@@ -1,9 +1,9 @@
-// backup.mjs — the copy of a user's file asight saves BEFORE it changes the file (RFC 1.6 R2, D39③).
-//   where   ~/.asight/backup/ (0700), each file 0600 — a backup holds API keys, so it has the capture data's protection (4.1 §凭据处置)
+// backup.mjs — the copy of a user's file trocar saves BEFORE it changes the file (RFC 1.6 R2, D39③).
+//   where   ~/.trocar/backup/ (0700), each file 0600 — a backup holds API keys, so it has the capture data's protection (4.1 §凭据处置)
 //   name    <first 16 hex of sha256(resolved original path)>-<UTC YYYYMMDDTHHMMSSmmmZ>[-n]: found by path without the manifest; one per
 //           change; a name that is taken gets -1, -2 … — never written over (an `off` that kept one leaves it for the user)
 //   rule    a backup that cannot be written means the file is not changed (the caller turns the throw into `backup-failed`)
-//   never   used to put a whole file back (1.6 R2: undo takes out only asight's key / block / line). Only a JSON key replaced by asight that
+//   never   used to put a whole file back (1.6 R2: undo takes out only trocar's key / block / line). Only a JSON key replaced by trocar that
 //           the manifest lost is read back from one, by marker (1.6 R3).
 // The manifest names a backup by path and holds the file's `pre_sha256`; it never holds the contents. Imports only node:* and src/off.
 import nodeFs from 'node:fs'
@@ -18,7 +18,7 @@ const NAME = /^[0-9a-f]{16}-\d{8}T\d{9}Z(?:-\d+)?$/
 /** The backup name of `file` at `now`: `<sha256(path)[0:16]>-<UTC, to the millisecond>`. */
 export const backupName = (file, now = new Date()) => `${pathHash(file)}-${now.toISOString().replace(/[-:.]/g, '')}`
 
-/** Saves `data` (the bytes of `file` before the change) in ~/.asight/backup/ and returns its path. Creates the directory 0700 (an existing
+/** Saves `data` (the bytes of `file` before the change) in ~/.trocar/backup/ and returns its path. Creates the directory 0700 (an existing
  *  one is tightened to it), writes the file exclusively and 0600, fsyncs it and the directory. A failure removes what it wrote and throws. */
 export function writeBackup({ home, file, data, now = new Date(), fs = nodeFs }) {
   const dir = backupDir(home)

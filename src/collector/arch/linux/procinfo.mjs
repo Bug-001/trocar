@@ -15,7 +15,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { readExe, readArgv, readEnviron, listPids, readStatus, readStartTime } from '../../../off/proc.mjs'
 
-// The readers `off` needs too — /proc/<pid>/{exe,cmdline,environ,status,stat} and the pid list — moved to src/off/proc.mjs (1.6 R3: `asight off`
+// The readers `off` needs too — /proc/<pid>/{exe,cmdline,environ,status,stat} and the pid list — moved to src/off/proc.mjs (1.6 R3: `trocar off`
 // judges which agents are alive with no collector code); they are re-exported here, so the daemon's importers and tests keep their names.
 export { readExe, readArgv, readEnviron, listPids, readStatus, readStartTime }
 

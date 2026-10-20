@@ -35,7 +35,7 @@ test('codex: the native binary and the managed daemon match; the Node launcher, 
 test('codex: $CODEX_HOME/.env SSL_CERT_FILE is believed only when it was there at start; CODEX_* keys are dropped; a CODEX_HOME in the env moves it (T12)', () => {
   const s = sandbox()
   try {
-    const merged = s.put('ca/merged.pem', OTHER.certPem + CA.certPem); const only = s.put('ca/asight.pem', CA.certPem)
+    const merged = s.put('ca/merged.pem', OTHER.certPem + CA.certPem); const only = s.put('ca/trocar.pem', CA.certPem)
     s.put('.codex/.env', `SSL_CERT_FILE=${merged}\nCODEX_CA_CERTIFICATE=${only}\nHTTPS_PROXY=https://proxy.example.com:8443\n`)
     const ok = judge(codex, ctxFor({ home: s.home, startedAt: Date.now() + 60_000 }))
     assert.deepEqual([ok.trust.trusted, ok.trust.var, ok.trust.via], [true, 'SSL_CERT_FILE', '$CODEX_HOME/.env'])
@@ -50,7 +50,7 @@ test('codex: $CODEX_HOME/.env SSL_CERT_FILE is believed only when it was there a
 test('codex: SSL_CERT_FILE and a shell CODEX_CA_CERTIFICATE both count — one without the CA never hides the other (T12, acceptance ①: Codex trusts both)', () => {
   const s = sandbox()
   try {
-    const only = s.put('ca/asight.pem', CA.certPem); const foreign = s.put('ca/other.pem', OTHER.certPem)
+    const only = s.put('ca/trocar.pem', CA.certPem); const foreign = s.put('ca/other.pem', OTHER.certPem)
     const merged = s.put('ca/merged.pem', OTHER.certPem + CA.certPem)
     const at = (env) => judge(codex, ctxFor({ home: s.home, env, startedAt: Date.now() + 60_000 })).trust
     assert.deepEqual([at({ SSL_CERT_FILE: foreign, CODEX_CA_CERTIFICATE: only }).trusted, at({ SSL_CERT_FILE: foreign, CODEX_CA_CERTIFICATE: only }).var], [true, 'CODEX_CA_CERTIFICATE'])
@@ -67,10 +67,10 @@ test('codex: SSL_CERT_FILE and a shell CODEX_CA_CERTIFICATE both count — one w
 test('codex: relay hosts come from the system, user and profile config.toml, not OPENAI_BASE_URL; the Responses terminal messages are data', () => {
   const s = sandbox()
   try {
-    s.put('.codex/config.toml', 'openai_base_url = "https://relay.example.com/v1"\n[model_providers.mock]\nbase_url = "http://mock.asight.test:8443/v1"\n')
+    s.put('.codex/config.toml', 'openai_base_url = "https://relay.example.com/v1"\n[model_providers.mock]\nbase_url = "http://mock.trocar.test:8443/v1"\n')
     s.put('.codex/fast.config.toml', '[model_providers.alt]\nbase_url = "https://alt.example.com/v1"\n')
     const r = judge(codex, ctxFor({ home: s.home, env: { OPENAI_BASE_URL: 'https://ignored.example.com' }, argv: ['codex', '--profile', 'fast'] }))
-    assert.deepEqual(r.hosts.sort(), ['alt.example.com', 'mock.asight.test', 'relay.example.com'])
+    assert.deepEqual(r.hosts.sort(), ['alt.example.com', 'mock.trocar.test', 'relay.example.com'])
     const [t] = codex.wsTerminal
     const re = new RegExp(t.patterns[0])
     assert.equal(t.pathSuffix, '/responses')
@@ -80,8 +80,8 @@ test('codex: relay hosts come from the system, user and profile config.toml, not
 })
 
 const planFor = (s, env = {}, running = []) => {
-  const dir = path.join(s.home, '.asight', 'collector')
-  return planTrust({ descriptors: [codex], ctxFor: () => ({ os: 'none', home: s.home, env: new Map(Object.entries(env)), running: running.map((e) => new Map(Object.entries(e))), collectorDir: dir, caPem: path.join(dir, 'ca', 'asight-ca.pem'), readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }, readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } } }), caCertPem: CA.certPem, collectorDir: dir, roots: { node: [], osText: '' } })
+  const dir = path.join(s.home, '.trocar', 'collector')
+  return planTrust({ descriptors: [codex], ctxFor: () => ({ os: 'none', home: s.home, env: new Map(Object.entries(env)), running: running.map((e) => new Map(Object.entries(e))), collectorDir: dir, caPem: path.join(dir, 'ca', 'trocar-ca.pem'), readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }, readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } } }), caCertPem: CA.certPem, collectorDir: dir, roots: { node: [], osText: '' } })
 }
 
 test('codex inject: a block with SSL_CERT_FILE=combined-codex.pem atop the .env of every Codex home in use; the bundle carries the SSL_CERT_FILE CAs it overrides; a shell CODEX_CA_CERTIFICATE needs no note (T10, T14)', () => {
@@ -93,11 +93,11 @@ test('codex inject: a block with SSL_CERT_FILE=combined-codex.pem atop the .env 
     const corp = s.put('corp.pem', OTHER.certPem); const shell = s.put('shell.pem', SHELL.certPem)
     s.put('.codex/.env', `OPENAI_API_KEY=sk-secret\nSSL_CERT_FILE=${corp}\n`)
     s.put('work/codex-home/config.toml', 'model = "m"\n')
-    const dir = path.join(s.home, '.asight', 'collector')
+    const dir = path.join(s.home, '.trocar', 'collector')
     const bundle = path.join(dir, 'ca', 'combined-codex.pem')
     const p = planFor(s, { SSL_CERT_FILE: shell, CODEX_CA_CERTIFICATE: corp }, [{ CODEX_HOME: path.join(s.home, 'work/codex-home'), SSL_CERT_FILE: bundle }, { CODEX_HOME: path.join(s.home, 'gone') }])
     assert.deepEqual(p.entries.map((e) => [e.path, e.format, e.vars]), [[path.join(s.home, '.codex/.env'), 'dotenv-block', { SSL_CERT_FILE: bundle }], [path.join(s.home, 'work/codex-home/.env'), 'dotenv-block', { SSL_CERT_FILE: bundle }]], 'the default home and a running codex\'s CODEX_HOME; never a home that is not there')
-    assert.deepEqual([p.files[0].path, p.files[0].role, p.files[0].sources], [bundle, 'bundle', [corp, shell]], 'the .env line it puts out of effect, the install shell; never asight\'s own bundle')
+    assert.deepEqual([p.files[0].path, p.files[0].role, p.files[0].sources], [bundle, 'bundle', [corp, shell]], 'the .env line it puts out of effect, the install shell; never trocar\'s own bundle')
     assert.deepEqual(fps(p.files[0].data), [fp(OTHER), fp(SHELL), fp(CA)])
     assert.ok(p.records.some((r) => /gone/.test(r.reason)), 'a CODEX_HOME that does not exist is named')
     assert.ok(!p.records.some((r) => /CODEX_CA_CERTIFICATE/.test(r.reason)), 'it adds to the store, it does not keep a codex from being captured: no note')
@@ -112,10 +112,10 @@ test('codex through install / uninstall: the user\'s SSL_CERT_FILE line is put o
     const before = `OPENAI_API_KEY=sk-secret\nexport SSL_CERT_FILE="${corp}"\n`
     const env = s.put('.codex/.env', before)
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [codex], freePort: async () => 47017, roots: { node: [], osText: '' } })
-    const dir = path.join(s.home, '.asight', 'collector')
+    const dir = path.join(s.home, '.trocar', 'collector')
     const bundle = path.join(dir, 'ca', 'combined-codex.pem')
-    assert.match(fs.readFileSync(env, 'utf8'), new RegExp(`^# >>> asight collector >>>[^\\n]*\\nSSL_CERT_FILE=${bundle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n# <<< asight collector <<<\\nOPENAI_API_KEY=sk-secret\\n#asight-collector-off# export SSL_CERT_FILE=`))
-    assert.deepEqual(fps(fs.readFileSync(bundle, 'utf8')), [fp(OTHER), ...fps(fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'), 'utf8'))])
+    assert.match(fs.readFileSync(env, 'utf8'), new RegExp(`^# >>> trocar collector >>>[^\\n]*\\nSSL_CERT_FILE=${bundle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n# <<< trocar collector <<<\\nOPENAI_API_KEY=sk-secret\\n#trocar-collector-off# export SSL_CERT_FILE=`))
+    assert.deepEqual(fps(fs.readFileSync(bundle, 'utf8')), [fp(OTHER), ...fps(fs.readFileSync(path.join(dir, 'ca', 'trocar-ca.pem'), 'utf8'))])
     assert.ok(!fs.readFileSync(path.join(dir, 'install-manifest.json'), 'utf8').includes('sk-secret'))
     // the .env is applied once, at start: a codex from before install never named the bundle; one started after did
     const old = { os: 'linux', pid: 98, exe: DAEMON, argv: [DAEMON, 'app-server', '--managed-daemon'], env: new Map(), startedAt: 0 }
@@ -128,7 +128,7 @@ test('codex through install / uninstall: the user\'s SSL_CERT_FILE line is put o
   } finally { s.done() }
 })
 
-test('codex: a provider in an inline table and a [profiles.<name>] table name relay hosts; a config.toml asight cannot fully read is reported (D38, review 4 #4 #6)', () => {
+test('codex: a provider in an inline table and a [profiles.<name>] table name relay hosts; a config.toml trocar cannot fully read is reported (D38, review 4 #4 #6)', () => {
   const s = sandbox()
   try {
     const cfg = s.put('.codex/config.toml', 'profile = "work"\nmodel_providers = { relay = { base_url = "https://inline.example.com/v1" } }\n[profiles.work]\nopenai_base_url = "https://work.example.com/v1"\n[profiles.home]\nopenai_base_url = "https://home.example.com/v1"\n')
@@ -142,13 +142,13 @@ test('codex: a provider in an inline table and a [profiles.<name>] table name re
   } finally { s.done() }
 })
 
-test('codex: a same-name SSL_CERT_FILE line the user adds below asight\'s block wins (last wins, as the resolver reads it): that codex is untrusted (T12, review 4 #5)', async () => {
+test('codex: a same-name SSL_CERT_FILE line the user adds below trocar\'s block wins (last wins, as the resolver reads it): that codex is untrusted (T12, review 4 #5)', async () => {
   const s = sandbox()
   try {
     const corp = s.put('corp.pem', OTHER.certPem)
     const env = s.put('.codex/.env', 'OPENAI_API_KEY=sk-secret\n')
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [codex], freePort: async () => 47018, roots: { node: [], osText: '' } })
-    const installed = { caCertPem: fs.readFileSync(path.join(s.home, '.asight', 'collector', 'ca', 'asight-ca.pem'), 'utf8') }
+    const installed = { caCertPem: fs.readFileSync(path.join(s.home, '.trocar', 'collector', 'ca', 'trocar-ca.pem'), 'utf8') }
     assert.equal(judge(codex, ctxFor({ home: s.home, argv: ['codex'] }), installed).trust.trusted, true)
     fs.appendFileSync(env, `SSL_CERT_FILE=${corp}\n`)
     const r = judge(codex, ctxFor({ home: s.home, argv: ['codex'] }), installed)

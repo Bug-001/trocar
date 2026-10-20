@@ -86,8 +86,8 @@ test('engine: two consecutive rejections on one host splice that host only; anot
   await new Promise((r) => up.listen(0, '127.0.0.1', r))
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 5, agent: 'dsh', decrypt: true })
   const told = []; for (const m of ['watch', 'unwatch', 'detach']) redirector[m] = async (...a) => { told.push([m, ...a]) }
-  const asightCa = createCa(); const flows = [], fails = []
-  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: upCa.certPem, store: { envelope() {}, flow: (f) => flows.push(f) }, onFailure: (f) => fails.push(f) })
+  const trocarCa = createCa(); const flows = [], fails = []
+  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(trocarCa)), upstreamCa: upCa.certPem, store: { envelope() {}, flow: (f) => flows.push(f) }, onFailure: (f) => fails.push(f) })
   const { port } = await engine.listen({})
   const hello = (servername, ca) => new Promise((resolve) => {
     const c = tls.connect({ port, host: '127.0.0.1', servername, ca }, () => { const issuer = c.getPeerX509Certificate().issuer; c.on('end', () => resolve(issuer)); c.resume(); c.write('x') })
@@ -100,10 +100,10 @@ test('engine: two consecutive rejections on one host splice that host only; anot
   assert.deepEqual(fails.filter((f) => f.code !== 'trust-rejected').map((f) => [f.where, f.code, f.pid, f.host, f.cause]), [['engine', 'negative-cache', 5, 'api.deepseek.com', 'client-rejected-leaf']], 'the write is a failure event, once (D-12)')
   assert.deepEqual([fails[0].neg_key, engine.negatives()[0].negKey], ['5', '5'], 'keyed by the pid: neg_key is "<pid>" (4.8 §5.5)')
   assert.match(await hello('api.deepseek.com', upCa.certPem), /upstream test CA/, 'the rejected host is spliced')
-  assert.match(await hello('chat.deepseek.com', asightCa.certPem), /asight collector CA/, 'another host of the same pid is still decrypted')
+  assert.match(await hello('chat.deepseek.com', trocarCa.certPem), /trocar collector CA/, 'another host of the same pid is still decrypted')
   // the process exits: the daemon calls forgetPid, so a reused pid starts clean
   assert.equal(engine.forgetPid(5), 1); assert.deepEqual(engine.negatives(), [])
-  assert.match(await hello('api.deepseek.com', asightCa.certPem), /asight collector CA/, 'decrypted again after forgetPid')
+  assert.match(await hello('api.deepseek.com', trocarCa.certPem), /trocar collector CA/, 'decrypted again after forgetPid')
   await closeWithin(engine); up.close()
   assert.deepEqual(told, [], 'kernel steering is never touched')
   const by = (h) => flows.filter((f) => f.host === h).map((f) => [f.decision, f.not_captured ?? null])
@@ -112,7 +112,7 @@ test('engine: two consecutive rejections on one host splice that host only; anot
   assert.deepEqual(engine.stats().notCaptured, { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 1, leafError: 0 })
 })
 
-// D38: asight's own failures are recorded and cost the agent one connection at most, never the collector.
+// D38: trocar's own failures are recorded and cost the agent one connection at most, never the collector.
 test('engine: connectUpstream throwing (e.g. a bad destination port) is an engine-error record, the socket is closed, the engine lives on (D38)', T, async () => {
   const failures = [], errors = [], flows = []
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: 1, family: 4 }, pid: 1, agent: 'x', decrypt: false })
@@ -129,7 +129,7 @@ test('engine: connectUpstream throwing (e.g. a bad destination port) is an engin
 test('engine: a flows/ record that cannot be written is a flow-write-failed failure record (D38)', T, async () => {
   const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path')
   const { createRecordStore } = await import('../../../src/collector/core/record/store.mjs')
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-flowfail-'))
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-flowfail-'))
   const flowsDir = path.join(root, 'flows')
   fs.mkdirSync(flowsDir); fs.mkdirSync(path.join(flowsDir, `${new Date().toISOString().slice(0, 10)}.ndjson`)) // the day's connection-row file is a directory
   const store = createRecordStore({ root, raw: root })
@@ -197,19 +197,19 @@ test('engine: meta.upstreamTrust is the set an upstream is verified with — its
   const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
   const up = tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)) }, (s) => { s.on('error', () => {}); s.on('data', () => s.end('x')) })
   await new Promise((r) => up.listen(0, '127.0.0.1', r))
-  const asightCa = createCa()
+  const trocarCa = createCa()
   const run = async (upstreamTrust, upstreamCa) => {
     const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 7, agent: 'x', decrypt: true, ...(upstreamTrust ? { upstreamTrust } : {}) })
-    const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa, store: { envelope() {}, flow() {} }, onFailure: () => {} })
+    const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(trocarCa)), upstreamCa, store: { envelope() {}, flow() {} }, onFailure: () => {} })
     const { port } = await engine.listen({})
     const issuer = await new Promise((resolve) => {
-      const c = tls.connect({ port, host: '127.0.0.1', servername: 'relay.test', ca: [asightCa.certPem, upCa.certPem] }, () => { const i = c.getPeerX509Certificate().issuer; c.on('end', () => resolve(i)); c.resume(); c.write('x') })
+      const c = tls.connect({ port, host: '127.0.0.1', servername: 'relay.test', ca: [trocarCa.certPem, upCa.certPem] }, () => { const i = c.getPeerX509Certificate().issuer; c.on('end', () => resolve(i)); c.resume(); c.write('x') })
       c.on('error', (e) => resolve(`error ${e.code}`))
     })
     await closeWithin(engine)
     return issuer
   }
-  assert.match(await run({ secureContext: tls.createSecureContext({ ca: [upCa.certPem] }) }), /asight collector CA/, 'the agent\'s own set holds the relay CA: decrypted')
+  assert.match(await run({ secureContext: tls.createSecureContext({ ca: [upCa.certPem] }) }), /trocar collector CA/, 'the agent\'s own set holds the relay CA: decrypted')
   assert.match(await run({ secureContext: tls.createSecureContext({ ca: [] }) }, upCa.certPem), /upstream test CA/, 'the union holds it, the agent\'s set does not: stepped aside')
   up.close()
 })

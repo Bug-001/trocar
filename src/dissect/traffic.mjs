@@ -4,7 +4,7 @@
 // `llm` and `token-count` are told by the ENDPOINT (src/capture/envelope.mjs::endpointClass, injected: this module is a
 // leaf and imports nothing). The other four come from DATA: the `traffic` entries on the harness's row in
 // harnesses.mjs, then the third-party table below that every harness shares, then `other`. The capture core holds no
-// harness name and no host pattern (D20, 0.1 §5); the wiring (bin/asight.mjs for the old MITM and reverse proxy,
+// harness name and no host pattern (D20, 0.1 §5); the wiring (bin/trocar.mjs for the old MITM and reverse proxy,
 // src/collector/daemon.mjs for the engine) builds one classifier with makeClassifier() and hands it to createRetention().
 // Leaf module (0.1 §2): imports only ./harnesses.mjs and ./vendors.mjs.
 import { HARNESSES, LEGACY_HARNESS_IDS, harnessOf } from './harnesses.mjs';

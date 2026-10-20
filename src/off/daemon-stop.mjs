@@ -1,8 +1,8 @@
-// daemon-stop.mjs (src/off) — is this user's collector daemon there, and how to stop it when it has to go (RFC 1.6 §1.4 第 2 / 5 步, 「asight 自己坏了时」;
-// 4.6 §控制面 `lock`). `asight off`, `asight uninstall` and the standalone `asight-off` ask first and stop only a daemon that does not answer
+// daemon-stop.mjs (src/off) — is this user's collector daemon there, and how to stop it when it has to go (RFC 1.6 §1.4 第 2 / 5 步, 「trocar 自己坏了时」;
+// 4.6 §控制面 `lock`). `trocar off`, `trocar uninstall` and the standalone `trocar-off` ask first and stop only a daemon that does not answer
 // (off) or has to go (uninstall); a daemon that answers is asked to switch off through its control socket instead (orchestrate.mjs).
 //   daemonState   judges from the `lock` file (written at start, its mtime refreshed every second) and the control socket
-//   stopDaemon    `systemctl --user stop asight-collector` when the autostart unit manages it (Linux), else SIGTERM, then SIGKILL after `termWaitMs`; on darwin the LaunchAgent is
+//   stopDaemon    `systemctl --user stop trocar-collector` when the autostart unit manages it (Linux), else SIGTERM, then SIGKILL after `termWaitMs`; on darwin the LaunchAgent is
 //                 booted out FIRST when the plist manages it (launchd's KeepAlive would pull a stopped daemon right back, 4.9 §4), then the signals; on win32 the supervisor
 //                 parent first, then the daemon, through taskkill. The pid's identity (the lock's start_time and boot_id) is checked before EVERY signal, so a lock that names a
 //                 reused pid kills nothing; the helper (lock.helper_pid) goes with it when it is still there and is the helper; then `reset-failed` and `is-active` (Linux)
@@ -83,10 +83,10 @@ export async function daemonState({ lockFile, socketPath = null, request = contr
   return out(L.state, L.why)
 }
 
-/** Is the process the capability helper? (its executable or its first argument is `asight-redirector`; a pid that is some other process now is not.) */
+/** Is the process the capability helper? (its executable or its first argument is `trocar-redirector`; a pid that is some other process now is not.) */
 export function isRedirectorHelper(pid) {
   const names = [readExe(pid), (readArgv(pid) || [])[0]].filter(Boolean).map((x) => path.basename(x))
-  return names.some((n) => n.startsWith('asight-redirector'))
+  return names.some((n) => n.startsWith('trocar-redirector'))
 }
 
 /** True when the lock's helper is not running (or is some other process now): no link of this instance is left, the link being the helper's. A
@@ -99,7 +99,7 @@ export function helperGone(lock, { alive = pidAlive, isHelper = isRedirectorHelp
 const refuseRealKill = () => {
   throw Object.assign(new Error('refusing to signal a real process under npm test (0.1 §3): inject `kill`'), { code: 'ESANDBOX' })
 }
-const defaultKill = (pid, signal) => { if (process.env.ASIGHT_TEST_SANDBOX === '1') refuseRealKill(); process.kill(pid, signal) }
+const defaultKill = (pid, signal) => { if (process.env.TROCAR_TEST_SANDBOX === '1') refuseRealKill(); process.kill(pid, signal) }
 
 // ── the Windows stop (RFC 4.8 §4.2, §7; plan Task 9(b)) ──────────────────────────────────────────────────────────────────────
 // `process.kill` on Windows is a hard kill with no drain and no kernel switch, and the supervised daemon would be re-spawned by its parent,

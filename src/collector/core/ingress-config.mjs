@@ -1,7 +1,7 @@
 // ingress-config.mjs — the ports and secrets proxy mode needs, chosen once and kept (spec 4.11 §3 ①, plan decision #16; lifted from the twins
 // arch/{darwin,win32}/ingress-config.mjs it replaces).
 //
-// `~/.asight/collector/ingress.json` (0600) holds the engine's ingress port, one door port per entry group (a group is a route id: every form on that
+// `~/.trocar/collector/ingress.json` (0600) holds the engine's ingress port, one door port per entry group (a group is a route id: every form on that
 // route shares its door), the ingress token and the listener token. The agents' entries hold the group ports, so a port, once given, stays until:
 //   - `uninstall` removes the file (removeIngressConfig);
 //   - `on` finds a group's port held by another socket (rebindTaken): that group gets a new port and the CLI rewrites that group's entries.
@@ -72,7 +72,7 @@ function writeAtomic(fs, file, text) {
 
 /**
  * loadIngressConfig({ dir, groups, isFree, random, fs }) → { enginePort, groupPorts, ingressToken, listenerToken, created, added, regenerated }
- *   dir     the collector directory (`~/.asight/collector`)
+ *   dir     the collector directory (`~/.trocar/collector`)
  *   groups  the group ids (4.8 §2.3) this `on` needs ports for. Ports already in the file are kept for every group, asked for or not: `on codex` does not move Claude Code's port.
  *   isFree  (port) → whether it can be bound; asked only for a port about to be given, never for one the file already holds. random(n) → n random bytes (default: crypto.randomBytes).
  * `groupPorts` has every group the file knows, the asked ones included. A new file, or a new group, is written (0600, atomically); a call that changes nothing writes nothing (the mtime stays).
@@ -133,7 +133,7 @@ export function readIngressConfig({ dir, fs = nodeFs } = {}) {
   let parsed = null
   try { parsed = JSON.parse(raw) } catch { return { error: 'ingress.json is not JSON' } }
   const bad = validate(parsed)
-  return bad ? { error: `ingress.json is not what asight writes (${bad})` } : { enginePort: parsed.enginePort, groupPorts: parsed.groupPorts, ingressToken: parsed.ingressToken, listenerToken: parsed.listenerToken, ...board(parsed) }
+  return bad ? { error: `ingress.json is not what trocar writes (${bad})` } : { enginePort: parsed.enginePort, groupPorts: parsed.groupPorts, ingressToken: parsed.ingressToken, listenerToken: parsed.listenerToken, ...board(parsed) }
 }
 
 /** `uninstall`: the file goes (the ports and the secrets are chosen again at the next `on`). → `{ removed: true, existed }`, or `{ removed: false, reason }` when it could not be removed. */
@@ -147,7 +147,7 @@ export function removeIngressConfig({ dir, fs = nodeFs } = {}) {
 /**
  * rebindTaken(cfg, probe, { dir, isFree, random, fs }) → { config, rebound } — `on`'s escape from a group port another socket took (decision #16).
  *   cfg     loadIngressConfig's answer (or readIngressConfig's)
- *   probe   async (port, group) → true when the port can serve the group: free, or already held by asight's own daemon for it (the caller knows which
+ *   probe   async (port, group) → true when the port can serve the group: free, or already held by trocar's own daemon for it (the caller knows which
  *           doors its daemon has open; a plain bind test would call those taken)
  * Each group whose port the probe refuses gets a new one in GROUP_RANGE (isFree decides, never a port the file already gives); the file is rewritten
  * once when anything moved. `rebound` lists those groups: the caller rewrites their entries. The engine port is not moved here: it is not in any entry.

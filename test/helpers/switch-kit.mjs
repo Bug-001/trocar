@@ -25,10 +25,10 @@ const LOGIN_EXEC = /launchctl setenv|launchctl config|\breg(\.exe)? add .*Enviro
 const ADMIN_EXEC = /\bsudo\b|with administrator privileges|-Verb RunAs|\brunas\b|authorizationdb|security add-trusted-cert -d|certutil (-f )?-addstore (?!-user)/i
 const TRUST_WRITE = /security (add-trusted-cert|delete-certificate|remove-trusted-cert)|certutil .*-(addstore|delstore)/
 // 1.6 §1.1: a plain uninstall keeps the captures (capture-*.ndjson, flows/, audit/, replays/), control.json, and the retention settings with their log
-const KEPT = /^\.asight([\\/](collector([\\/](control\.json|capture-[^\\/]*\.ndjson|(flows|audit|replays)([\\/].*)?))?|retention\.json|logs([\\/]retention\.ndjson)?))?$/
-export const ASIGHT = /^\.asight([\\/]|$)/
-const CERT_DIR = /^\.asight[\\/]collector[\\/]ca([\\/]|$)/
-const LOG = /^\.asight[\\/]collector[\\/]flows([\\/]|$)/
+const KEPT = /^\.trocar([\\/](collector([\\/](control\.json|capture-[^\\/]*\.ndjson|(flows|audit|replays)([\\/].*)?))?|retention\.json|logs([\\/]retention\.ndjson)?))?$/
+export const TROCAR = /^\.trocar([\\/]|$)/
+const CERT_DIR = /^\.trocar[\\/]collector[\\/]ca([\\/]|$)/
+const LOG = /^\.trocar[\\/]collector[\\/]flows([\\/]|$)/
 
 const formatOf = (route) => (route.kind === 'dotenv-block' ? 'dotenv' : route.kind === 'json-key' && route.file ? 'json' : null)
 const keyName = (k) => (Array.isArray(k) ? k.join('.') : k)
@@ -57,14 +57,14 @@ function readOf(bytes, format) {
 
 // ---- the invariants: each returns the violations it finds, [] when it holds -------------------------------------------------------------------------
 export const invariants = {
-  /** CM15: on touches only the harness's class-1 entries (the descriptor's route files, only their proxy keys) and asight's own switch / state files —
+  /** CM15: on touches only the harness's class-1 entries (the descriptor's route files, only their proxy keys) and trocar's own switch / state files —
    *  never a certificate byte, never a trust store; `on h; off h` gives back the bytes of before `on h` (with no user edit). */
   cm15({ c, s1, s2, s4, edited }) {
     const bad = []
     const routes = c.routePaths
     for (const { p, why } of diff(s1, s2)) {
-      if (CERT_DIR.test(p) || (!ASIGHT.test(p) && /BEGIN CERTIFICATE/.test(Buffer.from((s1.files[p] || {}).bytes || '', 'base64').toString('latin1')))) bad.push(`on changed certificate bytes: ${p} (${why})`)
-      else if (!ASIGHT.test(p) && !under(routes)(p)) bad.push(`on wrote outside the class-1 entries: ${p} (${why})`)
+      if (CERT_DIR.test(p) || (!TROCAR.test(p) && /BEGIN CERTIFICATE/.test(Buffer.from((s1.files[p] || {}).bytes || '', 'base64').toString('latin1')))) bad.push(`on changed certificate bytes: ${p} (${why})`)
+      else if (!TROCAR.test(p) && !under(routes)(p)) bad.push(`on wrote outside the class-1 entries: ${p} (${why})`)
     }
     if (c.file && c.format) {
       const before = view(fileOf(s1, c.file), c.format), after = view(fileOf(s2, c.file), c.format)
@@ -74,7 +74,7 @@ export const invariants = {
     if (s4.store.length !== s1.store.length || s4.exec.slice(s1.exec.length).some((x) => TRUST_WRITE.test(x))) bad.push('off touched a trust store')
     for (const { p, why } of diff(s1, s4)) {
       if (CERT_DIR.test(p)) bad.push(`off changed certificate bytes: ${p} (${why})`)
-      else if (!ASIGHT.test(p) && why !== 'mtime' && !(edited && under([c.file])(p))) bad.push(`on; off left ${p} other than before on (${why})`)
+      else if (!TROCAR.test(p) && why !== 'mtime' && !(edited && under([c.file])(p))) bad.push(`on; off left ${p} other than before on (${why})`)
     }
     return bad
   },
@@ -93,9 +93,9 @@ export const invariants = {
   cm32({ c, s0, s6, edited }) {
     return diff(s0, s6).filter(({ p, why }) => why !== 'mtime' && !KEPT.test(p) && !under(c.effects)(p) && !(edited && under([c.file])(p))).map(({ p, why }) => `uninstall left ${p} (${why})`)
   },
-  /** D54: a second on / off writes nothing — no byte anywhere but the event log, no mtime outside asight's directory. */
+  /** D54: a second on / off writes nothing — no byte anywhere but the event log, no mtime outside trocar's directory. */
   d54({ a, b, verb }) {
-    return diff(a, b).filter(({ p, why }) => !LOG.test(p) && (why !== 'mtime' || !ASIGHT.test(p))).map(({ p, why }) => `the second ${verb} wrote ${p} (${why})`)
+    return diff(a, b).filter(({ p, why }) => !LOG.test(p) && (why !== 'mtime' || !TROCAR.test(p))).map(({ p, why }) => `the second ${verb} wrote ${p} (${why})`)
   },
 }
 export const fileOf = (s, rel) => { const f = rel && s.files[rel]; return f && f.bytes != null ? Buffer.from(f.bytes, 'base64') : null }
@@ -189,7 +189,7 @@ async function drive(spec, harnesses) {
   })()
 }
 
-/** The user edits the route file while asight is on: an unrelated key added, or the proxy key itself set to the user's own value (D48②). */
+/** The user edits the route file while trocar is on: an unrelated key added, or the proxy key itself set to the user's own value (D48②). */
 function applyEdit(spec, file, format, route) {
   if (spec.edit === 'none' || !file || !format || !fs.existsSync(file)) return null
   const bytes = fs.readFileSync(file), proxy = keyName(route.proxyKeys[0])
@@ -198,10 +198,10 @@ function applyEdit(spec, file, format, route) {
     const next = op.apply(bytes, { before: bytes })
     if (!next) return null
     fs.writeFileSync(file, next)
-    return spec.edit === 'unrelated' ? { key: 'ASIGHT_SHAPES_ADDED', value: 'added' } : { key: proxy, value: USER_PROXY }
+    return spec.edit === 'unrelated' ? { key: 'TROCAR_SHAPES_ADDED', value: 'added' } : { key: proxy, value: USER_PROXY }
   }
   const value = readJsonc(bytes) || {}
-  const keys = spec.edit === 'unrelated' ? ['asightContractAdded'] : route.proxyKeys[0]
+  const keys = spec.edit === 'unrelated' ? ['trocarContractAdded'] : route.proxyKeys[0]
   let o = value
   for (const k of keys.slice(0, -1)) o = o[k] = o[k] && typeof o[k] === 'object' ? o[k] : {}
   o[keys.at(-1)] = spec.edit === 'unrelated' ? 'added' : USER_PROXY

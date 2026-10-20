@@ -1,11 +1,11 @@
-// uninstall.mjs — `asight uninstall [--purge-data] [--dry-run] [--yes] [--json]` (RFC 1.6 §1.1, R3, R6, R12; 4.6 §安装清单与卸载 1–5, V13): `off` for every harness, then asight's own
+// uninstall.mjs — `trocar uninstall [--purge-data] [--dry-run] [--yes] [--json]` (RFC 1.6 §1.1, R3, R6, R12; 4.6 §安装清单与卸载 1–5, V13): `off` for every harness, then trocar's own
 // files. The order is the spec's: (1) desired off for all, written under the op lock; (2) the daemon is told to exit once drained (`POST /off {exit:true}`) and is waited for
 // while it closes the connections it can see the end of — 30 s at most (§1.3); (3) the autostart is disabled and the daemon stopped by systemd (SIGTERM, then SIGKILL, when it
 // is not systemd's), which cuts the connections that never end by themselves and counts them; (4) the link is confirmed gone; (5) the entries are undone, by
-// the manifest or by asight's marks (src/off/orchestrate.mjs undoSide, the same code `off` runs); (6) asight's own files: the unit, the CA key and certificate, the runtime
-// directory, state.json, every backup (the ones kept because the user edited the file too, each listed), `~/.asight/bin/asight-off`, and the manifest LAST. The captures
+// the manifest or by trocar's marks (src/off/orchestrate.mjs undoSide, the same code `off` runs); (6) trocar's own files: the unit, the CA key and certificate, the runtime
+// directory, state.json, every backup (the ones kept because the user edited the file too, each listed), `~/.trocar/bin/trocar-off`, and the manifest LAST. The captures
 // stay (4.6 §安装清单与卸载 3) unless `--purge-data`. A daemon that cannot be stopped, a manifest this build does not read and marks that nobody confirmed remove nothing of
-// asight's own: what `off` could do is done, exit 1. Nothing here signals an agent or restarts anything (R8). The world is `deps` (see src/off/orchestrate.mjs).
+// trocar's own: what `off` could do is done, exit 1. Nothing here signals an agent or restarts anything (R8). The world is `deps` (see src/off/orchestrate.mjs).
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { newReceipt, EXIT, UNDO_LINE } from '../off/schema.mjs'
@@ -16,8 +16,8 @@ import { readManifest, saveManifest, manifestPath, refuseOldManifest } from '../
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
-import { standalonePath, backupDir, opLockFile, asightHome } from '../off/paths.mjs'
-import { rawHome, indexHome, classesLog } from '../paths.mjs' // D60: the records are segments under ~/.asight/raw, the index asight builds from them under ~/.asight/index
+import { standalonePath, backupDir, opLockFile, trocarHome } from '../off/paths.mjs'
+import { rawHome, indexHome, classesLog } from '../paths.mjs' // D60: the records are segments under ~/.trocar/raw, the index trocar builds from them under ~/.trocar/index
 import { netenvFile } from '../netenv/index.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
 import { removeOwnedFile } from '../off/journal.mjs'
@@ -58,17 +58,17 @@ async function captureOnline(w, m) {
   return on.length || unknown || (holders && holders.length) ? { on, holders: holders || [], unknown } : null
 }
 
-// What a plain uninstall keeps, and `--purge-data` deletes: the records themselves and the index built from them (D60). `flows/`, where asight
+// What a plain uninstall keeps, and `--purge-data` deletes: the records themselves and the index built from them (D60). `flows/`, where trocar
 // says what it did and what failed (D38), stays either way: this very run writes its own last line there. The class-change log is data too (1.6 §3.6).
-const KEEPS = [[rawHome, 'your captured records'], [indexHome, 'the index asight built from them'], [classesLog, 'the log of your traffic class changes']]
+const KEEPS = [[rawHome, 'your captured records'], [indexHome, 'the index trocar built from them'], [classesLog, 'the log of your traffic class changes']]
 const bytesUnder = (p, fs) => { // the size of a directory (or of a file), for the receipt; what cannot be read counts 0 rather than failing an uninstall
   let n = 0
-  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const q = path.join(d, e.name); if (e.isDirectory()) walk(q); else try { n += fs.lstatSync(q).size } catch { /* gone while we looked */ } } } // lstat: a link counts as the link, never as what it points at outside ~/.asight
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const q = path.join(d, e.name); if (e.isDirectory()) walk(q); else try { n += fs.lstatSync(q).size } catch { /* gone while we looked */ } } } // lstat: a link counts as the link, never as what it points at outside ~/.trocar
   try { if (fs.lstatSync(p).isDirectory()) walk(p); else n = fs.lstatSync(p).size } catch { /* unreadable: the path is still named, with what could be counted */ }
   return n
 }
 /** 附录 C.2 `kept`: what is still on disk under the home now, named, with its size. */
-const keptOf = (home, fs) => KEEPS.map(([dir, what]) => ({ what, path: dir(asightHome(home)), bytes: 0 })).filter((k) => fs.existsSync(k.path)).map((k) => ({ ...k, bytes: bytesUnder(k.path, fs) }))
+const keptOf = (home, fs) => KEEPS.map(([dir, what]) => ({ what, path: dir(trocarHome(home)), bytes: 0 })).filter((k) => fs.existsSync(k.path)).map((k) => ({ ...k, bytes: bytesUnder(k.path, fs) }))
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const errText = (e) => String((e && e.message) || e)
 
@@ -77,7 +77,7 @@ function planUninstall(w, m, purgeData = false) {
   const usable = m && !m.unsupported
   const entries = usable ? m.entries.filter((e) => e.kind === 'json-key' || e.kind === 'text') : []
   return {
-    changed: entries.map((e) => ({ path: e.path, change: `${e.kind === 'text' ? "asight's own lines" : (e.keys || []).join('.')} taken out`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
+    changed: entries.map((e) => ({ path: e.path, change: `${e.kind === 'text' ? "trocar's own lines" : (e.keys || []).join('.')} taken out`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
     removed: [...(usable ? m.files.map((f) => f.path) : []), path.join(w.dir, 'state.json'), path.join(w.dir, 'control.json'), path.join(w.dir, 'board.token'), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), ...(w.fs.existsSync(path.join(w.dir, 'update.json')) ? [path.join(w.dir, 'update.json')] : []), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m ? [manifestPath(w.dir)] : [])],
     kept: purgeData ? [] : keptOf(w.home, w.fs),
     notes: usable || !m ? [] : [`the install manifest is version ${JSON.stringify(m.version)}, which this build does not read: no entry would be touched`],
@@ -85,10 +85,10 @@ function planUninstall(w, m, purgeData = false) {
   }
 }
 
-/** `asight uninstall` (see the header). Refuses root by throwing (R7). → `{ receipt, exit }`: 0 done · 1 not done or a problem · 2 `--purge-data` without a terminal and
+/** `trocar uninstall` (see the header). Refuses root by throwing (R7). → `{ receipt, exit }`: 0 done · 1 not done or a problem · 2 `--purge-data` without a terminal and
  *  without `--yes` (nothing was done, the plan is in the receipt). */
 export async function runUninstall({ home = nodeOs.homedir(), env = process.env, purgeData = false, yes = false, dryRun = false, interactive = false, io = null, say = null, deps = {} } = {}) {
-  if ((deps.getuid || processUid)() === 0) throw new Error('asight uninstall: run this as your own user, not as root.')
+  if ((deps.getuid || processUid)() === 0) throw new Error('trocar uninstall: run this as your own user, not as root.')
   const w = offWorld({ home, env, deps })
   const fs = w.fs
   const run = w.clock().toISOString()
@@ -128,7 +128,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     const model = isModelOs(w.platform)
     try { lock = await acquireOpLock({ file: opLockFile(home), identity: w.identity, alive: w.alive, waitMs: deps.lockWaitMs ?? OFF_LOCK_WAIT_MS, offFirst: model ? null : () => { early = tryOff() }, fs, now: w.ms, sleep: w.sleep }) } catch (e) {
       if (!e || e.code !== LOCK_BUSY) throw e
-      receipt.ok = false; receipt.problems.push(`${errText(e)}. ${early && early.error ? `The desired state could not be written either (${errText(early.error)})` : 'The desired state is already off for every harness'}; run asight uninstall again afterwards`)
+      receipt.ok = false; receipt.problems.push(`${errText(e)}. ${early && early.error ? `The desired state could not be written either (${errText(early.error)})` : 'The desired state is already off for every harness'}; run trocar uninstall again afterwards`)
       put({ kind: 'result', outcome: 'failed', reason: `uninstall could not get the op lock: ${errText(e)}` })
       return { receipt, exit: EXIT.incomplete }
     }
@@ -141,7 +141,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // CM24: on macOS / Windows uninstall never does off — capture online (a harness on, a holder, or not knowable) is named and nothing changes
     const online = isModelOs(w.platform) && m && !m.unsupported ? await captureOnline(w, m) : null
     if (online) {
-      const why = [online.on.length ? `capture is still on for ${online.on.join(', ')}` : null, online.holders.length ? `these processes still have asight in their environment: ${online.holders.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}` : null, online.unknown ? `whether any process still has asight in its environment is unknown (${online.unknown})` : null].filter(Boolean).join('; ') + '. Nothing was changed. Run: asight off, wait for those processes to quit, then run asight uninstall again'
+      const why = [online.on.length ? `capture is still on for ${online.on.join(', ')}` : null, online.holders.length ? `these processes still have trocar in their environment: ${online.holders.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}` : null, online.unknown ? `whether any process still has trocar in its environment is unknown (${online.unknown})` : null].filter(Boolean).join('; ') + '. Nothing was changed. Run: trocar off, wait for those processes to quit, then run trocar uninstall again'
       // 附录 C.1: the refusal's code lives in `error` and nowhere else; `message` is the sentence the text form prints
       receipt.ok = false; receipt.error = { code: 'collectors-online', message: why }; receipt.purge_data = false; receipt.kept = keptOf(home, fs) // nothing changed: --purge-data deleted nothing either
       receipt.problems.push(why)
@@ -188,7 +188,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       if (stop.signals.length || !stop.stopped) put({ kind: 'daemon-stop', how: stop.how, signals: stop.signals, stopped: stop.stopped, pid: stop.pid, reason: stop.stopped ? `the daemon was stopped (${stop.signals.join(', ') || 'it had exited'})` : `the daemon was NOT stopped${stop.error ? `: ${stop.error}` : ''}` })
       // nothing to stop (no lock, no unit that was running, no pid known from the daemon's own reply) is not "the daemon (pid null) was stopped": the receipt says no daemon was there
       receipt.daemon = !stop.stopped ? { pid: stop.pid, state: 'unresponsive' } : stop.pid == null && routing.daemon.pid == null && (routing.state === 'none' || routing.state === 'stale') ? { pid: null, state: 'none' } : { pid: stop.pid ?? routing.daemon.pid, state: 'stopped' }
-      if (!stop.stopped) { receipt.problems.push(`the daemon (pid ${stop.pid}) could not be stopped${stop.error ? ` (${stop.error})` : ''}; stop it by hand: kill -9 ${stop.pid}, then run asight uninstall again`); failed.push({ code: 'stop-failed', reason: receipt.problems.at(-1) }) }
+      if (!stop.stopped) { receipt.problems.push(`the daemon (pid ${stop.pid}) could not be stopped${stop.error ? ` (${stop.error})` : ''}; stop it by hand: kill -9 ${stop.pid}, then run trocar uninstall again`); failed.push({ code: 'stop-failed', reason: receipt.problems.at(-1) }) }
       else if (routing.relayed !== 'unknown') { // what the daemon was still holding went with it, counted (1.6 §1.1)
         const last = drained && drained.rel ? drained.rel : routing.relayed
         receipt.relayed = { closing: 0, waiting: 0, cut: drained && drained.gone ? 0 : last.closing + last.waiting }
@@ -210,9 +210,9 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     for (const f of u.failures) failed.push(f)
     const noted = u.events.filter((e) => e.kind !== CODE_OFF.backupKept) // the backup an edited file kept is dropped below, listed in the receipt as non-identical: "kept" would be untrue
     const blocked = !gone || u.mode === 'unsupported' || u.pending.length > 0 || u.stopped // `stopped`: the manifest on disk is not what the entries now are: it and the CA stay
-    if (blocked) receipt.problems.push(gone ? 'asight\'s own files were left in place (the entries above are not all undone): run asight uninstall again' : 'asight\'s own files were left in place: the daemon is still running')
+    if (blocked) receipt.problems.push(gone ? 'trocar\'s own files were left in place (the entries above are not all undone): run trocar uninstall again' : 'trocar\'s own files were left in place: the daemon is still running')
 
-    // 6 · asight's own files — only when nothing above is still open
+    // 6 · trocar's own files — only when nothing above is still open
     const unitFile = m && !m.unsupported ? m.files.find((f) => f.role === 'unit') : null
     let unitLeft = false
     if (!blocked) {
@@ -246,21 +246,21 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       }
       // the CA, the runtime state (with the plugins' trust markers), the lock files, the single-file undo program
       for (const f of m && !m.unsupported ? m.files.filter((x) => x.role === 'ca-key') : []) {
-        if (!strictlyInside(asightHome(home), f.path, fs)) { // a manifest that names the CA key somewhere else is damaged or edited: that file is not asight's (audit semantics 6)
-          const reason = `${f.path}, named as the CA key, is not inside ${asightHome(home)}, so it is not asight's to remove; correct that item in ${manifestPath(w.dir)} by hand`
+        if (!strictlyInside(trocarHome(home), f.path, fs)) { // a manifest that names the CA key somewhere else is damaged or edited: that file is not trocar's (audit semantics 6)
+          const reason = `${f.path}, named as the CA key, is not inside ${trocarHome(home)}, so it is not trocar's to remove; correct that item in ${manifestPath(w.dir)} by hand`
           receipt.left.push({ path: f.path, result: 'error', reason }); failed.push({ code: 'entry-not-undone', path: f.path, reason })
         } else rm(f.path)
       }
       if (!m) rm(path.join(w.dir, 'ca'))
-      const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
-      // `netenv.json` is the adopted records and the topology, for the board: asight's own file, written outside collector/, so zero residue is not met without it (audit rule-b 8)
-      // `logs/` is the daemon's own console (D46, 0.2:130): asight's own, removed whole now that the daemon has stopped — its manifest entries (role 'daemon-log', Linux)
+      const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'trocar') : null
+      // `netenv.json` is the adopted records and the topology, for the board: trocar's own file, written outside collector/, so zero residue is not met without it (audit rule-b 8)
+      // `logs/` is the daemon's own console (D46, 0.2:130): trocar's own, removed whole now that the daemon has stopped — its manifest entries (role 'daemon-log', Linux)
       // first so the receipt names the files, then the directory, which on macOS no entry names (launchd writes the LaunchAgent's StandardOutPath / StandardErrorPath itself)
       for (const f of m && !m.unsupported ? m.files.filter((x) => x.role === 'daemon-log') : []) rm(f.path)
       rm(daemonLogPaths(home).dir)
       // the darwin key custody's signing helper (install put it there, 4.11 P1): it goes once no root key is left for it to remove — after undoRootKeys, which needs it
       const helper = w.platform === 'darwin' && !(m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key')) ? signHelperPath(home, NATIVE.signHelper) : null
-      for (const p of [path.join(w.dir, 'run'), path.join(w.dir, 'control.json'), path.join(w.dir, 'board.token'), path.join(w.dir, 'update.json'), w.lockFile, w.stateF, runtime, standalonePath(home), netenvFile(home), helper]) if (p) rm(p) // update.json: an update that never finished is asight's own note, and goes with the rest of its state (§5.5)
+      for (const p of [path.join(w.dir, 'run'), path.join(w.dir, 'control.json'), path.join(w.dir, 'board.token'), path.join(w.dir, 'update.json'), w.lockFile, w.stateF, runtime, standalonePath(home), netenvFile(home), helper]) if (p) rm(p) // update.json: an update that never finished is trocar's own note, and goes with the rest of its state (§5.5)
       removeEmptyDirs([path.dirname(standalonePath(home))], fs)
       // the door ports and their tokens (decision #16): the next install and on choose them again
       const ing = removeIngressConfig({ dir: w.dir, fs })
@@ -270,11 +270,11 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind. `--purge-data` is "nothing of the captures stays", so the
     // collector's own machine goes with it: the kernel's copy (kernel/) and its verified-archive cache (kernel-archive/), the kernel's config and home with the controller
     // secret and tokens (forwarder/), and the endpoint file control.json (the daemon's control endpoint; ingress.json went above, with every uninstall) — a plain uninstall
-    // keeps them (a kernel may still be draining; the next on reuses the cache), the purge leaves the collector directory empty of everything asight can rebuild nothing of.
+    // keeps them (a kernel may still be draining; the next on reuses the cache), the purge leaves the collector directory empty of everything trocar can rebuild nothing of.
     // Only when every step above succeeded (invariant 2; 1.6 §1.1): a run that leaves an item, has a problem or a failure keeps every capture
     // and says so — the captures are what nothing brings back, and the next uninstall can still purge them.
     const purgeHeld = purgeData && (blocked || receipt.left.length > 0 || receipt.problems.length > 0 || failed.length > 0)
-    if (purgeHeld) { receipt.purge_data = false; receipt.notes.push('This run did not finish, so not one captured record was deleted (--purge-data deletes them only when every other step succeeded). Fix what is above, then run: asight uninstall --purge-data') }
+    if (purgeHeld) { receipt.purge_data = false; receipt.notes.push('This run did not finish, so not one captured record was deleted (--purge-data deletes them only when every other step succeeded). Fix what is above, then run: trocar uninstall --purge-data') }
     if (purgeData && !purgeHeld) {
       for (const n of (() => { try { return fs.readdirSync(w.dir) } catch { return [] } })()) if (/^capture-.*\.ndjson$/.test(n)) rm(path.join(w.dir, n))
       for (const sub of ['flows', 'audit', 'replays', 'kernel', 'kernel-archive', 'forwarder']) rm(path.join(w.dir, sub))
@@ -303,15 +303,15 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
           receipt.removed.push(manifestPath(w.dir))
           removeEmptyDirs(m.dirs, fs)
         }
-        removeEmptyDirs([asightHome(home), w.dir, path.dirname(classesLog(asightHome(home)))], fs) // `on` made them before the manifest listed any directory; gone only when empty (the captures keep them)
+        removeEmptyDirs([trocarHome(home), w.dir, path.dirname(classesLog(trocarHome(home)))], fs) // `on` made them before the manifest listed any directory; gone only when empty (the captures keep them)
       }
     }
     let list = []
-    try { list = await w.procs() } catch (e) { receipt.notes.push(`the process table could not be read (${errText(e)}), so the asight processes you started yourself are not listed`) }
+    try { list = await w.procs() } catch (e) { receipt.notes.push(`the process table could not be read (${errText(e)}), so the trocar processes you started yourself are not listed`) }
     receipt.user_processes = userProcessesOf(list)
     receipt.kept = keptOf(home, fs) // what is still there now this run is done: after a purge, nothing
     receipt.ok = receipt.problems.length === 0 && left === 0
-    if (!receipt.ok && !receipt.problems.length) receipt.problems.push(`${left} item(s) could not be undone; the install manifest is kept. Fix them, then run asight uninstall again`)
+    if (!receipt.ok && !receipt.problems.length) receipt.problems.push(`${left} item(s) could not be undone; the install manifest is kept. Fix them, then run trocar uninstall again`)
     return { receipt, exit: receipt.ok ? EXIT.ok : EXIT.incomplete }
   } catch (e) { // an error that is not a step's own: recorded where status finds it, then thrown (4.6: a failed run ends with outcome 'failed')
     try { if (fs.existsSync(w.dir)) { put({ event: 'failure', code: (e && e.code) || 'uninstall-error', reason: errText(e) }); put({ kind: 'result', outcome: 'failed', reason: `uninstall failed: ${errText(e)}` }) } } catch { /* the original error is the one that matters */ }
@@ -319,19 +319,19 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   } finally { if (lock) lock.release() }
 }
 
-const USAGE = 'usage: asight uninstall [--purge-data] [--dry-run] [--yes] [--json]'
+const USAGE = 'usage: trocar uninstall [--purge-data] [--dry-run] [--yes] [--json]'
 const FLAGS = new Set(['--purge-data', '--dry-run', '--yes', '--json'])
 
 /** → the exit code. `argv` is what follows `uninstall`. `io` = { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo). */
 export async function runUninstallCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const flags = new Set()
   for (const a of argv) {
-    if (!a.startsWith('-')) { io.err(`asight uninstall: takes no harness name (${a}): uninstall removes asight for every harness\n${USAGE}`); return EXIT.usage }
-    if (!FLAGS.has(a)) { io.err(`asight uninstall: unknown option ${a}\n${USAGE}`); return EXIT.usage }
+    if (!a.startsWith('-')) { io.err(`trocar uninstall: takes no harness name (${a}): uninstall removes trocar for every harness\n${USAGE}`); return EXIT.usage }
+    if (!FLAGS.has(a)) { io.err(`trocar uninstall: unknown option ${a}\n${USAGE}`); return EXIT.usage }
     flags.add(a)
   }
   const json = flags.has('--json')
-  if ((deps.getuid || processUid)() === 0) { io.err('asight uninstall: run this as your own user, not as root.'); return EXIT.usage }
+  if ((deps.getuid || processUid)() === 0) { io.err('trocar uninstall: run this as your own user, not as root.'); return EXIT.usage }
   try {
     // a platform without a collector reaches runUninstall the same way and finds nothing to undo (D39⑥ executed 2026-10-11: the old capture's own uninstall went with it)
     // the root's key goes last through its custody (4.11 P13): the platform's backend unless a test hands one in
@@ -343,7 +343,7 @@ export async function runUninstallCli(argv, { io, env = process.env, home = node
     return exit
   } catch (e) {
     const message = errText(e)
-    if (json) io.out(JSON.stringify({ ...newReceipt('uninstall'), ok: false, notes: [message] }, null, 2)); else io.err(`asight uninstall: ${message}`)
+    if (json) io.out(JSON.stringify({ ...newReceipt('uninstall'), ok: false, notes: [message] }, null, 2)); else io.err(`trocar uninstall: ${message}`)
     return EXIT.incomplete
   }
 }

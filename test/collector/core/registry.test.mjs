@@ -125,9 +125,9 @@ test('livenessOf: the compiled name list as JSON under `identity` (off matches t
 
 test('R6 a user name that does not normalize to itself is that item\'s problem, never a throw: the registry and off\'s liveness still build, the good item applies', async () => {
   const ALL = await loadHarnesses()
-  const home = tmpDir('asight-agents-')
-  fs.mkdirSync(path.join(home, '.asight'), { recursive: true })
-  fs.writeFileSync(path.join(home, '.asight', 'agents.json'), JSON.stringify({ version: 1, agents: [
+  const home = tmpDir('trocar-agents-')
+  fs.mkdirSync(path.join(home, '.trocar'), { recursive: true })
+  fs.writeFileSync(path.join(home, '.trocar', 'agents.json'), JSON.stringify({ version: 1, agents: [
     { harness: 'codex', name: 'x.exe.exe' }, { harness: 'codex', name: 'foo (deleted) (deleted)' }, { harness: 'codex', name: 'foo .exe' },
     { harness: 'claude-code', name: 'claude-nightly' },
   ] }))

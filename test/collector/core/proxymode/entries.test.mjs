@@ -72,13 +72,13 @@ for (const { h, id, r } of ROUTES.filter((x) => x.r.kind === 'json-key' || x.r.k
         assert.ok(now.startsWith(original ?? ''), `${label}: CM17 the user's lines stay first, byte for byte; nothing is commented out`)
         if (s.spell) assert.equal(recs[0].prior_value[r.proxyKeys[0]], USER_PROXY, `${label}: CM17 the user's value is the prior`)
       } else if (s.spell) assert.equal(recs.find((x) => JSON.stringify(x.keys) === JSON.stringify(r.proxyKeys[0])).prior_value, USER_PROXY, `${label}: the replaced value is the prior`)
-      if (exists) assert.ok(recs.every((x) => x.backup && fs.existsSync(x.backup) && path.dirname(x.backup).startsWith(backupDir(w.home))), `${label}: the user's file was saved to ~/.asight/backup first`)
+      if (exists) assert.ok(recs.every((x) => x.backup && fs.existsSync(x.backup) && path.dirname(x.backup).startsWith(backupDir(w.home))), `${label}: the user's file was saved to ~/.trocar/backup first`)
       assert.equal(routeEntry(r.kind).check(ctx, recs).ok, true, label)
       assert.equal(routeEntry(r.kind).write(ctx, door()).ok, true, `${label}: on again`)
       assert.equal(recordsOf(w.ctx.manifest, h.name, id).length, recs.length, `${label}: on again writes nothing more (R9)`)
       const u = routeEntry(r.kind).undo(ctx, recs)
       assert.equal(u.ok, true, label)
-      assert.deepEqual(bytesOf(file), before, `${label}: CM15 off restores every byte (the file is gone again when asight made it)`)
+      assert.deepEqual(bytesOf(file), before, `${label}: CM15 off restores every byte (the file is gone again when trocar made it)`)
       assert.equal(fs.readFileSync(ca, 'utf8'), '-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n', `${label}: CM15 no certificate bytes touched`)
       assert.deepEqual(recordsOf(w.ctx.manifest, h.name, id), [], `${label}: the undone records leave the manifest`)
     }
@@ -132,7 +132,7 @@ for (const { h, id, r } of ROUTES.filter((x) => x.r.kind === 'plugin-file' || x.
     assert.equal(routeEntry(r.kind).check(ctx, [rec]).ok, true)
     assert.equal(routeEntry(r.kind).undo(ctx, [rec]).ok, true)
     assert.equal(bytesOf(rec.path), null)
-    assert.ok(!fs.existsSync(path.dirname(rec.path)), 'the directory asight made is gone')
+    assert.ok(!fs.existsSync(path.dirname(rec.path)), 'the directory trocar made is gone')
   })
 }
 

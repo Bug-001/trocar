@@ -15,8 +15,8 @@ const sign = (k) => (tbs) => crypto.sign('sha256', tbs, k.privateKey)
 const now = Date.now()
 
 // a root over `k`, signed by `by`, with extensions `exts` — the axes the variants move along
-function cert({ k = keyOf(), by = k, issuer = 'asight root (test)', exts }) {
-  return buildCertificateDer({ serial: Buffer.from([1]), issuer: name(issuer), subject: name('asight root (test)'), notBefore: new Date(now - DAY), notAfter: new Date(now + 365 * DAY),
+function cert({ k = keyOf(), by = k, issuer = 'trocar root (test)', exts }) {
+  return buildCertificateDer({ serial: Buffer.from([1]), issuer: name(issuer), subject: name('trocar root (test)'), notBefore: new Date(now - DAY), notAfter: new Date(now + 365 * DAY),
     spkiDer: spki(k), sign: sign(by), extensions: exts(k) })
 }
 const base = { bc: (k) => ext.basicConstraints(true, 1), ku: () => ext.keyUsage(0x06), eku: () => ext.extKeyUsageServerAuth(), ski: (k) => ext.subjectKeyId(spki(k)) }

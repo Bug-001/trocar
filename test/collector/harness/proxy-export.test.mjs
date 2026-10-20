@@ -1,5 +1,5 @@
-// test/collector/harness/proxy-export.test.mjs — the `proxy` export of every harness file (RFC 1.6 §9.7, D37①, D43): how its agent reads a proxy, as data. `asight status` draws each
-// harness's path from it and `asight doctor` takes its instructions from it, so a harness that adds a proxy behaviour adds it here and nowhere in core / cli (4.6 §结构, invariant 3).
+// test/collector/harness/proxy-export.test.mjs — the `proxy` export of every harness file (RFC 1.6 §9.7, D37①, D43): how its agent reads a proxy, as data. `trocar status` draws each
+// harness's path from it and `trocar doctor` takes its instructions from it, so a harness that adds a proxy behaviour adds it here and nowhere in core / cli (4.6 §结构, invariant 3).
 // The Windows values come from a Windows test machine (L2 / L3: `measured.win32` is 'lab'); Linux and macOS are inferred from them until measured (claude-code on Linux was measured by V54).
 import test from 'node:test'
 import assert from 'node:assert/strict'

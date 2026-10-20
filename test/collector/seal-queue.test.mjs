@@ -14,7 +14,7 @@ const LINE = (i) => Buffer.from(JSON.stringify({ id: `req_${i}`, ts: `2026-10-05
 const SEGMENTS = ['20261005T100000Z', '20261005T110000Z']
 
 function box({ live = '20261005T120000Z', segments = SEGMENTS } = {}) {
-  const home = tmpDir('asight-seal-queue-'), raw = path.join(home, 'raw'), lock = path.join(home, 'collector', 'lock')
+  const home = tmpDir('trocar-seal-queue-'), raw = path.join(home, 'raw'), lock = path.join(home, 'collector', 'lock')
   fs.mkdirSync(raw, { recursive: true, mode: 0o700 })
   fs.mkdirSync(path.dirname(lock), { recursive: true })
   fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, segment: live }) + '\n')
@@ -102,7 +102,7 @@ test('5: a plaintext beside a sealed file is sealed again, over it (the plaintex
 })
 
 test('a raw/ that is not there, and a segment whose file is gone, are nothing to do', async () => {
-  const home = tmpDir('asight-seal-queue-')
+  const home = tmpDir('trocar-seal-queue-')
   const q = createSealQueue({ raw: path.join(home, 'raw'), lockFile: path.join(home, 'collector', 'lock'), journal: null, fork: () => { throw new Error('nothing to seal') } })
   assert.deepEqual(q.scan({ current: null }), [])
   await q.idle()

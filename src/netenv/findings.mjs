@@ -1,9 +1,9 @@
-// findings.mjs (src/netenv) — what `asight doctor` says about the network (RFC 1.6 附录 B): the catalogue of findings, one entry per code, and `diagnose`, which says which of them the facts and the topology call for.
+// findings.mjs (src/netenv) — what `trocar doctor` says about the network (RFC 1.6 附录 B): the catalogue of findings, one entry per code, and `diagnose`, which says which of them the facts and the topology call for.
 // A finding is `{ code, class, harness?, what, why, commands: [{ run, shell }], verify }`. The commands are whole lines with every value filled in (pid, port, path, user): a value that could not be read is
-// written 「不知道 · <原因>」 with the command that reads it, never a `<…>` placeholder. asight's own commands come first, then the application's or the OS's. Nothing here runs anything (R8): `doctor` only
+// written 「不知道 · <原因>」 with the command that reads it, never a `<…>` placeholder. trocar's own commands come first, then the application's or the OS's. Nothing here runs anything (R8): `doctor` only
 // prints them. Pure: facts and topology in, findings out.
 import { detectDrift, isWrittenPlace } from './adopt.mjs'
-import { hopKey, firstHopAfterAsight, firstHopOff } from './topology-text.mjs'
+import { hopKey, firstHopAfterTrocar, firstHopOff } from './topology-text.mjs'
 import { parseProxyUrl } from './redact.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
 import { TRUST_REASONS, ROUTE_TRUST_REASONS } from '../health/codes.mjs'
@@ -14,9 +14,9 @@ const BY_CLASS = { problem: 0, expected: 1, note: 2 }
 const nodeOf = (t, id) => t.nodes.find((n) => n.id === id)
 
 // ── what a command is ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-const asight = (ctx, run) => ({ run, shell: ctx.sh })
-/** An install item of the form that drifted (proxy mode: the carrier, a wrapper or a plugin; 1.6 §9.3 row 31): the command its `certificate` names, `asight install`. */
-const installFix = (c) => (c.fm && c.fm.certificate && c.fm.certificate.command ? [asight(c, c.fm.certificate.command)] : null)
+const trocar = (ctx, run) => ({ run, shell: ctx.sh })
+/** An install item of the form that drifted (proxy mode: the carrier, a wrapper or a plugin; 1.6 §9.3 row 31): the command its `certificate` names, `trocar install`. */
+const installFix = (c) => (c.fm && c.fm.certificate && c.fm.certificate.command ? [trocar(c, c.fm.certificate.command)] : null)
 const os = (ctx, byPlatform) => ({ run: byPlatform[ctx.platform] || byPlatform.linux, shell: ctx.platform === 'win32' ? 'powershell' : 'sh' })
 const gui = (run) => ({ run, shell: 'gui' })
 const unknownValue = (what, reason) => `unknown ${what} (${reason})`
@@ -73,7 +73,7 @@ function formRestart(ctx) {
 }
 const settingOf = (hf) => (hf.setting && !hf.setting.unknown && hf.setting.value ? hf.setting : ((hf.forms || []).map((f) => f.setting).find((s) => s && s.value) || null))
 const deadProxy = (t) => t.nodes.find((n) => n.kind === 'proxy' && n.down === true) || null
-/** The places of the USER's own that hold the address this finding is about (`diagnose` filtered them: a key asight wrote is never among them, 1.6 附录 B `places`). */
+/** The places of the USER's own that hold the address this finding is about (`diagnose` filtered them: a key trocar wrote is never among them, 1.6 附录 B `places`). */
 const userPlaces = (c) => (Array.isArray(c.places) ? c.places : [])
 /** The steps that take that address out of the user's own settings, one named step per place; with no place known, the one the setting was read from. */
 const removeSteps = (c) => (userPlaces(c).length ? userPlaces(c).map((p) => gui(removeAt(c.h, p))) : [gui(c.setting ? removeAt(c.h, placeOf(c.hf, c.setting)) : unknownValue('setting', 'absent'))])
@@ -81,79 +81,79 @@ const removeSteps = (c) => (userPlaces(c).length ? userPlaces(c).map((p) => gui(
 /** not-routed, by the reason the model's route plan gave the form (`fm.route.reason`, src/collector/core/proxymode/entries.mjs; 4.11 §3, 1.6 附录 B): the why, and the steps
  *  (the place the plan named in `at`, else `unknown`). A PAC the facts see and no reason of the plan's is the PAC row; nothing known is the generic row. */
 function notRoutedOf(c) {
-  const r = (c.fm && c.fm.route) || {}, at = r.at || unknownValue('place', 'absent'), on = asight(c, `asight on ${c.h}`)
-  if (r.reason === 'system-pac' || (!r.reason && c.pac)) return { why: 'The system proxy it follows is a PAC script, which asight does not run.', commands: [gui(`${setAt(c.h, placeOf(c.hf, c.setting), unknownValue('proxy address', 'pac'))}`), on] }
-  if (r.reason === 'blocker' || r.reason === 'own-egress') return { why: `A setting of yours (${at}) keeps ${c.h} off any entry asight can use.`, commands: [gui(`Remove the setting at ${at}`), on] }
-  if (r.reason === 'blocker-unreadable' || r.reason === 'unreadable') return { why: `asight cannot read ${at}, so it did not connect this form.`, commands: [gui(`Make ${at} readable, or fix it`), on] }
-  if (r.reason === 'absent') return { why: `${c.h}'s entry file ${at} does not exist, and asight does not create it.`, commands: [gui(`Run ${c.h}'s own setup so that it creates ${at}`), on] }
-  if (r.reason === 'credentialed-own-leg') return { why: 'This form\'s entry takes no login, so asight does not hand it an upstream that needs one.', commands: [gui(`Use a proxy without a login for ${c.h}, or use its CLI form`), on] }
-  if (r.reason === 'no-path' || r.reason === 'no-applied-entry') return { why: `asight found no entry for this form of ${c.h}${r.at ? ` (${r.at})` : ''}.`, commands: [gui(`Start ${c.h} once so that it writes its own settings`), on] }
-  if (r.reason === 'no-carrier') return { why: 'This form has no certificate yet.', commands: [asight(c, 'asight install'), on] }
-  return { why: 'This form has no entry asight can use.', commands: [gui(`Use ${c.h}'s CLI form instead`), asight(c, `asight status ${c.h}`)] }
+  const r = (c.fm && c.fm.route) || {}, at = r.at || unknownValue('place', 'absent'), on = trocar(c, `trocar on ${c.h}`)
+  if (r.reason === 'system-pac' || (!r.reason && c.pac)) return { why: 'The system proxy it follows is a PAC script, which trocar does not run.', commands: [gui(`${setAt(c.h, placeOf(c.hf, c.setting), unknownValue('proxy address', 'pac'))}`), on] }
+  if (r.reason === 'blocker' || r.reason === 'own-egress') return { why: `A setting of yours (${at}) keeps ${c.h} off any entry trocar can use.`, commands: [gui(`Remove the setting at ${at}`), on] }
+  if (r.reason === 'blocker-unreadable' || r.reason === 'unreadable') return { why: `trocar cannot read ${at}, so it did not connect this form.`, commands: [gui(`Make ${at} readable, or fix it`), on] }
+  if (r.reason === 'absent') return { why: `${c.h}'s entry file ${at} does not exist, and trocar does not create it.`, commands: [gui(`Run ${c.h}'s own setup so that it creates ${at}`), on] }
+  if (r.reason === 'credentialed-own-leg') return { why: 'This form\'s entry takes no login, so trocar does not hand it an upstream that needs one.', commands: [gui(`Use a proxy without a login for ${c.h}, or use its CLI form`), on] }
+  if (r.reason === 'no-path' || r.reason === 'no-applied-entry') return { why: `trocar found no entry for this form of ${c.h}${r.at ? ` (${r.at})` : ''}.`, commands: [gui(`Start ${c.h} once so that it writes its own settings`), on] }
+  if (r.reason === 'no-carrier') return { why: 'This form has no certificate yet.', commands: [trocar(c, 'trocar install'), on] }
+  return { why: 'This form has no entry trocar can use.', commands: [gui(`Use ${c.h}'s CLI form instead`), trocar(c, `trocar status ${c.h}`)] }
 }
 
 /** The catalogue (附录 B). `applies` is `diagnose`'s business; each entry says what it is. `cls` is the class, or a function of the context where it depends (`proxy-changed`). */
 export const FINDINGS = {
-  'desired-off': { cls: 'expected', asightFirst: true, what: (c) => `Capture is off for ${c.h}.`, why: () => 'asight is not on its path: it connects directly, or through your own proxy.', commands: (c) => [asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}` },
-  'daemon-not-running': { cls: 'problem', asightFirst: true, what: () => 'asight is not running in the background, so nothing is captured.', why: () => 'Without it there is no engine, and new connections go straight out.', commands: (c) => [asight(c, `asight on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'asight status' },
-  'daemon-not-responding': { cls: 'problem', asightFirst: true, what: () => 'asight runs in the background but does not answer, so nothing is captured.', why: () => 'Its heartbeat is stale, so new connections already go straight out.', commands: (c) => [asight(c, 'asight off'), asight(c, `asight on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'asight status' },
-  'helper-missing': { cls: 'problem', asightFirst: false, what: () => 'asight\'s capture helper is missing or is the wrong version.', why: () => 'Without it asight cannot attach to the kernel, so nothing is captured.', commands: (c) => [{ run: 'sudo asight setup-helper', shell: 'sh' }, asight(c, `asight on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'asight status' },
-  'link-missing': { cls: 'problem', asightFirst: true, what: () => 'Capture is on, but asight is not attached, so nothing is captured.', why: () => 'New connections go straight out.', commands: (c) => [asight(c, `asight on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'asight status' },
-  'entry-missing': { cls: 'problem', asightFirst: true, what: (c) => `${c.h}'s setting that points at asight is gone.`, why: () => 'It was removed, or it was never written.', commands: (c) => installFix(c) || [asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}` },
-  'entry-changed': { cls: 'problem', asightFirst: true, what: (c) => `${c.h}'s setting that points at asight holds something else now.`, why: () => 'You, or another program, changed what asight wrote.', commands: (c) => installFix(c) || [asight(c, `asight off ${c.h}`), asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}` },
-  'negative-cache': { cls: 'problem', asightFirst: true, what: (c) => `${c.h}${c.pid ? ` (pid ${c.pid})` : ''} refused asight's certificate; it is forwarded only.`, why: () => 'Certificates are read when a program starts.', commands: (c) => [...restartSteps(c), asight(c, `asight status ${c.h}`)], verify: (c) => `asight status ${c.h}` },
-  'not-routed': { cls: 'problem', asightFirst: false, what: (c) => `New connections from ${c.h} do not go through asight.`, why: (c) => notRoutedOf(c).why, commands: (c) => notRoutedOf(c).commands, verify: (c) => `asight status ${c.h}` },
-  'route-loop': { cls: 'problem', asightFirst: true, what: (c) => `asight's upstream for ${c.h} would be asight itself.`, why: () => 'The proxy setting asight read already points at one of asight\'s own ports, so asight did not connect this form.', commands: (c) => [asight(c, `asight off ${c.h}`), gui(setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownValue('proxy address', 'absent'))), asight(c, `asight on ${c.h}`)], verify: (c) => `asight doctor ${c.h}` },
-  'proxy-dead': { cls: 'problem', asightFirst: false, what: (c) => `Nothing is listening on ${c.dead.addr}:${c.dead.port}, the proxy ${c.h} is set to use.`, why: () => 'Your proxy is not running; asight did not write this setting.',
-    places: userPlaces, commands: (c) => [gui(`Start your proxy, so that it listens on ${c.dead.addr}:${c.dead.port}`), ...removeSteps(c), portCheck(c, c.dead.port)], verify: (c) => `asight status ${c.h}` },
-  'proxy-unsupported': { cls: 'problem', asightFirst: false, what: (c) => `${c.h} does not support the proxy scheme ${c.setting.scheme}.`, why: (c) => (c.silent ? `${c.h} connects directly and says nothing, so that proxy has no effect.` : `${c.h} cannot use a ${c.setting.scheme} proxy.`),
-    commands: (c) => [gui(setAt(c.h, placeOf(c.hf, c.setting), c.setting.host && c.setting.port ? `http://${c.setting.host}:${c.setting.port}` : unknownValue('proxy address', 'absent')))], verify: (c) => `asight status ${c.h}` },
-  'proxy-changed': { cls: (c) => (c.F.routing === 'proxy' ? 'problem' : 'expected'), asightFirst: true, what: (c) => `${c.h}'s proxy setting is not the one asight connected to.`, why: () => 'You changed it.',
-    commands: (c) => (c.F.routing === 'proxy' ? [asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`)] : [asight(c, `asight status ${c.h}`)]), verify: (c) => `asight status ${c.h}` },
-  'elevated-agent': { cls: 'problem', asightFirst: false, what: (c) => `${c.h}${c.pid ? ` (pid ${c.pid})` : ''} runs elevated, so asight only forwards it.`, why: () => 'asight never decrypts an elevated process.', commands: () => [gui('Quit it and start it again without administrator rights')], verify: (c) => `asight status ${c.h}` },
-  'forwarder-down': { cls: 'problem', asightFirst: true, what: (c) => `asight is not listening${c.port ? ` on :${c.port}` : ''}, so ${c.h || 'your agents'} cannot connect.`, why: () => 'The port lives with asight\'s background process, which is not there.', commands: (c) => [asight(c, 'asight on'), asight(c, `asight off ${c.h}`)], verify: () => 'asight status' },
-  'upstream-unreachable': { cls: 'problem', asightFirst: false, what: (c) => `asight cannot reach the proxy${c.upPort ? ` :${c.upPort}` : ''} it uses for ${c.h}.`, why: () => 'Your proxy has quit while a setting still points at it; without asight it would not connect either.',
+  'desired-off': { cls: 'expected', trocarFirst: true, what: (c) => `Capture is off for ${c.h}.`, why: () => 'trocar is not on its path: it connects directly, or through your own proxy.', commands: (c) => [trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
+  'daemon-not-running': { cls: 'problem', trocarFirst: true, what: () => 'trocar is not running in the background, so nothing is captured.', why: () => 'Without it there is no engine, and new connections go straight out.', commands: (c) => [trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
+  'daemon-not-responding': { cls: 'problem', trocarFirst: true, what: () => 'trocar runs in the background but does not answer, so nothing is captured.', why: () => 'Its heartbeat is stale, so new connections already go straight out.', commands: (c) => [trocar(c, 'trocar off'), trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
+  'helper-missing': { cls: 'problem', trocarFirst: false, what: () => 'trocar\'s capture helper is missing or is the wrong version.', why: () => 'Without it trocar cannot attach to the kernel, so nothing is captured.', commands: (c) => [{ run: 'sudo trocar setup-helper', shell: 'sh' }, trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
+  'link-missing': { cls: 'problem', trocarFirst: true, what: () => 'Capture is on, but trocar is not attached, so nothing is captured.', why: () => 'New connections go straight out.', commands: (c) => [trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
+  'entry-missing': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s setting that points at trocar is gone.`, why: () => 'It was removed, or it was never written.', commands: (c) => installFix(c) || [trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
+  'entry-changed': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s setting that points at trocar holds something else now.`, why: () => 'You, or another program, changed what trocar wrote.', commands: (c) => installFix(c) || [trocar(c, `trocar off ${c.h}`), trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
+  'negative-cache': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}${c.pid ? ` (pid ${c.pid})` : ''} refused trocar's certificate; it is forwarded only.`, why: () => 'Certificates are read when a program starts.', commands: (c) => [...restartSteps(c), trocar(c, `trocar status ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
+  'not-routed': { cls: 'problem', trocarFirst: false, what: (c) => `New connections from ${c.h} do not go through trocar.`, why: (c) => notRoutedOf(c).why, commands: (c) => notRoutedOf(c).commands, verify: (c) => `trocar status ${c.h}` },
+  'route-loop': { cls: 'problem', trocarFirst: true, what: (c) => `trocar's upstream for ${c.h} would be trocar itself.`, why: () => 'The proxy setting trocar read already points at one of trocar\'s own ports, so trocar did not connect this form.', commands: (c) => [trocar(c, `trocar off ${c.h}`), gui(setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownValue('proxy address', 'absent'))), trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar doctor ${c.h}` },
+  'proxy-dead': { cls: 'problem', trocarFirst: false, what: (c) => `Nothing is listening on ${c.dead.addr}:${c.dead.port}, the proxy ${c.h} is set to use.`, why: () => 'Your proxy is not running; trocar did not write this setting.',
+    places: userPlaces, commands: (c) => [gui(`Start your proxy, so that it listens on ${c.dead.addr}:${c.dead.port}`), ...removeSteps(c), portCheck(c, c.dead.port)], verify: (c) => `trocar status ${c.h}` },
+  'proxy-unsupported': { cls: 'problem', trocarFirst: false, what: (c) => `${c.h} does not support the proxy scheme ${c.setting.scheme}.`, why: (c) => (c.silent ? `${c.h} connects directly and says nothing, so that proxy has no effect.` : `${c.h} cannot use a ${c.setting.scheme} proxy.`),
+    commands: (c) => [gui(setAt(c.h, placeOf(c.hf, c.setting), c.setting.host && c.setting.port ? `http://${c.setting.host}:${c.setting.port}` : unknownValue('proxy address', 'absent')))], verify: (c) => `trocar status ${c.h}` },
+  'proxy-changed': { cls: (c) => (c.F.routing === 'proxy' ? 'problem' : 'expected'), trocarFirst: true, what: (c) => `${c.h}'s proxy setting is not the one trocar connected to.`, why: () => 'You changed it.',
+    commands: (c) => (c.F.routing === 'proxy' ? [trocar(c, `trocar on ${c.h}`), trocar(c, `trocar off ${c.h}`)] : [trocar(c, `trocar status ${c.h}`)]), verify: (c) => `trocar status ${c.h}` },
+  'elevated-agent': { cls: 'problem', trocarFirst: false, what: (c) => `${c.h}${c.pid ? ` (pid ${c.pid})` : ''} runs elevated, so trocar only forwards it.`, why: () => 'trocar never decrypts an elevated process.', commands: () => [gui('Quit it and start it again without administrator rights')], verify: (c) => `trocar status ${c.h}` },
+  'forwarder-down': { cls: 'problem', trocarFirst: true, what: (c) => `trocar is not listening${c.port ? ` on :${c.port}` : ''}, so ${c.h || 'your agents'} cannot connect.`, why: () => 'The port lives with trocar\'s background process, which is not there.', commands: (c) => [trocar(c, 'trocar on'), trocar(c, `trocar off ${c.h}`)], verify: () => 'trocar status' },
+  'upstream-unreachable': { cls: 'problem', trocarFirst: false, what: (c) => `trocar cannot reach the proxy${c.upPort ? ` :${c.upPort}` : ''} it uses for ${c.h}.`, why: () => 'Your proxy has quit while a setting still points at it; without trocar it would not connect either.',
     places: userPlaces,
-    // asight's door is on the path, and its upstream is the address nobody answers: the key asight wrote holds the door, so removing THAT changes nothing
+    // trocar's door is on the path, and its upstream is the address nobody answers: the key trocar wrote holds the door, so removing THAT changes nothing
     // (`off` would write the prior value back). What to take away, to get off this proxy for good, are their own keys that still name it.
-    commands: (c) => [gui('Start your proxy, or turn off the system proxy that points at it'), ...(userPlaces(c).length ? [asight(c, `asight off ${c.h}`), ...userPlaces(c).map((p) => gui(removeAt(c.h, p))), asight(c, `asight on ${c.h}`)] : []),
-      ...(c.upPort ? [portCheck(c, c.upPort)] : [])], verify: (c) => `asight status ${c.h}` },
-  'shim-not-on-path': { cls: 'problem', asightFirst: true, what: (c) => `${c.h} does not start through the program asight installed.`, why: () => 'Another command of the same name comes first on PATH, or it was started another way.',
-    commands: (c) => [asight(c, 'asight install'), gui(`Quit ${c.h} and start it again from a new terminal`)], verify: (c) => `asight status ${c.h}` },
-  'egress-differs': { cls: 'note', asightFirst: false, what: (c) => `Some of ${c.h}'s connections now leave through a different hop.`, why: () => 'In proxy mode a form has one upstream, so traffic that used to split now takes that one.', commands: (c) => [asight(c, `asight off ${c.h}`)], verify: (c) => `asight status ${c.h}` },
-  'linger-off': { cls: 'note', asightFirst: false, what: () => 'Capture stops when you log out.', why: () => 'Your login session owns asight\'s background process.', commands: (c) => [{ run: `loginctl enable-linger ${c.user || '"$(id -un)"'}`, shell: 'sh' }], verify: () => 'asight status' },
-  'system-proxy-pac': { cls: 'note', asightFirst: false, what: () => 'Your system proxy is a PAC script, so the next hop is unknown.', why: () => 'asight does not run PAC scripts.', commands: (c) => [os(c, { win32: "Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name AutoConfigURL", darwin: 'scutil --proxy', linux: 'gsettings get org.gnome.system.proxy autoconfig-url' })], verify: () => 'asight status' },
-  'other-redirector': { cls: 'note', asightFirst: false, what: () => 'Something else on this machine also rewrites connections.', why: () => 'It may rewrite the same connections asight does.', commands: (c) => [os(c, { linux: 'sudo bpftool cgroup tree /sys/fs/cgroup', win32: 'netsh winsock show catalog', darwin: 'netstat -rn' })], verify: () => 'asight status' },
-  'fake-ip': { cls: 'note', asightFirst: false, what: (c) => `${c.h}'s API host resolves inside 198.18.0.0/15, a fake IP range.`, why: () => 'asight records the host from the TLS handshake, not from the address.', commands: () => [], verify: () => 'asight status' },
-  'inferred-behaviour': { cls: 'note', asightFirst: false, what: (c) => `${c.h}'s proxy behaviour on this platform is inferred, not measured.`, why: () => 'It was measured on another platform.', commands: () => [], verify: () => 'asight status' },
+    commands: (c) => [gui('Start your proxy, or turn off the system proxy that points at it'), ...(userPlaces(c).length ? [trocar(c, `trocar off ${c.h}`), ...userPlaces(c).map((p) => gui(removeAt(c.h, p))), trocar(c, `trocar on ${c.h}`)] : []),
+      ...(c.upPort ? [portCheck(c, c.upPort)] : [])], verify: (c) => `trocar status ${c.h}` },
+  'shim-not-on-path': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h} does not start through the program trocar installed.`, why: () => 'Another command of the same name comes first on PATH, or it was started another way.',
+    commands: (c) => [trocar(c, 'trocar install'), gui(`Quit ${c.h} and start it again from a new terminal`)], verify: (c) => `trocar status ${c.h}` },
+  'egress-differs': { cls: 'note', trocarFirst: false, what: (c) => `Some of ${c.h}'s connections now leave through a different hop.`, why: () => 'In proxy mode a form has one upstream, so traffic that used to split now takes that one.', commands: (c) => [trocar(c, `trocar off ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
+  'linger-off': { cls: 'note', trocarFirst: false, what: () => 'Capture stops when you log out.', why: () => 'Your login session owns trocar\'s background process.', commands: (c) => [{ run: `loginctl enable-linger ${c.user || '"$(id -un)"'}`, shell: 'sh' }], verify: () => 'trocar status' },
+  'system-proxy-pac': { cls: 'note', trocarFirst: false, what: () => 'Your system proxy is a PAC script, so the next hop is unknown.', why: () => 'trocar does not run PAC scripts.', commands: (c) => [os(c, { win32: "Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name AutoConfigURL", darwin: 'scutil --proxy', linux: 'gsettings get org.gnome.system.proxy autoconfig-url' })], verify: () => 'trocar status' },
+  'other-redirector': { cls: 'note', trocarFirst: false, what: () => 'Something else on this machine also rewrites connections.', why: () => 'It may rewrite the same connections trocar does.', commands: (c) => [os(c, { linux: 'sudo bpftool cgroup tree /sys/fs/cgroup', win32: 'netsh winsock show catalog', darwin: 'netstat -rn' })], verify: () => 'trocar status' },
+  'fake-ip': { cls: 'note', trocarFirst: false, what: (c) => `${c.h}'s API host resolves inside 198.18.0.0/15, a fake IP range.`, why: () => 'trocar records the host from the TLS handshake, not from the address.', commands: () => [], verify: () => 'trocar status' },
+  'inferred-behaviour': { cls: 'note', trocarFirst: false, what: (c) => `${c.h}'s proxy behaviour on this platform is inferred, not measured.`, why: () => 'It was measured on another platform.', commands: () => [], verify: () => 'trocar status' },
   // the name list (D51): a process on no list used the harness's entry (forwarded only), and agents.json's own problems. Not a WIDE name: the line to add, every value filled in;
-  // an interpreter name needs args (its script), and asight does not keep command lines, so that line cannot be written (no `<…>` is left, an unknown value is said)
-  'process-unknown': { cls: 'note', asightFirst: false, what: (c) => `A process named ${c.u.name ?? unknownValue('name', 'unreadable')} (pid ${c.u.pid ?? unknownValue('pid', 'unreadable')}) used ${c.h}'s proxy but is not listed.`,
-    why: (c) => (c.u.named ? `That name is listed for ${c.h}, but only with argument patterns this process did not match.` : `asight matches agents by process name, and this one is on no list.`),
-    commands: (c) => [gui(c.u.name == null ? unknownValue('name', 'the name of that process could not be read') : c.u.wide ? `An interpreter name needs its script name, which asight does not keep: add ${c.u.name} with an "args" pattern to the agents list in ${c.listPath}`
+  // an interpreter name needs args (its script), and trocar does not keep command lines, so that line cannot be written (no `<…>` is left, an unknown value is said)
+  'process-unknown': { cls: 'note', trocarFirst: false, what: (c) => `A process named ${c.u.name ?? unknownValue('name', 'unreadable')} (pid ${c.u.pid ?? unknownValue('pid', 'unreadable')}) used ${c.h}'s proxy but is not listed.`,
+    why: (c) => (c.u.named ? `That name is listed for ${c.h}, but only with argument patterns this process did not match.` : `trocar matches agents by process name, and this one is on no list.`),
+    commands: (c) => [gui(c.u.name == null ? unknownValue('name', 'the name of that process could not be read') : c.u.wide ? `An interpreter name needs its script name, which trocar does not keep: add ${c.u.name} with an "args" pattern to the agents list in ${c.listPath}`
       : c.u.named ? `A line without "args" would claim every process named ${c.u.name}: add this one with its own "args" pattern to the agents list in ${c.listPath}`
-      : `Add ${JSON.stringify({ harness: c.h, name: c.u.name })} to the agents list in ${c.listPath} (create it as {"version":1,"agents":[...]} if it is not there); no restart needed`)], verify: (c) => `asight status ${c.h}` },
-  'agent-list-invalid': { cls: 'problem', asightFirst: false, what: (c) => `${c.file.path} has ${c.file.problems.length} bad entr${c.file.problems.length === 1 ? 'y' : 'ies'}; the rest is still used.`, why: (c) => (c.file.state === 'ok' ? 'A bad entry does not apply; the others do.' : 'The whole file does not apply, so only the built-in names are used.'),
-    commands: (c) => c.file.problems.map((p) => gui(`${p.index == null ? `Fix ${c.file.path}` : `Fix or remove entry ${p.index + 1} of ${c.file.path}`}: ${p.detail}`)), verify: () => 'asight status' },
-  'cert-key-missing': { cls: 'problem', asightFirst: true, what: () => 'The key for asight\'s root is gone, so asight only forwards.', why: () => 'It was removed from your keychain or key store.', commands: (c) => [asight(c, 'asight install')], verify: () => 'asight status' },
-  'cert-intermediate-unavailable': { cls: 'problem', asightFirst: false, what: () => 'asight cannot sign certificates right now, so it only forwards.', why: () => 'There is no desktop login session, or your keychain is locked.',
-    commands: (c) => [gui('Log in to the desktop session on this machine and unlock your keychain'), asight(c, 'asight status')], verify: () => 'asight status' },
-  'not-users-file': { cls: 'expected', asightFirst: false, what: (c) => `${c.h} points at a certificate file that is not yours; asight left it alone.`, why: () => 'asight only appends to files you own.',
-    commands: (c) => [gui(`Point ${c.h}'s certificate setting at a file you own`), asight(c, 'asight install')], verify: (c) => `asight status ${c.h}` },
-  'not-verified': { cls: 'expected', asightFirst: false, what: (c) => `This form of ${c.h} is not verified on this platform yet; it is forwarded only.`, why: () => 'asight only decrypts the forms it has verified.',
-    commands: (c) => [gui(`No action needed: ${c.h} keeps working, and these connections are not decrypted`)], verify: (c) => `asight status ${c.h}` },
-  'prior-proxy-unknown': { cls: 'note', asightFirst: false, what: (c) => `asight could not recover the proxy ${c.h}${c.pids && c.pids.length ? ` (pid ${c.pids.join(', ')})` : ''} started with.`,
-    why: () => 'The process that set it has quit, so asight uses the system proxy, or none.', commands: (c) => [gui(setAt(c.h, placeOf(c.hf, null), unknownValue('proxy address', 'env-unreadable'))), asight(c, `asight on ${c.h}`), gui(`Restart ${c.h}`)],
-    verify: (c) => `asight status ${c.h}` },
-  'collectors-online': { cls: 'problem', asightFirst: true, what: (c) => `Capture is still on${c.online ? ` for ${c.online}` : ''}, so nothing was uninstalled.`, why: () => 'asight never turns capture off for you.', commands: (c) => [asight(c, 'asight off'), asight(c, 'asight uninstall')], verify: () => 'asight status' },
-  // The user named the harness, and nothing in the facts explains it. asight has no fact that says an agent cannot connect, so this does not claim it: a condition, a note.
-  'cause-unknown': { cls: 'note', asightFirst: true, what: (c) => `If ${c.h} still cannot connect: asight found no cause on its side.`, why: () => 'Nothing asight read explains it.',
-    commands: (c) => [asight(c, `asight off ${c.h}`), gui(`Try ${c.h} again: if it still fails, asight is not the cause; if it works, run asight on ${c.h} and then asight doctor ${c.h}`)], verify: (c) => `Try ${c.h} again` },
+      : `Add ${JSON.stringify({ harness: c.h, name: c.u.name })} to the agents list in ${c.listPath} (create it as {"version":1,"agents":[...]} if it is not there); no restart needed`)], verify: (c) => `trocar status ${c.h}` },
+  'agent-list-invalid': { cls: 'problem', trocarFirst: false, what: (c) => `${c.file.path} has ${c.file.problems.length} bad entr${c.file.problems.length === 1 ? 'y' : 'ies'}; the rest is still used.`, why: (c) => (c.file.state === 'ok' ? 'A bad entry does not apply; the others do.' : 'The whole file does not apply, so only the built-in names are used.'),
+    commands: (c) => c.file.problems.map((p) => gui(`${p.index == null ? `Fix ${c.file.path}` : `Fix or remove entry ${p.index + 1} of ${c.file.path}`}: ${p.detail}`)), verify: () => 'trocar status' },
+  'cert-key-missing': { cls: 'problem', trocarFirst: true, what: () => 'The key for trocar\'s root is gone, so trocar only forwards.', why: () => 'It was removed from your keychain or key store.', commands: (c) => [trocar(c, 'trocar install')], verify: () => 'trocar status' },
+  'cert-intermediate-unavailable': { cls: 'problem', trocarFirst: false, what: () => 'trocar cannot sign certificates right now, so it only forwards.', why: () => 'There is no desktop login session, or your keychain is locked.',
+    commands: (c) => [gui('Log in to the desktop session on this machine and unlock your keychain'), trocar(c, 'trocar status')], verify: () => 'trocar status' },
+  'not-users-file': { cls: 'expected', trocarFirst: false, what: (c) => `${c.h} points at a certificate file that is not yours; trocar left it alone.`, why: () => 'trocar only appends to files you own.',
+    commands: (c) => [gui(`Point ${c.h}'s certificate setting at a file you own`), trocar(c, 'trocar install')], verify: (c) => `trocar status ${c.h}` },
+  'not-verified': { cls: 'expected', trocarFirst: false, what: (c) => `This form of ${c.h} is not verified on this platform yet; it is forwarded only.`, why: () => 'trocar only decrypts the forms it has verified.',
+    commands: (c) => [gui(`No action needed: ${c.h} keeps working, and these connections are not decrypted`)], verify: (c) => `trocar status ${c.h}` },
+  'prior-proxy-unknown': { cls: 'note', trocarFirst: false, what: (c) => `trocar could not recover the proxy ${c.h}${c.pids && c.pids.length ? ` (pid ${c.pids.join(', ')})` : ''} started with.`,
+    why: () => 'The process that set it has quit, so trocar uses the system proxy, or none.', commands: (c) => [gui(setAt(c.h, placeOf(c.hf, null), unknownValue('proxy address', 'env-unreadable'))), trocar(c, `trocar on ${c.h}`), gui(`Restart ${c.h}`)],
+    verify: (c) => `trocar status ${c.h}` },
+  'collectors-online': { cls: 'problem', trocarFirst: true, what: (c) => `Capture is still on${c.online ? ` for ${c.online}` : ''}, so nothing was uninstalled.`, why: () => 'trocar never turns capture off for you.', commands: (c) => [trocar(c, 'trocar off'), trocar(c, 'trocar uninstall')], verify: () => 'trocar status' },
+  // The user named the harness, and nothing in the facts explains it. trocar has no fact that says an agent cannot connect, so this does not claim it: a condition, a note.
+  'cause-unknown': { cls: 'note', trocarFirst: true, what: (c) => `If ${c.h} still cannot connect: trocar found no cause on its side.`, why: () => 'Nothing trocar read explains it.',
+    commands: (c) => [trocar(c, `trocar off ${c.h}`), gui(`Try ${c.h} again: if it still fails, trocar is not the cause; if it works, run trocar on ${c.h} and then trocar doctor ${c.h}`)], verify: (c) => `Try ${c.h} again` },
 }
 // the trust reasons not listed above (a variable missing, a file unreadable, …): the daemon's own hint says what to do about this agent
-const TRUST = { cls: (c) => (RESTART_REASONS.includes(c.code) ? 'expected' : 'problem'), asightFirst: false, what: (c) => `${c.h} is not captured${RESTART_REASONS.includes(c.code) ? `${c.pid ? `: pid ${c.pid} started` : ': it started'} before capture was on.` : `${c.pid ? `: pid ${c.pid}` : ''}.`}`,
+const TRUST = { cls: (c) => (RESTART_REASONS.includes(c.code) ? 'expected' : 'problem'), trocarFirst: false, what: (c) => `${c.h} is not captured${RESTART_REASONS.includes(c.code) ? `${c.pid ? `: pid ${c.pid} started` : ': it started'} before capture was on.` : `${c.pid ? `: pid ${c.pid}` : ''}.`}`,
   why: (c) => c.hint || trustReasonText(c.code) || 'Certificates are read when a program starts.',
-  commands: (c) => (RESTART_REASONS.includes(c.code) ? restartSteps(c) : [asight(c, `asight status ${c.h}`), gui(c.hint || trustReasonText(c.code) || `Follow ${c.h}'s own instructions`)]), verify: (c) => `asight status ${c.h}` }
+  commands: (c) => (RESTART_REASONS.includes(c.code) ? restartSteps(c) : [trocar(c, `trocar status ${c.h}`), gui(c.hint || trustReasonText(c.code) || `Follow ${c.h}'s own instructions`)]), verify: (c) => `trocar status ${c.h}` }
 
 /** Every code a finding may carry: the cross-platform catalogue's, the Windows table's (4.8 §10.4) and the trust reasons' — the Windows collector's own trust reasons (ROUTE_TRUST_REASONS, 4.8 §12) included,
  *  for the same reason TRUST_REASONS is: they are the codes of `agent-untrusted` a form's verdict can carry. The schema validates against this list. */
@@ -204,7 +204,7 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     const sysPac = !!((hf.systemProxy && hf.systemProxy.pac) || (hf.forms || []).some((f) => f.systemProxy && f.systemProxy.pac))
     const upstream = Object.values((F.forwarder && F.forwarder.forms) || {}).map((x) => x.upstream).find((u) => u && u !== 'DIRECT')
     const upAddr = upstream ? parseProxyUrl(upstream) : null
-    // the places of the user's OWN that hold an address, for a finding that asks them to remove it by hand: a place asight wrote (its value is the door, and
+    // the places of the user's OWN that hold an address, for a finding that asks them to remove it by hand: a place trocar wrote (its value is the door, and
     // `off` puts the user's own back) is never one of them — known from this harness's on-phase manifest items (`writtenPlaces`), whatever the format
     const placesAt = (host, port) => (hf.proxyPlaces || []).filter((p) => p.host === host && String(p.port) === String(port) && !isWrittenPlace(hf.writtenPlaces, p))
     // the doctor's own name for a protocol the upstream cannot take replaces the branch's not-routed (4.8 §10.4: upstream-protocol sits on the proxy-unsupported row)
@@ -212,17 +212,17 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     for (const r of reasons.filter((x) => !(protoForm && x === 'not-routed'))) add(r, { upPort: upAddr ? upAddr.port : undefined, places: upAddr ? placesAt(upAddr.host, upAddr.port) : [], hint: row && row.reason === r ? row.hint : undefined, pid: row && row.reason === r ? row.pid : undefined, pac: sysPac, fm: formOf(r) })
     if (protoForm) add('proxy-unsupported', { protocol: protoForm.route.protocol, fm: protoForm })
     const dead = deadProxy(t)
-    // asight's door on the path with the dead address as its upstream is `upstream-unreachable`, not `proxy-dead`: the setting the agent reads is asight's
-    // own door, which is up; what is dead is the hop after it, and without asight the agent would not connect either (1.6 附录 B)
+    // trocar's door on the path with the dead address as its upstream is `upstream-unreachable`, not `proxy-dead`: the setting the agent reads is trocar's
+    // own door, which is up; what is dead is the hop after it, and without trocar the agent would not connect either (1.6 附录 B)
     if (dead) {
-      const viaAsight = !!(upAddr && upAddr.host === dead.addr && String(upAddr.port) === String(dead.port))
-      add(viaAsight ? 'upstream-unreachable' : 'proxy-dead', { dead, places: placesAt(dead.addr, dead.port), ...(viaAsight ? { upPort: dead.port } : {}) })
+      const viaTrocar = !!(upAddr && upAddr.host === dead.addr && String(upAddr.port) === String(dead.port))
+      add(viaTrocar ? 'upstream-unreachable' : 'proxy-dead', { dead, places: placesAt(dead.addr, dead.port), ...(viaTrocar ? { upPort: dead.port } : {}) })
     }
     const s = base.setting
     if (s && s.scheme && ((hf.behaviour.unsupported || {})[s.scheme] || !(hf.behaviour.schemes || []).includes(s.scheme))) add('proxy-unsupported', { silent: (hf.behaviour.unsupported || {})[s.scheme] === 'silent-direct' })
     if (sysPac) add('system-proxy-pac')
-    if (t.branches.some((b) => b.path.some((id) => (nodeOf(t, id) || {}).asight) && hopKey(firstHopAfterAsight(t, b)) !== hopKey(firstHopOff(t, b)) && firstHopAfterAsight(t, b))) add('egress-differs')
-    // drift is what the user changed in the files, not what this shell happens to export; and a harness that is off has no drift to report (asight is not on its path)
+    if (t.branches.some((b) => b.path.some((id) => (nodeOf(t, id) || {}).trocar) && hopKey(firstHopAfterTrocar(t, b)) !== hopKey(firstHopOff(t, b)) && firstHopAfterTrocar(t, b))) add('egress-differs')
+    // drift is what the user changed in the files, not what this shell happens to export; and a harness that is off has no drift to report (trocar is not on its path)
     const drifts = F.desired[h] === 'off' ? [] : detectDrift({ adopted, h, setting: hf.fileSetting || hf.setting, routing: F.routing, scope: 'files' })
     if (F.routing === 'driver' && drifts.some((d) => d.code === 'proxy-changed')) add('proxy-changed')
     for (const fm of hf.forms || []) { const fwf = F.forwarder && F.forwarder.forms && F.forwarder.forms[fm.id]; if (fwf && fwf.source === 'unknown') add('prior-proxy-unknown', { pids: fm.procs.map((p) => p.pid) }) }

@@ -1,5 +1,5 @@
 // labels/overview.mjs — the words of the overview page (1.7): the cards' names, the capture card's fixed parts, every
-// 事项 sentence, the stats figures, the disk footer and the first-run card. Fixed text only — keyed by asight's own closed sets
+// 事项 sentence, the stats figures, the disk footer and the first-run card. Fixed text only — keyed by trocar's own closed sets
 // (windows, condition kinds, source names), never by a harness-defined code (those carry their own words from the
 // server, 1.5 §数据规则). The capture card's state sentence itself is NOT here: it is core/capture-verdict.mjs's, so
 // the capture card and the 采集 page cannot say two things (1.7 §采集卡).
@@ -27,9 +27,9 @@ export const CAP_STALE_AS_OF = (t) => `capture health as of ${t}`
 export const MORE_OF = (n) => `${n} more ›`
 
 // O1 / O1′ — an agent's row sentence is the 采集 page's (core/capture-verdict.mjs agentVerdicts); a service-level condition
-// prefers its own `reason`, then these words for asight's own closed set of kinds
+// prefers its own `reason`, then these words for trocar's own closed set of kinds
 export const KIND_WORD = Object.freeze({
-  'ca-invalid': "asight's certificate cannot be used",
+  'ca-invalid': "trocar's certificate cannot be used",
 })
 export const AGENT_ITEM = (name, why) => `${name}: ${why}`
 export const SVC_ITEM = (why) => `capture service: ${why}`
@@ -78,11 +78,11 @@ export const PROBE_ONLY_TIP = 'this session has only token-count calls, no full 
 export const TITLE_FROM_AGENT = "title from the agent's own record"
 export const READ_FAIL = (what, why) => `${what} could not be read: ${why}`
 export const RETRY = 'Retry'
-export const DISK_USE = (b) => `${b} used by asight`
+export const DISK_USE = (b) => `${b} used by trocar`
 export const SEE_STORAGE = 'Storage ›'
 export const START_ROWS = Object.freeze([
   ['What it records', "Every call an agent sends to a model is recorded in full, with the model's response and usage, along with the agent's other network requests."],
   ['Where it is kept', 'These records are kept on this computer only.'],
-  ['What happens next', "Once installed, the first record appears here by itself the next time an agent calls a model. asight never sends a request for you."],
+  ['What happens next', "Once installed, the first record appears here by itself the next time an agent calls a model. trocar never sends a request for you."],
 ])
 export { MARK_TIP }

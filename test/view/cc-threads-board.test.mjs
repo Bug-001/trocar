@@ -13,7 +13,7 @@ import { tmpDir } from '../helpers/tmp.mjs';
 import { threadSession, record, replyOf, user } from '../helpers/cc-threads.mjs';
 
 async function board(recs) {
-  const file = path.join(tmpDir('asight-threads-'), 'cap.ndjson');
+  const file = path.join(tmpDir('trocar-threads-'), 'cap.ndjson');
   fs.writeFileSync(file, recs.map((r) => JSON.stringify(r)).join('\n') + '\n');
   const A = assembleSession(await readRecords(file));
   const calls = new Map(A.lanes.flatMap((l) => l.calls.map((c) => [c.id, { ...c, lane: l }])));

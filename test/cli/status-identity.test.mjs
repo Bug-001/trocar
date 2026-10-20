@@ -1,4 +1,4 @@
-// test/cli/status-identity.test.mjs — RFC 1.6 §9.7「名单」, V65 (D51③⑤): `asight status` reads ~/.asight/agents.json itself, with or without a daemon, and
+// test/cli/status-identity.test.mjs — RFC 1.6 §9.7「名单」, V65 (D51③⑤): `trocar status` reads ~/.trocar/agents.json itself, with or without a daemon, and
 // shows per harness the names in effect (with their source), the preset names an `ignore` dropped, the file's problems, and the processes on no list that
 // used the harness's door (the `process-unknown` events of this daemon life, folded from flows/). Sandbox HOME, injected process table and control socket (0.1 §3).
 import test from 'node:test'
@@ -10,9 +10,9 @@ import { runStatus, asDaemon, reply, claudeProc } from './fixtures/status-ctx.mj
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { foldFlows } from '../../src/health/flows.mjs'
 
-const writeList = (home, doc) => fs.writeFileSync(path.join(home, '.asight', 'agents.json'), JSON.stringify(doc))
+const writeList = (home, doc) => fs.writeFileSync(path.join(home, '.trocar', 'agents.json'), JSON.stringify(doc))
 function writeFlows(home, recs) {
-  const dir = path.join(home, '.asight', 'collector', 'flows')
+  const dir = path.join(home, '.trocar', 'collector', 'flows')
   fs.mkdirSync(dir, { recursive: true })
   const ts = new Date().toISOString()
   fs.appendFileSync(path.join(dir, `${ts.slice(0, 10)}.ndjson`), recs.map((r) => JSON.stringify({ ts, ...r }) + '\n').join(''))
@@ -38,7 +38,7 @@ test('V65 status --json: the identity block — a good custom item (source custo
     const { j, by } = await identityOf(s, deps)
     const cc = by['claude-code']
     assert.ok(cc, `${label}: claude-code has an identity block`)
-    assert.deepEqual([j.agent_list.path, j.agent_list.state], [path.join(s.home, '.asight', 'agents.json'), 'ok'], label)
+    assert.deepEqual([j.agent_list.path, j.agent_list.state], [path.join(s.home, '.trocar', 'agents.json'), 'ok'], label)
     assert.deepEqual(j.agent_list.problems.map((p) => [p.index, p.code]), [[1, 'wide-name-needs-args']], `${label}: the bad item is a problem with its index`)
     assert.ok(!('file' in cc), `${label}: the file is said once, not per harness`)
     assert.deepEqual(cc.names.find((n) => n.name === 'claude-nightly'), { name: 'claude-nightly', source: 'custom' }, label)
@@ -64,7 +64,7 @@ test('V65 a name the user has since put on the list is no longer said to be on n
   writeList(s.home, { version: 1, agents: [{ harness: 'claude-code', name: 'claude-canary' }] })
   ;({ by } = await identityOf(s))
   assert.deepEqual(by['claude-code'].unknown, [], 'on the list now: the condition no longer names it')
-  fs.writeFileSync(path.join(s.home, '.asight', 'agents.json'), '{ not json')
+  fs.writeFileSync(path.join(s.home, '.trocar', 'agents.json'), '{ not json')
   ;({ j } = await identityOf(s))
   assert.equal(j.agent_list.state, 'unparsable')
   assert.deepEqual(j.agent_list.problems.map((p) => [p.index, p.code]), [[null, 'unparsable']])
@@ -80,7 +80,7 @@ test('R18 V65 status puts a process under a harness by the name list in effect N
     const { j, by } = await identityOf(s, deps)
     assert.deepEqual(by['claude-code'].ignored.map((n) => n.name), ['claude'], label)
     assert.ok(!pidsOf(j).includes(5000), `${label}: an ignored name is no process of the harness — never said captured or waiting for a verdict (the daemon forwards it untouched)`)
-    fs.rmSync(path.join(s.home, '.asight', 'agents.json'))
+    fs.rmSync(path.join(s.home, '.trocar', 'agents.json'))
   }
 })
 
@@ -99,9 +99,9 @@ test('1.6 §9.7: status reads agents.json itself — with no harness installed o
   const { fakeIo } = await import('./fixtures/on-ctx.mjs')
   const { runStatusCli } = await import('../../src/cli/status.mjs')
   const { down, SOCK } = await import('./fixtures/status-ctx.mjs')
-  const home = tmpDir('asight-list-only-')
-  fs.mkdirSync(path.join(home, '.asight'), { recursive: true })
-  fs.writeFileSync(path.join(home, '.asight', 'agents.json'), '{ not json')
+  const home = tmpDir('trocar-list-only-')
+  fs.mkdirSync(path.join(home, '.trocar'), { recursive: true })
+  fs.writeFileSync(path.join(home, '.trocar', 'agents.json'), '{ not json')
   const parts = { os: 'darwin', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: {} }
   const deps = { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice' }
   const human = fakeIo()

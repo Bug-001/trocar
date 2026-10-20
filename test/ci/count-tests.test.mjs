@@ -41,7 +41,7 @@ test('count-tests: skips and passes may differ between versions (only the number
 })
 
 test('count-tests: the CLI — read writes the JSON line, compare exits 1 on a mismatch and 0 on agreement', (t) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-counts-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-counts-'))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const log = path.join(dir, 'test.log')
   fs.writeFileSync(log, TAP)

@@ -1,4 +1,4 @@
-// test/query/calls-index-first.test.mjs — `asight query calls` answers from the SEGMENT INDEX and reads back only
+// test/query/calls-index-first.test.mjs — `trocar query calls` answers from the SEGMENT INDEX and reads back only
 // the records of the page it returns (RFC 3.5 §访问模式, D62②; 1.6 §4.1, 附录 C.5 `calls`).
 import test from 'node:test'
 import assert from 'node:assert/strict'

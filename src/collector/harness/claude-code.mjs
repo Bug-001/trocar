@@ -4,14 +4,14 @@
 // every enabled settings scope OVER the launch env (Object.assign(process.env, …)) after exec, so they
 // never show in /proc/<pid>/environ and must be read here. CC re-applies those blocks while it runs; whether a
 // running CC then trusts a CA written into settings after it started is NOT established for every mode (lab ④:
-// CC 2.1.289 `-p` did on a new connection; TUI, SDK and background workers are unchecked). asight's policy
+// CC 2.1.289 `-p` did on a new connection; TUI, SDK and background workers are unchecked). trocar's policy
 // (coordinator 2026-10-06) is not to rely on it: the layers are not live, so such a process is config-after-start
 // → untrusted → direct, until the flip criteria in 4.6 OPEN ④ are met. Under CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST CC drops settings-sourced
 // CA/proxy keys (desktop entrypoints exempt — lab check L-CC-1); --restricted / CLAUDE_CODE_RESTRICTED
 // and --setting-sources without a scope drop that scope. Same-exe helpers run with argv0 rg / apply-seccomp.
 // Injection (4.6 信任入口表, D37④): one key, env.NODE_EXTRA_CA_CERTS in ~/.claude/settings.json (or
 // $CLAUDE_CONFIG_DIR/). Settings win over the launch env, so a value the user already relies on is carried
-// over into extra-cc.pem (its certificate blocks + the asight CA); with none, the key points at asight-ca.pem.
+// over into extra-cc.pem (its certificate blocks + the trocar CA); with none, the key points at trocar-ca.pem.
 import path from 'node:path'
 import { parseJsonc } from '../core/config-read.mjs'
 import { envHosts, argAfter, isOwnPath, perOs } from './_common.mjs'
@@ -94,7 +94,7 @@ function settingsLayers(ctx) {
 const CA_VAR = 'NODE_EXTRA_CA_CERTS'
 
 // Where the user already set NODE_EXTRA_CA_CERTS (4.6 CC row): the install-time shell, running CC processes,
-// ~/.claude.json, user settings, managed settings. asight's own values (under the collector dir) do not count.
+// ~/.claude.json, user settings, managed settings. trocar's own values (under the collector dir) do not count.
 function inject(ctx) {
   const cfgDir = ctx.env.get('CLAUDE_CONFIG_DIR')
   const settings = path.join(cfgDir || path.join(ctx.home, '.claude'), 'settings.json')
@@ -118,7 +118,7 @@ function inject(ctx) {
     notes: [
       ...unread,
       ...[...seen].filter((v) => !path.isAbsolute(v)).map((v) => `${CA_VAR}=${v} is a relative path; its certificates are not carried over`),
-      `a ${CA_VAR} exported only in a shell asight did not see no longer reaches Claude Code: settings env wins over the launch env`,
+      `a ${CA_VAR} exported only in a shell trocar did not see no longer reaches Claude Code: settings env wins over the launch env`,
     ],
   }
 }
@@ -131,7 +131,7 @@ const processes = {
   exclude: [{ name0: ['rg', 'apply-seccomp'] }],
 }
 
-// How Claude Code reads a proxy (RFC 1.6 §9.7; `asight status` draws its path from this and `asight doctor` takes its instructions from it): HTTPS_PROXY / HTTP_PROXY from its environment, and the same keys in the
+// How Claude Code reads a proxy (RFC 1.6 §9.7; `trocar status` draws its path from this and `trocar doctor` takes its instructions from it): HTTPS_PROXY / HTTP_PROXY from its environment, and the same keys in the
 // `env` block of ~/.claude.json and of the user settings (which win over the launch env); once, at start. It does not follow the OS proxy and takes no SOCKS proxy. Project and local settings depend on the
 // directory it was started in: not read here.
 const PROXY_KEYS = [['env', 'HTTPS_PROXY'], ['env', 'HTTP_PROXY']]
@@ -178,7 +178,7 @@ const proxyMode = {
     library: { kind: 'json-key', select: { dir: perOs({ darwin: { base: 'appSupport', path: 'Claude-3p/configLibrary' }, win32: { base: 'localAppData', path: 'Claude-3p/configLibrary' } }), meta: '_meta.json', idKey: 'appliedId', createIfNone: true }, format: 'json', proxyKeys: [['egressProxyPacUrl']], ownKeys: [['egressProxyUrl'], ['egressProxyPacUrl']], value: 'pac-url', auth: false, absent: 'create', takesEffect: 'takes effect the next time you start the Claude desktop app; no administrator needed' },
   },
   certs: {
-    // only when CLAUDE_CODE_CERT_STORE=bundled is set (then the root is hidden): asight-ca.pem into the settings env, if neither the settings nor the install env set it
+    // only when CLAUDE_CODE_CERT_STORE=bundled is set (then the root is hidden): trocar-ca.pem into the settings env, if neither the settings nor the install env set it
     bundled: { kind: 'config-key', file: SETTINGS, format: 'json', keys: ['env', 'NODE_EXTRA_CA_CERTS'], semantics: 'add', when: BUNDLED },
   },
   trusts: {
@@ -206,13 +206,13 @@ export default {
   trust: {
     chain: [{ var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' }],
     // uninstall step 5 only (the tracker still judges a running CC at start): a CC from before install uses a value
-    // added to its settings on new connections (lab ④), so after uninstall it may still trust asight until it restarts
+    // added to its settings on new connections (lab ④), so after uninstall it may still trust trocar until it restarts
     rereadsEntry: true,
     hints: {
       'settings-ignored-managed-by-host': 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST makes Claude Code ignore NODE_EXTRA_CA_CERTS from settings files',
       'settings-ignored-restricted': 'restricted mode ignores settings env',
       'settings-ignored-setting-sources': '--setting-sources excludes the scope that holds the CA',
-      'config-after-start': 'this Claude Code started before the CA was in its settings, and asight treats a running Claude Code as reading NODE_EXTRA_CA_CERTS only at start: restart it to be captured',
+      'config-after-start': 'this Claude Code started before the CA was in its settings, and trocar treats a running Claude Code as reading NODE_EXTRA_CA_CERTS only at start: restart it to be captured',
       'start-time-unknown': 'the start time of this Claude Code could not be read, so it is not known whether it started after the CA was in its settings; restart it to be captured',
       'settings-unparsable': 'a Claude Code settings file does not parse, so the NODE_EXTRA_CA_CERTS in it cannot be in effect: fix the file, then restart Claude Code',
       'settings-unreadable': 'a Claude Code settings file cannot be read (permissions?), so whether it holds the CA is not known: fix it, then restart Claude Code',

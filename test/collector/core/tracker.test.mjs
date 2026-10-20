@@ -11,8 +11,8 @@ import { createTrustChecker } from '../../../src/collector/core/trust/confirm.mj
 import { createTracker, watchDirNames, toProxyEntry } from '../../../src/collector/core/tracker.mjs'
 
 const ca = createCa()
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-trk-'))
-const PEM = path.join(dir, 'asight.pem'); fs.writeFileSync(PEM, ca.certPem)
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-trk-'))
+const PEM = path.join(dir, 'trocar.pem'); fs.writeFileSync(PEM, ca.certPem)
 test.after(() => fs.rmSync(dir, { recursive: true, force: true }))
 
 const agent = {
@@ -154,21 +154,21 @@ test('tracker: an error judging a process reaches onError with its pid; it is le
   assert.deepEqual(errors[3], [803, 'unwatch', 'the redirector helper is down'])
 })
 
-test('tracker: a layer read only at start is judged against installedAt when asight wrote its value, else its mtime (review 2 #5)', async () => {
+test('tracker: a layer read only at start is judged against installedAt when trocar wrote its value, else its mtime (review 2 #5)', async () => {
   const layered = { ...agent, layers: () => [{ name: 'cfg', file: '/h/cfg.json', mode: 'override', vars: { EXTRA_CA: PEM }, live: false, mtimeMs: 5_000 }] }
   const seen = []
   const make = (installedAt) => createTracker({ redirector: fakeRedirector(), registry: createRegistry([layered]), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir, installedAt })
   const byMtime = make(undefined)
   assert.deepEqual([(await byMtime.onExec(facts(900, { startedAt: 3_000 }))).trusted, byMtime.describe(900).reason], [false, 'config-after-start'])
   const byInstall = make((l) => { seen.push(l.file); return 2_000 })
-  assert.equal((await byInstall.onExec(facts(901, { startedAt: 3_000 }))).trusted, true, 'asight wrote this value before the process started; the later edit was something else')
+  assert.equal((await byInstall.onExec(facts(901, { startedAt: 3_000 }))).trusted, true, 'trocar wrote this value before the process started; the later edit was something else')
   assert.deepEqual(seen, ['/h/cfg.json'])
   assert.equal((await byInstall.onExec(facts(902, { startedAt: null }))).reason, 'start-time-unknown')
 })
 
 // A plugin harness (D37④): trust only through the per-pid marker its plugin writes (4.6 「标记」).
 const plugged = { ...agent, name: 'beta', hosts: ['api.beta.test'], processes: { names: [{ name: 'beta' }], longLived: [{ args: '(^| )serve( |$)' }] },
-  trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }, { var: 'asight:marker', semantic: 'append' }], refine: (r) => (r.reason === 'var-missing' ? 'no-marker' : null) } }
+  trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }, { var: 'trocar:marker', semantic: 'append' }], refine: (r) => (r.reason === 'var-missing' ? 'no-marker' : null) } }
 function markerRig(o = {}) {
   const markerDir = fs.mkdtempSync(path.join(dir, 'run-trust-'))
   const redirector = fakeRedirector()
@@ -188,7 +188,7 @@ test('tracker: a plugin marker that appears after exec re-judges that process; u
   await r.appear(800, 9000) // an earlier process with this pid
   assert.deepEqual([r.tracker.describe(800).trusted, r.tracker.describe(800).reason], [false, 'marker-stale'])
   await r.appear(800, 9001)
-  assert.deepEqual([r.tracker.describe(800).trusted, r.tracker.describe(800).trustVia, r.tracker.describe(800).trustVar], [true, 'plugin marker', 'asight:marker'])
+  assert.deepEqual([r.tracker.describe(800).trusted, r.tracker.describe(800).trustVia, r.tracker.describe(800).trustVar], [true, 'plugin marker', 'trocar:marker'])
   assert.deepEqual(r.redirector.calls, [['watch', 800, false], ['watch', 800, false], ['watch', 800, true]])
   r.redirector.emit('exec', facts(801, { exe: '/opt/alpha', startTicks: '1', startedAt: r.clock })); await settle()
   fs.writeFileSync(path.join(r.markerDir, '801'), '1\n'); r.redirector.calls.length = 0; await r.appear(801, 1)
@@ -199,7 +199,7 @@ test('tracker: a plugin marker that appears after exec re-judges that process; u
   assert.ok(!fs.existsSync(path.join(r.markerDir, '800')), 'the marker of an exited pid is removed')
 })
 
-test('tracker: no marker by the end of the grace → the harness reason (no-marker), judged by the scheduled re-judge; a CA file that lost the asight CA is not trusted by its marker', async () => {
+test('tracker: no marker by the end of the grace → the harness reason (no-marker), judged by the scheduled re-judge; a CA file that lost the trocar CA is not trusted by its marker', async () => {
   const r = markerRig()
   r.redirector.emit('exec', facts(810, { exe: '/opt/beta', argv: ['beta'], startTicks: '7', startedAt: r.clock })); await settle()
   assert.equal(r.tracker.describe(810).reason, 'marker-pending')

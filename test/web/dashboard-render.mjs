@@ -281,7 +281,7 @@ test('render gate: reused demo board renders every panel from the frozen canonic
   const payload = forWire(view);
 
   const combined = buildGateModule(JSON.stringify(payload));
-  const tmp = path.join(tmpDir('asight-rendergate-'), 'gate.mjs');
+  const tmp = path.join(tmpDir('trocar-rendergate-'), 'gate.mjs');
   fs.writeFileSync(tmp, combined);
   await import('file://' + tmp); // runs the module + harness in one scope; fills __RG_FAILS__
 
@@ -384,7 +384,7 @@ test('AC-1: the baked window is byte-verbatim against the raw capture — inline
     `AC-1 (inlined) must actually compare something — system:${sysChecked} messages:${msgChecked}`);
 
   // ── (b) resolved path — same session, D10 verbatim shape, locator resolved back to the bytes ──
-  const dir = tmpDir('asight-ac1-');
+  const dir = tmpDir('trocar-ac1-');
   const cap = path.join(dir, 'cc-verbatim.ndjson');
   // Promote the v0 records to the D10 envelope: req_body = the verbatim request bytes. This tmp file
   // is a TEST source, not a re-labelling of the committed capture (invariant 2 — the fixture is

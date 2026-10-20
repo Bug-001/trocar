@@ -1,15 +1,15 @@
-// index.mjs (src/netenv) — asight's own netenv.json: the adoption records and the topology (D49). ~/.asight/netenv.json (0600; outside collector/, so a platform with no new collector writes it too) holds `schema`,
-// `adopted` (what `on` found of each agent's proxy, 1.6 §9.5) and `topology` (what `status` drew, 1.6 §9); the board reads it through `/api/capture-health` (4.4). asight looks at no VPN / proxy software.
+// index.mjs (src/netenv) — trocar's own netenv.json: the adoption records and the topology (D49). ~/.trocar/netenv.json (0600; outside collector/, so a platform with no new collector writes it too) holds `schema`,
+// `adopted` (what `on` found of each agent's proxy, 1.6 §9.5) and `topology` (what `status` drew, 1.6 §9); the board reads it through `/api/capture-health` (4.4). trocar looks at no VPN / proxy software.
 // Read-only apart from this file: the only write in this directory is writeNetenv's own.
 import nodeFs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { asightHome } from '../off/paths.mjs'
+import { trocarHome } from '../off/paths.mjs'
 
 export const NETENV_SCHEMA = 1
-export const netenvFile = (home = os.homedir()) => path.join(asightHome(home), 'netenv.json')
+export const netenvFile = (home = os.homedir()) => path.join(trocarHome(home), 'netenv.json')
 
-/** ~/.asight/netenv.json as it is on disk → the object, or null when it is not there or does not parse (the board says that itself: src/health/read.mjs netenvOf). */
+/** ~/.trocar/netenv.json as it is on disk → the object, or null when it is not there or does not parse (the board says that itself: src/health/read.mjs netenvOf). */
 export function readNetenvFile(home, { fs = nodeFs } = {}) {
   try { const v = JSON.parse(fs.readFileSync(netenvFile(home), 'utf8')); return v && typeof v === 'object' && !Array.isArray(v) ? v : null } catch { return null }
 }
@@ -24,7 +24,7 @@ export function mergeNetenv(prev, result) {
   return out
 }
 
-/** Writes the result to ~/.asight/netenv.json whole or not at all (temp file, rename), 0600 in a 0700 directory when it had to be made → `{ path }`; throws what failed. It is the one place under
+/** Writes the result to ~/.trocar/netenv.json whole or not at all (temp file, rename), 0600 in a 0700 directory when it had to be made → `{ path }`; throws what failed. It is the one place under
  *  src/netenv that writes (4.7 N15). */
 export function writeNetenv(home, result, { fs = nodeFs } = {}) {
   const file = netenvFile(home)

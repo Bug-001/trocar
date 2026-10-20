@@ -90,10 +90,10 @@ const tokens = (n) => Math.max(1, Math.ceil(n / 4))
 
 // The shell tool each harness declares and the arguments its schema wants, so the agent really runs
 // the command. Unknown harnesses: the first tool whose name looks like a shell, else Codex's `shell`.
-export const TOOL_COMMAND = 'echo asight-tool-ok'
+export const TOOL_COMMAND = 'echo trocar-tool-ok'
 const SHELL_TOOLS = {
-  Bash: { command: TOOL_COMMAND, description: 'asight mock tool call' }, // Claude Code
-  bash: { command: TOOL_COMMAND, description: 'asight mock tool call' }, // OpenCode
+  Bash: { command: TOOL_COMMAND, description: 'trocar mock tool call' }, // Claude Code
+  bash: { command: TOOL_COMMAND, description: 'trocar mock tool call' }, // OpenCode
   shell: { command: ['bash', '-lc', TOOL_COMMAND] }, // Codex
   shell_command: { command: TOOL_COMMAND }, // Codex, newer
   exec_command: { cmd: TOOL_COMMAND }, // Codex unified exec

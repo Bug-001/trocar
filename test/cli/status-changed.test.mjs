@@ -1,4 +1,4 @@
-// test/cli/status-changed.test.mjs — 附录 C.3 `changed[]` (what asight changed or created for each harness, phase install and on, with the
+// test/cli/status-changed.test.mjs — 附录 C.3 `changed[]` (what trocar changed or created for each harness, phase install and on, with the
 // command that undoes it) and `failures.groups` (the failures already folded by captureHealth, one group per code, newest first, at most 50).
 // Sandbox HOMEs, injected daemon replies and capture health: nothing here reaches the machine (0.1 §3).
 import test from 'node:test'
@@ -12,7 +12,7 @@ import { foldFlows } from '../../src/health/flows.mjs'
 
 const docOf = async (s, o) => (await runStatus(s, ['--json'], o)).io.json()
 
-// one install-phase item and one on-phase item of the same harness, and an owned file of no harness: the manifest `asight install` + `on` really wrote, cut down to those
+// one install-phase item and one on-phase item of the same harness, and an owned file of no harness: the manifest `trocar install` + `on` really wrote, cut down to those
 async function seeded() {
   const s = await installedHome()
   const file = path.join(s.dir, 'install-manifest.json'), m = JSON.parse(fs.readFileSync(file, 'utf8'))

@@ -1,6 +1,6 @@
-// test/collector/model-port-taken-e2e.test.mjs — 4.11 §3 ① / acceptance G9 at the real seam (the platform-seam rule; the pattern of model-daemon-e2e.test.mjs): `asight on`
-// through the CLI opens the door of a REAL daemon on its recorded port; `asight off` and the daemon exits; another program (a real listener on 127.0.0.1)
-// takes that port; the next `asight on` says engine-port-taken (its output and a failure line in the events), moves the group to a free port, and the
+// test/collector/model-port-taken-e2e.test.mjs — 4.11 §3 ① / acceptance G9 at the real seam (the platform-seam rule; the pattern of model-daemon-e2e.test.mjs): `trocar on`
+// through the CLI opens the door of a REAL daemon on its recorded port; `trocar off` and the daemon exits; another program (a real listener on 127.0.0.1)
+// takes that port; the next `trocar on` says engine-port-taken (its output and a failure line in the events), moves the group to a free port, and the
 // entry follows the door. Nothing is injected on the way: the port test is the real bind test, the endpoint the one controlEndpointFor resolves.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -26,7 +26,7 @@ const squat = (port) => new Promise((resolve, reject) => { const s = net.createS
 const events = (w) => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n')).filter(Boolean).map((l) => { try { return JSON.parse(l) } catch { return {} } }) : [])
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform} · G9: the door's port taken by another program while off → the next asight on says engine-port-taken, moves the port, the entry follows`, { timeout: 30_000 }, async () => {
+  test(`${platform} · G9: the door's port taken by another program while off → the next trocar on says engine-port-taken, moves the port, the entry follows`, { timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const envFile = path.join(w.home, '.codex', '.env')

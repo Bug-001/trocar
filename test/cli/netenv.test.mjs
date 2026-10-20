@@ -1,4 +1,4 @@
-// test/cli/netenv.test.mjs — ~/.asight/netenv.json is asight's own file (D49): `schema`, `adopted` (what `on` found of each agent's proxy) and `topology`. It is written whole or not at all,
+// test/cli/netenv.test.mjs — ~/.trocar/netenv.json is trocar's own file (D49): `schema`, `adopted` (what `on` found of each agent's proxy) and `topology`. It is written whole or not at all,
 // 0600, and a write keeps what it does not redraw. (The V22 probe of VPN software this file once tested is gone with D49.)
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -7,7 +7,7 @@ import { writeNetenv, netenvFile, NETENV_SCHEMA } from '../../src/netenv/index.m
 import { tmpDir } from '../helpers/tmp.mjs'
 
 test('writeNetenv keeps what a write does not redraw: `adopted` (what `on` found) and the harnesses of `topology` it leaves out; the file is 0600 and a file that does not parse is replaced', () => {
-  const home = tmpDir('asight-merge-')
+  const home = tmpDir('trocar-merge-')
   writeNetenv(home, { adopted: { codex: { at: 'A', sha256: 'abc' } }, topology: { codex: { at: 'T1' }, hermes: { at: 'T1' } } })
   writeNetenv(home, { topology: { codex: { at: 'T2' } } })
   let f = JSON.parse(fs.readFileSync(netenvFile(home), 'utf8'))

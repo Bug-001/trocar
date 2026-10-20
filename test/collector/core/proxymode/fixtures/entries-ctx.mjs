@@ -12,9 +12,9 @@ export const door = (port = 18001) => `http://g:0123456789abcdef0123456789abcdef
 export const merged = (...vals) => { const seen = new Set(); return [...LOOP, ...vals.flatMap((v) => (v ? v.split(',') : []))].map((x) => x.trim()).filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase())).join(',') }
 
 export function world({ os = 'darwin', env = {}, persistent = {}, systemProxy = null } = {}) {
-  const root = tmpDir('asight-entries-')
+  const root = tmpDir('trocar-entries-')
   const home = path.join(root, 'home')
-  const dir = path.join(home, '.asight', 'collector')
+  const dir = path.join(home, '.trocar', 'collector')
   fs.mkdirSync(dir, { recursive: true })
   const virtual = new Map(), policies = new Set(), commands = new Set()
   let n = 0
@@ -27,7 +27,7 @@ export function world({ os = 'darwin', env = {}, persistent = {}, systemProxy = 
     which: (c) => (commands.has(c) ? path.join(root, 'bin', c) : null),
     policy: (spec) => (policies.has(JSON.stringify(spec)) ? { set: true, value: 'http://managed.example:1', where: `policy:${JSON.stringify(spec)}` } : { set: false }),
     dir, manifest: newManifest(), fs, now: () => new Date('2026-10-16T00:00:00Z'), persistentEnv: () => persistent, systemProxy,
-    render: (id, v) => `// ${id} ${v.door}\n`, newId: () => `asight-${++n}`,
+    render: (id, v) => `// ${id} ${v.door}\n`, newId: () => `trocar-${++n}`,
   }
   const pick = (l) => (l && l.perOs ? l.perOs[os] : l)
   /** Make a form installed: its first `present` place that exists on this OS. */

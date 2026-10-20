@@ -1,4 +1,4 @@
-// test/health/capture-health.test.mjs — captureHealth(), the payload of GET /api/capture-health and of `asight collector
+// test/health/capture-health.test.mjs — captureHealth(), the payload of GET /api/capture-health and of `trocar collector
 // status` without a daemon (D38; RFC 4.4 端点表 + #14, 1.5 状态矩阵, 4.6 F3(b)(c)(g)(h), F6, F9): from disk only; the
 // daemon judged by its lock; installed / residue / not installed; the switch; the worst state wins.
 import test from 'node:test'
@@ -14,7 +14,7 @@ const at = (msAgo) => new Date(NOW - msAgo).toISOString()
 const day = (iso) => iso.slice(0, 10)
 const ME = { start_time: '900', boot_id: 'b1' }
 function home() {
-  const h = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ch-'))
+  const h = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-ch-'))
   const c = path.join(h, 'collector')
   const flows = (recs) => { fs.mkdirSync(path.join(c, 'flows'), { recursive: true }); for (const r of recs) fs.appendFileSync(path.join(c, 'flows', `${day(r.ts)}.ndjson`), JSON.stringify(r) + '\n') }
   const manifest = (m) => { fs.mkdirSync(c, { recursive: true }); fs.writeFileSync(path.join(c, 'install-manifest.json'), typeof m === 'string' ? m : JSON.stringify(m)) }
@@ -172,9 +172,9 @@ test('only metadata leaves: a WebSocket row\'s tail_raw and an envelope-looking 
   } finally { b.done() }
 })
 
-// RFC 1.6 §6 「看板」 / V10: `netenv` rides in the payload, read from ~/.asight/netenv.json (src/netenv writes it): missing says it is not written yet and why, an unreadable or unparsable
+// RFC 1.6 §6 「看板」 / V10: `netenv` rides in the payload, read from ~/.trocar/netenv.json (src/netenv writes it): missing says it is not written yet and why, an unreadable or unparsable
 // file says the file and the errno, a good one is passed through — never an absent key, never a quiet 「无」; and a broken netenv.json does not turn the bar to 读不全 (it is a cache the next
-// `asight status` writes again, not capture health)
+// `trocar status` writes again, not capture health)
 test('netenv: written → passed through; missing → present:false with the reason; unreadable or not JSON → the file and the error, and the read errors stay empty', () => {
   const b = home()
   try {

@@ -220,8 +220,8 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
     else if (ev.type === 'data' && ev.done) { D.msg = null; complete(D, h, ev) }
   }
 
-  // this direction is not followed any more: the wire data broke it (broken), or asight's own code threw while
-  // following it (recorder-error, W-2) — the two are told apart so a bug in asight never reads as bad data
+  // this direction is not followed any more: the wire data broke it (broken), or trocar's own code threw while
+  // following it (recorder-error, W-2) — the two are told apart so a bug in trocar never reads as bad data
   function broke(D, why, code = 'broken') { D.broken = why; lost.add('decode-failed'); fail(code, why, { d: D.name }) }
 
   function feed(d, chunk) {

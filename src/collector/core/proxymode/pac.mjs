@@ -1,7 +1,7 @@
 // pac.mjs (core/proxymode) — P10, the PAC the daemon serves for a route whose value is `pac-url` (RFC 4.11 P10): on the PAC group's door
-// (auth:false) at GET /asight.pac. Loopback (chain.mjs isLoopbackHost: localhost, *.localhost, 127.0.0.0/8, ::1) goes DIRECT; the user's bypass list `PROXY <door>; DIRECT` (the door dials it direct: bypassHit, as for
+// (auth:false) at GET /trocar.pac. Loopback (chain.mjs isLoopbackHost: localhost, *.localhost, 127.0.0.0/8, ::1) goes DIRECT; the user's bypass list `PROXY <door>; DIRECT` (the door dials it direct: bypassHit, as for
 // the env routes — 2026-10-17 a bypass-list host went DIRECT and Claude Desktop's turns were never seen); everything else `PROXY <door>; <own leg>`,
-// the own leg being the app's way without asight (the user's fixed system proxy, else DIRECT). A plain `http:` URL, and every URL after `off` (door
+// the own leg being the app's way without trocar (the user's fixed system proxy, else DIRECT). A plain `http:` URL, and every URL after `off` (door
 // null), gets only the app's own way: the door takes CONNECT and SOCKS5, a proxied plain-http request is absolute-form, and once the door accepted
 // the connection the `; …` after it never applies (P10: plain http on the PAC route is not captured). The PAC door takes no
 // credentials, so at accept it forwards only a peer of this user (peerAllowed). When a PAC route is not written at all (the four not-routed
@@ -44,9 +44,9 @@ const PAC_CLIENT = Object.freeze({ proxy: Object.freeze({ env: Object.freeze([])
 
 /** The app's own way the PAC names (P10), in upstreamFor's shape `{ url, source, bypass, … }`: the user's fixed system proxy with its bypass rows,
  *  else direct (a PAC or an unreadable system proxy names no leg). The PAC is written from it and an auth:false door dials it, so they say one
- *  thing. `header`: a CONNECT's X-Asight-Upstream, never honoured here (noted, as upstreamFor notes it); `isAsightDoor` as upstreamFor's. */
-export function pacLeg({ systemProxy = null, header = null, isAsightDoor } = {}) {
-  return upstreamFor({ desc: PAC_CLIENT, systemProxy, header, ...(isAsightDoor ? { isAsightDoor } : {}) })
+ *  thing. `header`: a CONNECT's X-Trocar-Upstream, never honoured here (noted, as upstreamFor notes it); `isTrocarDoor` as upstreamFor's. */
+export function pacLeg({ systemProxy = null, header = null, isTrocarDoor } = {}) {
+  return upstreamFor({ desc: PAC_CLIENT, systemProxy, header, ...(isTrocarDoor ? { isTrocarDoor } : {}) })
 }
 
 /** The PAC text (P10). `door`: the door's address (null after `off`); `ownLeg`: the user's fixed system proxy, or null for DIRECT; `bypass`: the
@@ -68,7 +68,7 @@ export function pacText({ door = null, ownLeg = null, bypass = [] } = {}) {
   ].join('\n')
 }
 
-/** GET /asight.pac on the door: `state()` → pacText's input (read per request: `off` changes it in place). Any other path is the door's (→ false). */
+/** GET /trocar.pac on the door: `state()` → pacText's input (read per request: `off` changes it in place). Any other path is the door's (→ false). */
 export function pacHandler({ state }) {
   return (req, res) => {
     if (req.method !== 'GET' || new URL(req.url, 'http://door').pathname !== PAC_PATH) return false

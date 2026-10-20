@@ -5,7 +5,7 @@
 // K-30 (1.5): the first /api or /control answer with status 403 (no token, or a wrong one) latches the board shut — every later get()
 // answers {ok:false, status:403} without a request, and the onForbidden callbacks run once. Keyed on the status, never the body.
 import { CONTROL_TOKEN_HEADER } from '../../../off/token-header.mjs' // a shared module the static face serves (4.4)
-const TOKEN_KEY = 'asight.token' // the sessionStorage slot of the per-user token (4.4: read from #t=, kept for the tab)
+const TOKEN_KEY = 'trocar.token' // the sessionStorage slot of the per-user token (4.4: read from #t=, kept for the tab)
 const HELD_MAX = 100 // conditional-GET entries kept, oldest dropped first
 
 let token = null

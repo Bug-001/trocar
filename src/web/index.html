@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>asight — agent context oscilloscope</title>
+<title>trocar — agent context oscilloscope</title>
 <style>
   :root {
     --bg:#0e0f13; --panel:#16181f; --panel2:#1c1f28; --rail:#12141a;
@@ -501,7 +501,7 @@
 // ZERO provider parsing in the browser, so invariant 3 / AC-3 hold (a new provider = a new
 // server-side analyzer; this frontend is untouched).
 
-// The board face (4.4) refuses /api without the per-user token; `asight board` hands it over in the URL fragment (#t=…).
+// The board face (4.4) refuses /api without the per-user token; `trocar board` hands it over in the URL fragment (#t=…).
 // Every fetch below carries it, in the header named by the server's one constant (served at /off/token-header.mjs).
 const TOKEN=decodeURIComponent((/^#t=([^&]*)/.exec(globalThis.location?.hash||'')||[])[1]||'')
 const TOKEN_HEADER=TOKEN?import('/off/token-header.mjs').then(m=>m.CONTROL_TOKEN_HEADER):null
@@ -527,7 +527,7 @@ function priceRow(model,provider){
   const m=String(model||''); if(!m) return null
   const p=(provider===undefined?curProvider():provider)
   // an EXACT model key in the editable table wins for any provider — that is the D14 escape hatch:
-  // add "gpt-5.5":[…] to pricing.json / ASIGHT_PRICING and the board prices it for real.
+  // add "gpt-5.5":[…] to pricing.json / TROCAR_PRICING and the board prices it for real.
   if(Array.isArray(PRICING[m])) return PRICING[m]
   const bare=m.replace(/^claude-/,''); if(Array.isArray(PRICING[bare])) return PRICING[bare]
   // Family substrings (opus/sonnet/haiku) are ANTHROPIC model names, so they may only be matched
@@ -543,10 +543,10 @@ function costOf(model,u,provider){ const r=priceRow(model,provider); if(!r) retu
   const [i,o,cw,cr]=r; return ((u.fresh||0)*i+(u.out||0)*o+(u.create||0)*cw+(u.read||0)*cr)/1e6 } // u = neutral canonical usage (D18a Q1)
 // Render a cost cell. No price row ⇒ "n/a" + why, reusing the SAME treatment as the existing
 // "usage 未返回" case (2.2:102 不冒充 $0) rather than inventing a new visual language.
-const NOPRICE='no local unit price for this (provider, model) — asight does NOT guess (a fabricated figure is worse than none, 不变式4). Add a row for this model to pricing.json / ASIGHT_PRICING to price it (D14).'
+const NOPRICE='no local unit price for this (provider, model) — trocar does NOT guess (a fabricated figure is worse than none, 不变式4). Add a row for this model to pricing.json / TROCAR_PRICING to price it (D14).'
 const costCell=(model,u)=>{ const c=costOf(model,u); return c==null?`<b title="${NOPRICE}">n/a</b>`:`<b>${usd(c)}</b>` }
 // D14 保真标:花费 = 本地估价(canonical usage × 可编辑单价),非线上账单事实。就地标 → 不变式4;可复算 → §验收#3。(usd() 见下方 demo 复用的格式化器)
-const COSTTITLE='≈ 本地估价(local estimate, NOT a wire fact): Σ(canonical usage × 你的本地单价, opus/sonnet/haiku 四价 input/output/cache-write/cache-read). Provider 不在 wire 上返回金额;单价是可编辑配置(pricing.json / ASIGHT_PRICING),改价即改此估算。cost 是派生-only,绝不入归一化存储(D14 / 不变式2·4).'
+const COSTTITLE='≈ 本地估价(local estimate, NOT a wire fact): Σ(canonical usage × 你的本地单价, opus/sonnet/haiku 四价 input/output/cache-write/cache-read). Provider 不在 wire 上返回金额;单价是可编辑配置(pricing.json / TROCAR_PRICING),改价即改此估算。cost 是派生-only,绝不入归一化存储(D14 / 不变式2·4).'
 const estBadge=`<span class="estbadge" title="${COSTTITLE}">≈ 本地估价 · editable</span>`
 // D14 花费行 for a BILLED off-main lane-call detail card (monitor / notify / titlegen). probe(量尺·不计费)
 // 与 quota(max_tokens:1·回复丢弃)不走这条 → 各自卡上如实标"不计费/已丢弃"(2.2:101),不冒充成本。
@@ -601,7 +601,7 @@ const navOpen=new Set(['sys','life-file']) // which nav groups are expanded
 // 持久 localStorage → 跨 scrub + 重载存活。turnFold: Map<anchorKey, boolean>(true=用户展开 / false=用户折叠)。
 // 未记忆的 turn 走默认(末轮展开、余折叠);compaction → anchor 内容变 → 新 key → turn 自然回默认(正确)。
 // 不靠 turn 索引(索引跨步会漂移)。边角:两 turn 文本完全相同 → 共享 key → 共享态(罕见可接受,spec 1.4:91)。
-const FOLD_LS='asight.turnfold.v1'
+const FOLD_LS='trocar.turnfold.v1'
 let turnFold=loadFold()
 function loadFold(){ try{ const o=JSON.parse(localStorage.getItem(FOLD_LS)||'{}'); return new Map(Object.entries(o).filter(([,v])=>typeof v==='boolean')) }catch(e){ return new Map() } }
 function saveFold(){ try{ localStorage.setItem(FOLD_LS, JSON.stringify(Object.fromEntries(turnFold))) }catch(e){} }
@@ -940,9 +940,9 @@ function openControlDetail(cls,i){
     (slim?'':(req?ctlBodyHtml(req,'request body',key+':req'):'')+ctlBodyHtml(rv,'response body'+(rv.kind==='json'?' (JSON, as stored)':''),key))
 }
 
-const NO_SESSIONS='No sessions captured yet. Start the collector with `asight on` (it lists every file it will change and asks first), then run your agent. Check what is arranged with `asight status`.'
+const NO_SESSIONS='No sessions captured yet. Start the collector with `trocar on` (it lists every file it will change and asks first), then run your agent. Check what is arranged with `trocar status`.'
 let boardEmpty=false
-// capture health is `asight status` now (a CLI command, not a board panel), so an empty board says
+// capture health is `trocar status` now (a CLI command, not a board panel), so an empty board says
 // only what it can see itself.
 const emptyMessage=()=>NO_SESSIONS
 function buildLanes(A,probes){
@@ -1135,7 +1135,7 @@ function taxSummary(tax){
 }
 // D17② context-growth Δ (research pain #4: cost grows superlinearly, can't attribute to a step).
 // Per call: how many re-sent bytes were ADDED vs the previous call, and which segment they landed in.
-// Honest boundary: asight names the culprit (diagnose) — pruning is the harness's job (诊断非裁剪).
+// Honest boundary: trocar names the culprit (diagnose) — pruning is the harness's job (诊断非裁剪).
 // THE DIFF BASELINE, and the one way to ask for it. A call whose body was not shipped on this page
 // carries `flat: []` — empty, but NOT because the model saw an empty context. `[]` is truthy, so
 // `prevCall.flat||null` yields it, every block then counts as absent from the baseline, and the board
@@ -1542,7 +1542,7 @@ function ctxBlock(b,i,prevKeys){
     ?`<span class="metabadge" title="addressed, not yet fetched — this tool's description and JSON schema were captured verbatim (D15) but are not shipped with the page. Expand the row to resolve them from the raw capture.">已寻址 · 未取回</span>`
     :b.sec==='tools'?(b.verbatim
     ?`<span class="metabadge" style="border-style:solid;color:var(--green);border-color:var(--green)" title="faithfulness: verbatim — the full tool schema (description + JSON input_schema) is captured on the wire (D15). Byte-faithful, part of AC-1.">verbatim</span>`
-    :`<span class="metabadge" title="faithfulness: metadata — this v0 trace stored only name + param names + description length; the full JSON schema text was NOT retained. The model received the full schema; asight didn't store it. Fixed going forward by D15 verbatim capture (RFC 4.1 §验收 #3).">metadata</span>`):''
+    :`<span class="metabadge" title="faithfulness: metadata — this v0 trace stored only name + param names + description length; the full JSON schema text was NOT retained. The model received the full schema; trocar didn't store it. Fixed going forward by D15 verbatim capture (RFC 4.1 §验收 #3).">metadata</span>`):''
   // per-block faithfulness badge (1.4:52 / 不变式 4): server-baked b.faithfulness — never let ciphertext/summary pass as verbatim.
   const ff=b.faithfulness
   const ffb=ff==='opaque'?`<span class="ffbadge ff-opaque" title="opaque — encrypted/redacted reasoning: the model got a signature/ciphertext, NO plaintext on the wire. Not verbatim-readable (there is nothing to reconstruct).">🔒 opaque</span>`
@@ -1607,7 +1607,7 @@ function ctxBody(b){
   let txt
   if(b.sec==='tools') txt=b.verbatim
     ? `${b.name}${b.ttype?' · '+b.ttype:''}\n\ndescription:\n${b.desc||'—'}${b.schema!==undefined?`\n\ninput_schema:\n${JSON.stringify(b.schema,null,2)}`:''}`
-    : `${b.name}${b.ttype?' · '+b.ttype:''}\nparams (names only): ${(b.props||[]).join(', ')||'—'}\ndescription: ${kf(b.descChars)} chars captured — schema text not retained (length only)\n\n⚠ metadata only: the full JSON schema (param types / required / enums / nesting) and the description text were NOT captured in this v0 trace. The model DID receive the full schema — asight's v0 capture just didn't store it. This is a capture boundary, not display-clipping or source-truncation. Fixed going forward by verbatim req_body capture (D15, RFC 4.1 §验收 #3).`
+    : `${b.name}${b.ttype?' · '+b.ttype:''}\nparams (names only): ${(b.props||[]).join(', ')||'—'}\ndescription: ${kf(b.descChars)} chars captured — schema text not retained (length only)\n\n⚠ metadata only: the full JSON schema (param types / required / enums / nesting) and the description text were NOT captured in this v0 trace. The model DID receive the full schema — trocar's v0 capture just didn't store it. This is a capture boundary, not display-clipping or source-truncation. Fixed going forward by verbatim req_body capture (D15, RFC 4.1 §验收 #3).`
   else if(b.sec==='system') txt=b.text
   else if(b.faithfulness==='opaque'){
     // spec 2.3:44 / 不变式4 — opaque reasoning MUST show a placeholder, NEVER empty text or fake plaintext.
@@ -1753,7 +1753,7 @@ function wireBadges(c){
   // a request stored incomplete already has its own, exact badge (reqBadge): do not say it twice
   // contextMissing (server-baked) says WHICH earlier record a partial context lacks
   const cs=CTX_LABEL[w.contextState]; if(cs&&!(w.contextState==='partial'&&c.reqIncomplete)) h+=`<span class="pobadge" title="${esc((w.contextMissing?w.contextMissing+' — ':'')+cs[1])}">${esc(cs[0])}</span> `
-  for(const e of (w.observerEffect||[])) h+=`<span class="pobadge" title="${esc(e.what)} — caused by asight's ${esc(e.cause)}">观测者效应 · capture changed client behaviour: ${esc(e.what)}</span> `
+  for(const e of (w.observerEffect||[])) h+=`<span class="pobadge" title="${esc(e.what)} — caused by trocar's ${esc(e.cause)}">观测者效应 · capture changed client behaviour: ${esc(e.what)}</span> `
   if(w.transport==='ws') h+=`<span class="metabadge">WebSocket</span> `
   // 3.3:89, server-baked (the DB's rule): unknown host, a vendor with no cache row, or a vendor not verified on this
   // wire. Older payloads without the flag fall back to "no known vendor".
@@ -2036,7 +2036,7 @@ function lifecycleNav(){
       const size=r.loads.length?r.loads[r.loads.length-1].range:''
       const vd=`data-view="skill::${esc(r.label)}" data-viewstep="${enter}" data-viewlabel="${esc(r.label)}"`
       // size present ⇒ the verbatim body was captured; absent ⇒ only the Skill invocation was seen (labelled honestly)
-      return `<div class="navsub ${state}" data-navstep="${enter}" data-navres="skill::${esc(r.label)}"><span class="nsl viewname" ${vd} title="skill (asight inference from the wire) — 👁 shows the verbatim SKILL.md body">🧩 skill: ${esc(r.label)}</span>`+
+      return `<div class="navsub ${state}" data-navstep="${enter}" data-navres="skill::${esc(r.label)}"><span class="nsl viewname" ${vd} title="skill (trocar inference from the wire) — 👁 shows the verbatim SKILL.md body">🧩 skill: ${esc(r.label)}</span>`+
         (size?`<span class="viewbtn" ${vd} title="show the verbatim SKILL.md body in the panel">👁</span>`:'')+
         `${life}${size?`<span class="nsx" title="resident instructions size — verbatim body on the wire">${esc(size)}</span>`:`<span class="nsx" title="invocation seen; resident body not in the captured window">invocation only</span>`}<span class="nsx">#${enter+1}</span></div>`
     }).join('')
@@ -2261,7 +2261,7 @@ document.getElementById('liveChk').onchange=e=>{if(e.target.checked){follow=true
   if(d&&Array.isArray(d.models)) PRICING=Object.fromEntries(d.models.map(m=>[m.model,[m.input,m.output,m.cache_write,m.cache_read]]))
 }catch{} })()
 
-// ── 保存什么 · what is kept (2.6 §D · RFC 1.6 §4.2): the class table as `asight query classes` reports it.
+// ── 保存什么 · what is kept (2.6 §D · RFC 1.6 §4.2): the class table as `trocar query classes` reports it.
 // READ-ONLY (D59③): the board does not change a level — it prints the command that does.
 const CLS_MS=10000
 let clsDoc=null, clsAt=0, clsErr=null, clsBusy=false, clsSig=null
@@ -2295,18 +2295,18 @@ function renderClassesView(){
   if(sig===clsSig&&tl.dataset.mode==='classes'){ pollClasses(); return }
   clsSig=sig
   const d=clsDoc.disk||{}
-  let html=`<div class="ctrlhdr">⚙ <b>保存什么 · what is kept</b> — per traffic class: <b>全部</b> keeps whole requests and responses, <b>只记日志</b> keeps headers and sizes only. The board is read-only: change a level with <code>asight classes set &lt;class&gt; full|log</code>${clsDoc.file?` (the table lives in <code>${esc(clsDoc.file)}</code>)`:''}.</div>`
+  let html=`<div class="ctrlhdr">⚙ <b>保存什么 · what is kept</b> — per traffic class: <b>全部</b> keeps whole requests and responses, <b>只记日志</b> keeps headers and sizes only. The board is read-only: change a level with <code>trocar classes set &lt;class&gt; full|log</code>${clsDoc.file?` (the table lives in <code>${esc(clsDoc.file)}</code>)`:''}.</div>`
   if((clsDoc.errors||[]).length) html+=`<div class="ctrlhdr" style="color:var(--amber)">⚠ 读不全 · ${clsDoc.errors.map(e=>esc(e.where+': '+e.reason)).join(' · ')}</div>`
   html+=`<div class="rettbl"><table><thead><tr><th>class</th><th>保存 · keep</th><th>24 h</th><th>7 d</th><th>全部 · all</th><th>change</th></tr></thead><tbody>`
   for(const c of clsDoc.classes){
     const n=w=>w?`${w.calls} 条 · ${fmtB(w.bytes)}`:'—'
     html+=`<tr><th>${esc(c.class)}${c.builtin?'':' <span class="est">yours</span>'}</th><td>${esc(RET_LABEL[c.keep]||c.keep)}</td>`
       +`<td><div class="num">${n(c.counts&&c.counts.h24)}</div></td><td><div class="num">${n(c.counts&&c.counts.d7)}</div></td><td><div class="num">${n(c.counts&&c.counts.all)}</div></td>`
-      +`<td><code>asight classes set ${esc(c.class)} ${c.keep==='full'?'log':'full'}</code></td></tr>`
+      +`<td><code>trocar classes set ${esc(c.class)} ${c.keep==='full'?'log':'full'}</code></td></tr>`
   }
   html+=`</tbody></table></div>`
   tl.dataset.mode='classes'; tl.innerHTML=html
-  led.innerHTML=`<div class="curmeta">⚙ 保存什么 · <span style="text-transform:none">~/.asight</span> 盘上占用 <span class="ct">${fmtB(d.asight_bytes)}</span></div>`
+  led.innerHTML=`<div class="curmeta">⚙ 保存什么 · <span style="text-transform:none">~/.trocar</span> 盘上占用 <span class="ct">${fmtB(d.trocar_bytes)}</span></div>`
     +`<div class="res"><div class="top"><span class="nm">采集记录 · records</span><span class="via">${fmtB(d.records_bytes)}</span></div></div>`
     +`<div class="res"><div class="top"><span class="nm">封存文件 · sealed</span><span class="via">${fmtB(d.sealed_bytes)}</span></div></div>`
     +(clsDoc.last_change?`<div style="color:var(--dim);font-size:10px;margin-top:4px">last change ${esc(String(clsDoc.last_change))}</div>`:'')

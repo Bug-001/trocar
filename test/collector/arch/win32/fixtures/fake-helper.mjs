@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Fake Windows helper (RFC 4.8 §1): speaks the line protocol of src/collector/arch/win32/helper.ps1 from a JSON
 // fixture, so helper.mjs is exercised end to end with a real child process and no Windows. usage:
-//   ASIGHT_FAKE_HELPER=1 node fake-helper.mjs '<fixture json>'      (or a path to a .json file)
+//   TROCAR_FAKE_HELPER=1 node fake-helper.mjs '<fixture json>'      (or a path to a .json file)
 // fixture = {
 //   ready: false            → exit before the ready line (a helper that could not start); `readyDelayMs`, `hangBeforeReady`
 //   stderr: ['line', …]     → written to stderr first      exitCode: 3 → the code `exitAfter` / `ready:false` exit with
@@ -11,13 +11,13 @@
 //   inOrder: true           → one request at a time, in the order received, as helper.ps1's ReadLine loop does (a delayMs then holds every later request)
 //   reread: true            → (fixture given as a file) its `verbs` are read again for every request, so a test can answer facts it learns later (a client's port)
 // `tcp-table` honours the same filters the real helper does (pids, remotePort, localPort, states) on `data.rows`.
-// node --test runs every file under test/: unless the driver sets ASIGHT_FAKE_HELPER=1 this exits at once.
+// node --test runs every file under test/: unless the driver sets TROCAR_FAKE_HELPER=1 this exits at once.
 // a stand-in the test starts and kills must not outlive a runner that was killed: the watch of test/helpers/exit-with-parent.mjs ends this process when its parent is gone
 import '../../../../helpers/exit-with-parent.mjs'
 import fs from 'node:fs'
 import readline from 'node:readline'
 
-if (process.env.ASIGHT_FAKE_HELPER !== '1') process.exit(0)
+if (process.env.TROCAR_FAKE_HELPER !== '1') process.exit(0)
 
 const arg = process.argv[2] || '{}'
 const load = () => JSON.parse(arg.trim().startsWith('{') ? arg : fs.readFileSync(arg, 'utf8'))

@@ -76,8 +76,8 @@ test('every declared colour of every icon reaches 3:1 on --panel and --paper, in
   }
 })
 
-test('SOURCES.md records every file as asight 自绘', () => {
+test('SOURCES.md records every file as trocar 自绘', () => {
   const md = fs.readFileSync(path.join(ICONS, 'SOURCES.md'), 'utf8')
   for (const id of HARNESS_ORDER) assert.ok(md.includes(CHIP[id].icon), `${CHIP[id].icon} is recorded`)
-  assert.ok(md.includes('asight 自绘'))
+  assert.ok(md.includes('trocar 自绘'))
 })

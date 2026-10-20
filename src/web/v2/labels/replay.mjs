@@ -1,6 +1,6 @@
 // labels/replay.mjs — the words of the replay desk (回放台): the session head, the 会话保真行 and the session info popover
 // (1.2 §会话头), the step head and its 缓存 / 组成 / ≈ $ popovers and the compare menu (2.2 §步头), the lane kind table's words
-// (2.1, owned here for the whole board). Fixed text keyed by asight's own closed sets — the cache-predicate states
+// (2.1, owned here for the whole board). Fixed text keyed by trocar's own closed sets — the cache-predicate states
 // (core/metrics.mjs), the server's `cacheBreak.cause` / attribution closed sets (src/view/analyze.mjs CAUSE_META) and the lane
 // kinds — never by a harness-defined code (1.5 §数据规则): those carry their own words from the server. The server's own
 // causeLabel / fixHint and field names stay out of the UI (raw values go to technical details).
@@ -170,7 +170,7 @@ export const INCOMPLETE_WORD = Object.freeze({ req: 'request', ws: 'messages', r
 export const reqEncodingFact = (enc) => `The request body was compressed on the wire (${enc}); this is the exact decompressed text`
 
 // block-level marks (2.3 §保真标): one visible word per unproven block; the codes are the 3.2 closed set plus
-// asight's own opened-body outcomes (notfetched · reserialized · unknown)
+// trocar's own opened-body outcomes (notfetched · reserialized · unknown)
 export const FF_WORD = Object.freeze({
   metadata: 'metadata only', opaque: 'encrypted; no plaintext', summarized: 'a client summary, not the original', omitted: 'omitted by the source',
   truncated: 'truncated at the source', unaddressable: 'not addressable', unknown: 'fidelity unknown', notfetched: 'bytes could not be fetched',

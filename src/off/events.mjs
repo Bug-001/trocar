@@ -1,6 +1,6 @@
 // events.mjs (src/off) — the one line of a `flows/` event (RFC 4.6 §记录, D38): `{ts, event, …}` appended to
 // <collector>/flows/<UTC date>.ndjson with the writer's own descriptor, so a record store whose files broke can still say that it broke.
-// Moved here from src/collector/core/events.mjs (which re-exports it as `appendEvent`): `asight off` writes its `off-note` lines the same
+// Moved here from src/collector/core/events.mjs (which re-exports it as `appendEvent`): `trocar off` writes its `off-note` lines the same
 // way and may import nothing outside src/off (0.1 §2).
 import nodeFs from 'node:fs'
 import path from 'node:path'
@@ -33,7 +33,7 @@ export function runEventWriter({ dir, base = {}, notes = [], now = () => new Dat
     } catch (e) {
       if (!gap) gap = { from: at.toISOString(), lost: 0, error: null }
       gap.lost++; gap.error = eventErr(e)
-      log(`asight: an event line could not be written to ${dir}/flows (${eventErr(e)}): ${rec.reason}`)
+      log(`trocar: an event line could not be written to ${dir}/flows (${eventErr(e)}): ${rec.reason}`)
       notes.push(`not recorded (${eventErr(e)}): ${rec.reason}`)
     }
   }

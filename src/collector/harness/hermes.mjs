@@ -31,7 +31,7 @@ const LAST_CA_BUNDLE_RELEASE = 'v2026.9.24'
 /** A release tag (`v2026.9.24`, `2026.09.24`) as a number that orders by date; null when it is not one. */
 const releaseDay = (tag) => { const m = /^v?(\d{4})\.(\d{1,2})\.(\d{1,2})$/.exec(String(tag)); return m ? Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]) : null }
 const CUTOFF = releaseDay(LAST_CA_BUNDLE_RELEASE)
-const COVERED = ['SSL_CERT_FILE', 'HERMES_CA_BUNDLE'] // what asight's block sets over the launch env and the user's lines
+const COVERED = ['SSL_CERT_FILE', 'HERMES_CA_BUNDLE'] // what trocar's block sets over the launch env and the user's lines
 
 // The root of the Hermes data dirs (HERMES_HOME may name a profile under it) and the active home of this process.
 function hermesRoot(env, home) {
@@ -99,7 +99,7 @@ function configHosts(ctx) {
 
 function inject(ctx) {
   const root = hermesRoot(ctx.env, ctx.home)
-  if (!ctx.listDir(root).length) return { notes: [{ code: CODE.harnessNote, text: `${root} does not exist (Hermes is not installed for this user), so no trust entry is written; after installing Hermes, run asight collector uninstall and install again` }] }
+  if (!ctx.listDir(root).length) return { notes: [{ code: CODE.harnessNote, text: `${root} does not exist (Hermes is not installed for this user), so no trust entry is written; after installing Hermes, run trocar collector uninstall and install again` }] }
   const profiles = path.join(root, 'profiles')
   const homes = [root, ...ctx.listDir(profiles).sort().filter((n) => ctx.listDir(path.join(profiles, n)).length).map((n) => path.join(profiles, n))]
   const files = homes.map((h) => path.join(h, '.env'))
@@ -114,13 +114,13 @@ function inject(ctx) {
   for (const f of [...homes.flatMap((h) => [path.join(h, '.env'), path.join(h, '.op.env')]), ...checkouts.map((c) => path.join(c, '.env'))]) for (const [k, v] of parseDotenv(ctx.readText(f) || '')) if (COVERED.includes(k)) see(v)
   for (const env of [ctx.env, ...ctx.running]) for (const k of COVERED) see(env.get(k))
   const notes = [...seen].filter((v) => !path.isAbsolute(v)).map((v) => ({ code: CODE.relativePath, text: `${v} is a relative CA path; its certificates are not carried over into ${path.basename(bundle)}` }))
-  // a home .env asight creates turns the checkout .env from override into fill for that home (told at install; not a wire-level observer effect, 4.6 Hermes row)
+  // a home .env trocar creates turns the checkout .env from override into fill for that home (told at install; not a wire-level observer effect, 4.6 Hermes row)
   const flipped = files.filter((f) => ctx.readText(f) == null)
   const checkoutEnvs = checkouts.map((c) => path.join(c, '.env')).filter((f) => ctx.readText(f) != null)
-  if (flipped.length && checkoutEnvs.length) notes.push({ code: CODE.harnessNote, text: `${flipped.join(', ')} does not exist, so asight creates it for its block; Hermes then reads ${checkoutEnvs.join(', ')} as a fill instead of an override, so its keys no longer win over the environment Hermes is started with` })
+  if (flipped.length && checkoutEnvs.length) notes.push({ code: CODE.harnessNote, text: `${flipped.join(', ')} does not exist, so trocar creates it for its block; Hermes then reads ${checkoutEnvs.join(', ')} as a fill instead of an override, so its keys no longer win over the environment Hermes is started with` })
   const managed = ctx.env.get('HERMES_MANAGED_DIR') || MANAGED[ctx.os]
   const managedVars = managed ? new Map(parseDotenv(ctx.readText(path.join(managed, '.env')) || '')) : new Map()
-  for (const k of COVERED) if (managedVars.has(k)) notes.push({ code: CODE.harnessNote, text: `${path.join(managed, '.env')} sets ${k}; Hermes reads that file last, so it wins over asight's block and Hermes is not captured while it is there` })
+  for (const k of COVERED) if (managedVars.has(k)) notes.push({ code: CODE.harnessNote, text: `${path.join(managed, '.env')} sets ${k}; Hermes reads that file last, so it wins over trocar's block and Hermes is not captured while it is there` })
   return {
     entries: files.map((f) => ({ kind: 'text', format: 'dotenv-block', path: f, vars: { SSL_CERT_FILE: bundle, ...(old ? { HERMES_CA_BUNDLE: bundle } : {}) }, semantic: 'replace' })),
     files: [{ path: bundle, bundle: true, certsFrom: [...seen].filter((v) => path.isAbsolute(v)) }],
@@ -143,7 +143,7 @@ const proxy = {
 }
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (the .env block routes every form; the root
-// alone trusts; asight writes no SSL_CERT_FILE and no ssl_ca_cert). The block is written only into a Hermes home that exists.
+// alone trusts; trocar writes no SSL_CERT_FILE and no ssl_ca_cert). The block is written only into a Hermes home that exists.
 const HOME = (path) => perOs({ darwin: { base: 'home', dir: '.hermes', env: 'HERMES_HOME', path }, win32: { base: 'localAppData', dir: 'hermes', env: 'HERMES_HOME', path } })
 const form = (id, present, verified = { darwin: true, win32: true }) => ({ id, os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'root', present: [...present, HOME()], verified })
 const proxyMode = {
@@ -206,8 +206,8 @@ export default {
       return oldRelease(readText, checkout({ argv: f.argv || [], environ, home: environ.get('HOME') || home })) !== false ? 'restart' : 'next-handshake'
     },
     hints: {
-      shadowed: 'HERMES_CA_BUNDLE names a bundle without the asight CA, and this Hermes may be a release build that reads it first',
-      'replace-without-ca': 'a provider ssl_ca_cert in config.yaml names a bundle without the asight CA; that route trusts only that file',
+      shadowed: 'HERMES_CA_BUNDLE names a bundle without the trocar CA, and this Hermes may be a release build that reads it first',
+      'replace-without-ca': 'a provider ssl_ca_cert in config.yaml names a bundle without the trocar CA; that route trusts only that file',
       'verify-disabled': 'a provider in config.yaml sets ssl_verify: false',
     },
   },

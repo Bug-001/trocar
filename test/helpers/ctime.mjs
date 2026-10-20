@@ -1,6 +1,6 @@
 // test/helpers/ctime.mjs — a change a test makes to a file, made until the file's ctime has moved.
 //
-// asight tells "this file changed" from its stat signature: size, mtime, inode and ctime (src/raw/legacy.mjs `sameStat`, the
+// trocar tells "this file changed" from its stat signature: size, mtime, inode and ctime (src/raw/legacy.mjs `sameStat`, the
 // resolver's `fp`/signature in src/query/source.mjs, the loader's `fileSig`). ctime is the one stamp a writer cannot put back, so
 // it is what catches a rewrite that restores size and mtime, and a chmod that changes neither. But the kernel stamps it from its
 // COARSE clock — a 1 ms tick on the ext4 Linux test machine (CONFIG_HZ=1000), 4 to 10 ms on other configs — so a change made in the same

@@ -1,6 +1,6 @@
 // samples/gen-demo-capture.mjs — generates samples/demo-session.ndjson
 //
-// Why a SYNTHETIC sample exists: asight's own test fixture is a real personal Claude Code session,
+// Why a SYNTHETIC sample exists: trocar's own test fixture is a real personal Claude Code session,
 // so it is gitignored and can never ship (invariant: captures are full plaintext transcripts —
 // see the privacy note in the README). That left `git clone && npm start` rendering an empty board,
 // meaning nobody could evaluate the tool without first MITM-ing their own agent. This file is

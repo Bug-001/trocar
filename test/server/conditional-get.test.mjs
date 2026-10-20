@@ -9,7 +9,7 @@ import { serveFace, request, withToken } from './face.mjs';
 const SEGMENT = '20261018T100000Z';
 
 test('ETag / If-None-Match on the data plane (4.4 验收 9, the face)', async () => {
-  const home = rawHome('asight-cget-');
+  const home = rawHome('trocar-cget-');
   writeSegment(home, SEGMENT, [{ sessionKey: 'sess-1' }]);
   const f = await serveFace({ home });
   try {

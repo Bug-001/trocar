@@ -13,9 +13,9 @@ import {
 // 4.1:61 / D22 — the macOS-only CC-Desktop Clash steer. Durable mechanism = the Verge global
 // Script (imperative unshift, survives regen). All I/O is injected so NO real Clash config is
 // touched: an in-memory fs + spy mihomoReload/probeLive.
-// A developer's own ASIGHT_MIHOMO_SOCK would outrank the controlled discovery below and point the
+// A developer's own TROCAR_MIHOMO_SOCK would outrank the controlled discovery below and point the
 // default reload at their REAL core — never inherit it here.
-delete process.env.ASIGHT_MIHOMO_SOCK;
+delete process.env.TROCAR_MIHOMO_SOCK;
 
 const NO_OP = '// Define main function (script entry)\nfunction main(config, profileName) { return config; }\n';
 
@@ -342,7 +342,7 @@ test('rules the user adds WHILE capture is on survive off() (the snapshot-restor
   assert.equal(after, stripBlock(edited), 'off() == stripBlock(current file), nothing else');
 });
 
-test('a stale .atrace-bak left by an older asight is neither restored nor touched', async () => {
+test('a stale .atrace-bak left by an older trocar is neither restored nor touched', async () => {
   const fs = fakeFs({ '/s.js': USER_MAIN, '/s.js.atrace-bak': NO_OP, '/rt.yaml': RT });
   const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(false) });
   await steer.on({ port: 9898 });
@@ -486,7 +486,7 @@ test('discoverMihomoSock takes the first candidate that ANSWERS and says what it
 // behaviours of the real v1.19.31 core that broke the old path: SAFE_PATHS on {path}, and a
 // duplicate-proxy-name rejection.
 async function fakeMihomo({ rejectAll = null } = {}) {
-  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'asight-mh-'));
+  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'trocar-mh-'));
   const sock = path.join(dir, 'm.sock');
   const state = { puts: [], live: false };
   const send = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(obj ? JSON.stringify(obj) : ''); };
@@ -549,7 +549,7 @@ test('off() over a regenerated runtime drops the Script-produced route from the 
 });
 
 test('no reachable socket → ok:false naming what was tried + the Profiles → reactivate fallback', async () => {
-  const gone = path.join(os.tmpdir(), `asight-no-such-${process.pid}.sock`);
+  const gone = path.join(os.tmpdir(), `trocar-no-such-${process.pid}.sock`);
   const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
   const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', psText: () => '', knownSocks: [gone] });
   const on = await steer.on({ port: 9898 });
@@ -625,10 +625,10 @@ test('no Verge runtime config for this HOME → no discovery at all (never probe
   assert.equal(st.mihomoSock, null);
 });
 
-test('ASIGHT_MIHOMO_SOCK pins the socket: no ps, no known locations, reload goes exactly there', async () => {
+test('TROCAR_MIHOMO_SOCK pins the socket: no ps, no known locations, reload goes exactly there', async () => {
   const mh = await fakeMihomo();
-  const prev = process.env.ASIGHT_MIHOMO_SOCK;
-  process.env.ASIGHT_MIHOMO_SOCK = mh.sock;
+  const prev = process.env.TROCAR_MIHOMO_SOCK;
+  process.env.TROCAR_MIHOMO_SOCK = mh.sock;
   try {
     const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
     const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', psText: () => { throw new Error('ps must not run when pinned'); }, knownSocks: ['/must/not/be/tried.sock'] });
@@ -637,13 +637,13 @@ test('ASIGHT_MIHOMO_SOCK pins the socket: no ps, no known locations, reload goes
     assert.equal(mh.state.puts.length, 1);
     assert.equal(out.status.mihomoSock, mh.sock);
   } finally {
-    if (prev === undefined) delete process.env.ASIGHT_MIHOMO_SOCK; else process.env.ASIGHT_MIHOMO_SOCK = prev;
+    if (prev === undefined) delete process.env.TROCAR_MIHOMO_SOCK; else process.env.TROCAR_MIHOMO_SOCK = prev;
     await mh.close();
   }
 });
 
 test('discovery only accepts a real socket (a regular file at a candidate path is skipped, not PUT to)', async () => {
-  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'asight-nosock-'));
+  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'trocar-nosock-'));
   const file = path.join(dir, 'verge-mihomo.sock');
   nodeFs.writeFileSync(file, 'not a socket');
   const mh = await fakeMihomo();
@@ -662,7 +662,7 @@ test('non-darwin: explicit reserved refusal, never a silent no-op (D22)', () => 
   assert.equal(out.ok, false);
   assert.equal(out.reserved, true);
   assert.match(out.reason, /macOS-Desktop-only/);
-  assert.match(out.reason, /`asight on` where the per-process collector exists \(Linux\), or `asight monitor on --no-autostart`/, 'it points at the commands that do the thing now (1.6 §2), not at the old `asight on`');
+  assert.match(out.reason, /`trocar on` where the per-process collector exists \(Linux\), or `trocar monitor on --no-autostart`/, 'it points at the commands that do the thing now (1.6 §2), not at the old `trocar on`');
   assert.equal(steer.status().reserved, true);
 });
 

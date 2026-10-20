@@ -1,4 +1,4 @@
-// test/query/raw-home.mjs — a ~/.asight with raw/ segments in it, for the segment-index tests.
+// test/query/raw-home.mjs — a ~/.trocar with raw/ segments in it, for the segment-index tests.
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -33,13 +33,13 @@ export const envLine = (o = {}) => JSON.stringify({
 export const requiredFor = (name, { segment = '20261018T100000Z', session = 'no-such-session' } = {}) =>
   ({ session: { id: session }, block: { ref: `${segment}:1` } })[name] || {}
 
-export function rawHome(prefix = 'asight-t6-') {
+export function rawHome(prefix = 'trocar-t6-') {
   const home = tmpDir(prefix)
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
   return home
 }
 
-/** Appends `lines` (objects for envLine, or ready strings) to ~/.asight/raw/<segment>.ndjson. */
+/** Appends `lines` (objects for envLine, or ready strings) to ~/.trocar/raw/<segment>.ndjson. */
 export function writeSegment(home, segment, lines) {
   const f = path.join(home, 'raw', `${segment}.ndjson`)
   fs.appendFileSync(f, lines.map((l) => (typeof l === 'string' ? l : envLine(l))).join('\n') + '\n', { mode: 0o600 })

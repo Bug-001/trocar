@@ -1,5 +1,5 @@
 // CM14 (spec 4.11 hook contract, P8 / P9): a static scan of every hook template — the plugin templates and the wrapper templates. A hook
-// may add the asight root to its own process and route its own connections to the door, recording the prior value; it MUST NOT write
+// may add the trocar root to its own process and route its own connections to the door, recording the prior value; it MUST NOT write
 // files (agent config included), connect anywhere but the door (a ProxyAgent to it, or fetch's own `proxy` option), or read or change
 // request / response bytes. The routing slots (door, switch file, real program, proxy names) appear in no other source file, so a hook
 // carrier cannot grow outside harness/templates and the arch wrapper files. Each rule is also run against a planted violation, so the
@@ -66,7 +66,7 @@ test('CM14 the scan fails on a planted violation of every rule', () => {
 
 test('CM14 the routing slots live only in harness/templates and the arch wrapper files', () => {
   const walk = (d) => fs.readdirSync(path.join(REPO, d), { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(`${d}/${e.name}`) : [`${d}/${e.name}`]))
-  const SLOTS = /__ASIGHT_(DOOR|SWITCH|REAL|PROXY_ENV|PROXY_NAMES|NO_PROXY_ENV)__/
+  const SLOTS = /__TROCAR_(DOOR|SWITCH|REAL|PROXY_ENV|PROXY_NAMES|NO_PROXY_ENV)__/
   const carriers = walk('src').filter((rel) => SLOTS.test(read(rel))).sort()
   assert.deepEqual(carriers, [...JS_TEMPLATES, ...WRAPPERS].sort())
 })

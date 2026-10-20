@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { COMMANDS } from '../../src/cli/commands.mjs';
 
-// R14 — the product is `asight`, but the served UI still called itself `atrace`
+// R14 — the product is `trocar`, but the served UI still called itself `atrace`
 // (browser tab title + the empty state), and the empty state instructed the user to run a command
 // that does not exist. A first-time user who captures nothing lands exactly there, so the one screen
 // most likely to be someone's first impression named the wrong product and gave a dead instruction.
@@ -20,7 +20,7 @@ const title = (html.match(/<title>([^<]*)<\/title>/) || [])[1] || '';
 const emptyMsg = (html.match(/renderEmpty\('(No sessions[^']*)'\)/) || html.match(/const NO_SESSIONS='(No sessions[^']*)'/) || [])[1] || '';
 
 test('the browser tab title names the product', () => {
-  assert.match(title, /asight/i, `<title> is "${title}" — the product is asight`);
+  assert.match(title, /trocar/i, `<title> is "${title}" — the product is trocar`);
   assert.doesNotMatch(title, /atrace/i, 'the old name must not ship in the served UI');
 });
 
@@ -30,13 +30,13 @@ test('the empty state does not use the old product name', () => {
 });
 
 test('every command the empty state tells the user to run actually exists in the CLI', () => {
-  // extract `asight <verb>` mentions from the empty-state copy
-  const verbs = [...emptyMsg.matchAll(/asight\s+([a-z-]+)/g)].map((m) => m[1]);
+  // extract `trocar <verb>` mentions from the empty-state copy
+  const verbs = [...emptyMsg.matchAll(/trocar\s+([a-z-]+)/g)].map((m) => m[1]);
   assert.ok(verbs.length, `the empty state must tell the user a REAL next command; got: "${emptyMsg}"`);
-  const implemented = new Set(COMMANDS.map((c) => c.name)); // what bin/asight.mjs dispatches (src/cli/commands.mjs)
+  const implemented = new Set(COMMANDS.map((c) => c.name)); // what bin/trocar.mjs dispatches (src/cli/commands.mjs)
   for (const v of verbs) {
     assert.ok(implemented.has(v),
-      `empty state suggests "asight ${v}" but bin/asight.mjs implements no such subcommand (has: ${[...implemented].join(', ')})`);
+      `empty state suggests "trocar ${v}" but bin/trocar.mjs implements no such subcommand (has: ${[...implemented].join(', ')})`);
   }
 });
 
@@ -54,17 +54,17 @@ test('the old product name is not visible anywhere in the rendered page', () => 
     hit ? `visible chrome still reads "atrace" near: ${JSON.stringify(visibleText.slice(Math.max(0, hit.index - 40), hit.index + 40))}` : '');
 });
 
-test('the wordmark reads asight', () => {
+test('the wordmark reads trocar', () => {
   const h1 = (html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/) || [])[1] || '';
-  assert.match(h1.replace(/<[^>]+>/g, ''), /^asight$/i, `wordmark renders as "${h1.replace(/<[^>]+>/g, '')}"`);
+  assert.match(h1.replace(/<[^>]+>/g, ''), /^trocar$/i, `wordmark renders as "${h1.replace(/<[^>]+>/g, '')}"`);
 });
 
 // ── 2.6 · D59③: the board is READ-ONLY. Where a keep level used to be toggled it now prints the
 // command that changes it, so the one screen about settings cannot imply the board can change them.
 test('changing what is kept is shown as a command, not as a control', () => {
-  assert.match(html, /asight classes set \$\{esc\(c\.class\)\} \$\{c\.keep===/,
-    'the class table must print `asight classes set <class> full|log` per row (2.6 §D)');
-  for (const gone of [/setRetentionLevel/, /class="lvl"/, /method:\s*'POST'/, /x-asight-csrf/]) {
+  assert.match(html, /trocar classes set \$\{esc\(c\.class\)\} \$\{c\.keep===/,
+    'the class table must print `trocar classes set <class> full|log` per row (2.6 §D)');
+  for (const gone of [/setRetentionLevel/, /class="lvl"/, /method:\s*'POST'/, /x-trocar-csrf/]) {
     assert.doesNotMatch(html, gone, `the board still carries ${gone} — it has no write path (D26 · D59③)`);
   }
 });

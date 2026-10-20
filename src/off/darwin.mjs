@@ -1,8 +1,8 @@
-// darwin.mjs (src/off) — what `asight off` and `asight uninstall` do on macOS that no other OS needs (RFC 4.9 §4 · §7; 1.6 R3, R7). It imports Node's own modules and files of src/off and
-// nothing else: the standalone `asight-off` is made of the files of this directory alone, so it cannot reach the collector or the source tree (0.1 §2). Two things live here: the root
+// darwin.mjs (src/off) — what `trocar off` and `trocar uninstall` do on macOS that no other OS needs (RFC 4.9 §4 · §7; 1.6 R3, R7). It imports Node's own modules and files of src/off and
+// nothing else: the standalone `trocar-off` is made of the files of this directory alone, so it cannot reach the collector or the source tree (0.1 §2). Two things live here: the root
 // refusal and the launchd undo.
 //
-// R7 on darwin (4.9 §7): asight never runs as root, so `on`, `daemon`, `off` and `uninstall` refuse to. `on` and `daemon` ask the arch module (arch/darwin/autostart.mjs `refuseElevated`);
+// R7 on darwin (4.9 §7): trocar never runs as root, so `on`, `daemon`, `off` and `uninstall` refuse to. `on` and `daemon` ask the arch module (arch/darwin/autostart.mjs `refuseElevated`);
 // `off` and `uninstall` cannot reach it (the standalone has no source tree), and on darwin they need no tool for it either: the uid is this process's own, read in-process — where Windows
 // has to ask `whoami /groups` (src/off/win32.mjs), darwin asks nobody.
 //
@@ -15,9 +15,9 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { execTool } from './exec.mjs'
 
-export const AGENT_LABEL = 'com.asight.collector' // the launchd job's label (the arch module's own copy is held equal by test)
-export const PLIST_FILE_NAME = 'com.asight.collector.plist'
-/** ~/Library/LaunchAgents/com.asight.collector.plist — launchd scans this directory at every login, so the file IS the registration. */
+export const AGENT_LABEL = 'com.trocar.collector' // the launchd job's label (the arch module's own copy is held equal by test)
+export const PLIST_FILE_NAME = 'com.trocar.collector.plist'
+/** ~/Library/LaunchAgents/com.trocar.collector.plist — launchd scans this directory at every login, so the file IS the registration. */
 export const plistFilePath = (home) => path.join(home, 'Library', 'LaunchAgents', PLIST_FILE_NAME)
 
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1) // -1: a platform without getuid (a test on Windows) — never 0, so never a refusal
@@ -45,13 +45,13 @@ export function agentState({ exec, env, uid }) {
  *  measured against a plain dummy KeepAlive agent too): `bootout gui/<uid> <label>` — the domain and the label as two
  *  arguments — answers `Boot-out failed: 5: Input/output error` and leaves the job loaded, while the slash form
  *  `bootout gui/<uid>/<label>` takes it out; `print` behaves either way. So every target here is the slash form, and an
- *  `asight off` that quietly left the daemon to KeepAlive (exit 0, a fresh pid seconds later) is what this rule ends. */
+ *  `trocar off` that quietly left the daemon to KeepAlive (exit 0, a fresh pid seconds later) is what this rule ends. */
 export const launchctl = (args, { run, env } = {}) => execTool('launchctl', args, { run, env })
 
 // the two parts of an undo as one answer; a tool that did not run (code null) is code 1, a failure that a caller's `if (r.code)` sees (the same rule as the arch module's)
 const settle = (agent, plist) => ({ code: (agent.code !== 0 ? agent.code : plist.code) ?? 1, out: [agent.out, plist.out].filter(Boolean).join('\n'), err: [agent.err, plist.err].filter(Boolean).join('; '), agent: agent.state, plist: plist.state })
 
-/** No autostart any more: `launchctl bootout gui/<uid> com.asight.collector` — FIRST (4.9 §4: the autostart off the hook before the daemon is stopped, so KeepAlive does not pull it
+/** No autostart any more: `launchctl bootout gui/<uid> com.trocar.collector` — FIRST (4.9 §4: the autostart off the hook before the daemon is stopped, so KeepAlive does not pull it
  *  back; the caller stops the daemon process after this returns, never before) — and then the plist out of ~/Library/LaunchAgents (launchd scans that directory at every login: a file
  *  left there brings the agent back at the next one). An agent that is not there is already as asked, not an error; a print that did not run is a failure (`agent: 'failed'`, code 1) and
  *  nothing is booted out on a guess — the plist is a separate part of the undo and still goes (its removal is safe whatever launchd answered: it only prevents the next login's load).

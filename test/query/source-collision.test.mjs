@@ -23,7 +23,7 @@ const REC = (id, body) => JSON.stringify({
 
 // two capture files that BOTH contain req_00001 / req_00002, with distinguishable bodies
 function twoFileDir() {
-  const dir = tmpDir('asight-collide-');
+  const dir = tmpDir('trocar-collide-');
   writeFileSync(path.join(dir, 'alpha.ndjson'),
     REC('req_00001', { model: 'ALPHA-model-one', messages: [] }) +
     REC('req_00002', { model: 'ALPHA-model-two', messages: [] }));
@@ -99,7 +99,7 @@ test('BUG2: a single-FILE source is unaffected (no collisions possible)', async 
 //
 // This is not hypothetical. The capture writer mints ids from a per-PROCESS counter starting at
 // req_00001, and every MITM restart appends to the SAME file. Measured on the user's live
-// ~/.atrace/asight/claude-capture.ndjson: 36,876 records, **165 duplicated ids**
+// ~/.atrace/trocar/claude-capture.ndjson: 36,876 records, **165 duplicated ids**
 // (req_00001…req_00165, each twice). So on real data today, a "verbatim" panel for one of those
 // records serves a DIFFERENT record's bytes, under a label asserting byte-faithfulness.
 //
@@ -107,7 +107,7 @@ test('BUG2: a single-FILE source is unaffected (no collisions possible)', async 
 // is what makes it a lie (invariant 2), and guessing silently is what makes it undetectable
 // (invariant 4). The loud error is also what makes the capture-side fix findable.
 function oneFileTwice() {
-  const dir = tmpDir('asight-collide1-');
+  const dir = tmpDir('trocar-collide1-');
   writeFileSync(path.join(dir, 'claude-capture.ndjson'),
     REC('req_00001', { model: 'FIRST-writer', messages: [] }) +
     REC('req_00002', { model: 'unique-one', messages: [] }) +

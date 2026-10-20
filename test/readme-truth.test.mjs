@@ -7,8 +7,8 @@ import { COMMANDS } from '../src/cli/commands.mjs';
 
 // The stated bar for this README is that it must not TRAP a user: every command it tells someone to
 // run has to exist, and every file it points at has to be there. That is not a style question — the
-// audit found the README promising `npx asight` (the package is private and the npm name is taken),
-// documenting 5 of 11 CLI verbs, and drifting between `asight on` and `asight monitor on`. A reader
+// audit found the README promising `npx trocar` (the package is private and the npm name is taken),
+// documenting 5 of 11 CLI verbs, and drifting between `trocar on` and `trocar monitor on`. A reader
 // who types what they are told and gets "command not found" has been trapped by the docs.
 //
 // These assertions are mechanical on purpose: they hold whoever edits the README to reality.
@@ -18,20 +18,20 @@ const ROOT = path.join(HERE, '..');
 const readme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
 const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
-// what bin/asight.mjs dispatches: the table of commands and the first word of each hidden alias (src/cli/commands.mjs, RFC 1.6 §2)
+// what bin/trocar.mjs dispatches: the table of commands and the first word of each hidden alias (src/cli/commands.mjs, RFC 1.6 §2)
 const implementedVerbs = new Set(COMMANDS.map((c) => c.name));
 
 // Only text the reader would actually TYPE counts as an instruction: fenced code blocks and inline
-// `code` spans. Prose like "asight sits on the wire" is not a command, and the README's own
-// disclaimer that `npx asight` does not exist must not read as a promise that it does.
+// `code` spans. Prose like "trocar sits on the wire" is not a command, and the README's own
+// disclaimer that `npx trocar` does not exist must not read as a promise that it does.
 const fenced = [...readme.matchAll(/```[a-z]*\n([\s\S]*?)```/g)].map((m) => m[1]).join('\n');
 const inlineCode = [...readme.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]).join('\n');
 const commandText = fenced + '\n' + inlineCode;
 
-test('every `asight <verb>` the README tells you to run actually exists', () => {
+test('every `trocar <verb>` the README tells you to run actually exists', () => {
   // `[ \t]+`, not `\s+`: the spans are newline-joined, and `\s` would match across the join —
-  // "…01-asight" + "\n" + "spec/…" would read as the command `asight spec`.
-  const documented = new Set([...commandText.matchAll(/\basight[ \t]+([a-z-]+)/g)].map((m) => m[1]));
+  // "…01-trocar" + "\n" + "spec/…" would read as the command `trocar spec`.
+  const documented = new Set([...commandText.matchAll(/\btrocar[ \t]+([a-z-]+)/g)].map((m) => m[1]));
   const missing = [...documented].filter((v) => !implementedVerbs.has(v));
   assert.deepEqual(missing, [],
     `README documents commands that do not exist: ${missing.join(', ')}. `
@@ -41,24 +41,24 @@ test('every `asight <verb>` the README tells you to run actually exists', () => 
 test('the README\'s Commands section lists every command of the table, in code the reader can copy (1.6 §8, R10)', () => {
   const section = readme.slice(readme.indexOf('\n## Commands'), readme.indexOf('Design authority:'));
   assert.ok(section.length > 100, 'sanity: found the Commands section');
-  const listed = new Set([...section.matchAll(/\basight[ \t]+([a-z-]+)/g)].map((m) => m[1]));
+  const listed = new Set([...section.matchAll(/\btrocar[ \t]+([a-z-]+)/g)].map((m) => m[1]));
   assert.deepEqual(COMMANDS.map((c) => c.name).filter((n) => !listed.has(n)), [], 'a command of the table the README does not list');
 });
 
-test('the README teaches no command that is gone (`collector …`, `etl`, `shard`, `keep`, `verify`), and not `asight test`', () => {
-  const taught = [...commandText.matchAll(/\basight[ \t]+([a-z-]+)/g)].map((m) => m[1]);
+test('the README teaches no command that is gone (`collector …`, `etl`, `shard`, `keep`, `verify`), and not `trocar test`', () => {
+  const taught = [...commandText.matchAll(/\btrocar[ \t]+([a-z-]+)/g)].map((m) => m[1]);
   // the hidden aliases are gone with 1.6 §2 (one feature, one name): what they named is not a command any more
-  for (const a of ['collector', 'etl', 'shard', 'keep', 'verify', 'test']) assert.ok(!taught.includes(a), `the README tells the reader to run \`asight ${a}\`, which is gone (1.6 §2)`);
+  for (const a of ['collector', 'etl', 'shard', 'keep', 'verify', 'test']) assert.ok(!taught.includes(a), `the README tells the reader to run \`trocar ${a}\`, which is gone (1.6 §2)`);
 });
 
-test('the README no longer says what D39 and the code made false: the steer of `asight on`, <redacted> credentials, "observe-only: never rewrite", a test count', () => {
-  assert.doesNotMatch(readme, /`asight on` writes the steer/, '`asight on` is the collector now');
-  assert.doesNotMatch(readme, /`asight (monitor|desktop|capture|mitm) /, 'the old capture\'s commands are retired (D39⑥ executed 2026-10-11): the README must not teach them');
-  assert.doesNotMatch(readme, /replaced with `<redacted>`/, 'credential headers are stored verbatim (files 0600; asight doctor checks them)');
-  assert.doesNotMatch(readme, /never inject or\s+rewrite traffic/, 'D30: a request is changed or re-sent only by the operator, and the one `Connection: close` line is asight\'s');
+test('the README no longer says what D39 and the code made false: the steer of `trocar on`, <redacted> credentials, "observe-only: never rewrite", a test count', () => {
+  assert.doesNotMatch(readme, /`trocar on` writes the steer/, '`trocar on` is the collector now');
+  assert.doesNotMatch(readme, /`trocar (monitor|desktop|capture|mitm) /, 'the old capture\'s commands are retired (D39⑥ executed 2026-10-11): the README must not teach them');
+  assert.doesNotMatch(readme, /replaced with `<redacted>`/, 'credential headers are stored verbatim (files 0600; trocar doctor checks them)');
+  assert.doesNotMatch(readme, /never inject or\s+rewrite traffic/, 'D30: a request is changed or re-sent only by the operator, and the one `Connection: close` line is trocar\'s');
   assert.doesNotMatch(readme, /\b\d+ passing\b/, 'a hard-coded test count is stale the day after');
   assert.doesNotMatch(readme, /`monitor off --remove-ca` deletes it/, '--remove-ca takes the trust entry out; the CA files stay');
-  assert.doesNotMatch(readme, /asight mitm\s+# :9899\nasight desktop on/, '`desktop on` installs its own MITM on 9898; a hand-started one on 9899 is not what its rule points at');
+  assert.doesNotMatch(readme, /trocar mitm\s+# :9899\ntrocar desktop on/, '`desktop on` installs its own MITM on 9898; a hand-started one on 9899 is not what its rule points at');
 });
 
 test('every `npm run <script>` the README mentions exists in package.json', () => {
@@ -78,11 +78,11 @@ test('every repo file the README links to exists', () => {
 });
 
 test('the README does not promise a distribution channel that does not exist', () => {
-  // package.json is private with no LICENSE, so `npx asight` cannot work for anyone
+  // package.json is private with no LICENSE, so `npx trocar` cannot work for anyone
   if (pkg.private === true || !existsSync(path.join(ROOT, 'LICENSE'))) {
     // fenced blocks only: a disclaimer in prose is honest, an instruction in a code block is a trap
-    assert.doesNotMatch(fenced, /npx\s+asight/,
-      'the package is private and/or unlicensed, so `npx asight` would fail for every reader — '
+    assert.doesNotMatch(fenced, /npx\s+trocar/,
+      'the package is private and/or unlicensed, so `npx trocar` would fail for every reader — '
       + 'either ship the package and a LICENSE, or do not promise it');
   }
 });

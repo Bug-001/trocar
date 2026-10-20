@@ -15,7 +15,7 @@ const WORKER = fileURLToPath(new URL('../../src/collector/seal-worker.mjs', impo
 const SEGMENT = '20261005T100000Z'
 
 function box({ lines = 3 } = {}) {
-  const home = tmpDir('asight-seal-fork-'), raw = path.join(home, 'raw'), lock = path.join(home, 'collector', 'lock')
+  const home = tmpDir('trocar-seal-fork-'), raw = path.join(home, 'raw'), lock = path.join(home, 'collector', 'lock')
   fs.mkdirSync(raw, { recursive: true, mode: 0o700 })
   fs.mkdirSync(path.dirname(lock), { recursive: true })
   fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, segment: '20261005T120000Z' }) + '\n')

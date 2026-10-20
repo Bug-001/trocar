@@ -2,11 +2,11 @@
 //
 // Each test file runs in its own process, so "when the process ends" is "when the file is done": after every test passed, after
 // a failed assertion cut a test short (a `fs.rmSync(dir)` written at the END of a test body never ran then), after an uncaught
-// throw, after `--test-force-exit`'s process.exit(). Before this, a full `npm test` left 116 `asight-*` directories in the OS
+// throw, after `--test-force-exit`'s process.exit(). Before this, a full `npm test` left 116 `trocar-*` directories in the OS
 // temp dir (161 with every assertion failing), and an unattended machine collects them for ever.
 //
 //   import { tmpDir } from '../helpers/tmp.mjs'
-//   const dir = tmpDir('asight-foo-')          // was: fs.mkdtempSync(path.join(os.tmpdir(), 'asight-foo-'))
+//   const dir = tmpDir('trocar-foo-')          // was: fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-foo-'))
 //
 // Ctrl-C (SIGINT), SIGTERM and SIGHUP clean up too, then die of the signal as they would have. A kill -9 cannot run any
 // cleanup: `npm test`'s leak check (test/helpers/leak-guard.cjs) is what says so.
@@ -19,7 +19,7 @@ const made = new Set()
 let armed = false
 
 /** A fresh directory under os.tmpdir(), removed with everything in it (read-only entries too) when this process exits. */
-export function tmpDir(prefix = 'asight-') {
+export function tmpDir(prefix = 'trocar-') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
   made.add(dir)
   if (!armed) {

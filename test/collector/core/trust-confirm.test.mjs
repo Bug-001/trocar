@@ -7,21 +7,21 @@ import path from 'node:path'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createTrustChecker, effectiveEnv, fingerprintsInBundle, certBlocks } from '../../../src/collector/core/trust/confirm.mjs'
 
-const asight = createCa({ commonName: 'asight collector CA' })
+const trocar = createCa({ commonName: 'trocar collector CA' })
 const other = createCa({ commonName: 'someone else' })
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-trust-'))
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-trust-'))
 const file = (name, text) => { const f = path.join(tmp, name); fs.writeFileSync(f, text); return f }
-const ONLY = file('asight.pem', asight.certPem)
-const MERGED = file('merged.pem', other.certPem + '\n' + asight.certPem) // "system roots + asight CA"
+const ONLY = file('trocar.pem', trocar.certPem)
+const MERGED = file('merged.pem', other.certPem + '\n' + trocar.certPem) // "system roots + trocar CA"
 const FOREIGN = file('foreign.pem', other.certPem)
 const env = (o) => new Map(Object.entries(o))
 const additive = { chain: [{ var: 'EXTRA_CA', semantic: 'append' }] }
 const replacing = { chain: ['TOP_BUNDLE', 'CERT_FILE', 'REQ_BUNDLE'].map((v) => ({ var: v, semantic: 'replace' })) }
 const explicitCa = { chain: [{ var: 'AGENT_CA', semantic: 'replace', emptyStops: true }, { var: 'cfg:caFile', semantic: 'replace' }, { var: 'EXTRA_CA', semantic: 'append' }] }
-const checker = createTrustChecker({ caCertPem: asight.certPem })
+const checker = createTrustChecker({ caCertPem: trocar.certPem })
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }))
 
-test('trust: a merged bundle holding the asight CA is trusted by fingerprint, not by path', () => {
+test('trust: a merged bundle holding the trocar CA is trusted by fingerprint, not by path', () => {
   const r = checker.check(replacing, { environ: env({ CERT_FILE: MERGED }) })
   assert.deepEqual([r.trusted, r.reason, r.var, r.via, r.file], [true, 'ok', 'CERT_FILE', 'environ', MERGED])
   assert.equal(checker.check(additive, { environ: env({ EXTRA_CA: ONLY }) }).trusted, true)
@@ -84,7 +84,7 @@ test('trust: a non-live layer is judged by when its value appeared (`since`) bef
 })
 
 test('trust: a stale layer only ever takes trust away — trusted through environ, but a start-only layer naming another CA makes it untrusted (post-integration 1, 4.6 CC row)', () => {
-  const launch = env({ EXTRA_CA: ONLY }) // the launch environment trusts the asight CA
+  const launch = env({ EXTRA_CA: ONLY }) // the launch environment trusts the trocar CA
   const settings = { name: 'user settings env', mode: 'override', vars: { EXTRA_CA: FOREIGN }, live: false, mtimeMs: 5_000 }
   assert.equal(checker.check(additive, { environ: launch, layers: [] }).trusted, true, 'without the layer: trusted')
   const unknown = checker.check(additive, { environ: launch, layers: [settings], startedAt: null })
@@ -149,10 +149,10 @@ test('trust: every applicable variant must trust; a `when` variant applies only 
 test('trust: the fingerprint cache refreshes when the file changes; malformed PEM blocks are skipped', () => {
   const f = file('changing.pem', other.certPem)
   assert.equal(checker.check(additive, { environ: env({ EXTRA_CA: f }) }).trusted, false)
-  fs.writeFileSync(f, other.certPem + asight.certPem)
+  fs.writeFileSync(f, other.certPem + trocar.certPem)
   assert.equal(checker.check(additive, { environ: env({ EXTRA_CA: f }) }).trusted, true)
-  assert.equal(fingerprintsInBundle('-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n' + asight.certPem).size, 1)
-  assert.deepEqual(certBlocks('-----BEGIN PRIVATE KEY-----\nK\n-----END PRIVATE KEY-----\n' + asight.certPem), [asight.certPem.trim()])
+  assert.equal(fingerprintsInBundle('-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n' + trocar.certPem).size, 1)
+  assert.deepEqual(certBlocks('-----BEGIN PRIVATE KEY-----\nK\n-----END PRIVATE KEY-----\n' + trocar.certPem), [trocar.certPem.trim()])
   const { env: e, origin } = effectiveEnv(env({ A: '1' }), [{ name: 'L', mode: 'fill', vars: { A: '2', B: '3' } }])
   assert.deepEqual([e.get('A'), e.get('B'), origin.get('A'), origin.get('B')], ['1', '3', 'environ', 'L'])
 })

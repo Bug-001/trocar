@@ -1,4 +1,4 @@
-// io.mjs — the terminal as `asight on | off | uninstall` and the standalone `asight-off` see it (RFC 1.6 R6): is there a person to ask, ask
+// io.mjs — the terminal as `trocar on | off | uninstall` and the standalone `trocar-off` see it (RFC 1.6 R6): is there a person to ask, ask
 // them one question, and the pair of print functions a command writes through. Kept in src/off/ because the undo side asks too (按标记撤销
 // and `uninstall --purge-data` need a yes, R6) and may import nothing outside this directory (0.1 §2). Imports only node:* (nothing here).
 //
@@ -7,7 +7,7 @@
 //                                                      streams with `isTTY` set); no function here touches process.* itself.
 // R6: not in a terminal (stdin OR stdout is not a TTY) a command never prompts: it prints its plan and stops (exit 2), or runs on `--yes`.
 
-/** A person to ask: both streams are a terminal. (`asight on --json | jq` has no one at stdout, and an agent that runs `asight on` has neither.) */
+/** A person to ask: both streams are a terminal. (`trocar on --json | jq` has no one at stdout, and an agent that runs `trocar on` has neither.) */
 export const isInteractive = (io) => !!(io && io.stdin && io.stdout && io.stdin.isTTY && io.stdout.isTTY)
 
 /** Asks `question` (`[y/N]` is added) on the terminal and reads one line: `y` / `yes` is true, anything else — including the input ending — is

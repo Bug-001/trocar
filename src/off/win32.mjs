@@ -1,8 +1,8 @@
-// win32.mjs (src/off) — what `asight off` and `asight uninstall` do on Windows that no other OS needs (RFC 4.8 §4.2, §7; 1.6 R3, R7). It imports Node's own modules and files of src/off and nothing else: the standalone `asight-off`
+// win32.mjs (src/off) — what `trocar off` and `trocar uninstall` do on Windows that no other OS needs (RFC 4.8 §4.2, §7; 1.6 R3, R7). It imports Node's own modules and files of src/off and nothing else: the standalone `trocar-off`
 // is made of the files of this directory alone, so it cannot reach the helper, the collector or the source tree (0.1 §2). Today this file holds the elevation check; the Windows undo (`undoWin32`, plan Task 9(b)) joins it.
 //
-// R7 on Windows (4.8 §7): asight never runs with an elevated token or as SYSTEM, so `on`, `daemon`, `off` and `uninstall` refuse to. All four ask `whoami /groups` through execTool (`on` and `daemon`
-// by arch/win32/autostart.mjs `refuseElevated`, which calls elevationByWhoami): a helper started for the question cost on 1.2 s (2026-10-17), and off has to work when asight is broken. The SIDs are the same in every language of Windows, so the check reads
+// R7 on Windows (4.8 §7): trocar never runs with an elevated token or as SYSTEM, so `on`, `daemon`, `off` and `uninstall` refuse to. All four ask `whoami /groups` through execTool (`on` and `daemon`
+// by arch/win32/autostart.mjs `refuseElevated`, which calls elevationByWhoami): a helper started for the question cost on 1.2 s (2026-10-17), and off has to work when trocar is broken. The SIDs are the same in every language of Windows, so the check reads
 // SIDs, never group names: the integrity label is `S-1-16-<rid>` (High is 12288, System 16384) and SYSTEM is `S-1-5-18`.
 import nodeFs from 'node:fs'
 import nodePath from 'node:path'
@@ -52,10 +52,10 @@ export const elevatedRefusal = (system) => ({ code: 'elevated-token', reason: `r
 // unit.mjs and src/off/autostart.mjs are held). The names and paths are written here too; the equality test holds them.
 
 /** The scheduled task's name and the Run value's place — the same literals as arch/win32/autostart.mjs's TASK_NAME and RUN_KEY (the test holds them equal). */
-export const TASK_NAME = '\\asight\\collector'
-export const RUN_KEY = Object.freeze({ hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', name: 'asight-collector' })
+export const TASK_NAME = '\\trocar\\collector'
+export const RUN_KEY = Object.freeze({ hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', name: 'trocar-collector' })
 const RUN_PATH = `${RUN_KEY.hive}\\${RUN_KEY.key}`
-const ours = (value) => /\bdaemon --supervise\s*$/.test(value) // what an earlier `on` of asight wrote: the supervised daemon command
+const ours = (value) => /\bdaemon --supervise\s*$/.test(value) // what an earlier `on` of trocar wrote: the supervised daemon command
 
 /** The Run value, read (arch's readRunValue, inlined): `{ present: true, kind, value, lossy? }` · `{ present: false }` · `{ error }`. */
 export function readRunValue({ run = null, env = process.env } = {}) {
@@ -68,7 +68,7 @@ export function readRunValue({ run = null, env = process.env } = {}) {
   return { present: true, kind: m[1].toUpperCase(), value, ...(value.includes('�') ? { lossy: true } : {}) }
 }
 
-/** Takes asight's Run value out, and only that value (arch's removeRunValue, inlined): ours with no prior deleted, ours over a prior
+/** Takes trocar's Run value out, and only that value (arch's removeRunValue, inlined): ours with no prior deleted, ours over a prior
  *  restored with its kind, a value that is not ours left, an absent one already as asked. → `{ ok, result: 'removed'|'restored'|'left'|'absent'|'failed', reason? }`. */
 export function undoRunKey({ prior = null, run = null, env = process.env } = {}) {
   const cur = readRunValue({ run, env })
@@ -103,7 +103,7 @@ export function taskState({ run = null, env = process.env } = {}) {
   return { state: 'unknown', err: `schtasks /Query exited ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''}: whether the task ${TASK_NAME} is registered is not known` }
 }
 
-/** The task off the login path AND asight's Run value taken out, the two as one undo whatever an earlier `on` used (§7: exactly one login mechanism is
+/** The task off the login path AND trocar's Run value taken out, the two as one undo whatever an earlier `on` used (§7: exactly one login mechanism is
  *  left live; arch's undoScheduledTask, the Run value half inlined with it): `/Change /DISABLE` for an `off`, `/Delete /F` for an `uninstall`. →
  *  `{ ok, task: 'disabled'|'deleted'|'absent'|'failed', runKey: 'removed'|'restored'|'left'|'absent'|'failed', reason?, runKeyReason? }`. */
 export function undoScheduledTask({ uninstall = false, prior = null, run = null, env = process.env } = {}) {

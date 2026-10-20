@@ -11,7 +11,7 @@ import path from 'node:path'
 import tls from 'node:tls'
 import { createDoorIdentity } from '../engine/door-identity.mjs'
 import { verdictOf } from './verdict.mjs'
-import { upstreamFor, isAsightDoorUrl, isLoopbackHost, HOOK_ENV } from './chain.mjs'
+import { upstreamFor, isTrocarDoorUrl, isLoopbackHost, HOOK_ENV } from './chain.mjs'
 import { pacHandler, pacLeg, peerAllowed } from './pac.mjs'
 import { createDoorSeen, createHolderPoll, mayExit } from './holders.mjs'
 import { holdersOf } from '../../../off/holders.mjs'
@@ -49,7 +49,7 @@ function envNamesOf(desc) {
  *   proc       { envOf(pid, names) → {} | null, cwdOf(pid) → text | null, parentOf(pid) → { ppid, startedAt } | null }: read once per pid + start (P7)
  *   ctx        sources.mjs's ctx for the verdict (os, home, dirs, readFile, readdir, policy, join)
  *   proxyOf    (proxy text) → { kind: 'http' | 'socks5', host, port, auth? } | null: the arch's reading of a proxy address (parseProxyText + proxyAuthOf)
- *   templates  the hook templates (harness/templates TEMPLATES): a form whose cert's template says `sendsUpstreamHeader` may send X-Asight-Upstream
+ *   templates  the hook templates (harness/templates TEMPLATES): a form whose cert's template says `sendsUpstreamHeader` may send X-Trocar-Upstream
  *   custody    the key custody, or 'unavailable' (no backend): then no issuer, every verdict forward-only (P2)
  * → { bindDoors, start, restore, on, off, lookupIngress, servePac, issuer, holders, mayExit, doors, attached }
  */
@@ -136,7 +136,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       if (!r.decrypt) { v = r; break }
     }
     if (!v.decrypt && !said.has(`${k}\0${v.code}`)) { said.add(`${k}\0${v.code}`); fail(v.code, `pid ${id.pid} (${id.agent}) at ${host} is forwarded, not decrypted: ${v.detail}`, { harness: id.agent, pid: id.pid, door: d.g }) }
-    if (v.decrypt && agentTrust) { const f0 = forms[0], t = f0.trust !== 'root' && desc.proxyMode.trusts && desc.proxyMode.trusts[f0.trust]; v = { ...v, upstreamTrust: await agentTrust.contextFor(agentTrustSet({ trust: t || null, ctx, facts })) } } // ⑭: this agent's own set, minus the asight root
+    if (v.decrypt && agentTrust) { const f0 = forms[0], t = f0.trust !== 'root' && desc.proxyMode.trusts && desc.proxyMode.trusts[f0.trust]; v = { ...v, upstreamTrust: await agentTrust.contextFor(agentTrustSet({ trust: t || null, ctx, facts })) } } // ⑭: this agent's own set, minus the trocar root
     if (!ISSUER_CODES.has(v.code)) vcache.set(k, v)
     return v
   }
@@ -154,16 +154,16 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const own = known ? formsOn(byName.get(id.agent), id.agent === d.harness ? d.routeId : null) : []
     const allowed = own.length > 0 && own.every((f) => sendsHeader(byName.get(id.agent), f)) // only a form whose hook sends the header (P7 step 1)
     const ports = [...doors.values()].map((x) => x.port)
-    const isAsightDoor = (v) => isAsightDoorUrl(v, { ports })
-    const up = d.auth ? await upstreamFor({ desc, facts: pf, recordedPrior: priorOf(d), systemProxy: systemProxy(), header, headerAllowed: allowed, isAsightDoor })
-      : await pacLeg({ systemProxy: systemProxy(), header, isAsightDoor }) // an auth:false door is a PAC's: it dials the own leg that PAC names (P10)
+    const isTrocarDoor = (v) => isTrocarDoorUrl(v, { ports })
+    const up = d.auth ? await upstreamFor({ desc, facts: pf, recordedPrior: priorOf(d), systemProxy: systemProxy(), header, headerAllowed: allowed, isTrocarDoor })
+      : await pacLeg({ systemProxy: systemProxy(), header, isTrocarDoor }) // an auth:false door is a PAC's: it dials the own leg that PAC names (P10)
     if (known) answered(d.g, id.pid, up)
-    if ((up.notes || []).some((n) => n.note === 'header-ignored')) fail(CODE.upstreamHeaderIgnored, `pid ${id.pid ?? '?'} sent X-Asight-Upstream at the ${d.g} door, but no hook of its form sends it: ignored (its value is not recorded)`, { door: d.g, pid: id.pid })
-    if (up.code && !said.has(`${up.code}\0${id.pid}\0${d.g}`)) { said.add(`${up.code}\0${id.pid}\0${d.g}`); fail(up.code, `the proxy pid ${id.pid ?? '?'} would have used without asight could not be recovered; the door dials ${up.url ? 'the system proxy' : 'direct'}`, { door: d.g, pid: id.pid }) }
+    if ((up.notes || []).some((n) => n.note === 'header-ignored')) fail(CODE.upstreamHeaderIgnored, `pid ${id.pid ?? '?'} sent X-Trocar-Upstream at the ${d.g} door, but no hook of its form sends it: ignored (its value is not recorded)`, { door: d.g, pid: id.pid })
+    if (up.code && !said.has(`${up.code}\0${id.pid}\0${d.g}`)) { said.add(`${up.code}\0${id.pid}\0${d.g}`); fail(up.code, `the proxy pid ${id.pid ?? '?'} would have used without trocar could not be recovered; the door dials ${up.url ? 'the system proxy' : 'direct'}`, { door: d.g, pid: id.pid }) }
     let dial = { kind: 'direct' }
     if (up.url != null && !bypassHit(up.bypass, target.address)) {
       dial = proxyOf(up.url)
-      if (!dial) throw Object.assign(new Error(`the upstream of ${d.g} is not a proxy address asight can dial`), { code: 'upstream-unavailable', why: 'upstream-unparseable' })
+      if (!dial) throw Object.assign(new Error(`the upstream of ${d.g} is not a proxy address trocar can dial`), { code: 'upstream-unavailable', why: 'upstream-unparseable' })
     }
     const base = { pid: id.pid, agent: known ? id.agent : d.harness, decrypt: false, capture: 'proxy', door: d.g, exe: id.exe, upstream: dial, pid_source: id.source, pid_ms: id.ms, negKey: id.pid != null ? String(id.pid) : d.g }
     if (!known) return { ...base, skip: untracked(id.why || 'not-an-agent') }
@@ -173,7 +173,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     return { ...base, decrypt: v.decrypt === true, ...(v.upstreamTrust ? { upstreamTrust: v.upstreamTrust } : {}), ...(v.decrypt === true ? {} : { skip: { not_captured: 'untrusted', reason: v.code } }) } // P11's closed code on the row (D38)
   }
 
-  /** GET /asight.pac on the auth:false door (P10): the door leg for this user's processes while its harness is on; a requester whose owner could not
+  /** GET /trocar.pac on the auth:false door (P10): the door leg for this user's processes while its harness is on; a requester whose owner could not
    *  be read, and every requester after off, gets only the app's own way — never an empty answer, which would send the app direct around the user's
    *  system proxy; another user's process is refused. */
   async function servePac({ peer, user, path: p }) {
@@ -186,7 +186,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     // an owner that could not be read gets the door-less PAC (the app's own way): an empty answer would send the app direct around the system proxy
     const m = (facts && identify(facts)) || {}
     if (mine && m.reason === 'match' && onSet.has(m.agent)) seen.add({ harness: m.agent, pid: q, start: facts.startedAt ?? null }) // taking the PAC is reading the entry (P12)
-    const leg = await pacLeg({ systemProxy: systemProxy(), isAsightDoor: (v) => isAsightDoorUrl(v, { ports: [...doors.values()].map((x) => x.port) }) }) // what this door dials too
+    const leg = await pacLeg({ systemProxy: systemProxy(), isTrocarDoor: (v) => isTrocarDoorUrl(v, { ports: [...doors.values()].map((x) => x.port) }) }) // what this door dials too
     let res = { status: 404, headers: {}, body: '' }
     pacHandler({ state: () => ({ door: mine && onSet.has(d.harness) ? `127.0.0.1:${d.port}` : null, ownLeg: leg.url, bypass: leg.bypass }) })({ method: 'GET', url: p }, { writeHead: (status, headers) => { res = { status, headers, body: '' } }, end: (b) => { res.body = b } })
     return res
@@ -202,14 +202,14 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     if (held) { await bound.close([g]); doors.delete(g) }
     try { await bound.open([{ id: g, port, auth, ...(auth ? { token } : {}) }]) } catch (e) {
       const taken = e && e.code === 'EADDRINUSE'
-      record({ event: 'failure', where: taken ? 'ingress' : 'engine', code: taken ? CODE.enginePortTaken : 'engine-error', door: g, reason: taken ? `the door of ${g} cannot listen on its recorded port ${port}: another socket holds it; no door, and no other port is picked (asight on picks a free one and rewrites the entry)` : `the door of ${g} could not listen on ${port}: ${(e && e.message) || e}` })
+      record({ event: 'failure', where: taken ? 'ingress' : 'engine', code: taken ? CODE.enginePortTaken : 'engine-error', door: g, reason: taken ? `the door of ${g} cannot listen on its recorded port ${port}: another socket holds it; no door, and no other port is picked (trocar on picks a free one and rewrites the entry)` : `the door of ${g} could not listen on ${port}: ${(e && e.message) || e}` })
       return { reason: taken ? CODE.enginePortTaken : 'engine-error' }
     }
     const d = { g, harness, routeId, port, auth, url: auth ? `http://${encodeURIComponent(g)}:${token}@127.0.0.1:${port}` : `http://127.0.0.1:${port}` }
     doors.set(g, d)
     return { door: d }
   }
-  const tokenOf = () => { const c = readIng(); if (!c || c.error || c.missing) throw Object.assign(new Error(`ingress.json is not readable (${(c && c.error) || 'missing'}): asight on writes it before it asks`), { status: 409 }); return c }
+  const tokenOf = () => { const c = readIng(); if (!c || c.error || c.missing) throw Object.assign(new Error(`ingress.json is not readable (${(c && c.error) || 'missing'}): trocar on writes it before it asks`), { status: 409 }); return c }
 
   /** The off time the daemon knows (§3 ②): `off` reaches the daemon before the CLI writes the manifest's `off_at` (orchestrate's step 3 before
    *  undo), so a harness turned off here whose liveness has `on_at` and no `off_at` yet is judged with this time; once the CLI's own lands it rules. */
@@ -252,7 +252,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     doors: () => Object.fromEntries([...doors.values()].map((d) => [d.g, d.port])),
     /** The door's upstream per process, latest last: { '<h>:<route>': [{ pid, source, url_redacted }] } (status's per-form `proxy.upstream`). */
     upstreams: () => Object.fromEntries([...answers].filter(([g]) => doors.has(g)).map(([g, a]) => [g, [...a.values()]])),
-    /** Is `h`'s path into asight up (1.6 V32 `attached`)? Every group ingress.json records for it has its door listening; none recorded = no; unreadable = null. */
+    /** Is `h`'s path into trocar up (1.6 V32 `attached`)? Every group ingress.json records for it has its door listening; none recorded = no; unreadable = null. */
     attached(h) { const c = readIng(); if (!c || c.error) return null; const g = Object.keys((!c.missing && c.groupPorts) || {}).filter((k) => split(k).harness === h); return g.length > 0 && g.every((k) => doors.has(k)) }, // no ingress.json: nothing recorded, so no
     async start() {
       if (!custody || custody === 'unavailable' || custody.kind === 'unavailable') fail(CODE.certIntermediateUnavailable, 'no key custody answers: no issuer, every door forwards only')

@@ -4,7 +4,7 @@
 // The engine must not break the agent for that: "能解密就想办法解密,不能解密就透明转发并且在日志中记录" .
 //   TLS 1.2: the refusal comes before the handshake is done, the client is untouched → fresh connection, ClientHello replayed,
 //            the client's own handshake (with its certificate) reaches the real host; the (pid, host) is passed through from then on.
-//   TLS 1.3: the refusal comes AFTER the handshake — the client is already on asight's leaf and cannot be moved. That ONE
+//   TLS 1.3: the refusal comes AFTER the handshake — the client is already on trocar's leaf and cannot be moved. That ONE
 //            connection fails; the (pid, host) is passed through from the next connection, and says why (flows/ row + failure event).
 // Real engine, real TLS, an upstream that really demands a client certificate (rejectUnauthorized, no certificate → an alert).
 import test from 'node:test'
@@ -35,7 +35,7 @@ function clientCert() {
 
 async function rig(maxVersion) {
   const upCa = createCa({ commonName: 'gateway CA' }), upIssuer = createLeafIssuer(loadCa(upCa))
-  const client = clientCert(); const asightCa = createCa()
+  const client = clientCert(); const trocarCa = createCa()
   const saw = []      // what the real host's TLS layer saw: one entry per connection that ended with / without a certificate
   // one certificate, no SNICallback: a context handed out by SNICallback has its own trust store, and `ca` here would not apply to it
   const leaf = upIssuer.issue('gateway.example.test')
@@ -46,12 +46,12 @@ async function rig(maxVersion) {
   await new Promise((r) => up.listen(0, '127.0.0.1', r))
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 7, agent: 'claude-code', decrypt: true })
   const flows = [], envelopes = [], failures = []
-  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: upCa.certPem, store: { envelope: (e) => envelopes.push(e), flow: (f) => flows.push(f) }, onFailure: (f) => failures.push(f) })
+  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(trocarCa)), upstreamCa: upCa.certPem, store: { envelope: (e) => envelopes.push(e), flow: (f) => flows.push(f) }, onFailure: (f) => failures.push(f) })
   const { port } = await engine.listen({})
-  // one agent connection: the agent holds a client certificate and trusts both asight's CA and the gateway's own
+  // one agent connection: the agent holds a client certificate and trusts both trocar's CA and the gateway's own
   const connect = (servername = 'gateway.example.test') => new Promise((resolve) => {
     let issuer = null, got = ''
-    const c = tls.connect({ port, host: '127.0.0.1', servername, ca: [asightCa.certPem, upCa.certPem], key: client.keyPem, cert: client.certPem, ALPNProtocols: ['http/1.1'], maxVersion }, () => { issuer = c.getPeerX509Certificate().issuer; c.write(REQ) })
+    const c = tls.connect({ port, host: '127.0.0.1', servername, ca: [trocarCa.certPem, upCa.certPem], key: client.keyPem, cert: client.certPem, ALPNProtocols: ['http/1.1'], maxVersion }, () => { issuer = c.getPeerX509Certificate().issuer; c.write(REQ) })
     c.on('data', (d) => { got += d.toString('latin1') }); c.on('error', () => {})
     c.on('close', () => resolve({ issuer, got }))
   })
@@ -63,7 +63,7 @@ test('TLS 1.2: an upstream that wants a client certificate is stepped aside — 
   const r = await rig('TLSv1.2')
   const a = await r.connect(); await r.settled(1)
   assert.equal(a.got, RESP, 'the agent got the real answer on its FIRST connection')
-  assert.match(a.issuer, /gateway CA/, 'it saw the real host\'s certificate, not asight\'s')
+  assert.match(a.issuer, /gateway CA/, 'it saw the real host\'s certificate, not trocar\'s')
   assert.deepEqual([r.flows[0].decision, r.flows[0].not_captured], ['splice', 'upstream-handshake'])
   assert.match(r.flows[0].reason, /ALERT_HANDSHAKE_FAILURE/); assert.match(r.flows[0].reason, /client certificate/)
   assert.deepEqual(r.engine.negatives().map((e) => [e.pid, e.host, e.cause]), [[7, 'gateway.example.test', 'upstream-handshake']], 'negative at once: an alert is an answer')
@@ -79,7 +79,7 @@ test('TLS 1.2: an upstream that wants a client certificate is stepped aside — 
 test('TLS 1.3: the refusal comes after the handshake — that ONE connection fails, the next is passed through, and the host is never failed twice (§引擎 5, T18)', T, async () => {
   const r = await rig('TLSv1.3')
   const a = await r.connect(); await r.settled(1)
-  assert.equal(a.got, '', 'the client was already on asight\'s leaf: this connection gets no answer')
+  assert.equal(a.got, '', 'the client was already on trocar\'s leaf: this connection gets no answer')
   assert.deepEqual([r.flows[0].decision, r.flows[0].not_captured], ['decrypt', 'upstream-handshake'], 'the row says what happened, not an anonymous error')
   assert.match(r.flows[0].reason, /ALERT_CERTIFICATE_REQUIRED/); assert.match(r.flows[0].reason, /passed through/)
   assert.equal(r.flows[0].error.side, 'upstream')
@@ -97,14 +97,14 @@ test('TLS 1.3: the refusal comes after the handshake — that ONE connection fai
 })
 
 test('a host that does not ask for a client certificate is decrypted as before: the new rule is no blanket passthrough (T18)', T, async () => {
-  const upCa = createCa({ commonName: 'plain CA' }), upIssuer = createLeafIssuer(loadCa(upCa)), asightCa = createCa()
+  const upCa = createCa({ commonName: 'plain CA' }), upIssuer = createLeafIssuer(loadCa(upCa)), trocarCa = createCa()
   const up = tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)), ALPNProtocols: ['http/1.1'] }, (s) => { s.on('error', () => {}); s.once('data', () => s.end(RESP)) })
   await new Promise((r) => up.listen(0, '127.0.0.1', r))
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 7, agent: 'claude-code', decrypt: true })
   const flows = [], envelopes = []
-  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: upCa.certPem, store: { envelope: (e) => envelopes.push(e), flow: (f) => flows.push(f) }, onFailure: () => {} })
+  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(trocarCa)), upstreamCa: upCa.certPem, store: { envelope: (e) => envelopes.push(e), flow: (f) => flows.push(f) }, onFailure: () => {} })
   const { port } = await engine.listen({})
-  const got = await new Promise((resolve) => { let g = ''; const c = tls.connect({ port, host: '127.0.0.1', servername: 'plain.example.test', ca: asightCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write(REQ)); c.on('data', (d) => { g += d }); c.on('error', () => {}); c.on('close', () => resolve(g)) })
+  const got = await new Promise((resolve) => { let g = ''; const c = tls.connect({ port, host: '127.0.0.1', servername: 'plain.example.test', ca: trocarCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write(REQ)); c.on('data', (d) => { g += d }); c.on('error', () => {}); c.on('close', () => resolve(g)) })
   await within(new Promise((r) => { const t = setInterval(() => { if (flows.length) { clearInterval(t); r() } }, 5) }), 5000, 'flow row')
   assert.equal(got, RESP); assert.deepEqual([flows[0].decision, flows[0].not_captured ?? null], ['decrypt', null]); assert.equal(envelopes.length, 1); assert.deepEqual(engine.negatives(), [])
   await closeWithin(engine); up.close()

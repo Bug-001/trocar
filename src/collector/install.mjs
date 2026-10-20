@@ -1,9 +1,9 @@
-// install.mjs — per-user `asight on` / `asight collector install` (RFC 4.6 §安装清单与卸载, §身份与信任「信任注入」,
-// D36, D37④; acceptance S10, T10, T11). No sudo: everything lives under the operator's ~/.asight/collector and in
-// the agents' own config entries; the machine-wide helper is `asight setup-helper` (arch). Nothing here knows a
+// install.mjs — per-user `trocar on` / `trocar collector install` (RFC 4.6 §安装清单与卸载, §身份与信任「信任注入」,
+// D36, D37④; acceptance S10, T10, T11). No sudo: everything lives under the operator's ~/.trocar/collector and in
+// the agents' own config entries; the machine-wide helper is `trocar setup-helper` (arch). Nothing here knows a
 // harness or an OS: the descriptors declare their entries (`inject`), the caller passes `scan` / `match` (the
-// process table) from daemon.mjs. Install lists every file before touching one. The way back — `asight off` and
-// `asight uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
+// process table) from daemon.mjs. Install lists every file before touching one. The way back — `trocar off` and
+// `trocar uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
 import { isModelOs } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
@@ -53,11 +53,11 @@ export async function freeEnginePort({ tries = 20, listen = bindOnce } = {}) {
 // 1.6 R3: a manifest of a version this build does not read is never acted on — "already installed", or entries undone by guessing what its
 // fields mean. Plain Error: the caller records it as install-error / uninstall-error.
 function refuseUnsupported(dir, m) {
-  if (m && m.unsupported) throw new Error(`the install manifest ${manifestPath(dir)} is version ${JSON.stringify(m.version)}, which this build does not read (it reads version 3); nothing was changed. Use the asight that wrote it`)
+  if (m && m.unsupported) throw new Error(`the install manifest ${manifestPath(dir)} is version ${JSON.stringify(m.version)}, which this build does not read (it reads version 3); nothing was changed. Use the trocar that wrote it`)
 }
 
 function refuseRoot(verb, getuid = processUid) {
-  if (getuid() === 0) throw new Error(`asight ${verb === 'on' ? verb : `collector ${verb}`}: run this as your own user, not as root.`)
+  if (getuid() === 0) throw new Error(`trocar ${verb === 'on' ? verb : `collector ${verb}`}: run this as your own user, not as root.`)
 }
 
 // onPlan(list) is called once with every file install will write or change, BEFORE anything is written (4.6, user
@@ -87,18 +87,18 @@ async function recorded(dir, where, fn) {
 
 // 4.6 §引擎 5: the engine checks an upstream with Node's roots + NODE_EXTRA_CA_CERTS of the daemon's own environment. A daemon
 // nothing but a login entry starts has no login shell's exports, so the entry carries this shell's value — an absolute path
-// outside asight's home only; anything else is said, never dropped silently (review 3 #1, D38). A daemon `on` starts directly
+// outside trocar's home only; anything else is said, never dropped silently (review 3 #1, D38). A daemon `on` starts directly
 // (the fallback when the OS mechanism refuses) is handed exactly the same (ensureDaemonUp → unit.start): without it capture breaks behind a corporate
 // MITM relay and nothing says so (review 2026-10-18).
 export function daemonEnv(env, dir) {
   const v = env.NODE_EXTRA_CA_CERTS
   if (typeof v !== 'string' || v === '') return { env: {}, note: null }
-  const why = !path.isAbsolute(v) ? 'it is a relative path' : v.startsWith(path.dirname(dir) + path.sep) ? "it is asight's own file" : null
-  if (why) return { env: {}, note: `NODE_EXTRA_CA_CERTS of this shell (${v}) is not given to the daemon asight starts (${why}); that daemon checks a relay's certificate with Node's roots only` }
+  const why = !path.isAbsolute(v) ? 'it is a relative path' : v.startsWith(path.dirname(dir) + path.sep) ? "it is trocar's own file" : null
+  if (why) return { env: {}, note: `NODE_EXTRA_CA_CERTS of this shell (${v}) is not given to the daemon trocar starts (${why}); that daemon checks a relay's certificate with Node's roots only` }
   return { env: { NODE_EXTRA_CA_CERTS: v }, note: null }
 }
 
-// ── `asight on` (RFC 1.6 §1.6, R6, R9, R12; D39) ────────────────────────────────────────────────────────────────────────────────────────
+// ── `trocar on` (RFC 1.6 §1.6, R6, R9, R12; D39) ────────────────────────────────────────────────────────────────────────────────────────
 // `on` is the install: the first one writes the CA, the combined bundles, the entries and the unit; every later one finds what is there and writes
 // only what is not. Per planned item the manifest and the disk say which (journal.mjs judgeEntry / judgeOwned): written (new), intact (never
 // rewritten — its `installed_at`, inode and mtime stay, or the agents already captured would be judged config-after-start and stop being
@@ -109,15 +109,15 @@ export function daemonEnv(env, dir) {
 //   installCollector   the install half alone, as the harness and lab tests set an agent up (no state.json, no daemon, no confirmation)
 
 const OP_LOCK_WAIT_MS = 10_000 // 1.6 R12: another state-changing command (an `off`, say) is waited for at most this long
-const SLOW_START_MS = 1000 // D62: a start call that blocks longer than this is the OS holding the job back, not asight working — said in the receipt (D38)
+const SLOW_START_MS = 1000 // D62: a start call that blocks longer than this is the OS holding the job back, not trocar working — said in the receipt (D38)
 const nodeFs = fs
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const act = (a) => a !== 'skip-intact' && a !== 'skip-user-changed'
 const shortLine = (l) => String(l).split(' # ')[0].trim()
 const RESTART_REASONS = new Set(['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim']) // 「重启后才会被采集」(1.6 §1.1)
-const DAEMON_CMD = 'asight daemon' // 1.6 §2: the autostart unit's ExecStart is this command (units written before the rename run its alias `collector start`)
+const DAEMON_CMD = 'trocar daemon' // 1.6 §2: the autostart unit's ExecStart is this command (units written before the rename run its alias `collector start`)
 /** The login entry in the platform's own words (a Windows user told to run `systemctl` has been handed nothing; tested on Windows 2026-10-11 and macOS 2026-10-18). */
-const entryWords = (osName, unit) => (osName === 'win32' ? 'the scheduled task \\asight\\collector' : osName === 'darwin' ? `the LaunchAgent ${(unit && unit.name) || 'com.asight.collector'}` : 'the systemd user unit asight-collector.service')
+const entryWords = (osName, unit) => (osName === 'win32' ? 'the scheduled task \\trocar\\collector' : osName === 'darwin' ? `the LaunchAgent ${(unit && unit.name) || 'com.trocar.collector'}` : 'the systemd user unit trocar-collector.service')
 
 /** 附录 C.1: the code of the refusal below (one place, mirrored by src/cli/json.mjs's ERROR_CODES). */
 export const AUTOSTART_MISSING = 'autostart-missing'
@@ -130,19 +130,19 @@ export function autostartBlock({ unit, osName }) {
   if (!unit) return null
   const q = unit.registered()
   if (q.state === 'present') return null
-  return `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : q.state === 'disabled' ? 'is registered but switched off' : `could not be read (${q.err || 'no reason given'})`}: the collector would not start at the next login, and the agents asight points at its doors would all fail to connect. Nothing was changed. Run: asight install`
+  return `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : q.state === 'disabled' ? 'is registered but switched off' : `could not be read (${q.err || 'no reason given'})`}: the collector would not start at the next login, and the agents trocar points at its doors would all fail to connect. Nothing was changed. Run: trocar install`
 }
 
 /** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
 export function changeText(e, prior = null) {
   if (e.kind === 'text') {
-    if (e.vars) return `asight block added at the top (${Object.keys(e.vars).join(', ')})${prior ? `; your own ${Object.keys(prior).join(', ')} commented out` : ''}`
+    if (e.vars) return `trocar block added at the top (${Object.keys(e.vars).join(', ')})${prior ? `; your own ${Object.keys(prior).join(', ')} commented out` : ''}`
     return `one line added (${shortLine(e.line)})`
   }
   return prior != null ? `${(e.keys || []).join('.')} set (was ${prior})` : `${(e.keys || []).join('.')} added`
 }
 
-// An error that is not a failure of asight: an `off` asked for while this `on` ran (R12: off wins), or a step that has to stop the run.
+// An error that is not a failure of trocar: an `off` asked for while this `on` ran (R12: off wins), or a step that has to stop the run.
 const stop = (message) => Object.assign(new Error(message), { stopsRun: true })
 
 /** What `on` would do, read from the disk and the manifest, written nowhere. Refusals come first, so a refused plan writes nothing at all (not even the
@@ -153,20 +153,20 @@ const stop = (message) => Object.assign(new Error(message), { stopsRun: true })
  *  The combined bundles' roots are `roots` when given (a test's, an embedder's), else the arch's (tls/roots.mjs bundleRoots: `missing` is said per
  *  bundle by planTrust; a read that fails throws here, before anything is written). */
 export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), arch = null, roots = null, unit = null, fs = nodeFs, now = () => new Date() } = {}) {
-  const dir = collectorHome(path.join(home, '.asight'))
+  const dir = collectorHome(path.join(home, '.trocar'))
   let prior
-  try { prior = readManifest(dir, fs) } catch (e) { // not written over: it is the only list of what asight changed; `off` has the way back by asight's own marks (R3)
-    throw new Error(`the install manifest cannot be read (${String((e && e.message) || e)}); asight on does not write over it. Run "asight off" (it undoes asight's changes by their marks, after a yes, or at once with --yes); if asight on still refuses, the file is damaged and nothing else lists what asight changed: move it aside (mv '${manifestPath(dir)}' '${manifestPath(dir)}.damaged'), then run asight on`)
+  try { prior = readManifest(dir, fs) } catch (e) { // not written over: it is the only list of what trocar changed; `off` has the way back by trocar's own marks (R3)
+    throw new Error(`the install manifest cannot be read (${String((e && e.message) || e)}); trocar on does not write over it. Run "trocar off" (it undoes trocar's changes by their marks, after a yes, or at once with --yes); if trocar on still refuses, the file is damaged and nothing else lists what trocar changed: move it aside (mv '${manifestPath(dir)}' '${manifestPath(dir)}.damaged'), then run trocar on`)
   }
   refuseUnsupported(dir, prior)
   if (installComplete(prior)) {
     // installed — but only usable when its CA is (D-4): a CA that cannot be read or used is said, with how to start over
     const c = readCa({ dir: path.join(dir, 'ca'), fs })
     const st = c.error ? { ok: false, which: c.which, reason: c.error } : checkCa(c)
-    if (!st.ok) throw Object.assign(new Error(`the collector is installed, but its CA is unusable (${st.which}: ${st.reason}); run "asight uninstall", then "asight on"`), { code: 'ca-invalid' })
+    if (!st.ok) throw Object.assign(new Error(`the collector is installed, but its CA is unusable (${st.which}: ${st.reason}); run "trocar uninstall", then "trocar on"`), { code: 'ca-invalid' })
   }
-  if (prior && prior.pending_bundles) throw new Error(`an earlier uninstall kept combined bundles that running agents still use (${prior.files.filter((f) => f.role === 'bundle' || f.role === 'trust-file').map((f) => f.path).join(', ')}); run "asight uninstall" again once they exit`)
-  if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall could not undo ${prior.uninstall_left.length} item(s) (${prior.uninstall_left.map((l) => l.path).join(', ')}); fix them, run "asight uninstall" again, then "asight on"`)
+  if (prior && prior.pending_bundles) throw new Error(`an earlier uninstall kept combined bundles that running agents still use (${prior.files.filter((f) => f.role === 'bundle' || f.role === 'trust-file').map((f) => f.path).join(', ')}); run "trocar uninstall" again once they exit`)
+  if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall could not undo ${prior.uninstall_left.length} item(s) (${prior.uninstall_left.map((l) => l.path).join(', ')}); fix them, run "trocar uninstall" again, then "trocar on"`)
   const descs = ids ? harnesses.filter((d) => ids.includes(d.name)) : harnesses
   const ca = caPaths(path.join(dir, 'ca'))
   const facts = await scan()
@@ -196,12 +196,12 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   })
   const ownedJ = draft.owned.map((o) => {
     const j = judgeOwned({ manifest: prior, file: o.path, fs })
-    if (j.action === 'write' && fs.existsSync(o.path)) throw new Error(`${o.harness}: ${o.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`)
+    if (j.action === 'write' && fs.existsSync(o.path)) throw new Error(`${o.harness}: ${o.path} already exists; trocar will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`)
     steps.push({ harness: o.harness, path: o.path, kind: o.role, action: j.action, ...(j.why ? { why: j.why } : {}) })
     return j
   })
   const unitJ = unit ? judgeOwned({ manifest: prior, file: unit.path, planned: sha256(Buffer.from(unit.text(daemon.env))), fs }) : null
-  if (unitJ && unitJ.action === 'write' && fs.existsSync(unit.path)) throw new Error(`${unit.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`) // before anything is written (review 4 #7)
+  if (unitJ && unitJ.action === 'write' && fs.existsSync(unit.path)) throw new Error(`${unit.path} already exists; trocar will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`) // before anything is written (review 4 #7)
   if (unitJ) steps.push({ harness: null, path: unit.path, kind: 'unit', action: unitJ.action, ...(unitJ.why ? { why: unitJ.why } : {}) })
 
   // who is on, and who has nothing to do here (no entry, no file, not installed before): said, with the descriptor's own reason
@@ -211,7 +211,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const reasonOf = (name) => draft.records.filter((r) => r.harness === name).map((r) => r.reason.replace(`${name}: `, '')).join('; ') || `no ${name} configuration was found on this machine: nothing to change for it`
   const skipped = [
     ...descs.map((d) => d.name).filter((n) => !targets.includes(n)).map((n) => ({ what: n, reason: reasonOf(n) })),
-    ...steps.filter((s) => s.action === 'skip-user-changed').map((s) => ({ what: s.path, reason: `${s.why}; run "asight off", then ${isModelOs(osName) ? '"asight on"' : '"asight install" and "asight on"'}, to write it again` })), // D55⑥: off then install writes a certificate item again; on never does (macOS / Windows: turnOnModel)
+    ...steps.filter((s) => s.action === 'skip-user-changed').map((s) => ({ what: s.path, reason: `${s.why}; run "trocar off", then ${isModelOs(osName) ? '"trocar on"' : '"trocar install" and "trocar on"'}, to write it again` })), // D55⑥: off then install writes a certificate item again; on never does (macOS / Windows: turnOnModel)
   ]
   // what is written, and what the user has not yet confirmed (1.6 §1.6: the paths beyond the manifest's `confirmed_paths`; an installed one counts as confirmed)
   const known = new Set([...((prior && prior.confirmed_paths) || []), ...((prior && prior.entries) || []).map((x) => x.path), ...((prior && prior.files) || []).filter((x) => x.role !== 'ca-key' && x.role !== 'ca-cert').map((x) => x.path)])
@@ -251,7 +251,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   }
 }
 
-// A fresh liveness record with the `match` patterns of the one already recorded kept — its `identity`, or the `signature` an older asight wrote (4.6
+// A fresh liveness record with the `match` patterns of the one already recorded kept — its `identity`, or the `signature` an older trocar wrote (4.6
 // 判活快照: united with what is recorded) —: each pattern once (by its JSON text), sorted by it.
 export function unitedLiveness(old, fresh) {
   const was = patternsOf(old)
@@ -261,7 +261,7 @@ export function unitedLiveness(old, fresh) {
   return { ...fresh, identity: { ...fresh.identity, match } }
 }
 
-// The manifest the writing starts from: the one on disk, or — the first time — a new one that lists the directories asight is about to create and
+// The manifest the writing starts from: the one on disk, or — the first time — a new one that lists the directories trocar is about to create and
 // the CA files before the CA is minted, and is saved at once (so a crash before the first user file leaves a manifest `uninstall` can use).
 function openManifest({ dir, plan, now, fs }) {
   const { prior, ca } = plan._
@@ -287,23 +287,23 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   const save = () => { if (body() !== saved) { saveManifest(dir, m, fs); saved = body() } }
   guard()
   const caThere = fs.existsSync(ca.key) && fs.existsSync(ca.pem)
-  if (!certs && !caThere) throw stop('the collector CA is not there; run asight install (on never makes it, D55⑤)')
+  if (!certs && !caThere) throw stop('the collector CA is not there; run trocar install (on never makes it, D55⑤)')
   const { certPem } = loadOrCreateCa({ dir: ca.dir, fs })
   written.caCreated = !caThere
   if (m.engine_port == null) m.engine_port = await freePort()
   const final = planTrust({ descriptors: descs, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
   if (daemon && daemon.note) { final.notes.push(daemon.note); final.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
-  if (JSON.stringify(final.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${final.paths.join(', ')}); only the CA was written; run "asight uninstall", then "asight on"`)
+  if (JSON.stringify(final.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${final.paths.join(', ')}); only the CA was written; run "trocar uninstall", then "trocar on"`)
   m.planned = final.paths
-  // what `off` needs to judge, from this manifest alone, which live process may hold what asight wrote for a harness (4.6 撤销顺序): written before any user
+  // what `off` needs to judge, from this manifest alone, which live process may hold what trocar wrote for a harness (4.6 撤销顺序): written before any user
   // file changes. `identity` is the name list of now (presets + agents.json) united with the one already recorded: a name that has left the list since
-  // may still be running a process that read asight's file, so it is never dropped (4.6 「判活快照」); `exclude` / `longLived` are the new ones. The key
-  // an older asight wrote, `signature`, goes (a record is rewritten whole). The same inputs give the same bytes: a second `on` saves nothing (D54)
+  // may still be running a process that read trocar's file, so it is never dropped (4.6 「判活快照」); `exclude` / `longLived` are the new ones. The key
+  // an older trocar wrote, `signature`, goes (a record is rewritten whole). The same inputs give the same bytes: a second `on` saves nothing (D54)
   const named = new Set([...m.entries, ...m.files].map((x) => x.harness).filter(Boolean))
   const touched = new Set([...final.entries, ...final.files, ...final.owned].map((x) => x.harness))
   const agentList = readAgentList({ home, fs }).entries
   for (const d of harnesses) if (touched.has(d.name) || named.has(d.name)) m.liveness[d.name] = unitedLiveness(m.liveness[d.name], livenessOf(d, { agentList }))
-  const seen = new Set((m.watched || []).map((w) => w.path)) // `existed_before` was recorded when asight first came: a path an agent wrote since is not "there before"
+  const seen = new Set((m.watched || []).map((w) => w.path)) // `existed_before` was recorded when trocar first came: a path an agent wrote since is not "there before"
   m.watched = [...(m.watched || []), ...final.watch.filter((w) => !seen.has(w.path)).map((w) => ({ ...w, existed_before: fs.existsSync(w.path) }))]
   save()
   fs.mkdirSync(path.join(dir, 'run', 'trust'), { recursive: true, mode: 0o700 }) // plugins write their marker here, daemon up or not
@@ -342,7 +342,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
     const j = judgeOwned({ manifest: m, file: unit.path, planned: sha256(Buffer.from(text)), fs })
     if (j.action !== 'skip-intact') { guard(); writeOwnedFile({ dir, manifest: m, role: 'unit', phase: 'install', file: unit.path, data: text, mode: 0o644, exclusive: j.action === 'write', now: now(), fs }); written.unit = j.action }
     // D46: the daemon's own log sinks the unit names — directory 0700, two files 0600, made here at unit-write time and listed in the manifest like
-    // every file asight owns; NEVER rewritten afterwards (a later on only lists what the manifest does not know yet, so no log line is ever truncated)
+    // every file trocar owns; NEVER rewritten afterwards (a later on only lists what the manifest does not know yet, so no log line is ever truncated)
     if (typeof unit.ensureLogs === 'function') { guard(); unit.ensureLogs() }
     if (typeof unit.logFiles === 'function') for (const lf of unit.logFiles()) {
       if (!(m.files || []).some((x) => x.path === lf.path)) { writeOwnedFile({ dir, manifest: m, role: 'daemon-log', phase: 'install', file: lf.path, data: '', mode: 0o600, now: now(), fs }); written.files.push(lf.path) }
@@ -361,7 +361,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
 function noteRun({ dir, run, final, written, notes, fs, log = null }) {
   const put = runEventWriter({ dir, base: { run }, notes, fs, ...(log ? { log } : {}) }) // a line that cannot be written: stderr first, the receipt's notes, then a `log-gap` when one can again (R11)
   for (const e of written.entries.filter((x) => x.prior_value)) {
-    const prior = e.keys ? `${e.path} ${e.keys.join('.')} was ${e.prior_value}; it now points at ${e.value}` : `${e.path} held ${Object.entries(e.prior_value).map(([k, v]) => `${k}=${v}`).join(', ')}; asight commented it out (uninstall restores it)`
+    const prior = e.keys ? `${e.path} ${e.keys.join('.')} was ${e.prior_value}; it now points at ${e.value}` : `${e.path} held ${Object.entries(e.prior_value).map(([k, v]) => `${k}=${v}`).join(', ')}; trocar commented it out (uninstall restores it)`
     put({ event: EVENT.installNote, where: 'install', kind: 'prior-value', harness: e.harness, path: e.path, reason: prior })
   }
   for (const r of final.records) put({ event: EVENT.installNote, where: 'install', kind: 'note', ...r })
@@ -372,7 +372,7 @@ function noteRun({ dir, run, final, written, notes, fs, log = null }) {
 // or a daemon; `already` says every item was in place (no onPlan, nothing written, no event). A unit is enabled with `unit.enable()` (enable --now).
 export async function installCollector({ home = os.homedir(), ...opts } = {}) {
   refuseRoot('install')
-  const dir = collectorHome(path.join(home, '.asight'))
+  const dir = collectorHome(path.join(home, '.trocar'))
   return recorded(dir, 'install', async (run) => {
     const fs = opts.fs || nodeFs
     const now = opts.now || (() => new Date())
@@ -395,37 +395,37 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
   })
 }
 
-/** `asight on` (1.6 §1.1, §1.6, R1, R6, R9, R12): plan → confirm → desired state first → write → unit → daemon → receipt. Library form of the command: `runOnCli`
+/** `trocar on` (1.6 §1.1, §1.6, R1, R6, R9, R12): plan → confirm → desired state first → write → unit → daemon → receipt. Library form of the command: `runOnCli`
  *  (src/cli/on.mjs) parses the arguments and prints; everything the world gives is injected (`fs`, `request`, `now`, `getuid`, `helperState`, `linger` / `lingerRead`,
  *  `sleep`), so a test runs it in a sandbox HOME. Refuses root by throwing (R7); everything else is a receipt: `exit` 0 done · 1 not done or a problem ·
  *  2 not in a terminal without a yes (the plan is in the receipt, nothing was written).
  *    ids        harness code ids, or null for every one found   confirm(plan) → true | false | null (null: nobody can be asked)   onPlan(plan): print it
  *    unit       the autostart unit (arch/linux/unit.mjs userUnit), or null (no autostart on this platform); `on` never writes or enables it (D61: it is install's) — it is handed in only to start the daemon when none answers
- *    request    the control socket's client (default: controlRequest at $XDG_RUNTIME_DIR/asight/collector.sock, or `socketPath`)
+ *    request    the control socket's client (default: controlRequest at $XDG_RUNTIME_DIR/trocar/collector.sock, or `socketPath`)
  *    arch       the arch, asked for the combined bundles' OS roots (planOn)   roots  overrides them
  *  → { receipt, manifest, plan, exit }. */
 export async function turnOn(opts = {}) {
   const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, arch = null, roots = null, unit = null, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
   refuseRoot('on', getuid)
-  const dir = collectorHome(path.join(home, '.asight'))
+  const dir = collectorHome(path.join(home, '.trocar'))
   const stateF = path.join(dir, 'state.json')
   const username = (() => { try { return user || os.userInfo().username } catch { return String(env.USER || '') } })()
-  const fresh = () => ({ ...newReceipt('on'), user: username, relayed: { closing: 0, waiting: 0, cut: 0 }, undo: UNDO_LINE.on, standalone: standalonePath(home), commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'], log: path.join(dir, 'flows') }) // on relays nothing: zeros on purpose; `undo` is the ONE line that undoes an on (C.1), and the four commands are what V29 asks the first receipt to carry
+  const fresh = () => ({ ...newReceipt('on'), user: username, relayed: { closing: 0, waiting: 0, cut: 0 }, undo: UNDO_LINE.on, standalone: standalonePath(home), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], log: path.join(dir, 'flows') }) // on relays nothing: zeros on purpose; `undo` is the ONE line that undoes an on (C.1), and the four commands are what V29 asks the first receipt to carry
   // A receipt of a run that wrote nothing and could not go on: no change, no file made, and no way to undo or log to point at — what is not there (R1: the receipt is what was done).
   // `commands` (the four a user types) stay: they are true whether or not this run wrote anything.
   const unwritten = (r) => { const { standalone: _unwritten, ...rest } = r; return { ...rest, changed: [], created: [], undo: null, log: null } }
   // The helper (D36) is what the real `on` needs and the plan does not: a missing one stops the real run before anything is written, but `--dry-run` still shows the plan — it is what
-  // a user reads before deciding to `sudo asight setup-helper` — and exits 0 (R6, V7) with the stop said in the receipt (`blocked`).
+  // a user reads before deciding to `sudo trocar setup-helper` — and exits 0 (R6, V7) with the stop said in the receipt (`blocked`).
   let helperBlock = null
   if (helperState) {
     const h = await helperState()
-    if (h && h.ok === false) helperBlock = `the capability helper is missing or not the right version (${h.reason || 'not usable'}); nothing was changed. Run: sudo asight setup-helper`
+    if (h && h.ok === false) helperBlock = `the capability helper is missing or not the right version (${h.reason || 'not usable'}); nothing was changed. Run: sudo trocar setup-helper`
   }
   if (helperBlock && !dryRun) return { receipt: unwritten({ ...fresh(), ok: false, notes: [helperBlock] }), manifest: null, plan: null, exit: 1 }
   // D61 / 1.6 §3.3: the login entry is `install`'s, so an `on` with none would open doors that nobody opens after the next login
   // (without the login registration, a reboot after `on` leaves every agent unusable). Asked here, before the first write; a `--dry-run` goes on and carries it in `blocked`.
   const autostartBlk = dryRun ? null : autostartBlock({ unit, osName })
-  if (autostartBlk) return { receipt: unwritten({ ...fresh(), ok: false, notes: [autostartBlk], blocked: [{ what: 'asight on', reason: autostartBlk }], error: { code: AUTOSTART_MISSING, message: autostartBlk } }), manifest: null, plan: null, exit: 2 }
+  if (autostartBlk) return { receipt: unwritten({ ...fresh(), ok: false, notes: [autostartBlk], blocked: [{ what: 'trocar on', reason: autostartBlk }], error: { code: AUTOSTART_MISSING, message: autostartBlk } }), manifest: null, plan: null, exit: 2 }
   // `lingerRead()` → { state, error? } (src/collector/arch/linux/redirector.mjs) says why when it cannot be read; `linger()` → true | false | null is the older form
   const lingerNow = () => { try {
     if (lingerRead) { const r = lingerRead(); return r.state === true || r.state === false ? { linger: r.state } : { linger: 'unknown', linger_reason: r.error || 'the linger state could not be read' } }
@@ -436,8 +436,8 @@ export async function turnOn(opts = {}) {
     const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, fs, now }) // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
     // D55⑥ / override #15: `on` never writes a certificate, so it never installs silently — no install record, no on (macOS / Windows: turnOnModel)
     // 附录 C.1: the refusal's code lives in `error`, the one place a client looks (never a top-level `code`)
-    if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: asight install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }
-    // the copy of the undo side that needs no source tree (R3) is one more file asight writes: listed in the plan and the dry run when it is missing or not what src/off generates now
+    if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: trocar install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }
+    // the copy of the undo side that needs no source tree (R3) is one more file trocar writes: listed in the plan and the dry run when it is missing or not what src/off generates now
     const standaloneCheck = checkStandalone({ home, version: OFF_VERSION, platform: osName, fs })
     if (!standaloneCheck.ok) { plan.created = [...plan.created, standaloneCheck.path]; plan.standalone = standaloneCheck.path }
     // A version 1 file (what `collector on|off` wrote before D39) is read for the harnesses installed before and the ones this run turns on, the same set
@@ -450,14 +450,14 @@ export async function turnOn(opts = {}) {
     const stateWrite = need.length > 0 || stateRead.from === 1 // an unreadable file is `need` too: every target is not on
     const r = { ...fresh(), ...(osName === 'win32' || osName === 'darwin' ? {} : lingerNow()), harnesses: plan.targets, changed: plan.changed, created: [...plan.created, ...(stateWrite ? [stateF] : [])], skipped: [...plan.skipped], restart: plan.restart, unchanged: plan.unchanged, notes: [...plan.notes] }
     if (stateRead.error) r.notes.push(`${stateF} could not be read (${String(stateRead.error.message || stateRead.error)}); it is written again`)
-    if (!plan.targets.length) return { receipt: unwritten({ ...r, ok: false, notes: [...r.notes, 'no agent asight can capture was found: nothing was changed. Install one, then run asight on again'] }), manifest: plan._.prior, plan, exit: 1 }
+    if (!plan.targets.length) return { receipt: unwritten({ ...r, ok: false, notes: [...r.notes, 'no agent trocar can capture was found: nothing was changed. Install one, then run trocar on again'] }), manifest: plan._.prior, plan, exit: 1 }
     const named = !!ids && plan.skipped.some((s) => ids.includes(s.what)) // a harness asked for by name that has nothing to install: not done
     // the proxy fields the user edited since the last `on` (1.6 §9.5): asked about like an extra file (R6); a routing that owns none has none
     const edited = networkEdited && plan.targets.length ? await networkEdited(plan.targets) : []
-    if (edited.length) r.notes.push(...edited.map((e) => `you changed the proxy setting of ${e.harness}: ${e.where || 'the proxy field'} is now ${e.now ?? 'empty'} (asight left ${e.was ?? 'empty'} there); on takes that as the upstream and points the setting back at asight`))
+    if (edited.length) r.notes.push(...edited.map((e) => `you changed the proxy setting of ${e.harness}: ${e.where || 'the proxy field'} is now ${e.now ?? 'empty'} (trocar left ${e.was ?? 'empty'} there); on takes that as the upstream and points the setting back at trocar`))
     if (dryRun) {
       const blk = autostartBlock({ unit, osName })
-      return { receipt: { ...r, dry_run: true, ok: !named, ...(blk ? { blocked: [{ what: 'asight on', reason: blk }], notes: [...r.notes, `${blk} (a real asight on stops there)`] } : {}), ...(helperBlock ? { blocked: [{ what: 'asight on', reason: helperBlock }], notes: [...r.notes, `${helperBlock.replace('nothing was changed. ', '')} (a real asight on stops there)`] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
+      return { receipt: { ...r, dry_run: true, ok: !named, ...(blk ? { blocked: [{ what: 'trocar on', reason: blk }], notes: [...r.notes, `${blk} (a real trocar on stops there)`] } : {}), ...(helperBlock ? { blocked: [{ what: 'trocar on', reason: helperBlock }], notes: [...r.notes, `${helperBlock.replace('nothing was changed. ', '')} (a real trocar on stops there)`] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
     }
     if (plan.writing || stateWrite || edited.length) onPlan({ ...plan, state: stateWrite ? stateF : null, edited })
     if (plan.first || plan.newPaths.length || edited.length) {
@@ -484,13 +484,13 @@ export async function turnOn(opts = {}) {
     // cannot be written stops the run here, before one file of the agents' is touched — the way back first, like the backup of a file (R2) — and `recorded` writes the failure (R11)
     let standalone
     try { standalone = writeStandalone({ home, version: OFF_VERSION, fs }) } catch (e) {
-      throw Object.assign(new Error(`${standalonePath(home)}, the undo that works without the source tree, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed — put that right, then run asight on again`), { code: e && e.code })
+      throw Object.assign(new Error(`${standalonePath(home)}, the undo that works without the source tree, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed — put that right, then run trocar on again`), { code: e && e.code })
     }
     const guard = () => {
       let st
       try { st = readState().state } catch (e) { throw stop(`${stateF} cannot be read (${String((e && e.message) || e)}), so it is not known whether an off was asked; stopped (1.6 R12)`) }
       const off = plan.targets.filter((id) => !(st.harnesses[id] && st.harnesses[id].desired === 'on'))
-      if (off.length) throw stop(`${off.join(', ')} was turned off while this on ran (${stateF}); stopped, the off wins (1.6 R12). What was written is a resumable install: asight on finishes it`)
+      if (off.length) throw stop(`${off.join(', ')} was turned off while this on ran (${stateF}); stopped, the off wins (1.6 R12). What was written is a resumable install: trocar on finishes it`)
     }
     const notes = r.notes
     const problems = []
@@ -500,7 +500,7 @@ export async function turnOn(opts = {}) {
       written = e.written; halt = true
       problems.push(e.message)
     }
-    if (written && written.needInstall.length) problems.push(`these certificate items are not in place and on does not write them: ${written.needInstall.join(', ')}; run asight install (D55①)`)
+    if (written && written.needInstall.length) problems.push(`these certificate items are not in place and on does not write them: ${written.needInstall.join(', ')}; run trocar install (D55①)`)
     const put = noteRun({ dir, run, final: final || { records: [] }, written: written || { entries: [] }, notes, fs, log: opts.log })
     const receipt = {
       ...r,
@@ -539,7 +539,7 @@ export async function turnOn(opts = {}) {
         receipt.restart = (status.agents || []).filter((a) => a && !a.trusted && !a.off && RESTART_REASONS.has(a.reason) && plan.targets.includes(a.agent)).map((a) => ({ harness: a.agent, pid: a.pid, reason: a.reason }))
         receipt.capture = { desired: status.desired ?? null, actual: status.actual ?? null }
         if (status.actual !== 'on') {
-          const why = status.helper && status.helper.ok === false ? `the capability helper speaks protocol ${status.helper.proto}, this daemon expects ${status.helper.expected_proto}; run: sudo asight setup-helper`
+          const why = status.helper && status.helper.ok === false ? `the capability helper speaks protocol ${status.helper.proto}, this daemon expects ${status.helper.expected_proto}; run: sudo trocar setup-helper`
             : status.degraded ? `the helper is down (${status.degraded.reason}); nothing is steered, agents connect directly`
               : status.ca && status.ca.ok === false ? `the collector CA is unusable (${status.ca.which}: ${status.ca.reason}); nothing is steered` : `the daemon did not reach on (actual: ${status.actual}); nothing is steered, agents connect directly`
           problems.push(why); put({ event: EVENT.failure, where: 'switch', code: 'state-mismatch', reason: why })
@@ -552,7 +552,7 @@ export async function turnOn(opts = {}) {
   })
 }
 
-const UNIT_NAME_HINT = 'asight-collector.service'
+const UNIT_NAME_HINT = 'trocar-collector.service'
 // A named pipe whose server has gone: Windows answers EPIPE / ECONNRESET / a socket hang up where a unix socket answers ENOENT.
 const GONE_PIPE = /EPIPE|ECONNRESET|socket hang up|ECONNABORTED/i
 
@@ -560,7 +560,7 @@ const GONE_PIPE = /EPIPE|ECONNRESET|socket hang up|ECONNABORTED/i
 // macOS / Windows' runModelOn, 4.9 §4, 4.8 §7) — two copies of this seam is the 2026-10-11 incident's pattern.
 // The endpoint is resolved the one way every caller resolves it (4.8 §7 / 4.9 §7: darwin / win32 find the daemon through control.json and every
 // request carries its token; Linux through $XDG_RUNTIME_DIR). This was the 2026-10-11 incident's seam: a Linux-only fallback here made every
-// `asight on` on a real Mac a false start-failed while the daemon was up.
+// `trocar on` on a real Mac a false start-failed while the daemon was up.
 // Second seam of the same incident (caught on a macOS test machine, 2026-10-11): on darwin / win32 control.json is written by the daemon AT ITS
 // FIRST START, so a FIRST install has no endpoint to resolve before the unit runs — resolving once up here kept sock null through the whole
 // poll and every first `on` ended "no daemon answers on null", exit 1, while the daemon was up and healthy. The probe re-resolves while
@@ -578,7 +578,7 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
     if (!sock) return { up: false, why: endpoint.why || 'no control socket to ask' }
     try { await ask({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); return { up: true } } catch (e) {
       if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) return { up: false }
-      // win32 (tested 2026-10-20, `asight update`): a named pipe whose server has just gone answers the FIRST probe with EPIPE / ECONNRESET /
+      // win32 (tested 2026-10-20, `trocar update`): a named pipe whose server has just gone answers the FIRST probe with EPIPE / ECONNRESET /
       // a socket hang up instead of ENOENT, and reading that as "a daemon holds the pipe and does not answer" halted the run right after the
       // daemon was stopped. Asked once more after a pause; still like that = not up, never stuck.
       if (first && osName === 'win32' && GONE_PIPE.test(String((e && e.code) || '') + ' ' + String((e && e.message) || e))) {
@@ -594,7 +594,7 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
   const notes = [], problems = []
   const was = await probe(true)
   let up = was.up, started = false, unitFailed = null, halt = false
-  if (was.stuck) { problems.push(`a daemon holds the control socket but does not answer (${was.stuck}); run "asight off", then "asight on" (off stops a stuck daemon, 1.6 §1.4)`); halt = true }
+  if (was.stuck) { problems.push(`a daemon holds the control socket but does not answer (${was.stuck}); run "trocar off", then "trocar on" (off stops a stuck daemon, 1.6 §1.4)`); halt = true }
   else if (unit) {
     if (halted()) halt = true
     else {
@@ -604,17 +604,17 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       let rr = register ? unit.enable({ now: !was.up }) : (was.up ? null : unit.startNow())
       if (!register && rr && rr.code !== 0 && typeof unit.start === 'function') {
         const direct = unit.start(daemonEnv(env, dir)) // the direct start carries what the login entry's Environment= would carry
-        if (direct.code === 0) { notes.push(`the collector could not be started through ${entryWords(osName, unit)} (${rr.err || `exit ${rr.code}`}); asight started it directly this run; the login entry starts it at the next login`); rr = direct }
+        if (direct.code === 0) { notes.push(`the collector could not be started through ${entryWords(osName, unit)} (${rr.err || `exit ${rr.code}`}); trocar started it directly this run; the login entry starts it at the next login`); rr = direct }
       }
       started = !was.up
-      // D62 / D38: the OS mechanism can hold the spawn back, and that wait is asight's to SAY, not to hide. `launchctl kickstart` does not return
-      // until launchd spawned the job, and launchd spawns one at most once every ThrottleInterval seconds (10 s, launchd's default: asight writes no
+      // D62 / D38: the OS mechanism can hold the spawn back, and that wait is trocar's to SAY, not to hide. `launchctl kickstart` does not return
+      // until launchd spawned the job, and launchd spawns one at most once every ThrottleInterval seconds (10 s, launchd's default: trocar writes no
       // ThrottleInterval, D62 ⑥ and darwin/autostart.mjs). An `off` no longer asks the daemon to exit, so `on` normally finds it already up and never
-      // gets here; this note is what says so when it does. No "run asight install" in it: on darwin `install` rewrites the plist and calls
+      // gets here; this note is what says so when it does. No "run trocar install" in it: on darwin `install` rewrites the plist and calls
       // enable({now: false}), which does not reload an already loaded job, so the rewrite takes effect at the next login (D61,
       // darwin/autostart.mjs enable) — only enable({now: true}) boots the job out and bootstraps it again.
       const startMs = ms() - startAt
-      if (startMs >= SLOW_START_MS) notes.push(`${entryWords(osName, unit)} held the collector's start for ${startMs} ms; asight waited on the OS, not on work of its own${osName === 'darwin' ? ' (launchd spawns a job at most once every ThrottleInterval seconds, 10 s by default)' : ''}`)
+      if (startMs >= SLOW_START_MS) notes.push(`${entryWords(osName, unit)} held the collector's start for ${startMs} ms; trocar waited on the OS, not on work of its own${osName === 'darwin' ? ' (launchd spawns a job at most once every ThrottleInterval seconds, 10 s by default)' : ''}`)
       if (rr && rr.code === 0 && rr.warn) notes.push(rr.warn) // the arch's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say) — the Run-value it could not take out, the daemon it started directly because /Run's SUCCESS was a lie
       if (rr && rr.code !== 0) {
         // the flip checklist ③ (4.9 §4 末): the arch's own failure record, verbatim, when enable() carries one (the darwin LaunchAgent's `launchd-register-failed` —
@@ -622,10 +622,10 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
         if (rr.event) { unitFailed = rr.event.reason; put(rr.event) }
         else if (!register) { unitFailed = `the collector could not be started (${rr.err || `exit ${rr.code}`}); start it yourself: ${DAEMON_CMD}`; put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: unitFailed }) } // `on` touches no registration: there is nothing to enable, only this start
         else {
-          // the start question in the platform's own words: win32's unit is a scheduled task (\asight\collector, autostart.mjs), darwin's a LaunchAgent,
+          // the start question in the platform's own words: win32's unit is a scheduled task (\trocar\collector, autostart.mjs), darwin's a LaunchAgent,
           // and the systemd wording is Linux's alone — a Windows user told to run `systemctl --user status` has been handed nothing (tested 2026-10-11)
           const daemonLog = typeof unit.logFiles === 'function' ? (unit.logFiles()[1] || {}).path : null
-          const entry = osName === 'win32' ? 'the scheduled task \\asight\\collector' : osName === 'darwin' ? `the LaunchAgent ${unit.path}` : null
+          const entry = osName === 'win32' ? 'the scheduled task \\trocar\\collector' : osName === 'darwin' ? `the LaunchAgent ${unit.path}` : null
           unitFailed = entry // a systemd line is Linux's alone: a Mac or Windows user told to run `systemctl --user` has been handed nothing (tested on Windows 2026-10-11 and macOS 2026-10-18)
             ? `${entry} was not registered or run (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}"${daemonLog ? `, and ${daemonLog} says why it did not start` : ''}`
             : `${unit.path} is written but "systemctl --user enable${was.up ? '' : ' --now'}" failed (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
@@ -635,7 +635,7 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       } else if (!was.up) {
         for (let i = 0; i < 60 && !up && !halt; i++) { up = (await probe()).up; if (!up) { await pause(250); if (halted()) halt = true } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
         if (!up && !halt) {
-          const where = osName === 'darwin' ? 'launchctl print gui/$(id -u)/com.asight.collector' : osName === 'win32' ? 'schtasks /Query /TN \\asight\\collector (and "asight status" for the daemon)' : `systemctl --user status ${UNIT_NAME_HINT}` // the autostart's own status question, in the platform's words (4.9 §4: the LaunchAgent, not a systemd unit; 4.8 §7: the task, not a unit)
+          const where = osName === 'darwin' ? 'launchctl print gui/$(id -u)/com.trocar.collector' : osName === 'win32' ? 'schtasks /Query /TN \\trocar\\collector (and "trocar status" for the daemon)' : `systemctl --user status ${UNIT_NAME_HINT}` // the autostart's own status question, in the platform's words (4.9 §4: the LaunchAgent, not a systemd unit; 4.8 §7: the task, not a unit)
           const why = `the collector was started${sock ? ` but does not answer on ${sock}` : ', but it does not answer yet'}; look at "${where}" and the capture health on the board` // never "answers on null": an endpoint that is not known yet is not named (1.6 §1.1)
           problems.push(why); put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: why })
         }
@@ -646,5 +646,5 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
 }
 function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'lock'), 'utf8')).pid ?? null } catch { return null } }
 
-// `asight install` on macOS and Windows (4.11 §1, plan T20): the model's install lives beside this one; Linux keeps installCollector.
+// `trocar install` on macOS and Windows (4.11 §1, plan T20): the model's install lives beside this one; Linux keeps installCollector.
 export { runInstall } from './model-install.mjs'

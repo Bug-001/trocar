@@ -61,7 +61,7 @@ const statKeyOf = (f) => { try { const st = fs.statSync(f); return `${st.ino}:${
 
 // onVerdict(row, prev) is told every agent verdict (prev: the row this pid had before, or null), so the daemon can
 // leave a durable record when one is untrusted or its watch failed (D38).
-// installedAt(layer) → ms | null says when asight installed the value a layer read only at start holds (the daemon
+// installedAt(layer) → ms | null says when trocar installed the value a layer read only at start holds (the daemon
 // answers from the install manifest). onError(e, {pid, phase})
 // is told every error judging or (un)watching a process — that process stays unwatched (its connections go
 // direct) and the rest of the table carries on; nothing here is swallowed (review 2 #4).
@@ -72,7 +72,7 @@ const statKeyOf = (f) => { try { const st = fs.statSync(f); return `${st.ino}:${
 // was judged, and its exit is still an exit; one that was off since it started was never reported and leaves unreported. onUnmatched({pid, exe,
 // candidates}) is told once per pid that two descriptors both claim: never folded into either, never watched,
 // and never silent (D-19); unmatched() lists them for status.
-// markerDir / caPem: where plugins write their per-pid marker and the asight CA file a marker vouches for (null: no
+// markerDir / caPem: where plugins write their per-pid marker and the trocar CA file a marker vouches for (null: no
 // plugin harness is judged trusted). watchDir(dir, onName, onWatchError) → close; setTimer for the marker-pending
 // deadline. alive(pid): whether a pid a rescan did not list still exists (it may have started after the scan).
 // readFile: how config files are read; an error other than "absent" is kept on the row (readErrors) for the daemon.
@@ -137,7 +137,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     const marker = usesMarker(d) && markerDir && caPem ? markerLayer({ dir: markerDir, pid: facts.pid, startTicks: facts.startTicks ?? null, caPem, readText }) : null
     if (marker) layers.push(marker)
     // what a harness's refine may look at besides argv and env: the exe's runtime release (lazily), its own files
-    // (through the same reader, so an unreadable one is reported) and asight's collector dir (a launch shim lives there)
+    // (through the same reader, so an unreadable one is reported) and trocar's collector dir (a launch shim lives there)
     let t = envUnreadable ? { trusted: false, reason: 'environ-unreadable', var: null, via: facts.envError ?? null } : trust.check(d.trust, { environ, layers, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion(facts.exe), readText, collectorDir, exe: facts.exe ?? null, os: facts.os ?? null } })
     if (!t.trusted && t.reason === 'var-missing' && registry.isLongLived(d, facts)) t = { ...t, reason: 'env-frozen' }
     // The launch environment is never read on this OS (envRead: false, 4.8 §5.4's decision): a fill-mode layer only fills

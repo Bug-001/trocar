@@ -23,7 +23,7 @@ test('V91 · 1.6 §3.3: on A B, A needing setup → exit 1, error.code setup-nee
   const bin = path.join(w.home, '.kimi-code', 'bin', 'kimi')
   fs.mkdirSync(path.dirname(bin), { recursive: true }); fs.writeFileSync(bin, MACHO)
   assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
-  fs.writeFileSync(bin, Buffer.concat([MACHO, Buffer.from('the new release')])) // A's own update overwrote asight's wrapper: carrier-overwritten
+  fs.writeFileSync(bin, Buffer.concat([MACHO, Buffer.from('the new release')])) // A's own update overwrote trocar's wrapper: carrier-overwritten
   const sock = path.join(w.home, 'c.sock'), token = 'k'.repeat(32)
   fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
   const server = await startControlServer({ socketPath: sock, token, routes: {

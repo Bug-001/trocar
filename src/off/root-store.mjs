@@ -11,7 +11,7 @@
 //                   `-store Root <absent thumbprint>` exits 0, CRYPT_E_NOT_FOUND or NTE_NOT_FOUND by caller (a Windows test machine, 2026-10-17)
 //           remove  certutil -user -delstore Root <thumbprint>
 // A root is named by rootIdOf(der) = { fp256 (node's AB:CD:… form), sha1 (the thumbprint, hex) }: Windows looks a certificate up by its
-// SHA-1 thumbprint only. The certificate file `security` / `certutil` read is written under ~/.asight/collector and removed after.
+// SHA-1 thumbprint only. The certificate file `security` / `certutil` read is written under ~/.trocar/collector and removed after.
 import crypto from 'node:crypto'
 import nodeFs from 'node:fs'
 import path from 'node:path'
@@ -33,7 +33,7 @@ export const OS_PROMPT_MS = 120_000
 
 export function rootStore({ platform, run = null, home, env = process.env, fs = nodeFs }) {
   const opts = { run, env, timeoutMs: OS_PROMPT_MS }
-  const tmp = path.join(home, '.asight', 'collector', 'root-store-tmp.pem')
+  const tmp = path.join(home, '.trocar', 'collector', 'root-store-tmp.pem')
   const withFile = (pem, fn) => {
     try {
       fs.mkdirSync(path.dirname(tmp), { recursive: true, mode: 0o700 })

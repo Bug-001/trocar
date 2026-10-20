@@ -1,6 +1,6 @@
-// upstream-shape.mjs — the validators of the hop's shape: what a group's upstream and its bypass table must be for asight to dial them (RFC 4.8 §2.2, carried by
+// upstream-shape.mjs — the validators of the hop's shape: what a group's upstream and its bypass table must be for trocar to dial them (RFC 4.8 §2.2, carried by
 // 4.9 §2.2; D47's win32 twin closed the kernel, and src/netenv/mihomo/rules.mjs — the config generator these checks once fed — went with it: the checks stay,
-// because they are what keeps a proxy text of the user's from ever becoming a hop asight cannot dial or a table it cannot match).
+// because they are what keeps a proxy text of the user's from ever becoming a hop trocar cannot dial or a table it cannot match).
 //
 // Three pure functions, OS-neutral, no I/O:
 //   · `upstreamOf(g, up)` — is an upstream direct, or an http / socks5 proxy with a host a hop can name and a TCP port? This is the judge both arches'
@@ -12,7 +12,7 @@
 //     name (a name the matcher cannot meet is `dropped`, never a line that looks like capture and is none).
 //   · `bypassHit(bypass, host)` — the one matcher: does a CONNECT target hit one of the group's bypass rows? The model door's own dial decision
 //     (core/proxymode/collector.mjs) and both arches' tests read the same answer, so the rule and its test can never drift apart.
-// Node built-ins only; imports nothing of asight.
+// Node built-ins only; imports nothing of trocar.
 
 const HOST_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$/
 
@@ -48,7 +48,7 @@ export function bypassRuleOf(e, target = null) {
  *  Exported so that whoever reads a proxy address out of the user's settings (both arches' `upstream.mjs`) asks THIS function whether the hop is diallable,
  *  instead of keeping a copy of its checks: an address it throws on is not an upstream. The credentials, when the answer carries them, are the user's own. */
 export function upstreamOf(g, up) {
-  const name = `asight-up-${g}`
+  const name = `trocar-up-${g}`
   if (up == null || up === 'direct' || up.type === 'direct') return { name, type: 'direct' }
   if (typeof up !== 'object' || (up.type !== 'http' && up.type !== 'socks5')) throw new TypeError(`the upstream of ${g} is direct, or an http or socks5 proxy`)
   if (typeof up.host !== 'string' || up.host === '' || /[\s,]/.test(up.host)) throw new TypeError(`the upstream host of ${g} is a host name or an address`)

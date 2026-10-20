@@ -1,4 +1,4 @@
-// receipt.mjs — the words `asight on`, `asight install` (Linux) and `asight uninstall` print: the plan before they write (what `onPlan` is handed),
+// receipt.mjs — the words `trocar on`, `trocar install` (Linux) and `trocar uninstall` print: the plan before they write (what `onPlan` is handed),
 // and the receipt after (RFC 1.6 §1.1, §3.2, §3.3, §3.6, D58). The receipt object is src/off/schema.mjs's (`--json` prints it as it is); this renders
 // the same object for a person, in English, conclusion first, inside 80 columns, in the past tense (it happened) or the future (`--dry-run`: the same
 // receipt, nothing written). Pure: no disk, no clock, no process. Paths under HOME are shown as `~/…` (the way the user knows them); `--json` keeps
@@ -11,7 +11,7 @@ import { HARNESS_IDS } from './harness-names.mjs'
 /** `/home/alice/.claude/x` → `~/.claude/x` when `p` is under `home`. */
 export const tilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
 
-// §1.1 / D58: a form id and a carrier kind are asight's own words (4.11's primitives). A receipt prints what they MEAN to the reader. One
+// §1.1 / D58: a form id and a carrier kind are trocar's own words (4.11's primitives). A receipt prints what they MEAN to the reader. One
 // vocabulary, here, for every command: a name that is not in it is read out as its own words (`desktop-prebuilt` → "desktop prebuilt"), never
 // a refusal and never an id — adding a form or a carrier stays descriptor data (D57⑥).
 const FORM_WORDS = Object.freeze({
@@ -22,8 +22,8 @@ const FORM_WORDS = Object.freeze({
 })
 const CARRIER_WORDS = Object.freeze({
   root: 'reads your user trust store', 'config-key': "the certificate setting of its own configuration", 'pem-block': 'a block in your certificate file',
-  plugin: 'a plug-in asight installed', wrapper: 'a launch command asight installed', 'switch-file': "asight's switch file",
-  bundle: 'a certificate bundle asight wrote', env: 'the certificate variable of its settings',
+  plugin: 'a plug-in trocar installed', wrapper: 'a launch command trocar installed', 'switch-file': "trocar's switch file",
+  bundle: 'a certificate bundle trocar wrote', env: 'the certificate variable of its settings',
 })
 /** A form id (`codex.vscode`) as the form a user would name it by — the harness prefix goes. */
 export const formWords = (id) => { const s = String(id ?? '').split('.').slice(1).join('.'); return FORM_WORDS[s] || s.replace(/-/g, ' ') || String(id ?? '') }
@@ -61,7 +61,7 @@ function watchLines(watch, t) {
  *  to put in `--json` as `planned`. `p` = what planOn returns (its `files` / `owned` / `entries` / `unit` are only what would be written). */
 export function planItems(p, { home = null, platform = 'linux' } = {}) {
   const t = (x) => tilde(x, home)
-  const sep = platform === 'win32' ? '\\' : '/' // one separator style per platform (§1.1): a directory shown as `~\\.asight\\collector/` mixes two
+  const sep = platform === 'win32' ? '\\' : '/' // one separator style per platform (§1.1): a directory shown as `~\\.trocar\\collector/` mixes two
   const items = []
   const add = (what, path_, detail) => items.push({ what, path: path_ || null, detail })
   if (p.manifest) add('record', p.manifest, `${t(p.manifest)}: what was installed`)
@@ -69,8 +69,8 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
   if (p.standalone) add('undo', p.standalone, `${t(p.standalone)}: works without this source tree`)
   for (const c of p.ca || []) add('certificate', c, `${t(c)}: in no trust store`)
   if (p.run) add('record', p.run, `${t(p.run)}${sep}: what the plugins trust`)
-  for (const f of p.files || []) add(f.harness, f.path, `${t(f.path)}: ${f.sources.length ? `the certificates of ${f.sources.map((x) => String(x).split(/[\\/]/).pop()).join(', ')} plus asight's` : "asight's certificate"}`)
-  for (const o of p.owned || []) add(o.harness, o.path, `${t(o.path)}: asight's ${o.role}`)
+  for (const f of p.files || []) add(f.harness, f.path, `${t(f.path)}: ${f.sources.length ? `the certificates of ${f.sources.map((x) => String(x).split(/[\\/]/).pop()).join(', ')} plus trocar's` : "trocar's certificate"}`)
+  for (const o of p.owned || []) add(o.harness, o.path, `${t(o.path)}: trocar's ${o.role}`)
   for (const e of p.entries || []) add(e.harness, e.path, `${t(e.path)}${e.real_path ? ` -> ${t(e.real_path)}` : ''}: ${e.what || e.keys.join('.')}`)
   if (p.unit) add('autostart', p.unit.path, `${t(p.unit.path)}: starts the collector at login`)
   // §1.4「计划写全」: the symlink `enable` makes is a file of the user's too, so it is named as well
@@ -78,9 +78,9 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
   for (const l of p.logs || []) add('log', l, `${t(l)}: the collector's own output`)
   if (p.records) add('record', p.records, `${t(p.records)}${sep}: what each run did`)
   else if (p.events) add('record', p.events, `${t(p.events)}: what each run did`)
-  // V85 / §1.4「计划写全」: asight's own tree is ONE line, as it is in the model install's plan — every run of asight keeps its record, its
-  // desired state and its own logs there, and `asight uninstall` takes all of it back. Every file of YOURS is its own line, above.
-  if (home) add('asight', path.join(home, '.asight'), `${t(path.join(home, '.asight'))}${sep}: asight's own files (its install record, what is turned on, its logs); asight uninstall takes all of it back`)
+  // V85 / §1.4「计划写全」: trocar's own tree is ONE line, as it is in the model install's plan — every run of trocar keeps its record, its
+  // desired state and its own logs there, and `trocar uninstall` takes all of it back. Every file of YOURS is its own line, above.
+  if (home) add('trocar', path.join(home, '.trocar'), `${t(path.join(home, '.trocar'))}${sep}: trocar's own files (its install record, what is turned on, its logs); trocar uninstall takes all of it back`)
   return items
 }
 
@@ -88,14 +88,14 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
 export function formatPlan(p, { home = null, platform = 'linux', command = 'on', colors: c = noColor() } = {}) {
   const t = (x) => tilde(x, home)
   const items = planItems(p, { home, platform })
-  const backups = t(p.backups || path.join(home || '~', '.asight', 'backup'))
+  const backups = t(p.backups || path.join(home || '~', '.trocar', 'backup'))
   return fit([
-    c.bold(`asight ${command} will write ${items.length} file${items.length === 1 ? '' : 's'}:`),
+    c.bold(`trocar ${command} will write ${items.length} file${items.length === 1 ? '' : 's'}:`),
     ...pairs(items.map((i) => [i.what, i.detail])),
     `A copy of every file of yours it changes goes to ${backups}/ first.`,
     ...watchLines(p.watch, t).map((l) => `  ${l}`),
     ...(p.skipped && p.skipped.length ? [`Skipped: ${p.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`] : []),
-    ...(p.edited || []).map((e) => `You changed the proxy setting of ${e.harness}: ${e.where || 'its proxy field'} is now ${e.now ?? 'empty'} (asight left ${e.was ?? 'empty'} there). Going on takes your value as the upstream and points the setting back at asight.`),
+    ...(p.edited || []).map((e) => `You changed the proxy setting of ${e.harness}: ${e.where || 'its proxy field'} is now ${e.now ?? 'empty'} (trocar left ${e.was ?? 'empty'} there). Going on takes your value as the upstream and points the setting back at trocar.`),
     ...(p.adopted || []).filter(saysSomething).map((x) => adoptedLine(x.harness, x)),
     ...(p.restart && p.restart.length ? [`Restart to capture: ${p.restart.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}. Until then they connect as they do now.`] : []),
   ].filter((l) => l !== null)).join('\n')
@@ -109,20 +109,20 @@ const lingerText = ({ linger, linger_reason: why = null, user = null }) => (ling
 
 const joinPaths = (list, home) => list.map((x) => tilde(typeof x === 'string' ? x : x.path, home)).join('  ')
 
-/** The file lines of a receipt that writes (`on`, Linux `install`): each file changed — path, what, where its backup is — then what asight made
+/** The file lines of a receipt that writes (`on`, Linux `install`): each file changed — path, what, where its backup is — then what trocar made
  *  itself. `past`: false for a dry run (what it would do). */
 export function changeLines(r, { past = true, home = null } = {}) {
   const t = (x) => tilde(x, home)
   const lines = []
   if (r.changed.length) {
     lines.push(past ? 'Changed:' : 'Will change:')
-    lines.push(...pairs(r.changed.map((x) => [t(x.path), `${x.change}${x.backup ? ` (backup ${t(x.backup)})` : past ? ' (asight made this file; there was nothing to back up)' : ' (a copy is kept first)'}`])))
+    lines.push(...pairs(r.changed.map((x) => [t(x.path), `${x.change}${x.backup ? ` (backup ${t(x.backup)})` : past ? ' (trocar made this file; there was nothing to back up)' : ' (a copy is kept first)'}`])))
   } else lines.push(past ? 'No file of yours was changed.' : 'No file of yours will be changed.')
-  if (r.created.length) lines.push(`${past ? "asight's own files:" : "asight will make:"} ${joinPaths(r.created, home)}`)
+  if (r.created.length) lines.push(`${past ? "trocar's own files:" : "trocar will make:"} ${joinPaths(r.created, home)}`)
   return lines
 }
 
-/** The receipt of `asight on` as text (the verdict first, then every file it changed). `tense`: 'past' | 'future' (the dry run). `fresh` = the set of
+/** The receipt of `trocar on` as text (the verdict first, then every file it changed). `tense`: 'past' | 'future' (the dry run). `fresh` = the set of
  *  harnesses THIS run newly wired (their one-time notes print; the rest live in `doctor` and `--json`); null prints every note. */
 export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'linux', fresh = null, colors: c = noColor() } = {}) {
   const past = tense !== 'future'
@@ -132,10 +132,10 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   const named = (r.harnesses || []).length ? (r.harnesses || []).join(', ') : 'no agent'
   const daemonBit = r.daemon && r.daemon.state === 'running' ? `Collector running${r.daemon.pid ? ` (pid ${r.daemon.pid})` : ''}${r.daemon.started ? ', started by this run' : ''}.` : null
   const lines = [
-    r.ok === false && past ? `${c.red('x')} asight on did not finish. What stopped it is below.`
+    r.ok === false && past ? `${c.red('x')} trocar on did not finish. What stopped it is below.`
       : idle ? `The settings are in place, but no collector is running: nothing is captured until it is.`
         : past ? `${c.green('Capturing')} ${named}. ${daemonBit || 'Whether the collector is running is unknown.'}`
-          : `asight will start capturing ${named}.`,
+          : `trocar will start capturing ${named}.`,
   ]
   lines.push(...changeLines(r, { past, home }))
   if (r.unchanged && r.unchanged.length) { // the display caps at three names; the whole list is in --json, and none of them is rewritten by a second on
@@ -145,7 +145,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   if (r.skipped.length) lines.push(`Skipped: ${r.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`)
   if (lingerText(r)) lines.push(lingerText(r))
   for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(adoptedLine(h, x))
-  if (r.daemon && !daemonBit) lines.push('The collector is not running, so nothing is captured yet.', 'Start it: asight daemon') // the command keeps its own line: folding must not cut it (§1.1③)
+  if (r.daemon && !daemonBit) lines.push('The collector is not running, so nothing is captured yet.', 'Start it: trocar daemon') // the command keeps its own line: folding must not cut it (§1.1③)
   if (r.restart.length) lines.push(`  ${c.yellow('!')} Restart to capture: ${r.restart.map((x) => `${x.harness} (pid ${x.pid} started before the certificate was there)`).join(', ')}. Until then they connect as they do now.`)
   const nothingNew = fresh && fresh.size === 0 && !(r.changed || []).length && !(r.created || []).length
   // A note is a problem exactly when the run's own `problems` list names it — never merely because the whole run failed.
@@ -157,14 +157,14 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
     const isProblem = problemNotes ? problemNotes.has(n) : r.ok === false && past
     lines.push(`${isProblem ? 'Problem' : 'Note'}: ${n}`)
   }
-  lines.push(`Stop: asight off`)
+  lines.push(`Stop: trocar off`)
   // §1.1③⑥: a command a person copies gets its own line, so folding never cuts it in two
-  if (r.standalone) lines.push(`If asight itself breaks: ${c.dim(standaloneCommand(r.standalone, platform))}`)
-  lines.push(c.dim('Status: asight status   Remove asight: asight uninstall (your captured records stay)'))
+  if (r.standalone) lines.push(`If trocar itself breaks: ${c.dim(standaloneCommand(r.standalone, platform))}`)
+  lines.push(c.dim('Status: trocar status   Remove trocar: trocar uninstall (your captured records stay)'))
   return fit(lines).join('\n')
 }
 
-/** The receipt of `asight uninstall` as text (§3.6): the verdict, what was removed, what was kept, and the one next step. `tense`: 'past' |
+/** The receipt of `trocar uninstall` as text (§3.6): the verdict, what was removed, what was kept, and the one next step. `tense`: 'past' |
  *  'future' (`--dry-run`, or the plan printed when a yes is missing). */
 export function formatUninstallReceipt(r, { home = null, tense = r.dry_run ? 'future' : 'past', dataNote = null } = {}) {
   const past = tense !== 'future'
@@ -175,16 +175,16 @@ export function formatUninstallReceipt(r, { home = null, tense = r.dry_run ? 'fu
   if ((r.dropped_backups || []).length) removed.push(`${r.dropped_backups.length} backup${r.dropped_backups.length === 1 ? '' : 's'} in ${t(path.dirname(r.dropped_backups[0]))}/`)
   if (dataNote) kept.push(dataNote)
   else if (r.purge_data) removed.push('your captured records (--purge-data)')
-  // 附录 C.2 `kept`: every path that stays, with its size — the records are segments under ~/.asight/raw (D60), not the collector's directory
+  // 附录 C.2 `kept`: every path that stays, with its size — the records are segments under ~/.trocar/raw (D60), not the collector's directory
   for (const k of r.kept || []) kept.push(`${k.what}, in ${t(k.path)}/ (${size(k.bytes)})`)
   if (typeof r.class_table === 'string') kept.push(`your traffic classes, ${t(r.class_table)}`)
-  // §3.6 / 4.6: a bundle a live process may still have open is kept with asight's CA taken out — the receipt says which, and who may hold it
-  for (const b of r.kept_bundles || []) kept.push(`${t(b.path)} (asight's certificate taken out)${(b.pids || []).length ? `: ${(b.pids || []).map((p) => `pid ${p}`).join(', ')} may have loaded it` : ''}`)
+  // §3.6 / 4.6: a bundle a live process may still have open is kept with trocar's CA taken out — the receipt says which, and who may hold it
+  for (const b of r.kept_bundles || []) kept.push(`${t(b.path)} (trocar's certificate taken out)${(b.pids || []).length ? `: ${(b.pids || []).map((p) => `pid ${p}`).join(', ')} may have loaded it` : ''}`)
   const lines = [!past
-    ? 'asight uninstall will take out everything install put on this machine, and remove the root certificate from your trust settings.'
-    : r.ok === false ? 'asight uninstall did not finish. What is left is below.'
-      : "Uninstalled. asight is no longer on your agents' path, and its root certificate is gone from your trust settings."]
-  if (r.nothing_installed) lines.push('Nothing of asight is installed for your user, so there was nothing to take out.')
+    ? 'trocar uninstall will take out everything install put on this machine, and remove the root certificate from your trust settings.'
+    : r.ok === false ? 'trocar uninstall did not finish. What is left is below.'
+      : "Uninstalled. trocar is no longer on your agents' path, and its root certificate is gone from your trust settings."]
+  if (r.nothing_installed) lines.push('Nothing of trocar is installed for your user, so there was nothing to take out.')
   if (removed.length) lines.push(past ? 'Removed' : 'Will remove', ...removed.map((x) => `  ${x}`))
   if (kept.length) lines.push('Kept', ...kept.map((x) => `  ${x}`))
   const d = r.daemon || {}
@@ -192,12 +192,12 @@ export function formatUninstallReceipt(r, { home = null, tense = r.dry_run ? 'fu
   else if (d.state === 'unresponsive' && d.pid) lines.push(`The collector (pid ${d.pid}) did not answer and could not be stopped. Stop it yourself: kill -9 ${d.pid}`)
   // §1.1: a connection nothing else would end was cut — how many is said, never left to --json alone
   if ((r.relayed || {}).cut) lines.push(`${r.relayed.cut} connection${r.relayed.cut === 1 ? '' : 's'} that would not end by itself ${r.relayed.cut === 1 ? 'was' : 'were'} cut.`)
-  for (const n of r.non_identical || []) lines.push(`Not byte for byte what it was (you changed it after asight did; only asight's part was taken out): ${t(n.path)} (backup ${t(n.backup)})`)
+  for (const n of r.non_identical || []) lines.push(`Not byte for byte what it was (you changed it after trocar did; only trocar's part was taken out): ${t(n.path)} (backup ${t(n.backup)})`)
   for (const l of r.left || []) lines.push(`Left in place: ${t(l.path)}: ${l.reason}`)
   for (const p of r.problems || []) lines.push(`Problem: ${p}`)
   for (const n of r.notes || []) lines.push(`Note: ${n}`)
   lines.push(!past ? 'Nothing was changed. Run it with --yes to do it.'
-    : r.ok === false ? 'Fix what is above, then run: asight uninstall'
-      : r.purge_data ? 'Install it again: asight install' : 'Delete the captured records: asight uninstall --purge-data')
+    : r.ok === false ? 'Fix what is above, then run: trocar uninstall'
+      : r.purge_data ? 'Install it again: trocar install' : 'Delete the captured records: trocar uninstall --purge-data')
   return fit(lines).join('\n')
 }

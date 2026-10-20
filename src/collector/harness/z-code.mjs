@@ -102,7 +102,7 @@ function originHost(env) {
 
 function inject(ctx) {
   const zdir = path.join(ctx.home, '.zcode')
-  if (!ctx.listDir(zdir).length) return { notes: [{ code: CODE.harnessNote, text: `${zdir} does not exist (Z-Code has not run for this user), so no trust entry is written; after running Z-Code once, run asight collector uninstall and install again` }] }
+  if (!ctx.listDir(zdir).length) return { notes: [{ code: CODE.harnessNote, text: `${zdir} does not exist (Z-Code has not run for this user), so no trust entry is written; after running Z-Code once, run trocar collector uninstall and install again` }] }
   const cfg = path.join(zdir, 'cli', 'config.json')
   const bundle = path.join(ctx.collectorDir, 'ca', 'combined-z-code.pem')
   const seen = new Set()
@@ -113,8 +113,8 @@ function inject(ctx) {
   see(desk)
   for (const env of [ctx.env, ...ctx.running]) { see(env.get('NODE_EXTRA_CA_CERTS')); see(env.get('ZCODE_AGENT_CA_CERT')) }
   const notes = [...seen].filter((v) => !path.isAbsolute(v)).map((v) => ({ code: CODE.relativePath, text: `${v} is a relative CA path; its certificates are not carried over into ${path.basename(bundle)}` }))
-  if (typeof desk === 'string' && desk.trim()) notes.push({ code: CODE.harnessNote, text: `the Z-Code desktop setting httpProxyCaCertPath (${desk.trim()}, in ${deskFile}) reaches the desktop agent as ZCODE_AGENT_CA_CERT and wins over asight's caCertFile, so the desktop is not captured while it is set; its CA is merged into ${path.basename(bundle)}, so it can be cleared` })
-  if (ctx.env.has('ZCODE_AGENT_CA_CERT')) notes.push({ code: CODE.harnessNote, text: `ZCODE_AGENT_CA_CERT is set in this shell; a Z-Code started with it ignores asight's caCertFile and is not captured` })
+  if (typeof desk === 'string' && desk.trim()) notes.push({ code: CODE.harnessNote, text: `the Z-Code desktop setting httpProxyCaCertPath (${desk.trim()}, in ${deskFile}) reaches the desktop agent as ZCODE_AGENT_CA_CERT and wins over trocar's caCertFile, so the desktop is not captured while it is set; its CA is merged into ${path.basename(bundle)}, so it can be cleared` })
+  if (ctx.env.has('ZCODE_AGENT_CA_CERT')) notes.push({ code: CODE.harnessNote, text: `ZCODE_AGENT_CA_CERT is set in this shell; a Z-Code started with it ignores trocar's caCertFile and is not captured` })
   return {
     entries: [{ kind: 'json-key', path: cfg, keys: ['network', 'caCertFile'], value: bundle, semantic: 'replace' }],
     files: [{ path: bundle, bundle: true, certsFrom: [...seen].filter((v) => path.isAbsolute(v)) }],

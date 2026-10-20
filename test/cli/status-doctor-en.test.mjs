@@ -25,7 +25,7 @@ const doc = (over = {}) => ({
   harnesses: { 'claude-code': harness(), codex: harness({ captured: false, reason: 'config-after-start', processes: [{ pid: 5530, name: 'codex', captured: false, reason: 'config-after-start' }], forms: [{ form: 'codex.cli', certificate: { in_effect: true, carrier: 'root' }, proxy: { connected: true, written: 'http://127.0.0.1:17992', prior: null } }] }), opencode: harness({ desired: 'off', captured: false, reason: 'desired-off' }) },
   install: { state: 'complete', harnesses: ['claude-code', 'codex', 'opencode'], pending: [] },
   cert: { fp256: '3f9a', expires: '2036-10-15', root: { state: 'in-place' }, key: { custody: 'keychain', state: 'present' }, intermediate: { state: 'current' }, bundles: [] },
-  holders: [], relayed: { closing: 3, waiting: 0, cut: 0 }, agent_list: { path: '~/.asight/agents.json', state: 'ok', problems: [] },
+  holders: [], relayed: { closing: 3, waiting: 0, cut: 0 }, agent_list: { path: '~/.trocar/agents.json', state: 'ok', problems: [] },
   failures: { problem: 1, expected: 2, note: 0, since: null, latest: '2026-10-18T12:14:00Z' }, errors: [], ...over,
 })
 
@@ -37,13 +37,13 @@ test('§3.5 the summary: conclusion first, one row per harness, the three facts 
   assert.ok(lines.some((l) => /^ {2}codex\s+no\s+pid 5530 started before capture was on; restart codex$/.test(l)))
   assert.ok(lines.some((l) => /^ {2}opencode\s+off$/.test(l)), 'a harness that is off says off, not a reason code')
   assert.ok(lines.some((l) => /^ {2}Problems\s+1 in the last 24 hours, latest 10 min ago$/.test(l)))
-  assert.ok(lines.at(-1).startsWith('More: asight status codex'), lines.at(-1))
+  assert.ok(lines.at(-1).startsWith('More: trocar status codex'), lines.at(-1))
   assert.ok(!lines.some((l) => l.includes('->')), 'V44: the summary draws no chain')
 
   const fresh = statusSummary(doc({ harnesses: {}, install: { state: null, harnesses: [], pending: [] }, cert: { fp256: null, expires: null, root: { state: 'unknown' }, key: {}, intermediate: {}, bundles: [] } }), { now: NOW })
   clean(fresh, 'status (nothing installed)')
   assert.match(fresh[0], /^No harness is set up for capture yet\.$/)
-  assert.ok(fresh.includes('Next: asight install'))
+  assert.ok(fresh.includes('Next: trocar install'))
 })
 
 test('§3.5 a read that failed is `unknown` with its reason, never 0 and never a stale pid as the present state', () => {
@@ -60,21 +60,21 @@ test('§3.5 a read that failed is `unknown` with its reason, never 0 and never a
 })
 
 test('§3.5 `status <harness>`: the verdict, Why / Fix / Check from the one catalogue, the forms, the routes and the two sentences 附录 A asks for', () => {
-  const finding = { code: 'config-after-start', class: 'problem', harness: 'codex', what: 'codex is not captured: pid 5530 started before capture was on.', why: 'Certificates are read when a program starts.', commands: [{ run: 'Quit every codex window, then run: kill 5530', shell: 'sh' }], verify: 'asight status codex' }
+  const finding = { code: 'config-after-start', class: 'problem', harness: 'codex', what: 'codex is not captured: pid 5530 started before capture was on.', why: 'Certificates are read when a program starts.', commands: [{ run: 'Quit every codex window, then run: kill 5530', shell: 'sh' }], verify: 'trocar status codex' }
   const t = { harness: 'codex', routing: 'proxy', on_path: true, captured: false, reason: 'config-after-start',
-    nodes: [{ id: 'a', kind: 'agent', name: 'codex', pid: 5530 }, { id: 'd', kind: 'asight-forwarder', name: 'asight', port: 17992, asight: true, mode: 'on' }, { id: 'x', kind: 'egress', name: 'internet' }],
-    edges: [{ from: 'a', to: 'd', via: 'proxy-http', asight: true, entry: { where: '~/.codex/.env', kind: 'dotenv' } }, { from: 'd', to: 'x', via: 'egress' }, { from: 'a', to: 'x', via: 'direct' }],
+    nodes: [{ id: 'a', kind: 'agent', name: 'codex', pid: 5530 }, { id: 'd', kind: 'trocar-forwarder', name: 'trocar', port: 17992, trocar: true, mode: 'on' }, { id: 'x', kind: 'egress', name: 'internet' }],
+    edges: [{ from: 'a', to: 'd', via: 'proxy-http', trocar: true, entry: { where: '~/.codex/.env', kind: 'dotenv' } }, { from: 'd', to: 'x', via: 'egress' }, { from: 'a', to: 'x', via: 'direct' }],
     branches: [{ name: 'all', form: 'codex.cli', path: ['a', 'd', 'x'], off_path: ['a', 'x'], on_path: true, captured: false, reason: 'config-after-start' }], running: [], notes: [] }
   const lines = statusDetail(doc({ topology: { codex: t } }), 'codex', { finding, now: NOW })
   clean(lines, 'status codex')
   assert.match(lines[0], /^codex: on, not captured$/)
   assert.ok(lines.some((l) => /^ {2}Why\s+codex is not captured: pid 5530 started before capture was on\.$/.test(l)))
   assert.ok(lines.some((l) => /^ {2}Fix\s+Quit every codex window, then run: kill 5530$/.test(l)))
-  assert.ok(lines.some((l) => /^ {2}Check\s+asight status codex$/.test(l)))
-  assert.ok(lines.some((l) => /certificate\s+in effect \(root\)/.test(l)) && lines.some((l) => /proxy\s+points at asight :17992/.test(l)), 'the two axes are apart, and a loopback address prints as its port')
-  assert.ok(lines.some((l) => /^ {4}new processes\s+codex \(pid 5530\) -> .*asight :17992 -> internet$/.test(l)))
-  assert.ok(lines.some((l) => /^ {4}without asight\s+codex \(pid 5530\) -> internet$/.test(l)))
-  assert.ok(lines.includes('  If your VPN or proxy routes by process, it sees asight, not codex.'))
+  assert.ok(lines.some((l) => /^ {2}Check\s+trocar status codex$/.test(l)))
+  assert.ok(lines.some((l) => /certificate\s+in effect \(root\)/.test(l)) && lines.some((l) => /proxy\s+points at trocar :17992/.test(l)), 'the two axes are apart, and a loopback address prints as its port')
+  assert.ok(lines.some((l) => /^ {4}new processes\s+codex \(pid 5530\) -> .*trocar :17992 -> internet$/.test(l)))
+  assert.ok(lines.some((l) => /^ {4}without trocar\s+codex \(pid 5530\) -> internet$/.test(l)))
+  assert.ok(lines.includes('  If your VPN or proxy routes by process, it sees trocar, not codex.'))
   assert.ok(lines.some((l) => l.startsWith('  To change the proxy: edit codex')))
 })
 
@@ -105,7 +105,7 @@ test('§3.5 exit codes: 0 every harness that is on is captured, 1 one of them is
 test('附录 B · §3.7: every code in the catalogue renders as English sentences with Fix and Check, every value filled in, inside 80 columns', () => {
   const ctx = { platform: 'linux', h: 'codex', hf: { behaviour: { fileKeys: [{ path: '/home/alice/.codex/.env', key: 'HTTPS_PROXY', format: 'dotenv' }], restart: {} }, procs: [], forms: [] },
     t: { nodes: [], edges: [], branches: [] }, F: { routing: 'proxy', harnesses: {}, desired: {} }, user: 'alice', setting: { scheme: 'socks5', host: '127.0.0.1', port: 1080 },
-    dead: { addr: '127.0.0.1', port: 7890 }, u: { name: 'node', pid: 42 }, listPath: '/home/alice/.asight/agents.json', file: { path: '/home/alice/.asight/agents.json', state: 'ok', problems: [{ index: 1, code: 'wide-name-needs-args', detail: 'this name needs an args pattern' }] }, pid: 5530, port: 17992, upPort: 7890 }
+    dead: { addr: '127.0.0.1', port: 7890 }, u: { name: 'node', pid: 42 }, listPath: '/home/alice/.trocar/agents.json', file: { path: '/home/alice/.trocar/agents.json', state: 'ok', problems: [{ index: 1, code: 'wide-name-needs-args', detail: 'this name needs an args pattern' }] }, pid: 5530, port: 17992, upPort: 7890 }
   for (const code of FINDING_CODES) {
     const found = findingFor(code, ctx)
     assert.ok(found.what && found.why, `${code}: what and why say something`)

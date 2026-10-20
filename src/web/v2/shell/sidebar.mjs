@@ -21,7 +21,7 @@ export function sessionsTabTarget(route, libraryHash) {
 }
 
 // the per-viewer collapse choice: localStorage in try/catch, unreadable storage = no choice (the defaults apply)
-const SIDE_KEY = 'asight.v2.sidebar'
+const SIDE_KEY = 'trocar.v2.sidebar'
 const readPref = (store) => { try { const v = store && store.getItem(SIDE_KEY); return v === '1' || v === '0' ? v : null } catch { return null } }
 const writePref = (store, v) => { try { store && store.setItem(SIDE_KEY, v) } catch { /* forget it */ } }
 

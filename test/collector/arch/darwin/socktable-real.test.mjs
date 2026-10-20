@@ -18,7 +18,7 @@ import { ownerOfSocket } from '../../../../src/collector/arch/darwin/socktable.m
 import { NATIVE, nativePath } from '../../../../src/collector/arch/darwin/native.mjs'
 
 test('real kernel: the helper names the process that holds the peer\'s socket — a child that connected, not the test that accepted', { skip: process.platform !== 'darwin' && 'macOS only' }, async () => {
-  const helper = path.join(tmpDir('asight-socktable-real-'), NATIVE.socktable)
+  const helper = path.join(tmpDir('trocar-socktable-real-'), NATIVE.socktable)
   fs.copyFileSync(nativePath(NATIVE.socktable), helper)
   fs.chmodSync(helper, 0o755)
   const server = net.createServer()

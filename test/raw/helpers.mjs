@@ -5,11 +5,11 @@ import { openSealed } from '../../src/raw/reader.mjs';
 import { tmpDir as removedAtExit } from '../helpers/tmp.mjs';
 
 // Gone when the test process ends, pass or fail (test/helpers/tmp.mjs). Every raw test and the HOME sandbox below use it.
-export const tmpDir = (p = 'asight-seal-') => removedAtExit(p);
+export const tmpDir = (p = 'trocar-seal-') => removedAtExit(p);
 
-// Backstop: anything that falls back to a default under ~/.asight (the raw journal) lands in a sandbox,
-// never in the real home (tests never touch ~/.asight). Each test file runs in its own process.
-process.env.HOME = tmpDir('asight-home-');
+// Backstop: anything that falls back to a default under ~/.trocar (the raw journal) lands in a sandbox,
+// never in the real home (tests never touch ~/.trocar). Each test file runs in its own process.
+process.env.HOME = tmpDir('trocar-home-');
 
 let clock = Date.parse('2026-10-05T10:00:00.000Z');
 export function envelope({ sid = null, sidHeader = 'x-claude-code-session-id', id, body, resp = { kind: 'sse', status: 200 }, endpoint = '/v1/messages', llm = true }) {

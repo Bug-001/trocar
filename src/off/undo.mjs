@@ -1,26 +1,26 @@
-// undo.mjs (src/off) — take asight's trust entries back out, for all harnesses or some, by the 4.6 undo order (RFC 4.6 §安装清单与卸载「撤销顺序」
-// 第 1–5 步 and「按 harness 撤」, 1.6 §1.5 / R2 / R3, D39). This is `asight off`'s file work and `asight uninstall`'s (install.mjs calls it for
-// every harness); the standalone ~/.asight/bin/asight-off is made of src/off alone, so it needs nothing outside this directory (0.1 §2).
+// undo.mjs (src/off) — take trocar's trust entries back out, for all harnesses or some, by the 4.6 undo order (RFC 4.6 §安装清单与卸载「撤销顺序」
+// 第 1–5 步 and「按 harness 撤」, 1.6 §1.5 / R2 / R3, D39). This is `trocar off`'s file work and `trocar uninstall`'s (install.mjs calls it for
+// every harness); the standalone ~/.trocar/bin/trocar-off is made of src/off alone, so it needs nothing outside this directory (0.1 §2).
 //
 //   1  the config entries (JSON keys, dotenv blocks), each by the rule for one file (journal.mjs undoEntry): back byte for byte when untouched,
-//      else only asight's key / block / line goes and the user's commented line comes back
+//      else only trocar's key / block / line goes and the user's commented line comes back
 //   2  each combined bundle `combined-<h>.pem`: nobody holds it → removed; a live process may have loaded it → kept, the same file without the
-//      asight CA, its pids reported (judged again by the next run); gone while a live process may use it → rebuilt without the CA from Node's
+//      trocar CA, its pids reported (judged again by the next run); gone while a live process may use it → rebuilt without the CA from Node's
 //      roots, the OS roots and the user CAs the install recorded; unreadable while one may hold it → it still holds the CA: an item left
 //   3  the harness's extra trust files (`extra-cc.pem`, `extra-kimi.pem`, role trust-file): the same, but only a process whose environ names the
-//      file keeps it; and, only for `uninstall` (`dropCa`), asight-ca.pem — `off` never removes the CA, the next `on` uses it again
+//      file keeps it; and, only for `uninstall` (`dropCa`), trocar-ca.pem — `off` never removes the CA, the next `on` uses it again
 //   4  rc lines and patch rows (each loading line before the file it loads), then the plugins and the shim
-//   5  the live processes that may still trust asight (reported, never restarted)
+//   5  the live processes that may still trust trocar (reported, never restarted)
 // Liveness is judged from the manifest — `manifest.liveness.<harness>` (identity, rereads, until, until_environ), plus the names agents.json holds now — and the `installed_at` of
-// the harness's items — plus the process table `procs()` reads, never from the daemon (stopped by now) or the entries (undone by now), so `asight
-// off` and `asight-off` give the same answer (1.6 R3). A process table that cannot be read is not "nobody is alive": what depends on it is kept and
-// reported unjudged — and so is a harness whose snapshot has no signature (none recorded, or null: the asight that wrote it had none for its OS).
+// the harness's items — plus the process table `procs()` reads, never from the daemon (stopped by now) or the entries (undone by now), so `trocar
+// off` and `trocar-off` give the same answer (1.6 R3). A process table that cannot be read is not "nobody is alive": what depends on it is kept and
+// reported unjudged — and so is a harness whose snapshot has no signature (none recorded, or null: the trocar that wrote it had none for its OS).
 // Where the OS never shows another process's environment (macOS, Windows: the rows say `envRead: false`), a process of the harness, or one it
 // started, may hold an extra trust file: it is a holder, not "not known" (4.6 「判活快照」).
 //
 // `ids` null = every harness; otherwise only those harnesses' entries, bundle, extra files, plugin / shim / rc lines — never the CA (unless
 // `dropCa`), never an item of another harness (byte for byte), never a file with no harness. An undone entry leaves manifest.entries; backups: dropped
-// when the file is back at its pre_sha256, kept and listed in manifest.kept_backups when the user changed the file after asight did (1.6 R2).
+// when the file is back at its pre_sha256, kept and listed in manifest.kept_backups when the user changed the file after trocar did (1.6 R2).
 // Imports only node:* and src/off.
 import nodeFs from 'node:fs'
 import path from 'node:path'
@@ -28,7 +28,7 @@ import { undoEntry, removeOwnedFile, undoWrapper, describeEntry } from './journa
 import { saveManifest, KNOWN_KINDS, FILE_ENTRY_KINDS, PHASES, undoByHand, restoreByHand } from './manifest.mjs'
 import { undoRunKey, undoScheduledTask } from './win32.mjs'
 import { dropBackup } from './backup.mjs'
-import { backupDir, asightHome } from './paths.mjs'
+import { backupDir, trocarHome } from './paths.mjs'
 import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside } from './fsutil.mjs'
 import { harnessesOf, hasIdentity, withAgentList, mayHaveRead } from './signature.mjs'
 import { readAgentList } from './identity.mjs'
@@ -40,15 +40,15 @@ import { decodeText } from './text-codec.mjs'
 const UNDO_LEFT = new Set(['left-unparsable', 'left-unreadable', 'left-link', 'left-text', 'error']) // an entry that could not be undone stays in the manifest
 const UNDO_AT_PRE = new Set(['restored', 'already-restored']) // the file is at its pre_sha256: its backup goes
 const KEPT_BECAUSE = {
-  'reverted-not-identical': (e) => `${e.path} was edited after asight changed it: only asight's ${describeEntry(e)} was taken out, so it is not what it was before; the backup is that file as it was`,
-  missing: (e) => `${e.path} is gone (removed after asight changed it); the backup is what it held before`,
-  'left-user-value': (e) => `${e.path} now holds a value the user set in place of asight's, left as it is; the backup is the file as it was before`,
-  'already-removed': (e) => `asight's text was no longer in ${e.path}, which is not what it was before; the backup is the file as it was before`,
+  'reverted-not-identical': (e) => `${e.path} was edited after trocar changed it: only trocar's ${describeEntry(e)} was taken out, so it is not what it was before; the backup is that file as it was`,
+  missing: (e) => `${e.path} is gone (removed after trocar changed it); the backup is what it held before`,
+  'left-user-value': (e) => `${e.path} now holds a value the user set in place of trocar's, left as it is; the backup is the file as it was before`,
+  'already-removed': (e) => `trocar's text was no longer in ${e.path}, which is not what it was before; the backup is the file as it was before`,
 }
 const UNTIL_VALUES = ['restart', 'next-connection', 'next-handshake', 'session-end']
 
 const known = (item) => KNOWN_KINDS.includes(item.kind)
-// step 4's owned files: asight-only content goes whatever it holds now (a changed one is said); a config-library entry the agent writes the user's
+// step 4's owned files: trocar-only content goes whatever it holds now (a changed one is said); a config-library entry the agent writes the user's
 // settings into goes only while unchanged (4.11 P5 / CM18, D48②); a wrapper is put back by its own rule
 const OWNED_UNDO = { plugin: removeOwnedFile, shim: removeOwnedFile, switch: removeOwnedFile, 'config-entry': (f, fs) => removeOwnedFile(f, fs, { unlessChanged: true }), wrapper: undoWrapper }
 // what `install` wrote (D55①: phase 'install' — the root's key, its CA file, the certificate carriers: config keys, bundles, pem-blocks, wrappers, plugins and
@@ -61,14 +61,14 @@ const processEnv = (p) => { try { const e = typeof p.env === 'function' ? p.env(
 const errText = (e) => String((e && e.code) || (e && e.message) || e)
 const without = (list, item) => { const i = list.indexOf(item); if (i >= 0) list.splice(i, 1) }
 
-// A harness whose snapshot has no signature (no record: an older asight; null: none for its OS) cannot tell its processes from the others, so any live
+// A harness whose snapshot has no signature (no record: an older trocar; null: none for its OS) cannot tell its processes from the others, so any live
 // process that may have read its entry may be one of them (a record that is missing says nothing of re-reading either: alive is enough). → their pids;
-// none means nobody can hold what asight wrote for it, signature or not (4.6 「判活快照」).
+// none means nobody can hold what trocar wrote for it, signature or not (4.6 「判活快照」).
 const unsignedOf = (liveness, list, h, since) => (hasIdentity(liveness[h]) ? [] : list.filter((p) => mayHaveRead(p, liveness[h] || { rereads: true }, since)).map((p) => p.pid))
-// why such a harness cannot be judged, said the same way for its files (step 2 / 3) and for who still trusts asight (step 5)
+// why such a harness cannot be judged, said the same way for its files (step 2 / 3) and for who still trusts trocar (step 5)
 const unsignedWhy = (liveness, h) => (liveness[h]
-  ? `the install manifest has no process identity for ${h} (the asight that wrote it had none for this OS; "asight on" records it, then run this again)`
-  : `the install manifest has no liveness record for ${h} (written by an older asight; "asight on" adds it, then run this again)`)
+  ? `the install manifest has no process identity for ${h} (the trocar that wrote it had none for this OS; "trocar on" records it, then run this again)`
+  : `the install manifest has no liveness record for ${h} (written by an older trocar; "trocar on" adds it, then run this again)`)
 
 /** Undoes the entries (see the header) → `{ results, kept_bundles, removed, still_trusting, trust_unknown, left, residue, changed, procs_error, manifest }` (`trust_unknown`:
  *  `[{ harness, why }]`, the harnesses step 5 cannot judge, their snapshot having no signature). An error that stops it
@@ -83,8 +83,8 @@ export async function undoHarnesses(args) {
 }
 
 /** `uninstall`'s kernel removal (4.8 §8): the exe, `LICENSE-mihomo.txt` and `SOURCE-mihomo.txt` beside it, the kernel directory, and the
- * verified-archive cache (`kernel-archive/`) — the whole thing asight's `on` placed or downloaded. A file the system still holds (the kernel is running, a
- * drain is on) stays and the reason says so: asight does not stop it by itself (W28, the entries-kind branch's rule from day one). */
+ * verified-archive cache (`kernel-archive/`) — the whole thing trocar's `on` placed or downloaded. A file the system still holds (the kernel is running, a
+ * drain is on) stays and the reason says so: trocar does not stop it by itself (W28, the entries-kind branch's rule from day one). */
 const removeKernelCopy = (exe, fs) => {
   const dir = path.dirname(exe)
   try {
@@ -94,7 +94,7 @@ const removeKernelCopy = (exe, fs) => {
     try { fs.rmSync(path.join(path.dirname(dir), 'kernel-archive'), { recursive: true, force: true }) } catch (e) { return { ok: false, reason: `${exe} was removed, but the verified-archive cache beside it could not be (${errText(e)}); remove it by hand` } }
     return { ok: true }
   } catch (e) {
-    return { ok: false, reason: `${exe} could not be removed (${errText(e)}); a kernel still running holds it; stop it (asight off --now), then run this again` }
+    return { ok: false, reason: `${exe} could not be removed (${errText(e)}); a kernel still running holds it; stop it (trocar off --now), then run this again` }
   }
 }
 
@@ -120,19 +120,19 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   const leftEntries = [] // the entries step 1 could not undo: they stay in the manifest and still name what they named
   const rm = (p) => { sweepTemps(p, fs); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); out.removed.push(p) } }
   const fail = (item, reason) => { out.left.push({ path: item.path, harness: item.harness ?? null, result: 'error', reason }) }
-  // What is removed, rewritten or rebuilt at a path the manifest names is inside ~/.asight, where asight puts its bundles, trust files and CA: a manifest that names another
+  // What is removed, rewritten or rebuilt at a path the manifest names is inside ~/.trocar, where trocar puts its bundles, trust files and CA: a manifest that names another
   // path is damaged or was edited, and following it would take the user's files (audit semantics 6). The item stays in the manifest, so the next run says it again.
-  const outside = (f) => (strictlyInside(asightHome(home), f.path, fs) ? null : `${f.path} is not inside ${asightHome(home)}, so it is not asight's to remove or rewrite (the install manifest names a file asight does not make there: it is damaged or was edited); it is left as it is — correct that item in ${path.join(dir, 'install-manifest.json')} by hand, then run it again`)
-  // an entry that could not be undone: why, and — when asight kept a copy of the file as it was — the one command that puts it back and what that costs (R2:
+  const outside = (f) => (strictlyInside(trocarHome(home), f.path, fs) ? null : `${f.path} is not inside ${trocarHome(home)}, so it is not trocar's to remove or rewrite (the install manifest names a file trocar does not make there: it is damaged or was edited); it is left as it is — correct that item in ${path.join(dir, 'install-manifest.json')} by hand, then run it again`)
+  // an entry that could not be undone: why, and — when trocar kept a copy of the file as it was — the one command that puts it back and what that costs (R2:
   // "给出备份路径、手动 cp 命令和会丢掉什么"); the receipt prints `reason`, `--json` also carries `backup` and `restore`
   const leftRow = (e, why, result) => {
     const back = restoreByHand(e)
-    return { path: e.path, harness: e.harness, result, reason: back ? `${why}. The file as it was before asight is kept at ${back.backup}; by hand: ${back.command} (${back.loses})` : why, ...(back ? { backup: back.backup, restore: back.command } : {}) }
+    return { path: e.path, harness: e.harness, result, reason: back ? `${why}. The file as it was before trocar is kept at ${back.backup}; by hand: ${back.command} (${back.loses})` : why, ...(back ? { backup: back.backup, restore: back.command } : {}) }
   }
 
   // ── 1 and 4: entries ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
   // A file entry (json-key, text, proxy-entry, trust-entry) goes by the file rule; the Windows collector's tool entries by their own verbs
-  // (src/off/win32.mjs — the same questions the arch module asks, held equal by test). The kernel's copy is a file asight owns with a rule
+  // (src/off/win32.mjs — the same questions the arch module asks, held equal by test). The kernel's copy is a file trocar owns with a rule
   // of its own: `off` keeps it while it drains (removing it would cut agents mid-connection; a later run takes it when the drain is over),
   // `uninstall` removes it, and a Windows that holds it (EBUSY / EPERM: it is running) is reported, not papered over (4.8 §4.2).
   const undoWinItem = (e) => {
@@ -143,7 +143,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     }
     if (e.kind === 'scheduled-task') {
       const r = undoScheduledTask({ uninstall: dropCa, prior: e.prior ?? null, run: exec, env })
-      return { path: e.path ?? '\\asight\\collector', harness: e.harness, result: r.ok ? (r.task === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.ok ? {} : { reason: [r.reason, r.runKeyReason].filter(Boolean).join('; ') }) }
+      return { path: e.path ?? '\\trocar\\collector', harness: e.harness, result: r.ok ? (r.task === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.ok ? {} : { reason: [r.reason, r.runKeyReason].filter(Boolean).join('; ') }) }
     }
     if (e.kind === 'forwarder-binary') { // uninstall only (the entries filter keeps it out of an `off`)
       const file = e.path || e.real_path
@@ -155,11 +155,11 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   const undoOne = (e) => {
     let r
     try { r = undoWinItem(e) } catch (err) { r = { path: e.path, harness: e.harness, result: 'error', reason: String((err && err.message) || err) } }
-    const row = { ...r, backup: e.backup ?? null, what: describeEntry(e) } // `what`: what asight put there (the key and value, the block, the line), for a message
+    const row = { ...r, backup: e.backup ?? null, what: describeEntry(e) } // `what`: what trocar put there (the key and value, the block, the line), for a message
     out.results.push(row)
     if (UNDO_LEFT.has(r.result)) { // stays in the manifest, with its backup: the only copy of what the user had
       leftEntries.push(e)
-      out.left.push(leftRow(e, r.reason || `${e.path}: asight cannot read it; asight's ${describeEntry(e)} may still be in it`, r.result))
+      out.left.push(leftRow(e, r.reason || `${e.path}: trocar cannot read it; trocar's ${describeEntry(e)} may still be in it`, r.result))
       if (e.backup) row.backup_kept = e.backup
       return
     }
@@ -170,7 +170,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     try { dropBackup(e.backup, fs) } catch (err) { row.backup_error = errText(err); keep(`${e.backup}, the backup of ${e.path}, could not be removed (${errText(err)}); remove it by hand`) }
   }
   const kernelCopies = manifest.entries.filter((e) => inScope(e.harness) && e.kind === 'forwarder-binary')
-  if (!dropCa && kernelCopies.length) out.notes.push(`the kernel's copy (${kernelCopies.map((e) => e.path).join(', ')}) is kept while connections drain from it: it is not undone by \`off\`, \`asight uninstall\` removes it, \`asight off --now\` stops the drain`)
+  if (!dropCa && kernelCopies.length) out.notes.push(`the kernel's copy (${kernelCopies.map((e) => e.path).join(', ')}) is kept while connections drain from it: it is not undone by \`off\`, \`trocar uninstall\` removes it, \`trocar off --now\` stops the drain`)
   const kept = [...manifest.entries, ...manifest.files].filter((x) => spared(x) && (x.harness == null ? ids == null : inScope(x.harness))).map(keyWhere)
   out.install_items = [...new Set(kept)] // what install wrote, for `--json` (附录 C.2): §3.4's sample receipt names no count of it, so the human text says nothing here
 
@@ -178,7 +178,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   const config = (e) => !((e.kind === 'text' || e.kind === 'trust-entry') && e.format !== 'dotenv-block') // step 1; the rest are step 4's (json-key and proxy-entry are config, a text/trust block is config only as dotenv)
   const originals = entries.filter(config) // step 1's, as they are now: undoing takes them out of the manifest, and a bundle is judged after that
   for (const e of entries) if (config(e)) undoOne(e)
-  // D48②: a key the user set while asight was on keeps the user's value, and the old line asight put out of effect stays so (journal.mjs `prior_left`).
+  // D48②: a key the user set while trocar was on keeps the user's value, and the old line trocar put out of effect stays so (journal.mjs `prior_left`).
   // Its line number is the one in the file as step 1 leaves it: another entry of the same file, undone after it, may have taken lines out above it.
   for (const row of out.results) {
     if (!row.prior_left) continue
@@ -201,7 +201,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   if (bundles.length || extras.length) {
     const t = await table()
     const ca = (() => {
-      const file = (manifest.files.find((f) => f.role === 'ca-cert') || {}).path || path.join(dir, 'ca', 'asight-ca.pem')
+      const file = (manifest.files.find((f) => f.role === 'ca-cert') || {}).path || path.join(dir, 'ca', 'trocar-ca.pem')
       try { const b = certBlocks(fs.readFileSync(file, 'utf8')); return b.length ? { fp: b[0].fp, error: null } : { fp: null, error: `${file} holds no certificate` } } catch (e) { return { fp: null, error: errText(e) } }
     })()
     const unsigned = (harness) => unsignedOf(judged, t.list, harness, since.get(harness))
@@ -232,12 +232,12 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       const unknown = byHarness || pids.length ? [] : unknownEnv(f.harness)
       return unknown.length ? { why: `the environment of pid ${unknown.join(', ')}, a running ${f.harness} process or one started by it, cannot be read, so whether it holds this file is not known` } : { pids }
     }
-    // `f` kept, without the asight CA: stripped in place (atomic). { ok } done (or already so); { holds } it still holds the CA — it cannot be
+    // `f` kept, without the trocar CA: stripped in place (atomic). { ok } done (or already so); { holds } it still holds the CA — it cannot be
     // rewritten, or the CA cannot be named; { gone } it cannot be read, with the errno
     const strip = (f) => {
       let cur
       try { cur = fs.readFileSync(f.path, 'utf8') } catch (e) { return { gone: errText(e) } }
-      // no CA fingerprint to look for: an uninstall's step 3 already removed asight-ca.pem. A file that is byte for byte what an earlier run
+      // no CA fingerprint to look for: an uninstall's step 3 already removed trocar-ca.pem. A file that is byte for byte what an earlier run
       // wrote without the CA (`without_ca`, and the sha it recorded then) is still so, so the next run judges it by the same rule (4.6 第 2 步)
       if (!ca.fp) return f.without_ca === true && f.sha256 === sha256(Buffer.from(cur)) ? { ok: true } : { holds: ca.error }
       const s = stripCert(cur, ca.fp)
@@ -276,7 +276,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
         if (e.harness !== f.harness || leftEntries.includes(e) || !namesFile(e, f.path)) continue
         leftEntries.push(e)
         if (!manifest.entries.includes(e)) manifest.entries.push(e)
-        out.left.push(leftRow(e, `${e.path} still names ${f.path}, the bundle asight made for ${f.harness}, though its entry was reported as undone; asight did not take the bundle away under it: edit the file so it no longer names it`, 'left-text'))
+        out.left.push(leftRow(e, `${e.path} still names ${f.path}, the bundle trocar made for ${f.harness}, though its entry was reported as undone; trocar did not take the bundle away under it: edit the file so it no longer names it`, 'left-text'))
       }
       return viaLeft(f)
     }
@@ -290,7 +290,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       if (h.pids && !h.pids.length && !entry.length) { // nobody holds it: removed whatever its state (a directory too)
         try { rm(f.path); without(manifest.files, f) } catch (e) {
           out.kept_bundles.push({ path: f.path, harness: f.harness, pids: [], holds_ca: true, error: errText(e) })
-          fail(f, `${f.path} is held by no running process but could not be removed (${errText(e)}); it still holds the asight CA — fix the file, then run it again`)
+          fail(f, `${f.path} is held by no running process but could not be removed (${errText(e)}); it still holds the trocar CA — fix the file, then run it again`)
         }
         return
       }
@@ -299,12 +299,12 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       const used = [...(keep.pids.length ? [`a running process may have loaded it (pid ${keep.pids.join(', ')})`] : []), ...(entry.length ? [`${entry.join(', ')}, which could not be undone, still points at it`] : [])].join(' and ') || 'a running process may have loaded it (pid unknown)'
       if (s.ok) {
         out.kept_bundles.push(keep)
-        if (h.why) fail(f, `${f.path} is kept, without the asight CA, because whether a running process holds it is not known (${h.why}); run it again`)
-        else if (entry.length) fail(f, `${f.path} is kept, without the asight CA, because ${used}: fix that entry, then run it again`)
+        if (h.why) fail(f, `${f.path} is kept, without the trocar CA, because whether a running process holds it is not known (${h.why}); run it again`)
+        else if (entry.length) fail(f, `${f.path} is kept, without the trocar CA, because ${used}: fix that entry, then run it again`)
       } else if (s.holds || s.gone !== 'ENOENT') { // unreadable, or unwritable: it still holds the CA
         const why = s.holds || s.gone
         out.kept_bundles.push({ ...keep, holds_ca: true, error: why })
-        fail(f, `${f.path} still holds the asight CA: it could not be rewritten without it (${why}), and ${used}; it is kept as it is — fix the file, then run it again`)
+        fail(f, `${f.path} still holds the trocar CA: it could not be rewritten without it (${why}), and ${used}; it is kept as it is — fix the file, then run it again`)
       } else if (!byHarness) without(manifest.files, f) // an extra file that is gone only warns where it is named: nothing to keep
       else if (h.pids || entry.length) await rebuild(f, keep)
       else { out.kept_bundles.push(keep); fail(f, `${f.path} is gone, and whether a running process uses it is not known (${h.why}), so it was not rebuilt`) }
@@ -321,17 +321,17 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     try {
       const r = OWNED_UNDO[f.role](f, fs)
       if (r.result === 'error') { fail(f, r.reason); continue }
-      if (r.result === 'kept-changed') out.notes.push(`${f.path}, the ${f.role} asight created, was changed while asight was on: it holds the user's settings now, so it is kept (asight's own key in it was undone by its entry)`)
+      if (r.result === 'kept-changed') out.notes.push(`${f.path}, the ${f.role} trocar created, was changed while trocar was on: it holds the user's settings now, so it is kept (trocar's own key in it was undone by its entry)`)
       if (r.result === 'removed') out.removed.push(r.path)
-      if (r.changed) out.changed.push({ harness: f.harness, path: f.path, role: f.role }) // not what asight wrote: removed all the same, and said
+      if (r.changed) out.changed.push({ harness: f.harness, path: f.path, role: f.role }) // not what trocar wrote: removed all the same, and said
       without(manifest.files, f)
-    } catch (err) { fail(f, `${f.path}, asight's ${f.role}, could not be removed: ${String((err && err.message) || err)}`) }
+    } catch (err) { fail(f, `${f.path}, trocar's ${f.role}, could not be removed: ${String((err && err.message) || err)}`) }
   }
-  for (const w of manifest.watched || []) { // what an agent wrote because of asight's file: reported, never deleted
+  for (const w of manifest.watched || []) { // what an agent wrote because of trocar's file: reported, never deleted
     if (inScope(w.harness) && !w.existed_before && fs.existsSync(w.path)) out.residue.push({ harness: w.harness, path: w.path, why: w.why })
   }
 
-  // ── 5: who may still trust asight (never restarted) ───────────────────────────────────────────────────────────────────────────────
+  // ── 5: who may still trust trocar (never restarted) ───────────────────────────────────────────────────────────────────────────────
   if (touched.size) {
     const t = await table()
     out.procs_error = t.error
@@ -339,7 +339,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     for (const p of t.list) for (const h of harnessesOf(judged, p)) { // a process two harnesses claim may trust each one's file (D50: one more, never one less)
       const l = touched.has(h) ? judged[h] : null
       if (!l || !mayHaveRead(p, l, since.get(h))) continue
-      // it never read asight's file — told by its environment, where the OS shows one (on macOS and Windows a process that may have read it is listed)
+      // it never read trocar's file — told by its environment, where the OS shows one (on macOS and Windows a process that may have read it is listed)
       if (l.until_environ && p.envRead !== false) { const v = (processEnv(p) || new Map()).get(l.until_environ); if (!(typeof v === 'string' && v.startsWith(dir + path.sep))) continue }
       out.still_trusting.push({ pid: p.pid, harness: h, until: UNTIL_VALUES.includes(l.until) ? l.until : 'restart' })
     }
@@ -355,7 +355,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   if (windowed.length) {
     const t = await table()
     out.holders = t.error ? null : holdersOf({ manifest, procs: t.list, agentList: home ? readAgentList({ home, fs }) : null }).filter((x) => inScope(x.harness))
-    if (t.error) out.notes.push(`the process table could not be read (${t.error}), so which programs may still be connected through asight is not known`)
+    if (t.error) out.notes.push(`the process table could not be read (${t.error}), so which programs may still be connected through trocar is not known`)
   }
 
   // a harness with nothing left in the manifest needs no liveness and no watched path any more (a model record keeps its window, above)
@@ -376,13 +376,13 @@ export async function undoRootKeys({ dir, manifest, custody = null, fs = nodeFs 
   for (const k of manifest.entries.filter((e) => e.kind === 'root-key')) {
     const where = keyWhere(k)
     try {
-      if (!custody || typeof custody.remove !== 'function') throw new Error('this asight has no custody backend to remove it with')
+      if (!custody || typeof custody.remove !== 'function') throw new Error('this trocar has no custody backend to remove it with')
       // the custody's contract (custody-cli.mjs): { removed } | 'unavailable' (no GUI session, a locked keychain). Only an answer of that shape is
       // a removal; anything else keeps the record and says so — never a key left behind with no record and no line (invariant 5, D38)
       const r = await custody.remove(k.custody)
-      if (!r || typeof r !== 'object' || typeof r.removed !== 'boolean') throw new Error(r === 'unavailable' ? 'the key custody is not reachable now (macOS: no graphical login session, or the keychain is locked); run asight uninstall again in a terminal of that session' : `the key custody answered ${JSON.stringify(r)}`)
+      if (!r || typeof r !== 'object' || typeof r.removed !== 'boolean') throw new Error(r === 'unavailable' ? 'the key custody is not reachable now (macOS: no graphical login session, or the keychain is locked); run trocar uninstall again in a terminal of that session' : `the key custody answered ${JSON.stringify(r)}`)
       without(manifest.entries, k); out.removed.push(where)
-    } catch (e) { out.left.push({ path: where, harness: null, result: 'error', reason: `${where}, the asight root's private key, could not be removed (${errText(e)}); by hand: ${undoByHand(k)}` }) }
+    } catch (e) { out.left.push({ path: where, harness: null, result: 'error', reason: `${where}, the trocar root's private key, could not be removed (${errText(e)}); by hand: ${undoByHand(k)}` }) }
   }
   if (out.removed.length) saveManifest(dir, manifest, fs)
   return out

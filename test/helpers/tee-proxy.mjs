@@ -23,7 +23,7 @@ export async function startTeeProxy({ upstreamPort, dir, flow = {}, wsTerminal, 
   let n = 0;
   const sockets = new Set();
   const server = net.createServer((client) => {
-    const fl = { id: `flow-${++n}`, host: flow.host || 'relay.asight.test', scheme: 'https', dst: { address: '127.0.0.1', port: upstreamPort, family: 4 },
+    const fl = { id: `flow-${++n}`, host: flow.host || 'relay.trocar.test', scheme: 'https', dst: { address: '127.0.0.1', port: upstreamPort, family: 4 },
       proc: flow.proc || { pid: 1, exe: '/x/agent', agent: null } };
     // wsTerminal: the harness's terminal-message patterns, handed to the WebSocket recorder after a 101
     // (4.6 §传输与帧级记录); without it a call runs to the next client message or the end of the connection.

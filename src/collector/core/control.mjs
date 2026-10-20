@@ -1,5 +1,5 @@
 // control.mjs — the collector daemon's local control plane (RFC 4.6 §控制面): JSON over HTTP on
-// $XDG_RUNTIME_DIR/asight/collector.sock, socket 0600 in a 0700 directory, so only the operator (and
+// $XDG_RUNTIME_DIR/trocar/collector.sock, socket 0600 in a 0700 directory, so only the operator (and
 // root) can reach it. Nothing here listens on TCP: the 4.4 server bridge stays off until per-user
 // isolation exists, because loopback ports do not separate users (4.4 OPEN, D36 residual risk).
 // A live answer on the socket means another daemon owns this user's collector → refuse to start.
@@ -12,7 +12,7 @@ import path from 'node:path'
 import { isPipePath } from '../../off/control-client.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../off/token-header.mjs'
 
-// The client side (controlSocketPath, controlRequest, controlEndpointFor) is src/off/control-client.mjs: `asight off` asks the daemon without this directory (1.6 R3).
+// The client side (controlSocketPath, controlRequest, controlEndpointFor) is src/off/control-client.mjs: `trocar off` asks the daemon without this directory (1.6 R3).
 export { controlSocketPath, controlRequest, controlEndpointFor } from '../../off/control-client.mjs'
 
 const PROBE_MS = 2000 // a daemon that serves answers /status without touching disk; more than this means it does not serve
@@ -41,9 +41,9 @@ async function probe(socketPath, token) {
   })
 }
 
-// Windows (RFC 4.8 §7 控制面; W26): the daemon listens on a named pipe `\\.\pipe\asight-<16 hex>` and every request carries the secret of `control.json` in this header. A pipe has no file mode to keep other
+// Windows (RFC 4.8 §7 控制面; W26): the daemon listens on a named pipe `\\.\pipe\trocar-<16 hex>` and every request carries the secret of `control.json` in this header. A pipe has no file mode to keep other
 // users out, so the secret is what does: a request without it, or with another one, is answered 401 before a route is looked up (nothing is said about which routes exist).
-// The header name and the pipe shape are src/off's (control-client.mjs: one fact, one place; the standalone asight-off reads them too); re-exported because the tests import the name from here.
+// The header name and the pipe shape are src/off's (control-client.mjs: one fact, one place; the standalone trocar-off reads them too); re-exported because the tests import the name from here.
 export { CONTROL_TOKEN_HEADER }
 const sameToken = (want, got) => typeof got === 'string' && timingSafeEqual(createHash('sha256').update(want).digest(), createHash('sha256').update(got).digest())
 
@@ -51,25 +51,25 @@ const send = (res, status, obj) => { const b = JSON.stringify(obj); res.writeHea
 
 /** The flag startControlServer's error carries when another daemon already answers on the control channel: the one place that names it (src/cli/daemon.mjs
  *  reads it). Not `code`: a code of its own would enter the records as a failure code outside D38's closed sets, and this is not a failure at all. */
-export const DAEMON_ALREADY_UP = 'asightDaemonAlreadyUp'
+export const DAEMON_ALREADY_UP = 'trocarDaemonAlreadyUp'
 
 /** The flag startControlServer's error carries when the control endpoint is held by something that does not answer (probe's 'busy'): this IS a failure
  *  — src/cli/daemon.mjs records it under the code of the same name and exits non-zero, so the platform retries at its own throttle. */
-export const DAEMON_ENDPOINT_BUSY = 'asightControlEndpointHeld'
+export const DAEMON_ENDPOINT_BUSY = 'trocarControlEndpointHeld'
 
 // token: the secret a request must carry (CONTROL_TOKEN_HEADER); null asks for none (the unix socket of Linux, which the file modes keep to the operator).
 // pipe: the socket path is a Windows named pipe (the default says so from the path): no directory to make, no file mode to set, no file to remove. A unix socket path may be given with `pipe: true` by a test.
 export async function startControlServer({ socketPath, routes, maxBody = 64 * 1024, token = null, pipe = isPipePath(socketPath) }) {
   if (token !== null && (typeof token !== 'string' || token.length < 16)) throw new TypeError('the control token is a string of at least 16 characters, or null')
   if (!pipe && path.dirname(socketPath) !== os.tmpdir().replace(/\/+$/, '')) {
-    // The directory is asight's own (Linux's $XDG_RUNTIME_DIR/asight): made 0700 and hardened again on every start. A socket directly under the
+    // The directory is trocar's own (Linux's $XDG_RUNTIME_DIR/trocar): made 0700 and hardened again on every start. A socket directly under the
     // OS-managed per-user $TMPDIR (darwin's shape, 4.9 §7 — macOS keeps it 0700 itself) is the one directory we must NOT chmod: the system refuses it
     // (EPERM), which killed the launchd-spawned daemon on a real machine (2026-10-11; the regression cell is control.test.mjs's tmpdir test).
     fs.mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 })
     fs.chmodSync(path.dirname(socketPath), 0o700)
   }
   const state = await probe(socketPath, token)
-  // D62 ⑥: the code is what tells the CLI this is not a failure but a daemon already in place. `asight daemon` then exits 0, because a non-zero exit
+  // D62 ⑥: the code is what tells the CLI this is not a failure but a daemon already in place. `trocar daemon` then exits 0, because a non-zero exit
   // is retried by the platform for as long as the other daemon lives (launchd's KeepAlive {SuccessfulExit: false} every ThrottleInterval, the Windows
   // supervisor on its backoff): a hidden loop costing CPU with nothing to show for it.
   if (state === 'live') throw Object.assign(new Error(`another collector daemon is answering on ${socketPath}`), { [DAEMON_ALREADY_UP]: true })

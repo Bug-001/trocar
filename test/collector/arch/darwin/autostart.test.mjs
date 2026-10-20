@@ -23,10 +23,10 @@ import { startControlServer, CONTROL_TOKEN_HEADER } from '../../../../src/collec
 
 // ---- W26 (the 4.8 mechanism, 4.9 §7): the control plane ----------------------------------------------------------------------------------------
 
-test('W26 the socket name is asight- + 16 random hex digits + .sock under the user\'s tmp directory, the token is 64; two installs get different ones; control.json is made once, read back, and is 0600 — a real permission on darwin', () => {
-  const a = tmpDir('asight-ctl-'); const b = tmpDir('asight-ctl-'); const ta = tmpDir('asight-tmp-'); const tb = tmpDir('asight-tmp-')
+test('W26 the socket name is trocar- + 16 random hex digits + .sock under the user\'s tmp directory, the token is 64; two installs get different ones; control.json is made once, read back, and is 0600 — a real permission on darwin', () => {
+  const a = tmpDir('trocar-ctl-'); const b = tmpDir('trocar-ctl-'); const ta = tmpDir('trocar-tmp-'); const tb = tmpDir('trocar-tmp-')
   const ea = controlEndpoint({ dir: a, tmp: ta }); const eb = controlEndpoint({ dir: b, tmp: tb })
-  assert.match(path.basename(ea.path), /^asight-[0-9a-f]{16}\.sock$/)
+  assert.match(path.basename(ea.path), /^trocar-[0-9a-f]{16}\.sock$/)
   assert.ok(ea.path.startsWith(path.join(ta, SOCKET_PREFIX)))
   assert.equal(path.dirname(ea.path), ta, 'directly under the tmp directory, no subdirectory of it')
   assert.equal(path.basename(ea.path).endsWith(SOCKET_SUFFIX), true)
@@ -41,7 +41,7 @@ test('W26 the socket name is asight- + 16 random hex digits + .sock under the us
 })
 
 test('W26 a reader that finds no control.json says so and writes nothing; a control.json that is not an endpoint is replaced by the writer and is an error to the reader', () => {
-  const d = tmpDir('asight-ctl-'); const t = tmpDir('asight-tmp-')
+  const d = tmpDir('trocar-ctl-'); const t = tmpDir('trocar-tmp-')
   assert.equal(readControlEndpoint({ dir: d, tmp: t }), null, 'absent is null, not an error')
   assert.deepEqual(fs.readdirSync(d), [], 'a reader never creates it')
   for (const bad of ['', '{', '[]', JSON.stringify({ path: path.join(t, 'other.sock'), token: 'x'.repeat(64) }), JSON.stringify({ path: path.join(t, `${SOCKET_PREFIX}0123456789abcdef${SOCKET_SUFFIX}`), token: 'short' }), JSON.stringify({ path: `/tmp/${SOCKET_PREFIX}0123456789abcdef${SOCKET_SUFFIX}`, token: 'f'.repeat(64) })]) {
@@ -49,13 +49,13 @@ test('W26 a reader that finds no control.json says so and writes nothing; a cont
     const r = readControlEndpoint({ dir: d, tmp: t })
     assert.ok(r && typeof r.error === 'string' && r.error.length > 0, `the reader names the problem for ${JSON.stringify(bad)}`)
     const e = controlEndpoint({ dir: d, tmp: t })
-    assert.match(path.basename(e.path), /^asight-[0-9a-f]{16}\.sock$/, 'the writer makes a good one')
+    assert.match(path.basename(e.path), /^trocar-[0-9a-f]{16}\.sock$/, 'the writer makes a good one')
     assert.deepEqual(readControlEndpoint({ dir: d, tmp: t }), e)
   }
 })
 
 test('W26 a control.json that is not JSON is reported without any of its text: the parser\'s message quotes the characters around the error, and a damaged file may have the token in them', () => {
-  const d = tmpDir('asight-ctl-'); const t = tmpDir('asight-tmp-')
+  const d = tmpDir('trocar-ctl-'); const t = tmpDir('trocar-tmp-')
   const secret = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90'
   for (const damaged of [`{"path":"${path.join(t, `${SOCKET_PREFIX}0123456789abcdef${SOCKET_SUFFIX}`)}","token":${secret}}`, `{"token":"${secret}" "x"}`, `${secret}`, `{"token":"${secret.slice(0, 30)}`]) {
     fs.writeFileSync(path.join(d, CONTROL_FILE), damaged)
@@ -66,13 +66,13 @@ test('W26 a control.json that is not JSON is reported without any of its text: t
 })
 
 test('W26 two starts at the same moment end up with one endpoint: the one that linked first wins and the other reads it; a file system that cannot link still gets its file', () => {
-  const d = tmpDir('asight-ctl-'); const t = tmpDir('asight-tmp-')
+  const d = tmpDir('trocar-ctl-'); const t = tmpDir('trocar-tmp-')
   const winner = { path: path.join(t, `${SOCKET_PREFIX}aaaaaaaaaaaaaaaa${SOCKET_SUFFIX}`), token: 'b'.repeat(64) }
   const racing = { ...fs, linkSync: (from, to) => { fs.writeFileSync(to, `${JSON.stringify(winner)}\n`); throw Object.assign(new Error('EEXIST: file already exists'), { code: 'EEXIST' }) } }
   assert.deepEqual(controlEndpoint({ dir: d, tmp: t, fs: racing }), winner, 'the loser returns what the winner wrote')
   assert.deepEqual(readControlEndpoint({ dir: d, tmp: t }), winner)
   assert.deepEqual(fs.readdirSync(d), [CONTROL_FILE], 'and leaves no temp file')
-  const e = tmpDir('asight-ctl-'); const te = tmpDir('asight-tmp-')
+  const e = tmpDir('trocar-ctl-'); const te = tmpDir('trocar-tmp-')
   const noLinks = { ...fs, linkSync: () => { throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }) } }
   const made = controlEndpoint({ dir: e, tmp: te, fs: noLinks })
   assert.deepEqual(readControlEndpoint({ dir: e, tmp: te }), made)
@@ -81,14 +81,14 @@ test('W26 two starts at the same moment end up with one endpoint: the one that l
 
 test('W26 the names come from the injected random source, 8 bytes for the socket name and 32 for the token, and the socket path is the tmp directory\'s own child', () => {
   const asked = []
-  const t = tmpDir('asight-tmp-')
-  const e = controlEndpoint({ dir: tmpDir('asight-ctl-'), tmp: t, randomBytes: (n) => { asked.push(n); return Buffer.alloc(n, asked.length) } })
+  const t = tmpDir('trocar-tmp-')
+  const e = controlEndpoint({ dir: tmpDir('trocar-ctl-'), tmp: t, randomBytes: (n) => { asked.push(n); return Buffer.alloc(n, asked.length) } })
   assert.deepEqual(asked, [8, 32])
   assert.equal(e.path, path.join(t, `${SOCKET_PREFIX}0101010101010101${SOCKET_SUFFIX}`))
   assert.equal(e.token, '02'.repeat(32))
 })
 
-/** One request to a control server on a unix socket, with the headers given; → { status, body }. (The client of `asight off` is the CLI's; this is the least a test needs.) */
+/** One request to a control server on a unix socket, with the headers given; → { status, body }. (The client of `trocar off` is the CLI's; this is the least a test needs.) */
 const call = (socketPath, headers = {}, p = '/status') => new Promise((resolve, reject) => {
   const req = http.request({ socketPath, method: 'GET', path: p, headers }, (res) => {
     const chunks = []
@@ -102,7 +102,7 @@ const call = (socketPath, headers = {}, p = '/status') => new Promise((resolve, 
 test('W26 a request without the token is refused and never reaches a route; a wrong one too; the right one is answered — the token is checked first, on the unix socket as on the pipe', async () => {
   const dir = tmpDir('as-')
   // the socket goes directly under the user's tmp directory — the product's own shape (4.9 §7), and the only one that fits darwin's 104-byte sun_path:
-  // a deeper test-only nest leaks the guard's asight-run-<run> level into the path, macOS bind() silently truncates the name, and the server's chmod misses (ENOENT)
+  // a deeper test-only nest leaks the guard's trocar-run-<run> level into the path, macOS bind() silently truncates the name, and the server's chmod misses (ENOENT)
   const { path: socketPath, token } = controlEndpoint({ dir })
   const reached = []
   const srv = await startControlServer({ socketPath, token, routes: { 'GET /status': async () => { reached.push('status'); return { ok: 1 } }, 'POST /off': async () => { reached.push('off'); return {} } } })
@@ -117,7 +117,7 @@ test('W26 a request without the token is refused and never reaches a route; a wr
     assert.deepEqual(reached, [], 'no route ran for any of them')
     assert.deepEqual(await call(socketPath, { [CONTROL_TOKEN_HEADER]: token }), { status: 200, body: { ok: 1 } })
     assert.deepEqual(reached, ['status'])
-    assert.equal(CONTROL_TOKEN_HEADER, 'x-asight-token')
+    assert.equal(CONTROL_TOKEN_HEADER, 'x-trocar-token')
   } finally { await srv.close() }
 })
 
@@ -209,8 +209,8 @@ test('W24 `on` on darwin refuses a Node below 22.15 (4.9 §7, MA5: a root added 
 // ---- W24 (the 4.8 shape under launchd, 4.9 §4): the LaunchAgent ---------------------------------------------------------------------------------
 
 const NODE = '/usr/local/bin/node'
-const SCRIPT = '/Users/ada/.npm-global/lib/node_modules/asight/bin/asight.mjs'
-const plist = () => plistXml({ node: NODE, asight: SCRIPT })
+const SCRIPT = '/Users/ada/.npm-global/lib/node_modules/trocar/bin/trocar.mjs'
+const plist = () => plistXml({ node: NODE, trocar: SCRIPT })
 const inner = (x, tag) => { const m = new RegExp(`<${tag}(?: [^>]*)?>([\\s\\S]*?)</${tag}>`).exec(x); return m ? m[1] : null }
 /** Is it well formed in the one sense that matters here: every element opened is closed, in order? (There is no XML parser in Node; a typo in a tag name is what this catches.) */
 function balanced(x) {
@@ -222,38 +222,38 @@ function balanced(x) {
   return stack.length === 0
 }
 
-test('W24 the plist has the fields of 4.9 §4: Label com.asight.collector, ProgramArguments = node <asight> daemon (no --supervise: launchd\'s KeepAlive is the restart), RunAtLoad and KeepAlive both true', () => {
+test('W24 the plist has the fields of 4.9 §4: Label com.trocar.collector, ProgramArguments = node <trocar> daemon (no --supervise: launchd\'s KeepAlive is the restart), RunAtLoad and KeepAlive both true', () => {
   const x = plist()
   assert.ok(x.startsWith('<?xml version="1.0" encoding="UTF-8"?>'), 'a plain UTF-8 plist (launchctl reads it as it declares; there is no Windows code-page dance to make a copy of)')
   assert.match(x, /^<!DOCTYPE plist PUBLIC "-\/\/Apple\/\/DTD PLIST 1\.0\/\/EN" "http:\/\/www\.apple\.com\/DTDs\/PropertyList-1\.0\.dtd">$/m)
   assert.ok(balanced(x), 'every element is closed')
   assert.match(x, /<plist version="1\.0">/)
-  assert.match(x, /<key>Label<\/key>\s*<string>com\.asight\.collector<\/string>/)
-  assert.deepEqual([...inner(x, 'array').matchAll(/<string>([\s\S]*?)<\/string>/g)].map((m) => m[1]), [NODE, SCRIPT, 'daemon'], 'node <asight> daemon, and nothing more')
+  assert.match(x, /<key>Label<\/key>\s*<string>com\.trocar\.collector<\/string>/)
+  assert.deepEqual([...inner(x, 'array').matchAll(/<string>([\s\S]*?)<\/string>/g)].map((m) => m[1]), [NODE, SCRIPT, 'daemon'], 'node <trocar> daemon, and nothing more')
   assert.doesNotMatch(x, /--supervise/, 'the supervisor flag went with the supervisor parent (4.9 §4)')
   assert.match(x, /<key>RunAtLoad<\/key>\s*<true\/>/, 'launchd starts the daemon at every login')
   assert.match(x, /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>\s*<\/dict>/, 'launchd brings a crashed daemon back (no supervisor), but not one that drained after off and exited 0')
-  // D62 ⑥: asight writes NO ThrottleInterval. Under KeepAlive {SuccessfulExit: false} a smaller throttle is the respawn interval of a daemon that
+  // D62 ⑥: trocar writes NO ThrottleInterval. Under KeepAlive {SuccessfulExit: false} a smaller throttle is the respawn interval of a daemon that
   // crashes at start (every second = 15-25 % of a core, against about 2 % at launchd's 10 s default), and no `on` needs it any more: an `off` with no
   // names leaves the daemon running, so `on` asks the one that is there instead of having launchd spawn one.
-  assert.doesNotMatch(x, /ThrottleInterval/, 'launchd\'s own throttle is what bounds a crash loop: asight does not shorten it (D62 ⑥)')
+  assert.doesNotMatch(x, /ThrottleInterval/, 'launchd\'s own throttle is what bounds a crash loop: trocar does not shorten it (D62 ⑥)')
   assert.doesNotMatch(x, /EnvironmentVariables/, 'no environment needed: the daemon\'s env is empty unless install says otherwise')
-  const withEnv = plistXml({ node: NODE, asight: SCRIPT, env: { NODE_EXTRA_CA_CERTS: '/usr/local/etc/corp-ca.pem' } })
+  const withEnv = plistXml({ node: NODE, trocar: SCRIPT, env: { NODE_EXTRA_CA_CERTS: '/usr/local/etc/corp-ca.pem' } })
   assert.ok(balanced(withEnv))
   assert.match(withEnv, /<key>EnvironmentVariables<\/key>\s*<dict>\s*<key>NODE_EXTRA_CA_CERTS<\/key>\s*<string>\/usr\/local\/etc\/corp-ca\.pem<\/string>\s*<\/dict>/, 'what install decides the daemon needs is carried (the linux unit\'s Environment=; a launchd job starts with none of the shell\'s exports)')
-  assert.equal(plistPath('/h'), path.join('/h', 'Library', 'LaunchAgents', 'com.asight.collector.plist'))
-  assert.equal(PLIST_FILE, 'com.asight.collector.plist')
-  assert.equal(AGENT_LABEL, 'com.asight.collector')
+  assert.equal(plistPath('/h'), path.join('/h', 'Library', 'LaunchAgents', 'com.trocar.collector.plist'))
+  assert.equal(PLIST_FILE, 'com.trocar.collector.plist')
+  assert.equal(AGENT_LABEL, 'com.trocar.collector')
 })
 
 test('W24 what goes into the plist is escaped or refused: & < > are escaped, a control character, a non-string or a bad env key is a bug of the caller (a quote in a path is harmless plist element content, unlike the Windows command line)', () => {
-  const x = plistXml({ node: '/opt/R&D/bin/node', asight: '/Users/ada/a>b/asight.mjs' })
+  const x = plistXml({ node: '/opt/R&D/bin/node', trocar: '/Users/ada/a>b/trocar.mjs' })
   assert.ok(balanced(x))
-  assert.deepEqual([...inner(x, 'array').matchAll(/<string>([\s\S]*?)<\/string>/g)].map((m) => m[1]), ['/opt/R&amp;D/bin/node', '/Users/ada/a&gt;b/asight.mjs', 'daemon'])
-  assert.match(plistXml({ node: NODE, asight: '/Users/张三/.npm-global/lib/node_modules/asight/bin/asight.mjs' }), /张三/, 'a profile path in Chinese is carried as it is: UTF-8 holds it')
-  assert.equal(plistXml({ node: '/opt/"node"', asight: SCRIPT }).includes('"node"'), true, 'a quote is not escaped and not refused here')
-  for (const bad of [{ node: '/no\u0007de' }, { asight: '' }, { node: undefined }, { env: 'x' }, { env: null }, { env: { 'not a name': 'v' } }, { env: { K: 5 } }]) {
-    assert.throws(() => plistXml({ node: NODE, asight: SCRIPT, ...bad }), TypeError, JSON.stringify(bad))
+  assert.deepEqual([...inner(x, 'array').matchAll(/<string>([\s\S]*?)<\/string>/g)].map((m) => m[1]), ['/opt/R&amp;D/bin/node', '/Users/ada/a&gt;b/trocar.mjs', 'daemon'])
+  assert.match(plistXml({ node: NODE, trocar: '/Users/张三/.npm-global/lib/node_modules/trocar/bin/trocar.mjs' }), /张三/, 'a profile path in Chinese is carried as it is: UTF-8 holds it')
+  assert.equal(plistXml({ node: '/opt/"node"', trocar: SCRIPT }).includes('"node"'), true, 'a quote is not escaped and not refused here')
+  for (const bad of [{ node: '/no\u0007de' }, { trocar: '' }, { node: undefined }, { env: 'x' }, { env: null }, { env: { 'not a name': 'v' } }, { env: { K: 5 } }]) {
+    assert.throws(() => plistXml({ node: NODE, trocar: SCRIPT, ...bad }), TypeError, JSON.stringify(bad))
   }
 })
 
@@ -272,8 +272,8 @@ function fakeTools(answers = {}, hook = () => {}) {
   }
   return Object.assign(run, { calls })
 }
-const withHome = (over = {}) => { const home = tmpDir('asight-unit-'); return { home, node: NODE, script: SCRIPT, env: { HOME: home, USER: 'ada' }, ...over } }
-/** What `asight on` does before it enables: writes the unit's text where the unit says it lives. */
+const withHome = (over = {}) => { const home = tmpDir('trocar-unit-'); return { home, node: NODE, script: SCRIPT, env: { HOME: home, USER: 'ada' }, ...over } }
+/** What `trocar on` does before it enables: writes the unit's text where the unit says it lives. */
 const installed = (u) => { fs.mkdirSync(path.dirname(u.path), { recursive: true }); fs.writeFileSync(u.path, u.text({})); return u }
 
 test('W24 userUnit gives the shape turnOn and install consume: the plist\'s path under ~/Library/LaunchAgents (launchd scans it at every login), no links, the text, and the verbs enable / start / reload / disable / remove', () => {
@@ -281,10 +281,10 @@ test('W24 userUnit gives the shape turnOn and install consume: the plist\'s path
   const u = userUnit({ ...o, run: fakeTools(), uid: 501 })
   assert.equal(u.path, path.join(o.home, 'Library', 'LaunchAgents', PLIST_FILE))
   assert.deepEqual(u.links, [], 'a LaunchAgent has no wants/ link — the file in LaunchAgents is the whole registration')
-  assert.equal(u.name, 'com.asight.collector')
+  assert.equal(u.name, 'com.trocar.collector')
   const sinks = daemonLogPaths(o.home)
-  assert.equal(u.text({}), plistXml({ node: NODE, asight: SCRIPT, logs: sinks }), 'the text is the plist; an empty daemon env is no EnvironmentVariables key')
-  assert.match(u.text({}), new RegExp('<key>StandardOutPath</key>\n  <string>' + sinks.out.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '</string>'), 'D46: the daemon console is the log file under ~/.asight/collector/logs')
+  assert.equal(u.text({}), plistXml({ node: NODE, trocar: SCRIPT, logs: sinks }), 'the text is the plist; an empty daemon env is no EnvironmentVariables key')
+  assert.match(u.text({}), new RegExp('<key>StandardOutPath</key>\n  <string>' + sinks.out.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '</string>'), 'D46: the daemon console is the log file under ~/.trocar/collector/logs')
   assert.match(u.text({}), new RegExp('<key>StandardErrorPath</key>\n  <string>' + sinks.err.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '</string>'))
   assert.notEqual(u.text({ NODE_EXTRA_CA_CERTS: '/usr/local/etc/corp-ca.pem' }), plist(), 'the daemon env install offers is carried (unlike the win32 task, 4.8 §7)')
   for (const verb of ['enable', 'start', 'startNow', 'reload', 'remove']) assert.equal(typeof u[verb], 'function', verb) // D61: no `disable` verb — nothing in an off touches the registration
@@ -300,7 +300,7 @@ test('W24 startNow gives the kickstart a deadline above launchd\'s own respawn t
   const run = (file, args, opts) => { seen.push({ file, args, timeout: opts && opts.timeout }); return { status: 0, stdout: '', stderr: '' } }
   const u = installed(userUnit({ ...withHome(), run, uid: 501 }))
   assert.deepEqual(u.startNow(), { code: 0, out: '', err: '' })
-  assert.deepEqual(seen.map((c) => [c.file, ...c.args]), [['launchctl', 'kickstart', 'gui/501/com.asight.collector']])
+  assert.deepEqual(seen.map((c) => [c.file, ...c.args]), [['launchctl', 'kickstart', 'gui/501/com.trocar.collector']])
   assert.equal(seen[0].timeout, KICKSTART_TIMEOUT_MS, 'the kickstart carries its own deadline, not execTool\'s default')
   assert.ok(KICKSTART_TIMEOUT_MS > LAUNCHD_THROTTLE_SECONDS * 1000, `${KICKSTART_TIMEOUT_MS} ms must exceed launchd's ${LAUNCHD_THROTTLE_SECONDS} s throttle`)
 })
@@ -309,7 +309,7 @@ test('W24 enable bootstraps the job into the user\'s GUI session domain (gui/<ui
   const run = fakeTools()
   const u = installed(userUnit({ ...withHome(), run, uid: 501 }))
   assert.deepEqual(u.enable({ now: true }), { code: 0, out: '', err: '' })
-  assert.deepEqual(run.calls, [['launchctl', 'enable', 'gui/501/com.asight.collector'], ['launchctl', 'bootout', 'gui/501/com.asight.collector'], ['launchctl', 'bootstrap', 'gui/501', u.path]], 'off disabled the job, so on enables it before the bootstrap')
+  assert.deepEqual(run.calls, [['launchctl', 'enable', 'gui/501/com.trocar.collector'], ['launchctl', 'bootout', 'gui/501/com.trocar.collector'], ['launchctl', 'bootstrap', 'gui/501', u.path]], 'off disabled the job, so on enables it before the bootstrap')
   assert.deepEqual(u.enable(), { code: 0, out: '', err: '' }, 'now is the default')
   assert.equal(run.calls.filter((c) => c[1] === 'bootstrap').length, 2)
   // a bootout that answers "no such job" (a fresh install) is not a failure: the bootstrap below is the answer
@@ -321,7 +321,7 @@ test('W24 enable({ now: false }) (a daemon already answers) asks launchctl nothi
   const run = fakeTools()
   const u = installed(userUnit({ ...withHome(), run, uid: 501 }))
   assert.deepEqual(u.enable({ now: false }), { code: 0, out: '', err: '' })
-  assert.deepEqual(run.calls, [['launchctl', 'enable', 'gui/501/com.asight.collector']], 'only enable (a job off disabled is not loaded at the next login): the daemon that answers is not started a second time')
+  assert.deepEqual(run.calls, [['launchctl', 'enable', 'gui/501/com.trocar.collector']], 'only enable (a job off disabled is not loaded at the next login): the daemon that answers is not started a second time')
 })
 
 test('W24 enable says why it failed, with the launchd-register-failed record (launchd is the only autostart, so on\'s receipt says it; no fallback exists to succeed through, 4.9 §12)', () => {
@@ -356,7 +356,7 @@ test('W24 start (the direct start `on` falls back to: this session, nothing at l
   assert.deepEqual(u.start(), { code: 0, out: '', err: '', via: 'direct', pid: 321 })
   assert.deepEqual(run.calls, [], 'no launchctl: a LaunchAgent with RunAtLoad would be an autostart')
   assert.equal(spawned.length, 1)
-  assert.deepEqual([spawned[0].cmd, spawned[0].args], [NODE, [SCRIPT, 'daemon']], 'node <asight> daemon, no --supervise (there is no supervisor parent to run it, 4.9 §4)')
+  assert.deepEqual([spawned[0].cmd, spawned[0].args], [NODE, [SCRIPT, 'daemon']], 'node <trocar> daemon, no --supervise (there is no supervisor parent to run it, 4.9 §4)')
   assert.equal(spawned[0].opts.detached, true)
   assert.equal(spawned[0].child.unrefd, true, 'the daemon is not tied to the process that started it: this one can exit')
   const dead = userUnit({ ...o, run, spawn: () => ({ pid: undefined, unref() {}, on() {} }) }).start()
@@ -381,19 +381,19 @@ test('W24 a daemon started directly (start()) gets the environment a login-start
 })
 
 test('W24 remove (an uninstall) is the undo: the agent is booted out and the plist leaves ~/Library/LaunchAgents — the file IS the registration, there is no wants/-link to split off (the linux unit\'s file stays, 4.6; darwin\'s cannot)', () => {
-  const present = fakeTools({ 'launchctl print': { status: 0, stdout: 'com.asight.collector = {"state": "running", "pid": 4242}' } })
+  const present = fakeTools({ 'launchctl print': { status: 0, stdout: 'com.trocar.collector = {"state": "running", "pid": 4242}' } })
   const u = installed(userUnit({ ...withHome(), run: present, uid: 501 }))
   assert.deepEqual(u.remove(), { code: 0, out: '', err: '', agent: 'booted-out', plist: 'removed' })
-  assert.deepEqual(present.calls, [['launchctl', 'print', 'gui/501/com.asight.collector'], ['launchctl', 'bootout', 'gui/501/com.asight.collector']])
+  assert.deepEqual(present.calls, [['launchctl', 'print', 'gui/501/com.trocar.collector'], ['launchctl', 'bootout', 'gui/501/com.trocar.collector']])
   assert.ok(!fs.existsSync(u.path), 'the plist is gone: the next login has nothing to load')
   const again = fakeTools({ 'launchctl print': { status: 0, stdout: '' } })
   const u2 = installed(userUnit({ ...withHome(), run: again, uid: 501 }))
   assert.deepEqual(u2.remove(), { code: 0, out: '', err: '', agent: 'booted-out', plist: 'removed' }, 'remove makes the same calls as disable')
-  assert.deepEqual(again.calls, [['launchctl', 'print', 'gui/501/com.asight.collector'], ['launchctl', 'bootout', 'gui/501/com.asight.collector']])
+  assert.deepEqual(again.calls, [['launchctl', 'print', 'gui/501/com.trocar.collector'], ['launchctl', 'bootout', 'gui/501/com.trocar.collector']])
 })
 
 test('W24 an agent that is not loaded is already as asked, not an error — and the plist still leaves, or the next login would load it; a print that did not run is a failure for the launchd half, never "absent", and the file still goes (a separate part of the undo)', () => {
-  const gone = fakeTools({ 'launchctl print': { status: 113, stderr: 'Could not find service "com.asight.collector" in domain for gui/501' } })
+  const gone = fakeTools({ 'launchctl print': { status: 113, stderr: 'Could not find service "com.trocar.collector" in domain for gui/501' } })
   const u = installed(userUnit({ ...withHome(), run: gone, uid: 501 }))
   assert.deepEqual(u.remove(), { code: 0, out: '', err: '', agent: 'absent', plist: 'removed' })
   assert.deepEqual(gone.calls.map((c) => c[1]), ['print'], 'nothing is booted out on a guess')
@@ -461,13 +461,13 @@ test('src/off keeps its own copy of the agent label and the plist path, equal to
   assert.equal(offDarwin.AGENT_LABEL, AGENT_LABEL)
   assert.equal(offDarwin.PLIST_FILE_NAME, PLIST_FILE)
   assert.equal(offDarwin.plistFilePath('/h'), plistPath('/h'))
-  assert.equal(offDarwin.plistFilePath('/h'), '/h/Library/LaunchAgents/com.asight.collector.plist')
+  assert.equal(offDarwin.plistFilePath('/h'), '/h/Library/LaunchAgents/com.trocar.collector.plist')
 })
 
 test('the standalone undo (undoAutostart) is the same undo the arch module\'s disable and remove are: the same launchctl calls in the same order, the same answers — for an agent that is loaded, one that is not, one that cannot be asked, and one whose bootout was refused', () => {
   const worlds = {
-    'the agent is loaded': { 'launchctl print': { status: 0, stdout: 'com.asight.collector = {"pid": 4242}' }, 'launchctl bootout': { status: 0 } },
-    'the agent is not loaded': { 'launchctl print': { status: 113, stderr: 'Could not find service "com.asight.collector" in domain for gui/501' } },
+    'the agent is loaded': { 'launchctl print': { status: 0, stdout: 'com.trocar.collector = {"pid": 4242}' }, 'launchctl bootout': { status: 0 } },
+    'the agent is not loaded': { 'launchctl print': { status: 113, stderr: 'Could not find service "com.trocar.collector" in domain for gui/501' } },
     'launchctl print did not run': { 'launchctl print': { status: null, error: Object.assign(new Error('spawnSync launchctl ETIMEDOUT'), { code: 'ETIMEDOUT' }) } },
     'the bootout was refused': { 'launchctl print': { status: 0 }, 'launchctl bootout': { status: 5, stderr: 'Boot-out failed: 5: Input/output error' } },
   }
@@ -475,7 +475,7 @@ test('the standalone undo (undoAutostart) is the same undo the arch module\'s di
     for (const verb of ['remove']) {
       const archRun = fakeTools(answers)
       const a = installed(userUnit({ ...withHome(), run: archRun, uid: 501 }))[verb]()
-      const home = tmpDir('asight-off-')
+      const home = tmpDir('trocar-off-')
       fs.mkdirSync(path.dirname(offDarwin.plistFilePath(home)), { recursive: true })
       fs.writeFileSync(offDarwin.plistFilePath(home), 'plist')
       const offRun = fakeTools(answers)
@@ -486,7 +486,7 @@ test('the standalone undo (undoAutostart) is the same undo the arch module\'s di
     }
   }
   // the same file rules as the arch side: a plist that is not there is already as asked, and one that cannot be removed is said
-  const home = tmpDir('asight-off-')
+  const home = tmpDir('trocar-off-')
   const absent = fakeTools({ 'launchctl print': { status: 113, stderr: 'Could not find service' } })
   assert.deepEqual(offDarwin.undoAutostart({ home, exec: absent, uid: 501 }), { code: 0, out: '', err: '', agent: 'absent', plist: 'absent' })
   fs.mkdirSync(path.dirname(offDarwin.plistFilePath(home)), { recursive: true })

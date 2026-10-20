@@ -8,7 +8,7 @@
 //
 // It is a shortcut for speed, never a source of truth of its own: every call rejects (code 'daemon-read-failed', `reason` saying why) when the
 // daemon does not answer, and the caller falls back to its own OS question and REPORTS that it did (D38, never silent). `off` does not use it:
-// it is about to stop that daemon. Imports only node:* and src/off (0.1 §2: the standalone `asight-off` is made of src/off alone).
+// it is about to stop that daemon. Imports only node:* and src/off (0.1 §2: the standalone `trocar-off` is made of src/off alone).
 import nodeFs from 'node:fs'
 import { controlEndpointFor } from './control-client.mjs'
 

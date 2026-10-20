@@ -1,4 +1,4 @@
-// test/query/sessions-index.test.mjs — `asight query sessions` is counted from the SEGMENT INDEX, and must
+// test/query/sessions-index.test.mjs — `trocar query sessions` is counted from the SEGMENT INDEX, and must
 // still be the board's own answer (RFC 1.6 §4.1 速度目标 ≤ 1 s, 附录 C.5).
 //
 // The list used to read every record back: 4.5 s on Windows and 7.0 s on macOS over the 1 GB reference
@@ -26,7 +26,7 @@ const listIsEachMeta = async (home) => {
 }
 
 const dataset = (bytes = 4_000_000) => {
-  const home = path.join(tmpDir('asight-sessions-'), '.asight')
+  const home = path.join(tmpDir('trocar-sessions-'), '.trocar')
   generate({ home, seed: 1, bytes, segmentBytes: 1 << 20 })
   return home
 }

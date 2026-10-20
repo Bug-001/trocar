@@ -165,10 +165,10 @@ test('D40 field order: everything new follows req_body, so the sharder still fin
 })
 
 // CONTRACT CHANGE, not a relaxation (2026-07-20 · spec 4.1 §采集安全 patched in the
-// same commit). This asserted the opposite — that Authorization arrived as `<redacted>`. asight
+// same commit). This asserted the opposite — that Authorization arrived as `<redacted>`. trocar
 // exists to show what really went over the wire, and rewriting a header made the capture
 // non-verbatim at exactly the layer whose thesis is byte-fidelity. The protection MOVED to file
-// permissions: these bytes hold live credentials, so the writer creates 0600 and `asight doctor` ④b
+// permissions: these bytes hold live credentials, so the writer creates 0600 and `trocar doctor` ④b
 // hard-fails on anything looser (test/capture/verbatim-headers.test.mjs).
 test('credential headers are stored VERBATIM (they are what went over the wire)', () => {
   const env = buildEnvelope({ ...baseArgs, reqBody: Buffer.from('{}'), capture: 'mitm' })
@@ -199,7 +199,7 @@ test('envelope PARITY: same interaction via two sources differs ONLY in capture'
 })
 
 test('createEnvelopeWriter appends one flat NDJSON line per envelope (D20, no per-session split)', () => {
-  const f = path.join(tmpDir('asight-w-'), 'trace.ndjson')
+  const f = path.join(tmpDir('trocar-w-'), 'trace.ndjson')
   const w = createEnvelopeWriter(f)
   w.write(buildEnvelope({ ...baseArgs, reqBody: Buffer.from('{}'), capture: 'mitm' }))
   w.write(buildEnvelope({ ...baseArgs, id: 'req_00002', reqBody: Buffer.from('{}'), capture: 'mitm' }))

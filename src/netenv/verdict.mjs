@@ -1,4 +1,4 @@
-// verdict.mjs (src/netenv) — what `asight status` says of one harness: captured now, or not and why (RFC 1.6 §2, V32). Pure. `src/cli/status.mjs` re-exports it and feeds it what it read; the network
+// verdict.mjs (src/netenv) — what `trocar status` says of one harness: captured now, or not and why (RFC 1.6 §2, V32). Pure. `src/cli/status.mjs` re-exports it and feeds it what it read; the network
 // topology (topology.mjs, §9) calls the same function on the same facts for each branch's `captured` and `reason`, so the table `status` prints and the path it draws cannot disagree.
 // Imports nothing.
 const at = (t) => (typeof t === 'string' ? Date.parse(t) : t)
@@ -7,14 +7,14 @@ const verdict = (captured, reason = null) => ({ captured, reason })
 /**
  * The verdict on one harness (V32), pure. Inputs, every one of them `null` / 'unknown' when it could not be read:
  *   desired      'on' | 'off'
- *   entryIntact  true | false | null — the trust entry asight wrote is still there; `entryWhy` says what is wrong with it when false ('entry-missing' | 'entry-changed')
- *   attached     true | false | null — this harness's path into asight is up: Linux, the kernel has this instance's link (read back by the daemon); proxy mode, every door group `on`
+ *   entryIntact  true | false | null — the trust entry trocar wrote is still there; `entryWhy` says what is wrong with it when false ('entry-missing' | 'entry-changed')
+ *   attached     true | false | null — this harness's path into trocar is up: Linux, the kernel has this instance's link (read back by the daemon); proxy mode, every door group `on`
  *                recorded for it listens (a missing door with the daemon running is forwarder-down). `helper` 'missing' says the capability helper is absent or the wrong version
  *   daemon       'running' | 'not-running' | 'not-responding' | 'unknown'
- *   deadDoor     proxy mode (macOS, Windows): the agents' proxy entries name asight's door, which lives in the daemon — a daemon that is not running, or a door it does not hold, is a dead door (forwarder-down)
+ *   deadDoor     proxy mode (macOS, Windows): the agents' proxy entries name trocar's door, which lives in the daemon — a daemon that is not running, or a door it does not hold, is a dead door (forwarder-down)
  *   procs        [{ pid, startedAt (ms or ISO), trusted: true | false | null, reason, negative }] — the harness's processes that send requests. `trusted` is the daemon's verdict when it answered;
  *                null = not judged: then the entry, then the certificate, then the start time against the entry's `installedAt` decides (a process older than its entry never read it: config-after-start, 4.6 §确认信任)
- *   cert         true | null | a code — the certificate the harness's agents check asight's leaves with is in effect (true; also where nothing says otherwise, Linux), not known (null), or not
+ *   cert         true | null | a code — the certificate the harness's agents check trocar's leaves with is in effect (true; also where nothing says otherwise, Linux), not known (null), or not
  *                in effect and why (the 1.6 附录 B `cert-*` code of the form's `certificate`, certOfForms below). Like the entry, it decides only a process the daemon has not judged, and the harness's own row
  * → { captured: true | false | null, rows: [{ pid?, captured, reason }] }; `reason` is one of STATUS_REASONS, null when captured or not known. With no process the one row has no pid and is
  * the harness's own: 「link 已挂、入口完好且证书生效」(§1.5, V32). The order of the reasons: desired off · the daemon · the helper · the link · (a process: its own verdict, else the entry, then the certificate, then its start time).

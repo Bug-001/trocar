@@ -1,5 +1,5 @@
-// test/server/control-harness.e2e.test.mjs — 4.4 #11 (§控制面「先计划后确认」, D26②): POST /control/harness runs the very functions `asight on` /
-// `asight off` run. A REAL startDaemon (the model collector, test/helpers/model-daemon.mjs) mounts the board on the port install recorded; its
+// test/server/control-harness.e2e.test.mjs — 4.4 #11 (§控制面「先计划后确认」, D26②): POST /control/harness runs the very functions `trocar on` /
+// `trocar off` run. A REAL startDaemon (the model collector, test/helpers/model-daemon.mjs) mounts the board on the port install recorded; its
 // query worker is the real one (test/helpers/worker-fork.mjs) with the on/off OS fakes as its deps module (test/helpers/board-world.mjs); the
 // test talks to the board's real TCP port with the board.token, and `on` inside the worker finds the daemon through controlEndpointFor —
 // nothing is injected into a request or a socket path. Sandbox HOMEs only.
@@ -72,9 +72,9 @@ for (const platform of ['darwin', 'win32']) {
       assert.deepEqual([on.json.command, on.json.ok, on.json.harnesses], ['on', true, ['codex']], on.body)
       const wrote = fs.readFileSync(envFile, 'utf8')
       assert.match(wrote, /127\.0\.0\.1:\d+/, 'the entry with the door the daemon opened')
-      const backups = path.join(w.home, '.asight', 'backup')
+      const backups = path.join(w.home, '.trocar', 'backup')
       const held = fs.readdirSync(backups, { recursive: true }).map((n) => path.join(backups, n)).filter((f) => fs.statSync(f).isFile())
-      assert.ok(held.some((f) => fs.readFileSync(f).equals(before)), 'the pre-image is in ~/.asight/backup/')
+      assert.ok(held.some((f) => fs.readFileSync(f).equals(before)), 'the pre-image is in ~/.trocar/backup/')
       // an unrelated edit of the user's in the same file, kept byte for byte by off
       fs.writeFileSync(envFile, wrote.replace('relay.example', 'relay2.example'))
       const edited = Buffer.from(before.toString('utf8').replace('relay.example', 'relay2.example'))
@@ -84,7 +84,7 @@ for (const platform of ['darwin', 'win32']) {
       const off = await post({ harness: 'codex', on: false, confirm: p3.json.plan_id })
       assert.equal(off.status, 200, off.body)
       assert.deepEqual([off.json.command, off.json.ok], ['off', true], off.body)
-      assert.deepEqual(fs.readFileSync(envFile), edited, "asight's entry gone, the user's edit kept")
+      assert.deepEqual(fs.readFileSync(envFile), edited, "trocar's entry gone, the user's edit kept")
       // what a CLI off leaves: status --json's own document (GET /control/status) says desired off
       const st = await request(w.port, '/control/status', { headers: { [CONTROL_TOKEN_HEADER]: w.token } })
       assert.equal(st.status, 200, st.body)
@@ -103,7 +103,7 @@ for (const platform of ['darwin', 'win32']) {
       const home0 = snapshot(w.home)
       assert.equal((await post({ harness: 'codex', on: true }, {})).status, 403)
       for (const body of [{ harness: 'nope', on: true }, { harness: 'codex', on: 'yes' }, { on: false }]) assert.equal((await post(body)).status, 400, JSON.stringify(body))
-      const { server } = createServer({ home: path.join(w.home, '.asight'), token: w.token, uid: 0, query: { relay: () => assert.fail('relayed'), control: () => assert.fail('relayed'), warm: () => {} } })
+      const { server } = createServer({ home: path.join(w.home, '.trocar'), token: w.token, uid: 0, query: { relay: () => assert.fail('relayed'), control: () => assert.fail('relayed'), warm: () => {} } })
       server.listen(0, '127.0.0.1'); await once(server, 'listening')
       try {
         const r = await request(server.address().port, '/control/harness', { method: 'POST', headers: { 'content-type': 'application/json', [CONTROL_TOKEN_HEADER]: w.token }, body: JSON.stringify({ harness: 'codex', on: true }) })

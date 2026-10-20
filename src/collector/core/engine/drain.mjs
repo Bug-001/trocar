@@ -6,9 +6,9 @@
 // The gate writes no byte of its own, with one exception (1.6 §1.3 `Connection: close`): when `off`
 // lands before the head of the response that is in flight has been forwarded, the one hop-by-hop header line
 // `Connection: close` goes in before the head's closing blank line, so the client does not reuse the connection and
-// meet a reset. It is recorded (tee.markAdded → the envelope's and the flows/ row's `asight_added`), never silent.
+// meet a reset. It is recorded (tee.markAdded → the envelope's and the flows/ row's `trocar_added`), never silent.
 // Closing is `end()` after the last write (a FIN, never an RST); `destroy()` only after `timeoutMs`, and not while the
-// client's bytes are still unread. `now` (asight off --now) destroys at once. Any throw in here is fail-open: the held
+// client's bytes are still unread. `now` (trocar off --now) destroys at once. Any throw in here is fail-open: the held
 // bytes go on unchanged — what this chunk had already composed first, then what is still held — the throw is recorded
 // (engine-error), and the connection is no longer gated. The same holds when the flow stops recording this connection
 // (loseTee): what the gate holds goes to the client as it came, and nothing is added any more — an addition nobody
@@ -91,7 +91,7 @@ export function createDrain({ flowId, tee: teeIn = null, client, upstream, timeo
   }
 
   // Upstream bytes on their way to the client. Before the tee sees them (so an envelope that ends in this very chunk
-  // already carries asight_added). → what to write, in order.
+  // already carries trocar_added). → what to write, in order.
   function beforeUpstream(chunk) {
     if (phase !== 'closing' || mode !== 'hold') return [chunk]
     const out = []

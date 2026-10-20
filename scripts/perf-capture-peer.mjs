@@ -1,6 +1,6 @@
-// scripts/perf-capture-peer.mjs — the forked peer of scripts/perf-capture.mjs: everything that is NOT asight, so the
+// scripts/perf-capture-peer.mjs — the forked peer of scripts/perf-capture.mjs: everything that is NOT trocar, so the
 // parent's CPU is the daemon's alone. Holds the mock upstream (TLS, a CA of its own, an echo-sized reply) and the
-// agent-side client loop (CONNECT through the door with its credentials, TLS trusting the asight root, one request).
+// agent-side client loop (CONNECT through the door with its credentials, TLS trusting the trocar root, one request).
 import net from 'node:net'
 import tls from 'node:tls'
 import { createCa, loadCa } from '../src/collector/core/tls/ca.mjs'

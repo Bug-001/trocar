@@ -1,4 +1,4 @@
-// test/netenv/no-product-names.test.mjs — the backlog (D43 · D49, invariant 6): asight does not recognise or show a VPN / proxy product, so the
+// test/netenv/no-product-names.test.mjs — the backlog (D43 · D49, invariant 6): trocar does not recognise or show a VPN / proxy product, so the
 // code of src/ names none — not in a message, a path, a kind, a constant. Comments may (a reason can cite the product it is about). Static half; the names are the
 // products of the D43 / D49 decisions and of write-scan.mjs's PRODUCT_DIR_NAMES (the data directories N15 watches), as whole words, any case.
 import test from 'node:test'
@@ -24,7 +24,7 @@ export const productFindings = (files, read) => files.flatMap((f) => findIn(read
 
 test('the code of src/ names no VPN / proxy product (comments excluded; the old capture and the rows below exempt)', () => {
   const files = walk('src'), read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8')
-  assert.deepEqual(productFindings(files, read), [], 'asight does not recognise or show a VPN / proxy product (D43 · D49): say 「你的代理软件」')
+  assert.deepEqual(productFindings(files, read), [], 'trocar does not recognise or show a VPN / proxy product (D43 · D49): say 「你的代理软件」')
   const stale = EXEMPT.filter((x) => !files.includes(x.file) || !findIn(read(x.file), PRODUCT).some((h) => !x.text || h.text.toLowerCase() === x.text))
   assert.deepEqual(stale, [], 'an exemption that excuses nothing any more: delete its row')
 })

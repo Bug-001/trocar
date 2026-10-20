@@ -1,6 +1,6 @@
 // registry.mjs — which harness a running process is, by NAME (RFC 4.6 §身份与信任, D51, D31②, D37; plan 2026-10-14-d51-name-allowlist §2.3).
 // It knows no harness and no OS. Each descriptor in src/collector/harness/ carries its preset list as DATA (`processes: { names, exclude,
-// longLived }`, one for every OS); the user's ~/.asight/agents.json adds or ignores items (D51③, handed in as `agentList` / replaceAgentList).
+// longLived }`, one for every OS); the user's ~/.trocar/agents.json adds or ignores items (D51③, handed in as `agentList` / replaceAgentList).
 // Both compile once (src/off/identity.mjs compileIdentity) into patterns over the derived facts `names` / `name0` / `rest` (identityView), so
 // the tracker, the doors, `status` and `off` judge with one matcher. A process is judged on its own facts at exec time, never by its parent
 // (§子进程与嵌套 agent). Unknown or ambiguous means no agent: an unrecognised process is never folded into a known identity (0.1 §5, D25).
@@ -46,11 +46,11 @@ export function validateDescriptor(d) {
   return d
 }
 
-/** What `off` needs to judge, from the install manifest alone, which live process may hold what asight wrote for this harness (4.6 撤销顺序
+/** What `off` needs to judge, from the install manifest alone, which live process may hold what trocar wrote for this harness (4.6 撤销顺序
  *  第 2 / 5 步; manifest `liveness.<harness>`): `identity`, the harness's name list compiled — its presets with the user's `agentList` additions for it
  *  merged in (its `ignore` items not applied) (the same on every OS, D51) — as JSON; whether the harness re-reads its entry while running; and until when a running one still trusts
- *  asight after `off` — the data form of `trust.afterUninstall` ('restart' when it declares none, and when it is a function of the process, which a
- *  manifest cannot hold: Hermes). With `trust.untilEnviron` (Kimi), only a process whose environment names that variable at a file of asight's is
+ *  trocar after `off` — the data form of `trust.afterUninstall` ('restart' when it declares none, and when it is a function of the process, which a
+ *  manifest cannot hold: Hermes). With `trust.untilEnviron` (Kimi), only a process whose environment names that variable at a file of trocar's is
  *  reported at all. */
 export function livenessOf(d, { agentList = [], os = null } = {}) {
   const t = d.trust || {}

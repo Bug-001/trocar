@@ -1,4 +1,4 @@
-// test/collector/agent-list.test.mjs — RFC 4.6 R6, the daemon's half (D51③): the running daemon reads ~/.asight/agents.json at start
+// test/collector/agent-list.test.mjs — RFC 4.6 R6, the daemon's half (D51③): the running daemon reads ~/.trocar/agents.json at start
 // and on every check, swaps the name list in place when the file changed (stat key), re-judges the table and rescans — no restart.
 // A broken file is one `agent-list-invalid` failure per file version (D38); a file that reads cleanly again, or is removed, ends the
 // condition with `agent-list-ok`; a file that was never there writes nothing. Asserted on flows/ and on the daemon's own verdicts.
@@ -25,13 +25,13 @@ const NIGHTLY_EXE = '/home/u/.local/bin/claude-nightly'
 
 function fakeArch(p) {
   const clients = []
-  const makeClient = () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 }); clients.push(c); return c }
+  const makeClient = () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 }); clients.push(c); return c }
   return { clients, arch: { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) } }
 }
 async function sandbox() {
   const root = tmpDir('as-al-')
   const home = path.join(root, 'home'); fs.mkdirSync(home)
-  const s = { root, home, collector: path.join(home, '.asight', 'collector'), sock: path.join(root, 'run', 'c.sock'), list: path.join(home, '.asight', 'agents.json') }
+  const s = { root, home, collector: path.join(home, '.trocar', 'collector'), sock: path.join(root, 'run', 'c.sock'), list: path.join(home, '.trocar', 'agents.json') }
   await installCollector({ home, env: { HOME: home }, osName: 'none', harnesses: [cc], freePort: async () => 0 })
   return s
 }

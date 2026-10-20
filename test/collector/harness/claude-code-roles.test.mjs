@@ -26,8 +26,8 @@ const NS = '--type=utility --utility-sub-type=network.mojom.NetworkService'
 const CHILDREN = ['--type=utility --utility-sub-type=node.mojom.NodeService', '--type=renderer', '--type=gpu-process']
 const HELPER = '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper'
 
-function box(home = tmpDir('asight-roles-')) {
-  const pem = path.join(home, 'asight-ca.pem'); fs.writeFileSync(pem, ca.certPem)
+function box(home = tmpDir('trocar-roles-')) {
+  const pem = path.join(home, 'trocar-ca.pem'); fs.writeFileSync(pem, ca.certPem)
   const put = (rel, obj) => { const f = path.join(home, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(obj)) }
   return { home, pem, put }
 }
@@ -88,7 +88,7 @@ test('a Chromium child is chromium-child whichever harness the name list says it
 })
 
 test('the Desktop-bundled Claude Code (no --type=) is judged by the settings layer (mac F1)', async () => {
-  const spaced = path.join(tmpDir('asight-roles-'), 'Desktop User') // a home with a space in it: ps splits the exe across argv
+  const spaced = path.join(tmpDir('trocar-roles-'), 'Desktop User') // a home with a space in it: ps splits the exe across argv
   fs.mkdirSync(spaced)
   const b = box(spaced)
   const seed = SEEDS.find((s) => /mac claude-code F1/.test(s.source)).exe.replace('/Users/u', '')

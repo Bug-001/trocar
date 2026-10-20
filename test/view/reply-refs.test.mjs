@@ -19,7 +19,7 @@ const tail = (ref) => ref && ref.split('::').slice(-2).join('::');
 
 test('an SSE reply ships one resp.raw ref that resolves to the whole decoded stream', T, async (t) => {
   const up = await startMockUpstream(); t.after(() => up.close());
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-rr-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-rr-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const px = await startTeeProxy({ upstreamPort: up.port, dir, flow: { host: 'api.anthropic.com', proc: { pid: 1, exe: '/x/claude', agent: 'claude-code' } } });
   t.after(() => px.close());
   await request(`http://127.0.0.1:${px.port}`, '/v1/messages', '{"model":"m","stream":true,"max_tokens":8,"messages":[{"role":"user","content":"hi"}]}', { headers: { 'x-claude-code-session-id': 'S' } });

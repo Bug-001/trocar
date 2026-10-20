@@ -70,7 +70,7 @@ const fakeDoc = (store) => {
 test('applyThemePref: light / dark pin the attribute, anything else follows the system', () => {
   assert.equal(applyThemePref(fakeDoc({ getItem: () => 'light' })), 'light')
   assert.equal(applyThemePref(fakeDoc({ getItem: () => 'dark' })), 'dark')
-  for (const absent of [null, '', 'blue', 'asight', undefined]) {
+  for (const absent of [null, '', 'blue', 'trocar', undefined]) {
     const doc = fakeDoc({ getItem: () => absent })
     doc.documentElement.setAttribute('data-theme', 'left-over')
     assert.notEqual(applyThemePref(doc), 'light'); assert.notEqual(applyThemePref(doc), 'dark')
@@ -89,14 +89,14 @@ test('applyThemePref only moves the attribute: its source names no screen and no
   const at = src.indexOf('export function applyThemePref')
   const body = src.slice(at, src.indexOf('\nexport ', at + 10)) // just this function
   assert.ok(!/import|render|show\(|mount\(/.test(body))
-  assert.equal(THEME_KEY, 'asight.v2.theme')
+  assert.equal(THEME_KEY, 'trocar.v2.theme')
 })
 test('the page applies the preference before the first paint, from the same key, without throwing', () => {
   const html = fs.readFileSync(new URL('../../src/web/v2/index.html', import.meta.url), 'utf8')
   const head = html.slice(0, html.indexOf('</head>'))
   const m = head.match(/<script>([\s\S]*?)<\/script>/)
   assert.ok(m && m.index < head.indexOf('<link'), 'the boot script runs before the stylesheets')
-  assert.match(m[1], /asight\.v2\.theme/)
+  assert.match(m[1], /trocar\.v2\.theme/)
   assert.match(m[1], /light|dark/)
   assert.match(m[1], /catch/, 'a blocked localStorage must not break the boot')
 })

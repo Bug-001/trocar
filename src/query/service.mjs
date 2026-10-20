@@ -160,7 +160,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     if (!name) throw Object.assign(new Error('GET /query: ?name=<query name> is required'), { status: 400 })
     // The closed name set (client.mjs QUERY_NAMES), checked here: an arbitrary name used to fork a worker before the
     // query core refused it.
-    if (!QUERY_NAMES.includes(name)) throw Object.assign(new Error(`asight query: no query called ${JSON.stringify(name)} (names: ${QUERY_NAMES.join(', ')})`), { status: 400 })
+    if (!QUERY_NAMES.includes(name)) throw Object.assign(new Error(`trocar query: no query called ${JSON.stringify(name)} (names: ${QUERY_NAMES.join(', ')})`), { status: 400 })
     const params = {}
     for (const [k, v] of query) if (k !== 'name' && k !== 'indent') params[k] = v
     const line = lineOf(name, params, query.get('indent') || 0)

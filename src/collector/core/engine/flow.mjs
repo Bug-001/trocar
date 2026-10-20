@@ -39,7 +39,7 @@ const refusalWhy = (err, clientMoved) => `${err.code}: the upstream refused the 
   (clientMoved ? 'this connection is closed and the next one to the host is passed through' : "passed through, so the agent's own handshake reaches the host")
 
 // What a connection that came through the proxy ingress adds to its row (4.8 §5.6): who handed it over, how the pid was found, and the
-// upstream it went to — never the credentials, and never a `prelude` (the opener and the proxy prelude are asight's bytes, not the agent's).
+// upstream it went to — never the credentials, and never a `prelude` (the opener and the proxy prelude are trocar's bytes, not the agent's).
 function ingressFields(meta) {
   if (!meta.ingress) return {}
   const u = meta.upstream || {}
@@ -98,7 +98,7 @@ export function handleFlow(client, meta, ctx) {
   let drainAsked = false
   // the gate says it is about to close (or cut) the connection: the engine did it, not the client (the leaf-rejection judge ignores it), and a
   // cut says so on the row — before the sockets are destroyed, because a TLS socket emits its close events inside destroy()
-  const onGateClosed = (kind) => { selfClosed = true; if (kind === 'cut' && !rec.error) rec.error = { type: 'cut-by-off', message: 'the connection was cut by asight off --now', side: 'engine' } }
+  const onGateClosed = (kind) => { selfClosed = true; if (kind === 'cut' && !rec.error) rec.error = { type: 'cut-by-off', message: 'the connection was cut by trocar off --now', side: 'engine' } }
   let upstream = null       // the TCP connection to the original destination
   let firstByteTimer = null
   let slowTimer = null      // the upstream-slow watch while the engine waits on the upstream (RFC 4.6 §记录)
@@ -147,7 +147,7 @@ export function handleFlow(client, meta, ctx) {
     const notes = activeTee && activeTee.rowNotes ? activeTee.rowNotes() : {}
     if (notes.writeFailed) rec.write_failed = notes.writeFailed
     if (notes.framerError) rec.framer_error = notes.framerError
-    if (notes.asightAdded) rec.asight_added = notes.asightAdded // what the drain gate put into the bytes the client got (1.6 §1.3), recorded or not
+    if (notes.trocarAdded) rec.trocar_added = notes.trocarAdded // what the drain gate put into the bytes the client got (1.6 §1.3), recorded or not
     if (notes.notFollowed && !rec.not_captured) notCaptured('upgrade-not-followed', notes.notFollowed)
     // bytes_up / bytes_down = the agent's own connection's wire bytes (RFC 4.6 §记录): read off the
     // accepted socket once it has closed, so proxy preludes, TLS records (and the closing alerts after
@@ -251,7 +251,7 @@ export function handleFlow(client, meta, ctx) {
       if (!tee) return
       try { fn(tee) } catch (e) {
         const lost = tee; tee = null; activeTee = null
-        try { const added = lost.rowNotes().asightAdded; if (added) rec.asight_added = added } catch { /* the tee that threw may not answer either */ }
+        try { const added = lost.rowNotes().trocarAdded; if (added) rec.trocar_added = added } catch { /* the tee that threw may not answer either */ }
         loose.push(...drain.loseTee())
         ctx.failure({ code: 'engine-error', flow_id: rec.flow_id, reason: `recording stopped: ${msgOf(e)}` })
       }
@@ -384,7 +384,7 @@ export function handleFlow(client, meta, ctx) {
   // proxy ingress dialled through a credentialed proxy (4.8 §5.2); (pid, host) is
   // negative at once either way, so later flows (the client's retry) splice without trying.
   //   A leaf we cannot issue (cause 'leaf-error', an internal error) steps aside the same way, but is
-  // not negative-cached (asight's fault, not the host's) and is a leaf-error failure event (D38).
+  // not negative-cached (trocar's fault, not the host's) and is a leaf-error failure event (D38).
   function stepAside(upTls, buf, cSock, host, isTunnel, key, cause, why) {
     handedOff = true                                    // the original upstream closes under us; we own teardown
     try { upTls.destroy() } catch { /* ignore */ }
@@ -393,7 +393,7 @@ export function handleFlow(client, meta, ctx) {
     else { ctx.counters.notCaptured.leafError++; ctx.failure({ code: 'leaf-error', flow_id: rec.flow_id, host, reason: why }) }
     rec.not_captured = cause; rec.reason = why
     // A credentialed upstream (the user's own proxy, reached through the ingress) is dialled once, for this agent connection: a second
-    // dial would send the user's credentials again on asight's own initiative (invariant 1, 4.8 §5.2), so this flow is closed like a tunnel's.
+    // dial would send the user's credentials again on trocar's own initiative (invariant 1, 4.8 §5.2), so this flow is closed like a tunnel's.
     if (isTunnel || meta.upstream?.credentialed) {
       try { cSock.destroy() } catch { /* ignore */ }
       return finish(isTunnel ? 'tunnel' : 'error', { host, error: { type: cause.replace('-', '_'), message: why, side: cause === 'leaf-error' ? 'engine' : 'upstream' } })
@@ -485,13 +485,13 @@ export function handleFlow(client, meta, ctx) {
         // certificate-check code never reaches us.
         if (!rec.error) rec.error = e instanceof Error ? { type: e.code || 'error', message: msgOf(e), side: 'client' }
           : { type: 'closed_without_app_data', message: 'the client closed after the TLS handshake without sending application data', side: 'client' }
-        // D51④: the process was judged trusting asight and is not — a critical failure, once per (pid, host) (4.6 §事件与码). Names and
-        // the trust entry asight relied on; never the client's bytes or certificates.
+        // D51④: the process was judged trusting trocar and is not — a critical failure, once per (pid, host) (4.6 §事件与码). Names and
+        // the trust entry trocar relied on; never the client's bytes or certificates.
         if (!ctx.firstRejection || ctx.firstRejection(key)) {
           const t = meta.trust && typeof meta.trust === 'object' ? meta.trust : null
           ctx.failure({ code: 'trust-rejected', level: 'critical', harness: meta.agent ?? null, door: meta.door ?? null, process: processNames({ exe: meta.exe, argv: meta.argv })[0] ?? null,
             pid: meta.pid ?? null, neg_key: String(meta.negKey ?? meta.pid), host, alert: rec.error.type, trust_entry: t ? { var: t.var ?? null, via: t.via ?? null, file: t.file ?? null } : null,
-            reason: `${meta.agent ?? 'an agent'}${meta.pid != null ? ` pid ${meta.pid}` : ''} refused asight's certificate for ${host} (${rec.error.type}) although it was judged to trust asight${t && t.var ? ` through ${t.var}` : ''}; this connection failed` })
+            reason: `${meta.agent ?? 'an agent'}${meta.pid != null ? ` pid ${meta.pid}` : ''} refused trocar's certificate for ${host} (${rec.error.type}) although it was judged to trust trocar${t && t.var ? ` through ${t.var}` : ''}; this connection failed` })
         }
         ctx.negCache.observe(key, { rejected: true, meta, host })
       }

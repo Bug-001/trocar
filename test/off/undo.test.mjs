@@ -19,7 +19,7 @@ import { applyTextEntry } from '../../src/collector/core/trust/journal.mjs'
 
 const ROOT = createCa({ commonName: 'undo root' }), CORP = createCa({ commonName: 'undo corp relay' }), OSROOT = createCa({ commonName: 'undo os root' })
 const roots = { node: [ROOT.certPem], osText: '' }
-const box = () => { const home = tmpDir('asight-undo-'); return { home, dir: path.join(home, '.asight', 'collector'), ca: (n) => path.join(home, '.asight', 'collector', 'ca', n) } }
+const box = () => { const home = tmpDir('trocar-undo-'); return { home, dir: path.join(home, '.trocar', 'collector'), ca: (n) => path.join(home, '.trocar', 'collector', 'ca', n) } }
 const sha = (f) => (fs.existsSync(f) ? crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex') : null)
 const fpsOf = (f) => certBlocks(fs.readFileSync(f, 'utf8')).map((c) => c.fp)
 const write = (b, rel, text) => { const f = path.join(b.home, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); return f }
@@ -38,11 +38,11 @@ const jsonH = (b) => ({
   name: 'jj', runtime: 'node', processes: { names: [{ name: 'jj' }] }, hosts: [], trust: { chain: [{ var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' }], rereadsEntry: true },
   inject: (ctx) => ({ entries: [{ kind: 'json-key', path: path.join(ctx.home, '.jj', 'settings.json'), keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: b.ca('extra-jj.pem'), semantic: 'append' }], files: [{ path: b.ca('extra-jj.pem'), certsFrom: [path.join(ctx.home, 'corp.pem')] }] }),
 })
-// a plugin-style harness: a plugin file in the agent's directory, a YAML row loading asight's plugin dir, a path the agent may write because of it
+// a plugin-style harness: a plugin file in the agent's directory, a YAML row loading trocar's plugin dir, a path the agent may write because of it
 const plugH = (b) => ({
-  name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'asight:marker', semantic: 'append' }] },
+  name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'trocar:marker', semantic: 'append' }] },
   inject: (ctx) => ({
-    owned: [{ path: path.join(ctx.home, '.config', 'plug', 'plugins', 'asight-ca.js'), role: 'plugin', data: '// asight collector: trust plugin\n', mode: 0o644 }, { path: path.join(b.dir, 'plugins', 'plug', 'index.js'), role: 'plugin', data: 'export {}\n', mode: 0o644 }],
+    owned: [{ path: path.join(ctx.home, '.config', 'plug', 'plugins', 'trocar-ca.js'), role: 'plugin', data: '// trocar collector: trust plugin\n', mode: 0o644 }, { path: path.join(b.dir, 'plugins', 'plug', 'index.js'), role: 'plugin', data: 'export {}\n', mode: 0o644 }],
     entries: [{ kind: 'text', format: 'yaml-list', path: path.join(ctx.home, '.plug', 'patch.yml'), line: `- insert: [{ name: ${JSON.stringify(path.join(b.dir, 'plugins', 'plug', 'index.js'))} }] ${lineComment('plug trust plugin')}`, semantic: 'append' }],
     watch: [{ path: path.join(ctx.home, '.config', 'plug', 'node_modules'), why: 'plug installs its SDK on first run' }],
   }),
@@ -61,7 +61,7 @@ async function setup(pick = (b) => [repH(b, 'aa'), repH(b, 'bb'), jsonH(b), plug
   return { b, user, run, hashes: () => Object.fromEntries([...user, ...fs.readdirSync(b.ca('.')).map((n) => b.ca(n))].map((f) => [path.relative(b.home, f), sha(f)])) }
 }
 
-test('off one harness: its entry, bundle, extra file, plugin and rows go, byte for byte; every file of the others is unchanged, asight-ca.pem stays, and so does what is not asight\'s', async () => {
+test('off one harness: its entry, bundle, extra file, plugin and rows go, byte for byte; every file of the others is unchanged, trocar-ca.pem stays, and so does what is not trocar\'s', async () => {
   const s = await setup()
   const before = s.hashes()
   const r = await s.run({ ids: ['aa'] })
@@ -70,7 +70,7 @@ test('off one harness: its entry, bundle, extra file, plugin and rows go, byte f
   assert.ok(!fs.existsSync(s.b.ca('combined-aa.pem')), 'its bundle: nobody holds it, so it is removed')
   const after = s.hashes()
   for (const k of Object.keys(before)) if (!k.includes('aa')) assert.equal(after[k], before[k], `${k} is untouched`)
-  assert.ok(fs.existsSync(s.b.ca('asight-ca.pem')) && fs.existsSync(s.b.ca('ca.key')))
+  assert.ok(fs.existsSync(s.b.ca('trocar-ca.pem')) && fs.existsSync(s.b.ca('ca.key')))
   assert.deepEqual([...new Set(r.manifest.entries.map((e) => e.harness))].sort(), ['bb', 'jj', 'plug'], 'the other harnesses\' entries stay in the manifest')
   assert.deepEqual(Object.keys(r.manifest.liveness).sort(), ['bb', 'jj', 'plug'], 'a harness with nothing left needs no liveness')
   assert.deepEqual([r.left, r.kept_bundles, r.still_trusting], [[], [], []])
@@ -79,29 +79,29 @@ test('off one harness: its entry, bundle, extra file, plugin and rows go, byte f
   const p = await s.run({ ids: ['plug'] })
   assert.deepEqual(p.results.map((x) => x.result), ['reverted-not-identical'])
   assert.equal(fs.readFileSync(s.user[3], 'utf8'), '- set: {a: 1}\n- insert: [{ name: mine }]\n')
-  assert.ok(!fs.existsSync(path.join(s.b.home, '.config', 'plug', 'plugins', 'asight-ca.js')) && !fs.existsSync(path.join(s.b.dir, 'plugins')))
+  assert.ok(!fs.existsSync(path.join(s.b.home, '.config', 'plug', 'plugins', 'trocar-ca.js')) && !fs.existsSync(path.join(s.b.dir, 'plugins')))
   assert.deepEqual(p.residue, [], 'nothing appeared where the agent writes')
 })
 
-test('off all: every entry out in the 4.6 order (config keys, then rows), the CA files stay unless dropCa (uninstall), and the manifest keeps only what is not asight\'s harness work', async () => {
+test('off all: every entry out in the 4.6 order (config keys, then rows), the CA files stay unless dropCa (uninstall), and the manifest keeps only what is not trocar\'s harness work', async () => {
   const s = await setup()
   const r = await s.run()
   assert.deepEqual(r.results.map((x) => x.result).sort(), ['restored', 'restored', 'restored', 'restored'])
   const order = r.results.map((x) => path.basename(x.path))
   assert.ok(order.indexOf('patch.yml') > order.indexOf('settings.json') && order.indexOf('patch.yml') > order.lastIndexOf('.env'), `config keys and blocks (step 1) before rows (step 4): ${order}`)
   assert.deepEqual([r.manifest.entries, r.manifest.files.map((f) => f.role)], [[], ['ca-key', 'ca-cert']], 'the CA files are not a harness\'s')
-  assert.ok(fs.existsSync(s.b.ca('asight-ca.pem')), 'off never removes the CA: the next on uses it again')
+  assert.ok(fs.existsSync(s.b.ca('trocar-ca.pem')), 'off never removes the CA: the next on uses it again')
   const again = await s.run({ dropCa: true })
-  assert.deepEqual([again.results, again.removed], [[], [s.b.ca('asight-ca.pem')]], 'a second run finds nothing to undo; dropCa (uninstall) removes the CA certificate and not its key')
+  assert.deepEqual([again.results, again.removed], [[], [s.b.ca('trocar-ca.pem')]], 'a second run finds nothing to undo; dropCa (uninstall) removes the CA certificate and not its key')
   assert.ok(fs.existsSync(s.b.ca('ca.key')))
 })
 
-test('backups (R2): dropped when the file is back at its pre_sha256, kept and listed in kept_backups when the user changed the file after asight did; an entry that cannot be undone keeps its backup and stays', async () => {
+test('backups (R2): dropped when the file is back at its pre_sha256, kept and listed in kept_backups when the user changed the file after trocar did; an entry that cannot be undone keeps its backup and stays', async () => {
   const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb'), jsonH(b)])
   const m = readManifest(s.b.dir)
   const backups = [0, 1, 2].map((n) => m.entries.find((e) => e.path === s.user[n]).backup) // the run takes undone entries out of m
   const bk = (n) => backups[n]
-  assert.ok([0, 1, 2].every((n) => fs.existsSync(bk(n))), 'one backup per user file asight changed')
+  assert.ok([0, 1, 2].every((n) => fs.existsSync(bk(n))), 'one backup per user file trocar changed')
   fs.appendFileSync(s.user[1], 'KEY_NEW=1\n') // the user edits .bb/.env after install
   fs.writeFileSync(s.user[2], fs.readFileSync(s.user[2], 'utf8') + ' trailing garbage') // jj's settings is no longer JSON
   const r = await s.run({ manifest: m })
@@ -109,10 +109,10 @@ test('backups (R2): dropped when the file is back at its pre_sha256, kept and li
   const row = (n) => r.results.find((x) => x.path === s.user[n])
   assert.deepEqual([fs.existsSync(bk(0)), row(0).backup, row(0).backup_kept], [false, bk(0), undefined], 'restored: the backup is dropped')
   assert.deepEqual([fs.existsSync(bk(1)), row(1).backup_kept], [true, bk(1)], 'edited since: kept')
-  assert.deepEqual(r.manifest.kept_backups.map((k) => [k.path, k.backup, typeof k.at, /edited after asight/.test(k.reason)]), [[s.user[1], bk(1), 'string', true]])
-  assert.equal(fs.readFileSync(s.user[1], 'utf8'), 'KEY_B=sk-b\nKEY_NEW=1\n', 'asight\'s block is out; the user\'s edit stays')
+  assert.deepEqual(r.manifest.kept_backups.map((k) => [k.path, k.backup, typeof k.at, /edited after trocar/.test(k.reason)]), [[s.user[1], bk(1), 'string', true]])
+  assert.equal(fs.readFileSync(s.user[1], 'utf8'), 'KEY_B=sk-b\nKEY_NEW=1\n', 'trocar\'s block is out; the user\'s edit stays')
   assert.deepEqual([fs.existsSync(bk(2)), row(2).backup_kept, r.left.map((l) => [l.path, l.result])], [true, bk(2), [[s.user[2], 'left-unparsable']]], 'not undone: its backup stays, named')
-  assert.match(r.left[0].reason, /settings\.json: asight cannot read it \(line \d+, column \d+\); asight's env\.NODE_EXTRA_CA_CERTS/)
+  assert.match(r.left[0].reason, /settings\.json: trocar cannot read it \(line \d+, column \d+\); trocar's env\.NODE_EXTRA_CA_CERTS/)
   assert.deepEqual(r.manifest.entries.map((e) => e.path), [s.user[2]], 'and so does its manifest entry')
   assert.equal(r.manifest.files.some((f) => f.harness === 'jj'), false, 'its extra file was removed all the same: nobody holds it')
   // restoring a missing file keeps its backup too, and a backup left when the file was already back is dropped
@@ -131,20 +131,20 @@ test('P13 json-array-item, switch and config-entry are undone by off; wrapper an
   const s = await setup((b) => [repH(b, 'aa')])
   const m = readManifest(s.b.dir)
   const arr = write(s.b, '.aa/settings.json', '{\n  "list": [\n    "u",\n    "http.proxy"\n  ]\n}\n')
-  const sw = write(s.b, '.asight/collector/switch/aa', 'http://127.0.0.1:47011\n'), cfg = write(s.b, '.aa/library/asight.json', '{}\n')
-  const bin = write(s.b, 'bin/aa', '#!/bin/dash\nexec real\n'), real = write(s.b, 'bin/.asight-real/aa', 'REAL PROGRAM')
+  const sw = write(s.b, '.trocar/collector/switch/aa', 'http://127.0.0.1:47011\n'), cfg = write(s.b, '.aa/library/trocar.json', '{}\n')
+  const bin = write(s.b, 'bin/aa', '#!/bin/dash\nexec real\n'), real = write(s.b, 'bin/.trocar-real/aa', 'REAL PROGRAM')
   const at = new Date(0).toISOString()
   m.entries.push({ phase: 'on', kind: 'json-array-item', harness: 'aa', path: arr, keys: ['list'], item: 'http.proxy', created_array: false, existed_before: true, mode: 0o644, pre_sha256: 'x', post_sha256: 'y', ops: [], backup: null, installed_at: at },
-    { phase: 'install', kind: 'root-key', harness: null, path: 'keychain:asight-root', custody: { kind: 'keychain', id: 'asight-root' }, fp256: 'AB:CD', installed_at: at })
+    { phase: 'install', kind: 'root-key', harness: null, path: 'keychain:trocar-root', custody: { kind: 'keychain', id: 'trocar-root' }, fp256: 'AB:CD', installed_at: at })
   m.files.push({ phase: 'on', kind: 'owned-file', role: 'switch', harness: 'aa', path: sw }, { phase: 'on', kind: 'owned-file', role: 'config-entry', harness: 'aa', path: cfg, sha256: sha(cfg) },
     { phase: 'install', kind: 'owned-file', role: 'wrapper', harness: 'aa', path: bin, real, sha256: sha(bin), real_sha256: sha(real) })
   const removed = [], installed = m.entries.concat(m.files).filter((x) => x.phase === 'install'), bytes = () => installed.filter((x) => x.path && fs.existsSync(x.path)).map((x) => [x.path, sha(x.path)])
   const before = bytes()
   const off = await s.run({ manifest: m, phases: ['on'], custody: { remove: async (h) => { removed.push(h); return { removed: true } } } })
   assert.deepEqual(off.left, [])
-  assert.equal(fs.readFileSync(arr, 'utf8'), '{\n  "list": [\n    "u"\n  ]\n}\n', 'only asight\'s element left the list')
+  assert.equal(fs.readFileSync(arr, 'utf8'), '{\n  "list": [\n    "u"\n  ]\n}\n', 'only trocar\'s element left the list')
   assert.deepEqual([fs.existsSync(sw), fs.existsSync(cfg), fs.readFileSync(bin, 'utf8'), fs.existsSync(real), removed], [false, false, '#!/bin/dash\nexec real\n', true, []], 'off keeps the wrapper and the key')
-  assert.ok(off.install_items.some((x) => /keychain:asight-root/.test(x)), 'off names the key it left for uninstall in its --json receipt')
+  assert.ok(off.install_items.some((x) => /keychain:trocar-root/.test(x)), 'off names the key it left for uninstall in its --json receipt')
   const kept = readManifest(s.b.dir)
   assert.deepEqual(kept.entries.concat(kept.files).map((x) => x.phase), installed.map(() => 'install'), 'off took every phase-on item and left every phase-install one in the manifest')
   assert.deepEqual(bytes(), before, 'every file install wrote (the dotenv block, the bundle, the CA, the wrapper) is byte for byte')
@@ -152,7 +152,7 @@ test('P13 json-array-item, switch and config-entry are undone by off; wrapper an
   assert.deepEqual([un.left, removed, readManifest(s.b.dir).entries.map((e) => e.kind)], [[], [], ['root-key']], 'undoHarnesses never takes the key: its caller does, last (undoRootKeys)')
   assert.deepEqual([fs.readFileSync(bin, 'utf8'), fs.existsSync(path.dirname(real))], ['REAL PROGRAM', false], 'the real program is back under its name')
   const k = await undoRootKeys({ dir: s.b.dir, manifest: readManifest(s.b.dir), custody: { remove: async (h) => { removed.push(h); return { removed: true } } } })
-  assert.deepEqual([k, removed, readManifest(s.b.dir).entries], [{ removed: ['keychain:asight-root'], left: [] }, [{ kind: 'keychain', id: 'asight-root' }], []])
+  assert.deepEqual([k, removed, readManifest(s.b.dir).entries], [{ removed: ['keychain:trocar-root'], left: [] }, [{ kind: 'keychain', id: 'trocar-root' }], []])
 })
 
 // rule U's certificate block (phase install) in the user's own file: `off` lists it and leaves the file byte for byte; `uninstall` takes the block out
@@ -171,18 +171,18 @@ test('P13 pem-block: off leaves the user\'s certificate file byte-identical and 
   assert.deepEqual([fs.readFileSync(file), un.left, readManifest(s.b.dir).entries.some((e) => e.format === 'pem-block')], [before, [], false])
 })
 
-// a config-library entry asight created (4.11 P5 / CM18): the agent writes the user's settings into it while it is the applied one, so off removes it only
-// while it is what asight wrote; edited, it is the user's and stays (D48②), said
+// a config-library entry trocar created (4.11 P5 / CM18): the agent writes the user's settings into it while it is the applied one, so off removes it only
+// while it is what trocar wrote; edited, it is the user's and stays (D48②), said
 for (const [what, edit, gone] of [['untouched', null, true], ['edited during on', '{"egressProxyPacUrl":"x","theme":"dark"}\n', false]]) {
   test(`P13 config-entry ${what}: off ${gone ? 'removes it' : 'keeps it and says so'}`, async () => {
     const s = await setup((b) => [repH(b, 'aa')])
     const m = readManifest(s.b.dir)
-    const cfg = write(s.b, 'lib/asight.json', '{"egressProxyPacUrl":"x"}\n')
+    const cfg = write(s.b, 'lib/trocar.json', '{"egressProxyPacUrl":"x"}\n')
     m.files.push({ phase: 'on', kind: 'owned-file', role: 'config-entry', harness: 'aa', path: cfg, sha256: sha(cfg) })
     if (edit) fs.writeFileSync(cfg, edit)
     const off = await s.run({ manifest: m })
     assert.deepEqual([fs.existsSync(cfg), off.left], [!gone, []])
-    if (!gone) assert.deepEqual([fs.readFileSync(cfg, 'utf8'), off.notes.some((n) => n.startsWith(`${cfg}, the config-entry asight created, was changed`))], [edit, true])
+    if (!gone) assert.deepEqual([fs.readFileSync(cfg, 'utf8'), off.notes.some((n) => n.startsWith(`${cfg}, the config-entry trocar created, was changed`))], [edit, true])
     assert.ok(!readManifest(s.b.dir).files.some((f) => f.role === 'config-entry'), 'either way it leaves the manifest')
   })
 }
@@ -190,7 +190,7 @@ for (const [what, edit, gone] of [['untouched', null, true], ['edited during on'
 test('P13 uninstall: a wrapper the agent updated over is left in place and only the moved copy goes; a key with no custody backend is left, with how to remove it by hand', async () => {
   const s = await setup((b) => [repH(b, 'aa')])
   const m = readManifest(s.b.dir)
-  const bin = write(s.b, 'bin/aa', '#!/bin/dash\nexec real\n'), real = write(s.b, 'bin/.asight-real/aa', 'OLD PROGRAM')
+  const bin = write(s.b, 'bin/aa', '#!/bin/dash\nexec real\n'), real = write(s.b, 'bin/.trocar-real/aa', 'OLD PROGRAM')
   m.files.push({ phase: 'install', kind: 'owned-file', role: 'wrapper', harness: 'aa', path: bin, real, sha256: sha(bin), real_sha256: sha(real) })
   m.entries.push({ phase: 'install', kind: 'root-key', harness: null, path: 'file:/k', custody: { kind: 'file', id: '/k' }, fp256: 'AB' })
   fs.writeFileSync(bin, 'NEW PROGRAM') // the agent's update replaced it by name
@@ -218,7 +218,7 @@ test('an entry of a kind this build does not know is left alone, and so is a man
   m.entries.push({ phase: 'on', kind: 'mystery', harness: 'aa', path: path.join(s.b.home, 'x'), undo_by_hand: 'rm x' })
   const r = await s.run({ manifest: m })
   assert.deepEqual([r.results.length, r.manifest.entries.map((e) => e.kind)], [1, ['mystery']], 'the one it knows is undone, the one it does not stays')
-  assert.deepEqual(r.left.map((l) => [l.path, l.harness, l.result]), [[path.join(s.b.home, 'x'), 'aa', 'unknown-kind']], 'and it is said by undoHarnesses itself, so no caller (off, asight-off, uninstall) can forget it (1.6 R3)')
+  assert.deepEqual(r.left.map((l) => [l.path, l.harness, l.result]), [[path.join(s.b.home, 'x'), 'aa', 'unknown-kind']], 'and it is said by undoHarnesses itself, so no caller (off, trocar-off, uninstall) can forget it (1.6 R3)')
   assert.match(r.left[0].reason, /kind "mystery", which this build does not undo; by hand: rm x/)
   // another harness's unknown item is not this run's; an entry that names no harness is said by a run for everything, never by one for some
   const m2 = readManifest(s.b.dir)
@@ -230,17 +230,17 @@ test('an entry of a kind this build does not know is left alone, and so is a man
   // a file of a kind it does not know is not touched whatever its role, and is said the same way
   const t = await setup((b) => [plugH(b)])
   const m3 = readManifest(t.b.dir)
-  const plugin = m3.files.find((f) => f.role === 'plugin' && f.path.endsWith('asight-ca.js'))
+  const plugin = m3.files.find((f) => f.role === 'plugin' && f.path.endsWith('trocar-ca.js'))
   Object.assign(plugin, { kind: 'future-file', undo_by_hand: 'rm the plugin' })
   const r3 = await t.run({ manifest: m3 })
-  assert.deepEqual([r3.left.map((l) => [l.path, l.harness, l.result]), fs.existsSync(plugin.path), r3.removed.includes(plugin.path), r3.manifest.files.includes(plugin)], [[[plugin.path, 'plug', 'unknown-kind']], true, false, true], 'kept on disk and in the manifest; the plugin dir asight owns, of a kind it knows, still went')
+  assert.deepEqual([r3.left.map((l) => [l.path, l.harness, l.result]), fs.existsSync(plugin.path), r3.removed.includes(plugin.path), r3.manifest.files.includes(plugin)], [[[plugin.path, 'plug', 'unknown-kind']], true, false, true], 'kept on disk and in the manifest; the plugin dir trocar owns, of a kind it knows, still went')
   await assert.rejects(undoHarnesses({ dir: s.b.dir, home: s.b.home, manifest: { version: 3, unsupported: true, entries: [], files: [] }, ids: null }), /version 3.*nothing was changed/)
 })
 
 test('residue and changed plugins are reported, not deleted: a path the agent wrote because of the plugin; a plugin file edited since install (removed all the same)', async () => {
   const s = await setup((b) => [plugH(b)])
   fs.mkdirSync(path.join(s.b.home, '.config', 'plug', 'node_modules', 'sdk'), { recursive: true })
-  const plugin = path.join(s.b.home, '.config', 'plug', 'plugins', 'asight-ca.js'); fs.appendFileSync(plugin, '// edited\n')
+  const plugin = path.join(s.b.home, '.config', 'plug', 'plugins', 'trocar-ca.js'); fs.appendFileSync(plugin, '// edited\n')
   const r = await s.run()
   assert.deepEqual(r.residue, [{ harness: 'plug', path: path.join(s.b.home, '.config', 'plug', 'node_modules'), why: 'plug installs its SDK on first run' }])
   assert.ok(fs.existsSync(path.join(s.b.home, '.config', 'plug', 'node_modules', 'sdk')), 'never deleted')
@@ -248,19 +248,19 @@ test('residue and changed plugins are reported, not deleted: a path the agent wr
   assert.deepEqual(r.manifest.watched, [], 'reported once: the harness has nothing left')
 })
 
-test('bundle: a process of the harness that started after install, one that re-reads its entry, or a child whose environ names it keeps the bundle without the asight CA; one from before install does not; the next run removes it', async () => {
+test('bundle: a process of the harness that started after install, one that re-reads its entry, or a child whose environ names it keeps the bundle without the trocar CA; one from before install does not; the next run removes it', async () => {
   const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb', { rereadsEntry: true })])
   const installedAt = Date.parse(readManifest(s.b.dir).entries[0].installed_at)
   const table = [proc(70, '/x/aa', { startedAt: installedAt + 1000 }), proc(71, '/bin/git', { startedAt: installedAt + 2000, env: { SSL_CERT_FILE: s.b.ca('combined-aa.pem') } }), proc(72, '/x/aa', { startedAt: installedAt - 60000 }), proc(73, '/x/bb', { startedAt: 1 }), proc(74, '/x/aa', { startedAt: null })]
-  const asightFp = certBlocks(fs.readFileSync(s.b.ca('asight-ca.pem'), 'utf8'))[0].fp
+  const trocarFp = certBlocks(fs.readFileSync(s.b.ca('trocar-ca.pem'), 'utf8'))[0].fp
   const r = await s.run({ procs: async () => table })
   assert.deepEqual(r.kept_bundles, [{ path: s.b.ca('combined-aa.pem'), harness: 'aa', pids: [70, 71, 74] }, { path: s.b.ca('combined-bb.pem'), harness: 'bb', pids: [73] }], 'started after install, inherited it, or start time unknown; bb re-reads, so even the one from before counts; pid 72 predates install')
   const without = composeBundle({ nodeRoots: roots.node, osRootsText: '', userCerts: [CORP.certPem], caPem: null }).data
-  assert.equal(fs.readFileSync(s.b.ca('combined-aa.pem'), 'utf8'), without, 'the same bundle, without the asight CA, byte for byte what composing it without gives')
-  assert.ok(!fpsOf(s.b.ca('combined-bb.pem')).includes(asightFp))
+  assert.equal(fs.readFileSync(s.b.ca('combined-aa.pem'), 'utf8'), without, 'the same bundle, without the trocar CA, byte for byte what composing it without gives')
+  assert.ok(!fpsOf(s.b.ca('combined-bb.pem')).includes(trocarFp))
   assert.deepEqual([r.left, r.manifest.files.filter((f) => f.role === 'bundle').map((f) => [path.basename(f.path), f.without_ca])], [[], [['combined-aa.pem', true], ['combined-bb.pem', true]]], 'kept: still in the manifest')
   const again = await s.run({ manifest: r.manifest, procs: async () => [proc(72, '/x/aa', { startedAt: installedAt - 60000 })] })
-  assert.deepEqual([again.kept_bundles, again.removed.map((p) => path.basename(p)).sort(), fs.readdirSync(s.b.ca('.')).sort()], [[], ['combined-aa.pem', 'combined-bb.pem'], ['asight-ca.pem', 'ca.key']], 'nobody holds them now (or never could)')
+  assert.deepEqual([again.kept_bundles, again.removed.map((p) => path.basename(p)).sort(), fs.readdirSync(s.b.ca('.')).sort()], [[], ['combined-aa.pem', 'combined-bb.pem'], ['trocar-ca.pem', 'ca.key']], 'nobody holds them now (or never could)')
 })
 
 test('bundle gone while a live process may use it: rebuilt without the CA from Node\'s roots and the recorded user CAs (said), a lost source named; nobody uses it: nothing is made; no roots given: an item left', async () => {
@@ -270,7 +270,7 @@ test('bundle gone while a live process may use it: rebuilt without the CA from N
   const r = await s.run({ ids: ['aa'], procs: async () => live, roots: { node: [ROOT.certPem], osText: OSROOT.certPem } })
   const aa = s.b.ca('combined-aa.pem')
   assert.deepEqual(r.kept_bundles.map((k) => [k.harness, k.pids, k.rebuilt, k.lost_fps?.length, k.unread?.map((u) => u.errno)]), [['aa', [70], true, 1, ['ENOENT']]], 'rebuilt, and the user CA that could not be carried over is named with its errno')
-  assert.deepEqual(fpsOf(aa), [ROOT, OSROOT].flatMap((c) => certBlocks(c.certPem).map((x) => x.fp)), 'Node\'s roots and the OS roots; the user CA source is gone, and the asight CA is not in it')
+  assert.deepEqual(fpsOf(aa), [ROOT, OSROOT].flatMap((c) => certBlocks(c.certPem).map((x) => x.fp)), 'Node\'s roots and the OS roots; the user CA source is gone, and the trocar CA is not in it')
   assert.ok(!fs.existsSync(s.b.ca('combined-bb.pem')), 'bb was not asked about (ids)')
   const none = await s.run({ ids: ['bb'], procs: async () => [] })
   assert.deepEqual([none.kept_bundles, none.left, fs.existsSync(s.b.ca('combined-bb.pem'))], [[], [], false], 'nobody uses a missing bundle: it is just dropped')
@@ -285,7 +285,7 @@ test('bundle that cannot be read: with a live process it still holds the CA (an 
   const r = await s.run({ procs: async () => [proc(70, '/x/aa')] })
   assert.deepEqual(r.kept_bundles, [{ path: s.b.ca('combined-aa.pem'), harness: 'aa', pids: [70], holds_ca: true, error: 'EISDIR' }])
   assert.deepEqual(r.left.map((l) => [l.path, l.harness, l.result]), [[s.b.ca('combined-aa.pem'), 'aa', 'error']])
-  assert.match(r.left[0].reason, /still holds the asight CA.*EISDIR.*pid 70/)
+  assert.match(r.left[0].reason, /still holds the trocar CA.*EISDIR.*pid 70/)
   assert.ok(!fs.existsSync(s.b.ca('combined-bb.pem')), 'the one nobody holds is gone')
 })
 
@@ -294,7 +294,7 @@ test('extra trust file: only a process whose environ names it keeps it (stripped
   const extra = s.b.ca('extra-jj.pem')
   const r = await s.run({ procs: async () => [proc(70, '/x/jj', { startedAt: 1 }), proc(71, '/bin/node', { env: { NODE_EXTRA_CA_CERTS: extra } })] })
   assert.deepEqual(r.kept_bundles, [{ path: extra, harness: 'jj', pids: [71] }], 'the jj process itself is not a holder of an extra file')
-  assert.deepEqual(fpsOf(extra), [certBlocks(CORP.certPem)[0].fp], 'the user\'s CA stays, the asight CA is out')
+  assert.deepEqual(fpsOf(extra), [certBlocks(CORP.certPem)[0].fp], 'the user\'s CA stays, the trocar CA is out')
   const gone = await s.run({ manifest: r.manifest, procs: async () => [proc(71, '/bin/node', { env: { NODE_EXTRA_CA_CERTS: extra } })] })
   assert.deepEqual([gone.kept_bundles.length, fs.existsSync(extra)], [1, true], 'still held: kept again, stripped already')
   fs.rmSync(extra)
@@ -306,8 +306,8 @@ test('an extra trust file whose holder\'s environment cannot be read: a process 
   const s = await setup((b) => [jsonH(b)])
   const extra = s.b.ca('extra-jj.pem')
   const jj = proc(70, '/x/jj', { startedAt: 1 })
-  const helper = proc(90, '/usr/libexec/asight-helper', { env: null }) // non-dumpable, started by init: nothing of jj's
-  const asightFp = certBlocks(fs.readFileSync(s.b.ca('asight-ca.pem'), 'utf8'))[0].fp
+  const helper = proc(90, '/usr/libexec/trocar-helper', { env: null }) // non-dumpable, started by init: nothing of jj's
+  const trocarFp = certBlocks(fs.readFileSync(s.b.ca('trocar-ca.pem'), 'utf8'))[0].fp
   const gone = await s.run({ procs: async () => [jj, helper] })
   assert.deepEqual([gone.kept_bundles, gone.left, fs.existsSync(extra)], [[], [], false], 'an unreadable environ that descends from no jj process is not a holder: removed as ever')
   // a child of jj, and a grandchild of it, whose environ cannot be read; one that started before the file existed cannot hold it. Their start
@@ -325,8 +325,8 @@ test('an extra trust file whose holder\'s environment cannot be read: a process 
   const r = await u.run({ procs: async () => [jj, child, grand, helper] })
   const kept = u.b.ca('extra-jj.pem')
   assert.deepEqual(r.kept_bundles.map((k) => [k.path, k.harness, k.pids, k.unjudged, /pid 71, 72, a running jj process or one started by it, cannot be read/.test(k.error)]), [[kept, 'jj', [], true, true]], 'pid 71 and its child 72 are named; the helper is not')
-  assert.deepEqual([r.left.map((l) => [l.path, l.result]), fs.existsSync(kept), fpsOf(kept).includes(asightFp), fpsOf(kept).length], [[[kept, 'error']], true, false, 1], 'kept without the asight CA, with the user\'s')
-  assert.match(r.left[0].reason, /kept, without the asight CA, because whether a running process holds it is not known \(the environment of pid 71, 72/)
+  assert.deepEqual([r.left.map((l) => [l.path, l.result]), fs.existsSync(kept), fpsOf(kept).includes(trocarFp), fpsOf(kept).length], [[[kept, 'error']], true, false, 1], 'kept without the trocar CA, with the user\'s')
+  assert.match(r.left[0].reason, /kept, without the trocar CA, because whether a running process holds it is not known \(the environment of pid 71, 72/)
   // they go: the next run removes it
   const next = await u.run({ manifest: r.manifest, procs: async () => [jj, helper] })
   assert.deepEqual([next.kept_bundles, next.left, fs.existsSync(kept)], [[], [], false])
@@ -340,7 +340,7 @@ test('a process table that cannot be read is not "nobody is alive": the bundle i
   const s = await setup((b) => [repH(b, 'aa')])
   const r = await s.run({ procs: async () => { throw new Error('ps: boom') } })
   assert.deepEqual(r.kept_bundles, [{ path: s.b.ca('combined-aa.pem'), harness: 'aa', pids: [], unjudged: true, error: 'ps: boom' }])
-  assert.deepEqual([r.left.map((l) => l.result), r.procs_error, fpsOf(s.b.ca('combined-aa.pem')).length], [['error'], 'ps: boom', 2], 'kept, with Node\'s root and the user CA, not the asight CA')
+  assert.deepEqual([r.left.map((l) => l.result), r.procs_error, fpsOf(s.b.ca('combined-aa.pem')).length], [['error'], 'ps: boom', 2], 'kept, with Node\'s root and the user CA, not the trocar CA')
   const t = await setup((b) => [repH(b, 'aa')])
   const m = readManifest(t.b.dir); delete m.liveness.aa // a manifest written before the snapshot existed
   const old = await t.run({ manifest: m, procs: async () => [proc(91, '/x/anything', { env: null })] }) // nothing says whether it is an aa
@@ -356,7 +356,7 @@ test('a process table that cannot be read is not "nobody is alive": the bundle i
   assert.deepEqual([older.kept_bundles, older.left, older.trust_unknown, fs.existsSync(v.b.ca('combined-aa.pem'))], [[], [], [], false], 'no process that may have read the entry: nobody holds the bundle, signature or not')
 })
 
-test('step 5: only a process that may have read the entry is reported, with until from the snapshot; untilEnviron limits it to a process whose environ names a file of asight\'s — where the OS never shows an environment (macOS, Windows) such a process is reported, one whose read failed is not', async () => {
+test('step 5: only a process that may have read the entry is reported, with until from the snapshot; untilEnviron limits it to a process whose environ names a file of trocar\'s — where the OS never shows an environment (macOS, Windows) such a process is reported, one whose read failed is not', async () => {
   const s = await setup((b) => [repH(b, 'aa', { afterUninstall: 'next-connection' }), { ...repH(b, 'bb', { afterUninstall: 'restart', untilEnviron: 'SSL_CERT_FILE' }) }, jsonH(b)])
   const t0 = Date.parse(readManifest(s.b.dir).entries[0].installed_at)
   const r = await s.run({ ids: ['aa', 'bb', 'jj'], procs: async () => [
@@ -364,7 +364,7 @@ test('step 5: only a process that may have read the entry is reported, with unti
     proc(3, '/x/bb', { startedAt: t0 + 1000 }), proc(4, '/x/bb', { startedAt: t0 + 1000, env: { SSL_CERT_FILE: s.b.ca('combined-bb.pem') } }), proc(5, '/x/bb', { startedAt: t0 + 1000, env: { SSL_CERT_FILE: '/corp/own.pem' } }),
     proc(6, '/x/jj', { startedAt: 1 }), // jj re-reads its entry: alive is enough, until the default
     proc(7, '/usr/bin/vim'),
-    proc(8, '/x/bb', { startedAt: t0 + 1000, env: null }), // a read that failed (Linux): whether it went through asight's file is not known — not listed
+    proc(8, '/x/bb', { startedAt: t0 + 1000, env: null }), // a read that failed (Linux): whether it went through trocar's file is not known — not listed
     { ...proc(9, '/x/bb', { startedAt: t0 + 1000, env: null }), envRead: false }, // an environment the OS never shows: it may have, so it is listed
   ] })
   assert.deepEqual(r.still_trusting, [{ pid: 2, harness: 'aa', until: 'next-connection' }, { pid: 4, harness: 'bb', until: 'restart' }, { pid: 6, harness: 'jj', until: 'restart' }, { pid: 9, harness: 'bb', until: 'restart' }])
@@ -375,27 +375,27 @@ test('step 5: only a process that may have read the entry is reported, with unti
 test('a bundle nobody holds that cannot be removed still holds the CA: an item left with its reason, not a crash that leaves the rest undone; so is a CA file that cannot be removed', async () => {
   const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
   const refuse = (names) => ({ ...fs, rmSync: (p, o) => { if (names.some((n) => String(p).endsWith(n))) throw Object.assign(new Error(`EACCES: permission denied, rm '${p}'`), { code: 'EACCES' }); return fs.rmSync(p, o) } })
-  const r = await s.run({ fs: refuse(['combined-aa.pem', 'asight-ca.pem']), dropCa: true })
+  const r = await s.run({ fs: refuse(['combined-aa.pem', 'trocar-ca.pem']), dropCa: true })
   assert.deepEqual(r.kept_bundles, [{ path: s.b.ca('combined-aa.pem'), harness: 'aa', pids: [], holds_ca: true, error: 'EACCES' }])
-  assert.deepEqual(r.left.map((l) => [path.basename(l.path), l.harness, l.result]), [['combined-aa.pem', 'aa', 'error'], ['asight-ca.pem', null, 'error']])
-  assert.match(r.left[0].reason, /held by no running process but could not be removed \(EACCES\).*still holds the asight CA/)
+  assert.deepEqual(r.left.map((l) => [path.basename(l.path), l.harness, l.result]), [['combined-aa.pem', 'aa', 'error'], ['trocar-ca.pem', null, 'error']])
+  assert.match(r.left[0].reason, /held by no running process but could not be removed \(EACCES\).*still holds the trocar CA/)
   assert.ok(!fs.existsSync(s.b.ca('combined-bb.pem')) && r.results.length === 2, 'the other harness and every entry were still undone')
-  assert.deepEqual(r.manifest.files.filter((f) => f.role === 'bundle' || f.role === 'ca-cert').map((f) => path.basename(f.path)).sort(), ['asight-ca.pem', 'combined-aa.pem'], 'what is left stays in the manifest')
+  assert.deepEqual(r.manifest.files.filter((f) => f.role === 'bundle' || f.role === 'ca-cert').map((f) => path.basename(f.path)).sort(), ['trocar-ca.pem', 'combined-aa.pem'], 'what is left stays in the manifest')
 })
 
-test('an entry step 1 could not undo still names its bundle: the bundle is kept without the asight CA, held or not (no bundle, no network at the agent\'s next start), rebuilt when gone, and removed once the entry is undone (4.6 安装 / 卸载不静默)', async () => {
+test('an entry step 1 could not undo still names its bundle: the bundle is kept without the trocar CA, held or not (no bundle, no network at the agent\'s next start), rebuilt when gone, and removed once the entry is undone (4.6 安装 / 卸载不静默)', async () => {
   const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
-  const asightFp = certBlocks(fs.readFileSync(s.b.ca('asight-ca.pem'), 'utf8'))[0].fp
+  const trocarFp = certBlocks(fs.readFileSync(s.b.ca('trocar-ca.pem'), 'utf8'))[0].fp
   const bundle = s.b.ca('combined-aa.pem')
   const installed = fs.readFileSync(s.user[0])
   fs.rmSync(s.user[0]); fs.symlinkSync(write(s.b, 'elsewhere.env', 'X=1\n'), s.user[0]) // aa's .env is a link to some other file now: left-link
   const r = await s.run()
   assert.deepEqual(r.results.map((x) => [path.basename(path.dirname(x.path)), x.result]).sort(), [['.aa', 'left-link'], ['.bb', 'restored']])
-  assert.equal(fs.readFileSync(bundle, 'utf8'), composeBundle({ nodeRoots: roots.node, osRootsText: '', userCerts: [CORP.certPem], caPem: null }).data, 'kept: the same bundle without the asight CA, byte for byte')
-  assert.ok(!fpsOf(bundle).includes(asightFp) && !fs.existsSync(s.b.ca('combined-bb.pem')), 'bb\'s entry is out, so nobody needs its bundle')
+  assert.equal(fs.readFileSync(bundle, 'utf8'), composeBundle({ nodeRoots: roots.node, osRootsText: '', userCerts: [CORP.certPem], caPem: null }).data, 'kept: the same bundle without the trocar CA, byte for byte')
+  assert.ok(!fpsOf(bundle).includes(trocarFp) && !fs.existsSync(s.b.ca('combined-bb.pem')), 'bb\'s entry is out, so nobody needs its bundle')
   assert.deepEqual(r.kept_bundles, [{ path: bundle, harness: 'aa', pids: [], entry_left: [s.user[0]] }], 'nobody holds it: it is the entry that keeps it')
   assert.deepEqual(r.left.map((l) => [path.basename(l.path), l.harness, l.result]), [['.env', 'aa', 'left-link'], ['combined-aa.pem', 'aa', 'error']], 'the entry, and the bundle that stays because of it')
-  assert.match(r.left[1].reason, /kept, without the asight CA.*\.env, which could not be undone, still points at it/)
+  assert.match(r.left[1].reason, /kept, without the trocar CA.*\.env, which could not be undone, still points at it/)
   assert.deepEqual([r.manifest.entries.map((e) => e.harness), r.manifest.files.filter((f) => f.role === 'bundle').map((f) => [path.basename(f.path), f.without_ca])], [['aa'], [['combined-aa.pem', true]]], 'both stay in the manifest')
   // a bundle that is gone while the entry stands is rebuilt (nobody needs to be running: the next start reads it)
   fs.rmSync(bundle)
@@ -412,11 +412,11 @@ test('an entry step 1 could not undo still names its bundle: the bundle is kept 
   assert.deepEqual([bb.left, bb.kept_bundles, fs.existsSync(t.b.ca('combined-aa.pem'))], [[], [], true], 'aa is not in this run (nothing of it is touched)')
 })
 
-test('uninstall twice with a process still holding a kept bundle: the second run finds it as the first left it — without the CA, whose certificate the first run removed — and says the same, not "still holds the asight CA"', async () => {
+test('uninstall twice with a process still holding a kept bundle: the second run finds it as the first left it — without the CA, whose certificate the first run removed — and says the same, not "still holds the trocar CA"', async () => {
   const s = await setup((b) => [repH(b, 'aa'), jsonH(b)])
   const live = [proc(70, '/x/aa'), proc(71, '/bin/node', { env: { NODE_EXTRA_CA_CERTS: s.b.ca('extra-jj.pem') } })]
   const first = await s.run({ procs: async () => live, dropCa: true })
-  assert.ok(!fs.existsSync(s.b.ca('asight-ca.pem')), 'the first run removed the CA certificate')
+  assert.ok(!fs.existsSync(s.b.ca('trocar-ca.pem')), 'the first run removed the CA certificate')
   const expected = [{ path: s.b.ca('combined-aa.pem'), harness: 'aa', pids: [70] }, { path: s.b.ca('extra-jj.pem'), harness: 'jj', pids: [71] }]
   assert.deepEqual([first.kept_bundles, first.left], [expected, []])
   const sha = (f) => sha256(fs.readFileSync(f))
@@ -432,7 +432,7 @@ test('uninstall twice with a process still holding a kept bundle: the second run
   assert.deepEqual([gone.kept_bundles, gone.left, files.some((f) => fs.existsSync(f))], [[], [], false], 'nobody holds them now: both go')
 })
 
-// The audit's HIGH finding (semantics 1): `off` deleted the bundle a .env still named, reporting success, because the removal read only the bytes asight wrote.
+// The audit's HIGH finding (semantics 1): `off` deleted the bundle a .env still named, reporting success, because the removal read only the bytes trocar wrote.
 // A dangling SSL_CERT_FILE replaces the agent's whole trust store with a file that is not there: an agent with no network at all (1.6 §1.1: the reason `off` removes entries).
 const NAMES = (s, n) => fs.readFileSync(s.user[n], 'utf8').includes(path.basename(s.b.ca('combined-aa.pem')))
 for (const [form, edit] of [
@@ -448,16 +448,16 @@ for (const [form, edit] of [
     fs.writeFileSync(s.user[0], edit(fs.readFileSync(s.user[0], 'utf8')))
     const r = await s.run()
     const row = r.results.find((x) => x.path === s.user[0])
-    assert.equal(row.result, 'reverted-not-identical', 'the asight text was found and taken out')
+    assert.equal(row.result, 'reverted-not-identical', 'the trocar text was found and taken out')
     assert.deepEqual([r.left, NAMES(s, 0), fs.existsSync(s.b.ca('combined-aa.pem'))], [[], false, false], 'no entry left, none names the bundle, so the bundle is removed')
     assert.equal(fs.readFileSync(s.user[0], 'utf8').replace(/\r/g, '').trim(), 'KEY_A=sk-a', 'the user\'s own line is all that is left')
   })
 }
 
-test('asight\'s text in a shape the removal cannot read is NOT "already removed": the file is not touched, the entry is left (left-text, exit 1 through the receipt), and the bundle it names is kept without the CA, with the line numbers and the command that puts the file back from its backup (R2)', async () => {
+test('trocar\'s text in a shape the removal cannot read is NOT "already removed": the file is not touched, the entry is left (left-text, exit 1 through the receipt), and the bundle it names is kept without the CA, with the line numbers and the command that puts the file back from its backup (R2)', async () => {
   const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
   const bundle = s.b.ca('combined-aa.pem')
-  const asightFp = certBlocks(fs.readFileSync(s.b.ca('asight-ca.pem'), 'utf8'))[0].fp
+  const trocarFp = certBlocks(fs.readFileSync(s.b.ca('trocar-ca.pem'), 'utf8'))[0].fp
   const m = readManifest(s.b.dir)
   const backup = m.entries.find((e) => e.path === s.user[0]).backup
   const edited = fs.readFileSync(s.user[0], 'utf8').replace(/^SSL_CERT_FILE=(.*)$/m, 'SSL_CERT_FILE=$1;') // a trailing `;`: not a form the removal reads
@@ -467,16 +467,16 @@ test('asight\'s text in a shape the removal cannot read is NOT "already removed"
   assert.equal(fs.readFileSync(s.user[0], 'utf8'), edited, 'not one byte of the file was changed')
   assert.deepEqual(r.left.filter((l) => l.result === 'left-text').map((l) => [l.path, l.harness]), [[s.user[0], 'aa']])
   const l = r.left[0]
-  assert.match(l.reason, /still names asight's block with SSL_CERT_FILE=.* on line 2,/)
+  assert.match(l.reason, /still names trocar's block with SSL_CERT_FILE=.* on line 2,/)
   assert.equal(l.backup, backup)
   assert.equal(l.restore, `cp ${backup} ${s.user[0]}`, 'the command that puts the file back as it was, from its backup')
-  assert.match(l.reason, /by hand: cp .* \(puts the whole file back as it was before asight, so every change made to it since is lost\)/)
+  assert.match(l.reason, /by hand: cp .* \(puts the whole file back as it was before trocar, so every change made to it since is lost\)/)
   assert.equal(fs.existsSync(backup), true, 'the backup stays')
-  assert.ok(fs.existsSync(bundle) && !fpsOf(bundle).includes(asightFp), 'the bundle is kept, without the asight CA: the .env still points at it')
+  assert.ok(fs.existsSync(bundle) && !fpsOf(bundle).includes(trocarFp), 'the bundle is kept, without the trocar CA: the .env still points at it')
   assert.deepEqual(r.kept_bundles.map((k) => [k.path, k.entry_left]), [[bundle, [s.user[0]]]])
   assert.deepEqual(r.manifest.entries.map((e) => e.path), [s.user[0]], 'the entry stays in the manifest, for the next run')
   // fixed by hand: the next run undoes it and the bundle goes
-  fs.writeFileSync(s.user[0], edited.replace(`;\n`, '\n').replace(/^.*(?:asight collector).*\n/gm, '').replace(/^SSL_CERT_FILE=.*\n/m, ''))
+  fs.writeFileSync(s.user[0], edited.replace(`;\n`, '\n').replace(/^.*(?:trocar collector).*\n/gm, '').replace(/^SSL_CERT_FILE=.*\n/m, ''))
   const done = await s.run({ manifest: r.manifest })
   assert.deepEqual([done.left, fs.existsSync(bundle)], [[], false])
 })
@@ -490,7 +490,7 @@ test('before a bundle is removed the entry files of its harness are read again: 
   write(b, 'corp.pem', CORP.certPem); write(b, '.jr/settings.json', '{\n  "model": "m"\n}\n')
   await installCollector({ home: b.home, env: { HOME: b.home }, osName: 'none', harnesses: [repJson(b, 'jr')], freePort: async () => 47011, roots })
   const file = path.join(b.home, '.jr', 'settings.json'), bundle = b.ca('combined-jr.pem')
-  const moved = JSON.stringify({ model: 'm', SSL_CERT_FILE: bundle, env: {} }, null, 2) + '\n' // the key is not where asight put it: its value there is "the user's"
+  const moved = JSON.stringify({ model: 'm', SSL_CERT_FILE: bundle, env: {} }, null, 2) + '\n' // the key is not where trocar put it: its value there is "the user's"
   fs.writeFileSync(file, moved)
   const r = await undoHarnesses({ dir: b.dir, home: b.home, manifest: readManifest(b.dir), ids: null, procs: async () => [], roots, phases: PHASES })
   assert.equal(r.results.find((x) => x.path === file).result, 'left-user-value', 'step 1 took the key for the user\'s')
@@ -498,11 +498,11 @@ test('before a bundle is removed the entry files of its harness are read again: 
   assert.ok(fs.existsSync(bundle), 'the bundle is not taken away from under a file that names it')
   assert.deepEqual(r.kept_bundles.map((k) => [k.path, k.entry_left]), [[bundle, [file]]])
   assert.deepEqual(r.left.map((l) => [l.path, l.result]), [[file, 'left-text'], [bundle, 'error']].filter(([p]) => p === file || p === bundle))
-  assert.match(r.left[0].reason, /still names .*combined-jr\.pem, the bundle asight made for jr, though its entry was reported as undone/)
+  assert.match(r.left[0].reason, /still names .*combined-jr\.pem, the bundle trocar made for jr, though its entry was reported as undone/)
   assert.deepEqual(r.manifest.entries.map((e) => e.path), [file], 'the entry is put back for the next run')
 })
 
-test('an entry that cannot be undone gives its backup and the cp command that puts the file back, and what that loses (R2) — in `reason` and as `backup` / `restore`; one without a backup (asight made the file) gives neither', async () => {
+test('an entry that cannot be undone gives its backup and the cp command that puts the file back, and what that loses (R2) — in `reason` and as `backup` / `restore`; one without a backup (trocar made the file) gives neither', async () => {
   const s = await setup((b) => [repH(b, 'aa'), jsonH(b)])
   const m = readManifest(s.b.dir)
   const backup = m.entries.find((e) => e.path === s.user[2]).backup
@@ -510,12 +510,12 @@ test('an entry that cannot be undone gives its backup and the cp command that pu
   const r = await s.run({ manifest: m })
   const l = r.left.find((x) => x.path === s.user[2])
   assert.deepEqual([l.result, l.backup, l.restore], ['left-unparsable', backup, `cp ${backup} ${s.user[2]}`])
-  assert.match(l.reason, new RegExp(`asight cannot read it \\(line \\d+, column \\d+\\); asight's env\\.NODE_EXTRA_CA_CERTS.*kept at ${backup.replace(/[.\\]/g, '\\$&')}.*by hand: cp .*every change made to it since is lost`))
+  assert.match(l.reason, new RegExp(`trocar cannot read it \\(line \\d+, column \\d+\\); trocar's env\\.NODE_EXTRA_CA_CERTS.*kept at ${backup.replace(/[.\\]/g, '\\$&')}.*by hand: cp .*every change made to it since is lost`))
   // a path with a space is quoted so the line can be pasted
-  const q = restoreByHand({ backup: '/h/.asight/backup/x y', path: "/h/it's here/settings.json" })
-  assert.equal(q.command, `cp '/h/.asight/backup/x y' '/h/it'\\''s here/settings.json'`)
-  assert.equal(restoreByHand({ backup: null, path: '/p' }), null, 'a file asight created has no backup: nothing to put back')
-  // through a symlink the file asight changed is the real one
+  const q = restoreByHand({ backup: '/h/.trocar/backup/x y', path: "/h/it's here/settings.json" })
+  assert.equal(q.command, `cp '/h/.trocar/backup/x y' '/h/it'\\''s here/settings.json'`)
+  assert.equal(restoreByHand({ backup: null, path: '/p' }), null, 'a file trocar created has no backup: nothing to put back')
+  // through a symlink the file trocar changed is the real one
   assert.equal(restoreByHand({ backup: '/b', path: '/link', real_path: '/real' }).command, 'cp /b /real')
 })
 
@@ -525,9 +525,9 @@ for (const [what, answer] of [['unavailable', 'unavailable'], ['no answer', unde
   test(`P13 uninstall: a custody remove that answers ${what} keeps the root-key record and lists the key as left`, async () => {
     const s = await setup((b) => [repH(b, 'aa')])
     const m = readManifest(s.b.dir)
-    m.entries.push({ phase: 'install', kind: 'root-key', harness: null, path: 'keychain:asight-root', custody: { kind: 'keychain', id: 'asight-root' }, fp256: 'AB' })
+    m.entries.push({ phase: 'install', kind: 'root-key', harness: null, path: 'keychain:trocar-root', custody: { kind: 'keychain', id: 'trocar-root' }, fp256: 'AB' })
     const k = await undoRootKeys({ dir: s.b.dir, manifest: m, custody: { remove: async () => answer } })
-    assert.deepEqual([k.removed, k.left.map((l) => [l.path, l.result]), m.entries.filter((e) => e.kind === 'root-key').length], [[], [['keychain:asight-root', 'error']], 1])
+    assert.deepEqual([k.removed, k.left.map((l) => [l.path, l.result]), m.entries.filter((e) => e.kind === 'root-key').length], [[], [['keychain:trocar-root', 'error']], 1])
     assert.match(k.left[0].reason, /by hand/)
   })
 }
@@ -535,8 +535,8 @@ for (const removed of [true, false]) {
   test(`P13 uninstall: a custody remove that answers { removed: ${removed} } drops the root-key record`, async () => {
     const s = await setup((b) => [repH(b, 'aa')])
     const m = readManifest(s.b.dir)
-    m.entries.push({ phase: 'install', kind: 'root-key', harness: null, path: 'keychain:asight-root', custody: { kind: 'keychain', id: 'asight-root' }, fp256: 'AB' })
+    m.entries.push({ phase: 'install', kind: 'root-key', harness: null, path: 'keychain:trocar-root', custody: { kind: 'keychain', id: 'trocar-root' }, fp256: 'AB' })
     const k = await undoRootKeys({ dir: s.b.dir, manifest: m, custody: { remove: async () => ({ removed }) } })
-    assert.deepEqual([k.removed, k.left, readManifest(s.b.dir).entries.filter((e) => e.kind === 'root-key')], [['keychain:asight-root'], [], []])
+    assert.deepEqual([k.removed, k.left, readManifest(s.b.dir).entries.filter((e) => e.kind === 'root-key')], [['keychain:trocar-root'], [], []])
   })
 }

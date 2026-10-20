@@ -1,10 +1,10 @@
-// no-vpn-writes.test.mjs — 4.7 N15 (invariant 6, D43/D49): asight has no write path into a VPN / proxy product's data directory. Two scans that can see their target, because a count of
-// write-function names is never zero (asight writes its own files) and so can never be the test:
+// no-vpn-writes.test.mjs — 4.7 N15 (invariant 6, D43/D49): trocar has no write path into a VPN / proxy product's data directory. Two scans that can see their target, because a count of
+// write-function names is never zero (trocar writes its own files) and so can never be the test:
 //   (a) static: a module that names a product's data directory, and anything under src/netenv/, calls a write function only inside a helper the allowlist names;
-//   (b) runtime: a recording fs puts a write under a product directory in the log, and a write under asight's own directory is not one. Since D49 nothing of asight reads a product's directory
+//   (b) runtime: a recording fs puts a write under a product directory in the log, and a write under trocar's own directory is not one. Since D49 nothing of trocar reads a product's directory
 //       (the probe, the product table, the Verge adapter and the controller client are gone), so there is no read path left to run over the recorder: the recorder is held by planted counter-examples.
-// The allowlist is by the NAME of one helper per legitimate writer (4.7 N15): `writeNetenv` writes ~/.asight/netenv.json (it is the CLI's, src/netenv/index.mjs). The helpers of arch/win32 that write
-// asight's own directory are registered by name in OWN_WRITERS ONLY if that module names a product directory or sits in src/netenv/: this scan watches nothing else.
+// The allowlist is by the NAME of one helper per legitimate writer (4.7 N15): `writeNetenv` writes ~/.trocar/netenv.json (it is the CLI's, src/netenv/index.mjs). The helpers of arch/win32 that write
+// trocar's own directory are registered by name in OWN_WRITERS ONLY if that module names a product directory or sits in src/netenv/: this scan watches nothing else.
 // The OLD capture is exempt as a whole (OLD_CAPTURE: src/capture/): the Clash steer in src/capture/desktop-steer.mjs writes Verge's Script.js and merge file by design until those files
 // are swept (4.7 N15). The exemption is a pinned list, not a switch.
 // Planted counter-examples turn each scan red.
@@ -73,7 +73,7 @@ test('N15 (a) a module that names a product data directory, or sits in src/neten
 })
 
 // What the old capture's undo looks like (a module that names Verge's data directory and writes: the shape the exemption must cover in src/capture/) and what the one writer of
-// ~/.asight/netenv.json looks like (src/netenv/index.mjs).
+// ~/.trocar/netenv.json looks like (src/netenv/index.mjs).
 const OLD_UNDO = [
   "import nodeFs from 'node:fs'",
   'export function legacyPaths({ home }) {',
@@ -106,7 +106,7 @@ test('N15 (a) the writers are known: the old capture\'s files are exempt as file
   assert.deepEqual(violations('src/capture/desktop-steer.mjs', OLD_UNDO), [], 'src/capture/desktop-steer.mjs names Verge\'s directory and writes: the old capture\'s own (D43, 4.7 §4)')
   assert.equal(violations('src/off/win32.mjs', OLD_UNDO).length, 3, 'the same text in a new module is three writes')
   assert.equal(violations('src/collector/arch/win32/redirector.mjs', OLD_UNDO).length, 3)
-  assert.deepEqual(violations('src/netenv/index.mjs', NETENV_WRITER), [], 'the CLI\'s writer of ~/.asight/netenv.json is `writeNetenv` (4.7 N15 names it)')
+  assert.deepEqual(violations('src/netenv/index.mjs', NETENV_WRITER), [], 'the CLI\'s writer of ~/.trocar/netenv.json is `writeNetenv` (4.7 N15 names it)')
   assert.equal(violations('src/netenv/index.mjs', NETENV_WRITER.replace('writeNetenv', 'persist')).length, 5, 'any other name is five writes in src/netenv')
 })
 
@@ -122,7 +122,7 @@ test('N15 (a) planted counter-example: a module that writes a Verge path is red;
   assert.deepEqual(violations('src/collector/arch/win32/x.mjs', verge), ['src/collector/arch/win32/x.mjs:3 writeFile() in tweak'], 'it names the directory: watched, wherever it sits')
   const elsewhere = "import fs from 'node:fs'\nexport function save(p) { fs.mkdirSync(p) }\n"
   assert.deepEqual(violations('src/netenv/y.mjs', elsewhere), ['src/netenv/y.mjs:2 mkdir() in save'], 'src/netenv/ is watched whatever it names')
-  assert.deepEqual(violations('src/collector/arch/win32/z.mjs', elsewhere), [], 'asight\'s own directory writers elsewhere are not this scan\'s (the runtime half checks where they land)')
+  assert.deepEqual(violations('src/collector/arch/win32/z.mjs', elsewhere), [], 'trocar\'s own directory writers elsewhere are not this scan\'s (the runtime half checks where they land)')
   const named = "import fs from 'node:fs'\nexport function writeNetenv(p, t) { fs.writeFileSync(p, t) }\n"
   assert.deepEqual(violations('src/netenv/cache.mjs', named), [], 'the named helper may write')
   assert.deepEqual(violations('src/netenv/cache.mjs', named.replace('writeNetenv', 'writeSomethingElse')), ['src/netenv/cache.mjs:2 writeFile() in writeSomethingElse'])
@@ -178,7 +178,7 @@ export const writesUnder = (log, dirs) => log.filter((e) => e.paths.some((p) => 
 const PRODUCT_NAMES = ['io.github.clash-verge-rev.clash-verge-rev', 'mihomo-party', 'FlClash', 'GUI.for.SingBox', 'v2rayN']
 
 test('N15 (b) the recording fs sees every way to write: sync, callback and promises forms, an `open` with a write flag (a string or a number), a write on its fd, a stream; and not a read', async () => {
-  const dir = tmpDir('asight-rec-')
+  const dir = tmpDir('trocar-rec-')
   const log = []
   const rfs = recordingFs(fs, log)
   const at = (n) => path.join(dir, n)
@@ -208,16 +208,16 @@ test('N15 (b) the recording fs sees every way to write: sync, callback and promi
   assert.equal(writesUnder(log, [dir]).length, 1, 'the finding\'s probe (promises.writeFile) lands in the log and under the directory')
 })
 
-test('N15 (b) recorder counter-example (hand-written write, `on` is not run): a write under a product directory is caught, a write under asight\'s own directory is not', () => {
-  const sandbox = tmpDir('asight-nvw-')
+test('N15 (b) recorder counter-example (hand-written write, `on` is not run): a write under a product directory is caught, a write under trocar\'s own directory is not', () => {
+  const sandbox = tmpDir('trocar-nvw-')
   const roaming = path.join(sandbox, 'AppData', 'Roaming')
   const log = []
   const dirs = PRODUCT_NAMES.map((n) => path.join(roaming, n))
   const rfs = recordingFs(fs, log)
   fs.mkdirSync(path.join(roaming, 'v2rayN', 'guiConfigs'), { recursive: true })
   fs.writeFileSync(path.join(roaming, 'v2rayN', 'guiConfigs', 'x.json'), '{}') // the world's own, outside the recorder
-  fs.mkdirSync(path.join(sandbox, '.asight'))
-  rfs.writeFileSync(path.join(sandbox, '.asight', 'netenv.json'), '{}') // asight's own: fine
+  fs.mkdirSync(path.join(sandbox, '.trocar'))
+  rfs.writeFileSync(path.join(sandbox, '.trocar', 'netenv.json'), '{}') // trocar's own: fine
   assert.deepEqual(writesUnder(log, dirs), [])
   const wrongOn = () => { rfs.mkdirSync(path.join(roaming, 'v2rayN', 'guiConfigs', 'sub'), { recursive: true }); rfs.writeFileSync(path.join(roaming, 'v2rayN', 'guiConfigs', 'y.json'), '{}') }
   wrongOn()

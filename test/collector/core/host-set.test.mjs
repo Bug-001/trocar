@@ -28,7 +28,7 @@ test('core/entry-forms.mjs touches no OS, names no harness and imports nothing',
 
 /** A sandbox profile: files go in under it; `ctx` is what a harness's `file(ctx)` reads paths from, its reads `{ text, error }` the daemon's way. */
 function box() {
-  const home = tmpDir('asight-hosts-')
+  const home = tmpDir('trocar-hosts-')
   const put = (rel, text) => { const f = path.join(home, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); return f }
   const ctx = () => ({
     os: 'win32', home, env: new Map([['USERPROFILE', home]]),

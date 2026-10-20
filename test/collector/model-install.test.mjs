@@ -1,4 +1,4 @@
-// `asight install` on macOS / Windows (RFC 4.11 §1 install, P1–P4; plan T20): CM9 (Z-Code's bundle), CM10 (bundled Claude Code), CM25 (no admin
+// `trocar install` on macOS / Windows (RFC 4.11 §1 install, P1–P4; plan T20): CM9 (Z-Code's bundle), CM10 (bundled Claude Code), CM25 (no admin
 // step, nothing root-owned under HOME), CM26 (no login-environment write, through a recording fs), CM1's fingerprint from install to re-install, D54
 // (install; install changes no byte, makes no second key, raises no prompt) and the OS prompt's declined / pending (exit 1, the rest still done).
 import { test } from 'node:test'
@@ -26,7 +26,7 @@ async function everything(env = {}) {
   return w
 }
 
-test('CM9: Z-Code\'s caCertFile → a bundle of Node\'s own roots plus the asight root, no system roots — written only while the key is unset; set, the user\'s file gets the block', async () => {
+test('CM9: Z-Code\'s caCertFile → a bundle of Node\'s own roots plus the trocar root, no system roots — written only while the key is unset; set, the user\'s file gets the block', async () => {
   const w = await everything()
   const r = await w.install({ wrapperKit: { renderWrapper } })
   const cfg = path.join(w.home, '.zcode', 'cli', 'config.json')
@@ -34,7 +34,7 @@ test('CM9: Z-Code\'s caCertFile → a bundle of Node\'s own roots plus the asigh
   const fps = certBlocks(fs.readFileSync(bundle, 'utf8')).map((b) => b.fp)
   const node = tls.rootCertificates.flatMap((p) => certBlocks(p).map((b) => b.fp))
   assert.deepEqual(fps.slice(0, -1), node, 'Node\'s roots, in order, nothing else')
-  assert.equal(fps.at(-1), r.fp256, 'and the asight root last')
+  assert.equal(fps.at(-1), r.fp256, 'and the trocar root last')
   // the key already set by the user: config.json is not touched, the user's file takes the block
   const w2 = await everything()
   const mine = path.join(w2.home, 'certs', 'z.pem'); put(mine, USER_PEM)
@@ -46,7 +46,7 @@ test('CM9: Z-Code\'s caCertFile → a bundle of Node\'s own roots plus the asigh
 })
 
 // rule U, one file named by two harnesses' settings (Windows test machine 2026-10-17: Claude Code and Kimi Code both read NODE_EXTRA_CA_CERTS; the second
-// was refused "already holds asight's text from an install this manifest does not list" and install exited 1): one block, one entry, both carriers in place
+// was refused "already holds trocar's text from an install this manifest does not list" and install exited 1): one block, one entry, both carriers in place
 for (const [variable, harnesses] of [['NODE_EXTRA_CA_CERTS', ['claude-code', 'kimi-code']]]) { // (Codex and Hermes share SSL_CERT_FILE the same way; this world has no Hermes)
   test(`rule U: ${variable} names one user file for ${harnesses.join(' and ')} → one marked block, one entry, install exits 0; a second install changes nothing`, async () => {
     const w0 = await modelWorld()
@@ -69,7 +69,7 @@ for (const [variable, harnesses] of [['NODE_EXTRA_CA_CERTS', ['claude-code', 'ki
 }
 
 for (const inSettings of [false, true]) for (const inEnv of [false, true]) {
-  test(`CM10: bundled Claude Code, NODE_EXTRA_CA_CERTS ${inSettings ? 'in' : 'not in'} the settings and ${inEnv ? 'in' : 'not in'} the install env → ${!inSettings && !inEnv ? 'settings env points at asight-ca.pem' : 'settings untouched, the block appended to the named file'}`, async () => {
+  test(`CM10: bundled Claude Code, NODE_EXTRA_CA_CERTS ${inSettings ? 'in' : 'not in'} the settings and ${inEnv ? 'in' : 'not in'} the install env → ${!inSettings && !inEnv ? 'settings env points at trocar-ca.pem' : 'settings untouched, the block appended to the named file'}`, async () => {
     const w0 = await modelWorld()
     const mine = path.join(w0.home, 'mine.pem')
     const w = await everything(inEnv ? { NODE_EXTRA_CA_CERTS: mine } : {})
@@ -79,11 +79,11 @@ for (const inSettings of [false, true]) for (const inEnv of [false, true]) {
     if (inSettings) put(settings, JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: named } }))
     const before = inSettings ? fs.readFileSync(settings) : null
     await w.install({ wrapperKit: { renderWrapper } })
-    if (!inSettings && !inEnv) assert.equal(json(settings).env.NODE_EXTRA_CA_CERTS, path.join(w.dir, 'ca', 'asight-ca.pem'))
+    if (!inSettings && !inEnv) assert.equal(json(settings).env.NODE_EXTRA_CA_CERTS, path.join(w.dir, 'ca', 'trocar-ca.pem'))
     else {
       if (inSettings) assert.deepEqual(fs.readFileSync(settings), before)
       else assert.equal(fs.existsSync(settings), false, 'no settings file made')
-      assert.equal(certBlocks(fs.readFileSync(named, 'utf8')).length, 2, 'the user\'s file holds its own certificate and asight\'s')
+      assert.equal(certBlocks(fs.readFileSync(named, 'utf8')).length, 2, 'the user\'s file holds its own certificate and trocar\'s')
     }
   })
 }
@@ -151,9 +151,9 @@ test('1.6 §1.6 · an add that reports success but is not trusted when read back
   assert.deepEqual(readManifest(w.dir).entries.filter((e) => e.kind === 'system-root').map((e) => e.installed_at), [at.toISOString()], 'one record; its time is when the trust took (P11 ③)')
 })
 
-// CM35 (4.11 §3 ㉒): the lost-key install. The custody's key gone behind asight's back (exists() false, the manifest records the old root) → the old
+// CM35 (4.11 §3 ㉒): the lost-key install. The custody's key gone behind trocar's back (exists() false, the manifest records the old root) → the old
 // root leaves the store by its recorded fingerprint, one new key and root are made and added, and every carrier holding root bytes holds only the new
-// root: asight-ca.pem, Z-Code's bundle, the pem-block in the user's file (the user's bytes outside the marks as they were); their installed_at moves.
+// root: trocar-ca.pem, Z-Code's bundle, the pem-block in the user's file (the user's bytes outside the marks as they were); their installed_at moves.
 async function lostKeyWorld() {
   const w = await modelWorld({ commands: ['codex', 'dsh'], env: (home) => ({ SSL_CERT_FILE: path.join(home, 'certs', 'mine.pem') }) })
   put(w.env.SSL_CERT_FILE, USER_PEM)
@@ -172,7 +172,7 @@ function carrierTimes(w) {
 }
 function assertOnlyNewRoot(w, r1, r2, at1) {
   assert.notEqual(r2.fp256, r1.fp256)
-  assert.deepEqual(fpsIn(path.join(w.dir, 'ca', 'asight-ca.pem')), [r2.fp256])
+  assert.deepEqual(fpsIn(path.join(w.dir, 'ca', 'trocar-ca.pem')), [r2.fp256])
   assert.equal(fpsIn(bundleOf(w)).at(-1), r2.fp256); assert.ok(!fpsIn(bundleOf(w)).includes(r1.fp256), 'the bundle no longer holds the old root')
   const mine = fs.readFileSync(w.env.SSL_CERT_FILE, 'utf8')
   assert.ok(mine.startsWith(USER_PEM), 'the user\'s bytes before the marks as they were')
@@ -203,22 +203,22 @@ test('CM35: the old root\'s removal refused → the new root is installed all th
   w.store.remove = () => ({ ok: false, reason: 'User canceled' })
   const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
   assert.equal(r2.exit, 1)
-  assert.match(r2.problems.join('\n'), new RegExp(`orphan: the old asight root ${r1.fp256}.*User canceled.*by hand`))
+  assert.match(r2.problems.join('\n'), new RegExp(`orphan: the old trocar root ${r1.fp256}.*User canceled.*by hand`))
   assert.deepEqual(r2.items.find((i) => i.item === 'old-root'), { item: 'old-root', state: 'orphan', fp256: r1.fp256 })
   assert.ok(readManifest(w.dir).entries.some((e) => e.kind === 'system-root' && e.fp256 === r1.fp256 && e.orphan), 'kept on record: uninstall removes it')
   assertOnlyNewRoot(w, r1, r2, at1)
 })
 
-// the reverse: the key is there but asight cannot read its root back — asight-ca.pem gone, or the manifest's record gone — install must not crash on
+// the reverse: the key is there but trocar cannot read its root back — trocar-ca.pem gone, or the manifest's record gone — install must not crash on
 // the custody's 'exists'; it takes ㉒'s path (the custody has no verb that returns the root)
-for (const [what, lose] of [['asight-ca.pem gone', (w) => fs.rmSync(path.join(w.dir, 'ca', 'asight-ca.pem'))], ['the root-key record gone', (w) => { const m = readManifest(w.dir); m.entries = m.entries.filter((e) => e.kind !== 'root-key'); fs.writeFileSync(path.join(w.dir, 'install-manifest.json'), JSON.stringify(m)) }]]) {
+for (const [what, lose] of [['trocar-ca.pem gone', (w) => fs.rmSync(path.join(w.dir, 'ca', 'trocar-ca.pem'))], ['the root-key record gone', (w) => { const m = readManifest(w.dir); m.entries = m.entries.filter((e) => e.kind !== 'root-key'); fs.writeFileSync(path.join(w.dir, 'install-manifest.json'), JSON.stringify(m)) }]]) {
   test(`CM35 reverse: the key present, ${what} → no crash; the stray key goes, a new root is made and carried`, async () => {
     const { w, r1 } = await lostKeyWorld()
     lose(w)
     const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
     assert.ok(w.custody.calls.some((c) => c.verb === 'remove'))
     assert.notEqual(r2.fp256, r1.fp256)
-    assert.deepEqual(fpsIn(path.join(w.dir, 'ca', 'asight-ca.pem')), [r2.fp256])
+    assert.deepEqual(fpsIn(path.join(w.dir, 'ca', 'trocar-ca.pem')), [r2.fp256])
     assert.equal(fpsIn(bundleOf(w)).at(-1), r2.fp256)
     assert.deepEqual(readManifest(w.dir).entries.filter((e) => e.kind === 'root-key').map((e) => e.fp256), [r2.fp256])
     assert.ok(!w.store.held.has(r1.fp256), 'the old root left the store by the fingerprint its store record holds')

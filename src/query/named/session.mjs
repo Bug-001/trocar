@@ -1,4 +1,4 @@
-// src/query/named/session.mjs — `asight query session --id <id>` (RFC 1.6 §4.1, 附录 C.5).
+// src/query/named/session.mjs — `trocar query session --id <id>` (RFC 1.6 §4.1, 附录 C.5).
 //
 // One session's replay view: the board's own assembly (src/view/board.mjs sessionView → pageView) over
 // the records of the raw segments. The view semantics are the board's; this module only picks the data
@@ -34,7 +34,7 @@ const assemble = ({ home, fs, rows, id, bytes }) => () => {
 };
 
 export async function run({ home, fs, params: p, errors, warm = false }) {
-  if (p.id == null || p.id === '') throw new QueryArgError('asight query session: --id is required (a session id; `asight query sessions` lists them)');
+  if (p.id == null || p.id === '') throw new QueryArgError('trocar query session: --id is required (a session id; `trocar query sessions` lists them)');
   const id = String(p.id);
   // Membership is the segment index's (src/query/rows.mjs — the same function `sessions` counts with), so only
   // THIS session's records are read back, not every record of every segment (1.6 §4.1 `session` 第一页 ≤ 1 s).

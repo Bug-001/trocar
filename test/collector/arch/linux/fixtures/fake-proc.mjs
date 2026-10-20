@@ -4,7 +4,7 @@ import path from 'node:path'
 import { tmpDir } from '../../../../helpers/tmp.mjs'
 
 export function fakeProc() {
-  const root = tmpDir('asight-proc-')
+  const root = tmpDir('trocar-proc-')
   const btime = 1_700_000_000
   fs.writeFileSync(path.join(root, 'stat'), `cpu 1 2 3\nbtime ${btime}\nprocesses 9\n`)
   function add(pid, { ppid = 1, uid = 1000, exe = '/bin/true', argv = [exe], env = null, cwd = '/', startTicks = 0, comm = path.basename(exe) } = {}) {

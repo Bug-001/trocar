@@ -98,7 +98,7 @@ test('the /proc readers the daemon uses are the same functions the arch re-expor
 })
 
 // audit rule-b 2: `ps` prints lstart in the user's language. Under LC_ALL=zh_CN.UTF-8 or ja_JP.UTF-8 not one of 593 rows parsed, with no error: `off`, `status` and `uninstall`
-// then reported no asight processes and no steer-era claude processes, which is "nobody is alive" said about a table that was never read (R11).
+// then reported no trocar processes and no steer-era claude processes, which is "nobody is alive" said about a table that was never read (R11).
 const PS_C = ['  501     1   501 Wed Oct  7 04:27:00 2026 /Applications/Claude.app/Contents/MacOS/claude --flag x', '  502   501   501 Wed Oct  7 05:00:00 2026 /usr/local/bin/codex app-server', ''].join('\n')
 const PS_ZH = ['  501     1   501 三 10月  7 04:27:00 2026 /Applications/Claude.app/Contents/MacOS/claude --flag x', '  502   501   501 三 10月  7 05:00:00 2026 /usr/local/bin/codex app-server', ''].join('\n')
 const PS_JA = PS_ZH.replace(/三 10月/g, '水 10月')

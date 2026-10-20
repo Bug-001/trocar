@@ -5,7 +5,7 @@
 //   node scripts/gen-dataset.mjs --home <dir> [--seed 1] [--bytes 1000000000] [--json]
 //
 // `--home` is the user's HOME, as everywhere else on the CLI (`HOME=`, scripts/perf-query.mjs): the dataset lands in
-// <home>/.asight/raw/. The generate() below takes the ASIGHT home itself (<home>/.asight) — it is the library call.
+// <home>/.trocar/raw/. The generate() below takes the TROCAR home itself (<home>/.trocar) — it is the library call.
 //
 // The segments are left PLAINTEXT on purpose: what 附录 D.2 measures is the daemon's own auto-sealing
 // (which closed segments it sealed, how long each took). The envelopes are built by the one authority
@@ -178,7 +178,7 @@ class Writer {
 
 /**
  * generate({home, seed, bytes, segmentBytes, maxDisk, start}) → {seed, bytes, records, sessions, segments:[{segment, records, bytes}]}
- * `home` is the ASIGHT home: it writes <home>/raw/<segment>.ndjson, all of it plaintext; the daemon
+ * `home` is the TROCAR home: it writes <home>/raw/<segment>.ndjson, all of it plaintext; the daemon
  * seals the closed ones (附录 D.2). Every harness opens with one coverage session (every class, both
  * reply shapes, a cut stream, 429/5xx, a `log`-level batch, a gzipped wire body) so the smallest dataset
  * is still complete; the rest of the budget goes to PARALLEL sessions in flight, interleaved by their own
@@ -347,9 +347,9 @@ export async function keepIndexes({ home, segments }) {
 async function main(argv) {
   const args = {}
   for (let i = 0; i < argv.length; i += 2) args[argv[i].replace(/^--/, '')] = argv[i + 1]
-  if (!args.home) { console.error('usage: node scripts/gen-dataset.mjs --home <dir> [--seed 1] [--bytes 1000000000] [--json]   (--home is the HOME; the dataset lands in <home>/.asight/raw)'); process.exit(2) }
+  if (!args.home) { console.error('usage: node scripts/gen-dataset.mjs --home <dir> [--seed 1] [--bytes 1000000000] [--json]   (--home is the HOME; the dataset lands in <home>/.trocar/raw)'); process.exit(2) }
   const num = (k) => (args[k] === undefined ? undefined : Number(args[k]))
-  const home = path.join(args.home, '.asight')
+  const home = path.join(args.home, '.trocar')
   const started = Date.now()
   const out = generate({ home, seed: num('seed'), bytes: num('bytes'), segmentBytes: num('segment-bytes'), maxDisk: num('max-disk'), start: args.start })
   const index_bytes = await keepIndexes({ home, segments: out.segments })

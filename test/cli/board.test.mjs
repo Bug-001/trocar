@@ -1,4 +1,4 @@
-// test/cli/board.test.mjs — `asight board` (RFC 1.6 §4.3; 4.4 验收 8; V84's CLI half). The CLI ↔ daemon seam for real (the platform-seam rule): a REAL
+// test/cli/board.test.mjs — `trocar board` (RFC 1.6 §4.3; 4.4 验收 8; V84's CLI half). The CLI ↔ daemon seam for real (the platform-seam rule): a REAL
 // startDaemon behind the stand-in login unit (test/helpers/model-daemon.mjs), started by board.run itself through ensureDaemonUp, found through
 // controlEndpointFor alone — no request and no socket path are injected. Only the browser opener is the test's (it must never really run).
 import { test } from 'node:test'
@@ -28,7 +28,7 @@ const recorder = (fail = false) => { const calls = []; return { calls, open: asy
 const runBoard = (w, platform, box, opener, argv = []) => { const io = fakeIo(); return board(argv, { io, env: w.env, home: w.home, platform, args: NO_ARGS, deps: { unit: box.unit, open: opener.open } }).then((exit) => ({ exit, io })) }
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform} · 4.4 #8 · V84: asight board starts the daemon, prints http://127.0.0.1:<boardPort>/#t=<board.token>, opens exactly that URL, exit 0; an opener that fails still prints it, exit 0`, { timeout: 30_000 }, async () => {
+  test(`${platform} · 4.4 #8 · V84: trocar board starts the daemon, prints http://127.0.0.1:<boardPort>/#t=<board.token>, opens exactly that URL, exit 0; an opener that fails still prints it, exit 0`, { timeout: 30_000 }, async () => {
     const { w, port, box } = await installed(platform)
     await withScratchCwd(platform, async () => {
       try {
@@ -53,8 +53,8 @@ for (const platform of ['darwin', 'win32']) {
   })
 }
 
-test('§4.3: asight board on a machine with nothing installed exits 1 and the HOME stays byte-identical; an unknown argument exits 2', async () => {
-  const home = tmpDir('asight-fresh-')
+test('§4.3: trocar board on a machine with nothing installed exits 1 and the HOME stays byte-identical; an unknown argument exits 2', async () => {
+  const home = tmpDir('trocar-fresh-')
   const before = snapshot(home), opener = recorder()
   const io = fakeIo()
   assert.equal(await board([], { io, env: { HOME: home }, home, platform: 'darwin', args: NO_ARGS, deps: { open: opener.open } }), 1)
@@ -63,7 +63,7 @@ test('§4.3: asight board on a machine with nothing installed exits 1 and the HO
   assert.equal(await board(['x'], { io: fakeIo(), env: { HOME: home }, home, platform: 'darwin', args: { positionals: ['x'], flags: {} }, deps: { open: opener.open } }), 2)
 })
 
-test('V84: the board\'s port held by another program → asight board exits 1, opens nothing, and takes no other port', { timeout: 30_000 }, async () => {
+test('V84: the board\'s port held by another program → trocar board exits 1, opens nothing, and takes no other port', { timeout: 30_000 }, async () => {
   const { w, port, box } = await installed('darwin')
   const squat = net.createServer(); squat.listen(port, '127.0.0.1'); await once(squat, 'listening')
   try {

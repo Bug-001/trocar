@@ -27,7 +27,7 @@ const fpOf = (pem) => certBlocks(pem)[0].fp
 
 /** One Linux `on codex` over a machine whose /etc holds `disk` (path → text; any other path is ENOENT, as on a real machine that lacks it). */
 async function onWith(disk) {
-  const home = tmpDir('asight-linux-roots-')
+  const home = tmpDir('trocar-linux-roots-')
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true })
   fs.writeFileSync(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-test\n')
   const read = (f) => { if (f in disk) return disk[f]; throw Object.assign(new Error(`ENOENT: no such file or directory, open '${f}'`), { code: 'ENOENT' }) }
@@ -40,13 +40,13 @@ async function onWith(disk) {
       parts: { os: 'linux', harnesses: [codex], scan: async () => [], match: () => ({ agent: null }), arch },
       request: fakeDaemon().request, helperState: () => ({ ok: true }), linger: () => true,
       netenv: async () => ({ at: '2026-10-13T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }),
-      freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, fs,
+      freePort: async () => 47011, script: '/repo/bin/trocar.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, fs,
     },
   })
   // D55 / override #15: the combined bundle is install's (the OS roots are read there); on writes no certificate
   const inst = fakeIo()
   assert.equal(await runInstallCli(['--yes'], ctx(inst)), 0, inst.text())
-  const flowsDir = path.join(home, '.asight', 'collector', 'flows')
+  const flowsDir = path.join(home, '.trocar', 'collector', 'flows')
   const readFlows = () => fs.readdirSync(flowsDir).flatMap((n) => fs.readFileSync(path.join(flowsDir, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
   const flows = readFlows() // install's lines: the roots are read and said there (on plans the same bundle again and may repeat the note)
   const exit = await runOnCli(['--yes', 'codex'], ctx(io))
@@ -75,29 +75,29 @@ test('Linux on: a block of the OS bundle that does not parse is not in the combi
   assert.equal(rec.length, 1, `one record: ${JSON.stringify(r.flows.map((f) => [f.event, f.code]))}`)
   assert.deepEqual([rec[0].event, rec[0].where, rec[0].kind, rec[0].dropped, rec[0].files], ['install-note', 'install', 'note', 1, [r.bundle]])
   assert.match(r.text.replace(/\n\s+/g, ' '), /1 certificate in the OS roots could not be parsed and is not in the combined bundles/, 'the receipt says it too')
-  const doctorNotes = formatInstallNotes(captureHealth({ home: path.join(r.home, '.asight') })) // what `doctor` prints of the last install
+  const doctorNotes = formatInstallNotes(captureHealth({ home: path.join(r.home, '.trocar') })) // what `doctor` prints of the last install
   assert.ok(doctorNotes.some((l) => /could not be parsed/.test(l) && l.includes(r.bundle)), doctorNotes.join('\n')) // the note says what happened and names the bundle; a code name is never printed (D58)
   assert.deepEqual(r.flows.filter((f) => f.code === 'system-roots-unavailable'), [], 'the OS roots are there: not said missing')
 })
 
-test('Linux on: no OS bundle on the machine → the bundle has Node\'s roots and the asight CA only, and that is said in the receipt and in flows/ (D38)', async () => {
+test('Linux on: no OS bundle on the machine → the bundle has Node\'s roots and the trocar CA only, and that is said in the receipt and in flows/ (D38)', async () => {
   const r = await onWith({ '/etc/ssl/certs/ca-certificates.crt': '' }) // a Debian path that is there but holds no certificate counts as none, too
   assert.equal(r.exit, 0, r.text)
-  const asightCa = fpOf(fs.readFileSync(path.join(path.dirname(r.bundle), 'asight-ca.pem'), 'utf8'))
+  const trocarCa = fpOf(fs.readFileSync(path.join(path.dirname(r.bundle), 'trocar-ca.pem'), 'utf8'))
   const node = new Set(tls.rootCertificates.map(fpOf))
-  assert.deepEqual(r.held.filter((fp) => !node.has(fp)), [asightCa], 'nothing but Node\'s roots and the asight CA')
+  assert.deepEqual(r.held.filter((fp) => !node.has(fp)), [trocarCa], 'nothing but Node\'s roots and the trocar CA')
   const rec = r.flows.filter((f) => f.code === 'system-roots-unavailable')
   assert.equal(rec.length, 1, `one record: ${JSON.stringify(r.flows.map((f) => [f.event, f.code]))}`)
   assert.deepEqual([rec[0].event, rec[0].where, rec[0].kind, rec[0].harness], ['install-note', 'install', 'note', 'codex'])
   assert.ok(rec[0].reason.includes(r.bundle), 'it names the bundle')
   for (const f of SYSTEM_BUNDLES) assert.ok(rec[0].reason.includes(f), `and every path looked at: ${f}`)
   assert.match(r.text.replace(/\n\s+/g, ' '), /carries Node's roots only: no OS trust bundle holds a certificate/, 'the receipt says it too')
-  const doctorNotes = formatInstallNotes(captureHealth({ home: path.join(r.home, '.asight') })) // what `doctor` prints of the last install (doctor.mjs)
+  const doctorNotes = formatInstallNotes(captureHealth({ home: path.join(r.home, '.trocar') })) // what `doctor` prints of the last install (doctor.mjs)
   assert.ok(doctorNotes.some((l) => /no OS trust bundle holds a certificate/.test(l) && l.includes(r.bundle)), doctorNotes.join('\n'))
 })
 
 test('Linux install: an OS bundle that is there but cannot be read stops the install before the agent\'s file is touched, exit 1 with the reason (D38)', async () => {
-  const home = tmpDir('asight-linux-roots-')
+  const home = tmpDir('trocar-linux-roots-')
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true })
   fs.writeFileSync(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-test\n')
   const read = (f) => { throw Object.assign(new Error(`${f === SYSTEM_BUNDLES[0] ? 'EACCES: permission denied' : 'ENOENT: no such file'}, open '${f}'`), { code: f === SYSTEM_BUNDLES[0] ? 'EACCES' : 'ENOENT' }) }
@@ -108,7 +108,7 @@ test('Linux install: an OS bundle that is there but cannot be read stops the ins
       parts: { os: 'linux', harnesses: [codex], scan: async () => [], match: () => ({ agent: null }), arch: { osRoots: (o = {}) => linux.osRoots({ ...o, read }) } },
       request: fakeDaemon().request, helperState: () => ({ ok: true }), linger: () => true,
       netenv: async () => ({ at: '2026-10-13T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }),
-      freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, fs,
+      freePort: async () => 47011, script: '/repo/bin/trocar.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, fs,
     },
   })
   // D55 / override #15: the combined bundle is install's (the OS roots are read there); on writes no certificate
@@ -116,5 +116,5 @@ test('Linux install: an OS bundle that is there but cannot be read stops the ins
   assert.equal(exit, 1)
   assert.match(io.text(), /the OS trust bundle cannot be read \(\/etc\/ssl\/certs\/ca-certificates\.crt: EACCES/, 'the reason, with the path and its errno')
   assert.equal(fs.readFileSync(path.join(home, '.codex', '.env'), 'utf8'), 'OPENAI_API_KEY=sk-test\n', 'the user\'s file is as it was')
-  assert.ok(!fs.existsSync(path.join(home, '.asight', 'collector', 'ca', 'combined-codex.pem')), 'no bundle written on a guess')
+  assert.ok(!fs.existsSync(path.join(home, '.trocar', 'collector', 'ca', 'combined-codex.pem')), 'no bundle written on a guess')
 })

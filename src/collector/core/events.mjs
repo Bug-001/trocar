@@ -1,7 +1,7 @@
 // events.mjs — durable failure records (D38: a capture failure is never silent).
 // Every failure the collector owns becomes one JSON line `{ts, event, reason, …}` in <collector>/flows/<UTC date>.ndjson
 // (RFC 4.6 §记录: the board never reads flows/, so these are never mistaken for envelopes). appendEvent writes with its
-// own descriptor, so a record store whose files broke can still report that it broke. `asight collector status` and
+// own descriptor, so a record store whose files broke can still report that it broke. `trocar collector status` and
 // the board read them back through src/health/ (captureHealth), also when no daemon is running.
 import { appendFlowEvent } from '../../off/events.mjs'
 import { isFailure, UNFOLDED_CODES } from '../../health/codes.mjs'
@@ -10,11 +10,11 @@ import { readFlows } from '../../health/flows.mjs'
 // The closed sets and the failure / expected split live in src/health/codes.mjs (D38: writers and readers share them).
 export { isFailure }
 
-// The line writer is src/off/events.mjs (`asight off` writes the same lines without this directory, 1.6 R3). `day` (YYYY-MM-DD): the file to write,
+// The line writer is src/off/events.mjs (`trocar off` writes the same lines without this directory, 1.6 R3). `day` (YYYY-MM-DD): the file to write,
 // when the caller keeps a day that never goes back (the daemon's recorder)
 export const appendEvent = appendFlowEvent
 
-// The failure records in flows/, read the way `asight collector status` and the board read them (src/health/flows.mjs:
+// The failure records in flows/, read the way `trocar collector status` and the board read them (src/health/flows.mjs:
 // sealed day files too; an unreadable flows/ throws, never "no failures"), oldest first.
 export const recentFailures = (dir) => readFlows({ dir }).records.filter(isFailure)
 
@@ -23,7 +23,7 @@ const errText = (e) => String((e && e.message) || e)
 // The daemon's failure recorder: record(where, error, extra) writes one failure line per place and error code per
 // window; repeats inside the window are counted, and the count is written when the window closes (an unref'd
 // timer) or at flush() (the daemon's stop) — never lost (4.6 §记录). Every record carries `reason` and `code`
-// (asight's name or the errno: the fold key, D-3).
+// (trocar's name or the errno: the fold key, D-3).
 // record.event(rec) takes a failure already shaped {where, code, reason, …} — the engine's and the WebSocket
 // recorder's (they go to flows/ like every other failure, folded the same way, except the codes in
 // UNFOLDED_CODES: a negative-cache write is a condition per (pid, host), one line each, D1-1) — and does not log

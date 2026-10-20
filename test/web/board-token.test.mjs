@@ -1,5 +1,5 @@
 // test/web/board-token.test.mjs — the page the board face serves gets past the face's own gate (4.4 门, V84).
-// `asight board` hands the token over in the URL fragment (#t=…); every /api request the page makes on load must then pass
+// `trocar board` hands the token over in the URL fragment (#t=…); every /api request the page makes on load must then pass
 // the real face's token check. The page is the bytes the face serves at `/`; its import of /off/token-header.mjs resolves to
 // the file the face serves there (gate.test.mjs pins those bytes), the way a browser resolves it against the origin.
 import test from 'node:test'
@@ -28,7 +28,7 @@ async function pageRequests(port, hash) {
 }
 
 test('4.4 · V84: with #t=<token>, every /api request the served page makes on load passes the face\'s gate; without it, none does', async () => {
-  const home = rawHome('asight-board-token-')
+  const home = rawHome('trocar-board-token-')
   writeSegment(home, '20261018T100000Z', [{ sessionKey: 'sess-a' }])
   const f = await serveFace({ home })
   try {

@@ -63,8 +63,8 @@ export function createDoorIdentity({ ownerOf = null, factsOf = null, identify, o
     if (unknownSaid.has(key)) return
     unknownSaid.add(key)
     try { onEvent({ event: 'process-unknown', where: 'engine', harness: door.harness, door: door.g, name, wide: name != null && WIDE.has(name), named, pid, reason: named
-      ? `${name ?? 'a process'} (pid ${pid}) used the ${door.g} door; its name is listed only with an args pattern its arguments do not match: its connections are forwarded, not captured; to capture it, add an item with "args" to ~/.asight/agents.json`
-      : `${name ?? 'a process'} (pid ${pid}) used the ${door.g} door but is on no name list: its connections are forwarded, not captured; add it to ~/.asight/agents.json to capture it` }) } catch { /* the sink's own failure is the sink's */ }
+      ? `${name ?? 'a process'} (pid ${pid}) used the ${door.g} door; its name is listed only with an args pattern its arguments do not match: its connections are forwarded, not captured; to capture it, add an item with "args" to ~/.trocar/agents.json`
+      : `${name ?? 'a process'} (pid ${pid}) used the ${door.g} door but is on no name list: its connections are forwarded, not captured; add it to ~/.trocar/agents.json to capture it` }) } catch { /* the sink's own failure is the sink's */ }
   }
 
   async function identityOf({ peer, door, target }) {

@@ -1,31 +1,31 @@
 #!/bin/dash
-# asight install-folder wrapper (spec 4.11 P8; lab M4: /bin/dash, not /bin/sh — bash-as-sh drops `_` and OLDPWD and adds SHLVL).
-# Written by `asight install` where the agent's program was; the program itself was moved to .asight-real/ beside it under the same name.
+# trocar install-folder wrapper (spec 4.11 P8; lab M4: /bin/dash, not /bin/sh — bash-as-sh drops `_` and OLDPWD and adds SHLVL).
+# Written by `trocar install` where the agent's program was; the program itself was moved to .trocar-real/ beside it under the same name.
 # Without the switch file: the certificate variable is set only when it is unset, and the real program runs with the same argv,
-# stdio and exit code (exec). With the switch file: ASIGHT_PRIOR_PROXY records the agent's own proxy (the first set name of its
+# stdio and exit code (exec). With the switch file: TROCAR_PRIOR_PROXY records the agent's own proxy (the first set name of its
 # precedence list that is not the door; `none` when none is set) and the agent's proxy names point at the door the switch file holds.
 # The script sets no variable of its own: its working names are function locals, restored before exec.
-asight_cert() {
+trocar_cert() {
   local n
-  n=__ASIGHT_CERT_VAR__
+  n=__TROCAR_CERT_VAR__
   eval "[ -n \"\${$n-}\" ]" || eval "$n=\$1; export $n"
 }
-asight_route() {
+trocar_route() {
   local d k v p s
   IFS= read -r d 2>/dev/null <"$1" || [ -n "$d" ] || return 0
   [ -n "$d" ] || return 0
   p= s=
-  for k in __ASIGHT_PROXY_ENV__; do
+  for k in __TROCAR_PROXY_ENV__; do
     eval "v=\${$k-}"
     if [ -n "$v" ] && [ "$v" != "$d" ]; then p=$v; break; fi
     [ -n "$v" ] && s=1
   done
-  if [ -n "$p" ]; then ASIGHT_PRIOR_PROXY=$p
-  elif [ -z "$s" ] || [ -z "${ASIGHT_PRIOR_PROXY-}" ]; then ASIGHT_PRIOR_PROXY=none
+  if [ -n "$p" ]; then TROCAR_PRIOR_PROXY=$p
+  elif [ -z "$s" ] || [ -z "${TROCAR_PRIOR_PROXY-}" ]; then TROCAR_PRIOR_PROXY=none
   fi
-  export ASIGHT_PRIOR_PROXY
-  for k in __ASIGHT_PROXY_NAMES__; do eval "$k=\$d; export $k"; done
+  export TROCAR_PRIOR_PROXY
+  for k in __TROCAR_PROXY_NAMES__; do eval "$k=\$d; export $k"; done
 }
-asight_cert __ASIGHT_CA_FILE__
-if [ -f __ASIGHT_SWITCH__ ]; then asight_route __ASIGHT_SWITCH__; fi
-exec __ASIGHT_REAL__ "$@"
+trocar_cert __TROCAR_CA_FILE__
+if [ -f __TROCAR_SWITCH__ ]; then trocar_route __TROCAR_SWITCH__; fi
+exec __TROCAR_REAL__ "$@"

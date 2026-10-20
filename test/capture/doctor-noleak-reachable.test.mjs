@@ -10,14 +10,14 @@ import { osStubs } from '../helpers/os-stubs.mjs';
 
 // THE ONE SECURITY RED LINE MUST BE ABLE TO GO RED.
 //
-// `asight doctor` answers four questions about a capture, and exits non-zero on exactly one of them:
+// `trocar doctor` answers four questions about a capture, and exits non-zero on exactly one of them:
 // ③ 凭据没漏. Every secret header in every record MUST read `<redacted>`. It is the only hard failure
 // in the tool, which makes it the only check a user is entitled to trust without reading its output.
 //
 // It could not fail (confirmed by three independent verifiers). Two defects stacked:
 //
 //   1. D27 made `serveSource()` return an ARRAY of capture roots (the home plus the collector directory).
-//      bin/asight.mjs still did `fs.statSync(source)` on it, which throws ERR_INVALID_ARG_TYPE, which
+//      bin/trocar.mjs still did `fs.statSync(source)` on it, which throws ERR_INVALID_ARG_TYPE, which
 //      the surrounding try/catch swallows into `{exists:false}` — so `records` stayed `[]` and nothing
 //      was ever examined. On a DEFAULT install, with a real capture on disk, doctor read zero records.
 //
@@ -25,7 +25,7 @@ import { osStubs } from '../helpers/os-stubs.mjs';
 //      passes vacuously and prints 「✓ all secret headers redacted」. That is the invariant-4 failure
 //      in its purest form: ABSENCE OF EVIDENCE rendered as EVIDENCE OF ABSENCE, on a security claim.
 //
-// Together: the user runs `asight doctor`, sees ✓ 凭据没漏, gets exit 0, and their capture may be
+// Together: the user runs `trocar doctor`, sees ✓ 凭据没漏, gets exit 0, and their capture may be
 // full of Authorization headers. The tool is not merely unhelpful here, it is actively reassuring.
 //
 // 2026-07-20, LATER THAT DAY — redaction was REMOVED (spec 4.1 §采集安全 patched in
@@ -36,13 +36,13 @@ import { osStubs } from '../helpers/os-stubs.mjs';
 //
 // WHAT SURVIVES, because it is independent of which contract is in force and was the deeper defect:
 //   • a scan that examined NOTHING must never certify anything (the vacuous-truth guard), and
-//   • `asight doctor` must actually RESOLVE its source — array roots (D27) and directories — instead
+//   • `trocar doctor` must actually RESOLVE its source — array roots (D27) and directories — instead
 //     of silently reading zero records.
 // The red line's new home (file permissions) is pinned in test/capture/verbatim-headers.test.mjs.
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
-const CLI = path.join(ROOT, 'bin', 'asight.mjs');
+const CLI = path.join(ROOT, 'bin', 'trocar.mjs');
 const OS = osStubs(), OS_PATH = OS.path, OS_NATIVE = OS.nativeDir; // on a Mac `doctor`'s status block asks launchd and the keychain (read-only): stubs in the temp dir answer, the real tools are never run (0.1 §3)
 
 // A capture holding a real un-redacted credential. If doctor reads ANY records at all, it must find it.
@@ -50,7 +50,7 @@ function leakySource() {
   return leakyRoot();
 }
 function leakyRoot() {
-  const dir = tmpDir('asight-leak-');
+  const dir = tmpDir('trocar-leak-');
   const rec = {
     id: 'req_1', is_llm_call: true, endpoint: 'https://api.anthropic.com/v1/messages',
     ts_request: '2026-01-01T00:00:00.000Z',
@@ -109,8 +109,8 @@ test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s
   // would now pass for the WRONG REASON — their fixtures were 0644, so ④b would trip regardless of
   // any credential — which is exactly the kind of accidentally-green assertion this suite keeps
   // finding. Assert the real thing directly.
-  const dir = tmpDir('asight-leak-home-');
-  const home = path.join(dir, '.asight');
+  const dir = tmpDir('trocar-leak-home-');
+  const home = path.join(dir, '.trocar');
   fs.mkdirSync(home, { recursive: true });
   fs.copyFileSync(path.join(leakyRoot(), 'capture.ndjson'), path.join(home, 'capture.ndjson'));
   try {
@@ -118,7 +118,7 @@ test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s
     let status = 0, out = '';
     try {
       // the default source of this sandbox HOME (D27), the way a user runs it: no option of its own
-      out = execFileSync(process.execPath, [CLI, 'doctor'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, ASIGHT_SOURCE: '', PATH: OS_PATH, ASIGHT_NATIVE_DIR: OS_NATIVE } });
+      out = execFileSync(process.execPath, [CLI, 'doctor'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, TROCAR_SOURCE: '', PATH: OS_PATH, TROCAR_NATIVE_DIR: OS_NATIVE } });
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
     assert.notEqual(status, 0,
       `doctor exited 0 on a world-readable capture holding live credentials.\n--- output ---\n${out}`);
@@ -126,8 +126,8 @@ test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s
 
     // …and passes once the file is owner-only, credentials and all.
     fs.chmodSync(path.join(home, 'capture.ndjson'), 0o600);
-    const ok = execFileSync(process.execPath, [CLI, 'doctor'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, ASIGHT_SOURCE: '', PATH: OS_PATH, ASIGHT_NATIVE_DIR: OS_NATIVE } });
-    assert.match(ok, /^asight doctor: no problems\.$/m, 'a 0600 capture must pass, credentials and all');
+    const ok = execFileSync(process.execPath, [CLI, 'doctor'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, TROCAR_SOURCE: '', PATH: OS_PATH, TROCAR_NATIVE_DIR: OS_NATIVE } });
+    assert.match(ok, /^trocar doctor: no problems\.$/m, 'a 0600 capture must pass, credentials and all');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -138,10 +138,10 @@ test('END TO END: a bare doctor on a CLEAN multi-root capture examines records a
   // defence-in-depth, but it masks WHICH defect is present. So pin the other direction: on a healthy
   // multi-root capture, doctor must actually READ something and exit 0. A doctor that cannot resolve
   // an array source reads zero records, hard-fails, and fails this test.
-  const home = tmpDir('asight-home-ok-');
+  const home = tmpDir('trocar-home-ok-');
   try {
-    const newHome = path.join(home, '.asight');
-    const legacy = path.join(home, '.asight', 'collector'); // the second default root (D60 ②: older locations are not read)
+    const newHome = path.join(home, '.trocar');
+    const legacy = path.join(home, '.trocar', 'collector'); // the second default root (D60 ②: older locations are not read)
     fs.mkdirSync(newHome, { recursive: true });
     fs.mkdirSync(legacy, { recursive: true });
     const clean = {
@@ -160,7 +160,7 @@ test('END TO END: a bare doctor on a CLEAN multi-root capture examines records a
     let status = 0, out = '';
     try {
       out = execFileSync(process.execPath, [CLI, 'doctor'], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, ASIGHT_SOURCE: '', PATH: OS_PATH, ASIGHT_NATIVE_DIR: OS_NATIVE },
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, TROCAR_SOURCE: '', PATH: OS_PATH, TROCAR_NATIVE_DIR: OS_NATIVE },
       });
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
 
@@ -173,7 +173,7 @@ test('END TO END: a bare doctor on a CLEAN multi-root capture examines records a
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
-test('END TO END: a BARE `asight doctor` reads the D27 multi-root default', () => {
+test('END TO END: a BARE `trocar doctor` reads the D27 multi-root default', () => {
   // THE ACTUAL REGRESSION, exercised the way it actually happened: no --source at all, so the source
   // is whatever serveSource() returns — an ARRAY of the home and the collector directory. That array went
   // straight into fs.statSync(), which throws ERR_INVALID_ARG_TYPE on a non-path, and the catch
@@ -183,10 +183,10 @@ test('END TO END: a BARE `asight doctor` reads the D27 multi-root default', () =
   // of them. An earlier version of this test passed `--source a --source b`, which does NOT
   // reproduce it — `flag()` returns a single value, so that path never built an array and the test
   // stayed green with the fix reverted. Found by mutation.
-  const home = tmpDir('asight-home-');
+  const home = tmpDir('trocar-home-');
   try {
-    const newHome = path.join(home, '.asight');
-    const legacy = path.join(home, '.asight', 'collector'); // the second default root (D60 ②: older locations are not read)
+    const newHome = path.join(home, '.trocar');
+    const legacy = path.join(home, '.trocar', 'collector'); // the second default root (D60 ②: older locations are not read)
     fs.mkdirSync(newHome, { recursive: true });
     fs.mkdirSync(legacy, { recursive: true });
     fs.writeFileSync(path.join(newHome, 'capture.ndjson'), '');
@@ -198,7 +198,7 @@ test('END TO END: a BARE `asight doctor` reads the D27 multi-root default', () =
     let status = 0, out = '';
     try {
       out = execFileSync(process.execPath, [CLI, 'doctor'], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, ASIGHT_SOURCE: '', PATH: OS_PATH, ASIGHT_NATIVE_DIR: OS_NATIVE },
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, TROCAR_SOURCE: '', PATH: OS_PATH, TROCAR_NATIVE_DIR: OS_NATIVE },
       });
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
     // Subject is SOURCE RESOLUTION, not credentials: a bare doctor must find the legacy root and

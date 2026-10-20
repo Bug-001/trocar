@@ -8,7 +8,7 @@ import path from 'node:path'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { loadIngressConfig, readIngressConfig, rebindTaken, removeIngressConfig, freeOnLoopback, ensureBoardPort, INGRESS_FILE, ENGINE_RANGE, GROUP_RANGE, BOARD_RANGE } from '../../../src/collector/core/ingress-config.mjs'
 
-const dirOf = () => path.join(tmpDir('asight-ingress-'), 'collector')
+const dirOf = () => path.join(tmpDir('trocar-ingress-'), 'collector')
 const zeros = (n) => Buffer.alloc(n) // the random source that always starts at the bottom of a range (and gives the same secret twice: the file still has two)
 const noneTaken = async () => true
 const read = (dir) => JSON.parse(fs.readFileSync(path.join(dir, INGRESS_FILE), 'utf8'))
@@ -175,7 +175,7 @@ test('4.4 §Plan 「端口」: no file yet → ensureBoardPort makes it (doors\'
   assert.deepEqual(fs.readFileSync(path.join(dir2, INGRESS_FILE)), before)
 })
 
-test('validate: a boardPort equal to a door\'s port (or not a port) makes the file one asight did not write', async () => {
+test('validate: a boardPort equal to a door\'s port (or not a port) makes the file one trocar did not write', async () => {
   for (const bad of ['same', 0, 70000, '9800']) {
     const dir = dirOf()
     const c = await loadIngressConfig({ dir, groups: ['codex.env'], isFree: noneTaken })

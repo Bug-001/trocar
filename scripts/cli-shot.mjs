@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // scripts/cli-shot.mjs — a photo of what the CLI actually looks like (D58⑥).
 //
-//   node scripts/cli-shot.mjs [--out f.png] [--cols 80] [--title t] -- node bin/asight.mjs help
+//   node scripts/cli-shot.mjs [--out f.png] [--cols 80] [--title t] -- node bin/trocar.mjs help
 //   node scripts/cli-shot.mjs --text sample.txt [--out f.png]
 //
 // String assertions cannot see layout, alignment or colour, so the agents that design, build and
@@ -103,8 +103,8 @@ pre{margin:0;padding:${PAD}px;color:#d6dae3;background:#12141a;font:16px/${LH}px
 async function playwright() {
   const pick = (m) => (m && (m.chromium || (m.default && m.default.chromium))) || null
   try { const m = await import('playwright'); if (pick(m)) return pick(m) } catch { /* not in the repo */ }
-  if (!process.env.ASIGHT_PLAYWRIGHT) return null
-  try { return pick(await import(pathToFileURL(path.join(process.env.ASIGHT_PLAYWRIGHT, 'playwright', 'index.js')).href)) } catch { return null }
+  if (!process.env.TROCAR_PLAYWRIGHT) return null
+  try { return pick(await import(pathToFileURL(path.join(process.env.TROCAR_PLAYWRIGHT, 'playwright', 'index.js')).href)) } catch { return null }
 }
 
 const CHROMES = [
@@ -125,8 +125,8 @@ async function shoot({ doc, w, h, out }) {
     return
   }
   const bin = CHROMES.find((p) => fs.existsSync(p))
-  if (!bin) throw new Error('no renderer: install playwright (or set ASIGHT_PLAYWRIGHT=<node_modules>) or Google Chrome')
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-shot-'))
+  if (!bin) throw new Error('no renderer: install playwright (or set TROCAR_PLAYWRIGHT=<node_modules>) or Google Chrome')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-shot-'))
   try {
     const page = path.join(tmp, 'shot.html')
     fs.writeFileSync(page, doc)

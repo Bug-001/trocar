@@ -37,10 +37,10 @@ const MUTATIONS = {
 
 // The real loader over a directory of one generated module per descriptor; the module hands back an object built here (functions and all).
 async function loadOne(desc) {
-  const dir = tmpDir('asight-pm-')
+  const dir = tmpDir('trocar-pm-')
   const key = `d${Math.random().toString(36).slice(2)}`
-  globalThis.__asightPmSchema = { ...(globalThis.__asightPmSchema || {}), [key]: desc }
-  fs.writeFileSync(path.join(dir, `${key}.mjs`), `export default globalThis.__asightPmSchema.${key}\n`)
+  globalThis.__trocarPmSchema = { ...(globalThis.__trocarPmSchema || {}), [key]: desc }
+  fs.writeFileSync(path.join(dir, `${key}.mjs`), `export default globalThis.__trocarPmSchema.${key}\n`)
   return loadHarnesses(pathToFileURL(dir + path.sep))
 }
 
@@ -91,7 +91,7 @@ test('every write target of every descriptor resolves under the home, appSupport
 
 test("claude-code: CLAUDE_CODE_CERT_STORE is read in Claude Code's own precedence (project-local, project, user settings env, process env; ruling ⑧)", () => {
   const cc = real.find((d) => d.name === 'claude-code').proxyMode
-  const root = tmpDir('asight-pm-')
+  const root = tmpDir('trocar-pm-')
   const home = path.join(root, 'home'), cwd = path.join(root, 'proj')
   const put = (f, store) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify({ env: { CLAUDE_CODE_CERT_STORE: store } })) }
   const ctx = (env) => ({ os: 'darwin', home, cwd, env, dirs: {}, readFile: (p) => fs.readFileSync(p, 'utf8'), readdir: (p) => fs.readdirSync(p) })
@@ -123,7 +123,7 @@ test('hermes: a route CA in each of config.yaml\'s shapes is found by the descri
     routes: 'routes:\n  - ssl_ca_cert: /etc/corp.pem\n',
   }
   for (const os of ['darwin', 'win32']) for (const [shape, text] of Object.entries(DOCS)) {
-    const root = tmpDir('asight-pm-')
+    const root = tmpDir('trocar-pm-')
     const ctx = { os, home: path.join(root, 'home'), cwd: root, env: {}, dirs: { localAppData: path.join(root, 'la'), appSupport: path.join(root, 'as') }, readFile: (p) => fs.readFileSync(p, 'utf8'), readdir: (p) => fs.readdirSync(p) }
     const [f] = resolveLoc(yamlSrcs[0].file, ctx)
     fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text)
@@ -134,7 +134,7 @@ test('hermes: a route CA in each of config.yaml\'s shapes is found by the descri
 
 test("codex: SSL_CERT_FILE in $CODEX_HOME/.env beats the process env (Codex applies .env over its launch env, spec 4.11 ④)", () => {
   const cx = real.find((d) => d.name === 'codex').proxyMode
-  const root = tmpDir('asight-pm-')
+  const root = tmpDir('trocar-pm-')
   const home = path.join(root, 'home')
   const ctx = (env) => ({ os: 'darwin', home, cwd: root, env, dirs: {}, readFile: (p) => fs.readFileSync(p, 'utf8'), readdir: (p) => fs.readdirSync(p) })
   const first = (env) => cx.trusts.os.sources.map((s) => readSrc(s.from, ctx(env))).find((r) => r.set)?.value

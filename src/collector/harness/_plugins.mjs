@@ -6,7 +6,7 @@
 import fs from 'node:fs'
 
 export const PLUGIN_SOURCES = new URL('./plugins/', import.meta.url)
-const SLOTS = { caFile: "'__ASIGHT_CA_FILE__'", markerDir: "'__ASIGHT_MARKER_DIR__'" }
+const SLOTS = { caFile: "'__TROCAR_CA_FILE__'", markerDir: "'__TROCAR_MARKER_DIR__'" }
 
 export function renderPlugin(rel, { caFile, markerDir }) {
   const src = fs.readFileSync(new URL(rel, PLUGIN_SOURCES), 'utf8')
@@ -25,7 +25,7 @@ export function renderShim(name, { caFile }) {
 }
 
 
-// asight's own plugin directory needs a manifest so Node's lookup stops there and never lands on someone else's; it is
+// trocar's own plugin directory needs a manifest so Node's lookup stops there and never lands on someone else's; it is
 // anonymous on purpose: dsh puts the name / version of every plugin's manifest into the requests it sends
 // (dsh_plugin_packages), and a name without a version makes every request fail (4.6 dsh row, lab ⑤).
 export const ANONYMOUS_MODULE_MANIFEST = '{"type":"module"}\n'

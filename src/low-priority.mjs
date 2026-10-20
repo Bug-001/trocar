@@ -2,7 +2,7 @@
 //
 // The daemon's own event loop forwards agent traffic, and the work it hands to a child (sealing a closed segment,
 // answering a query) is work nobody is waiting on the agent's behalf. So every such child asks the OS to put it
-// behind everything else first. One fact in one place (0.1 §2): both children ask for THIS nice, and `asight doctor`
+// behind everything else first. One fact in one place (0.1 §2): both children ask for THIS nice, and `trocar doctor`
 // has one number to compare a running child against.
 //
 // WHICH number: node's own name for "below normal", never a literal. `os.setPriority` takes a nice and libuv maps it
@@ -26,7 +26,7 @@ export function lowerPriority({ os = nodeOs, say = () => {} } = {}) {
     os.setPriority(0, NICE)
     return os.getPriority(0)
   } catch (e) {
-    try { say(`asight: this process could not be put at nice ${NICE} (${String((e && e.message) || e)}); it runs at its parent's priority instead`) } catch { /* no stderr: the parent is gone */ }
+    try { say(`trocar: this process could not be put at nice ${NICE} (${String((e && e.message) || e)}); it runs at its parent's priority instead`) } catch { /* no stderr: the parent is gone */ }
     return null
   }
 }

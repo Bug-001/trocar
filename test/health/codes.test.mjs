@@ -66,7 +66,7 @@ test('D38 every event / where / code / not_captured a collector writer names is 
 })
 
 test('D38 the scan fails on a name outside the set (planted tree)', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-codes-'))
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-codes-'))
   try {
     fs.mkdirSync(path.join(root, 'src', 'collector', 'core', 'ws'), { recursive: true })
     fs.writeFileSync(path.join(root, 'src', 'collector', 'a.mjs'), "w({ event: 'agent-wandered', where: 'nowhere', code: 'oops-code' }); failure('elsewhere', e); r.not_captured = 'shrug'; notCaptured('hmm', why)\n")
@@ -161,7 +161,7 @@ test('4.11 §3 ⑱ the producer scan can fail: a planted code with no writer is 
   assert.equal(has('cert-key-missing'), true)
 })
 
-// D39⑦ (RFC 1.6 §涉及源文件与接口「闭集」): the names `asight off` writes. src/off may import nothing outside itself (0.1 §2), so
+// D39⑦ (RFC 1.6 §涉及源文件与接口「闭集」): the names `trocar off` writes. src/off may import nothing outside itself (0.1 §2), so
 // it keeps its own copy (src/off/names.mjs); this is what keeps the two copies the same list.
 test('D39 the off names (where off, event off-note, codes backup-failed / backup-kept / undone-by-marker) are in the closed sets', () => {
   assert.deepEqual(checkRecord({ event: 'off-note', where: 'off', code: 'backup-kept', reason: 'x' }), [])

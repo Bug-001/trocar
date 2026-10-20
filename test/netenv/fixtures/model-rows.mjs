@@ -24,7 +24,7 @@ export const ctxOf = (os, home, present = true) => ({ os, home, cwd: home, env: 
 
 /** A manifest with h installed and (unless `on` is false) one phase:on record per route, the door written over `prior` when given, as entries.mjs leaves it. */
 export function world(desc, { prior = null, ports = 17990, on = true } = {}) {
-  const home = tmpDir('model-rows'), dir = path.join(home, '.asight', 'collector')
+  const home = tmpDir('model-rows'), dir = path.join(home, '.trocar', 'collector')
   fs.mkdirSync(dir, { recursive: true })
   const m = newManifest()
   m.install = { state: 'complete', at: '2026-10-15T09:00:00.000Z', pending: [], harnesses: [desc.name], items: {} }

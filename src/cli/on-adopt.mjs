@@ -1,9 +1,9 @@
-// on-adopt.mjs (src/cli) — what `asight on` does about the proxy an agent already uses (RFC 1.6 §9.5): it reads the setting the way the agent reads it, draws where a new connection will go once asight is
-// on, prints that chain (credentials masked) in the plan and in the receipt, and records it as `adopted.<harness>` in ~/.asight/netenv.json, which is what a later drift is measured against.
-// In driver mode (Linux eBPF) asight writes no network setting at all: the kernel steers the connection and the engine hands the CONNECT on to the user's proxy as it was. A routing that owns a proxy
+// on-adopt.mjs (src/cli) — what `trocar on` does about the proxy an agent already uses (RFC 1.6 §9.5): it reads the setting the way the agent reads it, draws where a new connection will go once trocar is
+// on, prints that chain (credentials masked) in the plan and in the receipt, and records it as `adopted.<harness>` in ~/.trocar/netenv.json, which is what a later drift is measured against.
+// In driver mode (Linux eBPF) trocar writes no network setting at all: the kernel steers the connection and the engine hands the CONNECT on to the user's proxy as it was. A routing that owns a proxy
 // field (proxy mode: `deps.routing`, supplied by its platform) is told the setting that was there (`routing.adopt`) — the platform hands it to the engine's door as the upstream and writes the field, as a manifest
 // entry like any other — and `on` asks first when the user edited that field since the last `on` (R6, the confirmation reason 「你改过的代理设置」). Only `on` ever writes an agent's setting (D30); this file
-// writes one file of asight's own, netenv.json, through writeNetenv.
+// writes one file of trocar's own, netenv.json, through writeNetenv.
 import { gatherNetFacts } from '../netenv/facts.mjs'
 import { readProxySetting, readAdopted, chainsAfterOn, adoptedRecord, proxyFilesOf } from '../netenv/adopt.mjs'
 import { writeNetenv, netenvFile } from '../netenv/index.mjs'
@@ -36,7 +36,7 @@ export function editedFields({ adoption, routing, targets, home, env, fs = nodeF
     const d = adoption.descriptors.find((x) => x.name === h), a = adoption.adopted[h]
     const now = d ? readProxySetting(d, { home, env, fs, paths: a.file_paths || null, vars: false }) : null
     if (!now || now.unknown) return []
-    if ([a.written_sha256, a.file_sha256].includes(now.sha256 ?? null)) return [] // what asight wrote, or what the user had before it: not an edit
+    if ([a.written_sha256, a.file_sha256].includes(now.sha256 ?? null)) return [] // what trocar wrote, or what the user had before it: not an edit
     const field = routing.fieldOf(h) || {}
     return [{ harness: h, where: field.key ? `${field.path} ${field.key}` : field.path || null, now: now.value, was: a.proxy ?? null }]
   })
@@ -57,7 +57,7 @@ export async function recordAdoption({ adoption, routing, targets, home, env, no
     let written = null
     if (routing && routing.ownsProxyField(h)) {
       try { await routing.adopt(h, setting && !setting.unknown ? setting : null) } catch (e) { rethrowSandbox(e); out.failed.push(h); out.notes.push(`${h}: ${errText(e)}`); continue }
-      written = readProxySetting(d, { home, env, fs, vars: false }) // what the field holds now: asight's own value, which a later edit is told from
+      written = readProxySetting(d, { home, env, fs, vars: false }) // what the field holds now: trocar's own value, which a later edit is told from
     }
     const prev = adoption.adopted[h] || null
     const rec = adoptedRecord({ facts: adoption.facts, topology: chains, h, now, files: files.unknown ? null : files, paths, prev, written: written && !written.unknown ? written : null })
@@ -65,7 +65,7 @@ export async function recordAdoption({ adoption, routing, targets, home, env, no
     if (rec !== prev) changed[h] = rec
   }
   if (Object.keys(changed).length) {
-    try { writeNetenv(home, { adopted: { ...adoption.adopted, ...changed } }, { fs }); out.wrote = netenvFile(home) } catch (e) { rethrowSandbox(e); out.notes.push(`${netenvFile(home)} could not be written (${errText(e)}): what asight found of ${Object.keys(changed).join(', ')} is not recorded, so a later change of it cannot be told`) }
+    try { writeNetenv(home, { adopted: { ...adoption.adopted, ...changed } }, { fs }); out.wrote = netenvFile(home) } catch (e) { rethrowSandbox(e); out.notes.push(`${netenvFile(home)} could not be written (${errText(e)}): what trocar found of ${Object.keys(changed).join(', ')} is not recorded, so a later change of it cannot be told`) }
   }
   return out
 }

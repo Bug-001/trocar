@@ -118,7 +118,7 @@ function readProxyUrl(text) {
 /**
  * parseProxyText(text) → { ok: true, kind: 'http' | 'socks5', host, port, credentialed } | { ok: false, why: 'upstream-protocol', protocol } | { ok: false, why: 'upstream-unparseable' }
  * `http://`, `socks5://` and `socks5h://` connect (the last two are one thing: both hand the name to the proxy); a bare `host:port` is HTTP. `https://` (TLS to the proxy), `socks4`, `socks4a`, a bare `socks` and every other scheme
- * are not routed and say which scheme it was: asight does not swap the user's proxy for another way out (4.8 §2.2). The credentials are not in the answer: `proxyAuthOf` reads them, for whoever resolves a reference.
+ * are not routed and say which scheme it was: trocar does not swap the user's proxy for another way out (4.8 §2.2). The credentials are not in the answer: `proxyAuthOf` reads them, for whoever resolves a reference.
  * An address the kernel config generator would refuse (`upstreamOf`: a host with a comma, a port outside 1..65535) is `upstream-unparseable` too, so no proxy text of the user's can make `on` or a reload throw.
  */
 export function parseProxyText(text) {
@@ -128,7 +128,7 @@ export function parseProxyText(text) {
   return { ok: true, kind: r.kind, host: r.host, port: r.port, credentialed: r.hasLogin }
 }
 
-/** The login of a proxy address, `{ username, password }` (decoded), or null when it has none or is not an address asight can use. The one place a proxy's credentials are read from its text. */
+/** The login of a proxy address, `{ username, password }` (decoded), or null when it has none or is not an address trocar can use. The one place a proxy's credentials are read from its text. */
 export function proxyAuthOf(text) {
   const r = readProxyUrl(text)
   if (!r || !r.hasLogin || (r.proto !== 'http' && !SOCKS_LIKE.has(r.proto))) return null
@@ -138,7 +138,7 @@ export function proxyAuthOf(text) {
 const text = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
 
 /** chainSystemProxy(sp) → the chain's systemProxy, the twin of win32's: null (no proxy an HTTPS request takes) · { url, bypass } · { pac: true } (never executed) ·
- *  { ok: false, why } (unreadable, or an entry asight cannot dial). The entry is the one an HTTPS request takes: `HTTPSEnable` with `HTTPSProxy` (and `HTTPSPort`,
+ *  { ok: false, why } (unreadable, or an entry trocar cannot dial). The entry is the one an HTTPS request takes: `HTTPSEnable` with `HTTPSProxy` (and `HTTPSPort`,
  *  a key of its own — a host without one is a bare host); `HTTPEnable` alone is none (macOS sends HTTPS through the secure web proxy, as WinINET proxies no HTTPS
  *  over `http=`); `SOCKSEnable` alone is `upstream-protocol` (not followed, as WinINET's `socks=`); credentials are refused as on Windows. */
 export function chainSystemProxy(sp) {

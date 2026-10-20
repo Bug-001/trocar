@@ -2,7 +2,7 @@
 // rename 前按同一读法解析校验; the value is a string, or a boolean / null where an app's own setting is one — VS Code's
 // `http.systemCertificates: false` of 4.8 §2.4 spells it without quotes). The document is read as JSONC: a byte-order mark (U+FEFF at offset 0,
 // where text-codec.mjs leaves it), `//` and `/* */` comments, trailing commas in objects and arrays. A document of nothing but those (empty, blank,
-// a mark, comments) is no document. The edit is a minimal splice: no reordering, no reformatting, every byte outside it unchanged, and asight never
+// a mark, comments) is no document. The edit is a minimal splice: no reordering, no reformatting, every byte outside it unchanged, and trocar never
 // writes a comment. Each edit is returned as {offset, removed, inserted} for the install journal (§安装清单与卸载「日志」); reverseOps undoes it
 // and refuses when the text no longer matches. A refusal carries `why` from 4.6「逐 harness 跳过」's set — `not-json` (with the `offset` it
 // stopped at), `not-object`, `value` — for the caller to name its file.
@@ -96,12 +96,12 @@ export function parseJsonText(text) {
   return root == null ? undefined : valueOf(root)
 }
 
-// Why a JSON file of the user's is left as it is (`left-unparsable`): asight cannot read it as JSONC at a place the user can find (line and column,
-// counted as the user's editor counts them), and what of asight's may still be in it. `what`: asight's key and value, or its value under a key.
+// Why a JSON file of the user's is left as it is (`left-unparsable`): trocar cannot read it as JSONC at a place the user can find (line and column,
+// counted as the user's editor counts them), and what of trocar's may still be in it. `what`: trocar's key and value, or its value under a key.
 export function unreadableJson(file, text, err, what) {
   const at = Number.isInteger(err && err.offset) ? err.offset : null
   const where = at == null ? '' : (() => { const lines = text.slice(markLen(text), at).split(/\r\n|\r|\n/); return ` (line ${lines.length}, column ${lines.at(-1).length + 1})` })()
-  return `${file}: asight cannot read it${where}; ${what} may still be in it`
+  return `${file}: trocar cannot read it${where}; ${what} may still be in it`
 }
 
 // JSON.parse keeps the LAST duplicate key; so do we.
@@ -129,12 +129,12 @@ export function reverseOps(text, ops) {
   return t
 }
 
-// The JSON spelling of a value asight writes: a string in quotes, a boolean or null as itself (4.8 §2.4's VS Code item).
+// The JSON spelling of a value trocar writes: a string in quotes, a boolean or null as itself (4.8 §2.4's VS Code item).
 const literal = (v) => (typeof v === 'string' ? JSON.stringify(v) : String(v))
 
 const nest = (keys, value) => keys.reduceRight((inner, k) => `{ ${JSON.stringify(k)}: ${inner} }`, literal(value))
 const member = (keys, value) => `${JSON.stringify(keys[0])}: ${keys.length > 1 ? nest(keys.slice(1), value) : literal(value)}`
-/** The line ending asight writes into a file (4.6「文件的编码」: the line ending follows the file): CRLF when the file has more CRLF than bare LF,
+/** The line ending trocar writes into a file (4.6「文件的编码」: the line ending follows the file): CRLF when the file has more CRLF than bare LF,
  *  else LF — and LF for an empty or new file. The one place that decides it for every insert (a new JSON document, a dotenv block, a joined line, an rc line, a YAML row). */
 export const eolOf = (text) => { const t = text == null ? '' : text; const crlf = (t.match(/\r\n/g) || []).length; return crlf > (t.match(/\n/g) || []).length - crlf ? '\r\n' : '\n' }
 
@@ -190,7 +190,7 @@ export function setKey(text, keys, value) {
       return check(before, { text: applyOps(before, [op]), ops: [op], prior: null, existingDepth: d }, keys, value)
     }
     if (d === keys.length - 1) {
-      if (m.value.type !== 'string' && m.value.type !== 'scalar') throw refusal('value', `setKey: ${keys.join('.')} is not a value asight can replace`)
+      if (m.value.type !== 'string' && m.value.type !== 'scalar') throw refusal('value', `setKey: ${keys.join('.')} is not a value trocar can replace`)
       const op = { offset: m.value.start, removed: before.slice(m.value.start, m.value.end), inserted: literal(value) }
       return check(before, { text: applyOps(before, [op]), ops: [op], prior: m.value.value, existingDepth: d }, keys, value)
     }
@@ -256,7 +256,7 @@ export function removeKey(text, keys) {
   return { text: out, ops: [op] }
 }
 
-// removeItem(text, keys, item) → { text, ops } taking out the LAST element of the array at `keys` that equals `item` (an element asight appended, 4.11 P13
+// removeItem(text, keys, item) → { text, ops } taking out the LAST element of the array at `keys` that equals `item` (an element trocar appended, 4.11 P13
 // `json-array-item`), with one comma and the white space of its place — the cut removeKey makes for a member, so comments stay; an array left with
 // nothing but white space inside becomes `[]`. null when the path is not an array or holds no such element (the user took it out: nothing to do, D48②).
 export function removeItem(text, keys, item) {
@@ -285,7 +285,7 @@ export function addItem(text, keys, item) {
   for (; node && node.type === 'object' && d < keys.length; d++) { const m = memberOf(node, keys[d]); if (!m) break; node = m.value }
   let op, res
   if (d < keys.length || node == null) {
-    const PH = '\u0000asight-item' // a placeholder no user value is; setKey places the member, the array takes its place
+    const PH = '\u0000trocar-item' // a placeholder no user value is; setKey places the member, the array takes its place
     const r = setKey(text, keys, PH)
     op = { ...r.ops[0], inserted: r.ops[0].inserted.replace(JSON.stringify(PH), `[${JSON.stringify(item)}]`) }
     res = { createdArray: true, existingDepth: r.existingDepth }

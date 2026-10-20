@@ -1,6 +1,6 @@
 // src/raw/discover.mjs — which files ARE the source, for every reader (D35 · RFC 4.2 「读」「并存期」).
 //
-// The board loader, the resolver and `asight doctor` used to each decide this for themselves, and
+// The board loader, the resolver and `trocar doctor` used to each decide this for themselves, and
 // drifted (the scan comment in src/server.mjs, above scanRoots, explains how that once certified a capture nobody had read).
 // D35 adds sealed files, and with them the one rule that MUST be the same for all three readers:
 //
@@ -33,7 +33,7 @@ export const streamOfSealed = (name) => { const seg = sealedSegment(path.basenam
 // The order a reader reads one directory's files in (4.2 「watermark」: a session's record sequence is
 // the same before and after sealing). By stream — `streams` first, in that order, then any other
 // stream by name — then by segment number, numerically (…9999, 10000), and a stream's live original
-// after its segments: it holds what was written after them (`asight shard` writing a fresh
+// after its segments: it holds what was written after them (`trocar shard` writing a fresh
 // calls.ndjson beside the sealed one). Sorting by file name read a session's sealed `other` before its
 // sealed `probes`, unlike the originals (review 3 F2). Stable for files of one stream in several dirs.
 export function orderInputs(files, streams = []) {
@@ -158,7 +158,7 @@ function resolveCoexistence(all, { fs = nodeFs } = {}) {
       // Same inode but different size/mtime: the sealed original was changed in place afterwards —
       // both are read (never lose a byte) and that is reported, duplicates possible. Unless the file of
       // another size does not begin with the sealed bytes: then it is another file that reuses the freed
-      // inode (the fresh calls.ndjson `asight shard` writes after the sealer deleted the old one, on
+      // inode (the fresh calls.ndjson `trocar shard` writes after the sealer deleted the old one, on
       // ext4) — read beside the sealed copy and, as for another inode of another size, nothing to report.
       if (st.ino === s.ino) {
         if (st.size === s.length && st.mtimeMs === s.mtimeMs) return o;
@@ -166,7 +166,7 @@ function resolveCoexistence(all, { fs = nodeFs } = {}) {
         mismatched.push({ sealed: f, original: o, why: `the original was changed after it was sealed (${st.size === s.length ? `same size, ${st.size} bytes, other mtime` : `size ${st.size} vs ${s.length}`}) — both are read, records may appear twice` });
         return null;
       }
-      // Another inode. Of another size it is another file (`asight shard` writing a fresh calls.ndjson
+      // Another inode. Of another size it is another file (`trocar shard` writing a fresh calls.ndjson
       // after the sealer deleted the old one): both are read, nothing to report. Of the same size and
       // mtime (within the 1 s some copy tools keep) it is this file copied or restored with its tree —
       // a backup, `cp -a`, another disk — and is used alone, or every record would be read twice
@@ -174,7 +174,7 @@ function resolveCoexistence(all, { fs = nodeFs } = {}) {
       // that is reported.
       if (st.size !== s.length) return null;
       if (Math.abs(st.mtimeMs - s.mtimeMs) < 1000) return o;
-      mismatched.push({ sealed: f, original: o, why: `the file at the original's path is another inode of the same size (${st.size} bytes) with another mtime — a copy that did not keep times? Both are read, records may appear twice; \`asight raw verify\` tells whether it holds the sealed bytes` });
+      mismatched.push({ sealed: f, original: o, why: `the file at the original's path is another inode of the same size (${st.size} bytes) with another mtime — a copy that did not keep times? Both are read, records may appear twice; \`trocar raw verify\` tells whether it holds the sealed bytes` });
       return null;
     });
     if (present.length && present.every(Boolean)) { drop.add(f); superseded.push({ sealed: f, original: present[0] }); }
@@ -184,7 +184,7 @@ function resolveCoexistence(all, { fs = nodeFs } = {}) {
 
 // One directory as the board reads a session dir or `control/`: the named original streams that
 // exist, plus every sealed file in it, one copy per line (coexistence), in record order (orderInputs).
-// `exclude`: paths to treat as absent — `asight raw compare` reads the state after originals are
+// `exclude`: paths to treat as absent — `trocar raw compare` reads the state after originals are
 // deleted through this same function (review 3 F1).
 export function dirInputs(dir, { originals = [], order = originals, fs = nodeFs, exclude = null } = {}) {
   const own = originals.map((n) => path.join(dir, n)).filter((f) => fs.existsSync(f));
@@ -195,7 +195,7 @@ export function dirInputs(dir, { originals = [], order = originals, fs = nodeFs,
 }
 
 // roots → { files (to read, in a stable order), perRoot, skipped, superseded, mismatched, sig }.
-// `exclude`: paths to treat as absent (`asight raw compare` reads the state after deletion this way).
+// `exclude`: paths to treat as absent (`trocar raw compare` reads the state after deletion this way).
 export function listSources(roots, { fs = nodeFs, exclude = null } = {}) {
   const perRoot = roots.map((root) => ({ root, ...scanRoot(root, fs) }));
   for (const r of perRoot) {

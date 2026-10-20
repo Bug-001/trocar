@@ -1,11 +1,11 @@
 // src/query/named/index.mjs — the named queries (RFC 1.6 §4.1, 附录 C.5; D59).
 //
-// ONE table: every name, its parameters and its run function. `asight query`, the board's
+// ONE table: every name, its parameters and its run function. `trocar query`, the board's
 // `GET /api/<name>` and `--json` all come through runQuery, so there is one answer per name and no
 // second read path. Every document carries `schema` · `command` · `ok` · `errors` (C.5); what a
 // query could not read goes into `errors` and the document is still produced (D38).
 import nodeFs from 'node:fs';
-import { asightHome } from '../../paths.mjs';
+import { trocarHome } from '../../paths.mjs';
 import { SCHEMA_VERSION } from '../../cli/schema.mjs';
 import * as segments from './segments.mjs';
 import * as classes from './classes.mjs';
@@ -45,7 +45,7 @@ export const QUERIES = Object.freeze({
 async function verdict(name, { params, errors, userHome, env, platform, deps }) {
   const { resolveHarnesses } = await import('../../cli/harness-names.mjs');
   const named = resolveHarnesses(params.harness == null ? [] : [...listOf(params.harness)]);
-  if (!named.ok) throw new QueryArgError(`asight query ${name}: --harness: no agent called ${named.unknown.join(', ')} (known: ${named.known.join(', ')})`);
+  if (!named.ok) throw new QueryArgError(`trocar query ${name}: --harness: no agent called ${named.unknown.join(', ')} (known: ${named.known.join(', ')})`);
   const mod = await import(name === 'status' ? '../../cli/status.mjs' : '../../cli/doctor.mjs');
   // `exit` is the command's own exit code, not part of the document (runDoctor drops it too).
   const { errors: own = [], exit: _exit, ...doc } = await (name === 'status' ? mod.statusDoc : mod.doctorDoc)({ names: named.ids, home: userHome, env, platform, deps });
@@ -103,12 +103,12 @@ export function parseTime(v, { name = 'time', now = Date.now() } = {}) {
 
 /**
  * runQuery(name, params, {home, fs, now, userHome, env, platform, deps}) → the document.
- * `home` is ~/.asight; the rest of the context is handed to the query as it is, for `status` / `doctor`,
+ * `home` is ~/.trocar; the rest of the context is handed to the query as it is, for `status` / `doctor`,
  * which read the machine (`userHome` = the user's home, and whatever a test injects in `deps`).
  * Throws QueryArgError for an unknown name or parameter; everything else it cannot read is in `errors`.
  */
 export async function runQuery(name, params = {}, ctx = {}) {
-  const { home = asightHome(), fs = nodeFs, now = Date.now } = ctx;
+  const { home = trocarHome(), fs = nodeFs, now = Date.now } = ctx;
   const q = checked(name, params);
   const errors = [];
   const body = await q.run({ ...ctx, home, fs, now, params, errors });
@@ -117,8 +117,8 @@ export async function runQuery(name, params = {}, ctx = {}) {
 
 function checked(name, params) {
   const q = Object.hasOwn(QUERIES, name) ? QUERIES[name] : null;
-  if (!q) throw new QueryArgError(`asight query: no query called ${JSON.stringify(name)} (names: ${Object.keys(QUERIES).join(', ')})`);
-  for (const k of Object.keys(params)) if (!q.params.includes(k)) throw new QueryArgError(`asight query ${name}: no parameter --${k} (its parameters: ${q.params.length ? q.params.map((p) => '--' + p).join(' ') : 'none'})`);
+  if (!q) throw new QueryArgError(`trocar query: no query called ${JSON.stringify(name)} (names: ${Object.keys(QUERIES).join(', ')})`);
+  for (const k of Object.keys(params)) if (!q.params.includes(k)) throw new QueryArgError(`trocar query ${name}: no parameter --${k} (its parameters: ${q.params.length ? q.params.map((p) => '--' + p).join(' ') : 'none'})`);
   return q;
 }
 
@@ -129,7 +129,7 @@ function checked(name, params) {
  * answer that is stale only because time passed is stale by at most one minute. Throws what runQuery throws.
  */
 export function stampOf(name, params = {}, ctx = {}) {
-  const { home = asightHome(), fs = nodeFs, now = Date.now, env = process.env } = ctx;
+  const { home = trocarHome(), fs = nodeFs, now = Date.now, env = process.env } = ctx;
   const q = checked(name, params);
   const parts = q.stamp({ home, fs, env });
   if (parts == null) return null;

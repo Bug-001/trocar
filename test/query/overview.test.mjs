@@ -1,4 +1,4 @@
-// test/query/overview.test.mjs — `asight query overview` (RFC 1.6 §4.1 · 附录 C.5 `overview`; 3.5 §访问模式; 1.7 统计卡).
+// test/query/overview.test.mjs — `trocar query overview` (RFC 1.6 §4.1 · 附录 C.5 `overview`; 3.5 §访问模式; 1.7 统计卡).
 // The usage-bearing records are the captured bytes of test/fixtures/old-capture-resp-shapes.ndjson (regression seeds):
 // only their time, session id, host and retention are restamped, the reply bytes are as captured.
 import test from 'node:test'

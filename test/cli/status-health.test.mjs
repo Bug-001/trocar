@@ -15,7 +15,7 @@ const STATES = ['not-running', 'not-responding', 'failing', 'unknown', 'off', 'o
 
 /** An installed collector with a running daemon whose flows/ holds `recs` after its daemon-start → captureHealth over it. */
 function healthOver(recs) {
-  const h = tmpDir('asight-health-'), c = path.join(h, 'collector')
+  const h = tmpDir('trocar-health-'), c = path.join(h, 'collector')
   fs.mkdirSync(path.join(c, 'flows'), { recursive: true })
   fs.writeFileSync(path.join(c, 'install-manifest.json'), JSON.stringify({ version: 3, install: { state: 'complete' }, created_at: at(9999), entries: [], files: [] }))
   fs.writeFileSync(path.join(c, 'lock'), JSON.stringify({ pid: 4242, start_time: '900', boot_id: 'b1' }))

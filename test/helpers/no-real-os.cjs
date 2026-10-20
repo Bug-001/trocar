@@ -4,14 +4,14 @@
 // 0.1 §3 「不碰真实机器」: the author's Mac runs the old capture while the tests run, and the user's real launchctl, systemctl,
 // security and certutil are one forgotten injected runner away. Three layers, because a rule that only the new code's own helper
 // honours protects nothing from the code that does not use the helper:
-//   1. ASIGHT_TEST_SANDBOX=1, set here and inherited by every child a test starts. src/off/exec.mjs (`execTool`, the one way new
+//   1. TROCAR_TEST_SANDBOX=1, set here and inherited by every child a test starts. src/off/exec.mjs (`execTool`, the one way new
 //      code runs an OS tool) reads it and refuses a real tool: a stub inside the temp dir, or an injected runner, is all it runs.
 //   2. `node:child_process` is wrapped (spawn, spawnSync, execFile, execFileSync, exec, execSync, and the promisified exec /
 //      execFile): a command that is one of the guarded tools (REAL_TOOLS), or that a `sudo` / `env` / `sh -c` line puts in command position, is
 //      refused with code ESANDBOX unless it resolves (symlinks followed) to a file inside the temp dir. This is what catches the old
 //      capture's default runners (src/capture/*, src/collector/arch/linux/*) when a test forgot to inject one, and a stray direct
 //      `spawnSync('launchctl')` anywhere. The patch is seen by later `import { spawnSync } from 'node:child_process'`.
-//   3. Every refusal is written to a ledger (`globalThis[Symbol.for('asight.no-real-os')].refused`). A test process that ends with a
+//   3. Every refusal is written to a ledger (`globalThis[Symbol.for('trocar.no-real-os')].refused`). A test process that ends with a
 //      refusal nobody acknowledged (`takeRefusals()` in test/helpers/no-real-os.mjs) exits 1 and names it: a caller that catches
 //      ESANDBOX as "the tool failed" no longer turns a path it never ran into a green test.
 // Load it with `--require` like the other preloads; the test files' children inherit the variable (not the wrapper: a child that
@@ -24,18 +24,18 @@ const util = require('node:util')
 const cp = require('node:child_process')
 const { syncBuiltinESMExports } = require('node:module')
 
-process.env.ASIGHT_TEST_SANDBOX = '1'
-// the old capture's mihomo control socket, pinned to a place nothing listens (0.1 §3 「Clash 用 ASIGHT_MIHOMO_SOCK」): src/capture/desktop-steer.mjs reads it before anything else, and a test that wants a core sets the variable itself.
-process.env.ASIGHT_MIHOMO_SOCK = path.join(fs.realpathSync(os.tmpdir()), 'asight-test-no-mihomo.sock')
+process.env.TROCAR_TEST_SANDBOX = '1'
+// the old capture's mihomo control socket, pinned to a place nothing listens (0.1 §3 「Clash 用 TROCAR_MIHOMO_SOCK」): src/capture/desktop-steer.mjs reads it before anything else, and a test that wants a core sets the variable itself.
+process.env.TROCAR_MIHOMO_SOCK = path.join(fs.realpathSync(os.tmpdir()), 'trocar-test-no-mihomo.sock')
 
-// + the macOS native pieces asight ships (T13): the signing helper writes the login keychain, procenv reads another process's
+// + the macOS native pieces trocar ships (T13): the signing helper writes the login keychain, procenv reads another process's
 // memory, plutil reads managed preferences — a test injects a runner or a stub, never the committed binary or the real tool
-const REAL_TOOLS = new Set(['launchctl', 'systemctl', 'security', 'certutil', 'loginctl', 'asight-sign-helper', 'procenv', 'plutil', 'reg', 'reg.exe', 'powershell.exe', 'csc.exe'])
+const REAL_TOOLS = new Set(['launchctl', 'systemctl', 'security', 'certutil', 'loginctl', 'trocar-sign-helper', 'procenv', 'plutil', 'reg', 'reg.exe', 'powershell.exe', 'csc.exe'])
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash'])
 // words that put another command after them: `sudo launchctl …`, `env X=1 security …`, `if systemctl …; then`
 const PREFIXES = new Set(['sudo', 'doas', 'env', 'command', 'exec', 'nice', 'nohup', 'time', 'timeout', 'xargs', 'arch', 'if', 'then', 'else', 'elif', 'do', 'while', 'until', '!'])
 
-const KEY = Symbol.for('asight.no-real-os')
+const KEY = Symbol.for('trocar.no-real-os')
 const refused = [] // { tool, command, message } of every refusal, here or in src/off/exec.mjs, not yet acknowledged
 const ledger = { refused, takeRefusals: () => refused.splice(0) }
 globalThis[KEY] = ledger
@@ -107,10 +107,10 @@ function guard(name, a) {
 
 function patch(name) {
   const original = cp[name]
-  if (typeof original !== 'function' || original.asightGuarded) return
+  if (typeof original !== 'function' || original.trocarGuarded) return
   const wrapped = function (...a) { guard(name, a); return original.apply(this, a) }
   Object.defineProperty(wrapped, 'name', { value: name })
-  Object.defineProperty(wrapped, 'asightGuarded', { value: true })
+  Object.defineProperty(wrapped, 'trocarGuarded', { value: true })
   const custom = original[util.promisify.custom] // exec / execFile resolve to {stdout, stderr}; that function holds the original
   if (custom) Object.defineProperty(wrapped, util.promisify.custom, { value: function (...a) { guard(name, a); return custom.apply(this, a) } })
   cp[name] = wrapped

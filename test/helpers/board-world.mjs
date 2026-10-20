@@ -1,4 +1,4 @@
-// test/helpers/board-world.mjs — the OS fakes `asight on` / `off` need when the board's query worker runs them (POST /control/harness, 4.4 §控制面),
+// test/helpers/board-world.mjs — the OS fakes `trocar on` / `off` need when the board's query worker runs them (POST /control/harness, 4.4 §控制面),
 // built as test/helpers/model-world.mjs and test/collector/model-daemon-e2e.test.mjs give them to the CLI: the login entry install registered (its
 // start a no-op: the test's daemon is already up), no OS tool, an empty process table. The worker imports a module whose default export is these
 // deps (src/query/worker.mjs argv[3]); depsFile writes that module for one world. Exports only.
@@ -14,8 +14,8 @@ import { rootIdOf } from '../../src/off/root-store.mjs'
 export const standInUnit = (home) => ({
   // its text depends on the process and the env that build it (the real one names the script and carries NODE_EXTRA_CA_CERTS), and enable leaves a
   // line in HOME: a run that rewrites or registers the login entry from another process changes bytes a snapshot of HOME sees
-  path: path.join(home, 'asight-unit'), text: (env = {}) => `# stands for the LaunchAgent / scheduled task: pid ${process.pid} ${env.NODE_EXTRA_CA_CERTS || ''}`, links: [],
-  enable: () => { fs.appendFileSync(path.join(home, 'asight-unit.enabled'), `${process.pid}\n`); return { code: 0 } }, start: () => ({ code: 0 }), startNow: () => ({ code: 0 }), reload: () => {},
+  path: path.join(home, 'trocar-unit'), text: (env = {}) => `# stands for the LaunchAgent / scheduled task: pid ${process.pid} ${env.NODE_EXTRA_CA_CERTS || ''}`, links: [],
+  enable: () => { fs.appendFileSync(path.join(home, 'trocar-unit.enabled'), `${process.pid}\n`); return { code: 0 } }, start: () => ({ code: 0 }), startNow: () => ({ code: 0 }), reload: () => {},
   registered: () => ({ state: 'present' }),
 })
 
@@ -43,7 +43,7 @@ export function sharedTrust(state) {
       return { rootDer, fp256: rootIdOf(rootDer).fp256 }
     },
     remove: () => { call('remove'); const had = !!key(); fs.rmSync(at('custody.json'), { force: true }); return { removed: had } },
-    issueIntermediate: ({ spkiDer, serial, notBefore }) => { const k = key(); return intermediateCertDer({ root: k.rootDer, subject: `asight intermediate ${notBefore.toISOString()}`, spkiDer, serial, notBefore, sign: (tbs) => crypto.sign('sha256', tbs, k.priv) }) },
+    issueIntermediate: ({ spkiDer, serial, notBefore }) => { const k = key(); return intermediateCertDer({ root: k.rootDer, subject: `trocar intermediate ${notBefore.toISOString()}`, spkiDer, serial, notBefore, sign: (tbs) => crypto.sign('sha256', tbs, k.priv) }) },
   }
   const store = () => read('store.json', { held: [], answer: 'ok' })
   const rootStore = {
@@ -73,7 +73,7 @@ export async function boardDeps({ platform, home, env, dirs, trust = null }) {
 
 /** → the path of a deps module for the worker, for a modelWorld `w` on `platform` (`trust`: sharedTrust's state directory, for Set up). */
 export function depsFile(w, platform, trust = null) {
-  const file = path.join(tmpDir('asight-board-deps-'), 'deps.mjs')
+  const file = path.join(tmpDir('trocar-board-deps-'), 'deps.mjs')
   const world = { platform, home: w.home, env: w.env, dirs: w.ctx.dirs, trust }
   fs.writeFileSync(file, `import { boardDeps } from ${JSON.stringify(import.meta.url)}\nexport default await boardDeps(${JSON.stringify(world)})\n`)
   return file

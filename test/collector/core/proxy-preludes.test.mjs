@@ -19,7 +19,7 @@ import { within, onceWithin as once } from '../../helpers/bounded.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 
 const T = { timeout: 20000 }
-const asightCa = createCa()
+const trocarCa = createCa()
 const HOST = 'api.anthropic.com'
 const body = JSON.stringify({ model: 'claude-sonnet-4-5', stream: true, messages: [{ role: 'user', content: 'via proxy' }] })
 const REQ = `POST /v1/messages HTTP/1.1\r\nHost: ${HOST}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
@@ -31,7 +31,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // The engine steers every accepted connection to `dst()` (the mock proxy, or a stand-in in front of it).
 async function lab(t, proxyOpts, { proxies = () => [], trustLab = true, dst = null, policy = () => true, decrypt = true, timing = {} } = {}) {
-  const dir = tmpDir('asight-proxy-')
+  const dir = tmpDir('trocar-proxy-')
   const labCa = makeLabCa(path.join(dir, 'ca'))
   const tlsOpts = { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) }
   const mock = await startMockUpstream({ tls: tlsOpts })
@@ -41,7 +41,7 @@ async function lab(t, proxyOpts, { proxies = () => [], trustLab = true, dst = nu
   const port0 = dst ? await dst(proxy.port, mock.port) : proxy.port
   const engine = createEngine({
     redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: port0, family: 4 }, pid: 21, agent: 'kimi', decrypt }), policy,
-    issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: trustLab ? fs.readFileSync(labCa.caCert) : undefined,
+    issuer: createLeafIssuer(loadCa(trocarCa)), upstreamCa: trustLab ? fs.readFileSync(labCa.caCert) : undefined,
     store: { envelope: (e) => { envelopes.push(e); return store.envelope(e) }, flow: (f) => { flows.push(structuredClone(f)); return store.flow(f) } },
     onFailure: (f) => failures.push(f), // the engine's failure sink (D38; the daemon writes these to flows/)
     describe: () => ({ proxies: proxies(proxy.port) }), timing,
@@ -79,7 +79,7 @@ async function socks(port, { version, auth, domain = HOST, ip }) {
   write(Buffer.concat([Buffer.from([5, 1, 0, 3, domain.length]), Buffer.from(domain), portBytes]))
   const rep = await read(10); detach(); return { sock, ok: rep[1] === 0, wrote, got }
 }
-const exchange = (socket, ca = asightCa.certPem) => within(new Promise((resolve, reject) => {
+const exchange = (socket, ca = trocarCa.certPem) => within(new Promise((resolve, reject) => {
   const c = tls.connect({ socket, servername: HOST, ca }, () => c.write(REQ))
   let b = Buffer.alloc(0); c.on('data', (d) => { b = Buffer.concat([b, d]) }); c.on('end', () => resolve(b)); c.on('error', reject)
 }), 10000, 'the tunnelled exchange never completed', () => socket.destroy())
@@ -205,7 +205,7 @@ test('T6 CONNECT refused: client bytes sent behind the CONNECT head still reach 
 // ── https:// proxies (RFC 4.6 §引擎 3, §记录 https:// 代理; Plan 3c-7; W8 / W12) ────────────────────────────
 // The client speaks TLS to the proxy host first (outer TLS), sends CONNECT inside it, then TLS to the API host
 // inside the tunnel (TLS in TLS). Only the API host is in the decrypt policy here (`auto`).
-const PROXY_HOST = 'proxy.asight.test'
+const PROXY_HOST = 'proxy.trocar.test'
 const onlyApi = (meta, host) => host === HOST
 const httpsProxyClient = (port, ca, { innerCa = ca } = {}) => {
   let outer
@@ -219,8 +219,8 @@ const table = (own) => (port) => [{ scheme: 'https', host: PROXY_HOST, port, own
 
 test('W8 an https:// proxy from the process\'s own config: outer TLS terminated, CONNECT relayed and recorded, the inner call decrypted and recorded', T, async (t) => {
   const L = await lab(t, { kind: 'connect', tls: true }, { proxies: table(true), policy: onlyApi })
-  const r = await httpsProxyClient(L.port, asightCa.certPem); await L.settled(1)
-  assert.match(r.issuer, /asight collector CA/, 'the outer TLS was terminated by the engine')
+  const r = await httpsProxyClient(L.port, trocarCa.certPem); await L.settled(1)
+  assert.match(r.issuer, /trocar collector CA/, 'the outer TLS was terminated by the engine')
   assert.ok(r.reply.equals(b64(L.proxy.log[0].out_b64)), 'the proxy reply, verbatim')
   const entry = L.mock.state.log.find((e) => e.type === 'request')
   assert.equal(b64(entry.req_raw_b64).toString('latin1'), REQ); assert.ok(r.resp.equals(b64(entry.resp_raw_b64)))
@@ -234,7 +234,7 @@ test('W8 a listed https:// proxy that is not the process\'s own: spliced, flows/
   const L = await lab(t, { kind: 'connect', tls: true }, { proxies: table(false), policy: onlyApi })
   const ca = fs.readFileSync(L.labCa.caCert)
   const r = await httpsProxyClient(L.port, ca); await L.settled(1) // the client talks to the real proxy
-  assert.match(r.issuer, /asight lab CA|lab/i); assert.ok(r.reply.equals(b64(L.proxy.log[0].out_b64)))
+  assert.match(r.issuer, /trocar lab CA|lab/i); assert.ok(r.reply.equals(b64(L.proxy.log[0].out_b64)))
   assert.equal(L.envelopes.length, 0)
   const f = L.flows.at(-1)
   assert.deepEqual([f.decision, f.not_captured, f.reason, f.via_proxy.terminated], ['splice', 'https-proxy', 'proxy-not-own', false])
@@ -251,7 +251,7 @@ test('W8 an https:// proxy the daemon did not list, under auto: an ordinary TLS 
 
 test('W8 under `all` an https:// proxy the daemon did not list is terminated too: its CONNECT is followed, the inner call recorded', T, async (t) => {
   const L = await lab(t, { kind: 'connect', tls: true }, { policy: () => true })
-  const r = await httpsProxyClient(L.port, asightCa.certPem); await L.settled(1)
+  const r = await httpsProxyClient(L.port, trocarCa.certPem); await L.settled(1)
   const entry = L.mock.state.log.find((e) => e.type === 'request')
   assert.ok(r.resp.equals(b64(entry.resp_raw_b64))); assert.deepEqual(L.envelopes.map((e) => e.host), [HOST])
   const f = L.flows.at(-1)
@@ -288,7 +288,7 @@ test('an own https:// proxy: the client goes after CONNECT 200 without starting 
   const L = await lab(t, { kind: 'connect', tls: true }, { proxies: table(true), policy: onlyApi })
   let outer
   await within(new Promise((resolve) => {
-    outer = tls.connect({ port: L.port, host: '127.0.0.1', servername: PROXY_HOST, ca: asightCa.certPem }, () => outer.write(`CONNECT ${HOST}:443 HTTP/1.1\r\n\r\n`))
+    outer = tls.connect({ port: L.port, host: '127.0.0.1', servername: PROXY_HOST, ca: trocarCa.certPem }, () => outer.write(`CONNECT ${HOST}:443 HTTP/1.1\r\n\r\n`))
     outer.on('error', () => {}); outer.once('data', () => outer.end()); outer.on('close', resolve)
   }), 8000, 'the client that goes after CONNECT 200 never saw its connection close', () => outer.destroy())
   await L.settled(1)
@@ -590,8 +590,8 @@ test('review C · CONNECT retried after a 407, the client goes before the proxy 
 // terminated when the policy covers its host; an own proxy keeps an h2-only offer and a daemon code
 test('review C · a listed https:// proxy that is not the process\'s own, under `all`: terminated (the policy covers it), via_proxy keeps its source', T, async (t) => {
   const L = await lab(t, { kind: 'connect', tls: true }, { proxies: table(false), policy: () => true })
-  const r = await httpsProxyClient(L.port, asightCa.certPem); await L.settled(1)
-  assert.match(r.issuer, /asight collector CA/)
+  const r = await httpsProxyClient(L.port, trocarCa.certPem); await L.settled(1)
+  assert.match(r.issuer, /trocar collector CA/)
   const entry = L.mock.state.log.find((e) => e.type === 'request'); assert.ok(r.resp.equals(b64(entry.resp_raw_b64)))
   const f = L.flows.at(-1)
   assert.deepEqual([f.decision, f.inner, f.not_captured], ['tunnel', 'decrypt', undefined])

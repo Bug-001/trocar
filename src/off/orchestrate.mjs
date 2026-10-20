@@ -1,12 +1,12 @@
-// orchestrate.mjs (src/off) — `asight off`, from the first line to the receipt (RFC 1.6 §1.4, §1.5, R3, R12, 「asight 自己坏了时」; 4.6 §开关语义,
-// §撤销顺序). Nothing here needs the daemon, the repository or node_modules: the standalone `~/.asight/bin/asight-off` runs this same code (R3).
+// orchestrate.mjs (src/off) — `trocar off`, from the first line to the receipt (RFC 1.6 §1.4, §1.5, R3, R12, 「trocar 自己坏了时」; 4.6 §开关语义,
+// §撤销顺序). Nothing here needs the daemon, the repository or node_modules: the standalone `~/.trocar/bin/trocar-off` runs this same code (R3).
 //   1  the op lock, with off priority: when it is held, `desired:'off'` is written for these harnesses BEFORE the wait, so a mid-way `on` stops (R12)
 //   2  `state.json`: desired off for the harnesses asked for, atomically; it is not rewritten when they are all off already (a second off changes nothing)
 //   3  the routing is taken off and CONFIRMED, before one entry is touched (an agent whose bundle lost the CA while its connection was still steered
 //      would be refused, §1.5): a daemon that answers is told `POST /off` and its reply is the confirmation; a stuck or starting one is stopped first (step
 //      5 of §1.4) and the helper is checked gone; an absent one needs its helper gone. Unconfirmed → the entries are left alone, exit 1 — except a daemon
 //      that cannot be stopped: its entries are undone all the same (the new connections are direct by its stale heartbeat), exit 1, the pid is given
-//   4  the entries: by the manifest (undoHarnesses), or, with no readable manifest, by asight's own marks (planByMarker) after a yes (R3);
+//   4  the entries: by the manifest (undoHarnesses), or, with no readable manifest, by trocar's own marks (planByMarker) after a yes (R3);
 //      5.1's held requests through `deps.releaseHeld` (5.1 is not built: a seam)
 //   5  with no names: the daemon was asked to exit once drained (step 3) and nothing else — the login registration is install's and off never touches it (D61),
 //      so `on` and `off` are the same after a reboot as before it
@@ -61,7 +61,7 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
     request: deps.request || (endpoint && endpoint.request) || controlRequest,
     clock: deps.now || (() => new Date()), ms: deps.ms || Date.now, sleep: deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
     alive: deps.alive || pidAlive, identity: deps.identity || identityFor({ platform, exec: deps.exec || null, env }), isHelper: deps.isHelper || isRedirectorHelper, kill: deps.kill,
-    lockFile: path.join(dir, 'lock'), stateF: stateFile(home), deps, standalone: deps.standalone === true, // the single-file asight-off passes `standalone`: it words what it cannot do as "run asight off" (R3, V35)
+    lockFile: path.join(dir, 'lock'), stateF: stateFile(home), deps, standalone: deps.standalone === true, // the single-file trocar-off passes `standalone`: it words what it cannot do as "run trocar off" (R3, V35)
     socketPath: deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.socketPath) || null,
   }
   const once = (fn) => { let p; return () => p || (p = Promise.resolve().then(fn)) } // the process table is read once per run
@@ -77,8 +77,8 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
 /** What the user does when a daemon that answers cannot be made to confirm that its routing is off (1.6 §1.5 「确认不了就不撤」 leaves the entries alone, so the way out is said, audit semantics 5):
  *  stopping the daemon takes its helper and the links with it, and then the command is run again. On darwin the agent is booted out first — a daemon stopped under a loaded LaunchAgent is pulled right back by KeepAlive (4.9 §4). */
 const wayOut = (w, pid) => w.unitManaged()
-  ? (w.platform === 'darwin' ? `To go on, stop the autostart (launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}), so the daemon is not started again, then run the command again` : `To go on, stop the daemon (systemctl --user stop asight-collector.service), which takes its links off with it, then run the command again`)
-  : `To go on, stop the daemon (${Number.isInteger(pid) ? `kill ${pid}` : "no pid is on record: find it with pgrep -f 'asight.* (daemon|collector start)'"}), which takes its links off with it, then run the command again`
+  ? (w.platform === 'darwin' ? `To go on, stop the autostart (launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}), so the daemon is not started again, then run the command again` : `To go on, stop the daemon (systemctl --user stop trocar-collector.service), which takes its links off with it, then run the command again`)
+  : `To go on, stop the daemon (${Number.isInteger(pid) ? `kill ${pid}` : "no pid is on record: find it with pgrep -f 'trocar.* (daemon|collector start)'"}), which takes its links off with it, then run the command again`
 
 /** Is the autostart going to bring the daemon back the moment it is stopped — systemd's Restart=on-failure mid-wait, or launchd's KeepAlive with the agent still loaded (4.9 §4)? A tool that cannot be asked says no: the lock decides. */
 const unitIsUp = (w) => {
@@ -186,29 +186,29 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
       r.stop = s; r.how = s.how
       r.events.push({ kind: 'daemon-stop', how: s.how, signals: s.signals, stopped: s.stopped, pid: s.pid, reason: `no daemon is running, but the autostart would bring one back (${w.platform === 'darwin' ? 'the LaunchAgent is loaded: launchd KeepAlive' : 'the unit is up or about to restart: systemd Restart=on-failure'}); ${s.stopped ? (w.platform === 'darwin' ? 'booted out (launchctl bootout)' : 'stopped (systemctl stop, reset-failed)') : `NOT stopped${s.error ? `: ${s.error}` : ''}`}` })
       if (s.stopped) { r.confirmed = true; r.daemon = { pid: null, state: 'none' } } // there was no engine: nothing was relayed, and what the stop did is on `stop`
-      else { r.unstoppable = true; fail('stop-failed', w.platform === 'darwin' ? `the LaunchAgent could not be booted out${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but launchd may bring a daemon back with nothing attached; run: launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}, then run asight off again` : `systemd keeps the autostart unit up or restarting${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but a daemon may come back with nothing attached; stop it: systemctl --user stop asight-collector.service, then run asight off again`) }
+      else { r.unstoppable = true; fail('stop-failed', w.platform === 'darwin' ? `the LaunchAgent could not be booted out${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but launchd may bring a daemon back with nothing attached; run: launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}, then run trocar off again` : `systemd keeps the autostart unit up or restarting${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but a daemon may come back with nothing attached; stop it: systemctl --user stop trocar-collector.service, then run trocar off again`) }
     } else { r.confirmed = true; r.how = 'no-daemon'; r.daemon = { pid: null, state: 'none' } }
-  } else fail('control-error', `${st.reason || 'whether a daemon runs is not known'}; the entries are left as they are. If no asight daemon runs (pgrep -f 'asight.* (daemon|collector start)' finds none), delete ${w.lockFile} and run asight off again; if one does, stop it by hand first`)
+  } else fail('control-error', `${st.reason || 'whether a daemon runs is not known'}; the entries are left as they are. If no trocar daemon runs (pgrep -f 'trocar.* (daemon|collector start)' finds none), delete ${w.lockFile} and run trocar off again; if one does, stop it by hand first`)
   return r
 }
 
 
 // What a row of the receipt says an entry lost (1.6 §7): the key, the block, the line.
 function offChangeText(e, result) {
-  if (!e) return "asight's lines removed"
-  if (e.kind === 'text') return e.vars ? `asight's block removed (${Object.keys(e.vars).join(', ')})` : e.format === 'pem-block' ? "asight's certificate block removed" : `one line removed (${String(e.line).split(' # ')[0].trim()})`
+  if (!e) return "trocar's lines removed"
+  if (e.kind === 'text') return e.vars ? `trocar's block removed (${Object.keys(e.vars).join(', ')})` : e.format === 'pem-block' ? "trocar's certificate block removed" : `one line removed (${String(e.line).split(' # ')[0].trim()})`
   const keys = (e.keys || []).join('.')
   return e.prior_value != null && result !== 'left-user-value' ? `${keys} set back to your own value` : `${keys} removed`
 }
 const UNDO_NOTE = { // what each undo result other than a plain restore means for the user (4.6 撤销结果)
   'already-restored': 'already back as it was before install: nothing to undo',
-  'reverted-not-identical': 'asight\'s key was removed, but the file is not byte for byte what it was before install (it was edited since)',
-  missing: 'the file is gone: nothing of asight\'s is left in it',
+  'reverted-not-identical': 'trocar\'s key was removed, but the file is not byte for byte what it was before install (it was edited since)',
+  missing: 'the file is gone: nothing of trocar\'s is left in it',
   'left-user-value': 'the key now holds a value the user set: left as it is',
 }
 const UNTIL_REASON = { restart: 'until it restarts', 'next-connection': 'until its next new connection (it re-reads the bundle)', 'next-handshake': 'until its next TLS handshake (it re-reads the bundle)', 'session-end': 'until its current session ends' }
-const MARKER_TEXT = { block: "asight's block removed", line: 'the line asight added removed', 'json-value': "asight's value removed (the old one taken from the copy of the file as it was)", 'owned-file': 'the file asight created deleted' }
-const SKIP_REASON = { 'already-restored': 'already as it was before install', missing: 'the file is gone; nothing of asight is in it', 'left-user-value': 'this key now holds a value you set, so it was left as it is', 'already-removed': "asight's text is no longer in this file" }
+const MARKER_TEXT = { block: "trocar's block removed", line: 'the line trocar added removed', 'json-value': "trocar's value removed (the old one taken from the copy of the file as it was)", 'owned-file': 'the file trocar created deleted' }
+const SKIP_REASON = { 'already-restored': 'already as it was before install', missing: 'the file is gone; nothing of trocar is in it', 'left-user-value': 'this key now holds a value you set, so it was left as it is', 'already-removed': "trocar's text is no longer in this file" }
 const SKIP_CODE = { 'already-restored': 'already-restored', missing: 'missing', 'left-user-value': 'left-user-value' } // the results that are in the closed set of codes (src/health/codes.mjs)
 const withHarness = (h) => (typeof h === 'string' ? { harness: h } : {})
 // The roots a gone bundle is rebuilt from (4.6 撤销顺序 第 2 步): Node's and this platform's OS roots, read by the reader the collector composes the bundles with
@@ -226,7 +226,7 @@ const rebuildRoots = async (w) => {
   return { node, osText: got.pem || '', missing: got.missing || null, dropped: got.dropped || 0, partial: got.tried && got.tried.length ? got.tried.join('; ') : null }
 }
 
-/** Step 4: the entries, by the manifest or by asight's own marks. `dropCa`: only `uninstall` removes asight-ca.pem. → one object of what was undone and what was left
+/** Step 4: the entries, by the manifest or by trocar's own marks. `dropCa`: only `uninstall` removes trocar-ca.pem. → one object of what was undone and what was left
  *  (`changed`, `removed`, `skipped`, `left`, `kept_bundles`, `still_trusting`, `residue`, `kept_backups`, `dropped_backups`, `pending`, `orphan_backups`, `problems`,
  *  `notes`, `failures`, `events`, `stopped` (an error ended the undoing part-way; what it had done is in the other fields), `mode`: 'manifest' | 'marker' | 'none' |
  *  'unsupported'). */
@@ -235,11 +235,11 @@ export async function undoSide(w, opts = {}) {
   try { return await undoBody(w, opts, u) } catch (e) { // whatever throws here (a manifest of a shape nobody foresaw, a file that vanishes) must not cost the receipt: the routing is already off and files may already be written (R1, R11)
     u.stopped = true
     if (u.raw && !u.changed.length && !u.removed.length) { // the files were written before it threw: the receipt lists them, as the plain undo would have
-      for (const r of u.raw.results) if (r.result === 'restored' || r.result === 'reverted-not-identical') u.changed.push({ path: r.path, change: "asight's lines removed", backup: r.backup_kept || null, result: r.result, ...withHarness(r.harness) })
+      for (const r of u.raw.results) if (r.result === 'restored' || r.result === 'reverted-not-identical') u.changed.push({ path: r.path, change: "trocar's lines removed", backup: r.backup_kept || null, result: r.result, ...withHarness(r.harness) })
       u.removed.push(...u.raw.removed)
       if (!u.left.length) u.left = u.raw.left.map((l) => ({ path: l.path, result: l.result, reason: l.reason, ...withHarness(l.harness) }))
     }
-    u.problems.push(`undoing the entries stopped: ${errMessage(e)}; what was done before it is listed here, the rest is as it was: run asight off again, or undo the rest by hand (the install manifest names each file)`)
+    u.problems.push(`undoing the entries stopped: ${errMessage(e)}; what was done before it is listed here, the rest is as it was: run trocar off again, or undo the rest by hand (the install manifest names each file)`)
     u.failures.push({ code: 'entry-not-undone', reason: `undoing the entries stopped: ${errMessage(e)}` })
     return u
   }
@@ -249,8 +249,8 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
   if (manifest && manifest.unsupported) {
     u.mode = 'unsupported'
     u.problems.push(w.standalone
-      ? `the install manifest is version ${JSON.stringify(manifest.version)}, which this asight-off (version ${OFF_VERSION}, it reads manifest version ${MANIFEST_VERSION}) does not read; no entry was touched. Run \`asight off\`: the asight that wrote the manifest reads it`
-      : `the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read; no entry was touched. Use the asight that wrote it (or the asight-off it wrote)`)
+      ? `the install manifest is version ${JSON.stringify(manifest.version)}, which this trocar-off (version ${OFF_VERSION}, it reads manifest version ${MANIFEST_VERSION}) does not read; no entry was touched. Run \`trocar off\`: the trocar that wrote the manifest reads it`
+      : `the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read; no entry was touched. Use the trocar that wrote it (or the trocar-off it wrote)`)
     return u
   }
   if (manifest) {
@@ -282,12 +282,12 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
         if (gone) u.removed.push(r.path)
         else u.changed.push({ path: r.path, change: offChangeText(e, r.result), backup: r.backup_kept || null, result: r.result, ...(r.backup && !r.backup_kept ? { backup_dropped: true } : {}), ...(r.result === 'reverted-not-identical' ? { not_identical: true } : {}), ...(r.prior_left ? { prior_left: r.prior_left } : {}), ...withHarness(r.harness) })
       } else if (SKIP_REASON[r.result]) u.skipped.push({ what: r.path, reason: SKIP_REASON[r.result] })
-      if (r.result === 'reverted-not-identical') note('reverted-not-identical', { ...withHarness(r.harness), path: r.path }, `${r.path} was edited after install: only asight's ${r.what} was taken out${r.deleted ? ' and the file, holding nothing else, removed' : ''}; the file is not byte for byte what it was before install, the rest is as the user left it${r.backup_kept ? `; the file as it was is kept at ${r.backup_kept}` : ''}`)
+      if (r.result === 'reverted-not-identical') note('reverted-not-identical', { ...withHarness(r.harness), path: r.path }, `${r.path} was edited after install: only trocar's ${r.what} was taken out${r.deleted ? ' and the file, holding nothing else, removed' : ''}; the file is not byte for byte what it was before install, the rest is as the user left it${r.backup_kept ? `; the file as it was is kept at ${r.backup_kept}` : ''}`)
       else if (!['restored', 'left-unparsable', 'left-unreadable', 'left-link', 'left-text', 'error'].includes(r.result)) note(SKIP_CODE[r.result] || 'harness-note', { ...withHarness(r.harness), path: r.path }, UNDO_NOTE[r.result] || r.result)
     }
     u.removed.push(...out.removed)
     // an item whose kind this build does not know is left alone; the copy says who knows it (R3, V35)
-    const hint = w.standalone ? ` — this asight-off (version ${OFF_VERSION}) does not know that kind; run \`asight off\`, the asight that wrote the manifest, to take it out` : ''
+    const hint = w.standalone ? ` — this trocar-off (version ${OFF_VERSION}) does not know that kind; run \`trocar off\`, the trocar that wrote the manifest, to take it out` : ''
     u.left = out.left.map((l) => ({ path: l.path, result: l.result, reason: l.result === 'unknown-kind' ? `${l.reason}${hint}` : l.reason, ...(l.backup ? { backup: l.backup, restore: l.restore } : {}), ...withHarness(l.harness) }))
     for (const l of u.left) u.failures.push({ code: ['error', 'unknown-kind', 'left-text', 'left-unreadable'].includes(l.result) ? 'entry-not-undone' : l.result, ...withHarness(l.harness), path: l.path, reason: l.reason })
     u.kept_bundles = out.kept_bundles
@@ -295,17 +295,17 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
       const entry = k.entry_left ? `${k.entry_left.join(', ')}, which could not be undone, still points at it` : null // an agent's next start reads the bundle through it
       const again = `run it again once ${k.pids.length ? 'they exit' : 'that is fixed'}`
       note(k.rebuilt ? 'harness-note' : 'bundle-kept', { harness: k.harness, path: k.path }, k.rebuilt
-        ? `${k.path} was gone while ${[...(k.pids.length ? [`a running process may use it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [entry] : [])].join(' and ')}; it was rebuilt without the asight CA${k.lost_fps ? `, but without ${k.lost_fps.length} user CA(s) its source files no longer hold` : ''}${k.os_roots_missing ? `, with Node's roots only (${k.os_roots_missing})` : ''}${k.os_roots_partial ? `, with the OS roots short of what could not be read (${k.os_roots_partial})` : ''}${k.os_roots_dropped ? `, without ${k.os_roots_dropped} OS root certificate(s) that do not parse` : ''}; ${again}`
-        : `${k.path} is kept, without the asight CA, ${[...(k.pids.length ? [`for running processes that may have loaded it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [`because ${entry}`] : [])].join(' and ')}; ${again}`)
+        ? `${k.path} was gone while ${[...(k.pids.length ? [`a running process may use it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [entry] : [])].join(' and ')}; it was rebuilt without the trocar CA${k.lost_fps ? `, but without ${k.lost_fps.length} user CA(s) its source files no longer hold` : ''}${k.os_roots_missing ? `, with Node's roots only (${k.os_roots_missing})` : ''}${k.os_roots_partial ? `, with the OS roots short of what could not be read (${k.os_roots_partial})` : ''}${k.os_roots_dropped ? `, without ${k.os_roots_dropped} OS root certificate(s) that do not parse` : ''}; ${again}`
+        : `${k.path} is kept, without the trocar CA, ${[...(k.pids.length ? [`for running processes that may have loaded it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [`because ${entry}`] : [])].join(' and ')}; ${again}`)
     }
-    for (const c of out.changed) { note('harness-note', { harness: c.harness, path: c.path }, `${c.path}, asight's ${c.role}, had been changed since install; it was removed all the same`); u.notes.push(`${c.path}, asight's ${c.role}, had been changed since asight wrote it; it was removed all the same`) }
+    for (const c of out.changed) { note('harness-note', { harness: c.harness, path: c.path }, `${c.path}, trocar's ${c.role}, had been changed since install; it was removed all the same`); u.notes.push(`${c.path}, trocar's ${c.role}, had been changed since trocar wrote it; it was removed all the same`) }
     u.residue = out.residue
-    for (const x of out.residue) note('residue-not-removed', { harness: x.harness, path: x.path }, `${x.path} appeared after install (${x.why}); it may serve the user's own plugins too, so asight did not remove it`)
+    for (const x of out.residue) note('residue-not-removed', { harness: x.harness, path: x.path }, `${x.path} appeared after install (${x.why}); it may serve the user's own plugins too, so trocar did not remove it`)
     u.still_trusting = out.still_trusting
     u.holders = out.holders // P12: who may still use a door (null: the table could not be read)
-    for (const p of out.still_trusting) note('still-trusting', { harness: p.harness, pid: p.pid }, `pid ${p.pid} (${p.harness}) trusts the asight CA ${UNTIL_REASON[p.until] || UNTIL_REASON.restart}`)
-    if (out.procs_error) { note('harness-note', {}, `which agents still trust the asight CA is not known: the process table could not be read (${out.procs_error})`); u.notes.push(`which agents still trust the asight CA is not known: the process table could not be read (${out.procs_error})`) }
-    for (const x of out.trust_unknown || []) { const why = `which running ${x.harness} processes still trust the asight CA is not known: ${x.why}`; note('harness-note', { harness: x.harness }, why); u.notes.push(why) }
+    for (const p of out.still_trusting) note('still-trusting', { harness: p.harness, pid: p.pid }, `pid ${p.pid} (${p.harness}) trusts the trocar CA ${UNTIL_REASON[p.until] || UNTIL_REASON.restart}`)
+    if (out.procs_error) { note('harness-note', {}, `which agents still trust the trocar CA is not known: the process table could not be read (${out.procs_error})`); u.notes.push(`which agents still trust the trocar CA is not known: the process table could not be read (${out.procs_error})`) }
+    for (const x of out.trust_unknown || []) { const why = `which running ${x.harness} processes still trust the trocar CA is not known: ${x.why}`; note('harness-note', { harness: x.harness }, why); u.notes.push(why) }
     u.procs_error = out.procs_error
     u.kept_backups = (manifest.kept_backups || []).map((k) => ({ ...k }))
     for (const k of u.kept_backups.filter((x) => x.at === at.toISOString())) note(CODE_OFF.backupKept, { path: k.path, backup: k.backup }, `${k.path}: ${k.reason}`)
@@ -330,15 +330,15 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
           if (h && h.error) unconfirmed = `whether it is still in your trust store could not be read (${h.error})`
           else if (h && h.present) unconfirmed = 'it is still in your trust store: removing a root asks you first, and that question was not answered with yes'
         }
-        if (r.ok && r.absent) u.skipped.push({ what: e.path, reason: "asight's root certificate is no longer in your trust store" })
-        else if (r.ok && !unconfirmed) u.changed.push({ path: e.path, change: "asight's root certificate removed from your trust store", result: 'restored' })
+        if (r.ok && r.absent) u.skipped.push({ what: e.path, reason: "trocar's root certificate is no longer in your trust store" })
+        else if (r.ok && !unconfirmed) u.changed.push({ path: e.path, change: "trocar's root certificate removed from your trust store", result: 'restored' })
         else {
           const why = unconfirmed || r.reason
           const byHand = undoByHand(e)
-          const reason = `asight's root certificate was NOT taken out of your trust store: ${why}. By hand: ${byHand}`
+          const reason = `trocar's root certificate was NOT taken out of your trust store: ${why}. By hand: ${byHand}`
           u.left.push({ path: e.path, result: 'failed', reason })
           u.still_trusting.push({ what: 'root', store: e.store ?? null, fp256: e.fp256 ?? null, reason: why, command: byHand })
-          u.problems.push(`${reason} Your machine still trusts asight's certificate; the install record is kept, so \`asight uninstall\` tries again`)
+          u.problems.push(`${reason} Your machine still trusts trocar's certificate; the install record is kept, so \`trocar uninstall\` tries again`)
           u.failures.push({ code: CODE_OFF.rootNotRemoved, path: e.path, reason }) // its one D38 line; a `note` here would write a second
         }
       }
@@ -355,20 +355,20 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     }
     return u
   }
-  // no manifest (or one that cannot be read): asight's own marks, listed first and undone only after a yes (R3)
-  if (manifestError) u.notes.push(`the install manifest cannot be read (${errMessage(manifestError)}); asight's own marks are used instead`)
+  // no manifest (or one that cannot be read): trocar's own marks, listed first and undone only after a yes (R3)
+  if (manifestError) u.notes.push(`the install manifest cannot be read (${errMessage(manifestError)}); trocar's own marks are used instead`)
   const plan = planByMarker({ home: w.home, ids, fs: w.fs })
   u.orphan_backups = orphanBackups({ home: w.home, manifest: null, fs: w.fs })
   if (!plan.length) { u.mode = manifestError ? 'marker' : 'none'; return u }
   u.mode = 'marker'
   const items = plan.map((p) => ({ path: p.path, how: p.how, change: MARKER_TEXT[p.how], ...withHarness(p.harness) }))
-  const listing = ["There is no install record to go by. By asight's own marks, these would be undone:", ...plan.map((p) => `  ${p.harness}  ${p.path}`), ...[...new Set(plan.map((p) => `    ${MARKER_TEXT[p.how]}`))]].join('\n')
+  const listing = ["There is no install record to go by. By trocar's own marks, these would be undone:", ...plan.map((p) => `  ${p.harness}  ${p.path}`), ...[...new Set(plan.map((p) => `    ${MARKER_TEXT[p.how]}`))]].join('\n')
   let go = yes
   if (!go && interactive && io) { (say || io.out)(listing); go = await confirm(io, 'Proceed?') }
   if (!go) {
     u.pending = items
     u.planned = items // 附录 C.2: what a run that stopped before writing WOULD do — the key install / on / uninstall put it under too, and the only answer `--json` has (no question is asked there)
-    u.problems.push(`asight's own record of what it wrote ${manifestError ? 'cannot be read' : 'is missing'}, so the ${items.length} file${items.length === 1 ? '' : 's'} above ${items.length === 1 ? 'was' : 'were'} left as ${items.length === 1 ? 'it is' : 'they are'}.`, `Undo ${items.length === 1 ? 'it' : 'them'} by the marks asight left in ${items.length === 1 ? 'it' : 'them'}: asight off --yes`)
+    u.problems.push(`trocar's own record of what it wrote ${manifestError ? 'cannot be read' : 'is missing'}, so the ${items.length} file${items.length === 1 ? '' : 's'} above ${items.length === 1 ? 'was' : 'were'} left as ${items.length === 1 ? 'it is' : 'they are'}.`, `Undo ${items.length === 1 ? 'it' : 'them'} by the marks trocar left in ${items.length === 1 ? 'it' : 'them'}: trocar off --yes`)
     return u
   }
   for (const r of undoByMarker(plan, { home: w.home, fs: w.fs })) {
@@ -376,9 +376,9 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
       u.undone_by_marker = true
       if (r.how === 'owned-file') u.removed.push(r.path)
       else u.changed.push({ path: r.path, change: MARKER_TEXT[r.how], backup: r.restored_from || r.backup || null, result: r.result, ...(r.prior_left ? { prior_left: r.prior_left } : {}), ...withHarness(r.harness) })
-      u.events.push({ kind: CODE_OFF.undoneByMarker, code: CODE_OFF.undoneByMarker, ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${MARKER_TEXT[r.how]} (found by asight's mark; there is no manifest to say what it was before)` })
-    } else if (r.result === 'already-clean') u.skipped.push({ what: r.path, reason: "asight's mark is no longer in this file" })
-    else { u.left.push({ path: r.path, result: r.result, reason: r.reason || `${r.path}: ${r.result}`, ...withHarness(r.harness) }); u.failures.push({ code: r.result === 'left-unparsable' ? 'left-unparsable' : 'entry-not-undone', ...withHarness(r.harness), path: r.path, reason: r.reason || `${r.path}: asight cannot read it; asight's value may still be in it` }) }
+      u.events.push({ kind: CODE_OFF.undoneByMarker, code: CODE_OFF.undoneByMarker, ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${MARKER_TEXT[r.how]} (found by trocar's mark; there is no manifest to say what it was before)` })
+    } else if (r.result === 'already-clean') u.skipped.push({ what: r.path, reason: "trocar's mark is no longer in this file" })
+    else { u.left.push({ path: r.path, result: r.result, reason: r.reason || `${r.path}: ${r.result}`, ...withHarness(r.harness) }); u.failures.push({ code: r.result === 'left-unparsable' ? 'left-unparsable' : 'entry-not-undone', ...withHarness(r.harness), path: r.path, reason: r.reason || `${r.path}: trocar cannot read it; trocar's value may still be in it` }) }
   }
   if (u.orphan_backups.length) u.notes.push(`the backups of the files above (JSON values taken back from them), and any others, are left in place: ${u.orphan_backups.join(', ')}`)
   return u
@@ -395,17 +395,17 @@ export function flowWriter(w, run, notes, { event = EVENT_OFF_NOTE, where = WHER
   }
 }
 
-// a manifest holding an item of a kind this build does not know was written by a newer asight. Undoing the rest would turn the routing off and stop
+// a manifest holding an item of a kind this build does not know was written by a newer trocar. Undoing the rest would turn the routing off and stop
 // the daemon while that item stays, half an off: the whole off is refused instead, before the desired state and the routing (step 2 / 3) — the receipt
-// names each such item and kind and says which asight-off undoes it. → true when it refused (receipt filled), false otherwise.
+// names each such item and kind and says which trocar-off undoes it. → true when it refused (receipt filled), false otherwise.
 function refuseUnknownKinds(manifest, receipt, standalone) {
   const unknown = manifest && !manifest.unsupported ? unknownItems(manifest) : []
   if (!unknown.length) return false
   const kinds = [...new Set(unknown.map((u) => JSON.stringify(u.kind)))].join(', ')
-  // the copy sends the person to `asight off` (the asight that wrote the manifest); `asight off` itself cannot send anyone to itself (V35)
-  const who = standalone ? 'run `asight off`, from the asight that wrote it' : 'use the asight-off of the newer asight that wrote it'
-  receipt.left.push(...unknown.map((u) => ({ path: u.path ?? null, result: 'unknown-kind', reason: `an item of kind ${JSON.stringify(u.kind)}, which this asight-off does not know: ${who}` })))
-  receipt.problems.push(`the install manifest holds ${unknown.length} item(s) of a kind this asight-off (version ${OFF_VERSION}) does not know (${kinds}): a newer asight wrote it, and only a newer asight-off can undo it: ${who}. Nothing was changed: the routing is as it was, the daemon was not asked to stop`)
+  // the copy sends the person to `trocar off` (the trocar that wrote the manifest); `trocar off` itself cannot send anyone to itself (V35)
+  const who = standalone ? 'run `trocar off`, from the trocar that wrote it' : 'use the trocar-off of the newer trocar that wrote it'
+  receipt.left.push(...unknown.map((u) => ({ path: u.path ?? null, result: 'unknown-kind', reason: `an item of kind ${JSON.stringify(u.kind)}, which this trocar-off does not know: ${who}` })))
+  receipt.problems.push(`the install manifest holds ${unknown.length} item(s) of a kind this trocar-off (version ${OFF_VERSION}) does not know (${kinds}): a newer trocar wrote it, and only a newer trocar-off can undo it: ${who}. Nothing was changed: the routing is as it was, the daemon was not asked to stop`)
   receipt.ok = false
   receipt.log = null
   return true
@@ -421,7 +421,7 @@ function shapeReceipt(receipt) {
   const distinct = (list, keys) => [...new Map((list || []).map((x) => [typeof x === 'string' ? x : JSON.stringify(keys.map((k) => x[k] ?? null)), x])).values()]
   receipt.changed = distinct(receipt.changed, ['harness', 'path', 'change', 'backup'])
   receipt.removed = distinct(receipt.removed, ['harness', 'path'])
-  receipt.left = (receipt.left || []).map((l) => ({ what: l.what ?? (l.result === 'unknown-kind' ? 'an item this asight does not know' : 'something asight wrote'), ...l, undo_by_hand: l.undo_by_hand ?? l.restore ?? null }))
+  receipt.left = (receipt.left || []).map((l) => ({ what: l.what ?? (l.result === 'unknown-kind' ? 'an item this trocar does not know' : 'something trocar wrote'), ...l, undo_by_hand: l.undo_by_hand ?? l.restore ?? null }))
   receipt.outcome = receipt.ok ? 'done' : 'partial'
   receipt.harnesses = ids.map((id) => {
     const left = (receipt.left || []).filter((l) => l.harness === id)
@@ -431,7 +431,7 @@ function shapeReceipt(receipt) {
   return receipt
 }
 
-/** `asight off [harness…]` (1.6 §1.1, §1.4, §1.5): see the header. `ids`: harness code ids, or null for every one; `now`: cut the connections still relayed (`--now`);
+/** `trocar off [harness…]` (1.6 §1.1, §1.4, §1.5): see the header. `ids`: harness code ids, or null for every one; `now`: cut the connections still relayed (`--now`);
  *  `source`: added to every flows/ line of the run (the board's 'board'). `yes` / `interactive` / `io`: the one confirmation, for undoing by marks when the manifest is lost (R6); `say`: where the list goes before the question.
  *  → `{ receipt, exit }`; the receipt is src/off/schema.mjs's plus `harnesses` · `routing` · `daemon` · `autostart` · `still_trusting` · `kept_backups` · `kept_bundles` ·
  *  `user_processes` · `left` · `problems` · `notes`. */
@@ -453,7 +453,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   let { manifest, manifestError } = read() // what the plan and the first desired-off go by; read AGAIN under the lock: an `on` that held it has written to the manifest since
   let installed = harnessIdsOf(manifest)
   if (ids === null) receipt.harnesses = installed
-  const hadAnything = w.fs.existsSync(w.dir) || w.unitManaged() || manifest != null || manifestError != null // no collector directory, no unit, no manifest: asight was never installed here (or is uninstalled, and purged)
+  const hadAnything = w.fs.existsSync(w.dir) || w.unitManaged() || manifest != null || manifestError != null // no collector directory, no unit, no manifest: trocar was never installed here (or is uninstalled, and purged)
   if (dryRun) { // R6: the same receipt in the future tense, nothing written, nothing asked of the daemon, exit 0
     const mine = (x) => x.phase === 'on' && (ids == null || ids.includes(x.harness)) // off spares what install wrote (D55①), so its plan does too
     const items = manifest && !manifest.unsupported ? manifest : { entries: [], files: [] }
@@ -463,8 +463,8 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     receipt.changed = [...items.entries.filter((e) => mine(e) && (e.kind === 'json-key' || e.kind === 'text')).map((e) => ({ path: e.path, change: offChangeText(e), backup: e.backup ?? null, ...withHarness(e.harness) })), ...marks.filter((p) => p.how !== 'owned-file').map((p) => ({ path: p.path, change: MARKER_TEXT[p.how], backup: null, ...withHarness(p.harness) }))]
     receipt.removed = [...gone, ...marks.filter((p) => p.how === 'owned-file').map((p) => p.path)]
     if (manifest && manifest.unsupported) receipt.notes.push(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read: no entry would be touched`)
-    else if (!manifest) receipt.notes.push(`there is no usable install manifest${manifestError ? ` (${errMessage(manifestError)})` : ''}: ${marks.length ? `${marks.length} file(s) would be undone by asight's own marks, after a yes` : 'no file holds asight\'s marks'}`)
-    for (const id of ids || []) if (manifest && !installed.includes(id)) receipt.skipped.push({ what: id, reason: 'asight has nothing on its path (it was never set up, or it is already off)' })
+    else if (!manifest) receipt.notes.push(`there is no usable install manifest${manifestError ? ` (${errMessage(manifestError)})` : ''}: ${marks.length ? `${marks.length} file(s) would be undone by trocar's own marks, after a yes` : 'no file holds trocar\'s marks'}`)
+    for (const id of ids || []) if (manifest && !installed.includes(id)) receipt.skipped.push({ what: id, reason: 'trocar has nothing on its path (it was never set up, or it is already off)' })
     receipt.daemon = { pid: null, state: ids === null && !isProxyMode(w.platform) ? 'draining' : 'running' } // D62 ⑥: proxy mode's daemon keeps running
     if (!hadAnything && !receipt.changed.length && !receipt.removed.length) { receipt.nothing_installed = true; receipt.log = null } // said as it is (audit semantics 7); nothing would be written, so there is no log to point at
     return { receipt: shapeReceipt(receipt), exit: EXIT.ok }
@@ -487,7 +487,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   if (w.fs.existsSync(w.dir)) {
     try { lock = await acquireOpLock({ file: opLockFile(home), identity: w.identity, alive: w.alive, waitMs: deps.lockWaitMs ?? OFF_LOCK_WAIT_MS, offFirst: () => { early = tryOff() }, fs: w.fs, now: w.ms, sleep: w.sleep }) } catch (e) {
       if (!e || e.code !== LOCK_BUSY) throw e
-      receipt.problems.push(`${errMessage(e)}. ${early && early.error ? `The desired state could not be written either (${errMessage(early.error)})` : `The desired state is already off for ${ids ? ids.join(', ') : 'every harness'}: the command that holds the lock stops at its next write`}; run asight off again afterwards`)
+      receipt.problems.push(`${errMessage(e)}. ${early && early.error ? `The desired state could not be written either (${errMessage(early.error)})` : `The desired state is already off for ${ids ? ids.join(', ') : 'every harness'}: the command that holds the lock stops at its next write`}; run trocar off again afterwards`)
       receipt.ok = false
       put({ kind: 'result', outcome: 'failed', reason: `off could not get the op lock: ${errMessage(e)}` })
       return { receipt: shapeReceipt(receipt), exit: EXIT.incomplete }
@@ -495,7 +495,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   }
   try {
     ({ manifest, manifestError } = read()); installed = harnessIdsOf(manifest)
-    if (refuseUnknownKinds(manifest, receipt, w.standalone)) return { receipt: shapeReceipt(receipt), exit: EXIT.incomplete } // read again under the lock: a newer asight may have written since (the lock is released by finally)
+    if (refuseUnknownKinds(manifest, receipt, w.standalone)) return { receipt: shapeReceipt(receipt), exit: EXIT.incomplete } // read again under the lock: a newer trocar may have written since (the lock is released by finally)
     if (ids === null) receipt.harnesses = installed
     // 2 · the desired state
     const again = tryOff()
@@ -526,7 +526,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
 
     // 4 · the entries — only when the routing is confirmed (or the daemon could not be stopped)
     let outcome = 'off'
-    if ((deps.platform || process.platform) === 'win32' && routing.state !== 'running') receipt.notes.push('No asight daemon is running: the local port it listened on is gone with it, so no connection is draining.')
+    if ((deps.platform || process.platform) === 'win32' && routing.state !== 'running') receipt.notes.push('No trocar daemon is running: the local port it listened on is gone with it, so no connection is draining.')
     if (routing.confirmed || routing.unstoppable) {
       const u = await undoSide(w, { ids, manifest, manifestError, yes, interactive, io, say })
       for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...u[k])
@@ -539,7 +539,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
       if (u.mode === 'marker' && u.undone_by_marker && !u.left.length) outcome = CODE_OFF.undoneByMarker
       if (u.pending.length) outcome = 'partial'
       else if (u.left.length || u.mode === 'unsupported') outcome = 'left'
-      if (u.mode !== 'marker') for (const id of ids || []) if (!installed.includes(id)) receipt.skipped.push({ what: id, reason: 'asight has nothing on its path (it was never set up, or it is already off)' })
+      if (u.mode !== 'marker') for (const id of ids || []) if (!installed.includes(id)) receipt.skipped.push({ what: id, reason: 'trocar has nothing on its path (it was never set up, or it is already off)' })
       // (The Windows kernel arm that stood here — a daemon that did not answer left the kernel preferring its dead engine, so the standalone off made it
       // forward-only or stopped it through its controller — went with the kernel itself, D47's win32 twin: the engine's doors die with the daemon, nothing
       // outlives them to be steered, and uninstall's purge list still cleans kernel-era residue: kernel\, kernel-archive\, forwarder\.)
@@ -550,15 +550,15 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
       // for (none, after this off). `install` registers it, `uninstall` takes it out.
     } else outcome = 'failed'
     let list = []
-    try { list = await w.procs() } catch (e) { receipt.notes.push(`the process table could not be read (${errMessage(e)}), so the asight processes you started yourself are not listed`) }
+    try { list = await w.procs() } catch (e) { receipt.notes.push(`the process table could not be read (${errMessage(e)}), so the trocar processes you started yourself are not listed`) }
     receipt.user_processes = userProcessesOf(list)
     for (const p of receipt.user_processes) put({ kind: 'note', reason: `${p.command} (pid ${p.pid}) is still running: ${p.note}; off does not stop it` })
 
     // 6 / 7 · the receipt and its result line
     if (!w.fs.existsSync(w.dir)) receipt.log = null // nothing was written to flows/: there is no log to point at (R1)
-    if (!hadAnything && !receipt.changed.length && !receipt.removed.length && !receipt.left.length && !receipt.problems.length && !(receipt.pending || []).length) receipt.nothing_installed = true // an `off` of a machine asight is not on: it says so, instead of "asight 已关闭采集" (audit semantics 7)
+    if (!hadAnything && !receipt.changed.length && !receipt.removed.length && !receipt.left.length && !receipt.problems.length && !(receipt.pending || []).length) receipt.nothing_installed = true // an `off` of a machine trocar is not on: it says so, instead of "trocar 已关闭采集" (audit semantics 7)
     receipt.ok = receipt.problems.length === 0 && receipt.left.length === 0 // an item that was not undone is a not-done off (1.6 R3, R4), whatever else went well
-    if (!receipt.ok && !receipt.problems.length) receipt.problems.push(`${receipt.left.length} item(s) were left as they are (listed above, with why); put that right, then run asight off again`)
+    if (!receipt.ok && !receipt.problems.length) receipt.problems.push(`${receipt.left.length} item(s) were left as they are (listed above, with why); put that right, then run trocar off again`)
     const n = { changed: receipt.changed.length, removed: receipt.removed.length, left: receipt.left.length, still_trusting: (receipt.still_trusting || []).length }
     put({ kind: 'result', outcome: receipt.ok ? outcome : outcome === 'off' ? 'failed' : outcome, counts: n, reason: receipt.ok ? `off: ${receipt.harnesses.join(', ') || 'nothing installed'}${outcome === CODE_OFF.undoneByMarker ? ' (undone by their marks: there was no manifest)' : ''}` : `off did not finish: ${receipt.problems[0]}` })
     return { receipt: shapeReceipt(receipt), exit: receipt.ok ? EXIT.ok : EXIT.incomplete }

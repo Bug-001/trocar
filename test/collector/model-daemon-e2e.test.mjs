@@ -1,7 +1,7 @@
-// test/collector/model-daemon-e2e.test.mjs — the writer switch's real seam (the platform-seam rule, the pattern of test/off/main.test.mjs): `asight on`
+// test/collector/model-daemon-e2e.test.mjs — the writer switch's real seam (the platform-seam rule, the pattern of test/off/main.test.mjs): `trocar on`
 // through the CLI → the unit starts a REAL startDaemon running the model collector, found through the endpoint controlEndpointFor resolves (control.json,
 // the platform's own controlEndpoint wrote it) — no request and no socket path injected anywhere → POST /on opens the doors → the CLI writes the entry →
-// `asight off` through the CLI → the entry restored byte for byte, the doors closed and the daemon still running (D62 ⑥), and a following `on` reopens them with no OS spawn. One run per platform value; the HOME is a tmp one, the
+// `trocar off` through the CLI → the entry restored byte for byte, the doors closed and the daemon still running (D62 ⑥), and a following `on` reopens them with no OS spawn. One run per platform value; the HOME is a tmp one, the
 // custody a stub. 4.11 ① one writer, at the daemon's process boundary: driven alone through the real endpoint (POST /on, GET /status, a restart whose
 // restore() reopens the doors, POST /off), the daemon leaves ingress.json and the agent file byte- and mtime-identical. The restart holds restore() open
 // (the custody answers late) and an `on` arrives meanwhile: it waits for restore (the ready gate), one door, no engine-port-taken.
@@ -40,7 +40,7 @@ function fakeIo() {
 const canConnect = (port) => new Promise((resolve) => { const s = net.connect(port, '127.0.0.1'); s.once('connect', () => { s.destroy(); resolve(true) }); s.once('error', () => resolve(false)) })
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: asight on → a real daemon (model collector, real endpoint) opens the door → the CLI writes the entry → asight off restores it byte for byte, closes the doors and leaves the daemon running`, { timeout: 30_000 }, async () => {
+  test(`${platform}: trocar on → a real daemon (model collector, real endpoint) opens the door → the CLI writes the entry → trocar off restores it byte for byte, closes the doors and leaves the daemon running`, { timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const envFile = path.join(w.home, '.codex', '.env')
@@ -80,12 +80,12 @@ for (const platform of ['darwin', 'win32']) {
         assert.ok(cf.length > 0, `status --json has codex's forms: ${JSON.stringify(sj.harnesses.codex)} ${sj.topology_error || ''}`)
         assert.equal(cf[0].proxy.connected, true, JSON.stringify(cf[0]))
         assert.ok(['hook', 'config-prior', 'process-env', 'system-proxy', 'direct', 'unknown'].includes(cf[0].proxy.upstream.source), cf[0].proxy.upstream.source)
-        assert.match(cf[0].proxy.written, new RegExp(`^http://\\*\\*\\*@127\\.0\\.0\\.1:${port}$`), 'what asight wrote, redacted')
-        assert.ok(sj.topology.codex.nodes.some((n) => n.kind === 'asight-forwarder' && n.port === port), `the chain is drawn through the door: ${JSON.stringify(sj.topology.codex.notes)}`)
+        assert.match(cf[0].proxy.written, new RegExp(`^http://\\*\\*\\*@127\\.0\\.0\\.1:${port}$`), 'what trocar wrote, redacted')
+        assert.ok(sj.topology.codex.nodes.some((n) => n.kind === 'trocar-forwarder' && n.port === port), `the chain is drawn through the door: ${JSON.stringify(sj.topology.codex.notes)}`)
         const io5 = fakeIo()
         await statusRun(['codex'], { io: io5, env: w.env, home: w.home, platform, deps: { platform, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: archOf(platform) }), rootStore: w.store } })
         const esc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        assert.match(io5.text(), new RegExp(`proxy\\s+points at asight ${esc(cf[0].proxy.written)}\\n\\s+\\(was: ${esc(cf[0].proxy.prior ?? 'none')}\\)`), `status codex prints what asight wrote (masked) and what was there before (V70): ${io5.text()}`)
+        assert.match(io5.text(), new RegExp(`proxy\\s+points at trocar ${esc(cf[0].proxy.written)}\\n\\s+\\(was: ${esc(cf[0].proxy.prior ?? 'none')}\\)`), `status codex prints what trocar wrote (masked) and what was there before (V70): ${io5.text()}`)
         assert.match(io5.text(), new RegExp(`  ${esc(cf[0].form)}\\s+certificate  [^\\n]+\\n\\s+proxy        `), 'the two axes, one line each (V32)')
         // the model daemon runs no driftCheck, so the entry the CLI wrote is never read back as the user's change
         const log = fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join('') : ''
@@ -112,7 +112,7 @@ for (const platform of ['darwin', 'win32']) {
         await restarted
         assert.deepEqual(Object.keys((await onReply).doors || {}), [g])
         assert.deepEqual((await ask('GET', '/status')).doors, { [g]: port }, 'one door, on its recorded port')
-        assert.equal((await ask('GET', '/status')).code, codeId(), 'D67⑤: the model daemon says which code it runs — what `asight update` compares against')
+        assert.equal((await ask('GET', '/status')).code, codeId(), 'D67⑤: the model daemon says which code it runs — what `trocar update` compares against')
         // §1.3 (macOS test machine, 2026-10-18): the model daemon reports the connection counts, so `status` never has to say they are not known
         assert.deepEqual((await ask('GET', '/status')).relayed, { closing: 0, waiting: 0 }, 'the reply carries the counts of what is still relayed')
         const flows = () => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join('') : '')
@@ -132,7 +132,7 @@ for (const platform of ['darwin', 'win32']) {
         const exited = await Promise.race([box.daemon.exited.then(() => true), new Promise((res) => setTimeout(() => res(false), 1000))])
         assert.equal(exited, false, 'the daemon was not asked to exit')
         assert.deepEqual((await ask('GET', '/status')).doors, {}, 'it still answers, with no door open')
-        assert.equal(await canConnect(port), false, 'the door is closed: nothing of asight is on the agent\'s path (invariant 5)')
+        assert.equal(await canConnect(port), false, 'the door is closed: nothing of trocar is on the agent\'s path (invariant 5)')
         // and the next `on` opens the doors again by asking the daemon that stayed: no spawn through the OS mechanism (no kickstart, no throttle)
         const spawns = box.startedNow.length
         const io6 = fakeIo()

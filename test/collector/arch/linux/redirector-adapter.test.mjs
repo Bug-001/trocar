@@ -14,7 +14,7 @@ const FAKE = fileURLToPath(new URL('./fixtures/fake-loader.mjs', import.meta.url
 function rig(p, { autoHeartbeatMs = 0 } = {}) {
   const clients = []
   const makeClient = () => {
-    const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1' }, autoHeartbeatMs })
+    const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs })
     clients.push(c)
     return c
   }
@@ -96,20 +96,20 @@ test('adapter: helper and heartbeat errors are forwarded for the daemon to recor
 // D-22 (4.6 OPEN 登出后): whether logind keeps the daemon after logout, said in daemon-start — never guessed.
 test('adapter: linger() is true with the logind marker, false without, null when it cannot be told', async () => {
   const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path')
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-linger-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-linger-'))
   try {
     const r = (o) => createLinuxRedirector({ makeClient: () => null, procRoot: dir, uid: 1000, lingerDir: dir, ...o })
     assert.equal(r({ userName: () => 'u' }).linger(), false)
     fs.writeFileSync(path.join(dir, 'u'), '')
     assert.equal(r({ userName: () => 'u' }).linger(), true)
     assert.equal(r({ lingerDir: path.join(dir, 'u', 'x'), userName: () => 'u' }).linger(), null, 'ENOTDIR: unknown, not "off"')
-    // 1.6 §1.1 / V39: the same reading as plain functions (what `asight on` and `asight status` call), and a null that says why: the file and the errno
+    // 1.6 §1.1 / V39: the same reading as plain functions (what `trocar on` and `trocar status` call), and a null that says why: the file and the errno
     assert.deepEqual([lingerState({ user: 'u', dir }), lingerState({ user: 'nobody', dir })], [true, false])
     assert.deepEqual(lingerRead({ user: 'u', dir }), { state: true })
     const unreadable = lingerRead({ user: 'u', dir: path.join(dir, 'u', 'x') })
     assert.equal(unreadable.state, null); assert.match(unreadable.error, new RegExp(`${path.join(dir, 'u', 'x', 'u').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: ENOTDIR`))
     assert.equal(lingerState({ user: 'u', dir: path.join(dir, 'u', 'x') }), null)
-    assert.equal(r({ userName: () => 'u' }).lingerRead().state, true, 'the adapter has it too (the daemon\'s own redirector is what asight on asks)')
+    assert.equal(r({ userName: () => 'u' }).lingerRead().state, true, 'the adapter has it too (the daemon\'s own redirector is what trocar on asks)')
     assert.match(r({ userName: () => { throw new Error('no passwd entry') } }).lingerRead().error, /no passwd entry/, 'a user name that cannot be read is unknown, with the reason')
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
@@ -123,7 +123,7 @@ test('adapter: facts-error carries comm and the command line; the helper\'s own 
   try {
     await r.start()
     const helper = clients[0].loaderInfo.pid
-    unreadableExe(710, ['sshd: u@notty'], 'sshd'); unreadableExe(711, ['(sd-pam)'], '(sd-pam)'); unreadableExe(helper, ['asight-redirector', '--parent-pid', '1'], 'asight-redirect')
+    unreadableExe(710, ['sshd: u@notty'], 'sshd'); unreadableExe(711, ['(sd-pam)'], '(sd-pam)'); unreadableExe(helper, ['trocar-redirector', '--parent-pid', '1'], 'trocar-redirect')
     const errs = []; r.on('facts-error', (x) => errs.push(x))
     assert.deepEqual(await r.scan(), [], 'nothing readable')
     assert.deepEqual(errs.map((x) => [x.os, x.pid, x.comm, x.argv]).sort((a, b) => a[1] - b[1]), [['linux', 710, 'sshd', ['sshd: u@notty']], ['linux', 711, '(sd-pam)', ['(sd-pam)']]], 'the helper is not among them')

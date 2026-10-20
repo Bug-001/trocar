@@ -1,6 +1,6 @@
 // adopt.mjs (src/netenv) — the proxy an agent is set to use, read the way the agent reads it (RFC 1.6 §9.5). One reader for every command: `status`, `doctor`, `on` and the daemon's 5 s check all call
 // readProxySetting() on the same files, so what one of them sees the others see. It only reads: nothing here writes an agent's file (D30: only the operator's `on` does), and the one file the
-// functions further down touch is ~/.asight/netenv.json, through writeNetenv in index.mjs (src/netenv writes nowhere else: 4.7 N15).
+// functions further down touch is ~/.trocar/netenv.json, through writeNetenv in index.mjs (src/netenv writes nowhere else: 4.7 N15).
 // The value is held as the agent has it only in memory, on a non-enumerable `raw` (a caller that must hand it to the platform's upstream — `on` in proxy mode — reads it there); everything that can be printed,
 // stored or sent as JSON holds the redacted URL and a hash (redact.mjs).
 import nodeFs from 'node:fs'
@@ -58,16 +58,16 @@ export function readProxySetting(desc, { home, env = process.env, fs = nodeFs, p
   return setting
 }
 
-/** The region asight's marked block occupies in a text file, or null: its lines are asight's, never a place of the user's. */
+/** The region trocar's marked block occupies in a text file, or null: its lines are trocar's, never a place of the user's. */
 function blockRange(text) {
   const b = text.indexOf(BLOCK_BEGIN), e = text.indexOf(BLOCK_END, b + 1)
   return b >= 0 && e > b ? [b, e + BLOCK_END.length] : null
 }
 
 /**
- * Every LINE of a dotenv file that sets one of `keys`, as `[{ key, value }]` in the file's order — not the one assignment that wins. asight's block appends its
+ * Every LINE of a dotenv file that sets one of `keys`, as `[{ key, value }]` in the file's order — not the one assignment that wins. trocar's block appends its
  * own assignment after the user's last line (the last wins) and puts the user's lines of the same name out of effect with `OFF_PREFIX`, so the key the agent
- * reads says nothing of what the user still holds there, and `off` puts their lines back. A line inside asight's block is never a place.
+ * reads says nothing of what the user still holds there, and `off` puts their lines back. A line inside trocar's block is never a place.
  */
 function dotenvPlaces(text, keys) {
   const range = blockRange(text), out = []
@@ -76,14 +76,14 @@ function dotenvPlaces(text, keys) {
     const start = at
     at += raw.length + 1
     if (range && start >= range[0] && start < range[1]) continue
-    const line = raw.replace(OFF_PREFIX, '') // a line asight commented out is still the user's: `off` brings it back
+    const line = raw.replace(OFF_PREFIX, '') // a line trocar commented out is still the user's: `off` brings it back
     for (const [k, v] of parseDotenv(line)) if (keys.includes(k)) out.push({ key: k, value: v })
   }
   return out
 }
 
-/** The places asight itself wrote for a harness (its on-phase manifest items) as `path#key` keys, plus `path#*` for a file asight created whole: a place of
- *  asight's is never one the user is asked to edit (1.6 附录 B `places`). One reader for every item shape: a key path (json-key, json-array-item, a registry
+/** The places trocar itself wrote for a harness (its on-phase manifest items) as `path#key` keys, plus `path#*` for a file trocar created whole: a place of
+ *  trocar's is never one the user is asked to edit (1.6 附录 B `places`). One reader for every item shape: a key path (json-key, json-array-item, a registry
  *  value's name) or the file as a whole; a dotenv block needs no key of its own, its lines are known by its markers. */
 export function writtenPlaces(manifest, harness = null) {
   const m = manifest && !manifest.unsupported ? manifest : null
@@ -99,7 +99,7 @@ export function writtenPlaces(manifest, harness = null) {
   return [...out]
 }
 
-/** Is this place one asight wrote? `written` = `writtenPlaces`'s keys. */
+/** Is this place one trocar wrote? `written` = `writtenPlaces`'s keys. */
 export const isWrittenPlace = (written, p) => !!written && (written.includes(p.kind === 'env' ? p.name : `${p.path}#${p.key}`) || (p.kind !== 'env' && written.includes(`${p.path}#*`)))
 
 /** Every place this harness holds a proxy address right now — not only the one that wins — as `{ kind: 'file', path, key, format, scheme, host, port }` /
@@ -127,7 +127,7 @@ export function proxyPlaces(desc, { home, env = process.env, fs = nodeFs, paths 
 /** The files a harness reads a proxy from, resolved for this HOME and environment (the daemon stats them in its 5 s check). */
 export const proxyFilesOf = (desc, { home, env = process.env }) => desc.proxy.files.map((f) => f.path({ home, env }))
 
-/** What `on` found of each harness's proxy setting and drew (`adopted.<h>` of ~/.asight/netenv.json, §9.5), or null when it was never written; the drift of a setting is measured against it. */
+/** What `on` found of each harness's proxy setting and drew (`adopted.<h>` of ~/.trocar/netenv.json, §9.5), or null when it was never written; the drift of a setting is measured against it. */
 export function readAdopted(home, { fs = nodeFs } = {}) {
   const n = readNetenvFile(home, { fs })
   return n && n.adopted && typeof n.adopted === 'object' && !Array.isArray(n.adopted) ? n.adopted : null
@@ -150,7 +150,7 @@ const FIELDS = ['routing', 'chain', 'source', 'sha256', 'file_sha256', 'file_pat
 export const sameAdoption = (a, b) => !!a && !!b && FIELDS.every((k) => JSON.stringify(a[k] ?? null) === JSON.stringify(b[k] ?? null))
 
 /**
- * `adopted.<h>` of ~/.asight/netenv.json: what `on` found of the harness's proxy and drew. `{ at, routing, chain (the compact chain, redacted), source: [{ kind, where, key? }], sha256 (of the setting as the agent
+ * `adopted.<h>` of ~/.trocar/netenv.json: what `on` found of the harness's proxy and drew. `{ at, routing, chain (the compact chain, redacted), source: [{ kind, where, key? }], sha256 (of the setting as the agent
  * reads it: the original is not kept: it may hold a password), file_sha256 (of the file part alone: the daemon has not the agent's environment), proxy (the setting, redacted: 「仍按启动时的设置」 shows it),
  * file_paths (the files `on` read it from, in the order of the descriptor's `proxy.files`: the daemon reads those, it has not the environment that names them) }` (an older record may still hold a `vpn` key: it is not compared) plus `written_sha256` (of the value `on` put in the field a routing owns: proxy mode). Unchanged → `prev` itself, so a second `on` writes nothing.
  */
@@ -167,7 +167,7 @@ export function adoptedRecord({ facts, topology, h, now = Date.now, files = null
 /**
  * Has the setting moved since `on`? → [ { code: 'proxy-changed', from, to, captured } ], empty when it has not, or when it cannot be told (a setting that could
  * not be read is not drift: `status` says it is unknown). `setting` is what the caller read; `scope: 'files'` is the daemon's reading (files alone). In driver mode the baseline is what `on` found, and the harness is
- * still captured (the kernel steers it whatever it is set to); in proxy mode it is what `on` wrote into the field, and a field that holds anything else bypasses asight (`captured: false`). Pure.
+ * still captured (the kernel steers it whatever it is set to); in proxy mode it is what `on` wrote into the field, and a field that holds anything else bypasses trocar (`captured: false`). Pure.
  */
 export function detectDrift({ adopted, h, setting, routing, scope = 'all' }) {
   const a = adopted && adopted[h]
@@ -175,7 +175,7 @@ export function detectDrift({ adopted, h, setting, routing, scope = 'all' }) {
   const out = []
   const now = setting ? setting.sha256 ?? null : null
   const base = routing === 'proxy' ? a.written_sha256 ?? null : scope === 'files' ? a.file_sha256 ?? null : a.sha256 ?? null
-  if (now !== base) out.push({ code: 'proxy-changed', from: routing === 'proxy' ? 'asight' : a.proxy ?? null, to: setting ? setting.value ?? null : null, captured: routing !== 'proxy' })
+  if (now !== base) out.push({ code: 'proxy-changed', from: routing === 'proxy' ? 'trocar' : a.proxy ?? null, to: setting ? setting.value ?? null : null, captured: routing !== 'proxy' })
   return out
 }
 
@@ -183,14 +183,14 @@ export function detectDrift({ adopted, h, setting, routing, scope = 'all' }) {
  *  the caller (the daemon's recorder). Never touches an agent's file: only the operator's `on` writes a network setting (D30). */
 export function recordDrift({ drift, h, desired, appendEvent }) {
   const reason = drift.code === 'proxy-changed'
-    ? `${h}'s proxy setting is now ${drift.to ?? 'none'}${drift.captured === false ? `, not what asight put there: its new connections go round asight` : ' (it was ' + (drift.from ?? 'none') + ')'}`
+    ? `${h}'s proxy setting is now ${drift.to ?? 'none'}${drift.captured === false ? `, not what trocar put there: its new connections go round trocar` : ' (it was ' + (drift.from ?? 'none') + ')'}`
     : `the machine's network environment changed: ${drift.from} -> ${drift.to}`
   appendEvent({ event: 'netenv-change', where: 'netenv', harness: h, code: drift.code, from: drift.from ?? null, to: drift.to ?? null, captured: drift.captured, reason })
   if (desired === 'on' && drift.captured === false) appendEvent({ event: 'failure', where: 'netenv', harness: h, code: drift.code, reason })
 }
 
-/** What kind of drift a record has: a record of a routing that owns the proxy field (it says `proxy`, or holds `written_sha256`, the hash of what `on` wrote into the field) is measured against what asight wrote and a
- *  field that holds anything else bypasses asight; any other is measured against what `on` found, and the harness is still steered whatever it is set to. The record decides, because it is what `on` made under the
+/** What kind of drift a record has: a record of a routing that owns the proxy field (it says `proxy`, or holds `written_sha256`, the hash of what `on` wrote into the field) is measured against what trocar wrote and a
+ *  field that holds anything else bypasses trocar; any other is measured against what `on` found, and the harness is still steered whatever it is set to. The record decides, because it is what `on` made under the
  *  routing of that moment: the daemon has no routing of its own to ask (a platform module declares none). */
 export const driftRoutingOf = (a) => (a && (a.routing === 'proxy' || a.written_sha256 != null) ? 'proxy' : 'driver')
 
@@ -203,7 +203,7 @@ export function driftCheck({ home, env = {}, harnesses, desired = () => null, ap
   const adopted = readAdopted(home, { fs }), done = []
   if (!adopted) return done
   for (const d of harnesses) {
-    if (!adopted[d.name] || desired(d.name) === 'off') continue // a harness that is off has asight nowhere on its path: what its settings do is not asight's to report
+    if (!adopted[d.name] || desired(d.name) === 'off') continue // a harness that is off has trocar nowhere on its path: what its settings do is not trocar's to report
     const paths = adopted[d.name].file_paths || proxyFilesOf(d, { home, env }) // the files `on` read: the daemon's own environment does not say where they are
     const sig = paths.map((f) => { try { const st = fs.statSync(f); return `${st.ino}:${st.size}:${st.mtimeMs}` } catch { return 'gone' } }).join('|')
     if (state.sigs.get(d.name) === sig) continue

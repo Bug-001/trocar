@@ -17,7 +17,7 @@ import { recordsAt } from './records.mjs';
 import { isModelCall } from './rows.mjs';
 import { indexDir, readIndex, tailMark, usability, storeIndex, segmentSource, plainMark, segStamp, warmSegmentIndex } from './index-build.mjs';
 import { warmCache, fsTag, statKey } from './warm.mjs';
-import { asightHome } from '../paths.mjs';
+import { trocarHome } from '../paths.mjs';
 
 const USAGE_V = 1;
 export const USAGE_CHUNK_BYTES = 4 << 20; // stored bytes of model calls read back per chunk (4.2 §用量旁注 ④)
@@ -55,7 +55,7 @@ export function callFacts(records) {
 const read = warmCache({ maxBytes: 32 * 1024 * 1024, bytes: (v) => (v ? v.facts.size * 160 : 0) });
 /** readUsage({home, segment}) → { lines, facts: Map<lineNo, {lane, model, failed, cache_known, usage}>, problems } | null
  *  `lines`: the calls of lines 1..lines are all in `facts` (Infinity: a sealed segment, whole). null: no usable sidecar. */
-export const readUsage = ({ home = asightHome(), segment, fs = nodeFs } = {}) =>
+export const readUsage = ({ home = trocarHome(), segment, fs = nodeFs } = {}) =>
   read.get(`${fsTag(fs)}\n${home}\n${segment}`, `${segStamp(home, segment, fs)}|${statKey(usageFile(home, segment), fs)}`, () => {
     const got = readIndex(fs, usageFile(home, segment), USAGE_V);
     if (!got || usability(fs, segmentSource(home, segment, fs), got) === 'rebuild') return null;
@@ -99,7 +99,7 @@ const lastProblem = new Map();
 const problemKey = (home, fs) => `${fsTag(fs)}\n${home}`;
 const noteProblem = (home, fs, segment, reason) => lastProblem.set(problemKey(home, fs), { where: `usage/${segment}`, reason });
 /** takeFillProblem({home, fs}) → {where, reason} | null: what the last fill could not do, once. */
-export function takeFillProblem({ home = asightHome(), fs = nodeFs } = {}) {
+export function takeFillProblem({ home = trocarHome(), fs = nodeFs } = {}) {
   const key = problemKey(home, fs);
   const p = lastProblem.get(key) ?? null;
   lastProblem.delete(key);
@@ -156,7 +156,7 @@ let chain = Promise.resolve();
 const waiting = new Set();
 /** fillUsage({home, fs, segments}) → Promise<void>: brings each segment's sidecar up to its index. For the query
  *  worker, after it has answered (D63): it yields between chunks and segments, and runs on no timer. Never throws. */
-export function fillUsage({ home = asightHome(), fs = nodeFs, segments = [] } = {}) {
+export function fillUsage({ home = trocarHome(), fs = nodeFs, segments = [] } = {}) {
   for (const segment of segments) {
     const key = `${fsTag(fs)}\n${home}\n${segment}`;
     if (waiting.has(key)) continue;

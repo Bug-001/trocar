@@ -2,4 +2,4 @@
 bpf/vmlinux.h
 bpf/*.o
 redirector/*.skel.h
-asight-redirector
+trocar-redirector

@@ -34,7 +34,7 @@ test('V90: board.state follows the daemon\'s own reply, url is ingress.json\'s b
     assert.equal(b.url, `http://127.0.0.1:${port}/`)
     assert.equal(b.reason === null, state === 'serving', JSON.stringify(b))
     if (b.reason !== null) assert.equal(typeof b.reason, 'string')
-    for (const out of [t.text, j.text, t.io.stderrText(), j.io.stderrText()]) assert.ok(!out.includes(token), 'the token is printed only by asight board')
+    for (const out of [t.text, j.text, t.io.stderrText(), j.io.stderrText()]) assert.ok(!out.includes(token), 'the token is printed only by trocar board')
     assert.equal(t.exit, j.exit)
     if (daemonUp) exits.add(t.exit)
   }
@@ -42,7 +42,7 @@ test('V90: board.state follows the daemon\'s own reply, url is ingress.json\'s b
 })
 
 test('V90: with no install record the board is not-installed, with a reason and no url', async () => {
-  const home = tmpDir('asight-fresh-')
+  const home = tmpDir('trocar-fresh-')
   const io = fakeIo()
   await runStatusCli(['--json'], { io, home, platform: 'linux', env: { HOME: home }, deps: { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }) } })
   const b = io.json().board

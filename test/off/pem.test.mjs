@@ -1,6 +1,6 @@
 // test/off/pem.test.mjs — src/off/pem.mjs (RFC 4.6 撤销顺序第 2 / 3 步, 1.6 R3): the PEM readers `off` needs without the collector. certBlocks lists
 // the certificates of a file by fingerprint; stripCert takes one out and leaves every other byte; composeBundle (moved from the collector's
-// bundle.mjs, which still re-exports it) makes "the same bundle without the asight CA" the same bytes as stripCert makes.
+// bundle.mjs, which still re-exports it) makes "the same bundle without the trocar CA" the same bytes as stripCert makes.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { X509Certificate } from 'node:crypto'
@@ -36,9 +36,9 @@ test('stripCert takes out the block of one fingerprint and its newline, and not 
   assert.deepEqual(stripCert(bundle, fp(createCa({ commonName: 'not there' }))), { text: bundle, removed: false }, 'not there: the same text back, removed false')
 })
 
-test('stripCert of the asight CA from a composed bundle is byte for byte the bundle composed without it (so "the same file without the asight CA" is one thing)', () => {
+test('stripCert of the trocar CA from a composed bundle is byte for byte the bundle composed without it (so "the same file without the trocar CA" is one thing)', () => {
   const roots = { nodeRoots: [A.certPem], osRootsText: B.certPem }
-  const withCa = composeBundle({ ...roots, userCerts: [C.certPem], caPem: createCa({ commonName: 'asight' }).certPem })
+  const withCa = composeBundle({ ...roots, userCerts: [C.certPem], caPem: createCa({ commonName: 'trocar' }).certPem })
   const caFp = certBlocks(withCa.data).at(-1).fp
   const without = composeBundle({ ...roots, userCerts: [C.certPem], caPem: null })
   assert.equal(stripCert(withCa.data, caFp).text, without.data)

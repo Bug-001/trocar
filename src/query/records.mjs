@@ -13,7 +13,7 @@ import { expandRequestBody } from '../dissect/request-body.mjs';
 import { openSealed } from '../raw/reader.mjs';
 import { R } from '../raw/format.mjs';
 import { segmentIndex, segmentSource } from './index-build.mjs';
-import { asightHome } from '../paths.mjs';
+import { trocarHome } from '../paths.mjs';
 import { rowsKey, warmCache, fsTag } from './warm.mjs';
 
 // WARM (D63 ①, 1.6 §4.1 附近的查询): one entry per row list, kept against THAT list. A session's pages, the block of
@@ -63,7 +63,7 @@ function recordOf(text, segment, lineNo, stream) {
  */
 // `remember: false` is a SCAN (the usage sidecar's fill, src/query/usage.mjs): it neither reads from nor stores into
 // the warm cache, so filling a segment never evicts the records of the sessions the board has open.
-export function recordsAt({ home = asightHome(), fs = nodeFs, rows = [], errors = [], remember = true } = {}) {
+export function recordsAt({ home = trocarHome(), fs = nodeFs, rows = [], errors = [], remember = true } = {}) {
   const { id, bytes } = listKey(home, rows, fs);
   // The stamp IS the key here: a row list names the exact bytes it stands for, and those bytes never change
   // (invariant 2: a record is appended once and never rewritten). A shallow copy goes out, so a caller that
@@ -153,7 +153,7 @@ function sealedReader(file, fs) {
  * derived), or null when the segment holds no such line. The segment index says where the record is, so
  * neither the segment nor its index is scanned for it.
  */
-export async function readRecord({ home = asightHome(), fs = nodeFs, segment, lineNo } = {}) {
+export async function readRecord({ home = trocarHome(), fs = nodeFs, segment, lineNo } = {}) {
   const { records } = await segmentIndex({ home, segment, fs });
   const row = records.find((r) => r.id === recordId(segment, lineNo));
   if (!row) return null;
@@ -172,15 +172,15 @@ function segmentFile({ home, fs, segment }) {
 
 /**
  * segmentLines({home, segment, from, to}) → [lineNo, bytes] of one segment, the bytes exactly as they are stored
- * (`asight raw`, 1.6 §5.1): each line with its newline, a half line a crash left without one, an empty line as
+ * (`trocar raw`, 1.6 §5.1): each line with its newline, a half line a crash left without one, an empty line as
  * itself; a sealed segment is decoded first, and nothing is parsed or re-encoded. Throws when there is no such
  * segment.
  * `from`/`to` are the RECORD NUMBERS the caller will print (1-based, inclusive). They are not a filter over the
  * whole file: a sealed segment decodes only the frames those records sit in (plus their delta chains, which its
  * own index names), so printing the last record of a 128 MB segment costs one frame instead of all 32 — which is
- * what made `asight raw <seg:N>` on a sealed segment 5× slower than on the plaintext one (D62 A1).
+ * what made `trocar raw <seg:N>` on a sealed segment 5× slower than on the plaintext one (D62 A1).
  */
-export function* segmentLines({ home = asightHome(), fs = nodeFs, segment, from = 1, to = Infinity } = {}) {
+export function* segmentLines({ home = trocarHome(), fs = nodeFs, segment, from = 1, to = Infinity } = {}) {
   const file = segmentFile({ home, fs, segment });
   if (file.endsWith('.sealed')) {
     const sf = openSealed(file, { fs });

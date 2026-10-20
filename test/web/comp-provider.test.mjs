@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
-import { asightHome } from '../../src/paths.mjs';
+import { trocarHome } from '../../src/paths.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { boardFlat } from '../../src/dissect/openai.mjs';
@@ -42,8 +42,8 @@ const INDEX = path.join(ROOT, 'src', 'web', 'index.html');
 // Resolve through the paths module, never a literal: this test is skip-guarded on the file's
 // existence, so a hardcoded path turns a MOVED capture into a SILENT SKIP — the suite stays green
 // while the only real-bytes check that provider knowledge stays out of the browser (invariant 3)
-// stops running. That is exactly what happened when the home moved to ~/.asight (D27).
-const OPENCODE = path.join(asightHome(), 'opencode-capture.ndjson');
+// stops running. That is exactly what happened when the home moved to ~/.trocar (D27).
+const OPENCODE = path.join(trocarHome(), 'opencode-capture.ndjson');
 
 // ── the real captured OpenAI-Responses request shape (mirrors test/dissect/openai.test.mjs) ──
 const OA_REQ = {

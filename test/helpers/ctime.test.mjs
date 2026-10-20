@@ -27,7 +27,7 @@ test('changeUntilCtimeMoves: a ctime that never moves is an error naming the fil
 })
 
 test('changeUntilCtimeMoves: on the real file system a rewrite that restores mtime ends with a ctime different from the one before', () => {
-  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'asight-ctime-'))
+  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'trocar-ctime-'))
   try {
     const f = path.join(dir, 'a'), T = Math.floor(Date.now() / 1000) - 60
     nodeFs.writeFileSync(f, 'lorem'); nodeFs.utimesSync(f, T, T)

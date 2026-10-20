@@ -14,7 +14,7 @@ const renaming = (fail) => { let n = 0; const calls = []; return { calls, fs: { 
 const temps = (dir) => fs.readdirSync(dir).filter((n) => n.includes(TMP_MARK))
 
 test('writeDurable: a rename that fails with EBUSY twice is retried and lands; the file holds the new bytes and no temp file is left', () => {
-  const dir = tmpDir('asight-fsu-')
+  const dir = tmpDir('trocar-fsu-')
   const file = path.join(dir, 'config.toml')
   fs.writeFileSync(file, 'old')
   const r = renaming((n) => (n < 2 ? errno('EBUSY') : null))
@@ -27,7 +27,7 @@ test('writeDurable: a rename that fails with EBUSY twice is retried and lands; t
 
 test('writeDurable: every errno that means "held open for now" is retried — EPERM and EACCES as well as EBUSY (by errno, not by platform)', () => {
   for (const code of ['EPERM', 'EACCES']) {
-    const dir = tmpDir('asight-fsu-')
+    const dir = tmpDir('trocar-fsu-')
     const file = path.join(dir, 'a.json')
     const r = renaming((n) => (n < 1 ? errno(code) : null))
     writeDurable(file, '{}', 0o600, r.fs)
@@ -35,8 +35,8 @@ test('writeDurable: every errno that means "held open for now" is retried — EP
   }
 })
 
-test('writeDurable: a permanent EPERM throws after a bounded number of tries (about a second), the target is untouched and no *.asight-tmp-* is left', () => {
-  const dir = tmpDir('asight-fsu-')
+test('writeDurable: a permanent EPERM throws after a bounded number of tries (about a second), the target is untouched and no *.trocar-tmp-* is left', () => {
+  const dir = tmpDir('trocar-fsu-')
   const file = path.join(dir, '.env')
   fs.writeFileSync(file, 'KEEP=1\n')
   const r = renaming(() => errno('EPERM'))
@@ -50,7 +50,7 @@ test('writeDurable: a permanent EPERM throws after a bounded number of tries (ab
 })
 
 test('writeDurable: an error that waiting cannot fix (EXDEV, ENOSPC on write) is not retried, and still leaves no temp file', () => {
-  const dir = tmpDir('asight-fsu-')
+  const dir = tmpDir('trocar-fsu-')
   const file = path.join(dir, 'b.json')
   const r = renaming(() => errno('EXDEV'))
   assert.throws(() => writeDurable(file, '{}', 0o600, r.fs), (e) => e.code === 'EXDEV')
@@ -89,7 +89,7 @@ test('pathKey: a parent that is not there falls back to the resolved path (a dee
 })
 
 test('pathKey(darwin): case folds and a symlinked directory is the directory it links to (real directories in a temp dir)', () => {
-  const dir = fs.realpathSync(tmpDir('asight-pk-'))
+  const dir = fs.realpathSync(tmpDir('trocar-pk-'))
   fs.mkdirSync(path.join(dir, 'Home', 'Codex'), { recursive: true })
   fs.symlinkSync(path.join(dir, 'Home', 'Codex'), path.join(dir, 'link'))
   const k = (p) => pathKey(p, { platform: 'darwin', realpath: fs.realpathSync.native })
@@ -100,7 +100,7 @@ test('pathKey(darwin): case folds and a symlinked directory is the directory it 
 })
 
 test('pathKey(linux): case matters, a symlinked directory still resolves', () => {
-  const dir = fs.realpathSync(tmpDir('asight-pk-'))
+  const dir = fs.realpathSync(tmpDir('trocar-pk-'))
   fs.mkdirSync(path.join(dir, 'real'))
   fs.symlinkSync(path.join(dir, 'real'), path.join(dir, 'ln'))
   const k = (p) => pathKey(p, { platform: 'linux', realpath: fs.realpathSync.native })
@@ -117,13 +117,13 @@ test('pathKey: keying a win32 path on another host does not consult the host fil
 // failed write — but a real error must still be thrown, or a seal "succeeds" and keeps its plaintext (test-machine run P1).
 for (const code of ['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR', 'EBADF']) {
   test(`fsyncDir: ${code} on the directory fd is tolerated, and the fd is closed`, () => {
-    const dir = tmpDir('asight-fsy-')
+    const dir = tmpDir('trocar-fsy-')
     let closed = 0
     fsyncDir({ ...fs, fsyncSync: () => { throw errno(code) }, closeSync: (fd) => { closed++; return fs.closeSync(fd) } }, dir)
     assert.equal(closed, 1)
   })
 }
 test('fsyncDir: any other error is thrown', () => {
-  const dir = tmpDir('asight-fsy-')
+  const dir = tmpDir('trocar-fsy-')
   assert.throws(() => fsyncDir({ ...fs, fsyncSync: () => { throw errno('EIO') } }, dir), /EIO/)
 })

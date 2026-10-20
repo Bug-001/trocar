@@ -1,4 +1,4 @@
-// test/off/moved.test.mjs — what moved into src/off in T07 so `asight off` needs nothing of src/collector (1.6 R3): the control socket client and the
+// test/off/moved.test.mjs — what moved into src/off in T07 so `trocar off` needs nothing of src/collector (1.6 R3): the control socket client and the
 // flows/ line writer. The collector's own names are the same functions; one real socket and one real file show they still work.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -16,8 +16,8 @@ test('the collector\'s control and events modules export the src/off functions t
   assert.equal(appendEvent, appendFlowEvent)
 })
 
-test('controlSocketPath is $XDG_RUNTIME_DIR/asight/collector.sock and throws without XDG_RUNTIME_DIR', () => {
-  assert.equal(controlSocketPath({ env: { XDG_RUNTIME_DIR: '/run/user/1000' } }), '/run/user/1000/asight/collector.sock')
+test('controlSocketPath is $XDG_RUNTIME_DIR/trocar/collector.sock and throws without XDG_RUNTIME_DIR', () => {
+  assert.equal(controlSocketPath({ env: { XDG_RUNTIME_DIR: '/run/user/1000' } }), '/run/user/1000/trocar/collector.sock')
   assert.throws(() => controlSocketPath({ env: {} }), /XDG_RUNTIME_DIR is not set/)
 })
 

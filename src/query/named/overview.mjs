@@ -1,4 +1,4 @@
-// src/query/named/overview.mjs — `asight query overview` (RFC 1.6 §4.1, 附录 C.5 `overview`; 1.7 统计卡; 3.5 §访问模式).
+// src/query/named/overview.mjs — `trocar query overview` (RFC 1.6 §4.1, 附录 C.5 `overview`; 1.7 统计卡; 3.5 §访问模式).
 //
 // Everything but `usage` is ONE pass over the segment index rows: no record body is opened (3.5 MUST NOT). The window is
 // C.5's: a session whose LAST call falls in [since, until] counts whole; a session-less row counts by its own ts.

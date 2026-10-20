@@ -27,7 +27,7 @@ export function optionsOf(cmd) {
 export function parseArgs(cmd, argv) {
   const options = optionsOf(cmd)
   const positionals = [], flags = {}
-  const fail = (message) => ({ positionals: [], flags: {}, error: { code: 'usage', message: `asight ${cmd.name}: ${message}`, usage: cmd.usage } })
+  const fail = (message) => ({ positionals: [], flags: {}, error: { code: 'usage', message: `trocar ${cmd.name}: ${message}`, usage: cmd.usage } })
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (!arg.startsWith('-') || arg === '-' || (cmd.openOptions && negativeNumber(arg))) { positionals.push(arg); continue }

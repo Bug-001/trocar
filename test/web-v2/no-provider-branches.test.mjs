@@ -144,7 +144,7 @@ test('host literals are caught, file names are not', () => {
   assert.equal(violations('x.mjs', "a = 'one.com', b = 'two.net'").length, 2) // every match, not just the first
 })
 test('files() skips only the top-level assets/ directory', () => {
-  const dir = tmpDir('asight-v2-files-')
+  const dir = tmpDir('trocar-v2-files-')
   const put = (rel) => { const p = path.join(dir, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, 'x') }
   put('main.mjs'); put('assets/harness/cc.svg'); put('assets/x.mjs'); put('core/assets/real.mjs'); put('core/x.css'); put('core/notes.txt')
   const rel = files(dir).map((f) => path.relative(dir, f)).sort()

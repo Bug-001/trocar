@@ -17,10 +17,10 @@ const PROXY_NAMES = ['HTTPS_PROXY', 'https_proxy']
 const NO_PROXY_ENV = ['NO_PROXY', 'no_proxy']
 
 async function load(env) {
-  const file = path.join(tmpDir(), 'asight-route.js')
+  const file = path.join(tmpDir(), 'trocar-route.js')
   fs.writeFileSync(file, renderTemplate(fs.readFileSync(templateUrl('opencode-plugin'), 'utf8'), { DOOR, PROXY_ENV, PROXY_NAMES, NO_PROXY_ENV }))
   const saved = { env: { ...process.env }, fetch: globalThis.fetch }
-  for (const k of [...PROXY_ENV, ...NO_PROXY_ENV, 'ASIGHT_PRIOR_PROXY']) delete process.env[k]
+  for (const k of [...PROXY_ENV, ...NO_PROXY_ENV, 'TROCAR_PRIOR_PROXY']) delete process.env[k]
   Object.assign(process.env, env)
   const before = { ...process.env }
   const seen = []
@@ -51,16 +51,16 @@ test('CM13 import: prior recorded (or none), both spellings at the door, only th
     [{ HTTPS_PROXY: 'http://corp:3128' }, 'http://corp:3128'],
     [{ https_proxy: 'http://low:1', HTTP_PROXY: 'http://plain:2' }, 'http://low:1'],
     [{ HTTP_PROXY: 'http://plain:2' }, 'http://plain:2'],
-    [{ HTTPS_PROXY: DOOR, ASIGHT_PRIOR_PROXY: 'http://outer:9' }, 'http://outer:9'], // OpenCode started by an OpenCode: the outer prior stays
+    [{ HTTPS_PROXY: DOOR, TROCAR_PRIOR_PROXY: 'http://outer:9' }, 'http://outer:9'], // OpenCode started by an OpenCode: the outer prior stays
     [{ HTTPS_PROXY: DOOR }, 'none'],
   ]
   for (const [env, prior] of CASES) {
     const p = await load(env), before = p.before
     try {
-      assert.equal(p.after.ASIGHT_PRIOR_PROXY, prior, JSON.stringify(env))
+      assert.equal(p.after.TROCAR_PRIOR_PROXY, prior, JSON.stringify(env))
       for (const k of PROXY_NAMES) assert.equal(p.after[k], DOOR)
       const changed = Object.keys({ ...before, ...p.after }).filter((k) => before[k] !== p.after[k] )
-      assert.deepEqual(changed.filter((k) => ![...PROXY_NAMES, ...NO_PROXY_ENV, 'ASIGHT_PRIOR_PROXY'].includes(k)), [], 'nothing else in the environment changes')
+      assert.deepEqual(changed.filter((k) => ![...PROXY_NAMES, ...NO_PROXY_ENV, 'TROCAR_PRIOR_PROXY'].includes(k)), [], 'nothing else in the environment changes')
     } finally { p.restore() }
   }
 })

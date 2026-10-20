@@ -32,11 +32,11 @@ function growingSession() {
 }
 
 function sealedBox() {
-  const home = tmpDir('asight-ra-home-');
-  const raw = path.join(home, '.asight', 'raw');
+  const home = tmpDir('trocar-ra-home-');
+  const raw = path.join(home, '.trocar', 'raw');
   const lines = growingSession();
   const file = writeShard(path.join(raw, `${SEGMENT}.ndjson`), lines);
-  return { home: path.join(home, '.asight'), raw, file, lines, lock: path.join(home, '.asight', 'control', 'nolock.json') };
+  return { home: path.join(home, '.trocar'), raw, file, lines, lock: path.join(home, '.trocar', 'control', 'nolock.json') };
 }
 
 test('printing one record of a sealed segment reads a fraction of the file, and the same bytes as the plaintext', async () => {

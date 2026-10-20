@@ -1,4 +1,4 @@
-// test/cli/on-model.test.mjs — `asight on` on macOS / Windows through the CLI (1.6 §1.1, §1.6): no install record → cert-not-installed,
+// test/cli/on-model.test.mjs — `trocar on` on macOS / Windows through the CLI (1.6 §1.1, §1.6): no install record → cert-not-installed,
 // exit 1, nothing written and no daemon started; --dry-run prints the planned entries and writes nothing; R6 — a file beyond confirmed_paths with no
 // terminal and no --yes → the plan only, exit 2; --opt-in is not the model's yet → exit 2.
 import { test } from 'node:test'
@@ -29,7 +29,7 @@ for (const os of ['darwin', 'win32']) {
     const { exit, io } = await on(w, os, ['--yes', '--json'])
     assert.equal(exit, 1, io.text())
     assert.equal(io.json().error.code, 'cert-not-installed')
-    assert.equal(fs.existsSync(path.join(w.home, '.asight')), false)
+    assert.equal(fs.existsSync(path.join(w.home, '.trocar')), false)
   })
 
   test(`1.6 §1.1 · R6 (${os}): --dry-run prints the planned entry and writes nothing; no terminal and no --yes → exit 2, nothing written; --opt-in → exit 2`, async () => {
@@ -57,16 +57,16 @@ for (const os of ['darwin', 'win32']) {
     const w = await modelWorld({ os, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const gone = { ...neverStarts, registered: () => ({ state: 'absent' }) }
-    const mine = (h) => Object.fromEntries(Object.entries(snapshot(h)).filter(([k]) => !k.includes('collector/flows'))) // everything but asight's own record of the refusal (D38: a failure is never silent)
+    const mine = (h) => Object.fromEntries(Object.entries(snapshot(h)).filter(([k]) => !k.includes('collector/flows'))) // everything but trocar's own record of the refusal (D38: a failure is never silent)
     const before = mine(w.home)
     const r = await on(w, os, ['--yes', '--json'], gone)
     assert.deepEqual([r.exit, r.io.json().error.code, r.io.json().ok], [2, 'autostart-missing', false], r.io.text())
     assert.equal(r.io.json().undo, null, '附录 C.1: nothing was changed, so there is nothing to undo (macOS + Windows test machines 2026-10-19)')
-    assert.match(r.io.json().error.message, /asight install/)
-    assert.deepEqual(mine(w.home), before, 'nothing of yours and no state of asight\'s was written')
+    assert.match(r.io.json().error.message, /trocar install/)
+    assert.deepEqual(mine(w.home), before, 'nothing of yours and no state of trocar\'s was written')
     assert.match(fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join(''), /"code":"autostart-missing"/, 'D38: the refusal is recorded')
     const dry = await on(w, os, ['--dry-run', '--json'], gone)
-    assert.deepEqual([dry.exit, dry.io.json().blocked.map((b) => b.what)], [0, ['asight on']], dry.io.text())
+    assert.deepEqual([dry.exit, dry.io.json().blocked.map((b) => b.what)], [0, ['trocar on']], dry.io.text())
     assert.equal(dry.io.json().error, undefined, 'a dry run carries no error: nothing went wrong')
     // an answer that could not be read is not a yes either (the unit's `unknown`)
     const unreadable = await on(w, os, ['--yes', '--json'], { ...neverStarts, registered: () => ({ state: 'unknown', err: 'launchctl print did not run' }) })

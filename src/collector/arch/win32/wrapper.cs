@@ -1,14 +1,14 @@
-// asight install-folder wrapper (spec 4.11 P8; lab W3). Compiled by `asight install` with the
-// inbox .NET Framework csc.exe and written where the agent's program was; the program itself was moved to .asight-real\ beside it under the
+// trocar install-folder wrapper (spec 4.11 P8; lab W3). Compiled by `trocar install` with the
+// inbox .NET Framework csc.exe and written where the agent's program was; the program itself was moved to .trocar-real\ beside it under the
 // same name. Without the switch file: the certificate variable is set only when it is unset, and the real program runs with the same command
 // line (the tail after argv[0], verbatim: no re-quoting can change an argument), the inherited std handles, and its exit code is ours.
-// With the switch file: ASIGHT_PRIOR_PROXY records the agent's own proxy (the first set name of its precedence list that is not the door;
+// With the switch file: TROCAR_PRIOR_PROXY records the agent's own proxy (the first set name of its precedence list that is not the door;
 // "none" when none is set) and the agent's proxy names point at the door the switch file holds. The child is in a job that kills it when the
 // wrapper is killed (an editor's TerminateProcess must not orphan it); Ctrl-C / Ctrl-Break are ignored by the wrapper only, the child decides.
 using System; using System.IO; using System.Text; using System.Runtime.InteropServices;
-static class AsightWrapper {
-  const string Real = __ASIGHT_REAL__, Switch = __ASIGHT_SWITCH__, CaFile = __ASIGHT_CA_FILE__, CertVar = __ASIGHT_CERT_VAR__;
-  static readonly string[] ProxyEnv = __ASIGHT_PROXY_ENV__, ProxyNames = __ASIGHT_PROXY_NAMES__;
+static class TrocarWrapper {
+  const string Real = __TROCAR_REAL__, Switch = __TROCAR_SWITCH__, CaFile = __TROCAR_CA_FILE__, CertVar = __TROCAR_CERT_VAR__;
+  static readonly string[] ProxyEnv = __TROCAR_PROXY_ENV__, ProxyNames = __TROCAR_PROXY_NAMES__;
   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct SI { public int cb; public string r, d, t; public int x, y, xs, ys, xc, yc, fill, flags; public short show, r2; public IntPtr r3, hin, hout, herr; }
   [StructLayout(LayoutKind.Sequential)] struct PI { public IntPtr hp, ht; public int pid, tid; }
   [StructLayout(LayoutKind.Sequential)] struct JBLI { public long a, b; public int flags; public IntPtr c, d; public int e; public IntPtr f; public int g, h; }
@@ -39,8 +39,8 @@ static class AsightWrapper {
     if (string.IsNullOrEmpty(door)) return;
     string prior = null; bool sawDoor = false;
     foreach (var n in ProxyEnv) { var v = Get(n); if (v == null) continue; if (v != door) { prior = v; break; } sawDoor = true; }
-    if (prior != null) Environment.SetEnvironmentVariable("ASIGHT_PRIOR_PROXY", prior);
-    else if (!sawDoor || Get("ASIGHT_PRIOR_PROXY") == null) Environment.SetEnvironmentVariable("ASIGHT_PRIOR_PROXY", "none");
+    if (prior != null) Environment.SetEnvironmentVariable("TROCAR_PRIOR_PROXY", prior);
+    else if (!sawDoor || Get("TROCAR_PRIOR_PROXY") == null) Environment.SetEnvironmentVariable("TROCAR_PRIOR_PROXY", "none");
     foreach (var n in ProxyNames) Environment.SetEnvironmentVariable(n, door);
   }
   static int Main() {
@@ -53,7 +53,7 @@ static class AsightWrapper {
     int flags = 0x400 /*UNICODE_ENVIRONMENT*/ | 0x4 /*CREATE_SUSPENDED*/ | (hasConsole ? 0 : 0x08000000 /*CREATE_NO_WINDOW*/);
     PI pi;
     if (!CreateProcessW(Real, new StringBuilder(cmd, 32768), IntPtr.Zero, IntPtr.Zero, true, flags, IntPtr.Zero, null, ref si, out pi)) {
-      Console.Error.WriteLine("asight wrapper: could not start " + Real + " (error " + Marshal.GetLastWin32Error() + "); run `asight install` again, or reinstall the program");
+      Console.Error.WriteLine("trocar wrapper: could not start " + Real + " (error " + Marshal.GetLastWin32Error() + "); run `trocar install` again, or reinstall the program");
       return 9009;
     }
     IntPtr job = CreateJobObjectW(IntPtr.Zero, null); var info = new JELI(); info.basic.flags = 0x2000 /*KILL_ON_JOB_CLOSE*/ | 0x1000 /*SILENT_BREAKAWAY_OK*/;

@@ -55,7 +55,7 @@ test('a record with no addressable bytes still ships readable text, never an orp
   // A v0-shaped record: parsed `request` object, no verbatim `req_body`. Its original wire bytes were
   // lost at conversion time, so no span can be computed — the honest outcome, and exactly the case
   // that must NOT degrade into an unreadable row.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-v0-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-v0-'));
   const file = path.join(dir, 'v0.ndjson');
   fs.writeFileSync(file, JSON.stringify({
     id: 'req_1', is_llm_call: true, endpoint: 'https://api.anthropic.com/v1/messages',
@@ -88,7 +88,7 @@ test('a record with no addressable bytes still ships readable text, never an orp
 });
 
 test('the fallback is LABELLED — a reader can tell an addressed block from an inlined one', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-v0lbl-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-v0lbl-'));
   const file = path.join(dir, 'v0.ndjson');
   fs.writeFileSync(file, JSON.stringify({
     id: 'req_1', is_llm_call: true, endpoint: 'https://api.anthropic.com/v1/messages',

@@ -9,7 +9,7 @@ import { HARNESS_IDS } from '../../src/cli/harness-names.mjs'
 import { BUILTIN, readTable, classify, keepOf, edit, ClassArgError } from '../../src/classes/table.mjs'
 import { LLM_ENDPOINT_PATHS, TOKEN_COUNT_ENDPOINT_PATHS } from '../../src/capture/envelope.mjs'
 
-const home = () => tmpDir('asight-classes-')
+const home = () => tmpDir('trocar-classes-')
 const classesFile = (h) => path.join(h, 'classes.json')
 const logFile = (h) => path.join(h, 'logs', 'classes.ndjson')
 const now = () => new Date('2026-10-18T07:00:00.000Z')

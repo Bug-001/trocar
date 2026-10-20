@@ -255,7 +255,7 @@ test('boundary(): blind once framing stopped — a request or a response that ca
   assert.deepEqual(upgrade(null).boundary(), { idle: false, headPending: false, seq: null, blind: true }, 'no terminal message declared')
 })
 
-test('markAdded(): the envelope of that exchange carries asight_added after every other key; the row note carries it whether or not the exchange is recorded (invariant 4, 1.6 §1.3)', () => {
+test('markAdded(): the envelope of that exchange carries trocar_added after every other key; the row note carries it whether or not the exchange is recorded (invariant 4, 1.6 §1.3)', () => {
   const { out, store } = sink(); let on = true
   const t = createExchangeTee({ flow: FLOW, recordStore: store, isRecording: () => on })
   assert.deepEqual(t.rowNotes(), {})
@@ -264,8 +264,8 @@ test('markAdded(): the envelope of that exchange carries asight_added after ever
   t.markAdded(0, 'connection-close'); t.fromUpstream(Buffer.from(OK0))
   t.markAdded(1, 'connection-close'); t.fromUpstream(Buffer.from(OK0))
   assert.equal(out.length, 1)
-  assert.deepEqual([out[0].asight_added, Object.keys(out[0]).at(-1)], [['connection-close'], 'asight_added'])
-  assert.deepEqual(t.rowNotes().asightAdded, [{ seq: 0, what: 'connection-close' }, { seq: 1, what: 'connection-close' }], 'the unrecorded one is on the row only')
+  assert.deepEqual([out[0].trocar_added, Object.keys(out[0]).at(-1)], [['connection-close'], 'trocar_added'])
+  assert.deepEqual(t.rowNotes().trocarAdded, [{ seq: 0, what: 'connection-close' }, { seq: 1, what: 'connection-close' }], 'the unrecorded one is on the row only')
   t.fromClient(Buffer.from('GET /c HTTP/1.1\r\n\r\n')); t.fromUpstream(Buffer.from(OK0))
   assert.equal(out.length, 1, 'nothing recorded after off')
 })

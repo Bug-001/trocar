@@ -1,13 +1,13 @@
 // journal.mjs — the per-user install manifest and the install half of its journal (RFC 4.6 §安装清单与卸载,
-// 「信任入口的日志与撤销」, acceptance T11). One JSON file, ~/.asight/collector/install-manifest.json (0600):
-//   dirs     directories asight created (removed at the end of uninstall if empty)
-//   files    files asight owns (CA, extra trust files) — deleted on uninstall
-//   entries  every user file asight changed: {kind, harness, path, existed_before, mode, pre_sha256, post_sha256, backup,
+// 「信任入口的日志与撤销」, acceptance T11). One JSON file, ~/.trocar/collector/install-manifest.json (0600):
+//   dirs     directories trocar created (removed at the end of uninstall if empty)
+//   files    files trocar owns (CA, extra trust files) — deleted on uninstall
+//   entries  every user file trocar changed: {kind, harness, path, existed_before, mode, pre_sha256, post_sha256, backup,
 //            undo_by_hand, ops, prior_value, installed_at, created_dirs, charset?} + per kind: `json-key` (no kind on version 1
 //            manifests) {keys, value, existing_depth}; `text` {format, vars | line} (text-edit.mjs: a dotenv block, a
 //            shell-rc line, a YAML list row). ops are splices {offset, removed, inserted}; `removed` is only ever the value
-//            asight replaced (a path, or a YAML `[]`, never a secret). The user's file is NEVER copied INTO the manifest
-//            (Codex / Hermes .env files hold API keys): the copy made before the change is a file in ~/.asight/backup/
+//            trocar replaced (a path, or a YAML `[]`, never a secret). The user's file is NEVER copied INTO the manifest
+//            (Codex / Hermes .env files hold API keys): the copy made before the change is a file in ~/.trocar/backup/
 //            (src/off/backup.mjs, 1.6 R2) and `backup` only names it.
 // Write-ahead: the intent (no post_sha256) is fsynced before the user's file is touched, so an install that
 // crashed half-way is still found and undone. No whole-file snapshot rollback, ever (1.6 R2).
@@ -15,13 +15,13 @@
 // from the manifest and the disk, whether it is to be written, is intact (never rewritten: `installed_at`, inode and mtime stay), is only an intent
 // a crash left (resume: finish it), or was changed by the user since (reported, left). apply* run the same judgement themselves, so a caller that
 // forgot it still cannot rewrite an intact entry.
-// The undo half (undoEntry, removeOwnedFile, describeEntry) and the file primitives moved to src/off/ (D39⑤, 0.1 §2: `asight off`
-// and the standalone asight-off run without the repo); they are re-exported below so every importer of this module keeps working.
+// The undo half (undoEntry, removeOwnedFile, describeEntry) and the file primitives moved to src/off/ (D39⑤, 0.1 §2: `trocar off`
+// and the standalone trocar-off run without the repo); they are re-exported below so every importer of this module keeps working.
 import nodeFs from 'node:fs'
 import { isDeepStrictEqual } from 'node:util'
 import path from 'node:path'
 import { setKey, addItem, getPath, reverseOps, parseJsonText } from '../../../off/json-text.mjs'
-import { dotenvBlock, joinDotenvBlock, insertLine, pemBlock, removeAsightText, BLOCK_BEGIN } from '../../../off/text-edit.mjs'
+import { dotenvBlock, joinDotenvBlock, insertLine, pemBlock, removeTrocarText, BLOCK_BEGIN } from '../../../off/text-edit.mjs'
 import { sha256, readOrNull, writeDurable, missingDirs, editTarget, pathKey } from '../../../off/fsutil.mjs'
 import { saveManifest, undoByHand, PHASES } from '../../../off/manifest.mjs'
 import { writeBackup } from '../../../off/backup.mjs'
@@ -39,13 +39,13 @@ export { sha256, writeDurable, sweepTemps, missingDirs, removeEmptyDirs, editTar
 export { undoEntry, removeOwnedFile, describeEntry } from '../../../off/journal.mjs'
 export { MANIFEST, manifestPath, newManifest, readManifest, saveManifest } from '../../../off/manifest.mjs'
 
-// 1.6 R2: a user's file is saved to ~/.asight/backup/ before the first byte of it changes; no backup, no change. `before` null = asight
+// 1.6 R2: a user's file is saved to ~/.trocar/backup/ before the first byte of it changes; no backup, no change. `before` null = trocar
 // creates the file: nothing to save (existed_before:false, backup:null). The throw is `backup-failed`, raised before the manifest or the
 // file is touched.
 function backupFirst({ home, file, before, now, fs }) {
   if (before == null) return null
   try { return writeBackup({ home, file, data: before, now, fs }) } catch (e) {
-    throw Object.assign(new Error(`${file} was not changed: asight saves a copy of a file before it changes it (1.6 R2) and the copy could not be written to ${backupDir(home)} (${e.code ? `${e.code}: ` : ''}${(e && e.message) || e}); make that directory writable, then install again`), { code: CODE_OFF.backupFailed, path: file, errno: e && e.code })
+    throw Object.assign(new Error(`${file} was not changed: trocar saves a copy of a file before it changes it (1.6 R2) and the copy could not be written to ${backupDir(home)} (${e.code ? `${e.code}: ` : ''}${(e && e.message) || e}); make that directory writable, then install again`), { code: CODE_OFF.backupFailed, path: file, errno: e && e.code })
   }
 }
 // The text of a user's file by what its bytes prove (4.6「文件的编码」, text-codec.mjs): { text (null: not there), charset }. Bytes that prove no form
@@ -54,9 +54,9 @@ function backupFirst({ home, file, before, now, fs }) {
 function readUserText(file, bytes) {
   const d = decodeText(bytes)
   if (d.ok) return d
-  throw Object.assign(new Error(`${file} was not changed: asight cannot tell how it is encoded — ${WHY_TEXT[d.why]} (${d.why}); asight edits only UTF-8, or UTF-16 with a byte-order mark. Save it as UTF-8, then run "asight on" again`), { code: CODE_OFF.entryRefused, why: d.why, path: file })
+  throw Object.assign(new Error(`${file} was not changed: trocar cannot tell how it is encoded — ${WHY_TEXT[d.why]} (${d.why}); trocar edits only UTF-8, or UTF-16 with a byte-order mark. Save it as UTF-8, then run "trocar on" again`), { code: CODE_OFF.entryRefused, why: d.why, path: file })
 }
-// setKey on a user's file: a file asight cannot edit (not JSON / JSONC, not an object, a parent that is not an object, a key holding an object) is
+// setKey on a user's file: a file trocar cannot edit (not JSON / JSONC, not an object, a parent that is not an object, a key holding an object) is
 // refused with code `entry-refused`, its `why` and the path, before anything is written (4.6「逐 harness 跳过」; the fix is in the message).
 function setUserKey(file, text, keys, value) {
   try { return setKey(text, keys, value) } catch (e) {
@@ -64,20 +64,20 @@ function setUserKey(file, text, keys, value) {
     throw Object.assign(new Error(`${file} was not changed: ${e.message.replace(/^setKey: /, '')}`), { code: CODE_OFF.entryRefused, why: e.why, path: file, ...(e.offset != null ? { offset: e.offset } : {}) })
   }
 }
-const needHome = (what, home) => { if (!home) throw new TypeError(`${what}: home is required (backups go to <home>/.asight/backup, 1.6 R2)`) }
+const needHome = (what, home) => { if (!home) throw new TypeError(`${what}: home is required (backups go to <home>/.trocar/backup, 1.6 R2)`) }
 // D55①: every item says which command wrote it — `off` undoes phase 'on', `uninstall` the rest; a writer that forgets fails here, before anything is written
 const needPhase = (what, phase) => { if (!PHASES.includes(phase)) throw new TypeError(`${what}: phase is required (${PHASES.join(' | ')}), got ${JSON.stringify(phase)}`) }
 
-// A file asight owns (a trust file of certificate blocks, a trust plugin, a launch shim): listed before it is written,
+// A file trocar owns (a trust file of certificate blocks, a trust plugin, a launch shim): listed before it is written,
 // with the directories its write creates. `sources` names the user files a trust file carries certificates from
 // (paths, never contents), so the merge stays auditable. `exclusive`: a file already there is never written over
-// (an agent's plugin directory is the user's; asight only adds its own file to it): `on` passes `exclusive` for a file the manifest does not list,
-// and not for one it does — that is asight's own, written before or recorded by a run that crashed before the write (R9). A record for a path the
+// (an agent's plugin directory is the user's; trocar only adds its own file to it): `on` passes `exclusive` for a file the manifest does not list,
+// and not for one it does — that is trocar's own, written before or recorded by a run that crashed before the write (R9). A record for a path the
 // manifest already lists is replaced, not added (a second one would be undone twice), and the directories the first attempt made stay listed.
 export function writeOwnedFile({ dir, manifest, harness = null, role, phase, file, data, sources = null, mode = 0o600, exclusive = false, extra = {}, now = new Date(), fs = nodeFs }) {
   needPhase('writeOwnedFile', phase)
   const known = manifest.files.find((f) => samePath(f.path, file, fs))
-  if (exclusive && fs.existsSync(file)) throw new Error(`${file} already exists; asight will not write over it`)
+  if (exclusive && fs.existsSync(file)) throw new Error(`${file} already exists; trocar will not write over it`)
   const created = [...new Set([...((known && known.created_dirs) || []), ...missingDirs(path.dirname(file), fs)])]
   const item = { kind: 'owned-file', path: file, role, harness, phase, sha256: sha256(Buffer.from(data)), mode, created_dirs: created, installed_at: now.toISOString(), ...(sources ? { sources } : {}), ...extra }
   item.undo_by_hand = undoByHand(item)
@@ -88,8 +88,8 @@ export function writeOwnedFile({ dir, manifest, harness = null, role, phase, fil
   writeDurable(file, data, mode, fs)
 }
 
-// What `on` finds of one file asight owns (R9), from the manifest and the disk: `write` (the manifest does not list it), `skip-intact` (listed,
-// there, and byte for byte what asight recorded; for a combined bundle `off` kept without the CA — `without_ca` — it is not intact: `on` puts the
+// What `on` finds of one file trocar owns (R9), from the manifest and the disk: `write` (the manifest does not list it), `skip-intact` (listed,
+// there, and byte for byte what trocar recorded; for a combined bundle `off` kept without the CA — `without_ca` — it is not intact: `on` puts the
 // CA back), or `rewrite` (listed, but gone or changed since). `planned` (the sha256 of what would be written now) is for the files whose
 // content is a pure function of the plan (the unit): there the file must also equal it, else a moved script path would be kept for ever.
 export function judgeOwned({ manifest, file, planned = null, fs = nodeFs }) {
@@ -98,7 +98,7 @@ export function judgeOwned({ manifest, file, planned = null, fs = nodeFs }) {
   const cur = readOrNull(fs, file)
   const here = cur == null ? null : sha256(cur)
   if (here != null && here === rec.sha256 && !rec.without_ca && (planned == null || planned === here)) return { action: 'skip-intact', record: rec }
-  return { action: 'rewrite', record: rec, why: here == null ? 'the file is gone' : rec.without_ca ? 'it was kept without the asight CA' : 'it is not what asight wrote' }
+  return { action: 'rewrite', record: rec, why: here == null ? 'the file is gone' : rec.without_ca ? 'it was kept without the trocar CA' : 'it is not what trocar wrote' }
 }
 
 // What applyJsonKey would do, without writing: every refusal (a link to nothing or to a non-regular file, a file
@@ -117,13 +117,13 @@ const sameNames = (a, b) => !!a && !!b && JSON.stringify(Object.keys(a).sort()) 
 const entryOf = (manifest, p, fs) => ((manifest && manifest.entries) || []).find((x) => x.harness === p.harness && samePath(x.path, p.path, fs)
   && (x.kind ?? (x.format ? 'text' : 'json-key')) === p.kind
   && (p.kind === 'json-key' || p.kind === 'json-array-item' ? sameKeys(x.keys, p.keys) && (p.kind === 'json-key' || isDeepStrictEqual(x.item, p.item)) : x.format === p.format && (p.vars ? sameNames(x.vars, p.vars) : x.line === p.line)))
-// is asight's text still in the file? a JSON key by its value, a block or line by the text it inserted (the same test undo makes of an edited file)
+// is trocar's text still in the file? a JSON key by its value, a block or line by the text it inserted (the same test undo makes of an edited file)
 function holds(x, text) {
   if (text == null) return false
-  if (x.kind === 'text') return removeAsightText(text, x.ops || []).found
+  if (x.kind === 'text') return removeTrocarText(text, x.ops || []).found
   try { const v = getPath(parseJsonText(text), x.keys); return x.kind === 'json-array-item' ? Array.isArray(v) && v.some((e) => isDeepStrictEqual(e, x.item)) : v === x.value } catch { return false }
 }
-// the file is what asight's ops made of the file it recorded (an intent whose write finished and whose `post_sha256` did not): undo reads it the same way
+// the file is what trocar's ops made of the file it recorded (an intent whose write finished and whose `post_sha256` did not): undo reads it the same way
 function writtenBy(x, text) {
   if (text == null) return false
   const back = reverseOps(text, x.ops || [])
@@ -132,14 +132,14 @@ function writtenBy(x, text) {
 
 /** `planned` = { harness, kind: 'json-key'|'text', path, keys | format + (vars | line) } → what `on` does with it, from the manifest and the disk:
  *    write               the manifest has no entry for it
- *    skip-intact         it has, and asight's text is still in the file (the sha equals `post_sha256`, or the file was edited elsewhere since —
+ *    skip-intact         it has, and trocar's text is still in the file (the sha equals `post_sha256`, or the file was edited elsewhere since —
  *                        Claude Code rewrites settings.json): never written again, `installed_at` and the file stay as they are (R9)
  *    resume              an entry that is only an intent (a crash between the record and the end of the write): the file is still as it was
  *                        before, or already written (`adopt`: only `post_sha256` is missing)
  *    skip-user-changed   it has, but the key or block is gone or holds another value, or the intent cannot be told from a user's edit: the user
- *                        changed it after asight did. Reported, left (`asight off`, then `asight on`, writes it again)
+ *                        changed it after trocar did. Reported, left (`trocar off`, then `trocar on`, writes it again)
  *  `entry` is the manifest's. A path that cannot be resolved (a link now dangling) is skip-user-changed with the reason. A file whose bytes are not
- *  asight's own and prove no encoding throws entry-refused with its `why` (as previewTextEntry does for a new entry), before anything is written. */
+ *  trocar's own and prove no encoding throws entry-refused with its `why` (as previewTextEntry does for a new entry), before anything is written. */
 export function judgeEntry({ manifest, planned, fs = nodeFs }) {
   const x = entryOf(manifest, planned, fs)
   if (!x) return { action: 'write', entry: null }
@@ -147,16 +147,16 @@ export function judgeEntry({ manifest, planned, fs = nodeFs }) {
   try { cur = readOrNull(fs, editTarget(x.path, fs)) } catch (e) { return { action: 'skip-user-changed', entry: x, why: String((e && e.message) || e) } }
   if (x.post_sha256 != null && sha256(cur) === x.post_sha256) return { action: 'skip-intact', entry: x }
   // past the byte checks, what is in the file is read as text: bytes that prove no encoding are refused with their why (4.6:216, entry-refused),
-  // never judged as "the user changed it" — the block may well still be there, in bytes asight cannot read back
+  // never judged as "the user changed it" — the block may well still be there, in bytes trocar cannot read back
   const text = readUserText(x.path, cur).text
   if (x.post_sha256 != null) {
-    return holds(x, text) ? { action: 'skip-intact', entry: x, edited: true } : { action: 'skip-user-changed', entry: x, why: `${x.path} no longer holds what asight wrote there (${describeEntry(x)})` }
+    return holds(x, text) ? { action: 'skip-intact', entry: x, edited: true } : { action: 'skip-user-changed', entry: x, why: `${x.path} no longer holds what trocar wrote there (${describeEntry(x)})` }
   }
   if (x.existed_before ? sha256(cur) === x.pre_sha256 : cur == null) return { action: 'resume', entry: x }
   if (writtenBy(x, text)) return { action: 'resume', entry: x, adopt: true }
   return { action: 'skip-user-changed', entry: x, why: `${x.path} changed after an earlier run recorded its intent to change it, and is not what that run would have written` }
 }
-const refuseChanged = (j) => new Error(`${j.entry.path}: ${j.why}; asight leaves it as it is — run "asight off", then "asight on", to write the entry again`)
+const refuseChanged = (j) => new Error(`${j.entry.path}: ${j.why}; trocar leaves it as it is — run "trocar off", then "trocar on", to write the entry again`)
 const makeDirs = (entry, fs) => { for (const d of entry.created_dirs) if (!fs.existsSync(d)) fs.mkdirSync(d, { mode: 0o700 }) }
 
 // the part of applyJsonKey / applyTextEntry after the edit is decided: the backup (kept from the intent a crashed run left, if it is still there),
@@ -216,9 +216,9 @@ function setOneKey({ dir, manifest, harness, phase, file, keys, value, home, fol
   return commit({ dir, manifest, fresh, resumed, before, res, real, charset: read.charset, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) }) // keyed by the path the user knows (the link, for a symlinked file), holding the target's bytes
 }
 
-// One element asight appends to a JSON array (4.11 P5 `arrayItems`, kind `json-array-item`; undone by src/off/journal.mjs undoEntry: only that element goes,
-// and the array too when asight created it and it is empty again). Judged and committed as a json-key is; an array that already holds the element is
-// left as it is (null: nothing asight added, nothing to undo).
+// One element trocar appends to a JSON array (4.11 P5 `arrayItems`, kind `json-array-item`; undone by src/off/journal.mjs undoEntry: only that element goes,
+// and the array too when trocar created it and it is empty again). Judged and committed as a json-key is; an array that already holds the element is
+// left as it is (null: nothing trocar added, nothing to undo).
 export function applyJsonArrayItem({ dir, manifest, harness, phase, file, keys, item, home, now = new Date(), fs = nodeFs }) {
   needHome('applyJsonArrayItem', home)
   needPhase('applyJsonArrayItem', phase)
@@ -247,14 +247,14 @@ export function applyJsonArrayItem({ dir, manifest, harness, phase, file, keys, 
 // A text entry (text-edit.mjs): edit = { format: 'dotenv-block', vars, quote?, neutralize?, fold? } (the names put out of effect with the
 // block's own, 4.6「名字族」; recorded on the entry, `fold` as `fold: true`) | { format: 'line', line, after? } |
 // { format: 'yaml-list', line } | a dotenv-block with `joinBlock: true` (4.8 §2.3: the proxy lines of Codex and Hermes
-// join the sentinel block the trust entry wrote — one block per file, entered separately). Text asight already put there
+// join the sentinel block the trust entry wrote — one block per file, entered separately). Text trocar already put there
 // under an install this manifest does not list is refused: a second block or row would only be undone once. `joined` (the
 // caller has checked the manifest lists the block for this harness) is the only way past that refusal, and only into the
 // existing block (text-edit.mjs joinDotenvBlock); the default stays the refusal, so nothing joins by accident.
 function editText(file, text, edit, { joined = false } = {}) {
   if (text != null && (text.includes(BLOCK_BEGIN) || (edit.line && text.includes(edit.line)))) {
     if (!(joined && text.includes(BLOCK_BEGIN) && edit.format === 'dotenv-block')) {
-      throw new Error(`${file} already holds asight's text from an install this manifest does not list; take it out, then install again`)
+      throw new Error(`${file} already holds trocar's text from an install this manifest does not list; take it out, then install again`)
     }
   }
   try {
@@ -300,7 +300,7 @@ export function applyTextEntry({ dir, manifest, harness, phase, file, edit, home
   return commit({ dir, manifest, fresh, resumed, before, res, real, charset: read.charset, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) })
 }
 
-// When asight installed the value a config layer holds (ms), or null. A layer counts when an entry changed its file
+// When trocar installed the value a config layer holds (ms), or null. A layer counts when an entry changed its file
 // (`path`, or the link target `real_path`) and the layer still holds that entry's value (under its key, or the name a
 // descriptor gives it, e.g. zcode:user:caCertFile), or every variable of its dotenv block; the tracker then judges
 // config-after-start against this time, not the file's mtime, so an unrelated later edit of the same file (Hermes

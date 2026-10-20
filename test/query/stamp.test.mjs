@@ -14,7 +14,7 @@ const T0 = Date.parse('2026-10-19T12:00:10Z')
 const ctxOf = (home, o = {}) => ({ home, now: () => T0, env: {}, ...o })
 const stamps = (names, ctx) => Object.fromEntries(names.map((n) => [n, stampOf(n, requiredFor(n), ctx)]))
 function world() {
-  const home = rawHome('asight-stamp-')
+  const home = rawHome('trocar-stamp-')
   writeSegment(home, SEG, [{ id: 'a', sessionKey: 's-1' }])
   return home
 }
@@ -62,15 +62,15 @@ test('appending to logs/classes.ndjson changes classes', () => {
   assert.notEqual(stampOf('classes', {}, ctx), before)
 })
 
-test('ASIGHT_PRICING pointed elsewhere, or that file touched, changes pricing', () => {
-  const home = world(), dir = tmpDir('asight-stamp-p-')
+test('TROCAR_PRICING pointed elsewhere, or that file touched, changes pricing', () => {
+  const home = world(), dir = tmpDir('trocar-stamp-p-')
   const a = path.join(dir, 'a.json'), b = path.join(dir, 'b.json')
   fs.writeFileSync(a, '{}'); fs.writeFileSync(b, '{}')
-  const sa = stampOf('pricing', {}, ctxOf(home, { env: { ASIGHT_PRICING: a } }))
-  assert.notEqual(stampOf('pricing', {}, ctxOf(home, { env: { ASIGHT_PRICING: b } })), sa)
+  const sa = stampOf('pricing', {}, ctxOf(home, { env: { TROCAR_PRICING: a } }))
+  assert.notEqual(stampOf('pricing', {}, ctxOf(home, { env: { TROCAR_PRICING: b } })), sa)
   assert.notEqual(stampOf('pricing', {}, ctxOf(home)), sa)
   fs.appendFileSync(a, ' ')
-  assert.notEqual(stampOf('pricing', {}, ctxOf(home, { env: { ASIGHT_PRICING: a } })), sa)
+  assert.notEqual(stampOf('pricing', {}, ctxOf(home, { env: { TROCAR_PRICING: a } })), sa)
 })
 
 test('the minute tick: classes and a relative window move with the clock, an absolute window does not', () => {

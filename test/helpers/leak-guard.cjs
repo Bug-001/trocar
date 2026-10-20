@@ -7,7 +7,7 @@
 // running at the same time, or old leftovers from before, are never counted against this run — which a before / after listing
 // of the shared OS temp dir cannot promise.
 //
-// A leak is a directory, or an entry named like ours (`asight-…`, `as-…`, `atrace-…`); a stray file some library drops in TMPDIR is
+// A leak is a directory, or an entry named like ours (`trocar-…`, `as-…`, `atrace-…`); a stray file some library drops in TMPDIR is
 // removed with the rest and not blamed on a test. The fix for a leak is `tmpDir()` from test/helpers/tmp.mjs, which removes the
 // directory when the test process ends, pass or fail. Guard: test/helpers/leak-guard.test.mjs.
 'use strict'
@@ -16,7 +16,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { removeTree } = require('./rm-tree.cjs')
 
-const OURS = /^(asight|as|atrace)-/
+const OURS = /^(trocar|as|atrace)-/
 
 /** True for a directory; false for anything else, and for an entry that has gone since it was listed (it must not end the check). */
 function isDir(p) {
@@ -30,7 +30,7 @@ function leaked(dir, entries) {
 
 // the runner is the process that was started with --test; a test file's process has NODE_TEST_CONTEXT, and a plain `node file` has neither
 if (process.execArgv.includes('--test') && !process.env.NODE_TEST_CONTEXT) {
-  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-run-'))
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-run-'))
   for (const key of ['TMPDIR', 'TMP', 'TEMP']) process.env[key] = runDir
   process.on('exit', () => {
     let left = []

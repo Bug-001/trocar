@@ -1,4 +1,4 @@
-// test/cli/on.test.mjs — `asight on` as a resumable, idempotent install (RFC 1.6 R9, R12, §1.1, §1.6): a crash at any write is finished by the next on, every entry
+// test/cli/on.test.mjs — `trocar on` as a resumable, idempotent install (RFC 1.6 R9, R12, §1.1, §1.6): a crash at any write is finished by the next on, every entry
 // that exists points at a bundle that is valid at every one of those points, a second on rewrites nothing, and what the operator changed in between is
 // reported and left. Real descriptors in a sandbox HOME (the fixture of the `off` tests), OS tools and the control socket injected (0.1 §3).
 import test from 'node:test'
@@ -24,15 +24,15 @@ const NAMES = ['claude-code', 'codex', 'hermes', 'z-code', 'opencode', 'deepseek
 const descs = (await loadHarnesses()).filter((d) => NAMES.includes(d.name))
 const SOCK = '/x/collector.sock'
 
-// a sandbox HOME with the user's files of the seven-homes fixture, and everything a run needs; `run` is one `asight on`. D55 / override #15: on never writes a
-// certificate, so the sandbox has had `asight install` (installCollector, no unit) unless `installed: false` — then the first `run` installs first, so a crash
+// a sandbox HOME with the user's files of the seven-homes fixture, and everything a run needs; `run` is one `trocar on`. D55 / override #15: on never writes a
+// certificate, so the sandbox has had `trocar install` (installCollector, no unit) unless `installed: false` — then the first `run` installs first, so a crash
 // test cuts the install's writes too
 async function sandbox({ installed = true } = {}) {
-  const home = tmpDir('asight-on-')
+  const home = tmpDir('trocar-on-')
   const sh = sevenHomes(home)
-  const dir = path.join(home, '.asight', 'collector')
+  const dir = path.join(home, '.trocar', 'collector')
   const sys = fakeSystem()
-  const unit = (script = '/repo/bin/asight.mjs') => userUnit({ home, node: '/usr/bin/node', script, run: sys.exec.run, spawn: fakeSpawn(sys.daemon) })
+  const unit = (script = '/repo/bin/trocar.mjs') => userUnit({ home, node: '/usr/bin/node', script, run: sys.exec.run, spawn: fakeSpawn(sys.daemon) })
   const opts = (o = {}) => ({ home, env: sh.env, osName: 'linux', harnesses: descs, freePort: async () => 47011, roots: ROOTS, confirm: async () => true, unit: unit(), request: sys.daemon.request, socketPath: SOCK, sleep: async () => {}, linger: () => true, user: 'alice', ...o })
   const install = async (o = {}) => { await installCollector({ ...opts(o), unit: null }); installed = true }
   const run = async (o = {}) => { if (!installed) await install(o); return turnOn(opts(o)) }
@@ -47,10 +47,10 @@ function fakeSpawn(daemon = null) {
   return spawn
 }
 
-const asightOnly = (rel) => rel.startsWith('.asight') || rel.startsWith(path.join('.config', 'systemd'))
-const userView = (home) => Object.fromEntries(Object.entries(snapshot(home)).filter(([rel]) => !asightOnly(rel)))
+const trocarOnly = (rel) => rel.startsWith('.trocar') || rel.startsWith(path.join('.config', 'systemd'))
+const userView = (home) => Object.fromEntries(Object.entries(snapshot(home)).filter(([rel]) => !trocarOnly(rel)))
 
-// every entry asight wrote that names a combined bundle (the replace-semantics ones: Codex's and Hermes's dotenv block, Z-Code's network.caCertFile) must name
+// every entry trocar wrote that names a combined bundle (the replace-semantics ones: Codex's and Hermes's dotenv block, Z-Code's network.caCertFile) must name
 // one that exists and holds the Node roots and the OS roots (R9, V21); read from the user's files as they are at that moment, the manifest may not be saved yet
 const bundleNamedIn = {
   codex: (home) => dotenvBundle(path.join(home, '.codex', '.env')),
@@ -59,8 +59,8 @@ const bundleNamedIn = {
 }
 function dotenvBundle(file) {
   let text; try { text = fs.readFileSync(file, 'utf8') } catch { return null }
-  if (!text.includes('# >>> asight collector')) return null // not written yet
-  const m = /^SSL_CERT_FILE=(.+)$/m.exec(text.split('# <<<')[0]) // inside asight's block (the block is at the top)
+  if (!text.includes('# >>> trocar collector')) return null // not written yet
+  const m = /^SSL_CERT_FILE=(.+)$/m.exec(text.split('# <<<')[0]) // inside trocar's block (the block is at the top)
   return m ? m[1].trim() : null
 }
 function bundlesAreValid(s) {
@@ -116,7 +116,7 @@ test('R9: a second on on a complete install leaves installed_at, inode and mtime
   const s = await sandbox()
   const first = await s.run()
   assert.equal(first.exit, 0)
-  assert.deepEqual(first.receipt.changed, [], 'every user file asight changes is install\'s: the on after it changes none (D55①)')
+  assert.deepEqual(first.receipt.changed, [], 'every user file trocar changes is install\'s: the on after it changes none (D55①)')
   const stat = entryStats(s); const mtime = (f) => fs.statSync(f).mtimeMs
   const files = [path.join(s.dir, 'install-manifest.json'), path.join(s.dir, 'state.json'), ...readManifest(s.dir).files.map((f) => f.path)]
   const marks = files.map((f) => [f, fs.statSync(f).ino, mtime(f)])
@@ -125,31 +125,31 @@ test('R9: a second on on a complete install leaves installed_at, inode and mtime
   assert.deepEqual([again.exit, again.receipt.changed, again.receipt.created, again.receipt.ok], [0, [], [], true])
   assert.ok(again.receipt.unchanged.length >= 4, 'it names what it left alone')
   assert.deepEqual(entryStats(s), stat)
-  assert.deepEqual(files.map((f) => [f, fs.statSync(f).ino, mtime(f)]), marks, 'no file of asight was written again either')
+  assert.deepEqual(files.map((f) => [f, fs.statSync(f).ino, mtime(f)]), marks, 'no file of trocar was written again either')
   assert.equal(s.sys.daemon.calls.filter((c) => c.startsWith('POST /on')).length, 2, 'each on still asks the daemon to attach (it is idempotent there)')
   // D61: `on` touches no registration, and a daemon that answers is not started again (拉起不是重启): the one start is the FIRST on's, when nothing answered
   // every `on` READS the registration before it writes anything (1.6 §3.3: `is-enabled`); only the first STARTED the daemon
-  assert.deepEqual(s.sys.exec.calls, ['systemctl --user is-enabled asight-collector.service', 'systemctl --user start asight-collector.service', 'systemctl --user is-enabled asight-collector.service'], `only the first on started the daemon (${s.sys.exec.calls.join(' | ')})`)
+  assert.deepEqual(s.sys.exec.calls, ['systemctl --user is-enabled trocar-collector.service', 'systemctl --user start trocar-collector.service', 'systemctl --user is-enabled trocar-collector.service'], `only the first on started the daemon (${s.sys.exec.calls.join(' | ')})`)
   assert.ok(!s.sys.exec.calls.some((c) => /^systemctl --user (enable|disable)/.test(c)), 'and the login entry is install\'s: on enables and disables nothing — `is-enabled` is a read (1.6 §3.3)')
 })
 
-test('R9: an entry the operator changed after asight wrote it is reported and left; on never overwrites it, and off then on writes it again', async () => {
+test('R9: an entry the operator changed after trocar wrote it is reported and left; on never overwrites it, and off then on writes it again', async () => {
   const s = await sandbox()
   await s.run()
   const settings = path.join(s.home, '.claude', 'settings.json')
   const mine = '{ "model": "mine", "env": { "NODE_EXTRA_CA_CERTS": "/my/own-ca.pem" } }\n'
-  fs.writeFileSync(settings, mine) // the user's own value in place of asight's
+  fs.writeFileSync(settings, mine) // the user's own value in place of trocar's
   const r = await s.run()
   assert.equal(fs.readFileSync(settings, 'utf8'), mine, 'left as the user has it')
   assert.deepEqual([r.exit, r.receipt.ok], [1, false], 'an entry that is not in effect is not "done"')
-  assert.match(JSON.stringify(r.receipt.skipped), /settings\.json[\s\S]*asight off[\s\S]*asight on/, 'the receipt says which file and what to do')
-  // off takes asight's part out (there is none left: the user's own value stays), and on writes the entry again
+  assert.match(JSON.stringify(r.receipt.skipped), /settings\.json[\s\S]*trocar off[\s\S]*trocar on/, 'the receipt says which file and what to do')
+  // off takes trocar's part out (there is none left: the user's own value stays), and on writes the entry again
   const out = await undoHarnesses({ dir: s.dir, home: s.home, phases: PHASES, manifest: readManifest(s.dir), ids: ['claude-code'], procs: async () => [], roots: ROOTS })
   assert.deepEqual(out.results.map((x) => x.result), ['left-user-value'])
   await s.install() // the entry is a certificate item: install writes it again, never on (D55⑥)
   const back = await s.run()
   assert.equal(back.exit, 0)
-  assert.equal(JSON.parse(fs.readFileSync(settings, 'utf8')).env.NODE_EXTRA_CA_CERTS, path.join(s.dir, 'ca', 'extra-cc.pem'), 'asight\'s entry again — now through the merge path, since a CA of the user\'s is named in the file')
+  assert.equal(JSON.parse(fs.readFileSync(settings, 'utf8')).env.NODE_EXTRA_CA_CERTS, path.join(s.dir, 'ca', 'extra-cc.pem'), 'trocar\'s entry again — now through the merge path, since a CA of the user\'s is named in the file')
 })
 
 test('R9: an edit of the settings file elsewhere (Claude Code rewrites it) is not a change to the entry: it stays intact and is not written again', async () => {
@@ -161,14 +161,14 @@ test('R9: an edit of the settings file elsewhere (Claude Code rewrites it) is no
   const stat = entryStats(s).find((e) => e.path === settings)
   const r = await s.run()
   assert.deepEqual([r.exit, r.receipt.changed, r.receipt.skipped], [0, [], []])
-  assert.deepEqual(entryStats(s).find((e) => e.path === settings), stat, 'installed_at is when asight wrote it, not when the file was last edited')
+  assert.deepEqual(entryStats(s).find((e) => e.path === settings), stat, 'installed_at is when trocar wrote it, not when the file was last edited')
 })
 
 test('R9: on after off writes the entries again with a new installed_at; a bundle off kept without the CA for a live process gets the CA back and loses its without_ca mark (4.6 「合并包」)', async () => {
   const s = await sandbox()
   await s.run()
   const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
-  const caFp = certBlocks(fs.readFileSync(path.join(s.dir, 'ca', 'asight-ca.pem'), 'utf8'))[0].fp
+  const caFp = certBlocks(fs.readFileSync(path.join(s.dir, 'ca', 'trocar-ca.pem'), 'utf8'))[0].fp
   assert.ok(certBlocks(fs.readFileSync(bundle, 'utf8')).some((b) => b.fp === caFp))
   const was = readManifest(s.dir).entries.find((e) => e.harness === 'codex').installed_at
   const codex = { pid: 4242, exe: '/home/u/.local/bin/codex', argv: ['codex'], startedAt: Date.now() + 5000, env: () => new Map() } // started after install: it may have loaded the bundle
@@ -186,7 +186,7 @@ test('R9: on after off writes the entries again with a new installed_at; a bundl
   assert.equal(bundlesAreValid(s).length, 3)
 })
 
-test('R9: a manifest an older asight wrote has no liveness for some harness: on adds it, and rewrites the others from the descriptors (identity united with what was recorded, 4.6 「判活快照」)', async () => {
+test('R9: a manifest an older trocar wrote has no liveness for some harness: on adds it, and rewrites the others from the descriptors (identity united with what was recorded, 4.6 「判活快照」)', async () => {
   const s = await sandbox()
   await s.run()
   const file = path.join(s.dir, 'install-manifest.json')
@@ -205,17 +205,17 @@ test('R9: a manifest an older asight wrote has no liveness for some harness: on 
 
 test('D61: the login entry is install\'s — install writes it, rewrites it when what it would say changed (a daemon-reload first), and a later on never writes it', async () => {
   const s = await sandbox()
-  const unitFile = path.join(s.home, '.config', 'systemd', 'user', 'asight-collector.service')
+  const unitFile = path.join(s.home, '.config', 'systemd', 'user', 'trocar-collector.service')
   const opts = (script) => ({ home: s.home, env: s.sh.env, osName: 'linux', harnesses: descs, freePort: async () => 47011, roots: ROOTS, confirm: async () => true, request: s.sys.daemon.request, socketPath: SOCK, sleep: async () => {}, linger: () => true, user: 'alice', unit: s.unit(script) })
-  await installCollector(opts('/repo/bin/asight.mjs'))
-  assert.match(fs.readFileSync(unitFile, 'utf8'), /"\/repo\/bin\/asight\.mjs" daemon$/m, 'install writes the entry')
+  await installCollector(opts('/repo/bin/trocar.mjs'))
+  assert.match(fs.readFileSync(unitFile, 'utf8'), /"\/repo\/bin\/trocar\.mjs" daemon$/m, 'install writes the entry')
   s.sys.exec.calls.length = 0
-  await installCollector(opts('/moved/bin/asight.mjs'))
-  assert.match(fs.readFileSync(unitFile, 'utf8'), /"\/moved\/bin\/asight\.mjs" daemon$/m, 'and writes it again when what it would say changed (the repo moved)')
+  await installCollector(opts('/moved/bin/trocar.mjs'))
+  assert.match(fs.readFileSync(unitFile, 'utf8'), /"\/moved\/bin\/trocar\.mjs" daemon$/m, 'and writes it again when what it would say changed (the repo moved)')
   assert.ok(s.sys.exec.calls.includes('systemctl --user daemon-reload'), `a rewritten unit is reloaded (${s.sys.exec.calls.join(' | ')})`)
   const mark = [fs.statSync(unitFile).ino, fs.statSync(unitFile).mtimeMs]
   await new Promise((r) => setTimeout(r, 25))
-  const r = await s.run({ unit: s.unit('/moved/bin/asight.mjs') })
+  const r = await s.run({ unit: s.unit('/moved/bin/trocar.mjs') })
   assert.equal(r.exit, 0)
   assert.deepEqual([fs.statSync(unitFile).ino, fs.statSync(unitFile).mtimeMs], mark, 'the on after it does not write the entry (D61)')
 })
@@ -271,7 +271,7 @@ test('on: with no daemon answering and no login entry it writes everything, exit
   const bare = await s.run({ unit: null, request: down.request })
   // D61: `on` has no login entry to report — the key is gone from appendix C.2's `on` row with it
   assert.deepEqual([bare.exit, bare.receipt.daemon.state, 'unit' in bare.receipt], [0, 'not-running', false])
-  assert.match(bare.receipt.notes.join('\n'), /asight daemon/)
+  assert.match(bare.receipt.notes.join('\n'), /trocar daemon/)
   assert.deepEqual(s.sys.exec.calls, [], 'no unit: no systemctl at all')
   assert.ok(!fs.existsSync(path.join(s.home, '.config', 'systemd')), 'and no unit file')
   assert.deepEqual(readManifest(s.dir).files.filter((f) => f.role === 'unit'), [])
@@ -345,20 +345,20 @@ test('on: root is refused by the library too (R7), and a missing helper stops it
   const s = await sandbox(); const before = snapshot(s.home)
   await assert.rejects(s.run({ getuid: () => 0 }), /not as root/)
   const r = await s.run({ helperState: () => ({ ok: false, reason: 'no helper' }) })
-  assert.deepEqual([r.exit, r.receipt.ok], [1, false]); assert.match(r.receipt.notes.join(' '), /sudo asight setup-helper/)
+  assert.deepEqual([r.exit, r.receipt.ok], [1, false]); assert.match(r.receipt.notes.join(' '), /sudo trocar setup-helper/)
   assert.deepEqual(snapshot(s.home), before)
 })
 
-// audit rule-b 7 (R1, R6, V7): a failed `on` that wrote nothing still pointed at `~/.asight/bin/asight-off` and the flows/ log, neither of which exists; and a dry run with the helper
-// missing exited 1 with no plan, so the plan could not be read before deciding to `sudo asight setup-helper` — V7 says a dry run exits 0.
-test('R1 / R6: an `on` that stopped before writing anything says so — no change, nothing made, no undo and no log to point at, no asight-off path (helper missing, no agent found, the lock held)', async () => {
+// audit rule-b 7 (R1, R6, V7): a failed `on` that wrote nothing still pointed at `~/.trocar/bin/trocar-off` and the flows/ log, neither of which exists; and a dry run with the helper
+// missing exited 1 with no plan, so the plan could not be read before deciding to `sudo trocar setup-helper` — V7 says a dry run exits 0.
+test('R1 / R6: an `on` that stopped before writing anything says so — no change, nothing made, no undo and no log to point at, no trocar-off path (helper missing, no agent found, the lock held)', async () => {
   const noHelper = () => ({ ok: false, reason: 'no helper' })
   const s = await sandbox(); const before = snapshot(s.home)
   const r = await s.run({ helperState: noHelper })
   const bare = (x) => [x.exit, x.receipt.ok, x.receipt.changed, x.receipt.created, x.receipt.undo, x.receipt.log, 'standalone' in x.receipt]
   assert.deepEqual(bare(r), [1, false, [], [], null, null, false])
   assert.deepEqual(validateReceipt(r.receipt), [])
-  assert.ok(!JSON.stringify(r.receipt).includes('asight-off') && !JSON.stringify(r.receipt).includes('flows'), 'neither the undo program nor the log is named: neither is there')
+  assert.ok(!JSON.stringify(r.receipt).includes('trocar-off') && !JSON.stringify(r.receipt).includes('flows'), 'neither the undo program nor the log is named: neither is there')
   assert.deepEqual(snapshot(s.home), before)
   // no agent to capture
   const empty = await sandbox(); fs.rmSync(path.join(empty.home, '.claude'), { recursive: true, force: true })
@@ -370,7 +370,7 @@ test('R1 / R6: an `on` that stopped before writing anything says so — no chang
   fs.mkdirSync(held.dir, { recursive: true }); fs.writeFileSync(path.join(held.dir, 'op.lock'), JSON.stringify({ pid: process.pid, start_time: null, boot_id: null }) + '\n')
   const busy = await held.run({ lockWaitMs: 30 })
   assert.equal(busy.exit, 1)
-  assert.match(busy.receipt.notes.join(' '), /another asight command \(pid \d+\) holds/)
+  assert.match(busy.receipt.notes.join(' '), /another trocar command \(pid \d+\) holds/)
   assert.deepEqual([busy.receipt.changed, busy.receipt.created, busy.receipt.undo, busy.receipt.log], [[], [], null, null], 'the plan listed changes and files; none was made, so none is claimed')
   assert.equal(fs.readFileSync(path.join(held.home, '.claude', 'settings.json'), 'utf8'), settingsBefore, 'and none was')
 })
@@ -382,9 +382,9 @@ test('R6 / V7: `on --dry-run` with the helper missing still prints the plan and 
   assert.deepEqual([dry.exit, dry.receipt.ok, dry.receipt.dry_run], [0, true, true])
   assert.deepEqual([dry.receipt.changed, dry.receipt.created], [ok.receipt.changed, ok.receipt.created], 'the plan is the one a user with a helper would get')
   assert.ok(dry.receipt.created.length > 0, 'and it is a real plan (the unit; every certificate item is install\'s)')
-  assert.deepEqual(dry.receipt.blocked.map((b) => b.what), ['asight on']) // 附录 C.1: blocked:[{what, reason}]
-  assert.match(dry.receipt.blocked[0].reason, /capability helper is missing.*sudo asight setup-helper/)
-  assert.match(dry.receipt.notes.join('\n'), /sudo asight setup-helper.*a real asight on stops there/)
+  assert.deepEqual(dry.receipt.blocked.map((b) => b.what), ['trocar on']) // 附录 C.1: blocked:[{what, reason}]
+  assert.match(dry.receipt.blocked[0].reason, /capability helper is missing.*sudo trocar setup-helper/)
+  assert.match(dry.receipt.notes.join('\n'), /sudo trocar setup-helper.*a real trocar on stops there/)
   assert.deepEqual(validateReceipt(dry.receipt), [])
   assert.deepEqual(snapshot(s.home), before, 'a dry run writes nothing')
   assert.equal((await s.run({ helperState: () => ({ ok: false, reason: 'no helper' }) })).exit, 1)
@@ -402,9 +402,9 @@ test('R11: with flows/ unwritable `on` still installs (exit 0); stderr and the r
   assert.ok(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('NODE_EXTRA_CA_CERTS'), 'the install itself was done')
 })
 
-// R21 (D51③, 1.6 V65): the plan judges the running processes with the name list in effect — the presets plus ~/.asight/agents.json — the one the daemon and `status`
+// R21 (D51③, 1.6 V65): the plan judges the running processes with the name list in effect — the presets plus ~/.trocar/agents.json — the one the daemon and `status`
 // judge with. Through the real loadParts (the registry it builds), only the arch's process table faked: a custom name running before its entry is a process to restart.
-// Since D55 the entry is install's, so the plan that names it is `asight install`'s (the same planOn `on` printed before).
+// Since D55 the entry is install's, so the plan that names it is `trocar install`'s (the same planOn `on` printed before).
 test('R21 the plan reads agents.json: a running agent of a custom name (claude-nightly) is judged as the harness\'s — it is on the restart list of the plan', async () => {
   const { runInstallCli } = await import('../../src/cli/install.mjs')
   const { loadParts } = await import('../../src/collector/daemon.mjs')
@@ -412,9 +412,9 @@ test('R21 the plan reads agents.json: a running agent of a custom name (claude-n
   const { onCtx, fakeIo, seedClaude } = await import('./fixtures/on-ctx.mjs')
   const unit = await import('../../src/collector/arch/linux/unit.mjs')
   const cc = descs.find((d) => d.name === 'claude-code')
-  const home = tmpDir('asight-on-list-'); seedClaude(home)
-  fs.mkdirSync(path.join(home, '.asight'), { recursive: true })
-  fs.writeFileSync(path.join(home, '.asight', 'agents.json'), JSON.stringify({ version: 1, agents: [{ harness: 'claude-code', name: 'claude-nightly' }] }))
+  const home = tmpDir('trocar-on-list-'); seedClaude(home)
+  fs.mkdirSync(path.join(home, '.trocar'), { recursive: true })
+  fs.writeFileSync(path.join(home, '.trocar', 'agents.json'), JSON.stringify({ version: 1, agents: [{ harness: 'claude-code', name: 'claude-nightly' }] }))
   const nightly = { pid: 7100, ppid: 1, uid: 1000, startedAt: 1, exe: '/home/u/.local/bin/claude-nightly', argv: ['claude-nightly'], env: new Map() }
   const arch = { os: 'none', unit, createRedirector: async () => ({ scan: () => [nightly] }) }
   const parts = await loadParts({ env: { HOME: home }, agentList: readAgentList({ home, fs }).entries, arch, harnesses: [cc] })
@@ -423,7 +423,7 @@ test('R21 the plan reads agents.json: a running agent of a custom name (claude-n
   assert.match(io.text(), /7100/, 'the custom name is claude-code\'s, as the daemon will judge it: its pid is on the restart list')
 })
 
-// R13 (1.6 V65, D48): the list file belongs to the user — `on`, a second `on`, and `off` leave ~/.asight/agents.json byte for byte and untouched (mtime), whether it
+// R13 (1.6 V65, D48): the list file belongs to the user — `on`, a second `on`, and `off` leave ~/.trocar/agents.json byte for byte and untouched (mtime), whether it
 // reads cleanly (a custom item, an ignore, a bad item) or does not parse at all.
 test('R13 V65 on, on again and off leave agents.json byte for byte unchanged (a valid list with a bad item, and one that is not JSON)', async () => {
   const { installedHome } = await import('../off/fixtures/off-ctx.mjs')
@@ -432,8 +432,8 @@ test('R13 V65 on, on again and off leave agents.json byte for byte unchanged (a 
     invalid: '{ "version": 1, "agents": [ not json\n',
   }
   for (const [label, text] of Object.entries(docs)) {
-    const file = (home) => path.join(home, '.asight', 'agents.json')
-    const s = await installedHome({ seed: (home) => { fs.mkdirSync(path.join(home, '.asight'), { recursive: true }); fs.writeFileSync(file(home), text); fs.utimesSync(file(home), 1_700_000_000, 1_700_000_000) } })
+    const file = (home) => path.join(home, '.trocar', 'agents.json')
+    const s = await installedHome({ seed: (home) => { fs.mkdirSync(path.join(home, '.trocar'), { recursive: true }); fs.writeFileSync(file(home), text); fs.utimesSync(file(home), 1_700_000_000, 1_700_000_000) } })
     const same = (step) => {
       assert.equal(fs.readFileSync(file(s.home), 'utf8'), text, `${label}: ${step} left the bytes`)
       assert.equal(fs.statSync(file(s.home)).mtimeMs, 1_700_000_000_000, `${label}: ${step} did not write the file`)
@@ -449,7 +449,7 @@ test('R13 V65 on, on again and off leave agents.json byte for byte unchanged (a 
 test('V72 (1.6 §2, D57): `on --opt-in <any value>`, `--opt-in=<x>` and the old `--proxy` are plain unknown options now — exit 2, HOME byte for byte unchanged, zero OS tools, zero daemon calls, on every platform', async () => {
   const shapes = [['--opt-in', 'kimi-code.cli'], ['--opt-in=codex.machine'], ['codex', '--opt-in', 'a,b', '--yes'], ['--yes', '--opt-in='], ['--opt-in'], ['--proxy', 'http://127.0.0.1:8899'], ['--proxy=http://127.0.0.1:8899']]
   for (const platform of ['linux', 'darwin', 'win32']) for (const argv of shapes) {
-    const home = tmpDir('asight-v72-')
+    const home = tmpDir('trocar-v72-')
     seedClaude(home)
     const before = snapshot(home)
     const exec = recordingExec(), daemon = fakeDaemon(), io = fakeIo()
@@ -459,7 +459,7 @@ test('V72 (1.6 §2, D57): `on --opt-in <any value>`, `--opt-in=<x>` and the old 
     const exit = await runOnCli(argv, { ...ctx, platform })
     const label = `${platform} ${argv.join(' ')}`
     assert.equal(exit, 2, `${label}: ${io.text()}`)
-    assert.match(io.stderrText(), /^asight on: unknown option '--(opt-in|proxy)'\n/, label)
+    assert.match(io.stderrText(), /^trocar on: unknown option '--(opt-in|proxy)'\n/, label)
     assert.deepEqual(snapshot(home), before, `${label}: HOME byte for byte unchanged`)
     assert.deepEqual(exec.calls, [], `${label}: no OS tool`)
     assert.deepEqual(daemon.calls, [], `${label}: no daemon request`)

@@ -1,5 +1,5 @@
 // turnOnModel (RFC 4.11 §1 on, §3 ① ⑪; 1.6 §1.1; plan T20): no install record → cert-not-installed; CM28 / precondition ⑪ refuses only the harness
-// whose install items are gone or changed, with `asight install` (a Kimi-only machine: install placed the wrapper, on makes only the switch
+// whose install items are gone or changed, with `trocar install` (a Kimi-only machine: install placed the wrapper, on makes only the switch
 // file, exit 0); and the REAL seam: turnOnModel ↔ the daemon's POST /on over a real socket at the endpoint controlEndpointFor resolves for a tmp HOME
 // (control.json, as the darwin daemon writes it), a real startControlServer answering with stub doors — no request and no socket path injected.
 import { test } from 'node:test'
@@ -47,7 +47,7 @@ test('1.6 §1.1: on without an install record refuses with cert-not-installed, e
   const w = await modelWorld({ commands: ['codex'] })
   const r = await on(w)
   assert.deepEqual([r.code, r.exit], ['cert-not-installed', 1])
-  assert.equal(fs.existsSync(path.join(w.home, '.asight')), false)
+  assert.equal(fs.existsSync(path.join(w.home, '.trocar')), false)
 })
 
 test('e2e: a Kimi-only machine — install placed the wrapper; on asks the daemon over its real socket, makes only the switch file with the door, exit 0', async () => {
@@ -71,13 +71,13 @@ const DRIFTS = {
   'the wrapper replaced by the installer': (w) => fs.writeFileSync(w.kimi, Buffer.concat([MACHO, Buffer.from('new release')])),
 }
 for (const [name, drift] of Object.entries(DRIFTS)) {
-  test(`CM28 · ⑪: ${name} → only kimi-code is refused, with asight install; codex and deepseek-dsh are turned on`, async () => {
+  test(`CM28 · ⑪: ${name} → only kimi-code is refused, with trocar install; codex and deepseek-dsh are turned on`, async () => {
     const w = await installed()
     drift(w)
     const d = await daemon(w)
     try {
       const r = await on(w)
-      assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.command]), [['kimi-code', 'setup-needed', 'asight install']])
+      assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.command]), [['kimi-code', 'setup-needed', 'trocar install']])
       assert.ok(r.on.includes('deepseek-dsh') && r.on.includes('codex') && !r.on.includes('kimi-code'))
       assert.equal(fs.existsSync(path.join(w.dir, 'switch', 'kimi-code')), false)
       assert.ok(fs.existsSync(path.join(w.dir, 'switch', 'deepseek-dsh')))
@@ -86,7 +86,7 @@ for (const [name, drift] of Object.entries(DRIFTS)) {
   })
 }
 
-test('CM28 · ⑪ · 4.11 P4b: a harness installed after asight whose forms the root carries (present, install never saw it) needs no setup and is turned on', async () => {
+test('CM28 · ⑪ · 4.11 P4b: a harness installed after trocar whose forms the root carries (present, install never saw it) needs no setup and is turned on', async () => {
   const w = await installed()
   fs.mkdirSync(path.join(w.home, '.hermes'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.hermes', '.env'), '')
   const d = await daemon(w)
@@ -100,7 +100,7 @@ test('CM28 · ⑪ · 4.11 P4b: a harness installed after asight whose forms the 
 
 // the review of T20, item 2: precondition ⑪ is not vacuous when install's record went too — install keeps what it placed per harness (install.items), so
 // an item gone from the manifest (with its file or without it) refuses that harness, setup-needed, like one gone from disk. Generated over every item install placed.
-test('CM28 · ⑪: every item install placed, its record dropped from the manifest (file kept, or file gone too) → only its harness is refused, setup-needed, asight install', async () => {
+test('CM28 · ⑪: every item install placed, its record dropped from the manifest (file kept, or file gone too) → only its harness is refused, setup-needed, trocar install', async () => {
   const w0 = await installed()
   const m0 = JSON.parse(fs.readFileSync(path.join(w0.dir, 'install-manifest.json'), 'utf8'))
   const placed = Object.entries(m0.install.items).flatMap(([h, xs]) => xs.map((x, i) => ({ h, i })))
@@ -119,7 +119,7 @@ test('CM28 · ⑪: every item install placed, its record dropped from the manife
         const r = await on(w)
         // P4b: a form no longer on this machine is not counted (the file was its only `present` place): nothing to set up, so not refused
         const present = w.harnesses.find((d) => d.name === h).proxyMode.forms.some((f) => f.os.includes('darwin') && isPresent(f, w.ctx))
-        assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.command]), present ? [[h, 'setup-needed', 'asight install']] : [], `${h} ${p.kind} ${p.path} (file too: ${fileToo})`)
+        assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.command]), present ? [[h, 'setup-needed', 'trocar install']] : [], `${h} ${p.kind} ${p.path} (file too: ${fileToo})`)
         assert.ok(present ? !r.on.includes(h) && r.on.length > 0 : r.on.length > 0)
       } finally { await d.close() }
     }
@@ -129,7 +129,7 @@ test('CM28 · ⑪: every item install placed, its record dropped from the manife
 // the review of T20, item 3: an install whose root store was declined or left pending still has a root — on goes on for every harness, says what is pending
 // with the command, exit 1 (1.6 §1.1: refuse only with no usable root or no install record); the daemon may start on it
 for (const answer of ['declined', 'pending']) {
-  test(`1.6 §1.1: install with the root store ${answer} → on turns every installed harness on, notes install-pending with asight install, exit 1`, async () => {
+  test(`1.6 §1.1: install with the root store ${answer} → on turns every installed harness on, notes install-pending with trocar install, exit 1`, async () => {
     const w = await modelWorld({ commands: ['codex', 'dsh'] })
     fs.mkdirSync(path.join(w.home, '.dsh'), { recursive: true })
     w.store.answer = answer
@@ -142,7 +142,7 @@ for (const answer of ['declined', 'pending']) {
     try {
       const r = await on(w)
       assert.deepEqual([r.code, r.refused, r.on], [undefined, [], m.install.harnesses])
-      assert.deepEqual(r.notes.filter((n) => n.code === 'install-pending').map((n) => [n.item, n.state, n.command]), [['root-store', answer, 'asight install']])
+      assert.deepEqual(r.notes.filter((n) => n.code === 'install-pending').map((n) => [n.item, n.state, n.command]), [['root-store', answer, 'trocar install']])
       assert.equal(r.exit, 1)
       assert.ok(fs.existsSync(path.join(w.dir, 'switch', 'deepseek-dsh')), 'routed all the same')
     } finally { await d.close() }

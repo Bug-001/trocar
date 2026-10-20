@@ -9,7 +9,7 @@
 // local-end filter (and the engine's own pid is excluded beside that, belt and braces). Rows with pid 0 are left out (Windows gives a TIME_WAIT row no
 // owner, it is the end of a connection and no process is connecting).
 //
-// A wrong pid must never happen (4.8 W4): it would make the engine decrypt a process that does not trust asight's CA and break it, so no row, several rows
+// A wrong pid must never happen (4.8 W4): it would make the engine decrypt a process that does not trust trocar's CA and break it, so no row, several rows
 // (the pid was reused mid-query, or a twin of the socket), a slow table or an unreadable one all give null, and the connection is judged untracked and
 // spliced. There is no candidates set, no `known` table, no debounce and no demand poll (that machinery went with the kernel): the peer process is alive
 // by definition — it just connected — so one query per connection is the whole cost. `budgetMs` stays generous (250 ms): a table that is not back inside

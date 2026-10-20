@@ -1,4 +1,4 @@
-// lock.mjs (src/off) — the one lock of the commands that change state (RFC 1.6 R12): ~/.asight/collector/op.lock, written O_EXCL as
+// lock.mjs (src/off) — the one lock of the commands that change state (RFC 1.6 R12): ~/.trocar/collector/op.lock, written O_EXCL as
 // `{pid, start_time, boot_id}` (start_time and boot_id are what src/off/proc.mjs procIdentity reads; null where /proc is not there). Only one
 // of `on` / `off` / `uninstall` runs at a time. A lock whose pid is dead, or is another process now (its start time or the boot differs), is
 // stale: it is taken over, never waited for. `off` has priority: when the lock is held its `offFirst` runs once, before the wait — it writes
@@ -87,7 +87,7 @@ export async function acquireOpLock({ file, identity = procIdentity, alive = pid
     if (offFirst && !asked) { asked = true; await offFirst(got.holder) }
     if (now() >= end) {
       const who = got.holder ? `pid ${got.holder.pid}` : 'another process'
-      throw Object.assign(new Error(`another asight command (${who}) holds ${file}; wait for it to finish, or look at what it is (a stale lock of a dead process is taken over by itself)`), { code: LOCK_BUSY, holder: got.holder })
+      throw Object.assign(new Error(`another trocar command (${who}) holds ${file}; wait for it to finish, or look at what it is (a stale lock of a dead process is taken over by itself)`), { code: LOCK_BUSY, holder: got.holder })
     }
     await sleep(Math.max(1, Math.min(LOCK_POLL_MS, end - now())))
   }

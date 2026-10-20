@@ -40,7 +40,7 @@ for (const os of OSES) {
           assert.equal(x.proxy.upstream.code, source === 'unknown' ? 'prior-proxy-unknown' : undefined)
         }
       }
-      const { home, m } = world(desc, { prior: `http://${desc.name}:${'ab'.repeat(16)}@127.0.0.1:17990` }) // the prior is an asight door: skipped
+      const { home, m } = world(desc, { prior: `http://${desc.name}:${'ab'.repeat(16)}@127.0.0.1:17990` }) // the prior is an trocar door: skipped
       const out = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors: {} }, root: ROOT_OK, systemProxy: null, ctx: ctxOf(os, home) })
       for (const x of out[desc.name]) assert.deepEqual([x.proxy.upstream.source, x.proxy.door_up, x.proxy.connected], ['direct', false, false])
     })
@@ -58,15 +58,15 @@ for (const os of OSES) {
     test(`1.6 §9.4 ${os} ${desc.name}: the certificate per form — its carrier, in effect, or the code and command the user acts on`, async () => {
       const { home, m, doors } = world(desc)
       const ok = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors }, root: ROOT_OK, ctx: ctxOf(os, home) })
-      const pending = { state: 'pending', code: 'cert-root-pending', command: 'asight install' }
-      const drift = () => ({ reason: 'entry-changed', path: '/x', command: 'asight install' })
+      const pending = { state: 'pending', code: 'cert-root-pending', command: 'trocar install' }
+      const drift = () => ({ reason: 'entry-changed', path: '/x', command: 'trocar install' })
       const bad = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors }, root: pending, ctx: ctxOf(os, home), drift })
       ok[desc.name].forEach((x, i) => {
         assert.ok(['root', 'config-key', 'wrapper', 'plugin'].includes(x.certificate.carrier), `${x.id}: carrier`)
         assert.deepEqual([x.certificate.in_effect, x.certificate.code, x.certificate.command], [true, null, null])
         assert.match(x.certificate.since, /^2026-10-15T09:00:0[01]/)
         const y = bad[desc.name][i]
-        assert.deepEqual([y.certificate.in_effect, y.certificate.code, y.certificate.command], [false, x.certificate.carrier === 'root' ? 'cert-root-pending' : 'entry-changed', 'asight install'])
+        assert.deepEqual([y.certificate.in_effect, y.certificate.code, y.certificate.command], [false, x.certificate.carrier === 'root' ? 'cert-root-pending' : 'entry-changed', 'trocar install'])
         assert.equal(y.hook, ['wrapper', 'plugin'].includes(x.certificate.carrier) ? 'entry-changed' : null, 'a hook carrier that drifted takes the form off the path (row 31)')
         assert.deepEqual(y.proxy, x.proxy, 'the two axes do not touch (D55①)')
       })

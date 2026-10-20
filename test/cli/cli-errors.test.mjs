@@ -36,7 +36,7 @@ test('§1.3: a command that throws is exit 70 — one line and how to report it,
   assert.equal(await runCli(['status'], plain), 70)
   assert.equal(plain.io.stdoutText(), '')
   const lines = plain.io.stderrText().trim().split('\n')
-  assert.equal(lines[0], 'asight: internal error: a bug of mine')
+  assert.equal(lines[0], 'trocar: internal error: a bug of mine')
   assert.match(lines[1], /report/); assert.equal(lines.length, 2, 'no stack on a person\'s screen')
   const json = spying([]); json.deps = { commands: { status: boom } }
   assert.equal(await runCli(['status', '--json'], json), 70)

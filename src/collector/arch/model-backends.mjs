@@ -9,8 +9,8 @@ import { redactProxyUrl } from '../../netenv/redact.mjs'
 import { recordDrift } from '../../netenv/adopt.mjs'
 export { MODEL_OS, isModelOs } from '../model-install.mjs' // the one list of the OSes the model runs on
 
-/** The installed signing helper the darwin custody runs (4.11 P1): under ~/.asight/bin, beside asight-off. */
-export const signHelperPath = (home, name) => path.join(home, '.asight', 'bin', name)
+/** The installed signing helper the darwin custody runs (4.11 P1): under ~/.trocar/bin, beside trocar-off. */
+export const signHelperPath = (home, name) => path.join(home, '.trocar', 'bin', name)
 
 /** `which(command)` over the user's PATH (the install env): the first <dir>/<command><suffix> that exists, or null. */
 export function whichIn(env, { os, exists = nodeFs.existsSync } = {}) {
@@ -39,7 +39,7 @@ export function sourcesCtx({ os, home, env = process.env, cwd = process.cwd(), d
 }
 
 /** The harnesses with a form of this OS present on this machine (4.11 `present`, over the sources ctx with the platform's dirs): with no names,
- *  `status` lists them beside the ones asight's own records know (1.6 §3.5). Reads only. */
+ *  `status` lists them beside the ones trocar's own records know (1.6 §3.5). Reads only. */
 export async function presentHarnesses({ os, home, env = process.env, harnesses, fs = nodeFs }) {
   const [{ dirsOf }, { isPresent }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../core/proxymode/sources.mjs')])
   const ctx = sourcesCtx({ os, home, env, dirs: dirsOf(home, env), fs })
@@ -63,7 +63,7 @@ export async function backendsFor({ os, home, run = null, env = process.env, fs 
       import('./win32/custody.mjs'), import('./win32/root-store.mjs'), import('./win32/wrapper.mjs'), import('./win32/policy.mjs')])
     return {
       custody: cngCustody({ run, env }), rootStore: userRootStore({ home, run, env, fs }), installHelper: null,
-      wrapperKit: { renderWrapper, compile: makeCompile({ dir: path.join(home, '.asight', 'collector'), run, fs }) },
+      wrapperKit: { renderWrapper, compile: makeCompile({ dir: path.join(home, '.trocar', 'collector'), run, fs }) },
       facts: pol.platformFacts({ run, env }), dirs: pol.dirsOf(home, env), policy: pol.policyReader({ run, env }),
     }
   }
@@ -140,13 +140,13 @@ export async function modelNetForms({ os, home, env = process.env, status, setti
   const [{ readManifest }, { modelFormFacts, netFormsOf, setupOf }, { collectorHome }] = await Promise.all([
     import('../core/trust/journal.mjs'), import('../core/proxymode/status-facts.mjs'), import('../../paths.mjs')])
   let m = null, unread = null
-  try { m = readManifest(collectorHome(path.join(home, '.asight')), fs) } catch (e) { if (e && e.code === 'ESANDBOX') throw e; unread = { error: String((e && e.message) || e) } } // unreadable: no installed harness to draw, setup unknown
+  try { m = readManifest(collectorHome(path.join(home, '.trocar')), fs) } catch (e) { if (e && e.code === 'ESANDBOX') throw e; unread = { error: String((e && e.message) || e) } } // unreadable: no installed harness to draw, setup unknown
   const ctx = sourcesCtx({ os, home, env, dirs, fs })
   const root = status.cert && status.cert.root
   // 4.11 P4b: each harness's setup, the one judgement `on`'s precondition ⑪ makes too (with status's root); the forms' certificate codes read it as before
   const setup = Object.fromEntries(harnesses.filter((d) => d.proxyMode).map((d) => [d.name, setupOf(d, { os, manifest: unread || m, ctx, root, fs })]))
   const DRIFT = { 'carrier-absent': 'entry-missing', 'carrier-overwritten': 'entry-changed' }
-  const drift = (h) => { const s = setup[h]; if (!s || s.state === 'ready') return null; const x = s.missing.find((y) => y.form); return s.state === 'unknown' ? { reason: null, command: 'asight install' } : x ? { reason: DRIFT[x.what], command: 'asight install' } : null }
+  const drift = (h) => { const s = setup[h]; if (!s || s.state === 'ready') return null; const x = s.missing.find((y) => y.form); return s.state === 'unknown' ? { reason: null, command: 'trocar install' } : x ? { reason: DRIFT[x.what], command: 'trocar install' } : null }
   const model = await modelFormFacts({ harnesses, os, manifest: m, reply: status.daemon && status.daemon.reply, root, systemProxy: chainSp, ctx, fs, drift })
   return { ...netFormsOf({ model, status, procs, systemProxy, settings }), setup }
 }

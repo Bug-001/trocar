@@ -16,7 +16,7 @@ import { newManifest, applyJsonKey, applyTextEntry, saveManifest as saveCoreMani
 import { tmpDir } from '../helpers/tmp.mjs'
 
 // ── the fakes: reg and schtasks as recording runners ──────────────────────────────────────────────────────────────────────────
-const OURS = 'conhost.exe --headless "C:\\Program Files\\nodejs\\node.exe" "C:\\x\\asight.mjs" daemon --supervise'
+const OURS = 'conhost.exe --headless "C:\\Program Files\\nodejs\\node.exe" "C:\\x\\trocar.mjs" daemon --supervise'
 /** reg: the Run value starts as `value` ('ours' | 'theirs:<text>' | 'gone'); every call is recorded; `breakOn` a substring that makes the tool die. */
 function reg({ value = 'ours', breakOn = null } = {}) {
   const calls = []
@@ -56,8 +56,8 @@ test('the kinds are known, the file rule takes proxy-entry and trust-entry, and 
   for (const k of ['run-key', 'scheduled-task', 'forwarder-binary', 'proxy-entry', 'trust-entry']) assert.ok(undoByHand({ kind: k, path: 'C:/x' }), `${k} says what to do by hand`)
 })
 
-test('a run-key entry: ours is deleted, ours over a prior restores it, a value that is not ours is left (and the entry is done — asight has nothing there), an absent one is already as asked, a dead reg says so and stays', async () => {
-  const dir = tmpDir('asight-w32-rk-')
+test('a run-key entry: ours is deleted, ours over a prior restores it, a value that is not ours is left (and the entry is done — trocar has nothing there), an absent one is already as asked, a dead reg says so and stays', async () => {
+  const dir = tmpDir('trocar-w32-rk-')
   const entry = (prior = null) => ({ phase: 'on', kind: 'run-key', harness: 'claude-code', hive: RUN_KEY.hive, key: RUN_KEY.key, name: RUN_KEY.name, value: OURS, prior, installed_at: '2026-10-09T00:00:00Z' })
   const run = async (e, tools) => {
     const m = { version: 3, entries: [e], files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [] }
@@ -73,7 +73,7 @@ test('a run-key entry: ours is deleted, ours over a prior restores it, a value t
   assert.ok(rg.calls.some((c) => c.startsWith('reg add') && c.includes(prior.value) && c.includes('/t REG_SZ')), 'with its kind')
   r = await run(entry(), [reg({ value: 'theirs:C:\\my\\own.exe at login' })])
   assert.equal(r.out.results[0].result, 'left-user-value', 'a value the user set: left as is')
-  assert.equal(r.m.entries.length, 0, 'and done: nothing of asight\'s is there')
+  assert.equal(r.m.entries.length, 0, 'and done: nothing of trocar\'s is there')
   r = await run(entry(), [reg({ value: 'gone' })])
   assert.equal(r.out.results[0].result, 'already-restored', 'absent: already as asked')
   r = await run(entry(), [reg({ breakOn: 'query' })])
@@ -82,7 +82,7 @@ test('a run-key entry: ours is deleted, ours over a prior restores it, a value t
 })
 
 test('a scheduled-task entry: off disables the task, uninstall deletes it, an absent one is already as asked, a query that cannot tell changes nothing on a guess', async () => {
-  const dir = tmpDir('asight-w32-task-')
+  const dir = tmpDir('trocar-w32-task-')
   const entry = { phase: 'on', kind: 'scheduled-task', harness: 'claude-code', task: TASK_NAME, installed_at: '2026-10-09T00:00:00Z' }
   const run = async (dropCa, tools) => {
     const m = { version: 3, entries: [entry], files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [] }
@@ -91,11 +91,11 @@ test('a scheduled-task entry: off disables the task, uninstall deletes it, an ab
   const st = schtasks()
   let r = await run(false, [st, reg()])
   assert.deepEqual(r.out.results.map((x) => x.result), ['restored'])
-  assert.deepEqual(st.calls.filter((c) => c.startsWith('schtasks')), ['schtasks /Query /TN \\asight\\collector', 'schtasks /Change /TN \\asight\\collector /DISABLE'], 'an off disables; the Run value goes with it')
+  assert.deepEqual(st.calls.filter((c) => c.startsWith('schtasks')), ['schtasks /Query /TN \\trocar\\collector', 'schtasks /Change /TN \\trocar\\collector /DISABLE'], 'an off disables; the Run value goes with it')
   assert.equal(r.m.entries.length, 0)
   const del = schtasks()
   r = await run(true, [del, reg()])
-  assert.deepEqual(del.calls.filter((c) => c.startsWith('schtasks')), ['schtasks /Query /TN \\asight\\collector', 'schtasks /Delete /TN \\asight\\collector /F'], 'an uninstall deletes')
+  assert.deepEqual(del.calls.filter((c) => c.startsWith('schtasks')), ['schtasks /Query /TN \\trocar\\collector', 'schtasks /Delete /TN \\trocar\\collector /F'], 'an uninstall deletes')
   r = await run(false, [schtasks({ state: 'absent' }), reg({ value: 'gone' })])
   assert.equal(r.out.results[0].result, 'already-restored', 'neither the task nor the Run value is there')
   r = await run(false, [schtasks({ state: 'unknown' }), reg()])
@@ -105,8 +105,8 @@ test('a scheduled-task entry: off disables the task, uninstall deletes it, an ab
 })
 
 test('a forwarder-binary entry: an off keeps it (draining) and the entry STAYS for the uninstall; the uninstall removes the file, and one Windows holds is reported, not papered over', async () => {
-  const dir = tmpDir('asight-w32-kernel-')
-  const exe = path.join(dir, 'kernel', 'asight-forwarder.exe')
+  const dir = tmpDir('trocar-w32-kernel-')
+  const exe = path.join(dir, 'kernel', 'trocar-forwarder.exe')
   fs.mkdirSync(path.dirname(exe), { recursive: true })
   fs.writeFileSync(exe, 'the kernel')
   const entry = { phase: 'on', kind: 'forwarder-binary', harness: 'claude-code', path: exe, sha256: 'x', installed_at: '2026-10-09T00:00:00Z' }
@@ -129,12 +129,12 @@ test('a forwarder-binary entry: an off keeps it (draining) and the entry STAYS f
   const m = { version: 3, entries: [entry], files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [] }
   const out = await undoHarnesses({ dir, home: dir, manifest: m, ids: null, procs: async () => [], now: new Date(), dropCa: true, fs: broken, exec: execOf(reg(), schtasks({ state: 'absent' })), env: {} })
   assert.equal(out.results[0].result, 'error')
-  assert.ok(out.results[0].reason.includes('EBUSY') || out.results[0].reason.includes('asight off --now'), 'a kernel Windows holds is said, with the way out')
+  assert.ok(out.results[0].reason.includes('EBUSY') || out.results[0].reason.includes('trocar off --now'), 'a kernel Windows holds is said, with the way out')
 })
 
 test('the round trip (audit F3): an off over a manifest of every collector kind returns each file to its pre_sha256, takes the Run value and the task out, keeps only the draining kernel copy, and exits 0', async () => {
-  const home = tmpDir('asight-w32-round-')
-  const dir = path.join(home, '.asight', 'collector')
+  const home = tmpDir('trocar-w32-round-')
+  const dir = path.join(home, '.trocar', 'collector')
   fs.mkdirSync(dir, { recursive: true })
   // two real files, written through the REAL journal writers (the same ones the win32 entries module uses), then relabelled
   // proxy-entry / trust-entry: what the flip's on will write, undone by the file rule either way
@@ -150,7 +150,7 @@ test('the round trip (audit F3): an off over a manifest of every collector kind 
   assert.equal(m.entries.length, 2, 'the writers ledgered the two files')
   m.entries[0].kind = 'proxy-entry'
   m.entries[1].kind = 'trust-entry'
-  const exe = path.join(dir, 'kernel', 'asight-forwarder.exe')
+  const exe = path.join(dir, 'kernel', 'trocar-forwarder.exe')
   fs.mkdirSync(path.dirname(exe), { recursive: true })
   fs.writeFileSync(exe, 'the kernel')
   m.entries.push(
@@ -160,7 +160,7 @@ test('the round trip (audit F3): an off over a manifest of every collector kind 
   )
   saveCoreManifest(dir, m)
   const rg = reg(), st = schtasks()
-  const { receipt, exit } = await runOff({ home, env: { ASIGHT_TEST_SANDBOX: '1' }, ids: null, yes: true, deps: {
+  const { receipt, exit } = await runOff({ home, env: { TROCAR_TEST_SANDBOX: '1' }, ids: null, yes: true, deps: {
     platform: 'win32',
     exec: execOf(rg, st),
     procs: async () => [],

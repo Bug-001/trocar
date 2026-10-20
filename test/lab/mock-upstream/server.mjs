@@ -31,7 +31,7 @@ const ROUTES = [
   { re: /\/models$/, methods: ['GET'], kind: 'models' },
   // non-LLM aux pair (D40: the collector stores these verbatim like any LLM call): a status probe and
   // a telemetry sink. No session identity, never a marker/script step, answer a pure function of the bytes.
-  { re: /^\/nonllm\/status$/, methods: ['HEAD', 'GET'], kind: 'aux', aux: () => jsonReply(200, { ok: true, service: 'asight-mock-upstream' }) },
+  { re: /^\/nonllm\/status$/, methods: ['HEAD', 'GET'], kind: 'aux', aux: () => jsonReply(200, { ok: true, service: 'trocar-mock-upstream' }) },
   { re: /^\/nonllm\/telemetry$/, methods: ['POST'], kind: 'aux', aux: (req) => jsonReply(202, { accepted: true, bytes: req.body.length }) },
 ]
 
@@ -39,7 +39,7 @@ const ROUTES = [
 const MODEL_IDS = ['mock-model', 'claude-sonnet-4-5', 'claude-haiku-4-5', 'gpt-5', 'gpt-5-codex', 'deepseek-chat']
 const MODELS = {
   object: 'list', has_more: false, first_id: MODEL_IDS[0], last_id: MODEL_IDS.at(-1),
-  data: MODEL_IDS.map((id) => ({ type: 'model', object: 'model', id, display_name: id, created_at: '2025-01-01T00:00:00Z', created: 1735689600, owned_by: 'asight-mock' })),
+  data: MODEL_IDS.map((id) => ({ type: 'model', object: 'model', id, display_name: id, created_at: '2025-01-01T00:00:00Z', created: 1735689600, owned_by: 'trocar-mock' })),
 }
 
 const parseJson = (buf) => { try { const v = JSON.parse(buf.toString('utf8')); return v && typeof v === 'object' ? v : {} } catch { return {} } }

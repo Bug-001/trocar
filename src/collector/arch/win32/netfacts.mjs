@@ -4,7 +4,7 @@
 // proxy, the unknowns, and the per-form half (each form's certificate and proxy, the doors as `forwarder.forms`) from the collector model's one OS-neutral
 // reader (core/proxymode/status-facts.mjs through model-backends.mjs modelNetForms).
 //
-//   · the processes: the helper's `ps` rows judged by the name list (D51: the presets plus ~/.asight/agents.json), the host-tree rule first (core/host-agent.mjs,
+//   · the processes: the helper's `ps` rows judged by the name list (D51: the presets plus ~/.trocar/agents.json), the host-tree rule first (core/host-agent.mjs,
 //     a form's hosts.processes), each with the elevated verdict of `elevationOf` (integrity ≥ High, or a token that will not open — the latter marked inferred);
 //   · the listeners: the helper's `tcp-table` LISTEN rows with their owner pid named by the snapshot;
 //   · the OS proxy: Internet Settings through upstream.mjs's readSystemProxy (the reader the door's upstream rule uses).
@@ -38,7 +38,7 @@ function processName(row) {
 
 export async function gatherWin32Facts(ctx, deps = {}) {
   const { status, harnesses = [], env = process.env, home = env.USERPROFILE || null } = ctx
-  if (!home) throw new TypeError('gatherWin32Facts needs the user\'s home (%USERPROFILE%): the name list (~/.asight/agents.json) is read there')
+  if (!home) throw new TypeError('gatherWin32Facts needs the user\'s home (%USERPROFILE%): the name list (~/.trocar/agents.json) is read there')
   const D = { ...(ctx.deps || {}), ...deps }
   const fs = D.fs || nodeFs
   const unknowns = []

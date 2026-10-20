@@ -16,13 +16,13 @@ import { takeRefusals } from './no-real-os.mjs'
 const { REAL_TOOLS, realToolsIn } = createRequire(import.meta.url)('./no-real-os.cjs')
 const GUARD = fileURLToPath(new URL('./no-real-os.cjs', import.meta.url))
 const HELPER = fileURLToPath(new URL('./no-real-os.mjs', import.meta.url))
-const NOOP = '--asight-test-noop'
-const TOOLS = ['launchctl', 'systemctl', 'security', 'certutil', 'loginctl', 'asight-sign-helper', 'procenv', 'plutil', 'reg', 'reg.exe', 'powershell.exe', 'csc.exe']
+const NOOP = '--trocar-test-noop'
+const TOOLS = ['launchctl', 'systemctl', 'security', 'certutil', 'loginctl', 'trocar-sign-helper', 'procenv', 'plutil', 'reg', 'reg.exe', 'powershell.exe', 'csc.exe']
 const stub = (dir, name, body) => fs.writeFileSync(path.join(dir, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
 
 test('no-real-os: the preload is on and the guard names the tools of 0.1 §3, the macOS native pieces and the Windows ones (reg, powershell.exe, csc.exe)', () => {
-  assert.equal(process.env.ASIGHT_TEST_SANDBOX, '1')
-  assert.ok(process.env.ASIGHT_MIHOMO_SOCK.startsWith(fs.realpathSync(os.tmpdir()) + path.sep), 'the VPN core\'s socket is pinned inside the temp dir: a child `asight status` never asks the developer\'s own mihomo')
+  assert.equal(process.env.TROCAR_TEST_SANDBOX, '1')
+  assert.ok(process.env.TROCAR_MIHOMO_SOCK.startsWith(fs.realpathSync(os.tmpdir()) + path.sep), 'the VPN core\'s socket is pinned inside the temp dir: a child `trocar status` never asks the developer\'s own mihomo')
   assert.deepEqual([...REAL_TOOLS].sort(), [...TOOLS].sort())
   assert.deepEqual(takeRefusals(), [])
 })
@@ -54,7 +54,7 @@ test('no-real-os: every way node:child_process runs a command refuses each guard
 
 test('no-real-os: the committed macOS native binaries are refused by their real paths (the helper would write the login keychain)', () => {
   const native = fileURLToPath(new URL('../../src/collector/arch/darwin/native/', import.meta.url))
-  for (const name of ['asight-sign-helper', 'procenv']) {
+  for (const name of ['trocar-sign-helper', 'procenv']) {
     assert.ok(fs.existsSync(path.join(native, name)), `${name} is committed`)
     assert.throws(() => spawnSync(path.join(native, name), ['exists']), { code: 'ESANDBOX' }, name)
     assert.throws(() => execFileSync('sh', ['-c', `'${path.join(native, name)}' ${NOOP}`]), { code: 'ESANDBOX' }, `${name} behind sh -c`)
@@ -94,7 +94,7 @@ test('no-real-os: which commands count — a tool in command position does, an a
 })
 
 test('no-real-os: a stub inside the temp dir runs, through every wrapper; a stub that is a link to a real binary, or lies outside the temp dir, does not', async () => {
-  const bin = tmpDir('asight-noreal-'); stub(bin, 'launchctl', 'echo stub "$@"')
+  const bin = tmpDir('trocar-noreal-'); stub(bin, 'launchctl', 'echo stub "$@"')
   const env = { ...process.env, PATH: `${bin}:/bin:/usr/bin` }
   assert.equal(spawnSync('launchctl', ['a'], { env, encoding: 'utf8' }).stdout.trim(), 'stub a')
   assert.equal(execFileSync('launchctl', ['b'], { env, encoding: 'utf8' }).trim(), 'stub b')
@@ -103,14 +103,14 @@ test('no-real-os: a stub inside the temp dir runs, through every wrapper; a stub
   assert.equal((await promisify(execFile)('launchctl', ['e'], { env })).stdout.trim(), 'stub e')
   assert.deepEqual(takeRefusals(), [], 'a stub of the test\'s own is not a refusal')
 
-  const link = tmpDir('asight-noreal-'); fs.symlinkSync('/bin/sh', path.join(link, 'launchctl'))
+  const link = tmpDir('trocar-noreal-'); fs.symlinkSync('/bin/sh', path.join(link, 'launchctl'))
   assert.throws(() => spawnSync('launchctl', ['-c', 'true'], { env: { ...process.env, PATH: link } }), { code: 'ESANDBOX' })
-  const outside = fs.mkdtempSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'asight-notmp-')) // beside this file: not under os.tmpdir()
+  const outside = fs.mkdtempSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'trocar-notmp-')) // beside this file: not under os.tmpdir()
   try {
     stub(outside, 'systemctl', 'echo ran')
     assert.throws(() => spawnSync('systemctl', [], { env: { ...process.env, PATH: outside } }), { code: 'ESANDBOX' })
   } finally { fs.rmSync(outside, { recursive: true, force: true }) }
-  assert.throws(() => spawnSync('security', [NOOP], { env: { ...process.env, PATH: tmpDir('asight-noreal-') } }), { code: 'ESANDBOX' }, 'on no PATH at all')
+  assert.throws(() => spawnSync('security', [NOOP], { env: { ...process.env, PATH: tmpDir('trocar-noreal-') } }), { code: 'ESANDBOX' }, 'on no PATH at all')
   assert.equal(takeRefusals().length, 3)
 })
 
@@ -126,7 +126,7 @@ test('no-real-os: everything else still runs (node itself, a shell, a word that 
 const childEnv = { ...process.env }
 delete childEnv.NODE_TEST_CONTEXT; delete childEnv.NODE_OPTIONS
 function runChild(body) {
-  const dir = tmpDir('asight-noreal-')
+  const dir = tmpDir('trocar-noreal-')
   const file = path.join(dir, 'child.mjs')
   fs.writeFileSync(file, `import { execFileSync } from 'node:child_process'\nimport { takeRefusals } from ${JSON.stringify(HELPER)}\n${body}\n`)
   return spawnSync(process.execPath, ['--require', GUARD, file], { env: childEnv, encoding: 'utf8', timeout: 30_000 })
@@ -149,7 +149,7 @@ test('no-real-os: a process that ends with a refusal nobody took exits 1 and nam
 })
 
 test('no-real-os: under node --test a file whose test swallows the refusal fails, though every test in it passed; one that takes it passes', () => {
-  const scratch = tmpDir('asight-noreal-')
+  const scratch = tmpDir('trocar-noreal-')
   const fixture = (name, body) => {
     const file = path.join(scratch, `${name}.test.mjs`)
     fs.writeFileSync(file, `import test from 'node:test'\nimport { execFileSync } from 'node:child_process'\nimport { takeRefusals } from ${JSON.stringify(HELPER)}\n${body}\n`)

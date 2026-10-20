@@ -51,21 +51,21 @@ test('differential: for every process seed and its variants, matchHarness over t
 const installOs = (osName) => (osName === 'darwin' ? 'linux' : osName)
 async function codexBox(asked = 'darwin') {
   const osName = installOs(asked)
-  const home = tmpDir('asight-liveness-identity-')
+  const home = tmpDir('trocar-liveness-identity-')
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true })
   fs.writeFileSync(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-test\n')
-  const dir = path.join(home, '.asight', 'collector')
+  const dir = path.join(home, '.trocar', 'collector')
   const arch = await loadArch(osName)
   const install = () => installCollector({ home, env: { HOME: home }, ids: ['codex'], osName, arch, harnesses: HARNESSES, freePort: async () => 47011, scan: async () => [], roots })
   const sys = fakeSystem()
   const on = async () => { if (!fs.existsSync(manifestFile)) await install() // the Linux plan's on wants install's certificate first (D55⑥)
     const r = await turnOn({ home, env: { HOME: home }, ids: ['codex'], osName, arch, harnesses: HARNESSES, freePort: async () => 47011, roots, confirm: async () => true, unit: null, autostart: false, request: sys.daemon.request, socketPath: path.join(home, 'collector.sock'), sleep: async () => {} }); assert.equal(r.exit, 0, JSON.stringify(r.problems)); return r }
   const manifestFile = path.join(dir, 'install-manifest.json')
-  const agents = (list) => { fs.mkdirSync(path.join(home, '.asight'), { recursive: true }); fs.writeFileSync(path.join(home, '.asight', 'agents.json'), typeof list === 'string' ? list : JSON.stringify({ version: 1, agents: list })) }
-  return { home, dir, arch, install, on, manifestFile, agents, bundle: path.join(dir, 'ca', 'combined-codex.pem'), caFp: () => certBlocks(fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'), 'utf8'))[0].fp }
+  const agents = (list) => { fs.mkdirSync(path.join(home, '.trocar'), { recursive: true }); fs.writeFileSync(path.join(home, '.trocar', 'agents.json'), typeof list === 'string' ? list : JSON.stringify({ version: 1, agents: list })) }
+  return { home, dir, arch, install, on, manifestFile, agents, bundle: path.join(dir, 'ca', 'combined-codex.pem'), caFp: () => certBlocks(fs.readFileSync(path.join(dir, 'ca', 'trocar-ca.pem'), 'utf8'))[0].fp }
 }
 
-test('D54: a second `asight on` with the same inputs leaves the manifest byte for byte (same sha256) and does not write it', async () => {
+test('D54: a second `trocar on` with the same inputs leaves the manifest byte for byte (same sha256) and does not write it', async () => {
   const s = await codexBox()
   await s.on()
   const sha = () => crypto.createHash('sha256').update(fs.readFileSync(s.manifestFile)).digest('hex')
@@ -83,7 +83,7 @@ test('union: a name already in the recorded identity that the list no longer hol
   await s.on()
   const m = readManifest(s.dir)
   assert.equal(matchHarness(m.liveness, { exe: '/x/codex-old', argv: ['codex-old'] }), 'codex', 'the name agents.json held at on is in the snapshot')
-  m.liveness.codex.signature = { match: [{ exe: { re: 'never', flags: '' } }] } // what an older asight left beside it
+  m.liveness.codex.signature = { match: [{ exe: { re: 'never', flags: '' } }] } // what an older trocar left beside it
   saveManifest(s.dir, m)
   s.agents([{ harness: 'codex', name: 'codex-new' }]) // codex-old taken off the list; a codex-old started before may still hold the bundle
   await s.on()
@@ -95,7 +95,7 @@ test('union: a name already in the recorded identity that the list no longer hol
   assert.equal(matchHarness({ codex: l }, { exe: '/x/codex', argv: ['codex', '--codex-run-as-apply-patch'] }), null, 'exclude is the new one, and holds')
 })
 
-test('an old asight-off (OFF_VERSION 9) reads only `signature`: after on rewrites a record it has `identity` and no `signature`, so that copy judges "not known" (D50②: kept, exit 1) — the safe direction', async () => {
+test('an old trocar-off (OFF_VERSION 9) reads only `signature`: after on rewrites a record it has `identity` and no `signature`, so that copy judges "not known" (D50②: kept, exit 1) — the safe direction', async () => {
   const s = await codexBox()
   await s.on()
   const m = readManifest(s.dir)
@@ -146,7 +146,7 @@ const OS = {
 }
 const offWith = (s, osName, exe) => undoHarnesses({ dir: s.dir, home: s.home, phases: PHASES, manifest: readManifest(s.dir), ids: ['codex'], roots, procs: () => listProcs({ uid: 501, platform: osName, exec: exe }) })
 
-test('off counts a name put on agents.json after on: that live process holds the bundle — kept without the asight CA, its pid in the receipt; an unreadable list adds nothing and says so', async () => {
+test('off counts a name put on agents.json after on: that live process holds the bundle — kept without the trocar CA, its pid in the receipt; an unreadable list adds nothing and says so', async () => {
   const s = await codexBox('darwin')
   await s.install()
   s.agents([{ harness: 'codex', name: 'codex-fork' }]) // added after on: the snapshot does not hold it
@@ -156,7 +156,7 @@ test('off counts a name put on agents.json after on: that live process holds the
   const r = await offWith(s, 'darwin', table)
   assert.deepEqual([r.kept_bundles.map((k) => [path.basename(k.path), k.pids, !!k.unjudged]), r.left, r.still_trusting.map((p) => [p.pid, p.harness])], [[['combined-codex.pem', [5353], false]], [], [[5353, 'codex']]], 'the fork is a codex now')
   const left = certBlocks(fs.readFileSync(s.bundle, 'utf8'))
-  assert.ok(left.length > 0 && !left.some((c) => c.fp === caFp), 'the same bundle on disk, without the asight CA')
+  assert.ok(left.length > 0 && !left.some((c) => c.fp === caFp), 'the same bundle on disk, without the trocar CA')
   assert.equal('codex-fork' in JSON.parse(fs.readFileSync(s.manifestFile, 'utf8')).liveness, false)
   assert.ok(!fs.readFileSync(s.manifestFile, 'utf8').includes('codex-fork'), 'the manifest is not changed by the list: off only judges with it')
 
@@ -169,7 +169,7 @@ test('off counts a name put on agents.json after on: that live process holds the
 })
 
 for (const osName of Object.keys(OS)) {
-  test(`${osName}: off keeps combined-codex.pem for a codex that started after on — without the asight CA, its pid named — and removes it once that codex is gone`, async () => {
+  test(`${osName}: off keeps combined-codex.pem for a codex that started after on — without the trocar CA, its pid named — and removes it once that codex is gone`, async () => {
     const s = await codexBox(osName)
     await s.install()
     assert.ok(readManifest(s.dir).liveness.codex.identity, 'on wrote the identity: the name list, compiled')
@@ -178,13 +178,13 @@ for (const osName of Object.keys(OS)) {
     assert.ok(fs.existsSync(s.bundle), `the bundle a running codex re-reads at its next connection is still there (removed: ${r.removed.map((p) => path.basename(p)).join(', ')})`)
     assert.deepEqual(r.kept_bundles.map((k) => [path.basename(k.path), k.pids, !!k.unjudged]), [['combined-codex.pem', [4242], false]], 'kept, and the codex that may hold it is named — its node launcher is not codex')
     const left = certBlocks(fs.readFileSync(s.bundle, 'utf8'))
-    assert.ok(left.length > 0 && !left.some((c) => c.fp === caFp), 'the same bundle without the asight CA')
-    assert.deepEqual([r.left, r.still_trusting.map((p) => [p.pid, p.harness, p.until])], [[], [[4242, 'codex', 'next-connection']]], 'nothing left undone; the receipt says until when it trusts asight')
+    assert.ok(left.length > 0 && !left.some((c) => c.fp === caFp), 'the same bundle without the trocar CA')
+    assert.deepEqual([r.left, r.still_trusting.map((p) => [p.pid, p.harness, p.until])], [[], [[4242, 'codex', 'next-connection']]], 'nothing left undone; the receipt says until when it trusts trocar')
     const again = await offWith(s, osName, OS[osName].table(null, new Date(Date.now() + 60_000)))
     assert.deepEqual([fs.existsSync(s.bundle), again.kept_bundles, again.left], [false, [], []], 'the codex is gone: the next off removes the bundle')
   })
 
-  test(`${osName}: a record with no identity (an older asight's on) is not known — the bundle kept without the CA, an item left, step 5 says it cannot tell — and the next on fills it in`, async () => {
+  test(`${osName}: a record with no identity (an older trocar's on) is not known — the bundle kept without the CA, an item left, step 5 says it cannot tell — and the next on fills it in`, async () => {
     const s = await codexBox(osName)
     const sys = fakeSystem()
     await s.install()
@@ -197,8 +197,8 @@ for (const osName of Object.keys(OS)) {
     const table = OS[osName].table(OS[osName].codex, new Date(Date.now() + 60_000))
     const r = await offWith(s, osName, table)
     assert.deepEqual(r.kept_bundles.map((k) => [path.basename(k.path), k.unjudged, /no process identity for codex/.test(k.error)]), [['combined-codex.pem', true, true]], 'not known is not "nobody": kept')
-    assert.ok(!certBlocks(fs.readFileSync(s.bundle, 'utf8')).some((c) => c.fp === s.caFp()), 'without the asight CA')
-    assert.deepEqual([r.left.map((l) => path.basename(l.path)), r.trust_unknown.map((x) => [x.harness, /no process identity for codex/.test(x.why)]), r.still_trusting], [['combined-codex.pem'], [['codex', true]], []], 'an item left (exit 1); who still trusts asight is said to be unknown, not none, and why')
+    assert.ok(!certBlocks(fs.readFileSync(s.bundle, 'utf8')).some((c) => c.fp === s.caFp()), 'without the trocar CA')
+    assert.deepEqual([r.left.map((l) => path.basename(l.path)), r.trust_unknown.map((x) => [x.harness, /no process identity for codex/.test(x.why)]), r.still_trusting], [['combined-codex.pem'], [['codex', true]], []], 'an item left (exit 1); who still trusts trocar is said to be unknown, not none, and why')
     await s.install() // on Linux off took the certificate items back; on does not write them (D55①)
     assert.equal((await on()).exit, 0)
     assert.deepEqual(readManifest(s.dir).liveness.codex.identity, compiled, 'the next on records the identity')
@@ -214,14 +214,14 @@ const CLAUDE = {
 }
 for (const osName of Object.keys(CLAUDE)) {
   test(`${osName}: an extra trust file is held by a Claude Code process started after on, whose environment the OS never shows — kept without the CA, its pid named, not "not known" (4.6 「判活快照」)`, async () => {
-    const home = tmpDir('asight-liveness-identity-')
+    const home = tmpDir('trocar-liveness-identity-')
     const corp = createCa({ commonName: 'liveness-identity relay CA' })
     fs.writeFileSync(path.join(home, 'relay-ca.pem'), corp.certPem)
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
     fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{\n  "model": "x"\n}\n')
     const env = { HOME: home, USERPROFILE: home, NODE_EXTRA_CA_CERTS: path.join(home, 'relay-ca.pem') } // the user's own CA: Claude Code gets an extra-cc.pem
     await installCollector({ home, env, ids: ['claude-code'], osName: installOs(osName), arch: await loadArch(installOs(osName)), harnesses: HARNESSES, freePort: async () => 47011, scan: async () => [], roots })
-    const dir = path.join(home, '.asight', 'collector'), extra = path.join(dir, 'ca', 'extra-cc.pem')
+    const dir = path.join(home, '.trocar', 'collector'), extra = path.join(dir, 'ca', 'extra-cc.pem')
     assert.ok(fs.existsSync(extra), 'the user\'s own CA made an extra-cc.pem')
     const table = CLAUDE[osName](home, new Date(Date.now() + 60_000))
     const r = await undoHarnesses({ dir, home, phases: PHASES, manifest: readManifest(dir), ids: ['claude-code'], roots, procs: () => listProcs({ uid: 501, platform: osName, exec: table }) })
@@ -244,7 +244,7 @@ test('a codex that two harnesses claim (agents.json put "codex" under opencode a
     const r = await offWith(s, 'darwin', OS.darwin.table(OS.darwin.codex, new Date(Date.now() + 60_000)))
     assert.deepEqual([r.kept_bundles.map((k) => [path.basename(k.path), k.pids, !!k.unjudged]), r.left, r.still_trusting.filter((p) => p.harness === 'codex').map((p) => p.pid)], [[['combined-codex.pem', [4242], false]], [], [4242]], `${how}: a process of codex and of opencode is a holder of codex's bundle`)
     const left = certBlocks(fs.readFileSync(s.bundle, 'utf8'))
-    assert.ok(left.length > 0 && !left.some((c) => c.fp === caFp), `${how}: the same bundle, without the asight CA`)
+    assert.ok(left.length > 0 && !left.some((c) => c.fp === caFp), `${how}: the same bundle, without the trocar CA`)
   }
 })
 

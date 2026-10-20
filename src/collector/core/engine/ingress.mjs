@@ -1,6 +1,6 @@
 // ingress.mjs — the engine's proxy ingress (RFC 4.8 §5.1, §5.2). Where the transparent listener takes connections a
 // kernel steered (Linux eBPF), this takes the ones a proxy client hands over on purpose: on macOS / Windows the agent itself, through
-// the proxy entry asight wrote (D47: the engine is the proxy, one door per group; the user's VPN is never pointed here), sends each
+// the proxy entry trocar wrote (D47: the engine is the proxy, one door per group; the user's VPN is never pointed here), sends each
 // connection as `CONNECT host:port` with `Proxy-Authorization: Basic <group>:<token>`, or as a SOCKS5 CONNECT with RFC 1929 credentials. The ingress answers like the proxy it is, dials the upstream,
 // and only then says yes; the bytes after that are an agent's, and go to handleFlow exactly as a transparent flow's do.
 //
@@ -9,12 +9,12 @@
 //      `ingress-unknown`;
 //   2. check the token, in constant time — 407 / SOCKS auth failure and `ingress-auth-failed`, zero upstream connections;
 //   3. lookupIngress({peer, user, target}) → the flow's meta, or {health:true, group}, or null (an unknown user: also an auth failure);
-//   4. a health probe (the target is the group's re-entry point itself): 200, then 204 to every `HEAD`/`GET /asight-health/<g>`
+//   4. a health probe (the target is the group's re-entry point itself): 200, then 204 to every `HEAD`/`GET /trocar-health/<g>`
 //      on the kept-alive tunnel; no upstream, no flows/ row, no envelope. It never leaves the machine (invariant 1);
-//   5. dial the upstream — direct, or the proxy prelude asight writes (http / socks5; the user's proxy credentials ride only here) —
+//   5. dial the upstream — direct, or the proxy prelude trocar writes (http / socks5; the user's proxy credentials ride only here) —
 //      and say 200 only once it is up: a failure is `502`, or the proxy's own refusal, never a success first;
 //   6. handleFlow(socket, meta, {upstream, redial}); the row carries ingress / pid_source / pid_ms / upstream, no `prelude`
-//      (the opener and the proxy prelude are asight's bytes, not the agent's: invariant 4, §5.6).
+//      (the opener and the proxy prelude are trocar's bytes, not the agent's: invariant 4, §5.6).
 // The ingress never records an envelope itself and never forwards a byte it has not been asked to.
 import crypto from 'node:crypto'
 import net from 'node:net'
@@ -27,7 +27,7 @@ const HEAD_MAX = 16 * 1024        // no opener or proxy reply head is longer
 const HOLD_MAX = 256 * 1024       // what a client may send while the upstream is being dialled
 const sha = (s) => crypto.createHash('sha256').update(s).digest()
 const printable = (s, n = 80) => String(s).replace(/[^\x20-\x7e]/g, '?').slice(0, n)
-const ROUTE_NAME = /^[\w-]+\.[\w.-]+$/ // the user an asight-written route or block authenticates as: <route>.<group>
+const ROUTE_NAME = /^[\w-]+\.[\w.-]+$/ // the user an trocar-written route or block authenticates as: <route>.<group>
 const msgOf = (e) => String((e && e.message) || e)
 
 const SOCKS_OK = Buffer.from([5, 0, 0, 1, 0, 0, 0, 0, 0, 0])
@@ -144,7 +144,7 @@ function whenConnected(s) {
   })
 }
 
-// The proxy prelude asight writes for an agent's connection, and what comes back. Never for a health probe; the credentials (up.auth) are
+// The proxy prelude trocar writes for an agent's connection, and what comes back. Never for a health probe; the credentials (up.auth) are
 // the user's own proxy's, used for this one agent connection and nowhere else (§5.2, D30).
 async function viaHttp(sock, up, target, deadline) {
   const au = authority(target)
@@ -230,7 +230,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     const unknown = (reason) => { counters.unknown++; failure({ where: 'ingress', code: 'ingress-unknown', peer, reason }) }
     const authFailed = (user, reason) => { counters.authFailed++; failure({ where: 'ingress', code: 'ingress-auth-failed', peer, user: shownUser(user), reason }) }
     const r = reader(socket, { onTooMuch: () => { unknown('the client sent more than 256 KiB before the tunnel was open'); socket.destroy() } })
-    const w = { up: 0, down: 0 } // the opener's bytes in, and asight's answers out: not the agent's (§5.6)
+    const w = { up: 0, down: 0 } // the opener's bytes in, and trocar's answers out: not the agent's (§5.6)
     const say = (b) => { w.down += b.length; if (!socket.destroyed) socket.write(b) }
     try { await serve(socket, r, peer, w, say, unknown, authFailed, door) } catch (e) {
       socket.destroy()
@@ -260,7 +260,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       o = {
         target, user: c ? c.user : '', pass: c ? c.pass : null, authed: false, ...(hh ? { header: hh[1] } : {}),
         ok: () => say('HTTP/1.1 200 Connection established\r\n\r\n'),
-        denied: () => { say('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="asight"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); socket.end() },
+        denied: () => { say('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="trocar"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); socket.end() },
         badGateway: () => { say('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); socket.end() },
         refusedBy: (d) => { if (d.raw) { say(d.raw); socket.end() } else o.badGateway() },
       }
@@ -306,7 +306,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     const dst = { address: o.target.host, port: o.target.port, ...(net.isIP(o.target.host) ? { family: net.isIP(o.target.host) } : {}) }
     let meta
     try { meta = await lookupIngress({ peer, user: who, target: dst, ...(o.header !== undefined ? { header: o.header } : {}) }) } catch (e) {
-      if (e && e.code === 'upstream-unavailable') { // the redirector would not hand over a connection it cannot dial (no login for the upstream, none to dial): asight's own code and the ingress's own part, not a lookup that failed (4.8 §12)
+      if (e && e.code === 'upstream-unavailable') { // the redirector would not hand over a connection it cannot dial (no login for the upstream, none to dial): trocar's own code and the ingress's own part, not a lookup that failed (4.8 §12)
         failure({ where: 'ingress', code: 'upstream-unavailable', peer, ...(typeof e.why === 'string' ? { why: e.why } : {}), reason: `the upstream of the connection of ${shownUser(o.user)} to ${o.target.host}:${o.target.port} cannot be dialled (${msgOf(e)}); it was refused with a 502` })
       } else {
         const code = e && e.code === 'loader-timeout' ? 'loader-timeout' : 'loader-down'
@@ -416,7 +416,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       if (m.gone) return void r.detach()
       if (m.timeout) { r.detach(); return socket.destroy() }
       const line = !m.invalid && /^(HEAD|GET) (\S+) HTTP\/1\.[01]$/.exec(m.head.startLine)
-      if (!line || line[2].split('?')[0] !== `/asight-health/${group}`) {
+      if (!line || line[2].split('?')[0] !== `/trocar-health/${group}`) {
         unknown(`a request that is not the health probe inside the health tunnel (${m.invalid || printable(m.head.startLine.split(' ').slice(0, 2).join(' '))})`)
         r.detach(); return socket.destroy()
       }

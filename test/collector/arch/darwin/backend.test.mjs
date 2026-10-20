@@ -24,7 +24,7 @@ function runner(answers) {
 }
 
 test('CM7: the darwin root store adds to the LOGIN keychain with trustRoot and no -p, through the injected runner', () => {
-  const home = tmpDir('asight-rs-')
+  const home = tmpDir('trocar-rs-')
   const c = custodyStub(); const { rootDer } = c.create()
   const { run, calls } = runner({ security: { out: '' } })
   assert.deepEqual(userRootStore({ home, run }).add(rootDer), { ok: true })
@@ -119,7 +119,7 @@ test('policy: the per-user plist first, then the computer-wide one; only the dec
 test('policy: platform facts and dirs (ruling ⑤: macOS has no persistent environment)', () => {
   assert.equal(platformFacts.envCaseInsensitive, false)
   assert.deepEqual(platformFacts.persistentEnv(['HTTPS_PROXY']), {})
-  const home = tmpDir('asight-pf-')
+  const home = tmpDir('trocar-pf-')
   assert.equal(platformFacts.pathKey(path.join(home, 'a', '..', 'b')), path.join(fs.realpathSync(home), 'b').toLowerCase(), 'the real path, resolved, folded (the default APFS volume is case-insensitive)')
   assert.deepEqual(dirsOf('/Users/u'), { appSupport: '/Users/u/Library/Application Support' })
 })

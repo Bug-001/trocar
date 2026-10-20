@@ -1,9 +1,9 @@
 // control-path.mjs — where the Windows daemon's control plane is, and the secret that opens it (RFC 4.8 §7 控制面; acceptance W26).
 //
-// Linux puts the control socket at $XDG_RUNTIME_DIR/asight/collector.sock, 0600 in a 0700 directory: the file mode keeps other users out. Windows has no such mode, and a named pipe's default access lets
+// Linux puts the control socket at $XDG_RUNTIME_DIR/trocar/collector.sock, 0600 in a 0700 directory: the file mode keeps other users out. Windows has no such mode, and a named pipe's default access lets
 // other local users connect, so two things stand in for it: the pipe's NAME is random (a fixed name could be taken first by another user on the same machine) and every request carries a random TOKEN (the
-// server refuses one without it, core/control.mjs). Both are made once, at the first start, and kept in `<collector>\control.json`, which sits under the user's own profile (asight sets no ACL of its own;
-// the lab checks the default one, W26 [WinVM]). The CLI reads the file to find the daemon: `asight off` through src/off/control-client.mjs, which has its own, lighter reader; the file name and the pipe prefix are src/off's, imported here (core may import src/off, not the reverse).
+// server refuses one without it, core/control.mjs). Both are made once, at the first start, and kept in `<collector>\control.json`, which sits under the user's own profile (trocar sets no ACL of its own;
+// the test rig checks the default one, W26). The CLI reads the file to find the daemon: `trocar off` through src/off/control-client.mjs, which has its own, lighter reader; the file name and the pipe prefix are src/off's, imported here (core may import src/off, not the reverse).
 // Everything the world gives is a parameter (`fs`, `randomBytes`), so a test on any OS runs it in a temp directory. Node built-ins only.
 import nodeFs from 'node:fs'
 import path from 'node:path'
@@ -12,10 +12,10 @@ import { randomBytes as nodeRandomBytes } from 'node:crypto'
 import { CONTROL_FILE, PIPE_PREFIX } from '../../../off/control-client.mjs'
 
 export { CONTROL_FILE, PIPE_PREFIX }
-const PIPE_RE = new RegExp(`^${PIPE_PREFIX.replace(/[\\.]/g, '\\$&')}[0-9a-f]{16}$`) // the writer is strict where off is loose: asight-<16 hex>
+const PIPE_RE = new RegExp(`^${PIPE_PREFIX.replace(/[\\.]/g, '\\$&')}[0-9a-f]{16}$`) // the writer is strict where off is loose: trocar-<16 hex>
 const TOKEN_RE = /^[0-9a-f]{64}$/
 
-/** `{ path: '\\.\pipe\asight-<16 hex>', token: <64 hex> }` from the random source: 8 bytes for the name, 32 for the secret. */
+/** `{ path: '\\.\pipe\trocar-<16 hex>', token: <64 hex> }` from the random source: 8 bytes for the name, 32 for the secret. */
 function fresh(randomBytes) {
   return { path: `${PIPE_PREFIX}${randomBytes(8).toString('hex')}`, token: randomBytes(32).toString('hex') }
 }
@@ -25,7 +25,7 @@ function judge(text) {
   let o
   try { o = JSON.parse(text) } catch { return { error: 'control.json is not JSON' } } // not the parser's message: it quotes the characters around the error, and a damaged file may have the token in them
   if (!o || typeof o !== 'object' || Array.isArray(o)) return { error: 'control.json is not an object' }
-  if (typeof o.path !== 'string' || !PIPE_RE.test(o.path)) return { error: 'control.json has no asight pipe name' }
+  if (typeof o.path !== 'string' || !PIPE_RE.test(o.path)) return { error: 'control.json has no trocar pipe name' }
   if (typeof o.token !== 'string' || !TOKEN_RE.test(o.token)) return { error: 'control.json has no 64-digit token' }
   return { path: o.path, token: o.token }
 }

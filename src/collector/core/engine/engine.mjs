@@ -150,7 +150,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     ingress = createIngress({
       token: ingressToken, timing,
       lookupIngress: (q) => redirector.lookupIngress(q),
-      servePac: typeof redirector.servePac === 'function' ? (q) => redirector.servePac(q) : null, // GET /asight.pac on an auth:false door (4.11 P10)
+      servePac: typeof redirector.servePac === 'function' ? (q) => redirector.servePac(q) : null, // GET /trocar.pac on an auth:false door (4.11 P10)
       connectUpstream: (dst) => (connectUpstream || defaultConnect)(dst),
       failure,
       // an ingress connection whose upstream refused or could not be reached never became a flow: its flows/ row is written here

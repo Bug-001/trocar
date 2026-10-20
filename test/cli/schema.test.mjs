@@ -62,7 +62,7 @@ test('receipt schema: schema is the current integer, command a non-empty string,
 })
 
 test('receipt schema: changed[] items of a state-changing command (on) are {path, change, backup: string|null} (C.1)', () => {
-  assert.deepEqual(problems((r) => { r.changed.push({ path: '/h/.codex/.env', change: 'adds the asight block', backup: '/h/.asight/backup/ab-1' }, { path: '/h/.bashrc', change: 'x', backup: null }) }, 'on'), [])
+  assert.deepEqual(problems((r) => { r.changed.push({ path: '/h/.codex/.env', change: 'adds the trocar block', backup: '/h/.trocar/backup/ab-1' }, { path: '/h/.bashrc', change: 'x', backup: null }) }, 'on'), [])
   assert.ok(problems((r) => { r.changed.push({ path: '/h/a', change: 'x' }) }, 'on').some((s) => s.includes('changed[0].backup')), 'backup must be there, null when there is none')
   assert.ok(problems((r) => { r.changed.push({ path: '/h/a', change: 'x', backup: 3 }) }, 'on').some((s) => s.includes('changed[0].backup')))
   assert.ok(problems((r) => { r.changed.push({ change: 'x', backup: null }) }, 'on').some((s) => s.includes('changed[0].path')))
@@ -109,9 +109,9 @@ test('receipt schema: linger is optional, and true | false | "unknown" when ther
 })
 
 test('receipt schema: created and removed are lists, undo is the one line that undoes the command, log is a path or null', () => {
-  assert.deepEqual(problems((r) => { r.created.push('/h/.asight/bin/asight-off'); r.removed.push('/h/.config/systemd/user/asight-collector.service'); r.undo = 'asight on'; r.log = '/h/.asight/collector/flows/' }), [])
-  assert.ok(problems((r) => { r.undo = ['asight on'] }).some((s) => s.includes('undo')), 'a list of related commands is not an undo (附录 C.1)')
-  assert.ok(validateReceipt(mutate((r) => { r.undo = 'asight uninstall' }, 'off')).some((s) => s.includes('undo')), "off's undo is `asight on`, not another command's line")
+  assert.deepEqual(problems((r) => { r.created.push('/h/.trocar/bin/trocar-off'); r.removed.push('/h/.config/systemd/user/trocar-collector.service'); r.undo = 'trocar on'; r.log = '/h/.trocar/collector/flows/' }), [])
+  assert.ok(problems((r) => { r.undo = ['trocar on'] }).some((s) => s.includes('undo')), 'a list of related commands is not an undo (附录 C.1)')
+  assert.ok(validateReceipt(mutate((r) => { r.undo = 'trocar uninstall' }, 'off')).some((s) => s.includes('undo')), "off's undo is `trocar on`, not another command's line")
   for (const key of ['created', 'removed']) {
     assert.ok(problems((r) => { r[key] = 'x' }).some((s) => s.includes(key)), key)
     assert.ok(problems((r) => { r[key] = [3] }).some((s) => s.includes(`${key}[0]`)), `${key} item`)
@@ -138,7 +138,7 @@ test('receipt schema: a receipt that went through JSON.stringify and back still 
 // ── the topology (1.6 §9.4, V43): the closed sets are the spec's, and each rule of validateTopology has an input that breaks it ─────────────────────────────────────────────────────────────────────────
 test('topology schema: the closed sets are the ones of 1.6 §9.4, proxy mode and the old capture included, so the Windows branch adds none', () => {
   assert.deepEqual([...ROUTING], ['driver', 'proxy', 'legacy', 'none', 'unknown'])
-  assert.deepEqual([...TOPOLOGY_KINDS], ['agent', 'proxy', 'asight-engine', 'asight-forwarder', 'legacy-mitm', 'upstream', 'egress', 'unknown'])
+  assert.deepEqual([...TOPOLOGY_KINDS], ['agent', 'proxy', 'trocar-engine', 'trocar-forwarder', 'legacy-mitm', 'upstream', 'egress', 'unknown'])
   assert.deepEqual([...TOPOLOGY_VIA], ['direct', 'proxy-http', 'proxy-socks', 'proxy-https', 'system-proxy', 'ebpf', 'forward', 'egress', 'unknown'])
   assert.deepEqual([...UNKNOWN_REASONS], ['denied', 'timeout', 'absent', 'unparseable', 'owner-unreadable', 'pac', 'kernel-filter-invisible', 'env-unreadable'])
   assert.deepEqual([...FINDING_CLASSES], ['problem', 'expected', 'note'])
@@ -147,7 +147,7 @@ test('topology schema: the closed sets are the ones of 1.6 §9.4, proxy mode and
 test('validateTopology: a topology is valid, and every rule has a bad input that says so', () => {
   const good = () => ({ 'claude-code': {
     routing: 'driver', on_path: true, captured: true, reason: null,
-    nodes: [{ id: 'a', kind: 'agent', name: 'claude', pid: 4121 }, { id: 'e', kind: 'asight-engine', name: 'asight 引擎', port: 47123, asight: true }, { id: 'p', kind: 'proxy', name: 'mihomo', product: 'mihomo', port: 7890 }, { id: 'x', kind: 'egress', name: '出口' }],
+    nodes: [{ id: 'a', kind: 'agent', name: 'claude', pid: 4121 }, { id: 'e', kind: 'trocar-engine', name: 'trocar 引擎', port: 47123, trocar: true }, { id: 'p', kind: 'proxy', name: 'mihomo', product: 'mihomo', port: 7890 }, { id: 'x', kind: 'egress', name: '出口' }],
     edges: [{ from: 'a', to: 'e', via: 'ebpf' }, { from: 'e', to: 'p', via: 'proxy-http' }, { from: 'a', to: 'p', via: 'proxy-http' }, { from: 'p', to: 'x', via: 'egress' }],
     branches: [{ name: 'all', path: ['a', 'e', 'p', 'x'], off_path: ['a', 'p', 'x'], on_path: true, captured: true, reason: null }],
     running: [{ pid: 3990, path: ['a', 'p', 'x'], note: 'start-time-settings' }],
@@ -174,7 +174,7 @@ test('validateTopology: a topology is valid, and every rule has a bad input that
 
 test('validateFinding (1.6 §9.6, V49): a code in the closed sets, a class, a what and a why that say something, commands that are whole lines with a known shell and no <…>, a verify; a hint may have no command, a failure may not', async () => {
   const { validateFinding } = await import('../../src/cli/schema.mjs')
-  const ok = { code: 'proxy-dead', class: 'problem', harness: 'codex', what: 'w', why: 'y', commands: [{ run: 'asight status codex', shell: 'sh' }], verify: 'v' }
+  const ok = { code: 'proxy-dead', class: 'problem', harness: 'codex', what: 'w', why: 'y', commands: [{ run: 'trocar status codex', shell: 'sh' }], verify: 'v' }
   assert.deepEqual(validateFinding(ok), [])
   assert.deepEqual(validateFinding({ ...ok, class: 'note', commands: [] }), [])
   const bad = (over) => validateFinding({ ...ok, ...over })
@@ -192,10 +192,10 @@ test('validateFinding (1.6 §9.6, V49): a code in the closed sets, a class, a wh
 // 附录 C.2 names the keys a reader writes a client against, and `COMMAND_KEYS` is what validateReceipt checks: one external fact, one place (0.1 §2).
 // The drift this guard catches is the one the test machines found (macOS and Windows test machines, 2026-10-18: thirteen keys the manual named nowhere).
 test('附录 C.2 names exactly the keys of COMMAND_KEYS, for every command', () => {
-  const manual = readFileSync(new URL('../../spec/01-asight-rfc/1.6-cli.md', import.meta.url), 'utf8')
+  const manual = readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
   const table = manual.split('### C.2')[1].split('###')[0]
   const rows = table.split('\n').filter((l) => /^\| `/.test(l)).map((l) => l.split('|').slice(1, 3))
-  // a key is a code span that IS a key: an identifier, with its value shape after a `:` — so `asight-off`, a path or a prose span is not one
+  // a key is a code span that IS a key: an identifier, with its value shape after a `:` — so `trocar-off`, a path or a prose span is not one
   const keysIn = (cell) => [...new Set([...cell.matchAll(/`([a-z_][a-z0-9_]*)((?:[:([].*?)?)`/g)].map((m) => m[1]))]
   const named = new Map(rows.map(([head, cell]) => [head.match(/`([a-z-]+)/)[1], keysIn(cell)]))
   assert.deepEqual([...named.keys()], Object.keys(COMMAND_KEYS), 'a command per row, in the order of COMMAND_KEYS')

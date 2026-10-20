@@ -1,19 +1,19 @@
-// schema.mjs — the contract of what `asight on | off | status | uninstall | doctor` print (RFC 1.6 R4 exit codes, R5 `--json`
+// schema.mjs — the contract of what `trocar on | off | status | uninstall | doctor` print (RFC 1.6 R4 exit codes, R5 `--json`
 // receipt keys). `src/cli/schema.mjs` re-exports it and adds `validateReceipt`; it lives here because `src/off/` (the undo side,
-// node:* only, 0.1 §2) prints receipts too, and so does the standalone `~/.asight/bin/asight-off` generated from this directory.
+// node:* only, 0.1 §2) prints receipts too, and so does the standalone `~/.trocar/bin/trocar-off` generated from this directory.
 // Imports nothing.
 
 /** Bumped when a key of the receipt changes meaning or goes; adding a key does not bump it (R5 lists the least a receipt has). */
 export const SCHEMA_VERSION = 2
 
-/** R4. `unknown` (3) is for `status` / `doctor` only: it must never be read as `ok`. `crash` is `asight daemon`'s (src/collector/cli.mjs). */
+/** R4. `unknown` (3) is for `status` / `doctor` only: it must never be read as `ok`. `crash` is `trocar daemon`'s (src/collector/cli.mjs). */
 export const EXIT = Object.freeze({ ok: 0, incomplete: 1, usage: 2, unknown: 3, crash: 70 })
 
 /** R5: the top-level keys every receipt carries, in the order `newReceipt` writes them. */
 export const RECEIPT_KEYS = Object.freeze(['schema', 'command', 'ok', 'changed', 'created', 'removed', 'skipped', 'restart', 'relayed', 'undo', 'log'])
 
 /** C.1 `undo`: the ONE command line that undoes the command (a list of related commands is not an undo). `classes` writes its own inverse edit. */
-export const UNDO_LINE = Object.freeze({ install: 'asight uninstall', on: 'asight off', off: 'asight on', uninstall: 'asight install' })
+export const UNDO_LINE = Object.freeze({ install: 'trocar uninstall', on: 'trocar off', off: 'trocar on', uninstall: 'trocar install' })
 
 /** An empty receipt for `command`, ok until something says otherwise; a fresh object (its lists are the caller's to fill). `relayed`
  *  starts as `'unknown'` (R5 / R11: what was not read is not 0): a command that counted connections writes `{closing, waiting, cut}`

@@ -1,5 +1,5 @@
 // entries.mjs — the P5 route writers and the P6 NO_PROXY merge (spec 4.11 §4 P5 · P6, plan :110-133). Class 1 writes into the agent's own config
-// (`json-key`, `dotenv-block`, `plugin-file`), class 2 is asight's switch file (`switch-file`). A descriptor's route holds data only; this module
+// (`json-key`, `dotenv-block`, `plugin-file`), class 2 is trocar's switch file (`switch-file`). A descriptor's route holds data only; this module
 // knows no harness and no OS: paths come from sources.mjs's ctx (ctx.dirs), the OS's persistent env from ctx.persistentEnv.
 //
 // Writer ctx = sources.mjs's ctx + { dir (the collector dir: manifest, switch/), home (backups), manifest, fs, now, harness, route, routeId,
@@ -19,7 +19,7 @@ import { entryGate } from '../entry-forms.mjs'
 import { CODE } from '../codes.mjs'
 
 export const LOOPBACK = Object.freeze(['localhost', '127.0.0.1', '::1'])
-export const PAC_PATH = '/asight.pac' // P10: the daemon serves the PAC here on the PAC group's door
+export const PAC_PATH = '/trocar.pac' // P10: the daemon serves the PAC here on the PAC group's door
 const HOST_TREE_NOTE = 'every extension in this host goes through the door, forward only'
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/ // an entry id that names a file in the library and nothing outside it
 
@@ -75,8 +75,8 @@ function writeJson(ctx, door) {
   let file, create = null
   if (r.select) { const t = selectTarget(ctx); if (t.code) return t; file = t.file; create = t.create || null } else file = resolveLoc(r.file, ctx)[0]
   if (!file) return notRouted('no-path')
-  // One file, one record (4.11 §4): an entry file asight creates is carried by its own json-key record — `existed_before: false` and `created_dirs` say the
-  // file and its directories are asight's, and `off` deletes both once the keys are out. A second record of the same file (an owned-file holding the hash of
+  // One file, one record (4.11 §4): an entry file trocar creates is carried by its own json-key record — `existed_before: false` and `created_dirs` say the
+  // file and its directories are trocar's, and `off` deletes both once the keys are out. A second record of the same file (an owned-file holding the hash of
   // the empty object) disagreed with it the moment the keys went in, and status read a byte-intact entry as changed (mac 2026-10-19).
   const text = readText(ctx, file)
   if (!create && text === null && r.absent === 'not-routed') return notRouted('absent', file)
@@ -113,7 +113,7 @@ const KINDS = {
   'plugin-file': (ctx, door) => {
     const dir = resolveLoc(ctx.route.dir, ctx)[0]
     if (!dir) return notRouted('no-path')
-    return writeOwned(ctx, (ctx.join || path.join)(dir, ctx.route.name || 'asight.js'), 'plugin', ctx.render(ctx.route.template, { door, harness: ctx.harness }))
+    return writeOwned(ctx, (ctx.join || path.join)(dir, ctx.route.name || 'trocar.js'), 'plugin', ctx.render(ctx.route.template, { door, harness: ctx.harness }))
   },
   'switch-file': (ctx, door) => writeOwned(ctx, (ctx.join || path.join)(ctx.dir, 'switch', ctx.harness), 'switch', door),
 }
@@ -124,9 +124,9 @@ export function recordsOf(manifest, harness, routeId) {
   return [...((manifest && manifest.entries) || []).filter(mine), ...((manifest && manifest.files) || []).filter(mine)]
 }
 
-const KEEP = (res) => typeof res === 'string' && res.startsWith('left-') && res !== 'left-user-value' // the user's value now: nothing of asight's left to undo
+const KEEP = (res) => typeof res === 'string' && res.startsWith('left-') && res !== 'left-user-value' // the user's value now: nothing of trocar's left to undo
 
-/** undo(ctx, records): entries last-first (each back to its prior only while it still holds asight's value), then owned files (a config-library entry only
+/** undo(ctx, records): entries last-first (each back to its prior only while it still holds trocar's value), then owned files (a config-library entry only
  *  while unchanged). Done records leave the manifest; one that could not be undone stays, with its reason. → { ok, results } */
 function undo(ctx, records) {
   const fs = ctx.fs, m = ctx.manifest, results = []
@@ -138,7 +138,7 @@ function undo(ctx, records) {
   return { ok: !results.some((r) => KEEP(r.result)), results }
 }
 
-/** check(ctx, records): does every record still hold asight's value? → { ok, failing: [path] } */
+/** check(ctx, records): does every record still hold trocar's value? → { ok, failing: [path] } */
 function check(ctx, records) {
   const failing = []
   for (const x of records) {

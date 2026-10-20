@@ -18,10 +18,10 @@ const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.u
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
 const DEMO = fileURLToPath(new URL('../../samples/demo-session.ndjson', import.meta.url))
 
-/** A temp user home whose ~/.asight holds the demo session as one segment; `bytes` > 0 adds multi-harness traffic. */
+/** A temp user home whose ~/.trocar holds the demo session as one segment; `bytes` > 0 adds multi-harness traffic. */
 export function boardHome({ bytes = 0 } = {}) {
-  const userHome = tmpDir('asight-board-')
-  const home = path.join(userHome, '.asight')
+  const userHome = tmpDir('trocar-board-')
+  const home = path.join(userHome, '.trocar')
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
   writeSegment(home, '20260719T090000Z', fs.readFileSync(DEMO, 'utf8').split('\n').filter(Boolean))
   if (bytes > 0) generate({ home, bytes })

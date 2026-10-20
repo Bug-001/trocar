@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { optionsOf, parseArgs } from '../../src/cli/args.mjs'
 
-const cmd = { name: 'demo', usage: 'asight demo [<harness>...] [--now] [--port <port>]', options: [['--now', 'at once'], ['--port <port>', 'the port']] }
+const cmd = { name: 'demo', usage: 'trocar demo [<harness>...] [--now] [--port <port>]', options: [['--now', 'at once'], ['--port <port>', 'the port']] }
 
 test('optionsOf: the declaration says the name, whether it takes a value, and its one line of help', () => {
   const o = optionsOf(cmd)
@@ -25,15 +25,15 @@ test('parseArgs: positionals keep their order, a declared value is taken from th
 test('parseArgs: an option nobody declared, and a value-taking option with nothing after it, are usage errors naming the command and its usage line', () => {
   const bad = parseArgs(cmd, ['--frob'])
   assert.deepEqual(bad.flags, {}); assert.deepEqual(bad.positionals, [])
-  assert.deepEqual(bad.error, { code: 'usage', message: "asight demo: unknown option '--frob'", usage: cmd.usage })
-  assert.equal(parseArgs(cmd, ['--now=1']).error.message, "asight demo: option '--now' takes no value")
-  assert.equal(parseArgs(cmd, ['--port']).error.message, "asight demo: option '--port' needs a value")
-  assert.equal(parseArgs(cmd, ['x', '--frob', '--now']).error.message, "asight demo: unknown option '--frob'", 'the first unknown option is the one reported')
-  assert.equal(parseArgs(cmd, ['-x']).error.message, "asight demo: unknown option '-x'", 'a short option nobody declared too')
+  assert.deepEqual(bad.error, { code: 'usage', message: "trocar demo: unknown option '--frob'", usage: cmd.usage })
+  assert.equal(parseArgs(cmd, ['--now=1']).error.message, "trocar demo: option '--now' takes no value")
+  assert.equal(parseArgs(cmd, ['--port']).error.message, "trocar demo: option '--port' needs a value")
+  assert.equal(parseArgs(cmd, ['x', '--frob', '--now']).error.message, "trocar demo: unknown option '--frob'", 'the first unknown option is the one reported')
+  assert.equal(parseArgs(cmd, ['-x']).error.message, "trocar demo: unknown option '-x'", 'a short option nobody declared too')
 })
 
 test('parseArgs: a command with open options (query, whose parameters are the query\'s own) keeps every option it is given', () => {
-  const open = { name: 'query', usage: 'asight query <name> [--<param> <value>...]', openOptions: true }
+  const open = { name: 'query', usage: 'trocar query <name> [--<param> <value>...]', openOptions: true }
   assert.deepEqual(parseArgs(open, ['sessions', '--since', '7d', '--limit', '10']), { positionals: ['sessions'], flags: { since: '7d', limit: '10' }, error: null })
   assert.deepEqual(parseArgs(open, ['sessions', '--verbose']).flags, { verbose: true }, 'an option with no value is true')
   assert.equal(parseArgs(open, ['--json']).error, null)

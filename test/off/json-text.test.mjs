@@ -10,8 +10,8 @@ const K = ['env', 'CA_FILE']
 const SETTINGS = '{\n    "model": "x",\n    "env": {\n        "A": "1"\n    },\n    "hooks": [1, {"b": null}]\n}\n'
 
 test('json-text: a new key goes first in the existing object with its indentation; nothing else moves', () => {
-  const r = setKey(SETTINGS, K, '/h/.asight/collector/ca/asight-ca.pem')
-  assert.equal(r.text, '{\n    "model": "x",\n    "env": {\n        "CA_FILE": "/h/.asight/collector/ca/asight-ca.pem",\n        "A": "1"\n    },\n    "hooks": [1, {"b": null}]\n}\n')
+  const r = setKey(SETTINGS, K, '/h/.trocar/collector/ca/trocar-ca.pem')
+  assert.equal(r.text, '{\n    "model": "x",\n    "env": {\n        "CA_FILE": "/h/.trocar/collector/ca/trocar-ca.pem",\n        "A": "1"\n    },\n    "hooks": [1, {"b": null}]\n}\n')
   assert.deepEqual([r.ops.length, r.ops[0].removed, r.prior, r.existingDepth], [1, '', null, 1])
   assert.equal(reverseOps(r.text, r.ops), SETTINGS)
 })
@@ -43,7 +43,7 @@ test('json-text: refuses non-JSON, a non-object document, a non-object parent an
   assert.throws(() => setKey('[1]', K, '/v'), (e) => /not a JSON object/.test(e.message) && e.why === 'not-object')
   assert.throws(() => setKey('{"env":"x"}', K, '/v'), (e) => /env is not an object \(it is a string\): delete that member or make it \{\}/.test(e.message) && e.why === 'not-object')
   assert.throws(() => setKey('{"env":null}', K, '/v'), (e) => /env is not an object \(it is null\)/.test(e.message) && e.why === 'not-object')
-  assert.throws(() => setKey('{"env":{"CA_FILE":{"deep":1}}}', K, '/v'), (e) => /not a value asight can replace/.test(e.message) && e.why === 'value')
+  assert.throws(() => setKey('{"env":{"CA_FILE":{"deep":1}}}', K, '/v'), (e) => /not a value trocar can replace/.test(e.message) && e.why === 'value')
   assert.throws(() => setKey('{"env":{}}', K, 3), /must be a string, a boolean or null/)
   const num = setKey('{"env":{"CA_FILE":3}}', K, '/v')
   assert.deepEqual([num.prior, JSON.parse(num.text).env.CA_FILE], [3, '/v'], 'a number the key held is replaced, and the prior comes back as the number it was')
@@ -68,7 +68,7 @@ test('json-text: reverseOps refuses text that no longer holds what was inserted'
 })
 
 // ---- JSONC: a mark, comments, trailing commas, no document ----------------------------------------------------------------------------------
-// The comments of a text in order (outside strings): asight writes none and drops none.
+// The comments of a text in order (outside strings): trocar writes none and drops none.
 const commentsOf = (t) => {
   const out = []
   for (let i = 0; i < t.length;) {
@@ -79,7 +79,7 @@ const commentsOf = (t) => {
 const meaning = (t) => readJsonc(t) ?? {} // the generator's reader; no document reads as {}
 const withKey = (v, keys, value) => { const o = structuredClone(v); let cur = o; for (const k of keys.slice(0, -1)) { if (cur[k] == null || typeof cur[k] !== 'object') cur[k] = {}; cur = cur[k] } cur[keys.at(-1)] = value; return o }
 const tag = (c) => `${c.id} seed=${c.seed} ${c.describe}${c.bom ? ' +mark' : ''}`
-const EDITS = [[K, '/h/.asight/collector/ca/asight-ca.pem'], [['env', 'HTTPS_PROXY'], 'http://127.0.0.1:9'], [['asightTop'], true]]
+const EDITS = [[K, '/h/.trocar/collector/ca/trocar-ca.pem'], [['env', 'HTTPS_PROXY'], 'http://127.0.0.1:9'], [['trocarTop'], true]]
 
 test('json-text: along the JSON axis (strict, comments, trailing commas, indentation, mark, CRLF, empty, blank) setKey changes only the key, keeps every comment and the mark, and reverseOps gives every byte back; removeKey takes it out again', () => {
   const cases = shapeCases({ format: 'json', budget: 150 }).filter((c) => c.determinable)

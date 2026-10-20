@@ -13,8 +13,8 @@
 //
 // ⚠ REAL-BYTES CORRECTION to the spec's recorded rule. D25 writes the Responses test as
 // "`input[]` + `instructions`". Measured against the real captures, that CONJUNCTION is false:
-//     ~/.atrace/asight/codex-capture.ndjson     13/13 calls: input[] AND instructions  (UA matches)
-//     ~/.atrace/asight/opencode-capture.ndjson  17/17 calls: input[] and NO instructions (UA does not match)
+//     ~/.atrace/trocar/codex-capture.ndjson     13/13 calls: input[] AND instructions  (UA matches)
+//     ~/.atrace/trocar/opencode-capture.ndjson  17/17 calls: input[] and NO instructions (UA does not match)
 // Requiring `instructions` would fail to claim 100% of real OpenCode traffic — the exact regression
 // this audit exists to prevent. `input[]` alone is the discriminator (Anthropic has no top-level
 // `input[]`); `instructions` is optional corroboration.

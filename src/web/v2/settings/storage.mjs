@@ -1,4 +1,4 @@
-// settings/storage.mjs — 设置 · 存储 (1.11): 「asight 占了多少盘、每天长多少、每类存了什么?」 Reads the C.5 `classes` and
+// settings/storage.mjs — 设置 · 存储 (1.11): 「trocar 占了多少盘、每天长多少、每类存了什么?」 Reads the C.5 `classes` and
 // `segments` documents once per entry (no polling: `classes` lstats the whole home). Read side only: each class's level is
 // shown as a value; the control that changes it is PR 5's (C9) — a control that cannot work is not drawn (1.5).
 import { pageHeadHtml } from '../shell/pagehead.mjs'
@@ -19,7 +19,7 @@ export function diskFigures(doc) {
   const d = (doc && doc.disk) || {}
   const days = list(doc && doc.classes).map((c) => num(c && c.counts && c.counts.h24 && c.counts.h24.bytes))
   return {
-    total: num(d.asight_bytes),
+    total: num(d.trocar_bytes),
     perDay: days.length && days.every((b) => b != null) ? days.reduce((s, b) => s + b, 0) : null,
     asOf: (doc && doc.as_of) || null,
   }

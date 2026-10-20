@@ -2,7 +2,7 @@
 // is there anything to handle, what did the agents cost. Four cards (采集 · 要处理的事 · 统计 · 最近的会话; first run swaps
 // the last two for 开始使用). Every number names its source: stats come ONLY from the C.5 `overview` document (D24), the
 // recent list is live from `sessions`, and the two are allowed to disagree by a few sessions — the stats card says 截至,
-// it never back-fills from the live list. The disk footer is `classes.disk.asight_bytes`.
+// it never back-fills from the live list. The disk footer is `classes.disk.trocar_bytes`.
 // Polls (1.5 §轮询): `status` every 1.5 s and `sessions` every 3 s while visible; classes · pricing · overview(window) ·
 // overview(all) · traffic(24h) on open, on window change and every 30 s. Hidden stops everything; coming back reads at
 // once. All reads are GET; the page holds no button but the window links, the 技术细节 disclosures and 重试 (invariant 1).
@@ -189,10 +189,10 @@ export function recentRows(sessionsData) {
   }))
 }
 
-// ── 盘上占用 · the stats card's footer: `classes.disk.asight_bytes`, or nothing when the classes read failed ─────────
+// ── 盘上占用 · the stats card's footer: `classes.disk.trocar_bytes`, or nothing when the classes read failed ─────────
 export function diskBytes(slot) {
   if (!slot || slot.ok === false || !slot.data || !slot.data.disk) return null
-  return num(slot.data.disk.asight_bytes)
+  return num(slot.data.disk.trocar_bytes)
 }
 
 // ── renderers (string level) ─────────────────────────────────────────────────────────────────────────────────────────

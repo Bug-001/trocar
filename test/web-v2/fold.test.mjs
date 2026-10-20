@@ -6,7 +6,7 @@ import { loadFold, saveFold, setFold, turnAnchorKey, turnIsOpen, FOLD_KEY, FOLD_
 
 const fake = (init = {}) => { const m = new Map(Object.entries(init)); return { m, getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)) } } }
 
-test('the storage key is the v2 one', () => { assert.equal(FOLD_KEY, 'asight.v2.turnfold'); assert.equal(FOLD_CAP, 2000) })
+test('the storage key is the v2 one', () => { assert.equal(FOLD_KEY, 'trocar.v2.turnfold'); assert.equal(FOLD_CAP, 2000) })
 test('round trip through a fake storage', () => {
   const st = fake(); const f = new Map([['k1', true], ['k2', false]])
   saveFold(st, f)

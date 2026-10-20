@@ -123,7 +123,7 @@ export function agentVerdicts(doc, ov = null) {
       const mine = [...r.conditions].sort((a, b) => rank(a) - rank(b))
       const lead = mine[0], code = codeOf(lead)
       let text, restart = false
-      if (lead.kind === 'negative-cache') text = `not capturing: one of its processes refused asight's certificate`
+      if (lead.kind === 'negative-cache') text = `not capturing: one of its processes refused trocar's certificate`
       else if (RESTART_CODES.includes(code)) { text = `restart ${name} to capture it`; restart = true }
       else if (code != null && has(TRUST_REASON, code)) text = `not capturing: ${TRUST_REASON[code].why}`
       else text = `not capturing: ${lead.text || lead.reason || UNKNOWN_REASON}`

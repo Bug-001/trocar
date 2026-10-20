@@ -53,7 +53,7 @@ function fakeArch(p, extraEnv = {}, clientOpts = {}) {
   const gates = { held: false, running: 0, waiters: [], async hold() { this.held = true; await until(() => this.running === 0) }, release() { this.held = false; this.waiters.splice(0).forEach((r) => r()) } }
   const holdable = (fn) => fn && (async () => { while (gates.held) await new Promise((r) => gates.waiters.push(r)); gates.running++; try { return await fn() } finally { gates.running-- } })
   const makeClient = () => {
-    const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1', ...extraEnv }, autoHeartbeatMs: 0, ...clientOpts })
+    const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, TROCAR_FAKE_LOADER: '1', ...extraEnv }, autoHeartbeatMs: 0, ...clientOpts })
     const set = c.setBeatGate; c.setBeatGate = (fn) => set(holdable(fn))
     clients.push(c); return c
   }
@@ -62,7 +62,7 @@ function fakeArch(p, extraEnv = {}, clientOpts = {}) {
 function sandbox() {
   const root = tmpDir('as-d-') // short: unix socket paths are length-limited
   const home = path.join(root, 'home'); fs.mkdirSync(home)
-  return { root, home, collector: path.join(home, '.asight', 'collector'), sock: path.join(root, 'run', 'c.sock'), done: () => fs.rmSync(root, { recursive: true, force: true }) }
+  return { root, home, collector: path.join(home, '.trocar', 'collector'), sock: path.join(root, 'run', 'c.sock'), done: () => fs.rmSync(root, { recursive: true, force: true }) }
 }
 const req = (sock, method, p, body) => controlRequest({ socketPath: sock, method, path: p, body })
 // status reports capture health read by the board's reader (src/health): the last record of each failure kind
@@ -79,7 +79,7 @@ const flowsOf = (s) => {
   return lines
 }
 
-// A keep-alive TLS relay for relay.asight.test with its own private CA. A daemon process would trust it for the
+// A keep-alive TLS relay for relay.trocar.test with its own private CA. A daemon process would trust it for the
 // upstream side through NODE_EXTRA_CA_CERTS (gate G8, test/collector/core/upstream-trust.test.mjs); in-process the
 // test hands the engine the CA through startDaemon's upstreamCa seam. It answers every complete request with a fixed message.
 const REPLY = '{"id":"msg_1","type":"message","role":"assistant","model":"claude-x","content":[{"type":"text","text":"pong"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":1}}'
@@ -113,7 +113,7 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
   const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
   // the user's own Claude Code config, as for any private-CA relay: base URL + the relay's CA
   fs.mkdirSync(path.join(s.home, '.claude'))
-  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }, null, 2))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.trocar.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }, null, 2))
   await install(s)
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, upstreamCa: up.ca.certPem })
@@ -127,16 +127,16 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
     p.add(4242, { uid: UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
     await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4242, pid: 4242, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
     const row = await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242 && a.trusted))
-    assert.deepEqual([row.agent, row.reason, row.trust_var, row.trust_via.startsWith('user settings env'), row.hosts.includes('relay.asight.test'), row.direct], ['claude-code', 'ok', 'NODE_EXTRA_CA_CERTS', true, true, 0])
+    assert.deepEqual([row.agent, row.reason, row.trust_var, row.trust_via.startsWith('user settings env'), row.hosts.includes('relay.trocar.test'), row.direct], ['claude-code', 'ok', 'NODE_EXTRA_CA_CERTS', true, true, 0])
 
     const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4242, decrypt: 1 })
-    const extraCc = fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') // what CC now trusts: relay CA + asight CA
-    const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: extraCc }); await once(c, 'secureConnect')
+    const extraCc = fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') // what CC now trusts: relay CA + trocar CA
+    const c = tls.connect({ socket: raw, servername: 'relay.trocar.test', ca: extraCc }); await once(c, 'secureConnect')
     const sid = '6a1b7c2d-0000-4000-8000-000000000001'
     const post = (text) => {
       const body = JSON.stringify({ model: 'claude-x', max_tokens: 16, system: [{ type: 'text', text: 'You are a test.' }], messages: [{ role: 'user', content: [{ type: 'text', text }] }] })
-      return `POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test:${up.port}\r\nanthropic-version: 2023-06-01\r\nx-claude-code-session-id: ${sid}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
+      return `POST /v1/messages HTTP/1.1\r\nhost: relay.trocar.test:${up.port}\r\nanthropic-version: 2023-06-01\r\nx-claude-code-session-id: ${sid}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
     }
     const send = (text) => new Promise((resolve) => {
       let reply = ''
@@ -144,13 +144,13 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
       c.on('data', onData)
       c.write(post(text))
     })
-    assert.match(await send('asight-e2e-1'), /^HTTP\/1\.1 200 OK/)
-    const rawDir = path.join(s.home, '.asight', 'raw')
+    assert.match(await send('trocar-e2e-1'), /^HTTP\/1\.1 200 OK/)
+    const rawDir = path.join(s.home, '.trocar', 'raw')
     const capture = await until(() => fs.readdirSync(rawDir)[0]) // the raw layer's current segment (D60)
-    const envs = await until(() => { const t = fs.readFileSync(path.join(rawDir, capture), 'utf8'); return t.includes('asight-e2e-1') && t.trim().split('\n').map((l) => JSON.parse(l)) })
+    const envs = await until(() => { const t = fs.readFileSync(path.join(rawDir, capture), 'utf8'); return t.includes('trocar-e2e-1') && t.trim().split('\n').map((l) => JSON.parse(l)) })
     assert.equal(envs.length, 1)
     assert.deepEqual(Buffer.concat([Buffer.from(envs[0].req_head_raw, 'latin1'), Buffer.from(envs[0].req_body, 'utf8')]), up.got[0], 'recorded request bytes == bytes the relay received')
-    assert.deepEqual([envs[0].host, envs[0].proc.pid, envs[0].proc.agent, envs[0].proc.exe, envs[0].is_llm_call], ['relay.asight.test', 4242, 'claude-code', CC_EXE, true])
+    assert.deepEqual([envs[0].host, envs[0].proc.pid, envs[0].proc.agent, envs[0].proc.exe, envs[0].is_llm_call], ['relay.trocar.test', 4242, 'claude-code', CC_EXE, true])
 
     // the live daemon names its current segment in its lock, so the sealer and `raw seal` know the one segment to leave
     // alone (D60; the read side of these records is the query layer's, test/query/).
@@ -161,31 +161,31 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
     // (sw.isRecording(meta.agent)). The connection is kept busy across off — the relay is slow — so the next request is pipelined on it after off.
     let seen = ''; c.on('data', (x) => { seen += x })
     up.hold()
-    c.write(post('asight-in-flight'))
+    c.write(post('trocar-in-flight'))
     await until(() => up.got.length === 2)
     const off = await req(s.sock, 'POST', '/off')
     assert.deepEqual([off.relayed, off.pid], [{ closing: 1, waiting: 0, cut: 0 }, process.pid], 'busy: it closes at the response boundary, not at once')
-    c.write(post('asight-after-off')) // started after off
+    c.write(post('trocar-after-off')) // started after off
     await until(() => up.got.length === 3) // still the agent's own request: forwarded untouched, just not recorded
     up.release()
     await once(c, 'close') // the engine closes it once the responses are out
     assert.equal(seen.split(REPLY).length - 1, 2, 'both replies reached the client in full before the close')
-    await until(() => fs.readFileSync(path.join(rawDir, capture), 'utf8').includes('asight-in-flight'))
+    await until(() => fs.readFileSync(path.join(rawDir, capture), 'utf8').includes('trocar-in-flight'))
     const after = fs.readFileSync(path.join(rawDir, capture), 'utf8')
-    assert.ok(!after.includes('asight-after-off'), 'a request that starts after off is never recorded')
+    assert.ok(!after.includes('trocar-after-off'), 'a request that starts after off is never recorded')
     assert.equal(after.trim().split('\n').length, 2, 'the first call and the one that was in flight when off came')
     await until(() => flowsOf(s).some((f) => f.decision === 'decrypt' && f.agent === 'claude-code' && f.pid === 4242))
   } finally { await d.stop(); up.close(); p.done(); s.done() }
 })
 
-// The READ side of the same slice, through `asight query` on its default paths: a real daemon records one
+// The READ side of the same slice, through `trocar query` on its default paths: a real daemon records one
 // real TLS call into a raw segment, and the three named queries hand those very bytes back (T7; D59 · D60).
 // This is what the board half of this test used to assert, now through the one read entry point (1.6 §4.1).
 test('query: the records a real daemon wrote are listed and handed back byte for byte (T7 unit)', async () => {
   const s = sandbox(); const p = fakeProc(); const up = await relay()
   const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
   fs.mkdirSync(path.join(s.home, '.claude'))
-  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.trocar.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
   await install(s)
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, upstreamCa: up.ca.certPem })
@@ -196,14 +196,14 @@ test('query: the records a real daemon wrote are listed and handed back byte for
     await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242 && a.trusted))
     const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4242, decrypt: 1 })
-    const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') })
+    const c = tls.connect({ socket: raw, servername: 'relay.trocar.test', ca: fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') })
     await once(c, 'secureConnect')
     const sid = '6a1b7c2d-0000-4000-8000-000000000002'
-    const body = JSON.stringify({ model: 'claude-x', max_tokens: 16, system: [{ type: 'text', text: 'You are a test.' }], messages: [{ role: 'user', content: [{ type: 'text', text: 'asight-query-e2e' }] }] })
-    c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test:${up.port}\r\nanthropic-version: 2023-06-01\r\nx-claude-code-session-id: ${sid}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`)
+    const body = JSON.stringify({ model: 'claude-x', max_tokens: 16, system: [{ type: 'text', text: 'You are a test.' }], messages: [{ role: 'user', content: [{ type: 'text', text: 'trocar-query-e2e' }] }] })
+    c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.trocar.test:${up.port}\r\nanthropic-version: 2023-06-01\r\nx-claude-code-session-id: ${sid}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`)
     await new Promise((resolve) => { let reply = ''; c.on('data', (x) => { reply += x; if (reply.endsWith(REPLY)) resolve() } ) })
-    const home = path.join(s.home, '.asight')
-    const segment = await until(() => { const n = fs.readdirSync(path.join(home, 'raw'))[0]; return n && fs.readFileSync(path.join(home, 'raw', n), 'utf8').includes('asight-query-e2e') && path.basename(n, '.ndjson') })
+    const home = path.join(s.home, '.trocar')
+    const segment = await until(() => { const n = fs.readdirSync(path.join(home, 'raw'))[0]; return n && fs.readFileSync(path.join(home, 'raw', n), 'utf8').includes('trocar-query-e2e') && path.basename(n, '.ndjson') })
 
     // `sessions` lists the call's session, through the read-side grouping only (3.4)
     const sessions = await runQuery('sessions', {}, { home })
@@ -236,7 +236,7 @@ test('query: the records a real daemon wrote are listed and handed back byte for
 test('daemon: the same program without the CA is only observed; its direct connection is metadata in flows/ (T7 unit)', async () => {
   const s = sandbox(); const p = fakeProc()
   await installCollector({ home: path.join(s.root, 'other-home'), env: {}, osName: 'none', harnesses: [], freePort: async () => 0 }) // a CC whose HOME has no settings key
-  fs.cpSync(path.join(s.root, 'other-home', '.asight'), path.join(s.home, '.asight'), { recursive: true })
+  fs.cpSync(path.join(s.root, 'other-home', '.trocar'), path.join(s.home, '.trocar'), { recursive: true })
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
   try {
@@ -244,7 +244,7 @@ test('daemon: the same program without the CA is only observed; its direct conne
     await req(s.sock, 'POST', '/on', { harnesses: ['claude-code'] })
     const row = (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 5151) // picked up by the rescan in `on`
     assert.deepEqual([row.agent, row.trusted, row.reason, row.decrypt, row.source], ['claude-code', false, 'var-missing', false, 'scan'])
-    assert.equal(row.hint, 'no asight trust entry is in effect for this process', 'status says why in words (R4)')
+    assert.equal(row.hint, 'no trocar trust entry is in effect for this process', 'status says why in words (R4)')
     await clients[0].raw({ op: '__emit', ev: 'flow', pid: 5151, dst: { address: '160.79.104.10', port: 443, family: 4 }, ts_ns: 5 })
     const f = await until(() => flowsOf(s).find((x) => x.decision === 'direct'))
     assert.deepEqual([f.pid, f.agent, f.reason, f.not_captured], [5151, 'claude-code', 'untrusted: var-missing', 'untrusted'], 'the closed code too (D-11)')
@@ -281,7 +281,7 @@ test('daemon: status awaits the redirector\'s directCount — an arch whose answ
 test('daemon: an agent started by another agent is recorded with parent_pid and parent_agent in flows/ and status (B-4a)', async () => {
   const s = sandbox(); const p = fakeProc()
   await installCollector({ home: path.join(s.root, 'other-home'), env: {}, osName: 'none', harnesses: [], freePort: async () => 0 })
-  fs.cpSync(path.join(s.root, 'other-home', '.asight'), path.join(s.home, '.asight'), { recursive: true })
+  fs.cpSync(path.join(s.root, 'other-home', '.trocar'), path.join(s.home, '.trocar'), { recursive: true })
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
   try {
@@ -303,7 +303,7 @@ test('daemon: an agent started by another agent is recorded with parent_pid and 
 test('daemon: an agent started with ANTHROPIC_UNIX_SOCKET or the HTTP3 flag is an agent-transport event once per transport and a line in status; the event is no failure (B-4b)', async () => {
   const s = sandbox(); const p = fakeProc()
   await installCollector({ home: path.join(s.root, 'other-home'), env: {}, osName: 'none', harnesses: [], freePort: async () => 0 })
-  fs.cpSync(path.join(s.root, 'other-home', '.asight'), path.join(s.home, '.asight'), { recursive: true })
+  fs.cpSync(path.join(s.root, 'other-home', '.trocar'), path.join(s.home, '.trocar'), { recursive: true })
   const { arch } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
   try {
@@ -312,7 +312,7 @@ test('daemon: an agent started with ANTHROPIC_UNIX_SOCKET or the HTTP3 flag is a
     await req(s.sock, 'POST', '/on', { harnesses: ['claude-code'] })
     await req(s.sock, 'POST', '/off', {}); await req(s.sock, 'POST', '/on', { harnesses: ['claude-code'] }) // every on judges the live processes again
     const st = await req(s.sock, 'GET', '/status')
-    assert.equal(st.code, CODE, 'D67⑤: the daemon says which code it runs on its control channel — what `asight update` compares against')
+    assert.equal(st.code, CODE, 'D67⑤: the daemon says which code it runs on its control channel — what `trocar update` compares against')
     assert.deepEqual(st.agents.find((a) => a.pid === 5300).unreachable.map((u) => [u.transport, u.var]), [['af-unix', 'ANTHROPIC_UNIX_SOCKET'], ['quic', 'BUN_FEATURE_FLAG_EXPERIMENTAL_HTTP3_CLIENT']])
     assert.deepEqual(st.agents.find((a) => a.pid === 5301).unreachable, [])
     const ev = flowsOf(s).filter((f) => f.event === 'agent-transport')
@@ -417,13 +417,13 @@ test('daemon: a helper death is degraded and on reports why; a protocol mismatch
     const failures = statusFailures(await req(s.sock, 'GET', '/status')).map((f) => f.event)
     assert.ok(failures.includes('helper-down') && failures.includes('attach-failed'), `status reports both (D38): ${failures}`)
   } finally { await d.stop() }
-  const mis = fakeArch(p, { ASIGHT_FAKE_PROTO: '3' })
+  const mis = fakeArch(p, { TROCAR_FAKE_PROTO: '3' })
   const d2 = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: mis.arch, harnesses: [cc] })
   try {
     const on = await req(s.sock, 'POST', '/on', {})
     assert.deepEqual([on.actual, on.helper.ok], ['off', false])
     assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && /protocol 3/.test(f.reason)), 'every failure record carries reason (D38)')
-    assert.ok(flowsOf(s).some((f) => f.event === 'helper-version-mismatch' && /speaks protocol 3, this daemon expects 2; run "sudo asight setup-helper"/.test(f.reason)))
+    assert.ok(flowsOf(s).some((f) => f.event === 'helper-version-mismatch' && /speaks protocol 3, this daemon expects 2; run "sudo trocar setup-helper"/.test(f.reason)))
   } finally { await d2.stop(); p.done(); s.done() }
 })
 
@@ -433,7 +433,7 @@ test('daemon: the install-time engine port held by another process → start fai
   try {
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => squat.address().port })
     const { arch, clients } = fakeArch(p)
-    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), /recorded at install is held by another process; nothing is steered, agent connections go direct\. Free the port, or run "asight uninstall" and "asight on" to pick a new one$/)
+    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), /recorded at install is held by another process; nothing is steered, agent connections go direct\. Free the port, or run "trocar uninstall" and "trocar on" to pick a new one$/)
     assert.ok(flowsOf(s).some((f) => f.event === 'failure' && f.where === 'start' && f.code === 'engine-port-taken' && /held by another process/.test(f.reason)), 'the refusal to start is recorded under engine-port-taken (D38); the daemon picks no other port')
     assert.equal(clients.length, 0, 'the helper was never spawned, so no connection is redirected')
     assert.ok(!fs.existsSync(path.join(s.collector, 'lock')))
@@ -561,9 +561,9 @@ test('daemon: an envelope that cannot be written is a durable failure record, no
   const s = sandbox(); const p = fakeProc(); const up = await relay()
   const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
   fs.mkdirSync(path.join(s.home, '.claude'))
-  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.trocar.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
   await install(s)
-  fs.writeFileSync(path.join(s.home, '.asight', 'raw'), 'not a directory') // no segment can be opened under it
+  fs.writeFileSync(path.join(s.home, '.trocar', 'raw'), 'not a directory') // no segment can be opened under it
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], upstreamCa: up.ca.certPem })
   try {
@@ -573,10 +573,10 @@ test('daemon: an envelope that cannot be written is a durable failure record, no
     await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 7171 && a.trusted))
     const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 7171, decrypt: 1 })
-    const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem')) }); await once(c, 'secureConnect')
+    const c = tls.connect({ socket: raw, servername: 'relay.trocar.test', ca: fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem')) }); await once(c, 'secureConnect')
     const body = JSON.stringify({ model: 'claude-x', max_tokens: 1, messages: [{ role: 'user', content: 'x' }] })
     let reply = ''; c.on('data', (x) => { reply += x })
-    c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\ncontent-length: ${body.length}\r\n\r\n${body}`)
+    c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.trocar.test\r\ncontent-type: application/json\r\ncontent-length: ${body.length}\r\n\r\n${body}`)
     await until(() => flowsOf(s).some((f) => f.event === 'failure' && f.where === 'record'))
     assert.match(flowsOf(s).find((f) => f.where === 'record').reason, /EEXIST|ENOTDIR/)
     await until(() => reply.endsWith(REPLY))
@@ -625,15 +625,15 @@ test('daemon: a CC started after install stays trusted when settings.json is lat
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] })
   try {
     const row = (await req(s.sock, 'POST', '/on', {})).agents.find((a) => a.pid === 7171)
-    assert.deepEqual([row.trusted, row.decrypt], [true, true], 'the CA asight wrote was there when it started')
-    // now the CA value itself changes after it started (to a copy that holds the asight CA too)
+    assert.deepEqual([row.trusted, row.decrypt], [true, true], 'the CA trocar wrote was there when it started')
+    // now the CA value itself changes after it started (to a copy that holds the trocar CA too)
     const copy = path.join(s.home, 'copy.pem')
     edit((j) => { fs.copyFileSync(j.env.NODE_EXTRA_CA_CERTS, copy); j.env.NODE_EXTRA_CA_CERTS = copy })
     await req(s.sock, 'POST', '/off'); const again = (await req(s.sock, 'POST', '/on', {})).agents.find((a) => a.pid === 7171)
     assert.deepEqual([again.trusted, again.reason], [false, 'config-after-start'])
     const rec = flowsOf(s).find((f) => f.event === 'agent-untrusted' && f.pid === 7171)
     assert.deepEqual([rec.code, /started before the CA was in its settings.*restart it to be captured/.test(rec.reason)], ['config-after-start', true])
-    edit((j) => { j.env.NODE_EXTRA_CA_CERTS = path.join(s.collector, 'ca', 'asight-ca.pem') }) // the value asight installed, again
+    edit((j) => { j.env.NODE_EXTRA_CA_CERTS = path.join(s.collector, 'ca', 'trocar-ca.pem') }) // the value trocar installed, again
     await req(s.sock, 'POST', '/off'); await req(s.sock, 'POST', '/on', {})
     const back = flowsOf(s).find((f) => f.event === 'agent-trusted' && f.pid === 7171)
     assert.ok(back && back.code === 'ok', 'a pid recorded untrusted that is trusted again says so: the condition clears (D38)')
@@ -663,7 +663,7 @@ test('daemon: a plugin harness is marker-pending (not recorded) until its marker
   const locked = path.join(s.home, 'locked.env'); fs.writeFileSync(locked, 'X=1\n'); fs.chmodSync(locked, 0o000)
   const plug = { name: 'plug-agent', runtime: 'node', hosts: ['api.plug.test'], processes: { names: [{ name: 'plug-agent' }] },
     layers: (ctx) => { ctx.readText(locked); ctx.unparsable(path.join(s.home, 'broken.json')); return [] }, bypass: () => [{ host: 'early.plug.test', reason: 'before-plugin' }],
-    trust: { chain: [{ var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' }, { var: 'asight:marker', semantic: 'append' }], refine: (r) => (r.reason === 'var-missing' ? 'no-marker' : null) } }
+    trust: { chain: [{ var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' }, { var: 'trocar:marker', semantic: 'append' }], refine: (r) => (r.reason === 'var-missing' ? 'no-marker' : null) } }
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc, plug] })
   try {
@@ -712,7 +712,7 @@ test('daemon: combined bundles follow the roots — rebuilt at start when the OS
   d = await startDaemon({ dir, socketPath: s.sock, arch: { ...fakeArch(p).arch, osRoots: fileRoots(osRoots) }, harnesses: [rep] })
   try {
     const now = fs.readFileSync(bundle, 'utf8')
-    for (const c of [newRoot.certPem, corp.certPem, fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'), 'utf8')]) assert.ok(now.includes(c.trim()), 'the new root, the user\'s CA and the asight CA')
+    for (const c of [newRoot.certPem, corp.certPem, fs.readFileSync(path.join(dir, 'ca', 'trocar-ca.pem'), 'utf8')]) assert.ok(now.includes(c.trim()), 'the new root, the user\'s CA and the trocar CA')
     assert.ok(now.includes(tls.rootCertificates[0].trim()), 'Node\'s roots stay first')
     assert.ok(flowsOf(s).some((f) => f.event === 'bundles-rebuilt' && f.code === 'roots-changed' && f.reason.includes('combined-rep.pem')), 'the rebuild is recorded')
   } finally { await d.stop(); p.done(); s.done() }
@@ -799,10 +799,10 @@ test('daemon: OS roots the reader dropped as unparsable, or a roots source that 
   } finally { await d.stop(); p.done(); s.done() }
 })
 
-// 4.6 「合并包」, D39: the daily rebuild is for the harnesses whose desired state is on, and works on the manifest as it is on disk. `asight off <h>` runs while
-// the daemon does (it is not stopped for one harness): what it removed or kept without the asight CA must not come back with it, and the manifest it saved
+// 4.6 「合并包」, D39: the daily rebuild is for the harnesses whose desired state is on, and works on the manifest as it is on disk. `trocar off <h>` runs while
+// the daemon does (it is not stopped for one harness): what it removed or kept without the trocar CA must not come back with it, and the manifest it saved
 // must not be written over by the copy the daemon read at start.
-test('daemon: the daily bundle rebuild never writes the asight CA back into a bundle `asight off` removed, nor puts its undone entries back, and leaves a harness that is not on alone (4.6 「合并包」, D39)', async () => {
+test('daemon: the daily bundle rebuild never writes the trocar CA back into a bundle `trocar off` removed, nor puts its undone entries back, and leaves a harness that is not on alone (4.6 「合并包」, D39)', async () => {
   const s = sandbox(); const p = fakeProc()
   const { createCa } = await import('../../src/collector/core/tls/ca.mjs')
   const { readManifest } = await import('../../src/off/manifest.mjs')
@@ -821,7 +821,7 @@ test('daemon: the daily bundle rebuild never writes the asight CA back into a bu
   const { arch } = fakeArch(p)
   const d = await startDaemon({ dir, socketPath: s.sock, arch: { ...arch, osRoots: fileRoots(osRoots) }, harnesses: list, bundleMs: 30 })
   try {
-    // `asight off gone`, while the daemon runs: its entry out, its bundle removed (nobody holds it), the manifest saved
+    // `trocar off gone`, while the daemon runs: its entry out, its bundle removed (nobody holds it), the manifest saved
     const off = await undoHarnesses({ dir, home: s.home, phases: PHASES, manifest: readManifest(dir), ids: ['gone'], procs: async () => [], roots: { node: tlsMod.rootCertificates, osText: '' } })
     writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['stay'], 'on'))
     assert.deepEqual([off.results.map((r) => r.result), fs.existsSync(bundle('gone'))], [['restored'], false])
@@ -892,11 +892,11 @@ test('daemon: describe hands the engine the harness WebSocket terminators and th
     const bundle = fs.readFileSync(path.join(s.collector, 'ca', 'combined-codex.pem'), 'utf8') // what this codex trusts
     c = await wsConnect(0, { tls: { socket: raw, servername: 'api.openai.com', ca: bundle }, extensions: 'permessage-deflate; client_max_window_bits' })
     assert.equal(c.status, 101)
-    const msg = JSON.stringify({ type: 'response.create', model: 'gpt-test-1', store: false, stream: true, input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'asight-ws-describe' }] }] })
+    const msg = JSON.stringify({ type: 'response.create', model: 'gpt-test-1', store: false, stream: true, input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'trocar-ws-describe' }] }] })
     await c.sendText(msg)
     const evs = await c.events()
     assert.equal(evs.at(-1).type, 'response.completed')
-    const rawDir = path.join(s.home, '.asight', 'raw')
+    const rawDir = path.join(s.home, '.trocar', 'raw')
     const capture = () => (fs.existsSync(rawDir) ? fs.readdirSync(rawDir) : []).flatMap((n) => fs.readFileSync(path.join(rawDir, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
     const [e] = await until(() => { const l = capture().filter((x) => x.transport === 'ws'); return l.length && l }, 1500)
     assert.ok(!c.state.closed, 'cut at the terminal message, not at the close')
@@ -909,7 +909,7 @@ test('daemon: describe hands the engine the harness WebSocket terminators and th
     await clients[0].raw({ op: '__inject_port', port: raw2.localPort, family: 4, dst: { address: '127.0.0.1', port: mock.port, family: 4 }, pid: 5151, decrypt: 1 })
     const c2 = await wsConnect(0, { tls: { socket: raw2, servername: 'api.openai.com', ca: bundle } })
     assert.equal(c2.status, 101, 'the connection goes on')
-    const msg2 = msg.replace('asight-ws-describe', 'asight-ws-no-extras')
+    const msg2 = msg.replace('trocar-ws-describe', 'trocar-ws-no-extras')
     await c2.sendText(msg2)
     assert.equal((await c2.events()).at(-1).type, 'response.completed')
     await new Promise((r) => setTimeout(r, 400))
@@ -983,17 +983,17 @@ test('daemon: daemon-start carries its identity, version, foreground, upstream_c
 })
 
 // 1.6 §2: what the daemon tells a user to run is a command of help, never a hidden alias (`collector install` / `collector uninstall` are only kept for scripts written before D39).
-test('daemon: started where asight is not installed, or where the manifest cannot be read, it says which commands to run — `asight on`, `asight uninstall` (1.6 §2)', async () => {
+test('daemon: started where trocar is not installed, or where the manifest cannot be read, it says which commands to run — `trocar on`, `trocar uninstall` (1.6 §2)', async () => {
   const s = sandbox()
   try {
     const arch = { os: 'linux', createRedirector: () => { throw new Error('must not get this far') } }
-    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), (e) => e.code === 'not-installed' && /the collector is not installed for this user: run "asight on" first$/.test(e.message))
+    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), (e) => e.code === 'not-installed' && /the collector is not installed for this user: run "trocar on" first$/.test(e.message))
     fs.mkdirSync(s.collector, { recursive: true }); fs.writeFileSync(path.join(s.collector, 'install-manifest.json'), '{not json')
-    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), (e) => e.code === 'manifest-unreadable' && /is unreadable \(.*\); run "asight uninstall", then "asight on"$/.test(e.message))
+    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), (e) => e.code === 'manifest-unreadable' && /is unreadable \(.*\); run "trocar uninstall", then "trocar on"$/.test(e.message))
   } finally { s.done() }
 })
 
-// 4.11 ⑰: a v2 manifest is not read by this build — complete or not, the daemon is not-installed; the asight that wrote it undoes it (plan decision #11).
+// 4.11 ⑰: a v2 manifest is not read by this build — complete or not, the daemon is not-installed; the trocar that wrote it undoes it (plan decision #11).
 test('daemon: on a v2 manifest, complete or not, it is not-installed (4.11 ⑰)', async () => {
   const s = sandbox(); const p = fakeProc()
   await install(s)
@@ -1098,7 +1098,7 @@ test('daemon: an unusable CA is recorded as ca-invalid with which part and file,
   let d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] })
   try {
     const rec = flowsOf(s).find((f) => f.code === 'ca-invalid')
-    assert.deepEqual([rec.where, rec.which, rec.file], ['ca', 'pair', path.join(caDir, 'asight-ca.pem')])
+    assert.deepEqual([rec.where, rec.which, rec.file], ['ca', 'pair', path.join(caDir, 'trocar-ca.pem')])
     const on = await req(s.sock, 'POST', '/on', {})
     assert.deepEqual([on.ca.ok, on.ca.which, on.actual], [false, 'pair', 'off'], 'never hooked')
     assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && /CA is unusable/.test(f.reason)))
@@ -1115,7 +1115,7 @@ test('daemon: an unusable CA is recorded as ca-invalid with which part and file,
   try {
     assert.equal((await req(s.sock, 'GET', '/status')).ca.ok, true)
     const before = flowsOf(s).filter((f) => f.code === 'ca-invalid').length
-    fs.writeFileSync(path.join(caDir, 'asight-ca.pem'), 'garbage')
+    fs.writeFileSync(path.join(caDir, 'trocar-ca.pem'), 'garbage')
     await until(() => flowsOf(s).filter((f) => f.code === 'ca-invalid').length > before)
     assert.equal((await req(s.sock, 'GET', '/status')).ca.which, 'cert', 'the daily check found it')
   } finally { await d.stop(); p.done(); s.done() }
@@ -1128,7 +1128,7 @@ test('daemon: a CA that becomes usable again is rebuilt — ca-ok clears the con
   const s = sandbox(); const p = fakeProc(); const up = await relay()
   const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
   fs.mkdirSync(path.join(s.home, '.claude'))
-  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }, null, 2))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.trocar.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }, null, 2))
   await install(s)
   const caDir = path.join(s.collector, 'ca')
   const goodKey = fs.readFileSync(path.join(caDir, 'ca.key'), 'utf8')
@@ -1139,7 +1139,7 @@ test('daemon: a CA that becomes usable again is rebuilt — ca-ok clears the con
     assert.equal((await req(s.sock, 'POST', '/on', {})).actual, 'off', 'unusable at start: never hooked')
     fs.writeFileSync(path.join(caDir, 'ca.key'), goodKey, { mode: 0o600 }) // the key is put back
     const ok = await until(() => flowsOf(s).find((f) => f.event === 'ca-ok'))
-    assert.equal(ok.file, path.join(caDir, 'asight-ca.pem'))
+    assert.equal(ok.file, path.join(caDir, 'trocar-ca.pem'))
     const st = await req(s.sock, 'GET', '/status')
     assert.equal(st.ca.ok, true)
     assert.deepEqual(st.health.collector.conditions.filter((c) => c.kind === 'ca-invalid'), [], 'the board no longer says CA unusable')
@@ -1150,13 +1150,13 @@ test('daemon: a CA that becomes usable again is rebuilt — ca-ok clears the con
     await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4343 && a.trusted))
     const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4343, decrypt: 1 })
-    const extraCc = fs.readFileSync(path.join(caDir, 'extra-cc.pem'), 'utf8') // relay CA + asight CA
-    const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: extraCc }); await once(c, 'secureConnect')
-    const asightCa = new crypto.X509Certificate(fs.readFileSync(path.join(caDir, 'asight-ca.pem')))
-    assert.ok(new crypto.X509Certificate(c.getPeerCertificate().raw).checkIssued(asightCa), 'the leaf is signed by the asight CA: decrypted, not stepped aside')
+    const extraCc = fs.readFileSync(path.join(caDir, 'extra-cc.pem'), 'utf8') // relay CA + trocar CA
+    const c = tls.connect({ socket: raw, servername: 'relay.trocar.test', ca: extraCc }); await once(c, 'secureConnect')
+    const trocarCa = new crypto.X509Certificate(fs.readFileSync(path.join(caDir, 'trocar-ca.pem')))
+    assert.ok(new crypto.X509Certificate(c.getPeerCertificate().raw).checkIssued(trocarCa), 'the leaf is signed by the trocar CA: decrypted, not stepped aside')
     // a call goes through (a client that hung up right after the handshake would be, by the engine's rule, one that
     // refused the leaf: not_captured client-rejected-leaf — the merged rows now say so, they used to carry reason only)
-    c.write('POST /v1/messages HTTP/1.1\r\nHost: relay.asight.test\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}'); await once(c, 'data')
+    c.write('POST /v1/messages HTTP/1.1\r\nHost: relay.trocar.test\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}'); await once(c, 'data')
     c.end(); await once(c, 'close')
     const row = await until(() => flowsOf(s).find((f) => f.pid === 4343 && f.event == null && f.flow_id))
     assert.deepEqual([row.decision, row.not_captured ?? null], ['decrypt', null])
@@ -1177,7 +1177,7 @@ test('daemon: every check (5 s), with nobody running status — links lost behin
     await clients[0].raw({ op: '__yank' })
     const mm = await until(() => flowsOf(s).find((f) => f.code === 'state-mismatch'))
     assert.deepEqual([mm.event, mm.where, mm.desired, mm.actual, mm.links], ['failure', 'switch', 'on', 'off', []])
-    assert.match(mm.reason, /capture is on but the kernel has not got this instance's links: nothing is steered.*; run "asight on" again$/)
+    assert.match(mm.reason, /capture is on but the kernel has not got this instance's links: nothing is steered.*; run "trocar on" again$/)
     await new Promise((r) => setTimeout(r, 100))
     assert.equal(flowsOf(s).filter((f) => f.code === 'state-mismatch').length, 1, 'once per disagreement, not once per check')
     const switches = () => flowsOf(s).filter((f) => f.event === 'switch')
@@ -1226,17 +1226,17 @@ test('daemon: a trusted agent whose trust file changed is judged again by the ch
     p.add(9191, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
     await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 9191, pid: 9191, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
     await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 9191 && a.trusted))
-    const file = path.join(s.collector, 'ca', 'asight-ca.pem')
+    const file = path.join(s.collector, 'ca', 'trocar-ca.pem')
     const untrusted = () => flowsOf(s).filter((f) => f.event === 'agent-untrusted' && f.pid === 9191)
     fs.writeFileSync(path.join(s.collector, 'ca', 'x.tmp'), fs.readFileSync(file)); fs.renameSync(path.join(s.collector, 'ca', 'x.tmp'), file) // rewritten, same CA
     await new Promise((r) => setTimeout(r, 120))
     assert.deepEqual(untrusted(), [], 'judged again, still trusted: nothing to record')
     assert.equal((await clients[0].raw({ op: '__watched' })).watch['9191'], 1)
-    fs.renameSync(file, path.join(s.collector, 'ca', 'asight-ca.pem.bak'))
+    fs.renameSync(file, path.join(s.collector, 'ca', 'trocar-ca.pem.bak'))
     const u = await until(() => untrusted()[0])
     assert.deepEqual([u.cause, u.code, u.agent], ['entry-changed', 'file-unreadable', 'claude-code'])
     assert.equal((await clients[0].raw({ op: '__watched' })).watch['9191'], 0, 'the kernel only observes it from now on')
-    const good = fs.readFileSync(path.join(s.collector, 'ca', 'asight-ca.pem.bak'))
+    const good = fs.readFileSync(path.join(s.collector, 'ca', 'trocar-ca.pem.bak'))
     fs.writeFileSync(file, good) // back again: a process that found it missing does not trust it now, so trust never comes back by a recheck
     await new Promise((r) => setTimeout(r, 120))
     assert.equal(untrusted().length, 1)
@@ -1685,14 +1685,14 @@ test('daemon: the 5 s check records a change of the proxy setting once — neten
 })
 
 // §9.5: the semantics of a drift belong to the record `on` made, not to a property of the platform module (the Linux one has none, a proxy-mode one need not declare one): a record of a routing that owns the
-// proxy field is measured against what asight wrote there, so the entry asight put in the field is not a change — and the user's own edit of it is, with the harness left uncaptured.
-test('daemon: the 5 s check takes a proxy-mode record\'s own semantics — the field holding what asight wrote says nothing, the user\'s edit of it is one netenv-change (captured false) and one failure — with an arch that declares no routing', async () => {
+// proxy field is measured against what trocar wrote there, so the entry trocar put in the field is not a change — and the user's own edit of it is, with the harness left uncaptured.
+test('daemon: the 5 s check takes a proxy-mode record\'s own semantics — the field holding what trocar wrote says nothing, the user\'s edit of it is one netenv-change (captured false) and one failure — with an arch that declares no routing', async () => {
   const s = sandbox(); const p = fakeProc()
   await install(s)
   const file = path.join(s.home, '.claude', 'settings.json')
   const setProxy = (v) => { const d = JSON.parse(fs.readFileSync(file, 'utf8')); d.env.HTTPS_PROXY = v; fs.writeFileSync(file, `${JSON.stringify(d, null, 2)}\n`) }
   const KERNEL = 'http://127.0.0.1:17991'
-  setProxy(KERNEL) // `on` in proxy mode pointed the agent's proxy at asight's own kernel
+  setProxy(KERNEL) // `on` in proxy mode pointed the agent's proxy at trocar's own kernel
   const rec = { at: 'T', routing: 'proxy', chain: 'c', source: [], sha256: settingSha('http://proxy.old:3128'), file_sha256: settingSha('http://proxy.old:3128'), proxy: 'http://proxy.old:3128', vpn: null, written_sha256: settingSha(KERNEL) }
   writeNetenv(s.home, { at: 'T', products: [], unknown: [{ reason: 'a test' }], adopted: { 'claude-code': rec } })
   const { arch } = fakeArch(p)
@@ -1701,7 +1701,7 @@ test('daemon: the 5 s check takes a proxy-mode record\'s own semantics — the f
   try {
     await req(s.sock, 'POST', '/on', {})
     await new Promise((r) => setTimeout(r, 200))
-    assert.deepEqual(flowsOf(s).filter((f) => f.where === 'netenv' || f.event === 'netenv-change'), [], 'what asight wrote is not a change of the user\'s setting')
+    assert.deepEqual(flowsOf(s).filter((f) => f.where === 'netenv' || f.event === 'netenv-change'), [], 'what trocar wrote is not a change of the user\'s setting')
     setProxy('http://proxy.new:3128')
     const bytes = fs.readFileSync(file)
     await until(() => flowsOf(s).some((f) => f.event === 'failure' && f.where === 'netenv'))

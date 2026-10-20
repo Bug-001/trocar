@@ -7,7 +7,7 @@
 // It reports, per command: the COLD wall clock (the index deleted first), the WARM p50/p95 wall clock, the
 // command's own CPU time and peak RSS, and — separately — the CORE time, which is runQuery inside an already
 // running process. The core time is what a board server pays per click; the wall clock is the core plus the
-// FLOOR (node's own boot plus asight's module load), which this script measures on its own line.
+// FLOOR (node's own boot plus trocar's module load), which this script measures on its own line.
 // `nearby` is the sequence §4.1 calls 「附近的查询」: a session is open, and the next page / another step's block /
 // its calls follow in the SAME process — the 50 ms budget is theirs.
 // `--idle <pid>` is the OTHER half of D62: the daemon's own idle cost, read the way §3.1 says (two readings of
@@ -20,13 +20,13 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { median } from './perf-query.mjs'
 
-const CLI = path.join(import.meta.dirname, '..', 'bin', 'asight.mjs')
+const CLI = path.join(import.meta.dirname, '..', 'bin', 'trocar.mjs')
 const SELF = import.meta.filename
 const DEFAULT_RUNS = 7
 
-// ── the wrapper: a real cold `asight` process that also reports its own CPU and RSS ──────────────
+// ── the wrapper: a real cold `trocar` process that also reports its own CPU and RSS ──────────────
 // `--wrap <file> -- <argv…>` runs the CLI in this process and, on exit (the CLI may exit itself), appends
-// its cpuUsage and peak RSS to <file>. The modules are the same ones bin/asight.mjs loads, so the wall
+// its cpuUsage and peak RSS to <file>. The modules are the same ones bin/trocar.mjs loads, so the wall
 // clock the parent measures is the product's, plus this file's own import.
 async function wrap(out, argv) {
   process.on('exit', () => {
@@ -39,7 +39,7 @@ async function wrap(out, argv) {
 
 const pct = (xs, p) => { const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.ceil((p / 100) * s.length) - 1)] }
 
-/** One cold process: { ms, status, doc, cpu_ms, rss_kb }. `argv` is what follows `asight`. */
+/** One cold process: { ms, status, doc, cpu_ms, rss_kb }. `argv` is what follows `trocar`. */
 function run(home, argv, { json = true } = {}) {
   const out = path.join(fs.mkdtempSync(path.join(fs.realpathSync(require_tmp()), 'perf-')), 'm.json')
   const t = process.hrtime.bigint()
@@ -83,7 +83,7 @@ const CMDS = [
 const fill = (argv, vars) => argv.map((a) => (a.startsWith('$') ? vars[a.slice(1)] : a))
 const fillParams = (p, vars) => Object.fromEntries(Object.entries(p).map(([k, v]) => [k, typeof v === 'string' && v.startsWith('$') ? vars[v.slice(1)] : v]))
 
-/** The floor every command pays: node's own boot, and node plus asight's module load (`--version`). */
+/** The floor every command pays: node's own boot, and node plus trocar's module load (`--version`). */
 function floor(home, runs) {
   const boot = [], load = []
   for (let i = 0; i < runs; i++) {
@@ -100,7 +100,7 @@ function floor(home, runs) {
 /** The in-process times: runQuery once (cold index) then `runs` times, in ONE process. Plus the nearby sequence. */
 async function cores({ home, names, vars, runs }) {
   const { runQuery } = await import('../src/query/named/index.mjs')
-  const ctx = { home: path.join(home, '.asight'), userHome: home, env: { ...process.env, HOME: home, USERPROFILE: home }, platform: process.platform }
+  const ctx = { home: path.join(home, '.trocar'), userHome: home, env: { ...process.env, HOME: home, USERPROFILE: home }, platform: process.platform }
   const timed = async (name, params) => { const t = process.hrtime.bigint(); let doc = null, error = null
     try { doc = await runQuery(name, params, ctx) } catch (e) { error = String((e && e.message) || e) }
     return { ms: Number(process.hrtime.bigint() - t) / 1e6, doc, error } }
@@ -139,13 +139,13 @@ async function cores({ home, names, vars, runs }) {
 }
 
 export async function measure({ home, runs = DEFAULT_RUNS, only = null }) {
-  const indexPath = path.join(home, '.asight', 'index')
+  const indexPath = path.join(home, '.trocar', 'index')
   const names = CMDS.map(([n]) => n).filter((n) => !only || only.includes(n))
   // What the daemon leaves behind (D62, 4.2 §段索引): a reader never writes a plaintext segment's index, so after a
   // COLD run (the index deleted) the index has to be put back the way the keeper would have, or every "warm" run
   // would measure the fallback build instead of the product.
   const { allSegments, segmentIndex } = await import('../src/query/index-build.mjs')
-  const kept = async () => { const h = path.join(home, '.asight'); for (const s of await allSegments({ home: h })) await segmentIndex({ home: h, segment: s.segment, owner: true }) }
+  const kept = async () => { const h = path.join(home, '.trocar'); for (const s of await allSegments({ home: h })) await segmentIndex({ home: h, segment: s.segment, owner: true }) }
   // discovery (warm, index built): the id / ref / harness the parameterised commands use
   fs.rmSync(indexPath, { recursive: true, force: true })
   // `index_build_ms` is the REAL build — what the daemon's keeper pays to index a whole cold home, and what a user
@@ -247,7 +247,7 @@ async function sparseAmp(n) {
   const { fillUsage } = await import('../src/query/usage.mjs')
   const { envLine } = await import('../test/query/raw-home.mjs') // one record shape, one place (0.1 §2)
   const dir = fs.mkdtempSync(path.join(require_tmp(), 'perf-amp-'))
-  const h = path.join(dir, '.asight'), seg = '20261020T100000Z'
+  const h = path.join(dir, '.trocar'), seg = '20261020T100000Z'
   fs.mkdirSync(path.join(h, 'raw'), { recursive: true })
   const file = path.join(h, 'raw', `${seg}.ndjson`)
   for (let i = 0; i < n; i++) {
@@ -262,11 +262,11 @@ async function sparseAmp(n) {
     index_bytes_per_record: Math.round(index / n), bytes_written_per_captured_byte: +((captured + index) / captured).toFixed(2) }
 }
 
-/** (a) the reference mix already in <home>/.asight/raw, indexed the way the daemon's keeper does. */
+/** (a) the reference mix already in <home>/.trocar/raw, indexed the way the daemon's keeper does. */
 async function writeAmp({ home, records }) {
   const { allSegments, segmentIndex, indexDir } = await import('../src/query/index-build.mjs')
   const { fillUsage } = await import('../src/query/usage.mjs')
-  const h = path.join(home, '.asight')
+  const h = path.join(home, '.trocar')
   fs.rmSync(path.join(h, 'index'), { recursive: true, force: true })
   const segs = await allSegments({ home: h })
   const t0 = process.hrtime.bigint()
@@ -301,7 +301,7 @@ function printAmp(o) {
 function print(out) {
   const t = out.dataset
   console.log(`dataset  ${t.segments} segments  ${t.records} records  ${(t.bytes / 2 ** 30).toFixed(2)} GiB  index build (the keeper's, whole home) ${t.index_build_ms} ms`)
-  console.log(`floor    node boot ${out.floor.node_boot_ms} ms  +asight module load ${out.floor.module_load_ms} ms  (= ${out.floor.cli_version_ms} ms before any work)`)
+  console.log(`floor    node boot ${out.floor.node_boot_ms} ms  +trocar module load ${out.floor.module_load_ms} ms  (= ${out.floor.cli_version_ms} ms before any work)`)
   console.log('command         noindex    p50    p95   core50  core95   cpu    rss(MB)  diskblk')
   for (const c of out.commands) {
     if (c.skipped) { console.log(`  ${c.command.padEnd(16)}${c.skipped}`); continue }

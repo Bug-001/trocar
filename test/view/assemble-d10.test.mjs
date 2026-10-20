@@ -52,7 +52,7 @@ function d10Record(over = {}) {
 // `_stream` and every block is addressable. Returns { call, rec, file } — `rec` is the ORIGINAL record
 // (with req_body), which the tests diff the resolved bytes against.
 function boardFromCapture(record = d10Record()) {
-  const dir = tmpDir('asight-d10-');
+  const dir = tmpDir('trocar-d10-');
   const file = path.join(dir, 'cap.ndjson');
   fs.writeFileSync(file, JSON.stringify(record) + '\n');
   return { file, record };

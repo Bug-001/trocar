@@ -12,7 +12,7 @@ import { pageHtml } from '../../src/web/v2/capture/capture-view.mjs'
 import { failureWord } from '../../src/cli/words.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
-const SPEC = fs.readFileSync(new URL('../../spec/01-asight-rfc/1.6-cli.md', import.meta.url), 'utf8')
+const SPEC = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
 const C3 = SPEC.slice(SPEC.indexOf('### C.3'))
 const sample = () => JSON.parse(/```json\n([\s\S]*?)```/.exec(C3)[1])
 // the closed set of health.state, read off the C.3 table's `health` row (one fact, one place)

@@ -8,9 +8,9 @@ import { applyJsonKey, applyTextEntry, undoEntry, newManifest, readManifest, sav
 
 const K = ['env', 'CA_FILE']
 function box() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-j-'))
-  const dir = path.join(root, '.asight', 'collector')
-  return { root, dir, value: path.join(dir, 'ca', 'asight-ca.pem'), done: () => fs.rmSync(root, { recursive: true, force: true }) }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-j-'))
+  const dir = path.join(root, '.trocar', 'collector')
+  return { root, dir, value: path.join(dir, 'ca', 'trocar-ca.pem'), done: () => fs.rmSync(root, { recursive: true, force: true }) }
 }
 const USER = '{\n  "model": "x",\n  "env": {\n    "API_KEY": "sk-secret-123"\n  }\n}\n'
 
@@ -44,7 +44,7 @@ test('journal: a file (and directory) that did not exist is created, then remove
   } finally { b.done() }
 })
 
-test('journal: edited after install → only asight\'s key goes, the user\'s prior value comes back, the rest is byte-identical', () => {
+test('journal: edited after install → only trocar\'s key goes, the user\'s prior value comes back, the rest is byte-identical', () => {
   const b = box()
   try {
     const file = path.join(b.root, 'settings.json'); fs.writeFileSync(file, '{"env":{"CA_FILE":"/etc/corp.pem","B":"2"}}')
@@ -67,7 +67,7 @@ test('journal: edited after install with no prior value → the key and the pare
   } finally { b.done() }
 })
 
-test('journal: the user changed asight\'s value → left alone; unparsable → left alone', () => {
+test('journal: the user changed trocar\'s value → left alone; unparsable → left alone', () => {
   const b = box()
   try {
     const file = path.join(b.root, 'settings.json'); fs.writeFileSync(file, '{}')
@@ -123,7 +123,7 @@ test('journal: the intent is on disk before the user file changes; owned files a
   } finally { b.done() }
 })
 
-test('journal: a file asight created that the user then edited is kept with only asight\'s key gone (reverted-not-identical)', () => {
+test('journal: a file trocar created that the user then edited is kept with only trocar\'s key gone (reverted-not-identical)', () => {
   const b = box()
   try {
     const file = path.join(b.root, '.app', 'settings.json')
@@ -132,7 +132,7 @@ test('journal: a file asight created that the user then edited is kept with only
     const doc = JSON.parse(fs.readFileSync(file, 'utf8')); doc.model = 'mine'; fs.writeFileSync(file, JSON.stringify(doc, null, 2))
     const r = undoEntry(e)
     assert.deepEqual([r.result, r.deleted], ['reverted-not-identical', undefined])
-    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { model: 'mine' }, "the user's key stays, asight's key and the env object it created go")
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { model: 'mine' }, "the user's key stays, trocar's key and the env object it created go")
   } finally { b.done() }
 })
 
@@ -166,11 +166,11 @@ test('journal: installed through a link that is now a regular file, gone, or a l
     fs.rmSync(link); fs.writeFileSync(link, '{"mine":1}') // now a regular file
     let r = undoEntry(e)
     assert.equal(r.result, 'left-link')
-    assert.match(r.reason, new RegExp(`${link.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} is no longer a symbolic link; asight changed .*claude-settings\\.json through it; asight did not touch it, and its env\\.CA_FILE = .* may still be in .*claude-settings\\.json`))
+    assert.match(r.reason, new RegExp(`${link.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} is no longer a symbolic link; trocar changed .*claude-settings\\.json through it; trocar did not touch it, and its env\\.CA_FILE = .* may still be in .*claude-settings\\.json`))
     assert.deepEqual([fs.readFileSync(link, 'utf8'), fs.readFileSync(target, 'utf8')], ['{"mine":1}', withKey], 'neither the new file nor the old target is touched')
     fs.rmSync(link) // gone
     r = undoEntry(e)
-    assert.deepEqual([r.result, /is gone; asight changed/.test(r.reason)], ['left-link', true])
+    assert.deepEqual([r.result, /is gone; trocar changed/.test(r.reason)], ['left-link', true])
     assert.equal(fs.readFileSync(target, 'utf8'), withKey)
     const other = path.join(b.root, 'dotfiles', 'other.json'); fs.writeFileSync(other, '{}'); fs.symlinkSync(other, link) // a link elsewhere
     r = undoEntry(e)
@@ -185,7 +185,7 @@ test('journal: a crash between the intent and the write leaves no residue after 
     const file = path.join(b.root, '.app', 'sub', 'settings.json')
     const e = applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
     fs.rmSync(file) // as if the crash came after mkdir but before the rename …
-    fs.writeFileSync(`${file}.asight-tmp-4242`, '{"half":') // … with the temp file written
+    fs.writeFileSync(`${file}.trocar-tmp-4242`, '{"half":') // … with the temp file written
     const r = undoEntry({ ...e, post_sha256: null })
     assert.equal(r.result, 'already-restored')
     assert.ok(!fs.existsSync(path.join(b.root, '.app')), 'the directories the intent created are gone, temp file included')
@@ -203,7 +203,7 @@ test('journal: undo never writes or deletes over a path that is a symbolic link 
     fs.rmSync(file); fs.symlinkSync(dot, file)
     const r = undoEntry(e)
     assert.equal(r.result, 'left-link')
-    assert.match(r.reason, /is now a symbolic link to .*dotfiles\/settings\.json, not to .*\.app\/settings\.json, the file asight changed; asight did not touch it, and its env\.CA_FILE = .* may still be in /)
+    assert.match(r.reason, /is now a symbolic link to .*dotfiles\/settings\.json, not to .*\.app\/settings\.json, the file trocar changed; trocar did not touch it, and its env\.CA_FILE = .* may still be in /)
     assert.ok(fs.lstatSync(file).isSymbolicLink(), 'the link is still a link')
     assert.equal(JSON.parse(fs.readFileSync(dot, 'utf8')).env.CA_FILE, b.value, 'the target was not touched')
     // installed through a link to T; the link now points elsewhere
@@ -220,23 +220,23 @@ test('journal: undo never writes or deletes over a path that is a symbolic link 
   } finally { b.done() }
 })
 
-test('journal: installedAt finds when asight wrote the value a layer holds — by path or link target, only while the value is asight\'s (review 2 #5)', () => {
-  const m = { entries: [{ path: '/h/.claude/settings.json', real_path: '/dots/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: '/h/.asight/collector/ca/asight-ca.pem', installed_at: '2026-10-06T01:00:00.000Z' }] }
+test('journal: installedAt finds when trocar wrote the value a layer holds — by path or link target, only while the value is trocar\'s (review 2 #5)', () => {
+  const m = { entries: [{ path: '/h/.claude/settings.json', real_path: '/dots/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: '/h/.trocar/collector/ca/trocar-ca.pem', installed_at: '2026-10-06T01:00:00.000Z' }] }
   const layer = (file, v) => ({ file, vars: { NODE_EXTRA_CA_CERTS: v, OTHER: 'x' } })
   const at = Date.parse('2026-10-06T01:00:00.000Z')
-  assert.equal(installedAt(m, layer('/h/.claude/settings.json', '/h/.asight/collector/ca/asight-ca.pem')), at)
-  assert.equal(installedAt(m, layer('/dots/settings.json', '/h/.asight/collector/ca/asight-ca.pem')), at, 'read through the link target')
+  assert.equal(installedAt(m, layer('/h/.claude/settings.json', '/h/.trocar/collector/ca/trocar-ca.pem')), at)
+  assert.equal(installedAt(m, layer('/dots/settings.json', '/h/.trocar/collector/ca/trocar-ca.pem')), at, 'read through the link target')
   assert.equal(installedAt(m, layer('/h/.claude/settings.json', '/elsewhere/ca.pem')), null, 'the user changed the value: its age is the file\'s')
-  assert.equal(installedAt(m, layer('/h/project/.claude/settings.json', '/h/.asight/collector/ca/asight-ca.pem')), null, 'another file')
+  assert.equal(installedAt(m, layer('/h/project/.claude/settings.json', '/h/.trocar/collector/ca/trocar-ca.pem')), null, 'another file')
   assert.equal(installedAt(null, layer('/h/.claude/settings.json', 'x')), null)
-  // a dotenv block (Hermes, Codex): every variable of the block still holds asight's value
-  const B = '/h/.asight/collector/ca/combined-hermes.pem'
+  // a dotenv block (Hermes, Codex): every variable of the block still holds trocar's value
+  const B = '/h/.trocar/collector/ca/combined-hermes.pem'
   const mb = { entries: [{ kind: 'text', format: 'dotenv-block', path: '/h/.hermes/.env', vars: { SSL_CERT_FILE: B, HERMES_CA_BUNDLE: B }, installed_at: '2026-10-06T01:00:00.000Z' }] }
   assert.equal(installedAt(mb, { file: '/h/.hermes/.env', vars: { SSL_CERT_FILE: B, HERMES_CA_BUNDLE: B, OPENAI_API_KEY: 'k' } }), at)
   assert.equal(installedAt(mb, { file: '/h/.hermes/.env', vars: { SSL_CERT_FILE: '/etc/ssl/certs/ca-certificates.crt', HERMES_CA_BUNDLE: B } }), null, 'a same-name line below the block won')
   assert.equal(installedAt({ entries: [{ kind: 'text', format: 'line', path: '/h/.bashrc', line: 'x', installed_at: '2026-10-06T01:00:00.000Z' }] }, { file: '/h/.bashrc', vars: { A: '1' } }), null, 'a line entry sets no variable')
   // a descriptor may name the key's value under its own pseudo-variable (Z-Code: zcode:user:caCertFile)
-  const Z = '/h/.asight/collector/ca/combined-z-code.pem'
+  const Z = '/h/.trocar/collector/ca/combined-z-code.pem'
   const mz = { entries: [{ kind: 'json-key', path: '/h/.zcode/cli/config.json', keys: ['network', 'caCertFile'], value: Z, installed_at: '2026-10-06T01:00:00.000Z' }] }
   assert.equal(installedAt(mz, { file: '/h/.zcode/cli/config.json', vars: { 'zcode:user:caCertFile': Z } }), at)
   assert.equal(installedAt(mz, { file: '/h/.zcode/cli/config.json', vars: { 'zcode:user:caCertFile': '/corp.pem' } }), null)
@@ -244,7 +244,7 @@ test('journal: installedAt finds when asight wrote the value a layer holds — b
 
 test('D55①: each journal writer needs the phase of the command writing (install | on) and refuses before anything is written without one', async () => {
   const { tmpDir } = await import('../../helpers/tmp.mjs')
-  const home = tmpDir('asight-jphase-'); const dir = path.join(home, '.asight', 'collector'); const file = path.join(home, 'a.json')
+  const home = tmpDir('trocar-jphase-'); const dir = path.join(home, '.trocar', 'collector'); const file = path.join(home, 'a.json')
   for (const phase of [undefined, 'off']) {
     const m = newManifest()
     assert.throws(() => applyJsonKey({ dir, manifest: m, harness: 'h', phase, file, keys: ['k'], value: 'v', home }), /applyJsonKey: phase is required/)

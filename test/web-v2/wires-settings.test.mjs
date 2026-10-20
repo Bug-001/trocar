@@ -22,11 +22,11 @@ async function read(prep, names) {
 }
 const plain = read(null, ['classes', 'segments', 'pricing'])
 
-test('(1) the disk total is classes.disk.asight_bytes; the per-day figure is the sum of classes[].counts.h24.bytes', async () => {
+test('(1) the disk total is classes.disk.trocar_bytes; the per-day figure is the sum of classes[].counts.h24.bytes', async () => {
   const { classes } = await plain
   for (const doc of [classes, { ...classes, classes: classes.classes.map((c, i) => ({ ...c, counts: { ...c.counts, h24: { calls: 1, bytes: 1000 * (i + 1) } } })) }]) {
     const f = diskFigures(doc)
-    assert.equal(f.total, doc.disk.asight_bytes)
+    assert.equal(f.total, doc.disk.trocar_bytes)
     assert.equal(f.perDay, doc.classes.reduce((s, c) => s + c.counts.h24.bytes, 0))
   }
 })

@@ -121,8 +121,8 @@ function respMarks(ctl, b) {
   if (b && b.kind === 'undecoded') out.push(esc(W.RESP_UNDECODED(b.encoding || '?')))
   if (b && b.error) out.push(esc(`Response: ${b.error}`))
   else if (b && b.interrupted) out.push(esc(W.RESP_PARTIAL))
-  // asight's own additions (the off switch's Connection: close): the server's words, on the response side (#45 lands the label)
-  for (const l of ctl.labels || []) if (l && l.id && l.id.startsWith('asight')) out.push(esc(`${W.ASIGHT_ADDED} · ${l.label || l.id}`))
+  // trocar's own additions (the off switch's Connection: close): the server's words, on the response side (#45 lands the label)
+  for (const l of ctl.labels || []) if (l && l.id && l.id.startsWith('trocar')) out.push(esc(`${W.TROCAR_ADDED} · ${l.label || l.id}`))
   return out
 }
 function reqMarks(ctl, b) {
@@ -159,7 +159,7 @@ export function requestDetailHtml(model, { revealed = null, foldRequest = false 
   const meta = `${esc(clsWord)}${ctl.retention === 'log' ? ` · ${esc(W.RETENTION_MARK.log.label)}` : ''}`
 
   // the call-level marks: labels that belong to neither side (today the WebSocket size cap)
-  const SIDE_IDS = /^(req-|resp-|retention-|asight)/
+  const SIDE_IDS = /^(req-|resp-|retention-|trocar)/
   const callMarks = (ctl.labels || []).filter((l) => l && l.id && !SIDE_IDS.test(l.id)).map((l) => `<p class="rqd-mark">${esc(l.label || l.id)}</p>`).join('')
 
   // the domains: the connected one always; the request's own Host header beside it when they differ (a behaviour

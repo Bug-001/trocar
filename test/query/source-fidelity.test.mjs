@@ -17,7 +17,7 @@ import { composeTextRef, mintRawRef } from '../../src/raw/refs.mjs';
 import { tmpDir } from '../helpers/tmp.mjs';
 
 const refFor = (stream, id, start, end) => composeTextRef(mintRawRef('sess', stream, id), [start, end]);
-const tmp = () => tmpDir('asight-fidelity-');
+const tmp = () => tmpDir('trocar-fidelity-');
 
 // ── BUG 1 ────────────────────────────────────────────────────────────────────────────────
 // A v0 demo record stores the request as PARSED JSON; normalizeRecord rebuilds a body with

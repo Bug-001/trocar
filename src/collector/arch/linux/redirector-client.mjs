@@ -1,5 +1,5 @@
 // Linux redirector client — the platform half of the collector's `Redirector` contract
-// (spec/01-asight-rfc/4.6-process-collector.md §Linux 机制, §结构; the engine consumes it through
+// (spec/01-trocar-rfc/4.6-process-collector.md §Linux 机制, §结构; the engine consumes it through
 // src/collector/arch/linux/redirector.mjs).
 //
 // It spawns the privileged C loader (src/collector/arch/linux/redirector/redirector.c),
@@ -8,8 +8,8 @@
 // consumes only `lookup(peer)`; the platform methods below drive the switch and the watch
 // set. Node built-ins only (D18): child_process, readline, events, net.
 //
-// D36: the loader is the shared capability helper, installed once per machine by `sudo asight
-// setup-helper` at /usr/local/libexec/asight/asight-redirector and spawned as a child of this
+// D36: the loader is the shared capability helper, installed once per machine by `sudo trocar
+// setup-helper` at /usr/local/libexec/trocar/trocar-redirector and spawned as a child of this
 // (operator) engine.
 // The client passes `--parent-pid` so the loader can bind its self-exclusion to this engine and
 // die with it; it never sends an engine uid (the loader bakes owner_uid from getuid() itself).
@@ -44,13 +44,13 @@ import net from 'node:net'
 /** @typedef {{address:string,port:number,family:4|6}} Dst */
 /** @typedef {{dst:Dst,pid:number|null,agent:string|null,decrypt:boolean}} FlowMeta */
 
-/** Line-protocol version. Must equal ASIGHT_PROTO in redirector.c. */
-// asight.h ASIGHT_HEARTBEAT_STALE_NS: past this age the kernel stops rewriting connects.
+/** Line-protocol version. Must equal TROCAR_PROTO in redirector.c. */
+// trocar.h TROCAR_HEARTBEAT_STALE_NS: past this age the kernel stops rewriting connects.
 export const HEARTBEAT_STALE_MS = 2000
 export const REDIRECTOR_PROTO = 2 // 2 (D38): status `drops`; config / heartbeat / watch / unwatch say when the map write failed
 
-/** Where `sudo asight setup-helper` installs the capped loader; override with ASIGHT_REDIRECTOR_BIN. */
-export const DEFAULT_REDIRECTOR_BIN = '/usr/local/libexec/asight/asight-redirector'
+/** Where `sudo trocar setup-helper` installs the capped loader; override with TROCAR_REDIRECTOR_BIN. */
+export const DEFAULT_REDIRECTOR_BIN = '/usr/local/libexec/trocar/trocar-redirector'
 
 /** The helper's exit codes (redirector.c main) by name, for helper-down (D38 D-14). */
 export const HELPER_EXIT = { 1: 'load-failed', 2: 'usage', 3: 'parent-mismatch', 4: 'environment', 5: 'lockdown-failed' }
@@ -69,7 +69,7 @@ export function createRedirectorClient({
   exitGraceMs = 500, // a broken stdin waits this long for the helper's 'exit', which says how it ended (D-14)
   beforeBeat = null, // async () => boolean, asked before every automatic beat (see the contract above); null: no gate
 } = {}) {
-  const resolvedBinary = binary || (env && env.ASIGHT_REDIRECTOR_BIN) || DEFAULT_REDIRECTOR_BIN
+  const resolvedBinary = binary || (env && env.TROCAR_REDIRECTOR_BIN) || DEFAULT_REDIRECTOR_BIN
 
   const emitter = new EventEmitter()
   const pending = new Map() // id -> {resolve,reject}
@@ -209,7 +209,7 @@ export function createRedirectorClient({
     })
     child.on('error', (err) => {
       if (err && err.code === 'ENOENT') {
-        fail(`redirector helper not found at ${resolvedBinary}; install it once per machine with "sudo asight setup-helper"`)
+        fail(`redirector helper not found at ${resolvedBinary}; install it once per machine with "sudo trocar setup-helper"`)
       } else {
         fail('spawn error: ' + (err && err.message ? err.message : String(err)))
       }
@@ -221,7 +221,7 @@ export function createRedirectorClient({
     return send('config', { engine_port: enginePort | 0 })
   }
 
-  // A heartbeat first: the kernel steers only while the heartbeat is fresh (asight.bpf.c heartbeat_fresh), and the
+  // A heartbeat first: the kernel steers only while the heartbeat is fresh (trocar.bpf.c heartbeat_fresh), and the
   // first periodic one comes autoHeartbeatMs later, so without it every connection in that window after `on` went
   // direct (on a test machine, a `claude -p` started right after `on` was never captured).
   async function attach() { await heartbeat(); const r = await send('attach'); startHeartbeat(); return r }

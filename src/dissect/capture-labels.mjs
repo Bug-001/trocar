@@ -153,15 +153,15 @@ export function captureLabelsOf(rec) {
     out.push({ id: 'req-undecoded', label: '压缩请求体未解码 · compressed request not decoded',
       text: `the request body is stored compressed (${rec.req_content_encoding || 'unknown encoding'}) and could not be decoded: ${rec._reqBodyDecodeError || rec.req_encoding_error || 'the reader did not try'}` });
   }
-  // 4.8 §5.6: how the call reached the engine — a proxy-mode call (macOS and Windows: the agent's proxy setting names asight's door, D47) says so in
+  // 4.8 §5.6: how the call reached the engine — a proxy-mode call (macOS and Windows: the agent's proxy setting names trocar's door, D47) says so in
   // place (invariant 4). `transparent` is the default everywhere else and carries no label. The bytes shown are the agent's own either way:
-  // the CONNECT prelude and asight's answer are not part of this record (4.8 §5.6 代理前导).
-  if (rec.capture === 'proxy') out.push({ id: 'capture-routing', label: '经 asight 的门(代理模式)',
-    text: "this call reached asight through asight's door, the local proxy the agent's proxy setting names (proxy mode, macOS and Windows), not by transparent per-process interception; the bytes shown are the agent's own — the proxy prelude and asight's answer to it are not part of this record" });
-  // 1.6 §1.3 / 4.6 §记录: asight put a line into the response head the client got (`off` landed before the head was forwarded): the call says
+  // the CONNECT prelude and trocar's answer are not part of this record (4.8 §5.6 代理前导).
+  if (rec.capture === 'proxy') out.push({ id: 'capture-routing', label: '经 trocar 的门(代理模式)',
+    text: "this call reached trocar through trocar's door, the local proxy the agent's proxy setting names (proxy mode, macOS and Windows), not by transparent per-process interception; the bytes shown are the agent's own — the proxy prelude and trocar's answer to it are not part of this record" });
+  // 1.6 §1.3 / 4.6 §记录: trocar put a line into the response head the client got (`off` landed before the head was forwarded): the call says
   // so in place (invariant 4) — the stored head and body are the upstream's own, the client's head had this one line more
-  if (Array.isArray(rec.asight_added) && rec.asight_added.includes('connection-close')) out.push({ id: 'asight-added', label: 'asight 加的 · Connection: close',
-    text: 'asight added the hop-by-hop header Connection: close to this response when capture was turned off; the response body is byte for byte what the upstream sent, and resp_head_raw is the upstream head' });
+  if (Array.isArray(rec.trocar_added) && rec.trocar_added.includes('connection-close')) out.push({ id: 'trocar-added', label: 'trocar 加的 · Connection: close',
+    text: 'trocar added the hop-by-hop header Connection: close to this response when capture was turned off; the response body is byte for byte what the upstream sent, and resp_head_raw is the upstream head' });
   const keep = retentionLabelOf(rec);
   if (keep) out.push({ id: `retention-${keep.retention}`, label: keep.label, text: keep.text });
   // 4.1 保真边界 ⑤: before D40 a JSON reply was stored as the parsed value, re-serialized on write — not the wire bytes. A record from D40 on

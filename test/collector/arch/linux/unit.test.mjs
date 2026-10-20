@@ -8,30 +8,30 @@ import { unitText, unitPath, wantsLink, removeWantsLinks, systemctl, UNIT_NAME }
 import { commandNamed } from '../../../../src/cli/commands.mjs'
 
 test('unit: absolute quoted ExecStart, restart on failure, no capability-stripping directives', () => {
-  const t = unitText({ node: '/usr/bin/node', script: '/opt/my "asight"/bin/asight.mjs' })
-  assert.match(t, /^ExecStart="\/usr\/bin\/node" "\/opt\/my \\"asight\\"\/bin\/asight\.mjs" daemon$/m)
+  const t = unitText({ node: '/usr/bin/node', script: '/opt/my "trocar"/bin/trocar.mjs' })
+  assert.match(t, /^ExecStart="\/usr\/bin\/node" "\/opt\/my \\"trocar\\"\/bin\/trocar\.mjs" daemon$/m)
   assert.match(t, /^Restart=on-failure$/m)
   assert.match(t, /^WantedBy=default\.target$/m)
   assert.doesNotMatch(t, /NoNewPrivileges|CapabilityBoundingSet/)
   assert.doesNotMatch(t, /^Environment=/m, 'nothing to carry, no Environment line')
 })
 
-test('unit: ExecStart runs a command of the table that refuses root (asight daemon, 1.6 §2)', () => {
+test('unit: ExecStart runs a command of the table that refuses root (trocar daemon, 1.6 §2)', () => {
   const words = (text) => (/^ExecStart=(.*)$/m.exec(text)[1].match(/"(?:[^"\\]|\\.)*"|\S+/g) || []).map((w) => w.replace(/^"|"$/g, ''))
-  const [, , ...argv] = words(unitText({ node: '/usr/bin/node', script: '/opt/asight/bin/asight.mjs' }))
+  const [, , ...argv] = words(unitText({ node: '/usr/bin/node', script: '/opt/trocar/bin/trocar.mjs' }))
   assert.deepEqual(argv, ['daemon'])
   assert.ok(commandNamed(argv[0]) && commandNamed(argv[0]).mutates, 'the unit runs a command that is in the table, and it is one the daemon user runs, not root')
 })
 
 test('unit: the daemon\'s own environment as quoted Environment= lines; % and $ cannot expand into something else (review 3 #1)', () => {
-  const t = unitText({ node: '/opt/n$v/node', script: '/s/asight.mjs', env: { NODE_EXTRA_CA_CERTS: '/corp/"ca" 100%.pem' } })
+  const t = unitText({ node: '/opt/n$v/node', script: '/s/trocar.mjs', env: { NODE_EXTRA_CA_CERTS: '/corp/"ca" 100%.pem' } })
   assert.match(t, /^\[Service\]\nType=simple\nEnvironment="NODE_EXTRA_CA_CERTS=\/corp\/\\"ca\\" 100%%\.pem"\nExecStart=/m, 'in [Service], before ExecStart')
-  assert.match(t, /^ExecStart="\/opt\/n\$\$v\/node" "\/s\/asight\.mjs" daemon$/m)
-  assert.equal(wantsLink('/h'), '/h/.config/systemd/user/default.target.wants/asight-collector.service')
+  assert.match(t, /^ExecStart="\/opt\/n\$\$v\/node" "\/s\/trocar\.mjs" daemon$/m)
+  assert.equal(wantsLink('/h'), '/h/.config/systemd/user/default.target.wants/trocar-collector.service')
 })
 
 test('unit: wants/ symlinks left behind are removed; systemctl runs as --user and says why it failed', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-unit-'))
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-unit-'))
   try {
     const wants = path.join(path.dirname(unitPath(home)), 'default.target.wants'); fs.mkdirSync(wants, { recursive: true })
     fs.symlinkSync(unitPath(home), path.join(wants, UNIT_NAME))

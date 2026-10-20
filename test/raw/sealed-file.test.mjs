@@ -10,7 +10,7 @@ import { openSealed, createFrameCache, AMBIGUOUS } from '../../src/raw/reader.mj
 // · fixed trailer. These tests write lines through the real writer and read them back through the
 // real reader; the bytes MUST come back identical, and a damaged file MUST refuse to open or read.
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'asight-sealfile-'));
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-sealfile-'));
 function rng(seed) { let s = seed >>> 0; return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 2 ** 32); }
 const text = (r, n) => { let s = ''; for (let i = 0; i < n; i++) s += 'abcdefghij klmn'[Math.floor(r() * 15)]; return s; };
 

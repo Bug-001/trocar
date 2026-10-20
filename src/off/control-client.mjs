@@ -1,7 +1,7 @@
 // control-client.mjs (src/off) — how a command talks to the collector daemon's control socket (RFC 4.6 §控制面: JSON over HTTP on
-// $XDG_RUNTIME_DIR/asight/collector.sock, 0600 in a 0700 directory; on Windows 4.8 §7 控制面: a named pipe \\.\\pipe\\asight-<hex> whose
+// $XDG_RUNTIME_DIR/trocar/collector.sock, 0600 in a 0700 directory; on Windows 4.8 §7 控制面: a named pipe \\.\\pipe\\trocar-<hex> whose
 // name and secret token live in <collector>\control.json — a pipe has no file mode, so the token is what keeps it to the operator).
-// Moved here from src/collector/core/control.mjs, which re-exports both names: `asight off` and the standalone `~/.asight/bin/asight-off`
+// Moved here from src/collector/core/control.mjs, which re-exports both names: `trocar off` and the standalone `~/.trocar/bin/trocar-off`
 // ask the daemon to switch off and must not need the collector code (0.1 §2: src/off imports only node:* and itself). The server side
 // stays in core/control.mjs. The facts both sides share (CONTROL_FILE, PIPE_PREFIX, the pipe shape) live HERE once: the
 // daemon (core/control.mjs, arch/*/control-path.mjs) imports them — core may import src/off (0.1 §2), src/off cannot import core.
@@ -13,17 +13,17 @@ import path from 'node:path'
 import { CONTROL_TOKEN_HEADER } from './token-header.mjs'
 
 export const CONTROL_FILE = 'control.json'
-/** What a Windows daemon's pipe name starts with (`\\.\pipe\asight-`); the writer (arch/win32/control-path.mjs) adds `<16 hex>` and holds that strictly. */
-export const PIPE_PREFIX = '\\\\.\\pipe\\asight-'
+/** What a Windows daemon's pipe name starts with (`\\.\pipe\trocar-`); the writer (arch/win32/control-path.mjs) adds `<16 hex>` and holds that strictly. */
+export const PIPE_PREFIX = '\\\\.\\pipe\\trocar-'
 /** Is `p` a Windows named pipe: `\\.\pipe\` or `\\?\pipe\` and any name. Deliberately loose — off must not refuse a pipe a newer daemon build named differently —
  *  but never a unix path or a file: on win32 nothing that is no pipe is ever connected to (the platform-seam rule). */
 export const isPipePath = (p) => typeof p === 'string' && /^\\\\[.?]\\pipe\\./.test(p)
 
-/** $XDG_RUNTIME_DIR/asight/collector.sock; throws when XDG_RUNTIME_DIR is not set (the caller says why it cannot ask the daemon).
+/** $XDG_RUNTIME_DIR/trocar/collector.sock; throws when XDG_RUNTIME_DIR is not set (the caller says why it cannot ask the daemon).
  *  Linux's endpoint; Windows finds its own through controlEndpointOf (offWorld asks the right one for its platform). */
 export function controlSocketPath({ env = process.env } = {}) {
-  if (!env.XDG_RUNTIME_DIR) throw new Error('XDG_RUNTIME_DIR is not set; the collector control socket lives in $XDG_RUNTIME_DIR/asight (RFC 4.6 §控制面)')
-  return path.join(env.XDG_RUNTIME_DIR, 'asight', 'collector.sock')
+  if (!env.XDG_RUNTIME_DIR) throw new Error('XDG_RUNTIME_DIR is not set; the collector control socket lives in $XDG_RUNTIME_DIR/trocar (RFC 4.6 §控制面)')
+  return path.join(env.XDG_RUNTIME_DIR, 'trocar', 'collector.sock')
 }
 
 /** The endpoint `control.json` in the collector `dir` names (the Windows daemon writes it at its first start, RFC 4.8 §7 控制面):
@@ -45,9 +45,9 @@ export function controlEndpointOf({ dir, fs = nodeFs } = {}) {
 }
 
 /** The daemon's endpoint for THIS platform, resolved the one way every caller resolves it (the 2026-10-11 incident's seam: three call sites each
- *  carried their own platform fallback, and the one nobody re-audited — turnOn's probe — kept the Linux path and made every `asight on` on a real
+ *  carried their own platform fallback, and the one nobody re-audited — turnOn's probe — kept the Linux path and made every `trocar on` on a real
  *  Mac / Windows a false start-failed). darwin / win32 find the daemon through `control.json` in the collector `dir` (4.8 §7, 4.9 §7: random
- *  socket / pipe name plus the token every request carries); Linux derives `$XDG_RUNTIME_DIR/asight/collector.sock`. → `{ socketPath, request, why? }`:
+ *  socket / pipe name plus the token every request carries); Linux derives `$XDG_RUNTIME_DIR/trocar/collector.sock`. → `{ socketPath, request, why? }`:
  *  `request` is controlRequest wrapped with the token on the platforms that use one; a `why` names what is missing when there is no endpoint. Never
  *  throws — reading control.json is best-effort; the caller decides what a missing endpoint means. */
 export function controlEndpointFor({ platform = process.platform, dir, env = process.env, fs = nodeFs } = {}) {

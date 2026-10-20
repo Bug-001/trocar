@@ -1,4 +1,4 @@
-// test/collector/arch/win32/upstream.test.mjs — RFC 4.8 §2.2: the readers of the user's proxy settings the P7 chain takes, and which targets the agent reached directly before asight (W5 readers, W71 watcher, W72 translation half).
+// test/collector/arch/win32/upstream.test.mjs — RFC 4.8 §2.2: the readers of the user's proxy settings the P7 chain takes, and which targets the agent reached directly before trocar (W5 readers, W71 watcher, W72 translation half).
 // The readers of upstream.mjs only: what an upstream IS is the P7 chain's (test/collector/core/proxymode/chain.test.mjs); the old per-group trunk went with the old win32 collector (D57). Nothing here runs Windows: the helper is an object with a `call`, the clock is injected.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -41,7 +41,7 @@ test('W72 a typical Verge ProxyOverride is one table, in the order written, with
   assert.equal(r.bypass.length, 1 + 1 + 1 + 1 + 16 + 1, 'localhost, 127/8, 192.168/16, 10/8, sixteen 172.x/16, <local>')
 })
 
-test('W72 what asight cannot read is not in the table and is counted: a wildcard in the middle, a port, a scheme, an address family it has no rule for, <-loopback>', () => {
+test('W72 what trocar cannot read is not in the table and is counted: a wildcard in the middle, a port, a scheme, an address family it has no rule for, <-loopback>', () => {
   const r = W('*.corp.com;a*b.com;10.*;<local>;*corp.com;corp*;*;http://x.com;host:8080;[::1];::1;<-loopback>;10.1;300.1.2.3;10.*.1.*;例え.jp;-x.com')
   assert.deepEqual(r.bypass, [suf('corp.com'), cidr('10.0.0.0/8'), local])
   assert.equal(r.untranslated, 14, 'every one of the others')
@@ -142,7 +142,7 @@ test('W5 one reading of the system proxy (4.8 §2.2): for `http=a;https=b` the t
   for (const server of ['http=a:1;https=b:2', 'https=b:2;http=a:1', 'http=a:1;10.0.0.9:3128', 'http=127.0.0.1:10809;https=127.0.0.1:10810;socks=127.0.0.1:10808']) {
     const hop = proxyAddress(server), dialed = chainSystemProxy(sys({ server }))
     assert.ok(hop && dialed && dialed.url, server)
-    assert.equal(dialed.url, `http://${hop.host}:${hop.port}`, `${server}: the hop shows the proxy asight dials`)
+    assert.equal(dialed.url, `http://${hop.host}:${hop.port}`, `${server}: the hop shows the proxy trocar dials`)
   }
   assert.deepEqual(proxyAddress('http=a:1;https=b:2'), { host: 'b', port: 2 })
   assert.equal(proxyAddress('socks=127.0.0.1:10808'), null, 'a SOCKS-only value is no hop, as it is no upstream')
@@ -171,7 +171,7 @@ test('W5 credentials: parseProxyText says only that there is a login; proxyAuthO
   assert.deepEqual(proxyAuthOf('http://alice:p%40ss%3Aword@proxy.corp:3128/path'), { username: 'alice', password: 'p@ss:word' }, 'the one place that reads them, for whoever resolves the reference')
   assert.deepEqual(proxyAuthOf('socks5://bob@proxy.corp'), { username: 'bob', password: '' })
   assert.equal(proxyAuthOf('http://proxy.corp:3128'), null)
-  assert.equal(proxyAuthOf('https://alice:x@proxy.corp'), null, 'a proxy asight cannot use has no credentials to lend')
+  assert.equal(proxyAuthOf('https://alice:x@proxy.corp'), null, 'a proxy trocar cannot use has no credentials to lend')
   assert.equal(proxyAuthOf('nonsense'), null)
   assert.equal(parseProxyText('http://alice:@proxy.corp:3128').credentialed, true, 'a name with an empty password is a login')
 })

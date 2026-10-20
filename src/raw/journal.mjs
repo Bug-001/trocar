@@ -1,15 +1,15 @@
 // src/raw/journal.mjs — the durable record of every raw-layer outcome that is not plain success.
 //
 // User requirement 2026-10-06 (to become D38): no silent failures. A refused seal (active shard, fd
-// held, `asight shard --watch` running), a failed verification, a sealed file that cannot be read —
+// held, `trocar shard --watch` running), a failed verification, a sealed file that cannot be read —
 // each MUST leave a record with its reason that the operator can find later, not only a line of CLI
 // output that scrolled away. One append-only JSON line per event, 0600 (it names capture files),
 // fsync'd. `.jsonl`, under `raw/`, so no capture reader ever mistakes it for an envelope stream.
 import nodeFs from 'node:fs';
 import path from 'node:path';
-import { asightHome } from '../paths.mjs';
+import { trocarHome } from '../paths.mjs';
 
-export const defaultJournalPath = () => path.join(asightHome(), 'raw', 'journal.jsonl');
+export const defaultJournalPath = () => path.join(trocarHome(), 'raw', 'journal.jsonl');
 
 // journal: a path, or null to disable (only for callers that report through another durable channel).
 // Never throws: a journal that cannot be written must not mask the failure being journalled. It
@@ -37,7 +37,7 @@ export function appendJournal(entry, { journal = defaultJournalPath(), fs = node
   } catch (e) {
     const g = gaps.get(journal) || { from: now, lost: 0 };
     gaps.set(journal, { ...g, to: now, lost: g.lost + 1, error: e.message });
-    warn(`asight: could not write the raw journal ${journal} (${e.message}) — this outcome is recorded nowhere else: ${JSON.stringify(entry)}`);
+    warn(`trocar: could not write the raw journal ${journal} (${e.message}) — this outcome is recorded nowhere else: ${JSON.stringify(entry)}`);
     return false;
   }
 }

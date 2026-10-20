@@ -2,7 +2,7 @@
 //
 // WHY HERE: the segment index is a rebuildable projection of the raw bytes (invariant 2), and the daemon is the only
 // writer of those bytes — so it is the only thing that can index them as a side effect of writing, which is what makes
-// `asight query` never pay for a cold build (3.9 s on 1 GB before this, a macOS machine). The lazy build in
+// `trocar query` never pay for a cold build (3.9 s on 1 GB before this, a macOS machine). The lazy build in
 // src/query/index-build.mjs stays as the fallback, and a reader that takes it says `index-cold` (D38).
 //
 // ALMOST OFF THE HOT PATH: `wrote()` builds THIS record's index entry from the envelope the store just serialized —
@@ -69,7 +69,7 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
   // Measurement seam for scripts/perf-capture.mjs (D62): nothing is installed unless that script set the hook, so
   // the product path is one `typeof` per pass.
   const measured = async (fn) => {
-    const hook = globalThis.__asightPerfHook
+    const hook = globalThis.__trocarPerfHook
     if (typeof hook !== 'function') return fn()
     const c = process.cpuUsage()
     try { return await fn() } finally { const d = process.cpuUsage(c); hook((d.user + d.system) / 1000) }

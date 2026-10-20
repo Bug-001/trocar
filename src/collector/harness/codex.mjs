@@ -8,7 +8,7 @@
 // Trust (lab ①, codex-cli 0.160.0, HTTP and WebSocket alike): the store Codex verifies with is SSL_CERT_FILE's bundle
 // (the system roots when unset) plus CODEX_CA_CERTIFICATE's CA — both count, neither hides the other (the source reading
 // that CODEX_CA_CERTIFICATE replaces it was overruled by the measurement). For the
-// resolver both are `append`; SSL_CERT_FILE still replaces the system roots, so asight points it at a combined bundle. $CODEX_HOME/.env is applied after exec (invisible in environ), once per start, over the
+// resolver both are `append`; SSL_CERT_FILE still replaces the system roots, so trocar points it at a combined bundle. $CODEX_HOME/.env is applied after exec (invisible in environ), once per start, over the
 // launch env, and drops every CODEX_* key. The bundle's contents are read again for every HTTP client and WebSocket
 // connection. Relay hosts: openai_base_url / chatgpt_base_url / model_providers.*.base_url from the system, user and
 // profile config.toml (project layers cannot set them); OPENAI_BASE_URL is not read for inference.
@@ -23,7 +23,7 @@ import { envProxies, argAfter, dotenvLayer, isOwnPath, perOs } from './_common.m
 const ETC_CONFIG = '/etc/codex/config.toml'
 const SYSTEM_CONFIG = { linux: ETC_CONFIG, darwin: ETC_CONFIG }
 const codexHome = (env, home) => expandHome(env.get('CODEX_HOME') || '', home) || path.join(home, '.codex')
-// A config.toml asight cannot fully read is reported (D38): a relay host set in the unread part stays off the list.
+// A config.toml trocar cannot fully read is reported (D38): a relay host set in the unread part stays off the list.
 function tomlAt(ctx, file) {
   const t = file ? ctx.readText(file) : null
   if (t == null) return null
@@ -55,7 +55,7 @@ function inject(ctx) {
   for (const env of [ctx.env, ...ctx.running]) if (env.get('CODEX_HOME')) homes.add(path.resolve(codexHome(env, ctx.home)))
   const present = [...homes].filter((h) => ctx.listDir(h).length)
   const notes = [...homes].filter((h) => !present.includes(h)).map((h) => ({ code: CODE.harnessNote, text: `CODEX_HOME ${h} does not exist, so no trust entry is written there` }))
-  if (!present.length) return { notes: [...notes, { code: CODE.harnessNote, text: `no Codex home exists (${def}, or a CODEX_HOME of this shell or of a running codex), so no trust entry is written; after running Codex once, run asight collector uninstall and install again` }] }
+  if (!present.length) return { notes: [...notes, { code: CODE.harnessNote, text: `no Codex home exists (${def}, or a CODEX_HOME of this shell or of a running codex), so no trust entry is written; after running Codex once, run trocar collector uninstall and install again` }] }
   const bundle = path.join(ctx.collectorDir, 'ca', 'combined-codex.pem')
   const seen = new Set() // SSL_CERT_FILE values the block overrides: the user's lines, the launch env
   const see = (v) => { if (typeof v === 'string' && v !== '' && !isOwnPath(ctx, v)) seen.add(v) }
@@ -83,7 +83,7 @@ const proxy = {
 }
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (every form reads $CODEX_HOME/.env, the app's
-// embedded codex included; NO_PROXY is required on win, R3-W5). Trust is the root installed by `install` (D57): asight writes no SSL_CERT_FILE.
+// embedded codex included; NO_PROXY is required on win, R3-W5). Trust is the root installed by `install` (D57): trocar writes no SSL_CERT_FILE.
 const ENV_FILE = { base: 'home', dir: '.codex', env: 'CODEX_HOME', path: '.env' }
 const proxyMode = {
   forms: [

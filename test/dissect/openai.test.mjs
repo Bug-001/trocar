@@ -97,7 +97,7 @@ test('detect: claims by wire shape, not by a header alone; CC → not', () => {
   assert.equal(detect({ req_headers: { 'user-agent': 'claude-cli/1.2' }, endpoint: '/v1/messages' }), false);
 });
 
-// ── board path against a D10 envelope (the shape `asight capture --raw-sse` writes for Codex) ───────
+// ── board path against a D10 envelope (the shape `trocar capture --raw-sse` writes for Codex) ───────
 // Verbatim capture data is gitignored (**/*.ndjson); this builds the same envelope shape synthetically
 // so the test is self-contained while still exercising detect → assembleOpenai → boardFlat + the
 // byte-preservation of the captured context (AC-1: the system block equals the wire instructions).

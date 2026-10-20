@@ -1,6 +1,6 @@
 // test/helpers/model-daemon.mjs — the autostart unit of a modelWorld, standing for the LaunchAgent / scheduled task: its enable() starts the REAL
 // daemon (startDaemon, the model collector, the real control server at the endpoint the platform's own controlEndpoint picks — control.json, written
-// at the daemon's first start, exactly when the CLI's poll looks for it). Only the world outside asight is stubbed: the key custody (modelWorld's),
+// at the daemon's first start, exactly when the CLI's poll looks for it). Only the world outside trocar is stubbed: the key custody (modelWorld's),
 // the door's OS readers (no process is anybody's: identity answers null), the process table (box.procs, empty unless a test puts a holder there), the lock identity. restart({ custody }):
 // the daemon stopped and started again (launchd / the task bringing it back), optionally over another custody. A win32 pipe name is served on this host as a relative socket path, so the caller
 // runs inside a scratch cwd (withScratchCwd) for platform win32.
@@ -22,7 +22,7 @@ export async function liveUnit({ w, platform, io = null, parts = null, daemon = 
     box.starting.catch(() => {})
   }
   box.unit = {
-    path: path.join(w.home, 'asight-unit'), text: () => '# stands for the LaunchAgent / scheduled task', links: [],
+    path: path.join(w.home, 'trocar-unit'), text: () => '# stands for the LaunchAgent / scheduled task', links: [],
     enable: ({ now = false } = {}) => { box.enabled.push(now); if (now && !box.starting) start(); return { code: 0 } },
     start: () => { if (!box.starting) start(); return { code: 0 } },
     startNow: () => { box.startedNow.push(true); if (!box.starting) start(); return { code: 0 } }, // D61: what `on` asks (the OS mechanism starting the daemon), the real units' verb
@@ -39,6 +39,6 @@ export async function liveUnit({ w, platform, io = null, parts = null, daemon = 
 export async function withScratchCwd(platform, fn) {
   if (platform !== 'win32') return fn()
   const cwd = process.cwd()
-  process.chdir(tmpDir('asight-pipe-'))
+  process.chdir(tmpDir('trocar-pipe-'))
   try { return await fn() } finally { process.chdir(cwd) }
 }

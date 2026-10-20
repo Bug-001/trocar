@@ -19,7 +19,7 @@ for (const os of ['darwin', 'win32']) {
   test(`backendsFor(${os}).policy reads every declared policy spec without throwing`, async () => {
     const specs = specsOf((await loadHarnesses()).map((h) => h.proxyMode)).map((s) => s[os]).filter(Boolean)
     assert.ok(specs.length > 0, `some harness declares a ${os} policy source`)
-    const b = await backendsFor({ os, home: tmpDir(), run, env: { ...process.env, ASIGHT_TEST_SANDBOX: '1' } })
+    const b = await backendsFor({ os, home: tmpDir(), run, env: { ...process.env, TROCAR_TEST_SANDBOX: '1' } })
     for (const spec of specs) {
       const r = b.policy(spec)
       assert.ok(r && (typeof r.set === 'boolean' || typeof r.error === 'string'), `${os} ${JSON.stringify(spec)} → ${JSON.stringify(r)}`)

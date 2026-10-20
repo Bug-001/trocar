@@ -38,7 +38,7 @@ export function normalizeRecord(raw) {
 // outcome — worse than a visible failure. So corrupt lines are now COUNTED and DESCRIBED.
 //
 // The return value deliberately stays a plain Array — every caller consumes it as one
-// (bin/asight.mjs:171 `.length`, src/server.mjs:140 re-pushes into its own array,
+// (bin/trocar.mjs:171 `.length`, src/server.mjs:140 re-pushes into its own array,
 // plus the capture/adapters/query/view suites). Changing the shape to {records, scan} would break
 // all of them, so the report rides ALONGSIDE as a NON-ENUMERABLE `.scan` property: invisible to
 // spread / JSON.stringify / for…in, readable by anyone who asks. Callers that concatenate several
@@ -50,7 +50,7 @@ const EXCERPT = 160;
 // The streams are append-only, so "what is new" is exactly `size - lastOffset`. Without this the
 // board re-read and re-parsed every capture file on every refresh: measured on a real 6.88 GB
 // capture, 286 MB parses in 2,931 ms against a 70 ms read, i.e. ~70 s of pure JSON.parse per refresh
-// with every record resident at once — which is why `asight serve` could not open it at all.
+// with every record resident at once — which is why `trocar serve` could not open it at all.
 //
 // The caller owns the watermark and MUST reset it to 0 when the file shrinks or is replaced
 // (rotation, restore, a new capture reusing the name); see src/server.mjs::makeRecordLoader. This
@@ -108,7 +108,7 @@ export async function readRecords(filePath, { normalize = true, limit = Infinity
 // Every line of a capture file as readline sees it — an NDJSON stream, or a sealed file decoded frame
 // by frame (never whole in memory, 4.6 §日志体积预算) and cut the same way — with the stream it came
 // from (for a sealed file, each record's ORIGINAL stream) and its size on disk (`onLine(text, stream, bytes)`, D40). The one line source of readRecords (board,
-// ETL, doctor), `asight shard --rebuild-meta` and `asight raw compare`, so they count the same lines
+// ETL, doctor), `trocar shard --rebuild-meta` and `trocar raw compare`, so they count the same lines
 // (review 3 F11, F1). `onLine(text, stream)` returns false to stop. Returns what a sealed read could
 // not do — { sealedError } or { unreadableRecords, unreadable } — counted, never a silently short read
 // (user requirement 2026-10-06; callers label it: the ETL journals it, the board reports it).

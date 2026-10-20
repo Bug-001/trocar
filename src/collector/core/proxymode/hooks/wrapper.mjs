@@ -2,9 +2,9 @@
 // judging it for `status`. The arch gives the wrapper's bytes (`renderWrapper`: macOS's dash script; Windows's C# source, which
 // `compile` turns into the stub) and the platform facts (`exeSuffix`). A descriptor's cert reads
 //   { kind:'wrapper', command, binDir: <loc>, certVar, layout:'native-binary' }.
-// Placement: the real program is renamed, in its own folder (so on the same volume), to <binDir>/.asight-real/<same name>, and the wrapper is
+// Placement: the real program is renamed, in its own folder (so on the same volume), to <binDir>/.trocar-real/<same name>, and the wrapper is
 // written where it was; the manifest's owned file (role `wrapper`) carries both sha256 values (T11's shape: path, sha256, real, real_sha256).
-// The agent's own update replaces <binDir>/<name> by name and so lands on the wrapper; the real program in .asight-real is then stale, which
+// The agent's own update replaces <binDir>/<name> by name and so lands on the wrapper; the real program in .trocar-real is then stale, which
 // undo and status handle by the hash alone.
 import nodeFs from 'node:fs'
 import path from 'node:path'
@@ -14,7 +14,7 @@ import { undoWrapper as undoWrapperItem } from '../../../../off/journal.mjs'
 import { writeOwnedFile } from '../../trust/journal.mjs'
 import { CODE } from '../../codes.mjs'
 
-export const REAL_DIR = '.asight-real'
+export const REAL_DIR = '.trocar-real'
 const NOT_USERS_FILE = CODE.notUsersFile
 const SMART_APP_CONTROL = 'smart-app-control'
 
@@ -83,12 +83,12 @@ export function placeWrapper(ctx, cert, { renderWrapper, compile = null, sacOn =
   const rec = t && recordOf(ctx.manifest, t.file)
   const cur = t && readOrNull(fs, t.file)
   if (rec && cur != null && sha256(cur) === rec.sha256) return { ok: true, result: 'intact', record: rec }
-  if (sacOn) return { skipped: true, code: SMART_APP_CONTROL, why: 'Smart App Control is on: it would block an unsigned wrapper, so asight places none' }
+  if (sacOn) return { skipped: true, code: SMART_APP_CONTROL, why: 'Smart App Control is on: it would block an unsigned wrapper, so trocar places none' }
   const c = checkWrapperTarget(ctx, cert)
   if (!c.ok) return { skipped: true, ...c }
-  // .asight-real/<name> is overwritten only when this target's own record names it (the installer replaced the wrapper, so the copy there is
+  // .trocar-real/<name> is overwritten only when this target's own record names it (the installer replaced the wrapper, so the copy there is
   // stale). Without that record it may hold the user's only real program, under a wrapper whose record is gone: never move anything onto it.
-  if (fs.existsSync(t.real) && !(rec && rec.real === t.real)) return { skipped: true, code: NOT_USERS_FILE, why: `${t.real} already holds a program asight has no record of; asight will not overwrite it` }
+  if (fs.existsSync(t.real) && !(rec && rec.real === t.real)) return { skipped: true, code: NOT_USERS_FILE, why: `${t.real} already holds a program trocar has no record of; trocar will not overwrite it` }
   const values = { REAL: t.real, SWITCH: ctx.switchFile, CA_FILE: ctx.caFile, CERT_VAR: cert.certVar, PROXY_ENV: ctx.proxyEnv || [], PROXY_NAMES: ctx.proxyNames || [] }
   const source = renderWrapper(values)
   const data = compile ? compile(source) : source // render before any move: a template error leaves the program where it was
@@ -105,13 +105,13 @@ export function placeWrapper(ctx, cert, { renderWrapper, compile = null, sacOn =
   return { ok: true, result: 'placed', record: recordOf(ctx.manifest, t.file) }
 }
 
-/** Undo (uninstall): the real program goes back only while the wrapper is still asight's; otherwise only .asight-real goes. */
+/** Undo (uninstall): the real program goes back only while the wrapper is still trocar's; otherwise only .trocar-real goes. */
 export const undoWrapper = (ctx, record) => undoWrapperItem(record, ctx.fs || nodeFs)
 
 /** Status of a placed wrapper: null while intact; a drift → entry-changed with the command that puts it back. */
 export function checkWrapper(ctx, record) {
   const cur = readOrNull(ctx.fs || nodeFs, record.path)
-  if (cur == null) return { reason: 'entry-missing', path: record.path, command: 'asight install' }
-  if (sha256(cur) !== record.sha256) return { reason: 'entry-changed', path: record.path, command: 'asight install', why: `${record.path} is no longer asight's wrapper (the agent's installer or update replaced it)` }
+  if (cur == null) return { reason: 'entry-missing', path: record.path, command: 'trocar install' }
+  if (sha256(cur) !== record.sha256) return { reason: 'entry-changed', path: record.path, command: 'trocar install', why: `${record.path} is no longer trocar's wrapper (the agent's installer or update replaced it)` }
   return null
 }

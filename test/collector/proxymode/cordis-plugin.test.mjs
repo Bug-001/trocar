@@ -1,5 +1,5 @@
 // CM12 (spec 4.11 P9 `cordis-plugin`): the DeepSeek plugin template, rendered and imported against a stub undici found the way the plugin
-// finds dsh's (from process.argv[1]). Per request, the switch file decides: present → a ProxyAgent to the door carrying X-Asight-Upstream
+// finds dsh's (from process.argv[1]). Per request, the switch file decides: present → a ProxyAgent to the door carrying X-Trocar-Upstream
 // (dsh's own proxy for that origin, or 'none' when dsh would go direct); absent → the prior dispatcher. A root that cannot be added → never routes.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -14,9 +14,9 @@ import { TEMPLATES, templateUrl } from '../../../src/collector/harness/templates
 import dsh from '../../../src/collector/harness/deepseek-dsh.mjs'
 
 const STUB_UNDICI = `
-const log = globalThis.__asightUndici
+const log = globalThis.__trocarUndici
 class Dispatcher {}
-class ProxyAgent { constructor(o) { this.o = o; log.agents.push(o) } dispatch(opts) { log.calls.push({ via: 'door', uri: this.o.uri, up: this.o.headers['X-Asight-Upstream'], origin: opts.origin }); return true } close() { log.closed++; return Promise.resolve() } }
+class ProxyAgent { constructor(o) { this.o = o; log.agents.push(o) } dispatch(opts) { log.calls.push({ via: 'door', uri: this.o.uri, up: this.o.headers['X-Trocar-Upstream'], origin: opts.origin }); return true } close() { log.closed++; return Promise.resolve() } }
 let g = { dispatch(opts) { log.calls.push({ via: 'prior', origin: opts.origin }); return true }, close() { return Promise.resolve() } }
 module.exports = { Dispatcher, ProxyAgent, getGlobalDispatcher: () => g, setGlobalDispatcher: (d) => { g = d } }
 `
@@ -35,7 +35,7 @@ async function load({ caFile = 'ok', env = {} } = {}) {
   const text = renderTemplate(fs.readFileSync(templateUrl('cordis-plugin'), 'utf8'), { CA_FILE: ca, SWITCH: sw, PROXY_ENV: dsh.proxy.env, NO_PROXY_ENV: ['NO_PROXY', 'no_proxy'] })
   const file = path.join(d, 'plugin.mjs')
   fs.writeFileSync(file, text)
-  const log = (globalThis.__asightUndici = { agents: [], calls: [], closed: 0 })
+  const log = (globalThis.__trocarUndici = { agents: [], calls: [], closed: 0 })
   const saved = { argv1: process.argv[1], env: { ...process.env }, roots: tls.getCACertificates('default') }
   for (const k of [...dsh.proxy.env, 'NO_PROXY', 'no_proxy']) delete process.env[k]
   Object.assign(process.env, env)

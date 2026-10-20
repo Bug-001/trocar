@@ -6,7 +6,7 @@ import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
 // `on` starts the daemon (its autostart unit, D61's direct start) with the CLI's own script; in this worker process.argv[1] is the worker
-const SCRIPT = fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url))
+const SCRIPT = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
 
 /**
  * planThenConfirm({ dryRun, run, confirm }) → {status, doc} — 4.4 「先计划后确认」, shared by every verb that changes something. `dryRun()` is the
@@ -31,7 +31,7 @@ export const VERBS = Object.freeze({
     const doc = await statusDoc({ home: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps })
     return { status: 200, doc: { control: true, user: doc.user, root: false, harnesses: Object.entries(doc.harnesses).map(([harness, h]) => ({ harness, desired: h.desired, setup: h.setup })) } }
   },
-  /** POST /control/classes: `asight classes`'s own change (classesChange), planned then confirmed; `source:'board'` marks it in the change log.
+  /** POST /control/classes: `trocar classes`'s own change (classesChange), planned then confirmed; `source:'board'` marks it in the change log.
    *  A ClassArgError is the caller's mistake: 400 and nothing written. */
   async classes({ confirm, source: _source, ...op }, { home }) {
     const [{ classesChange }, { ClassArgError }] = await Promise.all([import('../cli/classes.mjs'), import('../classes/table.mjs')])
@@ -41,7 +41,7 @@ export const VERBS = Object.freeze({
       throw e
     }
   },
-  /** POST /control/harness: `asight on` (runOn, with --json and --dry-run / --yes) or `asight off` (runOff) for one harness, planned then confirmed;
+  /** POST /control/harness: `trocar on` (runOn, with --json and --dry-run / --yes) or `trocar off` (runOff) for one harness, planned then confirmed;
    *  the receipt is the one `--json` prints, a refusal included. `source:'board'` marks every flows/ record the run writes. The plan is the dry-run
    *  receipt's `planned` — for an off with an install record that is [] (1.6 附录 C.2), so its plan_id binds nothing but the harness. */
   async harness({ harness, on, confirm }, { home, deps }) {
@@ -63,9 +63,9 @@ export const VERBS = Object.freeze({
     }
     return planThenConfirm({ dryRun: () => runOnce(true), run: () => runOnce(false), confirm })
   },
-  /** POST /control/setup: `asight install`'s own function for one harness (only), planned then confirmed (D65④). Its plan is that harness's missing
+  /** POST /control/setup: `trocar install`'s own function for one harness (only), planned then confirmed (D65④). Its plan is that harness's missing
    *  carriers ([] when it has them all); the root and the login entry are install's steps, read back when in place, asked as install asks when not —
-   *  a dialog nobody answered is a `pending` row carrying `asight install`, the harness's carriers placed all the same (4.4 「Set up 的三件实话」). */
+   *  a dialog nobody answered is a `pending` row carrying `trocar install`, the harness's carriers placed all the same (4.4 「Set up 的三件实话」). */
   async setup({ harness, confirm }, { home, deps }) {
     const [{ resolveHarnesses }, { newReceipt }, { install }] = await Promise.all([import('../cli/harness-names.mjs'), import('../cli/schema.mjs'), import('../cli/install.mjs')])
     const named = typeof harness === 'string' ? resolveHarnesses([harness]) : { ok: false }

@@ -3,7 +3,7 @@
 // A child of the collector daemon, forked on demand and running at low priority, like the sealer: the daemon's own
 // event loop forwards agent traffic and MUST NOT compute a query. It stays warm (src/query/warm.mjs keeps the
 // segments' index rows and the recently opened sessions' records, each revalidated per request against the files it
-// came from), and exits after ASIGHT_QUERY_IDLE_MS idle — ONE one-shot timer, re-armed per request, so nobody
+// came from), and exits after TROCAR_QUERY_IDLE_MS idle — ONE one-shot timer, re-armed per request, so nobody
 // querying means no worker and no timer.
 //
 // The wire is frames on this process's own pipes, not JSON over IPC: one request per line on stdin
@@ -23,7 +23,7 @@ const home = process.argv[2]
 // The board's control verbs (`{control, body}`, 4.4 §控制面) run the CLI's own functions, which take `deps` for what they ask of the machine.
 // The daemon never passes argv[3]; a test fork names an ES module whose default export is that `deps` object.
 const depsP = process.argv[3] ? import(pathToFileURL(process.argv[3]).href).then((m) => m.default) : Promise.resolve({})
-const IDLE_MS = Number(process.env.ASIGHT_QUERY_IDLE_MS || 180_000)
+const IDLE_MS = Number(process.env.TROCAR_QUERY_IDLE_MS || 180_000)
 // What the CLI's own environment may change about an answer goes local (client.mjs LOCAL_ENV); this worker serves
 // every caller, so it answers as a clean environment would and never as the daemon's happened to be.
 for (const k of LOCAL_ENV) delete process.env[k]
@@ -41,7 +41,7 @@ async function answer(line) {
   let status = 200, text
   try {
     const { name, params, indent, control, body } = JSON.parse(line)
-    if (control) { // one JSON line, the bytes `asight <command> --json` prints into a pipe; the verb says the status (src/control/board.mjs)
+    if (control) { // one JSON line, the bytes `trocar <command> --json` prints into a pipe; the verb says the status (src/control/board.mjs)
       const { VERBS } = await import('../control/board.mjs')
       if (!Object.hasOwn(VERBS, control)) throw new Error(`no control verb ${JSON.stringify(control)}`)
       const r = await VERBS[control](body || {}, { home, deps: await depsP })

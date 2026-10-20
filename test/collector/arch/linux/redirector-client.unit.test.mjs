@@ -76,7 +76,7 @@ test('start passes --parent-pid after any script args, and spawns the configured
   await c.close()
 })
 
-test('binary defaults to the helper path and ASIGHT_REDIRECTOR_BIN overrides it', async () => {
+test('binary defaults to the helper path and TROCAR_REDIRECTOR_BIN overrides it', async () => {
   const m1 = mock()
   const c1 = createRedirectorClient({ spawn: m1.spawn, autoHeartbeatMs: 0, env: {} })
   const p1 = c1.start(); m1.pushLine({ ev: 'ready', pid: 1, proto: REDIRECTOR_PROTO }); await p1
@@ -84,7 +84,7 @@ test('binary defaults to the helper path and ASIGHT_REDIRECTOR_BIN overrides it'
   await c1.close()
 
   const m2 = mock()
-  const c2 = createRedirectorClient({ spawn: m2.spawn, autoHeartbeatMs: 0, env: { ASIGHT_REDIRECTOR_BIN: '/opt/red' } })
+  const c2 = createRedirectorClient({ spawn: m2.spawn, autoHeartbeatMs: 0, env: { TROCAR_REDIRECTOR_BIN: '/opt/red' } })
   const p2 = c2.start(); m2.pushLine({ ev: 'ready', pid: 1, proto: REDIRECTOR_PROTO }); await p2
   assert.equal(m2.bin, '/opt/red')
   await c2.close()
@@ -92,10 +92,10 @@ test('binary defaults to the helper path and ASIGHT_REDIRECTOR_BIN overrides it'
 
 test('a missing helper (ENOENT) rejects start with a clear setup-helper message', async () => {
   const m = mock()
-  const c = createRedirectorClient({ binary: '/usr/local/libexec/asight/asight-redirector', spawn: m.spawn, autoHeartbeatMs: 0 })
+  const c = createRedirectorClient({ binary: '/usr/local/libexec/trocar/trocar-redirector', spawn: m.spawn, autoHeartbeatMs: 0 })
   const p = c.start()
   m.child.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }))
-  await assert.rejects(p, /install it once per machine with "sudo asight setup-helper"/)
+  await assert.rejects(p, /install it once per machine with "sudo trocar setup-helper"/)
 })
 
 test('a protocol-version mismatch fails open: start still resolves, a warning fires, ops still work', async () => {
@@ -247,12 +247,12 @@ test('a helper that exits carries the exit name and its last stderr lines into d
   const p = c.start().catch(() => {})
   const writes = []; const realWrite = process.stderr.write; process.stderr.write = (x) => { writes.push(String(x)); return true }
   try {
-    m.child.stderr.write('asight-redirector: /sys/fs/cgroup is not a cgroup2 mount (unified hierarchy required)\n')
+    m.child.stderr.write('trocar-redirector: /sys/fs/cgroup is not a cgroup2 mount (unified hierarchy required)\n')
     await new Promise((r) => setImmediate(r))
     m.child.exitCode = 4; m.child.emit('exit', 4, null)
     const [d] = await down
-    assert.deepEqual([d.exit, /exited with code 4 \(environment\)/.test(d.reason), d.stderr], ['environment', true, ['asight-redirector: /sys/fs/cgroup is not a cgroup2 mount (unified hierarchy required)']])
-    assert.ok(writes.some((w) => w.startsWith('[helper] asight-redirector: /sys/fs/cgroup')), 'still on our stderr')
+    assert.deepEqual([d.exit, /exited with code 4 \(environment\)/.test(d.reason), d.stderr], ['environment', true, ['trocar-redirector: /sys/fs/cgroup is not a cgroup2 mount (unified hierarchy required)']])
+    assert.ok(writes.some((w) => w.startsWith('[helper] trocar-redirector: /sys/fs/cgroup')), 'still on our stderr')
   } finally { process.stderr.write = realWrite }
   await p
 })

@@ -108,7 +108,7 @@ function readProxyUrl(text) {
 /**
  * parseProxyText(text) → { ok: true, kind: 'http' | 'socks5', host, port, credentialed } | { ok: false, why: 'upstream-protocol', protocol } | { ok: false, why: 'upstream-unparseable' }
  * `http://`, `socks5://` and `socks5h://` connect (the last two are one thing: both hand the name to the proxy); a bare `host:port` is HTTP. `https://` (TLS to the proxy), `socks4`, `socks4a`, a bare `socks` and every other scheme
- * are not routed and say which scheme it was: asight does not swap the user's proxy for another way out (4.8 §2.2). The credentials are not in the answer: `proxyAuthOf` reads them, for whoever resolves a reference.
+ * are not routed and say which scheme it was: trocar does not swap the user's proxy for another way out (4.8 §2.2). The credentials are not in the answer: `proxyAuthOf` reads them, for whoever resolves a reference.
  * An address the kernel config generator would refuse (`upstreamOf`: a host with a comma, a port outside 1..65535) is `upstream-unparseable` too, so no proxy text of the user's can make `on` or a reload throw.
  */
 export function parseProxyText(text) {
@@ -118,7 +118,7 @@ export function parseProxyText(text) {
   return { ok: true, kind: r.kind, host: r.host, port: r.port, credentialed: r.hasLogin }
 }
 
-/** The login of a proxy address, `{ username, password }` (decoded), or null when it has none or is not an address asight can use. The one place a proxy's credentials are read from its text. */
+/** The login of a proxy address, `{ username, password }` (decoded), or null when it has none or is not an address trocar can use. The one place a proxy's credentials are read from its text. */
 export function proxyAuthOf(text) {
   const r = readProxyUrl(text)
   if (!r || !r.hasLogin || (r.proto !== 'http' && !SOCKS_LIKE.has(r.proto))) return null
@@ -183,7 +183,7 @@ export async function readSystemProxyChain({ helper, timeoutMs = 2000 } = {}) {
 }
 
 /** chainSystemProxy(sp) → the chain's systemProxy: null (off, or nothing for HTTPS) · { url, bypass, wpad? } · { pac: true, wpad? } (an AutoConfigURL, or
- *  WPAD with no usable manual proxy: never executed) · { ok: false, why } (unreadable, or a ProxyServer asight cannot dial: SOCKS-only, TLS, credentials
+ *  WPAD with no usable manual proxy: never executed) · { ok: false, why } (unreadable, or a ProxyServer trocar cannot dial: SOCKS-only, TLS, credentials
  *  WinINET would not send). WPAD (AutoDetect) does not override an enabled manual proxy: WinINET falls back to the ProxyServer when discovery finds
  *  nothing, and Windows ships with AutoDetect on (flags 0x09), so the manual proxy stands and `wpad: true` rides along as a hint. */
 export function chainSystemProxy(sp) {
@@ -266,7 +266,7 @@ export function watchSystemProxy({ helper, everyMs = 5000, initial = null, read 
   }
 }
 
-// "127.0.0.1:7897", or "http=127.0.0.1:7897;https=127.0.0.1:7897;socks=127.0.0.1:7898": the address of the entry asight dials — the same serverEntryOf pick (`https=` first, else the one with no
+// "127.0.0.1:7897", or "http=127.0.0.1:7897;https=127.0.0.1:7897;socks=127.0.0.1:7898": the address of the entry trocar dials — the same serverEntryOf pick (`https=` first, else the one with no
 // protocol) that chainSystemProxy uses, so the topology's system-proxy hop and the chain's upstream cannot name two different proxies for `http=a;https=b` (4.8 §2.2 / §10.1, 4.9; D49). A SOCKS-only or empty value is no hop.
 export function proxyAddress(server) {
   if (typeof server !== 'string' || server.trim() === '') return null

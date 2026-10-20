@@ -1,6 +1,6 @@
 // version.mjs — the one place that says which code this is (RFC 1.6 §2, §5.5; D67⑤).
 //   codeId()  `<package.json version>+<first 7 of HEAD>` in a git checkout, `<version>` anywhere else.
-// `asight --version` prints it, the daemon reports it as `code` on its control channel, and `asight update` compares the two to tell
+// `trocar --version` prints it, the daemon reports it as `code` on its control channel, and `trocar update` compares the two to tell
 // whether the daemon runs this code. Files are read, nothing is spawned: git may be absent, and this is asked on a daemon's start path.
 // Anything that cannot be read (no `.git`, an unreadable HEAD, a ref nowhere to be found) is the plain version, never a guess.
 import fs from 'node:fs'

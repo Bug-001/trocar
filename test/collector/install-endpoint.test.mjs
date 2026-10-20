@@ -1,7 +1,7 @@
-// test/collector/install-endpoint.test.mjs — `asight on`'s DEFAULT daemon-endpoint resolution against a REAL listening unix socket: no injected
+// test/collector/install-endpoint.test.mjs — `trocar on`'s DEFAULT daemon-endpoint resolution against a REAL listening unix socket: no injected
 // `request`, no injected `socketPath`. The gold standard test/off/main.test.mjs:122 already did this for `off`; the on side never had it, which is
 // exactly how the 2026-10-11 incident shipped: install.mjs carried its own Linux-only fallback ($XDG_RUNTIME_DIR), so on darwin sock was always
-// null and every real-Mac / real-Windows `asight on` was a false start-failed while the whole suite stayed green — every other turnOn test
+// null and every real-Mac / real-Windows `trocar on` was a false start-failed while the whole suite stayed green — every other turnOn test
 // injected one of the two deps this file refuses to inject. Linux finds the daemon through $XDG_RUNTIME_DIR; the darwin / win32 cases went with the old on.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -26,8 +26,8 @@ function daemon({ sock, token }) {
     req.on('data', (c) => chunks.push(c))
     req.on('end', () => {
       const body = Buffer.concat(chunks).toString('utf8')
-      saw.push({ method: req.method, path: req.url, token: req.headers['x-asight-token'] || null, body })
-      if (token != null && req.headers['x-asight-token'] !== token) { res.writeHead(401, { 'content-type': 'application/json' }); res.end('{"error":"no"}'); return }
+      saw.push({ method: req.method, path: req.url, token: req.headers['x-trocar-token'] || null, body })
+      if (token != null && req.headers['x-trocar-token'] !== token) { res.writeHead(401, { 'content-type': 'application/json' }); res.end('{"error":"no"}'); return }
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(req.url === '/on' ? '{"agents":[],"desired":"on","actual":"on"}' : '{}')
     })
@@ -35,8 +35,8 @@ function daemon({ sock, token }) {
   return { saw, start: new Promise((resolve) => srv.listen(sock, () => resolve())), close: () => new Promise((r) => srv.close(r)) }
 }
 
-const fakeUnit = (home) => ({ path: path.join(home, 'asight-collector.service'), text: () => '# a unit this test never really starts', enable: () => ({ code: 0 }), start: () => ({ code: 0 }), startNow: () => ({ code: 0 }), registered: () => ({ state: 'present' }), reload: () => {} })
-/** A home with Claude Code actually installed (the plan refuses a home whose agent is not there: "no agent asight can capture was found"). */
+const fakeUnit = (home) => ({ path: path.join(home, 'trocar-collector.service'), text: () => '# a unit this test never really starts', enable: () => ({ code: 0 }), start: () => ({ code: 0 }), startNow: () => ({ code: 0 }), registered: () => ({ state: 'present' }), reload: () => {} })
+/** A home with Claude Code actually installed (the plan refuses a home whose agent is not there: "no agent trocar can capture was found"). */
 const claudeHome = (root) => {
   const home = path.join(root, 'home'); fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
   fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: {} }, null, 2))
@@ -49,7 +49,7 @@ test('on (linux): the daemon is found through $XDG_RUNTIME_DIR, and POST /on sen
   try {
     const home = claudeHome(root)
     const run = path.join(root, 'run'); fs.mkdirSync(run, { recursive: true })
-    const sock = path.join(run, 'asight', 'collector.sock')
+    const sock = path.join(run, 'trocar', 'collector.sock')
     fs.mkdirSync(path.dirname(sock), { recursive: true })
     const d = daemon({ sock, token: null })
     await d.start
@@ -64,10 +64,10 @@ test('on (linux): the daemon is found through $XDG_RUNTIME_DIR, and POST /on sen
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-test('loadParts (win32): the CLI parts view builds no redirector on win32 — the construction wants the collector dir, so on/status answer an empty process table instead of dying (a Windows test machine, 2026-10-11: `asight on --yes` exited at once)', async () => {
+test('loadParts (win32): the CLI parts view builds no redirector on win32 — the construction wants the collector dir, so on/status answer an empty process table instead of dying (a Windows test machine, 2026-10-11: `trocar on --yes` exited at once)', async () => {
   const { loadParts } = await import('../../src/collector/daemon.mjs')
   let called = 0
-  const win32Arch = { os: 'win32', createRedirector: () => { called++; throw new TypeError('createWin32Collector needs the collector dir (~/.asight/collector)') } }
+  const win32Arch = { os: 'win32', createRedirector: () => { called++; throw new TypeError('createWin32Collector needs the collector dir (~/.trocar/collector)') } }
   const parts = await loadParts({ arch: win32Arch, harnesses: [] })
   assert.equal(called, 0, 'no redirector is constructed on win32 (arch/index.mjs win32 arm: loadParts makes no redirector there)')
   assert.deepEqual(await parts.scan(), [], 'the process table is empty, not a throw')

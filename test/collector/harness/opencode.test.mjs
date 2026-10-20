@@ -49,8 +49,8 @@ test('opencode: hosts not via the trust path — models.dev always; the openai A
 test('opencode: trusted by its plugin marker only while the start time matches; a missing marker is no-marker, --pure included (T12, acceptance ⑥)', () => {
   const s = sandbox()
   try {
-    const caPem = s.put('.asight/collector/ca/asight-ca.pem', CA.certPem)
-    const markers = plantMarker(path.join(s.home, '.asight/collector/run/trust'), 1000, 777)
+    const caPem = s.put('.trocar/collector/ca/trocar-ca.pem', CA.certPem)
+    const markers = plantMarker(path.join(s.home, '.trocar/collector/run/trust'), 1000, 777)
     const argv = ['opencode', 'run', 'hi']
     const ok = judge(oc, ctxFor({ home: s.home, argv, startTicks: 777 }), { markerDir: markers, caPem })
     assert.deepEqual([ok.trust.trusted, ok.trust.via], [true, 'plugin marker'])
@@ -61,41 +61,41 @@ test('opencode: trusted by its plugin marker only while the start time matches; 
     assert.equal(judge(oc, ctxFor({ home: s.home, env: { OPENCODE_PURE: '1' }, argv }), { markerDir: none, caPem }).trust.reason, 'no-marker')
     assert.equal(judge(oc, ctxFor({ home: s.home, argv }), { markerDir: none, caPem }).trust.reason, 'no-marker')
     const corp = s.put('corp.pem', OTHER.certPem)
-    assert.equal(judge(oc, ctxFor({ home: s.home, argv, env: { NODE_EXTRA_CA_CERTS: corp } }), { markerDir: none, caPem }).trust.reason, 'no-marker', 'a user CA file without the asight CA is not the reason: the plugin has not reported')
-    fs.writeFileSync(caPem, OTHER.certPem) // the asight CA file no longer holds the asight CA
+    assert.equal(judge(oc, ctxFor({ home: s.home, argv, env: { NODE_EXTRA_CA_CERTS: corp } }), { markerDir: none, caPem }).trust.reason, 'no-marker', 'a user CA file without the trocar CA is not the reason: the plugin has not reported')
+    fs.writeFileSync(caPem, OTHER.certPem) // the trocar CA file no longer holds the trocar CA
     const lost = judge(oc, ctxFor({ home: s.home, argv, startTicks: 777, env: { NODE_EXTRA_CA_CERTS: corp } }), { markerDir: markers, caPem })
-    assert.deepEqual([lost.trust.trusted, lost.trust.reason, lost.trust.var], [false, 'ca-not-in-file', 'asight:marker'], 'a marker next to a CA file without the asight CA does not trust')
+    assert.deepEqual([lost.trust.trusted, lost.trust.reason, lost.trust.var], [false, 'ca-not-in-file', 'trocar:marker'], 'a marker next to a CA file without the trocar CA does not trust')
     assert.ok(oc.trust.hints['no-marker'] && !oc.trust.hints['opencode-pure'])
   } finally { s.done() }
 })
 
-test('opencode inject: asight\'s plugin file in OpenCode\'s plugin dir (XDG_CONFIG_HOME aware), the npm-install paths watched, notes coded (T10)', () => {
+test('opencode inject: trocar\'s plugin file in OpenCode\'s plugin dir (XDG_CONFIG_HOME aware), the npm-install paths watched, notes coded (T10)', () => {
   const s = sandbox()
   try {
-    const dir = path.join(s.home, '.asight', 'collector')
-    const ctx = { home: s.home, env: new Map(), collectorDir: dir, caPem: path.join(dir, 'ca', 'asight-ca.pem'), readText: () => null, running: [] }
+    const dir = path.join(s.home, '.trocar', 'collector')
+    const ctx = { home: s.home, env: new Map(), collectorDir: dir, caPem: path.join(dir, 'ca', 'trocar-ca.pem'), readText: () => null, running: [] }
     const p = planTrust({ descriptors: [oc], ctxFor: () => ctx, caCertPem: CA.certPem, collectorDir: dir })
-    const plug = path.join(s.home, '.config', 'opencode', 'plugins', 'asight-ca.js')
+    const plug = path.join(s.home, '.config', 'opencode', 'plugins', 'trocar-ca.js')
     assert.deepEqual([p.paths, p.entries, p.files], [[plug], [], []], 'one file, nothing in OpenCode\'s config, no environment')
-    assert.ok(p.owned[0].data.includes(JSON.stringify(path.join(dir, 'ca', 'asight-ca.pem'))) && p.owned[0].data.includes(JSON.stringify(path.join(dir, 'run', 'trust'))))
+    assert.ok(p.owned[0].data.includes(JSON.stringify(path.join(dir, 'ca', 'trocar-ca.pem'))) && p.owned[0].data.includes(JSON.stringify(path.join(dir, 'run', 'trust'))))
     assert.deepEqual(p.watch.map((w) => path.basename(w.path)), ['package.json', 'package-lock.json', 'bun.lock', 'node_modules'])
     assert.ok(p.records.every((r) => r.code === 'harness-note') && p.records.some((r) => /npm registry once/.test(r.reason)))
     const xdg = planTrust({ descriptors: [oc], ctxFor: () => ({ ...ctx, env: new Map([['XDG_CONFIG_HOME', path.join(s.home, 'xdg')]]) }), caCertPem: CA.certPem, collectorDir: dir })
-    assert.deepEqual(xdg.paths, [path.join(s.home, 'xdg', 'opencode', 'plugins', 'asight-ca.js')])
+    assert.deepEqual(xdg.paths, [path.join(s.home, 'xdg', 'opencode', 'plugins', 'trocar-ca.js')])
   } finally { s.done() }
 })
 
-test('opencode through install / uninstall: the plugin goes in and out with the dirs asight made; OpenCode\'s own npm files are reported, kept (S10, T11)', async () => {
+test('opencode through install / uninstall: the plugin goes in and out with the dirs trocar made; OpenCode\'s own npm files are reported, kept (S10, T11)', async () => {
   const s = sandbox()
   try {
     s.put('.config/opencode/opencode.json', '{"theme":"x"}\n')
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [oc], freePort: async () => 47012 })
-    const plug = path.join(s.home, '.config', 'opencode', 'plugins', 'asight-ca.js')
-    assert.match(fs.readFileSync(plug, 'utf8'), /^\/\/ asight collector: trust plugin for OpenCode/)
-    assert.deepEqual(readManifest(path.join(s.home, '.asight', 'collector')).files.find((f) => f.path === plug).created_dirs, [path.dirname(plug)])
+    const plug = path.join(s.home, '.config', 'opencode', 'plugins', 'trocar-ca.js')
+    assert.match(fs.readFileSync(plug, 'utf8'), /^\/\/ trocar collector: trust plugin for OpenCode/)
+    assert.deepEqual(readManifest(path.join(s.home, '.trocar', 'collector')).files.find((f) => f.path === plug).created_dirs, [path.dirname(plug)])
     s.put('.config/opencode/node_modules/@opencode-ai/plugin/package.json', '{}') // OpenCode's first run
     const r = await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none' })
-    assert.ok(!fs.existsSync(path.dirname(plug)), 'the plugin and the plugins/ dir asight created are gone')
+    assert.ok(!fs.existsSync(path.dirname(plug)), 'the plugin and the plugins/ dir trocar created are gone')
     assert.equal(fs.readFileSync(path.join(s.home, '.config', 'opencode', 'opencode.json'), 'utf8'), '{"theme":"x"}\n')
     assert.deepEqual(r.residue, [path.join(s.home, '.config', 'opencode', 'node_modules')])
   } finally { s.done() }

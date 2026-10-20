@@ -1,4 +1,4 @@
-// test/cli/doctor.test.mjs — `asight doctor` (RFC 1.6 §2, R4, R11; 4.1 §凭据处置): the four questions and ④b, the old `verify` folded in, and what it says besides (the collector, the VPN software,
+// test/cli/doctor.test.mjs — `trocar doctor` (RFC 1.6 §2, R4, R11; 4.1 §凭据处置): the four questions and ④b, the old `verify` folded in, and what it says besides (the collector, the VPN software,
 // the standalone undo copy, backups no manifest names). The two verdicts this file exists for: 零条记录 = 「无法判定」(exit 3, never 0 — a check that reads nothing and passes is no check, 0.1 §3), and
 // 「采集文件可被他人读取」(exit 1). Sandbox HOMEs, injected `has` / `verify` / control socket / process table / VPN probe: nothing here reaches the machine (0.1 §3).
 import test from 'node:test'
@@ -30,12 +30,12 @@ function capture(dir, { n = 1, mode = 0o600, name = 'capture.ndjson' } = {}) {
   fs.chmodSync(f, mode)
   return f
 }
-/** A HOME where asight has not been turned on: a doctor with nothing of its own to look at. */
-const plain = () => { const home = tmpDir('asight-doc-'); return { home, sh: { env: { HOME: home } }, sys: { exec: recordingExec() } } }
+/** A HOME where trocar has not been turned on: a doctor with nothing of its own to look at. */
+const plain = () => { const home = tmpDir('trocar-doc-'); return { home, sh: { env: { HOME: home } }, sys: { exec: recordingExec() } } }
 const DEPS = { spawn: absentSpawn, has: () => true, request: down(), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice' }
 async function doctor(s, argv = [], { deps = {}, io = fakeIo(), platform = 'linux', source = '' } = {}) {
-  // `doctor` has no --source any more (1.6 §2): the capture it reads is the default location, and a test points it elsewhere with the internal seam ASIGHT_SOURCE (§1.8)
-  const exit = await runDoctor(argv, { io, home: s.home, platform, env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run'), ASIGHT_SOURCE: source }, deps: { ...DEPS, exec: s.sys.exec.run, ...deps } })
+  // `doctor` has no --source any more (1.6 §2): the capture it reads is the default location, and a test points it elsewhere with the internal seam TROCAR_SOURCE (§1.8)
+  const exit = await runDoctor(argv, { io, home: s.home, platform, env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run'), TROCAR_SOURCE: source }, deps: { ...DEPS, exec: s.sys.exec.run, ...deps } })
   return { exit, io, out: io.stdoutText(), err: io.stderrText(), text: io.text() }
 }
 
@@ -49,13 +49,13 @@ test('no record read = cannot judge: an empty capture file, or none at all, is e
   assert.ok(!/no problems\.$/.test(r.out.trim()), `an all-clear alone is not what exit 3 prints: ${r.out}`)
   r = await doctor(s, [], { source: path.join(s.home, 'nowhere') })
   assert.equal(r.exit, 3, 'a source that does not exist is not a pass either')
-  r = await doctor(plain()) // the defaults: ~/.asight does not exist
+  r = await doctor(plain()) // the defaults: ~/.trocar does not exist
   assert.equal(r.exit, 0, `§3.7: having no captured data at all is not 「cannot judge」\n${r.text}`)
   assert.match(r.out, /^File permissions: no captured data yet$/m, 'and it is said, not passed over in silence')
   capture(src, { n: 1 })
   r = await doctor(s, [], { source: src })
   assert.equal(r.exit, 0, r.text)
-  assert.match(r.out, /^asight doctor: no problems\.$/m)
+  assert.match(r.out, /^trocar doctor: no problems\.$/m)
   assert.doesNotMatch(r.out, /Could not judge/, 'a capture it could read leaves nothing undetermined')
   assert.equal(r.err, '', 'nothing on stderr for a clean capture')
 })
@@ -66,7 +66,7 @@ test('a capture file others can read (0644, 0640) is exit 1 with the words, the 
   const f = capture(src, { mode: 0o644 })
   let r = await doctor(s, [], { source: src })
   assert.equal(r.exit, 1, r.text)
-  assert.match(r.out, /^asight doctor: 1 problem\.$/m)
+  assert.match(r.out, /^trocar doctor: 1 problem\.$/m)
   assert.ok(r.out.includes(f) && r.out.includes('(mode 0644) can be read by someone else'), r.out)
   assert.ok(r.out.includes(`chmod 600`) && r.out.includes(f), `the command, with the path filled in:\n${r.out}`)
   assert.ok(!/credential leak|redact firewall/.test(r.text), 'the old wording (the credential is stored verbatim on purpose) is gone')
@@ -92,7 +92,7 @@ test('a capture file that could not be read in full is not a pass (exit 3, the f
   assert.ok(r.out.includes(`Could not judge a captured file: ${b}: EIO`), r.out)
 })
 
-test('④b covers ~/.asight/backup/: a backup of a user\'s file that others can read is exit 1; asight made it 0600, and then it is a pass', async () => {
+test('④b covers ~/.trocar/backup/: a backup of a user\'s file that others can read is exit 1; trocar made it 0600, and then it is a pass', async () => {
   const s = plain()
   const src = path.join(s.home, 'src'); capture(src)
   const b = writeBackup({ home: s.home, file: path.join(s.home, '.claude', 'settings.json'), data: '{"env":{"ANTHROPIC_AUTH_TOKEN":"tok"}}' })
@@ -109,7 +109,7 @@ test('④b covers ~/.asight/backup/: a backup of a user\'s file that others can 
 const NET_READ = /^(ss -ltnpH|ip -j (route get 1\.1\.1\.1|-d link show dev \S+))$/
 const ranBesides = (s, from = 0) => s.sys.exec.calls.slice(from).filter((c) => !NET_READ.test(c))
 
-// P7 (Windows test machine 2026-10-18): there is ONE check for 「is asight's root trusted」 — the collector's root store, the one `status` and `install` use.
+// P7 (Windows test machine 2026-10-18): there is ONE check for 「is trocar's root trusted」 — the collector's root store, the one `status` and `install` use.
 // doctor used to run a second, half-built one of its own and printed its exception at the reader: "win32 TrustStoreInstaller not implemented
 // (D22 reserved — CurrentUser Root store; ship with the Windows onboard sub-unit)" — a class name, a decision id and a plan item, on a machine
 // where install had just written the root. Over both model platforms: a store that answers is judged (exit ≠ 3), one that cannot be read is
@@ -141,7 +141,7 @@ test('what doctor runs: no VPN query at all (D49), only the read of the network 
 })
 
 test('dependencies are looked up in the files, never with `which` (§3.7 prints no dependency line any more)', async () => {
-  const dir = tmpDir('asight-path-')
+  const dir = tmpDir('trocar-path-')
   fs.writeFileSync(path.join(dir, 'openssl'), '#!/bin/sh\n', { mode: 0o755 })
   fs.writeFileSync(path.join(dir, 'certutil'), '#!/bin/sh\n', { mode: 0o644 }) // there, but not executable
   assert.equal(onPath('openssl', { env: { PATH: `/nonexistent:${dir}` }, platform: 'linux' }), true)
@@ -156,13 +156,13 @@ test('dependencies are looked up in the files, never with `which` (§3.7 prints 
 test('doctor explains the same harnesses `status` judges (the daemon\'s answer, every agent captured or why not), and its exit is the capture\'s alone (B-7)', async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
-  const agents = [{ pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start', hint: "asight's settings for this agent were written after this process started; restart it once" }]
+  const agents = [{ pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start', hint: "trocar's settings for this agent were written after this process started; restart it once" }]
   const before = s.sys.exec.calls.length
   const r = await doctor(s, [], { source: src, deps: { request: asDaemon(reply({ agents })) } })
   assert.equal(r.exit, 0, `status would say 1 here (an agent is not captured); doctor's exit is the capture's:\n${r.text}`)
   assert.match(r.out, /claude-code is not captured: pid 4388 started before capture was on\./, 'the finding says the harness, the pid and the reason')
   assert.ok(!/VPN/.test(r.out), 'no VPN software line: doctor probes none (D49)')
-  assert.doesNotMatch(r.out, /is not the current version/, 'on wrote the standalone copy and it is the version this asight writes')
+  assert.doesNotMatch(r.out, /is not the current version/, 'on wrote the standalone copy and it is the version this trocar writes')
   assert.deepEqual(ranBesides(s, before), [], 'doctor ran no OS tool but the reads of the network facts: it reads, and it asks the daemon over its socket (R8)')
   // names restrict the harness table, as in status
   const one = await doctor(s, ['claude', '--json'], { source: src, deps: { request: asDaemon(reply({ agents })) } })
@@ -173,20 +173,20 @@ test('doctor explains the same harnesses `status` judges (the daemon\'s answer, 
 test('a stale standalone copy is a problem with its reason (exit 1); where nothing was installed there is nothing to check (exit 0)', async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
-  fs.appendFileSync(path.join(s.home, '.asight', 'bin', 'asight-off'), '\n// edited\n')
+  fs.appendFileSync(path.join(s.home, '.trocar', 'bin', 'trocar-off'), '\n// edited\n')
   let r = await doctor(s, [], { source: src })
   assert.match(r.out, /is not the current version, so it may not undo everything\./); assert.equal(r.exit, 1, r.out)
-  assert.ok(r.out.includes(path.join(s.home, '.asight', 'bin', 'asight-off')), 'the copy is named')
+  assert.ok(r.out.includes(path.join(s.home, '.trocar', 'bin', 'trocar-off')), 'the copy is named')
   const n = plain(); const nsrc = path.join(n.home, 'src'); capture(nsrc)
   r = await doctor(n, [], { source: nsrc })
-  assert.doesNotMatch(r.out, /asight-off/, 'nothing installed: no undo copy to check (§3.7)')
+  assert.doesNotMatch(r.out, /trocar-off/, 'nothing installed: no undo copy to check (§3.7)')
   assert.equal(r.exit, 0, r.out)
 })
 
 test('§3.7 (Windows test machine run 2 Q3): the headline says what the list numbers — problems and expected findings, never fewer', async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
-  fs.appendFileSync(path.join(s.home, '.asight', 'bin', 'asight-off'), '\n// edited\n')
+  fs.appendFileSync(path.join(s.home, '.trocar', 'bin', 'trocar-off'), '\n// edited\n')
   const r = await doctor(s, [], { source: src })
   const numbered = r.out.split('\n').filter((l) => /^\d+\. /.test(l)).length
   const head = r.out.split('\n')[0]
@@ -212,11 +212,11 @@ test('backups no manifest names are a note with their paths; the ones the manife
   const lone = writeBackup({ home: n.home, file: path.join(n.home, '.zshrc'), data: 'x\n' })
   r = await doctor(n, [], { source: nsrc })
   assert.ok(r.out.includes(lone), 'no manifest: all of them')
-  fs.mkdirSync(path.join(n.home, '.asight', 'collector'), { recursive: true })
-  fs.writeFileSync(path.join(n.home, '.asight', 'collector', 'install-manifest.json'), '{ not json')
+  fs.mkdirSync(path.join(n.home, '.trocar', 'collector'), { recursive: true })
+  fs.writeFileSync(path.join(n.home, '.trocar', 'collector', 'install-manifest.json'), '{ not json')
   r = await doctor(n, [], { source: nsrc })
   assert.match(r.out, /Whether any backup belongs to no install record is unknown$/m, 'a manifest that cannot be read: unknown, not "none are orphans"')
-  assert.ok(r.out.includes(path.join(n.home, '.asight', 'collector', 'install-manifest.json')), `with the file:\n${r.out}`)
+  assert.ok(r.out.includes(path.join(n.home, '.trocar', 'collector', 'install-manifest.json')), `with the file:\n${r.out}`)
 })
 
 test('doctor writes nothing in the HOME (§3.7); usage errors (unknown option, unknown harness) exit 2 and touch nothing', async () => {
@@ -230,9 +230,9 @@ test('doctor writes nothing in the HOME (§3.7); usage errors (unknown option, u
   for (const argv of [['--bogus'], ['nosuchharness']]) {
     const u = await doctor(s, argv)
     assert.equal(u.exit, 2, `${argv.join(' ')}: ${u.text}`)
-    assert.match(u.err, /asight doctor: (unknown option '--bogus'|unknown harness 'nosuchharness')/)
+    assert.match(u.err, /trocar doctor: (unknown option '--bogus'|unknown harness 'nosuchharness')/)
   }
-  assert.match((await doctor(s, ['--bogus'])).err, /usage: asight doctor \[<harness>\.\.\.\]/)
+  assert.match((await doctor(s, ['--bogus'])).err, /usage: trocar doctor \[<harness>\.\.\.\]/)
   assert.match((await doctor(s, ['nosuchharness'])).err, /unknown harness 'nosuchharness'\. Known:/)
   assert.deepEqual(snapshot(s.home), mid, 'usage errors touch nothing')
 })
@@ -277,17 +277,17 @@ test('D57 / V72: doctor prints no --opt-in line on darwin, linux or win32, for e
 // ── V66 wired (1.6 §9.6, D51③⑤): from the flows/ a daemon wrote to the line doctor prints — no facts injected ─────────────────────────────────────────────────────
 const NIGHTLY = { harness: 'claude-code', name: 'claude-nightly' }
 function unknownOnDisk(home) { // what the door wrote on the macOS and Windows test machines (the D51 cells' mac-6 / win-13): a daemon life, then one process-unknown for a renamed claude
-  const dir = path.join(home, '.asight', 'collector', 'flows')
+  const dir = path.join(home, '.trocar', 'collector', 'flows')
   fs.mkdirSync(dir, { recursive: true })
   const ts = new Date().toISOString()
   fs.appendFileSync(path.join(dir, `${ts.slice(0, 10)}.ndjson`), [{ event: 'daemon-start', pid: 1 }, { event: 'process-unknown', where: 'engine', harness: 'claude-code', door: 'claude-code.settings', name: 'claude-nightly', wide: false, pid: 8622, reason: 'claude-nightly (pid 8622) used the claude-code.settings door but is on no name list' }].map((r) => JSON.stringify({ ts, ...r }) + '\n').join(''))
 }
 
-test('V66 wired: a process-unknown in ~/.asight\'s flows/ reaches `doctor claude-code` — the filled-in agents.json line in the text and in --json findings, daemon or not, on every platform\'s doctor', async () => {
+test('V66 wired: a process-unknown in ~/.trocar\'s flows/ reaches `doctor claude-code` — the filled-in agents.json line in the text and in --json findings, daemon or not, on every platform\'s doctor', async () => {
   const s = await installedHome()
   unknownOnDisk(s.home)
   const line = JSON.stringify(NIGHTLY)
-  const daemon = asDaemon(reply({ health: captureHealth({ home: path.join(s.home, '.asight') }) })) // what the daemon serves: the same fold of the same flows/
+  const daemon = asDaemon(reply({ health: captureHealth({ home: path.join(s.home, '.trocar') }) })) // what the daemon serves: the same fold of the same flows/
   for (const platform of ['linux', 'darwin', 'win32']) {
     for (const [label, request] of [['no daemon', down()], ['daemon', daemon]]) {
       const what = `${platform}, ${label}`

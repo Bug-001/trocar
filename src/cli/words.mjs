@@ -3,7 +3,7 @@
 // ERR_*) is not translated — it stays as the head of the brief with the squashed reason after it, exactly as the approved sample shows (`EPERM chmod
 // $TMPDIR ×93`); a (where, code) the table does not know falls back to `where/code` + reason. The FULL English reason is never changed or dropped by this
 // module: `--json` and the flows/ records keep it verbatim (R5, R11) — this is the display layer only, and it is lossy by design, so every place that
-// prints a brief also points at where the whole wall lives (`asight status --failures`, `doctor`, the board).
+// prints a brief also points at where the whole wall lives (`trocar status --failures`, `doctor`, the board).
 const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+|ERR_[A-Z0-9_]+)$/ // Node's own error codes (errno, ERR_*, zlib's Z_*), as src/health/codes.mjs spells them
 
 /** `(where, code)` -> one short English sentence, for the closed failure codes a person actually meets in a wall. */
@@ -30,8 +30,8 @@ export const FAILURE_WORDS = Object.freeze({
   'engine/lookup-miss': 'a connection\'s destination could not be read',
   'engine/engine-error': 'the engine failed',
   'engine/flow-write-failed': 'a connection log line could not be written',
-  'engine/negative-cache': 'a program refused asight\'s certificate, so its traffic to that host is passed on unread',
-  'engine/trust-rejected': 'a program refused asight\'s certificate under TLS, so that host is not captured',
+  'engine/negative-cache': 'a program refused trocar\'s certificate, so its traffic to that host is passed on unread',
+  'engine/trust-rejected': 'a program refused trocar\'s certificate under TLS, so that host is not captured',
   'engine/upstream-slow': 'the upstream was slow',
   'engine/leaf-error': 'a certificate could not be issued',
   'engine/framer-error': 'a request could not be parsed',
@@ -47,10 +47,10 @@ export const FAILURE_WORDS = Object.freeze({
   'install/install-error': 'the install step failed',
   'uninstall/left-unparsable': 'an uninstall left an item behind',
   'ingress/ingress-auth-failed': 'a program did not answer the proxy challenge',
-  'ingress/engine-port-taken': 'asight\'s port is taken',
+  'ingress/engine-port-taken': 'trocar\'s port is taken',
   'ingress/upstream-unavailable': 'the upstream could not be dialled',
   // a connection row the fold knows by its `not_captured` / `reason` alone (its group key is `flow:<code>`), not by a (where, code) pair
-  'flow/client-rejected-leaf': 'a connection whose program refused asight\'s certificate',
+  'flow/client-rejected-leaf': 'a connection whose program refused trocar\'s certificate',
 })
 
 /** The short reason of a `(where, code)` pair, or null when the table does not know it (errno and unknown codes keep their raw shape). */

@@ -1,7 +1,7 @@
-// trust.mjs — confirm a process trusts the asight CA before the engine decrypts it (RFC 4.6 §确认信任,
-// acceptance T12). The process trusts asight only if a trust source actually in effect for it names a
-// file holding a certificate whose SHA-256 fingerprint equals the asight CA's. A merged bundle ("system
-// roots + asight CA") is not the CA's path, so paths are never compared.
+// trust.mjs — confirm a process trusts the trocar CA before the engine decrypts it (RFC 4.6 §确认信任,
+// acceptance T12). The process trusts trocar only if a trust source actually in effect for it names a
+// file holding a certificate whose SHA-256 fingerprint equals the trocar CA's. A merged bundle ("system
+// roots + trocar CA") is not the CA's path, so paths are never compared.
 // The root /proc/<pid>/environ is not enough: agents load settings env / .env files after exec and some
 // read a CA path straight from their config, so each harness supplies LAYERS (file-borne variables and
 // config keys as pseudo-variables) and a precedence CHAIN; this module knows semantics only:
@@ -24,12 +24,12 @@ const FALSEY = /^(false|0|no|off)$/i
 
 // A plugin entry (D37④: dsh, OpenCode) never shows in environ. The plugin's only write is a per-pid marker,
 // <dir>/<pid>, holding the process's start time as the kernel reports it (Linux: field 22 of /proc/<pid>/stat),
-// written only when it really added the asight CA (4.6 「标记」). A marker whose start time differs belongs to an
+// written only when it really added the trocar CA (4.6 「标记」). A marker whose start time differs belongs to an
 // earlier process with the same pid: ignored (`marker-stale`), so a reused pid is never decrypted on a dead process's
-// word (T7). The layer names the asight CA file under the pseudo-variable `asight:marker`, so trust is still confirmed
-// by fingerprint: a marker next to a CA file that lost the asight CA does not trust.
+// word (T7). The layer names the trocar CA file under the pseudo-variable `trocar:marker`, so trust is still confirmed
+// by fingerprint: a marker next to a CA file that lost the trocar CA does not trust.
 // The comparison is byte-exact (the Linux /proc rule).
-export const MARKER_VAR = 'asight:marker'
+export const MARKER_VAR = 'trocar:marker'
 export function markerLayer({ dir, pid, startTicks, caPem, readText }) {
   const text = readText(path.join(dir, String(pid)))
   if (text == null) return null
@@ -134,7 +134,7 @@ export function createTrustChecker({ caCertPem, readFile = fs.readFileSync, stat
 
   function checkOne(trust, environ, layers, cwd, startedAt, argv, extra) {
     const spec = { ...trust, environ }
-    // A layer read only at start counts if its value was there when the process started: `since` (when asight
+    // A layer read only at start counts if its value was there when the process started: `since` (when trocar
     // installed that very value, from the install manifest) else the file's mtime. An unknown start time or an
     // unknown age counts as stale — never trusted by default (review 2 #5).
     const since = (l) => l.since ?? l.mtimeMs ?? null

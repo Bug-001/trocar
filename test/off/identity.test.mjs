@@ -1,5 +1,5 @@
 // test/off/identity.test.mjs — the name half of D51 (RFC 4.6 §身份与信任 R1 / R6; plan 2026-10-14-d51-name-allowlist §2.1–2.2): the
-// normalizer, the derived facts names / name0 / rest, the user's ~/.asight/agents.json (every problem code with its item and an actionable
+// normalizer, the derived facts names / name0 / rest, the user's ~/.trocar/agents.json (every problem code with its item and an actionable
 // detail, G5), the merge with the presets, the compiler's refusals, and a compiled list surviving the manifest's JSON round trip (G8).
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -147,14 +147,14 @@ test('G8: a compiled list answers the same after the manifest round trip (serial
 })
 
 const writeList = (home, doc) => {
-  fs.mkdirSync(path.join(home, '.asight'), { recursive: true })
-  fs.writeFileSync(path.join(home, '.asight', 'agents.json'), typeof doc === 'string' ? doc : JSON.stringify(doc))
+  fs.mkdirSync(path.join(home, '.trocar'), { recursive: true })
+  fs.writeFileSync(path.join(home, '.trocar', 'agents.json'), typeof doc === 'string' ? doc : JSON.stringify(doc))
 }
 
 test('readAgentList: absent, ok, and one item per problem code (code, index, an actionable detail)', () => {
-  const home = tmpDir('asight-agents-')
+  const home = tmpDir('trocar-agents-')
   const absent = readAgentList({ home })
-  assert.deepEqual([absent.state, absent.entries, absent.problems, absent.path], ['absent', [], [], path.join(home, '.asight', 'agents.json')])
+  assert.deepEqual([absent.state, absent.entries, absent.problems, absent.path], ['absent', [], [], path.join(home, '.trocar', 'agents.json')])
   writeList(home, { version: 1, agents: [
     { harness: 'claude-code', name: 'claude-nightly' }, //                 0 ok
     { harness: 'deepseek-dsh', name: 'node', args: String.raw`my-fork/bin\.js` }, // 1 ok
@@ -188,7 +188,7 @@ test('readAgentList: absent, ok, and one item per problem code (code, index, an 
 })
 
 test('readAgentList: whole-file problems have index null; not-there and unreadable are apart', () => {
-  const home = tmpDir('asight-agents-')
+  const home = tmpDir('trocar-agents-')
   writeList(home, '{ nope')
   assert.deepEqual([readAgentList({ home }).state, readAgentList({ home }).problems.map((p) => [p.index, p.code])], ['unparsable', [[null, 'unparsable']]])
   writeList(home, { version: 2, agents: [] })
@@ -198,13 +198,13 @@ test('readAgentList: whole-file problems have index null; not-there and unreadab
   writeList(home, { version: 1, agents: {} })
   assert.equal(readAgentList({ home }).problems[0].code, 'unparsable')
   writeList(home, { version: 1, agents: [] })
-  fs.chmodSync(path.join(home, '.asight', 'agents.json'), 0o000)
+  fs.chmodSync(path.join(home, '.trocar', 'agents.json'), 0o000)
   try {
     const u = readAgentList({ home })
     if (process.getuid && process.getuid() === 0) return // root reads a 000 file
     assert.deepEqual([u.state, u.problems[0].index, u.problems[0].code], ['unreadable', null, 'EACCES'])
     assert.match(u.problems[0].detail, /permissions/)
-  } finally { fs.chmodSync(path.join(home, '.asight', 'agents.json'), 0o600) }
+  } finally { fs.chmodSync(path.join(home, '.trocar', 'agents.json'), 0o600) }
   const inj = readAgentList({ home, fs: { readFileSync: () => { throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }) } } })
   assert.deepEqual([inj.state, inj.problems[0].code], ['unreadable', 'EIO'])
 })

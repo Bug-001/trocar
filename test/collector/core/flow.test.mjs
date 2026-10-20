@@ -7,7 +7,7 @@ import { handleFlow } from '../../../src/collector/core/engine/flow.mjs'
 import { createNegativeCache } from '../../../src/collector/core/engine/negcache.mjs'
 
 const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
-const asightCa = createCa(); const issuer = createLeafIssuer(loadCa(asightCa))
+const trocarCa = createCa(); const issuer = createLeafIssuer(loadCa(trocarCa))
 const listen = (srv) => new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv.address().port)))
 // Await an event-backed promise, but fail with a message instead of hanging the whole run if the
 // event never comes (e.g. a flow that is never finalized).
@@ -73,13 +73,13 @@ const once = (emitter, event) => new Promise((r) => emitter.once(event, r))
 const REQ = 'POST /v1/messages HTTP/1.1\r\nHost: upstream.test\r\nContent-Length: 13\r\nConnection: close\r\n\r\n{"model":"m"}'
 const RESP = 'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nX-Odd-Case: KeepMe\r\nContent-Length: 9\r\nConnection: close\r\n\r\n{"ok":1} '.slice(0, -1)
 
-test('decrypt: client sees an asight-issued leaf; both directions byte-identical; one envelope', async () => {
+test('decrypt: client sees an trocar-issued leaf; both directions byte-identical; one envelope', async () => {
   let seen = ''
   const h = await harness({ upstream: httpsUpstream((s) => s.on('data', (d) => { seen += d.toString('latin1'); if (seen.endsWith('}')) s.end(RESP) })) })
-  const r = await request(h.port, asightCa.certPem, REQ)
+  const r = await request(h.port, trocarCa.certPem, REQ)
   await h.close()
   assert.equal(seen, REQ); assert.equal(r.got, RESP)
-  assert.match(r.cert.issuer, /asight collector CA/)
+  assert.match(r.cert.issuer, /trocar collector CA/)
   assert.equal(h.envelopes.length, 1); assert.equal(h.envelopes[0].req_body, '{"model":"m"}')
   assert.equal(h.flows[0].decision, 'decrypt')
 })
@@ -112,7 +112,7 @@ test('upstream reset mid-response: client gets exactly the bytes upstream sent, 
   const partial = 'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n6\r\ndata:\n\r\n'
   const h = await harness({ upstream: httpsUpstream((s) => s.on('data', () => { s.write(partial); setTimeout(() => s.destroy(), 50) })) })
   const got = await new Promise((resolve) => {
-    const c = tls.connect({ port: h.port, host: '127.0.0.1', servername: 'upstream.test', ca: asightCa.certPem }, () => c.write(REQ))
+    const c = tls.connect({ port: h.port, host: '127.0.0.1', servername: 'upstream.test', ca: trocarCa.certPem }, () => c.write(REQ))
     let b = ''; c.on('data', (d) => (b += d.toString('latin1'))); c.on('close', () => resolve(b)); c.on('error', () => {})
   })
   await h.close()
@@ -132,7 +132,7 @@ test('CONNECT tunnel: the proxy reply is relayed verbatim, then the inner TLS is
     const raw = net.connect(h.port, '127.0.0.1', () => raw.write('CONNECT upstream.test:443 HTTP/1.1\r\nHost: upstream.test:443\r\n\r\n'))
     raw.once('data', (d) => {
       const reply = d.toString('latin1')
-      const t = tls.connect({ socket: raw, servername: 'upstream.test', ca: asightCa.certPem }, () => t.write(REQ))
+      const t = tls.connect({ socket: raw, servername: 'upstream.test', ca: trocarCa.certPem }, () => t.write(REQ))
       let b = ''; t.on('data', (x) => (b += x.toString('latin1'))); t.on('end', () => resolve({ reply, b })); t.on('error', reject)
     })
   })
@@ -153,7 +153,7 @@ test('CONNECT refused by the proxy: the client receives the proxy refusal verbat
   assert.equal(got, refusal)
 })
 
-// RFC 4.6 §引擎 5 (D37) · W9: a Node client that does not trust the asight CA sends no alert. Under
+// RFC 4.6 §引擎 5 (D37) · W9: a Node client that does not trust the trocar CA sends no alert. Under
 // TLS 1.3 we only see a reset; under TLS 1.2 the handshake completes on our side and the client hangs up
 // with zero application data. Both count; two in a row make (pid, host) negative, and the reason is on
 // each record when it is written (the harness store snapshots, like the real one).
@@ -205,7 +205,7 @@ test('a client that rejects the leaf with a TLS alert: the row\'s error carries 
 test('a connection that carries data resets the count: rejected, accepted, rejected is not negative (W9)', async () => {
   const h = await harness({ upstream: httpsUpstream((s) => s.on('data', () => s.end(RESP))) })
   await request(h.port, upCa.certPem, REQ).catch(() => {}); await within(h.settled(), 'first flow')
-  await request(h.port, asightCa.certPem, REQ); await within(h.settled(), 'second flow')
+  await request(h.port, trocarCa.certPem, REQ); await within(h.settled(), 'second flow')
   await request(h.port, upCa.certPem, REQ).catch(() => {})
   await h.close()
   assert.equal(h.ctx.negCache.list().length, 0)
@@ -218,10 +218,10 @@ test('a connection that carries data resets the count: rejected, accepted, rejec
 test('a trusting client\'s idle connection closed by the UPSTREAM is no rejection: no reason, no strike, still decrypted (W9)', async () => {
   const h = await harness({ upstream: httpsUpstream((s) => setTimeout(() => s.end(), 30)) })
   const idle = () => new Promise((resolve) => {
-    const c = tls.connect({ port: h.port, host: '127.0.0.1', servername: 'upstream.test', ca: asightCa.certPem }, () => { c.issuer = c.getPeerX509Certificate().issuer })
+    const c = tls.connect({ port: h.port, host: '127.0.0.1', servername: 'upstream.test', ca: trocarCa.certPem }, () => { c.issuer = c.getPeerX509Certificate().issuer })
     c.on('error', () => {}); c.on('close', () => resolve(c.issuer))
   })
-  for (let i = 0; i < 3; i++) { assert.match(await idle(), /asight collector CA/, `connection ${i + 1} decrypted`); await within(h.settled(), `flow ${i + 1}`) }
+  for (let i = 0; i < 3; i++) { assert.match(await idle(), /trocar collector CA/, `connection ${i + 1} decrypted`); await within(h.settled(), `flow ${i + 1}`) }
   await h.close()
   assert.deepEqual(h.flows.map((f) => [f.decision, f.reason ?? null]), [['decrypt', null], ['decrypt', null], ['decrypt', null]])
   assert.equal(h.ctx.negCache.strikes('1|upstream.test'), 0); assert.equal(h.ctx.negCache.list().length, 0)
@@ -303,7 +303,7 @@ test('an upstream that refuses the connection: flows/ error names the upstream s
   const h = await harness({ upstream: net.createServer() })
   const engine = net.createServer((c) => { h.direct.push(handleFlow(c, { dst: { address: '127.0.0.1', port: deadPort, family: 4 }, pid: 1, agent: 't', decrypt: true }, h.ctx)) })
   const port = await listen(engine)
-  assert.equal(await talk(port, asightCa.certPem), 'closed')
+  assert.equal(await talk(port, trocarCa.certPem), 'closed')
   await within(Promise.all(h.direct), 'flow finalized'); engine.close(); await h.close()
   assert.deepEqual([h.flows[0].decision, h.flows[0].error.type, h.flows[0].error.side], ['error', 'ECONNREFUSED', 'upstream'])
 })
@@ -340,7 +340,7 @@ test('client abort mid-flight tears down the upstream socket (acceptance T3)', a
   let upClosed; const closedUp = new Promise((r) => { upClosed = r })
   // consume the request bytes (a real upstream reads them) so the socket reports close on the RST
   const h = await harness({ upstream: httpsUpstream((s) => { upSock = s; s.on('data', () => reached()); s.on('close', () => { upClosedAt = Date.now(); upClosed() }) }) })
-  const c = tls.connect({ port: h.port, host: '127.0.0.1', servername: 'upstream.test', ca: asightCa.certPem }, () => c.write(REQ))
+  const c = tls.connect({ port: h.port, host: '127.0.0.1', servername: 'upstream.test', ca: trocarCa.certPem }, () => c.write(REQ))
   c.on('error', () => {})
   // wait for the decrypt handshake + REQ to reach the upstream (a fixed 120 ms flaked under a loaded suite)
   await within(requestReached, 'the decrypted request reached the upstream')
@@ -389,7 +389,7 @@ test('a leaf the engine cannot issue steps aside like an unverifiable upstream: 
   assert.match(r.cert.issuer, /upstream test CA/); assert.equal(r.got, RESP)
   assert.deepEqual([h.flows[0].decision, h.flows[0].not_captured, h.flows[0].reason], ['splice', 'leaf-error', 'cannot sign a leaf'])
   assert.deepEqual(h.failures.map((f) => [f.code, f.flow_id, f.host, f.reason]), [['leaf-error', h.flows[0].flow_id, 'upstream.test', 'cannot sign a leaf']])
-  assert.equal(h.ctx.negCache.list().length, 0, 'asight\'s own fault, not a property of the host'); assert.equal(h.ctx.counters.notCaptured.leafError, 1)
+  assert.equal(h.ctx.negCache.list().length, 0, 'trocar\'s own fault, not a property of the host'); assert.equal(h.ctx.counters.notCaptured.leafError, 1)
 })
 
 test('an internal error while routing (here the daemon\'s policy throws) ends that one flow with a record, not the collector (D38)', async () => {
@@ -406,7 +406,7 @@ test('a socket error on either side reaches flows/ with its side (D38)', async (
   const seen = new Promise((r) => { gotReq = r })
   const h = await harness({ upstream: httpsUpstream((s) => { s.on('error', () => {}); s.on('data', () => gotReq()) }) })
   const raw = net.connect(h.port, '127.0.0.1'); raw.on('error', () => {})
-  const c = tls.connect({ socket: raw, servername: 'upstream.test', ca: asightCa.certPem }, () => c.write(REQ)); c.on('error', () => {})
+  const c = tls.connect({ socket: raw, servername: 'upstream.test', ca: trocarCa.certPem }, () => c.write(REQ)); c.on('error', () => {})
   await within(seen, 'request reached the upstream')
   raw.resetAndDestroy()
   await h.close()
@@ -421,7 +421,7 @@ test('flows/ bytes_up / bytes_down == the agent socket\'s own counters: decrypte
   const viaTls = (port, prelude) => new Promise((resolve) => {
     const raw = net.connect(port, '127.0.0.1', () => { if (prelude) raw.write(prelude); else go() })
     raw.on('error', () => {})
-    const go = () => { const t = tls.connect({ socket: raw, servername: 'upstream.test', ca: asightCa.certPem }, () => t.write(REQ)); t.resume(); t.on('error', () => {}); t.on('close', () => resolve(raw)) }
+    const go = () => { const t = tls.connect({ socket: raw, servername: 'upstream.test', ca: trocarCa.certPem }, () => t.write(REQ)); t.resume(); t.on('error', () => {}); t.on('close', () => resolve(raw)) }
     if (prelude) raw.once('data', go)
   })
   const counted = (h) => [h.flows[0].bytes_up, h.flows[0].bytes_down]
@@ -445,7 +445,7 @@ test('flows/ bytes_up / bytes_down == the agent socket\'s own counters: decrypte
 test('an upstream framing error is a framer-error failure event with the flow id; the open exchange is written as framer_error (D38)', async () => {
   const bad = 'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nZZ\r\nxx\r\n0\r\n\r\n'
   const h = await harness({ upstream: httpsUpstream((s) => s.on('data', () => s.end(bad))) })
-  const r = await request(h.port, asightCa.certPem, REQ)
+  const r = await request(h.port, trocarCa.certPem, REQ)
   await h.close()
   assert.equal(r.got, bad, 'forwarded untouched')
   assert.deepEqual(h.failures.map((f) => [f.code, f.flow_id, f.side]), [['framer-error', h.flows[0].flow_id, 'response']])
@@ -455,13 +455,13 @@ test('an upstream framing error is a framer-error failure event with the flow id
 // 1.6 §1.3 / invariant 4: when the recorder throws after the drain gate put its `Connection: close` into a head, the connection stops being recorded
 // but the row still says what the client was given — the gate's note must not die with the tee. (The tee throws here because its failure sink does:
 // a framing failure that cannot be reported comes out of push(); the engine's own sink never throws, so this is the defensive path.)
-test('a recorder that throws after the drain gate added Connection: close: the flows/ row still says asight_added and the bytes the client got are the upstream\'s plus that line, in order (invariant 4)', async () => {
+test('a recorder that throws after the drain gate added Connection: close: the flows/ row still says trocar_added and the bytes the client got are the upstream\'s plus that line, in order (invariant 4)', async () => {
   const head = 'HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\n'
   const h = await harness({ upstream: httpsUpstream((s) => s.once('data', () => { setTimeout(() => s.write(`${head}abc`), 150); setTimeout(() => s.write('defghij'), 500) })) })
   const handles = []
   h.ctx.register = (x) => handles.push(x)
   h.ctx.failure = (r) => { if (r.code === 'framer-error') throw new Error('the failure sink threw'); h.failures.push(r) }
-  const c = tls.connect({ port: h.port, host: '127.0.0.1', servername: 'upstream.test', ca: asightCa.certPem, ALPNProtocols: ['http/1.1'] })
+  const c = tls.connect({ port: h.port, host: '127.0.0.1', servername: 'upstream.test', ca: trocarCa.certPem, ALPNProtocols: ['http/1.1'] })
   let got = ''; c.on('data', (d) => { got += d.toString('latin1') }); c.on('error', () => {})
   const wait = async (fn, what) => { for (const end = Date.now() + 4000; Date.now() < end; await new Promise((r) => setTimeout(r, 10))) if (fn()) return; throw new Error(`${what}: not within 4000ms`) }
   await once(c, 'secureConnect')
@@ -477,5 +477,5 @@ test('a recorder that throws after the drain gate added Connection: close: the f
   assert.equal(handles[0].state(), 'waiting', 'no longer followed: it waits for its own close, not closed on a stale view')
   c.destroy()
   await h.close()
-  assert.deepEqual(h.flows[0].asight_added, [{ seq: 0, what: 'connection-close' }], 'the row still says what the client was given')
+  assert.deepEqual(h.flows[0].trocar_added, [{ seq: 0, what: 'connection-close' }], 'the row still says what the client was given')
 })

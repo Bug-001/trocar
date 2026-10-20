@@ -5,7 +5,7 @@
 //   failed      — EVERY verb throws the way cliCustody reports a program that could not run at all: a HOME with no login keychain
 //                 answers "A default keychain could not be found" (macOS test machine, 2026-10-18). Set it to the message, or to true for that one.
 //   throws      — issueIntermediate throws (the helper crashed)
-//   keyLost     — exists() is false: the key was deleted behind asight's back (create then makes a new one; create over a key that exists throws, code 'exists')
+//   keyLost     — exists() is false: the key was deleted behind trocar's back (create then makes a new one; create over a key that exists throws, code 'exists')
 //   wrongProfile — issueIntermediate hands back a self-signed root-shaped certificate instead
 //   wrongKey    — a well-formed intermediate for another public key than the one sent
 //   skewMs      — a well-formed intermediate whose notBefore is shifted by this much (a local-vs-UTC slip)
@@ -28,7 +28,7 @@ export function custodyStub({ kind = 'stub', clock = () => Date.now() } = {}) {
   const self = {
     kind, switches, calls,
     get rootDer() { return rootDer },
-    create({ subject = 'asight root (test)' } = {}) {
+    create({ subject = 'trocar root (test)' } = {}) {
       calls.push({ verb: 'create' })
       if (switches.failed) throw failure('create')
       if (switches.unavailable) return 'unavailable'
@@ -47,7 +47,7 @@ export function custodyStub({ kind = 'stub', clock = () => Date.now() } = {}) {
       if (!self.exists()) throw Object.assign(new Error('stub custody: no root key'), { code: NO_KEY }) // the programs' exit 4
       if (switches.wrongProfile) { const k = p256(); return rootCertDer({ subject: 'not an intermediate', spkiDer: spkiOf(k.publicKey), serial, notBefore, notAfter: new Date(notBefore.getTime() + 7 * DAY), sign: signer(k.privateKey) }) }
       const nb = new Date(notBefore.getTime() + switches.skewMs)
-      return intermediateCertDer({ root: rootDer, subject: `asight intermediate ${nb.toISOString()}`, spkiDer: switches.wrongKey ? spkiOf(p256().publicKey) : spkiDer, serial, notBefore: nb, sign: signer(keys.privateKey) })
+      return intermediateCertDer({ root: rootDer, subject: `trocar intermediate ${nb.toISOString()}`, spkiDer: switches.wrongKey ? spkiOf(p256().publicKey) : spkiDer, serial, notBefore: nb, sign: signer(keys.privateKey) })
     },
     remove() { calls.push({ verb: 'remove' }); if (switches.failed) throw failure('remove'); if (switches.unavailable) return 'unavailable'; const had = !!keys; keys = null; rootDer = null; return { removed: had } },
   }

@@ -9,7 +9,7 @@ import { createTrustChecker, effectiveEnv, markerLayer } from '../../../src/coll
 import { readText, readTextOrError } from '../../../src/collector/core/config-read.mjs'
 
 export function sandbox() {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-h-'))
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-h-'))
   const put = (rel, text) => { const f = path.isAbsolute(rel) ? rel : path.join(home, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); return f }
   return { home, put, done: () => fs.rmSync(home, { recursive: true, force: true }) }
 }
@@ -31,15 +31,15 @@ export function ctxFor({ home, cwd = home, env = {}, argv = [], os: osName = 'no
 
 export const facts = (o) => ({ os: 'linux', pid: 1000, ppid: 1, uid: 1000, exe: null, argv: [], env: new Map(), cwd: '/', startedAt: null, source: 'exec', ...o })
 
-export const CA = createCa({ commonName: 'asight collector CA' })
-export const OTHER = createCa({ commonName: 'not asight' })
+export const CA = createCa({ commonName: 'trocar collector CA' })
+export const OTHER = createCa({ commonName: 'not trocar' })
 
 // A plugin's per-pid trust marker (4.6 「标记」): <dir>/<pid> = the process's start ticks.
 export function plantMarker(dir, pid, ticks) { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, String(pid)), String(ticks)); return dir }
 
 // What the tracker computes for one process: trust result + the env its readers see. With markerDir + caPem the
 // plugin marker layer is added as the tracker adds it; runtimeVersion is what the tracker reads from the exe.
-export function judge(descriptor, ctx, { markerDir = null, caPem = null, runtimeVersion = null, collectorDir = path.join(ctx.home, '.asight', 'collector'), exe = null, caCertPem = CA.certPem } = {}) {
+export function judge(descriptor, ctx, { markerDir = null, caPem = null, runtimeVersion = null, collectorDir = path.join(ctx.home, '.trocar', 'collector'), exe = null, caCertPem = CA.certPem } = {}) {
   const layers = (descriptor.layers ? descriptor.layers(ctx) : []).filter(Boolean)
   const marker = markerDir && caPem ? markerLayer({ dir: markerDir, pid: ctx.pid, startTicks: ctx.startTicks, caPem, readText: (f) => readText(f) }) : null
   if (marker) layers.push(marker)

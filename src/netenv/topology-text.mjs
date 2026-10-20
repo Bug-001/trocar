@@ -1,5 +1,5 @@
 // topology-text.mjs (src/netenv) — the words of the topology (RFC 1.6 §3.5, 附录 A). Everything printed is rendered from a HarnessTopology (topology.mjs) and from nothing else, so the text and `--json` cannot differ (V43):
-// `renderCompact` is one line per branch, `renderRoutes` the `Routes` block of `status <harness>`, `firstHopAfterAsight` / `firstHopOff` the two hops V45 compares. Pure.
+// `renderCompact` is one line per branch, `renderRoutes` the `Routes` block of `status <harness>`, `firstHopAfterTrocar` / `firstHopOff` the two hops V45 compares. Pure.
 // English, ASCII only (D58): a chain is `agent (pid N) -> [where it came from] hop -> internet`.
 // What is never printed: a proxy URL's credentials (the facts never held them), a proxy product's name or node names (nothing here has them), and a hop's name when it could not be read — that
 // hop says `unknown (<reason>)` (D58③).
@@ -18,8 +18,8 @@ const paren = (...parts) => { const p = parts.filter(Boolean); return p.length ?
 function hopText(n, via, detail, inferred = false) {
   switch (n.kind) {
     case 'agent': return `${n.name}${n.pid ? ` (pid ${n.pid}${n.elevated ? `, elevated${n.elevatedInferred ? ', inferred' : ''}` : ''})` : n.elevated ? ' (elevated)' : ''}`
-    case 'asight-engine': return `${n.name}${n.port ? ` :${n.port}` : ''}${paren(passText(n))}` // a daemon that did not say its port is drawn without one: no `:undefined`
-    case 'asight-forwarder': return `${n.name} :${n.port}${paren(n.mode === 'forward-only' ? 'forwarded only' : n.mode === 'down' ? 'nothing listening' : null)}`
+    case 'trocar-engine': return `${n.name}${n.port ? ` :${n.port}` : ''}${paren(passText(n))}` // a daemon that did not say its port is drawn without one: no `:undefined`
+    case 'trocar-forwarder': return `${n.name} :${n.port}${paren(n.mode === 'forward-only' ? 'forwarded only' : n.mode === 'down' ? 'nothing listening' : null)}`
     case 'legacy-mitm': return `${n.name} :${n.port}`
     case 'proxy': {
       const at = n.port && !String(n.name).endsWith(`:${n.port}`) ? ` :${n.port}` : '' // every proxy hop has its port; a hop already named `host:port` says it once
@@ -40,8 +40,8 @@ function edgeLabel(e, from, to, detail) {
   if (e.via === 'ebpf') return 'ebpf'
   if (e.via === 'system-proxy') return 'system proxy'
   if (e.via === 'proxy-http' || e.via === 'proxy-https' || e.via === 'proxy-socks') {
-    if (e.entry) return `${base(e.entry.where)}${e.entry.opt_in ? ', you named it' : ', written by asight'}`
-    if (from.asight) return e.via === 'proxy-socks' ? 'SOCKS passed on as it is' : 'CONNECT passed on as it is'
+    if (e.entry) return `${base(e.entry.where)}${e.entry.opt_in ? ', you named it' : ', written by trocar'}`
+    if (from.trocar) return e.via === 'proxy-socks' ? 'SOCKS passed on as it is' : 'CONNECT passed on as it is'
     const ev = (e.evidence || [])[0] || ''
     if (ev.startsWith('env:')) return ev.slice(4)
     if (ev.startsWith('file:')) { const [file, key] = ev.slice(5).split('#'); return key ? `${base(file)} ${key}` : base(file) }
@@ -59,24 +59,24 @@ function chain(t, ids, detail = false, labels = true) {
   }).join(' -> ')
 }
 
-// Which words a branch's line needs in front: its form when the harness has more than one, HTTP / WebSocket when the branches of its form do not all go the same way (`key`: the path with asight, or without).
+// Which words a branch's line needs in front: its form when the harness has more than one, HTTP / WebSocket when the branches of its form do not all go the same way (`key`: the path with trocar, or without).
 const sameWay = (t, b, key) => new Set(t.branches.filter((x) => x.form === b.form).map((x) => x[key].join())).size === 1
 const prefixOf = (t, b, key = 'path') => [new Set(t.branches.map((x) => x.form).filter(Boolean)).size > 1 ? b.form : null, sameWay(t, b, key) ? null : BRANCH_TEXT[b.name]].filter(Boolean).map((x) => `${x} `).join('')
 // the branches that go the same way (same form, same path) are one line
 const distinct = (t) => t.branches.filter((b, i) => t.branches.findIndex((x) => x.form === b.form && x.path.join() === b.path.join()) === i)
 
-/** One line per way a harness's traffic goes: the path with asight on it (HTTP and WebSocket that take the same path are one line). */
+/** One line per way a harness's traffic goes: the path with trocar on it (HTTP and WebSocket that take the same path are one line). */
 export const renderCompact = (t) => distinct(t).map((b) => `${prefixOf(t, b)}${chain(t, b.path)}`)
 
-/** What `status` says after a branch's chain: `on asight's path: yes · captured: no (desired-off)`. */
-export const verdictText = (b) => `on asight's path: ${tri(b.on_path)} · captured: ${tri(b.captured)}${b.reason ? ` (${b.reason})` : ''}`
+/** What `status` says after a branch's chain: `on trocar's path: yes · captured: no (desired-off)`. */
+export const verdictText = (b) => `on trocar's path: ${tri(b.on_path)} · captured: ${tri(b.captured)}${b.reason ? ` (${b.reason})` : ''}`
 
-const isAsight = (n) => n.asight === true
-/** The first hop after asight on a branch (the first one that is not asight's own), and the first hop of the same branch with asight taken out: 附录 A says they are the same. */
-export function firstHopAfterAsight(t, b) {
+const isTrocar = (n) => n.trocar === true
+/** The first hop after trocar on a branch (the first one that is not trocar's own), and the first hop of the same branch with trocar taken out: 附录 A says they are the same. */
+export function firstHopAfterTrocar(t, b) {
   const nodes = b.path.map((id) => nodeOf(t, id))
   let last = 0
-  nodes.forEach((n, i) => { if (isAsight(n)) last = i })
+  nodes.forEach((n, i) => { if (isTrocar(n)) last = i })
   return nodes[last + 1] || null
 }
 export const firstHopOff = (t, b) => nodeOf(t, b.off_path[1]) || null
@@ -85,19 +85,19 @@ export const hopKey = (n) => (n ? [n.kind, n.addr ?? '', n.port ?? '', n.name].j
 
 const CHANGE = {
   driver: (h) => `To change the proxy: edit ${h}'s own settings; new processes follow them.`,
-  proxy: (h) => `To change the proxy: edit ${h}'s own settings, then run: asight on ${h}`,
+  proxy: (h) => `To change the proxy: edit ${h}'s own settings, then run: trocar on ${h}`,
   legacy: () => 'To change the proxy: edit your proxy\'s own settings.',
-  none: (h) => `To change the proxy: edit ${h}'s own settings; asight is not on its path now.`,
+  none: (h) => `To change the proxy: edit ${h}'s own settings; trocar is not on its path now.`,
   unknown: (h) => `To change the proxy: edit ${h}'s own settings.`,
 }
-/** The one sentence 附录 A asks for whenever asight is on the path, and the line that says how to change the proxy. */
-export const routeNotes = (t) => [...(t.on_path === true ? [`If your VPN or proxy routes by process, it sees asight, not ${t.harness}.`] : []), (CHANGE[t.routing] || CHANGE.unknown)(t.harness)]
+/** The one sentence 附录 A asks for whenever trocar is on the path, and the line that says how to change the proxy. */
+export const routeNotes = (t) => [...(t.on_path === true ? [`If your VPN or proxy routes by process, it sees trocar, not ${t.harness}.`] : []), (CHANGE[t.routing] || CHANGE.unknown)(t.harness)]
 
-/** The `Routes` rows of `status <harness>` (§3.5): `[[label, chain], …]` — the path of new connections, the path with asight taken out, and each running process that goes another way. */
+/** The `Routes` rows of `status <harness>` (§3.5): `[[label, chain], …]` — the path of new connections, the path with trocar taken out, and each running process that goes another way. */
 function routeRows(t, { labels = true } = {}) {
   const rows = []
   for (const b of distinct(t)) rows.push([`new processes${prefixOf(t, b) ? ` (${prefixOf(t, b).trim()})` : ''}`, chain(t, b.path, true, labels)])
-  if (t.branches.some((b) => b.path.some((id) => isAsight(nodeOf(t, id))))) for (const b of distinct(t)) rows.push([`without asight${prefixOf(t, b, 'off_path') ? ` (${prefixOf(t, b, 'off_path').trim()})` : ''}`, chain(t, b.off_path, true, labels)])
+  if (t.branches.some((b) => b.path.some((id) => isTrocar(nodeOf(t, id))))) for (const b of distinct(t)) rows.push([`without trocar${prefixOf(t, b, 'off_path') ? ` (${prefixOf(t, b, 'off_path').trim()})` : ''}`, chain(t, b.off_path, true, labels)])
   for (const r of t.running || []) rows.push([`pid ${r.pid} now`, chain(t, r.path, true, labels)])
   return rows
 }

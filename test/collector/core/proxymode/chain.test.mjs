@@ -1,10 +1,10 @@
 // test/collector/core/proxymode/chain.test.mjs — CM20 (spec 4.11 P7, plan decision #12): the upstream chain, generated over every loaded descriptor's
 // proxyMode forms plus the eighth fixture, along the axes of the chain (hook env, header allowed or not, recorded prior, process env per spelling in the
 // agent's order, a door value with a parent, a parent gone, system proxy follower or not, PAC, identity failed). Measured values are seeds only:
-// Verge's 127.0.0.1:7897 with `localhost;<local>`, a corporate proxy, and the steer value an older asight left.
+// Verge's 127.0.0.1:7897 with `localhost;<local>`, a corporate proxy, and the steer value an older trocar left.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { HOOK_ENV, SOURCES, isAsightDoorUrl, upstreamFor } from '../../../../src/collector/core/proxymode/chain.mjs'
+import { HOOK_ENV, SOURCES, isTrocarDoorUrl, upstreamFor } from '../../../../src/collector/core/proxymode/chain.mjs'
 import { bypassHit } from '../../../../src/collector/core/upstream-shape.mjs'
 import { CODE } from '../../../../src/collector/core/codes.mjs'
 import { CODES } from '../../../../src/health/codes.mjs'
@@ -13,13 +13,13 @@ import eighth from '../../harness/fixtures/eighth.mjs'
 
 const TOKEN = 'a3'.repeat(32)
 const DOOR = `http://of.cli:${TOKEN}@127.0.0.1:47011` // what `on` writes
-const STEER = `http://g2:${'9f'.repeat(16)}@127.0.0.1:7890` // an older asight's steer value
+const STEER = `http://g2:${'9f'.repeat(16)}@127.0.0.1:7890` // an older trocar's steer value
 const CORP = 'http://proxy.corp:3128'
 const PARENT = 'http://parent.corp:8080'
 const HOOKED = 'http://hooked.corp:3128'
 const VERGE = { url: 'http://127.0.0.1:7897', bypass: [{ kind: 'domain-suffix', value: 'localhost' }, { kind: 'ip-cidr', value: '127.0.0.0/8' }, { kind: 'local' }] }
-const isDoor = (v) => isAsightDoorUrl(v, { ports: [47012] })
-const OPEN_DOOR = 'http://127.0.0.1:47012' // a PAC-served door: no credentials, one of asight's ports
+const isDoor = (v) => isTrocarDoorUrl(v, { ports: [47012] })
+const OPEN_DOOR = 'http://127.0.0.1:47012' // a PAC-served door: no credentials, one of trocar's ports
 
 const facts = (env, parent) => ({ pid: 100, start: 1, env, parentOf: async () => (parent === undefined ? null : parent) })
 
@@ -73,7 +73,7 @@ test('CM20 generated: every form × transport × hook × header × prior × proc
       const fx = c.identity ? envCase(c, name) : null
       if (fx && c.hook !== undefined) fx.env = fx.env && { ...fx.env, [HOOK_ENV]: c.hook }
       if (fx && c.hook !== undefined && fx.env === null) continue // an unreadable env has no hook value either
-      const r = await upstreamFor({ desc: d, form: f, facts: fx, recordedPrior: c.prior ?? null, systemProxy: SYS[c.sys], header: c.header ?? null, headerAllowed: c.allowed ?? false, isAsightDoor: isDoor, transport })
+      const r = await upstreamFor({ desc: d, form: f, facts: fx, recordedPrior: c.prior ?? null, systemProxy: SYS[c.sys], header: c.header ?? null, headerAllowed: c.allowed ?? false, isTrocarDoor: isDoor, transport })
       const at = `${f.id} ${transport} ${name} ${JSON.stringify(c)}`
       // invariants
       assert.ok(SOURCES.includes(r.source), at)
@@ -145,12 +145,12 @@ test('an old steer value as recordedPrior is skipped (never an upstream), noted,
     assert.ok(r.source === 'direct' || r.source === 'system-proxy', d.name)
     assert.deepEqual(r.notes, [{ note: 'door-skipped', source: 'config-prior' }])
   }
-  assert.equal(isAsightDoorUrl(STEER), true)
-  assert.equal(isAsightDoorUrl(DOOR), true)
-  for (const v of [CORP, 'http://u:secret@127.0.0.1:7890', 'http://127.0.0.1:7897', `http://of.cli:${TOKEN}@10.0.0.1:47011`, '', 'not a url', null]) assert.equal(isAsightDoorUrl(v), false, String(v))
-  assert.equal(isAsightDoorUrl(OPEN_DOOR, { ports: [47012] }), true, 'an open door is one of asight\'s ports')
-  for (const host of ['door.localhost', '127.0.0.2', 'LOCALHOST']) assert.equal(isAsightDoorUrl(`http://${host}:47012`, { ports: [47012] }), true, `${host} is loopback (isLoopbackHost: *.localhost, 127.0.0.0/8)`)
-  const throwing = await upstreamFor({ desc: descs[0], facts: null, recordedPrior: CORP, isAsightDoor: () => { throw new Error('x') } })
+  assert.equal(isTrocarDoorUrl(STEER), true)
+  assert.equal(isTrocarDoorUrl(DOOR), true)
+  for (const v of [CORP, 'http://u:secret@127.0.0.1:7890', 'http://127.0.0.1:7897', `http://of.cli:${TOKEN}@10.0.0.1:47011`, '', 'not a url', null]) assert.equal(isTrocarDoorUrl(v), false, String(v))
+  assert.equal(isTrocarDoorUrl(OPEN_DOOR, { ports: [47012] }), true, 'an open door is one of trocar\'s ports')
+  for (const host of ['door.localhost', '127.0.0.2', 'LOCALHOST']) assert.equal(isTrocarDoorUrl(`http://${host}:47012`, { ports: [47012] }), true, `${host} is loopback (isLoopbackHost: *.localhost, 127.0.0.0/8)`)
+  const throwing = await upstreamFor({ desc: descs[0], facts: null, recordedPrior: CORP, isTrocarDoor: () => { throw new Error('x') } })
   assert.equal(throwing.url, null, 'a judge that throws never lets a value through')
 })
 

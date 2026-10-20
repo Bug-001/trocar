@@ -29,7 +29,7 @@ function prune(cache, now) { for (const [h, e] of cache.entries) if (e.expiresAt
 // ── Anthropic: explicit breakpoints ──
 const blocksOf = (c) => (typeof c === 'string' ? [{ type: 'text', text: c }] : arr(c))
 const strip = (b) => { if (!b || typeof b !== 'object') return b; const { cache_control, ...rest } = b; return rest }
-// Claude Code's billing-header block changes on every call, yet real hit rates stay ~100% (asight's
+// Claude Code's billing-header block changes on every call, yet real hit rates stay ~100% (trocar's
 // src/dissect/cc.mjs marks it volatile): the provider leaves it out, and so does the mock.
 const BILLING = /^x-anthropic-billing-header/
 // Minimum cacheable prefix per model family (docs table); unknown and mock models get 1024.

@@ -31,7 +31,7 @@ const errOf = (e) => (e ? { type: e.code || e.type || 'error', message: String(e
  * has had no byte of its response yet (so its head, once whole, can still carry a header line); seq = that request's
  * seq; blind = the tee cannot see response boundaries on this connection (framing stopped, a WebSocket with no terminal
  * message to wait for). markAdded(seq, what) = the gate put `what` into the bytes it forwarded for exchange `seq` ('connection-close'):
- * the envelope of that exchange says so (asight_added) and rowNotes().asightAdded does, recorded or not.
+ * the envelope of that exchange says so (trocar_added) and rowNotes().trocarAdded does, recorded or not.
  * onTurnEnd() = a WebSocket call just closed on its terminal message (the ws recorder's option).
  * wsTerminal = FlowExtras.wsTerminal (harness data, Plan 3c §2); wsSummary() = the ws recorder's summary
  * for flows/ once the connection switched to WebSocket, else null. onFailure({code, reason, …}) takes the
@@ -44,7 +44,7 @@ const errOf = (e) => (e ? { type: e.code || e.type || 'error', message: String(e
 export const noFailureSink = (r) => { throw Object.assign(new Error(`capture failure with nowhere to be recorded: ${r.code}: ${r.reason}`), { code: r.code }) } // a wiring fault: loud, never dropped
 export function createExchangeTee({ flow, recordStore, isRecording = () => true, maxBodyBytes = 64 << 20, newId, wsTerminal = null, retention = null, onFailure = noFailureSink, onTurnEnd = () => {} }) {
   // the retention callback, sampled once per call: a throw or a nonsense answer is `full`, its class told by the
-  // endpoint alone (never throws into the framer: a bad flow object is asight's own bug, reported where the envelope
+  // endpoint alone (never throws into the framer: a bad flow object is trocar's own bug, reported where the envelope
   // is built, not here). Class names are the operator's table's, so any non-empty name is taken as it is (D60③).
   const sample = (method, target) => {
     let host = null
@@ -165,7 +165,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
     const partial = ex.req.partial || (ex.req === curReq ? why : null)
     if (ex.req === curReq) curReq = null
     if (!ex.record) return
-    // building the envelope runs inside the framer's push(): an exception here is asight's own (engine-error),
+    // building the envelope runs inside the framer's push(): an exception here is trocar's own (engine-error),
     // not a framing error, and must not stop the framing of the rest of the connection (D38)
     let env
     try {
@@ -177,7 +177,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
         class: ex.rt.class, level: ex.rt.level,
       })
     } catch (e) { onFailure({ code: 'engine-error', flow_id: flow.id, seq: ex.seq, reason: `recording failed: ${String((e && e.message) || e)}` }); return }
-    if (ex.added) env.asight_added = [...ex.added] // after every other key: what asight put into the bytes the client got (4.6 §记录, invariant 4)
+    if (ex.added) env.trocar_added = [...ex.added] // after every other key: what trocar put into the bytes the client got (4.6 §记录, invariant 4)
     let ok = true
     try { ok = recordStore.envelope(env).ok === true } catch { ok = false } // the store counts and reports its own failures
     if (!ok) { writeFailed++; return }
@@ -214,7 +214,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
     upstreamEnded(err) { if (ws) ws.end(errOf(err)); else if (!stopped) respFramer.end() },
     abort,
     wsSummary: () => (ws ? ws.summary() : null),
-    rowNotes: () => ({ ...(writeFailed ? { writeFailed } : {}), ...(notFollowed ? { notFollowed } : {}), ...(framerError ? { framerError } : {}), ...(added.length ? { asightAdded: added.map((a) => ({ ...a })) } : {}) }),
+    rowNotes: () => ({ ...(writeFailed ? { writeFailed } : {}), ...(notFollowed ? { notFollowed } : {}), ...(framerError ? { framerError } : {}), ...(added.length ? { trocarAdded: added.map((a) => ({ ...a })) } : {}) }),
     boundary() {
       if (ws) { const st = ws.state(); return { idle: st === 'idle', headPending: false, seq: null, blind: st === 'blind' } }
       return { idle: !pending.length && !curReq && !curResp && !clientMid, headPending: pending.length > 0 && !respSeen, seq: pending.length ? pending[0].seq : null, blind: stopped || !!framerError }

@@ -1,7 +1,7 @@
 // test/web-v2/browser/harness.mjs — the one browser harness (D64⑤): the real face (test/web-v2/real-face.mjs) on a temp HOME, the
 // system Google Chrome through playwright-core (channel:'chrome', no browser download), marks / measures and shots. Exports only:
 // node --test runs every .mjs, so nothing here runs at import. The browser suite runs only under `npm run test:browser`
-// (ASIGHT_PLAYWRIGHT=1); anywhere else probe() says why it is not ok and the cases skip with that reason.
+// (TROCAR_PLAYWRIGHT=1); anywhere else probe() says why it is not ok and the cases skip with that reason.
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,7 +13,7 @@ const CHANNEL = { channel: 'chrome' }
 /** { ok:true, chromium } when the browser suite may run here; { ok:false, reason } otherwise (the reason is printed). */
 export async function probe({ importer = () => import('playwright-core'), env = process.env } = {}) {
   const no = (reason) => { console.log(`# browser suite skipped: ${reason}`); return { ok: false, reason } }
-  if (env.ASIGHT_PLAYWRIGHT !== '1') return no('ASIGHT_PLAYWRIGHT is not 1 (run it with `npm run test:browser`)')
+  if (env.TROCAR_PLAYWRIGHT !== '1') return no('TROCAR_PLAYWRIGHT is not 1 (run it with `npm run test:browser`)')
   let chromium
   try { chromium = (await importer()).chromium } catch (e) { return no(`playwright-core is not installed: ${e?.message || e}`) }
   try { await (await chromium.launch(CHANNEL)).close() } catch (e) { return no(`Google Chrome did not launch: ${String(e?.message || e).split('\n')[0]}`) }

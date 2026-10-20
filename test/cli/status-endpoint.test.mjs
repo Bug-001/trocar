@@ -1,6 +1,6 @@
-// test/cli/status-endpoint.test.mjs — the REAL seam between `asight status` and the daemon (the platform-seam rule: the 2026-10-11 incident): a real
+// test/cli/status-endpoint.test.mjs — the REAL seam between `trocar status` and the daemon (the platform-seam rule: the 2026-10-11 incident): a real
 // control server at the endpoint the platform's own writer gives (darwin: arch/darwin/control-path.mjs controlEndpoint → control.json + a socket + a token;
-// Linux: $XDG_RUNTIME_DIR/asight/collector.sock; win32: control.json naming a pipe), and gatherStatus with NO injected request and NO socket path — it
+// Linux: $XDG_RUNTIME_DIR/trocar/collector.sock; win32: control.json naming a pipe), and gatherStatus with NO injected request and NO socket path — it
 // must find the daemon through controlEndpointFor alone. No per-call-site fallback: with the resolver broken, darwin finds nothing (XDG_RUNTIME_DIR
 // is unset there, as on a real Mac), so a re-added Linux fallback cannot hide it.
 import { test } from 'node:test'
@@ -18,7 +18,7 @@ const REPLY = { pid: 4242, doors: {}, harnesses: {} }
 
 /** The world each platform's daemon leaves, built by that platform's own endpoint writer. → { env, sock, token } */
 const SHAPES = {
-  linux: (home, dir) => { const run = path.join(home, 'r'); return { env: { HOME: home, XDG_RUNTIME_DIR: run }, sock: path.join(run, 'asight', 'collector.sock'), token: null } },
+  linux: (home, dir) => { const run = path.join(home, 'r'); return { env: { HOME: home, XDG_RUNTIME_DIR: run }, sock: path.join(run, 'trocar', 'collector.sock'), token: null } },
   darwin: (home, dir) => { const ep = darwinEndpoint({ dir }); return { env: { HOME: home }, sock: ep.path, token: ep.token } },
   win32: (home, dir) => { const ep = win32Endpoint({ dir }); return { env: { HOME: home }, sock: ep.path, token: ep.token } },
 }

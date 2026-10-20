@@ -25,8 +25,8 @@ test('the suite skips with a reason when it is not asked for, or playwright-core
   let imported = 0
   const absent = [
     { env: {}, importer: () => { imported++; return { chromium: { launch: async () => { launched++ } } } } },
-    { env: { ASIGHT_PLAYWRIGHT: '1' }, importer: () => { throw new Error('x') } },
-    { env: { ASIGHT_PLAYWRIGHT: '1' }, importer: async () => ({ chromium: { launch: async () => { throw new Error('no chrome') } } }) },
+    { env: { TROCAR_PLAYWRIGHT: '1' }, importer: () => { throw new Error('x') } },
+    { env: { TROCAR_PLAYWRIGHT: '1' }, importer: async () => ({ chromium: { launch: async () => { throw new Error('no chrome') } } }) },
   ]
   for (const c of absent) {
     const r = await probe(c)

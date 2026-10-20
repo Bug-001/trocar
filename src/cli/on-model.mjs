@@ -1,4 +1,4 @@
-// on-model.mjs — `asight on` on macOS and Windows in the collector model (RFC 1.6 §1.1, 4.11 §1 on / off, §3 ①): the CLI is the one writer.
+// on-model.mjs — `trocar on` on macOS and Windows in the collector model (RFC 1.6 §1.1, 4.11 §1 on / off, §3 ①): the CLI is the one writer.
 // In order: the install record (else cert-not-installed, exit 1); the plan — the routes turnOnModel would write, nothing written (--dry-run stops here);
 // R6 — a yes only for files beyond the manifest's confirmed_paths (1.6 §1.6), not a terminal and no --yes → exit 2; under op.lock: the daemon up with
 // its endpoint answering, the login registration untouched (D61: it is install's) (ensureDaemonUp, install.mjs: the one copy Linux's turnOn uses too; controlEndpointFor re-resolved
@@ -19,19 +19,19 @@ const errText = (e) => String((e && e.message) || e)
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
 
 // §1.4「计划写全」: every planned route by the full path (and key) it will write; a route that writes no file of yours says why instead
-const planLine = (p, home) => [p.harness, `${p.paths.length ? p.paths.map((x) => tilde(x, home)).join(', ') : `no file of yours: asight hands ${p.harness} the setting as it starts`}${p.keys && p.keys.length ? `: ${p.keys.join('.')}` : ''}`]
+const planLine = (p, home) => [p.harness, `${p.paths.length ? p.paths.map((x) => tilde(x, home)).join(', ') : `no file of yours: trocar hands ${p.harness} the setting as it starts`}${p.keys && p.keys.length ? `: ${p.keys.join('.')}` : ''}`]
 const noteLine = (n) => (n.code === 'install-pending' ? `Not done yet: ${n.item} is ${n.state} (${n.why}). Run again: ${n.command}` : `Note: ${n.harness ? `${n.harness}: ` : ''}${n.text || n.why || n.code}${n.paths && n.paths.length ? ` (${n.paths.join(', ')})` : ''}`)
 // 1.6 §3.3: a harness that needs setup — the fix is two commands, never the code (§1.1)
-const refusedLine = (r) => `${r.harness} was not turned on: ${r.why}. Run: ${r.command}, then: asight on ${r.harness}`
+const refusedLine = (r) => `${r.harness} was not turned on: ${r.why}. Run: ${r.command}, then: trocar on ${r.harness}`
 /** 1.6 §3.3 (D65④): the harnesses `on` refused because their setup is needed — `blocked` of a dry run, `error` of a real one (exit 1). */
 const setupBlocked = (r) => r.refused.filter((x) => x.reason === 'setup-needed').map((x) => ({ what: x.harness, reason: x.why }))
-const setupError = (b) => ({ code: 'setup-needed', message: `${b.map((x) => x.what).join(', ')} ${b.length === 1 ? 'is' : 'are'} not set up for capture; run asight install, then asight on again` })
+const setupError = (b) => ({ code: 'setup-needed', message: `${b.map((x) => x.what).join(', ')} ${b.length === 1 ? 'is' : 'are'} not set up for capture; run trocar install, then trocar on again` })
 
 /** → the exit code. `source`: added to each flows/ record this run writes (the board's 'board'). `parts` is loadParts' view (its arch's unit); `deps`: backends, harnesses, which, exec, now, sleep, fs (0.1 §3). */
 export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, json, source }) {
   const fs = deps.fs || nodeFs
   const say = json ? () => {} : io.out // §1.2: with --json stderr stays empty and the plan is the `planned` key of the one document on stdout (a macOS test machine 2026-10-18: it went to stderr)
-  const dir = path.join(home, '.asight', 'collector')
+  const dir = path.join(home, '.trocar', 'collector')
   const put = (rec) => { try { if (fs.existsSync(dir)) appendEvent(dir, source ? { ...rec, source } : rec) } catch { /* the receipt carries it (R11) */ } }
   const [{ turnOnModel }, { backendsFor, sourcesCtx }, { renderHook }] = await Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs')])
   const b = deps.backends || (await backendsFor({ os, home, run: deps.exec || null, env, fs }))
@@ -39,9 +39,9 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const args = { os, home, env, ids, harnesses: deps.harnesses || parts.harnesses, ctx, fs, renderHook, rootStore: b.rootStore || null, source, ...(deps.now ? { now: deps.now } : {}) }
   const out = (receipt, exit) => {
     if (json) io.out(JSON.stringify(receipt, null, 2))
-    else io.out(fit([receipt.dry_run ? `asight on would start capturing ${receipt.harnesses.join(', ') || 'no agent'}. Nothing was written.`
+    else io.out(fit([receipt.dry_run ? `trocar on would start capturing ${receipt.harnesses.join(', ') || 'no agent'}. Nothing was written.`
       : exit === 0 ? `Capturing ${receipt.harnesses.join(', ') || 'no agent'}.${receipt.daemon && receipt.daemon.state === 'running' ? ' The collector is running.' : ''}`
-        : `asight on did not finish${receipt.harnesses.length ? ` for all of ${receipt.harnesses.join(', ')}` : ''}. What stopped it is below.`,
+        : `trocar on did not finish${receipt.harnesses.length ? ` for all of ${receipt.harnesses.join(', ')}` : ''}. What stopped it is below.`,
       ...receipt.refused.map(refusedLine),
       // §1.1: no two rows the same. One agent with several routes (Claude Code's settings and its config library) said "the setting is in place"
       // twice (a Windows test machine 2026-10-18): the row names the file the setting is in, so each row is the fact it reports
@@ -60,7 +60,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   // 附录 C.2: a `--dry-run` goes as expected even when the real run would stop before writing — it exits 0, and what would stop it is `blocked`
   // (a Windows test machine 2026-10-18: with nothing installed it exited 1 with a top-level `code` and no `planned`)
   if (plan.code) {
-    const blocked = (plan.problems.length ? plan.problems : [plan.code]).map((reason) => ({ what: 'asight on', reason }))
+    const blocked = (plan.problems.length ? plan.problems : [plan.code]).map((reason) => ({ what: 'trocar on', reason }))
     if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned || [], blocked }), EXIT.ok)
     // 附录 C.1: the refusal's code lives in `error` and nowhere else (a dry run carries none: nothing went wrong)
     return out(receiptOf(plan, { blocked, error: { code: plan.code, message: plan.problems[0] || plan.code } }), EXIT.incomplete)
@@ -69,7 +69,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   // login — so it is asked here, before the first write, and refused (exit 2, nothing written). A `--dry-run` says it in `blocked` and exits 0.
   const autostartBlk = autostartBlock({ unit, osName: os })
   if (autostartBlk) {
-    const blocked = [{ what: 'asight on', reason: autostartBlk }]
+    const blocked = [{ what: 'trocar on', reason: autostartBlk }]
     if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned || [], blocked }), EXIT.ok)
     put({ event: 'failure', where: 'start', code: AUTOSTART_MISSING, reason: autostartBlk })
     return out(receiptOf({ ...plan, exit: 2, problems: [autostartBlk] }, { blocked, error: { code: AUTOSTART_MISSING, message: autostartBlk } }), EXIT.usage)
@@ -77,7 +77,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const m = readManifest(dir, fs)
   const seen = new Set(m.confirmed_paths || [])
   const fresh = [...new Set(plan.planned.flatMap((p) => p.paths))].filter((p) => !seen.has(p))
-  say(fit([`asight on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
+  say(fit([`trocar on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
     ...pairs(plan.planned.map((p) => planLine(p, home))),
     ...(fresh.length ? [`New since you last said yes: ${fresh.map((x) => tilde(x, home)).join(', ')}`] : [])]).join('\n'))
   const blockedSetup = setupBlocked(plan)
@@ -95,7 +95,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const closeProcs = await primeProcQuestions({ platform: os, dir, env, fs, ...(deps.daemonReader !== undefined ? { reader: deps.daemonReader } : {}) })
   try {
   let lock
-  try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) { if (e && e.code === LOCK_BUSY) { io.err(`asight on: ${e.message}`); return EXIT.incomplete } throw e }
+  try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) { if (e && e.code === LOCK_BUSY) { io.err(`trocar on: ${e.message}`); return EXIT.incomplete } throw e }
   try {
     const up = await ensureDaemonUp({ osName: os, dir, env, fs, unit, put, ...(deps.sleep ? { pause: deps.sleep } : {}) })
     const r = up.up ? await turnOnModel(args) : { ...plan, routes: [], problems: up.problems.length ? up.problems : up.notes, exit: EXIT.incomplete }

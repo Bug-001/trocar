@@ -1,5 +1,5 @@
 // switch.mjs — the collector's on/off state machine, per harness (RFC 4.6 §开关语义, 1.6 §1.5, D39②). Two states are kept apart:
-// `desired` is what the operator asked for, per harness, persisted in ~/.asight/collector/state.json (0600, version 2, src/off/state.mjs)
+// `desired` is what the operator asked for, per harness, persisted in ~/.trocar/collector/state.json (0600, version 2, src/off/state.mjs)
 // so a restarted daemon restores it (S9); `actual` is ALWAYS read back from the kernel through the redirector (the helper reports the
 // links the kernel still confirms) — never from a flag set here. When they disagree, report() says so. The links are one per
 // instance, not per harness: they stand while ANY harness is on and come off when the last one goes off; which processes are steered
@@ -9,7 +9,7 @@
 //
 // What the file may change under a running daemon (4.6: the daemon re-reads state.json before every heartbeat, by stat key): only ever
 // what TAKES CAPTURE AWAY. reloadIfChanged() turns a harness off that the file says off (hook: unwatch its processes; none left on:
-// detach), and never turns one on — links are attached only by an `on` request and at start (restore), because `asight on` writes the
+// detach), and never turns one on — links are attached only by an `on` request and at start (restore), because `trocar on` writes the
 // desired state first and hangs the links last (1.6 R9): a daemon that attached on seeing the file would steer before the entries and the
 // merged bundles are in place. The desired state of a harness the file says on but this daemon was not asked to turn on stays off here.
 import fs from 'node:fs'

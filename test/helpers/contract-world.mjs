@@ -75,7 +75,7 @@ export async function contractWorld({ os, env = {} }) {
 /** A real control server for the world's daemon: POST /on opens a door per group, POST /off and GET /holders answer as an idle daemon does. The
  *  endpoint has the platform's own shape (a win32 one is a pipe name: run the case inside withScratchCwd) and lies outside HOME, so it is no residue. */
 export async function daemonFor(w) {
-  const sock = w.os === 'win32' ? `\\\\.\\pipe\\asight-contract-${path.basename(w.home)}` : path.join(tmpDir('asight-sock-'), 'c.sock')
+  const sock = w.os === 'win32' ? `\\\\.\\pipe\\trocar-contract-${path.basename(w.home)}` : path.join(tmpDir('trocar-sock-'), 'c.sock')
   fs.mkdirSync(w.dir, { recursive: true })
   fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token: TOKEN }))
   const doors = {}

@@ -1,7 +1,7 @@
 // test/netenv/no-vpn-writes-switch.test.mjs — 4.7 N15(b) run for real (D43 · D49, invariant 6): with the platform injected as
 // darwin and as win32, the real install → on → on → off → off → uninstall of every harness (switch-kit.mjs's driver, a sandbox HOME) writes nothing under
 // a VPN / proxy product's data directory and runs nothing that sets the system proxy. The check is the sandbox's own byte / mtime snapshots and the
-// world's exec log, not a count of asight's write calls: it sees any writer, by any fs. The product directories are no-vpn-writes.test.mjs's
+// world's exec log, not a count of trocar's write calls: it sees any writer, by any fs. The product directories are no-vpn-writes.test.mjs's
 // PRODUCT_NAMES, placed under the per-user app-data folder and the XDG config folder with a file each.
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
@@ -28,7 +28,7 @@ export function n15b(r) {
 }
 
 const harnesses = await loadHarnesses()
-process.chdir(tmpDir('asight-pipes-')) // a win32 control endpoint is a pipe name, served as a socket path relative to the cwd (switch-contract.test.mjs)
+process.chdir(tmpDir('trocar-pipes-')) // a win32 control endpoint is a pipe name, served as a socket path relative to the cwd (switch-contract.test.mjs)
 // one case per harness per OS (its first generated form): the writes N15 forbids do not depend on a file's shape or a user edit, which the contract suite varies
 const CASES = OSES.flatMap((os) => harnesses.map((h) => casesFor(os, harnesses).find((s) => s.h === h.name && s.form)).filter(Boolean))
 
@@ -43,7 +43,7 @@ describe('N15(b): on / off / uninstall write nothing of a VPN / proxy product an
   it('counter-example: a write into a product folder at on, and a networksetup at off, are found (the check goes red)', async () => {
     const spec = CASES[0]
     const r = await run({ ...spec, world: placeProducts, bad: (phase, w) => {
-      if (phase === 'on') fs.writeFileSync(path.join(productDirs(w)[0], 'Script.js'), '// asight was here\n')
+      if (phase === 'on') fs.writeFileSync(path.join(productDirs(w)[0], 'Script.js'), '// trocar was here\n')
       if (phase === 'off') w.exec.push('networksetup -setwebproxy Wi-Fi 127.0.0.1 1')
     } }, harnesses)
     const found = n15b(r)

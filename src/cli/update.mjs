@@ -1,12 +1,12 @@
-// update.mjs — `asight update [--yes] [--dry-run] [--json]` (RFC 1.6 §5.5, 附录 C.2; D67).
+// update.mjs — `trocar update [--yes] [--dry-run] [--json]` (RFC 1.6 §5.5, 附录 C.2; D67).
 //
 // One command takes this machine to the newest code and leaves it the way it was: installed, and capturing whatever was being captured.
 // The line D67① draws is「pulling the code」: the OLD code runs the checks, switches off the harnesses that are on (who wrote an entry
 // undoes it) and pulls; then it starts a NEW process on the new code, which finishes (the daemon, `install`, `on`). The handover is one
-// public command, one file that holds nothing but harness names (`~/.asight/collector/update.json`), and the daemon's `code`.
+// public command, one file that holds nothing but harness names (`~/.trocar/collector/update.json`), and the daemon's `code`.
 // After the merge this process loads nothing: everything it may need is imported above, and all it does is spawn the child and wait.
 //   runUpdateCli(argv, { io, env, home, platform, deps }) → exit (0 updated or already up to date · 1 not updated / not finished · 2 usage, no git checkout, root, nobody to confirm)
-//   deps (0.1 §3): `exec` (the spawnSync-shaped runner of git / npm), `child` (what runs the new code's `asight update`), `off` / `on` /
+//   deps (0.1 §3): `exec` (the spawnSync-shaped runner of git / npm), `child` (what runs the new code's `trocar update`), `off` / `on` /
 //   `install` (the three commands this one runs), `daemonCode` (what the daemon answers on its control channel), `unit`, `fs`, `root`.
 import nodeOs from 'node:os'
 import nodeFs from 'node:fs'
@@ -26,9 +26,9 @@ import { runInstallCli } from './install.mjs'
 
 const USAGE = usageLine(commandNamed('update'))
 const FLAGS = new Set(['--yes', '--dry-run', '--json'])
-const NOT_GIT = 'this asight is not a git checkout, so it cannot update itself. Update it the way you installed it.'
+const NOT_GIT = 'this trocar is not a git checkout, so it cannot update itself. Update it the way you installed it.'
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
-const AGAIN = 'Fix that, then run asight update again'
+const AGAIN = 'Fix that, then run trocar update again'
 const CUT = 'Connections the collector still holds are cut when it is replaced.'
 const COST = `While it runs those agents are not captured; connections they make still work. ${CUT}`
 
@@ -36,7 +36,7 @@ const COST = `While it runs those agents are not captured; connections they make
 export async function runUpdateCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const flags = new Set()
   for (const a of argv) {
-    if (!FLAGS.has(a)) { io.err(`asight update: ${a.startsWith('-') ? `unknown option '${a.split('=')[0]}'` : 'takes no agent name: the harnesses it switches off and on again are the ones that are on'}\n${USAGE}`); return EXIT.usage }
+    if (!FLAGS.has(a)) { io.err(`trocar update: ${a.startsWith('-') ? `unknown option '${a.split('=')[0]}'` : 'takes no agent name: the harnesses it switches off and on again are the ones that are on'}\n${USAGE}`); return EXIT.usage }
     flags.add(a)
   }
   return update({ io, env, home, platform, deps, flags })
@@ -60,24 +60,24 @@ async function update({ io, env, home, platform, deps, flags }) {
     else for (const l of lines) io.out(l)
     return exit
   }
-  /** A reason nothing was done: `asight update: <why>`, exit 1 (the receipt carries it as its error). */
+  /** A reason nothing was done: `trocar update: <why>`, exit 1 (the receipt carries it as its error). */
   const no = (code, why, exit = EXIT.incomplete) => {
     r.error = { code, message: why }
     r.notes.push(why)
-    if (!json) io.err(`asight update: ${why}`)
+    if (!json) io.err(`trocar update: ${why}`)
     r.ok = false
     if (json) io.out(JSON.stringify(r, null, 2))
     return exit
   }
 
-  // §5.5: a checkout is the only way asight is installed today (D67②). Anything else is told how it was installed, and nothing is touched.
+  // §5.5: a checkout is the only way trocar is installed today (D67②). Anything else is told how it was installed, and nothing is touched.
   if (!gitDir(root)) return no('not-a-checkout', NOT_GIT, EXIT.usage)
 
   const git = (...args) => execTool('git', ['-C', root, ...args], { run: deps.exec || null, env })
-  // 先查,查不过什么都不改 (§5.5): your own changes first — a merge would carry them, and asight does not touch what you wrote.
+  // 先查,查不过什么都不改 (§5.5): your own changes first — a merge would carry them, and trocar does not touch what you wrote.
   const dirty = git('status', '--porcelain', '--untracked-files=no')
   if (dirty.code !== 0) return no('checkout-unreadable', `this checkout could not be read (${dirty.err || `git exit ${dirty.code}`})`)
-  if (dirty.out) return no('local-changes', 'this checkout has changes of your own. Commit or put them aside, then run asight update again')
+  if (dirty.out) return no('local-changes', 'this checkout has changes of your own. Commit or put them aside, then run trocar update again')
   const upstream = git('rev-parse', '--abbrev-ref', '@{u}')
   if (upstream.code !== 0) return no('no-upstream', 'the branch this checkout is on has no upstream, so there is nothing to update from')
   const fetched = git('fetch')
@@ -85,7 +85,7 @@ async function update({ io, env, home, platform, deps, flags }) {
   const head = git('rev-parse', 'HEAD').out
   const target = git('rev-parse', '@{u}').out
   if (head !== target && git('merge-base', '--is-ancestor', 'HEAD', '@{u}').code !== 0) {
-    return no('not-fast-forward', `this checkout has commits ${upstream.out} does not have, so it cannot be fast-forwarded. Push or put them aside, then run asight update again`)
+    return no('not-fast-forward', `this checkout has commits ${upstream.out} does not have, so it cannot be fast-forwarded. Push or put them aside, then run trocar update again`)
   }
 
   // §1.4: the plan, then `--dry-run` / `--yes` / the question — EVERY phase goes through this one gate, the finish and the daemon-only
@@ -104,7 +104,7 @@ async function update({ io, env, home, platform, deps, flags }) {
   // the handover file (D67①) = an update of a moment ago that did not finish: this run is its step 4, whatever the commits say
   const waiting = readHandover(handover, fs, deps.harnessIds || (await (await import('../collector/harness/index.mjs')).loadHarnesses()).map((h) => h.name))
   if (waiting) {
-    if (waiting.dropped.length) r.notes.push(`${waiting.dropped.join(', ')}: this update's note names ${waiting.dropped.length > 1 ? 'agents' : 'an agent'} this asight has no descriptor for, so capture is not switched on for ${waiting.dropped.length > 1 ? 'them' : 'it'}`)
+    if (waiting.dropped.length) r.notes.push(`${waiting.dropped.join(', ')}: this update's note names ${waiting.dropped.length > 1 ? 'agents' : 'an agent'} this trocar has no descriptor for, so capture is not switched on for ${waiting.dropped.length > 1 ? 'them' : 'it'}`)
     const to = codeId(root)
     const g = await gate([['Code', `${waiting.from || r.from} -> ${to}`], ['Switched on again', waiting.on.join(', ') || 'nothing was being captured']],
       [{ what: 'finish', detail: `an update to ${to} is waiting to be finished: the collector is replaced, install runs again${waiting.on.length ? `, and capture is switched on again for ${waiting.on.join(', ')}` : ''}`, harnesses: waiting.on }], CUT)
@@ -115,7 +115,7 @@ async function update({ io, env, home, platform, deps, flags }) {
   if (head === target) {
     const running = await daemonCode({ platform, dir, env, fs, deps })
     r.to = r.from
-    if (running === r.from) { lines.push(`asight update: already up to date (${r.from}).`); return done(EXIT.ok) }
+    if (running === r.from) { lines.push(`trocar update: already up to date (${r.from}).`); return done(EXIT.ok) }
     // the code is the newest, the daemon runs another one (or says none): only the one step that replaces it (§5.5)
     const runs = running || 'code it does not name'
     const g = await gate([['Code', `${r.from} (already the newest)`], ['Collector', `runs ${runs}, so it is replaced by ${r.from}`]],
@@ -127,12 +127,12 @@ async function update({ io, env, home, platform, deps, flags }) {
   // §1.4: the plan — from which commit to which, and which harnesses go off and on again
   const on = harnessesOn({ home, fs })
   // D38 / §5.5 「先查,查不过什么都不改」: which agents are being captured is a check like any other. A state.json that cannot be read is
-  // never "none is on" — that would leave those harnesses switched off, with asight's entries in their files, and nothing to switch back on.
+  // never "none is on" — that would leave those harnesses switched off, with trocar's entries in their files, and nothing to switch back on.
   if (on.error) return no('state-unreadable', on.error)
   r.harnesses = on.ids
   r.to = codeIdOf(upstreamVersion(git, root, fs), target) // the version the NEW code carries: the upstream's own package.json, not the one on disk
   const planned = [
-    { what: 'code', detail: `the code of this machine's asight goes from ${r.from} to ${r.to}` },
+    { what: 'code', detail: `the code of this machine's trocar goes from ${r.from} to ${r.to}` },
     { what: 'harnesses', detail: on.ids.length ? `${on.ids.join(', ')}: switched off before the code changes and on again after it` : 'no agent is being captured, so none is switched off', harness: null, harnesses: on.ids },
   ]
   const g = await gate([['Code', `${r.from} -> ${r.to}`], ['Off and on again', on.ids.join(', ') || 'nothing is being captured']], planned, COST)
@@ -140,7 +140,7 @@ async function update({ io, env, home, platform, deps, flags }) {
 
   // 1 · (old code) off, and the names into the handover file — the new code switches on what this file names, nothing else (D67①)
   const offExit = on.ids.length ? await step(deps.off || runOffCli, [...on.ids, '--yes', '--json'], { io, env, home, platform, deps }) : { exit: EXIT.ok, doc: null }
-  if (offExit.exit !== EXIT.ok) return no('off-failed', `the agents being captured could not be switched off (asight off exit ${offExit.exit}), so the code was left as it is`)
+  if (offExit.exit !== EXIT.ok) return no('off-failed', `the agents being captured could not be switched off (trocar off exit ${offExit.exit}), so the code was left as it is`)
   try { writeHandover(handover, { from: r.from, on: on.ids }, fs) } catch (e) {
     await reOn(on.ids, { io, env, home, platform, deps })
     return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so the code was left as it is`)
@@ -164,9 +164,9 @@ async function update({ io, env, home, platform, deps, flags }) {
   const argv = ['update', '--yes', ...(json ? ['--json'] : [])]
   // a process killed by a signal has no exit code to copy: `child` answers `{signal}` for that, and anything else is its exit code
   const child = deps.child || ((file, args) => runAsync(file, args, { quiet: true, inherit: true, env }).then((x) => (x.status === null ? { signal: x.signal } : x.status)))
-  const ended = await child(process.execPath, [path.join(root, 'bin', 'asight.mjs'), ...argv])
+  const ended = await child(process.execPath, [path.join(root, 'bin', 'trocar.mjs'), ...argv])
   if (!Number.isInteger(ended)) {
-    return no('child-crashed', `the code is now ${r.to}, but the process that was to finish this update was killed${ended && ended.signal ? ` by ${ended.signal}` : ''} before it could. This update is written down, so run asight update again to finish it`)
+    return no('child-crashed', `the code is now ${r.to}, but the process that was to finish this update was killed${ended && ended.signal ? ` by ${ended.signal}` : ''} before it could. This update is written down, so run trocar update again to finish it`)
   }
   return ended
 }
@@ -183,20 +183,20 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
   if (replaced.notes.length) r.notes.push(...replaced.notes)
   if (only === 'daemon') {
     if (problems.length) return no('daemon-not-replaced', problems[0])
-    lines.push(`asight is now running ${r.to}.`)
+    lines.push(`trocar is now running ${r.to}.`)
     return done(EXIT.ok)
   }
   const installed = await step(deps.install || runInstallCli, ['--yes', '--json'], { io, env, home, platform, deps })
   r.install = installed.doc
-  if (installed.exit !== EXIT.ok) problems.push(`the new code could not finish installing itself (asight install exit ${installed.exit}). ${AGAIN}`)
+  if (installed.exit !== EXIT.ok) problems.push(`the new code could not finish installing itself (trocar install exit ${installed.exit}). ${AGAIN}`)
   if (!problems.length && waiting.on.length) {
     const back = await step(deps.on || runOnCli, [...waiting.on, '--yes', '--json'], { io, env, home, platform, deps })
     r.on = back.doc
-    if (back.exit !== EXIT.ok) problems.push(`${waiting.on.join(', ')}: capture could not be switched on again (asight on exit ${back.exit}). ${AGAIN}`)
+    if (back.exit !== EXIT.ok) problems.push(`${waiting.on.join(', ')}: capture could not be switched on again (trocar on exit ${back.exit}). ${AGAIN}`)
   }
   if (problems.length) { r.problems = problems; return no('not-finished', problems[0]) } // the file stays: the next run goes on from here
   try { fs.rmSync(handover, { force: true }) } catch (e) { return no('handover-not-removed', `this update finished, but it could not be written off (${(e && e.message) || e})`) }
-  lines.push(`asight is now ${r.to} (it was ${r.from}).`,
+  lines.push(`trocar is now ${r.to} (it was ${r.from}).`,
     ...pairs([['Collector', r.restarted ? 'running the new code' : 'already running this code'], ['Capturing again', waiting.on.join(', ') || 'nothing was being captured']]))
   return done(EXIT.ok)
 }
@@ -243,8 +243,8 @@ async function daemonCode({ platform, dir, env, fs, deps }) {
   } catch { return null }
 }
 
-/** `~/.asight/collector/update.json` as written: `{ from, on: [harness…] }`, or null when there is none (or it holds no list of names).
- *  Only ids this code has a descriptor for are kept — the names go to `asight on`, and one this code does not know (a harness dropped
+/** `~/.trocar/collector/update.json` as written: `{ from, on: [harness…] }`, or null when there is none (or it holds no list of names).
+ *  Only ids this code has a descriptor for are kept — the names go to `trocar on`, and one this code does not know (a harness dropped
  *  since, a file edited by hand) would fail the whole finish. What is dropped is said, never silently (D38). */
 function readHandover(file, fs, known) {
   let text
@@ -258,7 +258,7 @@ function readHandover(file, fs, known) {
   return { from: typeof o.from === 'string' ? o.from : null, on, dropped }
 }
 
-/** The handover file, 0600 — it is asight's own note to itself (D27: everything of asight's is the operator's alone). */
+/** The handover file, 0600 — it is trocar's own note to itself (D27: everything of trocar's is the operator's alone). */
 function writeHandover(file, { from, on }, fs) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   fs.writeFileSync(file, JSON.stringify({ from, on }) + '\n', { mode: 0o600 })
@@ -276,7 +276,7 @@ function harnessesOn({ home, fs }) {
 }
 
 /** One of the three commands this one runs, with `--json` so its receipt is this one's (C.2 `install` / `on`): → `{ exit, doc }`. Its
- *  own output is held, not printed: one run of `asight update` prints one receipt. stdout and stderr are held APART — §1.2: the document
+ *  own output is held, not printed: one run of `trocar update` prints one receipt. stdout and stderr are held APART — §1.2: the document
  *  is stdout's alone, and a line of stderr mixed into it would make it unparsable. */
 async function step(run, argv, { io, env, home, platform, deps }) {
   const out = [], err = []

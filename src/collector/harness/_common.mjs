@@ -7,8 +7,8 @@ export const envHosts = (env, keys) => envValues(env, keys).map(hostOf).filter(B
 // Proxy settings as { url, source }; the tracker turns them into the engine's ProxyEntry (plan 3c `describe`).
 export const envProxies = (env, keys) => keys.filter((k) => (env.get(k) || '') !== '').map((k) => ({ url: env.get(k), source: `env:${k}` }))
 
-// Whether a CA path in an agent's config or environment is one asight wrote: a path under the collector directory. A descriptor skips it when it collects the user's CA files (the
-// bundle would otherwise carry asight's own bundle, and asight's CA would be recorded as a user CA). On Windows the values asight writes into agent configs have forward slashes (4.8 §6.1)
+// Whether a CA path in an agent's config or environment is one trocar wrote: a path under the collector directory. A descriptor skips it when it collects the user's CA files (the
+// bundle would otherwise carry trocar's own bundle, and trocar's CA would be recorded as a user CA). On Windows the values trocar writes into agent configs have forward slashes (4.8 §6.1)
 // while the collector directory comes back with backslashes (and any case): compare ignoring both; elsewhere the plain prefix.
 export function isOwnPath(ctx, v) {
   if (typeof v !== 'string' || v === '' || !ctx.collectorDir) return false

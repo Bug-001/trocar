@@ -24,8 +24,8 @@ export function rootStoreStub({ answer = 'ok' } = {}) {
 
 /** world({ os, env (an object, or home → object), commands }) → { home, dir, env, custody, store, ctx, install(over) } — `commands` are the names `which` finds (under home/bin). */
 export async function modelWorld({ os = 'darwin', env = {}, commands = [], cwd = null } = {}) {
-  const home = tmpDir('asight-model-')
-  const dir = path.join(home, '.asight', 'collector')
+  const home = tmpDir('trocar-model-')
+  const dir = path.join(home, '.trocar', 'collector')
   const bin = path.join(home, 'bin')
   fs.mkdirSync(bin, { recursive: true })
   for (const c of commands) fs.writeFileSync(path.join(bin, c), '#!/bin/sh\n', { mode: 0o755 })

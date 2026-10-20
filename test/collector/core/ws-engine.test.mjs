@@ -25,18 +25,18 @@ const create = (fields) => JSON.stringify({ type: 'response.create', model: 'gpt
 const b64 = (s) => Buffer.from(s, 'base64')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const until = async (fn, what, ms = 3000) => { for (const end = Date.now() + ms; Date.now() < end; await sleep(5)) { const v = fn(); if (v) return v } throw new Error(`${what}: not within ${ms}ms`) }
-const asightCa = createCa()
-const labCaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ws-labca-'))
+const trocarCa = createCa()
+const labCaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-ws-labca-'))
 const labCa = makeLabCa(labCaDir)
 process.on('exit', () => fs.rmSync(labCaDir, { recursive: true, force: true }))
 
 async function lab(t, { terminal = TERMINAL, recording, delays, describe } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ws-engine-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-ws-engine-'))
   const mock = await startMockUpstream({ tls: { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) }, delays })
   const envelopes = [], errors = []
   const store = createRecordStore({ root: path.join(dir, 'rec'), raw: path.join(dir, 'rec') }) // real 0600 files: W10 and flows/ read the disk
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: mock.port, family: 4 }, pid: 11, agent: 'codex', decrypt: true })
-  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: fs.readFileSync(labCa.caCert),
+  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(trocarCa)), upstreamCa: fs.readFileSync(labCa.caCert),
     store: { envelope: (e) => { envelopes.push(e); return store.envelope(e) }, flow: (f) => store.flow(f) }, onFailure: createFailureRecorder(path.join(dir, 'rec')).event, // as the daemon wires it
     isRecording: recording || (() => true), describe: describe || (() => ({ wsTerminal: terminal })), onError: (e) => errors.push(e) })
   const { port } = await engine.listen({})
@@ -47,7 +47,7 @@ async function lab(t, { terminal = TERMINAL, recording, delays, describe } = {})
     try { await mock.close(); await closeWithin(engine) } // a hook has no test-level deadline: engine.close() is bounded, or one flow left open parks the file
     finally { store.close(); fs.rmSync(dir, { recursive: true, force: true }) }
   })
-  const connect = async (opts = {}) => { const c = await wsConnect(port, { tls: { servername: 'api.openai.com', ca: asightCa.certPem }, ...opts }); clients.push(c); return c }
+  const connect = async (opts = {}) => { const c = await wsConnect(port, { tls: { servername: 'api.openai.com', ca: trocarCa.certPem }, ...opts }); clients.push(c); return c }
   const read = (sub) => { const d = path.join(dir, 'rec', sub); return fs.existsSync(d) ? fs.readdirSync(d).filter((f) => f.endsWith('.ndjson')).flatMap((f) => fs.readFileSync(path.join(d, f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : [] }
   return { mock, engine, envelopes, errors, connect, log: () => mock.state.log, port, onDisk: () => read(''), flows: () => read('flows').filter((r) => r.event == null), failures: () => read('flows').filter((r) => r.event === 'failure'), dir }
 }
@@ -175,7 +175,7 @@ test('W4 an upgrade answered 426, then the HTTP SSE fallback: both are recorded 
   const L = await lab(t)
   const v = await L.connect({ version: '8' })
   assert.equal(v.status, 426); v.sock.destroy()
-  const r = await request(`https://127.0.0.1:${L.port}`, '/v1/responses', JSON.stringify({ model: 'gpt-test-1', stream: true, input: 'fallback' }), { ca: asightCa.certPem, servername: 'api.openai.com' })
+  const r = await request(`https://127.0.0.1:${L.port}`, '/v1/responses', JSON.stringify({ model: 'gpt-test-1', stream: true, input: 'fallback' }), { ca: trocarCa.certPem, servername: 'api.openai.com' })
   assert.equal(r.status, 200)
   await until(() => L.envelopes.length === 2, 'two envelopes')
   assert.deepEqual(L.envelopes.map((e) => [e.method, e.resp.status, e.resp.kind, e.transport]), [['GET', 426, 'json', undefined], ['POST', 200, 'sse', undefined]])
@@ -195,7 +195,7 @@ test('mid-call upstream RST: the client gets only upstream bytes, the call is an
 
 // D38: a capture failure is never silent. Through the engine, the ws recorder's failure
 // lands in flows/ on disk as a failure event with the flow's id, the connection row's ws summary counts it, and
-// `asight collector status` (recentFailures, the reader it uses with or without a daemon) lists it.
+// `trocar collector status` (recentFailures, the reader it uses with or without a daemon) lists it.
 test('D38 a WebSocket capture failure through the engine: a flows/ failure event names the flow and the reason; ws.failures counts it; status lists it', T, async (t) => {
   const L = await lab(t)
   const c = await L.connect() // no deflate agreed

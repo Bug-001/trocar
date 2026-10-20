@@ -1,6 +1,6 @@
-// asight routing plugin for OpenCode (spec 4.11 P9 `opencode-plugin`; lab R3-M7 / R3-W4). Written by
-// `asight on` into OpenCode's plugin folder with the door baked in, deleted by `off`. Routing only (the root is in the user's trust store):
-//   at import — ASIGHT_PRIOR_PROXY records this process's own proxy (the first set name of OpenCode's precedence list that is not the door;
+// trocar routing plugin for OpenCode (spec 4.11 P9 `opencode-plugin`; lab R3-M7 / R3-W4). Written by
+// `trocar on` into OpenCode's plugin folder with the door baked in, deleted by `off`. Routing only (the root is in the user's trust store):
+//   at import — TROCAR_PRIOR_PROXY records this process's own proxy (the first set name of OpenCode's precedence list that is not the door;
 //               `none` when none is set), and both spellings of the https proxy point at the door (Bun reads them per request);
 //               the bypass list (both spellings) becomes loopback ∪ its own value (P6), so OpenCode's own loopback server — the ACP
 //               client talks to it over plain http, which follows HTTP_PROXY in Bun — is never sent to the door (macOS test machine, 2026-10-17);
@@ -9,10 +9,10 @@
 // It reads and changes no request or response bytes, connects nowhere itself, writes no file, never throws. Both module shapes are exported:
 // the 1.x named async function and the v2 default { id, server } (no `effect`: v2 2.0.29 broke its transport when one was given); the
 // work is done at import either way, because v2 evaluates plugin modules without calling them.
-const DOOR = __ASIGHT_DOOR__
-const PROXY_ENV = __ASIGHT_PROXY_ENV__
-const PROXY_NAMES = __ASIGHT_PROXY_NAMES__
-const NO_PROXY_ENV = __ASIGHT_NO_PROXY_ENV__
+const DOOR = __TROCAR_DOOR__
+const PROXY_ENV = __TROCAR_PROXY_ENV__
+const PROXY_NAMES = __TROCAR_PROXY_NAMES__
+const NO_PROXY_ENV = __TROCAR_NO_PROXY_ENV__
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '::1'] // P6, the same three as entries.mjs LOOPBACK
 const LOOPBACK = /^(localhost|127(\.\d+){3}|\[::1\]|::1)$/i
 
@@ -20,8 +20,8 @@ try {
   const env = process.env
   let prior = null, sawDoor = false
   for (const k of PROXY_ENV) { const v = env[k]; if (!v) continue; if (v !== DOOR) { prior = v; break } sawDoor = true }
-  if (prior) env.ASIGHT_PRIOR_PROXY = prior
-  else if (!sawDoor || !env.ASIGHT_PRIOR_PROXY) env.ASIGHT_PRIOR_PROXY = 'none'
+  if (prior) env.TROCAR_PRIOR_PROXY = prior
+  else if (!sawDoor || !env.TROCAR_PRIOR_PROXY) env.TROCAR_PRIOR_PROXY = 'none'
   for (const k of PROXY_NAMES) env[k] = DOOR
 } catch { /* a plugin never stops its host */ }
 
@@ -35,7 +35,7 @@ try { // P6: loopback ∪ the bypass list this process already has; case-insensi
 
 try {
   const inner = globalThis.fetch
-  if (typeof inner === 'function' && !inner.asightDoor) {
+  if (typeof inner === 'function' && !inner.trocarDoor) {
     const fetch = function (input, init) {
       let url = null
       try { url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url) } catch { /* not a URL: as it was */ }
@@ -45,10 +45,10 @@ try {
     for (const k of Object.getOwnPropertyNames(inner)) { // e.g. Bun's fetch.preconnect
       if (!['length', 'name', 'prototype', 'arguments', 'caller'].includes(k)) Object.defineProperty(fetch, k, Object.getOwnPropertyDescriptor(inner, k))
     }
-    Object.defineProperty(fetch, 'asightDoor', { value: DOOR })
+    Object.defineProperty(fetch, 'trocarDoor', { value: DOOR })
     globalThis.fetch = fetch
   }
 } catch { /* a plugin never stops its host */ }
 
-export const AsightRoute = async () => ({})
-export default { id: 'asight-route', server: AsightRoute }
+export const TrocarRoute = async () => ({})
+export default { id: 'trocar-route', server: TrocarRoute }

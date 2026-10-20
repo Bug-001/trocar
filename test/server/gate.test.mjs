@@ -18,7 +18,7 @@ import { serveFace, request as req, withToken } from './face.mjs';
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src');
 
 async function serve(opts = {}) {
-  const home = rawHome('asight-gate-');
+  const home = rawHome('trocar-gate-');
   writeSegment(home, '20261018T100000Z', [{ sessionKey: 'sess-secret' }]);
   return serveFace({ home, ...opts });
 }

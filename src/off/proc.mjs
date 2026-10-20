@@ -1,6 +1,6 @@
 // proc.mjs (src/off) — the process table `off` reads for itself, and the identity of one process (RFC 4.6 §安装清单与卸载「撤销顺序」第 2 / 5 步,
 // §控制面 `lock`, 1.6 R3). `off` has to know which agents are alive after the daemon is stopped and the entries are undone, with no daemon to ask
-// and no collector code (the standalone `asight-off` is made of src/off alone, 0.1 §2): Linux reads /proc, macOS runs two `ps` asks, Windows asks one fixed
+// and no collector code (the standalone `trocar-off` is made of src/off alone, 0.1 §2): Linux reads /proc, macOS runs two `ps` asks, Windows asks one fixed
 // powershell question (4.8 §7) — both through execTool. The /proc readers moved here from src/collector/arch/linux/procinfo.mjs, which re-exports them; procIdentity /
 // pidAlive from src/health/read.mjs, which re-exports procIdentity. A table that cannot be read throws: an empty one would read as "nobody is alive" (D38).
 // Every reader takes an injectable `root` (default '/proc'), so a test points it at a synthetic tree. Imports only node:* and src/off.
@@ -63,9 +63,8 @@ export function readStatus(pid, { root = '/proc' } = {}) {
 
 /** Process start as ms since the epoch: /proc/<pid>/stat field 22 (clock ticks since boot), placed on the wall
  *  clock through /proc/uptime read now (centiseconds, the same clock as file mtimes). /proc/stat btime is whole
- *  seconds and drifts from the wall clock in a VM: on a Linux test machine it put a `claude` started 0.4 s after
- *  `asight collector install` BEFORE the settings write, so a trusted process looked "config-after-start" (Plan 3a,
- *  ). btime remains the fallback when /proc/uptime is unreadable. */
+ *  seconds and drifts from the wall clock on a virtual machine: on a test machine it put a `claude` started 0.4 s after
+ *  `trocar collector install` BEFORE the settings write, so a trusted process looked "config-after-start" (Plan 3a). btime remains the fallback when /proc/uptime is unreadable. */
 export function readStartTime(pid, { root = '/proc', hz = 100, now = Date.now } = {}) {
   let stat
   try { stat = nodeFs.readFileSync(path.join(root, String(pid), 'stat'), 'utf8') } catch { return null }
@@ -197,7 +196,7 @@ function psIdentityAsk(pid, { exec = null, env = process.env } = {}) {
 
 /** The reader of a process's identity for a platform: /proc on Linux, `ps` on macOS, one Get-CimInstance question on Windows. Without one a
  *  lock can only say "its pid is alive", and a pid that another process has taken since (a crash, a reboot) then reads as a command still
- *  running — which blocked `asight off`, the way out, for as long as that other process lived (audit rule-b 3). */
+ *  running — which blocked `trocar off`, the way out, for as long as that other process lived (audit rule-b 3). */
 export function identityFor({ platform = process.platform, exec = null, env = process.env, root = '/proc', fs = nodeFs } = {}) {
   if (platform === 'win32') return (pid, o = {}) => winIdentity(pid, { run: exec, env, ...o })
   return platform === 'darwin' ? (pid) => psIdentity(pid, { exec, env }) : (pid) => procIdentity(pid, { root, fs, platform })

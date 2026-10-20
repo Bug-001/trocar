@@ -8,10 +8,10 @@ import readline from 'node:readline'
 
 // node --test discovers every file under test/ as a test file and runs it; this fixture is
 // not a test and would otherwise hang the runner on stdin. Exit immediately unless spawned by
-// its driver (redirector-client.test.mjs sets ASIGHT_FAKE_LOADER=1).
-if (process.env.ASIGHT_FAKE_LOADER !== '1') process.exit(0)
+// its driver (redirector-client.test.mjs sets TROCAR_FAKE_LOADER=1).
+if (process.env.TROCAR_FAKE_LOADER !== '1') process.exit(0)
 
-const PROTO = process.env.ASIGHT_FAKE_PROTO ? Number(process.env.ASIGHT_FAKE_PROTO) : 2 // = REDIRECTOR_PROTO
+const PROTO = process.env.TROCAR_FAKE_PROTO ? Number(process.env.TROCAR_FAKE_PROTO) : 2 // = REDIRECTOR_PROTO
 const state = {
   attached: false,
   enginePort: 0,

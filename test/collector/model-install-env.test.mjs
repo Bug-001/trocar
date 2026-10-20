@@ -17,7 +17,7 @@ const recordsOf = (dir) => {
 for (const [axis, valueOf, carried] of [['an absolute path', (home) => path.join(home, 'certs', 'corp.pem'), true], ['a relative path', () => 'certs/corp.pem', false]]) {
   test(`install with NODE_EXTRA_CA_CERTS as ${axis}: ${carried ? 'the login entry carries it' : 'not carried, and recorded'}`, async () => {
     const w = await modelWorld({ env: (home) => ({ NODE_EXTRA_CA_CERTS: valueOf(home) }) })
-    const unit = userUnit({ home: w.home, node: process.execPath, script: path.join(w.home, 'asight.mjs'), run: () => ({ code: 0, out: '', err: '' }), env: w.env })
+    const unit = userUnit({ home: w.home, node: process.execPath, script: path.join(w.home, 'trocar.mjs'), run: () => ({ code: 0, out: '', err: '' }), env: w.env })
     await w.install({ unit })
     assert.equal(fs.readFileSync(unit.path, 'utf8').includes(`<string>${w.env.NODE_EXTRA_CA_CERTS}</string>`), carried)
     assert.equal(recordsOf(w.dir).some((r) => r.code === 'unit-env-not-carried'), !carried)

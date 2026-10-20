@@ -39,7 +39,7 @@ test('deepseek-dsh: base URLs from the launch env and the home / profile patch f
     assert.deepEqual(r.hosts.sort(), ['launch.example.com', 'patched.example.com'])
     assert.deepEqual(r.proxies, ['https://px.example.com:8443'], 'the home .env may set the proxy names')
     assert.equal(r.trust.reason, 'no-marker', 'a CA variable in a dsh .env file is never in effect')
-    assert.equal(judge(dsh, ctxFor({ home: s.home, argv: AGENT, env: { NODE_EXTRA_CA_CERTS: pem } })).trust.trusted, true, 'a real-env NODE_EXTRA_CA_CERTS with the asight CA')
+    assert.equal(judge(dsh, ctxFor({ home: s.home, argv: AGENT, env: { NODE_EXTRA_CA_CERTS: pem } })).trust.trusted, true, 'a real-env NODE_EXTRA_CA_CERTS with the trocar CA')
     assert.equal(judge(dsh, ctxFor({ home: s.home, argv: ['node', '/usr/local/bin/dsh', 'web'], env: { DSH_HOME: '~/alt' } })).hosts.length, 0)
   } finally { s.done() }
 })
@@ -47,7 +47,7 @@ test('deepseek-dsh: base URLs from the launch env and the home / profile patch f
 test('deepseek-dsh: the plugin marker trusts; without it the reason is --use-openssl-ca, a Node older than 22.19, else no-marker (T12)', () => {
   const s = sandbox()
   try {
-    const caPem = s.put('.asight/collector/ca/asight-ca.pem', CA.certPem)
+    const caPem = s.put('.trocar/collector/ca/trocar-ca.pem', CA.certPem)
     const markers = plantMarker(path.join(s.home, 'run/trust'), 1000, 4242)
     const ok = judge(dsh, ctxFor({ home: s.home, argv: AGENT, startTicks: 4242 }), { markerDir: markers, caPem, runtimeVersion: '22.23.3' })
     assert.deepEqual([ok.trust.trusted, ok.trust.via], [true, 'plugin marker'])
@@ -65,16 +65,16 @@ test('deepseek-dsh: the plugin marker trusts; without it the reason is --use-ope
   } finally { s.done() }
 })
 
-test('deepseek-dsh inject: asight\'s plugin dir (entry file + anonymous manifest) and one sentinel row in $DSH_HOME/cordis.patch.yml (T10)', () => {
+test('deepseek-dsh inject: trocar\'s plugin dir (entry file + anonymous manifest) and one sentinel row in $DSH_HOME/cordis.patch.yml (T10)', () => {
   const s = sandbox()
   try {
-    const dir = path.join(s.home, '.asight', 'collector')
-    const ctx = (env = {}) => ({ home: s.home, env: new Map(Object.entries(env)), collectorDir: dir, caPem: path.join(dir, 'ca', 'asight-ca.pem'), readText: () => null, running: [] })
+    const dir = path.join(s.home, '.trocar', 'collector')
+    const ctx = (env = {}) => ({ home: s.home, env: new Map(Object.entries(env)), collectorDir: dir, caPem: path.join(dir, 'ca', 'trocar-ca.pem'), readText: () => null, running: [] })
     const p = planTrust({ descriptors: [dsh], ctxFor: () => ctx(), caCertPem: CA.certPem, collectorDir: dir })
     const entry = path.join(dir, 'plugins', 'dsh', 'index.js')
     assert.deepEqual(p.paths, [entry, path.join(dir, 'plugins', 'dsh', 'package.json'), path.join(s.home, '.dsh', 'cordis.patch.yml')])
     assert.equal(p.owned[1].data, '{"type":"module"}\n', 'no name: dsh would put it on the wire (acceptance ⑤)')
-    assert.match(p.entries[0].line, /^- insert: \[\{ name: ".*\/plugins\/dsh\/index\.js" \}\] # asight collector: /, 'the entry FILE, not the directory (lab ⑤)')
+    assert.match(p.entries[0].line, /^- insert: \[\{ name: ".*\/plugins\/dsh\/index\.js" \}\] # trocar collector: /, 'the entry FILE, not the directory (acceptance ⑤)')
     assert.ok(p.owned[0].data.includes('tls.setDefaultCACertificates'))
     assert.deepEqual(planTrust({ descriptors: [dsh], ctxFor: () => ctx({ DSH_HOME: '~/alt-dsh' }), caCertPem: CA.certPem, collectorDir: dir }).entries[0].path, path.join(s.home, 'alt-dsh', 'cordis.patch.yml'))
   } finally { s.done() }
@@ -85,12 +85,12 @@ test('deepseek-dsh through install / uninstall: a user\'s [] patch file gets the
   try {
     const patch = s.put('.dsh/cordis.patch.yml', '# my patches\n[]\n')
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [dsh], freePort: async () => 47013 })
-    const dir = path.join(s.home, '.asight', 'collector', 'plugins', 'dsh')
+    const dir = path.join(s.home, '.trocar', 'collector', 'plugins', 'dsh')
     assert.deepEqual(fs.readdirSync(dir).sort(), ['index.js', 'package.json'])
-    assert.match(fs.readFileSync(patch, 'utf8'), /^# my patches\n- insert: \[\{ name: ".*index\.js" \}\] # asight collector: .*\n$/)
+    assert.match(fs.readFileSync(patch, 'utf8'), /^# my patches\n- insert: \[\{ name: ".*index\.js" \}\] # trocar collector: .*\n$/)
     const r = await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none' })
     assert.deepEqual(r.entries.map((e) => e.result), ['restored'])
     assert.equal(fs.readFileSync(patch, 'utf8'), '# my patches\n[]\n')
-    assert.ok(!fs.existsSync(path.join(s.home, '.asight', 'collector', 'plugins')))
+    assert.ok(!fs.existsSync(path.join(s.home, '.trocar', 'collector', 'plugins')))
   } finally { s.done() }
 })

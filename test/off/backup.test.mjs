@@ -1,5 +1,5 @@
-// test/off/backup.test.mjs — 1.6 R2 「先备份再改」: before asight changes a file outside ~/.asight, the file's bytes go to
-// ~/.asight/backup/ (dir 0700, file 0600), one per change, named <sha256(path)[0:16]>-<UTC time>, never written over, and when the
+// test/off/backup.test.mjs — 1.6 R2 「先备份再改」: before trocar changes a file outside ~/.trocar, the file's bytes go to
+// ~/.trocar/backup/ (dir 0700, file 0600), one per change, named <sha256(path)[0:16]>-<UTC time>, never written over, and when the
 // backup cannot be written the user's file is not touched and the failure is `backup-failed`. The manifest names the backup and
 // holds `pre_sha256`; it never holds the contents (a Codex .env has API keys in it).
 import test from 'node:test'
@@ -18,14 +18,14 @@ const sha = (s) => crypto.createHash('sha256').update(s).digest('hex')
 const mode = (p) => fs.statSync(p).mode & 0o777
 /** A sandbox HOME with the collector directory where the install puts it. */
 function box() {
-  const home = tmpDir('asight-bk-')
-  return { home, dir: path.join(home, '.asight', 'collector') }
+  const home = tmpDir('trocar-bk-')
+  return { home, dir: path.join(home, '.trocar', 'collector') }
 }
 const put = (file, text, m = 0o644) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text, { mode: m }); return file }
 const T = new Date('2026-10-07T01:02:03.004Z')
 const K = ['env', 'NODE_EXTRA_CA_CERTS']
 const USER_JSON = '{\n  "env": {\n    "API_KEY": "sk-secret-123"\n  }\n}\n'
-const BLOCK = { format: 'dotenv-block', vars: { SSL_CERT_FILE: '/h/.asight/collector/ca/combined-codex.pem' } }
+const BLOCK = { format: 'dotenv-block', vars: { SSL_CERT_FILE: '/h/.trocar/collector/ca/combined-codex.pem' } }
 
 test('R2: one backup per change, 0700/0600, named by path hash + UTC time, never overwritten', () => {
   const { home } = box(); const f = put(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-1\n')
@@ -71,7 +71,7 @@ test('R2: the directory is 0700 and the file 0600 whatever the umask, and a loos
   try { p = writeBackup({ home, file: f, data: Buffer.from('KEY=v\n'), now: T }) } finally { process.umask(old) }
   assert.equal(mode(backupDir(home)), 0o700)
   assert.equal(mode(p), 0o600)
-  // a directory this call creates, with ~/.asight not there yet
+  // a directory this call creates, with ~/.trocar not there yet
   const other = box().home; const g = put(path.join(other, 'g'), 'g')
   const old2 = process.umask(0o000)
   try { writeBackup({ home: other, file: g, data: Buffer.from('g'), now: T }) } finally { process.umask(old2) }
@@ -106,14 +106,14 @@ test('R2: a backup that cannot be written leaves the user file byte for byte and
     const m = newManifest()
     const run = () => (kind === 'text'
       ? applyTextEntry({ phase: 'install', home, dir, manifest: m, harness: 'codex', file: f, edit: BLOCK })
-      : applyJsonKey({ phase: 'install', home, dir, manifest: m, harness: 'claude-code', file: f, keys: K, value: '/h/.asight/collector/ca/asight-ca.pem' }))
+      : applyJsonKey({ phase: 'install', home, dir, manifest: m, harness: 'claude-code', file: f, keys: K, value: '/h/.trocar/collector/ca/trocar-ca.pem' }))
     assert.throws(run, (e) => e.code === 'backup-failed' && e.message.includes(f) && /not (changed|touched)/.test(e.message), kind)
     assert.deepEqual(fs.readFileSync(f), before, `${kind}: the user file is byte for byte`)
     assert.equal(fs.statSync(f).mtimeMs, st.mtimeMs, `${kind}: and was not even rewritten`)
     assert.equal(mode(f), 0o640)
     assert.deepEqual(m.entries, [], `${kind}: no entry was recorded for a change that did not happen`)
     assert.equal(readManifest(dir), null, `${kind}: not even the intent was saved`)
-    assert.deepEqual(fs.readdirSync(path.dirname(f)).filter((n) => n.includes('.asight-tmp-')), [], `${kind}: no temp file left`)
+    assert.deepEqual(fs.readdirSync(path.dirname(f)).filter((n) => n.includes('.trocar-tmp-')), [], `${kind}: no temp file left`)
   }
 })
 
@@ -134,7 +134,7 @@ test('R2: a write that fails half-way (disk full) removes the partial backup, le
 
 test('R2: an entry of an existing file carries its backup (the bytes before the change), kind, undo_by_hand and pre_sha256; the manifest holds no contents', () => {
   const { home, dir } = box(); const f = put(path.join(home, '.claude', 'settings.json'), USER_JSON, 0o640)
-  const e = applyJsonKey({ phase: 'install', home, dir, manifest: newManifest(), harness: 'claude-code', file: f, keys: K, value: '/h/.asight/collector/ca/asight-ca.pem', now: T })
+  const e = applyJsonKey({ phase: 'install', home, dir, manifest: newManifest(), harness: 'claude-code', file: f, keys: K, value: '/h/.trocar/collector/ca/trocar-ca.pem', now: T })
   assert.equal(e.kind, 'json-key')
   assert.equal(e.backup, path.join(backupDir(home), backupName(f, T)))
   assert.equal(fs.readFileSync(e.backup, 'utf8'), USER_JSON, 'the backup is the file as it was before the change')
@@ -153,7 +153,7 @@ test('R2: an entry of an existing file carries its backup (the bytes before the 
   assert.ok(!fs.readFileSync(manifestPath(dir), 'utf8').includes('sk-1'))
 })
 
-test('R2: a file asight creates is not backed up: backup null, existed_before false, and no backup directory appears', () => {
+test('R2: a file trocar creates is not backed up: backup null, existed_before false, and no backup directory appears', () => {
   const { home, dir } = box()
   const e = applyJsonKey({ phase: 'install', home, dir, manifest: newManifest(), harness: 'claude-code', file: path.join(home, '.claude', 'settings.json'), keys: K, value: '/x.pem', now: T })
   assert.deepEqual([e.existed_before, e.backup], [false, null])
@@ -163,7 +163,7 @@ test('R2: a file asight creates is not backed up: backup null, existed_before fa
   assert.ok(!fs.existsSync(backupDir(home)))
 })
 
-test('R2: a change that changes nothing (the key already holds asight\'s value) writes no backup', () => {
+test('R2: a change that changes nothing (the key already holds trocar\'s value) writes no backup', () => {
   const { home, dir } = box(); const f = put(path.join(home, 's.json'), '{"env":{"NODE_EXTRA_CA_CERTS":"/x.pem"}}')
   assert.equal(applyJsonKey({ phase: 'install', home, dir, manifest: newManifest(), harness: 'h', file: f, keys: K, value: '/x.pem' }), null)
   assert.ok(!fs.existsSync(backupDir(home)))

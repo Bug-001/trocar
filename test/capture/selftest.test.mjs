@@ -25,7 +25,7 @@ test('checkDeps: openssl always required; certutil only on linux; missing → in
 // ① 是否真在抓
 test('qCapturing: no source → not ok; source with records → ok', () => {
   assert.equal(qCapturing([], null).ok, false);
-  assert.match(qCapturing([], null).note, /run `asight on`/, 'the note names a command that exists (D39⑥: `asight capture` went with the old capture)');
+  assert.match(qCapturing([], null).note, /run `trocar on`/, 'the note names a command that exists (D39⑥: `trocar capture` went with the old capture)');
   assert.equal(qCapturing([], { exists: false }).ok, false);
   assert.equal(qCapturing([], { exists: true, bytes: 0 }).ok, false); // exists but empty
   const ok = qCapturing([{}, {}], { exists: true, bytes: 100, mtimeMs: 1 });
@@ -73,7 +73,7 @@ test('qNoLeak: a raw sk-ant token in a request BODY is a warning, not a hard fai
 // assembled (R4): three outcomes, never mixed. failed = a capture file others can read (exit 1) · undetermined = nothing examined, or not all of it (exit 3) · otherwise ok (exit 0).
 test('runSelfTest: failed on a file others can read; undetermined on a scan that examined nothing; neither on a real capture in an owner-only file', () => {
   const recs = [{ endpoint: 'https://api.anthropic.com/v1/messages', req_headers: { 'anthropic-version': '2023-06-01' }, req_body: '{"model":"m"}', resp: { usage: { input_tokens: 1 } } }];
-  const okFile = path.join(os.tmpdir(), `asight-perm-ok-${process.pid}.ndjson`);
+  const okFile = path.join(os.tmpdir(), `trocar-perm-ok-${process.pid}.ndjson`);
   fs.writeFileSync(okFile, '{}\n'); fs.chmodSync(okFile, 0o600);
   const verdict = (r) => [r.failed, r.undetermined, r.hardFail];
   try {
@@ -111,7 +111,7 @@ test('runSelfTest: failed on a file others can read; undetermined on a scan that
 
 // ④b: bad modes, files whose mode could not be read, and nothing examined are three different answers (R11)
 test('qFilePerms: others-readable is a failure; a file whose permissions cannot be read is unknown with the file and the errno (never "readable by others", never ok); the fix line quotes the path', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-qfp-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-qfp-'));
   try {
     const loose = path.join(dir, "it's here.ndjson"); fs.writeFileSync(loose, '{}\n'); fs.chmodSync(loose, 0o640);
     const tight = path.join(dir, 'tight.ndjson'); fs.writeFileSync(tight, '{}\n'); fs.chmodSync(tight, 0o600);
@@ -141,7 +141,7 @@ test('readRecords honors a limit (bounded sampling for the self-test)', fixtureG
   assert.equal(capped.length, 5);
 });
 
-// D40 audit (缺接线): an LLM call the operator set to 「只记日志」 (`asight keep`, body_retention:'log') has no req_body BY CHOICE. `asight doctor` ②
+// D40 audit (缺接线): an LLM call the operator set to 「只记日志」 (`trocar keep`, body_retention:'log') has no req_body BY CHOICE. `trocar doctor` ②
 // counted it as a missing verbatim req_body and printed ✗ for a setting that was working.
 test('qCorrect: a call kept at the log level is counted apart, not as a missing verbatim req_body (D40)', () => {
   const kept = { endpoint: '/v1/messages', req_body: '{"model":"m"}', resp: { usage: { output_tokens: 1 } } };

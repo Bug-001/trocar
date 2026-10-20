@@ -3,7 +3,7 @@
 // There are no per-OS overlay files: macOS and Windows data is the base descriptor's `proxyMode`, with `perOs({ darwin, win32 })`
 // where a path differs (spec 4.11 §2.3).
 // The registry (core) validates them; this file never imports core/engine or arch/. It also checks the one export
-// every descriptor owes `asight status` and `asight doctor` (RFC 1.6 §9.7): `proxy`, how its agent reads a proxy.
+// every descriptor owes `trocar status` and `trocar doctor` (RFC 1.6 §9.7): `proxy`, how its agent reads a proxy.
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { normalizeName } from '../../off/identity.mjs'
@@ -57,7 +57,7 @@ function proxyModeProblems(pm) {
     if (obj(l) && obj(l.perOs)) { for (const [os, x] of Object.entries(l.perOs)) { oneOf(os, PM.os, `${at}.perOs key`); loc(x, `${at}.perOs.${os}`, write) } return }
     if (!obj(l)) return say('shape', `${at} is not a place`)
     oneOf(l.base, PM.base, `${at}.base`)
-    if (write && PM.base.includes(l.base) && !PM.writeBase.includes(l.base)) say('write-target', `${at} (${l.base} ${l.path || ''}) is written by asight, so it must be under the user's home, appSupport or localAppData`)
+    if (write && PM.base.includes(l.base) && !PM.writeBase.includes(l.base)) say('write-target', `${at} (${l.base} ${l.path || ''}) is written by trocar, so it must be under the user's home, appSupport or localAppData`)
   }
   const src = (s, at) => {
     if (Array.isArray(s)) { if (!s.length) say('shape', `${at} is an empty precedence list`); return s.forEach((x, i) => src(x, `${at}[${i}]`)) }
@@ -120,7 +120,7 @@ function proxyModeProblems(pm) {
     if (!(f.route in routes)) say('resolve', `${at}.route ${JSON.stringify(f.route)} names no route`)
     if (f.cert !== 'root' && !(f.cert in certs)) say('resolve', `${at}.cert ${JSON.stringify(f.cert)} names no cert (or 'root')`)
     if (f.trust !== 'root' && !(f.trust in trusts)) say('resolve', `${at}.trust ${JSON.stringify(f.trust)} names no trust (or 'root')`)
-    if (!Array.isArray(f.present) || !f.present.length) say('present', `${at}.present is empty: asight could not tell whether the form is installed`)
+    if (!Array.isArray(f.present) || !f.present.length) say('present', `${at}.present is empty: trocar could not tell whether the form is installed`)
     else f.present.forEach((p, k) => (obj(p) && 'command' in p ? !nonEmpty(p.command) && say('shape', `${at}.present[${k}].command is empty`) : loc(p, `${at}.present[${k}]`, false)))
     for (const os of f.os || []) {
       const v = obj(f.verified) ? f.verified[os] : undefined
