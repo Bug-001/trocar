@@ -16,7 +16,9 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { sandbox, installedViaCli, fakeIo, snapshot } from './fixtures/dispatch-ctx.mjs'
 
 const BIN = fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url))
-const PACKAGE = JSON.parse(fs.readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8'))
+import { codeId } from '../../src/version.mjs'
+
+const CODE = codeId() // D67⑥: the version with HEAD's first 7 in a git checkout
 /** The context of a run where every command is a spy that records `[name, ...argv]` and answers 0: what the dispatch did, not what the commands do. */
 const spying = (seen) => ({ io: fakeIo(), uid: 1000, platform: 'linux', deps: { commands: Object.fromEntries(COMMANDS.map((c) => [c.name, async (argv) => { seen.push([c.name, ...argv]); return 0 }])) } })
 const commandsOf = (text) => new Set(text.split('\n').map((l) => l.match(/^ {2}(?:sudo )?asight ([a-z-]+)/)).filter(Boolean).map((m) => m[1]))
@@ -84,7 +86,7 @@ test('help through the dispatch: no arguments, `help`, `--help`, `help <command>
   assert.equal(r.exit, 2); assert.match(r.c.io.stderrText(), /asight help: unknown command 'nope'\. Run: asight help/); assert.equal(r.c.io.stdoutText(), '')
   assert.equal((await say(['help', 'off', 'on'])).exit, 2, 'one command at a time')
   r = await say(['--version'])
-  assert.deepEqual([r.exit, r.c.io.stdoutText().trim()], [0, `asight ${PACKAGE.version}`])
+  assert.deepEqual([r.exit, r.c.io.stdoutText().trim()], [0, `asight ${CODE}`])
   for (const argv of [['-v'], ['version']]) assert.equal((await say(argv)).exit, 2, `${argv[0]} is gone: one feature, one name`)
 })
 
@@ -182,7 +184,7 @@ test('the real bin: --version, help, help off, an unknown command and `daemon --
   const home = tmpDir('asight-bin-')
   const env = { PATH: process.env.PATH, HOME: home, TMPDIR: process.env.TMPDIR || '/tmp', ASIGHT_TEST_SANDBOX: '1' }
   const run = (...args) => spawnSync(process.execPath, [BIN, ...args], { env, encoding: 'utf8' })
-  const v = run('--version'); assert.deepEqual([v.status, v.stdout.trim(), v.stderr], [0, `asight ${PACKAGE.version}`, ''])
+  const v = run('--version'); assert.deepEqual([v.status, v.stdout.trim(), v.stderr], [0, `asight ${CODE}`, ''])
   const h = run('help'); assert.equal(h.status, 0); assert.deepEqual([...commandsOf(h.stdout)].sort(), COMMANDS.filter((c) => c.group).map((c) => c.name).sort())
   const o = run('help', 'off'); assert.equal(o.status, 0); assert.match(o.stdout, /asight off \[<harness>\.\.\.\]/); assert.ok(!/asight serve/.test(o.stdout))
   const n = run('nope'); assert.equal(n.status, 2); assert.equal(n.stdout, ''); assert.match(n.stderr, /unknown command 'nope'/)

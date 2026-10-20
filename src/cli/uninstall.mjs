@@ -9,7 +9,7 @@
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { newReceipt, EXIT, UNDO_LINE } from '../off/schema.mjs'
-import { offWorld, desiredOff, switchRoutingOff, undoSide, harnessIdsOf, flowWriter, OFF_LOCK_WAIT_MS } from '../off/orchestrate.mjs'
+import { offWorld, desiredOff, drainDaemon, undoSide, harnessIdsOf, flowWriter, OFF_LOCK_WAIT_MS } from '../off/orchestrate.mjs'
 import { userProcessesOf } from '../off/user-procs.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readManifest, saveManifest, manifestPath, refuseOldManifest } from '../off/manifest.mjs'
@@ -58,7 +58,6 @@ async function captureOnline(w, m) {
   return on.length || unknown || (holders && holders.length) ? { on, holders: holders || [], unknown } : null
 }
 
-const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the connections it can see the end of
 // What a plain uninstall keeps, and `--purge-data` deletes: the records themselves and the index built from them (D60). `flows/`, where asight
 // says what it did and what failed (D38), stays either way: this very run writes its own last line there. The class-change log is data too (1.6 §3.6).
 const KEEPS = [[rawHome, 'your captured records'], [indexHome, 'the index asight built from them'], [classesLog, 'the log of your traffic class changes']]
@@ -72,21 +71,6 @@ const bytesUnder = (p, fs) => { // the size of a directory (or of a file), for t
 const keptOf = (home, fs) => KEEPS.map(([dir, what]) => ({ what, path: dir(asightHome(home)), bytes: 0 })).filter((k) => fs.existsSync(k.path)).map((k) => ({ ...k, bytes: bytesUnder(k.path, fs) }))
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const errText = (e) => String((e && e.message) || e)
-const relayedOf = (r) => (r && ['closing', 'waiting', 'cut'].every((k) => Number.isInteger(r[k]) && r[k] >= 0) ? r : null)
-
-// The daemon was asked to exit once drained: wait until the connections it can see the end of are closed (`closing` is 0), it has gone, or `boundMs` is up.
-// → { rel: the last counts read (null: never read), gone: the daemon had exited by itself when last looked }.
-async function waitForDrain(w, first, boundMs, socketPath) {
-  let rel = relayedOf(first), gone = false
-  for (const end = w.ms() + boundMs; rel && rel.closing > 0 && w.ms() < end;) {
-    await w.sleep(200)
-    try { rel = relayedOf((await w.request({ socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).relayed) || rel } catch (e) {
-      gone = !!e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') // exited by itself (it drained), or not answering: nothing more to wait for
-      break
-    }
-  }
-  return { rel, gone }
-}
 
 /** What `uninstall --dry-run` would do (and what is printed when a yes is missing), read and written nowhere → the receipt fields. */
 function planUninstall(w, m, purgeData = false) {
@@ -94,7 +78,7 @@ function planUninstall(w, m, purgeData = false) {
   const entries = usable ? m.entries.filter((e) => e.kind === 'json-key' || e.kind === 'text') : []
   return {
     changed: entries.map((e) => ({ path: e.path, change: `${e.kind === 'text' ? "asight's own lines" : (e.keys || []).join('.')} taken out`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
-    removed: [...(usable ? m.files.map((f) => f.path) : []), path.join(w.dir, 'state.json'), path.join(w.dir, 'control.json'), path.join(w.dir, 'board.token'), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m ? [manifestPath(w.dir)] : [])],
+    removed: [...(usable ? m.files.map((f) => f.path) : []), path.join(w.dir, 'state.json'), path.join(w.dir, 'control.json'), path.join(w.dir, 'board.token'), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), ...(w.fs.existsSync(path.join(w.dir, 'update.json')) ? [path.join(w.dir, 'update.json')] : []), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m ? [manifestPath(w.dir)] : [])],
     kept: purgeData ? [] : keptOf(w.home, w.fs),
     notes: usable || !m ? [] : [`the install manifest is version ${JSON.stringify(m.version)}, which this build does not read: no entry would be touched`],
     autostart: { planned: true },
@@ -175,15 +159,13 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     if (w.deps.releaseHeld) await w.deps.releaseHeld(null) // 5.1: held requests are released unchanged (a seam; 5.1 is not built)
 
     // 2 · 3 · 4: the daemon is asked to go and drains, the autostart is disabled, the daemon is stopped, the link is confirmed gone
-    const routing = await switchRoutingOff(w, { ids: null, now: false, exit: true })
+    const { routing, drained } = await drainDaemon(w, { drainMs: deps.drainMs }) // the one drain-then-stop path; `update`'s daemon replacement takes it too (D67①)
     receipt.routing = { confirmed: routing.confirmed, state: routing.state, how: routing.how }
     receipt.daemon = routing.daemon; receipt.relayed = routing.relayed
     if (routing.relayed_reason) receipt.relayed_reason = routing.relayed_reason
     receipt.problems.push(...routing.problems); receipt.notes.push(...routing.notes)
     for (const ev of routing.events) put(ev)
     for (const f of routing.failures) failed.push(f)
-    let drained = null
-    if (routing.confirmed && routing.how === 'daemon-reply') drained = await waitForDrain(w, routing.relayed, deps.drainMs ?? DRAIN_MS, routing.socket) // the socket that answered: w.socketPath is null with XDG_RUNTIME_DIR unset
     // the platform's own way out: darwin boots the LaunchAgent out and removes the plist (the same arm `off` uses, 4.9 §4 flip checklist ①),
     // Windows' task is DELETED here by the uninstall itself (the registration survives any manifest, so claiming it without asking schtasks left
     // the task registered at every login while the receipt said otherwise; the Run value stays a ledger entry), Linux disables the systemd unit
@@ -278,7 +260,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       rm(daemonLogPaths(home).dir)
       // the darwin key custody's signing helper (install put it there, 4.11 P1): it goes once no root key is left for it to remove — after undoRootKeys, which needs it
       const helper = w.platform === 'darwin' && !(m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key')) ? signHelperPath(home, NATIVE.signHelper) : null
-      for (const p of [path.join(w.dir, 'run'), path.join(w.dir, 'control.json'), path.join(w.dir, 'board.token'), w.lockFile, w.stateF, runtime, standalonePath(home), netenvFile(home), helper]) if (p) rm(p)
+      for (const p of [path.join(w.dir, 'run'), path.join(w.dir, 'control.json'), path.join(w.dir, 'board.token'), path.join(w.dir, 'update.json'), w.lockFile, w.stateF, runtime, standalonePath(home), netenvFile(home), helper]) if (p) rm(p) // update.json: an update that never finished is asight's own note, and goes with the rest of its state (§5.5)
       removeEmptyDirs([path.dirname(standalonePath(home))], fs)
       // the door ports and their tokens (decision #16): the next install and on choose them again
       const ing = removeIngressConfig({ dir: w.dir, fs })

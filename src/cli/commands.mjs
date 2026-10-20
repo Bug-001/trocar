@@ -86,6 +86,12 @@ export const COMMANDS = Object.freeze([
     options: [],
     exits: [[0, 'the address is printed'], [1, 'the board is not there: asight is not installed, the collector did not start, or its port is taken'], [2, 'a usage error']] },
 
+  { name: 'update',
+    group: 'Maintenance', mutates: true, run: via('./update.mjs', 'runUpdateCli'),
+    usage: 'asight update [--yes] [--dry-run] [--json]',
+    summary: 'Takes this asight to the newest code and leaves the machine as it was: installed, and capturing whatever it was capturing. The agents it captures are switched off while the code changes and switched on again after it.',
+    options: [YES, DRY, JSON_OPT],
+    exits: [[0, 'it is up to date'], [1, 'it was not updated, or not finished; it says why'], [2, 'nothing ran: a usage error, this asight is not a git checkout, root, or a confirmation nobody could give']] },
   { name: 'raw',
     group: 'Maintenance', mutates: false, run: via('./raw.mjs', 'run'),
     usage: 'asight raw <segment>[:<from>[-<to>]]',

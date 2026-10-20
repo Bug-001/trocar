@@ -553,6 +553,8 @@ export async function turnOn(opts = {}) {
 }
 
 const UNIT_NAME_HINT = 'asight-collector.service'
+// A named pipe whose server has gone: Windows answers EPIPE / ECONNRESET / a socket hang up where a unix socket answers ENOENT.
+const GONE_PIPE = /EPIPE|ECONNRESET|socket hang up|ECONNABORTED/i
 
 // ── the daemon up with its endpoint answering (1.6 §1.1「启用自启并拉起守护进程」; 拉起不是重启, R8): the one copy every `on` uses (Linux's turnOn and
 // macOS / Windows' runModelOn, 4.9 §4, 4.8 §7) — two copies of this seam is the 2026-10-11 incident's pattern.
@@ -571,16 +573,29 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
   let endpoint = resolveEndpoint()
   let sock = socketPath || endpoint.socketPath
   let ask = request || endpoint.request
-  const probe = async () => {
+  const probe = async (first = false) => {
     if (!sock && !socketPath) { endpoint = resolveEndpoint(); sock = endpoint.socketPath; ask = request || endpoint.request }
     if (!sock) return { up: false, why: endpoint.why || 'no control socket to ask' }
     try { await ask({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); return { up: true } } catch (e) {
       if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) return { up: false }
+      // win32 (tested 2026-10-20, `asight update`): a named pipe whose server has just gone answers the FIRST probe with EPIPE / ECONNRESET /
+      // a socket hang up instead of ENOENT, and reading that as "a daemon holds the pipe and does not answer" halted the run right after the
+      // daemon was stopped. Asked once more after a pause; still like that = not up, never stuck.
+      if (first && osName === 'win32' && GONE_PIPE.test(String((e && e.code) || '') + ' ' + String((e && e.message) || e))) {
+        await pause(250)
+        try { await ask({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); return { up: true } } catch (again) {
+          // the second ask answers for a gone pipe in any of its ways, ENOENT included (tested 2026-10-20: EPIPE while the server was still
+          // going, `connect ENOENT` once it had gone) — each of them is "not up"; only something else is a daemon that does not answer
+          if (again && (again.code === 'ENOENT' || again.code === 'ECONNREFUSED')) return { up: false }
+          if (GONE_PIPE.test(String((again && again.code) || '') + ' ' + String((again && again.message) || again))) return { up: false }
+          return { up: false, stuck: String((again && again.message) || again) }
+        }
+      }
       return { up: false, stuck: String((e && e.message) || e) }
     }
   }
   const notes = [], problems = []
-  const was = await probe()
+  const was = await probe(true)
   let up = was.up, started = false, unitFailed = null, halt = false
   if (was.stuck) { problems.push(`a daemon holds the control socket but does not answer (${was.stuck}); run "asight off", then "asight on" (off stops a stuck daemon, 1.6 §1.4)`); halt = true }
   else if (unit) {

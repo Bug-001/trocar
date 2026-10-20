@@ -9,7 +9,6 @@
 //     deps      what the world gives (0.1 §3), passed to the command as it is; `deps.commands` = { <name>: async (argv, ctx) → exit } replaces
 //               what a command runs (a test's spy: what was dispatched, not what it does)
 //   The command gets `(argv, ctx)`; `ctx.args` is the parsed form of argv ({ positionals, flags }) and `ctx.json` whether `--json` was asked.
-import fs from 'node:fs'
 import os from 'node:os'
 import { makeIo } from '../off/io.mjs'
 import { commandNamed, helpText, usageLine } from './commands.mjs'
@@ -17,9 +16,9 @@ import { parseArgs } from './args.mjs'
 import { wrap, WIDTH } from './text.mjs'
 import { printJson, errorDoc } from './json.mjs'
 import { EXIT } from './schema.mjs'
+import { codeId } from '../version.mjs'
 
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
-const version = () => JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version
 const REPORT = 'Please report it with what you ran: https://github.com/Bug-001/asight/issues'
 
 export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }), env = process.env, home = os.homedir(), platform = process.platform, uid = processUid(), deps = {} } = {}) {
@@ -32,7 +31,7 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   }
   const [first, ...rest] = argv
   if (first === undefined || first === '--help' || first === '-h') { io.out(helpText()); return EXIT.ok } // `asight` with nothing = `asight help` (§2)
-  if (first === '--version') { io.out(`asight ${version()}`); return EXIT.ok }
+  if (first === '--version') { io.out(`asight ${codeId()}`); return EXIT.ok } // §2, D67⑤: the version, with HEAD's first 7 in a git checkout
   const cmd = commandNamed(first)
   if (!cmd) return refuse(first, 'usage', `asight: unknown command '${first}'. Run: asight help`)
   if (rest.includes('--help') || rest.includes('-h')) { io.out(helpText(cmd.name)); return EXIT.ok }
