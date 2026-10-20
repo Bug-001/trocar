@@ -10,7 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as closedSets from '../../src/health/codes.mjs'
-import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, FAILURE_EVENTS, STATE_EVENTS, CODES, TRUST_REASONS, OFF_WHERE, OFF_EVENTS, OFF_CODES, ROUTE_WHERE, ROUTE_EVENTS, ROUTE_CODES, ROUTE_FAILURE_CODES, ROUTE_TRUST_REASONS, ROUTE_STATUS_REASONS, NET_WHERE, NET_EVENTS, NET_CODES, NET_FAILURE_CODES, STATUS_REASONS, CAPTURE_KINDS, isFailure, isCode, isEvent, isWhere, notCapturedClass, checkRecord } from '../../src/health/codes.mjs'
+import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, FAILURE_EVENTS, STATE_EVENTS, CODES, TRUST_REASONS, OFF_WHERE, OFF_EVENTS, OFF_CODES, ROUTE_WHERE, ROUTE_EVENTS, ROUTE_CODES, ROUTE_FAILURE_CODES, ROUTE_TRUST_REASONS, ROUTE_STATUS_REASONS, UNTRACKED_REASONS, NET_WHERE, NET_EVENTS, NET_CODES, NET_FAILURE_CODES, STATUS_REASONS, CAPTURE_KINDS, isFailure, isCode, isEvent, isWhere, notCapturedClass, checkRecord } from '../../src/health/codes.mjs'
 import { WHERE_OFF, EVENT_OFF_NOTE, CODE_OFF } from '../../src/off/names.mjs'
 import { EVENT, CODE, TRUST_REASON } from '../../src/collector/core/codes.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
@@ -77,6 +77,20 @@ test('D38 the scan fails on a name outside the set (planted tree)', () => {
     fs.writeFileSync(path.join(root, 'src', 'netenv', 'd.mjs'), "w({ event: 'failure', where: 'netenvv', code: 'route-lost' }); w({ event: 'failure', where: 'netenv', code: 'route-loop' }); w({ event: 'route-applied', where: 'routing', code: 'ingress-unknown' })\n")
     assert.deepEqual(outside(literals(root)).map((l) => `${l.kind} ${l.name}`).sort(), ['code CODE_OFF.backupLost (not in the map)', 'code backup-lost', 'code cli-broke', 'code made-up', 'code oops-code', 'code route-lost', 'event agent-wandered', 'event off-notes', 'not_captured hmm', 'not_captured shrug', 'where cli', 'where elsewhere', 'where netenvv', 'where nowhere', 'where offf'].sort())
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+// 4.6 §记录「连接行」(2026-10-21): an untracked / untrusted row's class is its reason's — forwarded by design is expected, every other reason
+// and none is a failure. The by-design lists are the spec's words, written out here (W38): a reason added to either set must be added in both.
+test('4.6 连接行: untracked / untrusted rows forwarded by design are expected; pid-unresolved, a trust reason and no reason stay failures', () => {
+  const SPEC = { untracked: ['not-an-agent', 'agent-helper', 'harness-off', 'group-off', 'outside-host-set', 'other-user'], untrusted: ['not-verified', 'outside-host-set'] }
+  for (const nc of Object.keys(SPEC)) {
+    for (const reason of [null, ...new Set([...UNTRACKED_REASONS, ...TRUST_REASONS])]) {
+      const row = { flow_id: 'f', decision: 'splice', not_captured: nc, reason }
+      const expected = SPEC[nc].includes(reason)
+      assert.equal(notCapturedClass(nc, reason), expected ? 'expected' : 'failure', `${nc}/${reason}`)
+      assert.equal(isFailure(row), !expected, `${nc}/${reason}`)
+    }
+  }
 })
 
 test('D38 failure vs expected: only failure classes and failure events turn the indicator', () => {
