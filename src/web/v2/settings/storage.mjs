@@ -43,11 +43,12 @@ const isNote = (e) => !!e && e.level === 'note'
 // problemCount(segmentsDoc) — the segments that did not fully read: the `segments[].problems[]` entries that are not notes (1.11)
 export const problemCount = (doc) => list(doc && doc.segments).reduce((s, x) => s + list(x.problems).filter((p) => p && !isNote(p)).length, 0)
 
-// fileProblems(...docs) — every entry the documents' errors[] name, `{where, reason, note}` as they said it; one entry per distinct pair
+// fileProblems(...docs) — every entry the documents' errors[] name, `{where, code, reason, note}` as they said it (code when the entry
+// carries one); one entry per distinct triple
 // (a segment's problem is in `segments` and again in `classes`' errors[] — the same problem, listed once)
 export function fileProblems(...docs) {
   const out = new Map()
-  for (const e of docs.flatMap((d) => list(d && d.errors))) if (e) out.set(`${e.where}\n${e.reason}`, { where: String(e.where ?? ''), reason: String(e.reason ?? ''), note: isNote(e) })
+  for (const e of docs.flatMap((d) => list(d && d.errors))) if (e) out.set(`${e.where}\n${e.code}\n${e.reason}`, { where: String(e.where ?? ''), code: e.code ? String(e.code) : '', reason: String(e.reason ?? ''), note: isNote(e) })
   return [...out.values()]
 }
 const anyNote = (segments, ...docs) => list(segments && segments.segments).some((x) => list(x.problems).some(isNote)) || fileProblems(segments, ...docs).some((p) => p.note)
@@ -162,7 +163,7 @@ export function storageHtml({ classes, segments }, window, opts = {}) {
   const d = (classes && classes.disk) || {}, ratio = sealRatio(d)
   const files = [[W.FILES_SEAL_RATIO, ratio != null ? `${ratio.toFixed(3)} · ${W.ESTIMATE}` : W.FILES_SEAL_NONE]]
   for (const [title, ps] of [[W.FILES_READ_PROBLEMS, all.filter((p) => !p.note)], [W.FILES_READ_NOTES, all.filter((p) => p.note)]]) {
-    if (ps.length) files.push([title, ''], ...ps.map((p) => ['', `${p.where} · ${p.reason}`]))
+    if (ps.length) files.push([title, ''], ...ps.map((p) => ['', [p.where, p.code, p.reason].filter(Boolean).join(' · ')]))
   }
   const disk = `<div class="scard"><h2>${W.CARD_DISK}</h2>` +
     (fig.total != null ? `<p class="dline"><b>${W.DISK_TOTAL}</b> <span class="num">${esc(bytes(fig.total))}</span></p>` : '') +

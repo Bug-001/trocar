@@ -458,7 +458,7 @@ const SEG = '20260719T100000Z'
 const classesDoc = (counts, errors = []) => ({ disk: { trocar_bytes: 1e6 }, as_of: null, file: null, errors,
   classes: CLASS_IDS.map((id, i) => ({ class: id, keep: 'full', builtin: true, rules: id === FALLBACK_CLASS ? [] : [{ host: `h${i}\\.example\\.test` }], counts: { h24: counts(id, i) } })) })
 const probDocs = (probs) => {
-  const errors = probs.map((p) => ({ where: `segments/${SEG}`, reason: `${p.code}: ${p.reason}`, ...(p.level ? { level: p.level } : {}) }))
+  const errors = probs.map((p) => ({ where: `segments/${SEG}`, code: p.code, ...(p.level ? { level: p.level } : {}), reason: p.reason })) // problemEntry
   return { segments: { segments: [{ segment: SEG, problems: probs }], errors }, classes: classesDoc((id, i) => ({ calls: i, bytes: i * 100 }), errors) }
 }
 
@@ -485,7 +485,7 @@ test('#13 every segment problem is listed once on the page (the 磁盘 card); th
   const probs = [{ code: 'index-cold', reason: 'built while reading', level: 'note' }, { code: 'record-unparseable', reason: 'line 3 is not JSON' }, { code: 'record-unparseable', reason: 'line 9 is not JSON' }]
   const d = probDocs(probs)
   const h = storage.storageHtml(d, '24h').replace(/ data-copy="[^"]*"/g, '') // the copy buffer is not shown
-  for (const p of probs) assert.equal(h.split(p.reason).length - 1, 1, p.reason)
+  for (const p of probs) assert.equal(h.split(esc(`segments/${SEG} · ${p.code} · ${p.reason}`)).length - 1, 1, p.reason) // 1.11: 段名 · 原因码 · 原因原文
   const tech = (/id="classtech"[\s\S]*$/.exec(h) || [''])[0]
   const keys = [...tech.matchAll(/<span class="k">([^<]*)<\/span>/g)].map((m) => m[1]).filter(Boolean)
   assert.ok(keys.length >= CLASS_IDS.length)
