@@ -2,6 +2,8 @@
 // fetches the session (cursor-paged), keeps it live (1.5 s poll), and schedules the repaint of each area:
 //   scrubbing    → only what depends on the playhead (bar .cur marks, context window, outline, resources, raw panel)
 //   brush window → bars, cache band and rails        a new fetch → everything
+// A poll that brought nothing new for the playhead's call leaves the window, outline, resources and raw panel as they are
+// (playheadSig, spec 1.4 D64), so a selection in them survives a live session's growth; the step bar always repaints.
 // The URL carries the step (`?step=N`, 1-based): scrubbing replaces it (no history pile-up), a different session is a new entry.
 // Contract: mount(el, ctx) → {update(route), unmount()}; ctx = {api, store, router}; the start route is ctx.router.current().
 import { esc } from '../core/fmt.mjs'
@@ -65,6 +67,18 @@ export const SKELETON = `<div id="pages">
 <div id="rightpage"><div id="rpbar" role="button" tabindex="0" aria-expanded="false" title="Expand the right page"></div><div id="rpbody"><div id="resexp"></div><div id="rawpanel"></div></div></div>
 </div>`
 
+// what the playhead's panels (window, outline, resources, raw panel) draw from: equal → not repainted (spec 1.4 D64). Only the
+// anchor lane's call at the playhead counts, so another lane's growth never repaints the window.
+export function playheadSig(s) {
+  const c = (s.anchor && s.anchor.calls[s.playhead]) || {}, n = c.norm || {}
+  const labels = ((c.wire && c.wire.labels) || []).map((l) => l && l.id)
+  return JSON.stringify([s.anchor && s.anchor.kind, c.gi, c.id, !!c.paged_out, (c.flat || []).length, String(n.text || '').length, n.stop_reason ?? null,
+    (n.tools || []).length, c.respIncomplete || null, labels, s.playhead, s.diffRef, [...(s.openBlocks || [])].sort(), [...(s.navOpen || [])].sort(),
+    s.viewPin ? s.viewPin.resKey : null, !!s.pricing, s.pricingErr || null, s.pageLoading ?? null, s.pageMissed ?? null])
+}
+// the hash names a session the server does not know (1.2 §Edge cases — 就地显示,不跳走): said in the window, with a way back
+export const notListedHtml = () => `<div class="empty" id="notlisted">${esc(SESSION_NOT_LISTED)} · <a href="#/sessions">${esc(BACK_TO_SESSIONS)}</a></div>`
+
 const storage = () => { try { return window.localStorage } catch { return null } }
 const stepOf = (route) => { const n = parseInt(route && route.params && route.params.step, 10); return Number.isFinite(n) && n >= 1 ? n : null }
 
@@ -89,7 +103,9 @@ export function mount(el, ctx) {
     openBlocks: new Set(), navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false,
     collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
     railsFolded: typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches, rpOpen: false,
-    lastCheapSig: null, lastRenderSig: null, pricing: store.get().pricing || null, pricingErr: null,
+    lastCheapSig: null, lastRenderSig: null, lastPhSig: null, headFollow: null, notListed: false,
+    reads: typeof AbortController === 'function' ? new AbortController() : null, // aborted when the session changes or the desk closes
+    pricing: store.get().pricing || null, pricingErr: null,
     goodKey: null, goodAt: null, staleErr: null, // the session last drawn from a good answer, when; a later failed read (1.5 K-29)
     turnFold: loadFold(storage()),
   }
@@ -119,13 +135,14 @@ export function mount(el, ctx) {
 
   // ── header: the session head + the 会话保真行 (1.2 §会话头 · §会话保真行); every number is behind ⓘ ───────────────
   function renderHeader() {
+    s.headFollow = s.follow
     renderSessionHead(E.deskhead, s)
   }
 
   // ── empty and failed states: every widget that carries per-session data is neutralised, nothing of the last session stays ──
   function renderEmpty(msg) {
     s.brushDragging = false; s.anchor = null; s.lanes = []; s.curFlat = []; s.curRemoved = []; s.breaks = []; jumps.clear()
-    s.landedFor = -1; s.turnLanded.clear()
+    s.landedFor = -1; s.turnLanded.clear(); s.lastPhSig = null
     E.stepbar.innerHTML = ''
     // the desk's failure state keeps its honest error text; the window's own ⑧ (载入中) is the same quiet shape
     E.ctxwin.innerHTML = `<div class="${msg === LOADING ? 'cwload' : 'empty'}">${esc(msg)}${s.errNote && msg !== LOADING ? `<div class="emptywhy">${s.errNote}</div>` : ''}</div>`
@@ -146,8 +163,11 @@ export function mount(el, ctx) {
       navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
     railsFolded: typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches, rpOpen: false,
       trunc: null, logged: null, sourceE: null, gap: null, totals: null, errNote: null,
-      lastCheapSig: null, lastRenderSig: null, goodKey: null, goodAt: null, staleErr: null })
-    poller.reset()
+      lastCheapSig: null, lastRenderSig: null, lastPhSig: null, notListed: false, goodKey: null, goodAt: null, staleErr: null })
+    el.querySelector('.desk').classList.remove('notlisted')
+    // the last session's read in flight is cancelled, and its loop (maybe still busy with it) cannot hold this one
+    if (s.reads) { s.reads.abort(); s.reads = new AbortController() }
+    poller = makePoller()
     s.openBlocks.clear()
     s.turnLanded.clear()
     E.stepbar.innerHTML = ''
@@ -159,13 +179,13 @@ export function mount(el, ctx) {
     const l = s.lanes.find((x) => x.id === s.selTick.laneId)
     if (l && reviewing(l)) highlightRange(s, l, s.selTick.i)
   }
-  function renderPlayheadAreas() { s.renderStep(); renderContextWindow(E.ctxwin, s); s.renderNav(); s.renderRaw() }
+  function renderPlayheadAreas() { s.renderStep(); renderContextWindow(E.ctxwin, s); s.renderNav(); s.renderRaw(); s.lastPhSig = playheadSig(s) }
   function renderMid() { renderPlayheadAreas() }
   function renderAll() {
     renderHeader()
     if (!s.anchor) return
     renderSaw(E.saw, s); renderRails(E.rails, s); renderOverview(E.saw, s)
-    renderPlayheadAreas()
+    if (playheadSig(s) !== s.lastPhSig) renderPlayheadAreas(); else s.renderStep() // 'Step N / M' moves with every new call
     restoreSelection()
   }
 
@@ -196,6 +216,7 @@ export function mount(el, ctx) {
     } else markCurrent(E.saw, s) // the common case: only the current marks move
     repositionBrush(E.saw, s)
     renderPlayheadAreas()
+    if (s.follow !== s.headFollow) renderHeader() // the follow chip (a scrub onto or off the live end, a tick selection)
     restoreSelection()
     syncUrl()
     // landing on the last step turned following on: the followed step is never paged out (2.3 §未下发态) → whether a read started
@@ -279,17 +300,23 @@ export function mount(el, ctx) {
 
   // one read in flight; a failed read backs off (doubling from POLL_MS to 30 s, reset by a success); the reader's own actions
   // (Retry, 载入这一步, a jump, f, the follow chip) read at once (follow.mjs createPoller)
-  const poller = createPoller({ base: POLL_MS, now: () => api.now(), alive: () => !s.dead,
-    run: async () => { try { return await pollOnce() } catch (e) { console.error(e); return { ok: false } } } })
+  // a hidden tab and a session that is not listed read nothing by themselves; after a slow read the timer waits 3x it (createPoller).
+  // One poller per session: its loop stops as soon as the session changes.
+  const idle = () => (typeof document !== 'undefined' && document.hidden) || s.notListed
+  const makePoller = () => { const key = sessionKey()
+    return createPoller({ base: POLL_MS, now: () => api.now(), alive: () => !s.dead && key === sessionKey(), idle,
+      run: async () => { try { return await pollOnce() } catch (e) { if (s.dead || key !== sessionKey() || (e && e.name === 'AbortError')) return; console.error(e); return { ok: false } } } }) }
+  let poller = makePoller()
   function poll(byReader = true) {
-    if (s.dead) return
+    if (s.dead || (!byReader && idle())) return
     loadPricing().catch((e) => console.error(e))
     return poller.poll(byReader)
   }
   s.poll = () => poll(true)
   async function pollOnce() {
-    const key = sessionKey()
-    const stale = () => s.dead || key !== sessionKey() // the session was switched while a request was in flight
+    const key = sessionKey(), reads = s.reads
+    // the session was switched (its read aborted) while a request was in flight: no record, no stale line
+    const stale = () => s.dead || key !== sessionKey() || !!(reads && reads.signal.aborted)
     // a failed listing is NOT an empty one: say why
     const pj = await loadSessions(api)
     if (stale()) return
@@ -304,14 +331,16 @@ export function mount(el, ctx) {
       s.lastCheapSig = cs
     }
     const asked = s.pageLoading // the step a reader's load is waiting for, if any
-    const res = await api.get('session', { id: s.id, after: s.pageCur || null, limit: s.pageLim })
+    const res = await api.get('session', { id: s.id, after: s.pageCur || null, limit: s.pageLim }, reads ? { signal: reads.signal } : undefined)
     if (stale()) return
+    // not in the listing and the server knows no such session (200 {meta:null}): say so HERE, with a way back; the timer stops
+    // reading it (idle) until a reader's own read finds it
+    if (!cur && res.ok && (!res.data || res.data.meta == null)) {
+      s.lastCheapSig = null; s.lastRenderSig = null; s.goodKey = null; s.staleErr = null; s.errNote = null; s.pageMissed = null; s.pageLoading = null
+      s.notListed = true; renderEmpty(''); E.ctxwin.innerHTML = notListedHtml(); el.querySelector('.desk').classList.add('notlisted'); renderHeader(); return
+    }
+    if (s.notListed) { s.notListed = false; el.querySelector('.desk').classList.remove('notlisted') }
     if (!res.ok) {
-      // the hash names a session the library does not have: say so HERE (1.2 §Edge cases — 就地显示,不跳走), with a way back
-      if (res.status === 404) {
-        s.lastCheapSig = null; s.lastRenderSig = null; s.goodKey = null; s.staleErr = null; s.errNote = null; s.pageMissed = null; s.pageLoading = null
-        renderEmpty(`${SESSION_NOT_LISTED} · <a href="#/sessions">${BACK_TO_SESSIONS}</a>`); renderHeader(); return
-      }
       return readFailed('Loading failed', res.error || 'cause not known', '. If the capture service is down, restart it; a session that is too large is served from its tail.', 'This session failed to load.')
     }
     s.errNote = null
@@ -408,6 +437,8 @@ export function mount(el, ctx) {
   // popovers and menus close themselves first and stop the key (core/keys.mjs); here: the call drawer, then the bottom row
   const onEscape = () => { if (E.detail.classList.contains('open')) closeDetail(E.detail, s); else if (s.rpOpen) onRp() }
   document.addEventListener('v2:escape', onEscape)
+  const onVis = () => { if (!document.hidden) poll(true) } // back in view: read now, not a tick later
+  document.addEventListener('visibilitychange', onVis)
   const timer = setInterval(() => poll(false), POLL_MS) // the desk keeps reading; 「跟随最新」 only decides whether the playhead follows growth
   // the lane's width changes with the window and with the right-page divider: watch both. Only a window that no longer fits is touched.
   const refit = () => { if (s.anchor && fitView()) { renderSaw(E.saw, s); renderRails(E.rails, s); renderOverview(E.saw, s) } }
@@ -421,8 +452,8 @@ export function mount(el, ctx) {
   return {
     update(route) {
       if (route.project !== s.project || route.id !== s.id) { // another session
-        resetSession(); renderEmpty('Loading…')
         s.project = route.project; s.id = route.id; s.initialStep = stepOf(route)
+        resetSession(); renderEmpty('Loading…')
         poll(); return
       }
       const st = stepOf(route) // the same session, only the step moved (our own scrubbing lands here too, and is a no-op)
@@ -431,6 +462,8 @@ export function mount(el, ctx) {
     },
     unmount() {
       s.dead = true
+      if (s.reads) s.reads.abort()
+      document.removeEventListener('visibilitychange', onVis)
       clearInterval(timer); if (ro) ro.disconnect(); window.removeEventListener('resize', refit)
       for (const f of offs) { try { f() } catch (e) { console.error(e) } }
       setScreenKeys(null)

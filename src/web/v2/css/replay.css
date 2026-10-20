@@ -464,3 +464,5 @@
 .v2-modal .keylist{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:0;}
 .v2-modal .keylist dd{margin:0;}
 .v2-modal .keylist kbd{font-family:var(--mono);color:var(--ink);}
+/* a session the server does not know: only the window speaks (its link back to the list); no empty timeline around it */
+.desk.notlisted #saw,.desk.notlisted #rails,.desk.notlisted #stepbar{display:none;}

@@ -1,10 +1,6 @@
 // replay/follow.mjs — the replay desk's live-follow and polling policy, pure so it can be tested without a DOM: when the timer may
-// poll, where the playhead lands after a fetch (and whether the URL's `step` has to follow it), where the next page sits, and
+// read, where the playhead lands after a fetch (and whether the URL's `step` has to follow it), where the next page sits, and
 // how the poll loop backs off after a failed read.
-
-// The timer's tick: poll only while the live checkbox is on. Unchecking freezes the view (nothing is fetched, repainted or moved);
-// checking it again resumes. Fetches the reader asks for (paging to a call, a retry) do not go through here.
-export const pollWhenLive = (isLive, poll) => () => { if (isLive()) poll() }
 
 // Where the playhead lands after a fetch that left the anchor lane with N (≥ 1) calls. `initialStep` is the 1-based step the URL
 // named when the screen opened (null otherwise): start there, clamped into range. Otherwise a playhead that follows the live end
@@ -57,28 +53,35 @@ export const BACKOFF_MAX_MS = 30000
 // the wait after `n` (≥ 1) failures in a row: the poll interval doubled n times, at most BACKOFF_MAX_MS
 export const backoffMs = (n, base) => Math.min(base * 2 ** n, BACKOFF_MAX_MS)
 
-// createPoller({run, now, base, alive}) → {poll(byReader), reset()}. `run()` reads once and resolves {ok:false} on a failure,
+// createPoller({run, now, base, alive, idle}) → {poll(byReader)}. `run()` reads once and resolves {ok:false} on a failure,
 // {again:true} when the answer asks for one more read before drawing (a re-aimed page), anything else on success.
-//   · a timer tick (byReader false) before the back-off is due does nothing; a reader's own action (byReader true) always reads
-//   · a call while a read is in flight asks for one more read after it; after a success that read runs, after a failure only a
-//     reader's request does — a failure never re-reads by itself, so one failing read cannot become a loop
-//   · a success clears the back-off; reset() clears it too (another session)
-export function createPoller({ run, now = Date.now, base, alive = () => true }) {
+//   · a timer tick (byReader false) does nothing while idle() holds (a hidden tab, a session that is not listed), nor before the
+//     next read is due; a reader's own action (byReader true) always reads
+//   · due: after a failure, the back-off; after a success that took D ms, 3·D from its start when 3·D > base (a slow worker gets
+//     at most a third of the time from the timer), else at once (the timer's own interval is the gap)
+//   · a call while a read is in flight asks for one more read after it; after a success that read runs when a reader asked or it
+//     is due, after a failure only a reader's request does — a failure never re-reads by itself, so one failing read cannot loop
+export function createPoller({ run, now = Date.now, base, alive = () => true, idle = () => false }) {
   let busy = false, again = false, readerAgain = false, fails = 0, nextAt = 0
   async function poll(byReader = false) {
     if (!alive()) return
-    if (!byReader && now() < nextAt) return
+    if (!byReader && (idle() || now() < nextAt)) return
     if (busy) { again = true; readerAgain = readerAgain || byReader; return }
     busy = true
     try {
       let go = true
       while (go && alive()) {
         again = false; readerAgain = false
+        const t0 = now()
         const r = await run()
         if (r && r.ok === false) { fails++; nextAt = now() + backoffMs(fails, base); go = readerAgain }
-        else { fails = 0; nextAt = 0; go = again || !!(r && r.again) }
+        else {
+          const d = now() - t0
+          fails = 0; nextAt = 3 * d > base ? t0 + 3 * d : 0
+          go = readerAgain || !!(r && r.again) || (again && !idle() && now() >= nextAt)
+        }
       }
     } finally { busy = false }
   }
-  return { poll, reset() { fails = 0; nextAt = 0 } }
+  return { poll }
 }
