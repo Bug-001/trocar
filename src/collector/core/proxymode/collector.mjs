@@ -163,7 +163,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
    *  judges. A code forwarded by design (an outside host of a host tree) says nothing of the process and is not listed. */
   const verdicts = new Map()
   function noted(id, v) {
-    if (id.pid != null && (v.decrypt || notCapturedClass('untrusted', v.code) !== 'expected')) keep(verdicts, `${id.pid}\0${id.facts.startedAt ?? ''}`, { pid: id.pid, start: id.facts.startedAt ?? null, agent: id.agent, trusted: v.decrypt === true, reason: v.decrypt ? null : v.code })
+    if (id.pid != null && (v.decrypt || notCapturedClass('untrusted', v.code) !== 'expected')) keep(verdicts, `${id.pid}\0${id.facts.startedAt ?? ''}`, { pid: id.pid, start: id.facts.startedAt ?? null, agent: id.agent, trusted: v.decrypt === true, decrypt: v.decrypt === true, reason: v.decrypt ? null : v.code }) // the driver row's shape: `decrypt` is what the netfacts' `watched` reads
     return v
   }
 

@@ -40,7 +40,7 @@ import { squashed } from './words.mjs'
 import { tilde } from './receipt.mjs'
 import { isProxyMode } from '../off/mode.mjs' // proxy mode or driver mode (D47), decided in ONE place (src/cli may import src/off; the collector's copy is isModelOs)
 
-export { STATUS_REASONS, judgeHarness } // judgeHarness lives in src/netenv/verdict.mjs: the topology (1.6 §9) judges `captured` and `reason` with the same function, so the two cannot disagree
+export { STATUS_REASONS, judgeHarness } // judgeHarness lives in src/netenv/verdict.mjs: the topology (1.6 §9) judges `captured` and `reason` with the same function over the per-process verdicts status hands it (never judged again), so the two cannot disagree
 
 const errText = (e) => String((e && (e.code || e.message)) || e)
 const errMessage = (e) => String((e && e.message) || e)
