@@ -7,7 +7,7 @@
 // The key of a resource is the server's `resKey`, else kind::label. `el` is #resexp; `s` is the replay desk's state.
 import { esc, kf } from '../core/fmt.mjs'
 import { resState } from './lanes.mjs'
-import { relPath } from './analysis.mjs'
+import { relPath, midClip } from './analysis.mjs'
 import { navGroupHtml, jumpToStepAndBlock } from './outline.mjs'
 import * as W from '../labels/replay.mjs'
 
@@ -26,12 +26,15 @@ const stepWordOf = (s) => {
   return (localIdx) => (isMain ? `step ${localIdx + 1}` : `call ${localIdx + 1}`)
 }
 
+// a read file's visible name is cut in the middle past this many characters; the hover keeps the full path (2.4)
+const NAME_MAX = 48
+
 export function resourcesHtml(s) {
   const a = s.anchor
   if (!a) return ''
   const at = stepWordOf(s)
   const cwd = s.meta && s.meta.project_path
-  const rp = (p) => esc(relPath(cwd, p))
+  const rp = (p) => esc(midClip(relPath(cwd, p), NAME_MAX))
   const res = a.resources || [], seen = a.seenFiles || []
   const withSeg = res.filter(hasSeg)
   const of = (k) => withSeg.filter((r) => r.kind === k)

@@ -21,7 +21,7 @@ import { TOKEN, withToken } from '../server/face.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
-import { centerCursor } from '../../src/web/v2/replay/follow.mjs'
+import { pagePlace } from '../../src/web/v2/replay/follow.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
@@ -62,7 +62,7 @@ test(`3.5 验收 11: a ${shape.wire} session growing past the worker heap while 
     assert.ok(list.doc, list.error)
     const listed = list.doc.sessions.find((x) => x.session_id === s.id)
     assert.ok(listed, 'the session is listed')
-    const read = () => get('session', { id: s.id, after: String(centerCursor(tail ? tail.gi : listed.calls - 1, 60)), limit: '60' })
+    const read = () => { const at = pagePlace(tail ? tail.gi : listed.calls - 1, 60); return get('session', { id: s.id, after: String(at.after), limit: String(at.limit) }) }
     let page = await read()
     if (!page.doc) return page
     const lastOf = (d) => { const m = d.analyzed.lanes.find((l) => l.kind === 'main'); return m.calls[m.calls.length - 1] }
@@ -94,7 +94,8 @@ test(`3.5 验收 11: a ${shape.wire} session growing past the worker heap while 
     // grown poll by poll, or folded from scratch in a process that never saw the session: the same bytes
     const q2 = await quiet()
     assert.ok(q2[0] && q2[0] === q2[1])
-    const cold = await runQuery('session', { id: s.id, after: String(centerCursor(tail.gi, 60)), limit: '60' }, { home })
+    const at = pagePlace(tail.gi, 60)
+    const cold = await runQuery('session', { id: s.id, after: String(at.after), limit: String(at.limit) }, { home })
     assert.equal(sansNotes(cold), sansNotes(JSON.parse(q2[0])), 'the grown spine answers what a fold from scratch does')
     assert.deepEqual(failed, [], 'no query worker died')
   } finally {

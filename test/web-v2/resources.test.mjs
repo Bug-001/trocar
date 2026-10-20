@@ -107,3 +107,22 @@ test('a note outside the closed set rides on the hover — never an inline paren
   const none = resourcesHtml(stateOf(anchorOf({ resources: null })))
   assert.match(none, /class="navwhy">/, 'no note key: no hover')
 })
+
+// A3 (2.4 element table): a long path is cut in the middle — the base name stays whole, the length fits unless the base
+// name alone is longer
+test('midClip keeps the base name whole and fits max unless the base name alone is longer', async () => {
+  const { midClip } = await import('../../src/web/v2/replay/analysis.mjs')
+  let seed = 7
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n }
+  for (let t = 0; t < 400; t++) {
+    const depth = 1 + rnd(8)
+    const segs = Array.from({ length: depth }, () => 'abcdefghij'.repeat(4).slice(0, 1 + rnd(40)))
+    const path = (rnd(2) ? '/' : '') + segs.join('/')
+    const max = 20 + rnd(41)
+    const out = midClip(path, max)
+    const base = segs[segs.length - 1]
+    assert.ok(out.endsWith(base), `${path} → ${out}`)
+    if (base.length <= max) assert.ok(out.length <= max, `${path} @${max} → ${out}`)
+    if (path.length <= max) assert.equal(out, path)
+  }
+})

@@ -2,6 +2,8 @@
 // fetches the session (cursor-paged), keeps it live (1.5 s poll), and schedules the repaint of each area:
 //   scrubbing    → only what depends on the playhead (bar .cur marks, context window, outline, resources, raw panel)
 //   brush window → bars, cache band and rails        a new fetch → everything
+// A poll that brought nothing new for the playhead's call leaves the window, outline, resources and raw panel as they are
+// (playheadSig, spec 1.4 D64), so a selection in them survives a live session's growth; the step bar always repaints.
 // The URL carries the step (`?step=N`, 1-based): scrubbing replaces it (no history pile-up), a different session is a new entry.
 // Contract: mount(el, ctx) → {update(route), unmount()}; ctx = {api, store, router}; the start route is ctx.router.current().
 import { esc } from '../core/fmt.mjs'
@@ -12,7 +14,7 @@ import { keyAction } from './keymap.mjs'
 import { buildLanes, anchorLane, stepsOf } from './lanes.mjs'
 import { breakSteps } from './analysis.mjs'
 import { loadFold, saveFold } from './fold.mjs'
-import { landPlayhead, followCursor, centerCursor, createPoller } from './follow.mjs'
+import { landPlayhead, followCursor, pagePlace, createPoller } from './follow.mjs'
 import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
 import { renderContextWindow, wireCtxWin } from './ctxwin.mjs'
@@ -65,6 +67,18 @@ export const SKELETON = `<div id="pages">
 <div id="rightpage"><div id="rpbar" role="button" tabindex="0" aria-expanded="false" title="Expand the right page"></div><div id="rpbody"><div id="resexp"></div><div id="rawpanel"></div></div></div>
 </div>`
 
+// what the playhead's panels (window, outline, resources, raw panel) draw from: equal → not repainted (spec 1.4 D64). Only the
+// anchor lane's call at the playhead counts, so another lane's growth never repaints the window.
+export function playheadSig(s) {
+  const c = (s.anchor && s.anchor.calls[s.playhead]) || {}, n = c.norm || {}
+  const labels = ((c.wire && c.wire.labels) || []).map((l) => l && l.id)
+  return JSON.stringify([s.anchor && s.anchor.kind, c.gi, c.id, !!c.paged_out, (c.flat || []).length, String(n.text || '').length, n.stop_reason ?? null,
+    (n.tools || []).length, c.respIncomplete || null, labels, s.playhead, s.diffRef, [...(s.openBlocks || [])].sort(), [...(s.navOpen || [])].sort(),
+    s.viewPin ? s.viewPin.resKey : null, !!s.pricing, s.pricingErr || null, s.pageLoading ?? null, s.pageMissed ?? null, !!s.decodedView])
+}
+// the hash names a session the server does not know (1.2 §Edge cases — 就地显示,不跳走): said in the window, with a way back
+export const notListedHtml = () => `<div class="empty" id="notlisted">${esc(SESSION_NOT_LISTED)} · <a href="#/sessions">${esc(BACK_TO_SESSIONS)}</a></div>`
+
 const storage = () => { try { return window.localStorage } catch { return null } }
 const stepOf = (route) => { const n = parseInt(route && route.params && route.params.step, 10); return Number.isFinite(n) && n >= 1 ? n : null }
 
@@ -83,13 +97,17 @@ export function mount(el, ctx) {
     trunc: null, logged: null, sourceE: null, gap: null, totals: null, errNote: null,
     lanes: [], anchor: null, anchorTs: [], breaks: [], problems: [], playhead: 0, follow: true, prevN: 0, sawView: 'ctx',
     view: { lo: 0, hi: 0 }, viewSig: null, brushDragging: false,
-    pageLimit: PAGE_LIMIT, pageCur: 0, pageInfo: null, pageSig: null, pageReaimed: false,
+    pageCur: 0, pageLim: PAGE_LIMIT, pageInfo: null, pageSig: null, pageReaimed: false, pageLoading: null, pageMissed: null,
     selTick: null, viewPin: null, diffRef: null, curFlat: [], drawerFlat: [], curRemoved: [],
+    followLanding: false, // the playhead was last moved by 跟随最新, not by the reader: the window lands on the reply (1.4 §打开一步时落在哪)
     landedFor: -1, turnLanded: new Set(), // the window's landing ran for that step; turns opened for the AUTOMATIC landing only (a reader's own jump writes the D12 fold memory, 2.5)
     openBlocks: new Set(), navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false,
+    decodedView: false, // JSON bodies shown as their decoded text (2.3 §block 卡 体); a desk-wide choice, kept across sessions
     collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
     railsFolded: typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches, rpOpen: false,
-    lastCheapSig: null, lastRenderSig: null, pricing: store.get().pricing || null, pricingErr: null,
+    lastCheapSig: null, lastRenderSig: null, lastPhSig: null, headFollow: null, notListed: false,
+    reads: typeof AbortController === 'function' ? new AbortController() : null, // aborted when the session changes or the desk closes
+    pricing: store.get().pricing || null, pricingErr: null,
     goodKey: null, goodAt: null, staleErr: null, // the session last drawn from a good answer, when; a later failed read (1.5 K-29)
     turnFold: loadFold(storage()),
   }
@@ -119,13 +137,14 @@ export function mount(el, ctx) {
 
   // ── header: the session head + the 会话保真行 (1.2 §会话头 · §会话保真行); every number is behind ⓘ ───────────────
   function renderHeader() {
+    s.headFollow = s.follow
     renderSessionHead(E.deskhead, s)
   }
 
   // ── empty and failed states: every widget that carries per-session data is neutralised, nothing of the last session stays ──
   function renderEmpty(msg) {
     s.brushDragging = false; s.anchor = null; s.lanes = []; s.curFlat = []; s.curRemoved = []; s.breaks = []; jumps.clear()
-    s.landedFor = -1; s.turnLanded.clear()
+    s.landedFor = -1; s.turnLanded.clear(); s.lastPhSig = null
     E.stepbar.innerHTML = ''
     // the desk's failure state keeps its honest error text; the window's own ⑧ (载入中) is the same quiet shape
     E.ctxwin.innerHTML = `<div class="${msg === LOADING ? 'cwload' : 'empty'}">${esc(msg)}${s.errNote && msg !== LOADING ? `<div class="emptywhy">${s.errNote}</div>` : ''}</div>`
@@ -141,13 +160,16 @@ export function mount(el, ctx) {
     jumps.clear()
     // a different session: nothing of the last one may survive (the first board left diffRef / navOpen / expanded behind)
     Object.assign(s, { meta: null, A: null, raw: [], probes: { count: 0, series: [] }, lanes: [], anchor: null, anchorTs: [], breaks: [], problems: [], playhead: 0, follow: true, prevN: 0, sawView: 'ctx',
-      view: { lo: 0, hi: 0 }, viewSig: null, pageCur: 0, pageInfo: null, pageSig: null, pageReaimed: false, selTick: null, viewPin: null, diffRef: null,
-      curFlat: [], drawerFlat: [], curRemoved: [], landedFor: -1,
+      view: { lo: 0, hi: 0 }, viewSig: null, pageCur: 0, pageLim: PAGE_LIMIT, pageInfo: null, pageSig: null, pageReaimed: false, pageLoading: null, pageMissed: null, selTick: null, viewPin: null, diffRef: null,
+      curFlat: [], drawerFlat: [], curRemoved: [], landedFor: -1, followLanding: false,
       navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
     railsFolded: typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches, rpOpen: false,
       trunc: null, logged: null, sourceE: null, gap: null, totals: null, errNote: null,
-      lastCheapSig: null, lastRenderSig: null, goodKey: null, goodAt: null, staleErr: null })
-    poller.reset()
+      lastCheapSig: null, lastRenderSig: null, lastPhSig: null, notListed: false, goodKey: null, goodAt: null, staleErr: null })
+    el.querySelector('.desk').classList.remove('notlisted')
+    // the last session's read in flight is cancelled, and its loop (maybe still busy with it) cannot hold this one
+    if (s.reads) { s.reads.abort(); s.reads = new AbortController() }
+    poller = makePoller()
     s.openBlocks.clear()
     s.turnLanded.clear()
     E.stepbar.innerHTML = ''
@@ -159,13 +181,13 @@ export function mount(el, ctx) {
     const l = s.lanes.find((x) => x.id === s.selTick.laneId)
     if (l && reviewing(l)) highlightRange(s, l, s.selTick.i)
   }
-  function renderPlayheadAreas() { s.renderStep(); renderContextWindow(E.ctxwin, s); s.renderNav(); s.renderRaw() }
+  function renderPlayheadAreas() { s.renderStep(); renderContextWindow(E.ctxwin, s); s.renderNav(); s.renderRaw(); s.lastPhSig = playheadSig(s) }
   function renderMid() { renderPlayheadAreas() }
   function renderAll() {
     renderHeader()
     if (!s.anchor) return
     renderSaw(E.saw, s); renderRails(E.rails, s); renderOverview(E.saw, s)
-    renderPlayheadAreas()
+    if (playheadSig(s) !== s.lastPhSig) renderPlayheadAreas(); else s.renderStep() // 'Step N / M' moves with every new call
     restoreSelection()
   }
 
@@ -178,13 +200,17 @@ export function mount(el, ctx) {
 
   // ── navigation ───────────────────────────────────────────────────────────────────────────────────────────────────
   function syncUrl() { router.setParams({ step: String(s.playhead + 1) }, { replace: true }) } // scrubbing is not a navigation
-  function setPlayhead(i, manual) {
+  // `followLanding`: 跟随最新 brought the playhead here (followOn) → this step lands on the reply; any other move lands by the change
+  // line. Set BEFORE the repaint below, because the landing runs once per step, inside that repaint (1.4 §打开一步时落在哪).
+  function setPlayhead(i, manual, followLanding = false) {
     if (!s.anchor || !s.anchor.calls.length) return // a zero-call session: "⇥ latest" is a no-op, not a TypeError
     s.viewPin = null // scrubbing returns the panel to the call raw
+    s.followLanding = followLanding
     jumps.clear() // a move by the reader ends any jump still waiting for its page (jumpTo queues its own after this)
     const N = s.anchor.calls.length, np = Math.max(0, Math.min(N - 1, i))
-    if (np !== s.playhead) { s.openBlocks.clear(); s.turnLanded.clear() } // a different call: its blocks start collapsed, no landing turn lingers
+    if (np !== s.playhead) { s.openBlocks.clear(); s.turnLanded.clear(); s.pageMissed = null } // a different call: its blocks start collapsed, no landing turn lingers, no missed load
     s.playhead = np
+    const wasFollowing = s.follow
     if (manual) s.follow = np === N - 1
     // keep the scrub target inside the brush window: pan it, keep its width
     if (np < s.view.lo || np >= s.view.hi) {
@@ -195,11 +221,20 @@ export function mount(el, ctx) {
     } else markCurrent(E.saw, s) // the common case: only the current marks move
     repositionBrush(E.saw, s)
     renderPlayheadAreas()
+    if (s.follow !== s.headFollow) renderHeader() // the follow chip (a scrub onto or off the live end, a tick selection)
     restoreSelection()
     syncUrl()
+    // landing on the last step turned following on: the followed step is never paged out (2.3 §未下发态) → whether a read started
+    return manual && s.follow && !wasFollowing ? ensurePage(s.anchor.calls[np]) : false
   }
   // how many bars #sawrow can draw (timeline.mjs barsThatFit). A lane that has no width yet (not laid out) cannot judge: no limit.
-  const sawCapacity = () => { const w = $('#sawrow').clientWidth; return w > 0 ? barsThatFit(w) : Infinity }
+  // measured on the bars row's grid column, not on #sawrow: the detail lanes narrow to the window's bar count (1.3 §窗内步少时
+  // 收窄), and what the window may hold must not shrink with them
+  const sawCapacity = () => {
+    const row = $('#sawrow').closest('.tkrow'), cols = row && typeof getComputedStyle === 'function' ? getComputedStyle(row).gridTemplateColumns.split(' ') : []
+    const w = parseFloat(cols[cols.length - 1]) || $('#sawrow').clientWidth
+    return w > 0 ? barsThatFit(w) : Infinity
+  }
   // a window wider than the lane draws is clipped, and the steps it clips are the latest ones: shrink it, keeping the playhead in it
   function fitView() {
     const w = fitWindow({ lo: s.view.lo, hi: s.view.hi, K: sawCapacity(), playhead: s.playhead })
@@ -224,18 +259,27 @@ export function mount(el, ctx) {
   // share a window cannot pull the window back and forth. Re-aiming never turns following off: only the reader's own moves do (1.2).
   function ensurePage(call, force, also) {
     if (!call || !call.paged_out) return false
-    let c = centerCursor(call.gi, PAGE_LIMIT)
-    if (also && also.gi != null) {
-      const lo = Math.min(call.gi, also.gi), hi = Math.max(call.gi, also.gi)
-      if (hi - lo < PAGE_LIMIT - 2) c = Math.max(0, lo - (((PAGE_LIMIT - (hi - lo)) / 2) | 0))
-    }
+    let p = pagePlace(call.gi, PAGE_LIMIT)
+    if (also && also.gi != null && Math.abs(call.gi - also.gi) < PAGE_LIMIT - 2) p = pagePlace(Math.ceil((call.gi + also.gi) / 2), PAGE_LIMIT)
     // the window asked for is already this one: a re-read would loop (the "载入这一步" button forces it anyway)
-    if (!force && c === (s.pageCur | 0)) return false
-    s.pageCur = c; s.pageReaimed = false
+    if (!force && p.after === (s.pageCur | 0) && p.limit === s.pageLim) return false
+    s.pageCur = p.after; s.pageLim = p.limit; s.pageReaimed = false
     s.lastCheapSig = null; s.lastRenderSig = null
+    s.pageLoading = call.gi; s.pageMissed = null // its load control is busy until an answer comes (2.3 §未下发态)
+    if (s.anchor && s.anchor.calls[s.playhead] === call) { renderContextWindow(E.ctxwin, s); s.renderRaw(); s.lastPhSig = playheadSig(s) } // drawn busy: an answer that clears it repaints
     poll(true)
     return true
   }
+  // 跟随最新 turned on (f, the chip): the followed step is never paged out (2.3 §未下发态), so the page is re-aimed at it before the
+  // read; the step lands on its reply (a scrub onto the last step also turns following on, but it is the reader's move: change line).
+  function followOn() {
+    const N = s.anchor ? s.anchor.calls.length : 0
+    let read = false
+    if (N) read = setPlayhead(N - 1, true, true); else { s.follow = true; s.followLanding = true } // the newest answer: land on the reply
+    renderHeader()
+    if (!read) poll(true)
+  }
+  s.followOn = followOn
   const selectedCall = () => {
     if (!s.selTick) return null
     const l = s.lanes.find((x) => x.id === s.selTick.laneId)
@@ -248,9 +292,12 @@ export function mount(el, ctx) {
   // a read failed (1.5 K-29): a desk that has drawn this session keeps every area as it is and says quietly, in the 会话保真行, since
   // when it is not refreshed and why; only a session that never loaded shows the failure in the content area
   function readFailed(title, reason, detail, emptyMsg) {
+    s.pageLoading = null // the read answered (with a failure): the load control is usable again
     s.lastCheapSig = null; s.lastRenderSig = null // so the next read retries; a stuck signature would keep the board wedged after recovery
-    if (s.goodKey === sessionKey()) s.staleErr = { reason, since: s.goodAt }
-    else { fail(title, reason + detail); renderEmpty(emptyMsg) }
+    if (s.goodKey === sessionKey()) {
+      s.staleErr = { reason, since: s.goodAt }
+      if (s.anchor && playheadSig(s) !== s.lastPhSig) renderPlayheadAreas() // a "Loading this step…" drawn by ensurePage goes back to usable (2.3 §未下发态)
+    } else { fail(title, reason + detail); renderEmpty(emptyMsg) }
     renderHeader()
     return { ok: false }
   }
@@ -266,17 +313,23 @@ export function mount(el, ctx) {
 
   // one read in flight; a failed read backs off (doubling from POLL_MS to 30 s, reset by a success); the reader's own actions
   // (Retry, 载入这一步, a jump, f, the follow chip) read at once (follow.mjs createPoller)
-  const poller = createPoller({ base: POLL_MS, now: () => api.now(), alive: () => !s.dead,
-    run: async () => { try { return await pollOnce() } catch (e) { console.error(e); return { ok: false } } } })
+  // a hidden tab and a session that is not listed read nothing by themselves; after a slow read the timer waits 3x it (createPoller).
+  // One poller per session: its loop stops as soon as the session changes.
+  const idle = () => (typeof document !== 'undefined' && document.hidden) || s.notListed
+  const makePoller = () => { const key = sessionKey()
+    return createPoller({ base: POLL_MS, now: () => api.now(), alive: () => !s.dead && key === sessionKey(), idle,
+      run: async () => { try { return await pollOnce() } catch (e) { if (s.dead || key !== sessionKey() || (e && e.name === 'AbortError')) return; console.error(e); return { ok: false } } } }) }
+  let poller = makePoller()
   function poll(byReader = true) {
-    if (s.dead) return
+    if (s.dead || (!byReader && idle())) return
     loadPricing().catch((e) => console.error(e))
     return poller.poll(byReader)
   }
   s.poll = () => poll(true)
   async function pollOnce() {
-    const key = sessionKey()
-    const stale = () => s.dead || key !== sessionKey() // the session was switched while a request was in flight
+    const key = sessionKey(), reads = s.reads
+    // the session was switched (its read aborted) while a request was in flight: no record, no stale line
+    const stale = () => s.dead || key !== sessionKey() || !!(reads && reads.signal.aborted)
     // a failed listing is NOT an empty one: say why
     const pj = await loadSessions(api)
     if (stale()) return
@@ -284,20 +337,23 @@ export function mount(el, ctx) {
     const cur = pj.data.sessions.find((x) => x.project_slug === s.project && x.session_id === s.id)
     // a session switch opens on the tail `sessions` counted, at the page's middle; afterwards every answer places the next page
     // (followCursor below). A manual scrub off the live end clears `follow`.
-    if (s.pageSig !== key) { s.pageSig = key; s.pageCur = centerCursor(((cur && cur.calls) || 0) - 1, PAGE_LIMIT); s.pageInfo = null; s.pageReaimed = false }
+    if (s.pageSig !== key) { const p = pagePlace(((cur && cur.calls) || 0) - 1, PAGE_LIMIT); s.pageSig = key; s.pageCur = p.after; s.pageLim = p.limit; s.pageInfo = null; s.pageReaimed = false }
     if (cur) {
-      const cs = key + '|' + cur.calls + '|' + cur.last_ts + '|' + s.pageCur // the window is part of the signature: moving it must refetch
+      const cs = key + '|' + cur.calls + '|' + cur.last_ts + '|' + s.pageCur + '|' + s.pageLim // the window is part of the signature: moving it must refetch
       if (cs === s.lastCheapSig) return
       s.lastCheapSig = cs
     }
-    const res = await api.get('session', { id: s.id, after: s.pageCur || null, limit: PAGE_LIMIT })
+    const asked = s.pageLoading // the step a reader's load is waiting for, if any
+    const res = await api.get('session', { id: s.id, after: s.pageCur || null, limit: s.pageLim }, reads ? { signal: reads.signal } : undefined)
     if (stale()) return
+    // not in the listing and the server knows no such session (200 {meta:null}): say so HERE, with a way back; the timer stops
+    // reading it (idle) until a reader's own read finds it
+    if (!cur && res.ok && (!res.data || res.data.meta == null)) {
+      s.lastCheapSig = null; s.lastRenderSig = null; s.goodKey = null; s.staleErr = null; s.errNote = null; s.pageMissed = null; s.pageLoading = null
+      s.notListed = true; renderEmpty(''); E.ctxwin.innerHTML = notListedHtml(); el.querySelector('.desk').classList.add('notlisted'); renderHeader(); return
+    }
+    if (s.notListed) { s.notListed = false; el.querySelector('.desk').classList.remove('notlisted') }
     if (!res.ok) {
-      // the hash names a session the library does not have: say so HERE (1.2 §Edge cases — 就地显示,不跳走), with a way back
-      if (res.status === 404) {
-        s.lastCheapSig = null; s.lastRenderSig = null; s.goodKey = null; s.staleErr = null; s.errNote = null
-        renderEmpty(`${SESSION_NOT_LISTED} · <a href="#/sessions">${BACK_TO_SESSIONS}</a>`); renderHeader(); return
-      }
       return readFailed('Loading failed', res.error || 'cause not known', '. If the capture service is down, restart it; a session that is too large is served from its tail.', 'This session failed to load.')
     }
     s.errNote = null
@@ -308,12 +364,16 @@ export function mount(el, ctx) {
     // where the next page sits is decided by THIS answer (1.2 「跟随最新」): while following, the anchor's last call at the page's
     // middle. When that call (or, the server having fewer calls than `sessions` counted, every call) did not ride this answer, read
     // once more at the new place before drawing — no paged-out flash, and `follow` stays: that tail IS the live end.
-    const next = followCursor({ follow: s.follow, page: d.page || null, pageCur: s.pageCur | 0, limit: PAGE_LIMIT, tailGi: tail ? tail.gi : null })
-    if (next !== (s.pageCur | 0)) {
-      s.pageCur = next
+    const next = followCursor({ follow: s.follow, page: d.page || null, pageCur: s.pageCur | 0, pageLim: s.pageLim, limit: PAGE_LIMIT, tailGi: tail ? tail.gi : null })
+    if (next.after !== (s.pageCur | 0) || next.limit !== s.pageLim) {
+      s.pageCur = next.after; s.pageLim = next.limit
       const missing = (d.page && d.page.returned === 0) || (s.follow && tail && tail.paged_out)
       if (missing && !s.pageReaimed) { s.pageReaimed = true; s.lastCheapSig = null; s.lastRenderSig = null; return { again: true } }
     }
+    if (s.pageLoading === asked) s.pageLoading = null // answered (a re-aimed read above carries the load on to the next answer)
+    // the step a load asked for: still without its body in this answer → missed (the button reads again); with it → no longer missed
+    const want = asked != null ? asked : s.pageMissed
+    if (want != null) { const c = lanes.flatMap((l) => l.calls).find((x) => x.gi === want); s.pageMissed = c && c.paged_out ? want : null }
     s.pageReaimed = false
     s.goodKey = key; s.goodAt = api.now(); s.staleErr = null
     s.pageInfo = d.page || null
@@ -321,7 +381,7 @@ export function mount(el, ctx) {
     s.logged = d.logged || null
     s.sourceE = d.errors || []
     s.raw = d.records || []; s.probes = probes; s.meta = d.meta || null
-    const sig = key + '|' + (s.pageCur | 0) + '|' + s.raw.length + '|' + (s.raw.length ? String((s.raw[s.raw.length - 1] || {}).ts_request || (s.raw[s.raw.length - 1] || {}).id || '') : '')
+    const sig = key + '|' + (s.pageCur | 0) + '|' + s.pageLim + '|' + (s.pageLoading ?? '') + '|' + (s.pageMissed ?? '') + '|' + s.raw.length + '|' + (s.raw.length ? String((s.raw[s.raw.length - 1] || {}).ts_request || (s.raw[s.raw.length - 1] || {}).id || '') : '')
     if (sig === s.lastRenderSig) { renderHeader(); return } // nothing new to draw; the head drops a stale line a failed read left
     s.lastRenderSig = sig
     s.A = A
@@ -340,8 +400,9 @@ export function mount(el, ctx) {
     // the URL named a step: start there (out of range is clamped); else follow the live end, or clamp. Whenever the playhead moved
     // by itself the URL's step is made truthful too (replace, so growth leaves no history entry per call).
     const land = landPlayhead({ N, playhead: s.playhead, follow: s.follow, initialStep: s.initialStep })
+    if (s.playhead !== land.playhead || s.landedFor === -1) s.followLanding = s.initialStep == null && land.follow // follow moved it (or opened on the live end)
     s.playhead = land.playhead; s.follow = land.follow; s.initialStep = null
-    if (s.playhead !== prevPh) s.openBlocks.clear() // live-follow moved to a new call
+    if (s.playhead !== prevPh) { s.openBlocks.clear(); s.pageMissed = null } // live-follow moved to a new call
     // brush window: a new session starts on the whole of it when that fits the lane, else on the last steps that fit — or, when the URL
     // named an earlier step, on the ones around it (fitView below; the playhead was landed above). On live growth keep the reader's
     // window but clamp it, and extend it when parked at the end.
@@ -383,18 +444,20 @@ export function mount(el, ctx) {
     if (!a) return
     e.preventDefault()
     if (a.keys) openModal({ title: KEYS_TITLE, bodyHtml: `<dl class="keylist">${KEY_LIST.map(([k, w]) => `<dt><kbd>${esc(k)}</kbd></dt><dd>${esc(w)}</dd>`).join('')}</dl>` })
-    else if (a.follow) { s.follow = !s.follow; renderHeader(); if (s.follow) poll(true) }
+    else if (a.follow) { if (s.follow) { s.follow = false; renderHeader() } else followOn() }
     else { if (keyTarget == null) requestAnimationFrame(paintKey); keyTarget = a.to }
   }
   setScreenKeys(onKey)
   // popovers and menus close themselves first and stop the key (core/keys.mjs); here: the call drawer, then the bottom row
   const onEscape = () => { if (E.detail.classList.contains('open')) closeDetail(E.detail, s); else if (s.rpOpen) onRp() }
   document.addEventListener('v2:escape', onEscape)
+  const onVis = () => { if (!document.hidden) poll(true) } // back in view: read now, not a tick later
+  document.addEventListener('visibilitychange', onVis)
   const timer = setInterval(() => poll(false), POLL_MS) // the desk keeps reading; 「跟随最新」 only decides whether the playhead follows growth
   // the lane's width changes with the window and with the right-page divider: watch both. Only a window that no longer fits is touched.
   const refit = () => { if (s.anchor && fitView()) { renderSaw(E.saw, s); renderRails(E.rails, s); renderOverview(E.saw, s) } }
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(refit) : null
-  if (ro) ro.observe($('#sawrow'))
+  if (ro) ro.observe($('#sawrow').closest('.tkrow'))
   window.addEventListener('resize', refit)
 
   renderEmpty('Loading…')
@@ -403,8 +466,8 @@ export function mount(el, ctx) {
   return {
     update(route) {
       if (route.project !== s.project || route.id !== s.id) { // another session
-        resetSession(); renderEmpty('Loading…')
         s.project = route.project; s.id = route.id; s.initialStep = stepOf(route)
+        resetSession(); renderEmpty('Loading…')
         poll(); return
       }
       const st = stepOf(route) // the same session, only the step moved (our own scrubbing lands here too, and is a no-op)
@@ -413,6 +476,8 @@ export function mount(el, ctx) {
     },
     unmount() {
       s.dead = true
+      if (s.reads) s.reads.abort()
+      document.removeEventListener('visibilitychange', onVis)
       clearInterval(timer); if (ro) ro.disconnect(); window.removeEventListener('resize', refit)
       for (const f of offs) { try { f() } catch (e) { console.error(e) } }
       setScreenKeys(null)

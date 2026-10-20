@@ -10,10 +10,10 @@ const gate = await probe()
 const skip = gate.ok ? false : gate.reason
 const BYTES = 5e6
 
-// the session with the most calls: the busiest step head and window the face has
-async function openBusiest(b) {
-  const rows = (await b.get('sessions')).doc.sessions
-  const r = [...rows].sort((x, y) => (y.calls || 0) - (x.calls || 0))[0]
+// the session with the most calls: the busiest step head and window the face has (`fewest`: the one with the fewest calls)
+async function openBusiest(b, fewest = false) {
+  const rows = (await b.get('sessions')).doc.sessions.filter((x) => x.calls > 0)
+  const r = [...rows].sort((x, y) => fewest ? x.calls - y.calls : (y.calls || 0) - (x.calls || 0))[0]
   await b.page.evaluate((h) => { location.hash = h }, `#/replay/${encodeURIComponent(r.project_slug)}/${encodeURIComponent(r.session_id)}`)
   await b.page.waitForFunction(() => !!document.querySelector('#stepbar .sb-no') && !!document.querySelector('#ctxwin') && !document.querySelector('#ctxwin .cwload'), null, { timeout: 15000 })
   await b.page.waitForLoadState('networkidle')
@@ -23,7 +23,8 @@ async function openBusiest(b) {
 const layout = (page) => page.evaluate(() => {
   const q = (s) => document.querySelector(s)
   const kids = (sel) => [...document.querySelectorAll(`${sel} > *, ${sel} > * > *`)].filter((e) => e.getClientRects().length)
-  const clipped = [...kids('#deskhead'), ...kids('#stepbar')].filter((e) => e.scrollWidth > e.clientWidth + 0.5 && getComputedStyle(e).display !== 'inline')
+  // an ellipsis with its full text on hover is the designed give-way (1.2 §让位次序, 2.2 §步头放不下: the model name first), not a clip
+  const clipped = [...kids('#deskhead'), ...kids('#stepbar')].filter((e) => e.scrollWidth > e.clientWidth + 0.5 && getComputedStyle(e).display !== 'inline' && !(getComputedStyle(e).textOverflow === 'ellipsis' && e.closest('[title]')))
     .map((e) => `${e.tagName}.${e.className} ${e.scrollWidth}>${e.clientWidth}`)
   const untitled = [...document.querySelectorAll('#content *')].filter((e) => e.getClientRects().length && getComputedStyle(e).textOverflow === 'ellipsis' && e.scrollWidth > e.clientWidth + 0.5 && !e.closest('[title]'))
     .map((e) => `${e.tagName}.${e.className}: ${e.textContent.slice(0, 40)}`)
@@ -73,6 +74,84 @@ for (const width of [1280, 1024, 800]) {
     })
   }
 }
+
+// 1.2 §上下文窗的高度 at the short 1280 × 800 viewport (the audit's): the step bar stays one row (2.2 §步头放不下: at 1280 the
+// model name shrinks, nothing wraps) and #ctxwin keeps half the available height. 1.3 §窗内步少时收窄: in the session with the
+// fewest steps every detail lane is at most (bars in the window) × the bar cap wide; the whole-session strip keeps the full width.
+test('at 1280 × 800 the step bar is one row, the window holds half the height, and a few-step session narrows its lanes', { skip, timeout: 120_000 }, async () => {
+  const b = await withBoard({ bytes: BYTES, width: 1280, height: 800, chromium: gate.chromium })
+  try {
+    await openBusiest(b)
+    const L = await layout(b.page)
+    // one row: every drawn part's middle lies inside the arrows' box (center-aligned parts of different heights share a row)
+    const off = await b.page.evaluate(() => {
+      const nav = document.querySelector('#stepbar .sb-nav').getBoundingClientRect()
+      return [...document.querySelectorAll('#stepbar > *')].filter((e) => e.getBoundingClientRect().width > 0)
+        .map((e) => [e.className, e.getBoundingClientRect()]).filter(([, r]) => (r.top + r.bottom) / 2 < nav.top || (r.top + r.bottom) / 2 > nav.bottom).map(([c]) => c)
+    })
+    assert.deepEqual(off, [], 'the step bar wraps at 1280')
+    assert.ok(L.ctxwin >= 0.5 * L.avail, `#ctxwin ${L.ctxwin}px < half of the available ${L.avail}px`)
+    await openBusiest(b, true)
+    const lanes = await b.page.evaluate(() => {
+      const page = document.querySelector('#leftpage'), cs = getComputedStyle(document.querySelector('#saw'))
+      const cap = parseFloat(cs.getPropertyValue('--barcap')), n = +getComputedStyle(page).getPropertyValue('--nbars')
+      const w = (e) => e.getBoundingClientRect().width
+      return { cap, n, detail: [...document.querySelectorAll('#saw .tkrow:not(.tkrow-ovw) > .tlane, #rails .tlane')].filter((e) => e.getClientRects().length).map(w),
+        whole: w(document.querySelector('#saw .tkrow-ovw > .tlane')) }
+    })
+    assert.ok(lanes.n > 0 && lanes.cap > 0 && lanes.detail.length, JSON.stringify(lanes))
+    for (const x of lanes.detail) assert.ok(x <= lanes.n * lanes.cap + 0.5, `a detail lane ${x}px > ${lanes.n} × ${lanes.cap}px`)
+    assert.ok(lanes.whole > lanes.n * lanes.cap, 'the whole-session strip narrowed with the window')
+    await shoot(b.page, 'replay-fewsteps', { width: 1280, theme: 'light' })
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
+// 1.4 §打开一步时落在哪: turning 跟随最新 on from a few steps back, with every body already on the page, lands the window on the
+// newest reply ⑨ — the landing runs inside the repaint of the move, so the reason for the move must be known before it.
+test('turning follow latest on from an earlier step lands the window on the newest reply', { skip, timeout: 120_000 }, async () => {
+  const b = await withBoard({ bytes: BYTES, width: 1280, height: 800, chromium: gate.chromium })
+  try {
+    await openBusiest(b)
+    await b.page.setViewportSize({ width: 1280, height: 520 }) // a short window: the reply and the step's first new block are not on one screen
+    for (let k = 0; k < 4; k++) await b.page.click('#stepbar [data-step="prev"]')
+    await b.page.waitForFunction(() => !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#ctxwin .cwreply'))
+    await b.page.click('#ctxwin') // the keys go to the page, not to a control
+    await b.page.keyboard.press('f')
+    await b.page.waitForFunction(() => /Step (\d+) \/ \1\b/.test(document.querySelector('#stepbar .sb-no').textContent))
+    const at = await b.page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => {
+      const w = document.querySelector('#ctxwin'), r = document.querySelector('#ctxwin .cwreply').getBoundingClientRect(), wr = w.getBoundingClientRect()
+      const sb = document.querySelector('#stepbar'), top = wr.top + (sb && w.contains(sb) ? sb.getBoundingClientRect().height : 0)
+      ok({ reply: r.top, top, bottom: wr.bottom, atEnd: w.scrollTop >= w.scrollHeight - w.clientHeight - 1 })
+    })))
+    // at the top of the window, or the window scrolled as far as it goes with the reply in view
+    assert.ok(at.reply >= at.top - 2 && at.reply < at.bottom && (at.reply <= at.top + 2 || at.atEnd), JSON.stringify(at))
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
+// 2.3 §未下发态: the load control is unclickable only while its read has not answered — a failed read is an answer. Step 1's body is
+// taken off the page (paged_out, the server's own flag), the reader loads it, and that read fails.
+test('a failed read of "Load this step" leaves the button usable, never busy', { skip, timeout: 120_000 }, async () => {
+  const b = await withBoard({ bytes: BYTES, width: 1280, chromium: gate.chromium })
+  try {
+    let fail = false
+    const pageOut = (o) => { if (Array.isArray(o)) o.forEach(pageOut); else if (o && typeof o === 'object') { if (o.gi === 0 && 'ts' in o) o.paged_out = true; Object.values(o).forEach(pageOut) } }
+    await b.page.route((u) => new URL(u).pathname === '/api/session', async (r) => {
+      if (fail) return r.abort()
+      const res = await r.fetch(); const j = await res.json(); pageOut(j); await r.fulfill({ response: res, json: j })
+    })
+    await openBusiest(b)
+    await b.page.click('#ctxwin'); await b.page.keyboard.press('Home')
+    const btn = '#ctxwin .pobtn'
+    await b.page.waitForSelector(`${btn}:not([disabled])`)
+    fail = true
+    await b.page.click(btn)
+    await b.page.waitForSelector(`${btn}[aria-busy="true"]`) // the read is out
+    await b.page.waitForFunction((sel) => { const e = document.querySelector(sel); return e && !e.disabled && e.getAttribute('aria-busy') !== 'true' }, btn, { timeout: 10000 })
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
 
 // 2.4 · 1.5: a 「Files read」 row with a long path and a long life sentence (read at step N · removed by compaction at step M — the main
 // Mac's shape) shows the whole sentence, wrapped under the name, and the name truncated with its full text on hover. The real answer,

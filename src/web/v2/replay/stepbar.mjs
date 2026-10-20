@@ -6,7 +6,7 @@
 import { esc, kf, usd, bytes, fmtTime } from '../core/fmt.mjs'
 import { popover, menuButton, mark } from '../core/ui.mjs'
 import { cacheState, usageOf, hitRatio, isBreak, breakCost, refOf, priceMatch, costOf } from '../core/metrics.mjs'
-import { segTax, blocksOf, TAX_ORDER, hasChangeLine } from './analysis.mjs'
+import { segTax, blocksOf, TAX_ORDER, hasChangeLine, callFacts } from './analysis.mjs'
 import * as W from '../labels/replay.mjs'
 
 const modelOf = (c) => (c && c.rec && c.rec.request && c.rec.request.model) || null
@@ -150,10 +150,10 @@ export function stepBarHtml(s) {
   const evs = (s.anchor.events || []).filter((e) => e && e.type === 'user' && e.step != null)
   const ask = evs.length && call.gi != null ? evs.filter((e) => e.step <= call.gi).length : 0
   // ◐: the call-level fidelity facts (words owned by 2.3's 调用保真行; here only the mark and the server's own texts)
-  const w = call.wire || {}
-  const fidTxt = [call.reqIncomplete && call.reqIncomplete.text, call.wsIncomplete && call.wsIncomplete.text, call.respIncomplete && call.respIncomplete.text,
-    ...((w.labels || []).map((l) => l.text || l.label))].filter(Boolean).join('\n')
-  const hasFid = !!(fidTxt || w.contextState)
+  // lit iff the row has words (callFacts, one source with the row; capture routing is not a fidelity fact)
+  const fid = callFacts(call)
+  const hasFid = fid.facts.length > 0
+  const fidTxt = fid.tech.map((p) => p[1]).filter(Boolean).join('\n')
   // the 缓存对比步: the nearest earlier call of the anchor lane that did not fail (S12 will name it; same rule until then)
   const ref = refOf(s.anchor.calls, s.playhead)
   const refK = ref && ref.gi != null && isMain ? localNo(s.anchor, ref) : null
@@ -164,8 +164,8 @@ export function stepBarHtml(s) {
   return `<span class="sb-nav"><button type="button" class="sbbtn" data-step="prev" aria-label="${esc(W.STEP_PREV)}" title="${esc(W.STEP_PREV)}">‹</button>` +
     `<b class="sb-no">${esc(no)}</b>` +
     `<button type="button" class="sbbtn" data-step="next" aria-label="${esc(W.STEP_NEXT)}" title="${esc(W.STEP_NEXT)}">›</button></span>` +
-    (ask ? `<span class="sb-ask">${esc(W.askNo(ask))}</span>` : '') +
-    `<span class="sb-time">${esc(fmtTime(call.ts) || '—')}</span>` +
+    (ask ? `<span class="sb-ask" title="${esc(W.askNo(ask))}">${esc(W.askNo(ask))}</span>` : '') +
+    `<span class="sb-time" title="${esc(call.ts || '')}">${esc(fmtTime(call.ts) || '—')}</span>` +
     `<span class="sb-model"${model ? ` title="${esc(model)}"` : ''}>${esc(model || '—')}</span>` +
     (hasFid ? `<span class="sb-fid">${mark('part', fidTxt || undefined)}</span>` : '') +
     `<span class="spacer"></span>` +

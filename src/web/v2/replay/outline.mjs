@@ -100,13 +100,15 @@ export function outlineHtml(s) {
 export function renderOutline(el, s) { el.innerHTML = outlineHtml(s) }
 
 // ── jumps ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// a jump scrolls instantly when the viewer asked the system for less motion (1.5)
+const motion = () => (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth')
 const flash = (el, ms) => { el.classList.add('hl'); setTimeout(() => el.classList.remove('hl'), ms) }
 export function jumpToAnchor(s, id) {
   let el = s.root.querySelector('#' + id)
   if (!el) return
   const win = s.root.querySelector('#ctxwin')
   if (win && openTurnOfNode(win, s, el)) { el = s.root.querySelector('#' + id); if (!el) return } // a marker in a folded turn is hidden: unfold it first
-  el.scrollIntoView({ block: 'start', behavior: 'smooth' }); flash(el, 1600)
+  el.scrollIntoView({ block: 'start', behavior: motion() }); flash(el, 1600)
 }
 export function jumpToBlockIndex(s, fi) {
   const win = s.root.querySelector('#ctxwin')
@@ -114,7 +116,7 @@ export function jumpToBlockIndex(s, fi) {
   const blk = win.querySelector(`.cblk[data-bi="${fi}"]`)
   if (!blk) return
   if (blk.classList.contains('collapsed')) toggleCtxBlock(s, blk)
-  blk.scrollIntoView({ block: 'center', behavior: 'smooth' }); flash(blk, 2000)
+  blk.scrollIntoView({ block: 'center', behavior: motion() }); flash(blk, 2000)
 }
 // open and highlight the block that carries a resource, in the step the playhead is on. Goes through the block's index so a block inside a
 // folded turn gets its turn opened first (a hidden element cannot be scrolled to).

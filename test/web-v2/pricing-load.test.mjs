@@ -7,6 +7,9 @@ import assert from 'node:assert/strict'
 import { createPricingLoader } from '../../src/web/v2/replay/pricing.mjs'
 import { costCellHtml, priceStateNote } from '../../src/web/v2/replay/stepbar.mjs'
 import { costRowHtml } from '../../src/web/v2/replay/detail.mjs'
+import { costOf, priceMatch } from '../../src/web/v2/core/metrics.mjs'
+import { run as pricingDoc } from '../../src/query/named/pricing.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
 
 const U = { read: 1e6, create: 0, fresh: 0, out: 0 }, TABLE = { opus: [15, 75, 18.75, 1.5] }
 
@@ -27,14 +30,6 @@ test('priceStateNote: empty when the table is loaded; the reason when the read f
   assert.match(priceStateNote(null, 'HTTP 500'), /HTTP 500/)
 })
 
-test('loader: a failed read keeps the reason and the NEXT load retries; a table that arrives clears the reason; a loaded table is never fetched again', async () => {
-  const answers = [{ ok: false, status: 503, error: 'HTTP 503' }, { ok: true, data: { pricing: TABLE } }]; let calls = 0
-  const L = createPricingLoader(async () => answers[calls++])
-  assert.equal(L.table(), null); assert.equal(L.err(), null)
-  assert.equal(await L.load(), true); assert.equal(L.table(), null); assert.equal(L.err(), 'HTTP 503')
-  assert.equal(await L.load(), true); assert.deepEqual(L.table(), TABLE); assert.equal(L.err(), null); assert.equal(calls, 2)
-  assert.equal(await L.load(), false); assert.equal(calls, 2, 'loaded: no more requests')
-})
 test('loader: the same failure again is not a change (the raw panel is not repainted every poll); a throw is a failure with its message; overlap does not double-fetch', async () => {
   let calls = 0
   const L = createPricingLoader(async () => { calls++; return { ok: false, error: 'HTTP 500' } })
@@ -52,4 +47,21 @@ test('loader: an answer that is ok but not a table is a failure, not an empty ta
   }
   let calls = 0; const L = createPricingLoader(async () => { calls++ }, TABLE)
   assert.equal(await L.load(), false); assert.equal(calls, 0); assert.equal(L.table(), TABLE)
+})
+
+test('loader (V01): the server\'s models[] document becomes a table that prices a call; a loaded table is not fetched again', async () => {
+  const doc = await pricingDoc({ home: tmpDir(), env: {} }); let calls = 0
+  const L = createPricingLoader(async () => { calls++; return { ok: true, status: 200, data: doc } })
+  await L.load()
+  assert.ok(L.table()); assert.equal(L.err(), null)
+  const m = priceMatch(L.table(), doc.models[0].model)
+  const usd = costOf(m && m.row, { read: 1e6, create: 0, fresh: 0, out: 0 })
+  assert.ok(Number.isFinite(usd) && usd > 0, String(usd))
+  await L.load(); assert.equal(calls, 1)
+})
+test('loader: an ok answer without models[] is a failure, and the next load asks again', async () => {
+  let calls = 0
+  const L = createPricingLoader(async () => { calls++; return { ok: true, status: 200, data: { source: 'x' } } })
+  await L.load(); assert.equal(L.table(), null); assert.ok(L.err())
+  await L.load(); assert.equal(calls, 2)
 })

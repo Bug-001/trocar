@@ -135,13 +135,15 @@ export const MULTIPLE_AGENTS_TIP = 'Records of several agents share this session
 export const PROJECT = 'project'
 export const GUESS = 'inferred'
 
+// one plural rule for every count label: count(1, 'call') → '1 call', count(2, 'call') → '2 calls'
+export const count = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`
+
 // ── the 会话保真行 (1.2 §会话保真行): each fact's plain words ────────────────────────────────────────────────────────
 export const truncFact = (shown, total, fileMb) => `Showing only the latest ${shown} / ${total} calls (file ${fileMb} MB)`
 export const unknownFact = (n) => `${n} records no parser can read; not drawn`
 export const LOGGED_FACT = 'calls are log only and not in the replay ›'
 export const loggedFact = (n) => `${n} ${LOGGED_FACT}`
-export const FILES_FACT = 'capture files were not read in full; this session may be missing content ›'
-export const filesFact = (n) => `${n} ${FILES_FACT}`
+export const filesFact = (n) => `${count(n, 'capture file was', 'capture files were')} not read in full; this session may be missing content ›`
 export const GAP_FACT = 'Capture had errors in this period; calls may be missing from the range read (inferred) · capture log ›'
 
 // ── the context window (2.3): sections, block marks, the 调用保真行, the 窗口行, the 变化线, the代替态 ────────────────
@@ -191,6 +193,10 @@ export const FF_TIP = Object.freeze({
 export const INLINE_NOTE = 'This text came inline with the block; it is not cut verbatim from the raw capture'
 export const NO_BODY = 'This block has no body and no source location'
 export const FETCHING = 'Fetching…'
+// a body that is one JSON value can be read as its text: a reading aid, never the wire bytes (2.3 §block 卡 体)
+export const SHOW_DECODED = 'Show as text'
+export const SHOW_WIRE_BYTES = 'Show wire bytes'
+export const DECODED_NOTE = 'Decoded from the JSON on the wire; these are not the wire bytes.'
 export const clipNote = (n) => `…(${n} characters in total; only the first 20000 are shown)`
 // the raw panel's reply / the drawer's reply: the display clip said once, in 2.6 §A's own words (the context window's
 // blocks keep clipNote above — 2.3 K-07 pins that wording for them)
@@ -227,8 +233,11 @@ export const PAGED_TITLE = 'This step\'s content is not on the current page'
 export const PAGED_FULL = 'The full raw record is on disk'
 export const PAGED_PARTIAL = 'The captured part is on disk'
 export const LOAD_THIS_STEP = 'Load this step'
+export const LOADING_THIS_STEP = 'Loading this step…'
+export const PAGE_MISSED = 'The page that came back still did not carry this step'
 export const RETRY = 'Retry'
 export const notRefreshed = (t, why) => `Not refreshed since ${t} · ${why}`
+export const FOLLOW_PAUSED = 'Following is paused: the last read failed'
 export const UNPARSED_TITLE = 'This step\'s request could not be parsed; there is no context to show'
 export const UNPARSED_KEEP = 'The raw record is on disk, unchanged'
 export const NO_REQUEST = 'No request was captured for this step'
@@ -238,28 +247,28 @@ export const LOADING = 'Loading…'
 export const COST_LINE = '≈ cost'
 export const BUCKETS = Object.freeze({ main: 'main thread', sub: 'sub-agents', bg: 'background calls' })
 export const COST_FROM = 'from'
-export const noPriceCalls = (n) => `${n} model calls have no unit price`
+export const noPriceCalls = (n) => `${count(n, 'model call has', 'model calls have')} no unit price`
 export const NO_ANY_PRICE = 'No unit price for these models'
 export const HIT_LINE = 'Main thread cache hit'
 export const HIT_MAIN_ONLY = 'main thread only'
 export const HIT_UNMEASURED = 'cannot be computed (no usage returned)'
-export const BREAKS_LINE = (n) => `${n} cache breaks (${L.STRUCT_EST})`
+export const BREAKS_LINE = (n) => `${count(n, 'cache break')} (${L.STRUCT_EST})`
 export const BREAK_COST_LINE = '≈ extra cost'
 export const BREAK_COST_SOME = (n) => `${n} of them cannot be computed`
 export const WORST_AT = (n) => `Most expensive at step ${n} ›`
-export const FAILED_LINE = (n) => `${n} failed calls ›`
+export const FAILED_LINE = (n) => `${count(n, 'failed call')} ›`
 export const COMPACTION_LINE = (n) => `${n} compactions`
-export const COUNTS_LINE = { sub: (n) => `${n} sub-agents`, bg: (n) => `${n} background calls`, probe: (n) => `${n} token counts` }
+export const COUNTS_LINE = { sub: (n) => count(n, 'sub-agent'), bg: (n) => count(n, 'background call'), probe: (n) => count(n, 'token count') }
 export const START_LINE = 'Started'
 export const DURATION_WORD = 'Duration'
 export const SESSION_ID = 'Session id'
 export const COPY = 'Copy'
-export const TRUNCATED_NOTE = (shown) => `Counts only the ${shown} calls shown`
-export const MODEL_CALLS = (n) => `${n} model calls`
+export const TRUNCATED_NOTE = (shown) => `Counts only the ${count(shown, 'call')} shown`
+export const MODEL_CALLS = (n) => count(n, 'model call')
 
 // ── the trace (1.3): the problem lane, the cache band's four states, the view switch, the overlay rows ───────────────
 export const PROBLEM_ROW = 'Problems'
-export const problemPager = (k, n) => (n ? `Problem ${k == null ? '—' : k}/${n}` : 'Problems')
+export const problemPager = (k, n) => (!n ? 'Problems' : k == null ? count(n, 'problem') : `Problem ${k}/${n}`)
 export const PROBLEM_PREV = 'Previous problem'
 export const PROBLEM_NEXT = 'Next problem'
 export const breakFlagTip = (n, costW, struct) => `Cache break at step ${n} · ${costW}` + (struct ? ` · ${L.STRUCT_EST}` : '')
@@ -279,17 +288,17 @@ export const VIEW_CTX = 'Context size'
 export const VIEW_COST = 'Cost'
 export const COMP_LEGEND = 'colour = content type (estimated from content size)'
 export const COST_LEGEND = 'bar height = estimated cost of the step (usage × unit price) · hatched = cannot be computed'
-export const showSteps = (a, b) => `Showing steps ${a}–${b}`
+export const showSteps = (a, b) => (a === b ? `Showing step ${a}` : `Showing steps ${a}–${b}`)
 export const noMainLane = (laneW) => `This session has no main thread; the timeline follows the ${laneW} calls`
 export const ONLY_MAIN = 'This session has only the main thread'
 export const peakCtx = (v) => `${v} tok` // kf() bakes the number; the peak is the main lane's real total_input
 export const askScaleTip = (k, preview) => `Prompt ${k}` + (preview ? ` ${preview}` : '')
 // the overlay rows' names (2.1 / 1.3): the counts are the full truth, never the drawn ticks
-export const SUBAGENT_ROW = (n) => `${n} sub-agents`
-export const BG_ROW = (n) => `${n} background calls`
-export const TC_ROW = (n) => `${n} token counts`
-export const laneTimes = (word, n) => `${word} · ${n} calls`
-export const callsWord = (n) => `${n} calls`
+export const SUBAGENT_ROW = (n) => count(n, 'sub-agent')
+export const BG_ROW = (n) => count(n, 'background call')
+export const TC_ROW = (n) => count(n, 'token count')
+export const laneTimes = (word, n) => `${word} · ${count(n, 'call')}`
+export const callsWord = (n) => count(n, 'call')
 export const TC_SAMPLED_TIP = (m, n) => `${m} of ${n} drawn; clicking anywhere opens the nearest one`
 export const TC_NO_SIZE = (j) => `${j} of them returned no size and are not drawn`
 export const FLAGGED_WORD = 'flagged a problem' // S13 landed: flagged === true draws a mark on the collapsed 后台调用 row

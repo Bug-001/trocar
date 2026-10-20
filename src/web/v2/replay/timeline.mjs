@@ -14,6 +14,8 @@ import { CT_ORDER, callComp, hitTier } from './analysis.mjs'
 import { anchorJump } from './jump.mjs'
 import { laneWord } from '../labels/replay.mjs'
 import * as W from '../labels/replay.mjs'
+// the composition colours' keys, in the bars' stacking order: [class suffix, word]
+const BAR_KEYS = [['tools', 'tools'], ['system', 'system'], ['user', 'messages'], ['assistant', 'reply'], ['thinking', 'thinking'], ['tool_use', 'tool call'], ['tool_result', 'tool result']]
 
 export const OVW_BARCAP = 60
 const q = (el, sel) => el.querySelector(sel)
@@ -83,7 +85,8 @@ function problemRowHtml(s, { lo, hi }) {
       cells[i - lo] = `<span class="pxmark" data-i="${i}" role="button" tabindex="0" title="${esc(W.failTip(n, msg))}">×</span>`
       continue
     }
-    if (c.compaction) { cells[i - lo] = `<span class="pcompact${c.compactionInferred ? ' inf' : ''}" data-i="${i}" role="button" tabindex="0" title="${esc(W.compactTip(n, c.compactionInferred))}">${esc(W.COMPACT_WORD)}${c.compactionInferred ? '·' + esc(W.GUESS) : ''}</span>`; continue } // neutral, not a flag
+    // neutral, not a flag: a small mark with no text of its own; the word rides the hover and the screen-reader name
+    if (c.compaction) { const tip = `${W.COMPACT_WORD}${c.compactionInferred ? ' · ' + W.GUESS : ''} — ${W.compactTip(n, c.compactionInferred)}`; cells[i - lo] = `<span class="pcompact${c.compactionInferred ? ' inf' : ''}" data-i="${i}" role="button" tabindex="0" title="${esc(tip)}" aria-label="${esc(tip)}"></span>`; continue }
     const st = cacheState(c, refCallOf(s, i))
     if (st.isBreak) breaks.push({ i, n, usd: breakCost(c, refCallOf(s, i), priceRowOf(s, c)).usd, struct: st.state === 'changed' })
   }
@@ -96,13 +99,13 @@ function problemRowHtml(s, { lo, hi }) {
   }
   return cells.map((c) => c || '<span class="pcell"></span>').join('')
 }
-// the pager's own row: 「问题 k/n」 + ‹ › (only when there is anything to page to); k is 「—」 off a problem step
+// the pager's own row: 「问题 k/n」 + ‹ › (only when there is anything to page to); off a problem step it reads 「N 个问题」
 export function renderProblemNav(el, s) {
   const nav = q(el, '#probnav')
   if (!nav) return
   const probs = s.problems || []
   const n = probs.length
-  const k = probs.includes(s.playhead) ? String(probs.indexOf(s.playhead) + 1) : '—'
+  const k = probs.includes(s.playhead) ? String(probs.indexOf(s.playhead) + 1) : null
   nav.innerHTML = n ? `${esc(W.problemPager(k, n))} <button type="button" class="pgbtn" id="probPrev" aria-label="${esc(W.PROBLEM_PREV)}" title="${esc(W.PROBLEM_PREV)}">‹</button><button type="button" class="pgbtn" id="probNext" aria-label="${esc(W.PROBLEM_NEXT)}" title="${esc(W.PROBLEM_NEXT)}">›</button>` : esc(W.problemPager(null, 0))
 }
 // the next / previous problem step from the playhead (dir > 0 / < 0); null at the ends
@@ -149,6 +152,9 @@ export function renderSaw(el, s) {
   const isMain = s.anchor.kind === 'main'
   const win = []
   for (let i = lo; i < hi; i++) win.push([s.anchor.calls[i], i])
+  // 1.3 §窗内步少时收窄: the detail rows' lanes cap their width at this many bars (css/replay.css), together, left-aligned
+  const page = el.closest ? el.closest('#leftpage') : null
+  if (page) page.style.setProperty('--nbars', String(hi - lo))
   // the problem lane
   q(el, '#probrow').innerHTML = problemRowHtml(s, { lo, hi })
   // the main track: 上下文大小 (default) or 花费
@@ -201,11 +207,12 @@ export function renderSaw(el, s) {
   q(el, '#sawgut').innerHTML = `${esc(costView ? W.VIEW_COST : (isMain ? 'Context' : laneWord(s.anchor.kind)))} <b title="${esc(peakTip)}">${esc(peak)}</b>`
   // the legend row
   q(el, '#viewswitch').innerHTML = `<button type="button" class="segbtn${costView ? '' : ' on'}" data-view="ctx" aria-pressed="${!costView}">${esc(W.VIEW_CTX)}</button><button type="button" class="segbtn${costView ? ' on' : ''}" data-view="cost" aria-pressed="${costView}">${esc(W.VIEW_COST)}</button>`
+  q(el, '#complegend').title = costView ? W.COST_LEGEND : W.COMP_LEGEND // the legend row stays one line; a cut part keeps its words here
   q(el, '#complegend').innerHTML = costView ? `<span>${esc(W.COST_LEGEND)}</span>` :
-    `<span>${esc(W.COMP_LEGEND)}</span><span class="barlegend"><i class="ct-tools"></i>tools<i class="ct-system"></i>system<i class="ct-user"></i>messages<i class="ct-assistant"></i>reply<i class="ct-thinking"></i>thinking<i class="ct-tool_use"></i>tool call<i class="ct-tool_result"></i>tool result</span>`
+    `<span>${esc(W.COMP_LEGEND)}</span><span class="barlegend" title="${esc(BAR_KEYS.map((k) => k[1]).join(' · '))}">${BAR_KEYS.map(([c, w]) => `<i class="ct-${c}"></i>${esc(w)}`).join('')}</span>`
   q(el, '#viewrange').textContent = W.showSteps(lo + 1, hi)
   q(el, '#nomain').style.display = isMain ? 'none' : ''
-  if (!isMain) q(el, '#nomain').textContent = W.noMainLane(laneWord(s.anchor.kind))
+  if (!isMain) q(el, '#nomain').textContent = q(el, '#nomain').title = W.noMainLane(laneWord(s.anchor.kind))
   markCurrent(el, s)
 }
 
