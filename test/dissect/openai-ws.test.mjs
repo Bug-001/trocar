@@ -5,7 +5,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildWsEnvelope } from '../../src/collector/core/record/envelope.mjs';
-import { roleOf, chainPlan, stitchedRequest, locate, normRespWs, RESPONSES_WS } from '../../src/dissect/openai-ws.mjs';
+import { roleOf, chainPlan, locate, normRespWs, RESPONSES_WS } from '../../src/dissect/openai-ws.mjs';
+import { spanAt } from '../../src/dissect/json-scan.mjs';
+import { fieldTextOf } from '../../src/dissect/record-fields.mjs';
 
 const user = (t) => ({ type: 'message', role: 'user', content: [{ type: 'input_text', text: t }] });
 const out = (t) => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: t }] });
@@ -28,7 +30,9 @@ function ws({ flow = 'F1', key = 'k1', input = [], prev, generate, terminal = 'r
     flow: { id: flow, host: 'api.openai.com', scheme: 'https', dst: { address: '127.0.0.1', port: 443 }, proc: { pid: 7, exe: '/x/codex', agent: 'codex' } },
     upgrade: upgrade(key), call: { client: [JSON.stringify(body), ...extra], server, tsStart: ts, tsRespStart: ts, tsEnd: ts, partial, truncated: false } });
 }
-const items = (plan) => plan.segments.map((s) => s.item);
+const items = (ctx) => ctx.req.input;
+// the value a locator of an earlier record points at, sliced out of that record's bytes
+const at = (loc, recs) => { const r = recs.find((x) => x.id === loc.src.id); const span = spanAt(loc.node, loc.sub); const t = loc.field === 'req_body' ? r.req_body : fieldTextOf(r, loc.field).text; return JSON.parse(t.slice(span[0], span[1])); };
 
 test('W7: context(N) = stitched input(N-1) + output(N-1) + input(N), each segment located in its own record and field', () => {
   const a = ws({ input: [user('q1')], id: 'r1', output: [out('a1')] });
@@ -36,10 +40,10 @@ test('W7: context(N) = stitched input(N-1) + output(N-1) + input(N), each segmen
   const c = ws({ input: [{ type: 'function_call_output', call_id: 'k', output: 'ok' }], prev: 'r2', id: 'r3' });
   const plan = chainPlan([c, a, b]); // array order does not matter: seq orders a connection
   assert.deepEqual(items(plan.get(c)), [user('q1'), out('a1'), user('q2'), out('a2'), { type: 'function_call_output', call_id: 'k', output: 'ok' }]);
-  assert.deepEqual(plan.get(c).segments.map((s) => [s.rec.id, s.field]), [
+  assert.deepEqual(plan.get(c).segments.map((s) => [s.src.id, s.field]), [
     [a.id, 'req_body'], [a.id, 'resp.messages.1'], [b.id, 'req_body'], [b.id, 'resp.messages.1'], [c.id, 'req_body']]);
   assert.deepEqual([plan.get(a).contextState, plan.get(b).contextState, plan.get(c).contextState], ['complete', 'reconstructed', 'reconstructed']);
-  assert.equal(stitchedRequest(c, plan.get(c)).instructions, 'You are Codex.', 'instructions come from the call itself (resent every time)');
+  assert.equal(plan.get(c).req.instructions, 'You are Codex.', 'instructions come from the call itself (resent every time)');
 });
 
 test('W3: a generate:false warmup is in the chain, its role says so, and the turn after it inherits its prompt', () => {
@@ -80,7 +84,7 @@ test('only response.completed can be continued: failed, incomplete, error and cu
     const a = ws({ input: [user('q1')], id: 'r1', terminal, error });
     const b = ws({ input: [user('q2')], prev: 'r1', id: 'r2' });
     const plan = chainPlan([a, b]);
-    assert.equal(plan.get(a).responseId, null, String(terminal));
+    assert.equal(RESPONSES_WS.prepare().plan(a).responseId, null, String(terminal));
     assert.equal(plan.get(b).contextState, 'partial', String(terminal));
   }
 });
@@ -105,12 +109,17 @@ test('a string input is one user message; locate() maps each stitched block back
   const a = ws({ input: 'hello', id: 'r1', output: [out('a1')] });
   const b = ws({ input: [user('q2')], prev: 'r1', id: 'r2' });
   const plan = chainPlan([a, b]);
-  const flat = RESPONSES_WS.boardFlat(stitchedRequest(b, plan.get(b)));
+  const ctx = plan.get(b);
+  const flat = RESPONSES_WS.boardFlat(ctx.req);
   const msgs = flat.filter((x) => x.sec === 'messages');
-  assert.deepEqual(locate(msgs[0], b, plan.get(b)), { rec: a, field: 'req_body', path: ['input'] }, 'the whole string');
-  assert.deepEqual(locate(msgs[1], b, plan.get(b)), { rec: a, field: 'resp.messages.1', path: ['response', 'output', 0, 'content', 0] });
-  assert.deepEqual(locate(msgs[2], b, plan.get(b)), { rec: b, field: 'req_body', path: ['input', 0, 'content', 0] });
-  assert.deepEqual(locate(flat.find((x) => x.sec === 'system'), b, plan.get(b)), { rec: b, field: 'req_body', path: ['instructions'] });
+  const where = (blk) => { const l = locate(blk, b, ctx.segments); return [l.src.id, l.field, l.sub]; };
+  assert.deepEqual(where(msgs[0]), [a.id, 'req_body', []], 'the whole string');
+  assert.equal(at(locate(msgs[0], b, ctx.segments), [a, b]), 'hello');
+  assert.deepEqual(where(msgs[1]), [a.id, 'resp.messages.1', ['content', 0]]);
+  assert.deepEqual(at(locate(msgs[1], b, ctx.segments), [a, b]), out('a1').content[0]);
+  assert.deepEqual(where(msgs[2]), [b.id, 'req_body', ['content', 0]]);
+  assert.deepEqual(at(locate(msgs[2], b, ctx.segments), [a, b]), user('q2').content[0]);
+  assert.deepEqual(locate(flat.find((x) => x.sec === 'system'), b, ctx.segments), { rec: b, field: 'req_body', path: ['instructions'] });
 });
 
 test('roles: a non-create client message and a server message with no call open are other; a legacy 101 is a handshake', () => {

@@ -16,7 +16,7 @@
 import { boardFlat, reqCountsFor, ctxTokens, normEvents, faithfulness } from './openai.mjs';
 import { isWsHandshake } from './ws-handshake.mjs'; // not ./registry.mjs: the registry imports THIS module
 import { headerOf } from './harnesses.mjs';
-import { extendChain } from './chain.mjs';
+import { extendChain, linked, segmentsOf, segmentsIn, createLinks } from './chain.mjs';
 
 const parse = (s) => { if (typeof s !== 'string') return null; try { const v = JSON.parse(s); return v && typeof v === 'object' ? v : null; } catch { return null; } };
 const PARSED = new WeakMap();
@@ -76,66 +76,84 @@ export function roleOf(rec) {
 const connOf = (rec) => `${rec.flow_id ?? ''}|${headerOf(rec, 'sec-websocket-key') || ''}`;
 const order = (a, b) => (Number(a.seq) - Number(b.seq)) || String(a.ts_request).localeCompare(String(b.ts_request));
 
+// The segments of a call's own input: a string input is one user message, exactly as the server reads it (its bytes are the
+// whole JSON string); else one per input item. How a segment's item is taken out of its record again is made at module level,
+// so it closes over nothing of the record it came from (a closure here would keep the record alive with the segment).
+const inputString = (r) => ({ role: 'user', content: bodyOf(r).input });
+const inputAt = (i) => (r) => bodyOf(r).input[i];
+const outputAt = (j, i) => (r) => parse(serverMessages(r)[j]).response.output[i];
 function ownSegments(rec, b) {
-  // A string input is one user message, exactly as the server reads it; its bytes are the whole JSON string.
-  if (typeof b.input === 'string') return [{ rec, field: 'req_body', path: ['input'], item: { role: 'user', content: b.input }, whole: true }];
-  return (Array.isArray(b.input) ? b.input : []).map((item, i) => ({ rec, field: 'req_body', path: ['input', i], item }));
+  const seg = segmentsIn(rec, 'req_body', rec.req_body);
+  if (typeof b.input === 'string') return [seg(['input'], inputString, { whole: true })];
+  return (Array.isArray(b.input) ? b.input : []).map((_, i) => seg(['input', i], inputAt(i)));
 }
+// The segments of a completed response's output (message j of the call's server messages), or none.
+function outputSegments(rec, done) {
+  if (!done) return [];
+  const seg = segmentsIn(rec, `resp.messages.${done.j}`, serverMessages(rec)[done.j]);
+  const output = Array.isArray(done.e.response.output) ? done.e.response.output : [];
+  return output.map((_, i) => seg(['response', 'output', i], outputAt(done.j, i)));
+}
+const completed = (rec) => { const t = terminalOf(rec); return t && t.e.type === 'response.completed' && t.e.response && typeof t.e.response.id === 'string' ? t : null; };
 
-// The chain, one record at a time (the ETL reads a stream; 4.2 incremental). plan(rec) → Plan | null (not a
-// call). Plan = { role, prevId, responseId, contextState, missing, segments }; segments, in assembly order, are the
-// call's whole stitched input: { rec, field, path, item, whole? }. A connection's records MUST arrive in seq order:
-// file order gives that, since the collector writes a call's envelope when its terminal message arrives and one
-// connection carries one response at a time (a continuation read before its predecessor reads as partial).
-export function createChain() {
-  const conns = new Map(); // connOf → (response id → { plan, outputSegs }): only a response.completed can be continued
-  const plans = new WeakMap();
-  return {
-    plan(rec) {
-      if (plans.has(rec)) return plans.get(rec);
-      const role = roleOf(rec);
-      if (role !== 'call' && role !== 'warmup' && role !== 'unstored') return null;
-      const k = connOf(rec);
-      let heads = conns.get(k);
-      if (!heads) conns.set(k, (heads = new Map()));
-      if (role === 'unstored') {
-        // no input is known, so no context: partial, and a continuation of its response is partial too
-        const why = unstoredRequestOf(rec);
-        const t = terminalOf(rec);
-        const done = t && t.e.type === 'response.completed' && t.e.response && typeof t.e.response.id === 'string' ? t : null;
-        const plan = { role, prevId: null, responseId: done ? done.e.response.id : null, contextState: 'partial', missing: why, unstored: why, segments: [] };
-        plans.set(rec, plan);
-        if (done) {
-          const output = Array.isArray(done.e.response.output) ? done.e.response.output : [];
-          heads.set(plan.responseId, { plan, outputSegs: output.map((item, i) => ({ rec, field: `resp.messages.${done.j}`, path: ['response', 'output', i], item })) });
-        }
-        return plan;
-      }
+// The chain, one record at a time (the ETL reads a stream; 4.2 incremental). createChain(read) → { plan(rec), context(rec) }.
+// plan(rec) → Plan | null (not a call); Plan = { role, prevId, responseId, contextState, missing, up, own, out } (chain.mjs). A
+// connection's records MUST arrive in seq order: file order gives that, since the collector writes a call's envelope when its
+// terminal message arrives and one connection carries one response at a time (a continuation read before its predecessor
+// reads as partial). A record read back later (by id) gets the plan it was given. `read` as chain.mjs createLinks.
+export function createChain(read = null) {
+  const conns = new Map(); // connOf → (response id → plan): only a response.completed can be continued
+  const plans = new Map(); // record id (the record itself when it has none) → plan | null
+  const links = createLinks(read);
+  const keyOf = (rec) => rec.id ?? rec;
+  function plan(rec) {
+    if (plans.has(keyOf(rec))) return plans.get(keyOf(rec));
+    const role = roleOf(rec);
+    if (role !== 'call' && role !== 'warmup' && role !== 'unstored') { plans.set(keyOf(rec), null); return null; }
+    const k = connOf(rec);
+    if (!conns.has(k)) conns.set(k, new Map());
+    const heads = conns.get(k);
+    const done = completed(rec);
+    let p;
+    if (role === 'unstored') {
+      // no input is known, so no context: partial, and a continuation of its response is partial too
+      const why = unstoredRequestOf(rec);
+      p = { up: null, own: [], contextState: 'partial', missing: why, unstored: why };
+    } else {
       const b = bodyOf(rec);
       const prevId = typeof b.previous_response_id === 'string' && b.previous_response_id ? b.previous_response_id : null;
-      let segments = ownSegments(rec, b), contextState = 'complete', missing = null;
+      p = { up: null, own: ownSegments(rec, b), contextState: 'complete', missing: null };
       if (prevId) {
-        ({ segments, contextState, missing } = extendChain(heads.get(prevId) || null, segments,
-          `response ${prevId} (named by previous_response_id) is not a completed response in this capture of the connection`));
+        p = extendChain(heads.get(prevId) || null, p.own,
+          `response ${prevId} (named by previous_response_id) is not a completed response in this capture of the connection`);
         if (rec.partial === true) {
-          contextState = 'partial';
-          missing = missing || `the collector saw a gap earlier on this connection (${(rec.partial_reasons || []).join(', ') || 'partial'})`;
+          p.contextState = 'partial';
+          p.missing = p.missing || `the collector saw a gap earlier on this connection (${(rec.partial_reasons || []).join(', ') || 'partial'})`;
         }
       }
-      const t = terminalOf(rec);
-      const done = t && t.e.type === 'response.completed' && t.e.response && typeof t.e.response.id === 'string' ? t : null;
-      const plan = { role, prevId, responseId: done ? done.e.response.id : null, contextState, missing, segments };
-      plans.set(rec, plan);
-      if (done) {
-        const output = Array.isArray(done.e.response.output) ? done.e.response.output : [];
-        heads.set(plan.responseId, { plan, outputSegs: output.map((item, i) => ({ rec, field: `resp.messages.${done.j}`, path: ['response', 'output', i], item })) });
-      }
-      return plan;
+      p.prevId = prevId;
+    }
+    p = linked(Object.assign(p, { role, responseId: done ? done.e.response.id : null, out: outputSegments(rec, done) }));
+    plans.set(keyOf(rec), p);
+    if (done) heads.set(p.responseId, p);
+    links.hold(p, rec);
+    return p;
+  }
+  return {
+    plan,
+    // the request the model was given: the call's own body with `input` replaced by the stitched input; each stitched block
+    // located in the record and field its bytes came from
+    context(rec) {
+      const p = plan(rec);
+      if (!p) return null;
+      const segments = segmentsOf(p);
+      return { req: { ...(bodyOf(rec) || {}), input: links.items(p, rec) }, contextState: p.contextState, missing: p.missing, segments,
+        locate: (blk) => locate(blk, rec, segments), ...(p.unstored ? { unrenderable: p.unstored } : {}) };
     },
   };
 }
 
-// The board's batch form: every connection's records in seq order, through one chain. → Map<rec, Plan>.
+// The board's batch form: every connection's records in seq order, through one chain. → Map<rec, context>.
 export function chainPlan(records) {
   const conns = new Map();
   for (const r of records || []) {
@@ -146,24 +164,20 @@ export function chainPlan(records) {
     conns.get(k).push(r);
   }
   const chain = createChain();
-  const plans = new Map();
-  for (const recs of conns.values()) for (const r of recs.sort(order)) plans.set(r, chain.plan(r));
-  return plans;
+  const out = new Map();
+  for (const recs of conns.values()) for (const r of recs.sort(order)) out.set(r, chain.context(r));
+  return out;
 }
 
-// The request the model was given: the call's own body with `input` replaced by the stitched input.
-export function stitchedRequest(rec, plan) {
-  return { ...(bodyOf(rec) || {}), input: plan.segments.map((s) => s.item) };
-}
-
-// A board block of the stitched request → the record, field and JSON path its bytes live in.
-export function locate(block, rec, plan) {
+// A board block of the stitched request → where its bytes are: the call's own record for what is not stitched (instructions,
+// tools), else the segment's record, field and scan (`node`) with the path below it (`sub`).
+export function locate(block, rec, segments) {
   const p = Array.isArray(block && block.path) ? block.path : null;
   if (!p) return null;
   if (p[0] !== 'input') return { rec, field: 'req_body', path: p };
-  const seg = typeof p[1] === 'number' ? plan.segments[p[1]] : null;
+  const seg = typeof p[1] === 'number' ? segments[p[1]] : null;
   if (!seg) return null;
-  return { rec: seg.rec, field: seg.field, path: seg.whole ? seg.path : [...seg.path, ...p.slice(2)] };
+  return { src: seg.src, field: seg.field, node: seg.node, sub: seg.whole ? [] : p.slice(2) };
 }
 
 // The reply, from the server messages. Messages that are not JSON text ({b64}, {omitted_bytes}, a parse
@@ -176,20 +190,15 @@ export function normRespWs(rec) {
 }
 
 // The dissector object the board's flat-lane assembler calls (D25: the shared layer names no wire; the
-// registry registers this under 'openai-responses-ws'). prepare/contextOf/roleOf/laneOf/failed are the hooks a
+// registry registers this under 'openai-responses-ws'). prepare (→ a planner whose context(rec) stitches) / roleOf / laneOf / failed are the hooks a
 // wire with a cross-record context provides.
 export const RESPONSES_WS = Object.freeze({
   id: 'openai-responses-ws', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
-  createChain, stitchedRequest, locate, roleOf,
+  roleOf,
   consumedBody: ['type', 'model', 'stream', 'instructions', 'tools', 'input', 'previous_response_id', 'generate'],
   faithfulnessOf: (b) => faithfulness(b && b.block),
   // one record at a time, in step order: a connection's calls are sequential, so step order is its seq order
-  prepare: () => { const c = createChain(); return { get: (rec) => c.plan(rec) }; },
-  contextOf: (rec, plans) => {
-    const p = plans && plans.get(rec);
-    return p ? { req: stitchedRequest(rec, p), contextState: p.contextState, missing: p.missing, locate: (b) => locate(b, rec, p),
-      ...(p.unstored ? { unrenderable: p.unstored } : {}) } : null;
-  },
+  prepare: (read) => createChain(read),
   admits: (rec) => { const r = roleOf(rec); return r === 'call' || r === 'warmup' || r === 'unstored'; },
   laneOf: (rec) => (roleOf(rec) === 'warmup' ? 'probe' : null), // W3: a warmup is lane probe, not a turn
   boardFlat: (req) => boardFlat(req),

@@ -21,7 +21,7 @@
 import { parsedRequestBody } from './request-body.mjs';
 import { isVolatile, serverEdited } from './cc.mjs';
 import { contextStateOfRequest, respIncompleteOf } from './capture-labels.mjs';
-import { extendChain } from './chain.mjs';
+import { extendSegments as extendChain } from './chain.mjs';
 
 const bodyOf = (rec) => { const b = parsedRequestBody(rec); return b && typeof b === 'object' ? b : null; };
 

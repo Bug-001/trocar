@@ -201,17 +201,17 @@ function flatRequest(d, r, ctx) {
   req.context_chars = (r.req_body || '').length; // verbatim wire byte count
   return { req, unparsed };
 }
-// The fold of one flat-lane wire (`d` = its dissector object): push(rec, gi) one call at a time in step order → { call, ctx }
+// The fold of one flat-lane wire (`d` = its dissector object): push(rec, gi) one call at a time in step order → the call
 // with the call in its META form (no blocks, `paged_out`); bodyOf() gives an in-window call its blocks back from its record.
-function flatLaneFold(d) {
-  const plans = d.prepare ? d.prepare() : null; // a wire whose context spans records (D37 ②) plans it as the calls arrive
+function flatLaneFold(d, read) {
+  const plans = d.prepare ? d.prepare(read) : null; // a wire whose context spans records (D37 ②) plans it as the calls arrive
   const calls = [];
   const prevFlatOf = new Map(); // lane kind → the last call that established a cache prefix in that lane
   const prevChainOf = new Map(); // and its resumable prefix-hash chain (prefixChain)
   const prevInfoOf = new Map(); // lane kind → { msgCount, marker } of the last parsed call: the compaction verdict's predecessor
   function push(r, gi) {
     if (!r.is_llm_call) return null;
-    const ctx = plans && d.contextOf ? d.contextOf(r, plans) : null; // { req, contextState, missing, locate }
+    const ctx = plans ? plans.context(r) : null; // { req, contextState, missing, locate }
     // the dissector's own lane (a warm-up, 3.1:37) first, else the harness table's hint (3.4: e.g. a subagent
     // header) — the rule the ETL uses too (registry.flatLaneOf); labels are server-side (invariant 3)
     const laneKind = flatLaneOf(d, r);
@@ -270,11 +270,12 @@ function flatLaneFold(d) {
     // A call that failed never established a cache prefix, so it MUST NOT become the next baseline. A call whose request
     // was not stored does (with no blocks, as in the ETL): the next call then has no known prefix to compare with.
     if (!(r.error || failed || (st != null && st !== 200))) { prevFlatOf.set(laneKind, flat); prevChainOf.set(laneKind, chain); }
-    return { call, ctx };
+    return call;
   }
   // shipped as metadata + a text_ref per block, never the body (4.2:55); a cross-record context locates each block in the
   // record and field its bytes came from
-  function bodyOf(call, r, ctx) {
+  function bodyOf(call, r) {
+    const ctx = plans ? plans.context(r) : null;
     const { req } = flatRequest(d, r, ctx);
     const flat = d.boardFlat(req, r);
     return { rec: slimRec(r), norm: d.normResp(r), nonBlockKeys: nonBlockKeysOf(r, d.id), flat: ctx ? withLocatedRefs(flat, ctx.locate, new Map()) : withPathRefs(flat, r) };
@@ -397,11 +398,13 @@ function extraMessagesOf(rec) {
     return { key: `req_extra_messages[${k}]`, chars: null, ref: null, note: `stored ${fieldTextOf(rec, field).missing.replace(/^stores \S+ as /, 'as ')}` };
   }) };
 }
-// Locators for a context assembled across records: each block's bytes live in the record and field its segment
-// came from (D37 ②), addressed by a field-qualified text_ref (4.2:40). `scans` caches each (record, field)'s
-// scanned JSON once per session. A block that cannot be addressed is shipped inline and labelled unaddressable
-// by slimBlock with the reason it could not be (invariant 4) — a field outside the 4.2:40 grammar included, so a
-// dissector's mistake labels one block instead of failing the whole session. Exported for its own test.
+// Locators for a context assembled across records: each block's bytes live in the record and field its segment came from
+// (D37 ②), addressed by a field-qualified text_ref (4.2:40). A locator is either { rec, field, path } — the record in hand, its
+// field scanned here (`scans` caches each (record, field) once) — or { src, field, node, sub } — a segment of an earlier record
+// that the dissector keeps by locator (src/dissect/chain.mjs): its source's id and stream, and the scan of its item. A block that
+// cannot be addressed is shipped inline and labelled unaddressable by slimBlock with the reason it could not be (invariant 4) —
+// a field outside the 4.2:40 grammar included, so a dissector's mistake labels one block instead of failing the whole session.
+// Exported for its own test.
 export function withLocatedRefs(flat, locateFn, scans = new Map()) {
   const rootOf = (rec, field) => {
     let m = scans.get(rec);
@@ -416,17 +419,18 @@ export function withLocatedRefs(flat, locateFn, scans = new Map()) {
   };
   return flat.map((b) => {
     const loc = locateFn(b);
-    const rec = loc && loc.rec;
-    if (!rec) return slimBlock(b, null, 'the dissector placed this block in no source record');
+    const at = loc && (loc.rec || loc.src);
+    if (!at) return slimBlock(b, null, 'the dissector placed this block in no source record');
     if (loc.why) return slimBlock(b, null, String(loc.why)); // e.g. a reply rebuilt from a stream: no single byte span
-    const base = rawRefOf(rec);
-    const of = `record ${rec.id ?? '(no id)'}`;
+    const base = loc.rec ? rawRefOf(loc.rec) : (at.id != null && at.stream ? mintRawRef(at.sid, at.stream, String(at.id)) : null);
+    const of = `record ${at.id ?? '(no id)'}`;
     if (!base) return slimBlock(b, null, `its source ${of} carries no id or stream to address`);
     if (loc.field !== 'req_body' && !TEXT_REF_FIELD.test(String(loc.field))) return slimBlock(b, null, `field "${loc.field}" of ${of} is no text_ref field segment (4.2:40)`);
-    const root = rootOf(rec, loc.field);
+    const root = loc.rec ? rootOf(loc.rec, loc.field) : loc.node;
     if (!root) return slimBlock(b, null, `field ${loc.field} of ${of} holds no JSON text`);
-    const span = spanAt(root, loc.path);
-    if (!span) return slimBlock(b, null, `path ${JSON.stringify(loc.path)} is not in field ${loc.field} of ${of}`);
+    const path = loc.rec ? loc.path : loc.sub;
+    const span = spanAt(root, path);
+    if (!span) return slimBlock(b, null, `path ${JSON.stringify(path)} is not in field ${loc.field} of ${of}`);
     return slimBlock(b, composeTextRef(base, span, loc.field));
   });
 }
@@ -486,10 +490,10 @@ function nonBlockKeysOf(rec, format) {
 // mix them). Each record goes to the fold of its own wire; every call carries the session's GLOBAL step index (the push order),
 // lanes of the same id merge, and `steps[gi]` is the call with that gi (the browser rehydrates by it). Records no dissector
 // claims are counted in `analyzed.unknown` and never rendered (3.1:58).
-export function createAssembler() {
+export function createAssembler({ read = null } = {}) {
   const folds = new Map(); // dissector object | 'analyzed' → its fold
   const unknown = [], other = []; // the facts unknownSummary reads of records no fold takes (LLM calls / the rest)
-  const src = new WeakMap(); // call → { fold, ctx }: what bodyOf() needs
+  const src = new WeakMap(); // call → the fold that assembled it
   let gi = 0;
   return {
     push(r) {
@@ -499,14 +503,14 @@ export function createAssembler() {
       const key = d || (wireFormatOf(r) === 'anthropic' ? 'analyzed' : null);
       if (!key) { (r.is_llm_call ? unknown : other).push(unknownFacts(r)); return null; }
       let f = folds.get(key);
-      if (!f) folds.set(key, (f = key === 'analyzed' ? multiLaneFold() : flatLaneFold(key)));
-      const got = f.push(r, gi);
-      if (!got) return null;
+      if (!f) folds.set(key, (f = key === 'analyzed' ? multiLaneFold(read) : flatLaneFold(key, read)));
+      const call = f.push(r, gi);
+      if (!call) return null;
       gi++;
-      src.set(got.call, { fold: f, ctx: got.ctx });
-      return got.call;
+      src.set(call, f);
+      return call;
     },
-    bodyOf(call, r) { const s = src.get(call); return s.fold.bodyOf(call, r, s.ctx); },
+    bodyOf(call, r) { return src.get(call).bodyOf(call, r); },
     finish() {
       if (!folds.size) return assembleUnknown(unknown.length ? unknown : other); // labelled, never faked
       const views = [...folds.values()].map((f) => f.finish());
@@ -564,9 +568,9 @@ function anthropicFlat(request, keyMemo) {
 // The multi-lane fold (the Anthropic wire): each record is dissected to the shape the board's block extractor reads (v0 in
 // place; D10 req_body→request), analyze()'s fold puts it in its lane, then the call is baked against its lane's previous one.
 // A call that continues a server-held thread carries only its delta: the dissector stitches its context as the calls arrive.
-function multiLaneFold() {
+function multiLaneFold(read) {
   const an = createAnalyzer();
-  const plans = MULTI_LANE_CONTEXT.prepare();
+  const plans = MULTI_LANE_CONTEXT.prepare(read);
   // Block keys of one session: the same context is re-sent every turn, so the per-text hash is asked for once per call. The
   // memo is keyed by a block's first BLK_KEY_CAP chars, so it grows with the session's distinct content, not its stored bytes.
   const keyMemo = new Map();
@@ -618,11 +622,12 @@ function multiLaneFold() {
     call.flat = []; call.nonBlockKeys = []; call.paged_out = true;
     call.rec = slimRec(call.rec);
     call.norm = { usage: call.norm.usage };
-    return { call, ctx };
+    return call;
   }
   // SHIP METADATA + A LOCATOR, NEVER THE BODY (RFC 4.2:55 「看全文=回源」 · 1.4:35 「点开惰性填正文」): the collapsed row plus a
   // text_ref; the body is fetched from the raw capture when a row is opened.
-  function bodyOf(call, r, ctx) {
+  function bodyOf(call, r) {
+    const ctx = MULTI_LANE_CONTEXT.contextOf(r, plans);
     const h = admitted(hydrateForBoard(r, ctx));
     const flat = anthropicFlat(h.request, new Map());
     return { flat: ctx ? withLocatedRefs(flat, ctx.locate, new Map()) : withRefs(flat, h), nonBlockKeys: nonBlockKeysOf(h, 'anthropic'), rec: slimRec(h), norm: normResp(h) };
