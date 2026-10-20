@@ -123,7 +123,9 @@ trocar (only what that agent is missing), and **a traffic class's level** (the s
 only). Where the board cannot make the change (not installed, or running as root), it shows no control and
 puts the command in the row's technical details. `trocar install` and `trocar uninstall` stay in the CLI: the
 board has no control for them. Replay keys: ← → (Shift: ten steps), Home, End, n / p (next / previous step with a
-problem), f (follow latest), ? (the key list), Esc. When an agent is not captured, its row says why in the same sentence `trocar status` prints in its NOTE column (one
+problem), f (follow latest), ? (the key list), Esc. Following latest keeps the newest step in view as calls arrive,
+and the context window ends with that step's reply: its text, thinking and tool calls. A refresh that fails keeps the
+last good view on screen, says it is out of date, and tries again with a growing pause. When an agent is not captured, its row says why in the same sentence `trocar status` prints in its NOTE column (one
 catalog, `src/cli/words.mjs`, a sentence for every reason).
 
 Per call, on one board: **context replay** (the full assembled request, block by block, plus the raw
@@ -182,7 +184,10 @@ What the board cannot vouch for, it labels on the call (raw panel and the top of
 Reading the records across sessions is `trocar query <name>` — the one core that reads data, of which
 the board is the HTTP shell (D59); there is no separate ETL step and no database to load. Both go through the
 daemon's query worker, which stays warm and keeps the segment index current as it captures, so a query about a
-session you are looking at answers in milliseconds. It is not a prerequisite: with no daemon — or none that answers
+session you are looking at answers in milliseconds. The worker stays warm while someone asks (an open board asks every
+1.5 s) and leaves after two minutes with nothing asked, giving its memory back; the next query starts a new one. A
+session is read call by call, so a large one loads whole within a bounded amount of memory, and one answer carries
+the message bodies of one page of steps plus a short line for every step. It is not a prerequisite: with no daemon — or none that answers
 yet — the command reads the records itself and gives the same document, only slower. Long results page with
 `--limit` and `--after <cursor>`, where the cursor is the `page.next` of the document before it.
 `trocar query traffic` is one line per agent and host, with requests and bytes sent and received (sums over
