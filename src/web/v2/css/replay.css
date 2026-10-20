@@ -275,7 +275,7 @@
   .navlife{font:inherit;font-size:9.5px;color:var(--ink-3);background:none;border:0;padding:0;cursor:pointer;flex:0 1 auto;min-width:0;text-align:left;overflow-wrap:anywhere;}
   .navlife:hover{color:var(--action);text-decoration:underline;}
   .navsince:hover{color:var(--ink);border-color:var(--ink-2);}
-  .navsub .bpbadge,.navsub .volbadge{flex:none;}
+  .navsub .bpbadge,.navsub .volbadge{flex:0 1 auto;min-width:0;max-width:100%;white-space:normal;} /* a pill longer than the panel wraps inside its row, never past the edge */
   .navsub .en{color:var(--green);} .navsub .ev{color:var(--red);}
   .navseen{display:flex;flex-wrap:wrap;gap:3px 4px;margin:2px 0 4px 14px;}
   .navchip{font-family:var(--mono);font-size:9.5px;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:0 5px;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}

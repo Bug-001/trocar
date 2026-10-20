@@ -97,3 +97,31 @@ test('Files read: a long path and a long life sentence are never cut — the lif
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
+
+// 2.4 · 1.5: the System prompt row of a block that changes every call (Claude Code's billing header) carries a pill longer than the
+// left panel is wide; it wraps inside its row and is never drawn past the panel's edge. The real answers, with such a block at the head of every step.
+test('System prompt: the "changes every call" pill stays inside the left panel', { skip, timeout: 120_000 }, async () => {
+  const b = await withBoard({ bytes: BYTES, width: 1440, chromium: gate.chromium })
+  try {
+    // a billing-header block as src/view/analyze.mjs flattens it, put at the head of every shipped step's system prompt
+    const bill = (k) => ({ sec: 'system', kind: 'system', role: 'system', label: 'billing header', text: 'x-anthropic-billing-header: cch=0', chars: 33, volatile: true, cc: null, key: `S:bill-${k}` })
+    const mark = (o) => { if (Array.isArray(o)) o.forEach(mark); else if (o && typeof o === 'object') { if (Array.isArray(o.flat) && o.flat.length) o.flat.unshift(bill(o.flat.length)); Object.values(o).forEach(mark) } }
+    await b.page.route((u) => new URL(u).pathname.startsWith('/api/'), async (r) => {
+      const res = await r.fetch()
+      if (!/json/.test(res.headers()['content-type'] || '')) return r.fulfill({ response: res })
+      const j = await res.json(); mark(j)
+      await r.fulfill({ response: res, json: j })
+    })
+    await openBusiest(b)
+    await b.page.waitForSelector('.navsub .volbadge', { timeout: 15000 })
+    const past = await b.page.evaluate(() => [...document.querySelectorAll('.navsub .volbadge')].filter((e) => e.getClientRects().length).map((e) => {
+      const r = e.getBoundingClientRect(), row = e.closest('.navsub').getBoundingClientRect()
+      return r.right > row.right + 0.5 || r.left < row.left - 0.5 ? `${Math.round(r.left)}–${Math.round(r.right)} outside ${Math.round(row.left)}–${Math.round(row.right)}` : null
+    }).filter(Boolean))
+    assert.deepEqual(past, [])
+    const F = await layoutFaults(b.page)
+    assert.deepEqual({ overlap: F.overlap, cut: F.cut, untitled: F.untitled }, { overlap: [], cut: [], untitled: [] })
+    await shoot(b.page, 'replay-volatile-pill', { width: 1440, theme: 'light' })
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
