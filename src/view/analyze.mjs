@@ -337,37 +337,54 @@ function failedCall(r) {
   return st != null && st !== 200
 }
 
-// opts.giOf(rec) → the call's GLOBAL step index when this analyzer sees only part of a session (a session
-// that mixes wire formats, src/view/assemble.mjs); undefined → the local index. It is asked about the
-// record as passed in, before any sentinel stub is made of it.
-export function analyze(records, opts = {}) {
-  // Admit on `is_llm_call` alone. Non-LLM records stay out (they carry only a response body by
-  // design — 保真边界, not a loss). Sentinels get an empty request stub so the downstream walkers
-  // never dereference a missing `.request`; `rec` here is already a view-side hydrated clone, so
-  // stubbing does not touch the raw NDJSON source truth (invariant 2).
-  const giGiven = new Map()
-  const llm = records.filter((r) => r && r.is_llm_call).map((r) => {
-    const out = isUnparsed(r)
-      ? { ...r, request: { messages: [], tools: [], system: [], message_count: 0, tool_count: 0 }, _unparsed: true }
-      : r
-    // the stub keeps the non-enumerable source-stream stamp a spread drops: its reply still needs a locator
-    if (out !== r && r._stream) Object.defineProperty(out, '_stream', { value: r._stream, enumerable: false, configurable: true })
-    const g = opts.giOf ? opts.giOf(r) : undefined
-    if (g != null) giGiven.set(out, g)
-    return out
-  })
-  llm.sort((a, b) => String(a.ts_request).localeCompare(String(b.ts_request)) || String(a.id).localeCompare(String(b.id)))
+// analyze()'s step order (ts_request, then id): every assembler folds a session in it, so a session's global step index is one sort
+// whichever wires it mixes.
+export const stepOrder = (a, b) => String(a.ts_request).localeCompare(String(b.ts_request)) || String(a.id).localeCompare(String(b.id))
+// The record analyze() reads in place of one whose request did not parse (see isUnparsed above): an empty request stub,
+// `_unparsed`, and the non-enumerable source-stream stamp a spread drops (its reply still needs a locator). The stub is a
+// view-side clone, so the raw NDJSON source truth is untouched (invariant 2). Every other record is itself.
+export function admitted(r) {
+  if (!isUnparsed(r)) return r
+  const out = { ...r, request: { messages: [], tools: [], system: [], message_count: 0, tool_count: 0 }, _unparsed: true }
+  if (r._stream) Object.defineProperty(out, '_stream', { value: r._stream, enumerable: false, configurable: true })
+  return out
+}
 
-  // ── segment into streams/lanes by lineage + role marker ─────────────────────
+// The batch form: every LLM record (non-LLM records stay out: they carry only a response body by design — 保真边界,
+// not a loss) folded in step order. opts.giOf(rec) → the call's GLOBAL step index when this analyzer sees only part of a
+// session (a session that mixes wire formats, src/view/assemble.mjs); undefined → the local index.
+export function analyze(records, opts = {}) {
+  const a = createAnalyzer()
+  for (const r of records.filter((x) => x && x.is_llm_call).sort(stepOrder)) a.push(r, opts.giOf ? opts.giOf(r) : undefined)
+  return a.finish()
+}
+
+// createAnalyzer() → { push(rec, gi) → step | null, finish() → {streams, steps, stats, lanes} }: a session folded ONE record at a
+// time, in step order (3.5 §内存有界). push() segments the call into its lane and derives the lane's events and resources from
+// it right away, so the caller may let go of the record's body once push() returned (src/view/assemble.mjs keeps only the
+// call's meta). What the fold remembers between records is per lane and small: the message count and context size of the lane's
+// last call, its resource and seen-file ledgers, tool names by id, and a subagent's first user text (for spawn linking).
+// finish() builds the document from that state WITHOUT changing it, so a fold can go on (push more) after it.
+export function createAnalyzer() {
   const streams = []
-  let mainStream = null, curSub = null, monitorStream = null
+  let mainStream = null, curSub = null, monitorStream = null, probeStream = null, prevKind = null
   const auxStreams = new Map()
   const subByKey = new Map() // one subagent stream per agent the harness names (3.4 agent-id), else per server-held thread
-  let prevKind = null
   const stepList = []
+  const toolNameById = new Map()
+  const state = new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText }
+  function mkStream(kind) {
+    const s = { id: 's' + streams.length, kind, calls: [], events: [] }
+    streams.push(s)
+    state.set(s, { resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '' })
+    return s
+  }
 
-  let probeStream = null
-  for (const r of llm) {
+  function push(rec, gi) {
+    if (!rec || !rec.is_llm_call) return null
+    // Admit on `is_llm_call` alone; an unparsed record is admitted as its sentinel stub (admitted() above)
+    const r = admitted(rec)
+    // ── segment into streams/lanes by lineage + role marker ─────────────────────
     const msgCount = r.request.message_count
     const tools = r.request.tool_count || 0
     // 3.4 lane precedence probe > monitor > aux > subagent > main, the ETL's (session-identity.mjs::lane): inside each
@@ -415,7 +432,7 @@ export function analyze(records, opts = {}) {
     const failed = failedCall(r)
     // #21: the collector's own word on WHY the stored body is incomplete (null when it is complete).
     const reqIncomplete = reqIncompleteOf(r)
-    const step = { gi: giGiven.has(r) ? giGiven.get(r) : stepList.length, id: r.id, streamId: stream.id, rec: r, norm: normResp(r),
+    const step = { gi: gi != null ? gi : stepList.length, id: r.id, streamId: stream.id, rec: r, norm: normResp(r),
       msgCount, tools, ctx: ctxTokens(r), status,
       ts: r.ts_request, compaction: false,
       unparsed: !!r._unparsed,
@@ -436,30 +453,35 @@ export function analyze(records, opts = {}) {
       chainsPrefix: !failed }
     stream.calls.push(step)
     stepList.push(step)
-  }
-  function mkStream(kind) {
-    const s = { id: 's' + streams.length, kind, calls: [], events: [], resources: [], parent: null, spawnArg: null }
-    streams.push(s)
-    return s
+    const st = state.get(stream)
+    if (stream.kind === 'subagent' && stream.calls.length === 1) {
+      const firstUser = r.request.messages.find((m) => m.role === 'user')
+      st.firstText = firstUser ? textOfMessage(firstUser).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '') : ''
+    }
+    const from = stream.events.length
+    eventsOf(stream, st, step)
+    // ── events keep their SHAPE, not a second copy of the session's text ─────────
+    //
+    // userEvents() / observationEvents() build each event around the FULL user message or the FULL tool_result. That text
+    // is the heaviest thing in a session and it is already carried, once, as blocks — so every event was a verbatim second
+    // copy, uncapped and with no locator (7.8 MB of a 10.1 MB response on a 40-call fixture, and not shrunk by paging).
+    // Nothing reads that text afterwards: spawn linking (finish) reads `input.prompt`, the board renders compaction /
+    // summarize events, which carry no `text`. Invariant 4: the body is not silently emptied — `preview` + `chars` are what
+    // the collapsed row shows anyway, and `text_omitted` states in place that the full text lives on this step's blocks (an
+    // event is derived from them and owns no byte span of its own, so there is no honest locator to mint here).
+    for (let k = from; k < stream.events.length; k++) {
+      const e = stream.events[k]
+      if (typeof e.text !== 'string') continue
+      const full = e.text
+      delete e.text
+      e.preview = full.replace(/\s+/g, ' ').trim().slice(0, 200)
+      e.chars = full.length
+      e.text_omitted = 'derived event — full text is not shipped here; read it from this step\'s blocks'
+    }
+    return step
   }
 
   // ── per stream: deltas → events + resources ─────────────────────────────────
-  const toolNameById = new Map()
-  for (const s of streams) {
-    const st = { resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null }
-    for (const step of s.calls) eventsOf(s, st, step)
-    if (EVENT_ONLY_KINDS.has(s.kind)) continue
-    s.resources = [...st.resMap.values()]
-    // "only seen" = matched paths minus anything actually opened. Dedupe absolute-vs-relative
-    // spellings of the SAME opened file (path-boundary suffix), but keep distinct-directory
-    // files that merely share a basename (src/index.js opened ≠ test/index.js seen).
-    const openedArr = [...new Set([...st.resMap.values()].filter((r) => r.kind === 'file').map((r) => r.label))]
-    const sameFile = (a, b) => a === b || a.endsWith('/' + b) || b.endsWith('/' + a)
-    s.seenFiles = [...st.seenMap.values()]
-      .filter((sf) => !openedArr.some((o) => sameFile(o, sf.path)))
-      .sort((a, b) => a.firstStep - b.firstStep || b.count - a.count)
-      .slice(0, 200)
-  }
   function eventsOf(s, st, step) {
     // monitor + aux-family lanes: no ReAct/resource extraction — just one event per call
     if (EVENT_ONLY_KINDS.has(s.kind)) {
@@ -555,87 +577,71 @@ export function analyze(records, opts = {}) {
     st.prevCount = msgs.length
   }
 
-
-  // ── link subagents to their spawning Agent/Task call ────────────────────────
-  for (const s of streams.filter((x) => x.kind === 'subagent')) {
-    const firstUser = s.calls[0]?.rec.request.messages.find((m) => m.role === 'user')
-    const firstText = firstUser ? textOfMessage(firstUser).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '') : ''
-    let best = null
-    for (const st of streams) {
-      for (const e of st.events) {
-        if (e.type !== 'spawn') continue
-        const p = (e.input?.prompt || '').slice(0, 60)
-        if (p && firstText.includes(p.slice(0, 40))) best = e
+  function finish() {
+    // ── link subagents to their spawning Agent/Task call (the last spawn event whose prompt opens the subagent's first user text)
+    const spawnOf = new Map(), childOf = new Map()
+    for (const s of streams) {
+      if (s.kind !== 'subagent') continue
+      const firstText = state.get(s).firstText
+      let best = null
+      for (const st of streams) {
+        for (const e of st.events) {
+          if (e.type !== 'spawn') continue
+          const p = (e.input?.prompt || '').slice(0, 60)
+          if (p && firstText.includes(p.slice(0, 40))) best = e
+        }
       }
+      if (best) { spawnOf.set(s, best); childOf.set(best, s.id) }
     }
-    if (best) {
-      s.parent = best.streamId
-      s.spawnArg = best.arg
-      s.spawnStep = best.step
-      best.childStreamId = s.id
-    }
-  }
-
-  // ── events keep their SHAPE, not a second copy of the session's text ─────────
-  //
-  // userEvents() / observationEvents() above build each event around the FULL user message or the
-  // FULL tool_result. That text is the heaviest thing in a session and it is already carried, once,
-  // as blocks — so every event was a verbatim second copy, uncapped and with no locator. Measured on
-  // a 40-call fixture it was 7.8 MB of a 10.1 MB response; and because events are not indexed by the
-  // page window, paging did not shrink them at all (a 10-wide window came out 1.04× a 5-wide one).
-  //
-  // Nothing reads that text after this point. Inside analyze() the only event field consulted later
-  // is `input.prompt`, for subagent spawn-linking above — which is why this runs AFTER that loop.
-  // The board renders one event kind (`grep -n '\.events' src/web/index.html` → :1739, filtered to
-  // compaction / summarize) and those carry no `text` at all.
-  //
-  // Invariant 4: the body is not silently emptied. `preview` + `chars` are what the collapsed row
-  // shows anyway, and `text_omitted` states in place that the full text lives on this step's blocks —
-  // an event is derived from them and owns no byte span of its own, so there is no honest locator to
-  // mint here.
-  for (const s of streams) {
-    for (const e of s.events) {
-      if (typeof e.text !== 'string') continue
-      const full = e.text
-      delete e.text
-      e.preview = full.replace(/\s+/g, ' ').trim().slice(0, 200)
-      e.chars = full.length
-      e.text_omitted = 'derived event — full text is not shipped here; read it from this step\'s blocks'
-    }
-  }
-
-  // ── lanes: a per-session view model the UI can tab between ───────────────────
-  const lanes = streams.slice()
-    .sort((a, b) => (LANE_ORDER[a.kind] - LANE_ORDER[b.kind]) || String(a.id).localeCompare(String(b.id)))
-    .map((s) => {
-      const giLocal = new Map(s.calls.map((c, i) => [c.gi, i]))
-      const laneId = s.kind === 'subagent' ? s.id : s.kind
-      return {
-        id: laneId, streamId: s.id, kind: s.kind, icon: LANE_META[s.kind].icon,
-        label: s.kind === 'subagent' ? `subagent: ${s.spawnArg || 'task'}` : LANE_META[s.kind].label,
-        ...(LANE_META[s.kind].note ? { note: LANE_META[s.kind].note } : null),
-        calls: s.calls, events: s.events, resources: s.resources, seenFiles: s.seenFiles || [], giLocal,
-        peakCtx: s.calls.reduce((m, c) => Math.max(m, c.ctx), 1),
-        spawnStep: s.spawnStep ?? null, parent: s.parent,
-        flagged: s.kind === 'monitor' ? s.events.filter((e) => e.flagged).length : 0,
+    const view = streams.map((s) => {
+      const st = state.get(s), b = spawnOf.get(s)
+      const out = { id: s.id, kind: s.kind, calls: [...s.calls], events: s.events.map((e) => (childOf.has(e) ? { ...e, childStreamId: childOf.get(e) } : e)),
+        resources: EVENT_ONLY_KINDS.has(s.kind) ? [] : [...st.resMap.values()], parent: b ? b.streamId : null, spawnArg: b ? b.arg : null }
+      if (!EVENT_ONLY_KINDS.has(s.kind)) {
+        // "only seen" = matched paths minus anything actually opened. Dedupe absolute-vs-relative
+        // spellings of the SAME opened file (path-boundary suffix), but keep distinct-directory
+        // files that merely share a basename (src/index.js opened ≠ test/index.js seen).
+        const openedArr = [...new Set(out.resources.filter((r) => r.kind === 'file').map((r) => r.label))]
+        const sameFile = (a, c) => a === c || a.endsWith('/' + c) || c.endsWith('/' + a)
+        out.seenFiles = [...st.seenMap.values()]
+          .filter((sf) => !openedArr.some((o) => sameFile(o, sf.path)))
+          .sort((a, c) => a.firstStep - c.firstStep || c.count - a.count)
+          .slice(0, 200)
       }
+      if (b) out.spawnStep = b.step
+      return out
     })
 
-  // NOTE: the true-order linear context (linearContext) + per-step cache-break (cacheBreak) are
-  // computed lazily by the UI for just the current + previous call — NOT precomputed for every
-  // call here — since analyze() re-runs on every poll and a session has hundreds of calls.
+    // ── lanes: a per-session view model the UI can tab between ───────────────────
+    const lanes = view.slice()
+      .sort((a, b) => (LANE_ORDER[a.kind] - LANE_ORDER[b.kind]) || String(a.id).localeCompare(String(b.id)))
+      .map((s) => {
+        const giLocal = new Map(s.calls.map((c, i) => [c.gi, i]))
+        const laneId = s.kind === 'subagent' ? s.id : s.kind
+        return {
+          id: laneId, streamId: s.id, kind: s.kind, icon: LANE_META[s.kind].icon,
+          label: s.kind === 'subagent' ? `subagent: ${s.spawnArg || 'task'}` : LANE_META[s.kind].label,
+          ...(LANE_META[s.kind].note ? { note: LANE_META[s.kind].note } : null),
+          calls: s.calls, events: s.events, resources: s.resources, seenFiles: s.seenFiles || [], giLocal,
+          peakCtx: s.calls.reduce((m, c) => Math.max(m, c.ctx), 1),
+          spawnStep: s.spawnStep ?? null, parent: s.parent,
+          flagged: s.kind === 'monitor' ? s.events.filter((e) => e.flagged).length : 0,
+        }
+      })
 
-  const stats = {
-    calls: stepList.length,
-    streams: streams.length,
-    subagents: streams.filter((s) => s.kind === 'subagent').length,
-    monitors: (streams.find((s) => s.kind === 'monitor')?.calls.length) || 0,
-    compactions: stepList.filter((s) => s.compaction).length,
-    totalIn: llm.reduce((a, r) => a + (normResp(r).usage.input_tokens || 0), 0),
-    totalOut: llm.reduce((a, r) => a + (normResp(r).usage.output_tokens || 0), 0),
-    peakCtx: stepList.reduce((a, s) => Math.max(a, s.ctx), 0),
+    const stats = {
+      calls: stepList.length,
+      streams: streams.length,
+      subagents: streams.filter((s) => s.kind === 'subagent').length,
+      monitors: (streams.find((s) => s.kind === 'monitor')?.calls.length) || 0,
+      compactions: stepList.filter((s) => s.compaction).length,
+      totalIn: stepList.reduce((a, s) => a + (s.norm.usage.input_tokens || 0), 0),
+      totalOut: stepList.reduce((a, s) => a + (s.norm.usage.output_tokens || 0), 0),
+      peakCtx: stepList.reduce((a, s) => Math.max(a, s.ctx), 0),
+    }
+    return { streams: view, steps: [...stepList], stats, lanes }
   }
-  return { streams, steps: stepList, stats, lanes }
+  return { push, finish }
 }
 
 // ── the linear context: the exact tools → system → messages sequence the model assembles ──
