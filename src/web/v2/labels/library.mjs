@@ -2,8 +2,10 @@
 // (entrypoint cli/desktop, window 24h/7d/all, sort calls): a harness-defined code never keys a word here — agent
 // names and icons come from core/chips.mjs (invariant 3). Nothing in this file is data.
 
-// ── the page head's scope control ────────────────────────────────────────────────────────────────────────────────────
-export const WINDOWS = Object.freeze({ '24h': '24 h', '7d': '7 days', all: 'All' })
+import { WINDOW_LABEL, UNTITLED } from './common.mjs'
+
+// ── the page head's scope control: the same words as the overview's ─────────────────────────────────────────────────
+export const WINDOWS = WINDOW_LABEL
 
 // ── the tool row ─────────────────────────────────────────────────────────────────────────────────────────────────────
 export const SEARCH_PLAIN = 'Search titles, projects or session ids'
@@ -38,13 +40,14 @@ export const COL_LAST = 'Last active'
 export const GROUPS = Object.freeze({ today: 'Today', yesterday: 'Yesterday', earlier: 'Earlier', none: 'No time' })
 
 // ── the title rule's three steps and their hover words (the session id rides along) ─────────────────────────────────
-export const UNTITLED = 'Untitled session'
+export { UNTITLED }
 export const titleFromAgent = (id) => `The title comes from the agent\'s own records, not from captured content · session ${id}`
 export const titleFromWire = (id) => `The title is taken from the captured requests · session ${id}`
 export const titleNoKey = (id) => `The agent gave no title · session ${id}`
 
 // ── the second line's marks (only when true / > 0; their hover words) ────────────────────────────────────────────────
 export const ENTRY = Object.freeze({ cli: 'CLI', desktop: 'desktop' })
+export const ENTRY_TIP = Object.freeze({ cli: 'Started from the command line', desktop: 'Started from the desktop app' })
 export const INFERRED_TIP = 'This agent was inferred from the request headers, not identified by its process'
 export const SYNTHESIZED = 'session boundary inferred'
 export const SYNTHESIZED_TIP = 'The requests carry no session key, so they were grouped into one session by system prompt and time. They may be merged or split wrongly'
