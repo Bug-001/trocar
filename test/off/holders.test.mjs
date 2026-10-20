@@ -129,9 +129,12 @@ for (const [label, start, inside] of [['in the earlier window', ON - 5_000_000, 
     assert.equal(sawEntry({ startedAt: start }, on), inside, 'while on (the latest window open)')
   })
 }
-test('windows: a full list makes its earliest start unknown (the safe direction); no window read nothing', () => {
+test('windows: a full list makes its earliest start unknown (the safe direction), not its end; no window read nothing', () => {
   const full = Array.from({ length: WINDOWS_MAX }, (_, i) => ({ on_at: iso(ON - (WINDOWS_MAX - i) * 2000), off_at: iso(ON - (WINDOWS_MAX - i) * 2000 + 1000) }))
-  assert.equal(sawEntry({ startedAt: 0 }, rec('agentx', { windows: full })), true)
+  const l = rec('agentx', { windows: full }), firstOff = ON - WINDOWS_MAX * 2000 + 1000
+  assert.equal(sawEntry({ startedAt: firstOff - 5_000_000 }, l), true, 'before the earliest window ended: its start is not known')
+  assert.equal(sawEntry({ startedAt: firstOff + 500 }, l), false, 'in the gap after the earliest window: the harness was off')
+  assert.equal(holdersOf({ manifest: manifest({ agentx: l }), procs: [proc(7, 'agentx', firstOff + 500)] }).length, 0, 'and it holds no door after off')
   assert.equal(sawEntry({ startedAt: ON + 5 }, { identity: identity('agentx') }), false)
   assert.equal(sawEntry({ startedAt: null }, rec('agentx')), null)
 })

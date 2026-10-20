@@ -12,12 +12,12 @@ const inWindow = (at, since, until) => at == null || ((since == null || at >= si
 export const WINDOWS_MAX = 32 // liveness.<h>.windows keeps at most this many earlier on windows (4.11 P12)
 
 /** Every on window of `l` whose entry value is the current one (4.11 P12): the earlier ones `on` kept in `windows` (the door's port and token
- *  unchanged since), then the latest [on_at, off_at) — `until` null while it is still open. A full list's earliest start is not known (null: the
- *  safe direction, one more holder). → [{ since, until }] */
+ *  unchanged since), then the latest [on_at, off_at) — `until` null while it is still open. A full list's earliest start is not known (-Infinity: the
+ *  safe direction, one more holder) — its end still is: a process started in the gap after it read no entry. → [{ since, until }] */
 export function windowsOf(l) {
   if (!l || typeof l !== 'object' || l.on_at == null) return []
   const past = (Array.isArray(l.windows) ? l.windows : []).filter((w) => w && w.on_at != null && w.off_at != null).map((w) => ({ since: msOf(w.on_at), until: msOf(w.off_at) }))
-  if (past.length >= WINDOWS_MAX) past[0].since = null
+  if (past.length >= WINDOWS_MAX) past[0].since = -Infinity
   return [...past, { since: msOf(l.on_at), until: l.off_at == null ? null : msOf(l.off_at) }]
 }
 
