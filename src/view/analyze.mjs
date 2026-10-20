@@ -361,7 +361,7 @@ export function analyze(records, opts = {}) {
   const streams = []
   let mainStream = null, curSub = null, monitorStream = null
   const auxStreams = new Map()
-  const subByLineage = new Map() // a server-held thread (r._ctx.lineage, the dissector's chain): one subagent stream each
+  const subByKey = new Map() // one subagent stream per agent the harness names (3.4 agent-id), else per server-held thread
   let prevKind = null
   const stepList = []
 
@@ -372,7 +372,7 @@ export function analyze(records, opts = {}) {
     // 3.4 lane precedence probe > monitor > aux > subagent > main, the ETL's (session-identity.mjs::lane): inside each
     // tier the harness table's hint decides first (Z-Code x-zcode-session-type, dsh origin, CC x-claude-code-agent-id,
     // a request-kind warm-up), then Claude Code's own markers
-    const hint = hintsOf(r).lane
+    const hints = hintsOf(r), hint = hints.lane
     const sub = hint === 'subagent' || isSub(r)
     // The main conversation runs on the primary (opus) model; utility calls run on a small model
     // (haiku). A tiny haiku call (≤2 msgs) is background util REGARDLESS of tool count — otherwise
@@ -394,9 +394,11 @@ export function analyze(records, opts = {}) {
       // (a call that continues a server-held thread is a turn of that thread, however small its own delta)
       const sk = auxSubkind(r, userTextOf(r))
       stream = auxStreams.get(sk) || auxStreams.set(sk, mkStream(sk)).get(sk)
-    } else if (sub && r._ctx && r._ctx.lineage) {
-      // the thread names its own chain, so interleaved subagents never share or split a stream
-      stream = subByLineage.get(r._ctx.lineage) || subByLineage.set(r._ctx.lineage, mkStream('subagent')).get(r._ctx.lineage)
+    } else if (sub && (hints.laneKey || (r._ctx && r._ctx.lineage))) {
+      // the agent's own id, or failing that the thread's chain, names the stream: interleaved subagents never share one,
+      // and an agent that starts a new thread midway stays one stream
+      const k = hints.laneKey ? 'agent:' + hints.laneKey : 'thread:' + r._ctx.lineage
+      stream = subByKey.get(k) || subByKey.set(k, mkStream('subagent')).get(k)
     } else if (sub) {
       const fresh = !curSub || msgCount <= (curSub._lastMsg ?? 0) || prevKind === 'main'
       if (fresh) curSub = mkStream('subagent')

@@ -95,3 +95,23 @@ test('system-role messages and tool_addition blocks are blocks of the context; a
   assert.equal(calls.get('M1').rec.request.tool_count, JSON.parse(s.M0.req_body).tools.length + 1);
   assert.ok(calls.get('M1').comp.tools > 0);
 });
+
+test('an agent that starts a new thread midway stays one subagent lane; another agent id is another lane', async () => {
+  const s = threadSession();
+  const sub = (id) => (r) => ({ ...r, req_headers: { ...r.req_headers, 'x-claude-code-agent-id': id } });
+  const S0 = sub('agent-s')(s.S0), S1 = sub('agent-s')(s.S1);
+  // the same agent opens a fresh thread carrying its whole history so far
+  const S2 = sub('agent-s')(record('S2', '2026-10-20T00:00:07.000Z', {
+    model: 'claude-opus-x', thread: { type: 'create' }, max_tokens: 1000, stream: true, system: JSON.parse(s.S0.req_body).system,
+    tools: JSON.parse(s.S0.req_body).tools,
+    messages: [user('subagent task: count files'), { role: 'assistant', content: [{ type: 'text', text: '2 files' }] }, user('and dirs?')],
+  }, replyOf('msg_s2', [{ type: 'text', text: '1 dir' }])));
+  const T0 = sub('agent-t')(record('T0', '2026-10-20T00:00:08.000Z', {
+    model: 'claude-opus-x', thread: { type: 'create' }, max_tokens: 1000, stream: true, system: JSON.parse(s.S0.req_body).system,
+    tools: JSON.parse(s.S0.req_body).tools, messages: [user('another task')],
+  }, replyOf('msg_t0', [{ type: 'text', text: 'ok' }])));
+  const { calls } = await board([s.M0, S0, s.M1, S1, S2, T0]);
+  assert.deepEqual(calls.get('S0').lane.calls.map((c) => c.id), ['S0', 'S1', 'S2']);
+  assert.equal(calls.get('T0').lane.kind, 'subagent');
+  assert.notEqual(calls.get('T0').lane, calls.get('S0').lane);
+});
