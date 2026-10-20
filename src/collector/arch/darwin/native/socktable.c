@@ -23,7 +23,7 @@ static const char *STATE[] = {"CLOSED", "LISTEN", "SYN_SENT", "SYN_RECEIVED", "E
                               "CLOSING", "LAST_ACK", "FIN_WAIT_2", "TIME_WAIT"};
 
 static void addr(const struct in_sockinfo *in, int local, char *out, size_t n) {
-  if (in->insi_vflag & INI_IPV4) {
+  if ((in->insi_vflag & INI_IPV4) && !(in->insi_vflag & INI_IPV6)) { // both: a dual-stack (`::`) listener, an IPv6 socket
     const struct in_addr *a = local ? &in->insi_laddr.ina_46.i46a_addr4 : &in->insi_faddr.ina_46.i46a_addr4;
     inet_ntop(AF_INET, a, out, (socklen_t)n);
   } else {
@@ -37,15 +37,21 @@ int main(int argc, char **argv) {
   int bytes = proc_listpids(PROC_UID_ONLY, getuid(), NULL, 0);
   if (bytes <= 0) { fprintf(stderr, "socktable: proc_listpids: %s\n", strerror(errno)); return 1; }
   pid_t *pids = malloc((size_t)bytes * 2); // room for processes started between the two asks
+  if (!pids) { fprintf(stderr, "socktable: out of memory\n"); return 1; }
   bytes = proc_listpids(PROC_UID_ONLY, getuid(), pids, bytes * 2);
-  if (!pids || bytes <= 0) { fprintf(stderr, "socktable: proc_listpids: %s\n", strerror(errno)); return 1; }
+  if (bytes <= 0) { fprintf(stderr, "socktable: proc_listpids: %s\n", strerror(errno)); return 1; }
   for (int i = 0; i < bytes / (int)sizeof(pid_t); i++) {
     pid_t pid = pids[i];
     if (pid <= 0) continue;
-    int sz = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
-    if (sz <= 0) continue;
-    struct proc_fdinfo *fds = malloc((size_t)sz);
-    sz = fds ? proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds, sz) : 0;
+    struct proc_fdinfo *fds = NULL;
+    int sz = 0;
+    for (int room = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0); room > 0; room *= 2) { // a list that fills the buffer may have been cut: ask again, larger
+      struct proc_fdinfo *more = realloc(fds, (size_t)room);
+      if (!more) { sz = 0; break; }
+      fds = more;
+      sz = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds, room);
+      if (sz < room) break;
+    }
     for (int j = 0; j < sz / (int)sizeof(*fds); j++) {
       if (fds[j].proc_fdtype != PROX_FDTYPE_SOCKET) continue;
       struct socket_fdinfo s;

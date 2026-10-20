@@ -243,7 +243,8 @@ export function scutilChanges({ onChange, onExit = () => {}, env = process.env, 
  * watchSystemProxy({ exec, everyMs = 5000, changes, quietMs = 30000, initial, read, onError, timers }) → { on('change', fn), off, stop(), poll(), ready, last() }
  * Reads the system proxy at once (the baseline: no event) and every `everyMs`; with `changes` (the daemon's: scutilChanges), at once on each change notice
  * and every `quietMs` besides — the notice is how a change is seen, the slow read only covers a notice that never came, and a notice watch that ended is
- * started again on that tick; a change of any of the eleven scutil keys — `ExceptionsList` by its content, only it having moved is one — or a turn to or from unreadable,
+ * started again on that tick (its end is one `helper-start-failed` to `onError` per run of failures). A read that failed is read again after `retryMs`
+ * (no notice follows a failed read, and the owner's hold is shorter than `quietMs`); a change of any of the eleven scutil keys — `ExceptionsList` by its content, only it having moved is one — or a turn to or from unreadable,
  * is one `change` event `{ before, after, changed: [scutil keys] }` (unreadable: all eleven). The model's door (arch/model-backends.mjs systemProxyWatch) hands the P7
  * chain `chainSystemProxy(last())`; this file writes nothing. `initial`: an answer the caller already has, so a change between its read and the first tick is not taken into the baseline. A read still running when the next tick comes is
  * waited for, not repeated (the CLI read is synchronous, so with the real reader it cannot overlap; the guard stays for an injected `read` that is not). 4.8 §1's helper-serial skip is not carried — darwin has no
@@ -251,7 +252,7 @@ export function scutilChanges({ onChange, onExit = () => {}, env = process.env, 
  * one more: the daemon reloads the kernel only when the recomputed answers differ from `last`, 4.8 §2.2). A listener that throws costs the others nothing and is handed to `onError`; what the read itself throws is
  * turned into an unreadable answer, except ESANDBOX, which is rethrown (off/exec.mjs). After `stop()` nothing is read and nothing is emitted.
  */
-export function watchSystemProxy({ exec = null, everyMs = 5000, changes = null, quietMs = 30_000, initial = null, read = readSystemProxy, onError = () => {}, timers = { setInterval, clearInterval } } = {}) {
+export function watchSystemProxy({ exec = null, everyMs = 5000, changes = null, quietMs = 30_000, retryMs = 2000, initial = null, read = readSystemProxy, onError = () => {}, timers = { setInterval, clearInterval, setTimeout, clearTimeout } } = {}) {
   const listeners = new Map()
   let last = initial
   let stopped = false
@@ -263,6 +264,10 @@ export function watchSystemProxy({ exec = null, everyMs = 5000, changes = null, 
     let next
     try { next = await read({ exec }) } catch (e) { if (e && e.code === 'ESANDBOX') throw e; next = unreadable(e) }
     if (stopped) return false
+    if (changes && !next.ok && !retry) { // no notice follows a read that failed: read again soon, inside the owner's hold, not a quiet tick later
+      retry = timers.setTimeout(() => { retry = null; poll() }, retryMs)
+      if (retry && retry.unref) retry.unref()
+    }
     if (last === null) { last = next; return false }
     if (sameSystemProxy(last, next)) { last = next; return false }
     const before = last
@@ -276,10 +281,17 @@ export function watchSystemProxy({ exec = null, everyMs = 5000, changes = null, 
     if (!busy) busy = once().finally(() => { busy = null })
     return busy
   }
-  let note = null
+  let note = null, retry = null, failing = false
+  const ended = (why) => { // the notice watch is gone: the slow tick reads on and starts it again; said once per run of failures (D38)
+    note = null
+    if (stopped || failing) return
+    failing = true
+    onError(Object.assign(new Error(`the system proxy's change notice (scutil) ${why}; it is read every ${quietMs / 1000} s until the notice is back`), { code: 'helper-start-failed' }))
+  }
   const listen = () => {
-    if (stopped || !changes || note) return
-    try { note = changes({ onChange: () => poll(), onExit: () => { note = null } }) } catch (e) { if (e && e.code === 'ESANDBOX') throw e; note = null; onError(e) }
+    if (stopped || !changes) return
+    if (note) { failing = false; return } // alive for a whole tick: a later end is a new failure
+    try { note = changes({ onChange: () => poll(), onExit: () => ended('ended') }) } catch (e) { if (e && e.code === 'ESANDBOX') throw e; ended(`could not start (${e && e.message ? e.message : e})`) }
   }
   listen()
   const ready = initial === null ? poll() : Promise.resolve(false)
@@ -288,7 +300,7 @@ export function watchSystemProxy({ exec = null, everyMs = 5000, changes = null, 
   return {
     on(event, fn) { listeners.set(event, [...(listeners.get(event) || []), fn]); return this },
     off(event, fn) { listeners.set(event, (listeners.get(event) || []).filter((f) => f !== fn)); return this },
-    stop() { stopped = true; timers.clearInterval(timer); if (note) note.stop() },
+    stop() { stopped = true; timers.clearInterval(timer); if (retry) timers.clearTimeout(retry); if (note) note.stop() },
     poll,
     ready,
     last: () => last,

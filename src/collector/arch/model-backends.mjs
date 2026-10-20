@@ -84,22 +84,23 @@ export async function systemProxyWatch({ up, read, io = {}, changes = null, fail
   // wrote `off -> off` and `off -> system-proxy-unreadable -> off` several times a minute).
   const word = (raw) => { const c = up.chainSystemProxy(raw); return c == null ? 'off' : c.url ? redactProxyUrl(c.url) : c.pac ? 'pac' : (c.why || 'unreadable') }
   const readable = (raw) => { const c = up.chainSystemProxy(raw); return !(c && c.ok === false) }
-  let said = word(initial), held = null
+  let said = word(initial), held = null, good = readable(initial) ? initial : null // the last reading that could be read: what the door dials while an unreadable one is held
   const say = (to) => { if (to === said) return; const from = said; said = to; recordDrift({ drift: { code: 'netenv-changed', from, to, captured: true }, h: null, desired: null, appendEvent: event }) }
   const drop = () => { if (held) { timers.clearTimeout(held); held = null } }
   watch.on('change', ({ after }) => {
     drop()
-    if (readable(after)) return say(word(after))
+    if (readable(after)) { good = after; return say(word(after)) }
     held = timers.setTimeout(() => { held = null; say(word(watch.last())) }, holdMs)
     if (held && typeof held.unref === 'function') held.unref()
   })
-  return { now: () => up.chainSystemProxy(watch.last()), poll: () => watch.poll(), stop: () => { const pending = !!held; drop(); if (pending) say(word(watch.last())); watch.stop() } } // a daemon that goes down inside the hold window still says the state it was holding (D38: no read that failed is left unsaid)
+  // `now`: while one unreadable reading is held, the last good one: one read that failed does not send the door direct around the user's proxy
+  return { now: () => up.chainSystemProxy(held && good ? good : watch.last()), poll: () => watch.poll(), stop: () => { const pending = !!held; drop(); if (pending) say(word(watch.last())); watch.stop() } } // a daemon that goes down inside the hold window still says the state it was holding (D38: no read that failed is left unsaid)
 }
 
 /** The door's readers of the world for the model collector (4.11 §1, createModelCollector): who owns a socket and that pid's facts, its env / cwd /
  *  parent (P7), how a proxy address is dialled, the system proxy now (a watcher's last read), the process table (P12). → { ownerOf, factsOf, proc,
  *  proxyOf, systemProxy, procTable, close }. Read-only, as the arch's own modules are. `io`: the OS readers only (a test's seam, 0.1 §3; the daemon's
- *  `model.io`) — `exec`, a spawnSync-shaped runner of ps / netstat / procenv (darwin) and of the process table (both); `helper`, startHelper's
+ *  `model.io`) — `exec`, a spawnSync-shaped runner of ps / socktable / procenv (darwin) and of the process table (both); `helper`, startHelper's
  *  { spawn, exe, args } (win32). Everything above them stays this function's own. */
 export async function doorPartsFor({ os, env = process.env, event = () => {}, failure = () => {}, io = {} }) {
   if (!isModelOs(os)) throw new Error(`the collector model runs on macOS and Windows, not ${os}`)
@@ -114,7 +115,7 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
     const execOf = (file, args, o = {}) => Promise.resolve(execTool(file, args, { ...o, run: runner })) // socktable races it: always a promise
     const run = { exec: runner }
     parts = { ownerOf: (q) => ownerOfSocket({ exec: execOf, ...q, onFailure: event }), factsOf: (pid) => pi.factsOfPid(pid, run), proc: { envOf: (p, n) => pi.envOf(p, n, run), cwdOf: (p) => pi.cwdOf(p, run), parentOf: (p) => pi.parentOf(p, run) }, close: () => {} }
-    watch = await systemProxyWatch({ up, read: up.readSystemProxy, io: io.exec ? { exec: io.exec } : {}, changes: io.exec ? null : up.scutilChanges, failure: (e) => failure('netenv', e), event }) // the OS's own change notice, unless a test injects the OS
+    watch = await systemProxyWatch({ up, read: up.readSystemProxy, io: io.exec ? { exec: io.exec } : {}, changes: io.exec ? null : (o) => up.scutilChanges({ ...o, env }), failure: (e) => failure('netenv', e), event }) // the OS's own change notice, unless a test injects the OS
   } else {
     // no declared registry keys (plan §E.7 ruling 4): the model reads a policy value through policy.mjs (reg.exe), not this helper
     const [{ ownerOfSocket }, pi, { startHelper, regReadAllowed }] = await Promise.all([import('./win32/socktable.mjs'), import('./win32/procinfo.mjs'), import('./win32/helper.mjs')])

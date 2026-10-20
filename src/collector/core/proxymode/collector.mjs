@@ -173,15 +173,18 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     return { ...base, decrypt: v.decrypt === true, ...(v.upstreamTrust ? { upstreamTrust: v.upstreamTrust } : {}), ...(v.decrypt === true ? {} : { skip: { not_captured: 'untrusted', reason: v.code } }) } // P11's closed code on the row (D38)
   }
 
-  /** GET /asight.pac on the auth:false door (P10): the door leg for this user's processes while its harness is on; anyone else, and every requester
-   *  after off, gets only the app's own way — never an empty answer, which would send the app direct around the user's system proxy. */
+  /** GET /asight.pac on the auth:false door (P10): the door leg for this user's processes while its harness is on; a requester whose owner could not
+   *  be read, and every requester after off, gets only the app's own way — never an empty answer, which would send the app direct around the user's
+   *  system proxy; another user's process is refused. */
   async function servePac({ peer, user, path: p }) {
     const d = doors.get(user)
     if (!d || d.auth) return null
     const { pid: q } = await ident.owningPid(peer)
     const facts = q != null ? await ident.factsCached(q) : null
-    const mine = peerAllowed({ ...(facts || {}), pid: q }, self, { record }).ok // recorded when not: the door is not offered, but the app keeps its own way (P10)
-    const m = identify(facts) || {}
+    const mine = peerAllowed({ ...(facts || {}), pid: q }, self, { record }).ok // recorded when not
+    if (!mine && facts && (facts.uid != null || facts.sid || facts.sameUser === false)) return null // another user's, for certain: refused (P10)
+    // an owner that could not be read gets the door-less PAC (the app's own way): an empty answer would send the app direct around the system proxy
+    const m = (facts && identify(facts)) || {}
     if (mine && m.reason === 'match' && onSet.has(m.agent)) seen.add({ harness: m.agent, pid: q, start: facts.startedAt ?? null }) // taking the PAC is reading the entry (P12)
     const leg = await pacLeg({ systemProxy: systemProxy(), isAsightDoor: (v) => isAsightDoorUrl(v, { ports: [...doors.values()].map((x) => x.port) }) }) // what this door dials too
     let res = { status: 404, headers: {}, body: '' }

@@ -55,3 +55,24 @@ test('scutilChanges: tells scutil to watch the proxy key on stdin, any output is
   const ended = new Promise((resolve) => scutilChanges({ env, onChange: () => {}, onExit: resolve }))
   await ended // a scutil that ends is said, so the watcher starts it again
 })
+
+test('a read that failed is read again after retryMs (no notice follows it, and the owner holds an unreadable reading for less than quietMs); a notice watch that keeps ending is said once per run of failures', async () => {
+  const box = { ok: false }, timeouts = [], errors = [], started = []
+  const changes = ({ onExit }) => { const n = { onExit, stop() {} }; started.push(n); return n }
+  const timers = { setInterval: (fn) => { timers.tick = fn; return 1 }, clearInterval: () => {}, setTimeout: (fn, ms) => { timeouts.push({ fn, ms }); return 2 }, clearTimeout: () => {} }
+  const w = watchSystemProxy({ read: async () => (box.ok ? reading(7897) : { ok: false, reason: 'timeout', detail: 'ETIMEDOUT' }), initial: reading(7897), changes, retryMs: 2000, onError: (e) => errors.push(e), timers })
+  const seen = []
+  w.on('change', (e) => seen.push([e.before.ok, e.after.ok]))
+  await w.poll()
+  assert.deepEqual(timeouts.map((t) => t.ms), [2000], 'one quick re-read is scheduled')
+  box.ok = true
+  timeouts[0].fn()
+  await w.poll()
+  assert.deepEqual(seen, [[true, false], [false, true]], 'the reading is back 2 s later, well inside the 11 s hold')
+  started[0].onExit(); timers.tick(); started[1].onExit(); timers.tick()
+  assert.deepEqual(errors.map((e) => e.code), ['helper-start-failed'], 'one record for a run of ends, not one per 30 s')
+  timers.tick() // alive for a whole tick
+  started[2].onExit()
+  assert.equal(errors.length, 2, 'an end after a healthy tick is a new failure')
+  w.stop()
+})

@@ -208,7 +208,7 @@ test('CM20 · X-Asight-Upstream counts only from a form whose hook sends it; fro
 // ---- CM19 / CM33: the PAC door ----------------------------------------------------------------------------------------------------------------------
 const pacDesc = descs.find((d) => Object.values(d.proxyMode.routes).some((r) => r.auth === false))
 const pacG = `${pacDesc.name}:${Object.entries(pacDesc.proxyMode.routes).find(([, r]) => r.auth === false)[0]}`
-test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg while on, own leg after off); another uid is refused and recorded, and its PAC fetch gets the own leg only (never an empty answer: the app would go direct around the system proxy)', async () => {
+test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg while on, own leg after off); another uid is refused and recorded; a requester whose owner cannot be read gets the own leg only (never an empty answer: the app would go direct around the system proxy)', async () => {
   const opened = []
   const { c, w, records } = await rig({ desc: pacDesc, opened, w: { pid: 77, facts: { uid: 501, startedAt: INSTALLED + 1 }, sp: { url: 'http://sys.corp:8080', bypass: [] } } })
   const { doors } = await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18103 } })
@@ -218,10 +218,13 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   const on = await c.servePac({ peer: PEER, user: pacG, path: '/asight.pac' })
   assert.equal(on.status, 200); assert.match(on.body, /PROXY 127\.0\.0\.1:18103; PROXY sys\.corp:8080/)
   w.facts = { uid: 502, startedAt: INSTALLED + 1 }
-  const other = await c.servePac({ peer: PEER, user: pacG, path: '/asight.pac' })
-  assert.equal(other.status, 200); assert.doesNotMatch(other.body, /18103/, 'no door for another user'); assert.match(other.body, /return "PROXY sys\.corp:8080"/, 'the app keeps the user\'s system proxy')
+  assert.equal(await c.servePac({ peer: PEER, user: pacG, path: '/asight.pac' }), null, 'another user, for certain: refused')
   assert.equal(await c.lookupIngress({ peer: PEER, user: pacG, target: { address: 'api.example', port: 443 } }), null, 'a CONNECT from another user is refused too')
-  assert.deepEqual(records.filter((r) => r.code === 'pac-peer-refused').length, 2)
+  w.pid = null // the owner could not be read
+  const unread = await c.servePac({ peer: PEER, user: pacG, path: '/asight.pac' })
+  assert.equal(unread.status, 200); assert.doesNotMatch(unread.body, /18103/, 'no door'); assert.match(unread.body, /return "PROXY sys\.corp:8080"/, 'the app keeps the user\'s system proxy')
+  assert.deepEqual(records.filter((r) => r.code === 'pac-peer-refused').length, 3)
+  w.pid = 77
   w.facts = { uid: 501, agent: pacDesc.name, startedAt: INSTALLED + 1 }
   w.manifest = manifestOf(pacDesc.name, { liveness: { [pacDesc.name]: { on_at: iso(INSTALLED), off_at: iso(INSTALLED + 10) } } })
   w.procs = [{ pid: 77, startedAt: INSTALLED + 1 }]
