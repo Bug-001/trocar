@@ -139,7 +139,9 @@ yet — the command reads the records itself and gives the same document, only s
 `--limit` and `--after <cursor>`, where the cursor is the `page.next` of the document before it.
 `asight query traffic` is one line per agent and host, with requests and bytes sent and received (sums over
 the calls that recorded a size, so they are a floor). `asight query overview` is the board's stats card: sessions,
-calls, bytes and token usage over a `--since` / `--until` window. `asight query calls --host <host>` lists the
+calls, bytes and token usage over a `--since` / `--until` window; its token usage comes from small per-segment
+files the query worker writes beside the index, so the first look may cover only the newest sessions
+(`usage.coverage` says how far) and later looks cover the whole window. `asight query calls --host <host>` lists the
 calls to one host, and `--ref <segment>:<line>` opens one call. Documents read from the segment index carry
 `as_of`, the time of the newest call they were counted over.
 

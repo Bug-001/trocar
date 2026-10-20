@@ -198,7 +198,7 @@ const fpDigest = (read, end) => { const h = createHash('sha256'); for (const [a,
 
 // The whole document, for a READER: everything up to the last complete mark line.
 // → { mark, records, problems } | null (no usable index).
-function readIndex(fs, file) {
+export function readIndex(fs, file, v = INDEX_V) {
   let buf;
   try { buf = fs.readFileSync(file) } catch { return null; }
   // ONE JSON.parse over the document, not one per line: a JSON line never holds a raw newline, so the document is an
@@ -213,7 +213,7 @@ function readIndex(fs, file) {
     const o = lines[i];
     if (!o || typeof o !== 'object') break;
     if (!o.m) continue;
-    if (o.v !== INDEX_V) return null;      // another format: stale, rebuilt like any stale index
+    if (o.v !== v) return null;      // another format: stale, rebuilt like any stale index
     got.mark = o.m; upTo = i;
   }
   if (!got.mark) return null;
@@ -248,7 +248,7 @@ let tmpSeq = 0; // see storeIndex: the temp name is unique per call, not only pe
 const TAIL = 64 << 10; // a mark line is a few hundred bytes: room for it plus a torn batch, and widened if not
 // The last complete mark line WITHOUT the entries, for the keeper: all it needs is where its last pass ended (and
 // what to cut back), so its CPU per pass does not grow with the segment's record count either (D62).
-function tailMark(fs, file) {
+export function tailMark(fs, file, v = INDEX_V) {
   let fd;
   try { fd = fs.openSync(file, 'r'); } catch { return null; }
   try {
@@ -268,7 +268,7 @@ function tailMark(fs, file) {
         let o;
         try { o = JSON.parse(body.subarray(at, nl)); } catch { break; }
         at = nl + 1;
-        if (o && o.m) { if (o.v !== INDEX_V) return null; found = { mark: o.m, covered: from + at }; }
+        if (o && o.m) { if (o.v !== v) return null; found = { mark: o.m, covered: from + at }; }
       }
       if (found) return found;
       if (from === 0) return null;
@@ -302,8 +302,24 @@ function fromEntries(fs, source, stored, how, entries) {
   return { records: entries.map((r) => r.entry), mark: { size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, end, lines: lineNo, fp }, bytesRead: 0, done: true };
 }
 
+// The file a segment's bytes are read from: the plaintext while it exists (4.2:30), else the sealed copy.
+export function segmentSource(home, segment, fs = nodeFs) {
+  const plainPath = path.join(rawDir(home), `${segment}.ndjson`);
+  return fs.existsSync(plainPath) ? plainPath : path.join(rawDir(home), `${segment}.sealed`);
+}
+
+// The mark of a plaintext segment covered up to byte `end` (just past line `lines`), the way a scan builds it: `size`
+// claims only what was covered, so a file that is longer reads as GROWN and resumes from `end` (usability below).
+export function plainMark(fs, source, end, lines) {
+  const fd = fs.openSync(source, 'r');
+  try {
+    const st = fs.fstatSync(fd);
+    return { size: end, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, end, lines, fp: fpDigest((a, b) => readRangeSync(fd, a, b), end) };
+  } finally { fs.closeSync(fd); }
+}
+
 // Reusable as it is (nothing changed), resumable from mark.end (appended bytes only), or neither.
-function usability(fs, source, stored) {
+export function usability(fs, source, stored) {
   if (!stored) return 'rebuild';
   const m = stored.mark;
   let st;
@@ -332,7 +348,7 @@ function sameBytesBefore(fs, source, m) {
 // after that mark (hole or garbage) is simply dead weight in the file, ignored by every reader (readIndex and
 // tailMark both stop at the last complete mark). The ANSWER stays right — the records those lost entries describe are
 // re-indexed from the segment — and the cost is that the segment reads cold until sealing rewrites its index whole.
-function storeIndex(fs, file, lines, problems, at = null) {
+export function storeIndex(fs, file, lines, problems, at = null) {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     if (at === null) {
@@ -384,9 +400,7 @@ function storeIndex(fs, file, lines, problems, at = null) {
  */
 export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null } = {}) {
   const problems = [];
-  const sealedPath = path.join(rawDir(home), `${segment}.sealed`);
-  const plainPath = path.join(rawDir(home), `${segment}.ndjson`);
-  const source = fs.existsSync(plainPath) ? plainPath : sealedPath;
+  const source = segmentSource(home, segment, fs);
   const sealed = /\.sealed$/.test(source);
   const idxFile = path.join(indexDir(home), `${segment}.json`);
   // the keeper needs the stored mark and where it ended (only it appends); a reader needs the entries behind it

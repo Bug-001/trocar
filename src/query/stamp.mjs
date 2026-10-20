@@ -8,12 +8,21 @@ import { segStamp } from './index-build.mjs';
 import { namesStamp } from './rows.mjs';
 import { classesFile, classesLog } from '../paths.mjs';
 import { pricingFile } from './named/pricing.mjs';
+import { usageFile } from './usage.mjs';
+
+const segmentsOf = ({ home, fs }) => {
+  const names = namesStamp(home, fs);
+  return { names, segs: [...new Set(names.split('\n').filter(Boolean).map((f) => f.replace(/\.(ndjson|sealed)$/, '')))] };
+};
+const corpusOf = ({ home, fs }, { names, segs }) => [names, ...segs.map((s) => segStamp(home, s, fs))];
 
 /** The segment name list + each segment's plaintext and sealed file. */
-export function corpus({ home, fs }) {
-  const names = namesStamp(home, fs);
-  const segs = [...new Set(names.split('\n').filter(Boolean).map((f) => f.replace(/\.(ndjson|sealed)$/, '')))];
-  return [names, ...segs.map((s) => segStamp(home, s, fs))];
+export const corpus = (ctx) => corpusOf(ctx, segmentsOf(ctx));
+
+/** `overview`: the corpus + each segment's usage sidecar (its coverage grows when the worker fills one, 4.2 §用量旁注). */
+export function usage(ctx) {
+  const list = segmentsOf(ctx);
+  return [...corpusOf(ctx, list), ...list.segs.map((s) => statKey(usageFile(ctx.home, s), ctx.fs))];
 }
 
 /** `classes`: the corpus + the user's table and the classification log. */
