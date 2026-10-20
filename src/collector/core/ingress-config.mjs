@@ -5,6 +5,7 @@
 // route shares its door), the ingress token and the listener token. The agents' entries hold the group ports, so a port, once given, stays until:
 //   - `uninstall` removes the file (removeIngressConfig);
 //   - `on` finds a group's port held by another socket (rebindTaken): that group gets a new port and the CLI rewrites that group's entries.
+// `boardPort` (optional) is the board's port (4.4 §Plan 「端口」): `install` chooses it once (ensureBoardPort) and every writer here keeps it.
 // The daemon never picks a port: one relaunched by its autostart unit reuses the recorded ports and records `engine-port-taken` when one is held.
 // Everything that touches the machine is injected: `isFree` / `probe`, `random`, `fs`.
 
@@ -16,6 +17,7 @@ import { randomBytes } from 'node:crypto'
 export const INGRESS_FILE = 'ingress.json'
 export const ENGINE_RANGE = Object.freeze([17990, 18989])
 export const GROUP_RANGE = Object.freeze([17991, 18989])
+export const BOARD_RANGE = Object.freeze([9800, 9899])
 const HEX32 = /^[0-9a-f]{32}$/
 
 /** Whether `port` can be bound on this machine's loopback right now, on 127.0.0.1 and (where IPv6 exists) ::1: the engine listens on both, and a kernel listener only on the first, so the stricter test serves both. */
@@ -37,7 +39,7 @@ const randomHex = (random) => random(16).toString('hex')
 /** The file's content when it is something we wrote and can be trusted (the shapes, the ranges, no port twice, two different secrets); otherwise why not. */
 function validate(j) {
   if (j === null || typeof j !== 'object' || Array.isArray(j)) return 'not-an-object'
-  const ports = [j.enginePort, ...Object.values(j.groupPorts && typeof j.groupPorts === 'object' ? j.groupPorts : { x: null })]
+  const ports = [j.enginePort, ...Object.values(j.groupPorts && typeof j.groupPorts === 'object' ? j.groupPorts : { x: null }), ...(j.boardPort === undefined ? [] : [j.boardPort])]
   if (!ports.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535)) return 'bad-port'
   if (new Set(ports).size !== ports.length) return 'duplicate-port'
   if (!HEX32.test(j.ingressToken) || !HEX32.test(j.listenerToken) || j.ingressToken === j.listenerToken) return 'bad-token'
@@ -58,7 +60,8 @@ function picker(used, isFree, random) {
     throw Object.assign(new Error(`no free port for ${what} in ${lo}-${hi}`), { code: 'EADDRINUSE' })
   }
 }
-const save = (fs, file, c) => writeAtomic(fs, file, `${JSON.stringify({ enginePort: c.enginePort, groupPorts: c.groupPorts, ingressToken: c.ingressToken, listenerToken: c.listenerToken }, null, 2)}\n`)
+const save = (fs, file, c) => writeAtomic(fs, file, `${JSON.stringify({ enginePort: c.enginePort, groupPorts: c.groupPorts, ingressToken: c.ingressToken, listenerToken: c.listenerToken, ...board(c) }, null, 2)}\n`)
+const board = (c) => (c.boardPort === undefined ? {} : { boardPort: c.boardPort })
 
 function writeAtomic(fs, file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
@@ -89,7 +92,7 @@ export async function loadIngressConfig({ dir, groups, isFree = freeOnLoopback, 
   const created = state === null
   const next = state ? { ...state, groupPorts: { ...state.groupPorts } } : { enginePort: null, groupPorts: {}, ingressToken: randomHex(random), listenerToken: randomHex(random) }
   if (next.listenerToken === next.ingressToken) next.listenerToken = `${next.listenerToken[0] === 'f' ? '0' : 'f'}${next.listenerToken.slice(1)}` // two secrets, whatever the random source does
-  const pick = picker(new Set([next.enginePort, ...Object.values(next.groupPorts)].filter((p) => p !== null)), isFree, random)
+  const pick = picker(new Set([next.enginePort, next.boardPort, ...Object.values(next.groupPorts)].filter((p) => p != null)), isFree, random)
   if (next.enginePort === null) next.enginePort = await pick(ENGINE_RANGE, 'the engine\'s ingress')
   const added = []
   for (const g of groups || []) {
@@ -98,7 +101,26 @@ export async function loadIngressConfig({ dir, groups, isFree = freeOnLoopback, 
     added.push(g)
   }
   if (created || added.length > 0) save(fs, file, next)
-  return { enginePort: next.enginePort, groupPorts: next.groupPorts, ingressToken: next.ingressToken, listenerToken: next.listenerToken, created, added, regenerated }
+  return { enginePort: next.enginePort, groupPorts: next.groupPorts, ingressToken: next.ingressToken, listenerToken: next.listenerToken, ...board(next), created, added, regenerated }
+}
+
+/**
+ * ensureBoardPort({ dir, isFree, random, fs }) → { port, created } | { error } — `install`'s choice of the board's port (4.4 §Plan 「端口」), made once:
+ * a file that has one is not written (the mtime stays); otherwise the first port of BOARD_RANGE that is free and not in the file, written beside the
+ * others (the file made by loadIngressConfig when there is none). No free port, or a file that cannot be written → `{ error }`, nothing written.
+ */
+export async function ensureBoardPort({ dir, isFree = freeOnLoopback, random = randomBytes, fs = nodeFs } = {}) {
+  try {
+    const cfg = await loadIngressConfig({ dir, isFree, random, fs })
+    if (cfg.boardPort !== undefined) return { port: cfg.boardPort, created: false }
+    const used = new Set([cfg.enginePort, ...Object.values(cfg.groupPorts)])
+    for (let port = BOARD_RANGE[0]; port <= BOARD_RANGE[1]; port++) {
+      if (used.has(port) || !(await isFree(port))) continue
+      save(fs, path.join(dir, INGRESS_FILE), { ...cfg, boardPort: port })
+      return { port, created: true }
+    }
+    return { error: `no free port for the board in ${BOARD_RANGE[0]}-${BOARD_RANGE[1]}` }
+  } catch (e) { return { error: `the board's port could not be recorded (${(e && (e.code || e.message)) || e})` } }
 }
 
 /** The read-only half: → `{ enginePort, groupPorts, ingressToken, listenerToken }` · `{ missing: true }` · `{ error }`; nothing is created. */
@@ -111,7 +133,7 @@ export function readIngressConfig({ dir, fs = nodeFs } = {}) {
   let parsed = null
   try { parsed = JSON.parse(raw) } catch { return { error: 'ingress.json is not JSON' } }
   const bad = validate(parsed)
-  return bad ? { error: `ingress.json is not what asight writes (${bad})` } : { enginePort: parsed.enginePort, groupPorts: parsed.groupPorts, ingressToken: parsed.ingressToken, listenerToken: parsed.listenerToken }
+  return bad ? { error: `ingress.json is not what asight writes (${bad})` } : { enginePort: parsed.enginePort, groupPorts: parsed.groupPorts, ingressToken: parsed.ingressToken, listenerToken: parsed.listenerToken, ...board(parsed) }
 }
 
 /** `uninstall`: the file goes (the ports and the secrets are chosen again at the next `on`). → `{ removed: true, existed }`, or `{ removed: false, reason }` when it could not be removed. */
@@ -132,14 +154,14 @@ export function removeIngressConfig({ dir, fs = nodeFs } = {}) {
  */
 export async function rebindTaken(cfg, probe, { dir, isFree = freeOnLoopback, random = randomBytes, fs = nodeFs } = {}) {
   const groupPorts = { ...cfg.groupPorts }
-  const pick = picker(new Set([cfg.enginePort, ...Object.values(groupPorts)]), isFree, random)
+  const pick = picker(new Set([cfg.enginePort, cfg.boardPort, ...Object.values(groupPorts)].filter((p) => p != null)), isFree, random)
   const rebound = []
   for (const [g, port] of Object.entries(groupPorts)) {
     if (await probe(port, g)) continue
     groupPorts[g] = await pick(GROUP_RANGE, `group ${g}`)
     rebound.push(g)
   }
-  const config = { enginePort: cfg.enginePort, groupPorts, ingressToken: cfg.ingressToken, listenerToken: cfg.listenerToken }
+  const config = { enginePort: cfg.enginePort, groupPorts, ingressToken: cfg.ingressToken, listenerToken: cfg.listenerToken, ...board(cfg) }
   if (rebound.length) save(fs, path.join(dir, INGRESS_FILE), config)
   return { config, rebound }
 }

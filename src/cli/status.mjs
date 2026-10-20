@@ -12,7 +12,8 @@ import { EXIT, newReceipt, UNDO_LINE } from '../off/schema.mjs' // the keys and 
 import { HARNESS_IDS, resolveHarnesses } from './harness-names.mjs'
 import { collectorDir, stateFile, asightHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
-import { readManifest, itemsOfPhase } from '../off/manifest.mjs'
+import { readManifest, itemsOfPhase, daemonMayStart } from '../off/manifest.mjs'
+import { readIngressConfig } from '../collector/core/ingress-config.mjs'
 import { holdersOf } from '../off/holders.mjs'
 import { daemonState } from '../off/daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
@@ -33,7 +34,7 @@ import { captureHealth } from '../health/read.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
 import { formatStatus, formatHealth, failuresBlock, statusSummary, statusDetail } from './status-text.mjs'
 import { colors, noColor, unknown as unknownText2 } from './text.mjs'
-import { failureBrief } from './words.mjs'
+import { squashed } from './words.mjs'
 import { tilde } from './receipt.mjs'
 import { isProxyMode } from '../off/mode.mjs' // proxy mode or driver mode (D47), decided in ONE place (src/cli may import src/off; the collector's copy is isModelOs)
 
@@ -114,6 +115,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   try { f.manifest = { value: readManifest(dir, fs), error: null } } catch (e) { f.manifest = { value: null, error: `${path.join(dir, 'install-manifest.json')}: ${errText(e)}` } }
   if (f.manifest.value && f.manifest.value.unsupported) { f.manifest.error = `${path.join(dir, 'install-manifest.json')} is version ${JSON.stringify(f.manifest.value.version)}, which this asight does not read`; f.manifest.value = null }
   const m = f.manifest.value
+  f.boardPort = readIngressConfig({ dir, fs }).boardPort ?? null // the board's url (C.3 `board`): install's record, read only
   const certP = installCertOf({ f, m, dir, fs, platform, home, env, deps }) // the certificate axis: its root-store read and its own import run while the harnesses are judged
   const installedIds = m ? [...new Set([...(m.entries || []), ...(m.files || [])].map((x) => x.harness).filter((h) => typeof h === 'string'))] : []
   let state = null
@@ -121,7 +123,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const fromReply = reply && reply.harnesses && typeof reply.harnesses === 'object' ? reply.harnesses : null
   const ids = [...new Set([...installedIds, ...Object.keys(state ? state.harnesses : {}), ...Object.keys(fromReply || {}), ...(names || [])])]
   const order = (id) => (HARNESS_IDS.includes(id) ? HARNESS_IDS.indexOf(id) : HARNESS_IDS.length)
-  const wanted = (names ? ids.filter((id) => names.includes(id)) : ids).sort((a, b) => order(a) - order(b) || a.localeCompare(b))
+  let wanted = (names ? ids.filter((id) => names.includes(id)) : ids).sort((a, b) => order(a) - order(b) || a.localeCompare(b))
   // the kernel and the helper, as the daemon reports them; a kernel state the daemon could not read keeps its error (the daemon's `actual: 'unknown'` carries `error` and `error_code`: R11 — the reason is not dropped on the way to 不知道)
   const kernelReason = (r) => (r.actual === 'unknown' ? `the daemon could not read the kernel state: ${r.error || 'it gave no reason'}${r.error_code && !String(r.error || '').includes(r.error_code) ? ` (${r.error_code})` : ''}` : `the daemon's reply does not say whether the kernel has this instance's link (actual: ${JSON.stringify(r.actual ?? null)})`)
   const attached = reply ? (reply.actual === 'on' ? true : reply.actual === 'off' ? false : null) : null
@@ -156,6 +158,14 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   f.matched = matched // read again by the network facts (src/netenv/facts.mjs): the processes of a harness and their start-time environment
   const negatives = new Set((reply && Array.isArray(reply.negatives) ? reply.negatives : []).map((n) => n.pid))
   const tableOf = new Map((table || []).map((p) => [p.pid, p]))
+  // with no names, every harness with a form present on this machine gets a row too, besides the ones asight's records know (1.6 §3.5, D65④):
+  // the row is where Set up and the board's on / off appear for a harness installed after asight. Proxy mode only; `on` / `off` do not read this list.
+  if (!names && isProxyMode(platform) && desc.value && daemonMayStart(m)) { // with asight not installed there is nothing to set up or turn on: the summary says so
+    try {
+      const present = await (deps.presentHarnesses || (await import('../collector/net-deps.mjs')).presentHarnesses)({ os: platform, home, env, harnesses: desc.value, fs })
+      wanted = [...new Set([...wanted, ...present])].sort((a, b) => order(a) - order(b) || a.localeCompare(b))
+    } catch (e) { rethrowSandbox(e); f.identity_error = f.identity_error || `which harnesses are on this machine could not be read (${errMessage(e)})` }
+  }
   for (const id of wanted) {
     const why = []
     const desired = fromReply && fromReply[id] ? (fromReply[id].desired === 'on' ? 'on' : 'off') : state ? (state.harnesses[id] && state.harnesses[id].desired === 'on' ? 'on' : 'off') : null
@@ -335,36 +345,43 @@ function formsOf(f) {
 }
 
 /** 附录 C.3 `failures`: how many problems, how many expected and note findings, since when and the newest — counts only real problems (§3.5) — and
- *  `groups`: the groups captureHealth already folded, refolded by code, newest first, at most GROUPS_MAX (the cut is said in `errors`). */
+ *  `groups`: what captureHealth read, folded by level + where + code (the key FAILURE_WORDS reads), each with the newest record's reason, newest first,
+ *  at most GROUPS_MAX (the cut is said in `errors`). The one fold of the document's groups: `status --failures` prints these (C.3, V92). */
 const GROUPS_MAX = 50
+const ROW = 'flow' // a connection row has no `where` of its own: FAILURE_WORDS keys its words under this one (a document field, not a flows/ record)
+const reasonText = (r) => (typeof r === 'string' && squashed(r)) || null
 function failuresOf(f) {
   const h = effectiveHealth(f).health
   if (!h) return null
   const c = h.collector || {}
-  const groups = [...(c.failures || []), ...((h.legacy && h.legacy.failures) || []), ...((h.raw && h.raw.failures) || [])]
+  const problem = (where) => (g) => {
+    const l = g.last || {}
+    // a failure event's where / code; a connection row is `flow` with its not_captured; the raw journal's op / outcome; else the event
+    const w = where || l.where || (l.event == null ? ROW : l.event)
+    return { level: 'problem', where: w, code: (l.code ?? l.not_captured ?? l.outcome ?? l.event ?? l.reason) || g.key, count: g.count || 1, first_ts: g.first_ts, last_ts: g.last_ts, agent: l.agent, reason: reasonText(l.reason ?? (l.error && l.error.message)) }
+  }
+  const groups = [...(c.failures || []).map(problem(null)), ...((h.raw && h.raw.failures) || []).map(problem('raw'))]
   const expected = Object.values(c.expected || {}).reduce((n, x) => n + (Number(x) || 0), 0)
   let latest = null
   for (const g of groups) if (String(g.last_ts || '') >= String(latest || '')) latest = g.last_ts || null
-  // the code a group's record carries: a failure's code, a connection row's not_captured (or its reason), the raw journal's outcome, else the event
-  const codeOf = (l) => (l && (l.code ?? l.not_captured ?? l.outcome ?? l.event ?? l.reason)) || null
   const parts = [
-    ...groups.map((g) => ({ code: codeOf(g.last) || g.key, level: 'problem', count: g.count || 1, first_ts: g.first_ts, last_ts: g.last_ts, agent: g.last && g.last.agent })),
-    ...Object.entries(c.expected_groups || {}).map(([code, g]) => ({ code, level: 'expected', ...g })),
+    ...groups,
+    ...Object.entries(c.expected_groups || {}).map(([code, g]) => ({ level: 'expected', where: ROW, code, ...g, reason: null })),
     // a condition holds since its record (`since`); one with neither a code nor a kind, or no time, is no group (no time is made up)
-    ...(c.conditions || []).filter((x) => (x.code || x.kind) && x.since).map((x) => ({ code: x.code || x.kind, level: 'note', count: 1, first_ts: x.since, last_ts: x.since, agent: x.agent })),
+    ...(c.conditions || []).filter((x) => (x.code || x.kind) && x.since).map((x) => ({ level: 'note', where: x.where || x.kind || null, code: x.code || x.kind, count: 1, first_ts: x.since, last_ts: x.since, agent: x.agent, reason: reasonText(x.reason) })),
   ]
   const by = new Map()
   for (const p of parts) {
-    const k = `${p.level}\u0000${p.code}`, g = by.get(k)
+    const k = `${p.level}\u0000${p.where}\u0000${p.code}`, g = by.get(k)
     const harness = HARNESS_IDS.includes(p.agent) ? p.agent : null
-    if (!g) { by.set(k, { code: p.code, level: p.level, count: p.count, first_ts: p.first_ts, last_ts: p.last_ts, harness }); continue }
+    if (!g) { by.set(k, { level: p.level, where: p.where, code: p.code, count: p.count, first_ts: p.first_ts, last_ts: p.last_ts, harness, reason: p.reason }); continue }
     g.count += p.count
     if (String(p.first_ts) < String(g.first_ts)) g.first_ts = p.first_ts
-    if (String(p.last_ts) > String(g.last_ts)) g.last_ts = p.last_ts
-    if (g.harness !== harness) g.harness = null // groups of one code from more than one harness: the group names none
+    if (String(p.last_ts) >= String(g.last_ts)) { g.last_ts = p.last_ts; g.reason = p.reason }
+    if (g.harness !== harness) g.harness = null // one group from more than one harness: the group names none
   }
   const all = [...by.values()].map(({ harness, ...g }) => (harness ? { ...g, harness } : g)).sort((a, b) => (String(a.last_ts) < String(b.last_ts) ? 1 : String(a.last_ts) > String(b.last_ts) ? -1 : 0))
-  return { problem: groups.reduce((n, g) => n + (g.count || 1), 0), expected, note: c.conditions ? c.conditions.length : 0, since: h.read && h.read.since ? h.read.since : null, latest,
+  return { problem: groups.reduce((n, g) => n + g.count, 0), expected, note: c.conditions ? c.conditions.length : 0, since: h.read && h.read.since ? h.read.since : null, latest,
     groups: all.slice(0, GROUPS_MAX), ...(all.length > GROUPS_MAX ? { groups_cut: all.length } : {}) }
 }
 
@@ -385,6 +402,37 @@ export function statusExit(f) {
   return failing ? EXIT.incomplete : EXIT.ok
 }
 
+/** C.3 `board` (1.6 §3.5): the daemon's own word on its board, from the `/status` reply this read already has (D62: no second round trip); the url from
+ *  ingress.json, never the token. What cannot be told is `unknown` with its reason, never guessed (D38). */
+function boardOf(f) {
+  const url = f.boardPort ? `http://127.0.0.1:${f.boardPort}/` : null, d = f.daemon, b = d.reply && d.reply.board
+  const say = (state, reason) => ({ state, url, reason })
+  if (f.manifest.error) return say('unknown', `the install record could not be read (${f.manifest.error})`)
+  if (!daemonMayStart(f.manifest.value)) return say('not-installed', 'asight is not installed on this machine; run: asight install')
+  if (d.state === 'not-running') return say('not-running', 'the daemon is not running; asight board starts it')
+  if (d.state !== 'running') return say('unknown', `the daemon did not answer${d.reason ? ` (${d.reason})` : ''}`)
+  if (!b || typeof b.state !== 'string') return say('unknown', 'the daemon did not say whether the board is up')
+  if (b.state === 'serving') return say('serving', null)
+  return say(b.state === 'port-taken' ? 'port-taken' : 'not-running', b.reason || `the daemon says the board is ${b.state}`)
+}
+
+/** C.3 `harnesses[h].setup` (4.11 P4b, D65④): the model's one judgement, read with the forms; driver mode (Linux) does not judge it, and what was not read is
+ *  `unknown` with its reason, never `ready` (D38). */
+function setupDocOf(f, id) {
+  const hf = f.facts && f.facts.harnesses && f.facts.harnesses[id]
+  if (hf && hf.setup) return hf.setup
+  const why = f.platform === 'linux' || (f.facts && f.facts.routing === 'driver') ? 'driver mode (Linux) does not judge setup per form; asight on works as before'
+    : `the setup of ${id} could not be read${f.topology_error ? ` (${f.topology_error})` : ''}`
+  return { state: 'unknown', missing: [], reason: why }
+}
+
+/** C.3 `health`: captureHealth's verdict over the collector and the raw layer, with only the keys C.3 names that have a value; absent when the health could not be read (1.5 K-28). */
+const HEALTH_KEYS = ['state', 'since', 'reason', 'signal', 'n', 'read_errors']
+function healthDocOf(f) {
+  const s = (effectiveHealth(f).health || {}).summary
+  return s && typeof s.state === 'string' ? Object.fromEntries(HEALTH_KEYS.filter((k) => s[k] != null).map((k) => [k, s[k]])) : null
+}
+
 /** The 附录 C.3 document of a read: `status --json` and `asight query status` print exactly this. */
 export function statusDocOf(f) {
   const d = f.daemon, forms = formsOf(f) || {}
@@ -401,15 +449,17 @@ export function statusDocOf(f) {
     // closed-set name of the question (src/health/codes.mjs DOC_WHERE); which reader could not answer it, and why, is the reason.
     ...(f.proc_asks || []).map((reason) => ({ where: 'the process table', reason: `the daemon was asked for the process facts and could not answer, so the OS was asked: ${reason}` })),
   ]
+  const health = healthDocOf(f)
   const doc = {
-    ...newReceipt('status'), ok: statusExit(f) === EXIT.ok, changed: changedOf(f),
+    ...newReceipt('status'), ok: statusExit(f) === EXIT.ok, ...(health ? { health } : {}), changed: changedOf(f),
     daemon: { running: d.state === 'running' ? true : d.state === 'not-running' ? false : null, pid: d.state === 'running' ? d.pid : null, responding: d.state === 'running' ? true : d.state === 'not-responding' ? false : null, since: (d.reply && d.reply.since) || (d.lock && d.lock.started_at) || null, error: d.reason || null },
     harnesses: Object.fromEntries(f.harnesses.map((h) => [h.id, {
       desired: h.desired ?? null, captured: h.judged.captured, reason: reasonOf(h.judged), why: h.why,
-      forms: forms[h.id] || [], processes: h.judged.rows.filter((r) => r.pid != null).map((r) => ({ pid: r.pid, name: r.name ?? null, captured: r.captured, reason: r.reason ?? null })),
+      setup: setupDocOf(f, h.id), forms: forms[h.id] || [], processes: h.judged.rows.filter((r) => r.pid != null).map((r) => ({ pid: r.pid, name: r.name ?? null, captured: r.captured, reason: r.reason ?? null })),
       ...(f.identity && f.identity[h.id] ? { identity: f.identity[h.id] } : {}),
     }])),
     ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}),
+    board: boardOf(f),
     install: f.install, cert: f.cert, holders: f.holders, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}),
     ...(f.linger ? f.linger : {}), user: f.user, agent_list: f.agent_list, restart: restartOf(f), critical: criticalOf(f), failures, errors,
   }
@@ -473,6 +523,6 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
       for (const l of statusDetail(doc, h, { finding, now, colors: c })) io.out(l)
     })
   } else for (const l of statusSummary(doc, { now, colors: c })) io.out(l)
-  if (failures) { io.out(''); for (const l of failuresBlock(effectiveHealth(f).health, { now })) io.out(l) }
+  if (failures) { io.out(''); for (const l of failuresBlock(doc.failures, effectiveHealth(f).health, { now })) io.out(l) }
   return { exit, f }
 }

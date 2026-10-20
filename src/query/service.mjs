@@ -11,16 +11,20 @@
 // that was 842-1142 ms against 548 ms locally. It answers 503 at once, which the one read client reads as "no warm
 // worker" and answers locally, at local speed; the same query line then warms a worker in the background, so the
 // next query is the warm one. "No worker while nobody queries" (D63) is untouched: nothing is forked until a query
-// arrives.
+// arrives. The board's `relay` (4.4, D66) has no local path, so it is the one caller that waits for a fork.
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { QUERY_PATH, QUERY_NAMES } from './client.mjs'
+import { OS_PROMPT_MS } from '../off/root-store.mjs'
 
 const WORKER = fileURLToPath(new URL('./worker.mjs', import.meta.url))
 /** The worker's heap bound. Measured warm on the reference dataset: RSS ~180 MB with every session of a 500 MB
  *  corpus opened, so 384 MB leaves room for one large document being serialized without ever growing without end. */
 export const WORKER_MEMORY_MB = 384
 const DEADLINE_MS = 30_000 // a worker silent this long is wedged, not slow: the queue must not be held for ever
+/** A control verb may run install's root steps (the board's Set up, 4.4 §控制面): the OS's root prompt, then its read-back, each up to OS_PROMPT_MS,
+ *  and the rest of install. A worker killed while the dialog is open would leave no receipt and the carriers unplaced. */
+const CONTROL_DEADLINE_MS = 2 * OS_PROMPT_MS + DEADLINE_MS
 const NL = 0x0a
 /** Where the bytes of a document nobody waits for go: the warm-up query's answer, and the rest of a document whose
  *  caller disconnected (its frame MUST still be read to the end, or the next reply is read as part of it). */
@@ -29,7 +33,7 @@ const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon y
 
 const forkWorker = (home) => fork(WORKER, [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: [`--max-old-space-size=${WORKER_MEMORY_MB}`] })
 
-export function createQueryService({ home, failure = () => {}, fork: spawn = forkWorker }) {
+export function createQueryService({ home, failure = () => {}, fork: spawn = forkWorker, deadlineMs = DEADLINE_MS, controlDeadlineMs = CONTROL_DEADLINE_MS }) {
   let child = null, pending = null, head = '', left = 0, stderr = '', paused = false
   let queue = Promise.resolve()
 
@@ -114,28 +118,44 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     resumeChild()
   }
 
-  const run = (line, res) => new Promise((done, fail) => {
+  const run = (line, res, ms) => new Promise((done, fail) => {
     const c = child || start()
     const p = { res, done, fail, quiet: false }
     p.timer = setTimeout(() => {
       // Still the deadline when the caller is gone (a silent worker must not hold the queue), but then it is not a
       // failure anyone asked about: no D38 record.
-      if (!p.quiet) failWorker(`the query worker did not answer within ${DEADLINE_MS} ms`)
+      if (!p.quiet) failWorker(`the query worker did not answer within ${ms} ms`)
       drop('the query worker did not answer in time')
-    }, DEADLINE_MS)
+    }, ms)
     pending = p
     c.stdin.write(line)
   })
 
   /** Fork a worker and give it this very query, with nobody waiting for the answer: the next query finds it warm. */
-  const warmUp = (line) => { const go = () => run(line, SINK); queue = queue.then(go, go).catch(() => {}) }
+  const warmUp = (line) => { const go = () => run(line, SINK, deadlineMs); queue = queue.then(go, go).catch(() => {}) }
 
-  /** GET /query?name=<name>&indent=<n>&<param>=<value> — the control plane's read route (4.6 §控制面). */
-  const route = async ({ query, res }) => {
+  const lineOf = (name, params, indent = 0) => JSON.stringify({ name, params, indent }) + '\n'
+
+  /** Hand `line` to the worker (forked if there is none: run() starts it) and let its frame flow into `res`. */
+  const answer = (line, res, ms = deadlineMs) => {
     // FIRST, before anything that can await: a caller may be gone at any moment, and the worker must survive it.
     let gone = false, finish, failRoute
     const answered = new Promise((resolve, reject) => { finish = resolve; failRoute = reject })
     res.once('close', () => { gone = true; abandon(res); finish() })
+    // The handler answers `res` itself, so the server sends nothing: nothing of this document is held in this
+    // process's memory as a JavaScript value. A request that failed does not hold the next one up, and its
+    // rejection reaches the server, which answers 500.
+    const go = () => run(line, res, ms)
+    const task = queue.then(go, go)
+    queue = task.catch(() => {})
+    // Answered as soon as EITHER the document is through or the caller is gone; a failure is raised only while there
+    // is someone to raise it to (writing a 500 into a closed socket is nobody's answer).
+    task.then(() => finish(), (e) => (gone ? finish() : failRoute(e)))
+    return answered.then(() => undefined)
+  }
+
+  /** GET /query?name=<name>&indent=<n>&<param>=<value> — the control plane's read route (4.6 §控制面). */
+  const route = async ({ query, res }) => {
     const name = query.get('name')
     if (!name) throw Object.assign(new Error('GET /query: ?name=<query name> is required'), { status: 400 })
     // The closed name set (client.mjs QUERY_NAMES), checked here: an arbitrary name used to fork a worker before the
@@ -143,24 +163,26 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     if (!QUERY_NAMES.includes(name)) throw Object.assign(new Error(`asight query: no query called ${JSON.stringify(name)} (names: ${QUERY_NAMES.join(', ')})`), { status: 400 })
     const params = {}
     for (const [k, v] of query) if (k !== 'name' && k !== 'indent') params[k] = v
-    const line = JSON.stringify({ name, params, indent: query.get('indent') || 0 }) + '\n'
+    const line = lineOf(name, params, query.get('indent') || 0)
     if (!child) { // the cold path: answered at once, warmed behind the answer (see the head of this file)
       warmUp(line)
       res.writeHead(503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(NO_WORKER) })
       res.end(NO_WORKER)
       return undefined
     }
-    // The handler answers `res` itself, so the control server sends nothing: nothing of this document is held in
-    // this process's memory as a JavaScript value. A request that failed does not hold the next one up, and its
-    // rejection reaches the control server, which answers 500 — the caller then reads locally.
-    const go = () => run(line, res)
-    const task = queue.then(go, go)
-    queue = task.catch(() => {})
-    // The route answers as soon as EITHER the document is through or the caller is gone; a failure is raised only
-    // while there is someone to raise it to (writing a 500 into a closed socket is nobody's answer).
-    task.then(() => finish(), (e) => (gone ? finish() : failRoute(e)))
-    return answered.then(() => undefined)
+    return answer(line, res)
   }
 
-  return { route, path: QUERY_PATH, stop: () => drop('the daemon is stopping') }
+  /** The board's `GET /api/<name>` (4.4, D66): the same frame path, but the board has no local path to fall back to,
+   *  so with no worker it forks one and waits its turn instead of the cold 503. The caller checked the name. */
+  const relay = ({ name, params = {}, res }) => answer(lineOf(name, params), res)
+
+  /** The board's `/control/<verb>` (4.4 §控制面): the same queue and frame path as `relay`, so a control verb waits its turn behind a query and the
+   *  worker runs the CLI's own function (src/control/board.mjs). The caller checked the verb and parsed the small request body. */
+  const control = ({ verb, body = {}, res }) => answer(JSON.stringify({ control: verb, body }) + '\n', res, controlDeadlineMs)
+
+  /** Fork a worker (if there is none) and run this query with nobody waiting: the board's page load warms it (4.4). */
+  const warm = ({ name, params = {} }) => warmUp(lineOf(name, params))
+
+  return { route, relay, control, warm, path: QUERY_PATH, stop: () => drop('the daemon is stopping') }
 }

@@ -239,9 +239,10 @@ const untrustedText = (code, last, name) => {
 }
 export function failureSentence(g) {
   const key = (g && g.key) || '', last = (g && g.last) || {}
+  const why = last.reason ?? (last.error && last.error.message) // failureBrief reads a C.3 group ({where, code, reason})
   if (key.startsWith('flow:')) {
     const nc = key.slice(5)
-    return { text: failureWord('flow', nc) ? failureBrief(g) : `not captured: ${has(NOT_CAPTURED, nc) ? NOT_CAPTURED[nc] : UNKNOWN_REASON}`, code: nc, cls: 'warn' }
+    return { text: failureWord('flow', nc) ? failureBrief({ where: 'flow', code: nc, reason: why }) : `not captured: ${has(NOT_CAPTURED, nc) ? NOT_CAPTURED[nc] : UNKNOWN_REASON}`, code: nc, cls: 'warn' }
   }
   if (key.startsWith('agent-untrusted:')) {
     const code = key.slice('agent-untrusted:'.length) || null
@@ -256,7 +257,7 @@ export function failureSentence(g) {
   // names share no word, so a `failure` event's `<where>/<code>` key cannot be confused with them.
   const [ev] = key.split('/')
   if (has(FAILURE_EVENT, ev)) return { text: FAILURE_EVENT[ev], code: ev, cls: 'warn' }
-  return { text: failureBrief(g), code: last.code ?? (key || null), cls: 'warn' }
+  return { text: failureBrief({ where: last.where || (last.code == null ? key : null), code: last.code, reason: why }), code: last.code ?? (key || null), cls: 'warn' }
 }
 
 // ── the poll of /api/capture-health (1.5 §采集状态 轮询 — the one place, so the 总览 / 采集 / 采集记录 pages cannot disagree) ──

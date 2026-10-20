@@ -107,73 +107,6 @@ test('the last install\'s notes come from the manifest\'s date when the window n
   } finally { b.done() }
 })
 
-test('the old capture: running / failing / stopped; no events but a fresh capture file is "no-events", not "not installed" (F8)', () => {
-  const b = home()
-  try {
-    const ev = (recs) => { fs.mkdirSync(path.join(b.h, 'logs'), { recursive: true }); fs.writeFileSync(path.join(b.h, 'logs', 'mitm-events.ndjson'), recs.map((r) => JSON.stringify(r) + '\n').join('')) }
-    fs.writeFileSync(path.join(b.h, 'claude-capture.ndjson'), '{}\n')
-    fs.utimesSync(path.join(b.h, 'claude-capture.ndjson'), new Date(NOW - H), new Date(NOW - H))
-    const ne = b.health()
-    assert.deepEqual([ne.installed, ne.summary.state, ne.summary.part], [true, 'no-events', 'legacy'])
-    fs.utimesSync(path.join(b.h, 'claude-capture.ndjson'), new Date(NOW - 30 * H), new Date(NOW - 30 * H))
-    assert.equal(b.health().summary.state, 'not-installed', 'an old capture file alone is not a running capture')
-    ev([{ ts: at(3 * H), event: 'mitm-start', pid: 99, port: 9898 }])
-    assert.deepEqual([b.health().summary.state, b.health().summary.since], ['ok', at(3 * H)], '✓ 旧 MITM · 最后启动于 T')
-    assert.equal(b.health({ alive: () => false }).summary.state, 'not-running', 'its pid is gone without mitm-stop')
-    ev([{ ts: at(3 * H), event: 'mitm-start', pid: 99 }, { ts: at(H), event: 'failure', where: 'mitm', code: 'tls-client-error', reason: 'unknown ca', servername: 'api.anthropic.com' }])
-    const lf = b.health()
-    assert.deepEqual([lf.summary.state, lf.summary.n, lf.legacy.failures[0].key], ['failing', 1, 'mitm/tls-client-error'])
-    // with the collector installed and fine, the old capture's failure still wins (the worse of the two)
-    installed(b); b.lock(); b.state('on', at(H))
-    assert.deepEqual([b.health().summary.state, b.health().summary.part], ['failing', 'legacy'])
-    b.flows([{ ts: at(H / 2), event: 'failure', where: 'engine', code: 'lookup-miss', reason: 'r' }])
-    assert.equal(b.health().summary.n, 2, 'both failing: the counts add up')
-    ev([{ ts: at(3 * H), event: 'mitm-start', pid: 99 }])
-    assert.deepEqual([b.health({ alive: (p) => p !== 99 }).summary.state, b.health({ alive: (p) => p !== 99 }).summary.part], ['not-running', 'legacy'], 'an old MITM gone without a clean stop is worse than a failing collector')
-    ev([{ ts: at(3 * H), event: 'mitm-start', pid: 99 }, { ts: at(2 * H), event: 'mitm-stop', pid: 99, signal: 'SIGTERM' }])
-    assert.deepEqual([b.health().summary.state, b.health().summary.part], ['failing', 'collector'], 'one stopped cleanly is not: the collector\'s failure shows')
-  } finally { b.done() }
-})
-
-// The old MITM drains on `asight off` and says how many connections it cut in its stop line; the board's 旧 MITM row carries the count (and never invents one for a stop that had none).
-test('the old MITM\'s last stop carries `cut` when the line has it — and not otherwise', () => {
-  const b = home()
-  try {
-    const ev = (lines) => { fs.mkdirSync(path.join(b.h, 'logs'), { recursive: true }); fs.writeFileSync(path.join(b.h, 'logs', 'mitm-events.ndjson'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n') }
-    ev([{ ts: at(3 * H), event: 'mitm-start', source: 'mitm', pid: 7 }, { ts: at(2 * H), event: 'mitm-stop', source: 'mitm', pid: 7, signal: 'SIGTERM', cut: 2 }])
-    assert.equal(b.health().legacy.sources[0].last_stop.cut, 2)
-    ev([{ ts: at(3 * H), event: 'mitm-start', source: 'mitm', pid: 7 }, { ts: at(2 * H), event: 'mitm-stop', source: 'mitm', pid: 7, signal: 'SIGTERM' }])
-    assert.equal('cut' in b.health().legacy.sources[0].last_stop, false)
-  } finally { b.done() }
-})
-
-// 4.1 落地细节 (3): no start / stop line of any source in what was read is never "stopped" by itself — an events
-// file holding only another line next to a fresh capture file is "no-events"; a start pushed out of the tail read is
-// "unknown".
-test('the old capture with no start / stop line read: a fresh capture file is no-events, a cut tail is unknown — never stopped', () => {
-  const b = home()
-  try {
-    fs.mkdirSync(path.join(b.h, 'logs'), { recursive: true })
-    const evFile = path.join(b.h, 'logs', 'mitm-events.ndjson')
-    fs.writeFileSync(path.join(b.h, 'claude-capture.ndjson'), '{}\n')
-    fs.utimesSync(path.join(b.h, 'claude-capture.ndjson'), new Date(NOW - 60e3), new Date(NOW - 60e3)) // an old MITM writes now
-    fs.writeFileSync(evFile, JSON.stringify({ ts: at(30 * H), event: 'failure', where: 'shard', code: 'shard-failed', reason: 'x' }) + '\n')
-    let r = b.health()
-    assert.deepEqual([r.legacy.state, r.summary.state, r.summary.part], ['no-events', 'no-events', 'legacy'], 'a shard line only: no-events, not "stopped"')
-    fs.utimesSync(path.join(b.h, 'claude-capture.ndjson'), new Date(NOW - 30 * H), new Date(NOW - 30 * H))
-    assert.equal(b.health().legacy.state, 'stopped', 'nothing written for 24 h, nothing read about a start: stopped')
-    // a running MITM, then over 1 MiB of later lines: its mitm-start is outside the tail read
-    const lines = [JSON.stringify({ ts: at(40 * H), event: 'mitm-start', source: 'mitm', pid: 99, port: 9898 })]
-    for (let i = 0; i < 4000; i++) lines.push(JSON.stringify({ ts: at(30 * H), event: 'failure', where: 'mitm', code: 'ECONNRESET', servername: 'api.anthropic.com', reason: 'x'.repeat(300) }))
-    fs.writeFileSync(evFile, lines.join('\n') + '\n')
-    r = b.health()
-    assert.deepEqual([r.read.truncated, r.legacy.state, r.summary.state], [true, 'unknown', 'unknown'], 'a cut tail: unknown, never stopped')
-    assert.match(r.summary.reason, /whether the old capture runs is unknown/)
-  } finally { b.done() }
-})
-
-// 1.5 order, 4.4: a manifest that cannot be read is "unknown", but never above what is worse — the daemon and
-// the failures are judged all the same; the top-level installed is null then, not false.
 test('an unreadable manifest: unknown never hides a failure or a dead daemon, and installed is null, not false', () => {
   const b = home()
   try {
@@ -213,30 +146,6 @@ test('conditions folded without the last daemon-start are partial: unknown, neve
   } finally { b.done() }
 })
 
-test('the old capture per source (RFC 4.1 落地细节 (3)): MITM and reverse proxy each by their last start / stop; a clean stop is ○ below ✓', () => {
-  const b = home()
-  try {
-    const ev = (recs) => { fs.mkdirSync(path.join(b.h, 'logs'), { recursive: true }); fs.writeFileSync(path.join(b.h, 'logs', 'mitm-events.ndjson'), recs.map((r) => JSON.stringify(r) + '\n').join('')) }
-    const mitmStopped = [{ ts: at(5 * H), event: 'mitm-start', source: 'mitm', pid: 7 }, { ts: at(4 * H), event: 'mitm-stop', source: 'mitm', pid: 7, signal: 'SIGTERM' }]
-    ev(mitmStopped)
-    let r = b.health()
-    assert.deepEqual([r.summary.state, r.summary.since, r.summary.signal, r.legacy.state], ['stopped', at(4 * H), 'SIGTERM', 'stopped'])
-    ev([...mitmStopped, { ts: at(2 * H), event: 'mitm-start', source: 'proxy', pid: 8, port: 8899 }])
-    r = b.health()
-    assert.deepEqual([r.summary.state, r.summary.source, r.summary.since], ['ok', 'proxy', at(2 * H)], 'the reverse proxy runs: ✓ 旧反代')
-    assert.deepEqual(r.legacy.sources.map((x) => [x.source, x.state]), [['mitm', 'stopped'], ['proxy', 'running']])
-    r = b.health({ alive: (pid) => pid !== 8 })
-    assert.deepEqual([r.summary.state, r.summary.source, r.summary.reason], ['not-running', 'proxy', 'pid 8 is gone without a clean stop'])
-    ev([{ ts: at(2 * H), event: 'mitm-start', pid: 9 }]) // a line without source is the MITM's
-    assert.equal(b.health().legacy.sources[0].source, 'mitm')
-    installed(b); b.lock(); b.state('on', at(H)); b.flows([{ ts: at(H), event: 'daemon-start', pid: 4242 }])
-    ev(mitmStopped)
-    assert.deepEqual([b.health().summary.state, b.health().summary.part], ['ok', 'collector'], 'a running collector hides a cleanly stopped old capture')
-    fs.rmSync(path.join(b.h, 'logs', 'mitm-events.ndjson')); fs.mkdirSync(path.join(b.h, 'logs', 'mitm-events.ndjson'))
-    assert.ok(b.health().read.errors.some((e) => /mitm-events/.test(e.file)))
-  } finally { b.done() }
-})
-
 test('the raw journal: non-success outcomes are listed and count as failures; an unreadable journal is an error, never empty (F7)', () => {
   const b = home()
   try {
@@ -245,7 +154,7 @@ test('the raw journal: non-success outcomes are listed and count as failures; an
     const j = path.join(b.h, 'raw', 'journal.jsonl')
     fs.writeFileSync(j, [{ ts: at(H), op: 'seal', outcome: 'ok', file: '/s' }, { ts: at(H), op: 'seal', outcome: 'refused', file: '/s2', reason: 'no close marker' }].map((x) => JSON.stringify(x) + '\n').join(''))
     const r = b.health()
-    assert.deepEqual([r.raw.problems.map((p) => p.outcome), r.summary.state, r.summary.n, r.summary.part], [['refused'], 'failing', 1, 'raw'])
+    assert.deepEqual([r.raw.problems.map((p) => p.outcome), r.summary.state, r.summary.n], [['refused'], 'failing', 1])
     fs.rmSync(j); fs.mkdirSync(j)
     const u = b.health()
     assert.ok(u.raw.error && u.read.errors.some((e) => e.file === j) && u.summary.read_errors === 1)

@@ -72,6 +72,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
         fileKeys: pr.files.map((x) => ({ path: x.path({ home, env }), format: x.format, key: x.format === 'json' ? x.keys[0].join('.') : x.keys[0] })) },
       procs, negatives: reply && Array.isArray(reply.negatives) ? reply.negatives.filter((n) => procs.some((p) => p.pid === n.pid)).map((n) => ({ pid: n.pid, host: n.host, reason: 'negative-cache' })) : [],
       apiHosts: [...(d.hosts || [])], noProxy: noProxyNames(env.NO_PROXY || env.no_proxy, d.hosts || []), fakeIp: part.fakeIp && part.fakeIp[h.id] === true ? true : null, adopted: adopted && adopted[h.id] ? adopted[h.id] : null, forms: (part.forms && part.forms[h.id]) || null,
+      ...(part.setup && part.setup[h.id] ? { setup: part.setup[h.id] } : {}),
       ...(part.legacy && part.legacy[h.id] ? { legacy: part.legacy[h.id] } : {}),
     }
   }

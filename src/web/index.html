@@ -501,6 +501,12 @@
 // ZERO provider parsing in the browser, so invariant 3 / AC-3 hold (a new provider = a new
 // server-side analyzer; this frontend is untouched).
 
+// The board face (4.4) refuses /api without the per-user token; `asight board` hands it over in the URL fragment (#t=…).
+// Every fetch below carries it, in the header named by the server's one constant (served at /off/token-header.mjs).
+const TOKEN=decodeURIComponent((/^#t=([^&]*)/.exec(globalThis.location?.hash||'')||[])[1]||'')
+const TOKEN_HEADER=TOKEN?import('/off/token-header.mjs').then(m=>m.CONTROL_TOKEN_HEADER):null
+const fetch=async(u,o={})=>TOKEN?globalThis.fetch(u,{...o,headers:{...o.headers,[await TOKEN_HEADER]:TOKEN}}):globalThis.fetch(u,o)
+
 const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
 const kf = n => n==null?'?':n>=1000?(n/1000).toFixed(n>=10000?0:1)+'k':''+n
 const base = p => String(p).replace(/\/+$/,'').split('/').pop() || p

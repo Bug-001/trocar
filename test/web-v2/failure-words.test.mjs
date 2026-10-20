@@ -14,13 +14,13 @@ const group = (where, code) => ({ count: 1, last: { where, code } })
 test('every (where, code) the CLI knows renders as the CLI\'s brief', () => {
   for (const k of Object.keys(FAILURE_WORDS)) {
     const i = k.indexOf('/'), g = group(k.slice(0, i), k.slice(i + 1))
-    assert.equal(failureSentence(g).text, failureBrief(g), k)
+    assert.equal(failureSentence(g).text, FAILURE_WORDS[k], k)
   }
 })
 
 test('an unknown pair and an errno code fall back exactly as the CLI does', () => {
   for (const g of [group('engine', 'no-such-code-x'), group('record', 'ECONNRESET'), { count: 2, last: { where: 'zz', code: 'yy', reason: 'r\nr' } }]) {
-    assert.equal(failureSentence(g).text, failureBrief(g), JSON.stringify(g))
+    assert.equal(failureSentence(g).text, failureBrief({ ...g.last }), JSON.stringify(g))
   }
 })
 

@@ -8,7 +8,7 @@ import { columns, colors, size, tilde, ago, wrap } from './text.mjs'
 import { usageLine, commandNamed } from './commands.mjs'
 import { resolveHarnesses } from './harness-names.mjs'
 import { asightHome } from '../off/paths.mjs'
-import { readTable, edit, ClassArgError } from '../classes/table.mjs'
+import { readTable, plan, edit, checkOp, ClassArgError } from '../classes/table.mjs'
 import { runQuery } from '../query/named/index.mjs'
 
 const EDITS = ['set', 'add', 'rm', 'reset']
@@ -97,6 +97,35 @@ function opOf(pos, flags) {
   return pos.length === 2 || pos.length === 3 ? { kind: 'rm', class: name, rule: a } : null
 }
 
+/**
+ * classesChange(op, {home, source, dryRun}) → {receipt, exit} — one change of the class table and its C.2 receipt, for `asight classes` and the
+ * board's POST /control/classes alike (4.4 §控制面), so the two receipts are one by construction. `home` is ~/.asight; `source` goes into the
+ * change log's line. `dryRun` writes nothing and gives the same receipt with `dry_run` and `planned:[{class, before, after, paths}]` (1.6 C.2).
+ * Throws ClassArgError (exit 2) for an op that does not make sense; a table that cannot be read or written is an `ok:false` receipt (exit 1).
+ */
+export function classesChange(op, { home, source = 'cli', dryRun = false }) {
+  checkOp(op)
+  const named = resolveHarnesses(op.harness ? [op.harness] : [])
+  if (!named.ok) throw new ClassArgError(`no agent called ${named.unknown.join(', ')}. Known: ${named.known.join(', ')}`)
+  op = { ...op, source, ...(named.ids ? { harness: named.ids[0] } : {}) }
+  const fail = (error) => ({ receipt: errorDoc('classes', error.code, `asight classes ${op.kind}: ${error.message}`), exit: EXIT.incomplete })
+  const cls = op.kind === 'reset' ? null : op.class
+  if (dryRun) {
+    const p = plan(op, { home })
+    if (p.error) return fail(p.error)
+    const [before, after] = cls === null ? [null, null] : [p.before, p.after] // the receipt's own before / after are the class's, as the run's
+    return { receipt: { ...newReceipt('classes'), class: cls, before, after, undo: undoEdit(op, before, after), dry_run: true, planned: [{ class: cls, ...p }] }, exit: EXIT.ok }
+  }
+  const was = readTable({ home })
+  const before = was.classes.find((x) => x.class === op.class) || null
+  const result = edit(op, { home })
+  if (!result.ok) return fail(result.error)
+  const after = op.kind === 'reset' ? null : readTable({ home }).classes.find((x) => x.class === op.class) || null
+  const changed = op.kind === 'reset' && was.file ? [{ path: result.file, change: 'removed', backup: null }] : []
+  for (const p of result.written) changed.push({ path: p, change: p === result.file ? 'written' : 'appended', backup: null })
+  return { receipt: { ...newReceipt('classes'), class: cls, before: op.kind === 'reset' ? null : before, after, changed, undo: undoEdit(op, before, after) }, exit: EXIT.ok }
+}
+
 /** → the exit code. `argv` is what follows `classes`; the parsed form is `ctx.args` ({ positionals, flags }). */
 export async function run(argv, { io, json, args, home, deps = {} }) {
   const refuse = (code, message, { exit = EXIT.usage, usage = false } = {}) => {
@@ -109,27 +138,15 @@ export async function run(argv, { io, json, args, home, deps = {} }) {
   const asight = asightHome(home)
   const c = colors(io)
   if (op) {
-    const named = resolveHarnesses(op.harness ? [op.harness] : [])
-    if (!named.ok) return refuse('usage', `asight classes: no agent called ${named.unknown.join(', ')}. Known: ${named.known.join(', ')}`)
-    if (named.ids) op.harness = named.ids[0]
-    const was = readTable({ home: asight })
-    const before = was.classes.find((x) => x.class === op.class) || null
-    let result
-    try { result = edit(op, { home: asight }) } catch (e) {
+    let r
+    try { r = classesChange(op, { home: asight }) } catch (e) {
       if (e instanceof ClassArgError) return refuse('usage', `asight classes ${op.kind}: ${errText(e)}`)
       throw e
     }
-    if (!result.ok) return refuse(result.error.code, `asight classes ${op.kind}: ${result.error.message}`, { exit: EXIT.incomplete })
-    const after = op.kind === 'reset' ? null : readTable({ home: asight }).classes.find((x) => x.class === op.class) || null
-    const changed = op.kind === 'reset' && was.file ? [{ path: result.file, change: 'removed', backup: null }] : []
-    for (const p of result.written) changed.push({ path: p, change: p === result.file ? 'written' : 'appended', backup: null })
-    const receipt = {
-      ...newReceipt('classes'), class: op.kind === 'reset' ? null : op.class,
-      before: op.kind === 'reset' ? null : before, after, changed, undo: undoEdit(op, before, after),
-    }
-    if (json) printJson(io, receipt)
-    else for (const line of changeLines(receipt, { home })) io.out(line)
-    return EXIT.ok
+    if (r.receipt.ok === false) return refuse(r.receipt.error.code, r.receipt.error.message, { exit: r.exit })
+    if (json) printJson(io, r.receipt)
+    else for (const line of changeLines(r.receipt, { home })) io.out(line)
+    return r.exit
   }
   const [name, ...extra] = args.positionals
   if (extra.length) return refuse('usage', 'asight classes: one class at a time.', { usage: true })

@@ -12,6 +12,7 @@ import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { ERROR_CODES } from '../../src/cli/json.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
+import { BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
 
 function fakeIo({ tty = false } = {}) {
   const out = [], err = []
@@ -176,4 +177,17 @@ test('V85: the model install plan names asight\'s own tree in one line and every
   assert.match(asightLine[0].detail, /asight-off/, 'and that line names the undo program, so the plan is readable without a second lookup')
   assert.equal(plan.filter((p) => p.detail.includes(w.home)).length, 0, 'every path is written under ~, never the home twice')
   for (const item of plan) assert.ok(item.detail.length > 0 && item.what, 'every planned item says what it is about')
+})
+
+test('4.4 §Plan 「端口」 · V67: install records the board\'s port in ingress.json once — a second install leaves the file byte- and mtime-identical', async () => {
+  const { w, io, exit } = await cli(['--yes', '--json'])
+  assert.equal(exit, 0, io.text())
+  const file = path.join(w.dir, 'ingress.json')
+  const bytes = fs.readFileSync(file), mtime = fs.statSync(file).mtimeMs
+  const { boardPort } = JSON.parse(bytes)
+  assert.ok(boardPort >= BOARD_RANGE[0] && boardPort <= BOARD_RANGE[1], String(boardPort))
+  await new Promise((r) => setTimeout(r, 20))
+  const io2 = fakeIo()
+  assert.equal(await runInstallCli(['--yes'], { io: io2, env: w.env, home: w.home, platform: 'darwin', deps: { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns } }), 0, io2.text())
+  assert.deepEqual([fs.readFileSync(file), fs.statSync(file).mtimeMs], [bytes, mtime])
 })

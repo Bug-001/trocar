@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "test": "node --test --test-force-exit --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs",
-    "serve": "node bin/asight.mjs serve"
+    "lab:linux:vm": "LAB_VM=1 node --test --test-force-exit --test-concurrency=1 --require ./test/helpers/flush-exit.cjs"
   },
   "dependencies": {}
 }

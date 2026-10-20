@@ -38,7 +38,14 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
   }
   const named = resolveHarnesses(names)
   if (!named.ok) { io.err(`asight on: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return EXIT.usage }
-  const json = flags.has('--json')
+  return runOn({ io, env, home, platform, deps, ids: named.ids, flags, json: flags.has('--json') })
+}
+
+/** `asight on` after its arguments are parsed — the CLI's and the board's (POST /control/harness, src/control/board.mjs) one body: the root,
+ *  older-install, Node-floor and elevated-token refusals hold on both paths. `ids`: code ids or null (all); `flags`: the Set of flags;
+ *  `source`: added to every flows/ record the run writes ('board'; the CLI's carry none). → the exit code. */
+export async function runOn({ io, env = process.env, home = os.homedir(), platform = process.platform, deps = {}, ids, flags, json, source }) {
+  const named = { ids }
   const held = [] // §1.2: with --json stderr stays empty — the plan is a key of the one document on stdout (`planned`)
   const say = json ? (s) => held.push(s) : io.out
   const c = json ? noColor() : colors(io) // --json never colours (D46); a non-TTY or NO_COLOR run colours nothing anywhere
@@ -82,13 +89,13 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
       if (refusal) {
         const receipt = { ...newReceipt('on'), ok: false, harnesses: named.ids, notes: [refusal.reason] }
         const cdir = path.join(home, '.asight', 'collector')
-        try { if (fs.existsSync(cdir)) appendEvent(cdir, { event: 'failure', where: 'start', code: refusal.code, reason: refusal.reason }) } catch { /* the receipt is the record then (R11) */ }
+        try { if (fs.existsSync(cdir)) appendEvent(cdir, { event: 'failure', where: 'start', code: refusal.code, reason: refusal.reason, ...(source ? { source } : {}) }) } catch { /* the receipt is the record then (R11) */ }
         if (json) io.out(JSON.stringify(receipt, null, 2))
         else io.out(formatOnReceipt(receipt, { tense: 'past', home }))
         return EXIT.incomplete
       }
     }
-    if (model) return await runModelOn({ io, env, home, os: parts.os, deps, parts, flags, ids: named.ids, json })
+    if (model) return await runModelOn({ io, env, home, os: parts.os, deps, parts, flags, ids: named.ids, json, source })
     const script = deps.script || process.argv[1]
     const unit = !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script, run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) }) // `deps.spawn`: the direct start (D61: `on`'s fallback when the login mechanism refuses) is a real spawn, so a test hands in its own (0.1 §3)
     const helperState = deps.helperState || (parts.arch && parts.arch.install && parts.arch.install.helperState ? () => parts.arch.install.helperState() : null)

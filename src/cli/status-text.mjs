@@ -111,6 +111,8 @@ function summaryPairs(doc, now) {
     rows.push(['Not captured', `${who.length ? who.join(', ') : 'a program'} refused asight's certificate${hosts.length ? ` for ${hosts.length} host${hosts.length === 1 ? '' : 's'}` : ''}; restart it. Which hosts: asight status --failures`])
   }
   rows.push(['Problems', !fl ? unknown(errorReason(doc, 'capture health') || 'capture health could not be read') : fl.problem === 0 ? 'none in the last 24 hours' : `${fl.problem} in the last 24 hours, latest ${ago(fl.latest, now)}`])
+  const b = doc.board // §3.5: the address without the token; `asight board` prints the one with it
+  if (b) rows.push(['Board', b.state === 'serving' ? `${b.url}  open it with: asight board` : b.state === 'unknown' ? unknown(b.reason) : `not running: ${b.reason}`])
   // V39 (§1.1): logging out stops the daemon unless linger is on — the command is printed, never run; a state that could not be read is said with its reason, never taken for "on"
   if (doc.linger === false) rows.push(['Logging out', `capture stops when you log out; run: loginctl enable-linger ${doc.user || '<your user name>'}`])
   else if (doc.linger === 'unknown') rows.push(['Logging out', unknown(doc.linger_reason || 'the linger state could not be read')])
@@ -156,15 +158,13 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
 export const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:127\.0\.0\.1|\[?::1\]?|localhost):(\d+)/.exec(String(url || '')); return m ? `:${m[1]}` : String(url || unknown('no address recorded')) }
 
 // ── `--failures` (§3.5: one line per kind of problem, then Expected) ──────────────────────────────────────────────
-/** The whole wall of the last 24 hours: one line per kind of problem, then the `Expected` section (what is not a problem by design). */
-export function failuresBlock(health, { now = Date.now() } = {}) {
-  if (!health) return [`Problems: ${unknown('capture health could not be read')}`]
-  const groups = [...((health.collector && health.collector.failures) || []), ...((health.legacy && health.legacy.failures) || []), ...((health.raw && health.raw.failures) || [])]
-  const lines = [groups.length ? `Problems in the last 24 hours: ${groups.reduce((n, g) => n + (g.count || 1), 0)} in ${groups.length} kind${groups.length === 1 ? '' : 's'}` : 'No problems in the last 24 hours.']
-  if (groups.length) {
-    const rows = groups.map((g) => [ago(g.last_ts, now), `x${g.count || 1}`, failureBrief(g)])
-    lines.push(...columns(rows).map((l) => `  ${l}`))
-  }
+/** The whole wall of the last 24 hours: one line per `level:'problem'` group of the document's `failures` (C.3, the board's capture log reads the same
+ *  groups and words), then the `Expected` section (what is not a problem by design). */
+export function failuresBlock(failures, health, { now = Date.now() } = {}) {
+  if (!failures || !health) return [`Problems: ${unknown('capture health could not be read')}`]
+  const groups = failures.groups.filter((g) => g.level === 'problem')
+  const lines = [groups.length ? `Problems in the last 24 hours: ${groups.reduce((n, g) => n + g.count, 0)} in ${groups.length} kind${groups.length === 1 ? '' : 's'}` : 'No problems in the last 24 hours.']
+  if (groups.length) lines.push(...columns(groups.map((g) => [ago(g.last_ts, now), `x${g.count}`, failureBrief(g)])).map((l) => `  ${l}`))
   const exp = Object.entries((health.collector && health.collector.expected) || {})
   lines.push('', 'Expected')
   if (exp.length) lines.push(...exp.map(([k, n]) => `  ${expectedText(k)}: ${n}`))
@@ -198,9 +198,7 @@ const SUMMARY = {
   ok: (x) => `capturing since ${x.since}`, off: (x) => `capture off since ${x.since}`, failing: (x) => `${x.n} problem(s) - see below`,
   'not-running': (x) => `not running - last record at ${x.since}${x.signal ? `, stopped by ${x.signal}` : ''}${x.reason ? `, ${x.reason}` : ''}`,
   'not-responding': (x) => `not responding - lock last refreshed at ${x.since}`, unknown: (x) => unknown(x.reason),
-  'no-events': (x) => `the old capture wrote at ${x.since} but has no event file`,
   residue: (x) => `not installed - ${x.n} item(s) left behind`, 'not-installed': () => 'not installed',
-  stopped: (x) => `the old capture stopped at ${x.since}${x.signal ? ` (${x.signal})` : ''}`,
 }
 const agoSec = (h, iso) => Math.round((Date.parse(h.generated_at) - Date.parse(iso)) / 1000)
 function daemonText(h) {

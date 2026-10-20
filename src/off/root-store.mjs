@@ -28,8 +28,11 @@ const rsTool = (r, what) => (r.code === 0 ? null : `${what} failed (exit ${r.cod
 
 /** rootStore({ platform, run, home, env, fs }) → { add(rootDer), has(id), remove(id) }. add / remove → { ok: true, absent? } |
  *  { ok: false, reason }; has → { present } | { error }. `run` is execTool's injected runner. */
+/** How long a root-store verb may wait on the OS: it may show its prompt, and a person may be slow to answer it. */
+export const OS_PROMPT_MS = 120_000
+
 export function rootStore({ platform, run = null, home, env = process.env, fs = nodeFs }) {
-  const opts = { run, env, timeoutMs: 120000 } // the OS may show its prompt
+  const opts = { run, env, timeoutMs: OS_PROMPT_MS }
   const tmp = path.join(home, '.asight', 'collector', 'root-store-tmp.pem')
   const withFile = (pem, fn) => {
     try {

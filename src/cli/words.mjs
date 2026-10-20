@@ -62,15 +62,13 @@ export const squashed = (s) => String(s ?? '').replace(/\s+/g, ' ').trim()
 /** The whole reason, or its head: the digest shows ~100 columns of it — the whole wall is one `--failures` away (R11: relocated, not dropped). */
 const briefText = (s, max = 100) => { const t = squashed(s); return t.length > max ? `${t.slice(0, max - 1)}…` : t }
 
-/** One failure group as the digest's `latest` brief: the table's word when it knows the code, else the raw errno / `where/code` with the squashed reason.
- *  `g` is what captureHealth's fold produced ({ count, last_ts, last: { event, where, code, reason, … } }); the `×count` multiplier is the caller's. */
+/** One failure group (C.3 `failures.groups[]`: { where, code, reason }) in one sentence, for `status --failures` and the board's capture log alike:
+ *  the table's word when it knows (where, code), else the raw errno / `where/code`, with the squashed reason; the `×count` multiplier is the caller's. */
 export function failureBrief(g) {
-  const l = (g && g.last) || {}
-  const reason = briefText(l.reason || (l.error && l.error.message) || '')
-  const word = failureWord(l.where, l.code) || (typeof (g && g.key) === 'string' && g.key.startsWith('flow:') ? failureWord('flow', g.key.slice(5)) : null)
+  const reason = briefText((g && g.reason) || '')
+  const word = failureWord(g && g.where, g && g.code)
   if (word) return reason ? `${word} (${reason})` : word
-  if (l.code && ERRNO.test(String(l.code))) return [l.code, reason].filter(Boolean).join(' ')
-  const head = [l.where, l.code].filter(Boolean).join('/')
-  return [head || String(l.event || g.key || 'a record'), reason].filter(Boolean).join(' ') // a row the fold knows only by its key still says which it was (R11)
+  if (g && g.code && ERRNO.test(String(g.code))) return [g.code, reason].filter(Boolean).join(' ')
+  return [[...new Set([g && g.where, g && g.code].filter(Boolean))].join('/') || 'a record', reason].filter(Boolean).join(' ') // an event with no code of its own is named once
 }
 

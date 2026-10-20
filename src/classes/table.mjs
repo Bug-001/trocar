@@ -20,7 +20,7 @@ import { HARNESSES } from '../dissect/harnesses.mjs'
 import { HARNESS_IDS } from '../cli/harness-names.mjs'
 import { THIRD_PARTY_TELEMETRY } from '../dissect/traffic.mjs'
 
-// not exported: the interface is BUILTIN / readTable / classify / keepOf / edit (+ ClassArgError); the CLI prints what
+// not exported: the interface is BUILTIN / readTable / classify / keepOf / plan / edit (+ ClassArgError); the CLI prints what
 // those return (T8) and the collector reads them (T5).
 const CLASSES_VERSION = 1
 const CLASS_NAME = /^[a-z0-9-]+$/
@@ -148,15 +148,16 @@ export function keepOf(table, className) {
 
 /**
  * edit(op, {home, fs, now}) → {ok, file, written, error?}
- * op = {kind:'set', class, keep} | {kind:'add', class, host, path?, harness?} | {kind:'rm', class, rule?} | {kind:'reset'}
+ * op = {kind:'set', class, keep} | {kind:'add', class, host, path?, harness?} | {kind:'rm', class, rule?} | {kind:'reset'}, each with an optional
+ * `source` ('cli' | 'board', default 'cli') that the change log's line carries, so a change made from the board is told apart (4.4 §控制面).
  * Throws ClassArgError (exit 2) before touching anything when the op does not make sense; comes back ok:false when the
  * file or the log cannot be written (exit 1).
  */
 export function edit(op, { home = asightHome(), fs = nodeFs, now = () => new Date() } = {}) {
   const file = classesFile(home)
   const table = readTable({ home, fs })
-  const fatal = table.problems.find((p) => p.fatal)
-  if (fatal) return { ok: false, file, written: [], error: { code: fatal.code, message: `${fatal.reason}; fix or remove the file first, nothing was changed` } }
+  const error = fatalOf(table)
+  if (error) return { ok: false, file, written: [], error }
   const { classes, log } = apply(op, table.classes)
   const ts = now().toISOString()
   const written = []
@@ -175,7 +176,7 @@ export function edit(op, { home = asightHome(), fs = nodeFs, now = () => new Dat
   const logFile = classesLog(home)
   try {
     fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 })
-    fs.appendFileSync(logFile, JSON.stringify({ ts, ...log }) + '\n', { mode: 0o600 })
+    fs.appendFileSync(logFile, JSON.stringify({ ts, ...log, source: op.source || 'cli' }) + '\n', { mode: 0o600 })
     written.push(logFile)
   } catch (e) {
     return { ok: false, file, written, error: { code: (e && e.code) || 'classes-log-failed', message: `the change was made but ${logFile} could not record it (${errText(e)})` } }
@@ -183,9 +184,37 @@ export function edit(op, { home = asightHome(), fs = nodeFs, now = () => new Dat
   return { ok: true, file, written }
 }
 
+const fatalOf = (table) => {
+  const fatal = table.problems.find((p) => p.fatal)
+  return fatal ? { code: fatal.code, message: `${fatal.reason}; fix or remove the file first, nothing was changed` } : null
+}
+
+/**
+ * plan(op, {home, fs}) → {before, after, paths} | {error} — what edit(op) would do, and nothing written: the change log's own from / to (the class's
+ * whole entry, or for reset the whole table before), so a plan_id over it changes when the table does; and the files edit would write. The same refusals as edit: ClassArgError, or the unreadable table's error.
+ */
+export function plan(op, { home = asightHome(), fs = nodeFs } = {}) {
+  const table = readTable({ home, fs })
+  const error = fatalOf(table)
+  if (error) return { error }
+  const { classes, log } = apply(op, table.classes)
+  return { before: log.from, after: log.to, paths: [...(classes || table.file ? [classesFile(home)] : []), classesLog(home)] }
+}
+
+/** Throws ClassArgError unless the op's fields are the types the CLI gives: a request body can carry any JSON (4.4 §控制面), and String()
+ *  below would turn 7 or [..] into a name or a regex. */
+export function checkOp(op) {
+  if (!op || typeof op !== 'object') throw new ClassArgError('a change is an object')
+  for (const k of ['kind', 'class', 'keep', 'host', 'path', 'harness']) {
+    if (op[k] != null && typeof op[k] !== 'string') throw new ClassArgError(`${k} must be a string, not ${JSON.stringify(op[k])}`)
+  }
+  if (op.rule != null && typeof op.rule !== 'string' && !Number.isInteger(op.rule)) throw new ClassArgError(`rule must be a number, not ${JSON.stringify(op.rule)}`)
+}
+
 /** The pure part: the new class list (null = delete the file) and the line that records the change. */
 function apply(op, current) {
-  const kind = op && op.kind
+  checkOp(op)
+  const kind = op.kind
   const classes = current.map((c) => ({ ...c, rules: (c.rules || []).map((r) => ({ ...r })) }))
   const find = (name) => classes.find((c) => c.class === name)
   if (kind === 'reset') return { classes: null, log: { op: 'reset', class: null, from: current, to: null } }

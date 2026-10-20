@@ -11,6 +11,8 @@ import { planRoutes } from './entries.mjs'
 import { upstreamFor, isAsightDoorUrl } from './chain.mjs'
 import { redactProxyUrl, parseProxyUrl } from '../../../netenv/redact.mjs'
 import { CODE } from '../codes.mjs'
+import { checkWrapper } from './hooks/wrapper.mjs'
+import { sha256, readOrNull } from '../../../off/fsutil.mjs'
 
 const CARRIER = { 'config-key': 'config-key', wrapper: 'wrapper', plugin: 'plugin', 'plugin-file': 'plugin' } // 1.6 §9.4 `carrier` from the descriptor's cert kind
 const HOOKS = new Set(['wrapper', 'plugin']) // a carrier that also applies the route (the switch file is read through it): its drift takes the form off the path (1.6 §9.3 row 31)
@@ -24,6 +26,48 @@ const userFilesOf = (desc, ctx) => (desc.proxyMode.userCertFiles || []).map((src
 /** The install items that carry a harness's certificate: its own, and the pem-block in a user file its settings name that another harness's entry holds —
  *  one block per file, recorded once (4.11 P4 rule U, shared_with), yet it serves both. */
 const itemsFor = (desc, inst, ctx) => { const files = userFilesOf(desc, ctx); return inst.filter((i) => i.harness === desc.name || (i.kind === 'text' && i.format === 'pem-block' && files.includes(i.path))) }
+
+/** Whether the install items that carry a harness's certificate are all there and unchanged → null | 'carrier-absent' | 'carrier-overwritten'. What install
+ *  placed (m.install.items) must still be on record: an item whose record is gone is as absent as its file. Throws when a file cannot be read. */
+function carrierLoss(m, desc, own, fs) {
+  const h = desc.name
+  if (!own.length) return 'carrier-absent'
+  if (((m.install.items && m.install.items[h]) || []).some((p) => !own.some((x) => x.kind === p.kind && x.path === p.path))) return 'carrier-absent'
+  for (const x of own) {
+    if (x.kind === 'owned-file') {
+      const d = x.role === 'wrapper' ? checkWrapper({ fs }, x) : (() => { const b = readOrNull(fs, x.path); return b == null ? { reason: 'entry-missing' } : sha256(b) !== x.sha256 ? { reason: 'entry-changed' } : null })()
+      if (d) return d.reason === 'entry-missing' ? 'carrier-absent' : 'carrier-overwritten'
+    } else if (judgeEntry({ manifest: m, planned: x, fs }).action !== 'skip-intact') return fs.existsSync(x.path) ? 'carrier-overwritten' : 'carrier-absent'
+  }
+  return null
+}
+
+/**
+ * setupOf(desc, { os, manifest, ctx, root, fs }) → { state: 'ready' | 'needed' | 'unknown', missing: [{ form, what }], reason? } — 4.11 P4b, the ONE judgement
+ * behind `status`'s `harnesses[h].setup` and `on`'s precondition ⑪ (D65④). Per present form of this OS whose carrier is not the root: its install items
+ * (its own, and rule U's shared pem-block) absent → `carrier-absent`, changed → `carrier-overwritten`; the root gone from the user's store (`root.state`
+ * 'missing'; pending / declined are install's own to-do, not setup) → one `{ form: null, what: 'root-missing' }`. `manifest` null = nothing installed;
+ * `{ error }` = it could not be read → `unknown`, and so is a file that cannot be read (D38): never `ready`. Reads only; no OS question of its own.
+ */
+export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs }) {
+  const unknown = (reason) => ({ state: 'unknown', missing: [], reason })
+  if (m && (m.error || m.unsupported)) return unknown(`the install record could not be read${m.error ? ` (${m.error})` : ''}`)
+  if (!desc || !desc.proxyMode) return unknown(`${desc ? desc.name : 'this harness'} has no proxy-mode description in this build`)
+  const missing = []
+  try {
+    const pm = desc.proxyMode
+    let lost
+    for (const f of pm.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))) {
+      const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
+      if (!c || (c.when && holds(c.when, ctx) === false)) continue // the root carries it: nothing per form, whether install saw the harness or not
+      // a carrier of its own: install's items for it (none when install never saw the harness, unless rule U's shared block carries it)
+      if (lost === undefined) lost = carrierLoss(m || {}, desc, itemsFor(desc, itemsOfPhase(m, 'install'), ctx), fs)
+      if (lost) missing.push({ form: f.id, what: lost })
+    }
+  } catch (e) { return unknown(String((e && e.message) || e)) }
+  if (root && root.state === 'missing') missing.push({ form: null, what: 'root-missing' })
+  return missing.length ? { state: 'needed', missing } : { state: 'ready', missing: [] }
+}
 
 /** The user's own certificate file a `userCertFiles` key names (1.6 §9.4 `user_file`): asight appended to it (intact / changed), or it is not one asight could append to. */
 function userFileOf(desc, { m, ctx, fs, own }) {
@@ -56,7 +100,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
   const inst = itemsOfPhase(m, 'install'), on = itemsOfPhase(m, 'on')
   const doors = (reply && reply.doors) || {}, answers = (reply && reply.upstreams) || {}
   const ports = Object.values(doors)
-  for (const desc of harnesses.filter((d) => d.proxyMode && installed.includes(d.name))) {
+  for (const desc of harnesses.filter((d) => d.proxyMode && (installed.includes(d.name) || (m && m.install && on.some((i) => i.harness === d.name))))) { // one install never saw: drawn once on wrote for it (its forms ride the root)
     const pm = desc.proxyMode, h = desc.name
     const plan = planRoutes(desc, ctx), d = drift(h), own = itemsFor(desc, inst, ctx)
     const uf = userFileOf(desc, { m, ctx, fs, own })

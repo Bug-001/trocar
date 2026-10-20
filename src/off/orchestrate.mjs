@@ -359,9 +359,9 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
 
 /** The writer of a run's `flows/` lines: `put(rec)` appends `{ts, event, where, run, …rec}` (a rec may bring its own `event`, e.g. 'failure'); a line that cannot be
  *  written is added to `notes`, never dropped and never fatal (D38); nothing is written when there is no collector directory (nothing installed: the command's own
- *  output is the only report). `event` / `where` default to `off`'s names; `uninstall` passes its own. */
-export function flowWriter(w, run, notes, { event = EVENT_OFF_NOTE, where = WHERE_OFF } = {}) {
-  const write = runEventWriter({ dir: w.dir, base: { event, where, run }, notes, now: w.clock, fs: w.fs, ...(w.deps.log ? { log: w.deps.log } : {}) }) // stderr first, then a `log-gap` once a line can be written again (R11)
+ *  output is the only report). `event` / `where` default to `off`'s names; `uninstall` passes its own; `source` marks every line (the board's 'board'). */
+export function flowWriter(w, run, notes, { event = EVENT_OFF_NOTE, where = WHERE_OFF, source } = {}) {
+  const write = runEventWriter({ dir: w.dir, base: { event, where, run, ...(source ? { source } : {}) }, notes, now: w.clock, fs: w.fs, ...(w.deps.log ? { log: w.deps.log } : {}) }) // stderr first, then a `log-gap` once a line can be written again (R11)
   return (rec) => {
     if (!w.fs.existsSync(w.dir)) return
     write(rec)
@@ -405,14 +405,14 @@ function shapeReceipt(receipt) {
 }
 
 /** `asight off [harness…]` (1.6 §1.1, §1.4, §1.5): see the header. `ids`: harness code ids, or null for every one; `now`: cut the connections still relayed (`--now`);
- *  `yes` / `interactive` / `io`: the one confirmation, for undoing by marks when the manifest is lost (R6); `say`: where the list goes before the question.
+ *  `source`: added to every flows/ line of the run (the board's 'board'). `yes` / `interactive` / `io`: the one confirmation, for undoing by marks when the manifest is lost (R6); `say`: where the list goes before the question.
  *  → `{ receipt, exit }`; the receipt is src/off/schema.mjs's plus `harnesses` · `routing` · `daemon` · `autostart` · `still_trusting` · `kept_backups` · `kept_bundles` ·
  *  `user_processes` · `left` · `problems` · `notes`. */
-export async function runOff({ home = nodeOs.homedir(), env = process.env, ids = null, now = false, yes = false, dryRun = false, interactive = false, io = null, say = null, deps = {} } = {}) {
+export async function runOff({ home = nodeOs.homedir(), env = process.env, ids = null, now = false, yes = false, dryRun = false, interactive = false, io = null, say = null, deps = {}, source }  = {}) {
   const w = offWorld({ home, env, deps })
   const run = w.clock().toISOString()
   const receipt = { ...newReceipt('off'), harnesses: ids || [], all: ids === null, undo: UNDO_LINE.off, log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], orphan_backups: [], pending: [], planned: [], user_processes: [], notes: [], problems: [] }
-  const put = flowWriter(w, run, receipt.notes)
+  const put = flowWriter(w, run, receipt.notes, { source })
   // 4.11 ⑰: a manifest of version 1 / 2 is refused before any write — no lock, no state, no flows record; the receipt names the tools that undo it
   const old = refuseOldManifest({ home, platform: w.platform, fs: w.fs })
   if (old) { receipt.problems.push(old.message); receipt.ok = false; Object.assign(receipt, { error: { code: 'older-install', message: old.message } }); receipt.log = null; return { receipt: shapeReceipt(receipt), exit: EXIT.incomplete } }

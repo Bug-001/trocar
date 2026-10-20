@@ -9,7 +9,8 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { CONTROL_TOKEN_HEADER, isPipePath } from '../../off/control-client.mjs'
+import { isPipePath } from '../../off/control-client.mjs'
+import { CONTROL_TOKEN_HEADER } from '../../off/token-header.mjs'
 
 // The client side (controlSocketPath, controlRequest, controlEndpointFor) is src/off/control-client.mjs: `asight off` asks the daemon without this directory (1.6 R3).
 export { controlSocketPath, controlRequest, controlEndpointFor } from '../../off/control-client.mjs'

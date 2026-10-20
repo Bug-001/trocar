@@ -588,6 +588,14 @@ test('V32 proxy mode: desired × daemon × door × certificate state — the ver
   }
 })
 
+test('1.6 §3.5: with no names, status lists every harness with a form present on this machine, also one installed after asight — with its setup; an absent one is not listed', async () => {
+  const w = await modelOn()
+  for (const c of ['dsh', 'opencode']) fs.writeFileSync(path.join(w.home, 'bin', c), '#!/bin/sh\n', { mode: 0o755 }) // installed after `asight install`
+  const { j } = await modelStatus(w, { desired: 'on', daemon: 'running', door: 'up', key: 'present', st: 'ready', root: 'in' })
+  for (const h of ['codex', 'deepseek-dsh', 'opencode']) assert.ok(['ready', 'needed', 'unknown'].includes(j.harnesses[h] && j.harnesses[h].setup.state), `${h}: ${JSON.stringify(j.harnesses[h])}`)
+  assert.equal('hermes' in j.harnesses, false, 'no form of hermes is on this machine')
+})
+
 // one HOME with codex installed and turned on (the door half a stub), for the cases below
 async function modelOn() {
   const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
@@ -784,4 +792,16 @@ test('D62: `GET /holders` is asked only when the daemon\'s poll has rows — wit
   paths.length = 0
   await once(0)
   assert.deepEqual(paths.filter((p) => p === '/holders'), ['/holders'], 'the poll has rows (a number, even 0): its own snapshot is the answer, and it is asked')
+})
+
+test('V91 · 附录 C.3: every harness status lists carries `setup` from the closed set; codex (the root carries its forms) is ready with the root in place, needed with root-missing when it is gone', async () => {
+  const w = await modelOn()
+  for (const root of ['in', 'out']) {
+    const { j } = await modelStatus(w, { desired: 'on', daemon: 'running', door: 'up', key: 'present', st: 'ready', root })
+    for (const [h, x] of Object.entries(j.harnesses)) {
+      assert.ok(['ready', 'needed', 'unknown'].includes(x.setup.state) && Array.isArray(x.setup.missing), `${h}: ${JSON.stringify(x.setup)}`)
+      if (x.setup.state === 'unknown') assert.ok(x.setup.reason, `${h}: unknown says why`)
+    }
+    assert.deepEqual(j.harnesses.codex.setup, root === 'in' ? { state: 'ready', missing: [] } : { state: 'needed', missing: [{ form: null, what: 'root-missing' }] })
+  }
 })
