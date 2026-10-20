@@ -146,7 +146,10 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     if (!d || !target) return null
     if (isLoopbackHost(target.address) && target.port === d.port) return null // a loop through the door, not a flow
     const id = await ident.identityOf({ peer, door: doorOf(d), target })
-    if (!d.auth && !peerAllowed({ ...(id.facts || {}), pid: id.pid }, self, { record }).ok) return null // the PAC door takes no credentials: this user's processes only
+    if (!d.auth) { // the PAC door takes no credentials: this user's processes only (P10); a refusal is an answer of its own, the ingress writes its one record and closes
+      const a = peerAllowed({ ...(id.facts || {}), pid: id.pid }, self)
+      if (!a.ok) return { refuse: { code: a.code, reason: `the PAC door refused a connection: ${a.detail}${id.unresolved ? ` (owner ${id.unresolved})` : ''}; it takes no credentials, so it forwards only this user's processes` } }
+    }
     const known = !id.why && byName.has(id.agent)
     if (known && onSet.has(id.agent)) seen.add({ harness: id.agent, pid: id.pid, start: id.facts.startedAt ?? null })
     const desc = byName.get(d.harness) // the upstream is the door group's (4.8 §5.3, D51⑥)
@@ -179,11 +182,15 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   async function servePac({ peer, user, path: p }) {
     const d = doors.get(user)
     if (!d || d.auth) return null
-    const { pid: q } = await ident.owningPid(peer)
-    const facts = q != null ? await ident.factsCached(q) : null
-    const mine = peerAllowed({ ...(facts || {}), pid: q }, self, { record }).ok // recorded when not
-    if (!mine && facts && (facts.uid != null || facts.sid || facts.sameUser === false)) return null // another user's, for certain: refused (P10)
+    const { pid: q, why, sameUser } = await ident.owningPid(peer)
+    const facts = q != null ? await ident.factsCached(q) : sameUser ? { sameUser: true } : null
+    const a = peerAllowed({ ...(facts || {}), pid: q }, self), mine = a.ok
+    if (!mine && facts && (facts.uid != null || facts.sid || facts.sameUser === false)) { // another user's, for certain: refused (P10)
+      record({ event: 'failure', where: 'ingress', code: a.code, peer, reason: `the PAC door refused a PAC request: ${a.detail}` })
+      return null
+    }
     // an owner that could not be read gets the door-less PAC (the app's own way): an empty answer would send the app direct around the system proxy
+    if (!mine) record({ event: 'failure', where: 'ingress', code: a.code, peer, reason: `served the PAC without the door: ${a.detail}${why ? ` (owner ${why})` : ''}; the app keeps its own way until it fetches the PAC again` })
     const m = (facts && identify(facts)) || {}
     if (mine && m.reason === 'match' && onSet.has(m.agent)) seen.add({ harness: m.agent, pid: q, start: facts.startedAt ?? null }) // taking the PAC is reading the entry (P12)
     const leg = await pacLeg({ systemProxy: systemProxy(), isTrocarDoor: (v) => isTrocarDoorUrl(v, { ports: [...doors.values()].map((x) => x.port) }) }) // what this door dials too

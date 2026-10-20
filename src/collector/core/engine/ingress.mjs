@@ -8,7 +8,8 @@
 //   1. read the opener — CONNECT or SOCKS5; anything else (an absolute-URI GET included) is closed,
 //      `ingress-unknown`;
 //   2. check the token, in constant time — 407 / SOCKS auth failure and `ingress-auth-failed`, zero upstream connections;
-//   3. lookupIngress({peer, user, target}) → the flow's meta, or {health:true, group}, or null (an unknown user: also an auth failure);
+//   3. lookupIngress({peer, user, target}) → the flow's meta, or {health:true, group}, or {refuse:{code, reason}} (the door refused this process:
+//      one record, closed unanswered), or null (an unknown user: also an auth failure);
 //   4. a health probe (the target is the group's re-entry point itself): 200, then 204 to every `HEAD`/`GET /trocar-health/<g>`
 //      on the kept-alive tunnel; no upstream, no flows/ row, no envelope. It never leaves the machine (invariant 1);
 //   5. dial the upstream — direct, or the proxy prelude trocar writes (http / socks5; the user's proxy credentials ride only here) —
@@ -196,7 +197,7 @@ async function viaSocks5(sock, up, target, deadline) {
 /**
  * createIngress({ token, lookupIngress, handleFlow, connectUpstream, failure, timing, refuse }) → { attach(server), handle(socket), stats(), closeIdle() }
  *   token            the install's ingress token (4.8 §3); a connection that does not present it gets 407 / auth failure
- *   lookupIngress    async ({peer, user, target:{address, port, family?}}) → IngressMeta | {health:true, group} | null (an unknown user)
+ *   lookupIngress    async ({peer, user, target:{address, port, family?}}) → IngressMeta | {health:true, group} | {refuse:{code, reason}} | null (an unknown user)
  *   handleFlow       (socket, meta, {upstream, redial}) — the engine's flow starter; `redial` re-dials through the same upstream when the
  *                    upstream carries no credentials (4.6 让路), else undefined
  *   connectUpstream  ({address, port}) → a connecting net.Socket (the engine's; tests inject)
@@ -315,6 +316,9 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       r.detach(); return o.badGateway('lookup')
     }
     if (!meta) { authFailed(o.user, 'unknown user'); r.detach(); return o.denied() }
+    // a door that refused this process (the PAC door, 4.11 P10): one record of its own code, and the connection closed unanswered — a 407 would ask
+    // for credentials the door never takes (and Chromium does not fall over to the PAC's next entry on one)
+    if (meta.refuse) { failure({ where: 'ingress', code: meta.refuse.code, peer, reason: meta.refuse.reason }); r.detach(); return socket.destroy() }
     // the client left while the lookup ran: nobody is waiting for a dial, and the user's proxy must not get its credentials for one (§5.1, §5.2)
     if (r.isGone()) return void r.detach()
 

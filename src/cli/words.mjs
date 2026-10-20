@@ -75,7 +75,7 @@ export const FAILURE_WORDS = Object.freeze({
   'framer-error': 'a request could not be parsed',
   'unpaired-response': 'a response arrived with no request to pair it with',
   'prior-proxy-unknown': 'the proxy in use before trocar could not be told',
-  'pac-peer-refused': "trocar's proxy auto-config refused a program of another user",
+  'pac-peer-refused': "trocar's proxy auto-config door refused a program not shown to be yours",
   'upstream-header-ignored': 'a routing header from a program that should not send one was ignored',
   untrusted: 'a connection from a program that does not trust trocar yet; passed on unread',
   untracked: 'a connection from a program trocar does not follow; passed on unread',
