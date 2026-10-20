@@ -162,8 +162,8 @@ export function mount(el, ctx) {
       projSig = po.sig
     }
     if (f.sort !== sortSig) {
-      if (sortSig == null) $('mw-sort').innerHTML = popMenu('lib-sort', `${W.SORT_MENU}:${W.SORTS[f.sort]}`, 'lib-sort-label', sortItemsHtml(f.sort))
-      else { $('lib-sort-label').textContent = `${W.SORT_MENU}:${W.SORTS[f.sort]}`; $('lib-sort').innerHTML = sortItemsHtml(f.sort) }
+      if (sortSig == null) $('mw-sort').innerHTML = popMenu('lib-sort', `${W.SORT_MENU}: ${W.SORTS[f.sort]}`, 'lib-sort-label', sortItemsHtml(f.sort))
+      else { $('lib-sort-label').textContent = `${W.SORT_MENU}: ${W.SORTS[f.sort]}`; $('lib-sort').innerHTML = sortItemsHtml(f.sort) }
       sortSig = f.sort
     }
     if (document.activeElement !== qEl && qEl.value !== f.q) qEl.value = f.q // never rewrite the box someone is typing in
