@@ -86,8 +86,7 @@ over `GET /api/<name>` (D59), and `asight status` shows its address (never the k
 reads `~/.asight/raw/`, so **the sessions of every captured harness appear side by side on one
 board** (the collector's `flows/`, `audit/` and `replays/` are not envelopes and are not shown).
 
-**The new board** is served at `/v2/` (same address, same key) until it replaces this one at `/`. Besides
-reading, it writes three things, each through the plan-then-confirm protocol of `/control/*` (it shows the
+There is one board, at `/`. Besides reading, it writes three things, each through the plan-then-confirm protocol of `/control/*` (it shows the
 files a change touches, focus on Cancel, and Cancel or Esc sends nothing): **an agent's capture on or off**
 (the capture page; the first-use overview has the same row per agent), **Set up** for an agent installed after
 asight (only what that agent is missing), and **a traffic class's level** (the storage page: everything or log
