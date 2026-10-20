@@ -3,13 +3,14 @@
 // with the predecessor's whole stitched context, then the predecessor's reply, then its own delta.
 //   head = { plan: { segments, contextState, missing }, outputSegs } | null (the predecessor is not in the capture)
 // → { segments, contextState, missing }: 'reconstructed' when the whole chain is in the capture, else 'partial' with
-// what is missing. A segment is { rec, field, path, item }: where the item's bytes sit, so each block stays verbatim.
+// what is missing; a 'server_edited' predecessor passes its state on. A segment is { rec, field, path, item }: where the
+// item's bytes sit, so each block stays verbatim.
 // Leaf module.
 export function extendChain(head, own, missingWhenAbsent) {
   if (!head) return { segments: own, contextState: 'partial', missing: missingWhenAbsent };
   return {
     segments: [...head.plan.segments, ...head.outputSegs, ...own],
-    contextState: head.plan.contextState === 'partial' ? 'partial' : 'reconstructed',
+    contextState: head.plan.contextState === 'partial' || head.plan.contextState === 'server_edited' ? head.plan.contextState : 'reconstructed',
     missing: head.plan.missing || null,
   };
 }

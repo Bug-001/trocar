@@ -6,18 +6,20 @@
 // The context a continuation ran with is RECONSTRUCTED across records:
 //   messages(N) = stitched messages(N-1) ⧺ N-1's assistant reply ⧺ messages(N)
 //   system(N)   = N's own system when it resends one with a cached (non-volatile) block, else the thread's system
-//                 with N's own volatile blocks in place of the inherited ones (isVolatile: never in the cache key)
+//                 with N's own volatile blocks in the inherited ones' places (isVolatile: never in the cache key);
+//                 N sends no system at all = the thread's whole system
 //   tools(N)    = N's own tools when non-empty, else the thread's
 // Whether to stitch depends ONLY on thread.type === 'continue' (never on a model, a version or a beta header), and
 // the predecessor is found by its reply id anywhere in the session's records: chains interleave (the main thread,
 // one per subagent) and arrive in any order. A call without `thread` is its own whole context, as before.
-// States (3.2:52): every predecessor in the capture = 'reconstructed'; one missing, so the inherited system / tools
-// and earlier turns cannot be restored = 'partial', with what is missing. Bytes are untouched: request blocks are
+// States (3.2:52): every predecessor in the capture with a whole reply = 'reconstructed'; one missing, its reply
+// incomplete, its own context partial or its thread.type unknown = 'partial', with what is missing; a server-edited
+// context anywhere up the chain = 'server_edited'. Bytes are untouched: request blocks are
 // located in the record they came from (locate → req_body path); an assistant reply is assembled from the streamed
 // reply, so it says where it came from instead of a byte span. Leaf module.
 import { parsedRequestBody } from './request-body.mjs';
 import { isVolatile, serverEdited } from './cc.mjs';
-import { contextStateOfRequest } from './capture-labels.mjs';
+import { contextStateOfRequest, respIncompleteOf } from './capture-labels.mjs';
 import { extendChain } from './chain.mjs';
 
 const bodyOf = (rec) => { const b = parsedRequestBody(rec); return b && typeof b === 'object' ? b : null; };
@@ -60,19 +62,52 @@ const own = (rec, body) => {
 };
 const volatile = (s) => isVolatile('system', s.item);
 
+// Why a predecessor does not hand its successor a whole context (3.2:52, invariant 4, D38): its reply did not
+// fully arrive, so the turn the server appended to the thread is not known in full. → reason | null
+function replyGap(pred) {
+  const id = `record ${pred.id ?? '(no id)'}`;
+  const r = (pred.resp || pred.response) || {};
+  if (r.kind === 'error') return `the reply of ${id} ended in an error: only what arrived before it is known`;
+  const inc = respIncompleteOf(pred);
+  if (inc) return `the reply of ${id} is incomplete (${inc.text})`;
+  if (!replySegs(pred).length) return `the reply of ${id} has no content blocks, so what the model answered is not known`;
+  return null;
+}
+// The call's own state on top of its chain's: a request stored only in part, a context the server edited.
+function finish(rec, plan) {
+  if (plan.contextState !== 'partial' && contextStateOfRequest(rec))
+    return { ...plan, contextState: 'partial', missing: `the request body of record ${rec.id ?? '(no id)'} is stored only in part` };
+  if (plan.contextState !== 'partial' && serverEdited(rec)) return { ...plan, contextState: 'server_edited' };
+  return plan;
+}
+
 // Plan = { thread, replyId, lineage, contextState, missing, system, tools, segments }, for every thread call.
 function build(rec, body, thread, head) {
   const o = own(rec, body);
   const replyId = replyIdOf(rec);
-  if (thread.kind !== 'continue') return { thread, replyId, lineage: replyId || String(rec.id), contextState: 'complete', missing: null, system: o.system, tools: o.tools, segments: o.messages };
+  if (thread.kind !== 'continue') {
+    const known = thread.kind === 'create';
+    return finish(rec, { thread, replyId, lineage: replyId || String(rec.id), contextState: known ? 'complete' : 'partial',
+      missing: known ? null : `thread.type ${JSON.stringify(thread.kind)} is neither create nor continue, so whether the server added earlier context is not known`,
+      system: o.system, tools: o.tools, segments: o.messages });
+  }
   const absent = thread.prevId
     ? `message ${thread.prevId} (named by thread.previous_message_id) is the reply of no call in this capture, so the earlier turns and the system / tools the server kept for the thread are not known`
     : 'this call continues a thread but names no previous_message_id, so the earlier turns and the system / tools the server kept for the thread are not known';
   const hp = head && head.plan;
-  const ext = extendChain(head, o.messages, absent);
-  const system = o.system.some((s) => !volatile(s)) ? o.system : [...o.system, ...(hp ? hp.system.filter((s) => !volatile(s)) : [])];
+  let { segments, contextState, missing } = extendChain(head, o.messages, absent);
+  const gap = head && replyGap(head.pred);
+  if (gap) { contextState = 'partial'; missing = missing ? `${missing}; ${gap}` : gap; }
+  // the call's volatile blocks (never in the cache key) take the inherited volatile blocks' places; none sent → the thread's
+  let system = o.system;
+  if (hp && !o.system.length) system = hp.system;
+  else if (hp && o.system.every(volatile)) {
+    const mine = [...o.system];
+    const kept = hp.system.flatMap((s) => (!volatile(s) ? [s] : mine.length ? [mine.shift()] : []));
+    system = [...mine, ...kept];
+  }
   const tools = o.tools.length ? o.tools : (hp ? hp.tools : []);
-  return { thread, replyId, lineage: hp ? hp.lineage : (thread.prevId || String(rec.id)), ...ext, system, tools };
+  return finish(rec, { thread, replyId, lineage: hp ? hp.lineage : (thread.prevId || String(rec.id)), segments, contextState, missing, system, tools });
 }
 
 // The board's batch form over one session's records (any order, any wire). → Map<rec, Plan> for thread calls.
@@ -102,7 +137,7 @@ export function threadPlan(records) {
       const rec = path[k], body = bodyOf(rec), t = threadOf(body);
       const pred = t.kind === 'continue' && t.prevId ? byReply.get(t.prevId) : null;
       const hp = pred && plans.get(pred);
-      plans.set(rec, build(rec, body, t, hp ? { plan: hp, outputSegs: replySegs(pred) } : null));
+      plans.set(rec, build(rec, body, t, hp ? { plan: hp, outputSegs: replySegs(pred), pred } : null));
     }
   }
   return plans;
@@ -127,13 +162,13 @@ export function locate(block, plan) {
   return { rec: seg.rec, field: seg.field, path: Array.isArray(seg.item.content) ? [...seg.path, 'content', block.bi] : [...seg.path, 'content'] };
 }
 
-// Tool definitions that enter the context: the tools array plus the ones added mid-conversation (a tool_addition
-// block in a message, D37 ①: inline tools).
+// Tool definitions in the context: the tools array plus the ones added mid-conversation, less the ones removed
+// (tool_addition / tool_removal blocks in a message, D37 ①: inline tools).
 export function toolCountOf(req) {
   let n = Array.isArray(req && req.tools) ? req.tools.length : 0;
   for (const m of Array.isArray(req && req.messages) ? req.messages : [])
-    for (const b of Array.isArray(m && m.content) ? m.content : []) if (b && b.type === 'tool_addition') n++;
-  return n;
+    for (const b of Array.isArray(m && m.content) ? m.content : []) n += b && b.type === 'tool_addition' ? 1 : b && b.type === 'tool_removal' ? -1 : 0;
+  return Math.max(0, n);
 }
 
 // The cross-record hooks the board's multi-lane assembler calls (same names as the WebSocket dissector's).
@@ -143,9 +178,7 @@ export const CC_THREADS = Object.freeze({
   contextOf: (rec, plans) => {
     const p = plans && plans.get(rec);
     if (!p) return null;
-    const stored = contextStateOfRequest(rec);
-    const contextState = stored || (p.contextState === 'partial' ? 'partial' : serverEdited(rec) ? 'server_edited' : p.contextState);
-    return { req: stitchedRequest(rec, p), contextState, missing: p.missing, lineage: p.lineage, continued: p.thread.kind === 'continue',
+    return { req: stitchedRequest(rec, p), contextState: p.contextState, missing: p.missing, lineage: p.lineage, continued: p.thread.kind === 'continue',
       locate: (b) => locate(b, p) };
   },
   toolCountOf,

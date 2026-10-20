@@ -93,3 +93,65 @@ test('system-role messages and tool_addition blocks stay in the context; added t
   assert.deepEqual(sys, [body(s.M0).messages[1], body(s.M1).messages[1]]);
   assert.equal(CC_THREADS.toolCountOf(req), body(s.M0).tools.length + 1);
 });
+
+test('a predecessor whose reply did not fully arrive makes the call and its successors partial, naming that record', () => {
+  const s = threadSession();
+  const variants = {
+    truncated: { ...s.M0.resp, truncated: true },
+    unparsedEvents: { ...s.M0.resp, unparsed_events: 2 },
+    errorEnvelope: { kind: 'error', status: 529, partial: s.M0.resp },
+    noContent: replyOf('msg_m0', []),
+  };
+  for (const [name, resp] of Object.entries(variants)) {
+    const M0 = { ...s.M0, resp };
+    const plans = threadPlan([M0, s.M1, s.M2]);
+    assert.equal(CC_THREADS.contextOf(M0, plans).contextState, 'complete', name);
+    for (const r of [s.M1, s.M2]) {
+      const c = CC_THREADS.contextOf(r, plans);
+      assert.equal(c.contextState, 'partial', `${name}: ${r.id}`);
+      assert.match(c.missing, /M0/, `${name}: ${r.id} names the record`);
+    }
+  }
+  // a predecessor whose own request is stored only in part passes partial on
+  const M0p = { ...s.M0, req_truncated: true };
+  const p2 = threadPlan([M0p, s.M1]);
+  assert.equal(CC_THREADS.contextOf(s.M1, p2).contextState, 'partial');
+  assert.ok(CC_THREADS.contextOf(s.M1, p2).missing);
+});
+
+test('a server-edited context up the chain stays server_edited down it', () => {
+  const s = threadSession();
+  const edited = { type: 'message_delta', context_management: { applied_edits: [{ type: 'clear_tool_uses' }] } };
+  const M0 = { ...s.M0, resp: { ...s.M0.resp, raw_sse: [...(s.M0.resp.raw_sse || []), edited] } };
+  const plans = threadPlan([M0, s.M1, s.M2]);
+  for (const r of [M0, s.M1, s.M2]) assert.equal(CC_THREADS.contextOf(r, plans).contextState, 'server_edited', r.id);
+});
+
+test('an unknown thread.type is not a complete head: it and its successors are partial with a reason', () => {
+  const s = threadSession();
+  const M0 = record('M0', s.M0.ts_request, { ...body(s.M0), thread: { type: 'branch' } }, s.M0.resp);
+  const plans = threadPlan([M0, s.M1]);
+  for (const r of [M0, s.M1]) {
+    const c = CC_THREADS.contextOf(r, plans);
+    assert.equal(c.contextState, 'partial', r.id);
+    assert.ok(c.missing, r.id);
+  }
+});
+
+test('a continuation\'s volatile system blocks take the inherited ones\' places; no system at all inherits the whole', () => {
+  const s = threadSession();
+  const head = body(s.M0);
+  const billing = head.system[0];
+  const M0 = record('M0', s.M0.ts_request, { ...head, system: [head.system[1], billing, head.system[2]] }, s.M0.resp);
+  const vol = { type: 'text', text: 'x-anthropic-billing-header: cc_version=2.1; cch=9;' };
+  const M1 = record('M1', s.M1.ts_request, { ...body(s.M1), system: [vol] }, s.M1.resp);
+  assert.deepEqual(stitchedRequest(M1, threadPlan([M0, M1]).get(M1)).system, [head.system[1], vol, head.system[2]]);
+  const { system: _drop, ...noSys } = body(s.M1);
+  const M1n = record('M1', s.M1.ts_request, noSys, s.M1.resp);
+  assert.deepEqual(stitchedRequest(M1n, threadPlan([M0, M1n]).get(M1n)).system, body(M0).system);
+});
+
+test('tool_removal blocks take their definitions out of the tool count', () => {
+  const req = { tools: [{ name: 'A' }, { name: 'B' }], messages: [{ role: 'system', content: [{ type: 'tool_addition', tool: {} }, { type: 'tool_removal', name: 'A' }, { type: 'tool_removal', name: 'B' }] }] };
+  assert.equal(CC_THREADS.toolCountOf(req), 1);
+});

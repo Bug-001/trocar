@@ -135,7 +135,9 @@ What the board cannot vouch for, it labels on the call (raw panel and the top of
   thread, following `thread.previous_message_id`, with the earlier replies in between. The main
   conversation and each subagent are their own threads and their own lanes. Request blocks open their
   verbatim bytes in the call that sent them; an earlier reply says it was rebuilt from that call's
-  stream. If an earlier call of the thread was not captured, the call is badged 不完整 and says which.
+  stream. If an earlier call of the thread was not captured or its reply did not fully arrive, the call and the
+  rest of the thread are badged 不完整 and say which call and why. Background calls (request class
+  `auxiliary`) go to the background lane.
 
 Reading the records across sessions is `asight query <name>` — the one core that reads data, of which
 the board is the HTTP shell (D59); there is no separate ETL step and no database to load. Both go through the
