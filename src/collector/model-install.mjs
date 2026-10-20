@@ -187,7 +187,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     owned(unit.path, 'unit', null, unit.text(d.env), 0o644)
   }
   const agentList = readAgentList({ home, fs }).entries
-  for (const d of harnesses.filter((x) => installedHarnesses.includes(x.name))) m.liveness[d.name] = { ...unitedLiveness(m.liveness[d.name], livenessOf(d, { agentList, os })), ...pick(m.liveness[d.name], ['on_at', 'off_at']) }
+  for (const d of harnesses.filter((x) => installedHarnesses.includes(x.name))) m.liveness[d.name] = { ...unitedLiveness(m.liveness[d.name], livenessOf(d, { agentList, os })), ...pick(m.liveness[d.name], ['on_at', 'off_at', 'windows']) }
   return finish()
 
   function finish() {

@@ -9,6 +9,26 @@ import { harnessesOf, withAgentList, mayHaveRead } from './signature.mjs'
 
 const msOf = (v) => { const t = typeof v === 'string' ? Date.parse(v) : Number.isFinite(v) ? v : NaN; return Number.isFinite(t) ? t : null }
 const inWindow = (at, since, until) => at == null || ((since == null || at >= since) && (until == null || at < until))
+export const WINDOWS_MAX = 32 // liveness.<h>.windows keeps at most this many earlier on windows (4.11 P12)
+
+/** Every on window of `l` whose entry value is the current one (4.11 P12): the earlier ones `on` kept in `windows` (the door's port and token
+ *  unchanged since), then the latest [on_at, off_at) — `until` null while it is still open. A full list's earliest start is not known (null: the
+ *  safe direction, one more holder). → [{ since, until }] */
+export function windowsOf(l) {
+  if (!l || typeof l !== 'object' || l.on_at == null) return []
+  const past = (Array.isArray(l.windows) ? l.windows : []).filter((w) => w && w.on_at != null && w.off_at != null).map((w) => ({ since: msOf(w.on_at), until: msOf(w.off_at) }))
+  if (past.length >= WINDOWS_MAX) past[0].since = null
+  return [...past, { since: msOf(l.on_at), until: l.off_at == null ? null : msOf(l.off_at) }]
+}
+
+/** Did live process `p` (startedAt in ms or ISO) read an entry of `l`'s harness that still leads to its door (4.11 P11 status, D31①)? → true · false · null (its start is not known). */
+export function sawEntry(p, l) {
+  const w = windowsOf(l)
+  if (!w.length) return false
+  if (p.startedAt == null) return null
+  const at = msOf(p.startedAt)
+  return w.some((x) => mayHaveRead({ startedAt: at }, l, x.since, x.until))
+}
 
 /** → `[{ harness, pid, start, why: 'started-in-window' | 'rereads' | 'start-unknown' | 'door-seen' }]`, in liveness order, one row per (harness, pid).
  *  `procs`: the live table (listProcs rows); `doorSeen`: `[{ harness, pid, start, at }]` from the door's accepts; `agentList`: readAgentList's result,
@@ -20,15 +40,15 @@ export function holdersOf({ manifest, procs = [], doorSeen = [], agentList = nul
   for (const [h, l] of Object.entries(liveness)) {
     // holders exist only after off (1.6 R5): a record without on_at is not the model's (Linux, the old model), one without off_at is still on
     if (!l || typeof l !== 'object' || l.per_request || l.on_at == null || l.off_at == null) continue
-    const since = msOf(l.on_at), until = msOf(l.off_at)
+    const windows = windowsOf(l) // every on window that led to this door, the latest last (an off→on keeps the earlier ones, P12)
     const seen = new Set()
     const add = (p, why) => { if (!seen.has(p.pid)) { seen.add(p.pid); out.push({ harness: h, pid: p.pid, start: p.startedAt ?? null, why }) } }
     for (const p of procs) {
-      if (!harnessesOf({ [h]: l }, p).length || !mayHaveRead(p, l, since, until)) continue
+      if (!harnessesOf({ [h]: l }, p).length || !windows.some((w) => mayHaveRead(p, l, w.since, w.until))) continue
       add(p, p.startedAt == null ? 'start-unknown' : l.rereads ? 'rereads' : 'started-in-window')
     }
     for (const s of doorSeen) {
-      if (!s || s.harness !== h || !inWindow(msOf(s.at), since, until)) continue
+      if (!s || s.harness !== h || !windows.some((w) => inWindow(msOf(s.at), w.since, w.until))) continue
       const p = procs.find((x) => x.pid === s.pid && (x.startedAt ?? null) === (s.start ?? null)) // pid + start: a reused pid is another process
       if (p) add(p, 'door-seen')
     }

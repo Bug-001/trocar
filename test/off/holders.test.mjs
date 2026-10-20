@@ -3,7 +3,7 @@
 // daemon's poll compute the same table. Generated over the start-time axis around the on window; never by counting connections.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { holdersOf } from '../../src/off/holders.mjs'
+import { holdersOf, sawEntry, WINDOWS_MAX } from '../../src/off/holders.mjs'
 import { compileIdentity } from '../../src/off/identity.mjs'
 import { serializeSignature } from '../../src/off/signature.mjs'
 
@@ -116,4 +116,22 @@ test('a repeated off keeps the first off_at (D54): a process started between the
   saveManifest(dir, again)
   await undoHarnesses({ dir, home, manifest: readManifest(dir), ids: null, procs: async () => [], now: new Date(OFF + 20_000) })
   assert.equal(readManifest(dir).liveness.agentx.off_at, iso(OFF + 20_000))
+})
+
+// P12 `windows`: the earlier on windows of the same door count as the latest does — for the holder after the next off and for `status`'s
+// "read an entry" (sawEntry, 4.11 P11 status); the gap between two windows (the harness off: no entry to read) counts for neither
+const W0 = { on_at: iso(ON - 7_200_000), off_at: iso(ON - 3_600_000) }
+for (const [label, start, inside] of [['in the earlier window', ON - 5_000_000, true], ['in the gap', ON - 1_000_000, false], ['before every window', ON - 9_000_000, false], ['in the latest window', ON + 5, true]]) {
+  test(`windows: a process started ${label} is ${inside ? '' : 'not '}a holder and ${inside ? 'read' : 'did not read'} an entry`, () => {
+    const l = rec('agentx', { windows: [W0] })
+    assert.equal(holdersOf({ manifest: manifest({ agentx: l }), procs: [proc(7, 'agentx', start)] }).length, inside ? 1 : 0)
+    const { off_at, ...on } = l
+    assert.equal(sawEntry({ startedAt: start }, on), inside, 'while on (the latest window open)')
+  })
+}
+test('windows: a full list makes its earliest start unknown (the safe direction); no window read nothing', () => {
+  const full = Array.from({ length: WINDOWS_MAX }, (_, i) => ({ on_at: iso(ON - (WINDOWS_MAX - i) * 2000), off_at: iso(ON - (WINDOWS_MAX - i) * 2000 + 1000) }))
+  assert.equal(sawEntry({ startedAt: 0 }, rec('agentx', { windows: full })), true)
+  assert.equal(sawEntry({ startedAt: ON + 5 }, { identity: identity('agentx') }), false)
+  assert.equal(sawEntry({ startedAt: null }, rec('agentx')), null)
 })
