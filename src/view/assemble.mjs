@@ -205,17 +205,24 @@ function flatRequest(d, r, ctx) {
 // with the call in its META form (no blocks, `paged_out`); bodyOf() gives an in-window call its blocks back from its record.
 function flatLaneFold(d, read) {
   const plans = d.prepare ? d.prepare(read) : null; // a wire whose context spans records (D37 ②) plans it as the calls arrive
-  const byLane = new Map(); // lane kind → its calls, in step order
-  const prevFlatOf = new Map(); // lane kind → the last call that established a cache prefix in that lane
+  // A lane of the fold is one agent's calls (3.5 §缓存): a subagent named by the harness's agent id, or by the wire's own (a
+  // WebSocket connection), is its own; the rest by lane kind. The board shows the kinds (finish()).
+  const byLane = new Map(); // lane → its calls, in step order
+  const prevFlatOf = new Map(); // lane → the last call that established a cache prefix in that lane
   const prevChainOf = new Map(); // and its resumable prefix-hash chain (prefixChain)
-  const prevInfoOf = new Map(); // lane kind → { msgCount, marker } of the last parsed call: the compaction verdict's predecessor
+  const prevInfoOf = new Map(); // lane → { msgCount, marker } of the last parsed call: the compaction verdict's predecessor
+  const laneOfCall = new WeakMap();
+  const laneOf = (kind, h, r) => {
+    const agent = kind === 'subagent' ? h.laneKey ?? (d.agentOf ? d.agentOf(r) : null) : null;
+    return agent == null ? kind : `${kind}\n${agent}`;
+  };
   function push(r) {
     const call = take(r);
     if (!call) return null;
-    const cs = byLane.get(call.streamId);
+    const lane = laneOfCall.get(call), cs = byLane.get(lane);
     if (cs.length < 2 || byOrder(cs[cs.length - 2], call) < 0) return call;
     const ids = cs.slice(0, -1).map((c) => c.id);
-    for (const m of [byLane, prevFlatOf, prevChainOf, prevInfoOf]) m.delete(call.streamId);
+    for (const m of [byLane, prevFlatOf, prevChainOf, prevInfoOf]) m.delete(lane);
     return relane(ids, r, read, take);
   }
   function take(r) {
@@ -224,8 +231,10 @@ function flatLaneFold(d, read) {
     // the dissector's own lane (a warm-up, 3.1:37) first, else the harness table's hint (3.4: e.g. a subagent
     // header) — the rule the ETL uses too (registry.flatLaneOf); labels are server-side (invariant 3)
     const laneKind = flatLaneOf(d, r);
-    const prevFlat = prevFlatOf.get(laneKind) || null;
-    const prevChain = prevChainOf.get(laneKind) || null; // set together with prevFlat: both or neither
+    const h = hintsOf(r);
+    const lane = laneOf(laneKind, h, r);
+    const prevFlat = prevFlatOf.get(lane) || null;
+    const prevChain = prevChainOf.get(lane) || null; // set together with prevFlat: both or neither
     // a call the dissector knows ran but whose request was not stored (ctx.unrenderable says why): no context to
     // show either, but no failure — its reply and usage are real
     const unstored = ctx && ctx.unrenderable ? String(ctx.unrenderable) : null;
@@ -243,11 +252,10 @@ function flatLaneFold(d, read) {
     // 3.4 compaction, the ETL's verdict (compactionVerdict, the one shared rule): a harness hint (Codex
     // request_kind=compaction, a compact header), a text marker on its rising edge (Hermes), then a big drop.
     // The count is the dissector's own (the ETL's), so compaction_from / _to match DuckDB.
-    const h = hintsOf(r);
     const msgN = d.messageCount ? d.messageCount(req) : (req.message_count || 0);
-    const comp = noContext() ? { compaction: false } : compactionMeta(compactionVerdict(prevInfoOf.get(laneKind) || null,
+    const comp = noContext() ? { compaction: false } : compactionMeta(compactionVerdict(prevInfoOf.get(lane) || null,
       { hint: h.compaction === true, marker: h.compactionMarker === true, msgCount: msgN }));
-    if (!noContext()) prevInfoOf.set(laneKind, { msgCount: msgN, marker: h.compactionMarker === true });
+    if (!noContext()) prevInfoOf.set(lane, { msgCount: msgN, marker: h.compactionMarker === true });
     const brk = cacheBreak(prevFlat, flat, { compaction: comp.compaction });
     // 3.2:124 on the board too: what is shown of a partial / server-edited context is not what the model saw,
     // so no byte-identity claim and no ground truth is made over it
@@ -276,11 +284,12 @@ function flatLaneFold(d, read) {
       usage, cacheBreak: brk, gt: brk.gt, prefixSha256: curPfx,
     };
     placed(call, r, self);
-    if (!byLane.has(laneKind)) byLane.set(laneKind, []);
-    byLane.get(laneKind).push(call);
+    laneOfCall.set(call, lane);
+    if (!byLane.has(lane)) byLane.set(lane, []);
+    byLane.get(lane).push(call);
     // A call that failed never established a cache prefix, so it MUST NOT become the next baseline. A call whose request
     // was not stored does (with no blocks, as in the ETL): the next call then has no known prefix to compare with.
-    if (!(r.error || failed || (st != null && st !== 200))) { prevFlatOf.set(laneKind, flat); prevChainOf.set(laneKind, chain); }
+    if (!(r.error || failed || (st != null && st !== 200))) { prevFlatOf.set(lane, flat); prevChainOf.set(lane, chain); }
     return call;
   }
   // shipped as metadata + a text_ref per block, never the body (4.2:55); a cross-record context locates each block in the
@@ -294,9 +303,9 @@ function flatLaneFold(d, read) {
   const all = () => [...byLane.values()].flat();
   function finish() {
     const calls = all().sort((a, b) => a.gi - b.gi);
-    const kinds = Object.keys(FLAT_LANES).filter((k) => byLane.has(k));
+    const kinds = Object.keys(FLAT_LANES).filter((k) => calls.some((c) => c.streamId === k));
     const lanes = kinds.map((k) => {
-      const lc = byLane.get(k);
+      const lc = calls.filter((c) => c.streamId === k);
       // the compaction events the board's outline lists, carrying the step's inference marker with them (invariant 4)
       const events = lc.filter((c) => c.compaction).map((c) => ({ type: 'compaction', step: c.gi, streamId: k, from: c.evictedFrom, to: c.evictedTo,
         inferred: c.compactionInferred, confidence: c.compactionConfidence, basis: c.compactionBasis }));

@@ -173,7 +173,7 @@ export function normRespWs(rec) {
 }
 
 // The dissector object the board's flat-lane assembler calls (D25: the shared layer names no wire; the
-// registry registers this under 'openai-responses-ws'). prepare (→ a planner whose context(rec) stitches) / roleOf / laneOf / failed are the hooks a
+// registry registers this under 'openai-responses-ws'). prepare (→ a planner whose context(rec) stitches) / roleOf / laneOf / agentOf / failed are the hooks a
 // wire with a cross-record context provides.
 export const RESPONSES_WS = Object.freeze({
   id: 'openai-responses-ws', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
@@ -184,6 +184,7 @@ export const RESPONSES_WS = Object.freeze({
   prepare: (read) => createChain(read),
   admits: (rec) => { const r = roleOf(rec); return r === 'call' || r === 'warmup' || r === 'unstored'; },
   laneOf: (rec) => (roleOf(rec) === 'warmup' ? 'probe' : null), // W3: a warmup is lane probe, not a turn
+  agentOf: connOf, // one connection carries one agent's conversation: a subagent is folded by its own (3.5 §缓存)
   boardFlat: (req) => boardFlat(req),
   normResp: (rec) => normRespWs(rec),
   reqCounts: (req) => reqCountsFor('responses', req),

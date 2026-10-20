@@ -131,3 +131,19 @@ test('a late call in its own lane, and one in a lane told apart by order, answer
   await same(late(sub[0], 9, legacy))
   await same(late(main[2], 3))
 })
+
+// Codex subagents side by side, each on its own WebSocket connection (one connection = one agent): a subagent's call is diffed against
+// its OWN previous call (3.5 §缓存), so the prefix it keeps grows with its own conversation, byte identical — not against whichever
+// subagent called just before it.
+test('subagents side by side on a WebSocket each: a call\'s cache break is against its own agent\'s previous call', async () => {
+  const home = path.join(tmpDir('trocar-sagent-'), '.trocar')
+  const k = 3
+  const s = bigSession({ home, wire: 'ws', growth: 1_500, subEvery: 2, subLanes: k, subLen: 100 })
+  s.append(40)
+  const doc = await session(home, { id: s.id, after: '0', limit: '60' }, { fs: freshFs() })
+  const sub = doc.analyzed.lanes.find((l) => l.kind === 'subagent').calls // their turns taken in turn: call i is agent i % k's
+  for (let i = k; i < sub.length; i++) {
+    assert.equal(sub[i].cacheBreak.prefixByteIdentical, true, `subagent call ${i}`)
+    assert.ok(sub[i].cacheBreak.idx > sub[i - k].cacheBreak.idx, `subagent call ${i} keeps more than its agent's previous call did`)
+  }
+})
