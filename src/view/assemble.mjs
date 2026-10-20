@@ -576,7 +576,7 @@ function multiLaneFold(read) {
   const keyMemo = new Map();
   const prev = new Map(); // lane (stream id) → { flat, chain } of the call that established the lane's cache baseline
   function push(r, gi) {
-    const ctx = MULTI_LANE_CONTEXT.contextOf(r, plans);
+    const ctx = plans.context(r);
     const call = an.push(hydrateForBoard(r, ctx), gi);
     if (!call) return null;
     call.wire = wireOf(call.rec, 'anthropic', ctx); // cheap meta: rides on out-of-window calls too
@@ -627,7 +627,7 @@ function multiLaneFold(read) {
   // SHIP METADATA + A LOCATOR, NEVER THE BODY (RFC 4.2:55 「看全文=回源」 · 1.4:35 「点开惰性填正文」): the collapsed row plus a
   // text_ref; the body is fetched from the raw capture when a row is opened.
   function bodyOf(call, r) {
-    const ctx = MULTI_LANE_CONTEXT.contextOf(r, plans);
+    const ctx = plans.context(r);
     const h = admitted(hydrateForBoard(r, ctx));
     const flat = anthropicFlat(h.request, new Map());
     return { flat: ctx ? withLocatedRefs(flat, ctx.locate, new Map()) : withRefs(flat, h), nonBlockKeys: nonBlockKeysOf(h, 'anthropic'), rec: slimRec(h), norm: normResp(h) };

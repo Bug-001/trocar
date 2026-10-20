@@ -39,13 +39,6 @@ export function extendChain(up, own, missingWhenAbsent) {
   return { up, own, contextState: up.contextState === 'partial' || up.contextState === 'server_edited' ? up.contextState : 'reconstructed',
     missing: up.missing || null };
 }
-// The batch shape the Message Threads planner still builds (head = { plan: { segments, contextState, missing }, outputSegs }).
-export function extendSegments(head, own, missingWhenAbsent) {
-  if (!head) return { segments: own, contextState: 'partial', missing: missingWhenAbsent };
-  return { segments: [...head.plan.segments, ...head.outputSegs, ...own],
-    contextState: head.plan.contextState === 'partial' || head.plan.contextState === 'server_edited' ? head.plan.contextState : 'reconstructed',
-    missing: head.plan.missing || null };
-}
 /** A plan made whole: how many segments its context has (`n`) and how far down its chain it is (`depth`). */
 export const linked = (plan) => Object.assign(plan, { n: (plan.up ? plan.up.n + plan.up.out.length : 0) + plan.own.length, depth: plan.up ? plan.up.depth + 1 : 0 });
 
