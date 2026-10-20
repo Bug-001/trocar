@@ -13,7 +13,8 @@ import { createDoorIdentity } from '../engine/door-identity.mjs'
 import { verdictOf } from './verdict.mjs'
 import { upstreamFor, isTrocarDoorUrl, isLoopbackHost, HOOK_ENV } from './chain.mjs'
 import { pacHandler, pacLeg, peerAllowed } from './pac.mjs'
-import { createDoorSeen, createHolderPoll, mayExit } from './holders.mjs'
+import { createDoorSeen, createHolderPoll, mayExit, HOLDER_POLL_MS } from './holders.mjs'
+import { notCapturedClass } from '../../../health/codes.mjs'
 import { holdersOf } from '../../../off/holders.mjs'
 import { itemsOfPhase, readManifest as readManifestAt } from '../../../off/manifest.mjs'
 import { readStateFile } from '../../../off/state.mjs'
@@ -31,6 +32,9 @@ const untracked = (reason) => ({ not_captured: 'untracked', reason })
 const split = (g) => { const i = String(g).lastIndexOf(':'); return { harness: g.slice(0, i), routeId: g.slice(i + 1) } }
 const safe = async (f) => { try { return (await f()) ?? null } catch { return null } }
 const ISSUER_CODES = new Set([CODE.certIntermediateUnavailable, CODE.certKeyMissing]) // verdicts on the issuer's state, which changes (P2)
+const CACHE_MAX = 4096 // every per-process map is bounded, the oldest entry goes first (the arch's caches' bound)
+const keep = (m, k, v) => { m.delete(k); m.set(k, v); if (m.size > CACHE_MAX) m.delete(m.keys().next().value) }
+const PID_KEY = /^(\d+)(?:@(.+))?$/ // a negative-cache key of a process: "<pid>@<start>", or "<pid>" when the start time was not read
 /** Every env name a descriptor's proxy-mode data reads (trust sources, blockers, directory overrides), its proxy variables, the hook's and the
  *  certificate variables the union reads (⑭, CERT_VARS): what
  *  `proc.envOf` is asked for — never the whole environment (4.9 §5.2). */
@@ -51,11 +55,13 @@ function envNamesOf(desc) {
  *   proxyOf    (proxy text) → { kind: 'http' | 'socks5', host, port, auth? } | null: the arch's reading of a proxy address (parseProxyText + proxyAuthOf)
  *   templates  the hook templates (harness/templates TEMPLATES): a form whose cert's template says `sendsUpstreamHeader` may send X-Trocar-Upstream
  *   custody    the key custody, or 'unavailable' (no backend): then no issuer, every verdict forward-only (P2)
+ *   forget     (negKey, pid | null) → void: the engine's entries of a key whose process exited, or whose door closed, are to go (4.8 §5.5); the daemon
+ *              calls engine.forgetNegKey and records negative-cache-cleared. The keys come from `noteHeld(record)`, the engine's own failure records.
  * → { bindDoors, start, restore, on, off, lookupIngress, servePac, issuer, holders, mayExit, doors, attached }
  */
 export function createModelCollector({ harnesses, dir, identify, ownerOf = null, factsOf = null, proc = {}, ctx, systemProxy = () => null, custody = null, rootPem = null,
   procTable = async () => [], record = () => {}, event = () => {}, clock = Date.now, timers = globalThis, readState = null, readIngress = null, readManifest = null,
-  proxyOf, templates = {}, hostsOf = () => null, ownUid = process.getuid?.() ?? null, ownSid = null, agentList = () => null, openConns = () => 0, drain = null, pid = process.pid, fs = nodeFs, upstreamRoots = null } = {}) {
+  proxyOf, templates = {}, hostsOf = () => null, ownUid = process.getuid?.() ?? null, ownSid = null, agentList = () => null, openConns = () => 0, drain = null, pid = process.pid, fs = nodeFs, upstreamRoots = null, forget = () => {} } = {}) {
   if (typeof proxyOf !== 'function') throw new TypeError('createModelCollector needs proxyOf: how a proxy address is dialled is the arch\'s reading')
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const readSt = readState || (() => readStateFile(path.join(dir, 'state.json'), { fs }).state)
@@ -76,21 +82,32 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     try { found = (t.d.configHosts && t.d.configHosts({ ...ctx, env: new Map(), readText, listDir: (p) => { try { return ctx.readdir(p) } catch { return [] } } })) || [] } catch (e) { errs.push(String((e && e.message) || e)) }
     let extra = []
     try { extra = ((readSt().harnesses || {})[t.d.name] || {}).extra_hosts || [] } catch { /* no state: no extra hosts */ }
-    if (errs.length && !said.has(`config-unreadable\0${f.id}`)) { said.add(`config-unreadable\0${f.id}`); record({ event: 'failure', where: 'harness', code: CODE.configUnreadable, harness: t.d.name, form: f.id, reason: `${f.id}'s own settings could not be read (${errs.join('; ')}); its host set is ${t.d.name}'s hosts and the extra hosts only, so a relay they name is forwarded, not decrypted` }) }
+    if (errs.length && once(`config-unreadable\0${f.id}`)) { record({ event: 'failure', where: 'harness', code: CODE.configUnreadable, harness: t.d.name, form: f.id, reason: `${f.id}'s own settings could not be read (${errs.join('; ')}); its host set is ${t.d.name}'s hosts and the extra hosts only, so a relay they name is forwarded, not decrypted` }) }
     Object.assign(t, { at: clock(), hosts: hostSetOf({ form: { hosts: { defaults: [...(t.d.hosts || []), ...(errs.length ? [] : found)] } }, extraHosts: extra }).hosts })
     return t.hosts
   }
   const hostSetFor = (f) => hostsOf(f) || treeHosts(f)
   const ident = createDoorIdentity({ ownerOf, factsOf, identify, ownUid, hostsOf: hostSetFor, onFailure: record, onEvent: event })
   const seen = createDoorSeen({ clock })
-  const pcache = new Map(), vcache = new Map(), said = new Set()
+  const pcache = new Map(), vcache = new Map(), said = new Map()
+  const once = (key) => { if (said.has(key)) return false; keep(said, key, true); return true } // one record per key, bounded like the caches
   const answers = new Map() // door → Map(pid → { pid, source, url_redacted }): the upstream the door chose per process, status's per-form `proxy.upstream` (1.6 §9.4)
   const answered = (g, pid, up) => { const a = answers.get(g) || new Map(); a.delete(pid); a.set(pid, { pid, source: up.source, url_redacted: up.url ? redactProxyUrl(up.url) : null }); if (a.size > 32) a.delete(a.keys().next().value); answers.set(g, a) }
   const rootFp256 = rootPem ? new crypto.X509Certificate(rootPem).fingerprint256 : null
   const agentTrust = upstreamRoots ? createAgentTrust({ roots: upstreamRoots, rootFp256, readFile: ctx.readFile }) : null
   const fail = (code, reason, extra = {}) => record({ event: 'failure', where: 'engine', code, ...extra, reason })
-  let man = { at: -Infinity, m: null }
-  const manifest = (fresh = false) => { if (fresh || clock() - man.at > 1000) { let m = null; try { m = readMan() } catch { m = null } man = { at: clock(), m } } return man.m } // the CLI writes it; read at most once a second
+  // the CLI writes it; read at most once a second. A read that fails keeps the last good one and is said once per spell (D38: unreadable is not
+  // "no carrier installed"); `man.err` with no good one yet keeps the verdicts it gave out of the cache (4.11 P11)
+  let man = { at: -Infinity, m: null, err: null }
+  const manifest = (fresh = false) => {
+    if (fresh || clock() - man.at > 1000) {
+      try { man = { at: clock(), m: readMan(), err: null } } catch (e) {
+        if (!man.err) record({ event: 'failure', where: 'daemon', code: 'manifest-unreadable', reason: `the install manifest could not be read (${(e && e.code) || (e && e.message) || e}); ${man.m ? 'the last one read is used' : 'no carrier is known until it reads'}` })
+        man = { at: clock(), m: man.m, err: e }
+      }
+    }
+    return man.m
+  }
   const formsOn = (desc, routeId) => desc.proxyMode.forms.filter((f) => f.os.includes(ctx.os) && (routeId == null || f.route === routeId))
   const sendsHeader = (desc, f) => { const c = (desc.proxyMode.certs || {})[f.cert]; return !!(c && c.template && templates[c.template] && templates[c.template].sendsUpstreamHeader === true) }
   const doorOf = (d) => ({ g: d.g, harness: d.harness, forms: formsOn(byName.get(d.harness), d.routeId) })
@@ -105,14 +122,23 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   }
   const priorOf = (d) => { const e = itemsOfPhase(manifest(), 'on').find((i) => i.harness === d.harness && i.route === d.routeId && typeof i.prior_value === 'string'); return e ? e.prior_value : null }
 
-  /** The process's env, cwd and parent walk, read once per pid + start (P7, 4.9 §5.2). */
+  /** The process's env, cwd and parent walk, read once per pid + start when read (P7, 4.9 §5.2). An answer with env or cwd unread, or of a process
+   *  whose start time is unknown (a pid alone can be reused), is asked again on a later connection, at most once a second (4.11 P7, D38). The start
+   *  time goes to the readers too, so a later life of the pid is never answered for this one. Concurrent connections share the read in flight. */
   function procFacts(p, start, desc) {
     const names = envNamesOf(desc)
     const of = (q, s) => {
       const k = `${q}\0${s ?? ''}\0${desc.name}`
-      if (!pcache.has(k)) pcache.set(k, (async () => ({ pid: q, start: s, env: await safe(() => proc.envOf && proc.envOf(q, names)), cwd: await safe(() => proc.cwdOf && proc.cwdOf(q)),
-        parentOf: async () => { const up = await safe(() => proc.parentOf && proc.parentOf(q)); return up && up.ppid != null ? of(up.ppid, up.startedAt ?? null) : null } }))())
-      return pcache.get(k)
+      const hit = pcache.get(k)
+      if (hit && (hit.at == null || clock() - hit.at <= 1000)) return hit.answer
+      const o = s != null ? { startedAt: s } : {}, entry = { at: null, answer: null }
+      entry.answer = (async () => {
+        const env = await safe(() => proc.envOf && proc.envOf(q, names, o)), cwd = await safe(() => proc.cwdOf && proc.cwdOf(q, o))
+        if (s == null || env == null || cwd == null) entry.at = clock()
+        return { pid: q, start: s, env, cwd, parentOf: async () => { const up = await safe(() => proc.parentOf && proc.parentOf(q, o)); return up && up.ppid != null ? of(up.ppid, up.startedAt ?? null) : null } }
+      })()
+      keep(pcache, k, entry)
+      return entry.answer
     }
     return of(p, start)
   }
@@ -121,7 +147,9 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
    *  the code (D38, recorded once). The forms it may be: its harness's forms on this OS (on its own harness's door, those of that route), and of
    *  those only the ones verified here when any is — D51 names a harness, not a form, and an unmeasured or out-of-scope sibling cannot be told apart
    *  by name, so it must not veto the verified ones; with none verified the answer is the first one's `not-verified`. A verdict that hangs on the
-   *  issuer's state (it changes: retries, rotation, expiry; P2) is not cached, so the process decrypts once a new intermediate is signed. */
+   *  issuer's state (it changes: retries, rotation, expiry; P2) is not cached, so the process decrypts once a new intermediate is signed; nor is one
+   *  whose evidence was not read (`unread`, an unknown start time, no manifest read yet): the next connection judges again (D38). A code that is
+   *  forwarding by design (`notCapturedClass` expected) lives in the row only; the others are said once per key and code (4.6 §连接行). */
   async function judge(id, d, host) {
     const k = `${id.pid}\0${id.facts.startedAt ?? ''}\0${d.g}\0${host}`
     if (vcache.has(k)) return vcache.get(k)
@@ -135,9 +163,9 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       const r = verdictOf({ desc, form: f, facts, record: { carrierInstalledAt: carrierAt(desc, f), rootFp256 }, issuer: iss ? issuer : null, host, hostSet: hostSetFor(f) || undefined, ctx })
       if (!r.decrypt) { v = r; break }
     }
-    if (!v.decrypt && !said.has(`${k}\0${v.code}`)) { said.add(`${k}\0${v.code}`); fail(v.code, `pid ${id.pid} (${id.agent}) at ${host} is forwarded, not decrypted: ${v.detail}`, { harness: id.agent, pid: id.pid, door: d.g }) }
+    if (!v.decrypt && notCapturedClass('untrusted', v.code) !== 'expected' && once(`${k}\0${v.code}`)) { fail(v.code, `pid ${id.pid} (${id.agent}) at ${host} is forwarded, not decrypted: ${v.detail}`, { harness: id.agent, pid: id.pid, door: d.g }) }
     if (v.decrypt && agentTrust) { const f0 = forms[0], t = f0.trust !== 'root' && desc.proxyMode.trusts && desc.proxyMode.trusts[f0.trust]; v = { ...v, upstreamTrust: await agentTrust.contextFor(agentTrustSet({ trust: t || null, ctx, facts })) } } // ⑭: this agent's own set, minus the trocar root
-    if (!ISSUER_CODES.has(v.code)) vcache.set(k, v)
+    if (!ISSUER_CODES.has(v.code) && !v.unread && id.facts.startedAt != null && !(man.err && !man.m)) keep(vcache, k, v)
     return v
   }
 
@@ -162,13 +190,13 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       : await pacLeg({ systemProxy: systemProxy(), header, isTrocarDoor }) // an auth:false door is a PAC's: it dials the own leg that PAC names (P10)
     if (known) answered(d.g, id.pid, up)
     if ((up.notes || []).some((n) => n.note === 'header-ignored')) fail(CODE.upstreamHeaderIgnored, `pid ${id.pid ?? '?'} sent X-Trocar-Upstream at the ${d.g} door, but no hook of its form sends it: ignored (its value is not recorded)`, { door: d.g, pid: id.pid })
-    if (up.code && !said.has(`${up.code}\0${id.pid}\0${d.g}`)) { said.add(`${up.code}\0${id.pid}\0${d.g}`); fail(up.code, `the proxy pid ${id.pid ?? '?'} would have used without trocar could not be recovered; the door dials ${up.url ? 'the system proxy' : 'direct'}`, { door: d.g, pid: id.pid }) }
+    if (up.code && once(`${up.code}\0${id.pid}\0${(id.facts && id.facts.startedAt) ?? ''}\0${d.g}`)) { fail(up.code, `the proxy pid ${id.pid ?? '?'} would have used without trocar could not be recovered; the door dials ${up.url ? 'the system proxy' : 'direct'}`, { door: d.g, pid: id.pid }) }
     let dial = { kind: 'direct' }
     if (up.url != null && !bypassHit(up.bypass, target.address)) {
       dial = proxyOf(up.url)
       if (!dial) throw Object.assign(new Error(`the upstream of ${d.g} is not a proxy address trocar can dial`), { code: 'upstream-unavailable', why: 'upstream-unparseable' })
     }
-    const base = { pid: id.pid, agent: known ? id.agent : d.harness, decrypt: false, capture: 'proxy', door: d.g, exe: id.exe, upstream: dial, pid_source: id.source, pid_ms: id.ms, negKey: id.pid != null ? String(id.pid) : d.g }
+    const base = { pid: id.pid, agent: known ? id.agent : d.harness, decrypt: false, capture: 'proxy', door: d.g, exe: id.exe, upstream: dial, pid_source: id.source, pid_ms: id.ms, negKey: id.pid != null ? (id.facts && id.facts.startedAt != null ? `${id.pid}@${id.facts.startedAt}` : String(id.pid)) : d.g } // per process life: a reused pid inherits nothing (4.8 §5.5)
     if (!known) return { ...base, skip: untracked(id.why || 'not-an-agent') }
     if (!onSet.has(d.harness)) return { ...base, skip: untracked('group-off') } // a door kept for its holders: forward only
     if (!onSet.has(id.agent)) return { ...base, skip: untracked('harness-off') }
@@ -236,6 +264,24 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   }
   const poll = createHolderPoll({ list: holdersNow, timers, onChange: (rows) => settle(rows), onError: (e) => fail(CODE.holdersUnreadable, `the process table could not be read (${(e && e.message) || e}); the doors kept for holders stay`) })
 
+  /** The engine's negative-cache keys this daemon must clear (4.8 §5.5): each key the engine wrote a trust-rejected or negative-cache record for. Every
+   *  HOLDER_POLL_MS while any is held, one read of the process table (none while nothing is held, none overlapping): a "<pid>@<start>" key whose
+   *  process is gone, a "<pid>" key whose pid is gone, a group key whose door closed → `forget`. An unreadable table clears nothing (unknown). */
+  const held = new Set()
+  let sweepT = null, closed = false
+  const arm = () => { if (held.size && !sweepT && !closed) { sweepT = timers.setTimeout(sweep, HOLDER_POLL_MS); if (sweepT && sweepT.unref) sweepT.unref() } }
+  async function sweep() {
+    let rows = null
+    if ([...held].some((w) => PID_KEY.test(w))) { try { rows = await procTable() } catch { rows = null } }
+    for (const who of [...held]) {
+      const m = PID_KEY.exec(who)
+      const gone = m ? Array.isArray(rows) && !rows.some((r) => String(r.pid) === m[1] && (m[2] == null || String(r.startedAt) === m[2])) : !doors.has(who)
+      if (gone) { held.delete(who); forget(who, m ? Number(m[1]) : null) }
+    }
+    sweepT = null
+    arm()
+  }
+
   /** The engine's { secureContextFor(host), issue(host) } over the issuer (P2): leaf + intermediate; nothing to sign with → a throw (flow.mjs steps aside). */
   const contexts = new Map()
   const issuer = {
@@ -269,7 +315,9 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     /** At start: the harnesses desired on get their groups reopened on ingress.json's RECORDED ports, never another (§3 ①). */
     async restore() {
       let st, ing
-      try { st = readSt(); ing = tokenOf() } catch (e) { return { doors: {}, problems: [String((e && e.message) || e)] } }
+      // a state.json that cannot be read starts every harness off, and says so (4.6 §开关 proxy mode, D38): never a quiet off
+      try { st = readSt() } catch (e) { record({ event: 'failure', where: 'state', code: (e && e.code) || 'state-unparsable', reason: `state.json could not be read at start (${(e && e.message) || e}); every harness starts off until trocar on` }); return { doors: {}, problems: [String((e && e.message) || e)] } }
+      try { ing = tokenOf() } catch (e) { return { doors: {}, problems: [String((e && e.message) || e)] } }
       const out = {}
       for (const [h, e] of Object.entries((st && st.harnesses) || {})) {
         if (!e || e.desired !== 'on' || !byName.has(h)) continue
@@ -299,11 +347,15 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     },
     lookupIngress,
     servePac,
+    /** Is `h` on in this daemon? The one switch both decryption (lookupIngress) and recording (the engine's isRecording) read (4.6 §开关). */
+    isOn: (h) => onSet.has(h),
+    /** An engine failure record: a trust-rejected / negative-cache one names a key to clear when its process or door is gone (4.8 §5.5). */
+    noteHeld(rec) { if (rec && (rec.code === 'trust-rejected' || rec.code === 'negative-cache') && rec.neg_key != null) { held.add(String(rec.neg_key)); arm() } },
     holders: holdersRoute({ holders: async () => poll.now() ?? holdersNow() }),
     /** The holder count the poll last saw, or null when nothing is watched: GET /status's number, which never reads the process table itself
      *  (on Windows that is a PowerShell each; `on` asks /status twice before POST /on, a Windows test machine 2026-10-17). GET /holders is the fresh answer. */
     polledHolders: () => { const r = poll.now(); return Array.isArray(r) ? r.length : null },
     mayExit: () => mayExit({ harnessesOn: [...onSet], holders: kept().length ? poll.now() : [], openConns: openConns() }),
-    close() { poll.stop(); if (iss) iss.close() },
+    close() { closed = true; if (sweepT) timers.clearTimeout(sweepT); sweepT = null; poll.stop(); if (iss) iss.close() },
   }
 }

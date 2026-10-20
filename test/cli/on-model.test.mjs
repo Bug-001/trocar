@@ -7,7 +7,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
-import { runOnCli } from '../../src/cli/on.mjs'
+import { runOnCli, runOn } from '../../src/cli/on.mjs'
+import { checkRecord } from '../../src/health/codes.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
 import { snapshot } from './fixtures/on-ctx.mjs'
 
@@ -72,5 +73,27 @@ for (const os of ['darwin', 'win32']) {
     const unreadable = await on(w, os, ['--yes', '--json'], { ...neverStarts, registered: () => ({ state: 'unknown', err: 'launchctl print did not run' }) })
     assert.deepEqual([unreadable.exit, unreadable.io.json().error.code, unreadable.io.json().undo], [2, 'autostart-missing', null], unreadable.io.text())
     assert.deepEqual(mine(w.home), before)
+  })
+}
+
+// 1.6 §1 (2026-10-21): every real `on` leaves its receipt in flows/ — the run's lines end with one install-note kind:'result' carrying the harnesses it
+// turned on and the ones it refused, a failed run too, and the board's carries source:'board' (an on after the board's off was invisible before)
+for (const os of ['darwin', 'win32']) {
+  test(`1.6 §1 (${os}): a refused on started from the board leaves an install-note result line with source, harnesses and refused; a dry run leaves none`, async () => {
+    const w = await modelWorld({ os, commands: ['codex'] })
+    assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+    const lines = () => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')) : []).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))).filter((l) => l.event === 'install-note' && l.source === 'board')
+    const gone = { ...neverStarts, registered: () => ({ state: 'absent' }) }
+    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => gone } } } }
+    const io = fakeIo()
+    assert.equal(await runOn({ io, env: w.env, home: w.home, platform: os, deps, ids: null, flags: new Set(['--dry-run']), json: true, source: 'board' }), 0, io.text())
+    assert.deepEqual(lines(), [], 'a dry run changed nothing and records nothing')
+    assert.equal(await runOn({ io: fakeIo(), env: w.env, home: w.home, platform: os, deps, ids: null, flags: new Set(['--yes']), json: true, source: 'board' }), 2)
+    const run = lines()
+    assert.ok(run.length >= 1)
+    for (const l of run) assert.deepEqual(checkRecord(l), [], JSON.stringify(l))
+    const last = run.at(-1)
+    assert.deepEqual([last.kind, last.outcome, last.source, last.harnesses, Array.isArray(last.refused)], ['result', 'failed', 'board', [], true], JSON.stringify(last)) // refused before any write: it turned nothing on
+    assert.equal(new Set(run.map((l) => l.run)).size, 1, 'one run, one run id')
   })
 }

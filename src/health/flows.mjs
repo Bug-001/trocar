@@ -10,7 +10,7 @@
 // bytes (ws.tail_raw, proxy preludes, bodies) ever reach the board.
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { isFailure, notCapturedClass, LEVELS } from './codes.mjs'
+import { isFailure, notCapturedClass, expectedKey, LEVELS } from './codes.mjs'
 
 export const WINDOW_MS = 24 * 3600e3
 export const MAX_BYTES = 4 << 20
@@ -233,9 +233,10 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
       groups.set(key, g)
       if (agent) { const a = agentRow(agent); a.last_failure = r.ts; a.last_failure_key = key }
     } else if (isRow(r)) {
-      if (notCapturedClass(r.not_captured) === 'expected') {
-        out.expected[r.not_captured] = (out.expected[r.not_captured] || 0) + 1
-        const e = out.expected_groups[r.not_captured] || (out.expected_groups[r.not_captured] = { count: 0, first_ts: r.ts, last_ts: r.ts })
+      if (notCapturedClass(r.not_captured, r.reason) === 'expected') {
+        const k = expectedKey(r) // a by-design reason counts under its own name ('not-an-agent'), not under 'untracked'
+        out.expected[k] = (out.expected[k] || 0) + 1
+        const e = out.expected_groups[k] || (out.expected_groups[k] = { count: 0, first_ts: r.ts, last_ts: r.ts })
         e.count += 1; e.last_ts = r.ts
       }
       else if (r.decision === 'decrypt' && r.not_captured == null && agent) agentRow(agent).last_captured = r.ts

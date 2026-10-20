@@ -163,18 +163,29 @@ export const isCode = (c) => sets.code.has(c) || ERRNO.test(String(c))
 export const isEvent = (e) => sets.event.has(e) // the sets checkRecord() judges by, for the static scans (test/health/codes.test.mjs): one rule, not two
 export const isWhere = (w) => sets.where.has(w)
 
-/** 'failure' | 'expected' | null — the class of a connection row's not_captured. */
-export function notCapturedClass(nc) {
+/** The `reason`s that make an `untracked` / `untrusted` row expected: the connection is forwarded by design, not lost (4.6 §记录「连接行」;
+ *  4.6 §连接行怎么落码 and 4.8 §5.2 for the door's untracked reasons, 1.6 附录 for `not-verified`). Every other reason, and none, stays a failure. */
+export const NOT_CAPTURED_BY_DESIGN = Object.freeze({
+  untracked: Object.freeze(['not-an-agent', 'agent-helper', 'harness-off', 'group-off', 'outside-host-set', 'other-user']),
+  untrusted: Object.freeze(['not-verified', 'outside-host-set']),
+})
+const byDesign = Object.fromEntries(Object.entries(NOT_CAPTURED_BY_DESIGN).map(([k, v]) => [k, new Set(v)]))
+
+/** 'failure' | 'expected' | null — the class of a connection row's not_captured; for `untracked` / `untrusted` its `reason` decides. */
+export function notCapturedClass(nc, reason = null) {
   if (nc == null) return null
+  if (byDesign[nc] && byDesign[nc].has(reason)) return 'expected'
   return sets.ncFail.has(nc) ? 'failure' : sets.nc.has(nc) ? 'expected' : null
 }
+/** The key a row's expected count is kept under: the reason when the reason decided the class, else the not_captured code. */
+export const expectedKey = (r) => (byDesign[r.not_captured] && byDesign[r.not_captured].has(r.reason) ? r.reason : r.not_captured)
 
 /** A record that turns the indicator ⚠: a failure event, or a connection row the capture failed on. A row whose
  *  leaf the client refused says so in `reason` too (until every writer also sets not_captured). */
 export function isFailure(r) {
   if (!r || typeof r !== 'object') return false
   if (r.event != null) return sets.fail.has(r.event)
-  return notCapturedClass(r.not_captured) === 'failure' || r.reason === 'client-rejected-leaf'
+  return notCapturedClass(r.not_captured, r.reason) === 'failure' || r.reason === 'client-rejected-leaf'
 }
 
 /** Problems with one record against the closed sets ([] = fine). Tests run it over every line a writer produced. */
