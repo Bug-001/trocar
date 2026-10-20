@@ -379,6 +379,10 @@ export function storeIndex(fs, file, lines, problems, at = null) {
   }
 }
 
+/** problemEntry(where, p) → one `errors` entry of a query document: the closed-set code, the level when there is one
+ *  (`note` = a fact about this read, not a loss — 3.5 读不全), and the reason in words. */
+export const problemEntry = (where, p) => ({ where, code: p.code, ...(p.level ? { level: p.level } : {}), reason: p.reason });
+
 /**
  * segmentIndex({home, segment, maxBytes, owner}) → { segment, source, records, problems, bytesRead, done }
  *   records: [{ id, ts, harness, class, host, path, status, stored_bytes, sent_bytes, received_bytes, session_key, is_llm }]
@@ -430,7 +434,10 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
   const said = [...prior, ...problems];
   // after the write, so it is never stored: this is about THIS read. A reader that had to index more than one of the
   // keeper's chunks did work the daemon should have done, and the seconds it cost are its own (D62 · D38).
-  if (!owner && got.bytesRead > KEEPER_CHUNK_BYTES) said.push({ code: 'index-cold', reason: `this query had to index ${Math.round(got.bytesRead / (1 << 20))} MB of ${segment} itself (${how === 'rebuild' ? 'the whole segment' : 'the part no index covered'}), which is what made it slow: the daemon keeps the index current while it captures, so this means no daemon wrote this segment, index/ was deleted, the index format changed, or the daemon was not running while these records arrived` });
+  if (!owner && got.bytesRead > KEEPER_CHUNK_BYTES) {
+    const mb = Math.round(got.bytesRead / (1 << 20));
+    said.push({ code: 'index-cold', level: 'note', reason: `This read indexed ${mb} MB of capture file ${segment} itself (${how === 'rebuild' ? 'all of it' : 'the part not indexed yet'}), which is why it was slow. Nothing is missing. trocar's background service normally does this while it captures; it was not running when these records arrived, the index was deleted, or trocar was updated.` });
+  }
   return { segment, source, records, problems: said, bytesRead: got.bytesRead, done: got.done };
 }
 

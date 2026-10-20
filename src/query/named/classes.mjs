@@ -3,7 +3,7 @@
 // The traffic-class table (src/classes/table.mjs — the ONE place the table is read), each class's calls
 // and bytes over 24 h / 7 d / all time, and what ~/.trocar takes on disk. The counts come from the
 // segment index and nothing else (1.6 §4.1 「`classes` 的条数与大小就是从这里算的」).
-import { allSegments, segmentIndex } from '../index-build.mjs';
+import { allSegments, segmentIndex, problemEntry } from '../index-build.mjs';
 import { readTable } from '../../classes/table.mjs';
 import { diskUsage } from '../disk.mjs';
 
@@ -22,7 +22,7 @@ export async function run({ home, fs, now, errors }) {
   let as_of = null; // 附录 C.5: the newest call time in the whole index
 
   for (const s of segs) {
-    for (const pr of s.problems) errors.push({ where: `segments/${s.segment}`, reason: `${pr.code}: ${pr.reason}` });
+    for (const pr of s.problems) errors.push(problemEntry(`segments/${s.segment}`, pr));
     const { records } = await segmentIndex({ home, segment: s.segment, fs });
     for (const r of records) {
       // A class on disk that the table does not name (an edited table, a record from before an edit) is

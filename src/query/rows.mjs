@@ -9,7 +9,7 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import { createSynthAssigner } from '../dissect/synth-key.mjs';
 import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
-import { allSegments, warmSegmentIndex } from './index-build.mjs';
+import { allSegments, warmSegmentIndex, problemEntry } from './index-build.mjs';
 import { trocarHome } from '../paths.mjs';
 import { warmCache, fsTag } from './warm.mjs';
 
@@ -33,7 +33,7 @@ export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [] 
   const segments = await segList.get(`${fsTag(fs)}\n${home}`, namesStamp(home, fs), () => allSegments({ home, fs }));
   for (const s of await segments) {
     const { records, problems } = await warmSegmentIndex({ home, segment: s.segment, fs });
-    for (const pr of problems) errors.push({ where: `segments/${s.segment}`, reason: `${pr.code}: ${pr.reason}` });
+    for (const pr of problems) errors.push(problemEntry(`segments/${s.segment}`, pr));
     for (const r of records) {
       const synth = r.synth_hash ? assign({ harness: r.harness_id, hash: r.synth_hash, ms: Date.parse(r.ts || '') }) : null;
       out.push({ ...r, segment: s.segment, lineNo: Number(String(r.id).split(':').pop()), session_id: r.session_key ?? synth ?? null, synthesized: !!synth });
