@@ -9,6 +9,7 @@ import tls from 'node:tls'
 import os from 'node:os'
 import path from 'node:path'
 import { asightHome, collectorHome, rawHome } from '../paths.mjs'
+import { codeId } from '../version.mjs'
 import { startSealing } from './seal-queue.mjs'
 import { createIndexKeeper } from './index-keeper.mjs'
 import { loadArch } from './arch/index.mjs'
@@ -69,7 +70,7 @@ const errText = (e) => String((e && e.message) || e)
 const BUNDLE_BUSY_MS = 2000 // a bundle rebuild that found the op lock held (1.6 R12) is tried again after this long ...
 const BUNDLE_BUSY_RETRIES = 30 // ... at most this many times; the daily round is the next chance after that
 const OFF_HINT = 'capture is switched off for this harness (its desired state is off); it is not judged, not watched and not counted as untrusted'
-const VERSION = (() => { try { return JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version } catch { return null } })() // null: said as unknown in daemon-start
+const VERSION = (() => { try { return codeId() } catch { return null } })() // which code this daemon runs (D67⑤): `code` on the control channel, and the version of its daemon-start record. null: said as unknown in daemon-start
 // Every failure record carries a code (asight's name from src/health/codes.mjs, or the errno): the fold key (D-3).
 const coded = (e, code) => Object.assign(new Error(errText(e)), { code: (e && e.code) || code })
 
@@ -624,6 +625,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       // processes of this user whose exe cannot be read and whose command line fits no harness: seen, not judged (4.6 exe-unreadable)
       const unjudged = (typeof redirector.unreadable === 'function' ? redirector.unreadable() : []).filter((u) => !registry.couldMatch({ os: A.os, exe: null, env: null, argv: u.argv, comm: u.comm }).length)
       return {
+        code: VERSION, // D67⑤: which code this daemon runs, as `asight --version` says it — `asight update` compares the two
         ...(await sw.report()),
         engine: { port, v6: v6Error ? null : port, v6_error: v6Error, ...engine.stats() },
         negatives: engine.negatives(), // (pid, host) pairs no longer decrypted until the process exits (D-12)
@@ -772,7 +774,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     // what it holds in memory, so this costs nothing. Without it `status` said "Connections unknown (the daemon's reply does not
     // carry the connection counts)" on every model-mode machine — a reason about asight's own IPC (a macOS test machine 2026-10-18).
     const off = new Set(Object.entries(d).filter(([, e]) => e && e.desired === 'off').map(([h]) => h))
-    return { pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), relayed: engine.relayed({ agents: off }), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
+    return { code: VERSION, pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), relayed: engine.relayed({ agents: off }), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
   // the daemon's own identity, as it writes it into its lock (below): the read route hands it back, and an answer on the token-checked channel is
