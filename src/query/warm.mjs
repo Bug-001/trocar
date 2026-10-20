@@ -7,7 +7,8 @@
 // any new byte anywhere would never be warm while capture runs, which is exactly when the board is used.
 //
 // Always on, in every process: a one-shot CLI simply never gets a second lookup, and correctness does not depend
-// on who is calling. The bound is bytes, so a warm worker's footprint is set by its budget and not by the corpus.
+// on who is calling. The bound is the HEAP (heapBudget below), estimated before anything is read, so a warm worker's footprint
+// is set by its budget and not by the corpus or by the size of one session.
 import nodeFs from 'node:fs'
 import v8 from 'node:v8'
 
@@ -37,52 +38,85 @@ export function rowsKey(rows) {
   return { id: `${rows.length}:${rows.length ? `${rows[0].id}:${rows[rows.length - 1].id}` : ''}:${bytes}`, bytes }
 }
 
+/** The query worker's heap (its `--max-old-space-size`, src/query/service.mjs forks it with this). It lives here because the read
+ *  side's budget is derived from it: every process that answers a query cuts at the same place, so the worker and the local path
+ *  give the same document (3.5 §内存有界). */
+export const WORKER_MEMORY_MB = 384
+/** What one stored byte of a record costs in the heap once read back and parsed (measured: 0.97x on generated Claude Code
+ *  sessions, 1.62-1.69x on the user's real one, 2026-10-21). */
+export const HEAP_PER_STORED = 2
+
+// ONE ledger for every cache of this process (3.5 §内存有界): the heap is shared, so is the budget. `lru` holds every kept entry in
+// recency order across all caches (a hit moves it to the end); `held` is what queries in flight have reserved with hold().
+const lru = new Set()
+let total = 0
+let budget = null
+
+/** The read side's heap budget, in bytes: two thirds of min(this process's heap limit, the worker's). The last third is the answer's
+ *  serialization and the GC's slack. The min makes a one-shot CLI (a heap of gigabytes) cut a large session where the worker does. */
+export function heapBudget() {
+  if (budget == null) budget = (Math.min(v8.getHeapStatistics().heap_size_limit, WORKER_MEMORY_MB * 1048576) * 2) / 3
+  return budget
+}
+
+const forget = (e) => { if (lru.delete(e)) { e.cache.delete(e.id); total -= e.size } }
+/** Make room for `need` more bytes: the least recently used entries of ANY cache go first; `keep` never. */
+function room(need, keep = null) {
+  for (const e of lru) {
+    if (total + need <= heapBudget()) return
+    if (e !== keep) forget(e)
+  }
+}
+
+/** A query's own working set (src/query/named/session.mjs: the window it is about to assemble), reserved BEFORE it is built: the
+ *  caches give way for it, and what they keep while it is held cannot grow into it. → release(), called when the query is done. */
+export function hold(bytes) {
+  room(bytes)
+  total += bytes
+  let held = true
+  return () => { if (held) { held = false; total -= bytes } }
+}
+
 /**
- * warmCache({maxBytes, max, bytes, heapFraction}) → { get(id, stamp, compute), peek(id, stamp) }: `compute()` runs
- * when this `id` was never seen or its `stamp` moved; otherwise the remembered value comes back untouched.
- * Least recently used entries are dropped first, so that the whole cache stays inside `maxBytes` (`bytes(value)`
- * sizes one entry) and `max` entries. With `heapFraction` the real heap decides as well: entries go while
- * `heapUsed` is past that fraction of this process's heap limit — what a value costs in the heap is several times
- * the bytes it serializes to, so a budget of estimated bytes alone let the worker reach its
- * `--max-old-space-size` and die (the review of D63, measured: 30 records = 3.08 MB serialized).
- * The entry just computed is never the one dropped.
+ * warmCache({max, cost}) → { get(id, stamp, compute, estimate), peek(id, stamp) }: `compute()` runs when this `id` was never seen
+ * or its `stamp` moved; otherwise the remembered value comes back untouched. `cost(value)` is what the value costs in the HEAP (an
+ * estimate from stored bytes, never a count of entries or a serialized size); `estimate` is the same, known BEFORE computing, so
+ * the room is made first and the peak never passes the budget. A value whose cost is past the whole budget is returned but never
+ * kept. `max` bounds this cache's entries.
  */
-export function warmCache({ maxBytes = Infinity, max = Infinity, bytes = () => 0, heapFraction = null, heapUsed = () => process.memoryUsage().heapUsed } = {}) {
-  const m = new Map() // insertion order IS the LRU order: a hit is deleted and set again
-  let total = 0
-  const heapLimit = heapFraction ? v8.getHeapStatistics().heap_size_limit * heapFraction : Infinity
-  const over = () => total > maxBytes || m.size > max || (m.size > 1 && heapUsed() > heapLimit)
-  const trim = (keep) => {
-    for (const [k, e] of m) {
-      if (!over()) break
-      if (k === keep) continue // the answer of THIS lookup is never evicted, whatever the budget
-      m.delete(k); total -= e.size
-    }
+export function warmCache({ max = Infinity, cost = () => 0 } = {}) {
+  const m = new Map()
+  const keep = (id, e, size) => {
+    e.size = size
+    if (size > heapBudget()) return // answered this once, never kept, and nothing else is pushed out for it
+    room(size)
+    if (total + size > heapBudget()) return // past what the budget can give it (a query in flight holds the rest): answered, never kept
+    m.set(id, e); lru.add(e); total += size
+    if (m.size > max) for (const old of m.values()) { if (m.size <= max) break; if (old !== e) forget(old) }
   }
   const fresh = (id, stamp) => { const hit = m.get(id); return hit && hit.stamp === stamp ? hit : null }
+  const touch = (e) => { if (lru.delete(e)) lru.add(e); return e.value } // a promise still in flight is in no ledger yet
   return {
-    get(id, stamp, compute) {
+    get(id, stamp, compute, estimate = 0) {
       const hit = fresh(id, stamp)
-      if (hit) { m.delete(id); m.set(id, hit); return hit.value }
+      if (hit) return touch(hit)
       const old = m.get(id)
-      if (old) { total -= old.size; m.delete(id) }
+      if (old) forget(old)
+      if (estimate && estimate <= heapBudget()) room(estimate)
       const value = compute()
-      const e = { stamp, value, size: 0 }
-      m.set(id, e)
-      // A promise is sized when it settles (the segment readers are async), and a rejected one is forgotten
-      // at once: a transient read error must not become this segment's answer for the rest of the process.
-      // Either way the entry is checked first: one that was replaced or evicted while the promise was in
-      // flight must not add its size to a total it is no longer part of (that total never came down again,
-      // and from then on every lookup trimmed the cache to nothing).
+      const e = { cache: m, id, stamp, value, size: 0 }
+      // A promise is sized and kept when it settles (the segment readers are async); a rejected one is never kept: a transient
+      // read error must not become this segment's answer for the rest of the process. A lookup that came in while it was in
+      // flight finds the promise itself (`pending`), so the segment is not read twice.
       if (value && typeof value.then === 'function') {
-        value.then((v) => { if (m.get(id) !== e) return; e.size = bytes(v); total += e.size; trim(id) },
-          () => { if (m.get(id) === e) { m.delete(id); total -= e.size } })
-      } else { e.size = bytes(value); total += e.size; trim(id) }
+        m.set(id, e)
+        value.then((v) => { if (m.get(id) === e) { m.delete(id); keep(id, e, cost(v)) } }, () => { if (m.get(id) === e) m.delete(id) })
+      } else keep(id, e, cost(value))
       return value
     },
-    /** The remembered value if it is there and still fresh, without computing anything: the caller that can answer
-     *  a cheaper way when it is absent (src/query/named/session.mjs renders the window only), and the caller that
-     *  decides AFTER computing whether the answer may be remembered (src/query/records.mjs: never a failed read). */
-    peek: (id, stamp) => { const hit = fresh(id, stamp); if (!hit) return undefined; m.delete(id); m.set(id, hit); return hit.value },
+    /** The remembered value if it is there and still fresh, without computing anything: the caller that can answer a cheaper way
+     *  when it is absent (src/query/named/session.mjs renders the window only), and the caller that decides AFTER computing whether
+     *  the answer may be remembered (src/query/records.mjs: never a failed read). */
+    peek: (id, stamp) => { const hit = fresh(id, stamp); return hit ? touch(hit) : undefined },
   }
 }

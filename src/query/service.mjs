@@ -15,12 +15,10 @@
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { QUERY_PATH, QUERY_NAMES } from './client.mjs'
+import { WORKER_MEMORY_MB } from './warm.mjs'
 import { OS_PROMPT_MS } from '../off/root-store.mjs'
 
 const WORKER = fileURLToPath(new URL('./worker.mjs', import.meta.url))
-/** The worker's heap bound. Measured warm on the reference dataset: RSS ~180 MB with every session of a 500 MB
- *  corpus opened, so 384 MB leaves room for one large document being serialized without ever growing without end. */
-export const WORKER_MEMORY_MB = 384
 const DEADLINE_MS = 30_000 // a worker silent this long is wedged, not slow: the queue must not be held for ever
 /** A control verb may run install's root steps (the board's Set up, 4.4 §控制面): the OS's root prompt, then its read-back, each up to OS_PROMPT_MS,
  *  and the rest of install. A worker killed while the dialog is open would leave no receipt and the carriers unplaced. */

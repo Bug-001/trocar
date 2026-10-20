@@ -14,14 +14,14 @@ import { openSealed } from '../raw/reader.mjs';
 import { R } from '../raw/format.mjs';
 import { segmentIndex, segmentSource } from './index-build.mjs';
 import { trocarHome } from '../paths.mjs';
-import { rowsKey, warmCache, fsTag } from './warm.mjs';
+import { warmCache, fsTag, HEAP_PER_STORED } from './warm.mjs';
 
-// WARM (D63 ①, 1.6 §4.1 附近的查询): one entry per row list, kept against THAT list. A session's pages, the block of
-// one of its steps and its calls ask for the same rows again, so the second query of an open session reads no record
-// file at all; a session that got a new record has a new list and is read again (never stale). The key is the list,
-// which is why the daemon appending to ANOTHER session costs this entry nothing.
-const readBack = warmCache({ maxBytes: 96 * 1024 * 1024, bytes: (v) => v.bytes });
-const listKey = (home, rows, fs) => { const k = rowsKey(rows); return { id: `${fsTag(fs)}\n${home}\n${k.id}`, bytes: k.bytes }; };
+// WARM (D63 ①, 1.6 §4.1 附近的查询; 3.5 §缓存): one entry per RECORD, keyed by its id. A record is appended once and never
+// rewritten (invariant 2), so its id is its stamp. A session's pages, the block of one of its steps and its calls ask for the same
+// records again, so the second query of an open session reads no record file at all; a session that got a new record reads that
+// one record (a key per row LIST kept one whole copy of a growing session per version of it, which is what filled the worker's
+// heap while the board followed a live session). Each entry costs its stored bytes × HEAP_PER_STORED in the one heap budget.
+const readBack = warmCache({ cost: (v) => v.cost });
 
 const NL = 0x0a;
 
@@ -64,22 +64,25 @@ function recordOf(text, segment, lineNo, stream) {
 // `remember: false` is a SCAN (the usage sidecar's fill, src/query/usage.mjs): it neither reads from nor stores into
 // the warm cache, so filling a segment never evicts the records of the sessions the board has open.
 export function recordsAt({ home = trocarHome(), fs = nodeFs, rows = [], errors = [], remember = true } = {}) {
-  const { id, bytes } = listKey(home, rows, fs);
-  // The stamp IS the key here: a row list names the exact bytes it stands for, and those bytes never change
-  // (invariant 2: a record is appended once and never rewritten). A shallow copy goes out, so a caller that
-  // sorts or trims its result cannot reach into the cache.
-  let got = remember ? readBack.peek(id, id) : undefined;
-  if (!got) {
-    got = { ...readRows({ home, fs, rows }), bytes };
-    if (!remember) { errors.push(...got.errors); return got.out; }
-    // A FAILED read is never remembered (3.5 §访问模式 不答陈旧): a read that landed in the seal rename window or
-    // hit one EIO would otherwise pin its incomplete answer — the row list's stamp cannot move, because the rows
-    // did not change — for the life of a resident worker. Not caching it costs the next query one re-read, which
-    // is exactly the query that can succeed.
-    if (!got.errors.length) readBack.get(id, id, () => got);
+  const tag = `${fsTag(fs)}\n${home}\n`;
+  const out = new Array(rows.length);
+  const missing = [];
+  for (let i = 0; i < rows.length; i++) {
+    const hit = remember ? readBack.peek(tag + rows[i].id, true) : undefined;
+    if (hit) out[i] = hit.rec; else missing.push(i);
   }
-  errors.push(...got.errors);
-  return [...got.out];
+  if (missing.length) {
+    const got = readRows({ home, fs, rows: missing.map((i) => rows[i]) });
+    errors.push(...got.errors);
+    missing.forEach((i, k) => {
+      const rec = got.out[k];
+      if (!rec) return; // its read failed: said in errors, and NEVER remembered (3.5 不答陈旧 — a read in the seal rename window or
+      // one EIO would otherwise pin its absence for the life of a resident worker; not caching it costs the next query one re-read)
+      out[i] = rec;
+      if (remember) { const cost = (rows[i].stored_bytes || 0) * HEAP_PER_STORED; readBack.get(tag + rows[i].id, true, () => ({ rec, cost }), cost); }
+    });
+  }
+  return out.filter(Boolean);
 }
 
 // A read that failed: `io` says the bytes could not be read (a transient EIO / EMFILE / a seal rename window),
@@ -87,20 +90,22 @@ export function recordsAt({ home = trocarHome(), fs = nodeFs, rows = [], errors 
 // [{where, reason}] (3.5:42), and only the usage fill looks at it (it never remembers a failed read).
 const failedRead = (where, reason, io) => Object.defineProperty({ where, reason }, 'io', { value: io });
 
+// → { out, errors }: `out[k]` is the record of `rows[k]`, or undefined when it could not be read (said in `errors`).
 function readRows({ home, fs, rows }) {
   const errors = [];
   const bySegment = new Map();
-  for (const r of rows) { if (!bySegment.has(r.segment)) bySegment.set(r.segment, []); bySegment.get(r.segment).push(r); }
-  const out = [];
-  for (const [segment, rs] of bySegment) {
+  rows.forEach((r, k) => { if (!bySegment.has(r.segment)) bySegment.set(r.segment, []); bySegment.get(r.segment).push(k); });
+  const out = new Array(rows.length);
+  for (const [segment, ks] of bySegment) {
     const file = segmentFile({ home, fs, segment });
     const stream = path.basename(file);
     let read;
     try { read = file.endsWith('.sealed') ? sealedReader(file, fs) : plainReader(file, fs); }
-    catch (e) { for (const r of rs) errors.push(failedRead(r.id, `cannot be read: ${String((e && e.message) || e)}`, true)); continue; }
+    catch (e) { for (const k of ks) errors.push(failedRead(rows[k].id, `cannot be read: ${String((e && e.message) || e)}`, true)); continue; }
     try {
-      for (const r of rs) {
-        try { out.push(recordOf(read(r), segment, r.lineNo, stream)); }
+      for (const k of ks) {
+        const r = rows[k];
+        try { out[k] = recordOf(read(r), segment, r.lineNo, stream); }
         catch (e) { errors.push(failedRead(r.id, `cannot be read back: ${String((e && e.message) || e)}`, !(e instanceof SyntaxError))); }
       }
     } finally { read.close(); }
