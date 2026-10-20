@@ -420,7 +420,9 @@ export async function psTableVia(helper, { timeoutMs = WIN_PS_ASK_MS } = {}) {
   return rows
 }
 
-const WIN_TABLE_SCRIPT = '$o = Get-CimInstance Win32_OperatingSystem; \'boot \' + [DateTimeOffset]::new($o.LastBootUpTime.ToUniversalTime()).ToUnixTimeMilliseconds(); Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ p = $_.ProcessId; pp = $_.ParentProcessId; n = $_.Name; x = $_.ExecutablePath; s = $(try { [DateTimeOffset]::new($_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds() } catch { $null }); c = $_.CommandLine } } | ConvertTo-Json -Compress'
+// The table prints ASCII only: every non-ASCII UTF-16 unit of the JSON becomes `\uXXXX`. powershell.exe encodes what it prints to a pipe in the
+// console's OEM code page (437 prints `?`, 936 GBK bytes), so `C:\Users\张三\…` read back as UTF-8 is not the path any more (spec 4.8 §1).
+export const WIN_TABLE_SCRIPT = String.raw`$o = Get-CimInstance Win32_OperatingSystem; 'boot ' + [DateTimeOffset]::new($o.LastBootUpTime.ToUniversalTime()).ToUnixTimeMilliseconds(); $j = [string](Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ p = $_.ProcessId; pp = $_.ParentProcessId; n = $_.Name; x = $_.ExecutablePath; s = $(try { [DateTimeOffset]::new($_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds() } catch { $null }); c = $_.CommandLine } } | ConvertTo-Json -Compress); [regex]::Replace($j, '[^\x00-\x7f]', { param($c) '\u{0:x4}' -f [int][char]$c.Value })`
 /** The Windows table from the daemon's warm helper alone: the rows, or null — with the reason kept in this scope's notes for the caller to
  *  report (D38, never silent). No process is started either way (4.8 §1). */
 async function winTableViaDaemon(m) {
