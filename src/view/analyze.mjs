@@ -446,119 +446,115 @@ export function analyze(records, opts = {}) {
   // ── per stream: deltas → events + resources ─────────────────────────────────
   const toolNameById = new Map()
   for (const s of streams) {
-    // monitor + aux-family lanes: no ReAct/resource extraction — just one event per call
-    if (EVENT_ONLY_KINDS.has(s.kind)) {
-      let prevCtx = 0
-      for (const step of s.calls) {
-        step.dCtx = step.ctx - prevCtx; prevCtx = step.ctx
-        if (step.error) { s.events.push({ type: 'error', step: step.gi, streamId: s.id, msg: step.errMsg }); continue }
-        if (s.kind === 'monitor') {
-          const v = (step.norm.text || '').replace(/<\/?block>/g, '').trim()
-          step.flagged = !/^no\b/i.test(v)
-          step.verdict = v
-          s.events.push({ type: 'monitor', step: step.gi, streamId: s.id, verdict: v, flagged: step.flagged })
-        } else {
-          s.events.push({ type: 'aux', subkind: s.kind, step: step.gi, streamId: s.id, text: step.norm.text || '', model: step.rec.request?.model })
-        }
-      }
-      continue
-    }
-    // main / subagent lanes
-    const resMap = new Map()
-    const seenMap = new Map() // filenames the agent saw (in results/prose) but never opened
-    let prevCount = 0, prevCtx = 0
-    let prevInfo = null // { msgCount, marker, preamble } of the last renderable call in this lane: the compaction verdict's predecessor
-    for (let k = 0; k < s.calls.length; k++) {
-      const step = s.calls[k]
-      // Unparsed sentinel: no context to diff. Emit the visible error marker and leave prevCount /
-      // prevCtx anchored to the last RENDERABLE call — its empty stub would otherwise read as a
-      // message-count collapse and fabricate a compaction event out of a capture defect.
-      if (step.unparsed) {
-        step.dCtx = 0
-        s.events.push({ type: 'error', step: step.gi, streamId: s.id, msg: step.errMsg, unparsed: true })
-        continue
-      }
-      step.dCtx = step.ctx - prevCtx
-      prevCtx = step.ctx
-      const msgs = step.rec.request.messages
-      for (const m of msgs) {
-        if (Array.isArray(m.content))
-          for (const b of m.content) if (b.type === 'tool_use') toolNameById.set(b.id, b.name)
-      }
-      for (const c of step.norm.tools || []) toolNameById.set(c.id, c.name)
-      for (const t of step.rec.request.tools || []) {
-        if (/^mcp__/.test(t.name || '')) addRes(resMap, 'capability', 'MCP: ' + (String(t.name).split('__')[1] || t.name), step.gi, 'mcp')
-      }
-
-      const drop = msgs.length < prevCount
-      const hasPreamble = hasCompactionPreamble(msgs)
-      const isSummarize = /^\s*<analysis>/.test(step.norm.text || '')
-      // 3.4, the ETL's verdict (compactionVerdict): a harness header hint first (x-cc-compaction-request, dsh's compact
-      // header), a text marker on its rising edge, then a sharp drop — the same shared rule the ETL runs.
-      // 保真边界 (invariant 4 · spec 1.5:37 / 3.4:16,21): a drop or a marker is INFERRED from observed shape, never
-      // confirmed by the harness, and says so (medium, `compactionInferred`); a header hint is the harness's own word.
-      // `basis` names WHICH evidence fired: CC's own "continued from a previous conversation" preamble (the stronger
-      // drop signal) vs. a bare message-count collapse (a number going down — the weaker guess).
-      const h = hintsOf(step.rec)
-      const marker = h.compactionMarker === true
-      // the preamble is evidence on its rising edge only (compactionVerdict): once a compaction has put it in the history
-      // every later call of the lane carries it, and a carried one neither makes a drop a compaction nor names its basis
-      const preambleNew = hasPreamble && !(prevInfo && prevInfo.preamble)
-      // 3.4: a request stored in part (the collector's req_* labels, the ETL's context_state 'partial') shows what arrived,
-      // not the context the model saw: its message count is no observation, so no verdict and no new baseline
-      const blindCount = step.reqIncomplete || step.ctxPartial
-      const verdict = blindCount ? { compaction: false }
-        : compactionVerdict(prevInfo, { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble })
-      if (!blindCount) prevInfo = { msgCount: msgs.length, marker, preamble: hasPreamble }
-      let newMsgs
-      if (verdict.compaction) {
-        Object.assign(step, compactionMeta(verdict, preambleNew))
-        for (const res of resMap.values()) {
-          const last = res.segments[res.segments.length - 1]
-          if (last.evict == null) last.evict = step.gi
-        }
-        newMsgs = msgs
-      } else if (drop) {
-        newMsgs = []
-      } else {
-        newMsgs = msgs.slice(prevCount)
-      }
-      if (step.compaction)
-        s.events.push({ type: 'compaction', step: step.gi, streamId: s.id, from: step.evictedFrom, to: step.evictedTo,
-          // the event travels to the UI on its own — it MUST carry the inference marker with it,
-          // otherwise the timeline re-asserts as fact what the step knows is a guess (invariant 4).
-          inferred: step.compactionInferred, confidence: step.compactionConfidence, basis: step.compactionBasis })
-      if (isSummarize) {
-        step.summarizing = true
-        s.events.push({ type: 'summarize', step: step.gi, streamId: s.id, out: step.norm.usage?.output_tokens })
-      }
-      extractResources(newMsgs, step.gi, resMap)
-      // seen-but-not-opened filenames: scan tool-result text (bigger cap) + prose (smaller)
-      for (const m of newMsgs) {
-        const content = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]
-        for (const b of content) {
-          if (b.type === 'tool_result') extractSeenPaths(textOfResult(b), step.gi, seenMap, 80)
-          else if (b.type === 'text') extractSeenPaths(b.text, step.gi, seenMap, 40)
-        }
-      }
-      extractSeenPaths(step.norm.text || '', step.gi, seenMap, 40)
-      s.events.push(...userEvents(newMsgs, step.gi, s.id))
-      s.events.push(...observationEvents(newMsgs, step.gi, s.id, toolNameById))
-      if (step.error) s.events.push({ type: 'error', step: step.gi, streamId: s.id, msg: step.errMsg })
-      else if (!isSummarize) s.events.push(...responseEvents(step.rec, step.gi, s.id))
-      prevCount = msgs.length
-    }
-    s.resources = [...resMap.values()]
+    const st = { resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null }
+    for (const step of s.calls) eventsOf(s, st, step)
+    if (EVENT_ONLY_KINDS.has(s.kind)) continue
+    s.resources = [...st.resMap.values()]
     // "only seen" = matched paths minus anything actually opened. Dedupe absolute-vs-relative
     // spellings of the SAME opened file (path-boundary suffix), but keep distinct-directory
     // files that merely share a basename (src/index.js opened ≠ test/index.js seen).
-    const openedArr = [...new Set([...resMap.values()].filter((r) => r.kind === 'file').map((r) => r.label))]
+    const openedArr = [...new Set([...st.resMap.values()].filter((r) => r.kind === 'file').map((r) => r.label))]
     const sameFile = (a, b) => a === b || a.endsWith('/' + b) || b.endsWith('/' + a)
-    s.seenFiles = [...seenMap.values()]
+    s.seenFiles = [...st.seenMap.values()]
       .filter((sf) => !openedArr.some((o) => sameFile(o, sf.path)))
       .sort((a, b) => a.firstStep - b.firstStep || b.count - a.count)
       .slice(0, 200)
   }
+  function eventsOf(s, st, step) {
+    // monitor + aux-family lanes: no ReAct/resource extraction — just one event per call
+    if (EVENT_ONLY_KINDS.has(s.kind)) {
+      step.dCtx = step.ctx - st.prevCtx; st.prevCtx = step.ctx
+      if (step.error) { s.events.push({ type: 'error', step: step.gi, streamId: s.id, msg: step.errMsg }); return }
+      if (s.kind === 'monitor') {
+        const v = (step.norm.text || '').replace(/<\/?block>/g, '').trim()
+        step.flagged = !/^no\b/i.test(v)
+        step.verdict = v
+        s.events.push({ type: 'monitor', step: step.gi, streamId: s.id, verdict: v, flagged: step.flagged })
+      } else {
+        s.events.push({ type: 'aux', subkind: s.kind, step: step.gi, streamId: s.id, text: step.norm.text || '', model: step.rec.request?.model })
+      }
+      return
+    }
+    // main / subagent lanes
+    // Unparsed sentinel: no context to diff. Emit the visible error marker and leave prevCount /
+    // prevCtx anchored to the last RENDERABLE call — its empty stub would otherwise read as a
+    // message-count collapse and fabricate a compaction event out of a capture defect.
+    if (step.unparsed) {
+      step.dCtx = 0
+      s.events.push({ type: 'error', step: step.gi, streamId: s.id, msg: step.errMsg, unparsed: true })
+      return
+    }
+    step.dCtx = step.ctx - st.prevCtx
+    st.prevCtx = step.ctx
+    const msgs = step.rec.request.messages
+    for (const m of msgs) {
+      if (Array.isArray(m.content))
+        for (const b of m.content) if (b.type === 'tool_use') toolNameById.set(b.id, b.name)
+    }
+    for (const c of step.norm.tools || []) toolNameById.set(c.id, c.name)
+    for (const t of step.rec.request.tools || []) {
+      if (/^mcp__/.test(t.name || '')) addRes(st.resMap, 'capability', 'MCP: ' + (String(t.name).split('__')[1] || t.name), step.gi, 'mcp')
+    }
+
+    const drop = msgs.length < st.prevCount
+    const hasPreamble = hasCompactionPreamble(msgs)
+    const isSummarize = /^\s*<analysis>/.test(step.norm.text || '')
+    // 3.4, the ETL's verdict (compactionVerdict): a harness header hint first (x-cc-compaction-request, dsh's compact
+    // header), a text marker on its rising edge, then a sharp drop — the same shared rule the ETL runs.
+    // 保真边界 (invariant 4 · spec 1.5:37 / 3.4:16,21): a drop or a marker is INFERRED from observed shape, never
+    // confirmed by the harness, and says so (medium, `compactionInferred`); a header hint is the harness's own word.
+    // `basis` names WHICH evidence fired: CC's own "continued from a previous conversation" preamble (the stronger
+    // drop signal) vs. a bare message-count collapse (a number going down — the weaker guess).
+    const h = hintsOf(step.rec)
+    const marker = h.compactionMarker === true
+    // the preamble is evidence on its rising edge only (compactionVerdict): once a compaction has put it in the history
+    // every later call of the lane carries it, and a carried one neither makes a drop a compaction nor names its basis
+    const preambleNew = hasPreamble && !(st.prevInfo && st.prevInfo.preamble)
+    // 3.4: a request stored in part (the collector's req_* labels, the ETL's context_state 'partial') shows what arrived,
+    // not the context the model saw: its message count is no observation, so no verdict and no new baseline
+    const blindCount = step.reqIncomplete || step.ctxPartial
+    const verdict = blindCount ? { compaction: false }
+      : compactionVerdict(st.prevInfo, { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble })
+    if (!blindCount) st.prevInfo = { msgCount: msgs.length, marker, preamble: hasPreamble }
+    let newMsgs
+    if (verdict.compaction) {
+      Object.assign(step, compactionMeta(verdict, preambleNew))
+      for (const res of st.resMap.values()) {
+        const last = res.segments[res.segments.length - 1]
+        if (last.evict == null) last.evict = step.gi
+      }
+      newMsgs = msgs
+    } else if (drop) {
+      newMsgs = []
+    } else {
+      newMsgs = msgs.slice(st.prevCount)
+    }
+    if (step.compaction)
+      s.events.push({ type: 'compaction', step: step.gi, streamId: s.id, from: step.evictedFrom, to: step.evictedTo,
+        // the event travels to the UI on its own — it MUST carry the inference marker with it,
+        // otherwise the timeline re-asserts as fact what the step knows is a guess (invariant 4).
+        inferred: step.compactionInferred, confidence: step.compactionConfidence, basis: step.compactionBasis })
+    if (isSummarize) {
+      step.summarizing = true
+      s.events.push({ type: 'summarize', step: step.gi, streamId: s.id, out: step.norm.usage?.output_tokens })
+    }
+    extractResources(newMsgs, step.gi, st.resMap)
+    // seen-but-not-opened filenames: scan tool-result text (bigger cap) + prose (smaller)
+    for (const m of newMsgs) {
+      const content = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]
+      for (const b of content) {
+        if (b.type === 'tool_result') extractSeenPaths(textOfResult(b), step.gi, st.seenMap, 80)
+        else if (b.type === 'text') extractSeenPaths(b.text, step.gi, st.seenMap, 40)
+      }
+    }
+    extractSeenPaths(step.norm.text || '', step.gi, st.seenMap, 40)
+    s.events.push(...userEvents(newMsgs, step.gi, s.id))
+    s.events.push(...observationEvents(newMsgs, step.gi, s.id, toolNameById))
+    if (step.error) s.events.push({ type: 'error', step: step.gi, streamId: s.id, msg: step.errMsg })
+    else if (!isSummarize) s.events.push(...responseEvents(step.rec, step.gi, s.id))
+    st.prevCount = msgs.length
+  }
+
 
   // ── link subagents to their spawning Agent/Task call ────────────────────────
   for (const s of streams.filter((x) => x.kind === 'subagent')) {
