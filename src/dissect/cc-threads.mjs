@@ -153,14 +153,6 @@ export function threadPlanner(read = null) {
     },
   };
 }
-const stepOrder = (a, b) => String(a.ts_request).localeCompare(String(b.ts_request)) || String(a.id).localeCompare(String(b.id));
-// The batch form over one session's records, in any order. → Map<rec, context> for thread calls.
-export function threadPlan(records) {
-  const p = threadPlanner(), out = new Map();
-  for (const r of [...(records || [])].sort(stepOrder)) { const c = p.context(r); if (c) out.set(r, c); }
-  return out;
-}
-
 // A board block of the stitched request (linearContext: tools ti, system si, messages mi/bi) → where its bytes are: the record,
 // field and scan (`node`) of its segment with the path below it (`sub`), or { src, why } for a block assembled from a streamed reply.
 export function locate(block, plan, segments) {

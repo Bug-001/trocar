@@ -74,7 +74,6 @@ export function roleOf(rec) {
 // One connection = one upgrade. flow_id restarts at 1 with the collector, so the upgrade's own random
 // Sec-WebSocket-Key (in req_headers, which every call of the connection carries) keeps two runs apart.
 const connOf = (rec) => `${rec.flow_id ?? ''}|${headerOf(rec, 'sec-websocket-key') || ''}`;
-const order = (a, b) => (Number(a.seq) - Number(b.seq)) || String(a.ts_request).localeCompare(String(b.ts_request));
 
 // The segments of a call's own input: a string input is one user message, exactly as the server reads it (its bytes are the
 // whole JSON string); else one per input item. How a segment's item is taken out of its record again is made at module level,
@@ -153,22 +152,6 @@ export function createChain(read = null) {
   };
 }
 
-// The board's batch form: every connection's records in seq order, through one chain. → Map<rec, context>.
-export function chainPlan(records) {
-  const conns = new Map();
-  for (const r of records || []) {
-    const role = roleOf(r);
-    if (role !== 'call' && role !== 'warmup' && role !== 'unstored') continue;
-    const k = connOf(r);
-    if (!conns.has(k)) conns.set(k, []);
-    conns.get(k).push(r);
-  }
-  const chain = createChain();
-  const out = new Map();
-  for (const recs of conns.values()) for (const r of recs.sort(order)) out.set(r, chain.context(r));
-  return out;
-}
-
 // A board block of the stitched request → where its bytes are: the call's own record for what is not stitched (instructions,
 // tools), else the segment's record, field and scan (`node`) with the path below it (`sub`).
 export function locate(block, rec, segments) {
@@ -190,7 +173,7 @@ export function normRespWs(rec) {
 }
 
 // The dissector object the board's flat-lane assembler calls (D25: the shared layer names no wire; the
-// registry registers this under 'openai-responses-ws'). prepare (→ a planner whose context(rec) stitches) / roleOf / laneOf / failed are the hooks a
+// registry registers this under 'openai-responses-ws'). prepare (→ a planner whose context(rec) stitches) / roleOf / laneOf / agentOf / failed are the hooks a
 // wire with a cross-record context provides.
 export const RESPONSES_WS = Object.freeze({
   id: 'openai-responses-ws', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
@@ -201,6 +184,7 @@ export const RESPONSES_WS = Object.freeze({
   prepare: (read) => createChain(read),
   admits: (rec) => { const r = roleOf(rec); return r === 'call' || r === 'warmup' || r === 'unstored'; },
   laneOf: (rec) => (roleOf(rec) === 'warmup' ? 'probe' : null), // W3: a warmup is lane probe, not a turn
+  agentOf: connOf, // one connection carries one agent's conversation: a subagent is folded by its own (3.5 §缓存)
   boardFlat: (req) => boardFlat(req),
   normResp: (rec) => normRespWs(rec),
   reqCounts: (req) => reqCountsFor('responses', req),

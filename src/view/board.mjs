@@ -1,7 +1,7 @@
 // src/view/board.mjs — server-side board data assembly (D18a Option-2). Groups a FLAT raw
 // NDJSON (the source of truth, invariant 2) into the shapes the reused demo dashboard polls:
 //   session → { records(slim), analyzed, probes, meta, truncated }
-// All provider parsing happens in assembleSession (analyze) HERE, server-side — the browser
+// All provider parsing happens in the assembler (src/view/assemble.mjs) HERE, server-side — the browser
 // receives only canonical `analyzed` (invariant 3 / AC-3). Pure over its `records` input;
 // human-title / cwd enrichment is injected via `enrich(id)` so this module stays testable.
 import { createAssembler, sessionIdOf, headersOf, respOf } from './assemble.mjs';
@@ -185,8 +185,9 @@ function itemOf(r) {
 }
 /**
  * sessionFold(sessionId, {read}) → { push(rec, key), view(keys, {enrich, bound}), filled(call, rec) } — ONE session, folded record by
- * record (3.5 §内存有界; src/view/assemble.mjs createAssembler; `read(ids)` yields records back by id, for a cross-record context
- * whose items the fold no longer holds — src/dissect/chain.mjs). push() takes the session's records in step order; `key` names the record
+ * record (3.5 §内存有界; src/view/assemble.mjs createAssembler; `read(ids)` yields records back by id, in the order asked, for a
+ * cross-record context whose items the fold no longer holds — src/dissect/chain.mjs — and for a lane folded again). push() takes the
+ * session's records in step order within each lane, the lanes in any order (createAssembler); `key` names the record
  * (its id, or the record itself when ids may repeat). view(keys) is the session document over the records `keys` names, in that
  * order, with every call in its META form; it does not change the fold, so more records can be pushed after it. filled(call, rec)
  * is that call with its body put back from its record (a new object), for the calls a page ships (pageView's `fill`).
@@ -253,9 +254,7 @@ function slimCall(c) {
     paged_out: true, // invariant 4: this call's body was not shipped on this page
     flat: [],
     // Same as `flat`: a key list with byte refs into the request body is the body's shape, which this page does not
-    // ship. It is also what made a slimmed call differ from one the assembler never flattened (`keepFlat`), and the
-    // two MUST be the same document: the warm path pages an assembly built whole, the cold one assembles the window
-    // only (D63; src/query/named/session.mjs).
+    // ship — and a slimmed call MUST read as a call the fold kept in its meta form (src/view/assemble.mjs), whichever this is.
     nonBlockKeys: nonBlockKeys ? [] : nonBlockKeys,
     norm: norm ? { usage: norm.usage } : norm,
     rec: rec ? { id: rec.id, request: { model: rec.request && rec.request.model } } : rec,

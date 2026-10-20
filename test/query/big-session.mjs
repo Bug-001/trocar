@@ -4,8 +4,13 @@
 //             stream (the collector's own shapeResponse), so the context is stitched across records
 //   'ws'      Codex over WebSocket (3.1:37): response.create with previous_response_id and only the new input; the reply is the
 //             server's messages, streamed deltas then response.completed (the collector's own buildWsEnvelope)
+//   'chat'    DeepSeek dsh over Chat Completions: the whole context each request; a subagent is marked by its lane hint only (no
+//             agent id), so all its subagents share one lane
 // The text of each turn is fresh (seeded words, a code block, a tool call and its result), so a parsed record costs in the heap what a
-// real one does. Every `subEvery`-th call is a subagent's (its own lane — a thread or a connection of its own — and a short context).
+// real one does. Every `subEvery`-th call is a subagent's (its own lane — a thread or a connection of its own — and a short context);
+// `subLanes` subagents run side by side (their turns taken in turn), and a subagent's call that finished up to `late` calls (seeded)
+// after the ones started after it is written then — as the collector writes a call when it ends — so its line sorts before lines
+// already written, and before lines of other subagents that ended sooner.
 // Exports only: node --test runs every .mjs.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -43,22 +48,24 @@ function turn(next, i, growth) {
  * thread or chain) once it holds more than `compactAt` characters.
  * `append(n)` appends the next n calls (as the daemon would, one line each) and returns the session's stored bytes so far.
  */
-export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, compactAt = 1_000_000, segment = '20261020T164737Z' } = {}) {
-  const next = rng(seed)
+export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z' } = {}) {
+  const next = rng(seed), delay = rng(seed + 1)
   const file = path.join(home, 'raw', `${segment}.ndjson`)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  const lanes = { main: { msgs: [], sent: 0, prev: null, n: 0, chars: 0 }, sub: { msgs: [], sent: 0, prev: null, n: 0, chars: 0 } }
-  let n = 0, stored = 0, ms = Date.parse('2026-10-20T16:47:37Z')
+  const fresh = (k) => ({ k, msgs: [], sent: 0, prev: null, n: 0, chars: 0 })
+  const main = fresh(0), subs = Array.from({ length: subLanes }, (_, k) => fresh(k))
+  const held = [] // [line, the call count at which it is written]
+  let n = 0, nsub = 0, stored = 0, ms = Date.parse('2026-10-20T16:47:37Z')
   const system = [{ type: 'text', text: 'You are a coding assistant operating in a terminal.' }]
   const line = () => {
     const sub = subEvery > 0 && n % subEvery === subEvery - 1
-    const lane = sub ? lanes.sub : lanes.main
+    const lane = sub ? subs[nsub++ % subLanes] : main
     if (sub ? lane.msgs.length > subLen : lane.chars > compactAt) Object.assign(lane, { msgs: [], sent: 0, prev: null, n: lane.n + 1, chars: 0 })
     lane.msgs.push(...turn(next, n, sub ? Math.round(growth / 4) : growth))
     lane.chars += sub ? Math.round(growth / 4) : growth
     const ts = new Date((ms += 4_000)).toISOString()
     const text = words(next, 200)
-    const agent = sub ? `agent-${lane.n}` : null
+    const agent = sub ? `agent-${lane.k}-${lane.n}` : null
     const reqId = `req_${String(n + 1).padStart(5, '0')}`
     const usage = { input_tokens: 40, output_tokens: 120, cache_read_input_tokens: 1000 * n, cache_creation_input_tokens: 300 }
     const ask = lane.msgs.slice(0, -2), delta = ask.slice(lane.sent)
@@ -81,6 +88,19 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
         call: { client: [JSON.stringify(body)], server, tsStart: ts, tsRespStart: ts, tsEnd: ts, partial: [], truncated: false } })
       env.is_llm_call = true
       lane.prev = msgId
+    } else if (wire === 'chat') {
+      const chat = (m) => ({ role: m.role, content: m.content.map((c) => c.text ?? (typeof c.content === 'string' ? c.content : JSON.stringify(c.input ?? c))).join('\n') })
+      const body = { model: 'deepseek-chat', messages: [{ role: 'system', content: system[0].text }, ...ask.map(chat)],
+        ...(sub ? { dsh_session_log: { session: { origin: 'subagent' } } } : {}) }
+      env = {
+        ts, endpoint: '/chat/completions', method: 'POST',
+        req_headers: { host: 'api.deepseek.com', 'content-type': 'application/json', 'x-deepseek-harness-session-id': id },
+        req_body: JSON.stringify(body),
+        resp: { status: 200, kind: 'json', body: { id: `chatcmpl_${n}`, model: 'deepseek-chat', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: text } }],
+          usage: { prompt_tokens: 40, completion_tokens: 120, prompt_cache_hit_tokens: 1000 * n, prompt_cache_miss_tokens: 300 } } },
+        id: reqId, ts_request: ts, ts_response_start: ts, ts_response_end: ts, duration_ms: 900,
+        is_llm_call: true, capture: 'transparent', host: 'api.deepseek.com', traffic_class: 'llm', proc: { pid: 4244, exe: '/x/dsh', agent: 'dsh' },
+      }
     } else {
       const msgId = `msg_${n}`
       const reply = [{ type: 'text', text }, ...(n % 4 ? [{ type: 'tool_use', id: `toolu_r${n}`, name: 'Read', input: { file_path: '/work/x.mjs' } }] : [])]
@@ -99,14 +119,23 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
       if (threads) { lane.prev = msgId; lane.msgs.splice(lane.sent, 0, { role: 'assistant', content: reply }); lane.sent++ }
     }
     n++
+    const due = sub && late ? n + Math.floor(delay() * (late + 1)) : n
+    if (due > n) { held.push([JSON.stringify(env), due]); return null }
     return JSON.stringify(env)
+  }
+  // the lines written once call `n` is: its own (unless it ends late), then every held one whose time has come
+  const written = () => {
+    const out = [line()].filter(Boolean)
+    for (let i = 0; i < held.length;) if (held[i][1] <= n) out.push(held.splice(i, 1)[0][0]); else i++
+    return out
   }
   return {
     file, id,
     get calls() { return n },
     append(k = 1) {
       const out = []
-      for (let i = 0; i < k; i++) out.push(line())
+      for (let i = 0; i < k; i++) out.push(...written())
+      if (!out.length) return stored
       const s = out.join('\n') + '\n'
       fs.appendFileSync(file, s, { mode: 0o600 })
       stored += Buffer.byteLength(s)

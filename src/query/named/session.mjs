@@ -11,10 +11,14 @@
 // The reads are a scan (`remember: false`): the spine is what is remembered, not the records.
 //
 // WARM (D63 ①, 1.6 §4.1 附近的查询 ≤ 50 ms): the spine is kept against THIS session's own row list, so the next page and every later
-// look at the session read only that page's bodies. A session that grew is folded on from where its spine stopped — unless a new
-// record sorts before one already folded (a concurrent call that finished late), which folds it again from the start. Either way
-// the document is the one a fold from scratch gives, and a hit and a miss are the same code path.
+// look at the session read only that page's bodies. A session that grew is folded on with the records it did not hold, whatever
+// their place in step order: a call is written when it ends, so a subagent's call lands after calls that started after it, and it
+// goes on its own lane (src/view/assemble.mjs createAssembler: a record that sorts before its lane's last call folds that lane
+// again, never the session). Only a session whose subagents are told apart by order alone, or one whose spine lost a record (the
+// heap bound moved, below), is folded from scratch. Either way the document is the one a fold from scratch gives, and a hit and a
+// miss are the same code path.
 import { sessionFold, pageView } from '../../view/board.mjs';
+import { OrderBound } from '../../view/analyze.mjs';
 import { recordsAt } from '../records.mjs';
 import { indexRows, sessionGroups } from '../rows.mjs';
 import { rowsKey, warmCache, fsTag, heapBudget, hold } from '../warm.mjs';
@@ -66,23 +70,29 @@ function* chunks(rows) {
     i = j;
   }
 }
-/** The spine of `sorted` (the rows in step order): `old` folded on when it is a prefix of them, else a fold from scratch. A record
- *  the fold asks for again (a cross-record context whose items it no longer holds: src/dissect/chain.mjs) is read back by id, a
- *  chunk at a time, through the rows of the query at hand (`s.rowOf`), its problems said in `s.sink` (D38). */
-function grow(old, { home, fs, id, sorted, rowOf }) {
-  const prefix = old && old.ids.length <= sorted.length && old.ids.every((x, i) => sorted[i].id === x);
-  const s = prefix ? old : { ids: [], errors: [], cost: 0 };
+/** The spine of `sorted` (the rows in step order): `old` folded on with the rows it does not hold when it holds no row the query
+ *  does not read, else a fold from scratch. A record the fold asks for again (a cross-record context whose items it no longer holds:
+ *  src/dissect/chain.mjs; a lane folded again) is read back by id, in the order asked, a chunk at a time, through the rows of the
+ *  query at hand (`s.rowOf`), its problems said in `s.sink` (D38). */
+function grow(old, args) {
+  if (old && [...old.ids].every((x) => args.rowOf.has(x))) {
+    try { return foldOn(old, args.sorted.filter((r) => !old.ids.has(r.id)), args); } catch (e) { if (!(e instanceof OrderBound)) throw e; }
+  }
+  return foldOn(null, args.sorted, args);
+}
+function foldOn(old, rows, { home, fs, id, rowOf }) {
+  const s = old || { ids: new Set(), errors: [], cost: 0 };
   s.rowOf = rowOf; s.sink = s.errors;
   const read = function* (ids) {
     for (const part of chunks(ids.map((x) => s.rowOf.get(x)).filter(Boolean))) for (const r of recordsAt({ home, fs, rows: part, errors: s.sink, remember: false })) yield named(r, id);
   };
-  if (!prefix) s.fold = sessionFold(id, { read });
-  for (const part of chunks(sorted.slice(s.ids.length))) {
+  if (!old) s.fold = sessionFold(id, { read });
+  for (const part of chunks(rows)) {
     for (const r of recordsAt({ home, fs, rows: part, errors: s.errors, remember: false })) s.fold.push(named(r, id), r.id);
-    for (const r of part) s.ids.push(r.id);
+    for (const r of part) s.ids.add(r.id);
   }
   // a record that did not read is said on every answer (D38) and the spine is not kept: the next query reads it again
-  s.cost = s.errors.length ? Infinity : s.ids.length * SPINE_PER_ROW;
+  s.cost = s.errors.length ? Infinity : s.ids.size * SPINE_PER_ROW;
   return s;
 }
 
