@@ -78,3 +78,12 @@ test('the #rpx click through wireRawPanel clears the pin', () => {
   handler({ target: { closest: (sel) => (sel === '#rpx' ? {} : null) } })
   assert.equal(s.viewPin, null)
 })
+
+test('the reply row states its character count once (one fact, one place — 1.4)', () => {
+  for (const transport of ['http', 'ws']) {
+    const h = draw(base({ norm: { text: 'r' }, wire: { transport }, respRefs: [{ label: 'body', ref: 'r1', chars: 937 }] }))
+    const row = h.split('class="rpk').find((r) => r.includes('data-nbk="r1"'))
+    assert.ok(row, `${transport}: the raw reply row exists`)
+    assert.equal(row.match(/\b937\b/g).length, 1, `${transport}: the count appears once`)
+  }
+})

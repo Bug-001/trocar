@@ -7,7 +7,7 @@
 import { esc, fmtTime, fmtWhen } from '../core/fmt.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
 import { READ_AT } from '../shell/pagehead.mjs'
-import { harnessIcon, harnessName, harnessKey, ensureHarnessIcons, HARNESS_ORDER } from '../core/chips.mjs'
+import { harnessIcon, harnessName, harnessKey, HARNESS_ORDER } from '../core/chips.mjs'
 import { menuButton, disclosureHtml } from '../core/ui.mjs'
 import { copyBtn } from '../core/dom.mjs'
 import { redactUrlCredentials } from '../core/sensitive.mjs'
@@ -127,7 +127,6 @@ export function mount(el, ctx) {
       if (at) at.textContent = stamp
     }
     mainEl.innerHTML = pageLogHtml(capH, { filter, openByReader })
-    if (mainEl.querySelectorAll) ensureHarnessIcons(mainEl)
   }
 
   // a row toggles through the expand memory, so the choice survives every re-read (1.9 #13, the log page's half)

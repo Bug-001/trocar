@@ -5,7 +5,7 @@
 import { esc, relTime, fmtStamp } from '../core/fmt.mjs'
 import { HARNESS_ORDER, harnessKey, harnessName, harnessIcon, harnessRaw } from '../core/chips.mjs'
 import { formatHash } from '../core/router.mjs'
-import { captureVerdict } from '../core/capture-verdict.mjs'
+import { captureVerdict, capHealthPatch } from '../core/capture-verdict.mjs'
 import * as W from '../labels/library.mjs'
 
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k)
@@ -100,6 +100,16 @@ export function groupOf(s, now) {
   const n = new Date(now)
   const d0 = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime()
   return t >= d0 ? 'today' : t >= d0 - 86400e3 ? 'yesterday' : 'earlier'
+}
+// the list's entries: rows, with a group name before each new group only in the 最近 order ({g} | {s})
+export function listEntries(rows, sort, now) {
+  const out = []
+  let last = null
+  for (const s of rows) {
+    if (sort === 'recent') { const g = groupOf(s, now); if (g !== last) { out.push({ g }); last = g } }
+    out.push({ s })
+  }
+  return out
 }
 
 // ── the agent menu: 图标 + 名字, multi-select, NO counts (1.2 §页头: no numbers in the head zone) ────────────────────
@@ -210,7 +220,8 @@ export function capShotMaker(fetchHealth, now = Date.now) {
     if (!p) p = (async () => {
       let r
       try { r = await fetchHealth() } catch (e) { r = { ok: false, error: String((e && e.message) || e) } }
-      done = (r && r.ok && r.data) ? { h: r.data, asOf: now() } : { fail: (r && (r.error || (r.status != null ? 'HTTP ' + r.status : null))) || 'unknown reason' }
+      const p = capHealthPatch(r, now()) // the same reading of one answer as every capture-health card (a 503 is {unreadable})
+      done = p.capH ? { h: p.capH, asOf: p.capHOkAt } : { fail: p.capHErr }
       return done
     })()
     return p
@@ -223,18 +234,19 @@ export function capShotMaker(fetchHealth, now = Date.now) {
 // only says "not perfect right now" (failing · unknown) does not — the agent's own line is still the useful one.
 export const SERVICE_DOWN = new Set(['not-running', 'not-responding', 'not-installed', 'off'])
 // the 空态's second line: the capture service's own sentence for its state — 采集在进行 says the inviting hint
-// instead — plus the time that answer was read (「截至」). A shot that never arrived says nothing yet.
-export function emptyBoardState(shot, now) {
+// instead — plus the time that answer was read (「截至」). A shot that never arrived says nothing yet. The verdict is taken
+// at that time: the shot is read once, so judging it against a later clock would call it stale.
+export function emptyBoardState(shot) {
   if (!shot) return { line: '' }
   if (shot.fail) return { line: W.readCapFail(shot.fail), asOf: null }
-  const v = captureVerdict(shot.h, { okAt: shot.asOf, now })
+  const v = captureVerdict(shot.h, { okAt: shot.asOf, now: shot.asOf })
   return { line: v.state === 'ok' ? W.CAPTURING_HINT : v.text, asOf: shot.asOf, verdict: v }
 }
 // the filtered agent's line, when exactly one agent was picked and nothing matched (1.8 空态表): is it even being
 // captured? → null (nothing to add) | {service:true,…} (the whole service's sentence) | {line, href} (this agent's)
-export function filteredAgentLine(shot, id, now) {
+export function filteredAgentLine(shot, id) {
   if (!shot || shot.fail) return null
-  const v = captureVerdict(shot.h, { okAt: shot.asOf, now })
+  const v = captureVerdict(shot.h, { okAt: shot.asOf, now: shot.asOf })
   if (SERVICE_DOWN.has(v.state)) return { service: true, line: v.text, asOf: shot.asOf }
   if (agentNotCaptured(shot.h, id)) return { line: W.agentNotCaptured(agentLabel(id)), href: formatHash({ area: 'capture', screen: 'capture', params: { h: id } }) }
   return null

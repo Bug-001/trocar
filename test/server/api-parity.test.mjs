@@ -62,7 +62,7 @@ test('V80: every named query answers the same document through HTTP as through r
 });
 
 test('V80: no second read path is left in the shell or the page', () => {
-  const files = [path.join(ROOT, 'src', 'server.mjs'), ...fs.readdirSync(path.join(ROOT, 'src', 'web')).map((f) => path.join(ROOT, 'src', 'web', f))];
+  const files = [path.join(ROOT, 'src', 'server.mjs'), ...fs.readdirSync(path.join(ROOT, 'src', 'web'), { recursive: true }).map((f) => path.join(ROOT, 'src', 'web', f))];
   for (const f of files) {
     if (!fs.statSync(f).isFile()) continue;
     const txt = fs.readFileSync(f, 'utf8');

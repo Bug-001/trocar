@@ -69,7 +69,7 @@ function railHtml(l, s, { sub = false } = {}) {
     }
     name = `${esc(String(l.task != null && l.task !== '' ? l.task : l.label || ''))} · ${l.calls.length} calls` + (sum > 0 || from ? ` · ≈ ${from ? 'from ' : ''}${usd(sum)}` : '')
   } else name = `${esc(laneWord(l.kind))} · ${l.calls.length} calls`
-  return `<div class="rail k-${esc(l.kind)} trow">` +
+  return `<div class="rail k-${esc(l.kind)} tkrow">` +
     `<div class="tgut railname ${col ? 'col' : ''}" data-toggle="${esc(l.id)}" title="${esc(hint)}"><span class="tw">${col ? '▸' : '▾'}</span> <span class="tn">${name}</span></div>` +
     (col ? '<div class="tlane"></div>' : `<div class="tlane railbody" data-lane="${esc(l.id)}">${renderTicks(l, s)}</div>`) + `</div>`
 }
@@ -80,13 +80,13 @@ function tcRailHtml(l, s) {
   const noSize = Math.max(0, (l.count || l.calls.length) - l.calls.length)
   const hint = laneKind('token-count').hint + (noSize ? ` · ${TC_NO_SIZE(noSize)}` : '')
   const body = col ? '' : `<div class="tlane railbody" data-lane="token-count">${renderTicks(l, s)}${l.drawn != null && l.drawn < l.calls.length ? `<span class="tcsample" title="${esc(TC_SAMPLED_TIP(l.drawn, l.count || l.calls.length))}">${esc(L.SAMPLED)}</span>` : ''}</div>`
-  return `<div class="rail k-token-count trow"><div class="tgut railname ${col ? 'col' : ''}" data-toggle="token-count" title="${esc(hint)}"><span class="tw">${col ? '▸' : '▾'}</span> <span class="tn">${esc(TC_ROW(l.count || l.calls.length))}</span></div>${col ? '<div class="tlane"></div>' : body}</div>`
+  return `<div class="rail k-token-count tkrow"><div class="tgut railname ${col ? 'col' : ''}" data-toggle="token-count" title="${esc(hint)}"><span class="tw">${col ? '▸' : '▾'}</span> <span class="tn">${esc(TC_ROW(l.count || l.calls.length))}</span></div>${col ? '<div class="tlane"></div>' : body}</div>`
 }
 
 // < 900 px the subagent / 后台调用 / 全程 rows fold into one 「▸」 row (1.2 §窄屏); the fold state is a viewport fact,
 // not session data, so it is never reset with a session switch
 const narrowScreen = () => typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches
-const foldRowHtml = (folded) => `<div class="railunfold trow" data-railunfold="1" role="button" tabindex="0" aria-label="Overlay rows"><div class="tgut railname"><span class="tw">${folded ? '▸' : '▾'}</span> <span class="tn">Overlay rows</span></div><div class="tlane"></div></div>`
+const foldRowHtml = (folded) => `<div class="railunfold tkrow" data-railunfold="1" role="button" tabindex="0" aria-label="Overlay rows"><div class="tgut railname"><span class="tw">${folded ? '▸' : '▾'}</span> <span class="tn">Overlay rows</span></div><div class="tlane"></div></div>`
 
 export function renderRails(el, s) {
   const narrow = narrowScreen()
@@ -99,14 +99,14 @@ export function renderRails(el, s) {
   let html = ''
   if (subs.length > 1) {
     const open = s.subgroupOpen
-    html += `<div class="rail k-subagent trow">` +
+    html += `<div class="rail k-subagent tkrow">` +
       `<div class="tgut railname group ${open ? '' : 'col'}" data-grouptoggle="sub" title="${esc(laneKind('subagent').hint)}"><span class="tw">${open ? '▾' : '▸'}</span> <span class="tn">${esc(SUBAGENT_ROW(subs.length))}</span></div>` +
       `<div class="tlane">${open ? '' : `<div class="railbody groupbody">${collapsedMarks(subs, s)}</div>`}</div></div>` +
       (open ? `<div class="subkids">${subs.map((l) => railHtml(l, s, { sub: true })).join('')}</div>` : '')
   } else if (subs.length === 1) html += railHtml(subs[0], s, { sub: true })
   if (bgs.length) {
     const open = s.bgOpen
-    html += `<div class="rail trow">` +
+    html += `<div class="rail tkrow">` +
       `<div class="tgut railname group ${open ? '' : 'col'}" data-grouptoggle="bg" title="${esc(laneKind('aux').hint)}"><span class="tw">${open ? '▾' : '▸'}</span> <span class="tn">${esc(BG_ROW(bgs.reduce((n, l) => n + l.calls.length, 0)))}</span></div>` +
       `<div class="tlane">${open ? '' : `<div class="railbody groupbody">${collapsedMarks(bgs, s)}</div>`}</div></div>` +
       (open ? `<div class="bgkids">${bgs.map((l) => railHtml(l, s)).join('')}</div>` : '')

@@ -31,7 +31,9 @@ function chipHtml(meta) {
   const multi = hs && hs.length > 1
   const multiInf = multi && hs.some((x) => x && (x.inferred || x.harness_inferred))
   const href = `#/capture?h=${encodeURIComponent(harnessKey(meta.harness) || '')}`
-  return `<a class="sh-chip" href="${esc(meta.harness ? href : '#/capture')}">${chipFor(meta)}</a>` +
+  const chip = chipFor(meta)
+  const tip = chip.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() // the chip's own words: it may shed width (1.2 让位次序), its title keeps them
+  return `<a class="sh-chip" href="${esc(meta.harness ? href : '#/capture')}" title="${tip}">${chip}</a>` +
     (multi ? `<span class="sh-multi" title="${esc(W.MULTIPLE_AGENTS_TIP)}${multiInf ? '(' + esc(W.GUESS) + ')' : ''}">${W.MULTIPLE_AGENTS}${multiInf ? esc(W.GUESS) : ''}</span>` : '')
 }
 

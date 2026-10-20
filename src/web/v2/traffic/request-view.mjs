@@ -28,7 +28,7 @@ const maskState = (h, open) => {
 }
 
 // ── one header table ────────────────────────────────────────────────────────────────────────────────────────────────
-// `revealed` is the one header name the current answer carries open (S8 &reveal=<name>). A header whose stored value is
+// `revealed` is the one header name the viewer chose to show (from the document already held). A header whose stored value is
 // the old capture's '<redacted>' placeholder says so — that is capture-time masking, not display masking.
 export function headersHtml(headers, { revealed = null } = {}) {
   const list = normHeaders(headers)
@@ -38,10 +38,10 @@ export function headersHtml(headers, { revealed = null } = {}) {
     const name = h && h.name != null ? String(h.name) : ''
     const value = h && h.value != null ? String(h.value) : null
     const st = maskState(h, open)
-    if (st === 'old') return `<span class="k">${esc(name)}</span><span class="v"><span class="c2">${esc(W.MASK_NOTE_OLD)}</span></span>`
-    if (st === 'plain') return `<span class="k">${esc(name)}</span><span class="v mono">${esc(value == null ? '' : value)}</span>`
-    if (st === 'open') return `<span class="k">${esc(name)}</span><span class="v mono">${esc(value)}</span>`
-    return `<span class="k">${esc(name)}</span><span class="v"><span class="mask-dots" aria-hidden="true">••••••</span> <span class="c2">${esc(W.MASKED)}</span> ` +
+    if (st === 'old') return `<span class="k" title="${esc(name)}">${esc(name)}</span><span class="v"><span class="c2">${esc(W.MASK_NOTE_OLD)}</span></span>`
+    if (st === 'plain') return `<span class="k" title="${esc(name)}">${esc(name)}</span><span class="v mono">${esc(value == null ? '' : value)}</span>`
+    if (st === 'open') return `<span class="k" title="${esc(name)}">${esc(name)}</span><span class="v mono">${esc(value)}</span>`
+    return `<span class="k" title="${esc(name)}">${esc(name)}</span><span class="v"><span class="mask-dots" aria-hidden="true">••••••</span> <span class="c2">${esc(W.MASKED)}</span> ` +
       `<button type="button" class="lnk" data-reveal="${esc(name)}">${esc(W.REVEAL)}</button></span>`
   }).join('')
   const hasMasked = list.some((h) => maskState(h, open) === 'masked')
@@ -176,18 +176,18 @@ export function requestDetailHtml(model, { revealed = null, foldRequest = false 
   const reqHeaders = rec && (rec.req_headers != null ? rec.req_headers : rec.request_headers)
   const respHeaders = resp.headers
 
-  const sec = (title, inner, extra = '') => `<section class="rqd-sec"><div class="rqd-sh"><b>${esc(title)}</b>${extra}</div>${inner}</section>`
+  const sec = (title, inner, extra = '', id = '') => `<section class="rqd-sec"${id ? ` data-side="${id}"` : ''}><div class="rqd-sh"><b>${esc(title)}</b>${extra}</div>${inner}</section>`
   const bodySec = (title, side, b, sideMarks) => {
     const marksHtml = [...sideMarks, ...b.marks].map((m) => `<p class="rqd-mark">${m}</p>`).join('')
     const fold = b.fold ? `<span class="c2 rqd-fold">${esc(b.fold)}</span>` : ''
     const copy = b.copy ? copyBtn(b.copy) : ''
-    return sec(title, `${marksHtml}${b.content}`, `<span class="spacer"></span>${fold}${copy}`)
+    return sec(title, `${marksHtml}${b.content}`, `<span class="spacer"></span>${fold}${copy}`, `${side}-body`)
   }
 
-  const reqSecs = sec(W.REQ_HEADERS, headersHtml(reqHeaders, { revealed }), copyBtn(headersCopy(reqHeaders, { revealed }))) +
+  const reqSecs = sec(W.REQ_HEADERS, headersHtml(reqHeaders, { revealed }), copyBtn(headersCopy(reqHeaders, { revealed })), 'req-headers') +
     bodySec(W.REQ_BODY, 'req', reqBody, reqMarks(ctl, ctl.req))
   const reqPart = foldRequest ? disclosureHtml({ id: 'rq-raw', title: W.RAW_REQUEST, body: reqSecs, open: false }) : reqSecs
-  const respSecs = sec(W.RESP_HEADERS, headersHtml(respHeaders, { revealed }), copyBtn(headersCopy(respHeaders, { revealed }))) +
+  const respSecs = sec(W.RESP_HEADERS, headersHtml(respHeaders, { revealed }), copyBtn(headersCopy(respHeaders, { revealed })), 'resp-headers') +
     bodySec(W.RESP_BODY, 'resp', respBody, respMarks(ctl, ctl.resp))
 
   const wireLine = `<p class="rqd-wire">${esc(W.WIRE_SIZE)} · ` +

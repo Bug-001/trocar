@@ -1,11 +1,11 @@
 // wires-settings.test.mjs — settings · storage and settings · prices (1.11) read the C.5 documents as they are: the disk
-// figures from `classes.disk` and `classes[].counts`, one read-only row per `classes[]` entry, the read problems from
+// figures from `classes.disk` and `classes[].counts`, one row per `classes[]` entry, the read problems from
 // `segments[].problems` and the documents' `errors[]`, the price rows from `pricing.models[]`. Real face, real worker.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { diskFigures, classRows, storageHtml, fileProblems, problemCount } from '../../src/web/v2/settings/storage.mjs'
+import { diskFigures, classRows, fileProblems, problemCount } from '../../src/web/v2/settings/storage.mjs'
 import { priceRows, sourceHtml } from '../../src/web/v2/settings/prices.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { writeSegment } from '../query/raw-home.mjs'
@@ -31,8 +31,8 @@ test('(1) the disk total is classes.disk.asight_bytes; the per-day figure is the
   }
 })
 
-test('(2) one class row per classes[] entry, keep shown as a value with no control for it', async () => {
-  const { classes, segments } = await plain
+test('(2) one class row per classes[] entry with its keep and its window\'s counts', async () => {
+  const { classes } = await plain
   assert.ok(classes.classes.some((c) => c.builtin), 'the built-ins are in the document')
   for (const w of ['h24', 'd7', 'all']) {
     const rows = classRows(classes, w)
@@ -43,9 +43,6 @@ test('(2) one class row per classes[] entry, keep shown as a value with no contr
       assert.deepEqual([r.calls, r.bytes], [c.counts[w].calls, c.counts[w].bytes])
     }
   }
-  const tables = storageHtml({ classes, segments }, '24h').match(/<table[\s\S]*?<\/table>/g) || []
-  assert.ok(tables.length > 0)
-  for (const t of tables) assert.doesNotMatch(t, /<(input|button|select)\b|role="(radio|switch)/)
 })
 
 test('(3) the file problems are the segments\' problems and the documents\' errors[] entries', async () => {
