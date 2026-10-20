@@ -16,6 +16,7 @@
 import { boardFlat, reqCountsFor, ctxTokens, normEvents, faithfulness } from './openai.mjs';
 import { isWsHandshake } from './ws-handshake.mjs'; // not ./registry.mjs: the registry imports THIS module
 import { headerOf } from './harnesses.mjs';
+import { extendChain } from './chain.mjs';
 
 const parse = (s) => { if (typeof s !== 'string') return null; try { const v = JSON.parse(s); return v && typeof v === 'object' ? v : null; } catch { return null; } };
 const PARSED = new WeakMap();
@@ -114,15 +115,8 @@ export function createChain() {
       const prevId = typeof b.previous_response_id === 'string' && b.previous_response_id ? b.previous_response_id : null;
       let segments = ownSegments(rec, b), contextState = 'complete', missing = null;
       if (prevId) {
-        const head = heads.get(prevId);
-        if (head) {
-          segments = [...head.plan.segments, ...head.outputSegs, ...segments];
-          contextState = head.plan.contextState === 'partial' ? 'partial' : 'reconstructed';
-          missing = head.plan.missing;
-        } else {
-          contextState = 'partial';
-          missing = `response ${prevId} (named by previous_response_id) is not a completed response in this capture of the connection`;
-        }
+        ({ segments, contextState, missing } = extendChain(heads.get(prevId) || null, segments,
+          `response ${prevId} (named by previous_response_id) is not a completed response in this capture of the connection`));
         if (rec.partial === true) {
           contextState = 'partial';
           missing = missing || `the collector saw a gap earlier on this connection (${(rec.partial_reasons || []).join(', ') || 'partial'})`;
