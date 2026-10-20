@@ -5,11 +5,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { pageHtml } from '../../src/web/v2/capture/capture-view.mjs'
-import { logRowsOf, pageLogHtml } from '../../src/web/v2/capture/capture-log.mjs'
+import { pageLogHtml } from '../../src/web/v2/capture/capture-log.mjs'
 import { captureVerdict } from '../../src/web/v2/core/capture-verdict.mjs'
 import { controlHtml, controlFor, wireHarnessControls } from '../../src/web/v2/core/harness-switch.mjs'
 import { ALIASES, harnessKey } from '../../src/web/v2/core/chips.mjs'
-import { COMMANDS, CHANGE_REMOVAL, RESTART_CODES } from '../../src/web/v2/labels/capture.mjs'
+import { COMMANDS, CHANGE_REMOVAL, RESTART_CODES, SWITCH_WORD, ERR_WHERE } from '../../src/web/v2/labels/capture.mjs'
 
 const SPEC = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
 const C3 = SPEC.slice(SPEC.indexOf('### C.3'))
@@ -148,13 +148,19 @@ test('#9 / R14: the removal sentence is said once in an agent row\'s expansion a
   assert.equal(block.includes(CHANGE_REMOVAL), false)
 })
 
-test('R15: the service row\'s failure-group number = failures.groups length = the log\'s row count', () => {
-  for (const n of [1, 2, 5]) {
-    const d = doc()
-    d.failures.groups = Array.from({ length: n }, (_, i) => ({ level: 'problem', where: 'engine', code: `c${i}`, count: 1, first_ts: T, last_ts: T, reason: 'r' }))
-    const shown = Number(/<a href="#\/capture\/log">(\d+)/.exec(page(d, CONTROL))[1])
-    assert.deepEqual([shown, logRowsOf(d).rows.length], [n, n])
+test('P1 / 1.9 采集服务行: the service row links to the log once — the failing sentence itself when it carries the group count, else one link without a number', () => {
+  const grp = (level, i) => ({ level, where: 'engine', code: `c${i}`, count: 1, first_ts: T, last_ts: T, reason: 'r' })
+  for (const n of [0, 1, 3]) {
+    const d = doc({ state: 'failing' })
+    d.failures.groups = Array.from({ length: n }, (_, i) => grp('problem', i))
+    assert.equal(count(rowsOf(page(d, CONTROL)).get('*service'), /href="#\/capture\/log"/g), Math.min(n, 1), `failing, ${n} groups`)
   }
+  const d = doc({ state: 'ok' })
+  d.failures.groups = [grp('note', 0), grp('note', 1)]
+  const svc = rowsOf(page(d, CONTROL)).get('*service')
+  const links = [...svc.matchAll(/<a href="#\/capture\/log"[^>]*>(.*?)<\/a>/g)].map((m) => m[1].replace(/<[^>]*>/g, ''))
+  assert.equal(links.length, 1)
+  assert.equal(/\d/.test(links[0]), false)
 })
 
 test('#12 / D38⑦: no alert role, live region, badge, unread count or dismiss control on the capture page or the log', () => {
@@ -203,4 +209,22 @@ test('1.5: the why section says each sentence once, though the reason also comes
     const ps = [...why.matchAll(/<p[^>]*>(.*?)<\/p>/g)].map((m) => m[1].replace(/\.$/, ''))
     assert.equal(new Set(ps).size, ps.length, `${code}: ${JSON.stringify(ps)}`)
   }
+})
+
+// 1.9 期望态: the desired state is text only where the row draws no control; a switch already says it
+test('P2 / 1.9 期望态: the desired-state text is drawn only on a row without a control', () => {
+  for (const desired of ['on', 'off']) {
+    const d = doc({ hs: { codex: { desired } } })
+    const des = (control) => /<span class="des">(.*?)<\/span>/.exec(rowsOf(page(d, control)).get(harnessKey('codex')))[1]
+    assert.equal(des(CONTROL), '', desired)
+    assert.equal(des(ROOT), SWITCH_WORD[desired], desired)
+  }
+})
+
+// 1.9 Edge cases 表空: the empty-table line (drawn for a document naming no agent — wires-capture.test.mjs (6)) is not drawn when the
+// install record cannot be read: the changes block already says so
+test('P3 / 1.9 表空: no empty-table line while the install manifest cannot be read', () => {
+  const d = doc({ hs: {} })
+  d.errors = [{ where: ERR_WHERE.manifest, reason: 'x' }]
+  assert.equal(/class="capfoot"/.test(page(d, CONTROL)), false)
 })
