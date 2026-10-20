@@ -29,7 +29,7 @@
   #reviewbracket .rbend{position:absolute;right:-2px;top:-14px;font-size:8.5px;color:var(--pink);white-space:nowrap;}
   /* 1.3 问题道: flags (height ∝ √ ≈ 多花), × per failed call, 「压缩」 per compaction — one cell per windowed step on the
      bars' own /N axis (same flex basis, same 1px gap): a mark lands on its step's column, never k shares of the row */
-  .trow-problem{align-items:flex-end;}
+  .tkrow-problem{align-items:flex-end;}
   .tgut-prob{white-space:normal;line-height:1.3;}
   .tgut-prob .pgbtn{margin-left:2px;}
   .probrow{display:flex;gap:1px;align-items:flex-end;height:30px;cursor:pointer;}
@@ -80,11 +80,10 @@
   .ovh-l{left:-1px;border-radius:2px 0 0 2px;} .ovh-r{right:-1px;border-radius:0 2px 2px 0;}
   .ovbrush .ovh:hover{opacity:.9;}
   .sawlegend{display:flex;gap:12px;font-size:10px;color:var(--dim);margin-top:3px;flex-wrap:wrap;align-items:center;}
-  .navbtns{display:flex;gap:4px;align-items:center;margin-left:auto;}
   /* shared timeline grid: fixed left gutter (track titles) | aligned plotting lane (point 3) */
   #saw,#rails{--gut:140px;}
-  .trow{display:grid;grid-template-columns:var(--gut) 1fr;align-items:center;column-gap:8px;}
-  .trow-bars{align-items:end;}
+  .tkrow{display:grid;grid-template-columns:var(--gut) 1fr;align-items:center;column-gap:8px;}
+  .tkrow-bars{align-items:end;}
   .tgut{font-size:10px;color:var(--dim);text-align:right;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding-right:2px;}
   .tgut-ctx{font-family:var(--mono);color:var(--fg);}
   .tlane{position:relative;min-width:0;}
@@ -128,8 +127,10 @@
   body.resizing{cursor:col-resize;user-select:none;}
   body.resizing #ctxwin,body.resizing #resexp{pointer-events:none;}
   #rightpage{flex:none;width:var(--rightpage-w,320px);display:flex;flex-direction:column;min-height:0;border-left:1px solid var(--border);background:var(--raised);}
-  #resexp{flex:1;overflow-y:auto;padding:9px 10px 30px;}
-  #rawpanel{flex:none;max-height:42%;overflow-y:auto;border-top:1px solid var(--border);background:var(--rail);padding:8px 10px;}
+  #rpbody{flex:1;min-height:0;display:flex;flex-direction:column;}
+  #resexp{flex:1 1 0;min-height:0;overflow-y:auto;padding:9px 10px 30px;}
+  /* the right page splits in halves (1.2 §回放台 B 布局): the raw panel reaches the page's bottom, never stops a third of the way down */
+  #rawpanel{flex:1 1 0;min-height:0;overflow-y:auto;border-top:1px solid var(--border);background:var(--rail);padding:8px 10px;}
   .rphd{font-family:var(--mono);font-size:11px;color:var(--fg);margin-bottom:4px;}
   .rpk{font-size:10.5px;color:var(--dim);margin:2px 0;} .rpk b{color:var(--fg);font-family:var(--mono);}
   .rpcost b{color:var(--amber);}
@@ -157,7 +158,7 @@
   }
   /* < 900: the subagent / bg / 全程 rows fold into one 「▸」 row (1.2 §窄屏) — the fold row itself is rendered by rails.mjs */
   @media(max-width:900px){
-    #leftpage:not(.railopen) .trow-ovw{display:none;}
+    #leftpage:not(.railopen) .tkrow-ovw{display:none;}
   }
   @media(min-width:901px){.railunfold{display:none;}}
 
@@ -261,19 +262,20 @@
   .navrow.head::before{content:"▸";color:var(--dimmer);font-size:9px;margin-right:-2px;}
   .navrow.head.open::before{content:"▾";}
   .navkids{margin:1px 0 4px 12px;border-left:1px solid var(--border);padding-left:4px;}
-  .navsub{display:flex;align-items:baseline;gap:6px;padding:3px 6px;border-radius:5px;cursor:pointer;font-size:10.5px;color:var(--dim);font-family:var(--mono);}
+  .navsub{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px;padding:3px 6px;border-radius:5px;cursor:pointer;font-size:10.5px;color:var(--dim);font-family:var(--mono);}
   .navsub:hover{background:color-mix(in srgb,var(--accent) 9%,transparent);color:var(--fg);}
-  .navsub .nsl{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .navsub .nsl{flex:1 1 9em;min-width:6em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .navsub .nsx{color:var(--dimmer);font-size:9px;white-space:nowrap;}
   .navsub .bpmark{color:var(--green);} .navsub .vol{color:var(--amber);}
   .navsub.pend{opacity:.42;} .navsub.dead{opacity:.5;text-decoration:line-through;text-decoration-color:var(--dimmer);}
   .navsub.empty{cursor:default;color:var(--ink-3);} .navsub.empty:hover{background:none;color:var(--ink-3);}
   .navwhy{font-size:var(--fs-cap);color:var(--warn);margin:0 4px 8px;line-height:1.5;}
   .navsince{border:1px solid var(--rule);border-radius:var(--r-pill);padding:0 5px;}
-  .navlife{font:inherit;font-size:9.5px;color:var(--ink-3);background:none;border:0;padding:0;cursor:pointer;white-space:nowrap;flex:none;}
+  /* the life text wraps under the name when the panel is narrow — never cut (1.5) */
+  .navlife{font:inherit;font-size:9.5px;color:var(--ink-3);background:none;border:0;padding:0;cursor:pointer;flex:0 1 auto;min-width:0;text-align:left;overflow-wrap:anywhere;}
   .navlife:hover{color:var(--action);text-decoration:underline;}
   .navsince:hover{color:var(--ink);border-color:var(--ink-2);}
-  .navsub .bpbadge,.navsub .volbadge{flex:none;}
+  .navsub .bpbadge,.navsub .volbadge{flex:0 1 auto;min-width:0;max-width:100%;white-space:normal;} /* a pill longer than the panel wraps inside its row, never past the edge */
   .navsub .en{color:var(--green);} .navsub .ev{color:var(--red);}
   .navseen{display:flex;flex-wrap:wrap;gap:3px 4px;margin:2px 0 4px 14px;}
   .navchip{font-family:var(--mono);font-size:9.5px;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:0 5px;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -382,17 +384,20 @@
 
 /* ── the desk: session head + 会话保真行, then the two pages (1.2 §会话头) ── */
 .desk{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;}
-/* the session head: only the parts of 1.2's table — no statistic, no sentence, no lamp ever lands here */
+/* the session head: only the parts of 1.2's table — no statistic, no sentence, no lamp ever lands here. Too narrow: 项目 gives
+   way first, then the agent chip, then the title (1.2 让位次序; the head has no duration); each carries its title, back /
+   follow / ⓘ never shrink */
 .sesshead{display:flex;align-items:center;gap:12px;padding:8px 16px;background:var(--raised);border-bottom:1px solid var(--rule);flex-wrap:nowrap;overflow:hidden;}
 .sesshead .spacer{flex:1;}
+.sh-back,.sh-follow,.sh-info{flex:none;}
 .sh-back{font-size:var(--fs-cap);color:var(--action);text-decoration:none;white-space:nowrap;border:1px solid var(--rule);border-radius:var(--r-pill);padding:2px 10px;}
 .sh-back:hover{color:var(--ink);border-color:var(--ink-2);}
-.sh-name{font-size:var(--fs-strong);font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:44vw;}
-.sh-chip{display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-cap);color:var(--ink-2);text-decoration:none;background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-pill);padding:2px 9px;white-space:nowrap;}
+.sh-name{flex:0 1 auto;min-width:2em;font-size:var(--fs-strong);font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:44vw;}
+.sh-chip{flex:0 100 auto;min-width:0;overflow:hidden;display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-cap);color:var(--ink-2);text-decoration:none;background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-pill);padding:2px 9px;white-space:nowrap;}
 .sh-chip:hover{border-color:var(--ink-2);color:var(--ink);}
-.sh-chip .chipname{color:var(--ink);}
+.sh-chip .chipname{color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;}
 .sh-multi{font-size:var(--fs-cap);color:var(--warn);white-space:nowrap;}
-.sh-proj{font-size:var(--fs-cap);color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:20vw;}
+.sh-proj{flex:0 10000 auto;min-width:0;font-size:var(--fs-cap);color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:20vw;}
 .sh-follow{font:inherit;font-size:var(--fs-cap);color:var(--ink-2);background:transparent;border:1px solid var(--rule);border-radius:var(--r-pill);padding:2px 10px;cursor:pointer;white-space:nowrap;}
 .sh-follow.on{color:var(--action-ink);background:var(--action);border-color:var(--action);}
 .sh-follow:focus-visible,.sh-back:focus-visible{outline:2px solid var(--action);outline-offset:1px;}
@@ -401,7 +406,10 @@
 .fidline a{color:var(--action);text-decoration:none;}
 .fidline a:hover{text-decoration:underline;}
 .fidsep{color:var(--rule-2);}
-.fidline + .disc{margin:0 16px 6px;font-size:var(--fs-cap);}
+.fidline + .disc{margin:0;padding:0 16px 4px;background:var(--raised);font-size:var(--fs-cap);}
+/* the quiet 技术细节 disclosures under the fidelity row and in the raw panel: caption size, no 36 px row */
+.fidline + .disc .disc-t,#rawpanel .disc-t{min-height:0;font-size:var(--fs-cap);}
+.fidline + .disc .disc-t b,#rawpanel .disc-t b{font-size:var(--fs-cap);font-weight:400;color:var(--ink-3);}
 /* the session info popover's rows: numbers with their Chinese names and marks, links reachable by Tab */
 .pop .sipb{display:flex;flex-direction:column;gap:6px;min-width:240px;}
 .pop .sir{font-size:var(--fs-body);color:var(--ink);}
@@ -414,16 +422,17 @@
 .pop .sijump{font:inherit;font-size:var(--fs-body);color:var(--action);background:none;border:0;padding:0;cursor:pointer;text-decoration:none;}
 .pop .sijump:hover{text-decoration:underline;}
 /* the step bar: the middle column's first row, sticky, only 2.2's table in it */
-#stepbar{flex:none;position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;padding:6px 20px;background:var(--paper);border-bottom:1px solid var(--rule);font-size:var(--fs-cap);color:var(--ink-2);overflow-x:auto;}
-.stepbar .sb-nav{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}
-.stepbar .sbbtn{font:inherit;font-size:var(--fs-body);line-height:1;padding:2px 7px;background:transparent;border:1px solid var(--rule);border-radius:var(--r-1);color:var(--ink-2);cursor:pointer;}
-.stepbar .sbbtn:hover{color:var(--ink);border-color:var(--ink-2);}
-.stepbar .sb-no{font-family:var(--mono);font-size:var(--fs-body);color:var(--ink);white-space:nowrap;}
-.stepbar .sb-ask,.stepbar .sb-time{white-space:nowrap;}
-.stepbar .sb-model{font-family:var(--mono);font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:22vw;}
-.stepbar .spacer{flex:1;}
-.stepbar .sb-cmp .cmpx{margin-left:4px;color:var(--ink-3);cursor:pointer;border:1px solid var(--rule);border-radius:var(--r-1);padding:0 3px;line-height:1.2;}
-.stepbar .sb-cmp .cmpx:hover{color:var(--bad);border-color:var(--bad);}
+/* too narrow for one line (2.2 §步头放不下): the parts after the spacer wrap to a second line; ‹ step › never folds */
+#stepbar{flex:none;position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:6px 20px;background:var(--paper);border-bottom:1px solid var(--rule);font-size:var(--fs-cap);color:var(--ink-2);}
+#stepbar .sb-nav{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}
+#stepbar .sbbtn{font:inherit;font-size:var(--fs-body);line-height:1;padding:2px 7px;background:transparent;border:1px solid var(--rule);border-radius:var(--r-1);color:var(--ink-2);cursor:pointer;}
+#stepbar .sbbtn:hover{color:var(--ink);border-color:var(--ink-2);}
+#stepbar .sb-no{font-family:var(--mono);font-size:var(--fs-body);color:var(--ink);white-space:nowrap;}
+#stepbar .sb-ask,#stepbar .sb-time{white-space:nowrap;}
+#stepbar .sb-model{font-family:var(--mono);font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:22vw;}
+#stepbar .spacer{flex:1;}
+#stepbar .sb-cmp .cmpx{margin-left:4px;color:var(--ink-3);cursor:pointer;border:1px solid var(--rule);border-radius:var(--r-1);padding:0 3px;line-height:1.2;}
+#stepbar .sb-cmp .cmpx:hover{color:var(--bad);border-color:var(--bad);}
 .pop .cmpick{display:flex;align-items:center;gap:6px;padding:4px 14px;font-size:var(--fs-body);}
 .pop .cmpick input{width:64px;font-family:var(--mono);}
 /* the three popovers' pieces: the sentence first, then the numbers, then the links */
@@ -445,5 +454,9 @@
 @media(max-width:900px){
   .sesshead .sh-proj{display:none;}
   .pop .sir-narrow{display:block;}
-  #stepbar{flex-wrap:wrap;}
 }
+/* 1.2 §键盘: the step bar and the brush show where the keyboard is */
+#stepbar .sbbtn:focus-visible,.ovbrush:focus-visible{outline:2px solid var(--action);outline-offset:1px;}
+.v2-modal .keylist{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:0;}
+.v2-modal .keylist dd{margin:0;}
+.v2-modal .keylist kbd{font-family:var(--mono);color:var(--ink);}

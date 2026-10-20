@@ -3,7 +3,7 @@
 // relaxed, D64⑥). Shots: every screen × 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, stats, shoot } from './harness.mjs'
+import { probe, withBoard, stats, shoot, layoutFaults } from './harness.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { COMMANDS } from '../../../src/web/v2/labels/capture.mjs'
 
@@ -68,6 +68,8 @@ async function driveEveryScreen(b, { width, theme }) {
       return hs.flatMap(([t, r], i) => hs.slice(i + 1).filter(([, q]) => over(r, q)).map(([u]) => `${t} × ${u}`))
     })
     assert.deepEqual(clash, [], `${name}: headings overlap`)
+    // 1.5: nothing drawn on top of anything else, no text cut off unsaid, every agent icon filled — on every screen, from its own data
+    assert.deepEqual(await layoutFaults(page), { overlap: [], cut: [], untitled: [], emptyIcons: [] }, `${name}: layout`)
     await fitsWindow(page, name)
     assert.ok(await page.locator(sel).count() > 0, `${name}: ${sel} at ${await page.evaluate(() => location.hash)} after ${ms} ms`)
     await shoot(page, name, { width, theme })
@@ -89,6 +91,7 @@ async function driveEveryScreen(b, { width, theme }) {
   }
   await page.waitForLoadState('networkidle')
   await shoot(page, 'replay', { width, theme })
+  assert.deepEqual(await layoutFaults(page), { overlap: [], cut: [], untitled: [], emptyIcons: [] }, 'replay: layout')
 
   // step change ×20 by click, ×20 by arrow key (D64②); bounce between the first and the last step
   const pos = async () => (await page.textContent('#stepbar .sb-no')).match(/(\d+)\s*\/\s*(\d+)/).slice(1).map(Number)
@@ -131,6 +134,7 @@ for (const width of [1280, 1024]) {
       try {
         await driveEveryScreen(b, { width, theme })
         assert.deepEqual(b.errors, [])
+        assert.deepEqual(b.missing, [], 'every static file the page asks for is served (no /favicon.ico 404)')
       } finally { await b.stop() }
     })
   }

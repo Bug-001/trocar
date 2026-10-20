@@ -38,17 +38,26 @@ async function withBoard(platform, run) {
     const token = fs.readFileSync(path.join(w.dir, 'board.token'), 'utf8')
     const post = (body, headers = { [CONTROL_TOKEN_HEADER]: token }) => request(port, '/control/harness', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) })
       .then((r) => ({ ...r, json: JSON.parse(r.body) }))
-    try { await run({ w: { ...w, token, port }, post }) } finally { await box.stop() }
+    // V91: the board's status poll (GET /api/status, the query worker) and GET /control/status (the control verbs) read the machine one way
+    const sameView = async (when) => {
+      const get = (p) => request(port, p, { headers: { [CONTROL_TOKEN_HEADER]: token } }).then((r) => { assert.equal(r.status, 200, `${p} ${when}: ${r.body}`); return JSON.parse(r.body) })
+      const [api, ctl] = await Promise.all([get('/api/status'), get('/control/status')])
+      assert.deepEqual(Object.keys(api.harnesses).sort(), ctl.harnesses.map((h) => h.harness).sort(), when)
+      for (const h of ctl.harnesses) assert.deepEqual({ desired: api.harnesses[h.harness].desired, setup: api.harnesses[h.harness].setup }, { desired: h.desired, setup: h.setup }, `${h.harness} ${when}`)
+      return ctl
+    }
+    try { await run({ w: { ...w, token, port }, post, sameView }) } finally { await box.stop() }
   })
 }
 
 for (const platform of ['darwin', 'win32']) {
   test(`${platform} · 4.4 #11: on and off from the board — 409 with the plan and nothing written, a stale plan_id → a new plan, confirm → the CLI's receipt; off keeps the user's edit`, { timeout: 60_000 }, async () => {
-    await withBoard(platform, async ({ w, post }) => {
+    await withBoard(platform, async ({ w, post, sameView }) => {
       const envFile = path.join(w.home, '.codex', '.env')
       fs.mkdirSync(path.dirname(envFile), { recursive: true }); fs.writeFileSync(envFile, '# the user\'s own\nOPENAI_BASE_URL=https://relay.example\n')
       const before = fs.readFileSync(envFile)
       const old = new Set(flows(w.dir).map((r) => JSON.stringify(r)))
+      await sameView('before on')
       let home0 = snapshot(w.home)
       const p1 = await post({ harness: 'codex', on: true })
       assert.equal(p1.status, 409, p1.body)
@@ -70,6 +79,7 @@ for (const platform of ['darwin', 'win32']) {
       assert.equal(on.status, 200, on.body)
       assert.deepEqual(validateReceipt(on.json), [], on.body)
       assert.deepEqual([on.json.command, on.json.ok, on.json.harnesses], ['on', true, ['codex']], on.body)
+      assert.equal((await sameView('after a confirmed on')).harnesses.find((h) => h.harness === 'codex').desired, 'on')
       const wrote = fs.readFileSync(envFile, 'utf8')
       assert.match(wrote, /127\.0\.0\.1:\d+/, 'the entry with the door the daemon opened')
       const backups = path.join(w.home, '.asight', 'backup')

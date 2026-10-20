@@ -14,7 +14,7 @@ import * as W from '../labels/replay.mjs'
 // role="button" + tabindex: the head is keyboard-focusable and Enter/Space toggle it (wireOutline's keydown).
 export function navGroupHtml(s, key, label, count, kidsHtml, { hint = '' } = {}) {
   const open = s.navOpen.has(key)
-  return `<div class="navrow head ${open ? 'open' : ''}" role="button" tabindex="0" data-navtoggle="${esc(key)}"${hint ? ` title="${esc(hint)}"` : ''}><span class="navlbl">${esc(label)}</span><span class="navct">${count}</span></div>` +
+  return `<div class="navrow head ${open ? 'open' : ''}" role="button" tabindex="0" data-navtoggle="${esc(key)}"${hint ? ` title="${esc(hint)}"` : ''}><span class="navlbl">${esc(label)}</span>${count !== '' && count != null ? `<span class="navct">${count}</span>` : ''}</div>` +
     (open ? `<div class="navkids">${kidsHtml}</div>` : '')
 }
 
@@ -66,11 +66,12 @@ export function outlineEntries(s) {
   const turns = off ? [] : humanTurns(flat)
   const since = queryStepLabels(s, turns)
   const groups = [
-    { key: 'tools', label: W.GRP_TOOLS, count: off ? (off.meta && typeof call.tools === 'number' ? call.tools : '—') : rowsOf('tools').length,
+    // no counts on the group heads (2.5 §只做导航): the sizes are the middle column's section rows; an off-page step says why
+    { key: 'tools', label: W.GRP_TOOLS,
       kids: off ? '' : rowsOf('tools').map((x) => ({ label: x.b.name || '', mcp: !!x.b.mcp, jump: x.i })) },
-    { key: 'sys', label: W.GRP_SYS, count: off ? '—' : rowsOf('system').length,
+    { key: 'sys', label: W.GRP_SYS,
       kids: off ? '' : rowsOf('system').map((x) => ({ label: x.b.label || '', ccMark: !!x.b.cc, volatile: !!x.b.volatile, chars: x.b.chars, jump: x.i })) },
-    { key: 'msg', label: W.GRP_ASK, count: off ? '—' : turns.length,
+    { key: 'msg', label: W.GRP_ASK,
       kids: off ? '' : turns.map((t, k) => ({ label: t.label, guess: t.basis === 'guess', since: since[k], jump: t.fi })) },
   ]
   return { head: W.OUTLINE_HEAD, groups, changeLine: hasChangeLine(call) || offPageChange(call), off }
@@ -91,7 +92,7 @@ export function outlineHtml(s) {
   if (e.off) h += `<div class="navwhy">${esc(e.off.why)}${e.off.meta && typeof (s.anchor.calls[s.playhead] || {}).tools === 'number' ? ` · <span class="mono">${s.anchor.calls[s.playhead].tools} tool definitions</span>` : ''}</div>`
   for (const g of e.groups) {
     const kids = !g.kids ? '' : g.kids.length ? g.kids.map(kidHtml[g.key]).join('') : `<div class="navsub empty">${esc(g.key === 'tools' ? W.NO_TOOLS : g.key === 'sys' ? W.NO_SYS : W.NO_ASK)}</div>`
-    h += navGroupHtml(s, g.key, g.label, g.count, kids)
+    h += navGroupHtml(s, g.key, g.label, '', kids)
   }
   if (e.changeLine) h += `<div class="navrow" data-jump="cachebrk" role="button" tabindex="0"><span class="navlbl">${esc(W.JUMP_TO_CHANGE)}</span></div>`
   return h

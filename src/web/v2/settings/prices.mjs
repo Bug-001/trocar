@@ -76,6 +76,7 @@ export function mount(el, ctx) {
     // 单价 — the table, read-only; its caption names the arithmetic and the unit
     cards.push(`<div class="scard"><h2>${W.CARD_PRICE}</h2>` +
       `<p class="cap">${W.PRICE_NOTE}</p>` +
+      `<p class="cap" data-note="read-only">${W.PRICE_READ_ONLY}</p>` +
       (pricing ? sourceHtml(pricing) : '') +
       (error ? `<p class="err">${esc(W.PRICE_READ_FAIL)}: ${esc(error.error || ('HTTP ' + error.status))} · <a href="#/settings/prices">${W.RETRY}</a></p>`
         : rows ? priceTable(rows) : `<p class="err">${W.PRICE_BAD_SHAPE}</p>`) +
@@ -92,7 +93,7 @@ export function mount(el, ctx) {
           return `<div class="umodel">` +
             `<span class="mono um">${m.model == null ? W.UNPRICED_NO_MODEL : esc(m.model)}</span>` +
             `<span class="cap">${W.UNPRICED_SESSIONS(m.sessions)}</span>` +
-            (tmpl ? `<span class="trow"><code class="well mono" tabindex="0">${esc(tmpl)}</code><button type="button" class="copybtn" data-copy="${esc(tmpl)}">${W.COPY_TEMPLATE}</button></span>` : '') +
+            (tmpl ? `<div class="tmpl"><code class="well mono" tabindex="0">${esc(tmpl)}</code><button type="button" class="copybtn" data-copy="${esc(tmpl)}">${W.COPY_TEMPLATE}</button></div>` : '') +
             `</div>`
         }).join('') + `<p class="cap hint">${W.TEMPLATE_HINT}</p>`
           : `<p class="cap">${W.UNPRICED_NONE}</p>`) +

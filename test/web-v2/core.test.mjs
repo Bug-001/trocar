@@ -121,3 +121,16 @@ test('trapTab: focus that is outside the dialog is pulled back in', () => {
   assert.equal(domMod.trapTab([], 'x', false), null) // nothing to trap
 })
 
+
+// 1.2 #12: arrows typed into a control or inside a list box / menu never reach the screen; Escape always does (fake targets)
+test('keys: isTyping holds for form controls, editable content and a target inside role=listbox / role=menu; Escape still passes', async () => {
+  const { isTyping } = await import('../../src/web/v2/core/keys.mjs')
+  const inRole = (role) => ({ tagName: 'LI', closest: (sel) => (sel.includes(`role=${role}`) || sel.includes(`role="${role}"`) ? {} : null) })
+  const plain = { tagName: 'DIV', closest: () => null }
+  const typing = [{ tagName: 'INPUT' }, { tagName: 'TEXTAREA' }, { tagName: 'SELECT' }, { tagName: 'DIV', isContentEditable: true }, inRole('listbox'), inRole('menu')]
+  for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End']) {
+    for (const target of typing) assert.equal(isTyping({ key, target }), true, `${key} on ${target.tagName}`)
+    assert.equal(isTyping({ key, target: plain }), false)
+  }
+  for (const target of typing) assert.equal(isTyping({ key: 'Escape', target }), false, 'Escape reaches the screen handler')
+})

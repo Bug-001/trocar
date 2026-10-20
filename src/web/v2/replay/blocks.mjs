@@ -220,6 +220,6 @@ export function ctxBlockHtml(b, i, { prevKeys, open, windowLine = false } = {}) 
   const chars = typeof b.chars === 'number' ? `<span class="cbchars">${esc(kf(b.chars))} ${esc(W.CHARS_WORD)}</span>` : ''
   const rk = b.resKey ? ` data-rk="${esc(b.resKey)}"` : ''
   return `<div class="cblk ${open ? '' : 'collapsed'} ${isNew ? 'is-new' : ''} s-${esc(b.sec)} r-${esc(b.role)} k-${esc(b.kind)}" data-bi="${i}" data-sec="${esc(b.sec)}" data-ff="${esc(f)}"${rk}>` +
-    `<div class="cbh"><span class="cbrole">${esc(h.role)}</span><span class="cbtag"${tag ? '' : ` title="${esc(String(h.tag || ''))}"`}>${esc(tag || W.TAG_UNKNOWN)}</span>${label ? `<span class="cblabel">${esc(label)}</span>` : ''}${bp}${vol}${nw}${badge}${chars}${sr}` +
+    `<div class="cbh"><span class="cbrole">${esc(h.role)}</span><span class="cbtag"${tag ? '' : ` title="${esc(String(h.tag || ''))}"`}>${esc(tag || W.TAG_UNKNOWN)}</span>${label ? `<span class="cblabel" title="${esc(label)}">${esc(label)}</span>` : ''}${bp}${vol}${nw}${badge}${chars}${sr}` +
     `</div><div class="cbc"${open ? ' data-filled="1"' : ''}>${open ? bodyFor(b) : ''}</div></div>`
 }

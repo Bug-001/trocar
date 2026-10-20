@@ -21,7 +21,7 @@ export const activeAgentChip = (name) => `agent: ${name}`
 export const activeProjectChip = (name) => `project: ${name}`
 
 // ── the caption row: only what changes how far the list can be trusted (D38); bookkeeping goes to 技术细节 ───────────
-export const capNotAllRead = (n) => `◐ ${n} capture files were not read in full; the list may be incomplete`
+export const capNotAllRead = (n) => `◐ ${n} capture ${n === 1 ? 'file was' : 'files were'} not read in full; the list may be incomplete`
 export const CAP_NOT_ALL_TIP = 'See Storage for each file'
 export const capReadFail = (code) => `Could not read the session list: the capture service returned ${code}`
 export const CAP_CONN_FAIL = 'Cannot reach the asight capture service'
