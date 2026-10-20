@@ -32,6 +32,8 @@ a.trow.hi{background:var(--panel);}
 .trow .nohost{color:var(--ink-3);font-size:var(--fs-cap);}
 .trow .cell-first{font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;}
 .newmark{color:var(--ink);font-weight:600;white-space:nowrap;}
+/* 收回's 「N not recorded」 sits under the number, inside its own cell (1.10: the note is part of the cell) */
+.trow .cell.num .c2{display:block;font-size:var(--fs-cap);line-height:15px;white-space:nowrap;}
 .trow .cell.classes{font-size:var(--fs-cap);color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .more-classes{color:var(--ink-3);}
 .sep-dot{color:var(--ink-3);}

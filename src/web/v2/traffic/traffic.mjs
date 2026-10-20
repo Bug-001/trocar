@@ -140,8 +140,8 @@ export function rowHtml(r, model, first) {
     return w.unclassified
       ? `${esc(w.word)} ${n} ${infoButton({ label: 'Why unclassified', title: w.word, body: esc(W.UNCLASSIFIED_TIP) })}`
       : `${esc(w.word)} ${n}`
-  }).join('<span class="sep-dot" aria-hidden="true"> · </span>') + (classes.length > 3
-    ? `<span class="more-classes" title="${esc(classes.slice(3).map(([id, n]) => `${classWord(id, r.harness, model.unmatched).word} ${n}`).join(' · '))}"> …</span>` : '')
+  }).join('<span class="sep-dot" aria-hidden="true"> · </span>') + (classes.length > 3 ? '<span class="more-classes"> …</span>' : '')
+  const clsAll = classes.map(([id, n]) => `${classWord(id, r.harness, model.unmatched).word} ${n}`).join(' · ') // the cell may cut: the whole list on hover
   const recv = r.recv
   const inferred = r.harness_inferred ? ` <span data-mark="inferred">${mark('inf', W.AGENT_AGENT_TIP)}</span>` : '' // every inferred row, once the rows carry the flag (1.10 §OPEN)
   const agentCell = `<span class="nm">${first ? `${harnessIcon(r.harness)}<span class="nmname">${esc(harnessName(r.harness))}</span>` : ''}${inferred}</span>`
@@ -154,7 +154,7 @@ export function rowHtml(r, model, first) {
     `<span class="cell num">${r.requests ?? 0}</span>` +
     `<span class="cell num">${esc(sentText(r))}</span>` +
     `<span class="cell num">${esc(recv.main)}${recv.note ? ` <span class="c2">${esc(recv.note)}</span>` : ''}</span>` +
-    `<span class="cell classes">${clsHtml}</span>`
+    `<span class="cell classes" title="${esc(clsAll)}">${clsHtml}</span>`
   return link
     ? `<a class="trow" href="${esc(link)}" data-href="${esc(link)}" data-h="${esc(key)}">${inner}</a>`
     : `<div class="trow nolink" data-h="${esc(key)}">${inner}</div>`

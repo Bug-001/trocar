@@ -14,7 +14,7 @@ import { TITLE_FROM_WIRE } from '../labels/replay.mjs'
 import { esc, fmtWhen, relTime, bytes, usd } from '../core/fmt.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
-import { harnessKey, harnessName, harnessIcon, ensureHarnessIcons, UNIDENTIFIED } from '../core/chips.mjs'
+import { harnessKey, harnessName, harnessIcon, UNIDENTIFIED } from '../core/chips.mjs'
 import { captureVerdict, capHealthPatch, agentVerdicts, failureSentence, AGENT_TIER, CAPH_MS } from '../core/capture-verdict.mjs'
 import { priceMatch, costOf, hitRatio } from '../core/metrics.mjs'
 import { loadSessions } from '../library/logic.mjs'
@@ -437,7 +437,6 @@ export function mount(el, ctx) {
     for (const k of Object.keys(zones)) if (sigs[k] !== next[k]) {
       zones[k].innerHTML = next[k]; sigs[k] = next[k]
       if (k === 'agents' && focusH) { const b = zones[k].querySelector(`[data-hctl][data-h="${focusH}"]`); if (b) b.focus() } // 1.9: focus stays on the control
-      if (zones[k].querySelectorAll) ensureHarnessIcons(zones[k]) // fill the 16px boxes this card just drew
     }
     el.querySelector('#ovgrid').classList.toggle('first', body.first)
   }

@@ -5,7 +5,7 @@
 // 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, shoot } from './harness.mjs'
+import { probe, withBoard, shoot, layoutFaults } from './harness.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -77,6 +77,27 @@ test('shots: the table, the host page and the detail at 1280 / 1024 × light / d
       await b.page.waitForSelector('.hdetail.open .rqd', { timeout: 30000 })
       await b.page.waitForTimeout(400)
       await shoot(b.page, 'traffic-detail', { width, theme })
+      assert.deepEqual(b.errors, [])
+    } finally { await b.stop() }
+  }
+})
+
+// 1.10 收回 · 1.5: a row whose received bytes are partly not recorded says 「≥ N」 and 「k not recorded」 inside its own cell — nothing runs into
+// 主要类别 — and every agent cell carries its icon. The real answer, with each row's received side made partial (a macOS machine's shape).
+test('收回 partly not recorded stays in its cell; every agent cell has its icon (1440 / 1280 / 1024)', { skip, timeout: 240_000 }, async () => {
+  for (const width of [1440, 1280, 1024]) {
+    const b = await withBoard({ bytes: 2e6, width, chromium: gate.chromium })
+    try {
+      await b.page.route((u) => new URL(u).pathname === '/api/traffic', async (r) => {
+        const res = await r.fetch(), j = await res.json()
+        for (const h of j.hosts || []) if ((h.requests || 0) > 1) Object.assign(h, { received_bytes: 7.4e6, received_unrecorded: h.requests - 1 })
+        await r.fulfill({ response: res, json: j })
+      })
+      await go(b.page, '#/traffic?window=all')
+      await b.page.waitForSelector('a.trow[data-h] .c2', { timeout: 30000 })
+      await b.page.waitForLoadState('networkidle')
+      assert.deepEqual(await layoutFaults(b.page), { overlap: [], cut: [], untitled: [], emptyIcons: [] }, `traffic ${width}`)
+      await shoot(b.page, 'traffic-unrecorded', { width, theme: 'light' })
       assert.deepEqual(b.errors, [])
     } finally { await b.stop() }
   }

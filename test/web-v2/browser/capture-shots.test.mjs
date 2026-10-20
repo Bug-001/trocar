@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { probe, shoot } from './harness.mjs'
+import { probe, shoot, layoutFaults } from './harness.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { modelWorld } from '../../helpers/model-world.mjs'
 import { liveUnit, withScratchCwd } from '../../helpers/model-daemon.mjs'
@@ -114,6 +114,40 @@ test('shots: healthy, not installed and control off at 1280 / 1024 × light / da
         await b.page.waitForSelector('.crow[data-h="codex"]', { timeout: 30000 })
         assert.equal(await b.page.locator('[data-hctl]').count(), 0)
         await shoot(b.page, 'capture-control-off', { width, theme })
+        assert.deepEqual(b.errors, [])
+      } finally { await b.close() }
+    }
+  })
+})
+
+// 1.9 · 1.5: an expanded problem row — the restart sentence, its why, the changed files, 技术细节 with its copy button, and on the right both
+// 最近采到 and 最近失败 — draws nothing on top of anything else at 1440 / 1280 / 1024 (a macOS machine's Z-Code row once put 「Copy
+// diagnostics」 over 「Technical details」, and ran 「captured just now ›latest failure …」 into the switch). The real answer, with codex made
+// that row.
+test('an expanded problem row: nothing drawn on one another, the two right-hand facts apart and clear of the switch', { skip, timeout: 240_000 }, async () => {
+  await withDaemonBoard(async (ctx) => {
+    for (const width of [1440, 1280, 1024]) {
+      const b = await open(gate.chromium, ctx, { width })
+      try {
+        const now = new Date().toISOString()
+        await b.page.route((u) => new URL(u).pathname === '/api/status', async (r) => {
+          const res = await r.fetch(), j = await res.json()
+          j.harnesses.codex = { ...j.harnesses.codex, desired: 'on', captured: false, reason: 'config-after-start', why: [] }
+          j.topology = { ...(j.topology || {}), codex: { at: now, captured: false, reason: 'config-after-start', findings: ['config-after-start'] } }
+          j.failures = { ...(j.failures || {}), groups: [{ level: 'problem', where: 'engine', code: 'trust-rejected', count: 3, first_ts: now, last_ts: now, harness: 'codex', reason: 'r' }] }
+          j.changed = [...(j.changed || []), { harness: 'codex', path: `${ctx.w.home}/.codex/a/rather/long/path/to/a/config/file/config.toml`, what: 'toml-key network.proxy' }]
+          await r.fulfill({ response: res, json: j })
+        })
+        await b.page.route((u) => new URL(u).pathname === '/api/overview', async (r) => {
+          const res = await r.fetch(), j = await res.json()
+          j.harnesses = [{ harness: 'codex', last_ts: now }]
+          await r.fulfill({ response: res, json: j })
+        })
+        await b.page.reload({ waitUntil: 'load' })
+        await b.page.waitForSelector('.crow[data-h="codex"] .cexp:not([hidden]) .exp-tech, .crow[data-h="codex"] .cexp:not([hidden]) .disc', { timeout: 30000 })
+        await b.page.waitForSelector('.crow[data-h="codex"] .last a[href^="#/sessions"]', { timeout: 30000 })
+        assert.deepEqual(await layoutFaults(b.page), { overlap: [], cut: [], untitled: [], emptyIcons: [] }, `capture ${width}`)
+        await shoot(b.page, 'capture-problem-row', { width, theme: 'light' })
         assert.deepEqual(b.errors, [])
       } finally { await b.close() }
     }

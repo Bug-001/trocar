@@ -63,14 +63,14 @@ export function resourcesHtml(s) {
 
   const fileRow = (r) => { const l = life(r)
     return `<div class="navsub ${l.cls}" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}">` +
-      `<button type="button" class="nsl viewname" ${view(r, l.enter)} aria-label="${esc(W.viewNameTip(relPath(cwd, r.label)))}">${rp(r.label)}</button>` +
+      `<button type="button" class="nsl viewname" ${view(r, l.enter)} title="${esc(r.label)}" aria-label="${esc(W.viewNameTip(relPath(cwd, r.label)))}">${rp(r.label)}</button>` +
       `<button type="button" class="navlife" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}" aria-label="${esc(W.jumpStepTip(at(l.enter)))}">${esc(l.word)}</button></div>` }
   const files = of('file')
   if (files.length) h += navGroupHtml(s, 'life-file', W.RES_GRP.file, files.length, files.map(fileRow).join(''))
 
   const loadRow = (r) => { const l = life(r)
     return `<div class="navsub ${l.cls}" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}">` +
-      `<button type="button" class="nsl viewname" ${view(r, l.enter)} aria-label="${esc(W.viewNameTip(r.label))}">${esc(r.label)}</button>` +
+      `<button type="button" class="nsl viewname" ${view(r, l.enter)} title="${esc(r.label)}" aria-label="${esc(W.viewNameTip(r.label))}">${esc(r.label)}</button>` +
       `<button type="button" class="navlife" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}" aria-label="${esc(W.jumpStepTip(at(l.enter)))}">${esc(`${W.lifeLoaded(at(l.enter))}`)}</button></div>` }
   const loads = of('scaffold')
   if (loads.length) h += navGroupHtml(s, 'life-load', W.RES_GRP.load, loads.length, loads.map(loadRow).join(''))
@@ -79,12 +79,12 @@ export function resourcesHtml(s) {
   const capRow = (r) => { const l = life(r)
     const skill = r.kind === 'skill', onlyCalls = skill && !(r.loads && r.loads.length)
     return `<div class="navsub ${l.cls}" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}">` +
-      `<button type="button" class="nsl viewname" ${view(r, l.enter)} aria-label="${esc(W.viewNameTip(r.label))}">${esc(skill ? `skill · ${r.label}` : r.label)}</button>` +
+      `<button type="button" class="nsl viewname" ${view(r, l.enter)} title="${esc(r.label)}" aria-label="${esc(W.viewNameTip(r.label))}">${esc(skill ? `skill · ${r.label}` : r.label)}</button>` +
       `<button type="button" class="navlife" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}" aria-label="${esc(W.jumpStepTip(at(l.enter)))}">${esc(skill ? l.word : W.lifeSeen(at(l.enter)))}</button>` +
       (onlyCalls ? `<span class="nsx" title="${esc(W.ONLY_CALLS_TIP)}">${esc(W.ONLY_CALLS)}</span>` : '') + `</div>` }
   const skills = of('skill'), caps = of('capability')
   const dlRow = (r) => { const l = life(r)
-    return `<div class="navsub" data-navstep="${l.enter}"><span class="nsl">${esc(r.kind === 'dir' ? W.DIR_WORD : W.LINK_WORD)} ${rp(r.label)}</span><button type="button" class="navlife" data-navstep="${l.enter}" aria-label="${esc(W.jumpStepTip(at(l.enter)))}">${esc(W.lifeSeen(at(l.enter)))}</button></div>` }
+    return `<div class="navsub" data-navstep="${l.enter}"><span class="nsl" title="${esc(r.label)}">${esc(r.kind === 'dir' ? W.DIR_WORD : W.LINK_WORD)} ${rp(r.label)}</span><button type="button" class="navlife" data-navstep="${l.enter}" aria-label="${esc(W.jumpStepTip(at(l.enter)))}">${esc(W.lifeSeen(at(l.enter)))}</button></div>` }
   const dl = [...of('dir'), ...of('link')]
   const compRow = (e) => {
     const giLocal = a.giLocal, N = a.calls.length
@@ -93,13 +93,13 @@ export function resourcesHtml(s) {
     const word = e.type === 'compaction'
       ? W.compactRow(at(atStep), e.from != null ? String(e.from) : '—', e.to != null ? String(e.to) : '—') + (e.inferred ? ` · ${W.GUESS}` : '')
       : W.summarizeRow(at(atStep), e.out != null ? kf(e.out) : '—')
-    return `<div class="navsub" data-navstep="${atStep}"><span class="nsl">${esc(word)}</span></div>` }
+    return `<div class="navsub" data-navstep="${atStep}"><span class="nsl" title="${esc(word)}">${esc(word)}</span></div>` }
   const comps = (a.events || []).filter((e) => e && (e.type === 'compaction' || e.type === 'summarize'))
   const others = res.filter((r) => !['file', 'scaffold', 'skill', 'capability', 'dir', 'link'].includes(r.kind))
   // others keeps EVERY unknown kind (even one without segments — 2.4 Edge cases: 不丢); an undated row shows no step
   // number and carries no data-navstep (there is no enter to locate)
   const otherRow = (r) => { const l = life(r)
-    return `<div class="navsub ${l.cls}"${l.enter != null ? ` data-navstep="${l.enter}"` : ''} title="${esc(r.kind)}"><span class="nsl">${esc(r.label)}</span>${l.enter != null ? `<button type="button" class="navlife" data-navstep="${l.enter}">${esc(W.lifeSeen(at(l.enter)))}</button>` : ''}</div>` }
+    return `<div class="navsub ${l.cls}"${l.enter != null ? ` data-navstep="${l.enter}"` : ''} title="${esc(r.kind)}"><span class="nsl" title="${esc(r.label)}">${esc(r.label)}</span>${l.enter != null ? `<button type="button" class="navlife" data-navstep="${l.enter}">${esc(W.lifeSeen(at(l.enter)))}</button>` : ''}</div>` }
   const seenBlock = seen.length ? (() => {
     const shown = s.navSeenExpanded ? seen : seen.slice(0, SEEN_CAP)
     const chips = shown.map((x) => { const giLocal = a.giLocal, N = a.calls.length; const v = giLocal.get(x.firstStep); const fl = v == null ? N : v

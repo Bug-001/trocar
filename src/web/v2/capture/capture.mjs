@@ -6,7 +6,7 @@
 // install / undo control anywhere. The control plane's answer is read on mount and again after a 405 (the daemon lost it).
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
-import { harnessName, ensureHarnessIcons } from '../core/chips.mjs'
+import { harnessName } from '../core/chips.mjs'
 import { captureVerdict, pollCaptureHealth } from '../core/capture-verdict.mjs'
 import { pageHtml } from './capture-view.mjs'
 import { wireHarnessControls } from '../core/harness-switch.mjs'
@@ -42,7 +42,6 @@ export function mount(el, ctx) {
     const v = captureVerdict(capH, { okAt: capHOkAt, err: capHErr })
     headEl.innerHTML = pageHeadHtml({ name: SCREEN_NAME.capture, readAt: capHOkAt })
     mainEl.innerHTML = pageHtml(capH, v, { openByReader, ov, control, ui: ctlState })
-    if (mainEl.querySelectorAll) ensureHarnessIcons(mainEl)
   }
 
   // ── ?h= : land on that row, opened (1.9 §从别处进来); an agent with no row is a toast, never head-zone text ───────

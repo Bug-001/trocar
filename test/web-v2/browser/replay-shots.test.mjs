@@ -4,7 +4,7 @@
 // bottom. Shots: the replay, the bottom sheet open at 1024, the cost view. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, shoot } from './harness.mjs'
+import { probe, withBoard, shoot, layoutFaults } from './harness.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -45,7 +45,9 @@ for (const width of [1280, 1024, 800]) {
       try {
         await openBusiest(b)
         const L = await layout(b.page)
-        const bad = [ // every finding at once: one run shows the whole picture
+        const F = await layoutFaults(b.page) // the side panel's rows included: a resource's life text wraps, never cut (1.5)
+        const bad = [
+          ...F.overlap.map((x) => `drawn on one another: ${x}`), ...F.cut.map((x) => `cut off: ${x}`), ...F.untitled.map((x) => `ellipsis without a title: ${x}`), ...F.emptyIcons.map((x) => `empty icon: ${x}`), // every finding at once: one run shows the whole picture
           ...L.clipped.map((x) => `clipped (M6): ${x}`),
           ...L.untitled.map((x) => `ellipsis without a title: ${x}`),
           ...(L.ctxwin >= 0.5 * L.avail ? [] : [`#ctxwin ${L.ctxwin}px < half of the available ${L.avail}px`]),

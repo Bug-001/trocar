@@ -157,7 +157,7 @@ export function agentRowHtml(row, h, { open = false, ov = null, control = null, 
   const desired = (row.desired === 'on' || row.desired === 'off') ? SWITCH_WORD[row.desired] : ''
   const last = row.lastCaptured
     ? `<a href="#/sessions?h=${esc(row.harness)}" title="${esc(fmtStamp(row.lastCaptured))}">captured ${esc(relCap(row.lastCaptured))} ›</a>`
-    : ov ? 'not captured in the last 24 hours' : '' // the `overview` document's harnesses[].last_ts (1.9); unread → nothing is claimed
+    : ov ? '<span>not captured in the last 24 hours</span>' : '' // the `overview` document's harnesses[].last_ts (1.9); unread → nothing is claimed
   const fail = row.lastFailure ? `<a href="#/capture/log?h=${esc(row.harness)}" title="${esc(fmtStamp(row.lastFailure))}">latest failure ${when(row.lastFailure)} · capture log ›</a>` : ''
   const problem = row.tier === AGENT_TIER.problem || row.tier === AGENT_TIER.forwarderDown
   return `<div class="crow" data-h="${esc(row.harness)}">` +
@@ -188,8 +188,7 @@ export function expandHtml(row, h, { problem = false } = {}) {
   if (problem) out.push(whyHtml(row))
   const ch = changesFor(row, h)
   if (ch) out.push(ch)
-  out.push(agentTechHtml(row, h))
-  return `<dl class="exp">${out.join('')}</dl>`
+  return (out.length ? `<dl class="exp">${out.join('')}</dl>` : '') + `<div class="exp-tech">${agentTechHtml(row, h)}</div>`
 }
 
 // 为什么 · 怎么办 — only on a problem row. The why is the row's own reason (agentVerdicts' reasonOf: the board's why / fix, the

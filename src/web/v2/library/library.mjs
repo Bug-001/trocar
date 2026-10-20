@@ -6,7 +6,7 @@
 import { esc, fmtTime } from '../core/fmt.mjs'
 import { createVList } from '../core/vlist.mjs'
 import { delegate } from '../core/dom.mjs'
-import { ensureHarnessIcons, harnessName, harnessIcon, harnessRaw } from '../core/chips.mjs'
+import { harnessName, harnessIcon, harnessRaw } from '../core/chips.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
 import { mark, techDetailsHtml } from '../core/ui.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
@@ -152,7 +152,7 @@ export function mount(el, ctx) {
     const am = agentMenuModel(all, f), as = agentMenuSignature(am)
     if (as !== agentSig) {
       if (agentSig == null) $('mw-agent').innerHTML = popMenu('lib-agent', W.AGENT_MENU, null, agentItemsHtml(am))
-      else { $('lib-agent').innerHTML = agentItemsHtml(am); ensureHarnessIcons($('lib-agent')) }
+      else $('lib-agent').innerHTML = agentItemsHtml(am)
       agentSig = as
     }
     const po = projectOptions(all, f.project)
@@ -200,10 +200,8 @@ export function mount(el, ctx) {
     entries = listEntries(rows, f.sort, now)
     const render = (i) => 'g' in entries[i] ? `<div class="lgroup">${esc(W.GROUPS[entries[i].g])}</div>` : rowHtml(entries[i].s, sel, now)
     const hadFocus = listEl.contains(document.activeElement) // a repaint replaces the row elements: focus follows the highlight
-    const fill = () => ensureHarnessIcons(listEl)
-    if (!vl) vl = createVList(listEl, { rowHeight: ROW_H, count: entries.length, render, after: fill })
+    if (!vl) vl = createVList(listEl, { rowHeight: ROW_H, count: entries.length, render })
     else vl.update({ count: entries.length, render })
-    fill()
     const fsig = filterSignature(f), selIndex = rows.findIndex((s) => sessionKey(s) === sel), d = scrollDecision({ prevSig: lastFilterSig, sig: fsig, selKey: sel, selIndex, prevSelKey })
     lastFilterSig = fsig; prevSelKey = sel
     if (d.kind === 'top') { listEl.scrollTop = 0; vl.update({}) }

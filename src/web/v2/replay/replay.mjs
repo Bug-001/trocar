@@ -6,7 +6,6 @@
 // Contract: mount(el, ctx) → {update(route), unmount()}; ctx = {api, store, router}; the start route is ctx.router.current().
 import { esc } from '../core/fmt.mjs'
 import { L } from '../core/labels.mjs' // the saw legend's estimate note (1.3) — the only L left in this file
-import { ensureHarnessIcons } from '../core/chips.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
 import { openModal } from '../core/dom.mjs'
 import { keyAction } from './keymap.mjs'
@@ -120,7 +119,6 @@ export function mount(el, ctx) {
   // ── header: the session head + the 会话保真行 (1.2 §会话头 · §会话保真行); every number is behind ⓘ ───────────────
   function renderHeader() {
     renderSessionHead(E.deskhead, s)
-    if (s.meta) ensureHarnessIcons(E.deskhead)
   }
 
   // ── empty and failed states: every widget that carries per-session data is neutralised, nothing of the last session stays ──
