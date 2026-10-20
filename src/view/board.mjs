@@ -215,14 +215,14 @@ export function sessionFold(sessionId) {
   };
 }
 // The batch form over records in memory (the usage sidecar's fill, tests). No `page` → every call ships its body.
-export function sessionView(records, sessionId, { enrich, bound = null, page } = {}) {
+export function sessionView(records, sessionId, { enrich, page } = {}) {
   const recs = groupSessions(records).get(sessionId);
   if (!recs) return null;
   const f = sessionFold(sessionId);
   const recOf = new Map();
   for (const r of [...recs].sort(stepOrder)) { const c = f.push(r); if (c) recOf.set(c, r); }
   const fill = (calls) => new Map(calls.map((c) => [c, f.filled(c, recOf.get(c))]));
-  const view = f.view(recs, { enrich, bound });
+  const view = f.view(recs, { enrich });
   return page ? pageView(view, page, { fill }) : bodied(view, (c) => fill([c]).get(c));
 }
 // A call in its meta form with its body put back (a NEW object: the fold's own call is left as it is).

@@ -73,6 +73,9 @@ export const pageSpec = (p = {}) => ({
 /** What one page of a list that reads its records back may hold, in the rows' stored bytes (3.5 §分页): 500 rows of multi-MB
  *  records parsed at once is past the worker's heap, so a page is cut by bytes as well as by `--limit`. */
 export const PAGE_STORED_BYTES = 32 * 1024 * 1024;
+/** What one `session` page may ship of request bodies (3.5 §分页 正文预算): the calls of the window nearest its middle carry their block
+ *  lists while their request bodies sum to at most this many bytes, and always one; the rest ride as meta, `paged_out`. */
+export const PAGE_BODY_BYTES = 4 * 1024 * 1024;
 /** One page of `list` → {items, next, has_more}: `next` IS the next page's `--after`. With `bytes(item)` the page also stops
  *  before the item that would take it past `cap` — never before its first item, so every page moves on. */
 export function paginate(list, p = {}, { bytes = null, cap = PAGE_STORED_BYTES } = {}) {
