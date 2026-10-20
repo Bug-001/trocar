@@ -31,7 +31,7 @@ export const QUERIES = Object.freeze({
   session: { params: session.params, run: session.run, stamp: src.corpus },
   calls: { params: calls.params, run: calls.run, stamp: src.corpus },
   traffic: { params: traffic.params, run: traffic.run, stamp: src.corpus },
-  overview: { params: overview.params, run: overview.run, stamp: src.corpus },
+  overview: { params: overview.params, run: overview.run, stamp: src.usage },
   block: { params: block.params, run: block.run, stamp: src.corpus },
   classes: { params: classes.params, run: classes.run, stamp: src.classes, clock: true },
   segments: { params: segments.params, run: segments.run, stamp: src.corpus },
@@ -55,8 +55,8 @@ async function verdict(name, { params, errors, userHome, env, platform, deps }) 
 
 // ── parameters every list query shares (§4.1 参数) ────────────────────────────
 export const LIMIT_DEFAULT = 50, LIMIT_MAX = 500;
-/** What `overview` may read back for its `usage` (3.5 §访问模式: bounded by a byte budget, never O(corpus)): stored
- *  bytes of the in-window sessions it reads, newest first. P1 measures it against the 0.5 s line. */
+/** What `overview` may compute for its `usage` beyond the usage sidecars (3.5 §访问模式: bounded by a byte budget, never
+ *  O(corpus)): stored bytes of the in-window model calls no sidecar covers yet, newest session first. */
 export const OVERVIEW_USAGE_BYTES = 16 * 1024 * 1024;
 const whole = (v, name, dflt) => {
   if (v == null || v === '') return dflt;

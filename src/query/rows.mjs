@@ -65,6 +65,10 @@ export function sessionGroups(rows) {
 
 const isProbe = (r) => /count_tokens/.test(r.path || '');
 
+/** Which index rows are a MODEL CALL: the one rule every reader counts calls with (sessionFactsOf below,
+ *  `overview`'s usage and the usage sidecar's fill), never a second copy of it. */
+export const isModelCall = (r) => r.is_llm && !r.log_only;
+
 /** One session's facts, the way src/view/board.mjs derives them from the records themselves (sessionMetaFor):
  *  the harness of the first row that had `proc`, else of the first that had headers; the entrypoint of the
  *  first row that had headers; calls / logged / probes / other complementary, so they sum to the session. */
@@ -79,7 +83,7 @@ export function sessionFactsOf(id, rows) {
     harness_inferred: !!(first && first.harness_inferred),
     // a harness that can be pointed at ANY backend has no provider unless the wire showed one (gate G10)
     provider: harness == null ? null : LEGACY_PROVIDER[harness] ?? rows.map((r) => wireProviderOfEndpoint(r.path)).find(Boolean) ?? null,
-    calls: rows.filter((r) => r.is_llm && !r.log_only).length,
+    calls: rows.filter(isModelCall).length,
     logged: rows.filter((r) => r.is_llm && r.log_only).length,
     probes: rows.filter(isProbe).length,
     other: rows.filter((r) => !r.is_llm && !isProbe(r)).length,

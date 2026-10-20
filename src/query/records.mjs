@@ -12,7 +12,7 @@ import { normalizeRecord } from '../raw/ingest.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
 import { openSealed } from '../raw/reader.mjs';
 import { R } from '../raw/format.mjs';
-import { segmentIndex } from './index-build.mjs';
+import { segmentIndex, segmentSource } from './index-build.mjs';
 import { asightHome } from '../paths.mjs';
 import { rowsKey, warmCache, fsTag } from './warm.mjs';
 
@@ -61,14 +61,17 @@ function recordOf(text, segment, lineNo, stream) {
  * answer with, never for the segment (1.6 §4.1 速度目标: `session` ≤ 1 s, `block` ≤ 0.3 s).
  * A row whose record cannot be read goes into `errors` (D38), never silently missing.
  */
-export function recordsAt({ home = asightHome(), fs = nodeFs, rows = [], errors = [] } = {}) {
+// `remember: false` is a SCAN (the usage sidecar's fill, src/query/usage.mjs): it neither reads from nor stores into
+// the warm cache, so filling a segment never evicts the records of the sessions the board has open.
+export function recordsAt({ home = asightHome(), fs = nodeFs, rows = [], errors = [], remember = true } = {}) {
   const { id, bytes } = listKey(home, rows, fs);
   // The stamp IS the key here: a row list names the exact bytes it stands for, and those bytes never change
   // (invariant 2: a record is appended once and never rewritten). A shallow copy goes out, so a caller that
   // sorts or trims its result cannot reach into the cache.
-  let got = readBack.peek(id, id);
+  let got = remember ? readBack.peek(id, id) : undefined;
   if (!got) {
     got = { ...readRows({ home, fs, rows }), bytes };
+    if (!remember) { errors.push(...got.errors); return got.out; }
     // A FAILED read is never remembered (3.5 §访问模式 不答陈旧): a read that landed in the seal rename window or
     // hit one EIO would otherwise pin its incomplete answer — the row list's stamp cannot move, because the rows
     // did not change — for the life of a resident worker. Not caching it costs the next query one re-read, which
@@ -78,6 +81,11 @@ export function recordsAt({ home = asightHome(), fs = nodeFs, rows = [], errors 
   errors.push(...got.errors);
   return [...got.out];
 }
+
+// A read that failed: `io` says the bytes could not be read (a transient EIO / EMFILE / a seal rename window),
+// as against a line whose content does not parse. It is NON-ENUMERABLE, like `_stream` above: `errors` ships as
+// [{where, reason}] (3.5:42), and only the usage fill looks at it (it never remembers a failed read).
+const failedRead = (where, reason, io) => Object.defineProperty({ where, reason }, 'io', { value: io });
 
 function readRows({ home, fs, rows }) {
   const errors = [];
@@ -89,11 +97,11 @@ function readRows({ home, fs, rows }) {
     const stream = path.basename(file);
     let read;
     try { read = file.endsWith('.sealed') ? sealedReader(file, fs) : plainReader(file, fs); }
-    catch (e) { for (const r of rs) errors.push({ where: r.id, reason: `cannot be read: ${String((e && e.message) || e)}` }); continue; }
+    catch (e) { for (const r of rs) errors.push(failedRead(r.id, `cannot be read: ${String((e && e.message) || e)}`, true)); continue; }
     try {
       for (const r of rs) {
         try { out.push(recordOf(read(r), segment, r.lineNo, stream)); }
-        catch (e) { errors.push({ where: r.id, reason: `cannot be read back: ${String((e && e.message) || e)}` }); }
+        catch (e) { errors.push(failedRead(r.id, `cannot be read back: ${String((e && e.message) || e)}`, !(e instanceof SyntaxError))); }
       }
     } finally { read.close(); }
   }
@@ -154,11 +162,10 @@ export async function readRecord({ home = asightHome(), fs = nodeFs, segment, li
   try { return expandRequestBody(JSON.parse(read({ ...row, lineNo }))); } finally { read.close(); }
 }
 
-/** The file a segment's bytes are in: the plaintext while it exists (4.2:30 明文为准), else the sealed copy. */
+/** The file a segment's bytes are in (segmentSource: the plaintext while it exists, 4.2:30 明文为准), or throws
+ *  when there is none — this path reads records back, so a missing segment is an error, not an empty index. */
 function segmentFile({ home, fs, segment }) {
-  const plain = path.join(home, 'raw', `${segment}.ndjson`);
-  const sealed = path.join(home, 'raw', `${segment}.sealed`);
-  const file = fs.existsSync(plain) ? plain : sealed;
+  const file = segmentSource(home, segment, fs);
   if (!fs.existsSync(file)) throw new Error(`there is no segment ${segment} in ${path.join(home, 'raw')}`);
   return file;
 }
