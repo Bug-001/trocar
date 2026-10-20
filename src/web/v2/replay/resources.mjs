@@ -115,7 +115,8 @@ export function resourcesHtml(s) {
     (others.length ? navGroupHtml(s, 'life-other', W.RES_GRP.other, others.length, others.map(otherRow).join('')) : '')
   if (inner) {
     const nOthers = seen.length + skills.length + caps.length + dl.length + comps.length + others.length
-    h += navGroupHtml(s, 'life-others', W.OTHERS_ROW(nOthers), '', inner)
+    // a session with nothing above: the groups stand on their own — a lone 「N more」 row would hide the only content
+    h += h ? navGroupHtml(s, 'life-others', W.OTHERS_ROW(nOthers), '', inner) : inner
   }
   if (!h) h = `<div class="navsub empty">${esc(W.NO_RESOURCES)}</div>` // entries exist but none renderable: never a blank page
   return h
@@ -132,7 +133,7 @@ export function renderResources(el, s) {
   if (bar) {
     const res = s.anchor.resources
     const n = Array.isArray(res) ? res.filter((r) => r && r.kind === 'file' && hasSeg(r)).length : 0
-    bar.textContent = n > 0 ? `${W.RES_GRP.file} ${n} · ${W.RAW_WORD} ▸` : `${W.RAW_WORD} ▸`
+    bar.textContent = n > 0 ? `${W.RES_GRP.file} ${n} · ${W.RAW_WORD}` : W.RAW_WORD // the ▸ / ▾ is the bar's own ::after (open state)
   }
 }
 
