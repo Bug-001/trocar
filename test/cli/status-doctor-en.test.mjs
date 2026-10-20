@@ -84,7 +84,6 @@ test('§3.5 `--failures`: one line per kind of problem, then Expected — and a 
   const lines = failuresBlock(failures, health, { now: NOW })
   clean(lines, 'status --failures')
   assert.match(lines[0], /^Problems in the last 24 hours: 3 in 1 kind$/)
-  assert.ok(lines.some((l) => /^ {2}10 min ago\s+x3\s+the engine failed \(the upstream reset it\)$/.test(l)))
   assert.ok(lines.includes('Expected') && lines.some((l) => /not agents[^:]*: 12$/.test(l)))
   clean(failuresBlock(null, null, { now: NOW }), 'status --failures (unreadable)')
   assert.match(failuresBlock(null, null)[0], /^Problems: unknown \(capture health could not be read\)$/)

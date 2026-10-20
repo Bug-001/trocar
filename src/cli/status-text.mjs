@@ -123,7 +123,7 @@ export const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:127\.0\.0\.1|\[?::1
 
 // ── `--failures` (§3.5: one line per kind of problem, then Expected) ──────────────────────────────────────────────
 /** One group's line: the shared sentence, then (when the sentence stands for a known code) the record's own reason — the CLI has no technical details to fold it into. */
-const failureLine = (g) => { const r = failureWord(g.where, g.code, g.harness || '') && briefText(g.reason || ''); return r ? `${failureBrief(g)} (${r})` : failureBrief(g) }
+const failureLine = (g) => { const r = failureWord(g.where, g.code, g.harness || '') && briefText(g.reason || ''); return r ? `${failureBrief(g)}: ${r}` : failureBrief(g) } // no nested brackets (§1.1②): a reason has its own
 
 /** The whole wall of the last 24 hours: one line per `level:'problem'` group of the document's `failures` (C.3, the board's capture log reads the same
  *  groups and words), then the `Expected` section (what is not a problem by design). */
@@ -131,10 +131,13 @@ export function failuresBlock(failures, health, { now = Date.now() } = {}) {
   if (!failures || !health) return [`Problems: ${unknown('capture health could not be read')}`]
   const groups = failures.groups.filter((g) => g.level === 'problem')
   const lines = [groups.length ? `Problems in the last 24 hours: ${groups.reduce((n, g) => n + g.count, 0)} in ${groups.length} kind${groups.length === 1 ? '' : 's'}` : 'No problems in the last 24 hours.']
-  if (groups.length) lines.push(...columns(groups.map((g) => [ago(g.last_ts, now), `x${g.count}`, failureLine(g)])).map((l) => `  ${l}`))
+  if (groups.length) { // §1.1⑥: each row folds inside 80 columns, under its own text
+    const heads = columns(groups.map((g) => [ago(g.last_ts, now), `x${g.count}`, ''])).map((h) => `  ${h}  `), col = Math.max(...heads.map((h) => h.length))
+    groups.forEach((g, i) => lines.push(...wrap(failureLine(g), WIDTH - col).map((t, j) => (j ? ' '.repeat(col) : heads[i].padEnd(col)) + t)))
+  }
   const exp = Object.entries((health.collector && health.collector.expected) || {})
   lines.push('', 'Expected')
-  if (exp.length) lines.push(...exp.map(([k, n]) => `  ${expectedText(k)}: ${n}`))
+  if (exp.length) lines.push(...exp.flatMap(([k, n]) => wrap(`${expectedText(k)}: ${n}`, WIDTH - 4).map((t, j) => (j ? '    ' : '  ') + t)))
   else lines.push('  nothing was skipped by design in the last 24 hours')
   return lines
 }

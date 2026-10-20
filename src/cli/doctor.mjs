@@ -26,7 +26,6 @@ const USAGE = 'usage: trocar doctor [<harness>...] [--json]'
 const LIMIT = 5000 // records sampled (the head of the capture)
 const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the tool failed" (0.1 §3)
 const errText = (e) => String((e && (e.code || e.message)) || e)
-const mark = (ok, warn) => (ok ? '✓' : warn ? '⚠' : '✗')
 const shq = (s) => (/^[\w@%+=:,./-]+$/.test(String(s)) ? String(s) : `'${String(s).replace(/'/g, "'\\''")}'`) // a path with a space or a quote stays one argument of the chmod line
 const indent = (s) => String(s).split('\n').map((l) => `  ${l}`).join('\n')
 

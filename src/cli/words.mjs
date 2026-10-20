@@ -169,8 +169,8 @@ export function failureWord(where, code, harness = '') {
 /** One line out of many: newlines and runs of whitespace become one space (a launchctl stderr with line breaks must not break the digest's alignment). */
 export const squashed = (s) => String(s ?? '').replace(/\s+/g, ' ').trim()
 
-/** The whole reason, or its head: the digest shows ~100 columns of it — the whole wall is one `--failures` away (R11: relocated, not dropped). */
-export const briefText = (s, max = 100) => { const t = squashed(s); return t.length > max ? `${t.slice(0, max - 1)}…` : t }
+/** The whole reason, or its head (cut with ASCII dots: 1.6 §1.1 ⑦, the old Windows console prints no other symbol): the digest shows ~100 columns of it — the whole wall is one `--failures` away (R11: relocated, not dropped). */
+export const briefText = (s, max = 100) => { const t = squashed(s); return t.length > max ? `${t.slice(0, max - 3)}...` : t }
 
 /** One failure group (C.3 `failures.groups[]`: { where, code, reason, harness? }) in one sentence, for `status --failures`, the board's capture log and
  *  the overview alike: the catalog's sentence when it knows the code — the code and the raw reason are then the technical details' (the CLI prints the
