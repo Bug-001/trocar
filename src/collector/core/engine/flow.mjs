@@ -31,7 +31,18 @@ const targetOf = (authority) => (authority.startsWith('[') && authority.includes
 // the codes the daemon's policy() may hand the engine for a row (RFC 4.6 §记录 连接行怎么落码)
 const DAEMON_CODES = ['not-trust-path', 'untracked', 'untrusted']
 const IDLE = { boundary: () => ({ idle: true, headPending: false, seq: null, blind: false }) } // the drain gate's view of a connection that has carried nothing yet
-const closedBefore = (side) => ({ type: 'closed_before_decision', message: `the ${side} closed before a routing decision`, side })
+// How a connection that ended before forwarding started is written (RFC 4.6 §记录 连接行怎么落码): the side that went and, when the engine was
+// waiting on the upstream, which wait and for how long. Node invents an ECONNRESET with no syscall when a socket closes before a TLS handshake
+// ("Client network socket disconnected…", the client being trocar's own socket): that is a close, not a reset off the wire; an error the OS
+// reported keeps its code. wait = {phase, t0} | null; phase 'tls' | 'proxy-reply' (the engine) | 'connect' (the ingress dialling directly).
+const synthetic = (e) => !(e instanceof Error) || (e.code === 'ECONNRESET' && !e.syscall)
+const WAITED = { tls: ['closed_before_handshake', "the upstream's TLS handshake"], 'proxy-reply': ['closed_before_reply', "the proxy's reply"], connect: ['closed_before_reply', 'the upstream connection'] }
+export function wentBy(side, err = null, wait = null, now = Date.now()) {
+  const w = wait ? { phase: wait.phase, ms: Math.max(0, now - wait.t0) } : null
+  if (!synthetic(err)) return { type: err.code || `${side}_error`, message: msgOf(err), side, ...(w ? { wait: w } : {}) }
+  if (!w) return { type: 'closed_before_decision', message: `the ${side} closed before a routing decision`, side }
+  return { type: WAITED[w.phase][0], message: `the ${side} closed while trocar waited ${w.ms} ms for ${WAITED[w.phase][1]}`, side, wait: w }
+}
 // The upstream answered the ENGINE's TLS handshake with an alert that says it wanted something the engine cannot give:
 // a client certificate (mTLS: 'certificate required' under TLS 1.3; 'handshake failure' / 'bad certificate' / 'no certificate'
 // under 1.2), or it refused this handshake for a reason the agent's own would not meet. Node names the alert from OpenSSL's
@@ -64,7 +75,7 @@ const parentsOf = (meta) => ({ ...(meta.parentPid != null ? { parent_pid: meta.p
 export function writeRefusal(meta, ctx, info) {
   const rec = {
     ts: new Date().toISOString(), flow_id: ctx.newFlowId(), pid: meta.pid ?? null, agent: meta.agent ?? null, ...parentsOf(meta),
-    dst: meta.dst, host: meta.dst.address, decision: info.decision, reason: info.reason ?? null, bytes_up: 0, bytes_down: 0, duration_ms: 0,
+    dst: meta.dst, host: meta.dst.address, decision: info.decision, reason: info.reason ?? null, bytes_up: 0, bytes_down: 0, duration_ms: info.duration_ms ?? 0,
     ...ingressFields(meta), not_captured: info.not_captured, ...(info.error ? { error: info.error } : {}),
   }
   let ok = true, why = null
@@ -106,16 +117,20 @@ export function handleFlow(client, meta, ctx) {
   let upstream = null       // the TCP connection to the original destination
   let firstByteTimer = null
   let slowTimer = null      // the upstream-slow watch while the engine waits on the upstream (RFC 4.6 §记录)
+  let wait = null           // {phase, t0} while the engine waits on the upstream: what a side going then is written with (wentBy)
+  let planned = null        // the decision already made while the engine waits on the upstream: kept on the row if a side goes then
+  const went = (side, err) => wentBy(side, err, wait)
   // Waiting on the upstream (our TLS handshake to it, a proxy's reply) has no time limit: cutting the
   // agent because its upstream or proxy is slow would break it (D31). Past `upstreamSlowMs` (5 s) the
   // wait is recorded once as an upstream-slow event (D38), and the connection goes on.
   function waitFor(phase, host) {
     waitDone()
     const ms = ctx.upstreamSlowMs ?? 5000, t0w = Date.now()
+    wait = { phase, t0: t0w }
     slowTimer = setTimeout(() => { slowTimer = null; ctx.failure({ code: 'upstream-slow', flow_id: rec.flow_id, host, phase, waited_ms: Math.max(ms, Date.now() - t0w), reason: `${host} has not answered the ${phase === 'proxy-reply' ? 'proxy request' : 'TLS handshake'} for ${Math.max(ms, Date.now() - t0w)} ms; still waiting` }) }, ms) // a timer can fire a ms early
     if (slowTimer.unref) slowTimer.unref()
   }
-  function waitDone() { if (slowTimer) { clearTimeout(slowTimer); slowTimer = null } }
+  function waitDone() { wait = null; if (slowTimer) { clearTimeout(slowTimer); slowTimer = null } }
   // the row's not_captured code (closed set, codes.mjs) and why (RFC 4.6 §记录 连接行怎么落码)
   function notCaptured(code, reason) { rec.not_captured = code; if (reason != null) rec.reason = reason }
   // policy(meta, host): true = decrypt; false = outside the decrypt policy; or the daemon's own code
@@ -201,7 +216,8 @@ export function handleFlow(client, meta, ctx) {
   // promise never resolves and engine.close() hangs on it. Disarmed once relay() owns teardown.
   function preTeardown(errObj) {
     if (handedOff || finished) return
-    finish('error', errObj ? { error: errObj } : {})
+    // nothing was forwarded: a decision already made stays on the row, its bytes not captured
+    finish(planned || 'error', { ...(errObj ? { error: errObj } : {}), ...(planned && !rec.not_captured ? { not_captured: 'error' } : {}) })
     try { if (!client.destroyed) client.destroy() } catch { /* ignore */ }
     try { if (!upstream.destroyed) upstream.destroy() } catch { /* ignore */ }
   }
@@ -227,14 +243,14 @@ export function handleFlow(client, meta, ctx) {
     },
     state: () => (finished ? 'done' : gate ? gate.state() : drainAsked ? 'closing' : 'open'),
   })
-  upstream.once('error', (err) => preTeardown({ type: err.code || 'upstream_error', message: msgOf(err), side: 'upstream' }))
-  upstream.on('close', () => preTeardown(closedBefore('upstream')))
-  client.on('close', () => preTeardown(closedBefore('client')))
-  client.on('end', () => preTeardown(closedBefore('client')))
+  upstream.once('error', (err) => preTeardown(went('upstream', err)))
+  upstream.on('close', () => preTeardown(went('upstream')))
+  client.on('close', () => preTeardown(went('client')))
+  client.on('end', () => preTeardown(went('client')))
   // The client socket is ours from accept: an error on it (a reset before we have decided, a write
   // to a client that already left) MUST be handled here, or it is an uncaughtException that takes
   // the whole collector down (RFC 4.6 fail-open). relay() and the TLS wrap own it after the decision.
-  client.on('error', (err) => preTeardown({ type: err.code || 'client_error', message: msgOf(err), side: 'client' }))
+  client.on('error', (err) => preTeardown(went('client', err)))
 
   // Passive bidirectional relay; forwards received bytes untouched and (optionally) tees a copy.
   // The upstream's FIN half-closes the client gracefully (the client drains the response, then
@@ -405,19 +421,20 @@ export function handleFlow(client, meta, ctx) {
     setDecision('splice', false)
     const fresh = ctx.connectUpstream(meta.dst)
     if (fresh && typeof fresh.then === 'function') { // the ingress's upstream is a proxy: the second dial is a handshake, not a connect
-      let gone = false
-      const left = () => { gone = true }
+      let gone = null
+      const left = () => { gone = went('client') }
       cSock.once('close', left)
+      waitFor('proxy-reply', host)
+      // nothing is spliced if the client leaves or the dial fails: the row keeps the plan (splice) with not_captured, and says who went during the wait
       return fresh.then((u) => {
         cSock.removeListener('close', left)
-        // the client left while the new handshake ran: nothing was spliced, so the row says error (setDecision('splice') above was a plan, not an outcome)
-        if (gone || cSock.destroyed) { try { u.destroy() } catch { /* ignore */ } rec.decision = 'error'; return finish('error', { error: closedBefore('client') }) }
-        u.write(buf); cSock.resume(); relay(cSock, u)
+        if (gone || cSock.destroyed) { try { u.destroy() } catch { /* ignore */ } return finish(null, { error: gone || went('client') }) }
+        waitDone(); u.write(buf); cSock.resume(); relay(cSock, u)
       }, (e) => {
         cSock.removeListener('close', left)
+        const error = went('upstream', e)
         try { cSock.destroy() } catch { /* ignore */ }
-        rec.decision = 'error'
-        finish('error', { error: { type: e.code || 'upstream_error', message: msgOf(e), side: 'upstream' } })
+        finish(null, { error })
       })
     }
     fresh.write(buf)                                    // the ClientHello, byte for byte
@@ -451,13 +468,14 @@ export function handleFlow(client, meta, ctx) {
     cSock.on('data', hold); cSock.resume()
     const takeHeld = () => { cSock.removeListener('data', hold); cSock.pause(); return held.length ? Buffer.concat([buf, ...held]) : buf }
     upTls.on('error', (err) => {
+      const error = went('upstream', err)
       waitDone()
       if (clientTls) return
       // The upstream answered our handshake with an alert that means it wants a client certificate (mTLS, TLS 1.2: the
       // refusal comes before the handshake is done). The client has not been touched yet, so this is the same case as
       // an unverifiable certificate: the client's own handshake, certificate and all, goes to the real host (§引擎 5).
       if (refusedByUpstream(err) && !finished && !handedOff) return guard(() => stepAside(upTls, takeHeld(), cSock, host, isTunnel, key, 'upstream-handshake', refusalWhy(err, false)))()
-      try { cSock.destroy() } catch { /* ignore */ }; finish(isTunnel ? 'tunnel' : 'decrypt', { host, not_captured: 'error', error: { type: err.code || 'upstream_tls_error', message: msgOf(err), side: 'upstream' } })
+      try { cSock.destroy() } catch { /* ignore */ }; finish(isTunnel ? 'tunnel' : 'decrypt', { host, not_captured: 'error', error })
     })
     upTls.on('secureConnect', guard(() => {
       waitDone()
@@ -490,7 +508,7 @@ export function handleFlow(client, meta, ctx) {
         // how the client went, as far as the engine can see (RFC 4.6 §记录): its TLS alert, a reset, or a close
         // with no error (a Node client checks our leaf after the handshake and sends no alert). Its own
         // certificate-check code never reaches us.
-        if (!rec.error) rec.error = e instanceof Error ? { type: e.code || 'error', message: msgOf(e), side: 'client' }
+        if (!rec.error) rec.error = !synthetic(e) ? { type: e.code || 'error', message: msgOf(e), side: 'client' }
           : { type: 'closed_without_app_data', message: 'the client closed after the TLS handshake without sending application data', side: 'client' }
         // D51④: the process was judged trusting trocar and is not — a critical failure, once per (pid, host) (4.6 §事件与码). Names and
         // the trust entry trocar relied on; never the client's bytes or certificates.
@@ -529,6 +547,7 @@ export function handleFlow(client, meta, ctx) {
   }
 
   function decrypt(buf, cSock, uSock, sni, host, isTunnel, key) {
+    planned = isTunnel ? 'tunnel' : 'decrypt'
     terminate(buf, cSock, uSock, sni, host, isTunnel, key, (clientTls, upTls) => {
       setDecision('decrypt', isTunnel)
       if (rec.via_proxy) rec.via_proxy.terminated = true
@@ -581,8 +600,8 @@ export function handleFlow(client, meta, ctx) {
     const go = (side) => (e) => {
       if (relaying || finished) return
       relaying = true
-      if (e instanceof Error && !rec.error) rec.error = { type: e.code || 'error', message: msgOf(e), side }
-      if (tunnelAsked && !rec.inner) { notCaptured('error'); if (!rec.error) rec.error = closedBefore(side) }
+      if (tunnelAsked && !rec.inner) { notCaptured('error'); if (!rec.error) rec.error = went(side, e) }
+      else if (e instanceof Error && !rec.error) rec.error = { type: e.code || 'error', message: msgOf(e), side }
       teardown()
       for (const s of [cS, uS, client, upstream]) { try { s.destroy() } catch { /* ignore */ } }
     }
@@ -614,7 +633,7 @@ export function handleFlow(client, meta, ctx) {
     const hold = (d) => { early.push(d) }
     cSock.on('data', hold)
     uSock.write(buf.subarray(0, h.headLength))                // forward the CONNECT head verbatim
-    waitFor('proxy-reply', connectHost)
+    planned = 'tunnel'; waitFor('proxy-reply', connectHost)
     const upChunks = []
     const onUp = guard((d) => {
       upChunks.push(d)
@@ -735,7 +754,7 @@ export function handleFlow(client, meta, ctx) {
     const seen = { c: [], s: [] }
     let target = meta.dst.address // the host the proxy is asked for, once the request has been read
     socksHandshake({
-      client: (parser) => c.take(parser).then((r) => { if (r && r.host) target = r.host; return r }),
+      client: (parser) => c.take(parser).then((r) => { if (r && r.host) { target = r.host; planned = 'tunnel' } return r }), // a request with its target: a tunnel, as a CONNECT head is
       proxy: (parser) => { waitFor('proxy-reply', target); return u.take(parser).then((r) => { waitDone(); return r }) },
       toProxy: (b) => { seen.c.push(b); uSock.write(b) },
       toClient: (b) => { seen.s.push(b); cSock.write(b) },
@@ -783,7 +802,7 @@ export function handleFlow(client, meta, ctx) {
   if (firstByteTimer.unref) firstByteTimer.unref()
 
   // Catch a client that was already gone before our listeners attached (accept/lookup raced the close).
-  if (client.destroyed) queueMicrotask(() => preTeardown(client.errored ? { type: client.errored.code || 'client_error', message: msgOf(client.errored), side: 'client' } : closedBefore('client')))
+  if (client.destroyed) queueMicrotask(() => preTeardown(went('client', client.errored)))
 
   return flowDone
 }

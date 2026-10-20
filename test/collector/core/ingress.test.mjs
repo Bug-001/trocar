@@ -637,20 +637,20 @@ async function twoStepProxy(t, originPort, second) {
   return { port: srv.address().port, conns }
 }
 
-test('W15 step-aside whose second proxy prelude is refused: the agent\'s connection is closed, the row is decision error with the proxy\'s refusal, and no connection to the proxy is left open', T, async (t) => {
+test('W15 step-aside whose second proxy prelude is refused: the agent\'s connection is closed, the row keeps the planned splice with the proxy\'s refusal, and no connection to the proxy is left open', T, async (t) => {
   const o = await origin(t), proxy = await twoStepProxy(t, o.port, 'refuse')
   const L = await lab(t, { meta: { decrypt: true, upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port } } }) // no upstreamCa: the origin's CA is not trusted, so the engine steps aside
   const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
   assert.equal(await talk(sock, privCa.certPem), 'closed', 'the agent\'s connection is closed: there is nothing left to splice it to'); await L.settled(1)
   assert.equal(proxy.conns.length, 2, 'the first prelude, and the second that was refused')
   const [row] = L.flows
-  assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side], ['error', 'upstream-cert', 'proxy-refused', 'upstream'])
+  assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side, row.error.wait?.phase], ['splice', 'upstream-cert', 'proxy-refused', 'upstream', 'proxy-reply'])
   assert.match(row.error.message, /refused the second connection \(proxy-status-403\)/); assert.deepEqual(checkRecord(row), [])
   await within(Promise.all(proxy.conns.map((c) => c.closed)), 3000, 'every connection to the proxy to be closed'); await o.closed()
   assert.equal(L.envelopes.length, 0)
 })
 
-test('W15 step-aside whose client is gone when the proxy answers the second prelude: the new upstream is destroyed, nothing is spliced, and the row says the client closed first', T, async (t) => {
+test('W15 step-aside whose client is gone when the proxy answers the second prelude: the new upstream is destroyed, nothing is spliced, and the row says the client left during the wait', T, async (t) => {
   const o = await origin(t), proxy = await twoStepProxy(t, o.port, 'hold')
   const L = await lab(t, { meta: { decrypt: true, upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port } } })
   const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
@@ -659,7 +659,8 @@ test('W15 step-aside whose client is gone when the proxy answers the second prel
   sock.destroy(); assert.equal(await agent, 'closed')
   await sleep(100); proxy.conns[1].release() // the proxy says yes, to nobody
   await within(proxy.conns[1].closed, 3000, 'the connection the redial opened to be destroyed'); await L.settled(1)
-  assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured, L.flows[0].error.type, L.flows[0].error.side], ['error', 'upstream-cert', 'closed_before_decision', 'client'])
+  // the plan (splice) stays on the row; the error says the client left while the engine waited on the proxy's answer to the second prelude (RFC 4.6 §记录)
+  assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured, L.flows[0].error.type, L.flows[0].error.side, L.flows[0].error.wait?.phase], ['splice', 'upstream-cert', 'closed_before_reply', 'client', 'proxy-reply'])
   await o.closed(); assert.equal(o.conns.length, 1, 'the origin saw only the engine\'s dropped handshake: no ClientHello of the agent\'s went anywhere'); assert.equal(L.envelopes.length, 0)
 })
 
@@ -783,7 +784,7 @@ test('W13 a client that resets after the ingress has answered, or while it looks
   assert.equal(L.engine.stats().ingress.flows, 0)
 })
 
-test('W13 a client that leaves while the upstream is being dialled takes the dial down: the upstream is destroyed, no connection row is written, nothing is counted', T, async (t) => {
+test('W13 a client that leaves while the upstream is being dialled takes the dial down: the upstream is destroyed, nothing is counted, and one row says the client left during the dial (RFC 4.6 §记录)', T, async (t) => {
   const hung = []
   const L = await lab(t, { connectUpstream: (d) => (d.port === 1 ? (hung.push(hungSocket()), hung.at(-1)) : net.connect(d.port, d.address)) })
   const a = L.client(); a.write(connectHead('127.0.0.1:1')) // a direct upstream whose connect never completes
@@ -795,7 +796,15 @@ test('W13 a client that leaves while the upstream is being dialled takes the dia
   await until(() => proxy.socks.length && proxy.socks[0].got.length, 'the proxy to get the prelude'); b.sock.destroy()
   await within(proxy.socks[0].closed, 1500, 'the connection to the proxy to be destroyed')
   await sleep(100)
-  for (const X of [L, P]) { assert.equal(X.flows.length, 0, 'the client left before the upstream was up: no flow existed, so no row'); assert.deepEqual(X.failures, []); assert.deepEqual(X.engine.stats().ingress, IDLE) }
+  // no flow existed, but the give-up is on record: who left, during which wait, for how long (the one signal that would show trocar delaying agents)
+  for (const [X, phase] of [[L, 'connect'], [P, 'proxy-reply']]) {
+    assert.equal(X.flows.length, 1, phase)
+    const [row] = X.flows
+    assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side, row.error.wait?.phase], ['error', 'error', 'closed_before_reply', 'client', phase])
+    assert.ok(row.error.wait.ms >= 0 && row.duration_ms === row.error.wait.ms, JSON.stringify(row)); assert.deepEqual(checkRecord(row), [])
+    assert.deepEqual(X.failures, []); assert.deepEqual(X.engine.stats().ingress, IDLE)
+  }
+  assert.equal(proxy.socks.length, 1, 'nothing dialled again')
 })
 
 test('W13 a client that leaves while lookupIngress is still running never gets a dial: the user\'s proxy sees no connection and no Proxy-Authorization for a connection nobody waits on', T, async (t) => {
@@ -859,3 +868,4 @@ test('W15 drain: `off` lands after an ingress flow\'s request went out and befor
   await within(L.engine.drained({ agents: null }), 4000, 'drained()')
   assert.deepEqual(L.failures, [])
 })
+
