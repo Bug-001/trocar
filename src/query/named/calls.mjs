@@ -30,7 +30,7 @@ export async function run({ home, fs, now, params: p, errors }) {
   }
 
   if (ref && !rows.length) errors.push({ where: String(p.ref), reason: `no record ${p.ref} in this home's segment index` });
-  const { items, next, has_more } = paginate(rows, p);
+  const { items, next, has_more } = paginate(rows, p, { bytes: (r) => r.stored_bytes || 0 }); // the page's records are read back: bounded by bytes too
   const byId = new Map(items.map((r) => [r.id, r]));
   const recs = recordsAt({ home, fs, rows: items, errors });
   const slimBefore = Math.max(0, recs.length - CONTROL_DETAIL_RECORDS);

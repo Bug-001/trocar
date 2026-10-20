@@ -70,10 +70,15 @@ export const pageSpec = (p = {}) => ({
   cursor: whole(p.after, 'after', 0),
   limit: Math.min(LIMIT_MAX, Math.max(1, whole(p.limit, 'limit', LIMIT_DEFAULT))),
 });
-/** One page of `list` → {items, next, has_more}: `next` IS the next page's `--after`. */
-export function paginate(list, p = {}) {
+/** What one page of a list that reads its records back may hold, in the rows' stored bytes (3.5 §分页): 500 rows of multi-MB
+ *  records parsed at once is past the worker's heap, so a page is cut by bytes as well as by `--limit`. */
+export const PAGE_STORED_BYTES = 32 * 1024 * 1024;
+/** One page of `list` → {items, next, has_more}: `next` IS the next page's `--after`. With `bytes(item)` the page also stops
+ *  before the item that would take it past `cap` — never before its first item, so every page moves on. */
+export function paginate(list, p = {}, { bytes = null, cap = PAGE_STORED_BYTES } = {}) {
   const { cursor, limit } = pageSpec(p);
-  const to = cursor + limit;
+  let to = Math.min(list.length, cursor + limit);
+  if (bytes) for (let i = cursor, sum = 0; i < to; i++) if ((sum += bytes(list[i])) > cap && i > cursor) { to = i; break; }
   return { items: list.slice(cursor, to), next: to < list.length ? String(to) : null, has_more: to < list.length };
 }
 /** A list parameter: comma-separated values, or null when it was not given. */
