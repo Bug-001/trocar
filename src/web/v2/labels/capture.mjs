@@ -51,6 +51,13 @@ export const residueLead = (result) => (result === 'install did not finish' ? RE
 // ── 引流方式(topology[].routing;字段在才画)────────────────────────────────────────
 export const ROUTING = Object.freeze({ driver: 'driver mode', proxy: 'proxy mode', none: 'all off', unknown: 'unknown' })
 export const CHANGE_REMOVAL = 'removed when its capture is turned off'
+// ── 改动条目的种类(status changed[].what 的第一个词 = 安装清单的 kind,src/off/manifest.mjs KNOWN_KINDS 的成员;认不出的原样等宽)──
+export const CHANGE_KIND = Object.freeze({
+  'json-key': 'setting', 'json-array-item': 'list item', text: 'text block', 'owned-file': 'file trocar created',
+  'proxy-entry': 'proxy setting', 'trust-entry': 'certificate setting',
+})
+// ── 还在转交的连接(status relayed 的三个计数,1.6 C.1 回执的键;只写不为 0 的)────────────────────────────────────
+export const RELAYED = Object.freeze({ closing: 'closing', waiting: 'waiting to close', cut: 'dropped' })
 
 // ── 命令(只出现在技术细节;每条都是 1.6 命令表 src/cli/commands.mjs 里的用法,cli-commands.test.mjs 守)──────────
 // <id> 由页面按 status 文档 harnesses 的键填(前端不另存 CLI 名表)

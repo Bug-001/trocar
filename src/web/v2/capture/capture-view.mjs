@@ -15,7 +15,7 @@ import { controlFor, controlHtml } from '../core/harness-switch.mjs'
 import { logRowsOf } from './capture-log.mjs'
 import { failureWord } from '../../../cli/words.mjs'
 import {
-  CONDITION_KIND, SWITCH_WORD, CODE, residueLead, ROUTING, CHANGE_REMOVAL, COMMANDS,
+  CONDITION_KIND, SWITCH_WORD, CODE, residueLead, ROUTING, CHANGE_REMOVAL, CHANGE_KIND, RELAYED, COMMANDS,
   UNKNOWN_REASON, ERR_WHERE, FIX_IN_DETAILS,
 } from '../labels/capture.mjs'
 
@@ -38,11 +38,13 @@ const leadHtml = (text, cls) => {
 }
 
 // ── the commands (1.6's table) — only ever inside 技术细节 ─────────────────────────────────────────────────────────
-// per harness, spelt the way the document itself spells it (`harnesses` keys); a row the document does not name gets none.
+// per harness, spelt the way the document itself spells it (`harnesses` keys); a row the document does not name gets none. The
+// capture service row gets only the harness-less ones (status, doctor without <id>): a bare on / off would switch every harness.
 export function commandsFor(h, { row = null, service = false } = {}) {
   const out = [], cmds = COMMANDS
-  const fill = (s) => row && row.cliId ? s.replace('<id>', row.cliId) : s
-  if (service || (row && row.cliId)) {
+  if (service) out.push(['see the full status', cmds.status.replace(' <id>', '')], ['diagnose', cmds.doctor.replace(' <id>', '')])
+  else if (row && row.cliId) {
+    const fill = (s) => s.replace('<id>', row.cliId)
     out.push(['start capturing', fill(cmds.on)], ['stop capturing', fill(cmds.off)], ['see the full status', fill(cmds.status)], ['diagnose', fill(cmds.doctor)])
   }
   if (h && h.health && h.health.state === 'not-installed') out.push(['install', cmds.install])
@@ -51,12 +53,13 @@ export function commandsFor(h, { row = null, service = false } = {}) {
   return out
 }
 
-// 技术细节 for this page: a [key, value] grid where a value is a plain string (escaped) or {m} (a machine fact — id,
-// path, code, command — set in mono). The disclosure's copy button carries the PLAIN text of the pairs; the diagnostics
+// 技术细节 for this page: a [key, value] grid where a value is a RAW plain string (escaped here, once), {m} (a machine fact — id,
+// path, code, command — set in mono) or {h} (real markup, escaped inside once). The disclosure's copy button carries the PLAIN text of the pairs; the diagnostics
 // copy carries the fields the row used (metadata only, credentials redacted).
 const techPairGrid = (pairs) => `<div class="tech">${pairs.map(([k, v]) =>
   `<span class="k">${esc(k)}</span><span class="v">${v && v.m != null ? `<span class="mono">${esc(v.m)}</span>` : v && v.h != null ? v.h : esc(v)}</span>`).join('')}</div>`
-const plainOf = (v) => v && v.m != null ? v.m : v && v.h != null ? v.h.replace(/<[^>]*>/g, '') : v
+const unesc = (s) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+const plainOf = (v) => v && v.m != null ? v.m : v && v.h != null ? unesc(v.h.replace(/<[^>]*>/g, '')) : v
 const detailsHtml = (id, pairs) => disclosureHtml({
   id, title: 'Technical details', open: false,
   body: techPairGrid(pairs) + copyBtn(pairs.map(([k, v]) => `${k}: ${plainOf(v)}`).join('\n')),
@@ -129,14 +132,20 @@ function serviceTechHtml(h, v) {
   const d = (h && h.daemon) || {}
   const rows = []
   if (d.pid != null) rows.push(['pid', M(d.pid)])
-  if (d.since) rows.push(['since', when(d.since)])
-  if (d.error) rows.push(['state could not be read', esc(d.error)])
+  if (d.since) rows.push(['since', fmtWhen(d.since)])
+  if (d.error) rows.push(['state could not be read', String(d.error)])
   if (v.raw != null) rows.push(['state', M(String(v.raw))])
-  if (v.reason && v.state !== 'unreadable') rows.push(['reason', esc(v.reason)])
-  if (h && h.linger == null && h.daemon) rows.push(['capture after logout', 'unknown'])
+  if (v.reason && v.state !== 'unreadable') rows.push(['reason', String(v.reason)])
+  // Linux only: the OS keeps the service after logout or not; a boolean is said in the row (false) or not at all (true)
+  if (h && h.linger === 'unknown') rows.push(['after logout', `not known${h.linger_reason ? ` · ${h.linger_reason}` : ''}`])
   for (const p of list(h && h.holders)) if (p) rows.push(['holder', M(`${p.harness ?? '?'} · pid ${p.pid ?? '?'}${p.name ? ` · ${p.name}` : ''}`)])
+  // the connections still relayed after an off: only the non-zero counts, in words
   const rel = h && h.relayed
-  if (rel && typeof rel === 'object') rows.push(['relayed', M(Object.entries(rel).map(([k, n]) => `${k} ${n}`).join(' · '))])
+  if (rel === 'unknown') rows.push(['still relayed', `not known${h.relayed_reason ? ` · ${h.relayed_reason}` : ''}`])
+  else if (rel && typeof rel === 'object') {
+    const parts = Object.entries(rel).filter(([, n]) => typeof n === 'number' && n > 0).map(([k, n]) => `${n} ${has(RELAYED, k) ? RELAYED[k] : k}`)
+    if (parts.length) rows.push(['still relayed', parts.join(' · ')])
+  }
   for (const e of list(h && h.errors)) if (e) rows.push(['could not be read', M(`${e.where ?? '?'}: ${redactUrlCredentials(String(e.reason ?? ''))}`)])
   rows.push(...commandsHtml(commandsFor(h, { service: true })))
   return detailsHtml('cap-svc-tech', rows) + `<div class="capcopy">${diagCopy({ health: h && h.health, daemon: d, critical: h && h.critical, errors: h && h.errors })}</div>`
@@ -214,9 +223,30 @@ function whyHtml(row) {
 function changesFor(row, h) {
   const items = list(h && h.changed).filter((e) => e && e.harness != null && harnessKey(e.harness) === row.harness)
   if (!items.length) return null
-  const lines = items.map((e) => `<p>${mono(e.path || '')} ${mono(e.what || '')}</p>`)
+  const lines = changeLines(items)
   lines.push(`<p class="fine">${esc(CHANGE_REMOVAL)}</p>`)
   return `<dt>Changed for it by trocar</dt><dd>${lines.join('')}</dd>`
+}
+
+// `changed[]` items grouped by file: the path once (mono), then what trocar wrote there — `what` is the manifest kind followed by the
+// key path or format (src/cli/status.mjs changedOf); a known kind in words (CHANGE_KIND), an unknown one as it came; one kind's keys
+// joined. Shared by an agent row and the machine-wide block.
+function changeLines(items) {
+  const byPath = new Map()
+  for (const e of items) {
+    const p = String(e.path ?? ''), w = String(e.what ?? ''), i = w.indexOf(' ')
+    const kind = i < 0 ? w : w.slice(0, i), rest = i < 0 ? '' : w.slice(i + 1)
+    if (!byPath.has(p)) byPath.set(p, new Map())
+    const kinds = byPath.get(p)
+    if (!kinds.has(kind)) kinds.set(kind, [])
+    if (rest && !kinds.get(kind).includes(rest)) kinds.get(kind).push(rest)
+  }
+  const out = []
+  for (const [p, kinds] of byPath) {
+    const parts = [...kinds].map(([k, rs]) => `${has(CHANGE_KIND, k) ? esc(CHANGE_KIND[k]) : mono(k)}${rs.length ? ` ${mono(rs.join(', '))}` : ''}`)
+    out.push(`<p>${mono(p)}</p><p>${parts.join(' · ')}</p>`)
+  }
+  return out
 }
 
 // an agent row's 技术细节: the condition codes / pids / hosts, the routing and branches (redacted), the running processes, the
@@ -233,20 +263,33 @@ function agentTechHtml(row, h) {
   if (t) {
     if (t.routing) rows.push(['routing', has(ROUTING, t.routing) ? ROUTING[t.routing] : t.routing])
     const name = new Map(list(t.nodes).filter((n) => n && n.id != null).map((n) => [n.id, n]))
+    // one row per distinct chain (adjacent repeats of one node said once), with the forms that take it
+    const chains = new Map()
     for (const b of list(t.branches)) {
       const nodes = list(b && b.path).map((id) => {
         const n = name.get(id)
-        return n && n.name != null ? `${redactUrlCredentials(String(n.name))}${n.inferred ? ' ' + mark('inf').replace(/<[^>]*>/g, '') : ''}` : `unknown${n && n.unknown && n.unknown.reason ? ` · ${n.unknown.reason}` : ''}`
-      })
-      if (nodes.length) rows.push(['path', nodes.join(' → ')])
+        return n && n.name != null ? `${redactUrlCredentials(String(n.name))}${n.inferred ? ' ' + unesc(mark('inf').replace(/<[^>]*>/g, '')) : ''}` : `unknown${n && n.unknown && n.unknown.reason ? ` · ${n.unknown.reason}` : ''}`
+      }).filter((x, i, a) => i === 0 || x !== a[i - 1])
+      if (!nodes.length) continue
+      const chain = nodes.join(' → ')
+      if (!chains.has(chain)) chains.set(chain, new Set())
+      const label = [b.form, b.name].filter((x) => x != null && x !== '').join(' ')
+      if (label) chains.get(chain).add(label)
     }
+    for (const [chain, labels] of chains) rows.push(['path', labels.size ? `${chain} · ${[...labels].join(', ')}` : chain])
     for (const p of list(t.running)) if (p && p.pid != null) rows.push(['process', M(`${p.pid}${p.note ? ` · ${p.note}` : ''}`)])
     for (const n of list(t.notes)) if (n != null) rows.push(['note', String(n)])
-    for (const f of list(t.findings)) if (f != null) rows.push(['finding code', M(String(f))])
+    for (const f of new Set(list(t.findings).filter((x) => x != null).map(String))) {
+      const x = reasonOf(f, { harness: row.harness })
+      rows.push(['finding', x.unknown ? M(f) : H(`${esc(x.why)} · ${mono(f)}`)])
+    }
     if (t.routing === 'proxy') rows.push(['VPN', `if your VPN routes by process, it sees trocar as the source, not ${harnessName(row.harness)}`])
   }
-  for (const e of list(h && h.changed)) if (e && e.harness != null && harnessKey(e.harness) === row.harness && e.undo) rows.push([`undo ${e.path || ''}`, M(e.undo)])
-  rows.push(...commandsHtml(commandsFor(h, { row })))
+  // each undo command once; one the row's commands already list is not said again
+  const cmds = commandsFor(h, { row })
+  const undos = new Set(list(h && h.changed).filter((e) => e && e.harness != null && harnessKey(e.harness) === row.harness && e.undo).map((e) => String(e.undo)))
+  for (const u of undos) if (!cmds.some(([, c]) => c === u)) rows.push(['undo', M(u)])
+  rows.push(...commandsHtml(cmds))
   const used = { harness: row.harness, verdict: { text: row.text, tier: row.tier, code: row.code, at: row.at }, conditions: row.conditions, topology: topoUsed(row.topology), last_failure: row.lastFailure }
   return detailsHtml(`cap-${row.harness}-tech`, rows) + `<div class="capcopy">${diagCopy(used)}</div>`
 }
@@ -258,7 +301,7 @@ export function changesHtml(h) {
   const pending = list(h && h.install && h.install.pending).filter((x) => x && typeof x === 'object')
   const manifest = list(h && h.errors).filter((e) => e && e.where === ERR_WHERE.manifest)
   if (!items.length && !pending.length && !manifest.length) return ''
-  const lines = items.map((e) => `<p>${mono(e.path || '')} ${mono(e.what || '')}</p>`)
+  const lines = changeLines(items)
   if (pending.length) {
     lines.push(`<p>${esc(residueLead(pending.some((x) => x.result === 'install did not finish') ? 'install did not finish' : ''))}</p>`)
     for (const x of pending) lines.push(`<p>${mono(x.path || '')}${x.harness != null ? ` ${harnessIcon(x.harness)}<span class="chipname">${esc(harnessName(harnessKey(x.harness)))}</span>` : ''} <span class="fine">${esc(failureWord(null, x.result) || (has(CODE, x.result) ? CODE[x.result] : String(x.result ?? '')))}</span></p>`)
