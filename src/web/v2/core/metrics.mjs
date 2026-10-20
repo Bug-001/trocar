@@ -131,7 +131,7 @@ export function priceMatch(table, model) {
   return key == null ? null : { row: table[key], key, exact: false }
 }
 // The server's `pricing` document { models: [{ model, input, output, cache_read, cache_write }], source } → { [model]: price row }.
-// The one converter the desk uses. Not a models[] document → null (the caller names that as a read failure, not an empty table).
+// The one converter the board uses (desk and overview). Not a models[] document → null (the caller names that as a read failure, not an empty table).
 export function priceTableOf(doc) {
   if (!doc || !Array.isArray(doc.models)) return null
   const t = {}

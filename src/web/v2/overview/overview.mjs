@@ -16,7 +16,7 @@ import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
 import { harnessKey, harnessName, harnessIcon, UNIDENTIFIED } from '../core/chips.mjs'
 import { captureVerdict, capHealthPatch, agentVerdicts, failureSentence, AGENT_TIER, CAPH_MS } from '../core/capture-verdict.mjs'
-import { priceMatch, costOf, hitRatio } from '../core/metrics.mjs'
+import { priceMatch, costOf, hitRatio, priceTableOf } from '../core/metrics.mjs'
 import { loadSessions } from '../library/logic.mjs'
 import { unpricedModels } from '../settings/prices.mjs'
 import { failureBrief, failureWord } from '../../../cli/words.mjs'
@@ -154,11 +154,6 @@ export function rawGroups(doc, now) {
   return [...by.values()].sort((a, b) => parseTs(b.last) - parseTs(a.last))
 }
 
-// the /api/pricing document's models[] as the table core/metrics.mjs prices with ({model: [input, output, cache_write, cache_read]})
-export function priceTable(doc) {
-  if (!doc || !Array.isArray(doc.models)) return null
-  return Object.fromEntries(doc.models.filter((m) => m && m.model).map((m) => [m.model, [m.input, m.output, m.cache_write, m.cache_read]]))
-}
 const usageOfRow = (r) => ({ fresh: r.input, out: r.output, create: r.cache_write, read: r.cache_read })
 const metered = (r) => (r.calls || 0) - (r.failed || 0) - (r.no_usage || 0)
 
@@ -176,7 +171,7 @@ function mainHit(rows) {
 // doc = the overview document, pricingDoc = /api/pricing. Money is an estimate (D14): a row that cannot be priced is left out and
 // marks the sum 「起」, and so does a usage read that did not cover the window; nothing unknown is ever a 0.
 export function overviewStats(doc, pricingDoc) {
-  const table = priceTable(pricingDoc)
+  const table = priceTableOf(pricingDoc)
   const usage = (doc && doc.usage) || {}
   const rows = list(usage.rows), cov = usageCoverage(usage.coverage)
   const partial = cov.partial
