@@ -166,6 +166,20 @@ test('V95: a merge that fails leaves the harnesses captured again, no handover f
   assert.deepEqual(t.calls.child, [])
 })
 
+// §1.2 / D38: the child has no exit code when a signal killed it (a macOS machine's security software kills node processes) — said, with a document
+test('V95: a finishing process killed by a signal is exit 1 with a reason and a --json document, and the handover file stays', async () => {
+  const s = sandbox({ on: ['codex'] })
+  s.ahead('child-killed.md')
+  const before = codeId(s.root) // read before the merge moves HEAD
+  const t = ctx(s, { childExit: { signal: 'SIGKILL' } })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.incomplete, t.io.text())
+  const receipt = t.io.json()
+  assert.deepEqual(validateReceipt(receipt), [])
+  assert.deepEqual([receipt.ok, receipt.error.code], [false, 'child-crashed'])
+  assert.match(receipt.error.message, /SIGKILL/)
+  assert.deepEqual(s.handover(), { from: before, on: ['codex'] }, 'the file stays: the next run finishes the update')
+})
+
 // ── V96 · the finish ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 test('V96: with a handover file the new code installs, switches the named harnesses on and removes the file; an `on` that fails keeps it, exit 1', async () => {
   const s = sandbox()

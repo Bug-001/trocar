@@ -161,8 +161,13 @@ async function update({ io, env, home, platform, deps, flags }) {
 
   // 3 · the new code finishes, in a process of its own. No harness name in its arguments (D67①): the file holds them.
   const argv = ['update', '--yes', ...(json ? ['--json'] : [])]
-  const child = deps.child || ((file, args) => runAsync(file, args, { quiet: true, inherit: true, env }).then((x) => (x.status === null ? EXIT.crash : x.status)))
-  return await child(process.execPath, [path.join(root, 'bin', 'asight.mjs'), ...argv])
+  // a process killed by a signal has no exit code to copy: `child` answers `{signal}` for that, and anything else is its exit code
+  const child = deps.child || ((file, args) => runAsync(file, args, { quiet: true, inherit: true, env }).then((x) => (x.status === null ? { signal: x.signal } : x.status)))
+  const ended = await child(process.execPath, [path.join(root, 'bin', 'asight.mjs'), ...argv])
+  if (!Number.isInteger(ended)) {
+    return no('child-crashed', `the code is now ${r.to}, but the process that was to finish this update was killed${ended && ended.signal ? ` by ${ended.signal}` : ''} before it could. This update is written down, so run asight update again to finish it`)
+  }
+  return ended
 }
 
 /** 4 · (the new code) the daemon, `install` and `on`, and the handover file gone when all three are done (§5.5). `only: 'daemon'`: the
