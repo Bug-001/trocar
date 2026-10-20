@@ -73,3 +73,27 @@ for (const width of [1280, 1024, 800]) {
     })
   }
 }
+
+// 2.4 · 1.5: a 「Files read」 row with a long path and a long life sentence (read at step N · removed by compaction at step M — the main
+// Mac's shape) shows the whole sentence, wrapped under the name, and the name truncated with its full text on hover. The real answer,
+// with the anchor lane's ledger given such files.
+test('Files read: a long path and a long life sentence are never cut — the life wraps, the name has its full text on hover', { skip, timeout: 120_000 }, async () => {
+  const b = await withBoard({ bytes: BYTES, width: 1440, chromium: gate.chromium })
+  try {
+    await b.page.route((u) => new URL(u).pathname === '/api/session', async (r) => {
+      const res = await r.fetch(), j = await res.json()
+      for (const l of (j.analyzed && j.analyzed.lanes) || []) {
+        const gis = (l.calls || []).map((c) => c && c.gi).filter((g) => g != null)
+        if (gis.length < 3) continue
+        l.resources = Array.from({ length: 6 }, (_, i) => ({ kind: 'file', label: `/private/tmp/a/rather/long/working/directory/for/the/project/src/web/module-${i}/server-side-file-${i}.mjs`, segments: [{ enter: gis[0], evict: gis[gis.length - 2] }] }))
+      }
+      await r.fulfill({ response: res, json: j })
+    })
+    await openBusiest(b)
+    await b.page.waitForSelector('.navsub.dead .navlife', { timeout: 15000 })
+    const F = await layoutFaults(b.page)
+    assert.deepEqual({ overlap: F.overlap, cut: F.cut, untitled: F.untitled }, { overlap: [], cut: [], untitled: [] })
+    await shoot(b.page, 'replay-files-read', { width: 1440, theme: 'light' })
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
