@@ -1006,7 +1006,7 @@ test('a descriptor whose afterUninstall is a string that is no known "until" is 
 const onBase = (b, o = {}) => ({ home: b.home, env: { HOME: b.home, XDG_RUNTIME_DIR: path.join(b.home, 'run') }, osName: 'none', harnesses: [cc], freePort: async () => 47011, roots: ROOTS, confirm: async () => true, sleep: async () => {}, linger: () => true, ...o })
 const unitOf = (b, run, spawn = () => { throw new Error('no test starts a daemon: hand in a spawn') }, env = undefined) => userUnit({ home: b.home, node: '/usr/bin/node', script: '/repo/bin/trocar.mjs', run, spawn, ...(env ? { env } : {}) })
 
-// A keep-alive TLS relay for relay.trocar.test with its own private CA (the shape daemon.test.mjs uses): answers every complete request with a fixed message.
+// A keep-alive TLS relay for relay.asight.test with its own private CA (the shape daemon.test.mjs uses): answers every complete request with a fixed message.
 const FAKE_LOADER = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const REPLY = '{"id":"msg_1","type":"message","role":"assistant","model":"claude-x","content":[{"type":"text","text":"pong"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":1}}'
 async function relay() {
@@ -1047,7 +1047,7 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
   // the daemon below really binds the manifest's engine port: a free one, not onBase's fixed 47011 (two full runs at once collided there)
   const port = await freeEnginePort(); const freePort = async () => port
   const on = (o = {}) => turnOn(onBase(b, { socketPath: sock, request: controlRequest, unit: null, freePort, ...o }))
-  fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.trocar.test:${up.port}` } }, null, 2)) // the user's own relay: its host is in the decrypt policy
+  fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}` } }, null, 2)) // the user's own relay: its host is in the decrypt policy
   let d = null
   try {
     // install writes the entry (D55); the first on: no daemon answers (no unit), so nothing is asked of one
@@ -1076,9 +1076,9 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
     // its connection passes through the engine untouched: the client sees the relay's own certificate, no error, and the relay got the bytes
     const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4343, decrypt: 0 })
-    const conn = tls.connect({ socket: raw, servername: 'relay.trocar.test', ca: up.ca.certPem }); await once(conn, 'secureConnect')
+    const conn = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: up.ca.certPem }); await once(conn, 'secureConnect')
     const body = JSON.stringify({ model: 'claude-x', max_tokens: 4, messages: [{ role: 'user', content: 'v16-through' }] })
-    const reply = await new Promise((resolve, reject) => { let t = ''; conn.on('error', reject); conn.on('data', (x) => { t += x; if (t.endsWith(REPLY)) resolve(t) }); conn.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.trocar.test\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`) })
+    const reply = await new Promise((resolve, reject) => { let t = ''; conn.on('error', reject); conn.on('data', (x) => { t += x; if (t.endsWith(REPLY)) resolve(t) }); conn.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`) })
     assert.match(reply, /^HTTP\/1\.1 200 OK/)
     assert.ok(Buffer.concat(up.got).toString().includes('v16-through'), 'the relay received it')
     conn.end()
@@ -1090,9 +1090,9 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
     assert.deepEqual([fresh.reason, fresh.decrypt], ['ok', true])
     const raw2 = net.connect(d.port, '127.0.0.1'); await once(raw2, 'connect')
     await clients[0].raw({ op: '__inject_port', port: raw2.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4444, decrypt: 1 })
-    const conn2 = tls.connect({ socket: raw2, servername: 'relay.trocar.test', ca: fs.readFileSync(path.join(b.dir, 'ca', 'trocar-ca.pem'), 'utf8') }); await once(conn2, 'secureConnect') // trocar's leaf, which only a process that trusts trocar's CA accepts
+    const conn2 = tls.connect({ socket: raw2, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(b.dir, 'ca', 'trocar-ca.pem'), 'utf8') }); await once(conn2, 'secureConnect') // trocar's leaf, which only a process that trusts trocar's CA accepts
     const body2 = JSON.stringify({ model: 'claude-x', max_tokens: 4, messages: [{ role: 'user', content: 'v16-after-restart' }] })
-    await new Promise((resolve, reject) => { let t = ''; conn2.on('error', reject); conn2.on('data', (x) => { t += x; if (t.endsWith(REPLY)) resolve(t) }); conn2.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.trocar.test\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body2)}\r\n\r\n${body2}`) })
+    await new Promise((resolve, reject) => { let t = ''; conn2.on('error', reject); conn2.on('data', (x) => { t += x; if (t.endsWith(REPLY)) resolve(t) }); conn2.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body2)}\r\n\r\n${body2}`) })
     const envs = await until(() => { const e = envelopesOf(b.dir); return e.some((x) => JSON.stringify(x).includes('v16-after-restart')) && e })
     assert.deepEqual([envs.length, envs[0].proc.pid, envs[0].proc.agent], [1, 4444, 'claude-code'], 'recorded verbatim, from the process that restarted')
     conn2.end()

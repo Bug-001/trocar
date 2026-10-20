@@ -30,7 +30,7 @@ const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', impo
 const UID = process.getuid()
 const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
 const API = 'api.anthropic.com'
-const PROXY_HOST = 'proxy.trocar.test' // the lab CA's leaf covers *.trocar.test
+const PROXY_HOST = 'proxy.asight.test' // the mock CA's leaf covers *.asight.test
 function fakeArch(p) {
   const clients = []
   const makeClient = () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 }); clients.push(c); return c }
@@ -71,7 +71,7 @@ test('daemon: an agent\'s own https:// proxy (HTTPS_PROXY) reaches the engine th
   let raw = null
   try {
     await req(sock, 'POST', '/on', {})
-    p.add(4343, { uid: UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: home, env: { HOME: home, HTTPS_PROXY: `https://u1:pw-SECRET@Proxy.Trocar.test:${proxy.port}` }, startTicks: nowTicks(p) })
+    p.add(4343, { uid: UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: home, env: { HOME: home, HTTPS_PROXY: `https://u1:pw-SECRET@Proxy.Asight.test:${proxy.port}` }, startTicks: nowTicks(p) })
     await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4343, pid: 4343, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
     const row = await until(async () => (await req(sock, 'GET', '/status')).agents.find((a) => a.pid === 4343 && a.trusted))
     assert.equal(row.hosts.includes(PROXY_HOST), false, 'its proxy is FlowExtras, never a decrypt host')

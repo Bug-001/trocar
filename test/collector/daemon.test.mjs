@@ -79,7 +79,7 @@ const flowsOf = (s) => {
   return lines
 }
 
-// A keep-alive TLS relay for relay.trocar.test with its own private CA. A daemon process would trust it for the
+// A keep-alive TLS relay for relay.asight.test with its own private CA. A daemon process would trust it for the
 // upstream side through NODE_EXTRA_CA_CERTS (gate G8, test/collector/core/upstream-trust.test.mjs); in-process the
 // test hands the engine the CA through startDaemon's upstreamCa seam. It answers every complete request with a fixed message.
 const REPLY = '{"id":"msg_1","type":"message","role":"assistant","model":"claude-x","content":[{"type":"text","text":"pong"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":1}}'
@@ -113,7 +113,7 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
   const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
   // the user's own Claude Code config, as for any private-CA relay: base URL + the relay's CA
   fs.mkdirSync(path.join(s.home, '.claude'))
-  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.trocar.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }, null, 2))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }, null, 2))
   await install(s)
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, upstreamCa: up.ca.certPem })
@@ -127,16 +127,16 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
     p.add(4242, { uid: UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
     await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4242, pid: 4242, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
     const row = await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242 && a.trusted))
-    assert.deepEqual([row.agent, row.reason, row.trust_var, row.trust_via.startsWith('user settings env'), row.hosts.includes('relay.trocar.test'), row.direct], ['claude-code', 'ok', 'NODE_EXTRA_CA_CERTS', true, true, 0])
+    assert.deepEqual([row.agent, row.reason, row.trust_var, row.trust_via.startsWith('user settings env'), row.hosts.includes('relay.asight.test'), row.direct], ['claude-code', 'ok', 'NODE_EXTRA_CA_CERTS', true, true, 0])
 
     const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4242, decrypt: 1 })
     const extraCc = fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') // what CC now trusts: relay CA + trocar CA
-    const c = tls.connect({ socket: raw, servername: 'relay.trocar.test', ca: extraCc }); await once(c, 'secureConnect')
+    const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: extraCc }); await once(c, 'secureConnect')
     const sid = '6a1b7c2d-0000-4000-8000-000000000001'
     const post = (text) => {
       const body = JSON.stringify({ model: 'claude-x', max_tokens: 16, system: [{ type: 'text', text: 'You are a test.' }], messages: [{ role: 'user', content: [{ type: 'text', text }] }] })
-      return `POST /v1/messages HTTP/1.1\r\nhost: relay.trocar.test:${up.port}\r\nanthropic-version: 2023-06-01\r\nx-claude-code-session-id: ${sid}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
+      return `POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test:${up.port}\r\nanthropic-version: 2023-06-01\r\nx-claude-code-session-id: ${sid}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
     }
     const send = (text) => new Promise((resolve) => {
       let reply = ''
@@ -150,7 +150,7 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
     const envs = await until(() => { const t = fs.readFileSync(path.join(rawDir, capture), 'utf8'); return t.includes('trocar-e2e-1') && t.trim().split('\n').map((l) => JSON.parse(l)) })
     assert.equal(envs.length, 1)
     assert.deepEqual(Buffer.concat([Buffer.from(envs[0].req_head_raw, 'latin1'), Buffer.from(envs[0].req_body, 'utf8')]), up.got[0], 'recorded request bytes == bytes the relay received')
-    assert.deepEqual([envs[0].host, envs[0].proc.pid, envs[0].proc.agent, envs[0].proc.exe, envs[0].is_llm_call], ['relay.trocar.test', 4242, 'claude-code', CC_EXE, true])
+    assert.deepEqual([envs[0].host, envs[0].proc.pid, envs[0].proc.agent, envs[0].proc.exe, envs[0].is_llm_call], ['relay.asight.test', 4242, 'claude-code', CC_EXE, true])
 
     // the live daemon names its current segment in its lock, so the sealer and `raw seal` know the one segment to leave
     // alone (D60; the read side of these records is the query layer's, test/query/).
@@ -185,7 +185,7 @@ test('query: the records a real daemon wrote are listed and handed back byte for
   const s = sandbox(); const p = fakeProc(); const up = await relay()
   const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
   fs.mkdirSync(path.join(s.home, '.claude'))
-  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.trocar.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
   await install(s)
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, upstreamCa: up.ca.certPem })
@@ -196,11 +196,11 @@ test('query: the records a real daemon wrote are listed and handed back byte for
     await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242 && a.trusted))
     const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4242, decrypt: 1 })
-    const c = tls.connect({ socket: raw, servername: 'relay.trocar.test', ca: fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') })
+    const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') })
     await once(c, 'secureConnect')
     const sid = '6a1b7c2d-0000-4000-8000-000000000002'
     const body = JSON.stringify({ model: 'claude-x', max_tokens: 16, system: [{ type: 'text', text: 'You are a test.' }], messages: [{ role: 'user', content: [{ type: 'text', text: 'trocar-query-e2e' }] }] })
-    c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.trocar.test:${up.port}\r\nanthropic-version: 2023-06-01\r\nx-claude-code-session-id: ${sid}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`)
+    c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test:${up.port}\r\nanthropic-version: 2023-06-01\r\nx-claude-code-session-id: ${sid}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`)
     await new Promise((resolve) => { let reply = ''; c.on('data', (x) => { reply += x; if (reply.endsWith(REPLY)) resolve() } ) })
     const home = path.join(s.home, '.trocar')
     const segment = await until(() => { const n = fs.readdirSync(path.join(home, 'raw'))[0]; return n && fs.readFileSync(path.join(home, 'raw', n), 'utf8').includes('trocar-query-e2e') && path.basename(n, '.ndjson') })
@@ -561,7 +561,7 @@ test('daemon: an envelope that cannot be written is a durable failure record, no
   const s = sandbox(); const p = fakeProc(); const up = await relay()
   const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
   fs.mkdirSync(path.join(s.home, '.claude'))
-  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.trocar.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
   await install(s)
   fs.writeFileSync(path.join(s.home, '.trocar', 'raw'), 'not a directory') // no segment can be opened under it
   const { arch, clients } = fakeArch(p)
@@ -573,10 +573,10 @@ test('daemon: an envelope that cannot be written is a durable failure record, no
     await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 7171 && a.trusted))
     const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 7171, decrypt: 1 })
-    const c = tls.connect({ socket: raw, servername: 'relay.trocar.test', ca: fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem')) }); await once(c, 'secureConnect')
+    const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem')) }); await once(c, 'secureConnect')
     const body = JSON.stringify({ model: 'claude-x', max_tokens: 1, messages: [{ role: 'user', content: 'x' }] })
     let reply = ''; c.on('data', (x) => { reply += x })
-    c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.trocar.test\r\ncontent-type: application/json\r\ncontent-length: ${body.length}\r\n\r\n${body}`)
+    c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\ncontent-length: ${body.length}\r\n\r\n${body}`)
     await until(() => flowsOf(s).some((f) => f.event === 'failure' && f.where === 'record'))
     assert.match(flowsOf(s).find((f) => f.where === 'record').reason, /EEXIST|ENOTDIR/)
     await until(() => reply.endsWith(REPLY))
@@ -1128,7 +1128,7 @@ test('daemon: a CA that becomes usable again is rebuilt — ca-ok clears the con
   const s = sandbox(); const p = fakeProc(); const up = await relay()
   const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
   fs.mkdirSync(path.join(s.home, '.claude'))
-  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.trocar.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }, null, 2))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }, null, 2))
   await install(s)
   const caDir = path.join(s.collector, 'ca')
   const goodKey = fs.readFileSync(path.join(caDir, 'ca.key'), 'utf8')
@@ -1151,12 +1151,12 @@ test('daemon: a CA that becomes usable again is rebuilt — ca-ok clears the con
     const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4343, decrypt: 1 })
     const extraCc = fs.readFileSync(path.join(caDir, 'extra-cc.pem'), 'utf8') // relay CA + trocar CA
-    const c = tls.connect({ socket: raw, servername: 'relay.trocar.test', ca: extraCc }); await once(c, 'secureConnect')
+    const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: extraCc }); await once(c, 'secureConnect')
     const trocarCa = new crypto.X509Certificate(fs.readFileSync(path.join(caDir, 'trocar-ca.pem')))
     assert.ok(new crypto.X509Certificate(c.getPeerCertificate().raw).checkIssued(trocarCa), 'the leaf is signed by the trocar CA: decrypted, not stepped aside')
     // a call goes through (a client that hung up right after the handshake would be, by the engine's rule, one that
     // refused the leaf: not_captured client-rejected-leaf — the merged rows now say so, they used to carry reason only)
-    c.write('POST /v1/messages HTTP/1.1\r\nHost: relay.trocar.test\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}'); await once(c, 'data')
+    c.write('POST /v1/messages HTTP/1.1\r\nHost: relay.asight.test\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}'); await once(c, 'data')
     c.end(); await once(c, 'close')
     const row = await until(() => flowsOf(s).find((f) => f.pid === 4343 && f.event == null && f.flow_id))
     assert.deepEqual([row.decision, row.not_captured ?? null], ['decrypt', null])

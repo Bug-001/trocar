@@ -53,7 +53,7 @@ export function rawExchange(port, wire, { closeAfter } = {}) {
 }
 
 export const httpPost = (path, body, headers = {}) =>
-  `POST ${path} HTTP/1.1\r\nHost: relay.trocar.test\r\nContent-Type: application/json\r\n${Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('')}Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
+  `POST ${path} HTTP/1.1\r\nHost: relay.asight.test\r\nContent-Type: application/json\r\n${Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('')}Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
 
 export async function waitFor(fn, ms = 2000) {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 10))) {

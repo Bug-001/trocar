@@ -229,7 +229,7 @@ const BODY = JSON.stringify({ model: 'claude-x', max_tokens: 16, messages: [{ ro
 const SSE_BODY = (text = 'drain me') => JSON.stringify({ model: 'claude-x', max_tokens: 16, stream: true, messages: [{ role: 'user', content: [{ type: 'text', text: `${text} [[mock:slow-drip]]` }] }] })
 const split = (b) => { const i = b.indexOf('\r\n\r\n') + 4; return { head: b.subarray(0, i).toString('latin1'), body: b.subarray(i) } }
 
-async function lab(t, { delays, terminal = TERMINAL, spliceHost = 'splice.trocar.test', upstream = null } = {}) {
+async function lab(t, { delays, terminal = TERMINAL, spliceHost = 'splice.asight.test', upstream = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-drain-'))
   const mock = upstream ? await upstream() : await startMockUpstream({ tls: { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) }, delays })
   const envelopes = [], errors = []
@@ -434,7 +434,7 @@ async function trio(t) {
   const L = await lab(t, { delays: { dripMs: 200 } })
   const sse = await L.client(); L.post(sse, '/v1/messages', SSE_BODY())
   const ws = await L.connectWs(); await ws.sendText(create('trio [[mock:slow-drip]]'))
-  const sp = await L.client({ servername: 'splice.trocar.test', ca: fs.readFileSync(labCa.caCert) })
+  const sp = await L.client({ servername: 'splice.asight.test', ca: fs.readFileSync(labCa.caCert) })
   await until(() => sse.bytes().includes('message_start'), 'the stream is under way')
   await ws.message()
   return { L, sse, ws, sp, closedAll: () => Promise.all([sse.closed, until(() => ws.state.closed, 'ws closed', 3000), sp.closed]) }

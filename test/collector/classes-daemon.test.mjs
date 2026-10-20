@@ -28,7 +28,7 @@ const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', impo
 const UID = process.getuid()
 const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
 const API = 'api.anthropic.com'
-const OTHER = 'telemetry.trocar.test' // not a known API host of any harness: only the policy `all` decrypts it (the lab leaf covers *.trocar.test)
+const OTHER = 'telemetry.asight.test' // not a known API host of any harness: only the policy `all` decrypts it (the mock CA's leaf covers *.asight.test)
 const req = (sock, method, p, body) => controlRequest({ socketPath: sock, method, path: p, body })
 async function until(fn, ms = 4000) { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 20)) } }
 const nowTicks = (p) => Math.ceil((Date.now() / 1000 - p.btime) * 100)

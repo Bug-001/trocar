@@ -67,10 +67,10 @@ test('codex: SSL_CERT_FILE and a shell CODEX_CA_CERTIFICATE both count — one w
 test('codex: relay hosts come from the system, user and profile config.toml, not OPENAI_BASE_URL; the Responses terminal messages are data', () => {
   const s = sandbox()
   try {
-    s.put('.codex/config.toml', 'openai_base_url = "https://relay.example.com/v1"\n[model_providers.mock]\nbase_url = "http://mock.trocar.test:8443/v1"\n')
+    s.put('.codex/config.toml', 'openai_base_url = "https://relay.example.com/v1"\n[model_providers.mock]\nbase_url = "http://mock.asight.test:8443/v1"\n')
     s.put('.codex/fast.config.toml', '[model_providers.alt]\nbase_url = "https://alt.example.com/v1"\n')
     const r = judge(codex, ctxFor({ home: s.home, env: { OPENAI_BASE_URL: 'https://ignored.example.com' }, argv: ['codex', '--profile', 'fast'] }))
-    assert.deepEqual(r.hosts.sort(), ['alt.example.com', 'mock.trocar.test', 'relay.example.com'])
+    assert.deepEqual(r.hosts.sort(), ['alt.example.com', 'mock.asight.test', 'relay.example.com'])
     const [t] = codex.wsTerminal
     const re = new RegExp(t.patterns[0])
     assert.equal(t.pathSuffix, '/responses')

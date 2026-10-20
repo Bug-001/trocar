@@ -30,7 +30,7 @@ let done
 const engine = net.createServer((c) => { done = handleFlow(c, { dst: { address: '127.0.0.1', port: upPort, family: 4 }, pid: 1, agent: 't', decrypt: true }, ctx) })
 const port = await listen(engine)
 const got = await new Promise((resolve) => {
-  const c = tls.connect({ port, host: '127.0.0.1', servername: 'relay.trocar.test', ca: trocarCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write('GET / HTTP/1.1\\r\\nhost: relay.trocar.test\\r\\n\\r\\n'))
+  const c = tls.connect({ port, host: '127.0.0.1', servername: 'relay.asight.test', ca: trocarCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write('GET / HTTP/1.1\\r\\nhost: relay.asight.test\\r\\n\\r\\n'))
   let b = ''; c.on('data', (d) => (b += d)); c.on('end', () => resolve(b)); c.on('error', (e) => resolve('client error: ' + e.code)); c.on('close', () => resolve(b))
 })
 await done

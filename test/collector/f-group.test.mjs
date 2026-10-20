@@ -108,7 +108,7 @@ async function scene({ reply, got = null, daemon = {}, policy = null } = {}) { /
   const s = sandbox(); const p = fakeProc(); const up = await relay({ reply, got })
   const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
   fs.mkdirSync(path.join(s.home, '.claude'))
-  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.trocar.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
   await install(s)
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], upstreamCa: up.ca.certPem, ...daemon })
@@ -127,14 +127,14 @@ async function scene({ reply, got = null, daemon = {}, policy = null } = {}) { /
   const stop = async () => { if (!stopped) { stopped = true; await d.stop() } }
   return { s, p, up, d, inject, rows, extraCc, stop, done: async () => { await stop(); up.close(); p.done(); s.done() } }
 }
-const POST = (body, extra = '') => `POST /v1/messages HTTP/1.1\r\nhost: relay.trocar.test\r\ncontent-type: application/json\r\n${extra}content-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
+const POST = (body, extra = '') => `POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\n${extra}content-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
 
 test('F1 CA and trust: (a) an untrusted agent is a condition until it exits, the event stays; (b) a leaf refused under TLS 1.3 and 1.2 → rows, a negative cache → a condition that a restart clears; (c) an unusable CA → "CA 不可用", never "not installed"; (e) a user CA block not carried over → the last install lists it', async () => {
   const s = sandbox(); const p = fakeProc(); const up = await relay()
   const relayCa = path.join(s.home, 'relay-ca.pem')
   fs.writeFileSync(relayCa, `-----BEGIN PRIVATE KEY-----\nNOT-A-KEY\n-----END PRIVATE KEY-----\n${up.ca.certPem}`) // (e) a key block beside the cert
   fs.mkdirSync(path.join(s.home, '.claude'))
-  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.trocar.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
   p.add(6161, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) - 6000 }) // started before install
   await install(s)
   const { arch, clients } = fakeArch(p)
@@ -160,7 +160,7 @@ test('F1 CA and trust: (a) an untrusted agent is a condition until it exits, the
       const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
       await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 7171, decrypt: 1 })
       await new Promise((resolve) => {
-        const c = tls.connect({ socket: raw, servername: 'relay.trocar.test', minVersion: v, maxVersion: v }) // the system store only
+        const c = tls.connect({ socket: raw, servername: 'relay.asight.test', minVersion: v, maxVersion: v }) // the system store only
         c.on('error', () => { raw.destroy(); resolve() }); c.on('secureConnect', () => assert.fail('the client should refuse the leaf'))
       })
     }
@@ -169,7 +169,7 @@ test('F1 CA and trust: (a) an untrusted agent is a condition until it exits, the
     assert.equal(rows.length, 2, '(b) one connection row per refusal')
     h = await endpoint(s)
     assert.equal(h.collector.failures.find((g) => g.key === 'flow:client-rejected-leaf').count, 2, '(b) the endpoint counts both')
-    assert.deepEqual(cond(h, 'negative-cache').map((c) => [c.pid, c.host]), [[7171, 'relay.trocar.test']], '(b) 因负缓存停采 (pid, host)')
+    assert.deepEqual(cond(h, 'negative-cache').map((c) => [c.pid, c.host]), [[7171, 'relay.asight.test']], '(b) 因负缓存停采 (pid, host)')
     assert.equal(h.summary.state, 'failing')
   } finally { await d.stop() }
   let st = await statusOffline(s)
@@ -206,7 +206,7 @@ test('F1(b) the refused-leaf connection row carries not_captured:\'client-reject
     for (const v of ['TLSv1.3', 'TLSv1.2']) {
       const raw = await S.inject()
       await new Promise((resolve) => { // the system store only: the client refuses the leaf
-        const c = tls.connect({ socket: raw, servername: 'relay.trocar.test', minVersion: v, maxVersion: v })
+        const c = tls.connect({ socket: raw, servername: 'relay.asight.test', minVersion: v, maxVersion: v })
         c.on('error', () => { raw.destroy(); resolve() }); c.on('secureConnect', () => assert.fail('the client should refuse the leaf'))
       })
     }
@@ -253,7 +253,7 @@ test('F2 table-driven: every connection row the bytes missed carries a closed no
   // [name, drive(raw), expected not_captured]
   const table = [
     ['a host outside the decrypt policy', (raw) => tlsHello(raw, { servername: 'other.example.test' }), 'policy'],
-    ['only h2 offered', (raw) => tlsHello(raw, { servername: 'relay.trocar.test', ALPNProtocols: ['h2'] }), 'h2'],
+    ['only h2 offered', (raw) => tlsHello(raw, { servername: 'relay.asight.test', ALPNProtocols: ['h2'] }), 'h2'],
     ['a ClientHello that does not parse', (raw) => { raw.write(Buffer.from([0x16, 3, 1, 0, 4, 2, 0, 0, 0])); return new Promise((r) => setTimeout(() => { raw.end(); r() }, 80)) }, 'malformed-hello', sink],
     ['an unknown first byte', (raw) => { raw.write('SSH-2.0-client\r\n'); return new Promise((r) => setTimeout(() => { raw.end(); r() }, 80)) }, 'unknown-protocol', sink],
     ['the upstream speaks first', (raw) => new Promise((r) => { raw.on('data', () => {}); raw.on('close', r); setTimeout(() => { raw.destroy(); r() }, 300) }), 'upstream-first', banner],
@@ -365,7 +365,7 @@ test('F4 the connection row of a flow whose envelope could not be written carrie
   try {
     fs.mkdirSync(path.dirname(rawOf(S.s)), { recursive: true }); fs.writeFileSync(rawOf(S.s), '') // raw/ is a file, so no segment can be opened
     const raw = await S.inject()
-    const c = tls.connect({ socket: raw, servername: 'relay.trocar.test', ca: fs.readFileSync(S.extraCc) }); await once(c, 'secureConnect')
+    const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(S.extraCc) }); await once(c, 'secureConnect')
     let got = ''; c.on('data', (x) => { got += x })
     c.write(POST('{"model":"claude-x","messages":[]}'))
     await until(() => got.endsWith('ok')); assert.match(got, /^HTTP\/1\.1 200 OK/, 'fail-open: the reply came although nothing could be written')
@@ -425,7 +425,7 @@ const rawOf = (s) => rawHome(path.dirname(s.collector))
 const captureOf = (s) => envelopesOf(s.collector)
 async function talk(S, bytes, { until: ok = () => true } = {}) {
   const raw = await S.inject()
-  const c = tls.connect({ socket: raw, servername: 'relay.trocar.test', ca: fs.readFileSync(S.extraCc) }); await once(c, 'secureConnect')
+  const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(S.extraCc) }); await once(c, 'secureConnect')
   let got = Buffer.alloc(0); c.on('data', (x) => { got = Buffer.concat([got, x]) }); c.on('error', () => {})
   c.write(bytes)
   await until(() => ok(got)); return { c, got: () => got }
@@ -448,7 +448,7 @@ test('F5 decoding and truncation of HTTP/1 calls: a response that cannot be fram
   const ok0 = 'HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n'
   S = await scene({ reply: ok0 + 'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n' + ok0 })
   try {
-    const t = await talk(S, 'POST /v1/messages HTTP/1.1\r\nhost: relay.trocar.test\r\ntransfer-encoding: chunked\r\n\r\n2\r\n{}XX', { until: (g) => g.length > 40 }); t.c.destroy()
+    const t = await talk(S, 'POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ntransfer-encoding: chunked\r\n\r\n2\r\n{}XX', { until: (g) => g.length > 40 }); t.c.destroy()
     const row = await until(() => S.rows()[0])
     assert.equal(row.framer_error && row.framer_error.side, 'request')
     await until(() => flowsOf(S.s).some((f) => f.code === 'unpaired-response'))
@@ -466,9 +466,9 @@ test('F5 decoding and truncation of HTTP/1 calls: a response that cannot be fram
     const gz = zlib.gzipSync(json), zst = Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 1, 2, 3, 4]) // a zstd frame header and junk: never decoded at capture
     for (const [enc, body] of [['gzip', gz], ['zstd', zst]]) {
       const raw = await S.inject()
-      const c = tls.connect({ socket: raw, servername: 'relay.trocar.test', ca: fs.readFileSync(S.extraCc) }); await once(c, 'secureConnect'); c.on('error', () => {})
+      const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(S.extraCc) }); await once(c, 'secureConnect'); c.on('error', () => {})
       let got = ''; c.on('data', (x) => { got += x })
-      c.write(Buffer.concat([Buffer.from(`POST /v1/messages HTTP/1.1\r\nhost: relay.trocar.test\r\ncontent-encoding: ${enc}\r\ncontent-length: ${body.length}\r\n\r\n`), body]))
+      c.write(Buffer.concat([Buffer.from(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-encoding: ${enc}\r\ncontent-length: ${body.length}\r\n\r\n`), body]))
       await until(() => got.length > 0); c.destroy()
     }
     const [g, z] = await until(() => { const e = captureOf(S.s); return e.length >= 2 && e })

@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
-export const LAB_HOSTS = ['relay.trocar.test', '*.trocar.test', 'api.anthropic.com', 'api.openai.com', 'api.deepseek.com',
+export const LAB_HOSTS = ['relay.asight.test', '*.asight.test', 'api.anthropic.com', 'api.openai.com', 'api.deepseek.com',
   'api.moonshot.cn', 'api.moonshot.ai', 'open.bigmodel.cn', 'api.z.ai', 'openrouter.ai', 'localhost']
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 
@@ -29,7 +29,7 @@ const LEAF_CNF = `[req]
 distinguished_name = dn
 prompt = no
 [dn]
-CN = relay.trocar.test
+CN = relay.asight.test
 [v3_leaf]
 basicConstraints = critical, CA:FALSE
 keyUsage = critical, digitalSignature, keyEncipherment

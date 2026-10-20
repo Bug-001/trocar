@@ -205,7 +205,7 @@ test('T6 CONNECT refused: client bytes sent behind the CONNECT head still reach 
 // ── https:// proxies (RFC 4.6 §引擎 3, §记录 https:// 代理; Plan 3c-7; W8 / W12) ────────────────────────────
 // The client speaks TLS to the proxy host first (outer TLS), sends CONNECT inside it, then TLS to the API host
 // inside the tunnel (TLS in TLS). Only the API host is in the decrypt policy here (`auto`).
-const PROXY_HOST = 'proxy.trocar.test'
+const PROXY_HOST = 'proxy.asight.test'
 const onlyApi = (meta, host) => host === HOST
 const httpsProxyClient = (port, ca, { innerCa = ca } = {}) => {
   let outer
