@@ -288,17 +288,17 @@ export const VIEW_CTX = 'Context size'
 export const VIEW_COST = 'Cost'
 export const COMP_LEGEND = 'colour = content type (estimated from content size)'
 export const COST_LEGEND = 'bar height = estimated cost of the step (usage × unit price) · hatched = cannot be computed'
-export const showSteps = (a, b) => `Showing steps ${a}–${b}`
+export const showSteps = (a, b) => (a === b ? `Showing step ${a}` : `Showing steps ${a}–${b}`)
 export const noMainLane = (laneW) => `This session has no main thread; the timeline follows the ${laneW} calls`
 export const ONLY_MAIN = 'This session has only the main thread'
 export const peakCtx = (v) => `${v} tok` // kf() bakes the number; the peak is the main lane's real total_input
 export const askScaleTip = (k, preview) => `Prompt ${k}` + (preview ? ` ${preview}` : '')
 // the overlay rows' names (2.1 / 1.3): the counts are the full truth, never the drawn ticks
-export const SUBAGENT_ROW = (n) => `${n} sub-agents`
-export const BG_ROW = (n) => `${n} background calls`
-export const TC_ROW = (n) => `${n} token counts`
-export const laneTimes = (word, n) => `${word} · ${n} calls`
-export const callsWord = (n) => `${n} calls`
+export const SUBAGENT_ROW = (n) => count(n, 'sub-agent')
+export const BG_ROW = (n) => count(n, 'background call')
+export const TC_ROW = (n) => count(n, 'token count')
+export const laneTimes = (word, n) => `${word} · ${count(n, 'call')}`
+export const callsWord = (n) => count(n, 'call')
 export const TC_SAMPLED_TIP = (m, n) => `${m} of ${n} drawn; clicking anywhere opens the nearest one`
 export const TC_NO_SIZE = (j) => `${j} of them returned no size and are not drawn`
 export const FLAGGED_WORD = 'flagged a problem' // S13 landed: flagged === true draws a mark on the collapsed 后台调用 row

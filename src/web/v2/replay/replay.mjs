@@ -226,7 +226,13 @@ export function mount(el, ctx) {
     return manual && s.follow && !wasFollowing ? ensurePage(s.anchor.calls[np]) : false
   }
   // how many bars #sawrow can draw (timeline.mjs barsThatFit). A lane that has no width yet (not laid out) cannot judge: no limit.
-  const sawCapacity = () => { const w = $('#sawrow').clientWidth; return w > 0 ? barsThatFit(w) : Infinity }
+  // measured on the bars row's grid column, not on #sawrow: the detail lanes narrow to the window's bar count (1.3 §窗内步少时
+  // 收窄), and what the window may hold must not shrink with them
+  const sawCapacity = () => {
+    const row = $('#sawrow').closest('.tkrow'), cols = row && typeof getComputedStyle === 'function' ? getComputedStyle(row).gridTemplateColumns.split(' ') : []
+    const w = parseFloat(cols[cols.length - 1]) || $('#sawrow').clientWidth
+    return w > 0 ? barsThatFit(w) : Infinity
+  }
   // a window wider than the lane draws is clipped, and the steps it clips are the latest ones: shrink it, keeping the playhead in it
   function fitView() {
     const w = fitWindow({ lo: s.view.lo, hi: s.view.hi, K: sawCapacity(), playhead: s.playhead })
@@ -448,7 +454,7 @@ export function mount(el, ctx) {
   // the lane's width changes with the window and with the right-page divider: watch both. Only a window that no longer fits is touched.
   const refit = () => { if (s.anchor && fitView()) { renderSaw(E.saw, s); renderRails(E.rails, s); renderOverview(E.saw, s) } }
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(refit) : null
-  if (ro) ro.observe($('#sawrow'))
+  if (ro) ro.observe($('#sawrow').closest('.tkrow'))
   window.addEventListener('resize', refit)
 
   renderEmpty('Loading…')

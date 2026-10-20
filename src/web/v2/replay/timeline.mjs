@@ -149,6 +149,9 @@ export function renderSaw(el, s) {
   const isMain = s.anchor.kind === 'main'
   const win = []
   for (let i = lo; i < hi; i++) win.push([s.anchor.calls[i], i])
+  // 1.3 §窗内步少时收窄: the detail rows' lanes cap their width at this many bars (css/replay.css), together, left-aligned
+  const page = el.closest ? el.closest('#leftpage') : null
+  if (page) page.style.setProperty('--nbars', String(hi - lo))
   // the problem lane
   q(el, '#probrow').innerHTML = problemRowHtml(s, { lo, hi })
   // the main track: 上下文大小 (default) or 花费
@@ -201,11 +204,12 @@ export function renderSaw(el, s) {
   q(el, '#sawgut').innerHTML = `${esc(costView ? W.VIEW_COST : (isMain ? 'Context' : laneWord(s.anchor.kind)))} <b title="${esc(peakTip)}">${esc(peak)}</b>`
   // the legend row
   q(el, '#viewswitch').innerHTML = `<button type="button" class="segbtn${costView ? '' : ' on'}" data-view="ctx" aria-pressed="${!costView}">${esc(W.VIEW_CTX)}</button><button type="button" class="segbtn${costView ? ' on' : ''}" data-view="cost" aria-pressed="${costView}">${esc(W.VIEW_COST)}</button>`
+  q(el, '#complegend').title = costView ? W.COST_LEGEND : W.COMP_LEGEND // the legend row stays one line; a cut part keeps its words here
   q(el, '#complegend').innerHTML = costView ? `<span>${esc(W.COST_LEGEND)}</span>` :
     `<span>${esc(W.COMP_LEGEND)}</span><span class="barlegend"><i class="ct-tools"></i>tools<i class="ct-system"></i>system<i class="ct-user"></i>messages<i class="ct-assistant"></i>reply<i class="ct-thinking"></i>thinking<i class="ct-tool_use"></i>tool call<i class="ct-tool_result"></i>tool result</span>`
   q(el, '#viewrange').textContent = W.showSteps(lo + 1, hi)
   q(el, '#nomain').style.display = isMain ? 'none' : ''
-  if (!isMain) q(el, '#nomain').textContent = W.noMainLane(laneWord(s.anchor.kind))
+  if (!isMain) q(el, '#nomain').textContent = q(el, '#nomain').title = W.noMainLane(laneWord(s.anchor.kind))
   markCurrent(el, s)
 }
 
