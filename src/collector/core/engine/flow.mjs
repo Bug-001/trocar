@@ -34,7 +34,7 @@ const IDLE = { boundary: () => ({ idle: true, headPending: false, seq: null, bli
 // How a connection that ended before forwarding started is written (RFC 4.6 §记录 连接行怎么落码): the side that went and, when the engine was
 // waiting on the upstream, which wait and for how long. Node invents an ECONNRESET with no syscall when a socket closes before a TLS handshake
 // ("Client network socket disconnected…", the client being trocar's own socket): that is a close, not a reset off the wire; an error the OS
-// reported keeps its code. wait = {phase, t0} | null; phase 'tls' | 'proxy-reply' (the engine) | 'connect' (the ingress dialling directly).
+// reported keeps its code. wait = {phase, t0} | null; phase 'tls' | 'proxy-reply' | 'connect' (the upstream's TCP connection not made yet).
 const synthetic = (e) => !(e instanceof Error) || (e.code === 'ECONNRESET' && !e.syscall)
 const WAITED = { tls: ['closed_before_handshake', "the upstream's TLS handshake"], 'proxy-reply': ['closed_before_reply', "the proxy's reply"], connect: ['closed_before_reply', 'the upstream connection'] }
 export function wentBy(side, err = null, wait = null, now = Date.now()) {
@@ -115,11 +115,13 @@ export function handleFlow(client, meta, ctx) {
   // cut says so on the row — before the sockets are destroyed, because a TLS socket emits its close events inside destroy()
   const onGateClosed = (kind) => { selfClosed = true; if (kind === 'cut' && !rec.error) rec.error = { type: 'cut-by-off', message: 'the connection was cut by trocar off --now', side: 'engine' } }
   let upstream = null       // the TCP connection to the original destination
+  let reached = false       // that connection was made (Node clears `connecting` before it emits a failed connect's error, so it is kept here)
   let firstByteTimer = null
   let slowTimer = null      // the upstream-slow watch while the engine waits on the upstream (RFC 4.6 §记录)
   let wait = null           // {phase, t0} while the engine waits on the upstream: what a side going then is written with (wentBy)
   let planned = null        // the decision already made while the engine waits on the upstream: kept on the row if a side goes then
-  const went = (side, err) => wentBy(side, err, wait)
+  // a TLS wait whose upstream TCP connection has not been made yet (transparent mode dials and handshakes at once) is a wait on the connect
+  const went = (side, err) => wentBy(side, err, wait && wait.phase === 'tls' && !reached ? { ...wait, phase: 'connect' } : wait)
   // Waiting on the upstream (our TLS handshake to it, a proxy's reply) has no time limit: cutting the
   // agent because its upstream or proxy is slow would break it (D31). Past `upstreamSlowMs` (5 s) the
   // wait is recorded once as an upstream-slow event (D38), and the connection goes on.
@@ -225,6 +227,7 @@ export function handleFlow(client, meta, ctx) {
   // a synchronous throw (e.g. net.connect on a bad port) ends this flow with a record (D38)
   try { upstream = ctx.connectUpstream(meta.dst) } catch (e) { internalError(e); return flowDone }
   track(client); track(upstream)
+  reached = !upstream.connecting; if (!reached) upstream.once('connect', () => { reached = true })
   // What the engine's drain() asks of this flow (RFC 1.6 §1.3). start() → 'closing' | 'waiting' | 'closed' | 'cut';
   // state() → 'open' (not asked) | 'closing' | 'waiting' | 'closed' | 'cut' | 'done'.
   if (ctx.register) ctx.register({
