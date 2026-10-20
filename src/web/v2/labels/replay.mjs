@@ -344,6 +344,7 @@ export const RES_NOT_LOADED = 'The body of this step has not loaded yet; it show
 export const RAW_WORD = 'Raw'
 export const RAW_HEAD = (n) => `Raw · step ${n}`
 export const REPLY_WORD = 'Reply'
+export const THINKING_ROW = 'Thinking'
 export const toolCallRow = (name) => `Tool call ${name}`
 export const stopReasonRow = (v) => `Stop reason ${v}`
 export const REPLY_PARSED = 'parsed reply'
