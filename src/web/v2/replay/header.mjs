@@ -184,12 +184,20 @@ export function renderSessionHead(el, s) {
   // the popover body replaces the placeholder the builder had to leave (infoButton needs its layer's html up front)
   const head = html.replace('<div class="sipre">…</div>', `<div class="sipb">${sessionInfoHtml({ meta: s.meta, lanes: s.lanes, probes: s.probes, totals: s.totals, truncated: s.trunc })}</div>`)
   const d = s.A ? { truncated: s.trunc, analyzed: s.A, logged: s.logged, errors: s.sourceE, gap: s.gap, harness: s.meta && s.meta.harness } : null
-  el.innerHTML = `<div class="sesshead">${head}</div>` + (d ? fidelityLineHtml(d) : '')
+  el.innerHTML = `<div class="sesshead">${head}</div>` + (d ? fidelityLineHtml(d) : '') + staleLineHtml(s.staleErr)
+}
+
+// 1.5 K-29: a read failed after this session was drawn — the desk keeps the last good answer; one quiet line says since when it is
+// not refreshed, why, and offers to read again now (a reader's action: the back-off does not hold it)
+export function staleLineHtml(st) {
+  if (!st) return ''
+  return `<div class="fidline fidstale">${esc(W.notRefreshed(fmtWhen(st.since), st.reason || ''))}<span class="fidsep">·</span><button type="button" class="linkbtn" data-retry="1">${esc(W.RETRY)}</button></div>`
 }
 
 export function wireSessionHead(el, s) {
   const onClick = (e) => {
     const t = e.target
+    if (t.closest('[data-retry]')) { if (s.poll) s.poll(); return }
     const fol = t.closest('[data-follow]')
     if (fol) { s.follow = fol.getAttribute('aria-pressed') !== 'true'; renderSessionHead(el, s); if (s.follow && s.poll) s.poll(); return }
     const jump = t.closest('[data-si]')
