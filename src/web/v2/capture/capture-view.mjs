@@ -2,14 +2,17 @@
 // expand sections, the 改动 block and the commands. Everything is a string builder over ONE C.3 `status` document (field presence
 // decides, never a version). No DOM, no timers: capture.mjs owns the mounting, the poll and the expand memory.
 //
-// The page is READ-ONLY here (N-01): the desired state is TEXT, and the command that changes it sits in 技术细节 filled in with
-// the document's own spelling (never a front-end CLI name table). No restart, no 点名, no elevated, no install button (1.9 §砍掉的).
+// Each agent row carries at most ONE control (core/harness-switch.mjs: the switch, or Set up; none where the board cannot act); the
+// desired state is also TEXT, and the commands sit in 技术细节 filled in with the document's own spelling (never a front-end CLI name
+// table). No restart, no 点名, no elevated, no install, no undo button (1.9 §开关).
 import { esc, fmtStamp, fmtWhen, has } from '../core/fmt.mjs'
 import { harnessIcon, harnessName, harnessKey } from '../core/chips.mjs'
 import { mark, disclosureHtml } from '../core/ui.mjs'
 import { copyBtn } from '../core/dom.mjs'
 import { redactUrlCredentials } from '../core/sensitive.mjs'
 import { agentVerdicts, AGENT_TIER } from '../core/capture-verdict.mjs'
+import { controlFor, controlHtml } from '../core/harness-switch.mjs'
+import { logRowsOf } from './capture-log.mjs'
 import { failureWord } from '../../../cli/words.mjs'
 import {
   CONDITION_KIND, SWITCH_WORD, TRUST_REASON, RESTART_CODES, CODE, residueLead, ROUTING, CHANGE_REMOVAL, COMMANDS,
@@ -64,6 +67,16 @@ const diagCopy = (obj) => copyBtn(redactUrlCredentials(JSON.stringify(obj, null,
 const commandsHtml = (pairs) => pairs.map(([k, v]) => [k, M(v)])
 // a condition's words: the CLI's failure table when the condition is a (where, code) failure (negative-cache), else the kind's own
 const kindWord = (k) => failureWord(k && k.where, k && (k.code ?? k.kind)) || (k && has(CONDITION_KIND, k.kind) ? CONDITION_KIND[k.kind] : null)
+// the topology fields this page shows (1.9 §技术细节) — the copy carries these and nothing else (an unknown field never leaks, D49)
+const TOPO_KEYS = ['at', 'captured', 'reason', 'routing', 'findings', 'notes', 'running']
+const topoUsed = (t) => {
+  if (!t || typeof t !== 'object') return null
+  const o = {}
+  for (const k of TOPO_KEYS) if (t[k] !== undefined) o[k] = t[k]
+  if (Array.isArray(t.nodes)) o.nodes = t.nodes.map((n) => n && { id: n.id, name: n.name, inferred: n.inferred, unknown: n.unknown })
+  if (Array.isArray(t.branches)) o.branches = t.branches.map((b) => b && { path: b.path, via: b.via })
+  return o
+}
 
 // the open state of every row of one paint: the reader's own choice (their folded / expanded rows) wins over the
 // default (a problem row opens, the rest stay folded); the service row follows the reader only (1.9 §页面结构 重读不打断人)
@@ -98,7 +111,7 @@ export function serviceRowHtml(h, v, { open = false } = {}) {
     else if (!daemonDown) failingLine = '<p>The capture service state is unknown</p>'
   }
   // the failure groups of the last 24 h → the log; zero groups draws nothing
-  const groups = list(h && h.failures && h.failures.groups).length
+  const groups = logRowsOf(h).rows.length // the one count (R15): the log's own rows
   const failLink = groups ? `<a href="#/capture/log">${groups} failure group${groups === 1 ? '' : 's'} in the last 24 hours · capture log ›</a>` : ''
   const lingerStop = h && h.linger === false ? '<p>Capture stops at logout</p>' : ''
   return `<div class="crow" data-h="*service">` +
@@ -106,7 +119,7 @@ export function serviceRowHtml(h, v, { open = false } = {}) {
     `<button type="button" class="nm cap-nm" data-caprow="cap-svc" aria-expanded="${open}" aria-controls="cap-svc-x"><span class="chev" aria-hidden="true">${open ? '▾' : '▸'}</span>Capture service</button>` +
     '<span class="des"></span>' +
     `<span class="stt stt-${esc(v.cls)}"><p class="lead">${leadHtml(v.text, v.cls)}</p>${conds}${failingLine}</span>` +
-    `<span class="last">${failLink}${lingerStop}</span></div>` +
+    `<span class="last">${failLink}${lingerStop}</span><span class="ctl"></span></div>` +
     `<div class="cexp" id="cap-svc-x"${open ? '' : ' hidden'}>${serviceTechHtml(h, v)}</div></div>`
 }
 
@@ -139,7 +152,7 @@ export const agentIdsOf = (h) => agentVerdicts(h).map((r) => r.harness)
 // sort by tier keeps it)
 export const rowOrder = (verdicts) => [...verdicts].sort((a, b) => a.tier - b.tier)
 
-export function agentRowHtml(row, h, { open = false, ov = null } = {}) {
+export function agentRowHtml(row, h, { open = false, ov = null, control = null, ui = null } = {}) {
   const name = harnessName(row.harness)
   const desired = (row.desired === 'on' || row.desired === 'off') ? SWITCH_WORD[row.desired] : ''
   const last = row.lastCaptured
@@ -153,7 +166,8 @@ export function agentRowHtml(row, h, { open = false, ov = null } = {}) {
     `<span class="chev" aria-hidden="true">${open ? '▾' : '▸'}</span>${harnessIcon(row.harness)}<span class="chipname">${esc(name)}</span></button>` +
     `<span class="des">${esc(desired)}</span>` +
     `<span class="stt stt-${esc(row.cls)}${row.tier === AGENT_TIER.off || row.wait ? ' dim' : ''}"><p class="lead">${leadHtml(row.text, row.cls)}</p></span>` +
-    `<span class="last">${last}${fail}</span></div>` +
+    `<span class="last">${last}${fail}</span>` +
+    `<span class="ctl">${controlHtml(controlFor({ control, status: h }, row.harness), (ui && ui.get(row.harness)) || {})}</span></div>` +
     `<div class="cexp" id="cap-${esc(row.harness)}-x"${open ? '' : ' hidden'}>${expandHtml(row, h, { problem })}</div></div>`
 }
 
@@ -238,7 +252,7 @@ function agentTechHtml(row, h) {
   }
   for (const e of list(h && h.changed)) if (e && e.harness != null && harnessKey(e.harness) === row.harness && e.undo) rows.push([`undo ${e.path || ''}`, M(e.undo)])
   rows.push(...commandsHtml(commandsFor(h, { row })))
-  const used = { harness: row.harness, verdict: { text: row.text, tier: row.tier, code: row.code, at: row.at }, conditions: row.conditions, topology: row.topology, last_failure: row.lastFailure }
+  const used = { harness: row.harness, verdict: { text: row.text, tier: row.tier, code: row.code, at: row.at }, conditions: row.conditions, topology: topoUsed(row.topology), last_failure: row.lastFailure }
   return detailsHtml(`cap-${row.harness}-tech`, rows) + `<div class="capcopy">${diagCopy(used)}</div>`
 }
 
@@ -264,12 +278,13 @@ export function changesHtml(h) {
 // `v` is captureVerdict of the same answer; `openByReader` is the expand memory (a Map the mount owns). The 503 state
 // (v.state 'unreadable') draws the service row alone — there is no data for agent rows.
 // `ov` = the `overview` document of the last 24 h (its harnesses[].last_ts is the 最近采到 column), null while unread.
-export function pageHtml(h, v, { openByReader = null, ov = null } = {}) {
+// `control` = api.controlStatus()'s answer (null before it), `ui` = the Map read-side id → {busy, receipt} of the row controls.
+export function pageHtml(h, v, { openByReader = null, ov = null, control = null, ui = null } = {}) {
   const verdicts = v.state === 'unreadable' ? [] : agentVerdicts(h, ov)
   const ordered = rowOrder(verdicts)
   const open = openStates(ordered, openByReader)
   const rows = [serviceRowHtml(h, v, { open: open.get('*service') })]
-  for (const row of ordered) rows.push(agentRowHtml(row, h, { open: open.get(row.harness), ov }))
+  for (const row of ordered) rows.push(agentRowHtml(row, h, { open: open.get(row.harness), ov, control, ui }))
   return `<section class="crows" aria-label="agent">${rows.join('')}${tableFootHtml(h, verdicts)}</section>` + changesHtml(h)
 }
 

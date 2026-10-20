@@ -14,10 +14,10 @@
 .capage .pagehead{padding:0 0 10px;}
 .cap-main{flex:1;min-width:0;}
 
-/* the agent table: [gutter] [name] [期望态] [状态句] [右侧] */
+/* the agent table: [gutter] [name] [期望态] [状态句] [右侧] [the one control] */
 .crows{border-top:1px solid var(--rule);}
 .crow{border-bottom:1px solid var(--rule);}
-.crow-t{display:grid;grid-template-columns:22px minmax(150px,190px) 64px minmax(0,1fr) minmax(180px,230px);column-gap:12px;align-items:center;min-height:46px;padding:2px 0;}
+.crow-t{display:grid;grid-template-columns:22px minmax(150px,190px) 64px minmax(0,1fr) minmax(180px,230px) 112px;column-gap:12px;align-items:center;min-height:46px;padding:2px 0;}
 .crow-t:hover{background:color-mix(in srgb,var(--panel) 55%,transparent);}
 .crow .gut{display:flex;justify-content:center;}
 .crow .nm{display:flex;align-items:center;gap:8px;min-width:0;border:0;background:none;color:var(--ink);font-size:var(--fs-strong);font-weight:500;text-align:left;cursor:pointer;padding:0;border-radius:var(--r-1);}
@@ -42,16 +42,30 @@
 /* the expansion: the same grid, a dl under the row */
 .cexp{padding:2px 0 14px;border-top:1px dashed var(--rule-2);}
 .cexp[hidden]{display:none;}
-.exp{display:grid;grid-template-columns:22px minmax(150px,190px) 64px minmax(0,1fr) minmax(180px,230px);column-gap:12px;row-gap:8px;margin:0;}
+.exp{display:grid;grid-template-columns:22px minmax(150px,190px) 64px minmax(0,1fr) minmax(180px,230px) 112px;column-gap:12px;row-gap:8px;margin:0;}
 .exp dt{grid-column:2 / 4;font-size:var(--fs-cap);color:var(--ink-3);line-height:21px;}
-.exp dd{grid-column:4 / 6;margin:0;font-size:var(--fs-body);line-height:21px;max-width:52em;text-wrap:pretty;}
+.exp dd{grid-column:4 / 7;margin:0;font-size:var(--fs-body);line-height:21px;max-width:52em;text-wrap:pretty;}
 .exp dd p{margin:0 0 3px;}
 .exp dd .fine{color:var(--ink-2);font-size:var(--fs-cap);}
 .exp .mono{background:var(--sunk);border-radius:var(--r-1);padding:1px 5px;white-space:nowrap;}
+/* a path is a line of its own, left-aligned with the other paths (1.9 §改动块) */
+.exp dd p .mono:first-child,.cblock p .mono:first-child{display:block;width:fit-content;max-width:100%;overflow-wrap:anywhere;white-space:normal;}
+/* the row control: a switch (role=switch) or Set up; busy shows as a wait cursor and a dimmed knob, never `disabled` */
+.crow .ctl{display:flex;justify-content:flex-end;}
+.hctl{display:inline-flex;flex-direction:column;align-items:flex-end;gap:3px;}
+.hswitch{position:relative;width:34px;height:20px;border-radius:var(--r-pill);border:1px solid var(--control-edge);background:var(--sunk);cursor:pointer;padding:0;flex:none;}
+.hswitch .knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--ink-3);transition:left var(--t-quick);}
+.hswitch[aria-checked="true"]{background:var(--action);border-color:var(--action);}
+.hswitch[aria-checked="true"] .knob{left:16px;background:var(--panel);}
+.hsetup{border:1px solid var(--control-edge);background:var(--panel);color:var(--ink);border-radius:var(--r-1);font-size:var(--fs-body);padding:2px 10px;cursor:pointer;}
+.hswitch[aria-busy="true"],.hsetup[aria-busy="true"]{cursor:progress;opacity:.6;}
+.hswitch:focus-visible,.hsetup:focus-visible{outline:2px solid var(--action);outline-offset:2px;}
+.hrcpt{font-size:var(--fs-cap);line-height:16px;color:var(--ink-2);text-align:right;max-width:200px;white-space:normal;}
+.hrcpt.bad{color:var(--bad);}
 .capfoot{margin:10px 0 0;font-size:var(--fs-cap);color:var(--ink-3);}
 .capcopy{padding:2px 0 4px;}
 
-/* the blocks under the table (旧采集 / 本机网络环境 / 改动) */
+/* the blocks under the table (本机网络环境 / 改动): a group starts with a hairline */
 .cblock{border-top:1px solid var(--rule);padding:12px 0 6px;}
 .cblock .sec-h{font-size:var(--fs-h2);line-height:24px;font-weight:600;margin-bottom:4px;}
 .cblock p{font-size:var(--fs-body);line-height:21px;margin:0 0 3px;}
@@ -82,11 +96,12 @@
 
 /* narrow: the 期望态 column folds away, the right column drops under the sentence */
 @media (max-width: 1279px) {
-  .crow-t,.exp{grid-template-columns:22px minmax(130px,160px) minmax(0,1fr);}
+  .crow-t,.exp{grid-template-columns:22px minmax(130px,160px) minmax(0,1fr) auto;}
   .crow .des{display:none;}
+  .crow .ctl{grid-column:4;grid-row:1;}
   .crow .last{grid-column:3;text-align:left;white-space:normal;}
   .exp dt{grid-column:2;}
-  .exp dd{grid-column:2 / 4;}
+  .exp dd{grid-column:2 / 5;}
   .lr{grid-template-columns:minmax(96px,120px) minmax(0,1fr) 56px 22px;row-gap:2px;}
   .lr.h span:nth-child(3){display:none;}
   .lr .ag{grid-column:2;grid-row:1;}
