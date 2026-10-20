@@ -45,16 +45,15 @@ test('fmtWhen: empty is a dash, junk is shown as it came, today shows only the t
   assert.equal(fmtWhen(now - 1000, now), fmtTime(now - 1000))
   assert.equal(fmtWhen(now - 3 * 86400e3, now), fmtStamp(now - 3 * 86400e3))
 })
-// B-M10: the page is zh-CN, so the clock is a 24 h one ("15:59:48"), never the browser default "3:59:48 PM" (nor 上午 / 下午)
-test('times are zh-CN and 24 h: 15:59:48, not 3:59:48 PM; midnight is 00:…, not 24:… and not 12:… AM', () => {
-  const at = (h, mi, sec) => new Date(2026, 9, 7, h, mi, sec)
-  assert.equal(fmtTime(at(15, 59, 48)), '15:59:48'); assert.equal(fmtTime(at(0, 5, 9)), '00:05:09'); assert.equal(fmtTime(at(12, 0, 0)), '12:00:00')
-  const now = at(16, 0, 0).getTime()
-  assert.equal(fmtWhen(at(15, 59, 48).getTime(), now), '15:59:48', 'today shows the time only')
-  const other = fmtWhen(at(15, 59, 48).getTime(), now + 3 * 86400e3)
-  assert.match(other, /2026/); assert.match(other, /15:59:48$/)
-  assert.equal(fmtStamp(at(0, 5, 9)), '2026/10/7 00:05:09')
-  assert.equal(fmtStamp(''), '—'); assert.equal(fmtStamp('junk'), 'junk')
+// 1.2 §页头 「HH:MM:SS」: a 24 h clock whatever the browser's locale, never AM / PM, midnight 00 and never 24
+test('the time format is HH:MM:SS on a 24 h clock, with no AM/PM', () => {
+  for (let h = 0; h < 24; h++) {
+    const d = new Date(2026, 9, 7, h, 5, 9)
+    for (const t of [fmtTime(d), fmtStamp(d)]) {
+      assert.ok(t.endsWith(`${String(h).padStart(2, '0')}:05:09`), t)
+      assert.ok(!/[ap]\.?m\.?/i.test(t), t)
+    }
+  }
 })
 
 test('has: own keys only (a code like "constructor" is not in a lookup table)', () => {

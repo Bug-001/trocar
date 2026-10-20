@@ -378,3 +378,16 @@ export const TC_INPUT = Object.freeze({
 })
 export const TC_MEASURED = (n) => `Measured ${n} tokens`
 export const OPAQUE_ROW = 'opaque — only a signature on the wire, no plaintext'
+
+// ── the `?` key list (1.2 §键盘) ──────────────────────────────────────────────────────────────────────────────────────
+export const KEYS_TITLE = 'Keyboard'
+export const BRUSH_LABEL = 'Steps shown above (the arrow keys move the step)'
+export const KEY_LIST = Object.freeze([
+  ['← / →', 'Previous / next step'],
+  ['Shift + ← / →', 'Ten steps back / forward'],
+  ['Home / End', 'First / last step'],
+  ['n / p', 'Next / previous step with a problem'],
+  ['f', 'Follow the latest step on or off'],
+  ['Esc', 'Close the topmost layer'],
+  ['?', 'This list'],
+])

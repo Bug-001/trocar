@@ -3,7 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { rawHome, writeSegment } from './raw-home.mjs'
+import { envLine, rawHome, writeSegment } from './raw-home.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { segmentIndex } from '../../src/query/index-build.mjs'
 
@@ -86,4 +86,11 @@ test('1.6 §4.1 paging: following next with --limit 1 gives every group once, as
   assert.equal(whole.length, 3)
   assert.equal(new Set(paged.map((h) => h.host)).size, 3)
   assert.deepEqual(paged, whole)
+})
+
+test('C.5: a record with no traffic_class is counted in class_unrecorded, never as a class named "null"', async () => {
+  const bare = JSON.parse(envLine({ ts: at(1), host: 'a.example' })); delete bare.traffic_class
+  const home = await homeWith([{ ts: at(0), host: 'a.example', class: 'telemetry' }, JSON.stringify(bare)])
+  const [h] = (await runQuery('traffic', {}, { home })).hosts
+  assert.deepEqual([h.classes, h.class_unrecorded, h.requests], [{ telemetry: 1 }, 1, 2])
 })

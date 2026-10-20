@@ -25,10 +25,13 @@ export function toast(text, { ms = TOAST_MS, doc = typeof document === 'undefine
 // anything else — no record, a stranger's value, a storage that throws — means follow the system (attribute gone).
 // Switching is a pure style change: this only ever touches the attribute, never a render function (1.5 §Edge cases).
 export const THEME_KEY = 'trocar.v2.theme'
+// the store the theme key lives in: the page's window.localStorage (a document has none of its own; a stand-in may carry one). The read
+// itself can throw (blocked site data), so callers wrap it.
+export const themeStore = (doc) => doc.localStorage || (doc.defaultView && doc.defaultView.localStorage) || null
 export function applyThemePref(doc = typeof document === 'undefined' ? null : document) {
   if (!doc || !doc.documentElement) return null
   let t = null
-  try { t = doc.localStorage && doc.localStorage.getItem(THEME_KEY) } catch { /* storage disabled: follow the system */ }
+  try { const ls = themeStore(doc); t = ls && ls.getItem(THEME_KEY) } catch { /* storage disabled: follow the system */ }
   if (t === 'light' || t === 'dark') doc.documentElement.setAttribute('data-theme', t)
   else doc.documentElement.removeAttribute('data-theme')
   return t

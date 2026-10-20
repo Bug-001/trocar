@@ -85,15 +85,17 @@ test('segments: every closed segment reaches onSegmentClosed once, at rollover a
   assert.deepEqual(closed, ['20261018T070809Z.ndjson', '20261018T070810Z.ndjson'], 'a second stop closes nothing twice')
 })
 
-test('segments: the lock names a new segment before that segment\'s file exists (invariant 2: no sealer takes the live segment)', () => {
+test('segments: the lock names a new segment before that segment\'s file exists, and no longer names it when the seal queue gets it (invariant 2)', () => {
   const home = tmpDir('trocar-seg-')
   const lock = path.join(home, 'lock')
   let clock = '2026-10-18T07:08:09.000Z'
   const s = store(home, { now: () => new Date(clock), segmentBytes: 1 })
   const refreshLock = lockKeeper({ file: lock, fields: { pid: 7 }, segmentOf: () => s.currentSegment })
-  s.onSegmentOpening(refreshLock) // the daemon's wiring
+  s.onSegmentChange(refreshLock) // the daemon's wiring
   const seen = [] // what a sealer would have read at the instant the file was about to appear
-  s.onSegmentOpening((seg) => seen.push({ seg, named: JSON.parse(fs.readFileSync(lock, 'utf8')).segment, onDisk: fs.existsSync(path.join(raw(home), `${seg}.ndjson`)) }))
+  s.onSegmentChange((seg) => { if (seg) seen.push({ seg, named: JSON.parse(fs.readFileSync(lock, 'utf8')).segment, onDisk: fs.existsSync(path.join(raw(home), `${seg}.ndjson`)) }) })
+  const handed = [] // what the sealer the queue forks at once would read
+  s.onSegmentClosed((f) => handed.push({ closed: path.basename(f), stillNamed: JSON.parse(fs.readFileSync(lock, 'utf8')).segment === path.basename(f, '.ndjson') }))
   s.envelope({ id: 'a' }) // past 1 byte: this segment is closed at once, so the next envelope rotates
   clock = '2026-10-18T07:08:10.000Z'
   s.envelope({ id: 'b' })
@@ -102,6 +104,10 @@ test('segments: the lock names a new segment before that segment\'s file exists 
     { seg: '20261018T070809Z', named: '20261018T070809Z', onDisk: false },
     { seg: '20261018T070810Z', named: '20261018T070810Z', onDisk: false },
   ], 'the lock named each segment while its file did not exist yet — not on the next 1 s tick')
+  assert.deepEqual(handed, [
+    { closed: '20261018T070809Z.ndjson', stillNamed: false },
+    { closed: '20261018T070810Z.ndjson', stillNamed: false },
+  ], 'a closed segment reaches the seal queue only once the lock no longer names it — not on the next 1 s tick')
 })
 
 test('segments: a name the directory scan missed is never appended to — the exclusive create takes the next suffix', () => {

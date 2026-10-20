@@ -9,12 +9,13 @@ import * as router from './core/router.mjs'
 import { initKeys, setScreenKeys } from './core/keys.mjs'
 import { installCopy, copyBtn, $ } from './core/dom.mjs'
 import { esc } from './core/fmt.mjs'
-import { ensureHarnessIcons } from './core/chips.mjs'
+import { watchHarnessIcons } from './core/chips.mjs'
 import { toast, installUi } from './core/ui.mjs'
 import { mountSidebar } from './shell/sidebar.mjs'
 import { safeMount, screenErrorHtml } from './shell/safemount.mjs'
 import { UNKNOWN_ROUTE, FORBIDDEN } from './labels/shell.mjs'
 import { COMMANDS } from './labels/capture.mjs'
+import { BRAND } from './core/icons.mjs'
 
 // every screen of every route (core/router.mjs); the ones whose content belongs to a later task are their page head until then
 const SCREENS = {
@@ -43,6 +44,21 @@ document.addEventListener('v2:escape', () => { const d = $('#detail'); if (d) d.
 const screenEl = $('#screen')
 const ctx = { api, store, router, toast }
 const sidebar = mountSidebar($('#sidebar'), ctx)
+watchHarnessIcons(document.body) // every agent icon box any screen, menu or drawer draws is filled here, once it is in the page
+
+// the tab icon: the brand mark (core/icons.mjs BRAND) in the theme's own colours — an icon file cannot read CSS variables, so the
+// tokens are resolved here and the mark is serialized into the <link rel="icon"> index.html holds (no icon file, no colour literal)
+;(() => {
+  const link = document.querySelector('link[rel="icon"]'), t = document.createElement('template')
+  if (!link || typeof XMLSerializer === 'undefined') return
+  t.innerHTML = BRAND
+  const svg = t.content.firstElementChild, cs = getComputedStyle(document.documentElement)
+  for (const el of [svg, ...svg.querySelectorAll('*')]) for (const a of ['fill', 'stroke']) {
+    const m = /^var\((--[\w-]+)\)$/.exec(el.getAttribute(a) || '')
+    if (m) el.setAttribute(a, cs.getPropertyValue(m[1]).trim())
+  }
+  link.href = 'data:image/svg+xml,' + encodeURIComponent(new XMLSerializer().serializeToString(svg))
+})()
 
 let cur = null // { screen, inst } — the mounted screen
 let shut = false // K-30 latched: no screen mounts again
@@ -68,7 +84,6 @@ async function show(route) {
   if (route.screen === 'library') store.set({ libraryHash: router.formatHash(route) })
   if (cur && cur.screen === route.screen) {
     try { cur.inst.update(route) } catch (e) { console.error('update failed', e) }
-    ensureHarnessIcons(document) // rows may carry new harness icons
     return
   }
   unmountCurrent()
@@ -81,7 +96,6 @@ async function show(route) {
   if (mine !== seq) return // a newer route took over while this screen was loading
   // a mount() that throws leaves no residue (no key handler, an emptied screen) and the screen says why
   const inst = safeMount(mod, screenEl, ctx, { clearKeys: () => setScreenKeys(null) })
-  ensureHarnessIcons(document) // fill the 16px boxes the screen just drew
   if (inst) cur = { screen: route.screen, inst }
 }
 

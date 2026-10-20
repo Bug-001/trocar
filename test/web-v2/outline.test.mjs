@@ -1,4 +1,4 @@
-// test/web-v2/outline.test.mjs — the left outline (2.5): three groups with honest counts, the 「跳到变化处」 row gated by
+// test/web-v2/outline.test.mjs — the left outline (2.5): three groups (no counts: 2.5 §只做导航), the 「跳到变化处」 row gated by
 // the window's own 变化线 predicate, the query rows' 「第 N 步起」 pairing and 「推测」 mark, and the B-split (resources never
 // appear here). String level over constructed states; the jump-source identity (data-jumpfi ↔ the window's data-bi)
 // is guarded by the test of that name below.
@@ -104,7 +104,6 @@ test('outlineEntries is the one table any narrow-screen dropdown would draw from
   const flat = [tool(), blk({ query: 'q' })]
   const e = outlineEntries(stateOf(flat))
   assert.deepEqual(e.groups.map((g) => g.key), ['tools', 'sys', 'msg'])
-  assert.deepEqual(e.groups.map((g) => g.count), [1, 0, 1])
   assert.deepEqual(e.groups[0].kids.map((k) => k.label), ['read_file'])
 })
 

@@ -24,13 +24,14 @@ export async function run({ home, fs, now, params: p, errors }) {
     if (!keep(r.ts)) continue;
     let g = groups.get(key);
     if (!g) groups.set(key, g = { harness: h, harness_inferred: false, host: r.host ?? null, first_seen: null, last_seen: null,
-      requests: 0, sent_bytes: null, received_bytes: null, received_unrecorded: 0, classes: {} });
+      requests: 0, sent_bytes: null, received_bytes: null, received_unrecorded: 0, classes: {}, class_unrecorded: 0 });
     g.requests++;
     if (ts && !(g.last_seen >= ts)) g.last_seen = ts;
     g.sent_bytes = add(g.sent_bytes, r.sent_bytes);
     g.received_bytes = add(g.received_bytes, r.received_bytes);
     if (r.received_bytes == null) g.received_unrecorded++;
-    g.classes[r.class] = (g.classes[r.class] || 0) + 1;
+    if (r.class == null) g.class_unrecorded++; // a record written with no traffic_class (before D40): said apart, never a class named "null"
+    else g.classes[r.class] = (g.classes[r.class] || 0) + 1;
     if (r.harness_inferred) g.harness_inferred = true;
     totals.requests++;
     totals.sent_bytes = add(totals.sent_bytes, r.sent_bytes);

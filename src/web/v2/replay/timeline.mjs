@@ -2,7 +2,7 @@
 // call, 「压缩」 per compaction — its row name is the 「问题 k/n」 pager), the main track itself (context bars, or cost bars
 // behind the 上下文大小 / 花费 switch), the cache band (cacheState's four shapes, one cell per bar), the 提问刻度 (one tick
 // per user event, only where the server ships them), the whole-session overview strip with its brush, the axis captions and
-// the legend row. Every row is the same grid (.trow: one gutter, one plotting lane) so the columns cannot drift.
+// the legend row. Every row is the same grid (.tkrow: one gutter, one plotting lane) so the columns cannot drift.
 //   renderSaw(el, s)       all rows for the brush window — rebuilt when the window or the data changes
 //   markCurrent(el, s)     scrubbing: only the .cur marks, the pager's k and the position label move
 //   renderOverview(el, s)  the whole-session strip and its brush
@@ -196,7 +196,7 @@ export function renderSaw(el, s) {
   // the axis: step numbers (call counts when the anchor is not the main lane)
   const unit = (v) => (isMain ? `step ${v}` : `call ${v}`)
   q(el, '#sawstart').textContent = unit(lo + 1)
-  q(el, '#sawend').textContent = `${unit(hi)} / ${N}`
+  q(el, '#sawend').textContent = unit(hi) // the total is the step bar's (one fact, one place)
   // the main track's own corner: the view word + this session's peak
   q(el, '#sawgut').innerHTML = `${esc(costView ? W.VIEW_COST : (isMain ? 'Context' : laneWord(s.anchor.kind)))} <b title="${esc(peakTip)}">${esc(peak)}</b>`
   // the legend row
@@ -215,7 +215,6 @@ export function markCurrent(el, s) {
   const N = s.anchor.calls.length
   for (const b of el.querySelectorAll('#sawrow .bar')) b.classList.toggle('cur', +b.dataset.i === s.playhead)
   for (const b of el.querySelectorAll('#cacherow .cbar')) b.classList.toggle('cur', +b.dataset.i === s.playhead)
-  q(el, '#phlabel').textContent = s.anchor.kind === 'main' ? ` step ${s.playhead + 1}/${N} ` : ` call ${s.playhead + 1}/${N} `
   const pin = q(el, '#ovpin'); if (pin) pin.style.left = (((s.playhead + 0.5) / N) * 100).toFixed(3) + '%'
   renderProblemNav(el, s) // which problem the playhead is on — and whether ‹ › have anywhere to go
 }
@@ -251,7 +250,7 @@ export function renderOverview(el, s) {
   strip.innerHTML = bg +
     (sampled ? `<span class="ovsample" title="Sampled: one point per bucket, not one per step (the strip is a map, not verbatim data)">${esc(L.SAMPLED)}</span>` : '') +
     '<div class="ovpin" id="ovpin"></div>' +
-    '<div class="ovbrush" id="ovbrush" title="Drag = pan · drag an edge = zoom · double-click = all (in a long session that does not fit the row above, the largest range that fits)"><span class="ovh ovh-l"></span><span class="ovh ovh-r"></span></div>'
+    `<div class="ovbrush" id="ovbrush" tabindex="0" aria-label="${esc(W.BRUSH_LABEL)}" title="Drag = pan · drag an edge = zoom · double-click = all (in a long session that does not fit the row above, the largest range that fits)"><span class="ovh ovh-l"></span><span class="ovh ovh-r"></span></div>`
   repositionBrush(el, s)
 }
 export function repositionBrush(el, s) {
@@ -299,10 +298,7 @@ export function wireTimeline(el, s) {
     if (bar) { s.setPlayhead(+bar.dataset.i, true); return }
     const btn = e.target.closest('button')
     if (!btn || !s.anchor) return
-    if (btn.id === 'prev') s.setPlayhead(s.playhead - 1, true)
-    else if (btn.id === 'next') s.setPlayhead(s.playhead + 1, true)
-    else if (btn.id === 'endBtn') { s.follow = true; s.setPlayhead(N() - 1, true) }
-    else if (btn.id === 'probPrev' || btn.id === 'probNext') {
+    if (btn.id === 'probPrev' || btn.id === 'probNext') {
       const j = problemJump(s.anchor.calls, s.problems || [], s.playhead, btn.id === 'probNext' ? 1 : -1)
       if (j) s.jumpTo(j.t, j.jump) // lands on the 变化线 when that problem step has one; a failed step just moves the playhead
     }

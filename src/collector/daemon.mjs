@@ -181,7 +181,8 @@ function storeWithSealing({ P, failure }) {
 /** The lock a live daemon holds (4.6 §控制面, D-25): `fields` (pid, start time, boot id …) plus `segment`, the raw-layer
  *  segment it is appending to right now (D60: readers and the sealer leave that one alone, and may take every other). The
  *  returned refresh is called on a timer, and by the record store right before it creates a new segment file (so the lock
- *  names the live segment no later than its first byte); the file is rewritten only when the segment changed (a rollover,
+ *  names the live segment no later than its first byte) and right after it closes one, before the seal queue hears of
+ *  it (so the sealer it forks at once never finds the closed segment still named here); the file is rewritten only when the segment changed (a rollover,
  *  a stop) — a reader never sees a segment named here that is already closed. */
 export function lockKeeper({ file, fields, segmentOf = () => null }) {
   let written = false, segment = null
@@ -546,10 +547,11 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, helper_pid: redirector.helperInfo().pid, engine_port: port, socket: sock }, segmentOf: () => store.currentSegment })
     refreshLock()
     // the lock must name the live segment before that segment's first byte (D60, invariant 2): the store calls this
-    // synchronously right before it creates the file, so a sealer never takes the segment the daemon is appending to.
+    // synchronously right before it creates the file, so a sealer never takes the segment the daemon is appending to;
+    // and again right after a segment closes, before the seal queue gets it, so that seal is not refused (2026-10-20).
     // A lock that cannot be written is said (D38) and the capture goes on.
     const bumpLock = () => { try { refreshLock() } catch (e) { failure('daemon', coded(new Error(`the lock ${P.lock} could not be refreshed (${errText(e)}); readers will judge this daemon unresponsive`), e && e.code ? e.code : 'record-error')) } }
-    store.onSegmentOpening(bumpLock)
+    store.onSegmentChange(bumpLock)
     const lockTimer = setInterval(bumpLock, lockRefreshMs)
     lockTimer.unref()
     // lifecycle (D-24): readers fold conditions from the last daemon-start; upstream_ca = the daemon's own
@@ -823,7 +825,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }, segmentOf: () => store.currentSegment })
     refreshLock()
     const bumpLock = () => { try { refreshLock() } catch (e) { failure('daemon', coded(e, 'record-error')) } }
-    store.onSegmentOpening(bumpLock) // before the new segment's file exists (D60, invariant 2); see runDaemon's copy
+    store.onSegmentChange(bumpLock) // before the new segment's file exists and before a closed one is sealed (D60, invariant 2); see runDaemon's copy
     const lockTimer = setInterval(bumpLock, lockRefreshMs); lockTimer.unref()
     const listTimer = setInterval(() => { const l = nextAgentList(); if (l) { agents = l.entries; registry.replaceAgentList(agents) } }, 5000); listTimer.unref()
     failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: VERSION, foreground: !!foreground, upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: null })

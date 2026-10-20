@@ -89,4 +89,6 @@ export const RESP_RESERIALIZED = 'The response is reserialized JSON, not the wir
 export const RESP_UNDECODED = (enc) => `Response: not decompressed (${enc}); the bytes are still in the source record`
 export const TROCAR_ADDED = 'added by trocar'
 export const DETAIL_READ_FAILED = (why) => `Could not read this request: ${why}`
-export const classWord = (id) => (Object.prototype.hasOwnProperty.call(CLASS_NAME, id) ? CLASS_NAME[id] : String(id))
+// a record that carries no class (written before D40 classified traffic): the class was never recorded (不变式 4) — not 「other」, not "null"
+export const CLASS_UNRECORDED = 'class not recorded'
+export const classWord = (id) => (id == null ? CLASS_UNRECORDED : Object.prototype.hasOwnProperty.call(CLASS_NAME, id) ? CLASS_NAME[id] : String(id))

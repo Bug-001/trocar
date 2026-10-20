@@ -122,13 +122,14 @@ export function costPopoverHtml(call, { table = null, tableErr = null } = {}) {
 }
 
 // ── the 对比 menu (2.3 §两个对比步; a MENU button — click / Enter / Space / ↓, never hover) ───────────────────────────
+// One label (1.4 §一件事只说一处): the visible text is the current value and the accessible name — no aria-label beside it.
 // sel: the chosen 内容对比步 as a 1-based step number, null = the default (the 缓存对比步). cacheRefK: the 缓存对比步's
 // number — when it is not the immediately previous step the default item names it.
 export function compareMenuHtml({ sel = null, cacheRefK = null, cur = null, M = 0 }) {
   const id = `cmp-${Math.random().toString(36).slice(2, 8)}`
   const def = cacheRefK != null && cur != null && cacheRefK !== cur - 1 ? W.compareDefaultAt(cacheRefK) : W.COMPARE_DEFAULT
   const label = sel ? `${esc(W.compareAt(sel).replace(' ×', ''))} <span class="cmpx" data-cmp-x="1" role="button" tabindex="0" aria-label="${esc(W.CMP_RESET)}" title="${esc(W.CMP_RESET)}" aria-hidden="true">×</span>` : esc(W.COMPARE)
-  return `<span class="sb-cmp"><button type="button" class="popbtn" data-menu="${id}" aria-label="${esc(W.COMPARE)}" aria-haspopup="menu" aria-expanded="false" aria-controls="${id}">${label} <span class="chev" aria-hidden="true">▾</span></button>` +
+  return `<span class="sb-cmp"><button type="button" class="popbtn" data-menu="${id}" aria-haspopup="menu" aria-expanded="false" aria-controls="${id}">${label} <span class="chev" aria-hidden="true">▾</span></button>` +
     `<div class="pop menu" id="${id}" role="menu" hidden>` +
     `<button type="button" role="menuitem" data-cmp="default">${esc(def)}</button>` +
     `<button type="button" role="menuitem" data-cmp="pick">${esc(W.COMPARE_PICK)}</button>` +
@@ -159,20 +160,19 @@ export function stepBarHtml(s) {
   // the jump is offered only when the window draws the 变化线 at the first differing block (one predicate, analysis.mjs)
   const hasChange = hasChangeLine(call)
   const priceRow = s.pricing ? priceMatch(s.pricing, modelOf(call)) : null
-  return `<div class="stepbar" id="stepbar">` +
-    `<span class="sb-nav"><button type="button" class="sbbtn" data-step="prev" aria-label="${esc(W.STEP_PREV)}" title="${esc(W.STEP_PREV)}">‹</button>` +
+  // the parts go straight into #stepbar (replay.mjs owns the element): no inner wrapper, so no second #stepbar
+  return `<span class="sb-nav"><button type="button" class="sbbtn" data-step="prev" aria-label="${esc(W.STEP_PREV)}" title="${esc(W.STEP_PREV)}">‹</button>` +
     `<b class="sb-no">${esc(no)}</b>` +
     `<button type="button" class="sbbtn" data-step="next" aria-label="${esc(W.STEP_NEXT)}" title="${esc(W.STEP_NEXT)}">›</button></span>` +
     (ask ? `<span class="sb-ask">${esc(W.askNo(ask))}</span>` : '') +
     `<span class="sb-time">${esc(fmtTime(call.ts) || '—')}</span>` +
-    `<span class="sb-model">${esc(model || '—')}</span>` +
+    `<span class="sb-model"${model ? ` title="${esc(model)}"` : ''}>${esc(model || '—')}</span>` +
     (hasFid ? `<span class="sb-fid">${mark('part', fidTxt || undefined)}</span>` : '') +
     `<span class="spacer"></span>` +
     (isMain ? compareMenuHtml({ sel: s.diffRef != null ? s.diffRef + 1 : null, cacheRefK: refK, cur: n, M }) : '') +
     popover({ label: W.CACHE_POPOVER_LABEL, title: W.CACHE_TITLE, glyph: esc(cacheLabel(call)), body: cachePopoverHtml(call, ref, { laneW: W.laneWord(s.anchor.kind), priceRow, hasChange }) }) +
     popover({ label: W.COMP_POPOVER_LABEL, title: W.COMP_TITLE, glyph: esc(call.paged_out || call.unparsed || !call.rec ? W.COMP_BTN_NONE : W.COMP_BTN), body: compPopoverHtml(call, contentRefOf(s), { refK: contentRefKOf(s), refIsCache: s.diffRef == null }) }) +
-    popover({ label: W.COST_POPOVER_LABEL, title: W.COST_TITLE, glyph: esc(costLabel(call, s.pricing)), body: costPopoverHtml(call, { table: s.pricing, tableErr: s.pricingErr }) }) +
-    `</div>`
+    popover({ label: W.COST_POPOVER_LABEL, title: W.COST_TITLE, glyph: esc(costLabel(call, s.pricing)), body: costPopoverHtml(call, { table: s.pricing, tableErr: s.pricingErr }) })
 }
 // the 内容对比步 (2.3): the chosen step when one is pinned, else the 缓存对比步; null = this line's first call
 export function contentRefOf(s) {

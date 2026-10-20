@@ -14,6 +14,7 @@
 // `warm: true` on every query it runs: a query here is never the only one, so what a query may build FOR THE NEXT
 // ONE (src/query/named/session.mjs assembles the whole session after answering a window) is built here and nowhere
 // else — a one-shot CLI would pay for it and exit.
+import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { LOCAL_ENV } from './client.mjs'
 import { runQuery, QueryArgError } from './named/index.mjs'
@@ -47,7 +48,11 @@ async function answer(line) {
       const r = await VERBS[control](body || {}, { home, deps: await depsP })
       status = r.status
       text = JSON.stringify(r.doc) + '\n'
-    } else text = JSON.stringify(await runQuery(name, params || {}, { home, warm: true }), null, Number(indent) || 0)
+    } else { // `status` / `doctor` read the machine the way the control verbs do — same user home, environment and deps — so /api/status and
+      // GET /control/status answer from one view of the machine (V91); the daemon passes no deps, so this is the real machine
+      const deps = await depsP
+      text = JSON.stringify(await runQuery(name, params || {}, { home, warm: true, userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }), null, Number(indent) || 0)
+    }
   } catch (e) {
     // 400 = the caller's mistake (an unknown name or parameter), 500 = this worker's. The message is the query
     // core's own, so the caller can raise the very error its local path would have raised.
