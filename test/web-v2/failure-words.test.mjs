@@ -20,6 +20,7 @@ function producerPairs() {
     ...C.ROUTE_FAILURE_CODES.map((c) => [null, c]),
     ...C.NET_FAILURE_CODES.map((c) => ['netenv', c]),
     ...C.NOT_CAPTURED_FAILURE.map((c) => ['flow', c]), // a connection row's group (src/cli/status.mjs failuresOf)
+    ...[...C.NOT_CAPTURED_EXPECTED, ...Object.values(C.NOT_CAPTURED_BY_DESIGN).flat()].map((c) => ['flow', c]), // an expected group (status.mjs, keyed by expectedKey): the board's foot and `--failures`' Expected
     ...C.FAILURE_EVENTS.map((e) => [e, e]), // a failure event with no code: the group's where and code are the event
     ...C.RAW_JOURNAL_FAILURES.map((c) => ['raw', c]),
     ...C.SEGMENT_PROBLEMS.map((c) => ['raw', c]),

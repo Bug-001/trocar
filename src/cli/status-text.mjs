@@ -139,12 +139,7 @@ export function failuresBlock(failures, health, { now = Date.now() } = {}) {
   return lines
 }
 
-const expectedText = (k) => ({ 'not-an-agent': 'connections of programs that are not agents, passed on unread',
-  // the other reasons a door forwards a connection by design (4.6 §记录「连接行」)
-  'agent-helper': "connections of an agent's helper programs, passed on unread", 'harness-off': 'connections of agents that are turned off, passed on unread',
-  'group-off': 'connections of agents still running after off, passed on unread', 'outside-host-set': "connections of an editor to hosts outside its agent's, passed on unread",
-  'other-user': "connections of another user's programs, passed on unread", 'not-verified': 'connections of agent forms or hosts not verified for capture yet, passed on unread',
-  passthrough: 'connections trocar does not decrypt by design', 'client-rejected-leaf': "connections whose program refused trocar's certificate" }[k] || k)
+const expectedText = (code) => failureWord('flow', code) || code // a connection row's group: the one catalog the board's capture log words the same groups from (words.mjs)
 
 // ── what the daemon and the disk say, verbatim (printed by `--failures` and by `doctor`) ──────────────────────────
 export function formatStatus(s) {
