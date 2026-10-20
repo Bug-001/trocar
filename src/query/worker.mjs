@@ -3,8 +3,8 @@
 // A child of the collector daemon, forked on demand and running at low priority, like the sealer: the daemon's own
 // event loop forwards agent traffic and MUST NOT compute a query. It stays warm (src/query/warm.mjs keeps the
 // segments' index rows and the recently opened sessions' records, each revalidated per request against the files it
-// came from), and exits after TROCAR_QUERY_IDLE_MS idle — ONE one-shot timer, re-armed per request, so nobody
-// querying means no worker and no timer.
+// came from) until the daemon ends it: the daemon keeps the idle clock (src/query/service.mjs QUERY_IDLE_MS), because only it
+// knows whether a request is in flight or queued. It also leaves when its stdin ends or the daemon is gone.
 //
 // The wire is frames on this process's own pipes, not JSON over IPC: one request per line on stdin
 // (`{name, params, indent}`), one reply on stdout as `<status> <byteLength>\n` then exactly those bytes. The daemon
@@ -26,21 +26,16 @@ const home = process.argv[2]
 // The board's control verbs (`{control, body}`, 4.4 §控制面) run the CLI's own functions, which take `deps` for what they ask of the machine.
 // The daemon never passes argv[3]; a test fork names an ES module whose default export is that `deps` object.
 const depsP = process.argv[3] ? import(pathToFileURL(process.argv[3]).href).then((m) => m.default) : Promise.resolve({})
-const IDLE_MS = Number(process.env.TROCAR_QUERY_IDLE_MS || 180_000)
 // What the CLI's own environment may change about an answer goes local (client.mjs LOCAL_ENV); this worker serves
 // every caller, so it answers as a clean environment would and never as the daemon's happened to be.
 for (const k of LOCAL_ENV) delete process.env[k]
 lowerPriority({ say: (m) => process.stderr.write(`${m}\n`) }) // behind the agents' traffic (1.6 §3.1), like the sealer
-
-let idle = null
-const rearm = () => { clearTimeout(idle); idle = setTimeout(() => process.exit(0), IDLE_MS) }
 
 const write = (status, body) => new Promise((done) => {
   process.stdout.write(`${status} ${body.length}\n`, () => { if (body.length) process.stdout.write(body, done); else done() })
 })
 
 async function answer(line) {
-  clearTimeout(idle)
   let status = 200, text
   const after = []
   try {
@@ -64,7 +59,6 @@ async function answer(line) {
   }
   await write(status, Buffer.from(text, 'utf8'))
   text = null
-  rearm()
   if (after.length) setImmediate(async () => { for (const fn of after) { try { await fn() } catch { /* the next query does it */ } } })
 }
 
@@ -80,4 +74,3 @@ process.stdin.on('data', (d) => {
 })
 process.stdin.on('end', () => process.exit(0))
 process.on('disconnect', () => process.exit(0)) // the daemon is gone: so is the reason to be here
-rearm()
