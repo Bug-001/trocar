@@ -1,7 +1,7 @@
 // src/dissect/harnesses.mjs — the read-side harness table (D37 ①⑤, RFC 3.4 table, 3.1): per v1 harness,
 // how a record names it, which key groups its calls into a session, which headers / body fields hint at
 // lanes, parents and compaction, and what asight's trust injection changes (observer effects). Board,
-// ETL and sharder all read THIS table: adding a harness = one row here + one chip row in index.html.
+// ETL and sharder all read THIS table: adding a harness = one row here + one chip row in src/web/v2/core/chips.mjs.
 //   • harness = proc.agent (D31). A record WITH proc is never re-identified from its UA, even when the
 //     agent is unknown (id null). Only legacy records without proc use the UA, flagged inferred:true.
 //   • never splits or joins a session by pid or connection (3.4 关键区分): proc.pid / flow_id / dst unread.

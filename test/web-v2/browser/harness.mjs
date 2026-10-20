@@ -45,7 +45,7 @@ export async function withBoard({ bytes, token = true, width = 1280, theme = 'li
       if (/^\/(api|control)\//.test(u.pathname)) requests.push({ url: u.pathname + u.search, method: r.request().method(), body: r.request().postData(), status: r.status(), start: r.request().timing().startTime, t: Date.now() })
     })
     const t = token === true ? face.token : token
-    await page.goto(`${face.base}/v2/index.html${t ? `#t=${encodeURIComponent(t)}` : ''}`, { waitUntil: 'load' })
+    await page.goto(`${face.base}/${t ? `#t=${encodeURIComponent(t)}` : ''}`, { waitUntil: 'load' })
   } catch (e) { await stop(); throw e }
   return { url: face.base, get: face.get, page, stop, requests, errors }
 }

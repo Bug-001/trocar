@@ -43,7 +43,7 @@ async function open(chromium, { base, token }, { width = 1280, theme = 'light' }
   const posts = [], errors = []
   page.on('pageerror', (e) => errors.push(String(e)))
   page.on('request', (r) => { if (r.method() === 'POST') posts.push({ url: r.url(), body: r.postData() }) })
-  await page.goto(`${base}/v2/index.html#t=${encodeURIComponent(token)}`, { waitUntil: 'load' })
+  await page.goto(`${base}/#t=${encodeURIComponent(token)}`, { waitUntil: 'load' })
   await page.evaluate(() => { location.hash = '#/capture' })
   await page.waitForSelector('.crow[data-h="codex"]', { timeout: 30000 })
   return { page, posts, errors, close: () => browser.close() }

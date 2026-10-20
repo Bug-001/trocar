@@ -16,8 +16,9 @@ import { CONTROL_TOKEN_HEADER } from './off/token-header.mjs';
 import { LOCAL_ENV, QUERY_NAMES } from './query/client.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
-// Named as new URL('./web/', import.meta.url) so test/ci/reachable.test.mjs follows it into every board module.
-const WEB_DIR = path.resolve(fileURLToPath(new URL('./web/', import.meta.url)));
+// The one board (1.2 §托管与打开): src/web/v2/ is the static plane, served at `/`. Named as new URL('./web/v2/', import.meta.url)
+// so test/ci/reachable.test.mjs follows it into every board module.
+const WEB_DIR = path.resolve(fileURLToPath(new URL('./web/v2/', import.meta.url)));
 /** The shared-module allowlist (4.4 静态面): pure, import-closed modules the page and the CLI must agree on, served at
  *  `/<entry>` from `src/<entry>`. Data, not routes: add a line here. */
 export const SHARED = Object.freeze(['cli/words.mjs', 'off/token-header.mjs']);
@@ -48,7 +49,7 @@ export function guard(req) {
   try { return LOOPBACK.has(new URL(o).hostname) ? null : 'forbidden: cross-origin request'; } catch { return 'forbidden: cross-origin request'; }
 }
 
-/** Every file of the static plane, read once: `/<path under src/web>` and `/<SHARED entry>`. A lookup in this map is
+/** Every file of the static plane, read once: `/<path under src/web/v2>` and `/<SHARED entry>`. A lookup in this map is
  *  the whole path-safety story: `..`, encoded or not, names nothing in it. */
 function loadStatic() {
   const files = new Map();
