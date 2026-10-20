@@ -312,6 +312,7 @@ test('daemon: an agent started with ANTHROPIC_UNIX_SOCKET or the HTTP3 flag is a
     await req(s.sock, 'POST', '/on', { harnesses: ['claude-code'] })
     await req(s.sock, 'POST', '/off', {}); await req(s.sock, 'POST', '/on', { harnesses: ['claude-code'] }) // every on judges the live processes again
     const st = await req(s.sock, 'GET', '/status')
+    assert.equal(st.code, CODE, 'D67⑤: the daemon says which code it runs on its control channel — what `asight update` compares against')
     assert.deepEqual(st.agents.find((a) => a.pid === 5300).unreachable.map((u) => [u.transport, u.var]), [['af-unix', 'ANTHROPIC_UNIX_SOCKET'], ['quic', 'BUN_FEATURE_FLAG_EXPERIMENTAL_HTTP3_CLIENT']])
     assert.deepEqual(st.agents.find((a) => a.pid === 5301).unreachable, [])
     const ev = flowsOf(s).filter((f) => f.event === 'agent-transport')

@@ -19,6 +19,7 @@ import { runOffCli } from '../../src/off/main.mjs'
 import { runUninstallCli } from '../../src/cli/uninstall.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
+import { codeId } from '../../src/version.mjs'
 import { statusRun } from '../../src/cli/status.mjs'
 import { runDoctor } from '../../src/cli/doctor.mjs'
 import { EXIT, validateReceipt } from '../../src/cli/schema.mjs'
@@ -111,6 +112,7 @@ for (const platform of ['darwin', 'win32']) {
         await restarted
         assert.deepEqual(Object.keys((await onReply).doors || {}), [g])
         assert.deepEqual((await ask('GET', '/status')).doors, { [g]: port }, 'one door, on its recorded port')
+        assert.equal((await ask('GET', '/status')).code, codeId(), 'D67⑤: the model daemon says which code it runs — what `asight update` compares against')
         // §1.3 (macOS test machine, 2026-10-18): the model daemon reports the connection counts, so `status` never has to say they are not known
         assert.deepEqual((await ask('GET', '/status')).relayed, { closing: 0, waiting: 0 }, 'the reply carries the counts of what is still relayed')
         const flows = () => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join('') : '')
