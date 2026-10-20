@@ -8,16 +8,17 @@ export const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k)
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 export const kf = (n) => n == null ? '?' : n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : '' + n
 export const base = (p) => String(p).replace(/\/+$/, '').split('/').pop() || p
-// Times are zh-CN with a 24 h clock ("15:59:48"), whatever the browser's own locale is: the page's words are Chinese, and the browser
-// default would print "3:59:48 PM" in the middle of them. `h23` (not hour12:false) so midnight is 00:…, never 24:….
-const LOCALE = 'zh-CN', CLOCK = { hourCycle: 'h23' }
+// Times are English with a 24 h clock ("15:59:48") and numeric dates ("2026-10-07"), whatever the browser's own locale is (1.2,
+// D58: the page's words are English; the browser default could print "3:59:48 PM" or a day-first date). `h23` (not hour12:false)
+// so midnight is 00:…, never 24:….
+const LOCALE = 'en-CA', CLOCK = { hourCycle: 'h23' }
 // the time of day of an ISO string or epoch ms; '' for an empty or unparseable value (never the words "Invalid Date")
 export const fmtTime = (ts) => {
   if (ts == null || ts === '') return ''
   const d = new Date(ts)
   return isNaN(d) ? '' : d.toLocaleTimeString(LOCALE, CLOCK)
 }
-// date and time ("2026/10/7 15:59:48"); '—' for an empty value, an unparseable one as it came
+// date and time ("2026-10-07, 15:59:48"); '—' for an empty value, an unparseable one as it came
 export const fmtStamp = (ts) => {
   if (ts == null || ts === '') return '—'
   const d = new Date(ts)

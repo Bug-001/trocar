@@ -58,7 +58,7 @@ function rawReplyHtml(c) {
   const rs = c.respRefs || []
   if (!rs.length) return ''
   const ws = (c.wire && c.wire.transport) === 'ws'
-  return `<div class="rpk" title="The captured reply bytes — each piece can be read back from the raw record"><b>${esc(W.RAW_REPLY)}</b> · ${rs.map((x, j) => refRow(x, ws ? W.rawReplyNth(j + 1) : `${W.RAW_REPLY} · ${x.chars != null ? kf(x.chars) + ' characters' : '—'}`)).join(' · ')}<div class="nbkbody"></div></div>`
+  return `<div class="rpk" title="The captured reply bytes — each piece can be read back from the raw record"><b>${esc(W.RAW_REPLY)}</b> · ${rs.map((x, j) => (ws ? refRow(x, W.rawReplyNth(j + 1)) : refRow({ ...x, chars: null }, x.chars != null ? `${kf(x.chars)} characters` : '—'))).join(' · ')}<div class="nbkbody"></div></div>`
 }
 function paramsHtml(c) {
   const ks = c.nonBlockKeys || []

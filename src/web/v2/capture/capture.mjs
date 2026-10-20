@@ -2,13 +2,15 @@
 // recorded — and when one is not, why and what to do about it. The 采集服务 row plus one row per detected agent, the
 // 改动 block. Everything is read from the C.3 `status` document through the shared store; the page polls while visible (1.5 §采集状态 轮询) and re-paints WITHOUT disturbing the
 // reader: an expanded row stays expanded, a row the reader folded stays folded, the scroll does not move.
-// Read-only by design (N-01): no switch, no restart / install / undo control anywhere — the desired state is text and
-// the command that changes it sits in 技术细节.
+// Each agent row has at most one control — its switch, or Set up (core/harness-switch.mjs, through planConfirm); no restart /
+// install / undo control anywhere. The control plane's answer is read on mount and again after a 405 (the daemon lost it).
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
-import { harnessName, ensureHarnessIcons } from '../core/chips.mjs'
+import { harnessName } from '../core/chips.mjs'
 import { captureVerdict, pollCaptureHealth } from '../core/capture-verdict.mjs'
 import { pageHtml } from './capture-view.mjs'
+import { wireHarnessControls } from '../core/harness-switch.mjs'
+import { confirmDialog } from '../core/ui.mjs'
 
 export function mount(el, ctx) {
   const { api, store, router, toast } = ctx
@@ -16,6 +18,10 @@ export function mount(el, ctx) {
   // problem row opens, the rest stay folded); a row the reader touched keeps their choice across every re-read.
   const openByReader = new Map()
   let lastH = null, landed = null, poll = null
+  // the control plane (GET /control/status) and each row control's {busy, receipt}, keyed by read-side id (repaints keep them)
+  let control = null
+  const ctlState = new Map()
+  const readControl = () => api.controlStatus().then((r) => { control = r; paint() }, (e) => { control = { ok: false, error: String(e) }; paint() })
   // the 最近采到 column reads the 24 h `overview` document (1.9): on open, then with the status poll at most every OV_MS
   const OV_MS = 30e3
   let ov = null, ovAt = 0, ovBusy = false
@@ -35,8 +41,7 @@ export function mount(el, ctx) {
     const { capH, capHOkAt, capHErr } = store.get()
     const v = captureVerdict(capH, { okAt: capHOkAt, err: capHErr })
     headEl.innerHTML = pageHeadHtml({ name: SCREEN_NAME.capture, readAt: capHOkAt })
-    mainEl.innerHTML = pageHtml(capH, v, { openByReader, ov })
-    if (mainEl.querySelectorAll) ensureHarnessIcons(mainEl)
+    mainEl.innerHTML = pageHtml(capH, v, { openByReader, ov, control, ui: ctlState })
   }
 
   // ── ?h= : land on that row, opened (1.9 §从别处进来); an agent with no row is a toast, never head-zone text ───────
@@ -80,7 +85,12 @@ export function mount(el, ctx) {
     if (open) exp.removeAttribute('hidden'); else exp.setAttribute('hidden', '')
   })
 
+  const offCtl = wireHarnessControls(el, {
+    api, state: ctlState, ask: (opts) => confirmDialog(opts, el.ownerDocument),
+    onDone: (out) => { if (out && out.status === 405) readControl(); paint(); if (poll) poll.refresh() },
+  })
   paint()
+  readControl()
   readOv()
   poll = pollCaptureHealth({ api, store, doc: el.ownerDocument, onAnswer: () => { paint(); land(lastH); readOv() } })
   land(router.current().params.h || null)
@@ -89,6 +99,7 @@ export function mount(el, ctx) {
     update(route) { land(route.params.h || null) },
     unmount() {
       if (poll) poll.stop()
+      offCtl()
       el.replaceChildren()
     },
   }

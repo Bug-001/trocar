@@ -3,7 +3,7 @@
 // what main.mjs calls before mounting the shell so the first frame is already right). This page only wires the
 // three-way choice; a storage that throws means the choice still applies to this page and is said to be unstorable.
 import { SCREEN_NAME } from '../labels/shell.mjs'
-import { applyThemePref, THEME_KEY } from '../core/ui.mjs'
+import { applyThemePref, themeStore, THEME_KEY } from '../core/ui.mjs'
 import * as W from '../labels/settings.mjs'
 
 // the current choice: 'light' | 'dark' | null (= 跟随系统). Applies it to `doc` and returns it — main.mjs's boot call.
@@ -21,7 +21,7 @@ export function setTheme(choice, doc = typeof document === 'undefined' ? null : 
   }
   let stored = true
   try {
-    const ls = doc && doc.localStorage
+    const ls = doc && themeStore(doc)
     if (ls) { if (choice === 'light' || choice === 'dark') ls.setItem(THEME_KEY, choice); else ls.removeItem(THEME_KEY) }
   } catch { stored = false } // an incognito window or blocked storage: this page still switched
   return { stored }

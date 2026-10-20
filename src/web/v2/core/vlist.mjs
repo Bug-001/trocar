@@ -7,7 +7,7 @@
 //
 // render(i) returns the HTML of row i; the list wraps it in an absolutely positioned `.vrow` (data-i = i), so a click
 // handler can delegate on `.vrow` and read `dataset.i`. The container becomes position:relative; overflow:auto.
-export function createVList(container, { rowHeight, count, render, overscan = 8, after = null }) {
+export function createVList(container, { rowHeight, count, render, overscan = 8 }) {
   let n = count, draw = render
   let first = -1, last = -1, raf = 0, dead = false
   container.style.position = 'relative'
@@ -34,7 +34,6 @@ export function createVList(container, { rowHeight, count, render, overscan = 8,
       html += `<div class="vrow" data-i="${i}" style="position:absolute;left:0;right:0;top:${i * rowHeight}px;height:${rowHeight}px">${draw(i)}</div>`
     }
     spacer.innerHTML = html
-    if (after) after(spacer)
   }
 
   const onScroll = () => {

@@ -85,6 +85,12 @@ export function asOfText(ts, now = Date.now()) {
   return `${d.getFullYear() === n.getFullYear() ? '' : d.getFullYear() + '/'}${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 export const readAtText = fmtTime
+// the caption's 截至: the words, with the document's as_of as the machine-readable time
+export const asOfHtml = (iso, text) => `<time class="cap-item" datetime="${esc(iso)}">${W.AS_OF} ${esc(text)}</time>`
+// the agent-source note, while the rows carry no harness_inferred field at all (1.10 §OPEN: by field presence, not version)
+export const agentSourceNote = (rows) => (rows.length && !rows.some((r) => 'harness_inferred' in r) ? `<span class="cap-item" data-note="agent-source">${esc(W.AGENT_SOURCE_NOTE)}</span>` : '')
+// the route segment of an agent: the read-side id; an unidentified one is 'unknown' (1.10 §Edge cases)
+export const routeHarness = (id) => harnessKey(id) || 'unknown'
 
 // group order: the chip table's order first, then any other id (sorted), the no-harness bucket last
 function groupOrder(ids) {
@@ -124,22 +130,23 @@ export function rowHtml(r, model, first) {
   const params = { window: model.window }
   if (model.cls) params.class = model.cls
   const host = r.host && String(r.host) !== '' ? r.host : null
-  const link = host ? formatHash({ screen: 'traffic-host', harness: harnessKey(r.harness), host, params }) : null
+  const key = routeHarness(r.harness)
+  const link = host ? formatHash({ screen: 'traffic-host', harness: key, host, params }) : null
   const isNew = isNewHost(r, model.harnessSince, model.now)
   const firstText = r.first_seen ? fmtDay(r.first_seen, model.now) : W.UNKNOWN_DAY
-  const classes = Object.entries(r.classes || {}).sort((a, b) => (b[1] || 0) - (a[1] || 0))
+  const classes = [...Object.entries(r.classes || {}), ...(r.class_unrecorded > 0 ? [[null, r.class_unrecorded]] : [])].sort((a, b) => (b[1] || 0) - (a[1] || 0))
   const clsHtml = classes.slice(0, 3).map(([id, n]) => {
     const w = classWord(id, r.harness, model.unmatched)
     return w.unclassified
       ? `${esc(w.word)} ${n} ${infoButton({ label: 'Why unclassified', title: w.word, body: esc(W.UNCLASSIFIED_TIP) })}`
       : `${esc(w.word)} ${n}`
-  }).join('<span class="sep-dot" aria-hidden="true"> · </span>') + (classes.length > 3
-    ? `<span class="more-classes" title="${esc(classes.slice(3).map(([id, n]) => `${classWord(id, r.harness, model.unmatched).word} ${n}`).join(' · '))}"> …</span>` : '')
+  }).join('<span class="sep-dot" aria-hidden="true"> · </span>') + (classes.length > 3 ? '<span class="more-classes"> …</span>' : '')
+  const clsAll = classes.map(([id, n]) => `${classWord(id, r.harness, model.unmatched).word} ${n}`).join(' · ') // the cell may cut: the whole list on hover
   const recv = r.recv
-  const inferred = r.harness_inferred ? ` ${mark('inf', W.AGENT_AGENT_TIP)}` : '' // per-row once the rows carry the flag (1.10 §OPEN)
-  const agentCell = first ? `<span class="nm">${harnessIcon(r.harness)}<span class="nmname">${esc(harnessName(r.harness))}</span>${inferred}</span>` : '<span class="nm"></span>'
+  const inferred = r.harness_inferred ? ` <span data-mark="inferred">${mark('inf', W.AGENT_AGENT_TIP)}</span>` : '' // every inferred row, once the rows carry the flag (1.10 §OPEN)
+  const agentCell = `<span class="nm">${first ? `${harnessIcon(r.harness)}<span class="nmname">${esc(harnessName(r.harness))}</span>` : ''}${inferred}</span>`
   const hostCell = host ? `<span class="host mono" title="${esc(host)}">${esc(host)}</span>` : `<span class="host nohost">${esc(W.NO_HOST)}</span>`
-  const firstCell = `${esc(firstText)}${isNew ? ` <span class="newmark">${esc(W.NEW)} ${mark('inf', W.NEW_TIP)}</span>` : ''}`
+  const firstCell = `${esc(firstText)}${isNew ? ` <span class="newmark" data-mark="new">${esc(W.NEW)} ${mark('inf', W.NEW_TIP)}</span>` : ''}`
   const title = r.first_seen ? ` title="${esc(W.FIRST_SEEN_TIP)} · ${esc(r.first_seen)}"` : ''
   const inner = `<span class="gut"></span>${agentCell}` +
     `<span class="cell-host">${hostCell}</span>` +
@@ -147,10 +154,10 @@ export function rowHtml(r, model, first) {
     `<span class="cell num">${r.requests ?? 0}</span>` +
     `<span class="cell num">${esc(sentText(r))}</span>` +
     `<span class="cell num">${esc(recv.main)}${recv.note ? ` <span class="c2">${esc(recv.note)}</span>` : ''}</span>` +
-    `<span class="cell classes">${clsHtml}</span>`
+    `<span class="cell classes" title="${esc(clsAll)}">${clsHtml}</span>`
   return link
-    ? `<a class="trow" href="${esc(link)}" data-href="${esc(link)}">${inner}</a>`
-    : `<div class="trow nolink">${inner}</div>`
+    ? `<a class="trow" href="${esc(link)}" data-href="${esc(link)}" data-h="${esc(key)}">${inner}</a>`
+    : `<div class="trow nolink" data-h="${esc(key)}">${inner}</div>`
 }
 
 export function totalRowHtml(model) {
@@ -166,10 +173,10 @@ export function totalRowHtml(model) {
 export function captionHtml(model, { cover = [] } = {}) {
   const parts = []
   const asOf = asOfText(model.asOf, model.now)
-  if (asOf) parts.push(`<span class="cap-item">${W.AS_OF} ${esc(asOf)}</span>`)
-  if (cover.length) parts.push(`<span class="cap-item">${esc(W.COVERS_PREFIX)}${cover.map((id) => `<span class="cap-agent">${harnessIcon(id)}${esc(harnessName(id))}</span>`).join('')}</span>`)
+  if (asOf) parts.push(asOfHtml(model.asOf, asOf))
+  if (cover.length) parts.push(`<span class="cap-item">${esc(W.COVERS_PREFIX)}${cover.map((id) => `<span class="cap-agent" data-h="${esc(id)}">${harnessIcon(id)}${esc(harnessName(id))}</span>`).join('')}</span>`)
   const rows = (model.answer && model.answer.hosts) || []
-  if (rows.length && !rows.some((r) => 'harness_inferred' in r)) parts.push(`<span class="cap-item">${esc(W.AGENT_SOURCE_NOTE)}</span>`)
+  if (agentSourceNote(rows)) parts.push(agentSourceNote(rows))
   return parts.join('')
 }
 
@@ -220,7 +227,7 @@ export function tableHtml(model, { h = [], cls = null, cover = [] } = {}) {
 // the states around the table: loading, no rows in the window, a failed read
 export function stateHtml(kind, payload = {}) {
   if (kind === 'loading') return `<div class="tstate">${esc(W.LOADING)}</div>`
-  if (kind === 'empty') return `<div class="tstate">${esc(payload.cls ? W.EMPTY_WINDOW_CLASS(W.classWord(payload.cls)) : W.EMPTY_WINDOW)}</div>`
+  if (kind === 'empty') return `<div class="tstate" data-empty${payload.cls ? ` data-class="${esc(payload.cls)}"` : ''}>${esc(payload.cls ? W.EMPTY_WINDOW_CLASS(W.classWord(payload.cls)) : W.EMPTY_WINDOW)}</div>`
   if (kind === 'error') return `<div class="tstate"><p>${esc(W.READ_FAILED(payload.error || 'reason not known'))}</p><button type="button" class="tbtn" data-act="retry">${esc(W.RETRY)}</button></div>`
   return ''
 }

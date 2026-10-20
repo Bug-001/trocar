@@ -2,7 +2,9 @@
 // GET against the server's ETag, and every failure (non-2xx, broken JSON, no network) folded into {ok:false, status, error}.
 // A failure is never returned as an empty success (invariant 4).
 //
-// K-30 (1.5): the first /api or /control answer with status 403 (no token, or a wrong one) latches the board shut — every later get()
+// post(path, body) is the one write: a JSON body to /control/<verb> (4.4 §控制面), its parsed answer kept for every status (a 409 carries the plan).
+//
+// K-30 (1.5): the first /api or /control answer with status 403 (no token, or a wrong one) latches the board shut — every later get() or post()
 // answers {ok:false, status:403} without a request, and the onForbidden callbacks run once. Keyed on the status, never the body.
 import { CONTROL_TOKEN_HEADER } from '../../../off/token-header.mjs' // a shared module the static face serves (4.4)
 const TOKEN_KEY = 'asight.token' // the sessionStorage slot of the per-user token (4.4: read from #t=, kept for the tab)
@@ -33,6 +35,12 @@ async function readBody(r) {
   try { return { json: JSON.parse(t) } } catch { return { bad: true } }
 }
 
+function latch(status) {
+  if (status !== 403 || forbidden) return
+  forbidden = true
+  for (const fn of onForbid) try { fn() } catch (e) { console.error('onForbidden failed', e) }
+}
+
 export async function get(path, params) {
   if (forbidden) return FORBIDDEN
   const url = path + qs(params)
@@ -45,7 +53,7 @@ export async function get(path, params) {
   if (r.status === 304) return was ? { ok: true, data: was.data } : { ok: false, status: 304, error: 'HTTP 304' }
   const b = await readBody(r)
   const body = 'json' in b ? b.json : null
-  if (r.status === 403 && !forbidden) { forbidden = true; for (const fn of onForbid) try { fn() } catch (e) { console.error('onForbidden failed', e) } }
+  latch(r.status)
   if (!r.ok) return { ok: false, status: r.status, error: (body && body.error) || 'HTTP ' + r.status }
   if (b.bad) return { ok: false, status: r.status, error: 'not JSON' }
   const etag = r.headers.get('etag')
@@ -55,6 +63,20 @@ export async function get(path, params) {
     if (held.size > HELD_MAX) held.delete(held.keys().next().value)
   }
   return { ok: true, data: body } // an empty 2xx is a success carrying null
+}
+
+// → {ok, status, data, error}: data is the parsed JSON answer (null when there is none), whatever the status; a network error is status 0
+export async function post(path, body) {
+  if (forbidden) return { ...FORBIDDEN, data: null }
+  const headers = { 'content-type': 'application/json' }
+  if (token) headers[CONTROL_TOKEN_HEADER] = token
+  let r
+  try { r = await fetch(path, { method: 'POST', cache: 'no-store', headers, body: JSON.stringify(body) }) } catch (e) { return { ok: false, status: 0, data: null, error: String((e && e.message) || e) } }
+  const b = await readBody(r)
+  const data = 'json' in b ? b.json : null
+  latch(r.status)
+  const error = r.ok ? (b.bad ? 'not JSON' : null) : (data && data.error) || 'HTTP ' + r.status
+  return { ok: r.ok && !b.bad, status: r.status, data, error }
 }
 
 // a static file of the board (the harness svg icons): its text, or null when it is not there

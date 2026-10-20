@@ -13,7 +13,7 @@ import { delegate } from '../core/dom.mjs'
 import { createVList } from '../core/vlist.mjs'
 import { formatHash } from '../core/router.mjs'
 import { requestDetailHtml, detailModel } from './request-view.mjs'
-import { queryOf, sinceOf, asOfText, classWord, stateHtml } from './traffic.mjs'
+import { queryOf, sinceOf, asOfText, asOfHtml, agentSourceNote, routeHarness, classWord, stateHtml } from './traffic.mjs'
 import * as W from '../labels/traffic.mjs'
 
 export const ROW_H = 34
@@ -59,9 +59,9 @@ export function retentionHtml(row, harness) {
   if (!row || !row.retention) return ''
   if (row.retention === 'log') {
     const href = formatHash({ screen: 'settings-storage', params: { h: harnessKey(harness), class: row.class || '' } })
-    return `<a class="rmark" href="${esc(href)}" title="See what this class keeps in the storage settings">${esc(W.RETENTION_MARK.log.label)} ›</a>`
+    return `<a class="rmark" data-mark="log" href="${esc(href)}" title="See what this class keeps in the storage settings">${esc(W.RETENTION_MARK.log.label)} ›</a>`
   }
-  if (row.retention === 'legacy-meta') return `<span class="rmark" title="${esc(W.RETENTION_MARK['legacy-meta'].tip)}">${esc(W.RETENTION_MARK['legacy-meta'].label)}</span>`
+  if (row.retention === 'legacy-meta') return `<span class="rmark" data-mark="legacy-meta" title="${esc(W.RETENTION_MARK['legacy-meta'].tip)}">${esc(W.RETENTION_MARK['legacy-meta'].label)}</span>`
   return ''
 }
 
@@ -78,7 +78,7 @@ export function rowHtml(r, { selected = false, unmatched = null, harness, window
   const params = { window }
   if (cls) params.class = cls
   if (r.ref) params.ref = r.ref
-  const href = formatHash({ screen: 'traffic-host', harness: harnessKey(harness), host: r._host, params })
+  const href = formatHash({ screen: 'traffic-host', harness: routeHarness(harness), host: r._host, params })
   const w = classWord(r.class, harness, unmatched)
   const replay = replayLinkOf(r)
   return `<a class="hrow${selected ? ' sel' : ''}" href="${esc(href)}" data-ref="${esc(r.ref || '')}"${selected ? ' aria-current="true"' : ''}>` +
@@ -87,7 +87,7 @@ export function rowHtml(r, { selected = false, unmatched = null, harness, window
     `<span class="cell class">${esc(w.word)}</span>` +
     `<span class="cell num">${r.sent_bytes != null ? esc(bytes(r.sent_bytes)) : esc(W.UNRECORDED)}</span>` +
     `<span class="cell num">${r.received_bytes != null ? esc(bytes(r.received_bytes)) : esc(W.UNRECORDED)}</span>` +
-    `<span class="cell marks">${retentionHtml(r, harness)}${r.error ? `<span class="rmark fail" title="The exact status is in the request details">${esc(W.FAILED)}</span>` : ''}</span>` +
+    `<span class="cell marks">${retentionHtml(r, harness)}${r.error ? `<span class="rmark fail" data-mark="failed" title="The exact status is in the request details">${esc(W.FAILED)}</span>` : ''}</span>` +
     `<span class="cell go">${replay ? `<a class="replay" href="${esc(replay)}" title="Go to this step">${esc(W.OPEN_IN_REPLAY)}</a>` : ''}</span>` +
     `</a>`
 }
@@ -102,13 +102,12 @@ export function detailLeadHtml(row) {
 // the caption row: 截至 + the count, the agent-source note, the class filter
 export function captionHtml(list, { harness, window, cls = null } = {}) {
   const asOf = asOfText(list.asOf)
-  const parts = [`<span class="cap-item">${asOf ? `${W.AS_OF} ${esc(asOf)} · ` : ''}${esc(W.TOTAL_N(list.total))}</span>`]
-  if (list.rows.length && !list.rows.some((r) => 'harness_inferred' in r)) parts.push(`<span class="cap-item">${esc(W.AGENT_SOURCE_NOTE)}</span>`)
+  const parts = [`${asOf ? asOfHtml(list.asOf, asOf) : ''}<span class="cap-item">${esc(W.TOTAL_N(list.total))}</span>`, agentSourceNote(list.rows)]
   const hrefOf = (patch) => {
     const params = { window }
     if (cls) params.class = cls
     for (const [k, v] of Object.entries(patch)) if (v == null || v === '') delete params[k]; else params[k] = v
-    return formatHash({ screen: 'traffic-host', harness: harnessKey(harness), host: list.host, params })
+    return formatHash({ screen: 'traffic-host', harness: routeHarness(harness), host: list.host, params })
   }
   const classMenu = menuButton({
     label: W.FILTER_CLASS, title: W.FILTER_CLASS,
@@ -125,15 +124,16 @@ export function captionHtml(list, { harness, window, cls = null } = {}) {
 export function mount(el, ctx) {
   const { api, router } = ctx
   const route0 = router.current()
-  const harness = harnessKey(route0.harness || 'unknown'), host = route0.host || ''
+  const harness = routeHarness(route0.harness), host = route0.host || ''
   let dead = false, q = queryOf(route0.params), ref = route0.params.ref || null, revealed = null
   let list = null, err = null, readAt = null, unmatched = null, detail = null, detailErr = null, mode = 'column'
 
   // a window change keeps class and drops ref (1.10 host-page head); the crumbs' links carry the window too
   const winHref = (w) => formatHash({ screen: 'traffic-host', harness, host, params: { window: w, ...(q.cls ? { class: q.cls } : {}) } })
+  const kept = () => (q.cls ? { window: q.window, class: q.cls } : { window: q.window })
   const crumbs = () => ([
-    { label: 'Traffic', href: formatHash({ screen: 'traffic', params: { window: q.window } }) },
-    { label: harnessName(harness), href: formatHash({ screen: 'traffic', params: { window: q.window, h: harness } }) },
+    { label: 'Traffic', href: formatHash({ screen: 'traffic', params: kept() }) },
+    { label: harnessName(harness), href: formatHash({ screen: 'traffic', params: { ...kept(), h: harness } }) },
     { label: host },
   ])
   const scope = () => ({ label: 'window', value: q.window, options: W.WINDOW_LABEL.map((o) => ({ ...o, href: winHref(o.value) })) })
@@ -148,7 +148,7 @@ export function mount(el, ctx) {
     else if (list.state === 'none') {
       const a = list.answer || {}
       body = stateHtml('error', { error: a.error })
-    } else if (!list.rows.length) body = `<div class="tstate">${esc(q.cls ? W.EMPTY_HOST_CLASS(W.classWord(q.cls)) : W.EMPTY_HOST)}</div>`
+    } else if (!list.rows.length) body = `<div class="tstate" data-empty${q.cls ? ` data-class="${esc(q.cls)}"` : ''}>${esc(q.cls ? W.EMPTY_HOST_CLASS(W.classWord(q.cls)) : W.EMPTY_HOST)}</div>`
     else body = captionHtml({ ...list, host }, { harness, window: q.window, cls: q.cls }) +
       `<div class="hhead" aria-hidden="true"><span class="cell">time</span><span class="cell-endpoint">endpoint</span><span class="cell class">class</span>` +
       `<span class="cell num">${esc(W.COL.sent)}</span><span class="cell num">${esc(W.COL.recv)}</span><span class="cell marks"></span><span class="cell go"></span></div>` +
@@ -233,8 +233,8 @@ export function mount(el, ctx) {
     delegate(el, 'click', '[data-act="retry"]', () => { err = null; paint(); readList() }),
     delegate(el, 'click', '[data-act="retry-detail"]', () => readDetail()),
     delegate(el, 'click', '[data-act="close-detail"]', () => router.setParams({ ref: null })),
-    // one credential header value at a time: the reveal re-reads `calls {ref}` (masking is display-only)
-    delegate(el, 'click', '[data-reveal]', (e, b) => { revealed = b.dataset.reveal; readDetail() }),
+    // one credential header value at a time, from the document already held (masking is display-only, 2.6 §C)
+    delegate(el, 'click', '[data-reveal]', (e, b) => { revealed = b.dataset.reveal; paint() }),
     // a plain click selects the row here (a replace, not a new history entry); a modified click is the browser's
     delegate(el, 'click', 'a.hrow', (e, a) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button) return

@@ -24,6 +24,20 @@
 .dline .num{font-family:var(--mono);}
 .dline.bad a{color:var(--bad);}
 
+/* 保存什么:the level control, its receipt, the clipped rule list (title carries all of it) */
+.ctable td{vertical-align:top;}
+.ctable td.lv{white-space:nowrap;}
+.ctable .busy{margin-left:8px;}
+.ctable .crcpt{margin-top:4px;font-size:var(--fs-cap);color:var(--ink-2);white-space:normal;max-width:320px;}
+.ctable .crcpt[data-receipt="not-changed"],.ctable .crcpt[data-receipt="offline"],.ctable .crcpt[data-receipt="read-only"]{color:var(--bad);}
+.ctable td.rules{max-width:0;width:40%;}
+.ctable .rclip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;}
+.ctable tr.hl td{background:color-mix(in srgb,var(--accent) 12%,transparent);}
+.ctable tr.hl td:first-child{box-shadow:inset 3px 0 0 var(--accent);}
+.ctable tfoot td{border-top:1px solid var(--rule);font-weight:600;}
+.linkbtn{border:0;background:none;padding:0;color:var(--action);cursor:pointer;font:inherit;}
+.scard .lastchg{margin-top:8px;}
+
 /* ── 价格 ─────────────────────────────────────────────────────────────────────────────────────────────────────── */
 .ptable th{font-size:10.5px;color:var(--dimmer);font-weight:500;text-align:left;padding:6px 10px;border-bottom:1px solid var(--rule);}
 .ptable th.n,.ptable td.n{text-align:right;}
@@ -38,8 +52,10 @@
 .umodel:last-of-type{border-bottom:0;}
 .umodel .um{font-size:12px;}
 .cap.hint{margin-top:8px;color:var(--dimmer);}
-.trow{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;}
-.well{font-family:var(--mono);font-size:11px;background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-1);padding:2px 8px;}
+/* the template is one unbroken line in its own box (scrolls inside when narrow); the button sits after it, never on it */
+.tmpl{display:flex;align-items:center;gap:8px;flex:1 1 100%;min-width:0;}
+.well{display:block;min-width:0;max-width:100%;overflow-x:auto;white-space:pre;font-family:var(--mono);font-size:11px;background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-1);padding:2px 8px;}
+.tmpl .copybtn{flex:none;}
 .well:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
 
 /* ── 外观 ─────────────────────────────────────────────────────────────────────────────────────────────────────── */
