@@ -1,6 +1,6 @@
 // traffic/request-view.mjs — the request detail widget (2.6 §C): one request's line, headers and bodies with a fidelity
 // mark on EACH side (never one sentence covering both), credential-class header values masked until「显示」reveals
-// exactly one (the server masks by default; masking is a display default, not isolation), copies that never carry a
+// exactly one (the server blanks them in every document; the host re-reads `calls {ref, reveal}` for the one shown), copies that never carry a
 // still-masked value, and 技术细节 for the codes. The host page (1.10) hosts it; the model-call lead line is the host
 // page's, not this widget's. Pure: it eats the `calls {ref}` document only.
 import { esc, bytes } from '../core/fmt.mjs'
@@ -28,7 +28,7 @@ const maskState = (h, open) => {
 }
 
 // ── one header table ────────────────────────────────────────────────────────────────────────────────────────────────
-// `revealed` is the one header name the viewer chose to show (from the document already held). A header whose stored value is
+// `revealed` is the one header name the viewer chose to show (the document came from a `calls {ref, reveal}` read). A header whose stored value is
 // the old capture's '<redacted>' placeholder says so — that is capture-time masking, not display masking.
 export function headersHtml(headers, { revealed = null } = {}) {
   const list = normHeaders(headers)

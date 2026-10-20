@@ -10,6 +10,7 @@ import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { menuButton } from '../core/ui.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
 import { delegate } from '../core/dom.mjs'
+import { revealHeader } from '../core/sensitive.mjs'
 import { createVList } from '../core/vlist.mjs'
 import { formatHash } from '../core/router.mjs'
 import { requestDetailHtml, detailModel } from './request-view.mjs'
@@ -233,8 +234,17 @@ export function mount(el, ctx) {
     delegate(el, 'click', '[data-act="retry"]', () => { err = null; paint(); readList() }),
     delegate(el, 'click', '[data-act="retry-detail"]', () => readDetail()),
     delegate(el, 'click', '[data-act="close-detail"]', () => router.setParams({ ref: null })),
-    // one credential header value at a time, from the document already held (masking is display-only, 2.6 §C)
-    delegate(el, 'click', '[data-reveal]', (e, b) => { revealed = b.dataset.reveal; paint() }),
+    // one credential header value at a time: the server blanks them, so「Show」re-reads the record with that one value
+    // (2.6 §C); a failed or empty read keeps the detail as it is, the value still masked
+    delegate(el, 'click', '[data-reveal]', async (e, b) => {
+      const name = b.dataset.reveal, at = ref
+      const r = await revealHeader(api, at, name)
+      if (dead || ref !== at) return
+      const m = r.ok ? detailModel(r.data) : null
+      if (!m || !m.rec) return
+      detail = m; revealed = name
+      paint()
+    }),
     // a plain click selects the row here (a replace, not a new history entry); a modified click is the browser's
     delegate(el, 'click', 'a.hrow', (e, a) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button) return

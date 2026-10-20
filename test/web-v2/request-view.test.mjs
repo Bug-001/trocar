@@ -1,16 +1,32 @@
 // request-view.test.mjs — the request detail widget (2.6 §C; 1.10 acceptance #21). Real `calls {ref}` documents from the real face on
 // a temp HOME; a shape the generated store does not hold is constructed from a real record. Contract only: which bytes sit in which
-// side's section, the marks per side, masking, and that「Show」re-renders from the document already held (no second read).
+// side's section, the marks per side, masking, and that「Show」re-reads `calls {ref, reveal}` for exactly the one value (2.6 §C).
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 import * as hostPage from '../../src/web/v2/traffic/host.mjs'
 import { requestDetailHtml, detailModel } from '../../src/web/v2/traffic/request-view.mjs'
 import { esc } from '../../src/web/v2/core/fmt.mjs'
 import * as W from '../../src/web/v2/labels/traffic.mjs'
 import { trafficWorld } from './traffic-world.mjs'
+import { boardHome } from './real-face.mjs'
+import { writeSegment } from '../query/raw-home.mjs'
 
+const SECRET = 'sk-test-0123456789abcdef', OTHER = 'sk-other-fedcba9876543210'
+// the generated store holds no live credential value: one seed record (a copy of a generated request, its own id) carries two
+const seeded = () => {
+  const h = boardHome({ bytes: 2e6 })
+  const raw = path.join(h.home, 'raw')
+  const line = fs.readdirSync(raw).sort().flatMap((f) => fs.readFileSync(path.join(raw, f), 'utf8').split('\n')).find((l) => l.includes('"dst"'))
+  const rec = JSON.parse(line)
+  rec.id = 'ds_seed_credentials'
+  rec.req_headers = { ...rec.req_headers, authorization: `Bearer ${SECRET}`, 'x-api-key': OTHER }
+  writeSegment(h.home, '20260719T235959Z', [JSON.stringify(rec)])
+  return h
+}
 const world = (async () => {
-  const w = await trafficWorld()
+  const w = await trafficWorld({ home: seeded() })
   const T = (await w.face.get('traffic', { limit: 500 })).doc
   const recs = []
   for (const h of T.hosts.filter((r) => r.host)) for (const r of (await w.face.get('calls', { harness: h.harness, host: h.host, limit: 500 })).doc.records) {
@@ -20,7 +36,6 @@ const world = (async () => {
 })()
 test.after(async () => { (await world).w.close() })
 const side = (html, s) => { const at = html.indexOf(`data-side="${s}"`); assert.ok(at > 0, s); return html.slice(at, html.indexOf('</section>', at)) }
-const SECRET = 'sk-test-0123456789abcdef'
 
 test('#21a the body is the record\'s bytes, in its own side\'s section', async () => {
   const { recs } = await world
@@ -65,19 +80,39 @@ test('#21c credential headers are masked by default, with the note that masking 
   }
 })
 
-test('#21d「Show」reveals from the document already held: the value appears and calls {ref} is not read again', async () => {
+const refReads = (w) => w.log.filter((x) => x.url.startsWith('/api/calls') && new URL(x.url, 'http://x').searchParams.has('ref'))
+const credentialed = async () => {
   const { w, recs } = await world
-  const { h, doc } = recs[0]
-  const ref = doc.records[0].ref
-  w.tamper((url, d) => (url.startsWith('/api/calls') && new URL(url, 'http://x').searchParams.has('ref') ? { ...d, records: d.records.map((r) => ({ ...r, req_headers: { ...r.req_headers, authorization: SECRET } })) } : d))
+  const hit = recs.find(({ doc }) => (doc.records[0].ctl.masked || []).includes('authorization'))
+  assert.ok(hit, 'the seeded record is served with its authorization value blanked')
+  const ref = hit.doc.records[0].ref
+  const hash = `#/traffic/host/${encodeURIComponent(hit.h.harness)}/${encodeURIComponent(hit.h.host)}?ref=${encodeURIComponent(ref)}`
+  return { w, ref, mount: () => w.mount(hostPage, hash) }
+}
+
+test('B1「Show」re-reads calls {ref, reveal} once: that value appears, every other credential stays masked', async () => {
+  const { w, ref, mount } = await credentialed()
+  const s = await mount()
+  assert.ok(s.html().includes('data-reveal="authorization"') && !s.html().includes(SECRET) && !s.html().includes(OTHER))
+  const before = refReads(w).length
+  await s.click('[data-reveal]', { reveal: 'authorization' })
+  const added = refReads(w).slice(before)
+  assert.equal(added.length, 1)
+  const q = new URL(added[0].url, 'http://x').searchParams
+  assert.equal(added[0].method, 'GET'); assert.equal(q.get('ref'), ref); assert.equal(q.get('reveal'), 'authorization')
+  assert.ok(s.html().includes(SECRET))
+  assert.ok(!s.html().includes(OTHER) && s.html().includes('data-reveal="x-api-key"'))
+  s.inst.unmount()
+})
+
+test('B2 a failed reveal read keeps the detail and the value masked', async () => {
+  const { w, mount } = await credentialed()
+  w.tamper((url, d) => (new URL(url, 'http://x').searchParams.has('reveal') ? { status: 500, body: {} } : d))
   try {
-    const s = await w.mount(hostPage, `#/traffic/host/${encodeURIComponent(h.harness)}/${encodeURIComponent(h.host)}?ref=${encodeURIComponent(ref)}`)
-    const reads = () => w.log.filter((x) => x.url.startsWith('/api/calls') && new URL(x.url, 'http://x').searchParams.has('ref')).length
-    assert.ok(s.html().includes('data-reveal="authorization"') && !s.html().includes(SECRET))
-    const before = reads()
+    const s = await mount()
     await s.click('[data-reveal]', { reveal: 'authorization' })
-    assert.equal(reads(), before)
-    assert.ok(s.html().includes(SECRET))
+    assert.ok(s.html().includes('data-reveal="authorization"'), 'the detail is still shown')
+    assert.ok(!s.html().includes(SECRET))
     s.inst.unmount()
   } finally { w.tamper(null) }
 })
