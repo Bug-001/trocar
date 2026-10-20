@@ -18,6 +18,8 @@ import { writeStateAtomic, setDesired, emptyState } from '../../src/off/state.mj
 import { controlRequest } from '../../src/collector/core/control.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { osRootsFor } from '../../src/off/os-roots.mjs'
+import { codeId } from '../../src/version.mjs'
+const CODE = codeId() // D67⑤: the daemon records which code it runs, the one place that says it
 const osBundleRoots = osRootsFor('linux') // the Linux reader, through the one table
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
 import { createRedirectorClient } from '../../src/collector/arch/linux/redirector-client.mjs'
@@ -974,7 +976,7 @@ test('daemon: daemon-start carries its identity, version, foreground, upstream_c
   try {
     const life = flowsOf(s).filter((f) => f.event === 'daemon-start' || f.event === 'daemon-stop')
     assert.deepEqual(life.map((f) => [f.event, f.pid, f.start_time ?? null, f.boot_id ?? null, f.version ?? null, f.foreground ?? null, f.upstream_ca ?? null, f.linger ?? null, f.signal ?? null]),
-      [['daemon-start', process.pid, '42', 'b-9', '0.0.0', true, '/etc/relay-ca.pem', true, null], ['daemon-stop', process.pid, null, null, null, null, null, null, 'SIGHUP'], ['daemon-start', process.pid, '42', 'b-9', '0.0.0', false, null, true, null]])
+      [['daemon-start', process.pid, '42', 'b-9', CODE, true, '/etc/relay-ca.pem', true, null], ['daemon-stop', process.pid, null, null, null, null, null, null, 'SIGHUP'], ['daemon-start', process.pid, '42', 'b-9', CODE, false, null, true, null]])
     assert.equal(flowsOf(s).filter((f) => f.code === 'unclean-stop').length, 0, 'a SIGHUP stop is a clean stop')
   } finally { await d.stop(); p.done(); s.done() }
 })
