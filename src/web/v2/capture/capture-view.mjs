@@ -15,7 +15,7 @@ import { controlFor, controlHtml } from '../core/harness-switch.mjs'
 import { logRowsOf } from './capture-log.mjs'
 import { failureWord } from '../../../cli/words.mjs'
 import {
-  CONDITION_KIND, SWITCH_WORD, CODE, residueLead, ROUTING, CHANGE_REMOVAL, CHANGE_KIND, RELAYED, COMMANDS,
+  CONDITION_KIND, SWITCH_WORD, CODE, residueLead, ROUTING, CHANGE_REMOVAL, CHANGE_KIND, CHANGE_FORMAT, RELAYED, COMMANDS,
   UNKNOWN_REASON, ERR_WHERE, FIX_IN_DETAILS,
 } from '../labels/capture.mjs'
 
@@ -235,7 +235,8 @@ function changesFor(row, h) {
 }
 
 // `changed[]` items grouped by file: the path once (mono), then what trocar wrote there — `what` is the manifest kind followed by the
-// key path or format (src/cli/status.mjs changedOf); a known kind in words (CHANGE_KIND), an unknown one as it came; one kind's keys
+// key path or format (src/cli/status.mjs changedOf); a known format in words in place of its kind (CHANGE_FORMAT), a known kind in
+// words (CHANGE_KIND), an unknown one as it came; one kind's keys
 // joined. Shared by an agent row and the machine-wide block.
 function changeLines(items) {
   const byPath = new Map()
@@ -249,7 +250,10 @@ function changeLines(items) {
   }
   const out = []
   for (const [p, kinds] of byPath) {
-    const parts = [...kinds].map(([k, rs]) => `${has(CHANGE_KIND, k) ? esc(CHANGE_KIND[k]) : mono(k)}${rs.length ? ` ${mono(rs.join(', '))}` : ''}`)
+    const parts = [...kinds].flatMap(([k, all]) => {
+      const fm = all.filter((r) => has(CHANGE_FORMAT, r)), rs = all.filter((r) => !has(CHANGE_FORMAT, r))
+      return [...fm.map((r) => esc(CHANGE_FORMAT[r])), ...(rs.length || !fm.length ? [`${has(CHANGE_KIND, k) ? esc(CHANGE_KIND[k]) : mono(k)}${rs.length ? ` ${mono(rs.join(', '))}` : ''}`] : [])]
+    })
     out.push(`<p>${mono(p)}</p><p>${parts.join(' · ')}</p>`)
   }
   return out

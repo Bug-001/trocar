@@ -56,6 +56,10 @@ export const CHANGE_KIND = Object.freeze({
   'json-key': 'setting', 'json-array-item': 'list item', text: 'text block', 'owned-file': 'file trocar created',
   'proxy-entry': 'proxy setting', 'trust-entry': 'certificate setting',
 })
+// a text entry's format (the `what` after the kind, src/off/text-edit.mjs formats), said instead of the kind; an unknown one as it came
+export const CHANGE_FORMAT = Object.freeze({
+  'dotenv-block': 'block of variables', 'pem-block': 'certificate block', line: 'one line', 'yaml-list': 'list item',
+})
 // ── 还在转交的连接(status relayed 的三个计数,1.6 C.1 回执的键;只写不为 0 的)────────────────────────────────────
 export const RELAYED = Object.freeze({ closing: 'closing', waiting: 'waiting to close', cut: 'dropped' })
 

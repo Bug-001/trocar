@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import { pageHtml } from '../../src/web/v2/capture/capture-view.mjs'
 import { captureVerdict, reasonOf } from '../../src/web/v2/core/capture-verdict.mjs'
 import { esc } from '../../src/web/v2/core/fmt.mjs'
-import { CHANGE_KIND, UNKNOWN_REASON } from '../../src/web/v2/labels/capture.mjs'
+import { CHANGE_KIND, CHANGE_FORMAT, UNKNOWN_REASON } from '../../src/web/v2/labels/capture.mjs'
 import { KNOWN_KINDS } from '../../src/off/manifest.mjs'
 import { STATUS_REASONS } from '../../src/health/codes.mjs'
 import { statusReason } from '../../src/cli/words.mjs'
@@ -98,6 +98,15 @@ test('D5: changes group by file — each path once in the expand, a known kind i
     assert.ok(Object.hasOwn(CHANGE_KIND, kind), kind)
     assert.ok(!monos(ex).some((m) => m.split(/[ ,]+/).includes(kind)), kind)
   }
+})
+
+test('D9: a text entry\'s format is said in words, never as its internal name; an unknown format is shown as it came', () => {
+  const fmts = Object.keys(CHANGE_FORMAT), odd = 'zz-unknown-format'
+  assert.ok(fmts.length > 0)
+  const changed = [...fmts, odd].map((f, i) => ({ harness: 'codex', path: `~/.codex/f${i}`, what: `text ${f}`, undo: 'trocar off codex' }))
+  const ex = expandOf(rowsOf(page(doc({ extra: { changed } }))).get('codex'))
+  for (const f of fmts) assert.ok(!monos(ex).includes(f), f)
+  assert.equal(monos(ex).filter((m) => m === odd).length, 1)
 })
 
 test('D6: each undo command is listed once, and one equal to a row command is not listed again', () => {

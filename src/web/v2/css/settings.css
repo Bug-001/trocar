@@ -37,7 +37,8 @@
 .ctable tfoot td{border-top:1px solid var(--rule);font-weight:600;}
 /* the class word is a word, not machine bytes (1.5); below 600 px the rules column is not drawn (1.11) */
 .ptable.ctable td.k{font-family:inherit;}
-@media (max-width:599px){.ctable .rules{display:none;}}
+/* phone: the Matches column folds away; a technical details grid puts each key above its value (a long key column left the values one letter wide) */
+@media (max-width:599px){.ctable .rules{display:none;}.scard .tech{grid-template-columns:minmax(0,1fr);}.scard .tech .v{margin-bottom:4px;}}
 .linkbtn{border:0;background:none;padding:0;color:var(--action);cursor:pointer;font:inherit;}
 .scard .lastchg{margin-top:8px;}
 
