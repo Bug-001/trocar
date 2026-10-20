@@ -10,13 +10,13 @@ import { harnessIcon, harnessName, harnessKey } from '../core/chips.mjs'
 import { mark, disclosureHtml } from '../core/ui.mjs'
 import { copyBtn } from '../core/dom.mjs'
 import { redactUrlCredentials } from '../core/sensitive.mjs'
-import { agentVerdicts, AGENT_TIER } from '../core/capture-verdict.mjs'
+import { agentVerdicts, reasonOf, AGENT_TIER } from '../core/capture-verdict.mjs'
 import { controlFor, controlHtml } from '../core/harness-switch.mjs'
 import { logRowsOf } from './capture-log.mjs'
 import { failureWord } from '../../../cli/words.mjs'
 import {
-  CONDITION_KIND, SWITCH_WORD, TRUST_REASON, RESTART_CODES, CODE, residueLead, ROUTING, CHANGE_REMOVAL, COMMANDS,
-  UNKNOWN_REASON, ERR_WHERE,
+  CONDITION_KIND, SWITCH_WORD, CODE, residueLead, ROUTING, CHANGE_REMOVAL, COMMANDS,
+  UNKNOWN_REASON, ERR_WHERE, FIX_IN_DETAILS,
 } from '../labels/capture.mjs'
 
 const mono = (s) => `<span class="mono">${esc(s)}</span>` // a machine fact: id, path, code, command
@@ -185,33 +185,27 @@ function relCap(ts) {
 // only while the answer carries S9 (or a prior-value note); 技术细节 is always there.
 export function expandHtml(row, h, { problem = false } = {}) {
   const out = []
-  if (problem) out.push(whyHtml(row, h))
+  if (problem) out.push(whyHtml(row))
   const ch = changesFor(row, h)
   if (ch) out.push(ch)
   out.push(agentTechHtml(row, h))
   return `<dl class="exp">${out.join('')}</dl>`
 }
 
-// 为什么 · 怎么办 — only on a problem row. The why is the sentence's own reason; the fix is the same code's fix words
-// (harness-defined codes carry their own sentence with the data); a restart-kind code names the restart; the last line
+// 为什么 · 怎么办 — only on a problem row. The why is the row's own reason (agentVerdicts' reasonOf: the board's why / fix, the
+// data's words, else the shared catalog's clause, whose command sits in 技术细节); a restart-kind code names the restart; a cached
+// verdict's further findings follow. Each fact is said once (1.5): a finding that repeats the reason is not said again. The last line
 // says whether the row updates by itself (a live condition) or needs a re-check (a cached verdict).
-function whyHtml(row, h) {
-  const name = harnessName(row.harness)
-  const ps = []
-  const lead = row.conditions && row.conditions.length ? row.conditions[0] : null
-  const code = lead ? lead.code ?? null : row.code
-  if (lead && lead.kind === 'negative-cache') {
-    ps.push(`<p>${esc(kindWord(lead) || UNKNOWN_REASON)}.</p>`)
-  } else if (code != null && RESTART_CODES.includes(code)) {
-    ps.push(`<p>${esc(TRUST_REASON[code].why)}.</p><p>Restart ${esc(name)}; the new process is captured.</p>`)
-  } else if (code != null && has(TRUST_REASON, code)) {
-    ps.push(`<p>${esc(TRUST_REASON[code].why)}.</p><p>${esc(TRUST_REASON[code].fix)}.</p>`)
-  } else {
-    const own = lead && (lead.text || lead.reason)
-    ps.push(`<p>${esc(own || (row.tier === AGENT_TIER.forwarderDown ? "asight's forwarder is not running, so it cannot reach the network." : UNKNOWN_REASON))}.</p>`)
-  }
-  // a cached verdict may carry more findings, each with its own sentence
-  for (const f of row.findings || []) if (typeof f === 'string' && has(TRUST_REASON, f)) ps.push(`<p>${esc(TRUST_REASON[f].why)}</p>`)
+function whyHtml(row) {
+  const said = new Set(), ps = []
+  const say = (t) => { const s = String(t).trim().replace(/\.$/, ''); if (s && !said.has(s)) { said.add(s); ps.push(`<p>${esc(s)}.</p>`) } }
+  const nc = (row.conditions || []).find((k) => k && k.kind === 'negative-cache')
+  const r = row.reason || (nc ? { why: kindWord(nc) || UNKNOWN_REASON } : { why: UNKNOWN_REASON })
+  say(r.why)
+  if (row.restart) say(`Restart ${harnessName(row.harness)}; the new process is captured`)
+  else if (r.fix) say(r.fix)
+  if (r.command && !r.fix && !row.restart) say(FIX_IN_DETAILS)
+  for (const f of row.findings || []) if (typeof f === 'string') { const x = reasonOf(f, { harness: row.harness }); if (!x.unknown) say(x.why) }
   ps.push(row.fromCache ? '<p class="fine">After fixing it, check again (the command is in the technical details).</p>' : '<p class="fine">After fixing it, this row updates itself.</p>')
   return `<dt>Why, and what to do</dt><dd>${ps.join('')}</dd>`
 }
@@ -234,6 +228,8 @@ function agentTechHtml(row, h) {
     rows.push([`condition ${k.kind || '?'}`, H(`${k.code ? `<span class="mono">${esc(k.code)}</span> ` : ''}${k.pid != null ? `pid ${esc(k.pid)} ` : ''}${k.host ? `<span class="mono">${esc(redactUrlCredentials(k.host))}</span> ` : ''}since ${when(k.since)}`)])
   }
   if (row.code && !(row.conditions || []).length) rows.push(['code', M(row.code)])
+  const fix = row.reason && row.reason.command
+  if (fix && (row.cliId || !fix.includes('<id>'))) rows.push(['fix it', M(fix.replace('<id>', row.cliId))])
   const t = row.topology
   if (t) {
     if (t.routing) rows.push(['routing', has(ROUTING, t.routing) ? ROUTING[t.routing] : t.routing])

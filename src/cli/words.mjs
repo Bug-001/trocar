@@ -72,3 +72,86 @@ export function failureBrief(g) {
   return [[...new Set([g && g.where, g && g.code].filter(Boolean))].join('/') || 'a record', reason].filter(Boolean).join(' ') // an event with no code of its own is named once
 }
 
+/** The status reasons a single harness defines (its descriptor's trust hints and entry checks; the 「a harness's own」 part of
+ *  src/health/codes.mjs TRUST_REASONS and kimi's shim checks). Their own words come with the data; the clause here is the fallback. */
+const HARNESS_OWN = new Set(['settings-ignored-managed-by-host', 'settings-ignored-restricted', 'settings-ignored-setting-sources', 'dsh-use-openssl-ca', 'dsh-node-too-old',
+  'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override'])
+
+/** The reason an agent is not captured (RFC 1.6 §3.5 NOTE column, D38): the one catalog, a clause for every code of
+ *  src/health/codes.mjs STATUS_REASONS. → { text, fix, command } — `text` what is wrong ('' for `desired-off`), `fix` what to do in
+ *  words or null, `command` the asight command that fixes it or null — or null for a code with no clause (the caller says the reason
+ *  is unknown). `harness` and `pid` are filled in where the clause names them. `asight status` prints statusNote (the three on one
+ *  line); the board says the text and the fix and puts the command in its technical details (1.9), so the two faces word one reason
+ *  one way. */
+export function statusReason(code, { harness = '', pid = null } = {}) {
+  const h = harness || 'it', who = pid != null ? `pid ${pid}` : h
+  const M = {
+    'desired-off': [''],
+    'config-after-start': [`${who} started before capture was on`, `restart ${h}`],
+    'env-frozen': [`${who} started before capture was on`, `restart ${h}`],
+    'start-time-unknown': [`when ${pid != null ? `pid ${pid}` : 'it'} started could not be read`, `restart ${h}`],
+    'no-marker': [`${who} started before capture was on`, `restart ${h}`],
+    'kimi-not-via-shim': [`${h} did not start through the program asight installed`],
+    'negative-cache': [`${h}${pid != null ? ` (pid ${pid})` : ''} refused asight's certificate`, 'restart it'],
+    'daemon-not-running': ['asight is not running in the background'],
+    'daemon-not-responding': ['asight runs in the background but does not answer'],
+    'helper-missing': ["asight's capture helper is missing or is the wrong version"],
+    'link-missing': ['asight is not attached'],
+    'entry-missing': ['the setting that points at asight is gone', null, `asight on ${h}`],
+    'entry-changed': ['the setting that points at asight holds something else'],
+    'forwarder-down': [`asight is not listening, so ${h} cannot connect`],
+    'not-routed': [`new connections from ${h} do not go through asight`],
+    'route-loop': [`asight's upstream for ${h} would be asight itself`],
+    'proxy-changed': [`${h}'s proxy setting is not the one asight connected to`],
+    'proxy-dead': [`the proxy ${h} is set to use is not running`],
+    'proxy-unsupported': [`${h} does not support the proxy scheme it is set to use`],
+    'elevated-agent': [`${h}${pid != null ? ` (pid ${pid})` : ''} runs elevated, so asight only forwards it`],
+    'upstream-unreachable': [`asight cannot reach the proxy it uses for ${h}`],
+    'cert-not-installed': ['certificates are not installed', null, 'asight install'],
+    'cert-root-missing': ["asight's root certificate is no longer trusted", null, 'asight install'],
+    'cert-root-pending': ["asight's root certificate is not trusted yet", null, 'asight install'],
+    'cert-root-declined': ["you declined asight's root certificate"],
+    'cert-key-missing': ["the key for asight's root is gone"],
+    'cert-intermediate-unavailable': ['asight cannot sign certificates right now, so it only forwards'],
+    'cert-bundle-missing': [`${h}'s certificate file no longer holds asight's root`],
+    'cert-tier-unreachable': [`this form of ${h} has no way to reach a certificate`],
+    'not-verified': [`this form of ${h} is not verified yet, so asight passes its traffic on without reading it`],
+    'not-users-file': [`${h} points at a certificate file that is not yours`],
+    'shim-not-on-path': [`${h} did not start through the program asight installed`],
+    'form-unsupported': [`this form of ${h} cannot be captured with the proxy it is set to use`],
+    'outside-host-set': [`${h} talked to a host outside the ones asight reads for it, so that traffic is only forwarded`],
+    'chromium-child': [`a helper process of ${h} that makes no model calls; it is never decrypted`],
+    // the trust resolver's generic reasons (src/collector/core/trust)
+    'var-missing': ["this process's environment has no asight trust entry in effect", null, 'asight install'],
+    'file-unreadable': ['the certificate file the trust entry points to could not be read', `fix the read permission of that file, then restart ${h}`],
+    'ca-not-in-file': ["the certificate file in effect does not hold asight's certificate", null, 'asight install'],
+    'replace-without-ca': ["a setting that replaces the root certificates points to a bundle without asight's certificate", null, 'asight install'],
+    shadowed: ["a higher-priority setting without asight's certificate overrides asight's entry", 'change that setting', 'asight install'],
+    'verify-disabled': [`${h} turned off certificate checks on a connection itself, so asight does not decrypt it`, 'turn the checks back on to have that connection recorded'],
+    'marker-stale': ["the trust plugin's marker belongs to an earlier process with the same pid", `restart ${h} once`],
+    'marker-pending': ["waiting for this process's trust plugin to report (up to tens of seconds after start)", 'this updates itself'],
+    'ca-unusable': ["asight's capture certificate cannot be used", null, 'asight install'],
+    'environ-unreadable': ["this process's environment could not be read, so its trust entry cannot be judged", `restart ${h} once`],
+    'config-unreadable': ['one of its config files could not be read, so the trust entry in it does not count', `fix the read permission of that file, then restart ${h}`],
+    'settings-unparsable': ['one of its settings files could not be parsed, so the trust entry in it does not count', `fix that file, then restart ${h}`],
+    'settings-unreadable': ['one of its settings files could not be read, so whether it holds the certificate is not known', `fix the read permission of that file, then restart ${h}`],
+    // a harness's own reasons (HARNESS_OWN): the words the data carries for them come first on the board
+    'settings-ignored-managed-by-host': [`${h} is told by its host app to ignore the certificate setting in its settings files`],
+    'settings-ignored-restricted': [`${h} runs in restricted mode, which ignores the certificate setting in its settings`],
+    'settings-ignored-setting-sources': [`${h} was started with settings sources that leave out asight's certificate setting`],
+    'dsh-use-openssl-ca': [`${h} runs with --use-openssl-ca, under which asight cannot add its certificate`, 'start it without that flag'],
+    'dsh-node-too-old': [`${h} runs on a Node too old to add a certificate while running`, 'run it on a newer Node'],
+    'kimi-npm-no-shim': [`this is the npm build of ${h}; asight sets up only the installed one`],
+    'desktop-ca-override': [`the desktop certificate setting of ${h} overrides the one asight wrote`],
+    'smart-app-control': [`Smart App Control is on, so asight could not set up the install folder of ${h}`],
+  }
+  if (!Object.hasOwn(M, code)) return null
+  const [text, fix = null, command = null] = M[code]
+  return { text, fix, command, harnessOwn: HARNESS_OWN.has(code) }
+}
+
+/** statusReason as the CLI's one line: what is wrong; what to do; `run: <command>`. null for a code with no clause. */
+export function statusNote(code, opts) {
+  const r = statusReason(code, opts)
+  return r && [r.text, r.fix, r.command && `run: ${r.command}`].filter(Boolean).join('; ')
+}

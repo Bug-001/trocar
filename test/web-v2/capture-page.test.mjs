@@ -171,3 +171,36 @@ test('#13: two paints with the same expand memory give the same aria-expanded se
   const exp = (html) => [...html.matchAll(/aria-expanded="(true|false)" aria-controls="([^"]+)"/g)].map((m) => `${m[2]}=${m[1]}`).sort()
   assert.deepEqual(exp(page(d, CONTROL, { openByReader: open })), exp(page(d, CONTROL, { openByReader: open })))
 })
+
+// D38 · 0.1 §2: every reason `status` can give for an agent that is not captured (the closed set STATUS_REASONS) gives the row a state
+// sentence and a why from the one shared catalog — never an empty clause after the colon, never 「reason unknown」 — whether the reason
+// arrives as the verdict's `reason` (with an empty `why[]`, as the real document carries it) or as a current condition's code.
+test('D38: every status reason gives the row a sentence and a why — none empty, none unknown — through the verdict and through a condition', async () => {
+  const { STATUS_REASONS } = await import('../../src/health/codes.mjs')
+  const { statusReason } = await import('../../src/cli/words.mjs')
+  const { agentVerdicts } = await import('../../src/web/v2/core/capture-verdict.mjs')
+  const { UNKNOWN_REASON } = await import('../../src/web/v2/labels/capture.mjs')
+  const bad = []
+  for (const code of STATUS_REASONS.filter((c) => c !== 'desired-off')) {
+    if (!statusReason(code)) bad.push(`${code}: no clause in the shared catalog`)
+    const viaVerdict = doc({ hs: { codex: { captured: false, reason: code, why: [] } } })
+    const viaCondition = doc({ hs: { codex: { captured: false, reason: null, why: [] } }, extra: { critical: [{ kind: 'untrusted', harness: 'codex', code, since: T }] } })
+    for (const [how, d] of [['verdict', viaVerdict], ['condition', viaCondition]]) {
+      const r = agentVerdicts(d).find((x) => x.harness === harnessKey('codex'))
+      const why = rowsOf(page(d, CONTROL)).get(harnessKey('codex')).split('<dt>Why, and what to do</dt>')[1] || ''
+      if (!r.text.trim() || /:\s*$/.test(r.text) || r.text.includes(UNKNOWN_REASON)) bad.push(`${code} (${how}): row sentence ${JSON.stringify(r.text)}`)
+      if (!why || why.includes(UNKNOWN_REASON)) bad.push(`${code} (${how}): no why`)
+    }
+  }
+  assert.deepEqual(bad, [])
+})
+
+// 1.5: one fact is said once — a cached verdict's finding that repeats the reason is not said a second time in 为什么 · 怎么办
+test('1.5: the why section says each sentence once, though the reason also comes back as a finding', () => {
+  for (const code of RESTART_CODES) {
+    const d = doc({ hs: { codex: { captured: false, reason: code, why: [] } }, topology: { codex: { at: T, captured: false, reason: code, findings: [code] } } })
+    const why = rowsOf(page(d, CONTROL)).get(harnessKey('codex')).split('<dt>Why, and what to do</dt>')[1].split('</dd>')[0]
+    const ps = [...why.matchAll(/<p[^>]*>(.*?)<\/p>/g)].map((m) => m[1].replace(/\.$/, ''))
+    assert.equal(new Set(ps).size, ps.length, `${code}: ${JSON.stringify(ps)}`)
+  }
+})

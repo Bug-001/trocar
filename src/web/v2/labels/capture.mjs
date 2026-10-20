@@ -18,28 +18,9 @@ export const CONDITION_KIND = Object.freeze({
 // 期望态 on/off 的话(state-mismatch 的两个值、开关的期望态文字共用一份)
 export const SWITCH_WORD = Object.freeze({ on: 'on', off: 'off' })
 
-// ── 通用信任原因(src/health/codes.mjs GENERIC_TRUST_REASONS:resolver / tracker / 守护进程自己的码)──────────────
-// 每码两句:为什么(状态句里「没在采:」后面接的话)与怎么办(展开里「为什么 · 怎么办」的话)。harness 自己定义的
-// 码(HARNESS_CODES:各 harness 的 trust hint 与入口自有码)绝不在此:它们的话随数据来。
-export const TRUST_REASON = Object.freeze({
-  'var-missing': { why: "this process's environment has no asight trust entry in effect", fix: 'run asight install again; it restores the trust entry' },
-  'env-frozen': { why: 'this process started before its trust entry existed', fix: 'restart this agent; the new process is captured' },
-  'config-after-start': { why: 'the trust entry was written after this process started', fix: 'restart this agent; the new process is captured' },
-  'start-time-unknown': { why: "this process's start time could not be read, so whether it started after the trust entry is unknown", fix: 'restart this agent once' },
-  'file-unreadable': { why: 'the certificate file the trust entry points to could not be read', fix: 'fix the read permission of that file, then restart this agent' },
-  'ca-not-in-file': { why: "the certificate file in effect does not hold asight's certificate", fix: 'run asight install again; it rewrites that file' },
-  'replace-without-ca': { why: "a setting that replaces the root certificates points to a bundle without asight's certificate", fix: 'run asight install again; it merges the certificate into that bundle' },
-  shadowed: { why: "a higher-priority setting without asight's certificate overrides asight's entry", fix: 'change that setting, or run asight install again' },
-  'verify-disabled': { why: 'this agent turned off certificate checks on a connection itself; asight does not decrypt it', fix: 're-enable the checks to have that connection recorded' },
-  'marker-stale': { why: "the trust plugin's marker belongs to an earlier process with the same pid", fix: 'restart this agent once' },
-  'marker-pending': { why: "waiting for this process's trust plugin to report (up to tens of seconds after start)", fix: 'wait; this row updates itself' },
-  'no-marker': { why: "this process's trust plugin did not report adding asight's certificate; reason unknown", fix: 'restart this agent once; if the plugin file is missing, run asight install again' },
-  'ca-unusable': { why: "asight's capture certificate cannot be used, so no process's trust can be judged", fix: 'run asight install again (it issues a new certificate)' },
-  'environ-unreadable': { why: "this process's environment could not be read, so its trust entry cannot be judged", fix: 'restart this agent once' },
-  'config-unreadable': { why: 'one of its config files could not be read, so the trust entry in it does not count', fix: 'fix the read permission of that file, then restart this agent' },
-  'settings-unparsable': { why: 'one of its settings files could not be parsed, so the trust entry in it does not count', fix: 'fix that file, then restart this agent' },
-  'settings-unreadable': { why: 'one of its settings files could not be read; whether it holds the certificate is unknown', fix: 'fix the read permission of that file, then restart this agent' },
-})
+// ── 没在采的原因:话归共享目录 src/cli/words.mjs statusReason(CLI 的 NOTE 列,每个 status 原因码一句),看板不另写一份 ──
+// 「为什么 · 怎么办」里原因带命令、却没有怎么办的话时说这一句,命令在技术细节(1.9 §展开)
+export const FIX_IN_DETAILS = 'The command that fixes it is in the technical details'
 // 这两个码的话是「重启 <agent> 后生效」(1.9 §每个 agent 一行 第 3 条;不画按钮)
 export const RESTART_CODES = Object.freeze(['config-after-start', 'env-frozen'])
 

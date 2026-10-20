@@ -3,47 +3,11 @@
 // Everything here renders from the status document (附录 C.3) and the facts it was built from; nothing is computed twice and nothing is written.
 import { columns, pairs, wrap, unknown, ago, noColor, WIDTH } from './text.mjs'
 import { renderRoutes, routeNotes } from '../netenv/topology-text.mjs'
-import { failureBrief } from './words.mjs'
+import { failureBrief, statusNote } from './words.mjs'
 
 // ── the summary (§3.5) ────────────────────────────────────────────────────────────────────────────────────────────
-/** The NOTE column of the summary: one short English clause for the reason a harness is not captured. Values are filled in; a code with no sentence here says the code is unknown, never prints a code name. */
-export function noteText(code, { harness = '', pid = null } = {}) {
-  const h = harness || 'it'
-  const M = {
-    'desired-off': '',
-    'config-after-start': `${pid != null ? `pid ${pid} ` : ''}started before capture was on; restart ${h}`,
-    'env-frozen': `${pid != null ? `pid ${pid} ` : ''}started before capture was on; restart ${h}`,
-    'start-time-unknown': `when ${pid != null ? `pid ${pid}` : 'it'} started could not be read; restart ${h}`,
-    'no-marker': `${pid != null ? `pid ${pid} ` : ''}started before capture was on; restart ${h}`,
-    'kimi-not-via-shim': `${h} did not start through the program asight installed`,
-    'negative-cache': `${h}${pid != null ? ` (pid ${pid})` : ''} refused asight's certificate; restart it`,
-    'daemon-not-running': 'asight is not running in the background',
-    'daemon-not-responding': 'asight runs in the background but does not answer',
-    'helper-missing': "asight's capture helper is missing or is the wrong version",
-    'link-missing': 'asight is not attached',
-    'entry-missing': "the setting that points at asight is gone; run: asight on " + h,
-    'entry-changed': 'the setting that points at asight holds something else',
-    'forwarder-down': `asight is not listening, so ${h} cannot connect`,
-    'not-routed': `new connections from ${h} do not go through asight`,
-    'route-loop': `asight's upstream for ${h} would be asight itself`,
-    'proxy-changed': `${h}'s proxy setting is not the one asight connected to`,
-    'proxy-dead': `the proxy ${h} is set to use is not running`,
-    'proxy-unsupported': `${h} does not support the proxy scheme it is set to use`,
-    'elevated-agent': `${h}${pid != null ? ` (pid ${pid})` : ''} runs elevated, so asight only forwards it`,
-    'upstream-unreachable': `asight cannot reach the proxy it uses for ${h}`,
-    'cert-not-installed': 'certificates are not installed; run: asight install',
-    'cert-root-missing': "asight's root certificate is no longer trusted; run: asight install",
-    'cert-root-pending': "asight's root certificate is not trusted yet; run: asight install",
-    'cert-root-declined': "you declined asight's root certificate",
-    'cert-key-missing': "the key for asight's root is gone",
-    'cert-bundle-missing': `${h}'s certificate file no longer holds asight's root`,
-    'cert-tier-unreachable': `this form of ${h} has no way to reach a certificate`,
-    'not-verified': `this form of ${h} is not verified yet, so asight passes its traffic on without reading it`,
-    'not-users-file': `${h} points at a certificate file that is not yours`,
-    'shim-not-on-path': `${h} did not start through the program asight installed`,
-  }
-  return code ? (M[code] ?? unknown('no reason was recorded')) : ''
-}
+/** The NOTE column of the summary: one short English clause for the reason a harness is not captured (the shared catalog, src/cli/words.mjs statusNote). Values are filled in; a code with no sentence there says the code is unknown, never prints a code name. */
+export const noteText = (code, opts = {}) => (code ? statusNote(code, opts) ?? unknown('no reason was recorded') : '')
 
 const upFor = (since, now) => { const t = Date.parse(since); if (!Number.isFinite(t)) return null; const s = Math.max(0, Math.round((now - t) / 1000)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m` }
 

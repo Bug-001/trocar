@@ -6,9 +6,9 @@
 // The marks ✓ ✗ ! ○ – ? are the board's own glyphs, not emoji; the words are labels/common.mjs HEALTH_WORDS.
 import { fmtWhen, has } from './fmt.mjs'
 import { harnessKey, harnessName, HARNESS_ORDER } from './chips.mjs'
-import { TRUST_REASON, RESTART_CODES, UNKNOWN_REASON } from '../labels/capture.mjs'
+import { RESTART_CODES, UNKNOWN_REASON } from '../labels/capture.mjs'
 import { HEALTH_WORDS, HEALTH_READ } from '../labels/common.mjs'
-import { failureBrief } from '../../../cli/words.mjs'
+import { failureBrief, statusReason } from '../../../cli/words.mjs'
 
 export const CAPH_MS = 5000 // the poll period of the pages that show this card while visible (4.4 §live-poll: `status` is the costliest read)
 
@@ -65,6 +65,23 @@ export function capHealthPatch(r, now = Date.now()) {
   return { capHErr: r && r.ok ? 'HTTP 200 · no document' : (r && (r.error || 'HTTP ' + r.status)) || 'reason unknown' }
 }
 
+// ── why an agent is not captured — the one lookup the row's sentence and its 为什么 · 怎么办 both read (1.9 §每个 agent 一行) ──
+// The shared catalog (src/cli/words.mjs statusReason: the CLI's NOTE column, a clause for every status reason, so the two faces word
+// one reason one way) gives what is wrong, what to do and the command for the technical details. A code a harness defines itself
+// says the words the data carries first (`own`: a condition's text, else the server's reason as it came); a code the catalog does
+// not hold falls to `own`, then to `rest` (a verdict's `why[]`: what could not be read), then reason unknown.
+// → { why, fix, command, unknown } — `why` is never empty (D38: a failure says why); `command` is a template, <id> = the document's spelling.
+const ownWords = (x) => (Array.isArray(x) ? x.filter((w) => typeof w === 'string' && w.trim()).join('; ') : typeof x === 'string' ? x.trim() : '')
+export function reasonOf(code, { harness = null, own = null, rest = null } = {}) {
+  const words = (why, x = {}) => ({ why, fix: null, command: null, unknown: false, ...x })
+  const c = code != null ? statusReason(code, { harness: harness != null ? harnessName(harness) : '' }) : null
+  if (ownWords(own) && (!c || c.harnessOwn)) return words(ownWords(own))
+  if (c && c.text) return words(c.text, { fix: c.fix, command: c.command && statusReason(code, { harness: '<id>' }).command })
+  if (ownWords(own)) return words(ownWords(own))
+  if (ownWords(rest)) return words(ownWords(rest))
+  return words(UNKNOWN_REASON, { unknown: true })
+}
+
 // ── per-agent verdicts (1.9 §每个 agent 一行; the 总览 page's 「<agent>:<状态句>」 item reads the same rows) ─────────────────
 // the tier of a row's verdict, worst first — rowOrder() sorts by it (1.9 §行的次序)
 export const AGENT_TIER = Object.freeze({ forwarderDown: 0, problem: 1, unknown: 2, fine: 3, off: 4 })
@@ -72,15 +89,15 @@ export const AGENT_TIER = Object.freeze({ forwarderDown: 0, problem: 1, unknown:
 // one agent's status sentence, by 1.9's precedence (first rule that holds wins):
 //   1 the daemon is not running / not responding → waiting for the capture service
 //   2 this harness's desired state is off → off
-//   3 a current condition (`critical[]` with this harness): negative-cache → its sentence; a restart code → restart; a generic
-//     trust code → TRUST_REASON; else the condition's own reason; several → the first, then 「· N more」
+//   3 a current condition (`critical[]` with this harness): negative-cache → its sentence; a restart code → restart; else
+//     reasonOf (the shared catalog, a harness's own words first); several → the first, then 「· N more」
 //   4 the verdict `harnesses[id].captured` (else a cached `topology[id]` not older than the switch's last change):
 //     true → capturing only while the daemon runs AND responds; false → forwarder-down / restart / not capturing: <why>;
 //     null → unknown; a cache older than the switch's last change → unknown (no recent state)
 //   5 no verdict for this harness at all: the `overview` document (C.5, `ov`) has a harnesses[].last_ts for it → no problems
 //     found; it has none → not captured in the last 24 h; `ov` not read → unknown (no recent state) — never a guess (D38②)
-// → [{ harness, cliId, desired, tier, text, cls, wait, restart, code, fromCache, at, conditions, topology, findings,
-//      lastCaptured, lastFailure }] in chip-table order; `cliId` is the spelling the document used.
+// → [{ harness, cliId, desired, tier, text, cls, wait, restart, code, reason (reasonOf's answer on a not-captured row, else null),
+//      fromCache, at, conditions, topology, findings, lastCaptured, lastFailure }] in chip-table order; `cliId` is the spelling the document used.
 export function agentVerdicts(doc, ov = null) {
   const d = obj(doc && doc.daemon)
   const daemonDown = d.running === false || d.responding === false
@@ -91,7 +108,7 @@ export function agentVerdicts(doc, ov = null) {
     const k = harnessKey(id)
     if (!by.has(k)) by.set(k, {
       harness: k, cliId: null, desired: null, tier: AGENT_TIER.fine, text: '', cls: '', wait: false, restart: false,
-      code: null, fromCache: false, at: null, conditions: [], topology: null, findings: null, verdict: null,
+      code: null, reason: null, fromCache: false, at: null, conditions: [], topology: null, findings: null, verdict: null,
       lastCaptured: null, lastFailure: null,
     })
     return by.get(k)
@@ -122,13 +139,13 @@ export function agentVerdicts(doc, ov = null) {
       const rank = (c) => (c.kind === 'negative-cache' ? 2 : RESTART_CODES.includes(codeOf(c)) ? 0 : 1)
       const mine = [...r.conditions].sort((a, b) => rank(a) - rank(b))
       const lead = mine[0], code = codeOf(lead)
-      let text, restart = false
+      let text, restart = false, reason = null
       if (lead.kind === 'negative-cache') text = `not capturing: one of its processes refused asight's certificate`
       else if (RESTART_CODES.includes(code)) { text = `restart ${name} to capture it`; restart = true }
-      else if (code != null && has(TRUST_REASON, code)) text = `not capturing: ${TRUST_REASON[code].why}`
-      else text = `not capturing: ${lead.text || lead.reason || UNKNOWN_REASON}`
+      if (lead.kind !== 'negative-cache') reason = reasonOf(code, { harness: r.harness, own: lead.text || lead.reason })
+      if (!text) text = `not capturing: ${reason.why}`
       if (mine.length > 1) text += ` · ${mine.length - 1} more`
-      Object.assign(r, { tier: AGENT_TIER.problem, text, cls: 'warn', code, restart })
+      Object.assign(r, { tier: AGENT_TIER.problem, text, cls: 'warn', code, restart, reason })
       continue
     }
     // rule 4 — the document's own verdict for this harness, else a cached one no older than the switch's last change
@@ -143,12 +160,13 @@ export function agentVerdicts(doc, ov = null) {
     const asOf = fromCache ? ` · as of ${fmtWhen(t.at)}` : ''
     const why = src.reason ?? null
     let text, tier = AGENT_TIER.problem, cls = 'warn', restart = false
+    const reason = src.captured === false ? reasonOf(why, { harness: r.harness, rest: v && v.why }) : null
     if (src.captured === true) { tier = daemonUp ? AGENT_TIER.fine : AGENT_TIER.unknown; text = `${daemonUp ? 'capturing' : 'unknown'}${asOf}`; cls = daemonUp ? 'ok' : '' }
     else if (src.captured === false && why === 'forwarder-down') { text = `may not reach the network${asOf}`; tier = AGENT_TIER.forwarderDown; cls = 'bad' }
     else if (src.captured === false && RESTART_CODES.includes(why)) { text = `restart ${name} to capture it${asOf}`; restart = true }
-    else if (src.captured === false) text = `not capturing: ${why != null && has(TRUST_REASON, why) ? TRUST_REASON[why].why : (v && v.why) || UNKNOWN_REASON}${asOf}`
+    else if (src.captured === false) text = `not capturing: ${reason.why}${asOf}`
     else { text = `unknown${asOf}`; tier = AGENT_TIER.unknown; cls = '' }
-    Object.assign(r, { tier, text, cls, restart, fromCache, at, code: why })
+    Object.assign(r, { tier, text, cls, restart, fromCache, at, code: why, reason })
   }
   const rank = (id) => { const i = HARNESS_ORDER.indexOf(id); return i < 0 ? HARNESS_ORDER.length : i }
   return [...by.values()].sort((a, b) => rank(a.harness) - rank(b.harness) || (a.harness < b.harness ? -1 : 1))
