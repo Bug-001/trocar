@@ -93,7 +93,7 @@ export const FAILURE_WORDS = Object.freeze({
   'flow/agent-helper': "connections of an agent's helper programs, passed on unread",
   'flow/harness-off': 'connections of agents that are turned off, passed on unread',
   'flow/group-off': 'connections of agents still running after off, passed on unread',
-  'flow/outside-host-set': "connections of an editor to hosts outside its agent's, passed on unread",
+  'flow/outside-host-set': 'connections of agents to hosts trocar does not read for them, passed on unread',
   'flow/other-user': "connections of another user's programs, passed on unread",
   'flow/not-verified': 'connections of agent forms or hosts not verified for capture yet, passed on unread',
   'flow/policy': 'connections to hosts trocar does not read, passed on unread',
