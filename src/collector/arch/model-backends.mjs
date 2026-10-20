@@ -114,7 +114,7 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
     const runner = io.exec || runAsync
     const execOf = (file, args, o = {}) => Promise.resolve(execTool(file, args, { ...o, run: runner })) // socktable races it: always a promise
     const run = { exec: runner }
-    parts = { ownerOf: (q) => ownerOfSocket({ exec: execOf, ...q, onFailure: event }), factsOf: (pid) => pi.factsOfPid(pid, run), proc: { envOf: (p, n) => pi.envOf(p, n, run), cwdOf: (p) => pi.cwdOf(p, run), parentOf: (p) => pi.parentOf(p, run) }, close: () => {} }
+    parts = { ownerOf: (q) => ownerOfSocket({ exec: execOf, ...q, onFailure: event }), factsOf: (pid) => pi.factsOfPid(pid, run), proc: { envOf: (p, n, o) => pi.envOf(p, n, { ...o, ...run }), cwdOf: (p, o) => pi.cwdOf(p, { ...o, ...run }), parentOf: (p, o) => pi.parentOf(p, { ...o, ...run }) }, close: () => {} }
     watch = await systemProxyWatch({ up, read: up.readSystemProxy, io: io.exec ? { exec: io.exec } : {}, changes: io.exec ? null : (o) => up.scutilChanges({ ...o, env }), failure: (e) => failure('netenv', e), event }) // the OS's own change notice, unless a test injects the OS
   } else {
     // no declared registry keys (plan §E.7 ruling 4): the model reads a policy value through policy.mjs (reg.exe), not this helper

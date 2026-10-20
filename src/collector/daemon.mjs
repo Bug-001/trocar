@@ -752,20 +752,23 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   try { rootPem = fs.readFileSync(path.join(P.caDir, 'trocar-ca.pem'), 'utf8') } catch { /* no root: the issuer says so, every door forwards only */ }
   const { store, seal } = storeWithSealing({ P, failure }) // 4.2 §自动封存, the same wiring as runDaemon's
   let collector = null
-  const desired = () => { try { return readStateFile(P.state).state.harnesses || {} } catch { return {} } }
+  // status's per-harness entries: state.json's; unreadable → what this daemon has on (its in-memory switch), never a silent empty list (D38)
+  const desired = () => { try { return readStateFile(P.state).state.harnesses || {} } catch { return Object.fromEntries(list.filter((d) => collector.isOn(d.name)).map((d) => [d.name, { desired: 'on' }])) } }
   const engine = createEngine({
     redirector: { lookupIngress: (q) => collector.lookupIngress(q), servePac: (q) => collector.servePac(q) },
     issuer: { secureContextFor: (h) => collector.issuer.secureContextFor(h), issue: (h) => collector.issuer.issue(h) }, store, upstreamCa,
     ingressToken: crypto.randomBytes(24).toString('hex'), // the model listens on no shared ingress: each door carries its group's token (ingress.json's), this one guards nothing
-    isRecording: (meta) => (desired()[meta && meta.agent] || {}).desired === 'on',
+    isRecording: (meta) => collector.isOn(meta && meta.agent), // the in-memory switch decryption uses too: no file read per request, no silent off on a read error (4.6 §开关)
     retention: classesHook({ home: path.dirname(P.dir), failure }), describe: wsTerminalHook(list), // D60③ and the WebSocket turn edge, as on Linux (engine-data.mjs)
-    onFailure: (rec) => failure.event(rec), onError: (e) => log('engine', e),
+    onFailure: (rec) => { collector.noteHeld(rec); failure.event(rec) }, onError: (e) => log('engine', e),
   })
   collector = createModelCollector({ harnesses: list, dir: P.dir, identify: registry.match, ownerOf: parts.ownerOf, factsOf: parts.factsOf, proc: parts.proc,
     ctx: sourcesCtx({ os: A.os, home, env, dirs: b.dirs, policy: b.policy }), systemProxy: parts.systemProxy, custody: b.custody || 'unavailable', rootPem, procTable: parts.procTable,
     record: event, event, proxyOf: parts.proxyOf, templates: TEMPLATES, agentList: () => ({ entries: agents }), ownSid: parts.ownSid || null, openConns: () => engine.stats().active,
     drain: ({ harnesses: hs, now }) => engine.drain({ agents: new Set(hs), now }),
-    upstreamRoots: upstreamRootsOf({ A, env, upstreamCa, event }) })
+    upstreamRoots: upstreamRootsOf({ A, env, upstreamCa, event }),
+    // the process of a negative-cache key exited, or its door closed: its entries go, as runDaemon's onGone does (4.8 §5.5; the fold clears by neg_key)
+    forget: (who, pid) => { const dropped = engine.forgetNegKey(who); if (dropped) failure.write({ event: 'negative-cache-cleared', pid, neg_key: who, dropped }) } })
   collector.bindDoors({ open: (l) => engine.listen({ groups: l }), close: (ids) => Promise.resolve(engine.closeGroups(ids)) })
   let exitAsked = 0, exitTimer = null
   const status = async () => {

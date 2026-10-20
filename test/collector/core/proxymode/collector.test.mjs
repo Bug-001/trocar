@@ -9,6 +9,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createModelCollector } from '../../../../src/collector/core/proxymode/collector.mjs'
+import { HOLDER_POLL_MS } from '../../../../src/collector/core/proxymode/holders.mjs'
 import { verdictOf } from '../../../../src/collector/core/proxymode/verdict.mjs'
 import { upstreamFor } from '../../../../src/collector/core/proxymode/chain.mjs'
 import { certPem } from '../../../../src/collector/core/tls/cert.mjs'
@@ -35,13 +36,13 @@ const ready = { state: () => 'ready' }
 const manifestOf = (h, { on = [], liveness = {} } = {}) => ({ ...newManifest(), entries: [{ phase: 'install', harness: h, kind: 'json-key', path: '/x', installed_at: iso(INSTALLED) }, { phase: 'install', harness: null, kind: 'system-root', installed_at: iso(INSTALLED) }, ...on], liveness })
 
 /** One collector over one harness: `w` is what the injected readers answer now (facts, env, cwd, verdict ctx, manifest, process table). */
-async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null, others = [] } = {}) {
+async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null, others = [], forget } = {}) {
   const records = [], ctx = { os, home: '/h', dirs: {}, join: path.posix.join, readFile: (p) => w.ctx.readFile(p), readdir: (d) => w.ctx.readdir(d), exists: (p) => w.ctx.exists(p), policy: (s) => w.ctx.policy(s) }
   w.ctx ||= ctxOf(newWorld(os))
   const c = createModelCollector({ harnesses: [desc, ...others], dir: '/nowhere', ctx, custody, rootPem, proxyOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, record: (r) => records.push(r),
     identify: (f) => (f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => ({ pid: w.pid, source: 'socket-table', ms: 1 }), factsOf: async () => w.facts,
-    proc: { envOf: async (_, names) => (w.env == null ? null : (w.asked && w.asked.push(...names), Object.fromEntries(Object.entries(w.env).filter(([k]) => names.includes(k))))), cwdOf: async () => w.cwd ?? null, parentOf: async () => null }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
-    readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => w.manifest || manifestOf(desc.name), procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5 })
+    proc: { envOf: async (_, names) => (w.envCalls = (w.envCalls || 0) + 1, w.env == null ? null : (w.asked && w.asked.push(...names), Object.fromEntries(Object.entries(w.env).filter(([k]) => names.includes(k))))), cwdOf: async () => w.cwd ?? null, parentOf: async () => null }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
+    readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => { if (w.manifestErr) throw w.manifestErr; return w.manifest || manifestOf(desc.name) }, procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5, ...(forget ? { forget } : {}) })
   c.bindDoors({ open: async (l) => { for (const x of l) { if (taken.has(x.port)) throw Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' }); opened.push(x) } }, close: async (ids) => { opened.push(...ids.map((id) => ({ closed: id }))) } })
   await c.start()
   return { c, w, records }
@@ -468,4 +469,104 @@ test('1.6 V32 `attached` · the daemon\'s own answer: every group ingress.json r
   const absent = await rig({ desc: d, ingress: { missing: true }, w: { ...on } })
   assert.equal(absent.c.attached(d.name), false, 'no ingress.json: nothing recorded for it, so no (not 不知道)')
   absent.c.close()
+})
+
+// ---- 2026-10-21: evidence that was not read is never kept (4.11 P7 · P11, D38) ------------------------------------------------------------------
+// Over every verified, non-host-tree form: the process env or cwd unreadable on the first connection, readable later — a connection after the
+// throttle second gets the verdict the readable world gives (never the first one's pinned forward); within that second the reader is asked once.
+const plain = CASES.filter(({ f, os }) => f.verified[os] === true && !f.hostTree && !(f.forwardOnlyHosts || []).length)
+for (const axis of [{ envNull: true }, { cwdNull: true }]) {
+  test(`4.11 P7 · P11 · ${Object.keys(axis)[0]}: an unread env / cwd is asked again after a second and its verdict is not kept`, async () => {
+    let healed = 0
+    for (const { d, f, os } of plain) {
+      const desc = { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, g = `${d.name}:${f.route}`
+      const r = await rig({ desc, os })
+      await r.c.on({ harnesses: [d.name], groups: { [g]: 18500 } })
+      const put = (over) => { const x = worldOf(d, f, os, over), base = ctxOf(x.w); Object.assign(r.w, { pid: 4545, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: x.facts.startedAt }, env: x.w.env, cwd: x.w.cwd, ctx: { ...base, readFile: (p) => base.readFile(p).replace(ROOT.pem, STUB_PEM) } }); return x }
+      const ask = async (host) => (await r.c.lookupIngress({ peer: PEER, user: g, target: { address: host, port: 443 } })).decrypt
+      const x = put(axis)
+      const first = await ask(x.c.host)
+      const calls = r.w.envCalls
+      await ask(x.c.host); await ask(x.c.host)
+      if (axis.envNull) assert.equal(r.w.envCalls, calls, `${f.id} · ${os}: an env that does not read is asked at most once a second`)
+      const y = put({})
+      r.w.now = INSTALLED + 5 + 1001
+      const want = verdictOf({ desc, form: f, facts: { ...y.facts, pid: 4545 }, record: { carrierInstalledAt: INSTALLED, rootFp256: STUB_FP }, issuer: ready, host: y.c.host, ctx: r.w.ctx })
+      assert.equal(await ask(y.c.host), want.decrypt, `${f.id} · ${os}: the later connection is judged on what reads now`)
+      if (!first && want.decrypt) healed++
+      r.c.close()
+    }
+    if (axis.envNull) assert.ok(healed > 0, 'some form reads the env for its verdict, so the axis is exercised')
+  })
+}
+
+test('4.11 P11 · an unreadable manifest: the last good one is used and said once; with none read yet the verdict is not kept', async () => {
+  const { d, f, os } = rootForm, g = `${d.name}:${f.route}`
+  const desc = { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }
+  const r = await rig({ desc, os, w: { pid: 4646, facts: { agent: d.name, uid: 501, startedAt: INSTALLED + 1 }, env: {}, cwd: '/', manifestErr: Object.assign(new Error('busy'), { code: 'EBUSY' }) } })
+  await r.c.on({ harnesses: [d.name], groups: { [g]: 18501 } })
+  const ask = async () => (await r.c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })).decrypt
+  assert.equal(await ask(), false, 'no manifest read yet: no carrier known')
+  r.w.manifestErr = null; r.w.now = INSTALLED + 5 + 1001
+  assert.equal(await ask(), true, 'it reads now: the same process decrypts')
+  r.w.manifestErr = Object.assign(new Error('busy'), { code: 'EBUSY' }); r.w.now += 1001; r.w.pid = 4647
+  assert.equal(await ask(), true, 'a later read that fails keeps the last good manifest')
+  const said = r.records.filter((x) => x.code === 'manifest-unreadable')
+  assert.equal(said.length, 2, 'once per spell of failed reads')
+  for (const x of r.records) assert.deepEqual(checkRecord(x), [], JSON.stringify(x))
+  r.c.close()
+})
+
+// ---- 2026-10-21: negative-cache keys per process life, cleared on exit (4.8 §5.5) ---------------------------------------------------------------
+test('4.8 §5.5 · the negative-cache key is pid@start; a held key is forgotten when its process is gone from the table, a group key when its door closes', async () => {
+  const { d, f, os } = rootForm, g = `${d.name}:${f.route}`
+  const pending = [], forgot = []
+  const timers = { setTimeout: (fn, ms) => { if (ms === HOLDER_POLL_MS) pending.push(fn); return { unref() {} } }, clearTimeout: () => {} } // the sweep's (the issuer's own timers are not this test's)
+  const r = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, timers, forget: (who, p) => forgot.push([who, p]), w: { pid: 777, facts: { agent: d.name, uid: 501, startedAt: INSTALLED + 1 }, env: {}, cwd: '/' } })
+  await r.c.on({ harnesses: [d.name], groups: { [g]: 18502 } })
+  const ask = async () => r.c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })
+  assert.equal((await ask()).negKey, `777@${INSTALLED + 1}`)
+  r.w.facts = { ...r.w.facts, startedAt: INSTALLED + 2 }
+  assert.equal((await ask()).negKey, `777@${INSTALLED + 2}`, 'a later life of the pid has a key of its own: it inherits nothing')
+  assert.equal(pending.length, 0, 'nothing held: no timer, no table read')
+  for (const rec of [{ code: 'trust-rejected', neg_key: `777@${INSTALLED + 1}` }, { code: 'negative-cache', neg_key: '888' }, { code: 'negative-cache', neg_key: g }, { code: 'upstream-slow', neg_key: '999' }]) r.c.noteHeld({ event: 'failure', ...rec })
+  assert.equal(pending.length, 1, 'one timer while keys are held')
+  r.w.procs = [{ pid: 777, startedAt: INSTALLED + 1 }, { pid: 888, startedAt: 5 }]
+  await pending.shift()()
+  assert.deepEqual(forgot, [], 'every process alive, the door open: nothing goes')
+  r.w.procs = [{ pid: 777, startedAt: INSTALLED + 2 }]
+  await pending.shift()()
+  assert.deepEqual(forgot.sort(), [[`777@${INSTALLED + 1}`, 777], ['888', 888]], 'the first life of 777 exited (its pid holds another), 888 is gone')
+  r.w.procs = []
+  await r.c.off({ harnesses: [d.name] })
+  await pending.shift()()
+  assert.deepEqual(forgot.at(-1), [g, null], 'the group key goes with its door')
+  assert.equal(pending.length, 0, 'nothing held: the timer stops')
+  r.c.close()
+})
+
+// ---- 2026-10-21: forwarding by design is no failure event; the switch is the in-memory one (4.6 §连接行 · §开关) -------------------------------------
+test('4.6 §连接行 · a not-verified verdict writes no failure event (the row carries it); config-after-start writes one, once', async () => {
+  const { d, f, os } = rootForm, g = `${d.name}:${f.route}`
+  for (const [over, code, events] of [[{ verified: { reason: 'not-measured' } }, 'not-verified', 0], [{ start: 'before' }, 'config-after-start', 1]]) {
+    const { form, facts } = worldOf(d, f, os, over)
+    const r = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [form] } }, os, w: { pid: 5151, facts: { agent: d.name, uid: 501, startedAt: facts.startedAt }, env: {}, cwd: '/' } })
+    await r.c.on({ harnesses: [d.name], groups: { [g]: 18503 } })
+    for (let i = 0; i < 2; i++) assert.deepEqual((await r.c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })).skip, { not_captured: 'untrusted', reason: code })
+    assert.equal(r.records.filter((x) => x.event === 'failure' && x.code === code).length, events, code)
+    r.c.close()
+  }
+})
+
+test('4.6 §开关 · isOn follows on / off; a state.json that cannot be read at start is a where:state failure, every harness off', async () => {
+  const { d, f, os } = rootForm, g = `${d.name}:${f.route}`
+  const r = await rig({ desc: d, os, w: { get state() { throw Object.assign(new Error('permission denied'), { code: 'EACCES' }) } } })
+  assert.deepEqual(r.records.filter((x) => x.where === 'state').map((x) => [x.event, x.code]), [['failure', 'EACCES']])
+  for (const x of r.records) assert.deepEqual(checkRecord(x), [], JSON.stringify(x))
+  assert.equal(r.c.isOn(d.name), false)
+  await r.c.on({ harnesses: [d.name], groups: { [g]: 18504 } })
+  assert.equal(r.c.isOn(d.name), true, 'the state file is not asked: the daemon\'s own switch')
+  await r.c.off({ harnesses: [d.name] })
+  assert.equal(r.c.isOn(d.name), false)
+  r.c.close()
 })
