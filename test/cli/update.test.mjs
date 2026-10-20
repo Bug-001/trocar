@@ -264,6 +264,23 @@ test('V96: the collector on another code is asked to drain and exit before it is
   assert.deepEqual([t.io.json().restarted, daemon], [true, codeId(s.root)])
 })
 
+test('V96: a collector that refuses the off request is not named by a null pid', async () => {
+  const s = sandbox()
+  const sock = path.join(s.base, 'control.sock')
+  const t = ctx(s, {
+    daemonCode: () => '0.1.0+0000000',
+    deps: {
+      daemonState: async () => ({ state: 'running', socket: sock, lock: { pid: null } }),
+      request: async () => { const e = new Error('the collector refused it (409)'); e.status = 409; throw e },
+      socketPath: sock, drainMs: 0,
+    },
+  })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.incomplete, 'a step that could not do its work: exit 1, nothing changed')
+  const out = t.io.text()
+  assert.match(out, /could not be stopped/)
+  assert.doesNotMatch(out, /pid null/, 'D58②: a number the user can act on, or none — never a placeholder')
+})
+
 // ── V97 · the version, and the code the collector reports ────────────────────────────────────────────────────────────────────────────
 test('V97: --version is the package version with HEAD\'s first 7 in a git checkout, and the version alone outside one', () => {
   const home = tmpDir('asight-version-')
