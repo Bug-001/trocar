@@ -561,14 +561,13 @@ function relane(ids, r, read, take) {
   return pending ? take(r) : mine;
 }
 
-// The batch form: `records` (one session's, any order) folded whole. `opts.keepFlat(gi)` — RETENTION WINDOW: only the calls it
-// names get their blocks back (bodyOf); the others stay in their meta form (`paged_out`). Omitted → every call keeps its body.
-export function assembleSession(records, opts = {}) {
+// The batch form: `records` (one session's, any order) folded whole, every call with its body.
+export function assembleSession(records) {
   const a = createAssembler();
   const pushed = [];
   for (const r of [...(records || [])].sort(stepOrder)) { const c = a.push(r); if (c) pushed.push([c, r]); }
   const A = a.finish();
-  for (const [c, r] of pushed) if (!opts.keepFlat || opts.keepFlat(c.gi)) { Object.assign(c, a.bodyOf(c, r)); delete c.paged_out; }
+  for (const [c, r] of pushed) { Object.assign(c, a.bodyOf(c, r)); delete c.paged_out; }
   return A;
 }
 

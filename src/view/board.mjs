@@ -254,9 +254,7 @@ function slimCall(c) {
     paged_out: true, // invariant 4: this call's body was not shipped on this page
     flat: [],
     // Same as `flat`: a key list with byte refs into the request body is the body's shape, which this page does not
-    // ship. It is also what made a slimmed call differ from one the assembler never flattened (`keepFlat`), and the
-    // two MUST be the same document: the warm path pages an assembly built whole, the cold one assembles the window
-    // only (D63; src/query/named/session.mjs).
+    // ship — and a slimmed call MUST read as a call the fold kept in its meta form (src/view/assemble.mjs), whichever this is.
     nonBlockKeys: nonBlockKeys ? [] : nonBlockKeys,
     norm: norm ? { usage: norm.usage } : norm,
     rec: rec ? { id: rec.id, request: { model: rec.request && rec.request.model } } : rec,

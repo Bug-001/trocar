@@ -2,17 +2,24 @@
 // Records are synthetic (test/helpers/cc-threads.mjs); replies are shaped by the collector's own shapeResponse.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { threadPlan, CC_THREADS } from '../../src/dissect/cc-threads.mjs';
+import { CC_THREADS } from '../../src/dissect/cc-threads.mjs';
+import { stepOrder } from '../../src/view/analyze.mjs';
 import { contextStateOf } from '../../src/dissect/registry.mjs';
 import { spanAt } from '../../src/dissect/json-scan.mjs';
 import { threadSession, record, replyOf, user } from '../helpers/cc-threads.mjs';
 
 const body = (r) => JSON.parse(r.req_body);
+// the planner as the board's assembler folds a session through it: one record at a time, in step order → Map<rec, context>
+function planned(records) {
+  const p = CC_THREADS.prepare(), out = new Map();
+  for (const r of [...records].sort(stepOrder)) { const c = p.context(r); if (c) out.set(r, c); }
+  return out;
+}
 const reply = (r) => ({ role: 'assistant', content: r.resp.content_blocks });
 
 test('a continuation = the thread head system / tools + every earlier delta and reply in order + its own delta', () => {
   const s = threadSession();
-  const plans = threadPlan(s.fileOrder);
+  const plans = planned(s.fileOrder);
   const req = plans.get(s.M2).req;
   assert.deepEqual(req.messages, [...body(s.M0).messages, reply(s.M0), ...body(s.M1).messages, reply(s.M1), ...body(s.M2).messages]);
   // a continuation sends only its volatile billing header, which stands in for the head's; the cached blocks are the thread's
@@ -25,7 +32,7 @@ test('a continuation = the thread head system / tools + every earlier delta and 
 
 test('every request block of a stitched context is located in the record it came from, byte for byte', () => {
   const s = threadSession();
-  const plans = threadPlan(s.fileOrder);
+  const plans = planned(s.fileOrder);
   const p = plans.get(s.M2);
   const req = p.req;
   const check = (blk, value) => {
@@ -47,21 +54,21 @@ test('a continuation that resends non-empty tools or a cached system block uses 
   const s = threadSession();
   const own = record('M1b', '2026-10-20T00:00:03.500Z', { ...body(s.M1), tools: [{ name: 'Only', input_schema: { type: 'object' } }],
     system: [{ type: 'text', text: 'a resent system prompt' }] }, replyOf('msg_m1b', [{ type: 'text', text: 'x' }]));
-  const req = threadPlan([s.M0, own]).get(own).req;
+  const req = planned([s.M0, own]).get(own).req;
   assert.deepEqual(req.tools, body(own).tools);
   assert.deepEqual(req.system, body(own).system);
 });
 
 test('a missing anchor makes the call and its successors partial, says what is missing, and never reads complete', () => {
   const s = threadSession();
-  const plans = threadPlan([s.M1, s.M2]); // M0 (msg_m0's call) not in the capture
+  const plans = planned([s.M1, s.M2]); // M0 (msg_m0's call) not in the capture
   for (const r of [s.M1, s.M2]) {
     const c = (plans.get(r) ?? null);
     assert.equal(c.contextState, 'partial');
     assert.match(c.missing, /msg_m0/);
   }
   const noAnchor = record('X', '2026-10-20T00:00:09.000Z', { model: 'm', thread: { type: 'continue' }, messages: [user('x')] }, replyOf('msg_x', [{ type: 'text', text: 'y' }]));
-  assert.equal(threadPlan([noAnchor]).get(noAnchor).contextState, 'partial');
+  assert.equal(planned([noAnchor]).get(noAnchor).contextState, 'partial');
   // read on its own (the per-record ETL path), a continuation carries only its delta
   assert.equal(contextStateOf(s.M1), 'partial');
   assert.equal(contextStateOf(s.M0), 'complete');
@@ -71,7 +78,7 @@ test('a missing anchor makes the call and its successors partial, says what is m
 test('interleaved threads arriving out of ts order never cross: each continuation stitches only its own chain', () => {
   const s = threadSession();
   for (const order of [s.fileOrder, [...s.fileOrder].reverse()]) {
-    const plans = threadPlan(order);
+    const plans = planned(order);
     const sub = plans.get(s.S1).req;
     assert.deepEqual(sub.messages, [...body(s.S0).messages, reply(s.S0), ...body(s.S1).messages]);
     assert.deepEqual(sub.system, [body(s.S1).system[0], body(s.S0).system[1]]);
@@ -83,13 +90,13 @@ test('interleaved threads arriving out of ts order never cross: each continuatio
 
 test('a call without `thread` is read from its own bytes alone', () => {
   const s = threadSession();
-  const plans = threadPlan(s.fileOrder);
+  const plans = planned(s.fileOrder);
   assert.equal((plans.get(s.A) ?? null), null);
 });
 
 test('system-role messages and tool_addition blocks stay in the context; added tool definitions count as tools', () => {
   const s = threadSession();
-  const req = threadPlan(s.fileOrder).get(s.M2).req;
+  const req = planned(s.fileOrder).get(s.M2).req;
   const sys = req.messages.filter((m) => m.role === 'system');
   assert.deepEqual(sys, [body(s.M0).messages[1], body(s.M1).messages[1]]);
   assert.equal(CC_THREADS.toolCountOf(req), body(s.M0).tools.length + 1);
@@ -105,7 +112,7 @@ test('a predecessor whose reply did not fully arrive makes the call and its succ
   };
   for (const [name, resp] of Object.entries(variants)) {
     const M0 = { ...s.M0, resp };
-    const plans = threadPlan([M0, s.M1, s.M2]);
+    const plans = planned([M0, s.M1, s.M2]);
     assert.equal((plans.get(M0) ?? null).contextState, 'complete', name);
     for (const r of [s.M1, s.M2]) {
       const c = (plans.get(r) ?? null);
@@ -115,7 +122,7 @@ test('a predecessor whose reply did not fully arrive makes the call and its succ
   }
   // a predecessor whose own request is stored only in part passes partial on
   const M0p = { ...s.M0, req_truncated: true };
-  const p2 = threadPlan([M0p, s.M1]);
+  const p2 = planned([M0p, s.M1]);
   assert.equal((p2.get(s.M1) ?? null).contextState, 'partial');
   assert.ok((p2.get(s.M1) ?? null).missing);
 });
@@ -124,14 +131,14 @@ test('a server-edited context up the chain stays server_edited down it', () => {
   const s = threadSession();
   const edited = { type: 'message_delta', context_management: { applied_edits: [{ type: 'clear_tool_uses' }] } };
   const M0 = { ...s.M0, resp: { ...s.M0.resp, raw_sse: [...(s.M0.resp.raw_sse || []), edited] } };
-  const plans = threadPlan([M0, s.M1, s.M2]);
+  const plans = planned([M0, s.M1, s.M2]);
   for (const r of [M0, s.M1, s.M2]) assert.equal((plans.get(r) ?? null).contextState, 'server_edited', r.id);
 });
 
 test('an unknown thread.type is not a complete head: it and its successors are partial with a reason', () => {
   const s = threadSession();
   const M0 = record('M0', s.M0.ts_request, { ...body(s.M0), thread: { type: 'branch' } }, s.M0.resp);
-  const plans = threadPlan([M0, s.M1]);
+  const plans = planned([M0, s.M1]);
   for (const r of [M0, s.M1]) {
     const c = (plans.get(r) ?? null);
     assert.equal(c.contextState, 'partial', r.id);
@@ -146,10 +153,10 @@ test('a continuation\'s volatile system blocks take the inherited ones\' places;
   const M0 = record('M0', s.M0.ts_request, { ...head, system: [head.system[1], billing, head.system[2]] }, s.M0.resp);
   const vol = { type: 'text', text: 'x-anthropic-billing-header: cc_version=2.1; cch=9;' };
   const M1 = record('M1', s.M1.ts_request, { ...body(s.M1), system: [vol] }, s.M1.resp);
-  assert.deepEqual(threadPlan([M0, M1]).get(M1).req.system, [head.system[1], vol, head.system[2]]);
+  assert.deepEqual(planned([M0, M1]).get(M1).req.system, [head.system[1], vol, head.system[2]]);
   const { system: _drop, ...noSys } = body(s.M1);
   const M1n = record('M1', s.M1.ts_request, noSys, s.M1.resp);
-  assert.deepEqual(threadPlan([M0, M1n]).get(M1n).req.system, body(M0).system);
+  assert.deepEqual(planned([M0, M1n]).get(M1n).req.system, body(M0).system);
 });
 
 test('tool_removal blocks take their definitions out of the tool count', () => {

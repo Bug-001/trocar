@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildWsEnvelope } from '../../src/collector/core/record/envelope.mjs';
-import { roleOf, chainPlan, locate, normRespWs, RESPONSES_WS } from '../../src/dissect/openai-ws.mjs';
+import { roleOf, createChain, locate, normRespWs, RESPONSES_WS } from '../../src/dissect/openai-ws.mjs';
 import { spanAt } from '../../src/dissect/json-scan.mjs';
 import { fieldTextOf } from '../../src/dissect/record-fields.mjs';
 
@@ -18,6 +18,12 @@ const upgrade = (key) => ({
 });
 let n = 0;
 // One logical call as the collector writes it: the client's response.create, then the server messages up to the terminal.
+// the chain as the board's assembler folds a session through it: one record at a time, in step order (a connection's calls are
+// sequential) → Map<rec, context>
+function chained(records) {
+  const chain = createChain();
+  return new Map(records.map((r) => [r, chain.context(r)]));
+}
 function ws({ flow = 'F1', key = 'k1', input = [], prev, generate, terminal = 'response.completed', id, output = [], partial = [], extra = [], error = null }) {
   const body = { type: 'response.create', model: 'gpt-x', instructions: 'You are Codex.', tools: [], input,
     ...(prev ? { previous_response_id: prev } : {}), ...(generate === false ? { generate: false } : {}) };
@@ -38,7 +44,7 @@ test('W7: context(N) = stitched input(N-1) + output(N-1) + input(N), each segmen
   const a = ws({ input: [user('q1')], id: 'r1', output: [out('a1')] });
   const b = ws({ input: [user('q2')], prev: 'r1', id: 'r2', output: [out('a2')] });
   const c = ws({ input: [{ type: 'function_call_output', call_id: 'k', output: 'ok' }], prev: 'r2', id: 'r3' });
-  const plan = chainPlan([c, a, b]); // array order does not matter: seq orders a connection
+  const plan = chained([a, b, c]);
   assert.deepEqual(items(plan.get(c)), [user('q1'), out('a1'), user('q2'), out('a2'), { type: 'function_call_output', call_id: 'k', output: 'ok' }]);
   assert.deepEqual(plan.get(c).segments.map((s) => [s.src.id, s.field]), [
     [a.id, 'req_body'], [a.id, 'resp.messages.1'], [b.id, 'req_body'], [b.id, 'resp.messages.1'], [c.id, 'req_body']]);
@@ -49,7 +55,7 @@ test('W7: context(N) = stitched input(N-1) + output(N-1) + input(N), each segmen
 test('W3: a generate:false warmup is in the chain, its role says so, and the turn after it inherits its prompt', () => {
   const w = ws({ input: [user('ctx'), user('q1')], generate: false, id: 'rW' });
   const c = ws({ input: [], prev: 'rW', id: 'r1', output: [out('a1')] });
-  const plan = chainPlan([w, c]);
+  const plan = chained([w, c]);
   assert.deepEqual([roleOf(w), roleOf(c)], ['warmup', 'call']);
   assert.deepEqual([plan.get(w).contextState, plan.get(c).contextState], ['complete', 'reconstructed']);
   assert.deepEqual(items(plan.get(c)), [user('ctx'), user('q1')], 'the warmup carried the prompt; the turn sent nothing new');
@@ -60,7 +66,7 @@ test('W3: a generate:false warmup is in the chain, its role says so, and the tur
 test('W5: a missing predecessor makes that call and every later call on the chain partial, and says what is missing', () => {
   const b = ws({ input: [user('q2')], prev: 'r-gone', id: 'r2', output: [out('a2')] });
   const c = ws({ input: [user('q3')], prev: 'r2', id: 'r3' });
-  const plan = chainPlan([b, c]);
+  const plan = chained([b, c]);
   assert.deepEqual([plan.get(b).contextState, plan.get(c).contextState], ['partial', 'partial']);
   assert.match(plan.get(c).missing, /r-gone/);
   assert.deepEqual(items(plan.get(c)), [user('q2'), out('a2'), user('q3')], 'a partial call still carries what it has');
@@ -69,21 +75,21 @@ test('W5: a missing predecessor makes that call and every later call on the chai
 test('W6: the collector\'s partial flag forces partial on a continuation even when the chain resolves', () => {
   const a = ws({ input: [user('q1')], id: 'r1' });
   const b = ws({ input: [user('q2')], prev: 'r1', id: 'r2', partial: ['off-window'] });
-  const plan = chainPlan([a, b]);
+  const plan = chained([a, b]);
   assert.equal(plan.get(b).contextState, 'partial');
   assert.match(plan.get(b).missing, /off-window/);
 });
 
 test('3.1:60 narrowing: a call without previous_response_id carries its whole input, so the collector flag does not make it partial', () => {
   const full = ws({ input: [user('ctx'), user('q1')], id: 'r9', partial: ['decode-failed'] });
-  assert.equal(chainPlan([full]).get(full).contextState, 'complete');
+  assert.equal(chained([full]).get(full).contextState, 'complete');
 });
 
 test('only response.completed can be continued: failed, incomplete, error and cut calls are no chain head', () => {
   for (const [terminal, error] of [['response.failed', null], ['response.incomplete', null], ['error', null], [null, { type: 'ECONNRESET', message: 'cut' }]]) {
     const a = ws({ input: [user('q1')], id: 'r1', terminal, error });
     const b = ws({ input: [user('q2')], prev: 'r1', id: 'r2' });
-    const plan = chainPlan([a, b]);
+    const plan = chained([a, b]);
     assert.equal(RESPONSES_WS.prepare().plan(a).responseId, null, String(terminal));
     assert.equal(plan.get(b).contextState, 'partial', String(terminal));
   }
@@ -92,7 +98,7 @@ test('only response.completed can be continued: failed, incomplete, error and cu
 test('stitching follows previous_response_id only, never position: an OpenCode-style connection resends the full input each time', () => {
   const a = ws({ input: [user('q1')], id: 'r1', output: [out('a1')] });
   const b = ws({ input: [user('q1'), out('a1'), user('q2')], id: 'r2' }); // no previous_response_id: complete, not stitched
-  const plan = chainPlan([a, b]);
+  const plan = chained([a, b]);
   assert.equal(plan.get(b).contextState, 'complete');
   assert.deepEqual(items(plan.get(b)), [user('q1'), out('a1'), user('q2')], 'no context counted twice');
 });
@@ -100,15 +106,15 @@ test('stitching follows previous_response_id only, never position: an OpenCode-s
 test('chains never cross connections — not even when two connections reuse a flow id (a restarted collector counts from 1 again)', () => {
   const a = ws({ flow: 'F1', key: 'k1', input: [user('q1')], id: 'r1' });
   const b = ws({ flow: 'F2', key: 'k2', input: [user('q2')], prev: 'r1', id: 'r2' });
-  assert.equal(chainPlan([a, b]).get(b).contextState, 'partial');
+  assert.equal(chained([a, b]).get(b).contextState, 'partial');
   const c = ws({ flow: 'F1', key: 'k9', input: [user('q2')], prev: 'r1', id: 'r3' });
-  assert.equal(chainPlan([a, c]).get(c).contextState, 'partial', 'same flow id, another upgrade (Sec-WebSocket-Key)');
+  assert.equal(chained([a, c]).get(c).contextState, 'partial', 'same flow id, another upgrade (Sec-WebSocket-Key)');
 });
 
 test('a string input is one user message; locate() maps each stitched block back to its source record, field and path', () => {
   const a = ws({ input: 'hello', id: 'r1', output: [out('a1')] });
   const b = ws({ input: [user('q2')], prev: 'r1', id: 'r2' });
-  const plan = chainPlan([a, b]);
+  const plan = chained([a, b]);
   const ctx = plan.get(b);
   const flat = RESPONSES_WS.boardFlat(ctx.req);
   const msgs = flat.filter((x) => x.sec === 'messages');

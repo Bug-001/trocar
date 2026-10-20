@@ -74,7 +74,6 @@ export function roleOf(rec) {
 // One connection = one upgrade. flow_id restarts at 1 with the collector, so the upgrade's own random
 // Sec-WebSocket-Key (in req_headers, which every call of the connection carries) keeps two runs apart.
 const connOf = (rec) => `${rec.flow_id ?? ''}|${headerOf(rec, 'sec-websocket-key') || ''}`;
-const order = (a, b) => (Number(a.seq) - Number(b.seq)) || String(a.ts_request).localeCompare(String(b.ts_request));
 
 // The segments of a call's own input: a string input is one user message, exactly as the server reads it (its bytes are the
 // whole JSON string); else one per input item. How a segment's item is taken out of its record again is made at module level,
@@ -151,22 +150,6 @@ export function createChain(read = null) {
         locate: (blk) => locate(blk, rec, segments), ...(p.unstored ? { unrenderable: p.unstored } : {}) };
     },
   };
-}
-
-// The board's batch form: every connection's records in seq order, through one chain. → Map<rec, context>.
-export function chainPlan(records) {
-  const conns = new Map();
-  for (const r of records || []) {
-    const role = roleOf(r);
-    if (role !== 'call' && role !== 'warmup' && role !== 'unstored') continue;
-    const k = connOf(r);
-    if (!conns.has(k)) conns.set(k, []);
-    conns.get(k).push(r);
-  }
-  const chain = createChain();
-  const out = new Map();
-  for (const recs of conns.values()) for (const r of recs.sort(order)) out.set(r, chain.context(r));
-  return out;
 }
 
 // A board block of the stitched request → where its bytes are: the call's own record for what is not stitched (instructions,
