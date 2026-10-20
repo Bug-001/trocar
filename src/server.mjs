@@ -155,7 +155,7 @@ export function createServer({ home, token, query, uid = process.getuid?.(), pla
     } catch (e) {
       // Never let one bad request take the daemon's face down — respond 500, stay up.
       if (!res.headersSent) sendJson(res, 500, { error: String((e && e.message) || e) });
-      else try { res.end(); } catch {}
+      else res.destroy(); // a head already went out: abort, never end a 200 whose body is short (4.4 D66 ③)
     }
   });
   return { server };
