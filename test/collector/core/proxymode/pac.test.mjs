@@ -78,11 +78,9 @@ const PEERS = [
   ['no facts', null, { uid: 501 }, false],
 ]
 for (const [name, peer, self, ok] of PEERS) {
-  test(`CM33 peerAllowed: ${name} → ${ok ? 'allowed' : 'refused and recorded'}`, () => {
-    const recs = []
-    const r = peerAllowed(peer, self, { record: (e) => recs.push(e) })
+  test(`CM33 peerAllowed: ${name} → ${ok ? 'allowed' : 'refused (the caller records it: one record per connection)'}`, () => {
+    const r = peerAllowed(peer, self)
     assert.equal(r.ok, ok)
-    assert.equal(recs.length, ok ? 0 : 1)
-    if (!ok) { assert.equal(r.code, 'pac-peer-refused'); assert.equal(recs[0].code, 'pac-peer-refused'); assert.equal(recs[0].event, 'failure'); assert.doesNotThrow(() => checkRecord({ ...recs[0], ts: new Date().toISOString() })) }
+    if (!ok) { assert.equal(r.code, 'pac-peer-refused'); assert.equal(typeof r.detail, 'string') }
   })
 }

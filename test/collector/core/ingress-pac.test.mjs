@@ -66,3 +66,20 @@ test('a door URL whose user is the group id `<harness>:<route>` authenticates: t
   assert.equal(d.asked.length, 1, 'the token held: the lookup was asked')
   assert.equal(d.failures[0].reason, 'unknown user')
 })
+
+test('CM33 · a refusal by process on the PAC door (lookup answers {refuse}) is ONE record of its code with the peer, zero ingress-auth-failed, and the connection closed with zero bytes — not a 407 (4.8 §5.1, 4.11 P10)', T, async (t) => {
+  const d = await door(t, { open: true, lookupIngress: async () => ({ refuse: { code: 'pac-peer-refused', reason: 'pid ?: not shown to be this user\'s (no-row)' } }) })
+  const got = await d.send('CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n\r\n')
+  assert.equal(got, '', 'closed without an answer')
+  assert.equal(d.failures.filter((f) => f.code === 'ingress-auth-failed').length, 0)
+  const refused = d.failures.filter((f) => f.code === 'pac-peer-refused')
+  assert.equal(refused.length, 1)
+  assert.equal(refused[0].where, 'ingress')
+  assert.ok(refused[0].peer, 'the record names the peer')
+})
+
+test('CM33 · null from the lookup keeps its one meaning on any door: unknown user → 407 and ingress-auth-failed', T, async (t) => {
+  const d = await door(t, { open: true })
+  assert.match(await d.send('CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n\r\n'), /^HTTP\/1\.1 407 /)
+  assert.equal(d.failures.filter((f) => f.code === 'ingress-auth-failed').length, 1)
+})
