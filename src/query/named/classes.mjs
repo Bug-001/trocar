@@ -14,7 +14,7 @@ const zero = () => Object.fromEntries(WINDOWS.map(([k]) => [k, { calls: 0, bytes
 
 export async function run({ home, fs, now, errors }) {
   const table = readTable({ home, fs });
-  for (const pr of table.problems) errors.push({ where: 'classes.json', reason: pr.reason });
+  for (const pr of table.problems) errors.push({ where: 'classes.json', code: pr.code, reason: pr.reason, ...(pr.fatal ? { fatal: true } : {}) });
 
   const counts = new Map(table.classes.map((c) => [c.class, zero()]));
   const t = now();
