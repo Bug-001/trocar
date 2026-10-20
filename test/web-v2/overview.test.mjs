@@ -169,15 +169,15 @@ test('#3 no false 「nothing to handle」: a failed source draws the partial not
 })
 
 // a mounted overview on a fake element and a fake api that logs every call
-// hold(name, params) → a promise to wait on before answering (the test decides when a read answers), or null to answer at once
+// hold(name, params, opts) → a promise to wait on before answering (the test decides when a read answers), or null to answer at once
 function fakeMount({ status = quiet(), sessions = { sessions: [session(1)], errors: [], next: null }, window = '24h', control = {}, answer = { ok: true }, hold = null } = {}) {
   const log = [], on = {}
   const docs = { status, sessions, classes: { disk: { trocar_bytes: 1 } }, pricing: { models: [] }, traffic: { hosts: [], harness_since: {} }, segments: { segments: [] } }
   const api = {
     now: () => NOW,
-    get: async (name, params) => {
+    get: async (name, params, opts) => {
       log.push({ method: 'GET', name, params: params || {} })
-      const held = hold && hold(name, params || {})
+      const held = hold && hold(name, params || {}, opts || {})
       if (held) return held
       return name === 'overview' ? { ok: true, status: 200, data: stateOf(quiet()).stats.data } : { ok: true, status: 200, data: docs[name] }
     },
@@ -469,20 +469,23 @@ test('A16 a window change moves the tab at once and an answer for another window
   } finally { inst.unmount() }
 })
 
-test('A17 the slow reads go at most two at a time, and all five are read in the end', async () => {
+test('A17 the slow reads go at most two at a time, a window change included, and all five are read in the end', async () => {
   const SLOW = ['classes', 'pricing', 'overview', 'segments', 'traffic']
   const pending = [], asked = new Set()
   let most = 0
   const { inst } = fakeMount({
-    hold: (name) => {
+    hold: (name, params, opts) => {
       if (!SLOW.includes(name)) return null
       asked.add(name); const d = deferred(); const x = { name, d, done: false }; pending.push(x)
+      // an aborted read frees its socket at once in a browser, so it no longer counts as in flight
+      if (opts.signal) opts.signal.addEventListener('abort', () => { x.done = true }, { once: true })
       most = Math.max(most, pending.filter((p) => !p.done).length)
       return d.promise.then((v) => { x.done = true; return v })
     },
   })
   try {
     await settle()
+    inst.update({ params: { window: '7d' } }); await settle() // the window's own read joins while two slow reads are out
     for (let i = 0; i < 10 && pending.some((p) => !p.done); i++) {
       const next = pending.find((p) => !p.done)
       next.d.resolve(next.name === 'overview' ? statsDoc(1) : { ok: true, status: 200, data: {} }); await settle()

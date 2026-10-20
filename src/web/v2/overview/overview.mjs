@@ -486,13 +486,27 @@ export function mount(el, ctx) {
   }
   const readControl = () => api.controlStatus().then((r) => { s.control = r }, (e) => { s.control = { ok: false, error: String(e) } }).finally(render)
   const readSessions = async () => { fold('sessions', await loadSessions(api)) }
+  // the five slow reads share two sockets (1.7 §读取与刷新: the browser's six per origin keep room for status and sessions), the
+  // window's own stats read included; an aborted read gives its socket back at once, as the browser does
+  let free = 2
+  const queue = []
+  const slowGet = (name, params, opts = {}) => new Promise((resolve, reject) => {
+    const go = () => {
+      let held = true
+      const give = () => { if (!held) return; held = false; const next = queue.shift(); if (next) next(); else free++ }
+      if (opts.signal) opts.signal.addEventListener('abort', give, { once: true })
+      api.get(name, params, opts).then(resolve, reject).finally(give)
+    }
+    if (free > 0) { free--; go() } else queue.push(go)
+  })
   // the stats read: one at a time, tagged with the window it asked for. A newer one cancels the older; an answer for a window
   // that is no longer s.w, or a cancelled one, is dropped; a failure keeps the last data only when it was this window's
-  let statsCtl = null, statsP = null
+  let statsCtl = null, statsP = null, statsW = null
   const readStats = () => {
+    if (statsCtl && statsW === s.w) return statsP // this window's read is already out: wait for it, do not ask twice
     if (statsCtl) statsCtl.abort()
-    const ctl = statsCtl = new AbortController(), asked = s.w
-    const p = statsP = api.get('overview', { since: asked === 'all' ? null : asked }, { signal: ctl.signal }).then((r) => {
+    const ctl = statsCtl = new AbortController(), asked = statsW = s.w
+    const p = statsP = slowGet('overview', { since: asked === 'all' ? null : asked }, { signal: ctl.signal }).then((r) => {
       if (ctl.signal.aborted || asked !== s.w) return
       const kept = s.stats.w === asked ? s.stats.data : null
       s.stats = r && r.ok ? { data: r.data, ok: true, err: null, w: asked } : { data: kept, ok: false, err: (r && (r.error || `HTTP ${r.status}`)) || 'reason unknown', w: kept ? asked : null }
@@ -502,19 +516,14 @@ export function mount(el, ctx) {
   }
   // the slow group's stats step lasts until the latest stats read ends (a window change mid-way replaces it in the same slot)
   const statsSettled = async () => { let p = readStats(); for (;;) { await p.catch(() => {}); if (statsP === p) return; p = statsP } }
-  // two workers pull the five reads (1.7 §读取与刷新): the browser's six sockets per origin keep room for status and sessions
   const SLOW = [
-    () => api.get('classes').then((r) => fold('classes', r)),
-    () => api.get('pricing').then((r) => fold('pricing', r)),
+    () => slowGet('classes').then((r) => fold('classes', r)),
+    () => slowGet('pricing').then((r) => fold('pricing', r)),
     statsSettled,
-    () => api.get('segments').then((r) => fold('segments', r)),
-    () => api.get('traffic', { since: '24h' }).then((r) => fold('traffic', r)),
+    () => slowGet('segments').then((r) => fold('segments', r)),
+    () => slowGet('traffic', { since: '24h' }).then((r) => fold('traffic', r)),
   ]
-  const readSlow = async () => {
-    let i = 0
-    const worker = async () => { while (!dead && i < SLOW.length) { const job = SLOW[i++]; await Promise.resolve().then(job).catch(() => {}); render() } }
-    await Promise.all([worker(), worker()])
-  }
+  const readSlow = () => Promise.all(SLOW.map((job) => Promise.resolve().then(job).catch(() => {}).then(render)))
   const readers = { health: readHealth, sessions: readSessions, slow: readSlow }
 
   // one heartbeat: ask each poll what to do; a read that is still out never starts a second one
