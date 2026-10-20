@@ -17,7 +17,7 @@ import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autosta
 import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
 import { standalonePath, backupDir, opLockFile, asightHome } from '../off/paths.mjs'
-import { rawHome, indexHome } from '../paths.mjs' // D60: the records are segments under ~/.asight/raw, the index asight builds from them under ~/.asight/index
+import { rawHome, indexHome, classesLog } from '../paths.mjs' // D60: the records are segments under ~/.asight/raw, the index asight builds from them under ~/.asight/index
 import { netenvFile } from '../netenv/index.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
 import { removeOwnedFile } from '../off/journal.mjs'
@@ -60,12 +60,12 @@ async function captureOnline(w, m) {
 
 const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the connections it can see the end of
 // What a plain uninstall keeps, and `--purge-data` deletes: the records themselves and the index built from them (D60). `flows/`, where asight
-// says what it did and what failed (D38), stays either way: this very run writes its own last line there.
-const KEEPS = [[rawHome, 'your captured records'], [indexHome, 'the index asight built from them']]
-const bytesUnder = (p, fs) => { // the size of a directory, for the receipt; what cannot be read counts 0 rather than failing an uninstall
+// says what it did and what failed (D38), stays either way: this very run writes its own last line there. The class-change log is data too (1.6 §3.6).
+const KEEPS = [[rawHome, 'your captured records'], [indexHome, 'the index asight built from them'], [classesLog, 'the log of your traffic class changes']]
+const bytesUnder = (p, fs) => { // the size of a directory (or of a file), for the receipt; what cannot be read counts 0 rather than failing an uninstall
   let n = 0
   const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const q = path.join(d, e.name); if (e.isDirectory()) walk(q); else try { n += fs.lstatSync(q).size } catch { /* gone while we looked */ } } } // lstat: a link counts as the link, never as what it points at outside ~/.asight
-  try { walk(p) } catch { /* unreadable: the path is still named, with what could be counted */ }
+  try { if (fs.lstatSync(p).isDirectory()) walk(p); else n = fs.lstatSync(p).size } catch { /* unreadable: the path is still named, with what could be counted */ }
   return n
 }
 /** 附录 C.2 `kept`: what is still on disk under the home now, named, with its size. */
@@ -321,7 +321,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
           receipt.removed.push(manifestPath(w.dir))
           removeEmptyDirs(m.dirs, fs)
         }
-        removeEmptyDirs([asightHome(home), w.dir], fs) // `on` made them before the manifest listed any directory; gone only when empty (the captures keep them)
+        removeEmptyDirs([asightHome(home), w.dir, path.dirname(classesLog(asightHome(home)))], fs) // `on` made them before the manifest listed any directory; gone only when empty (the captures keep them)
       }
     }
     let list = []

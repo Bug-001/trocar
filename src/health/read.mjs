@@ -6,14 +6,13 @@
 // 1 s. A pid is reused and a lock survives a reboot, so "running" needs all three to match and a fresh mtime.
 //   captureHealth() is what GET /api/capture-health answers and `asight collector status` prints when no daemon
 // answers (RFC 4.4, 4.6 §记录「看得到」): from disk only — flows/ (src/health/flows.mjs), the lock, the install manifest,
-// state.json, the raw journal and the old capture's events file — never through the daemon's socket.
+// state.json and the raw journal — never through the daemon's socket.
 // Node built-ins, src/paths.mjs, src/raw/ and src/off/proc.mjs (a process's identity and liveness: the one reader `off` uses too) only (0.1 §2).
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { asightHome } from '../paths.mjs'
 import { procIdentity, pidAlive } from '../off/proc.mjs'
 import { readFlows, readDay, foldFlows, pick, groupKey, lastRun, WINDOW_MS, HealthUnreadable } from './flows.mjs'
-import { isFailure } from './codes.mjs'
 
 // Has `install` finished? The same reading as src/off/manifest.mjs installComplete (D55: `install.state`, which replaced v2's `complete`); src/health imports no manifest code (0.1 §2)
 const installComplete = (m) => !!(m && m.install && m.install.state === 'complete')
@@ -54,7 +53,7 @@ export function lockState({ file, now = Date.now(), alive = pidAlive, identity =
 const errText = (e) => String((e && e.message) || e)
 const DAEMON = { none: 'not-running', stale: 'not-running', unresponsive: 'not-responding', running: 'running', unknown: 'unknown' }
 // how bad each state is (1.5: `?` unreadable > ✗ > ⚠ > `?` unknown > ○ > ✓ > –); the top bar shows the worst part
-export const RANK = { unreadable: 8, 'not-running': 7, 'not-responding': 7, failing: 6, unknown: 5, 'no-events': 5, off: 4, ok: 3, residue: 2, stopped: 2, 'not-installed': 1 }
+export const RANK = { unreadable: 8, 'not-running': 7, 'not-responding': 7, failing: 6, unknown: 5, off: 4, ok: 3, residue: 2, 'not-installed': 1 }
 const latest = (...ts) => ts.filter(Boolean).sort().at(-1) || null
 
 function readJson(file, fs) {
@@ -184,60 +183,6 @@ function judgedSummary(c) {
   return { state: 'ok', since: latest(d.last_start && d.last_start.ts, c.switch.since) }
 }
 
-// The old MITM / reverse proxy (RFC 4.1 过渡期, D38): ~/.asight/logs/mitm-events.ndjson. Without it, a capture file
-// written within 24 h means an old process started before the events writer existed: said, never "not installed".
-// a capture file the old capture wrote within 24 h: {file, mtime} or null
-function freshCapture(home, now, fs) {
-  for (const f of ['claude-capture.ndjson', 'capture.ndjson']) {
-    let s; try { s = fs.statSync(path.join(home, f)) } catch { continue }
-    if (now - s.mtimeMs <= WINDOW_MS) return { file: path.join(home, f), mtime: new Date(s.mtimeMs).toISOString() }
-  }
-  return null
-}
-function legacyHealth({ home, now, fs, alive, read }) {
-  const file = path.join(home, 'logs', 'mitm-events.ndjson')
-  const t = tailLines(file, 1 << 20, fs)
-  if (t.error) { read.errors.push({ file, error: t.error }); return { present: true, state: 'unknown', error: t.error, summary: { state: 'unknown', reason: t.error } } }
-  if (t.missing) {
-    const cap = freshCapture(home, now, fs)
-    return cap ? { present: true, state: 'no-events', capture: cap, summary: { state: 'no-events', since: cap.mtime } } : { present: false, state: 'none', summary: { state: 'not-installed' } }
-  }
-  read.files.push(file); read.unparsable += t.unparsable
-  if (t.truncated) read.truncated = true
-  // per `source` (mitm / proxy; RFC 4.1 落地细节 (3)): the last start and stop of each — running (pid alive), gone (no
-  // stop, pid dead: ✗) or stopped cleanly (○, ranked below ✓ so a running collector hides it)
-  const by = new Map()
-  for (const r of t.recs) {
-    if (r.event !== 'mitm-start' && r.event !== 'mitm-stop') continue
-    const k = r.source || 'mitm', s = by.get(k) || { source: k, last_start: null, last_stop: null }
-    // `cut`: how many connections the MITM cut when it stopped (it drains for 10 s on `asight off`) — a count the whitelist of pick() does not carry, so the stop line says it here
-    if (r.event === 'mitm-start') { s.last_start = pick(r); s.last_stop = null } else s.last_stop = { ...pick(r), ...(Number.isInteger(r.cut) && r.cut >= 0 ? { cut: r.cut } : {}) }
-    by.set(k, s)
-  }
-  const sources = [...by.values()].map((s) => ({ ...s, state: s.last_start && !s.last_stop ? (s.last_start.pid == null || alive(s.last_start.pid) ? 'running' : 'gone') : 'stopped' }))
-  const failures = groupsOf(t.recs.filter(isFailure), now)
-  const last = t.recs.length ? t.recs[t.recs.length - 1].ts : null
-  // no start / stop line of any source in what was read is never "stopped" by itself (4.1 落地细节 (3)): the last
-  // start may be before the tail read (unknown), or the process predates the events writer (judged by the capture file)
-  if (!sources.length) {
-    const cap = freshCapture(home, now, fs)
-    const st = t.truncated ? 'unknown' : cap ? 'no-events' : null
-    if (st) {
-      const why = t.truncated ? `no mitm-start / mitm-stop in the last ${1 << 20} bytes of ${file}: whether the old capture runs is unknown` : null
-      return { present: true, state: st, sources, last_start: null, last_stop: null, last_record_at: last, failures, ...(cap ? { capture: cap } : {}),
-        summary: failures.length ? { state: 'failing', n: failures.length } : st === 'unknown' ? { state: 'unknown', reason: why } : { state: 'no-events', since: cap.mtime } }
-    }
-  }
-  const gone = sources.find((s) => s.state === 'gone'), running = sources.find((s) => s.state === 'running')
-  const lead = gone || running || sources.at(-1) || {}
-  const l = { present: true, state: gone ? 'not-running' : running ? 'running' : 'stopped', sources, last_start: lead.last_start || null, last_stop: lead.last_stop || null, last_record_at: last, failures }
-  l.summary = gone ? { state: 'not-running', since: last, source: gone.source, n: failures.length, reason: `pid ${gone.last_start.pid} is gone without a clean stop` }
-    : failures.length ? { state: 'failing', n: failures.length }
-    : running ? { state: 'ok', since: running.last_start.ts, source: running.source }
-    : { state: 'stopped', since: (lead.last_stop && lead.last_stop.ts) || last, ...(lead.last_stop && lead.last_stop.signal ? { signal: lead.last_stop.signal } : {}) }
-  return l
-}
-
 // The raw layer's journal (4.2 §原始层封存, D35): every outcome that is not plain success.
 function rawHealth({ home, now, fs, read }) {
   const file = path.join(home, 'raw', 'journal.jsonl')
@@ -263,25 +208,20 @@ function netenvOf({ home, fs }) {
 
 /**
  * captureHealth({home}) → the /api/capture-health payload (RFC 4.4): `installed`,
- * `summary` (the top bar's state, the worst of the collector's and the old capture's), `collector`, `legacy`, `raw`,
+ * `summary` (the verdict over the collector and the raw layer: C.3's `health`), `collector`, `raw`,
  * `netenv` (asight's own netenv.json: the adopted records and the topology, 1.6 §6), `read` (files read, files that could not be, truncated). Throws HealthUnreadable when flows/ (or the collector
  * directory) cannot be read at all — never an empty answer.
  */
 export function captureHealth({ home = asightHome(), now = Date.now(), fs = nodeFs, alive = pidAlive, identity = procIdentity, maxBytes } = {}) {
   const read = { files: [], errors: [], truncated: false, unparsable: 0, window_hours: WINDOW_MS / 3600e3 }
   const collector = collectorHealth({ dir: path.join(home, 'collector'), now, fs, alive, identity, maxBytes, read })
-  const legacy = legacyHealth({ home, now, fs, alive, read })
   const raw = rawHealth({ home, now, fs, read })
-  const parts = [{ part: 'collector', ...collector.summary }, { part: 'legacy', ...legacy.summary }]
-  let summary = parts.reduce((a, b) => (RANK[b.state] > RANK[a.state] ? b : a))
-  if (summary.state === 'failing') summary = { ...summary, n: parts.filter((p) => p.state === 'failing').reduce((k, p) => k + p.n, 0) }
-  // the raw layer's failures count whatever else is installed (the sealer works on the old pipeline's sessions too)
-  if (raw.failures.length && RANK[summary.state] <= RANK.failing) summary = { part: summary.state === 'failing' ? summary.part : 'raw', state: 'failing', n: (summary.state === 'failing' ? summary.n : 0) + raw.failures.length }
-  if (summary.state === 'not-installed') summary = { state: 'not-installed' }
+  let summary = collector.summary
+  // the raw layer's failures count whatever else is installed
+  if (raw.failures.length && RANK[summary.state] <= RANK.failing) summary = { state: 'failing', n: (summary.state === 'failing' ? summary.n : 0) + raw.failures.length }
   read.errors = [...new Map(read.errors.map((e) => [e.file, e])).values()] // one entry per file
   if (read.errors.length) summary = { ...summary, read_errors: read.errors.length }
-  // installed: true when either capture is there; null when the collector's manifest cannot be read and nothing else
-  // says so — false only means not installed (4.4)
-  const installed = collector.installed === true || legacy.present ? true : collector.installed === null ? null : false
-  return { generated_at: new Date(now).toISOString(), installed, summary, collector, legacy, raw, netenv: netenvOf({ home, fs }), read }
+  // installed: null when the collector's manifest cannot be read — false only means not installed (4.4)
+  const installed = collector.installed
+  return { generated_at: new Date(now).toISOString(), installed, summary, collector, raw, netenv: netenvOf({ home, fs }), read }
 }

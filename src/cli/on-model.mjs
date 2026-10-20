@@ -27,16 +27,16 @@ const refusedLine = (r) => `${r.harness} was not turned on: ${r.why}. Run: ${r.c
 const setupBlocked = (r) => r.refused.filter((x) => x.reason === 'setup-needed').map((x) => ({ what: x.harness, reason: x.why }))
 const setupError = (b) => ({ code: 'setup-needed', message: `${b.map((x) => x.what).join(', ')} ${b.length === 1 ? 'is' : 'are'} not set up for capture; run asight install, then asight on again` })
 
-/** → the exit code. `parts` is loadParts' view (its arch's unit); `deps`: backends, harnesses, which, exec, now, sleep, fs (0.1 §3). */
-export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, json }) {
+/** → the exit code. `source`: added to each flows/ record this run writes (the board's 'board'). `parts` is loadParts' view (its arch's unit); `deps`: backends, harnesses, which, exec, now, sleep, fs (0.1 §3). */
+export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, json, source }) {
   const fs = deps.fs || nodeFs
   const say = json ? () => {} : io.out // §1.2: with --json stderr stays empty and the plan is the `planned` key of the one document on stdout (a macOS test machine 2026-10-18: it went to stderr)
   const dir = path.join(home, '.asight', 'collector')
-  const put = (rec) => { try { if (fs.existsSync(dir)) appendEvent(dir, rec) } catch { /* the receipt carries it (R11) */ } }
+  const put = (rec) => { try { if (fs.existsSync(dir)) appendEvent(dir, source ? { ...rec, source } : rec) } catch { /* the receipt carries it (R11) */ } }
   const [{ turnOnModel }, { backendsFor, sourcesCtx }, { renderHook }] = await Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs')])
   const b = deps.backends || (await backendsFor({ os, home, run: deps.exec || null, env, fs }))
   const ctx = sourcesCtx({ os, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
-  const args = { os, home, env, ids, harnesses: deps.harnesses || parts.harnesses, ctx, fs, renderHook, rootStore: b.rootStore || null, ...(deps.now ? { now: deps.now } : {}) }
+  const args = { os, home, env, ids, harnesses: deps.harnesses || parts.harnesses, ctx, fs, renderHook, rootStore: b.rootStore || null, source, ...(deps.now ? { now: deps.now } : {}) }
   const out = (receipt, exit) => {
     if (json) io.out(JSON.stringify(receipt, null, 2))
     else io.out(fit([receipt.dry_run ? `asight on would start capturing ${receipt.harnesses.join(', ') || 'no agent'}. Nothing was written.`
@@ -102,7 +102,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     if (up.up) r.notes.push(...up.notes.map((text) => ({ harness: null, text })))
     if (r.on.length && up.up) { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) }
     const b = setupBlocked(r)
-    return out(receiptOf(r, { planned: plan.planned, daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, doors: r.doors || {}, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit)
+    return out(receiptOf(r, { planned: plan.planned, daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit)
   } finally { lock.release() }
   } finally { closeProcs() }
 }

@@ -3,6 +3,10 @@
 // with --json. The face (src/server.mjs) parsed only the small request body and never reads what comes back (D63).
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { fileURLToPath } from 'node:url'
+
+// `on` starts the daemon (its autostart unit, D61's direct start) with the CLI's own script; in this worker process.argv[1] is the worker
+const SCRIPT = fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url))
 
 /**
  * planThenConfirm({ dryRun, run, confirm }) → {status, doc} — 4.4 「先计划后确认」, shared by every verb that changes something. `dryRun()` is the
@@ -18,6 +22,8 @@ export async function planThenConfirm({ dryRun, run, confirm }) {
   return { status: 200, doc: await run() }
 }
 
+// Every verb runs with the daemon's environment (deps.env || process.env): the login job's, not a shell's. A variable exported only in some shell
+// (CODEX_HOME, SSL_CERT_FILE …) reaches the CLI run from that shell and never the board; V91 is equality under one environment (4.4 §控制面).
 export const VERBS = Object.freeze({
   /** GET /control/status: per harness what `status --json` says of its switch and its setup — that very document, so the two cannot differ (V91). */
   async status(_body, { home, deps }) {
@@ -34,5 +40,45 @@ export const VERBS = Object.freeze({
       if (e instanceof ClassArgError) return { status: 400, doc: { error: e.message } }
       throw e
     }
+  },
+  /** POST /control/harness: `asight on` (runOn, with --json and --dry-run / --yes) or `asight off` (runOff) for one harness, planned then confirmed;
+   *  the receipt is the one `--json` prints, a refusal included. `source:'board'` marks every flows/ record the run writes. The plan is the dry-run
+   *  receipt's `planned` — for an off with an install record that is [] (1.6 附录 C.2), so its plan_id binds nothing but the harness. */
+  async harness({ harness, on, confirm }, { home, deps }) {
+    const [{ resolveHarnesses }, { newReceipt }] = await Promise.all([import('../cli/harness-names.mjs'), import('../cli/schema.mjs')])
+    const named = typeof harness === 'string' ? resolveHarnesses([harness]) : { ok: false }
+    if (!named.ok) return { status: 400, doc: { error: `harness must be one of the harness names, not ${JSON.stringify(harness)}` } }
+    if (typeof on !== 'boolean') return { status: 400, doc: { error: 'on must be true or false' } }
+    const ids = named.ids, user = path.dirname(home), env = deps.env || process.env, platform = deps.platform || process.platform, d = { script: SCRIPT, ...deps }
+    const out = [], err = []
+    const io = { out: (s) => out.push(s), err: (s) => err.push(s), stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: { isTTY: false } }
+    const runOnce = async (dryRun) => {
+      out.length = err.length = 0
+      try {
+        if (!on) return (await (await import('../off/orchestrate.mjs')).runOff({ home: user, env, ids, dryRun, yes: true, interactive: false, io, say: () => {}, deps: { platform, ...d }, source: 'board' })).receipt
+        await (await import('../cli/on.mjs')).runOn({ io, env, home: user, platform, deps: d, ids, flags: new Set(['--json', dryRun ? '--dry-run' : '--yes']), json: true, source: 'board' })
+        if (out.length) return JSON.parse(out.at(-1))
+        return { ...newReceipt('on'), ok: false, notes: [...err] } // a refusal said on stderr only (root, 1.6 §1.5): the receipt the CLI's --json would have had
+      } catch (e) { return { ...newReceipt(on ? 'on' : 'off'), ok: false, notes: [String((e && e.message) || e)] } } // what the CLI prints when the command throws
+    }
+    return planThenConfirm({ dryRun: () => runOnce(true), run: () => runOnce(false), confirm })
+  },
+  /** POST /control/setup: `asight install`'s own function for one harness (only), planned then confirmed (D65④). Its plan is that harness's missing
+   *  carriers ([] when it has them all); the root and the login entry are install's steps, read back when in place, asked as install asks when not —
+   *  a dialog nobody answered is a `pending` row carrying `asight install`, the harness's carriers placed all the same (4.4 「Set up 的三件实话」). */
+  async setup({ harness, confirm }, { home, deps }) {
+    const [{ resolveHarnesses }, { newReceipt }, { install }] = await Promise.all([import('../cli/harness-names.mjs'), import('../cli/schema.mjs'), import('../cli/install.mjs')])
+    const named = typeof harness === 'string' ? resolveHarnesses([harness]) : { ok: false }
+    if (!named.ok || named.ids.length !== 1) return { status: 400, doc: { error: `harness must be one of the harness names, not ${JSON.stringify(harness)}` } }
+    const out = [], err = []
+    const io = { out: (s) => out.push(s), err: (s) => err.push(s), stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: { isTTY: false } }
+    const runOnce = async (dryRun) => {
+      out.length = err.length = 0
+      try {
+        await install({ io, env: deps.env || process.env, home: path.dirname(home), platform: deps.platform || process.platform, deps: { script: SCRIPT, ...deps }, flags: new Set(['--json', dryRun ? '--dry-run' : '--yes']), only: named.ids[0] })
+        return out.length ? JSON.parse(out.at(-1)) : { ...newReceipt('install'), ok: false, notes: [...err] } // a refusal said on stderr only (root, op.lock)
+      } catch (e) { return { ...newReceipt('install'), ok: false, notes: [String((e && e.message) || e)] } }
+    }
+    return planThenConfirm({ dryRun: () => runOnce(true), run: () => runOnce(false), confirm })
   },
 })

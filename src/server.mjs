@@ -81,7 +81,7 @@ const jsonBody = (req) => new Promise((resolve) => {
 
 let named = null; // the query core, imported on the first /api request (it is most of a cold start)
 
-export function createServer({ home, token, query, uid = process.getuid?.(), fs, now, env } = {}) {
+export function createServer({ home, token, query, uid = process.getuid?.(), platform = process.platform, fs, now, env } = {}) {
   const files = loadStatic();
   const want = Buffer.from(String(token ?? ''));
   const tokenOk = (got) => {
@@ -91,14 +91,18 @@ export function createServer({ home, token, query, uid = process.getuid?.(), fs,
   };
   // The control endpoints, by `<METHOD> <name>` (4.4 §控制面). The query worker runs each one (src/control/board.mjs); this face only relays.
   // A daemon running as root mounts none of them (`on` / `off` refuse root, 1.6 §1.5): status says why, and every write falls to 405.
+  const post = (verb) => async ({ req, res }) => {
+    const body = await jsonBody(req);
+    return body ? query.control({ verb, body, res }) : sendJson(res, 400, { error: `the request body must be one JSON object of at most ${BODY_MAX} bytes` });
+  };
   const control = uid === 0
     ? { 'GET status': ({ res }) => sendJson(res, 200, { control: false, user: nodeOs.userInfo().username, root: true, harnesses: [] }) }
     : {
       'GET status': ({ res }) => query.control({ verb: 'status', res }),
-      'POST classes': async ({ req, res }) => {
-        const body = await jsonBody(req);
-        return body ? query.control({ verb: 'classes', body, res }) : sendJson(res, 400, { error: `the request body must be one JSON object of at most ${BODY_MAX} bytes` });
-      },
+      'POST classes': post('classes'),
+      'POST harness': post('harness'),
+      // Set up is install's own carriers step (4.11 P4b), which is macOS / Windows only: on Linux the row is absent, so 405
+      ...(platform === 'darwin' || platform === 'win32' ? { 'POST setup': post('setup') } : {}),
     };
 
   async function api(req, res, url) {

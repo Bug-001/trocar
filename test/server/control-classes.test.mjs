@@ -8,41 +8,35 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { serveFace, request, withToken, TOKEN } from './face.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
-import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { fakeIo } from '../cli/fixtures/on-ctx.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
 import { snapshot } from '../query/raw-home.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
-
-const STATUS_CTX = pathToFileURL(fileURLToPath(new URL('../cli/fixtures/status-ctx.mjs', import.meta.url))).href
-
-/** A deps module for the worker: no daemon, an empty process table, no OS tool, the sandbox's own environment. → its path */
-function depsModule(env) {
-  const file = path.join(tmpDir('asight-deps-'), 'deps.mjs')
-  fs.writeFileSync(file, `import { down, SOCK } from ${JSON.stringify(STATUS_CTX)}
-export default { request: down(), socketPath: SOCK, procs: async () => [], lingerRead: () => ({ state: true }), user: 'alice',
-  exec: () => ({ status: 0, stdout: '', stderr: '' }), platform: 'linux', env: ${JSON.stringify(env)} }
-`)
-  return file
-}
+import { modelWorld } from '../helpers/model-world.mjs'
+import { sharedTrust, standInUnit } from '../helpers/board-world.mjs'
 
 const post = (port, p, body, headers = withToken()) => request(port, p, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: typeof body === 'string' ? body : JSON.stringify(body) })
 
-test('V91: GET /control/status gives per harness the desired and the setup `status --json` gives on the same sandbox', async () => {
-  const s = await installedHome()
-  const file = depsModule({ ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run') })
+test('V91: on a darwin model world, GET /control/status gives per harness the desired and the setup `status --json` gives — one ready, one needed', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] }), state = tmpDir('asight-trust-'), trust = sharedTrust(state)
+  assert.equal((await w.install({ custody: trust.custody, rootStore: trust.rootStore, unit: standInUnit(w.home) })).exit, 0)
+  fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true }) // z-code appears after install: its carrier is not placed
+  const file = path.join(tmpDir('asight-deps-'), 'deps.mjs')
+  fs.writeFileSync(file, `import { boardDeps } from ${JSON.stringify(pathToFileURL(fileURLToPath(new URL('../helpers/board-world.mjs', import.meta.url))).href)}
+import { darwinNetFacts } from ${JSON.stringify(pathToFileURL(fileURLToPath(new URL('../../src/collector/arch/darwin/netfacts.mjs', import.meta.url))).href)}
+const d = await boardDeps(${JSON.stringify({ platform: 'darwin', home: w.home, env: w.env, dirs: w.ctx.dirs, trust: state })})
+export default { ...d, netFactsDeps: async () => ({ harnesses: d.harnesses, archFacts: darwinNetFacts }) }
+`)
   const deps = (await import(pathToFileURL(file).href)).default
   const io = fakeIo()
-  await runStatusCli(['--json'], { io, home: s.home, platform: deps.platform, env: deps.env, deps })
+  await runStatusCli(['--json'], { io, home: w.home, platform: 'darwin', env: w.env, deps })
   const doc = io.json()
-  const f = await serveFace({ home: path.join(s.home, '.asight'), deps: file })
+  assert.deepEqual([doc.harnesses.codex.setup.state, doc.harnesses['z-code'].setup.state], ['ready', 'needed'], JSON.stringify(doc.harnesses))
+  const f = await serveFace({ home: path.join(w.home, '.asight'), deps: file })
   try {
     const r = await request(f.port, '/control/status', { headers: withToken() })
     assert.equal(r.status, 200, r.body)
-    const j = JSON.parse(r.body)
-    assert.deepEqual([j.control, j.root, j.user], [true, false, doc.user])
-    assert.ok(j.harnesses.length > 0)
-    assert.deepEqual(j.harnesses, Object.entries(doc.harnesses).map(([harness, h]) => ({ harness, desired: h.desired, setup: h.setup })))
+    assert.deepEqual(JSON.parse(r.body).harnesses, Object.entries(doc.harnesses).map(([harness, h]) => ({ harness, desired: h.desired, setup: h.setup })))
   } finally { f.close() }
 })
 
@@ -158,7 +152,10 @@ test('4.4 #10: a bad op or a body that is not one JSON object is 400, and classe
   try {
     const bad = [{ kind: 'set', class: 'nope', keep: 'log' }, { kind: 'set', class: 'llm', keep: 'most' }, { kind: 'add', class: 'other', host: 'x' },
       { kind: 'add', class: 'llm', host: '(' }, { kind: 'add', class: 'llm', host: 'x', harness: 'no-such-agent' }, { kind: 'rm', class: 'llm', rule: 99 },
-      { kind: 'rm', class: 'other' }, { kind: 'rename', class: 'llm' }, { kind: 'set', class: 'BAD NAME', keep: 'log' }]
+      { kind: 'rm', class: 'other' }, { kind: 'rename', class: 'llm' }, { kind: 'set', class: 'BAD NAME', keep: 'log' },
+      // a request body is any JSON: a field of another type is refused, never coerced into a name, a regex or a rule number
+      { kind: 'add', class: 7, host: 'y\\.com' }, { kind: 'add', class: ['zz'], host: 'y\\.com' }, { kind: 'add', class: 'llm', host: {} },
+      { kind: 'add', class: 'llm', host: 'x', path: ['/a', '/b'] }, { kind: 'rm', class: 'llm', rule: true }, { kind: 'rm', class: 'llm', rule: [1] }]
     for (const body of bad) {
       for (const confirm of [undefined, 'f'.repeat(64)]) {
         const r = await post(f.port, '/control/classes', { ...body, confirm })
@@ -191,12 +188,12 @@ test('4.4 #10: a classes.json that cannot be read is a receipt with ok:false and
   } finally { f.close() }
 })
 
-test('4.4 #11: a stale plan_id (the class changed between the two requests) is 409 with a new plan_id, and nothing is written', async () => {
+for (const body of [{ kind: 'set', class: 'telemetry', keep: 'log' }, { kind: 'reset' }]) test(`4.4 #11: a stale plan_id (the table changed between the two requests) is 409 with a new plan_id, and nothing is written: ${body.kind}`, async () => {
   const userHome = tmpDir('asight-ctlc-'), dir = asightOf(userHome)
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  assert.equal((await cli(['set', 'llm', 'log'], userHome)).exit, 0) // classes.json exists before and after, so only its content differs
   const f = await serveFace({ home: dir })
   try {
-    const body = { kind: 'set', class: 'telemetry', keep: 'log' }
     const first = JSON.parse((await post(f.port, '/control/classes', body)).body)
     assert.equal((await cli(['add', 'telemetry', 't\\.example'], userHome)).exit, 0)
     const between = freeze(dir)

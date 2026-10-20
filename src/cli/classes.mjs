@@ -8,7 +8,7 @@ import { columns, colors, size, tilde, ago, wrap } from './text.mjs'
 import { usageLine, commandNamed } from './commands.mjs'
 import { resolveHarnesses } from './harness-names.mjs'
 import { asightHome } from '../off/paths.mjs'
-import { readTable, plan, edit, ClassArgError } from '../classes/table.mjs'
+import { readTable, plan, edit, checkOp, ClassArgError } from '../classes/table.mjs'
 import { runQuery } from '../query/named/index.mjs'
 
 const EDITS = ['set', 'add', 'rm', 'reset']
@@ -104,7 +104,8 @@ function opOf(pos, flags) {
  * Throws ClassArgError (exit 2) for an op that does not make sense; a table that cannot be read or written is an `ok:false` receipt (exit 1).
  */
 export function classesChange(op, { home, source = 'cli', dryRun = false }) {
-  const named = resolveHarnesses(op.harness ? [String(op.harness)] : [])
+  checkOp(op)
+  const named = resolveHarnesses(op.harness ? [op.harness] : [])
   if (!named.ok) throw new ClassArgError(`no agent called ${named.unknown.join(', ')}. Known: ${named.known.join(', ')}`)
   op = { ...op, source, ...(named.ids ? { harness: named.ids[0] } : {}) }
   const fail = (error) => ({ receipt: errorDoc('classes', error.code, `asight classes ${op.kind}: ${error.message}`), exit: EXIT.incomplete })
@@ -112,7 +113,8 @@ export function classesChange(op, { home, source = 'cli', dryRun = false }) {
   if (dryRun) {
     const p = plan(op, { home })
     if (p.error) return fail(p.error)
-    return { receipt: { ...newReceipt('classes'), class: cls, before: p.before, after: p.after, undo: undoEdit(op, p.before, p.after), dry_run: true, planned: [{ class: cls, ...p }] }, exit: EXIT.ok }
+    const [before, after] = cls === null ? [null, null] : [p.before, p.after] // the receipt's own before / after are the class's, as the run's
+    return { receipt: { ...newReceipt('classes'), class: cls, before, after, undo: undoEdit(op, before, after), dry_run: true, planned: [{ class: cls, ...p }] }, exit: EXIT.ok }
   }
   const was = readTable({ home })
   const before = was.classes.find((x) => x.class === op.class) || null

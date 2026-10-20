@@ -1,6 +1,6 @@
 // test/health/retention-health.test.mjs — D40 (RFC 4.6 §记录「保存级别」热读, acceptance K3): a retention.json that cannot be
 // read or parsed is a current CONDITION on the collector (the top bar ⚠) until `retention-ok`; a traffic pattern that does
-// not compile is a failure of its own, not that condition; the old MITM's line shows as a legacy failure. From disk only.
+// not compile is a failure of its own, not that condition. From disk only.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -42,7 +42,7 @@ test('every line the retention writes is in the closed sets (src/health/codes.mj
   assert.deepEqual(lines.map((l) => isFailure(l)), [true, true, true, true, true, true, false, false, false])
 })
 
-test('captureHealth over a real collector dir: the condition shows, the state is failing, and retention-ok takes the condition away; the old MITM\'s line is a legacy failure', () => {
+test('captureHealth over a real collector dir: the condition shows, the state is failing, and retention-ok takes the condition away', () => {
   const h = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-rh-'))
   try {
     const c = path.join(h, 'collector'); fs.mkdirSync(path.join(c, 'flows'), { recursive: true })
@@ -56,10 +56,5 @@ test('captureHealth over a real collector dir: the condition shows, the state is
     assert.deepEqual(bad.collector.conditions.map((x) => x.kind), ['retention']); assert.equal(bad.summary.state, 'failing')
     write({ ts: at(100), event: 'retention-ok', where: 'retention', reason: 'ok' })
     assert.deepEqual(health().collector.conditions, [])
-    // the old capture: one line in logs/mitm-events.ndjson
-    fs.mkdirSync(path.join(h, 'logs'), { recursive: true })
-    fs.writeFileSync(path.join(h, 'logs', 'mitm-events.ndjson'), [{ ts: at(500), event: 'mitm-start', source: 'mitm', pid: process.pid, port: 1, out: '/x' }, { ts: at(60), event: 'failure', where: 'retention', code: 'retention-unparsable', reason: 'torn' }].map((r) => JSON.stringify(r)).join('\n') + '\n')
-    const legacy = health().legacy
-    assert.deepEqual([legacy.summary.state, legacy.failures.map((g) => g.key)], ['failing', ['retention/retention-unparsable']])
   } finally { fs.rmSync(h, { recursive: true, force: true }) }
 })

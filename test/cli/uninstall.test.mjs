@@ -81,12 +81,25 @@ test('R6: --purge-data takes the collector machine with the data — kernel/, ke
   const r = await cli(purged, ['--purge-data', '--yes'])
   assert.equal(r.exit, 0, r.io.text())
   assert.deepEqual(there(purged), [false, false, false, false, false], 'the kernel, its cache, the forwarder state and the two endpoint files go with the data')
-  // §3.6「流量类别表不删」(V82): the class table and its change log say what to keep of FUTURE calls, so not even --purge-data deletes them
-  assert.deepEqual(classTable(purged), [CLASSES, CLASSES_LOG], '~/.asight/classes.json and logs/classes.ndjson are byte for byte what they were')
+  // §3.6「流量类别表不删」(V82): the class table says what to keep of FUTURE calls, so not even --purge-data deletes it; its change log is data, and goes
+  assert.deepEqual(classTable(purged), [CLASSES, 'MISSING (ENOENT)'])
   const plain = await installedHome({ names: ['claude-code'] }); keep(plain); leftovers(plain)
   const p = await cli(plain, ['--yes'])
   assert.equal(p.exit, 0, p.io.text())
   assert.deepEqual(there(plain), [true, true, true, false, false], 'a plain uninstall keeps the kernel, its cache and the forwarder state (the kernel may be draining; the next on reuses the cache), but neither endpoint file: ingress.json nor control.json (P12: daemon state, and the daemon has stopped)')
+})
+
+test('§3.6: the class-change log is data — a plain uninstall keeps it byte for byte and names it in `kept`; after --purge-data ~/.asight does not exist', async () => {
+  const seedLog = (s) => { const f = path.join(path.dirname(s.dir), 'logs', 'classes.ndjson'); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, CLASSES_LOG); return f }
+  const plain = await installedHome({ names: ['claude-code'] }), log = seedLog(plain)
+  const p = await cli(plain, ['--yes', '--json'])
+  assert.equal(p.exit, 0, p.io.text())
+  assert.equal(fs.readFileSync(log, 'utf8'), CLASSES_LOG)
+  assert.ok(p.io.json().kept.some((k) => k.path === log && k.bytes === Buffer.byteLength(CLASSES_LOG)), JSON.stringify(p.io.json().kept))
+  const purged = await installedHome({ names: ['claude-code'] }); seedLog(purged)
+  const r = await cli(purged, ['--purge-data', '--yes'])
+  assert.equal(r.exit, 0, r.io.text())
+  assert.equal(fs.existsSync(path.dirname(purged.dir)), false, 'no ~/.asight after a full purge')
 })
 
 test('R6 · §3.6: uninstall always asks — no terminal and no --yes prints the plan and exits 2 with nothing done; a terminal asks once (n: nothing, exit 1); --yes goes; --purge-data says the records go for good', async () => {

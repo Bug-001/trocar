@@ -80,13 +80,14 @@ test('§3.5 `status <harness>`: the verdict, Why / Fix / Check from the one cata
 
 test('§3.5 `--failures`: one line per kind of problem, then Expected — and a health that could not be read says so', () => {
   const health = { collector: { failures: [{ count: 3, last_ts: '2026-10-18T12:14:00Z', last: { event: 'failure', where: 'engine', code: 'engine-error', reason: 'the upstream reset it' } }], expected: { 'not-an-agent': 12 } }, read: { errors: [] }, summary: { state: 'failing' } }
-  const lines = failuresBlock(health, { now: NOW })
+  const failures = { groups: [{ level: 'problem', where: 'engine', code: 'engine-error', count: 3, first_ts: '2026-10-18T12:00:00Z', last_ts: '2026-10-18T12:14:00Z', reason: 'the upstream reset it' }] }
+  const lines = failuresBlock(failures, health, { now: NOW })
   clean(lines, 'status --failures')
   assert.match(lines[0], /^Problems in the last 24 hours: 3 in 1 kind$/)
   assert.ok(lines.some((l) => /^ {2}10 min ago\s+x3\s+the engine failed \(the upstream reset it\)$/.test(l)))
   assert.ok(lines.includes('Expected') && lines.some((l) => /not agents[^:]*: 12$/.test(l)))
-  clean(failuresBlock(null, { now: NOW }), 'status --failures (unreadable)')
-  assert.match(failuresBlock(null)[0], /^Problems: unknown \(capture health could not be read\)$/)
+  clean(failuresBlock(null, null, { now: NOW }), 'status --failures (unreadable)')
+  assert.match(failuresBlock(null, null)[0], /^Problems: unknown \(capture health could not be read\)$/)
 })
 
 test('§3.5 exit codes: 0 every harness that is on is captured, 1 one of them is not, 3 that cannot be judged — a stale health line never decides it', () => {
