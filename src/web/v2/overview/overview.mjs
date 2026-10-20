@@ -65,7 +65,7 @@ export function overviewItems(s, now) {
   // ── O1 · an agent with a problem, worded as its 采集 page row (agentVerdicts); the net-blocked ones lead the table ──
   if (H) {
     for (const r of agentVerdicts(H).filter((r) => r.tier <= AGENT_TIER.problem).sort((a, b) => a.tier - b.tier))
-      push('O1', r.harness, { chip: r.harness, href: `#/capture?h=${encodeURIComponent(r.harness)}`, text: W.AGENT_ITEM(harnessName(r.harness), r.text) })
+      push('O1', r.harness, { chip: r.harness, href: `#/capture?h=${encodeURIComponent(r.harness)}`, text: r.text })
     // ── O1′ · problems that hang on no harness: critical[] without one, the agent name list, the certificate ──────
     for (const c of list(H.critical)) if (c && c.harness == null) push('O1p', `c:${c.kind}`, { subject: W.SVC_ITEM(c.reason || W.KIND_WORD[c.kind] || c.kind || ''), href: '#/capture' })
     for (const p of list(H.agent_list && H.agent_list.problems)) push('O1p', 'agent-list', { subject: W.SVC_ITEM(String((p && (p.reason || p.code)) ?? p)), href: '#/capture' })
@@ -113,8 +113,8 @@ export function overviewItems(s, now) {
       const fs = parseTs(r && r.first_seen), hs = parseTs(since[r && r.harness])
       return r && r.host != null && fs != null && hs != null && now - fs < DAY && now - hs >= DAY
     }).sort((a, b) => parseTs(b.first_seen) - parseTs(a.first_seen))) push('O9', `${r.harness} ${r.host}`, {
-      chip: agentKey(r.harness) ?? undefined,
-      text: `${W.NEW_HOST(harnessName(harnessKey(r.harness)), r.host)} (${W.BY_STATS})`,
+      chip: agentKey(r.harness) ?? undefined, subject: agentKey(r.harness) == null ? UNIDENTIFIED : null, // no agent: the unidentified name is the subject
+      text: `${W.NEW_HOST(r.host)} (${W.BY_STATS})`,
       href: `#/traffic/host/${encodeURIComponent(harnessKey(r.harness))}/${encodeURIComponent(r.host)}`,
     })
   }

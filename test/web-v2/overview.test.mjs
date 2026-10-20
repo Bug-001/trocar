@@ -116,6 +116,26 @@ test('#2 each item class appears iff its trigger holds, and links to the page of
   assert.ok(overviewItems(s, NOW).rows.find((r) => r.cls === 'O2').text.includes('lock file is not JSON'), 'O2 carries daemon.error')
 })
 
+// 1.7 §事项目录 · 1.5 一件事只说一处: the chip is the item's subject — the sentence after it never starts with the agent's name again; an
+// O1 item's sentence is the capture page row's own (agentVerdicts), word for word
+test('an item with an agent chip does not name the agent again: O1 is the capture row\'s sentence itself, O9 starts with the host', async () => {
+  const { agentVerdicts } = await import('../../src/web/v2/core/capture-verdict.mjs')
+  const s = stateOf(quiet())
+  const [id] = Object.keys(s.caph.data.harnesses)
+  Object.assign(s.caph.data.harnesses[id], { captured: false, reason: 'config-after-start' })
+  s.caph.data.critical = [{ kind: 'untrusted', harness: B, code: 'var-missing', since: iso(H) }]
+  s.caph.data.failures.groups = [group({ harness: B })]
+  s.traffic = ok({ hosts: [{ harness: A, host: 'h.example', first_seen: iso(H), requests: 1 }, { harness: null, host: 'n.example', first_seen: iso(H), requests: 1 }], harness_since: { [A]: iso(48 * H), null: iso(48 * H) } })
+  const rows = overviewItems(s, NOW).rows
+  const said = new Map(agentVerdicts(s.caph.data).map((r) => [r.harness, r.text]))
+  assert.ok(rows.some((r) => r.cls === 'O1') && rows.some((r) => r.cls === 'O9'), JSON.stringify(rows.map((r) => r.cls)))
+  for (const r of rows) {
+    if (r.chip != null) assert.ok(!r.text.startsWith(harnessName(r.chip)), `${r.cls}: ${r.text}`)
+    if (r.cls === 'O1') assert.equal(r.text, said.get(r.chip))
+    if (r.cls === 'O9') assert.ok(r.chip != null || r.subject, `${r.cls} without a chip names its subject: ${JSON.stringify(r)}`)
+  }
+})
+
 test('#2 a class with more than five items shows five and one 「N more」 link', () => {
   const s = stateOf(quiet())
   s.caph.data.critical = Array.from({ length: 7 }, (_, i) => ({ kind: `k${i}`, reason: 'r' }))

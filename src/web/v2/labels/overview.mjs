@@ -31,7 +31,6 @@ export const MORE_OF = (n) => `${n} more ›`
 export const KIND_WORD = Object.freeze({
   'ca-invalid': "asight's certificate cannot be used",
 })
-export const AGENT_ITEM = (name, why) => `${name}: ${why}`
 export const SVC_ITEM = (why) => `capture service: ${why}`
 // O2 — the capture service's state cannot be said; `why` is daemon.error as the server wrote it
 export const UNKNOWN_ITEM = (why) => `capture service state unknown: ${why}`
@@ -53,7 +52,7 @@ export const RESIDUE_LEFT = (n) => `${n} item${n === 1 ? '' : 's'} left behind b
 export const FILES_NOT_READ = (n) => `${n} capture file${n === 1 ? ' was' : 's were'} not read in full`
 
 // O9 — a host seen for the first time
-export const NEW_HOST = (name, host) => `${name} reached ${host} for the first time`
+export const NEW_HOST = (host) => `reached ${host} for the first time` // after the agent chip: the chip names the agent (1.7)
 export const BY_STATS = 'inferred from the records already in the stats'
 
 // ── 统计 ──────────────────────────────────────────────────────────────────────────────────────────────────────────
