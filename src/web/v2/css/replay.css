@@ -38,8 +38,8 @@
   .pflag:hover,.pflag:focus-visible{opacity:1;outline:1.5px solid var(--fg);}
   .pxmark{flex:1 1 0;min-width:2px;text-align:center;color:var(--red);font-size:11px;line-height:1;align-self:flex-end;cursor:pointer;font-weight:700;}
   .pxmark:hover,.pxmark:focus-visible{outline:1.5px solid var(--fg);border-radius:2px;}
-  .pcompact{flex:1 1 0;min-width:2px;display:flex;justify-content:center;align-self:flex-end;cursor:pointer;overflow:hidden;}
-  .pcompact::before{content:"";width:6px;height:6px;margin-bottom:1px;box-sizing:border-box;border:1.5px solid var(--ink-3);border-radius:50%;}
+  .pcompact{flex:1 1 0;min-width:2px;display:flex;justify-content:center;align-self:flex-end;cursor:pointer;}
+  .pcompact::before{content:"";flex:none;width:6px;height:6px;margin-bottom:1px;box-sizing:border-box;border:1.5px solid var(--ink-3);border-radius:50%;}
   .pcompact.inf::before{border-style:dotted;}
   .pcompact:hover::before,.pcompact:focus-visible::before{border-color:var(--fg);}
   /* 提问刻度: one small tick per user event, below the cache band — one cell per windowed step (the bars' /N axis),
@@ -362,6 +362,7 @@
 #pages{min-width:0;} #leftpage{min-width:0;}
 /* fidelity marks (2.3 proof rule): a PROVEN block shows no badge at all; every unproven value keeps the dashed caveat look (base .ffbadge) */
 .ff-summarized,.ff-truncated,.ff-metadata,.ff-unaddressable,.ff-unknown,.ff-notfetched,.ff-reserialized,.ff-opaque,.ff-omitted{color:var(--ink-2);}
+.desk .ffbadge{font-size:10px;} /* the desk keeps every badge at 10px or more (1.5) */
 .remnote{font-size:10px;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 40%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;}
 .cbsrc{font-size:10px;color:var(--dimmer);margin:4px 0 0;font-family:var(--mono);}
 .cbsrc.warn{color:var(--ink-2);}
