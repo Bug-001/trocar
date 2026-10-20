@@ -7,7 +7,7 @@ import { SCREEN_NAME } from '../labels/shell.mjs'
 import { esc, bytes, fmtStamp, relTime } from '../core/fmt.mjs'
 import { techDetailsHtml, popover, confirmDialog } from '../core/ui.mjs'
 import { delegate } from '../core/dom.mjs'
-import { CLASS_NAME } from '../core/classes.mjs'
+import { CLASS_NAME, CLASS_DESC, FALLBACK_CLASS } from '../core/classes.mjs'
 import { planConfirm } from '../core/control.mjs'
 import { COMMANDS } from '../labels/capture.mjs'
 import * as W from '../labels/settings.mjs'
@@ -37,16 +37,20 @@ export function classRows(doc, key = 'h24') {
   }).sort((a, b) => (b.bytes ?? -1) - (a.bytes ?? -1))
 }
 
-// problemCount(segmentsDoc) — the segments that did not fully read: the number of `segments[].problems[]` entries (1.11)
-export const problemCount = (doc) => list(doc && doc.segments).reduce((s, x) => s + list(x.problems).length, 0)
+// a `level:'note'` entry is said but is no problem: the reader built a missing index itself (slow, nothing lost, 4.2 §段索引)
+const isNote = (e) => !!e && e.level === 'note'
 
-// fileProblems(...docs) — every read problem the documents name, `{where, reason}` as they said it; one entry per distinct pair
+// problemCount(segmentsDoc) — the segments that did not fully read: the `segments[].problems[]` entries that are not notes (1.11)
+export const problemCount = (doc) => list(doc && doc.segments).reduce((s, x) => s + list(x.problems).filter((p) => p && !isNote(p)).length, 0)
+
+// fileProblems(...docs) — every entry the documents' errors[] name, `{where, reason, note}` as they said it; one entry per distinct pair
 // (a segment's problem is in `segments` and again in `classes`' errors[] — the same problem, listed once)
 export function fileProblems(...docs) {
   const out = new Map()
-  for (const e of docs.flatMap((d) => list(d && d.errors))) if (e) out.set(`${e.where}\n${e.reason}`, { where: String(e.where ?? ''), reason: String(e.reason ?? '') })
+  for (const e of docs.flatMap((d) => list(d && d.errors))) if (e) out.set(`${e.where}\n${e.reason}`, { where: String(e.where ?? ''), reason: String(e.reason ?? ''), note: isNote(e) })
   return [...out.values()]
 }
+const anyNote = (segments, ...docs) => list(segments && segments.segments).some((x) => list(x.problems).some(isNote)) || fileProblems(segments, ...docs).some((p) => p.note)
 
 const sealRatio = (d) => (num(d.records_bytes) > 0 && num(d.sealed_bytes) > 0 ? d.sealed_bytes / d.records_bytes : null)
 
@@ -99,9 +103,11 @@ function receiptHtml(r, rc) {
 }
 
 function popHtml(r, win) {
-  const lines = []
-  if (r.bytes > 0) lines.push(`<p>${esc(W.POP_STORED(bytes(r.bytes)))}</p>`)
   if (r.id == null) return ''
+  const lines = []
+  if (CLASS_DESC[r.id]) lines.push(`<p>${esc(CLASS_DESC[r.id])}</p>`)
+  lines.push(`<p>${esc(W.POP_LOG_ONLY)}</p>`)
+  if (r.bytes > 0) lines.push(`<p>${esc(W.POP_STORED(bytes(r.bytes)))}</p>`)
   lines.push(`<p><a href="#/traffic?${esc(new URLSearchParams({ class: r.id, window: win }).toString())}">${W.POP_TRAFFIC} ›</a></p>`)
   return popover({ label: r.name, title: r.name, body: lines.join('') })
 }
@@ -117,7 +123,7 @@ function classesCardHtml(classes, window, { control = null, ui = new Map(), hl =
   const notes = [['later', W.NOTE_LATER]]
   if (classes && classes.as_of) notes.push(['as-of', `${W.CLASSES_AS_OF} ${fmtStamp(classes.as_of)}`])
   else if (classes && classes.as_of === null) notes.push(['no-calls', W.NOTE_NO_CALLS])
-  if (errs.some((e) => String(e.where || '').startsWith('segments/'))) notes.push(['partial', W.NOTE_PARTIAL])
+  if (errs.some((e) => !isNote(e) && String(e.where || '').startsWith('segments/'))) notes.push(['partial', W.NOTE_PARTIAL])
   if (root) notes.push(['read-only', W.NOTE_READ_ONLY])
   if (fatal) notes.push(['file-bad', W.NOTE_FILE_BAD])
   else if (fileErrs.length) notes.push(['file-some', W.NOTE_FILE_SOME(fileErrs.length)])
@@ -125,39 +131,45 @@ function classesCardHtml(classes, window, { control = null, ui = new Map(), hl =
   const last = lc && lc.ts
     ? `<p class="cap lastchg" data-source="${esc(lc.source || '')}">${W.LAST_CHANGE}: ${esc(lc.class == null ? W.NO_CLASS : CLASS_NAME[lc.class] || lc.class)} ${esc(lc.to && lc.to.keep ? keepName(lc.to.keep) : '')} · ${esc(W.SOURCE_WORD[lc.source] || lc.source || '')} · <time datetime="${esc(lc.ts)}" title="${esc(fmtStamp(lc.ts))}">${esc(relTime(lc.ts, now))}</time></p>`
     : `<p class="cap lastchg" data-empty="no-change">${W.NO_CHANGE}</p>`
+  // segment read problems are listed once, in the 磁盘 card's files; here only the settings file's own; one command row per class
   const tech = [
-    ...errs.map((e) => [W.TECH_PROBLEM, `${e.where} · ${e.reason}`]),
+    ...fileErrs.map((e, i) => [i ? '' : W.TECH_PROBLEM, `${e.where} · ${e.reason}`]),
     [W.CLASSES_FILE, classes && classes.file ? classes.file : W.FILE_NONE],
     ...(fatal ? [['', W.FILE_FIX]] : []),
-    ...rows.filter((r) => r.inTable).map((r) => [W.TECH_TERMINAL, cmdFor(r.id, other(r.keep))]),
+    ...rows.filter((r) => r.inTable).map((r) => [r.name, cmdFor(r.id, other(r.keep))]),
   ]
+  const all = sum(rows, 'bytes')
+  const share = (b) => (all > 0 && b != null ? ` · ${Math.round((b / all) * 100)}%` : '')
   return `<div class="scard"><h2>${W.CARD_CLASSES}</h2>` +
     notes.map(([k, t]) => `<p class="cap" data-note="${k}">${esc(t)}</p>`).join('') +
-    `<div class="hscroll"><table class="ptable ctable"><thead><tr><th class="k">${W.COL_CLASS}</th><th>${W.COL_KEEP}</th><th>${W.COL_RULES}</th><th class="n">${W.COL_CALLS}</th><th class="n">${W.COL_STORED}</th><th aria-label="${W.COL_INFO}"></th></tr></thead><tbody>` +
+    `<div class="hscroll"><table class="ptable ctable"><thead><tr><th class="k">${W.COL_CLASS}</th><th>${W.COL_KEEP}</th><th class="rules">${W.COL_RULES}</th><th class="n">${W.COL_CALLS}</th><th class="n">${W.COL_STORED}</th><th aria-label="${W.COL_INFO}"></th></tr></thead><tbody>` +
     rows.map((r) => {
       const u = r.id != null ? ui.get(r.id) : null, rules = r.rules.join('\n')
       return `<tr id="class-${esc(r.id)}" data-class="${esc(r.id)}"${hl != null && r.id === hl ? ' class="hl" data-hl="true"' : ''}><td class="k">${esc(r.name)}</td>` +
         `<td class="lv">${levelHtml(r, editable, u)}${receiptHtml(r, u && u.receipt)}</td>` +
-        `<td class="rules"><div class="rclip mono" title="${esc(rules)}">${r.rules.map(esc).join(' · ')}</div></td>` +
-        `<td class="n" data-n="calls">${r.calls ?? '—'}</td><td class="n" data-n="bytes" data-bytes="${r.bytes ?? ''}">${r.bytes != null ? esc(bytes(r.bytes)) : '—'}</td>` +
+        `<td class="rules">${!r.rules.length && r.id === FALLBACK_CLASS ? `<div class="rclip">${esc(W.RULES_FALLBACK)}</div>` : `<div class="rclip mono" title="${esc(rules)}">${r.rules.map(esc).join(' · ')}</div>`}</td>` +
+        `<td class="n" data-n="calls">${r.calls ?? '—'}</td><td class="n" data-n="bytes" data-bytes="${r.bytes ?? ''}">${r.bytes != null ? esc(bytes(r.bytes) + share(r.bytes)) : '—'}</td>` +
         `<td class="i">${popHtml(r, window)}</td></tr>`
     }).join('') +
-    `</tbody><tfoot><tr data-total="true"><td class="k">${W.TOTAL}</td><td></td><td></td>` +
+    `</tbody><tfoot><tr data-total="true"><td class="k">${W.TOTAL}</td><td></td><td class="rules"></td>` +
     `<td class="n" data-n="calls">${sum(rows, 'calls') ?? '—'}</td><td class="n" data-n="bytes" data-bytes="${sum(rows, 'bytes') ?? ''}">${sum(rows, 'bytes') != null ? esc(bytes(sum(rows, 'bytes'))) : '—'}</td><td></td></tr></tfoot></table></div>` +
     last + techDetailsHtml(tech, { id: 'classtech' }) + `</div>`
 }
 
 // storageHtml({classes, segments}, window, opts) — the page body: the 磁盘 card, then the 保存什么 card
 export function storageHtml({ classes, segments }, window, opts = {}) {
-  const fig = diskFigures(classes), probs = fileProblems(segments, classes), bad = problemCount(segments)
+  const fig = diskFigures(classes), all = fileProblems(segments, classes), bad = problemCount(segments)
   const d = (classes && classes.disk) || {}, ratio = sealRatio(d)
   const files = [[W.FILES_SEAL_RATIO, ratio != null ? `${ratio.toFixed(3)} · ${W.ESTIMATE}` : W.FILES_SEAL_NONE]]
-  if (probs.length) files.push([W.FILES_READ_PROBLEMS, ''], ...probs.map((p) => ['', `${p.where} · ${p.reason}`]))
+  for (const [title, ps] of [[W.FILES_READ_PROBLEMS, all.filter((p) => !p.note)], [W.FILES_READ_NOTES, all.filter((p) => p.note)]]) {
+    if (ps.length) files.push([title, ''], ...ps.map((p) => ['', `${p.where} · ${p.reason}`]))
+  }
   const disk = `<div class="scard"><h2>${W.CARD_DISK}</h2>` +
     (fig.total != null ? `<p class="dline"><b>${W.DISK_TOTAL}</b> <span class="num">${esc(bytes(fig.total))}</span></p>` : '') +
     `<p class="dline"><b>${W.DISK_PER_DAY}</b> <span class="num">${fig.perDay != null ? `≈ ${esc(bytes(fig.perDay))}` : '—'}</span>` +
     (fig.asOf ? `<span class="cap">${W.AS_OF} ${esc(fmtStamp(fig.asOf))}</span>` : '') + `</p>` +
     (bad > 0 ? `<p class="dline bad"><a class="jumpfiles" href="#">${esc(W.BAD_FILES(bad))} · ${esc(W.BAD_FILES_SHOW)} ▸</a></p>` : '') +
+    (anyNote(segments, classes) ? `<p class="cap" data-note="slow">${esc(W.SLOW_NOTE)}</p>` : '') +
     `<p class="dline"><a href="${W.CAPTURE_PAGE_HREF}">${W.CAPTURE_PAGE_LINE} ›</a></p>` +
     techDetailsHtml(files, { id: 'diskfiles' }) + `</div>`
   return disk + classesCardHtml(classes, window, opts)
