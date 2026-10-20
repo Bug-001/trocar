@@ -54,7 +54,8 @@ export function execTool(file, args, { run = null, env = process.env, input = nu
 
 /** spawnSync's runner shape without blocking the event loop (a daemon that serves doors must not stop for an `lsof`): `execFile`, the
  *  same options execTool passes, resolving `{ status, stdout, stderr, error? }` — status null when it was killed (the timeout) or never started.
- *  `quiet` asks for no output and settles on the child's exit; `windowsVerbatimArguments` is spawn's own (cmd's quoting).
+ *  `quiet` asks for no output and settles on the child's exit (`inherit`: the child writes on this process's own streams instead — a child
+ *  that IS the command the user is running, `asight update`'s new code, §5.5 step 3); `windowsVerbatimArguments` is spawn's own (cmd's quoting).
  *  Pass it as execTool's `run`; it refuses a real tool under npm test the way execTool does (only a stub inside the temp dir runs). */
 export function runAsync(file, args, opts = {}) {
   const env = opts.env || process.env
@@ -62,7 +63,7 @@ export function runAsync(file, args, opts = {}) {
   const win = { windowsVerbatimArguments: !!opts.windowsVerbatimArguments, windowsHide: true }
   if (opts.quiet) { // no output wanted: settle on exit, not on the pipes closing (a child it starts, a browser, may hold them for its whole life)
     return new Promise((resolve) => {
-      const c = spawn(file, args, { env, stdio: 'ignore', ...win })
+      const c = spawn(file, args, { env, stdio: opts.inherit ? 'inherit' : 'ignore', ...win })
       const t = opts.timeout ? setTimeout(() => { try { c.kill() } catch { /* gone */ } resolve({ status: null, stdout: '', stderr: '', error: new Error(`${file} did not return within ${opts.timeout / 1000} s`) }) }, opts.timeout) : null
       c.on('error', (error) => { clearTimeout(t); resolve({ status: null, stdout: '', stderr: '', error }) })
       c.on('exit', (code) => { clearTimeout(t); resolve({ status: code, stdout: '', stderr: '' }) })

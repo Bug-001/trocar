@@ -15,6 +15,7 @@ export const COMMAND_KEYS = Object.freeze({
   on: Object.freeze(['harnesses', 'refused', 'routes', 'user', 'standalone', 'commands', 'unchanged', 'capture', 'daemon', 'linger', 'linger_reason', 'adopted', 'notes']),
   off: Object.freeze(['harnesses', 'all', 'outcome', 'daemon', 'daemon_stop', 'holders', 'left', 'kept_backups', 'orphan_backups', 'kept_bundles', 'still_trusting', 'residue', 'undone_by_marker', 'routing', 'install_items', 'pending', 'user_processes', 'nothing_installed', 'relayed_reason', 'notes']),
   uninstall: Object.freeze(['harnesses', 'all', 'purge_data', 'kept', 'kept_bundles', 'still_trusting', 'residue', 'dropped_backups', 'non_identical', 'entries', 'left', 'pending', 'autostart', 'daemon', 'relayed_reason', 'routing', 'user_processes', 'declined', 'notes']),
+  update: Object.freeze(['from', 'to', 'harnesses', 'restarted', 'install', 'on', 'notes']),
   classes: Object.freeze(['class', 'before', 'after']),
 })
 /** C.1: the keys any receipt may carry besides `RECEIPT_KEYS` — a refusal's `error`, and what a run stopped before writing says (`planned`, `blocked`, `needs_yes`, `dry_run`). */
@@ -103,7 +104,9 @@ export function validateReceipt(r) {
   if ('agent_list' in r) bad.push(...validateAgentList(r.agent_list))
   if (Array.isArray(r.harnesses)) r.harnesses.forEach((h, i) => { if (isObject(h) && h.identity !== undefined) bad.push(...validateIdentity(h.identity).map((x) => `harnesses[${i}].${x}`)) })
   else if (isObject(r.harnesses)) for (const [h, x] of Object.entries(r.harnesses)) if (isObject(x) && x.identity !== undefined) bad.push(...validateIdentity(x.identity).map((y) => `harnesses.${h}.${y}`))
-  if ('install' in r || 'cert' in r) bad.push(...validateInstallCert(r))
+  // `update`'s `install` / `on` are the receipts of the two steps the new code ran (C.2), not `status`'s install / cert pair
+  if (r.command === 'update') { for (const k of ['install', 'on']) if (r[k] != null) bad.push(...validateReceipt(r[k]).map((x) => `${k}.${x}`)) }
+  else if ('install' in r || 'cert' in r) bad.push(...validateInstallCert(r))
   if ('forms' in r) bad.push(...validateForms(r.forms))
   checkHarnessIds(r, '', bad, new WeakSet())
   return bad
