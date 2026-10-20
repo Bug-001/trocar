@@ -73,10 +73,10 @@ export async function backendsFor({ os, home, run = null, env = process.env, fs 
 /** The system proxy the door hands the P7 chain (4.11 P7; D49): the arch's watcher over `read`, each answer put in the chain's shape by the arch's own
  *  `chainSystemProxy` ({ url, bypass } · { pac } · { ok: false, why } · null) — the one place a raw reader answer (the scutil dictionary, the registry values)
  *  becomes what core/proxymode/chain.mjs reads; the chain never sees a raw answer. `io`: what `read` needs ({ helper } on win32); `event`: the daemon's event writer.
- *  `holdMs`: how long a reading that could not be read is held before it is said to be the state (one watch interval and a bit; see below). → { now(), poll() (read now, as the timer does), stop() }. */
-export async function systemProxyWatch({ up, read, io = {}, failure = () => {}, event = () => {}, holdMs = 11000, timers = { setTimeout, clearTimeout } }) {
+ *  `changes`: the arch's change notice (darwin's scutilChanges), handed to its watcher. `holdMs`: how long a reading that could not be read is held before it is said to be the state (one watch interval and a bit; see below). → { now(), poll() (read now, as the timer does), stop() }. */
+export async function systemProxyWatch({ up, read, io = {}, changes = null, failure = () => {}, event = () => {}, holdMs = 11000, timers = { setTimeout, clearTimeout } }) {
   const initial = await read(io).catch(() => null)
-  const watch = up.watchSystemProxy({ ...io, read, initial, onError: failure })
+  const watch = up.watchSystemProxy({ ...io, read, initial, onError: failure, ...(changes ? { changes } : {}) })
   // 1.6 §9.5 (D49 ⑤) · 4.7「变了 = 归一后的那一句话变了」: a change of the system proxy is one `netenv-change` (`netenv-changed`, captured: the door follows it per
   // connection), zero failures. from / to: the chain's answer as one word (the url without credentials, `pac`, `off`, or why it cannot be followed). The raw
   // readings move more than the word does: a difference the word does not carry is no event (`off -> off`), and one reading that could not be read, between
@@ -114,7 +114,7 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
     const execOf = (file, args, o = {}) => Promise.resolve(execTool(file, args, { ...o, run: runner })) // socktable races it: always a promise
     const run = { exec: runner }
     parts = { ownerOf: (q) => ownerOfSocket({ exec: execOf, ...q, onFailure: event }), factsOf: (pid) => pi.factsOfPid(pid, run), proc: { envOf: (p, n) => pi.envOf(p, n, run), cwdOf: (p) => pi.cwdOf(p, run), parentOf: (p) => pi.parentOf(p, run) }, close: () => {} }
-    watch = await systemProxyWatch({ up, read: up.readSystemProxy, io: io.exec ? { exec: io.exec } : {}, failure: (e) => failure('netenv', e), event })
+    watch = await systemProxyWatch({ up, read: up.readSystemProxy, io: io.exec ? { exec: io.exec } : {}, changes: io.exec ? null : up.scutilChanges, failure: (e) => failure('netenv', e), event }) // the OS's own change notice, unless a test injects the OS
   } else {
     // no declared registry keys (plan §E.7 ruling 4): the model reads a policy value through policy.mjs (reg.exe), not this helper
     const [{ ownerOfSocket }, pi, { startHelper, regReadAllowed }] = await Promise.all([import('./win32/socktable.mjs'), import('./win32/procinfo.mjs'), import('./win32/helper.mjs')])
