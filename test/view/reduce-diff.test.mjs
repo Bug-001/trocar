@@ -1,8 +1,8 @@
 // test/view/reduce-diff.test.mjs — TEMPORARY (deleted once the real session
 // agrees): the document reduced from a session's context projection is the record fold's, over generated Anthropic sessions (whole
 // context each call, and Message Threads; sub-agents side by side and written late), the thread helper's session in causal and file
-// order, axes that break the cache inside the shared prefix (an edited block, reordered JSON keys, a reordered tools array), and the
-// real captured fixture when it is on disk.
+// order, axes that break the cache inside the shared prefix (an edited block, reordered JSON keys, a reordered tools array), a call
+// that fails midway (it moves no lane's baseline), the committed captured response shapes, and the real captured session when on disk.
 //   (a) reduce(projection) ≡ createAssembler push-all → finish, serialised, except prefixSha256, lanes[].key, items
 //   (b) listOf(rid) of every call is the call's list as extraction materialises it (its base chain), boundaries too
 //   (c) a break detail is written once per pair of blocks: a second reduction appends nothing
@@ -50,6 +50,10 @@ function broken(recs, axis) {
   const k = Math.floor(all.length / 2);
   return all.map((r, i) => (i === k ? rebody(r, AXES[axis]) : r));
 }
+// a call midway that fails cleanly: it moves no lane's cache baseline
+const failed = (recs) => recs.map((r, i) => (i === Math.floor(recs.length / 2)
+  ? { ...r, resp: { status: 529, kind: 'json', body: { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } } } } : r));
+const fixture = (name) => fs.readFileSync(new URL(`../fixtures/${name}`, import.meta.url), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 
 function sessions() {
   const out = {};
@@ -58,6 +62,8 @@ function sessions() {
   out['threads helper causal'] = [T.S0, T.M0, T.M1, T.A, T.S1, T.M2];
   out['threads helper file order'] = T.fileOrder;
   for (const axis of Object.keys(AXES)) out[`http ${axis}`] = broken(big('http', 0, 1), axis);
+  for (const wire of ['http', 'threads']) for (const late of [0, 3]) out[`${wire} failed late=${late}`] = failed(big(wire, late, 2));
+  out['captured response shapes'] = fixture('old-capture-resp-shapes.ndjson').filter((r) => /^\/v1\/messages/.test(r.endpoint || ''));
   for (const k of Object.keys(out)) out[k] = filed(out[k]);
   return out;
 }
