@@ -9,7 +9,8 @@
 // baselines up to BASELINE_BYTES (the rest rebuilt by id), the records a cross-record context stitches from — plus one chunk, never
 // the session. A page then reads
 // back, by id, only the calls it ships with their bodies (pageView: nearest the window's middle, within PAGE_BODY_BYTES).
-// The reads are a scan (`remember: false`): the spine is what is remembered, not the records.
+// The reads are a scan (`remember: false`): the spine is what is remembered, not the records. Every record read is reported to
+// `progress()` (the worker passes it on to the daemon, whose deadline measures silence: a long fold is not a wedged worker, 3.5:42).
 //
 // WARM (D63 ①, 1.6 §4.1 附近的查询 ≤ 50 ms): the spine is kept against THIS session's own row list, so the next page and every later
 // look at the session read only that page's bodies. A session that grew is folded on with the records it did not hold, whatever
@@ -86,15 +87,15 @@ function grow(old, args) {
   }
   return foldOn(null, args.sorted, args);
 }
-function foldOn(old, rows, { home, fs, id, rowOf }) {
+function foldOn(old, rows, { home, fs, id, rowOf, progress }) {
   const s = old || { ids: new Set(), errors: [], cost: 0 };
-  s.rowOf = rowOf; s.sink = s.errors;
+  s.rowOf = rowOf; s.sink = s.errors; s.progress = progress;
   const read = function* (ids) {
-    for (const part of chunks(ids.map((x) => s.rowOf.get(x)).filter(Boolean))) for (const r of recordsAt({ home, fs, rows: part, errors: s.sink, remember: false })) yield named(r, id);
+    for (const part of chunks(ids.map((x) => s.rowOf.get(x)).filter(Boolean))) for (const r of recordsAt({ home, fs, rows: part, errors: s.sink, remember: false })) { s.progress(); yield named(r, id); }
   };
   if (!old) s.fold = sessionFold(id, { read });
   for (const part of chunks(rows)) {
-    for (const r of recordsAt({ home, fs, rows: part, errors: s.errors, remember: false })) s.fold.push(named(r, id), r.id);
+    for (const r of recordsAt({ home, fs, rows: part, errors: s.errors, remember: false })) { progress(); s.fold.push(named(r, id), r.id); }
     for (const r of part) s.ids.add(r.id);
   }
   // a record that did not read is said on every answer (D38) and the spine is not kept: the next query reads it again
@@ -102,7 +103,7 @@ function foldOn(old, rows, { home, fs, id, rowOf }) {
   return s;
 }
 
-export async function run({ home, fs, params: p, errors }) {
+export async function run({ home, fs, params: p, errors, progress = () => {} }) {
   if (p.id == null || p.id === '') throw new QueryArgError('trocar query session: --id is required (a session id; `trocar query sessions` lists them)');
   const id = String(p.id);
   // Membership is the segment index's (src/query/rows.mjs — the same function `sessions` counts with), so only
@@ -119,9 +120,9 @@ export async function run({ home, fs, params: p, errors }) {
   const release = hold(working(read)); // the caches give way BEFORE anything is read
   let view;
   try {
-    const sp = spines.get(`${fsTag(fs)}\n${home}\n${id}`, rowsKey(sorted).id, (old) => grow(old, { home, fs, id, sorted, rowOf }));
+    const sp = spines.get(`${fsTag(fs)}\n${home}\n${id}`, rowsKey(sorted).id, (old) => grow(old, { home, fs, id, sorted, rowOf, progress }));
     errors.push(...sp.errors);
-    sp.rowOf = rowOf; sp.sink = errors;
+    sp.rowOf = rowOf; sp.sink = errors; sp.progress = progress;
     // the calls this page ships with their bodies, read back by id and given their bodies by the fold that assembled them
     const fill = (cs) => {
       const recs = recordsAt({ home, fs, rows: cs.map((c) => rowOf.get(c.id)).filter(Boolean), errors, remember: false });

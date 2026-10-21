@@ -22,7 +22,7 @@ import { WORKER_MEMORY_MB } from './warm.mjs'
 import { OS_PROMPT_MS } from '../off/root-store.mjs'
 
 const WORKER = fileURLToPath(new URL('./worker.mjs', import.meta.url))
-const DEADLINE_MS = 30_000 // a worker SILENT this long is wedged, not slow: the queue must not be held for ever. A body waiting on a slow reader is not silence.
+const DEADLINE_MS = 30_000 // a worker SILENT this long is wedged, not slow: the queue must not be held for ever. A body waiting on a slow reader is not silence, nor is a fold that keeps reporting progress.
 /** A response full this long with no 'drain' is a reader that is not reading: it is let go (4.4 §Plan ③), or it held every read of
  *  every client behind it (17 min, 2026-10-21). Long enough that a merely slow reader of a large body is never cut. */
 const PAUSE_MS = 60_000
@@ -69,8 +69,9 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     if (child) child.stdout.resume()
   }
 
-  /** The deadline measures the worker's SILENCE: armed while it owes bytes, re-armed by every byte, and off while the response is
-   *  full and the worker is paused for it — a slow reader of a large body is not a wedged worker. */
+  /** The deadline measures the worker's SILENCE: armed while it owes bytes, re-armed by every byte and every progress message
+   *  (a fold still reading records), and off while the response is full and the worker is paused for it — a slow reader of a
+   *  large body is not a wedged worker, nor is a long fold. */
   function arm(p) {
     clearTimeout(p.timer)
     p.timer = setTimeout(() => {
@@ -117,6 +118,8 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
       if (errHead.length < STDERR_HEAD) errHead += t.slice(0, STDERR_HEAD - errHead.length)
       errTail = (errTail + t).slice(-STDERR_TAIL)
     })
+    // a worker still working says so (worker.mjs PROGRESS_MS): its silence clock starts again (3.5:42)
+    c.on('message', (m) => { if (child === c && pending && !paused && m && m.progress === true) arm(pending) })
     c.on('error', (e) => { if (child === c) { failWorker(`the query worker could not be started: ${e.message}`); drop('the query worker could not be started') } })
     c.on('close', (code, signal) => { // 'close', not 'exit': every byte it wrote to stdout and stderr has been read by then
       if (child !== c) return

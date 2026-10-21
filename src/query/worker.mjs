@@ -36,6 +36,17 @@ for (const k of LOCAL_ENV) delete process.env[k]
 lowerPriority({ say: (m) => process.stderr.write(`${m}\n`) }) // behind the agents' traffic (1.6 §3.1), like the sealer
 
 const gzip = promisify(gzipCb)
+/** A query still working says so (`{progress: true}` on the IPC channel, at most once per PROGRESS_MS): the daemon's deadline
+ *  measures SILENCE, so a long fold that keeps reading records is not taken for a wedged worker, and one that stops is (3.5:42).
+ *  The fold is synchronous; a send on the channel is written at once all the same. */
+const PROGRESS_MS = 100
+let said = 0
+const progress = () => {
+  const t = Date.now()
+  if (t - said < PROGRESS_MS || !process.connected) return
+  said = t
+  process.send({ progress: true })
+}
 const write = (status, body, enc, cpu) => new Promise((done) => {
   process.stdout.write(`${status} ${body.length} ${enc} ${cpu}\n`, () => { if (body.length) process.stdout.write(body, done); else done() })
 })
@@ -55,7 +66,7 @@ async function answer(line) {
     } else { // `status` / `doctor` read the machine the way the control verbs do — same user home, environment and deps — so /api/status and
       // GET /control/status answer from one view of the machine (V91); the daemon passes no deps, so this is the real machine
       const deps = await depsP
-      text = JSON.stringify(await runQuery(name, params || {}, { home, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }), null, Number(indent) || 0)
+      text = JSON.stringify(await runQuery(name, params || {}, { home, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }), null, Number(indent) || 0)
     }
   } catch (e) {
     // 400 = the caller's mistake (an unknown name or parameter), 500 = this worker's. The message is the query

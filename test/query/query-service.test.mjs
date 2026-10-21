@@ -14,6 +14,10 @@ import { isCode, isWhere } from '../../src/health/codes.mjs'
 import { rawHome } from './raw-home.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
+import fs from 'node:fs'
+import path from 'node:path'
+import { tmpDir } from '../helpers/tmp.mjs'
+import { bigSession } from './big-session.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 // A worker that answers one query (the warm-up's) and then dies on the next, which is how a caller WAITING for a
@@ -292,4 +296,52 @@ process.stdin.on('data', (d) => { if (!String(d).includes('\\n')) return
   } finally {
     svc.stop()
   }
+})
+
+// A worker on the real IPC channel (`fork`, as the service's own): `script` runs on the first request line.
+const ipcFake = (script) => () => spawn(process.execPath, ['-e', `process.stdin.on('data', (d) => { if (String(d).includes('\\n')) { ${script} } })`], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'] })
+
+for (const [what, script, answered] of [
+  // reports progress every 50 ms for 1 s (five deadlines), then answers
+  ['keeps reporting progress past the deadline is answered', `const t = setInterval(() => process.send({ progress: true }), 50); setTimeout(() => { clearInterval(t); const b = '{"ok":true}'; process.stdout.write('200 ' + b.length + '\\n' + b) }, 1000)`, true],
+  // reports progress for 400 ms, then stops: a worker that stopped making progress
+  ['stops reporting progress is still cut at the deadline', `const t = setInterval(() => process.send({ progress: true }), 50); setTimeout(() => clearInterval(t), 400)`, false],
+])
+test(`the deadline measures silence: a worker that ${what} (3.5:42)`, async () => {
+  const said = []
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), deadlineMs: 200, failure: (w, e) => said.push(e.message), fork: ipcFake(script) })
+  const res = recorder()
+  const t0 = Date.now()
+  try {
+    const r = await within(svc.relay({ name: 'segments', params: {}, res }).then(() => 'answered', (e) => e.message), 5000, 'the relay settles')
+    if (answered) {
+      assert.equal(r, 'answered')
+      assert.equal(res.status, 200)
+      assert.equal(res.text(), '{"ok":true}')
+      assert.deepEqual(said, [])
+    } else {
+      assert.match(r, /did not answer in time/)
+      assert.equal(said.length, 1, 'the wedged worker is a D38 failure')
+      assert.ok(Date.now() - t0 >= 400 + 200, 'cut only after its last progress plus the deadline')
+    }
+  } finally { svc.stop() }
+})
+
+test('the real worker reports progress while it folds a session, and the fold is answered whole (3.5:42)', { timeout: 120_000 }, async () => {
+  const home = path.join(tmpDir('trocar-qsvc-prog-'), '.trocar')
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  const s = bigSession({ home, subLanes: 4, late: 3 })
+  s.growTo(16 << 20)
+  const ticks = []
+  const svc = createQueryService({ home, fork: (h) => { const c = workerFork(h); c.on('message', (m) => { if (m && m.progress === true) ticks.push(Date.now()) }); return c } })
+  try {
+    await within(svc.relay({ name: 'segments', params: {}, res: recorder() }), 60_000, 'the worker is up')
+    ticks.length = 0
+    const res = recorder()
+    await within(svc.relay({ name: 'session', params: { id: s.id }, res }), 60_000, 'the session is answered')
+    assert.equal(res.status, 200)
+    const doc = JSON.parse(res.text())
+    assert.equal(doc.command, 'session')
+    assert.ok(ticks.length >= 1, 'a fold of 16 MB said it was still working')
+  } finally { svc.stop() }
 })
