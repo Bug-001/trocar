@@ -93,10 +93,6 @@ const ANTHROPIC_REPLY = {
   jsonBlocks: (body) => (Array.isArray(body.content) ? body.content : []),
 }
 export const replyPartsAnthropic = (rec) => streamParts(rec, ANTHROPIC_REPLY)
-const ctxTokens = (r) => {
-  const u = normResp(r).usage
-  return (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0)
-}
 
 // Pull a short readable label from a tool call's input.
 export function toolArg(name, input = {}) {
@@ -233,8 +229,10 @@ const own = (s) => (' ' + s).slice(1)
 // What a subagent lane keeps of its first user text to find the spawn that opened it (finish: the spawn's prompt opens that text).
 const FIRST_TEXT_CHARS = 4096
 // ── THE ANALYZER'S FACTS (RFC 4.3 §3 · §4) ─────────────────────────────────────────────────────────────────────────────────────────
-// Everything the fold reads of a message block comes from blockFacts(block), a pure producer whose result is plain JSON (the context
-// projection persists it, src/query/projection.mjs).
+// Everything the fold reads of a call comes from two pure producers whose results are plain JSON (the context projection persists
+// them, src/query/projection.mjs): blockFacts(block) for one message block, callFacts(record) for the call itself. The fold reads a
+// CALL VIEW { facts, messages: [{ role, uses, blocks }] } — `uses` the [id, name] of the message's tool_use blocks, `blocks` its
+// blockFacts — and nothing else, so a view built from persisted facts folds to the same document as one built from the record.
 // Every string a fact keeps is its own (own): a fact outlives its record.
 
 // A text as an event shows it: whitespace runs squashed, trimmed, its first 200 characters, and its length.
@@ -339,8 +337,6 @@ function textOfResult(b) {
   const c = b.content
   return typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text || '').join('\n') : ''
 }
-
-// Classify the assistant turn a call PRODUCED into ReAct events (uses normResp).
 // What a block an omitted text names in an event says in its place (invariant 4: preview + chars, never silently emptied).
 const TEXT_OMITTED = 'derived event — full text is not shipped here; read it from this step\'s blocks'
 
@@ -366,21 +362,55 @@ export function blockFacts(b) {
 }
 // a fact object without its undefined keys: what a JSON round trip gives back
 const defined = (o) => { for (const k of Object.keys(o)) if (o[k] === undefined) delete o[k]; return o }
-function responseEvents(r, step, streamId) {
-  const rs = normResp(r)
-  const ev = []
-  if (rs.thinking) ev.push({ type: 'thought', step, streamId, text: rs.thinking })
-  if (rs.text) ev.push({ type: 'say', step, streamId, text: rs.text })
-  for (const c of rs.tools || []) {
-    const spawn = SPAWN_OPS.has(c.name)
-    ev.push({
-      type: spawn ? 'spawn' : 'action',
-      step, streamId, tool: c.name, id: c.id,
-      arg: toolArg(c.name, c.input), input: c.input,
-    })
-  }
-  return ev
+
+// callFacts(record) → the facts of one call (an admitted, hydrated record): its place in step order, what puts it in a lane, its
+// status and labels, its usage, and its reply's events — never a block's text.
+export function callFacts(r) {
+  const req = r.request, rs = respOf(r) || {}, nr = normResp(r), h = hintsOf(r)
+  const status = rs.status ?? null
+  const reqIncomplete = reqIncompleteOf(r)
+  const sub = h.lane === 'subagent' || isSub(r), monitor = isMonitor(r)
+  const u = nr.usage, text = nr.text || ''
+  const firstUser = sub ? req.messages.find((m) => m.role === 'user') : null
+  return defined({
+    id: r.id, ts_request: r.ts_request, unparsed: !!r._unparsed,
+    hints: { lane: h.lane, laneKey: h.laneKey, compaction: h.compaction, compactionMarker: h.compactionMarker },
+    sub, monitor, small: /haiku/i.test(req.model || ''), model: req.model,
+    msgCount: req.message_count, tools: req.tool_count || 0,
+    // which utility a small call is (only a call that can land in an aux lane is asked)
+    aux: h.lane === 'aux' || req.message_count <= 2 ? auxSubkind(r, userTextOf(r)) : undefined,
+    continued: !!(r._ctx && r._ctx.continued), lineage: r._ctx ? r._ctx.lineage : undefined,
+    ctxPartial: !!(r._ctx && r._ctx.contextState === 'partial'),
+    status, failed: failedCall(r),
+    reqIncomplete, wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
+    errMsg: r._unparsed ? unparsedErrMsg(reqIncomplete)
+      : (rs.error?.message || (status != null && status !== 200 ? `HTTP ${status}` : (r.error ? String(r.error.message || r.error) : null))),
+    ctx: (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0),
+    usage: u,
+    preamble: hasCompactionPreamble(req.messages),
+    mcp: (req.tools || []).filter((t) => /^mcp__/.test(t.name || '')).map((t) => 'MCP: ' + (String(t.name).split('__')[1] || t.name)),
+    // a subagent's first user text, its head only: a spawn's prompt opens it (finish)
+    firstText: sub ? (firstUser ? own(textOfMessage(firstUser).replace(REMINDER, '').slice(0, FIRST_TEXT_CHARS)) : '') : undefined,
+    reply: defined({
+      text: evText(text), thinking: nr.thinking ? evText(nr.thinking) : undefined,
+      tools: (nr.tools || []).map((c) => defined({ id: c.id, name: c.name, input: c.input })),
+      summarize: /^\s*<analysis>/.test(text),
+      verdict: monitor ? text.replace(/<\/?block>/g, '').trim() : undefined,
+      seen: seenRuns(text),
+    }),
+  })
 }
+// The call view of an admitted, hydrated record: its facts, and its messages' block facts worked out only when the fold reads them
+// (it reads the blocks of the messages new to the lane; `uses` of all).
+class MessageView {
+  constructor(m) {
+    this.role = m.role
+    this.content = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]
+    this.uses = Array.isArray(m.content) ? this.content.filter((b) => b.type === 'tool_use').map((b) => [b.id, b.name]) : []
+  }
+  get blocks() { return this.memo || (this.memo = this.content.map(blockFacts)) }
+}
+const viewOf = (r) => ({ facts: callFacts(r), messages: r.request.messages.map((m) => new MessageView(m)) })
 
 // What a compaction verdict says about itself on the board (1.5:38 / 1.5:79: the UI tells confirmed from inferred).
 // A harness header hint is the harness's own word (high, not inferred); a text marker and a count drop are inferred
@@ -479,6 +509,7 @@ export function createAnalyzer() {
   const subByKey = new Map() // one subagent stream per agent the harness names (3.4 agent-id), else per server-held thread
   const steps = new Map() // the fold's own counter → its step (events and resources name a step by it until finish)
   const laneOfStep = new WeakMap() // step → its stream
+  const usageOf = new WeakMap() // step → its call's usage (callFacts)
   let n = 0, top = null, late = false, byOrder = false
   const state = new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, ask, tools }
   const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', ask: null, tools: new Map() })
@@ -494,26 +525,32 @@ export function createAnalyzer() {
     state.set(s, fresh())
   }
 
+  // push(rec, gi): the record's call view folded in; the step keeps the record and its reply (`rec`, `norm`) for the caller
   function push(rec, gi) {
     if (!rec || !rec.is_llm_call) return null
     // Admit on `is_llm_call` alone; an unparsed record is admitted as its sentinel stub (admitted() above)
     const r = admitted(rec)
-    if (top && stepOrder(r, top) < 0) late = true
-    else top = { ts_request: r.ts_request, id: r.id }
+    return pushView(viewOf(r), gi, r)
+  }
+  // pushView(view, gi, rec?): one call view folded in (the call's facts and its messages' block facts, see viewOf)
+  function pushView(view, gi, rec = null) {
+    const f = view.facts
+    if (top && stepOrder(f, top) < 0) late = true
+    else top = { ts_request: f.ts_request, id: f.id }
     // ── segment into streams/lanes by lineage + role marker ─────────────────────
-    const msgCount = r.request.message_count
-    const tools = r.request.tool_count || 0
+    const msgCount = f.msgCount
+    const tools = f.tools
     // 3.4 lane precedence probe > monitor > aux > subagent > main, the ETL's (session-identity.mjs::lane): inside each
     // tier the harness table's hint decides first (Z-Code x-zcode-session-type, dsh origin, CC x-claude-code-agent-id,
     // a request-kind warm-up), then Claude Code's own markers
-    const hints = hintsOf(r), hint = hints.lane
-    const sub = hint === 'subagent' || isSub(r)
+    const hints = f.hints, hint = hints.lane
+    const sub = f.sub
     // The main conversation runs on the primary (opus) model; utility calls run on a small model
     // (haiku). A tiny haiku call (≤2 msgs) is background util REGARDLESS of tool count — otherwise
     // a burst of failed haiku retries (tools≥1) during a network drop pollutes the conversation lane.
-    const small = /haiku/i.test(r.request.model || '')
+    const small = f.small
     let stream
-    if (r._unparsed) {
+    if (f.unparsed) {
       // An unparsed sentinel has no system text / message count to classify on. Every lane guess
       // would be a fabrication; route it to `main` — the lane the user is actually watching — so the
       // gap is VISIBLE. The alternative (0 msgs / 0 tools → the aux heuristic) would file a broken
@@ -522,16 +559,16 @@ export function createAnalyzer() {
       stream = mainStream
     } else if (hint === 'probe') {
       stream = probeStream || (probeStream = mkStream('probe'))
-    } else if (isMonitor(r)) {
+    } else if (f.monitor) {
       stream = monitorStream || (monitorStream = mkStream('monitor'))
-    } else if (hint === 'aux' || (msgCount <= 2 && !sub && (tools === 0 || small) && !(r._ctx && r._ctx.continued))) {
+    } else if (hint === 'aux' || (msgCount <= 2 && !sub && (tools === 0 || small) && !f.continued)) {
       // (a call that continues a server-held thread is a turn of that thread, however small its own delta)
-      const sk = auxSubkind(r, userTextOf(r))
+      const sk = f.aux
       stream = auxStreams.get(sk) || auxStreams.set(sk, mkStream(sk)).get(sk)
-    } else if (sub && (hints.laneKey || (r._ctx && r._ctx.lineage))) {
+    } else if (sub && (hints.laneKey || f.lineage)) {
       // the agent's own id, or failing that the thread's chain, names the stream: interleaved subagents never share one,
       // and an agent that starts a new thread midway stays one stream
-      const k = hints.laneKey ? 'agent:' + hints.laneKey : 'thread:' + r._ctx.lineage
+      const k = hints.laneKey ? 'agent:' + hints.laneKey : 'thread:' + f.lineage
       stream = subByKey.get(k) || subByKey.set(k, mkStream('subagent')).get(k)
     } else if (sub) {
       byOrder = true
@@ -545,79 +582,60 @@ export function createAnalyzer() {
     if (late && byOrder) throw new OrderBound('a record arrived out of step order in a session whose subagents are told apart by order')
     stream._lastMsg = msgCount
     prevKind = stream.kind
-    const rs = respOf(r) || {}
-    const status = rs.status ?? null
-    const failed = failedCall(r)
-    // #21: the collector's own word on WHY the stored body is incomplete (null when it is complete).
-    const reqIncomplete = reqIncompleteOf(r)
     const at = n++
-    const step = { gi: gi != null ? gi : at, id: r.id, streamId: stream.id, rec: r, norm: normResp(r),
-      msgCount, tools, ctx: ctxTokens(r), status,
-      ts: r.ts_request, compaction: false,
-      unparsed: !!r._unparsed,
-      reqIncomplete,
+    const step = { gi: gi != null ? gi : at, id: f.id, streamId: stream.id, ...(rec ? { rec, norm: normResp(rec) } : null),
+      msgCount, tools, ctx: f.ctx, status: f.status,
+      ts: f.ts_request, compaction: false,
+      unparsed: f.unparsed,
+      // #21: the collector's own word on WHY the stored body is incomplete (null when it is complete).
+      reqIncomplete: f.reqIncomplete,
       // a context stitched across records with a predecessor missing: what is shown is not what the model saw
-      ctxPartial: !!(r._ctx && r._ctx.contextState === 'partial'),
-      wsIncomplete: wsIncompleteOf(r), // D38 a WebSocket call's labels (4.6 各说一件事)
-      respIncomplete: respIncompleteOf(r), // a response body not decoded / not JSON / empty / partly parsed / cut
+      ctxPartial: f.ctxPartial,
+      wsIncomplete: f.wsIncomplete, // D38 R-4: a WebSocket call's labels (4.6 各说一件事)
+      respIncomplete: f.respIncomplete, // a response body not decoded / not JSON / empty / partly parsed / cut
       // `error` now covers EVERY non-200 (was: only 5xx — so a 401/429 rendered as a normal call).
-      error: failed,
-      errMsg: r._unparsed ? unparsedErrMsg(reqIncomplete)
-        : (rs.error?.message || (status != null && status !== 200 ? `HTTP ${status}` : (r.error ? String(r.error.message || r.error) : null))),
+      error: f.failed,
+      errMsg: f.errMsg,
       // Cache-prefix chaining. A call that FAILED did not establish a new cache
       // prefix at the provider — a 401/429/502 never got far enough to write one — so the next call's
       // prefix diff must be taken against the last SUCCESSFUL call, not against the failure. This flag
       // makes that skip EXPLICIT and inspectable; the call still APPEARS on the timeline (that was the
       // whole bug). Consumers that chain `prevFlat` MUST advance it only when chainsPrefix is true.
-      chainsPrefix: !failed }
+      chainsPrefix: !f.failed }
     Object.defineProperty(step, 'at', { value: at })
     stream.calls.push(step)
     steps.set(at, step)
     laneOfStep.set(step, stream)
+    usageOf.set(step, f.usage)
     const st = state.get(stream)
-    if (stream.kind === 'subagent' && stream.calls.length === 1) {
-      const firstUser = r.request.messages.find((m) => m.role === 'user')
-      // its head only: a spawn's prompt opens it (finish), and the whole first message is a context's worth of text per lane
-      st.firstText = firstUser ? own(textOfMessage(firstUser).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').slice(0, FIRST_TEXT_CHARS)) : ''
-    }
-    const from = stream.events.length
-    eventsOf(stream, st, step)
+    if (stream.kind === 'subagent' && stream.calls.length === 1) st.firstText = f.firstText || ''
     // ── events keep their SHAPE, not a second copy of the session's text ─────────
     //
-    // userEvents() / observationEvents() build each event around the FULL user message or the FULL tool_result. That text
-    // is the heaviest thing in a session and it is already carried, once, as blocks — so every event was a verbatim second
-    // copy, uncapped and with no locator (7.8 MB of a 10.1 MB response on a 40-call fixture, and not shrunk by paging).
-    // Nothing reads that text afterwards: spawn linking (finish) reads `input.prompt`, the board renders compaction /
-    // summarize events, which carry no `text`. Invariant 4: the body is not silently emptied — `preview` + `chars` are what
-    // the collapsed row shows anyway, and `text_omitted` states in place that the full text lives on this step's blocks (an
+    // A user message or a tool_result is the heaviest thing in a session and it is already carried, once, as blocks — so an event
+    // carrying it verbatim was a second copy, uncapped and with no locator (7.8 MB of a 10.1 MB response on a 40-call fixture, and
+    // not shrunk by paging). Nothing reads that text afterwards: spawn linking (finish) reads `input.prompt`, the board renders
+    // compaction / summarize events, which carry no `text`. Invariant 4: the body is not silently emptied — `preview` + `chars` are
+    // what the collapsed row shows anyway, and `text_omitted` states in place that the full text lives on this step's blocks (an
     // event is derived from them and owns no byte span of its own, so there is no honest locator to mint here).
-    for (let k = from; k < stream.events.length; k++) {
-      const e = stream.events[k]
-      if (typeof e.text !== 'string') continue
-      const full = e.text
-      delete e.text
-      // its own 200 characters: a slice would keep the whole text alive for as long as the event lives (the fold keeps events)
-      e.preview = own(full.replace(/\s+/g, ' ').trim().slice(0, 200))
-      e.chars = full.length
-      e.text_omitted = 'derived event — full text is not shipped here; read it from this step\'s blocks'
-    }
+    eventsOf(stream, st, step, view)
     return step
   }
   const shown = (m) => ({ preview: own(m.preview), chars: m.chars, text_omitted: TEXT_OMITTED })
 
   // ── per stream: deltas → events + resources ─────────────────────────────────
-  function eventsOf(s, st, step) {
+  function eventsOf(s, st, step, view) {
+    const f = view.facts, reply = f.reply
     // monitor + aux-family lanes: no ReAct/resource extraction — just one event per call
     if (EVENT_ONLY_KINDS.has(s.kind)) {
       step.dCtx = step.ctx - st.prevCtx; st.prevCtx = step.ctx
       if (step.error) { s.events.push({ type: 'error', step: step.at, streamId: s.id, msg: step.errMsg }); return }
       if (s.kind === 'monitor') {
-        const v = (step.norm.text || '').replace(/<\/?block>/g, '').trim()
+        const v = reply.verdict
         step.flagged = !/^no\b/i.test(v)
         step.verdict = v
         s.events.push({ type: 'monitor', step: step.at, streamId: s.id, verdict: v, flagged: step.flagged })
       } else {
-        s.events.push({ type: 'aux', subkind: s.kind, step: step.at, streamId: s.id, text: step.norm.text || '', model: step.rec.request?.model })
+        s.events.push({ type: 'aux', subkind: s.kind, step: step.at, streamId: s.id, model: f.model, ...shown(reply.text) })
       }
       return
     }
@@ -632,26 +650,21 @@ export function createAnalyzer() {
     }
     step.dCtx = step.ctx - st.prevCtx
     st.prevCtx = step.ctx
-    const msgs = step.rec.request.messages
-    for (const m of msgs) {
-      if (Array.isArray(m.content))
-        for (const b of m.content) if (b.type === 'tool_use') st.tools.set(b.id, b.name)
-    }
-    for (const c of step.norm.tools || []) st.tools.set(c.id, c.name)
-    for (const t of step.rec.request.tools || []) {
-      if (/^mcp__/.test(t.name || '')) addRes(st.resMap, 'capability', 'MCP: ' + (String(t.name).split('__')[1] || t.name), step.at, 'mcp')
-    }
+    const msgs = view.messages
+    for (const m of msgs) for (const [id, name] of m.uses) st.tools.set(id, name)
+    for (const c of reply.tools) st.tools.set(c.id, c.name)
+    for (const label of f.mcp) addRes(st.resMap, 'capability', label, step.at, 'mcp')
 
     const drop = msgs.length < st.prevCount
-    const hasPreamble = hasCompactionPreamble(msgs)
-    const isSummarize = /^\s*<analysis>/.test(step.norm.text || '')
+    const hasPreamble = f.preamble
+    const isSummarize = reply.summarize
     // 3.4, the ETL's verdict (compactionVerdict): a harness header hint first (x-cc-compaction-request, dsh's compact
     // header), a text marker on its rising edge, then a sharp drop — the same shared rule the ETL runs.
     // 保真边界 (invariant 4 · spec 1.5:37 / 3.4:16,21): a drop or a marker is INFERRED from observed shape, never
     // confirmed by the harness, and says so (medium, `compactionInferred`); a header hint is the harness's own word.
     // `basis` names WHICH evidence fired: CC's own "continued from a previous conversation" preamble (the stronger
     // drop signal) vs. a bare message-count collapse (a number going down — the weaker guess).
-    const h = hintsOf(step.rec)
+    const h = f.hints
     const marker = h.compactionMarker === true
     // the preamble is evidence on its rising edge only (compactionVerdict): once a compaction has put it in the history
     // every later call of the lane carries it, and a carried one neither makes a drop a compaction nor names its basis
@@ -682,19 +695,18 @@ export function createAnalyzer() {
         inferred: step.compactionInferred, confidence: step.compactionConfidence, basis: step.compactionBasis })
     if (isSummarize) {
       step.summarizing = true
-      s.events.push({ type: 'summarize', step: step.at, streamId: s.id, out: step.norm.usage?.output_tokens })
+      s.events.push({ type: 'summarize', step: step.at, streamId: s.id, out: f.usage?.output_tokens })
     }
-    const added = newMsgs.map((m) => ({ role: m.role, blocks: (Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]).map(blockFacts) }))
-    for (const m of added) for (const b of m.blocks) for (const e of b.res || []) addRes(st.resMap, e[0], e[1], step.at, e[2], e[3])
+    for (const m of newMsgs) for (const b of m.blocks) for (const e of b.res || []) addRes(st.resMap, e[0], e[1], step.at, e[2], e[3])
     // seen-but-not-opened filenames: tool-result text (bigger cap) + prose (smaller)
-    for (const m of added) for (const b of m.blocks) seeIn(st.seenMap, b.seen, step.at, b.type === 'tool_result' ? 80 : 40)
-    seeIn(st.seenMap, seenRuns(step.norm.text || ''), step.at, 40)
-    for (const m of added) {
+    for (const m of newMsgs) for (const b of m.blocks) seeIn(st.seenMap, b.seen, step.at, b.type === 'tool_result' ? 80 : 40)
+    seeIn(st.seenMap, reply.seen, step.at, 40)
+    for (const m of newMsgs) {
       if (m.role !== 'user') continue
       const e = userEventOf(m.blocks)
       if (e) s.events.push({ type: 'user', step: step.at, streamId: s.id, ...shown(e) })
     }
-    for (const m of added) {
+    for (const m of newMsgs) {
       if (m.role !== 'user') continue
       for (const b of m.blocks) {
         if (b.type !== 'tool_result') continue
@@ -703,7 +715,15 @@ export function createAnalyzer() {
       }
     }
     if (step.error) s.events.push({ type: 'error', step: step.at, streamId: s.id, msg: step.errMsg })
-    else if (!isSummarize) s.events.push(...responseEvents(step.rec, step.at, s.id))
+    else if (!isSummarize) {
+      // the turn the call PRODUCED, as ReAct events
+      if (reply.thinking) s.events.push({ type: 'thought', step: step.at, streamId: s.id, ...shown(reply.thinking) })
+      if (reply.text.chars) s.events.push({ type: 'say', step: step.at, streamId: s.id, ...shown(reply.text) })
+      for (const c of reply.tools) {
+        s.events.push({ type: SPAWN_OPS.has(c.name) ? 'spawn' : 'action', step: step.at, streamId: s.id, tool: c.name, id: c.id,
+          arg: toolArg(c.name, c.input), input: c.input })
+      }
+    }
     st.prevCount = msgs.length
   }
 
@@ -776,15 +796,15 @@ export function createAnalyzer() {
       subagents: live.filter((s) => s.kind === 'subagent').length,
       monitors: (live.find((s) => s.kind === 'monitor')?.calls.length) || 0,
       compactions: stepList.filter((s) => s.compaction).length,
-      totalIn: stepList.reduce((a, s) => a + (s.norm.usage.input_tokens || 0), 0),
-      totalOut: stepList.reduce((a, s) => a + (s.norm.usage.output_tokens || 0), 0),
+      totalIn: stepList.reduce((a, s) => a + (usageOf.get(s).input_tokens || 0), 0),
+      totalOut: stepList.reduce((a, s) => a + (usageOf.get(s).output_tokens || 0), 0),
       peakCtx: stepList.reduce((a, s) => Math.max(a, s.ctx), 0),
     }
     return { streams: view, steps: stepList, stats, lanes }
   }
   // ask(lane, text): the lane's first prompt, said by the caller that holds the first call's blocks (src/view/blockmeta.mjs firstHuman)
   const ask = (s, text) => { state.get(s).ask = text }
-  return { push, finish, drop, ask, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()] }
+  return { push, pushView, finish, drop, ask, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()] }
 }
 
 // ── the linear context: the exact tools → system → messages sequence the model assembles ──
