@@ -1,8 +1,8 @@
 // test/query/cut-fits.test.mjs — a session past the heap bound shows the newest calls that FIT, not a sliver of them (RFC 3.5
 // §内存有界: 只读从尾部往前放得进的记录,至多少一步,截断点落在步格上).
 //
-// The room is the spine's share of the read side's budget: the budget less the working set of a fold (working()) and the steady
-// caches counted in whole steps (a step = a tenth of the budget). A cut session reads the newest rows that fit the room less at most
+// The room is the spine's share of the read side's budget: the budget less the working set of a fold (working()), the steady
+// caches and the distinct blocks (SPINE_PER_BLOCK each) counted in whole steps (a step = a tenth of the budget). A cut session reads the newest rows that fit the room less at most
 // one step, the cut on the step grid: its rows, each at what the plan reckons a row costs, fill the room less at most two steps. The
 // plan reckons SPINE_PER_ROW until a fold measured more (the measured bound: a fold whose heap passes the whole reservation stops,
 // and the plan reads as many rows as it got through, its cost rounded up to a quarter power of two), so rows that cost the estimate
@@ -22,14 +22,18 @@ const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.met
 const at = (p) => JSON.stringify(new URL(p, import.meta.url).href)
 const CHILD = `
 const { runQuery } = await import(${at('../../src/query/named/index.mjs')})
-const { SPINE_PER_ROW, working } = await import(${at('../../src/query/named/session.mjs')})
+const fs = await import('node:fs')
+const { SPINE_PER_ROW, SPINE_PER_BLOCK, working } = await import(${at('../../src/query/named/session.mjs')})
 const { heapBudget, steadyBytes, liveHeap } = await import(${at('../../src/query/warm.mjs')})
-const { STORE_HEAP } = await import(${at('../../src/query/projection.mjs')})
+const { STORE_HEAP, projectionFile } = await import(${at('../../src/query/projection.mjs')})
+// the projection's definition lines, counted over its bytes (a Buffer, outside the heap measured)
+const defs = (b) => { let n = 0; for (let i = b.indexOf('\\n{"d":'); i >= 0; i = b.indexOf('\\n{"d":', i + 1)) n++; return n }
 const { indexRows, sessionGroups } = await import(${at('../../src/query/rows.mjs')})
 const { bigSession } = await import(${at('./big-session.mjs')})
 const [home, shape, dear] = [process.argv[1], JSON.parse(process.argv[2]), Number(process.argv[3])]
 const step = heapBudget() / 10
-const roomOf = (rows) => heapBudget() - working(rows) - Math.ceil(steadyBytes() / step) * step
+// the distinct blocks (the projection's \`d\` lines) are reserved beside the steady caches, in whole steps too
+const roomOf = (rows, blocks = 0) => heapBudget() - working(rows) - Math.ceil(steadyBytes() / step) * step - Math.ceil(blocks * SPINE_PER_BLOCK / step) * step
 const rowsOf = async (id) => sessionGroups(await indexRows({ home, errors: [] })).get(id) || []
 const s = bigSession({ home, growth: 150, subEvery: 4, subLanes: 3, subLen: 12, ...shape })
 // half again as many rows as the room holds, each at the estimate (or at dear times it, for rows that cost that much more)
@@ -41,8 +45,8 @@ do doc = await runQuery('session', { id: s.id, limit: '60' }, { home, writer: tr
 const { truncated } = doc, total = doc.lanes.reduce((n, l) => n + l.count, 0)
 doc = null
 const kept = liveHeap() - before // the spine, kept warm for the next look
-const rows = await rowsOf(s.id)
-console.log(JSON.stringify({ truncated, total, rows: rows.length, kept, room: roomOf(rows), step, SPINE_PER_ROW, STORE_HEAP }))`
+const rows = await rowsOf(s.id), blocks = defs(fs.readFileSync(projectionFile(home, s.id)))
+console.log(JSON.stringify({ truncated, total, rows: rows.length, kept, room: roomOf(rows, blocks), step, SPINE_PER_ROW, STORE_HEAP }))`
 
 const cut = (shape, { dear, heapMb }) => {
   const home = path.join(tmpDir('trocar-cutfits-'), '.trocar')

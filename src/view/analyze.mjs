@@ -404,7 +404,7 @@ export function callFacts(r) {
   })
 }
 // The call view of an admitted, hydrated record: its facts, and its messages' block facts worked out only when the fold reads them
-// (it reads the blocks of the messages new to the lane; `uses` of all).
+// (it reads the blocks and the tool uses of the messages new to the lane).
 class MessageView {
   constructor(m) {
     this.role = m.role
@@ -656,8 +656,6 @@ export function createAnalyzer() {
     step.dCtx = step.ctx - st.prevCtx
     st.prevCtx = step.ctx
     const msgs = view.messages
-    for (const m of msgs) for (const [id, name] of m.uses) st.tools.set(id, name)
-    for (const c of reply.tools) st.tools.set(c.id, c.name)
     for (const label of f.mcp) addRes(st.resMap, 'capability', label, step.at, 'mcp')
 
     const drop = msgs.length < st.prevCount
@@ -693,6 +691,9 @@ export function createAnalyzer() {
     } else {
       newMsgs = msgs.slice(st.prevCount)
     }
+    // tool uses from the messages new to the lane (the rest were new once: a lane's state is O(new), not O(context)), then the reply's
+    for (const m of newMsgs) for (const [id, name] of m.uses) st.tools.set(id, name)
+    for (const c of reply.tools) st.tools.set(c.id, c.name)
     if (step.compaction)
       s.events.push({ type: 'compaction', step: step.at, streamId: s.id, from: step.evictedFrom, to: step.evictedTo,
         // the event travels to the UI on its own — it MUST carry the inference marker with it,

@@ -88,9 +88,10 @@ function eachSlot(v, depth, visit) {
   if (!isObj(v) || depth >= SHARE_DEPTH) return;
   for (const k of Array.isArray(v) ? v.keys() : Object.keys(v)) if (visit(v, k)) eachSlot(v[k], depth + 1, visit);
 }
-// key → [offset, length] of a line on disk: a Map to a slot, the places in two typed columns (no array per key)
+// key → [offset, length] of a line on disk: a Map to a slot, the places in two typed columns (no array per key); a slot never
+// changes while the store is open, and names its key back (the array shares the Map's key strings)
 function lineIndex() {
-  const slot = new Map();
+  const slot = new Map(), names = [];
   let off = new Float64Array(256), len = new Uint32Array(256);
   return {
     has: (k) => slot.has(k),
@@ -100,20 +101,22 @@ function lineIndex() {
       if (i === undefined) {
         i = slot.size;
         if (i === off.length) { const o2 = new Float64Array(2 * i), l2 = new Uint32Array(2 * i); o2.set(off); l2.set(len); off = o2; len = l2; }
-        slot.set(k, i);
+        slot.set(k, i); names.push(k);
       }
       off[i] = o; len[i] = l;
     },
+    slotOf: (k) => slot.get(k),
+    keyAt: (i) => names[i],
     keys: () => slot.keys(),
     get size() { return slot.size; },
-    clear: () => slot.clear(),
+    clear: () => { slot.clear(); names.length = 0; },
   };
 }
 // a cache in two generations: an entry goes into the current one, which becomes the old one (the old one dropped) once what it
 // holds weighs `cap`; a hit in the old one moves to the current one. So it keeps at least the last `cap` of weight used and at
 // most 2 × `cap` (plus one entry), every operation O(1). (Evicting the oldest entry of one Map in insertion order costs time with
 // the Map's size in V8, whose deleted entries stay as holes the next eviction walks: 6 µs an eviction at 32768 entries, 2026-10-22.)
-function gens(cap) {
+export function gens(cap) {
   let cur = new Map(), old = new Map(), w = 0;
   const put = (k, v, kw) => {
     cur.set(k, [v, kw]); w += kw;
@@ -273,6 +276,11 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
   return {
     hasDef: (bid) => at.has(bid),
     readDef: (bid) => { const p = at.get(bid); return p ? lineAt(p).d : undefined; },
+    /** A definition's slot: 0, 1, … in the order the store took them in, fixed while it is open (src/view/reduce.mjs keys its block
+     *  columns by it); defBid(slot) names it back; defCount: how many distinct blocks the store holds. */
+    defSlot: (bid) => at.slotOf(bid),
+    defBid: (slot) => at.keyAt(slot),
+    get defCount() { return at.size; },
     close: () => lines.close(),
     rows,
     brks,

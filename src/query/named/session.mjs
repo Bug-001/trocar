@@ -11,11 +11,12 @@
 // scratch, so the heap never holds two. The serialized rows and lane headers of the last answered marks are kept (src/query/session-doc.mjs) for
 // `--since`; any other member mark is reduced afresh for that answer only.
 //
-// THE CUT (3.5 §内存有界, a backstop): the reduction keeps SPINE_PER_ROW a row; only when the rows past what the budget holds beside
+// THE CUT (3.5 §内存有界, a backstop): the reduction keeps SPINE_PER_ROW a row and SPINE_PER_BLOCK a distinct block of its store (the
+// blocks reserved beside the steady caches); only when the rows past what the budget holds beside
 // the work and the steady caches does it reduce the newest that fit, less one step, on a grid of steps (`truncated` says so). A
 // reduction whose MEASURED heap passes what was reserved stops (HeapBound, checked per row folded) and the session is cut again
 // by the rows it got through.
-import { reduction } from '../../view/reduce.mjs';
+import { reduction, REDUCE_HEAP } from '../../view/reduce.mjs';
 import { extractMembers, blockAt, CHUNK_STORED } from '../../view/extract.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { recordsAt, STRETCH_HEAP } from '../records.mjs';
@@ -31,6 +32,11 @@ export const params = Object.freeze(['id', 'since', 'before', 'limit']);
 /** What the reduction keeps in the heap per row (a call's row and facts, its lane's reduced state, a block list's ints), until a
  *  reduction of THIS session measured it (HeapBound below). */
 export const SPINE_PER_ROW = 16 * 1024;
+/** What the reduction keeps in the heap per distinct block of the session (its store's slot, its block columns and interned keys:
+ *  src/view/reduce.mjs, src/query/projection.mjs): 222 B measured (after a forced GC, in a heap of the worker's size) as what a
+ *  read of a test/query/big-session.mjs live(0.004) session holds more with 1,500 fresh tool definitions a call than with none, per
+ *  block more, × 1.25 (2026-10-22). */
+export const SPINE_PER_BLOCK = 280;
 // What extraction's work costs in the heap per stored byte of what it reads at once (CHUNK_STORED, src/view/extract.mjs).
 const WORK_PER_STORED = 4;
 // The cut moves by the rows 1/BOUND_STEPS of the budget holds, so a live session is not reduced from scratch on every new row.
@@ -83,12 +89,14 @@ const PER_ROW_KEPT = 64;
 // The plan of a member list — its write order, what fits, by id — made once per list: indexRows hands back the same frozen array
 // while no segment moved, so sessionGroups does too. Made again when a reduction measured the session's rows dearer.
 const plans = new WeakMap();
-function planOf(members, k) {
-  const perRow = perRows.get(k) || SPINE_PER_ROW;
+// The store's distinct blocks are reserved beside the steady caches, in whole steps so the plan is made again only when a step is passed.
+function planOf(members, k, blocks) {
+  const perRow = perRows.get(k) || SPINE_PER_ROW, stepBytes = heapBudget() / BOUND_STEPS;
+  const blockSteps = Math.ceil((blocks * SPINE_PER_BLOCK) / stepBytes);
   let p = plans.get(members);
-  if (!p || p.perRow !== perRow) {
-    const { read, bound, room } = fitting([...members].sort(stepOrder), perRow, steadyBytes());
-    p = { perRow, read, bound, room, limit: room + working(read), inCut: new Set(read.map((r) => String(r.id))),
+  if (!p || p.perRow !== perRow || p.blockSteps !== blockSteps) {
+    const { read, bound, room } = fitting([...members].sort(stepOrder), perRow, steadyBytes() + blockSteps * stepBytes);
+    p = { perRow, blockSteps, read, bound, room, limit: room + working(read), inCut: new Set(read.map((r) => String(r.id))),
       byId: new Map(members.map((r) => [String(r.id), r])), order: members.map((r) => String(r.id)).sort(posCmp), key: rowsKey(members).id };
     plans.set(members, p);
   }
@@ -161,7 +169,7 @@ export async function sessionState(ctx, id) {
   const ex = extractMembers({ store, members, recordsAt: read, sessionId: String(id), budgetMs: ctx.writer === true ? 50 : Infinity, errors });
   persisted(ctx, errors);
   const mark = ex.frontier;
-  const last = planOf(members, k).order.at(-1);
+  const last = planOf(members, k, store.defCount).order.at(-1);
   const pending = mark == null || posCmp(mark, last) < 0 ? { done: ex.done, total: ex.total } : null;
   const resolve = (ref) => {
     const row = byIdAll.get(parseTextRef(ref).recordId);
@@ -169,7 +177,7 @@ export async function sessionState(ctx, id) {
     return rec ? blockAt(rec, ref) : null;
   };
   for (;;) {
-    const plan = planOf(members, k);
+    const plan = planOf(members, k, store.defCount);
     const want = plan.read.map((r) => String(r.id)).filter((rid) => mark != null && posCmp(rid, mark) <= 0);
     const box = { old: states.take(k) };
     const release = hold(working(plan.read));
@@ -192,6 +200,8 @@ export async function sessionState(ctx, id) {
     } finally { release(); }
   }
 }
+// What a kept state weighs: its rows and its store's blocks, the marks kept, the store's and the reduction's caches.
+const costOf = (st, perRow) => st.rids.size * perRow + st.store.defCount * SPINE_PER_BLOCK + st.markBytes + STORE_HEAP + REDUCE_HEAP;
 // The kept state grown with `want` when it holds no row the cut dropped and was made over this store, else a reduction from scratch
 // (the old state's only reference, `box.old`, dropped first).
 function grow(box, { store, plan, want, resolve, progress, errors }) {
@@ -211,7 +221,7 @@ function grow(box, { store, plan, want, resolve, progress, errors }) {
   const fresh = want.filter((rid) => !st.rids.has(rid));
   if (fresh.length) { st.R.add(fresh); for (const rid of fresh) st.rids.add(rid); }
   errors.push(...st.sink.splice(0));
-  st.cost = st.rids.size * plan.perRow + st.markBytes + STORE_HEAP;
+  st.cost = costOf(st, plan.perRow);
   return st;
 }
 
@@ -223,8 +233,8 @@ export async function version(ctx) {
   const { rows, errors } = await indexed(ctx);
   const members = sessionGroups(rows).get(String(p.id));
   if (!members) return null;
-  const k = keyOf(ctx, p.id), plan = planOf(members, k);
-  return { key: JSON.stringify([plan.key, frontierOf(storeOf(ctx, String(p.id), k), plan.order), plan.bound]), errors };
+  const k = keyOf(ctx, p.id), store = storeOf(ctx, String(p.id), k), plan = planOf(members, k, store.defCount);
+  return { key: JSON.stringify([plan.key, frontierOf(store, plan.order), plan.bound]), errors };
 }
 
 const one = (v) => (v == null || v === '' ? null : String(v));
@@ -261,6 +271,6 @@ export async function run(ctx) {
   const known = since != null && member(since) && st.mark != null && posCmp(since, st.mark) <= 0;
   const out = { base: known ? since : null, ...head, ...(known ? null : { more: false }), ...body,
     ...(known ? deltaOf(D, now, serialAt(st, since)) : pageOf(D, now, before, limit)) };
-  if (keep(st.kept, st.mark, now) && states.take(st.key) === st.kept) { st.kept.cost = st.kept.rids.size * st.kept.perRow + st.kept.markBytes + STORE_HEAP; states.get(st.key, st.kept, () => st.kept); }
+  if (keep(st.kept, st.mark, now) && states.take(st.key) === st.kept) { st.kept.cost = costOf(st.kept, st.kept.perRow); states.get(st.key, st.kept, () => st.kept); }
   return out;
 }
