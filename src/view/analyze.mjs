@@ -167,18 +167,20 @@ function extractResources(messages, step, out) {
     }
   }
 }
+// A label or range is a match or split piece of a block's text or a Bash command (links, skills, read paths): kept as a copy of its
+// own, else it would keep the whole text alive for the life of the spine (3.5 §内存有界).
 function addRes(map, kind, label, step, via, range) {
   const key = kind + '::' + label
   let r = map.get(key)
   if (!r) {
-    r = { kind, label, via, segments: [{ enter: step, evict: null }], loads: [], hits: 1 }
-    map.set(key, r)
+    r = { kind, label: own(label), via, segments: [{ enter: step, evict: null }], loads: [], hits: 1 }
+    map.set(own(key), r)
   } else {
     r.hits++
     const last = r.segments[r.segments.length - 1]
     if (last.evict != null && step >= last.evict) r.segments.push({ enter: step, evict: null })
   }
-  if (range) r.loads.push({ step, range, via })
+  if (range) r.loads.push({ step, range: own(range), via })
 }
 
 // "Seen but never opened" filenames: path-like tokens the agent saw in tool RESULTS
