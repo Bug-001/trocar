@@ -235,6 +235,8 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   assert.deepEqual(unreadRec.map((r) => [r.event, r.code, r.peer]), [['failure', 'pac-owner-unread', PEER]], 'exactly one record that the PAC was served without the door, with the peer')
   assert.equal(unread.status, 200); assert.doesNotMatch(unread.body, /18103/, 'no door'); assert.match(unread.body, /return "PROXY sys\.corp:8080"/, 'the app keeps the user\'s system proxy')
   assert.equal((await c.lookupIngress({ peer: PEER, user: pacG, target: { address: 'api.example', port: 443 } })).refuse.code, 'pac-peer-refused', 'not shown to be this user\'s: refused')
+  const leftReq = await wrote({ ...pacReq, left: async () => true }) // the requester left while it was judged (the ingress's `left`)
+  assert.deepEqual([leftReq.res, leftReq.got], [null, []], 'nobody to answer: no PAC, no pac-owner-unread')
   w.owner = { why: 'shared', sameUser: true } // the table proves the end is this user's but names no single pid (4.9 §5.3 step 1)
   const shared = await c.lookupIngress({ peer: PEER, user: pacG, target: { address: 'api.example', port: 443 } })
   assert.equal(shared.refuse, undefined, 'this user\'s, pid unknown: not refused')

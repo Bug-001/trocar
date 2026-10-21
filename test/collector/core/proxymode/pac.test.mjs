@@ -67,20 +67,20 @@ test('pacHandler serves GET /trocar.pac from state() per request, and leaves eve
   assert.equal(h({ method: 'POST', url: PAC_PATH }, res()), false)
 })
 
-const PEERS = [
+const PEERS = [ // name, peer, self, allowed, refused because its owner could not be read (not shown to be another user's)
   ['mac same uid', { pid: 1, uid: 501 }, { uid: 501 }, true],
-  ['mac other uid', { pid: 2, uid: 502 }, { uid: 501 }, false],
-  ['mac uid unknown', { pid: 3 }, { uid: 501 }, false],
+  ['mac other uid', { pid: 2, uid: 502 }, { uid: 501 }, false, false],
+  ['mac uid unknown', { pid: 3 }, { uid: 501 }, false, true],
   ['win same SID', { pid: 4, sid: 's-1-5-21-1-1001' }, { sid: 'S-1-5-21-1-1001' }, true],
-  ['win other SID', { pid: 5, sid: 'S-1-5-21-1-1002' }, { sid: 'S-1-5-21-1-1001' }, false],
+  ['win other SID', { pid: 5, sid: 'S-1-5-21-1-1002' }, { sid: 'S-1-5-21-1-1001' }, false, false],
   ['win helper sameUser', { pid: 6, sameUser: true }, { sid: null }, true],
-  ['win helper other user', { pid: 7, sameUser: false }, { sid: null }, false],
-  ['no facts', null, { uid: 501 }, false],
+  ['win helper other user', { pid: 7, sameUser: false }, { sid: null }, false, false],
+  ['no facts', null, { uid: 501 }, false, true],
 ]
-for (const [name, peer, self, ok] of PEERS) {
+for (const [name, peer, self, ok, unread] of PEERS) {
   test(`CM33 peerAllowed: ${name} → ${ok ? 'allowed' : 'refused (the caller records it: one record per connection)'}`, () => {
     const r = peerAllowed(peer, self)
     assert.equal(r.ok, ok)
-    if (!ok) { assert.equal(r.code, 'pac-peer-refused'); assert.equal(typeof r.detail, 'string') }
+    if (!ok) { assert.equal(r.code, 'pac-peer-refused'); assert.equal(typeof r.detail, 'string'); assert.equal(r.unread, unread) }
   })
 }
