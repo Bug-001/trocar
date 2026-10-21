@@ -16,7 +16,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { X509Certificate } from 'node:crypto'
-import { chromiumRole } from './chromium.mjs'
+import { chromiumRole } from '../../../off/chromium.mjs'
 
 const PEM_RE = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g
 
