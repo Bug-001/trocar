@@ -319,6 +319,7 @@ test('CM23 · an idle holder keeps the door forward-only; mayExit stays false un
 })
 
 // ---- CM6: the issuer over the custody -------------------------------------------------------------------------------------------------------------
+const acceptVerdicts = (dir) => readDoorSeen({ dir }).rows.filter((r) => r.kind === 'accept').map((r) => [r.group, r.pid, r.start, r.decrypt, r.reason ?? null])
 const rootForm = CASES.find(({ f, os }) => f.trust === 'root' && f.verified[os] === true && !f.hostTree && !(f.forwardOnlyHosts || []).length)
 for (const [what, custody, code] of [['custody unavailable', 'unavailable', 'cert-intermediate-unavailable'], ['the root key not in its custody', null, 'cert-key-missing']]) {
   test(`CM6 · ${what} → forward only, ${code}`, async () => {
@@ -326,13 +327,15 @@ for (const [what, custody, code] of [['custody unavailable', 'unavailable', 'cer
     let cus = custody
     if (cus === null) { cus = custodyStub(); cus.create(); cus.switches.keyLost = true }
     const g = `${d.name}:${f.route}`
-    const { c, records } = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, custody: cus, w: { pid: ++pid, facts: { agent: d.name, uid: 501, startedAt: INSTALLED + 1 }, env: {}, cwd: '/' } })
+    const dir = tmpDir()
+    const { c, records } = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, dir, custody: cus, w: { pid: ++pid, facts: { agent: d.name, uid: 501, startedAt: INSTALLED + 1 }, env: {}, cwd: '/' } })
     await c.on({ harnesses: [d.name], groups: { [g]: 18105 } })
     const meta = await c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })
     assert.equal(meta.decrypt, false)
     assert.ok(records.some((r) => r.code === code && r.pid === pid), JSON.stringify(records))
     assert.throws(() => c.issuer.secureContextFor('a.test'), /no intermediate/)
     c.close()
+    assert.deepEqual(acceptVerdicts(dir), [[g, pid, INSTALLED + 1, false, code]], 'the durable accept row carries the door\'s judgement (P12)')
   })
 }
 
@@ -365,7 +368,8 @@ test('CM6 · a forward-only verdict on the issuer\'s state is not kept: once the
   const g = `${d.name}:${f.route}`
   stub.switches.keyLost = true // the shared custody, whose root the rig installs: its key goes missing, then comes back
   try {
-    const { c, records } = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, timers, w: { pid: ++pid, facts: { agent: d.name, uid: 501, startedAt: INSTALLED + 1 }, env: {}, cwd: '/' } })
+    const dir = tmpDir()
+    const { c, records } = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, dir, timers, w: { pid: ++pid, facts: { agent: d.name, uid: 501, startedAt: INSTALLED + 1 }, env: {}, cwd: '/' } })
     await c.on({ harnesses: [d.name], groups: { [g]: 18106 } })
     const ask = async () => (await c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })).decrypt
     assert.equal(await ask(), false); assert.equal(await ask(), false)
@@ -375,6 +379,7 @@ test('CM6 · a forward-only verdict on the issuer\'s state is not kept: once the
     assert.equal(c.issuer.state(), 'ready')
     assert.equal(await ask(), true)
     c.close()
+    assert.deepEqual(acceptVerdicts(dir), [[g, pid, INSTALLED + 1, true, null]], 'the durable accept row holds the latest judgement, its forward reason gone (P12)')
   } finally { stub.switches.keyLost = false }
 })
 
@@ -490,14 +495,19 @@ test('A10 · PAC GETs are counted per life: two from one life are one kind:\'pac
 })
 
 // ---- ① / G4: no writes; the recorded ports; a taken port ----------------------------------------------------------------------------------------
-test('4.11 ① · on / off / restore / lookup write nothing: a recording fs over the real state, ingress and manifest files sees zero writes', async () => {
+test('4.11 ① · on / off / restore / lookup write none of state, ingress or the manifest: a recording fs sees writes to the door record (P12) and nothing else', async () => {
   const dir = tmpDir()
   const d = descs[0], f = d.proxyMode.forms.find((x) => x.os.includes('darwin')), g = `${d.name}:${f.route}`
   await loadIngressConfig({ dir, groups: [g], isFree: async () => true })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), [d.name], 'on'))
   saveManifest(dir, manifestOf(d.name))
-  const writes = []
-  const rec = new Proxy(fs, { get: (t, k) => (typeof t[k] === 'function' && /write|rename|mkdir|unlink|rm|copy|chmod|append|truncate|symlink|utimes/i.test(String(k)) ? (...a) => { writes.push(k); return t[k](...a) } : t[k]) })
+  const writes = [], fds = new Map() // the path each write touches (an fd call: the path it was opened for writing)
+  const rec = new Proxy(fs, { get: (t, k) => {
+    const fn = t[k]
+    if (k === 'openSync') return (p, fl = 'r', ...r) => { const fd = fn.call(t, p, fl, ...r); if (fl !== 'r') { fds.set(fd, String(p)); writes.push(String(p)) } return fd }
+    if (typeof fn !== 'function' || !/write|rename|mkdir|unlink|rm|copy|chmod|append|truncate|symlink|utimes/i.test(String(k))) return fn
+    return (...a) => { writes.push(typeof a[0] === 'string' ? a[0] : fds.get(a[0]) ?? `fd ${a[0]}`); return fn.apply(t, a) }
+  } })
   const c = createModelCollector({ harnesses: [d], dir, fs: rec, ctx: { os: 'darwin', home: '/h', dirs: {}, readFile: () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, readdir: () => [] }, custody: 'unavailable', proxyOf,
     identify: () => ({ reason: 'match', agent: d.name }), ownerOf: async () => ({ pid: 9 }), factsOf: async () => ({ startedAt: INSTALLED + 1 }) })
   c.bindDoors({ open: async () => {}, close: async () => {} })
@@ -506,8 +516,10 @@ test('4.11 ① · on / off / restore / lookup write nothing: a recording fs over
   await c.on({ harnesses: [d.name], groups: { [g]: port } })
   await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
   await c.off({ harnesses: [d.name] })
-  assert.deepEqual(writes, [])
-  c.close()
+  c.close() // flushes the door record synchronously: what is asserted does not hang on the throttle timer
+  const isDoorRecord = (p) => p === dir || (path.dirname(p) === dir && path.basename(p).startsWith(DOOR_SEEN_FILE))
+  assert.deepEqual(writes.filter((p) => !isDoorRecord(p)), [], 'state.json, ingress.json and the manifest are not written')
+  assert.ok(writes.some((p) => p !== dir && isDoorRecord(p)), 'the lookup\'s accept row reached the door record')
 })
 
 test('① / G4 · restore reopens the desired harnesses on ingress.json\'s recorded ports; a taken port gives engine-port-taken and no door', async () => {
