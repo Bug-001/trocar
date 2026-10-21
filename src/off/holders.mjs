@@ -22,7 +22,8 @@ const windowsOf = (l) => (l && typeof l === 'object' && l.on_at != null
 export const sameLife = (row, p) => !!row && !!p && row.pid === p.pid && msOf(row.start) === msOf(p.startedAt)
 
 /** judgeLife({ p, l, table, rows, carrierAt, isMine }) → { state: 'door' | 'read' | 'maybe' | 'not-read' | 'start-unknown', row?, via? }
- *  p: a process-table row; l: its harness's liveness record; table: the whole table (ppid walks, the Chromium fold); rows: the harness's door rows;
+ *  p: a process-table row; l: its harness's liveness record; table: the whole table (ppid walks, the Chromium fold); rows: the harness's door rows
+ *  (null: the door's record could not be read — a live process of h is then judged in the safe direction);
  *  carrierAt: the earliest carrier time (ms) or null (unknown: the safe direction); isMine(x): is x a process of this harness (D51).
  *  via ∈ started-in-window · rereads · history-unknown · host-of · ancestor. */
 export function judgeLife({ p, l, table = [], rows = [], carrierAt = null, isMine = () => true }, seen = new Set()) {
@@ -40,6 +41,8 @@ export function judgeLife({ p, l, table = [], rows = [], carrierAt = null, isMin
   }
   const w = windowsOf(l)
   if (!w.length) return NOT // never on: no entry to read
+  // rows null: the door's record could not be read — whether this life has a row is not known, so the safe direction (4.11 P12)
+  const gap = rows == null && isMine(p) ? { state: 'maybe', via: 'history-unknown' } : NOT
   if (p.startedAt == null) return { state: 'start-unknown' }
   const q = { startedAt: msOf(p.startedAt), startGrain: p.startGrain }
   if (q.startedAt == null) return { state: 'start-unknown' }
@@ -53,9 +56,9 @@ export function judgeLife({ p, l, table = [], rows = [], carrierAt = null, isMin
   const parentOf = (x) => table.find((y) => y.pid === x.ppid && y.pid !== x.pid)
   for (let a = parentOf(p); a && !seen.has(a.pid); a = parentOf(a)) {
     if (!isMine(a)) { seen.add(a.pid); continue }
-    return again(a).state !== 'not-read' ? { state: 'maybe', via: 'ancestor' } : NOT
+    return again(a).state !== 'not-read' ? { state: 'maybe', via: 'ancestor' } : gap
   }
-  return NOT
+  return gap
 }
 
 /** status's door-free reading until it reads judgeLife itself: true = read an entry in a window, null = its start is not known, else false. */
@@ -68,7 +71,8 @@ const whyOf = (j) => j.via || (j.state === 'door' ? 'door-seen' : 'start-unknown
 
 /** → `[{ harness, pid, start, why }]`, in liveness then table order; why ∈ door-seen · started-in-window · rereads · start-unknown · history-unknown ·
  *  ancestor · host-of. `procs`: the live table (listProcs rows); `doorSeen`: the door's durable rows (door-seen.mjs); `agentList`: readAgentList's
- *  result, whose additions count as the harness's names too (the safe direction, as in undo). */
+ *  result, whose additions count as the harness's names too (the safe direction, as in undo). `doorSeen` null = the door's record could not be
+ *  read: every live process of a harness that was on is then a holder (history-unknown) unless other evidence names it. */
 export function holdersOf({ manifest, procs = [], doorSeen = [], agentList = null } = {}) {
   const raw = manifest && manifest.liveness && typeof manifest.liveness === 'object' ? manifest.liveness : {}
   const { liveness } = withAgentList(raw, agentList)
@@ -78,11 +82,11 @@ export function holdersOf({ manifest, procs = [], doorSeen = [], agentList = nul
     // holders exist only after off (1.6 R5): a record without on_at is not the model's (Linux, the old model), one without off_at is still on
     if (!l || typeof l !== 'object' || l.per_request || l.on_at == null || l.off_at == null) continue
     const isMine = (x) => harnessesOf({ [h]: l }, x).length > 0
-    const rows = (doorSeen || []).filter((r) => r && r.harness === h)
+    const rows = doorSeen == null ? null : doorSeen.filter((r) => r && r.harness === h) // null: not known (an unreadable door record)
     const t = items.filter((i) => i.harness === h || i.kind === 'system-root').map((i) => msOf(i.installed_at)).filter((x) => x != null)
     const carrierAt = t.length ? Math.min(...t) : null // the earliest carrier: the safe direction
     for (const p of procs) {
-      if (!isMine(p) && !rows.some((r) => sameLife(r, p))) continue
+      if (!isMine(p) && !(rows || []).some((r) => sameLife(r, p))) continue
       const j = judgeLife({ p, l, table: procs, rows, carrierAt, isMine })
       if (j.state !== 'not-read') out.push({ harness: h, pid: p.pid, start: p.startedAt ?? null, why: whyOf(j) })
     }

@@ -223,3 +223,36 @@ for (const [sl, start] of Object.entries(STARTS)) for (const since of [false, tr
     if (inWindow) assert.equal(j.state, sl === 'in-window-before-move' && moved ? 'maybe' : 'read', 'a window from before a group moved may have read the old door value')
   })
 }
+
+// A9 · off reads the door's durable record from its own dir: a process started in a known gap after off (no window, no ancestor) is held only by
+// its row; an unreadable record (a directory there) is "not known" — every live process of h holds (history-unknown), with a note; no file: none
+for (const doorFile of ['none', 'row', 'unreadable']) {
+  test(`A9 · off over door-seen.json ${doorFile}: the gap process is ${doorFile === 'none' ? 'not ' : ''}a holder`, async () => {
+    const fs = (await import('node:fs')).default, path = (await import('node:path')).default
+    const { tmpDir } = await import('../helpers/tmp.mjs')
+    const { newManifest, saveManifest, readManifest } = await import('../../src/off/manifest.mjs')
+    const { undoHarnesses } = await import('../../src/off/undo.mjs')
+    const { DOOR_SEEN_FILE, writeDoorSeen } = await import('../../src/off/door-seen.mjs')
+    const dir = tmpDir('holders-door'), home = tmpDir('holders-door-home')
+    const m = newManifest()
+    m.liveness = { agentx: rec('agentx') }
+    saveManifest(dir, m)
+    const p = proc(5, 'agentx', OFF + 1000)
+    if (doorFile === 'row') writeDoorSeen({ dir, rows: [{ harness: 'agentx', group: 'agentx:cli', pid: 5, start: OFF + 1000, kind: 'accept', at: iso(OFF + 2000), n: 1 }] })
+    if (doorFile === 'unreadable') fs.mkdirSync(path.join(dir, DOOR_SEEN_FILE))
+    const out = await undoHarnesses({ dir, home, manifest: readManifest(dir), ids: null, procs: async () => [p], now: new Date(OFF + 5000) })
+    const want = { none: [], row: [[5, 'door-seen']], unreadable: [[5, 'history-unknown']] }[doorFile]
+    assert.deepEqual(out.holders.map((x) => [x.pid, x.why]), want)
+    assert.equal(out.notes.length > 0, doorFile === 'unreadable')
+  })
+}
+
+// door evidence not known (rows null) over the generated axes: every live process of h that was on holds; one of another name does not
+for (const [sl, start] of Object.entries({ 'before-carrier': ON - 9_000_000, 'in-gap': GAP, 'after-off': OFF + 1, 'in-window': ON + 5, unknown: null })) {
+  test(`door record unreadable · start ${sl}: a process of h is a holder, another program is not`, () => {
+    const l = known()
+    const m = { ...manifest({ agentx: l }), entries: [{ kind: 'system-root', phase: 'install', installed_at: iso(ON - 8_000_000) }] }
+    const got = holdersOf({ manifest: m, procs: [tproc(910, 1, start), tproc(911, 1, start, ['other'], 'other')], doorSeen: null })
+    assert.deepEqual(got.map((x) => x.pid), [910])
+  })
+}

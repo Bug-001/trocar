@@ -358,8 +358,8 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   if (windowed.length) {
     const t = await table()
     const ds = readDoorSeen({ dir, fs }) // the door's durable rows (P12); unreadable = door evidence not known: the judge keeps the safe direction
-    if (ds.rows == null) out.notes.push(`which programs the door met could not be read (${ds.error}), so the holders are judged without it`)
-    out.holders = t.error ? null : holdersOf({ manifest, procs: t.list, doorSeen: ds.rows || [], agentList: home ? readAgentList({ home, fs }) : null }).filter((x) => inScope(x.harness))
+    if (ds.rows == null) out.notes.push(`${ds.error}, so every running program of a harness that was on is counted as still connected`)
+    out.holders = t.error ? null : holdersOf({ manifest, procs: t.list, doorSeen: ds.rows, agentList: home ? readAgentList({ home, fs }) : null }).filter((x) => inScope(x.harness))
     if (t.error) out.notes.push(`the process table could not be read (${t.error}), so which programs may still be connected through trocar is not known`)
   }
 

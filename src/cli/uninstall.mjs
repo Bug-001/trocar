@@ -53,9 +53,9 @@ async function captureOnline(w, m, notes = []) {
     if (r && Array.isArray(r.holders)) holders = r.holders; else unknown = 'the daemon does not know its holders yet'
   } catch (e) {
     if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) { // the daemon is down: the CLI judges, by the same rule
-      const ds = readDoorSeen({ dir: w.dir, fs: w.fs }) // the door's durable rows (P12); unreadable: judged without them, the safe direction
-      if (ds.rows == null) notes.push(`${ds.error}, so the holders were judged without it`)
-      try { holders = holdersOf({ manifest: m, procs: await w.procs(), doorSeen: ds.rows || [], agentList: readAgentList({ home: w.home, fs: w.fs }) }) } catch (t) { unknown = `the process table could not be read (${errText(t)})` }
+      const ds = readDoorSeen({ dir: w.dir, fs: w.fs }) // the door's durable rows (P12); unreadable (rows null): every live process of h holds
+      if (ds.rows == null) notes.push(`${ds.error}, so every running program of a harness that was on is counted as still connected`)
+      try { holders = holdersOf({ manifest: m, procs: await w.procs(), doorSeen: ds.rows, agentList: readAgentList({ home: w.home, fs: w.fs }) }) } catch (t) { unknown = `the process table could not be read (${errText(t)})` }
     } else unknown = `a daemon holds the control endpoint but did not answer (${errText(e)})`
   }
   return on.length || unknown || (holders && holders.length) ? { on, holders: holders || [], unknown } : null
