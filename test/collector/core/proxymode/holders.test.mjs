@@ -1,5 +1,5 @@
 // test/collector/core/proxymode/holders.test.mjs — CM23 (unit, the daemon half; 4.11 P12): the poll reads the process table every 10 s through
-// injected timers and never a connection count; an idle holder keeps mayExit false until it dies; doorSeen is recorded at accept (pid + start).
+// injected timers and never a connection count; an idle holder keeps mayExit false until it dies; the door record (createDoorSeen) is bounded.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHolderPoll, mayExit, createDoorSeen, HOLDER_POLL_MS } from '../../../../src/collector/core/proxymode/holders.mjs'
@@ -7,6 +7,8 @@ import { holdersOf } from '../../../../src/off/holders.mjs'
 import { compileIdentity } from '../../../../src/off/identity.mjs'
 import { serializeSignature } from '../../../../src/off/signature.mjs'
 import { holdersRoute } from '../../../../src/collector/core/control.mjs'
+import { readDoorSeen, DOOR_SEEN_MAX } from '../../../../src/off/door-seen.mjs'
+import { tmpDir } from '../../../helpers/tmp.mjs'
 
 const ON = 1_000_000, OFF = 2_000_000
 const liveness = { agentx: { identity: serializeSignature(compileIdentity({ harness: 'agentx', names: [{ name: 'agentx' }] })), rereads: false, since: new Date(ON).toISOString(), on_at: new Date(ON).toISOString(), off_at: new Date(OFF).toISOString() } } // since: the first on's (P12)
@@ -42,14 +44,17 @@ test('a table that cannot be read keeps the last answer (never "nobody holds")',
   poll.stop()
 })
 
-test('doorSeen records pid + start at accept, once per process with its latest sighting, and holdersOf counts it within the on window', () => {
-  let now = ON + 50
-  const seen = createDoorSeen({ clock: () => now })
-  seen.add({ harness: 'agentx', pid: 20, start: ON - 100 }); now = ON + 60; seen.add({ harness: 'agentx', pid: 20, start: ON - 100 })
-  seen.add({ harness: 'agentx', pid: 'x' })
-  assert.deepEqual(seen.list(), [{ harness: 'agentx', pid: 20, start: ON - 100, at: ON + 60 }])
-  const rows = holdersOf({ manifest: { liveness }, procs: [proc(20, ON - 100, 'helper')], doorSeen: seen.list() })
-  assert.deepEqual(rows.map((r) => [r.pid, r.why]), [[20, 'door-seen']])
+test('A9 (c) · P12 the door record is bounded: past DOOR_SEEN_MAX lives the file keeps the newest DOOR_SEEN_MAX rows, and a reload lists them', () => {
+  const dir = tmpDir()
+  let now = ON
+  const seen = createDoorSeen({ dir, clock: () => ++now, timers: fakeTimers() })
+  const extra = 5
+  for (let pid = 1; pid <= DOOR_SEEN_MAX + extra; pid++) seen.add({ harness: 'agentx', group: 'agentx:api', pid, start: ON - pid, kind: 'accept' })
+  seen.close()
+  const { rows } = readDoorSeen({ dir })
+  assert.ok(rows.length <= DOOR_SEEN_MAX)
+  assert.deepEqual(rows.map((r) => r.pid).sort((a, b) => a - b), Array.from({ length: DOOR_SEEN_MAX }, (_, i) => i + 1 + extra), 'the oldest lives went')
+  assert.equal(createDoorSeen({ dir, timers: fakeTimers() }).list().length, rows.length)
 })
 
 test('GET /holders answers the count and the rows', async () => {
