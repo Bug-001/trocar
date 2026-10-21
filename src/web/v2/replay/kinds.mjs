@@ -5,16 +5,17 @@
 //
 // renderKind returns {html, more, cls}: `html` is the inner markup, `cls` the classes of the wrapper the CALLER puts around it
 // (`<div class="cellread ${cls}">`, kind class plus tone class), `more` the next `from` when only a slice of a long string was
-// drawn (text and code only), else null. A continuation slice is appended inside the same wrapper. Nested children (kv,
+// drawn (text and code only; `bid` names a media cell's img), else null. A continuation slice is appended inside the same wrapper. Nested children (kv,
 // sections, parts) carry their own `<div class="kd-… tone-…">` and are drawn whole.
 // Security: every byte of input goes through esc(); only the elements and attributes of plan §2.2 are emitted.
-import { esc, has, enc } from '../core/fmt.mjs'
-import { failAs, opaqueLine } from '../labels/cells.mjs'
+import { esc, has, enc, bytes } from '../core/fmt.mjs'
+import { failAs, opaqueLine, mediaAlt, BEFORE, AFTER, SAVE } from '../labels/cells.mjs'
 
 const CLASS = { sections: 'kd-sec', markdown: 'kd-md' } // every other kind's class is kd-<as>
 const TONE = { error: 'tone-error', quiet: 'tone-quiet' }
 const GROUP = 100, FIRST = 200 // json: entries per disclosure group; nodes on a first paint
 const GUT = /^\s*\d+(?:→|\t)/
+const DMAX = 256, NMAX = 2000 // diff: an edit pair gets a line diff up to D edits and this many lines per side, else two panes
 
 export const valueOf = (text) => { try { return JSON.parse(text) } catch { return text } }
 
@@ -105,7 +106,138 @@ function json(r, b) {
   if (typeof b === 'string') { try { b = JSON.parse(b) } catch { fail() } }
   return { html: node('', b, [], 0, { n: FIRST - 1 }) }
 }
-const R = { text, code, shell, json, kv, sections, opaque, parts } // markdown, diff and media draw as text until they land
+// ── markdown: a subset; every byte is text through esc(), so raw HTML in the source shows as text and a link is its text
+// plus its URL, never an anchor ─────────────────────────────────────────────────────────────────────────────────────
+const INL = /`([^`]+)`|\*\*([^]+?)\*\*|__([^]+?)__|\*([^*\s][^*]*?)\*|(?<!\w)_([^_\s][^_]*?)_(?!\w)|!?\[([^\]]*)\]\(([^)\s]*)\)/g
+function inl(s) {
+  if (s.length > 10000) return shown(s) // a long line is plain text: no inline scan to pay for
+  let h = '', at = 0
+  for (const m of s.matchAll(INL)) {
+    h += shown(s.slice(at, m.index))
+    at = m.index + m[0].length
+    h += m[1] != null ? `<code>${shown(m[1])}</code>` : m[2] != null || m[3] != null ? `<span class="md-b">${inl(m[2] ?? m[3])}</span>`
+      : m[4] != null || m[5] != null ? `<span class="md-em">${inl(m[4] ?? m[5])}</span>` : `${inl(m[6])} (${shown(m[7])})`
+  }
+  return h + shown(s.slice(at))
+}
+const SEP = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/
+const cellsOf = (l) => l.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim())
+const row = (l, t) => `<tr>${cellsOf(l).map((c) => `<${t}>${inl(c)}</${t}>`).join('')}</tr>`
+function markdown(r, b) {
+  if (typeof b !== 'string') fail()
+  const L = b.split('\n')
+  let h = '', para = [], m
+  const flush = () => { if (para.length) h += `<div>${para.map(inl).join('\n')}</div>`; para = [] }
+  for (let i = 0; i < L.length; i++) {
+    const l = L[i], put = (x) => { flush(); h += x }
+    if ((m = /^\s*(`{3,}|~{3,})/.exec(l))) { // a fence: drawn by the code renderer; an unclosed one runs to the end
+      let e = i + 1
+      while (e < L.length && !L[e].trim().startsWith(m[1])) e++
+      put(child({ as: 'code' }, L.slice(i + 1, e).join('\n')))
+      i = e
+    } else if (l.includes('|') && SEP.test(L[i + 1] ?? '') && L[i + 1].includes('-')) {
+      let rows = row(l, 'th')
+      for (i += 2; i < L.length && L[i].includes('|') && L[i].trim(); i++) rows += row(L[i], 'td')
+      i--
+      put(`<div class="md-table"><table>${rows}</table></div>`)
+    } else if ((m = /^ {0,3}(#{1,6})\s+([^]*)$/.exec(l))) put(`<div class="md-h${m[1].length}">${inl(m[2])}</div>`)
+    else if ((m = /^\s*>\s?([^]*)$/.exec(l))) put(`<div class="md-q">${inl(m[1])}</div>`)
+    else if ((m = /^\s*([-*+]|\d+[.)])\s+([^]*)$/.exec(l))) put(`<div class="md-li">${shown(m[1])} ${inl(m[2])}</div>`)
+    else if (l.trim()) para.push(l)
+    else flush()
+  }
+  flush()
+  return { html: h }
+}
+
+// ── diff: unified only; every changed line starts with its sign character ────────────────────────────────────────────
+const SIGN = { ' ': 'd-ctx', '-': 'd-del', '+': 'd-add' }
+const dline = (c, s) => `<div class="${c}">${shown(s)}</div>`
+const pane = (word, s) => `<div class="d-pane"><div class="d-panel">${esc(word)}</div>${shown(s)}</div>`
+// Myers' O(ND) line diff → [[sign, line]], or null past DMAX edits or NMAX lines a side (the work is then at most ~(N+M)·DMAX)
+function myers(a, b) {
+  const n = a.length, m = b.length, off = DMAX + 1, v = new Int32Array(2 * off + 1), trace = []
+  if (n > NMAX || m > NMAX) return null
+  for (let d = 0; d <= DMAX; d++) {
+    trace.push(v.slice())
+    for (let k = -d; k <= d; k += 2) {
+      let x = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? v[off + k + 1] : v[off + k - 1] + 1, y = x - k
+      while (x < n && y < m && a[x] === b[y]) { x++; y++ }
+      v[off + k] = x
+      if (x >= n && y >= m) return back(trace, a, b, off)
+    }
+  }
+  return null
+}
+function back(trace, a, b, off) {
+  let x = a.length, y = b.length
+  const out = []
+  for (let d = trace.length - 1; d >= 0; d--) {
+    const v = trace[d], k = x - y
+    const pk = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? k + 1 : k - 1, px = v[off + pk], py = px - pk
+    while (x > px && y > py) { y--; out.push([' ', a[--x]]) }
+    if (d > 0) out.push(x === px ? ['+', b[--y]] : ['-', a[--x]])
+    x = px; y = py
+  }
+  return out.reverse()
+}
+function diff(r, b, v) {
+  const f = r.f || {}, cap = r.title != null ? `<div class="kd-title">${esc(r.title)}</div>` : ''
+  if (f.old != null || f.new != null) {
+    const a = get(v, f.old), c = get(v, f.new)
+    if (typeof a !== 'string' || typeof c !== 'string') fail()
+    const ops = myers(a.split('\n'), c.split('\n'))
+    return { html: cap + (ops ? ops.map(([s, l]) => dline(SIGN[s], s + l)).join('') : pane(BEFORE, a) + pane(AFTER, c)) }
+  }
+  const p = f.patch != null ? get(v, f.patch) : b
+  if (typeof p !== 'string') fail()
+  const L = p.split('\n'), hunk = (l) => l.startsWith('@@') || l.startsWith('***')
+  if (L.at(-1) === '') L.pop()
+  if (!L.some(hunk)) fail() // not a patch
+  let head = true
+  return { html: cap + L.map((l) => {
+    if (hunk(l)) head = false
+    return dline(hunk(l) || (head && /^(?:---|\+\+\+) /.test(l)) ? 'd-hunk' : SIGN[l[0]] || 'd-ctx', l)
+  }).join('') }
+}
+
+// ── media: png / jpeg / gif / webp as an <img> with no src (the caller sets a blob: URL after insertion); svg as code;
+// any other data as a file line with Save; no data (a URL) as text, never loaded ─────────────────────────────────────
+function dims(s) { // [type, width, height] from the image header, else null
+  const at = (i) => s.charCodeAt(i), be = (i) => at(i) << 8 | at(i + 1), le = (i) => at(i) | at(i + 1) << 8
+  const le3 = (i) => le(i) | at(i + 2) << 16, ok = (t, w, h) => (w > 0 && h > 0 ? [t, w, h] : null)
+  if (s.startsWith('\x89PNG\r\n\x1a\n') && s.slice(12, 16) === 'IHDR') return ok('png', be(16) * 65536 + be(18), be(20) * 65536 + be(22))
+  if (/^GIF8[79]a/.test(s)) return ok('gif', le(6), le(8))
+  if (s.startsWith('RIFF') && s.slice(8, 12) === 'WEBP') {
+    const c = s.slice(12, 16), n = (le(21) | at(23) << 16 | at(24) << 24) >>> 0
+    return c === 'VP8 ' ? ok('webp', le(26) & 0x3fff, le(28) & 0x3fff) : c === 'VP8L' ? ok('webp', (n & 0x3fff) + 1, (n >>> 14 & 0x3fff) + 1)
+      : c === 'VP8X' ? ok('webp', le3(24) + 1, le3(27) + 1) : null
+  }
+  if (s.startsWith('\xff\xd8')) {
+    for (let i = 2; i + 9 <= s.length;) {
+      const mk = at(i + 1)
+      if (at(i) !== 0xff || mk === 0xd9 || mk === 0xda) return null
+      if (mk === 0xff) i++
+      else if (mk === 0x01 || (mk >= 0xd0 && mk <= 0xd8)) i += 2
+      else if (mk >= 0xc0 && mk <= 0xcf && mk !== 0xc4 && mk !== 0xc8 && mk !== 0xcc) return ok('jpeg', be(i + 7), be(i + 5))
+      else i += 2 + be(i + 2)
+    }
+  }
+  return null
+}
+function media(r, b, v, o) {
+  const f = r.f || {}, data = f.data != null ? get(v, f.data) : undefined
+  if (data == null) return { html: `<div>${shown(asText(b))}</div>` }
+  if (typeof data !== 'string') fail()
+  const bin = atob(data), mime = String((f.mime != null && get(v, f.mime)) || '').toLowerCase().split(';')[0].trim()
+  const sub = mime.split('/')[1] || ''
+  if (sub.startsWith('svg')) return { as: 'code', body: new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0))) }
+  const d = dims(bin)
+  if (d) return { html: `<img data-media="${esc(o.bid ?? '')}" width="${d[1]}" height="${d[2]}" alt="${esc(mediaAlt(d[0], d[1], d[2], bin.length))}" decoding="async">` }
+  if (/^(?:png|jpe?g|gif|webp)$/.test(sub)) fail() // an image type whose header does not read
+  return { html: `<div class="kd-file">${esc((sub || mime || '?').toUpperCase())} · ${esc(bytes(bin.length))} <button type="button" data-cellsave>${esc(SAVE)}</button></div>` }
+}
+const R = { text, code, shell, json, kv, sections, opaque, parts, markdown, diff, media }
 
 // ── json tree: <details> per object / array; 2 levels open on a first paint, at most FIRST nodes; the rest closed and empty ─
 const prim = (v) => typeof v === 'string' ? `<span class="j-str">${shown(JSON.stringify(v))}</span>`
@@ -154,15 +286,15 @@ function draw(r, value, o) {
     const body = get(value, r?.f?.body)
     if (body === undefined && r?.f?.body != null) fail()
     let out = R[as](r || {}, body, value, o)
-    if (out.as) { as = out.as; out = R[as](r || {}, body, value, o) }
+    if (out.as) { as = out.as; out = R[as](r || {}, has(out, 'body') ? out.body : body, value, o) }
     return { html: out.html, more: out.more ?? null, cls: (CLASS[as] || 'kd-' + as) + tone }
   } catch {
     const [s, more] = slice(asText(value), o.from, o.budget)
     return { html: (o.from === 0 ? `<div class="kd-fail">${esc(failAs(as))}</div>` : '') + shown(s), more, cls: 'kd-text' + tone }
   }
 }
-export function renderKind(r, value, { from = 0, budget = 20000 } = {}) {
-  return draw(r, value, { from, budget })
+export function renderKind(r, value, { from = 0, budget = 20000, bid } = {}) {
+  return draw(r, value, { from, budget, bid })
 }
 // a nested child: drawn whole, inside its own kind wrapper; a missing spec is text
 function child(r, v) {

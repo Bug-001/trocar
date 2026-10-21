@@ -166,3 +166,114 @@ test('valueOf: JSON when it parses, else the text itself', () => {
     assert.equal(valueOf(s), s)
   }
 })
+
+// ── markdown, diff, media (T3) ─────────────────────────────────────────────────────────────────────────────────────────
+const plain = () => str(12).replace(/[\u001b\r\n|*_`[\]\\#>~+-]/g, '') + 'w' // a table cell / text run with no markdown syntax in it
+
+test('markdown: an HTML tag stays text, a link is text and URL with no href, a pipe table becomes cells', () => {
+  for (let i = 0; i < 100; i++) {
+    const tag = pick(['b', 'script', 'a', 'img', 'h1']), html = `<${tag} x="${plain()}">${plain()}</${tag}>`
+    const url = 'https://e.x/' + plain().replace(/[\s()]/g, '')
+    const cols = 1 + Math.floor(rnd() * 4), rows = Math.floor(rnd() * 5)
+    const line = (f) => '| ' + Array.from({ length: cols }, f).join(' | ') + ' |'
+    const lvl = 1 + Math.floor(rnd() * 6)
+    const src = [`${'#'.repeat(lvl)} ${plain()}`, html, `see [${plain()}](${url})`, '', line(plain), line(() => '---'),
+      ...Array.from({ length: rows }, () => line(plain)), '', `- ${plain()}`, `> ${plain()}`].join('\n')
+    const out = renderKind({ as: 'markdown' }, src)
+    assert.ok(has(wrap(out), 'kd-md'))
+    assert.ok(textOf(out.html).includes(html), 'the tag is shown as text')
+    assert.ok(textOf(out.html).includes(url), 'the URL is shown')
+    assert.doesNotMatch(out.html, /href|<a[\s>]|<h\d|<ul|<li|<em|<strong/)
+    assert.equal(count(out.html, /<th>/g), cols)
+    assert.equal(count(out.html, /<td>/g), cols * rows)
+    for (const c of ['md-h' + lvl, 'md-li', 'md-q', 'md-table']) assert.ok(has(out.html, c), c)
+  }
+})
+
+const dlines = (h) => [...h.matchAll(/<div class="(d-add|d-del|d-ctx)">([^<]*)<\/div>/g)].map((m) => [m[1], textOf(m[2])])
+const lineBits = () => pick(['a', 'b', 'c', 'x = 1', '', '  }', '<p>', '"q"', '\r'])
+test('diff: an edit pair read back with its signs rebuilds old and new', () => {
+  for (let i = 0; i < 200; i++) {
+    const old = Array.from({ length: Math.floor(rnd() * 60) }, lineBits)
+    const nu = old.flatMap((l) => (rnd() < 0.1 ? [] : rnd() < 0.1 ? [lineBits(), l] : rnd() < 0.05 ? [lineBits()] : [l]))
+    const v = { o: old.join('\n'), n: nu.join('\n') }
+    const out = renderKind({ as: 'diff', title: 'p', f: { old: ['o'], new: ['n'] } }, v)
+    assert.ok(has(wrap(out), 'kd-diff') && has(out.html, 'kd-title'))
+    const L = dlines(out.html)
+    for (const [c, t] of L) assert.equal(t[0], { 'd-add': '+', 'd-del': '-', 'd-ctx': ' ' }[c])
+    assert.equal(L.filter(([c]) => c !== 'd-add').map(([, t]) => t.slice(1)).join('\n'), v.o)
+    assert.equal(L.filter(([c]) => c !== 'd-del').map(([, t]) => t.slice(1)).join('\n'), v.n)
+  }
+})
+
+test('diff: past the edit or line cap, two panes; a patch is classed by its first character', () => {
+  const many = (n, p) => Array.from({ length: n }, (_, k) => p + k).join('\n')
+  for (const [o, n] of [[many(300, 'a'), many(300, 'b')], [many(2001, 'a'), many(2001, 'a') + '\nz']]) {
+    const t0 = Date.now()
+    const out = renderKind({ as: 'diff', f: { old: ['o'], new: ['n'] } }, { o, n })
+    assert.equal(count(out.html, /class="d-pane"/g), 2)
+    assert.equal(count(out.html, /class="d-panel"/g), 2)
+    assert.ok(Date.now() - t0 < 2000, 'bounded work')
+  }
+  for (let i = 0; i < 100; i++) {
+    const body = Array.from({ length: 1 + Math.floor(rnd() * 20) }, () => pick(['+', '-', ' ']) + plain())
+    const p = ['@@ -1,3 +1,3 @@', ...body].join('\n')
+    const out = renderKind({ as: 'diff', f: { patch: ['p'] } }, { p })
+    const want = body.map((l) => ({ '+': 'd-add', '-': 'd-del', ' ': 'd-ctx' }[l[0]]))
+    assert.deepEqual(dlines(out.html).map(([c]) => c), want)
+    assert.ok(has(out.html, 'd-hunk'))
+  }
+})
+
+// generated image headers: [mime, bytes, width, height]
+function header(kind, w, h) {
+  const b = Buffer.alloc(64)
+  if (kind === 'png') { Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').copy(b); b.writeUInt32BE(w, 16); b.writeUInt32BE(h, 20) }
+  if (kind === 'gif') { b.write('GIF89a', 0, 'latin1'); b.writeUInt16LE(w, 6); b.writeUInt16LE(h, 8) }
+  if (kind === 'jpeg') {
+    const app = Buffer.alloc(2 + Math.floor(rnd() * 40)); app.writeUInt16BE(app.length, 0)
+    const sof = Buffer.from([0xff, pick([0xc0, 0xc1, 0xc2]), 0, 17, 8, h >> 8, h & 255, w >> 8, w & 255, 3])
+    return Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), app, sof, Buffer.alloc(20)])
+  }
+  if (kind.startsWith('webp')) {
+    b.write('RIFF', 0, 'latin1'); b.write('WEBP', 8, 'latin1')
+    if (kind === 'webp-x') { b.write('VP8X', 12, 'latin1'); b.writeUIntLE(w - 1, 24, 3); b.writeUIntLE(h - 1, 27, 3) }
+    if (kind === 'webp-l') { b.write('VP8L', 12, 'latin1'); b[20] = 0x2f; b.writeUInt32LE(((w - 1) | ((h - 1) << 14)) >>> 0, 21) }
+    if (kind === 'webp') { b.write('VP8 ', 12, 'latin1'); b.writeUIntBE(0x9d012a, 23, 3); b.writeUInt16LE(w, 26); b.writeUInt16LE(h, 28) }
+  }
+  return b
+}
+const MAX = { png: 2 ** 31 - 1, gif: 65535, jpeg: 65535, webp: 16383, 'webp-l': 16384, 'webp-x': 2 ** 24 }
+const MEDIA = { as: 'media', f: { data: ['d'], mime: ['m'] } }
+
+test('media: width and height come from the image header; no src; svg is code; other data a file with Save; a URL is text', () => {
+  for (let i = 0; i < 300; i++) {
+    const kind = pick(Object.keys(MAX)), w = 1 + Math.floor(rnd() * MAX[kind]), h = 1 + Math.floor(rnd() * MAX[kind])
+    const out = renderKind(MEDIA, { d: header(kind, w, h).toString('base64'), m: 'image/' + kind.split('-')[0] }, { bid: 'b' + i })
+    assert.ok(has(wrap(out), 'kd-media'))
+    const img = out.html.match(/<img ([^>]*)>/)
+    assert.ok(img, kind)
+    assert.match(img[1], new RegExp(`data-media="b${i}" width="${w}" height="${h}"`))
+    assert.doesNotMatch(img[1], /\bsrc=/)
+  }
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg"><text>' + plain() + '</text></svg>'
+  const s = renderKind(MEDIA, { d: Buffer.from(svg).toString('base64'), m: 'image/svg+xml' })
+  assert.ok(has(wrap(s), 'kd-code'))
+  assert.equal(textOf(s.html), svg)
+  const pdf = renderKind(MEDIA, { d: Buffer.from('%PDF-1.7').toString('base64'), m: 'application/pdf' })
+  assert.match(pdf.html, /class="kd-file"[^]*<button type="button" data-cellsave>/)
+  const url = renderKind({ as: 'media', f: { data: ['d'] } }, { url: 'https://e.x/a.png' })
+  assert.doesNotMatch(url.html, /<img|src=/)
+  assert.ok(textOf(url.html).includes('https://e.x/a.png'))
+})
+
+test('markdown, diff, media: input they cannot draw falls back to text with the fail line', () => {
+  for (let i = 0; i < 50; i++) {
+    for (const [r, v] of [[{ as: 'diff' }, plain() + '\n+' + plain()], [{ as: 'diff', f: { patch: ['p'] } }, { p: 7 }],
+      [{ as: 'diff', f: { old: ['o'], new: ['n'] } }, { o: 'a' }], [{ as: 'markdown' }, { a: 1 }],
+      [MEDIA, { d: '!' + plain(), m: 'image/png' }], [MEDIA, { d: header('png', 3, 4).subarray(0, 14).toString('base64'), m: 'image/png' }]]) {
+      const h = wrap(renderKind(r, v))
+      assert.ok(has(h, 'kd-fail') && has(h, 'kd-text'), JSON.stringify(r))
+    }
+  }
+})
