@@ -83,6 +83,9 @@ test('the minute tick: classes and a relative window move with the clock, an abs
   const abs = { since: '2026-10-18T00:00:00Z' }
   assert.equal(stampOf('sessions', abs, at(later)), stampOf('sessions', abs, at(T0)))
   assert.equal(stampOf('sessions', {}, at(later)), stampOf('sessions', {}, at(T0)))
+  // `session --since` is a mark (a record id), not a time: no tick (3.5 §会话读)
+  const mark = { id: 'x', since: '20261018T100000Z:7' }
+  assert.equal(stampOf('session', mark, at(later)), stampOf('session', mark, at(T0)))
 })
 
 test('nothing touched → the same stamp for every name; status and doctor have none', () => {

@@ -28,12 +28,15 @@ import { indexDir } from './index-build.mjs';
 import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
 
-export const PROJ_V = 4;
+export const PROJ_V = 5;
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
 const SHARE_DEPTH = 3, SHARE_MIN = 48;
 // rows and shared values read back are kept by the bytes of their lines (a row grows with its context: a count let a long lane's
 // rows hold most of the heap, 2026-10-22), the value keys looked for by count; each cache holds one to two times its figure
 const ROW_BYTES = 2 << 20, SHARED_BYTES = 2 << 20, SEEN = 1 << 14;
+/** What an open store keeps at most of rows and shared values read back (each cache holds one to two times its figure): the heap
+ *  a warm session's store costs beside its reduction (src/query/named/session.mjs). */
+export const STORE_HEAP = 2 * (ROW_BYTES + SHARED_BYTES);
 const CHUNK = 1 << 20;
 const NAME = /^[0-9a-f]{32}\.ndjson$/;
 

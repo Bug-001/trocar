@@ -78,7 +78,7 @@ const isCall = (row) => !!(row && row.x && Array.isArray(row.x.secs));
  * "Extraction frontier"): the reduction over the members whose record id is ≤ mark (posCmp) and nothing else. `members`: the
  * session's index rows (or record ids); those up to the mark that the store holds a row for go through one reduction(). With no
  * mark, the mark is the store's frontier: the largest member such that every member up to it has a row. The document carries `mark`;
- * `failed: [{id, reason}]`, the members up to the mark whose row says why they did not extract (design §3.9, D38: their call is
+ * `failed: [{id, reason, code}]` (code: record-unreadable / record-unparseable), the members up to the mark whose row says why they did not extract (design §3.9, D38: their call is
  * shown by its reason, never dropped); and `pending: {done, total}` (members up to the mark that have a row, members) while a member
  * is above the mark or has no row — a failed member is reported, not pending (3.5:43). `resolve(ref)` → the flat entry of the block
  * `ref` names (src/view/extract.mjs blockAt over the record read back): asked only for a break detail no `brk` line holds yet.
@@ -102,7 +102,7 @@ export function reduce(store, members, { mark = undefined, resolve = null, error
  * New rids that all sort after the last one folded (write order; step order once the reduction is in step order) are folded on;
  * else the fold starts again over everything added, as it does on an `OrderBound` (sub-agents told apart by order only: then in step
  * order). So `doc()` is always the document of one pass over the rids added so far: byte for byte what one add of them all gives.
- * `progress()` is called once per row folded (the worker's silence clock, 3.5:46). `doc()` → the document (the head of this file),
+ * `progress(rid)` is called once per row folded (the worker's silence clock, 3.5:46). `doc()` → the document (the head of this file),
  * with `failed` when a row added says its record did not extract; it is built at each call (the analyzer's finish) and shares its
  * calls with the fold, which the next add goes on changing.
  */
@@ -113,13 +113,13 @@ export function reduction(store, { resolve = null, errors = undefined, progress 
   const byStep = (a, b) => { const oa = ord.get(a), ob = ord.get(b); return oa && ob ? stepOrder(oa, ob) : 0; };
   let inStep = false, last = null, F = foldOf(store, resolve, found, ord);
   const store_ = (rid) => store.rows.get(rid);
-  const fold = (rid, row, rowOf) => { F.push(rid, row, rowOf); last = rid; if (progress) progress(); };
+  const fold = (rid, row, rowOf) => { F.push(rid, row, rowOf); last = rid; if (progress) progress(rid); };
   // a row read: a failed one noted, else its order kept (the row returned)
   function read(rid) {
     const row = store.rows.get(rid);
     if (!row) throw new Error(`the context projection has no row for ${rid}`);
     const x = row.x || {};
-    if (typeof x.unparsed === 'string' && !x.item) { failed.set(rid, x.unparsed); return null; }
+    if (typeof x.unparsed === 'string' && !x.item) { failed.set(rid, { reason: x.unparsed, code: x.code || 'record-unparseable' }); return null; }
     ord.set(rid, x.item ? { ts_request: x.item.ts_request, id: x.item.id } : null);
     return row;
   }
@@ -152,7 +152,7 @@ export function reduction(store, { resolve = null, errors = undefined, progress 
   }
   function doc() {
     const A = F.doc();
-    if (failed.size) A.failed = [...failed].sort((a, b) => posCmp(a[0], b[0])).map(([id, reason]) => ({ id, reason }));
+    if (failed.size) A.failed = [...failed].sort((a, b) => posCmp(a[0], b[0])).map(([id, f]) => ({ id, ...f }));
     return A;
   }
   const R = { add, doc, has: (rid) => ord.has(String(rid)) || failed.has(String(rid)) };

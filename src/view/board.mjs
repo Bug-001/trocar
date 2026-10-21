@@ -162,6 +162,17 @@ function loggedView(its) {
   const items = its.slice(-LOGGED_SHOWN).reverse().map((i) => i.item);
   return { count: its.length, labels, items, shown: items.length };
 }
+/** itemsView(items) → {logged, probes} of a session document (C.5) from the facts the reduction keeps of each member (src/view/reduce.mjs
+ *  `items`, src/view/extract.mjs itemFacts), in step order: the same shapes sessionFold's view gives from the records. */
+export function itemsView(items) {
+  const its = [...items].sort(stepOrder);
+  const probes = its.filter(isProbe).map((i) => ({ ts: i.ts_request, tokens: i.probeTokens ?? null, retention: i.retention }));
+  const logged = its.filter(isLogged).map((i) => {
+    const w = i.body_wire_bytes || {};
+    return { label: (i.retentionLabel || {}).label, item: { id: i.id, ts: i.ts_request || i.ts || null, endpoint: String(i.endpoint || '').split('?')[0], status: i.status ?? null, request_bytes: w.req ?? null, response_bytes: w.resp ?? null } };
+  });
+  return { logged: loggedView(logged), probes: { count: probes.length, series: probes.filter((p) => p.tokens != null) } };
+}
 // What the session document keeps of one record besides its call (the fold lets the record go): the slim entry the browser reads
 // (errStats status + change-sig), the probe point, the logged-call line, and the envelope fields the session meta is derived from.
 const META_KEYS = ['is_llm_call', 'body_retention', 'endpoint', 'req_headers', 'request_headers', 'proc', 'ts_request', 'ts'];

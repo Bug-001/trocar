@@ -26,7 +26,7 @@ import { CC_THREADS, replyIdOf, patchSystem } from '../dissect/cc-threads.mjs';
 import { hasCompactionPreamble } from '../identity/session-identity.mjs';
 import { sessionKeyOf } from '../dissect/harnesses.mjs';
 import { posCmp } from '../query/projection.mjs';
-import { bodyRetentionOf, retentionLabelOf, reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs';
+import { bodyRetentionOf, retentionLabelOf, reqIncompleteOf, wsIncompleteOf, respIncompleteOf, isLogOnly } from '../dissect/capture-labels.mjs';
 
 const SEP = '\x1F';
 const b64 = (s) => createHash('sha256').update(s, 'utf8').digest().subarray(0, 16).toString('base64url');
@@ -101,7 +101,7 @@ export function definition(b, ref, exact, why = null) {
 // ── what a record's own bytes hold ──────────────────────────────────────────────────────────────────────────────────────────────
 // The wire a call is read on: a flat-lane dissector, the Anthropic wire, or null (no call: counted, never guessed at).
 export function callWireOf(r) {
-  if (!r || !r.is_llm_call) return null;
+  if (!r || !r.is_llm_call || isLogOnly(r)) return null; // D40: a call kept as a log line is no step (the session's `logged`)
   let d = boardDissectorFor(r);
   if (d && d.admits && !d.admits(r)) d = null;
   if (d) return { d, format: d.id };
@@ -278,7 +278,7 @@ const counts = (x) => x.facts || x; // where a call's msgCount is (the Anthropic
  */
 export function extract(rec, ctx) {
   const rid = String(rec.id), pos = rid, wire = callWireOf(rec);
-  if (!wire) return { defs: [], row: { rid, pos, x: { item: itemFacts(rec), unknown: jsonClean(unknownFacts(rec)) } } };
+  if (!wire) return { defs: [], row: { rid, pos, x: { item: itemFacts(rec), ...(isLogOnly(rec) ? null : { unknown: jsonClean(unknownFacts(rec)) }) } } };
   const defs = [], local = new Set(), take = (b, at) => {
     const { bid, def, query } = definition(b, at.ref, at.exact, at.why);
     if (!ctx.store.hasDef(bid) && !local.has(bid)) { local.add(bid); defs.push(def); }
@@ -435,7 +435,7 @@ export function extractMembers({ store, members, recordsAt, sessionId = null, bu
       if (rec) try { out = extract(rec, ctx); } catch (e) { why = `extraction failed: ${e && e.message ? e.message : e}`; }
       if (!out) ctx.held = true;
       if (out) defs.push(...out.defs);
-      (ctx.held ? held : rows).push(out ? out.row : { rid, pos: rid, x: { unparsed: why } });
+      (ctx.held ? held : rows).push(out ? out.row : { rid, pos: rid, x: { unparsed: why, code: rec ? 'record-unparseable' : 'record-unreadable' } });
     }
     store.append({ defs, rows }, { errors });
     if (held.length) store.append({ rows: held }, { held: true, errors });
