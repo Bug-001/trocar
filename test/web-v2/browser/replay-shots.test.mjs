@@ -130,6 +130,33 @@ test('turning follow latest on from an earlier step lands the window on the newe
   } finally { await b.stop() }
 })
 
+// 2.3 §这一步的回复 (acceptance #13, browser): a reply row has the request row's frame — the head's font, size and side padding are the
+// last request row's — and its head is reached by Tab and flipped by Enter, like a request row's.
+test('a reply row has the request row\'s head frame and opens by keyboard', { skip, timeout: 120_000 }, async () => {
+  const b = await withBoard({ bytes: BYTES, width: 1440, chromium: gate.chromium })
+  try {
+    await openBusiest(b) // the last step; back to the latest one whose reply has parts (a demo step may carry only a stop reason)
+    const head = '#ctxwin .cwreply .cblk > .cbh'
+    const no = () => b.page.$eval('#stepbar .sb-no', (e) => e.textContent)
+    while (!(await b.page.$(head))) {
+      const was = await no()
+      assert.doesNotMatch(was, /^Step 1 \//, 'no step of the busiest session has a reply row')
+      await b.page.click('#stepbar [data-step="prev"]')
+      await b.page.waitForFunction((w) => document.querySelector('#stepbar .sb-no').textContent !== w && !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#ctxwin .cwreply'), was)
+    }
+    const frame = (sel, i) => b.page.$$eval(sel, (hs, i) => { const s = getComputedStyle(hs.at(i)); return [s.fontFamily, s.fontSize, s.paddingLeft, s.paddingRight] }, i)
+    assert.deepEqual(await frame(head, 0), await frame('#ctxwin .cblk[data-bi] > .cbh', -1)) // the first reply row against the last request row
+    assert.equal(await b.page.$eval(head, (e) => e.tabIndex), 0)
+    const shut = () => b.page.$eval(head, (e) => e.parentElement.classList.contains('collapsed'))
+    const before = await shut()
+    await b.page.focus(head); await b.page.keyboard.press('Enter')
+    assert.equal(await shut(), !before)
+    await b.page.focus(head); await b.page.keyboard.press('Enter')
+    assert.equal(await shut(), before)
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
 // 2.3 §未下发态: the load control is unclickable only while its read has not answered — a failed read is an answer. Step 1's body is
 // taken off the page (paged_out, the server's own flag), the reader loads it, and that read fails.
 test('a failed read of "Load this step" leaves the button usable, never busy', { skip, timeout: 120_000 }, async () => {
