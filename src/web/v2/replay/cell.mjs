@@ -278,6 +278,14 @@ function offsetIn(pre, c, o) {
   }
   return acc
 }
+// IntersectionObservers rooted at each target's nearest scrolling ancestor (the viewport when none), one per scroller: a margin
+// of one scroller height ahead then reaches inside the scroller, where a viewport-rooted one sees nothing past its clip
+function watcher(cb) {
+  const by = new Map()
+  const scroller = (el) => { for (let p = el.parentElement; p; p = p.parentElement) if (/^(auto|scroll|overlay)$/.test(getComputedStyle(p).overflowY)) return p; return null }
+  const of = (el) => { const root = scroller(el); if (!by.has(root)) by.set(root, new IntersectionObserver(cb, { root, rootMargin: '100% 0px' })); return by.get(root) }
+  return { observe: (el) => of(el).observe(el), unobserve: (el) => { for (const o of by.values()) o.unobserve(el) }, disconnect: () => { for (const o of by.values()) o.disconnect(); by.clear() } }
+}
 const idle = (fn) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout: 500 }) : setTimeout(fn, 0))
 
 // click / keys / copy / growth / media / json disclosure on the given roots → a disposer. `s.storage` overrides localStorage.
@@ -309,10 +317,10 @@ export function wireCells(roots, s = {}) {
       if (q.length) requestAnimationFrame(step); else pumping = false
     })
   }
-  const stale = new IntersectionObserver((ents) => {
+  const stale = watcher((ents) => {
     for (const en of ents) if (en.isIntersecting || !en.target.isConnected) { stale.unobserve(en.target); if (en.isIntersecting) q.push(en.target) }
     pump()
-  }, { rootMargin: '100% 0px' })
+  })
   function flipDesk() {
     setDeskMode(deskMode(opt) === 'raw' ? 'read' : 'raw', opt)
     say(deskMode(opt) === 'read' ? C.READABLE_VIEW : C.RAW_VIEW)
@@ -332,9 +340,9 @@ export function wireCells(roots, s = {}) {
     if (line && clip) clip.textContent = line; else if (!line && clip) clip.remove()
     if (entry.next != null && entry.shown < CELL_CAP) { sent.dataset.at = String(entry.next); io.observe(sent) } else sent.remove()
   }
-  const io = new IntersectionObserver((ents) => {
+  const io = watcher((ents) => {
     for (const en of ents) if (en.isIntersecting) { io.unobserve(en.target); idle(() => more(en.target)) }
-  }, { rootMargin: '100% 0px' })
+  })
   const hook = (n) => {
     if (n.nodeType !== 1) return
     for (const el of [n, ...n.querySelectorAll('.cellmore, img[data-media]:not([src])')]) {

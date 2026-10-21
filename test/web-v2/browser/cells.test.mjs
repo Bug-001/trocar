@@ -179,3 +179,41 @@ test('an open cell whose bytes left the cache asks once per need and gives the s
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
+
+// Shift+V marks every open cell stale and draws one again as it comes within one height of the window's visible area
+// (RFC 2.3): the head start is measured in the scroller the cell lives in, not in the page's viewport.
+test('Shift+V redraws the cells within one window height below the visible area before they are scrolled to (Chromium)', { skip }, async () => {
+  const b = await withBoard({ chromium: gate.chromium, height: 520 })
+  try {
+    await openBusiest(b)
+    await openLaidCells(b.page)
+    // scroll the window so an open cell starts half a window height below its visible bottom
+    const h = await b.page.evaluate(() => {
+      const sc = document.querySelector('#ctxwin'), h = sc.clientHeight
+      const at = (c) => c.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop
+      const c = [...sc.querySelectorAll('.cell')].reverse().find((x) => at(x) - 1.5 * h >= 0 && at(x) - 1.5 * h <= sc.scrollHeight - h)
+      if (!c) return null
+      sc.scrollTop = at(c) - 1.5 * h
+      return h
+    })
+    assert.ok(h, 'an open cell far enough down to start below the visible area')
+    const cellsBelow = () => b.page.evaluate((h) => {
+      const R = document.querySelector('#ctxwin').getBoundingClientRect()
+      return [...document.querySelectorAll('#ctxwin .cell')].map((c) => ({ mode: c.dataset.mode, below: c.getBoundingClientRect().top - R.bottom })).filter((x) => x.below > 0 && x.below < h)
+    }, h)
+    const before = await cellsBelow()
+    assert.ok(before.length > 0 && before.every((c) => c.mode === before[0].mode), 'open cells below the visible area, one mode')
+    const want = before[0].mode === 'raw' ? 'read' : 'raw'
+    await b.page.evaluate(() => {
+      const R = document.querySelector('#ctxwin').getBoundingClientRect()
+      const head = [...document.querySelectorAll('#ctxwin .cblk > .cbh')].find((x) => { const r = x.getBoundingClientRect(); return r.bottom > R.top && r.top < R.bottom })
+      head.focus({ preventScroll: true })
+      head.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', shiftKey: true, bubbles: true, cancelable: true }))
+    })
+    await b.page.evaluate(() => new Promise((r) => { let n = 60; const f = () => (--n ? requestAnimationFrame(f) : r()); requestAnimationFrame(f) }))
+    const after = await cellsBelow()
+    assert.ok(after.length > 0)
+    assert.deepEqual(after.filter((c) => c.mode !== want), [], 'every cell within one height below the visible area is redrawn')
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
