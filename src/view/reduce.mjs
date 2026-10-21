@@ -37,16 +37,19 @@ function listsOf(store) {
     return out;
   };
   const same = (v) => v;
-  // a call row's { rid, list (ints), mb, depth }, through its base chain from the nearest list held
-  function at(rid) {
+  // a call row's { rid, list (ints), mb, depth }, through its base chain from the nearest list held; `head`: the row itself when the
+  // caller holds it, `rowOf`: how a row of the chain is read
+  function at(rid, rowOf = (r) => store.rows.get(r), head = null) {
     const hit = recent.get(rid) || keyframes.get(rid);
     if (hit) return remember(hit);
     const path = [];
     let e = null;
-    for (let r = store.rows.get(rid); r; r = r.base == null ? null : store.rows.get(r.base)) {
-      const c = recent.get(r.rid) || keyframes.get(r.rid);
-      if (c) { e = c; break; }
+    for (let r = head || rowOf(rid); r;) {
       path.push(r);
+      if (r.base == null) break;
+      const c = recent.get(r.base) || keyframes.get(r.base); // a base whose list is held is not read
+      if (c) { e = c; break; }
+      r = rowOf(r.base);
     }
     if (!e && !path.length) return null;
     for (let i = path.length - 1; i >= 0; i--) {
@@ -68,51 +71,101 @@ export function listOf(store, rid) {
 
 // ── reduce ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const ridOf = (m) => String(m && typeof m === 'object' ? m.id : m);
-const orderOfRow = (row) => ({ ts_request: row.x.item.ts_request, id: row.x.item.id });
 const isCall = (row) => !!(row && row.x && Array.isArray(row.x.secs));
 
 /**
- * reduce(store, members, {mark, resolve}) → the session's document (see the head of this file) at `mark` (design §3.4 "Extraction
- * frontier"): the reduction over the members whose record id is ≤ mark (posCmp) and nothing else. `members`: the session's index
- * rows (or record ids); those up to the mark that the store holds a row for are reduced, in write order, as the record path folds
- * them. With no mark, the mark is the store's frontier: the largest member such that every member up to it has a row. The document
- * carries `mark`; `failed: [{id, reason}]`, the members up to the mark whose row says why they did not extract (design §3.9, D38:
- * their call is shown by its reason, never dropped); and `pending: {done, total}` (members reduced, members) while any member is not
- * reduced (above the mark, failed, or with no row). `resolve(ref)` → the
- * flat entry of the block `ref` names (src/view/extract.mjs blockAt over the record read back): asked only for a break detail no
- * `brk` line holds yet. `errors`: the answering request's (where a note of writing the `brk` lines goes).
+ * reduce(store, members, {mark, resolve, errors}) → the session's document (see the head of this file) at `mark` (design §3.4
+ * "Extraction frontier"): the reduction over the members whose record id is ≤ mark (posCmp) and nothing else. `members`: the
+ * session's index rows (or record ids); those up to the mark that the store holds a row for go through one reduction(). With no
+ * mark, the mark is the store's frontier: the largest member such that every member up to it has a row. The document carries `mark`;
+ * `failed: [{id, reason}]`, the members up to the mark whose row says why they did not extract (design §3.9, D38: their call is
+ * shown by its reason, never dropped); and `pending: {done, total}` (members up to the mark that have a row, members) while a member
+ * is above the mark or has no row — a failed member is reported, not pending (3.5:43). `resolve(ref)` → the flat entry of the block
+ * `ref` names (src/view/extract.mjs blockAt over the record read back): asked only for a break detail no `brk` line holds yet.
+ * `errors`: the answering request's (where a note of writing the `brk` lines goes).
  */
 export function reduce(store, members, { mark = undefined, resolve = null, errors = undefined } = {}) {
   const all = [...new Set(members.map(ridOf))].sort(posCmp);
   if (mark === undefined) { mark = null; for (const rid of all) { if (!store.rows.has(rid)) break; mark = rid; } }
-  const upTo = mark == null ? [] : all.filter((rid) => posCmp(rid, mark) <= 0);
-  const failed = [], rids = [];
-  for (const rid of upTo) {
-    const x = store.rows.has(rid) ? store.rows.get(rid).x || {} : null;
-    if (x && typeof x.unparsed === 'string' && !x.item) failed.push({ id: rid, reason: x.unparsed });
-    else if (x) rids.push(rid);
-  }
-  const found = new Map(); // break details worked out by this reduction, written as `brk` lines once it is done
-  let doc;
-  try { doc = reduceIn(store, rids, resolve, found); } catch (e) {
-    if (!(e instanceof OrderBound)) throw e;
-    // sub-agents told apart only by order: from scratch, in step order
-    // each row's order read once (a row is read back from the projection: not once a comparison)
-    const ord = new Map(rids.map((rid) => { const row = store.rows.get(rid); return [rid, row.x.item ? orderOfRow(row) : null]; }));
-    const byOrder = (a, b) => { const oa = ord.get(a), ob = ord.get(b); return oa && ob ? stepOrder(oa, ob) : 0; };
-    doc = reduceIn(store, rids.slice().sort(byOrder), resolve, found);
-  }
-  if (found.size) store.append({ brks: [...found.values()] }, { errors });
+  const upTo = mark == null ? [] : all.filter((rid) => posCmp(rid, mark) <= 0 && store.rows.has(rid));
+  const doc = reduction(store, { resolve, errors }).add(upTo).doc();
   doc.mark = mark;
-  if (failed.length) doc.failed = failed;
-  if (rids.length < all.length) doc.pending = { done: rids.length, total: all.length };
+  if (upTo.length < all.length) doc.pending = { done: upTo.length, total: all.length };
   return doc;
+}
+
+/**
+ * reduction(store, {resolve, errors, progress}) → {add(rids), doc(), has(rid)}: a session's reduction that grows (design §3.4).
+ * `add(rids)`: member record ids that have a row, in any order. In write order each row is read from the store once, as it is
+ * folded; what the fold asks of it again — its order, for a late call's lane put in again and for the step order — is kept as a small
+ * record. Rows are read again only for a late call's own lane put in again, a base chain past the lists held, and a fold from scratch.
+ * New rids that all sort after the last one folded (write order; step order once the reduction is in step order) are folded on;
+ * else the fold starts again over everything added, as it does on an `OrderBound` (sub-agents told apart by order only: then in step
+ * order). So `doc()` is always the document of one pass over the rids added so far: byte for byte what one add of them all gives.
+ * `progress()` is called once per row folded (the worker's silence clock, 3.5:46). `doc()` → the document (the head of this file),
+ * with `failed` when a row added says its record did not extract; it is built at each call (the analyzer's finish) and shares its
+ * calls with the fold, which the next add goes on changing.
+ */
+export function reduction(store, { resolve = null, errors = undefined, progress = null } = {}) {
+  const ord = new Map(); // rid folded → { ts_request, id } (null: a row with no item)
+  const failed = new Map(); // rid → why its record did not extract
+  const found = new Map(); // break details worked out by this reduction, written as `brk` lines once an add is done
+  const byStep = (a, b) => { const oa = ord.get(a), ob = ord.get(b); return oa && ob ? stepOrder(oa, ob) : 0; };
+  let inStep = false, last = null, F = foldOf(store, resolve, found, ord);
+  const store_ = (rid) => store.rows.get(rid);
+  const fold = (rid, row, rowOf) => { F.push(rid, row, rowOf); last = rid; if (progress) progress(); };
+  // a row read: a failed one noted, else its order kept (the row returned)
+  function read(rid) {
+    const row = store.rows.get(rid);
+    if (!row) throw new Error(`the context projection has no row for ${rid}`);
+    const x = row.x || {};
+    if (typeof x.unparsed === 'string' && !x.item) { failed.set(rid, x.unparsed); return null; }
+    ord.set(rid, x.item ? { ts_request: x.item.ts_request, id: x.item.id } : null);
+    return row;
+  }
+  // from scratch over everything added, each row read again
+  function again() {
+    F = foldOf(store, resolve, found, ord); last = null;
+    const rids = [...ord.keys()].sort(posCmp);
+    for (const rid of inStep ? rids.sort(byStep) : rids) fold(rid, store.rows.get(rid), store_);
+  }
+  function add(rids) {
+    const fresh = [...new Set(rids.map(String))].filter((rid) => !ord.has(rid) && !failed.has(rid)).sort(posCmp);
+    try {
+      if (!fresh.length) { /* nothing new */ } else if (!inStep && (last == null || posCmp(fresh[0], last) > 0)) {
+        for (const rid of fresh) { const row = read(rid); if (row) fold(rid, row, store_); } // write order: each row read once, as it is folded
+      } else {
+        const held = new Map(); // in step order: the new rows' order is read first, their rows kept while they are folded
+        for (const rid of fresh) { const row = read(rid); if (row) held.set(rid, row); }
+        const next = [...held.keys()].sort(byStep), rowOf = (rid) => held.get(rid) || store.rows.get(rid);
+        if (!next.length) { /* only failures */ } else if (inStep && last != null && byStep(next[0], last) > 0) for (const rid of next) fold(rid, held.get(rid), rowOf);
+        else again();
+      }
+    } catch (e) {
+      if (!(e instanceof OrderBound) || inStep) throw e;
+      for (const rid of fresh) if (!ord.has(rid) && !failed.has(rid)) read(rid);
+      inStep = true; // sub-agents told apart only by order: from scratch, in step order
+      again();
+    }
+    if (found.size) { store.append({ brks: [...found.values()] }, { errors }); found.clear(); }
+    return R;
+  }
+  function doc() {
+    const A = F.doc();
+    if (failed.size) A.failed = [...failed].sort((a, b) => posCmp(a[0], b[0])).map(([id, reason]) => ({ id, reason }));
+    return A;
+  }
+  const R = { add, doc, has: (rid) => ord.has(String(rid)) || failed.has(String(rid)) };
+  return R;
 }
 
 const byOrder = (a, b) => stepOrder({ ts_request: a.ts, id: a.id }, { ts_request: b.ts, id: b.id });
 
-function reduceIn(store, rids, resolve, found) {
+// One pass of the fold: push(rid, row, rowOf) in order, doc() at any point. `rowOf(rid)` reads a row again (a late call's lane put
+// in again; a base chain no held list reaches): the add's own rows first, the store's for the rest.
+function foldOf(store, resolve, found, ord) {
   const L = listsOf(store), items = new Map(), unknown = [], other = [];
+  let rowOf = (rid) => store.rows.get(rid);
   const defs = []; // block int → what the reduction reads of its definition (held for this reduction only)
   const keys = new Map(); // (sec, role, kind, fh) → int
   const intOf = (s) => { let k = keys.get(s); if (k === undefined) keys.set(s, (k = keys.size)); return k; };
@@ -162,46 +215,51 @@ function reduceIn(store, rids, resolve, found) {
     brk.prefixByteIdentical = same;
     brk.gt = realGroundTruth(same, usage.read, usage.create);
     brk.gtReal = true;
+    if (base) brk.refRid = base.rid; // the 缓存对比步 (2.3): the call this one's break is taken against
     return brk;
   }
   // a fold's push: a call that sorts before its lane's last call puts the lane in again, its rows in step order with this one in place
-  const pushOf = (take, callsOf, drop) => (rid) => {
-    const call = take(rid), cs = callsOf(call);
+  const pushOf = (take, callsOf, drop) => (rid, row) => {
+    const call = take(rid, row), cs = callsOf(call);
     if (cs.length < 2 || byOrder(cs[cs.length - 2], call) < 0) return;
-    const ids = cs.slice(0, -1).map((c) => String(c.id)), me = orderOfRow(store.rows.get(rid));
+    const ids = cs.slice(0, -1).map((c) => String(c.id)), me = ord.get(rid);
     drop(call);
     let pending = true;
     for (const id of ids) {
-      if (pending && stepOrder(me, orderOfRow(store.rows.get(id))) < 0) { take(rid); pending = false; }
-      take(id);
+      if (pending && stepOrder(me, ord.get(id)) < 0) { take(rid, row); pending = false; }
+      take(id, rowOf(id));
     }
-    if (pending) take(rid);
+    if (pending) take(rid, row);
   };
-  const K = { store, L, def, cacheOf, pushOf };
+  const K = { store, L, def, cacheOf, pushOf, at: (rid, row) => L.at(rid, rowOf, row) };
   const folds = new Map(); // wire format → its fold
-  for (const rid of rids) {
-    const row = store.rows.get(rid), x = row.x || {};
+  function push(rid, row, reader) {
+    rowOf = reader;
+    const x = row.x || {};
     if (x.item) items.set(rid, x.item);
     if (isCall(row)) {
       if (!folds.has(x.format)) folds.set(x.format, x.format === 'anthropic' ? anthropicFold(K) : flatFold(boardDissectorOf(x.format), K));
-      folds.get(x.format).push(rid);
+      folds.get(x.format).push(rid, row);
     } else if (x.unknown) (x.item.is_llm_call ? unknown : other).push({ at: { ts_request: x.item.ts_request, id: x.item.id }, facts: x.unknown });
   }
-  const facts = (xs) => [...xs].sort((a, b) => stepOrder(a.at, b.at)).map((u) => u.facts);
-  if (!folds.size) return { ...assembleUnknown(facts(unknown.length ? unknown : other)), items };
-  [...folds.values()].flatMap((f) => f.calls()).sort(byOrder).forEach((c, i) => { c.gi = i; });
-  const first = (v) => (v.steps.length ? v.steps[0].gi : Infinity);
-  const views = [...folds.values()].map((f) => f.finish()).sort((a, b) => first(a) - first(b));
-  const A = views.length === 1 ? views[0] : mergeViews(views);
-  tellApart(A.lanes);
-  if (unknown.length) A.unknown = unknownSummary(facts(unknown), true);
-  for (const l of A.lanes) l.key = l.calls.length ? String(l.calls[0].id) : null;
-  A.items = items;
-  return A;
+  function doc() {
+    const facts = (xs) => [...xs].sort((a, b) => stepOrder(a.at, b.at)).map((u) => u.facts);
+    if (!folds.size) return { ...assembleUnknown(facts(unknown.length ? unknown : other)), items: new Map(items) };
+    [...folds.values()].flatMap((f) => f.calls()).sort(byOrder).forEach((c, i) => { c.gi = i; });
+    const first = (v) => (v.steps.length ? v.steps[0].gi : Infinity);
+    const views = [...folds.values()].map((f) => f.finish()).sort((a, b) => first(a) - first(b));
+    const A = views.length === 1 ? views[0] : mergeViews(views);
+    tellApart(A.lanes);
+    if (unknown.length) A.unknown = unknownSummary(facts(unknown), true);
+    for (const l of A.lanes) l.key = l.calls.length ? String(l.calls[0].id) : null;
+    A.items = new Map(items);
+    return A;
+  }
+  return { push, doc };
 }
 
 // The Anthropic wire's fold: the analyzer's lanes (createAnalyzer, fed call views), each call baked against its lane's base.
-function anthropicFold({ store, L, def, cacheOf, pushOf }) {
+function anthropicFold({ at, def, cacheOf, pushOf }) {
   const an = createAnalyzer();
   const lanes = new Map(); // the analyzer's lane → { base, last: { list, comp } }
   function view(row, list, mb) {
@@ -213,8 +271,8 @@ function anthropicFold({ store, L, def, cacheOf, pushOf }) {
     });
     return { facts: row.x.facts, messages };
   }
-  function take(rid) {
-    const row = store.rows.get(rid), x = row.x, e = L.at(rid), list = e.list, attrs = row.attrs || {};
+  function take(rid, row) {
+    const x = row.x, e = at(rid, row), list = e.list, attrs = row.attrs || {};
     const call = an.pushView(view(row, list, e.mb));
     const lane = an.laneOf(call);
     if (lane.calls[0] === call) an.ask(lane, firstHumanOf(list, def));
@@ -225,7 +283,7 @@ function anthropicFold({ store, L, def, cacheOf, pushOf }) {
     lanes.set(lane, st);
     call.cacheBreak = cacheOf(st.base, list, attrs, x, !!call.compaction, call.usage);
     call.gt = call.cacheBreak.gt;
-    if (call.chainsPrefix !== false) st.base = { list, attrs };
+    if (call.chainsPrefix !== false) st.base = { rid, list, attrs };
     call.comp = compOf(st.last, list, def);
     st.last = { list, comp: call.comp };
     call.flat = []; call.nonBlockKeys = []; call.paged_out = true;
@@ -240,10 +298,10 @@ function anthropicFold({ store, L, def, cacheOf, pushOf }) {
 // A flat-lane wire's fold (assemble.mjs flatLaneFold over rows): a lane per agent (a subagent named by the harness's agent id or the
 // wire's own, the rest by lane kind), each call's compaction verdict on the dissector's message count, its cache break against its
 // lane's last call that did not fail; the document names lanes by kind (flatLaneView).
-function flatFold(d, { store, L, def, cacheOf, pushOf }) {
+function flatFold(d, { at, def, cacheOf, pushOf }) {
   const byLane = new Map(), base = new Map(), info = new Map(), last = new Map(), laneOfCall = new WeakMap(), asks = new WeakMap();
-  function take(rid) {
-    const row = store.rows.get(rid), x = row.x, e = L.at(rid), list = e.list, attrs = row.attrs || {}, h = x.hints || {};
+  function take(rid, row) {
+    const x = row.x, e = at(rid, row), list = e.list, attrs = row.attrs || {}, h = x.hints || {};
     const kind = x.lane, agent = kind === 'subagent' ? h.laneKey ?? x.agent ?? null : null;
     const lane = agent == null ? kind : `${kind}\n${agent}`;
     // 3.4: a call whose context is unknown (a body that does not parse; a partial context, an unstored WebSocket request included) has
@@ -267,7 +325,7 @@ function flatFold(d, { store, L, def, cacheOf, pushOf }) {
     if (!byLane.has(lane)) { byLane.set(lane, []); asks.set(call, firstHumanOf(list, def)); }
     byLane.get(lane).push(call);
     // a call that failed never established a cache prefix; one whose request was not stored does (with no blocks)
-    if (!(x.error || (x.status != null && x.status !== 200))) base.set(lane, { list, attrs });
+    if (!(x.error || (x.status != null && x.status !== 200))) base.set(lane, { rid, list, attrs });
     return call;
   }
   const push = pushOf(take, (call) => byLane.get(laneOfCall.get(call)), (call) => { const lane = laneOfCall.get(call); for (const m of [byLane, base, info, last]) m.delete(lane); });
