@@ -12,15 +12,33 @@ import * as W from '../labels/replay.mjs'
 import { pageState } from './follow.mjs'
 
 // ── the reply: parsed text · tool calls · stop reason · ONE fidelity mark ───────────────────────────────────────────
-// The mark rule (2.6 §A): the bytes only partially stored → 「◐ 回复没采全」; bytes that resolve (a respRef with a
-// locator) → no mark (the verbatim text is one click away); anything else → 「◐ 解析后的回复」. 逐字 is never written
-// for the parsed reply. Shared with the call drawer (2.6 §B): one rule, one predicate.
-export function replyMarkHtml(c) {
+// replyOf(c) is the one rule (2.3 §这一步的回复 · 2.6 §A): the parts (thinking → text → each tool call, in the block
+// vocabulary), the stop reason, the ONE fidelity mark, or the failure reason. This panel draws it as compact rows; the
+// context window draws each part as a block row. The mark rule: the bytes only partially stored → 'partial' (「◐ 回复没采全」);
+// bytes that resolve (a respRef with a locator) → null (the verbatim text is one click away); anything else → 'parsed'
+// (「◐ 解析后的回复」). 逐字 is never written for the parsed reply.
+export function replyOf(c) {
+  const n = c.norm || {}
   const partial = !!(c.respIncomplete || ((c.wire && c.wire.labels) || []).some((l) => ['resp-truncated', 'resp-partial', 'resp-undecoded'].includes(l.id)))
-  if (partial) return `<span class="rpmark">${mark('part', W.REPLY_PARTIAL)} ${esc(W.REPLY_PARTIAL.replace('◐ ', ''))}</span>`
-  const resolves = (c.respRefs || []).some((x) => x && x.ref)
-  if (resolves) return ''
-  return `<span class="rpmark">${mark('part', W.REPLY_PARSED)} ${esc(W.REPLY_PARSED)}</span>`
+  const mark = partial ? 'partial' : (c.respRefs || []).some((x) => x && x.ref) ? null : 'parsed'
+  // an unparsed step is a REQUEST-body fact (the params row says it, errMsg rides in 技术细节); where the response itself
+  // parsed, the reply still renders — 「这次调用失败,没有回复」 would deny a reply we do have (2.6 §A)
+  let failed = null
+  if (!(c.unparsed && n.text) && (c.error || (c.status != null && c.status !== 200))) {
+    failed = { reason: c.unparsed ? '' : (typeof c.error === 'string' ? c.error : (c.errMsg || (c.error && c.error.message) || (c.status != null ? `status ${c.status}` : ''))) }
+  }
+  const parts = []
+  if (n.thinking) parts.push({ kind: 'thinking', block: { type: 'thinking', thinking: String(n.thinking) } })
+  if (n.text) parts.push({ kind: 'text', block: { type: 'text', text: n.text } })
+  for (const t of n.tools || []) parts.push({ kind: 'tool_use', block: { type: 'tool_use', name: t.name, input: t.input ?? {}, id: t.id } })
+  return { failed, mark, stop: n.stop_reason || null, parts }
+}
+// the reply's ONE fidelity mark as HTML. Shared with the call drawer (2.6 §B) and the window's reply header: one rule.
+export function replyMarkHtml(c) {
+  const m = replyOf(c).mark
+  if (!m) return ''
+  const w = m === 'partial' ? W.REPLY_PARTIAL : W.REPLY_PARSED
+  return `<span class="rpmark">${mark('part', w)} ${esc(m === 'partial' ? w.replace('◐ ', '') : w)}</span>`
 }
 // the parsed reply's own rows: ONE fidelity mark, the thinking and the text (over the display cap: the prefix + ONE note in
 // this panel's own words — 2.6 §A 「已截断显示 · 前 N / 共 M 字符」, never the context window's block wording stacked on
@@ -29,31 +47,25 @@ const clippedPre = (t) => {
   const cut = clipCut(t)
   return `<pre class="rawpre">${esc(cut < t.length ? t.slice(0, cut) : t)}</pre>${cut < t.length ? `<div class="cbsrc warn">${esc(W.clipShownNote(cut, t.length))}</div>` : ''}`
 }
-function parsedReplyHtml(c) {
-  const n = c.norm || {}
+function parsedReplyHtml(c, r) {
   let h = `<div class="rpk rpreply"><b>${esc(W.REPLY_WORD)}</b> ${replyMarkHtml(c)}</div>`
-  if (n.thinking) h += `<div class="rpk rpthink">${esc(W.THINKING_ROW)}<div class="rpbody">${clippedPre(String(n.thinking))}</div></div>`
-  if (n.text) h += `<div class="rpbody">${clippedPre(n.text)}</div>`
-  for (const t of n.tools || []) {
+  for (const { kind, block: b } of r.parts) {
+    if (kind === 'thinking') h += `<div class="rpk rpthink">${esc(W.THINKING_ROW)}<div class="rpbody">${clippedPre(b.thinking)}</div></div>`
+    else if (kind === 'text') h += `<div class="rpbody">${clippedPre(b.text)}</div>`
     // 2.6 §A 「回复 · 工具调用」: the name and the arguments (JSON) as they are, monospace — a very long input rides the
     // same display clip. The server's norm.tools never carries a ref, so there is no click surface here; the tool id is
     // a tech detail, not a visible row fact.
-    h += `<div class="rpk">${esc(W.toolCallRow(t.name || ''))}<pre class="rawpre">${esc(clipText(JSON.stringify(t.input ?? {}, null, 2)))}</pre></div>`
+    else h += `<div class="rpk">${esc(W.toolCallRow(b.name || ''))}<pre class="rawpre">${esc(clipText(JSON.stringify(b.input ?? {}, null, 2)))}</pre></div>`
   }
-  if (n.stop_reason) h += `<div class="rpk">${W.stopReasonRow(`<span class="mono">${esc(n.stop_reason)}</span>`)}</div>`
+  if (r.stop) h += `<div class="rpk">${W.stopReasonRow(`<span class="mono">${esc(r.stop)}</span>`)}</div>`
   return h
 }
-// the reply of one step: shared by this panel and the context window's closing reply segment (2.3 §这一步的回复) — one rule
+// the reply of one step as this panel's compact rows (the window draws the same replyOf as block rows: ctxwin.mjs)
 export function replyHtml(c, techId = 'rpfail') {
-  // an unparsed step is a REQUEST-body fact (the params row says it, errMsg rides in 技术细节); where the response itself
-  // parsed, the reply still renders — 「这次调用失败,没有回复」 would deny a reply we do have (2.6 §A)
-  if (c.unparsed && c.norm && c.norm.text) return parsedReplyHtml(c)
-  if (c.error || (c.status != null && c.status !== 200)) {
-    const msg = c.unparsed ? '' : (typeof c.error === 'string' ? c.error : (c.errMsg || (c.error && c.error.message) || (c.status != null ? `status ${c.status}` : '')))
-    // the visible line is the fixed sentence; the server's raw reason is a tech detail (1.5 §数据规则)
-    return `<div class="rpk"><b>${esc(W.REPLY_WORD)}</b> · ${esc(W.FAILED_NO_REPLY)}${msg ? techDetailsHtml([['reason', msg]], { id: techId }) : ''}</div>`
-  }
-  return parsedReplyHtml(c)
+  const r = replyOf(c)
+  // the visible line is the fixed sentence; the server's raw reason is a tech detail (1.5 §数据规则)
+  if (r.failed) return `<div class="rpk"><b>${esc(W.REPLY_WORD)}</b> · ${esc(W.FAILED_NO_REPLY)}${r.failed.reason ? techDetailsHtml([['reason', r.failed.reason]], { id: techId }) : ''}</div>`
+  return parsedReplyHtml(c, r)
 }
 // ── the pieces the capture can still hand over verbatim: reply bytes · non-block request keys · later messages ─────
 const refRow = (x, label) => x.ref

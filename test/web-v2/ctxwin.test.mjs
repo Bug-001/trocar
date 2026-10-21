@@ -88,7 +88,6 @@ test('the window ends with the step\'s reply segment: after every section, carry
     const seg = replySeg(h)
     assert.ok(seg, `step ${i + 1} has a reply segment`)
     assert.ok(h.lastIndexOf('class="cwsec"') < h.lastIndexOf('<div class="cwreply">'), 'after the request sections')
-    assert.ok(!/class="cblk/.test(seg), 'no block card inside the reply segment')
     for (const t of call.norm.tools || []) { assert.ok(seg.includes(t.name), t.name); tools++ }
     if (call.norm.text) assert.ok(seg.includes(call.norm.text.slice(0, 40).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')))
   }
@@ -100,8 +99,63 @@ test('the reply segment\'s mark follows the proof rule: a resolvable respRef →
   for (const [respRefs, marked] of [[[{ label: 'body', ref: 'r:1', chars: 3 }], false], [[], true], [[{ label: 'body', ref: null, why: 'x' }], true]]) {
     const seg = replySeg(ctxWindowHtml(deskAt(i, { respRefs }).s))
     assert.equal(seg.includes(W.REPLY_PARSED), marked, JSON.stringify(respRefs))
+    assert.equal(count(seg, 'class="rpmark"'), marked ? 1 : 0, 'the mark is written once for the segment')
     assert.ok(!seg.includes(W.SECTION_VERBATIM) && !/data-ff="verbatim"/.test(seg))
   }
+})
+
+// 2.3 §这一步的回复 · acceptance #13: the reply's parts are block rows drawn by the request's row component, without what only a
+// request block carries; the segment's fidelity mark is written once; the first present kind (text → tool call → thinking) opens
+const replyRows = (seg) => [...seg.matchAll(/<div class="(cblk[^"]*)"([^>]*)>/g)].map((m) => ({ cls: m[1].split(/\s+/), attrs: m[2] }))
+const NORM = { thinking: 'weighing the options', text: 'Here is the answer.', tools: [{ id: 't1', name: 'Bash', input: { command: 'ls -la' } }, { id: 't2', name: 'Read', input: { n: 3 } }] }
+
+test('every reply part is one block row through the row component, without request-only attributes or marks', () => {
+  const n = anchorLane(buildLanes(doc.analyzed, doc.probes)).calls.length
+  let seen = 0
+  for (let i = 0; i < n; i++) {
+    for (const over of [{}, { norm: NORM }]) {
+      const { s, call } = deskAt(i, over)
+      if (call.paged_out || !call.rec || call.unparsed || call.error || (call.status != null && call.status !== 200)) continue
+      const h = ctxWindowHtml(s), seg = replySeg(h), nm = call.norm || {}
+      assert.equal(count(seg, '<div class="cblk'), (nm.thinking ? 1 : 0) + (nm.text ? 1 : 0) + (nm.tools || []).length, `step ${i + 1}`)
+      const heads = [...seg.matchAll(/<div class="cbh"[\s\S]*?<\/div>/g)].map((m) => m[0])
+      for (const t of nm.tools || []) assert.ok(heads.some((x) => x.includes(t.name)), t.name)
+      for (const x of ['data-bi=', 'data-rk=', 'data-ff=', 'newmark', 'bpbadge', 'volbadge', 'ffbadge']) assert.ok(!seg.includes(x), x)
+      assert.equal(count(h, 'data-bi="'), call.flat.length, 'the request rows alone carry a block index')
+      seen++
+    }
+  }
+  assert.ok(seen > 0)
+})
+
+test('the reply rows open the first present kind (text, then tool call, then thinking); the rest stay collapsed', () => {
+  const i = anchorLane(buildLanes(doc.analyzed, doc.probes)).calls.findIndex((c) => !c.paged_out && c.rec && !c.unparsed)
+  for (const [norm, openKind] of [[NORM, 'k-text'], [{ ...NORM, text: '' }, 'k-tool_use'], [{ thinking: NORM.thinking, text: '', tools: [] }, 'k-thinking']]) {
+    const rows = replyRows(replySeg(ctxWindowHtml(deskAt(i, { norm }).s)))
+    assert.ok(rows.length > 0)
+    for (const r of rows) assert.equal(r.cls.includes('collapsed'), !r.cls.includes(openKind), `${openKind}: ${r.cls.join(' ')}`)
+  }
+})
+
+test('a reader\'s flip of a reply row is kept in openBlocks as reply:<j>, against the default', () => {
+  const i = anchorLane(buildLanes(doc.analyzed, doc.probes)).calls.findIndex((c) => !c.paged_out && c.rec && !c.unparsed)
+  const base = replyRows(replySeg(ctxWindowHtml(deskAt(i, { norm: NORM }).s)))
+  assert.ok(base.length > 1)
+  base.forEach((r, j) => {
+    const { s } = deskAt(i, { norm: NORM })
+    s.openBlocks.add('reply:' + j)
+    const rows = replyRows(replySeg(ctxWindowHtml(s)))
+    rows.forEach((x, k) => assert.equal(x.cls.includes('collapsed'), k === j ? !base[k].cls.includes('collapsed') : base[k].cls.includes('collapsed'), `flip ${j}, row ${k}`))
+    assert.ok(rows[j].attrs.includes(`data-rp="${j}"`))
+  })
+})
+
+test('a failed step\'s reply segment has no block row; the server\'s reason is in the tech details', () => {
+  const i = anchorLane(buildLanes(doc.analyzed, doc.probes)).calls.findIndex((c) => !c.paged_out && c.rec && !c.unparsed)
+  const seg = replySeg(ctxWindowHtml(deskAt(i, { error: 'boom-reason', norm: NORM }).s))
+  assert.ok(!seg.includes('class="cblk'))
+  const t = seg.indexOf('id="cwfail')
+  assert.ok(t >= 0 && seg.indexOf('boom-reason') > t)
 })
 
 test('stand-in states (not on this page, unparsed, no request) draw no reply segment', () => {
