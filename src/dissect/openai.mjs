@@ -139,7 +139,7 @@ function summaryText(item) {
 export function itemToBlocks(item) {
   if (!item || typeof item !== 'object') return [{ role: 'user', block: { type: 'text', text: String(item ?? '') }, sub: [] }];
   const t = item.type;
-  if (t === 'message' || item.content) {
+  if (t === 'message' || (item.content && !/_call(_output)?$/.test(t || ''))) {
     const role = item.role || 'user';
     const arr = Array.isArray(item.content);
     const content = arr ? item.content : [{ type: 'input_text', text: String(item.content ?? '') }];
@@ -152,15 +152,22 @@ export function itemToBlocks(item) {
       return { role, block: { type: 'text', text: JSON.stringify(c) }, sub };
     });
   }
-  if (t === 'function_call') return [{ role: 'assistant', block: { type: 'tool_use', name: item.name || '', id: item.call_id || item.id || '', input: safeJson(item.arguments) }, sub: [] }];
-  if (t === 'function_call_output') {
+  if (t === 'reasoning') return [{ role: 'assistant', block: { type: 'thinking', thinking: summaryText(item), signature: item.encrypted_content ? 'encrypted' : '' }, sub: [] }];
+  // tools, by the wire's own naming (no tool names): `*_call_output` is a call's result; `*_call` with a call_id is a call the
+  // client runs, without one a call the server ran. Anything else is shown as the JSON it is, never as assistant text.
+  const ty = typeof t === 'string' ? t : '';
+  if (ty.endsWith('_call_output')) {
     const out = item.output;
     const content = typeof out === 'string' ? out : (out && out.content) || JSON.stringify(out ?? '');
     return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: item.call_id || '', content }, sub: [] }];
   }
-  if (t === 'reasoning') return [{ role: 'assistant', block: { type: 'thinking', thinking: summaryText(item), signature: item.encrypted_content ? 'encrypted' : '' }, sub: [] }];
-  // fallback (item_reference / unknown): render verbatim JSON, marked non-standard.
-  return [{ role: (item.role || 'assistant'), block: { type: 'text', text: JSON.stringify(item) }, sub: [] }];
+  if (ty.endsWith('_call')) {
+    const { type: _t, id: _i, status: _s, ...rest } = item;
+    if (item.call_id == null) return [{ role: 'assistant', block: { type: 'server_tool_use', id: item.id || '', name: ty, input: rest }, sub: [] }];
+    const input = item.arguments !== undefined ? safeJson(item.arguments) : item.input !== undefined ? item.input : rest;
+    return [{ role: 'assistant', block: { type: 'tool_use', name: item.name ?? ty, id: item.call_id, input }, sub: [] }];
+  }
+  return [{ role: (item.role || 'assistant'), block: { type: 'json', value: item }, sub: [] }];
 }
 
 // ── board projection: raw Responses request → flat block descriptors (same vocab as CC linearContext).
@@ -194,7 +201,7 @@ export function boardFlat(req) {
     let bi = 0;
     for (const { role, block, sub } of itemToBlocks(item)) {
       const type = block.type;
-      const d = { sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['input', mi, ...sub] };
+      const d = { sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' || type === 'server_tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['input', mi, ...sub] };
       if (type === 'thinking') d.faithfulness = faithfulness(block);
       flat.push(d);
       bi++;
@@ -282,7 +289,7 @@ export function boardFlatChat(req) {
     let bi = 0;
     for (const { role, block, sub } of chatMessageToBlocks(msgs[i])) {
       const type = block.type;
-      flat.push({ sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['messages', i, ...sub] });
+      flat.push({ sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' || type === 'server_tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['messages', i, ...sub] });
       bi++;
     }
     mi++;
@@ -387,8 +394,9 @@ export function normEvents(events) {
   let text = '';
   const toolCalls = [];
   for (const o of output) {
-    if (o.type === 'message' && Array.isArray(o.content)) for (const c of o.content) if (c && (c.type === 'output_text' || c.type === 'text')) text += c.text || '';
-    if (o.type === 'function_call') toolCalls.push({ id: o.call_id, name: o.name, input: safeJson(o.arguments) });
+    if (o && o.type === 'message') {
+      if (Array.isArray(o.content)) for (const c of o.content) if (c && (c.type === 'output_text' || c.type === 'text')) text += c.text || '';
+    } else for (const { block: b } of itemToBlocks(o)) if (b.type === 'tool_use' || b.type === 'server_tool_use') toolCalls.push({ id: b.id, name: b.name, input: b.input });
   }
   // fallback: if no response.completed (interrupted), stitch text from output_text.delta events
   if (!completed) for (const e of events || []) if (e && e.type === 'response.output_text.delta') text += e.delta || '';
