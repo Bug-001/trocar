@@ -96,7 +96,7 @@ function grow(old, args) {
   return foldOn(null, args.sorted, args);
 }
 function foldOn(old, rows, { home, fs, id, rowOf, progress }) {
-  const s = old || { ids: new Set(), errors: [], cost: 0 };
+  const s = old || { ids: new Set(), errors: [], cost: 0, bodies: new Map(), bodyBytes: 0 };
   s.rowOf = rowOf; s.sink = s.errors; s.progress = progress;
   const read = function* (ids) {
     for (const part of chunks(ids.map((x) => s.rowOf.get(x)).filter(Boolean))) for (const r of recordsAt({ home, fs, rows: part, errors: s.sink, remember: false })) { s.progress(); yield named(r, id); }
@@ -107,36 +107,91 @@ function foldOn(old, rows, { home, fs, id, rowOf, progress }) {
     for (const r of part) s.ids.add(r.id);
   }
   // a record that did not read is said on every answer (D38) and the spine is not kept: the next query reads it again
-  s.cost = s.errors.length ? Infinity : s.ids.size * SPINE_PER_ROW;
+  s.cost = s.errors.length ? Infinity : s.ids.size * SPINE_PER_ROW + PAGE_BODY_BYTES * WORK_PER_STORED; // + the bodies it keeps (bodiesOf)
   return s;
 }
 
-export async function run({ home, fs, params: p, errors, progress = () => {} }) {
+// The work a row list asks for before anything is read — what fits, in step order, by id — done once per list: indexRows hands back
+// the same frozen array while no segment moved, so sessionGroups does too, and a poll of a session that did not grow redoes none of it.
+const plans = new WeakMap();
+function planOf(rows) {
+  let p = plans.get(rows);
+  if (!p) {
+    const { read, bound } = fitting(rows);
+    const sorted = [...read].sort(stepOrder);
+    plans.set(rows, (p = { read, bound, sorted, rowOf: new Map(read.map((r) => [r.id, r])), key: rowsKey(sorted).id }));
+  }
+  return p;
+}
+// The segment index of THIS request, read once whether version() asked first (src/query/answers.mjs) or not: a note about the
+// read that built it (`index-cold`) reaches the answer that read was for (3.5 读不全), and the answer is the one its version names.
+async function indexed({ home, fs, once }) {
+  if (once && once.index) return once.index;
+  const errors = [], got = { rows: await indexRows({ home, fs, errors }), errors };
+  if (once) once.index = got;
+  return got;
+}
+/** version(ctx) → {key, errors} | null (3.5 §谁执行它 答案缓存): the identity of the index rows this answer reads, where it is cut
+ *  (`truncated`) and the index's problems — read from the warm index rows only, never a record. null: no such session. */
+export async function version(ctx) {
+  const p = ctx.params;
+  if (p.id == null || p.id === '') return null;
+  const { rows, errors } = await indexed(ctx);
+  const mine = sessionGroups(rows).get(String(p.id));
+  if (!mine) return null;
+  const { key, bound } = planOf(mine);
+  return { key: JSON.stringify([key, bound]), errors };
+}
+
+/** The bodies a spine keeps for the calls its pages shipped (3.5 §缓存按依赖失效): a poll reads back only the calls new to the page.
+ *  Keyed by the call OBJECT — a lane folded again makes new ones, and a new spine starts empty — and holding the body only, never the
+ *  filled call (gi / streamId / cacheBreak.refGi are set in place when the fold finishes). Least recently shipped go first. */
+function bodiesOf(s, cs, fresh) {
+  const out = new Map(), missing = [];
+  for (const c of cs) {
+    const b = s.bodies.get(c);
+    if (b) { s.bodies.delete(c); s.bodies.set(c, b); out.set(c, b.body); } else missing.push(c);
+  }
+  for (const [c, body] of fresh(missing)) {
+    const bytes = Object.values(c.comp || {}).reduce((n, v) => n + v, 0);
+    s.bodies.set(c, { body, bytes });
+    s.bodyBytes += bytes;
+    out.set(c, body);
+  }
+  for (const [c, b] of s.bodies) { if (s.bodyBytes <= PAGE_BODY_BYTES) break; s.bodies.delete(c); s.bodyBytes -= b.bytes; }
+  return out;
+}
+
+export async function run(ctx) {
+  const { home, fs, params: p, errors, progress = () => {} } = ctx;
   if (p.id == null || p.id === '') throw new QueryArgError('trocar query session: --id is required (a session id; `trocar query sessions` lists them)');
   const id = String(p.id);
   // Membership is the segment index's (src/query/rows.mjs — the same function `sessions` counts with), so only
   // THIS session's records are read back, not every record of every segment (1.6 §4.1 `session` 第一页 ≤ 1 s).
-  const rows = sessionGroups(await indexRows({ home, fs, errors })).get(id) || [];
+  const index = await indexed(ctx);
+  errors.push(...index.errors);
+  const rows = sessionGroups(index.rows).get(id) || [];
   if (!rows.length) {
     errors.push({ where: `session/${id}`, reason: 'no session with this id among the captured records' });
     return { meta: null, records: [], analyzed: null, logged: null, probes: null, truncated: null, page: null };
   }
   const spec = pageSpec(p);
-  const { read, bound } = fitting(rows);
-  const sorted = [...read].sort(stepOrder);
-  const rowOf = new Map(read.map((r) => [r.id, r]));
+  const { read, bound, sorted, rowOf, key } = planOf(rows);
   const release = hold(working(read)); // the caches give way BEFORE anything is read
   let view;
   try {
-    const sp = spines.get(`${fsTag(fs)}\n${home}\n${id}`, rowsKey(sorted).id, (old) => grow(old, { home, fs, id, sorted, rowOf, progress }));
+    const sp = spines.get(`${fsTag(fs)}\n${home}\n${id}`, key, (old) => grow(old, { home, fs, id, sorted, rowOf, progress }));
     errors.push(...sp.errors);
     sp.rowOf = rowOf; sp.sink = errors; sp.progress = progress;
-    // the calls this page ships with their bodies, read back by id and given their bodies by the fold that assembled them
-    const fill = (cs) => {
+    // the calls this page ships with their bodies: those the spine kept, the rest read back by id and given their bodies by the fold
+    // that assembled them
+    const fresh = (cs) => {
+      if (!cs.length) return [];
       const recs = recordsAt({ home, fs, rows: cs.map((c) => rowOf.get(c.id)).filter(Boolean), errors, remember: false });
       const byId = new Map(recs.map((r) => [r.id, named(r, id)]));
-      return new Map(cs.filter((c) => byId.has(c.id)).map((c) => [c, sp.fold.filled(c, byId.get(c.id))]));
+      return cs.filter((c) => byId.has(c.id)).map((c) => [c, sp.fold.bodyOf(c, byId.get(c.id))]);
     };
+    const fill = (cs) => new Map([...bodiesOf(sp, cs, fresh)].map(([c, body]) => [c, sp.fold.filled(c, body)]));
     view = pageView(sp.fold.view(read.map((r) => r.id), { bound }), spec, { fill, budget: PAGE_BODY_BYTES });
   } finally { release(); }
   // `steps` and `streams` hold the SAME call objects as `lanes[].calls` — in process one object, on the

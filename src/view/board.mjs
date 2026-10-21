@@ -180,13 +180,14 @@ function itemOf(r) {
   };
 }
 /**
- * sessionFold(sessionId, {read}) → { push(rec, key), view(keys, {bound}), filled(call, rec) } — ONE session, folded record by
+ * sessionFold(sessionId, {read}) → { push(rec, key), view(keys, {bound}), bodyOf(call, rec), filled(call, body) } — ONE session, folded record by
  * record (3.5 §内存有界; src/view/assemble.mjs createAssembler; `read(ids)` yields records back by id, in the order asked, for a
  * cross-record context whose items the fold no longer holds — src/dissect/chain.mjs — and for a lane folded again). push() takes the
  * session's records in step order within each lane, the lanes in any order (createAssembler); `key` names the record
  * (its id, or the record itself when ids may repeat). view(keys) is the session document over the records `keys` names, in that
- * order, with every call in its META form; it does not change the fold, so more records can be pushed after it. filled(call, rec)
- * is that call with its body put back from its record (a new object), for the calls a page ships (pageView's `fill`).
+ * order, with every call in its META form; it does not change the fold, so more records can be pushed after it. bodyOf(call, rec)
+ * is that call's body built from its record — it never changes for that call object (a lane folded again makes new ones), so it
+ * may be kept; filled(call, body) is the call with that body put back (a new object), for the calls a page ships (pageView's `fill`).
  */
 export function sessionFold(sessionId, { read = null } = {}) {
   const asm = createAssembler({ read });
@@ -211,7 +212,8 @@ export function sessionFold(sessionId, { read = null } = {}) {
         truncated: bound, // 保真边界 (invariant 4): set when a session too large for even its meta was read from its tail
       };
     },
-    filled: (call, r) => withBody(call, asm.bodyOf(call, r)),
+    bodyOf: (call, r) => asm.bodyOf(call, r),
+    filled: withBody,
   };
 }
 // The batch form over records in memory (the usage sidecar's fill, tests). No `page` → every call ships its body.
@@ -221,7 +223,7 @@ export function sessionView(records, sessionId, { page } = {}) {
   const f = sessionFold(sessionId);
   const recOf = new Map();
   for (const r of [...recs].sort(stepOrder)) { const c = f.push(r); if (c) recOf.set(c, r); }
-  const fill = (calls) => new Map(calls.map((c) => [c, f.filled(c, recOf.get(c))]));
+  const fill = (calls) => new Map(calls.map((c) => [c, f.filled(c, f.bodyOf(c, recOf.get(c)))]));
   const view = f.view(recs);
   return page ? pageView(view, page, { fill }) : bodied(view, (c) => fill([c]).get(c));
 }

@@ -29,7 +29,18 @@ const enc = (s) => (s == null ? 0 : Buffer.byteLength(String(s), 'utf8'));
  * tax and the growth Δ are all denominated in. Ported verbatim from the browser's flatBytes(); the
  * numbers must not move, or every historical reading of a session silently changes meaning.
  */
+// Memo by the PARSED source object (the message block, or the tool / system item a flat entry was made from; linearContext gives it
+// as the non-enumerable `src`): a stitched context hands the same parsed items to every call of its chain, so a session's fold asked for
+// the same block's bytes once per call that carries it. Parsed bodies are read-only (src/dissect/request-body.mjs; test/view/frozen-fold).
+const bytesMemo = new WeakMap();
 function blockBytes(b) {
+  const src = b && (b.sec === 'tools' || b.sec === 'system' ? b.src : b.block);
+  if (!src || typeof src !== 'object') return blockBytesOf(b);
+  let n = bytesMemo.get(src);
+  if (n === undefined) bytesMemo.set(src, (n = blockBytesOf(b)));
+  return n;
+}
+function blockBytesOf(b) {
   if (!b) return 0;
   if (b.sec === 'tools') {
     // D15: a verbatim trace carries the real description + schema bytes; a v0 trace kept only a
