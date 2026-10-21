@@ -9,6 +9,8 @@
 // The document is what createAssembler(...).finish() gives for the same records (src/view/assemble.mjs), every call in its meta
 // form, plus `lanes[].key` (the id of the lane's first call) and `items` (record id → the facts the session document reads of it).
 // It carries no `prefixSha256` (the board only ever compared digests: `prefixByteIdentical` says the same over the frame hashes).
+// One place it is more exact: the record fold keys a block by its first 4,096 characters (analyze.mjs BLK_KEY_CAP), so two blocks
+// that differ only past that are the same to it; here a block is its whole frame (one call of the user's live session, 2026-10-21).
 import { createAnalyzer, stepOrder, OrderBound, breakOf, blockDiff, compactionMeta, unparsedErrMsg } from './analyze.mjs';
 import { realGroundTruth, unknownSummary, assembleUnknown, flatLaneView, mergeViews } from './assemble.mjs';
 import { compactionVerdict } from '../identity/session-identity.mjs';
