@@ -10,7 +10,7 @@ import { compactionVerdict } from '../identity/session-identity.mjs';
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf, captureLabelsOf } from '../dissect/capture-labels.mjs'; // #21 request-body labels, D38 WebSocket labels, response labels; captureLabelsOf: the per-call wire.labels (4.6 §记录)
 import { blockSpans } from '../adapters/cc.mjs';
 import { scanJson, spanAt } from '../dissect/json-scan.mjs';
-import { slimBlock, compBuckets, firstAsk } from './blockmeta.mjs';
+import { slimBlock, compBuckets, firstAsk, firstHuman } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../raw/refs.mjs';
 import { fieldTextOf, TEXT_REF_FIELD } from '../dissect/record-fields.mjs';
 import { sessionKeyOf, observerEffectsOf, hintsOf } from '../dissect/harnesses.mjs';
@@ -699,7 +699,7 @@ function multiLaneFold(read, baselines) {
     call.respRefs = respRefsOf(call.rec); // locators only (a few dozen bytes each), never the reply body
     const p = prev.get(lane), was = p && p.keys, keys = new Map();
     const flat = anthropicFlat(call.rec.request, { get: (t) => { const k = keys.get(t) ?? (was && was.get(t)); if (k !== undefined) keys.set(t, k); return k; }, set: (t, k) => keys.set(t, k) });
-    if (lane.calls[0] === call) an.ask(lane, firstAsk(flat)); // the lane's task (4.4 §看板 v2 需要的补充)
+    if (lane.calls[0] === call) an.ask(lane, firstHuman(flat)); // the lane's task (4.4 §看板 v2 需要的补充; finish)
     const u = call.norm.usage || {};
     // Bake NEUTRAL canonical usage (D18a Q1 / D24): the board frontend reads call.usage.{read,
     // create,fresh,out} — ZERO provider-native usage field names in the browser. Provider→canonical

@@ -48,3 +48,18 @@ test('a prompt that is only wrapped reminders is skipped for the next text; a la
   const lanes = sessionView(recs, 'S').analyzed.lanes
   assert.deepEqual(lanes.map((l) => [l.kind, l.task]), [['main', 'Fix the retry queue'], ['subagent', null]])
 })
+
+test('sub-agents whose first prompts share a long preamble are told apart by the first line where each departs from the others', () => {
+  const preamble = Array.from({ length: 120 }, (_, i) => `[harness] shared instruction line ${i}: work in the given worktree and report back.`).join('\n')
+  const ask = (line) => [{ role: 'user', content: [{ type: 'text', text: `${preamble}\n${line}\nmore   text that follows\n` }] }]
+  const recs = [
+    rec(1, [{ role: 'user', content: [{ type: 'text', text: 'Run the plan' }] }]),
+    rec(2, ask('## Your task: implement   the retry queue in src/queue.mjs and its tests'), 'agent-a'),
+    rec(3, ask('## Your task: review the branch'), 'agent-b'),
+    rec(4, ask('## Your task: review the branch'), 'agent-c'), // the same prompt twice: still told apart from agent-a
+  ]
+  const lanes = sessionView(recs, 'S').analyzed.lanes
+  const from = (line) => `${line}\nmore   text that follows`.replace(/\s+/g, ' ').trim().slice(0, 80) // that line on, squashed, ≤ 80
+  assert.deepEqual(lanes.map((l) => l.task), ['Run the plan', from('## Your task: implement   the retry queue in src/queue.mjs and its tests'),
+    from('## Your task: review the branch'), from('## Your task: review the branch')])
+})

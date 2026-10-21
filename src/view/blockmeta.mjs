@@ -203,17 +203,24 @@ function queryOf(b, raw, max = PREVIEW_MAX) {
   const human = String(raw || '').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
   return human ? shorten(human, max) : null;
 }
-// How long a lane's task is (4.4 §看板 v2 需要的补充 `lanes[].task`; the session title is the main lane's).
-const TASK_MAX = 80;
-/** firstAsk(flat) → the first human prompt of a context (blockQuery's rule), squashed, ≤ TASK_MAX characters, or null. A string of
- *  its own (shorten joins its characters), so a fold that keeps it does not keep the block's text alive. */
-export function firstAsk(flat) {
+// How long a lane's task is (4.4 §看板 v2 需要的补充 `lanes[].task`; the session title is the main lane's), and how much of a lane's first
+// prompt is kept to tell sibling sub-agents apart (their prompts often share a long preamble: a workflow's own instructions).
+export const TASK_MAX = 80;
+export const TASK_HEAD = 16384;
+/** taskOf(text) → the text squashed (whitespace runs → one space, trimmed), ≤ TASK_MAX characters, or null. */
+export const taskOf = (text) => (text ? shorten(text, TASK_MAX) || null : null);
+/** firstHuman(flat) → the first human prompt of a context (blockQuery's rule: a user text block, <system-reminder> stripped, not empty),
+ *  trimmed, its first TASK_HEAD characters, as a string of its own (a slice would keep the block's whole text alive) — or null. */
+export function firstHuman(flat) {
   for (const b of flat || []) {
-    const q = isUserText(b) ? queryOf(b, bodyTextOf(b), TASK_MAX) : null;
-    if (q) return q;
+    if (!isUserText(b)) continue;
+    const human = String(bodyTextOf(b) || '').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+    if (human) return (' ' + human.slice(0, TASK_HEAD)).slice(1);
   }
   return null;
 }
+/** firstAsk(flat) → the lane's task from its first call's blocks: taskOf(firstHuman(flat)). */
+export const firstAsk = (flat) => taskOf(firstHuman(flat));
 
 // Fields that carry the block's CONTENT. These are what must not cross the wire; everything else on
 // a block is metadata the collapsed row, the diff and the timeline need on every call.
