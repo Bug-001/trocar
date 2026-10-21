@@ -316,7 +316,7 @@ test(`the deadline measures silence: a worker that ${what} (3.5:42)`, async () =
       assert.deepEqual(said, [])
     } else {
       assert.equal(said.length, 1, 'the wedged worker is a D38 failure')
-      assert.ok(Date.now() - t0 >= 400 + 200, 'cut only after its last progress plus the deadline')
+      assert.ok(Date.now() - t0 >= 400 - 50 + 200, 'cut only after its last progress plus the deadline') // its last progress comes at most one 50 ms tick before it stops at 400
     }
   } finally { svc.stop() }
 })
