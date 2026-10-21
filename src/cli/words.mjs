@@ -22,6 +22,7 @@ export const FAILURE_WORDS = Object.freeze({
   'manifest-unreadable': 'the install record could not be read',
   'control-endpoint-held': "another process holds trocar's control channel, so the background process did not start",
   'query-failed': 'a query worker failed; the query was answered another way',
+  'projection-write-failed': 'a session could not be saved to disk for faster reading; its answers are unchanged',
   'root-refused': 'refused: it was run as root',
   'root-token': 'refused: it was run as root',
   'elevated-token': 'refused: it was run elevated',
