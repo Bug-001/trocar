@@ -1,17 +1,99 @@
-// test/web-v2/ctxwin-patch.test.mjs — the window patched by bid (2.3 §读与画 · 2.3 #22 · 1.4:114 D64 line): a window patched
-// from one step to the next equals the window drawn fresh, and a unit whose key survives with the same html is never re-created.
+// test/web-v2/ctxwin-patch.test.mjs — the window patched by bid (2.3 §读与画 · 2.3 #22 · 1.4:114 D64 line): over generated
+// session worlds (desk-world.mjs), a window patched from one step to the next equals the window drawn fresh, a row whose bid
+// survives with the same html is never re-created (its DOM and a selection in it stay), and a desk held through deltas draws
+// the same window as a desk read whole.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { patchUnits, applyOps } from '../../src/web/v2/replay/ctxwin.mjs'
+import { createDesk, applySession, laneAsk } from '../../src/web/v2/replay/model.mjs'
+import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
+import { ctxWindowUnits, ctxWindowHtml, patchUnits, applyOps } from '../../src/web/v2/replay/ctxwin.mjs'
+import { world, readLane, deskFrom } from './desk-world.mjs'
 
 const SEEDS = Array.from({ length: 24 }, (_, i) => i + 1)
 function rng(seed) { let a = seed >>> 0 || 1; return () => ((a = Math.imul(a ^ (a >>> 13), 0x5bd1e995) + 0x9e3779b9 >>> 0) / 4294967296) }
 
-test('the op algebra: unit lists whose survivors are reordered, re-drawn, re-set and nested patch to the next list', () => {
+const stateOf = (desk, extra = {}) => {
+  const lanes = buildLanes(desk)
+  return { desk, lanes, anchor: anchorLane(lanes), playhead: 0, diffRef: null, navOpen: new Set(), openBlocks: new Set(),
+    turnFold: new Map(), turnLanded: new Set(), ctx: {}, ...extra }
+}
+// every op names a key; collect, per level path, which keys an op re-creates
+function recreated(ops, path = '', out = new Set()) {
+  for (const [op, key, a] of ops) {
+    if (op === 'del' || op === 'put') out.add(path + '/' + key)
+    if (op === 'kids') recreated(a, path + '/' + key, out)
+  }
+  return out
+}
+function untouched(prev, next, path = '', out = []) {
+  const P = new Map(prev.map((u) => [u.key, u]))
+  for (const u of next) {
+    const p = P.get(u.key)
+    if (!p) continue
+    if (!u.kids && p.html === u.html) out.push(path + '/' + u.key)
+    if (u.kids && p.kids) untouched(p.kids, u.kids, path + '/' + u.key, out)
+  }
+  return out
+}
+
+test('A11 (2.3 #22 · 1.4:114): a window patched across random steps equals the fresh window; a surviving row with the same html is never re-created', async () => {
+  let kept = 0, moved = 0
+  for (const seed of SEEDS) {
+    const w = world(seed), desk = await deskFrom(w.get(), 'S'), r = rng(seed)
+    for (const lane of buildLanes(desk)) {
+      const s = stateOf(desk, { anchor: lane })
+      const n = lane.calls.length
+      s.playhead = Math.floor(r() * n)
+      let prev = ctxWindowUnits(s)
+      for (let k = 0; k < 30; k++) {
+        // a neighbour most of the time (a scrub), a jump otherwise; the reader opens rows and pins a compare step now and then
+        s.playhead = r() < 0.7 ? Math.max(0, Math.min(n - 1, s.playhead + (r() < 0.5 ? -1 : 1))) : Math.floor(r() * n)
+        if (r() < 0.3 && s.curKeys && s.curKeys.length) s.openBlocks.add(s.curKeys[Math.floor(r() * s.curKeys.length)])
+        if (r() < 0.1) s.diffRef = r() < 0.5 ? null : Math.floor(r() * n)
+        const next = ctxWindowUnits(s), ops = patchUnits(prev, next)
+        assert.deepEqual(applyOps(prev, ops), next, `seed ${seed} lane ${lane.id} step ${s.playhead}`)
+        const re = recreated(ops)
+        for (const k of untouched(prev, next)) { assert.ok(!re.has(k), `seed ${seed}: ${k} kept its html but was re-created`); kept++ }
+        moved += ops.filter((o) => o[0] === 'set').length
+        prev = next
+      }
+    }
+  }
+  assert.ok(kept > 0 && moved > 0, 'the walks cover surviving rows, some of them at a new position')
+  // the op algebra on its own axis: unit lists whose survivors are reordered, re-drawn, re-set and nested
   for (const seed of SEEDS) {
     const r = rng(seed * 7919), pick = (xs) => xs.filter(() => r() < 0.7).sort(() => r() - 0.5)
     const tree = (depth) => pick(['a', 'b', 'c', 'd', 'e', 'f']).map((key) => ({ key, html: r() < 0.3 ? '<i>x</i>' : '<i>y</i>',
       ...(r() < 0.5 ? { set: { 'data-bi': Math.floor(r() * 3) } } : {}), ...(depth && r() < 0.4 ? { kids: tree(depth - 1) } : {}) }))
     for (let k = 0; k < 40; k++) { const prev = tree(2), next = tree(2); assert.deepEqual(applyOps(prev, patchUnits(prev, next)), next, `seed ${seed}`) }
+  }
+})
+
+test('A12: at every mark, the window drawn from a desk held through deltas equals the window of a desk read whole', async () => {
+  for (const seed of SEEDS.slice(0, 12)) {
+    const w = world(seed), m = w.marks, r = rng(seed)
+    let M = m[Math.floor(m.length / 3)]
+    const desk = createDesk()
+    applySession(desk, w.full(M))
+    for (const key of desk.lanes.keys()) await readLane(w.get(M), 'S', desk, { lane: key })
+    for (let i = m.indexOf(M) + 1; i < m.length; i++) {
+      const next = m[i], { touched } = applySession(desk, w.since(M, next))
+      for (const key of touched.keys()) await readLane(w.get(next), 'S', desk, laneAsk(desk, key, touched))
+      for (const key of desk.lanes.keys()) if (!desk.held.has(key)) await readLane(w.get(next), 'S', desk, { lane: key })
+      M = next
+      const whole = await deskFrom(w.get(M), 'S')
+      const open = new Set()
+      for (const lane of buildLanes(whole)) {
+        const a = stateOf(desk, { openBlocks: open }), b = stateOf(whole, { openBlocks: new Set(open) })
+        a.anchor = a.lanes.find((l) => l.id === lane.id); b.anchor = lane
+        assert.ok(a.anchor, `seed ${seed} at ${M}: lane ${lane.id} is on both desks`)
+        for (let p = 0; p < lane.calls.length; p++) {
+          a.playhead = b.playhead = p
+          const hb = ctxWindowHtml(b)
+          assert.equal(ctxWindowHtml(a), hb, `seed ${seed} at ${M} lane ${lane.id} step ${p}`)
+          if (r() < 0.2 && b.curKeys && b.curKeys.length) { const k = b.curKeys[Math.floor(r() * b.curKeys.length)]; a.openBlocks.add(k); b.openBlocks.add(k) }
+        }
+      }
+    }
   }
 })
