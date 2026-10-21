@@ -221,7 +221,7 @@
   .newmark{font-size:10px;color:var(--fg);border:1px solid var(--rule);border-radius:8px;padding:0 5px;white-space:nowrap;}
   .cblk.is-new{box-shadow:inset 2px 0 0 var(--ink);}
   /* one block */
-  .cblk{border:1px solid var(--border);border-radius:6px;margin-bottom:4px;overflow:hidden;background:var(--raised);scroll-margin-top:8px;}
+  .cblk{border:1px solid var(--border);border-radius:6px;margin-bottom:4px;overflow:hidden;background:var(--raised);scroll-margin-top:8px;content-visibility:auto;contain-intrinsic-size:auto 28px;}
   .cblk.s-tools{background:color-mix(in srgb,var(--amber) 4%,transparent);}
   .cblk.s-system{background:color-mix(in srgb,var(--purple) 5%,transparent);}
   .cblk.hl{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 55%,transparent);}
@@ -240,7 +240,7 @@
   /* per-block faithfulness (1.4:52 / 不变式4): dashed = NOT byte-verbatim. Muted amber so it reads as a caveat, not an error. */
   .cbc{padding:0 9px;} .cblk.collapsed .cbc{display:none;}
   /* messages grouped into turns (point 2): user-query header ▸ nested call-turn blocks */
-  .cwturn{border:1px solid var(--border);border-radius:7px;margin-bottom:6px;overflow:hidden;background:color-mix(in srgb,var(--accent) 3%,transparent);}
+  .cwturn{content-visibility:auto;contain-intrinsic-size:auto 28px;border:1px solid var(--border);border-radius:7px;margin-bottom:6px;overflow:hidden;background:color-mix(in srgb,var(--accent) 3%,transparent);}
   .cwturnhd{display:flex;align-items:center;gap:8px;padding:6px 10px;cursor:pointer;font-size:11.5px;}
   .cwturnhd::before{content:"▾";color:var(--dimmer);font-size:10px;width:8px;}
   .cwturn.collapsed .cwturnhd::before{content:"▸";}
@@ -346,18 +346,12 @@
   .seenchip .sdot{color:var(--dimmer);}
   .seenmore{font-size:10px;color:var(--dimmer);cursor:pointer;padding:3px 0;font-family:var(--mono);}
   .seenmore:hover{color:var(--accent);}
-  /* ⑤–⑧ the stand-in states (1.4): 未下发 · 解析不出 · 没有请求 · 载入中 — never a blank window */
-  .pagedout{margin:24px auto;max-width:560px;padding:14px 16px;border:1px dashed var(--rule-2);border-radius:6px;background:color-mix(in srgb,var(--fg) 2%,transparent);}
-  .pohd{font-size:12px;color:var(--ink-2);margin-bottom:6px;}
-  .pobody{font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:10px;}
-  .poact{margin-top:2px;}
-  .pobtn{font:inherit;font-size:11px;padding:4px 10px;border:1px solid var(--dim);border-radius:4px;background:transparent;color:var(--fg);cursor:pointer;}
-  .pobtn:hover{border-color:var(--accent);color:var(--accent);}
-  .pobtn[disabled]{cursor:progress;opacity:.6;border-color:var(--dim);color:var(--dim);}
-  .pomissed{font-size:11px;color:var(--amber);margin-right:6px;}
-  .cwunparsed,.cwnoreq,.cwload{margin:24px auto;max-width:560px;padding:14px 16px;border:1px dashed var(--rule-2);border-radius:6px;font-size:11.5px;color:var(--dim);line-height:1.6;}
+  /* ⑥ ⑦ the stand-in states (1.4); ⑧ and an unheld lane's frames: empty, aria-busy, sized from the row's composition */
+  .cwunparsed,.cwnoreq{margin:24px auto;max-width:560px;padding:14px 16px;border:1px dashed var(--rule-2);border-radius:6px;font-size:11.5px;color:var(--dim);line-height:1.6;}
   .cwunparsed .cwuhd,.cwnoreq{color:var(--fg);}
-  .cwload{color:var(--dimmer);text-align:center;}
+  .cwbusy{min-height:84px;}
+  .cwframe{height:calc(var(--fr, 1) * 28px);margin:16px 0 6px;border:1px dashed var(--rule-2);border-radius:6px;background:color-mix(in srgb,var(--fg) 2%,transparent);}
+  .rpbusy{height:28px;border-radius:4px;background:color-mix(in srgb,var(--fg) 3%,transparent);}
 
 /* ── new in v2 ── */
 #pages{min-width:0;} #leftpage{min-width:0;}
