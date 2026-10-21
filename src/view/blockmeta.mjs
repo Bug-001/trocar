@@ -141,6 +141,7 @@ function blockHead(b) {
     return { role: r, tag: k === 'tool_addition' ? 'def · added' : 'def · removed', label: String(def.name || (t && t.name) || '') };
   }
   if (k === 'document') return { role: r, tag: 'document', label: '' };
+  if (k === 'json') { const v = bl && bl.value; return { role: r, tag: String((v && v.type) || 'json'), label: shorten(JSON.stringify(v)) }; } // an unmapped item: its own type, its JSON
   const tag = r === 'user' ? 'user' : r === 'assistant' ? 'say' : r === 'system' ? 'system-reminder' : 'text';
   const txt = typeof bl === 'string' ? bl : (bl && typeof bl.text === 'string') ? bl.text : '';
   return { role: r, tag, label: shorten(txt) };

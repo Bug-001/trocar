@@ -33,6 +33,7 @@ test('Responses items: kind / role by the type suffix and call_id, each block a 
     assert.deepEqual([flat[0].kind, flat[0].role], want, raw);
     const { start, end } = parseTextRef(flat[0].text_ref);
     assert.equal(body.slice(start, end), raw, raw);
+    if (want[0] === 'json') { const h = flat[0].head; assert.notEqual(h.tag, 'say', raw); assert.ok(h.label, raw); }
   }
 });
 
