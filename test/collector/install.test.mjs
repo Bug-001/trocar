@@ -1147,3 +1147,20 @@ test('V13: uninstall writes desired off, asks the daemon to switch off and exit,
   assert.deepEqual(r.receipt.relayed, { closing: 0, waiting: 0, cut: 0 })
   assert.equal(ALL_HARNESSES.length, 7)
 })
+
+// V104 (driver): the result line's `harnesses` lists only what this run really turned on — none when POST /on threw or the daemon did not reach on
+for (const [name, reply, turned] of [['POST /on throws', null, false], ['the daemon answers actual off', { desired: 'on', actual: 'off' }, false], ['the daemon answers actual on', { desired: 'on', actual: 'on' }, true]]) {
+  test(`V104 driver: ${name} → the on result line's harnesses is ${turned ? 'the targets' : '[]'}`, async () => {
+    const b = box()
+    await installCollector({ ...onBase(b), unit: null })
+    const request = async ({ method, path: p }) => {
+      if (method === 'GET' && p === '/status') return { desired: 'on', actual: 'on' }
+      if (reply === null) throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })
+      return reply
+    }
+    const r = await turnOn(onBase(b, { socketPath: path.join(b.home, 'run', 'c.sock'), request, unit: null }))
+    const last = readEvents(b.dir).filter((e) => e.event === 'install-note' && e.kind === 'result').at(-1)
+    assert.deepEqual(last.harnesses, turned ? r.plan.targets : [], JSON.stringify(last))
+    if (turned) assert.ok(r.plan.targets.length > 0)
+  })
+}
