@@ -74,7 +74,7 @@ function realGroundTruth(prefixByteIdentical, read, create) {
 // wire req_body, so AC-1 holds MORE directly for D10 than v0. No-op for records already in v0 shape.
 // A context the dissector stitched across records (ctx, D37 ②) stands in for the call's own body, and rides on the
 // copy as the non-enumerable `_ctx` (state, lineage) for the lane segmentation in analyze().
-function hydrateForBoard(r, ctx = null) {
+export function hydrateForBoard(r, ctx = null) {
   if (!r || r.request !== undefined || typeof r.req_body !== 'string') return r; // already v0 / not a D10 body
   const body = ctx ? ctx.req : parsedRequestBody(r); // parsed once per record (src/dissect/request-body.mjs)
   if (!body || typeof body !== 'object') return r; // unparseable → leave (analyze filters it)
@@ -135,7 +135,7 @@ export function recordsForSession(records, sessionId) {
 // The evidence block for records no dissector claims. `partial` = they sit inside a session whose other
 // records ARE rendered (a mixed session); otherwise the whole session is unrecognized.
 // What the evidence block keeps of one such record (the fold lets the record go): endpoint, user-agent, model.
-function unknownFacts(r) {
+export function unknownFacts(r) {
   let b = r && r.request && typeof r.request === 'object' ? r.request : null;
   if (!b && r && typeof r.req_body === 'string') { try { b = JSON.parse(r.req_body); } catch { b = null; } }
   return { endpoint: String((r && r.endpoint) || '').split('?')[0], ua: (headersOf(r) || {})['user-agent'], model: b && typeof b.model === 'string' ? b.model : null };
@@ -187,7 +187,7 @@ const FLAT_LANES = {
 // null (a WebSocket call whose request message is undecoded, or a server push: 4.6 §传输) is no body at all: such a call
 // has no request, and its labels say why (wsIncomplete); it must not take /api/session down either.
 // Side effect, as the board's callComp / cost need it: `r.request` is the parsed request, with the dissector's counts.
-function flatRequest(d, r, ctx) {
+export function flatRequest(d, r, ctx) {
   let req = ctx ? ctx.req : null, unparsed = false;
   if (!ctx) {
     try { req = JSON.parse(r.req_body); } catch { req = null; }
@@ -353,7 +353,7 @@ function slimRec(rec) {
 }
 
 // A record's raw_ref (4.2:40), or null when it cannot be addressed: no id, or no stream it was read from.
-const rawRefOf = (rec) => (rec && rec.id != null && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, String(rec.id)) : null);
+export const rawRefOf = (rec) => (rec && rec.id != null && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, String(rec.id)) : null);
 
 // Turn a call's assembled blocks into their WIRE shape: metadata + a text_ref locator, no body.
 //
@@ -397,7 +397,7 @@ function withPathRefs(flat, rec) {
 // incompleteness labels (4.6 §记录 「不完整的标注」 — shown on the call, never dropped). Cheap: no body parse.
 // A cross-record context (ctx, from the dissector) brings its own state and, when partial, what is missing;
 // `norm.unread` counts reply messages the dissector could not read (D38: never skipped without a trace).
-function wireOf(rec, format, ctx = null, norm = null) {
+export function wireOf(rec, format, ctx = null, norm = null) {
   const labels = captureLabelsOf(rec);
   const unread = norm && norm.unread;
   if (unread) labels.push({ id: 'reply-unread', label: `${unread} reply message${unread > 1 ? 's' : ''} not read`,
@@ -412,7 +412,7 @@ function wireOf(rec, format, ctx = null, norm = null) {
 // 3.1:37: client messages that arrived while the call was open (req_extra_messages, e.g. an interrupt) belong to
 // the call and MUST be visible — listed one by one with a locator to their verbatim text (4.2:40 字段段), or with
 // what is stored instead. Cheap meta: no parse.
-function extraMessagesOf(rec) {
+export function extraMessagesOf(rec) {
   const xs = rec && Array.isArray(rec.req_extra_messages) ? rec.req_extra_messages : [];
   if (!xs.length) return null;
   const base = rawRefOf(rec);
@@ -464,7 +464,7 @@ export function withLocatedRefs(flat, locateFn, scans = new Map()) {
 // message. Joining an HTTP call's resolved pieces gives the whole decoded reply. A piece that cannot be addressed is
 // listed with why (invariant 4), never dropped. Envelope fields only (record-fields.mjs): no wire knowledge.
 // → [{ label, ref: string|null, chars: number|null, why? }]
-function respRefsOf(rec) {
+export function respRefsOf(rec) {
   const r = respOf(rec);
   if (!r) return [{ label: 'reply', ref: null, chars: null, why: 'no response is recorded for this call' }];
   const part = r.kind === 'error' && r.partial && typeof r.partial === 'object' ? r.partial : r;
@@ -496,7 +496,7 @@ function scalarOf(text, node) {
   try { v = JSON.parse(text.slice(node.start, node.end)); } catch { return undefined; }
   return typeof v === 'number' || typeof v === 'boolean' || (typeof v === 'string' && v.length <= SHORT_STRING) ? v : undefined;
 }
-function nonBlockKeysOf(rec, format) {
+export function nonBlockKeysOf(rec, format) {
   if (!rec || typeof rec.req_body !== 'string') return [];
   let root = null;
   try { root = scanJson(rec.req_body); } catch { return []; }
@@ -660,7 +660,7 @@ function mergeViews(views) {
 // the browser → invariant 3). opaque = encrypted/redacted reasoning replayed as signature-only, no plaintext on the wire
 // (thinking/redacted_thinking with a signature but empty text). The board renders a badge off b.faithfulness so nobody
 // mistakes ciphertext for verbatim content (invariant 4). (1.4:52)
-function anthropicFlat(request, keyMemo) {
+export function anthropicFlat(request, keyMemo) {
   const flat = linearContext(request, keyMemo);
   for (const b of flat) {
     const bl = b.block || {};

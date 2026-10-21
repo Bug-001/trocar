@@ -170,7 +170,7 @@ const COMP_KIND = { tool_addition: 'tools', tool_removal: 'tools', thinking: 'th
 const COMP_ROLE = { assistant: 'assistant', user: 'user', system: 'system', developer: 'system', tool: 'tool_result' };
 export const COMP_KEYS = ['tools', 'system', 'user', 'assistant', 'thinking', 'tool_use', 'tool_result', 'image', 'other'];
 
-function compBucket(b) {
+export function compBucket(b) {
   if (!b) return 'other';
   if (b.sec === 'tools') return 'tools';
   if (b.sec === 'system') return 'system';
