@@ -62,6 +62,7 @@ export const FAILURE_WORDS = Object.freeze({
   'harness-note': 'a note from the install',
   'unit-env-not-carried': "the login item's environment cannot carry the install's certificate variable",
   'holders-unreadable': 'the list of running processes could not be read',
+  'door-record-unreadable': "trocar's record of which programs used its doors could not be read",
   // connections (the engine, its doors, a connection row's not_captured)
   'lookup-miss': "a connection's destination could not be read",
   'describe-error': "a connection's program could not be described",

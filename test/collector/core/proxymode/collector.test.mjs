@@ -21,6 +21,8 @@ import { checkRecord, CODES } from '../../../../src/health/codes.mjs'
 import { custodyStub } from '../../../helpers/custody-stub.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { readDoorSeen, DOOR_SEEN_FILE } from '../../../../src/off/door-seen.mjs'
+import { compileIdentity } from '../../../../src/off/identity.mjs'
+import { serializeSignature } from '../../../../src/off/signature.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { ROOT, INSTALLED, descs, newWorld, ctxOf, worldOf, combos, makeRoot } from './verdict-world.mjs'
 import { CERT_VARS } from '../../../../src/collector/core/proxymode/upstream-trust.mjs'
@@ -480,6 +482,27 @@ test('A9 (d) · a collector with no door traffic writes no door record', async (
   await c.off({ harnesses: [d.name] })
   c.close()
   assert.equal(fs.existsSync(path.join(dir, DOOR_SEEN_FILE)), false)
+})
+
+test('A9 (e) · a door record unreadable at start: said as door-record-unreadable; the record written back stays not known while a process of the harness from before lives, and is whole once none does', async () => {
+  const d = descs[0], dir = tmpDir(), T1 = INSTALLED + 100
+  fs.writeFileSync(path.join(dir, DOOR_SEEN_FILE), '{not json')
+  const identity = serializeSignature(compileIdentity({ harness: d.name, names: [{ name: 'agentq' }] }))
+  const p = (pid, startedAt) => ({ pid, ppid: 1, uid: 501, startedAt, exe: '/opt/agentq', argv: ['agentq'], env: () => null, envRead: false })
+  const manifest = manifestOf(d.name, { liveness: { [d.name]: { identity, rereads: false, since: iso(INSTALLED), on_at: iso(INSTALLED + 1), off_at: iso(INSTALLED + 2) } } })
+  const run = async (procs) => {
+    const { c, records } = await rig({ desc: d, dir, w: { procs, now: T1, manifest } })
+    const got = await c.holders()
+    c.close()
+    return { got, said: records.filter((r) => r.code === 'door-record-unreadable').length }
+  }
+  const before = await run([p(91, T1 - 50)])
+  assert.equal(before.said, 1)
+  assert.deepEqual(before.got.holders.map((h) => [h.pid, h.why]), [[91, 'history-unknown']])
+  assert.equal(readDoorSeen({ dir }).rows, null, 'a process from before the unreadable moment lives: still not known')
+  const after = await run([p(92, T1 + 500)])
+  assert.deepEqual(after.got.holders, [], 'none from before: the door evidence is known again')
+  assert.deepEqual(readDoorSeen({ dir }).rows, [], 'and the file says so')
 })
 
 test('A10 · PAC GETs are counted per life: two from one life are one kind:\'pac\' row with n = 2 at the latest time; a new life of the same pid gets its own row', async () => {

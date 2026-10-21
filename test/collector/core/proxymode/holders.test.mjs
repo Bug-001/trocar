@@ -7,7 +7,10 @@ import { holdersOf } from '../../../../src/off/holders.mjs'
 import { compileIdentity } from '../../../../src/off/identity.mjs'
 import { serializeSignature } from '../../../../src/off/signature.mjs'
 import { holdersRoute } from '../../../../src/collector/core/control.mjs'
-import { readDoorSeen, DOOR_SEEN_MAX } from '../../../../src/off/door-seen.mjs'
+import { readDoorSeen, DOOR_SEEN_MAX, DOOR_SEEN_FILE } from '../../../../src/off/door-seen.mjs'
+import { isCode } from '../../../../src/health/codes.mjs'
+import fs from 'node:fs'
+import path from 'node:path'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
 const ON = 1_000_000, OFF = 2_000_000
@@ -56,6 +59,36 @@ test('A9 (c) · P12 the door record is bounded: past DOOR_SEEN_MAX lives the fil
   assert.deepEqual(rows.map((r) => r.pid).sort((a, b) => a - b), Array.from({ length: DOOR_SEEN_MAX }, (_, i) => i + 1 + extra), 'the oldest lives went')
   assert.equal(createDoorSeen({ dir, timers: fakeTimers() }).list().length, rows.length)
 })
+
+// P12 an unreadable door record: the lives it held are not known, and stay not known in the file the daemon writes back, until no live process of a
+// harness that was on started before (or at an unknown time before) the moment it was found unreadable. Axes: what the file held × the claimable table.
+for (const bad of ['{not json', '{"version":1}', '[]']) {
+  test(`P12 a door record that cannot be read (${JSON.stringify(bad)}) is said with its own code and is never written back as complete; it is cleared once no claimable life predates it`, () => {
+    const dir = tmpDir(), T = 5_000_000
+    fs.writeFileSync(path.join(dir, DOOR_SEEN_FILE), bad)
+    let now = T
+    const errs = []
+    const open = () => createDoorSeen({ dir, clock: () => ++now, timers: fakeTimers(), onError: (e) => errs.push(e) })
+    const a = open()
+    assert.equal(errs[0].code, 'door-record-unreadable'); assert.ok(isCode(errs[0].code), 'in the closed set')
+    assert.equal(a.list(), null)
+    a.add({ harness: 'agentx', group: 'agentx:api', pid: 1, start: T + 10, kind: 'accept' })
+    a.close()
+    assert.equal(readDoorSeen({ dir }).rows, null, 'the file written back still says not known')
+    for (const predates of [[proc(9, T - 1)], [proc(9, null)], [proc(1, T + 10), proc(9, T - 1)]]) {
+      const b = open()
+      assert.equal(b.list(), null, 'a restart reads it as not known')
+      b.prune(() => true, predates); b.close()
+      assert.equal(readDoorSeen({ dir }).rows, null, `a live claimable process started before: still not known (${JSON.stringify(predates.map((x) => x.startedAt))})`)
+    }
+    const c = open()
+    c.prune(() => true, [proc(1, T + 10)])
+    assert.deepEqual(c.list().map((r) => r.pid), [1], 'cleared: the rows met since are the record')
+    c.close()
+    assert.deepEqual(readDoorSeen({ dir }).rows.map((r) => r.pid), [1])
+    const d = open(); d.prune(() => true, null); assert.ok(Array.isArray(d.list()), 'a readable record stays known')
+  })
+}
 
 test('GET /holders answers the count and the rows', async () => {
   const h = holdersRoute({ holders: () => [{ harness: 'agentx', pid: 1, start: 2, why: 'rereads' }] })

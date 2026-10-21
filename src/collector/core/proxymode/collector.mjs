@@ -16,6 +16,7 @@ import { pacHandler, pacLeg, peerAllowed } from './pac.mjs'
 import { createDoorSeen, createHolderPoll, mayExit, HOLDER_POLL_MS } from './holders.mjs'
 import { notCapturedClass } from '../../../health/codes.mjs'
 import { holdersOf, sameLife } from '../../../off/holders.mjs'
+import { harnessesOf, withAgentList } from '../../../off/signature.mjs'
 import { itemsOfPhase, readManifest as readManifestAt } from '../../../off/manifest.mjs'
 import { readStateFile } from '../../../off/state.mjs'
 import { readIngressConfig } from '../ingress-config.mjs'
@@ -262,9 +263,11 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   /** The door rows of lives still in `procs` (an entry whose start was not read keeps its pid's rows: the safe direction). */
   const liveIn = (procs) => (r) => procs.some((p) => p.pid === r.pid && (p.startedAt == null || sameLife(r, p)))
   const holdersNow = async () => {
-    const m = withOffAt(manifest(true)), procs = await procTable()
-    seen.prune(liveIn(procs)) // each read of the table (the poll's tick, off, GET /holders) drops the door rows of lives that left it (P12)
-    return holdersOf({ manifest: m, procs, doorSeen: seen.list(), agentList: agentList() })
+    const m = withOffAt(manifest(true)), procs = await procTable(), list = agentList()
+    // the processes of harnesses that were on: an unreadable door record is known again once none of them predates it (P12); no manifest, no clearing
+    const wasOn = m && m.liveness ? withAgentList(Object.fromEntries(Object.entries(m.liveness).filter(([, l]) => l && l.on_at != null)), list).liveness : null
+    seen.prune(liveIn(procs), wasOn && procs.filter((p) => harnessesOf(wasOn, p).length)) // each read of the table (the poll's tick, off, GET /holders) drops the door rows of lives that left it (P12)
+    return holdersOf({ manifest: m, procs, doorSeen: seen.list(), agentList: list })
   }
   const kept = () => [...doors.values()].filter((d) => !onSet.has(d.harness))
   /** Doors of harnesses that are off: closed once no holder of theirs lives (P12); the poll stops when none is left. */
