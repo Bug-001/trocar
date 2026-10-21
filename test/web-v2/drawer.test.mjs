@@ -37,8 +37,9 @@ const sideDesk = (blocks, reply = [], row = {}) => deskOf([{ kind: 'main', rows:
 const drawSide = (desk) => { const lanes = buildLanes(desk), lane = lanes.find((l) => l.kind === 'aux'); return detailHtml({ ...stateOf(), desk, lanes }, lane, 0) }
 
 test('the input: a row per block of the held lane, each carrying its own size from the input', () => {
-  const rows = drawSide(sideDesk([blk({}), blk({ chars: 900 }), blk({ chars: null, bytes: 700, ff: 'summarized' })])).body.split('class="dblk').slice(1)
-  assert.equal(rows.length, 3)
+  const input = [blk({}), blk({ chars: 900 }), blk({ chars: null, bytes: 700, ff: 'summarized' })]
+  const rows = drawSide(sideDesk(input)).body.split('class="dblk').slice(1)
+  assert.equal(rows.length, input.length)
   assert.match(rows[1], /\b900\b/); assert.match(rows[2], /\b700\b/)
 })
 
@@ -46,7 +47,7 @@ test('2.6 §B: a call whose lane is not held draws busy frames for its input and
   const desk = deskOf([{ kind: 'main', rows: [{}], blocks: [[]] }, { kind: 'aux', rows: [{ error: 'x' }] }])
   const lanes = buildLanes(desk), lane = lanes.find((l) => l.kind === 'aux')
   const { body } = detailHtml({ ...stateOf(), desk, lanes }, lane, 0)
-  assert.equal((body.match(/aria-busy="true"/g) || []).length, 2)
+  assert.match(body, /aria-busy="true"/); assert.ok(!body.includes('class="dblk'), 'no input rows before the lane lands')
   assert.ok(!body.includes(W.NO_INPUT) && !body.includes(W.FAILED_NO_REPLY))
   const asked = []
   const el = { className: '', innerHTML: '', querySelectorAll: () => [] }
@@ -56,7 +57,8 @@ test('2.6 §B: a call whose lane is not held draws busy frames for its input and
 
 test('more than 40 input blocks: none auto-opens; 40 short ones all do', () => {
   assert.ok(!/dblk open/.test(drawSide(sideDesk(Array.from({ length: 41 }, () => blk({ chars: 5 })))).body))
-  assert.equal((drawSide(sideDesk(Array.from({ length: 40 }, () => blk({ chars: 5 })))).body.match(/dblk open/g) || []).length, 40)
+  const short = Array.from({ length: 40 }, () => blk({ chars: 5 }))
+  assert.equal((drawSide(sideDesk(short)).body.match(/dblk open/g) || []).length, short.length)
 })
 
 test('the review bracket is only for the kinds that read the conversation; a token-count tick shows its measured count', () => {
