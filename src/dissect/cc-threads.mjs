@@ -21,7 +21,7 @@
 import { parsedRequestBody } from './request-body.mjs';
 import { isVolatile, serverEdited } from './cc.mjs';
 import { contextStateOfRequest, respIncompleteOf } from './capture-labels.mjs';
-import { extendChain, linked, segmentsOf, segmentsIn, sourceOf, createLinks } from './chain.mjs';
+import { extendChain, linked, segmentsIn, sourceOf, createLinks, withUnread } from './chain.mjs';
 
 const bodyOf = (rec) => { const b = parsedRequestBody(rec); return b && typeof b === 'object' ? b : null; };
 
@@ -146,9 +146,9 @@ export function threadPlanner(read = null) {
     context(rec) {
       const p = get(rec);
       if (!p) return null; // a call without `thread`: its own bytes are its context, read exactly as before
-      const segments = segmentsOf(p);
-      return { req: { ...(bodyOf(rec) || {}), system: p.system.map((s) => s.item), tools: p.tools.map((s) => s.item), messages: links.items(p, rec) },
-        contextState: p.contextState, missing: p.missing, lineage: p.lineage, continued: p.thread.kind === 'continue', segments,
+      const { items, segments, missing } = links.items(p, rec);
+      return { req: { ...(bodyOf(rec) || {}), system: p.system.map((s) => s.item), tools: p.tools.map((s) => s.item), messages: items },
+        ...withUnread(p.contextState, p.missing, missing), lineage: p.lineage, continued: p.thread.kind === 'continue', segments,
         locate: (b) => locate(b, p, segments) };
     },
   };

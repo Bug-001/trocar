@@ -18,7 +18,7 @@ import { scanJson, spanAt } from './json-scan.mjs';
 import { storedReply, noSpanWhy, replyPart, partsOfUnit } from './sse-spans.mjs';
 import { isWsHandshake } from './ws-handshake.mjs'; // not ./registry.mjs: the registry imports THIS module
 import { headerOf } from './harnesses.mjs';
-import { extendChain, linked, segmentsOf, segmentsIn, createLinks } from './chain.mjs';
+import { extendChain, linked, segmentsIn, createLinks, withUnread } from './chain.mjs';
 
 const parse = (s) => { if (typeof s !== 'string') return null; try { const v = JSON.parse(s); return v && typeof v === 'object' ? v : null; } catch { return null; } };
 const PARSED = new WeakMap();
@@ -147,8 +147,8 @@ export function createChain(read = null) {
     context(rec) {
       const p = plan(rec);
       if (!p) return null;
-      const segments = segmentsOf(p);
-      return { req: { ...(bodyOf(rec) || {}), input: links.items(p, rec) }, contextState: p.contextState, missing: p.missing, segments,
+      const { items, segments, missing } = links.items(p, rec);
+      return { req: { ...(bodyOf(rec) || {}), input: items }, ...withUnread(p.contextState, p.missing, missing), segments,
         locate: (blk) => locate(blk, rec, segments), ...(p.unstored ? { unrenderable: p.unstored } : {}) };
     },
   };
