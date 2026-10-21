@@ -11,7 +11,7 @@
 // the row's `attrs`, by list position.
 import { createHash } from 'node:crypto';
 import { admitted, flatBlockText, blockFacts, callFacts, replyPartsAnthropic, linearContext } from './analyze.mjs';
-import { hydrateForBoard, anthropicFlat, flatRequest, rawRefOf, wireOf, respRefsOf, extraMessagesOf, nonBlockKeysOf, unknownFacts, headersOf, respOf, slimRec } from './assemble.mjs';
+import { hydrateForBoard, anthropicFlat, flatRequest, rawRefOf, wireOf, respRefsOf, extraMessagesOf, unknownFacts, respOf, slimRec } from './assemble.mjs';
 import { slimBlock, compBucket, firstHuman } from './blockmeta.mjs';
 import { renderOf } from './render-kind.mjs';
 import { blockSpans } from '../adapters/cc.mjs';
@@ -26,7 +26,6 @@ import { CC_THREADS, replyIdOf, patchSystem } from '../dissect/cc-threads.mjs';
 import { hasCompactionPreamble } from '../identity/session-identity.mjs';
 import { sessionKeyOf } from '../dissect/harnesses.mjs';
 import { posCmp } from '../query/projection.mjs';
-import { safeHeaders } from '../capture/redact.mjs';
 import { bodyRetentionOf, retentionLabelOf, reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs';
 
 const SEP = '\x1F';
@@ -164,12 +163,13 @@ export function materialize(baseList, { k, patch, add }) {
 /** A call's base is the last call extracted with the same lane hint; a chain of more than KEYFRAME links starts over (null base). */
 const KEYFRAME = 128;
 
-// The facts the session document reads of any record (src/view/board.mjs itemOf), credential headers masked (4.1 §凭据处置).
+// The facts the session document reads of any record (src/view/board.mjs itemOf), its request headers left in the record: they differ
+// on every call (request ids, lengths), were a sixth of the projection, and are read of the few records that need them (P fix 2026-10-21).
 function itemFacts(r) {
   const rp = respOf(r) || {};
   return jsonClean({ id: r.id, is_llm_call: !!r.is_llm_call, ts_request: r.ts_request, ts: r.ts, endpoint: r.endpoint, proc: r.proc,
     status: rp.status ?? null, body_retention: r.body_retention, retention: bodyRetentionOf(r), retentionLabel: retentionLabelOf(r),
-    body_wire_bytes: r.body_wire_bytes, probeTokens: (rp.body && rp.body.input_tokens) ?? null, req_headers: safeHeaders(headersOf(r)),
+    body_wire_bytes: r.body_wire_bytes, probeTokens: (rp.body && rp.body.input_tokens) ?? null,
     synthKey: r._synthKey });
 }
 const ATTR = ['volatile', 'resRole', 'resPending', 'resError', 'resTruncNote'];
@@ -357,7 +357,7 @@ function callX(rec, { d, format }, { h, req, unparsed }) {
   if (format === 'anthropic') {
     const facts = callFacts(h), u = facts.usage || {};
     const lane = facts.sub ? 'subagent' : facts.monitor ? 'monitor' : hintsOf(rec).lane || 'main';
-    return jsonClean({ ...common, facts, lane, wire: wireOf(h, format, null), nonBlockKeys: nonBlockKeysOf(h, format), rq: slimRec(h).request,
+    return jsonClean({ ...common, facts, lane, wire: wireOf(h, format, null), rq: slimRec(h).request,
       usage: { read: u.cache_read_input_tokens || 0, create: u.cache_creation_input_tokens || 0, fresh: u.input_tokens || 0, out: u.output_tokens || 0 },
       error: !!rec.error || !!facts.failed, replyId: replyIdOf(rec) });
   }
@@ -366,7 +366,7 @@ function callX(rec, { d, format }, { h, req, unparsed }) {
   return jsonClean({ ...common, lane: flatLaneOf(d, rec), hints: hintsOf(rec), msgCount: d.messageCount ? d.messageCount(req) : (req.message_count || 0),
     agent: d.agentOf ? d.agentOf(rec) ?? undefined : undefined, rq: slimRec(h).request, ctx: d.ctxTokens(norm), nu: norm.usage,
     reqIncomplete: reqIncompleteOf(rec), wsIncomplete: wsIncompleteOf(rec), respIncomplete: respIncompleteOf(rec),
-    model: req.model, unparsed, wire: wireOf(rec, d.id, null, norm), nonBlockKeys: nonBlockKeysOf(rec, d.id), usage: norm.canonUsage,
+    model: req.model, unparsed, wire: wireOf(rec, d.id, null, norm), usage: norm.canonUsage,
     stop_reason: norm.stop_reason, error: !!rec.error || unparsed || !!(d.failed && d.failed(norm, rec)), replyId: norm.id ?? null });
 }
 

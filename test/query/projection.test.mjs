@@ -123,9 +123,50 @@ test('(e) GC deletes projections of sessions that are gone, then the least recen
   for (const [k, age] of [['old', 300], ['mid', 200], ['new', 100], ['dead', 0]]) fs.utimesSync(projectionFile(home, k), t0 - age, t0 - age)
   openProjection({ home, fs, key: 'old', errors: [] }) // opening it makes it the most recently opened
   const size = fs.statSync(projectionFile(home, 'mid')).size
-  gcProjections({ home, fs, liveKeys: ['old', 'mid', 'new'], rawBytes: size * 25, now: Date.now() }) // cap = 2.5 files
+  gcProjections({ home, fs, liveKeys: ['old', 'mid', 'new'], capBytes: size * 2.5 })
   const left = ['old', 'mid', 'new', 'dead'].filter((k) => fs.existsSync(projectionFile(home, k)))
   assert.deepEqual(left, ['old', 'new'])
+})
+
+test('(e) GC never evicts a session that is open or followed, and needs to be told which sessions live', () => {
+  const keys = ['a', 'b', 'c']
+  for (const cap of [0, 1, 1e9]) for (const open of keys) {
+    const home = tmpDir('trocar-proj-')
+    for (const k of keys) filled(home, k)
+    gcProjections({ home, fs, liveKeys: keys.filter((k) => k !== open), keepKeys: [open], capBytes: cap })
+    assert.ok(fs.existsSync(projectionFile(home, open)), `cap ${cap}: the open session ${open} stays, even when not listed live and over the cap`)
+    const total = keys.filter((k) => k !== open && fs.existsSync(projectionFile(home, k))).length
+    if (cap === 0) assert.equal(total, 0, 'over the cap: every other one goes')
+  }
+  const home = tmpDir('trocar-proj-')
+  filled(home, 'a')
+  assert.throws(() => gcProjections({ home, fs }), TypeError)
+  assert.ok(fs.existsSync(projectionFile(home, 'a')), 'no list of live sessions deletes nothing')
+})
+
+test('(g) a value that recurs across rows is written once and read back as one shared object', () => {
+  const big = { text: 'a lane\'s first prompt '.repeat(40) }
+  const rowsOf = (n) => Array.from({ length: n }, (_, i) => ({ rid: `20261021T054349Z:${i + 1}`, x: { facts: { first: big, own: `call ${i}` }, wire: { state: 'complete', vendor: 'v'.repeat(60) } },
+    attrs: { 0: { volatile: true, note: 'n'.repeat(60) } } }))
+  // a value of a reference's own shape, at every depth, stays itself
+  const tricky = { rid: '20261021T054349Z:99', x: { $s: 'k', y: { $s: 'not-a-key' }, z: { w: { $s: 'deep' } } }, attrs: { $s: 'x' } }
+  for (const split of [1, 3, 10]) {
+    const home = tmpDir('trocar-proj-'), rs = [...rowsOf(10), tricky]
+    const s = openProjection({ home, fs, key: KEY, errors: [] })
+    for (let i = 0; i < rs.length; i += split) s.append({ rows: rs.slice(i, i + split) })
+    const once = fs.readFileSync(projectionFile(home, KEY), 'utf8')
+    assert.equal(once.split(big.text).length - 1, 2, `split ${split}: the recurring value is on disk twice (its first row, its shared line)`)
+    const again = openProjection({ home, fs, key: KEY, errors: [] })
+    assert.deepEqual(Object.fromEntries(again.rows), Object.fromEntries(rs.map((r) => [r.rid, r])), `split ${split}: rows read back as written`)
+    const r5 = again.rows.get('20261021T054349Z:5'), r6 = again.rows.get('20261021T054349Z:6')
+    assert.equal(r5.x.facts.first, r6.x.facts.first, `split ${split}: one object for every row that holds it`)
+    assert.deepEqual(Object.fromEntries(s.rows), Object.fromEntries(rs.map((r) => [r.rid, r])), `split ${split}: the writing store holds the rows as given`)
+    // a reference whose shared line is gone: the file is rebuilt, never read with a hole
+    fs.writeFileSync(projectionFile(home, KEY), once.split('\n').filter((l) => !l.startsWith('{"s"')).join('\n'))
+    const errors = [], lost = openProjection({ home, fs, key: KEY, errors })
+    assert.equal(lost.rows.size, 0, `split ${split}`)
+    assert.deepEqual(errors.map((e) => e.code), ['projection-rebuilt'], `split ${split}`)
+  }
 })
 
 test('(f) write:false leaves the home byte-identical', () => {
