@@ -134,51 +134,48 @@ function rangeOf(name, input = {}) {
 // parseBashReads (bash read-target parsing) now lives in the shared CC dissector (src/dissect/cc.mjs,
 // imported above) — a file dumped by cat/head/sed -n … IS resident in context like a Read.
 
-// Detect resources introduced by a set of (new) messages.
-function extractResources(messages, step, out) {
-  for (const m of messages) {
-    const content = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]
-    for (const b of content) {
-      if (b.type === 'tool_use') {
-        const arg = toolArg(b.name, b.input)
-        if (FILE_OPS.has(b.name) && arg) addRes(out, 'file', arg, step, b.name, rangeOf(b.name, b.input))
-        else if (b.name === 'Bash' && b.input?.command) {
-          for (const rd of parseBashReads(b.input.command)) addRes(out, 'file', rd.path, step, 'Bash', rd.range)
-        } else if (DIR_OPS.has(b.name) && arg) addRes(out, 'dir', arg, step, b.name)
-        else if ((b.name === 'WebFetch' || b.name === 'WebSearch') && arg)
-          addRes(out, 'link', arg, step, b.name)
-        // Skill invocation: fine-grained kind:'skill' (schema 3.2 kind enum / D8 — no `capability` umbrella).
-        // The tool_use is the point-marker + args source; the resident SKILL.md body is caught below.
-        // normalize to the bare skill name (basename) so a namespaced invocation
-        // (`plugin:skill`) keys to the SAME resource as its resident SKILL.md body
-        // (whose "Base directory" basename is unqualified) — else the card splits in two.
-        else if (b.name === 'Skill') addRes(out, 'skill', String(b.input?.skill || b.input?.command || '?').split(':').pop().split('/').pop(), step, 'Skill')
-      } else if (b.type === 'image') {
-        addRes(out, 'capability', 'image (' + (b.source?.media_type || '?') + ')', step, 'image')
-      } else if (b.type === 'document') {
-        addRes(out, 'capability', 'document (' + (b.source?.media_type || b.title || '?') + ')', step, 'document')
-      } else if (b.type === 'text' && typeof b.text === 'string') {
-        // Skill residency: a skill enters context as a bare `user` `text` block carrying the
-        // verbatim SKILL.md, prefixed "Base directory for this skill: <dir>" — NOT a Read of a
-        // file (so it never lands in "files opened"). basename(dir) = skill name. The body IS
-        // verbatim on the wire, so its length is the resident size (fine kind:'skill', schema 3.2).
-        const sk = b.text.match(/^Base directory for this skill: (\S+)/)
-        if (sk) addRes(out, 'skill', sk[1].split('/').pop(), step, 'skill', `${b.text.length} chars (verbatim body)`)
-        if (/<system-reminder>/.test(b.text)) {
-          if (/CLAUDE\.md/i.test(b.text)) addRes(out, 'scaffold', 'CLAUDE.md', step, 'auto-load')
-          if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(b.text))
-            addRes(out, 'scaffold', 'memory (MEMORY.md)', step, 'auto-load')
-        }
-        // only genuine URLs — strip trailing markdown/punctuation so `**http://x**` or `http://x,`
-        // don't leak the surrounding prose into the label
-        const urls = b.text.match(/https?:\/\/[^\s"'`<>)\]]+/g)
-        if (urls) for (const raw of urls.slice(0, 3)) {
-          const u = raw.replace(/[*_~.,;:!?)\]}>'"]+$/, '')
-          if (/^https?:\/\/[^/]+\.[^/]/.test(u) || /^https?:\/\/[^/]+:\d/.test(u)) addRes(out, 'link', u, step, 'mention')
-        }
-      }
+// The resources one block brings into context, as [kind, label, via, range?] (the lane adds them with addRes at the call that brought
+// the block in). Labels are strings of their own (own): a slice of a command or a text would keep it alive in the lane's ledger.
+function resourcesOf(b) {
+  const out = []
+  const add = (kind, label, via, range) => out.push(range ? [kind, own(label), via, range] : [kind, own(label), via])
+  if (b.type === 'tool_use') {
+    const arg = toolArg(b.name, b.input)
+    if (FILE_OPS.has(b.name) && arg) add('file', arg, b.name, rangeOf(b.name, b.input))
+    else if (b.name === 'Bash' && b.input?.command) {
+      for (const rd of parseBashReads(b.input.command)) add('file', rd.path, 'Bash', rd.range)
+    } else if (DIR_OPS.has(b.name) && arg) add('dir', arg, b.name)
+    else if ((b.name === 'WebFetch' || b.name === 'WebSearch') && arg) add('link', arg, b.name)
+    // Skill invocation: fine-grained kind:'skill' (schema 3.2 kind enum / D8 — no `capability` umbrella).
+    // The tool_use is the point-marker + args source; the resident SKILL.md body is caught below.
+    // normalize to the bare skill name (basename) so a namespaced invocation
+    // (`plugin:skill`) keys to the SAME resource as its resident SKILL.md body
+    // (whose "Base directory" basename is unqualified) — else the card splits in two.
+    else if (b.name === 'Skill') add('skill', String(b.input?.skill || b.input?.command || '?').split(':').pop().split('/').pop(), 'Skill')
+  } else if (b.type === 'image') {
+    add('capability', 'image (' + (b.source?.media_type || '?') + ')', 'image')
+  } else if (b.type === 'document') {
+    add('capability', 'document (' + (b.source?.media_type || b.title || '?') + ')', 'document')
+  } else if (b.type === 'text' && typeof b.text === 'string') {
+    // Skill residency: a skill enters context as a bare `user` `text` block carrying the
+    // verbatim SKILL.md, prefixed "Base directory for this skill: <dir>" — NOT a Read of a
+    // file (so it never lands in "files opened"). basename(dir) = skill name. The body IS
+    // verbatim on the wire, so its length is the resident size (fine kind:'skill', schema 3.2).
+    const sk = b.text.match(/^Base directory for this skill: (\S+)/)
+    if (sk) add('skill', sk[1].split('/').pop(), 'skill', `${b.text.length} chars (verbatim body)`)
+    if (/<system-reminder>/.test(b.text)) {
+      if (/CLAUDE\.md/i.test(b.text)) add('scaffold', 'CLAUDE.md', 'auto-load')
+      if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(b.text)) add('scaffold', 'memory (MEMORY.md)', 'auto-load')
+    }
+    // only genuine URLs — strip trailing markdown/punctuation so `**http://x**` or `http://x,`
+    // don't leak the surrounding prose into the label
+    const urls = b.text.match(/https?:\/\/[^\s"'`<>)\]]+/g)
+    if (urls) for (const raw of urls.slice(0, 3)) {
+      const u = raw.replace(/[*_~.,;:!?)\]}>'"]+$/, '')
+      if (/^https?:\/\/[^/]+\.[^/]/.test(u) || /^https?:\/\/[^/]+:\d/.test(u)) add('link', u, 'mention')
     }
   }
+  return out
 }
 function addRes(map, kind, label, step, via, range) {
   const key = kind + '::' + label
@@ -235,28 +232,140 @@ function acceptPath(p) {
 const own = (s) => (' ' + s).slice(1)
 // What a subagent lane keeps of its first user text to find the spawn that opened it (finish: the spawn's prompt opens that text).
 const FIRST_TEXT_CHARS = 4096
-function extractSeenPaths(text, step, seen, cap) {
-  if (!text || typeof text !== 'string') return
+// ── THE ANALYZER'S FACTS (RFC 4.3 §3 · §4) ─────────────────────────────────────────────────────────────────────────────────────────
+// Everything the fold reads of a message block comes from blockFacts(block), a pure producer whose result is plain JSON (the context
+// projection persists it, src/query/projection.mjs).
+// Every string a fact keeps is its own (own): a fact outlives its record.
+
+// A text as an event shows it: whitespace runs squashed, trimmed, its first 200 characters, and its length.
+const PREVIEW_CHARS = 200
+const evText = (s) => ({ preview: own(s.replace(/\s+/g, ' ').trim().slice(0, PREVIEW_CHARS)), chars: s.length })
+
+// SEEN PATHS. A block's path-like tokens (the lane's "seen but never opened" files), in text order as runs [i, n] over its distinct
+// paths `p`: the lane replays them against its own ledger with its per-block cap of NEW paths (seeIn), which is where the scan of
+// one text used to stop. At most SEEN_RUNS runs are kept: past them a lane would see a block's later tokens only if fewer than its
+// cap of the first SEEN_RUNS runs were new to it — a convenience index, never a fidelity claim (see PATH_RE).
+const SEEN_RUNS = 400
+function seenRuns(text) {
+  if (!text || typeof text !== 'string') return undefined
   text = text.replace(/https?:\/\/[^\s"'`<>)\]]+/g, ' ') // drop URLs so remote asset paths aren't "seen files"
   PATH_RE.lastIndex = 0
-  let m, n = 0
-  while ((m = PATH_RE.exec(text)) && n < cap) {
+  const p = [], at = new Map(), r = []
+  let m
+  while ((m = PATH_RE.exec(text))) {
     const raw = m[1] || m[0] // group 1 = the dotfile capture; else whole match
     const end = m.index + m[0].length
     if (text[end] === '(') continue // response.json() etc. — a method call, not a file
-    const p = raw.replace(/^[\s"'(]+/, '').replace(/[.,;:!?)\]}>'"`]+$/, '')
-    if (p.length < 3 || p.endsWith('/') || !acceptPath(p)) continue
-    const ex = seen.get(p)
-    if (ex) ex.count++
-    else { const q = own(p); seen.set(q, { path: q, firstStep: step, count: 1 }); n++ } // cap counts DISTINCT paths
+    const path = raw.replace(/^[\s"'(]+/, '').replace(/[.,;:!?)\]}>'"`]+$/, '')
+    if (path.length < 3 || path.endsWith('/') || !acceptPath(path)) continue
+    let i = at.get(path)
+    if (i === undefined) { i = p.length; at.set(path, i); p.push(own(path)) }
+    const last = r[r.length - 1]
+    if (last && last[0] === i) last[1]++
+    else if (r.length === SEEN_RUNS) break
+    else r.push([i, 1])
+  }
+  return r.length ? { p, r } : undefined
+}
+// a block's seen paths into the lane's ledger: occurrences of known paths counted, at most `cap` new paths taken (the scan stops there)
+function seeIn(seen, s, step, cap) {
+  if (!s) return
+  let n = 0
+  for (const [i, k] of s.r) {
+    const ex = seen.get(s.p[i])
+    if (ex) { ex.count += k; continue }
+    const e = { path: s.p[i], firstStep: step, count: 1 }
+    seen.set(e.path, e)
+    if (++n >= cap) return
+    e.count += k - 1
   }
 }
+
+// USER TEXT. A user message's event text is its text blocks joined with '\n', the <system-reminder>s taken out, trimmed — a
+// per-MESSAGE text. Each text block keeps what that join needs of it: its text without reminders as a piece (length, leading and
+// trailing whitespace, squashed head), and how it reads when a reminder left open by an earlier block runs into it.
+const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g
+const R_OPEN = '<system-reminder>', R_CLOSE = '</system-reminder>'
+function piece(s) {
+  const t = s.trim()
+  return { len: s.length, lead: s.length - s.trimStart().length, trail: t ? s.length - s.trimEnd().length : s.length, head: own(t.replace(/\s+/g, ' ').slice(0, PREVIEW_CHARS)) }
+}
+// s without its reminders as a piece `m`, and, when a reminder in it never closes, `o`: the piece up to that reminder (what is left of
+// s when a later block closes it)
+function stripped(s) {
+  let out = '', at = 0, m
+  REMINDER.lastIndex = 0
+  while ((m = REMINDER.exec(s))) { out += s.slice(at, m.index); at = m.index + m[0].length }
+  const k = s.indexOf(R_OPEN, at)
+  out += s.slice(at)
+  return k < 0 ? { m: piece(out) } : { m: piece(out), o: piece(out.slice(0, out.length - (s.length - k))) }
+}
+function userText(text) {
+  const s = text == null ? '' : String(text)
+  const c = s.indexOf(R_CLOSE)
+  // entering inside a reminder an earlier block opened: it ends at this block's first close
+  return c < 0 ? { u: stripped(s) } : { u: stripped(s), ui: stripped(s.slice(c + R_CLOSE.length)) }
+}
+const NL = { len: 1, lead: 1, trail: 1, head: '' }
+// a user message's event text { preview, chars } from its blocks' facts, or null when there is none
+function userEventOf(blocks) {
+  if (blocks.some((b) => b.type === 'tool_result')) return null
+  const parts = blocks.filter((b) => b.type === 'text'), pieces = []
+  let inside = false
+  parts.forEach((b, i) => {
+    if (i && !inside) pieces.push(NL)
+    const v = inside ? b.ui : b.u
+    if (!v) return // still inside: the reminder swallows this block
+    const cut = !!v.o && parts.slice(i + 1).some((x) => x.ui) // an open reminder closes only if a later block has a close
+    pieces.push(cut ? v.o : v.m)
+    inside = cut
+  })
+  const len = pieces.reduce((a, p) => a + p.len, 0)
+  const edge = (ps, side) => { let w = 0; for (const p of ps) { if (p[side] === p.len) { w += p.len; continue } return w + p[side] } return w }
+  const chars = len - edge(pieces, 'lead') - edge([...pieces].reverse(), 'trail')
+  if (chars <= 0) return null
+  let preview = '', gap = false
+  for (const p of pieces) {
+    if (p.lead === p.len) { if (p.len) gap = true; continue }
+    if (preview && (gap || p.lead)) preview += ' '
+    preview += p.head
+    gap = p.trail > 0
+    if (preview.length >= PREVIEW_CHARS) break
+  }
+  return { preview: preview.slice(0, PREVIEW_CHARS), chars }
+}
+
 function textOfResult(b) {
   const c = b.content
   return typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text || '').join('\n') : ''
 }
 
 // Classify the assistant turn a call PRODUCED into ReAct events (uses normResp).
+// What a block an omitted text names in an event says in its place (invariant 4: preview + chars, never silently emptied).
+const TEXT_OMITTED = 'derived event — full text is not shipped here; read it from this step\'s blocks'
+
+// blockFacts(block) → the facts of one message block: its type; a tool_use's id and name; a tool_result's tool_use_id and its
+// observation text (`obs`, absent when it has none); the resources it brings in (`res`); the paths it shows (`seen`); a text's
+// user-event pieces (`u`, `ui`).
+export function blockFacts(b) {
+  const f = { type: b.type }
+  if (b.type === 'tool_use') { f.id = b.id; f.name = b.name }
+  if (b.type === 'tool_result') {
+    f.tool_use_id = b.tool_use_id
+    const c = b.content
+    const text = typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text || `[${x.type}]`).join('\n') : JSON.stringify(c)
+    if (typeof text === 'string') f.obs = evText(text)
+    f.seen = seenRuns(textOfResult(b))
+  } else if (b.type === 'text') {
+    f.seen = seenRuns(b.text)
+    Object.assign(f, userText(b.text))
+  }
+  const res = resourcesOf(b)
+  if (res.length) f.res = res
+  return defined(f)
+}
+// a fact object without its undefined keys: what a JSON round trip gives back
+const defined = (o) => { for (const k of Object.keys(o)) if (o[k] === undefined) delete o[k]; return o }
 function responseEvents(r, step, streamId) {
   const rs = normResp(r)
   const ev = []
@@ -269,35 +378,6 @@ function responseEvents(r, step, streamId) {
       step, streamId, tool: c.name, id: c.id,
       arg: toolArg(c.name, c.input), input: c.input,
     })
-  }
-  return ev
-}
-
-function observationEvents(newMessages, step, streamId, toolNameById) {
-  const ev = []
-  for (const m of newMessages) {
-    if (m.role !== 'user' || !Array.isArray(m.content)) continue
-    for (const b of m.content) {
-      if (b.type !== 'tool_result') continue
-      const src = toolNameById.get(b.tool_use_id) || 'tool'
-      const c = b.content
-      const text = typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text || `[${x.type}]`).join('\n') : JSON.stringify(c)
-      ev.push({ type: 'observation', step, streamId, source: src, tool_use_id: b.tool_use_id, text })
-    }
-  }
-  return ev
-}
-
-function userEvents(newMessages, step, streamId) {
-  const ev = []
-  for (const m of newMessages) {
-    if (m.role !== 'user') continue
-    const content = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]
-    const hasToolResult = content.some((b) => b.type === 'tool_result')
-    if (hasToolResult) continue
-    const text = content.filter((b) => b.type === 'text').map((b) => b.text).join('\n')
-    const human = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
-    if (human) ev.push({ type: 'user', step, streamId, text: human })
   }
   return ev
 }
@@ -523,6 +603,7 @@ export function createAnalyzer() {
     }
     return step
   }
+  const shown = (m) => ({ preview: own(m.preview), chars: m.chars, text_omitted: TEXT_OMITTED })
 
   // ── per stream: deltas → events + resources ─────────────────────────────────
   function eventsOf(s, st, step) {
@@ -603,18 +684,24 @@ export function createAnalyzer() {
       step.summarizing = true
       s.events.push({ type: 'summarize', step: step.at, streamId: s.id, out: step.norm.usage?.output_tokens })
     }
-    extractResources(newMsgs, step.at, st.resMap)
-    // seen-but-not-opened filenames: scan tool-result text (bigger cap) + prose (smaller)
-    for (const m of newMsgs) {
-      const content = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]
-      for (const b of content) {
-        if (b.type === 'tool_result') extractSeenPaths(textOfResult(b), step.at, st.seenMap, 80)
-        else if (b.type === 'text') extractSeenPaths(b.text, step.at, st.seenMap, 40)
+    const added = newMsgs.map((m) => ({ role: m.role, blocks: (Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]).map(blockFacts) }))
+    for (const m of added) for (const b of m.blocks) for (const e of b.res || []) addRes(st.resMap, e[0], e[1], step.at, e[2], e[3])
+    // seen-but-not-opened filenames: tool-result text (bigger cap) + prose (smaller)
+    for (const m of added) for (const b of m.blocks) seeIn(st.seenMap, b.seen, step.at, b.type === 'tool_result' ? 80 : 40)
+    seeIn(st.seenMap, seenRuns(step.norm.text || ''), step.at, 40)
+    for (const m of added) {
+      if (m.role !== 'user') continue
+      const e = userEventOf(m.blocks)
+      if (e) s.events.push({ type: 'user', step: step.at, streamId: s.id, ...shown(e) })
+    }
+    for (const m of added) {
+      if (m.role !== 'user') continue
+      for (const b of m.blocks) {
+        if (b.type !== 'tool_result') continue
+        s.events.push({ type: 'observation', step: step.at, streamId: s.id, source: st.tools.get(b.tool_use_id) || 'tool', tool_use_id: b.tool_use_id,
+          ...(b.obs ? shown(b.obs) : { text: undefined }) })
       }
     }
-    extractSeenPaths(step.norm.text || '', step.at, st.seenMap, 40)
-    s.events.push(...userEvents(newMsgs, step.at, s.id))
-    s.events.push(...observationEvents(newMsgs, step.at, s.id, st.tools))
     if (step.error) s.events.push({ type: 'error', step: step.at, streamId: s.id, msg: step.errMsg })
     else if (!isSummarize) s.events.push(...responseEvents(step.rec, step.at, s.id))
     st.prevCount = msgs.length
