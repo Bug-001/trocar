@@ -5,8 +5,9 @@
 // names the page the way every paged document does.
 //
 // FOLDED (3.5 §内存有界): the session's records are read in step order, a chunk of stored bytes at a time, and folded one by one;
-// a record's body is let go once its call is assembled, so what a query holds is the SPINE — every call's timeline meta, each
-// lane's previous call, the records a cross-record context stitches from — plus one chunk, never the session. A page then reads
+// a record's body is let go once its call is assembled, so what a query holds is the SPINE — every call's timeline meta, the lanes'
+// baselines up to BASELINE_BYTES (the rest rebuilt by id), the records a cross-record context stitches from — plus one chunk, never
+// the session. A page then reads
 // back, by id, only the calls it ships with their bodies (pageView: nearest the window's middle, within PAGE_BODY_BYTES).
 // The reads are a scan (`remember: false`): the spine is what is remembered, not the records.
 //
@@ -18,6 +19,7 @@
 // heap bound moved, below), is folded from scratch. Either way the document is the one a fold from scratch gives, and a hit and a
 // miss are the same code path.
 import { sessionFold, pageView } from '../../view/board.mjs';
+import { BASELINE_BYTES } from '../../view/assemble.mjs';
 import { OrderBound } from '../../view/analyze.mjs';
 import { recordsAt } from '../records.mjs';
 import { indexRows, sessionGroups } from '../rows.mjs';
@@ -29,12 +31,15 @@ export const params = Object.freeze(['id', 'after', 'limit']);
 
 // What the fold reads at once, in the rows' stored bytes (at least one row).
 const CHUNK_STORED = 8 * 1048576;
-// What a spine costs in the heap per row (a call's meta, its lane's events and resources). Measured 2026-10-21 on the generated
-// Claude Code sessions of test/query/big-session.mjs (forced GC), rounded up.
-export const SPINE_PER_ROW = 16 * 1024;
-// What the records being worked on cost in the heap per stored byte: a chunk read and parsed, the lanes' previous calls, a page's
-// bodies assembled and serialized (measured with the spine, above).
-const WORK_PER_STORED = 6;
+// What a spine costs in the heap per row (a call's meta, its lane's events and resources, a stitched context's locators). Measured
+// 2026-10-21 on the user's live session and the generated ones of test/query/big-session.mjs (forced GC).
+export const SPINE_PER_ROW = 32 * 1024;
+// What the records being worked on cost in the heap per stored byte (and the lanes' baselines per character of their blocks): a
+// chunk read and parsed, a page's bodies assembled and serialized (measured with the spine, above).
+const WORK_PER_STORED = 4;
+/** What the lanes' cache baselines (src/view/assemble.mjs BASELINE_BYTES: the blocks, prefix chain and block keys of each lane's
+ *  last prefix-establishing call, the most recently used held, the rest rebuilt by record id) cost in the heap at most, beside the spine. */
+export const BASELINE_HEAP = BASELINE_BYTES * WORK_PER_STORED;
 
 const spines = warmCache({ cost: (v) => v.cost });
 // analyze()'s step order (src/view/analyze.mjs stepOrder) over the index rows: `ts` is the record's ts_request
@@ -46,7 +51,8 @@ const mb = (n) => Math.round((n / 1048576) * 10) / 10;
 function working(rows) {
   let max = 0;
   for (const r of rows) max = Math.max(max, r.stored_bytes || 0);
-  return (CHUNK_STORED + 2 * max + PAGE_BODY_BYTES) * WORK_PER_STORED;
+  // the baselines may hold one lane's past BASELINE_BYTES (the one in use is always held): `max` covers it
+  return (CHUNK_STORED + max + PAGE_BODY_BYTES) * WORK_PER_STORED + BASELINE_HEAP;
 }
 /** The rows a query folds: all of them while their spine fits the heap budget, else the newest that do, with the `truncated` the
  *  document carries — the same {shown, total, kept_mb, file_mb} the board draws (invariant 4, 1.5 K-06). */

@@ -216,6 +216,11 @@ function acceptPath(p) {
   }
   return true
 }
+// A string the fold keeps (a seen path, a byte context, a subagent's first text) in bytes of its own: a slice of a block's text, or
+// a cons string over one, would keep that whole text alive for as long as the fold lives (3.5 §内存有界).
+const own = (s) => (' ' + s).slice(1)
+// What a subagent lane keeps of its first user text to find the spawn that opened it (finish: the spawn's prompt opens that text).
+const FIRST_TEXT_CHARS = 4096
 function extractSeenPaths(text, step, seen, cap) {
   if (!text || typeof text !== 'string') return
   text = text.replace(/https?:\/\/[^\s"'`<>)\]]+/g, ' ') // drop URLs so remote asset paths aren't "seen files"
@@ -229,7 +234,7 @@ function extractSeenPaths(text, step, seen, cap) {
     if (p.length < 3 || p.endsWith('/') || !acceptPath(p)) continue
     const ex = seen.get(p)
     if (ex) ex.count++
-    else { seen.set(p, { path: p, firstStep: step, count: 1 }); n++ } // cap counts DISTINCT paths
+    else { const q = own(p); seen.set(q, { path: q, firstStep: step, count: 1 }); n++ } // cap counts DISTINCT paths
   }
 }
 function textOfResult(b) {
@@ -478,7 +483,8 @@ export function createAnalyzer() {
     const st = state.get(stream)
     if (stream.kind === 'subagent' && stream.calls.length === 1) {
       const firstUser = r.request.messages.find((m) => m.role === 'user')
-      st.firstText = firstUser ? textOfMessage(firstUser).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '') : ''
+      // its head only: a spawn's prompt opens it (finish), and the whole first message is a context's worth of text per lane
+      st.firstText = firstUser ? own(textOfMessage(firstUser).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').slice(0, FIRST_TEXT_CHARS)) : ''
     }
     const from = stream.events.length
     eventsOf(stream, st, step)
@@ -497,7 +503,7 @@ export function createAnalyzer() {
       const full = e.text
       delete e.text
       // its own 200 characters: a slice would keep the whole text alive for as long as the event lives (the fold keeps events)
-      e.preview = (' ' + full.replace(/\s+/g, ' ').trim().slice(0, 200)).slice(1)
+      e.preview = own(full.replace(/\s+/g, ' ').trim().slice(0, 200))
       e.chars = full.length
       e.text_omitted = 'derived event — full text is not shipped here; read it from this step\'s blocks'
     }
@@ -910,7 +916,7 @@ export function cacheBreak(prevFlat, curFlat, opts = {}) {
     // byte-level localization within the first diverging block (structural estimate)
     const prevText = flatBlockText(prev), curText = flatBlockText(cur)
     const off = firstDiffOffset(prevText, curText)
-    if (off >= 0) { out.byteOffset = off; out.byteContext = curText.slice(off, off + 48) }
+    if (off >= 0) { out.byteOffset = off; out.byteContext = own(curText.slice(off, off + 48)) }
     // analyze()'s drop-based compaction verdict is authoritative — a compaction that kept the first
     // user turn breaks mid-history; without the hint that reads as 'content-changed'.
     if (opts.compaction) out.cause = 'compaction'

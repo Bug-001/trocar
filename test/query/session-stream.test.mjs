@@ -14,6 +14,9 @@ import fs from 'node:fs'
 import { runQuery, PAGE_BODY_BYTES } from '../../src/query/named/index.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { sessionView } from '../../src/view/board.mjs'
+import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
+import { recordsAt } from '../../src/query/records.mjs'
 
 // a context of another process: its own fs object is its own cache key (src/query/warm.mjs fsTag), so nothing it folds is shared
 const freshFs = () => ({ ...fs })
@@ -149,3 +152,22 @@ test('subagents side by side on a WebSocket each: a call\'s cache break is again
     assert.ok(sub[i].cacheBreak.idx > sub[i - k].cacheBreak.idx, `subagent call ${i} keeps more than its agent's previous call did`)
   }
 })
+
+// More lanes than their baselines fit BASELINE_BYTES (3.5 §内存有界: the most recently used held, the rest rebuilt from their record
+// read back by id): forty subagents side by side, each a few calls of ~400 KB a turn. Which baselines were let go changes the cost,
+// never the answer: every call's meta (cache break, prefix digest, ground truth, composition) is the batch fold's, which holds
+// every record (read as the query reads them) in memory and lets no baseline go.
+const metaOf = (lanes) => JSON.stringify(lanes.map(({ giLocal, ...l }) => ({ ...l, calls: l.calls.map(({ flat, nonBlockKeys, norm, rec, paged_out, ...c }) => c) })))
+for (const wire of ['http', 'threads', 'ws', 'chat']) {
+  test(`a ${wire} session whose lanes' baselines exceed BASELINE_BYTES answers the batch fold's meta for every call`, async () => {
+    const home = path.join(tmpDir('trocar-sbase-'), '.trocar')
+    const s = bigSession({ home, wire, growth: 1_600_000, subEvery: 2, subLanes: 40, subLen: 8 })
+    s.append(160)
+    const doc = await session(home, { id: s.id, after: '0', limit: '60' }, { fs: freshFs() })
+    const rows = sessionGroups(await indexRows({ home, fs, errors: [] })).get(s.id)
+    const records = [...recordsAt({ home, fs, rows, errors: [], remember: false })]
+    const batch = sessionView(records, s.id)
+    assert.equal(doc.page.total, 160)
+    assert.equal(metaOf(doc.analyzed.lanes), metaOf(batch.analyzed.lanes))
+  })
+}
