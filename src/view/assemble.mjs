@@ -10,7 +10,7 @@ import { compactionVerdict } from '../identity/session-identity.mjs';
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf, captureLabelsOf } from '../dissect/capture-labels.mjs'; // #21 request-body labels, D38 WebSocket labels, response labels; captureLabelsOf: the per-call wire.labels (4.6 §记录)
 import { blockSpans } from '../adapters/cc.mjs';
 import { scanJson, spanAt } from '../dissect/json-scan.mjs';
-import { slimBlock, compBuckets, firstAsk, firstHuman } from './blockmeta.mjs';
+import { slimBlock, compBuckets, firstHuman, HEAD, tellApart } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../raw/refs.mjs';
 import { fieldTextOf, TEXT_REF_FIELD } from '../dissect/record-fields.mjs';
 import { sessionKeyOf, observerEffectsOf, hintsOf } from '../dissect/harnesses.mjs';
@@ -286,7 +286,7 @@ function flatLaneFold(d, read, baselines) {
     };
     placed(call, r, self);
     laneOfCall.set(call, lane);
-    if (!byLane.has(lane)) { byLane.set(lane, []); asks.set(call, firstAsk(flat)); } // a lane's first call: its task (finish)
+    if (!byLane.has(lane)) { byLane.set(lane, []); asks.set(call, firstHuman(flat)); } // a lane's first call: its first prompt, the task tellApart says
     byLane.get(lane).push(call);
     // A call that failed never established a cache prefix, so it MUST NOT become the next baseline. A call whose request
     // was not stored does (with no blocks, as in the ETL): the next call then has no known prefix to compare with.
@@ -310,7 +310,7 @@ function flatLaneFold(d, read, baselines) {
       // the compaction events the board's outline lists, carrying the step's inference marker with them (invariant 4)
       const events = lc.filter((c) => c.compaction).map((c) => ({ type: 'compaction', step: c.gi, streamId: k, from: c.evictedFrom, to: c.evictedTo,
         inferred: c.compactionInferred, confidence: c.compactionConfidence, basis: c.compactionBasis }));
-      return { id: k, streamId: k, ...FLAT_LANES[k], task: asks.get(lc[0]) ?? null, calls: lc, events, resources: [], seenFiles: [],
+      return { id: k, streamId: k, ...FLAT_LANES[k], task: null, [HEAD]: asks.get(lc[0]) ?? null, calls: lc, events, resources: [], seenFiles: [],
         giLocal: new Map(lc.map((c, i) => [c.gi, i])), peakCtx: lc.reduce((m, c) => Math.max(m, c.ctx), 1),
         spawnStep: null, parent: null, flagged: 0 };
     });
@@ -549,6 +549,7 @@ export function createAssembler({ read = null } = {}) {
     const first = (v) => (v.steps.length ? v.steps[0].gi : Infinity);
     const views = [...folds.values()].map((f) => f.finish()).sort((a, b) => first(a) - first(b));
     const A = views.length === 1 ? views[0] : mergeViews(views);
+    tellApart(A.lanes); // every lane's task, sub-agents told apart across every wire's lanes at once
     if (unknown.length) A.unknown = unknownSummary(facts(unknown), true);
     return A;
   }
@@ -640,7 +641,7 @@ function mergeViews(views) {
   for (const l of views.flatMap((v) => v.lanes || [])) {
     const cur = by.get(l.id);
     if (!cur) { by.set(l.id, { ...l, calls: [...l.calls], events: [...(l.events || [])], resources: [...(l.resources || [])] }); continue; }
-    if (l.calls.length && (!cur.calls.length || l.calls[0].gi < cur.calls[0].gi)) cur.task = l.task ?? null; // the earliest call's side
+    if (l.calls.length && (!cur.calls.length || l.calls[0].gi < cur.calls[0].gi)) { cur.task = l.task ?? null; delete cur[HEAD]; if (HEAD in l) cur[HEAD] = l[HEAD]; } // the earliest call's side
     cur.calls = [...cur.calls, ...l.calls].sort((a, b) => a.gi - b.gi);
     cur.events.push(...(l.events || []));
     cur.resources.push(...(l.resources || []));

@@ -219,8 +219,33 @@ export function firstHuman(flat) {
   }
   return null;
 }
-/** firstAsk(flat) → the lane's task from its first call's blocks: taskOf(firstHuman(flat)). */
-export const firstAsk = (flat) => taskOf(firstHuman(flat));
+/** A lane's first prompt (firstHuman of its first call), kept on the lane under a symbol key: no document carries it. */
+export const HEAD = Symbol('first prompt');
+// Sub-agents a spawn does not name are told apart by their first prompts (4.4 §看板 v2 需要的补充 `lanes[].task`): a lane's task starts at the
+// line where its prompt departs from the sibling it shares the longest prefix with (an identical prompt is no sibling to depart from).
+// Sorted, that sibling is a neighbour: n lanes cost a sort, not n² comparisons. → Map<lane, offset> (0: from the start).
+function departures(heads) {
+  const list = heads.filter(([, h]) => h).sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+  const common = (a, b) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
+  const out = new Map();
+  for (let i = 0; i < list.length; i++) {
+    const [s, h] = list[i];
+    let d = 0;
+    for (let j = i - 1; j >= 0; j--) if (list[j][1] !== h) { d = Math.max(d, common(h, list[j][1])); break; }
+    for (let j = i + 1; j < list.length; j++) if (list[j][1] !== h) { d = Math.max(d, common(h, list[j][1])); break; }
+    out.set(s, d < h.length ? h.lastIndexOf('\n', d - 1) + 1 : 0);
+  }
+  return out;
+}
+/** tellApart(lanes) → lanes, each lane that carries its first prompt (`lane[HEAD]`: no spawn named it) given its `task` (4.4 §看板 v2
+ *  需要的补充): that prompt, a sub-agent's from the line it departs from its siblings — every such sub-agent lane of the session, whatever
+ *  wire it came on, so the rule is one (invariant 3). Run once, on the session's whole set of lanes. */
+export function tellApart(lanes) {
+  const open = lanes.filter((l) => HEAD in l);
+  const departs = departures(open.filter((l) => l.kind === 'subagent').map((l) => [l, l[HEAD]]));
+  for (const l of open) l.task = taskOf(l[HEAD] && l[HEAD].slice(departs.get(l) || 0));
+  return lanes;
+}
 
 // Fields that carry the block's CONTENT. These are what must not cross the wire; everything else on
 // a block is metadata the collapsed row, the diff and the timeline need on every call.

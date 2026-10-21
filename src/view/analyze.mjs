@@ -25,7 +25,7 @@ import { compactionVerdict, hasCompactionPreamble } from '../identity/session-id
 // analyze.mjs too; the cycle is safe because respOf is only CALLED at runtime, after both modules
 // have finished evaluating. test/view/analyze-admission.test.mjs pins both module load orders.)
 import { respOf } from './assemble.mjs'
-import { taskOf } from './blockmeta.mjs'
+import { HEAD, taskOf } from './blockmeta.mjs'
 export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
 
 const FILE_OPS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
@@ -222,22 +222,6 @@ function acceptPath(p) {
 const own = (s) => (' ' + s).slice(1)
 // What a subagent lane keeps of its first user text to find the spawn that opened it (finish: the spawn's prompt opens that text).
 const FIRST_TEXT_CHARS = 4096
-// Sub-agents a spawn does not name are told apart by their first prompts (4.4 §看板 v2 需要的补充 `lanes[].task`): a lane's task starts at the
-// line where its prompt departs from the sibling it shares the longest prefix with (an identical prompt is no sibling to depart from).
-// Sorted, that sibling is a neighbour: n lanes cost a sort, not n² comparisons. → Map<lane, offset> (0: from the start).
-function departures(heads) {
-  const list = heads.filter(([, h]) => h).sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))
-  const common = (a, b) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i }
-  const out = new Map()
-  for (let i = 0; i < list.length; i++) {
-    const [s, h] = list[i]
-    let d = 0
-    for (let j = i - 1; j >= 0; j--) if (list[j][1] !== h) { d = Math.max(d, common(h, list[j][1])); break }
-    for (let j = i + 1; j < list.length; j++) if (list[j][1] !== h) { d = Math.max(d, common(h, list[j][1])); break }
-    out.set(s, d < h.length ? h.lastIndexOf('\n', d - 1) + 1 : 0)
-  }
-  return out
-}
 function extractSeenPaths(text, step, seen, cap) {
   if (!text || typeof text !== 'string') return
   text = text.replace(/https?:\/\/[^\s"'`<>)\]]+/g, ' ') // drop URLs so remote asset paths aren't "seen files"
@@ -644,14 +628,14 @@ export function createAnalyzer() {
       }
       if (best) { spawnOf.set(s, best); childOf.set(best, idOf.get(s)) }
     }
-    const departs = departures(live.filter((s) => s.kind === 'subagent' && !spawnOf.has(s)).map((s) => [s, state.get(s).ask]))
     const view = live.map((s) => {
       const id = idOf.get(s), st = state.get(s), b = spawnOf.get(s)
       const events = s.events.map((e) => ({ ...e, step: gi(e.step), streamId: id, ...(childOf.has(e) ? { childStreamId: childOf.get(e) } : null) }))
       const resources = EVENT_ONLY_KINDS.has(s.kind) ? [] : [...st.resMap.values()].map((r) => ({ ...r,
         segments: r.segments.map((g) => ({ enter: gi(g.enter), evict: gi(g.evict) })), loads: r.loads.map((l) => ({ ...l, step: gi(l.step) })) }))
       const out = { id, kind: s.kind, calls: [...s.calls], events, resources, parent: b ? sid.get(b.streamId) : null, spawnArg: b ? b.arg : null,
-        task: (b && b.arg) || taskOf(st.ask && st.ask.slice(departs.get(s) || 0)) } // 4.4 §看板 v2 需要的补充
+        // a spawned lane says its spawn's argument; the rest, their first prompt, said by tellApart once every wire's lanes are in (4.4 §看板 v2 需要的补充)
+        ...(b ? { task: b.arg || taskOf(st.ask) } : { task: null, [HEAD]: st.ask ?? null }) }
       if (!EVENT_ONLY_KINDS.has(s.kind)) {
         // "only seen" = matched paths minus anything actually opened. Dedupe absolute-vs-relative
         // spellings of the SAME opened file (path-boundary suffix), but keep distinct-directory
@@ -676,7 +660,7 @@ export function createAnalyzer() {
         const laneId = s.kind === 'subagent' ? s.id : s.kind
         return {
           id: laneId, streamId: s.id, kind: s.kind, icon: LANE_META[s.kind].icon,
-          label: LANE_META[s.kind].label, task: s.task,
+          label: LANE_META[s.kind].label, task: s.task, ...(HEAD in s ? { [HEAD]: s[HEAD] } : null),
           ...(LANE_META[s.kind].note ? { note: LANE_META[s.kind].note } : null),
           calls: s.calls, events: s.events, resources: s.resources, seenFiles: s.seenFiles || [], giLocal,
           peakCtx: s.calls.reduce((m, c) => Math.max(m, c.ctx), 1),
@@ -698,7 +682,7 @@ export function createAnalyzer() {
     }
     return { streams: view, steps: stepList, stats, lanes }
   }
-  // ask(lane, text): the lane's first prompt, said by the caller that holds the first call's blocks (src/view/assemble.mjs firstAsk)
+  // ask(lane, text): the lane's first prompt, said by the caller that holds the first call's blocks (src/view/blockmeta.mjs firstHuman)
   const ask = (s, text) => { state.get(s).ask = text }
   return { push, finish, drop, ask, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()] }
 }

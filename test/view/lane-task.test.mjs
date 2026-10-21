@@ -63,3 +63,19 @@ test('sub-agents whose first prompts share a long preamble are told apart by the
   assert.deepEqual(lanes.map((l) => l.task), ['Run the plan', from('## Your task: implement   the retry queue in src/queue.mjs and its tests'),
     from('## Your task: review the branch'), from('## Your task: review the branch')])
 })
+
+// A session whose sub-agents come on two wires (D37 ①: the wire is per call): Claude Code's, and a flat-lane wire's, every sub-agent's
+// first prompt opening with the same workflow preamble. The rule is one over every sub-agent lane of the session (invariant 3).
+const PREAMBLE = Array.from({ length: 40 }, (_, i) => `[workflow] shared instruction ${i}: work only in the given worktree and report back.`).join('\n')
+for (const flat of ['chat', 'ws'])
+  test(`http + ${flat}: sub-agents sharing a preamble are told apart on every wire, none named by the preamble`, async () => {
+    const home = path.join(tmpDir('trocar-lanetask-'), '.trocar')
+    const opts = { home, growth: 600, subEvery: 3, subLanes: 3, subLen: 6, preamble: PREAMBLE }
+    const a = bigSession({ ...opts, wire: 'http' }), b = bigSession({ ...opts, wire: flat, segment: '20261020T170000Z', seed: 11 })
+    a.append(18); b.append(18)
+    const doc = await runQuery('session', { id: a.id, limit: 500 }, { home })
+    const subs = doc.analyzed.lanes.filter((l) => l.kind === 'subagent')
+    assert.ok(new Set(subs.map((l) => l.calls[0].wireFormat)).size === 2, 'sub-agent lanes on both wires')
+    for (const l of subs) assert.ok(l.task && !PREAMBLE.startsWith(l.task.slice(0, 20)), `lane ${l.id} is not named by the preamble: ${l.task}`)
+    assert.equal(new Set(subs.map((l) => l.task)).size, subs.length, 'each sub-agent its own task')
+  })
