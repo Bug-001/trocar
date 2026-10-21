@@ -38,12 +38,19 @@ const PROSE = ['', '{', '}', 'hello {world, [x\nfoo {"a":1} bar\n{"a":[1,"\\n"]}
 const values = Array.from({ length: 160 }, () => gen(Math.floor(r() * 21)))
 const pretty = values.map((t) => JSON.stringify(JSON.parse(t), (k, v) => (typeof v === 'string' ? v.replaceAll('\n', '') : v), 2))
 const streams = Array.from({ length: 30 }, sse)
-const big = ['[' + Array.from({ length: 40000 }, (_, i) => `{"i":${i},"s":"a\\nb"}`).join(',') + ']', '{' + 'x,'.repeat(140000) + '}', 'pre ' + '[1,'.repeat(100000) + '\n{"a":[1]}\n']
+const big = ['[' + Array.from({ length: 40000 }, (_, i) => `{"i":${i},"s":"a\\nb"}`).join(',') + ']', '{' + 'x,'.repeat(140000) + '}', 'pre ' + '[1,'.repeat(100000) + '\n{"a":[1]}\n',
+  // one line or one string literal far past the budget (a string literal over 256 KB is one JSON value, not prose)
+  JSON.stringify('ab\n\u{1F600}'.repeat(70000)), 'x'.repeat(300001), 'k ' + JSON.stringify({ s: 'q\n'.repeat(20000) }) + '\n' + '\u{1F600}'.repeat(30000)]
 const CASES = [...values, ...pretty, ...streams, ...PROSE, '{}', '[]', '[[],{}]', ' {"a" : [ ] } ', ...big]
 
 function slices(text, budget) {
   let h = '', at = 0, st = null
-  for (;;) { const o = layout(text, at, budget, st); h += o.html; if (o.next == null) return h; assert.ok(o.next > at, 'progress'); at = o.next; st = o.state }
+  for (;;) {
+    const o = layout(text, at, budget, st); h += o.html
+    assert.ok((o.next ?? text.length) - at <= budget + 1, 'a slice spans at most the budget (+1: a surrogate pair is never split)')
+    if (o.next == null) return h
+    assert.ok(o.next > at, 'progress'); at = o.next; st = o.state
+  }
 }
 
 test('C1: removing the .lay spans and un-escaping gives back the bytes, for every slicing', () => {
