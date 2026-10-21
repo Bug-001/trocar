@@ -7,9 +7,11 @@
 // knows whether a request is in flight or queued. It also leaves when its stdin ends or the daemon is gone.
 //
 // The wire is frames on this process's own pipes, not JSON over IPC: one request per line on stdin
-// (`{name, params, indent}`), one reply on stdout as `<status> <byteLength>\n` then exactly those bytes. The daemon
-// forwards the bytes without parsing or re-encoding them, so a 30 MB document costs it a few buffer writes (1.6
-// §4.1 「守护进程的负担」).
+// (`{name, params, indent, gzip?}`), one reply on stdout as `<status> <byteLength> <enc> <cpu_ms>\n` then exactly those bytes.
+// The daemon forwards the bytes without parsing or re-encoding them, so a 30 MB document costs it a few buffer writes (1.6
+// §4.1 「守护进程的负担」). `gzip: true` (the board's reader takes it, 4.4 §服务形状): the bytes are gzipped HERE, `enc` says
+// `gzip`, and `byteLength` is the compressed length; otherwise `enc` is `-`. `cpu_ms` is this process's CPU for the answer,
+// for the daemon's read-cost line.
 //
 // `later(fn)` on every query it runs: a query here is never the only one, so what a query may build FOR THE NEXT ONE
 // (src/query/named/session.mjs assembles the whole session, overview.mjs fills the usage sidecars) is built here and nowhere else —
@@ -17,6 +19,8 @@
 // and its last byte this process does nothing else, so that work can neither delay the answer nor, if it fails or runs the heap
 // out, cost the caller the answer it was already sent.
 import path from 'node:path'
+import { promisify } from 'node:util'
+import { gzip as gzipCb } from 'node:zlib'
 import { pathToFileURL } from 'node:url'
 import { LOCAL_ENV } from './client.mjs'
 import { runQuery, QueryArgError } from './named/index.mjs'
@@ -31,15 +35,28 @@ const depsP = process.argv[3] ? import(pathToFileURL(process.argv[3]).href).then
 for (const k of LOCAL_ENV) delete process.env[k]
 lowerPriority({ say: (m) => process.stderr.write(`${m}\n`) }) // behind the agents' traffic (1.6 §3.1), like the sealer
 
-const write = (status, body) => new Promise((done) => {
-  process.stdout.write(`${status} ${body.length}\n`, () => { if (body.length) process.stdout.write(body, done); else done() })
+const gzip = promisify(gzipCb)
+/** A query still working says so (`{progress: true}` on the IPC channel, at most once per PROGRESS_MS): the daemon's deadline
+ *  measures SILENCE, so a long fold that keeps reading records is not taken for a wedged worker, and one that stops is (3.5:42).
+ *  The fold is synchronous; a send on the channel is written at once all the same. */
+const PROGRESS_MS = 100
+let said = 0
+const progress = () => {
+  const t = Date.now()
+  if (t - said < PROGRESS_MS || !process.connected) return
+  said = t
+  process.send({ progress: true })
+}
+const write = (status, body, enc, cpu) => new Promise((done) => {
+  process.stdout.write(`${status} ${body.length} ${enc} ${cpu}\n`, () => { if (body.length) process.stdout.write(body, done); else done() })
 })
 
 async function answer(line) {
-  let status = 200, text
-  const after = []
+  let status = 200, text, zip = false
+  const after = [], cpu0 = process.cpuUsage()
   try {
-    const { name, params, indent, control, body } = JSON.parse(line)
+    const { name, params, indent, control, body, gzip: wants } = JSON.parse(line)
+    zip = wants === true
     if (control) { // one JSON line, the bytes `trocar <command> --json` prints into a pipe; the verb says the status (src/control/board.mjs)
       const { VERBS } = await import('../control/board.mjs')
       if (!Object.hasOwn(VERBS, control)) throw new Error(`no control verb ${JSON.stringify(control)}`)
@@ -49,7 +66,7 @@ async function answer(line) {
     } else { // `status` / `doctor` read the machine the way the control verbs do — same user home, environment and deps — so /api/status and
       // GET /control/status answer from one view of the machine (V91); the daemon passes no deps, so this is the real machine
       const deps = await depsP
-      text = JSON.stringify(await runQuery(name, params || {}, { home, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }), null, Number(indent) || 0)
+      text = JSON.stringify(await runQuery(name, params || {}, { home, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }), null, Number(indent) || 0)
     }
   } catch (e) {
     // 400 = the caller's mistake (an unknown name or parameter), 500 = this worker's. The message is the query
@@ -57,8 +74,12 @@ async function answer(line) {
     status = e instanceof QueryArgError ? 400 : 500
     text = JSON.stringify({ error: String((e && e.message) || e) })
   }
-  await write(status, Buffer.from(text, 'utf8'))
+  let bytes = Buffer.from(text, 'utf8')
   text = null
+  if (zip) bytes = await gzip(bytes)
+  const cpu = process.cpuUsage(cpu0)
+  await write(status, bytes, zip ? 'gzip' : '-', Math.round((cpu.user + cpu.system) / 1000))
+  bytes = null
   if (after.length) setImmediate(async () => { for (const fn of after) { try { await fn() } catch { /* the next query does it */ } } })
 }
 

@@ -67,6 +67,13 @@ test('darwin: a read goes through the real daemon and gives the very bytes the l
       const d = await cli(argv, { home: w.home, env: w.env, platform: 'darwin' })
       const l = await local(argv)
       assert.equal(d.exit, 0, d.out)
+      // a session's title comes from the usage sidecar the worker fills after it answered (4.4 §人类标题的来源); the one-shot CLI
+      // never fills one, so the two paths may honestly differ in `title` / `title_source` and in nothing else
+      if (argv[0] === 'sessions') {
+        const bare = (out) => JSON.stringify(JSON.parse(out), (k, v) => (k === 'title' || k === 'title_source' ? undefined : v))
+        assert.equal(bare(d.out), bare(l.out), 'sessions: the same document but for the titles')
+        continue
+      }
       assert.equal(d.out === l.out, true, `the daemon path and the local path print the same bytes for ${argv.join(' ')}:\n  daemon ${d.out.length} B\n  local  ${l.out.length} B`)
     }
 

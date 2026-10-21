@@ -25,6 +25,7 @@ import { compactionVerdict, hasCompactionPreamble } from '../identity/session-id
 // analyze.mjs too; the cycle is safe because respOf is only CALLED at runtime, after both modules
 // have finished evaluating. test/view/analyze-admission.test.mjs pins both module load orders.)
 import { respOf } from './assemble.mjs'
+import { HEAD, taskOf } from './blockmeta.mjs'
 export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
 
 const FILE_OPS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
@@ -216,6 +217,11 @@ function acceptPath(p) {
   }
   return true
 }
+// A string the fold keeps (a seen path, a byte context, a subagent's first text) in bytes of its own: a slice of a block's text, or
+// a cons string over one, would keep that whole text alive for as long as the fold lives (3.5 §内存有界).
+const own = (s) => (' ' + s).slice(1)
+// What a subagent lane keeps of its first user text to find the spawn that opened it (finish: the spawn's prompt opens that text).
+const FIRST_TEXT_CHARS = 4096
 function extractSeenPaths(text, step, seen, cap) {
   if (!text || typeof text !== 'string') return
   text = text.replace(/https?:\/\/[^\s"'`<>)\]]+/g, ' ') // drop URLs so remote asset paths aren't "seen files"
@@ -229,7 +235,7 @@ function extractSeenPaths(text, step, seen, cap) {
     if (p.length < 3 || p.endsWith('/') || !acceptPath(p)) continue
     const ex = seen.get(p)
     if (ex) ex.count++
-    else { seen.set(p, { path: p, firstStep: step, count: 1 }); n++ } // cap counts DISTINCT paths
+    else { const q = own(p); seen.set(q, { path: q, firstStep: step, count: 1 }); n++ } // cap counts DISTINCT paths
   }
 }
 function textOfResult(b) {
@@ -361,7 +367,7 @@ export function analyze(records) {
 // thread): when a record arrives before one already folded, no lane can be folded again alone — the session is folded from scratch.
 export class OrderBound extends Error {}
 
-// createAnalyzer() → { push(rec, gi) → step | null, laneOf(step), drop(lane), calls(), finish() → {streams, steps, stats, lanes} }: a
+// createAnalyzer() → { push(rec, gi) → step | null, laneOf(step), drop(lane), ask(lane, text), calls(), finish() → {streams, steps, stats, lanes} }: a
 // session folded ONE record at a time (3.5 §内存有界). push() segments the call into its lane and derives the lane's events and
 // resources from it right away, so the caller may let go of the record's body once push() returned (src/view/assemble.mjs keeps
 // only the call's meta). What the fold remembers between records is per lane and small: the message count and context size of the
@@ -381,8 +387,8 @@ export function createAnalyzer() {
   const steps = new Map() // the fold's own counter → its step (events and resources name a step by it until finish)
   const laneOfStep = new WeakMap() // step → its stream
   let n = 0, top = null, late = false, byOrder = false
-  const state = new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, tools }
-  const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', tools: new Map() })
+  const state = new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, ask, tools }
+  const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', ask: null, tools: new Map() })
   function mkStream(kind) {
     const s = { id: 's' + streams.length, kind, calls: [], events: [] }
     streams.push(s)
@@ -478,7 +484,8 @@ export function createAnalyzer() {
     const st = state.get(stream)
     if (stream.kind === 'subagent' && stream.calls.length === 1) {
       const firstUser = r.request.messages.find((m) => m.role === 'user')
-      st.firstText = firstUser ? textOfMessage(firstUser).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '') : ''
+      // its head only: a spawn's prompt opens it (finish), and the whole first message is a context's worth of text per lane
+      st.firstText = firstUser ? own(textOfMessage(firstUser).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').slice(0, FIRST_TEXT_CHARS)) : ''
     }
     const from = stream.events.length
     eventsOf(stream, st, step)
@@ -497,7 +504,7 @@ export function createAnalyzer() {
       const full = e.text
       delete e.text
       // its own 200 characters: a slice would keep the whole text alive for as long as the event lives (the fold keeps events)
-      e.preview = (' ' + full.replace(/\s+/g, ' ').trim().slice(0, 200)).slice(1)
+      e.preview = own(full.replace(/\s+/g, ' ').trim().slice(0, 200))
       e.chars = full.length
       e.text_omitted = 'derived event — full text is not shipped here; read it from this step\'s blocks'
     }
@@ -626,7 +633,9 @@ export function createAnalyzer() {
       const events = s.events.map((e) => ({ ...e, step: gi(e.step), streamId: id, ...(childOf.has(e) ? { childStreamId: childOf.get(e) } : null) }))
       const resources = EVENT_ONLY_KINDS.has(s.kind) ? [] : [...st.resMap.values()].map((r) => ({ ...r,
         segments: r.segments.map((g) => ({ enter: gi(g.enter), evict: gi(g.evict) })), loads: r.loads.map((l) => ({ ...l, step: gi(l.step) })) }))
-      const out = { id, kind: s.kind, calls: [...s.calls], events, resources, parent: b ? sid.get(b.streamId) : null, spawnArg: b ? b.arg : null }
+      const out = { id, kind: s.kind, calls: [...s.calls], events, resources, parent: b ? sid.get(b.streamId) : null, spawnArg: b ? b.arg : null,
+        // a spawned lane says its spawn's argument; the rest, their first prompt, said by tellApart once every wire's lanes are in (4.4 §看板 v2 需要的补充)
+        ...(b ? { task: b.arg || taskOf(st.ask) } : { task: null, [HEAD]: st.ask ?? null }) }
       if (!EVENT_ONLY_KINDS.has(s.kind)) {
         // "only seen" = matched paths minus anything actually opened. Dedupe absolute-vs-relative
         // spellings of the SAME opened file (path-boundary suffix), but keep distinct-directory
@@ -651,7 +660,7 @@ export function createAnalyzer() {
         const laneId = s.kind === 'subagent' ? s.id : s.kind
         return {
           id: laneId, streamId: s.id, kind: s.kind, icon: LANE_META[s.kind].icon,
-          label: s.kind === 'subagent' ? `subagent: ${s.spawnArg || 'task'}` : LANE_META[s.kind].label,
+          label: LANE_META[s.kind].label, task: s.task, ...(HEAD in s ? { [HEAD]: s[HEAD] } : null),
           ...(LANE_META[s.kind].note ? { note: LANE_META[s.kind].note } : null),
           calls: s.calls, events: s.events, resources: s.resources, seenFiles: s.seenFiles || [], giLocal,
           peakCtx: s.calls.reduce((m, c) => Math.max(m, c.ctx), 1),
@@ -673,7 +682,9 @@ export function createAnalyzer() {
     }
     return { streams: view, steps: stepList, stats, lanes }
   }
-  return { push, finish, drop, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()] }
+  // ask(lane, text): the lane's first prompt, said by the caller that holds the first call's blocks (src/view/blockmeta.mjs firstHuman)
+  const ask = (s, text) => { state.get(s).ask = text }
+  return { push, finish, drop, ask, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()] }
 }
 
 // ── the linear context: the exact tools → system → messages sequence the model assembles ──
@@ -910,7 +921,7 @@ export function cacheBreak(prevFlat, curFlat, opts = {}) {
     // byte-level localization within the first diverging block (structural estimate)
     const prevText = flatBlockText(prev), curText = flatBlockText(cur)
     const off = firstDiffOffset(prevText, curText)
-    if (off >= 0) { out.byteOffset = off; out.byteContext = curText.slice(off, off + 48) }
+    if (off >= 0) { out.byteOffset = off; out.byteContext = own(curText.slice(off, off + 48)) }
     // analyze()'s drop-based compaction verdict is authoritative — a compaction that kept the first
     // user turn breaks mid-history; without the hint that reads as 'content-changed'.
     if (opts.compaction) out.cause = 'compaction'

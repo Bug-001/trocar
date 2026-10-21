@@ -139,34 +139,34 @@ export function captureLabelsOf(rec) {
   const out = [];
   if (!rec) return out;
   const r = rec.resp || rec.response || {};
-  if (r.truncated === true) out.push({ id: 'resp-truncated', label: '已截断 · reply cut at the cap',
+  if (r.truncated === true) out.push({ id: 'resp-truncated', label: 'Reply cut at the capture cap',
     text: `the reply was cut at the capture cap: only its first ${Number(r.body_bytes) || 0} bytes are stored` });
-  if (r.kind === 'error' && r.partial) out.push({ id: 'resp-partial', label: '不完整 · reply never finished',
+  if (r.kind === 'error' && r.partial) out.push({ id: 'resp-partial', label: 'Reply never finished',
     text: 'the response stopped before it finished; what arrived is kept under resp.partial' });
-  if (r.encoding_error) out.push({ id: 'resp-undecoded', label: '回复未解码 · reply not decoded',
+  if (r.encoding_error) out.push({ id: 'resp-undecoded', label: 'Reply not decoded',
     text: `the reply could not be decoded (${r.encoding_error}); its bytes are kept as base64 in the record, so no reply text is shown` });
-  if (rec.ws_truncated === true) out.push({ id: 'ws-truncated', label: '已截断 · call over the size cap',
+  if (rec.ws_truncated === true) out.push({ id: 'ws-truncated', label: 'Call over the size cap',
     text: 'messages past the per-call cap are stored as {omitted_bytes}; their bytes are not in the record' });
   // 3.1 / 3.2:132: the reader decodes req_body_b64 first (request-body.mjs, at load); labelled only when no text is
   // left — the reader could not decode it either, or the collector said it did not and kept no bytes to try
   if (typeof rec.req_body !== 'string' && (rec.req_encoding_error || (typeof rec.req_body_b64 === 'string' && requestEncodingOf(rec)))) {
-    out.push({ id: 'req-undecoded', label: '压缩请求体未解码 · compressed request not decoded',
+    out.push({ id: 'req-undecoded', label: 'Compressed request not decoded',
       text: `the request body is stored compressed (${rec.req_content_encoding || 'unknown encoding'}) and could not be decoded: ${rec._reqBodyDecodeError || rec.req_encoding_error || 'the reader did not try'}` });
   }
-  // 4.8 §5.6: how the call reached the engine — a proxy-mode call (macOS and Windows: the agent's proxy setting names trocar's door, D47) says so in
+  // 4.8 §5.6: how the call reached the engine — a proxy-mode call (macOS and Windows: the agent's proxy setting names trocar's local proxy, D47) says so in
   // place (invariant 4). `transparent` is the default everywhere else and carries no label. The bytes shown are the agent's own either way:
   // the CONNECT prelude and trocar's answer are not part of this record (4.8 §5.6 代理前导).
-  if (rec.capture === 'proxy') out.push({ id: 'capture-routing', label: '经 trocar 的门(代理模式)',
-    text: "this call reached trocar through trocar's door, the local proxy the agent's proxy setting names (proxy mode, macOS and Windows), not by transparent per-process interception; the bytes shown are the agent's own — the proxy prelude and trocar's answer to it are not part of this record" });
+  if (rec.capture === 'proxy') out.push({ id: 'capture-routing', label: "Via trocar's local proxy",
+    text: "the agent's proxy setting names trocar's local proxy, so this call reached trocar through it; the bytes shown are the agent's own — the proxy handshake and trocar's answer to it are not part of this record" });
   // 1.6 §1.3 / 4.6 §记录: trocar put a line into the response head the client got (`off` landed before the head was forwarded): the call says
   // so in place (invariant 4) — the stored head and body are the upstream's own, the client's head had this one line more
-  if (Array.isArray(rec.trocar_added) && rec.trocar_added.includes('connection-close')) out.push({ id: 'trocar-added', label: 'trocar 加的 · Connection: close',
+  if (Array.isArray(rec.trocar_added) && rec.trocar_added.includes('connection-close')) out.push({ id: 'trocar-added', label: 'trocar added Connection: close',
     text: 'trocar added the hop-by-hop header Connection: close to this response when capture was turned off; the response body is byte for byte what the upstream sent, and resp_head_raw is the upstream head' });
   const keep = retentionLabelOf(rec);
   if (keep) out.push({ id: `retention-${keep.retention}`, label: keep.label, text: keep.text });
   // 4.1 保真边界 ⑤: before D40 a JSON reply was stored as the parsed value, re-serialized on write — not the wire bytes. A record from D40 on
   // carries body_wire_bytes and keeps resp.raw whenever the two differ, so a parsed reply without either is the old kind (the shape alone says so)
-  if (r.kind === 'json' && r.body !== undefined && typeof r.raw !== 'string' && !rec.body_wire_bytes) out.push({ id: 'resp-json-reserialized', label: 'JSON · 重新序列化,非线上原字节 · re-serialized, not wire bytes',
+  if (r.kind === 'json' && r.body !== undefined && typeof r.raw !== 'string' && !rec.body_wire_bytes) out.push({ id: 'resp-json-reserialized', label: 'Re-serialized JSON, not the wire bytes',
     text: 'the reply is stored as the parsed JSON and was written back out: whitespace, key order, integers past 2^53 and duplicated keys may differ from what was on the wire (this capture predates the verbatim reply text)' });
   return out;
 }
@@ -177,7 +177,7 @@ export function captureLabelsOf(rec) {
 // body_retention:'log' and its bodies are {raw_chars, verbatim:false}; `legacy-meta` — a non-LLM record from BEFORE D40,
 // whose request body is {raw_chars, verbatim:false} and which carries no body_retention (the shape alone identifies it: the
 // bytes were never kept and cannot be recovered). Nothing reads either of the last two as an empty body or a complete one.
-export const LEGACY_META_TEXT = '本条采于 D40 之前,只存了长度';
+export const LEGACY_META_TEXT = 'Stored as length only (captured before full bodies were kept)';
 export const isLogOnly = (rec) => !!rec && typeof rec === 'object' && rec.body_retention === 'log';
 export function bodyRetentionOf(rec) {
   if (isLogOnly(rec)) return 'log';
@@ -198,7 +198,7 @@ export function retentionLabelOf(rec) {
   if (retention === 'log') {
     const harness = harnessOf(rec).id || 'unknown'; // proc.agent, or — an old capture has none — the UA, as the old capture itself told them apart
     const cls = trafficClassOf(rec);
-    const label = `只记日志 · 用户设置 ${harness} · ${cls}`;
+    const label = `Logged only (your setting for ${harness} · ${cls})`;
     return { retention, harness, class: cls, label, text: `${label}: the headers and sizes are kept, the request and reply bodies are not (they were not stored, so none is shown — this is not an empty body)` };
   }
   return null;

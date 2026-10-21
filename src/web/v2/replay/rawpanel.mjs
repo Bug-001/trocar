@@ -131,10 +131,9 @@ export function renderRawPanel(el, s) {
   const model = String((call.rec.request || {}).model || '')
   const modelLine = model ? `<div class="rpk mono">${esc(model)}</div>` : ''
   if (call.paged_out) {
-    // 未下发 ≠ 没有: the reply / params rows become the window's own paged-out sentence + the load button; what did not
-    // ride the page (respRefs, extraMessages, wire) still renders
-    el.innerHTML = head + modelLine + `<div class="rpk"><span class="pobadge" title="The verbatim request body of this step was not sent with this page; it is kept in full in the raw capture">${esc(W.PAGED_TITLE)}</span> ${loadStepHtml(s, call, `data-load-step="${s.playhead}"`)}</div>` +
-      rawReplyHtml(call) + extraHtml(call) + wireHtml(call) + observerHtml(call) + techHtml(call)
+    // 未下发 ≠ 没有: the panel is the window's own paged-out sentence + the load button; the reply, its bytes, the params, later
+    // messages, the transport, the observer lines and the tech details arrive with the body (2.6 §A, 3.5 §分页 PAGED_META)
+    el.innerHTML = head + modelLine + `<div class="rpk"><span class="pobadge" title="The verbatim request body of this step was not sent with this page; it is kept in full in the raw capture">${esc(W.PAGED_TITLE)}</span> ${loadStepHtml(s, call, `data-load-step="${s.playhead}"`)}</div>`
     return
   }
   el.innerHTML = head + modelLine + replyHtml(call) + rawReplyHtml(call) + paramsHtml(call) + extraHtml(call) + wireHtml(call) + observerHtml(call) + techHtml(call)

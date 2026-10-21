@@ -4,8 +4,9 @@
 // Generated sessions (test/query/big-session.mjs) on three axes — the wire (a whole context per request, Message Threads, Codex
 // over WebSocket: the last two stitched across records), how fast a context grows per turn, and how often a subagent turn is
 // interleaved — paged at windows across the session. The contract, whatever the axes: every call is counted and carries its meta;
-// the calls that carry bodies lie in the window (plus its baseline), include the window's middle, sit nearest it, and ship contexts
-// (their blocks' bytes, `comp`) that sum to at most PAGE_BODY_BYTES (or are exactly one); `page.returned` counts them. A session
+// the calls that carry bodies are the window's middle and its cache comparison call (2.3, wherever it lies) and calls of the window
+// (plus its baseline) nearest the middle, whose contexts (their blocks' bytes, `comp`) sum to at most PAGE_BODY_BYTES (or are exactly
+// the middle call and its comparison call); `page.returned` counts them. A session
 // that grew is answered byte for byte as a fold from scratch answers it, also when a late record sorts before ones already folded.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -14,6 +15,9 @@ import fs from 'node:fs'
 import { runQuery, PAGE_BODY_BYTES } from '../../src/query/named/index.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { sessionView, pageView } from '../../src/view/board.mjs'
+import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
+import { recordsAt } from '../../src/query/records.mjs'
 
 // a context of another process: its own fs object is its own cache key (src/query/warm.mjs fsTag), so nothing it folds is shared
 const freshFs = () => ({ ...fs })
@@ -31,14 +35,26 @@ function checkPage(doc, { cursor, limit }, total) {
   // every predecessor is in the capture: no context is partial, and a body put back is the context its meta was counted from
   for (const c of calls) assert.notEqual(c.wire.contextState, 'partial', `gi ${c.gi}`)
   for (const c of kept) assert.equal(c.flat.reduce((n, b) => n + b.bytes, 0), bytes(c), `gi ${c.gi}: its body is the context it was folded with`)
-  for (const c of calls) if (c.paged_out) assert.deepEqual([c.flat, c.nonBlockKeys, Object.keys(c.norm)], [[], [], ['usage']])
-  for (const c of kept) assert.ok(c.gi >= cursor - 1 && c.gi < cursor + limit, `gi ${c.gi} is in the window`)
-  const sum = kept.reduce((n, c) => n + bytes(c), 0)
-  assert.ok(sum <= PAGE_BODY_BYTES || kept.length === 1, `${kept.length} bodies, ${sum} request bytes`)
+  for (const c of calls) if (c.paged_out) assert.deepEqual([c.flat, c.nonBlockKeys, c.norm], [[], [], undefined])
   const mid = cursor + Math.floor(limit / 2)
+  const ref = mid < total ? comparisonGi(doc, mid) : null
+  if (ref != null) assert.ok(kept.some((c) => c.gi === ref), `the middle call's comparison call (gi ${ref}) rides with its body`)
+  for (const c of kept) if (c.gi !== ref) assert.ok(c.gi >= cursor - 1 && c.gi < cursor + limit, `gi ${c.gi} is in the window`)
+  const sum = kept.reduce((n, c) => n + bytes(c), 0)
+  assert.ok(sum <= PAGE_BODY_BYTES || kept.every((c) => c.gi === mid || c.gi === ref), `${kept.length} bodies, ${sum} request bytes`)
   if (mid < total) assert.ok(kept.some((c) => c.gi === mid), 'the window\'s middle call rides with its body')
-  const far = Math.max(...kept.map((c) => Math.abs(c.gi - mid)))
+  const far = Math.max(...kept.filter((c) => c.gi !== ref).map((c) => Math.abs(c.gi - mid)))
   for (const c of calls) if (c.paged_out && c.gi >= cursor - 1 && c.gi < cursor + limit) assert.ok(Math.abs(c.gi - mid) >= far, 'nearest the middle first')
+}
+
+// the 缓存对比步 of the call at `gi` (2.3): the one cacheBreak.refGi names, else the nearest earlier call of its lane that did not fail
+function comparisonGi(doc, gi) {
+  const lane = doc.analyzed.lanes.find((l) => l.calls.some((c) => c.gi === gi))
+  const k = lane.calls.findIndex((c) => c.gi === gi)
+  const named = lane.calls[k].cacheBreak && lane.calls[k].cacheBreak.refGi
+  if (named != null) return named
+  for (let j = k - 1; j >= 0; j--) { const c = lane.calls[j]; if (!c.error && (c.status == null || c.status === 200)) return c.gi }
+  return null
 }
 
 // a note (`level`) is about the read that made it (3.5 读不全): a cold fold indexed the segment, a warm one did not
@@ -149,3 +165,22 @@ test('subagents side by side on a WebSocket each: a call\'s cache break is again
     assert.ok(sub[i].cacheBreak.idx > sub[i - k].cacheBreak.idx, `subagent call ${i} keeps more than its agent's previous call did`)
   }
 })
+
+// More lanes than their baselines fit BASELINE_BYTES (3.5 §内存有界: the most recently used held, the rest rebuilt from their record
+// read back by id): forty subagents side by side, each a few calls of ~400 KB a turn. Which baselines were let go changes the cost,
+// never the answer: every call's meta (cache break, prefix digest, ground truth, composition) is the batch fold's, which holds
+// every record (read as the query reads them) in memory and lets no baseline go — paged the same way.
+const metaOf = (lanes) => JSON.stringify(lanes.map(({ giLocal, ...l }) => ({ ...l, calls: l.calls.map(({ flat, nonBlockKeys, norm, rec, paged_out, ...c }) => c) })))
+for (const wire of ['http', 'threads', 'ws', 'chat']) {
+  test(`a ${wire} session whose lanes' baselines exceed BASELINE_BYTES answers the batch fold's meta for every call`, async () => {
+    const home = path.join(tmpDir('trocar-sbase-'), '.trocar')
+    const s = bigSession({ home, wire, growth: 1_600_000, subEvery: 2, subLanes: 40, subLen: 8 })
+    s.append(160)
+    const doc = await session(home, { id: s.id, after: '0', limit: '60' }, { fs: freshFs() })
+    const rows = sessionGroups(await indexRows({ home, fs, errors: [] })).get(s.id)
+    const records = [...recordsAt({ home, fs, rows, errors: [], remember: false })]
+    const batch = sessionView(records, s.id)
+    assert.equal(doc.page.total, 160)
+    assert.equal(metaOf(doc.analyzed.lanes), metaOf(pageView(batch, { cursor: 0, limit: 60 }, { budget: PAGE_BODY_BYTES }).analyzed.lanes))
+  })
+}

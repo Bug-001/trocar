@@ -8,7 +8,7 @@
 //                        text is the body as stored, clipped to BODY_SHOW_CHARS; a clipped body says so (shown_chars < chars) and where the rest is.
 //                        binary: bytes + the first HEX_SHOW_BYTES as a hex dump. length-only: the record kept only a size (a pre-D40 record,
 //                        or the operator's 「只记日志」): never shown as an empty body.
-//   ctl.labels           what to say in place (4.1 保真边界, via captureLabelsOf): 本条采于 D40 之前,只存了长度 · 只记日志 · 已截断 · 压缩请求体未解码 …
+//   ctl.labels           what to say in place (4.1 保真边界, via captureLabelsOf): stored as length only · logged only · cut at the cap · not decoded …
 //   ctl.host / hostHeader / hostDiffers   the host the bytes went to (SNI …) and the request's own Host header — a mismatch is a behaviour signal
 //                        (not for a reverse-proxy record: there `host` is the upstream and the Host header is the client's address to the proxy, always different)
 //   ctl.req / ctl.resp .truncated / .incomplete / .stored_bytes   a body cut at the capture cap, or a request that never finished: the stored bytes are only part of it
@@ -177,7 +177,7 @@ export function controlRecordWire(input, { detail = true, reveal = null } = {}) 
     const norm = (h) => (h ? String(h).toLowerCase().replace(/:\d+$/, '') : null);
     const labels = captureLabelsOf(rec);
     const inc = reqIncompleteOf(rec); // the request-body labels live in reqIncompleteOf (capture-labels.mjs), not in captureLabelsOf
-    if (inc) labels.push({ id: 'req-incomplete', label: inc.truncated ? '已截断 · request cut at the cap' : '不完整 · request never finished', text: inc.text });
+    if (inc) labels.push({ id: 'req-incomplete', label: inc.truncated ? 'Request cut at the capture cap' : 'Request never finished', text: inc.text });
     const ctl = {
       retention: bodyRetentionOf(rec), traffic_class: trafficClassOf(rec), labels,
       host: typeof rec.host === 'string' ? rec.host : null, hostHeader,

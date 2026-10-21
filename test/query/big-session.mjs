@@ -11,6 +11,7 @@
 // `subLanes` subagents run side by side (their turns taken in turn), and a subagent's call that finished up to `late` calls (seeded)
 // after the ones started after it is written then — as the collector writes a call when it ends — so its line sorts before lines
 // already written, and before lines of other subagents that ended sooner.
+// `preamble`: text every subagent's first prompt starts with (a workflow's own instructions, shared by all its subagents).
 // Exports only: node --test runs every .mjs.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -48,7 +49,7 @@ function turn(next, i, growth) {
  * thread or chain) once it holds more than `compactAt` characters.
  * `append(n)` appends the next n calls (as the daemon would, one line each) and returns the session's stored bytes so far.
  */
-export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z' } = {}) {
+export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '' } = {}) {
   const next = rng(seed), delay = rng(seed + 1)
   const file = path.join(home, 'raw', `${segment}.ndjson`)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
@@ -62,6 +63,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
     const lane = sub ? subs[nsub++ % subLanes] : main
     if (sub ? lane.msgs.length > subLen : lane.chars > compactAt) Object.assign(lane, { msgs: [], sent: 0, prev: null, n: lane.n + 1, chars: 0 })
     lane.msgs.push(...turn(next, n, sub ? Math.round(growth / 4) : growth))
+    if (sub && preamble && lane.msgs.length === 3) lane.msgs[0].content[0].text = `${preamble}\n${lane.msgs[0].content[0].text}` // a subagent's first prompt
     lane.chars += sub ? Math.round(growth / 4) : growth
     const ts = new Date((ms += 4_000)).toISOString()
     const text = words(next, 200)
@@ -144,4 +146,30 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
     /** Appends calls until the session's stored bytes reach `bytes`. */
     growTo(bytes) { while (stored < bytes) this.append(1); return stored },
   }
+}
+
+/** firstAskOf(record, records) → what 4.4 §看板 v2 需要的补充 says a lane's `task` is, read straight off the request bytes: the first
+ *  user text of the call's context that is not only <system-reminder> blocks, whitespace runs squashed to one space, trimmed, at most
+ *  80 characters. A call that continues a server-held context (a `previous_*_id`) has its predecessors' messages first. */
+export function firstAskOf(rec, records = []) {
+  const users = [], prev = []
+  const walk = (o) => {
+    if (Array.isArray(o)) { for (const x of o) walk(x); return }
+    if (!o || typeof o !== 'object') return
+    if (o.role === 'user') users.push(o)
+    for (const [k, v] of Object.entries(o)) if (/^previous_\w+_id$/.test(k) && typeof v === 'string') prev.push(v); else walk(v)
+  }
+  walk(JSON.parse(rec.req_body))
+  const answered = (r) => { const t = JSON.stringify(r.resp); return t.includes(`"${prev[0]}"`) || t.includes(`\\"${prev[0]}\\"`) }
+  const before = prev.length ? records.find((r) => r !== rec && answered(r)) : null
+  const head = before ? firstAskOf(before, records) : null
+  if (head) return head
+  for (const m of users) {
+    const parts = typeof m.content === 'string' ? [m.content] : (m.content || []).filter((p) => p && typeof p.text === 'string').map((p) => p.text)
+    for (const t of parts) {
+      const h = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/\s+/g, ' ').trim()
+      if (h) return h.slice(0, 80)
+    }
+  }
+  return null
 }

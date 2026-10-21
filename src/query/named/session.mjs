@@ -5,10 +5,12 @@
 // names the page the way every paged document does.
 //
 // FOLDED (3.5 §内存有界): the session's records are read in step order, a chunk of stored bytes at a time, and folded one by one;
-// a record's body is let go once its call is assembled, so what a query holds is the SPINE — every call's timeline meta, each
-// lane's previous call, the records a cross-record context stitches from — plus one chunk, never the session. A page then reads
+// a record's body is let go once its call is assembled, so what a query holds is the SPINE — every call's timeline meta, the lanes'
+// baselines up to BASELINE_BYTES (the rest rebuilt by id), the records a cross-record context stitches from — plus one chunk, never
+// the session. A page then reads
 // back, by id, only the calls it ships with their bodies (pageView: nearest the window's middle, within PAGE_BODY_BYTES).
-// The reads are a scan (`remember: false`): the spine is what is remembered, not the records.
+// The reads are a scan (`remember: false`): the spine is what is remembered, not the records. Every record read is reported to
+// `progress()` (the worker passes it on to the daemon, whose deadline measures silence: a long fold is not a wedged worker, 3.5:42).
 //
 // WARM (D63 ①, 1.6 §4.1 附近的查询 ≤ 50 ms): the spine is kept against THIS session's own row list, so the next page and every later
 // look at the session read only that page's bodies. A session that grew is folded on with the records it did not hold, whatever
@@ -18,6 +20,7 @@
 // heap bound moved, below), is folded from scratch. Either way the document is the one a fold from scratch gives, and a hit and a
 // miss are the same code path.
 import { sessionFold, pageView } from '../../view/board.mjs';
+import { BASELINE_BYTES } from '../../view/assemble.mjs';
 import { OrderBound } from '../../view/analyze.mjs';
 import { recordsAt } from '../records.mjs';
 import { indexRows, sessionGroups } from '../rows.mjs';
@@ -29,12 +32,15 @@ export const params = Object.freeze(['id', 'after', 'limit']);
 
 // What the fold reads at once, in the rows' stored bytes (at least one row).
 const CHUNK_STORED = 8 * 1048576;
-// What a spine costs in the heap per row (a call's meta, its lane's events and resources). Measured 2026-10-21 on the generated
-// Claude Code sessions of test/query/big-session.mjs (forced GC), rounded up.
-export const SPINE_PER_ROW = 16 * 1024;
-// What the records being worked on cost in the heap per stored byte: a chunk read and parsed, the lanes' previous calls, a page's
-// bodies assembled and serialized (measured with the spine, above).
-const WORK_PER_STORED = 6;
+// What a spine costs in the heap per row (a call's meta, its lane's events and resources, a stitched context's locators). Measured
+// 2026-10-21 on the user's live session and the generated ones of test/query/big-session.mjs (forced GC).
+export const SPINE_PER_ROW = 32 * 1024;
+// What the records being worked on cost in the heap per stored byte (and the lanes' baselines per character of their blocks): a
+// chunk read and parsed, a page's bodies assembled and serialized (measured with the spine, above).
+const WORK_PER_STORED = 4;
+/** What the lanes' cache baselines (src/view/assemble.mjs BASELINE_BYTES: the blocks, prefix chain and block keys of each lane's
+ *  last prefix-establishing call, the most recently used held, the rest rebuilt by record id) cost in the heap at most, beside the spine. */
+export const BASELINE_HEAP = BASELINE_BYTES * WORK_PER_STORED;
 
 const spines = warmCache({ cost: (v) => v.cost });
 // analyze()'s step order (src/view/analyze.mjs stepOrder) over the index rows: `ts` is the record's ts_request
@@ -46,14 +52,23 @@ const mb = (n) => Math.round((n / 1048576) * 10) / 10;
 function working(rows) {
   let max = 0;
   for (const r of rows) max = Math.max(max, r.stored_bytes || 0);
-  return (CHUNK_STORED + 2 * max + PAGE_BODY_BYTES) * WORK_PER_STORED;
+  // the baselines may hold one lane's past BASELINE_BYTES (the one in use is always held): `max` covers it
+  return (CHUNK_STORED + max + PAGE_BODY_BYTES) * WORK_PER_STORED + BASELINE_HEAP;
 }
-/** The rows a query folds: all of them while their spine fits the heap budget, else the newest that do, with the `truncated` the
- *  document carries — the same {shown, total, kept_mb, file_mb} the board draws (invariant 4, 1.5 K-06). */
+// The cut of a session past the heap bound moves a 1/BOUND_STEPS of what fits at a time: a spine that lost a row is folded from
+// scratch (grow), so a cut that moved with every new row made every poll of a live session that size a cold fold (30 s of worker CPU
+// on the user's ~5 500-call session, 2026-10-21). Between steps the spine is folded on with the new rows only.
+const BOUND_STEPS = 10;
+/** The rows a query folds: all of them while their spine fits the heap budget, else the newest that do, cut at a multiple of a tenth
+ *  of what fits (BOUND_STEPS) and at most nine tenths of it, with the `truncated` the document carries — the same {shown, total, kept_mb, file_mb} the board draws
+ *  (invariant 4, 1.5 K-06). */
 function fitting(rows) {
   const n = Math.max(1, Math.floor((heapBudget() - working(rows)) / SPINE_PER_ROW));
   if (rows.length <= n) return { read: rows, bound: null };
-  const read = rows.slice(-n);
+  // one step is left to the other caches (the segments' index rows refresh as the capture grows): a spine that filled the budget
+  // to the byte was pushed out by the next of them, and the session folded cold on every poll all the same
+  const step = Math.max(1, Math.floor(n / BOUND_STEPS)), cap = Math.max(1, n - step);
+  const read = rows.slice(Math.ceil((rows.length - cap) / step) * step);
   return { read, bound: { shown: calls(read), total: calls(rows), kept_mb: mb(stored(read)), file_mb: mb(stored(rows)) } };
 }
 // A keyless record is in this session because the segment index named it so (3.4 合成键): its refs carry that name.
@@ -80,15 +95,15 @@ function grow(old, args) {
   }
   return foldOn(null, args.sorted, args);
 }
-function foldOn(old, rows, { home, fs, id, rowOf }) {
+function foldOn(old, rows, { home, fs, id, rowOf, progress }) {
   const s = old || { ids: new Set(), errors: [], cost: 0 };
-  s.rowOf = rowOf; s.sink = s.errors;
+  s.rowOf = rowOf; s.sink = s.errors; s.progress = progress;
   const read = function* (ids) {
-    for (const part of chunks(ids.map((x) => s.rowOf.get(x)).filter(Boolean))) for (const r of recordsAt({ home, fs, rows: part, errors: s.sink, remember: false })) yield named(r, id);
+    for (const part of chunks(ids.map((x) => s.rowOf.get(x)).filter(Boolean))) for (const r of recordsAt({ home, fs, rows: part, errors: s.sink, remember: false })) { s.progress(); yield named(r, id); }
   };
   if (!old) s.fold = sessionFold(id, { read });
   for (const part of chunks(rows)) {
-    for (const r of recordsAt({ home, fs, rows: part, errors: s.errors, remember: false })) s.fold.push(named(r, id), r.id);
+    for (const r of recordsAt({ home, fs, rows: part, errors: s.errors, remember: false })) { progress(); s.fold.push(named(r, id), r.id); }
     for (const r of part) s.ids.add(r.id);
   }
   // a record that did not read is said on every answer (D38) and the spine is not kept: the next query reads it again
@@ -96,7 +111,7 @@ function foldOn(old, rows, { home, fs, id, rowOf }) {
   return s;
 }
 
-export async function run({ home, fs, params: p, errors }) {
+export async function run({ home, fs, params: p, errors, progress = () => {} }) {
   if (p.id == null || p.id === '') throw new QueryArgError('trocar query session: --id is required (a session id; `trocar query sessions` lists them)');
   const id = String(p.id);
   // Membership is the segment index's (src/query/rows.mjs — the same function `sessions` counts with), so only
@@ -113,9 +128,9 @@ export async function run({ home, fs, params: p, errors }) {
   const release = hold(working(read)); // the caches give way BEFORE anything is read
   let view;
   try {
-    const sp = spines.get(`${fsTag(fs)}\n${home}\n${id}`, rowsKey(sorted).id, (old) => grow(old, { home, fs, id, sorted, rowOf }));
+    const sp = spines.get(`${fsTag(fs)}\n${home}\n${id}`, rowsKey(sorted).id, (old) => grow(old, { home, fs, id, sorted, rowOf, progress }));
     errors.push(...sp.errors);
-    sp.rowOf = rowOf; sp.sink = errors;
+    sp.rowOf = rowOf; sp.sink = errors; sp.progress = progress;
     // the calls this page ships with their bodies, read back by id and given their bodies by the fold that assembled them
     const fill = (cs) => {
       const recs = recordsAt({ home, fs, rows: cs.map((c) => rowOf.get(c.id)).filter(Boolean), errors, remember: false });
