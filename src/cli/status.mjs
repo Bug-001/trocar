@@ -373,7 +373,7 @@ function failuresOf(f) {
     const l = g.last || {}
     // a failure event's where / code; a connection row is `flow` with its not_captured; the raw journal's op / outcome; else the event
     const w = where || l.where || (l.event == null ? ROW : l.event)
-    return { level: 'problem', where: w, code: (l.code ?? l.not_captured ?? l.outcome ?? l.event ?? l.reason) || g.key, count: g.count || 1, first_ts: g.first_ts, last_ts: g.last_ts, agent: l.agent, reason: reasonText(l.reason ?? (l.error && l.error.message)) }
+    return { level: 'problem', where: w, code: (l.code ?? l.not_captured ?? l.outcome ?? l.event ?? l.reason) || g.key, count: g.count || 1, first_ts: g.first_ts, last_ts: g.last_ts, agent: l.agent ?? l.harness, reason: reasonText(l.reason ?? (l.error && l.error.message)) }
   }
   const groups = [...(c.failures || []).map(problem(null)), ...((h.raw && h.raw.failures) || []).map(problem('raw'))]
   const expected = Object.values(c.expected || {}).reduce((n, x) => n + (Number(x) || 0), 0)
@@ -383,7 +383,7 @@ function failuresOf(f) {
     ...groups,
     ...Object.entries(c.expected_groups || {}).map(([code, g]) => ({ level: 'expected', where: ROW, code, ...g, reason: null })),
     // a condition holds since its record (`since`); one with neither a code nor a kind, or no time, is no group (no time is made up)
-    ...(c.conditions || []).filter((x) => (x.code || x.kind) && x.since).map((x) => ({ level: 'note', where: x.where || x.kind || null, code: x.code || x.kind, count: 1, first_ts: x.since, last_ts: x.since, agent: x.agent, reason: reasonText(x.reason) })),
+    ...(c.conditions || []).filter((x) => (x.code || x.kind) && x.since).map((x) => ({ level: 'note', where: x.where || x.kind || null, code: x.code || x.kind, count: 1, first_ts: x.since, last_ts: x.since, agent: x.agent ?? x.harness, reason: reasonText(x.reason) })),
   ]
   const by = new Map()
   for (const p of parts) {

@@ -48,3 +48,16 @@ test('V92: two failures sharing a code under two `where`s are two groups, each w
   const problems = doc.failures.groups.filter((g) => g.level === 'problem')
   for (const g of problems) assert.equal(text.split('\n').filter((l) => l.includes(failureBrief(g))).length, 1, failureBrief(g))
 })
+
+test('V102: a failure names its harness whether the record says `agent` or `harness`: the agents row and the status group both name codex', async () => {
+  const health = healthOver([
+    { ts: at(200), event: 'failure', where: 'engine', code: 'trust-rejected', harness: 'codex', reason: 'r' },
+    { ts: at(100), event: 'failure', where: 'engine', code: 'leaf-error', agent: 'codex', reason: 'r' },
+  ])
+  const row = health.collector.agents.find((a) => a.agent === 'codex')
+  assert.equal(typeof (row && row.last_failure), 'string')
+  const doc = (await sandbox().run(['status', '--json'], { deps: { captureHealth: () => health } })).io.json()
+  const mine = doc.failures.groups.filter((g) => ['trust-rejected', 'leaf-error'].includes(g.code))
+  assert.ok(mine.some((g) => g.code === 'trust-rejected') && mine.some((g) => g.code === 'leaf-error'))
+  for (const g of mine) assert.equal(g.harness, 'codex', `${g.level} ${g.code}`)
+})
