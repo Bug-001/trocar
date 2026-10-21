@@ -299,7 +299,8 @@ export function validateFinding(f) {
 const VERDICT = Object.freeze(['status', 'doctor'])
 
 /** Problems with a `query` document against 附录 C.5 (`[]` = valid): every document, whatever the name, has
- *  `schema` · `command` · `ok` · `errors:[{where, reason}]`, and a paged one has `next` and `has_more` too. */
+ *  `schema` · `command` · `ok` · `errors:[{where, reason}]`, and one paged by `--after` (it says `has_more`) has `next` agreeing with it;
+ *  `lane`'s `next` / `prev` are rids of its neighbour pages (3.5 §会话读), no `--after`. */
 export function validateQueryDoc(doc, name = doc && doc.command) {
   if (!isObject(doc)) return ['document: not an object']
   const bad = []
@@ -313,7 +314,7 @@ export function validateQueryDoc(doc, name = doc && doc.command) {
     for (const k of ['where', 'reason']) if (!isString(e[k]) || e[k].trim() === '') bad.push(`errors[${i}].${k}: empty`)
   })
   if (doc.ok !== (Array.isArray(doc.errors) && !doc.errors.some((e) => !isObject(e) || !e.level)) && !VERDICT.includes(doc.command)) bad.push('ok: says something else than `errors` does')
-  if ('has_more' in doc || 'next' in doc) {
+  if ('has_more' in doc) {
     if (typeof doc.has_more !== 'boolean') bad.push('has_more: not a boolean')
     if (!(doc.next === null || isString(doc.next))) bad.push('next: neither the next --after nor null')
     if (doc.has_more !== (doc.next !== null)) bad.push('next: says something else than `has_more` does')

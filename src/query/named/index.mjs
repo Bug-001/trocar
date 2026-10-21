@@ -11,6 +11,7 @@ import * as segments from './segments.mjs';
 import * as classes from './classes.mjs';
 import * as sessions from './sessions.mjs';
 import * as session from './session.mjs';
+import * as lane from './lane.mjs';
 import * as calls from './calls.mjs';
 import * as block from './block.mjs';
 import * as pricing from './pricing.mjs';
@@ -31,6 +32,7 @@ export const QUERIES = Object.freeze({
   doctor: { params: Object.freeze(['harness']), run: (c) => verdict('doctor', c), stamp: () => null },
   sessions: { params: sessions.params, run: sessions.run, stamp: src.usage, times: TIMES }, // its titles come from the usage sidecars (4.4 §人类标题的来源)
   session: { params: session.params, run: session.run, version: session.version, stamp: src.corpus },
+  lane: { params: lane.params, run: lane.run, version: lane.version, stamp: src.corpus },
   calls: { params: calls.params, run: calls.run, stamp: src.corpus, times: TIMES },
   traffic: { params: traffic.params, run: traffic.run, stamp: src.corpus, times: TIMES },
   overview: { params: overview.params, run: overview.run, stamp: src.usage, times: TIMES },

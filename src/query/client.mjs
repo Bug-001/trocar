@@ -16,7 +16,7 @@ export const LOCAL_ONLY = Object.freeze(['status', 'doctor'])
 /** Every query name there is (src/query/named/index.mjs QUERIES, which this list is checked against by
  *  test/query/docs.test.mjs — the query core is most of a CLI's load time, so the daemon must be able to refuse an
  *  unknown name without importing it, and before forking a worker for it). */
-export const QUERY_NAMES = Object.freeze(['status', 'doctor', 'sessions', 'session', 'calls', 'traffic', 'overview', 'block', 'classes', 'segments', 'pricing'])
+export const QUERY_NAMES = Object.freeze(['status', 'doctor', 'sessions', 'session', 'lane', 'calls', 'traffic', 'overview', 'block', 'classes', 'segments', 'pricing'])
 /** The window parameters: they move which part of a document is shipped, never what is asked, so a failure is
  *  remembered per query WITHOUT them (service.mjs, 3.5 §读不全不静默): a board whose window moved asks the same thing. */
 export const WINDOW_PARAMS = Object.freeze(['since', 'before', 'limit', 'from', 'to'])
