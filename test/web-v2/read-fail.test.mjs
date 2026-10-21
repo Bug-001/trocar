@@ -9,7 +9,12 @@ import * as trafficPage from '../../src/web/v2/traffic/traffic.mjs'
 import * as hostPage from '../../src/web/v2/traffic/host.mjs'
 import * as prices from '../../src/web/v2/settings/prices.mjs'
 import * as storage from '../../src/web/v2/settings/storage.mjs'
-import { hidesReason, reasonsWith } from './visible.mjs'
+import { readFailHtml, captionHtml } from '../../src/web/v2/library/library.mjs'
+import { emptyBoardState } from '../../src/web/v2/library/logic.mjs'
+import { pageLogHtml } from '../../src/web/v2/capture/capture-log.mjs'
+import { captureVerdict } from '../../src/web/v2/core/capture-verdict.mjs'
+import { screenErrorHtml } from '../../src/web/v2/shell/safemount.mjs'
+import { hidesReason, reasonsWith, visibleOf } from './visible.mjs'
 import { trafficWorld } from './traffic-world.mjs'
 import { boardHome } from './real-face.mjs'
 
@@ -96,6 +101,28 @@ test('AC-2 a failed read on traffic, a host page (list and request detail), Sett
           s.inst.unmount()
         } finally { w.tamper(null) }
       }
+    }
+  }
+})
+
+test('AC-4 library, capture log and the shell keep a failed read\'s reason out of the visible text', () => {
+  const NOW = Date.parse('2026-10-20T12:00:00Z')
+  for (const status of [0, 500, 503]) {
+    for (const make of [0, 1, 2, 3]) {
+      const t = tok(), reason = reasonsWith(t)[make], given = reason !== ''
+      const r = { ok: false, status, error: reason }
+      const where = (site) => `${site} · ${status} · ${make}`
+      const lf = readFailHtml(r)
+      hidesReason(lf, t, given, where('library read failure'))
+      assert.ok(lf.includes('data-act="retry"'), where('library read failure'))
+      const cap = captionHtml([], r, NOW - 5000)
+      hidesReason(cap, t, given, where('stale caption'))
+      assert.ok(cap.includes('data-act="retry"'), where('stale caption'))
+      if (!given) continue // the rest take a bare reason; an empty one is no failure there
+      assert.ok(!emptyBoardState({ fail: reason }).line.includes(t), where('empty board'))
+      hidesReason(pageLogHtml({ unreadable: reason }), t, true, where('capture log'))
+      assert.ok(!visibleOf(captureVerdict({ unreadable: reason }, { okAt: NOW, now: NOW }).text).includes(t), where('verdict'))
+      hidesReason(screenErrorHtml(reason), t, true, where('screen error'))
     }
   }
 })

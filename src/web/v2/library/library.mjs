@@ -8,11 +8,11 @@ import { createVList } from '../core/vlist.mjs'
 import { delegate } from '../core/dom.mjs'
 import { harnessName, harnessIcon, harnessRaw } from '../core/chips.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
-import { mark, techDetailsHtml } from '../core/ui.mjs'
+import { mark, techDetailsHtml, readFailure } from '../core/ui.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { formatHash } from '../core/router.mjs'
 import * as W from '../labels/library.mjs'
-import { parseFilters, filtersToParams, hasFilters, flattenSessions, applyFilters, listEntries, selectedKey, sessionKey, rowModel, listSignature, filterSignature, scrollDecision, agentMenuModel, agentMenuSignature, projectOptions, captionFacts, readFailWording, loadSessions, capShotMaker, emptyBoardState, filteredAgentLine, agentLabel, WINDOWS } from './logic.mjs'
+import { parseFilters, filtersToParams, hasFilters, flattenSessions, applyFilters, listEntries, selectedKey, sessionKey, rowModel, listSignature, filterSignature, scrollDecision, agentMenuModel, agentMenuSignature, projectOptions, captionFacts, loadSessions, capShotMaker, emptyBoardState, filteredAgentLine, agentLabel, WINDOWS } from './logic.mjs'
 
 const ROW_H = 50, GROUP_H = 28, POLL_MS = 3000
 const hidden = () => typeof document !== 'undefined' && document.hidden
@@ -88,7 +88,7 @@ export function captionHtml(errors, errR, readAt) {
   const cf = captionFacts(errors)
   const parts = cf.facts.map((x) =>
     `<a href="${esc(formatHash({ area: 'settings', screen: 'settings-storage' }))}" title="${esc(W.CAP_NOT_ALL_TIP)}">${esc(W.capNotAllRead(x.n))} ›</a>`)
-  if (errR && readAt != null) parts.push(`${esc(readFailWording(errR).line)} · <button type="button" class="linkbtn" data-act="retry">${esc(W.RETRY)}</button> · ${esc(W.capOldList(fmtTime(readAt)))}`)
+  if (errR && readAt != null) parts.push(`${esc(readFailure(W.SESSION_LIST, errR).line)} · <button type="button" class="linkbtn" data-act="retry">${esc(W.RETRY)}</button> · ${esc(W.capOldList(fmtTime(readAt)))}`)
   const tech = cf.tech.slice()
   if (errR) tech.push(String((errR.error || '') || 'HTTP ' + errR.status))
   if (!parts.length && !tech.length) return ''
@@ -98,9 +98,8 @@ export function captionHtml(errors, errR, readAt) {
 // ── the states that stand in for the table (pure html, so the words are pinned without a DOM) ────────────────────────
 // the read failed and there is no older list: the failure IS the content, never worded as 「还没有会话」
 export function readFailHtml(errR) {
-  const w = readFailWording(errR)
-  return `${esc(w.line)}<br><button type="button" class="linkbtn" data-act="retry">${esc(W.RETRY)}</button>` +
-    techDetailsHtml([['Error', String((errR && errR.error) || '')]])
+  const f = readFailure(W.SESSION_LIST, errR, { id: 'lib-fail' })
+  return `${esc(f.line)}<br><button type="button" class="linkbtn" data-act="retry">${esc(W.RETRY)}</button>` + f.tech
 }
 // the empty board: 还没有会话, then the capture service's own sentence (read once) with 「截至」, then the way out
 export function emptyBoardHtml(shot) {

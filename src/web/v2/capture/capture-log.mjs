@@ -8,7 +8,8 @@ import { esc, fmtTime, fmtWhen } from '../core/fmt.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
 import { READ_AT } from '../shell/pagehead.mjs'
 import { harnessIcon, harnessName, harnessKey, HARNESS_ORDER } from '../core/chips.mjs'
-import { menuButton, disclosureHtml } from '../core/ui.mjs'
+import { menuButton, disclosureHtml, techDetailsHtml } from '../core/ui.mjs'
+import { HEALTH_READ } from '../labels/common.mjs'
 import { copyBtn } from '../core/dom.mjs'
 import { redactUrlCredentials } from '../core/sensitive.mjs'
 import { failureSentence, pollCaptureHealth } from '../core/capture-verdict.mjs'
@@ -83,7 +84,8 @@ export function footHtml(doc) {
 // 读不到采集状态 and draws no table — never an empty one.
 export function pageLogHtml(doc, { filter = null, openByReader = null } = {}) {
   if (doc == null) return '<p class="caplog-none">Reading</p>' // no answer yet — never an invented empty table
-  if (doc.unreadable != null) return `<p class="caplog-none">Capture health could not be read · ${esc(String(doc.unreadable))}</p>`
+  if (doc.unreadable != null) // the verdict's 503 sentence; the server's reason only in the collapsed details (K-29)
+    return `<p class="caplog-none">${esc(HEALTH_READ.unreadable)}</p>` + techDetailsHtml([['reason', String(doc.unreadable)]], { id: 'caplog-unreadable' })
   const { html, rows, filtered } = logRowsOf(doc, { filter, openByReader })
   const since = doc.failures && doc.failures.since
   const partial = errorsAt(doc, ERR_WHERE.health)

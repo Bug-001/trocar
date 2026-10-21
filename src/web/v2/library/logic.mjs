@@ -6,6 +6,7 @@ import { esc, relTime, fmtStamp } from '../core/fmt.mjs'
 import { HARNESS_ORDER, harnessKey, harnessName, harnessIcon, harnessRaw } from '../core/chips.mjs'
 import { formatHash } from '../core/router.mjs'
 import { captureVerdict, capHealthPatch } from '../core/capture-verdict.mjs'
+import { readFailure } from '../core/ui.mjs'
 import * as W from '../labels/library.mjs'
 
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k)
@@ -145,13 +146,6 @@ export function captionFacts(errors) {
   return { facts: n ? [{ kind: 'not-all', n }] : [], tech: es.map((e) => `${e.where ?? ''} · ${e.reason ?? ''}`) }
 }
 
-// ── what the read failed with: a dead server is not an HTTP error ────────────────────────────────────────────────────
-export function readFailWording(r) {
-  if (r && r.status === 0) return { line: W.CAP_CONN_FAIL, code: null }
-  const code = r && r.status != null ? r.status : null
-  return { line: W.capReadFail(code != null ? code : 'unknown reason'), code }
-}
-
 // ── the row ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 export function rowModel(s, now) {
   const multi = Array.isArray(s.harnesses) && s.harnesses.length > 1 // S14: field presence — before it, never drawn
@@ -240,7 +234,7 @@ export const SERVICE_DOWN = new Set(['not-running', 'not-responding', 'not-insta
 // at that time: the shot is read once, so judging it against a later clock would call it stale.
 export function emptyBoardState(shot) {
   if (!shot) return { line: '' }
-  if (shot.fail) return { line: W.readCapFail(shot.fail), asOf: null }
+  if (shot.fail) return { line: readFailure(W.CAPTURE_HEALTH, shot.fail).line, asOf: null } // the reason is not drawn here (K-29)
   const v = captureVerdict(shot.h, { okAt: shot.asOf, now: shot.asOf })
   return { line: v.state === 'ok' ? W.CAPTURING_HINT : v.text, asOf: shot.asOf, verdict: v }
 }
