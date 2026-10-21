@@ -1,16 +1,17 @@
-// core/sensitive.mjs — the credential-class header names, ONE list for the whole board (2.6 §C 凭据类头 / 4.1 §凭据处置).
-// The same four HTTP-generic names the capture side stores verbatim and the server blanks in every query document, naming
-// them in ctl.masked (src/capture/redact.mjs : SECRET_HEADERS — a test imports both and compares); this list stays the
-// front end's floor for an answer that carries no ctl.masked. No provider knowledge: these are standard HTTP header
-// names. 1.9's proxy-address redaction (redactUrlCredentials) also lives in this file.
+// core/sensitive.mjs — the credential-class header rule for the whole board (2.6 §C 凭据类头 / 4.1 §凭据处置): one of
+// four HTTP-generic names, or a name ending in a whole `api-key` word. The server blanks the same class in every query document
+// and names it in ctl.masked (src/capture/redact.mjs : isSecretHeader — a test compares the two predicates); this one is the
+// front end's floor for an answer that carries no ctl.masked. No provider knowledge. 1.9's proxy-address redaction
+// (redactUrlCredentials) also lives in this file.
 import { esc } from './fmt.mjs'
-export const CREDENTIAL_HEADERS = Object.freeze(['authorization', 'x-api-key', 'cookie', 'proxy-authorization'])
+const CREDENTIAL_NAMES = new Set(['authorization', 'proxy-authorization', 'cookie', 'set-cookie'])
 
-// is a header name credential-class? Case-insensitive, whitespace-tolerant. The SERVER may mask a wider set (a name
-// carrying token / secret / key, set-cookie): its answer then carries masked:true and this board honours the mark;
-// this list is the front end's own floor for answers that carry no `masked` field (2.6 §C).
-export const isCredentialHeader = (name) =>
-  typeof name === 'string' && CREDENTIAL_HEADERS.includes(name.trim().toLowerCase())
+// is a header name credential-class? Case-insensitive, whitespace-tolerant.
+export const isCredentialHeader = (name) => {
+  if (typeof name !== 'string') return false
+  const n = name.trim().toLowerCase()
+  return CREDENTIAL_NAMES.has(n) || /(^|-)api-key$/.test(n)
+}
 
 /** One credential header's value: the server gives it only on a `calls {ref, reveal}` read (2.6 §C). Returns api.get's own
  * {ok, status, data, error}; the record (data.records[0]) carries that one value, every other credential still blanked. */
