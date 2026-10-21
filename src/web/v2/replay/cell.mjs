@@ -50,12 +50,18 @@ export function blockGot(doc) {
   const verbatim = !!(d.fidelity && d.fidelity.verbatim)
   return { status: 'ok', text: d.bytes, verbatim, fidelity: verbatim ? 'verbatim' : 'reserialized', note: (d.fidelity && d.fidelity.note) || null, truncated: d.truncated ?? null }
 }
+const asking = new Map() // ref -> the answer on its way: needs that meet while it is out share it
 export async function loadBody(api, ref) {
   if (bodyCache.has(ref)) return bodyCache.get(ref)
-  const r = await api.get('block', { ref })
-  const got = r.ok ? blockGot(r.data) : { status: r.status === 404 ? 'absent' : 'error', error: r.error }
-  if (r.ok || r.status === 404) bodyCache.set(ref, got)
-  return got
+  if (!asking.has(ref)) {
+    asking.set(ref, (async () => {
+      const r = await api.get('block', { ref })
+      const got = r.ok ? blockGot(r.data) : { status: r.status === 404 ? 'absent' : 'error', error: r.error }
+      if (r.ok || r.status === 404) bodyCache.set(ref, got)
+      return got
+    })().finally(() => asking.delete(ref)))
+  }
+  return asking.get(ref)
 }
 // a failed fetch that was not remembered: the next open asks again
 export const isRetryable = (got) => !!got && got.status === 'error'
