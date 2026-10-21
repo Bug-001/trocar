@@ -1,58 +1,90 @@
-// holders.mjs (src/off) — who may still use a door after `off` (RFC 4.11 P12; plan decision #4). A holder is a live process (pid + start time) that
-// may have read a route during its harness's on window: a process of h (D51 identity) started inside [on_at, off_at) — or, for a harness that
-// re-reads a route while running (`rereads`, the routes' datum — never the trust entry's `trust_rereads`), any process of h alive at off_at — or a process the door identified during that window (`doorSeen`,
-// recorded at accept). A harness whose hook re-reads the switch per request (`per_request`: the cordis-plugin) makes none: its next request after
-// `off` goes its own way. Judged from the manifest's `liveness.<h>` and a process table alone, never from open connections (an idle agent still holds
-// the door address), so the daemon's poll, `off`'s receipt, `status` and `uninstall`'s refusal while the daemon is down compute the same table.
-// Built on the kept judge (signature.mjs harnessesOf / withAgentList / mayHaveRead); imports only src/off (standalone-safe, 0.1 §2).
+// holders.mjs (src/off) — the one judge of a live process's life against its harness's door (4.11 P11 status, P12 holders): did it read an entry
+// that still leads to the door, may it have, or did it not? From the manifest's `liveness.<h>` (identity, rereads, on_at, off_at, since, door_since,
+// windows), the door's durable rows (door-seen.mjs) and a process table alone — never from open connections (an idle agent still holds the door
+// address) — so the daemon's poll, `off`'s receipt, `status` and `uninstall`'s refusal while the daemon is down compute the same answer. A holder is
+// any state but `not-read`, the safe direction (D50: one more holder, never one less; invariant 5). A harness whose hook re-reads the switch per
+// request (`per_request`: the cordis-plugin) makes none. Built on the kept off liveness judge (signature.mjs); imports only src/off (standalone-safe, 0.1 §2).
 import { harnessesOf, withAgentList, mayHaveRead } from './signature.mjs'
+import { chromiumRole } from './chromium.mjs'
+import { validFor, msOf } from './door-seen.mjs'
+import { itemsOfPhase } from './manifest.mjs'
 
-const msOf = (v) => { const t = typeof v === 'string' ? Date.parse(v) : Number.isFinite(v) ? v : NaN; return Number.isFinite(t) ? t : null }
-const inWindow = (at, since, until) => at == null || ((since == null || at >= since) && (until == null || at < until))
 export const WINDOWS_MAX = 32 // liveness.<h>.windows keeps at most this many earlier on windows (4.11 P12)
+const NOT = Object.freeze({ state: 'not-read' })
 
-/** Every on window of `l` whose entry value is the current one (4.11 P12): the earlier ones `on` kept in `windows` (the door's port and token
- *  unchanged since), then the latest [on_at, off_at) — `until` null while it is still open. A full list's earliest start is not known (-Infinity: the
- *  safe direction, one more holder) — its end still is: a process started in the gap after it read no entry. → [{ since, until }] */
-export function windowsOf(l) {
-  if (!l || typeof l !== 'object' || l.on_at == null) return []
-  const past = (Array.isArray(l.windows) ? l.windows : []).filter((w) => w && w.on_at != null && w.off_at != null).map((w) => ({ since: msOf(w.on_at), until: msOf(w.off_at) }))
-  if (past.length >= WINDOWS_MAX) past[0].since = -Infinity
-  return [...past, { since: msOf(l.on_at), until: l.off_at == null ? null : msOf(l.off_at) }]
-}
+/** Every on window of `l`, the earlier ones `windows` keeps then the latest [on_at, off_at) — until null while it is open. → [{ since, until }] */
+const windowsOf = (l) => (l && typeof l === 'object' && l.on_at != null
+  ? [...(Array.isArray(l.windows) ? l.windows : []).filter((w) => w && w.on_at != null && w.off_at != null).map((w) => ({ since: msOf(w.on_at), until: msOf(w.off_at) })),
+    { since: msOf(l.on_at), until: l.off_at == null ? null : msOf(l.off_at) }]
+  : [])
 
-/** Did live process `p` (startedAt in ms or ISO) read an entry of `l`'s harness that still leads to its door (4.11 P11 status, D31①)? → true · false · null (its start is not known).
- *  Judged as the holders are (mayHaveRead, over the start its reader's `startGrain` allows): a whole-second reading (macOS `lstart`) inside on_at's
- *  second read the entry (1.6 A.2 row 32), and after off is a holder. */
-export function sawEntry(p, l) {
+/** Is door row `row` of process `p`'s life — the same pid AND the same start (a reused pid is another process)? */
+export const sameLife = (row, p) => !!row && !!p && row.pid === p.pid && msOf(row.start) === msOf(p.startedAt)
+
+/** judgeLife({ p, l, table, rows, carrierAt, isMine }) → { state: 'door' | 'read' | 'maybe' | 'not-read' | 'start-unknown', row?, via? }
+ *  p: a process-table row; l: its harness's liveness record; table: the whole table (ppid walks, the Chromium fold); rows: the harness's door rows;
+ *  carrierAt: the earliest carrier time (ms) or null (unknown: the safe direction); isMine(x): is x a process of this harness (D51).
+ *  via ∈ started-in-window · rereads · history-unknown · host-of · ancestor. */
+export function judgeLife({ p, l, table = [], rows = [], carrierAt = null, isMine = () => true }, seen = new Set()) {
+  if (!p || seen.has(p.pid)) return NOT
+  seen.add(p.pid)
+  const row = (rows || []).find((r) => sameLife(r, p) && validFor(r, l))
+  if (row) return { state: 'door', row }
+  const again = (x) => judgeLife({ p: x, l, table, rows, carrierAt, isMine }, seen)
+  if (chromiumRole(p.argv) === null) { // a Chromium host reads through its network service: the child's judgement is the host's
+    for (const c of table) {
+      if (c.ppid !== p.pid || c.pid === p.pid || !isMine(c) || chromiumRole(c.argv) !== 'network-service') continue
+      const j = again(c)
+      if (j.state !== 'not-read') return { ...j, via: 'host-of' }
+    }
+  }
   const w = windowsOf(l)
-  if (!w.length) return false
-  if (p.startedAt == null) return null
+  if (!w.length) return NOT // never on: no entry to read
+  if (p.startedAt == null) return { state: 'start-unknown' }
   const q = { startedAt: msOf(p.startedAt), startGrain: p.startGrain }
-  return w.some((x) => mayHaveRead(q, !!l.rereads, x.since, x.until))
+  if (q.startedAt == null) return { state: 'start-unknown' }
+  if (l.rereads && mayHaveRead(q, true, null, w[w.length - 1].until)) return { state: 'read', via: 'rereads' }
+  const moved = Math.max(-Infinity, ...Object.values((l.door_since && typeof l.door_since === 'object') ? l.door_since : {}).map(msOf).filter((x) => x != null))
+  const hit = w.filter((x) => mayHaveRead(q, false, x.since, x.until))
+  if (hit.length) return { state: hit.some((x) => x.since == null || x.since >= moved) ? 'read' : 'maybe', via: 'started-in-window' }
+  const last = Number.isFinite(q.startGrain) && q.startGrain > 1 ? q.startedAt + q.startGrain - 1 : q.startedAt
+  if (msOf(l.since) == null && w[0].since != null && q.startedAt < w[0].since && (carrierAt == null || last > carrierAt)) return { state: 'maybe', via: 'history-unknown' }
+  // a known gap: what it read is what its nearest ancestor of the same harness may have handed down
+  const parentOf = (x) => table.find((y) => y.pid === x.ppid && y.pid !== x.pid)
+  for (let a = parentOf(p); a && !seen.has(a.pid); a = parentOf(a)) {
+    if (!isMine(a)) { seen.add(a.pid); continue }
+    return again(a).state !== 'not-read' ? { state: 'maybe', via: 'ancestor' } : NOT
+  }
+  return NOT
 }
 
-/** → `[{ harness, pid, start, why: 'started-in-window' | 'rereads' | 'start-unknown' | 'door-seen' }]`, in liveness order, one row per (harness, pid).
- *  `procs`: the live table (listProcs rows); `doorSeen`: `[{ harness, pid, start, at }]` from the door's accepts; `agentList`: readAgentList's result,
- *  whose additions count as the harness's names too (the safe direction, as in undo). */
+/** status's door-free reading until it reads judgeLife itself: true = read an entry in a window, null = its start is not known, else false. */
+export function sawEntry(p, l) {
+  const j = judgeLife({ p, l })
+  return j.state === 'start-unknown' ? null : j.via === 'started-in-window' || j.via === 'rereads'
+}
+
+const whyOf = (j) => j.via || (j.state === 'door' ? 'door-seen' : 'start-unknown')
+
+/** → `[{ harness, pid, start, why }]`, in liveness then table order; why ∈ door-seen · started-in-window · rereads · start-unknown · history-unknown ·
+ *  ancestor · host-of. `procs`: the live table (listProcs rows); `doorSeen`: the door's durable rows (door-seen.mjs); `agentList`: readAgentList's
+ *  result, whose additions count as the harness's names too (the safe direction, as in undo). */
 export function holdersOf({ manifest, procs = [], doorSeen = [], agentList = null } = {}) {
   const raw = manifest && manifest.liveness && typeof manifest.liveness === 'object' ? manifest.liveness : {}
   const { liveness } = withAgentList(raw, agentList)
+  const items = itemsOfPhase(manifest, 'install')
   const out = []
   for (const [h, l] of Object.entries(liveness)) {
     // holders exist only after off (1.6 R5): a record without on_at is not the model's (Linux, the old model), one without off_at is still on
     if (!l || typeof l !== 'object' || l.per_request || l.on_at == null || l.off_at == null) continue
-    const windows = windowsOf(l) // every on window that led to this door, the latest last (an off→on keeps the earlier ones, P12)
-    const seen = new Set()
-    const add = (p, why) => { if (!seen.has(p.pid)) { seen.add(p.pid); out.push({ harness: h, pid: p.pid, start: p.startedAt ?? null, why }) } }
+    const isMine = (x) => harnessesOf({ [h]: l }, x).length > 0
+    const rows = (doorSeen || []).filter((r) => r && r.harness === h)
+    const t = items.filter((i) => i.harness === h || i.kind === 'system-root').map((i) => msOf(i.installed_at)).filter((x) => x != null)
+    const carrierAt = t.length ? Math.min(...t) : null // the earliest carrier: the safe direction
     for (const p of procs) {
-      if (!harnessesOf({ [h]: l }, p).length || !windows.some((w) => mayHaveRead(p, !!l.rereads, w.since, w.until))) continue
-      add(p, p.startedAt == null ? 'start-unknown' : l.rereads ? 'rereads' : 'started-in-window')
-    }
-    for (const s of doorSeen) {
-      if (!s || s.harness !== h || !windows.some((w) => inWindow(msOf(s.at), w.since, w.until))) continue
-      const p = procs.find((x) => x.pid === s.pid && (x.startedAt ?? null) === (s.start ?? null)) // pid + start: a reused pid is another process
-      if (p) add(p, 'door-seen')
+      if (!isMine(p) && !rows.some((r) => sameLife(r, p))) continue
+      const j = judgeLife({ p, l, table: procs, rows, carrierAt, isMine })
+      if (j.state !== 'not-read') out.push({ harness: h, pid: p.pid, start: p.startedAt ?? null, why: whyOf(j) })
     }
   }
   return out

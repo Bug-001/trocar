@@ -9,7 +9,7 @@ import { serializeSignature } from '../../../../src/off/signature.mjs'
 import { holdersRoute } from '../../../../src/collector/core/control.mjs'
 
 const ON = 1_000_000, OFF = 2_000_000
-const liveness = { agentx: { identity: serializeSignature(compileIdentity({ harness: 'agentx', names: [{ name: 'agentx' }] })), rereads: false, on_at: new Date(ON).toISOString(), off_at: new Date(OFF).toISOString() } }
+const liveness = { agentx: { identity: serializeSignature(compileIdentity({ harness: 'agentx', names: [{ name: 'agentx' }] })), rereads: false, since: new Date(ON).toISOString(), on_at: new Date(ON).toISOString(), off_at: new Date(OFF).toISOString() } } // since: the first on's (P12)
 const proc = (pid, startedAt, name = 'agentx') => ({ pid, startedAt, exe: `/opt/${name}`, argv: [name], env: () => null, envRead: false })
 const fakeTimers = () => { const q = []; return { q, setTimeout: (fn, ms) => { q.push({ fn, ms }); return q.length }, clearTimeout: () => { q.length = 0 }, async fire() { const t = q.shift(); await t.fn() } } }
 const flush = () => new Promise((r) => setImmediate(r))

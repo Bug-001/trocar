@@ -29,6 +29,7 @@ import { formatUninstallReceipt } from './receipt.mjs'
 import { removeIngressConfig } from '../collector/core/ingress-config.mjs'
 import { refuseElevatedByWhoami, disableScheduledTask, TASK_NAME } from '../off/win32.mjs'
 import { holdersOf } from '../off/holders.mjs'
+import { readDoorSeen } from '../off/door-seen.mjs'
 import { readStateFile } from '../off/state.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { signHelperPath } from '../collector/arch/model-backends.mjs'
@@ -40,7 +41,7 @@ import { isModelOs } from '../collector/model-install.mjs' // macOS / Windows ru
  *  phase-on items; `holders`: P12's table, from the daemon (GET /holders) when it answers, else judged here from the manifest's liveness and the
  *  process table (src/off/holders.mjs, the same judge); `unknown`: why the holders could not be told (a daemon that does not answer, an unreadable
  *  table) — never read as "nobody". */
-async function captureOnline(w, m) {
+async function captureOnline(w, m, notes = []) {
   let st = null
   try { st = readStateFile(w.stateF, { fs: w.fs, installed: harnessIdsOf(m), now: w.clock() }).state } catch { st = null }
   const on = [...new Set([...Object.entries((st && st.harnesses) || {}).filter(([, v]) => v && v.desired === 'on').map(([h]) => h),
@@ -52,7 +53,9 @@ async function captureOnline(w, m) {
     if (r && Array.isArray(r.holders)) holders = r.holders; else unknown = 'the daemon does not know its holders yet'
   } catch (e) {
     if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) { // the daemon is down: the CLI judges, by the same rule
-      try { holders = holdersOf({ manifest: m, procs: await w.procs(), agentList: readAgentList({ home: w.home, fs: w.fs }) }) } catch (t) { unknown = `the process table could not be read (${errText(t)})` }
+      const ds = readDoorSeen({ dir: w.dir, fs: w.fs }) // the door's durable rows (P12); unreadable: judged without them, the safe direction
+      if (ds.rows == null) notes.push(`${ds.error}, so the holders were judged without it`)
+      try { holders = holdersOf({ manifest: m, procs: await w.procs(), doorSeen: ds.rows || [], agentList: readAgentList({ home: w.home, fs: w.fs }) }) } catch (t) { unknown = `the process table could not be read (${errText(t)})` }
     } else unknown = `a daemon holds the control endpoint but did not answer (${errText(e)})`
   }
   return on.length || unknown || (holders && holders.length) ? { on, holders: holders || [], unknown } : null
@@ -139,7 +142,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     ;({ m, merr } = read()) // read AGAIN under the lock: an `on` that held it has written to the manifest since
     receipt.harnesses = harnessIdsOf(m)
     // CM24: on macOS / Windows uninstall never does off — capture online (a harness on, a holder, or not knowable) is named and nothing changes
-    const online = isModelOs(w.platform) && m && !m.unsupported ? await captureOnline(w, m) : null
+    const online = isModelOs(w.platform) && m && !m.unsupported ? await captureOnline(w, m, receipt.notes) : null
     if (online) {
       const why = [online.on.length ? `capture is still on for ${online.on.join(', ')}` : null, online.holders.length ? `these processes still have trocar in their environment: ${online.holders.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}` : null, online.unknown ? `whether any process still has trocar in its environment is unknown (${online.unknown})` : null].filter(Boolean).join('; ') + '. Nothing was changed. Run: trocar off, wait for those processes to quit, then run trocar uninstall again'
       // 附录 C.1: the refusal's code lives in `error` and nowhere else; `message` is the sentence the text form prints

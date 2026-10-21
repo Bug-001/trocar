@@ -33,6 +33,7 @@ import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside } fro
 import { harnessesOf, hasIdentity, withAgentList, mayHaveRead, trustRereads } from './signature.mjs'
 import { readAgentList } from './identity.mjs'
 import { holdersOf } from './holders.mjs'
+import { readDoorSeen } from './door-seen.mjs'
 import { certBlocks, stripCert, composeBundle, certsOf } from './pem.mjs'
 import { offLines } from './text-edit.mjs'
 import { decodeText } from './text-codec.mjs'
@@ -356,7 +357,9 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   }
   if (windowed.length) {
     const t = await table()
-    out.holders = t.error ? null : holdersOf({ manifest, procs: t.list, agentList: home ? readAgentList({ home, fs }) : null }).filter((x) => inScope(x.harness))
+    const ds = readDoorSeen({ dir, fs }) // the door's durable rows (P12); unreadable = door evidence not known: the judge keeps the safe direction
+    if (ds.rows == null) out.notes.push(`which programs the door met could not be read (${ds.error}), so the holders are judged without it`)
+    out.holders = t.error ? null : holdersOf({ manifest, procs: t.list, doorSeen: ds.rows || [], agentList: home ? readAgentList({ home, fs }) : null }).filter((x) => inScope(x.harness))
     if (t.error) out.notes.push(`the process table could not be read (${t.error}), so which programs may still be connected through trocar is not known`)
   }
 
