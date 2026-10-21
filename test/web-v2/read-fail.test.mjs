@@ -9,12 +9,14 @@ import * as trafficPage from '../../src/web/v2/traffic/traffic.mjs'
 import * as hostPage from '../../src/web/v2/traffic/host.mjs'
 import * as prices from '../../src/web/v2/settings/prices.mjs'
 import * as storage from '../../src/web/v2/settings/storage.mjs'
-import { readFailHtml, captionHtml } from '../../src/web/v2/library/library.mjs'
-import { emptyBoardState } from '../../src/web/v2/library/logic.mjs'
+import { readFailHtml, captionHtml, emptyBoardHtml } from '../../src/web/v2/library/library.mjs'
+import { capShotMaker } from '../../src/web/v2/library/logic.mjs'
 import { pageLogHtml } from '../../src/web/v2/capture/capture-log.mjs'
 import { captureVerdict } from '../../src/web/v2/core/capture-verdict.mjs'
 import { screenErrorHtml } from '../../src/web/v2/shell/safemount.mjs'
-import { hidesReason, reasonsWith, visibleOf } from './visible.mjs'
+import { hidesReason, reasonsWith, visibleOf, outsideCollapsed } from './visible.mjs'
+import { esc } from '../../src/web/v2/core/fmt.mjs'
+import * as LW from '../../src/web/v2/labels/library.mjs'
 import { trafficWorld } from './traffic-world.mjs'
 import { boardHome } from './real-face.mjs'
 
@@ -105,7 +107,7 @@ test('AC-2 a failed read on traffic, a host page (list and request detail), Sett
   }
 })
 
-test('AC-4 library, capture log and the shell keep a failed read\'s reason out of the visible text', () => {
+test('AC-4 library, capture log and the shell keep a failed read\'s reason out of the visible text', async () => {
   const NOW = Date.parse('2026-10-20T12:00:00Z')
   for (const status of [0, 500, 503]) {
     for (const make of [0, 1, 2, 3]) {
@@ -118,8 +120,17 @@ test('AC-4 library, capture log and the shell keep a failed read\'s reason out o
       const cap = captionHtml([], r, NOW - 5000)
       hidesReason(cap, t, given, where('stale caption'))
       assert.ok(cap.includes('data-act="retry"'), where('stale caption'))
+      // the empty board's capture-health line, from the one-shot read: answered, thrown, or a 503 verdict
+      for (const [how, fetch] of [['answer', async () => r], ['throw', async () => { throw new Error(reason) }]]) {
+        const shot = capShotMaker(fetch, () => NOW)
+        await shot.read()
+        const eb = emptyBoardHtml(shot.settled)
+        hidesReason(eb, t, given, where(`empty board ${how}`))
+        // a failed answer keeps its cause class on the line: the same line any board read failure with that status says
+        const st = how === 'throw' ? 0 : status
+        if (!(st === 503 && given)) assert.ok(outsideCollapsed(eb).includes(esc(readFailure(LW.CAPTURE_HEALTH, { status: st }).line)), where(`empty board ${how} cause`))
+      }
       if (!given) continue // the rest take a bare reason; an empty one is no failure there
-      assert.ok(!emptyBoardState({ fail: reason }).line.includes(t), where('empty board'))
       hidesReason(pageLogHtml({ unreadable: reason }), t, true, where('capture log'))
       assert.ok(!visibleOf(captureVerdict({ unreadable: reason }, { okAt: NOW, now: NOW }).text).includes(t), where('verdict'))
       hidesReason(screenErrorHtml(reason), t, true, where('screen error'))

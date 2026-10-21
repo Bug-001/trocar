@@ -105,7 +105,7 @@ export function readFailHtml(errR) {
 export function emptyBoardHtml(shot) {
   const c = emptyBoardState(shot)
   const line2 = c.line ? `${esc(c.line)}${c.asOf != null ? ` · ${esc(W.AS_OF)} ${esc(fmtTime(c.asOf))}` : ''}` : ''
-  return `${esc(W.NO_SESSIONS)}<br><span class="dimline">${line2}</span> <a href="${esc(formatHash({ area: 'capture', screen: 'capture', params: {} }))}">${esc(W.GO_CAPTURE)} ›</a>`
+  return `${esc(W.NO_SESSIONS)}<br><span class="dimline">${line2}</span> <a href="${esc(formatHash({ area: 'capture', screen: 'capture', params: {} }))}">${esc(W.GO_CAPTURE)} ›</a>${c.tech}`
 }
 // filters emptied a non-empty board. When exactly one agent was picked, the line asks whether it is even captured.
 export function filteredEmptyHtml(shot, f) {
