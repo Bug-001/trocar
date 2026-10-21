@@ -138,3 +138,14 @@ test('windows: a full list makes its earliest start unknown (the safe direction)
   assert.equal(sawEntry({ startedAt: ON + 5 }, { identity: identity('agentx') }), false)
   assert.equal(sawEntry({ startedAt: null }, rec('agentx')), null)
 })
+
+// V32 (1.6 A.2 row 32): a start read to the whole second (macOS `lstart`) that falls in on_at's second read the entry; a millisecond start is unchanged
+for (const k of [2, 17, 250, 500, 998, 999]) {
+  test(`same second: on_at = S + ${k} ms, a whole-second start S read the entry; S - 1 s and a millisecond start before on_at did not`, () => {
+    const S = ON, l = rec('agentx', { on_at: iso(S + k) })
+    delete l.off_at
+    assert.equal(sawEntry({ startedAt: S }, l), true)
+    assert.equal(sawEntry({ startedAt: S - 1000 }, l), false)
+    assert.equal(sawEntry({ startedAt: S + k - 1 }, l), false, 'a millisecond start before on_at')
+  })
+}

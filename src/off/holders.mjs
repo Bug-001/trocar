@@ -27,7 +27,9 @@ export function sawEntry(p, l) {
   if (!w.length) return false
   if (p.startedAt == null) return null
   const at = msOf(p.startedAt)
-  return w.some((x) => mayHaveRead({ startedAt: at }, l, x.since, x.until))
+  // a whole-second reading (macOS `lstart`) means a start somewhere in [at, at + 1000): one inside on_at's second read the entry (1.6 A.2 row 32)
+  const starts = at != null && at % 1000 === 0 ? [at, at + 999] : [at]
+  return w.some((x) => starts.some((s) => mayHaveRead({ startedAt: s }, l, x.since, x.until)))
 }
 
 /** → `[{ harness, pid, start, why: 'started-in-window' | 'rereads' | 'start-unknown' | 'door-seen' }]`, in liveness order, one row per (harness, pid).

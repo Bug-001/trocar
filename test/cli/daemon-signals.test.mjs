@@ -1,6 +1,6 @@
 // test/cli/daemon-signals.test.mjs — V99 (RFC 1.6 §5.2): a stop signal that arrives while the daemon is already stopping is ignored, so the
 // stop runs once and to its end. A real child process runs the real runDaemonCli and its real signal wait (fixtures/daemon-child.mjs); only the
-// daemon module is a stub whose stop takes a second.
+// daemon module is a stub whose stop takes a second. After the stop, the handlers are gone: a later signal takes the default action.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -40,3 +40,32 @@ for (const [first, ...later] of [['SIGTERM', 'SIGTERM', 'SIGTERM'], ['SIGINT', '
     }
   })
 }
+
+test('V99: after the stop, with the loop still held alive, a SIGINT ends the process — the lock removed, one daemon-stop record', async () => {
+  const home = tmpDir('trocar-dsig-')
+  const dir = path.join(home, '.trocar', 'collector')
+  fs.mkdirSync(dir, { recursive: true })
+  saveManifest(dir, { ...newManifest(), install: { state: 'complete' }, entries: [{ phase: 'install', kind: 'root-key', what: 'the root' }] })
+  const env = watchEnv({ ...process.env, HOME: home }); delete env.INVOCATION_ID
+  const child = spawn(process.execPath, [...WITH_PARENT, CHILD, 'run-held'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  let out = '', err = ''
+  child.stdout.on('data', (b) => { out += b }); child.stderr.on('data', (b) => { err += b })
+  const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })))
+  const timeout = (ms, what) => new Promise((_, reject) => { const t = setTimeout(() => reject(new Error(`${what} within ${ms} ms; out=${out} err=${err}`)), ms); t.unref() })
+  const flows = path.join(dir, 'flows')
+  const stops = () => { try { return fs.readdirSync(flows).flatMap((f) => fs.readFileSync(path.join(flows, f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))).filter((x) => x.event === 'daemon-stop') } catch { return [] } }
+  const until = (ok) => new Promise((resolve) => { const check = () => (ok() ? resolve() : setTimeout(check, 20)); check() })
+  try {
+    await Promise.race([until(() => /trocar collector:/.test(out)), timeout(10_000, 'no readiness line')])
+    child.kill('SIGTERM')
+    await Promise.race([until(() => stops().length > 0), timeout(10_000, 'no daemon-stop record')])
+    await new Promise((resolve) => setTimeout(resolve, 100)) // the stop's promise settles and the handlers come off
+    child.kill('SIGINT')
+    const r = await Promise.race([exited, timeout(5_000, 'no exit after the stop')])
+    assert.ok(r.signal === 'SIGINT' || r.code != null, JSON.stringify(r))
+    assert.equal(fs.existsSync(path.join(dir, 'lock')), false)
+    assert.equal(stops().length, 1)
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+  }
+})
