@@ -83,14 +83,14 @@ const WS = /\s/;
 // never emitted (trim again).
 // The characters are collected and joined ONCE: `out += c` per character left a V8 cons-string tree of ~90 nodes behind
 // every preview (~2 KB of heap for 90 chars), which an assembled window of 60 large calls held as 167 MB (measured).
-const shorten = (s) => {
+const shorten = (s, max = PREVIEW_MAX) => {
   const t = String(s || '');
   const out = [];
   let pending = false;
-  for (let i = 0; i < t.length && out.length < PREVIEW_MAX; i++) {
+  for (let i = 0; i < t.length && out.length < max; i++) {
     const c = t[i];
     if (WS.test(c)) { if (out.length) pending = true; continue; }
-    if (pending) { out.push(' '); pending = false; if (out.length >= PREVIEW_MAX) break; }
+    if (pending) { out.push(' '); pending = false; if (out.length >= max) break; }
     out.push(c);
   }
   return out.join('');
@@ -197,10 +197,22 @@ function blockQuery(b) {
   return queryOf(b, bodyTextOf(b));
 }
 // …over a body text the caller already has (slimBlock builds it once for chars, preview and this).
-function queryOf(b, raw) {
-  if (!b || b.sec !== 'messages' || b.role !== 'user' || b.kind !== 'text') return null;
+const isUserText = (b) => !!b && b.sec === 'messages' && b.role === 'user' && b.kind === 'text';
+function queryOf(b, raw, max = PREVIEW_MAX) {
+  if (!isUserText(b)) return null;
   const human = String(raw || '').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
-  return human ? shorten(human) : null;
+  return human ? shorten(human, max) : null;
+}
+// How long a lane's task is (4.4 §看板 v2 需要的补充 `lanes[].task`; the session title is the main lane's).
+const TASK_MAX = 80;
+/** firstAsk(flat) → the first human prompt of a context (blockQuery's rule), squashed, ≤ TASK_MAX characters, or null. A string of
+ *  its own (shorten joins its characters), so a fold that keeps it does not keep the block's text alive. */
+export function firstAsk(flat) {
+  for (const b of flat || []) {
+    const q = isUserText(b) ? queryOf(b, bodyTextOf(b), TASK_MAX) : null;
+    if (q) return q;
+  }
+  return null;
 }
 
 // Fields that carry the block's CONTENT. These are what must not cross the wire; everything else on

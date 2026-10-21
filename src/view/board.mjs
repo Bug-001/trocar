@@ -3,7 +3,6 @@
 //   session → { records(slim), analyzed, probes, meta, truncated }
 // All provider parsing happens in the assembler (src/view/assemble.mjs) HERE, server-side — the browser
 // receives only canonical `analyzed` (invariant 3 / AC-3). Pure over its `records` input;
-// human-title / cwd enrichment is injected via `enrich(id)` so this module stays testable.
 import { createAssembler, sessionIdOf, headersOf, respOf } from './assemble.mjs';
 import { stepOrder } from './analyze.mjs';
 import { harnessOf as harnessOfRecord, LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
@@ -71,19 +70,16 @@ const hasSubagent = (recs) => recs.some((r) => String(headersOf(r)['x-claude-cod
 // the same time the segment index keeps per record (src/query/rows.mjs), so the list and the board sort alike
 function lastTs(recs) { let m = ''; for (const r of recs) { const t = String(r.ts_request ?? r.ts ?? ''); if (t > m) m = t; } return m; }
 
-// project_slug / project_path / title are a BOARD-side lookup (enrich against ~/.claude/projects),
-// not a capture fact — so they are layered on separately from the per-session facts. This is applied
-// both to metas computed from records (sessionMetaFor) and to facts counted from the segment index
-// (sessionMetaOfFacts), so the two paths produce identical session objects.
-// It is also the ONE place the session document's shape lives (附录 C.5): `trocar query sessions` derives the
-// same facts from the segment index (src/query/rows.mjs sessionFactsOf) and hands them to this function, so the
-// list the board draws and the list the CLI prints are one document, however they were counted.
-function applyEnrich(base, enrich) {
-  const info = enrich ? enrich(base.session_id) : null; // { slug, cwd, title } | null
+// The ONE place the session document's shape lives (附录 C.5): `trocar query sessions` derives the same facts from the segment
+// index (src/query/rows.mjs sessionFactsOf) and hands them to this function, so the list the board draws and the list the CLI prints
+// are one document, however they were counted. The title is the main lane's task — the first prompt of the captured request (4.4
+// §人类标题的来源) — so where it came from is always the wire. No project is known from the capture: '_unresolved', no path.
+function sessionDoc(base) {
+  const title = base.title ?? null;
   return {
     session_id: base.session_id,
-    project_slug: info && info.slug ? info.slug : '_unresolved',
-    project_path: (info && info.cwd) || null,
+    project_slug: '_unresolved',
+    project_path: null,
     entrypoint: base.entrypoint ?? null,
     harness: base.harness ?? null,
     // a meta.json written before D37 has no flag: that fold read only the UA, so its harness was inferred
@@ -91,9 +87,8 @@ function applyEnrich(base, enrich) {
     // grouped by a synthesized key (3.4: confidence low) — the chip says so
     session_synthesized: !!base.session_synthesized,
     provider: base.provider ?? null,
-    title: (info && info.title) || null,
-    // where the title came from (附录 C.5, 4.4 §人类标题的来源): the harness's own local store, never the captured wire
-    title_source: info && info.title ? 'harness-local-store' : null,
+    title,
+    title_source: title != null ? 'wire' : null,
     calls: base.calls || 0,
     logged: base.logged || 0, // D40: inference calls kept as a log line only (a meta.json written before D40 has none)
     probes: base.probes || 0,
@@ -103,8 +98,8 @@ function applyEnrich(base, enrich) {
   };
 }
 
-function sessionMetaFor(id, recs, enrich) {
-  return applyEnrich({
+function sessionMetaFor(id, recs, title) {
+  return sessionDoc({
     session_id: id,
     entrypoint: entrypointOf(recs),
     ...harnessOf(recs), // { harness, harness_inferred, provider }
@@ -115,11 +110,12 @@ function sessionMetaFor(id, recs, enrich) {
     has_subagent: hasSubagent(recs),
     last_ts: lastTs(recs),
     session_synthesized: recs.some((r) => !!r._synthKey),
-  }, enrich);
+    title,
+  });
 }
 
-/** One session meta from facts counted elsewhere (the segment index), in the one document shape. */
-export const sessionMetaOfFacts = (facts, { enrich } = {}) => applyEnrich(facts, enrich);
+/** One session meta from facts counted elsewhere (the segment index; `title` from the usage sidecar), in the one document shape. */
+export const sessionMetaOfFacts = (facts) => sessionDoc(facts);
 
 // ── session ──────────────────────────────────────────────────────────────
 // analyze() sees LLM calls only (count_tokens probes are passed separately, as the demo did);
@@ -184,7 +180,7 @@ function itemOf(r) {
   };
 }
 /**
- * sessionFold(sessionId, {read}) → { push(rec, key), view(keys, {enrich, bound}), filled(call, rec) } — ONE session, folded record by
+ * sessionFold(sessionId, {read}) → { push(rec, key), view(keys, {bound}), filled(call, rec) } — ONE session, folded record by
  * record (3.5 §内存有界; src/view/assemble.mjs createAssembler; `read(ids)` yields records back by id, in the order asked, for a
  * cross-record context whose items the fold no longer holds — src/dissect/chain.mjs — and for a lane folded again). push() takes the
  * session's records in step order within each lane, the lanes in any order (createAssembler); `key` names the record
@@ -201,15 +197,17 @@ export function sessionFold(sessionId, { read = null } = {}) {
       // analyze() sees inference calls only: count_tokens probes and D40 log-only calls are counted apart (above)
       return r.is_llm_call && !isLogOnly(r) ? asm.push(r) : null;
     },
-    view(keys, { enrich, bound = null } = {}) {
+    view(keys, { bound = null } = {}) {
       const its = keys.map((k) => items.get(k)).filter(Boolean);
       const probes = its.filter((i) => i.probe).map((i) => i.probe);
+      const analyzed = asm.finish();
+      const main = (analyzed.lanes || []).find((l) => l.kind === 'main');
       return {
         records: its.map((i) => i.slim),
-        analyzed: asm.finish(),
+        analyzed,
         logged: loggedView(its.filter((i) => i.logged).map((i) => i.logged)),
         probes: { count: probes.length, series: probes.filter((p) => p.tokens != null) },
-        meta: sessionMetaFor(sessionId, its.map((i) => i.light), enrich),
+        meta: sessionMetaFor(sessionId, its.map((i) => i.light), main ? main.task ?? null : null),
         truncated: bound, // 保真边界 (invariant 4): set when a session too large for even its meta was read from its tail
       };
     },
@@ -217,14 +215,14 @@ export function sessionFold(sessionId, { read = null } = {}) {
   };
 }
 // The batch form over records in memory (the usage sidecar's fill, tests). No `page` → every call ships its body.
-export function sessionView(records, sessionId, { enrich, page } = {}) {
+export function sessionView(records, sessionId, { page } = {}) {
   const recs = groupSessions(records).get(sessionId);
   if (!recs) return null;
   const f = sessionFold(sessionId);
   const recOf = new Map();
   for (const r of [...recs].sort(stepOrder)) { const c = f.push(r); if (c) recOf.set(c, r); }
   const fill = (calls) => new Map(calls.map((c) => [c, f.filled(c, recOf.get(c))]));
-  const view = f.view(recs, { enrich });
+  const view = f.view(recs);
   return page ? pageView(view, page, { fill }) : bodied(view, (c) => fill([c]).get(c));
 }
 // A call in its meta form with its body put back (a NEW object: the fold's own call is left as it is).

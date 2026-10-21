@@ -20,7 +20,7 @@ import { indexDir, readIndex, tailMark, usability, storeIndex, segmentSource, pl
 import { warmCache, fsTag, statKey } from './warm.mjs';
 import { trocarHome } from '../paths.mjs';
 
-const USAGE_V = 1;
+const USAGE_V = 2; // 2: a main-lane call carries `ask` (the session title, 4.4 §人类标题的来源)
 export const USAGE_CHUNK_BYTES = 4 << 20; // stored bytes of model calls read back per chunk (4.2 §用量旁注 ④)
 
 export const usageFile = (home, segment) => path.join(indexDir(home), `${segment}.usage.json`);
@@ -33,7 +33,7 @@ function canonical(c) {
   try { return mapUsage(c.wire.format, raw, { vendor: c.wire.vendor }); } catch { return null; }
 }
 
-/** callFacts(records) → [{id, lane, model, failed, cache_known, usage}] — one per call `session` assembles from these
+/** callFacts(records) → [{id, lane, model, failed, cache_known, usage, ask?}] — one per call `session` assembles from these
  *  records. The session keys are THESE records' own: a synthesized key depends on the first record it is stamped over. */
 export function callFacts(records) {
   const out = [];
@@ -48,7 +48,9 @@ export function callFacts(records) {
       const failed = c.status == null || c.status >= 400;
       const u = failed ? null : canonical(c);
       out.push({ id: c.rec && c.rec.id, lane: lane.kind, model: (c.rec && c.rec.request && c.rec.request.model) ?? null, failed,
-        cache_known: !!(c.wire && c.wire.cacheSemanticsKnown), usage: u ? [u.input_uncached, u.output, u.cache_read, u.cache_write] : null });
+        cache_known: !!(c.wire && c.wire.cacheSemanticsKnown), usage: u ? [u.input_uncached, u.output, u.cache_read, u.cache_write] : null,
+        // the main lane's task rides on its calls: `sessions` takes the earliest one's as the title (4.2 §用量旁注 `ask`)
+        ...(lane.kind === 'main' ? { ask: lane.task ?? null } : null) });
     }
   }
   return out;
@@ -56,7 +58,7 @@ export function callFacts(records) {
 
 // WARM like the index rows (D63 ①): kept against the segment's files and the sidecar's own, so never stale.
 const read = warmCache({ cost: (v) => (v ? v.facts.size * 160 : 0) });
-/** readUsage({home, segment}) → { lines, facts: Map<lineNo, {lane, model, failed, cache_known, usage}>, problems } | null
+/** readUsage({home, segment}) → { lines, facts: Map<lineNo, {lane, model, failed, cache_known, usage, ask?}>, problems } | null
  *  `lines`: the calls of lines 1..lines are all in `facts` (Infinity: a sealed segment, whole). null: no usable sidecar. */
 export const readUsage = ({ home = trocarHome(), segment, fs = nodeFs } = {}) =>
   read.get(`${fsTag(fs)}\n${home}\n${segment}`, `${segStamp(home, segment, fs)}|${statKey(usageFile(home, segment), fs)}`, () => {
@@ -68,7 +70,8 @@ export const readUsage = ({ home = trocarHome(), segment, fs = nodeFs } = {}) =>
   });
 
 const tick = () => new Promise((r) => setImmediate(r));
-const callLine = ({ line, lane, model, failed, cache_known, usage }) => `${JSON.stringify({ line, lane, model, failed, cache_known, usage })}\n`;
+const callLine = ({ line, lane, model, failed, cache_known, usage, ask }) =>
+  `${JSON.stringify({ line, lane, model, failed, cache_known, usage, ...(ask !== undefined ? { ask } : null) })}\n`;
 const problemLine = (p) => `${JSON.stringify({ p })}\n`;
 const markLine = (m) => `${JSON.stringify({ m, v: USAGE_V })}\n`;
 const lineOf = (id) => Number(String(id).split(':').pop());

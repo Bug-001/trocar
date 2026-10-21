@@ -366,7 +366,7 @@ export function analyze(records) {
 // thread): when a record arrives before one already folded, no lane can be folded again alone — the session is folded from scratch.
 export class OrderBound extends Error {}
 
-// createAnalyzer() → { push(rec, gi) → step | null, laneOf(step), drop(lane), calls(), finish() → {streams, steps, stats, lanes} }: a
+// createAnalyzer() → { push(rec, gi) → step | null, laneOf(step), drop(lane), ask(lane, text), calls(), finish() → {streams, steps, stats, lanes} }: a
 // session folded ONE record at a time (3.5 §内存有界). push() segments the call into its lane and derives the lane's events and
 // resources from it right away, so the caller may let go of the record's body once push() returned (src/view/assemble.mjs keeps
 // only the call's meta). What the fold remembers between records is per lane and small: the message count and context size of the
@@ -386,8 +386,8 @@ export function createAnalyzer() {
   const steps = new Map() // the fold's own counter → its step (events and resources name a step by it until finish)
   const laneOfStep = new WeakMap() // step → its stream
   let n = 0, top = null, late = false, byOrder = false
-  const state = new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, tools }
-  const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', tools: new Map() })
+  const state = new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, ask, tools }
+  const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', ask: null, tools: new Map() })
   function mkStream(kind) {
     const s = { id: 's' + streams.length, kind, calls: [], events: [] }
     streams.push(s)
@@ -632,7 +632,8 @@ export function createAnalyzer() {
       const events = s.events.map((e) => ({ ...e, step: gi(e.step), streamId: id, ...(childOf.has(e) ? { childStreamId: childOf.get(e) } : null) }))
       const resources = EVENT_ONLY_KINDS.has(s.kind) ? [] : [...st.resMap.values()].map((r) => ({ ...r,
         segments: r.segments.map((g) => ({ enter: gi(g.enter), evict: gi(g.evict) })), loads: r.loads.map((l) => ({ ...l, step: gi(l.step) })) }))
-      const out = { id, kind: s.kind, calls: [...s.calls], events, resources, parent: b ? sid.get(b.streamId) : null, spawnArg: b ? b.arg : null }
+      const out = { id, kind: s.kind, calls: [...s.calls], events, resources, parent: b ? sid.get(b.streamId) : null, spawnArg: b ? b.arg : null,
+        task: (b && b.arg) || st.ask || null } // 4.4 §看板 v2 需要的补充: the spawn's argument, else the lane's first prompt
       if (!EVENT_ONLY_KINDS.has(s.kind)) {
         // "only seen" = matched paths minus anything actually opened. Dedupe absolute-vs-relative
         // spellings of the SAME opened file (path-boundary suffix), but keep distinct-directory
@@ -657,7 +658,7 @@ export function createAnalyzer() {
         const laneId = s.kind === 'subagent' ? s.id : s.kind
         return {
           id: laneId, streamId: s.id, kind: s.kind, icon: LANE_META[s.kind].icon,
-          label: s.kind === 'subagent' ? `subagent: ${s.spawnArg || 'task'}` : LANE_META[s.kind].label,
+          label: LANE_META[s.kind].label, task: s.task,
           ...(LANE_META[s.kind].note ? { note: LANE_META[s.kind].note } : null),
           calls: s.calls, events: s.events, resources: s.resources, seenFiles: s.seenFiles || [], giLocal,
           peakCtx: s.calls.reduce((m, c) => Math.max(m, c.ctx), 1),
@@ -679,7 +680,9 @@ export function createAnalyzer() {
     }
     return { streams: view, steps: stepList, stats, lanes }
   }
-  return { push, finish, drop, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()] }
+  // ask(lane, text): the lane's first prompt, said by the caller that holds the first call's blocks (src/view/assemble.mjs firstAsk)
+  const ask = (s, text) => { state.get(s).ask = text }
+  return { push, finish, drop, ask, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()] }
 }
 
 // ── the linear context: the exact tools → system → messages sequence the model assembles ──

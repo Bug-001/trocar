@@ -145,3 +145,29 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
     growTo(bytes) { while (stored < bytes) this.append(1); return stored },
   }
 }
+
+/** firstAskOf(record, records) → what 4.4 §看板 v2 需要的补充 says a lane's `task` is, read straight off the request bytes: the first
+ *  user text of the call's context that is not only <system-reminder> blocks, whitespace runs squashed to one space, trimmed, at most
+ *  80 characters. A call that continues a server-held context (a `previous_*_id`) has its predecessors' messages first. */
+export function firstAskOf(rec, records = []) {
+  const users = [], prev = []
+  const walk = (o) => {
+    if (Array.isArray(o)) { for (const x of o) walk(x); return }
+    if (!o || typeof o !== 'object') return
+    if (o.role === 'user') users.push(o)
+    for (const [k, v] of Object.entries(o)) if (/^previous_\w+_id$/.test(k) && typeof v === 'string') prev.push(v); else walk(v)
+  }
+  walk(JSON.parse(rec.req_body))
+  const answered = (r) => { const t = JSON.stringify(r.resp); return t.includes(`"${prev[0]}"`) || t.includes(`\\"${prev[0]}\\"`) }
+  const before = prev.length ? records.find((r) => r !== rec && answered(r)) : null
+  const head = before ? firstAskOf(before, records) : null
+  if (head) return head
+  for (const m of users) {
+    const parts = typeof m.content === 'string' ? [m.content] : (m.content || []).filter((p) => p && typeof p.text === 'string').map((p) => p.text)
+    for (const t of parts) {
+      const h = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/\s+/g, ' ').trim()
+      if (h) return h.slice(0, 80)
+    }
+  }
+  return null
+}

@@ -15,10 +15,13 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { generate } from '../../scripts/gen-dataset.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { recordsAt } from '../../src/query/records.mjs'
+import { fillUsage } from '../../src/query/usage.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 
-// every item of the list is the `meta` its own session document carries
+// every item of the list is the `meta` its own session document carries — once the usage sidecars, where the list's titles come
+// from (4.4 §人类标题的来源), are filled
 const listIsEachMeta = async (home) => {
+  await fillUsage({ home, segments: fs.readdirSync(path.join(home, 'raw')).map((f) => f.replace(/\.(ndjson|sealed)$/, '')) })
   const doc = await runQuery('sessions', { limit: '500' }, { home })
   assert.deepEqual(doc.errors, [])
   assert.ok(doc.sessions.length > 1, `the dataset has sessions to compare (${doc.sessions.length})`)
