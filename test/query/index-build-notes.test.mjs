@@ -22,10 +22,12 @@ const coldHome = () => {
   return home
 }
 
-test('C1 index-cold is a note: level note, a code apart from its reason, a valid document', async () => {
+test('C1 index-cold is a note: level note, a code apart from its reason, a valid document that is ok', async () => {
   for (const [name, params] of READS) {
     const doc = await runQuery(name, params, { home: coldHome() })
     assert.deepEqual(validateQueryDoc(doc, name), [], name)
+    assert.ok(doc.errors.every((e) => e.level === 'note'), `${name}: ${JSON.stringify(doc.errors)}`)
+    assert.equal(doc.ok, true, `${name}: only notes, so nothing went unread (C.5)`)
     const cold = doc.errors.filter((e) => e.code === 'index-cold')
     assert.ok(cold.length > 0, `${name}: ${JSON.stringify(doc.errors)}`)
     for (const e of cold) {
@@ -35,10 +37,12 @@ test('C1 index-cold is a note: level note, a code apart from its reason, a valid
   }
 })
 
-test('C2 a lost record is not a note: record-unparseable has its code and no level', async () => {
+test('C2 a lost record is not a note: record-unparseable has its code and no level, and the document is not ok', async () => {
   const home = rawHome()
   writeSegment(home, SEG, [{ id: 'a' }, '{"this is not": json'])
   const doc = await runQuery('segments', {}, { home })
+  assert.deepEqual(validateQueryDoc(doc, 'segments'), [])
+  assert.equal(doc.ok, false)
   const bad = doc.errors.filter((e) => e.code === 'record-unparseable')
   assert.ok(bad.length > 0, JSON.stringify(doc.errors))
   for (const e of bad) assert.equal('level' in e, false)

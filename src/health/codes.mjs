@@ -16,6 +16,8 @@ export const RAW_JOURNAL_FAILURES = Object.freeze(['refused', 'failed'])
 export const SEGMENT_PROBLEMS = Object.freeze(['record-unparseable', 'record-unreadable', 'segment-unreadable', 'index-unwritable'])
 /** The notes the context projection puts into a read's errors (src/query/projection.mjs; level 'note', RFC 4.3 §4): it was rebuilt, or could not be written. */
 export const PROJECTION_NOTES = Object.freeze(['projection-rebuilt', 'projection-write-failed'])
+/** The codes of an unreadable ref in a `block` read's errors (src/query/named/block.mjs; 3.5 §会话读, 1.6 C.5). */
+export const BLOCK_PROBLEMS = Object.freeze(['record-missing', 'record-unreadable', 'field-missing'])
 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])

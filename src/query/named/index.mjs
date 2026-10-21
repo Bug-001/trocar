@@ -120,7 +120,7 @@ export async function runQuery(name, params = {}, ctx = {}) {
   const q = checked(name, params);
   const errors = [];
   const body = await q.run({ ...ctx, home, fs, now, params, errors });
-  return { schema: SCHEMA_VERSION, command: name, ok: errors.length === 0, ...body, errors };
+  return { schema: SCHEMA_VERSION, command: name, ok: !errors.some((e) => !e.level), ...body, errors };
 }
 
 /**
