@@ -760,7 +760,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     ingressToken: crypto.randomBytes(24).toString('hex'), // the model listens on no shared ingress: each door carries its group's token (ingress.json's), this one guards nothing
     isRecording: (meta) => collector.isOn(meta && meta.agent), // the in-memory switch decryption uses too: no file read per request, no silent off on a read error (4.6 §开关)
     retention: classesHook({ home: path.dirname(P.dir), failure }), describe: wsTerminalHook(list), // D60③ and the WebSocket turn edge, as on Linux (engine-data.mjs)
-    onFailure: (rec) => { collector.noteHeld(rec); failure.event(rec) }, onError: (e) => log('engine', e),
+    onFailure: (rec) => failure.event(rec), onHeld: (who) => collector.noteHeld(who), onError: (e) => log('engine', e),
   })
   collector = createModelCollector({ harnesses: list, dir: P.dir, identify: registry.match, ownerOf: parts.ownerOf, factsOf: parts.factsOf, proc: parts.proc,
     ctx: sourcesCtx({ os: A.os, home, env, dirs: b.dirs, policy: b.policy }), systemProxy: parts.systemProxy, custody: b.custody || 'unavailable', rootPem, procTable: parts.procTable,

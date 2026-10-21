@@ -55,7 +55,7 @@ function envNamesOf(desc) {
  *   templates  the hook templates (harness/templates TEMPLATES): a form whose cert's template says `sendsUpstreamHeader` may send X-Trocar-Upstream
  *   custody    the key custody, or 'unavailable' (no backend): then no issuer, every verdict forward-only (P2)
  *   forget     (negKey, pid | null) → void: the engine's entries of a key whose process exited, or whose door closed, are to go (4.8 §5.5); the daemon
- *              calls engine.forgetNegKey and records negative-cache-cleared. The keys come from `noteHeld(record)`, the engine's own failure records.
+ *              calls engine.forgetNegKey and records negative-cache-cleared. The keys come from `noteHeld(negKey)`: the engine's onHeld, a strike or an entry.
  * → { bindDoors, start, restore, on, off, lookupIngress, servePac, issuer, holders, mayExit, doors, attached }
  */
 export function createModelCollector({ harnesses, dir, identify, ownerOf = null, factsOf = null, proc = {}, ctx, systemProxy = () => null, custody = null, rootPem = null,
@@ -262,7 +262,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   }
   const poll = createHolderPoll({ list: holdersNow, timers, onChange: (rows) => settle(rows), onError: (e) => fail(CODE.holdersUnreadable, `the process table could not be read (${(e && e.message) || e}); the doors kept for holders stay`) })
 
-  /** The engine's negative-cache keys this daemon must clear (4.8 §5.5): each key the engine wrote a trust-rejected or negative-cache record for. Every
+  /** The engine's negative-cache keys this daemon must clear (4.8 §5.5): each key the engine's cache holds a strike or an entry under. Every
    *  HOLDER_POLL_MS while any is held, one read of the process table (none while nothing is held, none overlapping): a "<pid>@<start>" key whose
    *  process is gone, a "<pid>" key whose pid is gone, a group key whose door closed → `forget`. An unreadable table clears nothing (unknown). */
   const held = new Set()
@@ -349,8 +349,8 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     servePac,
     /** Is `h` on in this daemon? The one switch both decryption (lookupIngress) and recording (the engine's isRecording) read (4.6 §开关). */
     isOn: (h) => onSet.has(h),
-    /** An engine failure record: a trust-rejected / negative-cache one names a key to clear when its process or door is gone (4.8 §5.5). */
-    noteHeld(rec) { if (rec && (rec.code === 'trust-rejected' || rec.code === 'negative-cache') && rec.neg_key != null) { held.add(String(rec.neg_key)); arm() } },
+    /** The engine's onHeld: its negative cache holds a strike or an entry under `negKey`, to clear when its process or door is gone (4.8 §5.5). */
+    noteHeld(negKey) { if (negKey != null) { held.add(String(negKey)); arm() } },
     holders: holdersRoute({ holders: async () => poll.now() ?? holdersNow() }),
     /** The holder count the poll last saw, or null when nothing is watched: GET /status's number, which never reads the process table itself
      *  (on Windows that is a PowerShell each; `on` asks /status twice before POST /on, a Windows test machine 2026-10-17). GET /holders is the fresh answer. */

@@ -48,7 +48,7 @@ function client(port) {
   return c
 }
 
-async function lab(t, { meta = {}, timing = {}, connectUpstream, redirector = createStaticRedirector(), noToken = false, upstreamCa } = {}) {
+async function lab(t, { meta = {}, timing = {}, connectUpstream, redirector = createStaticRedirector(), noToken = false, upstreamCa, onHeld } = {}) {
   const flows = [], failures = [], envelopes = []
   const upConns = []
   const echo = net.createServer((s) => { upConns.push(s); s.on('error', () => {}); s.pipe(s) })
@@ -62,7 +62,7 @@ async function lab(t, { meta = {}, timing = {}, connectUpstream, redirector = cr
   const engine = createEngine({
     redirector, issuer: createLeafIssuer(loadCa(trocarCa)), connectUpstream: connect, timing, upstreamCa,
     store: { envelope: (e) => { envelopes.push(e); return true }, flow: (f) => { flows.push(structuredClone(f)); return true } },
-    onFailure: (f) => failures.push(f), ...(noToken ? {} : { ingressToken: TOKEN }),
+    onFailure: (f) => failures.push(f), ...(noToken ? {} : { ingressToken: TOKEN }), ...(onHeld ? { onHeld } : {}),
   })
   const { ingressPort } = await engine.listen({ ingress: { port: 0 } })
   const made = []
@@ -796,6 +796,19 @@ test('W17 a connection whose pid is known keeps the (pid, host) key: neg_key is 
   for (let i = 1; i <= 2; i++) { const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`); assert.equal(await talk(sock, privCa.certPem), 'closed'); await L.settled(i) }
   assert.deepEqual(L.failures.filter((f) => f.code === 'negative-cache').map((f) => [f.pid, f.neg_key]), [[77, '77']])
   assert.equal(L.engine.forgetPid(77), 1)
+})
+
+test('4.8 §5.5 a lone rejection hands its key to the sweep at once; once the key is forgotten the strike is gone with it', T, async (t) => {
+  const o = await origin(t)
+  const held = []
+  const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true, pid: 77, negKey: '77@5' }, onHeld: (who) => held.push(who) })
+  const reject = async (n) => { const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`); assert.equal(await talk(sock, privCa.certPem), 'closed'); await L.settled(n) }
+  await reject(1)
+  assert.deepEqual([L.engine.negatives().length, L.failures.filter((f) => f.code === 'trust-rejected' || f.code === 'negative-cache').length], [0, 0], 'below the threshold: no entry, no failure record')
+  assert.ok(held.includes('77@5'), 'the strike alone is held: the sweep is armed for it')
+  L.engine.forgetNegKey('77@5') // its process left the table
+  await reject(2)
+  assert.deepEqual(L.engine.negatives(), [], 'the earlier strike went with the key: one rejection after the clearing is again below the threshold')
 })
 
 test('W17 the ingress keys a connection by its own user when the lookup gives no negKey and no pid: two such forms do not poison each other; a known pid is the key', T, async (t) => {

@@ -22,7 +22,7 @@ import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
 // timing (tests): {firstByteTimeoutMs, upstreamSlowMs, preludeStallMs} — the engine's waits, 5 s each by default; rejectWindowMs — the leaf
 // rejection window (flow.mjs REJECT_WINDOW_MS, 10 s).
 // ingressToken: the install's ingress token (4.8 §3), required for listen({ingress}).
-export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, retention = null, describe = () => ({}), onError = () => {}, onFailure = null, timing = {}, drainTimeoutMs, ingressToken = null }) {
+export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, retention = null, describe = () => ({}), onError = () => {}, onFailure = null, onHeld = () => {}, timing = {}, drainTimeoutMs, ingressToken = null }) {
   const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0, notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }
   const servers = []
   const active = new Set()
@@ -36,7 +36,10 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   const neg = createNegativeCache()
   // neg_key: what the entry is keyed by — "<pid>", or "<route>.<group>" for a connection with no pid (4.8 §5.5)
   const negWritten = (made, key, o) => { if (made) { const e = neg.get(key); failure({ code: 'negative-cache', pid: e.pid ?? null, neg_key: e.negKey, agent: e.agent, host: e.host, cause: e.cause, reason: `${e.host} is no longer decrypted for ${e.pid != null ? `pid ${e.pid}` : e.negKey} (${e.cause}${e.rejections > 1 ? `, ${e.rejections} times in a row` : ''}); its connections there are passed through until ${e.pid != null ? 'it exits' : 'every process of that form has exited'}` }) } return made }
-  const negCache = { ...neg, observe: (key, o) => negWritten(neg.observe(key, o), key, o), mark: (key, o) => negWritten(neg.mark(key, o), key, o) }
+  // onHeld(negKey): the cache now holds something under this key — a strike below the threshold or an entry — so whoever clears keys when their
+  // process or door is gone (the daemon's sweep, 4.8 §5.5) watches it from the first rejection, not only from the first record
+  const held = (o) => { try { onHeld(String(o.meta.negKey ?? o.meta.pid)) } catch (e) { onError(e) } }
+  const negCache = { ...neg, observe: (key, o) => { if (o.rejected) held(o); return negWritten(neg.observe(key, o), key, o) }, mark: (key, o) => { held(o); return negWritten(neg.mark(key, o), key, o) } }
   let flowSeq = 0
   const defaultConnect = (dst) => net.connect(dst.port, dst.address)
   // A capture failure is never silent (D38, 4.6 §记录): one shaped record {event:'failure', where:'engine', code,

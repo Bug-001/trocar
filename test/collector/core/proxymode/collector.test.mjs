@@ -566,7 +566,7 @@ test('4.8 §5.5 · the negative-cache key is pid@start; a held key is forgotten 
   r.w.facts = { ...r.w.facts, startedAt: INSTALLED + 2 }
   assert.equal((await ask()).negKey, `777@${INSTALLED + 2}`, 'a later life of the pid has a key of its own: it inherits nothing')
   assert.equal(pending.length, 0, 'nothing held: no timer, no table read')
-  for (const rec of [{ code: 'trust-rejected', neg_key: `777@${INSTALLED + 1}` }, { code: 'negative-cache', neg_key: '888' }, { code: 'negative-cache', neg_key: g }, { code: 'upstream-slow', neg_key: '999' }]) r.c.noteHeld({ event: 'failure', ...rec })
+  for (const who of [`777@${INSTALLED + 1}`, '888', g]) r.c.noteHeld(who)
   assert.equal(pending.length, 1, 'one timer while keys are held')
   r.w.procs = [{ pid: 777, startedAt: INSTALLED + 1 }, { pid: 888, startedAt: 5 }]
   await pending.shift()()
