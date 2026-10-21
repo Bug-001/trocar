@@ -254,7 +254,6 @@
   .cwfoldall{display:flex;gap:6px;justify-content:flex-end;margin:-2px 0 5px;}
   .foldallbtn{background:none;border:1px solid var(--border);border-radius:10px;color:var(--dim);font-size:10px;font-family:var(--mono);padding:1px 7px;cursor:pointer;}
   .foldallbtn:hover{color:var(--fg);border-color:var(--accent);}
-  .cbpre{margin:2px 0 7px;font-family:var(--mono);font-size:11px;white-space:pre-wrap;word-break:break-word;max-height:340px;overflow:auto;color:var(--fg);}
   .cbc .md{padding:3px 0 7px;font-size:12px;}
   /* role accents on the message blocks */
   .cblk.r-user .cbrole{color:var(--green);} .cblk.r-assistant .cbrole{color:var(--accent);}
@@ -368,10 +367,6 @@
 .remnote{font-size:10px;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 40%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;}
 .cbsrc{font-size:10px;color:var(--dimmer);margin:4px 0 0;font-family:var(--mono);}
 .cbsrc.warn{color:var(--ink-2);}
-.cbdec{font-size:10px;color:var(--ink-2);margin:4px 0 0;font-family:var(--mono);}
-.decodebtn{border:0;background:none;padding:0;color:var(--action);cursor:pointer;font:inherit;text-decoration:underline;}
-.cbpre[data-ref]{color:var(--dim);}
-.nbkbody .cbpre,.pinbody .cbpre{font-size:10px;line-height:1.45;color:var(--dim);max-height:260px;margin:5px 0 0;}
 .estnote{color:var(--dimmer);font-size:10px;font-style:italic;margin-left:6px;}
 /* cache band: a call with no usage is unknown (neutral), not "cold" (red) */
 .cbar.na{background:repeating-linear-gradient(45deg,var(--dimmer) 0 2px,transparent 2px 4px);opacity:.5;}
@@ -392,7 +387,6 @@
 #detail .dnav{margin:-2px 0 6px;}
 #detail .dback{font:inherit;font-size:11px;color:var(--action);background:none;border:1px solid var(--rule);border-radius:var(--r-1);padding:2px 9px;cursor:pointer;}
 #detail .dback:hover{border-color:var(--action);}
-#detail .dpre{margin:4px 0;font-family:var(--mono);font-size:10.5px;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;color:var(--ink-2);background:var(--sunk);border-radius:6px;padding:8px 10px;}
 /* the bottom drawer: input blocks listed one by one */
 .dblk{border:1px solid var(--border);border-radius:6px;margin:4px 0;background:var(--panel2);}
 .dblk>.dbh{display:flex;gap:7px;align-items:center;padding:3px 9px;font-family:var(--mono);font-size:10.5px;color:var(--dim);cursor:pointer;}

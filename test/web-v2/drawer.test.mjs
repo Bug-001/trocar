@@ -55,3 +55,16 @@ test('a monitor verdict is passed through as-is', () => {
   const body = detailHtml(stateOf(), { id: 'm', kind: 'monitor', label: 'mon', calls: [call] }, 0).body
   assert.ok(body.includes('the change is safe &lt;b&gt;no&lt;/b&gt; issue'))
 })
+
+test('the reply cell holds the parsed text itself: its Raw body and its size are the text, not an envelope made around it', () => {
+  const ENT = { lt: '<', gt: '>', quot: '"', '#39': "'", '#13': '\r', amp: '&' }
+  for (const text of ['Hello\nworld', '{"type":"text","text":"x"}', 'a"b\\c\r\n<i>']) {
+    const call = { gi: 9, ts: ts(3), ctx: 5, status: 200, norm: { text }, flat: [], rec: { request: { model: 'm' } } }
+    const body = detailHtml(stateOf(), { id: 'a', kind: 'aux', label: 'x', calls: [call] }, 0).body
+    const m = /<div class="cell"[^>]*data-chars="(\d+)"[^>]*>[\s\S]*?<pre class="cellraw">([\s\S]*?)<\/pre>/.exec(body)
+    assert.ok(m, 'a Raw reply cell')
+    assert.equal(+m[1], text.length)
+    const raw = m[2].replace(/<span class="lay" aria-hidden="true">[^<]*<\/span>/g, '').replace(/&(lt|gt|quot|#39|#13|amp);/g, (_, n) => ENT[n])
+    assert.equal(raw.replace(/^\n/, ''), text)
+  }
+})
