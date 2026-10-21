@@ -179,21 +179,24 @@ const MEMO = 64; // materialised lists kept (lane tips and predecessors are aske
 
 /**
  * createExtractContext(store) → the state extraction keeps across one session's records, in the order they are extracted: which
- * definitions exist (`store.hasDef`, plus those extracted since), the rows (`store.rows`, plus those extracted since), each lane
- * hint's last call (the next call of that hint is written against it) and each linkable call by the id a successor names it by.
- * Seeded from the store's rows in write order, so a context opened over a stored projection goes on exactly where one pass would.
+ * definitions exist (`store.hasDef`, plus those extracted since the last `flushed()`), the rows (`store.rows`, plus those extracted
+ * since), each lane hint's last call (the next call of that hint is written against it), each linkable call by the id a successor
+ * names it by, and the last MEMO lists materialised. Seeded from the store's rows, so a context opened over a stored projection goes
+ * on exactly where one pass would. With a store, what it keeps does not grow with the session's rows (4.3 §4): rows and definitions
+ * are the store's once appended (the driver calls `flushed()`), and only a lane's last rid and a link's rid are held per lane / link.
  */
 export function createExtractContext(store = null) {
   const fresh = new Set(), mine = new Map(), lanes = new Map(), links = new Map(), memo = new Map();
   const rowOf = (rid) => mine.get(rid) || (store && store.rows ? store.rows.get(rid) : undefined) || null;
+  // a lane's last call (the latest in write order), a link's first
   const note = (row) => {
     if (!callRow(row)) return;
-    if (row.x.hint != null) lanes.set(row.x.hint, row.rid);
-    const k = row.x.link != null ? `${row.x.scope ?? ''}\n${row.x.link}` : null;
-    if (k != null && !links.has(k)) links.set(k, row.rid);
+    const h = row.x.hint, k = row.x.link != null ? `${row.x.scope ?? ''}\n${row.x.link}` : null;
+    if (h != null && !(lanes.has(h) && posCmp(lanes.get(h), row.rid) > 0)) lanes.set(h, row.rid);
+    if (k != null && !(links.has(k) && posCmp(links.get(k), row.rid) <= 0)) links.set(k, row.rid);
   };
   const remember = (e) => { memo.delete(e.rid); memo.set(e.rid, e); if (memo.size > MEMO) memo.delete(memo.keys().next().value); return e; };
-  if (store && store.rows) [...store.rows.values()].filter(callRow).sort((a, b) => posCmp(a.rid, b.rid)).forEach(note);
+  if (store && store.rows) for (const row of store.rows.values()) note(row);
   // a call row's { rid, list, mb, depth } through its base chain (iteratively: a chain is up to KEYFRAME links)
   function listsOf(rid) {
     if (memo.has(rid)) return remember(memo.get(rid));
@@ -218,6 +221,7 @@ export function createExtractContext(store = null) {
     linked: (scope, id) => { const rid = id == null ? null : links.get(`${scope}\n${id}`); return rid == null ? null : rowOf(rid); },
     prevOf: (hint) => (lanes.has(hint) ? listsOf(lanes.get(hint)) : null),
     took: (row, lists) => { mine.set(row.rid, row); note(row); remember({ rid: row.rid, ...lists }); },
+    flushed: () => { fresh.clear(); mine.clear(); }, // what was extracted is the store's now
   };
 }
 const laneHintOf = (rec, format, lane) => { const h = hintsOf(rec); return h.laneKey != null ? `agent\n${h.laneKey}` : `${format}\n${lane}`; };
@@ -375,20 +379,22 @@ const CHUNK = 16; // records asked of recordsAt at a time
 const contexts = new WeakMap(); // store → its extraction context (slices of one session go on with the same one)
 
 /**
- * extractMembers({store, members, recordsAt, sessionId, budgetMs, clock}) → { frontier, done, total } (design §3.4 "Extraction
- * frontier"). `members`: the session's index rows; `recordsAt(rows)` → their records (one that does not read back is left out).
- * Extracts the members the store has no row for, in write order (posCmp), until `budgetMs` of `clock` is spent, appending each
- * chunk's definitions and rows. A member that fails to extract gets a row { x: { unparsed: reason } } kept in memory only
- * (persist: false), so the next open tries it again (§3.9); so are the rows extracted after it (one that continues it, or is written
- * against it, would otherwise be stored without it), so what is on disk stays the rows of one pass over a prefix. frontier: the largest rid such that every member up to it has a row;
+ * extractMembers({store, members, recordsAt, sessionId, budgetMs, clock, errors}) → { frontier, done, total } (design §3.4
+ * "Extraction frontier"). `members`: the session's index rows; `recordsAt(rows)` → their records (one that does not read back is
+ * left out). Extracts the members the store has no row for, in write order (posCmp), until `budgetMs` of `clock` is spent, appending
+ * each chunk's definitions and rows; `errors`: the answering request's (where a store note goes). A member that fails to extract gets
+ * a row { x: { unparsed: reason } } appended as held (a `t` line the next open cuts off), so the next open tries it again (§3.9); so
+ * are the rows extracted after it (one that continues it, or is written against it, would otherwise be stored without it), so what
+ * a later open reads is the rows of one pass over a prefix. What extraction holds is a chunk of records, the store's indexes and the
+ * context's per-lane / per-link ids: not the rows (4.3 §4). frontier: the largest rid such that every member up to it has a row;
  * done / total: members with a row, members. A keyless record gets the session's synthesized key (3.4 合成键), as the query does.
  */
-export function extractMembers({ store, members, recordsAt, sessionId = null, budgetMs = Infinity, clock = () => performance.now() }) {
+export function extractMembers({ store, members, recordsAt, sessionId = null, budgetMs = Infinity, clock = () => performance.now(), errors = undefined }) {
   const order = members.map((m) => String(m.id)).sort(posCmp);
-  if (!contexts.has(store)) contexts.set(store, createExtractContext(store));
-  const ctx = contexts.get(store), t0 = clock(), spent = () => clock() - t0 >= budgetMs;
-  const byId = new Map(members.map((m) => [String(m.id), m]));
+  const t0 = clock(), spent = () => clock() - t0 >= budgetMs;
   const todo = order.filter((rid) => !store.rows.has(rid));
+  if (todo.length && !contexts.has(store)) contexts.set(store, createExtractContext(store));
+  const ctx = contexts.get(store), byId = todo.length ? new Map(members.map((m) => [String(m.id), m])) : null;
   for (let i = 0; i < todo.length && !spent();) {
     const part = todo.slice(i, i + CHUNK), got = new Map();
     for (const r of recordsAt(part.map((rid) => byId.get(rid))) || []) if (r) got.set(String(r.id), r);
@@ -404,8 +410,9 @@ export function extractMembers({ store, members, recordsAt, sessionId = null, bu
       if (out) defs.push(...out.defs);
       (ctx.held ? held : rows).push(out ? out.row : { rid, pos: rid, x: { unparsed: why } });
     }
-    store.append({ defs, rows });
-    if (held.length) store.append({ rows: held }, { persist: false });
+    store.append({ defs, rows }, { errors });
+    if (held.length) store.append({ rows: held }, { held: true, errors });
+    ctx.flushed();
   }
   let frontier = null, done = 0;
   for (const rid of order) if (store.rows.has(rid)) done++;

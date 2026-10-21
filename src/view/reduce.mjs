@@ -79,9 +79,9 @@ const isCall = (row) => !!(row && row.x && Array.isArray(row.x.secs));
  * their call is shown by its reason, never dropped); and `pending: {done, total}` (members reduced, members) while any member is not
  * reduced (above the mark, failed, or with no row). `resolve(ref)` → the
  * flat entry of the block `ref` names (src/view/extract.mjs blockAt over the record read back): asked only for a break detail no
- * `brk` line holds yet.
+ * `brk` line holds yet. `errors`: the answering request's (where a note of writing the `brk` lines goes).
  */
-export function reduce(store, members, { mark = undefined, resolve = null } = {}) {
+export function reduce(store, members, { mark = undefined, resolve = null, errors = undefined } = {}) {
   const all = [...new Set(members.map(ridOf))].sort(posCmp);
   if (mark === undefined) { mark = null; for (const rid of all) { if (!store.rows.has(rid)) break; mark = rid; } }
   const upTo = mark == null ? [] : all.filter((rid) => posCmp(rid, mark) <= 0);
@@ -96,10 +96,12 @@ export function reduce(store, members, { mark = undefined, resolve = null } = {}
   try { doc = reduceIn(store, rids, resolve, found); } catch (e) {
     if (!(e instanceof OrderBound)) throw e;
     // sub-agents told apart only by order: from scratch, in step order
-    const byOrder = (a, b) => { const ra = store.rows.get(a), rb = store.rows.get(b); return ra.x.item && rb.x.item ? stepOrder(orderOfRow(ra), orderOfRow(rb)) : 0; };
+    // each row's order read once (a row is read back from the projection: not once a comparison)
+    const ord = new Map(rids.map((rid) => { const row = store.rows.get(rid); return [rid, row.x.item ? orderOfRow(row) : null]; }));
+    const byOrder = (a, b) => { const oa = ord.get(a), ob = ord.get(b); return oa && ob ? stepOrder(oa, ob) : 0; };
     doc = reduceIn(store, rids.slice().sort(byOrder), resolve, found);
   }
-  if (found.size) store.append({ brks: [...found.values()] });
+  if (found.size) store.append({ brks: [...found.values()] }, { errors });
   doc.mark = mark;
   if (failed.length) doc.failed = failed;
   if (rids.length < all.length) doc.pending = { done: rids.length, total: all.length };

@@ -116,6 +116,23 @@ test('(d) a disk that refuses writes keeps the items in memory and says so once 
   assert.equal(notes().length, 2) // the successful write ended the first episode
 })
 
+test('(d) a store kept open across requests puts a write failure in the errors of the request whose write failed', async () => {
+  const home = path.join(tmpDir('trocar-proj-'), '.trocar')
+  const s0 = bigSession({ home, wire: 'threads', growth: 300 })
+  s0.append(4)
+  const members = sessionGroups(await indexRows({ home, errors: [] })).get(s0.id)
+  let full = false
+  const stub = { ...fs, appendFileSync: (...a) => { if (full) throw Object.assign(new Error('no space'), { code: 'ENOSPC' }); return fs.appendFileSync(...a) } }
+  const first = [], later = [], code = (es) => es.map((e) => e.code)
+  const s = openProjection({ home, fs: stub, key: s0.id, errors: first })
+  const recordsOf = (rs) => recordsAt({ home, rows: rs, errors: [], remember: false })
+  extractMembers({ store: s, members: members.slice(0, 2), recordsAt: recordsOf, sessionId: s0.id, errors: first })
+  full = true
+  extractMembers({ store: s, members, recordsAt: recordsOf, sessionId: s0.id, errors: later }) // a later request
+  assert.deepEqual(code(first), [])
+  assert.deepEqual(code(later), ['projection-write-failed'])
+})
+
 test('(e) GC deletes projections of sessions that are gone, then the least recently opened over the cap', () => {
   const home = tmpDir('trocar-proj-')
   for (const k of ['old', 'mid', 'new', 'dead']) filled(home, k)

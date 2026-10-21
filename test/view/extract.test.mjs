@@ -309,7 +309,7 @@ test('(d) frontier: the largest rid with every member up to it extracted; done /
   }
 });
 
-test('(d) a member that does not read back is held in memory with every row after it; the next open goes on to the rows of one pass', () => {
+test('(d) a member that does not read back is held with every row after it; the next open goes on to the rows of one pass', () => {
   const all = stitchedSessions();
   for (const name of ['threads', 'ws']) {
     const recs = all[name], members = membersOf(recs), recordsAt = reader(recs), whole = { frontier: recs.at(-1).id, done: recs.length, total: recs.length };

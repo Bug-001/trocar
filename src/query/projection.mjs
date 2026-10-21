@@ -4,18 +4,23 @@
 // break by its `brk` pair, and nothing else of their contents. A projection like the index (invariant 2, D59): delete
 // it and the next open rebuilds it, answer for answer the same.
 //
-// Lines: `{"v":PROJ_V}`, then `{"d":def}`, `{"c":row}`, `{"b":brk}`, `{"s":{k,v}}` in any order. Definitions stay on disk;
-// the store holds only bid → [offset, length] and reads one back when asked (the worker's heap budget). Rows and breaks are held.
+// Lines: `{"v":PROJ_V}`, then `{"d":def}`, `{"c":row}`, `{"t":row}`, `{"b":brk}`, `{"s":{k,v}}` in any order. Definitions, rows
+// and shared values stay on disk: the store holds key → where its line is (compact columns) and reads a line back when asked, the
+// most recent rows and shared values kept, so its heap does not grow with the session's rows (extraction's bound, 4.3 §4). Breaks
+// are held. A `t` line is a held row (extracted after a member that failed, §3.9): opening stops at the first one and cuts the
+// file there before the next append, so what is read back is always the rows of one pass over a prefix.
 //   Shared values (`s`): a value that recurs across rows (a lane's facts, a call's attributes, the wire's labels) is written once.
-// Top down to SHARE_DEPTH levels under a row, a value of SHARE_MIN bytes or more whose content was seen before in this store is
-// written as an `s` line keyed by its hash and stands in the row as `{"$s":key}`; a value seen for the first time stays inline and
-// its children are looked at. Opening puts each shared value back as one object every row holding it shares. An original value of
-// the reference's own shape is always shared, so a reference is never ambiguous. Content-blind: the store knows nothing of a row.
-//   A header of another version, or a line that does not parse before the last → the file is deleted and the store
-// starts empty, with one `projection-rebuilt` note (D38). A torn last line (no newline, or not JSON) is cut off before
-// the next append, silently: an interrupted append, nothing lost that was ever whole. A write that fails keeps the
-// items in memory, says `projection-write-failed` once per episode, and writes them with the next write that works.
-// `write: false` (the local CLI's path) never touches the disk.
+// Top down to SHARE_DEPTH levels under a row, a value of SHARE_MIN bytes or more whose content was seen among the last SEEN values
+// looked at, or is shared already, is written as an `s` line keyed by its hash and stands in the row as `{"$s":key}`; a value not
+// seen stays inline and its children are looked at. A row read back puts each shared value back as one object every row read
+// while it is kept shares. An original value of the reference's own shape is always shared, so a reference is never ambiguous.
+// Content-blind: the store knows nothing of a row.
+//   A header of another version, or a line that does not parse before the last, or a row naming a shared value the file does
+// not hold → the file is deleted and the store starts empty, with one `projection-rebuilt` note (D38). A torn last line (no
+// newline, or not JSON) is cut off before the next append, silently: an interrupted append, nothing lost that was ever whole. A
+// write that fails keeps the items in memory, says `projection-write-failed` once per episode (in the `errors` of the request
+// whose append failed), and writes them with the next write that works.
+// `write: false` (the local CLI's path) never writes: what it extracts is held in memory.
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -23,9 +28,10 @@ import { indexDir } from './index-build.mjs';
 import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
 
-export const PROJ_V = 2;
+export const PROJ_V = 3;
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
 const SHARE_DEPTH = 3, SHARE_MIN = 48;
+const ROW_CACHE = 256, SHARED_CACHE = 4096, SEEN = 1 << 15; // rows / shared values read back and kept; recent value keys looked for
 const CHUNK = 1 << 20;
 const NAME = /^[0-9a-f]{32}\.ndjson$/;
 
@@ -72,56 +78,114 @@ function eachSlot(v, depth, visit) {
   if (!isObj(v) || depth >= SHARE_DEPTH) return;
   for (const k of Array.isArray(v) ? v.keys() : Object.keys(v)) if (visit(v, k)) eachSlot(v[k], depth + 1, visit);
 }
-// a row just parsed, its references put back in place (shared instances); null when one names no shared value
-function expand(row, shared) {
-  let ok = true;
-  eachSlot(row, 0, (h, k) => {
-    const v = h[k];
-    if (!isRef(v)) return isObj(v);
-    if (shared.has(v.$s)) h[k] = shared.get(v.$s); else ok = false;
-    return false;
-  });
-  return ok ? row : null;
+// key → [offset, length] of a line on disk: a Map to a slot, the places in two typed columns (no array per key)
+function lineIndex() {
+  const slot = new Map();
+  let off = new Float64Array(256), len = new Uint32Array(256);
+  return {
+    has: (k) => slot.has(k),
+    get: (k) => { const i = slot.get(k); return i === undefined ? undefined : [off[i], len[i]]; },
+    set(k, o, l) {
+      let i = slot.get(k);
+      if (i === undefined) {
+        i = slot.size;
+        if (i === off.length) { const o2 = new Float64Array(2 * i), l2 = new Uint32Array(2 * i); o2.set(off); l2.set(len); off = o2; len = l2; }
+        slot.set(k, i);
+      }
+      off[i] = o; len[i] = l;
+    },
+    keys: () => slot.keys(),
+    get size() { return slot.size; },
+    clear: () => slot.clear(),
+  };
+}
+// a Map that keeps its `cap` most recently used entries
+function lru(cap) {
+  const m = new Map();
+  return {
+    get(k) { const v = m.get(k); if (v !== undefined) { m.delete(k); m.set(k, v); } return v; },
+    has: (k) => m.has(k),
+    set(k, v) { m.delete(k); m.set(k, v); if (m.size > cap) m.delete(m.keys().next().value); },
+    delete: (k) => m.delete(k),
+    clear: () => m.clear(),
+  };
 }
 
-/** openProjection({home, fs, key, write, errors}) → the session's store (see the head of this file). */
+/** openProjection({home, fs, key, write, errors}) → the session's store (see the head of this file). `errors`: where notes go
+ *  when an append names no other sink (an append of a later request passes that request's `errors`). */
 export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = true, errors = [] } = {}) {
   const file = projectionFile(home, key);
-  const at = new Map(); // bid → [offset, length] of its line on disk
+  const at = lineIndex(); // bid → its line on disk
   const mem = new Map(); // bid → def, for the definitions that are not on disk
-  const rows = new Map();
+  const rowAt = lineIndex(); // rid → its line on disk
+  const rowMem = new Map(); // rid → row, for the rows that are not on disk
+  const rowCache = lru(ROW_CACHE);
   const brks = new Map();
-  const shared = new Map(); // shared value key → the value (one object for every row that holds it)
-  let seen = null; // content keys of every value at a share position so far, built at the first append (opening does not hash)
+  const sharedAt = lineIndex(); // shared value key → its line on disk
+  const sharedMem = new Map(); // shared value key → the value, while it is not on disk
+  const sharedCache = lru(SHARED_CACHE); // one object for every row read while it is kept
+  const seen = lru(SEEN); // content keys of the values at share positions written last
   let bytes = 0, torn = false, failing = false, pending = [];
 
+  const refsHeld = (row) => { let ok = true; eachSlot(row, 0, (h, k) => { const v = h[k]; if (!isRef(v)) return isObj(v); if (!sharedAt.has(v.$s)) ok = false; return false; }); return ok; };
+  // a line read from disk (opening, append and reads all use the same offsets)
+  let fd = null;
+  function lineAt([o, l]) {
+    if (fd == null) { fd = fs.openSync(file, 'r'); held.register(store, { fs, fd }, store); }
+    const buf = Buffer.alloc(l);
+    fs.readSync(fd, buf, 0, l, o);
+    return JSON.parse(buf.toString('utf8'));
+  }
+  function sharedOf(k) {
+    if (sharedMem.has(k)) return sharedMem.get(k);
+    let v = sharedCache.get(k);
+    if (v !== undefined) return v;
+    const p = sharedAt.get(k);
+    if (!p) return undefined;
+    v = lineAt(p).s.v;
+    sharedCache.set(k, v);
+    return v;
+  }
+  // a row read back: its references put back in place (the shared instances kept)
+  function expand(row) {
+    eachSlot(row, 0, (h, k) => {
+      const v = h[k];
+      if (!isRef(v)) return isObj(v);
+      const got = sharedOf(v.$s);
+      if (got === undefined) throw new Error(`the context projection has no shared value ${v.$s}`);
+      h[k] = got;
+      return false;
+    });
+    return row;
+  }
+  const rowKey = (o) => (o.c || o.t).rid;
+  // an item taken in: from disk (`off` given: only where its line is) or kept in memory
   const take = (o, off, len) => {
-    if (o.d) { if (off == null) mem.set(o.d.bid, o.d); else if (!at.has(o.d.bid)) at.set(o.d.bid, [off, len]); }
-    if (o.s) shared.set(o.s.k, o.s.v);
-    if (o.c) { const row = off == null ? o.c : expand(o.c, shared); if (!row) return false; rows.set(row.rid, row); }
+    if (o.d) { if (off == null) mem.set(o.d.bid, o.d); else { mem.delete(o.d.bid); if (!at.has(o.d.bid)) at.set(o.d.bid, off, len); } }
+    if (o.s) { if (off == null) sharedMem.set(o.s.k, o.s.v); else { sharedAt.set(o.s.k, off, len); sharedMem.delete(o.s.k); } }
+    if (o.c || o.t) {
+      const rid = rowKey(o);
+      if (off == null) rowMem.set(rid, o.row || o.c || o.t);
+      else { rowAt.set(rid, off, len); rowMem.delete(rid); }
+      rowCache.delete(rid);
+      if (o.row) rowCache.set(rid, o.row); // the row as given (the same as it reads back)
+    }
     if (o.b) brks.set(pairKey(o.b.brk[0], o.b.brk[1]), o.b);
-    return true;
   };
   // what an append writes of a row: a recurring value (or one of a reference's shape) as an `s` line and a reference
   const note = (v) => { const j = JSON.stringify(v); return j === undefined ? null : j; };
-  function seenSet() {
-    if (seen) return seen;
-    seen = new Set(shared.keys());
-    for (const row of rows.values()) eachSlot(row, 0, (h, k) => { const j = note(h[k]); if (j == null) return false; seen.add(keyOf(j)); return isObj(h[k]); });
-    return seen;
-  }
   function encode(row, out) {
-    const S = seenSet(), copy = { ...row };
+    const copy = { ...row };
     eachSlot(copy, 0, (h, k) => {
       const v = h[k], j = note(v);
       if (j == null) return false;
       const key = keyOf(j);
-      if (isRef(v) || (j.length >= SHARE_MIN && S.has(key))) {
-        if (!shared.has(key)) { shared.set(key, v); out.push({ s: { k: key, v } }); }
+      if (isRef(v) || (j.length >= SHARE_MIN && (seen.has(key) || sharedAt.has(key) || sharedMem.has(key)))) {
+        if (!sharedAt.has(key) && !sharedMem.has(key)) { sharedMem.set(key, v); out.push({ s: { k: key, v } }); }
         h[k] = { $s: key };
         return false;
       }
-      S.add(key);
+      seen.set(key, true);
       if (!isObj(v)) return false;
       h[k] = Array.isArray(v) ? v.slice() : { ...v };
       return true;
@@ -129,7 +193,8 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     return copy;
   }
   const rebuilt = (reason) => {
-    at.clear(); rows.clear(); brks.clear(); shared.clear(); seen = null; bytes = 0; torn = false;
+    for (const m of [at, mem, rowAt, rowMem, rowCache, brks, sharedAt, sharedMem, sharedCache, seen]) m.clear();
+    bytes = 0; torn = false;
     if (write) { try { fs.rmSync(file, { force: true }); } catch { /* the next append truncates it */ torn = true; } }
     errors.push({ where: 'projection', code: 'projection-rebuilt', level: 'note', reason });
   };
@@ -143,23 +208,29 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
       if (o.v !== PROJ_V) { rebuilt(`The stored context projection is of version ${JSON.stringify(o.v)}, not ${PROJ_V}; it is rebuilt from the capture.`); break; }
       head = false; bytes = l.off + l.len + 1; continue;
     }
+    if (o && o.t) { torn = true; break; } // held rows of an earlier process: from here on everything is extracted again
     if (!l.nl || !shaped(o)) { bad = `Line at byte ${l.off} of the stored context projection does not parse; it is rebuilt from the capture.`; continue; }
-    if (!take(o, l.off, l.len)) { rebuilt(`Line at byte ${l.off} of the stored context projection names a shared value it does not hold; it is rebuilt from the capture.`); break; }
+    if (o.c && !refsHeld(o.c)) { rebuilt(`Line at byte ${l.off} of the stored context projection names a shared value it does not hold; it is rebuilt from the capture.`); break; }
+    take(o, l.off, l.len);
     bytes = l.off + l.len + 1;
   }
   if (bad) torn = true; // only the last line was bad: cut it off before the next append
   if (write && bytes) { try { const t = new Date(); fs.utimesSync(file, t, t); } catch { /* the GC order only */ } }
 
-  function append({ defs = [], rows: rs = [], brks: bs = [] } = {}, { persist = true } = {}) {
-    const items = [...defs.filter((d) => !at.has(d.bid)).map((d) => ({ d })), ...rs.map((c) => ({ c })), ...bs.map((b) => ({ b }))];
-    if (!write || !persist) { for (const o of items) take(o); return; }
+  /** append({defs, rows, brks}, {held, errors}): `held` rows are written as `t` lines, which the next open cuts off with all that
+   *  follows them (rows extracted after a member that failed: §3.9); `errors` is where this append's note goes. */
+  function append({ defs = [], rows: rs = [], brks: bs = [] } = {}, { held: tent = false, errors: sink = errors } = {}) {
+    const items = [...defs.filter((d) => !at.has(d.bid)).map((d) => ({ d })), ...rs.map((r) => (tent ? { t: r } : { c: r })), ...bs.map((b) => ({ b }))];
+    if (!write) { for (const o of items) take(o); return; }
     const all = [];
-    for (const o of [...pending, ...items]) { if (o.c && !o.enc) { all.push({ c: encode(o.c, all), enc: true, row: o.c }); } else all.push(o); }
+    for (const o of [...pending, ...items]) {
+      if ((o.c || o.t) && !o.enc) { const r = o.c || o.t, e = encode(r, all); all.push(o.c ? { c: e, enc: true, row: r } : { t: e, enc: true, row: r }); } else all.push(o);
+    }
     let text = bytes ? '' : `${JSON.stringify({ v: PROJ_V })}\n`;
     const placed = [];
     let off = bytes + Buffer.byteLength(text);
     for (const o of all) {
-      const line = JSON.stringify(o.enc ? { c: o.c } : o), len = Buffer.byteLength(line);
+      const line = JSON.stringify(o.enc ? (o.c ? { c: o.c } : { t: o.t }) : o), len = Buffer.byteLength(line);
       placed.push([o, off, len]); text += `${line}\n`; off += len + 1;
     }
     try {
@@ -168,33 +239,46 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
       torn = true; // until the append is known whole
       fs.appendFileSync(file, text, { mode: 0o600 });
       torn = false; failing = false; pending = []; bytes = off;
-      for (const [o, o2, len] of placed) { if (o.d) { mem.delete(o.d.bid); take(o, o2, len); } else if (o.b) take(o); }
-      for (const o of items) if (o.c) take(o); // the rows as given (their shared values are in `shared` already)
+      for (const [o, o2, len] of placed) take(o, o2, len);
     } catch (e) {
       for (const o of items) take(o);
       pending = all;
-      if (!failing) errors.push({ where: 'projection', code: 'projection-write-failed', level: 'note', reason: `The context projection could not be written (${e.code || e.message}); this session is kept in memory and extracted again next time.` });
+      if (!failing) sink.push({ where: 'projection', code: 'projection-write-failed', level: 'note', reason: `The context projection could not be written (${e.code || e.message}); this session is kept in memory and extracted again next time.` });
       failing = true;
     }
   }
 
   // one descriptor for the store's reads (a reduction reads tens of thousands of definitions: an open each was most of its time,
   // 2026-10-21), closed by close() or, failing that, when the store is collected
-  let fd = null;
   function readDef(bid) {
     if (mem.has(bid)) return mem.get(bid);
     const p = at.get(bid);
-    if (!p) return undefined;
-    if (fd == null) { fd = fs.openSync(file, 'r'); held.register(store, { fs, fd }, store); }
-    const buf = Buffer.alloc(p[1]);
-    fs.readSync(fd, buf, 0, p[1], p[0]);
-    return JSON.parse(buf.toString('utf8')).d;
+    return p ? lineAt(p).d : undefined;
   }
   function close() {
     if (fd == null) return;
     held.unregister(store);
     try { fs.closeSync(fd); } finally { fd = null; }
   }
+  // the rows: those on disk are read back when asked (the most recent ROW_CACHE kept), so a store's heap does not grow with its session
+  function* rowKeys() { yield* rowAt.keys(); for (const k of rowMem.keys()) if (!rowAt.has(k)) yield k; }
+  const rows = {
+    has: (rid) => rowMem.has(rid) || rowAt.has(rid),
+    get(rid) {
+      if (rowMem.has(rid)) return rowMem.get(rid);
+      const hit = rowCache.get(rid);
+      if (hit !== undefined) return hit;
+      const p = rowAt.get(rid);
+      if (!p) return undefined;
+      const o = lineAt(p), row = expand(o.c || o.t);
+      rowCache.set(rid, row);
+      return row;
+    },
+    get size() { let n = rowAt.size; for (const k of rowMem.keys()) if (!rowAt.has(k)) n++; return n; },
+    keys: rowKeys,
+    *values() { for (const k of rowKeys()) yield rows.get(k); },
+    *[Symbol.iterator]() { for (const k of rowKeys()) yield [k, rows.get(k)]; },
+  };
 
   const store = {
     hasDef: (bid) => at.has(bid) || mem.has(bid),
