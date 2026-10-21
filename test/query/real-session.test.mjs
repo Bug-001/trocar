@@ -1,0 +1,42 @@
+// test/query/real-session.test.mjs — LOCAL ONLY: the largest session of a real trocar home, read cold by the real worker under its
+// real heap, answers 200 with a whole document (RFC 3.5 §内存有界; D38). Generated sessions miss what real captures carry (2026-10-21:
+// the worker died on the user's own session while every generated one passed), so this runs before every `trocar update` on the
+// machine that runs trocar: `TROCAR_REAL_HOME=<a trocar home> npm run test:real`.
+//
+// The home is only read: the worker runs over a side home in a temp dir whose raw/ is a link to the real one and whose index/ is a
+// copy, so whatever the read builds lands in the temp dir. Without TROCAR_REAL_HOME it is skipped and says why.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import path from 'node:path'
+import fs from 'node:fs'
+import { serveFace, request, withToken } from '../server/face.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
+import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
+
+const REAL = process.env.TROCAR_REAL_HOME
+const skip = REAL ? (fs.existsSync(path.join(REAL, 'raw')) ? false : `TROCAR_REAL_HOME has no raw/: ${REAL}`)
+  : 'TROCAR_REAL_HOME is not set (a trocar home to read; run it with `TROCAR_REAL_HOME=<home> npm run test:real`)'
+
+test('the largest real session, read cold by the real worker, answers 200 with a whole document', { skip, timeout: 600_000 }, async () => {
+  const home = path.join(tmpDir('trocar-real-'), '.trocar')
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 })
+  fs.symlinkSync(path.join(path.resolve(REAL), 'raw'), path.join(home, 'raw'))
+  if (fs.existsSync(path.join(REAL, 'index'))) fs.cpSync(path.join(REAL, 'index'), path.join(home, 'index'), { recursive: true })
+  const groups = sessionGroups(await indexRows({ home }))
+  let id = null, most = -1
+  for (const [k, rows] of groups) { const b = rows.reduce((n, r) => n + (r.stored_bytes || 0), 0); if (b > most) { most = b; id = k } }
+  assert.ok(id, 'the home has a session')
+  const failed = []
+  const face = await serveFace({ home, failure: (where, e) => failed.push(`${e.code}: ${e.message}`) })
+  try {
+    const t0 = Date.now()
+    const r = await request(face.port, `/api/session?${new URLSearchParams({ id, limit: '60' })}`, { headers: withToken() })
+    const ms = Date.now() - t0
+    const doc = JSON.parse(r.body) // a cut body is not JSON: it throws here
+    assert.equal(r.status, 200, `${id}: ${r.body.slice(0, 600)}`)
+    const t = doc.truncated
+    console.log(`real session ${id}: ${(most / 1048576).toFixed(0)} MB stored, ${doc.page.total} calls shown${t ? ` of ${t.total}` : ''}, cold read ${ms} ms`)
+    if (t) assert.ok(t.shown === doc.page.total && t.shown < t.total, 'a cut session says how many calls it shows of how many')
+    assert.deepEqual(failed, [], 'no query worker died')
+  } finally { face.close() }
+})
