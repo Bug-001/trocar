@@ -68,8 +68,7 @@ class HeapBound extends Error {
 // Per row folded: the live heap (a full collection) is looked at when the stored bytes folded since the last look reach `m.gap` (half
 // of what is left of the reservation at WORK_PER_STORED a byte), by the members' stored bytes, never by the allocated heap, so two
 // processes look at the same rows. What the reduction holds is what the heap grew by since it began (`m.base`, measured for a
-// reduction from scratch big enough to matter), held against the whole reservation (`m.limit`); one grown on a kept state is held
-// against the ceiling only.
+// reduction from scratch, and kept by a state grown across requests), held against the whole reservation (`m.limit`) and the ceiling.
 function bounded(m, rows, bytes) {
   const used = usedHeap();
   m.since += bytes;

@@ -4,7 +4,7 @@
 //
 // Generated sessions (test/query/big-session.mjs) on two axes: the wire (a whole context per request, Message Threads, Codex over
 // WebSocket, Chat Completions) and how many subagents run side by side, every call a subagent's with a context of hundreds of KB, so
-// the lanes' last contexts together are far past BASELINE_HEAP. One cold query in a process of its own (forced GC before and after):
+// the lanes' last contexts together are far past calls × SPINE_PER_ROW. One cold query in a process of its own (forced GC before and after):
 // what it still holds once the document is let go is the spine (and the caches it fills), never every lane's last context.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -34,7 +34,7 @@ for (const wire of ['http', 'chat', 'threads', 'ws']) for (const subLanes of [1,
   test(`a ${wire} session with ${subLanes} subagent lane(s) of long contexts keeps at most SPINE_PER_ROW a call beside its projection store's caches`, () => {
     const home = path.join(tmpDir('trocar-spine-'), '.trocar')
     // every call a subagent's (subEvery 1) with ~400 KB of fresh text a turn, a new subagent after two turns: ~120 lanes whose last
-    // contexts sum to ~60 MB, past calls × SPINE_PER_ROW + BASELINE_HEAP
+    // contexts sum to ~60 MB, past calls × SPINE_PER_ROW
     const s = bigSession({ home, wire, growth: 1_600_000, subEvery: 1, subLanes, subLen: 5 })
     s.append(240)
     const out = JSON.parse(execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', '--input-type=module', '-e', CHILD, home, s.id],
