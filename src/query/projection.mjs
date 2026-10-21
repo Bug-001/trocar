@@ -27,6 +27,7 @@ const ctxDir = (home) => path.join(indexDir(home), 'ctx');
 const hashOf = (key) => createHash('sha256').update(String(key)).digest('hex').slice(0, 32);
 export const projectionFile = (home, sessionKey) => path.join(ctxDir(home), `${hashOf(sessionKey)}.ndjson`);
 const pairKey = (a, b) => `${a}\n${b}`;
+const held = new FinalizationRegistry(({ fs, fd }) => { try { fs.closeSync(fd); } catch { /* already closed */ } });
 
 /** posCmp(ridA, ridB): write order of two record ids `<segment>:<line>` — segment instant, collision suffix, line. */
 export function posCmp(a, b) {
@@ -118,27 +119,35 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     }
   }
 
+  // one descriptor for the store's reads (a reduction reads tens of thousands of definitions: an open each was most of its time,
+  // 2026-10-21), closed by close() or, failing that, when the store is collected
+  let fd = null;
   function readDef(bid) {
     if (mem.has(bid)) return mem.get(bid);
     const p = at.get(bid);
     if (!p) return undefined;
-    const fd = fs.openSync(file, 'r');
-    try {
-      const buf = Buffer.alloc(p[1]);
-      fs.readSync(fd, buf, 0, p[1], p[0]);
-      return JSON.parse(buf.toString('utf8')).d;
-    } finally { fs.closeSync(fd); }
+    if (fd == null) { fd = fs.openSync(file, 'r'); held.register(store, { fs, fd }, store); }
+    const buf = Buffer.alloc(p[1]);
+    fs.readSync(fd, buf, 0, p[1], p[0]);
+    return JSON.parse(buf.toString('utf8')).d;
+  }
+  function close() {
+    if (fd == null) return;
+    held.unregister(store);
+    try { fs.closeSync(fd); } finally { fd = null; }
   }
 
-  return {
+  const store = {
     hasDef: (bid) => at.has(bid) || mem.has(bid),
     readDef,
+    close,
     rows,
     brks,
     brk: (prevBid, curBid) => brks.get(pairKey(prevBid, curBid)),
     append,
     get bytes() { return bytes; },
   };
+  return store;
 }
 
 /** gcProjections({home, fs, liveKeys, rawBytes}) → {deleted: [file]}: drops the projections of sessions not in
