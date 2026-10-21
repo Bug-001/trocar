@@ -412,14 +412,7 @@ export function forWire(view) {
 const ROW = ['ts', 'ctx', 'comp', 'usage', 'tools', 'status', 'error', 'errMsg', 'unparsed', 'rec', 'compaction', 'compactionInferred', 'gt',
   'probe', 'reqIncomplete', 'wsIncomplete', 'respIncomplete', 'wire', 'cacheBreak'];
 const ROW_BREAK = ['cause', 'attribution', 'idx', 'refRid', 'gt', 'firstCall'];
-function namesOf(doc) {
-  const lanes = doc.lanes || [], keyOf = new Map(), laneOfCall = new Map(), ridAt = new Map();
-  for (const s of doc.steps || []) ridAt.set(s.gi, String(s.id));
-  for (const l of lanes) { keyOf.set(l.streamId, l.key); for (const c of l.calls) laneOfCall.set(c, l.key); }
-  const rid = (gi) => (gi == null ? null : ridAt.get(gi) ?? null);
-  return { lanes, rid, key: (streamId) => (streamId == null ? null : keyOf.get(streamId) ?? null), laneOfCall };
-}
-function rowOf(c, lane) {
+export function callRow(c, lane) {
   const out = { rid: String(c.id), lane, ...pick(c, ROW) };
   if (noRawUsage(c.norm)) out.usage = null;
   if (c.rec) out.rec = { id: c.rec.id, request: { model: c.rec.request && c.rec.request.model } };
@@ -429,35 +422,4 @@ function rowOf(c, lane) {
   }
   if (c.cacheBreak) out.cacheBreak = pick(c.cacheBreak, ROW_BREAK);
   return out;
-}
-function headOf(l, N) {
-  const first = l.calls[0], last = l.calls[l.calls.length - 1];
-  return { lane: l.key, kind: l.kind, icon: l.icon, label: l.label, task: l.task ?? null, ...(l.note ? { note: l.note } : null), count: l.calls.length,
-    first: first ? String(first.id) : null, last: last ? String(last.id) : null, peakCtx: l.peakCtx, spawnRid: N.rid(l.spawnStep), parent: N.key(l.parent),
-    flagged: l.flagged || 0 };
-}
-/** skeletonOf(doc) → {rows, lanes, events, records, stats} of a reduced document (src/view/reduce.mjs): rows in step order (3.5:59),
- *  every lane's header (3.5:60), every lane event as {type, rid, lane}, every member's record facts in step order. */
-export function skeletonOf(doc) {
-  const N = namesOf(doc);
-  const rows = (doc.steps || []).map((c) => rowOf(c, N.laneOfCall.get(c) ?? null));
-  const events = N.lanes.flatMap((l) => (l.events || []).map((e) => ({ type: e.type, rid: N.rid(e.step), lane: l.key })));
-  const records = [...(doc.items || new Map()).values()]
-    .map((it) => ({ id: String(it.id), ts_request: it.ts_request, is_llm_call: !!it.is_llm_call, response: { status: it.status ?? null } }))
-    .sort((a, b) => stepOrder(a, b));
-  return { rows, lanes: N.lanes.map((l) => headOf(l, N)), events, records, stats: doc.stats };
-}
-/** laneOf(doc, key) → {head, rids, resources, seen, events} of the lane `key` names (null when none): its calls' rids in step order;
- *  its resources with rids for steps (segments {enter, evict}, loads {rid, range, via}); its seen paths {path, firstRid, count}; its
- *  events with `rid` for `step` and `lane` for the stream (a spawn's `childLane` for its child's), a monitor's verdict and flagged kept. */
-export function laneOf(doc, key) {
-  const N = namesOf(doc), l = N.lanes.find((x) => x.key === key);
-  if (!l) return null;
-  const resources = (l.resources || []).map(({ segments, loads, ...r }) => ({ ...r,
-    segments: (segments || []).map((g) => ({ enter: N.rid(g.enter), evict: N.rid(g.evict) })),
-    loads: (loads || []).map(({ step, ...x }) => ({ rid: N.rid(step), ...x })) }));
-  const seen = (l.seenFiles || []).map((f) => ({ path: f.path, firstRid: N.rid(f.firstStep), count: f.count }));
-  const events = (l.events || []).map(({ step, streamId, childStreamId, ...e }) => ({ ...e, rid: N.rid(step), lane: l.key,
-    ...(childStreamId !== undefined ? { childLane: N.key(childStreamId) } : null) }));
-  return { head: headOf(l, N), rids: l.calls.map((c) => String(c.id)), resources, seen, events };
 }
