@@ -368,6 +368,11 @@ running at install picking up the new trust entry (not verified for every mode),
 untrusted (`config-after-start`, with a hint to restart it) and its connections go direct, unrecorded,
 until you restart it.
 
+After `off`, the programs listed as still connected are those started while it was on, those seen going through trocar,
+and, for a program that re-reads its trocar setting while running (OpenCode, Z-Code), any copy still running at `off`.
+`off` lists no program as still trusting the certificate (that is `uninstall`'s report). A machine installed by an older
+trocar gets this rule from its next `trocar update` or `trocar install`.
+
 After `off`, connections the engine was still relaying end at the next response boundary (a WebSocket at its
 turn's end); `trocar off --now` cuts them at once. The one byte of its own that trocar ever adds is the
 `Connection: close` header line that ends such a connection, and a call that carries it is labelled

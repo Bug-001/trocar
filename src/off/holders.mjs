@@ -1,6 +1,6 @@
 // holders.mjs (src/off) — who may still use a door after `off` (RFC 4.11 P12; plan decision #4). A holder is a live process (pid + start time) that
 // may have read a route during its harness's on window: a process of h (D51 identity) started inside [on_at, off_at) — or, for a harness that
-// re-reads its entry while running (`rereads`), any process of h alive at off_at — or a process the door identified during that window (`doorSeen`,
+// re-reads a route while running (`rereads`, the routes' datum — never the trust entry's `trust_rereads`), any process of h alive at off_at — or a process the door identified during that window (`doorSeen`,
 // recorded at accept). A harness whose hook re-reads the switch per request (`per_request`: the cordis-plugin) makes none: its next request after
 // `off` goes its own way. Judged from the manifest's `liveness.<h>` and a process table alone, never from open connections (an idle agent still holds
 // the door address), so the daemon's poll, `off`'s receipt, `status` and `uninstall`'s refusal while the daemon is down compute the same table.
@@ -29,7 +29,7 @@ export function sawEntry(p, l) {
   if (!w.length) return false
   if (p.startedAt == null) return null
   const q = { startedAt: msOf(p.startedAt), startGrain: p.startGrain }
-  return w.some((x) => mayHaveRead(q, l, x.since, x.until))
+  return w.some((x) => mayHaveRead(q, !!l.rereads, x.since, x.until))
 }
 
 /** → `[{ harness, pid, start, why: 'started-in-window' | 'rereads' | 'start-unknown' | 'door-seen' }]`, in liveness order, one row per (harness, pid).
@@ -46,7 +46,7 @@ export function holdersOf({ manifest, procs = [], doorSeen = [], agentList = nul
     const seen = new Set()
     const add = (p, why) => { if (!seen.has(p.pid)) { seen.add(p.pid); out.push({ harness: h, pid: p.pid, start: p.startedAt ?? null, why }) } }
     for (const p of procs) {
-      if (!harnessesOf({ [h]: l }, p).length || !windows.some((w) => mayHaveRead(p, l, w.since, w.until))) continue
+      if (!harnessesOf({ [h]: l }, p).length || !windows.some((w) => mayHaveRead(p, !!l.rereads, w.since, w.until))) continue
       add(p, p.startedAt == null ? 'start-unknown' : l.rereads ? 'rereads' : 'started-in-window')
     }
     for (const s of doorSeen) {
