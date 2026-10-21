@@ -216,16 +216,8 @@ test('query: the records a real daemon wrote are listed and handed back byte for
     // the board shows for every block are the bytes the relay received (`block`, 4.2:55 看全文 = 回源).
     const view = await runQuery('session', { id: sid }, { home })
     assert.deepEqual([view.ok, view.records.map((r) => r.id)], [true, [`${segment}:1`]])
-    assert.deepEqual([view.analyzed.steps, view.analyzed.streams, view.logged], [undefined, undefined, null], 'C.5: steps / streams stay off the wire')
-    const calls = view.analyzed.lanes.flatMap((l) => l.calls)
-    assert.equal(calls.length, 1)
-    assert.deepEqual(calls[0].flat.map((b) => b.kind), ['system', 'text'])
+    assert.deepEqual([view.calls.map((r) => r.rid), view.logged], [[`${segment}:1`], null])
     const relayBody = up.got[0].subarray(up.got[0].indexOf('\r\n\r\n') + 4).toString('utf8')
-    for (const b of calls[0].flat) {
-      const [, from, to] = /::(\d+)-(\d+)$/.exec(b.text_ref)
-      const blk = await runQuery('block', { ref: b.text_ref }, { home })
-      assert.deepEqual([blk.ok, blk.bytes, blk.fidelity.verbatim], [true, relayBody.slice(Number(from), Number(to)), true], `${b.key}: query bytes == relay bytes`)
-    }
     // the whole record, unspanned: the request body exactly as it went on the wire
     const whole = await runQuery('block', { ref: `${segment}:1` }, { home })
     assert.deepEqual([whole.bytes, whole.truncated], [relayBody, null])

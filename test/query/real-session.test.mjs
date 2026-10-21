@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import { serveFace, request, withToken } from '../server/face.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
+import { compareStep } from '../../src/view/step-order.mjs'
 
 const REAL = process.env.TROCAR_REAL_HOME
 const skip = REAL ? (fs.existsSync(path.join(REAL, 'raw')) ? false : `TROCAR_REAL_HOME has no raw/: ${REAL}`)
@@ -32,13 +33,21 @@ test('the largest real session, read cold by the real worker, answers 200 with a
     const face = await serveFace({ home, failure: (where, e) => failed.push(`${e.code}: ${e.message}`) })
     try {
       const t0 = Date.now()
-      const r = await request(face.port, `/api/session?${new URLSearchParams({ id, limit: '60' })}`, { headers: withToken() })
+      const r = await request(face.port, `/api/session?${new URLSearchParams({ id })}`, { headers: withToken() })
       const ms = Date.now() - t0
       const doc = JSON.parse(r.body) // a cut body is not JSON: it throws here
       assert.equal(r.status, 200, `${id}: ${r.body.slice(0, 600)}`)
-      const t = doc.truncated
-      console.log(`real session ${id}: ${(most / 1048576).toFixed(0)} MB stored, ${doc.page.total} calls shown${t ? ` of ${t.total}` : ''}, cold read ${ms} ms`)
-      if (t) assert.ok(t.shown === doc.page.total && t.shown < t.total, 'a cut session says how many calls it shows of how many')
+      const t = doc.truncated, shown = doc.lanes.reduce((n, l) => n + l.count, 0)
+      // the skeleton (3.5 §会话读): the newest page of rows in step order, ≤ 1 MB and ≥ 1 row, at the extraction frontier
+      assert.ok(doc.calls.length >= 1 && (doc.calls.length === 1 || Buffer.byteLength(JSON.stringify(doc.calls)) <= 1048576), 'a page is 1 row to 1 MB')
+      assert.deepEqual([...doc.calls].sort((a, b) => compareStep(a.ts, a.rid, b.ts, b.rid)), doc.calls, 'rows in step order')
+      assert.equal(typeof doc.mark, 'string')
+      const t1 = Date.now()
+      const d = await request(face.port, `/api/session?${new URLSearchParams({ id, since: doc.mark })}`, { headers: withToken() })
+      const delta = JSON.parse(d.body)
+      assert.equal(delta.base, doc.mark, 'a delta against the mark just answered')
+      console.log(`real session ${id}: ${(most / 1048576).toFixed(0)} MB stored, ${shown} calls shown${t ? ` of ${t.total}` : ''}, ${doc.pending ? `pending ${doc.pending.done}/${doc.pending.total}, ` : ''}cold read ${ms} ms, delta ${Date.now() - t1} ms (${delta.calls.length} rows)`)
+      if (t) assert.ok(t.shown === shown && t.shown < t.total, 'a cut session says how many calls it shows of how many')
       cuts.push(t && t.total - t.shown) // the calls left out: a live session grows at the tail between the reads
     } finally { face.close() }
   }

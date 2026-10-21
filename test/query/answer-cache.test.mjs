@@ -38,7 +38,7 @@ for (const wire of ['http', 'threads', 'ws']) {
     A.append(30); B.append(10)
     const segA = '20261020T100000Z.ndjson'
     const c = counting(), ctx = { home, fs: c.fs }
-    for (const req of [{ name: 'session', params: { id: A.id }, indent: 0 }, { name: 'session', params: { id: A.id, after: '5', limit: '4' }, indent: 2, gzip: true }]) {
+    for (const req of [{ name: 'session', params: { id: A.id }, indent: 0 }, { name: 'session', params: { id: A.id, limit: '4' }, indent: 2, gzip: true }]) {
       const first = await answer(req, ctx)
       assert.equal(first.status, 200)
       c.touched.length = 0
@@ -60,7 +60,7 @@ for (const wire of ['http', 'threads', 'ws']) {
     const fresh = await answer(req, { home, fs: { ...fs } })
     assert.equal(grew.status, 200)
     const doc = JSON.parse(grew.bytes)
-    assert.equal(doc.page.total, JSON.parse(fresh.bytes).page.total)
+    assert.equal(doc.mark, JSON.parse(fresh.bytes).mark)
     // a note (`level`) is about the read that made it (3.5 读不全): the other process indexed cold, this one did not
     const sansNotes = (d) => { const errors = d.errors.filter((e) => !e.level); return JSON.stringify({ ...d, ok: errors.length === 0, errors }) }
     assert.equal(sansNotes(doc), sansNotes(JSON.parse(fresh.bytes)), 'the session grew: answered as another process answers it')

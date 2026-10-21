@@ -57,14 +57,12 @@ test('sessions / session / block / pricing 的顶层键照 C.5', async () => {
   assert.deepEqual([sessions.sessions[0].session_id, sessions.sessions[0].calls], [SID, 1])
 
   const session = await runQuery('session', { id: SID }, { home })
-  assert.deepEqual(Object.keys(session).sort(), ['analyzed', 'command', 'errors', 'logged', 'meta', 'ok', 'page', 'probes', 'records', 'schema', 'truncated'])
-  assert.deepEqual(Object.keys(session.page).sort(), ['baseline', 'cursor', 'has_more', 'limit', 'next', 'returned', 'total'])
+  assert.deepEqual(Object.keys(session).sort(), ['base', 'calls', 'command', 'errors', 'events', 'lanes', 'logged', 'mark', 'meta', 'more', 'ok', 'probes', 'records', 'schema', 'stats', 'truncated'])
   assert.deepEqual(Object.keys(session.records[0]).sort(), ['id', 'is_llm_call', 'response', 'ts_request'])
   assert.equal(session.records[0].id, `${SEG}:1`)
-  // C.5:`steps` 与 `streams` 在进程内是同一批对象,序列化就是三份拷贝 → 都不上线;
-  // 没有「只记日志」的调用时 `logged` 是 null,不是 []。
-  assert.deepEqual([session.analyzed.steps, session.analyzed.streams, session.logged], [undefined, undefined, null])
-  assert.ok(Array.isArray(session.analyzed.lanes) && session.analyzed.stats)
+  // 没有「只记日志」的调用时 `logged` 是 null,不是 [](C.5)
+  assert.deepEqual([session.base, session.mark, session.logged], [null, session.records[session.records.length - 1].id, null])
+  assert.ok(Array.isArray(session.lanes) && session.stats)
   assert.equal(session.truncated, null)
 
   const block = await runQuery('block', { ref: `${SEG}:1` }, { home })

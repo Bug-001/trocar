@@ -63,7 +63,7 @@ test('darwin: a read goes through the real daemon and gives the very bytes the l
 
     // `segments` and `classes` are not here: both report the raw layer's live state (its sizes, what is sealed), and
     // this daemon seals its own copy — the two HOMEs may honestly disagree about those two documents, not about a record.
-    for (const argv of [['sessions', '--json'], ['session', '--id', id, '--json'], ['session', '--id', id, '--after', '1', '--limit', '1', '--json'], ['calls', '--session', id, '--json'], ['block', '--ref', ref, '--json'], ['pricing', '--json']]) {
+    for (const argv of [['sessions', '--json'], ['session', '--id', id, '--json'], ['session', '--id', id, '--limit', '1', '--json'], ['calls', '--session', id, '--json'], ['block', '--ref', ref, '--json'], ['pricing', '--json']]) {
       const d = await cli(argv, { home: w.home, env: w.env, platform: 'darwin' })
       const l = await local(argv)
       assert.equal(d.exit, 0, d.out)

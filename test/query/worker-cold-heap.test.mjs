@@ -13,6 +13,7 @@ import fs from 'node:fs'
 import { serveFace, request, withToken } from '../server/face.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+const rowsOf = (doc) => doc.lanes.reduce((n, l) => n + l.count, 0)
 
 const CALLS = 1_500 // ~150 MB stored; the fold before the measured bound kept ~300 KB a call of this shape and died near 1 000
 
@@ -40,9 +41,9 @@ test('3.5 §内存有界: a cold read of a large real-shaped session answers 200
       if (t) {
         assert.ok(t.shown < t.total, 'a cut session shows fewer calls than it has')
         assert.equal(t.total, listed.calls, 'and counts them all')
-        assert.equal(a.doc.page.total, t.shown, 'the page counts the calls shown')
-      } else assert.equal(a.doc.page.total, listed.calls)
-      reads.push({ total: a.doc.page.total, truncated: t })
+        assert.equal(rowsOf(a.doc), t.shown, 'the lanes count the calls shown')
+      } else assert.equal(rowsOf(a.doc), listed.calls)
+      reads.push({ total: rowsOf(a.doc), truncated: t })
     }
     assert.deepEqual(reads[1], reads[0], 'a warm read answers what the cold one did')
     assert.deepEqual(failed, [], 'no query worker died')
