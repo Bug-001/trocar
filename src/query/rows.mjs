@@ -26,7 +26,7 @@ export const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(
 // built from (the live segment is the last, so usually only its rows), with the synthesized-key rule resumed from the state it had
 // after the segment before; nothing moved → the SAME (frozen) array, so sessionGroups' memo below holds too.
 const ROW_HEAP = 400; // a row object here: the segment's ~320 B row (index-build.mjs segRows) plus segment / lineNo / session_id
-const lists = warmCache({ max: 4, cost: (v) => v.rows.length * ROW_HEAP });
+const lists = warmCache({ max: 4, cost: (v) => v.rows.length * ROW_HEAP, steady: true });
 const entryIds = new WeakMap();
 let entrySeq = 0;
 const entryId = (records) => { let n = entryIds.get(records); if (n == null) entryIds.set(records, (n = ++entrySeq)); return n; };

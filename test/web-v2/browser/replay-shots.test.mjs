@@ -231,3 +231,27 @@ test('System prompt: the "changes every call" pill stays inside the left panel',
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
+
+// 1.5 K-29 · D58: a session that never loaded and whose read failed says ONE sentence and offers Retry; the reason — a worker's
+// crash with V8's native stack — is only in the collapsed technical details, never in the body.
+test('a session whose first read failed: one sentence and Retry; the reason only in the collapsed technical details', { skip, timeout: 120_000 }, async () => {
+  const b = await withBoard({ bytes: BYTES, width: 1280, chromium: gate.chromium })
+  try {
+    const reason = 'the query worker exited (signal SIGABRT): FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory · 1: 0x10446 node::OOMErrorHandler(char const*) [/bin/node]'
+    let reads = 0
+    await b.page.route((u) => new URL(u).pathname === '/api/session', (r) => { reads++; return r.fulfill({ status: 500, json: { error: reason } }) })
+    const rows = (await b.get('sessions')).doc.sessions.filter((x) => x.calls > 0)
+    await b.page.evaluate((h) => { location.hash = h }, `#/replay/${encodeURIComponent(rows[0].project_slug)}/${encodeURIComponent(rows[0].session_id)}`)
+    await b.page.waitForSelector('#ctxwin .empty [data-retry]')
+    const seen = await b.page.evaluate(() => document.querySelector('#ctxwin').innerText)
+    assert.match(seen, /This session could not be read\./)
+    assert.doesNotMatch(seen, /FATAL|node::|SIGABRT/, 'the visible body carries no reason text')
+    const hidden = await b.page.evaluate(() => [...document.querySelectorAll('#ctxwin .disc-b[hidden]')].map((e) => e.textContent).join(' '))
+    assert.ok(hidden.includes('FATAL ERROR: Reached heap limit'), 'the reason is in the collapsed technical details')
+    await shoot(b.page, 'replay-read-failed', { width: 1280, theme: 'light' })
+    const before = reads
+    await Promise.all([b.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/session'), b.page.click('#ctxwin [data-retry]')])
+    assert.ok(reads > before, 'Retry reads the session again')
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})

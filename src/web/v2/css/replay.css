@@ -480,6 +480,7 @@
 .pop .pp-link .jumpbtn:hover{text-decoration:underline;}
 /* a failed read says so in the content area, not in a banner */
 .emptywhy{margin-top:8px;font-size:var(--fs-cap);color:var(--ink-3);line-height:1.6;}
+.emptywhy .disc{max-width:560px;margin:4px auto 0;text-align:left;}.emptywhy .disc-t,.emptywhy .disc-t b{min-height:0;font-size:inherit;}
 #ctxwin{flex:1;min-height:0;overflow-y:auto;position:relative;/* its absolute children (.sr-only) scroll and clip with it, not stretch the document */ padding:12px 20px 60px;}
 /* < 900 px: the head drops 项目 (it is the info popover's last row there); the step bar keeps its parts */
 @media(max-width:900px){

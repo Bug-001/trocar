@@ -128,13 +128,13 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   }
 
   /** What stderr says about a crash, in one line: the cause (V8's `FATAL ERROR: …` / `Check failed` / heap limit, a thrown
-   *  `…Error: …`), the first stack frame after it, and the tail. Only the dying request's stderr: run() starts it afresh. */
+   *  `…Error: …`) and the first JavaScript frame after it — never V8's native stack, which is kilobytes of addresses the board would
+   *  print (2026-10-21). With no cause line: the head and the tail. Only the dying request's stderr: run() starts it afresh. */
   function stderrReason() {
     const lines = errHead.split('\n').map((l) => l.trim()).filter(Boolean)
     const at = lines.findIndex((l) => /FATAL ERROR|Check failed|heap limit|\b\w*Error:/.test(l))
-    const frame = at < 0 ? undefined : lines.slice(at + 1).find((l) => /^(?:at\s|\d+:\s)/.test(l))
-    const first = at < 0 ? errHead.slice(0, 600).trim() : [lines[at], frame].filter(Boolean).join(' · ')
-    const tail = errTail.trim()
+    if (at >= 0) return [lines[at], lines.slice(at + 1).find((l) => /^at\s/.test(l))].filter(Boolean).join(' · ')
+    const first = errHead.slice(0, 600).trim(), tail = errTail.trim()
     return [first, tail && !first.includes(tail) ? `… ${tail}` : ''].filter(Boolean).join(' ')
   }
 

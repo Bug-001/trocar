@@ -207,6 +207,7 @@ test('a crash says its FATAL line, to the caller and in the D38 record; within t
     await assert.rejects(ask('segments'), /FATAL ERROR: Reached heap limit/, 'the caller is told why')
     assert.equal(said.length, 1)
     assert.match(said[0], /FATAL ERROR: Reached heap limit/, 'the D38 reason carries the fatal line, not only the stack tail')
+    assert.doesNotMatch(said[0], /node::Abort/, 'and none of the native stack')
     assert.equal(forks, 1)
     clock += CRASH_COOLDOWN_MS - 1
     await assert.rejects(ask('segments'), /FATAL ERROR: Reached heap limit/, 'within the cool-down: the same reason')
@@ -315,7 +316,7 @@ test(`the deadline measures silence: a worker that ${what} (3.5:42)`, async () =
       assert.deepEqual(said, [])
     } else {
       assert.equal(said.length, 1, 'the wedged worker is a D38 failure')
-      assert.ok(Date.now() - t0 >= 400 + 200, 'cut only after its last progress plus the deadline')
+      assert.ok(Date.now() - t0 >= 400 - 50 + 200, 'cut only after its last progress plus the deadline') // its last progress comes at most one 50 ms tick before it stops at 400
     }
   } finally { svc.stop() }
 })

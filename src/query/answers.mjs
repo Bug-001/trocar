@@ -36,7 +36,10 @@ export async function answer({ name, params = {}, indent = 0, gzip: zip = false 
     const hit = version != null && kept.get(key)
     if (hit && hit.version === version) { kept.delete(key); kept.set(key, hit); return { status: hit.status, bytes: hit.bytes, enc: hit.enc } }
     const doc = await runQuery(name, params, c)
-    if (!(v && JSON.stringify(doc.errors) === JSON.stringify(v.errors))) version = null
+    // kept only under the version it answers: a run may move what the version names (session: a fold the measured heap bound
+    // stopped is cut again, 3.5 §内存有界), and then the next ask is answered afresh, never with these bytes
+    const w = v && (await versionOf(name, params, c))
+    if (!(w && w.key === v.key && JSON.stringify(doc.errors) === JSON.stringify(v.errors))) version = null
     text = JSON.stringify(doc, null, Number(indent) || 0)
   } catch (e) {
     status = e instanceof QueryArgError ? 400 : 500

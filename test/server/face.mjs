@@ -12,8 +12,9 @@ export const withToken = (h = {}) => ({ [CONTROL_TOKEN_HEADER]: TOKEN, ...h })
 
 /** `query` overrides the real service (a counting stand-in); `relays` counts what reached the worker either way. */
 /** `deps` = the path of a module whose default export is the worker's `deps` (src/query/worker.mjs argv[3]); control lines count as `control:<verb>`. */
-export async function serveFace({ home, query, deps, ...opts }) {
-  const svc = query ? null : createQueryService({ home, fork: (h) => (deps ? workerFork(h, deps) : workerFork(h)) })
+/** `failure` = the service's D38 recorder (src/query/service.mjs), e.g. to see that no worker died. */
+export async function serveFace({ home, query, deps, failure, ...opts }) {
+  const svc = query ? null : createQueryService({ home, failure, fork: (h) => (deps ? workerFork(h, deps) : workerFork(h)) })
   const relays = []
   const q = query || { relay: (a) => (relays.push(a.name), svc.relay(a)), control: (a) => (relays.push(`control:${a.verb}`), svc.control(a)), warm: (a) => svc.warm(a) }
   const { server } = createServer({ home, token: TOKEN, query: q, ...opts })
