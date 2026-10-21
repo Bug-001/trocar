@@ -27,16 +27,21 @@ test('the largest real session, read cold by the real worker, answers 200 with a
   for (const [k, rows] of groups) { const b = rows.reduce((n, r) => n + (r.stored_bytes || 0), 0); if (b > most) { most = b; id = k } }
   assert.ok(id, 'the home has a session')
   const failed = []
-  const face = await serveFace({ home, failure: (where, e) => failed.push(`${e.code}: ${e.message}`) })
-  try {
-    const t0 = Date.now()
-    const r = await request(face.port, `/api/session?${new URLSearchParams({ id, limit: '60' })}`, { headers: withToken() })
-    const ms = Date.now() - t0
-    const doc = JSON.parse(r.body) // a cut body is not JSON: it throws here
-    assert.equal(r.status, 200, `${id}: ${r.body.slice(0, 600)}`)
-    const t = doc.truncated
-    console.log(`real session ${id}: ${(most / 1048576).toFixed(0)} MB stored, ${doc.page.total} calls shown${t ? ` of ${t.total}` : ''}, cold read ${ms} ms`)
-    if (t) assert.ok(t.shown === doc.page.total && t.shown < t.total, 'a cut session says how many calls it shows of how many')
-    assert.deepEqual(failed, [], 'no query worker died')
-  } finally { face.close() }
+  const cuts = []
+  for (let i = 0; i < 2; i++) { // two fresh workers: a cut is where the session's records put it, not where a process happened to be
+    const face = await serveFace({ home, failure: (where, e) => failed.push(`${e.code}: ${e.message}`) })
+    try {
+      const t0 = Date.now()
+      const r = await request(face.port, `/api/session?${new URLSearchParams({ id, limit: '60' })}`, { headers: withToken() })
+      const ms = Date.now() - t0
+      const doc = JSON.parse(r.body) // a cut body is not JSON: it throws here
+      assert.equal(r.status, 200, `${id}: ${r.body.slice(0, 600)}`)
+      const t = doc.truncated
+      console.log(`real session ${id}: ${(most / 1048576).toFixed(0)} MB stored, ${doc.page.total} calls shown${t ? ` of ${t.total}` : ''}, cold read ${ms} ms`)
+      if (t) assert.ok(t.shown === doc.page.total && t.shown < t.total, 'a cut session says how many calls it shows of how many')
+      cuts.push(t && t.total - t.shown) // the calls left out: a live session grows at the tail between the reads
+    } finally { face.close() }
+  }
+  assert.equal(cuts[1], cuts[0], 'a second fresh worker cuts where the first did (the cut moves on a grid of steps, not per call)')
+  assert.deepEqual(failed, [], 'no query worker died')
 })

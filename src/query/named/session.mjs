@@ -77,24 +77,32 @@ function fitting(rows, perRow, others) {
   const read = rows.slice(Math.min(Math.ceil((rows.length - cap) / step) * step, rows.length - 1));
   return { read, room, bound: { shown: calls(read), total: calls(rows), kept_mb: mb(stored(read)), file_mb: mb(stored(rows)) } };
 }
-/** A fold stopped by the MEASURED bound after `rows` rows, `perRow` each as measured: its spine passed the room the plan gave it, or
- *  the process's heap its ceiling. */
+/** A fold stopped by the MEASURED bound after `rows` rows: what it held passed what the plan reserved for it, or the process's heap
+ *  its ceiling. */
 class HeapBound extends Error {
-  constructor(perRow, rows) { super('the session fold passed the heap ceiling'); this.perRow = perRow; this.rows = rows; }
+  constructor(rows) { super('the session fold passed the heap ceiling'); this.rows = rows; }
 }
-// Checked after every record folded: the heap allocated first (cheap, garbage included), the live heap (a full collection) only when
-// that is past the bound. The spine is what the heap grew by since the fold began (`s.base`, measured for a spine big enough to
-// matter), so a process holding other things — a CLI, a test — cuts where the worker does. A look that finds the spine within its
-// room sets the next one for when, at the cost per row measured so far, the spine would have taken half the room left: a handful
-// of full collections per fold, not one per record.
-function bounded(s, rows) {
+// Checked after every record folded. The live heap (a full collection) is looked at when the stored bytes folded since the last look
+// reach `s.gap`: half of what is left of the reservation at WORK_PER_STORED heap bytes a stored byte — by bytes, not rows (a run of
+// large records late in a session, a long main-thread context ~2.8 MB a call on the user's, grows the fold far faster than its
+// average row), and by the records alone, never by the allocated heap, so two processes look at the same records. The allocated
+// heap (cheap, garbage included) only guards the ceiling. What the fold holds is what the heap grew by since it began (`s.base`,
+// measured for a fold from scratch big enough to matter), so a process holding other things — a CLI, a test — cuts where the
+// worker does. It is held against the whole reservation (`s.limit`: the spine's room AND the working set, working() — a parsed
+// chunk, the baselines, the chain tips' contexts are in the heap too); a fold grown on a kept spine has no base of its own and is
+// held against the ceiling only.
+function bounded(s, rows, bytes) {
   const used = usedHeap();
-  if (used <= heapCeiling() && (s.base == null || used - s.base <= s.room || rows < s.next)) return;
-  const live = liveHeap(), spine = live - (s.base || 0);
-  if (live > heapCeiling() || (s.base != null && spine > s.room)) throw new HeapBound(spine / rows, rows);
-  if (s.base != null) s.next = rows + Math.max(1, Math.floor((s.room - spine) / (spine / rows) / 2));
+  s.since += bytes;
+  if (used <= heapCeiling() && (s.base == null || s.since < s.gap)) return;
+  const live = liveHeap(), grew = live - (s.base || 0);
+  // within half a step of the limit counts as there: the cut leaves a step anyway, and creeping up to the byte is a full
+  // collection every record
+  if (live > heapCeiling() || (s.base != null && grew > s.limit - heapBudget() / BOUND_STEPS / 2)) throw new HeapBound(rows);
+  s.since = 0; s.gap = (s.limit - grew) / 2 / WORK_PER_STORED;
 }
-// What a row of each session costs as a fold of it measured (session key → bytes), at most PER_ROW_KEPT sessions.
+// What a row of each session costs as a fold of it measured — its room over the rows that fold got through (session key → bytes),
+// at most PER_ROW_KEPT sessions.
 const perRows = new Map();
 const PER_ROW_KEPT = 64;
 // A keyless record is in this session because the segment index named it so (3.4 合成键): its refs carry that name.
@@ -127,18 +135,19 @@ function grow(box, args) {
   }
   return foldOn(null, args.sorted, args);
 }
-function foldOn(old, rows, { home, fs, id, rowOf, progress, perRow, room }) {
-  // what the heap held before this spine, measured only for a spine that may matter (a full collection costs)
+function foldOn(old, rows, { home, fs, id, rowOf, progress, perRow, limit }) {
+  // what the heap held before this spine, measured only for a fold from scratch that may matter (a full collection costs)
   const s = old || { ids: new Set(), errors: [], cost: 0, bodies: new Map(), bodyBytes: 0,
-    base: rows.length * perRow > heapBudget() / BOUND_STEPS ? liveHeap() : null, next: 0 };
-  s.rowOf = rowOf; s.sink = s.errors; s.progress = progress; s.room = room;
+    base: rows.length * perRow > heapBudget() / BOUND_STEPS ? liveHeap() : null, since: 0, gap: 0 };
+  if (old) s.base = null;
+  s.rowOf = rowOf; s.sink = s.errors; s.progress = progress; s.limit = limit;
   let folded = s.ids.size;
   const read = function* (ids) {
     for (const part of chunks(ids.map((x) => s.rowOf.get(x)).filter(Boolean))) for (const r of recordsAt({ home, fs, rows: part, errors: s.sink, remember: false })) { s.progress(); yield named(r, id); }
   };
   if (!old) s.fold = sessionFold(id, { read });
   for (const part of chunks(rows)) {
-    for (const r of recordsAt({ home, fs, rows: part, errors: s.errors, remember: false })) { progress(); s.fold.push(named(r, id), r.id); bounded(s, ++folded); }
+    for (const r of recordsAt({ home, fs, rows: part, errors: s.errors, remember: false })) { progress(); s.fold.push(named(r, id), r.id); bounded(s, ++folded, (rowOf.get(r.id) || {}).stored_bytes || 0); }
     for (const r of part) s.ids.add(r.id);
   }
   // a record that did not read is said on every answer (D38) and the spine is not kept: the next query reads it again
@@ -156,7 +165,7 @@ function planOf(rows, k) {
   if (!p || p.perRow !== perRow) {
     const { read, bound, room } = fitting(rows, perRow, steadyBytes());
     const sorted = [...read].sort(stepOrder);
-    plans.set(rows, (p = { read, bound, room, sorted, perRow, rowOf: new Map(read.map((r) => [r.id, r])), key: rowsKey(sorted).id }));
+    plans.set(rows, (p = { read, bound, room, limit: room + working(read), sorted, perRow, rowOf: new Map(read.map((r) => [r.id, r])), key: rowsKey(sorted).id }));
   }
   return p;
 }
@@ -215,21 +224,27 @@ export async function run(ctx) {
   }
   const spec = pageSpec(p), k = spineKey(ctx, id);
   for (;;) {
-    const { read, bound, sorted, rowOf, key, perRow, room } = planOf(rows, k);
+    const { read, bound, sorted, rowOf, key, perRow, room, limit } = planOf(rows, k);
     let sp = spines.peek(k, key);
     // a spine that is grown, or let go, is taken out of the cache before the room is made: the caches give way for it, never it
     const box = sp ? null : { old: spines.take(k) };
     const release = hold(working(read)); // the caches give way BEFORE anything is read
     try {
-      if (!sp) sp = spines.get(k, key, () => grow(box, { home, fs, id, sorted, rowOf, progress, perRow, room }));
+      if (!sp) sp = spines.get(k, key, () => grow(box, { home, fs, id, sorted, rowOf, progress, perRow, limit }));
       return answerOf(sp, { home, fs, id, rowOf, read, bound, spec, errors, progress });
     } catch (e) {
       if (!(e instanceof HeapBound)) throw e;
-      // the measured bound: the rows that fit at the cost this fold measured (at least a quarter dearer than reckoned, so every
-      // round reads fewer rows), from scratch — the stopped fold is garbage by now
-      if (e.rows <= 1) throw new Error(`the heap holds no room for this session (${mb(heapCeiling())} MB ceiling)`);
+      // the measured bound: as many rows as the stopped fold got through fill the room — a count, not a cost divided out of a heap
+      // that also holds the working set, so a fold that stops early is not cut harder for it — but never fewer than half the rows
+      // it was asked for: a fold that began inside a run of large records (a long main-thread context) stops early for where it
+      // began, not for what the newest rows cost (the user's session, 2026-10-21: 85 calls shown where 420 fit). The newest of
+      // them less one step are folded from scratch (fitting): fewer rows every round, even for a fold that stopped on its last row
+      // (so - 1). The cost is rounded up to a quarter power of two, so the heap's noise between two processes (a look a few records
+      // later) does not move the plan: the same records are cut in the same place. The stopped fold is garbage by now.
+      const fit = Math.max(e.rows, Math.floor(read.length / 2)) - 1;
+      if (fit < 1) throw new Error(`the heap holds no room for this session (${mb(heapCeiling())} MB ceiling)`);
       perRows.delete(k);
-      perRows.set(k, Math.max(e.perRow, perRow * 1.25));
+      perRows.set(k, 2 ** (Math.ceil(Math.log2(room / fit) * 4) / 4));
       if (perRows.size > PER_ROW_KEPT) perRows.delete(perRows.keys().next().value);
     } finally { release(); }
   }
