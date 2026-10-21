@@ -9,6 +9,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { resourcesHtml, renderResources } from '../../src/web/v2/replay/resources.mjs'
 import * as W from '../../src/web/v2/labels/replay.mjs'
+import { relPath } from '../../src/web/v2/replay/analysis.mjs'
 
 const ts = (i) => new Date(Date.UTC(2026, 9, 7, 0, 0, i * 5)).toISOString()
 const calls = (n) => Array.from({ length: n }, (_, i) => ({ gi: i, ts: ts(i), ctx: 100 + i }))
@@ -124,5 +125,19 @@ test('midClip keeps the base name whole and fits max unless the base name alone 
     assert.ok(out.endsWith(base), `${path} → ${out}`)
     if (base.length <= max) assert.ok(out.length <= max, `${path} @${max} → ${out}`)
     if (path.length <= max) assert.equal(out, path)
+  }
+})
+
+test('#3 a seen-name chip\'s hover holds the full project-relative path, escaped once', () => {
+  const cwd = '/w/p'
+  const decode = (t) => t.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+  for (const odd of ['&', '<', '>', '"', 'a&amp;b', '']) for (const depth of [1, 4, 9]) {
+    const path = `${cwd}/${Array.from({ length: depth }, (_, i) => `dir-${i}-${odd}-segment`).join('/')}/file${odd}name.mjs`
+    const anchor = anchorOf({ seenFiles: [{ path, count: 2, firstStep: 1 }] })
+    const h = resourcesHtml(stateOf(anchor, { meta: { project_path: cwd } }))
+    const m = /<span class="navchip[^"]*"[^>]*title="([^"]*)"/.exec(h)
+    assert.ok(m, 'a chip with a hover')
+    assert.ok(decode(m[1]).startsWith(relPath(cwd, path)), path)
+    assert.ok(!decode(m[1]).replace(relPath(cwd, path), '').includes('&amp;'), 'escaped once')
   }
 })
