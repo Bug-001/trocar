@@ -318,3 +318,53 @@ export function wireCtxWin(el, s) {
   el.addEventListener('keydown', onKey)
   return () => { el.removeEventListener('click', onClick); el.removeEventListener('keydown', onKey) }
 }
+
+// ── the patch: ops over keyed units (pure) ────────────────────────────────────────────────────────────────────────────
+// ['del', key] · ['put', key, unit, after] (a new node after sibling `after`, null = first) · ['move', key, after] ·
+// ['wrap', key, html] (a container's own html; its kids stay) · ['set', key, set|null] · ['kids', key, ops]. A unit whose key
+// survives with the same html and set, in its order, gets no op at all.
+const sameSet = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+function stableKeys(prev, next) { // the survivors that keep their relative order: a longest increasing run of prev positions
+  const at = new Map(prev.map((u, i) => [u.key, i])), seq = next.map((u) => at.get(u.key)).filter((i) => i != null)
+  const tails = [], link = new Array(seq.length)
+  seq.forEach((v, i) => {
+    let lo = 0, hi = tails.length
+    while (lo < hi) { const m = (lo + hi) >> 1; if (seq[tails[m]] < v) lo = m + 1; else hi = m }
+    link[i] = lo ? tails[lo - 1] : -1; tails[lo] = i
+  })
+  const keep = new Set()
+  for (let i = tails.at(-1) ?? -1; i >= 0; i = link[i]) keep.add(prev[seq[i]].key)
+  return keep
+}
+export function patchUnits(prev, next) {
+  const P = new Map(prev.map((u) => [u.key, u])), N = new Set(next.map((u) => u.key)), keep = stableKeys(prev, next), ops = []
+  for (const u of prev) if (!N.has(u.key)) ops.push(['del', u.key])
+  let after = null
+  for (const u of next) {
+    const p = P.get(u.key)
+    if (!p || !!p.kids !== !!u.kids || (!u.kids && p.html !== u.html)) { if (p) ops.push(['del', u.key]); ops.push(['put', u.key, u, after]) }
+    else {
+      if (!keep.has(u.key)) ops.push(['move', u.key, after])
+      if (u.kids && p.html !== u.html) ops.push(['wrap', u.key, u.html])
+      if (!sameSet(p.set, u.set)) ops.push(['set', u.key, u.set ?? null])
+      if (u.kids) { const k = patchUnits(p.kids, u.kids); if (k.length) ops.push(['kids', u.key, k]) }
+    }
+    after = u.key
+  }
+  return ops
+}
+const placeAfter = (arr, x, after) => { const i = after == null ? 0 : arr.findIndex((u) => u.key === after) + 1; arr.splice(i, 0, x) }
+export function applyOps(tree, ops) {
+  const arr = tree.slice(), find = (k) => arr.findIndex((u) => u.key === k)
+  for (const [op, key, a, b] of ops) {
+    const i = find(key)
+    if (op === 'del') arr.splice(i, 1)
+    else if (op === 'put') placeAfter(arr, a, b)
+    else if (op === 'move') { const [x] = arr.splice(i, 1); placeAfter(arr, x, a) }
+    else if (op === 'wrap') arr[i] = { ...arr[i], html: a }
+    else if (op === 'set') { const { set, ...x } = arr[i]; arr[i] = a == null ? x : { ...x, set: a } }
+    else if (op === 'kids') arr[i] = { ...arr[i], kids: applyOps(arr[i].kids, a) }
+  }
+  return arr
+}
+
