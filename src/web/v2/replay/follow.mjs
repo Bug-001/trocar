@@ -66,33 +66,40 @@ export function createPoller({ run, now = Date.now, base, alive = () => true, id
 }
 
 // ── a step's own reads (2.3 §读与画 快速拖动; 4.4 live-poll, C3) ───────────────────────────────────────────────────────────
-// createStepReads({get, setTimer, clearTimer, need, onLane, onBodies, restMs}) → {target(rid), prefetch(key)}. Injected, no DOM.
+// createStepReads({get, setTimer, clearTimer, need, onLane, onBodies, restMs}) → {target(rid), prefetch(key), laneSlot(fn)}. Injected, no DOM.
 //   · target(rid): the playhead's call. Once it has rested `restMs` with no newer target, need(rid) → {lane: {lane, from?, to?} |
 //     null, refs: string[]} says what that step still lacks; at most one `lane` and one `block` read are in flight at a time
 //   · a newer target aborts at once the reads asked for any other step (a prefetch too); an aborted read is not a failure and
 //     calls back nothing
-//   · onLane(rid, answer) hears a lane read's envelope (rid null for a prefetch); after a successful one the step is asked again
-//     (its rows' refs may now be known), but never for the same lane query twice per target; onBodies(rid, got[]) hears the bodies
+//   · onLane(rid, answer, query) hears a lane read's envelope (rid null for a prefetch); after a successful one the step is asked
+//     again (its rows' refs may now be known), but never for the same lane query twice per target; onBodies(rid, got[], refs)
+//     hears the bodies
 //   · prefetch(key) reads lane `key` only when nothing is in flight and no target is resting
+//   · laneSlot(fn) runs the caller's own lane reads (the poll's) in the one `lane` slot: it waits for the step's lane read in
+//     flight, and the step's next lane read waits for it
 export function createStepReads({ get, setTimer = setTimeout, clearTimer = clearTimeout, need, onLane, onBodies, restMs = 100 }) {
-  let want = null, timer = null, lastLane = null
-  const out = { lane: null, block: null } // the read in flight of each kind: {rid, ac}
+  let want = null, timer = null, lastLane = null, slot = null, waited = false
+  const out = { lane: null, block: null } // the read in flight of each kind: {rid, ac, p}
   const api = { get }
   function start(kind, rid, what) {
     const ac = new AbortController(), f = { rid, ac }
     out[kind] = f
-    const p = kind === 'lane' ? get('lane', what, { signal: ac.signal }) : loadBodies(api, what, { signal: ac.signal })
-    p.then((r) => {
+    // a read that threw is a failure like any other: it reaches onLane / onBodies with its reason, never strands the slot
+    const why = (e) => String((e && e.message) || e || 'cause not known')
+    const p = kind === 'lane' ? get('lane', what, { signal: ac.signal }).catch((e) => ({ ok: false, error: why(e) }))
+      : loadBodies(api, what, { signal: ac.signal }).catch((e) => what.map(() => ({ status: 'error', error: why(e) })))
+    f.p = p.then((r) => {
       out[kind] = null
       if (ac.signal.aborted) { if (timer == null && want != null) go(); return }
-      if (kind === 'block') { onBodies(rid, r); return }
-      onLane(rid, r)
+      if (kind === 'block') { onBodies(rid, r, what); return }
+      onLane(rid, r, what)
       if (r && r.ok && rid != null && rid === want) go()
     })
   }
   function go() {
     const rid = want, n = need(rid) || {}
-    if (n.lane && !out.lane) {
+    if (n.lane && slot) waited = true
+    else if (n.lane && !out.lane) {
       const k = JSON.stringify(n.lane)
       if (k !== lastLane) { lastLane = k; start('lane', rid, n.lane) }
     }
@@ -106,8 +113,17 @@ export function createStepReads({ get, setTimer = setTimeout, clearTimer = clear
       timer = setTimer(() => { timer = null; go() }, restMs)
     },
     prefetch(key) {
-      if (out.lane || out.block || timer != null) return
+      if (out.lane || out.block || slot || timer != null) return
       start('lane', null, { lane: key })
+    },
+    async laneSlot(fn) {
+      while (out.lane || slot) await (out.lane ? out.lane.p.catch(() => {}) : slot)
+      let free
+      slot = new Promise((r) => { free = r })
+      try { return await fn() } finally {
+        slot = null; free()
+        if (waited && timer == null && want != null) { waited = false; go() }
+      }
     },
   }
 }
