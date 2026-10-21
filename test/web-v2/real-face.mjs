@@ -28,10 +28,13 @@ export function boardHome({ bytes = 0 } = {}) {
   return { userHome, home }
 }
 
-/** The face on an ephemeral port. get(name, params) → {status, doc}; close() stops the server and the worker. */
+/** The face on an ephemeral port. get(name, params) → {status, doc}; close() stops the server and the worker.
+ *  workers() → the pids of the query workers it forked that are still alive; killWorker(sig) signals them, → how many. */
 export async function serveBoard({ userHome, home }) {
   const env = { ...process.env, HOME: userHome, ...osStubs().env }
-  const svc = createQueryService({ home, fork: (h, ...argv) => fork(WORKER, [h, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: ['--require', NO_REAL_OS], env }) })
+  const kids = []
+  const svc = createQueryService({ home, fork: (h, ...argv) => { const c = fork(WORKER, [h, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: ['--require', NO_REAL_OS], env }); kids.push(c); return c } })
+  const alive = () => kids.filter((c) => c.exitCode === null && c.signalCode === null)
   const { server } = createServer({ home, token: TOKEN, query: svc })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
   const port = server.address().port
@@ -41,5 +44,7 @@ export async function serveBoard({ userHome, home }) {
     try { doc = JSON.parse(r.body) } catch { /* not JSON: doc stays null */ }
     return { status: r.status, doc }
   }
-  return { port, base: `http://127.0.0.1:${port}`, token: TOKEN, get, close: async () => { svc.stop(); server.close(); await once(server, 'close') } }
+  const workers = () => alive().map((c) => c.pid)
+  const killWorker = (sig = 'SIGKILL') => alive().filter((c) => c.kill(sig)).length
+  return { port, base: `http://127.0.0.1:${port}`, token: TOKEN, get, workers, killWorker, close: async () => { svc.stop(); server.close(); await once(server, 'close') } }
 }
