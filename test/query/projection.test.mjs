@@ -248,6 +248,7 @@ test('3.5 #15: after a restart, extraction reads only the records the projection
     assert.ok(cut.r.done > 0 && cut.r.done < cut.r.total, `${wire}: the budget stopped the build midway`)
     const reopened = openAt(home, s.id, [])
     const lacking = cut.members.map((m) => String(m.id)).filter((rid) => !reopened.rows.has(rid))
+    assert.ok(lacking.length < cut.members.length, `${wire}: the reopened projection kept the cut build's rows`)
     const go = await indexed(home, s.id)
     extractMembers({ store: reopened, members: go.members, recordsAt: go.read, sessionId: s.id })
     assert.deepEqual(go.asked.slice().sort(posCmp), lacking.slice().sort(posCmp), `${wire}: only the members not yet projected are read`)
