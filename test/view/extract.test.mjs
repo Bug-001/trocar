@@ -10,7 +10,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
-import { extract, createExtractContext } from '../../src/view/extract.mjs';
+import { extract, createExtractContext, materialize } from '../../src/view/extract.mjs';
+import { assembleSession } from '../../src/view/assemble.mjs';
 import { parseTextRef } from '../../src/raw/refs.mjs';
 import { fieldTextOf } from '../../src/dissect/record-fields.mjs';
 import { shapeResponse } from '../../src/collector/core/record/body.mjs';
@@ -120,5 +121,45 @@ test('(b) the same bytes at another position, call, lane or beside another sibli
     const both = [...a.keys()].filter((k) => b.has(k));
     assert.ok(both.length >= 2, axis);
     for (const k of both) assert.deepEqual(noRef(b.get(k)), noRef(a.get(k)), `${axis}: ${a.get(k).kind}`);
+  }
+});
+
+test('(c) each call\'s list, through its base chain, is the old fold\'s context; its message boundaries too', () => {
+  for (const [name, recs] of Object.entries(SESSIONS())) {
+    const byId = new Map(recs.map((r) => [String(r.id), r]));
+    const { rows } = run(recs);
+    const memo = new Map();
+    const listOf = (rid, key) => {
+      if (memo.has(rid + key)) return memo.get(rid + key);
+      const row = rows.get(rid), enc = key === 'list' ? row : row.mb;
+      const v = materialize(row.base == null ? null : listOf(row.base, key), enc);
+      memo.set(rid + key, v);
+      return v;
+    };
+    const steps = assembleSession(recs).steps;
+    assert.ok(steps.length, name);
+    for (const s of steps) {
+      const want = s.flat.map((b) => (b.text_ref ? b64(`${b.sec}\x1F${b.role}\x1F${resolve(byId.get(parseTextRef(b.text_ref).recordId), b.text_ref)}`)
+        : b64(`u\x1F${b.sec}\x1F${b.role}\x1F${canon(b.sec === 'system' ? b.text : b.block)}`)));
+      assert.deepEqual(listOf(String(s.id), 'list'), want, `${name} ${s.id}`);
+      const mb = [];
+      s.flat.forEach((b, i) => { if (b.sec === 'messages' && (i === 0 || s.flat[i - 1].sec !== 'messages' || s.flat[i - 1].mi !== b.mi)) mb.push(i); });
+      assert.deepEqual(listOf(String(s.id), 'mb'), mb, `${name} ${s.id} boundaries`);
+    }
+    // a chain of calls is written against its base, not as a keyframe each time
+    assert.ok([...rows.values()].some((r) => r.base != null), name);
+  }
+});
+
+test('(d) rows and definitions survive a JSON round trip, and carry no credential header value', () => {
+  for (const [name, recs] of Object.entries(SESSIONS())) {
+    for (const r of recs) if (name === 'http') r.req_headers.authorization = `Bearer ${SECRET}`;
+    const { defs, rows } = run(recs);
+    for (const o of [...defs.values(), ...rows.values()]) {
+      const s = JSON.stringify(o);
+      assert.deepStrictEqual(JSON.parse(s), o, name);
+      assert.ok(!s.includes(SECRET), `${name}: no secret`);
+    }
+    for (const r of recs) assert.ok(rows.get(String(r.id)).x.item, `${name}: every record has a row`);
   }
 });
