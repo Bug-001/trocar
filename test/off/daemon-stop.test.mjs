@@ -195,3 +195,33 @@ test('on darwin shapes the daemon lock is verified — same process running, a r
   assert.equal(read(ps('Thu Oct  8 09:00:00 2026', 1760000000)).state, 'stale', 'a reused pid is not reported as running')
   assert.equal(read(ps('Wed Oct  7 04:27:00 2026', 1760100000)).state, 'stale', 'a reboot since')
 })
+
+// V100 (1.6 §3.4): after the manager's own stop (launchd's bootout, systemd's stop — each already sends its SIGTERM) stopDaemon first waits for the
+// pid; its own SIGTERM goes only to a pid still there after a whole termWaitMs, its SIGKILL only after a second wait.
+for (const [platform, managerStop] of [['darwin', 'launchctl-bootout'], ['linux', 'systemctl-stop']]) {
+  const manager = (t, c, endsAfterMs) => (file, args) => {
+    const cmd = [file, ...args].join(' ')
+    if (/ (bootout|stop) /.test(cmd) && endsAfterMs != null) c.at(c.now() + endsAfterMs, () => t.live.delete(4242))
+    return { status: cmd.includes(' is-active ') ? 3 : 0, stdout: cmd.includes(' is-active ') ? 'inactive\n' : '', stderr: '' }
+  }
+  const run = async (endsAfterMs) => {
+    const t = table({ 4242: UP[4242] }, { ignoreTerm: [4242] }); const c = clock(); const timers = []
+    c.at = (when, fn) => timers.push([when, fn])
+    const sleep = async (ms) => { await c.sleep(ms); for (const [when, fn] of timers) if (c.now() >= when) fn() }
+    const sentAt = []
+    const kill = (pid, sig) => { sentAt.push([sig, c.now() - 10_000_000]); t.kill(pid, sig) }
+    const r = await stopDaemon({ lockFile: lockAt(DAEMON), exec: manager(t, c, endsAfterMs), kill, alive: t.alive, identity: t.identity, isHelper: t.isHelper, unitManaged: true, platform, termWaitMs: 10_000, now: c.now, sleep })
+    return { r, sentAt }
+  }
+  test(`V100 ${platform}: a daemon that ends within the wait after ${managerStop} gets no signal of stopDaemon's own`, async () => {
+    const { r, sentAt } = await run(3000)
+    assert.deepEqual([r.stopped, r.signals, sentAt], [true, [managerStop], []])
+  })
+  test(`V100 ${platform}: a daemon that outlives ${managerStop} gets SIGTERM only after termWaitMs, then SIGKILL after a second wait`, async () => {
+    const { r, sentAt } = await run(null)
+    assert.deepEqual([r.stopped, r.signals], [true, [managerStop, 'SIGTERM', 'SIGKILL']])
+    assert.deepEqual(sentAt.map(([s]) => s), ['SIGTERM', 'SIGKILL'])
+    assert.ok(sentAt[0][1] >= 10_000, `SIGTERM at ${sentAt[0][1]} ms`)
+    assert.ok(sentAt[1][1] - sentAt[0][1] >= 10_000, `SIGKILL ${sentAt[1][1] - sentAt[0][1]} ms after SIGTERM`)
+  })
+}

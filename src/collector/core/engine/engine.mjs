@@ -126,6 +126,8 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     const meta = withExtras(meta0)
     counters.active++
     const ctx = flowCtx(connect)
+    // every failure of this flow names its agent (4.6, V30): the engine copies the door's meta, it does not branch on a harness
+    if (meta.agent != null) ctx.failure = (rec) => failure(rec.agent === undefined ? { agent: meta.agent, ...rec } : rec)
     const entry = { agent: meta.agent ?? null, handle: null }
     flows.add(entry)
     ctx.register = (h) => { entry.handle = h }
@@ -141,7 +143,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       if (!rec || rec.not_captured === 'error' || (rec.error && rec.error.wait)) return
       if (rec.decision === 'decrypt') counters.decrypted++
       else if (rec.decision === 'splice') counters.spliced++
-    }).catch((e) => { failure({ code: 'engine-error', pid: meta.pid ?? null, dst: meta.dst, reason: `handling the connection failed: ${String((e && e.message) || e)}` }); onError(e) }).finally(() => { active.delete(done); counters.active--; gone() })
+    }).catch((e) => { ctx.failure({ code: 'engine-error', pid: meta.pid ?? null, dst: meta.dst, reason: `handling the connection failed: ${String((e && e.message) || e)}` }); onError(e) }).finally(() => { active.delete(done); counters.active--; gone() })
     active.add(done)
     if (duringLookup) socket.removeListener('error', duringLookup) // handleFlow's own listener has taken over
   }

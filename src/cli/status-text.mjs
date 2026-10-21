@@ -13,7 +13,7 @@ const upFor = (since, now) => { const t = Date.parse(since); if (!Number.isFinit
 
 /** The daemon in one clause, from the daemon's own answer — never a stale pid as the present state (§1.1). */
 function daemonClause(d, now) {
-  if (d.running === true) { const up = d.since ? upFor(d.since, now) : null; return `Daemon running (pid ${d.pid ?? unknown('no pid recorded')}${up ? `, up ${up}` : ''}).` }
+  if (d.running === true) { const up = d.since ? upFor(d.since, now) : null; return `Daemon running (pid ${d.pid ?? 'unknown'}${up ? `, up ${up}` : ''}).` }
   if (d.running === false) return `Daemon not running${d.error ? ` (${d.error})` : ''}; nothing is captured. Start it: trocar on`
   if (d.responding === false) return `Daemon does not answer${d.error ? ` (${d.error})` : ''}; new connections are not captured.`
   return `Daemon: ${unknown(d.error || 'its state could not be read')}.`
@@ -63,8 +63,9 @@ function summaryPairs(doc, now) {
     const words = { 'in-place': 'installed, trusted by your user', pending: 'installed, but not trusted yet: the dialog was not answered', declined: 'installed, but you declined the trust dialog', missing: 'no longer in your trust store; run: trocar install', orphan: 'left over from an uninstall; run: trocar install', none: 'installed', unknown: null }[root]
     rows.push(['Certificate', `${words || unknown((cert.root && cert.root.reason) || 'your trust store could not be read')}${cert.expires ? `, expires ${cert.expires}` : ''}`])
   }
-  const r = doc.relayed
-  rows.push(['Connections', r === 'unknown' || !r ? unknown(doc.relayed_reason || 'the daemon did not say') : `${r.closing + r.waiting} open through trocar`])
+  // open now (V37); of those, the ones of agents turned off that are still closing (`relayed`, §1.3)
+  const n = doc.connections, r = doc.relayed, closing = r && r !== 'unknown' ? r.closing + r.waiting : 0
+  rows.push(['Connections', Number.isInteger(n) ? `${n} open through trocar${closing > 0 ? ` (${closing} from agents turned off, closing)` : ''}` : unknown(doc.connections_reason || 'the daemon did not say')])
   const fl = doc.failures
   // D51④: a program that refuses trocar's certificate is not captured for that host at all. A count of problems does not say that,
   // so the summary names it on its own row; which hosts is in `trocar status --failures` and in `critical` of the document (C.3).
@@ -122,8 +123,8 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
 export const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:127\.0\.0\.1|\[?::1\]?|localhost):(\d+)/.exec(String(url || '')); return m ? `:${m[1]}` : String(url || unknown('no address recorded')) }
 
 // ── `--failures` (§3.5: one line per kind of problem, then Expected) ──────────────────────────────────────────────
-/** One group's line: the shared sentence, then (when the sentence stands for a known code) the record's own reason — the CLI has no technical details to fold it into. */
-const failureLine = (g) => { const r = failureWord(g.where, g.code, g.harness || '') && briefText(g.reason || ''); return r ? `${failureBrief(g)}: ${r}` : failureBrief(g) } // no nested brackets (§1.1②): a reason has its own
+/** One group's line: its harness when the group names one (D38: for whom), the shared sentence, then (when the sentence stands for a known code) the record's own reason — the CLI has no technical details to fold it into. */
+const failureLine = (g) => { const r = failureWord(g.where, g.code, g.harness || '') && briefText(g.reason || ''); const s = r ? `${failureBrief(g)}: ${r}` : failureBrief(g); return g.harness ? `${g.harness}: ${s}` : s } // no nested brackets (§1.1②): a reason has its own
 
 /** The whole wall of the last 24 hours: one line per `level:'problem'` group of the document's `failures` (C.3, the board's capture log reads the same
  *  groups and words), then the `Expected` section (what is not a problem by design). */

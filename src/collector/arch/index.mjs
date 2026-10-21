@@ -42,5 +42,5 @@ export async function loadArch(platform = process.platform) {
       netFacts: darwinNetFacts,
     }
   }
-  throw new Error(`trocar collector: ${platform} is not supported yet (Linux first; RFC 4.6 §结构)`)
+  throw new Error(`trocar collector: ${platform} is not supported yet`)
 }

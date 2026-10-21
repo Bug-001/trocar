@@ -174,7 +174,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const id = await ident.identityOf({ peer, door: doorOf(d), target })
     if (!d.auth) { // the PAC door takes no credentials: this user's processes only (P10); a refusal is an answer of its own, the ingress writes its one record and closes
       const a = peerAllowed({ ...(id.facts || {}), pid: id.pid }, self)
-      if (!a.ok) return { refuse: { code: a.code, reason: `the PAC door refused a connection: ${a.detail}${id.unresolved ? ` (owner ${id.unresolved})` : ''}; it takes no credentials, so it forwards only this user's processes` } }
+      if (!a.ok) return { refuse: { code: a.code, reason: `trocar's proxy settings file (PAC) refused a connection: ${a.detail}${id.unresolved ? ` (owner ${id.unresolved})` : ''}; it takes no credentials, so it forwards only this user's processes` } }
     }
     const known = !id.why && byName.has(id.agent)
     if (known && onSet.has(id.agent)) seen.add({ harness: id.agent, pid: id.pid, start: id.facts.startedAt ?? null })
@@ -212,11 +212,11 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const facts = q != null ? await ident.factsCached(q) : sameUser ? { sameUser: true } : null
     const a = peerAllowed({ ...(facts || {}), pid: q }, self), mine = a.ok
     if (!mine && facts && (facts.uid != null || facts.sid || facts.sameUser === false)) { // another user's, for certain: refused (P10)
-      record({ event: 'failure', where: 'ingress', code: a.code, peer, reason: `the PAC door refused a PAC request: ${a.detail}` })
+      record({ event: 'failure', where: 'ingress', code: a.code, peer, reason: `a request for trocar's proxy settings file (PAC) was refused: ${a.detail}` })
       return null
     }
     // an owner that could not be read gets the door-less PAC (the app's own way): an empty answer would send the app direct around the system proxy
-    if (!mine) record({ event: 'failure', where: 'ingress', code: CODE.pacOwnerUnread, peer, reason: `served the PAC without the door: ${a.detail}${why ? ` (owner ${why})` : ''}; the app keeps its own way until it fetches the PAC again` })
+    if (!mine) record({ event: 'failure', where: 'ingress', code: CODE.pacOwnerUnread, peer, reason: `served trocar's proxy settings file (PAC) without routing through trocar: ${a.detail}${why ? ` (owner ${why})` : ''}; the app keeps its own way until it fetches the PAC again` })
     const m = (facts && identify(facts)) || {}
     if (mine && m.reason === 'match' && onSet.has(m.agent)) seen.add({ harness: m.agent, pid: q, start: facts.startedAt ?? null }) // taking the PAC is reading the entry (P12)
     const leg = await pacLeg({ systemProxy: systemProxy(), isTrocarDoor: (v) => isTrocarDoorUrl(v, { ports: [...doors.values()].map((x) => x.port) }) }) // what this door dials too
@@ -235,7 +235,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     if (held) { await bound.close([g]); doors.delete(g) }
     try { await bound.open([{ id: g, port, auth, ...(auth ? { token } : {}) }]) } catch (e) {
       const taken = e && e.code === 'EADDRINUSE'
-      record({ event: 'failure', where: taken ? 'ingress' : 'engine', code: taken ? CODE.enginePortTaken : 'engine-error', door: g, reason: taken ? `the door of ${g} cannot listen on its recorded port ${port}: another socket holds it; no door, and no other port is picked (trocar on picks a free one and rewrites the entry)` : `the door of ${g} could not listen on ${port}: ${(e && e.message) || e}` })
+      record({ event: 'failure', where: taken ? 'ingress' : 'engine', code: taken ? CODE.enginePortTaken : 'engine-error', door: g, reason: taken ? `trocar cannot open its local proxy port ${port} for ${g}: another socket holds it; nothing listens for ${g}, and no other port is picked (trocar on picks a free one and rewrites the entry)` : `trocar could not open its local proxy port ${port} for ${g}: ${(e && e.message) || e}` })
       return { reason: taken ? CODE.enginePortTaken : 'engine-error' }
     }
     const d = { g, harness, routeId, port, auth, url: auth ? `http://${encodeURIComponent(g)}:${token}@127.0.0.1:${port}` : `http://127.0.0.1:${port}` }

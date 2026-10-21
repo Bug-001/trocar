@@ -9,6 +9,7 @@ import { appendFlowEvent } from '../../src/off/events.mjs'
 import * as core from '../../src/collector/core/control.mjs'
 import { appendEvent } from '../../src/collector/core/events.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { assertEnglish } from '../helpers/english.mjs'
 
 test('the collector\'s control and events modules export the src/off functions themselves — one implementation, not two', () => {
   assert.equal(core.controlRequest, controlRequest)
@@ -18,7 +19,7 @@ test('the collector\'s control and events modules export the src/off functions t
 
 test('controlSocketPath is $XDG_RUNTIME_DIR/trocar/collector.sock and throws without XDG_RUNTIME_DIR', () => {
   assert.equal(controlSocketPath({ env: { XDG_RUNTIME_DIR: '/run/user/1000' } }), '/run/user/1000/trocar/collector.sock')
-  assert.throws(() => controlSocketPath({ env: {} }), /XDG_RUNTIME_DIR is not set/)
+  assert.throws(() => controlSocketPath({ env: {} }), (e) => { assertEnglish(e.message, 'the reason no socket is known'); return true }) // D58 V73
 })
 
 test('controlRequest against the real control server: a reply is the parsed JSON, a 4xx rejects with its status, an absent socket has code ENOENT, a server that never answers rejects with ETIMEDOUT', async () => {

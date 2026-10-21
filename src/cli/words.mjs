@@ -75,8 +75,8 @@ export const FAILURE_WORDS = Object.freeze({
   'framer-error': 'a request could not be parsed',
   'unpaired-response': 'a response arrived with no request to pair it with',
   'prior-proxy-unknown': 'the proxy in use before trocar could not be told',
-  'pac-peer-refused': "trocar's proxy auto-config door refused a program not shown to be yours",
-  'pac-owner-unread': "trocar's proxy auto-config door could not tell whose program asked, so it answered without routing through trocar",
+  'pac-peer-refused': "a program not shown to be yours asked for trocar's proxy settings file (PAC) and was refused",
+  'pac-owner-unread': "trocar's proxy settings file (PAC) could not tell whose program asked, so it answered without routing through trocar",
   'upstream-header-ignored': 'a routing header from a program that should not send one was ignored',
   untrusted: 'a connection from a program that does not trust trocar yet; passed on unread',
   untracked: 'a connection from a program trocar does not follow; passed on unread',
@@ -255,6 +255,20 @@ export function statusReason(code, { harness = '', pid = null } = {}) {
     'kimi-npm-no-shim': [`this is the npm build of ${h}; trocar sets up only the installed one`],
     'desktop-ca-override': [`the desktop certificate setting of ${h} overrides the one trocar wrote`],
     'smart-app-control': [`Smart App Control is on, so trocar could not set up the install folder of ${h}`],
+    // the rest of doctor's findings (1.6 附录 B, src/netenv/findings.mjs FINDING_CODES): the catalogue's "what" sentence, without the values a clause is not given
+    'egress-differs': [`some of ${h}'s connections now leave through a different hop`, `to keep the old path, turn capture off for ${h}`, `trocar off ${h}`],
+    'linger-off': ['capture stops when you log out', 'let your user keep running after logout: loginctl enable-linger'],
+    'system-proxy-pac': ['your system proxy is a PAC script, so the next hop is unknown'],
+    'other-redirector': ['something else on this machine also rewrites connections'],
+    'fake-ip': [`${h}'s API host resolves inside 198.18.0.0/15, a VPN's fake IP range`],
+    'inferred-behaviour': [`${h}'s proxy behaviour on this platform is inferred, not measured`],
+    'process-unknown': [`a process that is not on the agent list used ${h}'s proxy`, `add its name to ${h} in ~/.trocar/agents.json`],
+    'agent-list-invalid': ['~/.trocar/agents.json has bad entries; the rest is still used', 'fix or remove those entries; no restart is needed'],
+    'prior-proxy-unknown': [`trocar could not recover the proxy ${h}${pid != null ? ` (pid ${pid})` : ''} started with`, `put that proxy in ${h}'s own setting, then restart ${h}`, `trocar on ${h}`],
+    'collectors-online': [`capture is still on for ${h}, so nothing was uninstalled`, 'turn capture off, then uninstall again', 'trocar off'],
+    'cause-unknown': [`if ${h} still cannot connect: trocar found no cause on its side`, `turn capture off for ${h} and try again`, `trocar off ${h}`],
+    'engine-port-taken': ['another program holds the port trocar listens on, so nothing is captured', 'turn capture off and on again, and trocar picks another port'],
+    'socktable-unavailable': ['Windows did not say which program owns a connection, so it was forwarded only', 'no action is needed; the next connection is asked again'],
   }
   if (!Object.hasOwn(M, code)) return null
   const [text, fix = null, command = null] = M[code]

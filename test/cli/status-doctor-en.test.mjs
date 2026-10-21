@@ -50,7 +50,7 @@ test('§3.5 a read that failed is `unknown` with its reason, never 0 and never a
   const lines = statusSummary(doc({
     daemon: { running: null, pid: 4012, responding: null, since: null, error: 'the lock could not be read (EACCES)' },
     harnesses: { codex: harness({ captured: null, why: ['the process table could not be listed (EPERM)'] }) },
-    relayed: 'unknown', relayed_reason: 'the daemon does not answer', failures: null,
+    relayed: 'unknown', relayed_reason: 'the daemon does not answer', connections: 'unknown', connections_reason: 'the daemon does not answer', failures: null,
   }), { now: NOW })
   clean(lines, 'status (unreadable)')
   assert.ok(lines.some((l) => /Daemon: unknown \(the lock could not be read \(EACCES\)\)/.test(l)))

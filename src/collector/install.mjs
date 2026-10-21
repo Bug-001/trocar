@@ -531,6 +531,7 @@ export async function turnOn(opts = {}) {
     receipt.daemon = { state: up ? 'running' : 'not-running', started, ...(pid ? { pid } : {}) }
     // the links last: the daemon attaches on this request, and answers with the state it reached
     if (up && !halt) checked(() => guard())
+    let reached = false // V104: the result line lists the targets only when the daemon took the request and reached on
     if (up && !halt) {
       let status = null
       try { status = await ask({ socketPath: sock, method: 'POST', path: '/on', body: { harnesses: plan.targets } }) } catch (e) {
@@ -540,7 +541,8 @@ export async function turnOn(opts = {}) {
       if (status) {
         receipt.restart = (status.agents || []).filter((a) => a && !a.trusted && !a.off && RESTART_REASONS.includes(a.reason) && plan.targets.includes(a.agent)).map((a) => ({ harness: a.agent, pid: a.pid, reason: a.reason }))
         receipt.capture = { desired: status.desired ?? null, actual: status.actual ?? null }
-        if (status.actual !== 'on') {
+        reached = status.actual === 'on'
+        if (!reached) {
           const why = status.helper && status.helper.ok === false ? `the capability helper speaks protocol ${status.helper.proto}, this daemon expects ${status.helper.expected_proto}; run: sudo trocar setup-helper`
             : status.degraded ? `the helper is down (${status.degraded.reason}); nothing is steered, agents connect directly`
               : status.ca && status.ca.ok === false ? `the collector CA is unusable (${status.ca.which}: ${status.ca.reason}); nothing is steered` : `the daemon did not reach on (actual: ${status.actual}); nothing is steered, agents connect directly`
@@ -549,7 +551,7 @@ export async function turnOn(opts = {}) {
       }
     }
     const wrote = written.entries.length || written.files.length || written.owned.length || written.unit
-    return finish(wrote ? 'installed' : 'on', problems.length ? `on did not finish: ${problems[0]}` : `on: ${plan.targets.join(', ')}`, up && !halt ? plan.targets : [])
+    return finish(wrote ? 'installed' : 'on', problems.length ? `on did not finish: ${problems[0]}` : `on: ${plan.targets.join(', ')}`, reached && !halt ? plan.targets : [])
     } finally { lock.release() }
   }, { harnesses: [], refused: [] })
 }

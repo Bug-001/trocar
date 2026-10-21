@@ -9,6 +9,7 @@ import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { tmpDir } from '../../../helpers/tmp.mjs'
+import { assertEnglish } from '../../../helpers/english.mjs'
 import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, taskXml, taskUser, userUnit, directStartEnv, register, daemonCommandLine, readRunValue, runKeyFallback, removeRunValue, TASK_NAME, TASK_FILE, RUN_KEY, superviseChild, runSupervisor, lockHolderAlive, supervisorBackoff, SUPERVISOR_LOCK, SUPERVISE_CAP_MS, SUPERVISE_STABLE_MS } from '../../../../src/collector/arch/win32/autostart.mjs'
 import { elevationByWhoami, refuseElevatedByWhoami } from '../../../../src/off/win32.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
@@ -227,12 +228,14 @@ test('W24 `on` refuses a Node below the minimum with a doctor line that says wha
     assert.equal(r.have, v)
     assert.match(r.doctor, new RegExp(v.replaceAll('.', '\\.')), 'the doctor line names the version found')
     assert.match(r.doctor, new RegExp(`${NODE_MIN_MAJOR}`), '... and the one needed')
+    assertEnglish(r.doctor, v, { width: false })
   }
   assert.equal(nodePreflight().ok, true, 'the default is this process\'s own Node')
   for (const v of [undefined, '', 'twenty', null]) {
     const r = nodePreflight({ versions: { node: v } })
     assert.equal(r.ok, false, `an unreadable version (${JSON.stringify(v)}) is not a pass`)
     assert.match(r.doctor, /Node/)
+    assertEnglish(r.doctor, String(v), { width: false })
   }
 })
 

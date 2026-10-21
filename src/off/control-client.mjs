@@ -22,7 +22,7 @@ export const isPipePath = (p) => typeof p === 'string' && /^\\\\[.?]\\pipe\\./.t
 /** $XDG_RUNTIME_DIR/trocar/collector.sock; throws when XDG_RUNTIME_DIR is not set (the caller says why it cannot ask the daemon).
  *  Linux's endpoint; Windows finds its own through controlEndpointOf (offWorld asks the right one for its platform). */
 export function controlSocketPath({ env = process.env } = {}) {
-  if (!env.XDG_RUNTIME_DIR) throw new Error('XDG_RUNTIME_DIR is not set; the collector control socket lives in $XDG_RUNTIME_DIR/trocar (RFC 4.6 §控制面)')
+  if (!env.XDG_RUNTIME_DIR) throw new Error('XDG_RUNTIME_DIR is not set, so the control socket cannot be found')
   return path.join(env.XDG_RUNTIME_DIR, 'trocar', 'collector.sock')
 }
 

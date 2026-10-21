@@ -13,6 +13,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../../../helpers/tmp.mjs'
+import { assertEnglish } from '../../../helpers/english.mjs'
 import { refuseElevated, nodePreflight, plistXml, plistPath, userUnit, directStartEnv, AGENT_LABEL, PLIST_FILE, LAUNCHD_THROTTLE_SECONDS, KICKSTART_TIMEOUT_MS } from '../../../../src/collector/arch/darwin/autostart.mjs'
 import { daemonLogPaths } from '../../../../src/collector/arch/daemon-logs.mjs'
 import { controlEndpoint, readControlEndpoint, CONTROL_FILE, SOCKET_PREFIX, SOCKET_SUFFIX } from '../../../../src/collector/arch/darwin/control-path.mjs'
@@ -160,7 +161,7 @@ test('W25 root is refused by the daemon\'s check with the closed-set code root-t
     const r = await refuseElevated(w)
     if (!refused) { assert.equal(r, null, what); continue }
     assert.equal(r.code, 'root-token', what)
-    assert.match(r.reason, /R7/, 'the reason names the rule')
+    assertEnglish(r.reason, what, { width: false }) // D58: the refusal is plain English and names no spec rule
     assert.match(r.reason, /sudo/, '... and says what not to do')
     assert.deepEqual(r.token, { uid: w.getuid(), euid: w.geteuid() }, 'what it saw')
     assert.deepEqual(checkRecord({ event: 'failure', where: 'start', code: r.code, reason: r.reason }), [], 'a failure record the closed set takes')
@@ -196,12 +197,14 @@ test('W24 `on` on darwin refuses a Node below 22.15 (4.9 §7, MA5: a root added 
     assert.match(r.doctor, new RegExp(v.replaceAll('.', '\\.')), 'the doctor line names the version found')
     assert.match(r.doctor, new RegExp(NODE_MIN.replaceAll('.', '\\.')), '... and the one needed')
     assert.match(r.doctor, /launchd/, '... and who starts the daemon with it')
+    assertEnglish(r.doctor, v, { width: false })
   }
   assert.equal(nodePreflight({ versions: { node: '22.15.0' } }).ok, true)
   for (const v of [undefined, '', 'twenty', null, '22']) {
     const r = nodePreflight({ versions: { node: v } })
     assert.equal(r.ok, false, `an unreadable version (${JSON.stringify(v)}) is not a pass`)
     assert.match(r.doctor, /Node/)
+    assertEnglish(r.doctor, String(v), { width: false })
   }
 })
 
