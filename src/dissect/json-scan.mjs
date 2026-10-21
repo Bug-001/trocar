@@ -16,16 +16,19 @@ export function scanJson(text) {
   const isWs = (c) => c === 32 || c === 9 || c === 10 || c === 13;
   const skipWs = () => { while (i < N && isWs(text.charCodeAt(i))) i++; };
 
+  // A string ends at the first '"' preceded by an EVEN run of backslashes (the run never reaches back past the opening quote):
+  // indexOf jumps over the body instead of stepping it char by char — request bodies are megabytes of string (3.5 #21).
   function parseString() {
     // precondition: text[i] === '"'
-    i++; // opening quote
-    while (i < N) {
-      const ch = text[i];
-      if (ch === '\\') { i += 2; continue; } // skip escaped char
-      if (ch === '"') { i++; return; }
-      i++;
+    const open = i;
+    for (let from = i + 1; ;) {
+      const q = text.indexOf('"', from);
+      if (q === -1) { i = N; throw new Error(`scanJson: unterminated string at ${i}`); }
+      let b = q - 1;
+      while (b > open && text.charCodeAt(b) === 92) b--;
+      if ((q - 1 - b) % 2 === 0) { i = q + 1; return; }
+      from = q + 1;
     }
-    throw new Error(`scanJson: unterminated string at ${i}`);
   }
 
   function parseLiteral() {
@@ -50,7 +53,8 @@ export function scanJson(text) {
       if (text[i] !== '"') throw new Error(`scanJson: expected object key at ${i}`);
       const keyStart = i;
       parseString();
-      const key = JSON.parse(text.slice(keyStart, i));
+      const raw = text.slice(keyStart + 1, i - 1);   // a key with no escape is its own text
+      const key = raw.includes('\\') ? JSON.parse(text.slice(keyStart, i)) : raw;
       skipWs();
       if (text[i] !== ':') throw new Error(`scanJson: expected ':' at ${i}`);
       i++; // :
