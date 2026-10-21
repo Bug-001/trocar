@@ -20,7 +20,7 @@
 // nothing is, so an idle exit never cuts a query and is not a failure. The board's `relay` (4.4, D66) has no local path, so it is the one caller that waits for a fork.
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { QUERY_PATH, QUERY_NAMES, WINDOW_PARAMS } from './client.mjs'
+import { QUERY_PATH, QUERY_NAMES, WINDOW_PARAMS, paramsOf } from './client.mjs'
 import { WORKER_MEMORY_MB } from './warm.mjs'
 import { OS_PROMPT_MS } from '../off/root-store.mjs'
 
@@ -39,7 +39,7 @@ export const CRASH_COOLDOWN_MS = 60_000
 export const FAILURE_BACKOFF_MAX_MS = 15 * 60_000
 const coolOf = (ep) => Math.min(CRASH_COOLDOWN_MS * 2 ** (ep.n - 1), FAILURE_BACKOFF_MAX_MS)
 /** What a failure is remembered by: the name and every parameter but the window (stable key order). */
-const subjectOf = (name, params = {}) => `${name} ${JSON.stringify(Object.keys(params).filter((k) => !WINDOW_PARAMS.includes(k)).sort().map((k) => [k, String(params[k])]))}`
+const subjectOf = (name, params = {}) => `${name} ${JSON.stringify(Object.keys(params).filter((k) => !WINDOW_PARAMS.includes(k)).sort().map((k) => [k, Array.isArray(params[k]) ? params[k].map(String) : String(params[k])]))}`
 /** A worker asked nothing this long leaves and gives its memory back: the board polls every 1.5 s while it is open, so it stays
  *  warm while anyone is looking; the next query after an idle exit forks a new one (3.5 谁执行它). */
 export const QUERY_IDLE_MS = 120_000
@@ -295,8 +295,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     // The closed name set (client.mjs QUERY_NAMES), checked here: an arbitrary name used to fork a worker before the
     // query core refused it.
     if (!QUERY_NAMES.includes(name)) throw Object.assign(new Error(`trocar query: no query called ${JSON.stringify(name)} (names: ${QUERY_NAMES.join(', ')})`), { status: 400 })
-    const params = {}
-    for (const [k, v] of query) if (k !== 'name' && k !== 'indent') params[k] = v
+    const params = paramsOf(query, ['name', 'indent'])
     const line = lineOf(name, params, query.get('indent') || 0)
     if (!child) { // the cold path: answered at once, warmed behind the answer (see the head of this file)
       warmUp(line, name, subjectOf(name, params))

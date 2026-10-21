@@ -138,7 +138,11 @@ export async function versionOf(name, params = {}, ctx = {}) {
 function checked(name, params) {
   const q = Object.hasOwn(QUERIES, name) ? QUERIES[name] : null;
   if (!q) throw new QueryArgError(`trocar query: no query called ${JSON.stringify(name)} (names: ${Object.keys(QUERIES).join(', ')})`);
-  for (const k of Object.keys(params)) if (!q.params.includes(k)) throw new QueryArgError(`trocar query ${name}: no parameter --${k} (its parameters: ${q.params.length ? q.params.map((p) => '--' + p).join(' ') : 'none'})`);
+  for (const k of Object.keys(params)) {
+    if (!q.params.includes(k)) throw new QueryArgError(`trocar query ${name}: no parameter --${k} (its parameters: ${q.params.length ? q.params.map((p) => '--' + p).join(' ') : 'none'})`);
+    // A parameter given more than once is a list; only the entry's `lists` take one (1.6 §4.1 参数).
+    if (Array.isArray(params[k]) && !(q.lists || []).includes(k)) throw new QueryArgError(`trocar query ${name}: --${k} takes one value, and it was given ${params[k].length}`);
+  }
   return q;
 }
 

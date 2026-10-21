@@ -361,18 +361,18 @@ const ANSWER = `const b = '{"ok":true}'; process.stdout.write('200 ' + b.length 
 test('#20: a subject that keeps timing out while its window moves writes one query-failed; its cool-down forks nothing and doubles with each failure', async () => {
   const { svc, said, st, ask } = episodic(() => SILENT)
   try {
-    await assert.rejects(ask({ id: 'S', after: '0', limit: '10' }))
+    await assert.rejects(ask({ id: 'S', since: '0', limit: '10' }))
     assert.equal(st.forks, 1)
     assert.equal(said.length, 1)
     assert.ok(said[0].where === 'daemon' && said[0].code === 'query-failed')
-    for (const [after, limit] of [['5', '10'], ['9', '40'], ['120', '3']]) {
-      await assert.rejects(ask({ id: 'S', after, limit }), (e) => e.message === said[0].reason, 'answered at once with the episode\'s reason')
+    for (const w of [{ since: '5', limit: '10' }, { before: '9', limit: '40' }, { from: '120', to: '130' }]) {
+      await assert.rejects(ask({ id: 'S', ...w }), (e) => e.message === said[0].reason, 'answered at once with the episode\'s reason')
     }
     st.clock = CRASH_COOLDOWN_MS - 1
-    await assert.rejects(ask({ id: 'S', after: '200' }))
+    await assert.rejects(ask({ id: 'S', before: '200' }))
     assert.equal(st.forks, 1, 'no fork while the cool-down runs, whatever the window')
     st.clock = CRASH_COOLDOWN_MS
-    await assert.rejects(ask({ id: 'S', after: '201' }))
+    await assert.rejects(ask({ id: 'S', from: '201' }))
     assert.equal(st.forks, 2, 'after the cool-down the subject is tried once')
     st.clock = CRASH_COOLDOWN_MS + 2 * CRASH_COOLDOWN_MS - 1
     await assert.rejects(ask({ id: 'S' }))
@@ -389,9 +389,9 @@ test('#20: a subject that keeps timing out while its window moves writes one que
 test('#20: a crash and then a timeout of the same subject are one episode, one record', async () => {
   const { svc, said, st, ask } = episodic((n) => (n === 1 ? CRASH : SILENT))
   try {
-    await assert.rejects(ask({ id: 'S', after: '0' }))
+    await assert.rejects(ask({ id: 'S', before: '0' }))
     st.clock = CRASH_COOLDOWN_MS
-    await assert.rejects(ask({ id: 'S', after: '7' }))
+    await assert.rejects(ask({ id: 'S', before: '7' }))
     assert.equal(st.forks, 2, 'the timeout was a real try')
     assert.equal(said.length, 1)
   } finally { svc.stop() }
@@ -403,8 +403,8 @@ test('#20: an answer ends the episode, so the next failure of that subject is a 
   try {
     await assert.rejects(ask({ id: 'S' }))
     st.clock = CRASH_COOLDOWN_MS
-    await ask({ id: 'S', after: '3' })
-    await assert.rejects(ask({ id: 'S', after: '4' }))
+    await ask({ id: 'S', before: '3' })
+    await assert.rejects(ask({ id: 'S', before: '4' }))
     assert.equal(said.length, 2)
     assert.equal(st.forks, 2, 'no cool-down was left over from the ended episode')
   } finally { svc.stop() }

@@ -61,6 +61,18 @@ test('V80: every named query answers the same document through HTTP as through r
   takeRefusals();
 });
 
+test('a parameter given more than once is a list, and a parameter that takes one value refuses it: 400 (1.6 §4.1 参数)', async () => {
+  const f = await serveFace({ home: home() });
+  try {
+    for (const [name, q] of Object.entries(QUERIES)) {
+      for (const p of q.params.filter((k) => !(q.lists || []).includes(k))) {
+        const r = await get(f.port, `/api/${name}?${p}=1&${p}=2`);
+        assert.equal(r.status, 400, `${name} ?${p}=1&${p}=2 → ${r.status}`);
+      }
+    }
+  } finally { f.close(); }
+});
+
 test('V80: no second read path is left in the shell or the page', () => {
   const files = [path.join(ROOT, 'src', 'server.mjs'), ...fs.readdirSync(path.join(ROOT, 'src', 'web'), { recursive: true }).map((f) => path.join(ROOT, 'src', 'web', f))];
   for (const f of files) {

@@ -18,6 +18,7 @@
 import { dissectBlocks, sysLabel, parseBashReads } from '../dissect/cc.mjs'
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'
 import { hintsOf } from '../dissect/harnesses.mjs'
+import { compareStep } from './step-order.mjs'
 import { compactionVerdict, hasCompactionPreamble } from '../identity/session-identity.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
 // `response`. Reading `.response` directly is the bug class that silently killed every HTTP status
@@ -470,7 +471,7 @@ function failedCall(r) {
 
 // analyze()'s step order (ts_request, then id): every assembler folds a session in it, so a session's global step index is one sort
 // whichever wires it mixes.
-export const stepOrder = (a, b) => String(a.ts_request).localeCompare(String(b.ts_request)) || String(a.id).localeCompare(String(b.id))
+export const stepOrder = (a, b) => compareStep(a.ts_request, a.id, b.ts_request, b.id)
 // The record analyze() reads in place of one whose request did not parse (see isUnparsed above): an empty request stub,
 // `_unparsed`, and the non-enumerable source-stream stamp a spread drops (its reply still needs a locator). The stub is a
 // view-side clone, so the raw NDJSON source truth is untouched (invariant 2). Every other record is itself.

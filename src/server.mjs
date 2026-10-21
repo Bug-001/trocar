@@ -13,7 +13,7 @@ import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { CONTROL_TOKEN_HEADER } from './off/token-header.mjs';
-import { LOCAL_ENV, QUERY_NAMES } from './query/client.mjs';
+import { LOCAL_ENV, QUERY_NAMES, paramsOf } from './query/client.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 // The one board (1.2 §托管与打开): src/web/v2/ is the static plane, served at `/`. Named as new URL('./web/v2/', import.meta.url)
@@ -21,7 +21,7 @@ const SRC = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.resolve(fileURLToPath(new URL('./web/v2/', import.meta.url)));
 /** The shared-module allowlist (4.4 静态面): pure, import-closed modules the page and the CLI must agree on, served at
  *  `/<entry>` from `src/<entry>`. Data, not routes: add a line here. */
-export const SHARED = Object.freeze(['cli/words.mjs', 'off/token-header.mjs']);
+export const SHARED = Object.freeze(['cli/words.mjs', 'off/token-header.mjs', 'view/step-order.mjs']);
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -112,7 +112,7 @@ export function createServer({ home, token, query, uid = process.getuid?.(), pla
     const name = m[1];
     if (!QUERY_NAMES.includes(name)) return sendJson(res, 404, { error: `no query called ${JSON.stringify(name)}` });
     if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed — the board is read-only' });
-    const params = Object.fromEntries(url.searchParams);
+    const params = paramsOf(url.searchParams); // a repeated parameter is a list (1.6 §4.1 参数)
     named ||= await import('./query/named/index.mjs');
     // The worker answers as if LOCAL_ENV were unset (worker.mjs), so the stamp must be taken the same way.
     const workerEnv = { ...(env || process.env) };

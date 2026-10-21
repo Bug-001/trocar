@@ -22,6 +22,7 @@
 import { sessionFold, pageView } from '../../view/board.mjs';
 import { BASELINE_BYTES } from '../../view/assemble.mjs';
 import { OrderBound } from '../../view/analyze.mjs';
+import { compareStep } from '../../view/step-order.mjs';
 import { recordsAt } from '../records.mjs';
 import { indexRows, sessionGroups } from '../rows.mjs';
 import { rowsKey, warmCache, fsTag, heapBudget, heapCeiling, hold, steadyBytes, liveHeap, usedHeap } from '../warm.mjs';
@@ -46,7 +47,7 @@ export const BASELINE_HEAP = BASELINE_BYTES * WORK_PER_STORED;
 
 const spines = warmCache({ cost: (v) => v.cost });
 // analyze()'s step order (src/view/analyze.mjs stepOrder) over the index rows: `ts` is the record's ts_request
-const stepOrder = (a, b) => String(a.ts).localeCompare(String(b.ts)) || String(a.id).localeCompare(String(b.id));
+const stepOrder = (a, b) => compareStep(a.ts, a.id, b.ts, b.id);
 const calls = (rs) => rs.reduce((n, r) => n + (r.is_llm && !r.log_only ? 1 : 0), 0);
 const stored = (rs) => rs.reduce((n, r) => n + (r.stored_bytes || 0), 0);
 const mb = (n) => Math.round((n / 1048576) * 10) / 10;

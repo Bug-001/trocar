@@ -17,9 +17,23 @@ export const LOCAL_ONLY = Object.freeze(['status', 'doctor'])
  *  test/query/docs.test.mjs — the query core is most of a CLI's load time, so the daemon must be able to refuse an
  *  unknown name without importing it, and before forking a worker for it). */
 export const QUERY_NAMES = Object.freeze(['status', 'doctor', 'sessions', 'session', 'calls', 'traffic', 'overview', 'block', 'classes', 'segments', 'pricing'])
-/** The paging / delta parameters: they change which part of a document is shipped, never what it costs to compute, so a
- *  failure is remembered per query WITHOUT them (service.mjs, 3.5 §读不全不静默): a board whose window moved asks the same thing. */
-export const WINDOW_PARAMS = Object.freeze(['after', 'limit', 'base', 'have'])
+/** The window parameters: they move which part of a document is shipped, never what is asked, so a failure is
+ *  remembered per query WITHOUT them (service.mjs, 3.5 §读不全不静默): a board whose window moved asks the same thing. */
+export const WINDOW_PARAMS = Object.freeze(['since', 'before', 'limit', 'from', 'to'])
+/** A query string → query parameters, one rule on every path (1.6 §4.1 参数): a parameter given more than once is the
+ *  list of its values, in order; once, its value. `skip` = the route's own keys. Whether a list is taken is the query
+ *  core's call (named/index.mjs checked()). */
+export const paramsOf = (search, skip = []) => {
+  const out = new Map()
+  for (const [k, v] of search) if (!skip.includes(k)) out.set(k, out.has(k) ? [].concat(out.get(k), v) : v)
+  return Object.fromEntries(out)
+}
+/** Query parameters → a query string: a list is the parameter repeated, once per value, in order (paramsOf's inverse). */
+const searchOf = (params) => {
+  const q = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) for (const x of [].concat(v)) q.append(k, String(x))
+  return q
+}
 /** Environment variables that change what the query core answers. Set in the caller's environment → the caller
  *  answers locally, and the worker runs as if none were set (worker.mjs deletes them): one list, one place, so the
  *  two paths cannot disagree about a document. */
@@ -44,7 +58,8 @@ export async function queryDocument(name, params = {}, { home, userHome, dir, pl
     const ep = controlEndpointFor({ platform, dir, env: env || {} })
     if (ep.socketPath) {
       try {
-        const q = new URLSearchParams({ ...params, name, indent: String(indent) })
+        const q = searchOf(params)
+        q.set('name', name); q.set('indent', String(indent))
         const bytes = await ep.request({ socketPath: ep.socketPath, path: `${QUERY_PATH}?${q}`, timeoutMs: deadlineMs, raw: true })
         return { text: bytes.toString('utf8'), via: 'daemon' }
       } catch (e) {
