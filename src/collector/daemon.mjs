@@ -779,7 +779,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     // what it holds in memory, so this costs nothing. Without it `status` said "Connections unknown (the daemon's reply does not
     // carry the connection counts)" on every model-mode machine — a reason about trocar's own IPC (a macOS test machine 2026-10-18).
     const off = new Set(Object.entries(d).filter(([, e]) => e && e.desired === 'off').map(([h]) => h))
-    return { code: VERSION, pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), agents: collector.verdicts(), relayed: engine.relayed({ agents: off }), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
+    return { code: VERSION, pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), agents: collector.verdicts(), negatives: engine.negatives(), relayed: engine.relayed({ agents: off }), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
   // the daemon's own identity, as it writes it into its lock (below): the read route hands it back, and an answer on the token-checked channel is
