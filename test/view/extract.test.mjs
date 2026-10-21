@@ -168,7 +168,11 @@ test('(d) rows and definitions survive a JSON round trip, and carry no credentia
 //   (a) every definition reachable from a stitched call's list checks out (as part 1's (a))
 //   (b) id-level == item-level: each stitched list is the old planner's flat, block for block — a request block by its bid, a
 //       reply block (now addressed in the reply) by its frame — with the same boundaries, attributes and state
+//   (c) a restart (rows 0..k stored, the store reopened from disk) goes on to the rows one pass gives
+//   (d) the frontier: the largest rid with every member up to it extracted
+import { extractMembers } from '../../src/view/extract.mjs';
 import { flatBlockText } from '../../src/view/analyze.mjs';
+import { openProjection } from '../../src/query/projection.mjs';
 import { threadSession, record } from '../helpers/cc-threads.mjs';
 
 const SEG = '20261020T164737Z';
@@ -260,3 +264,55 @@ test('(b) id-level == item-level: each stitched list is the planner-stitched fla
   }
 });
 
+// the driver over a session's members: index rows by id, records read through recordsAt (one chunk at a time)
+const membersOf = (recs) => recs.map((r) => ({ id: r.id }));
+const reader = (recs) => { const byId = new Map(recs.map((r) => [r.id, r])); return (rows) => rows.map((m) => byId.get(m.id)); };
+const KEY = 'big-0000-4a1b-9c2d-000000000001';
+const opened = (home) => openProjection({ home, key: KEY });
+
+test('(c) a restart — rows 0..k stored, the store reopened from disk — goes on to exactly the rows of one pass', () => {
+  const all = stitchedSessions();
+  for (const name of ['threads', 'ws', 'causal']) {
+    const recs = all[name], members = membersOf(recs), recordsAt = reader(recs);
+    const one = opened(tmpDir('trocar-extract-'));
+    extractMembers({ store: one, members, recordsAt });
+    assert.equal(one.rows.size, recs.length, name);
+    for (let k = 0; k < recs.length; k += 3) {
+      const home = tmpDir('trocar-extract-');
+      extractMembers({ store: opened(home), members: members.slice(0, k + 1), recordsAt });
+      const again = opened(home);
+      assert.equal(again.rows.size, k + 1, `${name} k=${k}: read back from disk`);
+      extractMembers({ store: again, members, recordsAt });
+      for (const r of recs) assert.deepEqual(again.rows.get(r.id), one.rows.get(r.id), `${name} k=${k} ${r.id}`);
+    }
+  }
+});
+
+test('(d) frontier: the largest rid with every member up to it extracted; done / total count members', () => {
+  const recs = stitchedSessions().threads, members = membersOf(recs), recordsAt = reader(recs);
+  const store = opened(tmpDir('trocar-extract-'));
+  // some later members first: the frontier stops at the first gap
+  extractMembers({ store, members: members.filter((_, i) => i < 3 || (i >= 6 && i < 9)), recordsAt });
+  let r = extractMembers({ store, members, recordsAt, budgetMs: 0 });
+  assert.deepEqual(r, { frontier: recs[2].id, done: 6, total: recs.length });
+  // a budget that runs out midway: what it extracted is the next members in write order, and the frontier says how far
+  for (const budget of [3, 6]) {
+    let now = 0;
+    const before = new Set(store.rows.keys());
+    r = extractMembers({ store, members, recordsAt, budgetMs: budget, clock: () => now++ });
+    const has = recs.map((x) => store.rows.has(x.id)), gap = has.indexOf(false);
+    const taken = recs.filter((x) => store.rows.has(x.id) && !before.has(x.id)).map((x) => x.id);
+    const todo = recs.filter((x) => !before.has(x.id)).map((x) => x.id);
+    assert.ok(taken.length > 0 && taken.length < todo.length, `budget ${budget} stops midway`);
+    assert.deepEqual(taken, todo.slice(0, taken.length), 'in write order');
+    assert.deepEqual(r, { frontier: gap === 0 ? null : recs[(gap < 0 ? recs.length : gap) - 1].id, done: has.filter(Boolean).length, total: recs.length });
+  }
+  // a member whose record does not read back has a row in memory only, so the next open extracts it again (design §3.9)
+  const home = tmpDir('trocar-extract-'), lost = recs[4].id;
+  r = extractMembers({ store: opened(home), members, recordsAt: (rows) => recordsAt(rows).filter((x) => x.id !== lost) });
+  assert.deepEqual(r, { frontier: recs.at(-1).id, done: recs.length, total: recs.length });
+  const again = opened(home);
+  assert.ok(!again.rows.has(lost));
+  assert.deepEqual(extractMembers({ store: again, members, recordsAt }), { frontier: recs.at(-1).id, done: recs.length, total: recs.length });
+  assert.ok(again.rows.get(lost).x.secs, 'extracted on the next open');
+});

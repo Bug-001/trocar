@@ -24,6 +24,7 @@ import { boardDissectorFor, wireFormatOf, flatLaneOf } from '../dissect/registry
 import { hintsOf } from '../dissect/harnesses.mjs';
 import { CC_THREADS, replyIdOf, patchSystem } from '../dissect/cc-threads.mjs';
 import { hasCompactionPreamble } from '../identity/session-identity.mjs';
+import { sessionKeyOf } from '../dissect/harnesses.mjs';
 import { posCmp } from '../query/projection.mjs';
 import { safeHeaders } from '../capture/redact.mjs';
 import { bodyRetentionOf, retentionLabelOf } from '../dissect/capture-labels.mjs';
@@ -356,3 +357,42 @@ function callX(rec, { d, format }, { h, req, unparsed }) {
     stop_reason: norm.stop_reason, error: !!rec.error || unparsed || !!(d.failed && d.failed(norm, rec)), replyId: norm.id ?? null });
 }
 
+// ── the build driver ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const CHUNK = 16; // records asked of recordsAt at a time
+const contexts = new WeakMap(); // store → its extraction context (slices of one session go on with the same one)
+
+/**
+ * extractMembers({store, members, recordsAt, sessionId, budgetMs, clock}) → { frontier, done, total } (design §3.4 "Extraction
+ * frontier"). `members`: the session's index rows; `recordsAt(rows)` → their records (one that does not read back is left out).
+ * Extracts the members the store has no row for, in write order (posCmp), until `budgetMs` of `clock` is spent, appending each
+ * chunk's definitions and rows. A member that fails to extract gets a row { x: { unparsed: reason } } kept in memory only
+ * (persist: false), so the next open tries it again (§3.9). frontier: the largest rid such that every member up to it has a row;
+ * done / total: members with a row, members. A keyless record gets the session's synthesized key (3.4 合成键), as the query does.
+ */
+export function extractMembers({ store, members, recordsAt, sessionId = null, budgetMs = Infinity, clock = () => performance.now() }) {
+  const order = members.map((m) => String(m.id)).sort(posCmp);
+  if (!contexts.has(store)) contexts.set(store, createExtractContext(store));
+  const ctx = contexts.get(store), t0 = clock(), spent = () => clock() - t0 >= budgetMs;
+  const byId = new Map(members.map((m) => [String(m.id), m]));
+  const todo = order.filter((rid) => !store.rows.has(rid));
+  for (let i = 0; i < todo.length && !spent();) {
+    const part = todo.slice(i, i + CHUNK), got = new Map();
+    for (const r of recordsAt(part.map((rid) => byId.get(rid))) || []) if (r) got.set(String(r.id), r);
+    const defs = [], rows = [], failed = [];
+    for (const rid of part) {
+      if (spent() && (rows.length || failed.length)) break;
+      i++;
+      const rec = got.get(rid);
+      if (rec && sessionId != null && sessionKeyOf(rec).key == null) Object.defineProperty(rec, '_synthKey', { value: sessionId, enumerable: false, configurable: true, writable: true });
+      let out = null, why = rec ? null : 'the record did not read back';
+      if (rec) try { out = extract(rec, ctx); } catch (e) { why = `extraction failed: ${e && e.message ? e.message : e}`; }
+      if (out) { defs.push(...out.defs); rows.push(out.row); } else failed.push({ rid, pos: rid, x: { unparsed: why } });
+    }
+    store.append({ defs, rows });
+    if (failed.length) store.append({ rows: failed }, { persist: false });
+  }
+  let frontier = null, done = 0;
+  for (const rid of order) if (store.rows.has(rid)) done++;
+  for (const rid of order) { if (!store.rows.has(rid)) break; frontier = rid; }
+  return { frontier, done, total: order.length };
+}
