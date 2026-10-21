@@ -17,3 +17,13 @@ export function keyAction(e, { at, n, problems = [] }) {
   if (k === 'p') { const i = problems.findLast((p) => p < at && p >= 0); return i == null ? null : { to: i } }
   return null
 }
+
+// the cell keys (RFC 2.3 §两种模式), pure: v flips this cell's mode, Shift+V the desk default, c copies the cell's bytes.
+// Any Ctrl / Meta / Alt chord belongs to the browser or the OS. keyAction leaves these keys alone.
+export function cellKey(e) {
+  if (!e || e.ctrlKey || e.metaKey || e.altKey) return null
+  if (e.key === 'V' || (e.key === 'v' && e.shiftKey)) return { flipDesk: true }
+  if (e.key === 'v') return { flip: true }
+  if (e.key === 'c') return { copy: true }
+  return null
+}
