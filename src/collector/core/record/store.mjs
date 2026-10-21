@@ -14,6 +14,11 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
   let errors = 0, openDay = null
   let lastError = null // the reason of the last failed write, for the caller's failure record (RFC 4.6 §记录 采集失败不静默)
   let segment = null, segFile = null, segBytes = 0, segLines = 0
+  // close() makes the store final (1.6 §5.2: the stop is a barrier): nothing is written after it, no file is created, the lock is told nothing more.
+  // A write that still arrives is refused and said once per kind (`late-write`), never a reopened day file or a new segment.
+  let final = false
+  const late = new Set()
+  const lateWrite = (kind) => { if (!late.has(kind)) { late.add(kind); report(Object.assign(new Error(`a ${kind} record reached the record store after the stop closed it; it was not written`), { code: 'late-write' })) } return false }
   const onClosed = [] // the seal queue hangs here (4.6 §记录 自动封存)
   const onWrote = [] // the index keeper hangs here (D62): told the segment a line was just appended to
   const onChange = [] // the live segment changed: the daemon writes it into the lock there (see openSegment, closeSegment)
@@ -108,6 +113,7 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
     // { ok: true, id: '<segment>:<line>' } once the line is in the segment; { ok: false } when it is not (counted,
     // reported). The WebSocket recorder marks the calls after a lost envelope partial (4.6 §传输与帧级记录, write-failed).
     envelope(env) {
+      if (final) return { ok: lateWrite('envelope') }
       try {
         // ONE utf-8 encode: `Buffer.byteLength` on the string used to scan it a second time only to count it, and
         // writeSync encodes it a third (D62: ~0.3 ms per MB of record, a macOS machine).
@@ -133,9 +139,9 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
         return { ok: false }
       }
     },
-    flow(rec) { return write((d) => path.join(root, 'flows', `${d}.ndjson`), rec) }, // false = not written (D38: the engine records that)
-    audit(rec) { write((d) => path.join(root, 'audit', `${d}.ndjson`), rec) },
-    replay(env) { write((d) => path.join(root, 'replays', `${d}.ndjson`), env) },
+    flow(rec) { return final ? lateWrite('flow') : write((d) => path.join(root, 'flows', `${d}.ndjson`), rec) }, // false = not written (D38: the engine records that)
+    audit(rec) { if (final) lateWrite('audit'); else write((d) => path.join(root, 'audit', `${d}.ndjson`), rec) },
+    replay(env) { if (final) lateWrite('replay'); else write((d) => path.join(root, 'replays', `${d}.ndjson`), env) },
     onSegmentClosed(cb) { onClosed.push(cb) },
     /** cb(segment) right before a segment's file is created, and cb(null) once it is closed, before onSegmentClosed
      *  hears of it — the daemon rewrites the lock there, so a sealer never sees a stale live segment (D60, invariant 2). */
@@ -147,6 +153,6 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
     get lastError() { return lastError },
     get errors() { return errors },
     get openFiles() { return fds.size },
-    close() { closeSegment(); closeAll(); openDay = null },
+    close() { if (final) return; closeSegment(); closeAll(); openDay = null; final = true },
   }
 }

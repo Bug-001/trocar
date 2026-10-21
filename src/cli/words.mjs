@@ -28,6 +28,7 @@ export const FAILURE_WORDS = Object.freeze({
   // records and the raw layer (sealing, indexing, reading capture files)
   'record-error': 'a record could not be written',
   'file-replaced': 'the capture file was replaced',
+  'late-write': 'a record arrived after the daemon stopped and was not written',
   'log-gap': 'the event log has a gap',
   'seal-failed': 'a capture file could not be compressed; its plain copy is kept',
   'index-failed': 'the index of a capture file fell behind; the next read rebuilds it',

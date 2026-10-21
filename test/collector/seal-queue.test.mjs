@@ -182,7 +182,7 @@ test('4: a segment the running daemon rotates away from is sealed in the same ru
   const { lockKeeper } = await import('../../src/collector/daemon.mjs')
   const b = box({ segments: [] })
   const s = createRecordStore({ root: path.dirname(b.lock), raw: b.raw, segmentBytes: 1, now: () => new Date('2026-10-05T13:00:00.000Z'), onError: (e) => { throw e } })
-  s.onSegmentChange(lockKeeper({ file: b.lock, fields: { pid: process.pid }, segmentOf: () => s.currentSegment }))
+  s.onSegmentChange(lockKeeper({ file: b.lock, fields: { pid: process.pid }, segmentOf: () => s.currentSegment }).refresh)
   const failed = []
   const q = startSealing({ store: s, raw: b.raw, lockFile: b.lock, journal: b.journal, failure: (where, err) => failed.push(err.message) })
   const { id } = s.envelope({ id: 'req_rotated' }) // past segmentBytes: closed at once, handed to the queue

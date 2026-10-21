@@ -179,20 +179,26 @@ function storeWithSealing({ P, failure }) {
 }
 
 /** The lock a live daemon holds (4.6 §控制面, D-25): `fields` (pid, start time, boot id …) plus `segment`, the raw-layer
- *  segment it is appending to right now (D60: readers and the sealer leave that one alone, and may take every other). The
- *  returned refresh is called on a timer, and by the record store right before it creates a new segment file (so the lock
+ *  segment it is appending to right now (D60: readers and the sealer leave that one alone, and may take every other).
+ *  `refresh` is called on a timer, and by the record store right before it creates a new segment file (so the lock
  *  names the live segment no later than its first byte) and right after it closes one, before the seal queue hears of
  *  it (so the sealer it forks at once never finds the closed segment still named here); the file is rewritten only when the segment changed (a rollover,
- *  a stop) — a reader never sees a segment named here that is already closed. */
+ *  a stop) — a reader never sees a segment named here that is already closed.
+ *  `release` is the stop's last step and the lock's one remover (1.6 §5.2): it deletes the file and latches, so a refresh that comes later — the
+ *  timer, the store's segment hook — writes nothing back. */
 export function lockKeeper({ file, fields, segmentOf = () => null }) {
-  let written = false, segment = null
-  return () => {
-    const seg = segmentOf()
-    if (written && seg === segment) { const t = new Date(); fs.utimesSync(file, t, t); return }
-    const tmp = `${file}.tmp-${process.pid}`
-    fs.writeFileSync(tmp, JSON.stringify({ ...fields, segment: seg }) + '\n', { mode: 0o600 })
-    fs.renameSync(tmp, file) // atomic: a reader sees the whole old lock or the whole new one
-    segment = seg; written = true // only now: a failed write must be retried, not remembered as done
+  let written = false, segment = null, released = false
+  return {
+    refresh() {
+      if (released) return
+      const seg = segmentOf()
+      if (written && seg === segment) { const t = new Date(); fs.utimesSync(file, t, t); return }
+      const tmp = `${file}.tmp-${process.pid}`
+      fs.writeFileSync(tmp, JSON.stringify({ ...fields, segment: seg }) + '\n', { mode: 0o600 })
+      fs.renameSync(tmp, file) // atomic: a reader sees the whole old lock or the whole new one
+      segment = seg; written = true // only now: a failed write must be retried, not remembered as done
+    },
+    release() { released = true; fs.rmSync(file, { force: true }) },
   }
 }
 
@@ -544,7 +550,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // the lock (4.6 §控制面, D-25): pid + start time + boot id, so a reused pid or a reboot is never "running"; its
     // mtime is refreshed every second, so a stuck daemon shows as unresponsive within 5 s — read from disk alone
     const me = identity(process.pid)
-    const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, helper_pid: redirector.helperInfo().pid, engine_port: port, socket: sock }, segmentOf: () => store.currentSegment })
+    const lock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, helper_pid: redirector.helperInfo().pid, engine_port: port, socket: sock }, segmentOf: () => store.currentSegment })
+    const refreshLock = lock.refresh
     refreshLock()
     // the lock must name the live segment before that segment's first byte (D60, invariant 2): the store calls this
     // synchronously right before it creates the file, so a sealer never takes the segment the daemon is appending to;
@@ -722,7 +729,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       await step('raw', () => seal.settle()) // the index of what this daemon wrote, including the segment just closed (D62)
       failure.flush()
       failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(failed.length ? { failed } : {}) })
-      fs.rmSync(P.lock, { force: true }) // last: a lock still there at the next start means this stop never finished
+      lock.release() // last: a lock still there at the next start means this stop never finished
       return { failed }
     }
     return { port, socketPath: sock, paths: P, stop, exited, status, tracker, engine, redirector, switch: sw }
@@ -826,7 +833,8 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     board.start() // never fails the start: a board that cannot listen is a state and a record
     const me = await identity(process.pid) // an async reader here (runDaemon's model branch): the requests markReady released go on meanwhile
     selfId = me
-    const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }, segmentOf: () => store.currentSegment })
+    const lock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }, segmentOf: () => store.currentSegment })
+    const refreshLock = lock.refresh
     refreshLock()
     const bumpLock = () => { try { refreshLock() } catch (e) { failure('daemon', coded(e, 'record-error')) } }
     store.onSegmentChange(bumpLock) // before the new segment's file exists and before a closed one is sealed (D60, invariant 2); see runDaemon's copy
@@ -848,7 +856,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       await step('raw', () => seal.settle()) // as in runDaemon: the index covers everything this daemon wrote (D62)
       failure.flush()
       failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(failed.length ? { failed } : {}) })
-      fs.rmSync(P.lock, { force: true })
+      lock.release()
       return { failed }
     }
     stop = (o) => { if (!stopping) { stopping = doStop(o); stopping.then(markExited, () => markExited({ failed: ['stop'] })) } return stopping }
