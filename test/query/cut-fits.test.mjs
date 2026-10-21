@@ -17,6 +17,8 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { REDUCE_HEAP } from '../../src/view/reduce.mjs'
+import { LOG_BYTES } from '../../src/query/fold-log.mjs'
 
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
 const at = (p) => JSON.stringify(new URL(p, import.meta.url).href)
@@ -66,8 +68,9 @@ test('3.5 §内存有界: a cut session whose rows cost what the plan reckons sh
   // Claude Code on Message Threads, its tool definitions and cache markers riding every request (cc): a body has the long keys and
   // the resent items a real one has
   const c = cut({ wire: 'threads', compactAt: 3_000, cc: 4 }, { dear: 1, heapMb: 128 })
-  assert.ok(c.kept <= c.shown * c.SPINE_PER_ROW + c.STORE_HEAP,
-    `${mb(c.kept)} MB kept for ${c.shown} calls: ${(c.perRow / 1024).toFixed(0)} KiB a call, past ${c.SPINE_PER_ROW / 1024} KiB each beside the projection store's caches`)
+  // beside the fixed caches (3.5 §内存有界 K): the store's, the reduction's lists and facts, the fold log's lines
+  assert.ok(c.kept <= c.shown * c.SPINE_PER_ROW + c.STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES,
+    `${mb(c.kept)} MB kept for ${c.shown} calls: ${(c.perRow / 1024).toFixed(0)} KiB a call, past ${c.SPINE_PER_ROW / 1024} KiB each beside the fixed caches`)
   assert.ok(c.shown * c.SPINE_PER_ROW >= c.room - 2 * c.step,
     `${c.shown} / ${c.total} calls shown, ${mb(c.shown * c.SPINE_PER_ROW)} MB at ${c.SPINE_PER_ROW / 1024} KiB each, of a ${mb(c.room)} MB room: more than two ${mb(c.step)} MB steps short (${(c.perRow / 1024).toFixed(0)} KiB kept a call)`)
 })

@@ -3,8 +3,8 @@
 // A session's skeleton from its context projection (src/query/projection.mjs): the members (the segment index's rows of this
 // session, src/query/rows.mjs) are extracted into the projection in write order (src/view/extract.mjs extractMembers; the worker
 // writes it, the local path holds it in memory), and the members up to the extraction frontier (`mark`) are reduced
-// (src/view/reduce.mjs reduction) into the document whose rows, lane headers, events and records the answer ships
-// (src/view/board.mjs skeletonOf). No record is read but by extraction and, once per pair of diverging blocks, a break detail.
+// (src/view/reduce.mjs reduction, written into the session's fold log, src/query/fold-log.mjs), whose rows, lane headers,
+// events and records the answer ships (src/view/reduce.mjs skeletonDoc). No record is read but by extraction and, once per pair of diverging blocks, a break detail.
 //
 // WARM (D63 ①; 3.5 §缓存按依赖失效): per (fs, home, session, writer) the projection store stays open and the reduction state is kept,
 // grown with the members the frontier passed since; it is let go (take(): the only reference dropped) before a reduction from
@@ -16,7 +16,10 @@
 // the work and the steady caches does it reduce the newest that fit, less one step, on a grid of steps (`truncated` says so). A
 // reduction whose MEASURED heap passes what was reserved stops (HeapBound, checked per row folded) and the session is cut again
 // by the rows it got through.
-import { reduction, REDUCE_HEAP } from '../../view/reduce.mjs';
+import nodeFs from 'node:fs';
+import { reduction, skeletonOf, memoryLog, REDUCE_HEAP } from '../../view/reduce.mjs';
+import { openFoldLog, foldLogFile, LOG_BYTES } from '../fold-log.mjs';
+import { trocarHome } from '../../paths.mjs';
 import { extractMembers, blockAt, CHUNK_STORED } from '../../view/extract.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { recordsAt, STRETCH_HEAP } from '../records.mjs';
@@ -29,8 +32,11 @@ import { documentOf, serialOf, keep, deltaOf, pageOf, limitOf } from '../session
 
 export const params = Object.freeze(['id', 'since', 'before', 'limit']);
 
-/** What the reduction keeps in the heap per row (a call's row and facts, its lane's reduced state, a block list's ints), until a
- *  reduction of THIS session measured it (HeapBound below). */
+/** What a session read keeps in the heap per call (the reduction's columns, its lane's ledger share, the plan's and the marks' entries),
+ *  until a reduction of THIS session measured it (HeapBound below). Measured 2026-10-22 (after a forced GC, in a heap of the worker's
+ *  size, what a read of a test/query/big-session.mjs live(0.24) session holds more than one of live(0.12), per call, its new blocks
+ *  at SPINE_PER_BLOCK taken out): 5,488 B (12,437 B before the fold log). The figure stays at its old value until it is ≤ 1 KiB
+ *  (3.5 §内存有界). */
 export const SPINE_PER_ROW = 16 * 1024;
 /** What the reduction keeps in the heap per distinct block of the session (its store's slot, its block columns and interned keys:
  *  src/view/reduce.mjs, src/query/projection.mjs): 222 B measured (after a forced GC, in a heap of the worker's size) as what a
@@ -182,12 +188,12 @@ export async function sessionState(ctx, id) {
     const box = { old: states.take(k) };
     const release = hold(working(plan.read));
     try {
-      const st = grow(box, { store, plan, want, resolve, progress, errors });
-      const doc = st.R.doc();
+      const st = grow(box, { ctx, id: String(id), store, plan, want, resolve, progress, errors });
+      const doc = skeletonOf(st.R);
       // the document is built beside the state: past the ceiling, the session is cut as if its reduction had stopped here
       if (usedHeap() > heapCeiling() && liveHeap() > heapCeiling()) throw new HeapBound(st.rids.size);
       states.get(k, st, () => st);
-      return { id: String(id), rows: members, store, mark, pending, truncated: plan.bound, doc, errors, kept: st, plan, key: k };
+      return { id: String(id), rows: members, store, mark, pending, truncated: plan.bound, doc, R: st.R, errors, kept: st, plan, key: k };
     } catch (e) {
       if (!(e instanceof HeapBound)) throw e;
       // the measured bound: the rows the stopped reduction got through fill the room, never fewer than half those asked for, the
@@ -201,17 +207,25 @@ export async function sessionState(ctx, id) {
   }
 }
 // What a kept state weighs: its rows and its store's blocks, the marks kept, the store's and the reduction's caches.
-const costOf = (st, perRow) => st.rids.size * perRow + st.store.defCount * SPINE_PER_BLOCK + st.markBytes + STORE_HEAP + REDUCE_HEAP;
+const costOf = (st, perRow) => st.rids.size * perRow + st.store.defCount * SPINE_PER_BLOCK + st.markBytes + STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES;
+// A reduction from scratch writes a fold log from scratch (3.5 §内存有界: a cut that moves restarts the fold and its log): the
+// worker's beside the projection (4.3 §4), the local path's in memory only.
+function freshLog(ctx, id, store, errors) {
+  if (ctx.writer !== true) return memoryLog(store);
+  const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
+  try { fs.rmSync(foldLogFile(home, id), { force: true }); } catch { /* the open below cuts what it cannot read */ }
+  return openFoldLog({ home, fs, key: id, write: true, projection: { id: store.id, bytes: store.bytes }, errors });
+}
 // The kept state grown with `want` when it holds no row the cut dropped and was made over this store, else a reduction from scratch
 // (the old state's only reference, `box.old`, dropped first).
-function grow(box, { store, plan, want, resolve, progress, errors }) {
+function grow(box, { ctx, id, store, plan, want, resolve, progress, errors }) {
   let st = box.old;
   box.old = null;
-  if (st && !(st.store === store && st.perRow === plan.perRow && [...st.rids].every((r) => plan.inCut.has(r)))) st = null;
+  if (st && !(st.store === store && st.perRow === plan.perRow && [...st.rids].every((r) => plan.inCut.has(r)))) { st.R.log.close(); st = null; }
   if (!st) {
     st = { base: liveHeap(), store, perRow: plan.perRow, rids: new Set(), marks: new Map(), markBytes: 0, cost: 0, sink: [], hook: null, resolve: null };
     const s = st;
-    s.R = reduction(store, { resolve: (ref) => s.resolve(ref), errors: s.sink, progress: (rid) => s.hook(rid) });
+    s.R = reduction(store, { log: freshLog(ctx, id, store, s.sink), resolve: (ref) => s.resolve(ref), errors: s.sink, progress: (rid) => s.hook(rid) });
   }
   // a state grown across requests is held against the heap it began from (the extraction of a session read for the first time
   // grows it a slice at a time: no one reduction of it is from scratch)
@@ -243,9 +257,11 @@ function serialAt(st, M) {
   const hit = st.kept && st.kept.marks.get(M);
   if (hit) return hit;
   const want = st.plan.read.map((r) => String(r.id)).filter((rid) => posCmp(rid, M) <= 0 && st.store.rows.has(rid));
-  const R = reduction(st.store, { resolve: st.kept ? st.kept.resolve : null, errors: [] });
+  const log = memoryLog(st.store), R = reduction(st.store, { log, resolve: st.kept ? st.kept.resolve : null, errors: [] });
   R.add(want);
-  return serialOf(documentOf({ ...st, doc: R.doc() }));
+  const doc = skeletonOf(R);
+  log.close();
+  return serialOf(documentOf({ ...st, doc }));
 }
 
 export async function run(ctx) {

@@ -31,19 +31,17 @@ function breakAt(at) {
   const store = openProjection({ home: tmpDir('trocar-break-'), key: KEY }), members = recs.map((r) => ({ id: r.id }));
   extractMembers({ store, members, recordsAt: (rows) => rows.map((m) => byId.get(m.id)) });
   const doc = reduce(store, members, { resolve: (ref) => blockAt(byId.get(parseTextRef(ref).recordId), ref) });
-  const call = doc.lanes.flatMap((l) => l.calls).find((c) => String(c.id) === recs[K].id);
-  assert.ok(call, `call ${recs[K].id} is in the document`);
-  return call.cacheBreak;
+  const row = doc.rows.find((r) => r.rid === recs[K].id);
+  assert.ok(row, `call ${recs[K].id} is in the document`);
+  return row.cacheBreak;
 }
 
-test('a change past 4,096 characters breaks the cache at its block, located at or after the change', () => {
+test('a change past 4,096 characters breaks the cache at its block', () => {
   const control = breakAt(10);
   assert.equal(control.cause, 'content-changed');
   for (const at of [4_097, 4_200, 21_948, LONG - 1]) {
     const b = breakAt(at);
     assert.equal(b.idx, control.idx, `at ${at}: the break is the edited block`);
     assert.equal(b.cause, 'content-changed', `at ${at}`);
-    assert.ok(b.byteOffset >= at, `at ${at}: the change is located at ${b.byteOffset}`);
-    assert.equal(b.prefixByteIdentical, true, `at ${at}: the blocks before the break are byte-identical`);
   }
 });

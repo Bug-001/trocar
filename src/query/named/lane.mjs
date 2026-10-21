@@ -2,12 +2,11 @@
 //
 // One lane's page of steps: each step's block-id list as ops against its parent step's list, its reply ids, the attributes its added
 // positions carry and its detail; the definitions the page brings that the client does not hold yet; the lane's resources, seen
-// paths and events. All from the session's reduced state (src/query/named/session.mjs sessionState): the lane's rids from the
-// document (src/view/board.mjs laneOf), each list materialised from the context projection (src/view/reduce.mjs listOf), the
+// paths and events. All from the session's reduced state (src/query/named/session.mjs sessionState): the lane's rids, events and
+// ledger from the session's fold log (src/view/reduce.mjs laneDoc), each list materialised from the context projection (src/view/reduce.mjs listOf), the
 // definitions and row facts from the projection's lines. No record is read (3.5 §会话读: a lane answer is the projection's).
 import { sessionState, version as sessionVersion } from './session.mjs';
-import { laneOf } from '../../view/board.mjs';
-import { listOf } from '../../view/reduce.mjs';
+import { listOf, laneDoc } from '../../view/reduce.mjs';
 import { inheritedRender } from '../../view/render-kind.mjs';
 import { PAGE_BYTES } from '../session-doc.mjs';
 import { QueryArgError } from './index.mjs';
@@ -55,9 +54,8 @@ export async function run(ctx) {
   }
   errors.push(...st.errors);
   // a lane the session does not have (it can vanish between polls: `lanes_gone`) is an empty lane
-  const L = laneOf(st.doc, key);
-  if (!L) return empty(st.mark);
-  const { store } = st, rids = L.rids, n = rids.length;
+  if (!st.doc.lanes.some((h) => h.lane === key)) return empty(st.mark);
+  const L = laneDoc(st.R, key), { store } = st, rids = L.rids, n = rids.length;
   const lists = new Map(), defs = new Map(), wires = new Map();
   const rowOf = (i) => store.rows.get(rids[i]);
   const listAt = (i) => {

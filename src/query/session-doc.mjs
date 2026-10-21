@@ -1,6 +1,7 @@
 // src/query/session-doc.mjs — the session answer's document, page and delta (RFC 3.5 §会话读, 1.6 C.5), from a reduced state that
-// src/query/named/session.mjs holds. Pure over the state: no record, store or heap is touched here.
-import { skeletonOf, sessionMetaOfFacts, itemsView } from '../view/board.mjs';
+// src/query/named/session.mjs holds (its `doc`: src/view/reduce.mjs skeletonDoc). Pure over the state: no record, store or heap is touched here.
+import { sessionMetaOfFacts } from '../view/board.mjs';
+import { num52 } from '../view/reduce.mjs';
 import { compareStep } from '../view/step-order.mjs';
 import { sessionFactsOf } from './rows.mjs';
 import { QueryArgError } from './named/index.mjs';
@@ -23,33 +24,34 @@ export function limitOf(v) {
 /** documentOf(st) → the session document at a state's mark, as the answer ships it: rows and lane headers in step order (a lane by
  *  its first row), events by their row's place, records (failed members from their index rows) in step order. */
 export function documentOf(st) {
-  const sk = skeletonOf(st.doc), items = st.doc.items || new Map();
-  const at = new Map(sk.rows.map((r, i) => [r.rid, i]));
-  const place = (rid) => at.get(rid) ?? Infinity;
-  const lanes = sk.lanes.map((l, i) => [l, i]).sort((a, b) => place(a[0].first) - place(b[0].first) || a[1] - b[1]).map(([l]) => l);
-  const events = sk.events.filter((e) => at.has(e.rid)).map((e, i) => [e, i]).sort((a, b) => place(a[0].rid) - place(b[0].rid) || a[1] - b[1]).map(([e]) => e);
-  const failed = st.doc.failed || [];
+  const sk = st.doc, failed = sk.failed || [];
+  const ts = new Map(sk.records.map((r) => [r.id, r.ts_request]));
   const records = [...sk.records, ...failed.map((f) => {
     const r = st.plan.byId.get(f.id) || {};
     return { id: f.id, ts_request: r.ts ?? null, is_llm_call: !!r.is_llm, response: { status: r.status ?? null } };
   })].sort((a, b) => compareStep(a.ts_request, a.id, b.ts_request, b.id));
   const main = sk.lanes.find((l) => l.kind === 'main');
   return {
-    rows: sk.rows, lanes, events, records, stats: sk.stats ?? null, ...itemsView(items.values()),
+    rows: sk.rows, lanes: sk.lanes, events: sk.events, records, stats: sk.stats ?? null, logged: sk.logged, probes: sk.probes,
     meta: sessionMetaOfFacts({ ...sessionFactsOf(st.id, st.rows), title: main ? main.task ?? null : null }),
     errors: failed.map((f) => ({ where: f.id, code: f.code, reason: f.reason })),
-    tsOf: (rid) => (items.get(rid) || {}).ts_request,
+    tsOf: (rid) => ts.get(rid),
   };
 }
 
-/** serialOf(D) → the serialized rows and lane headers of a document, the form `--since` compares. */
-export const serialOf = (D) => ({ rows: new Map(D.rows.map((r) => [r.rid, JSON.stringify(r)])), lanes: new Map(D.lanes.map((l) => [l.lane, JSON.stringify(l)])) });
-const sizeOf = (s) => { let n = 0; for (const m of [s.rows, s.lanes]) for (const [k, v] of m) n += k.length + v.length; return n; };
+/** serialOf(D) → the form `--since` compares: each row's and lane header's serialized bytes as a 52-bit digest, and each row's
+ *  serialized length (for paging; not kept with a mark). */
+export function serialOf(D) {
+  const rows = new Map(), bytes = new Map();
+  for (const r of D.rows) { const j = JSON.stringify(r); rows.set(r.rid, num52(j)); bytes.set(r.rid, Buffer.byteLength(j)); }
+  return { rows, lanes: new Map(D.lanes.map((l) => [l.lane, num52(JSON.stringify(l))])), bytes };
+}
+const sizeOf = (s) => { let n = 0; for (const m of [s.rows, s.lanes]) for (const k of m.keys()) n += 2 * k.length + 48; return n; };
 
 /** keep(kept, mark, s) → true when the serialized document `s` at `mark` is newly kept (the oldest past MARKS let go). */
 export function keep(kept, mark, s) {
   if (!kept || mark == null || kept.marks.has(mark)) return false;
-  kept.marks.set(mark, s); kept.markBytes += sizeOf(s);
+  kept.marks.set(mark, { rows: s.rows, lanes: s.lanes }); kept.markBytes += sizeOf(s);
   for (const [m, v] of kept.marks) { if (kept.marks.size <= MARKS) break; kept.marks.delete(m); kept.markBytes -= sizeOf(v); }
   return true;
 }
@@ -69,7 +71,7 @@ export function pageOf(D, now, before, limit) {
   const end = before != null ? D.rows.findIndex((r) => r.rid === before) : D.rows.length;
   let start = end, bytes = 0;
   while (start > 0 && end - start < limit) {
-    const n = Buffer.byteLength(now.rows.get(D.rows[start - 1].rid));
+    const n = now.bytes.get(D.rows[start - 1].rid);
     if (start < end && bytes + n > PAGE_BYTES) break;
     bytes += n; start--;
   }

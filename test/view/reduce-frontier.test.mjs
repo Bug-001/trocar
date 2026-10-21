@@ -76,7 +76,7 @@ test('(d) a member that did not extract is named in the document with its reason
       const at = `${name} k=${k} (${why})`;
       assert.deepEqual((doc.failed || []).map((f) => f.id), [lost], `${at}: the failed member is named`);
       assert.match(doc.failed[0].reason, new RegExp(why), `${at}: with its reason`);
-      assert.ok(!doc.items.has(lost) && !doc.lanes.some((l) => l.calls.some((c) => String(c.id) === lost)), `${at}: and does not show it as a good call`);
+      assert.ok(!doc.records.some((r) => r.id === lost) && !doc.rows.some((r) => r.rid === lost), `${at}: and does not show it as a good call`);
     }
   }
 });
