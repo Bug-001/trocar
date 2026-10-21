@@ -155,6 +155,17 @@ test('P13 json-array-item, switch and config-entry are undone by off; wrapper an
   assert.deepEqual([k, removed, readManifest(s.b.dir).entries], [{ removed: ['keychain:trocar-root'], left: [] }, [{ kind: 'keychain', id: 'trocar-root' }], []])
 })
 
+// 4.6 「off 的撤销」: off takes only phase-on items, so step 5 (who may still trust trocar) is uninstall's alone — a live process of a harness whose
+// entry re-reads (jj) and one of a harness no identity tells apart (aa) are reported by neither still_trusting nor trust_unknown under off
+test('off reports no process as still trusting, nor a harness whose trust it cannot judge: step 5 runs only for install items', async () => {
+  const s = await setup((b) => [repH(b, 'aa'), jsonH(b)])
+  const m = readManifest(s.b.dir)
+  delete m.liveness.aa.identity
+  for (const h of ['aa', 'jj']) m.files.push({ phase: 'on', kind: 'owned-file', role: 'switch', harness: h, path: write(s.b, `.trocar/collector/switch/${h}`, 'http://127.0.0.1:47011\n') })
+  const off = await s.run({ manifest: m, phases: ['on'], procs: async () => [proc(6, '/x/jj', { startedAt: 1 }), proc(7, '/x/aa')] })
+  assert.deepEqual([off.left, off.still_trusting, off.trust_unknown], [[], [], []])
+})
+
 // rule U's certificate block (phase install) in the user's own file: `off` lists it and leaves the file byte for byte; `uninstall` takes the block out
 test('P13 pem-block: off leaves the user\'s certificate file byte-identical and lists the block; uninstall takes only the block out', async () => {
   const s = await setup((b) => [repH(b, 'aa')])
