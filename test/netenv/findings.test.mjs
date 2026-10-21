@@ -35,6 +35,7 @@ function idOf(h, { unknown = [] } = {}) { return { [h]: { names: [{ name: 'claud
 const SETS = {
   'config-after-start': { h: 'claude-code', facts: row(5).facts, codes: row(5).findings },
   'desired-off': { h: 'claude-code', facts: row(4).facts, codes: row(4).findings },
+  'not-seen': { h: 'claude-code', facts: facts('claude-code', {}, { procs: [proc(4121), proc(4122, { watched: 'unknown', trusted: null, start: 'not-seen' })] }), codes: ['not-seen'] },
   'negative-cache': { h: 'claude-code', facts: row(6).facts, codes: row(6).findings },
   'daemon-not-running': { h: 'claude-code', facts: row(7).facts, codes: row(7).findings },
   'daemon-not-responding': { h: 'claude-code', facts: facts('claude-code', { daemon: { state: 'not-responding', pid: 4012, enginePort: 47123 } }), codes: ['daemon-not-responding'] },
@@ -71,7 +72,7 @@ const SETS = {
 const IDENTITY_CODES = ['process-unknown', 'agent-list-invalid']
 const CERT_CODES = ['cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file'] // 1.6 §9.7's cert group, as findings
 const REFUSAL_CODES = ['collectors-online'] // a command's refusal (uninstall), rendered by findingFor, not by diagnose
-const STATUS_REASONS_IN_CATALOGUE = ['config-after-start', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'link-missing', 'entry-missing', 'entry-changed', 'desired-off', 'negative-cache']
+const STATUS_REASONS_IN_CATALOGUE = ['config-after-start', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'link-missing', 'entry-missing', 'entry-changed', 'desired-off', 'negative-cache', 'not-seen']
 
 for (const [code, set] of Object.entries(SETS)) {
   test(`V49 ${code}: its facts call for exactly ${JSON.stringify([...set.codes].sort())}`, () => {

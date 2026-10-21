@@ -204,6 +204,7 @@ export function statusReason(code, { harness = '', pid = null } = {}) {
     'start-time-unknown': [`when ${pid != null ? `pid ${pid}` : 'it'} started could not be read`, `restart ${h}`],
     'no-marker': [`${who} started before capture was on`, `restart ${h}`],
     'kimi-not-via-shim': [`${h} did not start through the program trocar installed`],
+    'not-seen': [`trocar has not seen ${who} use its proxy yet; its next connection is judged`], // no restart part (1.6 附录 B)
     'negative-cache': [`${h}${pid != null ? ` (pid ${pid})` : ''} refused trocar's certificate`, 'restart it'],
     'daemon-not-running': ['trocar is not running in the background'],
     'daemon-not-responding': ['trocar runs in the background but does not answer'],

@@ -247,7 +247,9 @@ that need a restart are listed. Name an agent (`trocar off claude-code`) to swit
 
 `trocar status` and `trocar doctor` show, per agent, whether it is captured and why not, and where trocar forwards its
 connections — agent → door → upstream, and where the upstream comes from: the agent's own proxy, the system proxy, or a
-direct connection, with the value trocar wrote beside your own. A certificate block says whether the root is installed,
+direct connection, with the value trocar wrote beside your own. A process trocar has not seen use its door, and whose
+start history is incomplete, is `not-seen`: never a reason to call the agent not captured, and no restart is asked
+(`yes` with "N not seen yet" beside captured ones, `unknown` when it is all there is). A certificate block says whether the root is installed,
 its key is still in custody and the daemon could make its intermediate (`cert-not-installed`, `cert-key-missing`,
 `cert-intermediate-unavailable`), and which certificate files trocar did not append to because they are not yours
 (`not-users-file`). `trocar status <harness>` prints these per form (a `certificate:` and a `proxy:` line, then trocar's value beside
