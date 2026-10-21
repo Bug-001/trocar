@@ -1,5 +1,5 @@
 // replay/follow.mjs — the replay desk's live-follow and polling policy, pure so it can be tested without a DOM: when the timer may
-// read, where the playhead lands after a fetch (and whether the URL's `step` has to follow it), where the next page sits, and
+// read, where the playhead lands after a fetch (and whether the URL's `step` has to follow it),
 // how the poll loop backs off after a failed read, and when a step's own reads (its lane, its open rows' bodies) go out.
 import { loadBodies } from './cell.mjs'
 
@@ -19,34 +19,11 @@ export function landPlayhead({ N, playhead, follow, initialStep }) {
   return { playhead: ph, follow, syncUrl: ph !== playhead }
 }
 
-// ── where the page sits (1.2 §会话头 「跟随最新」) ──────────────────────────────────────────────────────────────────────
-// Where a page sits: `{after, limit}` with call `gi` at the server's middle (`after + floor(limit/2)`), where it keeps bodies first
-// (3.5 §分页 正文预算), so the asked step always rides the page. Near the start the window narrows instead of clamping, so an early
-// step is still the middle. One rule for the follow window and for re-aiming at a step (replay.mjs ensurePage).
+// Where a page sits around call `gi`: `{after, limit}` with it at the middle. The desk no longer pages (D69); this stays only
+// while test/query/worker-memory.test.mjs (lane Q, which drops it) imports it — D8 deletes it with that merge.
 export const pagePlace = (gi, limit) => {
   const h = Math.floor(limit / 2), g = Math.max(0, gi | 0)
   return g >= h ? { after: g - h, limit } : { after: 0, limit: 2 * g + 1 }
-}
-
-// After an answer: where the NEXT read of this session sits ({after, limit}). While following, the page is placed by THIS answer —
-// the followed step (the anchor lane's last call, `tailGi`; absent → the answer's last call, page.total - 1) at its middle —
-// never by an earlier answer's total. An answer whose window held no call at all (returned 0 of a non-empty session) is placed
-// the same way. Otherwise the reader's window (`pageCur`, `pageLim`) stays. A fetch never turns following off.
-export function followCursor({ follow, page, pageCur, pageLim, limit, tailGi }) {
-  const keep = { after: pageCur, limit: pageLim }
-  if (!page || typeof page.total !== 'number' || page.total <= 0) return keep
-  if (!follow && page.returned !== 0) return keep
-  const t = tailGi != null && tailGi >= 0 ? Math.min(tailGi, page.total - 1) : page.total - 1
-  return pagePlace(t, limit)
-}
-
-// The load control of a step whose body is not on the page: 'loading' while a read asked for it is out, 'missed' when that read
-// answered and the step still did not ride it, 'idle' otherwise (and for a step that has its body).
-export function pageState(s, call) {
-  if (!call || !call.paged_out) return 'idle'
-  if (s.pageLoading != null && s.pageLoading === call.gi) return 'loading'
-  if (s.pageMissed != null && s.pageMissed === call.gi) return 'missed'
-  return 'idle'
 }
 
 // ── the poll loop: one read in flight, back-off after a failure (1.5 K-29) ──────────────────────────────────────────────
@@ -55,8 +32,7 @@ export const BACKOFF_MAX_MS = 30000
 export const backoffMs = (n, base) => Math.min(base * 2 ** n, BACKOFF_MAX_MS)
 
 // createPoller({run, now, base, alive, idle}) → {poll(byReader)}. `run()` reads once and resolves {ok:false} on a failure,
-// {pending:…} when extraction has not caught up (4.4 live-poll, 3.5 §抽取前沿), {again:true} when the answer asks for one more
-// read before drawing (a re-aimed page; D6 drops it with replay.mjs's paging), anything else on success.
+// {pending:…} when extraction has not caught up (4.4 live-poll, 3.5 §抽取前沿), anything else on success.
 //   · a timer tick (byReader false) does nothing while idle() holds (a hidden tab, a session that is not listed), nor before the
 //     next read is due; a reader's own action (byReader true) always reads
 //   · due (C2, 4.4 live-poll): after a failure, the back-off; after a success that answered `pending` or ended a back-off, at
@@ -81,7 +57,7 @@ export function createPoller({ run, now = Date.now, base, alive = () => true, id
         else {
           const d = now() - t0, plain = !fails && !(r && r.pending)
           fails = 0; nextAt = plain && 3 * d > base ? t0 + 3 * d : 0
-          go = readerAgain || !!(r && r.again) || (again && !idle() && now() >= nextAt)
+          go = readerAgain || (again && !idle() && now() >= nextAt)
         }
       }
     } finally { busy = false }

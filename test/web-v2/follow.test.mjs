@@ -52,12 +52,12 @@ test('poller: after a failure no read happens before the back-off is due; it dou
 test('poller: a reader\'s own action bypasses the back-off', async () => {
   const r = rig([{ ok: false }, { ok: false }])
   await r.p.poll(); await r.p.poll(); assert.equal(r.reads(), 1)
-  await r.p.poll(true); assert.equal(r.reads(), 2, 'Retry / load this step / f read at once')
+  await r.p.poll(true); assert.equal(r.reads(), 2, 'Retry / a jump / f read at once')
   await r.p.poll(); assert.equal(r.reads(), 2)
 })
 
-test('poller: one read in flight; a tick during it re-reads after a success, never after a failure; {again} reads once more', async () => {
-  for (const [first, want] of [[{}, 2], [{ ok: false }, 1], [{ again: true }, 2]]) {
+test('poller: one read in flight; a tick during it re-reads after a success, never after a failure', async () => {
+  for (const [first, want] of [[{}, 2], [{ ok: false }, 1]]) {
     let release, reads = 0
     const answers = [first, {}, {}]
     const p = createPoller({ base: 1500, now: () => 0, run: () => { reads++; const a = answers.shift(); return reads === 1 ? new Promise((res) => { release = () => res(a) }) : Promise.resolve(a) } })
