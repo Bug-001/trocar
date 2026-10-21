@@ -811,6 +811,15 @@ test('4.8 §5.5 a lone rejection hands its key to the sweep at once; once the ke
   assert.deepEqual(L.engine.negatives(), [], 'the earlier strike went with the key: one rejection after the clearing is again below the threshold')
 })
 
+test('4.8 §5.5 an acceptance after a lone rejection leaves nothing held under the key: the sweep has nothing to watch', T, async (t) => {
+  const o = await origin(t)
+  const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true, pid: 78, negKey: '78@5' } })
+  const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`); assert.equal(await talk(sock, privCa.certPem), 'closed'); await L.settled(1)
+  assert.equal(L.engine.holdsNegKey('78@5'), true, 'the strike is held under its key')
+  assert.equal((await talk((await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)).sock, trocarCa.certPem)).got, RESP); await L.settled(2)
+  assert.equal(L.engine.holdsNegKey('78@5'), false, 'the acceptance reset the strike: nothing left under the key')
+})
+
 test('W17 the ingress keys a connection by its own user when the lookup gives no negKey and no pid: two such forms do not poison each other; a known pid is the key', T, async (t) => {
   const o = await origin(t)
   const L = await lab(t, { upstreamCa: privCa.certPem })

@@ -768,6 +768,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     drain: ({ harnesses: hs, now }) => engine.drain({ agents: new Set(hs), now }),
     upstreamRoots: upstreamRootsOf({ A, env, upstreamCa, event }),
     // the process of a negative-cache key exited, or its door closed: its entries go, as runDaemon's onGone does (4.8 §5.5; the fold clears by neg_key)
+    holds: (who) => engine.holdsNegKey(who),
     forget: (who, pid) => { const dropped = engine.forgetNegKey(who); if (dropped) failure.write({ event: 'negative-cache-cleared', pid, neg_key: who, dropped }) } })
   collector.bindDoors({ open: (l) => engine.listen({ groups: l }), close: (ids) => Promise.resolve(engine.closeGroups(ids)) })
   let exitAsked = 0, exitTimer = null

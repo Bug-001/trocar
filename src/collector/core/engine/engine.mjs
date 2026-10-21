@@ -277,5 +277,5 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
 
   // negatives() is for status only; forgetPid(pid) is called by the daemon when that process exits; forgetNegKey(k) when the last process of a
   // form with no pid to key by has (4.8 §5.5).
-  return { listen, closeGroups, close, stats, drain, relayed, drained, negatives: () => neg.list(), forgetPid: neg.forgetKey, forgetNegKey: neg.forgetKey }
+  return { listen, closeGroups, close, stats, drain, relayed, drained, negatives: () => neg.list(), forgetPid: neg.forgetKey, forgetNegKey: neg.forgetKey, holdsNegKey: neg.holds }
 }

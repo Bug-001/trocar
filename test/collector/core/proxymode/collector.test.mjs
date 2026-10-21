@@ -36,13 +36,13 @@ const ready = { state: () => 'ready' }
 const manifestOf = (h, { on = [], liveness = {} } = {}) => ({ ...newManifest(), entries: [{ phase: 'install', harness: h, kind: 'json-key', path: '/x', installed_at: iso(INSTALLED) }, { phase: 'install', harness: null, kind: 'system-root', installed_at: iso(INSTALLED) }, ...on], liveness })
 
 /** One collector over one harness: `w` is what the injected readers answer now (facts, env, cwd, verdict ctx, manifest, process table). */
-async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null, others = [], forget } = {}) {
+async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null, others = [], forget, holds } = {}) {
   const records = [], ctx = { os, home: '/h', dirs: {}, join: path.posix.join, readFile: (p) => w.ctx.readFile(p), readdir: (d) => w.ctx.readdir(d), exists: (p) => w.ctx.exists(p), policy: (s) => w.ctx.policy(s) }
   w.ctx ||= ctxOf(newWorld(os))
   const c = createModelCollector({ harnesses: [desc, ...others], dir: '/nowhere', ctx, custody, rootPem, proxyOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, record: (r) => records.push(r),
     identify: (f) => (f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => ({ pid: w.pid, source: 'socket-table', ms: 1, ...(w.owner || {}) }), factsOf: async () => w.facts,
     proc: { envOf: async (_, names) => (w.envCalls = (w.envCalls || 0) + 1, w.env == null ? null : (w.asked && w.asked.push(...names), Object.fromEntries(Object.entries(w.env).filter(([k]) => names.includes(k))))), cwdOf: async () => w.cwd ?? null, parentOf: async () => null }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
-    readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => { if (w.manifestErr) throw w.manifestErr; return w.manifest || manifestOf(desc.name) }, procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5, ...(forget ? { forget } : {}) })
+    readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => { if (w.manifestErr) throw w.manifestErr; return w.manifest || manifestOf(desc.name) }, procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5, ...(forget ? { forget } : {}), ...(holds ? { holds } : {}) })
   c.bindDoors({ open: async (l) => { for (const x of l) { if (taken.has(x.port)) throw Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' }); opened.push(x) } }, close: async (ids) => { opened.push(...ids.map((id) => ({ closed: id }))) } })
   await c.start()
   return { c, w, records }
@@ -579,6 +579,21 @@ test('4.8 §5.5 · the negative-cache key is pid@start; a held key is forgotten 
   await pending.shift()()
   assert.deepEqual(forgot.at(-1), [g, null], 'the group key goes with its door')
   assert.equal(pending.length, 0, 'nothing held: the timer stops')
+  r.c.close()
+})
+
+test('4.8 §5.5 · a key the engine no longer holds anything under is dropped: no table read for it, no timer left', async () => {
+  const { d, f, os } = rootForm
+  const pending = [], forgot = [], holding = new Set(['999@7'])
+  let reads = 0
+  const timers = { setTimeout: (fn, ms) => { if (ms === HOLDER_POLL_MS) pending.push(fn); return { unref() {} } }, clearTimeout: () => {} }
+  const r = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, timers, forget: (who, p) => forgot.push([who, p]), holds: (who) => holding.has(who), w: { get procs() { reads++; return [{ pid: 999, startedAt: 7 }] } } })
+  r.c.noteHeld('999@7')
+  assert.equal(pending.length, 1, 'a strike is held: the sweep is armed')
+  holding.delete('999@7') // an acceptance cleared the strike
+  reads = 0
+  await pending.shift()()
+  assert.deepEqual([reads, pending.length, forgot], [0, 0, []], 'nothing held under the key: no table read, no timer, nothing to forget')
   r.c.close()
 })
 

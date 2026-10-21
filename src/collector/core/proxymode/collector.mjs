@@ -56,11 +56,13 @@ function envNamesOf(desc) {
  *   custody    the key custody, or 'unavailable' (no backend): then no issuer, every verdict forward-only (P2)
  *   forget     (negKey, pid | null) → void: the engine's entries of a key whose process exited, or whose door closed, are to go (4.8 §5.5); the daemon
  *              calls engine.forgetNegKey and records negative-cache-cleared. The keys come from `noteHeld(negKey)`: the engine's onHeld, a strike or an entry.
+ *   holds      (negKey) → does the engine's cache still keep a strike or an entry under it (engine.holdsNegKey): a key it no longer does (an
+ *              acceptance reset its strike) leaves the sweep, so the process table is read only while something is held (4.8 §5.5)
  * → { bindDoors, start, restore, on, off, lookupIngress, servePac, issuer, holders, mayExit, doors, attached }
  */
 export function createModelCollector({ harnesses, dir, identify, ownerOf = null, factsOf = null, proc = {}, ctx, systemProxy = () => null, custody = null, rootPem = null,
   procTable = async () => [], record = () => {}, event = () => {}, clock = Date.now, timers = globalThis, readState = null, readIngress = null, readManifest = null,
-  proxyOf, templates = {}, hostsOf = () => null, ownUid = process.getuid?.() ?? null, ownSid = null, agentList = () => null, openConns = () => 0, drain = null, pid = process.pid, fs = nodeFs, upstreamRoots = null, forget = () => {} } = {}) {
+  proxyOf, templates = {}, hostsOf = () => null, ownUid = process.getuid?.() ?? null, ownSid = null, agentList = () => null, openConns = () => 0, drain = null, pid = process.pid, fs = nodeFs, upstreamRoots = null, forget = () => {}, holds = () => true } = {}) {
   if (typeof proxyOf !== 'function') throw new TypeError('createModelCollector needs proxyOf: how a proxy address is dialled is the arch\'s reading')
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const readSt = readState || (() => readStateFile(path.join(dir, 'state.json'), { fs }).state)
@@ -267,8 +269,10 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
    *  process is gone, a "<pid>" key whose pid is gone, a group key whose door closed → `forget`. An unreadable table clears nothing (unknown). */
   const held = new Set()
   let sweepT = null, closed = false
-  const arm = () => { if (held.size && !sweepT && !closed) { sweepT = timers.setTimeout(sweep, HOLDER_POLL_MS); if (sweepT && sweepT.unref) sweepT.unref() } }
+  const holding = () => { for (const who of held) if (!holds(who)) held.delete(who); return held.size }
+  const arm = () => { if (!sweepT && !closed && holding()) { sweepT = timers.setTimeout(sweep, HOLDER_POLL_MS); if (sweepT && sweepT.unref) sweepT.unref() } }
   async function sweep() {
+    holding()
     let rows = null
     if ([...held].some((w) => PID_KEY.test(w))) { try { rows = await procTable() } catch { rows = null } }
     for (const who of [...held]) {
