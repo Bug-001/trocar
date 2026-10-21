@@ -152,7 +152,7 @@ function first(cell, mode, text) {
     return { body: (o.html.startsWith('\n') ? '\n' : '') + o.html, next: o.next, state: o.state, shown: o.next ?? text.length, cls: '' }
   }
   const o = renderKind(cell.r, valueOf(text), { budget: DISPLAY_CLIP, bid: cell.bid })
-  return { body: o.html, next: o.more, state: null, shown: o.more ?? o.shown ?? text.length, cls: o.cls }
+  return { body: o.html, next: o.more, state: null, shown: o.more ?? o.shown ?? text.length, cls: o.cls, as: o.as }
 }
 // the next slice of a drawn entry → {html, entry} (a new entry; the old one is left as it was)
 function grow(cell, mode, entry, text) {
@@ -183,11 +183,10 @@ export function cellBodyHtml(cell, mode) {
   remember(k, cell)
   const e = entryOf(cell, m, text)
   const btn = (v, word) => `<button type="button" data-cellmode="${v}" aria-pressed="${m === v}">${esc(word)}</button>`
-  const as = Object.hasOwn(C.KIND_WORD, cell.r?.as) ? cell.r.as : 'text'
   const clip = clipLine(e.shown, text.length)
   const bar = `<div class="cellbar"><span class="cellview" role="group" aria-label="${esc(C.VIEW_GROUP)}">${btn('raw', C.RAW)}${btn('read', C.READABLE)}</span>` +
     `<button type="button" class="cellcopy" data-cellcopy>${esc(C.COPY)}</button>` +
-    (m === 'read' ? `<span class="cellkind">${esc(C.KIND_WORD[as])}</span><span class="cellstate">${esc(C.READ_STATE)}</span>` : `<span class="cellstate" title="${esc(C.RAW_TIP)}">${esc(C.RAW_STATE)}</span>`) +
+    (m === 'read' ? `<span class="cellkind">${esc(C.KIND_WORD[e.as] || C.KIND_WORD.text)}</span><span class="cellstate">${esc(C.READ_STATE)}</span>` : `<span class="cellstate" title="${esc(C.RAW_TIP)}">${esc(C.RAW_STATE)}</span>`) +
     (clip ? `<span class="cellclip">${esc(clip)}</span>` : '') + '</div>'
   const body = m === 'raw' ? `<pre class="cellraw">${e.body}</pre>` : `<div class="cellread ${esc(e.cls)}">${e.body}</div>`
   const more = e.next != null && e.shown < CELL_CAP ? `<span class="cellmore" data-at="${e.next}"></span>` : ''

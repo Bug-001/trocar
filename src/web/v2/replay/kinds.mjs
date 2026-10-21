@@ -307,10 +307,10 @@ function draw(r, value, o) {
     if (WHOLE.has(as) && typeof body === 'string' && (o.from > 0 || body.length > o.budget)) as = 'text'
     let out = R[as](r || {}, body, value, o)
     if (out.as) { as = out.as; out = R[as](r || {}, has(out, 'body') ? out.body : body, value, o) }
-    return { html: out.html, more: out.more ?? null, cls: (CLASS[as] || 'kd-' + as) + tone }
+    return { html: out.html, more: out.more ?? null, cls: (CLASS[as] || 'kd-' + as) + tone, as }
   } catch {
     const [s, more] = slice(asText(value), o.from, o.budget)
-    return { html: (o.from === 0 ? `<div class="kd-fail">${esc(failAs(as))}</div>` : '') + shown(take(o, s)), more, cls: 'kd-text' + tone }
+    return { html: (o.from === 0 ? `<div class="kd-fail">${esc(failAs(as))}</div>` : '') + shown(take(o, s)), more, cls: 'kd-text' + tone, as: 'text' }
   }
 }
 export function renderKind(r, value, { from = 0, budget = 20000, bid } = {}) {
