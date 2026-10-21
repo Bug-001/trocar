@@ -73,9 +73,7 @@ export function controlRequest({ socketPath, method = 'GET', path: p = '/status'
     const payload = body == null ? null : JSON.stringify(body)
     const headers = payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}
     if (token != null) headers[CONTROL_TOKEN_HEADER] = token
-    // agent:false = one connection per request: the global agent keeps sockets alive (Node 19+) and handed a socket of the daemon a restart had
-    // stopped to the next request in the same process (EPIPE: `status` read daemon-not-responding, uninstall "did not answer"; model-verdict-e2e)
-    const req = nodeHttp.request({ socketPath, method, path: p, headers, agent: false }, (res) => {
+    const req = nodeHttp.request({ socketPath, method, path: p, headers }, (res) => {
       const chunks = []
       res.on('data', (c) => chunks.push(c))
       res.on('end', () => {

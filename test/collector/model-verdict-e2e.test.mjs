@@ -9,6 +9,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import http from 'node:http'
 import tls from 'node:tls'
 import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
@@ -23,7 +24,8 @@ import { runUninstallCli } from '../../src/cli/uninstall.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { PID, BODY, reqOf, REPLY, agentOf, darwinExec, win32Io, freePort, through, statusDoc } from '../helpers/model-io.mjs'
 
-const recordsOf = (raw) => (fs.existsSync(raw) ? fs.readdirSync(raw) : []).flatMap((n) => fs.readFileSync(path.join(raw, n), 'utf8').split('\n').filter(Boolean))
+// the plain segments' record lines (a restart's start seals the earlier segment: a sealed file holds no line that is new)
+const recordsOf = (raw) => (fs.existsSync(raw) ? fs.readdirSync(raw) : []).filter((n) => n.endsWith('.ndjson')).flatMap((n) => fs.readFileSync(path.join(raw, n), 'utf8').split('\n').filter(Boolean))
 
 for (const platform of ['darwin', 'win32']) {
   test(`${platform}: after a daemon restart, the door's durable row says the decrypted agent is captured (status), a holder (off) and online (uninstall, daemon down)`, { timeout: 60_000 }, async () => {
@@ -59,6 +61,7 @@ for (const platform of ['darwin', 'win32']) {
 
         // the daemon restarts (D67) and nothing connects again; the liveness record is an older trocar's: its windows start after the agent did
         await within(box.restart(), 15_000, 'the daemon came back')
+        http.globalAgent.destroy() // a CLI is a new process: no kept-alive socket to the stopped daemon's server (as in model-daemon-e2e)
         const mf = path.join(w.dir, 'install-manifest.json'), m = JSON.parse(fs.readFileSync(mf, 'utf8'))
         const l = m.liveness.codex, iso = (ms) => new Date(ms).toISOString()
         delete l.since; delete l.door_since
@@ -83,10 +86,11 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(two.reply, REPLY)
         assert.ok(new crypto.X509Certificate(two.peer.raw).checkIssued(new crypto.X509Certificate(mockCa.certPem)), 'the TLS peer is the mock\'s own: forwarded, not decrypted')
         await two.end()
-        assert.deepEqual(recordsOf(raw), recorded, 'nothing recorded for the forwarded connection')
+        assert.deepEqual(recordsOf(raw).filter((x) => !recorded.includes(x)), [], 'nothing recorded for the forwarded connection')
 
         // the daemon stops and stays down (CM24): uninstall judges the holders itself, from door-seen.json and the process table — refused
         await within(box.daemon.stop({ reason: 'test' }), 15_000, 'the daemon stopped')
+        http.globalAgent.destroy()
         const out = { t: '' }
         const uio = { out: (s) => { out.t += s }, err: () => {}, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
         const procs = async () => [{ pid: PID, ppid: 1, startedAt: a.start, name: a.name, comm: a.name, exe: a.exe, argv: [a.exe], args: [a.exe], cmdline: a.exe }]
