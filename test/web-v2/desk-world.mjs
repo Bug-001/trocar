@@ -204,7 +204,7 @@ export async function deskFrom(get, id) {
 
 /**
  * A desk from hand-made lanes, for renderer tests: `lanes` = [{kind, head?, rows: [row fields], blocks?: [[block] per row]
- * (absent = the lane is not held), resources?, seen?, events?}]. Rows get rids `R<lane>-<i>` and increasing ts in the order
+ * (absent = the lane is not held), replies?: [[reply def] per row], details?: [detail per row], resources?, seen?, events?}]. Rows get rids `R<lane>-<i>` and increasing ts in the order
  * given; a block's `query` / `volatile` travel as position attrs and `key` as its content key `fh` (3.5 §会话读).
  */
 export function deskOf(lanes, { events = [], ...answer } = {}) {
@@ -219,13 +219,14 @@ export function deskOf(lanes, { events = [], ...answer } = {}) {
     if (!l.blocks) return
     const defs = [], steps = l.blocks.map((bs, i) => {
       const ids = [], attrs = {}
-      bs.forEach(({ query, volatile, key: fh, ...d }, p) => {
-        const bid = `b${bn++}`
+      bs.forEach(({ query, volatile, key: fh, bid: given, ...d }, p) => {
+        const bid = given ?? `b${bn++}`
         defs.push({ ...d, bid, fh: fh ?? bid })
         ids.push(bid)
         if (query != null || volatile != null) attrs[p] = { query, volatile }
       })
-      return { rid: rids[i], parent: null, ops: [[1, ...ids]], reply: [], attrs, detail: null }
+      const reply = (l.replies?.[i] || []).map((d) => { const bid = d.bid ?? `b${bn++}`; defs.push({ sec: 'reply', role: 'assistant', ...d, bid, fh: d.fh ?? bid }); return bid })
+      return { rid: rids[i], parent: null, ops: [[1, ...ids]], reply, attrs, detail: l.details?.[i] ?? null }
     })
     reads.push({ lane: key, base: null, steps, defs, resources: l.resources || [], seen: l.seen || [], events: l.events || [], prev: null, next: null })
   })
