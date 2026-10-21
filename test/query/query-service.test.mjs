@@ -207,6 +207,7 @@ test('a crash says its FATAL line, to the caller and in the D38 record; within t
     await assert.rejects(ask('segments'), /FATAL ERROR: Reached heap limit/, 'the caller is told why')
     assert.equal(said.length, 1)
     assert.match(said[0], /FATAL ERROR: Reached heap limit/, 'the D38 reason carries the fatal line, not only the stack tail')
+    assert.doesNotMatch(said[0], /node::Abort/, 'and none of the native stack')
     assert.equal(forks, 1)
     clock += CRASH_COOLDOWN_MS - 1
     await assert.rejects(ask('segments'), /FATAL ERROR: Reached heap limit/, 'within the cool-down: the same reason')

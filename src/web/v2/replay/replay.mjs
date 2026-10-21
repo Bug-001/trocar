@@ -29,7 +29,8 @@ import { initLayout } from './layout.mjs'
 import { renderSessionHead, wireSessionHead, captureGap } from './header.mjs'
 import { stepBarHtml, wireStepBar } from './stepbar.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
-import { LOADING, CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST } from '../labels/replay.mjs'
+import { LOADING, CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, SESSION_READ_FAILED, LIST_READ_FAILED } from '../labels/replay.mjs'
+import { techDetailsHtml } from '../core/ui.mjs'
 
 const PAGE_LIMIT = 60 // calls whose verbatim body rides on one page; the timeline itself is never limited by it
 const POLL_MS = 1500
@@ -287,17 +288,18 @@ export function mount(el, ctx) {
   }
 
   // ── fetching ─────────────────────────────────────────────────────────────────────────────────────────────────────
-  // a failed read is said IN the content area (no banner, no dot): the reason, and that the raw capture is untouched
-  const fail = (title, msg) => { s.errNote = `<b>${esc(title)}</b> · ${esc(msg)} — the raw capture on disk is complete (the source of truth is not affected).` }
+  // a failed read is said IN the content area (no banner, no dot): one plain sentence (emptyMsg), Retry, and the reason — a worker's
+  // crash, say — in the collapsed 技术细节, never in the body
+  const fail = (reason) => { s.errNote = `<button type="button" class="linkbtn" data-retry="1">${esc(RETRY)}</button>${techDetailsHtml([['reason', reason]], { id: 'readtech' })}` }
   // a read failed (1.5 K-29): a desk that has drawn this session keeps every area as it is and says quietly, in the 会话保真行, since
   // when it is not refreshed and why; only a session that never loaded shows the failure in the content area
-  function readFailed(title, reason, detail, emptyMsg) {
+  function readFailed(reason, emptyMsg) {
     s.pageLoading = null // the read answered (with a failure): the load control is usable again
     s.lastCheapSig = null; s.lastRenderSig = null // so the next read retries; a stuck signature would keep the board wedged after recovery
     if (s.goodKey === sessionKey()) {
       s.staleErr = { reason, since: s.goodAt }
       if (s.anchor && playheadSig(s) !== s.lastPhSig) renderPlayheadAreas() // a "Loading this step…" drawn by ensurePage goes back to usable (2.3 §未下发态)
-    } else { fail(title, reason + detail); renderEmpty(emptyMsg) }
+    } else { fail(reason); renderEmpty(emptyMsg) }
     renderHeader()
     return { ok: false }
   }
@@ -333,7 +335,7 @@ export function mount(el, ctx) {
     // a failed listing is NOT an empty one: say why
     const pj = await loadSessions(api)
     if (stale()) return
-    if (!pj.ok) return readFailed('Cannot list sessions', pj.error, ' — fix the source or restart the capture service.', 'Cannot list sessions.')
+    if (!pj.ok) return readFailed(pj.error || 'cause not known', LIST_READ_FAILED)
     const cur = pj.data.sessions.find((x) => x.project_slug === s.project && x.session_id === s.id)
     // a session switch opens on the tail `sessions` counted, at the page's middle; afterwards every answer places the next page
     // (followCursor below). A manual scrub off the live end clears `follow`.
@@ -354,7 +356,7 @@ export function mount(el, ctx) {
     }
     if (s.notListed) { s.notListed = false; el.querySelector('.desk').classList.remove('notlisted') }
     if (!res.ok) {
-      return readFailed('Loading failed', res.error || 'cause not known', '. If the capture service is down, restart it; a session that is too large is served from its tail.', 'This session failed to load.')
+      return readFailed(res.error || 'cause not known', SESSION_READ_FAILED)
     }
     s.errNote = null
     const d = res.data
@@ -433,7 +435,9 @@ export function mount(el, ctx) {
   const onRp = () => { s.rpOpen = !s.rpOpen; const rp = el.querySelector('#rightpage'); if (rp) { rp.classList.toggle('open', s.rpOpen); const b = el.querySelector('#rpbar'); if (b) b.setAttribute('aria-expanded', String(s.rpOpen)) } }
   const rpbar = el.querySelector('#rpbar')
   if (rpbar) { rpbar.addEventListener('click', onRp); rpbar.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRp() } }) }
-  const offs = [() => { if (rpbar) { rpbar.removeEventListener('click', onRp) } }, wireTimeline(E.saw, s), wireRails(E.rails, s), wireCtxWin(E.ctxwin, s), wireOutline(E.ctxnav, s), wireResources(E.resexp, s),
+  const onRetry = (e) => { if (e.target.closest && e.target.closest('[data-retry]')) poll(true) } // the failure state's Retry
+  E.ctxwin.addEventListener('click', onRetry)
+  const offs = [() => { if (rpbar) { rpbar.removeEventListener('click', onRp) } E.ctxwin.removeEventListener('click', onRetry) }, wireTimeline(E.saw, s), wireRails(E.rails, s), wireCtxWin(E.ctxwin, s), wireOutline(E.ctxnav, s), wireResources(E.resexp, s),
     wireRawPanel(E.rawpanel, s), wireDetail(E.detail, s), wireSessionHead(E.deskhead, s), wireStepBar(E.stepbar, s), initLayout(el)]
   // 1.2 §键盘: a held key moves the target at once and paints at most once per frame
   let keyTarget = null
