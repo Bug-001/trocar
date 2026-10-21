@@ -179,3 +179,41 @@ test('D55① · model: after install → on → off, every phase-install item is
     assert.deepEqual([again.exit, again.refused, again.on.sort()], [0, [], [...first.on].sort()], JSON.stringify(again.refused))
   } finally { await d.close() }
 })
+
+// A7 · 4.11 P12: `on` writes the history fields over a real run — the first on starts the history (`since`); an on that moves some door groups of h
+// marks them (`door_since`) and keeps the windows, so a process from an earlier window is still a holder; one that moves every group restarts the
+// history there, and a process from before is not a holder. Generic over the harness's groups: the test reads them from the run, never names one.
+test('A7 · door moves per group: some moved → windows kept + door_since; all moved → windows gone, since = that on_at', async () => {
+  const { holdersOf } = await import('../../src/off/holders.mjs')
+  const w = await modelWorld({ commands: ['claude'] }) // the CLI and the desktop app: a harness with two door groups
+  fs.mkdirSync(path.join(w.home, 'Applications', 'Claude.app'), { recursive: true })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const d = await daemon(w)
+  const T0 = Date.now() + 60_000, at = (k) => new Date(T0 + k * 60_000)
+  const L = () => readManifest(w.dir).liveness
+  const ingress = () => JSON.parse(fs.readFileSync(path.join(w.dir, 'ingress.json'), 'utf8')).groupPorts
+  const off = (k) => undoHarnesses({ dir: w.dir, home: w.home, manifest: readManifest(w.dir), ids: null, procs: async () => [], now: at(k) })
+  try {
+    const first = await on(w, { now: () => at(0) })
+    assert.equal(first.exit, 0, JSON.stringify(first.problems))
+    const groupsOf = (h) => [...new Set(first.planned.filter((x) => x.harness === h).map((x) => `${h}:${x.route}`))]
+    const h = first.on.find((x) => groupsOf(x).length >= 2)
+    assert.ok(h, 'some harness here has two door groups')
+    assert.equal(L()[h].since, at(0).toISOString(), 'the first on starts the history')
+    await off(1)
+    await on(w, { now: () => at(2) }); await off(3)
+    assert.deepEqual([L()[h].windows.length, L()[h].since, L()[h].door_since], [1, at(0).toISOString(), undefined], 'nothing moved: the window kept, no door_since')
+    const [g] = groupsOf(h), taken = ingress()[g]
+    await on(w, { now: () => at(4), isFree: async (p) => p !== taken }); await off(5)
+    const some = L()[h]
+    assert.deepEqual([some.windows.length, some.since, some.door_since], [2, at(0).toISOString(), { [g]: at(4).toISOString() }])
+    const p = { pid: 77, ppid: 1, uid: 501, startedAt: T0 + 30_000, exe: path.join(w.home, 'bin', 'x'), argv: ['x'], env: () => null, envRead: false }
+    const mine = holdersOf({ manifest: readManifest(w.dir), procs: [p], doorSeen: [{ harness: h, group: g, pid: 77, start: p.startedAt, kind: 'accept', at: at(0.6).toISOString(), n: 1 }] })
+    assert.deepEqual(mine.filter((x) => x.harness === h).map((x) => x.why), ['started-in-window'], 'from the first window: a holder (the old door row is no evidence now)')
+    const ports = ingress()
+    await on(w, { now: () => at(6), isFree: async (q) => !groupsOf(h).some((x) => ports[x] === q) }); await off(7)
+    const all = L()[h]
+    assert.deepEqual([all.windows, all.since, all.door_since], [undefined, at(6).toISOString(), undefined])
+    assert.deepEqual(holdersOf({ manifest: readManifest(w.dir), procs: [p] }).filter((x) => x.harness === h), [], 'from before every group moved: not a holder')
+  } finally { await d.close() }
+})
