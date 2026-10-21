@@ -18,11 +18,27 @@
 // `reads`: each turn's tool call is a Bash command that reads `reads` distinct files (cat a b c …), so every call adds as many
 // resources to its lane — a call whose meta legitimately costs far more than an average one.
 // `tools`: on the Anthropic wires, how many tool definitions each call carries that no call before it did (fresh names and schemas).
+// What the user's live session has besides (every one OFF by default, and drawn from a random stream of its own, so a session
+// without them is byte for byte what it was):
+// `paths`: each turn's tool result names `paths` file paths and its prose half as many — absolute and relative, half of them new and
+//   half named before — so the seen ledger grows the way a real one does.
+// `prompt`: each lane's first prompt (main and subagent, after every compaction) starts with `prompt` characters of <system-reminder>
+//   blocks, one the same in every lane and one its own, before the ask — the human heads; later turns carry a short one or two.
+// `writes`: each turn's tool call is a Write (`content`) or an Edit (`old_string` / `new_string`) of `writes` characters — event args.
+// `bigEvery` / `bigBytes` / `bigRun`: every `bigEvery` calls a cluster of `bigRun` main-lane calls each stores about `bigBytes` more
+//   (a file read into the context: once on the wires that re-send the context, on every call on the ones that send a delta); the
+//   main context compacts after the cluster.
+// `shared`: the system prompt every lane sends (subagents included) gains a block of `shared` characters; the `cc` tool definitions
+//   are already one set every lane sends.
+// `seal()`: seals the segment written so far through the product's sealSegment (frames of `seal` bytes, so reads go through frames
+//   and delta chains) and goes on in a new segment; the record ids already written do not change.
+// live(scale) gives all of them in the proportions of the user's live session.
 // Exports only: node --test runs every .mjs.
 import fs from 'node:fs'
 import path from 'node:path'
 import { replyOf } from '../helpers/cc-threads.mjs'
 import { buildWsEnvelope } from '../../src/collector/core/record/envelope.mjs'
+import { sealSegment } from '../../src/raw/seal.mjs'
 
 const MODEL = 'claude-opus-4-8'
 function rng(seed) {
@@ -57,24 +73,55 @@ function turn(next, i, growth, reads) {
  * thread or chain) once it holds more than `compactAt` characters.
  * `append(n)` appends the next n calls (as the daemon would, one line each) and returns the session's stored bytes so far.
  */
-export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '', cc = 0, reads = 0, tools = 0 } = {}) {
-  const next = rng(seed), delay = rng(seed + 1)
-  const file = path.join(home, 'raw', `${segment}.ndjson`)
+export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '', cc = 0, reads = 0, tools = 0,
+  paths = 0, prompt = 0, writes = 0, bigEvery = 0, bigBytes = 2_000_000, bigRun = 4, shared = 0, seal = 64 << 10 } = {}) {
+  const next = rng(seed), delay = rng(seed + 1), xr = rng(seed + 2)
+  let file = path.join(home, 'raw', `${segment}.ndjson`)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const fresh = (k) => ({ k, msgs: [], sent: 0, prev: null, n: 0, chars: 0 })
   const main = fresh(0), subs = Array.from({ length: subLanes }, (_, k) => fresh(k))
   const held = [] // [line, the call count at which it is written]
-  let n = 0, nsub = 0, stored = 0, ms = Date.parse('2026-10-20T16:47:37Z')
-  const system = [{ type: 'text', text: 'You are a coding assistant operating in a terminal.' }]
+  let n = 0, nsub = 0, stored = 0, ms = Date.parse('2026-10-20T16:47:37Z'), bigLeft = 0
+  const system = [{ type: 'text', text: 'You are a coding assistant operating in a terminal.' }, ...(shared ? [{ type: 'text', text: words(xr, shared) }] : [])]
+  const sysText = system.map((b) => b.text).join('\n\n')
+  const named = [], slug = (k) => words(xr, k).trim().replace(/[\s.]+/g, '-')
+  const pathOf = () => {
+    if (named.length && xr() < 0.5) return named[Math.floor(xr() * named.length)]
+    const p = xr() < 0.5 ? `/work/${slug(6)}/${slug(8)}.mjs` : `src/${slug(6)}/${slug(8)}.ts`
+    named.push(p)
+    return p
+  }
+  const remind = (t) => ({ type: 'text', text: `<system-reminder>\n${t}\n</system-reminder>` })
+  const everyLane = prompt ? remind(words(xr, prompt / 2)) : null
   const ccTools = Array.from({ length: cc }, (_, k) => ({ name: `Tool${k}`, description: words(next, 2_500),
     input_schema: { type: 'object', additionalProperties: false, properties: { file_path: { type: 'string', description: words(next, 300) } }, required: ['file_path'] },
     eager_input_streaming: true }))
   const line = () => {
-    const sub = subEvery > 0 && n % subEvery === subEvery - 1
+    if (bigEvery > 0 && n % bigEvery === bigEvery - 1) bigLeft = bigRun
+    const big = bigLeft > 0
+    const sub = !big && subEvery > 0 && n % subEvery === subEvery - 1
     const lane = sub ? subs[nsub++ % subLanes] : main
     if (sub ? lane.msgs.length > subLen : lane.chars > compactAt) Object.assign(lane, { msgs: [], sent: 0, prev: null, n: lane.n + 1, chars: 0 })
-    lane.msgs.push(...turn(next, n, sub ? Math.round(growth / 4) : growth, reads))
+    const t = turn(next, n, sub ? Math.round(growth / 4) : growth, reads)
+    lane.msgs.push(...t)
     if (sub && preamble && lane.msgs.length === 3) lane.msgs[0].content[0].text = `${preamble}\n${lane.msgs[0].content[0].text}` // a subagent's first prompt
+    if (prompt && lane.msgs.length === 3) t[0].content.unshift(everyLane, remind(words(xr, prompt / 2)))
+    else if (prompt) { t[2].content.push(remind(words(xr, 240))); if (n % 2) t[0].content.unshift(remind(words(xr, 160))) } // as Claude Code adds to a turn
+    if (paths) {
+      const some = (k) => Array.from({ length: k }, pathOf)
+      t[0].content[t[0].content.length - 1].text += ` See ${some(Math.ceil(paths / 2)).join(' and ')}.`
+      t[2].content[0].content += '\n' + some(paths).map((p, k) => `${p}:${k + 1}: ${slug(4)}`).join('\n')
+    }
+    if (writes) {
+      const use = t[1].content[1], file_path = paths ? pathOf() : `/work/src/w${n}.mjs`
+      Object.assign(use, n % 2 ? { name: 'Edit', input: { file_path, old_string: words(xr, writes / 4), new_string: words(xr, writes * 3 / 4) } }
+        : { name: 'Write', input: { file_path, content: words(xr, writes) } })
+    }
+    if (big) {
+      // a big file read into the context: the wires that re-send the context carry it on to the cluster's next calls
+      if (bigLeft === bigRun || wire === 'threads' || wire === 'ws') t[0].content.push({ type: 'text', text: words(xr, bigBytes) })
+      if (--bigLeft === 0) lane.chars = Infinity // the context compacts on the next main call
+    }
     lane.chars += sub ? Math.round(growth / 4) : growth
     const ts = new Date((ms += 4_000)).toISOString()
     const text = words(next, 200)
@@ -87,7 +134,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
     if (wire === 'ws') {
       const msgId = `resp_${n}`
       const input = delta.map((m) => ({ type: 'message', role: m.role, content: m.content.map((c) => ({ type: m.role === 'user' ? 'input_text' : 'output_text', text: c.text ?? (typeof c.content === 'string' ? c.content : JSON.stringify(c.input ?? c)) })) }))
-      const body = { type: 'response.create', model: 'gpt-x', instructions: system[0].text, tools: [], input, ...(lane.prev ? { previous_response_id: lane.prev } : {}) }
+      const body = { type: 'response.create', model: 'gpt-x', instructions: sysText, tools: [], input, ...(lane.prev ? { previous_response_id: lane.prev } : {}) }
       const output = [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
       const server = [JSON.stringify({ type: 'response.created', response: { id: msgId } }),
         ...text.match(/.{1,40}/gs).map((d) => JSON.stringify({ type: 'response.output_text.delta', delta: d })),
@@ -103,7 +150,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
       lane.prev = msgId
     } else if (wire === 'chat') {
       const chat = (m) => ({ role: m.role, content: m.content.map((c) => c.text ?? (typeof c.content === 'string' ? c.content : JSON.stringify(c.input ?? c))).join('\n') })
-      const body = { model: 'deepseek-chat', messages: [{ role: 'system', content: system[0].text }, ...ask.map(chat)],
+      const body = { model: 'deepseek-chat', messages: [{ role: 'system', content: sysText }, ...ask.map(chat)],
         ...(sub ? { dsh_session_log: { session: { origin: 'subagent' } } } : {}) }
       env = {
         ts, endpoint: '/chat/completions', method: 'POST',
@@ -121,7 +168,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
       const defs = Array.from({ length: tools }, (_, k) => ({ name: `tool_${n}_${k}`, description: words(next, 160), input_schema: { type: 'object', properties: { [words(next, 6).trim()]: { type: 'string', description: words(next, 60) } } } }))
       const sent = [...(cc ? ccTools : []), ...defs]
       const mark = (ms) => (cc && ms.length ? [...ms.slice(0, -1), { ...ms[ms.length - 1], content: ms[ms.length - 1].content.map((c, i, a) => (i === a.length - 1 ? { ...c, cache_control: { type: 'ephemeral' } } : c)) }] : ms)
-      const sys = cc ? [{ ...system[0], cache_control: { type: 'ephemeral' } }] : system
+      const sys = cc ? system.map((b, i, a) => (i === a.length - 1 ? { ...b, cache_control: { type: 'ephemeral' } } : b)) : system
       const body = { model: MODEL, max_tokens: 4096, ...(sent.length ? { tools: sent } : {}), ...(threads && lane.prev ? { thread: { type: 'continue', previous_message_id: lane.prev }, messages: mark(delta) }
         : { ...(threads ? { thread: { type: 'create' } } : {}), system: sys, messages: mark(ask) }) }
       env = {
@@ -147,20 +194,39 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
     return out
   }
   return {
-    file, id,
+    get file() { return file }, id,
     get calls() { return n },
     append(k = 1) {
-      const out = []
-      for (let i = 0; i < k; i++) out.push(...written())
-      if (!out.length) return stored
-      const s = out.join('\n') + '\n'
-      fs.appendFileSync(file, s, { mode: 0o600 })
-      stored += Buffer.byteLength(s)
+      let out = [], len = 0
+      const flush = () => {
+        if (!out.length) return
+        const s = out.join('\n') + '\n'
+        fs.appendFileSync(file, s, { mode: 0o600 })
+        stored += Buffer.byteLength(s)
+        out = []; len = 0
+      }
+      for (let i = 0; i < k; i++) for (const l of written()) { out.push(l); if ((len += l.length) > 64 << 20) flush() } // a string has a ceiling
+      flush()
       return stored
     },
     /** Appends calls until the session's stored bytes reach `bytes`. */
     growTo(bytes) { while (stored < bytes) this.append(1); return stored },
+    /** Seals the segment written so far (frames of `seal` bytes) and goes on in a new segment one second later. */
+    async seal() {
+      if (fs.existsSync(file)) await sealSegment(file, { lockFile: path.join(home, 'collector', 'lock'), journal: null, frameBytes: seal })
+      segment = new Date(Date.parse(segment.replace(/^(\d{4})(\d\d)(\d\d)T(\d\d)(\d\d)(\d\d)Z$/, '$1-$2-$3T$4:$5:$6Z')) + 1_000).toISOString().replace(/[-:]|\.\d+/g, '')
+      file = path.join(home, 'raw', `${segment}.ndjson`)
+    },
   }
+}
+
+/** live(scale) → bigSession options (and `calls`, how many to append) in the proportions of the user's live Claude Code session
+ *  (12.5k calls, ~36 calls a lane, ~149 KB a record, ~1 % of records over 1 MB in clusters, first prompts up
+ *  to 16 KB of system-reminders, one system prompt and tool set across lanes). A regression seed, not an expectation: scale 1 is
+ *  the user's size. */
+export function live(scale = 1) {
+  return { calls: Math.max(1, Math.round(12_500 * scale)), wire: 'http', growth: 2_500, subEvery: 2, subLanes: 12, subLen: 54, late: 6,
+    compactAt: 110_000, cc: 16, shared: 12_000, paths: 4, prompt: 12_000, writes: 1_200, bigEvery: 400, bigBytes: 2_000_000, bigRun: 4 }
 }
 
 /** firstAskOf(record, records) → what 4.4 §看板 v2 需要的补充 says a lane's `task` is, read straight off the request bytes: the first
