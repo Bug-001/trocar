@@ -186,13 +186,23 @@ test('W1 stdout noise that is not a reply is skipped', async (t) => {
 
 test('W1 the helper is ready before the first verb is written, and a call made at once waits for it', async (t) => {
   const log = path.join(tmpDir('trocar-helper-'), 'in.log')
-  const h = started(t, { log, readyDelayMs: 120 }) // Add-Type compiles for a while on a cold machine
-  const first = h.call('version', {}, { timeoutMs: 50 }) // the timeout counts from the write, not from the call
+  const h = started(t, { log, readyDelayMs: 120, verbs: { ps: { hang: true } } }) // Add-Type compiles for a while on a cold machine
+  let readyAt = null, wroteAt = null
+  h.ready.then(() => { readyAt = performance.now() }, () => {})
+  const first = h.call('version') // made at once: it waits for the ready line, then is answered
+  // the timeout counts from the write, not from the call: 50 ms is shorter than the wait for ready (≥ 120 ms after the call), so a timer
+  // started at the call would reject before the write. Nothing here waits on the clock (the verb hangs; ready and the write are events), so load cannot redden it.
+  const timed = h.call('ps', {}, { timeoutMs: 50, onStart: () => { wroteAt = performance.now() } })
+  let wroteBeforeRejection = null
+  timed.catch(() => { wroteBeforeRejection = wroteAt != null })
   const info = await h.ready
   assert.equal(info.proto, 1)
   assert.equal(info.native, true)
   assert.equal((await first).proto, 1)
-  assert.equal(lines(log).length, 1)
+  await rejects(timed, 'helper-timeout')
+  assert.equal(wroteBeforeRejection, true, 'the timeout ran out after the write, not during the wait for ready')
+  assert.ok(readyAt != null && wroteAt >= readyAt, 'written only after the helper said ready')
+  assert.deepEqual((await until(() => lines(log).length === 2 && lines(log))).map((l) => l.verb), ['version', 'ps'], 'each verb written once, after ready')
 })
 
 test('W1 a helper that speaks another protocol is a failed start, and says so', async (t) => {
