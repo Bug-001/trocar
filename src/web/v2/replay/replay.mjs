@@ -366,7 +366,9 @@ function mountDesk(el, ctx) {
     return [...new Set(rows.map((d) => d.ref).filter((r) => r && !bodyCache.has(r)))]
   }
   // what a resting playhead still lacks: its lane (or the older page that holds it), its open bodies; then the lane's next older
-  // page — within 32 steps of the held edge that is in time for a scrub, and at rest it walks the remaining pages newest first
+  // page, one per resting rid while the playhead is fewer than 32 steps from the held edge (3.5:69, in time for a scrub), and one
+  // per quiet poll (`olderOk`): the remaining pages come newest first, each after a reader's move or a `session` read (4.4:52)
+  let olderOk = false, olderFor = null
   function need(rid) {
     const row = s.desk.rows.get(rid)
     if (!row) return null
@@ -375,7 +377,9 @@ function mountDesk(el, ctx) {
       const older = h && h.prev != null && h.rids.length && laneIndex(key, rid) < laneIndex(key, h.rids[0])
       return { lane: older ? { lane: key, to: h.prev } : { lane: key }, refs: [] }
     }
-    return { lane: h.prev != null ? { lane: key, to: h.prev } : null, refs: openRefs(rid) }
+    const older = h.prev != null && (olderOk || (olderFor !== rid && laneIndex(key, rid) - laneIndex(key, h.rids[0]) < 32))
+    if (older) { olderOk = false; olderFor = rid }
+    return { lane: older ? { lane: key, to: h.prev } : null, refs: openRefs(rid) }
   }
   const wanted = new Set() // lanes asked for by the drawer or a rail while another read was out
   let targeted = null, openLane = null
@@ -443,6 +447,8 @@ function mountDesk(el, ctx) {
   }
   s.poll = () => poll(true)
   let quiet = false // the last delta brought nothing: the next tick backfills older rows instead (one `session` read per tick)
+  // a quiet poll lets the resting playhead's lane read its next older page (need)
+  const olderPage = () => { const h = s.playRid != null && s.desk.held.get((s.desk.rows.get(s.playRid) || {}).lane); if (h && h.prev != null && openLane == null) { olderOk = true; targeted = s.playRid; steps.target(s.playRid) } }
 
   async function pollOnce() {
     const key = sessionKey(), reads = s.reads, signal = reads ? reads.signal : undefined, desk = s.desk
@@ -455,7 +461,7 @@ function mountDesk(el, ctx) {
     if (!res.ok) return readFailed(res.error || 'cause not known')
     s.errNote = null; s.goodKey = key; s.goodAt = api.now()
     const hadStale = !!s.staleErr; s.staleErr = null
-    if (res.status === 304 || !res.data) { quiet = true; if (hadStale) renderHeader(); return { ok: true } }
+    if (res.status === 304 || !res.data) { quiet = true; if (hadStale) renderHeader(); olderPage(); return { ok: true } }
     const a = res.data
     // the server knows no such session (meta null, nothing captured): said HERE, with a way back; the timer stops reading it
     if (a.base == null && !before && a.meta == null && !(a.calls || []).length) {
@@ -521,6 +527,7 @@ function mountDesk(el, ctx) {
     renderAll()
     refreshDrawer()
     if (s.initialStep == null && (first || moved || String(router.current().params.step ?? '') !== String(shownStep()))) syncUrl()
+    if (quiet) olderPage()
     return { ok: true, pending: desk.pending || undefined }
   }
 
