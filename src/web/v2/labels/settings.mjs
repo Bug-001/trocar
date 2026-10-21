@@ -8,7 +8,8 @@ export const CARD_DISK = 'Disk', CARD_PRICE = 'Unit prices', CARD_UNPRICED = 'Mo
 // 磁盘卡
 export const DISK_TOTAL = 'Used by trocar', DISK_PER_DAY = 'Estimated growth per day', AS_OF = 'as of',
   CAPTURE_PAGE_LINE = 'Each agent\'s switch and the local network environment are on the capture page', CAPTURE_PAGE_HREF = '#/capture',
-  BAD_FILES = (n) => `${n} capture file problem${n === 1 ? '' : 's'} when read`, BAD_FILES_SHOW = 'Show which', THIS_PAGE = 'This page'
+  BAD_FILES = (n) => `${n} capture file problem${n === 1 ? '' : 's'} when read`, BAD_FILES_SHOW = 'Show which', THIS_PAGE = 'This page',
+  FILES_CHECK = 'The capture file check'
 
 // 磁盘上的文件(技术细节)
 export const FILES_SEAL_RATIO = 'Sealed compression ratio', ESTIMATE = 'estimate', FILES_SEAL_NONE = 'No readable sealed files',

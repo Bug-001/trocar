@@ -40,6 +40,9 @@ test('AC-1 readFailure: the visible line holds none of the reason; the reason is
   }
   const none = readFailure('Stats', null)
   assert.ok(none.line.trim() && !none.line.includes('\n'))
+  // the cause class (K-29): a returned status is in the line; unreachable (0) and a server error are told apart
+  for (const status of [404, 500, 503]) assert.ok(readFailure('Stats', { status }).line.includes(String(status)), `status ${status} in the line`)
+  assert.notEqual(readFailure('Stats', { status: 0 }).line, readFailure('Stats', { status: 500 }).line)
 })
 
 test('AC-3 overview cards: stats and recent read failures, the price line and a 503 capture card keep the reason out of the visible text', () => {
@@ -85,6 +88,7 @@ test('AC-2 a failed read on traffic, a host page (list and request detail), Sett
     ['request detail', hostPage, `${host}?ref=${encodeURIComponent(ref)}`, (u) => u.pathname === '/api/calls' && u.searchParams.has('ref'), 'data-act="retry-detail"'],
     ['prices', prices, '#/settings/prices', (u) => u.pathname === '/api/pricing', 'href="#/settings/prices"'],
     ['storage', storage, '#/settings/storage', (u) => u.pathname === '/api/classes', 'href="#/settings/storage"'],
+    ['storage files', storage, '#/settings/storage', (u) => u.pathname === '/api/segments', 'href="#/settings/storage"'], // never zero problems (D38)
   ]
   for (const [name, mod, hash, hit, retry] of sites) {
     for (const fail of [500, 503, 'throw']) {
