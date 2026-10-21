@@ -5,8 +5,10 @@
 //   stepBarHtml(s)  the row (popovers inline, hidden)      wireStepBar(el, s)  the actions
 import { esc, kf, usd, bytes, fmtTime } from '../core/fmt.mjs'
 import { popover, menuButton, mark } from '../core/ui.mjs'
-import { cacheState, usageOf, hitRatio, isBreak, breakCost, refOf, priceMatch, costOf } from '../core/metrics.mjs'
-import { segTax, blocksOf, TAX_ORDER, hasChangeLine, callFacts } from './analysis.mjs'
+import { cacheState, usageOf, breakCost, priceMatch, costOf } from '../core/metrics.mjs'
+import { segTax, TAX_ORDER, hasChangeLine, callFacts, refRowOf } from './analysis.mjs'
+import { stepRef } from './lanes.mjs'
+import { stepOf } from './model.mjs'
 import * as W from '../labels/replay.mjs'
 
 const modelOf = (c) => (c && c.rec && c.rec.request && c.rec.request.model) || null
@@ -70,14 +72,15 @@ export function cachePopoverHtml(call, ref, { laneW = 'main thread', priceRow = 
 }
 
 // ── the 组成 button ──────────────────────────────────────────────────────────────────────────────────────────────────
-// the 内容对比步's segTax against this one's; a step whose body is not on the page (or unparsed, or never captured) says so
-// instead of a number. The calibre sentence is DOM text, not a hover (2.2 MUST).
+// the 内容对比步's segTax against this one's. `flat` / `refFlat` are the two steps' blocks (null while that step's lane is not
+// held: a sized empty row, no words, no control — 2.2 §步头); an unparsed or never captured step says so instead of a number.
+// The calibre sentence is DOM text, not a hover (2.2 MUST).
 const SEG_BYTE = (k, tax) => `${bytes(tax.seg[k])} · ≈ ${kf(tax.est(k))} token`
-export function compPopoverHtml(call, ref, { refK = null, refIsCache = true } = {}) {
+const BUSY = '<div class="pp-busy" aria-busy="true"></div>'
+export function compPopoverHtml(call, ref, { flat = null, refFlat = null, refK = null, refIsCache = true } = {}) {
   if (!call || !call.rec) return `<div class="pp-sentence">${esc(W.COMP_SELF.none)}</div>`
   if (call.unparsed) return `<div class="pp-sentence">${esc(W.COMP_SELF.unparsed)}</div>`
-  if (call.paged_out) return `<div class="pp-sentence">${esc(W.COMP_SELF.paged)}</div>`
-  const flat = call.flat || []
+  if (!flat) return BUSY
   const tax = segTax(flat)
   const rows = [`<div class="pp-nums">${esc(W.compSize(bytes(tax.total)))}</div>`, `<div class="pp-calibre">${esc(W.COMP_CALIBRE)}</div>`]
   rows.push(`<div class="pp-segs">${TAX_ORDER.map((k) => `<span class="ppseg" title="${esc(SEG_BYTE(k, tax))}">${esc(W.SEG_NAME[k])} <b>${tax.pct(k)}%</b></span>`).join(' · ')}</div>`)
@@ -87,9 +90,9 @@ export function compPopoverHtml(call, ref, { refK = null, refIsCache = true } = 
   const cause = call.cacheBreak && call.cacheBreak.cause
   if (cause === 'compaction' && refIsCache) rows.push(`<div class="pp-note">${esc(W.COMPACTION_REWRITE)}</div>`)
   else if (ref) {
-    if (ref.paged_out || !blocksOf(ref)) rows.push(`<div class="pp-note">${esc(W.compOffPage(refK))} <button type="button" class="jumpbtn" data-load-step="${esc(String(refK))}">${esc(W.LOAD_STEP(refK))}</button></div>`)
+    if (!refFlat) rows.push(BUSY)
     else {
-      const prev = segTax(ref.flat)
+      const prev = segTax(refFlat)
       const d = tax.total - prev.total
       const dom = TAX_ORDER.map((k) => ({ k, d: tax.seg[k] - prev.seg[k] })).reduce((a, x) => (Math.abs(x.d) > Math.abs(a.d) ? x : a), { k: 'tools', d: 0 })
       const segW = dom.d ? W.SEG_NAME[dom.k] : ''
@@ -139,27 +142,34 @@ export function compareMenuHtml({ sel = null, cacheRefK = null, cur = null, M = 
 
 // ── the row ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 // ONLY the parts of 2.2's table; a fact that is absent is not drawn. `s` is the desk's state.
+const flatOf = (s, call) => (s.desk && call ? stepOf(s.desk, call.rid).flat : null)
+// a call's number in its lane: 「第 N / M 步」 on the main lane, 「<lane 词> · 第 k / M 次调用」 elsewhere (stepRef, 1.2 §编号)
+const localNo = (s, call) => { const r = call && stepRef(s.lanes, call.rid); return r ? (r.step ? r.n : r.k) : null }
+
 export function stepBarHtml(s) {
   const call = s.anchor && s.anchor.calls[s.playhead]
   if (!call) return ''
   const isMain = s.anchor.kind === 'main'
-  const M = s.anchor.calls.length, n = s.playhead + 1
+  const ref0 = stepRef(s.lanes, call.rid)
+  const n = ref0 ? (ref0.step ? ref0.n : ref0.k) : s.playhead + 1, M = ref0 ? ref0.m : s.anchor.calls.length
   const no = isMain ? W.stepNo(n, M) : W.callNo(W.laneWord(s.anchor.kind), n, M)
   const model = modelOf(call)
-  // 第 K 次提问: only where the server ships user events (some wire families do); an absent field → not drawn
-  const evs = (s.anchor.events || []).filter((e) => e && e.type === 'user' && e.step != null)
-  const ask = evs.length && call.gi != null ? evs.filter((e) => e.step <= call.gi).length : 0
+  // 第 K 次提问: the anchor lane's user events (each names its call by rid) at or before this step in step order
+  const at = (rid) => { const i = s.anchor.ridLocal && s.anchor.ridLocal.get(rid); return i == null ? Infinity : i }
+  const ask = (s.anchor.events || []).filter((e) => e && e.type === 'user' && e.rid != null && at(e.rid) <= s.playhead).length
   // ◐: the call-level fidelity facts (words owned by 2.3's 调用保真行; here only the mark and the server's own texts)
   // lit iff the row has words (callFacts, one source with the row; capture routing is not a fidelity fact)
   const fid = callFacts(call)
   const hasFid = fid.facts.length > 0
   const fidTxt = fid.tech.map((p) => p[1]).filter(Boolean).join('\n')
-  // the 缓存对比步: the nearest earlier call of the anchor lane that did not fail (S12 will name it; same rule until then)
-  const ref = refOf(s.anchor.calls, s.playhead)
-  const refK = ref && ref.gi != null && isMain ? localNo(s.anchor, ref) : null
+  // the 缓存对比步: the row the server named (cacheBreak.refRid), else the nearest earlier call of the lane that did not fail
+  const ref = refRowOf(s.anchor, s.playhead)
+  const refK = ref && isMain ? localNo(s, ref) : null
   // the jump is offered only when the window draws the 变化线 at the first differing block (one predicate, analysis.mjs)
-  const hasChange = hasChangeLine(call)
+  const flat = flatOf(s, call)
+  const hasChange = hasChangeLine(call, flat)
   const priceRow = s.pricing ? priceMatch(s.pricing, modelOf(call)) : null
+  const cref = contentRefOf(s)
   // the parts go straight into #stepbar (replay.mjs owns the element): no inner wrapper, so no second #stepbar
   return `<span class="sb-nav"><button type="button" class="sbbtn" data-step="prev" aria-label="${esc(W.STEP_PREV)}" title="${esc(W.STEP_PREV)}">‹</button>` +
     `<b class="sb-no">${esc(no)}</b>` +
@@ -169,19 +179,18 @@ export function stepBarHtml(s) {
     `<span class="sb-model"${model ? ` title="${esc(model)}"` : ''}>${esc(model || '—')}</span>` +
     (hasFid ? `<span class="sb-fid">${mark('part', fidTxt || undefined)}</span>` : '') +
     `<span class="spacer"></span>` +
-    (isMain ? compareMenuHtml({ sel: s.diffRef != null ? s.diffRef + 1 : null, cacheRefK: refK, cur: n, M }) : '') +
+    (isMain ? compareMenuHtml({ sel: s.diffRef != null ? localNo(s, s.anchor.calls[s.diffRef]) : null, cacheRefK: refK, cur: n, M }) : '') +
     popover({ label: W.CACHE_POPOVER_LABEL, title: W.CACHE_TITLE, glyph: esc(cacheLabel(call)), body: cachePopoverHtml(call, ref, { laneW: W.laneWord(s.anchor.kind), priceRow, hasChange }) }) +
-    popover({ label: W.COMP_POPOVER_LABEL, title: W.COMP_TITLE, glyph: esc(call.paged_out || call.unparsed || !call.rec ? W.COMP_BTN_NONE : W.COMP_BTN), body: compPopoverHtml(call, contentRefOf(s), { refK: contentRefKOf(s), refIsCache: s.diffRef == null }) }) +
+    popover({ label: W.COMP_POPOVER_LABEL, title: W.COMP_TITLE, glyph: esc(call.unparsed || !call.rec ? W.COMP_BTN_NONE : W.COMP_BTN), body: compPopoverHtml(call, cref, { flat, refFlat: flatOf(s, cref), refK: contentRefKOf(s), refIsCache: s.diffRef == null }) }) +
     popover({ label: W.COST_POPOVER_LABEL, title: W.COST_TITLE, glyph: esc(costLabel(call, s.pricing)), body: costPopoverHtml(call, { table: s.pricing, tableErr: s.pricingErr }) })
 }
 // the 内容对比步 (2.3): the chosen step when one is pinned, else the 缓存对比步; null = this line's first call
 export function contentRefOf(s) {
   if (!s.anchor) return null
   if (s.diffRef != null && s.diffRef >= 0 && s.diffRef < s.anchor.calls.length && s.diffRef !== s.playhead) return s.anchor.calls[s.diffRef]
-  return refOf(s.anchor.calls, s.playhead)
+  return refRowOf(s.anchor, s.playhead)
 }
-export const contentRefKOf = (s) => { const r = contentRefOf(s); return r && s.anchor.kind === 'main' ? localNo(s.anchor, r) : null }
-const localNo = (lane, call) => { const i = lane.giLocal ? lane.giLocal.get(call.gi) : lane.calls.indexOf(call); return i != null && i >= 0 ? i + 1 : null }
+export const contentRefKOf = (s) => { const r = contentRefOf(s); return r && s.anchor.kind === 'main' ? localNo(s, r) : null }
 
 // ── wiring: the step arrows, the jumps, the compare menu ────────────────────────────────────────────────────────────
 export function wireStepBar(el, s) {
@@ -193,8 +202,6 @@ export function wireStepBar(el, s) {
     if (st) { s.setPlayhead(s.playhead + (st.dataset.step === 'prev' ? -1 : 1), true); return }
     const j = t.closest('[data-jump="change"]')
     if (j) { s.queueJump({ kind: 'anchor', id: 'cachebrk' }); return }
-    const ld = t.closest('[data-load-step]')
-    if (ld) { const r = contentRefOf(s); if (r) s.ensurePage(r, true); return }
     const cm = t.closest('[data-cmp]')
     if (cm) {
       const a = cm.dataset.cmp
@@ -203,8 +210,8 @@ export function wireStepBar(el, s) {
       else if (a === 'ok') {
         const inp = cm.closest('.pop').querySelector('[data-cmp-in]')
         const v = inp && parseInt(inp.value, 10)
-        const M = s.anchor ? s.anchor.calls.length : 0
-        if (Number.isFinite(v) && v >= 1 && v <= M && v !== s.playhead + 1) s.setDiff(v - 1)
+        const base = (s.anchor && s.anchor.base) || 0, M = s.anchor ? s.anchor.calls.length + base : 0 // step numbers count the rows not loaded yet
+        if (Number.isFinite(v) && v > base && v <= M && v - 1 - base !== s.playhead) s.setDiff(v - 1 - base)
         else if (inp) inp.title = W.COMPARE_RANGE(M)
       }
       return

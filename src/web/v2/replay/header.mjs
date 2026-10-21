@@ -11,6 +11,15 @@ import { sessionTotals, priceMatch } from '../core/metrics.mjs'
 import { stepsOf } from './lanes.mjs'
 import * as W from '../labels/replay.mjs'
 
+// the main lane's first and last step times: its header names them by rid (`first` / `last`, 3.5 §会话读) and the skeleton rows
+// carry the ts; a session without a main lane uses its anchor lane's loaded rows
+function spanOf(lanes) {
+  const a = (lanes || []).find((l) => l.kind === 'main') || (lanes || [])[0]
+  if (!a || !a.calls.length) return null
+  const row = (rid, dflt) => { const i = rid != null && a.ridLocal ? a.ridLocal.get(rid) : null; return i != null ? a.calls[i] : dflt }
+  return { t0: row(a.first, a.calls[0]).ts, t1: row(a.last, a.calls[a.calls.length - 1]).ts }
+}
+
 // ── the title: the fallback chain and where each title came from (1.2) ───────────────────────────────────────────────
 // meta.title (its source = meta.title_source) → 「未命名会话」 + the first step's time. The tip names the source and carries
 // the session id; a title is never invented from the id.
@@ -18,8 +27,8 @@ const titleFrom = (meta) => (meta.title_source === 'wire' ? W.TITLE_FROM_WIRE : 
 function titleHtml(meta, lanes) {
   const id = (meta && meta.session_id) || ''
   if (meta && meta.title != null) return `<span class="sh-name" title="${esc(titleFrom(meta))}\n${esc(W.SESSION_ID)} ${esc(id)}">${esc(meta.title)}</span>`
-  const steps = stepsOf(lanes)
-  const t0 = steps.length ? fmtWhen(steps[0].ts) : ''
+  const sp = spanOf(lanes)
+  const t0 = sp ? fmtWhen(sp.t0) : ''
   return `<span class="sh-name" title="${esc(W.TITLE_UNTITLED_TIP)}\n${esc(W.SESSION_ID)} ${esc(id)}">${W.UNTITLED}${t0 ? ` · ${esc(t0)}` : ''}</span>`
 }
 
@@ -71,20 +80,21 @@ export function captureGap(doc, range, harness, now = Date.now()) {
 }
 
 // ── the 会话保真行: each fact in plain words; the row exists only when at least one does (必拒隐瞒) ────────────────────
-// `d` is one /api/session answer (+ the desk's once-per-open capture-health answer pre-judged into `gap`). Raw values ride
-// along as `tech` pairs for the 技术细节 disclosure, never in the plain words.
-export function fidelityFacts({ truncated, analyzed, logged, errors, gap, harness }) {
+// `d` is the session answer's {truncated, unknown, logged, errors} as the desk holds them (+ the desk's once-per-open
+// capture-health answer pre-judged into `gap`). Raw values ride along as `tech` pairs for the 技术细节 disclosure, never in
+// the plain words.
+export function fidelityFacts({ truncated, unknown, logged, errors, gap, harness }) {
   const facts = []
   const h = harness != null ? `?h=${encodeURIComponent(harnessKey(harness))}` : ''
   const tech = []
   if (truncated) facts.push({ html: esc(W.truncFact(truncated.shown, truncated.total, truncated.file_mb)) })
-  const unk = analyzed && analyzed.unknown
+  const unk = unknown
   if (unk && Number(unk.records) > 0) {
     facts.push({ html: esc(W.unknownFact(unk.records)) })
     if (unk.reason) tech.push(['reason', unk.reason])
     if (unk.endpoints && unk.endpoints.length) tech.push(['endpoints', unk.endpoints.join(', ')])
   }
-  if (logged && Number(logged.count) > 0) facts.push({ html: `<a href="#/settings/storage${esc(h)}">${esc(W.loggedFact(logged.count))}</a>` })
+  if (Number(logged) > 0) facts.push({ html: `<a href="#/settings/storage${esc(h)}">${esc(W.loggedFact(Number(logged)))}</a>` })
   const errs = (errors || []).filter(Boolean)
   const lost = errs.filter((e) => e.level !== 'note').length // a note (an index-cold slow read) is not a loss: tech pairs only
   if (lost) facts.push({ html: `<a href="#/settings/storage">${esc(W.filesFact(lost))}</a>` })
@@ -133,7 +143,7 @@ export function sessionInfoHtml({ meta, lanes, probes, totals, truncated }) {
   }
   // 4 调用失败 — every lane; the jump lands on the first one
   if (t.failed) rows.push(`<div class="sir"><button type="button" class="sijump" data-si="failed">${esc(W.FAILED_LINE(t.failed))}</button></div>`)
-  // 5 压缩 — inferred ones carry 「推测」
+  // 5 压缩 — inferred ones carry 「推测」 (the skeleton rows cover the whole session)
   const steps = stepsOf(lanes)
   const compN = steps.filter((x) => x && x.compaction).length
   if (compN) {
@@ -144,13 +154,14 @@ export function sessionInfoHtml({ meta, lanes, probes, totals, truncated }) {
   const subN = (lanes || []).filter((l) => l.kind === 'subagent').length
   const isRuler = (l) => { const cs = l.calls || []; return cs.length > 0 && cs.every((x) => x && x.probe) } // the token-count lane the front end builds
   const bgN = (lanes || []).filter((l) => l.kind !== 'main' && l.kind !== 'subagent' && !isRuler(l)).reduce((n, l) => n + (l.calls || []).length, 0)
-  const probeN = (probes && probes.count) || 0
+  const probeN = (typeof probes === 'number' ? probes : probes && probes.count) || 0 // the session answer's count, or the ruler's
   const counts = [subN && W.COUNTS_LINE.sub(subN), bgN && W.COUNTS_LINE.bg(bgN), probeN && W.COUNTS_LINE.probe(probeN)].filter(Boolean)
   if (counts.length) rows.push(`<div class="sir">${counts.map((x) => esc(x)).join(' · ')}</div>`)
   const stats = rows.slice() // rows 1–7: the statistics; the identity rows below are not the fallback's business
-  // 7 开始 · 时长 — the paged-out steps carry their ts too, so this covers the whole session
-  if (steps.length) {
-    const t0 = steps[0].ts, t1 = steps[steps.length - 1].ts
+  // 7 开始 · 时长 — the main lane header's first … last rows
+  const sp = spanOf(lanes)
+  if (sp) {
+    const { t0, t1 } = sp
     const dur = t0 && t1 ? fmtUp(Date.parse(t1) - Date.parse(t0)) : null
     rows.push(`<div class="sir">${esc(W.START_LINE)} ${esc(fmtWhen(t0))}${dur ? ` · ${esc(W.DURATION_WORD)} ${esc(dur)}` : ''}</div>`)
   }
@@ -175,15 +186,26 @@ export function totalsOf(s) {
   return sessionTotals(s.lanes, (m) => (s.pricing ? priceMatch(s.pricing, m) : null))
 }
 
+// 1.2 §会话头 读取状态: while the server is still extracting this session (`pending{done, total}` on the session answer) one quiet
+// line says how far — the first read as a share, later the calls still to catch up. Words only: no control (D69).
+export function readStateHtml(desk) {
+  const p = desk && desk.pending
+  if (!p) return ''
+  const done = Number(p.done) || 0, total = Number(p.total) || 0
+  const words = desk.firstPending ? W.readingFirst(total > 0 ? Math.floor((done / total) * 100) : 0) : W.catchingUp(Math.max(0, total - done))
+  return `<div class="fidline readstate" data-read-state>${esc(words)}</div>`
+}
+
 export function renderSessionHead(el, s) {
   if (!el) return
   const html = sessionHeadHtml({ meta: s.meta, lanes: s.lanes, follow: s.follow, stale: !!s.staleErr, libraryHash: s.ctx && s.ctx.store ? s.ctx.store.get().libraryHash : '' })
   if (!html) { el.innerHTML = ''; return }
-  s.totals = s.A ? totalsOf(s) : null
+  const desk = s.desk
+  s.totals = desk ? totalsOf(s) : null
   // the popover body replaces the placeholder the builder had to leave (infoButton needs its layer's html up front)
-  const head = html.replace('<div class="sipre">…</div>', `<div class="sipb">${sessionInfoHtml({ meta: s.meta, lanes: s.lanes, probes: s.probes, totals: s.totals, truncated: s.trunc })}</div>`)
-  const d = s.A ? { truncated: s.trunc, analyzed: s.A, logged: s.logged, errors: s.sourceE, gap: s.gap, harness: s.meta && s.meta.harness } : null
-  el.innerHTML = `<div class="sesshead">${head}</div>` + (d ? fidelityLineHtml(d) : '') + staleLineHtml(s.staleErr)
+  const head = html.replace('<div class="sipre">…</div>', `<div class="sipb">${sessionInfoHtml({ meta: s.meta, lanes: s.lanes, probes: desk ? desk.probes : null, totals: s.totals, truncated: desk && desk.truncated })}</div>`)
+  const d = desk ? { truncated: desk.truncated, unknown: desk.unknown, logged: desk.logged, errors: desk.errors, gap: s.gap, harness: s.meta && s.meta.harness } : null
+  el.innerHTML = `<div class="sesshead">${head}</div>` + readStateHtml(desk) + (d ? fidelityLineHtml(d) : '') + staleLineHtml(s.staleErr)
 }
 
 // 1.5 K-29: a read failed after this session was drawn — the desk keeps the last good answer; one quiet line says since when it is
