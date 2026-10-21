@@ -404,7 +404,13 @@ function callX(rec, { d, format }, { h, req, unparsed }) {
 }
 
 // ── the build driver ────────────────────────────────────────────────────────────────────────────────────────────────────────────
-const CHUNK = 16; // records asked of recordsAt at a time
+/** What extraction reads at once, in stored bytes: consecutive members whose `stored_bytes` sum to at most this (at least one), so
+ *  the records it holds at a time are a reservation the reading side makes before it reads (src/query/named/session.mjs working()). */
+export const CHUNK_STORED = 8 * 1048576;
+// and at most this many: a row lists its whole context however few bytes its record stores (a thread's continuation stores its
+// delta), so the rows a chunk holds until it is appended are bounded by count (by bytes alone, 800 rows of a lane that never
+// compacts, each a context of megabytes, passed the worker's heap: 2026-10-22)
+const CHUNK = 16;
 const contexts = new WeakMap(); // store → its extraction context (slices of one session go on with the same one)
 
 /**
@@ -425,7 +431,9 @@ export function extractMembers({ store, members, recordsAt, sessionId = null, bu
   if (todo.length && !contexts.has(store)) contexts.set(store, createExtractContext(store));
   const ctx = contexts.get(store), byId = todo.length ? new Map(members.map((m) => [String(m.id), m])) : null;
   for (let i = 0; i < todo.length && !spent();) {
-    const part = todo.slice(i, i + CHUNK), got = new Map();
+    let j = i + 1;
+    for (let sum = byId.get(todo[i]).stored_bytes || 0; j < todo.length && j - i < CHUNK && (sum += byId.get(todo[j]).stored_bytes || 0) <= CHUNK_STORED;) j++;
+    const part = todo.slice(i, j), got = new Map();
     for (const r of recordsAt(part.map((rid) => byId.get(rid))) || []) if (r) got.set(String(r.id), r);
     const defs = [], rows = [], held = [];
     for (const rid of part) {

@@ -10,7 +10,8 @@ import path from 'node:path';
 import { recordId } from '../collector/core/record/segments.mjs';
 import { normalizeRecord } from '../raw/ingest.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
-import { openSealed, createFrameCache, createLineCache } from '../raw/reader.mjs';
+import { openSealed, createLineCache } from '../raw/reader.mjs';
+import { FRAME_BYTES } from '../raw/writer.mjs';
 import { R } from '../raw/format.mjs';
 import { segmentIndex, segmentSource } from './index-build.mjs';
 import { trocarHome } from '../paths.mjs';
@@ -143,10 +144,20 @@ function plainReader(file, fs) {
 // chains again (3.5 #21 — brotli was 3.8 s of a 25 s fold of a 5.9k-call session). The first open schedules one setImmediate
 // that closes every reader and empties both caches, so no fd and no decoded frame outlives the read: a sealed file may be
 // replaced or deleted (Windows refuses that while an fd is open), and the heap budget never pays for them.
-const SHARED_FRAMES = 12;              // a chunk's records reach back over a few frames; 12 measured 17.6 s against 8's re-decodes
+// The frames are kept by their decoded bytes (a frame is FRAME_BYTES of lines, more when one record is larger): twelve frames'
+// worth measured 17.6 s against eight's re-decodes. A byte-bounded cache of Buffers is what the line cache is, so it is one.
+const SHARED_FRAME_BYTES = 12 * FRAME_BYTES;
 const SHARED_LINE_BYTES = 32 << 20;    // rebuilt delta predecessors of one chunk: 32 MiB kept the sibling chains of the fold resident
 const SHARED_FILES = 32;               // open fds of one stretch; past it the least recently opened one is closed
-const shared = { files: new Map(), frameCache: createFrameCache(SHARED_FRAMES), lineCache: createLineCache(SHARED_LINE_BYTES), armed: false };
+// an open reader's line maps (its index's record table and the line → record map): 15.75 MB for 32 readers over the user's
+// sealed segments (a heap diagnosis, 2026-10-22)
+const READER_HEAP = 512 << 10;
+/** What one synchronous stretch of reads keeps at most in the V8 heap: its readers' line maps, a fixed term of the heap a read
+ *  reserves before it reads (src/query/named/session.mjs working()). The frames and lines are Buffers, external memory outside
+ *  the V8 heap (12 decoded frames and 64 lines of 0.5 MB: heapUsed +0.11 MB, external +78 MB, 2026-10-22): their byte caps
+ *  bound the process's resident memory, not its heap. */
+export const STRETCH_HEAP = SHARED_FILES * READER_HEAP;
+const shared = { files: new Map(), frameCache: createLineCache(SHARED_FRAME_BYTES), lineCache: createLineCache(SHARED_LINE_BYTES), armed: false };
 const dropReader = (e) => { try { e.sf.close(); } catch { /* already closed: nothing to release */ } };
 function releaseShared() {
   for (const e of shared.files.values()) dropReader(e);

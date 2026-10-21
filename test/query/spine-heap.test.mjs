@@ -92,7 +92,7 @@ const legacy = () => fs.writeFileSync(s.file, fs.readFileSync(s.file, 'utf8').tr
   const r = JSON.parse(l), { 'x-claude-code-agent-id': agent, ...req_headers } = r.req_headers
   return agent ? JSON.stringify({ ...r, req_headers, req_body: JSON.stringify({ ...JSON.parse(r.req_body), system: [{ type: 'text', text: 'cc_is_subagent=true' }] }) }) : l
 }).join('\\n') + '\\n')
-s.append(3_000); legacy()
+s.append(5_000); legacy()
 const live = () => { global.gc(); global.gc(); return process.memoryUsage().heapUsed }
 const before = live()
 await runQuery('session', { id: s.id, limit: '20' }, { home })

@@ -9,9 +9,14 @@
 // time linear in the calls of a lane that compacts: four times the calls take at most SLOWER times as long (each operation of
 // the store's caches O(1); evicting from one Map in insertion order cost time with its size, 2026-10-22).
 //
+// Both media of the store hold to it: the projection file (the worker) and the off-heap arena that writes nothing (the local path),
+// so neither keeps the rows in the V8 heap. And a cluster of records megabytes each is read a chunk of stored bytes at a time, so
+// extraction's peak stays within what the session reserves for its work (working(), src/query/named/session.mjs).
+//
 // Generated sessions (test/query/big-session.mjs): Message Threads (each call stitched to its predecessor's row), thirty subagent
-// lanes side by side, tool results of a few KB each turn. Each session is extracted whole in a process of its own; the peak is
-// sampled after a forced GC at every fourth chunk of records read, above the heap held once the index is read.
+// lanes side by side, tool results of a few KB each turn, and the live session's paths, writes and prompts. Each session is
+// extracted whole in a process of its own; the peak is sampled after a forced GC once a chunk of records is read (every fourth
+// chunk, or every one), above the heap held once the index is read.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
@@ -19,9 +24,10 @@ import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from '../query/big-session.mjs'
+import { WORKER_MEMORY_MB } from '../../src/query/warm.mjs'
 
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
-const HEAP_MB = 64 // the child's old space (the query worker's is larger; the bound is a share of whatever it is)
+const HEAP_MB = WORKER_MEMORY_MB / 6 // the child's old space: a share of the worker's (the bound is a share of whatever it is)
 const SLACK_PER_CALL = 2 * 1024
 const N = 2_000
 const SLACK_PER_DEF = 512
@@ -32,44 +38,59 @@ const { indexRows, sessionGroups } = await import(${src('query/rows.mjs')})
 const { recordsAt } = await import(${src('query/records.mjs')})
 const { openProjection } = await import(${src('query/projection.mjs')})
 const { extractMembers } = await import(${src('view/extract.mjs')})
-const [home, id] = process.argv.slice(1)
+await import(${src('query/named/index.mjs')}) // the registry first: it imports session.mjs
+const { working } = await import(${src('query/named/session.mjs')})
+const [home, id, medium, every] = process.argv.slice(1)
 const errors = [], members = sessionGroups(await indexRows({ home, errors })).get(id)
 global.gc(); global.gc()
 const base = process.memoryUsage().heapUsed
 let peak = 0, n = 0
 const sample = () => { global.gc(); peak = Math.max(peak, process.memoryUsage().heapUsed - base) }
-const read = (rows) => { if (n++ % 4 === 0) sample(); return recordsAt({ home, rows, errors, remember: false }) }
+const read = (rows) => { const got = recordsAt({ home, rows, errors, remember: false }); if (n++ % Number(every) === 0) sample(); return got }
 const t0 = performance.now()
-const r = extractMembers({ store: openProjection({ home, key: id }), members, recordsAt: read, sessionId: id })
+const r = extractMembers({ store: openProjection({ home, key: id, write: medium === 'file' }), members, recordsAt: read, sessionId: id })
 const ms = performance.now() - t0
 sample()
-console.log(JSON.stringify({ done: r.done, total: r.total, peak, ms }))`
+console.log(JSON.stringify({ done: r.done, total: r.total, peak, ms, working: working(members) }))`
 
 const LANES = { wire: 'threads', growth: 8_000, subEvery: 2, subLanes: 30, subLen: 12, compactAt: 400_000 }
+// the user's live session's axes (test/query/big-session.mjs live()) on the lanes above: paths named, prompts with their reminders, writes
+const SHAPED = { ...LANES, paths: 4, prompt: 12_000, writes: 1_200 }
+// the store's two media: a projection file (the worker), the off-heap arena that writes nothing (the local path)
+const MEDIA = ['file', 'arena']
 const mb = (b) => `${(b / 1048576).toFixed(1)} MB`
 
-function run(calls, shape = LANES) {
+function run(calls, shape = LANES, { medium = 'file', heapMb = HEAP_MB, every = 4 } = {}) {
   const home = path.join(tmpDir('trocar-extract-heap-'), '.trocar')
   const s = bigSession({ home, ...shape })
   s.append(calls)
   let out
   try {
-    out = execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', `--max-old-space-size=${HEAP_MB}`, '--input-type=module', '-e', CHILD, home, s.id],
+    out = execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', `--max-old-space-size=${heapMb}`, '--input-type=module', '-e', CHILD, home, s.id, medium, String(every)],
       { encoding: 'utf8', maxBuffer: 1 << 20, stdio: ['ignore', 'pipe', 'pipe'] })
   } catch (e) {
-    assert.fail(`extracting ${calls} calls at ${HEAP_MB} MB did not finish (exit ${e.status}): ${String(e.stderr).split('\n').find((l) => /FATAL|Error/.test(l)) || ''}`)
+    assert.fail(`extracting ${calls} calls (${medium}) at ${heapMb} MB did not finish (exit ${e.status}): ${String(e.stderr).split('\n').find((l) => /FATAL|Error/.test(l)) || ''}`)
   }
   const r = JSON.parse(out)
   assert.equal(r.done, r.total)
   assert.equal(r.total, calls)
   return r
 }
-const peakOf = (calls, shape) => run(calls, shape).peak
+const peakOf = (calls, shape, o) => run(calls, shape, o).peak
 
-test(`extraction peaks under half the heap, and ${2 * N} calls peak no higher than ${N} plus SLACK_PER_CALL a call`, () => {
-  const one = peakOf(N), two = peakOf(2 * N)
-  for (const p of [one, two]) assert.ok(p < (HEAP_MB << 20) / 2, `peak ${mb(p)} at a ${HEAP_MB} MB heap`)
-  assert.ok(two - one <= N * SLACK_PER_CALL, `${N} calls peak at ${mb(one)}, ${2 * N} at ${mb(two)}: past ${SLACK_PER_CALL} bytes for each added call`)
+for (const medium of MEDIA) {
+  test(`extraction into the ${medium} peaks under half the heap, and ${2 * N} calls peak no higher than ${N} plus SLACK_PER_CALL a call`, () => {
+    const one = peakOf(N, SHAPED, { medium }), two = peakOf(2 * N, SHAPED, { medium })
+    for (const p of [one, two]) assert.ok(p < (HEAP_MB << 20) / 2, `${medium}: peak ${mb(p)} at a ${HEAP_MB} MB heap`)
+    assert.ok(two - one <= N * SLACK_PER_CALL, `${medium}: ${N} calls peak at ${mb(one)}, ${2 * N} at ${mb(two)}: past ${SLACK_PER_CALL} bytes for each added call`)
+  })
+}
+
+// a cluster of records megabytes each (files read into the context), so sixteen records in a row store far more than CHUNK_STORED:
+// what extraction holds at once is a chunk by stored bytes, so its peak stays within the work the session reserves for it
+test('extraction through records of megabytes peaks within the work reserved for it (working())', () => {
+  const r = run(32, { wire: 'http', growth: 2_000, subEvery: 0, bigEvery: 16, bigRun: 16, bigBytes: 15_500_000 }, { heapMb: WORKER_MEMORY_MB, every: 1 })
+  assert.ok(r.peak <= r.working, `peak ${mb(r.peak)} above the ${mb(r.working)} reserved`)
 })
 
 test('one lane that never compacts peaks under half the heap', () => {

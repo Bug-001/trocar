@@ -16,9 +16,9 @@
 // reduction whose MEASURED heap passes what was reserved stops (HeapBound, checked per row folded) and the session is cut again
 // by the rows it got through.
 import { reduction } from '../../view/reduce.mjs';
-import { extractMembers, blockAt } from '../../view/extract.mjs';
+import { extractMembers, blockAt, CHUNK_STORED } from '../../view/extract.mjs';
 import { compareStep } from '../../view/step-order.mjs';
-import { recordsAt } from '../records.mjs';
+import { recordsAt, STRETCH_HEAP } from '../records.mjs';
 import { indexRows, sessionGroups } from '../rows.mjs';
 import { openProjection, posCmp, STORE_HEAP } from '../projection.mjs';
 import { rowsKey, warmCache, fsTag, heapBudget, heapCeiling, hold, steadyBytes, liveHeap, usedHeap } from '../warm.mjs';
@@ -31,8 +31,7 @@ export const params = Object.freeze(['id', 'since', 'before', 'limit']);
 /** What the reduction keeps in the heap per row (a call's row and facts, its lane's reduced state, a block list's ints), until a
  *  reduction of THIS session measured it (HeapBound below). */
 export const SPINE_PER_ROW = 16 * 1024;
-// What extraction reads at once, in stored bytes (its chunk of records), and what that work costs in the heap per stored byte.
-const CHUNK_STORED = 8 * 1048576;
+// What extraction's work costs in the heap per stored byte of what it reads at once (CHUNK_STORED, src/view/extract.mjs).
 const WORK_PER_STORED = 4;
 // The cut moves by the rows 1/BOUND_STEPS of the budget holds, so a live session is not reduced from scratch on every new row.
 const BOUND_STEPS = 10;
@@ -43,11 +42,11 @@ const calls = (rs) => rs.reduce((n, r) => n + (r.is_llm && !r.log_only ? 1 : 0),
 const stored = (rs) => rs.reduce((n, r) => n + (r.stored_bytes || 0), 0);
 const mb = (n) => Math.round((n / 1048576) * 10) / 10;
 /** What reducing `rows` costs besides its rows' spine, reserved before anything is read: a chunk being extracted and the largest
- *  row, rounded up to a power of two so a new largest row does not move the cut. */
+ *  row, rounded up to a power of two so a new largest row does not move the cut, and the read's shared caches (STRETCH_HEAP). */
 export function working(rows) {
   let max = 1;
   for (const r of rows) max = Math.max(max, r.stored_bytes || 0);
-  return (CHUNK_STORED + 2 ** Math.ceil(Math.log2(max))) * WORK_PER_STORED;
+  return (CHUNK_STORED + 2 ** Math.ceil(Math.log2(max))) * WORK_PER_STORED + STRETCH_HEAP;
 }
 /** The rows (in step order) a reduction reads: all while their spine fits the budget beside the work and the steady caches
  *  (`others`, counted in whole steps so their refreshes do not move it; the other caches give way), else the newest that do less
