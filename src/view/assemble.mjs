@@ -486,7 +486,15 @@ function respRefsOf(rec) {
 }
 
 // 4.6 R2 「不成块的顶层键逐个列出」: every top-level request key that is not a block section, each with a
-// locator to its verbatim value (null when the record cannot be addressed).
+// locator to its verbatim value (null when the record cannot be addressed). 2.6 §A 请求参数: a short scalar — a number, a
+// boolean, a string of at most SHORT_STRING characters — also ships as `value` (only its own byte slice is parsed).
+const SHORT_STRING = 40;
+function scalarOf(text, node) {
+  if (node.kind !== 'literal' && !(node.kind === 'string' && node.end - node.start <= SHORT_STRING * 6 + 2)) return undefined;
+  let v;
+  try { v = JSON.parse(text.slice(node.start, node.end)); } catch { return undefined; }
+  return typeof v === 'number' || typeof v === 'boolean' || (typeof v === 'string' && v.length <= SHORT_STRING) ? v : undefined;
+}
 function nonBlockKeysOf(rec, format) {
   if (!rec || typeof rec.req_body !== 'string') return [];
   let root = null;
@@ -495,7 +503,11 @@ function nonBlockKeysOf(rec, format) {
   const keep = blockKeysOf(format);
   const base = rawRefOf(rec);
   const out = [];
-  for (const [key, node] of root.props) if (!keep.includes(key)) out.push({ key, chars: node.end - node.start, ref: base ? composeTextRef(base, [node.start, node.end]) : null });
+  for (const [key, node] of root.props) {
+    if (keep.includes(key)) continue;
+    const value = scalarOf(rec.req_body, node);
+    out.push({ key, chars: node.end - node.start, ref: base ? composeTextRef(base, [node.start, node.end]) : null, ...(value !== undefined ? { value } : {}) });
+  }
   return out;
 }
 
