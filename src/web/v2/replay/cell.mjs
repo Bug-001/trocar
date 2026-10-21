@@ -91,17 +91,10 @@ export function inlineText(b) {
 // ── the cell object ───────────────────────────────────────────────────────────────────────────────────────────────────
 const fnv = (s) => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193); return (h >>> 0).toString(36) }
 const synth = (text) => `i:${text.length}:${fnv(text)}` // an identity derived from the inline bytes themselves
-// the render spec of a reply part until reply parts become definitions (replyOf()'s own vocabulary)
-const PART_R = { text: { as: 'text', f: { body: ['text'] } }, thinking: { as: 'text', tone: 'quiet', f: { body: ['thinking'] } }, tool_use: { as: 'kv', f: { body: ['input'] } } }
-
-// a flat definition ({sec, …}), a reply part ({kind, block}) or a non-block key ({key, ref, chars}) as a cell. `x.inline` is a
-// body the caller already holds.
+// a flat definition ({sec, …}), a non-block key ({key, ref, chars}) or a body the caller holds ({inline, r}) as a cell. `x.inline`
+// is that body: the text the cell shows and copies, never an envelope made up around it (a parsed reply part is its own text).
 export function cellOf(x) {
   const held = typeof x.inline === 'string' ? x.inline : undefined
-  if (x.sec == null && x.block !== undefined) {
-    const inline = held ?? JSON.stringify(x.block) ?? ''
-    return { bid: x.bid || synth(inline), inline, r: x.r || PART_R[x.kind] || { as: 'text' }, ff: x.ff ?? null, chars: inline.length, preview: x.preview ?? '' }
-  }
   if (x.sec == null && x.ref) return { bid: 'nbk:' + x.ref, ref: x.ref, inline: held, r: x.r || { as: 'text' }, ff: x.ff ?? null, chars: x.chars ?? held?.length ?? 0, preview: x.preview ?? '' }
   const ref = isAddressed(x) ? x.text_ref : undefined
   const inline = held ?? (ref ? undefined : String(inlineText(x) ?? ''))
@@ -159,7 +152,7 @@ function first(cell, mode, text) {
     return { body: (o.html.startsWith('\n') ? '\n' : '') + o.html, next: o.next, state: o.state, shown: o.next ?? text.length, cls: '' }
   }
   const o = renderKind(cell.r, valueOf(text), { budget: DISPLAY_CLIP, bid: cell.bid })
-  return { body: o.html, next: o.more, state: null, shown: o.more ?? text.length, cls: o.cls }
+  return { body: o.html, next: o.more, state: null, shown: o.more ?? o.shown ?? text.length, cls: o.cls }
 }
 // the next slice of a drawn entry → {html, entry} (a new entry; the old one is left as it was)
 function grow(cell, mode, entry, text) {
@@ -213,6 +206,14 @@ function held(el) {
   const cell = el && cells.get(el.dataset.ck), got = cell && gotOf(cell)
   return got && got.status === 'ok' ? { cell, text: String(got.text ?? '') } : null
 }
+// the same, asking for the bytes again when they left bodyCache while the cell stayed open (the cache is bounded; a cell is a ref)
+let api = null
+async function hold(el) {
+  const x = held(el), cell = !x && el && cells.get(el.dataset.ck)
+  if (x || !cell || cell.ref == null || cell.inline !== undefined || !api) return x
+  await loadBody(api, cell.ref)
+  return held(el)
+}
 function blobOf(el) {
   const x = held(el), f = (x && x.cell.r && x.cell.r.f) || {}
   if (!x || !Array.isArray(f.data)) return null
@@ -238,7 +239,8 @@ function say(msg) {
 // draw a .cell again in its current mode; focus inside it moves to the same control of the new one
 function redraw(el, opt) {
   const x = held(el)
-  if (!x || !el.isConnected) return
+  if (!x) { hold(el).then((y) => { if (y) redraw(el, opt) }); return }
+  if (!el.isConnected) return
   const a = document.activeElement, inside = a && el.contains(a), which = inside && a.dataset ? (a.dataset.cellmode ?? (a.dataset.cellcopy != null ? 'copy' : null)) : null
   el.insertAdjacentHTML('beforebegin', cellBodyHtml(x.cell, modeOf(x.cell.bid, opt)))
   const neu = el.previousElementSibling
@@ -246,7 +248,7 @@ function redraw(el, opt) {
   if (inside && neu) (neu.querySelector(which === 'copy' ? '[data-cellcopy]' : `[data-cellmode="${which}"]`) || neu).focus?.()
 }
 async function copyBytes(el) {
-  const x = held(el)
+  const x = held(el) ?? await hold(el)
   if (!x) { say(C.COPY_FAILED); return }
   const n = new TextEncoder().encode(x.text).length
   try { await navigator.clipboard.writeText(x.text); say(C.copied(n)); return } catch { /* no clipboard API here: the textarea way */ }
@@ -279,29 +281,41 @@ export function wireCells(roots, s = {}) {
   const els = [].concat(roots).filter((r) => r && r.nodeType === 1), rs = els.filter((r) => !els.some((o) => o !== r && o.contains(r)))
   if (!rs.length) return () => {}
   const opt = { storage: s.storage }
+  api = s.ctx?.api ?? api
   const each = (sel, fn) => { for (const r of rs) for (const el of r.querySelectorAll(sel)) fn(el) }
   const sameBid = (bid, fn) => each('.cell', (el) => { if (el.dataset.bid === bid) fn(el) })
   function flip(el, m) {
-    const x = held(el)
-    if (!x) return
-    setMode(x.cell.bid, m ?? (modeOf(x.cell.bid, opt) === 'raw' ? 'read' : 'raw'), opt)
-    const now = modeOf(x.cell.bid, opt)
-    sameBid(x.cell.bid, (c) => redraw(c, opt))
+    const bid = el.dataset.bid
+    setMode(bid, m ?? (modeOf(bid, opt) === 'raw' ? 'read' : 'raw'), opt)
+    const now = modeOf(bid, opt)
+    sameBid(bid, (c) => redraw(c, opt))
     say(now === 'read' ? C.READABLE_VIEW : C.RAW_VIEW)
   }
-  function flipDesk() { // the open cells again, in frames of at most 8 ms
+  // Shift+V: every open cell is stale; one is drawn again when it comes within a viewport of the view, a few per frame, so
+  // the cells in view go first and the rest only as the reader reaches them (style and layout land with each redraw)
+  const q = []
+  let pumping = false
+  const pump = () => {
+    if (pumping) return
+    pumping = true
+    requestAnimationFrame(function step() {
+      const t0 = performance.now()
+      for (let n = 0; q.length && n < 4 && performance.now() - t0 < 4; n++) redraw(q.shift(), opt)
+      if (q.length) requestAnimationFrame(step); else pumping = false
+    })
+  }
+  const stale = new IntersectionObserver((ents) => {
+    for (const en of ents) if (en.isIntersecting || !en.target.isConnected) { stale.unobserve(en.target); if (en.isIntersecting) q.push(en.target) }
+    pump()
+  }, { rootMargin: '100% 0px' })
+  function flipDesk() {
     setDeskMode(deskMode(opt) === 'raw' ? 'read' : 'raw', opt)
     say(deskMode(opt) === 'read' ? C.READABLE_VIEW : C.RAW_VIEW)
-    const q = []; each('.cell', (el) => q.push(el))
-    const step = () => {
-      const t0 = performance.now()
-      while (q.length && performance.now() - t0 < 8) redraw(q.shift(), opt)
-      if (q.length) requestAnimationFrame(step)
-    }
-    requestAnimationFrame(step)
+    stale.disconnect(); q.length = 0 // a cell from an earlier flip is stale again (or gone)
+    each('.cell', (el) => stale.observe(el))
   }
-  function more(sent) { // append the next slice where the reader is heading
-    const el = sent.isConnected && sent.closest('.cell'), x = held(el)
+  async function more(sent) { // append the next slice where the reader is heading
+    const el = sent.isConnected && sent.closest('.cell'), x = held(el) ?? await hold(el)
     if (!x) return
     const mode = el.dataset.mode, shown = Number(el.dataset.shown) || 0
     const e = entryOf(x.cell, mode, x.text, shown)
@@ -348,15 +362,15 @@ export function wireCells(roots, s = {}) {
     e.clipboardData.setData('text/plain', x.text.slice(offsetIn(pre, r.startContainer, r.startOffset), offsetIn(pre, r.endContainer, r.endOffset)))
     e.preventDefault()
   }
-  const onToggle = (e) => { // a json node opened for the first time: draw its children now
+  const onToggle = async (e) => { // a json node opened for the first time: draw its children now
     const d = e.target
     if (!d || d.tagName !== 'DETAILS' || !d.open || d.dataset.path == null || d.children.length > 1) return
-    const x = held(d.closest('.cell'))
+    const el = d.closest('.cell'), x = held(el) ?? await hold(el)
     if (!x) return
     let path
     try { path = JSON.parse(d.dataset.path) } catch { return }
     const v = valueOf(x.text), body = Array.isArray(x.cell.r?.f?.body) ? at(v, x.cell.r.f.body) : v
-    d.insertAdjacentHTML('beforeend', jsonNodeHtml(body, path, d.dataset.span ? d.dataset.span.split(',').map(Number) : undefined))
+    d.insertAdjacentHTML('beforeend', jsonNodeHtml(body, path, d.dataset.span ? d.dataset.span.split(',').map(Number) : undefined, { q: d.dataset.q != null, budget: DISPLAY_CLIP }))
   }
   const mos = rs.map((r) => {
     const mo = new MutationObserver((recs) => { for (const rec of recs) for (const n of rec.addedNodes) hook(n) })
@@ -367,7 +381,7 @@ export function wireCells(roots, s = {}) {
   })
   return () => {
     for (const mo of mos) mo.disconnect()
-    io.disconnect()
+    io.disconnect(); stale.disconnect(); q.length = 0
     for (const r of rs) { r.removeEventListener('click', onClick); r.removeEventListener('keydown', onKey); r.removeEventListener('copy', onCopy); r.removeEventListener('toggle', onToggle, true) }
   }
 }

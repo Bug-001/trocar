@@ -84,8 +84,10 @@ export function blockBodyHtml(got, b) {
     const why = got.error || got.reason || 'the capture could not be read'
     return `<div class="cbsrc warn" title="locator: ${esc(b.text_ref || '—')}">${esc(W.HALF_MARK + ' ' + ffWord('notfetched') + ' — ' + why)}</div>`
   }
+  // the cached answer is read by ref (the cell LRU then holds refs, not bodies, and the blob of a media cell is keyed r:<ref>);
+  // only an answer the cache does not hold rides inline
   const cell = cellOf(b)
-  return cellBodyHtml({ ...cell, inline: String(got.text ?? '') }, modeOf(cell.bid))
+  return cellBodyHtml(cell.ref != null && bodyCache.get(cell.ref) === got ? cell : { ...cell, inline: String(got.text ?? '') }, modeOf(cell.bid))
 }
 // the body of an opened row right now: inline, from the cache, or the pending state (the caller then loads it)
 export function bodyFor(b) {

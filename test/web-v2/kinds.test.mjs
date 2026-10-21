@@ -56,6 +56,36 @@ test('slicing: the more chain covers the whole string with no gap or overlap', (
   }
 })
 
+test('one draw spends at most its budget on strings; a cut string opens the rest a slice at a time, no gap or overlap (§4.5)', () => {
+  const ALPHA = ['a', 'Z', ' ', '\u{1F600}', 'é'] // nothing JSON escapes, so a drawn character is a source character
+  const long = (n) => { let s = ''; while (s.length < n) s += pick(ALPHA); return s }
+  const blank = (v) => typeof v === 'string' ? '' : Array.isArray(v) ? v.map(blank) : Object.fromEntries(Object.entries(v).map(([k, x]) => [k, blank(x)]))
+  const bare = (h) => textOf(h.replace(/<summary>[^<]*<\/summary>/g, ''))
+  for (let i = 0; i < 40; i++) {
+    const budget = 1 + Math.floor(rnd() * 3000), s = long(budget * (2 + Math.floor(rnd() * 5))), t = long(Math.floor(rnd() * 50))
+    for (const [r, v] of [[{ as: 'json' }, { a: s, b: [t, s] }], [{ as: 'kv' }, { a: s, b: t, c: s }], [undefined, { k: [s] }], [{ as: 'parts' }, [s, t]]]) {
+      const out = renderKind(r, v, { budget }), skel = bare(renderKind(r, blank(v), { budget: Infinity }).html).length
+      assert.ok(bare(out.html).length - skel <= budget + 1, `${JSON.stringify(r)}: drawn past the budget`) // +1: a pair is never split
+      assert.ok(out.shown != null && out.shown <= budget, 'the cut is reported to the cell')
+      let chains = 0
+      for (const m of out.html.matchAll(/<details class="j-more" data-path="([^"]*)" data-span="(\d+),(\d+)"( data-q="")?>/g)) {
+        const path = JSON.parse(textOf(m[1])), q = !!m[4], whole = path.reduce((x, k) => x[k], v)
+        let a = +m[2], got = ''
+        while (a != null) {
+          const h = jsonNodeHtml(v, path, [a, whole.length], { q, budget }), nx = /data-span="(\d+),/.exec(h)
+          assert.ok(bare(h).length <= budget + 2, 'a continuation is one slice')
+          got += bare(h)
+          if (nx) assert.ok(+nx[1] > a, 'progress')
+          a = nx ? +nx[1] : null
+        }
+        assert.equal(got, q ? JSON.stringify(whole.slice(+m[2])).slice(1) : whole.slice(+m[2]))
+        chains++
+      }
+      assert.ok(chains > 0, 'the rest of a cut string is reachable')
+    }
+  }
+})
+
 test('shell: a $ prompt followed by the command; argv is joined; note and other keys are drawn below', () => {
   for (let i = 0; i < 200; i++) {
     const argv = rnd() < 0.5

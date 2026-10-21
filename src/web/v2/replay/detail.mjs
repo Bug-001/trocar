@@ -34,7 +34,7 @@ function outputHtml(c) {
   if (c.paged_out) return `<div class="din">${esc(W.REPLY_WORD)}: <span class="pobadge">${esc(W.PAGED_TITLE)}</span></div>`
   const out = (c.norm && c.norm.text) || ''
   if (!out) return `<div class="din">${esc(W.REPLY_WORD)}: <b>(none)</b></div>`
-  const cell = cellOf({ kind: 'text', block: { type: 'text', text: out } })
+  const cell = cellOf({ inline: out, r: { as: 'text' } }) // the parsed text itself; replyMarkHtml says it is parsed
   return `<div class="din">${esc(W.REPLY_WORD)} ${replyMarkHtml(c)}</div>` + cellBodyHtml(cell, modeOf(cell.bid))
 }
 

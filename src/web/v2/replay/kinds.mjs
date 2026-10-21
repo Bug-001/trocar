@@ -5,11 +5,14 @@
 //
 // renderKind returns {html, more, cls}: `html` is the inner markup, `cls` the classes of the wrapper the CALLER puts around it
 // (`<div class="cellread ${cls}">`, kind class plus tone class), `more` the next `from` when only a slice of a long string was
-// drawn (text and code only; `bid` names a media cell's img), else null. A continuation slice is appended inside the same wrapper. Nested children (kv,
-// sections, parts) carry their own `<div class="kd-… tone-…">` and are drawn whole.
+// drawn (text, code and markdown; `bid` names a media cell's img), else null; `shown` the characters drawn when a nested part
+// was cut (else null). A continuation slice is appended inside the same wrapper. Nested children (kv, sections, parts) carry
+// their own `<div class="kd-… tone-…">`. One draw spends at most `budget` characters of string (B.c): a string past what is left
+// is cut, and the rest of it opens from a `j-more` disclosure, a slice at a time (jsonNodeHtml); a nested diff or sections
+// string past it is drawn as text.
 // Security: every byte of input goes through esc(); only the elements and attributes of plan §2.2 are emitted.
 import { esc, has, enc, bytes } from '../core/fmt.mjs'
-import { failAs, opaqueLine, mediaAlt, BEFORE, AFTER, SAVE } from '../labels/cells.mjs'
+import { failAs, opaqueLine, mediaAlt, moreChars, BEFORE, AFTER, SAVE } from '../labels/cells.mjs'
 
 const CLASS = { sections: 'kd-sec', markdown: 'kd-md' } // every other kind's class is kd-<as>
 const TONE = { error: 'tone-error', quiet: 'tone-quiet' }
@@ -31,7 +34,7 @@ const asText = (v) => { if (typeof v === 'string') return v; try { return JSON.s
 
 // a slice of s from `from`, ending at a line end inside the budget when there is one, never inside a surrogate pair
 function slice(s, from, budget) {
-  let end = Math.min(s.length, from + Math.max(1, budget))
+  let end = Math.min(s.length, from + Math.max(0, budget))
   if (end < s.length) {
     const nl = s.lastIndexOf('\n', end - 1)
     if (nl >= from) end = nl + 1
@@ -39,16 +42,27 @@ function slice(s, from, budget) {
   }
   return [s.slice(from, end), end < s.length ? end : null]
 }
+const take = (o, s) => { if (o.B) o.B.c -= s.length; return s } // spend the draw's character budget
+// s[a, …) drawn within the budget left; the rest behind a disclosure that jsonNodeHtml opens (q: inside a JSON string literal)
+function cutStr(s, a, B, path, q) {
+  const [part, end] = slice(s, a, B.c)
+  B.c -= part.length
+  const body = q ? JSON.stringify(part).slice(1, -1) + (end == null ? '"' : '') : part // the opening quote is prim's
+  if (end == null) return shown(body)
+  B.cut = true
+  return shown(body) + (path ? `<details class="j-more" ${dpath(path)} data-span="${end},${s.length}"${q ? ' data-q=""' : ''}><summary>${esc(moreChars(s.length - end))}</summary></details>` : '')
+}
 
 // ── the renderers: (r, body, value, o) → {html, more?, as?}; `as` re-dispatches (text over a non-string is json) ─────────
 function text(r, b, v, o) {
   if (typeof b !== 'string') return { as: 'json' }
   const [s, more] = slice(b, o.from, o.budget)
-  return { html: shown(s), more }
+  return { html: shown(take(o, s)), more }
 }
 function code(r, b, v, o) {
   if (typeof b !== 'string') return { as: 'json' }
   const [s, more] = slice(b, o.from, o.budget)
+  take(o, s)
   const atStart = o.from === 0 || b[o.from - 1] === '\n'
   let html = o.from === 0 && r.title != null ? `<div class="kd-title">${esc(r.title)}</div>` : ''
   html += s.split('\n').map((line, i) => {
@@ -60,7 +74,7 @@ function code(r, b, v, o) {
 }
 // for display only: an argv array as one line a shell would read back
 const quote = (a) => (/^[\w./=:,@%+-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)
-function shell(r, b, v) {
+function shell(r, b, v, o) {
   const f = r.f || {}, cmd = get(v, f.cmd), note = f.note && get(v, f.note)
   const line = typeof cmd === 'string' ? cmd : Array.isArray(cmd) && cmd.length && cmd.every((a) => typeof a === 'string') ? cmd.map(quote).join(' ') : fail()
   let html = `<div><span class="sh-ps">$</span> ${shown(line)}</div>`
@@ -69,28 +83,28 @@ function shell(r, b, v) {
     const own = (p) => Array.isArray(p) && p.length === (f.body?.length ?? 0) + 1 && (f.body ?? []).every((k, i) => k === p[i]) ? p.at(-1) : undefined
     const skip = new Set([own(f.cmd), own(f.note)])
     const rest = Object.keys(b).filter((k) => !skip.has(k))
-    if (rest.length) html += `<dl class="kd-kv">${rest.map((k) => `<dt>${esc(k)}</dt><dd>${child(r.kids?.[k], b[k])}</dd>`).join('')}</dl>`
+    if (rest.length) html += `<dl class="kd-kv">${rest.map((k) => `<dt>${esc(k)}</dt><dd>${child(r.kids?.[k], b[k], o, k)}</dd>`).join('')}</dl>`
   }
   return { html }
 }
-function kv(r, b) {
+function kv(r, b, v, o) {
   if (!b || typeof b !== 'object') fail()
-  return { html: `<dl class="kd-kv">${Object.keys(b).map((k) => `<dt>${esc(k)}</dt><dd>${child(r.kids?.[k], b[k])}</dd>`).join('')}</dl>` }
+  return { html: `<dl class="kd-kv">${Object.keys(b).map((k) => `<dt>${esc(k)}</dt><dd>${child(r.kids?.[k], b[k], o, k)}</dd>`).join('')}</dl>` }
 }
-function sections(r, b) {
+function sections(r, b, v, o) {
   if (typeof b !== 'string') fail()
   const open = /<([A-Za-z][\w:.-]*)(?:\s[^<>]*)?>/g
   let html = '', at = 0, i = 0, m
   while ((m = open.exec(b))) {
     const close = `</${m[1]}>`, end = b.indexOf(close, open.lastIndex)
     if (end < 0) continue
-    if (m.index > at) html += child(undefined, b.slice(at, m.index))
-    html += `<div><span class="sec-tag">${esc(m[1])}</span>${child(r.kids?.[i], b.slice(open.lastIndex, end))}</div>`
+    if (m.index > at) html += child(undefined, b.slice(at, m.index), o)
+    html += `<div><span class="sec-tag">${esc(m[1])}</span>${child(r.kids?.[i], b.slice(open.lastIndex, end), o)}</div>`
     i++
     at = open.lastIndex = end + close.length
   }
   if (!i) fail()
-  if (at < b.length) html += child(undefined, b.slice(at))
+  if (at < b.length) html += child(undefined, b.slice(at), o)
   return { html }
 }
 function opaque(r, b, v) {
@@ -98,13 +112,15 @@ function opaque(r, b, v) {
   if (sig === undefined) fail()
   return { html: esc(opaqueLine(enc(typeof sig === 'string' ? sig : JSON.stringify(sig)))) }
 }
-function parts(r, b) {
+function parts(r, b, v, o) {
   if (!Array.isArray(b)) fail()
-  return { html: b.map((x, i) => child(r.kids?.[i], x)).join('') }
+  return { html: b.map((x, i) => child(r.kids?.[i], x, o, i)).join('') }
 }
-function json(r, b) {
+function json(r, b, v, o) {
   if (typeof b === 'string') { try { b = JSON.parse(b) } catch { fail() } }
-  return { html: node('', b, [], 0, { n: FIRST - 1 }) }
+  const B = { n: FIRST - 1, c: o.B.c, cut: false }, html = node('', b, o.path ?? [], 0, B)
+  o.B.c = B.c; o.B.cut ||= B.cut
+  return { html }
 }
 // ── markdown: a subset; every byte is text through esc(), so raw HTML in the source shows as text and a link is its text
 // plus its URL, never an anchor ─────────────────────────────────────────────────────────────────────────────────────
@@ -123,9 +139,9 @@ function inl(s) {
 const SEP = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/
 const cellsOf = (l) => l.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim())
 const row = (l, t) => `<tr>${cellsOf(l).map((c) => `<${t}>${inl(c)}</${t}>`).join('')}</tr>`
-function markdown(r, b) {
+function markdown(r, b, v, o) {
   if (typeof b !== 'string') fail()
-  const L = b.split('\n')
+  const [src, more] = slice(b, o.from, o.budget), L = take(o, src).split('\n')
   let h = '', para = [], m
   const flush = () => { if (para.length) h += `<div>${para.map(inl).join('\n')}</div>`; para = [] }
   for (let i = 0; i < L.length; i++) {
@@ -133,7 +149,7 @@ function markdown(r, b) {
     if ((m = /^\s*(`{3,}|~{3,})/.exec(l))) { // a fence: drawn by the code renderer; an unclosed one runs to the end
       let e = i + 1
       while (e < L.length && !L[e].trim().startsWith(m[1])) e++
-      put(child({ as: 'code' }, L.slice(i + 1, e).join('\n')))
+      put(child({ as: 'code' }, L.slice(i + 1, e).join('\n'), o))
       i = e
     } else if (l.includes('|') && SEP.test(L[i + 1] ?? '') && L[i + 1].includes('-')) {
       let rows = row(l, 'th')
@@ -147,7 +163,7 @@ function markdown(r, b) {
     else flush()
   }
   flush()
-  return { html: h }
+  return { html: h, more }
 }
 
 // ── diff: unified only; every changed line starts with its sign character ────────────────────────────────────────────
@@ -240,7 +256,7 @@ function media(r, b, v, o) {
 const R = { text, code, shell, json, kv, sections, opaque, parts, markdown, diff, media }
 
 // ── json tree: <details> per object / array; 2 levels open on a first paint, at most FIRST nodes; the rest closed and empty ─
-const prim = (v) => typeof v === 'string' ? `<span class="j-str">${shown(JSON.stringify(v))}</span>`
+const prim = (v, path, B) => typeof v === 'string' ? `<span class="j-str">&quot;${cutStr(v, 0, B, path, true)}</span>`
   : typeof v === 'number' ? `<span class="j-num">${esc(String(v))}</span>` : `<span class="j-lit">${esc(String(v))}</span>`
 const keyOf = (k) => `<span class="j-key">${esc(typeof k === 'number' ? String(k) : JSON.stringify(k))}</span>: `
 const dpath = (path) => `data-path="${esc(JSON.stringify(path))}"`
@@ -249,7 +265,7 @@ const shown1 = (n) => (n <= GROUP ? n : Math.ceil(n / size(n))) // the disclosur
 // B.n = nodes left; opening a container pays for all the disclosures it shows at once, so later siblings are already paid for
 const opens = (n, d, B) => { const k = shown1(n); if (n > 0 && d < 2 && B.n >= k) { B.n -= k; return true } return false }
 function node(label, v, path, d, B) {
-  if (v === null || typeof v !== 'object') return `<div>${label}${prim(v)}</div>`
+  if (v === null || typeof v !== 'object') return `<div>${label}${prim(v, path, B)}</div>`
   const keys = Array.isArray(v) ? null : Object.keys(v), n = keys ? keys.length : v.length
   const open = opens(n, d, B)
   return `<details${open ? ' open' : ''} ${dpath(path)}><summary>${label}<span class="j-lit">${keys ? `{${n}}` : `[${n}]`}</span></summary>${open ? entries(v, keys, path, 0, n, d + 1, B) : ''}</details>`
@@ -267,37 +283,46 @@ function entries(v, keys, path, a, b, d, B) {
   }
   return h
 }
-// the children of one closed json node (or of one group, span = [a, b) from its data-span), for when it is opened
-export function jsonNodeHtml(value, path, span) {
+// the children of one closed json node (or of one group, span = [a, b) from its data-span), for when it is opened; for a
+// string (a j-more disclosure, q: inside a JSON literal) the next `budget` characters of it from span[0]
+export function jsonNodeHtml(value, path, span, { q = false, budget = 20000 } = {}) {
   const v = get(value, path)
+  if (typeof v === 'string') { const a = Array.isArray(span) ? span[0] : 0; return a >= 0 && a < v.length ? `<span class="j-str">${cutStr(v, a, { c: budget }, path, q)}</span>` : '' }
   if (v === null || typeof v !== 'object') return ''
   const keys = Array.isArray(v) ? null : Object.keys(v), n = keys ? keys.length : v.length
   const [a, b] = Array.isArray(span) ? span : [0, n]
-  const lo = Math.max(0, a), hi = Math.min(n, b), B = { n: FIRST - shown1(hi - lo) }
+  const lo = Math.max(0, a), hi = Math.min(n, b), B = { n: FIRST - shown1(hi - lo), c: budget }
   return entries(v, keys, path, lo, hi, 2, B)
 }
 
 // ── dispatch ────────────────────────────────────────────────────────────────────────────────────────────────────────
 const toneOf = (r) => (r && has(TONE, r.tone) ? ' ' + TONE[r.tone] : '')
+const WHOLE = new Set(['diff', 'sections']) // kinds that draw a string whole: past the budget it is text, sliced
 function draw(r, value, o) {
   let as = r && typeof r.as === 'string' && has(R, r.as) ? r.as : 'text'
   const tone = toneOf(r)
   try {
     const body = get(value, r?.f?.body)
     if (body === undefined && r?.f?.body != null) fail()
+    if (WHOLE.has(as) && typeof body === 'string' && (o.from > 0 || body.length > o.budget)) as = 'text'
     let out = R[as](r || {}, body, value, o)
     if (out.as) { as = out.as; out = R[as](r || {}, has(out, 'body') ? out.body : body, value, o) }
     return { html: out.html, more: out.more ?? null, cls: (CLASS[as] || 'kd-' + as) + tone }
   } catch {
     const [s, more] = slice(asText(value), o.from, o.budget)
-    return { html: (o.from === 0 ? `<div class="kd-fail">${esc(failAs(as))}</div>` : '') + shown(s), more, cls: 'kd-text' + tone }
+    return { html: (o.from === 0 ? `<div class="kd-fail">${esc(failAs(as))}</div>` : '') + shown(take(o, s)), more, cls: 'kd-text' + tone }
   }
 }
 export function renderKind(r, value, { from = 0, budget = 20000, bid } = {}) {
-  return draw(r, value, { from, budget, bid })
+  const B = { c: budget, cut: false }, out = draw(r, value, { from, budget, bid, B, path: [] })
+  return { ...out, shown: out.more == null && B.cut ? budget - Math.max(0, B.c) : null }
 }
-// a nested child: drawn whole, inside its own kind wrapper; a missing spec is text
-function child(r, v) {
-  const out = draw(r || { as: 'text' }, v, { from: 0, budget: Infinity })
-  return `<div class="${out.cls}">${out.html}</div>`
+// a nested child, inside its own kind wrapper, drawn within the budget left; a missing spec is text. `key` extends the path
+// from the body (null when the child is not a value at a path, as a sections substring is): a cut string's rest opens there.
+function child(r, v, o, key) {
+  const path = o.path && key !== undefined ? [...o.path, key] : null
+  const out = draw(r || { as: 'text' }, v, { from: 0, budget: Math.max(0, o.B.c), bid: o.bid, B: o.B, path })
+  if (out.more != null) o.B.cut = true
+  const rest = out.more != null && typeof v === 'string' && path ? `<details class="j-more" ${dpath(path)} data-span="${out.more},${v.length}"><summary>${esc(moreChars(v.length - out.more))}</summary></details>` : ''
+  return `<div class="${out.cls}">${out.html}${rest}</div>`
 }

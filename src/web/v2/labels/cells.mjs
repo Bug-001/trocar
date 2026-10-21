@@ -22,6 +22,7 @@ export const KIND_WORD = Object.freeze({
 export const failAs = (k) => `Could not render as ${Object.hasOwn(KIND_WORD, k) ? KIND_WORD[k] : KIND_WORD.text}; shown as text`
 export const showing = (n, N) => `Showing ${grp(n)} of ${grp(N)} characters`
 export const atCap = (n, N) => `Showing the first ${grp(n)} of ${grp(N)} characters · Copy bytes copies all`
+export const moreChars = (n) => `${grp(n)} more characters`
 export const copied = (n) => `Copied ${grp(n)} bytes`
 export const COPY_FAILED = 'Copy failed; select the text and copy it instead'
 export const opaqueLine = (n) => `Encrypted reasoning · signature ${grp(n)} bytes`
