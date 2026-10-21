@@ -51,7 +51,7 @@ const calls = (rs) => rs.reduce((n, r) => n + (r.is_llm && !r.log_only ? 1 : 0),
 const stored = (rs) => rs.reduce((n, r) => n + (r.stored_bytes || 0), 0);
 const mb = (n) => Math.round((n / 1048576) * 10) / 10;
 /** What folding `rows` and answering one page costs besides the spine, reserved before anything is read. */
-function working(rows) {
+export function working(rows) {
   let max = 0;
   for (const r of rows) max = Math.max(max, r.stored_bytes || 0);
   // the baselines may hold one lane's past BASELINE_BYTES (the one in use is always held): `max` covers it
