@@ -47,14 +47,10 @@ const contentOf = (b) => (b.sec === 'messages' ? b.block ?? null : b.sec === 'sy
 // a definition's byte-derived metadata (the rest of a flat entry is its place in the call, or its body)
 const META = ['name', 'ttype', 'toolName', 'cc', 'mcp', 'label', 'descChars', 'props', 'verbatim'];
 const BODY = ['text', 'block', 'desc', 'schema'];
-// drop undefined members, recursively: a definition and a row are JSON documents
-function jsonClean(v) {
-  if (Array.isArray(v)) return v.map((x) => (x === undefined ? null : jsonClean(x)));
-  if (!v || typeof v !== 'object') return v;
-  const o = {};
-  for (const k of Object.keys(v)) if (v[k] !== undefined) o[k] = jsonClean(v[k]);
-  return o;
-}
+// a definition and a row are JSON documents: undefined members dropped, and every string a copy of its own. A string cut out of a
+// record (a regex match, a slice) keeps the whole text it was cut from alive, and a row is held for the life of the session's
+// extraction: on the user's 6.6k-call session that was ~200 KB of heap per row, against ~19 KB for the same row read from disk.
+const jsonClean = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 function factsOf(b) {
   if (b.sec === 'tools') return { type: 'tool', name: b.name || '', mcp: !!b.mcp, bucket: 'tools' };
   if (b.sec === 'system') return { type: 'system', bucket: 'system' };
