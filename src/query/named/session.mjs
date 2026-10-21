@@ -124,6 +124,24 @@ function frontierOf(store, order) {
 }
 
 const states = warmCache({ cost: (v) => v.cost });
+// The store's notes that are D38 records besides (4.3 盘满): the worker passes `ctx.persist`, which sends each to the daemon. The store
+// says each once per episode, so one episode is one record.
+const PERSISTED = new Set(['projection-write-failed']);
+const persisted = (ctx, errors) => { if (ctx.persist) for (const e of errors) if (PERSISTED.has(e.code)) ctx.persist(e); };
+
+/** extendSession(ctx, id, budgetMs) → whether members of the session are still without a row (3.5 后台抽取): one background slice of
+ *  the query worker (`ctx.writer`), the members extracted in write order into the session's warm store until `budgetMs` is spent,
+ *  the index read included. Nothing is reduced here; the next answer reduces what the frontier passed. */
+export async function extendSession(ctx, id, budgetMs) {
+  const t0 = performance.now();
+  const members = sessionGroups((await indexed(ctx)).rows).get(String(id));
+  if (!members) return false;
+  const errors = [], store = storeOf(ctx, String(id), keyOf(ctx, id));
+  const read = (rs) => recordsAt({ home: ctx.home, fs: ctx.fs, rows: rs.filter(Boolean), errors: [], remember: false });
+  const ex = extractMembers({ store, members, recordsAt: read, sessionId: String(id), budgetMs: Math.max(1, budgetMs - (performance.now() - t0)), errors });
+  persisted(ctx, errors);
+  return ex.done < ex.total;
+}
 
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, doc, errors}: the session's members
  *  (`rows`, its index rows), its projection store, the extraction frontier `mark`, `pending: {done, total}` while members above it
@@ -140,6 +158,7 @@ export async function sessionState(ctx, id) {
   // extraction errors are the member's own (its row says why, on every answer), not this request's
   const read = (rs) => { progress(); return recordsAt({ home: ctx.home, fs: ctx.fs, rows: rs.filter(Boolean), errors: [], remember: false }); };
   const ex = extractMembers({ store, members, recordsAt: read, sessionId: String(id), budgetMs: ctx.writer === true ? 50 : Infinity, errors });
+  persisted(ctx, errors);
   const mark = ex.frontier;
   const last = planOf(members, k).order.at(-1);
   const pending = mark == null || posCmp(mark, last) < 0 ? { done: ex.done, total: ex.total } : null;

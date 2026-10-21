@@ -13,6 +13,7 @@ import fs from 'node:fs'
 import { serveFace, request, withToken } from '../server/face.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { within } from '../helpers/bounded.mjs'
 const rowsOf = (doc) => doc.lanes.reduce((n, l) => n + l.count, 0)
 
 const CALLS = 1_500 // ~150 MB stored; the fold before the measured bound kept ~300 KB a call of this shape and died near 1 000
@@ -33,8 +34,10 @@ test('3.5 §内存有界: a cold read of a large real-shaped session answers 200
     assert.equal(list.status, 200)
     const listed = list.doc.sessions.find((x) => x.session_id === s.id)
     assert.ok(listed, 'the session is listed')
+    // a session not yet extracted to its last member answers with `pending` (3.5 后台抽取): asked until it answers without
+    await within((async () => { for (;;) { const a = await get('session', { id: s.id, limit: '60' }); assert.equal(a.status, 200); if (!a.doc.pending) return; await new Promise((d) => setTimeout(d, 50)) } })(), 240_000, 'the session answered without pending')
     const reads = []
-    for (let i = 0; i < 2; i++) { // cold, then warm: the same answer
+    for (let i = 0; i < 2; i++) { // twice: the same answer
       const a = await get('session', { id: s.id, limit: '60' })
       assert.equal(a.status, 200, `read ${i + 1}: ${JSON.stringify(a.doc).slice(0, 600)}`)
       const t = a.doc.truncated

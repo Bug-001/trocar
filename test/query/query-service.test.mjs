@@ -434,3 +434,26 @@ test('#20: a control verb\'s subject includes its body: a failed click does not 
     assert.equal(st.forks, 3, 'the same click is cooling')
   } finally { svc.stop() }
 })
+
+test('a projection the worker cannot write: both answers whole, one persisted projection-write-failed record (4.3 §4 盘满, D38)', { timeout: 120_000 }, async () => {
+  const home = path.join(tmpDir('trocar-qsvc-full-'), '.trocar')
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  const s = bigSession({ home })
+  s.growTo(4 << 20)
+  const ctxDir = path.join(home, 'index', 'ctx')
+  fs.mkdirSync(ctxDir, { recursive: true, mode: 0o700 })
+  fs.chmodSync(ctxDir, 0o500)
+  const said = []
+  const svc = createQueryService({ home, failure: (where, e) => said.push({ where, code: e.code }), fork: workerFork })
+  try {
+    for (let i = 0; i < 2; i++) {
+      const res = recorder()
+      await within(svc.relay({ name: 'session', params: { id: s.id }, res }), 60_000, 'the session is answered')
+      assert.equal(res.status, 200)
+      assert.equal(JSON.parse(res.text()).command, 'session', 'the whole document')
+    }
+    const got = said.filter((x) => x.code === 'projection-write-failed')
+    assert.equal(got.length, 1, 'one record for the episode')
+    assert.ok(isWhere(got[0].where) && isCode(got[0].code))
+  } finally { svc.stop(); fs.chmodSync(ctxDir, 0o700) }
+})

@@ -148,7 +148,12 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
       errTail = (errTail + t).slice(-STDERR_TAIL)
     })
     // a worker still working says so (worker.mjs PROGRESS_MS): its silence clock starts again (3.5:42)
-    c.on('message', (m) => { if (child === c && pending && !paused && m && m.progress === true) arm(pending) })
+    c.on('message', (m) => {
+      if (child !== c || !m) return
+      if (m.progress === true && pending && !paused) arm(pending)
+      // a D38 record the worker owes (4.3 盘满 `projection-write-failed`): written here, where the daemon's records are
+      if (m.failure && typeof m.failure.code === 'string') failure('daemon', Object.assign(new Error(String(m.failure.reason)), { code: m.failure.code }))
+    })
     c.on('error', (e) => { if (child === c) { const why = `the query worker could not be started: ${e.message}`; fault(pending && pending.subject, why); drop(why) } })
     c.on('close', (code, signal) => { // 'close', not 'exit': every byte it wrote to stdout and stderr has been read by then
       if (child !== c) return

@@ -21,6 +21,7 @@ import { TOKEN, withToken } from '../server/face.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
+import { within } from '../helpers/bounded.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
@@ -61,14 +62,16 @@ test(`3.5 验收 11: a ${shape.wire} session growing past the worker heap while 
     assert.ok(listed, 'the session is listed')
     return { ...(await get('session', { id: s.id })), listed: listed.calls }
   }
+  // a session not yet extracted to its last member answers with `pending` (3.5 后台抽取): followed until it answers without
+  const settled = () => within((async () => { for (;;) { const a = await follow(); if (!a.doc || !a.doc.pending) return a; await new Promise((d) => setTimeout(d, 20)) } })(), 60_000, 'the session answered without pending')
   try {
     // the first answer places the page (its anchor lane's last call at the middle); an unchanged session then answers the same bytes
-    const quiet = async () => { await follow(); const q = []; for (let i = 0; i < 2; i++) q.push((await follow()).text); return q }
+    const quiet = async () => { await settled(); const q = []; for (let i = 0; i < 2; i++) q.push((await follow()).text); return q }
     const q1 = await quiet()
     assert.ok(q1[0] && q1[0] === q1[1], 'an unchanged session answers the same bytes')
     let polls = 0, whole = 0
     for (let stored = 4 * MB; stored < 60 * MB; stored = s.append(shape.growth ? 120 : 12)) {
-      const a = await follow()
+      const a = await settled()
       polls++
       if (!a.doc) continue // a non-2xx JSON error is a complete answer too
       whole++
