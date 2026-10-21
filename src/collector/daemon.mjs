@@ -760,7 +760,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     ingressToken: crypto.randomBytes(24).toString('hex'), // the model listens on no shared ingress: each door carries its group's token (ingress.json's), this one guards nothing
     isRecording: (meta) => collector.isOn(meta && meta.agent), // the in-memory switch decryption uses too: no file read per request, no silent off on a read error (4.6 §开关)
     retention: classesHook({ home: path.dirname(P.dir), failure }), describe: wsTerminalHook(list), // D60③ and the WebSocket turn edge, as on Linux (engine-data.mjs)
-    onFailure: (rec) => { collector.noteHeld(rec); failure.event(rec) }, onError: (e) => log('engine', e),
+    onFailure: (rec) => failure.event(rec), onHeld: (who) => collector.noteHeld(who), onError: (e) => log('engine', e),
   })
   collector = createModelCollector({ harnesses: list, dir: P.dir, identify: registry.match, ownerOf: parts.ownerOf, factsOf: parts.factsOf, proc: parts.proc,
     ctx: sourcesCtx({ os: A.os, home, env, dirs: b.dirs, policy: b.policy }), systemProxy: parts.systemProxy, custody: b.custody || 'unavailable', rootPem, procTable: parts.procTable,
@@ -768,6 +768,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     drain: ({ harnesses: hs, now }) => engine.drain({ agents: new Set(hs), now }),
     upstreamRoots: upstreamRootsOf({ A, env, upstreamCa, event }),
     // the process of a negative-cache key exited, or its door closed: its entries go, as runDaemon's onGone does (4.8 §5.5; the fold clears by neg_key)
+    holds: (who) => engine.holdsNegKey(who),
     forget: (who, pid) => { const dropped = engine.forgetNegKey(who); if (dropped) failure.write({ event: 'negative-cache-cleared', pid, neg_key: who, dropped }) } })
   collector.bindDoors({ open: (l) => engine.listen({ groups: l }), close: (ids) => Promise.resolve(engine.closeGroups(ids)) })
   let exitAsked = 0, exitTimer = null
@@ -779,7 +780,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     // what it holds in memory, so this costs nothing. Without it `status` said "Connections unknown (the daemon's reply does not
     // carry the connection counts)" on every model-mode machine — a reason about trocar's own IPC (a macOS test machine 2026-10-18).
     const off = new Set(Object.entries(d).filter(([, e]) => e && e.desired === 'off').map(([h]) => h))
-    return { code: VERSION, pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), agents: collector.verdicts(), relayed: engine.relayed({ agents: off }), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
+    return { code: VERSION, pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), agents: collector.verdicts(), negatives: engine.negatives(), relayed: engine.relayed({ agents: off }), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
   // the daemon's own identity, as it writes it into its lock (below): the read route hands it back, and an answer on the token-checked channel is

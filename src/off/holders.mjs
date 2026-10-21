@@ -21,13 +21,15 @@ export function windowsOf(l) {
   return [...past, { since: msOf(l.on_at), until: l.off_at == null ? null : msOf(l.off_at) }]
 }
 
-/** Did live process `p` (startedAt in ms or ISO) read an entry of `l`'s harness that still leads to its door (4.11 P11 status, D31①)? → true · false · null (its start is not known). */
+/** Did live process `p` (startedAt in ms or ISO) read an entry of `l`'s harness that still leads to its door (4.11 P11 status, D31①)? → true · false · null (its start is not known).
+ *  Judged as the holders are (mayHaveRead, over the start its reader's `startGrain` allows): a whole-second reading (macOS `lstart`) inside on_at's
+ *  second read the entry (1.6 A.2 row 32), and after off is a holder. */
 export function sawEntry(p, l) {
   const w = windowsOf(l)
   if (!w.length) return false
   if (p.startedAt == null) return null
-  const at = msOf(p.startedAt)
-  return w.some((x) => mayHaveRead({ startedAt: at }, l, x.since, x.until))
+  const q = { startedAt: msOf(p.startedAt), startGrain: p.startGrain }
+  return w.some((x) => mayHaveRead(q, l, x.since, x.until))
 }
 
 /** → `[{ harness, pid, start, why: 'started-in-window' | 'rereads' | 'start-unknown' | 'door-seen' }]`, in liveness order, one row per (harness, pid).

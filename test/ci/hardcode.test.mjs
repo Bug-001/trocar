@@ -1,4 +1,4 @@
-// test/ci/hardcode.test.mjs — spec 0.1 §2 「一个外部事实只写一处(禁止硬编码)」 and §3 conventions 4 / 6 / 7, as checks that turn red.
+// test/ci/hardcode.test.mjs — spec 0.1 §2 「一个外部事实只写一处(禁止硬编码)」 and §3 conventions 6 / 7, as checks that turn red.
 //   1. (§2) An external fact written as a literal in src/ — an absolute path, a loopback port, a version — appears once in the whole tree;
 //      every other use imports it. Two copies drift: one gets fixed, the other keeps the old value (the 2026-10-11 incident had five
 //      copies of one endpoint rule).
@@ -7,7 +7,6 @@
 //      written from one measured path keeps every test green and silently stops capturing after the next update or on another machine (2026-10-13 audit, M3).
 //   3. (§3 convention 7) Tests pin no new counts (`.length, 17`): a count restates today's data, goes red when an item is added and stays green when the
 //      world changes. The files that still do are listed and may only shrink.
-//   4. (§3 convention 4) Exports that only tests use do not grow: a test that reaches past the public entry pins the implementation, not the behaviour.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'

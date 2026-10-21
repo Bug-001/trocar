@@ -48,6 +48,8 @@ export function createNegativeCache({ threshold = 2, now = () => Date.now() } = 
     },
     /** forgetKey(who) → how many negative entries were dropped (that key's half-way counts go too). `who` is "<pid>" or "<route>.<group>". */
     forgetKey,
+    /** holds(who) → does the cache keep anything under `who`: an entry or a strike below the threshold (the daemon's sweep watches only such keys, 4.8 §5.5). */
+    holds: (who) => { who = String(who); for (const e of negative.values()) if (e.negKey === who) return true; for (const st of strikes.values()) if (st.negKey === who) return true; return false },
     /** forgetPid(pid) → how many negative entries were dropped (that pid's half-way counts go too). */
     forgetPid: (pid) => forgetKey(pid),
     list: () => [...negative.values()],

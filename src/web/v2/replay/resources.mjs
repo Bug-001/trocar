@@ -106,7 +106,7 @@ export function resourcesHtml(s) {
   const seenBlock = seen.length ? (() => {
     const shown = s.navSeenExpanded ? seen : seen.slice(0, SEEN_CAP)
     const chips = shown.map((x) => { const giLocal = a.giLocal, N = a.calls.length; const v = giLocal.get(x.firstStep); const fl = v == null ? N : v
-      return `<span class="navchip ${fl > s.playhead ? 'future' : ''}" data-navstep="${fl}" role="button" tabindex="0" title="${esc(rp(x.path) + ' · ' + W.seenTip(x.count, at(fl)))}">${rp(x.path)}</span>` }).join('')
+      return `<span class="navchip ${fl > s.playhead ? 'future' : ''}" data-navstep="${fl}" role="button" tabindex="0" title="${esc(relPath(cwd, x.path) + ' · ' + W.seenTip(x.count, at(fl)))}">${rp(x.path)}</span>` }).join('')
     const more = seen.length > SEEN_CAP ? `<div class="navmore" data-navmore="1" role="button" tabindex="0">${s.navSeenExpanded ? esc(W.HIDE_ALL) : esc(W.SHOW_ALL(seen.length))}</div>` : ''
     return navGroupHtml(s, 'life-seen', `${W.RES_GRP.seen} · ${W.GUESS}`, seen.length, `<div class="navseen">${chips}</div>${more}`, { hint: W.SEEN_GROUP_TIP })
   })() : ''

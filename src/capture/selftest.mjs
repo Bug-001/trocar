@@ -3,7 +3,7 @@
 // CLI 化(`trocar doctor`)——受众是人,核对四问:**是否真在抓 · 抓得对 · 凭据没漏 · 没弱化全机 TLS**。
 // 全为纯函数(probe / records / trust 皆注入)→ 离线可单测,不碰真实信任库/网络。
 import fsMod from 'node:fs';
-import { SECRET_HEADERS } from './redact.mjs';
+import { isSecretHeader } from './redact.mjs';
 import { isLlmCall } from './envelope.mjs';
 
 // 依赖探测(4.5:41,77):openssl(全平台,生成 CA/叶证)+ certutil(仅 Linux,装用户 NSS 库)。
@@ -65,7 +65,7 @@ export function qNoLeak(records) {
   let withCreds = 0; const tokens = [];
   for (const r of records) {
     const h = r.req_headers || r.request_headers || {};
-    if (Object.keys(h).some((k) => SECRET_HEADERS.has(k.toLowerCase()) && h[k] && h[k] !== '<redacted>')) withCreds++;
+    if (Object.keys(h).some((k) => isSecretHeader(k) && h[k] && h[k] !== '<redacted>')) withCreds++;
     const body = typeof r.req_body === 'string' ? r.req_body : '';
     const m = body.match(ANT_TOKEN); if (m) tokens.push(m[0].slice(0, 10) + '…');
   }

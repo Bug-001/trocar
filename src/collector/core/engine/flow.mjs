@@ -513,15 +513,15 @@ export function handleFlow(client, meta, ctx) {
         // certificate-check code never reaches us.
         if (!rec.error) rec.error = !synthetic(e) ? { type: e.code || 'error', message: msgOf(e), side: 'client' }
           : { type: 'closed_without_app_data', message: 'the client closed after the TLS handshake without sending application data', side: 'client' }
-        // D51④: the process was judged trusting trocar and is not — a critical failure, once per (pid, host) (4.6 §事件与码). Names and
+        // D51④: the process was judged trusting trocar and is not — a critical failure when this rejection makes the (pid, host) negative,
+        // the threshold's confirmation (4.6 §事件与码 #9); a key is made negative once until forgotten, so once per (pid, host). Names and
         // the trust entry trocar relied on; never the client's bytes or certificates.
-        if (!ctx.firstRejection || ctx.firstRejection(key)) {
+        if (ctx.negCache.observe(key, { rejected: true, meta, host })) {
           const t = meta.trust && typeof meta.trust === 'object' ? meta.trust : null
           ctx.failure({ code: 'trust-rejected', level: 'critical', harness: meta.agent ?? null, door: meta.door ?? null, process: processNames({ exe: meta.exe, argv: meta.argv })[0] ?? null,
             pid: meta.pid ?? null, neg_key: String(meta.negKey ?? meta.pid), host, alert: rec.error.type, trust_entry: t ? { var: t.var ?? null, via: t.via ?? null, file: t.file ?? null } : null,
             reason: `${meta.agent ?? 'an agent'}${meta.pid != null ? ` pid ${meta.pid}` : ''} refused trocar's certificate for ${host} (${rec.error.type}) although it was judged to trust trocar${t && t.var ? ` through ${t.var}` : ''}; this connection failed` })
         }
-        ctx.negCache.observe(key, { rejected: true, meta, host })
       }
       clientTls.on('error', judge); clientTls.on('end', judge); clientTls.on('close', judge)
       // TLS 1.3: a host that wants a client certificate says so AFTER our handshake is done — the client is already on our

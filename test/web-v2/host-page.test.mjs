@@ -128,3 +128,41 @@ test('#20 detail placement follows the media query (a column at ≥ 1440 px, a b
     s.inst.unmount()
   }
 })
+
+const asideOf = (html) => { const m = /<aside class="hdetail[^"]*" id="hdetail"[^>]*>([\s\S]*?)<\/aside>/.exec(html); return m ? m[1] : null }
+
+test('#23 the latest selection wins: a slower earlier `calls {ref}` answer never paints over the newer one', async () => {
+  const { w, calls, page } = await world
+  const fresh = async (r) => { const s = await w.mount(hostPage, `${page}?ref=${encodeURIComponent(r)}`); const a = asideOf(s.html()); s.inst.unmount(); return a }
+  const recs = calls.records.filter((r) => r.ref)
+  let A = null, B = null, asideA = null, asideB = null
+  for (const b of recs.slice(1, 12)) { const x = await fresh(recs[0].ref), y = await fresh(b.ref); if (x !== y) { A = recs[0].ref; B = b.ref; asideA = x; asideB = y; break } }
+  assert.ok(A && B, 'two records whose details differ')
+  let release = null
+  const held = new Promise((r) => { release = r })
+  w.tamper(async (url, doc) => (new URL(url, 'http://x').searchParams.get('ref') === A ? held.then(() => doc) : doc))
+  try {
+    const s = await w.mount(hostPage, page)
+    s.inst.update({ ...s.route(), params: { ...s.route().params, ref: A } })
+    s.inst.update({ ...s.route(), params: { ...s.route().params, ref: B } })
+    await w.settle()
+    release()
+    await w.settle()
+    const got = asideOf(s.html())
+    assert.equal(got, asideB, 'the detail is B\'s')
+    assert.notEqual(got, asideA)
+    s.inst.unmount()
+  } finally { w.tamper(null) }
+})
+
+test('#24 after unmount, crossing the 1440 px breakpoint paints nothing into the shared screen element', async () => {
+  const { w, calls, page } = await world
+  for (const width of [1920, 1024]) {
+    const s = await w.mount(hostPage, `${page}?ref=${encodeURIComponent(calls.records[0].ref)}`, { width })
+    s.inst.unmount()
+    assert.equal(s.el.innerHTML, '')
+    s.media(width < 1440)
+    await w.settle()
+    assert.equal(s.el.innerHTML, '', String(width))
+  }
+})

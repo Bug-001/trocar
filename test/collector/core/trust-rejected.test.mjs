@@ -52,8 +52,9 @@ test('4.6 R9: a client that refuses trocar\'s leaf → one critical trust-reject
   assert.equal(typeof r.reason, 'string')
   assert.doesNotMatch(JSON.stringify(r), /BEGIN CERTIFICATE/, 'no certificate content in the record')
   assert.deepEqual(logged.filter((l) => l.startsWith('[critical]')), [`[critical] trust-rejected harness=deepseek-dsh pid=5 host=api.deepseek.com: ${r.reason}`], 'one stderr line')
-  // another host of the same pid is its own record
+  // another host of the same pid is its own record, once its own threshold confirms it
   assert.equal(await hello('chat.deepseek.com'), 'rejected'); await settled(3)
+  assert.equal(await hello('chat.deepseek.com'), 'rejected'); await settled(4)
   assert.deepEqual(fails.filter((f) => f.code === 'trust-rejected').map((f) => f.host), ['api.deepseek.com', 'chat.deepseek.com'])
   recorder.flush()
 
@@ -65,8 +66,9 @@ test('4.6 R9: a client that refuses trocar\'s leaf → one critical trust-reject
   assert.deepEqual(conds[0].trust_entry, TRUST); assert.equal(conds[0].door, 'g-dsh'); assert.equal(conds[0].process, 'dsh')
 
   // the process exits: forgetPid ends the pairs (negative-cache-cleared), so a reused pid that refuses again is recorded again
-  assert.equal(engine.forgetPid(5), 2, 'the negative entry of api.deepseek.com + the record-only chat.deepseek.com')
-  assert.equal(await hello('chat.deepseek.com'), 'rejected'); await settled(4)
+  assert.equal(engine.forgetPid(5), 2, 'the negative entries of api.deepseek.com and chat.deepseek.com')
+  assert.equal(await hello('chat.deepseek.com'), 'rejected'); await settled(5)
+  assert.equal(await hello('chat.deepseek.com'), 'rejected'); await settled(6)
   assert.equal(fails.filter((f) => f.code === 'trust-rejected').length, 3)
   await closeWithin(engine); up.close()
 
@@ -93,7 +95,7 @@ async function windowRig() {
   const up = tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)) }, (s) => { s.on('error', () => {}); s.on('data', () => s.write('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok')) })
   await new Promise((r) => up.listen(0, '127.0.0.1', r))
   const trocarCa = createCa()
-  const meta = { dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 7, agent: 'claude-code', decrypt: true, door: 'g', negKey: '7', exe: '/x/claude', argv: ['claude'] }
+  const meta = { dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 7, agent: 'claude-code', decrypt: true, door: 'g', negKey: '7', exe: '/x/claude', argv: ['claude'], trust: TRUST }
   const fails = [], flows = []
   const engine = createEngine({ redirector: createStaticRedirector(meta), issuer: createLeafIssuer(loadCa(trocarCa)), upstreamCa: upCa.certPem, systemCa: { certs: [], sources: ['test'], errors: [] },
     store: { envelope() {}, flow: (f) => flows.push(f) }, onFailure: (f) => fails.push(f), timing: { rejectWindowMs: W } })
@@ -117,12 +119,22 @@ test('4.6 §引擎 5: a trusting client\'s connection kept past the window and c
 })
 
 for (const v of ['TLSv1.2', 'TLSv1.3']) {
-  test(`4.6 §引擎 5: a Node client that refuses the leaf (${v}, no alert) is judged at once under the window — critical on the first, negative on the second`, T, async () => {
+  test(`4.6 #9: a Node client refusing the leaf (${v}, no alert) — the first rejection writes no trust-rejected; the one that makes the key negative writes one, complete; later ones none`, T, async () => {
     const s = await windowRig()
-    await s.rejecting(v); await s.settled(1); await s.rejecting(v); await s.settled(2)
-    assert.deepEqual(s.flows.map((f) => [f.decision, f.not_captured]), [['decrypt', 'client-rejected-leaf'], ['decrypt', 'client-rejected-leaf']])
-    assert.equal(s.fails.filter((f) => f.code === 'trust-rejected').length, 1)
-    assert.deepEqual(s.engine.negatives().map((e) => [e.host, e.cause, e.rejections]), [['h.test', 'client-rejected-leaf', 2]])
+    const tr = () => s.fails.filter((f) => f.code === 'trust-rejected')
+    assert.equal(await s.rejecting(v), null); await s.settled(1)
+    assert.deepEqual(tr(), [], 'a single rejection is no trust-rejected')
+    assert.deepEqual([s.flows[0].decision, s.flows[0].not_captured], ['decrypt', 'client-rejected-leaf'])
+    assert.equal(await s.rejecting(v), null); await s.settled(2)
+    assert.equal(s.flows[1].not_captured, 'client-rejected-leaf')
+    assert.equal(tr().length, 1, 'the rejection that made the key negative: one trust-rejected')
+    const r = tr()[0]
+    assert.deepEqual({ level: r.level, harness: r.harness, door: r.door, process: r.process, pid: r.pid, neg_key: r.neg_key, host: r.host, alert: r.alert, trust_entry: r.trust_entry },
+      { level: 'critical', harness: 'claude-code', door: 'g', process: 'claude', pid: 7, neg_key: '7', host: 'h.test', alert: s.flows[1].error.type, trust_entry: TRUST })
+    assert.deepEqual(s.fails.filter((f) => f.code === 'negative-cache').map((f) => [f.neg_key, f.host, f.cause]), [['7', 'h.test', 'client-rejected-leaf']])
+    const c = await s.rejecting(v); if (c) c.destroy()
+    await s.settled(3)
+    assert.equal(tr().length, 1, 'a later connection of the negative key writes no trust-rejected')
     await s.close()
   })
 }

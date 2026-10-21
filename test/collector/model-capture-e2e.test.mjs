@@ -103,6 +103,19 @@ async function through({ door, auth, target, localPort, ca, req, open }) {
   return { reply: await reply, peer, end: () => new Promise((r) => { c.once('close', r); c.end() }) }
 }
 
+/** `status --json` over the real daemon: the process table is `all` (pid, startedAt) of `a`'s executable, `live` the pids still in it; the
+ *  platform's network facts run with their OS reads faked. */
+async function statusDoc({ w, platform, box, a, all, live }) {
+  const exe = a.exe, rows = all.filter((p) => live.includes(p.pid))
+  const archFacts = platform === 'win32'
+    ? (ctx) => gatherWin32Facts(ctx, { helper: { call: async (verb) => (verb === 'ps' ? { sessionId: 1, procs: rows.map((p) => ({ ...p, ppid: 1, name: a.name, exe, cmdline: exe, cmdlineState: 'ok', sessionId: 1, sameUser: true, integrity: 'medium', tokenDenied: false })) } : verb === 'tcp-table' ? { rows: [] } : Promise.reject(Object.assign(new Error('not faked'), { code: 'not-faked' }))) }, readSystemProxy: async () => ({ ok: false, reason: 'absent' }) })
+    : (ctx) => darwinNetFacts(ctx, { exec: () => ({ status: 1, stdout: '', stderr: 'not faked' }) })
+  const sio = { t: '', out(s) { this.t += s }, err(s) { this.t += s }, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
+  const procs = async () => rows.map((p) => ({ ...p, ppid: 1, uid: process.getuid(), exe, argv: [exe], env: () => null, envRead: false }))
+  await statusRun(['--json'], { io: sio, env: w.env, home: w.home, platform, deps: { platform, procs, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts }), rootStore: w.store } })
+  return JSON.parse(sio.t.slice(sio.t.indexOf('{')))
+}
+
 for (const platform of ['darwin', 'win32']) {
   test(`${platform}: a codex connection through the real door is decrypted and recorded verbatim; after off this holder is forwarded only, and the daemon stays up with its door forward-only`, { timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
@@ -159,12 +172,17 @@ for (const platform of ['darwin', 'win32']) {
         await kept.end()
         fs.writeFileSync(stateF, stateWas)
 
-        // D51④ / 4.8 §5.5: a client of this process that refuses the leaf → trust-rejected keyed by the process life "<pid>@<start>"; the key is
-        // cleared (negative-cache-cleared, same neg_key) once the process leaves the table — below, after off
-        a.ports.add(await freePort()); win?.write()
-        await assert.rejects(through({ door, auth, target, localPort: [...a.ports].at(-1), ca: [upCa.certPem], req: REQ, open }))
+        // D51④ / 4.8 §5.5: a client of this process that refuses the leaf twice (the threshold, 4.6 #9) → trust-rejected keyed by the process life
+        // "<pid>@<start>", and status reads the process as not captured (1.6 negative-cache); the key is cleared (negative-cache-cleared, same
+        // neg_key) once the process leaves the table — below, after off
+        for (let i = 0; i < 2; i++) {
+          a.ports.add(await freePort()); win?.write()
+          await assert.rejects(through({ door, auth, target, localPort: [...a.ports].at(-1), ca: [upCa.certPem], req: REQ, open }))
+        }
         const rejected = await within((async () => { for (;;) { const f = flowsOf(w.dir).find((l) => l.event === 'failure' && l.code === 'trust-rejected'); if (f) return f; await new Promise((r) => setTimeout(r, 25)) } })(), 5000, 'a trust-rejected line')
         assert.match(rejected.neg_key, new RegExp(`^${PID}@\\d+$`), 'keyed by the process life, not the bare pid')
+        const negRow = (await statusDoc({ w, platform, box, a, all: [{ pid: PID, startedAt: a.start }], live: [PID] })).harnesses.codex.processes.find((r) => r.pid === PID)
+        assert.deepEqual([negRow?.captured, negRow?.reason], [false, 'negative-cache'], 'status: the negative-cached process is not captured')
 
         // D60: the record went into the raw layer's current segment, and the live daemon names that segment in its lock —
         // which is how the sealer and `raw seal` know the one segment they must leave alone.
@@ -276,15 +294,7 @@ for (const platform of ['darwin', 'win32']) {
         const reply = await ep.request({ socketPath: ep.socketPath })
         assert.deepEqual((reply.agents || []).filter((r) => r.pid === PID).map((r) => [r.agent, r.trusted, r.decrypt, new Date(r.start).getTime()]), [['codex', true, true, a.start]], JSON.stringify(reply.agents))
         // the platform's own network facts under the topology, its OS reads faked: the form's verdict is status's, never judged again
-        const archFacts = (live) => platform === 'win32'
-          ? (ctx) => gatherWin32Facts(ctx, { helper: { call: async (verb) => (verb === 'ps' ? { sessionId: 1, procs: three.filter((p) => live.includes(p.pid)).map((p) => ({ ...p, ppid: 1, name: a.name, exe, cmdline: exe, cmdlineState: 'ok', sessionId: 1, sameUser: true, integrity: 'medium', tokenDenied: false })) } : verb === 'tcp-table' ? { rows: [] } : Promise.reject(Object.assign(new Error('not faked'), { code: 'not-faked' }))) }, readSystemProxy: async () => ({ ok: false, reason: 'absent' }) })
-          : (ctx) => darwinNetFacts(ctx, { exec: () => ({ status: 1, stdout: '', stderr: 'not faked' }) })
-        const status = async (live) => {
-          const sio = { t: '', out(s) { this.t += s }, err(s) { this.t += s }, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
-          const procs = async () => three.filter((p) => live.includes(p.pid)).map((p) => ({ ...p, ppid: 1, uid: process.getuid(), exe, argv: [exe], env: () => null, envRead: false }))
-          await statusRun(['--json'], { io: sio, env: w.env, home: w.home, platform, deps: { platform, procs, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: archFacts(live) }), rootStore: w.store } })
-          return JSON.parse(sio.t.slice(sio.t.indexOf('{')))
-        }
+        const status = (live) => statusDoc({ w, platform, box, a, all: three, live })
         const doc = await status([PID, inWin.pid, offStart.pid])
         const rows = Object.fromEntries(doc.harnesses.codex.processes.map((r) => [r.pid, [r.captured, r.reason]]))
         assert.deepEqual(rows, { [PID]: [true, null], [inWin.pid]: [true, null], [offStart.pid]: [false, 'config-after-start'] }, JSON.stringify(doc.harnesses.codex))
