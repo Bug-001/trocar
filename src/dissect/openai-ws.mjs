@@ -97,6 +97,13 @@ function outputSegments(rec, done) {
 }
 const completed = (rec) => { const t = terminalOf(rec); return t && t.e.type === 'response.completed' && t.e.response && typeof t.e.response.id === 'string' ? t : null; };
 
+const absentWhy = (prevId) => `response ${prevId} (named by previous_response_id) is not a completed response in this capture of the connection`;
+// A continuation's own state on top of its chain's: the collector's own `partial` (a gap earlier on the connection, 3.1:60).
+const settled = (rec, p) => (rec.partial === true
+  ? Object.assign(p, { contextState: 'partial', missing: p.missing || `the collector saw a gap earlier on this connection (${(rec.partial_reasons || []).join(', ') || 'partial'})` })
+  : p);
+const prevIdOf = (b) => (typeof b.previous_response_id === 'string' && b.previous_response_id ? b.previous_response_id : null);
+
 // The chain, one record at a time (the ETL reads a stream; 4.2 incremental). createChain(read) → { plan(rec), context(rec) }.
 // plan(rec) → Plan | null (not a call); Plan = { role, prevId, responseId, contextState, missing, up, own, out } (chain.mjs). A
 // connection's records MUST arrive in seq order: file order gives that, since the collector writes a call's envelope when its
@@ -122,15 +129,10 @@ export function createChain(read = null) {
       p = { up: null, own: [], contextState: 'partial', missing: why, unstored: why };
     } else {
       const b = bodyOf(rec);
-      const prevId = typeof b.previous_response_id === 'string' && b.previous_response_id ? b.previous_response_id : null;
+      const prevId = prevIdOf(b);
       p = { up: null, own: ownSegments(rec, b), contextState: 'complete', missing: null };
       if (prevId) {
-        p = extendChain(heads.get(prevId) || null, p.own,
-          `response ${prevId} (named by previous_response_id) is not a completed response in this capture of the connection`);
-        if (rec.partial === true) {
-          p.contextState = 'partial';
-          p.missing = p.missing || `the collector saw a gap earlier on this connection (${(rec.partial_reasons || []).join(', ') || 'partial'})`;
-        }
+        p = settled(rec, extendChain(heads.get(prevId) || null, p.own, absentWhy(prevId)));
       }
       p.prevId = prevId;
     }
@@ -176,18 +178,39 @@ export function normRespWs(rec) {
 
 // The reply's blocks as addressable parts (sse-spans.mjs): the server message that closes an item
 // (response.output_item.done) holds it whole, so its span is the `item` node inside that message, field resp.messages.<j>.
+// Each part carries `unit`, the output item it is a block of (one item = one message of a successor's context). A stream whose
+// items no message closed has them in its response.completed: there the span is the item's node in that message's output.
 export function replyPartsWs(rec) {
   const out = [];
+  let unit = 0;
+  const push = (item, m, j, path) => {
+    let span = null;
+    try { span = spanAt(scanJson(m), path); } catch { /* parsed, so scannable */ }
+    out.push(...partsOfUnit(itemToBlocks(item).map((x) => x.block), `resp.messages.${j}`, span, 'the item could not be located in its message').map((p) => ({ ...p, unit })));
+    unit++;
+  };
   serverMessages(rec).forEach((m, j) => {
     const e = parse(m);
-    if (!e || e.type !== 'response.output_item.done' || !e.item || typeof e.item !== 'object') return;
-    let span = null;
-    try { span = spanAt(scanJson(m), ['item']); } catch { /* parsed above, so scannable */ }
-    out.push(...partsOfUnit(itemToBlocks(e.item).map((x) => x.block), `resp.messages.${j}`, span, 'the item could not be located in its message'));
+    if (e && e.type === 'response.output_item.done' && e.item && typeof e.item === 'object') push(e.item, m, j, ['item']);
   });
+  const done = out.length ? null : completed(rec);
+  if (done) (Array.isArray(done.e.response.output) ? done.e.response.output : []).forEach((item, i) => push(item, serverMessages(rec)[done.j], done.j, ['response', 'output', i]));
   if (out.length) return out;
   const { r, part } = storedReply(rec);
   return [replyPart(null, null, null, r && serverMessages(rec).length ? 'no server message closed an output item' : noSpanWhy(r, part || {}))];
+}
+
+// stitchOf(rec) → what the id-level stitch (src/view/extract.mjs) needs of one record, read from it alone (as CC_THREADS.stitchOf);
+// null when it is no call. A response is continued on its own connection only, and only once it completed.
+function stitchOf(rec) {
+  const role = roleOf(rec);
+  if (role !== 'call' && role !== 'warmup' && role !== 'unstored') return null;
+  const done = completed(rec);
+  const base = { scope: connOf(rec), link: done ? done.e.response.id : null, gap: null, inherit: { system: 'own', tools: 'own' } };
+  if (role === 'unstored') return { ...base, cont: false, prev: null, head: { contextState: 'partial', missing: unstoredRequestOf(rec) }, settle: (s) => s };
+  const prev = prevIdOf(bodyOf(rec));
+  return { ...base, cont: !!prev, prev, absent: prev ? absentWhy(prev) : null, head: { contextState: 'complete', missing: null },
+    settle: (s) => (prev ? settled(rec, { ...s }) : s) };
 }
 
 // The dissector object the board's flat-lane assembler calls (D25: the shared layer names no wire; the
@@ -200,6 +223,7 @@ export const RESPONSES_WS = Object.freeze({
   faithfulnessOf: (b) => faithfulness(b && b.block),
   // one record at a time, in step order: a connection's calls are sequential, so step order is its seq order
   prepare: (read) => createChain(read),
+  stitchOf, // the id-level stitch's view of one record (as CC_THREADS.stitchOf; instructions and tools are always the call's own)
   admits: (rec) => { const r = roleOf(rec); return r === 'call' || r === 'warmup' || r === 'unstored'; },
   laneOf: (rec) => (roleOf(rec) === 'warmup' ? 'probe' : null), // W3: a warmup is lane probe, not a turn
   agentOf: connOf, // one connection carries one agent's conversation: a subagent is folded by its own (3.5 §缓存)

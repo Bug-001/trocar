@@ -163,3 +163,100 @@ test('(d) rows and definitions survive a JSON round trip, and carry no credentia
     for (const r of recs) assert.ok(rows.get(String(r.id)).x.item, `${name}: every record has a row`);
   }
 });
+
+// ── part 2: the calls whose context is stitched across records, and the build driver ───────────────────────────────────────────────────
+//   (a) every definition reachable from a stitched call's list checks out (as part 1's (a))
+//   (b) id-level == item-level: each stitched list is the old planner's flat, block for block — a request block by its bid, a
+//       reply block (now addressed in the reply) by its frame — with the same boundaries, attributes and state
+import { flatBlockText } from '../../src/view/analyze.mjs';
+import { threadSession, record } from '../helpers/cc-threads.mjs';
+
+const SEG = '20261020T164737Z';
+// records as the daemon writes them: ids are segment:line in write order (a call is written when it ends, so a predecessor first)
+const filed = (recs) => recs.map((r, i) => stamp({ ...r, id: `${SEG}:${i + 1}` }));
+const rebody = (r, f) => ({ ...r, req_body: JSON.stringify(f(JSON.parse(r.req_body))) });
+const T = threadSession(), CAUSAL = [T.S0, T.M0, T.M1, T.A, T.S1, T.M2];
+const THREAD_VARIANTS = {
+  causal: CAUSAL,
+  // M2 resends its own tools and a cached system block; S1 sends no system at all; M1's system is only a volatile block (as given)
+  ownTools: CAUSAL.map((r) => (r === T.M2 ? rebody(r, (b) => ({ ...b, tools: [{ name: 'Grep', description: 'grep', input_schema: { type: 'object' } }], system: [{ type: 'text', text: 'A new system.' }] })) : r)),
+  noSystem: CAUSAL.map((r) => (r === T.S1 ? rebody(r, ({ system, ...b }) => b) : r)),
+  // M1's reply ended in an error: what it answered is not wholly known
+  replyGap: CAUSAL.map((r) => (r === T.M1 ? { ...r, resp: { kind: 'error', status: 529, partial: r.resp } } : r)),
+};
+function wsVariant(recs) { const k = recs.findIndex((r, i) => i > 0 && JSON.parse(r.req_body).previous_response_id); return recs.map((r, i) => (i === k ? { ...r, partial: true, partial_reasons: ['gap'] } : r)); }
+function stitchedSessions() {
+  const out = {};
+  for (const wire of ['threads', 'ws']) {
+    const s = bigSession({ home: tmpDir('trocar-extract-'), wire, growth: 300, subEvery: 3, subLanes: 2, late: 2 });
+    s.append(16);
+    const recs = fs.readFileSync(s.file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    out[wire] = recs;
+    if (wire === 'ws') out.wsGap = wsVariant(recs);
+  }
+  Object.assign(out, THREAD_VARIANTS);
+  // one record at a time left out of the capture: what continues it is partial, and says what is missing
+  for (const name of ['causal', 'ws']) out[name].forEach((_, k) => { out[`${name}-${k}`] = out[name].filter((__, i) => i !== k); });
+  for (const k of Object.keys(out)) out[k] = filed(out[k]);
+  return out;
+}
+const listsOf = (rows) => {
+  const memo = new Map();
+  const of = (rid, key) => {
+    if (memo.has(rid + key)) return memo.get(rid + key);
+    const row = rows.get(rid), v = materialize(row.base == null ? null : of(row.base, key), key === 'list' ? row : row.mb);
+    memo.set(rid + key, v);
+    return v;
+  };
+  return of;
+};
+const fh = (b) => { const t = flatBlockText(b); return createHash('sha256').update(String(t.length) + ':' + t, 'utf8').digest('hex'); };
+const fromRequest = (ref) => { const f = parseTextRef(ref).field; return !f || f === 'req_body'; };
+const ATTRS = ['volatile', 'resRole', 'resPending', 'resError', 'resTruncNote'];
+const attrsWant = (b) => { const a = {}; for (const k of ATTRS) if (b[k]) a[k] = b[k]; if (b.resRole === 'result') a.resKey = b.resKey; return a; };
+const stitchedIds = (recs) => recs.filter((r) => { try { const b = JSON.parse(r.req_body); return (b.thread && b.thread.type === 'continue') || b.type === 'response.create'; } catch { return false; } }).map((r) => r.id);
+
+test('(a) part 2: every definition a stitched call\'s list reaches checks out against the bytes its bid hashes', () => {
+  for (const [name, recs] of Object.entries(stitchedSessions())) {
+    const byId = new Map(recs.map((r) => [String(r.id), r]));
+    const { defs, rows } = run(recs), of = listsOf(rows);
+    const ids = stitchedIds(recs);
+    assert.ok(ids.length, name);
+    for (const rid of ids) for (const bid of of(rid, 'list').concat(rows.get(rid).reply)) {
+      const d = defs.get(bid);
+      assert.ok(d, `${name} ${rid}: ${bid} is defined`);
+      assert.equal(d.bid, expectedBid(byId, d), `${name} ${rid} ${d.sec}/${d.role}/${d.kind}`);
+    }
+  }
+});
+
+test('(b) id-level == item-level: each stitched list is the planner-stitched flat, with its boundaries, attributes and state', () => {
+  for (const [name, recs] of Object.entries(stitchedSessions())) {
+    const byId = new Map(recs.map((r) => [String(r.id), r]));
+    const { defs, rows } = run(recs), of = listsOf(rows);
+    const steps = assembleSession(recs).steps;
+    // the same fold over unstamped copies: no record to point into, so every block keeps its whole body (the frame fh hashes)
+    const whole = new Map(assembleSession(recs.map((r) => ({ ...r }))).steps.map((s) => [String(s.id), s.flat]));
+    const ids = new Set(stitchedIds(recs));
+    assert.ok(steps.some((s) => ids.has(String(s.id))), name);
+    for (const s of steps) {
+      const rid = String(s.id), row = rows.get(rid), list = of(rid, 'list'), at = `${name} ${rid}`;
+      assert.equal(list.length, s.flat.length, `${at} length`);
+      s.flat.forEach((b, i) => {
+        const d = defs.get(list[i]);
+        if (b.text_ref && fromRequest(b.text_ref)) assert.equal(list[i], b64(`${b.sec}\x1F${b.role}\x1F${resolve(byId.get(parseTextRef(b.text_ref).recordId), b.text_ref)}`), `${at} #${i}`);
+        else {
+          assert.deepEqual([d.sec, d.role, d.kind, d.fh], [b.sec, b.role, b.kind, fh(whole.get(rid)[i])], `${at} #${i} reply block`);
+          assert.ok(d.ref == null || !fromRequest(d.ref), `${at} #${i} is a reply definition`);
+        }
+        const { query, ...a } = row.attrs[i] || {};
+        assert.deepEqual(a, attrsWant(b), `${at} #${i} attrs`);
+      });
+      const mb = [];
+      s.flat.forEach((b, i) => { if (b.sec === 'messages' && (i === 0 || s.flat[i - 1].sec !== 'messages' || s.flat[i - 1].mi !== b.mi)) mb.push(i); });
+      assert.deepEqual(of(rid, 'mb'), mb, `${at} boundaries`);
+      assert.deepEqual([row.x.wire.contextState, row.x.wire.contextMissing], [s.wire.contextState, s.wire.contextMissing], `${at} state`);
+    }
+  }
+});
+
