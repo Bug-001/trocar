@@ -15,7 +15,7 @@ import { setScreenKeys } from '../core/keys.mjs'
 import { openModal } from '../core/dom.mjs'
 import { keyAction } from './keymap.mjs'
 import { buildLanes, anchorLane, stepsOf, nearestByTs } from './lanes.mjs'
-import { createDesk, applySession, laneAsk, applyLane, stepOf as deskStep } from './model.mjs'
+import { createDesk, applySession, applyLane, readTouched, mergeTouch, stepOf as deskStep } from './model.mjs'
 import { breakSteps } from './analysis.mjs'
 import { loadFold, saveFold } from './fold.mjs'
 import { landPlayhead, createPoller, createStepReads } from './follow.mjs'
@@ -31,7 +31,7 @@ import { openDetail, closeDetail, wireDetail } from './detail.mjs'
 import { initLayout } from './layout.mjs'
 import { renderSessionHead, wireSessionHead, captureGap } from './header.mjs'
 import { stepBarHtml, wireStepBar } from './stepbar.mjs'
-import { loadBodies, bodyCache, clearOverrides } from './cell.mjs'
+import { loadBodies, bodyCache, clearOverrides, isRetryable } from './cell.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
 import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, SESSION_READ_FAILED } from '../labels/replay.mjs'
 import { techDetailsHtml } from '../core/ui.mjs'
@@ -83,7 +83,7 @@ export function playheadSig(s, frame = 'rows') {
   const ref = a && s.diffRef != null ? a.calls[s.diffRef] : null
   return JSON.stringify([a && a.id, c, frame, st && st.held ? [st.flat.map((b) => b.bid), st.reply, st.detail] : null,
     ref ? ref.rid : null, [...(s.openBlocks || [])].sort(), [...(s.navOpen || [])].sort(), s.viewPin ? s.viewPin.resKey : null,
-    !!s.pricing, s.pricingErr || null])
+    !!s.pricing, s.pricingErr || null, (st && s.laneErr && s.laneErr.get(st.lane)) || null, s.bodyFail ? s.bodyFail.size : 0])
 }
 
 // 2.3 §车道未到手: a step whose lane is held draws its rows; one that is not keeps the desk as it is for BUSY_MS from `since`
@@ -144,6 +144,7 @@ function mountDesk(el, ctx) {
     navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
     railsFolded: typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches, rpOpen: false,
     gap: null, totals: null, errNote: null, lastPhSig: null, unheld: null, notListed: false, goodKey: null, goodAt: null, staleErr: null,
+    laneErr: new Map(), bodyFail: new Map(), // a step read that failed: lane key → reason, ref → its failed body (2.3 §读失败)
   })
   const s = {
     ctx, root, dead: false, project: route0.project, id: route0.id, initialStep: hasStep(route0) ? stepParam(route0.params.step).step : null,
@@ -269,9 +270,7 @@ function mountDesk(el, ctx) {
     const sig = playheadSig(s, f)
     s.renderStep() // 'Step N / M' moves with every new call
     if (sig !== s.lastPhSig) {
-      // the open rows' bodies go out as one `block` read; the cells drawn next share it instead of asking one by one (cell.mjs)
-      const refs = f === 'rows' ? openRefs(c.rid) : []
-      if (refs.length) loadBodies(api, refs, { signal: s.reads ? s.reads.signal : undefined }).catch((e) => console.error(e))
+      // drawn from what is here: the open rows' bodies are read by the step's own reads once the playhead rests (aim)
       renderContextWindow(E.ctxwin, s, { busy: f === 'busy' }); s.renderNav(); s.renderRaw(); s.lastPhSig = sig
     }
     if (s.follow !== s.headFollow) renderHeader() // the follow chip (a scrub onto or off the live end, a tick selection)
@@ -356,13 +355,13 @@ function mountDesk(el, ctx) {
   // ── a step's own reads: its lane, its open rows' bodies, the lane's older pages (2.3 §读与画; 3.5:69) ─────────────────
   const read = (name, p, opts) => api.get(name, { id: s.id, ...p }, opts)
   const laneIndex = (key, rid) => { const r = s.desk.laneRids.get(key); return r ? r.indexOf(rid) : -1 }
-  // the refs of a held step's rows that are open and not cached: the default-open reply kind (2.3:195) and the rows the reader opened
+  // the refs of a held step's bodies on show and not cached: its reply parts (the window's default-open kind, 2.3:195, and the raw panel) and the rows the reader opened
   function openRefs(rid) {
     const st = deskStep(s.desk, rid)
     if (!st.held) return []
-    const first = ['text', 'tool_use', 'thinking'].find((k) => st.reply.some((d) => d.kind === k))
+    // every reply part (the raw panel shows each one) and the request rows the reader opened
     const keys = rowKeys(st.flat)
-    const rows = [...st.reply.filter((d) => (d.kind === first) !== s.openBlocks.has('rp:' + d.bid)), ...st.flat.filter((b, i) => s.openBlocks.has(keys[i]))]
+    const rows = [...st.reply, ...st.flat.filter((b, i) => s.openBlocks.has(keys[i]))]
     return [...new Set(rows.map((d) => d.ref).filter((r) => r && !bodyCache.has(r)))]
   }
   // what a resting playhead still lacks: its lane (or the older page that holds it), its open bodies; then the lane's next older
@@ -387,10 +386,10 @@ function mountDesk(el, ctx) {
     const key = sessionKey(), mine = () => !s.dead && key === sessionKey()
     return createStepReads({
       get: read, need,
-      onLane: (rid, r) => {
+      onLane: (rid, r, q) => {
         if (!mine()) return
         const a = r && r.ok ? r.data : null
-        if (a) applyLane(s.desk, a)
+        if (a) { applyLane(s.desk, a); s.laneErr.delete(a.lane) } else if (q) s.laneErr.set(q.lane, (r && r.error) || 'cause not known')
         const was = openLane
         if ((a && a.lane === openLane) || (!a && rid == null)) openLane = null
         if (a) { wanted.delete(a.lane); if (s.anchor && a.lane !== s.anchor.id) { renderRails(E.rails, s); watchRails() } }
@@ -398,7 +397,11 @@ function mountDesk(el, ctx) {
         if (was && !openLane) aim()
         for (const k of wanted) if (!s.desk.held.has(k)) { steps.prefetch(k); break }
       },
-      onBodies: (rid) => { if (mine() && rid === s.playRid && s.anchor) { renderContextWindow(E.ctxwin, s); s.renderRaw() } },
+      onBodies: (rid, got, refs) => {
+        if (!mine()) return
+        refs.forEach((ref, i) => { if (isRetryable(got[i])) s.bodyFail.set(ref, got[i]); else s.bodyFail.delete(ref) })
+        if (rid === s.playRid && s.anchor) { renderContextWindow(E.ctxwin, s); s.renderRaw() }
+      },
     })
   }
   let steps = makeStepReads()
@@ -448,6 +451,8 @@ function mountDesk(el, ctx) {
   s.poll = () => poll(true)
   let quiet = false // the last delta brought nothing: the next tick backfills older rows instead (one `session` read per tick)
   // a quiet poll lets the resting playhead's lane read its next older page (need)
+  // a step read that failed is asked again on the poll's schedule (2.3 §读失败)
+  const reask = () => { if ((s.laneErr.size || s.bodyFail.size) && s.playRid != null && openLane == null) { targeted = s.playRid; steps.target(s.playRid) } }
   const olderPage = () => { const h = s.playRid != null && s.desk.held.get((s.desk.rows.get(s.playRid) || {}).lane); if (h && h.prev != null && openLane == null) { olderOk = true; targeted = s.playRid; steps.target(s.playRid) } }
 
   async function pollOnce() {
@@ -459,10 +464,13 @@ function mountDesk(el, ctx) {
       : desk.mark != null ? await read('session', { since: desk.mark }, { signal, hold: false }) : await read('session', {}, { signal })
     if (stale()) return
     if (!res.ok) return readFailed(res.error || 'cause not known')
+    const lastGood = s.goodAt
     s.errNote = null; s.goodKey = key; s.goodAt = api.now()
     const hadStale = !!s.staleErr; s.staleErr = null
-    if (res.status === 304 || !res.data) { quiet = true; if (hadStale) renderHeader(); olderPage(); return { ok: true } }
-    const a = res.data
+    const same = res.status === 304 || !res.data
+    if (same && !desk.lagging.size) { quiet = true; if (hadStale) renderHeader(); reask(); olderPage(); return { ok: true } }
+    // nothing new, but a lane an earlier read failed on is read now: an empty delta carries it through the same path
+    const a = same ? { base: desk.mark, mark: desk.mark } : res.data
     // the server knows no such session (meta null, nothing captured): said HERE, with a way back; the timer stops reading it
     if (a.base == null && !before && a.meta == null && !(a.calls || []).length) {
       s.goodKey = null; s.notListed = true; renderEmpty(''); E.ctxwin.innerHTML = notListedHtml(); E.ctxwin.__units = null; root.classList.add('notlisted'); renderHeader(); return { ok: true }
@@ -477,23 +485,19 @@ function mountDesk(el, ctx) {
     // applied in slices that yield (3.7), checking between them that the session is still this one
     const touched = new Map()
     let t0 = nowMs()
-    for (const part of slicesOf(a, before)) {
+    for (const part of same ? [] : slicesOf(a, before)) {
       const r = applySession(desk, part, { before })
-      for (const [k, v] of r.touched) if (!touched.has(k) || v.earliest === null) touched.set(k, v)
+      for (const [k, v] of r.touched) mergeTouch(touched, k, v)
       if (nowMs() - t0 > SLICE_MS) { await yieldNow(); if (stale()) return; t0 = nowMs() }
     }
-    // each held lane the delta touched reads on by 3.5's from-rule, forward page by page
-    for (const k of touched.keys()) {
-      let q = laneAsk(desk, k, touched)
-      for (let n = 0; q && n < 50; n++) {
-        const lr = await read('lane', q, { signal, hold: false })
-        if (stale()) return
-        if (!lr.ok || !lr.data) break
-        applyLane(desk, lr.data)
-        q = lr.data.base != null && lr.data.next ? { lane: k, from: lr.data.next } : null
-      }
-      changed?.add(k)
-    }
+    // each held lane the delta touched (and one an earlier read failed on) reads on by 3.5's from-rule, in the step reads' one
+    // lane slot; a failed read keeps that lane's drawn steps, leaves it for the next poll and says so in the header (K-29)
+    const lt = await steps.laneSlot(() => readTouched(desk, touched, (name, q) => read(name, q, { signal, hold: false }), stale))
+    if (!lt || stale()) return
+    for (const k of [...touched.keys(), ...lt.done]) changed?.add(k)
+    for (const k of lt.done) s.laneErr.delete(k)
+    if (!lt.ok) { s.staleErr = { reason: lt.error, since: lastGood }; s.goodAt = lastGood }
+    const result = (ok) => (lt.ok ? ok : { ok: false })
     s.meta = desk.meta
     s.lanes = buildLanes(desk, { count: desk.probes || 0, series: [] }, { prev: s.lanes, changed })
     const prevAnchor = s.anchor
@@ -502,7 +506,7 @@ function mountDesk(el, ctx) {
     if (!s.anchor || !s.anchor.calls.length) {
       renderEmpty('')
       E.ctxwin.innerHTML = `<div class="empty">${esc(desk.probes ? `This session has only token counts (${desk.probes}), no model calls to replay.` : 'No model calls have been captured in this session yet.')}</div>`
-      renderHeader(); return { ok: true, pending: desk.pending || undefined }
+      renderHeader(); return result({ ok: true, pending: desk.pending || undefined })
     }
     if (s.anchor !== prevAnchor) { s.anchorTs = s.anchor.calls.map((c) => Date.parse(c.ts)); s.breaks = breakSteps(s.anchor.calls); s.problems = problemSteps(s.anchor) }
     const first = s.viewSig !== key
@@ -527,8 +531,9 @@ function mountDesk(el, ctx) {
     renderAll()
     refreshDrawer()
     if (s.initialStep == null && (first || moved || String(router.current().params.step ?? '') !== String(shownStep()))) syncUrl()
+    reask()
     if (quiet) olderPage()
-    return { ok: true, pending: desk.pending || undefined }
+    return result({ ok: true, pending: desk.pending || undefined })
   }
 
   // ── capture health: read once per desk open, only to judge the 采集缺口 (1.2 §会话保真行); unreadable → no judgement

@@ -128,12 +128,13 @@ export function fillBody(api, bc, b) {
   bc.dataset.filled = '1'
   bc.innerHTML = bodyFor(b)
   if (!bc.querySelector('pre[data-ref]')) return Promise.resolve()
-  return loadBody(api, b.text_ref).then((got) => {
-    if (!bc.isConnected || !bc.querySelector('pre[data-ref]')) return
-    bc.innerHTML = blockBodyHtml(got, b)
-    if (typeof bc.closest === 'function') noteBodyFidelity(bc.closest('.cblk'), got)
-    if (isRetryable(got)) delete bc.dataset.filled
-  })
+  return loadBody(api, b.text_ref).then((got) => { if (bc.isConnected && bc.querySelector('pre[data-ref]')) showBody(bc, b, got) })
+}
+// paint `bc` with a body that has come back (`got`, as loadBodies resolves it); a failed one leaves `filled` clear
+export function showBody(bc, b, got) {
+  bc.innerHTML = blockBodyHtml(got, b)
+  if (typeof bc.closest === 'function') noteBodyFidelity(bc.closest('.cblk'), got)
+  if (isRetryable(got)) delete bc.dataset.filled
 }
 
 // ── one row ──────────────────────────────────────────────────────────────────────────────────────────────────────────

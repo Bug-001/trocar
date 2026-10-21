@@ -17,7 +17,7 @@ import { contentRefOf, contentRefKOf } from './stepbar.mjs'
 import { stepRef } from './lanes.mjs'
 import { stepOf } from './model.mjs'
 import { setFold, turnAnchorKey, turnIsOpen } from './fold.mjs'
-import { ctxBlockHtml, blockRowHtml, fillBody, faithOf, faithNow, ffBadgeHtml, tagWord, bodyFor } from './blocks.mjs'
+import { ctxBlockHtml, blockRowHtml, fillBody, showBody, faithOf, faithNow, ffBadgeHtml, tagWord, bodyFor } from './blocks.mjs'
 import { replyOf, replyMarkHtml } from './rawpanel.mjs' // one reply rule, two drawings (2.3 §这一步的回复 · 2.6 §A)
 
 export { blockBodyHtml } from './blocks.mjs'
@@ -129,6 +129,9 @@ export function ctxWindowUnits(s) {
   if (!call.rec) return [...out, { key: 'noreq', html: noRequestHtml() }] // ⑦
   if (call.unparsed) return [...out, { key: 'unparsed', html: unparsedHtml(call) }] // ⑥
   const st = s.desk ? stepOf(s.desk, call.rid) : null
+  // its lane's read failed: the K-29 sentence, Retry, the reason in the technical details — never empty frames (2.3 §读失败)
+  const why = st && !st.held && s.laneErr ? s.laneErr.get(st.lane) : null
+  if (why) return [...out, { key: 'lanefail', html: `<div class="empty" data-fail="lane">${esc(W.STEP_READ_FAILED)}<div class="emptywhy"><button type="button" class="linkbtn" data-retry="1">${esc(W.RETRY)}</button>${techDetailsHtml([['reason', why]], { id: 'lanetech' })}</div></div>` }]
   if (!st || !st.held) return [...out, { key: 'frames', html: busyFramesHtml(s, call) }]
   const flat = st.flat, keys = rowKeys(flat)
   s.curFlat = flat; s.curKeys = keys
@@ -237,12 +240,14 @@ function paint(el, units) {
   else { el.innerHTML = serialize(units); if (el.children && typeof document !== 'undefined') tag(el, units) }
   el.__units = units
 }
-// an open row whose bytes are not cached yet shows the pending cell: fetch them now (a re-render must not strand it)
+// an open row whose bytes are not cached shows the sized pending cell; the step's own reads fetch them once the playhead rests
+// (2.3 §快速拖动). A body whose read failed shows that failure and its reason here.
 function hydrate(el, s) {
-  if (!el.querySelectorAll || !s.ctx || !s.ctx.api) return
+  if (!el.querySelectorAll || !s.bodyFail || !s.bodyFail.size) return
   for (const pre of el.querySelectorAll('.cblk:not(.collapsed) > .cbc pre[data-ref]')) {
     const blk = pre.closest('.cblk'), b = blk.dataset.rp ? s.curReply && s.curReply.get(blk.dataset.rp) : s.curFlat[+blk.dataset.bi]
-    if (b) fillBody(s.ctx.api, blk.querySelector(':scope > .cbc'), b)
+    const got = b && s.bodyFail.get(b.text_ref)
+    if (got) showBody(blk.querySelector(':scope > .cbc'), b, got)
   }
 }
 

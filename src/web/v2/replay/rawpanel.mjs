@@ -7,7 +7,7 @@
 import { esc, kf } from '../core/fmt.mjs'
 import { techDetailsHtml, mark } from '../core/ui.mjs'
 import { relPath, ROUTING_LABELS } from './analysis.mjs'
-import { fillBody, bodyFor } from './blocks.mjs'
+import { showBody, bodyFor } from './blocks.mjs'
 import { stepOf } from './model.mjs'
 import { stepRef } from './lanes.mjs'
 import * as W from '../labels/replay.mjs'
@@ -121,10 +121,11 @@ export function renderRawPanel(el, s) {
   if (!st || !st.held) { el.innerHTML = head + modelLine + wireHtml(w) + busyRowsHtml(); return }
   const r = replyOf({ row: call, reply: st.reply, detail: d })
   el.innerHTML = head + modelLine + replyHtml(r) + rawReplyHtml(d, w) + paramsHtml(call, d) + extraHtml(d) + wireHtml(w) + observerHtml(w) + techHtml(call, d, w, r)
-  // the reply's cells whose bytes are not here yet fill in place once the one `block` read answers
-  if (el.querySelectorAll && s.ctx && s.ctx.api) {
+  // the reply's cells whose bytes are not here show the pending box; the step's own reads fetch them once the playhead rests
+  // (2.3 §快速拖动) and repaint; a body whose read failed shows that failure here
+  if (el.querySelectorAll && s.bodyFail && s.bodyFail.size) {
     const defs = new Map(r.parts.map((p) => [p.bid, p]))
-    for (const slot of el.querySelectorAll('[data-rpb]')) { const p = defs.get(slot.dataset.rpb); if (p && slot.querySelector('pre[data-ref]')) fillBody(s.ctx.api, slot, { ...p, text_ref: p.ref }) }
+    for (const slot of el.querySelectorAll('[data-rpb]')) { const p = defs.get(slot.dataset.rpb), got = p && s.bodyFail.get(p.ref); if (got && slot.querySelector('pre[data-ref]')) showBody(slot, { ...p, text_ref: p.ref }, got) }
   }
 }
 
