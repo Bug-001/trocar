@@ -727,11 +727,20 @@ const BLK_KEY_CAP = 4096
 // append-only conversation re-sends its whole context every turn, so one session asks for the key of the
 // SAME block text once per call — measured 17 594 block keys over 494 distinct contents. Hashing the 17 100
 // repeats was 89 ms of a 115-call session's 305 ms. Same text in, same key out; the map dies with the call.
+// A block OBJECT's hash is also kept by the object itself (a WeakMap: a stitched context hands the same parsed block to every call of
+// its chain, and the text would be built again for each); the per-lane text memo stays for the contents that arrive as new objects.
+// A memo's `null` is a miss, as `undefined` is: the fold's lane memo answers `null` for a lane with no baseline yet
+// (src/view/assemble.mjs: `keys.get(t) ?? (was && was.get(t))`), and a key must be the block's hash, whichever fold asked first.
+const keyOfBlock = new WeakMap()
 const blkKey = (prefix, b, memo) => {
-  const t = blkHashText(b, BLK_KEY_CAP)
-  if (!memo) return prefix + hash(t)
-  let h = memo.get(t)
-  if (h === undefined) memo.set(t, (h = hash(t)))
+  const obj = b && typeof b === 'object'
+  let h = obj ? keyOfBlock.get(b) : undefined
+  if (h === undefined) {
+    const t = blkHashText(b, BLK_KEY_CAP)
+    if (!memo) h = hash(t)
+    else if ((h = memo.get(t)) == null) memo.set(t, (h = hash(t)))
+    if (obj) keyOfBlock.set(b, h)
+  }
   return prefix + h
 }
 
@@ -751,6 +760,9 @@ function truncNote(text) {
   return m ? m[m.length - 1] : null
 }
 
+// A tools / system entry's parsed source item, the key of the per-block memos (blockBytes, flatBlockText). NON-enumerable: flat entries
+// ship inside page bodies, and the item must never serialize with them. A bare string has no identity to key by: it is left out.
+const withSrc = (d, src) => (src && typeof src === 'object' ? Object.defineProperty(d, 'src', { value: src }) : d)
 export function linearContext(request, keyMemo = null) {
   const flat = []
   // ── resource ↔ RESULT linking ────────────────────────────────────────
@@ -783,16 +795,16 @@ export function linearContext(request, keyMemo = null) {
       const verbatim = hasSchema || hasDesc
       const props = hasSchema ? (t.input_schema?.properties ? Object.keys(t.input_schema.properties) : []) : (t.input_schema_props || [])
       const descChars = hasDesc ? t.description.length : (t.description_chars || 0)
-      flat.push({
+      flat.push(withSrc({
         sec: 'tools', kind: 'tool', role: 'tool', ti: e.path.i, name: t.name || '', ttype: t.type || '',
         props, descChars, cc: t.cache_control || null, mcp,
         verbatim, desc: hasDesc ? t.description : undefined, schema: hasSchema ? t.input_schema : undefined,
         resKey: mcp ? 'mcp::' + (String(t.name).split('__')[1] || '') : '',
         key: 'T:' + (t.name || e.path.i) + ':' + descChars + ':' + props.length,
-      })
+      }, t))
     } else if (e.section === 'system') {
       const b = e.parsed, text = b?.text || ''
-      flat.push({ sec: 'system', kind: 'system', role: 'system', si: e.path.i, label: sysLabel(text), text, chars: text.length, volatile: e.volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }, keyMemo) })
+      flat.push(withSrc({ sec: 'system', kind: 'system', role: 'system', si: e.path.i, label: sysLabel(text), text, chars: text.length, volatile: e.volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }, keyMemo) }, b))
     } else {
       const b = e.parsed, type = typeof b === 'string' ? 'text' : (b?.type || 'text')
       const d = {
@@ -834,7 +846,16 @@ function canonJSON(v) {
 }
 // a flat block's canonical text — for byte-level divergence localization within the first diverging block,
 // and the verbatim byte source for the D17④ prefix SHA-256 (exported; used by the server-side assembler).
+// Memo by the parsed source object, as blockBytes (src/view/blockmeta.mjs): prefixChain asks it of every block of every call.
+const textOfSrc = new WeakMap()
 export function flatBlockText(b) {
+  const src = b.sec === 'tools' ? b.src : b.sec === 'system' ? null : b.block
+  if (!src || typeof src !== 'object') return flatBlockTextOf(b)
+  let t = textOfSrc.get(src)
+  if (t === undefined) textOfSrc.set(src, (t = flatBlockTextOf(b)))
+  return t
+}
+function flatBlockTextOf(b) {
   if (b.sec === 'tools') return 'T:' + (b.name || '') + '\u0001' + (b.desc != null ? b.desc : '') + '\u0001' + (b.schema !== undefined ? JSON.stringify(b.schema) : '')
   if (b.sec === 'system') return b.text || ''
   return blkHashText(b.block)

@@ -100,8 +100,15 @@ export function faithfulness(block) {
 // Link a message block to a resource-ledger id (file / skill / mcp / scaffold), or '' when none.
 // The board uses '' inline; the ETL maps '' → null. Labels MUST match extractResources'/addRes' keys
 // so the ledger join works. (Unifies the twin msgResKey [board] / resourceRefOf [ETL].)
+// Memo by the parsed block: a stitched context hands the same block to every call of its chain (parsed bodies are read-only).
+const refMemo = new WeakMap();
 export function resourceRef(b) {
   if (!b || typeof b !== 'object') return '';
+  let r = refMemo.get(b);
+  if (r === undefined) refMemo.set(b, (r = resourceRefOf(b)));
+  return r;
+}
+function resourceRefOf(b) {
   if (b.type === 'text' && typeof b.text === 'string') {
     // the resident SKILL.md body block → link to its skill (basename of "Base directory" === skill)
     const sk = b.text.match(/^Base directory for this skill: (\S+)/);
