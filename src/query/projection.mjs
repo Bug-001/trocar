@@ -6,12 +6,12 @@
 //
 // Lines: `{"v":PROJ_V}`, then `{"d":def}`, `{"c":row}`, `{"t":row}`, `{"b":brk}`, `{"s":{k,v}}` in any order. Definitions, rows
 // and shared values stay on disk: the store holds key → where its line is (compact columns) and reads a line back when asked, the
-// most recent rows and shared values kept, so its heap does not grow with the session's rows (extraction's bound, 4.3 §4). Breaks
+// most recently used rows and shared values kept up to a few MiB of their lines, so its heap does not grow with the session's rows (extraction's bound, 4.3 §4). Breaks
 // are held. A `t` line is a held row (extracted after a member that failed, §3.9): opening stops at the first one and cuts the
 // file there before the next append, so what is read back is always the rows of one pass over a prefix.
 //   Shared values (`s`): a value that recurs across rows (a lane's facts, a call's attributes, the wire's labels) is written once.
-// Top down to SHARE_DEPTH levels under a row, a value of SHARE_MIN bytes or more whose content was seen among the last SEEN values
-// looked at, or is shared already, is written as an `s` line keyed by its hash and stands in the row as `{"$s":key}`; a value not
+// Top down to SHARE_DEPTH levels under a row, a value of SHARE_MIN bytes or more whose content was seen among the last SEEN (to 2 × SEEN)
+// values looked at, or is shared already, is written as an `s` line keyed by its hash and stands in the row as `{"$s":key}`; a value not
 // seen stays inline and its children are looked at. A row read back puts each shared value back as one object every row read
 // while it is kept shares. An original value of the reference's own shape is always shared, so a reference is never ambiguous.
 // Content-blind: the store knows nothing of a row.
@@ -31,7 +31,9 @@ import { trocarHome } from '../paths.mjs';
 export const PROJ_V = 4;
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
 const SHARE_DEPTH = 3, SHARE_MIN = 48;
-const ROW_CACHE = 256, SHARED_CACHE = 4096, SEEN = 1 << 15; // rows / shared values read back and kept; recent value keys looked for
+// rows and shared values read back are kept by the bytes of their lines (a row grows with its context: a count let a long lane's
+// rows hold most of the heap, 2026-10-22), the value keys looked for by count; each cache holds one to two times its figure
+const ROW_BYTES = 2 << 20, SHARED_BYTES = 2 << 20, SEEN = 1 << 14;
 const CHUNK = 1 << 20;
 const NAME = /^[0-9a-f]{32}\.ndjson$/;
 
@@ -99,15 +101,29 @@ function lineIndex() {
     clear: () => slot.clear(),
   };
 }
-// a Map that keeps its `cap` most recently used entries
-function lru(cap) {
-  const m = new Map();
+// a cache in two generations: an entry goes into the current one, which becomes the old one (the old one dropped) once what it
+// holds weighs `cap`; a hit in the old one moves to the current one. So it keeps at least the last `cap` of weight used and at
+// most 2 × `cap` (plus one entry), every operation O(1). (Evicting the oldest entry of one Map in insertion order costs time with
+// the Map's size in V8, whose deleted entries stay as holes the next eviction walks: 6 µs an eviction at 32768 entries, 2026-10-22.)
+function gens(cap) {
+  let cur = new Map(), old = new Map(), w = 0;
+  const put = (k, v, kw) => {
+    cur.set(k, [v, kw]); w += kw;
+    if (w >= cap) { old = cur; cur = new Map(); w = 0; }
+  };
   return {
-    get(k) { const v = m.get(k); if (v !== undefined) { m.delete(k); m.set(k, v); } return v; },
-    has: (k) => m.has(k),
-    set(k, v) { m.delete(k); m.set(k, v); if (m.size > cap) m.delete(m.keys().next().value); },
-    delete: (k) => m.delete(k),
-    clear: () => m.clear(),
+    get(k) {
+      const e = cur.get(k);
+      if (e) return e[0];
+      const o = old.get(k);
+      if (!o) return undefined;
+      old.delete(k); put(k, o[0], o[1]);
+      return o[0];
+    },
+    has: (k) => cur.has(k) || old.has(k),
+    set(k, v, kw = 1) { const e = cur.get(k); if (e) w -= e[1]; old.delete(k); put(k, v, kw); },
+    delete(k) { const e = cur.get(k); if (e) { w -= e[1]; cur.delete(k); } old.delete(k); },
+    clear() { cur = new Map(); old = new Map(); w = 0; },
   };
 }
 
@@ -119,12 +135,12 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
   const mem = new Map(); // bid → def, for the definitions that are not on disk
   const rowAt = lineIndex(); // rid → its line on disk
   const rowMem = new Map(); // rid → row, for the rows that are not on disk
-  const rowCache = lru(ROW_CACHE);
+  const rowCache = gens(ROW_BYTES); // rid → row, weighed by its line's length
   const brks = new Map();
   const sharedAt = lineIndex(); // shared value key → its line on disk
   const sharedMem = new Map(); // shared value key → the value, while it is not on disk
-  const sharedCache = lru(SHARED_CACHE); // one object for every row read while it is kept
-  const seen = lru(SEEN); // content keys of the values at share positions written last
+  const sharedCache = gens(SHARED_BYTES); // one object for every row read while it is kept
+  const seen = gens(SEEN); // content keys of the values at share positions written last
   let bytes = 0, torn = false, failing = false, pending = [];
 
   const refsHeld = (row) => { let ok = true; eachSlot(row, 0, (h, k) => { const v = h[k]; if (!isRef(v)) return isObj(v); if (!sharedAt.has(v.$s)) ok = false; return false; }); return ok; };
@@ -143,7 +159,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     const p = sharedAt.get(k);
     if (!p) return undefined;
     v = lineAt(p).s.v;
-    sharedCache.set(k, v);
+    sharedCache.set(k, v, p[1]);
     return v;
   }
   // a row read back: its references put back in place (the shared instances kept)
@@ -168,7 +184,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
       if (off == null) rowMem.set(rid, o.row || o.c || o.t);
       else { rowAt.set(rid, off, len); rowMem.delete(rid); }
       rowCache.delete(rid);
-      if (o.row) rowCache.set(rid, o.row); // the row as given (the same as it reads back)
+      if (o.row) rowCache.set(rid, o.row, len); // the row as given (the same as it reads back)
     }
     if (o.b) brks.set(pairKey(o.b.brk[0], o.b.brk[1]), o.b);
   };
@@ -260,7 +276,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     held.unregister(store);
     try { fs.closeSync(fd); } finally { fd = null; }
   }
-  // the rows: those on disk are read back when asked (the most recent ROW_CACHE kept), so a store's heap does not grow with its session
+  // the rows: those on disk are read back when asked (the most recently used kept, by bytes), so a store's heap does not grow with its session
   function* rowKeys() { yield* rowAt.keys(); for (const k of rowMem.keys()) if (!rowAt.has(k)) yield k; }
   const rows = {
     has: (rid) => rowMem.has(rid) || rowAt.has(rid),
@@ -271,7 +287,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
       const p = rowAt.get(rid);
       if (!p) return undefined;
       const o = lineAt(p), row = expand(o.c || o.t);
-      rowCache.set(rid, row);
+      rowCache.set(rid, row, p[1]);
       return row;
     },
     get size() { let n = rowAt.size; for (const k of rowMem.keys()) if (!rowAt.has(k)) n++; return n; },

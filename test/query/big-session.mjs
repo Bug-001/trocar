@@ -12,6 +12,7 @@
 // after the ones started after it is written then — as the collector writes a call when it ends — so its line sorts before lines
 // already written, and before lines of other subagents that ended sooner.
 // `preamble`: text every subagent's first prompt starts with (a workflow's own instructions, shared by all its subagents).
+// `tools`: on the Anthropic wires, how many tool definitions each call carries that no call before it did (fresh names and schemas).
 // Exports only: node --test runs every .mjs.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -49,7 +50,7 @@ function turn(next, i, growth) {
  * thread or chain) once it holds more than `compactAt` characters.
  * `append(n)` appends the next n calls (as the daemon would, one line each) and returns the session's stored bytes so far.
  */
-export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '' } = {}) {
+export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '', tools = 0 } = {}) {
   const next = rng(seed), delay = rng(seed + 1)
   const file = path.join(home, 'raw', `${segment}.ndjson`)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
@@ -107,7 +108,8 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
       const msgId = `msg_${n}`
       const reply = [{ type: 'text', text }, ...(n % 4 ? [{ type: 'tool_use', id: `toolu_r${n}`, name: 'Read', input: { file_path: '/work/x.mjs' } }] : [])]
       const threads = wire === 'threads'
-      const body = { model: MODEL, max_tokens: 4096, ...(threads && lane.prev ? { thread: { type: 'continue', previous_message_id: lane.prev }, messages: delta }
+      const defs = Array.from({ length: tools }, (_, k) => ({ name: `tool_${n}_${k}`, description: words(next, 160), input_schema: { type: 'object', properties: { [words(next, 6).trim()]: { type: 'string', description: words(next, 60) } } } }))
+      const body = { model: MODEL, max_tokens: 4096, ...(tools ? { tools: defs } : {}), ...(threads && lane.prev ? { thread: { type: 'continue', previous_message_id: lane.prev }, messages: delta }
         : { ...(threads ? { thread: { type: 'create' } } : {}), system, messages: ask }) }
       env = {
         ts, endpoint: '/v1/messages', method: 'POST',
