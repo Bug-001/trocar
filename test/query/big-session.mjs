@@ -17,6 +17,7 @@
 // so a request body has the size and the long keys a real one has.
 // `reads`: each turn's tool call is a Bash command that reads `reads` distinct files (cat a b c …), so every call adds as many
 // resources to its lane — a call whose meta legitimately costs far more than an average one.
+// `tools`: on the Anthropic wires, how many tool definitions each call carries that no call before it did (fresh names and schemas).
 // Exports only: node --test runs every .mjs.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -56,7 +57,7 @@ function turn(next, i, growth, reads) {
  * thread or chain) once it holds more than `compactAt` characters.
  * `append(n)` appends the next n calls (as the daemon would, one line each) and returns the session's stored bytes so far.
  */
-export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '', cc = 0, reads = 0 } = {}) {
+export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '', cc = 0, reads = 0, tools = 0 } = {}) {
   const next = rng(seed), delay = rng(seed + 1)
   const file = path.join(home, 'raw', `${segment}.ndjson`)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
@@ -65,7 +66,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
   const held = [] // [line, the call count at which it is written]
   let n = 0, nsub = 0, stored = 0, ms = Date.parse('2026-10-20T16:47:37Z')
   const system = [{ type: 'text', text: 'You are a coding assistant operating in a terminal.' }]
-  const tools = Array.from({ length: cc }, (_, k) => ({ name: `Tool${k}`, description: words(next, 2_500),
+  const ccTools = Array.from({ length: cc }, (_, k) => ({ name: `Tool${k}`, description: words(next, 2_500),
     input_schema: { type: 'object', additionalProperties: false, properties: { file_path: { type: 'string', description: words(next, 300) } }, required: ['file_path'] },
     eager_input_streaming: true }))
   const line = () => {
@@ -117,9 +118,11 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
       const msgId = `msg_${n}`
       const reply = [{ type: 'text', text }, ...(n % 4 ? [{ type: 'tool_use', id: `toolu_r${n}`, name: 'Read', input: { file_path: '/work/x.mjs' } }] : [])]
       const threads = wire === 'threads'
+      const defs = Array.from({ length: tools }, (_, k) => ({ name: `tool_${n}_${k}`, description: words(next, 160), input_schema: { type: 'object', properties: { [words(next, 6).trim()]: { type: 'string', description: words(next, 60) } } } }))
+      const sent = [...(cc ? ccTools : []), ...defs]
       const mark = (ms) => (cc && ms.length ? [...ms.slice(0, -1), { ...ms[ms.length - 1], content: ms[ms.length - 1].content.map((c, i, a) => (i === a.length - 1 ? { ...c, cache_control: { type: 'ephemeral' } } : c)) }] : ms)
       const sys = cc ? [{ ...system[0], cache_control: { type: 'ephemeral' } }] : system
-      const body = { model: MODEL, max_tokens: 4096, ...(cc ? { tools } : {}), ...(threads && lane.prev ? { thread: { type: 'continue', previous_message_id: lane.prev }, messages: mark(delta) }
+      const body = { model: MODEL, max_tokens: 4096, ...(sent.length ? { tools: sent } : {}), ...(threads && lane.prev ? { thread: { type: 'continue', previous_message_id: lane.prev }, messages: mark(delta) }
         : { ...(threads ? { thread: { type: 'create' } } : {}), system: sys, messages: mark(ask) }) }
       env = {
         ts, endpoint: '/v1/messages', method: 'POST',

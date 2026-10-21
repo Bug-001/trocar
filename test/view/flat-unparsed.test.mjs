@@ -23,6 +23,7 @@ test('a corrupt request body on every wire is an unparsed call with the same rea
     assert.equal(s.unparsed, true, `${ep}: the page's "nothing to render" guard fires`);
     assert.equal(s.error, true, `${ep}: an unrenderable call is not shown as a normal one`);
     assert.deepEqual(s.flat, []);
+    assert.equal(s.wire.contextState, 'partial', `${ep}: a body that does not parse is no complete context (G17)`);
     out[ep] = s.errMsg;
   }
   assert.match(out['/v1/chat/completions'], /could not be parsed \(truncated \/ corrupt capture\)/);
