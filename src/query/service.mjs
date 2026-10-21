@@ -314,7 +314,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
 
   /** The board's `/control/<verb>` (4.4 §控制面): the same queue and frame path as `relay`, so a control verb waits its turn behind a query and the
    *  worker runs the CLI's own function (src/control/board.mjs). The caller checked the verb and parsed the small request body. */
-  const control = ({ verb, body = {}, res }) => answer(JSON.stringify({ control: verb, body }) + '\n', res, controlDeadlineMs, `control/${verb}`, `control/${verb}`)
+  const control = ({ verb, body = {}, res }) => answer(JSON.stringify({ control: verb, body }) + '\n', res, controlDeadlineMs, `control/${verb}`, subjectOf(`control/${verb}`, body))
 
   /** Fork a worker (if there is none) and run this query with nobody waiting: the board's page load warms it (4.4). */
   const warm = ({ name, params = {} }) => warmUp(lineOf(name, params), name, subjectOf(name, params))

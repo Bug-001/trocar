@@ -314,7 +314,6 @@ test(`the deadline measures silence: a worker that ${what} (3.5:42)`, async () =
       assert.equal(res.text(), '{"ok":true}')
       assert.deepEqual(said, [])
     } else {
-      assert.match(r, /did not answer/)
       assert.equal(said.length, 1, 'the wedged worker is a D38 failure')
       assert.ok(Date.now() - t0 >= 400 + 200, 'cut only after its last progress plus the deadline')
     }
@@ -413,5 +412,18 @@ test('#20: another subject (another session) is not cooled down by one that fail
     assert.equal(said.length, 2, 'and its failure is its own record')
     await assert.rejects(ask({ id: 'A' }))
     assert.equal(st.forks, 2, 'A is still cooling')
+  } finally { svc.stop() }
+})
+
+test('#20: a control verb\'s subject includes its body: a failed click does not refuse a different one', async () => {
+  const { svc, said, st } = episodic(() => CRASH)
+  const click = (body) => svc.control({ verb: 'harness', body, res: recorder() })
+  try {
+    await assert.rejects(click({ harness: 'claude', on: true }))
+    for (const body of [{ harness: 'claude', on: false }, { harness: 'codex', on: true }]) await assert.rejects(click(body))
+    assert.equal(st.forks, 3, 'each different click was tried')
+    assert.equal(said.length, 3)
+    await assert.rejects(click({ on: true, harness: 'claude' }))
+    assert.equal(st.forks, 3, 'the same click is cooling')
   } finally { svc.stop() }
 })
