@@ -8,7 +8,8 @@
 //
 // The document is what createAssembler(...).finish() gives for the same records (src/view/assemble.mjs), every call in its meta
 // form, plus `lanes[].key` (the id of the lane's first call) and `items` (record id → the facts the session document reads of it).
-// It carries no `prefixSha256` (the board only ever compared digests: `prefixByteIdentical` says the same over the frame hashes).
+// It carries no `prefixSha256` (the board only ever compared digests): `prefixByteIdentical` compares each block's verbatim slice
+// with its cache_control cut out (the definition's `vh`), never the frame text, so it can be false where the record fold says true.
 // One place it is more exact: the record fold keys a block by its first 4,096 characters (analyze.mjs BLK_KEY_CAP), so two blocks
 // that differ only past that are the same to it; here a block is its whole frame (one call of the user's live session, 2026-10-21).
 import { createAnalyzer, stepOrder, OrderBound, breakOf, blockDiff, compactionMeta, unparsedErrMsg } from './analyze.mjs';
@@ -121,7 +122,7 @@ function reduceIn(store, rids, resolve, found) {
     const D = store.readDef(L.bid(k));
     if (!D) throw new Error(`the context projection has no definition for block ${L.bid(k)}`);
     const f = D.f || {};
-    d = defs[k] = { key: intOf(`${D.sec}\x1F${D.role}\x1F${D.kind}\x1F${D.fh}`), fh: intOf(D.fh), sec: D.sec, role: D.role, name: D.name,
+    d = defs[k] = { key: intOf(`${D.sec}\x1F${D.role}\x1F${D.kind}\x1F${D.fh}`), vh: D.vh ?? null, sec: D.sec, role: D.role, name: D.name,
       bytes: D.bytes || 0, bucket: f.bucket || 'other', chars: D.chars || 0, f: D.sec === 'messages' ? f : null };
     return d;
   };
@@ -145,14 +146,19 @@ function reduceIn(store, rids, resolve, found) {
   }
   const seq = (list, attrs) => ({ n: list.length, key: (i) => def(list[i]).key, vol: (i) => !!(attrs[i] && attrs[i].volatile), sec: (i) => def(list[i]).sec, name: (i) => def(list[i]).name });
   // a call's cache break against its lane's base (the list and attributes of the lane's last call that chained a prefix), and the
-  // byte-identity of the prefix before it: 3.2:124, no claim over a context shown in part or edited by the server; else the frames
-  // before the break are the base's, volatile ones left out on each side (prefixChain's digest equality, over the frame hashes)
+  // byte-identity of the prefix before it (3.3:75, acceptance #12): no claim over a context shown in part or edited by the server;
+  // else each position of [0, idx) holds, on both sides, a block whose verbatim slice with its cache_control cut out has the same
+  // SHA-256 (`vh`), volatile positions skipped; a block with no verbatim slice (vh null) proves nothing, so the flag is false
   function cacheOf(base, list, attrs, x, compaction, usage) {
     const P = base ? seq(base.list, base.attrs) : null, C = seq(list, attrs);
     const brk = breakOf(P, C, { compaction, detail: (i) => detail(base.list[i], list[i]) });
     const blind = x.wire.contextState === 'partial' || x.wire.contextState === 'server_edited';
     let same = brk.idx > 0 && !blind && !!P;
-    for (let i = 0; same && i < brk.idx; i++) same = (P.vol(i) ? -1 : def(base.list[i]).fh) === (C.vol(i) ? -1 : def(list[i]).fh);
+    for (let i = 0; same && i < brk.idx; i++) {
+      if (P.vol(i) && C.vol(i)) continue;
+      const a = P.vol(i) ? null : def(base.list[i]).vh;
+      same = a != null && a === (C.vol(i) ? null : def(list[i]).vh);
+    }
     brk.prefixByteIdentical = same;
     brk.gt = realGroundTruth(same, usage.read, usage.create);
     brk.gtReal = true;

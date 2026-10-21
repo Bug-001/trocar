@@ -28,7 +28,7 @@ import { indexDir } from './index-build.mjs';
 import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
 
-export const PROJ_V = 3;
+export const PROJ_V = 4;
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
 const SHARE_DEPTH = 3, SHARE_MIN = 48;
 const ROW_CACHE = 256, SHARED_CACHE = 4096, SEEN = 1 << 15; // rows / shared values read back and kept; recent value keys looked for

@@ -39,6 +39,29 @@ const canonicalJson = (v) => JSON.stringify(v, (k, x) => (x && typeof x === 'obj
 export const unaddressableBid = (sec, role, value) => b64('u' + SEP + sec + SEP + role + SEP + (canonicalJson(value) ?? 'null'));
 /** fh: sha256 hex of the block's length-prefixed frame (the frame prefixChain hashes; cache_control is not in it). */
 export const fhOf = (b) => { const t = flatBlockText(b); return createHash('sha256').update(String(t.length) + ':' + t, 'utf8').digest('hex'); };
+const CC = '"cache_control"';
+/**
+ * vhOf(exact) → the SHA-256 (base64url) of a block's verbatim slice with its own `cache_control` member cut out by byte span: the
+ * member and the comma on one side, every other byte as it is (3.3:75, acceptance #12): what the board's "reusable prefix
+ * byte-identical" flag compares. null when the cut cannot be placed for sure (the slice does not scan, the member's key is not
+ * spelled plainly): no proof rather than a wrong one.
+ */
+export function vhOf(exact) {
+  let t = exact;
+  if (t.includes(CC)) {
+    let root = null;
+    try { root = scanJson(t); } catch { return null; }
+    if (root.kind === 'object' && root.props.has('cache_control')) {
+      const keys = [...root.props.keys()], vals = [...root.props.values()], j = keys.indexOf('cache_control');
+      const keyAt = (k) => { let p = k ? vals[k - 1].end : root.start + 1; while (p < t.length && /[\s,]/.test(t[p])) p++; return p; };
+      const from = keyAt(j);
+      if (!t.startsWith(CC, from)) return null;
+      const [a, z] = j + 1 < vals.length ? [from, keyAt(j + 1)] : j > 0 ? [vals[j - 1].end, vals[j].end] : [from, vals[j].end];
+      t = t.slice(0, a) + t.slice(z);
+    }
+  }
+  return createHash('sha256').update(t, 'utf8').digest('base64url');
+}
 
 // what an unaddressable block's id is taken over: its content, never its place
 const contentOf = (b) => (b.sec === 'messages' ? b.block ?? null : b.sec === 'system' ? b.text ?? ''
@@ -62,7 +85,11 @@ function factsOf(b) {
 export function definition(b, ref, exact, why = null) {
   const bid = ref != null && exact != null ? bidOf(b.sec, b.role, exact) : unaddressableBid(b.sec, b.role, contentOf(b));
   const s = slimBlock(b, ref != null && exact != null ? ref : null, why);
-  const def = { bid, fh: fhOf(b), ref: s.text_ref ?? null, sec: b.sec, role: b.role, kind: b.kind, head: s.head, preview: s.preview,
+  // vh: only of a verbatim slice. A block with no span has none, nor one whose faithfulness says its bytes are not the wire's
+  // (metadata, summarized, omitted, truncated). An opaque block (signature-only reasoning) is unreadable, not unproven: its span
+  // is the wire's bytes, so it keeps its vh (on the user's live session 9,092 of 10,308 calls carry one in their prefix).
+  const verbatim = ref != null && exact != null && (b.faithfulness == null || b.faithfulness === 'verbatim' || b.faithfulness === 'opaque');
+  const def = { bid, fh: fhOf(b), vh: verbatim ? vhOf(exact) : null, ref: s.text_ref ?? null, sec: b.sec, role: b.role, kind: b.kind, head: s.head, preview: s.preview,
     chars: s.chars, bytes: s.bytes, ff: jsonClean({ faithfulness: b.faithfulness, unaddressable: s.unaddressable }), r: renderOf(b), f: factsOf(b) };
   for (const k of META) if (b[k] !== undefined) def[k] = b[k];
   // the block's own resource key: a tool_result's mirrored file key is its place in the call (attrs), never its own
