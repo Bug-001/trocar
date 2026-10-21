@@ -8,6 +8,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runDaemonCli } from '../../src/cli/daemon.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
+import { assertEnglish } from '../helpers/english.mjs'
 
 const ioOf = () => { const out = [], err = []; return { out, err, io: { out: (s) => out.push(s), err: (s) => err.push(s), stdin: null, stdout: { isTTY: false }, stderr: { isTTY: false } } } }
 const tree = (d) => fs.readdirSync(d, { recursive: true }).sort()
@@ -20,7 +21,7 @@ for (const platform of ['freebsd', 'sunos', 'aix']) {
     for (const [name, run] of [['on', () => runOnCli([], { io: o.io, env, home, platform, deps })], ['daemon', () => runDaemonCli([], { io: o.io, env, home, platform, deps })]]) {
       var o = ioOf()
       assert.equal(await run(), 1, `${name}: ${o.err.join('\n')}`)
-      assert.match(o.err.join("\n"), /not supported yet/, `${name}: err=${o.err.join("\n")} out=${o.out.join("\n")}`)
+      assertEnglish(o.err.join('\n'), `${name}'s refusal`) // D58 V73
       assert.deepEqual(tree(home), [], `${name} wrote nothing`)
     }
     o = ioOf()
