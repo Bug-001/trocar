@@ -64,7 +64,8 @@ const sessionOf = (hash) => { const m = /^#\/replay\/[^/]+\/([^/?]+)/.exec(hash)
 
 /**
  * runSequence({steps, seed, big, viewport, theme, chromium, real, base, known, shot}) →
- *   { violation?: {id, sig, detail, step, screenshot}, step, seen:[{id, sig, detail, step}], pending:{id: {n, max}}, ms, coverage:{a: {ran, skipped}}, maxLongTask }
+ *   { violation?: {id, sig, detail, step, screenshot}, step, seen:[{id, sig, detail, step}], pending:{id: {n, max}}, ms, coverage:{a: {ran, skipped}}, maxLongTask,
+ *     serverErrors:[text] (the server's truth read failed past a restart's grace) }
  * Stops at the first violation whose sig is not in `known` (a Set of sigs, or 'all' to run every step); a known one is recorded in
  * `seen`, its evidence logs are cleared and the run goes on. `shot` names the screenshot (default `<id>-<screen>-<seed>`).
  */
@@ -72,7 +73,7 @@ export async function runSequence({ steps, seed = 1, big = false, viewport = 128
   const t0 = Date.now()
   const world = base ? null : makeWorld({ seed, big })
   let faults
-  const out = { step: -1, seen: [], pending: {}, coverage: {}, maxLongTask: 0 }
+  const out = { step: -1, seen: [], pending: {}, coverage: {}, maxLongTask: 0, serverErrors: [] }
   const b = await withBoard({ home: world, base, chromium, width: viewport, height: viewport < 768 ? 844 : 900, theme,
     setup: async (page) => { await page.addInitScript(recordInput); await installProbe(page); faults = await installFaults(page) } })
   const ctx = { b, page: b.page, world, faults, actions: [], hidden: [], follow: false, grownAt: null, lastGrow: null }
@@ -93,7 +94,9 @@ export async function runSequence({ steps, seed = 1, big = false, viewport = 128
       const settled = await settle(b.page, slow ? SETTLE_LATENCY_MS : SETTLE_CAP_MS)
       const hash = await b.page.evaluate(() => location.hash).catch(() => '')
       const id = sessionOf(hash)
-      const truth = id && !real ? () => retry(() => mainCount(b.get, id)) : undefined
+      // the server's own read failing is no frontend fault: reported, and that step's I-follow is not judged
+      let noTruth = false
+      const truth = id && !real ? () => retry(() => mainCount(b.get, id)).catch((e) => { noTruth = true; out.serverErrors.push(`step ${i}: ${e.message}`); return null }) : undefined
       // every input the page saw (a compound step clicks after its own waits) opens a reader window for I-rate
       for (const at of await b.page.evaluate(() => (window.__seqInput || []).splice(0)).catch(() => [])) ctx.actions.push({ t: at, a: 'input' })
       const c = { page: b.page, requests: b.requests, errors: b.errors, actions: ctx.actions, faults: faults.log, hidden: ctx.hidden, follow: ctx.follow,
@@ -105,7 +108,7 @@ export async function runSequence({ steps, seed = 1, big = false, viewport = 128
       prev = res.view
       for (const p of res.pending) { const e = out.pending[p.id] ||= { n: 0, max: 0 }; e.n++; if (typeof p.value === 'number') e.max = Math.max(e.max, p.value) }
       out.maxLongTask = Math.max(out.maxLongTask, await b.page.evaluate(() => window.__seq.snap().longtaskMax).catch(() => 0))
-      const vs = res.violations.filter((v) => settled || !SETTLED_ONLY.has(v.id))
+      const vs = res.violations.filter((v) => (settled || !SETTLED_ONLY.has(v.id)) && !(noTruth && v.id === 'I-follow'))
       const fresh = vs.find((v) => !(known === 'all' || known.has(v.sig)))
       if (fresh) {
         out.violation = { ...fresh, step: i, screenshot: await shoot(b.page, shot || `${fresh.id}-${fresh.sig.split(':')[1]}-${seed}`) }

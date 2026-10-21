@@ -23,6 +23,7 @@ export const LIMITS = Object.freeze({
   rateSlack: 0.8, // timer jitter: a gap of 0.8 × the expected interval still passes (plan §Invariants I-rate)
   actionWindowMs: Object.freeze([-200, 500]), // a read within this of a reader action is the reader's read (4.4:51)
   returnReadMs: 2000, // the one read on becoming visible again (4.4:49-51)
+  leakSlack: 2, // a one-time lazy global wiring (core/dom.mjs wireKeys on the first dialog) is no leak; a per-visit one passes it by the 4th visit
   settleMs: 3000, // how long check waits for in-flight fetches to settle before I-leak counts them
   memRatio: 1.5, memSlackBytes: 10 * 2 ** 20, // plan §Invariants I-mem
   memCapBytes: 80 * 2 ** 20, // pending: no spec line sets this cap yet
@@ -130,8 +131,8 @@ export async function check(ctx) {
   while (first && s.inflight > first.inflight && Date.now() < deadline) { await page.waitForTimeout(100); s = await probeSnap(page) }
   const now = { window: s.listeners.window, document: s.listeners.document, intervals: s.intervals, inflight: s.inflight, dom: v.dom, heap: await heapUsed(page) }
   if (!first) base.set(route, now)
-  else {
-    const more = ['window', 'document', 'intervals', 'inflight'].filter((k) => now[k] > first[k])
+  else if (!prev || routeOf(prev.hash) !== route) { // a revisit (the route was just entered again); within one visit an open overlay may hold more
+    const more = ['window', 'document', 'intervals', 'inflight'].filter((k) => now[k] > first[k] + LIMITS.leakSlack)
     if (more.length) bad('I-leak', more.map((k) => `${k} ${first[k]} → ${now[k]}`).join(', '))
     const grew = []
     if (now.dom > LIMITS.memRatio * first.dom) grew.push(`elements ${first.dom} → ${now.dom}`)
@@ -142,9 +143,11 @@ export async function check(ctx) {
 
   // I-follow / I-hold / I-url: the replay desk
   const desk = screen === 'replay' && v.step != null
-  if (desk && follow && grownAt != null && truth) {
+  // a hidden tab reads nothing (4.4:49-51): following is held to the growth only from the later of the growth and the return
+  const shownAt = Math.max(grownAt ?? 0, ...hidden.map((h) => h.to ?? Infinity))
+  if (desk && follow && grownAt != null && truth && shownAt !== Infinity) {
     let w = v, m = await truth()
-    while (!(w.step === m && w.of === m && w.reply) && Date.now() < grownAt + LIMITS.followMs) {
+    while (!(w.step === m && w.of === m && w.reply) && Date.now() < shownAt + LIMITS.followMs) {
       await page.waitForTimeout(250); w = await viewOf(page); m = await truth()
     }
     if (!(w.step === m && w.of === m && w.reply)) bad('I-follow', `following: shows ${w.step} / ${w.of}${w.reply ? '' : ' without the reply'}, the server has ${m}`)

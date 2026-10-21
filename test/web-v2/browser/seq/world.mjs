@@ -58,7 +58,7 @@ export async function mainCount(get, id) {
   let after = null, guard = 0
   for (;;) {
     const { status, doc } = await get('session', { id, ...(after != null ? { after } : {}) })
-    if (status !== 200 || !doc?.analyzed) throw new Error(`session ${id}: ${status}`)
+    if (status !== 200 || !doc?.analyzed) throw new Error(`session ${id}: ${status} ${String(doc?.error ?? "").slice(0, 400)}`)
     const main = doc.analyzed.lanes.find((l) => l.kind === 'main') || doc.analyzed.lanes[0]
     for (const c of main?.calls || []) seen.add(c.id)
     if (!doc.page?.has_more || ++guard > 10_000) return seen.size
