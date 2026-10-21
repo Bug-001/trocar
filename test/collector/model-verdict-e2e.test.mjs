@@ -2,9 +2,10 @@
 // path: `trocar on codex` through the CLI → a real daemon (liveUnit, the door parts' OS readers faked by model-io) → the agent's connection through the
 // real door is decrypted → the daemon restarts and nothing connects again → the manifest's liveness.codex is the shape an older trocar wrote (on
 // windows that start after the agent did, no `since`, no `door_since`), so its on windows cannot say the agent read an entry. What still knows is the
-// door's durable record (door-seen.json, 4.11 P12), and each reader takes it: `status` (P11: the process and codex captured), `off` (P12: the daemon's
-// GET /holders names it and its door forwards it only, CM23) and `uninstall` with the daemon down (CM24: refused, collectors-online, the holder
-// named). No request, socket path or lookupIngress is injected. One run per platform value.
+// door's durable record (door-seen.json, 4.11 P12): `status` takes it (P11: the process and codex captured) and `off` takes it (P12: the daemon's
+// GET /holders names it with why door-seen and its door forwards it only, CM23). `uninstall` with the daemon down is refused (CM24: collectors-online,
+// the holder named); its receipt carries no holder codes (1.6 C.2), and here history-unknown alone also holds the agent, so that step checks the refusal only.
+// No request, socket path or lookupIngress is injected. One run per platform value.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
@@ -80,7 +81,7 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(await runOffCli(['codex'], { io, home: w.home, env: w.env, platform, deps: offDeps }), 0)
         const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env })
         const held = await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/holders' })
-        assert.deepEqual((held.holders || []).filter((x) => x.pid === PID).map((x) => x.harness), ['codex'], JSON.stringify(held))
+        assert.deepEqual((held.holders || []).filter((x) => x.pid === PID).map((x) => [x.harness, x.why]), [['codex', 'door-seen']], JSON.stringify(held))
         a.ports.add(await freePort()); win?.write()
         const two = await through({ door, auth, target, localPort: [...a.ports].at(-1), ca: [mockCa.certPem], req: reqOf(target), open })
         assert.equal(two.reply, REPLY)
@@ -88,7 +89,7 @@ for (const platform of ['darwin', 'win32']) {
         await two.end()
         assert.deepEqual(recordsOf(raw).filter((x) => !recorded.includes(x)), [], 'nothing recorded for the forwarded connection')
 
-        // the daemon stops and stays down (CM24): uninstall judges the holders itself, from door-seen.json and the process table — refused
+        // the daemon stops and stays down (CM24): uninstall judges the holders itself and is refused (door-seen and history-unknown both hold here; the receipt has no why)
         await within(box.daemon.stop({ reason: 'test' }), 15_000, 'the daemon stopped')
         http.globalAgent.destroy()
         const out = { t: '' }
