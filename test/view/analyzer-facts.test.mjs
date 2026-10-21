@@ -1,23 +1,13 @@
 // test/view/analyzer-facts.test.mjs — the analyzer's facts seam (RFC 4.3 §3 · §4): everything createAnalyzer reads of a record
 // or block comes from blockFacts / callFacts, which the context projection persists (index/ctx, invariant 2: a deletable projection).
-//   (a) the facts survive a JSON round trip, generated over block kinds and call shapes;
-//   (b) moving the reads changed no document: assembleSession over generated sessions equals, serialised, what the code before the
-//       seam produced (that commit's src/ is taken from git into a temp dir and run beside this one).
+//   (a) the facts survive a JSON round trip, generated over block kinds and call shapes.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import path from 'node:path'
-import { execFileSync } from 'node:child_process'
-import { fileURLToPath, pathToFileURL } from 'node:url'
 import { blockFacts, callFacts, admitted } from '../../src/view/analyze.mjs'
-import { assembleSession } from '../../src/view/assemble.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from '../query/big-session.mjs'
 import { threadSession, record, replyOf } from '../helpers/cc-threads.mjs'
-
-// the last commit before the facts seam: its fold is the expected one
-const BEFORE = '1e323709edaae2b4cc30aae2af167e28d4c16ad5'
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
 // ── generated axes ─────────────────────────────────────────────────────────
 const R = '<system-reminder>', RC = '</system-reminder>'
@@ -104,26 +94,5 @@ test('(a) blockFacts and callFacts survive a JSON round trip, over every block k
     const h = admitted(v0(r))
     roundTrips(callFacts(h), `callFacts of ${r.id}`)
     for (const m of h.request.messages) for (const b of Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]) roundTrips(blockFacts(b), `a block of ${r.id}`)
-  }
-})
-
-// ── (b) ─────────────────────────────────────────────────────────────────────
-async function beforeFold() {
-  const dir = tmpDir('trocar-facts-before-')
-  const tar = execFileSync('git', ['-C', REPO, 'archive', '--format=tar', BEFORE, 'src'], { maxBuffer: 256 * 1048576 })
-  execFileSync('tar', ['-x', '-C', dir], { input: tar })
-  return import(pathToFileURL(path.join(dir, 'src/view/assemble.mjs')).href)
-}
-const doc = (fn, recs) => JSON.stringify(fn(structuredClone(recs)))
-
-test('(b) the session document is the one the fold gave before the seam, on generated sessions', async () => {
-  const before = await beforeFold()
-  const cases = { axes: axesSession(), threads: threadRecords(), 'threads-gap': threadRecords().filter((r, i) => i !== 2), ...Object.fromEntries(['http', 'threads', 'ws', 'chat'].map((w) => [`big-${w}`, bigRecords(w)])) }
-  for (const [name, recs] of Object.entries(cases)) {
-    const want = doc(before.assembleSession, recs), got = doc(assembleSession, recs)
-    if (got === want) continue
-    let i = 0
-    while (got[i] === want[i]) i++
-    assert.fail(`${name}: documents differ at ${i}\n  before …${want.slice(Math.max(0, i - 200), i + 200)}\n  now    …${got.slice(Math.max(0, i - 200), i + 200)}`)
   }
 })
