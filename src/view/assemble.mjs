@@ -302,29 +302,33 @@ function flatLaneFold(d, read, baselines) {
     return { rec: slimRec(r), norm: d.normResp(r), nonBlockKeys: nonBlockKeysOf(r, d.id), flat: ctx ? withLocatedRefs(flat, ctx.locate, new Map()) : withPathRefs(flat, r) };
   }
   const all = () => [...byLane.values()].flat();
-  function finish() {
-    const calls = all().sort((a, b) => a.gi - b.gi);
-    const kinds = Object.keys(FLAT_LANES).filter((k) => calls.some((c) => c.streamId === k));
-    const lanes = kinds.map((k) => {
-      const lc = calls.filter((c) => c.streamId === k);
-      // the compaction events the board's outline lists, carrying the step's inference marker with them (invariant 4)
-      const events = lc.filter((c) => c.compaction).map((c) => ({ type: 'compaction', step: c.gi, streamId: k, from: c.evictedFrom, to: c.evictedTo,
-        inferred: c.compactionInferred, confidence: c.compactionConfidence, basis: c.compactionBasis }));
-      return { id: k, streamId: k, ...FLAT_LANES[k], task: null, [HEAD]: asks.get(lc[0]) ?? null, calls: lc, events, resources: [], seenFiles: [],
-        giLocal: new Map(lc.map((c, i) => [c.gi, i])), peakCtx: lc.reduce((m, c) => Math.max(m, c.ctx), 1),
-        spawnStep: null, parent: null, flagged: 0 };
-    });
-    const stats = {
-      calls: calls.length, streams: lanes.length, subagents: lanes.filter((l) => l.kind === 'subagent').length, monitors: 0,
-      compactions: calls.filter((c) => c.compaction).length,
-      totalIn: calls.reduce((a, c) => a + ((c.norm.usage || {}).input_tokens || 0), 0),
-      totalOut: calls.reduce((a, c) => a + ((c.norm.usage || {}).output_tokens || 0), 0),
-      peakCtx: calls.reduce((a, c) => Math.max(a, c.ctx), 0),
-    };
-    return { provider: d.provider, streams: lanes.map((l) => ({ id: l.id, kind: l.kind, calls: l.calls })), steps: calls, stats, lanes };
-  }
+  const finish = () => flatLaneView(d, all(), (c) => asks.get(c));
   const self = { push, bodyOf, finish, calls: all };
   return self;
+}
+
+// The document of a flat-lane wire's calls (`calls`, each with its global gi): one lane per kind, named by the kind (several agents'
+// lanes of one kind shown as one), its compaction events, the stats. `askOf(call)` → the first prompt of the lane that call opens.
+export function flatLaneView(d, all, askOf) {
+  const calls = all.slice().sort((a, b) => a.gi - b.gi);
+  const kinds = Object.keys(FLAT_LANES).filter((k) => calls.some((c) => c.streamId === k));
+  const lanes = kinds.map((k) => {
+    const lc = calls.filter((c) => c.streamId === k);
+    // the compaction events the board's outline lists, carrying the step's inference marker with them (invariant 4)
+    const events = lc.filter((c) => c.compaction).map((c) => ({ type: 'compaction', step: c.gi, streamId: k, from: c.evictedFrom, to: c.evictedTo,
+      inferred: c.compactionInferred, confidence: c.compactionConfidence, basis: c.compactionBasis }));
+    return { id: k, streamId: k, ...FLAT_LANES[k], task: null, [HEAD]: askOf(lc[0]) ?? null, calls: lc, events, resources: [], seenFiles: [],
+      giLocal: new Map(lc.map((c, i) => [c.gi, i])), peakCtx: lc.reduce((m, c) => Math.max(m, c.ctx), 1),
+      spawnStep: null, parent: null, flagged: 0 };
+  });
+  const stats = {
+    calls: calls.length, streams: lanes.length, subagents: lanes.filter((l) => l.kind === 'subagent').length, monitors: 0,
+    compactions: calls.filter((c) => c.compaction).length,
+    totalIn: calls.reduce((a, c) => a + ((c.norm.usage || {}).input_tokens || 0), 0),
+    totalOut: calls.reduce((a, c) => a + ((c.norm.usage || {}).output_tokens || 0), 0),
+    peakCtx: calls.reduce((a, c) => Math.max(a, c.ctx), 0),
+  };
+  return { provider: d.provider, streams: lanes.map((l) => ({ id: l.id, kind: l.kind, calls: l.calls })), steps: calls, stats, lanes };
 }
 
 // records = ONE session's raw (v0/demo-shape) records. Returns analyze() output with each
@@ -635,7 +639,7 @@ export function assembleSession(records) {
 }
 
 // Several wires in one session: steps re-sorted by the global gi, lanes of the same id merged.
-function mergeViews(views) {
+export function mergeViews(views) {
   const steps = views.flatMap((v) => v.steps || []).sort((a, b) => a.gi - b.gi);
   const by = new Map();
   for (const l of views.flatMap((v) => v.lanes || [])) {

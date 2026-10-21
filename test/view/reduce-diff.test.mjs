@@ -1,6 +1,7 @@
-// test/view/reduce-diff.test.mjs — TEMPORARY (deleted once the real session
-// agrees): the document reduced from a session's context projection is the record fold's, over generated Anthropic sessions (whole
-// context each call, and Message Threads; sub-agents side by side and written late), the thread helper's session in causal and file
+// test/view/reduce-diff.test.mjs — TEMPORARY (deleted once the real
+// session agrees): the document reduced from a session's context projection is the record fold's, over generated sessions on every
+// wire (Anthropic whole context and Message Threads, Responses over HTTP and WebSocket, Chat; sub-agents side by side and written
+// late), sessions mixing wires with records no dissector reads, the thread helper's session in causal and file
 // order, axes that break the cache inside the shared prefix (an edited block, reordered JSON keys, a reordered tools array), a call
 // that fails midway (it moves no lane's baseline), the committed captured response shapes, and the real captured session when on disk.
 //   (a) reduce(projection) ≡ createAssembler push-all → finish, serialised, except prefixSha256, lanes[].key, items
@@ -55,6 +56,60 @@ const failed = (recs) => recs.map((r, i) => (i === Math.floor(recs.length / 2)
   ? { ...r, resp: { status: 529, kind: 'json', body: { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } } } } : r));
 const fixture = (name) => fs.readFileSync(new URL(`../fixtures/${name}`, import.meta.url), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 
+// Codex over Responses HTTP: the whole context each request; every third call a subagent's (a harness lane hint, no agent id), a
+// probe (prewarm) call, and one call per axis midway: a compaction (the harness hint, the input cut), a failed stream, an edited turn
+const SSE = (events) => events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
+function responses(axis, n = 15) {
+  const lanes = { main: [], sub: [] }, k = Math.floor(n / 2), out = [];
+  const tools = [{ type: 'function', name: 'shell', description: 'run a command', parameters: { type: 'object', properties: { cmd: { type: 'string' } } } }];
+  for (let i = 0; i < n; i++) {
+    const sub = i % 3 === 2, probe = i === 1, L = sub ? 'sub' : 'main';
+    if (sub && lanes.sub.length > 6) lanes.sub = [];
+    if (axis === 'compaction' && i === k) lanes.main = lanes.main.slice(-3);
+    if (!probe) lanes[L].push({ type: 'message', role: 'user', content: [{ type: 'input_text', text: `ask ${i} `.repeat(30) }] },
+      { type: 'function_call', name: 'shell', arguments: JSON.stringify({ cmd: `ls ${i}` }), call_id: `c${i}` },
+      { type: 'function_call_output', call_id: `c${i}`, output: `out ${i} `.repeat(40) });
+    const input = lanes[L].map((m) => JSON.parse(JSON.stringify(m)));
+    if (axis === 'edited' && i === k && !sub) input[0].content[0].text += ' (edited)';
+    const item = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `reply ${i}` }] }, id = `resp_${i}`;
+    const failed = axis === 'failed' && i === k;
+    const events = [{ type: 'response.created', response: { id } }, { type: 'response.output_item.added', output_index: 0, item },
+      { type: 'response.output_item.done', output_index: 0, item },
+      { type: failed ? 'response.failed' : 'response.completed', response: { id, status: failed ? 'failed' : 'completed', output: [item],
+        usage: { input_tokens: 100 + i, input_tokens_details: { cached_tokens: 50 * i }, output_tokens: 20 } } }];
+    const meta = probe ? 'prewarm' : axis === 'compaction' && i === k ? 'compaction' : null;
+    out.push({ ts_request: new Date(Date.parse('2026-10-20T16:47:37Z') + i * 4000).toISOString(), endpoint: '/v1/responses', is_llm_call: true,
+      proc: { pid: 1, exe: '/x/codex', agent: 'codex' },
+      req_headers: { 'session-id': 'S', ...(sub ? { 'x-openai-subagent': 'agent' } : {}), ...(meta ? { 'x-codex-turn-metadata': JSON.stringify({ request_kind: meta }) } : {}) },
+      req_body: JSON.stringify({ model: 'gpt-x', instructions: 'You are Codex.', tools, input: probe ? [] : input, stream: true }),
+      resp: { status: 200, kind: 'sse', raw: SSE(events), raw_sse: events } });
+  }
+  return out;
+}
+// one session, several wires (Hermes: Chat for the conversation, the Anthropic wire for a side model), and records no dissector reads
+function mixed(n = 14) {
+  const msgs = [{ role: 'system', content: 'you are hermes' }], out = [];
+  for (let i = 0; i < n; i++) {
+    const at = { ts_request: new Date(Date.parse('2026-10-20T16:47:37Z') + i * 4000).toISOString(), is_llm_call: true,
+      proc: { pid: 1, exe: '/x/hermes', agent: 'hermes' }, req_headers: {}, resp: { status: 200, kind: 'sse', raw_sse: [], usage: {} } };
+    if (i % 5 === 4) { out.push({ ...at, endpoint: '/v1beta/models/x:generateContent', req_body: JSON.stringify({ session_id: 'H1', contents: [] }) }); continue; }
+    if (i % 4 === 3) {
+      out.push({ ...at, endpoint: '/v1/messages', req_body: JSON.stringify({ session_id: 'H1', model: 'claude-haiku', system: [{ type: 'text', text: 'title this' }], messages: [{ role: 'user', content: `q ${i}` }] }) });
+      continue;
+    }
+    msgs.push({ role: 'user', content: `turn ${i} `.repeat(20) }, { role: 'assistant', content: `answer ${i} `.repeat(10) });
+    out.push({ ...at, endpoint: '/v1/chat/completions', req_body: JSON.stringify({ session_id: 'H1', model: 'nous', messages: msgs }) });
+  }
+  return out;
+}
+// records written later than they were sent: every `pick`ed record moves `by` places down the file (as a call is written when it ends)
+function lateBy(recs, pick, by) {
+  const out = recs.slice();
+  for (let i = out.length - 1; i >= 0; i--) if (pick(out[i], i)) out.splice(Math.min(out.length - 1, i + by), 0, ...out.splice(i, 1));
+  return out;
+}
+const subOf = (r) => /subagent/.test(JSON.stringify(r.req_headers) + (r.req_body || ''));
+
 function sessions() {
   const out = {};
   for (const wire of ['http', 'threads']) for (const late of [0, 3]) for (const subLanes of [1, 2]) out[`${wire} late=${late} subLanes=${subLanes}`] = big(wire, late, subLanes);
@@ -63,6 +118,9 @@ function sessions() {
   out['threads helper file order'] = T.fileOrder;
   for (const axis of Object.keys(AXES)) out[`http ${axis}`] = broken(big('http', 0, 1), axis);
   for (const wire of ['http', 'threads']) for (const late of [0, 3]) out[`${wire} failed late=${late}`] = failed(big(wire, late, 2));
+  for (const wire of ['ws', 'chat']) for (const late of [0, 3]) for (const subLanes of [1, 2]) out[`${wire} late=${late} subLanes=${subLanes}`] = big(wire, late, subLanes);
+  for (const axis of ['plain', 'compaction', 'failed', 'edited']) for (const late of [0, 2]) out[`responses ${axis} late=${late}`] = lateBy(responses(axis), subOf, late);
+  for (const late of [0, 2]) out[`mixed late=${late}`] = lateBy(mixed(), (r) => /messages|generate/.test(r.endpoint), late);
   out['captured response shapes'] = fixture('old-capture-resp-shapes.ndjson').filter((r) => /^\/v1\/messages/.test(r.endpoint || ''));
   for (const k of Object.keys(out)) out[k] = filed(out[k]);
   return out;
@@ -85,9 +143,10 @@ function projected(recs, home = tmpDir('trocar-reduce-')) {
   const resolve = (ref) => blockAt(byId.get(parseTextRef(ref).recordId), ref);
   return { store, members, resolve, home, doc: () => reduce(store, members, { resolve }) };
 }
-// the documents as they are sent, minus what the reduction leaves out or adds on purpose
+// the documents as they are sent, minus what the reduction leaves out or adds on purpose (`mark` / `pending`: the extraction frontier
+// a projection is reduced at, design §3.4, which a fold over records has no counterpart for; reduce-frontier.test.mjs covers them)
 const serialised = (doc) => {
-  const { items, ...rest } = doc;
+  const { items, mark, pending, ...rest } = doc;
   return JSON.parse(JSON.stringify({ ...rest, lanes: (rest.lanes || []).map(({ key, ...l }) => l) },
     (k, v) => (k === 'prefixSha256' ? undefined : v instanceof Map ? [...v] : v)));
 };

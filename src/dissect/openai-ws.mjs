@@ -207,7 +207,7 @@ function stitchOf(rec) {
   if (role !== 'call' && role !== 'warmup' && role !== 'unstored') return null;
   const done = completed(rec);
   const base = { scope: connOf(rec), link: done ? done.e.response.id : null, gap: null, inherit: { system: 'own', tools: 'own' } };
-  if (role === 'unstored') return { ...base, cont: false, prev: null, head: { contextState: 'partial', missing: unstoredRequestOf(rec) }, settle: (s) => s };
+  if (role === 'unstored') { const why = unstoredRequestOf(rec); return { ...base, cont: false, prev: null, unstored: why, head: { contextState: 'partial', missing: why }, settle: (s) => s }; }
   const prev = prevIdOf(bodyOf(rec));
   return { ...base, cont: !!prev, prev, absent: prev ? absentWhy(prev) : null, head: { contextState: 'complete', missing: null },
     settle: (s) => (prev ? settled(rec, { ...s }) : s) };

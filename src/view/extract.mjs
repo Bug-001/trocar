@@ -27,7 +27,7 @@ import { hasCompactionPreamble } from '../identity/session-identity.mjs';
 import { sessionKeyOf } from '../dissect/harnesses.mjs';
 import { posCmp } from '../query/projection.mjs';
 import { safeHeaders } from '../capture/redact.mjs';
-import { bodyRetentionOf, retentionLabelOf } from '../dissect/capture-labels.mjs';
+import { bodyRetentionOf, retentionLabelOf, reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs';
 
 const SEP = '\x1F';
 const b64 = (s) => createHash('sha256').update(s, 'utf8').digest().subarray(0, 16).toString('base64url');
@@ -310,6 +310,7 @@ export function extract(rec, ctx) {
   const msgs = inherited.concat(mine), head = tools.concat(system), all = head.concat(msgs);
   const list = all.map((e) => e.bid), attrs = all.map((e) => e.a), mb = [];
   msgs.forEach((e, k) => { if (e.start) mb.push(head.length + k); });
+  if (st && st.unstored != null) x.unstored = st.unstored; // a call whose request was not stored: no context, its reply real
   if (st) {
     // what a successor stitches from this row: where it is found, its reply's message starts, its pending file tool_uses
     Object.assign(x, { link: st.link, scope: st.scope, gap: st.gap, continued: st.cont, rmb,
@@ -365,7 +366,10 @@ function callX(rec, { d, format }, { h, req, unparsed }) {
       error: !!rec.error || !!facts.failed, replyId: replyIdOf(rec) });
   }
   const norm = d.normResp(rec);
+  // `agent`: the wire's own agent (a WebSocket connection), what a subagent's lane is folded by when the harness names none
   return jsonClean({ ...common, lane: flatLaneOf(d, rec), hints: hintsOf(rec), msgCount: d.messageCount ? d.messageCount(req) : (req.message_count || 0),
+    agent: d.agentOf ? d.agentOf(rec) ?? undefined : undefined, rq: slimRec(h).request, ctx: d.ctxTokens(norm), nu: norm.usage,
+    reqIncomplete: reqIncompleteOf(rec), wsIncomplete: wsIncompleteOf(rec), respIncomplete: respIncompleteOf(rec),
     model: req.model, unparsed, wire: wireOf(rec, d.id, null, norm), nonBlockKeys: nonBlockKeysOf(rec, d.id), usage: norm.canonUsage,
     stop_reason: norm.stop_reason, error: !!rec.error || unparsed || !!(d.failed && d.failed(norm, rec)), replyId: norm.id ?? null });
 }

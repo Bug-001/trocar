@@ -9,8 +9,10 @@
 // The document is what createAssembler(...).finish() gives for the same records (src/view/assemble.mjs), every call in its meta
 // form, plus `lanes[].key` (the id of the lane's first call) and `items` (record id → the facts the session document reads of it).
 // It carries no `prefixSha256` (the board only ever compared digests: `prefixByteIdentical` says the same over the frame hashes).
-import { createAnalyzer, stepOrder, OrderBound, breakOf, blockDiff } from './analyze.mjs';
-import { realGroundTruth, unknownSummary, assembleUnknown } from './assemble.mjs';
+import { createAnalyzer, stepOrder, OrderBound, breakOf, blockDiff, compactionMeta, unparsedErrMsg } from './analyze.mjs';
+import { realGroundTruth, unknownSummary, assembleUnknown, flatLaneView, mergeViews } from './assemble.mjs';
+import { compactionVerdict } from '../identity/session-identity.mjs';
+import { boardDissectorOf } from '../dissect/registry.mjs';
 import { COMP_KEYS, tellApart } from './blockmeta.mjs';
 import { posCmp } from '../query/projection.mjs';
 
@@ -67,13 +69,19 @@ const orderOfRow = (row) => ({ ts_request: row.x.item.ts_request, id: row.x.item
 const isCall = (row) => !!(row && row.x && Array.isArray(row.x.secs));
 
 /**
- * reduce(store, members, {resolve}) → the session's document (see the head of this file). `members`: the session's index rows (or
- * record ids); those the store holds a row for are reduced, in write order, as the record path folds them. `resolve(ref)` → the flat
- * entry of the block `ref` names (src/view/extract.mjs blockAt over the record read back): asked only for a break detail no `brk`
- * line holds yet.
+ * reduce(store, members, {mark, resolve}) → the session's document (see the head of this file) at `mark` (design §3.4 "Extraction
+ * frontier"): the reduction over the members whose record id is ≤ mark (posCmp) and nothing else. `members`: the session's index
+ * rows (or record ids); those up to the mark that the store holds a row for are reduced, in write order, as the record path folds
+ * them. With no mark, the mark is the store's frontier: the largest member such that every member up to it has a row. The document
+ * carries `mark`, and `pending: {done, total}` (members up to the mark, members) while members above it exist. `resolve(ref)` → the
+ * flat entry of the block `ref` names (src/view/extract.mjs blockAt over the record read back): asked only for a break detail no
+ * `brk` line holds yet.
  */
-export function reduce(store, members, { resolve = null } = {}) {
-  const rids = [...new Set(members.map(ridOf))].filter((rid) => store.rows.has(rid)).sort(posCmp);
+export function reduce(store, members, { mark = undefined, resolve = null } = {}) {
+  const all = [...new Set(members.map(ridOf))].sort(posCmp);
+  if (mark === undefined) { mark = null; for (const rid of all) { if (!store.rows.has(rid)) break; mark = rid; } }
+  const upTo = mark == null ? [] : all.filter((rid) => posCmp(rid, mark) <= 0);
+  const rids = upTo.filter((rid) => store.rows.has(rid));
   const found = new Map(); // break details worked out by this reduction, written as `brk` lines once it is done
   let doc;
   try { doc = reduceIn(store, rids, resolve, found); } catch (e) {
@@ -83,11 +91,15 @@ export function reduce(store, members, { resolve = null } = {}) {
     doc = reduceIn(store, rids.slice().sort(byOrder), resolve, found);
   }
   if (found.size) store.append({ brks: [...found.values()] });
+  doc.mark = mark;
+  if (upTo.length < all.length) doc.pending = { done: upTo.length, total: all.length };
   return doc;
 }
 
+const byOrder = (a, b) => stepOrder({ ts_request: a.ts, id: a.id }, { ts_request: b.ts, id: b.id });
+
 function reduceIn(store, rids, resolve, found) {
-  const L = listsOf(store), an = createAnalyzer(), items = new Map(), unknown = [], other = [];
+  const L = listsOf(store), items = new Map(), unknown = [], other = [];
   const defs = []; // block int → what the reduction reads of its definition (held for this reduction only)
   const keys = new Map(); // (sec, role, kind, fh) → int
   const intOf = (s) => { let k = keys.get(s); if (k === undefined) keys.set(s, (k = keys.size)); return k; };
@@ -101,8 +113,6 @@ function reduceIn(store, rids, resolve, found) {
       bytes: D.bytes || 0, bucket: f.bucket || 'other', chars: D.chars || 0, f: D.sec === 'messages' ? f : null };
     return d;
   };
-  const lanes = new Map(); // the analyzer's lane → { base: the list and attributes of its last call that chained a prefix, last: { list, comp } }
-  let calls = 0;
 
   // the break detail of a pair of blocks: from the projection, else from both blocks' texts (once)
   const blockOf = (bid) => {
@@ -122,7 +132,60 @@ function reduceIn(store, rids, resolve, found) {
     return d;
   }
   const seq = (list, attrs) => ({ n: list.length, key: (i) => def(list[i]).key, vol: (i) => !!(attrs[i] && attrs[i].volatile), sec: (i) => def(list[i]).sec, name: (i) => def(list[i]).name });
+  // a call's cache break against its lane's base (the list and attributes of the lane's last call that chained a prefix), and the
+  // byte-identity of the prefix before it: 3.2:124, no claim over a context shown in part or edited by the server; else the frames
+  // before the break are the base's, volatile ones left out on each side (prefixChain's digest equality, over the frame hashes)
+  function cacheOf(base, list, attrs, x, compaction, usage) {
+    const P = base ? seq(base.list, base.attrs) : null, C = seq(list, attrs);
+    const brk = breakOf(P, C, { compaction, detail: (i) => detail(base.list[i], list[i]) });
+    const blind = x.wire.contextState === 'partial' || x.wire.contextState === 'server_edited';
+    let same = brk.idx > 0 && !blind && !!P;
+    for (let i = 0; same && i < brk.idx; i++) same = (P.vol(i) ? -1 : def(base.list[i]).fh) === (C.vol(i) ? -1 : def(list[i]).fh);
+    brk.prefixByteIdentical = same;
+    brk.gt = realGroundTruth(same, usage.read, usage.create);
+    brk.gtReal = true;
+    return brk;
+  }
+  // a fold's push: a call that sorts before its lane's last call puts the lane in again, its rows in step order with this one in place
+  const pushOf = (take, callsOf, drop) => (rid) => {
+    const call = take(rid), cs = callsOf(call);
+    if (cs.length < 2 || byOrder(cs[cs.length - 2], call) < 0) return;
+    const ids = cs.slice(0, -1).map((c) => String(c.id)), me = orderOfRow(store.rows.get(rid));
+    drop(call);
+    let pending = true;
+    for (const id of ids) {
+      if (pending && stepOrder(me, orderOfRow(store.rows.get(id))) < 0) { take(rid); pending = false; }
+      take(id);
+    }
+    if (pending) take(rid);
+  };
+  const K = { store, L, def, cacheOf, pushOf };
+  const folds = new Map(); // wire format → its fold
+  for (const rid of rids) {
+    const row = store.rows.get(rid), x = row.x || {};
+    if (x.item) items.set(rid, x.item);
+    if (isCall(row)) {
+      if (!folds.has(x.format)) folds.set(x.format, x.format === 'anthropic' ? anthropicFold(K) : flatFold(boardDissectorOf(x.format), K));
+      folds.get(x.format).push(rid);
+    } else if (x.unknown) (x.item.is_llm_call ? unknown : other).push({ at: { ts_request: x.item.ts_request, id: x.item.id }, facts: x.unknown });
+  }
+  const facts = (xs) => [...xs].sort((a, b) => stepOrder(a.at, b.at)).map((u) => u.facts);
+  if (!folds.size) return { ...assembleUnknown(facts(unknown.length ? unknown : other)), items };
+  [...folds.values()].flatMap((f) => f.calls()).sort(byOrder).forEach((c, i) => { c.gi = i; });
+  const first = (v) => (v.steps.length ? v.steps[0].gi : Infinity);
+  const views = [...folds.values()].map((f) => f.finish()).sort((a, b) => first(a) - first(b));
+  const A = views.length === 1 ? views[0] : mergeViews(views);
+  tellApart(A.lanes);
+  if (unknown.length) A.unknown = unknownSummary(facts(unknown), true);
+  for (const l of A.lanes) l.key = l.calls.length ? String(l.calls[0].id) : null;
+  A.items = items;
+  return A;
+}
 
+// The Anthropic wire's fold: the analyzer's lanes (createAnalyzer, fed call views), each call baked against its lane's base.
+function anthropicFold({ store, L, def, cacheOf, pushOf }) {
+  const an = createAnalyzer();
+  const lanes = new Map(); // the analyzer's lane → { base, last: { list, comp } }
   function view(row, list, mb) {
     const messages = mb.map((s, j) => {
       const end = j + 1 < mb.length ? mb[j + 1] : list.length, ks = list.slice(s, end);
@@ -135,7 +198,6 @@ function reduceIn(store, rids, resolve, found) {
   function take(rid) {
     const row = store.rows.get(rid), x = row.x, e = L.at(rid), list = e.list, attrs = row.attrs || {};
     const call = an.pushView(view(row, list, e.mb));
-    calls++;
     const lane = an.laneOf(call);
     if (lane.calls[0] === call) an.ask(lane, firstHumanOf(list, def));
     call.wire = x.wire;
@@ -143,18 +205,8 @@ function reduceIn(store, rids, resolve, found) {
     call.usage = x.usage;
     const st = lanes.get(lane) || { base: null, last: null };
     lanes.set(lane, st);
-    const P = st.base ? seq(st.base.list, st.base.attrs) : null, C = seq(list, attrs);
-    const brk = breakOf(P, C, { compaction: !!call.compaction, detail: (i) => detail(st.base.list[i], list[i]) });
-    // 3.2:124: no byte-identity claim over a context shown in part or edited by the server; else the frames before the break are the
-    // previous call's, volatile ones left out on each side (prefixChain's digest equality, over the frame hashes)
-    const blind = x.wire.contextState === 'partial' || x.wire.contextState === 'server_edited';
-    let same = brk.idx > 0 && !blind && !!P;
-    for (let i = 0; same && i < brk.idx; i++) same = (P.vol(i) ? -1 : def(st.base.list[i]).fh) === (C.vol(i) ? -1 : def(list[i]).fh);
-    brk.prefixByteIdentical = same;
-    brk.gt = realGroundTruth(same, call.usage.read, call.usage.create);
-    brk.gtReal = true;
-    call.cacheBreak = brk;
-    call.gt = brk.gt;
+    call.cacheBreak = cacheOf(st.base, list, attrs, x, !!call.compaction, call.usage);
+    call.gt = call.cacheBreak.gt;
     if (call.chainsPrefix !== false) st.base = { list, attrs };
     call.comp = compOf(st.last, list, def);
     st.last = { list, comp: call.comp };
@@ -163,39 +215,45 @@ function reduceIn(store, rids, resolve, found) {
     call.norm = { usage: x.facts.usage };
     return call;
   }
-  const byOrder = (a, b) => stepOrder({ ts_request: a.ts, id: a.id }, { ts_request: b.ts, id: b.id });
-  // a call that sorts before its lane's last call: the lane goes in again, its rows in step order with this one in its place
-  function push(rid) {
-    const call = take(rid), lane = an.laneOf(call), cs = lane.calls;
-    if (cs.length < 2 || byOrder(cs[cs.length - 2], call) < 0) return;
-    const ids = cs.slice(0, -1).map((c) => String(c.id)), me = orderOfRow(store.rows.get(rid));
-    an.drop(lane); lanes.delete(lane);
-    let pending = true;
-    for (const id of ids) {
-      if (pending && stepOrder(me, orderOfRow(store.rows.get(id))) < 0) { take(rid); pending = false; }
-      take(id);
-    }
-    if (pending) take(rid);
-  }
+  const push = pushOf(take, (call) => an.laneOf(call).calls, (call) => { const lane = an.laneOf(call); an.drop(lane); lanes.delete(lane); });
+  return { push, calls: () => an.calls(), finish() { const A = an.finish(); A.provider = 'cc'; return A; } };
+}
 
-  for (const rid of rids) {
-    const row = store.rows.get(rid), x = row.x || {};
-    if (x.item) items.set(rid, x.item);
-    if (isCall(row)) {
-      if (x.format !== 'anthropic') throw new Error(`reduce: calls on the ${x.format} wire are not reduced yet`);
-      push(rid);
-    } else if (x.unknown) (x.item.is_llm_call ? unknown : other).push({ at: { ts_request: x.item.ts_request, id: x.item.id }, facts: x.unknown });
+// A flat-lane wire's fold (assemble.mjs flatLaneFold over rows): a lane per agent (a subagent named by the harness's agent id or the
+// wire's own, the rest by lane kind), each call's compaction verdict on the dissector's message count, its cache break against its
+// lane's last call that did not fail; the document names lanes by kind (flatLaneView).
+function flatFold(d, { store, L, def, cacheOf, pushOf }) {
+  const byLane = new Map(), base = new Map(), info = new Map(), last = new Map(), laneOfCall = new WeakMap(), asks = new WeakMap();
+  function take(rid) {
+    const row = store.rows.get(rid), x = row.x, e = L.at(rid), list = e.list, attrs = row.attrs || {}, h = x.hints || {};
+    const kind = x.lane, agent = kind === 'subagent' ? h.laneKey ?? x.agent ?? null : null;
+    const lane = agent == null ? kind : `${kind}\n${agent}`;
+    // 3.4: a call whose context is unknown has no observed message count: no compaction verdict, and not the next one's predecessor
+    const noContext = !!x.unparsed || x.unstored != null || x.wire.contextState === 'partial';
+    const comp = noContext ? { compaction: false } : compactionMeta(compactionVerdict(info.get(lane) || null,
+      { hint: h.compaction === true, marker: h.compactionMarker === true, msgCount: x.msgCount || 0 }));
+    if (!noContext) info.set(lane, { msgCount: x.msgCount || 0, marker: h.compactionMarker === true });
+    const brk = cacheOf(base.get(lane), list, attrs, x, comp.compaction, x.usage);
+    const rq = requestOf(x, list, def);
+    const call = {
+      gi: null, id: x.item.id, streamId: kind, rec: { id: x.item.id, request: rq }, norm: { usage: x.nu || {} }, wireFormat: d.id, ctx: x.ctx || 0,
+      msgCount: rq.message_count || 0, tools: rq.tool_count || 0, ts: x.ts, status: x.status || null,
+      ...comp, error: !!x.error, reqIncomplete: x.reqIncomplete, wsIncomplete: x.wsIncomplete, respIncomplete: x.respIncomplete,
+      ...(x.unparsed ? { unparsed: true, errMsg: unparsedErrMsg(x.reqIncomplete) } : x.unstored != null ? { unparsed: true, errMsg: `unrenderable: ${x.unstored}` } : null),
+      wire: x.wire, nonBlockKeys: [], ...(x.extraMessages ? { extraMessages: x.extraMessages } : null), respRefs: x.respRefs, flat: [], paged_out: true,
+      comp: compOf(last.get(lane), list, def), usage: x.usage, cacheBreak: brk, gt: brk.gt,
+    };
+    last.set(lane, { list, comp: call.comp });
+    laneOfCall.set(call, lane);
+    if (!byLane.has(lane)) { byLane.set(lane, []); asks.set(call, firstHumanOf(list, def)); }
+    byLane.get(lane).push(call);
+    // a call that failed never established a cache prefix; one whose request was not stored does (with no blocks)
+    if (!(x.error || (x.status != null && x.status !== 200))) base.set(lane, { list, attrs });
+    return call;
   }
-  const facts = (xs) => [...xs].sort((a, b) => stepOrder(a.at, b.at)).map((u) => u.facts);
-  if (!calls) return { ...assembleUnknown(facts(unknown.length ? unknown : other)), items };
-  an.calls().sort(byOrder).forEach((c, i) => { c.gi = i; });
-  const A = an.finish();
-  A.provider = 'cc';
-  tellApart(A.lanes);
-  if (unknown.length) A.unknown = unknownSummary(facts(unknown), true);
-  for (const l of A.lanes) l.key = l.calls.length ? String(l.calls[0].id) : null;
-  A.items = items;
-  return A;
+  const push = pushOf(take, (call) => byLane.get(laneOfCall.get(call)), (call) => { const lane = laneOfCall.get(call); for (const m of [byLane, base, info, last]) m.delete(lane); });
+  const calls = () => [...byLane.values()].flat();
+  return { push, calls, finish: () => flatLaneView(d, calls(), (c) => asks.get(c)) };
 }
 
 // The first human prompt of a list (blockmeta firstHuman, from each user text's `human` fact).
@@ -218,8 +276,8 @@ function compOf(last, list, def) {
 function requestOf(x, list, def) {
   const rq = { ...(x.rq || {}) };
   if (!x.continued) return rq;
-  rq.message_count = x.facts.msgCount;
-  rq.tool_count = x.facts.tools;
+  rq.message_count = (x.facts || x).msgCount;
+  rq.tool_count = x.facts ? x.facts.tools : x.secs[0];
   let chars = 0;
   for (let i = x.secs[0]; i < x.secs[0] + x.secs[1]; i++) chars += def(list[i]).chars;
   rq.system_chars = chars;
