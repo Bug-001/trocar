@@ -132,7 +132,7 @@ async function shoot({ doc, w, h, out }) {
     fs.writeFileSync(page, doc)
     const r = spawnSync(bin, ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--force-device-scale-factor=2',
       `--window-size=${w},${h}`, `--screenshot=${out}`, '--virtual-time-budget=1000', `--user-data-dir=${tmp}/p`,
-      pathToFileURL(page).href], { encoding: 'utf8' })
+      pathToFileURL(page).href], { encoding: 'utf8', timeout: 30000 }) // headless Chrome 154 on macOS 27 can stay up after writing the png
     if (!fs.existsSync(out)) throw new Error(`chrome did not write the png: ${(r.stderr || r.error?.message || '').trim().split('\n').pop()}`)
   } finally { fs.rmSync(tmp, { recursive: true, force: true }) }
 }

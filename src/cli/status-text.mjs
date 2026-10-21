@@ -13,7 +13,7 @@ const upFor = (since, now) => { const t = Date.parse(since); if (!Number.isFinit
 
 /** The daemon in one clause, from the daemon's own answer — never a stale pid as the present state (§1.1). */
 function daemonClause(d, now) {
-  if (d.running === true) { const up = d.since ? upFor(d.since, now) : null; return `Daemon running (pid ${d.pid ?? unknown('no pid recorded')}${up ? `, up ${up}` : ''}).` }
+  if (d.running === true) { const up = d.since ? upFor(d.since, now) : null; return `Daemon running (pid ${d.pid ?? 'unknown'}${up ? `, up ${up}` : ''}).` }
   if (d.running === false) return `Daemon not running${d.error ? ` (${d.error})` : ''}; nothing is captured. Start it: trocar on`
   if (d.responding === false) return `Daemon does not answer${d.error ? ` (${d.error})` : ''}; new connections are not captured.`
   return `Daemon: ${unknown(d.error || 'its state could not be read')}.`
@@ -123,8 +123,8 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
 export const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:127\.0\.0\.1|\[?::1\]?|localhost):(\d+)/.exec(String(url || '')); return m ? `:${m[1]}` : String(url || unknown('no address recorded')) }
 
 // ── `--failures` (§3.5: one line per kind of problem, then Expected) ──────────────────────────────────────────────
-/** One group's line: the shared sentence, then (when the sentence stands for a known code) the record's own reason — the CLI has no technical details to fold it into. */
-const failureLine = (g) => { const r = failureWord(g.where, g.code, g.harness || '') && briefText(g.reason || ''); return r ? `${failureBrief(g)}: ${r}` : failureBrief(g) } // no nested brackets (§1.1②): a reason has its own
+/** One group's line: its harness when the group names one (D38: for whom), the shared sentence, then (when the sentence stands for a known code) the record's own reason — the CLI has no technical details to fold it into. */
+const failureLine = (g) => { const r = failureWord(g.where, g.code, g.harness || '') && briefText(g.reason || ''); const s = r ? `${failureBrief(g)}: ${r}` : failureBrief(g); return g.harness ? `${g.harness}: ${s}` : s } // no nested brackets (§1.1②): a reason has its own
 
 /** The whole wall of the last 24 hours: one line per `level:'problem'` group of the document's `failures` (C.3, the board's capture log reads the same
  *  groups and words), then the `Expected` section (what is not a problem by design). */
