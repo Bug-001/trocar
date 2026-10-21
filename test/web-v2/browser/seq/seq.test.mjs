@@ -16,7 +16,7 @@ const STEPS = +(env.SEQ_STEPS || 60), BIG = env.SEQ_BIG === '1'
 const SEEDS = env.SEQ_SEED ? [+env.SEQ_SEED] : Array.from({ length: +(env.SEQ_SEEDS || 6) }, (_, k) => +(env.SEQ_SEED_BASE || 1) + k)
 const saved = regressions()
 const known = new Set(saved.filter((r) => r.status === 'open').map((r) => r.sig))
-const generated = {}, ran = {}
+const generated = {}, ran = {}, shrunk = new Set() // a sig is shrunk once per run; later seeds that meet it fail without shrinking
 
 const report = (label, r) => {
   for (const [id, p] of Object.entries(r.pending)) console.log(`PENDING ${id} ${p.max || 'seen'} in ${p.n} step(s) (${label})`)
@@ -49,6 +49,8 @@ for (const seed of SEEDS) {
     report(`seed ${seed} ${opts.viewport} ${opts.theme}`, r)
     if (!r.violation) return
     const v = r.violation
+    if (shrunk.has(v.sig)) assert.fail(`seed ${seed}: ${v.sig} again at step ${v.step} — ${v.detail} (screenshot ${v.screenshot}); shrunk once in this run`)
+    shrunk.add(v.sig)
     console.log(`seed ${seed}: ${v.sig} at step ${v.step} — ${v.detail}; shrinking`)
     const reg = await findOne(v, steps, opts, { log: (m) => console.log(`  ${m}`) })
     assert.fail(`seed ${seed}: ${v.sig} (${reg.status}) — ${v.detail}\n  minimal steps (${reg.steps.length}, ${reg.trials} trials): ${JSON.stringify(reg.steps)}\n  screenshot ${v.screenshot}\n  saved ${reg.file}`)

@@ -41,6 +41,7 @@ const nameOf = (url) => { const p = url.split('?')[0]; return p.startsWith('/api
 const failedRead = (e) => e.failed || e.cut || e.status === 0 || e.status >= 500
 const baselines = new WeakMap() // page → Map(route → first-visit counts)
 const cdps = new WeakMap()
+const visits = new WeakMap() // page → {route, t}: when the route on screen was entered
 
 async function heapUsed(page) {
   let s = cdps.get(page)
@@ -127,16 +128,24 @@ export async function check(ctx) {
 
   // I-leak / I-mem: the route's first visit is its baseline; a later visit may not hold more
   const deadline = Date.now() + LIMITS.settleMs
-  const first = base.get(route)
+  let first = base.get(route)
+  // the world grew since the baseline: what the route draws grew with the data, so the baseline is taken again (not a leak)
+  if (first && grownAt != null && grownAt > first.at) { base.delete(route); first = undefined }
   while (first && s.inflight > first.inflight && Date.now() < deadline) { await page.waitForTimeout(100); s = await probeSnap(page) }
-  const now = { window: s.listeners.window, document: s.listeners.document, intervals: s.intervals, inflight: s.inflight, dom: v.dom, heap: await heapUsed(page) }
-  if (!first) base.set(route, now)
+  const now = { window: s.listeners.window, document: s.listeners.document, intervals: s.intervals, inflight: s.inflight, dom: v.dom, heap: await heapUsed(page), at: Date.now() }
+  // a visit with a failed read drew a failure state, not the route: no baseline (a later clean visit is)
+  let visit = visits.get(page)
+  if (!visit || visit.route !== route) visits.set(page, visit = { route, t: prev?.t ?? 0 })
+  const clean = !s.fetchLog.some((e) => e.start >= visit.t && failedRead(e) && !e.aborted)
+  if (!first) { if (clean) base.set(route, now) }
   else if (!prev || routeOf(prev.hash) !== route) { // a revisit (the route was just entered again); within one visit an open overlay may hold more
     const more = ['window', 'document', 'intervals', 'inflight'].filter((k) => now[k] > first[k] + LIMITS.leakSlack)
     if (more.length) bad('I-leak', more.map((k) => `${k} ${first[k]} → ${now[k]}`).join(', '))
     const grew = []
     if (now.dom > LIMITS.memRatio * first.dom) grew.push(`elements ${first.dom} → ${now.dom}`)
-    if (now.heap > LIMITS.memRatio * first.heap + LIMITS.memSlackBytes) grew.push(`heap ${first.heap} → ${now.heap}`)
+    // a first visit's heap is a cold page's (no store, no caches yet): the heap's baseline is the route's first revisit
+    if (first.warm == null) first.warm = now.heap
+    else if (now.heap > LIMITS.memRatio * first.warm + LIMITS.memSlackBytes) grew.push(`heap ${first.warm} → ${now.heap}`)
     if (grew.length) bad('I-mem', grew.join(', '))
   }
   if (now.heap > LIMITS.memCapBytes) pending.push({ id: 'I-memcap', value: now.heap, pointer: PENDING.get('I-memcap') })
