@@ -29,7 +29,6 @@ export const UNREACHED = Object.freeze({
   'src/collector/core/redirector.mjs': 'the Redirector contract (4.6:333) plus createStaticRedirector, which only tests use',
   'src/collector/core/engine/codes.mjs': 'regrouping of src/health/codes.mjs that only tests use',
   'src/capture/desktop-steer.mjs': 'old CC-Desktop Clash Verge steer; only src/netenv/clash.mjs reached it (for socket discovery), and D49 deleted that. Removal waits on the backlog',
-  'src/query/fold-log.mjs': 'the fold log store (Q16, storage only); the reduction writes and reads it from Q17 on, which removes this row',
   'src/off/clash.mjs': 'the Verge strip / reload half of that steer, reached only through src/capture/desktop-steer.mjs; same backlog items',
 })
 
