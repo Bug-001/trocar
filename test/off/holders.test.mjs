@@ -163,6 +163,9 @@ for (const [os, read] of Object.entries(READERS)) {
       assert.equal(sawEntry(row, l), os === 'darwin')
       const [earlier] = await read(truly - 1000)
       assert.equal(sawEntry(earlier, l), false)
+      const closed = rec('agentx', { on_at: iso(S + k) }) // after off the same row is judged on the same interval: a reader of entries is a holder
+      assert.equal(holdersOf({ manifest: manifest({ agentx: closed }), procs: [row] }).length, os === 'darwin' ? 1 : 0)
+      assert.equal(holdersOf({ manifest: manifest({ agentx: closed }), procs: [earlier] }).length, 0)
     })
   }
 }

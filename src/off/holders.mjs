@@ -22,16 +22,14 @@ export function windowsOf(l) {
 }
 
 /** Did live process `p` (startedAt in ms or ISO) read an entry of `l`'s harness that still leads to its door (4.11 P11 status, D31①)? → true · false · null (its start is not known).
- *  `p.startGrain` (ms, listProcs's rows) is how finely its reader knows the start: the true start is somewhere in [startedAt, startedAt + startGrain) —
- *  a whole-second reading (macOS `lstart`) inside on_at's second read the entry (1.6 A.2 row 32). A row that states none is taken as exact. */
+ *  Judged as the holders are (mayHaveRead, over the start its reader's `startGrain` allows): a whole-second reading (macOS `lstart`) inside on_at's
+ *  second read the entry (1.6 A.2 row 32), and after off is a holder. */
 export function sawEntry(p, l) {
   const w = windowsOf(l)
   if (!w.length) return false
   if (p.startedAt == null) return null
-  const at = msOf(p.startedAt)
-  const last = at + (Number.isFinite(p.startGrain) && p.startGrain > 1 ? p.startGrain - 1 : 0)
-  // the earliest possible start (a rereading harness: started before off_at), and the possible start nearest the window's opening
-  return w.some((x) => [at, Math.min(Math.max(at, x.since ?? at), last)].some((s) => mayHaveRead({ startedAt: s }, l, x.since, x.until)))
+  const q = { startedAt: msOf(p.startedAt), startGrain: p.startGrain }
+  return w.some((x) => mayHaveRead(q, l, x.since, x.until))
 }
 
 /** → `[{ harness, pid, start, why: 'started-in-window' | 'rereads' | 'start-unknown' | 'door-seen' }]`, in liveness order, one row per (harness, pid).
