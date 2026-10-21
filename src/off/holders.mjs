@@ -6,7 +6,7 @@
 // request (`per_request`: the cordis-plugin) makes none. Built on the kept off liveness judge (signature.mjs); imports only src/off (standalone-safe, 0.1 §2).
 import { harnessesOf, withAgentList, mayHaveRead } from './signature.mjs'
 import { chromiumRole } from './chromium.mjs'
-import { validFor, msOf } from './door-seen.mjs'
+import { validFor, validRow, msOf } from './door-seen.mjs'
 import { itemsOfPhase } from './manifest.mjs'
 
 export const WINDOWS_MAX = 32 // liveness.<h>.windows keeps at most this many earlier on windows (4.11 P12)
@@ -82,7 +82,8 @@ export function holdersOf({ manifest, procs = [], doorSeen = [], agentList = nul
     // holders exist only after off (1.6 R5): a record without on_at is not the model's (Linux, the old model), one without off_at is still on
     if (!l || typeof l !== 'object' || l.per_request || l.on_at == null || l.off_at == null) continue
     const isMine = (x) => harnessesOf({ [h]: l }, x).length > 0
-    const rows = doorSeen == null ? null : doorSeen.filter((r) => r && r.harness === h) // null: not known (an unreadable door record)
+    // null: not known (an unreadable door record); a row is valid by its door group's harness's record (validRow), as status judges it
+    const rows = doorSeen == null ? null : doorSeen.filter((r) => r && r.harness === h && validRow(r, raw))
     const t = items.filter((i) => i.harness === h || i.kind === 'system-root').map((i) => msOf(i.installed_at)).filter((x) => x != null)
     const carrierAt = t.length ? Math.min(...t) : null // the earliest carrier: the safe direction
     for (const p of procs) {

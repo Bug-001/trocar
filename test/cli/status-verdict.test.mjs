@@ -120,6 +120,25 @@ test('A3 P11 status and P12 holders are one judge: a process with no door row, s
   }
 })
 
+// A3 · one validity judge: a door row whose group belongs to another harness (row.harness ≠ the group's) is valid or stale by THAT group's
+// door_since on both sides — status's verdict and the holders after off agree over (the group moved or not) × (the row before or after the move)
+for (const moved of [false, true]) for (const atRel of [-MIN, MIN]) {
+  test(`A3 · a codex row at a door group of another harness (${moved ? 'moved' : 'never moved'}, the row ${atRel < 0 ? 'before' : 'after'} the move): status and the holders agree`, async () => {
+    const c = await codexOn()
+    const child = proc(c, 7202, START.gap), group = 'zz:api'
+    const rows = [{ ...accept(c, child), group, at: ON_AT + atRel }]
+    const other = { zz: { rereads: false, ...(moved ? { door_since: { [group]: new Date(ON_AT).toISOString() } } : {}) } }
+    const write = (m) => { m.liveness = { ...m.liveness, ...other }; fs.writeFileSync(c.mf, JSON.stringify(m)); return m }
+    write(setWorld(c, liveness(c, { since: true }), rows))
+    const { j } = await run(c, [child])
+    const m = write(setWorld(c, liveness(c, { since: true, off: true }), rows))
+    const held = holdersOf({ manifest: m, procs: [child], doorSeen: rows }).some((h) => h.pid === child.pid)
+    const valid = !(moved && atRel < 0)
+    assert.deepEqual(said(j, child.pid), valid ? [true, null] : [false, 'config-after-start'])
+    assert.equal(held, valid)
+  })
+}
+
 test('A5 status half: a Chromium host (no --type) shows its network service\'s door verdict; a same-name CLI child\'s row never folds up into its parent', async () => {
   const c = await codexOn()
   const NS = ['codex', '--type=utility', '--utility-sub-type=network.mojom.NetworkService']
