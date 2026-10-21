@@ -30,6 +30,7 @@ export const UNREACHED = Object.freeze({
   'src/collector/core/engine/codes.mjs': 'regrouping of src/health/codes.mjs that only tests use',
   'src/capture/desktop-steer.mjs': 'old CC-Desktop Clash Verge steer; only src/netenv/clash.mjs reached it (for socket discovery), and D49 deleted that. Removal waits on the backlog',
   'src/off/clash.mjs': 'the Verge strip / reload half of that steer, reached only through src/capture/desktop-steer.mjs; same backlog items',
+  'src/query/session-doc.mjs': 'the session answer\'s document, page and delta; the rewritten src/query/named/session.mjs reaches it in the next commit, and this row goes then',
   'src/view/render-kind.mjs': 'the per-definition render spec (RFC 2.3, 3.5), called by extraction; reached once extraction is wired into the query worker, and this row goes then',
   'src/query/projection.mjs': 'the context projection store (RFC 4.3 §4); the query worker opens it for a session answer, and this row goes then',
   'src/view/reduce.mjs': 'reduction of a session\'s document from its projection (RFC 4.3 §3); the worker\'s session answer calls it, and this row goes then',
