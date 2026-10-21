@@ -2,8 +2,8 @@
 //
 // A child of the collector daemon, forked on demand and running at low priority, like the sealer: the daemon's own
 // event loop forwards agent traffic and MUST NOT compute a query. It stays warm (src/query/warm.mjs keeps the
-// segments' index rows and the recently opened sessions' records, each revalidated per request against the files it
-// came from) until the daemon ends it: the daemon keeps the idle clock (src/query/service.mjs QUERY_IDLE_MS), because only it
+// segments' index rows, the sessions' spines and a few answers' bytes (src/query/answers.mjs), each revalidated per request against
+// the files it came from) until the daemon ends it: the daemon keeps the idle clock (src/query/service.mjs QUERY_IDLE_MS), because only it
 // knows whether a request is in flight or queued. It also leaves when its stdin ends or the daemon is gone.
 //
 // The wire is frames on this process's own pipes, not JSON over IPC: one request per line on stdin
@@ -23,7 +23,7 @@ import { promisify } from 'node:util'
 import { gzip as gzipCb } from 'node:zlib'
 import { pathToFileURL } from 'node:url'
 import { LOCAL_ENV } from './client.mjs'
-import { runQuery, QueryArgError } from './named/index.mjs'
+import { answer } from './answers.mjs'
 import { lowerPriority } from '../low-priority.mjs'
 
 const home = process.argv[2]
@@ -51,34 +51,34 @@ const write = (status, body, enc, cpu) => new Promise((done) => {
   process.stdout.write(`${status} ${body.length} ${enc} ${cpu}\n`, () => { if (body.length) process.stdout.write(body, done); else done() })
 })
 
-async function answer(line) {
-  let status = 200, text, zip = false
+async function serve(line) {
+  let status = 200, bytes, enc = '-'
   const after = [], cpu0 = process.cpuUsage()
   try {
     const { name, params, indent, control, body, gzip: wants } = JSON.parse(line)
-    zip = wants === true
     if (control) { // one JSON line, the bytes `trocar <command> --json` prints into a pipe; the verb says the status (src/control/board.mjs)
-      const { VERBS } = await import('../control/board.mjs')
-      if (!Object.hasOwn(VERBS, control)) throw new Error(`no control verb ${JSON.stringify(control)}`)
-      const r = await VERBS[control](body || {}, { home, deps: await depsP })
-      status = r.status
-      text = JSON.stringify(r.doc) + '\n'
+      try {
+        const { VERBS } = await import('../control/board.mjs')
+        if (!Object.hasOwn(VERBS, control)) throw new Error(`no control verb ${JSON.stringify(control)}`)
+        const r = await VERBS[control](body || {}, { home, deps: await depsP })
+        status = r.status
+        bytes = Buffer.from(JSON.stringify(r.doc) + '\n', 'utf8')
+      } catch (e) { status = 500; bytes = Buffer.from(JSON.stringify({ error: String((e && e.message) || e) }), 'utf8') }
+      if (wants === true) { bytes = await gzip(bytes); enc = 'gzip' }
     } else { // `status` / `doctor` read the machine the way the control verbs do — same user home, environment and deps — so /api/status and
-      // GET /control/status answer from one view of the machine (V91); the daemon passes no deps, so this is the real machine
-      const deps = await depsP
-      text = JSON.stringify(await runQuery(name, params || {}, { home, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }), null, Number(indent) || 0)
+      // GET /control/status answer from one view of the machine (V91); the daemon passes no deps, so this is the real machine.
+      // 400 = the caller's mistake (an unknown name or parameter), 500 = this worker's (src/query/answers.mjs); the message is the
+      // query core's own, so the caller can raise the very error its local path would have raised.
+      const deps = await depsP;
+      ({ status, bytes, enc } = await answer({ name, params: params || {}, indent, gzip: wants === true },
+        { home, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }))
     }
-  } catch (e) {
-    // 400 = the caller's mistake (an unknown name or parameter), 500 = this worker's. The message is the query
-    // core's own, so the caller can raise the very error its local path would have raised.
-    status = e instanceof QueryArgError ? 400 : 500
-    text = JSON.stringify({ error: String((e && e.message) || e) })
+  } catch (e) { // a line that is not a request
+    status = 500
+    bytes = Buffer.from(JSON.stringify({ error: String((e && e.message) || e) }), 'utf8')
   }
-  let bytes = Buffer.from(text, 'utf8')
-  text = null
-  if (zip) bytes = await gzip(bytes)
   const cpu = process.cpuUsage(cpu0)
-  await write(status, bytes, zip ? 'gzip' : '-', Math.round((cpu.user + cpu.system) / 1000))
+  await write(status, bytes, enc, Math.round((cpu.user + cpu.system) / 1000))
   bytes = null
   if (after.length) setImmediate(async () => { for (const fn of after) { try { await fn() } catch { /* the next query does it */ } } })
 }
@@ -90,7 +90,7 @@ process.stdin.on('data', (d) => {
   for (let nl = buf.indexOf('\n'); nl >= 0; nl = buf.indexOf('\n')) {
     const line = buf.slice(0, nl)
     buf = buf.slice(nl + 1)
-    if (line) chain = chain.then(() => answer(line))
+    if (line) chain = chain.then(() => serve(line))
   }
 })
 process.stdin.on('end', () => process.exit(0))
