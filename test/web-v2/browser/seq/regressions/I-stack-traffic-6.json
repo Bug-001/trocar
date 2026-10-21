@@ -1,0 +1,19 @@
+{
+  "name": "I-stack-traffic-6",
+  "invariant": "I-stack",
+  "sig": "I-stack:traffic",
+  "fp": "Could not read traffic: FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory at foldSession (/x/src/query/worker.mjs:#:#) at readSe",
+  "seed": 6,
+  "big": false,
+  "viewport": 1440,
+  "theme": "light",
+  "steps": [
+    {"a":"fault","p":{"kind":"e500","name":"calls","n":2,"ms":9185}},
+    {"a":"host","p":{"f":0.322}}
+  ],
+  "screenshot": "test/web-v2/browser/shots/seq/I-stack-traffic-6.png",
+  "status": "open",
+  "detail": "an e500 `calls` read on a host page draws the server's whole `error` text (a native stack) in the visible failure line (stateHtml error)",
+  "owner": "shell/overview/library/capture/settings/traffic (main fix lane)",
+  "suspect": "src/web/v2/traffic/traffic.mjs:231"
+}

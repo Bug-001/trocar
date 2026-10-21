@@ -1,0 +1,67 @@
+// test/web-v2/browser/seq/world.mjs — the world the sequence harness drives: a temp trocar home holding the demo session and four
+// generated sessions shaped like real ones (Claude Code over http with subagents running side by side, late lines, a compaction,
+// huge tool results, images and failed calls; Claude Code on Message Threads; Codex over WebSocket; dsh over Chat Completions), all
+// four appending to ONE segment — the live one — so grow() is what the daemon does between two of the reader's steps.
+// mainCount() reads the cross-layer truth (the main lane's call count) off the real server's `session` document.
+// Exports only: node --test runs every .mjs, so nothing here runs at import. No CJK in what it writes (bigSession's syllables).
+import { boardHome } from '../../real-face.mjs'
+import { bigSession } from '../../../query/big-session.mjs'
+
+export const LIVE_SEGMENT = '20261020T164737Z'
+const HUGE = 30_000
+// Claude Code's requests carry their tool definitions (a call with ≤ 2 messages and none reads as a utility call, not the main lane)
+const TOOLS = ['Read', 'Edit', 'Bash'].map((name) => ({ name, description: `${name} a file or run a command.`, input_schema: { type: 'object', properties: { file_path: { type: 'string' } } } }))
+
+/** The session id of wire `w` in world `seed` (uuid-shaped, distinct per wire and seed). */
+const idOf = (seed, k) => `5e9${String(seed).padStart(5, '0').slice(-5)}-0000-4a1b-9c2d-${String(k + 1).padStart(12, '0')}`
+
+/**
+ * makeWorld({seed, big}) → { userHome, home, sessions:[{id, wire}], live:[id], hugeBytes, grow(k) }.
+ * Tens of calls per session by default (a cold fold stays fast); `big` grows the http session to hundreds of calls / several MB.
+ * grow(k) appends the next k calls of every live session → { calls, main, by: {id: {calls, main}} }, `main` = the main-lane calls among
+ * them, counted by the generator.
+ */
+export function makeWorld({ seed = 1, big = false } = {}) {
+  const { userHome, home } = boardHome()
+  const base = { home, segment: LIVE_SEGMENT, growth: 1_200, tools: TOOLS }
+  const specs = [
+    { wire: 'http', subEvery: 3, subLanes: 3, late: 3, compactAt: big ? 80_000 : 50_000, hugeEvery: 7, hugeBytes: HUGE, imageEvery: 5, failEvery: 6, n: big ? 300 : 40 },
+    { wire: 'threads', subEvery: 4, compactAt: 25_000, n: 24 },
+    { wire: 'ws', subEvery: 4, compactAt: 25_000, n: 24 },
+    { wire: 'chat', subEvery: 4, failEvery: 9, n: 24 },
+  ]
+  const writers = specs.map(({ n, ...o }, k) => {
+    const w = bigSession({ ...base, ...o, id: idOf(seed, k), seed: seed * 101 + k * 7 })
+    w.append(n)
+    return w
+  })
+  const sessions = writers.map((w, k) => ({ id: w.id, wire: specs[k].wire }))
+  return {
+    userHome, home, sessions, live: sessions.map((s) => s.id), hugeBytes: HUGE,
+    grow(k = 1) {
+      const by = {}
+      let calls = 0, main = 0
+      for (const w of writers) {
+        const c0 = w.calls, m0 = w.mains
+        w.append(k)
+        by[w.id] = { calls: w.calls - c0, main: w.mains - m0 }
+        calls += by[w.id].calls; main += by[w.id].main
+      }
+      return { calls, main, by }
+    },
+  }
+}
+
+/** The main lane's call count of session `id`, read page by page off the `session` document (page.next until has_more is false). */
+export async function mainCount(get, id) {
+  const seen = new Set()
+  let after = null, guard = 0
+  for (;;) {
+    const { status, doc } = await get('session', { id, ...(after != null ? { after } : {}) })
+    if (status !== 200 || !doc?.analyzed) throw new Error(`session ${id}: ${status} ${String(doc?.error ?? "").slice(0, 400)}`)
+    const main = doc.analyzed.lanes.find((l) => l.kind === 'main') || doc.analyzed.lanes[0]
+    for (const c of main?.calls || []) seen.add(c.id)
+    if (!doc.page?.has_more || ++guard > 10_000) return seen.size
+    after = doc.page.next
+  }
+}

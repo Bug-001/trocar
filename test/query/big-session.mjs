@@ -17,7 +17,11 @@
 // so a request body has the size and the long keys a real one has.
 // `reads`: each turn's tool call is a Bash command that reads `reads` distinct files (cat a b c …), so every call adds as many
 // resources to its lane — a call whose meta legitimately costs far more than an average one.
-// `tools`: on the Anthropic wires, how many tool definitions each call carries that no call before it did (fresh names and schemas).
+// `freshTools`: on the Anthropic wires, how many tool definitions each call carries that no call before it did (fresh names and schemas).
+// Rarer shapes, every k-th MAIN call (0 = never; each draws randomness only when on, so a seed without them writes the same bytes):
+// `hugeEvery` its tool_result is `hugeBytes` of text; `imageEvery` (http / threads) its first user message carries a base64 PNG image
+// block (the Messages shape); `failEvery` its response is an error (http / threads 529 overloaded_error, chat 500; ws: none), and a
+// thread's next call re-sends the delta the failed one carried. `tools` (http / threads): the tool definitions every request carries.
 // Exports only: node --test runs every .mjs.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -25,10 +29,11 @@ import { replyOf } from '../helpers/cc-threads.mjs'
 import { buildWsEnvelope } from '../../src/collector/core/record/envelope.mjs'
 
 const MODEL = 'claude-opus-4-8'
-function rng(seed) {
+export function rng(seed) {
   let a = seed >>> 0
   return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296 }
 }
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=='
 const SYL = ['ka', 'ro', 'mi', 'tu', 'sel', 'van', 'qu', 'lo', 'pre', 'dax', 'ne', 'ost', 'fi', 'gru', 'he', 'zan']
 function words(next, chars) {
   let s = ''
@@ -57,14 +62,14 @@ function turn(next, i, growth, reads) {
  * thread or chain) once it holds more than `compactAt` characters.
  * `append(n)` appends the next n calls (as the daemon would, one line each) and returns the session's stored bytes so far.
  */
-export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '', cc = 0, reads = 0, tools = 0 } = {}) {
+export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '', cc = 0, reads = 0, freshTools = 0, hugeEvery = 0, hugeBytes = 40_000, imageEvery = 0, failEvery = 0, tools = null } = {}) {
   const next = rng(seed), delay = rng(seed + 1)
   const file = path.join(home, 'raw', `${segment}.ndjson`)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const fresh = (k) => ({ k, msgs: [], sent: 0, prev: null, n: 0, chars: 0 })
   const main = fresh(0), subs = Array.from({ length: subLanes }, (_, k) => fresh(k))
   const held = [] // [line, the call count at which it is written]
-  let n = 0, nsub = 0, stored = 0, ms = Date.parse('2026-10-20T16:47:37Z')
+  let n = 0, nsub = 0, nmain = 0, stored = 0, ms = Date.parse('2026-10-20T16:47:37Z')
   const system = [{ type: 'text', text: 'You are a coding assistant operating in a terminal.' }]
   const ccTools = Array.from({ length: cc }, (_, k) => ({ name: `Tool${k}`, description: words(next, 2_500),
     input_schema: { type: 'object', additionalProperties: false, properties: { file_path: { type: 'string', description: words(next, 300) } }, required: ['file_path'] },
@@ -74,6 +79,11 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
     const lane = sub ? subs[nsub++ % subLanes] : main
     if (sub ? lane.msgs.length > subLen : lane.chars > compactAt) Object.assign(lane, { msgs: [], sent: 0, prev: null, n: lane.n + 1, chars: 0 })
     lane.msgs.push(...turn(next, n, sub ? Math.round(growth / 4) : growth, reads))
+    const every = (k) => !sub && k > 0 && nmain % k === k - 1
+    if (every(hugeEvery)) { lane.msgs.at(-1).content[0].content = words(next, hugeBytes); lane.chars += hugeBytes }
+    if (every(imageEvery) && (wire === 'http' || wire === 'threads')) lane.msgs.at(-3).content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG } })
+    const failed = every(failEvery) && wire !== 'ws', sentBefore = lane.sent
+    if (!sub) nmain++
     if (sub && preamble && lane.msgs.length === 3) lane.msgs[0].content[0].text = `${preamble}\n${lane.msgs[0].content[0].text}` // a subagent's first prompt
     lane.chars += sub ? Math.round(growth / 4) : growth
     const ts = new Date((ms += 4_000)).toISOString()
@@ -109,7 +119,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
         ts, endpoint: '/chat/completions', method: 'POST',
         req_headers: { host: 'api.deepseek.com', 'content-type': 'application/json', 'x-deepseek-harness-session-id': id },
         req_body: JSON.stringify(body),
-        resp: { status: 200, kind: 'json', body: { id: `chatcmpl_${n}`, model: 'deepseek-chat', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: text } }],
+        resp: failed ? { status: 500, kind: 'json', body: { error: { message: 'Internal Server Error', type: 'internal_error' } } } : { status: 200, kind: 'json', body: { id: `chatcmpl_${n}`, model: 'deepseek-chat', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: text } }],
           usage: { prompt_tokens: 40, completion_tokens: 120, prompt_cache_hit_tokens: 1000 * n, prompt_cache_miss_tokens: 300 } } },
         id: reqId, ts_request: ts, ts_response_start: ts, ts_response_end: ts, duration_ms: 900,
         is_llm_call: true, capture: 'transparent', host: 'api.deepseek.com', traffic_class: 'llm', proc: { pid: 4244, exe: '/x/dsh', agent: 'dsh' },
@@ -118,8 +128,8 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
       const msgId = `msg_${n}`
       const reply = [{ type: 'text', text }, ...(n % 4 ? [{ type: 'tool_use', id: `toolu_r${n}`, name: 'Read', input: { file_path: '/work/x.mjs' } }] : [])]
       const threads = wire === 'threads'
-      const defs = Array.from({ length: tools }, (_, k) => ({ name: `tool_${n}_${k}`, description: words(next, 160), input_schema: { type: 'object', properties: { [words(next, 6).trim()]: { type: 'string', description: words(next, 60) } } } }))
-      const sent = [...(cc ? ccTools : []), ...defs]
+      const defs = Array.from({ length: freshTools }, (_, k) => ({ name: `tool_${n}_${k}`, description: words(next, 160), input_schema: { type: 'object', properties: { [words(next, 6).trim()]: { type: 'string', description: words(next, 60) } } } }))
+      const sent = [...(tools || []), ...(cc ? ccTools : []), ...defs]
       const mark = (ms) => (cc && ms.length ? [...ms.slice(0, -1), { ...ms[ms.length - 1], content: ms[ms.length - 1].content.map((c, i, a) => (i === a.length - 1 ? { ...c, cache_control: { type: 'ephemeral' } } : c)) }] : ms)
       const sys = cc ? [{ ...system[0], cache_control: { type: 'ephemeral' } }] : system
       const body = { model: MODEL, max_tokens: 4096, ...(sent.length ? { tools: sent } : {}), ...(threads && lane.prev ? { thread: { type: 'continue', previous_message_id: lane.prev }, messages: mark(delta) }
@@ -128,12 +138,13 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
         ts, endpoint: '/v1/messages', method: 'POST',
         req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-app': 'cli', 'x-claude-code-session-id': id, ...(agent ? { 'x-claude-code-agent-id': agent } : {}), 'anthropic-version': '2023-06-01' },
         req_body: JSON.stringify(body),
-        resp: threads ? replyOf(msgId, reply, usage) : { status: 200, kind: 'json', body: { id: msgId, model: MODEL, stop_reason: n % 4 ? 'tool_use' : 'end_turn', content: reply, usage } },
+        resp: failed ? { status: 529, kind: 'json', body: { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } } } : threads ? replyOf(msgId, reply, usage) : { status: 200, kind: 'json', body: { id: msgId, model: MODEL, stop_reason: n % 4 ? 'tool_use' : 'end_turn', content: reply, usage } },
         id: reqId, ts_request: ts, ts_response_start: ts, ts_response_end: ts, duration_ms: 900,
         is_llm_call: true, capture: 'transparent', host: 'api.anthropic.com', traffic_class: 'llm', proc: { pid: 4242, exe: '/x/claude', agent: 'claude-code' },
       }
       // a thread's context goes on with the reply as the server kept it; the plain wire re-sends what the generator wrote
-      if (threads) { lane.prev = msgId; lane.msgs.splice(lane.sent, 0, { role: 'assistant', content: reply }); lane.sent++ }
+      if (failed) lane.sent = sentBefore
+      else if (threads) { lane.prev = msgId; lane.msgs.splice(lane.sent, 0, { role: 'assistant', content: reply }); lane.sent++ }
     }
     n++
     const due = sub && late ? n + Math.floor(delay() * (late + 1)) : n
@@ -149,6 +160,8 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
   return {
     file, id,
     get calls() { return n },
+    /** the main lane's calls generated so far */
+    get mains() { return nmain },
     append(k = 1) {
       const out = []
       for (let i = 0; i < k; i++) out.push(...written())
