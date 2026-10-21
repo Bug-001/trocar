@@ -315,10 +315,12 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       let st, ing
       // a state.json that cannot be read starts every harness off, and says so (4.6 §开关 proxy mode, D38): never a quiet off
       try { st = readSt() } catch (e) { record({ event: 'failure', where: 'state', code: (e && e.code) || 'state-unparsable', reason: `state.json could not be read at start (${(e && e.message) || e}); every harness starts off until trocar on` }); return { doors: {}, problems: [String((e && e.message) || e)] } }
-      try { ing = tokenOf() } catch (e) { return { doors: {}, problems: [String((e && e.message) || e)] } }
+      const want = Object.entries((st && st.harnesses) || {}).filter(([h, e]) => e && e.desired === 'on' && byName.has(h)).map(([h]) => h)
+      if (!want.length) return { doors: {}, problems: [] } // nothing to reopen: a never-turned-on install has no ingress.json, which is normal
+      // desired on, but its recorded ports cannot be read: no door opens, and that is said, never a quiet off (D38)
+      try { ing = tokenOf() } catch (e) { const why = String((e && e.message) || e); record({ event: 'failure', where: 'state', code: 'state-unparsable', reason: `ingress.json could not be read at start (${why}); ${want.join(', ')} stay uncaptured until trocar on` }); return { doors: {}, problems: [why] } }
       const out = {}
-      for (const [h, e] of Object.entries((st && st.harnesses) || {})) {
-        if (!e || e.desired !== 'on' || !byName.has(h)) continue
+      for (const h of want) {
         onSet.add(h)
         for (const [g, port] of Object.entries(ing.groupPorts || {})) if (split(g).harness === h) { const r = await openDoor(g, port, ing.listenerToken); if (r.door) out[g] = r.door.url }
       }

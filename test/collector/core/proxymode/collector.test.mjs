@@ -17,7 +17,7 @@ import { TEMPLATES } from '../../../../src/collector/harness/templates/index.mjs
 import { loadIngressConfig } from '../../../../src/collector/core/ingress-config.mjs'
 import { emptyState, setDesired, writeStateAtomic } from '../../../../src/off/state.mjs'
 import { newManifest, saveManifest } from '../../../../src/off/manifest.mjs'
-import { checkRecord } from '../../../../src/health/codes.mjs'
+import { checkRecord, CODES } from '../../../../src/health/codes.mjs'
 import { custodyStub } from '../../../helpers/custody-stub.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
@@ -488,6 +488,25 @@ test('1.6 V32 `attached` · the daemon\'s own answer: every group ingress.json r
   assert.equal(absent.c.attached(d.name), false, 'no ingress.json: nothing recorded for it, so no (not 不知道)')
   absent.c.close()
 })
+
+// 4.6 §开关 proxy mode (D38): at start, a harness desired on whose ingress.json cannot be read opens no door and leaves one failure record with a known
+// code; with no harness desired on, ingress.json is not needed (a never-turned-on install has none) and nothing is recorded.
+for (const ingress of [{ missing: true }, { error: 'EACCES' }]) for (const anyOn of [true, false]) {
+  test(`4.6 · restore · ingress.json ${ingress.missing ? 'missing' : 'unreadable'} · ${anyOn ? 'a harness desired on' : 'none desired on'}: ${anyOn ? 'one recorded failure, no door' : 'no record'}`, async () => {
+    const d = descs[0], opened = []
+    const state = { harnesses: anyOn ? { [d.name]: { desired: 'on' } } : { [d.name]: { desired: 'off' } } }
+    const { c, records } = await rig({ desc: d, opened, ingress, w: { state } })
+    const failures = records.filter((r) => r.event === 'failure')
+    if (anyOn) {
+      assert.equal(failures.length, 1, JSON.stringify(failures))
+      assert.ok(CODES.includes(failures[0].code), failures[0].code)
+      assert.deepEqual(checkRecord(failures[0]), [])
+    } else assert.deepEqual(failures, [])
+    assert.deepEqual(opened, [], 'no door opened')
+    assert.deepEqual(c.doors(), {})
+    c.close()
+  })
+}
 
 // ---- 2026-10-21: evidence that was not read is never kept (4.11 P7 · P11, D38) ------------------------------------------------------------------
 // Over every verified, non-host-tree form: the process env or cwd unreadable on the first connection, readable later — a connection after the

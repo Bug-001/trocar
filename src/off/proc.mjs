@@ -263,8 +263,12 @@ export function psArgv(cmdline, exe = null) {
   return k > 1 && normalizeName(head) === name ? [head, ...words.slice(k)] : words
 }
 
+// Both asks answer in the runner's own time (`then`): at once with spawnSync, as a promise with runAsync — the model daemon's, whose sweep and holder poll
+// read this table every few seconds while a negative key is held and must not stop its event loop for two `ps` (4.8 §5.5).
 function exesOfPs({ exec, env, rows }) {
-  const r = execTool('ps', ['-Axo', 'pid=,comm='], { run: exec, env: psEnv(env), maxBuffer: TABLE_MAX_BUFFER })
+  return then(execTool('ps', ['-Axo', 'pid=,comm='], { run: exec, env: psEnv(env), maxBuffer: TABLE_MAX_BUFFER }), (r) => exesOfAnswer(r, rows))
+}
+function exesOfAnswer(r, rows) {
   const how = r.code === null ? `did not finish (${r.err || 'no reason given'})` : `failed (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})`
   if (r.code !== 0) throw new Error(`the executables ask \`ps -Axo pid=,comm=\` ${how}, so the executables of the ${rows} process(es) the table listed are not known, nor which agents are alive`)
   const exes = new Map()
@@ -276,7 +280,9 @@ function exesOfPs({ exec, env, rows }) {
   return exes
 }
 function procsOfPs({ uid, exec, env }) {
-  const r = execTool('ps', ['-Axo', 'pid=,ppid=,uid=,lstart=,command='], { run: exec, env: psEnv(env), maxBuffer: TABLE_MAX_BUFFER })
+  return then(execTool('ps', ['-Axo', 'pid=,ppid=,uid=,lstart=,command='], { run: exec, env: psEnv(env), maxBuffer: TABLE_MAX_BUFFER }), (r) => procsOfAnswer(r, { uid, exec, env }))
+}
+function procsOfAnswer(r, { uid, exec, env }) {
   if (r.code !== 0) throw new Error(`ps failed (${r.code === null ? r.err : `exit ${r.code}: ${r.err}`}), so which agents are alive is not known`)
   const out = []
   let rows = 0, parsed = 0
@@ -294,9 +300,10 @@ function procsOfPs({ uid, exec, env }) {
   }
   if (rows > 0 && parsed === 0) throw new Error(`ps printed ${rows} line(s) and none could be read (the first: ${JSON.stringify(r.out.split('\n').find((l) => l.trim()).slice(0, 80))}), so which agents are alive is not known`)
   if (!out.length) return out // nobody of this user: nothing to name
-  const exes = exesOfPs({ exec, env, rows: out.length })
-  for (const p of out) if (exes.get(p.pid)) { p.exe = exes.get(p.pid); p.argv = psArgv(p.cmdline, p.exe) }
-  return out
+  return then(exesOfPs({ exec, env, rows: out.length }), (exes) => {
+    for (const p of out) if (exes.get(p.pid)) { p.exe = exes.get(p.pid); p.argv = psArgv(p.cmdline, p.exe) }
+    return out
+  })
 }
 
 /** The live processes of one user: `[{ pid, ppid, uid, startedAt: ms | null, exe, argv, env: () => Map | null }]` — `env` is read when asked for; macOS and
