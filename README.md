@@ -10,7 +10,20 @@ stores the raw bytes verbatim, and replays them step by step. Nothing to integra
 Observe-only today: it never originates a request and never uses your app's token on its own, and it binds loopback only. A request is only ever changed or re-sent by you, on purpose (D30; none of that is built yet).
 
 The v1 harnesses (D37): **Claude Code**, **Codex**, **OpenCode**, **Kimi Code**, **DeepSeek `dsh`**, **Hermes** and
-**Z-Code**. A form that has not been shown to capture verbatim on an OS is not claimed here.
+**Z-Code**. Whether one of them has been shown to capture verbatim end to end on an OS:
+
+| harness | macOS | Windows | Linux |
+|---|---|---|---|
+| Claude Code | yes | yes | yes |
+| Codex | yes | yes | yes |
+| OpenCode | yes | yes | yes |
+| Kimi Code | yes | yes | yes |
+| DeepSeek `dsh` | yes | yes | yes |
+| Hermes | yes | yes | yes |
+| Z-Code | yes | yes | yes |
+
+`yes` = at least one of that harness's main forms (CLI, VS Code extension, desktop app) was driven end to end on that
+OS and its calls came out verbatim; `not yet` = that has not been shown there. What is not shown is not claimed.
 
 ## See it in 30 seconds, with no capture and no setup
 
@@ -223,7 +236,7 @@ yours); `status --json` has them under `forms`. trocar only reads your proxy set
 
 The collector has descriptors for seven harnesses (D37) — `claude-code`, `codex` (its WebSocket transport is recorded
 call by call), `opencode`, `deepseek-dsh`, `kimi-code`, `hermes` and `z-code` — on all three platforms. Which form of
-which one captures verbatim on which platform is claimed only where that has been shown.
+which one has been shown to capture verbatim on which platform is the table at the top of this README.
 
 **Linux** is driver mode (RFC 4.6, D31): an eBPF helper steers only the connections of agent processes you run to a
 loopback engine, which decrypts only for agents that trust the collector CA. Everything else, including other users,
