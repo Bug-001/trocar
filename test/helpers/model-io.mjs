@@ -1,6 +1,7 @@
 // test/helpers/model-io.mjs — the OS as the model daemon's door parts read it, faked for one agent process (model-capture-e2e and the stop
 // barrier e2e share it): agentOf (the process facts), darwinExec (the socktable / lsof / ps / procenv runner), win32Io (the fake helper over a
-// fixture it rereads, and the powershell table), through (one agent connection through a door: CONNECT with credentials, TLS, one request) and flowsOf.
+// fixture it rereads, and the powershell table), through (one agent connection through a door: CONNECT with credentials, TLS, one request), flowsOf, and statusDoc
+// (`status --json` against the live daemon).
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import net from 'node:net'
@@ -11,6 +12,9 @@ import { fileURLToPath } from 'node:url'
 import { within, onceWithin } from './bounded.mjs'
 import { tmpDir } from './tmp.mjs'
 import { NATIVE } from '../../src/collector/arch/darwin/native.mjs'
+import { statusRun } from '../../src/cli/status.mjs'
+import { darwinNetFacts } from '../../src/collector/arch/darwin/netfacts.mjs'
+import { gatherWin32Facts } from '../../src/collector/arch/win32/netfacts.mjs'
 
 const FAKE_HELPER = fileURLToPath(new URL('../collector/arch/win32/fixtures/fake-helper.mjs', import.meta.url))
 export const PID = 2_000_001 // the agent's pid as the fake readers answer it: never this process (the doors exclude their own pid) nor a real one
@@ -82,3 +86,15 @@ export async function through({ door, auth, target, localPort, ca, req, open }) 
   return { reply: await reply, peer, end: () => new Promise((r) => { c.once('close', r); c.end() }) }
 }
 
+/** `status --json` over the real daemon: the process table is `all` (pid, startedAt) of `a`'s executable, `live` the pids still in it; the
+ *  platform's network facts run with their OS reads faked. */
+export async function statusDoc({ w, platform, box, a, all, live }) {
+  const exe = a.exe, rows = all.filter((p) => live.includes(p.pid))
+  const archFacts = platform === 'win32'
+    ? (ctx) => gatherWin32Facts(ctx, { helper: { call: async (verb) => (verb === 'ps' ? { sessionId: 1, procs: rows.map((p) => ({ ...p, ppid: 1, name: a.name, exe, cmdline: exe, cmdlineState: 'ok', sessionId: 1, sameUser: true, integrity: 'medium', tokenDenied: false })) } : verb === 'tcp-table' ? { rows: [] } : Promise.reject(Object.assign(new Error('not faked'), { code: 'not-faked' }))) }, readSystemProxy: async () => ({ ok: false, reason: 'absent' }) })
+    : (ctx) => darwinNetFacts(ctx, { exec: () => ({ status: 1, stdout: '', stderr: 'not faked' }) })
+  const sio = { t: '', out(s) { this.t += s }, err(s) { this.t += s }, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
+  const procs = async () => rows.map((p) => ({ ...p, ppid: 1, uid: process.getuid(), exe, argv: [exe], env: () => null, envRead: false }))
+  await statusRun(['--json'], { io: sio, env: w.env, home: w.home, platform, deps: { platform, procs, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts }), rootStore: w.store } })
+  return JSON.parse(sio.t.slice(sio.t.indexOf('{')))
+}

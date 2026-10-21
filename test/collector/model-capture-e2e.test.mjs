@@ -23,26 +23,10 @@ import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
-import { statusRun } from '../../src/cli/status.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
-import { darwinNetFacts } from '../../src/collector/arch/darwin/netfacts.mjs'
-import { gatherWin32Facts } from '../../src/collector/arch/win32/netfacts.mjs'
 import { segmentIndex } from '../../src/query/index-build.mjs'
-import { PID, BODY, reqOf, REPLY, agentOf, darwinExec, win32Io, flowsOf, freePort, doorOpen, through } from '../helpers/model-io.mjs'
+import { PID, BODY, reqOf, REPLY, agentOf, darwinExec, win32Io, flowsOf, freePort, doorOpen, through, statusDoc } from '../helpers/model-io.mjs'
 
-
-/** `status --json` over the real daemon: the process table is `all` (pid, startedAt) of `a`'s executable, `live` the pids still in it; the
- *  platform's network facts run with their OS reads faked. */
-async function statusDoc({ w, platform, box, a, all, live }) {
-  const exe = a.exe, rows = all.filter((p) => live.includes(p.pid))
-  const archFacts = platform === 'win32'
-    ? (ctx) => gatherWin32Facts(ctx, { helper: { call: async (verb) => (verb === 'ps' ? { sessionId: 1, procs: rows.map((p) => ({ ...p, ppid: 1, name: a.name, exe, cmdline: exe, cmdlineState: 'ok', sessionId: 1, sameUser: true, integrity: 'medium', tokenDenied: false })) } : verb === 'tcp-table' ? { rows: [] } : Promise.reject(Object.assign(new Error('not faked'), { code: 'not-faked' }))) }, readSystemProxy: async () => ({ ok: false, reason: 'absent' }) })
-    : (ctx) => darwinNetFacts(ctx, { exec: () => ({ status: 1, stdout: '', stderr: 'not faked' }) })
-  const sio = { t: '', out(s) { this.t += s }, err(s) { this.t += s }, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
-  const procs = async () => rows.map((p) => ({ ...p, ppid: 1, uid: process.getuid(), exe, argv: [exe], env: () => null, envRead: false }))
-  await statusRun(['--json'], { io: sio, env: w.env, home: w.home, platform, deps: { platform, procs, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts }), rootStore: w.store } })
-  return JSON.parse(sio.t.slice(sio.t.indexOf('{')))
-}
 
 for (const platform of ['darwin', 'win32']) {
   test(`${platform}: a codex connection through the real door is decrypted and recorded verbatim; after off this holder is forwarded only, and the daemon stays up with its door forward-only`, { timeout: 60_000 }, async () => {
