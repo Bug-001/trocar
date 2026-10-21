@@ -22,8 +22,9 @@ const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.met
 const at = (p) => JSON.stringify(new URL(p, import.meta.url).href)
 const CHILD = `
 const { runQuery } = await import(${at('../../src/query/named/index.mjs')})
-const { SPINE_PER_ROW, BASELINE_HEAP, working } = await import(${at('../../src/query/named/session.mjs')})
+const { SPINE_PER_ROW, working } = await import(${at('../../src/query/named/session.mjs')})
 const { heapBudget, steadyBytes, liveHeap } = await import(${at('../../src/query/warm.mjs')})
+const { STORE_HEAP } = await import(${at('../../src/query/projection.mjs')})
 const { indexRows, sessionGroups } = await import(${at('../../src/query/rows.mjs')})
 const { bigSession } = await import(${at('./big-session.mjs')})
 const [home, shape, dear] = [process.argv[1], JSON.parse(process.argv[2]), Number(process.argv[3])]
@@ -34,12 +35,14 @@ const s = bigSession({ home, growth: 150, subEvery: 4, subLanes: 3, subLen: 12, 
 // half again as many rows as the room holds, each at the estimate (or at dear times it, for rows that cost that much more)
 for (let rows = []; rows.length * SPINE_PER_ROW * dear <= 1.5 * roomOf(rows); rows = await rowsOf(s.id)) s.append(500)
 const before = liveHeap()
-let doc = await runQuery('session', { id: s.id, limit: '60' }, { home })
-const { truncated, page } = doc
+// as the worker reads it (it writes the projection, 3.5 §后台抽取), until no member is above the extraction frontier
+let doc
+do doc = await runQuery('session', { id: s.id, limit: '60' }, { home, writer: true }); while (doc.pending)
+const { truncated } = doc, total = doc.lanes.reduce((n, l) => n + l.count, 0)
 doc = null
 const kept = liveHeap() - before // the spine, kept warm for the next look
 const rows = await rowsOf(s.id)
-console.log(JSON.stringify({ truncated, total: page.total, rows: rows.length, kept, room: roomOf(rows), step, SPINE_PER_ROW, BASELINE_HEAP }))`
+console.log(JSON.stringify({ truncated, total, rows: rows.length, kept, room: roomOf(rows), step, SPINE_PER_ROW, STORE_HEAP }))`
 
 const cut = (shape, { dear, heapMb }) => {
   const home = path.join(tmpDir('trocar-cutfits-'), '.trocar')
@@ -59,8 +62,8 @@ test('3.5 §内存有界: a cut session whose rows cost what the plan reckons sh
   // Claude Code on Message Threads, its tool definitions and cache markers riding every request (cc): a body has the long keys and
   // the resent items a real one has
   const c = cut({ wire: 'threads', compactAt: 3_000, cc: 4 }, { dear: 1, heapMb: 128 })
-  assert.ok(c.kept <= c.shown * c.SPINE_PER_ROW + c.BASELINE_HEAP,
-    `${mb(c.kept)} MB kept for ${c.shown} calls: ${(c.perRow / 1024).toFixed(0)} KiB a call, past ${c.SPINE_PER_ROW / 1024} KiB each beside the baselines`)
+  assert.ok(c.kept <= c.shown * c.SPINE_PER_ROW + c.STORE_HEAP,
+    `${mb(c.kept)} MB kept for ${c.shown} calls: ${(c.perRow / 1024).toFixed(0)} KiB a call, past ${c.SPINE_PER_ROW / 1024} KiB each beside the projection store's caches`)
   assert.ok(c.shown * c.SPINE_PER_ROW >= c.room - 2 * c.step,
     `${c.shown} / ${c.total} calls shown, ${mb(c.shown * c.SPINE_PER_ROW)} MB at ${c.SPINE_PER_ROW / 1024} KiB each, of a ${mb(c.room)} MB room: more than two ${mb(c.step)} MB steps short (${(c.perRow / 1024).toFixed(0)} KiB kept a call)`)
 })
