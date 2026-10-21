@@ -228,7 +228,7 @@ test('engine: a failure of a flow carries the flow\'s agent when the door names 
   }
 })
 
-test('engine: the stop is bounded — a connection that does not end after the cut (here its lookup never answers) rejects close() with stop-timeout within grace + bound; its socket is destroyed (1.6 §5.2, V99)', T, async () => {
+test('engine: the stop is bounded — a connection that does not end after the cut (here its lookup never answers) rejects close() with stop-failed within grace + bound; its socket is destroyed (1.6 §5.2, V99)', T, async () => {
   for (const [graceMs, boundMs] of [[0, 50], [80, 120]]) {
     let asked; const lookedUp = new Promise((r) => { asked = r })
     const redirector = { lookup: () => { asked(); return new Promise(() => {}) } } // never answers: the engine has nothing to cut but the socket
@@ -238,7 +238,7 @@ test('engine: the stop is bounded — a connection that does not end after the c
     await within(lookedUp, 1000, 'the engine asking the redirector')
     const closed = new Promise((r) => c.once('close', r))
     const t0 = Date.now()
-    await assert.rejects(engine.close({ graceMs, boundMs }), (e) => e.code === 'stop-timeout')
+    await assert.rejects(engine.close({ graceMs, boundMs }), (e) => e.code === 'stop-failed')
     assert.ok(Date.now() - t0 < graceMs + boundMs + 500, `close() took ${Date.now() - t0} ms`)
     await within(closed, 1000, 'the client socket closed by the cut')
   }
