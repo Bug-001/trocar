@@ -24,7 +24,8 @@
 // slices of ≤ SLICE_MS — the members of the session last answered (session / lane) extracted until none is left, then, after
 // IDLE_SLICE_MS with no request, those of the session of the newest index row, then once a projection GC (gcProjections) — yielding
 // with setImmediate between slices, so a request line that arrives is read before the next one. Slices are not requests: the daemon's
-// idle clock never sees them, so it ends this process with work left all the same (the next one goes on from the frontier).
+// idle clock never sees them, so it ends this process with work left all the same (the next one goes on from the frontier); its kill
+// may cut a slice, which leaves at most a torn last line that the next open cuts off (4.3 §上下文投影).
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -141,6 +142,5 @@ process.stdin.on('data', (d) => {
     }, say).finally(() => { busy--; lastAt = Date.now(); kick() })
   }
 })
-process.on('SIGTERM', () => process.exit(0)) // the daemon's idle end (service.mjs drop): a slice is never cut mid-chunk
 process.stdin.on('end', () => process.exit(0))
 process.on('disconnect', () => process.exit(0)) // the daemon is gone: so is the reason to be here

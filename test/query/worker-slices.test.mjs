@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createQueryService } from '../../src/query/service.mjs'
-import { projectionFile } from '../../src/query/projection.mjs'
+import { projectionFile, PROJ_V } from '../../src/query/projection.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -46,7 +46,6 @@ test('a never-projected session answers with pending, extraction goes on with no
     // the idle clock is the daemon's: slices hold none, so the worker leaves on it with members still to extract
     const w = kids[0]
     await until(() => w.exitCode !== null || w.signalCode !== null, IDLE * 10, 'the idle worker left')
-    if (process.platform !== 'win32') assert.equal(w.exitCode, 0, 'it ended cleanly')
     assert.deepEqual(said, [], 'an idle exit with work left is no failure')
     const next = await ask(svc, 'session', { id: s.id })
     assert.equal(kids.length, 2, 'the next query forked a new worker')
@@ -66,5 +65,23 @@ test('after an idle period the worker collects the projection of a session the i
     await ask(svc, 'session', { id: s.id })
     await until(() => !fs.existsSync(stray), 30_000, 'the stray projection was collected')
     assert.ok(fs.existsSync(projectionFile(home, s.id)), 'the answered session keeps its projection')
+  } finally { svc.stop() }
+})
+
+test('a projection rebuilt when a background slice opened it is said on the next answer of that session, once (4.3 #7, D38)', { timeout: 120_000 }, async () => {
+  const home = homeOf()
+  const s = bigSession({ home })
+  s.growTo(1 << 20)
+  const file = projectionFile(home, s.id)
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  fs.writeFileSync(file, `${JSON.stringify({ v: PROJ_V + 1 })}\n`, { mode: 0o600 }) // a version this build does not read
+  const svc = createQueryService({ home, fork: workerFork })
+  const rebuilt = (doc) => doc.errors.filter((e) => e.code === 'projection-rebuilt').length
+  try {
+    await ask(svc, 'sessions', {}) // no session answered: after the idle wait the slice takes the newest index row's session
+    const head = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8').split('\n')[0]).v } catch { return null } }
+    await until(() => head() === PROJ_V, 30_000, 'a background slice rebuilt and wrote the projection')
+    assert.equal(rebuilt(await ask(svc, 'session', { id: s.id })), 1, 'the next answer says the rebuild')
+    assert.equal(rebuilt(await ask(svc, 'session', { id: s.id })), 0, 'once')
   } finally { svc.stop() }
 })

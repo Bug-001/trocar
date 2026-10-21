@@ -105,13 +105,15 @@ async function indexed({ home, fs, once }) {
   return got;
 }
 // The projection store of a session, open across requests (the least recently used closed past STORES). What opening it said (a
-// rebuild) goes to the request that opened it.
+// rebuild) stays with the store (`opened`) until the next answer of that session says it, whoever opened it: a background slice
+// has no caller to tell.
 const stores = new Map();
 function storeOf(ctx, id, k) {
   let s = stores.get(k);
   if (s) { stores.delete(k); stores.set(k, s); return s; }
-  const opened = ctx.once ? (ctx.once.opened ||= []) : [];
+  const opened = [];
   s = openProjection({ home: ctx.home, fs: ctx.fs, key: id, write: ctx.writer === true, errors: opened });
+  s.opened = opened;
   stores.set(k, s);
   for (const [kk, v] of stores) { if (stores.size <= STORES) break; stores.delete(kk); states.take(kk); v.close(); }
   return s;
@@ -153,7 +155,7 @@ export async function sessionState(ctx, id) {
   if (!members) return null;
   const errors = [...index.errors], k = keyOf(ctx, id), progress = ctx.progress || (() => {});
   const store = storeOf(ctx, String(id), k);
-  if (ctx.once && ctx.once.opened) errors.push(...ctx.once.opened.splice(0));
+  errors.push(...store.opened.splice(0));
   const byIdAll = new Map(members.map((r) => [String(r.id), r]));
   // extraction errors are the member's own (its row says why, on every answer), not this request's
   const read = (rs) => { progress(); return recordsAt({ home: ctx.home, fs: ctx.fs, rows: rs.filter(Boolean), errors: [], remember: false }); };
