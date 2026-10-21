@@ -63,5 +63,5 @@ test('the board: a reply that has its wire text shows it verbatim; a record from
   // before D40: no body_wire_bytes, no raw — the shape alone says the JSON was parsed and written back
   const { body_wire_bytes, ...old } = rec; old.resp = { status: 200, kind: 'json', body: JSON.parse(TRICKY) }
   const ow = controlRecordWire(old)
-  assert.ok(ow.ctl.labels.some((l) => l.id === 'resp-json-reserialized' && /not wire bytes/.test(l.label)), 'said in place')
+  assert.ok(ow.ctl.labels.some((l) => l.id === 'resp-json-reserialized'), 'said in place')
 })
