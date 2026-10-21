@@ -266,7 +266,8 @@ agent group, loopback only, no TUN, never the system proxy, nothing written into
   and dsh's plugin read. The door connects onward through the proxy the agent would have used without trocar.
 - `off` removes those entries and switch files; your edits to unrelated keys during `on` stay, and a proxy key you
   changed yourself keeps your value. It kills and restarts nothing: a process started while capture was on keeps its
-  door, which now only forwards (no decryption, no record), and `trocar status` says how many are left. The daemon
+  door, which now only forwards (no decryption, no record), and `trocar status` says how many are left (its
+  Connections line counts every connection open through trocar, and how many of them are still closing). The daemon
   itself stays up with its doors closed — the same idle state as right after a login, so the next `on` is a door
   opening (about 0.2 s) and not a daemon start. On Linux `off` drains what it was relaying and the daemon exits.
 - *macOS*: the autostart unit is the LaunchAgent `com.trocar.collector` in `~/Library/LaunchAgents` (`RunAtLoad` +
