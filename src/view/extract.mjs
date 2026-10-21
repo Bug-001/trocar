@@ -10,8 +10,8 @@
 // depends on the block's place in a call (a turn boundary, a volatile block, the links between a file's tool_use and its result) is
 // the row's `attrs`, by list position.
 import { createHash } from 'node:crypto';
-import { admitted, flatBlockText, blockFacts, callFacts, replyPartsAnthropic, linearContext } from './analyze.mjs';
-import { hydrateForBoard, anthropicFlat, flatRequest, rawRefOf, wireOf, respRefsOf, extraMessagesOf, unknownFacts, respOf, slimRec } from './assemble.mjs';
+import { admitted, flatBlockText, blockFacts, callFacts, normResp, replyPartsAnthropic, linearContext } from './analyze.mjs';
+import { hydrateForBoard, anthropicFlat, flatRequest, rawRefOf, wireOf, respRefsOf, extraMessagesOf, unknownFacts, respOf, slimRec, nonBlockKeysOf } from './assemble.mjs';
 import { slimBlock, compBucket, firstHuman } from './blockmeta.mjs';
 import { renderOf } from './render-kind.mjs';
 import { blockSpans } from '../adapters/cc.mjs';
@@ -381,16 +381,18 @@ function stitchedFacts(x, { rec, st, predX, state, tools, ownMsgs }) {
   x.lane = f.sub ? 'subagent' : f.monitor ? 'monitor' : hintsOf(rec).lane || 'main';
 }
 
-// x: the per-call facts (design §3.2 "x"), all from this record.
+// x: the per-call facts (design §3.2 "x"), all from this record. `nonBlockKeys`: the request's top-level keys that are no block
+// (refs into the body and short scalars, never a body: assemble.mjs nonBlockKeysOf), what a lane answer's step detail ships (3.5 §会话读).
 function callX(rec, { d, format }, { h, req, unparsed }) {
   const st = (respOf(rec) || {}).status ?? null;
-  const common = { item: itemFacts(rec), format, respRefs: respRefsOf(rec), ...(extraMessagesOf(rec) || {}), ts: rec.ts_request || rec.ts || '', status: st };
+  const common = { item: itemFacts(rec), format, respRefs: respRefsOf(rec), ...(extraMessagesOf(rec) || {}), ts: rec.ts_request || rec.ts || '', status: st,
+    nonBlockKeys: nonBlockKeysOf(rec, format) };
   if (format === 'anthropic') {
     const facts = callFacts(h), u = facts.usage || {};
     const lane = facts.sub ? 'subagent' : facts.monitor ? 'monitor' : hintsOf(rec).lane || 'main';
     return jsonClean({ ...common, facts, lane, wire: wireOf(h, format, null), rq: slimRec(h).request,
       usage: { read: u.cache_read_input_tokens || 0, create: u.cache_creation_input_tokens || 0, fresh: u.input_tokens || 0, out: u.output_tokens || 0 },
-      error: !!rec.error || !!facts.failed, replyId: replyIdOf(rec) });
+      error: !!rec.error || !!facts.failed, replyId: replyIdOf(rec), stop_reason: normResp(h).stop_reason ?? null });
   }
   const norm = d.normResp(rec);
   // `agent`: the wire's own agent (a WebSocket connection), what a subagent's lane is folded by when the harness names none

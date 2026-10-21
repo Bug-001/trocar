@@ -28,7 +28,7 @@ import { indexDir } from './index-build.mjs';
 import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
 
-export const PROJ_V = 5;
+export const PROJ_V = 6;
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
 const SHARE_DEPTH = 3, SHARE_MIN = 48;
 // rows and shared values read back are kept by the bytes of their lines (a row grows with its context: a count let a long lane's
