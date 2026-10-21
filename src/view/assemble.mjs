@@ -175,7 +175,7 @@ export function assembleUnknown(records) {
 // resource ledger are not extracted on this path (fidelity: not-yet-extracted, not misreported).
 // Lanes a flat-lane wire can be split into by the harness table's hints (3.4). Labels are server-side
 // (invariant 3); the board renders them as it renders analyze()'s lanes.
-const FLAT_LANES = {
+export const FLAT_LANES = {
   main: { kind: 'main', icon: '💬', label: 'conversation' },
   subagent: { kind: 'subagent', icon: '🧬', label: 'subagent' },
   aux: { kind: 'aux', icon: '⚙', label: 'other util' },

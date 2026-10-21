@@ -507,7 +507,10 @@ export class OrderBound extends Error {}
 // record that sorts before its lane's last call is the caller's to fold again: drop(lane) forgets the lane, and its records go
 // in again in step order. finish() builds the document WITHOUT changing the fold (it renumbers only the calls' gi-ordered
 // `streamId`), so a fold can go on (push more) after it.
-export function createAnalyzer() {
+// keep: false (src/view/reduce.mjs, which writes each call out as it is folded): no call, step or event is kept: pushView's step
+// carries its events (`step.ev`) and its ledger delta (`step.ld`, replayLedger below), a spawn event its prompt's head (`head`, 60
+// characters, for linking) instead of the tool's input; finish() is not on that path.
+export function createAnalyzer({ keep = true } = {}) {
   const streams = []
   let mainStream = null, curSub = null, monitorStream = null, probeStream = null, prevKind = null
   const auxStreams = new Map()
@@ -519,14 +522,14 @@ export function createAnalyzer() {
   const state = new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, ask, tools }
   const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', ask: null, tools: new Map() })
   function mkStream(kind) {
-    const s = { id: 's' + streams.length, kind, calls: [], events: [] }
+    const s = { id: 's' + streams.length, kind, calls: [], events: [], n: 0 }
     streams.push(s)
     state.set(s, fresh())
     return s
   }
   function drop(s) {
     for (const c of s.calls) steps.delete(c.at)
-    s.calls = []; s.events = []
+    s.calls = []; s.events = []; s.n = 0
     state.set(s, fresh())
   }
 
@@ -608,12 +611,12 @@ export function createAnalyzer() {
       // whole bug). Consumers that chain `prevFlat` MUST advance it only when chainsPrefix is true.
       chainsPrefix: !f.failed }
     Object.defineProperty(step, 'at', { value: at })
-    stream.calls.push(step)
-    steps.set(at, step)
+    stream.n++
+    if (keep) { stream.calls.push(step); steps.set(at, step) }
     laneOfStep.set(step, stream)
     usageOf.set(step, f.usage)
     const st = state.get(stream)
-    if (stream.kind === 'subagent' && stream.calls.length === 1) st.firstText = f.firstText || ''
+    if (stream.kind === 'subagent' && stream.n === 1) st.firstText = f.firstText || ''
     // ── events keep their SHAPE, not a second copy of the session's text ─────────
     //
     // A user message or a tool_result is the heaviest thing in a session and it is already carried, once, as blocks — so an event
@@ -622,25 +625,31 @@ export function createAnalyzer() {
     // compaction / summarize events, which carry no `text`. Invariant 4: the body is not silently emptied — `preview` + `chars` are
     // what the collapsed row shows anyway, and `text_omitted` states in place that the full text lives on this step's blocks (an
     // event is derived from them and owns no byte span of its own, so there is no honest locator to mint here).
-    eventsOf(stream, st, step, view)
+    const E = keep ? stream.events : []
+    if (!keep) { Object.defineProperty(step, 'ev', { value: E }); Object.defineProperty(step, 'ld', { value: [] }) }
+    eventsOf(stream, st, step, view, E)
     return step
   }
   const shown = (m) => ({ preview: own(m.preview), chars: m.chars, text_omitted: TEXT_OMITTED })
 
   // ── per stream: deltas → events + resources ─────────────────────────────────
-  function eventsOf(s, st, step, view) {
+  function eventsOf(s, st, step, view, E) {
+    // the lane's ledger, and what this step did to it (step.ld, when the fold keeps no step: replayLedger)
+    const D = keep ? null : step.ld
+    const addR = (kind, label, via, range) => { addRes(st.resMap, kind, label, step.at, via, range); if (D) D.push(['r', kind, label, via, range ?? null]) }
+    const see = (s, cap) => { seeIn(st.seenMap, s, step.at, cap); if (D && s) D.push(['s', s, cap]) }
     const f = view.facts, reply = f.reply
     // monitor + aux-family lanes: no ReAct/resource extraction — just one event per call
     if (EVENT_ONLY_KINDS.has(s.kind)) {
       step.dCtx = step.ctx - st.prevCtx; st.prevCtx = step.ctx
-      if (step.error) { s.events.push({ type: 'error', step: step.at, streamId: s.id, msg: step.errMsg }); return }
+      if (step.error) { E.push({ type: 'error', step: step.at, streamId: s.id, msg: step.errMsg }); return }
       if (s.kind === 'monitor') {
         const v = reply.verdict
         step.flagged = !/^no\b/i.test(v)
         step.verdict = v
-        s.events.push({ type: 'monitor', step: step.at, streamId: s.id, verdict: v, flagged: step.flagged })
+        E.push({ type: 'monitor', step: step.at, streamId: s.id, verdict: v, flagged: step.flagged })
       } else {
-        s.events.push({ type: 'aux', subkind: s.kind, step: step.at, streamId: s.id, model: f.model, ...shown(reply.text) })
+        E.push({ type: 'aux', subkind: s.kind, step: step.at, streamId: s.id, model: f.model, ...shown(reply.text) })
       }
       return
     }
@@ -650,13 +659,13 @@ export function createAnalyzer() {
     // message-count collapse and fabricate a compaction event out of a capture defect.
     if (step.unparsed) {
       step.dCtx = 0
-      s.events.push({ type: 'error', step: step.at, streamId: s.id, msg: step.errMsg, unparsed: true })
+      E.push({ type: 'error', step: step.at, streamId: s.id, msg: step.errMsg, unparsed: true })
       return
     }
     step.dCtx = step.ctx - st.prevCtx
     st.prevCtx = step.ctx
     const msgs = view.messages
-    for (const label of f.mcp) addRes(st.resMap, 'capability', label, step.at, 'mcp')
+    for (const label of f.mcp) addR('capability', label, 'mcp')
 
     const drop = msgs.length < st.prevCount
     const hasPreamble = f.preamble
@@ -685,6 +694,7 @@ export function createAnalyzer() {
         const last = res.segments[res.segments.length - 1]
         if (last.evict == null) last.evict = step.at
       }
+      if (D) D.push(['x'])
       newMsgs = msgs
     } else if (drop) {
       newMsgs = []
@@ -695,39 +705,41 @@ export function createAnalyzer() {
     for (const m of newMsgs) for (const [id, name] of m.uses) st.tools.set(id, name)
     for (const c of reply.tools) st.tools.set(c.id, c.name)
     if (step.compaction)
-      s.events.push({ type: 'compaction', step: step.at, streamId: s.id, from: step.evictedFrom, to: step.evictedTo,
+      E.push({ type: 'compaction', step: step.at, streamId: s.id, from: step.evictedFrom, to: step.evictedTo,
         // the event travels to the UI on its own — it MUST carry the inference marker with it,
         // otherwise the timeline re-asserts as fact what the step knows is a guess (invariant 4).
         inferred: step.compactionInferred, confidence: step.compactionConfidence, basis: step.compactionBasis })
     if (isSummarize) {
       step.summarizing = true
-      s.events.push({ type: 'summarize', step: step.at, streamId: s.id, out: f.usage?.output_tokens })
+      E.push({ type: 'summarize', step: step.at, streamId: s.id, out: f.usage?.output_tokens })
     }
-    for (const m of newMsgs) for (const b of m.blocks) for (const e of b.res || []) addRes(st.resMap, e[0], e[1], step.at, e[2], e[3])
+    for (const m of newMsgs) for (const b of m.blocks) for (const e of b.res || []) addR(e[0], e[1], e[2], e[3])
     // seen-but-not-opened filenames: tool-result text (bigger cap) + prose (smaller)
-    for (const m of newMsgs) for (const b of m.blocks) seeIn(st.seenMap, b.seen, step.at, b.type === 'tool_result' ? 80 : 40)
-    seeIn(st.seenMap, reply.seen, step.at, 40)
+    for (const m of newMsgs) for (const b of m.blocks) see(b.seen, b.type === 'tool_result' ? 80 : 40)
+    see(reply.seen, 40)
     for (const m of newMsgs) {
       if (m.role !== 'user') continue
       const e = userEventOf(m.blocks)
-      if (e) s.events.push({ type: 'user', step: step.at, streamId: s.id, ...shown(e) })
+      if (e) E.push({ type: 'user', step: step.at, streamId: s.id, ...shown(e) })
     }
     for (const m of newMsgs) {
       if (m.role !== 'user') continue
       for (const b of m.blocks) {
         if (b.type !== 'tool_result') continue
-        s.events.push({ type: 'observation', step: step.at, streamId: s.id, source: st.tools.get(b.tool_use_id) || 'tool', tool_use_id: b.tool_use_id,
+        E.push({ type: 'observation', step: step.at, streamId: s.id, source: st.tools.get(b.tool_use_id) || 'tool', tool_use_id: b.tool_use_id,
           ...(b.obs ? shown(b.obs) : { text: undefined }) })
       }
     }
-    if (step.error) s.events.push({ type: 'error', step: step.at, streamId: s.id, msg: step.errMsg })
+    if (step.error) E.push({ type: 'error', step: step.at, streamId: s.id, msg: step.errMsg })
     else if (!isSummarize) {
       // the turn the call PRODUCED, as ReAct events
-      if (reply.thinking) s.events.push({ type: 'thought', step: step.at, streamId: s.id, ...shown(reply.thinking) })
-      if (reply.text.chars) s.events.push({ type: 'say', step: step.at, streamId: s.id, ...shown(reply.text) })
+      if (reply.thinking) E.push({ type: 'thought', step: step.at, streamId: s.id, ...shown(reply.thinking) })
+      if (reply.text.chars) E.push({ type: 'say', step: step.at, streamId: s.id, ...shown(reply.text) })
       for (const c of reply.tools) {
-        s.events.push({ type: SPAWN_OPS.has(c.name) ? 'spawn' : 'action', step: step.at, streamId: s.id, tool: c.name, id: c.id,
-          arg: toolArg(c.name, c.input), input: c.input })
+        const e = { type: SPAWN_OPS.has(c.name) ? 'spawn' : 'action', step: step.at, streamId: s.id, tool: c.name, id: c.id, arg: toolArg(c.name, c.input) }
+        if (keep) e.input = c.input
+        else if (e.type === 'spawn') Object.defineProperty(e, 'head', { value: own(((c.input && c.input.prompt) || '').slice(0, 60)) })
+        E.push(e)
       }
     }
     st.prevCount = msgs.length
@@ -810,7 +822,22 @@ export function createAnalyzer() {
   }
   // ask(lane, text): the lane's first prompt, said by the caller that holds the first call's blocks (src/view/blockmeta.mjs firstHuman)
   const ask = (s, text) => { state.get(s).ask = text }
-  return { push, pushView, finish, drop, ask, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()] }
+  return { push, pushView, finish, drop, ask, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()], firstText: (s) => state.get(s).firstText }
+}
+
+/** laneMeta(kind) → {icon, label, note?} of an analyzer lane's kind; eventOnly(kind): no ReAct events, resources or seen paths. */
+export const laneMeta = (kind) => LANE_META[kind]
+export const eventOnly = (kind) => EVENT_ONLY_KINDS.has(kind)
+/** replayLedger(steps) → {resources, seen} of a lane from its steps' ledger deltas (`step.ld` of a keep:false analyzer), `steps`
+ *  [[n, ld]] in the lane's order (n increasing): what the analyzer's own ledger holds then, a step named by its `n`. */
+export function replayLedger(steps) {
+  const resMap = new Map(), seenMap = new Map()
+  for (const [n, ld] of steps) for (const op of ld) {
+    if (op[0] === 'r') addRes(resMap, op[1], op[2], n, op[3], op[4] ?? undefined)
+    else if (op[0] === 's') seeIn(seenMap, op[1], n, op[2])
+    else for (const r of resMap.values()) { const last = r.segments[r.segments.length - 1]; if (last.evict == null) last.evict = n }
+  }
+  return { resources: [...resMap.values()], seen: [...seenMap.values()] }
 }
 
 // ── the linear context: the exact tools → system → messages sequence the model assembles ──
