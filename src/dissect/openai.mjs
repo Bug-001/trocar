@@ -23,6 +23,7 @@ export const OPENAI_SECTIONS = [
 ];
 
 import { parsedRequestBody } from './request-body.mjs';
+import { streamParts } from './sse-spans.mjs';
 
 // ── detection ───────────────────────────────────────────────────────────────────────────────
 // D25 · detect on WIRE SHAPE, not the User-Agent. The old UA test (/codex|openai/) was unreliable in
@@ -413,6 +414,47 @@ export function ctxTokens(norm) {
 // are the request's top-level keys that become context blocks (everything else is a non-block key).
 // `consumedBody` — the request keys this dissector maps to blocks (the rest are unmapped, 3.1:44); `messageCount` — the
 // message count compaction compares (3.4); `faithfulnessOf` — a flat block's 3.2 faithfulness.
+// ── reply parts (sse-spans.mjs): each reply block addressed as a span of resp.raw. Responses keys an event by its
+// `output_index` and takes the item the wire closes it with (output_item.done, else the terminal's output); Chat keys
+// a chunk by choice index and what its delta carries (reasoning, text, or tool call `index`).
+const replyBlocksOf = (items) => items.flatMap((it) => itemToBlocks(it)).map((x) => x.block);
+const RESPONSES_REPLY = {
+  keysOf: (e) => (Number.isInteger(e.output_index) ? [String(e.output_index)] : []),
+  build: (k, evts, all) => {
+    const done = evts.find((e) => e.type === 'response.output_item.done' && e.item);
+    const term = all.find((e) => e && /^response\.(completed|incomplete|failed)$/.test(e.type) && e.response);
+    const item = done ? done.item : term && Array.isArray(term.response.output) ? term.response.output[Number(k)] : null;
+    return item ? replyBlocksOf([item]) : 'this output item did not finish before the stream ended';
+  },
+  jsonBlocks: (body) => replyBlocksOf(Array.isArray(body.output) ? body.output : []),
+};
+const chatDeltas = (e) => (Array.isArray(e.choices) ? e.choices : []).map((c, i) => [c && c.index !== undefined ? c.index : i, (c && (c.delta || c.message)) || {}]);
+const CHAT_REPLY = {
+  keysOf: (e) => chatDeltas(e).flatMap(([ci, d]) => [
+    ...(typeof d.reasoning_content === 'string' && d.reasoning_content ? [`${ci}:thinking`] : []),
+    ...(typeof d.content === 'string' && d.content ? [`${ci}:text`] : []),
+    ...(Array.isArray(d.tool_calls) ? d.tool_calls.map((tc, n) => `${ci}:tool:${tc && tc.index !== undefined ? tc.index : n}`) : []),
+  ]),
+  build: (k, evts) => {
+    const [ci, kind, ti] = k.split(':');
+    let text = '', id = '', name = '', args = '';
+    for (const e of evts) for (const [c, d] of chatDeltas(e)) {
+      if (String(c) !== ci) continue;
+      if (kind === 'thinking' && typeof d.reasoning_content === 'string') text += d.reasoning_content;
+      if (kind === 'text' && typeof d.content === 'string') text += d.content;
+      if (kind === 'tool') (Array.isArray(d.tool_calls) ? d.tool_calls : []).forEach((tc, n) => {
+        if (String(tc && tc.index !== undefined ? tc.index : n) !== ti) return;
+        const f = tc.function || {};
+        if (tc.id) id = tc.id;
+        if (f.name) name += f.name;
+        if (typeof f.arguments === 'string') args += f.arguments;
+      });
+    }
+    return [kind === 'tool' ? { type: 'tool_use', id, name, input: safeJson(args) } : kind === 'thinking' ? { type: 'thinking', thinking: text } : { type: 'text', text }];
+  },
+  jsonBlocks: (body) => (Array.isArray(body.choices) ? body.choices : []).flatMap((c) => (c && c.message ? chatMessageToBlocks(c.message).map((x) => x.block) : [])),
+};
+
 const blockFaithfulness = (b) => faithfulness(b && b.block); // tools / system descriptors carry no .block → verbatim
 export const RESPONSES = Object.freeze({
   id: 'openai-responses', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
@@ -421,6 +463,7 @@ export const RESPONSES = Object.freeze({
   // the stream's terminal says the response failed, or an `error` event arrived with no terminal (normEvents)
   failed: (norm) => norm.stop_reason === 'failed' || norm.stop_reason === 'error',
   consumedBody: ['model', 'stream', 'instructions', 'tools', 'input'],
+  replyParts: (rec) => streamParts(rec, RESPONSES_REPLY),
   messageCount: (req) => (Array.isArray(req && req.input) ? req.input.length : typeof (req && req.input) === 'string' ? 1 : 0),
   faithfulnessOf: blockFaithfulness,
 });
@@ -429,6 +472,7 @@ export const CHAT = Object.freeze({
   boardFlat: (req) => boardFlatChat(req), normResp: (rec) => normRespChat(rec),
   reqCounts: (req) => reqCountsFor('chat', req), ctxTokens,
   consumedBody: ['model', 'stream', 'messages', 'tools'],
+  replyParts: (rec) => streamParts(rec, CHAT_REPLY),
   messageCount: (req) => (Array.isArray(req && req.messages) ? req.messages.length : 0),
   faithfulnessOf: blockFaithfulness,
 });

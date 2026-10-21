@@ -13,7 +13,9 @@
 // bytes carry its whole input (3.1:60). The bytes are untouched: every stitched block is located in the record
 // and field it came from (locate), so it resolves verbatim through a field-qualified text_ref (4.2:40, gate G1).
 // Leaf module.
-import { boardFlat, reqCountsFor, ctxTokens, normEvents, faithfulness } from './openai.mjs';
+import { boardFlat, reqCountsFor, ctxTokens, normEvents, faithfulness, itemToBlocks } from './openai.mjs';
+import { scanJson, spanAt } from './json-scan.mjs';
+import { storedReply, noSpanWhy, replyPart, partsOfUnit } from './sse-spans.mjs';
 import { isWsHandshake } from './ws-handshake.mjs'; // not ./registry.mjs: the registry imports THIS module
 import { headerOf } from './harnesses.mjs';
 import { extendChain, linked, segmentsOf, segmentsIn, createLinks } from './chain.mjs';
@@ -172,6 +174,22 @@ export function normRespWs(rec) {
   return { ...normEvents(events), unread };
 }
 
+// The reply's blocks as addressable parts (sse-spans.mjs): the server message that closes an item
+// (response.output_item.done) holds it whole, so its span is the `item` node inside that message, field resp.messages.<j>.
+export function replyPartsWs(rec) {
+  const out = [];
+  serverMessages(rec).forEach((m, j) => {
+    const e = parse(m);
+    if (!e || e.type !== 'response.output_item.done' || !e.item || typeof e.item !== 'object') return;
+    let span = null;
+    try { span = spanAt(scanJson(m), ['item']); } catch { /* parsed above, so scannable */ }
+    out.push(...partsOfUnit(itemToBlocks(e.item).map((x) => x.block), `resp.messages.${j}`, span, 'the item could not be located in its message'));
+  });
+  if (out.length) return out;
+  const { r, part } = storedReply(rec);
+  return [replyPart(null, null, null, r && serverMessages(rec).length ? 'no server message closed an output item' : noSpanWhy(r, part || {}))];
+}
+
 // The dissector object the board's flat-lane assembler calls (D25: the shared layer names no wire; the
 // registry registers this under 'openai-responses-ws'). prepare (→ a planner whose context(rec) stitches) / roleOf / laneOf / agentOf / failed are the hooks a
 // wire with a cross-record context provides.
@@ -187,6 +205,7 @@ export const RESPONSES_WS = Object.freeze({
   agentOf: connOf, // one connection carries one agent's conversation: a subagent is folded by its own (3.5 §缓存)
   boardFlat: (req) => boardFlat(req),
   normResp: (rec) => normRespWs(rec),
+  replyParts: (rec) => replyPartsWs(rec),
   reqCounts: (req) => reqCountsFor('responses', req),
   ctxTokens,
   // a call failed when its terminal says so, or when no terminal arrived at all (the connection cut it)
