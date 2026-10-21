@@ -188,6 +188,23 @@ test('K-29: a control answer whose body is cut off is status 0 with no data', as
   })
 })
 
+test('A9 (3.5 block --ref repeatable): an array parameter is sent as one repeated parameter, in order', async () => {
+  await withFetch(() => json({ blocks: [] }), async (calls) => {
+    await api.get('block', { ref: ['s/a#1::0-4', 's/b#2::0-9'] })
+    assert.deepEqual(new URL(calls[0].url, 'http://x').searchParams.getAll('ref'), ['s/a#1::0-4', 's/b#2::0-9'])
+  })
+})
+
+test('A9 (4.4 two-part ETag): hold:false sends the ETag back and a 304 is {ok:true, status:304, data:null}', async () => {
+  await withFetch((url, init) => (headerOf(init, 'if-none-match') === '"m1"' ? new Response(null, { status: 304 }) : json({ mark: 'm1' }, 200, { etag: '"m1"' })), async (calls) => {
+    const first = await api.get('session', { id: 'hold-false-test' }, { hold: false })
+    assert.equal(first.ok, true); assert.deepEqual(first.data, { mark: 'm1' })
+    const second = await api.get('session', { id: 'hold-false-test' }, { hold: false })
+    assert.equal(headerOf(calls[1].init, 'if-none-match'), '"m1"')
+    assert.deepEqual(second, { ok: true, status: 304, data: null })
+  })
+})
+
 test('K-30: after a 403 no request is sent, every read is {ok:false, status:403}, onForbidden fires once', async () => {
   let fired = 0
   onForbidden(() => fired++)
