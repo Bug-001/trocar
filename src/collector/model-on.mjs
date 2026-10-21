@@ -95,7 +95,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   // §3 ①: a group port another socket holds is engine-port-taken — said in the receipt and recorded (D38), then the group's entries follow the new door
   for (const g of cfg.rebound) {
     const [from, to] = [was.groupPorts[g], cfg.config.groupPorts[g]]
-    const reason = `the door of ${g} could not use its recorded port ${from}: another program holds it; trocar on moved the door to ${to} and rewrites its entries`
+    const reason = `trocar's local proxy port ${from} for ${g} is held by another program; trocar on moved it to ${to} and rewrites its entries`
     try { appendEvent(dir, { event: 'failure', where: 'ingress', code: CODE.enginePortTaken, door: g, port: from, moved_to: to, reason, ...(source ? { source } : {}) }) } catch { /* the receipt's note carries it (R11) */ }
     out.notes.push({ harness: g.slice(0, g.indexOf(':')), code: CODE.enginePortTaken, text: `${CODE.enginePortTaken}: 门 ${g} 原来的端口 ${from} 被别的程序占了,换到 ${to},入口跟着改写` })
   }
