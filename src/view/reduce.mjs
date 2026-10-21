@@ -228,8 +228,9 @@ function flatFold(d, { store, L, def, cacheOf, pushOf }) {
     const row = store.rows.get(rid), x = row.x, e = L.at(rid), list = e.list, attrs = row.attrs || {}, h = x.hints || {};
     const kind = x.lane, agent = kind === 'subagent' ? h.laneKey ?? x.agent ?? null : null;
     const lane = agent == null ? kind : `${kind}\n${agent}`;
-    // 3.4: a call whose context is unknown has no observed message count: no compaction verdict, and not the next one's predecessor
-    const noContext = !!x.unparsed || x.unstored != null || x.wire.contextState === 'partial';
+    // 3.4: a call whose context is unknown (a body that does not parse; a partial context, an unstored WebSocket request included) has
+    // no observed message count: no compaction verdict, and not the next one's predecessor
+    const noContext = !!x.unparsed || x.wire.contextState === 'partial';
     const comp = noContext ? { compaction: false } : compactionMeta(compactionVerdict(info.get(lane) || null,
       { hint: h.compaction === true, marker: h.compactionMarker === true, msgCount: x.msgCount || 0 }));
     if (!noContext) info.set(lane, { msgCount: x.msgCount || 0, marker: h.compactionMarker === true });

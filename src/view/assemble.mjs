@@ -239,17 +239,18 @@ function flatLaneFold(d, read, baselines) {
     // a call the dissector knows ran but whose request was not stored (ctx.unrenderable says why): no context to
     // show either, but no failure — its reply and usage are real
     const unstored = ctx && ctx.unrenderable ? String(ctx.unrenderable) : null;
+    // the labels read the body as stored: before flatRequest stands a parsed request (`{}` for a body that does not parse) on it
+    const norm = d.normResp(r);
+    const wire = wireOf(r, d.id, ctx, norm);
     const { req, unparsed } = flatRequest(d, r, ctx);
     // 3.4: a call whose context is unknown (no stored request, a body that did not parse, a partial context — the ETL's
     // context_state, a continuation with no predecessor in the capture included) has no observed message count: it
     // gets no compaction verdict and is not the lane's baseline for the next call
     const noContext = () => unparsed || !!unstored || wire.contextState === 'partial';
     const flat = d.boardFlat(req, r);
-    const norm = d.normResp(r);
     const usage = norm.canonUsage;
     const st = (respOf(r) || {}).status;
     const failed = unparsed || !!(d.failed && d.failed(norm, r));
-    const wire = wireOf(r, d.id, ctx, norm);
     // 3.4 compaction, the ETL's verdict (compactionVerdict, the one shared rule): a harness hint (Codex
     // request_kind=compaction, a compact header), a text marker on its rising edge (Hermes), then a big drop.
     // The count is the dissector's own (the ETL's), so compaction_from / _to match DuckDB.

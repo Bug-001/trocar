@@ -3,7 +3,8 @@
 // wire (Anthropic whole context and Message Threads, Responses over HTTP and WebSocket, Chat; sub-agents side by side and written
 // late), sessions mixing wires with records no dissector reads, the thread helper's session in causal and file
 // order, axes that break the cache inside the shared prefix (an edited block, reordered JSON keys, a reordered tools array), a call
-// that fails midway (it moves no lane's baseline), the committed captured response shapes, and the real captured session when on disk.
+// that fails midway (it moves no lane's baseline), calls that cannot show their context (a body that does not parse, an unstored
+// WebSocket request, a continuation with its predecessor missing), the committed captured response shapes, and the real captured session when on disk.
 //   (a) reduce(projection) ≡ createAssembler push-all → finish, serialised, except prefixSha256, lanes[].key, items
 //   (b) listOf(rid) of every call is the call's list as extraction materialises it (its base chain), boundaries too
 //   (c) a break detail is written once per pair of blocks: a second reduction appends nothing
@@ -54,6 +55,19 @@ function broken(recs, axis) {
 // a call midway that fails cleanly: it moves no lane's cache baseline
 const failed = (recs) => recs.map((r, i) => (i === Math.floor(recs.length / 2)
   ? { ...r, resp: { status: 529, kind: 'json', body: { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } } } } : r));
+// a call midway that cannot show its context (3.4: no compaction verdict, not its lane's baseline), one shape per axis: a body that is
+// stored but does not parse; a WebSocket call whose request message was not stored (over the size cap: req_body null, a client
+// data frame in ws_raw); a WebSocket continuation whose predecessor is not in the capture
+const FAILS = {
+  unparsed: { on: (r) => typeof r.req_body === 'string', f: (r) => ({ ...r, req_body: r.req_body.slice(0, -7) }) },
+  unstored: { on: (r) => r.transport === 'ws', f: (r) => ({ ...r, req_body: null, ws_truncated: true, ws_raw: [{ d: 'c', h: Buffer.from([0x81, 0x7e]).toString('base64') }] }) },
+  orphan: { on: (r) => /previous_response_id/.test(r.req_body || ''), f: (r) => rebody(r, (b) => ({ ...b, previous_response_id: 'resp_gone' })) },
+};
+function blind(recs, axis) {
+  const { on, f } = FAILS[axis], at = recs.map((r, i) => i).filter((i) => recs[i].is_llm_call && on(recs[i]));
+  const k = at[Math.floor(at.length / 2)];
+  return recs.map((r, i) => (i === k ? f(r) : r));
+}
 const fixture = (name) => fs.readFileSync(new URL(`../fixtures/${name}`, import.meta.url), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 
 // Codex over Responses HTTP: the whole context each request; every third call a subagent's (a harness lane hint, no agent id), a
@@ -120,6 +134,11 @@ function sessions() {
   for (const wire of ['http', 'threads']) for (const late of [0, 3]) out[`${wire} failed late=${late}`] = failed(big(wire, late, 2));
   for (const wire of ['ws', 'chat']) for (const late of [0, 3]) for (const subLanes of [1, 2]) out[`${wire} late=${late} subLanes=${subLanes}`] = big(wire, late, subLanes);
   for (const axis of ['plain', 'compaction', 'failed', 'edited']) for (const late of [0, 2]) out[`responses ${axis} late=${late}`] = lateBy(responses(axis), subOf, late);
+  for (const late of [0, 3]) {
+    for (const axis of ['unparsed', 'unstored', 'orphan']) out[`ws ${axis} late=${late}`] = blind(big('ws', late, 2), axis);
+    out[`chat unparsed late=${late}`] = blind(big('chat', late, 2), 'unparsed');
+  }
+  for (const late of [0, 2]) out[`responses unparsed late=${late}`] = lateBy(blind(responses('plain'), 'unparsed'), subOf, late);
   for (const late of [0, 2]) out[`mixed late=${late}`] = lateBy(mixed(), (r) => /messages|generate/.test(r.endpoint), late);
   out['captured response shapes'] = fixture('old-capture-resp-shapes.ndjson').filter((r) => /^\/v1\/messages/.test(r.endpoint || ''));
   for (const k of Object.keys(out)) out[k] = filed(out[k]);
