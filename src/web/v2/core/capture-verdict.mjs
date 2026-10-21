@@ -46,7 +46,7 @@ export function captureVerdict(doc, { okAt = null, err = null, now = Date.now() 
   if (okAt != null && now - okAt > 2 * CAPH_MS) return mk('stale', HEALTH_READ.stale(fmtWhen(okAt, now)))
   if (err && okAt == null) return mk('stale', HEALTH_READ.stale('—'))
   if (!doc) return mk('loading', HEALTH_READ.loading)
-  if (doc.unreadable) return mk('unreadable', HEALTH_READ.unreadable(doc.unreadable), { reason: String(doc.unreadable) })
+  if (doc.unreadable) return mk('unreadable', HEALTH_READ.unreadable, { reason: String(doc.unreadable) })
   const h = doc.health && typeof doc.health === 'object' ? doc.health : null
   if (!h) return mk('unknown', HEALTH_WORDS.unknown({}))
   const W = (t) => fmtWhen(t, now)
