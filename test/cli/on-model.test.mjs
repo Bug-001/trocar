@@ -11,6 +11,7 @@ import { runOnCli, runOn } from '../../src/cli/on.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
 import { snapshot } from './fixtures/on-ctx.mjs'
+import { startControlServer } from '../../src/collector/core/control.mjs'
 
 function fakeIo() {
   const out = [], err = []
@@ -119,3 +120,26 @@ for (const os of ['darwin', 'win32']) {
     assert.deepEqual([last.outcome, last.harnesses], ['failed', []], JSON.stringify(last)); assert.deepEqual(checkRecord(last), [])
   })
 }
+
+// V104 (proxy): the result line lists only the harnesses this run really turned on — a harness the daemon opened no door for is not one of them
+test('V104 proxy (darwin): the daemon opens doors for the first harness only → the on result line\'s harnesses is [first]', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex', 'dsh'] })
+  fs.mkdirSync(path.join(w.home, '.dsh'), { recursive: true })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const sock = path.join(w.home, 'c.sock'), token = 't'.repeat(32)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+  let asked = null
+  const server = await startControlServer({ socketPath: sock, token, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => { asked = body; return { doors: Object.fromEntries(Object.entries(body.groups).filter(([g]) => g.startsWith(`${body.harnesses[0]}:`)).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) } },
+  } })
+  try {
+    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+    const io = fakeIo()
+    await runOn({ io, env: w.env, home: w.home, platform: 'darwin', deps, ids: null, flags: new Set(['--yes']), json: true })
+    assert.ok(asked && asked.harnesses.length >= 2, JSON.stringify(asked))
+    const last = fs.readdirSync(path.join(w.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))).filter((l) => l.event === 'install-note' && l.kind === 'result').at(-1)
+    assert.deepEqual(last.harnesses, [asked.harnesses[0]], JSON.stringify(last))
+    assert.deepEqual(checkRecord(last), [])
+  } finally { await server.close() }
+})

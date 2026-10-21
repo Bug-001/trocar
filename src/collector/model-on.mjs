@@ -97,7 +97,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
     const [from, to] = [was.groupPorts[g], cfg.config.groupPorts[g]]
     const reason = `trocar's local proxy port ${from} for ${g} is held by another program; trocar on moved it to ${to} and rewrites its entries`
     try { appendEvent(dir, { event: 'failure', where: 'ingress', code: CODE.enginePortTaken, door: g, port: from, moved_to: to, reason, ...(source ? { source } : {}) }) } catch { /* the receipt's note carries it (R11) */ }
-    out.notes.push({ harness: g.slice(0, g.indexOf(':')), code: CODE.enginePortTaken, text: `${CODE.enginePortTaken}: 门 ${g} 原来的端口 ${from} 被别的程序占了,换到 ${to},入口跟着改写` })
+    out.notes.push({ harness: g.slice(0, g.indexOf(':')), code: CODE.enginePortTaken, text: `${CODE.enginePortTaken}: port ${from} of ${g} was taken by another program; trocar moved it to ${to} and rewrote the entries` })
   }
   let doors = null
   if (!ep.socketPath) out.problems.push(`no daemon to ask: ${ep.why || 'no control endpoint'}; start it (trocar daemon), then run trocar on again`)
@@ -108,15 +108,20 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
     } catch (e) { out.problems.push(`the daemon did not take the on request (${errText(e)})`) }
   }
   out.doors = doors || {}
+  // V104: turned on = at least one of its entries now leads to a door — what the run's result line lists, also when a throw cuts the run short
+  const turned = () => on.filter((h) => out.routes.some((r) => r.harness === h && r.ok))
   if (doors) {
-    for (const { h } of planned) {
-      const doorOf = (rid) => { const u = doors[groupOf(h, rid)]; if (!u) throw Object.assign(new Error(`the daemon opened no door for ${groupOf(h, rid)}`), { code: 'not-routed' }); return u }
-      const w = writeRoutes(byName.get(h), { ...wctx, harness: h }, doorOf)
-      for (const r of w.results) out.routes.push({ harness: h, ...r })
-      for (const n of w.notRouted) out.routes.push({ harness: h, ok: false, ...n })
-      out.notes.push(...w.notes.map((n) => ({ harness: h, ...n })))
-    }
+    try {
+      for (const { h } of planned) {
+        const doorOf = (rid) => { const u = doors[groupOf(h, rid)]; if (!u) throw Object.assign(new Error(`the daemon opened no door for ${groupOf(h, rid)}`), { code: 'not-routed' }); return u }
+        const w = writeRoutes(byName.get(h), { ...wctx, harness: h }, doorOf)
+        for (const r of w.results) out.routes.push({ harness: h, ...r })
+        for (const n of w.notRouted) out.routes.push({ harness: h, ok: false, ...n })
+        out.notes.push(...w.notes.map((n) => ({ harness: h, ...n })))
+      }
+    } catch (e) { if (e && typeof e === 'object') e.turnedOn = turned(); throw e }
   }
+  out.turnedOn = turned()
   out.exit = !refused.length && !pending.length && doors && out.routes.every((r) => r.ok) && !out.problems.length ? 0 : 1
   return out
 }
