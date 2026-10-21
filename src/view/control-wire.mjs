@@ -23,7 +23,7 @@ import { captureLabelsOf, bodyRetentionOf, reqIncompleteOf, isLogOnly } from '..
 import { requestEncodingOf } from '../dissect/request-body.mjs';
 import { trafficClassOf } from '../dissect/traffic.mjs';
 import { headerOf } from '../dissect/harnesses.mjs';
-import { SECRET_HEADERS } from '../capture/redact.mjs';
+import { isSecretHeader } from '../capture/redact.mjs';
 
 export const BODY_SHOW_CHARS = 1 << 20; // the most of one body's text a record carries to the browser
 const HEX_SHOW_BYTES = 4096;     // the most of a binary body shown as hex
@@ -123,13 +123,16 @@ function slimResp(r, { detail, shown, omitted, prefix }) {
   return out;
 }
 
-// A credential-class header's value (SECRET_HEADERS, the one server list) never leaves in a query document (2.6 §保真边界 2, 4.1 §凭据处置):
+// A credential-class header's value (isSecretHeader, the one server rule) never leaves in a query document (2.6 §保真边界 2, 4.1 §凭据处置):
 // blanked in the header objects and the raw heads, the names in ctl.masked; `reveal` (one lowercased name) keeps that one. The stored bytes stay
 // verbatim. The old capture placeholder '<redacted>' is no credential and stays as stored. Never throws: every field is type-checked.
-const HEAD_LINE = /^([!#$%&'*+.^_`|~0-9A-Za-z-]+):([ \t]*)([^\r\n]*)(\r?\n?)$/;
+// A raw head line keeps its name, the whitespace around the colon and its line ending; an obs-fold continuation (leading SP/HTAB)
+// of a blanked header keeps only its leading whitespace and line ending, so it never becomes the empty line that ends the head.
+const HEAD_LINE = /^([!#$%&'*+.^_`|~0-9A-Za-z-]+)([ \t]*):([ \t]*)([^\r\n]*)(\r?\n?)$/;
+const FOLD_LINE = /^([ \t]+)[^\r\n]*?(\r?\n?)$/;
 function maskCredentials(rec, reveal) {
   const masked = new Set();
-  const hit = (k) => { const n = String(k).toLowerCase(); return SECRET_HEADERS.has(n) && n !== reveal ? n : null; };
+  const hit = (k) => { const n = String(k).trim().toLowerCase(); return isSecretHeader(n) && n !== reveal ? n : null; };
   const headers = (h) => {
     if (!h || typeof h !== 'object' || Array.isArray(h)) return h;
     let out = h;
@@ -142,12 +145,19 @@ function maskCredentials(rec, reveal) {
     }
     return out;
   };
-  const rawHead = (s) => (typeof s !== 'string' ? s : s.split(/(?<=\n)/).map((line) => {
-    const m = HEAD_LINE.exec(line), n = m && hit(m[1]);
-    if (!n) return line;
-    masked.add(n);
-    return `${m[1]}:${m[2]}${m[4]}`;
-  }).join(''));
+  const rawHead = (s) => {
+    if (typeof s !== 'string') return s;
+    let folding = false;
+    return s.split(/(?<=\n)/).map((line) => {
+      const f = folding && FOLD_LINE.exec(line);
+      if (f) return f[1] + f[2];
+      const m = HEAD_LINE.exec(line), n = m && hit(m[1]);
+      folding = !!n;
+      if (!n) return line;
+      masked.add(n);
+      return `${m[1]}${m[2]}:${m[3]}${m[5]}`;
+    }).join('');
+  };
   const resp = (r) => {
     if (!r || typeof r !== 'object') return r;
     const out = { ...r, headers: headers(r.headers) };

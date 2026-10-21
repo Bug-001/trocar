@@ -194,8 +194,11 @@ session you are looking at answers in milliseconds; the board's answers come gzi
 someone asks (an open board asks every 1.5 s) and leaves after two minutes with nothing asked, giving its memory back;
 the next query starts a new one. A session is read call by call, and one answer carries the message bodies of one
 page of steps plus a short line for every step. The worker's memory is bounded: a session too large for it shows its
-newest calls that fit and says so (**Showing only the latest N / M calls (file X MB)**); the cut moves a tenth of
-what fits at a time, and between moves each refresh reads on with the new calls only. The first open of a very large
+newest calls that fit and says so (**Showing only the latest N / M calls (file X MB)**); the cut moves by a tenth of
+the budget at a time, and between moves each refresh reads on with the new calls only. The worker also measures its
+heap while it reads: a session that costs more per call than estimated is cut shorter, never read until the worker
+runs out of memory. A session that cannot be read says so in one sentence with **Retry**; the reason is under
+**Technical details**. The first open of a very large
 session after the worker has left reads it from the start, which takes a while (about half a minute for a
 5.4k-call session). It is not a prerequisite: with no daemon — or none that answers
 yet — the command reads the records itself and gives the same document, only slower. Long results page with
@@ -410,7 +413,8 @@ config library (creating a one-key entry when none is in effect; `off` removes i
 PAC is served by the daemon on loopback: loopback and your bypass list go direct, the rest goes through the door, and
 when the door does not answer, the way Desktop would go without trocar: your system proxy, or direct when none is set.
 The door itself also leaves through your system proxy, and follows it when you change it. A process trocar cannot
-confirm is yours still gets a PAC, with your system proxy and no door. It takes effect at the next start of the app;
+confirm is yours still gets a PAC, with your system proxy and no door; one that leaves before trocar could tell is
+only counted, never reported as refused. It takes effect at the next start of the app;
 no administrator rights. Desktop's own first-party hosts (sign-in, the updater, the Code tab's download) are forwarded,
 not decrypted.
 

@@ -1,0 +1,21 @@
+{
+  "name": "I-pageerror-replay-100",
+  "invariant": "I-pageerror",
+  "sig": "I-pageerror:replay",
+  "fp": "TypeError: Cannot read properties of null (reading 'closest')",
+  "seed": 100,
+  "big": false,
+  "viewport": 1280,
+  "theme": "light",
+  "steps": [
+    {"a":"host","p":{"f":0.198}},
+    {"a":"open","p":{"via":"link","f":0.409}},
+    {"a":"nav","p":{"key":"step:prev"}},
+    {"a":"repeat","p":{"step":{"a":"resize","p":{"width":1440}},"times":6}}
+  ],
+  "screenshot": "test/web-v2/browser/shots/seq/I-pageerror-replay-100.png",
+  "status": "open",
+  "detail": "resizing the window on an open desk throws TypeError reading 'closest' of null: refit → fitView → sawCapacity reads $('#sawrow').closest while #sawrow is not in the document",
+  "owner": "desk (lane D)",
+  "suspect": "src/web/v2/replay/replay.mjs:234"
+}

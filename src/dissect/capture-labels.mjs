@@ -8,7 +8,7 @@
 //     on disk is what arrived before that.
 // These are NOT the top-level `partial` (a connection's earlier messages are missing — context, not bytes).
 // Envelope fields only, no wire knowledge, so the board and the ETL can both use it. Leaf module.
-import { requestEncodingOf } from './request-body.mjs';
+import { requestEncodingOf, parsedRequestBody } from './request-body.mjs';
 import { harnessOf } from './harnesses.mjs';
 import { trafficClassOf } from './traffic.mjs';
 const PARTIAL = {
@@ -128,7 +128,8 @@ export function bodyUnparsedOf(rec) {
   // stored, never shipped). Parsing a 0.8 MB request a second time only to learn that it parses cost
   // 46 ms per open of a 115-call session — the same JSON.parse the board had just done (1.6 §3.1).
   if (typeof rec._reqParsed === 'boolean') return !rec._reqParsed;
-  try { const v = JSON.parse(b); return !(v && typeof v === 'object'); } catch { return true; }
+  const v = parsedRequestBody(rec);   // the one parse every reader of this record shares (a body that does not parse is null)
+  return !(v && typeof v === 'object');
 }
 
 // The other incompleteness labels (4.6 §记录 「不完整的标注,各说一件事」), one per thing that happened, from

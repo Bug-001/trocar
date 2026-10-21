@@ -6,6 +6,9 @@ import assert from 'node:assert/strict'
 import { holdersOf, sawEntry, WINDOWS_MAX } from '../../src/off/holders.mjs'
 import { compileIdentity } from '../../src/off/identity.mjs'
 import { serializeSignature } from '../../src/off/signature.mjs'
+import { listProcs } from '../../src/off/proc.mjs'
+import { darwinTools } from './fixtures/darwin-tools.mjs'
+import { fakeProc } from '../collector/arch/linux/fixtures/fake-proc.mjs'
 
 const ON = Date.parse('2026-10-15T10:00:00Z'), OFF = Date.parse('2026-10-15T11:00:00Z')
 const iso = (ms) => new Date(ms).toISOString()
@@ -138,3 +141,31 @@ test('windows: a full list makes its earliest start unknown (the safe direction)
   assert.equal(sawEntry({ startedAt: ON + 5 }, { identity: identity('agentx') }), false)
   assert.equal(sawEntry({ startedAt: null }, rec('agentx')), null)
 })
+
+// V32 (1.6 A.2 row 32): a start the reader read only to the whole second (macOS `lstart`, which the row states as `startGrain`) that falls in
+// on_at's second read the entry; a start read finer is taken as it is, even one that happens to fall on a whole second. Generated over the three
+// readers (src/off/proc.mjs listProcs through its injected OS), each answering a process that truly started k ms after the whole second S:
+// darwin prints S's second (true start = on_at, inside); win32 and Linux give S itself, k ms before on_at (outside).
+const S = Math.floor(ON / 1000) * 1000 + 3_000
+const READERS = {
+  darwin: async (at) => listProcs({ platform: 'darwin', uid: 501, exec: darwinTools([{ pid: 7, at: new Date(at), exe: '/usr/local/bin/agentx' }]).run }),
+  win32: async (at) => { const ps = { run: (file, args) => (/Win32_Process \| ForEach-Object/.test(args.join(' ')) ? { status: 0, stdout: JSON.stringify([{ p: 7, pp: 1, n: 'agentx.exe', x: 'C:\\a\\agentx.exe', s: at, c: 'agentx' }]), stderr: '' } : { status: 1, stdout: '', stderr: '' }) }; return listProcs({ platform: 'win32', exec: ps.run }) },
+  linux: async (at) => { const p = fakeProc(); try { p.add(7, { uid: 1000, exe: '/usr/bin/agentx', argv: ['agentx'], startTicks: (at / 1000 - p.btime) * 100 }); return await listProcs({ platform: 'linux', uid: 1000, root: p.root }) } finally { p.done() } },
+}
+for (const [os, read] of Object.entries(READERS)) {
+  for (const k of [10, 250, 999]) { // from Linux's grain (one clock tick, 10 ms) up: within a tick no reader tells the two apart
+    test(`same second (${os}): on_at = S + ${k} ms; the process started at ${os === 'darwin' ? 'on_at, read as S' : 'S, read finer than a second'} ${os === 'darwin' ? 'read' : 'did not read'} the entry; one a second earlier did not`, async () => {
+      const l = rec('agentx', { on_at: iso(S + k) })
+      delete l.off_at
+      const truly = os === 'darwin' ? S + k : S
+      const [row] = await read(truly)
+      assert.equal(row.startedAt, S, 'the reader gives a start on the whole second S')
+      assert.equal(sawEntry(row, l), os === 'darwin')
+      const [earlier] = await read(truly - 1000)
+      assert.equal(sawEntry(earlier, l), false)
+      const closed = rec('agentx', { on_at: iso(S + k) }) // after off the same row is judged on the same interval: a reader of entries is a holder
+      assert.equal(holdersOf({ manifest: manifest({ agentx: closed }), procs: [row] }).length, os === 'darwin' ? 1 : 0)
+      assert.equal(holdersOf({ manifest: manifest({ agentx: closed }), procs: [earlier] }).length, 0)
+    })
+  }
+}

@@ -11,33 +11,58 @@ import { createSynthAssigner } from '../dissect/synth-key.mjs';
 import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
 import { segmentFiles, warmSegmentIndex, problemEntry } from './index-build.mjs';
 import { trocarHome } from '../paths.mjs';
+import { warmCache, fsTag } from './warm.mjs';
 
 // WARM (D63 ①, 1.6 §4.1 附近的查询): the rows of one segment come from the ONE warm reading of its index
 // (src/query/index-build.mjs `warmSegmentIndex`, which `allSegments` reads through as well), kept against that
 // segment's own source file, so a line appended to the live segment is never missed. The segment list is the names in
-// raw/ (`segmentFiles`), read each time: nothing is kept here, so a note about the read that indexed a segment
-// (`index-cold`) reaches this read's `errors` and no later one.
+// raw/ (`segmentFiles`), read each time, and every segment's problems are said by each read: a note about the read that indexed
+// a segment (`index-cold`) reaches this read's `errors` and no later one.
 
 export const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(home, 'raw')).sort().join('\n'); } catch { return ''; } };
+
+// The row list itself is kept per home (3.5 §缓存按依赖失效): a poll of the board asks for it every 1.5 s, and building 27 k row
+// objects costs 20-50 ms when nothing moved. It is rebuilt from the first segment whose warm index entry is not the one it was
+// built from (the live segment is the last, so usually only its rows), with the synthesized-key rule resumed from the state it had
+// after the segment before; nothing moved → the SAME (frozen) array, so sessionGroups' memo below holds too.
+const ROW_HEAP = 400; // a row object here: the segment's ~320 B row (index-build.mjs segRows) plus segment / lineNo / session_id
+const lists = warmCache({ max: 4, cost: (v) => v.rows.length * ROW_HEAP, steady: true });
+const entryIds = new WeakMap();
+let entrySeq = 0;
+const entryId = (records) => { let n = entryIds.get(records); if (n == null) entryIds.set(records, (n = ++entrySeq)); return n; };
+const copyOpen = (open) => new Map([...open].map(([k, v]) => [k, { ...v }])); // the rule moves `lastMs` in place
 
 /**
  * indexRows({home, fs, errors}) → [{…index row, segment, lineNo, session_id}], oldest segment first,
  * capture order inside a segment — the order the synthesized keys (3.4 合成键) are assigned in, the same
- * order the board stamps them in, so both name a session the same.
- * What a segment could not say goes into `errors` (D38), never silently missing.
+ * order the board stamps them in, so both name a session the same. Frozen: it is shared by every reader until a segment moves.
+ * What a segment could not say goes into `errors` (D38), never silently missing — on every call.
  */
 export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [] } = {}) {
-  const assign = createSynthAssigner();
-  const out = [];
+  const segs = [];
   for (const [segment] of segmentFiles(home, fs)) {
     const { records, problems } = await warmSegmentIndex({ home, segment, fs });
     for (const pr of problems) errors.push(problemEntry(`segments/${segment}`, pr));
+    segs.push({ segment, records, entry: entryId(records) });
+  }
+  const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n');
+  return lists.get(`${fsTag(fs)}\n${home}`, stamp, (old) => rowList(segs, old)).rows;
+}
+function rowList(segs, old) {
+  let i = 0;
+  if (old) while (i < segs.length && i < old.segs.length && old.segs[i].segment === segs[i].segment && old.segs[i].entry === segs[i].entry) i++;
+  const out = i ? old.rows.slice(0, old.segs[i - 1].end) : [];
+  const open = i ? copyOpen(old.segs[i - 1].open) : new Map();
+  const assign = createSynthAssigner({ open });
+  const done = old ? old.segs.slice(0, i) : [];
+  for (const { segment, records, entry } of segs.slice(i)) {
     for (const r of records) {
       const synth = r.synth_hash ? assign({ harness: r.harness_id, hash: r.synth_hash, ms: Date.parse(r.ts || '') }) : null;
       out.push({ ...r, segment, lineNo: Number(String(r.id).split(':').pop()), session_id: r.session_key ?? synth ?? null, synthesized: !!synth });
     }
+    done.push({ segment, entry, end: out.length, open: copyOpen(open) });
   }
-  return out;
+  return { rows: Object.freeze(out), segs: done };
 }
 
 /** as_of (附录 C.5): the newest call time in the WHOLE index — what every number of an index-reading document is

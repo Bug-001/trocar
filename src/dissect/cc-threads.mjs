@@ -18,10 +18,11 @@
 // context anywhere up the chain = 'server_edited'. Bytes are untouched: request blocks are
 // located in the record they came from (locate → req_body path); an assistant reply is assembled from the streamed
 // reply, so it says where it came from instead of a byte span. Leaf module.
+import { createHash } from 'node:crypto';
 import { parsedRequestBody } from './request-body.mjs';
 import { isVolatile, serverEdited } from './cc.mjs';
 import { contextStateOfRequest, respIncompleteOf } from './capture-labels.mjs';
-import { extendChain, linked, segmentsOf, segmentsIn, sourceOf, createLinks } from './chain.mjs';
+import { extendChain, linked, segmentsIn, sourceOf, createLinks, withUnread } from './chain.mjs';
 
 const bodyOf = (rec) => { const b = parsedRequestBody(rec); return b && typeof b === 'object' ? b : null; };
 
@@ -62,13 +63,29 @@ function replySegs(rec) {
 // over nothing of the record (a closure here would keep the record alive with the segment).
 const systemText = (r) => ({ type: 'text', text: bodyOf(r).system });
 const at = (key, i) => (r) => bodyOf(r)[key][i];
-const own = (rec, body) => {
-  const seg = segmentsIn(rec, 'req_body', rec.req_body);
+// An item that is the same bytes as one a call of this session already sent is that call's parsed item: Claude Code resends its
+// system and tools with every call, and held once per call they were most of what a session's spine cost (3.5 §内存有界). Keyed
+// by a digest of the item's bytes, never the bytes (a slice of the body would keep the whole body). Parsed items are read-only.
+function sharing() {
+  const byDigest = new Map();
+  return (text, node, item) => {
+    if (!node || !item || typeof item !== 'object') return item;
+    const k = createHash('sha256').update(text.slice(node.start, node.end)).digest('base64');
+    const had = byDigest.get(k);
+    if (had !== undefined) return had;
+    byDigest.set(k, item);
+    return item;
+  };
+}
+const own = (rec, body, share) => {
+  const seg0 = segmentsIn(rec, 'req_body', rec.req_body);
+  // a system or tools item is one block (locate: no path below it), so its span is all its segment keeps
+  const seg = (path, of, item) => { const s = seg0(path, of, undefined, 0); s.item = share(rec.req_body, s.node, item); return s; };
   const sys = body.system;
-  const system = typeof sys === 'string' ? [seg(['system'], systemText, { item: { type: 'text', text: sys } })]
-    : (Array.isArray(sys) ? sys : []).map((item, i) => seg(['system', i], at('system', i), { item }));
-  const tools = (Array.isArray(body.tools) ? body.tools : []).map((item, i) => seg(['tools', i], at('tools', i), { item }));
-  const messages = (Array.isArray(body.messages) ? body.messages : []).map((m, i) => seg(['messages', i], at('messages', i), { arr: Array.isArray(m && m.content) }));
+  const system = typeof sys === 'string' ? [seg(['system'], systemText, { type: 'text', text: sys })]
+    : (Array.isArray(sys) ? sys : []).map((item, i) => seg(['system', i], at('system', i), item));
+  const tools = (Array.isArray(body.tools) ? body.tools : []).map((item, i) => seg(['tools', i], at('tools', i), item));
+  const messages = (Array.isArray(body.messages) ? body.messages : []).map((m, i) => seg0(['messages', i], at('messages', i), { arr: Array.isArray(m && m.content) }));
   return { system, tools, messages };
 };
 const volatile = (s) => isVolatile('system', s.item);
@@ -92,31 +109,40 @@ function finish(rec, plan) {
   return plan;
 }
 
+// What a thread call's own bytes say about its chain, shared by the planner below and the id-level stitch (stitchOf):
+// why its predecessor is unknown when it is absent, a head's own state, and which of system / tools it inherits (3.1:35).
+const absentWhy = (thread) => (thread.prevId
+  ? `message ${thread.prevId} (named by thread.previous_message_id) is the reply of no call in this capture, so the earlier turns and the system / tools the server kept for the thread are not known`
+  : 'this call continues a thread but names no previous_message_id, so the earlier turns and the system / tools the server kept for the thread are not known');
+const headState = (thread) => (thread.kind === 'create' ? { contextState: 'complete', missing: null }
+  : { contextState: 'partial', missing: `thread.type ${JSON.stringify(thread.kind)} is neither create nor continue, so whether the server added earlier context is not known` });
+/** inherit(body) → { system, tools }: 'own' (the call's own), 'inherit' (the predecessor's whole) or, for system, 'patch' (the
+ *  predecessor's, with the call's own volatile blocks in the inherited volatile blocks' places). */
+export function inherit(body) {
+  const sys = typeof body.system === 'string' ? [{ type: 'text', text: body.system }] : Array.isArray(body.system) ? body.system : [];
+  return { tools: Array.isArray(body.tools) && body.tools.length ? 'own' : 'inherit',
+    system: !sys.length ? 'inherit' : sys.every((s) => isVolatile('system', s)) ? 'patch' : 'own' };
+}
+/** patchSystem(inherited, own, isVol) → the system a 'patch' call ran with: own volatile entries take the inherited volatile
+ *  entries' places in order; own ones left over go first. Works on any entries (segments here, block ids in extraction). */
+export function patchSystem(inherited, own, isVol) {
+  const sent = [...own];
+  const kept = inherited.flatMap((s) => (!isVol(s) ? [s] : sent.length ? [sent.shift()] : []));
+  return [...sent, ...kept];
+}
+
 // Plan = { thread, replyId, lineage, contextState, missing, system, tools, up, own, out, gap } for every thread call (chain.mjs);
 // `hp` = the predecessor's plan. `gap`: why this call's reply does not hand a successor a whole context, or null.
-function build(rec, body, thread, hp) {
-  const o = own(rec, body);
+function build(rec, body, thread, hp, share) {
+  const o = own(rec, body, share);
   const mine = { thread, replyId: replyIdOf(rec), out: replySegs(rec), gap: replyGap(rec) };
-  if (thread.kind !== 'continue') {
-    const known = thread.kind === 'create';
-    return finish(rec, { ...mine, lineage: mine.replyId || String(rec.id), contextState: known ? 'complete' : 'partial',
-      missing: known ? null : `thread.type ${JSON.stringify(thread.kind)} is neither create nor continue, so whether the server added earlier context is not known`,
-      system: o.system, tools: o.tools, up: null, own: o.messages });
-  }
-  const absent = thread.prevId
-    ? `message ${thread.prevId} (named by thread.previous_message_id) is the reply of no call in this capture, so the earlier turns and the system / tools the server kept for the thread are not known`
-    : 'this call continues a thread but names no previous_message_id, so the earlier turns and the system / tools the server kept for the thread are not known';
-  let { up, contextState, missing } = extendChain(hp, o.messages, absent);
+  if (thread.kind !== 'continue')
+    return finish(rec, { ...mine, lineage: mine.replyId || String(rec.id), ...headState(thread), system: o.system, tools: o.tools, up: null, own: o.messages });
+  let { up, contextState, missing } = extendChain(hp, o.messages, absentWhy(thread));
   if (hp && hp.gap) { contextState = 'partial'; missing = missing ? `${missing}; ${hp.gap}` : hp.gap; }
-  // the call's volatile blocks (never in the cache key) take the inherited volatile blocks' places; none sent → the thread's
-  let system = o.system;
-  if (hp && !o.system.length) system = hp.system;
-  else if (hp && o.system.every(volatile)) {
-    const sent = [...o.system];
-    const kept = hp.system.flatMap((s) => (!volatile(s) ? [s] : sent.length ? [sent.shift()] : []));
-    system = [...sent, ...kept];
-  }
-  const tools = o.tools.length ? o.tools : (hp ? hp.tools : []);
+  const how = inherit(body);
+  const system = !hp || how.system === 'own' ? o.system : how.system === 'inherit' ? hp.system : patchSystem(hp.system, o.system, volatile);
+  const tools = how.tools === 'own' || !hp ? o.tools : hp.tools;
   return finish(rec, { ...mine, lineage: hp ? hp.lineage : (thread.prevId || String(rec.id)), up, own: o.messages, contextState, missing, system, tools });
 }
 
@@ -128,13 +154,14 @@ export function threadPlanner(read = null) {
   const byReply = new Map(); // reply id → the plan of the thread call that replied with it
   const plans = new Map(); // record id (the record itself when it has none) → plan | null
   const links = createLinks(read);
+  const share = sharing();
   const keyOf = (rec) => rec.id ?? rec;
   function get(rec) {
     if (plans.has(keyOf(rec))) return plans.get(keyOf(rec));
     const b = bodyOf(rec), t = b && Array.isArray(b.messages) ? threadOf(b) : null;
     let plan = null;
     if (t) {
-      plan = linked(build(rec, b, t, t.kind === 'continue' && t.prevId ? byReply.get(t.prevId) || null : null));
+      plan = linked(build(rec, b, t, t.kind === 'continue' && t.prevId ? byReply.get(t.prevId) || null : null, share));
       if (plan.replyId && !byReply.has(plan.replyId)) byReply.set(plan.replyId, plan);
       links.hold(plan, rec);
     }
@@ -146,9 +173,9 @@ export function threadPlanner(read = null) {
     context(rec) {
       const p = get(rec);
       if (!p) return null; // a call without `thread`: its own bytes are its context, read exactly as before
-      const segments = segmentsOf(p);
-      return { req: { ...(bodyOf(rec) || {}), system: p.system.map((s) => s.item), tools: p.tools.map((s) => s.item), messages: links.items(p, rec) },
-        contextState: p.contextState, missing: p.missing, lineage: p.lineage, continued: p.thread.kind === 'continue', segments,
+      const { items, segments, missing } = links.items(p, rec);
+      return { req: { ...(bodyOf(rec) || {}), system: p.system.map((s) => s.item), tools: p.tools.map((s) => s.item), messages: items },
+        ...withUnread(p.contextState, p.missing, missing), lineage: p.lineage, continued: p.thread.kind === 'continue', segments,
         locate: (b) => locate(b, p, segments) };
     },
   };
@@ -176,8 +203,21 @@ export function toolCountOf(req) {
   return Math.max(0, n);
 }
 
+// stitchOf(rec): what the id-level stitch (src/view/extract.mjs) needs of one record, read from it alone; null for a call without
+// `thread`. cont: it continues a chain; prev: the reply id it names; scope: where that id is looked up (the session); link: the id
+// a successor names it by; gap: why its reply does not hand a successor a whole context; absent: why its context is partial when
+// its predecessor is not found; head: a head's own state; inherit: as inherit(); settle(state): the call's own state on top.
+function stitchOf(rec) {
+  const b = bodyOf(rec), t = b && Array.isArray(b.messages) ? threadOf(b) : null;
+  if (!t) return null;
+  const cont = t.kind === 'continue';
+  return { cont, prev: cont ? t.prevId : null, scope: '', link: replyIdOf(rec), gap: replyGap(rec), absent: cont ? absentWhy(t) : null,
+    head: cont ? null : headState(t), inherit: inherit(b), settle: (s) => finish(rec, s) };
+}
+
 // The cross-record hooks the board's multi-lane assembler calls (same names as the WebSocket dissector's).
 export const CC_THREADS = Object.freeze({
   prepare: (read) => threadPlanner(read),
+  stitchOf,
   toolCountOf,
 });

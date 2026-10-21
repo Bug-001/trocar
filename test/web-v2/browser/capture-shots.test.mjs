@@ -158,3 +158,31 @@ test('an expanded problem row: nothing drawn on one another, the two right-hand 
     }
   })
 })
+
+// 1.9 #13: the shell hands every screen the same element, so a second visit must not leave the first visit's row handler on it
+// (two handlers toggled the same row: one click opened and closed it). Capture and Capture log both, after a round trip via Overview.
+test('after leaving and coming back, one click on a row head toggles that row (capture and capture log)', { skip, timeout: 240_000 }, async () => {
+  await withDaemonBoard(async (ctx) => {
+    const b = await open(gate.chromium, ctx)
+    try {
+      const now = new Date().toISOString()
+      await b.page.route((u) => new URL(u).pathname === '/api/status', async (r) => {
+        const res = await r.fetch(), j = await res.json()
+        j.failures = { ...(j.failures || {}), groups: [{ level: 'problem', where: 'engine', code: 'trust-rejected', count: 1, first_ts: now, last_ts: now, harness: 'codex', reason: 'r' }] }
+        await r.fulfill({ response: res, json: j })
+      })
+      for (const [hash, head] of [['#/capture', '.crow [data-caprow]'], ['#/capture/log', '.crows .lr:not(.h) [data-lrow]']]) {
+        for (const h of [hash, '#/overview', hash]) {
+          await b.page.evaluate((x) => { location.hash = x }, h)
+          if (h !== '#/overview') await b.page.waitForSelector(head, { timeout: 30000 })
+        }
+        const before = await b.page.locator(head).first().getAttribute('aria-expanded')
+        await b.page.locator(head).first().click()
+        const after = await b.page.evaluate((s) => { const e = document.querySelector(s); const p = document.getElementById(e.getAttribute('aria-controls')); return { exp: e.getAttribute('aria-expanded'), hidden: p.hasAttribute('hidden') } }, head)
+        assert.equal(after.exp, String(before !== 'true'), hash)
+        assert.equal(after.hidden, before === 'true', hash)
+      }
+      assert.deepEqual(b.errors, [])
+    } finally { await b.close() }
+  })
+})

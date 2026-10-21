@@ -9,6 +9,26 @@
 //        | { kind:'string'|'literal',            start, end }
 // Whitespace between tokens is excluded from a value's [start,end); the span is
 // from the value's first non-ws char to just past its last char.
+// Object keys, each a copy of its own: never a slice of the text, which would keep the whole text (a multi-MB request body) alive
+// for as long as the tree or a key of it is kept (V8 slices strings of 13+ chars). Keys repeat across bodies, so each distinct
+// short one (the API's names: cache_control, input_schema) is copied once and shared; the table is bounded in entries and in each
+// entry's length, so it never holds more than a few hundred KB however long the keys of a tool's input are (a long key is copied
+// afresh every time and goes with its tree), and starts over when full.
+const KEYS = new Map();
+const KEYS_MAX = 4096;
+const KEY_SHARED_CHARS = 64;
+function keyOf(text, open, close) {
+  const raw = text.slice(open + 1, close - 1);   // a temporary: looked up, never kept
+  if (raw.length > KEY_SHARED_CHARS || raw.includes('\\')) return JSON.parse(text.slice(open, close));
+  let key = KEYS.get(raw);
+  if (key === undefined) {
+    if (KEYS.size >= KEYS_MAX) KEYS.clear();
+    key = JSON.parse(text.slice(open, close));   // a fresh flat string
+    KEYS.set(key, key);
+  }
+  return key;
+}
+
 export function scanJson(text) {
   let i = 0;
   const N = text.length;
@@ -16,16 +36,19 @@ export function scanJson(text) {
   const isWs = (c) => c === 32 || c === 9 || c === 10 || c === 13;
   const skipWs = () => { while (i < N && isWs(text.charCodeAt(i))) i++; };
 
+  // A string ends at the first '"' preceded by an EVEN run of backslashes (the run never reaches back past the opening quote):
+  // indexOf jumps over the body instead of stepping it char by char — request bodies are megabytes of string (3.5 #21).
   function parseString() {
     // precondition: text[i] === '"'
-    i++; // opening quote
-    while (i < N) {
-      const ch = text[i];
-      if (ch === '\\') { i += 2; continue; } // skip escaped char
-      if (ch === '"') { i++; return; }
-      i++;
+    const open = i;
+    for (let from = i + 1; ;) {
+      const q = text.indexOf('"', from);
+      if (q === -1) { i = N; throw new Error(`scanJson: unterminated string at ${i}`); }
+      let b = q - 1;
+      while (b > open && text.charCodeAt(b) === 92) b--;
+      if ((q - 1 - b) % 2 === 0) { i = q + 1; return; }
+      from = q + 1;
     }
-    throw new Error(`scanJson: unterminated string at ${i}`);
   }
 
   function parseLiteral() {
@@ -50,7 +73,7 @@ export function scanJson(text) {
       if (text[i] !== '"') throw new Error(`scanJson: expected object key at ${i}`);
       const keyStart = i;
       parseString();
-      const key = JSON.parse(text.slice(keyStart, i));
+      const key = keyOf(text, keyStart, i);
       skipWs();
       if (text[i] !== ':') throw new Error(`scanJson: expected ':' at ${i}`);
       i++; // :

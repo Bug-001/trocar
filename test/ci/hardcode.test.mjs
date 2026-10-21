@@ -1,4 +1,4 @@
-// test/ci/hardcode.test.mjs — spec 0.1 §2 「一个外部事实只写一处(禁止硬编码)」 and §3 conventions 4 / 6 / 7, as checks that turn red.
+// test/ci/hardcode.test.mjs — spec 0.1 §2 「一个外部事实只写一处(禁止硬编码)」 and §3 conventions 6 / 7, as checks that turn red.
 //   1. (§2) An external fact written as a literal in src/ — an absolute path, a loopback port, a version — appears once in the whole tree;
 //      every other use imports it. Two copies drift: one gets fixed, the other keeps the old value (the 2026-10-11 incident had five
 //      copies of one endpoint rule).
@@ -7,7 +7,6 @@
 //      written from one measured path keeps every test green and silently stops capturing after the next update or on another machine (2026-10-13 audit, M3).
 //   3. (§3 convention 7) Tests pin no new counts (`.length, 17`): a count restates today's data, goes red when an item is added and stays green when the
 //      world changes. The files that still do are listed and may only shrink.
-//   4. (§3 convention 4) Exports that only tests use do not grow: a test that reaches past the public entry pins the implementation, not the behaviour.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -144,4 +143,18 @@ test('5 · nothing depends on DuckDB any more', () => {
   assert.ok(!/duckdb/i.test(pkg), 'package.json names duckdb')
   const named = SRC.filter((f) => /@duckdb|DuckDBInstance/.test(fs.readFileSync(path.join(ROOT, f), 'utf8')))
   assert.deepEqual(named, [], 'these source files still reach for DuckDB')
+})
+
+// 6 · The render kind of a block comes from the wire kind, generic input keys and the content: no tool name
+// is a string literal in its code, so a harness that renames a tool, or a new one, renders the same way without a branch.
+const TOOL_NAMES = ['Bash', 'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Glob', 'Grep', 'LS', 'WebFetch', 'WebSearch', 'Task', 'Agent', 'Skill',
+  'apply_patch', 'exec_command', 'local_shell'] // render kind names (shell, code, diff, json, text) are left out: they are the module's vocabulary
+const toolNameLiterals = (text) => [...text.matchAll(/(['"`])((?:\\.|(?!\1)[^\\\n])*)\1/g)].map((m) => m[2]).filter((s) => TOOL_NAMES.includes(s))
+
+test('6 · the render-kind module names no tool', () => {
+  assert.deepEqual(toolNameLiterals(code(read(path.join('src', 'view', 'render-kind.mjs')))), [], 'pick the kind from input keys or content, not the tool name')
+})
+
+test('6 · the tool-name scanner sees a literal and skips a comment or a longer word (it can go red)', () => {
+  assert.deepEqual(toolNameLiterals(code("if (n === 'Bash') x // 'Edit'\nconst k = \"apply_patch\", w = 'Bashful', s = 'shell'")), ['Bash', 'apply_patch'])
 })

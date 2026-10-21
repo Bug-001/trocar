@@ -86,7 +86,7 @@ function usageOf({ home, fs, inWindow, errors, later }) {
       spent += cost;
       taken.add(r);
     }
-    const computed = taken.size ? new Map(callFacts(recordsAt({ home, fs, rows: missing.filter((r) => taken.has(r)), errors })).map((f) => [f.id, f])) : null;
+    const computed = taken.size ? new Map(callFacts(recordsAt({ home, fs, rows: missing.filter((r) => taken.has(r)), errors, remember: false })).map((f) => [f.id, f])) : null;
     callsRead += need.length - missing.length + taken.size;
     if (taken.size === missing.length) read++;
     for (const r of need) {

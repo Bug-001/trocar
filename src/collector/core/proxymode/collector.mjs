@@ -55,12 +55,14 @@ function envNamesOf(desc) {
  *   templates  the hook templates (harness/templates TEMPLATES): a form whose cert's template says `sendsUpstreamHeader` may send X-Trocar-Upstream
  *   custody    the key custody, or 'unavailable' (no backend): then no issuer, every verdict forward-only (P2)
  *   forget     (negKey, pid | null) → void: the engine's entries of a key whose process exited, or whose door closed, are to go (4.8 §5.5); the daemon
- *              calls engine.forgetNegKey and records negative-cache-cleared. The keys come from `noteHeld(record)`, the engine's own failure records.
+ *              calls engine.forgetNegKey and records negative-cache-cleared. The keys come from `noteHeld(negKey)`: the engine's onHeld, a strike or an entry.
+ *   holds      (negKey) → does the engine's cache still keep a strike or an entry under it (engine.holdsNegKey): a key it no longer does (an
+ *              acceptance reset its strike) leaves the sweep, so the process table is read only while something is held (4.8 §5.5)
  * → { bindDoors, start, restore, on, off, lookupIngress, servePac, issuer, holders, mayExit, doors, attached }
  */
 export function createModelCollector({ harnesses, dir, identify, ownerOf = null, factsOf = null, proc = {}, ctx, systemProxy = () => null, custody = null, rootPem = null,
   procTable = async () => [], record = () => {}, event = () => {}, clock = Date.now, timers = globalThis, readState = null, readIngress = null, readManifest = null,
-  proxyOf, templates = {}, hostsOf = () => null, ownUid = process.getuid?.() ?? null, ownSid = null, agentList = () => null, openConns = () => 0, drain = null, pid = process.pid, fs = nodeFs, upstreamRoots = null, forget = () => {} } = {}) {
+  proxyOf, templates = {}, hostsOf = () => null, ownUid = process.getuid?.() ?? null, ownSid = null, agentList = () => null, openConns = () => 0, drain = null, pid = process.pid, fs = nodeFs, upstreamRoots = null, forget = () => {}, holds = () => true } = {}) {
   if (typeof proxyOf !== 'function') throw new TypeError('createModelCollector needs proxyOf: how a proxy address is dialled is the arch\'s reading')
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const readSt = readState || (() => readStateFile(path.join(dir, 'state.json'), { fs }).state)
@@ -174,7 +176,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const id = await ident.identityOf({ peer, door: doorOf(d), target })
     if (!d.auth) { // the PAC door takes no credentials: this user's processes only (P10); a refusal is an answer of its own, the ingress writes its one record and closes
       const a = peerAllowed({ ...(id.facts || {}), pid: id.pid }, self)
-      if (!a.ok) return { refuse: { code: a.code, reason: `trocar's proxy settings file (PAC) refused a connection: ${a.detail}${id.unresolved ? ` (owner ${id.unresolved})` : ''}; it takes no credentials, so it forwards only this user's processes` } }
+      if (!a.ok) return { refuse: { code: a.code, unread: a.unread, reason: `trocar's proxy settings file (PAC) refused a connection: ${a.detail}${id.unresolved ? ` (owner ${id.unresolved})` : ''}; it takes no credentials, so it forwards only this user's processes` } }
     }
     const known = !id.why && byName.has(id.agent)
     if (known && onSet.has(id.agent)) seen.add({ harness: id.agent, pid: id.pid, start: id.facts.startedAt ?? null })
@@ -204,18 +206,21 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
 
   /** GET /trocar.pac on the auth:false door (P10): the door leg for this user's processes while its harness is on; a requester whose owner could not
    *  be read, and every requester after off, gets only the app's own way — never an empty answer, which would send the app direct around the user's
-   *  system proxy; another user's process is refused. */
-  async function servePac({ peer, user, path: p }) {
+   *  system proxy; another user's process is refused; a requester whose owner could not be read and that left while it was judged (`left()`, the
+   *  ingress's) gets nothing and is recorded nothing. */
+  async function servePac({ peer, user, path: p, left = async () => false }) {
     const d = doors.get(user)
     if (!d || d.auth) return null
     const { pid: q, why, sameUser } = await ident.owningPid(peer)
     const facts = q != null ? await ident.factsCached(q) : sameUser ? { sameUser: true } : null
     const a = peerAllowed({ ...(facts || {}), pid: q }, self), mine = a.ok
-    if (!mine && facts && (facts.uid != null || facts.sid || facts.sameUser === false)) { // another user's, for certain: refused (P10)
+    if (!mine && !a.unread) { // another user's, for certain: refused (P10)
       record({ event: 'failure', where: 'ingress', code: a.code, peer, reason: `a request for trocar's proxy settings file (PAC) was refused: ${a.detail}` })
       return null
     }
-    // an owner that could not be read gets the door-less PAC (the app's own way): an empty answer would send the app direct around the system proxy
+    // an owner that could not be read gets the door-less PAC (the app's own way): an empty answer would send the app direct around the system proxy;
+    // a requester that left while it was judged (the ingress's `left`) gets nothing and no record — nothing was served (P10)
+    if (!mine && await left()) return null
     if (!mine) record({ event: 'failure', where: 'ingress', code: CODE.pacOwnerUnread, peer, reason: `served trocar's proxy settings file (PAC) without routing through trocar: ${a.detail}${why ? ` (owner ${why})` : ''}; the app keeps its own way until it fetches the PAC again` })
     const m = (facts && identify(facts)) || {}
     if (mine && m.reason === 'match' && onSet.has(m.agent)) seen.add({ harness: m.agent, pid: q, start: facts.startedAt ?? null }) // taking the PAC is reading the entry (P12)
@@ -262,13 +267,15 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   }
   const poll = createHolderPoll({ list: holdersNow, timers, onChange: (rows) => settle(rows), onError: (e) => fail(CODE.holdersUnreadable, `the process table could not be read (${(e && e.message) || e}); the doors kept for holders stay`) })
 
-  /** The engine's negative-cache keys this daemon must clear (4.8 §5.5): each key the engine wrote a trust-rejected or negative-cache record for. Every
+  /** The engine's negative-cache keys this daemon must clear (4.8 §5.5): each key the engine's cache holds a strike or an entry under. Every
    *  HOLDER_POLL_MS while any is held, one read of the process table (none while nothing is held, none overlapping): a "<pid>@<start>" key whose
    *  process is gone, a "<pid>" key whose pid is gone, a group key whose door closed → `forget`. An unreadable table clears nothing (unknown). */
   const held = new Set()
   let sweepT = null, closed = false
-  const arm = () => { if (held.size && !sweepT && !closed) { sweepT = timers.setTimeout(sweep, HOLDER_POLL_MS); if (sweepT && sweepT.unref) sweepT.unref() } }
+  const holding = () => { for (const who of held) if (!holds(who)) held.delete(who); return held.size }
+  const arm = () => { if (!sweepT && !closed && holding()) { sweepT = timers.setTimeout(sweep, HOLDER_POLL_MS); if (sweepT && sweepT.unref) sweepT.unref() } }
   async function sweep() {
+    holding()
     let rows = null
     if ([...held].some((w) => PID_KEY.test(w))) { try { rows = await procTable() } catch { rows = null } }
     for (const who of [...held]) {
@@ -315,10 +322,12 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       let st, ing
       // a state.json that cannot be read starts every harness off, and says so (4.6 §开关 proxy mode, D38): never a quiet off
       try { st = readSt() } catch (e) { record({ event: 'failure', where: 'state', code: (e && e.code) || 'state-unparsable', reason: `state.json could not be read at start (${(e && e.message) || e}); every harness starts off until trocar on` }); return { doors: {}, problems: [String((e && e.message) || e)] } }
-      try { ing = tokenOf() } catch (e) { return { doors: {}, problems: [String((e && e.message) || e)] } }
+      const want = Object.entries((st && st.harnesses) || {}).filter(([h, e]) => e && e.desired === 'on' && byName.has(h)).map(([h]) => h)
+      if (!want.length) return { doors: {}, problems: [] } // nothing to reopen: a never-turned-on install has no ingress.json, which is normal
+      // desired on, but its recorded ports cannot be read: no door opens, and that is said, never a quiet off (D38)
+      try { ing = tokenOf() } catch (e) { const why = String((e && e.message) || e); record({ event: 'failure', where: 'state', code: 'state-unparsable', reason: `ingress.json could not be read at start (${why}); ${want.join(', ')} stay uncaptured until trocar on` }); return { doors: {}, problems: [why] } }
       const out = {}
-      for (const [h, e] of Object.entries((st && st.harnesses) || {})) {
-        if (!e || e.desired !== 'on' || !byName.has(h)) continue
+      for (const h of want) {
         onSet.add(h)
         for (const [g, port] of Object.entries(ing.groupPorts || {})) if (split(g).harness === h) { const r = await openDoor(g, port, ing.listenerToken); if (r.door) out[g] = r.door.url }
       }
@@ -347,8 +356,8 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     servePac,
     /** Is `h` on in this daemon? The one switch both decryption (lookupIngress) and recording (the engine's isRecording) read (4.6 §开关). */
     isOn: (h) => onSet.has(h),
-    /** An engine failure record: a trust-rejected / negative-cache one names a key to clear when its process or door is gone (4.8 §5.5). */
-    noteHeld(rec) { if (rec && (rec.code === 'trust-rejected' || rec.code === 'negative-cache') && rec.neg_key != null) { held.add(String(rec.neg_key)); arm() } },
+    /** The engine's onHeld: its negative cache holds a strike or an entry under `negKey`, to clear when its process or door is gone (4.8 §5.5). */
+    noteHeld(negKey) { if (negKey != null) { held.add(String(negKey)); arm() } },
     holders: holdersRoute({ holders: async () => poll.now() ?? holdersNow() }),
     /** The holder count the poll last saw, or null when nothing is watched: GET /status's number, which never reads the process table itself
      *  (on Windows that is a PowerShell each; `on` asks /status twice before POST /on, a Windows test machine 2026-10-17). GET /holders is the fresh answer. */

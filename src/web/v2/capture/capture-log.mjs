@@ -134,7 +134,7 @@ export function mount(el, ctx) {
   }
 
   // a row toggles through the expand memory, so the choice survives every re-read (1.9 #13, the log page's half)
-  el.addEventListener('click', (e) => {
+  const onRowClick = (e) => {
     if (!e.target.closest) return
     const rowEl = e.target.closest('.lr')
     if (!rowEl || !rowEl.classList || rowEl.classList.contains('h')) return
@@ -150,7 +150,8 @@ export function mount(el, ctx) {
     btn.setAttribute('aria-expanded', String(open))
     const chev = btn.querySelector('.chev'); if (chev) chev.textContent = open ? '▾' : '▸'
     if (open) exp.removeAttribute('hidden'); else exp.setAttribute('hidden', '')
-  })
+  }
+  el.addEventListener('click', onRowClick) // removed in unmount: the shell hands the next screen this same element
 
   paint()
   poll = pollCaptureHealth({ api, store, doc: el.ownerDocument, onAnswer: paint })
@@ -162,6 +163,7 @@ export function mount(el, ctx) {
     },
     unmount() {
       if (poll) poll.stop()
+      el.removeEventListener('click', onRowClick)
       el.replaceChildren()
     },
   }

@@ -48,7 +48,7 @@ function client(port) {
   return c
 }
 
-async function lab(t, { meta = {}, timing = {}, connectUpstream, redirector = createStaticRedirector(), noToken = false, upstreamCa } = {}) {
+async function lab(t, { meta = {}, timing = {}, connectUpstream, redirector = createStaticRedirector(), noToken = false, upstreamCa, onHeld } = {}) {
   const flows = [], failures = [], envelopes = []
   const upConns = []
   const echo = net.createServer((s) => { upConns.push(s); s.on('error', () => {}); s.pipe(s) })
@@ -62,7 +62,7 @@ async function lab(t, { meta = {}, timing = {}, connectUpstream, redirector = cr
   const engine = createEngine({
     redirector, issuer: createLeafIssuer(loadCa(trocarCa)), connectUpstream: connect, timing, upstreamCa,
     store: { envelope: (e) => { envelopes.push(e); return true }, flow: (f) => { flows.push(structuredClone(f)); return true } },
-    onFailure: (f) => failures.push(f), ...(noToken ? {} : { ingressToken: TOKEN }),
+    onFailure: (f) => failures.push(f), ...(noToken ? {} : { ingressToken: TOKEN }), ...(onHeld ? { onHeld } : {}),
   })
   const { ingressPort } = await engine.listen({ ingress: { port: 0 } })
   const made = []
@@ -85,7 +85,7 @@ test('W13 CONNECT with the right credentials: the upstream is dialled, then 200;
   assert.equal('prelude' in row, false, 'the CONNECT is mihomo\'s, with trocar\'s token: it is not recorded as the agent\'s prelude (invariant 4)')
   assert.deepEqual([row.bytes_up, row.bytes_down], [5, 5], 'the agent\'s own bytes: the opener and trocar\'s 200 are not counted')
   assert.deepEqual(L.failures, [])
-  assert.deepEqual(L.engine.stats().ingress, { connections: 1, flows: 1, health: 0, challenged: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 })
+  assert.deepEqual(L.engine.stats().ingress, { connections: 1, flows: 1, health: 0, challenged: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0, left: 0 })
 })
 
 test('W13 an agent that speaks at once (its first bytes arrive with the CONNECT) loses nothing', T, async (t) => {
@@ -798,6 +798,28 @@ test('W17 a connection whose pid is known keeps the (pid, host) key: neg_key is 
   assert.equal(L.engine.forgetPid(77), 1)
 })
 
+test('4.8 §5.5 a lone rejection hands its key to the sweep at once; once the key is forgotten the strike is gone with it', T, async (t) => {
+  const o = await origin(t)
+  const held = []
+  const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true, pid: 77, negKey: '77@5' }, onHeld: (who) => held.push(who) })
+  const reject = async (n) => { const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`); assert.equal(await talk(sock, privCa.certPem), 'closed'); await L.settled(n) }
+  await reject(1)
+  assert.deepEqual([L.engine.negatives().length, L.failures.filter((f) => f.code === 'trust-rejected' || f.code === 'negative-cache').length], [0, 0], 'below the threshold: no entry, no failure record')
+  assert.ok(held.includes('77@5'), 'the strike alone is held: the sweep is armed for it')
+  L.engine.forgetNegKey('77@5') // its process left the table
+  await reject(2)
+  assert.deepEqual(L.engine.negatives(), [], 'the earlier strike went with the key: one rejection after the clearing is again below the threshold')
+})
+
+test('4.8 §5.5 an acceptance after a lone rejection leaves nothing held under the key: the sweep has nothing to watch', T, async (t) => {
+  const o = await origin(t)
+  const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true, pid: 78, negKey: '78@5' } })
+  const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`); assert.equal(await talk(sock, privCa.certPem), 'closed'); await L.settled(1)
+  assert.equal(L.engine.holdsNegKey('78@5'), true, 'the strike is held under its key')
+  assert.equal((await talk((await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)).sock, trocarCa.certPem)).got, RESP); await L.settled(2)
+  assert.equal(L.engine.holdsNegKey('78@5'), false, 'the acceptance reset the strike: nothing left under the key')
+})
+
 test('W17 the ingress keys a connection by its own user when the lookup gives no negKey and no pid: two such forms do not poison each other; a known pid is the key', T, async (t) => {
   const o = await origin(t)
   const L = await lab(t, { upstreamCa: privCa.certPem })
@@ -818,7 +840,7 @@ test('W17 the ingress keys a connection by its own user when the lookup gives no
 
 // ── fail-open: a client that leaves, a hold that grows, a command that is not CONNECT (4.8 §5.1) ───────────────────────────────────
 // Each is a MUST the ingress carries. Removing any one of them left the first suite green (review 2026-10-07), so each has a test that goes red without it.
-const IDLE = { connections: 1, flows: 0, health: 0, challenged: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 } // one connection came, nothing became of it
+const IDLE = { connections: 1, flows: 0, health: 0, challenged: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0, left: 0 } // one connection came, nothing became of it
 const socksLogin = async (c) => { c.write(Buffer.from([5, 1, 2])); await c.bytes(2); c.write(Buffer.concat([Buffer.from([1, USER.length]), Buffer.from(USER), Buffer.from([TOKEN.length]), Buffer.from(TOKEN)])); await c.bytes(2) }
 const hungSocket = () => { const s = new PassThrough(); s.connecting = true; return s } // a TCP connect that never completes; destroy() is its close
 const until = (pred, what, ms = 2000) => within((async () => { while (!pred()) await sleep(5) })(), ms, what)
@@ -895,7 +917,7 @@ test('W13 a client that leaves while lookupIngress is still running never gets a
   await sleep(100); c.sock.resetAndDestroy()
   await sleep(500) // the lookup has returned by now
   assert.equal(proxy.socks.length, 0, 'not one connection to the proxy')
-  assert.deepEqual(L.dials, []); assert.equal(L.flows.length, 0); assert.deepEqual(L.failures, []); assert.deepEqual(L.engine.stats().ingress, IDLE)
+  assert.deepEqual(L.dials, []); assert.equal(L.flows.length, 0); assert.deepEqual(L.failures, []); assert.deepEqual(L.engine.stats().ingress, { ...IDLE, left: 1 }, 'counted as a client that left while it was judged')
 })
 
 test('W13 a SOCKS5 command that is not CONNECT (BIND, UDP ASSOCIATE) is answered "command not supported" and recorded ingress-unknown; no lookup, no dial', T, async (t) => {

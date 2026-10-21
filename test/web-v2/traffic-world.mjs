@@ -1,7 +1,7 @@
 // test/web-v2/traffic-world.mjs — the traffic screens (1.10) mounted in node over the REAL face: the board's own core/api.mjs
 // (through core/http.mjs) with fetch pointed at a real server on a temp HOME, every request logged as {method, url}. A test may
 // rewrite an answer (`tamper`) to construct a document shape the generated store does not hold. The element is a stand-in that
-// keeps innerHTML and the delegated listeners; the router is a stand-in over the real parseHash. Exports only.
+// keeps innerHTML and the delegated listeners, the media query keeps its 'change' listeners (`media(matches)` fires them); the router is a stand-in over the real parseHash. Exports only.
 import { boardHome, serveBoard } from './real-face.mjs'
 import { api } from '../../src/web/v2/core/api.mjs'
 import { configure } from '../../src/web/v2/core/http.mjs'
@@ -41,7 +41,8 @@ export async function trafficWorld({ home = null } = {}) {
     for (let quiet = 0, i = 0; quiet < 3 && i < 400; i++) { await new Promise((r) => setTimeout(r, 10)); quiet = inflight ? 0 : quiet + 1 }
   }
   async function mount(mod, hash, { width = 1280 } = {}) {
-    win.matchMedia = (q) => ({ matches: width >= Number(/(\d+)px/.exec(q)[1]), addEventListener() {} })
+    const mq = [] // the media query's 'change' listeners, kept so a test can cross the breakpoint later (`media(matches)`)
+    win.matchMedia = (q) => ({ matches: width >= Number(/(\d+)px/.exec(q)[1]), addEventListener(t, fn) { if (t === 'change') mq.push(fn) }, removeEventListener(t, fn) { const i = mq.indexOf(fn); if (i >= 0) mq.splice(i, 1) } })
     const handlers = {}
     const slots = new Map() // '#id' → a stand-in that keeps its innerHTML (a screen that paints into its own sub-containers)
     const el = {
@@ -71,7 +72,8 @@ export async function trafficWorld({ home = null } = {}) {
       if (wait) await settle()
     }
     const key = async (k) => { keydown({ key: k, target: { tagName: 'BODY' }, preventDefault() {} }); await settle() }
-    return { el, inst, moves, click, key, route: () => cur, html: () => el.innerHTML + [...slots.values()].map((x) => x.innerHTML).join('') }
+    const media = (matches) => { for (const fn of [...mq]) fn({ matches }) }
+    return { el, inst, moves, click, key, media, route: () => cur, html: () => el.innerHTML + [...slots.values()].map((x) => x.innerHTML).join('') }
   }
   return {
     face, home: h, log, settle,

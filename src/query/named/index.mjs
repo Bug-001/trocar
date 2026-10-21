@@ -28,7 +28,7 @@ export const QUERIES = Object.freeze({
   status: { params: Object.freeze(['harness']), run: (c) => verdict('status', c), stamp: () => null },
   doctor: { params: Object.freeze(['harness']), run: (c) => verdict('doctor', c), stamp: () => null },
   sessions: { params: sessions.params, run: sessions.run, stamp: src.usage }, // its titles come from the usage sidecars (4.4 §人类标题的来源)
-  session: { params: session.params, run: session.run, stamp: src.corpus },
+  session: { params: session.params, run: session.run, version: session.version, stamp: src.corpus },
   calls: { params: calls.params, run: calls.run, stamp: src.corpus },
   traffic: { params: traffic.params, run: traffic.run, stamp: src.corpus },
   overview: { params: overview.params, run: overview.run, stamp: src.usage },
@@ -121,6 +121,18 @@ export async function runQuery(name, params = {}, ctx = {}) {
   const errors = [];
   const body = await q.run({ ...ctx, home, fs, now, params, errors });
   return { schema: SCHEMA_VERSION, command: name, ok: errors.length === 0, ...body, errors };
+}
+
+/**
+ * versionOf(name, params, ctx) → { key, errors } | null: what that answer depends on, read from the warm segment index rows only —
+ * never a record (3.5 §谁执行它 答案缓存). Two equal keys = the same answer; `errors` are the index problems the answer carries.
+ * null = this name declares no version (or names nothing it could answer). Throws what runQuery throws.
+ */
+export async function versionOf(name, params = {}, ctx = {}) {
+  const q = checked(name, params);
+  if (!q.version) return null;
+  const { home = trocarHome(), fs = nodeFs } = ctx;
+  return q.version({ ...ctx, home, fs, params });
 }
 
 function checked(name, params) {

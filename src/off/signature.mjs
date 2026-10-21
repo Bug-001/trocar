@@ -144,7 +144,11 @@ export function harnessesOf(liveness, facts) {
 /** May a live process of a harness have read trocar's entry for it (4.6 撤销顺序 第 2 / 5 步; 4.11 P12)? It started inside the window [since, until) — since =
  *  the harness's first install time (undo) or its on_at (holders), until = its off_at, open when null — or the harness re-reads its entry while running
  *  (`rereads`: alive at `until` is enough), or a time it needs is unknown (the safe direction: one more holder, never one less). The one copy undo.mjs
- *  (steps 2 / 3 / 5) and holders.mjs judge with. */
-export const mayHaveRead = (p, l, since, until = null) => (l && l.rereads)
-  ? (p.startedAt == null || until == null || p.startedAt < until)
-  : (p.startedAt == null || since == null || (p.startedAt >= since && (until == null || p.startedAt < until)))
+ *  (steps 2 / 3 / 5) and holders.mjs (status and the holders) judge with. `p.startGrain` (ms, listProcs's rows) is how finely its reader knows the
+ *  start: the true start is anywhere in [startedAt, startedAt + startGrain), and any of it inside the window counts (4.11 P12; a row that states
+ *  none is exact). */
+export const mayHaveRead = (p, l, since, until = null) => {
+  if (p.startedAt == null) return true
+  const at = p.startedAt, last = Number.isFinite(p.startGrain) && p.startGrain > 1 ? at + p.startGrain - 1 : at
+  return (l && l.rereads) ? (until == null || at < until) : (since == null || (last >= since && (until == null || at < until)))
+}

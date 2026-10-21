@@ -447,7 +447,7 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
 // file: a closed or sealed segment is read once per process, the live one again when it grew (never stale). It lives
 // in this file and not in the readers because `allSegments` is in this file: a warm wrapper in rows.mjs that
 // `allSegments` also called would be a cycle between the two modules.
-const segRows = warmCache({ cost: (v) => v.records.length * 320 }); // ~320 B per index row in memory (measured on the reference dataset)
+const segRows = warmCache({ cost: (v) => v.records.length * 320, steady: true }); // ~320 B per index row in memory (measured on the reference dataset)
 // Both files, so a plaintext that is sealed (or a sealed file rebuilt) is a new stamp: the plaintext wins while it exists (4.2:30).
 export const segStamp = (home, segment, fs) => `${statKey(path.join(rawDir(home), `${segment}.ndjson`), fs)}|${statKey(path.join(rawDir(home), `${segment}.sealed`), fs)}`;
 /** warmSegmentIndex({home, segment, fs}) → the same `segmentIndex()` answer, read from disk only when that segment's

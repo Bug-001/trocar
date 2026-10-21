@@ -17,7 +17,8 @@
   ],
   "scripts": {
     "test": "node --test --test-force-exit --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs",
-    "test:browser": "TROCAR_PLAYWRIGHT=1 node --test --test-concurrency=1 --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs 'test/web-v2/browser/*.test.mjs'"
+    "test:real": "node --test --test-force-exit --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs test/query/real-session.test.mjs",
+    "test:browser": "TROCAR_PLAYWRIGHT=1 node --test --test-concurrency=1 --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs 'test/web-v2/browser/*.test.mjs' 'test/web-v2/browser/seq/*.test.mjs'"
   },
   "devDependencies": {
     "playwright-core": "^1.64.1"

@@ -106,12 +106,12 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
   if (!isModelOs(os)) throw new Error(`the collector model runs on macOS and Windows, not ${os}`)
   const [up, { listProcs, psTableVia }] = await Promise.all([import(`./${os}/upstream.mjs`), import('../../off/proc.mjs')])
   const proxyOf = (text) => { const p = up.parseProxyText(text); return p && p.ok ? { kind: p.kind, host: p.host, port: p.port, ...(p.credentialed ? { auth: up.proxyAuthOf(text) } : {}) } : null }
-  let parts, watch, winHelper = null
+  let parts, watch, winHelper = null, runner = null
   if (os === 'darwin') {
     const [{ ownerOfSocket }, pi, { execTool, runAsync }] = await Promise.all([import('./darwin/socktable.mjs'), import('./darwin/procinfo.mjs'), import('../../off/exec.mjs')])
     // every lsof / ps of the accept path runs through execFile (runAsync), never spawnSync — the daemon keeps serving its
     // other doors while one table read runs (nor may it hold the lock refresh off reads)
-    const runner = io.exec || runAsync
+    runner = io.exec || runAsync // the process table's two `ps` too (below): the sweep and the holder poll read it every few seconds (4.8 §5.5)
     const execOf = (file, args, o = {}) => Promise.resolve(execTool(file, args, { ...o, run: runner })) // socktable races it: always a promise
     const run = { exec: runner }
     parts = { ownerOf: (q) => ownerOfSocket({ exec: execOf, ...q, onFailure: event }), factsOf: (pid) => pi.factsOfPid(pid, run), proc: { envOf: (p, n, o) => pi.envOf(p, n, { ...o, ...run }), cwdOf: (p, o) => pi.cwdOf(p, { ...o, ...run }), parentOf: (p, o) => pi.parentOf(p, { ...o, ...run }) }, close: () => {} }
@@ -130,7 +130,7 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
   // (src/off/proc.mjs psTableVia), so both sides of the seam read the same rows and say the same thing when the answer is no table (D38).
   const procTable = winHelper
     ? () => psTableVia(winHelper, { timeoutMs: 10000 })
-    : () => listProcs({ platform: os, env, exec: io.exec || null })
+    : () => listProcs({ platform: os, env, exec: runner })
   return { ...parts, proxyOf, systemProxy: watch.now, procTable, helper: winHelper, close: () => { watch.stop(); parts.close() } }
 }
 

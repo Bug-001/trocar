@@ -24,12 +24,13 @@ export function sourceOf(rec) {
   if (!SRC.has(rec)) SRC.set(rec, { id: rec.id, stream: rec._stream, sid: sessionKeyOf(rec).key ?? rec._synthKey ?? null });
   return SRC.get(rec);
 }
-/** segmentsIn(rec, field, text) → seg(path, of, extra): the segments of one field of one record (the field is scanned once). */
+/** segmentsIn(rec, field, text) → seg(path, of, extra, depth): the segments of one field of one record (the field is scanned once);
+ *  `depth`: how far below the item its blocks are addressed (0: the item is one block, its span is all that is kept). */
 export function segmentsIn(rec, field, text) {
   const src = sourceOf(rec);
   let root = null;
   try { root = typeof text === 'string' ? scanJson(text) : null; } catch { root = null; }
-  return (path, of, extra) => ({ src, field, path, node: root ? pruned(nodeAt(root, path), BLOCK_DEPTH) : null, of, ...extra });
+  return (path, of, extra, depth = BLOCK_DEPTH) => ({ src, field, path, node: root ? pruned(nodeAt(root, path), depth) : null, of, ...extra });
 }
 
 // → { up, own, contextState, missing }: 'reconstructed' when the whole chain is in the capture, else 'partial' with what is
@@ -38,6 +39,12 @@ export function extendChain(up, own, missingWhenAbsent) {
   if (!up) return { up: null, own, contextState: 'partial', missing: missingWhenAbsent };
   return { up, own, contextState: up.contextState === 'partial' || up.contextState === 'server_edited' ? up.contextState : 'reconstructed',
     missing: up.missing || null };
+}
+/** A context with records it is stitched from that did not read back (createLinks items().missing) is partial, naming them. */
+export function withUnread(state, missing, unread) {
+  if (!unread.length) return { contextState: state, missing };
+  const why = `record${unread.length > 1 ? 's' : ''} ${unread.join(', ')} that this context is stitched from did not read back`;
+  return { contextState: 'partial', missing: missing ? `${missing}; ${why}` : why };
 }
 /** A plan made whole: how many segments its context has (`n`) and how far down its chain it is (`depth`). */
 export const linked = (plan) => Object.assign(plan, { n: (plan.up ? plan.up.n + plan.up.out.length : 0) + plan.own.length, depth: plan.up ? plan.up.depth + 1 : 0 });
@@ -58,10 +65,12 @@ const lca = (a, b) => {
   return a;
 };
 /**
- * createLinks(read) → { items(plan, rec, withOut), hold(plan, rec) }. items() = the items of plan's context (and of its reply when
- * `withOut`), in order: the longest prefix a held tip knows, then the rest from `rec` (the record in hand) or from the records
- * `read(ids)` yields (any order, one at a time). hold() keeps a newly planned plan's context as a tip. With no `read` (the batch
- * forms, every record in memory) every tip is held.
+ * createLinks(read) → { items(plan, rec, withOut), hold(plan, rec) }. items() = { items, segments, missing }: the items of plan's
+ * context (and of its reply when `withOut`), in order, with the segment each came from: the longest prefix a held tip knows, then
+ * the rest from `rec` (the record in hand) or from the records `read(ids)` yields (any order, one at a time). A segment whose
+ * record did not read back is left out, and that record's id is in `missing` (the read failure itself is said in read's sink, D38).
+ * hold() keeps a newly planned plan's context as a tip (never one with a gap). With no `read` (the batch forms, every record in
+ * memory) every tip is held.
  */
 export function createLinks(read = null) {
   const tips = new Map(); // tip plan → { items, out }
@@ -79,7 +88,7 @@ export function createLinks(read = null) {
     const segs = segmentsOf(plan);
     if (withOut) segs.push(...plan.out);
     const got = known(plan, withOut);
-    if (got.length === segs.length) return got;
+    if (got.length === segs.length) return { items: got, segments: segs, missing: [] };
     const mine = (s) => rec && (s.src === SRC.get(rec) || (s.src.id != null && s.src.id === rec.id));
     const need = new Map(); // record id → the indexes of its segments
     for (let i = got.length; i < segs.length; i++) {
@@ -87,11 +96,15 @@ export function createLinks(read = null) {
       else { const k = segs[i].src.id; if (!need.has(k)) need.set(k, []); need.get(k).push(i); }
     }
     if (need.size && read) for (const r of read([...need.keys()])) for (const i of need.get(r.id) || []) got[i] = segs[i].of(r);
-    for (let i = 0; i < segs.length; i++) if (got[i] === undefined) throw new Error(`record ${segs[i].src.id} that this context is stitched from did not read back`);
-    return got;
+    const missing = [...need.keys()].filter((k) => need.get(k).some((i) => got[i] === undefined));
+    if (!missing.length) return { items: got, segments: segs, missing };
+    const kept = segs.map((_, i) => i).filter((i) => got[i] !== undefined);
+    return { items: kept.map((i) => got[i]), segments: kept.map((i) => segs[i]), missing };
   }
   function hold(plan, rec) {
-    const v = { items: items(plan, rec), out: plan.out.map((s) => s.of(rec)) };
+    const ctx = items(plan, rec);
+    if (ctx.missing.length) return;
+    const v = { items: ctx.items, out: plan.out.map((s) => s.of(rec)) };
     for (const t of tips.keys()) if (lca(t, plan) === t) tips.delete(t); // plan's context holds theirs
     tips.set(plan, v);
     if (read) for (const t of tips.keys()) { if (tips.size <= TIPS) break; tips.delete(t); }

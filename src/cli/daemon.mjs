@@ -20,12 +20,18 @@ const processUid = () => (typeof process.getuid === 'function' ? process.getuid(
 // SIGHUP (the terminal closed, SSH dropped, logout) and SIGQUIT stop it cleanly like SIGTERM / SIGINT — Node's default
 // for SIGHUP is to exit at once, leaving the lock behind and the next start recording a crash that never was (D-27).
 export const STOP_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT']
-// The handlers stay for the process's lifetime (1.6 §5.2): a second signal while the stop runs (`trocar update` stopping the old daemon, a
-// launchd bootout followed by a SIGTERM) is ignored rather than taking the default action that cut the stop short. They do not keep the loop
-// alive, and stopDaemon's SIGKILL still bounds a stop that wedges.
-const waitForSignal = () => new Promise((resolve) => {
-  for (const s of STOP_SIGNALS) process.on(s, () => resolve(s)) // a promise resolves once: the later signals change nothing
-})
+// The handlers stay until the stop has run (1.6 §5.2, V99): a second signal while the stop runs (`trocar update` stopping the old daemon, a
+// launchd bootout followed by a SIGTERM) is ignored rather than taking the default action that cut the stop short. `release` then takes them off,
+// so a signal after the stop — the loop still held alive by something else — takes the default action instead of being ignored for good. They do
+// not keep the loop alive, and stopDaemon's SIGKILL still bounds a stop that wedges.
+const waitForSignal = () => {
+  const on = []
+  const asked = new Promise((resolve) => {
+    for (const s of STOP_SIGNALS) { const h = () => resolve(s); on.push([s, h]); process.on(s, h) } // a promise resolves once: the later signals change nothing
+  })
+  asked.release = () => { for (const [s, h] of on) process.off(s, h) }
+  return asked
+}
 
 /** → the exit code. `argv` is what follows `daemon`; `io` = { out, err } (src/off/io.mjs makeIo). */
 export async function runDaemonCli(argv, { io, env = process.env, home = os.homedir(), platform = process.platform, deps = {} } = {}) {
@@ -87,7 +93,9 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
   io.out(`trocar collector: ${[d.port ? `engine 127.0.0.1:${d.port}` : 'engine: no port of its own', d.socketPath ? `control ${d.socketPath}` : null].filter(Boolean).join(', ')}`)
   // a signal, or the daemon stopping itself (after `off` with no names, once nothing is relayed: 1.6 §1.4 5; exit 0 so systemd does not restart it)
   const signal = await Promise.race([stopAsked, d.exited ? d.exited.then(() => null) : new Promise(() => {}), crashedFirst])
-  const r = await d.stop({ signal: typeof signal === 'string' ? signal : null }) // stops once: when the daemon has stopped itself this is its result
+  let r
+  try { r = await d.stop({ signal: typeof signal === 'string' ? signal : null }) } // stops once: when the daemon has stopped itself this is its result
+  finally { if (typeof stopAsked.release === 'function') stopAsked.release() } // the stop has run: the next signal takes the default action (V99)
   if (signal === EXIT.crash) return EXIT.crash
   if (r && r.failed && r.failed.length) { io.err(`trocar daemon: stopped, but ${r.failed.join(', ')} failed while stopping (recorded in flows/)`); return EXIT.incomplete }
   return EXIT.ok

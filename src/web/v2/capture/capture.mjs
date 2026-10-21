@@ -68,7 +68,7 @@ export function mount(el, ctx) {
   // ── wiring ──────────────────────────────────────────────────────────────────────────────────────────────────────
   // the row head (the name button) toggles; a click anywhere else on the row — outside a link, a button, a disclosure
   // or a popover — toggles too
-  el.addEventListener('click', (e) => {
+  const onRowClick = (e) => {
     if (!e.target.closest) return
     const rowEl = e.target.closest('.crow')
     if (!rowEl) return
@@ -83,7 +83,8 @@ export function mount(el, ctx) {
     target.setAttribute('aria-expanded', String(open))
     const chev = target.querySelector('.chev'); if (chev) chev.textContent = open ? '▾' : '▸'
     if (open) exp.removeAttribute('hidden'); else exp.setAttribute('hidden', '')
-  })
+  }
+  el.addEventListener('click', onRowClick) // removed in unmount: the shell hands the next screen this same element
 
   const offCtl = wireHarnessControls(el, {
     api, state: ctlState, ask: (opts) => confirmDialog(opts, el.ownerDocument),
@@ -100,6 +101,7 @@ export function mount(el, ctx) {
     unmount() {
       if (poll) poll.stop()
       offCtl()
+      el.removeEventListener('click', onRowClick)
       el.replaceChildren()
     },
   }
