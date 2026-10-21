@@ -43,26 +43,43 @@ class BodyCache extends Map {
 export const bodyCache = new BodyCache(BODY_CHARS)
 // What is cached: the bytes (200), and a 404 — the server looked the locator up in every capture root and found no such record,
 // kept as `absent`. A network failure, a 400 / 409 / 5xx is shown (status 'error') but never remembered: the next ask may work.
-// a C.5 `block` document ({ref, bytes, encoding, fidelity:{verbatim, note?}, truncated, errors}) as the body the cell shows
+// one item of a `block` answer ({ref, bytes, encoding, fidelity, truncated}, 3.5 §会话读) as the body the cell shows
 export function blockGot(doc) {
   const d = doc || {}
   if (typeof d.bytes !== 'string') return { status: 'absent', error: ((d.errors || [])[0] || {}).reason || 'the capture has no such block' }
-  const verbatim = !!(d.fidelity && d.fidelity.verbatim)
-  return { status: 'ok', text: d.bytes, verbatim, fidelity: verbatim ? 'verbatim' : 'reserialized', note: (d.fidelity && d.fidelity.note) || null, truncated: d.truncated ?? null }
+  const f = d.fidelity, verbatim = f === 'verbatim' || !!(f && f.verbatim)
+  return { status: 'ok', text: d.bytes, verbatim, fidelity: verbatim ? 'verbatim' : 'reserialized', note: (f && f.note) || null, truncated: d.truncated ?? null }
 }
-const asking = new Map() // ref -> the answer on its way: needs that meet while it is out share it
-export async function loadBody(api, ref) {
-  if (bodyCache.has(ref)) return bodyCache.get(ref)
-  if (!asking.has(ref)) {
-    asking.set(ref, (async () => {
-      const r = await api.get('block', { ref })
-      const got = r.ok ? blockGot(r.data) : { status: r.status === 404 ? 'absent' : 'error', error: r.error }
-      if (r.ok || r.status === 404) bodyCache.set(ref, got)
-      return got
-    })().finally(() => asking.delete(ref)))
+const asking = new Map() // ref -> its answer on the way: needs that meet while it is out share it
+// The bodies of `refs` → Promise<got[]> in the order asked. One `block` read carries every ref neither in bodyCache nor already
+// on its way; each answer item fills bodyCache by its `ref`, and an item with `bytes:null` takes its `errors` entry (where = ref)
+// as that ref's failure. A failed read is not remembered (the next ask reads again), except a 404.
+export function loadBodies(api, refs, { signal } = {}) {
+  const want = [...new Set(refs)].filter((ref) => !bodyCache.has(ref) && !asking.has(ref))
+  if (want.length) {
+    const read = api.get('block', { ref: want }, { signal }).then((r) => {
+      const out = new Map()
+      if (!r.ok) {
+        for (const ref of want) { const got = { status: r.status === 404 ? 'absent' : 'error', error: r.error }; if (r.status === 404) bodyCache.set(ref, got); out.set(ref, got) }
+        return out
+      }
+      const d = r.data || {}, errs = d.errors || []
+      // until lane Q's block route lands (D8): the one-ref answer is the item itself
+      const items = Array.isArray(d.blocks) ? d.blocks : want.length === 1 ? [{ ...d, ref: want[0] }] : []
+      const byRef = new Map(items.map((x) => [x.ref, x]))
+      for (const ref of want) {
+        const it = byRef.get(ref)
+        if (!it) { out.set(ref, { status: 'error', error: 'the answer did not carry this block' }); continue }
+        const got = typeof it.bytes === 'string' ? blockGot(it) : blockGot({ errors: errs.filter((e) => e.where === ref) })
+        bodyCache.set(ref, got); out.set(ref, got)
+      }
+      return out
+    })
+    for (const ref of want) asking.set(ref, read.then((m) => m.get(ref)).finally(() => asking.delete(ref)))
   }
-  return asking.get(ref)
+  return Promise.all(refs.map((ref) => asking.get(ref) ?? bodyCache.get(ref)))
 }
+export const loadBody = (api, ref) => loadBodies(api, [ref]).then(([got]) => got)
 // a failed fetch that was not remembered: the next open asks again
 export const isRetryable = (got) => !!got && got.status === 'error'
 
@@ -138,7 +155,7 @@ export function setMode(bid, m, opt) {
 
 // ── drawing ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 // A drawn cell is an entry {body, next, state, shown}: the body markup so far, where the next slice starts (null when all is
-// shown) and jsonlay's carried state. Entries live in an LRU keyed by byte identity and mode, bounded by markup characters,
+// shown) and jsonlay's carried state. Entries live in an LRU keyed by bid and mode, bounded by markup characters,
 // and are replaced as a cell grows.
 const drawn = new Map()
 let drawnChars = 0
@@ -148,8 +165,8 @@ function keep(k, e) {
   drawn.set(k, e); drawnChars += e.body.length
   for (const [o, oe] of drawn) { if (drawnChars <= HTML_CHARS || o === k) break; drawn.delete(o); drawnChars -= oe.body.length }
 }
-const cells = new Map() // byte key -> the last cell drawn with it, for the DOM wiring
-function remember(k, cell) { cells.delete(k); cells.set(k, cell); if (cells.size > CELLS) { const [o] = cells.keys(); cells.delete(o); cellGone(o) } }
+const cells = new Map() // bid -> the last cell drawn with it, for the DOM wiring
+function remember(k, cell) { cells.delete(k); cells.set(k, cell); if (cells.size > CELLS) { const [[, o]] = cells; cells.delete(o.bid); cellGone(byteKey(o)) } }
 let cellGone = () => {}
 
 function first(cell, mode, text) {
@@ -166,14 +183,14 @@ function grow(cell, mode, entry, text) {
   const o = mode === 'raw' ? layout(text, entry.next, DISPLAY_CLIP, entry.state) : renderKind(cell.r, valueOf(text), { from: entry.next, budget: DISPLAY_CLIP, bid: cell.bid })
   const next = mode === 'raw' ? o.next : o.more
   const e = { ...entry, body: entry.body + o.html, next, state: mode === 'raw' ? o.state : null, shown: next ?? text.length }
-  keep(byteKey(cell) + '|' + mode, e)
+  keep(cell.bid + '|' + mode, e)
   return { html: o.html, entry: e }
 }
 // the drawn entry of a cell in a mode, rebuilt up to `upto` shown characters when the LRU let it go
 function entryOf(cell, mode, text, upto = 0) {
-  const k = byteKey(cell) + '|' + mode
+  const k = cell.bid + '|' + mode, src = byteKey(cell)
   let e = drawn.get(k)
-  if (!e) { e = first(cell, mode, text); keep(k, e) }
+  if (!e || e.src !== src) { e = { ...first(cell, mode, text), src }; keep(k, e) } // a bid drawn from other bytes is drawn again
   while (e.shown < upto && e.next != null && e.shown < CELL_CAP) e = grow(cell, mode, e, text).entry
   return e
 }
@@ -185,7 +202,7 @@ export function cellBodyHtml(cell, mode) {
   const got = gotOf(cell)
   if (!got) return `<pre class="cellpend" data-ref="${esc(cell.ref ?? '')}" style="--cl:${lines(cell.chars)}">${preEsc(String(cell.preview ?? ''))}</pre>`
   if (got.status !== 'ok') return `<div class="cbsrc warn" title="locator: ${esc(cell.ref ?? '—')}">${esc(W.HALF_MARK + ' ' + W.FF_WORD.notfetched + ' — ' + (got.error || got.reason || 'the capture could not be read'))}</div>`
-  const m = mode === 'read' ? 'read' : 'raw', text = String(got.text ?? ''), k = byteKey(cell)
+  const m = mode === 'read' ? 'read' : 'raw', text = String(got.text ?? ''), k = cell.bid
   remember(k, cell)
   const e = entryOf(cell, m, text)
   const btn = (v, word) => `<button type="button" data-cellmode="${v}" aria-pressed="${m === v}">${esc(word)}</button>`
@@ -222,7 +239,7 @@ async function hold(el) {
 function blobOf(el) {
   const x = held(el), f = (x && x.cell.r && x.cell.r.f) || {}
   if (!x || !Array.isArray(f.data)) return null
-  const k = el.dataset.ck
+  const k = byteKey(x.cell)
   if (blobs.has(k)) return blobs.get(k)
   const v = valueOf(x.text), data = at(v, f.data), mime = Array.isArray(f.mime) ? String(at(v, f.mime) ?? '') : ''
   if (typeof data !== 'string') return null

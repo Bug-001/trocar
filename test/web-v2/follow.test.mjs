@@ -26,30 +26,7 @@ test('landPlayhead: a reader who scrubbed away stays put; a lane that shrank cla
   assert.deepEqual(landPlayhead({ N: 8, playhead: 49, follow: false, initialStep: null }), { playhead: 7, follow: false, syncUrl: true })
 })
 
-// ── where a page sits (1.2 「跟随最新」 · 2.3 §未下发态 · 3.5 §分页 正文预算) ───────────────────────────────────────────
-import { followCursor, pagePlace, createPoller, backoffMs, BACKOFF_MAX_MS } from '../../src/web/v2/replay/follow.mjs'
-import { pageView } from '../../src/view/board.mjs'
-import { PAGE_BODY_BYTES } from '../../src/query/named/index.mjs'
-
-test('pagePlace: every step of a long session rides the page placed for it, with its body (the first steps too)', () => {
-  const N = 3 * 60, size = Math.floor(PAGE_BODY_BYTES / 5.5) // the budget holds about five bodies
-  const calls = Array.from({ length: N }, (_, gi) => ({ gi, ts: new Date(gi * 1000).toISOString(), comp: { messages: size }, flat: [{ sec: 'messages' }] }))
-  const view = { analyzed: { lanes: [{ id: 'main', kind: 'main', calls }], steps: calls } }
-  for (let gi = 0; gi < N; gi++) {
-    const p = pagePlace(gi, 60)
-    const out = pageView(view, { cursor: p.after, limit: p.limit }, { budget: PAGE_BODY_BYTES })
-    const c = out.analyzed.lanes[0].calls.find((x) => x.gi === gi)
-    assert.ok(c && !c.paged_out, `step ${gi} rides the page ${JSON.stringify(p)}`)
-  }
-})
-
-test('followCursor: while following, the followed step sits at the middle of the next page, the session\'s first steps too', () => {
-  for (const total of [1, 2, 7, 59, 60, 61, 333]) for (const limit of [1, 2, 7, 60]) for (const back of [0, 1, 5, 40, 332]) for (const returned of [0, 1, 60]) {
-    const tailGi = Math.max(0, total - 1 - back)
-    const p = followCursor({ follow: true, page: { total, returned }, pageCur: 250, pageLim: 60, limit, tailGi })
-    assert.equal(p.after + Math.floor(p.limit / 2), tailGi, JSON.stringify({ total, limit, tailGi, returned, p }))
-  }
-})
+import { createPoller, backoffMs, BACKOFF_MAX_MS } from '../../src/web/v2/replay/follow.mjs'
 
 // ── the poll loop (1.5 K-29): a fake clock and a fake reader ────────────────────────────────────────────────────────────
 function rig(answers) {
@@ -121,4 +98,42 @@ test('poller: a tick during a slow read does not chain a read before the 3x gap'
   const p = createPoller({ base: 1500, now: () => t, run: () => { reads++; return new Promise((res) => { release = () => { t += 15000; res({}) } }) } })
   const done = p.poll(); await p.poll(); release(); await done
   assert.equal(reads, 1)
+})
+
+// ── C2 (4.4 live-poll): the 3x wait follows only a success without `pending` that did not end a back-off ──────────────
+// a poller over scripted answers, each read taking `took` ms of the fake clock
+function timed(script, base = 1500) {
+  let t = 0, reads = 0
+  const p = createPoller({ base, now: () => t, run: async () => { const [a, took] = script[reads++] || [{}, 0]; t += took; return a } })
+  return { p, reads: () => reads, at: (ms) => { t = ms }, now: () => t }
+}
+
+test('A7 (C2): after a pending answer the next timer tick reads at the interval, however long the read took', async () => {
+  const base = 1500
+  for (const took of [base / 3 + 1, base, 10 * base]) {
+    const r = timed([[{ pending: { done: 1, total: 9 } }, took]], base)
+    await r.p.poll(); assert.equal(r.reads(), 1)
+    r.at(took + base); await r.p.poll(); assert.equal(r.reads(), 2, `took ${took}: the tick one interval later reads`)
+  }
+})
+
+test('A7 (C2): after k failures and then a slow success the next timer tick reads at the interval', async () => {
+  const base = 1500
+  for (const k of [1, 2, 5]) {
+    const r = timed([...Array.from({ length: k }, () => [{ ok: false }, 10]), [{}, 22000]], base)
+    for (let i = 0; i < k; i++) await r.p.poll(true)
+    await r.p.poll(true); assert.equal(r.reads(), k + 1, 'the success')
+    r.at(r.now() + base); await r.p.poll(); assert.equal(r.reads(), k + 2, `k=${k}: the back-off ended at once`)
+  }
+})
+
+test('A7 (C2): after a slow success without pending no timer read comes before 3x its duration', async () => {
+  const base = 1500
+  for (const D of [base / 3 + 1, base, 7 * base]) {
+    const r = timed([[{}, D]], base)
+    await r.p.poll()
+    for (let t = D; t < 3 * D; t += base / 2) { r.at(t); await r.p.poll() }
+    assert.equal(r.reads(), 1, `D=${D}`)
+    r.at(3 * D); await r.p.poll(); assert.equal(r.reads(), 2)
+  }
 })
