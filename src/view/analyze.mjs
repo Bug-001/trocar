@@ -476,6 +476,8 @@ export function admitted(r) {
   if (!isUnparsed(r)) return r
   const out = { ...r, request: { messages: [], tools: [], system: [], message_count: 0, tool_count: 0 }, _unparsed: true }
   if (r._stream) Object.defineProperty(out, '_stream', { value: r._stream, enumerable: false, configurable: true })
+  // the stub is not the stored body: the labels (bodyUnparsedOf → context 'partial', G17) read the body as stored
+  if (typeof r.req_body === 'string') Object.defineProperty(out, '_reqParsed', { value: false, enumerable: false, configurable: true })
   return out
 }
 

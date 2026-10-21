@@ -193,7 +193,11 @@ export function flatRequest(d, r, ctx) {
     try { req = JSON.parse(r.req_body); } catch { req = null; }
     if (!req || typeof req !== 'object') {
       if (r.request && typeof r.request === 'object') req = r.request; // demo v0 shape
-      else { req = {}; if (r.req_body != null) unparsed = true; }
+      else {
+        req = {}; if (r.req_body != null) unparsed = true;
+        // the stub stands where the body is: the labels still read the body as stored (G17 'partial')
+        if (typeof r.req_body === 'string') Object.defineProperty(r, '_reqParsed', { value: false, enumerable: false, configurable: true });
+      }
     }
   }
   r.request = req;
