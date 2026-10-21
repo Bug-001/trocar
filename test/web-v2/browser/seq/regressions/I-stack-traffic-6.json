@@ -7,21 +7,8 @@
   "viewport": 1440,
   "theme": "light",
   "steps": [
-    {
-      "a": "fault",
-      "p": {
-        "kind": "e500",
-        "name": "calls",
-        "n": 2,
-        "ms": 9185
-      }
-    },
-    {
-      "a": "host",
-      "p": {
-        "f": 0.322
-      }
-    }
+    {"a":"fault","p":{"kind":"e500","name":"calls","n":2,"ms":9185}},
+    {"a":"host","p":{"f":0.322}}
   ],
   "screenshot": "test/web-v2/browser/shots/seq/I-stack-traffic-6.png",
   "status": "open",

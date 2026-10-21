@@ -1,0 +1,20 @@
+{
+  "name": "I-console-replay-117",
+  "invariant": "I-console",
+  "sig": "I-console:replay",
+  "seed": 117,
+  "big": false,
+  "viewport": 390,
+  "theme": "light",
+  "steps": [
+    {"a":"host","p":{"f":0.301}},
+    {"a":"open","p":{"via":"row","f":0.052}},
+    {"a":"resize","p":{"width":1440}},
+    {"a":"deeplink","p":{"kind":"session","f":0.978,"step":"abc","junk":"xfwhj9z"}}
+  ],
+  "screenshot": "test/web-v2/browser/shots/seq/I-console-replay-117.png",
+  "status": "open",
+  "detail": "host page → open a session → resize → deep link to another session: update() → resetSession throws reading 'classList' of null (el.querySelector('.desk') is gone), main.mjs:88 logs 'update failed' and the switch does not happen; same host → open → resize family as I-pageerror-replay-100 (the desk's own DOM missing under a live instance)",
+  "owner": "desk (lane D)",
+  "suspect": "src/web/v2/replay/replay.mjs:169"
+}

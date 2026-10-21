@@ -7,15 +7,7 @@
   "viewport": 768,
   "theme": "light",
   "steps": [
-    {
-      "a": "fault",
-      "p": {
-        "kind": "e500",
-        "name": "overview",
-        "n": 2,
-        "ms": 5454
-      }
-    }
+    {"a":"fault","p":{"kind":"e500","name":"overview","n":2,"ms":5454}}
   ],
   "screenshot": "test/web-v2/browser/shots/seq/I-stack-overview-3.png",
   "status": "open",
