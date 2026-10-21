@@ -28,7 +28,8 @@ const report = (label, r) => {
 
 for (const reg of saved) {
   test(reg.name, { skip }, async () => {
-    const r = await runSequence({ steps: reg.steps, seed: reg.seed, big: reg.big, viewport: reg.viewport, theme: reg.theme, chromium: gate.chromium, shot: `replay-${reg.name}` })
+    const r = await runSequence({ steps: reg.steps, seed: reg.seed, big: reg.big, viewport: reg.viewport, theme: reg.theme, chromium: gate.chromium, shot: `replay-${reg.name}`,
+      known: new Set([...known].filter((sig) => sig !== reg.sig)) }) // another open bug met on the way is that bug's own regression: run past it
     report(`${reg.name} [${reg.status}]`, r)
     const hit = r.violation?.sig === reg.sig
     if (reg.status === 'open' || reg.status === 'flaky') {

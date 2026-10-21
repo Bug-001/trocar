@@ -23,6 +23,7 @@ export const LIMITS = Object.freeze({
   rateSlack: 0.8, // timer jitter: a gap of 0.8 × the expected interval still passes (plan §Invariants I-rate)
   actionWindowMs: Object.freeze([-200, 500]), // a read within this of a reader action is the reader's read (4.4:51)
   returnReadMs: 2000, // the one read on becoming visible again (4.4:49-51)
+  openReadMs: 10000, // a screen's opening reads after a route change, chained behind its first answers (4.4 「打开时」)
   leakSlack: 2, // a one-time lazy global wiring (core/dom.mjs wireKeys on the first dialog) is no leak; a per-visit one passes it by the 4th visit
   settleMs: 3000, // how long check waits for in-flight fetches to settle before I-leak counts them
   memRatio: 1.5, memSlackBytes: 10 * 2 ** 20, // plan §Invariants I-mem
@@ -78,10 +79,17 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
     const seen = new Set()
     for (const e of log) if (e.start >= h.to && e.start <= h.to + LIMITS.returnReadMs && !seen.has(nameOf(e.url))) { seen.add(nameOf(e.url)); returnRead.add(e) }
   }
+  // a route change opens a screen: its first read of each name within openReadMs is the opening read (4.4 「打开时」)
+  const opened = new Set()
+  const sorted = [...log].filter((x) => x.method === 'GET').sort((a, b) => a.start - b.start)
+  for (const a of actions) if (a.a === 'hashchange' || a.a === 'popstate') {
+    const seen = new Set()
+    for (const e of sorted) if (e.start >= a.t + LIMITS.actionWindowMs[0] && e.start <= a.t + LIMITS.openReadMs && !seen.has(nameOf(e.url))) { seen.add(nameOf(e.url)); opened.add(e) }
+  }
   const last = new Map() // name → {start, dur, fails}
-  for (const e of [...log].filter((x) => x.method === 'GET').sort((a, b) => a.start - b.start)) {
+  for (const e of sorted) {
     const name = nameOf(e.url)
-    if (byReader(e.start) || returnRead.has(e)) { last.delete(name); continue }
+    if (byReader(e.start) || returnRead.has(e) || opened.has(e)) { last.delete(name); continue }
     if (hiddenAt(e.start)) out.push(`${name} read at ${e.start} while hidden`)
     const p = last.get(name)
     if (p) {
@@ -133,10 +141,11 @@ export async function check(ctx) {
   if (first && grownAt != null && grownAt > first.at) { base.delete(route); first = undefined }
   while (first && s.inflight > first.inflight && Date.now() < deadline) { await page.waitForTimeout(100); s = await probeSnap(page) }
   const now = { window: s.listeners.window, document: s.listeners.document, intervals: s.intervals, inflight: s.inflight, dom: v.dom, heap: await heapUsed(page), at: Date.now() }
-  // a visit with a failed read drew a failure state, not the route: no baseline (a later clean visit is)
+  // a visit with a failed read drew a failure state; one with reads in flight, or hidden for a while (reads paused, 4.4), has not
+  // drawn yet: no baseline (a later clean visit is)
   let visit = visits.get(page)
   if (!visit || visit.route !== route) visits.set(page, visit = { route, t: prev?.t ?? 0 })
-  const clean = !s.fetchLog.some((e) => e.start >= visit.t && failedRead(e) && !e.aborted)
+  const clean = s.inflight === 0 && !hidden.some((h) => (h.to ?? Infinity) >= visit.t) && !s.fetchLog.some((e) => e.start >= visit.t && failedRead(e) && !e.aborted) // and nothing still on its way
   if (!first) { if (clean) base.set(route, now) }
   else if (!prev || routeOf(prev.hash) !== route) { // a revisit (the route was just entered again); within one visit an open overlay may hold more
     const more = ['window', 'document', 'intervals', 'inflight'].filter((k) => now[k] > first[k] + LIMITS.leakSlack)

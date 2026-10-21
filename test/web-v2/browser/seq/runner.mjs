@@ -49,9 +49,9 @@ async function shoot(page, name) {
   return file
 }
 
-// installed before the probe (so its listeners are not the board's): the time of every reader input the page receives
+// installed before the probe (so its listeners are not the board's): the time and kind of every reader input the page receives
 function recordInput() {
-  for (const e of ['keydown', 'pointerdown', 'hashchange', 'popstate']) addEventListener(e, () => (window.__seqInput ||= []).push(Date.now()), true)
+  for (const e of ['keydown', 'pointerdown', 'hashchange', 'popstate']) addEventListener(e, () => (window.__seqInput ||= []).push([Date.now(), e]), true)
 }
 
 // the server's truth right after a worker kill: the restart answers 500 / 503 for a moment
@@ -98,7 +98,7 @@ export async function runSequence({ steps, seed = 1, big = false, viewport = 128
       let noTruth = false
       const truth = id && !real ? () => retry(() => mainCount(b.get, id)).catch((e) => { noTruth = true; out.serverErrors.push(`step ${i}: ${e.message}`); return null }) : undefined
       // every input the page saw (a compound step clicks after its own waits) opens a reader window for I-rate
-      for (const at of await b.page.evaluate(() => (window.__seqInput || []).splice(0)).catch(() => [])) ctx.actions.push({ t: at, a: 'input' })
+      for (const [at, e] of await b.page.evaluate(() => (window.__seqInput || []).splice(0)).catch(() => [])) ctx.actions.push({ t: at, a: e })
       const c = { page: b.page, requests: b.requests, errors: b.errors, actions: ctx.actions, faults: faults.log, hidden: ctx.hidden, follow: ctx.follow,
         grownAt: ctx.grownAt, truth, real, prev, baseline }
       const had = new Set(baseline.keys())
@@ -153,6 +153,8 @@ export async function findOne(v, steps, opts, { budgetMs = +(process.env.SEQ_SHR
     screenshot: path.relative(process.cwd(), v.screenshot), status: again ? 'new' : 'flaky', detail: v.detail }
   fs.mkdirSync(REGRESSIONS, { recursive: true })
   const file = path.join(REGRESSIONS, `${name}.json`)
-  fs.writeFileSync(file, JSON.stringify(doc, null, 2) + '\n')
+  // one step per line: a long minimal list stays a short, reviewable file
+  const lines = `[\n${min.map((x) => `    ${JSON.stringify(x)}`).join(',\n')}\n  ]`
+  fs.writeFileSync(file, JSON.stringify({ ...doc, steps: 0 }, null, 2).replace('"steps": 0', () => `"steps": ${lines}`) + '\n')
   return { ...doc, file, trials }
 }
