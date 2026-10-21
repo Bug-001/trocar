@@ -60,13 +60,15 @@ function working(rows) {
 // on the user's ~5 500-call session, 2026-10-21). Between steps the spine is folded on with the new rows only.
 const BOUND_STEPS = 10;
 /** The rows a query folds: all of them while their spine fits the heap budget, else the newest that do, cut at a multiple of a tenth
- *  of what fits (BOUND_STEPS), with the `truncated` the document carries — the same {shown, total, kept_mb, file_mb} the board draws
+ *  of what fits (BOUND_STEPS) and at most nine tenths of it, with the `truncated` the document carries — the same {shown, total, kept_mb, file_mb} the board draws
  *  (invariant 4, 1.5 K-06). */
 function fitting(rows) {
   const n = Math.max(1, Math.floor((heapBudget() - working(rows)) / SPINE_PER_ROW));
   if (rows.length <= n) return { read: rows, bound: null };
-  const step = Math.max(1, Math.floor(n / BOUND_STEPS));
-  const read = rows.slice(Math.ceil((rows.length - n) / step) * step);
+  // one step is left to the other caches (the segments' index rows refresh as the capture grows): a spine that filled the budget
+  // to the byte was pushed out by the next of them, and the session folded cold on every poll all the same
+  const step = Math.max(1, Math.floor(n / BOUND_STEPS)), cap = Math.max(1, n - step);
+  const read = rows.slice(Math.ceil((rows.length - cap) / step) * step);
   return { read, bound: { shown: calls(read), total: calls(rows), kept_mb: mb(stored(read)), file_mb: mb(stored(rows)) } };
 }
 // A keyless record is in this session because the segment index named it so (3.4 合成键): its refs carry that name.
