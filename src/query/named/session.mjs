@@ -33,9 +33,10 @@ export const params = Object.freeze(['id', 'after', 'limit']);
 // What the fold reads at once, in the rows' stored bytes (at least one row).
 const CHUNK_STORED = 8 * 1048576;
 // What a spine costs in the heap per row (a call's meta, its lane's events and resources, a stitched context's locators), until a
-// fold of THIS session measured it (HeapBound below). Measured 2026-10-21 on the user's live session and the generated ones of
-// test/query/big-session.mjs (forced GC).
-export const SPINE_PER_ROW = 32 * 1024;
+// fold of THIS session measured it (HeapBound below). Measured 2026-10-21 (forced GC) on the user's live session, 13-20 KB a row
+// with the chain tips and baselines spread over the rows, and on the generated ones of test/query/big-session.mjs, 15-18 KB a row
+// at ~900 lanes.
+export const SPINE_PER_ROW = 16 * 1024;
 // What the records being worked on cost in the heap per stored byte (and the lanes' baselines per character of their blocks): a
 // chunk read and parsed, a page's bodies assembled and serialized (measured with the spine, above).
 const WORK_PER_STORED = 4;

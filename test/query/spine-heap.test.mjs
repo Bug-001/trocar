@@ -47,13 +47,16 @@ for (const wire of ['http', 'chat', 'threads', 'ws']) for (const subLanes of [1,
 
 // A session past the heap bound that goes on growing (a live one, followed): the cut moves in steps, not with every new row, so the
 // spine is folded on with the new rows instead of from scratch on every poll (3.5 §内存有界). Twenty one-call growths in a worker-sized
-// heap far smaller than the session: the shown calls grow with the session between steps, and the cut moves at most once.
+// heap far smaller than the session (as many rows as the whole budget holds at SPINE_PER_ROW, more than its room for the spine):
+// the shown calls grow with the session between steps, and the cut moves at most once.
 const GROWING = `
 const { runQuery } = await import(${JSON.stringify(QUERY)})
+const { SPINE_PER_ROW } = await import(${JSON.stringify(new URL('../../src/query/named/session.mjs', import.meta.url).href)})
+const { heapBudget } = await import(${JSON.stringify(new URL('../../src/query/warm.mjs', import.meta.url).href)})
 const { bigSession } = await import(${JSON.stringify(new URL('./big-session.mjs', import.meta.url).href)})
 const [home] = process.argv.slice(1)
 const s = bigSession({ home, growth: 300, compactAt: 6_000, subEvery: 4, subLanes: 3, subLen: 4 })
-s.append(2_000)
+s.append(Math.ceil(heapBudget() / SPINE_PER_ROW))
 const shown = []
 for (let i = 0; i < 20; i++) {
   const doc = await runQuery('session', { id: s.id, limit: '20' }, { home })
