@@ -73,7 +73,7 @@ export const HIT_UNKNOWN_TIP = "this provider's cache figures have an uncertain 
 export const EST_TIP = 'local estimated cost (usage × unit price), not a bill'
 export const UNPRICED = (n) => `${n} model${n === 1 ? ' has' : 's have'} no unit price`
 export const EMPTY_WINDOW = 'no sessions in this window'
-export const PRICE_FAIL = (why) => `the price table could not be read: ${why}`
+export const PRICE_TABLE = 'the price table'
 export const NET_ONLY = 'no model calls · network only'
 export const TBL = Object.freeze({ agent: 'agent', sessions: 'sessions', calls: 'model calls', cost: '≈ cost', hit: 'main thread cache hit', last: 'last active' })
 
@@ -82,7 +82,6 @@ export const ALL_SESSIONS = 'All sessions ›'
 export const PROBE_ONLY = 'token counts only'
 export const PROBE_ONLY_TIP = 'this session has only token-count calls, no full content'
 export const TITLE_FROM_AGENT = "title from the agent's own record"
-export const READ_FAIL = (what, why) => `${what} could not be read: ${why}`
 export const RETRY = 'Retry'
 export const DISK_USE = (b) => `${b} used by trocar`
 export const SEE_STORAGE = 'Storage ›'
