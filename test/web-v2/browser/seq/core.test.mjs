@@ -23,9 +23,9 @@ test('R2 with no trial budget ddmin returns the full failing list, never a passi
 })
 
 test('R3 generate(seed) is equal across two calls and differs for another seed', () => {
-  const a = generate(5, 40, null), b = generate(5, 40, null)
-  assert.equal(a.length, 40)
+  const n = 40, a = generate(5, n, null), b = generate(5, n, null)
+  assert.equal(a.length, n)
   assert.deepEqual(a, b)
-  assert.notDeepEqual(generate(6, 40, null), a)
+  assert.notDeepEqual(generate(6, n, null), a)
   assert.deepEqual(JSON.parse(JSON.stringify(a)), a) // a sequence is plain JSON: it saves, replays and shrinks
 })

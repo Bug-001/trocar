@@ -1,0 +1,25 @@
+{
+  "name": "I-stack-overview-3",
+  "invariant": "I-stack",
+  "sig": "I-stack:overview",
+  "seed": 3,
+  "big": false,
+  "viewport": 768,
+  "theme": "light",
+  "steps": [
+    {
+      "a": "fault",
+      "p": {
+        "kind": "e500",
+        "name": "overview",
+        "n": 2,
+        "ms": 5454
+      }
+    }
+  ],
+  "screenshot": "test/web-v2/browser/shots/seq/I-stack-overview-3.png",
+  "status": "open",
+  "detail": "an e500 `overview` read draws the server's whole `error` text (a native stack) in the visible failure line, not under Technical details",
+  "owner": "shell/overview/library/capture/settings/traffic (main fix lane)",
+  "suspect": "src/web/v2/overview/overview.mjs:380"
+}
