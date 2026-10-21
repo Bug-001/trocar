@@ -3,7 +3,8 @@
 // #ctxwin; #ctxwin's children come ONLY from 1.4's whitelist ①–⑨, in order:
 //   ① 调用保真行  ② 窗口行  ③ the three sections (with the 变化线 ④ drawn before the first changed block)  ⑤ 未下发态
 //   ⑥ 解析不出态  ⑦ 没有请求态  ⑧ 载入中 — ⑤–⑧ stand in for ③④⑨  ⑨ this step's reply (2.3 §这一步的回复), set apart from the
-//   request: not a section, no block card, not in any count — the model's answer, not what it received.
+//   request: not a section, not in any count — the model's answer, not what it received; its parts are block rows drawn
+//   by the request's row component (blockRowHtml), without what only a request block carries.
 // No window head (step no / model / time / size live in the step bar), no cache states (the 缓存 button owns them), no
 // raw-JSON twin (the window IS the truth, AC-1).   renderContextWindow(el, s)  repaint + land   wireCtxWin(el, s)
 // listeners.   ctxWindowHtml(s)  the pure string the whitelist tests assert on.
@@ -13,8 +14,8 @@ import * as W from '../labels/replay.mjs'
 import { messageTurns, blocksOf, keyDiff, cacheRefOf, hasChangeLine, callFacts } from './analysis.mjs'
 import { contentRefOf, contentRefKOf } from './stepbar.mjs'
 import { setFold, saveFold, turnAnchorKey, turnIsOpen } from './fold.mjs'
-import { ctxBlockHtml, fillBody, faithOf, faithNow, ffBadgeHtml, tagWord } from './blocks.mjs'
-import { replyHtml, loadStepHtml } from './rawpanel.mjs' // one reply renderer, two hosts (2.3 §这一步的回复 · 2.6 §A)
+import { ctxBlockHtml, blockRowHtml, blockBodyHtml, rawContentText, fillBody, faithOf, faithNow, ffBadgeHtml, tagWord } from './blocks.mjs'
+import { replyOf, replyMarkHtml, loadStepHtml } from './rawpanel.mjs' // one reply rule, two drawings (2.3 §这一步的回复 · 2.6 §A)
 
 export { blockBodyHtml } from './blocks.mjs'
 
@@ -128,7 +129,39 @@ export function ctxWindowHtml(s) {
         `<div class="cwturnbody">${t.items.map((i) => mark(i) + row(flat[i], i)).join('')}</div></div>`
     })
   }
-  return html + `<div class="cwreply">${replyHtml(call, 'cwfail')}</div>` // ⑨
+  return html + replySegmentHtml(s, call) // ⑨
+}
+
+// ── ⑨ this step's reply (2.3 §这一步的回复): one header (the word · the ONE fidelity mark · the stop reason), then one block
+// row per part (thinking → text → each tool call) through the request's row component. A reply row is not a request block:
+// no data-bi / data-rk / data-sec / data-ff, no 新 / cache / volatile / per-row fidelity marks. Default open = the rows of
+// the first present kind among text → tool call → thinking; 'reply:<j>' in s.openBlocks = the reader flipped row j.
+const REPLY_OPEN_ORDER = ['text', 'tool_use', 'thinking']
+const replyTag = (p) => (p.kind === 'tool_use' ? 'action · ' + (p.block.name || '') : p.kind === 'thinking' ? 'thinking' : 'say')
+// a tool call's preview is the first string among its arguments, else their JSON — never a branch on a parameter's name
+function replyPreview(p) {
+  const b = p.block
+  let t = p.kind === 'thinking' ? b.thinking : p.kind === 'text' ? b.text : null
+  if (t == null) { const v = Object.values(b.input && typeof b.input === 'object' ? b.input : {}).find((x) => typeof x === 'string'); t = v != null ? v : JSON.stringify(b.input ?? {}) }
+  return String(t).replace(/\s+/g, ' ').trim().slice(0, 90)
+}
+function replyRowsOpen(parts) {
+  const first = REPLY_OPEN_ORDER.find((k) => parts.some((p) => p.kind === k))
+  return parts.map((p) => p.kind === first)
+}
+export function replySegmentHtml(s, call) {
+  const r = replyOf(call)
+  if (r.failed) return `<div class="cwreply"><div class="cwrhd"><b>${esc(W.REPLY_WORD)}</b> · ${esc(W.FAILED_NO_REPLY)}${r.failed.reason ? techDetailsHtml([['reason', r.failed.reason]], { id: 'cwfail' }) : ''}</div></div>`
+  const head = `<div class="cwrhd"><b>${esc(W.REPLY_WORD)}</b>${replyMarkHtml(call)}${r.stop ? `<span>${W.stopReasonRow(`<span class="mono">${esc(r.stop)}</span>`)}</span>` : ''}</div>`
+  const dflt = replyRowsOpen(r.parts)
+  const rows = r.parts.map((p, j) => {
+    const open = dflt[j] !== s.openBlocks.has('reply:' + j)
+    const b = { sec: 'reply', block: p.block }
+    return blockRowHtml({ role: 'assistant', tag: replyTag(p), label: replyPreview(p) }, {
+      cls: `r-assistant k-${p.kind}`, attrs: ` data-rp="${j}"`, chars: rawContentText(p.block).length, open, body: open ? blockBodyHtml(null, b) : '',
+    })
+  }).join('')
+  return `<div class="cwreply">${head}${rows}</div>`
 }
 
 // the 缓存对比步 as a 1-based step number: S12's cacheBreak.refGi when the server names it, else the front-end rule
@@ -203,10 +236,24 @@ export function toggleCtxBlock(s, blk) {
   if (!blk) return
   const i = +blk.dataset.bi, wasShut = blk.classList.contains('collapsed')
   blk.classList.toggle('collapsed')
+  setExpanded(blk, wasShut)
   if (!wasShut) { s.openBlocks.delete(i); return }
   s.openBlocks.add(i)
   const bc = blk.querySelector('.cbc'), b = s.curFlat[i]
   if (bc && b && !bc.dataset.filled) fillBody(s.ctx.api, bc, b, { decoded: !!s.decodedView }) // fillBody owns the flag: a failed fetch leaves it clear, so a reopen asks again
+}
+const setExpanded = (blk, open) => { const h = blk.querySelector(':scope > .cbh'); if (h) h.setAttribute('aria-expanded', String(open)) }
+// a reply row (⑨): its body was drawn with the row (inline), so a toggle only flips it and records the flip against the
+// default in s.openBlocks — it never reaches toggleCtxBlock (a reply row has no data-bi)
+function toggleReplyRow(s, blk) {
+  const key = 'reply:' + blk.dataset.rp, wasShut = blk.classList.contains('collapsed')
+  if (s.openBlocks.has(key)) s.openBlocks.delete(key); else s.openBlocks.add(key)
+  const call = s.anchor && s.anchor.calls[s.playhead]
+  const p = call && replyOf(call).parts[+blk.dataset.rp]
+  const bc = blk.querySelector(':scope > .cbc')
+  if (wasShut && bc && p && !bc.dataset.filled) { bc.innerHTML = blockBodyHtml(null, { sec: 'reply', block: p.block }); bc.dataset.filled = '1' }
+  blk.classList.toggle('collapsed')
+  setExpanded(blk, wasShut)
 }
 // a removed row: same lazy read, but its block belongs to the 内容对比步 (s.curRemoved), not this step's flat
 function toggleRemovedBlock(s, blk) {
@@ -257,9 +304,17 @@ export function wireCtxWin(el, s) {
     if (th) { const turn = th.closest('.cwturn'); setFold(s.turnFold, turn.dataset.anchor, turn.classList.contains('collapsed')); s.persistFold(); renderContextWindow(el, s); return }
     const rh = t.closest('.cblk.removed > .cbh')
     if (rh) { toggleRemovedBlock(s, rh.closest('.cblk')); return }
+    const rp = t.closest('.cblk[data-rp] > .cbh')
+    if (rp) { toggleReplyRow(s, rp.closest('.cblk')); return }
     const bh = t.closest('.cbh')
     if (bh) toggleCtxBlock(s, bh.closest('.cblk'))
   }
+  // a row head is a button (2.3 §block 卡): Enter / Space on the head itself opens and closes it like a click
+  const onKey = (e) => {
+    if ((e.key !== 'Enter' && e.key !== ' ') || !e.target.classList || !e.target.classList.contains('cbh')) return
+    e.preventDefault(); onClick(e)
+  }
   el.addEventListener('click', onClick)
-  return () => el.removeEventListener('click', onClick)
+  el.addEventListener('keydown', onKey)
+  return () => { el.removeEventListener('click', onClick); el.removeEventListener('keydown', onKey) }
 }
