@@ -399,7 +399,7 @@ function withPathRefs(flat, rec) {
 function wireOf(rec, format, ctx = null, norm = null) {
   const labels = captureLabelsOf(rec);
   const unread = norm && norm.unread;
-  if (unread) labels.push({ id: 'reply-unread', label: `回复部分未读 · ${unread} reply message${unread > 1 ? 's' : ''} not read`,
+  if (unread) labels.push({ id: 'reply-unread', label: `${unread} reply message${unread > 1 ? 's' : ''} not read`,
     text: `${unread} server message${unread > 1 ? 's' : ''} of this call are not JSON text (binary, past the size cap, or not decodable); the reply shown is read from the others` });
   // a request sent compressed and shown decompressed says so (4.6 §记录, invariant 4): exact text, not the wire bytes
   const enc = rec && typeof rec.req_body === 'string' ? requestEncodingOf(rec) : null;
