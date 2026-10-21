@@ -5,7 +5,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { loadSessions, rowModel } from '../../src/web/v2/library/logic.mjs'
-import { buildLanes, stepsOf } from '../../src/web/v2/replay/lanes.mjs'
 import { captureGap } from '../../src/web/v2/replay/header.mjs'
 import { bodyCache, loadBody } from '../../src/web/v2/replay/blocks.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
@@ -33,24 +32,6 @@ test('(1)(2) the library reads every page of `sessions`; a row\'s title fields a
         assert.equal(v.title, title); assert.equal(v.titleSource, title_source); assert.equal(v.untitled, title == null)
       }
     }
-  } finally { await face.close() }
-})
-
-test('(3) the replay\'s steps are the main lane\'s calls; following page.next ends with has_more:false', async () => {
-  const face = await serveBoard(boardHome())
-  try {
-    const id = (await face.get('sessions')).doc.sessions[0].session_id
-    let after = null, pages = 0, doc
-    do {
-      doc = (await face.get('session', { id, limit: 2, ...(after != null ? { after } : {}) })).doc
-      const main = doc.analyzed.lanes.find((l) => l.kind === 'main') || doc.analyzed.lanes[0]
-      assert.deepEqual(stepsOf(buildLanes(doc.analyzed, doc.probes)).map((c) => c.id), main.calls.map((c) => c.id))
-      after = doc.page.next; pages++
-      assert.ok(pages <= doc.page.total + 1, 'paging terminates')
-    } while (doc.page.has_more)
-    assert.equal(doc.page.has_more, false)
-    assert.equal(doc.page.next, null)
-    assert.ok(pages > 1)
   } finally { await face.close() }
 })
 

@@ -9,8 +9,8 @@
 // `el` is #saw; `s` is the replay desk's state object (replay.mjs owns it).
 import { esc, kf, usd } from '../core/fmt.mjs'
 import { L } from '../core/labels.mjs'
-import { cacheState, isBreak, breakCost, usageOf, hitRatio, refOf, priceMatch, costOf, isFailed } from '../core/metrics.mjs'
-import { CT_ORDER, callComp, hitTier } from './analysis.mjs'
+import { cacheState, isBreak, breakCost, usageOf, priceMatch, costOf, isFailed } from '../core/metrics.mjs'
+import { CT_ORDER, callComp, hitTier, refRowOf } from './analysis.mjs'
 import { anchorJump } from './jump.mjs'
 import { laneWord } from '../labels/replay.mjs'
 import * as W from '../labels/replay.mjs'
@@ -43,24 +43,20 @@ export const windowOf = (s) => {
   return { lo, hi: Math.max(lo + 1, Math.min(N, s.view.hi || N)), N }
 }
 
-// the 缓存对比步 of calls[i]: the server names it (S12 cacheBreak.refGi); until it does, the same walk the predicate uses
-const refCallOf = (s, i) => {
-  const gi = s.anchor.calls[i] && s.anchor.calls[i].cacheBreak && s.anchor.calls[i].cacheBreak.refGi
-  if (gi != null && s.anchor.giLocal) { const k = s.anchor.giLocal.get(gi); if (k != null) return s.anchor.calls[k] }
-  return refOf(s.anchor.calls, i)
-}
+// the 缓存对比步 of calls[i]: the row the server named (cacheBreak.refRid), else the same walk the predicate uses
+const refCallOf = (s, i) => refRowOf(s.anchor, i)
 const priceRowOf = (s, c) => (s.pricing ? priceMatch(s.pricing, modelOf(c)) : null)
 
 // the problem steps of the whole main lane (window-independent): every cache break and every failed call, in order.
 // A compaction step is NOT one (1.3): it draws the neutral 「压缩」 word — a rewrite is not a problem, and it never counts in n.
-export function problemSteps(calls) {
+export function problemSteps(lane) {
   const out = []
-  ;(calls || []).forEach((c, i) => { if (isFailed(c) || (isBreak(c, refOf(calls, i)) && !c.compaction)) out.push(i) })
+  ;((lane && lane.calls) || []).forEach((c, i) => { if (isFailed(c) || (isBreak(c, refRowOf(lane, i)) && !c.compaction)) out.push(i) })
   return out
 }
 
-// composition of one call as stacked segments. "Not computed" (hatched) is not "body not on this page": the nine numbers ride
-// on every call, only the bodies are lazy.
+// composition of one call as stacked segments from the skeleton row's `comp` (every row carries it, held lane or not);
+// hatched = not computed.
 export function barSegsHtml(c, h) {
   const comp = callComp(c)
   if (!comp) return `<span class="ct-unloaded" title="The breakdown has not been computed yet" style="height:${h}px"></span>`
@@ -174,16 +170,14 @@ export function renderSaw(el, s) {
     peakTip = 'The largest real input total of a main thread step (input + cache read + cache write)'
     q(el, '#sawrow').innerHTML = '<div id="reviewbracket"><span class="rbend" aria-hidden="true">' + esc(W.GUESS) + '</span></div>' + win.map(([c, i]) => {
       const h = isFailed(c) ? 20 : Math.max(3, Math.round(((c.ctx || 0) / pk) * 72))
-      // a paged-out step still draws its bar (its cheap meta is real); whether the body is on this page is the context
-      // window's own sentence (2.3 ⑤) — the 砍掉的 table keeps it out of the bar's hover
       return `<div class="bar ${isFailed(c) ? 'err' : ''} ${c.compaction ? 'compact' : ''} ${i === s.playhead ? 'cur' : ''}" data-i="${i}" style="height:${h}px" title="step ${i + 1} · ${isFailed(c) ? 'call failed' : kf(c.ctx) + ' tok'}">${isFailed(c) ? '' : barSegsHtml(c, h)}</div>`
     }).join('')
   }
   // the cache band
   q(el, '#cacherow').innerHTML = win.map(([c, i]) => cacheCell(c, i, s)).join('')
-  // the 提问刻度: only where the server ships user events (1.3 §提问刻度); step is a global gi → giLocal first
-  const asks = (s.anchor.events || []).map((e, k) => ({ e, k })).filter(({ e }) => e && e.type === 'user' && e.step != null)
-    .map(({ e, k }) => ({ k: k + 1, i: s.anchor.giLocal ? s.anchor.giLocal.get(e.step) : null, preview: e.preview || '' }))
+  // the 提问刻度: only where the server ships user events (1.3 §提问刻度); an event names its call by rid → ridLocal
+  const asks = (s.anchor.events || []).filter((e) => e && e.type === 'user' && e.rid != null)
+    .map((e, k) => ({ k: k + 1, i: s.anchor.ridLocal ? s.anchor.ridLocal.get(e.rid) : null, preview: e.preview || '' }))
     .filter((a) => a.i != null && a.i >= lo && a.i < hi)
   const askrow = q(el, '#askrow')
   if (askrow) {

@@ -5,6 +5,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { SAW_BAR_PX, barsThatFit, fitWindow, capWindow, renderOverview, repositionBrush } from '../../src/web/v2/replay/timeline.mjs'
+import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
+import { deskOf } from './desk-world.mjs'
 
 const css = fs.readFileSync(new URL('../../src/web/v2/css/replay.css', import.meta.url), 'utf8')
 const rule = (sel) => { const m = css.match(new RegExp('(?:^|\\n)\\s*' + sel.replace(/[.#]/g, '\\$&') + '\\s*\\{([^}]*)\\}')); assert.ok(m, sel); return m[1] }
@@ -67,7 +69,7 @@ test('renderOverview with brushDragging: the backdrop is left untouched, only th
     const map = new Map([['ovstrip', { innerHTML: '' }], ['ovbrush', { style: {} }], ['ovpin', { style: {} }]])
     return { map, el: { querySelector: (sel) => map.get(sel.replace(/^#/, '')) || null } }
   }
-  const anchor = { calls: Array.from({ length: 8 }, (_, i) => ({ gi: i, ctx: 10 + i })), peakCtx: 20 }
+  const anchor = { calls: Array.from({ length: 8 }, (_, i) => ({ rid: `R${i}`, ctx: 10 + i })), peakCtx: 20 }
   const s = { anchor, view: { lo: 0, hi: 8 }, playhead: 0, brushDragging: false }
   const { map, el } = mk()
   renderOverview(el, s)
@@ -93,8 +95,8 @@ test('renderOverview with brushDragging: the backdrop is left untouched, only th
 test('the problem lane\'s compaction cell has no text content and a non-empty aria-label', async () => {
   const { renderSaw } = await import('../../src/web/v2/replay/timeline.mjs')
   for (const inferred of [false, true]) {
-    const calls = Array.from({ length: 4 }, (_, i) => ({ gi: i, ts: new Date(Date.UTC(2026, 9, 7, 0, 0, i)).toISOString(), ctx: 100 + i, usage: { read: 90, create: 5, fresh: 5, out: 1 }, ...(i === 2 ? { compaction: true, compactionInferred: inferred } : {}) }))
-    const anchor = { kind: 'main', calls, giLocal: new Map(calls.map((c, i) => [i, i])), events: [], peakCtx: 103 }
+    const rows = Array.from({ length: 4 }, (_, i) => ({ ctx: 100 + i, usage: { read: 90, create: 5, fresh: 5, out: 1 }, ...(i === 2 ? { compaction: true, compactionInferred: inferred } : {}) }))
+    const anchor = anchorLane(buildLanes(deskOf([{ kind: 'main', rows, head: { peakCtx: 103 } }])))
     const nodes = new Map()
     const node = () => ({ innerHTML: '', textContent: '', title: '', style: { setProperty() {} }, classList: { toggle() {} } })
     const el = { querySelector: (sel) => { if (!nodes.has(sel)) nodes.set(sel, node()); return nodes.get(sel) }, querySelectorAll: () => [] }

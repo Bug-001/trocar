@@ -201,3 +201,36 @@ export async function deskFrom(get, id) {
   for (const key of desk.lanes.keys()) await readLane(get, id, desk, { lane: key })
   return desk
 }
+
+/**
+ * A desk from hand-made lanes, for renderer tests: `lanes` = [{kind, head?, rows: [row fields], blocks?: [[block] per row]
+ * (absent = the lane is not held), resources?, seen?, events?}]. Rows get rids `R<lane>-<i>` and increasing ts in the order
+ * given; a block's `query` / `volatile` travel as position attrs and `key` as its content key `fh` (3.5 §会话读).
+ */
+export function deskOf(lanes, { events = [], ...answer } = {}) {
+  const T0 = Date.parse('2026-10-07T00:00:00.000Z')
+  let t = 0, bn = 0
+  const heads = [], calls = [], reads = []
+  lanes.forEach((l, li) => {
+    const rids = l.rows.map((_, i) => `R${li}-${i}`), key = rids[0]
+    const rows = l.rows.map((r, i) => ({ rid: rids[i], lane: key, ts: new Date(T0 + (t++) * 5000).toISOString(), ctx: 100, tools: 0, status: 200, rec: { request: { model: 'm' } }, ...r }))
+    calls.push(...rows)
+    heads.push({ lane: key, kind: l.kind, icon: '', label: l.kind, task: '', count: rows.length, first: key, last: rids.at(-1), peakCtx: 100, spawnRid: null, parent: null, flagged: false, ...l.head })
+    if (!l.blocks) return
+    const defs = [], steps = l.blocks.map((bs, i) => {
+      const ids = [], attrs = {}
+      bs.forEach(({ query, volatile, key: fh, ...d }, p) => {
+        const bid = `b${bn++}`
+        defs.push({ ...d, bid, fh: fh ?? bid })
+        ids.push(bid)
+        if (query != null || volatile != null) attrs[p] = { query, volatile }
+      })
+      return { rid: rids[i], parent: null, ops: [[1, ...ids]], reply: [], attrs, detail: null }
+    })
+    reads.push({ lane: key, base: null, steps, defs, resources: l.resources || [], seen: l.seen || [], events: l.events || [], prev: null, next: null })
+  })
+  const desk = createDesk()
+  applySession(desk, { base: null, mark: calls.at(-1)?.rid ?? null, more: false, meta: { session_id: 'S' }, lanes: heads, calls, events, errors: [], ...answer })
+  for (const a of reads) applyLane(desk, a)
+  return desk
+}

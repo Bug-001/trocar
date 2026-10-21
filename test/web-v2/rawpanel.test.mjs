@@ -6,6 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { renderRawPanel, renderResourceView, wireRawPanel } from '../../src/web/v2/replay/rawpanel.mjs'
 import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
+import { ROUTES_READY } from './desk-world.mjs'
 import { normResp } from '../../src/view/analyze.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
@@ -93,7 +94,7 @@ test('the reply row states its character count once (one fact, one place — 1.4
 
 // 2.6 §A / :236: the reply's tool calls come from the server's own answer (a real face over the demo session, whose replies
 // carry tool_use blocks), never a hand-made shape — so the server and the board cannot disagree on the field's name
-test('a real server answer: every in-page step\'s reply tool names render in the panel', async () => {
+test('a real server answer: every in-page step\'s reply tool names render in the panel', { skip: ROUTES_READY ? false : "lane Q's routes are not merged (src/query/named/lane.mjs)" }, async () => {
   const face = await serveBoard(boardHome())
   try {
     const id = (await face.get('sessions')).doc.sessions[0].session_id
