@@ -11,7 +11,8 @@
 // (storeIndex `at`); anything else is rewritten whole (temp + rename); a sealed segment's file is written whole once.
 import nodeFs from 'node:fs';
 import path from 'node:path';
-import { groupSessions, sessionView } from '../view/board.mjs';
+import { groupSessions, sessionFold } from '../view/board.mjs';
+import { stepOrder } from '../view/analyze.mjs';
 import { mapUsage } from '../model/schema.mjs';
 import { recordsAt } from './records.mjs';
 import { isModelCall } from './rows.mjs';
@@ -24,8 +25,6 @@ export const USAGE_CHUNK_BYTES = 4 << 20; // stored bytes of model calls read ba
 
 export const usageFile = (home, segment) => path.join(indexDir(home), `${segment}.usage.json`);
 
-// No window: every call is slimmed to its cheap meta (norm.usage, wire, status, rec.request.model), no body assembled.
-const META_ONLY = Object.freeze({ cursor: 0, limit: 0 });
 // The 3.2 canonical usage of one call, by the wire it arrived in and the vendor that answered (the NULL-write rule is
 // schema.mjs's, per vendor); null when the reply reported none, or in a wire format no mapping exists for.
 function canonical(c) {
@@ -38,9 +37,13 @@ function canonical(c) {
  *  records. The session keys are THESE records' own: a synthesized key depends on the first record it is stamped over. */
 export function callFacts(records) {
   const out = [];
-  for (const key of groupSessions(records).keys()) {
-    const view = sessionView(records, key, { page: META_ONLY });
-    if (!view) continue;
+  for (const [key, recs] of groupSessions(records)) {
+    // the fold's own META form (norm.usage, wire, status, rec.request.model), no body assembled — not a page: a page's paged-out
+    // calls carry only what the board reads (3.5 §分页 PAGED_META), and the raw usage is not among it
+    const f = sessionFold(key);
+    for (const r of [...recs].sort(stepOrder)) f.push(r);
+    const view = f.view(recs);
+    if (!view.analyzed) continue;
     for (const lane of view.analyzed.lanes || []) for (const c of lane.calls || []) {
       const failed = c.status == null || c.status >= 400;
       const u = failed ? null : canonical(c);

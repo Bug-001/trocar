@@ -244,22 +244,52 @@ function bodied(view, to) {
   return { ...view, analyzed: { ...A, lanes, steps, streams } };
 }
 
-// Slim a call to CHEAP meta only — drop the heavy request body + reconstructed blocks + response text,
-// keep everything the timeline/overview reads (ctx/usage/gi/cacheBreak/error/compaction) plus the model
-// (so cost + labels still resolve). Non-mutating: returns a NEW object, leaves the source call intact.
+// What a paged-out call ships (3.5 §分页): a CLOSED field set — exactly what the board reads from a call whose body is not on the
+// page, and nothing else. Everything else (respRefs, extraMessages, a label's long `text`, the raw `norm`, the rest of `cacheBreak`)
+// rides only on calls with their bodies. Who reads what (src/web/v2):
+//   gi id ts streamId       cursor unit, lane index (giLocal), tech id, 时间轴 (timeline / stepbar / replay playheadSig)
+//   ctx comp usage tools    bar height, composition, cache cell / cost (core/metrics usageOf · costOf), the tool-definition count (outline)
+//   status error errMsg     failed predicate + its reason (core/metrics isFailed · timeline · detail · ctxwin · stepbar)
+//   unparsed rec            the load control's reachability and the model (jump · rawpanel · stepbar/timeline modelOf); rec = {id, request:{model}}
+//   compaction compactionInferred gt probe   compaction mark, ground-truth verdict, cost buckets (timeline · header · metrics)
+//   reqIncomplete wsIncomplete respIncomplete   the 调用保真行 and ◐ (analysis callFacts)
+//   paged_out flat nonBlockKeys   invariant 4 + the meta form (flat / nonBlockKeys empty), shared with assemble.mjs
+//   wire        cacheSemanticsKnown (cache cell, popover) · contextState contextMissing reqEncoding labels (callFacts, replyMark)
+//   wire.labels[]  id label (callFacts words); the long `text` is a tech detail of a loaded step
+//   cacheBreak  cause attribution idx refGi gt firstCall (core/metrics cacheState · stepbar popover · ctxwin · outline · timeline refCallOf)
+export const PAGED_META = Object.freeze({
+  call: Object.freeze(['gi', 'id', 'ts', 'streamId', 'ctx', 'comp', 'usage', 'tools', 'status', 'error', 'errMsg', 'unparsed', 'rec',
+    'compaction', 'compactionInferred', 'gt', 'probe', 'reqIncomplete', 'wsIncomplete', 'respIncomplete', 'paged_out', 'flat', 'nonBlockKeys',
+    'wire', 'cacheBreak']),
+  wire: Object.freeze(['cacheSemanticsKnown', 'contextState', 'contextMissing', 'reqEncoding', 'labels']),
+  label: Object.freeze(['id', 'label']),
+  cacheBreak: Object.freeze(['cause', 'attribution', 'idx', 'refGi', 'gt', 'firstCall']),
+});
+const pick = (o, keys) => { const out = {}; for (const k of keys) if (o[k] !== undefined) out[k] = o[k]; return out; };
+// a raw usage the wire did not fill (absent or {}) — the board reads it as "no usage" (core/metrics usageOf); said as usage:null
+const noRawUsage = (norm) => !!norm && typeof norm === 'object' && 'usage' in norm
+  && (norm.usage == null || (typeof norm.usage === 'object' && !Object.keys(norm.usage).length));
+// Slim a call to its PAGED_META form. Non-mutating: returns a NEW object, leaves the source call intact.
 function slimCall(c) {
-  const { rec, flat, norm, _comp, nonBlockKeys, ...rest } = c;
-  return {
-    ...rest,
-    paged_out: true, // invariant 4: this call's body was not shipped on this page
-    flat: [],
-    // Same as `flat`: a key list with byte refs into the request body is the body's shape, which this page does not
-    // ship — and a slimmed call MUST read as a call the fold kept in its meta form (src/view/assemble.mjs), whichever this is.
-    nonBlockKeys: nonBlockKeys ? [] : nonBlockKeys,
-    norm: norm ? { usage: norm.usage } : norm,
-    rec: rec ? { id: rec.id, request: { model: rec.request && rec.request.model } } : rec,
-  };
+  const out = pick(c, PAGED_META.call);
+  out.paged_out = true; // invariant 4: this call's body was not shipped on this page
+  // a key list with byte refs into the request body is the body's shape, which this page does not ship — and a slimmed call MUST
+  // read as a call the fold kept in its meta form (src/view/assemble.mjs), whichever this is
+  out.flat = [];
+  if (c.nonBlockKeys) out.nonBlockKeys = [];
+  if (noRawUsage(c.norm)) out.usage = null;
+  if (c.rec) out.rec = { id: c.rec.id, request: { model: c.rec.request && c.rec.request.model } };
+  if (c.wire) {
+    out.wire = pick(c.wire, PAGED_META.wire);
+    if (Array.isArray(c.wire.labels)) out.wire.labels = c.wire.labels.map((l) => (l && typeof l === 'object' ? pick(l, PAGED_META.label) : l));
+  }
+  if (c.cacheBreak) out.cacheBreak = pick(c.cacheBreak, PAGED_META.cacheBreak);
+  return out;
 }
+// A lane event ships whole when its step is on the page or its kind is read session-wide (the 提问刻度 / 第 K 次提问 read `user`, the
+// resource lifecycle reads `compaction` / `summarize`); any other one ships as {type, step, streamId} (3.5 §分页).
+export const SESSION_WIDE_EVENTS = Object.freeze(new Set(['user', 'compaction', 'summarize']));
+const slimEvent = (e) => (e && typeof e === 'object' ? pick(e, ['type', 'step', 'streamId']) : e);
 
 // A page ships ONE CALL MORE than it displays: the call just before the window. That call is the
 // diff baseline for the first call ON the window, and without it the very first step of every page
@@ -276,16 +306,33 @@ function windowOf({ cursor = 0, limit = Infinity } = {}) {
 // What a call's body costs a page: the bytes of the context it ships, block by block — its composition (`comp`, on every call), so a
 // context stitched across records (D37 ②) is charged whole, not its record's delta.
 const bodyBytes = (c) => Object.values(c.comp || {}).reduce((n, v) => n + v, 0);
-/** The in-window calls that ride WITH their bodies (3.5 §分页 正文预算): nearest the window's middle first (the board puts the step it
- *  shows there), while their contexts sum to at most `budget` bytes — and always the nearest one. */
-function bodiesFor(calls, { lo, limit }, budget) {
-  if (limit === Infinity || budget === Infinity) return new Set(calls);
+// the call failed: it carries an error, or the wire answered with a status that is not 200 (the board's own predicate, core/metrics isFailed)
+const failed = (c) => !!c.error || (c.status != null && c.status !== 200);
+// The 缓存对比步 of `c` (2.3): the call `cacheBreak.refGi` names, else the nearest earlier call of its lane that did not fail; null when none.
+// The front end's twin is src/web/v2/core/metrics.mjs refOf.
+function comparisonOf(c, lanes, byGi) {
+  const named = c.cacheBreak && c.cacheBreak.refGi;
+  if (named != null && byGi.has(named)) return byGi.get(named);
+  const lane = lanes.find((l) => (l.calls || []).includes(c));
+  const cs = lane ? lane.calls : [];
+  for (let k = cs.indexOf(c) - 1; k >= 0; k--) if (!failed(cs[k])) return cs[k];
+  return null;
+}
+/** The calls that ride WITH their bodies (3.5 §分页 正文预算): the in-window call nearest the window's middle (the board puts the step it
+ *  shows there) and its cache comparison call — wherever that one lies, so the step always has its diff baseline — then the other
+ *  in-window calls nearest the middle first, while their contexts sum to at most `budget` bytes. */
+function bodiesFor(calls, inWin, { lo, limit }, budget, lanes) {
+  if (limit === Infinity || budget === Infinity) return new Set(inWin);
   const mid = lo + Math.floor(limit / 2);
-  const near = [...calls].sort((a, b) => Math.abs(a.gi - mid) - Math.abs(b.gi - mid) || a.gi - b.gi);
+  const near = [...inWin].sort((a, b) => Math.abs(a.gi - mid) - Math.abs(b.gi - mid) || a.gi - b.gi);
   const keep = new Set();
+  if (!near.length) return keep;
+  const ref = comparisonOf(near[0], lanes, new Map(calls.map((c) => [c.gi, c])));
   let sum = 0;
+  for (const c of [near[0], ref]) if (c && !keep.has(c)) { keep.add(c); sum += bodyBytes(c); }
   for (const c of near) {
-    if (keep.size && sum + bodyBytes(c) > budget) break;
+    if (keep.has(c)) continue;
+    if (sum + bodyBytes(c) > budget) break;
     keep.add(c); sum += bodyBytes(c);
   }
   return keep;
@@ -293,9 +340,10 @@ function bodiesFor(calls, { lo, limit }, budget) {
 
 /**
  * pageView(view, spec, {fill, budget}) — the cursor/limit window over a session view, WITHOUT mutating it (the lane/call spine is
- * cloned). Every call keeps its cheap meta; the calls of the window (plus its baseline) whose bodies fit `budget` (bodiesFor) ride
- * with them — `fill(calls)` → Map(call → that call with its body) puts them back when the view holds calls in their meta form
- * (sessionFold) — and every other call is slimmed and marked `paged_out`. `page.returned` = how many rode with their bodies.
+ * cloned). Every call keeps its cheap meta (PAGED_META); the middle call's comparison call and the calls of the window (plus its
+ * baseline) whose bodies fit `budget` (bodiesFor) ride with them — `fill(calls)` → Map(call → that call with its body) puts them back
+ * when the view holds calls in their meta form (sessionFold) — and every other call is slimmed and marked `paged_out`. A lane event
+ * off the page ships slim unless its kind is SESSION_WIDE_EVENTS. `page.returned` = how many rode with their bodies.
  */
 export function pageView(view, spec = {}, { fill = null, budget = Infinity } = {}) {
   const { lo, hi, limit } = windowOf(spec);
@@ -305,16 +353,22 @@ export function pageView(view, spec = {}, { fill = null, budget = Infinity } = {
   // other, and counting the wrong array reports a session length that does not exist.
   const calls = new Set([...(A.steps || []), ...(A.lanes || []).flatMap((l) => l.calls || [])]);
   const total = calls.size;
-  const keep = bodiesFor([...calls].filter((c) => inPage(c.gi, { lo, hi })), { lo, limit }, budget);
+  const all = [...calls];
+  const keep = bodiesFor(all, all.filter((c) => inPage(c.gi, { lo, hi })), { lo, limit }, budget, A.lanes || []);
   const filled = fill ? fill([...keep]) : null;
   // a call whose body could not be put back (its record did not read: said in `errors`) is shipped like any other paged-out call
   const out = bodied(view, (c) => (!keep.has(c) ? slimCall(c) : filled ? (filled.get(c) || slimCall(c)) : c));
+  // bodied() cloned the lanes, so their events are re-mapped here without touching the view's own
+  if (hi !== Infinity) {
+    const whole = (e) => !e || typeof e !== 'object' || SESSION_WIDE_EVENTS.has(e.type) || (e.step != null && inPage(e.step, { lo, hi }));
+    for (const l of out.analyzed.lanes) if (Array.isArray(l.events)) l.events = l.events.map((e) => (whole(e) ? e : slimEvent(e)));
+  }
   let returned = 0;
   for (const c of new Set([...out.analyzed.steps, ...out.analyzed.lanes.flatMap((l) => l.calls)])) if (!c.paged_out) returned++;
   const nextCursor = hi !== Infinity && hi < total ? hi : null;
   // `returned` counts every call shipped WITH its body: at most the window plus `baseline` — the one call before it, sent so
-  // the first step of the page can still be diffed (see inPage). `baseline` is named on the wire rather than left as an
-  // unexplained off-by-one.
+  // the first step of the page can still be diffed (see inPage) — plus the middle call's comparison call when it lies further
+  // back. `baseline` is named on the wire rather than left as an unexplained off-by-one.
   const baseline = lo > 0 && lo <= total ? lo - 1 : null;
   const page = { cursor: lo, limit: limit === Infinity ? null : (limit | 0), total, returned, baseline, nextCursor, hasMore: nextCursor != null };
   return { ...out, page };
