@@ -7,7 +7,7 @@ import { esc, bytes, fmtTime, fmtStamp } from '../core/fmt.mjs'
 import { CLASS_IDS } from '../core/classes.mjs'
 import { harnessKey, harnessName } from '../core/chips.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
-import { menuButton } from '../core/ui.mjs'
+import { menuButton, readFailure } from '../core/ui.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
 import { delegate } from '../core/dom.mjs'
 import { revealHeader } from '../core/sensitive.mjs'
@@ -145,11 +145,11 @@ export function mount(el, ctx) {
     const savedScroll = listEl() ? listEl().scrollTop : 0
     const head = pageHeadHtml({ crumbs: crumbs(), scope: scope(), readAt })
     let body = ''
-    if (err && (!list || list.state !== 'table')) body = stateHtml('error', { error: err })
+    if (err && (!list || list.state !== 'table')) body = stateHtml('error', { r: err })
     else if (!list) body = stateHtml('loading')
     else if (list.state === 'none') {
       const a = list.answer || {}
-      body = stateHtml('error', { error: a.error })
+      body = stateHtml('error', { r: { status: null, error: a.error } })
     } else if (!list.rows.length) body = `<div class="tstate" data-empty${q.cls ? ` data-class="${esc(q.cls)}"` : ''}>${esc(q.cls ? W.EMPTY_HOST_CLASS(W.classWord(q.cls)) : W.EMPTY_HOST)}</div>`
     else body = captionHtml({ ...list, host }, { harness, window: q.window, cls: q.cls }) +
       `<div class="hhead" aria-hidden="true"><span class="cell">time</span><span class="cell-endpoint">endpoint</span><span class="cell class">class</span>` +
@@ -195,7 +195,10 @@ export function mount(el, ctx) {
   }
 
   function detailHtml() {
-    if (detailErr) return `<div class="d-err"><p>${esc(W.DETAIL_READ_FAILED(detailErr))}</p><button type="button" class="tbtn" data-act="retry-detail">${esc(W.RETRY)}</button></div>`
+    if (detailErr) {
+      const f = readFailure(W.THIS_REQUEST, detailErr, { id: 'rqd-fail' })
+      return `<div class="d-err"><p>${esc(f.line)}</p><button type="button" class="tbtn" data-act="retry-detail">${esc(W.RETRY)}</button>${f.tech}</div>`
+    }
     if (!detail) return `<div class="d-empty">${esc(W.LOADING)}</div>`
     const row = list && list.state === 'table' ? list.rows.find((r) => r.ref === ref) : null
     const lead = row ? detailLeadHtml(row) : null // a deep-linked ref the list has not loaded still opens its detail
@@ -211,7 +214,7 @@ export function mount(el, ctx) {
     if (dead || ref !== at) return // a slower earlier answer never paints over the newer selection (invariant 4)
     const m = r.ok ? detailModel(r.data) : null
     if (m && m.rec) detail = m
-    else detailErr = (m && m.error) || r.error || `HTTP ${r.status}` // an unknown ref is an errors[] entry, never an empty body
+    else detailErr = { status: r.ok ? null : r.status, error: (m && m.error) || r.error } // an unknown ref is an errors[] entry, never an empty body
     paint()
   }
   async function readList() {
@@ -219,7 +222,7 @@ export function mount(el, ctx) {
     const r = await readPage(api, { harness, host, cls: asked.cls, window: asked.window })
     if (dead || q !== asked) return
     if (r.ok) { readAt = api.now(); err = null; list = listModel(r.data) }
-    else { err = r.error || `HTTP ${r.status}`; if (!list || list.state !== 'table') list = null }
+    else { err = r; if (!list || list.state !== 'table') list = null }
     paint()
   }
 

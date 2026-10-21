@@ -198,7 +198,8 @@ newest calls that fit and says so (**Showing only the latest N / M calls (file X
 the budget at a time, and between moves each refresh reads on with the new calls only. The worker also measures its
 heap while it reads: a session that costs more per call than estimated is cut shorter, never read until the worker
 runs out of memory. A session that cannot be read says so in one sentence with **Retry**; the reason is under
-**Technical details**. The first open of a very large
+**Technical details**. Every other board screen that cannot read something (overview, traffic, settings,
+session list, capture log) does the same. The first open of a very large
 session after the worker has left reads it from the start, which takes a while (about half a minute for a
 5.4k-call session). It is not a prerequisite: with no daemon — or none that answers
 yet — the command reads the records itself and gives the same document, only slower. Long results page with

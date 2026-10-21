@@ -29,7 +29,7 @@ export const EMPTY_WINDOW = 'No traffic in this window'
 export const EMPTY_WINDOW_CLASS = (word) => `No ${word} traffic in this window`
 // the two store states (a closed set of the server's own reason codes); the command comes from the server's answer
 export const RETRY = 'Retry'
-export const READ_FAILED = (why) => `Could not read traffic: ${why}`
+export const TRAFFIC = 'Traffic'
 
 // ── the host page ───────────────────────────────────────────────────────────────────────────────────────────────────────
 export const TOTAL_N = (n) => `${n} in total`
@@ -88,7 +88,7 @@ export const RESP_PARTIAL = 'Response: incomplete, not fully transferred'
 export const RESP_RESERIALIZED = 'The response is reserialized JSON, not the wire bytes'
 export const RESP_UNDECODED = (enc) => `Response: not decompressed (${enc}); the bytes are still in the source record`
 export const TROCAR_ADDED = 'added by trocar'
-export const DETAIL_READ_FAILED = (why) => `Could not read this request: ${why}`
+export const THIS_REQUEST = 'This request'
 // a record that carries no class (written before D40 classified traffic): the class was never recorded (不变式 4) — not 「other」, not "null"
 export const CLASS_UNRECORDED = 'class not recorded'
 export const classWord = (id) => (id == null ? CLASS_UNRECORDED : Object.prototype.hasOwnProperty.call(CLASS_NAME, id) ? CLASS_NAME[id] : String(id))

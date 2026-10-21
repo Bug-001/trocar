@@ -39,7 +39,7 @@ export const HEALTH_WORDS = Object.freeze({
 })
 export const HEALTH_READ = Object.freeze({
   unrecognized: (state) => `? unknown capture health (${state})`,
-  unreadable: (why) => `? capture health could not be read: ${why}`,
+  unreadable: '? capture health could not be read',
   stale: (at) => `? not refreshed · as of ${at}`,
   loading: '? reading',
   partial: ' · partly unreadable',
@@ -49,6 +49,10 @@ export const HEALTH_READ = Object.freeze({
 })
 
 // the words more than one screen shows the same way
+// a failed /api read (1.5 K-29): what could not be read + the cause class, in the board's own words — never the server's text.
+// status 0 = no full answer (cannot connect, cut, timed out); a number = the code the service answered; none = no class known
+export const READ_FAIL = (what, status) => `${what} could not be read${status === 0 ? ': cannot reach the trocar service'
+  : typeof status === 'number' ? `: the trocar service returned ${status}` : ''}`
 export const READING = 'Reading…' // the content area while a screen module loads (1.2 main.mjs)
 export const WINDOW_LABEL = Object.freeze({ '24h': '24 hours', '7d': '7 days', all: 'All' })
 export const UNTITLED = 'Untitled session'

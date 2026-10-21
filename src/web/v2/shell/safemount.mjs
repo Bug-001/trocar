@@ -3,9 +3,12 @@
 // → the instance mount() returned, or null when it failed (the caller then has nothing to unmount).
 //   hooks = { clearKeys() }
 import { esc } from '../core/fmt.mjs'
+import { techDetailsHtml } from '../core/ui.mjs'
 import { SCREEN_FAILED } from '../labels/shell.mjs'
 
-export const screenErrorHtml = (reason) => `<div class="screenerr" role="alert">${esc(SCREEN_FAILED)} · ${esc(reason)}</div>`
+// the thrown message only in the collapsed 技术细节 (1.5 K-29)
+export const screenErrorHtml = (reason) =>
+  `<div class="screenerr" role="alert">${esc(SCREEN_FAILED)}${techDetailsHtml([['error', reason]], { id: 'screen-err-tech' })}</div>`
 
 export function safeMount(mod, el, ctx, { clearKeys }) {
   try {
