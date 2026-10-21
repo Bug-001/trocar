@@ -38,3 +38,29 @@ for (const keep of ['tree', 'pruned']) {
     assert.ok(out.retained < BIG / 8, `${Math.round(out.retained / 1048576)} MiB retained by a scan of a ${BIG / 1048576} MiB text`)
   })
 }
+
+// Keys are not only the short repeated names of the API: a tool's input or schema may carry any key, of any length. What a scan keeps
+// of them once every text and tree is dropped is not proportional to their bytes (a table of copied keys that outlives the scans
+// would hold them for the life of the process, outside the heap budget's accounting).
+const LONG = `
+const { scanJson } = await import(${JSON.stringify(SCAN)})
+const [bodies, keys, len] = process.argv.slice(1).map(Number)
+const heap = () => { global.gc(); global.gc(); return process.memoryUsage().heapUsed }
+function scanOne(b) {
+  const o = {}
+  for (let k = 0; k < keys; k++) o[String(b * keys + k).padStart(len, 'k')] = k
+  return scanJson(JSON.stringify({ input: o })).props.get('input').props.size
+}
+const before = heap()
+let seen = 0
+for (let b = 0; b < bodies; b++) seen += scanOne(b)
+console.log(JSON.stringify({ seen, retained: heap() - before }))`
+
+test('scans of bodies with long distinct keys, all dropped, retain heap that is small beside the keys bytes', () => {
+  const bodies = 4, keys = 256, len = 64 * 1024
+  const out = JSON.parse(execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', '--single-threaded', '--input-type=module', '-e', LONG,
+    String(bodies), String(keys), String(len)], { encoding: 'utf8' }))
+  assert.equal(out.seen, bodies * keys)
+  const bytes = bodies * keys * len
+  assert.ok(out.retained < bytes / 8, `${Math.round(out.retained / 1048576)} MiB retained after scans of ${bytes / 1048576} MiB of keys were dropped`)
+})

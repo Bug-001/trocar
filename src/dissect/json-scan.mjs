@@ -10,13 +10,16 @@
 // Whitespace between tokens is excluded from a value's [start,end); the span is
 // from the value's first non-ws char to just past its last char.
 // Object keys, each a copy of its own: never a slice of the text, which would keep the whole text (a multi-MB request body) alive
-// for as long as the tree or a key of it is kept (V8 slices strings of 13+ chars). Keys repeat across bodies, so each distinct one
-// is copied once and shared; the table is bounded and starts over when full.
+// for as long as the tree or a key of it is kept (V8 slices strings of 13+ chars). Keys repeat across bodies, so each distinct
+// short one (the API's names: cache_control, input_schema) is copied once and shared; the table is bounded in entries and in each
+// entry's length, so it never holds more than a few hundred KB however long the keys of a tool's input are (a long key is copied
+// afresh every time and goes with its tree), and starts over when full.
 const KEYS = new Map();
 const KEYS_MAX = 4096;
+const KEY_SHARED_CHARS = 64;
 function keyOf(text, open, close) {
   const raw = text.slice(open + 1, close - 1);   // a temporary: looked up, never kept
-  if (raw.includes('\\')) return JSON.parse(text.slice(open, close));
+  if (raw.length > KEY_SHARED_CHARS || raw.includes('\\')) return JSON.parse(text.slice(open, close));
   let key = KEYS.get(raw);
   if (key === undefined) {
     if (KEYS.size >= KEYS_MAX) KEYS.clear();
