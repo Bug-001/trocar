@@ -787,7 +787,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   collector = createModelCollector({ harnesses: list, dir: P.dir, identify: registry.match, ownerOf: parts.ownerOf, factsOf: parts.factsOf, proc: parts.proc,
     ctx: sourcesCtx({ os: A.os, home, env, dirs: b.dirs, policy: b.policy }), systemProxy: parts.systemProxy, custody: b.custody || 'unavailable', rootPem, procTable: parts.procTable,
     record: event, event, proxyOf: parts.proxyOf, templates: TEMPLATES, agentList: () => ({ entries: agents }), ownSid: parts.ownSid || null, openConns: () => engine.stats().active,
-    drain: ({ harnesses: hs, now }) => engine.drain({ agents: new Set(hs), now }),
+    drain: ({ harnesses: hs, now }) => engine.drain({ agents: hs ? new Set(hs) : null, now }), // null: every connection (an off that stops the daemon)
     upstreamRoots: upstreamRootsOf({ A, env, upstreamCa, event }),
     // the process of a negative-cache key exited, or its door closed: its entries go, as runDaemon's onGone does (4.8 §5.5; the fold clears by neg_key)
     holds: (who) => engine.holdsNegKey(who),
@@ -833,9 +833,17 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       try { return { ok: true, data: await parts.helper.call(verb, args && typeof args === 'object' ? args : {}, { timeoutMs: verb === 'ps' ? 10000 : 2000 }), ...(self ? { self } : {}) } } catch (e) { return no(`${verb}: ${String((e && (e.code || e.message)) || e)}`) }
     }),
     'POST /on': gate(async (q) => { exitAsked++; clearInterval(exitTimer); return collector.on(body(q)) }),
+    // `exit` stops the daemon once it may (no harness on, no holder, no connection); with `now` its connections were just cut and it stops at
+    // once, as runDaemon's exitWhenDrained does: whatever the engine still holds after half a second goes through the stop barrier
     'POST /off': gate(async (q) => {
-      const r = await collector.off(body(q))
-      if (body(q).exit === true) { const mine = ++exitAsked; clearInterval(exitTimer); exitTimer = setInterval(() => { if (mine === exitAsked && collector.mayExit()) { clearInterval(exitTimer); stop({ reason: 'off' }) } }, 250) }
+      const b = body(q)
+      const r = await collector.off(b)
+      if (b.exit === true) {
+        const mine = ++exitAsked; clearInterval(exitTimer)
+        const go = () => { if (mine === exitAsked) { clearInterval(exitTimer); stop({ reason: 'off' }) } }
+        if (b.now === true) Promise.race([engine.drained({ agents: null }), new Promise((res) => setTimeout(res, 500))]).then(() => new Promise((res) => setTimeout(res, 50))).then(go)
+        else exitTimer = setInterval(() => { if (collector.mayExit()) go() }, 250)
+      }
       return r
     }),
   }) })

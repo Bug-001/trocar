@@ -2,11 +2,9 @@
 // REAL old daemon: a child process (../collector/fixtures/model-daemon-child.mjs) that holds a decrypted WebSocket open through its real door.
 // The update's own drain (drainDaemon) and stop (stopDaemon) are the real ones and find the daemon at its real control endpoint (no request,
 // no socket path injected). Only what cannot run in a test stands in: launchd (its `print` answers loaded, its `bootout` sends the daemon
-// SIGTERM, which is what launchd does), the login entry's start (a NEW real daemon in the same HOME), and the lock identity the child wrote
-// with its own stub. Then: the new start writes no `unclean-stop`, the old daemon's `daemon-stop` counts the cut WebSocket, and the old
-// process exited 0 by itself, never SIGKILLed.
-// win32 is N/A here: its stop (stopDaemonWin32) has no login-entry path to stand in for — it ends the daemon with `taskkill /F` only, which
-// no stand-in can make a graceful stop without forging a shape the real platform does not have.
+// SIGTERM, which is what launchd does; win32's `taskkill /F` sends SIGKILL, which is what /F is), the login entry's start (a NEW real daemon
+// in the same HOME), and the lock identity the child wrote with its own stub. Then: the new start writes no `unclean-stop`, the cut
+// WebSocket's row precedes the old daemon's `daemon-stop`, and the old process exited 0 by itself — the stop never had to reach it.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
@@ -17,7 +15,7 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { WITH_PARENT, watchEnv } from '../helpers/standin.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -28,7 +26,7 @@ import { plistFilePath } from '../../src/off/darwin.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runUpdateCli } from '../../src/cli/update.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
-import { agentOf, flowsOf, freePort, through } from '../helpers/model-io.mjs'
+import { agentOf, flowsOf, freePort, through, win32Io } from '../helpers/model-io.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 
 const CHILD = fileURLToPath(new URL('../collector/fixtures/model-daemon-child.mjs', import.meta.url))
@@ -54,8 +52,8 @@ function checkout() {
   return root
 }
 
-test('darwin: update replaces a daemon holding a decrypted WebSocket — the old one is cut by its stop barrier and exits 0 unkilled, the new start reads a clean stop', { timeout: 90_000 }, async () => {
-  const platform = 'darwin'
+for (const platform of ['darwin', 'win32']) {
+test(`${platform}: update replaces a daemon holding a decrypted WebSocket — the old one cuts it, stops itself and exits 0 unkilled, the new start reads a clean stop`, { timeout: 90_000 }, async () => {
   const w = await modelWorld({ os: platform, commands: ['codex'] })
   fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')
   const upCa = createCa({ commonName: 'e2e upstream CA' }), upIssuer = createLeafIssuer(loadCa(upCa))
@@ -69,14 +67,16 @@ test('darwin: update replaces a daemon holding a decrypted WebSocket — the old
   const bundle = path.join(w.home, 'codex-ca.pem')
   const a = agentOf({ w, name: w.harnesses.find((h) => h.name === 'codex').processes.names[0].name, env: { SSL_CERT_FILE: bundle } })
   const agentFile = path.join(tmpDir('trocar-agent-'), 'agent.json')
-  const publish = () => fs.writeFileSync(agentFile, JSON.stringify({ ...a, ports: [...a.ports] }))
+  const fx = path.join(tmpDir('trocar-helper-'), 'fixture.json')
+  const win = platform === 'win32' ? win32Io(a, { fx }) : null
+  const publish = () => { fs.writeFileSync(agentFile, JSON.stringify({ ...a, ports: [...a.ports] })); win?.write() }
   publish()
   const open = []
   let child = null, box = null
-  try {
+  await withScratchCwd(platform, async () => { try {
     // TMPDIR as this process has it: the new daemon starts in this process and must read the socket name the old one wrote under it (4.9 §7)
     child = spawn(process.execPath, [...WITH_PARENT, CHILD, 'run'], { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'],
-      env: watchEnv({ ...w.env, TMPDIR: os.tmpdir(), TROCAR_TEST_SANDBOX: '1', TROCAR_E2E_OS: platform, TROCAR_E2E_AGENT: agentFile }) })
+      env: watchEnv({ ...w.env, TMPDIR: os.tmpdir(), TROCAR_TEST_SANDBOX: '1', TROCAR_E2E_OS: platform, TROCAR_E2E_AGENT: agentFile, TROCAR_E2E_FX: fx }) })
     let out = '', err = ''
     child.stdout.on('data', (b) => { out += b }); child.stderr.on('data', (b) => { err += b })
     const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })))
@@ -98,13 +98,15 @@ test('darwin: update replaces a daemon holding a decrypted WebSocket — the old
     // the update: the old daemon is under a loaded LaunchAgent (the plist install wrote); launchd and the login entry stand in
     fs.mkdirSync(path.dirname(plistFilePath(w.home)), { recursive: true }); fs.writeFileSync(plistFilePath(w.home), '<plist/>')
     box = await liveUnit({ w, platform })
-    const signalled = []
+    const signalled = [], reached = [] // what stopDaemon sent, and which manager stops found the old daemon still running
     const childUp = () => child.exitCode === null && child.signalCode === null
+    const manager = (what, signal) => { if (childUp()) { reached.push(what); child.kill(signal) } return { status: 0, stdout: '', stderr: '' } }
     const exec = (file, args, opts) => {
       if (file === 'git') return spawnSync(file, args, opts)
       if (file === 'launchctl' && args[0] === 'print') return { status: 0, stdout: '', stderr: '' }
-      if (file === 'launchctl' && args[0] === 'bootout') { if (childUp()) child.kill('SIGTERM'); return { status: 0, stdout: '', stderr: '' } }
-      return { status: 1, stdout: '', stderr: `not faked: ${file}` }
+      if (file === 'launchctl' && args[0] === 'bootout') return manager('launchctl bootout', 'SIGTERM')
+      if (file === 'taskkill' && args.includes(String(child.pid))) return manager('taskkill /F', 'SIGKILL')
+      return win ? win.io.exec(file, args, opts) : { status: 1, stdout: '', stderr: `not faked: ${file}` }
     }
     const deps = {
       root: checkout(), exec, getuid: () => 501, unit: box.unit, drainMs: 1000,
@@ -119,11 +121,12 @@ test('darwin: update replaces a daemon holding a decrypted WebSocket — the old
 
     const r = await within(exited, 5000, 'the old daemon exit')
     assert.deepEqual([r.code, r.signal], [0, null], `the old daemon exited 0 by itself (err=${err})`)
-    assert.ok(!signalled.includes('SIGKILL'), `stopDaemon never escalated: ${JSON.stringify(signalled)}`)
+    assert.deepEqual([reached, signalled.filter((x) => x === 'SIGKILL')], [[], []], 'the old daemon stopped itself: no manager stop and no SIGKILL had to reach it')
     const flows = flowsOf(w.dir)
     assert.deepEqual(flows.flatMap((x) => checkRecord(x)), [], 'every flows/ line is in the closed sets')
-    const stop = flows.find((x) => x.event === 'daemon-stop' && x.pid === child.pid)
-    assert.ok(stop && stop.relayed && stop.relayed.cut >= 1, `the old daemon's daemon-stop counts the cut WebSocket: ${JSON.stringify(stop)}`)
+    const at = flows.findIndex((x) => x.event === 'daemon-stop' && x.pid === child.pid)
+    assert.ok(at >= 0, 'the old daemon wrote its daemon-stop')
+    assert.ok(flows.slice(0, at).some((x) => x.error && /^cut-by-/.test(x.error.type)), `the cut WebSocket's row precedes daemon-stop: ${JSON.stringify(flows.filter((x) => x.flow_id))}`)
     assert.ok(box.daemon, 'the new daemon is up')
     assert.deepEqual(flows.filter((x) => x.code === 'unclean-stop'), [], 'the new start read a clean stop')
   } finally {
@@ -132,5 +135,6 @@ test('darwin: update replaces a daemon holding a decrypted WebSocket — the old
     if (box) await within(box.stop(), 10_000, 'the new daemon stop').catch(() => {})
     for (const s of held) s.destroy()
     await new Promise((r) => mock.close(r))
-  }
+  } })
 })
+}
