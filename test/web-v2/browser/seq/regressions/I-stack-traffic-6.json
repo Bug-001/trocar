@@ -2,6 +2,7 @@
   "name": "I-stack-traffic-6",
   "invariant": "I-stack",
   "sig": "I-stack:traffic",
+  "fp": "Could not read traffic: FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory at foldSession (/x/src/query/worker.mjs:#:#) at readSe",
   "seed": 6,
   "big": false,
   "viewport": 1440,

@@ -2,6 +2,7 @@
   "name": "I-url-replay-4",
   "invariant": "I-url",
   "sig": "I-url:replay",
+  "fp": "step=-# while step # is shown",
   "seed": 4,
   "big": false,
   "viewport": 1280,

@@ -2,6 +2,7 @@
   "name": "I-console-replay-117",
   "invariant": "I-console",
   "sig": "I-console:replay",
+  "fp": "update failed Cannot read properties of null (reading 'classList')",
   "seed": 117,
   "big": false,
   "viewport": 390,

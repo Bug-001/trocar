@@ -1,9 +1,11 @@
 // core.test.mjs — the sequence harness's two pure parts, no browser (runs in `npm test`): ddmin shrinks to a 1-minimal failing list
-// and never hands back a list that did not fail; generate() is a pure function of its seed.
+// and never hands back a list that did not fail; generate() is a pure function of its seed; a violation's key tells two bugs of one
+// `<id>:<screen>` apart but not two runs of one bug.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ddmin } from './shrink.mjs'
-import { generate } from './runner.mjs'
+import { generate, keyOf } from './runner.mjs'
+import { fingerprint } from './invariants.mjs'
 
 // fails iff the list holds an 'x' somewhere before a 'y'
 const xBeforeY = async (list) => { const i = list.indexOf('x'); return i >= 0 && list.indexOf('y', i + 1) > i }
@@ -28,4 +30,12 @@ test('R3 generate(seed) is equal across two calls and differs for another seed',
   assert.deepEqual(a, b)
   assert.notDeepEqual(generate(6, n, null), a)
   assert.deepEqual(JSON.parse(JSON.stringify(a)), a) // a sequence is plain JSON: it saves, replays and shrinks
+})
+
+test('R4 two runs of one bug share a key; another bug of the same invariant and screen does not', () => {
+  const v = (detail) => ({ sig: 'I-pageerror:replay', fp: fingerprint(detail) })
+  const a = "TypeError: Cannot read properties of null (reading 'x') at 1712 ms | TypeError: second"
+  assert.equal(keyOf(v(a)), keyOf(v(a.replace('1712', '33').replace('second', 'other'))), 'numbers and later items are not identity')
+  assert.notEqual(keyOf(v(a)), keyOf(v('RangeError: Maximum call stack size exceeded')))
+  assert.notEqual(keyOf(v(a)), keyOf({ sig: 'I-console:replay', fp: fingerprint(a) }))
 })

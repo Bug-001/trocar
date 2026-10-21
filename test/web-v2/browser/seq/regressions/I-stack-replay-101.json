@@ -2,6 +2,7 @@
   "name": "I-stack-replay-101",
   "invariant": "I-stack",
   "sig": "I-stack:replay",
+  "fp": "Loading failed · FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory at foldSession (/x/src/query/worker.mjs:#:#) at readSegment (",
   "seed": 101,
   "big": false,
   "viewport": 390,

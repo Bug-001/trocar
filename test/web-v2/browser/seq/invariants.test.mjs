@@ -88,10 +88,14 @@ test('V-keep the never-drawn failure state over a drawn desk', { skip }, async (
   assert.ok(ids(await check(ctx())).includes('I-keep'))
 })
 
-test('V-stack native stack text in the rendered page', { skip }, async () => {
+test('V-stack a native stack in the board\'s own failure line, never one inside a captured block', { skip }, async () => {
+  const STACK = 'FATAL ERROR: Reached heap limit\n    at f (/srv/a.js:1:2)'
   await fresh()
-  await b.page.evaluate(() => { const e = document.createElement('pre'); e.textContent = 'Error: x\n    at f (/srv/a.js:1:2)'; document.getElementById('screen').firstElementChild.append(e) })
-  assert.ok(ids(await check(ctx())).includes('I-stack'))
+  // a tool_result holding a trace is the session's content: the open block's verbatim body
+  await b.page.evaluate((t) => { const e = document.createElement('pre'); e.className = 'cbpre'; e.textContent = t; document.querySelector('#ctxwin .cblk').append(e) }, STACK)
+  assert.ok(!ids(await check(ctx())).includes('I-stack'), 'a stack in captured content is not the board\'s')
+  await b.page.evaluate((t) => { const e = document.createElement('div'); e.className = 'emptywhy'; e.style.whiteSpace = 'pre-wrap'; e.textContent = t; document.getElementById('ctxwin').prepend(e) }, STACK)
+  assert.ok(ids(await check(ctx())).includes('I-stack'), 'the same stack in a failure line is')
 })
 
 test('V-hscroll a 5000 px wide element', { skip }, async () => {

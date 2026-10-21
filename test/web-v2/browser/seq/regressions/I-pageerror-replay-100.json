@@ -2,6 +2,7 @@
   "name": "I-pageerror-replay-100",
   "invariant": "I-pageerror",
   "sig": "I-pageerror:replay",
+  "fp": "TypeError: Cannot read properties of null (reading 'closest')",
   "seed": 100,
   "big": false,
   "viewport": 1280,

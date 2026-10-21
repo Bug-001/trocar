@@ -2,6 +2,7 @@
   "name": "I-stack-settings-109",
   "invariant": "I-stack",
   "sig": "I-stack:settings",
+  "fp": "Could not read the price table: FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory at foldSession (/x/src/query/worker.mjs:#:#) a",
   "seed": 109,
   "big": false,
   "viewport": 390,

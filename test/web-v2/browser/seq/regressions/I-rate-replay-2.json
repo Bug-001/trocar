@@ -2,6 +2,7 @@
   "name": "I-rate-replay-2",
   "invariant": "I-rate",
   "sig": "I-rate:replay",
+  "fp": "sessions: # ms after the last timer read, expected ≥ # ms",
   "seed": 2,
   "big": false,
   "viewport": 1440,

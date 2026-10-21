@@ -2,6 +2,7 @@
   "name": "I-stack-overview-3",
   "invariant": "I-stack",
   "sig": "I-stack:overview",
+  "fp": "Stats could not be read: FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory at foldSession (/x/src/query/worker.mjs:#:#) at readS",
   "seed": 3,
   "big": false,
   "viewport": 768,

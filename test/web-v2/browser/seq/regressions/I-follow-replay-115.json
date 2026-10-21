@@ -2,6 +2,7 @@
   "name": "I-follow-replay-115",
   "invariant": "I-follow",
   "sig": "I-follow:replay",
+  "fp": "following: shows # / #, the server has #",
   "seed": 115,
   "big": false,
   "viewport": 768,

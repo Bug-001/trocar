@@ -2,6 +2,7 @@
   "name": "I-hold-replay-108",
   "invariant": "I-hold",
   "sig": "I-hold:replay",
+  "fp": "step # → #, # → # row heads",
   "seed": 108,
   "big": false,
   "viewport": 1280,

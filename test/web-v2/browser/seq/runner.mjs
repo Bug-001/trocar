@@ -19,6 +19,9 @@ const QUIET_MS = 300, SETTLE_CAP_MS = 5000, SETTLE_LATENCY_MS = 25000
 // checks that only mean something once the page has settled (a step that cannot settle skips these and keeps the rest)
 const SETTLED_ONLY = new Set(['I-url', 'I-leak', 'I-mem', 'I-follow', 'I-hold'])
 
+/** A violation's (or a regression's) identity: its `<id>:<screen>` sig and its fingerprint (invariants.mjs). */
+export const keyOf = (v) => `${v.sig} ${v.fp}`
+
 /** The steps of sequence `seed`: a pure function of (seed, steps, real). → [{a, p}] (plain JSON) */
 export function generate(seed, steps, world, { real = false } = {}) {
   const r = rng(seed * 7919 + 17)
@@ -66,7 +69,7 @@ const sessionOf = (hash) => { const m = /^#\/replay\/[^/]+\/([^/?]+)/.exec(hash)
  * runSequence({steps, seed, big, viewport, theme, chromium, real, base, known, shot}) →
  *   { violation?: {id, sig, detail, step, screenshot}, step, seen:[{id, sig, detail, step}], pending:{id: {n, max}}, ms, coverage:{a: {ran, skipped}}, maxLongTask,
  *     serverErrors:[text] (the server's truth read failed past a restart's grace) }
- * Stops at the first violation whose sig is not in `known` (a Set of sigs, or 'all' to run every step); a known one is recorded in
+ * Stops at the first violation whose keyOf() is not in `known` (a Set of keys, or 'all' to run every step); a known one is recorded in
  * `seen`, its evidence logs are cleared and the run goes on. `shot` names the screenshot (default `<id>-<screen>-<seed>`).
  */
 export async function runSequence({ steps, seed = 1, big = false, viewport = 1280, theme = 'light', chromium, real = false, base, known = new Set(), shot } = {}) {
@@ -109,7 +112,7 @@ export async function runSequence({ steps, seed = 1, big = false, viewport = 128
       for (const p of res.pending) { const e = out.pending[p.id] ||= { n: 0, max: 0 }; e.n++; if (typeof p.value === 'number') e.max = Math.max(e.max, p.value) }
       out.maxLongTask = Math.max(out.maxLongTask, await b.page.evaluate(() => window.__seq.snap().longtaskMax).catch(() => 0))
       const vs = res.violations.filter((v) => (settled || !SETTLED_ONLY.has(v.id)) && !(noTruth && v.id === 'I-follow'))
-      const fresh = vs.find((v) => !(known === 'all' || known.has(v.sig)))
+      const fresh = vs.find((v) => !(known === 'all' || known.has(keyOf(v))))
       if (fresh) {
         out.violation = { ...fresh, step: i, screenshot: await shoot(b.page, shot || `${fresh.id}-${fresh.sig.split(':')[1]}-${seed}`) }
         break
@@ -138,18 +141,18 @@ export function regressions() {
 
 /**
  * A violation `v` met at step v.step of `steps` (run `opts`): reproduce once on the list up to that step, shrink it with ddmin (each
- * trial a fresh board; it fails only when the same sig recurs), save regressions/<id>-<screen>-<seed>.json as `new` (or `flaky` with
+ * trial a fresh board; it fails only when the same sig and fingerprint recur), save regressions/<id>-<screen>-<seed>.json as `new` (or `flaky` with
  * the full list when it does not reproduce). → the saved document plus {file, trials}.
  */
 export async function findOne(v, steps, opts, { budgetMs = +(process.env.SEQ_SHRINK_MS || 600000), maxTrials = 40, log = () => {} } = {}) {
   const head = steps.slice(0, v.step + 1)
   let trials = 0
-  const fails = async (sub) => { trials++; const r = await runSequence({ ...opts, steps: sub, shot: 'trial' }); log(`trial ${trials}: ${sub.length} steps → ${r.violation?.sig || 'pass'}`); return r.violation?.sig === v.sig }
+  const fails = async (sub) => { trials++; const r = await runSequence({ ...opts, steps: sub, shot: 'trial' }); log(`trial ${trials}: ${sub.length} steps → ${r.violation?.sig || 'pass'}`); return !!r.violation && keyOf(r.violation) === keyOf(v) }
   const again = await fails(head)
   const min = again ? await ddmin(head, fails, { budgetMs, maxTrials: maxTrials - 1 }) : head
   const [id, screen] = v.sig.split(':')
   const name = `${id}-${screen}-${opts.seed}`
-  const doc = { name, invariant: id, sig: v.sig, seed: opts.seed, big: !!opts.big, viewport: opts.viewport, theme: opts.theme, steps: min,
+  const doc = { name, invariant: id, sig: v.sig, fp: v.fp, seed: opts.seed, big: !!opts.big, viewport: opts.viewport, theme: opts.theme, steps: min,
     screenshot: path.relative(process.cwd(), v.screenshot), status: again ? 'new' : 'flaky', detail: v.detail }
   fs.mkdirSync(REGRESSIONS, { recursive: true })
   const file = path.join(REGRESSIONS, `${name}.json`)

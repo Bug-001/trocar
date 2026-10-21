@@ -34,6 +34,13 @@ export const LIMITS = Object.freeze({
 
 const STACK = [/^\s*at \S.*:\d+:\d+\)?\s*$/m, /FATAL ERROR/, /<--- Last few GCs --->/, /\b(?:node|v8)::\w/]
 const CJK = /[぀-ヿ㐀-鿿豈-﫿가-힯]/
+// where the board draws captured bytes, not its own words: verbatim bodies (<pre>, blocks.mjs), block rows (tag + preview) and
+// outline entries. A stack the session itself holds (a tool_result's trace) is content; I-stack reads only what is left.
+const CAPTURED = 'pre, .cblk, .navsub'
+
+/** What tells one bug from another of the same `<id>:<screen>`: the detail's first item with every number (and hex run holding a
+ *  digit) as `#`, whitespace folded. Saved with an open regression; a violation is known only when its sig AND this match. */
+export const fingerprint = (detail) => String(detail).split(' | ')[0].replace(/[0-9a-f]*\d[0-9a-f]*/gi, '#').replace(/\s+/g, ' ').trim().slice(0, 160)
 
 const screenOf = (hash) => (hash.replace(/^#\/?/, '').split(/[/?]/)[0] || 'overview')
 const routeOf = (hash) => hash.replace(/^#/, '').split('?')[0] || '/'
@@ -52,7 +59,7 @@ async function heapUsed(page) {
 }
 
 // the replay desk as the reader sees it: the step counter's two numbers and the window's request-row heads
-const viewOf = (page) => page.evaluate(() => {
+const viewOf = (page) => page.evaluate((sel) => {
   const no = document.querySelector('#stepbar .sb-no')
   const m = no && /(\d+)\s*\/\s*(\d+)/.exec(no.textContent)
   return {
@@ -61,12 +68,18 @@ const viewOf = (page) => page.evaluate(() => {
     heads: [...document.querySelectorAll('#ctxwin .cblk[data-bi]')].map((e) => `${e.dataset.bi}:${e.dataset.sec || ''}`),
     reply: !!document.querySelector('#ctxwin .cwreply'),
     loadStep: !!document.querySelector('[data-load-step], [data-state="missed"], .pobadge'),
-    text: (document.querySelector('#content') || document.body).innerText,
+    // the rendered text with the captured blocks invisible for this one synchronous read: innerText skips visibility:hidden, which
+    // changes no box (no layout shift, no scroll clamped) and no frame is drawn in between
+    own: ((root) => {
+      if (!document.getElementById('seq-own')) document.head.append(Object.assign(document.createElement('style'), { id: 'seq-own', textContent: `[data-seq-own] :is(${sel}), [data-seq-own] :is(${sel}) * { visibility: hidden !important }` }))
+      root.setAttribute('data-seq-own', '')
+      try { return root.innerText } finally { root.removeAttribute('data-seq-own') }
+    })(document.querySelector('#content') || document.body),
     bodyText: document.body.innerText,
     sideways: document.documentElement.scrollWidth > innerWidth,
     dom: document.getElementsByTagName('*').length,
   }
-})
+}, CAPTURED)
 
 /** I-rate over the probe's fetch log (see LIMITS for every bound). → [detail] */
 function rateFaults(log, { actions = [], hidden = [] } = {}) {
@@ -106,7 +119,7 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
 }
 
 /**
- * check(ctx) → { violations:[{id, sig, detail}], pending:[{id, value, pointer}], view }.
+ * check(ctx) → { violations:[{id, sig, fp, detail}], pending:[{id, value, pointer}], view }.
  * ctx: { page, requests, errors, actions:[{t,a}], faults:[{name, kind, from, to}], hidden:[{from,to}], follow, grownAt (ms of the last
  * growth, or null), truth() → the main-lane count, real, prev (the `view` of the previous check), baseline (Map, optional: per-route
  * first-visit counts; default one per page) }. Call it when the page has settled.
@@ -118,7 +131,7 @@ export async function check(ctx) {
   const v = await viewOf(page)
   const screen = screenOf(v.hash), route = routeOf(v.hash)
   const violations = [], pending = []
-  const bad = (id, detail) => violations.push({ id, sig: `${id}:${screen}`, detail })
+  const bad = (id, detail) => violations.push({ id, sig: `${id}:${screen}`, fp: fingerprint(detail), detail })
 
   if (errors.length) bad('I-pageerror', errors.slice(0, 3).join(' | '))
   const armed = (t) => faults.some((f) => t >= f.from && t <= (f.to ?? Infinity) + LIMITS.consoleGraceMs)
@@ -126,8 +139,8 @@ export async function check(ctx) {
   if (loose.length) bad('I-console', loose.slice(0, 3).map((c) => c.msg).join(' | '))
   if (s.blank.length) bad('I-blank', `${s.blank.length} blank frame(s), first at ${s.blank[0].hash}`)
   if (s.keep.length) bad('I-keep', `${s.keep.length} frame(s) of the never-drawn state over a drawn desk, first at ${s.keep[0].hash}`)
-  const st = STACK.find((re) => re.test(v.text))
-  if (st) bad('I-stack', `rendered text matches ${st}`)
+  const st = STACK.find((re) => re.test(v.own))
+  if (st) { const i = st.exec(v.own).index; bad('I-stack', `${v.own.slice(v.own.lastIndexOf('\n', i) + 1).trimStart().split('\n')[0].slice(0, 200)} (matches ${st})`) }
   if (v.sideways) bad('I-hscroll', 'the document scrolls sideways')
   const rate = rateFaults(s.fetchLog, { actions, hidden })
   if (rate.length) bad('I-rate', rate.slice(0, 3).join(' | '))
