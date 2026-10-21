@@ -158,7 +158,8 @@ export function blockRowHtml(head, { cls = '', attrs = '', badges = '', chars = 
     `<div class="cbh" role="button" tabindex="0" aria-expanded="${open}"><span class="cbrole">${esc(head.role)}</span><span class="cbtag"${tag ? '' : ` title="${esc(String(head.tag || ''))}"`}>${esc(tag || W.TAG_UNKNOWN)}</span>${label ? `<span class="cblabel" title="${esc(label)}">${esc(label)}</span>` : ''}${badges}${n}` +
     `</div><div class="cbc"${open ? ' data-filled="1"' : ''}>${open ? body : ''}</div></div>`
 }
-export function ctxBlockHtml(b, i, { prevKeys, open, windowLine = false } = {}) {
+// a request row as its unit html: no position on it (the window writes data-bi on placement, 2.3 §读与画)
+export function ctxBlockHtml(b, { prevKeys, open, windowLine = false } = {}) {
   const h = b.head || { role: b.role || '', tag: b.kind || '', label: '' }
   const f = open ? faithNow({ ...b, _open: true }) : faithOf(b)
   const isNew = prevKeys && !b.volatile && !prevKeys.has(b.key)
@@ -172,7 +173,7 @@ export function ctxBlockHtml(b, i, { prevKeys, open, windowLine = false } = {}) 
   const rk = b.resKey ? ` data-rk="${esc(b.resKey)}"` : ''
   return blockRowHtml({ role: h.role, tag: h.tag, label: h.label || b.preview || '' }, {
     cls: `${isNew ? 'is-new' : ''} s-${esc(b.sec)} r-${esc(b.role)} k-${esc(b.kind)}`,
-    attrs: ` data-bi="${i}" data-sec="${esc(b.sec)}" data-ff="${esc(f)}"${rk}`,
+    attrs: ` data-sec="${esc(b.sec)}" data-ff="${esc(f)}"${rk}`,
     badges: bp + vol + nw + badge + sr,
     chars: typeof b.chars === 'number' ? b.chars : null, open, body: open ? bodyFor(b) : '',
   })

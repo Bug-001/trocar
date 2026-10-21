@@ -52,17 +52,16 @@ test('「跳到变化处」 appears iff the window draws the 变化线 (the one 
 test('openTurnFor: a click into an explicitly folded card opens it AND writes the D12 memory; the automatic landing still loses to an explicit fold', () => {
   const qA = blk({ query: '第一问', key: 'a1' }), midA = blk({ role: 'assistant', kind: 'text', key: 'a2' }), qB = blk({ query: '第二问', key: 'b1' })
   const flat = [sys({ key: 's' }), qA, midA, qB, blk({ key: 'b2' })]
-  const anchor = { id: 'main', kind: 'main', calls: [{ gi: 0, ts: ts(0), flat, rec: { request: {} }, cacheBreak: { idx: 4, cause: 'append', firstCall: false } }], giLocal: new Map([[0, 0]]), events: [], resources: [] }
   let persisted = 0
-  const s = { anchor, lanes: [anchor], playhead: 0, curFlat: flat, navOpen: new Set(), openBlocks: new Set(), turnFold: new Map([['a1', false]]), turnLanded: new Set(), persistFold: () => persisted++ }
+  const s = stateOf(flat, { openBlocks: new Set(), turnFold: new Map([['a1', false]]), turnLanded: new Set(), persistFold: () => persisted++ })
   const el = { _h: '', set innerHTML(v) { this._h = v }, get innerHTML() { return this._h }, querySelector: () => null, querySelectorAll: () => [] }
   renderContextWindow(el, s) // the desk has already painted this step and run its landing
-  assert.match(el._h, /class="cwturn collapsed" data-turn="0" data-anchor="a1"/, 'the reader folded the first card; the fold memory keeps it shut')
+  assert.match(el._h, /class="cwturn collapsed" data-anchor="a1"/, 'the reader folded the first card; the fold memory keeps it shut')
   assert.equal(openTurnFor(el, s, 1), true, 'fi 1 (第一问) lives in that folded card: the outline click opens it')
   assert.equal(s.turnFold.get('a1'), true, 'the open is written to the D12 fold memory (2.5 §跳转联动), not the ephemeral set')
   assert.equal(persisted, 1, 'and persisted')
   assert.equal(s.turnLanded.size, 0, 'the ephemeral set stays for the automatic landing only')
-  assert.match(el._h, /class="cwturn " data-turn="0" data-anchor="a1"/, 'the window repainted with the card open — the block can be scrolled to')
+  assert.match(el._h, /class="cwturn " data-anchor="a1"/, 'the window repainted with the card open — the block can be scrolled to')
   assert.equal(openTurnFor(el, s, 3), false, 'a block in the (default-open) latest card: nothing to open')
   assert.equal(persisted, 1, 'and nothing further persisted')
   // the automatic landing on the same key WITHOUT a user click still respects the explicit fold (1.4's rule)
@@ -142,7 +141,6 @@ test('jump-source identity: every data-jumpfi names a block the window actually 
   const flat = [tool(), tool({ name: 'grep' }), sys(), blk({ query: '第一问' }), blk({ role: 'assistant', kind: 'text', query: null })]
   const s = stateOf(flat, { openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), diffRef: null })
   const outline = outlineHtml(s)
-  s.anchor.calls[0].flat = stepOf(s.desk, 'R0-0').flat // the window reads the step's blocks off the call until D5 ports it to the desk
   const win = { _h: '', set innerHTML(v) { this._h = v }, get innerHTML() { return this._h }, querySelector: () => null, querySelectorAll: () => [] }
   renderContextWindow(win, s)
   const inWindow = new Set([...win.innerHTML.matchAll(/data-bi="(\d+)"/g)].map((m) => +m[1]))

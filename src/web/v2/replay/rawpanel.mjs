@@ -11,7 +11,6 @@ import { fillBody, bodyFor } from './blocks.mjs'
 import { stepOf } from './model.mjs'
 import { stepRef } from './lanes.mjs'
 import * as W from '../labels/replay.mjs'
-import { pageState } from './follow.mjs' // D6 deletes, with loadStepHtml
 
 // ── the reply: its parts · stop reason · ONE fidelity mark ─────────────────────────────────────────────────────────
 // replyOf({row, reply, detail}) is the one rule (2.3 §这一步的回复 · 2.6 §A) over a step as the desk holds it: `reply` = the
@@ -168,13 +167,4 @@ export function wireRawPanel(el, s) {
   }
   el.addEventListener('click', onClick)
   return () => el.removeEventListener('click', onClick)
-}
-
-// the load control of a paged-out step (2.3 §未下发态), one for the window and the raw panel: busy while its read is out; after an
-// answer that still lacked the step, a line says so and the button reads again
-export function loadStepHtml(s, call, attr) {
-  const st = pageState(s, call)
-  if (st === 'loading') return `<button type="button" class="pobtn" ${attr} disabled aria-busy="true">${esc(W.LOADING_THIS_STEP)}</button>`
-  const btn = `<button type="button" class="pobtn" ${attr}>${esc(W.LOAD_THIS_STEP)}</button>`
-  return st === 'missed' ? `<span class="pomissed" data-state="missed">${esc(W.PAGE_MISSED)}</span> ${btn}` : btn
 }
