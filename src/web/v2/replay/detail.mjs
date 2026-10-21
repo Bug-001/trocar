@@ -8,9 +8,10 @@ import { esc, kf } from '../core/fmt.mjs'
 import { techDetailsHtml } from '../core/ui.mjs'
 import { nearestByTs } from './lanes.mjs'
 import { when } from './analysis.mjs'
-import { faithOf, FF, ffBadgeHtml, fillBody, tagWord } from './blocks.mjs'
-import { cellOf, cellBodyHtml, modeOf, wireCells } from './cell.mjs'
-import { replyMarkHtml } from './rawpanel.mjs' // the reply's ONE fidelity mark: the same resolve rule as the raw panel (2.3)
+import { faithOf, FF, ffBadgeHtml, fillBody, tagWord, bodyFor } from './blocks.mjs'
+import { wireCells } from './cell.mjs'
+import { stepOf } from './model.mjs'
+import { replyOf, replyMarkHtml } from './rawpanel.mjs' // the reply's ONE fidelity mark: the same resolve rule as the raw panel (2.3)
 import { costCellHtml } from './stepbar.mjs' // the cost cell's one home (2.2); the drawer's own words stay here
 import { clearRange } from './rails.mjs'
 import * as W from '../labels/replay.mjs'
@@ -26,16 +27,15 @@ export function costRowHtml(c, table, tableErr) {
   return `<div class="din" style="color:var(--dim)">${esc(model)} · output ${kf(c.usage.out)} tokens · ≈ ${costCellHtml(model, c.usage, table, tableErr)}</div>`
 }
 
-// the reply: parsed by the server, drawn as a cell like every other body — marked by the SAME resolve rule as the raw panel
-// (2.2/2.3/2.6 §A: resolvable respRefs[].ref → no mark; partially stored → 「◐ 回复没采全」; else 「◐ 解析后的回复」; 逐字 is never written
-// for it). A monitor's verdict text is shown as-is, with no mark of its own beyond that.
-function outputHtml(c) {
-  if (c.error || (c.status != null && c.status !== 200)) return `<div class="din">${esc(W.FAILED_NO_REPLY)}${c.errMsg ? techDetailsHtml([['reason', String(c.errMsg)]], { id: 'dfail' }) : ''}</div>`
-  if (c.paged_out) return `<div class="din">${esc(W.REPLY_WORD)}: <span class="pobadge">${esc(W.PAGED_TITLE)}</span></div>`
-  const out = (c.norm && c.norm.text) || ''
-  if (!out) return `<div class="din">${esc(W.REPLY_WORD)}: <b>(none)</b></div>`
-  const cell = cellOf({ inline: out, r: { as: 'text' } }) // the parsed text itself; replyMarkHtml says it is parsed
-  return `<div class="din">${esc(W.REPLY_WORD)} ${replyMarkHtml(c)}</div>` + cellBodyHtml(cell, modeOf(cell.bid))
+// the reply: the step's reply definitions, each a cell like every other body, marked by the SAME rule as the raw panel
+// (replyOf: every part on its span of the streamed reply → no mark; partially stored → 「◐ 回复没采全」; else 「◐ 解析后的回复」).
+// A monitor's verdict text is shown as-is, with no mark of its own beyond that.
+function outputHtml(c, st) {
+  if (!st || !st.held) return `<div class="din rpbusy" aria-busy="true"></div>`
+  const r = replyOf({ row: c, reply: st.reply, detail: st.detail })
+  if (r.failed) return `<div class="din">${esc(W.FAILED_NO_REPLY)}${r.failed.reason ? techDetailsHtml([['reason', String(r.failed.reason)]], { id: 'dfail' }) : ''}</div>`
+  if (!r.parts.length) return `<div class="din">${esc(W.REPLY_WORD)}: <b>(none)</b></div>`
+  return `<div class="din">${esc(W.REPLY_WORD)} ${replyMarkHtml(r)}</div>` + r.parts.map((d) => `<div class="dout" data-dout="${esc(d.bid)}">${bodyFor({ ...d, text_ref: d.ref })}</div>`).join('')
 }
 
 // a block's size with its unit: chars when the server baked them, else bytes (a byte count labelled 字符 would be a wrong
@@ -45,10 +45,10 @@ const OPAQUE_SIZE = W.OPAQUE_ROW
 
 // the call's input: one row per block of `flat`, each opening to its verbatim bytes. The fold label states what is folded:
 // 「逐字 · N 字符 · 点开」 only for a PROVEN block, its own fidelity word otherwise (D18c).
-function inputHtml(c) {
-  const flat = c.flat || []
+function inputHtml(c, flat) {
   if (c.kindHint === 'tc') return `<div class="din">${esc(W.TC_INPUT[c.tcRetention === 'log' ? 'log' : c.tcRetention === 'legacy-meta' ? 'old' : 'full'])}</div>`
-  if (!flat.length) return `<div class="din" style="color:var(--dim)">${esc(c.paged_out ? W.INPUT_NOT_PAGE : W.NO_INPUT)}</div>`
+  if (!flat) return `<div class="din rpbusy" aria-busy="true"></div>` // the lane is not held yet: a frame, filled when it lands
+  if (!flat.length) return `<div class="din" style="color:var(--dim)">${esc(W.NO_INPUT)}</div>`
   const auto = flat.length <= AUTO_AT
   return `<div class="din" style="color:var(--dim)">${esc(W.inputBlocks(flat.length))}:</div>` + flat.map((b, i) => {
     const h = b.head || { role: b.role || '', tag: b.kind || '', label: '' }
@@ -77,26 +77,31 @@ export function detailHtml(s, lane, i) {
   if (isTc) {
     body = `<div class="din">${esc(W.laneKind('token-count').hint)}</div>` +
       `<div class="din">${esc(W.TC_MEASURED(kf(c.ctx)))}</div>` +
-      inputHtml({ kindHint: 'tc', tcRetention: c.retention })
+      inputHtml({ kindHint: 'tc', tcRetention: c.retention }, [])
   } else {
+    const st = s.desk && c.rid != null ? stepOf(s.desk, c.rid) : null
     const unknown = !W.LANE_KIND[lane.kind]
     const tech = [[lane.note ? 'note' : '', lane.note || ''], unknown ? ['kind', lane.kind] : '', c.flagged != null ? ['flagged', String(c.flagged)] : '', c.rec && c.rec.id ? ['id', String(c.rec.id)] : ''].filter((x) => x && x[0])
     body = `<div class="din">${esc(W.laneKind(lane.kind).hint)}</div>` +
-      outputHtml(c) + costRowHtml(c, s.pricing, s.pricingErr) + inputHtml(c) +
+      outputHtml(c, st) + costRowHtml(c, s.pricing, s.pricingErr) + inputHtml(c, st && st.held ? st.flat : null) +
       (tech.length ? techDetailsHtml(tech, { id: 'dtech' }) : '')
   }
-  return { title, body, near }
+  return { title, body, near, flat: isTc ? [] : (s.desk && c.rid != null && stepOf(s.desk, c.rid).flat) || null }
 }
 
 export function openDetail(el, s, lane, i) {
-  const { title, body, near } = detailHtml(s, lane, i)
+  const { title, body, near, flat } = detailHtml(s, lane, i)
   el.className = 'open k-' + lane.kind
   el.innerHTML = `<div class="dclose" id="dclose" role="button" tabindex="0">${esc(W.DRAWER_CLOSE)}</div>` +
     `<h3>${title}</h3>` +
     `<div class="dnav"><button type="button" class="dback" data-back="${near}">${esc(W.backToStep(near + 1))}</button></div>` +
     body
-  s.drawerFlat = lane.calls[i].flat || []
+  s.drawerFlat = flat || []
+  // the lane of this call is read when the drawer opens (2.3 §读与画); the desk re-opens the drawer when it lands
+  if (!flat && lane.kind !== 'token-count' && typeof s.wantLane === 'function') s.wantLane(lane.calls[i].lane ?? lane.id)
   for (const row of el.querySelectorAll('.dblk.open')) fillBody(s.ctx.api, row.querySelector('.dbbody'), s.drawerFlat[+row.dataset.di])
+  const st = flat && stepOf(s.desk, lane.calls[i].rid), reply = new Map(((st && st.reply) || []).map((d) => [d.bid, d]))
+  for (const slot of el.querySelectorAll('.dout')) { const d = reply.get(slot.dataset.dout); if (d && slot.querySelector('pre[data-ref]')) fillBody(s.ctx.api, slot, { ...d, text_ref: d.ref }) }
 }
 export function closeDetail(el, s) {
   s.selTick = null; s.drawerFlat = []
