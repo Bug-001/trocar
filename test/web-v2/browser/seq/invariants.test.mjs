@@ -1,12 +1,12 @@
 // invariants.test.mjs — every invariant of the sequence harness can go red on the real board: one board on makeWorld() with the probe
 // installed and the Claude Code session open; V0 a settled, followed, grown desk breaks none; each V-<id> plants exactly that fault
-// (through page.evaluate, a route, an unrecorded keydown, or growth with the session reads aborted) and check() names it; VP a long task
-// lands in `pending`, never in `violations`. Runs only under `npm run test:browser`.
+// (through page.evaluate, a route, an unrecorded keydown, or growth with the session reads aborted) and check() names it; A17 a tiny
+// static page the harness serves (not the board) proves the probe sees a long task. Runs only under `npm run test:browser`.
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard } from '../harness.mjs'
 import { makeWorld, mainCount } from './world.mjs'
-import { installProbe } from './probe.mjs'
+import { installProbe, snap } from './probe.mjs'
 import { check } from './invariants.mjs'
 
 const gate = await probe()
@@ -173,11 +173,31 @@ test('V-cjk CJK text in the page', { skip }, async () => {
   assert.ok(ids(await check(ctx())).includes('I-cjk'))
 })
 
-test('VP a 120 ms busy loop is pending I-longtask, never a violation', { skip }, async () => {
+test('V-loadstep a control inside an aria-busy frame of the desk', { skip }, async () => {
   await fresh()
-  await b.page.evaluate(() => { setTimeout(() => { const t = Date.now(); while (Date.now() - t < 120); }) }) // a task of its own: an evaluate is not one
-  await b.page.waitForFunction(() => window.__seq.snap().longtaskMax > 0, null, { timeout: 5000 })
-  const r = await check(ctx())
-  assert.ok(r.pending.some((p) => p.id === 'I-longtask'))
-  assert.ok(!ids(r).includes('I-longtask'))
+  await b.page.evaluate(() => { const f = document.createElement('div'); f.setAttribute('aria-busy', 'true'); document.getElementById('ctxwin').append(f) })
+  assert.ok(!ids(await check(ctx())).includes('I-loadstep'), 'an empty busy frame is no load control')
+  await b.page.evaluate(() => document.querySelector('#ctxwin > [aria-busy="true"]').append(document.createElement('button')))
+  assert.ok(ids(await check(ctx())).includes('I-loadstep'))
+})
+
+// the page's own timer runs the loop (code run through page.evaluate is no task of the page's)
+const planted = (loop) => `<!doctype html><meta charset="utf-8"><title>planted</title><p>planted</p><script>setTimeout(() => {
+  ${loop ? 'const t = performance.now(); while (performance.now() - t < 120);' : ''} window.__planted = true }, 50)</script>`
+
+test('A17 a planted 120 ms busy loop is a long task ≥ 100 ms and an I-longtask violation; the page without it is neither', { skip }, async () => {
+  for (const loop of [true, false]) {
+    const pg = await b.page.context().newPage()
+    try {
+      await installProbe(pg)
+      await pg.route('**/seq-planted.html', (r) => r.fulfill({ contentType: 'text/html; charset=utf-8', body: planted(loop) }))
+      await pg.goto(`${b.url}/seq-planted.html`)
+      await pg.waitForFunction(() => window.__planted === true)
+      await pg.waitForTimeout(300) // the observer's entries are delivered after the task
+      const r = await check({ page: pg })
+      const { longtaskMax } = await snap(pg)
+      assert.equal(longtaskMax >= 100, loop, `long task max ${longtaskMax} ms`)
+      assert.equal(ids(r).includes('I-longtask'), loop)
+    } finally { await pg.close() }
+  }
 })

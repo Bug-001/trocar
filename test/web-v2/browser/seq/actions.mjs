@@ -2,14 +2,14 @@
 // row of ACTIONS, `p` is plain JSON drawn at generation time (fractions and choices, never DOM handles), so a sequence serializes,
 // replays and shrinks. Targets are resolved when the step runs; one that is absent on the current screen is `{skipped:true}`.
 // Reader rows (real:true) are what a reader does with mouse and keys (routes 1.2:83-105, keys 1.2:262-269); world rows (real:false)
-// are grow, a worker kill mid-read and arming a route fault. No step ever clicks a control that writes (DENY), and faults.mjs aborts
+// are grow, late growth (rows landing before the tip), a fresh session opened, a worker kill mid-read and arming a route fault. No step ever clicks a control that writes (DENY), and faults.mjs aborts
 // any non-GET request anyway. Selectors are ids, classes and data attributes, never wording. Exports only: nothing runs at import.
 import { setHidden } from './probe.mjs'
 import { FAULT_KINDS, killWorkerMidRead } from './faults.mjs'
 
 // controls that write (core/harness-switch.mjs switch / Set up; settings/storage.mjs levels) and every button of a modal (a confirm)
 export const DENY = '[role=switch],[data-hctl],[data-keep],[data-lvl],[data-class],.v2-modal button,.v2-modal [role=button]'
-const FAULT_NAMES = ['session', 'sessions', 'status', 'overview', 'traffic', 'classes', 'pricing', 'segments', 'calls']
+const FAULT_NAMES = ['session', 'lane', 'block', 'sessions', 'status', 'overview', 'traffic', 'classes', 'pricing', 'segments', 'calls']
 const SCREENS = ['#/overview', '#/sessions', '#/capture', '#/capture/log', '#/traffic', '#/settings/storage', '#/settings/prices', '#/settings/appearance']
 const TOGGLES = { block: '#ctxwin .cblk[data-bi] > .cbh', reply: '#ctxwin .cblk[data-rp] > .cbh', turn: '#ctxwin .cwturnhd', rail: '#rails [data-toggle], #rails [data-railunfold]', tick: '#rails .tick[data-lane]', rpbar: '#rpbar', details: '#screen details > summary', row: '#screen [aria-expanded][aria-controls]' }
 const NAV_KEYS = ['ArrowLeft', 'ArrowRight', 'Shift+ArrowLeft', 'Shift+ArrowRight', 'Home', 'End', 'step:prev', 'step:next']
@@ -133,6 +133,15 @@ export const ACTIONS = [
     await go(ctx.page, deskHash(B))
   }),
   world('grow', 8, (r) => ({ k: int(r, 1, 3) }), (ctx, p) => { ctx.lastGrow = ctx.world.grow(p.k); ctx.grownAt = Date.now() }),
+  world('late', 4, (r) => ({ k: int(r, 1, 3) }), (ctx, p) => { ctx.lastGrow = ctx.world.late(p.k); ctx.grownAt = Date.now() }),
+  // a session no read has touched yet, opened at once: its first open meets the server still extracting it (3.5 §抽取前沿)
+  world('fresh', 2, (r) => ({ n: int(r, 8, 40) }), async (ctx, p) => {
+    const id = ctx.world.fresh(p.n)
+    ctx.grownAt = Date.now(); ctx._lib = null
+    const row = (await library(ctx)).find((x) => x.session_id === id)
+    if (!row) return SKIP
+    await go(ctx.page, deskHash(row))
+  }),
   world('fault', 5, (r) => ({ kind: pick(r, FAULT_KINDS), name: pick(r, FAULT_NAMES), n: int(r, 1, 3), ms: int(r, 0, 20000) }), (ctx, p) => ctx.faults.arm(p)),
   world('kill', 2, () => ({}), async (ctx) => {
     // on the desk the kill lands in a `session` read; elsewhere in whichever read comes next (the worker answers every name)
