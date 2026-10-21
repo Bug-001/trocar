@@ -3,6 +3,7 @@
 // rows for those members and m; and reducing the same store twice gives the same bytes.
 //   (b) reduce(store, members, {mark: m}) ≡ reduce over a store holding only the members ≤ m, for every m; `pending` iff members above m
 //   (c) two reductions of one store, and one of a store opened afresh over the same file (nothing cached), are byte-identical
+//   (d) a member that did not extract is in the document with its reason (§3.9, D38), and the document does not claim to be whole
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -57,5 +58,26 @@ test('(c) two reductions of one store are byte-identical, cached or not', () => 
     assert.equal(bytes(reduce(p.store, p.members, { resolve: p.resolve })), once, `${name}: the same store again`);
     const fresh = openProjection({ home: p.home, key: KEY });
     assert.equal(bytes(reduce(fresh, p.members, { resolve: p.resolve })), once, `${name}: a store opened afresh`);
+  }
+});
+
+test('(d) a member that did not extract is named in the document with its reason, and the document is not whole', () => {
+  // two ways a member fails: its record does not read back; its extraction throws (a record that cannot be read as stored)
+  const FAIL = {
+    'did not read back': (r) => null,
+    'extraction failed': (r) => Object.defineProperty({ ...r }, 'req_body', { enumerable: true, get() { throw new Error('unreadable'); } }),
+  };
+  for (const [name, recs] of Object.entries(SESSIONS)) {
+    for (const k of [0, recs.length >> 1, recs.length - 1]) for (const [why, spoil] of Object.entries(FAIL)) {
+      const lost = recs[k].id, byId = new Map(recs.map((r) => [r.id, r.id === lost ? spoil(r) : r]));
+      const store = openProjection({ home: tmpDir('trocar-frontier-'), key: KEY }), members = recs.map((r) => ({ id: r.id }));
+      extractMembers({ store, members, recordsAt: (rows) => rows.map((m) => byId.get(m.id)).filter(Boolean) });
+      const doc = reduce(store, members, { resolve: (ref) => blockAt(byId.get(parseTextRef(ref).recordId), ref) });
+      const at = `${name} k=${k} (${why})`;
+      assert.deepEqual((doc.failed || []).map((f) => f.id), [lost], `${at}: the failed member is named`);
+      assert.match(doc.failed[0].reason, new RegExp(why), `${at}: with its reason`);
+      assert.ok(doc.pending && doc.pending.done < doc.pending.total, `${at}: the document does not claim to be whole`);
+      assert.ok(!doc.items.has(lost) && !doc.lanes.some((l) => l.calls.some((c) => String(c.id) === lost)), `${at}: and does not show it as a good call`);
+    }
   }
 });

@@ -75,7 +75,9 @@ const isCall = (row) => !!(row && row.x && Array.isArray(row.x.secs));
  * frontier"): the reduction over the members whose record id is ≤ mark (posCmp) and nothing else. `members`: the session's index
  * rows (or record ids); those up to the mark that the store holds a row for are reduced, in write order, as the record path folds
  * them. With no mark, the mark is the store's frontier: the largest member such that every member up to it has a row. The document
- * carries `mark`, and `pending: {done, total}` (members up to the mark, members) while members above it exist. `resolve(ref)` → the
+ * carries `mark`; `failed: [{id, reason}]`, the members up to the mark whose row says why they did not extract (design §3.9, D38:
+ * their call is shown by its reason, never dropped); and `pending: {done, total}` (members reduced, members) while any member is not
+ * reduced (above the mark, failed, or with no row). `resolve(ref)` → the
  * flat entry of the block `ref` names (src/view/extract.mjs blockAt over the record read back): asked only for a break detail no
  * `brk` line holds yet.
  */
@@ -83,7 +85,12 @@ export function reduce(store, members, { mark = undefined, resolve = null } = {}
   const all = [...new Set(members.map(ridOf))].sort(posCmp);
   if (mark === undefined) { mark = null; for (const rid of all) { if (!store.rows.has(rid)) break; mark = rid; } }
   const upTo = mark == null ? [] : all.filter((rid) => posCmp(rid, mark) <= 0);
-  const rids = upTo.filter((rid) => store.rows.has(rid));
+  const failed = [], rids = [];
+  for (const rid of upTo) {
+    const x = store.rows.has(rid) ? store.rows.get(rid).x || {} : null;
+    if (x && typeof x.unparsed === 'string' && !x.item) failed.push({ id: rid, reason: x.unparsed });
+    else if (x) rids.push(rid);
+  }
   const found = new Map(); // break details worked out by this reduction, written as `brk` lines once it is done
   let doc;
   try { doc = reduceIn(store, rids, resolve, found); } catch (e) {
@@ -94,7 +101,8 @@ export function reduce(store, members, { mark = undefined, resolve = null } = {}
   }
   if (found.size) store.append({ brks: [...found.values()] });
   doc.mark = mark;
-  if (upTo.length < all.length) doc.pending = { done: upTo.length, total: all.length };
+  if (failed.length) doc.failed = failed;
+  if (rids.length < all.length) doc.pending = { done: rids.length, total: all.length };
   return doc;
 }
 
