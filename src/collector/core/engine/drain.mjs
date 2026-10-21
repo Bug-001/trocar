@@ -78,7 +78,8 @@ export function createDrain({ flowId, tee: teeIn = null, client, upstream, timeo
 
   const blind = (b) => !tee || !!(b && b.blind)
   function start({ now = false } = {}) {
-    if (phase === 'closed' || phase === 'cut') return phase
+    if (phase === 'cut') return phase
+    if (phase === 'closed') { if (now) { if (timer) { clearTimeout(timer); timer = null } hard() } return phase } // closed at a boundary, its FIN out: `now` does not wait for the peers
     try {
       const b = tee ? tee.boundary() : null
       if (b && !b.blind && b.idle && phase !== 'broken') return closeNow() // nothing in flight: closed now, whether or not `now`

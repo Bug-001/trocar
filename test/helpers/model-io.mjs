@@ -48,9 +48,9 @@ export const darwinExec = (a) => (file, args) => {
   return no(`not faked: ${file}`) // scutil: no system proxy readable
 }
 
-/** win32: the fake helper over a fixture file it reads again per request (its `reread`), and the powershell process table. */
-export function win32Io(a) {
-  const fx = path.join(tmpDir('trocar-helper-'), 'fixture.json')
+/** win32: the fake helper over a fixture file it reads again per request (its `reread`), and the powershell process table. `fx`: that file's path,
+ *  when a daemon in another process reads the one this process writes. */
+export function win32Io(a, { fx = path.join(tmpDir('trocar-helper-'), 'fixture.json') } = {}) {
   const write = () => fs.writeFileSync(fx, JSON.stringify({ reread: true, verbs: {
     ps: { data: { sessionId: 1, procs: a.alive ? [{ pid: a.pid, ppid: 1, name: a.name, exe: a.exe, cmdline: a.exe, cmdlineState: 'ok', startedAt: a.start, sessionId: 1, sameUser: true, integrity: 'medium', tokenDenied: false }] : [] } },
     'tcp-table': { data: { rows: a.alive ? [...a.ports].map((p) => ({ pid: a.pid, state: 'established', family: 4, localAddr: '127.0.0.1', localPort: p, remoteAddr: '127.0.0.1', remotePort: 1 })) : [] } },

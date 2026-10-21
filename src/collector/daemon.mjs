@@ -178,6 +178,28 @@ function storeWithSealing({ P, failure }) {
   return { store, seal, keeper }
 }
 
+/** The stop's tail, the ONE copy both entries run (1.6 §5.2, the stop is a barrier). `before(step)` / `after(step)` are the
+ *  entry's own steps around the engine (Linux closes its helper before the engine, the model after). The engine closes the barrier way —
+ *  every connection ends at a boundary within `graceMs` or is cut (`cut-by-stop`), and only then does close() resolve, its rows written; then the
+ *  store becomes final, the index settles, daemon-stop is written with `relayed` (absent when the engine step failed: it is in `failed`), the failure
+ *  recorder becomes final (later lines → stderr only), and the lock's one owner removes it last: a lock still there at the next start means this
+ *  stop never finished. Every step runs; one that fails is recorded with its reason, never thrown past the rest (D38). → {failed: [where…]} */
+async function stopTail({ engine, graceMs, store, seal, failure, lock, signal, reason, before = async () => {}, after = async () => {} }) {
+  const failed = []
+  const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
+  await before(step)
+  let relayed = null
+  await step('engine', async () => { relayed = await engine.close({ graceMs }) })
+  await after(step)
+  await step('record', () => store.close())
+  await step('raw', () => seal.settle()) // the index of what this daemon wrote, including the segment just closed (D62)
+  failure.flush()
+  failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(relayed ? { relayed } : {}), ...(failed.length ? { failed } : {}) })
+  failure.final()
+  lock.release()
+  return { failed }
+}
+
 /** The lock a live daemon holds (4.6 §控制面, D-25): `fields` (pid, start time, boot id …) plus `segment`, the raw-layer
  *  segment it is appending to right now (D60: readers and the sealer leave that one alone, and may take every other).
  *  `refresh` is called on a timer, and by the record store right before it creates a new segment file (so the lock
@@ -258,7 +280,7 @@ function boardFor({ P, failure, query, log = () => {} }) {
   }
 }
 
-async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {}, fork }) {
+async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, stopGraceMs = 2000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {}, fork }) {
   const P = collectorPaths(dir)
   const netHome = home || env.HOME || os.homedir() // whose agents' settings the 5 s check looks at: the user the daemon runs as
   const failure = createFailureRecorder(P.dir, { log })
@@ -276,7 +298,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   const ep = A0 && typeof A0.controlEndpoint === 'function' && !socketPath ? A0.controlEndpoint({ dir: P.dir }) : null
   const sock = socketPath || (ep ? ep.path : controlSocketPath({ env }))
   // macOS / Windows run the collector model (4.11 §1, §3 ①): no CA of its own to gate on, doors from POST /on, the CLI writes every file
-  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env, exec: runAsync }) /* darwin = ps lstart + kern.boottime; async: the event loop stays free */, lockRefreshMs, foreground, upstreamCa, model, fork })
+  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env, exec: runAsync }) /* darwin = ps lstart + kern.boottime; async: the event loop stays free */, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork })
   identity = identity || procIdentity
   let manifest
   try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "trocar uninstall", then "trocar on"`), { code: 'manifest-unreadable' }) }
@@ -717,20 +739,13 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       if (!helperDown) { try { const s = await redirector.status(); if (s && s.drops) lastDrops = s.drops } catch { /* the helper is going: what was last read is written */ } }
       noteDrops({ force: true }) // drops not yet reported are written, not lost
       failure.flush() // folded counts are written, not lost
-      const failed = []
-      // every step runs; one that fails is recorded with its reason, never thrown past the rest (D38)
-      const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
-      await step('control', () => control.close())
-      clearInterval(bundleTimer)
-      tracker.stop()
-      await step('helper', () => redirector.close()) // the helper exits; its unpinned links vanish; new connections go direct
-      await step('engine', () => Promise.race([engine.close(), new Promise((r) => setTimeout(r, 2000).unref())]))
-      await step('record', () => store.close())
-      await step('raw', () => seal.settle()) // the index of what this daemon wrote, including the segment just closed (D62)
-      failure.flush()
-      failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(failed.length ? { failed } : {}) })
-      lock.release() // last: a lock still there at the next start means this stop never finished
-      return { failed }
+      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason,
+        before: async (step) => {
+          await step('control', () => control.close())
+          clearInterval(bundleTimer)
+          tracker.stop()
+          await step('helper', () => redirector.close()) // the helper exits; its unpinned links vanish; new connections go direct
+        } })
     }
     return { port, socketPath: sock, paths: P, stop, exited, status, tracker, engine, redirector, switch: sw }
   } catch (e) {
@@ -747,7 +762,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 // a door forward-only while its holders live after off (P12), and exits after `off {exit}` only when mayExit says so. `model`: test seams only —
 // { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone } — the endpoint, the control server and the
 // engine are always the real ones.
-async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model, fork }) {
+async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork }) {
   const list = harnesses || (await loadHarnesses())
   const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
   let agents = (nextAgentList() || { entries: [] }).entries
@@ -847,17 +862,9 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       seal.stop() // as in runDaemon: the last segment is left to the next start's scan
       board.stop(); query.stop()
       clearInterval(lockTimer); clearInterval(listTimer); clearInterval(exitTimer)
-      const failed = []
-      const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
-      await step('control', () => control.close())
-      await step('engine', () => Promise.race([engine.close(), new Promise((r) => setTimeout(r, 2000).unref())]))
-      collector.close(); await step('helper', () => parts.close && parts.close())
-      await step('record', () => store.close())
-      await step('raw', () => seal.settle()) // as in runDaemon: the index covers everything this daemon wrote (D62)
-      failure.flush()
-      failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(failed.length ? { failed } : {}) })
-      lock.release()
-      return { failed }
+      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason,
+        before: (step) => step('control', () => control.close()),
+        after: async (step) => { collector.close(); await step('helper', () => parts.close && parts.close()) } })
     }
     stop = (o) => { if (!stopping) { stopping = doStop(o); stopping.then(markExited, () => markExited({ failed: ['stop'] })) } return stopping }
     return { port: null, socketPath: sock, paths: P, stop, exited, status, engine, collector }
