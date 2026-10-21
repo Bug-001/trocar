@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { newManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { WITH_PARENT, watchEnv } from '../helpers/standin.mjs'
 
 const CHILD = fileURLToPath(new URL('./fixtures/daemon-child.mjs', import.meta.url))
 
@@ -18,8 +19,8 @@ for (const [first, ...later] of [['SIGTERM', 'SIGTERM', 'SIGTERM'], ['SIGINT', '
     const dir = path.join(home, '.trocar', 'collector')
     fs.mkdirSync(dir, { recursive: true })
     saveManifest(dir, { ...newManifest(), install: { state: 'complete' }, entries: [{ phase: 'install', kind: 'root-key', what: 'the root' }] })
-    const env = { ...process.env, HOME: home }; delete env.INVOCATION_ID
-    const child = spawn(process.execPath, [CHILD], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const env = watchEnv({ ...process.env, HOME: home }); delete env.INVOCATION_ID
+    const child = spawn(process.execPath, [...WITH_PARENT, CHILD, 'run'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
     let out = '', err = ''
     child.stdout.on('data', (b) => { out += b }); child.stderr.on('data', (b) => { err += b })
     const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })))
