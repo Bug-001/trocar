@@ -61,12 +61,6 @@ export function judgeLife({ p, l, table = [], rows = [], carrierAt = null, isMin
   return gap
 }
 
-/** status's door-free reading until it reads judgeLife itself: true = read an entry in a window, null = its start is not known, else false. */
-export function sawEntry(p, l) {
-  const j = judgeLife({ p, l })
-  return j.state === 'start-unknown' ? null : j.via === 'started-in-window' || j.via === 'rereads'
-}
-
 const whyOf = (j) => j.via || (j.state === 'door' ? 'door-seen' : 'start-unknown')
 
 /** → `[{ harness, pid, start, why }]`, in liveness then table order; why ∈ door-seen · started-in-window · rereads · start-unknown · history-unknown ·
