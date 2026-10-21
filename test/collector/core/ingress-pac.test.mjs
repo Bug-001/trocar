@@ -88,11 +88,19 @@ test('CM33 · a refusal by process on the PAC door (lookup answers {refuse}) is 
 
 test('CM33 · a client that left while it was judged was refused nothing: the lookup\'s refusal writes no pac-peer-refused, the connection is counted `left` (a macOS machine 2026-10-21: 26 `owner no-row` refusals in a day)', T, async (t) => {
   let client = null
-  const d = await door(t, { open: true, lookupIngress: async () => { await client.leave(); busy(30); return { refuse: { code: 'pac-peer-refused', reason: 'pid ?: not shown to be this user\'s (no-row)' } } } })
+  const d = await door(t, { open: true, lookupIngress: async () => { await client.leave(); busy(30); return { refuse: { code: 'pac-peer-refused', reason: 'pid ?: not shown to be this user\'s (no-row)', unread: true } } } })
   client = d.stay('CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n\r\n')
   while ((d.stats().left || 0) + d.failures.length === 0) await new Promise((r) => setTimeout(r, 5))
   assert.deepEqual(d.failures, [], 'no refusal record for a connection that was gone')
   assert.equal(d.stats().left, 1)
+})
+
+test('CM33 · a peer the socket table named as another user\'s is refused with its one pac-peer-refused even when it closes while it is judged (the audit signal, 4.11 P10)', T, async (t) => {
+  let client = null
+  const d = await door(t, { open: true, lookupIngress: async () => { await client.leave(); busy(30); return { refuse: { code: 'pac-peer-refused', reason: 'pid 42 belongs to another user' } } } })
+  client = d.stay('CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n\r\n')
+  while ((d.stats().left || 0) + d.failures.length === 0) await new Promise((r) => setTimeout(r, 5))
+  assert.deepEqual(d.failures.map((f) => f.code), ['pac-peer-refused'])
 })
 
 test('CM33 · the PAC request\'s `left()` says whether the requester left while it was judged: false while it waits, true once it closed', T, async (t) => {

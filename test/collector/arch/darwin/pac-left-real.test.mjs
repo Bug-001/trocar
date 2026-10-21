@@ -34,7 +34,7 @@ async function pacDoor(t, ready) {
     const o = await ownerOfSocket({ exec, peer, socktablePath: helper })
     owners.push(o)
     const a = peerAllowed({ pid: o.pid, ...(o.pid != null ? me : {}), ...(o.sameUser ? { sameUser: true } : {}) }, me)
-    return a.ok ? null : { refuse: { code: a.code, reason: `${a.detail} (owner ${o.why})` } }
+    return a.ok ? null : { refuse: { code: a.code, unread: a.unread, reason: `${a.detail} (owner ${o.why})` } }
   }
   const ing = createIngress({ token: 'f'.repeat(32), failure: (f) => failures.push(f), handleFlow: () => {}, connectUpstream: () => { throw new Error('no upstream here') }, lookupIngress })
   const srv = net.createServer((s) => ing.connection(s, { user: 'h:pac', token: null, open: true }))

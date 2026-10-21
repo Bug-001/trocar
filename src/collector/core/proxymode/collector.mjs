@@ -176,7 +176,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const id = await ident.identityOf({ peer, door: doorOf(d), target })
     if (!d.auth) { // the PAC door takes no credentials: this user's processes only (P10); a refusal is an answer of its own, the ingress writes its one record and closes
       const a = peerAllowed({ ...(id.facts || {}), pid: id.pid }, self)
-      if (!a.ok) return { refuse: { code: a.code, reason: `trocar's proxy settings file (PAC) refused a connection: ${a.detail}${id.unresolved ? ` (owner ${id.unresolved})` : ''}; it takes no credentials, so it forwards only this user's processes` } }
+      if (!a.ok) return { refuse: { code: a.code, unread: a.unread, reason: `trocar's proxy settings file (PAC) refused a connection: ${a.detail}${id.unresolved ? ` (owner ${id.unresolved})` : ''}; it takes no credentials, so it forwards only this user's processes` } }
     }
     const known = !id.why && byName.has(id.agent)
     if (known && onSet.has(id.agent)) seen.add({ harness: id.agent, pid: id.pid, start: id.facts.startedAt ?? null })
@@ -214,7 +214,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const { pid: q, why, sameUser } = await ident.owningPid(peer)
     const facts = q != null ? await ident.factsCached(q) : sameUser ? { sameUser: true } : null
     const a = peerAllowed({ ...(facts || {}), pid: q }, self), mine = a.ok
-    if (!mine && facts && (facts.uid != null || facts.sid || facts.sameUser === false)) { // another user's, for certain: refused (P10)
+    if (!mine && !a.unread) { // another user's, for certain: refused (P10)
       record({ event: 'failure', where: 'ingress', code: a.code, peer, reason: `a request for trocar's proxy settings file (PAC) was refused: ${a.detail}` })
       return null
     }

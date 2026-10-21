@@ -8,8 +8,8 @@
 //   1. read the opener — CONNECT or SOCKS5; anything else (an absolute-URI GET included) is closed,
 //      `ingress-unknown`;
 //   2. check the token, in constant time — 407 / SOCKS auth failure and `ingress-auth-failed`, zero upstream connections;
-//   3. lookupIngress({peer, user, target}) → the flow's meta, or {health:true, group}, or {refuse:{code, reason}} (the door refused this process:
-//      one record, closed unanswered — unless the client had already left, which refused nothing: counted `left`, no record), or null (an unknown
+//   3. lookupIngress({peer, user, target}) → the flow's meta, or {health:true, group}, or {refuse:{code, reason, unread?}} (the door refused this process:
+//      one record, closed unanswered — unless its owner could not be read (`unread`) and the client had already left, which refused nothing: counted `left`, no record), or null (an unknown
 //      user: also an auth failure);
 //   4. a health probe (the target is the group's re-entry point itself): 200, then 204 to every `HEAD`/`GET /trocar-health/<g>`
 //      on the kept-alive tunnel; no upstream, no flows/ row, no envelope. It never leaves the machine (invariant 1);
@@ -200,7 +200,7 @@ async function viaSocks5(sock, up, target, deadline) {
 /**
  * createIngress({ token, lookupIngress, handleFlow, connectUpstream, failure, timing, refuse }) → { attach(server), handle(socket), stats(), closeIdle() }
  *   token            the install's ingress token (4.8 §3); a connection that does not present it gets 407 / auth failure
- *   lookupIngress    async ({peer, user, target:{address, port, family?}}) → IngressMeta | {health:true, group} | {refuse:{code, reason}} | null (an unknown user)
+ *   lookupIngress    async ({peer, user, target:{address, port, family?}}) → IngressMeta | {health:true, group} | {refuse:{code, reason, unread?}} | null (an unknown user)
  *   handleFlow       (socket, meta, {upstream, redial}) — the engine's flow starter; `redial` re-dials through the same upstream when the
  *                    upstream carries no credentials (4.6 让路), else undefined
  *   connectUpstream  ({address, port}) → a connecting net.Socket (the engine's; tests inject)
@@ -226,7 +226,8 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
   // Did the client leave while it was being judged (4.8 §5.1, 4.11 P10)? Asked one event-loop turn later: a peer whose end had no holder when its owner
   // was read had closed before that read, so its FIN (or reset) was in this socket's queue before the lookup answered, and the poll before the turn
   // delivers it even when the answer and the FIN came in one batch. A client that left is refused nothing and is no failure (it sent only its opener,
-  // nothing of the agent's was lost, D38): it is counted, never recorded.
+  // nothing of the agent's was lost, D38): it is counted, never recorded. Left = closed or half-closed (its FIN reads as 'end' before any 'close'); asked
+  // only of a refusal whose owner could not be read, and a live process that half-closes still holds its end, so its owner is read and it is not asked.
   const leftWhileJudged = async (r) => { await new Promise((res) => setImmediate(res)); if (!r.isGone()) return false; counters.left++; return true }
   const now = timing.now || Date.now, lastUnreachable = new Map() // door group → when its upstream-unreachable event was written (1.6 §9.7: at most one per form per 60 s)
   const idle = new Set() // sockets that are not a flow: still in the handshake, or a health tunnel (closeIdle ends them; flows finish on their own)
@@ -325,9 +326,10 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     }
     if (!meta) { authFailed(o.user, 'unknown user'); r.detach(); return o.denied() }
     // a door that refused this process (the PAC door, 4.11 P10): one record of its own code, and the connection closed unanswered — a 407 would ask
-    // for credentials the door never takes (and Chromium does not fall over to the PAC's next entry on one)
+    // for credentials the door never takes (and Chromium does not fall over to the PAC's next entry on one). A refusal for an owner that could not be
+    // read (`unread`) of a client that had left is no refusal: a client that closed has no holder, hence the unread owner; it is counted `left`
     if (meta.refuse) {
-      if (!(await leftWhileJudged(r))) failure({ where: 'ingress', code: meta.refuse.code, peer, reason: meta.refuse.reason }) // a refusal is of a client still there
+      if (!(meta.refuse.unread && await leftWhileJudged(r))) failure({ where: 'ingress', code: meta.refuse.code, peer, reason: meta.refuse.reason })
       r.detach(); return socket.destroy()
     }
     // the client left while the lookup ran: nobody is waiting for a dial, and the user's proxy must not get its credentials for one (§5.1, §5.2)

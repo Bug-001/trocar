@@ -89,6 +89,7 @@ export function peerAllowed(peer, self) {
     : p.sid && me.sid ? String(p.sid).toUpperCase() === String(me.sid).toUpperCase()
     : p.sameUser === true
   if (ok) return { ok: true }
-  const detail = p.uid != null || p.sid || p.sameUser === false ? `pid ${p.pid ?? '?'} belongs to another user` : `pid ${p.pid ?? '?'}: not shown to be this user's process`
-  return { ok: false, code: CODE.pacPeerRefused, detail }
+  const unread = !(p.uid != null || p.sid || p.sameUser === false) // its owner could not be read, as opposed to another user's for certain
+  const detail = unread ? `pid ${p.pid ?? '?'}: not shown to be this user's process` : `pid ${p.pid ?? '?'} belongs to another user`
+  return { ok: false, code: CODE.pacPeerRefused, detail, unread }
 }
