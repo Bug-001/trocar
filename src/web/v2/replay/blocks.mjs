@@ -9,15 +9,9 @@
 // `verbatim` faithfulness (tools blocks additionally need `verbatim:true`). Nothing is ever assumed verbatim without evidence.
 import { esc, kf } from '../core/fmt.mjs'
 import * as W from '../labels/replay.mjs'
+import { DISPLAY_CLIP, cellOf, cellBodyHtml, modeOf, bodyCache, hasInline, isAddressed, inlineText, loadBody, isRetryable } from './cell.mjs'
+export { DISPLAY_CLIP, preEsc, rawContentText, inlineText, hasInline, isAddressed, blockGot, loadBody, isRetryable, bodyCache } from './cell.mjs'
 
-export const DISPLAY_CLIP = 20000
-
-// escape for <pre>. Two parser behaviours would silently alter the bytes: a leading newline right after <pre> is dropped, and a
-// raw carriage return is normalised to a newline. Guard both, so what is displayed (and copied) is what was captured.
-export function preEsc(t) {
-  const e = esc(t).replace(/\r/g, '&#13;')
-  return e.startsWith('\n') ? '\n' + e : e
-}
 // the DISPLAY clip: what exceeds 20 000 characters is folded with the full count said — the full text stays reachable in the
 // source; this is a display control, NOT a faithfulness mark (2.3: 显示剪裁 ≠ 源截断)
 export const clipCut = (t) => {
@@ -70,100 +64,34 @@ export function ffBadgeHtml(f, { tech = '' } = {}) {
 // kept for the drawer's folded-row label (detail.mjs); the emoji forms are gone (2.3 砍掉的)
 export const FF = Object.freeze(Object.fromEntries(Object.entries(W.FF_WORD).map(([k, text]) => [k, { text }])))
 
-// ── bodies ────────────────────────────────────────────────────────────────────────────────────────────────────────────
-const CACHE_CAP = 300
-export const bodyCache = new Map() // text_ref -> {status, text, fidelity, error}; an append-only conversation re-sends the same block every call
-// What is cached: the bytes (200), and a 404 — the server looked the locator up in every capture root (re-indexing once on a miss)
-// and found no such record, so it is kept as `absent`. What is NOT cached: a network failure, a 400 / 409 / 5xx — the capture may be
-// fine and the next ask may work, so a failure is shown (status 'error') but never remembered.
-// a C.5 `block` document ({ref, bytes, encoding, fidelity:{verbatim, note?}, truncated, errors}) as the body the row shows:
-// `bytes` is the decoded text; `fidelity.verbatim:false` is the one non-verbatim case (re-serialised). No bytes = no such
-// record, said with the document's own reason.
-export function blockGot(doc) {
-  const d = doc || {}
-  if (typeof d.bytes !== 'string') return { status: 'absent', error: ((d.errors || [])[0] || {}).reason || 'the capture has no such block' }
-  const verbatim = !!(d.fidelity && d.fidelity.verbatim)
-  return { status: 'ok', text: d.bytes, verbatim, fidelity: verbatim ? 'verbatim' : 'reserialized', note: (d.fidelity && d.fidelity.note) || null, truncated: d.truncated ?? null }
-}
-export async function loadBody(api, ref) {
-  if (bodyCache.has(ref)) return bodyCache.get(ref)
-  const r = await api.get('block', { ref })
-  const got = r.ok ? blockGot(r.data) : { status: r.status === 404 ? 'absent' : 'error', error: r.error }
-  if (r.ok || r.status === 404) {
-    if (bodyCache.size >= CACHE_CAP) bodyCache.delete(bodyCache.keys().next().value)
-    bodyCache.set(ref, got)
-  }
-  return got
-}
-// a failed fetch that was not remembered: the row that shows it is not "filled", so its next open asks again
-export const isRetryable = (got) => !!got && got.status === 'error'
-
-export const hasInline = (b) => b.text !== undefined || b.block !== undefined || b.desc !== undefined || b.schema !== undefined
-export const isAddressed = (b) => !!b.text_ref && !hasInline(b)
-
-export const pendingBodyHtml = (b) => `<pre class="cbpre" data-ref="${esc(b.text_ref)}">${esc(W.FETCHING)}</pre>`
-
-// the text of an inline message block (the block vocabulary: text · thinking · tool_use · tool_result · image · document)
-export function rawContentText(bl) {
-  if (bl == null) return ''
-  if (typeof bl === 'string') return bl
-  if (bl.type === 'text') return bl.text || ''
-  if (bl.type === 'tool_use' || bl.type === 'server_tool_use') return `${bl.name}(\n${JSON.stringify(bl.input, null, 2)}\n)`
-  if (bl.type === 'tool_result') { const c = bl.content; return (typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text || `[${x.type}]`).join('\n') : JSON.stringify(c)) + (bl.is_error ? '  ⟨is_error⟩' : '') }
-  if (bl.type === 'image') return `[image ${(bl.source && (bl.source.media_type || bl.source.type)) || ''}]`
-  if (bl.type === 'document') return `[document ${(bl.source && (bl.source.media_type || bl.source.type)) || bl.title || ''}]`
-  if (bl.type === 'thinking') return bl.thinking || ''
-  if (bl.type === 'redacted_thinking') return '[redacted_thinking]'
-  return JSON.stringify(bl, null, 2)
-}
-// the text of a block that carries its body inline
-export function inlineText(b) {
-  if (b.sec === 'tools') {
-    return b.verbatim
-      ? `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\n\ndescription:\n${b.desc || '—'}${b.schema !== undefined ? `\n\nschema:\n${JSON.stringify(b.schema, null, 2)}` : ''}`
-      : `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\nparams (names only): ${(b.props || []).join(', ') || '—'}\ndescription: ${kf(b.descChars)} chars captured — schema text not retained (length only)\n\nMetadata only: the full JSON schema (parameter types / required / enums / nesting) and the description text were not captured. The model received the full schema; this is a capture boundary, not a display clip.`
-  }
-  if (b.sec === 'system') return b.text
-  if (b.faithfulness === 'opaque') return String(rawContentText(b.block) || '') || '[Encrypted / redacted reasoning: the wire carries only a signature or ciphertext, no plaintext. There is nothing to restore verbatim.]'
-  return rawContentText(b.block)
-}
+// ── bodies ── (the bytes, the cache and the inline text live in cell.mjs; a body is always drawn as a cell)
+// the pending state of an addressed row: the cell's sized box, a <pre> carrying data-ref until the bytes arrive
+export const pendingBodyHtml = (b) => cellBodyHtml(cellOf(b), modeOf(cellOf(b).bid))
 
 // the body as HTML. `got` is a resolved /api/block answer ({status, text, fidelity, error}); null means "inline" (the block itself
 // carries the body). A proven body carries NO fidelity line of its own (the section header says 以下逐字 once); a body that came
 // back unproven is said here AND upgrades the row's mark (noteBodyFidelity, called by fillBody).
-export function blockBodyHtml(got, b, { decoded = false } = {}) {
+export function blockBodyHtml(got, b) {
   if (got == null) {
     // a tools block always has its metadata row (name · params · descChars) to show, HEAVY-dropped or old-trace
     const inline = hasInline(b) || (b.sec === 'tools' && (b.name != null || b.descChars != null || (b.props && b.props.length)))
     if (!inline) return `<div class="cbsrc warn">${esc(W.HALF_MARK + ' ' + W.NO_BODY)}</div>`
     const note = b.unaddressable ? `<div class="cbsrc warn" title="${esc(b.unaddressable)}">${esc(W.INLINE_NOTE)}</div>` : ''
-    return note + `<pre class="cbpre">${preEsc(clipText(String(inlineText(b) ?? '')))}</pre>`
+    const cell = cellOf({ ...b, text_ref: undefined, inline: String(inlineText(b) ?? '') })
+    return note + cellBodyHtml(cell, modeOf(cell.bid))
   }
   if (got.status !== 'ok') {
     const why = got.error || got.reason || 'the capture could not be read'
     return `<div class="cbsrc warn" title="locator: ${esc(b.text_ref || '—')}">${esc(W.HALF_MARK + ' ' + ffWord('notfetched') + ' — ' + why)}</div>`
   }
-  const text = String(got.text ?? ''), dec = decodedText(text)
-  if (dec == null) return `<pre class="cbpre">${preEsc(clipText(text))}</pre>`
-  const btn = (on) => `<button type="button" class="decodebtn" data-decode aria-pressed="${on}">${esc(on ? W.SHOW_WIRE_BYTES : W.SHOW_DECODED)}</button>`
-  // the decoded view is a reading aid, never the wire bytes: said on the spot, one click back to them
-  if (decoded) return `<div class="cbdec">${esc(W.DECODED_NOTE)} ${btn(true)}</div><pre class="cbpre" data-view="decoded">${preEsc(clipText(dec))}</pre>`
-  return `<div class="cbdec">${btn(false)}</div><pre class="cbpre">${preEsc(clipText(text))}</pre>`
-}
-// the readable text form of a body that is one JSON value (a tool result's wrapper, a tool call, a string literal): the parsed
-// value's text (rawContentText), or null when the body is not JSON, is not a string / object / array, or reads the same
-export function decodedText(text) {
-  let v
-  try { v = JSON.parse(text) } catch { return null }
-  if (v == null || (typeof v !== 'string' && typeof v !== 'object')) return null
-  const t = Array.isArray(v) ? v.map(rawContentText).join('\n') : rawContentText(v)
-  return t === text ? null : t
+  const cell = cellOf(b)
+  return cellBodyHtml({ ...cell, inline: String(got.text ?? '') }, modeOf(cell.bid))
 }
 // the body of an opened row right now: inline, from the cache, or the pending state (the caller then loads it)
-export function bodyFor(b, opt) {
+export function bodyFor(b) {
   if (!isAddressed(b)) return blockBodyHtml(null, b)
   const got = bodyCache.get(b.text_ref)
-  return got ? blockBodyHtml(got, b, opt) : pendingBodyHtml(b)
+  return got ? blockBodyHtml(got, b) : pendingBodyHtml(b)
 }
 // a block's faithfulness as it stands NOW: an opened body that came back unproven beats the metadata's claim
 export function faithNow(b) {
@@ -194,13 +122,13 @@ export function noteBodyFidelity(blk, got) {
 // open": set at once (a collapse + reopen while the bytes are in flight must not start a second request) and taken back when the
 // fetch FAILED, so the next open of that row asks again. An absent record stays filled: asking again would only get the same 404.
 // Returns the promise of the swap (nothing to wait for when the body is already here).
-export function fillBody(api, bc, b, opt) {
+export function fillBody(api, bc, b) {
   bc.dataset.filled = '1'
-  bc.innerHTML = bodyFor(b, opt)
+  bc.innerHTML = bodyFor(b)
   if (!bc.querySelector('pre[data-ref]')) return Promise.resolve()
   return loadBody(api, b.text_ref).then((got) => {
     if (!bc.isConnected || !bc.querySelector('pre[data-ref]')) return
-    bc.innerHTML = blockBodyHtml(got, b, opt)
+    bc.innerHTML = blockBodyHtml(got, b)
     if (typeof bc.closest === 'function') noteBodyFidelity(bc.closest('.cblk'), got)
     if (isRetryable(got)) delete bc.dataset.filled
   })
@@ -228,7 +156,7 @@ export function blockRowHtml(head, { cls = '', attrs = '', badges = '', chars = 
     `<div class="cbh" role="button" tabindex="0" aria-expanded="${open}"><span class="cbrole">${esc(head.role)}</span><span class="cbtag"${tag ? '' : ` title="${esc(String(head.tag || ''))}"`}>${esc(tag || W.TAG_UNKNOWN)}</span>${label ? `<span class="cblabel" title="${esc(label)}">${esc(label)}</span>` : ''}${badges}${n}` +
     `</div><div class="cbc"${open ? ' data-filled="1"' : ''}>${open ? body : ''}</div></div>`
 }
-export function ctxBlockHtml(b, i, { prevKeys, open, windowLine = false, decoded = false } = {}) {
+export function ctxBlockHtml(b, i, { prevKeys, open, windowLine = false } = {}) {
   const h = b.head || { role: b.role || '', tag: b.kind || '', label: '' }
   const f = open ? faithNow({ ...b, _open: true }) : faithOf(b)
   const isNew = prevKeys && !b.volatile && !prevKeys.has(b.key)
@@ -244,6 +172,6 @@ export function ctxBlockHtml(b, i, { prevKeys, open, windowLine = false, decoded
     cls: `${isNew ? 'is-new' : ''} s-${esc(b.sec)} r-${esc(b.role)} k-${esc(b.kind)}`,
     attrs: ` data-bi="${i}" data-sec="${esc(b.sec)}" data-ff="${esc(f)}"${rk}`,
     badges: bp + vol + nw + badge + sr,
-    chars: typeof b.chars === 'number' ? b.chars : null, open, body: open ? bodyFor(b, { decoded }) : '',
+    chars: typeof b.chars === 'number' ? b.chars : null, open, body: open ? bodyFor(b) : '',
   })
 }

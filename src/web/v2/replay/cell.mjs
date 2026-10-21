@@ -275,7 +275,10 @@ const idle = (fn) => (typeof requestIdleCallback === 'function' ? requestIdleCal
 
 // click / keys / copy / growth / media / json disclosure on the given roots → a disposer. `s.storage` overrides localStorage.
 export function wireCells(roots, s = {}) {
-  const rs = [].concat(roots).filter(Boolean), opt = { storage: s.storage }
+  // element roots only, and none inside another (one listener per cell)
+  const els = [].concat(roots).filter((r) => r && r.nodeType === 1), rs = els.filter((r) => !els.some((o) => o !== r && o.contains(r)))
+  if (!rs.length) return () => {}
+  const opt = { storage: s.storage }
   const each = (sel, fn) => { for (const r of rs) for (const el of r.querySelectorAll(sel)) fn(el) }
   const sameBid = (bid, fn) => each('.cell', (el) => { if (el.dataset.bid === bid) fn(el) })
   function flip(el, m) {
