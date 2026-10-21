@@ -30,6 +30,7 @@ export const UNREACHED = Object.freeze({
   'src/collector/core/engine/codes.mjs': 'regrouping of src/health/codes.mjs that only tests use',
   'src/capture/desktop-steer.mjs': 'old CC-Desktop Clash Verge steer; only src/netenv/clash.mjs reached it (for socket discovery), and D49 deleted that. Removal waits on the backlog',
   'src/off/clash.mjs': 'the Verge strip / reload half of that steer, reached only through src/capture/desktop-steer.mjs; same backlog items',
+  'src/view/render-kind.mjs': 'the per-definition render spec (RFC 2.3, 3.5); extraction calls it, and this row goes when extraction lands',
 })
 
 const walk = (dir) => fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]) : []

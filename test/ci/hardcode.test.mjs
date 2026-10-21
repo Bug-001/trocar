@@ -145,3 +145,17 @@ test('5 · nothing depends on DuckDB any more', () => {
   const named = SRC.filter((f) => /@duckdb|DuckDBInstance/.test(fs.readFileSync(path.join(ROOT, f), 'utf8')))
   assert.deepEqual(named, [], 'these source files still reach for DuckDB')
 })
+
+// 6 · The render kind of a block comes from the wire kind, generic input keys and the content: no tool name
+// is a string literal in its code, so a harness that renames a tool, or a new one, renders the same way without a branch.
+const TOOL_NAMES = ['Bash', 'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Glob', 'Grep', 'LS', 'WebFetch', 'WebSearch', 'Task', 'Agent', 'Skill',
+  'apply_patch', 'exec_command', 'local_shell'] // render kind names (shell, code, diff, json, text) are left out: they are the module's vocabulary
+const toolNameLiterals = (text) => [...text.matchAll(/(['"`])((?:\\.|(?!\1)[^\\\n])*)\1/g)].map((m) => m[2]).filter((s) => TOOL_NAMES.includes(s))
+
+test('6 · the render-kind module names no tool', () => {
+  assert.deepEqual(toolNameLiterals(code(read(path.join('src', 'view', 'render-kind.mjs')))), [], 'pick the kind from input keys or content, not the tool name')
+})
+
+test('6 · the tool-name scanner sees a literal and skips a comment or a longer word (it can go red)', () => {
+  assert.deepEqual(toolNameLiterals(code("if (n === 'Bash') x // 'Edit'\nconst k = \"apply_patch\", w = 'Bashful', s = 'shell'")), ['Bash', 'apply_patch'])
+})
