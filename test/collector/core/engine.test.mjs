@@ -6,7 +6,7 @@ import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
 import { createStaticRedirector } from '../../../src/collector/core/redirector.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
-import { closeWithin } from '../../helpers/bounded.mjs'
+import { closeWithin, within } from '../../helpers/bounded.mjs'
 
 // A wait that never ends parks the file under --test-force-exit: every test has a deadline, and engine.close() (which waits for
 // every flow still open and never destroys one) a bound that says what it waited for (test/helpers/bounded.mjs).
@@ -225,5 +225,21 @@ test('engine: a failure of a flow carries the flow\'s agent when the door names 
     await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}); c.resume() })
     await closeWithin(engine); up.close()
     assert.deepEqual(failures.map((f) => [f.code, f.agent ?? null]), [['flow-write-failed', agent ?? null]], String(agent))
+  }
+})
+
+test('engine: the stop is bounded — a connection that does not end after the cut (here its lookup never answers) rejects close() with stop-timeout within grace + bound; its socket is destroyed (1.6 §5.2, V99)', T, async () => {
+  for (const [graceMs, boundMs] of [[0, 50], [80, 120]]) {
+    let asked; const lookedUp = new Promise((r) => { asked = r })
+    const redirector = { lookup: () => { asked(); return new Promise(() => {}) } } // never answers: the engine has nothing to cut but the socket
+    const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {} } })
+    const { port } = await engine.listen({})
+    const c = net.connect(port, '127.0.0.1'); c.on('error', () => {})
+    await within(lookedUp, 1000, 'the engine asking the redirector')
+    const closed = new Promise((r) => c.once('close', r))
+    const t0 = Date.now()
+    await assert.rejects(engine.close({ graceMs, boundMs }), (e) => e.code === 'stop-timeout')
+    assert.ok(Date.now() - t0 < graceMs + boundMs + 500, `close() took ${Date.now() - t0} ms`)
+    await within(closed, 1000, 'the client socket closed by the cut')
   }
 })
