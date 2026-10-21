@@ -190,7 +190,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
       if (!forms.length) return {}
       // 4.11 P11 status, in its order: the door's own word on this life (its durable row; a Chromium host's network service) · rule 3 · known history · else not-seen
       const carrier = carriers.includes(null) ? null : Math.max(...carriers)
-      const j = judgeLife({ p, l: (m.liveness || {})[id], table: table || [], rows: (doorSeen || []).filter((r) => r && r.harness === id && validRow(r, m.liveness)), carrierAt: carrier, isMine: (x) => harnessOf.get(x.pid) === id })
+      const j = judgeLife({ p, l: (m.liveness || {})[id], table: table || [], rows: doorSeen == null ? null : doorSeen.filter((r) => r && r.harness === id && validRow(r, m.liveness)) /* null = the door's evidence not known (P12): never config-after-start from it */, carrierAt: carrier, isMine: (x) => harnessOf.get(x.pid) === id })
       if (j.state === 'door') return j.row.kind === 'accept' && 'decrypt' in j.row ? { trusted: j.row.decrypt === true, reason: j.row.decrypt === true ? null : j.row.reason ?? null } : { start: null }
       const certain = startVerdict(p.startedAt, carrier)
       if (certain) return { start: certain }

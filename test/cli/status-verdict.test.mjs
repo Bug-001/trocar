@@ -14,7 +14,7 @@ import { runStatusCli } from '../../src/cli/status.mjs'
 import { runDoctor } from '../../src/cli/doctor.mjs'
 import { EXIT, validateReceipt } from '../../src/cli/schema.mjs'
 import { holdersOf } from '../../src/off/holders.mjs'
-import { writeDoorSeen } from '../../src/off/door-seen.mjs'
+import { writeDoorSeen, DOOR_SEEN_FILE } from '../../src/off/door-seen.mjs'
 import { emptyState, setDesired, writeStateAtomic } from '../../src/off/state.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { SOCK } from './fixtures/status-ctx.mjs'
@@ -106,6 +106,19 @@ test('A2 4.11 P11 status: start × since × a routed ancestor → the process ro
   const seed = [proc(c, 8101, Date.parse('2026-10-20T16:47:34Z')), proc(c, 8102, Date.parse('2026-10-20T17:11:24Z'))]
   const { j } = await run(c, seed)
   assert.deepEqual(seed.map((p) => said(j, p.pid)), [[null, 'not-seen'], [null, 'not-seen']])
+})
+
+test('P12 status: an unreadable door record, or one still carrying unknown_before (any value), never makes a process config-after-start', async () => {
+  const c = await codexOn()
+  const child = proc(c, 7302, START.gap) // a known gap with no ancestor: config-after-start when the record is known and empty (A2)
+  const file = path.join(c.w.dir, DOOR_SEEN_FILE)
+  for (const write of [() => fs.writeFileSync(file, '{not json'), () => writeDoorSeen({ dir: c.w.dir, rows: [], unknownBefore: Date.now() }),
+    () => fs.writeFileSync(file, JSON.stringify({ version: 1, rows: [], unknown_before: 'x' }))]) {
+    setWorld(c, liveness(c, { since: true }), [])
+    write()
+    const { j } = await run(c, [child])
+    assert.deepEqual(said(j, child.pid), [null, 'not-seen'])
+  }
 })
 
 test('A3 P11 status and P12 holders are one judge: a process with no door row, started after every carrier, is config-after-start while on ⇔ the holders after off do not list it', async () => {
