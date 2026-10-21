@@ -44,3 +44,28 @@ for (const wire of ['http', 'chat', 'threads', 'ws']) for (const subLanes of [1,
       `${Math.round(out.retained / 1024)} KiB retained for ${out.calls} calls (≤ ${SPINE_PER_ROW / 1024} KiB each + ${BASELINE_HEAP / 1048576} MiB)`)
   })
 }
+
+// A session past the heap bound that goes on growing (a live one, followed): the cut moves in steps, not with every new row, so the
+// spine is folded on with the new rows instead of from scratch on every poll (3.5 §内存有界). Twenty one-call growths in a worker-sized
+// heap far smaller than the session: the shown calls grow with the session between steps, and the cut moves at most once.
+const GROWING = `
+const { runQuery } = await import(${JSON.stringify(QUERY)})
+const { bigSession } = await import(${JSON.stringify(new URL('./big-session.mjs', import.meta.url).href)})
+const [home] = process.argv.slice(1)
+const s = bigSession({ home, growth: 300, compactAt: 6_000, subEvery: 4, subLanes: 3, subLen: 4 })
+s.append(2_000)
+const shown = []
+for (let i = 0; i < 20; i++) {
+  const doc = await runQuery('session', { id: s.id, limit: '20' }, { home })
+  shown.push(doc.truncated && doc.truncated.shown)
+  s.append(1)
+}
+console.log(JSON.stringify(shown))`
+test('a session past the heap bound that keeps growing keeps its cut between steps, so it is folded on, not from scratch', () => {
+  const home = path.join(tmpDir('trocar-spine-'), '.trocar')
+  const shown = JSON.parse(execFileSync(process.execPath, ['--require', NO_REAL_OS, '--max-old-space-size=128', '--input-type=module', '-e', GROWING, home],
+    { encoding: 'utf8', maxBuffer: 1 << 20 }))
+  assert.ok(shown.every((x) => x > 0), `cut every time: ${shown}`)
+  const moves = shown.slice(1).filter((x, i) => x !== shown[i] + 1).length
+  assert.ok(moves <= 1, `the cut moved ${moves} times in 20 one-call growths: ${shown}`)
+})

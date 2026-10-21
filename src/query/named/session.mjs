@@ -55,12 +55,18 @@ function working(rows) {
   // the baselines may hold one lane's past BASELINE_BYTES (the one in use is always held): `max` covers it
   return (CHUNK_STORED + max + PAGE_BODY_BYTES) * WORK_PER_STORED + BASELINE_HEAP;
 }
-/** The rows a query folds: all of them while their spine fits the heap budget, else the newest that do, with the `truncated` the
- *  document carries — the same {shown, total, kept_mb, file_mb} the board draws (invariant 4, 1.5 K-06). */
+// The cut of a session past the heap bound moves a 1/BOUND_STEPS of what fits at a time: a spine that lost a row is folded from
+// scratch (grow), so a cut that moved with every new row made every poll of a live session that size a cold fold (30 s of worker CPU
+// on the user's ~5 500-call session, 2026-10-21). Between steps the spine is folded on with the new rows only.
+const BOUND_STEPS = 10;
+/** The rows a query folds: all of them while their spine fits the heap budget, else the newest that do, cut at a multiple of a tenth
+ *  of what fits (BOUND_STEPS), with the `truncated` the document carries — the same {shown, total, kept_mb, file_mb} the board draws
+ *  (invariant 4, 1.5 K-06). */
 function fitting(rows) {
   const n = Math.max(1, Math.floor((heapBudget() - working(rows)) / SPINE_PER_ROW));
   if (rows.length <= n) return { read: rows, bound: null };
-  const read = rows.slice(-n);
+  const step = Math.max(1, Math.floor(n / BOUND_STEPS));
+  const read = rows.slice(Math.ceil((rows.length - n) / step) * step);
   return { read, bound: { shown: calls(read), total: calls(rows), kept_mb: mb(stored(read)), file_mb: mb(stored(rows)) } };
 }
 // A keyless record is in this session because the segment index named it so (3.4 合成键): its refs carry that name.
