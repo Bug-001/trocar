@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { fork, spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { once } from 'node:events'
+import { once, EventEmitter } from 'node:events'
 import { createQueryService, CRASH_COOLDOWN_MS } from '../../src/query/service.mjs'
 import { createServer } from '../../src/server.mjs'
 import { TOKEN, withToken } from '../server/face.mjs'
@@ -247,6 +247,48 @@ test('the deadline measures silence: a body waiting on a slow reader is not kill
     assert.equal(res.text(), WANT, 'the whole document arrived')
     assert.ok(res.ended)
     assert.deepEqual(said, [], 'no failure was recorded')
+  } finally {
+    svc.stop()
+  }
+})
+
+test('a reader that never drains does not hold the queue: it is abandoned after pauseMs, its connection destroyed, nothing recorded (4.4 §Plan ③)', async () => {
+  const said = []
+  const WANT = JSON.stringify({ a: 'x'.repeat(1000) })
+  // every request is answered in two writes, so a full response pauses the worker mid-frame
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), pauseMs: 100, failure: (w, e) => said.push(e.message),
+    fork: fake(`const b = ${JSON.stringify(WANT)}; process.stdout.write('200 ' + b.length + '\\n' + b.slice(0, 500)); setTimeout(() => process.stdout.write(b.slice(500)), 50)`) })
+  const stuck = Object.assign(new EventEmitter(), { destroyed: false, ended: false,
+    writeHead() {}, write: () => false, end() { stuck.ended = true }, destroy() { stuck.destroyed = true; stuck.emit('close') } })
+  try {
+    const held = svc.relay({ name: 'segments', params: {}, res: stuck })
+    const next = recorder()
+    await within(Promise.all([held, svc.relay({ name: 'classes', params: {}, res: next })]), 5000, 'the read behind a reader that never drains')
+    assert.equal(next.text(), WANT, 'the next reader gets its whole document')
+    assert.ok(stuck.destroyed && !stuck.ended, 'the stuck reader is cut off, never ended short')
+    assert.deepEqual(said, [], 'a reader that went away is not a query failure')
+  } finally {
+    svc.stop()
+  }
+})
+
+test('a crash after earlier requests\' stderr still names its cause (3.5:42)', async () => {
+  const said = []
+  const WANT = JSON.stringify({ segments: [] })
+  const worker = () => spawn(process.execPath, ['-e', `let n = 0
+process.stdin.on('data', (d) => { if (!String(d).includes('\\n')) return
+  if (++n === 1) { process.stderr.write('lowered priority, gc: scavenge 12 -> 9 MB\\n'.repeat(200), () => { const b = ${JSON.stringify(WANT)}; process.stdout.write('200 ' + b.length + '\\n' + b) }); return }
+  process.stderr.write('<--- Last few GCs --->\\n\\nFATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\\n' + ' 1: 0x1 node::Abort() [node]\\n'.repeat(300), () => process.kill(process.pid, 'SIGKILL'))
+})`], { stdio: ['pipe', 'pipe', 'pipe'] })
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), failure: (w, e) => said.push(e.message), fork: worker })
+  try {
+    const first = recorder()
+    await svc.relay({ name: 'segments', params: {}, res: first })
+    assert.equal(first.text(), WANT)
+    await new Promise((d) => setTimeout(d, 50))
+    await assert.rejects(svc.relay({ name: 'classes', params: {}, res: recorder() }))
+    assert.equal(said.length, 1)
+    assert.match(said[0], /FATAL ERROR: Reached heap limit/, 'the reason carries the cause line, not the earlier requests\' stderr')
   } finally {
     svc.stop()
   }

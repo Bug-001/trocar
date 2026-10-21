@@ -23,6 +23,10 @@ import { OS_PROMPT_MS } from '../off/root-store.mjs'
 
 const WORKER = fileURLToPath(new URL('./worker.mjs', import.meta.url))
 const DEADLINE_MS = 30_000 // a worker SILENT this long is wedged, not slow: the queue must not be held for ever. A body waiting on a slow reader is not silence.
+/** A response full this long with no 'drain' is a reader that is not reading: it is let go (4.4 §Plan ③), or it held every read of
+ *  every client behind it (17 min, 2026-10-21). Long enough that a merely slow reader of a large body is never cut. */
+const PAUSE_MS = 60_000
+const STATS_MS = 60_000 // the read-cost line in the daemon's log: once a minute, only when there were reads (4.4 §服务形状)
 /** How long a request that just crashed the worker is answered 500 with that crash's reason instead of being forked into the same
  *  crash again (3.5 §读不全不静默): the board polls every 1.5 s, and each fork re-read the whole session it died on. */
 export const CRASH_COOLDOWN_MS = 60_000
@@ -41,9 +45,13 @@ const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon y
 
 const forkWorker = (home) => fork(WORKER, [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: [`--max-old-space-size=${WORKER_MEMORY_MB}`] })
 
-export function createQueryService({ home, failure = () => {}, fork: spawn = forkWorker, deadlineMs = DEADLINE_MS, controlDeadlineMs = CONTROL_DEADLINE_MS, idleMs = QUERY_IDLE_MS, now = Date.now }) {
+const logLine = (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`) // the daemon's stdout is its log
+const mb = (n) => `${(n / 1048576).toFixed(1)} MB`
+
+export function createQueryService({ home, failure = () => {}, fork: spawn = forkWorker, deadlineMs = DEADLINE_MS, controlDeadlineMs = CONTROL_DEADLINE_MS, idleMs = QUERY_IDLE_MS, pauseMs = PAUSE_MS, say = logLine, now = Date.now }) {
   let asked = 0, idle = null // requests queued or in flight; the idle clock, running only while there are none
-  let child = null, pending = null, head = '', left = 0, errHead = '', errTail = '', paused = false
+  let child = null, pending = null, head = '', left = 0, errHead = '', errTail = '', paused = false, pauseTimer = null
+  let stats = new Map(), statsTimer = null // per name: {reads, bytes, cpu, slowest} since the last line
   let queue = Promise.resolve()
   let crashed = null // {line, reason, at}: the request the last worker died on, while that streak lasts
 
@@ -56,6 +64,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   function resumeChild() {
     if (!paused) return
     paused = false
+    clearTimeout(pauseTimer)
     if (pending) arm(pending)
     if (child) child.stdout.resume()
   }
@@ -78,7 +87,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   // (4.4 D66 ③), which the board read as "not JSON" instead of "cut off".
   function drop(why) {
     const c = child, p = pending
-    clearTimeout(idle)
+    clearTimeout(idle); clearTimeout(pauseTimer)
     child = null; pending = null; head = ''; left = 0; errHead = ''; errTail = ''; paused = false
     if (c) { c.removeAllListeners(); try { c.kill() } catch { /* already gone */ } }
     if (p) {
@@ -88,10 +97,13 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     }
   }
 
-  /** What stderr says about a crash: the first fatal line (V8's `FATAL ERROR: …`, a thrown `…Error: …`) and the tail. */
+  /** What stderr says about a crash, in one line: the cause (V8's `FATAL ERROR: …` / `Check failed` / heap limit, a thrown
+   *  `…Error: …`), the first stack frame after it, and the tail. Only the dying request's stderr: run() starts it afresh. */
   function stderrReason() {
-    const fatal = /^.*(?:FATAL ERROR|Error):.*$/m.exec(errHead)
-    const first = fatal ? fatal[0].trim() : errHead.slice(0, 600).trim()
+    const lines = errHead.split('\n').map((l) => l.trim()).filter(Boolean)
+    const at = lines.findIndex((l) => /FATAL ERROR|Check failed|heap limit|\b\w*Error:/.test(l))
+    const frame = at < 0 ? undefined : lines.slice(at + 1).find((l) => /^(?:at\s|\d+:\s)/.test(l))
+    const first = at < 0 ? errHead.slice(0, 600).trim() : [lines[at], frame].filter(Boolean).join(' · ')
     const tail = errTail.trim()
     return [first, tail && !first.includes(tail) ? `… ${tail}` : ''].filter(Boolean).join(' ')
   }
@@ -121,7 +133,8 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
 
   const failWorker = (reason) => failure('daemon', Object.assign(new Error(reason), { code: 'query-failed' }))
 
-  // The frame reader: `<status> <len>\n` then exactly `len` bytes, straight into the response. Nothing is parsed.
+  // The frame reader: `<status> <len> <enc> <cpu_ms>\n` then exactly `len` bytes, straight into the response. Nothing is parsed.
+  // `enc` is `gzip` when the worker compressed the bytes (the request asked it: 4.4 §服务形状) and `-` otherwise.
   function onData(b) {
     while (b.length) {
       if (!left) {
@@ -129,10 +142,12 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
         if (nl < 0) { head += b.toString('latin1'); return }
         head += b.subarray(0, nl).toString('latin1')
         b = b.subarray(nl + 1)
-        const [status, len] = head.split(' ')
+        const [status, len, enc = '-', cpu = '0'] = head.split(' ')
         head = ''
         if (!pending) return // a frame nobody waits for (its request died): the worker is out of step
-        pending.res.writeHead(Number(status), { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': len })
+        pending.bytes = Number(len); pending.cpu = Number(cpu) || 0
+        pending.res.writeHead(Number(status), { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': len,
+          ...(enc === 'gzip' ? { 'content-encoding': 'gzip', vary: 'accept-encoding' } : {}) })
         pending.headed = true
         left = Number(len)
         if (!left) { settle() ; continue }
@@ -142,7 +157,14 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
       left -= take.length
       b = b.subarray(take.length)
       const room = pending.res.write(take)
-      if (!room && child && !paused) { paused = true; clearTimeout(pending.timer); child.stdout.pause(); const c = child; pending.res.once('drain', () => { if (child === c) resumeChild() }) }
+      if (!room && child && !paused) {
+        paused = true; clearTimeout(pending.timer); child.stdout.pause()
+        const c = child, p = pending, res = p.res
+        res.once('drain', () => { if (child === c) resumeChild() })
+        // no drain within pauseMs: that reader is let go like one that left, and its connection is cut, never ended short
+        pauseTimer = setTimeout(() => { if (pending === p && p.res === res) { abandon(res); try { res.destroy?.() } catch { /* already closed */ } } }, pauseMs)
+        pauseTimer.unref?.()
+      }
       else if (left && !paused) arm(pending)
       if (!left) settle()
     }
@@ -153,6 +175,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     pending = null
     clearTimeout(p.timer)
     if (crashed && crashed.line === p.line) crashed = null // that request is answered again: the streak is over
+    count(p)
     resumeChild() // the document is through: nothing is left to hold off for, and no drain comes after end()
     p.res.end()
     p.done()
@@ -169,20 +192,34 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     resumeChild()
   }
 
-  const run = (line, res, ms) => new Promise((done, fail) => {
+  /** What reads cost, per name, for the once-a-minute line (4.4 §服务形状): reads, bytes out, the worker's CPU, the slowest wall time. */
+  function count(p) {
+    const s = stats.get(p.name) || { reads: 0, bytes: 0, cpu: 0, slowest: 0 }
+    s.reads++; s.bytes += p.bytes || 0; s.cpu += p.cpu || 0; s.slowest = Math.max(s.slowest, now() - p.t0)
+    stats.set(p.name, s)
+    statsTimer ||= setInterval(() => {
+      if (!stats.size) return
+      say(`query reads, last minute: ${[...stats].map(([n, s]) => `${n} ${s.reads}× ${mb(s.bytes)} out, ${Math.round(s.cpu)} ms worker cpu, slowest ${s.slowest} ms`).join('; ')}`)
+      stats = new Map()
+    }, STATS_MS)
+    statsTimer.unref?.()
+  }
+
+  const run = (line, res, ms, name) => new Promise((done, fail) => {
     // The request the last worker died on, again within its cool-down: answered with that crash, not forked into it again.
     if (crashed && crashed.line === line && now() - crashed.at < CRASH_COOLDOWN_MS) { fail(new Error(crashed.reason)); return }
     const c = child || start()
-    const p = { res, done, fail, quiet: false, line, ms, headed: false }
+    errHead = ''; errTail = '' // a crash's reason is THIS request's stderr: a long-lived worker's earlier noise filled the head
+    const p = { res, done, fail, quiet: false, line, ms, headed: false, name, t0: now() }
     arm(p)
     pending = p
     c.stdin.write(line)
   })
 
   /** Fork a worker and give it this very query, with nobody waiting for the answer: the next query finds it warm. */
-  const warmUp = (line) => { const go = () => run(line, SINK, deadlineMs); queue = counted(queue.then(go, go)).catch(() => {}) }
+  const warmUp = (line, name) => { const go = () => run(line, SINK, deadlineMs, name); queue = counted(queue.then(go, go)).catch(() => {}) }
 
-  const lineOf = (name, params, indent = 0) => JSON.stringify({ name, params, indent }) + '\n'
+  const lineOf = (name, params, indent = 0, gzip = false) => JSON.stringify({ name, params, indent, ...(gzip ? { gzip } : {}) }) + '\n'
 
   /** Every request is counted from the moment it is queued until it is answered or failed; at none, the idle clock starts. */
   const counted = (task) => {
@@ -198,7 +235,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   }
 
   /** Hand `line` to the worker (forked if there is none: run() starts it) and let its frame flow into `res`. */
-  const answer = (line, res, ms = deadlineMs) => {
+  const answer = (line, res, ms, name) => {
     // FIRST, before anything that can await: a caller may be gone at any moment, and the worker must survive it.
     let gone = false, finish, failRoute
     const answered = new Promise((resolve, reject) => { finish = resolve; failRoute = reject })
@@ -206,7 +243,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     // The handler answers `res` itself, so the server sends nothing: nothing of this document is held in this
     // process's memory as a JavaScript value. A request that failed does not hold the next one up, and its
     // rejection reaches the server, which answers 500.
-    const go = () => run(line, res, ms)
+    const go = () => run(line, res, ms, name)
     const task = counted(queue.then(go, go))
     queue = task.catch(() => {})
     // Answered as soon as EITHER the document is through or the caller is gone; a failure is raised only while there
@@ -226,24 +263,25 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     for (const [k, v] of query) if (k !== 'name' && k !== 'indent') params[k] = v
     const line = lineOf(name, params, query.get('indent') || 0)
     if (!child) { // the cold path: answered at once, warmed behind the answer (see the head of this file)
-      warmUp(line)
+      warmUp(line, name)
       res.writeHead(503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(NO_WORKER) })
       res.end(NO_WORKER)
       return undefined
     }
-    return answer(line, res)
+    return answer(line, res, deadlineMs, name)
   }
 
   /** The board's `GET /api/<name>` (4.4, D66): the same frame path, but the board has no local path to fall back to,
-   *  so with no worker it forks one and waits its turn instead of the cold 503. The caller checked the name. */
-  const relay = ({ name, params = {}, res }) => answer(lineOf(name, params), res)
+   *  so with no worker it forks one and waits its turn instead of the cold 503. The caller checked the name. `gzip`: the
+   *  reader takes gzip, so the worker compresses (the daemon never encodes a document, D63 ①). */
+  const relay = ({ name, params = {}, res, gzip = false }) => answer(lineOf(name, params, 0, gzip), res, deadlineMs, name)
 
   /** The board's `/control/<verb>` (4.4 §控制面): the same queue and frame path as `relay`, so a control verb waits its turn behind a query and the
    *  worker runs the CLI's own function (src/control/board.mjs). The caller checked the verb and parsed the small request body. */
-  const control = ({ verb, body = {}, res }) => answer(JSON.stringify({ control: verb, body }) + '\n', res, controlDeadlineMs)
+  const control = ({ verb, body = {}, res }) => answer(JSON.stringify({ control: verb, body }) + '\n', res, controlDeadlineMs, `control/${verb}`)
 
   /** Fork a worker (if there is none) and run this query with nobody waiting: the board's page load warms it (4.4). */
-  const warm = ({ name, params = {} }) => warmUp(lineOf(name, params))
+  const warm = ({ name, params = {} }) => warmUp(lineOf(name, params), name)
 
-  return { route, relay, control, warm, path: QUERY_PATH, stop: () => drop('the daemon is stopping') }
+  return { route, relay, control, warm, path: QUERY_PATH, stop: () => { clearInterval(statsTimer); statsTimer = null; drop('the daemon is stopping') } }
 }
