@@ -4,7 +4,8 @@
 // break by its `brk` pair, and nothing else of their contents. A projection like the index (invariant 2, D59): delete
 // it and the next open rebuilds it, answer for answer the same.
 //
-// Lines: `{"v":PROJ_V}`, then `{"d":def}`, `{"c":row}`, `{"t":row}`, `{"b":brk}`, `{"s":{k,v}}` in any order. Definitions, rows
+// Lines: `{"v":PROJ_V,"id"}` (`id`: a random id taken when the file is made, which the fold log beside it names as its own: a
+// projection rebuilt is another projection, and src/query/fold-log.mjs drops a log that names another), then `{"d":def}`, `{"c":row}`, `{"t":row}`, `{"b":brk}`, `{"s":{k,v}}` in any order. Definitions, rows
 // and shared values stay on disk: the store holds key → where its line is (compact columns) and reads a line back when asked, the
 // most recently used rows and shared values kept up to a few MiB of heap, so its heap does not grow with the session's rows
 // (extraction's bound, 4.3 §4). Breaks are held. A `t` line is a held row (extracted after a member that failed, §3.9): opening stops at the first one and cuts the
@@ -24,13 +25,13 @@
 // memory, about the projection's bytes per call extracted), so its V8 heap is bounded as the worker's is.
 import nodeFs from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { indexDir } from './index-build.mjs';
 import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
 import { lineFile } from './line-file.mjs';
 
-export const PROJ_V = 6;
+export const PROJ_V = 7;
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
 const SHARE_DEPTH = 3, SHARE_MIN = 48;
 // rows and shared values read back are kept by what they weigh in the heap (a row grows with its context: a count let a long
@@ -39,16 +40,17 @@ const ROW_HEAP = 2 << 20, SHARED_HEAP = 2 << 20, SEEN = 1 << 14;
 // what a row or shared value read back costs in the heap per byte of its line: 2.6 measured (after a forced GC) on rows read back
 // with their shared values put back unshared, from test/query/big-session.mjs live(0.08) and live(0.2) (a row parsed alone 1.9, a
 // shared value 1.95), 3.5-7 on the user's live session (a heap diagnosis); 2026-10-22
-const HEAP_PER_LINE_BYTE = 4;
+export const HEAP_PER_LINE_BYTE = 4;
 /** What an open store keeps at most of rows and shared values read back (each cache holds one to two times its figure): the heap
  *  a warm session's store costs beside its reduction (src/query/named/session.mjs). */
 export const STORE_HEAP = 2 * (ROW_HEAP + SHARED_HEAP);
 const CHUNK = 1 << 20;
-const NAME = /^[0-9a-f]{32}\.ndjson$/;
+const NAME = /^([0-9a-f]{32})(?:\.fold)?\.ndjson$/; // a projection, or its fold log (src/query/fold-log.mjs)
 
 const ctxDir = (home) => path.join(indexDir(home), 'ctx');
 const hashOf = (key) => createHash('sha256').update(String(key)).digest('hex').slice(0, 32);
 export const projectionFile = (home, sessionKey) => path.join(ctxDir(home), `${hashOf(sessionKey)}.ndjson`);
+const newId = () => randomBytes(12).toString('base64url');
 const pairKey = (a, b) => `${a}\n${b}`;
 
 /** posCmp(ridA, ridB): write order of two record ids `<segment>:<line>` — segment instant, collision suffix, line. */
@@ -60,7 +62,7 @@ export function posCmp(a, b) {
 }
 
 // Every line of `file` with its byte offset and length (newline excluded), read in chunks; `nl`: it ended in a newline.
-function* linesOf(fs, file) {
+export function* linesOf(fs, file) {
   let fd;
   try { fd = fs.openSync(file, 'r'); } catch (e) { if (e.code === 'ENOENT') return; throw e; }
   try {
@@ -90,7 +92,7 @@ function eachSlot(v, depth, visit) {
 }
 // key → [offset, length] of a line on disk: a Map to a slot, the places in two typed columns (no array per key); a slot never
 // changes while the store is open, and names its key back (the array shares the Map's key strings)
-function lineIndex() {
+export function lineIndex() {
   const slot = new Map(), names = [];
   let off = new Float64Array(256), len = new Uint32Array(256);
   return {
@@ -210,6 +212,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     return copy;
   }
   const rebuilt = (reason) => {
+    id = newId();
     for (const m of [at, rowAt, rowCache, brks, sharedAt, sharedCache, seen]) m.clear();
     bytes = 0;
     if (write) { try { fs.rmSync(file, { force: true }); } catch { /* cut before the next append */ } }
@@ -217,14 +220,14 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     errors.push({ where: 'projection', code: 'projection-rebuilt', level: 'note', reason });
   };
 
-  let head = true, bad = null, bytes = 0;
+  let head = true, bad = null, bytes = 0, id = newId();
   for (const l of linesOf(fs, file)) {
     if (bad) { rebuilt(bad); bad = null; break; } // a bad line that was not the last
     const o = parse(l.text);
     if (head) {
       if (!l.nl || !o) { bad = 'The stored context projection has no readable header; it is rebuilt from the capture.'; continue; }
-      if (o.v !== PROJ_V) { rebuilt(`The stored context projection is of version ${JSON.stringify(o.v)}, not ${PROJ_V}; it is rebuilt from the capture.`); break; }
-      head = false; bytes = l.off + l.len + 1; continue;
+      if (o.v !== PROJ_V || typeof o.id !== 'string') { rebuilt(`The stored context projection is of version ${JSON.stringify(o.v)}, not ${PROJ_V}; it is rebuilt from the capture.`); break; }
+      head = false; id = o.id; bytes = l.off + l.len + 1; continue;
     }
     if (o && o.t) break; // held rows of an earlier process: from here on everything is extracted again
     if (!l.nl || !shaped(o)) { bad = `Line at byte ${l.off} of the stored context projection does not parse; it is rebuilt from the capture.`; continue; }
@@ -243,7 +246,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     for (const r of rs) { const e = encode(r, all); all.push(tent ? { t: e, row: r } : { c: e, row: r }); }
     for (const b of bs) all.push({ b });
     shares.clear();
-    let text = lines.bytes ? '' : `${JSON.stringify({ v: PROJ_V })}\n`;
+    let text = lines.bytes ? '' : `${JSON.stringify({ v: PROJ_V, id })}\n`;
     const placed = [];
     let off = Buffer.byteLength(text);
     for (const o of all) {
@@ -286,32 +289,44 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     brks,
     brk: (prevBid, curBid) => brks.get(pairKey(prevBid, curBid)),
     append,
+    /** The header's id (taken now when the file is made or rebuilt); `bytes`: the length of the whole lines it holds. */
+    get id() { return id; },
     get bytes() { return lines.bytes; },
   };
 }
 
 /** gcProjections({home, fs, liveKeys, keepKeys, capBytes}) → {deleted: [file]}: drops the projections of sessions not in
  *  `liveKeys`, then the least recently opened (mtime: opening touches it) until the total is within `capBytes` (512 MiB).
- *  Never one of `keepKeys` (the sessions open or followed: evicting one would cost its whole extraction on the next read).
- *  `liveKeys` is required: no list is not "no session lives". Only files named like a projection, only under index/ctx/. */
+ *  A projection and its fold log go together and count together. Never one of `keepKeys` (the sessions open or followed:
+ *  evicting one would cost its whole extraction on the next read). `liveKeys` is required: no list is not "no session lives".
+ *  Only files named like a projection or a fold log, only under index/ctx/. */
 export function gcProjections({ home = trocarHome(), fs = nodeFs, liveKeys, keepKeys = [], capBytes = CAP_BYTES } = {}) {
   if (!liveKeys || typeof liveKeys[Symbol.iterator] !== 'function') throw new TypeError('gcProjections needs liveKeys, the sessions that still have members');
   const dir = ctxDir(home);
   let names;
-  try { names = fs.readdirSync(dir).filter((n) => NAME.test(n)); } catch (e) { if (e.code === 'ENOENT') return { deleted: [] }; throw e; }
-  const file = (k) => `${hashOf(k)}.ndjson`;
-  const keep = new Set([...keepKeys].map(file)), live = new Set([...liveKeys].map(file));
+  try { names = fs.readdirSync(dir); } catch (e) { if (e.code === 'ENOENT') return { deleted: [] }; throw e; }
+  const keep = new Set([...keepKeys].map(hashOf)), live = new Set([...liveKeys].map(hashOf));
+  const pairs = new Map(); // hash → {files, size, t}
+  for (const n of names) {
+    const m = NAME.exec(n);
+    if (!m) continue;
+    const p = pairs.get(m[1]) || { h: m[1], files: [], size: 0, t: 0 };
+    pairs.set(m[1], p);
+    p.files.push(n);
+    try { const st = fs.statSync(path.join(dir, n)); p.size += st.size; p.t = Math.max(p.t, st.mtimeMs); } catch { /* gone meanwhile */ }
+  }
   const deleted = [];
-  const drop = (n) => { try { fs.rmSync(path.join(dir, n), { force: true }); deleted.push(path.join(dir, n)); } catch { /* the next GC */ } };
+  const drop = (p) => { for (const n of p.files) { try { fs.rmSync(path.join(dir, n), { force: true }); deleted.push(path.join(dir, n)); } catch { /* the next GC */ } } };
   const kept = [];
   let total = 0;
-  for (const n of names) {
-    if (!live.has(n) && !keep.has(n)) { drop(n); continue; }
-    try { const st = fs.statSync(path.join(dir, n)); total += st.size; if (!keep.has(n)) kept.push({ n, size: st.size, t: st.mtimeMs }); } catch { /* gone meanwhile */ }
+  for (const p of pairs.values()) {
+    if (!live.has(p.h) && !keep.has(p.h)) { drop(p); continue; }
+    total += p.size;
+    if (!keep.has(p.h)) kept.push(p);
   }
-  for (const f of kept.sort((a, b) => a.t - b.t)) {
+  for (const p of kept.sort((a, b) => a.t - b.t)) {
     if (total <= capBytes) break;
-    drop(f.n); total -= f.size;
+    drop(p); total -= p.size;
   }
   return { deleted };
 }
