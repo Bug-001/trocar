@@ -12,6 +12,7 @@
     "stats": {"calls": 6, "lanes": 2},
     "logged": 0,
     "probes": 0,
+    "unknown": {"records": 1, "reason": "No registered dissector reads this record as a call.", "endpoints": ["/v1/x"]},
     "lanes": [
       {"lane": "20261021T101500Z:12", "kind": "main", "icon": "main", "label": "Main", "task": "", "count": 5, "first": "20261021T101500Z:12", "last": "20261021T101500Z:17", "peakCtx": 2800, "spawnRid": null, "parent": null, "flagged": false},
       {"lane": "20261021T101500Z:15", "kind": "subagent", "icon": "agent", "label": "Explore", "task": "Find the config loader", "count": 1, "first": "20261021T101500Z:15", "last": "20261021T101500Z:15", "peakCtx": 1100, "spawnRid": "20261021T101500Z:13", "parent": "20261021T101500Z:12", "flagged": false}
