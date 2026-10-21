@@ -85,7 +85,7 @@ test('W13 CONNECT with the right credentials: the upstream is dialled, then 200;
   assert.equal('prelude' in row, false, 'the CONNECT is mihomo\'s, with trocar\'s token: it is not recorded as the agent\'s prelude (invariant 4)')
   assert.deepEqual([row.bytes_up, row.bytes_down], [5, 5], 'the agent\'s own bytes: the opener and trocar\'s 200 are not counted')
   assert.deepEqual(L.failures, [])
-  assert.deepEqual(L.engine.stats().ingress, { connections: 1, flows: 1, health: 0, challenged: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 })
+  assert.deepEqual(L.engine.stats().ingress, { connections: 1, flows: 1, health: 0, challenged: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0, left: 0 })
 })
 
 test('W13 an agent that speaks at once (its first bytes arrive with the CONNECT) loses nothing', T, async (t) => {
@@ -840,7 +840,7 @@ test('W17 the ingress keys a connection by its own user when the lookup gives no
 
 // ── fail-open: a client that leaves, a hold that grows, a command that is not CONNECT (4.8 §5.1) ───────────────────────────────────
 // Each is a MUST the ingress carries. Removing any one of them left the first suite green (review 2026-10-07), so each has a test that goes red without it.
-const IDLE = { connections: 1, flows: 0, health: 0, challenged: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 } // one connection came, nothing became of it
+const IDLE = { connections: 1, flows: 0, health: 0, challenged: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0, left: 0 } // one connection came, nothing became of it
 const socksLogin = async (c) => { c.write(Buffer.from([5, 1, 2])); await c.bytes(2); c.write(Buffer.concat([Buffer.from([1, USER.length]), Buffer.from(USER), Buffer.from([TOKEN.length]), Buffer.from(TOKEN)])); await c.bytes(2) }
 const hungSocket = () => { const s = new PassThrough(); s.connecting = true; return s } // a TCP connect that never completes; destroy() is its close
 const until = (pred, what, ms = 2000) => within((async () => { while (!pred()) await sleep(5) })(), ms, what)
@@ -917,7 +917,7 @@ test('W13 a client that leaves while lookupIngress is still running never gets a
   await sleep(100); c.sock.resetAndDestroy()
   await sleep(500) // the lookup has returned by now
   assert.equal(proxy.socks.length, 0, 'not one connection to the proxy')
-  assert.deepEqual(L.dials, []); assert.equal(L.flows.length, 0); assert.deepEqual(L.failures, []); assert.deepEqual(L.engine.stats().ingress, IDLE)
+  assert.deepEqual(L.dials, []); assert.equal(L.flows.length, 0); assert.deepEqual(L.failures, []); assert.deepEqual(L.engine.stats().ingress, { ...IDLE, left: 1 }, 'counted as a client that left while it was judged')
 })
 
 test('W13 a SOCKS5 command that is not CONNECT (BIND, UDP ASSOCIATE) is answered "command not supported" and recorded ingress-unknown; no lookup, no dial', T, async (t) => {

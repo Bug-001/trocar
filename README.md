@@ -413,7 +413,8 @@ config library (creating a one-key entry when none is in effect; `off` removes i
 PAC is served by the daemon on loopback: loopback and your bypass list go direct, the rest goes through the door, and
 when the door does not answer, the way Desktop would go without trocar: your system proxy, or direct when none is set.
 The door itself also leaves through your system proxy, and follows it when you change it. A process trocar cannot
-confirm is yours still gets a PAC, with your system proxy and no door. It takes effect at the next start of the app;
+confirm is yours still gets a PAC, with your system proxy and no door; one that leaves before trocar could tell is
+only counted, never reported as refused. It takes effect at the next start of the app;
 no administrator rights. Desktop's own first-party hosts (sign-in, the updater, the Code tab's download) are forwarded,
 not decrypted.
 

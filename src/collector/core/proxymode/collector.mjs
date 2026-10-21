@@ -206,8 +206,9 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
 
   /** GET /trocar.pac on the auth:false door (P10): the door leg for this user's processes while its harness is on; a requester whose owner could not
    *  be read, and every requester after off, gets only the app's own way — never an empty answer, which would send the app direct around the user's
-   *  system proxy; another user's process is refused. */
-  async function servePac({ peer, user, path: p }) {
+   *  system proxy; another user's process is refused; a requester whose owner could not be read and that left while it was judged (`left()`, the
+   *  ingress's) gets nothing and is recorded nothing. */
+  async function servePac({ peer, user, path: p, left = async () => false }) {
     const d = doors.get(user)
     if (!d || d.auth) return null
     const { pid: q, why, sameUser } = await ident.owningPid(peer)
@@ -217,7 +218,9 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       record({ event: 'failure', where: 'ingress', code: a.code, peer, reason: `a request for trocar's proxy settings file (PAC) was refused: ${a.detail}` })
       return null
     }
-    // an owner that could not be read gets the door-less PAC (the app's own way): an empty answer would send the app direct around the system proxy
+    // an owner that could not be read gets the door-less PAC (the app's own way): an empty answer would send the app direct around the system proxy;
+    // a requester that left while it was judged (the ingress's `left`) gets nothing and no record — nothing was served (P10)
+    if (!mine && await left()) return null
     if (!mine) record({ event: 'failure', where: 'ingress', code: CODE.pacOwnerUnread, peer, reason: `served trocar's proxy settings file (PAC) without routing through trocar: ${a.detail}${why ? ` (owner ${why})` : ''}; the app keeps its own way until it fetches the PAC again` })
     const m = (facts && identify(facts)) || {}
     if (mine && m.reason === 'match' && onSet.has(m.agent)) seen.add({ harness: m.agent, pid: q, start: facts.startedAt ?? null }) // taking the PAC is reading the entry (P12)
