@@ -24,12 +24,13 @@ export function sourceOf(rec) {
   if (!SRC.has(rec)) SRC.set(rec, { id: rec.id, stream: rec._stream, sid: sessionKeyOf(rec).key ?? rec._synthKey ?? null });
   return SRC.get(rec);
 }
-/** segmentsIn(rec, field, text) → seg(path, of, extra): the segments of one field of one record (the field is scanned once). */
+/** segmentsIn(rec, field, text) → seg(path, of, extra, depth): the segments of one field of one record (the field is scanned once);
+ *  `depth`: how far below the item its blocks are addressed (0: the item is one block, its span is all that is kept). */
 export function segmentsIn(rec, field, text) {
   const src = sourceOf(rec);
   let root = null;
   try { root = typeof text === 'string' ? scanJson(text) : null; } catch { root = null; }
-  return (path, of, extra) => ({ src, field, path, node: root ? pruned(nodeAt(root, path), BLOCK_DEPTH) : null, of, ...extra });
+  return (path, of, extra, depth = BLOCK_DEPTH) => ({ src, field, path, node: root ? pruned(nodeAt(root, path), depth) : null, of, ...extra });
 }
 
 // → { up, own, contextState, missing }: 'reconstructed' when the whole chain is in the capture, else 'partial' with what is

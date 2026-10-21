@@ -18,6 +18,7 @@
 // context anywhere up the chain = 'server_edited'. Bytes are untouched: request blocks are
 // located in the record they came from (locate → req_body path); an assistant reply is assembled from the streamed
 // reply, so it says where it came from instead of a byte span. Leaf module.
+import { createHash } from 'node:crypto';
 import { parsedRequestBody } from './request-body.mjs';
 import { isVolatile, serverEdited } from './cc.mjs';
 import { contextStateOfRequest, respIncompleteOf } from './capture-labels.mjs';
@@ -62,13 +63,29 @@ function replySegs(rec) {
 // over nothing of the record (a closure here would keep the record alive with the segment).
 const systemText = (r) => ({ type: 'text', text: bodyOf(r).system });
 const at = (key, i) => (r) => bodyOf(r)[key][i];
-const own = (rec, body) => {
-  const seg = segmentsIn(rec, 'req_body', rec.req_body);
+// An item that is the same bytes as one a call of this session already sent is that call's parsed item: Claude Code resends its
+// system and tools with every call, and held once per call they were most of what a session's spine cost (3.5 §内存有界). Keyed
+// by a digest of the item's bytes, never the bytes (a slice of the body would keep the whole body). Parsed items are read-only.
+function sharing() {
+  const byDigest = new Map();
+  return (text, node, item) => {
+    if (!node || !item || typeof item !== 'object') return item;
+    const k = createHash('sha256').update(text.slice(node.start, node.end)).digest('base64');
+    const had = byDigest.get(k);
+    if (had !== undefined) return had;
+    byDigest.set(k, item);
+    return item;
+  };
+}
+const own = (rec, body, share) => {
+  const seg0 = segmentsIn(rec, 'req_body', rec.req_body);
+  // a system or tools item is one block (locate: no path below it), so its span is all its segment keeps
+  const seg = (path, of, item) => { const s = seg0(path, of, undefined, 0); s.item = share(rec.req_body, s.node, item); return s; };
   const sys = body.system;
-  const system = typeof sys === 'string' ? [seg(['system'], systemText, { item: { type: 'text', text: sys } })]
-    : (Array.isArray(sys) ? sys : []).map((item, i) => seg(['system', i], at('system', i), { item }));
-  const tools = (Array.isArray(body.tools) ? body.tools : []).map((item, i) => seg(['tools', i], at('tools', i), { item }));
-  const messages = (Array.isArray(body.messages) ? body.messages : []).map((m, i) => seg(['messages', i], at('messages', i), { arr: Array.isArray(m && m.content) }));
+  const system = typeof sys === 'string' ? [seg(['system'], systemText, { type: 'text', text: sys })]
+    : (Array.isArray(sys) ? sys : []).map((item, i) => seg(['system', i], at('system', i), item));
+  const tools = (Array.isArray(body.tools) ? body.tools : []).map((item, i) => seg(['tools', i], at('tools', i), item));
+  const messages = (Array.isArray(body.messages) ? body.messages : []).map((m, i) => seg0(['messages', i], at('messages', i), { arr: Array.isArray(m && m.content) }));
   return { system, tools, messages };
 };
 const volatile = (s) => isVolatile('system', s.item);
@@ -94,8 +111,8 @@ function finish(rec, plan) {
 
 // Plan = { thread, replyId, lineage, contextState, missing, system, tools, up, own, out, gap } for every thread call (chain.mjs);
 // `hp` = the predecessor's plan. `gap`: why this call's reply does not hand a successor a whole context, or null.
-function build(rec, body, thread, hp) {
-  const o = own(rec, body);
+function build(rec, body, thread, hp, share) {
+  const o = own(rec, body, share);
   const mine = { thread, replyId: replyIdOf(rec), out: replySegs(rec), gap: replyGap(rec) };
   if (thread.kind !== 'continue') {
     const known = thread.kind === 'create';
@@ -128,13 +145,14 @@ export function threadPlanner(read = null) {
   const byReply = new Map(); // reply id → the plan of the thread call that replied with it
   const plans = new Map(); // record id (the record itself when it has none) → plan | null
   const links = createLinks(read);
+  const share = sharing();
   const keyOf = (rec) => rec.id ?? rec;
   function get(rec) {
     if (plans.has(keyOf(rec))) return plans.get(keyOf(rec));
     const b = bodyOf(rec), t = b && Array.isArray(b.messages) ? threadOf(b) : null;
     let plan = null;
     if (t) {
-      plan = linked(build(rec, b, t, t.kind === 'continue' && t.prevId ? byReply.get(t.prevId) || null : null));
+      plan = linked(build(rec, b, t, t.kind === 'continue' && t.prevId ? byReply.get(t.prevId) || null : null, share));
       if (plan.replyId && !byReply.has(plan.replyId)) byReply.set(plan.replyId, plan);
       links.hold(plan, rec);
     }
