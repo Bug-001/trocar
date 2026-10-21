@@ -46,6 +46,17 @@ test('the largest real session, read cold by the real worker, answers 200 with a
       const d = await request(face.port, `/api/session?${new URLSearchParams({ id, since: doc.mark })}`, { headers: withToken() })
       const delta = JSON.parse(d.body)
       assert.equal(delta.base, doc.mark, 'a delta against the mark just answered')
+      // its busiest lane's tail page (3.5 §会话读 lane): a keyframe first, every id it references defined on it, ≤ 1 MB
+      const busiest = [...doc.lanes].sort((a, b) => b.count - a.count)[0]
+      const t2 = Date.now()
+      const l = await request(face.port, `/api/lane?${new URLSearchParams({ id, lane: busiest.lane })}`, { headers: withToken() })
+      const lane = JSON.parse(l.body)
+      assert.equal(l.status, 200, `lane ${busiest.lane}: ${l.body.slice(0, 600)}`)
+      assert.ok(lane.steps.length >= 1 && lane.base === null && lane.steps[0].ops.length === 1 && lane.steps[0].ops[0][0] === 1, 'the tail page starts with a keyframe')
+      const defined = new Set(lane.defs.map((x) => x.bid))
+      for (const st of lane.steps) for (const b of [...st.ops.flatMap(([op, ...a]) => (op === 1 ? a : [])), ...st.reply]) assert.ok(defined.has(b), `${st.rid}: ${b} defined on the page`)
+      assert.ok(lane.steps.length === 1 || Buffer.byteLength(JSON.stringify([lane.steps, lane.defs])) <= 1048576, 'a lane page is 1 step to 1 MB')
+      console.log(`lane ${busiest.lane} (${busiest.count} calls): ${lane.steps.length} steps, ${lane.defs.length} defs, ${Date.now() - t2} ms`)
       console.log(`real session ${id}: ${(most / 1048576).toFixed(0)} MB stored, ${shown} calls shown${t ? ` of ${t.total}` : ''}, ${doc.pending ? `pending ${doc.pending.done}/${doc.pending.total}, ` : ''}cold read ${ms} ms, delta ${Date.now() - t1} ms (${delta.calls.length} rows)`)
       if (t) assert.ok(t.shown === shown && t.shown < t.total, 'a cut session says how many calls it shows of how many')
       cuts.push(t && t.total - t.shown) // the calls left out: a live session grows at the tail between the reads
