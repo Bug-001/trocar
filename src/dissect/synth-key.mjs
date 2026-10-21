@@ -55,8 +55,8 @@ export function synthFactsOf(rec) {
 
 /** The rule itself (gate G11), over those facts in the order the calls were captured: same harness + same
  *  system-prompt hash within `gapMs` of the open session's latest call → that session; else a new one. */
-export function createSynthAssigner({ gapMs = SYNTH_GAP_MS } = {}) {
-  const open = new Map(); // `${harness}\0${hash}` → { key, lastMs }
+export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } = {}) {
+  // `${harness}\0${hash}` → { key, lastMs }; a caller that resumes the rule part-way (src/query/rows.mjs) hands in the state it saved
   return (facts) => {
     if (!facts || !facts.harness || facts.hash == null || !Number.isFinite(facts.ms)) return null;
     const { harness, hash, ms } = facts;
