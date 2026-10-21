@@ -4,7 +4,8 @@
 // The cost cell moved to replay/stepbar.mjs (2.2: the estimate is shown in ONE place, the ≈ $ button); its words are the RFC's.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createPricingLoader } from '../../src/web/v2/replay/pricing.mjs'
+import { createPricingLoader, PRICING_MS } from '../../src/web/v2/replay/pricing.mjs'
+import { backoffMs } from '../../src/web/v2/replay/follow.mjs'
 import { costCellHtml, priceStateNote } from '../../src/web/v2/replay/stepbar.mjs'
 import { costRowHtml } from '../../src/web/v2/replay/detail.mjs'
 import { costOf, priceMatch } from '../../src/web/v2/core/metrics.mjs'
@@ -30,16 +31,6 @@ test('priceStateNote: empty when the table is loaded; the reason when the read f
   assert.match(priceStateNote(null, 'HTTP 500'), /HTTP 500/)
 })
 
-test('loader: the same failure again is not a change (the raw panel is not repainted every poll); a throw is a failure with its message; overlap does not double-fetch', async () => {
-  let calls = 0
-  const L = createPricingLoader(async () => { calls++; return { ok: false, error: 'HTTP 500' } })
-  assert.equal(await L.load(), true); assert.equal(await L.load(), false); assert.equal(L.err(), 'HTTP 500'); assert.equal(calls, 2)
-  const T = createPricingLoader(async () => { throw new Error('socket hang up') })
-  assert.equal(await T.load(), true); assert.equal(T.err(), 'socket hang up')
-  let n = 0, release; const gate = new Promise((r) => { release = r })
-  const B = createPricingLoader(async () => { n++; await gate; return { ok: true, data: { pricing: TABLE } } })
-  const a = B.load(), b = B.load(); release(); assert.deepEqual(await Promise.all([a, b]), [true, false]); assert.equal(n, 1)
-})
 test('loader: an answer that is ok but not a table is a failure, not an empty table; a table handed in is used as is', async () => {
   for (const data of [null, {}, { pricing: 'x' }, { pricing: null }]) {
     const L = createPricingLoader(async () => ({ ok: true, data })); await L.load()
@@ -59,9 +50,24 @@ test('loader (V01): the server\'s models[] document becomes a table that prices 
   assert.ok(Number.isFinite(usd) && usd > 0, String(usd))
   await L.load(); assert.equal(calls, 1)
 })
-test('loader: an ok answer without models[] is a failure, and the next load asks again', async () => {
-  let calls = 0
-  const L = createPricingLoader(async () => { calls++; return { ok: true, status: 200, data: { source: 'x' } } })
-  await L.load(); assert.equal(L.table(), null); assert.ok(L.err())
-  await L.load(); assert.equal(calls, 2)
+
+test('A8 (4.4 其余 · K-29): a failed price read is retried on the back-off schedule, not on each session poll; a table ends the reads', async () => {
+  const fails = [async () => ({ ok: false, status: 500, error: 'HTTP 500' }), async () => { throw new Error('socket hang up') }, async () => ({ ok: true, data: { source: 'x' } })]
+  for (const fail of fails) {
+    let t = 0, ok = false
+    const reads = []
+    const L = createPricingLoader(async () => { reads.push(t); return ok ? { ok: true, data: { models: [{ model: 'opus', input: 15, output: 75, cache_write: 18.75, cache_read: 1.5 }] } } : fail() }, null, { now: () => t })
+    for (; t <= 200000; t += 1500) await L.load() // the session's 1.5 s ticks
+    assert.ok(reads.length > 1, 'a failed read is retried')
+    for (let k = 1; k < reads.length; k++) {
+      const gap = reads[k] - reads[k - 1], due = backoffMs(k, PRICING_MS)
+      assert.ok(gap >= due && gap < due + 1500, `read ${k}: ${gap} ms after the last, due ${due}`)
+    }
+    assert.ok(L.err())
+    ok = true
+    await L.load(true); assert.ok(L.table(), 'a reader\'s own action reads at once')
+    const n = reads.length
+    for (let i = 0; i < 40; i++, t += 1500) await L.load()
+    assert.equal(reads.length, n, 'a loaded table is not asked again')
+  }
 })
