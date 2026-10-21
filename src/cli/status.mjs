@@ -211,7 +211,12 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   // how many connections are still relayed after an off (§1.3): the daemon says; with no daemon there is no engine, so none; with one that does not answer or does not say, not known
   const rc = reply && reply.relayed
   f.relayed = d_isCounts(rc) ? { closing: rc.closing, waiting: rc.waiting, cut: 0 } : f.daemon.state === 'not-running' ? { closing: 0, waiting: 0, cut: 0 } : 'unknown'
-  if (f.relayed === 'unknown') f.relayed_reason = f.daemon.state === 'running' ? 'the daemon\'s reply does not carry the connection counts' : f.daemon.state === 'not-responding' ? `the daemon does not answer (${f.daemon.reason})` : `whether a daemon runs is not known (${f.daemon.reason})`
+  const notKnown = (what) => (f.daemon.state === 'running' ? `the daemon's reply does not carry ${what}` : f.daemon.state === 'not-responding' ? `the daemon does not answer (${f.daemon.reason})` : `whether a daemon runs is not known (${f.daemon.reason})`)
+  if (f.relayed === 'unknown') f.relayed_reason = notKnown('the connection counts')
+  // how many connections are open through trocar now (§3.5, V37): the engine's count; no daemon, no engine, none; else not known
+  const active = reply && reply.engine && reply.engine.active
+  f.connections = Number.isInteger(active) && active >= 0 ? active : f.daemon.state === 'not-running' ? 0 : 'unknown'
+  if (f.connections === 'unknown') f.connections_reason = notKnown('the count of open connections')
   // logging out (§1.1, Linux): does the OS keep the daemon after the user's last logout? A file is looked at (`/var/lib/systemd/linger/<user>`), `loginctl` never runs (R8): trocar says how, it does not do it
   if (platform === 'linux') {
     let read
@@ -471,6 +476,7 @@ export function statusDocOf(f) {
     ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}),
     board: boardOf(f),
     install: f.install, cert: f.cert, holders: f.holders, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}),
+    connections: f.connections, ...(f.connections === 'unknown' ? { connections_reason: f.connections_reason } : {}),
     ...(f.linger ? f.linger : {}), user: f.user, agent_list: f.agent_list, restart: restartOf(f), critical: criticalOf(f), failures, errors,
   }
   return doc

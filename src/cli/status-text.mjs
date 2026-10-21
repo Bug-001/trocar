@@ -63,8 +63,9 @@ function summaryPairs(doc, now) {
     const words = { 'in-place': 'installed, trusted by your user', pending: 'installed, but not trusted yet: the dialog was not answered', declined: 'installed, but you declined the trust dialog', missing: 'no longer in your trust store; run: trocar install', orphan: 'left over from an uninstall; run: trocar install', none: 'installed', unknown: null }[root]
     rows.push(['Certificate', `${words || unknown((cert.root && cert.root.reason) || 'your trust store could not be read')}${cert.expires ? `, expires ${cert.expires}` : ''}`])
   }
-  const r = doc.relayed
-  rows.push(['Connections', r === 'unknown' || !r ? unknown(doc.relayed_reason || 'the daemon did not say') : `${r.closing + r.waiting} open through trocar`])
+  // open now (V37); of those, the ones of agents turned off that are still closing (`relayed`, §1.3)
+  const n = doc.connections, r = doc.relayed, closing = r && r !== 'unknown' ? r.closing + r.waiting : 0
+  rows.push(['Connections', Number.isInteger(n) ? `${n} open through trocar${closing > 0 ? ` (${closing} from agents turned off, closing)` : ''}` : unknown(doc.connections_reason || 'the daemon did not say')])
   const fl = doc.failures
   // D51④: a program that refuses trocar's certificate is not captured for that host at all. A count of problems does not say that,
   // so the summary names it on its own row; which hosts is in `trocar status --failures` and in `critical` of the document (C.3).
