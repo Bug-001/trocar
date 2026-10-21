@@ -202,6 +202,7 @@ export function createExtractContext(store = null) {
     return at;
   }
   return {
+    held: false, // a member before the ones being extracted has no row on disk (it failed): what follows is kept in memory only
     store: { hasDef: (bid) => fresh.has(bid) || !!(store && store.hasDef(bid)) },
     defined: (bid) => fresh.add(bid),
     rowOf,
@@ -274,7 +275,7 @@ export function extract(rec, ctx) {
     const s = predX.wire.contextState, m = predX.wire.contextMissing ?? null;
     state = s === 'partial' || s === 'server_edited' ? { contextState: s, missing: m } : { contextState: 'reconstructed', missing: null };
     if (predX.gap) state = { contextState: 'partial', missing: state.missing ? `${state.missing}; ${predX.gap}` : predX.gap };
-  } else if (st && st.cont) state = { contextState: 'partial', missing: st.absent };
+  } else if (st && st.cont) state = { contextState: 'partial', missing: ctx.held ? `the call it continues (reply ${st.prev ?? '(unnamed)'}) is not extracted yet` : st.absent };
   else if (st) state = { ...st.head };
   if (st) state = st.settle(state);
   // own messages, their boundaries; file tool_uses still waiting for a result carried across records (linearContext's links)
@@ -366,7 +367,8 @@ const contexts = new WeakMap(); // store → its extraction context (slices of o
  * frontier"). `members`: the session's index rows; `recordsAt(rows)` → their records (one that does not read back is left out).
  * Extracts the members the store has no row for, in write order (posCmp), until `budgetMs` of `clock` is spent, appending each
  * chunk's definitions and rows. A member that fails to extract gets a row { x: { unparsed: reason } } kept in memory only
- * (persist: false), so the next open tries it again (§3.9). frontier: the largest rid such that every member up to it has a row;
+ * (persist: false), so the next open tries it again (§3.9); so are the rows extracted after it (one that continues it, or is written
+ * against it, would otherwise be stored without it), so what is on disk stays the rows of one pass over a prefix. frontier: the largest rid such that every member up to it has a row;
  * done / total: members with a row, members. A keyless record gets the session's synthesized key (3.4 合成键), as the query does.
  */
 export function extractMembers({ store, members, recordsAt, sessionId = null, budgetMs = Infinity, clock = () => performance.now() }) {
@@ -378,18 +380,20 @@ export function extractMembers({ store, members, recordsAt, sessionId = null, bu
   for (let i = 0; i < todo.length && !spent();) {
     const part = todo.slice(i, i + CHUNK), got = new Map();
     for (const r of recordsAt(part.map((rid) => byId.get(rid))) || []) if (r) got.set(String(r.id), r);
-    const defs = [], rows = [], failed = [];
+    const defs = [], rows = [], held = [];
     for (const rid of part) {
-      if (spent() && (rows.length || failed.length)) break;
+      if (spent() && (rows.length || held.length)) break;
       i++;
       const rec = got.get(rid);
       if (rec && sessionId != null && sessionKeyOf(rec).key == null) Object.defineProperty(rec, '_synthKey', { value: sessionId, enumerable: false, configurable: true, writable: true });
       let out = null, why = rec ? null : 'the record did not read back';
       if (rec) try { out = extract(rec, ctx); } catch (e) { why = `extraction failed: ${e && e.message ? e.message : e}`; }
-      if (out) { defs.push(...out.defs); rows.push(out.row); } else failed.push({ rid, pos: rid, x: { unparsed: why } });
+      if (!out) ctx.held = true;
+      if (out) defs.push(...out.defs);
+      (ctx.held ? held : rows).push(out ? out.row : { rid, pos: rid, x: { unparsed: why } });
     }
     store.append({ defs, rows });
-    if (failed.length) store.append({ rows: failed }, { persist: false });
+    if (held.length) store.append({ rows: held }, { persist: false });
   }
   let frontier = null, done = 0;
   for (const rid of order) if (store.rows.has(rid)) done++;

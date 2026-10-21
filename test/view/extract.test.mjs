@@ -307,12 +307,26 @@ test('(d) frontier: the largest rid with every member up to it extracted; done /
     assert.deepEqual(taken, todo.slice(0, taken.length), 'in write order');
     assert.deepEqual(r, { frontier: gap === 0 ? null : recs[(gap < 0 ? recs.length : gap) - 1].id, done: has.filter(Boolean).length, total: recs.length });
   }
-  // a member whose record does not read back has a row in memory only, so the next open extracts it again (design §3.9)
-  const home = tmpDir('trocar-extract-'), lost = recs[4].id;
-  r = extractMembers({ store: opened(home), members, recordsAt: (rows) => recordsAt(rows).filter((x) => x.id !== lost) });
-  assert.deepEqual(r, { frontier: recs.at(-1).id, done: recs.length, total: recs.length });
-  const again = opened(home);
-  assert.ok(!again.rows.has(lost));
-  assert.deepEqual(extractMembers({ store: again, members, recordsAt }), { frontier: recs.at(-1).id, done: recs.length, total: recs.length });
-  assert.ok(again.rows.get(lost).x.secs, 'extracted on the next open');
+});
+
+test('(d) a member that does not read back is held in memory with every row after it; the next open goes on to the rows of one pass', () => {
+  const all = stitchedSessions();
+  for (const name of ['threads', 'ws']) {
+    const recs = all[name], members = membersOf(recs), recordsAt = reader(recs), whole = { frontier: recs.at(-1).id, done: recs.length, total: recs.length };
+    const one = opened(tmpDir('trocar-extract-'));
+    extractMembers({ store: one, members, recordsAt });
+    recs.forEach(({ id: lost }, k) => {
+      const home = tmpDir('trocar-extract-'), first = opened(home);
+      assert.deepEqual(extractMembers({ store: first, members, recordsAt: (rows) => recordsAt(rows).filter((x) => x.id !== lost) }), whole);
+      assert.ok(first.rows.get(lost).x.unparsed, `${name} k=${k}: held unparsed`);
+      for (const r of recs.slice(k + 1)) {
+        const m = r === lost ? null : first.rows.get(r.id).x.wire?.contextMissing;
+        assert.ok(!m || !m.includes('in this capture') || one.rows.get(r.id).x.wire.contextMissing === m, `${name} k=${k} ${r.id}: no false claim`);
+      }
+      const again = opened(home);
+      assert.equal(again.rows.size, k, `${name} k=${k}: only the rows before it on disk`);
+      assert.deepEqual(extractMembers({ store: again, members, recordsAt }), whole);
+      for (const r of recs) assert.deepEqual(again.rows.get(r.id), one.rows.get(r.id), `${name} k=${k} ${r.id}`);
+    });
+  }
 });
