@@ -5,7 +5,7 @@
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
 import { esc, bytes, fmtStamp, relTime } from '../core/fmt.mjs'
-import { techDetailsHtml, popover, confirmDialog } from '../core/ui.mjs'
+import { techDetailsHtml, popover, confirmDialog, readFailure } from '../core/ui.mjs'
 import { delegate } from '../core/dom.mjs'
 import { CLASS_NAME, CLASS_DESC, FALLBACK_CLASS } from '../core/classes.mjs'
 import { planConfirm } from '../core/control.mjs'
@@ -202,7 +202,8 @@ export function mount(el, ctx) {
 
   function paint() {
     if (readFail) {
-      $('#smain').innerHTML = `<div class="scard"><p class="err">${esc(W.READ_FAIL)} · ${esc(readFail.error || 'HTTP ' + readFail.status)} · <a href="#/settings/storage">${W.RETRY}</a></p></div>`
+      const f = readFailure(W.THIS_PAGE, readFail, { id: 'stech-fail' })
+      $('#smain').innerHTML = `<div class="scard"><p class="err">${esc(f.line)} · <a href="#/settings/storage">${W.RETRY}</a></p>${f.tech}</div>`
       return
     }
     if (!docs) return

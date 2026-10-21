@@ -7,7 +7,7 @@ import { esc, bytes, fmtDay, fmtTime } from '../core/fmt.mjs'
 import { CLASS_IDS, UNCLASSIFIED } from '../core/classes.mjs'
 import { harnessKey, harnessName, harnessIcon, HARNESS_ORDER } from '../core/chips.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
-import { menuButton, infoButton, mark } from '../core/ui.mjs'
+import { menuButton, infoButton, mark, readFailure } from '../core/ui.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
 import { delegate } from '../core/dom.mjs'
 import { formatHash, parseHash } from '../core/router.mjs'
@@ -228,7 +228,10 @@ export function tableHtml(model, { h = [], cls = null, cover = [] } = {}) {
 export function stateHtml(kind, payload = {}) {
   if (kind === 'loading') return `<div class="tstate">${esc(W.LOADING)}</div>`
   if (kind === 'empty') return `<div class="tstate" data-empty${payload.cls ? ` data-class="${esc(payload.cls)}"` : ''}>${esc(payload.cls ? W.EMPTY_WINDOW_CLASS(W.classWord(payload.cls)) : W.EMPTY_WINDOW)}</div>`
-  if (kind === 'error') return `<div class="tstate"><p>${esc(W.READ_FAILED(payload.error || 'reason not known'))}</p><button type="button" class="tbtn" data-act="retry">${esc(W.RETRY)}</button></div>`
+  if (kind === 'error') { // payload.r = the failed answer {status, error} (K-29: the reason only in the technical details)
+    const f = readFailure(W.TRAFFIC, payload.r, { id: 'read-fail' })
+    return `<div class="tstate"><p>${esc(f.line)}</p><button type="button" class="tbtn" data-act="retry">${esc(W.RETRY)}</button>${f.tech}</div>`
+  }
   return ''
 }
 
@@ -255,9 +258,9 @@ export function mount(el, ctx) {
     const head = pageHeadHtml({ name: 'Traffic', scope: scope(), readAt })
     const cover = coverOf()
     let body = ''
-    if (err && (!model || model.state !== 'table')) body = stateHtml('error', { error: err })
+    if (err && (!model || model.state !== 'table')) body = stateHtml('error', { r: err })
     else if (!model) body = stateHtml('loading')
-    else if (model.state === 'none') body = stateHtml('error', { error: (model.answer && model.answer.error) || null })
+    else if (model.state === 'none') body = stateHtml('error', { r: { status: null, error: model.answer && model.answer.error } })
     else if (!model.flat.length) body = stateHtml('empty', { cls: q.cls }) + `<div class="tcap">${captionHtml(model, { cover })}</div>`
     else body = tableHtml(model, { h: q.h, cls: q.cls, cover })
     el.innerHTML = `<div class="page traf">${head}${body}</div>`
@@ -266,7 +269,7 @@ export function mount(el, ctx) {
     const r = await api.get('traffic', { since: sinceOf(q.window), limit: 500 })
     if (dead) return
     if (r.ok) { readAt = api.now(); err = null; model = remodel(r.data) }
-    else if (!model || model.state !== 'table') { err = r.error || `HTTP ${r.status}`; model = null }
+    else if (!model || model.state !== 'table') { err = r; model = null }
     paint()
     if (!unmatched) api.get('classes').then((c) => {
       // `unmatched` is not a C.5 field yet: while it is absent, 其他 stays 其他 (1.10 §前置定义, PR 5 C8)
