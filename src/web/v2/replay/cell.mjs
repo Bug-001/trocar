@@ -7,7 +7,9 @@ import { esc, kf } from '../core/fmt.mjs'
 import * as W from '../labels/replay.mjs'
 import * as C from '../labels/cells.mjs'
 import { layout } from './jsonlay.mjs'
-import { renderKind, valueOf } from './kinds.mjs'
+import { renderKind, valueOf, jsonNodeHtml } from './kinds.mjs'
+import { cellKey } from './keymap.mjs'
+import { isTyping } from '../core/keys.mjs'
 
 export const DISPLAY_CLIP = 20000
 const CELL_CAP = 2000000 // characters a cell shows at most; Copy bytes still copies all
@@ -197,4 +199,172 @@ export function cellBodyHtml(cell, mode) {
   const body = m === 'raw' ? `<pre class="cellraw">${e.body}</pre>` : `<div class="cellread ${esc(e.cls)}">${e.body}</div>`
   const more = e.next != null && e.shown < CELL_CAP ? `<span class="cellmore" data-at="${e.next}"></span>` : ''
   return `<div class="cell" data-bid="${esc(cell.bid)}" data-ck="${esc(k)}" data-mode="${m}" data-chars="${text.length}" data-shown="${e.shown}"${cell.ref != null ? ` data-ref="${esc(cell.ref)}"` : ''}>${bar}${body}${more}</div>`
+}
+
+// ── DOM wiring ────────────────────────────────────────────────────────────────────────────────────────────────────────
+const at = (v, p) => { for (const k of p) { if (v == null || typeof v !== 'object' || !Object.hasOwn(v, k)) return undefined; v = v[k] } return v }
+const blobs = new Map() // byte key -> the blob: URL made from a media cell's bytes; revoked when those bytes leave the caches
+function revoke(k) { const u = blobs.get(k); if (u) { blobs.delete(k); try { URL.revokeObjectURL(u) } catch { /* already gone */ } } }
+bodyCache.onEvict = (ref) => revoke('r:' + ref)
+cellGone = revoke
+
+// the cell behind a .cell element and the bytes it shows, or null
+function held(el) {
+  const cell = el && cells.get(el.dataset.ck), got = cell && gotOf(cell)
+  return got && got.status === 'ok' ? { cell, text: String(got.text ?? '') } : null
+}
+function blobOf(el) {
+  const x = held(el), f = (x && x.cell.r && x.cell.r.f) || {}
+  if (!x || !Array.isArray(f.data)) return null
+  const k = el.dataset.ck
+  if (blobs.has(k)) return blobs.get(k)
+  const v = valueOf(x.text), data = at(v, f.data), mime = Array.isArray(f.mime) ? String(at(v, f.mime) ?? '') : ''
+  if (typeof data !== 'string') return null
+  try {
+    const bin = atob(data), url = URL.createObjectURL(new Blob([Uint8Array.from(bin, (c) => c.charCodeAt(0))], { type: mime }))
+    blobs.set(k, url)
+    return url
+  } catch { return null }
+}
+let live = null // the one polite live region every cell speaks through
+function say(msg) {
+  if (!live || !live.isConnected) {
+    live = document.createElement('div')
+    live.className = 'sr-only'; live.setAttribute('aria-live', 'polite'); live.setAttribute('role', 'status')
+    document.body.appendChild(live)
+  }
+  live.textContent = msg
+}
+// draw a .cell again in its current mode; focus inside it moves to the same control of the new one
+function redraw(el, opt) {
+  const x = held(el)
+  if (!x || !el.isConnected) return
+  const a = document.activeElement, inside = a && el.contains(a), which = inside && a.dataset ? (a.dataset.cellmode ?? (a.dataset.cellcopy != null ? 'copy' : null)) : null
+  el.insertAdjacentHTML('beforebegin', cellBodyHtml(x.cell, modeOf(x.cell.bid, opt)))
+  const neu = el.previousElementSibling
+  el.remove()
+  if (inside && neu) (neu.querySelector(which === 'copy' ? '[data-cellcopy]' : `[data-cellmode="${which}"]`) || neu).focus?.()
+}
+async function copyBytes(el) {
+  const x = held(el)
+  if (!x) { say(C.COPY_FAILED); return }
+  const n = new TextEncoder().encode(x.text).length
+  try { await navigator.clipboard.writeText(x.text); say(C.copied(n)); return } catch { /* no clipboard API here: the textarea way */ }
+  const back = document.activeElement, ta = document.createElement('textarea')
+  ta.value = x.text; ta.setAttribute('readonly', ''); ta.className = 'sr-only'
+  document.body.appendChild(ta); ta.select()
+  let ok = false
+  try { ok = document.execCommand('copy') } catch { /* refused */ }
+  ta.remove(); back && back.focus && back.focus()
+  say(ok ? C.copied(n) : C.COPY_FAILED)
+}
+// the offset in the cell's bytes of a DOM point inside its .cellraw: the verbatim text nodes before it, the .lay ones skipped
+function offsetIn(pre, c, o) {
+  const pt = document.createRange(); pt.setStart(c, o)
+  const w = document.createTreeWalker(pre, NodeFilter.SHOW_TEXT)
+  let acc = 0
+  for (let t; (t = w.nextNode());) {
+    const lay = !!t.parentElement.closest('.lay')
+    if (t === c) return acc + (lay ? 0 : o)
+    if (pt.comparePoint(t, t.length) > 0) return acc
+    if (!lay) acc += t.length
+  }
+  return acc
+}
+const idle = (fn) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout: 500 }) : setTimeout(fn, 0))
+
+// click / keys / copy / growth / media / json disclosure on the given roots → a disposer. `s.storage` overrides localStorage.
+export function wireCells(roots, s = {}) {
+  const rs = [].concat(roots).filter(Boolean), opt = { storage: s.storage }
+  const each = (sel, fn) => { for (const r of rs) for (const el of r.querySelectorAll(sel)) fn(el) }
+  const sameBid = (bid, fn) => each('.cell', (el) => { if (el.dataset.bid === bid) fn(el) })
+  function flip(el, m) {
+    const x = held(el)
+    if (!x) return
+    setMode(x.cell.bid, m ?? (modeOf(x.cell.bid, opt) === 'raw' ? 'read' : 'raw'), opt)
+    const now = modeOf(x.cell.bid, opt)
+    sameBid(x.cell.bid, (c) => redraw(c, opt))
+    say(now === 'read' ? C.READABLE_VIEW : C.RAW_VIEW)
+  }
+  function flipDesk() { // the open cells again, in frames of at most 8 ms
+    setDeskMode(deskMode(opt) === 'raw' ? 'read' : 'raw', opt)
+    say(deskMode(opt) === 'read' ? C.READABLE_VIEW : C.RAW_VIEW)
+    const q = []; each('.cell', (el) => q.push(el))
+    const step = () => {
+      const t0 = performance.now()
+      while (q.length && performance.now() - t0 < 8) redraw(q.shift(), opt)
+      if (q.length) requestAnimationFrame(step)
+    }
+    requestAnimationFrame(step)
+  }
+  function more(sent) { // append the next slice where the reader is heading
+    const el = sent.isConnected && sent.closest('.cell'), x = held(el)
+    if (!x) return
+    const mode = el.dataset.mode, shown = Number(el.dataset.shown) || 0
+    const e = entryOf(x.cell, mode, x.text, shown)
+    if (e.shown !== shown) { redraw(el, opt); return } // another copy of this cell grew further: draw it whole
+    const { html, entry } = grow(x.cell, mode, e, x.text)
+    el.querySelector(mode === 'raw' ? ':scope > .cellraw' : ':scope > .cellread')?.insertAdjacentHTML('beforeend', html)
+    el.dataset.shown = String(entry.shown)
+    const line = clipLine(entry.shown, x.text.length), clip = el.querySelector('.cellclip')
+    if (line && clip) clip.textContent = line; else if (!line && clip) clip.remove()
+    if (entry.next != null && entry.shown < CELL_CAP) { sent.dataset.at = String(entry.next); io.observe(sent) } else sent.remove()
+  }
+  const io = new IntersectionObserver((ents) => {
+    for (const en of ents) if (en.isIntersecting) { io.unobserve(en.target); idle(() => more(en.target)) }
+  }, { rootMargin: '100% 0px' })
+  const hook = (n) => {
+    if (n.nodeType !== 1) return
+    for (const el of [n, ...n.querySelectorAll('.cellmore, img[data-media]:not([src])')]) {
+      if (el.matches('.cellmore')) io.observe(el)
+      else if (el.matches('img[data-media]:not([src])') && el.dataset.media) { const u = blobOf(el.closest('.cell')); if (u) el.src = u }
+    }
+  }
+  const onClick = (e) => {
+    const b = e.target.closest && e.target.closest('[data-cellmode],[data-cellcopy],[data-cellsave]')
+    const el = b && b.closest('.cell')
+    if (!el) return
+    if (b.dataset.cellmode != null) flip(el, b.dataset.cellmode)
+    else if (b.dataset.cellcopy != null) copyBytes(el)
+    else { const u = blobOf(el); if (u) { const a = document.createElement('a'); a.href = u; a.download = ''; a.click() } }
+  }
+  const onKey = (e) => {
+    const a = isTyping(e) ? null : cellKey(e), row = a && e.target.closest && e.target.closest('.cblk, .dblk')
+    if (!row) return
+    if (a.flipDesk) { e.preventDefault(); flipDesk(); return }
+    const el = row.querySelector('.cell')
+    if (!el) return
+    e.preventDefault()
+    if (a.flip) flip(el); else copyBytes(el)
+  }
+  const onCopy = (e) => { // exact bytes from a selection inside one Raw cell; a selection that leaves it is the browser's
+    const sel = getSelection(), r = sel && sel.rangeCount === 1 ? sel.getRangeAt(0) : null
+    const sc = r && (r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement)
+    const pre = sc && sc.closest('.cellraw'), x = pre && pre.contains(r.endContainer) && held(pre.closest('.cell'))
+    if (!x || !e.clipboardData) return
+    e.clipboardData.setData('text/plain', x.text.slice(offsetIn(pre, r.startContainer, r.startOffset), offsetIn(pre, r.endContainer, r.endOffset)))
+    e.preventDefault()
+  }
+  const onToggle = (e) => { // a json node opened for the first time: draw its children now
+    const d = e.target
+    if (!d || d.tagName !== 'DETAILS' || !d.open || d.dataset.path == null || d.children.length > 1) return
+    const x = held(d.closest('.cell'))
+    if (!x) return
+    let path
+    try { path = JSON.parse(d.dataset.path) } catch { return }
+    const v = valueOf(x.text), body = Array.isArray(x.cell.r?.f?.body) ? at(v, x.cell.r.f.body) : v
+    d.insertAdjacentHTML('beforeend', jsonNodeHtml(body, path, d.dataset.span ? d.dataset.span.split(',').map(Number) : undefined))
+  }
+  const mos = rs.map((r) => {
+    const mo = new MutationObserver((recs) => { for (const rec of recs) for (const n of rec.addedNodes) hook(n) })
+    mo.observe(r, { childList: true, subtree: true })
+    hook(r)
+    r.addEventListener('click', onClick); r.addEventListener('keydown', onKey); r.addEventListener('copy', onCopy); r.addEventListener('toggle', onToggle, true)
+    return mo
+  })
+  return () => {
+    for (const mo of mos) mo.disconnect()
+    io.disconnect()
+    for (const r of rs) { r.removeEventListener('click', onClick); r.removeEventListener('keydown', onKey); r.removeEventListener('copy', onCopy); r.removeEventListener('toggle', onToggle, true) }
+  }
 }
