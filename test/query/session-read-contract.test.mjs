@@ -33,11 +33,12 @@ test('session: a delta is based on a full answer\'s mark; pending is {done, tota
   assert.ok(Number.isInteger(pending.done) && Number.isInteger(pending.total) && pending.done < pending.total)
 })
 
-// A page's steps rebuilt from their ops: every bid is defined, the first step is a keyframe, copies stay in the parent's list.
-function lists(page, known) {
-  const held = new Map()
+// A page's steps rebuilt from their ops: every bid is defined, copies stay in the parent's list.
+// A page with no base starts with a keyframe; a --from page's first step copies from the base list the client holds.
+function lists(page, known, held = new Map()) {
   page.steps.forEach((s, i) => {
-    if (i === 0) assert.ok(s.ops.length === 1 && s.ops[0][0] === 1, `${s.rid}: a page starts with one add op`)
+    if (i === 0 && page.base === null) assert.ok(s.ops.length === 1 && s.ops[0][0] === 1, `${s.rid}: a page with no base starts with one add op`)
+    if (i === 0 && page.base !== null) assert.equal(s.parent, page.base, `${s.rid}: the first step extends the base`)
     const parent = held.get(s.parent) || []
     const out = []
     for (const [op, ...args] of s.ops) {
@@ -56,15 +57,15 @@ function lists(page, known) {
   return held
 }
 
-test('lane pages: ids defined, keyframe first, copies within the parent, base names the page they extend', () => {
-  for (const k of LANES) for (const d of doc[k].defs) assert.match(d.bid, BID, `${k}: bid`)
+test('lane pages: ids defined, keyframe only without a base, copies within the parent, base names the page they extend', () => {
+  for (const k of LANES) for (const d of doc[k].defs) { assert.match(d.bid, BID, `${k}: bid`); assert.match(d.fh, BID, `${k}: fh`) }
   const key = new Set(doc.lane_keyframe.defs.map((d) => d.bid))
-  lists(doc.lane_keyframe, key)
+  const held = lists(doc.lane_keyframe, key)
   lists(doc.lane_reset, new Set(doc.lane_reset.defs.map((d) => d.bid)))
   const ops = new Set(doc.lane_ops.defs.map((d) => d.bid))
   for (const b of ops) assert.ok(!key.has(b), `lane_ops re-sends ${b}`)
-  lists(doc.lane_ops, new Set([...key, ...ops]))
   assert.equal(doc.lane_ops.base, doc.lane_keyframe.steps.at(-1).rid)
+  lists(doc.lane_ops, new Set([...key, ...ops]), held)
   assert.equal(doc.lane_reset.base, null)
 })
 
