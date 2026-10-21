@@ -59,7 +59,7 @@ function prefixChain(flat, prev) {
 }
 // Ground-truth from PROVEN byte-identity (not the structural proxy). Strict wording per 3.3:73 — the
 // claim is only "MY outbound prefix is byte-identical", never "the provider is wrong".
-function realGroundTruth(prefixByteIdentical, read, create) {
+export function realGroundTruth(prefixByteIdentical, read, create) {
   if (!prefixByteIdentical) return null;             // no proven byte-identical reusable prefix
   if (read > 0) return null;                          // genuinely reused → normal
   return create > 0 ? 'ttl-rebuild' : 'provider-contradiction';
@@ -140,7 +140,7 @@ export function unknownFacts(r) {
   if (!b && r && typeof r.req_body === 'string') { try { b = JSON.parse(r.req_body); } catch { b = null; } }
   return { endpoint: String((r && r.endpoint) || '').split('?')[0], ua: (headersOf(r) || {})['user-agent'], model: b && typeof b.model === 'string' ? b.model : null };
 }
-function unknownSummary(recs, partial) {
+export function unknownSummary(recs, partial) {
   const uniq = (xs) => [...new Set(xs.filter(Boolean))];
   const models = uniq(recs.map((r) => r.model));
   return {
@@ -158,7 +158,7 @@ function unknownSummary(recs, partial) {
     models,
   };
 }
-function assembleUnknown(records) {
+export function assembleUnknown(records) {
   return {
     provider: 'unknown',
     unknown: unknownSummary(records || [], false),
@@ -344,7 +344,7 @@ function flatLaneFold(d, read, baselines) {
 // The body is not lost, it is where it always was: in the raw NDJSON, addressed by the same ref its
 // blocks carry.
 const REQ_KEEP = ['model', 'context_chars', 'message_count', 'tool_count', 'system_chars'];
-function slimRec(rec) {
+export function slimRec(rec) {
   if (!rec) return rec;
   const rq = rec.request || {};
   const request = {};

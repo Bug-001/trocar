@@ -11,8 +11,8 @@
 // the row's `attrs`, by list position.
 import { createHash } from 'node:crypto';
 import { admitted, flatBlockText, blockFacts, callFacts, replyPartsAnthropic, linearContext } from './analyze.mjs';
-import { hydrateForBoard, anthropicFlat, flatRequest, rawRefOf, wireOf, respRefsOf, extraMessagesOf, nonBlockKeysOf, unknownFacts, headersOf, respOf } from './assemble.mjs';
-import { slimBlock, compBucket } from './blockmeta.mjs';
+import { hydrateForBoard, anthropicFlat, flatRequest, rawRefOf, wireOf, respRefsOf, extraMessagesOf, nonBlockKeysOf, unknownFacts, headersOf, respOf, slimRec } from './assemble.mjs';
+import { slimBlock, compBucket, firstHuman } from './blockmeta.mjs';
 import { renderOf } from './render-kind.mjs';
 import { blockSpans } from '../adapters/cc.mjs';
 import { resourceRef as ccResourceRef } from '../dissect/cc.mjs';
@@ -59,7 +59,8 @@ function factsOf(b) {
   if (b.sec === 'tools') return { type: 'tool', name: b.name || '', mcp: !!b.mcp, bucket: 'tools' };
   if (b.sec === 'system') return { type: 'system', bucket: 'system' };
   const bl = b.block && typeof b.block === 'object' ? b.block : { type: 'text', text: String(b.block ?? '') };
-  return { ...blockFacts(bl), bucket: compBucket(b) };
+  // `human`: a user text's human prompt (blockmeta firstHuman), what names a lane whose first call this block opens
+  return { ...blockFacts(bl), bucket: compBucket(b), human: firstHuman([b]) ?? undefined };
 }
 
 /** definition(b, ref, exact, why) → { bid, def }: `exact` the text the ref names (null: no span, `why` says why). */
@@ -134,6 +135,17 @@ export function replyBlocks(rec, { d, format }) {
     out.push({ b, ...at, unit: p.unit ?? 0 });
   }
   return out;
+}
+
+/** blockAt(rec, ref) → the flat entry of the block `ref` names in `rec` (a request or a reply block), as extraction built it, or null. */
+export function blockAt(rec, ref) {
+  const wire = callWireOf(rec);
+  if (!wire || ref == null) return null;
+  const { flat, at } = requestBlocks(rec, wire);
+  const i = at.findIndex((a) => a.ref === ref);
+  if (i >= 0) return flat[i];
+  const p = replyBlocks(rec, wire).find((x) => x.ref === ref);
+  return p ? p.b : null;
 }
 
 // ── the call row ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -348,7 +360,7 @@ function callX(rec, { d, format }, { h, req, unparsed }) {
   if (format === 'anthropic') {
     const facts = callFacts(h), u = facts.usage || {};
     const lane = facts.sub ? 'subagent' : facts.monitor ? 'monitor' : hintsOf(rec).lane || 'main';
-    return jsonClean({ ...common, facts, lane, wire: wireOf(h, format, null), nonBlockKeys: nonBlockKeysOf(h, format),
+    return jsonClean({ ...common, facts, lane, wire: wireOf(h, format, null), nonBlockKeys: nonBlockKeysOf(h, format), rq: slimRec(h).request,
       usage: { read: u.cache_read_input_tokens || 0, create: u.cache_creation_input_tokens || 0, fresh: u.input_tokens || 0, out: u.output_tokens || 0 },
       error: !!rec.error || !!facts.failed, replyId: replyIdOf(rec) });
   }

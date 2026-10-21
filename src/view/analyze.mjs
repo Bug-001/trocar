@@ -1028,41 +1028,50 @@ const CAUSE_META = {
 // compaction can PRESERVE the first user turn and rewrite the middle, so the structural break lands
 // mid-history — the hint makes the cause say "compaction" while byteOffset still localizes the rewrite.
 export function cacheBreak(prevFlat, curFlat, opts = {}) {
-  if (!prevFlat || !prevFlat.length)
-    return { idx: 0, rawIdx: 0, prefixLen: 0, total: curFlat.length, firstCall: true, cause: 'first-call', causeLabel: 'first captured call', attribution: 'harmless', fixHint: '', byteOffset: null, byteContext: '' }
-  const n = Math.min(prevFlat.length, curFlat.length)
+  const seq = (f) => f && { n: f.length, key: (i) => f[i].key, vol: (i) => !!f[i].volatile, sec: (i) => f[i].sec, name: (i) => f[i].name }
+  return breakOf(seq(prevFlat), seq(curFlat), { ...opts, detail: (i) => blockDiff(prevFlat[i], curFlat[i]) })
+}
+// What cacheBreak reads of two blocks that diverge at the same place: whether only their JSON key order differs, and the first
+// differing character of their frames with the text from it on. A function of the two blocks' bytes alone (src/view/reduce.mjs
+// keeps it per pair of block ids).
+export function blockDiff(prev, cur) {
+  const curText = flatBlockText(cur), off = firstDiffOffset(flatBlockText(prev), curText)
+  return { reorder: keyReorder(prev, cur), byteOffset: off >= 0 ? off : null, byteContext: off >= 0 ? own(curText.slice(off, off + 48)) : '' }
+}
+// cacheBreak over two block sequences given by accessors: { n, key(i), vol(i), sec(i), name(i) }; `opts.detail(i)` → blockDiff of
+// the blocks at the break (asked only when the break is inside both sequences).
+export function breakOf(prev, cur, opts = {}) {
+  if (!prev || !prev.n)
+    return { idx: 0, rawIdx: 0, prefixLen: 0, total: cur.n, firstCall: true, cause: 'first-call', causeLabel: 'first captured call', attribution: 'harmless', fixHint: '', byteOffset: null, byteContext: '' }
+  const n = Math.min(prev.n, cur.n)
   let rawIdx = -1, idx = -1
   for (let i = 0; i < n; i++) {
-    if (prevFlat[i].key === curFlat[i].key) continue
+    if (prev.key(i) === cur.key(i)) continue
     if (rawIdx < 0) rawIdx = i
-    if (curFlat[i].volatile) continue // billing nonce — differs but cache-irrelevant
+    if (cur.vol(i)) continue // billing nonce — differs but cache-irrelevant
     idx = i; break
   }
   if (idx < 0) idx = n // no meaningful divergence within the shared region → new content is the appended tail (idx===prevLen) or nothing
   if (rawIdx < 0) rawIdx = idx
-  const out = { idx, rawIdx, prefixLen: idx, total: curFlat.length, firstCall: false, cause: 'append', causeLabel: '', attribution: 'harmless', fixHint: '', byteOffset: null, byteContext: '' }
+  const out = { idx, rawIdx, prefixLen: idx, total: cur.n, firstCall: false, cause: 'append', causeLabel: '', attribution: 'harmless', fixHint: '', byteOffset: null, byteContext: '' }
   // classify WHY (structural inference — labelled as such in the UI; numeric truth stays with usage)
   if (idx >= n) {
     // shared prefix fully reused; only a volatile block changed, or new content was appended
-    out.cause = (curFlat.length <= prevFlat.length && rawIdx < n) ? 'volatile-nonce-only' : 'append'
+    out.cause = (cur.n <= prev.n && rawIdx < n) ? 'volatile-nonce-only' : 'append'
   } else {
-    const cur = curFlat[idx], prev = prevFlat[idx]
     // a bare "first messages block changed" is NOT reliable for compaction (real traces over-fire:
     // CC re-injects scaffolding into the first user turn, forks, etc.). Compaction is decided by
     // analyze()'s authoritative drop verdict (opts.compaction) below, not by structure.
-    if (cur.sec === 'tools') {
-      const ps = prevFlat.filter((b) => b.sec === 'tools').map((b) => b.name)
-      const cs = curFlat.filter((b) => b.sec === 'tools').map((b) => b.name)
+    const d = opts.detail(idx)
+    out.cause = d.reorder ? 'json-key-reorder' : 'content-changed'
+    if (cur.sec(idx) === 'tools') {
+      const names = (s) => { const o = []; for (let i = 0; i < s.n; i++) if (s.sec(i) === 'tools') o.push(s.name(i)); return o }
+      const ps = names(prev), cs = names(cur)
       const sameSet = ps.length === cs.length && ps.slice().sort().join('\u0001') === cs.slice().sort().join('\u0001')
       if (sameSet && ps.join('\u0001') !== cs.join('\u0001')) out.cause = 'tool-array-reorder'
-      else out.cause = keyReorder(prev, cur) ? 'json-key-reorder' : 'content-changed'
-    } else {
-      out.cause = keyReorder(prev, cur) ? 'json-key-reorder' : 'content-changed'
     }
     // byte-level localization within the first diverging block (structural estimate)
-    const prevText = flatBlockText(prev), curText = flatBlockText(cur)
-    const off = firstDiffOffset(prevText, curText)
-    if (off >= 0) { out.byteOffset = off; out.byteContext = own(curText.slice(off, off + 48)) }
+    if (d.byteOffset != null) { out.byteOffset = d.byteOffset; out.byteContext = d.byteContext }
     // analyze()'s drop-based compaction verdict is authoritative — a compaction that kept the first
     // user turn breaks mid-history; without the hint that reads as 'content-changed'.
     if (opts.compaction) out.cause = 'compaction'

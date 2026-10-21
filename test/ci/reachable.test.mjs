@@ -32,6 +32,7 @@ export const UNREACHED = Object.freeze({
   'src/off/clash.mjs': 'the Verge strip / reload half of that steer, reached only through src/capture/desktop-steer.mjs; same backlog items',
   'src/view/render-kind.mjs': 'the per-definition render spec (RFC 2.3, 3.5); extraction calls it, and this row goes when extraction lands',
   'src/query/projection.mjs': 'the context projection store (RFC 4.3 §4); the query worker opens it once extraction lands, and this row goes then',
+  'src/view/reduce.mjs': 'reduction of a session\'s document from its projection (RFC 4.3 §3); the worker\'s session answer calls it, and this row goes then',
   'src/view/extract.mjs': 'extraction and its build driver extractMembers (RFC 4.3 §3); the worker\'s session answer calls the driver, and this row goes then',
 })
 
