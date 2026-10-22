@@ -158,7 +158,7 @@ export async function run(ctx) {
     events.push(...(i >= lo && i < hi ? eventsAt(i) : eventsAt(i).filter(CS)));
   }
   // the ledger replayed from every step's delta, each line read for it and let go
-  const { resources, seen } = laneLedger(rids.map((rid, i) => (lines.has(i) ? lines.get(i) : (({ c, d }) => ({ c, d }))(log.read(...log.latest(rid))))),
+  const { resources, seen } = laneLedger(rids.map((rid, i) => (lines.has(i) ? lines.get(i) : (({ c, d }) => ({ c, d }))(log.peek(...log.latest(rid))))),
     base == null ? -1 : index.get(base));
   return {
     lane: key, base, mark: st.mark, steps, defs: [...fresh.keys()].map((b) => wireDef(b, listAt(fresh.get(b)).bids)).filter(Boolean),

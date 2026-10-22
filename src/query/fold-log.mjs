@@ -141,6 +141,8 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
     items: keyed(items),
     failures: keyed(fails),
     read: (off, len) => entry(off, len)[0],
+    /** read() that leaves the cache as it is: a scan of every line (session-doc.mjs sync) parses each once and lets it go young. */
+    peek: (off, len) => { const e = cache.get(off); return e ? e[0] : JSON.parse(lines.read(off, len).toString('utf8')); },
     /** The latest line of `rid` at or before byte `off`: walks `p` back from its latest line. */
     versionAt,
     /** The rids and lane keys whose latest line lies past byte `off`. */

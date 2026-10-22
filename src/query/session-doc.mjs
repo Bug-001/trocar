@@ -70,7 +70,7 @@ export function sync(cols, log) {
   for (const rid of ch.rids) {
     const k = cols.slotOf(rid);
     if (k === undefined) throw new Error(`the fold log names ${rid}, which the context projection has no row for`);
-    const old = cols.ts[k], o = log.read(...log.latest(rid)), r = rowOf(o);
+    const old = cols.ts[k], o = log.peek(...log.latest(rid)), r = rowOf(o);
     if (old !== undefined) cols.order.splice(placeOf(cols, old, rid), 1);
     slot(cols, k);
     if (r) {
