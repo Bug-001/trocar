@@ -6,14 +6,62 @@
 // the arena (`onFail(error)` once per episode of failures) and writes it with the next append that works. The arena starts at the
 // file's end, so an offset handed out never changes. One descriptor for reads, closed by close() or, failing that, when the
 // line file is collected.
+//   A SIDECAR (4.3 §4 旁索引) beside it, `<name>.idx`, holds what a scan of the file's first `bytes` would have put in the heap: the
+// header line `{v: SIDECAR_V, …head, bytes, parts: [[name, type, byteLength]]}`, then each part's bytes. Never a second source: a
+// sidecar that does not load is a scan. The file created anew or truncated drops its sidecar first.
 import nodeFs from 'node:fs';
 import path from 'node:path';
 
+export const SIDECAR_V = 1;
+const TYPES = { f64: Float64Array, u32: Uint32Array, i32: Int32Array, u8: Uint8Array };
+export const sidecarOf = (file) => file.replace(/\.ndjson$/, '') + '.idx';
+
+/** saveSidecar({fs, file, head, parts}): `file`'s sidecar, written to a temp file in its directory then renamed over (0600). `head`
+ *  carries `bytes` (the length it covers); `parts`: [[name, a typed array of TYPES or an array of strings (`str`: none holds "\n")]]. */
+export function saveSidecar({ fs = nodeFs, file, head, parts }) {
+  const bufs = [], desc = [];
+  for (const [name, v] of parts) {
+    const type = Array.isArray(v) ? 'str' : Object.keys(TYPES).find((t) => v instanceof TYPES[t]);
+    if (!type) throw new TypeError(`sidecar part ${name}: not one of str, ${Object.keys(TYPES).join(', ')}`);
+    if (type === 'str' && v.some((x) => String(x).includes('\n'))) throw new TypeError(`sidecar part ${name}: a string holds a newline`);
+    const b = type === 'str' ? Buffer.from(v.join('\n'), 'utf8') : Buffer.from(v.buffer, v.byteOffset, v.byteLength);
+    bufs.push(b); desc.push([name, type, b.length]);
+  }
+  const side = sidecarOf(file), tmp = `${side}.tmp`;
+  try {
+    fs.writeFileSync(tmp, Buffer.concat([Buffer.from(`${JSON.stringify({ ...head, v: SIDECAR_V, parts: desc })}\n`), ...bufs]), { mode: 0o600 });
+    fs.renameSync(tmp, side);
+  } catch (e) { try { fs.rmSync(tmp, { force: true }); } catch { /* the next save */ } throw e; }
+}
+
+/** loadSidecar({fs, file}) → {head, parts: {name: array}} | null: missing, unreadable, of another version, short or long, or covering
+ *  more than `file` holds or not ending at a line's end. */
+export function loadSidecar({ fs = nodeFs, file }) {
+  try {
+    const b = fs.readFileSync(sidecarOf(file)), nl = b.indexOf(10);
+    if (nl < 0) return null;
+    const { v, parts: desc, ...head } = JSON.parse(b.toString('utf8', 0, nl));
+    if (v !== SIDECAR_V || !Array.isArray(desc) || !Number.isSafeInteger(head.bytes) || head.bytes < 1) return null;
+    const parts = {};
+    let at = nl + 1;
+    for (const [name, type, n] of desc) {
+      if (!Number.isSafeInteger(n) || n < 0 || at + n > b.length || (type !== 'str' && (!TYPES[type] || n % TYPES[type].BYTES_PER_ELEMENT))) return null;
+      parts[name] = type === 'str' ? (n ? b.toString('utf8', at, at + n).split('\n') : []) : new TYPES[type](b.buffer.slice(b.byteOffset + at, b.byteOffset + at + n));
+      at += n;
+    }
+    if (at !== b.length) return null;
+    const fd = fs.openSync(file, 'r'), last = Buffer.alloc(1);
+    try { if (fs.readSync(fd, last, 0, 1, head.bytes - 1) !== 1 || last[0] !== 10) return null; } finally { fs.closeSync(fd); }
+    return { head, parts };
+  } catch { return null; }
+}
+
 const held = new FinalizationRegistry(({ fs, fd }) => { try { fs.closeSync(fd); } catch { /* already closed */ } });
 
-/** lineFile({fs, file, write, onFail}) → {append(text) → the offset of its first byte, read(off, len) → Buffer, bytes, cut(len),
- *  close()}. `bytes`: the end (the file's bytes that count, then the arena's). `cut(len)` (len ≤ the file's end): what lies past
- *  `len` is no longer there (a torn tail, a file rebuilt); with `write` the file is truncated to it before the next write. */
+/** lineFile({fs, file, write, onFail}) → {append(text) → the offset of its first byte, read(off, len) → Buffer, bytes, settled,
+ *  cut(len), close()}. `settled`: written, every byte in the file (no arena, nothing to cut): a sidecar may be saved.
+ *  `bytes`: the end (the file's bytes that count, then the arena's). `cut(len)` (len ≤ the file's end): what lies past `len` is no
+ *  longer there (a torn tail, a file rebuilt); with `write` the file is truncated to it before the next write. */
 export function lineFile({ fs = nodeFs, file, write = true, onFail = () => {} } = {}) {
   let end = 0; // the file's bytes that count: the arena starts here
   try { end = fs.statSync(file).size; } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -26,6 +74,7 @@ export function lineFile({ fs = nodeFs, file, write = true, onFail = () => {} } 
     if (write) {
       try {
         fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+        if (trunc || !end) fs.rmSync(sidecarOf(file), { force: true }); // what it covers is no longer there
         if (trunc) { try { fs.truncateSync(file, end); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
         trunc = true; // until the append is known whole
         const out = arena ? Buffer.concat([...bufs, buf]) : buf;
@@ -66,6 +115,6 @@ export function lineFile({ fs = nodeFs, file, write = true, onFail = () => {} } 
     try { fs.closeSync(fd); } finally { fd = null; }
   }
 
-  const self = { append, read, cut, close, get bytes() { return end + arena; } };
+  const self = { append, read, cut, close, get bytes() { return end + arena; }, get settled() { return write && !arena && !trunc; } };
   return self;
 }

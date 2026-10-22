@@ -161,7 +161,15 @@ function relayOf(log) {
   return r;
 }
 const reductionOf = (s, log) => { s.relay = relayOf(log); return reduction(s.store, { log: s.relay, resolve: (ref) => s.resolve(ref), errors: s.sink, progress: (rid) => s.hook(rid) }); };
-function closeState(s) { s.log.close(); if (s.T) s.T.close(); }
+function closeState(s) { if (fileLogs.get(s.store) === s.log) fileLogs.delete(s.store); s.log.close(); if (s.T) s.T.close(); }
+// store → the fold log file a state of it holds open (the worker's)
+const fileLogs = new WeakMap();
+/** saveIndexes(): the sidecars (4.3 §4 旁索引) of every open store and its fold log whose file grew since its last save, the store's
+ *  first (the log's sidecar names the projection's bytes). The worker calls it once an idle period; the local path's are never
+ *  written (opened write:false). A sidecar that cannot be written is not one: the next open scans. */
+export function saveIndexes() {
+  for (const s of stores.values()) for (const x of [s, fileLogs.get(s)]) { try { if (x) x.saveIndex(); } catch { /* the next idle period */ } }
+}
 const cutOf = (plan) => (plan.read.length ? String(plan.read[0].id) : null);
 // Whether a fold log was folded under this plan's cut: its last frontier's `n` (the members folded) = the members of the cut up to
 // its `f` that did not fail. A log folded under another cut would serve a reader that must cut a log folded uncut.
@@ -180,12 +188,13 @@ function stateOf(ctx, id, store, plan) {
   const writer = ctx.writer === true, home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   const open = () => openFoldLog({ home, fs, key: id, write: writer, projection: { id: store.id, bytes: store.bytes }, errors: s.sink });
   const log = open(), m = markOf(log);
-  if (m != null && foldedUnder(log, plan, m)) { s.log = log; s.target = m; return s; }
+  if (m != null && foldedUnder(log, plan, m)) { s.log = log; s.target = m; if (writer) fileLogs.set(store, log); return s; }
   log.close();
   if (writer) {
     try { fs.rmSync(foldLogFile(home, id), { force: true }); } catch { /* the open below cuts what it cannot read */ }
     s.log = open();
   } else s.log = memoryLog(store);
+  if (writer) fileLogs.set(store, s.log);
   s.R = reductionOf(s, s.log);
   return s;
 }

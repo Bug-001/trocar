@@ -29,7 +29,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { indexDir } from './index-build.mjs';
 import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
-import { lineFile } from './line-file.mjs';
+import { lineFile, saveSidecar, loadSidecar } from './line-file.mjs';
 
 export const PROJ_V = 7;
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
@@ -45,7 +45,7 @@ export const HEAP_PER_LINE_BYTE = 4;
  *  a warm session's store costs beside its reduction (src/query/named/session.mjs). */
 export const STORE_HEAP = 2 * (ROW_HEAP + SHARED_HEAP);
 const CHUNK = 1 << 20;
-const NAME = /^([0-9a-f]{32})(?:\.fold)?\.ndjson$/; // a projection, or its fold log (src/query/fold-log.mjs)
+const NAME = /^([0-9a-f]{32})(?:\.fold)?\.(?:ndjson|idx(?:\.tmp)?)$/; // a projection, its fold log (src/query/fold-log.mjs), their sidecars
 
 const ctxDir = (home) => path.join(indexDir(home), 'ctx');
 const hashOf = (key) => createHash('sha256').update(String(key)).digest('hex').slice(0, 32);
@@ -61,14 +61,16 @@ export function posCmp(a, b) {
   return sa < sb ? -1 : sa > sb ? 1 : (Number(na) - Number(nb)) || (pa.lineNo - pb.lineNo);
 }
 
-// Every line of `file` with its byte offset and length (newline excluded), read in chunks; `nl`: it ended in a newline.
-export function* linesOf(fs, file) {
+// Every line of `file` from byte `from` (a line's start) with its byte offset and length (newline excluded), read in chunks; `nl`: it
+// ended in a newline.
+export function* linesOf(fs, file, from = 0) {
   let fd;
   try { fd = fs.openSync(file, 'r'); } catch (e) { if (e.code === 'ENOENT') return; throw e; }
   try {
-    let carry = Buffer.alloc(0), at = 0, n;
+    let carry = Buffer.alloc(0), at = from, pos = from, n;
     const buf = Buffer.alloc(CHUNK);
-    while ((n = fs.readSync(fd, buf, 0, CHUNK, null)) > 0) {
+    while ((n = fs.readSync(fd, buf, 0, CHUNK, pos)) > 0) {
+      pos += n;
       const b = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n);
       let from = 0, i;
       while ((i = b.indexOf(10, from)) !== -1) { yield { off: at + from, len: i - from, text: b.toString('utf8', from, i), nl: true }; from = i + 1; }
@@ -115,7 +117,8 @@ export function numTable() {
   };
 }
 // key → [offset, length] of a line on disk: a slot found through the key's number (numTable; a key whose number another key took
-// first in a Map of its own), the places in two typed columns; a slot never changes while the store is open, and names its key back
+// first in a Map of its own), the places in two typed columns; a slot never changes while the store is open, and names its key back.
+// dump() → [keys, offsets, lengths] by slot; load(dump) into an empty index gives each key the slot it had (a sidecar's, line-file.mjs).
 export function lineIndex() {
   let first = numTable(), spill = new Map();
   const names = [];
@@ -136,6 +139,11 @@ export function lineIndex() {
       off[i] = o; len[i] = l;
     },
     slotOf,
+    dump: () => [names.slice(), off.slice(0, names.length), len.slice(0, names.length)],
+    load([ks, os, ls]) {
+      if (names.length || ks.length !== os.length || ks.length !== ls.length) throw new RangeError('not a line index of this shape');
+      for (let i = 0; i < ks.length; i++) this.set(ks[i], os[i], ls[i]);
+    },
     keyAt: (i) => names[i],
     keys: () => names.values(),
     get size() { return names.length; },
@@ -186,7 +194,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
   const at = lineIndex(); // bid → its line
   const rowAt = lineIndex(); // rid → its line
   const rowCache = lru(2 * ROW_HEAP); // rid → row, weighed in heap
-  const brks = new Map();
+  const brks = new Map(), brkAt = [[], []]; // break pairs, and where their lines are (offsets, lengths)
   const sharedAt = lineIndex(); // shared value key → its line
   const sharedCache = lru(2 * SHARED_HEAP); // one object for every row read while it is kept
   const seen = lru(2 * SEEN); // content keys of the values at share positions written last
@@ -224,7 +232,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
       rowCache.delete(rid);
       if (o.row) rowCache.set(rid, o.row, len * HEAP_PER_LINE_BYTE); // the row as given (the same as it reads back)
     }
-    if (o.b) brks.set(pairKey(o.b.brk[0], o.b.brk[1]), o.b);
+    if (o.b) { brks.set(pairKey(o.b.brk[0], o.b.brk[1]), o.b); brkAt[0].push(off); brkAt[1].push(len); }
   };
   // what an append writes of a row: a recurring value (or one of a reference's shape) as an `s` line and a reference
   const note = (v) => { const j = JSON.stringify(v); return j === undefined ? null : j; };
@@ -250,27 +258,50 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
   const rebuilt = (reason) => {
     id = newId();
     for (const m of [at, rowAt, rowCache, brks, sharedAt, sharedCache, seen]) m.clear();
-    bytes = 0;
+    brkAt[0].length = brkAt[1].length = 0;
+    bytes = savedAt = 0;
     if (write) { try { fs.rmSync(file, { force: true }); } catch { /* cut before the next append */ } }
     lines.cut(0);
     errors.push({ where: 'projection', code: 'projection-rebuilt', level: 'note', reason });
   };
 
-  let head = true, bad = null, bytes = 0, id = newId();
-  for (const l of linesOf(fs, file)) {
-    if (bad) { rebuilt(bad); bad = null; break; } // a bad line that was not the last
-    const o = parse(l.text);
-    if (head) {
-      if (!l.nl || !o) { bad = 'The stored context projection has no readable header; it is rebuilt from the capture.'; continue; }
-      if (o.v !== PROJ_V || typeof o.id !== 'string') { rebuilt(`The stored context projection is of version ${JSON.stringify(o.v)}, not ${PROJ_V}; it is rebuilt from the capture.`); break; }
-      head = false; id = o.id; bytes = l.off + l.len + 1; continue;
+  let head = true, bad = null, bytes = 0, id = newId(), savedAt = 0, heldRows = false;
+  // the sidecar (4.3 §4 旁索引) of this header's id: the indexes and the breaks of its first `bytes`, or nothing of it
+  function loaded() {
+    const sc = loadSidecar({ fs, file });
+    if (!sc || sc.head.id !== id) return false;
+    try {
+      const p = sc.parts;
+      for (const [n, idx] of [['d', at], ['r', rowAt], ['s', sharedAt]]) idx.load([p[`${n}.k`], p[`${n}.o`], p[`${n}.l`]]);
+      for (let i = 0; i < p['b.o'].length; i++) take({ b: lineAt([p['b.o'][i], p['b.l'][i]]).b }, p['b.o'][i], p['b.l'][i]);
+    } catch {
+      for (const m of [at, rowAt, sharedAt, brks]) m.clear();
+      brkAt[0].length = brkAt[1].length = 0;
+      return false;
     }
-    if (o && o.t) break; // held rows of an earlier process: from here on everything is extracted again
-    if (!l.nl || !shaped(o)) { bad = `Line at byte ${l.off} of the stored context projection does not parse; it is rebuilt from the capture.`; continue; }
-    if (o.c && !refsHeld(o.c)) { rebuilt(`Line at byte ${l.off} of the stored context projection names a shared value it does not hold; it is rebuilt from the capture.`); break; }
-    take(o, l.off, l.len);
-    bytes = l.off + l.len + 1;
+    bytes = savedAt = sc.head.bytes;
+    return true;
   }
+  function scan(from) {
+    for (const l of linesOf(fs, file, from)) {
+      if (bad) { rebuilt(bad); bad = null; return false; } // a bad line that was not the last
+      const o = parse(l.text);
+      if (head) {
+        if (!l.nl || !o) { bad = 'The stored context projection has no readable header; it is rebuilt from the capture.'; continue; }
+        if (o.v !== PROJ_V || typeof o.id !== 'string') { rebuilt(`The stored context projection is of version ${JSON.stringify(o.v)}, not ${PROJ_V}; it is rebuilt from the capture.`); return false; }
+        head = false; id = o.id; bytes = l.off + l.len + 1;
+        if (loaded()) return true; // the rest is scanned from where it ends
+        continue;
+      }
+      if (o && o.t) return false; // held rows of an earlier process: from here on everything is extracted again
+      if (!l.nl || !shaped(o)) { bad = `Line at byte ${l.off} of the stored context projection does not parse; it is rebuilt from the capture.`; continue; }
+      if (o.c && !refsHeld(o.c)) { rebuilt(`Line at byte ${l.off} of the stored context projection names a shared value it does not hold; it is rebuilt from the capture.`); return false; }
+      take(o, l.off, l.len);
+      bytes = l.off + l.len + 1;
+    }
+    return false;
+  }
+  if (scan(0)) scan(bytes);
   lines.cut(bytes); // a torn or held tail is cut off before the next append
   if (write && bytes) { try { const t = new Date(); fs.utimesSync(file, t, t); } catch { /* the GC order only */ } }
 
@@ -279,6 +310,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
   function append({ defs = [], rows: rs = [], brks: bs = [] } = {}, { held: tent = false, errors: to = errors } = {}) {
     const all = [];
     for (const d of defs) if (!at.has(d.bid)) all.push({ d });
+    if (tent && rs.length) heldRows = true;
     for (const r of rs) { const e = encode(r, all); all.push(tent ? { t: e, row: r } : { c: e, row: r }); }
     for (const b of bs) all.push({ b });
     shares.clear();
@@ -328,6 +360,17 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     brks,
     brk: (prevBid, curBid) => brks.get(pairKey(prevBid, curBid)),
     append,
+    /** saveIndex() → whether it wrote the sidecar (4.3 §4 旁索引): written stores only, none while the store holds `t` rows or
+     *  when nothing grew since the last. */
+    saveIndex() {
+      if (!lines.settled || heldRows || !lines.bytes || lines.bytes === savedAt) return false;
+      const parts = [];
+      for (const [n, idx] of [['d', at], ['r', rowAt], ['s', sharedAt]]) { const [k, o, l] = idx.dump(); parts.push([`${n}.k`, k], [`${n}.o`, o], [`${n}.l`, l]); }
+      parts.push(['b.o', Float64Array.from(brkAt[0])], ['b.l', Uint32Array.from(brkAt[1])]);
+      saveSidecar({ fs, file, head: { id, bytes: lines.bytes }, parts });
+      savedAt = lines.bytes;
+      return true;
+    },
     /** The header's id (taken now when the file is made or rebuilt); `bytes`: the length of the whole lines it holds. */
     get id() { return id; },
     get bytes() { return lines.bytes; },

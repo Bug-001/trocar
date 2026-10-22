@@ -35,7 +35,7 @@ import { pathToFileURL } from 'node:url'
 import { LOCAL_ENV } from './client.mjs'
 import { answer } from './answers.mjs'
 import { lowerPriority } from '../low-priority.mjs'
-import { extendSession } from './named/session.mjs'
+import { extendSession, saveIndexes } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
 import { gcProjections, posCmp } from './projection.mjs'
 
@@ -125,6 +125,7 @@ async function background() {
   }
   if (gcDone || busy) return
   gcDone = true
+  saveIndexes() // the sidecars of what this busy period grew, before the GC counts them
   gcProjections({ home, liveKeys: [...sessionGroups(await indexRows({ home, errors: [] })).keys()], keepKeys: answered })
 }
 

@@ -16,9 +16,12 @@
 // the projection's bytes (a step whose frontier is missing or torn, or that the projection no longer holds, is dropped with all
 // after it), cut from the file before the next append. The lines sit on src/query/line-file.mjs: `write: false` and a write that
 // fails keep them in the off-heap arena at the offsets they will have; `projection-write-failed` once per episode.
+//   Its sidecar (4.3 §4 旁索引, `<hash>.fold.idx`, saveIndex) holds the indexes and frontiers up to the end of a frontier line: an
+// open whose header names the projection loads it when it is of this FOLD_V and its frontier's `pb` ≤ the projection's bytes, and
+// scans only past it.
 import nodeFs from 'node:fs';
 import { trocarHome } from '../paths.mjs';
-import { lineFile } from './line-file.mjs';
+import { lineFile, saveSidecar, loadSidecar } from './line-file.mjs';
 import { projectionFile, linesOf, lineIndex, lru, HEAP_PER_LINE_BYTE } from './projection.mjs';
 
 export const FOLD_V = 1;
@@ -54,26 +57,51 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
     else own[k].set(id, off, len);
   };
 
-  let head = true, bad = null, end = 0, step = [];
+  let head = true, bad = null, end = 0, step = [], savedAt = 0, saved = null;
+  const OWN = [['c', calls], ['l', lanes], ['i', items], ['x', fails]];
   const rebuild = (reason) => {
-    calls.clear(); lanes.clear(); items.clear(); fails.clear(); fronts.clear(); last = undefined; step = []; end = 0;
+    calls.clear(); lanes.clear(); items.clear(); fails.clear(); fronts.clear(); last = undefined; step = []; end = savedAt = 0; saved = null;
     if (write) { try { fs.rmSync(file, { force: true }); } catch { /* cut before the next append */ } }
     errors.push({ where: 'fold-log', code: 'projection-rebuilt', level: 'note', reason });
   };
-  for (const l of linesOf(fs, file)) {
-    if (bad) { rebuild(bad); break; } // a bad line that was not the last
-    const o = parse(l.text);
-    if (head) {
-      if (!l.nl || !o) { bad = 'The stored fold log has no readable header; it is folded again.'; continue; }
-      if (o.v !== FOLD_V || o.pid !== projection.id) { rebuild(`The stored fold log is of version ${JSON.stringify(o.v)} for projection ${JSON.stringify(o.pid)}, not ${FOLD_V} for ${JSON.stringify(projection.id)}; it is folded again.`); break; }
-      head = false; end = l.off + l.len + 1; continue;
+  // the sidecar of this projection, FOLD_V and a frontier the projection still holds, or nothing of it
+  function loaded() {
+    const sc = loadSidecar({ fs, file }), h = sc && sc.head;
+    if (!h || h.pid !== projection.id || h.fold !== FOLD_V || !(h.pb <= projection.bytes) || !Number.isFinite(h.last)) return false;
+    try {
+      const p = sc.parts;
+      for (const [n, idx] of OWN) idx.load([p[`${n}.k`], p[`${n}.o`], p[`${n}.l`]]);
+      if (p['f.k'].length !== p['f.o'].length) throw new RangeError('frontiers');
+      p['f.k'].forEach((rid, i) => fronts.set(rid, p['f.o'][i]));
+      saved = { bytes: h.bytes, parts: Object.fromEntries(Object.entries(p).filter(([n]) => !/^[clixf]\.[kol]$/.test(n))) };
+    } catch {
+      for (const [, idx] of OWN) idx.clear();
+      fronts.clear();
+      return false;
     }
-    const k = l.nl ? kindOf(o) : undefined;
-    if (!k) { bad = `Line at byte ${l.off} of the stored fold log does not parse; it is folded again.`; continue; }
-    if (k === 'f' && o.pb > projection.bytes) break; // a step the projection no longer holds: it and all after it are dropped
-    step.push([k, o[k], l.off, l.len]);
-    if (k === 'f') { for (const t of step) take(...t); step = []; end = l.off + l.len + 1; }
+    last = h.last; end = savedAt = h.bytes;
+    return true;
   }
+  function scan(from) {
+    for (const l of linesOf(fs, file, from)) {
+      if (bad) { rebuild(bad); return false; } // a bad line that was not the last
+      const o = parse(l.text);
+      if (head) {
+        if (!l.nl || !o) { bad = 'The stored fold log has no readable header; it is folded again.'; continue; }
+        if (o.v !== FOLD_V || o.pid !== projection.id) { rebuild(`The stored fold log is of version ${JSON.stringify(o.v)} for projection ${JSON.stringify(o.pid)}, not ${FOLD_V} for ${JSON.stringify(projection.id)}; it is folded again.`); return false; }
+        head = false; end = l.off + l.len + 1;
+        if (loaded()) return true; // the rest is scanned from where it ends
+        continue;
+      }
+      const k = l.nl ? kindOf(o) : undefined;
+      if (!k) { bad = `Line at byte ${l.off} of the stored fold log does not parse; it is folded again.`; continue; }
+      if (k === 'f' && o.pb > projection.bytes) return false; // a step the projection no longer holds: it and all after it are dropped
+      step.push([k, o[k], l.off, l.len]);
+      if (k === 'f') { for (const t of step) take(...t); step = []; end = l.off + l.len + 1; }
+    }
+    return false;
+  }
+  if (scan(0)) scan(end);
   step = [];
   lines.cut(end);
 
@@ -133,8 +161,26 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
   const keyed = (idx) => ({ get: (id) => idx.get(id), keys: () => idx.keys(), get size() { return idx.size; } });
   const past = (idx, off) => { const out = []; for (const k of idx.keys()) if (idx.get(k)[0] > off) out.push(k); return out; };
 
+  /** saveIndex(extra) → whether it wrote the sidecar: up to the end of the last frontier line, when that grew since the last save
+   *  (written logs only). `extra`: [[name, array]] parts a caller adds (no name of the form `<c|l|i|x|f>.<k|o|l>`), handed back by
+   *  the next open that loads the sidecar as `saved.parts` (`saved.bytes`: what they cover). */
+  function saveIndex(extra = []) {
+    if (!lines.settled || last === undefined) return false;
+    const [f, len] = entry(last), bytes = last + len + 1;
+    if (bytes === savedAt) return false;
+    const parts = [];
+    for (const [n, idx] of OWN) { const [k, o, l] = idx.dump(); parts.push([`${n}.k`, k], [`${n}.o`, o], [`${n}.l`, l]); }
+    parts.push(['f.k', [...fronts.keys()]], ['f.o', Float64Array.from(fronts.values())], ...extra);
+    saveSidecar({ fs, file, head: { pid: projection.id, fold: FOLD_V, bytes, pb: f.pb, last }, parts });
+    savedAt = bytes;
+    return true;
+  }
+
   return {
     append,
+    saveIndex,
+    /** What the sidecar this open loaded carried besides the indexes ({bytes, parts}), or null (saveIndex). */
+    get saved() { return saved; },
     latest: (rid) => calls.get(rid),
     lane: (k) => lanes.get(k),
     /** The item lines and the failed lines by rid (their latest), as {get(rid) → location, keys() in first-written order, size}. */
