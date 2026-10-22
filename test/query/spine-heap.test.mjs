@@ -24,10 +24,12 @@ import { grower, readerFlags } from './past-room.mjs'
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
 const QUERY = new URL('../../src/query/named/index.mjs', import.meta.url).href
 const K = STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES
-// one cold read as the worker reads, until no member is above the extraction frontier → {calls, truncated, retained, blocks}
+// one cold read as the worker reads, until no member is above the reduction frontier and its background is done → {calls, truncated,
+// retained, blocks}
 const READ = `
 const fs = await import('node:fs')
 const { runQuery } = await import(${JSON.stringify(QUERY)})
+const { extendSession } = await import(${JSON.stringify(new URL('../../src/query/named/session.mjs', import.meta.url).href)})
 const { projectionFile } = await import(${JSON.stringify(new URL('../../src/query/projection.mjs', import.meta.url).href)})
 // the projection's definition lines, counted over its bytes (a Buffer, outside the heap measured)
 const defs = (b) => { let n = 0; for (let i = b.indexOf('\\n{"d":'); i >= 0; i = b.indexOf('\\n{"d":', i + 1)) n++; return n }
@@ -36,10 +38,17 @@ const [home, id] = process.argv.slice(1)
 await indexRows({ home, errors: [] }) // the segment index's rows: the bound's \`steady\`, not the session's spine
 global.gc(); global.gc()
 const before = process.memoryUsage().heapUsed
-let doc
-do doc = await runQuery('session', { id, limit: '20' }, { home, writer: true }); while (doc.pending)
-const calls = doc.lanes.reduce((n, l) => n + l.count, 0), truncated = doc.truncated
-doc = null
+// asked until no pending, the worker's background driven until it has nothing left (a cold state's rebuild included), then asked
+// once more: what is measured is the rebuilt state and the step-order columns. In a function of its own, so the top-level frame's
+// registers keep no answer.
+const ask = async () => {
+  let doc
+  do doc = await runQuery('session', { id, limit: '20' }, { home, writer: true }); while (doc.pending)
+  while (await extendSession({ home, writer: true }, id, Infinity));
+  doc = await runQuery('session', { id, limit: '20' }, { home, writer: true })
+  return { calls: doc.lanes.reduce((n, l) => n + l.count, 0), truncated: doc.truncated }
+}
+const { calls, truncated } = await ask()
 global.gc(); global.gc()
 const retained = process.memoryUsage().heapUsed - before
 const blocks = defs(fs.readFileSync(projectionFile(home, id)))
@@ -64,9 +73,9 @@ const read = (opts, calls) => {
 // K, and what 4N holds more than 2N is at most 2N × SPINE_PER_ROW beside what its new blocks measure, BLOCK_COLUMNS each. The fixed
 // caches are not full at N (from N to 2N the projection's shared-value cache grows ~1 MB and the reduction's list LRU ~0.5 MB, ~1 KB a
 // call); by 2N the LRU is full and what the shared-value cache still fills up to 4N (~300 B a call) stays inside the slope, and 2N → 4N
-// doubles every per-call and per-block table once, as a step of the session's growth does. The session is extracted between the reads
-// as the worker extracts it in the background, so each read is the cold open of a projected session (a worker that went idle and was
-// forked again).
+// doubles every per-call and per-block table once, as a step of the session's growth does. The session is extracted and folded between
+// the reads as the worker does in the background, so each read is the cold open of a projected session (a worker that went idle and
+// was forked again); READ then drives the rebuild, so the call term measures the rebuilt state and the step-order columns.
 // What a distinct block of this shape keeps in the heap measured (heapUsed: the store's bid index and block columns, not their typed
 // arrays' backing stores), measured 2026-10-22 single-threaded at live(0.12) with 2 against 12 tools a call (15,003 → 29,993 blocks,
 // one table doubling, the same calls).

@@ -1,6 +1,7 @@
 // test/query/past-room.mjs — a session past a small reader's room for its spine (RFC 3.5 §内存有界), grown and extracted in a
 // process with a large heap: growing and extracting it is not what the cut tests measure, and a reader with a heap that small
-// would spend minutes extracting it a 50 ms slice at a time. Nothing is reduced while it grows; the reader reduces it cold.
+// would spend minutes extracting it a 50 ms slice at a time. It is extracted and folded as it grows (extendSession), uncut: the
+// reader's plan cuts it, so the reader finds a fold log of another cut and folds its own from scratch.
 //
 // The room is what the plan reckons (src/query/named/session.mjs fitting): the reader's budget less the work, the steady caches and
 // the distinct blocks (SPINE_PER_BLOCK each), each counted in whole steps of a tenth of the budget. The blocks are the projection's
@@ -18,7 +19,7 @@ export const readerFlags = (heapMb) => ['--require', NO_REAL_OS, '--expose-gc', 
 
 const BUDGET = `const { heapBudget } = await import(${at('../../src/query/warm.mjs')}); console.log(heapBudget())`
 /** growPast(s, {home, budget}) → grows the bigSession `s` (test/query/big-session.mjs, writing into `home`) 500 calls at a time,
- *  extracting it as the worker does, until it holds a quarter more rows than a reader whose heap budget is `budget` has room for,
+ *  extracting and folding it as the worker's background does, until it holds a quarter more rows than a reader whose heap budget is `budget` has room for,
  *  each at SPINE_PER_ROW. In-process: the query modules' caches of this process hold the session. */
 export async function growPast(s, { home, budget }) {
   const fs = await import('node:fs')
