@@ -5,6 +5,7 @@
 // are grow, late growth (rows landing before the tip), a fresh session opened, a worker kill mid-read and arming a route fault. No step ever clicks a control that writes (DENY), and faults.mjs aborts
 // any non-GET request anyway. Selectors are ids, classes and data attributes, never wording. Exports only: nothing runs at import.
 import { setHidden } from './probe.mjs'
+import { mainCount } from './world.mjs'
 import { FAULT_KINDS, killWorkerMidRead } from './faults.mjs'
 
 // controls that write (core/harness-switch.mjs switch / Set up; settings/storage.mjs levels) and every button of a modal (a confirm)
@@ -74,8 +75,7 @@ async function deepLink(ctx, p) {
   if (p.kind === 'session') return go(ctx.page, `#/replay/${encodeURIComponent(row.project_slug)}/${p.junk}`)
   let step = p.step
   if (typeof step === 'number' && step > 0 && step < 1) {
-    const { doc } = await ctx.b.get('session', { id: row.session_id, limit: 1 })
-    step = Math.max(1, Math.round(step * ((doc && doc.page && doc.page.total) || 1)))
+    step = Math.max(1, Math.round(step * ((await mainCount(ctx.b.get, row.session_id).catch(() => 0)) || 1)))
   } else if (step === 'past') step = 1_000_000
   return go(ctx.page, `${deskHash(row)}?step=${encodeURIComponent(String(step))}`)
 }

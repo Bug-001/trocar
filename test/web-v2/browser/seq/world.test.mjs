@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import { HARNESSES } from '../../../../src/dissect/harnesses.mjs'
 import { serveBoard } from '../../real-face.mjs'
 import { makeWorld, mainCount } from './world.mjs'
+import { deskFrom } from '../../desk-world.mjs'
 
 // the header each wire's generator keys its session by (test/query/big-session.mjs)
 const KEY_HEADER = { http: 'x-claude-code-session-id', threads: 'x-claude-code-session-id', ws: 'session-id', chat: 'x-deepseek-harness-session-id' }
@@ -44,10 +45,9 @@ test('W2 the http session carries subagent lanes, a failed call, a compaction, a
   const face = await serveBoard(world)
   try {
     const id = world.sessions.find((s) => s.wire === 'http').id
-    const { status, doc } = await face.get('session', { id, limit: 500 })
-    assert.equal(status, 200)
-    const lanes = doc.analyzed.lanes, calls = lanes.flatMap((l) => l.calls)
-    const blocks = calls.flatMap((c) => c.flat || [])
+    // the desk as the board reads it: every row of `session`, every lane's pages (3.5 §会话读)
+    const desk = await deskFrom(async (name, p) => (await face.get(name, p)).doc, id)
+    const lanes = [...desk.lanes.values()], calls = [...desk.rows.values()], blocks = [...desk.defs.values()]
     assert.ok(lanes.some((l) => l.kind === 'subagent'), 'K-08 a subagent lane')
     assert.ok(calls.some((c) => c.error === true || (c.status != null && c.status !== 200)), 'K-12 a failed call')
     assert.ok(calls.some((c) => c.compaction === true || c.cacheBreak?.cause === 'compaction'), 'K-13 a compaction')

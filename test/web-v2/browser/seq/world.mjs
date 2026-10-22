@@ -63,16 +63,9 @@ export function makeWorld({ seed = 1, big = false } = {}) {
   }
 }
 
-/** The main lane's call count of session `id`, read page by page off the `session` document (page.next until has_more is false). */
+/** The main lane's call count of session `id`: its lane header's `count` in one `session` read (3.5 §会话读 车道头). */
 export async function mainCount(get, id) {
-  const seen = new Set()
-  let after = null, guard = 0
-  for (;;) {
-    const { status, doc } = await get('session', { id, ...(after != null ? { after } : {}) })
-    if (status !== 200 || !doc?.analyzed) throw new Error(`session ${id}: ${status} ${String(doc?.error ?? "").slice(0, 400)}`)
-    const main = doc.analyzed.lanes.find((l) => l.kind === 'main') || doc.analyzed.lanes[0]
-    for (const c of main?.calls || []) seen.add(c.id)
-    if (!doc.page?.has_more || ++guard > 10_000) return seen.size
-    after = doc.page.next
-  }
+  const { status, doc } = await get('session', { id })
+  if (status !== 200 || !Array.isArray(doc?.lanes)) throw new Error(`session ${id}: ${status} ${String(doc?.error ?? "").slice(0, 400)}`)
+  return (doc.lanes.find((l) => l.kind === 'main') || doc.lanes[0])?.count ?? 0
 }
