@@ -846,17 +846,25 @@ export const eventOnly = (kind) => EVENT_ONLY_KINDS.has(kind)
 /** replayLedger(steps, after?, maps?, touch?) → {resources, seen} of a lane from its steps' ledger deltas (`step.ld` of a keep:false
  *  analyzer), `steps` [[n, ld]] in the lane's order (n increasing): what the analyzer's own ledger holds then, a step named by its `n`.
  *  `after(n, resources, seen)`: called after each step with the ledger's maps as they stand then (resources by `kind::label`, seen by
- *  path). `maps: {resources, seen}`: the maps to go on from (a replay up to the step before the first of `steps`), changed in place.
+ *  path). `maps: {resources, seen, units}`: the maps to go on from (a replay up to the step before the first of `steps`), changed in place;
+ *  `units` = how many entries they hold (a resource, each of its segments and loads, a seen path), kept as they change.
  *  `touch(kind, key, entry)`: called before an op may change an entry (`r` a resource, `s` a seen path; `entry` undefined: none yet). */
-export function replayLedger(steps, after, { resources: resMap = new Map(), seen: seenMap = new Map() } = {}, touch = null) {
+export function replayLedger(steps, after, maps = {}, touch = null) {
+  const resMap = (maps.resources ??= new Map()), seenMap = (maps.seen ??= new Map())
+  let units = maps.units || 0
   for (const [n, ld] of steps) {
     for (const op of ld) {
       if (op[0] === 'r') {
-        if (touch) touch('r', op[1] + '::' + op[2], resMap.get(op[1] + '::' + op[2]))
+        const key = op[1] + '::' + op[2], r = resMap.get(key), was = r ? r.segments.length + r.loads.length : -1
+        if (touch) touch('r', key, r)
         addRes(resMap, op[1], op[2], n, op[3], op[4] ?? undefined)
+        const now = resMap.get(key)
+        units += now.segments.length + now.loads.length - was
       } else if (op[0] === 's') {
         if (touch && op[1]) for (const [i] of op[1].r) touch('s', op[1].p[i], seenMap.get(op[1].p[i]))
+        const was = seenMap.size
         seeIn(seenMap, op[1], n, op[2])
+        units += seenMap.size - was
       } else {
         for (const [k, r] of resMap) {
           const last = r.segments[r.segments.length - 1]
@@ -866,6 +874,7 @@ export function replayLedger(steps, after, { resources: resMap = new Map(), seen
     }
     if (after) after(n, resMap, seenMap)
   }
+  maps.units = units
   return { resources: [...resMap.values()], seen: [...seenMap.values()] }
 }
 

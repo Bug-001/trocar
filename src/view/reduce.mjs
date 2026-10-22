@@ -19,7 +19,7 @@ import { compareStep } from './step-order.mjs';
 import { compactionVerdict } from '../identity/session-identity.mjs';
 import { boardDissectorOf } from '../dissect/registry.mjs';
 import { COMP_KEYS, tellApart, taskOf, HEAD } from './blockmeta.mjs';
-import { posCmp, lru, num52, numTable, HEAP_PER_LINE_BYTE } from '../query/projection.mjs';
+import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
 import { openFoldLog } from '../query/fold-log.mjs';
 
 const KEYFRAME = 32; // a materialised list kept every KEYFRAME links of a base chain
@@ -519,9 +519,13 @@ function skeletonOf(R) {
   return { rows, lanes, events, ...(failed.length ? { failed } : null), ...(unknown ? { unknown } : null),
     stats: f ? f.st : { calls: 0, streams: 0, subagents: 0, monitors: 0, compactions: 0, totalIn: 0, totalOut: 0, peakCtx: 0 }, ...itemsView(its.map((o) => o.it)), records };
 }
-/** The heap the kept lane ledgers may take (src/query/named/lane.mjs): a K term of the reduction's bound (3.5 §内存有界), an entry
- *  weighed by its serialized bytes × HEAP_PER_LINE_BYTE (ledgerWeight). */
-export const LEDGER_BYTES = 4 << 20;
+/** The heap one entry of a kept ledger takes (a resource, a segment or load of it, a seen path; replayLedger's `units`): the most
+ *  measured over ledgers of 3,040 resources (1–4 segments, 1–8 loads each) and 0–13,738 seen paths of ~50 characters, after a forced
+ *  GC (232 B, all resources of one segment and load), × 1.25. */
+export const LEDGER_UNIT_BYTES = 300;
+/** The heap the kept lane ledgers may take (src/query/named/lane.mjs): a K term of the reduction's bound (3.5 §内存有界), each weighed
+ *  by ledgerWeight; room for a lane of the shape of Q23 #6's generated 6,598-call session. */
+export const LEDGER_BYTES = 8 << 20;
 /** laneLedger(rids, deltaOf, base?, kept?) → {resources, seen, kept} of a lane from its steps' ledger deltas (deltaOf(i) → step i's
  *  `d` from its call line, asked only for the steps replayed; analyze.mjs replayLedger), `rids` its steps in step order (an entry's
  *  steps go on the wire as rids): resources' segments {enter, evict} and loads {rid, range, via}; seen paths {path, firstRid, count},
@@ -548,8 +552,9 @@ export function laneLedger(rids, deltaOf, base = -1, kept = null) {
   for (const [k, f] of maps.seen) { const w = see(f); if (!was || (touched ? touched.s.has(k) : true) && was.s.get(k) !== JSON.stringify(w)) seen.push(w); }
   return { ...out, resources, seen };
 }
-/** ledgerWeight(kept) → the heap a kept ledger (laneLedger's `kept`) is weighed at: its serialized bytes × HEAP_PER_LINE_BYTE. */
-export const ledgerWeight = (kept) => Buffer.byteLength(JSON.stringify([[...kept.maps.resources.values()], [...kept.maps.seen.values()]])) * HEAP_PER_LINE_BYTE;
+/** ledgerWeight(kept) → the heap a kept ledger (laneLedger's `kept`) is weighed at: its entries (counted as the replay changes them)
+ *  × LEDGER_UNIT_BYTES. */
+export const ledgerWeight = (kept) => kept.maps.units * LEDGER_UNIT_BYTES;
 /** laneDoc(R, key) → {rids, events, resources, seen} of the lane `key` names, read from R's fold log: its calls in step order, their
  *  lane events, and its ledger (laneLedger). */
 function laneDoc(R, key) {

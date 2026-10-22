@@ -27,7 +27,8 @@
 // What the user's live session has besides (every one OFF by default, and drawn from a random stream of its own, so a session
 // without them is byte for byte what it was):
 // `paths`: each turn's tool result names `paths` file paths and its prose half as many — absolute and relative, half of them new and
-//   half named before — so the seen ledger grows the way a real one does.
+//   half named before — so the seen ledger grows the way a real one does; with `pathPool`, once that many are named every one is named
+//   before (a ledger that stops growing).
 // `prompt`: each lane's first prompt (main and subagent, after every compaction) starts with `prompt` characters of <system-reminder>
 //   blocks, one the same in every lane and one its own, before the ask — the human heads; later turns carry a short one or two.
 // `writes`: each turn's tool call is a Write (`content`) or an Edit (`old_string` / `new_string`) of `writes` characters — event args.
@@ -81,7 +82,7 @@ function turn(next, i, growth, reads, names) {
  * `append(n)` appends the next n calls (as the daemon would, one line each) and returns the session's stored bytes so far.
  */
 export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '', cc = 0, reads = 0, names = 0, freshTools = 0, hugeEvery = 0, hugeBytes = 40_000, imageEvery = 0, failEvery = 0, tools = null,
-  paths = 0, prompt = 0, writes = 0, bigEvery = 0, bigBytes = 2_000_000, bigRun = 4, shared = 0, seal = 64 << 10 } = {}) {
+  paths = 0, pathPool = 0, prompt = 0, writes = 0, bigEvery = 0, bigBytes = 2_000_000, bigRun = 4, shared = 0, seal = 64 << 10 } = {}) {
   const next = rng(seed), delay = rng(seed + 1), xr = rng(seed + 2)
   let file = path.join(home, 'raw', `${segment}.ndjson`)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
@@ -94,7 +95,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
   let shown = 0
   const named = [], slug = (k) => words(xr, k).trim().replace(/[\s.]+/g, '-')
   const pathOf = () => {
-    if (named.length && xr() < 0.5) return named[Math.floor(xr() * named.length)]
+    if (named.length && ((pathPool && named.length >= pathPool) || xr() < 0.5)) return named[Math.floor(xr() * named.length)]
     const p = xr() < 0.5 ? `/work/${slug(6)}/${slug(8)}.mjs` : `src/${slug(6)}/${slug(8)}.ts`
     named.push(p)
     return p
