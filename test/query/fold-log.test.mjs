@@ -47,6 +47,7 @@ function model(entries) {
   return {
     latest: RIDS.map((r) => last.get(`rid:${r}`)?.line ?? null),
     lanes: LANES.map((l) => last.get(`lane:${l}`)?.line ?? null),
+    own: ['i', 'x'].map((k) => RIDS.map((r) => entries.filter((e) => Object.keys(e.line)[0] === k && e.line[k] === r).at(-1)?.line ?? null)),
     versions: probes.map((o) => RIDS.map((r) => lines.filter((e) => e.chain === `rid:${r}` && e.off <= o).at(-1)?.off ?? null)),
     changed: probes.map((o) => [RIDS.filter((r) => last.get(`rid:${r}`)?.off > o), LANES.filter((l) => last.get(`lane:${l}`)?.off > o)]),
     frontier: frontier ?? null,
@@ -60,6 +61,7 @@ function view(log, entries) {
   return {
     latest: RIDS.map((r) => at(log.latest(r))),
     lanes: LANES.map((l) => at(log.lane(l))),
+    own: [log.items, log.failures].map((idx) => RIDS.map((r) => at(idx.get(r)))),
     versions: probes.map((o) => RIDS.map((r) => log.versionAt(r, o)?.[0] ?? null)),
     changed: probes.map((o) => { const c = log.changedSince(o); return [RIDS.filter((r) => c.rids.includes(r)), LANES.filter((l) => c.lanes.includes(l))] }),
     frontier: log.frontier ?? null,
@@ -85,7 +87,7 @@ test('4.3 #7 fold log: its file sits beside the projection, mode 0600', () => {
   assert.equal(fs.statSync(file).mode & 0o777, 0o600)
 })
 
-test('4.3 #7 fold log: a reopened log gives the same latest lines, versionAt answers and frontiers', () => {
+test('4.3 #7 fold log: a reopened log gives the same latest lines, item and failed lines by rid, versionAt answers and frontiers', () => {
   for (const seed of [1, 2, 3, 4]) {
     const home = tmpDir('trocar-fold-'), log = open(home)
     const entries = write(log, steps(seed, 6))

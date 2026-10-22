@@ -9,8 +9,8 @@
 // `{lg: key, p}` a lane gone; `{i: rid, …}` an item (a member that is not a call); `{x: rid, …}` a member that failed; `{f: rid, n,
 // pb}` a frontier, after each fold step (`pb` = the projection's bytes then). `p` (set by append) = the offset of the previous line
 // of the same rid (calls and gones) or lane key (lanes and lane gones), null for the first: versionAt walks it.
-//   In the heap: rid → its latest call / gone line and lane key → its latest line (offset and length in typed columns), frontier rid
-// → offset; nothing else per line. Lines are read back by offset through a cache of two times LOG_BYTES of heap (projection.mjs lru).
+//   In the heap: rid → its latest call / gone line, lane key → its latest line, rid → its latest item line and its latest failed line
+// (offset and length in typed columns, an index per kind), frontier rid → offset; nothing else per line. Lines are read back by offset through a cache of two times LOG_BYTES of heap (projection.mjs lru).
 //   Open: a header of another FOLD_V or a pid not the projection's id, or a line that does not parse before the last → the file is
 // deleted and the log starts empty, with one `projection-rebuilt` note (D38). Then it is cut back to the last frontier whose `pb` ≤
 // the projection's bytes (a step whose frontier is missing or torn, or that the projection no longer holds, is dropped with all
@@ -45,16 +45,18 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
   let sink = errors; // the errors of the request whose append is running
   const lines = lineFile({ fs, file, write, onFail: (e) => sink.push({ where: 'fold-log', code: 'projection-write-failed', level: 'note',
     reason: `The fold log could not be written (${e.code || e.message}); this session's reduction is kept in memory and done again next time.` }) });
-  const calls = lineIndex(), lanes = lineIndex(), fronts = new Map();
+  const calls = lineIndex(), lanes = lineIndex(), items = lineIndex(), fails = lineIndex(), fronts = new Map();
+  const own = { i: items, x: fails };
   const cache = lru(2 * LOG_BYTES); // offset → [line, length]
   let last; // the last frontier's offset
   const take = (k, id, off, len) => {
     if (k === 'f') { fronts.set(id, off); last = off; } else if (CHAIN[k]) (CHAIN[k] === 'rid' ? calls : lanes).set(id, off, len);
+    else own[k].set(id, off, len);
   };
 
   let head = true, bad = null, end = 0, step = [];
   const rebuild = (reason) => {
-    calls.clear(); lanes.clear(); fronts.clear(); last = undefined; step = []; end = 0;
+    calls.clear(); lanes.clear(); items.clear(); fails.clear(); fronts.clear(); last = undefined; step = []; end = 0;
     if (write) { try { fs.rmSync(file, { force: true }); } catch { /* cut before the next append */ } }
     errors.push({ where: 'fold-log', code: 'projection-rebuilt', level: 'note', reason });
   };
@@ -128,12 +130,16 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
     }
     return at;
   }
+  const keyed = (idx) => ({ get: (id) => idx.get(id), keys: () => idx.keys(), get size() { return idx.size; } });
   const past = (idx, off) => { const out = []; for (const k of idx.keys()) if (idx.get(k)[0] > off) out.push(k); return out; };
 
   return {
     append,
     latest: (rid) => calls.get(rid),
     lane: (k) => lanes.get(k),
+    /** The item lines and the failed lines by rid (their latest), as {get(rid) → location, keys() in first-written order, size}. */
+    items: keyed(items),
+    failures: keyed(fails),
     read: (off, len) => entry(off, len)[0],
     /** The latest line of `rid` at or before byte `off`: walks `p` back from its latest line. */
     versionAt,
