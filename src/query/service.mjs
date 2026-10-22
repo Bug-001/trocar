@@ -3,7 +3,9 @@
 // The daemon's only part in a read: fork the worker when one is asked for, hand it the request line, and let its
 // bytes flow to the response. This event loop forwards agent traffic, so it MUST NOT parse or stringify the
 // document (1.6 §4.1 「守护进程的负担」 ≤ 5 ms per query whatever the size) and MUST NOT compute an answer.
-// Requests are serialized: one worker, one query at a time, which is also what bounds its memory.
+// Requests are serialized: one worker, one query at a time, which is also what bounds its memory. Those waiting are served by
+// class (SERVE_ORDER: block, lane, session, then every other name), first come first served within a class, and one whose caller
+// left before its turn is skipped, never written to the worker (3.5 §服务队列).
 // A worker that crashes or says nothing within DEADLINE_MS is a D38 failure (`where:'daemon'`, `query-failed`) and
 // is dropped; the next request forks a new one, and a caller whose request died gets a 500 and answers locally.
 // Failures are kept per SUBJECT (the name and its parameters without client.mjs WINDOW_PARAMS): the first one opens an
@@ -53,6 +55,11 @@ const NL = 0x0a
 const SINK = { writeHead() {}, write() { return true }, end() {}, once() {} }
 const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon yet: it is being started, read this one locally' })
 
+/** The serving order of what waits (3.5 §服务队列): these names first, in this order; every other name (and a control verb) after them.
+ *  A `block` then waits at most for the request in flight, never behind a run of `session` reads. */
+const SERVE_ORDER = Object.freeze(['block', 'lane', 'session'])
+const rank = (name) => { const i = SERVE_ORDER.indexOf(name); return i < 0 ? SERVE_ORDER.length : i }
+
 const forkWorker = (home) => fork(WORKER, [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: heapFlags(), env: workerEnv() })
 
 const logLine = (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`) // the daemon's stdout is its log
@@ -62,7 +69,8 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   let asked = 0, idle = null // requests queued or in flight; the idle clock, running only while there are none
   let child = null, pending = null, head = '', left = 0, errHead = '', errTail = '', paused = false, pauseTimer = null
   let stats = new Map(), statsTimer = null // per name: {reads, bytes, cpu, slowest} since the last line
-  let queue = Promise.resolve()
+  const waiting = [] // {name, go, gone, resolve, reject} in arrival order; pump() takes the first of the lowest rank
+  let busy = false // a request is in flight
   const episodes = new Map() // subject → {reason, at, n}: failures since that subject was last answered
 
   /** The open episode of `subject` while its cool-down runs, else null. Episodes nobody asked about for a whole
@@ -170,8 +178,9 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
 
   const failWorker = (reason) => failure('daemon', Object.assign(new Error(reason), { code: 'query-failed' }))
 
-  // The frame reader: `<status> <len> <enc> <cpu_ms>\n` then exactly `len` bytes, straight into the response. Nothing is parsed.
-  // `enc` is `gzip` when the worker compressed the bytes (the request asked it: 4.4 §服务形状) and `-` otherwise.
+  // The frame reader: `<status> <len> <enc> <cpu_ms> <tag>\n` then exactly `len` bytes, straight into the response. Nothing is parsed.
+  // `enc` is `gzip` when the worker compressed the bytes (the request asked it: 4.4 §服务形状) and `-` otherwise; `tag` is the
+  // answer's version tag (answers.mjs), handed to the response as its `etag` header, or `-` for none (4.4 §条件 GET).
   function onData(b) {
     while (b.length) {
       if (!left) {
@@ -179,12 +188,12 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
         if (nl < 0) { head += b.toString('latin1'); return }
         head += b.subarray(0, nl).toString('latin1')
         b = b.subarray(nl + 1)
-        const [status, len, enc = '-', cpu = '0'] = head.split(' ')
+        const [status, len, enc = '-', cpu = '0', tag = '-'] = head.split(' ')
         head = ''
         if (!pending) return // a frame nobody waits for (its request died): the worker is out of step
         pending.bytes = Number(len); pending.cpu = Number(cpu) || 0
         pending.res.writeHead(Number(status), { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': len,
-          ...(enc === 'gzip' ? { 'content-encoding': 'gzip', vary: 'accept-encoding' } : {}) })
+          ...(enc === 'gzip' ? { 'content-encoding': 'gzip', vary: 'accept-encoding' } : {}), ...(tag !== '-' ? { etag: `"${tag}"` } : {}) })
         pending.headed = true
         left = Number(len)
         if (!left) { settle() ; continue }
@@ -257,10 +266,24 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   /** Fork a worker and give it this very query, with nobody waiting for the answer: the next query finds it warm. */
   const warmUp = (line, name, subject) => {
     if (cooling(subject)) return // nothing to warm a cooling subject with: the cold caller reads locally all the same
-    const go = () => run(line, SINK, deadlineMs, name, subject); queue = counted(queue.then(go, go)).catch(() => {})
+    enqueue(name, () => run(line, SINK, deadlineMs, name, subject)).catch(() => {})
   }
 
-  const lineOf = (name, params, indent = 0, gzip = false) => JSON.stringify({ name, params, indent, ...(gzip ? { gzip } : {}) }) + '\n'
+  /** `etag`: the version part of the tag the caller holds; the worker answers 304 when its version is that one (4.4 §条件 GET). */
+  const lineOf = (name, params, indent = 0, gzip = false, etag = null) => JSON.stringify({ name, params, indent, ...(gzip ? { gzip } : {}), ...(etag ? { etag } : {}) }) + '\n'
+
+  /** Queue `go` (counted from now until it settles) and serve the queue. `gone()` true at its turn: skipped, never run. */
+  const enqueue = (name, go, gone = () => false) => counted(new Promise((resolve, reject) => { waiting.push({ name, go, gone, resolve, reject }); pump() }))
+  function pump() {
+    while (!busy && waiting.length) {
+      let at = 0
+      for (let i = 1; i < waiting.length; i++) if (rank(waiting[i].name) < rank(waiting[at].name)) at = i
+      const [j] = waiting.splice(at, 1)
+      if (j.gone()) { j.resolve(); continue }
+      busy = true
+      j.go().then(j.resolve, j.reject).finally(() => { busy = false; pump() })
+    }
+  }
 
   /** Every request is counted from the moment it is queued until it is answered or failed; at none, the idle clock starts. */
   const counted = (task) => {
@@ -287,9 +310,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     // The handler answers `res` itself, so the server sends nothing: nothing of this document is held in this
     // process's memory as a JavaScript value. A request that failed does not hold the next one up, and its
     // rejection reaches the server, which answers 500.
-    const go = () => run(line, res, ms, name, subject)
-    const task = counted(queue.then(go, go))
-    queue = task.catch(() => {})
+    const task = enqueue(name, () => run(line, res, ms, name, subject), () => gone)
     // Answered as soon as EITHER the document is through or the caller is gone; a failure is raised only while there
     // is someone to raise it to (writing a 500 into a closed socket is nobody's answer).
     task.then(() => finish(), (e) => (gone ? finish() : failRoute(e)))
@@ -317,7 +338,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   /** The board's `GET /api/<name>` (4.4, D66): the same frame path, but the board has no local path to fall back to,
    *  so with no worker it forks one and waits its turn instead of the cold 503. The caller checked the name. `gzip`: the
    *  reader takes gzip, so the worker compresses (the daemon never encodes a document, D63 ①). */
-  const relay = ({ name, params = {}, res, gzip = false }) => answer(lineOf(name, params, 0, gzip), res, deadlineMs, name, subjectOf(name, params))
+  const relay = ({ name, params = {}, res, gzip = false, etag = null }) => answer(lineOf(name, params, 0, gzip, etag), res, deadlineMs, name, subjectOf(name, params))
 
   /** The board's `/control/<verb>` (4.4 §控制面): the same queue and frame path as `relay`, so a control verb waits its turn behind a query and the
    *  worker runs the CLI's own function (src/control/board.mjs). The caller checked the verb and parsed the small request body. */

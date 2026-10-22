@@ -7,11 +7,12 @@
 // knows whether a request is in flight or queued. It also leaves when its stdin ends or the daemon is gone.
 //
 // The wire is frames on this process's own pipes, not JSON over IPC: one request per line on stdin
-// (`{name, params, indent, gzip?}`), one reply on stdout as `<status> <byteLength> <enc> <cpu_ms>\n` then exactly those bytes.
+// (`{name, params, indent, gzip?, etag?}`), one reply on stdout as `<status> <byteLength> <enc> <cpu_ms> <tag>\n` then exactly those bytes.
 // The daemon forwards the bytes without parsing or re-encoding them, so a 30 MB document costs it a few buffer writes (1.6
 // §4.1 「守护进程的负担」). `gzip: true` (the board's reader takes it, 4.4 §服务形状): the bytes are gzipped HERE, `enc` says
 // `gzip`, and `byteLength` is the compressed length; otherwise `enc` is `-`. `cpu_ms` is this process's CPU for the answer,
-// for the daemon's read-cost line.
+// for the daemon's read-cost line. `tag` is the answer's version tag, `-` for none; `etag` on the line is the one the caller holds,
+// and a version still at it is answered `304` with no bytes (src/query/answers.mjs, 4.4 §条件 GET).
 //
 // `later(fn)` on every query it runs: a query here is never the only one, so what a query may build FOR THE NEXT ONE
 // (src/query/named/session.mjs assembles the whole session, overview.mjs fills the usage sidecars) is built here and nowhere else —
@@ -59,18 +60,18 @@ const progress = () => {
   said = t
   process.send({ progress: true })
 }
-const write = (status, body, enc, cpu) => new Promise((done) => {
-  process.stdout.write(`${status} ${body.length} ${enc} ${cpu}\n`, () => { if (body.length) process.stdout.write(body, done); else done() })
+const write = (status, body, enc, cpu, tag) => new Promise((done) => {
+  process.stdout.write(`${status} ${body.length} ${enc} ${cpu} ${tag}\n`, () => { if (body.length) process.stdout.write(body, done); else done() })
 })
 
 // A D38 record the store owes (4.3 盘满): the daemon writes it (service.mjs).
 const persist = (e) => { if (process.connected) process.send({ failure: { code: e.code, reason: e.reason } }) }
 
 async function serve(line) {
-  let status = 200, bytes, enc = '-', asked = null
+  let status = 200, bytes, enc = '-', tag = '-', asked = null
   const after = [], cpu0 = process.cpuUsage()
   try {
-    const { name, params, indent, control, body, gzip: wants } = JSON.parse(line)
+    const { name, params, indent, control, body, gzip: wants, etag } = JSON.parse(line)
     asked = { name, params }
     if (control) { // one JSON line, the bytes `trocar <command> --json` prints into a pipe; the verb says the status (src/control/board.mjs)
       try {
@@ -86,7 +87,7 @@ async function serve(line) {
       // 400 = the caller's mistake (an unknown name or parameter), 500 = this worker's (src/query/answers.mjs); the message is the
       // query core's own, so the caller can raise the very error its local path would have raised.
       const deps = await depsP;
-      ({ status, bytes, enc } = await answer({ name, params: params || {}, indent, gzip: wants === true },
+      ({ status, bytes, enc, tag } = await answer({ name, params: params || {}, indent, gzip: wants === true, etag: typeof etag === 'string' ? etag : null },
         { home, fs: nodeFs, writer: true, persist, progress, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }))
     }
   } catch (e) { // a line that is not a request
@@ -94,7 +95,7 @@ async function serve(line) {
     bytes = Buffer.from(JSON.stringify({ error: String((e && e.message) || e) }), 'utf8')
   }
   const cpu = process.cpuUsage(cpu0)
-  await write(status, bytes, enc, Math.round((cpu.user + cpu.system) / 1000))
+  await write(status, bytes, enc, Math.round((cpu.user + cpu.system) / 1000), tag)
   bytes = null
   if (after.length) setImmediate(async () => { for (const fn of after) { try { await fn() } catch { /* the next query does it */ } } })
   return asked

@@ -476,3 +476,40 @@ test('a projection the worker cannot write: both answers whole, one persisted pr
     assert.ok(isWhere(got[0].where) && isCode(got[0].code))
   } finally { svc.stop(); fs.chmodSync(ctxDir, 0o700) }
 })
+
+// 3.5 #27 服务队列: one request in flight; the rest are served block, lane, session, then the others, first come first served
+// within a class; a caller gone before its turn is never written to the worker. The stub answers each line 100 ms after it arrives
+// and the fork records every line the service writes to it.
+const queueWorld = () => {
+  const got = []
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), failure: () => {}, fork: () => {
+    const c = spawn(process.execPath, ['-e', `process.stdin.on('data', (d) => { for (const l of String(d).split('\\n').filter(Boolean)) setTimeout(() => process.stdout.write('200 2\\n{}'), 100) })`], { stdio: ['pipe', 'pipe', 'pipe'] })
+    const w = c.stdin.write.bind(c.stdin)
+    c.stdin.write = (l, ...a) => (got.push(JSON.parse(l).params.tag), w(l, ...a))
+    return c
+  } })
+  const ask = (name, tag, res = recorder()) => svc.relay({ name, params: { tag }, res })
+  return { svc, got, ask }
+}
+
+test('#27: with one request in flight, the queue is served block, lane, session, then the rest', async () => {
+  const { svc, got, ask } = queueWorld()
+  try {
+    const all = [ask('segments', 'first'), ask('sessions', 'sessions'), ask('session', 'session'), ask('lane', 'lane'), ask('block', 'block')]
+    await within(Promise.all(all), 10_000, 'every queued request')
+    assert.deepEqual(got, ['first', 'block', 'lane', 'session', 'sessions'])
+  } finally { svc.stop() }
+})
+
+test('#27: a queued request whose caller closed before its turn is never written to the worker', async () => {
+  const { svc, got, ask } = queueWorld()
+  const gone = Object.assign(new EventEmitter(), { writeHead() {}, write: () => true, end() {} })
+  try {
+    const first = ask('segments', 'first')
+    const left = ask('session', 'left', gone)
+    const later = ask('sessions', 'later')
+    gone.emit('close')
+    await within(Promise.all([first, left, later]), 10_000, 'every request settles')
+    assert.deepEqual(got, ['first', 'later'])
+  } finally { svc.stop() }
+})

@@ -41,6 +41,9 @@ export const LOCAL_ENV = Object.freeze(['TROCAR_PRICING'])
 /** How long a daemon has to say something. Inactivity, not a total: the worker streams, so this bites a wedged
  *  daemon, never a big document. */
 export const DEADLINE_MS = 5000
+/** How long the CLI waits before it asks again for an answer that still carries `pending` (3.5 §归约前沿). */
+const PENDING_WAIT_MS = 200
+const pendingOf = (text) => (text.includes('"pending"') ? JSON.parse(text).pending : null)
 
 /** Which path a name and an environment take, without asking anything: `true` = this process must answer it.
  *  A caller that injects its own `fs` or `now` reads its own files on its own clock, which the daemon's worker
@@ -52,6 +55,9 @@ export const localOnly = (name, env = {}) => LOCAL_ONLY.includes(name) || LOCAL_
  * ready to be written as it stands; `via` is 'daemon' or 'local'. `ctx` is the query core's context plus `dir`
  * (the collector directory, where this platform's daemon says how to reach it) — `home` = ~/.trocar, `userHome` =
  * the user's home. Throws what the query core throws (QueryArgError for an unknown name or parameter) on either path.
+ * An answer from the daemon that carries `pending` (its worker has not folded every member yet) is asked again after
+ * PENDING_WAIT_MS until it carries none (3.5 §归约前沿: the terminal prints a whole answer); one whose `pending.done` does not grow
+ * within `deadlineMs` is answered here instead, where the local path folds everything and never has `pending`.
  */
 export async function queryDocument(name, params = {}, { home, userHome, dir, platform, env, deps, fs, now, indent = 0, deadlineMs = DEADLINE_MS } = {}) {
   if (!localOnly(name, env || {}) && !fs && !now) {
@@ -60,8 +66,14 @@ export async function queryDocument(name, params = {}, { home, userHome, dir, pl
       try {
         const q = searchOf(params)
         q.set('name', name); q.set('indent', String(indent))
-        const bytes = await ep.request({ socketPath: ep.socketPath, path: `${QUERY_PATH}?${q}`, timeoutMs: deadlineMs, raw: true })
-        return { text: bytes.toString('utf8'), via: 'daemon' }
+        for (let done = -1, grew = Date.now(); ;) {
+          const text = (await ep.request({ socketPath: ep.socketPath, path: `${QUERY_PATH}?${q}`, timeoutMs: deadlineMs, raw: true })).toString('utf8')
+          const p = pendingOf(text)
+          if (!p) return { text, via: 'daemon' }
+          if (p.done > done) { done = p.done; grew = Date.now() }
+          else if (Date.now() - grew >= deadlineMs) break // the fold stopped making progress: this process folds it all
+          await new Promise((d) => setTimeout(d, PENDING_WAIT_MS))
+        }
       } catch (e) {
         // 400 is the query core's own verdict on these very arguments, so this process must raise the same error
         // instead of computing it again. EVERYTHING else is answered locally: no daemon, a refused socket, a wrong

@@ -65,8 +65,8 @@ function loadStatic() {
   return files;
 }
 
-/** `If-None-Match` names `stamp` (quoted or not, weak or strong, one of a list). */
-const matches = (header, stamp) => String(header || '').split(',').some((t) => t.trim().replace(/^W\//, '').replace(/^"|"$/g, '') === stamp);
+/** The entity tags an If-None-Match lists, without quotes or `W/`. */
+const tagsOf = (header) => String(header || '').split(',').map((t) => t.trim().replace(/^W\//, '').replace(/^"|"$/g, '')).filter(Boolean);
 
 const BODY_MAX = 64 * 1024; // a control request is a few fields (4.4 §控制面); anything larger is not one
 /** The control request's body as a JSON object, or null when it is not one (too large, not JSON, not an object). The only thing this face parses. */
@@ -120,15 +120,25 @@ export function createServer({ home, token, query, uid = process.getuid?.(), pla
     let stamp;
     try { stamp = named.stampOf(name, params, { home, fs, now, env: workerEnv }); }
     catch (e) { if (e instanceof named.QueryArgError) return sendJson(res, 400, { error: e.message }); throw e; }
+    let held = null; // the version part of the caller's tag, for the worker to compare (a name with a version)
     if (stamp != null) {
-      const etag = `"${stamp}"`;
-      if (matches(req.headers['if-none-match'], stamp)) { res.writeHead(304, { etag, 'cache-control': 'no-store' }); return res.end(); }
-      // The worker writes the head of its frame itself; the ETag is added only to a 200 (an error is not a version).
+      // A name with a version (`session`, `lane`) is tagged "<stamp>:<version>" (4.4 §条件 GET): this loop compares the stamp part
+      // alone; a stamp that moved is relayed with the caller's version part, and the worker answers 304 while that version holds.
+      const versioned = !!named.QUERIES[name].version;
+      const tags = tagsOf(req.headers['if-none-match']);
+      const same = tags.find((t) => t.split(':')[0] === stamp);
+      if (same != null) { res.writeHead(304, { etag: `"${same}"`, 'cache-control': 'no-store' }); return res.end(); }
+      if (versioned) held = tags.map((t) => t.split(':')[1]).find(Boolean) ?? null;
+      // The worker writes the head of its frame itself, with its version tag as `etag` when the answer has one; the ETag goes only
+      // on a 200 or a 304 (an error is not a version), and on a versioned name only with the worker's tag (one still folding has none).
       const writeHead = res.writeHead;
-      res.writeHead = (status, headers) => writeHead.call(res, status, status === 200 ? { ...headers, etag } : headers);
+      res.writeHead = (status, { etag: v, ...headers } = {}) => {
+        const etag = versioned ? (v ? `"${stamp}:${v.replace(/"/g, '')}"` : null) : `"${stamp}"`;
+        return writeHead.call(res, status, (status === 200 || status === 304) && etag ? { ...headers, etag } : headers);
+      };
     }
     // A reader that takes gzip gets it, compressed by the worker: this loop only forwards bytes (4.4 §服务形状, D63 ①).
-    return query.relay({ name, params, res, gzip: /\bgzip\b/.test(req.headers['accept-encoding'] || '') });
+    return query.relay({ name, params, res, etag: held, gzip: /\bgzip\b/.test(req.headers['accept-encoding'] || '') });
   }
 
   function staticFile(req, res, url) {

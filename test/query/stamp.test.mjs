@@ -127,3 +127,46 @@ test('4.4:36 overview and sessions follow the usage sidecars; the other corpus n
   assert.notEqual(after.sessions, before.sessions)
   assert.equal(after.traffic, before.traffic)
 })
+
+// 4.4 #9, the two-part tag of `session` / `lane` ("<stamp>:<version>"): the face compares the stamp part alone; a stamp that moved
+// is relayed with the caller's version part, and the worker answers 304 while this session's version holds.
+test('4.4 #9 two-part: another session grows → 304; this one grows → 200 with a new tag; nothing changed → 304 with no worker line', { timeout: 60_000 }, async () => {
+  const { serveFace, request, withToken } = await import('../server/face.mjs')
+  const { within } = await import('../helpers/bounded.mjs')
+  const { bigSession } = await import('./big-session.mjs')
+  const home = path.join(tmpDir('trocar-stamp2-'), '.trocar')
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  const A = bigSession({ home, id: 'aaaa-0000-4a1b-9c2d-000000000001', segment: '20261020T100000Z', growth: 500, subEvery: 0, seed: 3 })
+  const B = bigSession({ home, id: 'bbbb-0000-4a1b-9c2d-000000000002', segment: '20261020T110000Z', growth: 500, subEvery: 0, seed: 5 })
+  A.append(4); B.append(4)
+  const f = await serveFace({ home })
+  const ask = (inm) => request(f.port, `/api/session?id=${A.id}`, { headers: withToken(inm ? { 'if-none-match': inm } : {}) })
+  const parts = (etag) => /^"([0-9a-f]+):([^":]+)"$/.exec(etag || '')?.slice(1)
+  // an answer still folding (`pending`) carries no tag: ask until the worker has it whole
+  const tagged = async (inm) => {
+    for (;;) { const r = await ask(inm); assert.equal(r.status, 200); if (r.headers.etag) return r; await new Promise((d) => setTimeout(d, 50)) }
+  }
+  try {
+    const first = await within(tagged(), 30_000, 'a tagged answer')
+    const [stamp, version] = parts(first.headers.etag)
+    assert.ok(stamp && version, first.headers.etag)
+
+    const n = f.relays.length
+    const same = await ask(first.headers.etag)
+    assert.equal(same.status, 304)
+    assert.equal(same.body, '')
+    assert.equal(f.relays.length, n, 'nothing changed: no worker line')
+
+    B.append(2)
+    const other = await ask(first.headers.etag)
+    assert.equal(other.status, 304, 'another session grew: this one is unchanged')
+    assert.equal(other.body, '')
+    const [stamp2, version2] = parts(other.headers.etag)
+    assert.notEqual(stamp2, stamp, 'the stamp part moved with the disk')
+    assert.equal(version2, version, 'the version part did not')
+
+    A.append(2)
+    const grown = await within(tagged(other.headers.etag), 30_000, 'the grown session, tagged')
+    assert.notEqual(parts(grown.headers.etag)[1], version, 'this session grew: a new version part')
+  } finally { f.close() }
+})
