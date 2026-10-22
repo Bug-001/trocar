@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { renderRawPanel, renderResourceView, wireRawPanel } from '../../src/web/v2/replay/rawpanel.mjs'
 import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
 import { stepOf } from '../../src/web/v2/replay/model.mjs'
-import { ROUTES_READY, deskOf, deskFrom } from './desk-world.mjs'
+import { deskOf, deskFrom } from './desk-world.mjs'
 import * as W from '../../src/web/v2/labels/replay.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
@@ -97,7 +97,7 @@ test('the raw reply row states its character count once (one fact, one place —
 })
 
 // 2.6 §A: the reply's parts come from the server's own lane answer (the demo session), never a hand-made shape
-test('a real server answer: every held step\'s reply tool names render in the panel', { skip: ROUTES_READY ? false : "lane Q's routes are not merged (src/query/named/lane.mjs)" }, async () => {
+test('a real server answer: every held step\'s reply tool names render in the panel', async () => {
   const face = await serveBoard(boardHome())
   try {
     const id = (await face.get('sessions')).doc.sessions[0].session_id

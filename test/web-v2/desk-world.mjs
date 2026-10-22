@@ -6,11 +6,7 @@
 // member mark with the key sets of test/fixtures/session-read-contract.json; ops are a greedy copy/add encoding.
 // deskFrom(get, id) reads `session` and then every lane page by page through the desk model.
 import { createHash } from 'node:crypto'
-import { QUERIES } from '../../src/query/named/index.mjs'
 import { createDesk, applySession, applyLane } from '../../src/web/v2/replay/model.mjs'
-
-/** Lane Q's routes are merged when the named-query table has `lane` (D8 deletes this and the skips that read it). */
-export const ROUTES_READY = Object.hasOwn(QUERIES, 'lane')
 
 // the server's step order (3.5: ts_request, then id), written here independently of the model
 const stepCmp = (a, b) => String(a.ts).localeCompare(String(b.ts)) || String(a.rid).localeCompare(String(b.rid))

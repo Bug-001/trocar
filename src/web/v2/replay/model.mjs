@@ -11,8 +11,7 @@
 //   applyLane(desk, answer) → {reset}                            a tail / reset page, an older (--to) page, a --from page
 //   listOf(desk, rid) → bid[] | null    stepOf(desk, rid) → {row, lane, held, flat, reply, attrs, detail}
 
-// D8 replaces with ../../../view/step-order.mjs
-const compareStep = (tsA, idA, tsB, idB) => String(tsA).localeCompare(String(tsB)) || String(idA).localeCompare(String(idB))
+import { compareStep } from '../../../view/step-order.mjs'
 
 const KF_EVERY = 32
 

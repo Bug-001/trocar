@@ -9,10 +9,9 @@ import { ctxWindowHtml, ctxWindowUnits, landingTarget, renderContextWindow } fro
 import { QUIET_CAUSES } from '../../src/web/v2/replay/analysis.mjs'
 import { stepOf } from '../../src/web/v2/replay/model.mjs'
 import * as W from '../../src/web/v2/labels/replay.mjs'
-import { deskOf, world, deskFrom, ROUTES_READY } from './desk-world.mjs'
+import { deskOf, world, deskFrom } from './desk-world.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
-const NOT_READY = ROUTES_READY ? false : "lane Q's routes are not merged (src/query/named/lane.mjs)"
 let rn = 0
 const blk = (o = {}) => ({ sec: 'messages', role: 'user', kind: 'text', head: { role: 'user', tag: 'user', label: 'b' }, preview: 'p', chars: 5, bytes: 5, ref: `s/m#R::${rn++}-9`, ...o })
 const sys = (o) => blk({ sec: 'system', role: 'system', head: { role: 'system', tag: 'text', label: 's' }, ...o })
@@ -204,7 +203,7 @@ test('2.3 #13: a failed step\'s segment is one line, its reason in the technical
   assert.ok(!h.includes('class="cblk')); assert.ok(h.indexOf('ERR-boom-q') > h.indexOf('id="cwfail'))
 })
 
-test('the real face: every main step of the demo session draws inside the whitelist with one row per reply def', { skip: NOT_READY }, async () => {
+test('the real face: every main step of the demo session draws inside the whitelist with one row per reply def', async () => {
   const face = await serveBoard(boardHome())
   try {
     const id = (await face.get('sessions')).doc.sessions[0].session_id

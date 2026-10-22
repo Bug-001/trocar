@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { boardHome, serveBoard } from './real-face.mjs'
-import { world, deskFrom, ROUTES_READY } from './desk-world.mjs'
+import { world, deskFrom } from './desk-world.mjs'
 import { buildLanes, anchorLane, stepRef } from '../../src/web/v2/replay/lanes.mjs'
 import { createDesk, applySession } from '../../src/web/v2/replay/model.mjs'
 import { sessionHeadHtml, readStateHtml } from '../../src/web/v2/replay/header.mjs'
@@ -14,7 +14,6 @@ import { stepBarHtml } from '../../src/web/v2/replay/stepbar.mjs'
 import { SKELETON } from '../../src/web/v2/replay/replay.mjs'
 import * as W from '../../src/web/v2/labels/replay.mjs'
 
-const NOT_READY = ROUTES_READY ? false : "lane Q's routes are not merged (src/query/named/lane.mjs)"
 const SEEDS = [1, 7, 19, 42]
 const worldDesk = (seed) => { const w = world(seed); return deskFrom(w.get(), 'S').then((desk) => ({ w, desk })) }
 async function realDesk() {
@@ -71,7 +70,7 @@ test('the desk draws exactly one previous-step and one next-step control, and th
 test('the session head is built only from 1.2 §会话头 parts: back, title, agent chip (entry word inside), project, follow, ⓘ', async () => {
   for (const seed of SEEDS) headParts((await worldDesk(seed)).desk)
 })
-test('on the real face: one control each, the head only from its parts', { skip: NOT_READY }, async () => {
+test('on the real face: one control each, the head only from its parts', async () => {
   const desk = await realDesk()
   oneControlEach(desk); headParts(desk)
 })
