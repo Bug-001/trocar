@@ -59,9 +59,13 @@ const read = (opts, calls) => {
 // The call term: a session of the user's live session's shape (test/query/big-session.mjs live: a dozen subagent lanes side by side,
 // late calls, paths in tool results, written files, long first prompts with reminders, shared system prompts, clusters of MB-sized
 // records) read cold at N and at 2N calls, N past what fills the fixed caches: each read holds at most its calls × SPINE_PER_ROW and
-// its blocks × SPINE_PER_BLOCK beside K, and what 2N holds more than N is at most N × SPINE_PER_ROW beside its new blocks ×
-// SPINE_PER_BLOCK. The session is extracted between the reads as the worker extracts it in the background, so each read is the cold
-// open of a projected session (a worker that went idle and was forked again).
+// its blocks × SPINE_PER_BLOCK beside K, and what 2N holds more than N is at most N × SPINE_PER_ROW beside what its new blocks
+// measure, BLOCK_COLUMNS each: crediting them SPINE_PER_BLOCK, their reservation, would leave ~8 blocks a call of slack and the
+// slope green until a call cost ~2.4 × SPINE_PER_ROW. The session is extracted between the reads as the worker extracts it in the
+// background, so each read is the cold open of a projected session (a worker that went idle and was forked again).
+// What a distinct block of this shape keeps (its store slot and block columns), measured 2026-10-22 as SPINE_PER_ROW was (heap
+// snapshot dominators, live(0.24) → live(0.48)).
+const BLOCK_COLUMNS = 147
 test('what a session read keeps grows by at most SPINE_PER_ROW a call', { timeout: 120_000 }, async () => {
   const { calls: N, ...opts } = live(0.12)
   const home = path.join(tmpDir('trocar-spine-'), '.trocar'), s = bigSession({ home, ...opts })
@@ -73,7 +77,7 @@ test('what a session read keeps grows by at most SPINE_PER_ROW a call', { timeou
       const bound = r.calls * SPINE_PER_ROW + r.blocks * SPINE_PER_BLOCK + K
       assert.ok(r.retained <= bound, `${r.retained} B retained for ${r.calls} calls and ${r.blocks} blocks, past ${bound} B`)
     }
-    const per = (two.retained - one.retained - (two.blocks - one.blocks) * SPINE_PER_BLOCK) / (two.calls - one.calls)
+    const per = (two.retained - one.retained - (two.blocks - one.blocks) * BLOCK_COLUMNS) / (two.calls - one.calls)
     assert.ok(SPINE_PER_ROW <= 1024, `SPINE_PER_ROW ${SPINE_PER_ROW} B: past 3.5's 1 KiB a call`)
     assert.ok(per <= SPINE_PER_ROW, `${Math.round(per)} B a call (${one.retained} → ${two.retained} B, ${one.blocks} → ${two.blocks} blocks, ${one.calls} → ${two.calls} calls), SPINE_PER_ROW ${SPINE_PER_ROW}`)
   } finally { fs.rmSync(path.dirname(home), { recursive: true, force: true }) } // a live-shaped session is hundreds of MB on disk
