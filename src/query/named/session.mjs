@@ -35,7 +35,7 @@ import { openProjection, posCmp, STORE_HEAP } from '../projection.mjs';
 import { rowsKey, warmCache, fsTag, heapBudget, heapCeiling, hold, steadyBytes, liveHeap, usedHeap } from '../warm.mjs';
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
-import { columns, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
+import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
 
 export const params = Object.freeze(['id', 'since', 'before', 'limit']);
 
@@ -161,14 +161,19 @@ function relayOf(log) {
   return r;
 }
 const reductionOf = (s, log) => { s.relay = relayOf(log); return reduction(s.store, { log: s.relay, resolve: (ref) => s.resolve(ref), errors: s.sink, progress: (rid) => s.hook(rid) }); };
-function closeState(s) { if (fileLogs.get(s.store) === s.log) fileLogs.delete(s.store); s.log.close(); if (s.T) s.T.close(); }
-// store → the fold log file a state of it holds open (the worker's)
+function closeState(s) { if (fileLogs.get(s.store) === s) fileLogs.delete(s.store); s.log.close(); if (s.T) s.T.close(); }
+// store → the state that holds its fold log file open (the worker's)
 const fileLogs = new WeakMap();
 /** saveIndexes(): the sidecars (4.3 §4 旁索引) of every open store and its fold log whose file grew since its last save, the store's
- *  first (the log's sidecar names the projection's bytes). The worker calls it once an idle period; the local path's are never
- *  written (opened write:false). A sidecar that cannot be written is not one: the next open scans. */
+ *  first (the log's sidecar names the projection's bytes), the log's with the state's step-order columns synced to its frontier.
+ *  The worker calls it once an idle period; the local path's are never written (opened write:false). A sidecar that cannot be
+ *  written is not one: the next open scans. */
 export function saveIndexes() {
-  for (const s of stores.values()) for (const x of [s, fileLogs.get(s)]) { try { if (x) x.saveIndex(); } catch { /* the next idle period */ } }
+  for (const s of stores.values()) {
+    try { s.saveIndex(); } catch { /* the next idle period */ }
+    const st = fileLogs.get(s);
+    try { if (st) st.log.saveIndex(dumpColumns(sync(st.cols, st.log))); } catch { /* the next idle period */ }
+  }
 }
 const cutOf = (plan) => (plan.read.length ? String(plan.read[0].id) : null);
 // Whether a fold log was folded under this plan's cut: its last frontier's `n` (the members folded) = the members of the cut up to
@@ -180,7 +185,8 @@ function foldedUnder(log, plan, f) {
   return n === log.read(log.frontier).n;
 }
 // A state from scratch: the session's fold log (the worker's file; the local path's opened write:false) when it was folded under this
-// cut, answered at its frontier (`target`) with no reduction yet; else a reduction from scratch into a fold log from scratch (3.5
+// cut, answered at its frontier (`target`) with no reduction yet, its step-order columns seeded from the log's sidecar when they
+// were synced at or before its frontier (sync() then reads only the lines past them); else a reduction from scratch into a fold log from scratch (3.5
 // §内存有界: a cut that moves restarts the fold and its log), the worker's beside the projection (4.3 §4), the local path's in memory.
 function stateOf(ctx, id, store, plan) {
   const s = { base: liveHeap(), store, perRow: plan.perRow, cut: cutOf(plan), n: 0, cost: 0, sink: [], hook: null, resolve: null,
@@ -188,13 +194,18 @@ function stateOf(ctx, id, store, plan) {
   const writer = ctx.writer === true, home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   const open = () => openFoldLog({ home, fs, key: id, write: writer, projection: { id: store.id, bytes: store.bytes }, errors: s.sink });
   const log = open(), m = markOf(log);
-  if (m != null && foldedUnder(log, plan, m)) { s.log = log; s.target = m; if (writer) fileLogs.set(store, log); return s; }
+  if (m != null && foldedUnder(log, plan, m)) {
+    const c = log.saved && loadColumns(store.rows, log.saved.parts);
+    if (c && c.at <= log.frontier) s.cols = c;
+    s.log = log; s.target = m; if (writer) fileLogs.set(store, s);
+    return s;
+  }
   log.close();
   if (writer) {
     try { fs.rmSync(foldLogFile(home, id), { force: true }); } catch { /* the open below cuts what it cannot read */ }
     s.log = open();
   } else s.log = memoryLog(store);
-  if (writer) fileLogs.set(store, s.log);
+  if (writer) fileLogs.set(store, s);
   s.R = reductionOf(s, s.log);
   return s;
 }

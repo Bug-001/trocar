@@ -161,3 +161,54 @@ test('4.3 #7: the local path writes no sidecar', async () => {
   saveIndexes()
   assert.deepEqual(sidecars(local), [])
 })
+
+// A member that is no call, written after the calls: a request of no LLM on the session's own headers (the last call's).
+function nonCall(file, n) {
+  const last = fs.readFileSync(file, 'utf8').trimEnd().split('\n').map((l) => JSON.parse(l)).reverse().find((r) => r.req_headers)
+  if (!last) return false
+  const ts = new Date(Date.parse(last.ts_request) + 1_000).toISOString()
+  fs.appendFileSync(file, JSON.stringify({ ...last, ts, ts_request: ts, ts_response_start: ts, ts_response_end: ts, id: `noncall-${n}`, endpoint: `/api/other/${n}`,
+    method: 'GET', req_body: '', resp: { status: 200, kind: 'json', body: { ok: true } }, is_llm_call: false, traffic_class: 'other' }) + '\n')
+  return true
+}
+// The line of the first call of a lane other than the main one that has two calls or more, taken out of the file (its rid is
+// `<segment>:<line>`): written back later, it sorts before that lane's first row, so the lane's key moves.
+async function holdFirst(home, file, id) {
+  const { doc } = await answers(copy(home), id)
+  const lane = doc.lanes.find((l) => l.kind !== 'main' && doc.calls.filter((c) => c.lane === l.lane).length > 1)
+  const lines = fs.readFileSync(file, 'utf8').split('\n'), at = Number(lane.lane.split(':').pop()) - 1, held = lines[at]
+  lines.splice(at, 1)
+  fs.writeFileSync(file, lines.join('\n'))
+  return held
+}
+// What a reader asks of a cold open: the session whole, its newest page, the change since a mark kept from before, each lane's tail
+// and its page ending before its second step (the compaction and summarize events of the steps after it ride along).
+async function reads(home, id, kept) {
+  const doc = await settled(home, id), out = [doc]
+  for (const p of [{ limit: 2 }, { since: kept }]) out.push(await q('session', home, { id, ...p }, { writer: true }))
+  for (const l of doc.lanes) {
+    const second = doc.calls.filter((c) => c.lane === l.lane)[1]
+    for (const p of [{}, ...(second ? [{ to: second.rid }] : [])]) out.push(await q('lane', home, { id, lane: l.lane, ...p }, { writer: true }))
+  }
+  return out
+}
+
+test('4.3 §4 旁索引: a cold open seeded from the step-order columns in the fold log\'s sidecar answers session and lane as one without, with lines past them', { timeout: 600_000 }, async () => {
+  let nonCalls = 0
+  for (const wire of WIRES) {
+    const home = homeOf('trocar-side-cols-'), s = bigSession({ home, wire, growth: 200, subEvery: 3, compactAt: 1_500, segment: SEG, late: 3, subLanes: 4 })
+    s.append(3 * FIRST) // enough for a subagent lane of two calls
+    const held = await holdFirst(home, s.file, s.id)
+    const before = await settled(home, s.id)
+    saveIndexes()
+    // past the saved columns: late rows that sort before the tip, a lane whose first row comes back (its key moves), a member no call
+    s.append(MORE)
+    fs.appendFileSync(s.file, held + '\n')
+    if (nonCall(s.file, 1)) nonCalls++
+    const after = await settled(home, s.id)
+    assert.ok(before.lanes.some((l) => after.lanes.every((m) => m.lane !== l.lane)), `${wire}: a lane key moved`)
+    const a = await reads(copy(home), s.id, before.mark), b = await reads(copy(home, false), s.id, before.mark)
+    assert.equal(JSON.stringify(a), JSON.stringify(b), wire)
+  }
+  assert.ok(nonCalls > 0, 'a member that is no call was written')
+})

@@ -50,6 +50,33 @@ const recOf = (r) => ({ id: String(r.id), ts_request: r.ts ?? null, is_llm_call:
 export const columns = (slotOf) => ({ at: -1, slotOf, ts: [], ln: new Int32Array(0), uc: new Int32Array(0), cs: new Uint8Array(0),
   keys: new Map(), order: [], lanes: new Set(), its: null });
 const tsOf = (cols, rid) => cols.ts[cols.slotOf(rid)];
+// The columns in a fold log's sidecar (4.3 §4 旁索引, its `extra`): `s.at` the frontier they were synced to; by slot `s.tk` whether the
+// ts is undefined (0), null (1) or a string (2, in `s.ts` in slot order), `s.ln`, `s.uc`, `s.cs`; `s.keys` the lane keys in int order;
+// `s.order` the step order as slots; `s.lanes` the live lane keys. A string holding a newline, or a value of another type, saves none.
+const strs = (a) => a.every((x) => typeof x === 'string' && !x.includes('\n'));
+/** dumpColumns(cols) → the sidecar parts of synced columns ([] when they cannot be: never synced, or a key no `str` part holds). */
+export function dumpColumns(cols) {
+  const n = cols.ts.length, tk = new Uint8Array(n), ts = [];
+  for (let k = 0; k < n; k++) { const t = cols.ts[k]; tk[k] = t === undefined ? 0 : t === null ? 1 : 2; if (tk[k] === 2) ts.push(t); }
+  const keys = [...cols.keys.keys()], lanes = [...cols.lanes];
+  if (cols.at < 0 || !strs(ts) || !strs(keys) || !strs(lanes)) return [];
+  return [['s.at', Float64Array.of(cols.at)], ['s.tk', tk], ['s.ts', ts], ['s.ln', cols.ln.slice(0, n)], ['s.uc', cols.uc.slice(0, n)],
+    ['s.cs', cols.cs.slice(0, n)], ['s.keys', keys], ['s.order', Int32Array.from(cols.order, (rid) => cols.slotOf(rid))], ['s.lanes', lanes]];
+}
+/** loadColumns(rows, parts) → the columns dumpColumns saved, over the projection's rows (`slotOf`, `keyAt`, `size`): equal to a sync
+ *  to their `at`; null when the parts are not of that shape or name a slot the rows do not have. */
+export function loadColumns(rows, p) {
+  const at = p['s.at'], tk = p['s.tk'], n = tk ? tk.length : -1;
+  if (!(at instanceof Float64Array) || at.length !== 1 || !(tk instanceof Uint8Array) || n > rows.size || !Array.isArray(p['s.ts'])) return null;
+  for (const c of ['s.ln', 's.uc']) if (!(p[c] instanceof Int32Array) || p[c].length !== n) return null;
+  if (!(p['s.cs'] instanceof Uint8Array) || p['s.cs'].length !== n || !(p['s.order'] instanceof Int32Array) || !Array.isArray(p['s.keys']) || !Array.isArray(p['s.lanes'])) return null;
+  const cols = { ...columns(rows.slotOf), at: at[0], ln: p['s.ln'], uc: p['s.uc'], cs: p['s.cs'], keys: new Map(p['s.keys'].map((k, i) => [k, i])), lanes: new Set(p['s.lanes']) };
+  let j = 0;
+  for (let k = 0; k < n; k++) if (tk[k]) cols.ts[k] = tk[k] === 1 ? null : p['s.ts'][j++];
+  if (j !== p['s.ts'].length) return null;
+  for (const k of p['s.order']) { if (!(k >= 0 && k < n && tk[k])) return null; cols.order.push(rows.keyAt(k)); }
+  return cols;
+}
 // where (t, rid) goes in the step-order column: the first place whose row sorts at or after it
 function placeOf(cols, t, rid) {
   let lo = 0, hi = cols.order.length;
