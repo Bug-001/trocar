@@ -499,7 +499,7 @@ export function skeletonDoc(R) {
 }
 /** skeletonOf(R) → {rows (step order), lanes (headers, in the order of their first row), events [{type, rid, lane}], failed?,
  *  unknown?, stats, logged, probes, records (every member folded but the failed, in step order)}, read from R's fold log. */
-export function skeletonOf(R) {
+function skeletonOf(R) {
   const { log } = R, v = R.view();
   const rows = [], events = [], records = [];
   for (const rid of v.calls) {
@@ -537,7 +537,7 @@ export function laneLedger(lines, base = -1) {
 }
 /** laneDoc(R, key) → {rids, events, resources, seen} of the lane `key` names, read from R's fold log: its calls in step order, their
  *  lane events, and its ledger (laneLedger). */
-export function laneDoc(R, key) {
+function laneDoc(R, key) {
   const { log } = R, lines = [];
   for (const rid of R.view().calls) { const o = log.read(...log.latest(rid)); if (o.r.lane === key) lines.push(o); }
   return { rids: lines.map((o) => o.c), events: lines.flatMap((o) => o.e), ...laneLedger(lines) };
