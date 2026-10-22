@@ -12,14 +12,14 @@ import { execFileSync, spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs, not the other way round
-import { SPINE_PER_ROW, SPINE_PER_BLOCK } from '../../src/query/named/session.mjs'
+import { SPINE_PER_ROW, SPINE_PER_BLOCK, extendSession } from '../../src/query/named/session.mjs'
 import { STORE_HEAP } from '../../src/query/projection.mjs'
 import { REDUCE_HEAP } from '../../src/view/reduce.mjs'
 import { LOG_BYTES } from '../../src/query/fold-log.mjs'
-import { WORKER_MEMORY_MB } from '../../src/query/warm.mjs'
+import { heapFlags } from '../../src/query/warm.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession, live } from './big-session.mjs'
-import { growPast, readerBudget, readerFlags } from './past-room.mjs'
+import { grower, readerFlags } from './past-room.mjs'
 
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
 const QUERY = new URL('../../src/query/named/index.mjs', import.meta.url).href
@@ -44,26 +44,39 @@ global.gc(); global.gc()
 const retained = process.memoryUsage().heapUsed - before
 const blocks = defs(fs.readFileSync(projectionFile(home, id)))
 console.log(JSON.stringify({ calls, truncated, retained, blocks }))`
+const cold = (home, id) => JSON.parse(execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', ...heapFlags(), '--input-type=module', '-e', READ, home, id],
+  { encoding: 'utf8', maxBuffer: 1 << 20 }))
 const read = (opts, calls) => {
   const home = path.join(tmpDir('trocar-spine-'), '.trocar'), s = bigSession({ home, ...opts })
   s.append(calls)
-  const out = JSON.parse(execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', `--max-old-space-size=${WORKER_MEMORY_MB}`, '--input-type=module', '-e', READ, home, s.id],
-    { encoding: 'utf8', maxBuffer: 1 << 20 }))
+  const out = cold(home, s.id)
   fs.rmSync(path.dirname(home), { recursive: true, force: true }) // a live-shaped session is hundreds of MB on disk
   assert.ok(out.calls > 0.99 * calls, `${out.calls} of ${calls} calls read`)
   assert.equal(out.truncated, null)
   return out
 }
 
-// The call term: sessions of the user's live session's shape (test/query/big-session.mjs live: a dozen subagent lanes side by side,
+// The call term: a session of the user's live session's shape (test/query/big-session.mjs live: a dozen subagent lanes side by side,
 // late calls, paths in tool results, written files, long first prompts with reminders, shared system prompts, clusters of MB-sized
-// records) of N and 2N calls, N past what fills the fixed caches: what 2N holds more than N is at most N × SPINE_PER_ROW beside its
-// new blocks × SPINE_PER_BLOCK.
-test('what a session read keeps grows by at most SPINE_PER_ROW a call', { timeout: 600_000 }, () => {
-  const { calls: N, ...opts } = live(0.24), one = read(opts, N), two = read(opts, 2 * N)
-  const per = (two.retained - one.retained - (two.blocks - one.blocks) * SPINE_PER_BLOCK) / (two.calls - one.calls)
-  assert.ok(SPINE_PER_ROW <= 1024, `SPINE_PER_ROW ${SPINE_PER_ROW} B: past 3.5's 1 KiB a call`)
-  assert.ok(per <= SPINE_PER_ROW, `${Math.round(per)} B a call (${one.retained} → ${two.retained} B, ${one.blocks} → ${two.blocks} blocks, ${one.calls} → ${two.calls} calls), SPINE_PER_ROW ${SPINE_PER_ROW}`)
+// records) read cold at N and at 2N calls, N past what fills the fixed caches: each read holds at most its calls × SPINE_PER_ROW and
+// its blocks × SPINE_PER_BLOCK beside K, and what 2N holds more than N is at most N × SPINE_PER_ROW beside its new blocks ×
+// SPINE_PER_BLOCK. The session is extracted between the reads as the worker extracts it in the background, so each read is the cold
+// open of a projected session (a worker that went idle and was forked again).
+test('what a session read keeps grows by at most SPINE_PER_ROW a call', { timeout: 120_000 }, async () => {
+  const { calls: N, ...opts } = live(0.12)
+  const home = path.join(tmpDir('trocar-spine-'), '.trocar'), s = bigSession({ home, ...opts })
+  const grown = async () => { s.append(N); while (await extendSession({ home, writer: true }, s.id, Infinity)); return cold(home, s.id) }
+  try {
+    const one = await grown(), two = await grown()
+    for (const [r, n] of [[one, N], [two, 2 * N]]) {
+      assert.ok(r.calls > 0.99 * n && r.truncated === null, `${r.calls} of ${n} calls read, truncated ${JSON.stringify(r.truncated)}`)
+      const bound = r.calls * SPINE_PER_ROW + r.blocks * SPINE_PER_BLOCK + K
+      assert.ok(r.retained <= bound, `${r.retained} B retained for ${r.calls} calls and ${r.blocks} blocks, past ${bound} B`)
+    }
+    const per = (two.retained - one.retained - (two.blocks - one.blocks) * SPINE_PER_BLOCK) / (two.calls - one.calls)
+    assert.ok(SPINE_PER_ROW <= 1024, `SPINE_PER_ROW ${SPINE_PER_ROW} B: past 3.5's 1 KiB a call`)
+    assert.ok(per <= SPINE_PER_ROW, `${Math.round(per)} B a call (${one.retained} → ${two.retained} B, ${one.blocks} → ${two.blocks} blocks, ${one.calls} → ${two.calls} calls), SPINE_PER_ROW ${SPINE_PER_ROW}`)
+  } finally { fs.rmSync(path.dirname(home), { recursive: true, force: true }) } // a live-shaped session is hundreds of MB on disk
 })
 
 // Long contexts and lanes side by side: on two axes, the wire (a whole context per request, Message Threads, Codex over WebSocket,
@@ -88,11 +101,10 @@ test('what a session read keeps grows by at most SPINE_PER_BLOCK a distinct bloc
 
 // A session past the heap bound that goes on growing (a live one, followed): the cut moves in steps, not with every new row, so the
 // spine is folded on with the new rows instead of from scratch on every poll (3.5 §内存有界). Twenty one-call growths in a worker-sized
-// heap far smaller than the session (half again as many rows as its room for the spine holds at SPINE_PER_ROW, growPast):
+// heap smaller than the session (a quarter more rows than its room for the spine holds at SPINE_PER_ROW, test/query/past-room.mjs):
 // the shown calls grow with the session between steps, and the cut moves at most once.
-// The session is grown and extracted in this process (test/query/past-room.mjs growPast: growing it is not what is measured); the
-// reader, one process with a small heap kept across the reads (readerFlags), reads it on each line it is sent and answers with what
-// it showed.
+// The session is grown and extracted in a process of its own (grower: growing it is not what is measured); the reader, one process
+// with a small heap kept across the reads (readerFlags), reads it on each line it is sent and answers with what it showed.
 const GROWING = `
 const { runQuery } = await import(${JSON.stringify(QUERY)})
 const [home, id] = process.argv.slice(1)
@@ -102,21 +114,20 @@ for await (const _ of (await import('node:readline')).createInterface({ input: p
   do doc = await runQuery('session', { id, limit: '20' }, { home, writer: true }); while (doc.pending)
   console.log(JSON.stringify(doc.truncated && doc.truncated.shown))
 }`
-test('a session past the heap bound that keeps growing keeps its cut between steps, so it is folded on, not from scratch', { timeout: 600_000 }, async () => {
+test('a session past the heap bound that keeps growing keeps its cut between steps, so it is folded on, not from scratch', { timeout: 120_000 }, async () => {
   const home = path.join(tmpDir('trocar-spine-'), '.trocar')
-  // Message Threads (a call's new messages are its new blocks: the room is the spine's, not eaten by the blocks)
-  const s = bigSession({ home, wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12 })
-  await growPast(s, { home, budget: readerBudget(256) })
-  const reader = spawn(process.execPath, [...readerFlags(256), '--input-type=module', '-e', GROWING, home, s.id], { stdio: ['pipe', 'pipe', 'inherit'] })
+  // Message Threads, subagents side by side
+  const s = await grower({ home, heapMb: 128, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12 } })
+  const reader = spawn(process.execPath, [...readerFlags(128), '--input-type=module', '-e', GROWING, home, s.id], { stdio: ['pipe', 'pipe', 'inherit'] })
   const lines = createInterface({ input: reader.stdout })[Symbol.asyncIterator]()
   const answer = async () => { const { value, done } = await lines.next(); assert.ok(!done, 'the reader ended'); return JSON.parse(value) }
   try {
     const shown = []
-    for (let i = 0; i < 20; i++) { reader.stdin.write('read\n'); shown.push(await answer()); s.append(1) }
+    for (let i = 0; i < 20; i++) { reader.stdin.write('read\n'); shown.push(await answer()); await s.more() }
     assert.ok(shown.every((x) => x > 0), `cut every time: ${shown}`)
     const moves = shown.slice(1).filter((x, i) => x !== shown[i] + 1).length
     assert.ok(moves <= 1, `the cut moved ${moves} times in 20 one-call growths: ${shown}`)
-  } finally { reader.stdin.end(); reader.kill() }
+  } finally { reader.stdin.end(); reader.kill(); s.stop(); fs.rmSync(path.dirname(home), { recursive: true, force: true }) }
 })
 
 // A reduction from scratch (subagents told apart by order alone, and a record that ends late among them: the session is reduced

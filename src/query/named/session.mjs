@@ -34,11 +34,11 @@ export const params = Object.freeze(['id', 'since', 'before', 'limit']);
 
 /** What a session read keeps in the heap per call (the reduction's columns and its lanes' shares, the projection's row and shared
  *  value index, the plan's entry, the kept mark's digest), until a reduction of THIS session measured it (HeapBound below).
- *  Measured 2026-10-22 as what a read of a test/query/big-session.mjs live(0.48) session holds more than one of live(0.24), per
- *  call, after a forced GC, the objects each part dominates summed (a heap snapshot: the caches of K and the blocks' columns left
- *  out): 602 B (the reduction state and its mark 345, the row and shared value index 203, the plan 54; the analyzer of a fold
- *  that keeps nothing keeps no ledger, replayLedger rebuilds it from the deltas), × 1.25. */
-export const SPINE_PER_ROW = 752;
+ *  Measured 2026-10-22 as what a cold read of a test/query/big-session.mjs live(0.48) session holds more than one of live(0.24),
+ *  per call, after a forced GC, the objects each part dominates summed (a heap snapshot's dominator tree; the caches of K, the
+ *  segment index rows and the blocks' columns left out): 633 B (the reduction state and its marks 346, the row and shared value
+ *  index 203, the plan 84), × 1.25. */
+export const SPINE_PER_ROW = 792;
 /** What the reduction keeps in the heap per distinct block of the session (its store's slot, its block columns and interned keys:
  *  src/view/reduce.mjs, src/query/projection.mjs): 222 B measured (after a forced GC, in a heap of the worker's size) as what a
  *  read of a test/query/big-session.mjs live(0.004) session holds more with 1,500 fresh tool definitions a call than with none, per
@@ -63,13 +63,15 @@ export function working(rows) {
 }
 /** The rows (in step order) a reduction reads: all while their spine fits the budget beside the work and the steady caches
  *  (`others`, counted in whole steps so their refreshes do not move it; the other caches give way), else the newest that do less
- *  one step, on a grid of steps → {read, bound (the document's `truncated`), room}. */
+ *  one step, on a grid of steps → {read, bound (the document's `truncated`), room}. A step is the rows a tenth of the budget holds,
+ *  at most a quarter of the rows that fit: the cut moves once a step and shows at least half of what fits (a session's index rows
+ *  and blocks, never cut, can leave its spine less than two budget steps). */
 function fitting(rows, perRow, others) {
   const stepBytes = heapBudget() / BOUND_STEPS;
   const room = heapBudget() - working(rows) - Math.ceil(others / stepBytes) * stepBytes;
   const n = Math.floor(room / perRow);
   if (rows.length <= n) return { read: rows, bound: null, room };
-  const step = Math.max(1, Math.floor(stepBytes / perRow)), cap = Math.max(1, n - step);
+  const step = Math.max(1, Math.min(Math.floor(stepBytes / perRow), Math.floor(n / 4))), cap = Math.max(1, n - step);
   const read = rows.slice(Math.min(Math.ceil((rows.length - cap) / step) * step, rows.length - 1));
   return { read, room, bound: { shown: calls(read), total: calls(rows), kept_mb: mb(stored(read)), file_mb: mb(stored(rows)) } };
 }
