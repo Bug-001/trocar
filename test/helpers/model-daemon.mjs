@@ -10,7 +10,7 @@ import { tmpDir } from './tmp.mjs'
 
 const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, systemProxy: () => null, procTable: async () => [], close: () => {} }
 
-/** daemon: more startDaemon options (its `fork` seam). io: doorPartsFor's OS readers (its `io`), for a daemon whose door parts are the arch's own; without it the door parts are NOBODY — `parts` adds to
+/** daemon: more startDaemon options (its `fork` seam, `queryIdleMs` the query service's idle clock). io: doorPartsFor's OS readers (its `io`), for a daemon whose door parts are the arch's own; without it the door parts are NOBODY — `parts` adds to
  *  those (a stand-in `helper` for the daemon's read route, 4.8 §7). */
 export async function liveUnit({ w, platform, io = null, parts = null, daemon = {} }) {
   const { controlEndpoint } = await import(`../../src/collector/arch/${platform}/control-path.mjs`)

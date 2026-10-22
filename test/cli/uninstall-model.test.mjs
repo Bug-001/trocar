@@ -83,6 +83,29 @@ test('CM24 · daemon down: the CLI judges holders from the manifest\'s liveness 
   assert.deepEqual(tree(w.home), before)
 })
 
+// CM24 · daemon down, the door's durable record (4.11 P12): a codex started after its off (a known gap, `since` set, no ancestor) is held only by its
+// door row in ~/.trocar/collector/door-seen.json; with no file it is no holder; an unreadable file (a directory there) is "not known": a holder, said
+for (const doorFile of ['none', 'row', 'unreadable']) {
+  test(`CM24 · daemon down: door-seen.json ${doorFile} → ${doorFile === 'none' ? 'not refused for it' : 'refused, nothing changed'}`, async () => {
+    const w = await installed()
+    const m = readManifest(w.dir)
+    const onAt = Date.now() - 60_000, offAt = onAt + 30_000, start = offAt + 5_000
+    m.liveness.codex = { ...m.liveness.codex, since: new Date(onAt).toISOString(), on_at: new Date(onAt).toISOString(), off_at: new Date(offAt).toISOString() }
+    saveManifest(w.dir, m)
+    const f = path.join(w.dir, 'door-seen.json')
+    if (doorFile === 'row') fs.writeFileSync(f, JSON.stringify({ version: 1, rows: [{ harness: 'codex', group: 'codex:cli', pid: 778, start, kind: 'accept', at: new Date(start + 1000).toISOString(), n: 1, decrypt: true }] }))
+    if (doorFile === 'unreadable') fs.mkdirSync(f)
+    const before = tree(w.home)
+    const proc = { pid: 778, ppid: 1, startedAt: start, name: 'codex', comm: 'codex', exe: '/usr/local/bin/codex', args: ['codex'], cmdline: 'codex', argv: ['codex'] }
+    const { receipt, exit } = await uninstall(w, { procs: async () => [proc] })
+    if (doorFile === 'none') { assert.notEqual(receipt.error && receipt.error.code, 'collectors-online', JSON.stringify(receipt.problems)); return }
+    assert.deepEqual([exit, receipt.error && receipt.error.code], [1, 'collectors-online'], JSON.stringify(receipt.problems))
+    assert.match(receipt.problems.join('\n'), /codex \(pid 778\)/)
+    assert.equal(receipt.notes.length > 0, doorFile === 'unreadable')
+    assert.deepEqual(tree(w.home), before)
+  })
+}
+
 test('CM24 · offline: LIFO — the wrapper back, the plugin and its loader line, the config key, the pem-block, the root store, and the root\'s key LAST; the user\'s bytes as they were', async () => {
   const w = await installed()
   seq.length = 0

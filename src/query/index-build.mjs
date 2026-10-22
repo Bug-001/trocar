@@ -503,7 +503,14 @@ export async function allSegments({ home = trocarHome(), fs = nodeFs, lockState 
   }
   return out;
 }
-/** segmentFiles(home, fs) → [[segment, {plain, sealed}]], oldest first: which segments raw/ holds, from the names alone. */
+/** segmentCmp(a, b): the order segments were opened in — the opening instant, then the collision suffix as a number (`-10` after
+ *  `-9`); the one rule segmentFiles lists segments by and posCmp (src/query/projection.mjs) orders record ids by, so a session's
+ *  member list (src/query/rows.mjs) is in write order. */
+export function segmentCmp(a, b) {
+  const [sa, na = 1] = String(a).split('-'), [sb, nb = 1] = String(b).split('-');
+  return sa < sb ? -1 : sa > sb ? 1 : Number(na) - Number(nb);
+}
+/** segmentFiles(home, fs) → [[segment, {plain, sealed}]], oldest first (segmentCmp): which segments raw/ holds, from the names alone. */
 export function segmentFiles(home = trocarHome(), fs = nodeFs) {
   let names;
   try { names = fs.readdirSync(rawDir(home)); } catch { return []; }
@@ -515,6 +522,6 @@ export function segmentFiles(home = trocarHome(), fs = nodeFs) {
     at[p.sealed ? 'sealed' : 'plain'] = true;
     seen.set(p.segment, at);
   }
-  return [...seen].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return [...seen].sort(([a], [b]) => segmentCmp(a, b));
 }
 const sizeOf = (fs, f) => { try { return fs.statSync(f).size; } catch { return 0; } };

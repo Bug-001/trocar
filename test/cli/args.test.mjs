@@ -40,4 +40,6 @@ test('parseArgs: a command with open options (query, whose parameters are the qu
   assert.deepEqual(parseArgs(open, ['sessions', '--limit', '-1', '--ratio', '-0.5', '-2']),
     { positionals: ['sessions', '-2'], flags: { limit: '-1', ratio: '-0.5' }, error: null },
     'a negative number is a value (and a positional), not an option name nobody declared')
+  assert.deepEqual(parseArgs(open, ['block', '--ref', 'a', '--ref=b', '--ref', 'c']).flags, { ref: ['a', 'b', 'c'] },
+    'an option given more than once is a list of its values, in order (1.6 §4.1 参数)')
 })

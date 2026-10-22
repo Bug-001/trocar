@@ -6,7 +6,8 @@
 //                             (`--dry-run` → `flags['dry-run']`); a declared value is a string, a plain option is `true`.
 //                             `error` is `{ code: 'usage', message, usage }` or null; `cmd.openOptions` (query, whose parameters belong
 //                             to the query, not to the CLI) keeps every option it is given instead of refusing it, and reads a negative
-//                             number (`--limit -1`) as a value, since no option is named that.
+//                             number (`--limit -1`) as a value, since no option is named that; an open option given more than
+//                             once is the list of its values, in order (1.6 §4.1 参数: the query core says whether it takes one).
 const DECL = /^(--[a-z][a-z-]*)(?:[ =]<([a-z-]+)>)?$/
 const key = (name) => name.replace(/^--?/, '')
 /** `-1`, `-0.5`: a value an open option is given, not an option name. */
@@ -37,7 +38,8 @@ export function parseArgs(cmd, argv) {
     const opt = options.get(name)
     if (!opt) {
       if (!cmd.openOptions) return fail(`unknown option '${name}'`)
-      flags[key(name)] = inline !== null ? inline : (argv[i + 1] !== undefined && (!argv[i + 1].startsWith('-') || negativeNumber(argv[i + 1])) ? argv[++i] : true)
+      const v = inline !== null ? inline : (argv[i + 1] !== undefined && (!argv[i + 1].startsWith('-') || negativeNumber(argv[i + 1])) ? argv[++i] : true)
+      flags[key(name)] = Object.hasOwn(flags, key(name)) ? [].concat(flags[key(name)], v) : v // given again → a list, in order (1.6 §4.1)
       continue
     }
     if (!opt.value) {

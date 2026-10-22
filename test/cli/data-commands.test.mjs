@@ -75,7 +75,7 @@ test('V81: `trocar query` lists every name with its parameters, a query prints i
   assert.deepEqual(JSON.parse(doc.out).segments.map((x) => x.segment).sort(), [SEG, SEALED])
   assert.equal(doc.err, '', 'the document is on stdout and nothing is on stderr')
 
-  for (const argv of [['query', 'nope'], ['query', 'segments', '--frob', 'x'], ['query', 'segments', 'extra']]) {
+  for (const argv of [['query', 'nope'], ['query', 'segments', '--frob', 'x'], ['query', 'segments', 'extra'], ['query', 'sessions', '--limit', '1', '--limit', '2']]) {
     const bad = await run(argv, home)
     assert.deepEqual([bad.exit, bad.out], [2, ''], argv.join(' '))
     assert.ok(bad.err.trimEnd().split('\n').length <= 2, `${argv.join(' ')}: one message (it may fold once at 80 columns)`)

@@ -31,7 +31,7 @@ export const envLine = (o = {}) => JSON.stringify({
  * `block --ref`). One place, so a new required parameter is added once.
  */
 export const requiredFor = (name, { segment = '20261018T100000Z', session = 'no-such-session' } = {}) =>
-  ({ session: { id: session }, block: { ref: `${segment}:1` } })[name] || {}
+  ({ session: { id: session }, lane: { id: session, lane: `${segment}:1` }, block: { ref: `${segment}:1` } })[name] || {}
 
 export function rawHome(prefix = 'trocar-t6-') {
   const home = tmpDir(prefix)

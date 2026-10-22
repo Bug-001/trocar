@@ -45,10 +45,13 @@ diverging block's rebuilt text. The cause is a structural estimate from comparin
 provider's real boundary — `usage` stays the numeric truth. "Emit the tools array in a stable order" is a one-line
 fix you cannot find without seeing the wire.
 
-**"My prefix looked identical — why was I billed a miss?"** trocar hashes the reusable prefix (SHA-256
-over each block's canonical text — tools re-serialized, messages rebuilt from their parsed blocks — not over the
-wire bytes) and cross-checks it against what the provider's `usage` actually credited.
-`read=0, write>0` is labelled a TTL rebuild, not a bug; `read=0, write=0` on a prefix that hashes identical is
+**"My prefix looked identical — why was I billed a miss?"** trocar checks the reusable prefix block by block
+against the call it is compared with: each block's own slice of the request bytes, with only its `cache_control`
+marker cut out, must have the same SHA-256 on both sides. A marker that moved still counts as identical; a tools
+schema that differs only in whitespace or number spelling does not, and neither does a block with no slice of its
+own in the request (it is never called identical). The board then cross-checks that against what the provider's
+`usage` actually credited.
+`read=0, write>0` is labelled a TTL rebuild, not a bug; `read=0, write=0` on a byte-identical prefix is
 flagged as a provider contradiction. The structural guess and the numeric truth are shown separately
 and never conflated.
 
@@ -87,7 +90,9 @@ One command takes this checkout to the newest code and leaves the machine the wa
 capture on again for the agents that had it on. It prints the plan — which commit to which commit,
 and which agents go off and on again — and asks first; `--yes` answers, `--dry-run` only prints.
 While it runs those agents are not captured (their connections still work), and the collector is
-replaced the way `uninstall` stops it: connections it still holds get up to 30 s to finish. An update that stops half way leaves a note
+replaced the way `uninstall` stops it: connections it still holds get up to 30 s to finish, then the old collector cuts
+the rest (a call left open, such as a WebSocket) and stops itself cleanly, so the new one does not report that the previous
+one ended without a clean stop. An update that stops half way leaves a note
 behind: run `trocar update` again and it goes on from where it stopped.
 
 A machine that ran the build from before the rename moves over once, by hand: that build's own `uninstall`, then
@@ -192,16 +197,31 @@ the board is the HTTP shell (D59); there is no separate ETL step and no database
 daemon's query worker, which stays warm and keeps the segment index current as it captures, so a query about a
 session you are looking at answers in milliseconds; the board's answers come gzipped. The worker stays warm while
 someone asks (an open board asks every 1.5 s) and leaves after two minutes with nothing asked, giving its memory back;
-the next query starts a new one. A session is read call by call, and one answer carries the message bodies of one
-page of steps plus a short line for every step. The worker's memory is bounded: a session too large for it shows its
-newest calls that fit and says so (**Showing only the latest N / M calls (file X MB)**); the cut moves by a tenth of
-the budget at a time, and between moves each refresh reads on with the new calls only. The worker also measures its
-heap while it reads: a session that costs more per call than estimated is cut shorter, never read until the worker
-runs out of memory. A session that cannot be read says so in one sentence with **Retry**; the reason is under
-**Technical details**. The first open of a very large
-session after the worker has left reads it from the start, which takes a while (about half a minute for a
-5.4k-call session). It is not a prerequisite: with no daemon — or none that answers
-yet — the command reads the records itself and gives the same document, only slower. Long results page with
+the next query starts a new one. A session is read call by call: each call is taken apart once into a context
+file beside the index, and the session's summary rows are written to a second file as they are worked out, so
+reopening a session reads those two files and does not take the records apart again.
+`trocar query session --id <id>` gives the newest page of call rows (at most 1,000 rows and 1 MB) with every lane's
+header; `--before <call>` gives the page just before that call, `--limit <n>` makes pages smaller, and
+`--since <mark>` gives only what changed since the `mark` of an earlier answer (the board asks this every 1.5 s).
+`trocar query lane --id <id> --lane <key>` gives one lane's steps: the last page by default, `--from <call>` the
+steps after that call, `--to <call>` the page that ends just before it. Each step is its block list as changes
+against the step before, with the definitions of the blocks the page brings, the files the lane has seen and
+the resources it holds. When those do not all fit in the 1 MB page beside the steps, the answer's `ledger_next`
+names the rest: `--ledger <ledger_next>` gives the next part, until `ledger_next` is null. `trocar query block --ref <ref>` opens one block's verbatim bytes; give `--ref` more than
+once to get several in one answer, in the order asked (a ref that cannot be read says why in `errors`).
+A session the worker has not finished reading answers at once with what it has, and says how far it got
+(`pending: {done, total}`); the worker reads on in the background, and the CLI asks again until the answer is
+complete (it reads the records itself if the worker stops making progress). The first open of a very large session
+takes a while: about 4 minutes in the background for a 16k-call session, during which the board shows it filling
+in. The worker's memory is bounded: a session too large for it shows its newest calls that fit and says so
+(**Showing only the latest N / M calls (file X MB)**); a cut session always shows at least half of what fits, and
+the cut moves by a tenth of the budget at a time, so between moves each refresh reads on with the new calls only.
+The worker also measures its heap while it reads: a session that costs more per call than estimated is cut shorter,
+never read until the worker runs out of memory. A session that cannot be read says so in one sentence with
+**Retry**; the reason is under **Technical details**. Every other board screen that cannot read something
+(overview, traffic, settings, session list, capture log) does the same. It is not a prerequisite: with no
+daemon — or none that answers yet — the command reads the records itself and gives the same document, only
+slower. Long results page with
 `--limit` and `--after <cursor>`, where the cursor is the `page.next` of the document before it.
 `trocar query traffic` is one line per agent and host, with requests and bytes sent and received (sums over
 the calls that recorded a size, so they are a floor). `trocar query overview` is the board's stats card: sessions,
@@ -246,7 +266,9 @@ that need a restart are listed. Name an agent (`trocar off claude-code`) to swit
 
 `trocar status` and `trocar doctor` show, per agent, whether it is captured and why not, and where trocar forwards its
 connections — agent → door → upstream, and where the upstream comes from: the agent's own proxy, the system proxy, or a
-direct connection, with the value trocar wrote beside your own. A certificate block says whether the root is installed,
+direct connection, with the value trocar wrote beside your own. A process trocar has not seen use its door, and whose
+start history is incomplete, is `not-seen`: never a reason to call the agent not captured, and no restart is asked
+(`yes` with "N not seen yet" beside captured ones, `unknown` when it is all there is). A certificate block says whether the root is installed,
 its key is still in custody and the daemon could make its intermediate (`cert-not-installed`, `cert-key-missing`,
 `cert-intermediate-unavailable`), and which certificate files trocar did not append to because they are not yours
 (`not-users-file`). `trocar status <harness>` prints these per form (a `certificate:` and a `proxy:` line, then trocar's value beside
@@ -367,6 +389,11 @@ trocar does not count on a Claude Code process that was already
 running at install picking up the new trust entry (not verified for every mode), so `status` reports it
 untrusted (`config-after-start`, with a hint to restart it) and its connections go direct, unrecorded,
 until you restart it.
+
+After `off`, the programs listed as still connected are those started while it was on, those seen going through trocar,
+and, for a program that re-reads its trocar setting while running (OpenCode, Z-Code), any copy still running at `off`.
+`off` lists no program as still trusting the certificate (that is `uninstall`'s report). A machine installed by an older
+trocar gets this rule from its next `trocar update` or `trocar install`.
 
 After `off`, connections the engine was still relaying end at the next response boundary (a WebSocket at its
 turn's end); `trocar off --now` cuts them at once. The one byte of its own that trocar ever adds is the

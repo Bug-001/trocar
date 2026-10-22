@@ -8,6 +8,10 @@ import { briefText, failureBrief, failureWord, statusNote } from './words.mjs'
 // ── the summary (§3.5) ────────────────────────────────────────────────────────────────────────────────────────────
 /** The NOTE column of the summary: one short English clause for the reason a harness is not captured (the shared catalog, src/cli/words.mjs statusNote). Values are filled in; a code with no sentence there says the code is unknown, never prints a code name. */
 export const noteText = (code, opts = {}) => (code ? statusNote(code, opts) ?? unknown('no reason was recorded') : '')
+/** A captured harness whose other processes the door has not seen yet (1.6 §2 判词): the count of its rows not known, from the rows ('' when none). */
+const notSeenYet = (x) => { const n = (x.processes || []).filter((p) => p.captured === null).length; return n ? `${n} not seen yet` : '' }
+/** A harness not known: what could not be read, else its rows' own reason (only `not-seen` processes; `said` wraps it where no column says unknown), else that it could not be read. */
+const openText = (x, h, said = (t) => t) => ((x.why || []).length ? unknown(x.why.join('; ')) : x.reason ? said(noteText(x.reason, { harness: h, pid: ((x.processes || []).find((p) => p.reason === x.reason) || {}).pid ?? null })) : unknown('it could not be read'))
 
 const upFor = (since, now) => { const t = Date.parse(since); if (!Number.isFinite(t)) return null; const s = Math.max(0, Math.round((now - t) / 1000)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m` }
 
@@ -37,7 +41,7 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } =
     for (const h of shown) {
       const x = doc.harnesses[h]
       const pid = (x.processes || []).find((p) => p.captured === false) || null
-      rows.push([h, CAPTURED(x), x.captured === true ? '' : x.captured === null ? unknown((x.why || []).join('; ') || 'it could not be read') : noteText(x.reason, { harness: h, pid: pid && pid.pid })])
+      rows.push([h, CAPTURED(x), x.captured === true ? notSeenYet(x) : x.captured === null ? ((x.why || []).length ? openText(x, h) : notSeenYet(x) || openText(x, h)) : noteText(x.reason, { harness: h, pid: pid && pid.pid })])
     }
     lines.push(...columns(rows).map((l) => `  ${l}`))
   }
@@ -91,7 +95,7 @@ const DESIRED = { on: 'on', off: 'off' }
 export function statusDetail(doc, h, { finding = null, now = Date.now(), colors: c = noColor() } = {}) {
   const x = doc.harnesses[h]
   if (!x) return [`${h}: ${unknown('it is not set up on this machine')}`]
-  const verdict = x.captured === true ? 'captured' : x.captured === null ? unknown((x.why || []).join('; ') || 'it could not be read') : x.desired === 'off' ? 'capture is off' : 'not captured'
+  const verdict = x.captured === true ? ['captured', notSeenYet(x)].filter(Boolean).join(', ') : x.captured === null ? openText(x, h, unknown) : x.desired === 'off' ? 'capture is off' : 'not captured'
   const lines = [c.bold(`${h}: ${DESIRED[x.desired] || unknown('its on/off state could not be read')}, ${verdict}`), '']
   const rows = []
   if (finding) {
@@ -99,7 +103,7 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
     if (finding.why) rows.push(['', finding.why])
     finding.commands.forEach((cmd, i) => rows.push([i ? '' : 'Fix', cmd.run]))
     rows.push(['Check', finding.verify])
-  } else if (x.captured === true) rows.push(['Why', 'every running process of it is captured'])
+  } else if (x.captured === true && !notSeenYet(x)) rows.push(['Why', 'every running process of it is captured'])
   if (rows.length) lines.push(...rows.flatMap(([l, v]) => wrap(v, WIDTH - 9).map((t, i) => `  ${(i ? '' : l).padEnd(5)}  ${t}`)), '')
   const forms = x.forms || []
   if (forms.length) {

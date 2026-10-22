@@ -1,6 +1,6 @@
 // test/helpers/leak-guard.test.mjs — the preload `npm test` runs under (test/helpers/leak-guard.cjs): a test run that leaves a
-// temp directory behind fails, names it, and cleans it up; one that leaves nothing, or fails its tests without leaking, does not
-// get blamed.
+// temp directory or a running child behind fails, names it, and cleans it up; one that leaves nothing, or fails its tests without
+// leaking, does not get blamed.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -35,6 +35,49 @@ test('leak-guard: a test that leaves a directory behind fails the run, and the m
   assert.match(r.stderr, /^ {2}trocar-leaky-[A-Za-z0-9]{6}\/$/m)
   assert.match(r.stderr, /grep -rn "'trocar-leaky-" test/)
   assert.deepEqual(r.left, [], 'the guard removed what it found, and its own run directory')
+})
+
+const alive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
+
+// the child would outlive its test file (it ends by itself after 10 minutes, should everything else fail)
+test('leak-guard: a child a test file started and did not end is killed when the file ends, named, and fails the run', async () => {
+  let pid
+  try {
+    const r = run(`import { spawn } from 'node:child_process'\ntest('starts a child', () => { const c = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600000)'], { stdio: 'ignore' }); process.stdout.write('CHILD=' + c.pid + '\\n') })`)
+    pid = Number(/CHILD=(\d+)/.exec(r.stdout)?.[1])
+    assert.ok(pid > 0, r.stdout)
+    assert.equal(r.status, 1)
+    assert.match(r.stdout, /^# pass 1$/m, 'the test itself passed — the guard is what fails the run')
+    assert.match(r.stderr, /leak-guard: 1 child process was still running/)
+    assert.match(r.stderr, new RegExp(`pid ${pid} from .*fixture\\.test\\.mjs: .*-e setTimeout`))
+    assert.deepEqual(r.left, [])
+    // the orphan is reaped by whoever adopted it; give that a moment
+    for (let i = 0; i < 50 && alive(pid); i++) await new Promise((ok) => setTimeout(ok, 100))
+    assert.equal(alive(pid), false, `child ${pid} is dead`)
+  } finally {
+    if (pid > 0 && alive(pid)) process.kill(pid, 'SIGKILL')
+  }
+})
+
+test('leak-guard: a child with an IPC channel is killed when its file ends and not blamed (it would end when the channel closes)', async () => {
+  let pid
+  try {
+    const r = run(`import { spawn } from 'node:child_process'\ntest('forks', () => { const c = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600000)'], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] }); process.stdout.write('CHILD=' + c.pid + '\\n') })`)
+    pid = Number(/CHILD=(\d+)/.exec(r.stdout)?.[1])
+    assert.ok(pid > 0, r.stdout)
+    assert.equal(r.status, 0, r.stderr)
+    assert.doesNotMatch(r.stderr, /leak-guard/)
+    for (let i = 0; i < 50 && alive(pid); i++) await new Promise((ok) => setTimeout(ok, 100))
+    assert.equal(alive(pid), false, `child ${pid} is dead`)
+  } finally {
+    if (pid > 0 && alive(pid)) process.kill(pid, 'SIGKILL')
+  }
+})
+
+test('leak-guard: a child the test ends and waits for is not blamed', () => {
+  const r = run(`import { spawn } from 'node:child_process'\nimport { once } from 'node:events'\ntest('ends its child', async () => { const c = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600000)'], { stdio: 'ignore' }); try { await new Promise((ok) => setTimeout(ok, 50)) } finally { c.kill(); await once(c, 'exit') } })`)
+  assert.equal(r.status, 0, r.stderr)
+  assert.doesNotMatch(r.stderr, /leak-guard/)
 })
 
 test('leak-guard: tmpDir() directories leave nothing, so a run that uses them passes — a failing test included', () => {

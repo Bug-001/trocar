@@ -15,7 +15,7 @@
 import path from 'node:path'
 import { parseJsonc } from '../core/config-read.mjs'
 import { envHosts, argAfter, isOwnPath, perOs } from './_common.mjs'
-import { chromiumRole, NETWORK_SERVICE_ARG } from '../core/trust/chromium.mjs'
+import { chromiumRole, NETWORK_SERVICE_ARG } from '../../off/chromium.mjs'
 
 const BASE_URL_KEYS = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_BEDROCK_BASE_URL', 'ANTHROPIC_VERTEX_BASE_URL', 'ANTHROPIC_FOUNDRY_BASE_URL', 'ANTHROPIC_BEDROCK_MANTLE_BASE_URL']
 const HOST_MANAGED_DROPS = new Set(['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'NO_PROXY', 'no_proxy', 'NODE_EXTRA_CA_CERTS', 'NODE_TLS_REJECT_UNAUTHORIZED'])

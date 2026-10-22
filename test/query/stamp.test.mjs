@@ -83,6 +83,9 @@ test('the minute tick: classes and a relative window move with the clock, an abs
   const abs = { since: '2026-10-18T00:00:00Z' }
   assert.equal(stampOf('sessions', abs, at(later)), stampOf('sessions', abs, at(T0)))
   assert.equal(stampOf('sessions', {}, at(later)), stampOf('sessions', {}, at(T0)))
+  // `session --since` is a mark (a record id), not a time: no tick (3.5 §会话读)
+  const mark = { id: 'x', since: '20261018T100000Z:7' }
+  assert.equal(stampOf('session', mark, at(later)), stampOf('session', mark, at(T0)))
 })
 
 test('nothing touched → the same stamp for every name; status and doctor have none', () => {
@@ -123,4 +126,54 @@ test('4.4:36 overview and sessions follow the usage sidecars; the other corpus n
   assert.notEqual(after.overview, before.overview)
   assert.notEqual(after.sessions, before.sessions)
   assert.equal(after.traffic, before.traffic)
+})
+
+// 4.4 #9, the two-part tag of `session` / `lane` ("<stamp>:<version>"): the face compares the stamp part alone; a stamp that moved
+// is relayed with the caller's version part, and the worker answers 304 while this session's version holds.
+test('4.4 #9 two-part: another session grows → 304; this one grows → 200 with a new tag; nothing changed → 304 with no worker line', { timeout: 60_000 }, async () => {
+  const { serveFace, request, withToken } = await import('../server/face.mjs')
+  const { within } = await import('../helpers/bounded.mjs')
+  const { bigSession } = await import('./big-session.mjs')
+  const home = path.join(tmpDir('trocar-stamp2-'), '.trocar')
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  const A = bigSession({ home, id: 'aaaa-0000-4a1b-9c2d-000000000001', segment: '20261020T100000Z', growth: 500, subEvery: 0, seed: 3 })
+  const B = bigSession({ home, id: 'bbbb-0000-4a1b-9c2d-000000000002', segment: '20261020T110000Z', growth: 500, subEvery: 0, seed: 5 })
+  A.append(150); B.append(4) // A: more calls than one 50 ms slice folds, so its first answers carry `pending`
+  const f = await serveFace({ home })
+  // an answer still folding (`pending`) has no version part, so no ETag (4.4 §条件 GET): every 200 is checked
+  let pendings = 0
+  const ask = async (inm) => {
+    const r = await request(f.port, `/api/session?id=${A.id}`, { headers: withToken(inm ? { 'if-none-match': inm } : {}) })
+    if (r.status === 200 && JSON.parse(r.body).pending) { pendings++; assert.equal(r.headers.etag, undefined, 'a pending answer carries no ETag') }
+    return r
+  }
+  const parts = (etag) => /^"([0-9a-f]+):([^":]+)"$/.exec(etag || '')?.slice(1)
+  // ask until the worker has it whole
+  const tagged = async (inm) => {
+    for (;;) { const r = await ask(inm); assert.equal(r.status, 200); if (r.headers.etag) return r; await new Promise((d) => setTimeout(d, 50)) }
+  }
+  try {
+    const first = await within(tagged(), 30_000, 'a tagged answer')
+    const [stamp, version] = parts(first.headers.etag)
+    assert.ok(stamp && version, first.headers.etag)
+
+    const n = f.relays.length
+    const same = await ask(first.headers.etag)
+    assert.equal(same.status, 304)
+    assert.equal(same.body, '')
+    assert.equal(f.relays.length, n, 'nothing changed: no worker line')
+
+    B.append(2)
+    const other = await ask(first.headers.etag)
+    assert.equal(other.status, 304, 'another session grew: this one is unchanged')
+    assert.equal(other.body, '')
+    const [stamp2, version2] = parts(other.headers.etag)
+    assert.notEqual(stamp2, stamp, 'the stamp part moved with the disk')
+    assert.equal(version2, version, 'the version part did not')
+
+    A.append(2)
+    const grown = await within(tagged(other.headers.etag), 30_000, 'the grown session, tagged')
+    assert.notEqual(parts(grown.headers.etag)[1], version, 'this session grew: a new version part')
+    assert.ok(pendings > 0, 'a fold that outlasts one slice was answered with pending at least once')
+  } finally { f.close() }
 })

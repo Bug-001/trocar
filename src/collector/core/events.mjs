@@ -35,7 +35,9 @@ export function createFailureRecorder(dir, { log = () => {}, windowMs = 10_000, 
   let gap = null // { from, lost, error } while lines are being lost
   let lostTotal = 0
   let lastDay = null // the day file never goes back when the clock does (4.6 §记录)
+  let final = false // after the stop's daemon-stop (1.6 §5.2): no line reaches flows/ any more, stderr gets it
   const write = (rec) => {
+    if (final) { log('events', new Error(`after the stop, not written to flows/: ${JSON.stringify(rec)}`)); return }
     const t = now().toISOString()
     const d = t.slice(0, 10)
     if (!lastDay || d > lastDay) lastDay = d
@@ -80,6 +82,8 @@ export function createFailureRecorder(dir, { log = () => {}, windowMs = 10_000, 
   return Object.assign(record, {
     event, write,
     flush() { for (const k of [...open.keys()]) close(k) },
+    /** The stop wrote daemon-stop: from here every line goes to stderr only (1.6 §5.2: nothing in flows/ after daemon-stop). */
+    final() { for (const k of [...open.keys()]) { clearTimer(open.get(k).timer); open.delete(k) } final = true },
     health: () => ({ lost: lostTotal, ...(gap ? { losing_since: gap.from, lost_now: gap.lost, last_error: gap.error } : {}) }),
   })
 }

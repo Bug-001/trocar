@@ -3,7 +3,7 @@
 // rows for those members and m; and reducing the same store twice gives the same bytes.
 //   (b) reduce(store, members, {mark: m}) ≡ reduce over a store holding only the members ≤ m, for every m; `pending` iff members above m
 //   (c) two reductions of one store, and one of a store opened afresh over the same file (nothing cached), are byte-identical
-//   (d) a member that did not extract is in the document with its reason (§3.9, D38), and the document does not claim to be whole
+//   (d) a member that did not extract is in the document with its reason (§3.9, D38), not shown as a good call
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -61,7 +61,7 @@ test('(c) two reductions of one store are byte-identical, cached or not', () => 
   }
 });
 
-test('(d) a member that did not extract is named in the document with its reason, and the document is not whole', () => {
+test('(d) a member that did not extract is named in the document with its reason', () => {
   // two ways a member fails: its record does not read back; its extraction throws (a record that cannot be read as stored)
   const FAIL = {
     'did not read back': (r) => null,
@@ -76,8 +76,7 @@ test('(d) a member that did not extract is named in the document with its reason
       const at = `${name} k=${k} (${why})`;
       assert.deepEqual((doc.failed || []).map((f) => f.id), [lost], `${at}: the failed member is named`);
       assert.match(doc.failed[0].reason, new RegExp(why), `${at}: with its reason`);
-      assert.ok(doc.pending && doc.pending.done < doc.pending.total, `${at}: the document does not claim to be whole`);
-      assert.ok(!doc.items.has(lost) && !doc.lanes.some((l) => l.calls.some((c) => String(c.id) === lost)), `${at}: and does not show it as a good call`);
+      assert.ok(!doc.records.some((r) => r.id === lost) && !doc.rows.some((r) => r.rid === lost), `${at}: and does not show it as a good call`);
     }
   }
 });

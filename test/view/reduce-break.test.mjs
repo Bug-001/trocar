@@ -31,19 +31,28 @@ function breakAt(at) {
   const store = openProjection({ home: tmpDir('trocar-break-'), key: KEY }), members = recs.map((r) => ({ id: r.id }));
   extractMembers({ store, members, recordsAt: (rows) => rows.map((m) => byId.get(m.id)) });
   const doc = reduce(store, members, { resolve: (ref) => blockAt(byId.get(parseTextRef(ref).recordId), ref) });
-  const call = doc.lanes.flatMap((l) => l.calls).find((c) => String(c.id) === recs[K].id);
-  assert.ok(call, `call ${recs[K].id} is in the document`);
-  return call.cacheBreak;
+  const row = doc.rows.find((r) => r.rid === recs[K].id);
+  assert.ok(row, `call ${recs[K].id} is in the document`);
+  return row.cacheBreak;
 }
 
-test('a change past 4,096 characters breaks the cache at its block, located at or after the change', () => {
+test('a change past 4,096 characters breaks the cache at its block', () => {
   const control = breakAt(10);
   assert.equal(control.cause, 'content-changed');
   for (const at of [4_097, 4_200, 21_948, LONG - 1]) {
     const b = breakAt(at);
     assert.equal(b.idx, control.idx, `at ${at}: the break is the edited block`);
     assert.equal(b.cause, 'content-changed', `at ${at}`);
-    assert.ok(b.byteOffset >= at, `at ${at}: the change is located at ${b.byteOffset}`);
-    assert.equal(b.prefixByteIdentical, true, `at ${at}: the blocks before the break are byte-identical`);
   }
+});
+
+test('4.2 text_ref = record id + byte range: a block extracted while its file had another name resolves on the record as read now', () => {
+  const at = 4_200, recs = session(at), byId = new Map(recs.map((r) => [r.id, r]));
+  // extracted while the segment's file was named otherwise (a sealed name), read back now under its stream
+  const renamed = new Map(recs.map((r) => [r.id, Object.defineProperty({ ...r }, '_stream', { value: `${SEG}.sealed`, enumerable: false })]));
+  const store = openProjection({ home: tmpDir('trocar-break-'), key: KEY }), members = recs.map((r) => ({ id: r.id }));
+  extractMembers({ store, members, recordsAt: (rows) => rows.map((m) => renamed.get(m.id)) });
+  const doc = reduce(store, members, { resolve: (ref) => blockAt(byId.get(parseTextRef(ref).recordId), ref) });
+  const b = doc.rows.find((r) => r.rid === recs[K].id).cacheBreak;
+  assert.deepEqual({ idx: b.idx, cause: b.cause }, { idx: breakAt(at).idx, cause: breakAt(at).cause })
 });

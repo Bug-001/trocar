@@ -22,12 +22,14 @@ export const FAILURE_WORDS = Object.freeze({
   'manifest-unreadable': 'the install record could not be read',
   'control-endpoint-held': "another process holds trocar's control channel, so the background process did not start",
   'query-failed': 'a query worker failed; the query was answered another way',
+  'projection-write-failed': 'a session could not be saved to disk for faster reading; its answers are unchanged',
   'root-refused': 'refused: it was run as root',
   'root-token': 'refused: it was run as root',
   'elevated-token': 'refused: it was run elevated',
   // records and the raw layer (sealing, indexing, reading capture files)
   'record-error': 'a record could not be written',
   'file-replaced': 'the capture file was replaced',
+  'late-write': 'a record arrived after the daemon stopped and was not written',
   'log-gap': 'the event log has a gap',
   'seal-failed': 'a capture file could not be compressed; its plain copy is kept',
   'index-failed': 'the index of a capture file fell behind; the next read rebuilds it',
@@ -61,6 +63,7 @@ export const FAILURE_WORDS = Object.freeze({
   'harness-note': 'a note from the install',
   'unit-env-not-carried': "the login item's environment cannot carry the install's certificate variable",
   'holders-unreadable': 'the list of running processes could not be read',
+  'door-record-unreadable': "trocar's record of which programs used its doors could not be read",
   // connections (the engine, its doors, a connection row's not_captured)
   'lookup-miss': "a connection's destination could not be read",
   'describe-error': "a connection's program could not be described",
@@ -203,6 +206,7 @@ export function statusReason(code, { harness = '', pid = null } = {}) {
     'start-time-unknown': [`when ${pid != null ? `pid ${pid}` : 'it'} started could not be read`, `restart ${h}`],
     'no-marker': [`${who} started before capture was on`, `restart ${h}`],
     'kimi-not-via-shim': [`${h} did not start through the program trocar installed`],
+    'not-seen': [`trocar has not seen ${who} use its proxy yet; its next connection is judged`], // no restart part (1.6 附录 B)
     'negative-cache': [`${h}${pid != null ? ` (pid ${pid})` : ''} refused trocar's certificate`, 'restart it'],
     'daemon-not-running': ['trocar is not running in the background'],
     'daemon-not-responding': ['trocar runs in the background but does not answer'],

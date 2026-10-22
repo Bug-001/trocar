@@ -38,29 +38,29 @@ function breakOfK(opts) {
   const store = openProjection({ home: tmpDir('trocar-prefix-'), key: KEY }), members = recs.map((r) => ({ id: r.id }))
   extractMembers({ store, members, recordsAt: (rows) => rows.map((m) => byId.get(m.id)) })
   const doc = reduce(store, members, { resolve: (ref) => blockAt(byId.get(parseTextRef(ref).recordId), ref) })
-  const call = doc.lanes.flatMap((l) => l.calls).find((c) => String(c.id) === recs[K].id)
-  assert.ok(call, `call ${recs[K].id} is in the document`)
-  assert.ok(call.cacheBreak.idx > 2, 'the reusable prefix holds the tool, the system blocks and earlier messages')
-  return call.cacheBreak
+  const row = doc.rows.find((r) => r.rid === recs[K].id)
+  assert.ok(row, `call ${recs[K].id} is in the document`)
+  assert.ok(row.cacheBreak.idx > 2, 'the reusable prefix holds the tool, the system blocks and earlier messages')
+  return row
 }
 
+// The row ships the flag through its `gt` (3.5 §会话读 row closed set): with usage that reads nothing from the cache and creates nothing, a
+// byte-identical reusable prefix is a provider contradiction (assemble.mjs realGroundTruth), and no gt is claimed without the proof.
+const usage = { input_tokens: 4000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+const proven = (opts = {}) => breakOfK({ usage, ...opts }).cacheBreak.gt === 'provider-contradiction'
+
 test('#12: a cache marker that moved, and a volatile block that changed, leave the prefix byte-identical', () => {
-  assert.equal(breakOfK().prefixByteIdentical, true)
+  assert.equal(proven(), true)
 })
 
 test('#12: a tools schema that differs only in whitespace or number spelling (same frame, other bytes) is not byte-identical, no gt', () => {
-  // usage that would make a byte-identical prefix a provider contradiction: the gt is there only if the flag is
-  const usage = { input_tokens: 4000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
-  const control = breakOfK({ usage })
-  assert.equal(control.prefixByteIdentical, true)
-  assert.equal(control.gt, 'provider-contradiction')
   for (const [name, edit] of [['whitespace', (t) => t.replace('"default":2', '"default": 2')], ['number spelling', (t) => t.replace('"default":2', '"default":2.0')]]) {
-    const b = breakOfK({ usage, edit: (t, i) => (i === K ? edit(t) : t) })
-    assert.equal(b.prefixByteIdentical, false, name)
-    assert.equal(b.gt, null, name)
+    const row = breakOfK({ usage, edit: (t, i) => (i === K ? edit(t) : t) })
+    assert.equal(row.cacheBreak.gt, null, name)
+    assert.equal(row.gt, null, name)
   }
 })
 
 test('#12: a block in [0, idx) with no verbatim slice, on either side, makes the flag false', () => {
-  for (const at of [K, K - 1]) assert.equal(breakOfK({ streamless: (i) => i === at }).prefixByteIdentical, false, `call ${at + 1} unaddressable`)
+  for (const at of [K, K - 1]) assert.equal(proven({ streamless: (i) => i === at }), false, `call ${at + 1} unaddressable`)
 })

@@ -3,7 +3,7 @@
 // installUi(doc) is the one wiring pass, installed once by main.mjs. Nothing touches `document` at import time.
 
 import { esc } from './fmt.mjs'
-import { MARK_TIP } from '../labels/common.mjs'
+import { MARK_TIP, READ_FAIL } from '../labels/common.mjs'
 
 // A short, polite message that goes away by itself — what the board says when it moved the reader somewhere (an unknown link). It is
 // NOT an alert: it takes no focus, and a screen reader announces it once (role="status"). Appended to #toasts; without that host
@@ -91,6 +91,17 @@ export function techDetailsHtml(rows, { id = 'tech', html = false } = {}) {
   const grid = pairs.map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${html ? v : esc(v)}</span>`).join('')
   const flat = html ? '' : pairs.map(([k, v]) => (k ? `${k}: ${v}` : String(v))).join('\n')
   return disclosureHtml({ id, title: 'Technical details', body: `<div class="tech">${grid}</div><button type="button" class="copybtn" data-copy="${esc(flat)}">Copy</button>`, open: false })
+}
+
+// a failed read (1.5 K-29): `r` is the failed answer {status, error} of core/http.mjs (status 0 = no full answer) or a bare reason.
+// → { line, tech }: `line` is plain text (the caller escapes it) in the board's own words — what + the cause class, never the
+// reason; `tech` is the collapsed 技术细节 holding the status and the reason (escaped by techDetailsHtml).
+export function readFailure(what, r, { id = 'read-fail' } = {}) {
+  const obj = r != null && typeof r === 'object'
+  const status = obj && typeof r.status === 'number' ? r.status : null
+  const why = obj ? r.error : r
+  const rows = [...(status != null ? [['status', String(status)]] : []), ['error', why == null || why === '' ? '—' : String(why)]]
+  return { line: READ_FAIL(what, status), tech: techDetailsHtml(rows, { id }) }
 }
 
 // the confirm dialog (4.6 of the visual doc): a question, the impact, what trocar will change; the default focus sits

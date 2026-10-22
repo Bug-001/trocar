@@ -118,9 +118,6 @@ export const respOf = (rec) => (rec && (rec.resp || rec.response)) || null;
 export function sessionIdOf(rec) {
   return sessionKeyOf(rec).key ?? (rec && rec._synthKey) ?? null;
 }
-export function recordsForSession(records, sessionId) {
-  return records.filter((r) => sessionIdOf(r) === sessionId);
-}
 
 // ── wire dispatch (D25 · one dissector per WIRE FORMAT, D37 ①) ──────────────────────────────────
 // Which dissector reads a record is the shared registry's answer (src/dissect/registry.mjs): the flat-lane
@@ -158,7 +155,7 @@ export function unknownSummary(recs, partial) {
     models,
   };
 }
-export function assembleUnknown(records) {
+function assembleUnknown(records) {
   return {
     provider: 'unknown',
     unknown: unknownSummary(records || [], false),
@@ -175,7 +172,7 @@ export function assembleUnknown(records) {
 // resource ledger are not extracted on this path (fidelity: not-yet-extracted, not misreported).
 // Lanes a flat-lane wire can be split into by the harness table's hints (3.4). Labels are server-side
 // (invariant 3); the board renders them as it renders analyze()'s lanes.
-const FLAT_LANES = {
+export const FLAT_LANES = {
   main: { kind: 'main', icon: '💬', label: 'conversation' },
   subagent: { kind: 'subagent', icon: '🧬', label: 'subagent' },
   aux: { kind: 'aux', icon: '⚙', label: 'other util' },
@@ -207,13 +204,13 @@ export function flatRequest(d, r, ctx) {
 }
 // The fold of one flat-lane wire (`d` = its dissector object): push(rec, gi) one call at a time in step order → the call
 // with the call in its META form (no blocks, `paged_out`); bodyOf() gives an in-window call its blocks back from its record.
-function flatLaneFold(d, read, baselines) {
-  const plans = d.prepare ? d.prepare(read) : null; // a wire whose context spans records (D37 ②) plans it as the calls arrive
+function flatLaneFold(d) {
+  const plans = d.prepare ? d.prepare() : null; // a wire whose context spans records (D37 ②) plans it as the calls arrive
   // A lane of the fold is one agent's calls (3.5 §缓存): a subagent named by the harness's agent id, or by the wire's own (a
   // WebSocket connection), is its own; the rest by lane kind. The board shows the kinds (finish()).
   const byLane = new Map(); // lane → its calls, in step order
   // lane → the blocks and resumable prefix-hash chain (prefixChain) of the last call that established a cache prefix in that lane
-  const prev = baselines((r) => { const flat = d.boardFlat(flatRequest(d, r, plans ? plans.context(r) : null).req, r); return { flat, chain: prefixChain(flat, null) }; });
+  const prev = new Map();
   const prevInfoOf = new Map(); // lane → { msgCount, marker } of the last parsed call: the compaction verdict's predecessor
   const laneOfCall = new WeakMap();
   const asks = new WeakMap(); // the first call of a lane → its first prompt (4.4 §看板 v2 需要的补充 `lanes[].task`)
@@ -223,12 +220,7 @@ function flatLaneFold(d, read, baselines) {
   };
   function push(r) {
     const call = take(r);
-    if (!call) return null;
-    const lane = laneOfCall.get(call), cs = byLane.get(lane);
-    if (cs.length < 2 || byOrder(cs[cs.length - 2], call) < 0) return call;
-    const ids = cs.slice(0, -1).map((c) => c.id);
-    for (const m of [byLane, prev, prevInfoOf]) m.delete(lane);
-    return relane(ids, r, read, take);
+    return call && inOrder(byLane.get(laneOfCall.get(call)), call);
   }
   function take(r) {
     if (!r.is_llm_call) return null;
@@ -295,7 +287,7 @@ function flatLaneFold(d, read, baselines) {
     byLane.get(lane).push(call);
     // A call that failed never established a cache prefix, so it MUST NOT become the next baseline. A call whose request
     // was not stored does (with no blocks, as in the ETL): the next call then has no known prefix to compare with.
-    if (!(r.error || failed || (st != null && st !== 200))) prev.set(lane, r.id, { flat, chain });
+    if (!(r.error || failed || (st != null && st !== 200))) prev.set(lane, { flat, chain });
     return call;
   }
   // shipped as metadata + a text_ref per block, never the body (4.2:55); a cross-record context locates each block in the
@@ -524,24 +516,20 @@ export function nonBlockKeysOf(rec, format) {
 // ONE SESSION, FOLDED (3.5 §内存有界). createAssembler() → { push(rec), finish(), bodyOf(call, rec) }: the session's records go in
 // ONE AT A TIME. push() assembles the call — its lane, the cache-break and prefix chain against its lane's previous call, its
 // composition, wire facts and usage — and keeps it in its META form: no blocks, `paged_out`, `rec` and `norm` reduced to what the
-// timeline reads. The record's body is let go when push() returns; what the fold holds is the calls' meta, the lanes' baselines
-// (the blocks a lane's next call is diffed against: baselines() below, bounded, the rest rebuilt by id) and the locators a
-// cross-record context (D37 ②) is stitched by. bodyOf() gives one call its blocks back — `flat` (metadata + a text_ref per
+// timeline reads. The record's body is let go when push() returns; what the fold holds is the calls' meta, each lane's baseline
+// (the blocks its next call is diffed against) and the locators a cross-record context (D37 ②) is stitched by. bodyOf() gives one call its blocks back — `flat` (metadata + a text_ref per
 // block), `nonBlockKeys`, the reply (`norm`), `rec` — from its own record, with the same functions push() used, so a page can ship
 // the calls it shows with their bodies without the session ever being held whole. finish() builds the `analyzed` document without changing what the fold derived, so it can go on afterwards.
 //
-// LANE BY LANE. A record is written when its call ends, so the calls of lanes running side by side (subagents, a long main call)
-// arrive out of step order. Everything a call is assembled against is its own lane's (analyze.mjs createAnalyzer), so a record goes
-// on its lane whatever the other lanes hold; what orders the lanes against each other — the global step index `gi`, the stream
-// ids — is given at finish(), by step order (analyze.mjs stepOrder). A record that sorts before its lane's last call folds that
-// lane again (relane: its records read back by id, `read(ids)` yielding them in the order asked), never the session. So the
-// document is the one a fold in step order gives, whatever order the records came in.
+// IN STEP ORDER. The batch forms (assembleSession, board.mjs sessionFold / sessionView, the usage sidecar's callFacts) push a
+// session's records sorted by step order; what orders the lanes against each other — the global step index `gi`, the stream ids —
+// is given at finish(), by step order (analyze.mjs stepOrder). A record that sorts before its lane's last call throws (inOrder).
 //
 // SEVERAL WIRES (D37 ①: the wire format is per call — an auxiliary model, a provider template or a per-model protocol choice can
 // mix them). Each record goes to the fold of its own wire; every call carries the session's GLOBAL step index, lanes of the same
 // id merge, and `steps[gi]` is the call with that gi (the browser rehydrates by it). Records no dissector claims are counted in
 // `analyzed.unknown` and never rendered (3.1:58).
-export function createAssembler({ read = null } = {}) {
+export function createAssembler() {
   const folds = new Map(); // dissector object | 'analyzed' → its fold
   const unknown = [], other = []; // { at, facts }: what unknownSummary reads of records no fold takes (LLM calls / the rest)
   const foldKey = (r) => {
@@ -551,7 +539,6 @@ export function createAssembler({ read = null } = {}) {
   };
   const facts = (xs) => [...xs].sort((a, b) => stepOrder(a.at, b.at)).map((x) => x.facts);
   let done = null; // the document of what has gone in so far, until the next push
-  const base = baselines(read);
   function finish() {
     if (!folds.size) return assembleUnknown(facts(unknown.length ? unknown : other)); // labelled, never faked
     [...folds.values()].flatMap((f) => f.calls()).sort(byOrder).forEach((c, i) => { c.gi = i; });
@@ -569,50 +556,11 @@ export function createAssembler({ read = null } = {}) {
       const key = foldKey(r);
       if (!key) { (r.is_llm_call ? unknown : other).push({ at: orderOf(r), facts: unknownFacts(r) }); return null; }
       let f = folds.get(key);
-      if (!f) folds.set(key, (f = key === 'analyzed' ? multiLaneFold(read, base) : flatLaneFold(key, read, base)));
+      if (!f) folds.set(key, (f = key === 'analyzed' ? multiLaneFold() : flatLaneFold(key)));
       return f.push(r);
     },
     bodyOf: (call, r) => PLACE.get(call).fold.bodyOf(call, r),
     finish: () => (done = done || finish()), // the same object until the next push: nothing downstream changes it
-  };
-}
-// What the lanes' cache baselines hold at once, in the characters of their blocks' texts (3.5 §内存有界).
-export const BASELINE_BYTES = 4 * 1048576;
-// THE LANES' BASELINES (3.5 §内存有界). A call is diffed against its lane's baseline — the blocks (`flat`), prefix chain and block
-// keys of the lane's last call that established a cache prefix — so a lane must find it again when its next call comes, which in a
-// session of many subagents can be hundreds of calls later. The most recently used baselines are held while their texts sum to at
-// most BASELINE_BYTES (the one in use always); a lane whose baseline was let go keeps that record's id, and its next call builds the
-// baseline again from the record read back by id (`read`, the path bodyOf takes), with the functions that built it. Which baselines
-// are held changes the cost only, never the answer. With no `read` (the batch forms, every record in memory) all are held.
-// baselines(read) → scope(build): one fold's lanes, build(record) → its baseline → { get(lane), set(lane, id, base), delete(lane) }.
-function baselines(read) {
-  const live = new Set(); // entries holding their baseline, least recently used first
-  let total = 0;
-  const drop = (e) => { if (live.delete(e)) total -= e.size; e.base = null; };
-  const use = (e) => {
-    if (!live.delete(e)) total += e.size;
-    live.add(e);
-    if (read) for (const o of live) { if (total <= BASELINE_BYTES) break; if (o !== e) drop(o); }
-    return e.base;
-  };
-  return (build) => {
-    const of = new Map(); // lane → { id, size, base }
-    return {
-      get(lane) {
-        const e = of.get(lane);
-        if (!e) return null;
-        if (!e.base) for (const r of read([e.id])) e.base = build(r);
-        if (!e.base) { of.delete(lane); return null; } // did not read back: said in read's sink (D38)
-        return use(e);
-      },
-      set(lane, id, base) {
-        const old = of.get(lane);
-        if (old) drop(old);
-        of.set(lane, { id, base, size: base.chain.texts.reduce((n, t) => n + (t == null ? 0 : t.length), 0) });
-        use(of.get(lane));
-      },
-      delete(lane) { const e = of.get(lane); if (e) drop(e); of.delete(lane); },
-    };
   };
 }
 // A call's place in step order (its record's ts_request and id; the global index is given by it at finish()) and the fold that
@@ -621,16 +569,11 @@ const PLACE = new WeakMap();
 const orderOf = (r) => ({ ts_request: r.ts_request, id: r.id });
 const placed = (call, r, fold) => { PLACE.set(call, { ...orderOf(r), fold }); return call; };
 const byOrder = (a, b) => stepOrder(PLACE.get(a), PLACE.get(b));
-// A record that sorts before its lane's last call: the lane — forgotten by the caller — goes in again, its records `ids` read back
-// in step order with `r` in its place. → r's call.
-function relane(ids, r, read, take) {
-  if (!read) throw new Error(`record ${r.id} sorts before calls already folded in its lane, and no reader can give that lane's records again`);
-  let mine = null, pending = true;
-  for (const x of read(ids)) {
-    if (pending && stepOrder(r, x) < 0) { mine = take(r); pending = false; }
-    take(x);
-  }
-  return pending ? take(r) : mine;
+// A call that sorts before its lane's previous call: the batch forms push every session in step order, so this is a caller's bug,
+// never folded over silently. `cs` = the lane's calls, `call` last. → call.
+function inOrder(cs, call) {
+  if (cs.length > 1 && byOrder(cs[cs.length - 2], call) >= 0) throw new Error(`record ${PLACE.get(call).id} sorts before calls already folded in its lane: push a session in step order`);
+  return call;
 }
 
 // The batch form: `records` (one session's, any order) folded whole, every call with its body.
@@ -680,24 +623,16 @@ export function anthropicFlat(request, keyMemo) {
 // The multi-lane fold (the Anthropic wire): each record is dissected to the shape the board's block extractor reads (v0 in
 // place; D10 req_body→request), analyze()'s fold puts it in its lane, then the call is baked against its lane's previous one.
 // A call that continues a server-held thread carries only its delta: the dissector stitches its context as the calls arrive.
-function multiLaneFold(read, baselines) {
+function multiLaneFold() {
   const an = createAnalyzer();
-  const plans = MULTI_LANE_CONTEXT.prepare(read);
+  const plans = MULTI_LANE_CONTEXT.prepare();
   // lane (the analyzer's stream) → { flat, chain, keys } of the call that established the lane's cache baseline. Block keys: a lane
   // re-sends its context every turn, so a block's per-text hash is asked once per lane call, not once per block of every call; the
   // memo (text → key) is its baseline's blocks only (a key text is a slice that keeps its whole text alive), never the session's.
-  const prev = baselines((r) => {
-    const keys = new Map(), flat = anthropicFlat(admitted(hydrateForBoard(r, plans.context(r))).request, keys);
-    return { flat, chain: prefixChain(flat, null), keys };
-  });
+  const prev = new Map();
   function push(r) {
     const call = take(r);
-    if (!call) return null;
-    const lane = an.laneOf(call), cs = lane.calls;
-    if (cs.length < 2 || byOrder(cs[cs.length - 2], call) < 0) return call;
-    const ids = cs.slice(0, -1).map((c) => c.id);
-    an.drop(lane); prev.delete(lane);
-    return relane(ids, r, read, take);
+    return call && inOrder(an.laneOf(call).calls, call);
   }
   function take(r) {
     const ctx = plans.context(r);
@@ -739,7 +674,7 @@ function multiLaneFold(read, baselines) {
     // through it makes the NEXT successful call diff against context that was never cached — the
     // board then reports a cache break that did not happen, with a cause and a fix hint. analyze()
     // marks this as `chainsPrefix`; undefined (older shapes) means "assume it chained".
-    if (call.chainsPrefix !== false) prev.set(lane, r.id, { flat, chain, keys });
+    if (call.chainsPrefix !== false) prev.set(lane, { flat, chain, keys });
     // COMPOSITION IS TIER A — computed HERE, while the blocks are still in hand: nine integers that ride on every call
     // whether or not its body does, so the timeline draws the WHOLE session rather than hatching everything outside the
     // current page as "composition unknown".

@@ -1,7 +1,7 @@
 // engine.mjs — the collector's TCP listener (RFC 4.6 §引擎). It accepts connections the platform
 // redirector steered to it, asks the redirector who the peer is, and hands each known flow to
-// handleFlow; unknown peers are dropped. close() stops accepting and waits for in-flight flows to
-// finish rather than killing them (RFC 4.6 §开关: connections established while on keep relaying).
+// handleFlow; unknown peers are dropped. close({graceMs}) is the stop barrier (RFC 1.6 §5.2): it stops accepting, closes each
+// connection at a boundary within the grace, cuts the rest (`cut-by-stop`), and resolves once no flow is left.
 //   drain({agents, now}) / relayed({agents}) / drained({agents}): what `off` asks of the connections still relayed (RFC 1.6 §1.3,
 // engine/drain.mjs): close each at the boundary the engine can see, count what is still on its way out or waiting for its
 // own close, cut everything on `now`, and say when none is left.
@@ -67,7 +67,13 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     onError(new Error(error)); failure({ code: 'system-roots-unavailable', reason: error })
   }
 
-  async function onConnection(socket) {
+  // accepted sockets still in their redirector lookup (not flows yet): drained() waits for them too, and the stop destroys the ones its grace leaves
+  const lookups = new Map() // promise → socket
+  function onConnection(socket) {
+    const p = accept(socket).finally(() => { lookups.delete(p); for (const w of [...waiters]) w() })
+    lookups.set(p, socket)
+  }
+  async function accept(socket) {
     counters.total++
     // The accepted socket is ours from here. Until handleFlow attaches its own listeners (after the
     // lookup), a client reset would be an uncaughtException that takes the collector down (RFC 4.6
@@ -120,7 +126,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     const ctx = flowCtx(connect)
     // every failure of this flow names its agent (4.6, V30): the engine copies the door's meta, it does not branch on a harness
     if (meta.agent != null) ctx.failure = (rec) => failure(rec.agent === undefined ? { agent: meta.agent, ...rec } : rec)
-    const entry = { agent: meta.agent ?? null, handle: null }
+    const entry = { agent: meta.agent ?? null, handle: null, socket }
     flows.add(entry)
     ctx.register = (h) => { entry.handle = h }
     const gone = () => { flows.delete(entry); for (const w of [...waiters]) w() }
@@ -230,11 +236,26 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     return closed
   }
 
-  async function close() {
+  // close({graceMs, boundMs}) → {closing, waiting, cut}: the stop barrier (1.6 §5.2). Stop accepting; ask every connection to close where the engine
+  // sees a boundary (as `off` does); wait for that up to graceMs; then cut what is left (rows say `cut-by-stop`), and destroy the client socket of
+  // every connection still there — one in its lookup, one whose gate failed or threw — so none outlives the cut. Then wait for every cut flow's row and
+  // envelopes, so what the stop writes after it (daemon-stop) comes after them; a flow that has still not ended `boundMs` later rejects close() with   // `stop-failed` (the stop records it and goes on: the stop is bounded, V99). closing / waiting: what the first ask found; cut: what the grace left.
+  async function close({ graceMs = 2000, boundMs = 2000 } = {}) {
     const closing = Promise.all(servers.map((s) => new Promise((res) => s.close(res))))
     if (ingress) ingress.closeIdle() // handshakes and health tunnels are not flows: nothing of an agent's is lost, and they would hold close() for their idle timeout
-    await closing
-    await Promise.allSettled([...active]) // let in-flight flows finish; never destroy them
+    const asked = drain({ agents: null })
+    let timer = null
+    await Promise.race([drained({ agents: null }), new Promise((r) => { timer = setTimeout(r, graceMs) })])
+    clearTimeout(timer)
+    const left = drain({ agents: null, now: true, by: 'stop' })
+    const cutNow = (e) => { try { const st = e.handle.state(); return st === 'cut' || st === 'closed' || st === 'done' } catch { return false } }
+    left.cut += lookups.size + [...flows].filter((e) => !e.handle || !cutNow(e)).length // in its lookup, not yet a handle, or a gate that threw or failed open: the socket below cuts it
+    for (const s of [...lookups.values(), ...[...flows].map((e) => e.socket)]) { try { s.destroy() } catch { /* already gone */ } }
+    const rest = (async () => { await Promise.allSettled([...lookups.keys()]); await Promise.allSettled([...active]); await drained({ agents: null }); await closing })()
+    const late = await Promise.race([rest.then(() => false), new Promise((r) => { timer = setTimeout(() => r(true), boundMs) })])
+    clearTimeout(timer)
+    if (late) throw Object.assign(new Error(`${flows.size + lookups.size} connection(s) had not ended ${boundMs} ms after the stop cut them; their rows may be missing`), { code: 'stop-failed' })
+    return { closing: asked.closing, waiting: asked.waiting, cut: left.cut }
   }
 
   function stats() {
@@ -247,12 +268,12 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   // message — or, on `now`, is cut. → {closing, waiting, cut}: still on its way out / waiting for its own close (a spliced
   // connection, a WebSocket whose turn end is not seen) / cut. Connections closed at once are in none of them.
   const mine = (e, agents) => !agents || agents.has(e.agent)
-  function drain({ agents = null, now = false } = {}) {
+  function drain({ agents = null, now = false, by = 'off' } = {}) {
     const out = { closing: 0, waiting: 0, cut: 0 }
     for (const e of [...flows]) {
       if (!mine(e, agents) || !e.handle) continue
       let r
-      try { r = e.handle.start({ now }) } catch (err) { failure({ code: 'engine-error', agent: e.agent, reason: `closing a connection after off failed: ${String((err && err.message) || err)}` }); onError(err); continue }
+      try { r = e.handle.start({ now, by }) } catch (err) { failure({ code: 'engine-error', agent: e.agent, reason: `closing a connection after off failed: ${String((err && err.message) || err)}` }); onError(err); continue }
       if (r === 'closing' || r === 'waiting' || r === 'cut') out[r]++
     }
     return out
@@ -267,10 +288,10 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     }
     return out
   }
-  // resolves once no connection of `agents` (null = all) is left in the engine, closing or not
+  // resolves once no connection of `agents` (null = all, counting those still in their lookup) is left in the engine, closing or not
   function drained({ agents = null } = {}) {
     return new Promise((resolve) => {
-      const check = () => { if (![...flows].some((e) => mine(e, agents))) { waiters.delete(check); resolve() } }
+      const check = () => { if (![...flows].some((e) => mine(e, agents)) && (agents || lookups.size === 0)) { waiters.delete(check); resolve() } } // all: a connection still in its lookup is one too
       waiters.add(check); check()
     })
   }

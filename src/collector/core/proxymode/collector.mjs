@@ -15,7 +15,8 @@ import { upstreamFor, isTrocarDoorUrl, isLoopbackHost, HOOK_ENV } from './chain.
 import { pacHandler, pacLeg, peerAllowed } from './pac.mjs'
 import { createDoorSeen, createHolderPoll, mayExit, HOLDER_POLL_MS } from './holders.mjs'
 import { notCapturedClass } from '../../../health/codes.mjs'
-import { holdersOf } from '../../../off/holders.mjs'
+import { holdersOf, sameLife } from '../../../off/holders.mjs'
+import { harnessesOf, withAgentList } from '../../../off/signature.mjs'
 import { itemsOfPhase, readManifest as readManifestAt } from '../../../off/manifest.mjs'
 import { readStateFile } from '../../../off/state.mjs'
 import { readIngressConfig } from '../ingress-config.mjs'
@@ -89,7 +90,6 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   }
   const hostSetFor = (f) => hostsOf(f) || treeHosts(f)
   const ident = createDoorIdentity({ ownerOf, factsOf, identify, ownUid, hostsOf: hostSetFor, onFailure: record, onEvent: event })
-  const seen = createDoorSeen({ clock })
   const pcache = new Map(), vcache = new Map(), said = new Map()
   const once = (key) => { if (said.has(key)) return false; keep(said, key, true); return true } // one record per key, bounded like the caches
   const answers = new Map() // door → Map(pid → { pid, source, url_redacted }): the upstream the door chose per process, status's per-form `proxy.upstream` (1.6 §9.4)
@@ -97,6 +97,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   const rootFp256 = rootPem ? new crypto.X509Certificate(rootPem).fingerprint256 : null
   const agentTrust = upstreamRoots ? createAgentTrust({ roots: upstreamRoots, rootFp256, readFile: ctx.readFile }) : null
   const fail = (code, reason, extra = {}) => record({ event: 'failure', where: 'engine', code, ...extra, reason })
+  const seen = createDoorSeen({ clock, dir, fs, timers, onError: ({ code, reason }) => fail(code, reason) }) // the door's durable record (P12), loaded here
   // the CLI writes it; read at most once a second. A read that fails keeps the last good one and is said once per spell (D38: unreadable is not
   // "no carrier installed"); `man.err` with no good one yet keeps the verdicts it gave out of the cache (4.11 P11)
   let man = { at: -Infinity, m: null, err: null }
@@ -146,7 +147,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
    *  forwarding by design (`notCapturedClass` expected) lives in the row only; the others are said once per key and code (4.6 §连接行). */
   async function judge(id, d, host) {
     const k = `${id.pid}\0${id.facts.startedAt ?? ''}\0${d.g}\0${host}`
-    if (vcache.has(k)) return noted(id, vcache.get(k))
+    if (vcache.has(k)) return noted(id, vcache.get(k), d.g)
     const desc = byName.get(id.agent)
     const pf = await procFacts(id.pid, id.facts.startedAt ?? null, desc)
     const facts = { name: id.agent, pid: id.pid, startedAt: id.facts.startedAt ?? null, env: pf.env, cwd: pf.cwd }
@@ -159,13 +160,15 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     if (!v.decrypt && notCapturedClass('untrusted', v.code) !== 'expected' && once(`${k}\0${v.code}`)) { fail(v.code, `pid ${id.pid} (${id.agent}) at ${host} is forwarded, not decrypted: ${v.detail}`, { harness: id.agent, pid: id.pid, door: d.g }) }
     if (v.decrypt && agentTrust) { const f0 = forms[0], t = f0.trust !== 'root' && desc.proxyMode.trusts && desc.proxyMode.trusts[f0.trust]; v = { ...v, upstreamTrust: await agentTrust.contextFor(agentTrustSet({ trust: t || null, ctx, facts })) } } // ⑭: this agent's own set, minus the trocar root
     if (!ISSUER_CODES.has(v.code) && !v.unread && id.facts.startedAt != null && !(man.err && !man.m)) keep(vcache, k, v)
-    return noted(id, v)
+    return noted(id, v, d.g)
   }
   /** The door's latest verdict per process life (pid + start), GET /status's `agents` rows (4.11 P11 status): `status` takes them, so the one rule
    *  judges. A code forwarded by design (an outside host of a host tree) says nothing of the process and is not listed. */
   const verdicts = new Map()
-  function noted(id, v) {
-    if (id.pid != null && (v.decrypt || notCapturedClass('untrusted', v.code) !== 'expected')) keep(verdicts, `${id.pid}\0${id.facts.startedAt ?? ''}`, { pid: id.pid, start: id.facts.startedAt ?? null, agent: id.agent, trusted: v.decrypt === true, decrypt: v.decrypt === true, reason: v.decrypt ? null : v.code }) // the driver row's shape: `decrypt` is what the netfacts' `watched` reads
+  function noted(id, v, g) {
+    if (id.pid == null || (!v.decrypt && notCapturedClass('untrusted', v.code) === 'expected')) return v
+    seen.judged({ group: g, pid: id.pid, start: id.facts.startedAt ?? null, decrypt: v.decrypt === true, reason: v.decrypt ? null : v.code }) // the durable accept row's verdict (P12)
+    keep(verdicts, `${id.pid}\0${id.facts.startedAt ?? ''}`, { pid: id.pid, start: id.facts.startedAt ?? null, agent: id.agent, trusted: v.decrypt === true, decrypt: v.decrypt === true, reason: v.decrypt ? null : v.code }) // the driver row's shape: `decrypt` is what the netfacts' `watched` reads
     return v
   }
 
@@ -179,7 +182,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       if (!a.ok) return { refuse: { code: a.code, unread: a.unread, reason: `trocar's proxy settings file (PAC) refused a connection: ${a.detail}${id.unresolved ? ` (owner ${id.unresolved})` : ''}; it takes no credentials, so it forwards only this user's processes` } }
     }
     const known = !id.why && byName.has(id.agent)
-    if (known && onSet.has(id.agent)) seen.add({ harness: id.agent, pid: id.pid, start: id.facts.startedAt ?? null })
+    if (known && onSet.has(id.agent)) seen.add({ harness: id.agent, group: d.g, pid: id.pid, start: id.facts.startedAt ?? null, kind: 'accept' })
     const desc = byName.get(d.harness) // the upstream is the door group's (4.8 §5.3, D51⑥)
     const pf = known ? await procFacts(id.pid, id.facts.startedAt ?? null, desc) : null
     const own = known ? formsOn(byName.get(id.agent), id.agent === d.harness ? d.routeId : null) : []
@@ -223,7 +226,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     if (!mine && await left()) return null
     if (!mine) record({ event: 'failure', where: 'ingress', code: CODE.pacOwnerUnread, peer, reason: `served trocar's proxy settings file (PAC) without routing through trocar: ${a.detail}${why ? ` (owner ${why})` : ''}; the app keeps its own way until it fetches the PAC again` })
     const m = (facts && identify(facts)) || {}
-    if (mine && m.reason === 'match' && onSet.has(m.agent)) seen.add({ harness: m.agent, pid: q, start: facts.startedAt ?? null }) // taking the PAC is reading the entry (P12)
+    if (mine && m.reason === 'match' && onSet.has(m.agent)) seen.add({ harness: m.agent, group: d.g, pid: q, start: facts.startedAt ?? null, kind: 'pac' }) // taking the PAC is reading the entry (P12)
     const leg = await pacLeg({ systemProxy: systemProxy(), isTrocarDoor: (v) => isTrocarDoorUrl(v, { ports: [...doors.values()].map((x) => x.port) }) }) // what this door dials too
     let res = { status: 404, headers: {}, body: '' }
     pacHandler({ state: () => ({ door: mine && onSet.has(d.harness) ? `127.0.0.1:${d.port}` : null, ownLeg: leg.url, bypass: leg.bypass }) })({ method: 'GET', url: p }, { writeHead: (status, headers) => { res = { status, headers, body: '' } }, end: (b) => { res.body = b } })
@@ -257,7 +260,15 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const lv = Object.fromEntries(Object.entries(m.liveness).map(([h, l]) => [h, l && l.on_at != null && l.off_at == null && offAt.has(h) ? { ...l, off_at: offAt.get(h) } : l]))
     return { ...m, liveness: lv }
   }
-  const holdersNow = async () => holdersOf({ manifest: withOffAt(manifest(true)), procs: await procTable(), doorSeen: seen.list(), agentList: agentList() })
+  /** The door rows of lives still in `procs` (an entry whose start was not read keeps its pid's rows: the safe direction). */
+  const liveIn = (procs) => (r) => procs.some((p) => p.pid === r.pid && (p.startedAt == null || sameLife(r, p)))
+  const holdersNow = async () => {
+    const m = withOffAt(manifest(true)), procs = await procTable(), list = agentList()
+    // the processes of harnesses that were on: an unreadable door record is known again once none of them predates it (P12); no manifest, no clearing
+    const wasOn = m && m.liveness ? withAgentList(Object.fromEntries(Object.entries(m.liveness).filter(([, l]) => l && l.on_at != null)), list).liveness : null
+    seen.prune(liveIn(procs), wasOn && procs.filter((p) => harnessesOf(wasOn, p).length)) // each read of the table (the poll's tick, off, GET /holders) drops the door rows of lives that left it (P12)
+    return holdersOf({ manifest: m, procs, doorSeen: seen.list(), agentList: list })
+  }
   const kept = () => [...doors.values()].filter((d) => !onSet.has(d.harness))
   /** Doors of harnesses that are off: closed once no holder of theirs lives (P12); the poll stops when none is left. */
   async function settle(rows) {
@@ -337,6 +348,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       if (!bound) throw new TypeError('on: bindDoors first (the engine\'s door half)')
       const ing = tokenOf()
       for (const h of hs) if (byName.has(h)) { onSet.add(h); offAt.delete(h) }
+      procTable().then((t) => { if (Array.isArray(t)) seen.prune(liveIn(t)) }, () => {}) // the door rows of gone lives (P12); not awaited: on's answer never waits on the table
       const out = {}, skipped = []
       for (const [g, port] of Object.entries(groups)) { const r = await openDoor(g, port, ing.listenerToken); if (r.door) out[g] = r.door.url; else skipped.push({ g, reason: r.reason }) }
       return { doors: out, ...(skipped.length ? { skipped } : {}) }
@@ -349,7 +361,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       try { rows = await holdersNow() } catch { rows = null } // unreadable: unknown, every door stays
       if (rows) await settle(rows)
       if (kept().length) poll.start(rows) // this off's own table: never the last watch's answer
-      const relayed = drain ? await drain({ harnesses: ids, now: !!now }) : null
+      const relayed = drain ? await drain({ harnesses: exit ? null : ids, now: !!now }) : null // exit: the whole daemon goes, so every connection it relays, whatever harness
       return { pid, actual: onSet.size ? 'on' : 'off', confirmed: true, relayed, holders: rows ? rows.length : null }
     },
     lookupIngress,
@@ -365,6 +377,6 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     /** The door's verdicts, latest last (bounded; from memory, never the process table: a row may name a process that has exited since). */
     verdicts: () => [...verdicts.values()],
     mayExit: () => mayExit({ harnessesOn: [...onSet], holders: kept().length ? poll.now() : [], openConns: openConns() }),
-    close() { closed = true; if (sweepT) timers.clearTimeout(sweepT); sweepT = null; poll.stop(); if (iss) iss.close() },
+    close() { closed = true; if (sweepT) timers.clearTimeout(sweepT); sweepT = null; poll.stop(); seen.close(); if (iss) iss.close() }, // the door record is written here, synchronously (doStop runs it before daemon-stop)
   }
 }

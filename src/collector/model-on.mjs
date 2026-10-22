@@ -76,7 +76,12 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
     for (const h of fresh) {
       const was = m.liveness[h] || {}, l = { ...was, on_at: now().toISOString() }
       delete l.off_at
-      if (was.on_at && was.off_at) l.windows = [...(Array.isArray(was.windows) ? was.windows : []), { on_at: was.on_at, off_at: was.off_at }].slice(-WINDOWS_MAX)
+      if (was.on_at == null) l.since = l.on_at // the first on: this harness's history is whole from here (P12)
+      if (was.on_at && was.off_at) {
+        const all = [...(Array.isArray(was.windows) ? was.windows : []), { on_at: was.on_at, off_at: was.off_at }]
+        if (all.length > WINDOWS_MAX) delete l.since // the earliest window trimmed: what came before it is not known any more
+        l.windows = all.slice(-WINDOWS_MAX)
+      }
       m.liveness[h] = l
     }
     saveManifest(dir, m, fs)
@@ -89,9 +94,16 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   try { doorsNow = ep.socketPath ? ((await ask({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).doors || {}) : {} } catch { doorsNow = {} }
   const was = await loadIngressConfig({ dir, groups, isFree, fs })
   const cfg = await rebindTaken(was, async (port, g) => doorsNow[g] === port || isFree(port), { dir, isFree, fs })
-  // a door whose port or token is new: the entries of the earlier windows lead nowhere now, so those windows go (P12)
-  const moved = fresh.filter((h) => m.liveness[h].windows && (was.created || [...was.added, ...cfg.rebound].some((g) => g.startsWith(`${h}:`))))
-  if (moved.length) { for (const h of moved) delete m.liveness[h].windows; saveManifest(dir, m, fs) }
+  // a door group whose port or token is new (P12): when every group of h moved, the earlier windows lead nowhere now — they go and the history
+  // restarts here (`since`); when some moved, `door_since` marks those groups, and a process from an earlier window may have read the old value
+  const changed = new Set(was.created ? groups : [...was.added, ...cfg.rebound])
+  for (const { h, plan } of planned.filter((x) => fresh.includes(x.h))) {
+    const mine = plan.routes.map((r) => groupOf(h, r.id)), l = m.liveness[h]
+    const moved = mine.filter((g) => changed.has(g))
+    if (!moved.length) continue
+    if (moved.length === mine.length) { delete l.windows; delete l.door_since; l.since = l.on_at } else l.door_since = { ...(l.door_since || {}), ...Object.fromEntries(moved.map((g) => [g, l.on_at])) }
+  }
+  if (changed.size) saveManifest(dir, m, fs)
   // §3 ①: a group port another socket holds is engine-port-taken — said in the receipt and recorded (D38), then the group's entries follow the new door
   for (const g of cfg.rebound) {
     const [from, to] = [was.groupPorts[g], cfg.config.groupPorts[g]]

@@ -12,24 +12,113 @@
 // with its cache_control cut out (the definition's `vh`), never the frame text, so it can be false where the record fold says true.
 // One place it is more exact: the record fold keys a block by its first 4,096 characters (analyze.mjs BLK_KEY_CAP), so two blocks
 // that differ only past that are the same to it; here a block is its whole frame (one call of the user's live session, 2026-10-21).
-import { createAnalyzer, stepOrder, OrderBound, breakOf, blockDiff, compactionMeta, unparsedErrMsg } from './analyze.mjs';
-import { realGroundTruth, unknownSummary, assembleUnknown, flatLaneView, mergeViews } from './assemble.mjs';
+import { createAnalyzer, stepOrder, OrderBound, breakOf, blockDiff, compactionMeta, unparsedErrMsg, laneMeta, replayLedger } from './analyze.mjs';
+import { realGroundTruth, unknownSummary, FLAT_LANES } from './assemble.mjs';
+import { callRow, itemsView } from './board.mjs';
+import { compareStep } from './step-order.mjs';
 import { compactionVerdict } from '../identity/session-identity.mjs';
 import { boardDissectorOf } from '../dissect/registry.mjs';
-import { COMP_KEYS, tellApart } from './blockmeta.mjs';
-import { posCmp } from '../query/projection.mjs';
+import { COMP_KEYS, tellApart, taskOf, HEAD } from './blockmeta.mjs';
+import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
+import { openFoldLog } from '../query/fold-log.mjs';
 
 const KEYFRAME = 32; // a materialised list kept every KEYFRAME links of a base chain
-const RECENT = 64; // and the lists asked last (lane tips are asked again and again)
+// what the lists kept (keyframes and the lists asked last) and the facts read back may weigh in the heap: each a cache of two times
+// its figure (src/query/projection.mjs lru)
+const LIST_BYTES = 2 << 20, FACTS_BYTES = 2 << 20;
+/** What a store's reduction caches hold at most beside its block columns (src/query/named/session.mjs counts it with the store's). */
+export const REDUCE_HEAP = 2 * (LIST_BYTES + FACTS_BYTES);
+
+// ── blocks ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// A block is the store's own definition slot (store.defSlot). What the reduction reads of a definition is kept in typed columns by
+// slot, filled from its line the first time a slot is asked for; a definition's facts `f` are read from its line when asked (the
+// blocks of messages new to their lane, a lane's first prompt), through a cache weighed in bytes. So a block costs a few columns,
+// never its definition (3.5 §内存有界 SPINE_PER_BLOCK).
+// value → the first slot that had it; `read(slot)` → that slot's value (read back to verify a hit: a collision never merges two)
+function interner(read) {
+  const first = numTable(), spill = new Map(); // spill: values whose number another value holds
+  return (v, slot) => {
+    const h = num52(v), s = first.get(h);
+    if (s === undefined) { first.set(h, slot); return slot; }
+    if (read(s) === v) return s;
+    const t = spill.get(v);
+    if (t !== undefined) return t;
+    spill.set(v, slot);
+    return slot;
+  };
+}
+// a small closed set of strings (a section, a role, a bucket) as an index into a table
+function enumOf() {
+  const ix = new Map(), names = [];
+  return { id: (v) => { let k = ix.get(v); if (k === undefined) { k = names.length; names.push(v); ix.set(v, k); } return k; }, name: (k) => names[k] };
+}
+const BLOCKS = new WeakMap(); // store → its block columns
+function blocksOf(store) {
+  if (BLOCKS.has(store)) return BLOCKS.get(store);
+  let cap = 0, known, key, vh, name, bytes, chars, sec, role, bucket;
+  const grow = (n) => {
+    const to = Math.max(256, cap * 2, n), m = (T, a) => { const x = new T(to); if (a) x.set(a); return x; };
+    known = m(Uint8Array, known); key = m(Int32Array, key); vh = m(Int32Array, vh); name = m(Int32Array, name);
+    bytes = m(Uint32Array, bytes); chars = m(Uint32Array, chars); sec = m(Uint16Array, sec); role = m(Uint16Array, role); bucket = m(Uint16Array, bucket);
+    cap = to;
+  };
+  const E = enumOf(), facts = lru(2 * FACTS_BYTES);
+  const readDef = (k) => {
+    const D = store.readDef(store.defBid(k));
+    if (!D) throw new Error(`the context projection has no definition for block ${store.defBid(k)}`);
+    return D;
+  };
+  const keyText = (D) => `${D.sec}\x1F${D.role}\x1F${D.kind}\x1F${D.fh}`;
+  const keys = interner((k) => keyText(readDef(k))), vhs = interner((k) => readDef(k).vh), names = interner((k) => readDef(k).name);
+  const remember = (k, f) => { facts.set(k, f, 2 * JSON.stringify(f || null).length + 64); return f; };
+  const factsOf = (D) => (D.sec === 'messages' ? D.f || {} : null);
+  const fill = (k) => {
+    if (k < cap && known[k]) return k;
+    if (k >= cap) grow(k + 1);
+    const D = readDef(k);
+    key[k] = keys(keyText(D), k);
+    vh[k] = D.vh == null ? -1 : vhs(D.vh, k);
+    name[k] = typeof D.name === 'string' ? names(D.name, k) : -1;
+    bytes[k] = D.bytes || 0; chars[k] = D.chars || 0;
+    sec[k] = E.id(D.sec); role[k] = E.id(D.role); bucket[k] = E.id((D.f && D.f.bucket) || 'other');
+    known[k] = 1;
+    if (D.sec === 'messages') remember(k, factsOf(D)); // a block seen the first time is a new one: its facts are asked next
+    return k;
+  };
+  // (each column read after fill: it may grow the columns)
+  const B = {
+    key: (k) => { fill(k); return key[k]; },
+    vh: (k) => { fill(k); return vh[k] < 0 ? null : vh[k]; },
+    name: (k) => { fill(k); return name[k] < 0 ? undefined : name[k]; },
+    bytes: (k) => { fill(k); return bytes[k]; },
+    chars: (k) => { fill(k); return chars[k]; },
+    sec: (k) => { fill(k); return E.name(sec[k]); },
+    role: (k) => { fill(k); return E.name(role[k]); },
+    bucket: (k) => { fill(k); return E.name(bucket[k]); },
+    // the facts of a block of the messages (null for one of the tools or system), read back when the cache no longer holds them
+    f: (k) => {
+      if (B.sec(k) !== 'messages') return null;
+      const hit = facts.get(k);
+      return hit !== undefined ? hit : remember(k, factsOf(readDef(k)));
+    },
+  };
+  BLOCKS.set(store, B);
+  return B;
+}
 
 // ── lists ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-const LISTS = new WeakMap(); // store → its lists (block ids interned as ints)
+const LISTS = new WeakMap(); // store → its lists (blocks as the store's definition slots)
 function listsOf(store) {
   if (LISTS.has(store)) return LISTS.get(store);
-  const ix = new Map(), names = [];
-  const int = (bid) => { let k = ix.get(bid); if (k === undefined) { k = names.length; names.push(bid); ix.set(bid, k); } return k; };
-  const keyframes = new Map(), recent = new Map();
-  const remember = (e) => { recent.delete(e.rid); recent.set(e.rid, e); if (recent.size > RECENT) recent.delete(recent.keys().next().value); return e; };
+  const int = (bid) => {
+    const k = store.defSlot(bid);
+    if (k === undefined) throw new Error(`the context projection has no definition for block ${bid}`);
+    return k;
+  };
+  const held = lru(2 * LIST_BYTES); // rid → its list: keyframes and the lists asked last alike
+  // a list weighs 16 B an element (arrays of small integers built by push: 8 B an element and up to half again of spare room; at
+  // 8 B an element the cache held 7.3 MB at its 4 MB figure, test/query/big-session.mjs live(0.48), 2026-10-22)
+  const keep = (e) => { held.set(e.rid, e, 16 * (e.list.length + e.mb.length) + 160); return e; };
   const apply = (base, { k = 0, patch, add }, map) => {
     const out = base ? base.slice(0, k) : [];
     for (const [i, v] of patch || []) out[i] = map(v);
@@ -37,26 +126,29 @@ function listsOf(store) {
     return out;
   };
   const same = (v) => v;
-  // a call row's { rid, list (ints), mb, depth }, through its base chain from the nearest list held
-  function at(rid) {
-    const hit = recent.get(rid) || keyframes.get(rid);
-    if (hit) return remember(hit);
+  // a call row's { rid, list (slots), mb, depth }, through its base chain from the nearest list held; `head`: the row itself when the
+  // caller holds it, `rowOf`: how a row of the chain is read
+  function at(rid, rowOf = (r) => store.rows.get(r), head = null) {
+    const hit = held.get(rid);
+    if (hit) return hit;
     const path = [];
     let e = null;
-    for (let r = store.rows.get(rid); r; r = r.base == null ? null : store.rows.get(r.base)) {
-      const c = recent.get(r.rid) || keyframes.get(r.rid);
-      if (c) { e = c; break; }
+    for (let r = head || rowOf(rid); r;) {
       path.push(r);
+      if (r.base == null) break;
+      const c = held.get(r.base); // a base whose list is held is not read
+      if (c) { e = c; break; }
+      r = rowOf(r.base);
     }
     if (!e && !path.length) return null;
     for (let i = path.length - 1; i >= 0; i--) {
       const r = path[i], from = r.base != null ? e : null;
       e = { rid: r.rid, list: apply(from && from.list, r, int), mb: apply(from && from.mb, r.mb || {}, same), depth: from ? from.depth + 1 : 0 };
-      if (e.depth % KEYFRAME === 0) keyframes.set(r.rid, e);
+      if (e.depth % KEYFRAME === 0) keep(e);
     }
-    return remember(e);
+    return keep(e);
   }
-  const lists = { at, int, bid: (k) => names[k] };
+  const lists = { at, bid: (k) => store.defBid(k) };
   LISTS.set(store, lists);
   return lists;
 }
@@ -68,65 +160,120 @@ export function listOf(store, rid) {
 
 // ── reduce ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const ridOf = (m) => String(m && typeof m === 'object' ? m.id : m);
-const orderOfRow = (row) => ({ ts_request: row.x.item.ts_request, id: row.x.item.id });
 const isCall = (row) => !!(row && row.x && Array.isArray(row.x.secs));
+const enoent = () => { throw Object.assign(new Error('no file: the fold log is held in memory'), { code: 'ENOENT' }); };
+const NO_FILE = { statSync: enoent, openSync: enoent, closeSync() {}, readSync: () => 0 };
+/** memoryLog(store) → a fold log (src/query/fold-log.mjs) held in memory only, over no file: what reduce() folds into. */
+export const memoryLog = (store) => openFoldLog({ home: '/', fs: NO_FILE, key: 'reduce', write: false, projection: { id: store.id, bytes: store.bytes } });
 
 /**
- * reduce(store, members, {mark, resolve}) → the session's document (see the head of this file) at `mark` (design §3.4 "Extraction
- * frontier"): the reduction over the members whose record id is ≤ mark (posCmp) and nothing else. `members`: the session's index
- * rows (or record ids); those up to the mark that the store holds a row for are reduced, in write order, as the record path folds
- * them. With no mark, the mark is the store's frontier: the largest member such that every member up to it has a row. The document
- * carries `mark`; `failed: [{id, reason}]`, the members up to the mark whose row says why they did not extract (design §3.9, D38:
- * their call is shown by its reason, never dropped); and `pending: {done, total}` (members reduced, members) while any member is not
- * reduced (above the mark, failed, or with no row). `resolve(ref)` → the
- * flat entry of the block `ref` names (src/view/extract.mjs blockAt over the record read back): asked only for a break detail no
- * `brk` line holds yet. `errors`: the answering request's (where a note of writing the `brk` lines goes).
+ * reduce(store, members, {mark, resolve, errors}) → skeletonDoc of the reduction at `mark` (design §3.4 "Extraction frontier"),
+ * folded into a fold log held in memory: the members whose record id is ≤ mark (posCmp) and nothing else. `members`: the session's
+ * index rows (or record ids); those up to the mark that the store holds a row for are folded. With no mark, the mark is the store's
+ * frontier: the largest member such that every member up to it has a row. `pending: {done, total}` (members up to the mark that
+ * have a row, members) while a member is above the mark or has no row — a failed member is reported in `failed`, not pending (3.5:43).
  */
 export function reduce(store, members, { mark = undefined, resolve = null, errors = undefined } = {}) {
   const all = [...new Set(members.map(ridOf))].sort(posCmp);
   if (mark === undefined) { mark = null; for (const rid of all) { if (!store.rows.has(rid)) break; mark = rid; } }
-  const upTo = mark == null ? [] : all.filter((rid) => posCmp(rid, mark) <= 0);
-  const failed = [], rids = [];
-  for (const rid of upTo) {
-    const x = store.rows.has(rid) ? store.rows.get(rid).x || {} : null;
-    if (x && typeof x.unparsed === 'string' && !x.item) failed.push({ id: rid, reason: x.unparsed });
-    else if (x) rids.push(rid);
-  }
-  const found = new Map(); // break details worked out by this reduction, written as `brk` lines once it is done
-  let doc;
-  try { doc = reduceIn(store, rids, resolve, found); } catch (e) {
-    if (!(e instanceof OrderBound)) throw e;
-    // sub-agents told apart only by order: from scratch, in step order
-    // each row's order read once (a row is read back from the projection: not once a comparison)
-    const ord = new Map(rids.map((rid) => { const row = store.rows.get(rid); return [rid, row.x.item ? orderOfRow(row) : null]; }));
-    const byOrder = (a, b) => { const oa = ord.get(a), ob = ord.get(b); return oa && ob ? stepOrder(oa, ob) : 0; };
-    doc = reduceIn(store, rids.slice().sort(byOrder), resolve, found);
-  }
-  if (found.size) store.append({ brks: [...found.values()] }, { errors });
-  doc.mark = mark;
-  if (failed.length) doc.failed = failed;
-  if (rids.length < all.length) doc.pending = { done: rids.length, total: all.length };
+  const upTo = mark == null ? [] : all.filter((rid) => posCmp(rid, mark) <= 0 && store.rows.has(rid));
+  const log = memoryLog(store), R = reduction(store, { log, resolve, errors });
+  R.add(upTo);
+  const doc = { mark, ...(upTo.length < all.length ? { pending: { done: upTo.length, total: all.length } } : null), ...skeletonDoc(R) };
+  log.close();
   return doc;
 }
 
-const byOrder = (a, b) => stepOrder({ ts_request: a.ts, id: a.id }, { ts_request: b.ts, id: b.id });
+/**
+ * reduction(store, {log, resolve, errors, progress}) → {add(rids, {budgetMs}) → the rids not reached, frontier, has(rid), log}: a
+ * session's reduction that grows (design §3.4, 3.5 §内存有界), writing what it folds into the fold log `log` (src/query/fold-log.mjs).
+ * `add(rids)`: member record ids that have a row, in any order. In write order each row is read from the store once, as it is
+ * folded, until `budgetMs` is spent (the rest handed back); new rids that do not all sort after the last one folded (write order;
+ * step order once the reduction is in step order) fold again from scratch over everything added, as an `OrderBound` does (sub-agents
+ * told apart by order only: then in step order). A call that sorts before its lane's last call folds its lane again (pushOf).
+ *   Each call folded is one call line `{c: rid, r: row, e: lane events, d: ledger delta, rc: record facts}`: its skeleton row (3.5
+ * §会话读 row closed set, src/view/board.mjs callRow, `lane` = its lane's key), its lane events in the lane answer's form (no tool
+ * input), what it did to its lane's ledger (analyze.mjs replayLedger), its record's facts. A line is appended only when its bytes
+ * differ from the rid's latest (an 8-byte digest per rid). After each add, in order: the lines of calls whose lane key or spawned
+ * lane changed, lane header lines that changed (3.5 lane-header closed set), lane-gone lines, item lines (members that are no call),
+ * failed lines, and one frontier line `{f: the last rid in write order, n: members folded, pb: the projection's bytes, st: stats}`.
+ *   The heap keeps per member, by its row's slot in the store, its step-order ts and its latest line's digest; per lane its calls'
+ * slots in step order, its base and last call (their lists through the bounded list cache), last composition, first prompt, the
+ * sums its header and the stats read, and the analyzer's state (its lane ledgers among it); the spawns' 60-character prompt
+ * heads for linking. No call, event or document is kept. `members()`: the rids read so far, failed ones included.
+ * `progress(rid)` is called once per row folded (the worker's silence clock, 3.5:46).
+ */
+export function reduction(store, { log, resolve = null, errors = undefined, progress = null } = {}) {
+  const L = listsOf(store), B = blocksOf(store);
+  // per member, by its row's slot in the store (store.rows.slotOf): its ts and its call's own ts (step order; one string when they
+  // are equal), the digest of its latest line (NaN: none yet; 0: an item)
+  const ts = [], cts = [];
+  let dig = new Float64Array(1024).fill(NaN);
+  const ridAt = (k) => store.rows.keyAt(k), slotOf = (rid) => store.rows.slotOf(rid);
+  const failed = new Map(), items = []; // failed rid → its line's offset; the item lines' offsets
+  const found = new Map(); // break details worked out by this reduction, written as `brk` lines once an add is done
+  const heads = new Map(), written = new Map(); // lane key → its header line's digest; spawn → the child lane its call line names
+  let pend = [], newItems = [], newFailed = [], inStep = false, last = -1, top = null, n = 0, F;
+  const before = (a, b) => compareStep(cts[a], ridAt(a), cts[b], ridAt(b));
+  const byStep = (a, b) => { const p = slotOf(a), q = slotOf(b); return ts[p] != null && ts[q] != null ? compareStep(ts[p], a, ts[q], b) : 0; };
+  const setDig = (k, h) => { if (k >= dig.length) { const d = new Float64Array(Math.max(2 * dig.length, k + 1)).fill(NaN); d.set(dig); dig = d; } dig[k] = h; };
+  const flush = () => { if (pend.length) log.append(pend, { errors }); pend = []; };
+  const put = (k, line) => { const h = num52(JSON.stringify(line)); if (dig[k] === h) return; setDig(k, h); pend.push(line); if (pend.length >= 256) flush(); };
+  // the latest line of a call, changed by `edit` (false: unchanged), written again
+  const rewrite = (k, edit) => { flush(); const at = log.latest(ridAt(k)); if (!at) return; const { p, ...o } = log.read(...at); const line = structuredClone(o); if (edit(line) !== false) put(k, line); };
 
-function reduceIn(store, rids, resolve, found) {
-  const L = listsOf(store), items = new Map(), unknown = [], other = [];
-  const defs = []; // block int → what the reduction reads of its definition (held for this reduction only)
-  const keys = new Map(); // (sec, role, kind, fh) → int
-  const intOf = (s) => { let k = keys.get(s); if (k === undefined) keys.set(s, (k = keys.size)); return k; };
-  const def = (k) => {
-    let d = defs[k];
-    if (d) return d;
-    const D = store.readDef(L.bid(k));
-    if (!D) throw new Error(`the context projection has no definition for block ${L.bid(k)}`);
-    const f = D.f || {};
-    d = defs[k] = { key: intOf(`${D.sec}\x1F${D.role}\x1F${D.kind}\x1F${D.fh}`), vh: D.vh ?? null, sec: D.sec, role: D.role, name: D.name,
-      bytes: D.bytes || 0, bucket: f.bucket || 'other', chars: D.chars || 0, f: D.sec === 'messages' ? f : null };
-    return d;
-  };
-
+  // a lane's sums for the stats and its header (its calls' peak context, compactions, tokens in and out, monitor flags)
+  const sums = () => ({ peak: 0, cmp: 0, tin: 0, tout: 0, flags: 0 });
+  // ── one pass of the fold: its lanes, from scratch on again()
+  const fold = () => ({ subs: new Map(), flat: new Map(), dls: new Map(), an: null, spawns: [], links: new Map(), uid: 0, relink: false, fresh: [], subsNew: [] });
+  F = fold();
+  let rowOf = (rid) => store.rows.get(rid);
+  // a doc lane (what the document shows as one lane: a sub-agent's analyzer lane, else a kind) and the sub-lanes it holds
+  const dlOf = (S) => { let d = F.dls.get(S.dl); if (!d) F.dls.set(S.dl, d = { id: S.dl, parts: new Set(), first: -1, moved: false }); d.parts.add(S); return d; };
+  const keyOf = (S) => ridAt(F.dls.get(S.dl).first);
+  function newSub(fmt, kind, dl) {
+    const S = { fmt, kind, dl, uid: F.uid++, rids: [], base: -1, last: -1, comp: null, ask: null, info: null, ...sums() };
+    dlOf(S); F.subsNew.push(S);
+    return S;
+  }
+  function dropSub(S) {
+    S.rids = []; S.base = S.last = -1; S.comp = null; S.info = null; Object.assign(S, sums());
+    F.spawns = F.spawns.filter((s) => s.S !== S); F.relink = true;
+    const d = F.dls.get(S.dl);
+    let first = -1;
+    for (const T of d.parts) if (T.rids.length && (first < 0 || before(T.rids[0], first) < 0)) first = T.rids[0];
+    if (first !== d.first) { d.first = first; d.moved = true; }
+  }
+  // a call folded: its columns, its place in its lane, its line
+  function emit(k, S, call, ev, ld, usage) {
+    S.peak = Math.max(S.peak, call.ctx || 0); S.cmp += call.compaction ? 1 : 0; S.tin += usage.input_tokens || 0; S.tout += usage.output_tokens || 0;
+    S.rids.push(k);
+    const d = F.dls.get(S.dl);
+    if (d.first < 0 || before(k, d.first) < 0) { if (d.first >= 0) d.moved = true; d.first = k; }
+    const key = ridAt(d.first), rid = ridAt(k);
+    const e = ev.map(({ step, streamId, childStreamId, ...x }, i) => {
+      const out = { ...x, rid, lane: key };
+      if (x.type === 'monitor' && x.flagged) S.flags++;
+      if (x.type === 'spawn') {
+        const sp = { k, i, head: ev[i].head || '', arg: x.arg, S };
+        F.spawns.push(sp); F.fresh.push(sp);
+        const child = F.links.get(`${k}:${i}`);
+        if (child) out.childLane = keyOf(child);
+        written.set(`${k}:${i}`, out.childLane ?? null);
+      }
+      return out;
+    });
+    const it = (store.rows.get(rid) || {}).x;
+    put(k, { c: rid, r: callRow(call, key), e, d: ld, rc: recFacts(it && it.item) });
+  }
+  const K = { B, cacheOf, pushOf, emit, newSub, at: (rid, row) => L.at(rid, rowOf, row), baseOf, lastOf, int: slotOf };
+  function push(rid, row, reader) {
+    rowOf = reader;
+    const k = slotOf(rid), x = row.x || {};
+    if (!isCall(row)) { if (!(dig[k] >= 0)) { setDig(k, 0); newItems.push(k); } return; }
+    if (!F.flat.has(x.format)) F.flat.set(x.format, x.format === 'anthropic' ? anthropicFold(K, F) : flatFold(boardDissectorOf(x.format), K, F));
+    F.flat.get(x.format).push(rid, row);
+  }
   // the break detail of a pair of blocks: from the projection, else from both blocks' texts (once)
   const blockOf = (bid) => {
     const D = store.readDef(bid);
@@ -144,11 +291,14 @@ function reduceIn(store, rids, resolve, found) {
     found.set(pair, d);
     return d;
   }
-  const seq = (list, attrs) => ({ n: list.length, key: (i) => def(list[i]).key, vol: (i) => !!(attrs[i] && attrs[i].volatile), sec: (i) => def(list[i]).sec, name: (i) => def(list[i]).name });
-  // a call's cache break against its lane's base (the list and attributes of the lane's last call that chained a prefix), and the
-  // byte-identity of the prefix before it (3.3:75, acceptance #12): no claim over a context shown in part or edited by the server;
-  // else each position of [0, idx) holds, on both sides, a block whose verbatim slice with its cache_control cut out has the same
-  // SHA-256 (`vh`), volatile positions skipped; a block with no verbatim slice (vh null) proves nothing, so the flag is false
+  const seq = (list, attrs) => ({ n: list.length, key: (i) => B.key(list[i]), vol: (i) => !!(attrs[i] && attrs[i].volatile), sec: (i) => B.sec(list[i]), name: (i) => B.name(list[i]) });
+  // a lane's base (its last call that chained a prefix) and last call, from their rows and the list cache
+  function baseOf(k) { if (k < 0) return null; const rid = ridAt(k); return { rid, list: L.at(rid, rowOf).list, attrs: rowOf(rid).attrs || {} }; }
+  function lastOf(S) { return S.last < 0 ? null : { list: L.at(ridAt(S.last), rowOf).list, comp: S.comp }; }
+  // a call's cache break against its lane's base, and the byte-identity of the prefix before it (3.3:75, acceptance #12): no claim
+  // over a context shown in part or edited by the server; else each position of [0, idx) holds, on both sides, a block whose
+  // verbatim slice with its cache_control cut out has the same SHA-256 (`vh`), volatile positions skipped; a block with no verbatim
+  // slice (vh null) proves nothing, so the flag is false
   function cacheOf(base, list, attrs, x, compaction, usage) {
     const P = base ? seq(base.list, base.attrs) : null, C = seq(list, attrs);
     const brk = breakOf(P, C, { compaction, detail: (i) => detail(base.list[i], list[i]) });
@@ -156,149 +306,373 @@ function reduceIn(store, rids, resolve, found) {
     let same = brk.idx > 0 && !blind && !!P;
     for (let i = 0; same && i < brk.idx; i++) {
       if (P.vol(i) && C.vol(i)) continue;
-      const a = P.vol(i) ? null : def(base.list[i]).vh;
-      same = a != null && a === (C.vol(i) ? null : def(list[i]).vh);
+      const a = P.vol(i) ? null : B.vh(base.list[i]);
+      same = a != null && a === (C.vol(i) ? null : B.vh(list[i]));
     }
     brk.prefixByteIdentical = same;
     brk.gt = realGroundTruth(same, usage.read, usage.create);
     brk.gtReal = true;
+    if (base) brk.refRid = base.rid; // the 缓存对比步 (2.3): the call this one's break is taken against
     return brk;
   }
   // a fold's push: a call that sorts before its lane's last call puts the lane in again, its rows in step order with this one in place
-  const pushOf = (take, callsOf, drop) => (rid) => {
-    const call = take(rid), cs = callsOf(call);
-    if (cs.length < 2 || byOrder(cs[cs.length - 2], call) < 0) return;
-    const ids = cs.slice(0, -1).map((c) => String(c.id)), me = orderOfRow(store.rows.get(rid));
-    drop(call);
-    let pending = true;
-    for (const id of ids) {
-      if (pending && stepOrder(me, orderOfRow(store.rows.get(id))) < 0) { take(rid); pending = false; }
-      take(id);
-    }
-    if (pending) take(rid);
-  };
-  const K = { store, L, def, cacheOf, pushOf };
-  const folds = new Map(); // wire format → its fold
-  for (const rid of rids) {
-    const row = store.rows.get(rid), x = row.x || {};
-    if (x.item) items.set(rid, x.item);
-    if (isCall(row)) {
-      if (!folds.has(x.format)) folds.set(x.format, x.format === 'anthropic' ? anthropicFold(K) : flatFold(boardDissectorOf(x.format), K));
-      folds.get(x.format).push(rid);
-    } else if (x.unknown) (x.item.is_llm_call ? unknown : other).push({ at: { ts_request: x.item.ts_request, id: x.item.id }, facts: x.unknown });
+  function pushOf(take, drop) {
+    return (rid, row) => {
+      const S = take(rid, row), cs = S.rids, me = cs[cs.length - 1];
+      if (cs.length < 2 || before(cs[cs.length - 2], me) < 0) return;
+      const ids = cs.slice(0, -1).map(ridAt);
+      drop(S); dropSub(S);
+      let pending = true;
+      for (const id of ids) {
+        if (pending && byStep(rid, id) < 0) { take(rid, row); pending = false; }
+        take(id, rowOf(id));
+      }
+      if (pending) take(rid, row);
+    };
   }
-  const facts = (xs) => [...xs].sort((a, b) => stepOrder(a.at, b.at)).map((u) => u.facts);
-  if (!folds.size) return { ...assembleUnknown(facts(unknown.length ? unknown : other)), items };
-  [...folds.values()].flatMap((f) => f.calls()).sort(byOrder).forEach((c, i) => { c.gi = i; });
-  const first = (v) => (v.steps.length ? v.steps[0].gi : Infinity);
-  const views = [...folds.values()].map((f) => f.finish()).sort((a, b) => first(a) - first(b));
-  const A = views.length === 1 ? views[0] : mergeViews(views);
-  tellApart(A.lanes);
-  if (unknown.length) A.unknown = unknownSummary(facts(unknown), true);
-  for (const l of A.lanes) l.key = l.calls.length ? String(l.calls[0].id) : null;
-  A.items = items;
-  return A;
+
+  let reader = (rid) => store.rows.get(rid);
+  const step = (rid, row) => { push(rid, row, reader); last = slotOf(rid); if (progress) progress(rid); };
+  // a row read: a failed one noted, else its order kept (the row returned)
+  function read(rid) {
+    const row = store.rows.get(rid);
+    if (!row) throw new Error(`the context projection has no row for ${rid}`);
+    const k = slotOf(rid), x = row.x || {};
+    if (top == null || posCmp(rid, top) > 0) top = rid;
+    if (typeof x.unparsed === 'string' && !x.item) { if (!failed.has(rid)) { failed.set(rid, -1); newFailed.push({ x: rid, reason: x.unparsed, code: x.code || 'record-unparseable' }); } return null; }
+    n++;
+    ts[k] = x.item ? x.item.ts_request : null;
+    const c = !isCall(row) ? ts[k] : x.format === 'anthropic' ? (x.facts || {}).ts_request : x.ts; // the call's own ts (its step order)
+    cts[k] = c === ts[k] ? ts[k] : c;
+    return row;
+  }
+  const folded = () => { const out = []; ts.forEach((t, k) => { const rid = ridAt(k); if (!failed.has(rid)) out.push(rid); }); return out; };
+  // from scratch over everything added, each row read again
+  function again() {
+    F = fold(); last = -1; reader = (rid) => store.rows.get(rid);
+    const all = folded().sort(posCmp);
+    for (const rid of inStep ? all.sort(byStep) : all) step(rid, store.rows.get(rid));
+  }
+  function add(list, { budgetMs = Infinity } = {}) {
+    const t0 = performance.now();
+    const fresh = [...new Set(list.map(String))].filter((rid) => !has(rid)).sort(posCmp);
+    let rest = [];
+    try {
+      if (!fresh.length) { /* nothing new */ } else if (!inStep && (last < 0 || posCmp(fresh[0], ridAt(last)) > 0)) {
+        reader = (rid) => store.rows.get(rid);
+        for (let i = 0; i < fresh.length; i++) { // write order: each row read once, as it is folded
+          if (i && performance.now() - t0 >= budgetMs) { rest = fresh.slice(i); break; }
+          const row = read(fresh[i]);
+          if (row) step(fresh[i], row);
+        }
+      } else {
+        const held = new Map(); // in step order: the new rows' order is read first, their rows kept while they are folded
+        for (const rid of fresh) { const row = read(rid); if (row) held.set(rid, row); }
+        const next = [...held.keys()].sort(byStep);
+        reader = (rid) => held.get(rid) || store.rows.get(rid);
+        if (!next.length) { /* only failures */ } else if (inStep && last >= 0 && byStep(next[0], ridAt(last)) > 0) for (const rid of next) step(rid, held.get(rid));
+        else again();
+      }
+    } catch (e) {
+      if (!(e instanceof OrderBound) || inStep) throw e;
+      for (const rid of fresh) if (!has(rid)) read(rid);
+      inStep = true; // sub-agents told apart only by order: from scratch, in step order
+      again();
+    }
+    settle();
+    if (found.size) { store.append({ brks: [...found.values()] }, { errors }); found.clear(); }
+    return rest;
+  }
+  const has = (rid) => { const k = slotOf(String(rid)); return k !== undefined && (ts[k] !== undefined || failed.has(String(rid))); };
+
+  // after an add: the calls whose lane key or child lane moved, the lane headers, the items, the failures, the frontier
+  function settle() {
+    flush();
+    for (const d of F.dls.values()) if (d.moved) {
+      const key = ridAt(d.first);
+      for (const S of d.parts) for (const k of S.rids) rewrite(k, (o) => {
+        if (o.r.lane === key) return false;
+        o.r.lane = key; for (const e of o.e) e.lane = key;
+      });
+      d.moved = false;
+    }
+    link();
+    for (const sp of F.spawns) {
+      const sk = `${sp.k}:${sp.i}`, child = F.links.get(sk), want = child ? keyOf(child) : null;
+      if (written.get(sk) === want) continue;
+      written.set(sk, want);
+      rewrite(sp.k, (o) => { const e = o.e[sp.i]; if (want == null) delete e.childLane; else e.childLane = want; });
+    }
+    const now = headers(), lines = [];
+    for (const [key, h] of now) { const g = num52(JSON.stringify(h)); if (heads.get(key) !== g) { heads.set(key, g); lines.push({ l: key, ...h }); } }
+    for (const key of [...heads.keys()]) if (!now.has(key)) { heads.delete(key); lines.push({ lg: key }); }
+    for (const k of newItems) { const x = store.rows.get(ridAt(k)).x || {}; lines.push({ i: ridAt(k), it: x.item || null, ...(x.unknown ? { u: x.unknown } : null) }); }
+    lines.push(...newFailed);
+    if (top != null) lines.push({ f: top, n, pb: store.bytes, st: stats() });
+    flush();
+    if (lines.length) {
+      const offs = log.append(lines, { errors });
+      lines.forEach((o, j) => { const kind = Object.keys(o)[0]; if (kind === 'i') items.push(offs[j]); else if (kind === 'x') failed.set(o.x, offs[j]); });
+    }
+    newItems = []; newFailed = [];
+  }
+  // spawns linked to sub-agent lanes (the record fold's rule, analyze.mjs finish): a sub-agent lane is spawned by the last spawn, in
+  // the order of lanes by their first call and then of the lane's steps, whose prompt's head opens the lane's first user text
+  function link() {
+    const order = (a, b) => before(a.S.rids[0], b.S.rids[0]) || before(a.k, b.k) || a.i - b.i;
+    const matches = (S, sp) => { const p = sp.head; return p && F.firstText(S).includes(p.slice(0, 40)); };
+    const subs = [...F.subs.values()].filter((S) => S.fmt === 'anthropic' && S.kind === 'subagent' && S.rids.length);
+    const best = F.best || (F.best = new Map());
+    const scan = (S, list) => { let b = best.get(S) || null; for (const sp of list) if (matches(S, sp) && (!b || order(sp, b) > 0)) b = sp; if (b) best.set(S, b); else best.delete(S); };
+    if (F.relink) { best.clear(); for (const S of subs) scan(S, F.spawns); }
+    else {
+      const born = new Set(F.subsNew);
+      for (const S of subs) scan(S, born.has(S) ? F.spawns : F.fresh);
+    }
+    F.relink = false; F.fresh = []; F.subsNew = [];
+    // a spawn names the last lane (in the order of lanes by their first call) it spawned
+    F.links = new Map();
+    for (const S of subs.sort((a, b) => before(a.rids[0], b.rids[0]))) { const b = best.get(S); if (b) F.links.set(`${b.k}:${b.i}`, S); }
+  }
+  // the lane headers (3.5 lane-header closed set) by lane key
+  function headers() {
+    const fmtFirst = new Map();
+    for (const S of F.subs.values()) if (S.rids.length) { const f = fmtFirst.get(S.fmt); if (f === undefined || before(S.rids[0], f) < 0) fmtFirst.set(S.fmt, S.rids[0]); }
+    const out = [], best = F.best || new Map();
+    for (const d of F.dls.values()) {
+      const parts = [...d.parts].filter((S) => S.rids.length);
+      if (!parts.length) continue;
+      let count = 0, lastK = -1, peak = 1, flagged = 0;
+      for (const S of parts) {
+        count += S.rids.length; flagged += S.flags; peak = Math.max(peak, S.peak);
+        const l = S.rids[S.rids.length - 1];
+        if (lastK < 0 || before(l, lastK) > 0) lastK = l;
+      }
+      const lead = parts.slice().sort((a, b) => before(fmtFirst.get(a.fmt), fmtFirst.get(b.fmt)))[0], firstS = parts.find((S) => S.rids[0] === d.first);
+      const meta = lead.fmt === 'anthropic' ? { kind: lead.kind, ...laneMeta(lead.kind) } : FLAT_LANES[lead.kind];
+      const sp = lead.fmt === 'anthropic' && lead.kind === 'subagent' ? best.get(lead) : null;
+      const h = { lane: ridAt(d.first), kind: meta.kind, icon: meta.icon, label: meta.label, task: sp ? sp.arg || taskOf(lead.ask) : null,
+        ...(meta.note ? { note: meta.note } : null), count, first: ridAt(d.first), last: ridAt(lastK), peakCtx: peak,
+        spawnRid: sp ? ridAt(sp.k) : null, parent: sp ? keyOf(sp.S) : null, flagged };
+      if (!sp) h[HEAD] = firstS.ask ?? null;
+      out.push(h);
+    }
+    tellApart(out);
+    for (const h of out) delete h[HEAD];
+    return new Map(out.map((h) => [h.lane, h]));
+  }
+  // the session's stats (the record fold's: analyze.mjs finish, assemble.mjs flatLaneView, mergeViews)
+  function stats() {
+    const s = { calls: 0, streams: 0, subagents: 0, monitors: 0, compactions: 0, totalIn: 0, totalOut: 0, peakCtx: 0 };
+    const kinds = new Set();
+    for (const S of F.subs.values()) {
+      if (!S.rids.length) continue;
+      s.calls += S.rids.length; s.compactions += S.cmp; s.totalIn += S.tin; s.totalOut += S.tout; if (S.peak > s.peakCtx) s.peakCtx = S.peak;
+      if (S.fmt !== 'anthropic') { const kk = `${S.fmt}\n${S.kind}`; if (kinds.has(kk)) continue; kinds.add(kk); }
+      s.streams++;
+      if (S.kind === 'subagent') s.subagents++;
+      if (S.fmt === 'anthropic' && S.kind === 'monitor') s.monitors += S.rids.length;
+    }
+    return s;
+  }
+  const R = {
+    add, has, log,
+    members: () => [...folded(), ...failed.keys()],
+    get frontier() { return top; },
+    // what skeletonDoc reads besides the log: the calls in step order, the lanes in the order of their first call, items and failures
+    view: () => ({
+      calls: [...F.subs.values()].flatMap((S) => S.rids).sort(before).map(ridAt),
+      lanes: [...F.dls.values()].filter((d) => d.first >= 0 && [...d.parts].some((S) => S.rids.length)).map((d) => d.first).sort(before).map(ridAt),
+      items, failed: [...failed.values()],
+    }),
+  };
+  return R;
 }
 
-// The Anthropic wire's fold: the analyzer's lanes (createAnalyzer, fed call views), each call baked against its lane's base.
-function anthropicFold({ store, L, def, cacheOf, pushOf }) {
-  const an = createAnalyzer();
-  const lanes = new Map(); // the analyzer's lane → { base, last: { list, comp } }
+/** skeletonDoc(R) → the comparison form of a reduction, read from its fold log: skeletonOf(R) with every lane's events and ledger
+ *  (laneDoc) as {laneEvents: {key: events}, ledgers: {key: {resources, seen}}}. */
+export function skeletonDoc(R) {
+  const sk = skeletonOf(R), laneEvents = {}, ledgers = {};
+  for (const h of sk.lanes) { const { rids, events, ...ledger } = laneDoc(R, h.lane); laneEvents[h.lane] = events; ledgers[h.lane] = ledger; }
+  const { records, ...rest } = sk;
+  return { ...rest, laneEvents, ledgers, records };
+}
+/** skeletonOf(R) → {rows (step order), lanes (headers, in the order of their first row), events [{type, rid, lane}], failed?,
+ *  unknown?, stats, logged, probes, records (every member folded but the failed, in step order)}, read from R's fold log. */
+function skeletonOf(R) {
+  const { log } = R, v = R.view();
+  const rows = [], events = [], records = [];
+  for (const rid of v.calls) {
+    const o = log.read(...log.latest(rid));
+    rows.push(o.r);
+    records.push({ id: rid, ...o.rc });
+    for (const e of o.e) events.push({ type: e.type, rid, lane: o.r.lane });
+  }
+  const lanes = v.lanes.map((key) => { const { l, p, ...h } = log.read(...log.lane(key)); return h; });
+  const its = v.items.map((off) => log.read(off)).filter((o) => o.it).sort((a, b) => stepOrder(a.it, b.it));
+  for (const o of its) records.push({ id: o.i, ts_request: o.it.ts_request, is_llm_call: !!o.it.is_llm_call, response: { status: o.it.status ?? null } });
+  records.sort(stepOrder);
+  const llm = its.filter((o) => o.u && o.it.is_llm_call).map((o) => o.u), other = its.filter((o) => o.u && !o.it.is_llm_call).map((o) => o.u);
+  const unknown = rows.length ? (llm.length ? unknownSummary(llm, true) : undefined) : unknownSummary(llm.length ? llm : other, false);
+  const failed = v.failed.map((off) => { const { x, reason, code } = log.read(off); return { id: x, reason, code }; }).sort((a, b) => posCmp(a.id, b.id));
+  const f = log.frontier == null ? null : log.read(log.frontier);
+  return { rows, lanes, events, ...(failed.length ? { failed } : null), ...(unknown ? { unknown } : null),
+    stats: f ? f.st : { calls: 0, streams: 0, subagents: 0, monitors: 0, compactions: 0, totalIn: 0, totalOut: 0, peakCtx: 0 }, ...itemsView(its.map((o) => o.it)), records };
+}
+/** The heap one entry of a kept ledger takes (a resource, a segment or load of it, a seen path; replayLedger's `units`): the most
+ *  measured over ledgers of 3,040 resources (1–4 segments, 1–8 loads each) and 0–13,738 seen paths of ~50 characters, after a forced
+ *  GC (232 B, all resources of one segment and load), × 1.25. */
+export const LEDGER_UNIT_BYTES = 300;
+/** The heap the kept lane ledgers may take (src/query/named/lane.mjs): a K term of the reduction's bound (3.5 §内存有界), each weighed
+ *  by ledgerWeight; room for a lane of the shape of Q23 #6's generated 6,598-call session. */
+export const LEDGER_BYTES = 8 << 20;
+/** laneLedger(rids, deltaOf, base?, kept?) → {resources, seen, kept} of a lane from its steps' ledger deltas (deltaOf(i) → step i's
+ *  `d` from its call line, asked only for the steps replayed; analyze.mjs replayLedger), `rids` its steps in step order (an entry's
+ *  steps go on the wire as rids): resources' segments {enter, evict} and loads {rid, range, via}; seen paths {path, firstRid, count},
+ *  every entry in the ledger's order. With `base` (a step's place): only the entries new after it or whose bytes differ from the
+ *  ledger's at it (3.5 §会话读 `lane`). `kept: {maps, step}`: the replay's maps at `step` of these same steps (its rids up to it
+ *  unchanged), with `base` -1 or `step`: only the steps after it are replayed, its maps going on in place. The `kept` returned: the
+ *  maps at the last step (null for a lane of no step). */
+export function laneLedger(rids, deltaOf, base = -1, kept = null) {
+  const at = (n) => (n == null ? n : rids[n]);
+  const res = ({ segments, loads, ...r }) => ({ ...r, segments: segments.map((g) => ({ enter: at(g.enter), evict: at(g.evict) })),
+    loads: loads.map(({ step, ...x }) => ({ rid: at(step), ...x })) });
+  const see = (f) => ({ path: f.path, firstRid: at(f.firstStep), count: f.count });
+  const from = kept ? kept.step + 1 : 0, maps = kept ? kept.maps : { resources: new Map(), seen: new Map() };
+  // the entries' wire bytes at `base`: all of them (a replay from the first step), or those the steps after a kept `base` touch
+  let was = null;
+  const touched = kept && base >= 0 ? (was = { r: new Map(), s: new Map() }) : null;
+  const snap = (m, wire) => new Map([...m].map(([k, v]) => [k, JSON.stringify(wire(v))]));
+  const steps = function* () { for (let i = from; i < rids.length; i++) yield [i, deltaOf(i) || []]; };
+  replayLedger(steps(), touched ? null : (n, r, s) => { if (n === base) was = { r: snap(r, res), s: snap(s, see) }; }, maps,
+    touched && ((kind, key, e) => { if (!touched[kind].has(key)) touched[kind].set(key, e ? JSON.stringify(kind === 'r' ? res(e) : see(e)) : null); }));
+  const out = { kept: rids.length ? { maps, step: rids.length - 1 } : null };
+  const resources = [], seen = [];
+  for (const [k, r] of maps.resources) { const w = res(r); if (!was || (touched ? touched.r.has(k) : true) && was.r.get(k) !== JSON.stringify(w)) resources.push(w); }
+  for (const [k, f] of maps.seen) { const w = see(f); if (!was || (touched ? touched.s.has(k) : true) && was.s.get(k) !== JSON.stringify(w)) seen.push(w); }
+  return { ...out, resources, seen };
+}
+/** ledgerWeight(kept) → the heap a kept ledger (laneLedger's `kept`) is weighed at: its entries (counted as the replay changes them)
+ *  × LEDGER_UNIT_BYTES. */
+export const ledgerWeight = (kept) => kept.maps.units * LEDGER_UNIT_BYTES;
+/** laneDoc(R, key) → {rids, events, resources, seen} of the lane `key` names, read from R's fold log: its calls in step order, their
+ *  lane events, and its ledger (laneLedger). */
+function laneDoc(R, key) {
+  const { log } = R, lines = [];
+  for (const rid of R.view().calls) { const o = log.read(...log.latest(rid)); if (o.r.lane === key) lines.push(o); }
+  const { resources, seen } = laneLedger(lines.map((o) => o.c), (i) => lines[i].d);
+  return { rids: lines.map((o) => o.c), events: lines.flatMap((o) => o.e), resources, seen };
+}
+
+const recFacts = (it) => (it ? { ts_request: it.ts_request, is_llm_call: !!it.is_llm_call, response: { status: it.status ?? null } } : {});
+
+// The Anthropic wire's fold: the analyzer's lanes (createAnalyzer, fed call views, keeping nothing), each call baked against its
+// lane's base and written out.
+function anthropicFold({ at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int }, F) {
+  const an = createAnalyzer({ keep: false });
+  F.firstText = (S) => an.firstText(S.stream);
+  // a call's view: its messages' roles from the columns, their tool uses and block facts read when the analyzer asks (the messages
+  // new to the lane: analyze.mjs eventsOf)
   function view(row, list, mb) {
     const messages = mb.map((s, j) => {
-      const end = j + 1 < mb.length ? mb[j + 1] : list.length, ks = list.slice(s, end);
-      const uses = [];
-      for (const k of ks) { const f = def(k).f; if (f && f.type === 'tool_use') uses.push([f.id, f.name]); }
-      return { role: def(ks[0]).role, uses, get blocks() { return ks.map((k) => def(k).f); } };
+      const end = j + 1 < mb.length ? mb[j + 1] : list.length;
+      let blocks = null;
+      const factsOf = () => blocks || (blocks = list.slice(s, end).map(B.f));
+      return {
+        role: B.role(list[s]),
+        get uses() { const u = []; for (const f of factsOf()) if (f && f.type === 'tool_use') u.push([f.id, f.name]); return u; },
+        get blocks() { return factsOf(); },
+      };
     });
     return { facts: row.x.facts, messages };
   }
-  function take(rid) {
-    const row = store.rows.get(rid), x = row.x, e = L.at(rid), list = e.list, attrs = row.attrs || {};
+  function take(rid, row) {
+    const x = row.x, e = at(rid, row), list = e.list, attrs = row.attrs || {}, k = int(rid);
     const call = an.pushView(view(row, list, e.mb));
     const lane = an.laneOf(call);
-    if (lane.calls[0] === call) an.ask(lane, firstHumanOf(list, def));
+    let S = F.subs.get(lane);
+    if (!S) { S = newSub('anthropic', lane.kind, lane.kind === 'subagent' ? `\0${F.uid}` : lane.kind); S.stream = lane; F.subs.set(lane, S); }
+    if (!S.rids.length) S.ask = firstHumanOf(list, B);
     call.wire = x.wire;
     call.respRefs = x.respRefs;
     call.usage = x.usage;
-    const st = lanes.get(lane) || { base: null, last: null };
-    lanes.set(lane, st);
-    call.cacheBreak = cacheOf(st.base, list, attrs, x, !!call.compaction, call.usage);
+    call.cacheBreak = cacheOf(baseOf(S.base), list, attrs, x, !!call.compaction, call.usage);
     call.gt = call.cacheBreak.gt;
-    if (call.chainsPrefix !== false) st.base = { list, attrs };
-    call.comp = compOf(st.last, list, def);
-    st.last = { list, comp: call.comp };
-    call.flat = []; call.nonBlockKeys = []; call.paged_out = true;
-    call.rec = { id: x.item.id, request: requestOf(x, list, def) };
+    call.comp = compOf(lastOf(S), list, B);
+    if (call.chainsPrefix !== false) S.base = k;
+    S.last = k; S.comp = call.comp;
+    call.rec = { id: x.item.id, request: requestOf(x, list, B) };
     call.norm = { usage: x.facts.usage };
-    return call;
+    emit(k, S, call, call.ev, call.ld, x.facts.usage || {});
+    return S;
   }
-  const push = pushOf(take, (call) => an.laneOf(call).calls, (call) => { const lane = an.laneOf(call); an.drop(lane); lanes.delete(lane); });
-  return { push, calls: () => an.calls(), finish() { const A = an.finish(); A.provider = 'cc'; return A; } };
+  return { push: pushOf(take, (S) => an.drop(S.stream)) };
 }
 
 // A flat-lane wire's fold (assemble.mjs flatLaneFold over rows): a lane per agent (a subagent named by the harness's agent id or the
 // wire's own, the rest by lane kind), each call's compaction verdict on the dissector's message count, its cache break against its
-// lane's last call that did not fail; the document names lanes by kind (flatLaneView).
-function flatFold(d, { store, L, def, cacheOf, pushOf }) {
-  const byLane = new Map(), base = new Map(), info = new Map(), last = new Map(), laneOfCall = new WeakMap(), asks = new WeakMap();
-  function take(rid) {
-    const row = store.rows.get(rid), x = row.x, e = L.at(rid), list = e.list, attrs = row.attrs || {}, h = x.hints || {};
+// lane's last call that did not fail; the document names lanes by kind (flatLaneView): one doc lane per kind.
+function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int }, F) {
+  const lanes = new Map();
+  function take(rid, row) {
+    const x = row.x, e = at(rid, row), list = e.list, attrs = row.attrs || {}, h = x.hints || {}, k = int(rid);
     const kind = x.lane, agent = kind === 'subagent' ? h.laneKey ?? x.agent ?? null : null;
-    const lane = agent == null ? kind : `${kind}\n${agent}`;
+    const lk = agent == null ? kind : `${kind}\n${agent}`;
+    let S = lanes.get(lk);
+    if (!S) { S = newSub(d.id, kind, kind); lanes.set(lk, S); F.subs.set(`${d.id}\n${lk}`, S); }
+    if (!S.rids.length) S.ask = firstHumanOf(list, B);
     // 3.4: a call whose context is unknown (a body that does not parse; a partial context, an unstored WebSocket request included) has
     // no observed message count: no compaction verdict, and not the next one's predecessor
     const noContext = !!x.unparsed || x.wire.contextState === 'partial';
-    const comp = noContext ? { compaction: false } : compactionMeta(compactionVerdict(info.get(lane) || null,
+    const comp = noContext ? { compaction: false } : compactionMeta(compactionVerdict(S.info,
       { hint: h.compaction === true, marker: h.compactionMarker === true, msgCount: x.msgCount || 0 }));
-    if (!noContext) info.set(lane, { msgCount: x.msgCount || 0, marker: h.compactionMarker === true });
-    const brk = cacheOf(base.get(lane), list, attrs, x, comp.compaction, x.usage);
-    const rq = requestOf(x, list, def);
+    if (!noContext) S.info = { msgCount: x.msgCount || 0, marker: h.compactionMarker === true };
+    const brk = cacheOf(baseOf(S.base), list, attrs, x, comp.compaction, x.usage);
+    const rq = requestOf(x, list, B);
     const call = {
       gi: null, id: x.item.id, streamId: kind, rec: { id: x.item.id, request: rq }, norm: { usage: x.nu || {} }, wireFormat: d.id, ctx: x.ctx || 0,
       msgCount: rq.message_count || 0, tools: rq.tool_count || 0, ts: x.ts, status: x.status || null,
       ...comp, error: !!x.error, reqIncomplete: x.reqIncomplete, wsIncomplete: x.wsIncomplete, respIncomplete: x.respIncomplete,
       ...(x.unparsed ? { unparsed: true, errMsg: unparsedErrMsg(x.reqIncomplete) } : x.unstored != null ? { unparsed: true, errMsg: `unrenderable: ${x.unstored}` } : null),
       wire: x.wire, nonBlockKeys: [], ...(x.extraMessages ? { extraMessages: x.extraMessages } : null), respRefs: x.respRefs, flat: [], paged_out: true,
-      comp: compOf(last.get(lane), list, def), usage: x.usage, cacheBreak: brk, gt: brk.gt,
+      comp: compOf(lastOf(S), list, B), usage: x.usage, cacheBreak: brk, gt: brk.gt,
     };
-    last.set(lane, { list, comp: call.comp });
-    laneOfCall.set(call, lane);
-    if (!byLane.has(lane)) { byLane.set(lane, []); asks.set(call, firstHumanOf(list, def)); }
-    byLane.get(lane).push(call);
+    S.last = k; S.comp = call.comp;
     // a call that failed never established a cache prefix; one whose request was not stored does (with no blocks)
-    if (!(x.error || (x.status != null && x.status !== 200))) base.set(lane, { list, attrs });
-    return call;
+    if (!(x.error || (x.status != null && x.status !== 200))) S.base = k;
+    // the compaction events the board's outline lists, carrying the step's inference marker with them (invariant 4)
+    const ev = call.compaction ? [{ type: 'compaction', step: null, streamId: kind, from: call.evictedFrom, to: call.evictedTo,
+      inferred: call.compactionInferred, confidence: call.compactionConfidence, basis: call.compactionBasis }] : [];
+    emit(k, S, call, ev, [], x.nu || {});
+    return S;
   }
-  const push = pushOf(take, (call) => byLane.get(laneOfCall.get(call)), (call) => { const lane = laneOfCall.get(call); for (const m of [byLane, base, info, last]) m.delete(lane); });
-  const calls = () => [...byLane.values()].flat();
-  return { push, calls, finish: () => flatLaneView(d, calls(), (c) => asks.get(c)) };
+  return { push: pushOf(take, () => {}) };
 }
 
 // The first human prompt of a list (blockmeta firstHuman, from each user text's `human` fact).
-function firstHumanOf(list, def) {
-  for (const k of list) { const f = def(k).f; if (f && f.human) return f.human; }
+function firstHumanOf(list, B) {
+  for (const k of list) { const f = B.f(k); if (f && f.human) return f.human; }
   return null;
 }
 // The composition: the lane's previous call's, minus its blocks after the shared prefix, plus this call's.
-function compOf(last, list, def) {
+function compOf(last, list, B) {
   const c = {};
   for (const k of COMP_KEYS) c[k] = last ? last.comp[k] : 0;
   let p = 0;
   if (last) { const m = Math.min(last.list.length, list.length); while (p < m && last.list[p] === list[p]) p++; }
-  if (last) for (let i = p; i < last.list.length; i++) { const d = def(last.list[i]); c[d.bucket] -= d.bytes; }
-  for (let i = p; i < list.length; i++) { const d = def(list[i]); c[d.bucket] += d.bytes; }
+  if (last) for (let i = p; i < last.list.length; i++) c[B.bucket(last.list[i])] -= B.bytes(last.list[i]);
+  for (let i = p; i < list.length; i++) c[B.bucket(list[i])] += B.bytes(list[i]);
   return c;
 }
 // What the timeline reads of the request (assemble.mjs slimRec): the record's own, with what a stitched context changes — its message
 // and tool counts and its system's characters — from the stitched list.
-function requestOf(x, list, def) {
+function requestOf(x, list, B) {
   const rq = { ...(x.rq || {}) };
   if (!x.continued) return rq;
   rq.message_count = (x.facts || x).msgCount;
   rq.tool_count = x.facts ? x.facts.tools : x.secs[0];
   let chars = 0;
-  for (let i = x.secs[0]; i < x.secs[0] + x.secs[1]; i++) chars += def(list[i]).chars;
+  for (let i = x.secs[0]; i < x.secs[0] + x.secs[1]; i++) chars += B.chars(list[i]);
   rq.system_chars = chars;
   return rq;
 }

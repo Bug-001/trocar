@@ -112,6 +112,7 @@ export function desiredOff(w, ids, installed) {
 
 const counts = (r) => (r && ['closing', 'waiting', 'cut'].every((k) => Number.isInteger(r[k]) && r[k] >= 0) ? { closing: r.closing, waiting: r.waiting, cut: r.cut } : null)
 
+const EXIT_WAIT_MS = 10_000 // a daemon asked to exit at once stops within its stop grace (2 s) and the half second its `now` exit waits; past this the caller's stop takes over
 export const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the connections it can see the end of
 const relayedOf = (r) => (r && ['closing', 'waiting', 'cut'].every((k) => Number.isInteger(r[k]) && r[k] >= 0) ? r : null)
 
@@ -130,12 +131,23 @@ async function waitForDrain(w, first, boundMs, socketPath) {
 }
 
 /** The one way a whole daemon is taken out of the way (1.6 §5.2): asked to go once drained (`POST /off {exit:true}`, no names), then waited
- *  on until what it can see the end of is closed. `uninstall` and `update`'s daemon replacement both go through this — the caller stops it
+ *  on until what it can see the end of is closed; one still there then is asked to go at once (`now`: what it relays is cut) and waited on
+ *  until its pid has exited, so the stop that follows never lands inside its barrier. `uninstall` and `update`'s daemon replacement both go through this — the caller stops it
  *  afterwards (`routing.stop` when switchRoutingOff already had to). → `{ routing (switchRoutingOff's), drained ({rel, gone}, null when no
  *  daemon answered) }`. The socket is the one that answered: `w.socketPath` is null with $XDG_RUNTIME_DIR unset. */
 export async function drainDaemon(w, { drainMs = DRAIN_MS } = {}) {
   const routing = await switchRoutingOff(w, { ids: null, now: false, exit: true })
-  const drained = routing.confirmed && routing.how === 'daemon-reply' ? await waitForDrain(w, routing.relayed, drainMs, routing.socket) : null
+  if (!(routing.confirmed && routing.how === 'daemon-reply')) return { routing, drained: null }
+  const drained = await waitForDrain(w, routing.relayed, drainMs, routing.socket)
+  const pid = routing.daemon.pid
+  if (!drained.gone) {
+    // the drain wait is up and the daemon is still there (a WebSocket mid-call has no end to wait for; a holder keeps a proxy-mode daemon): it
+    // is asked to go at once, so it cuts what it still relays and stops through its own barrier, and the caller's stop never has to kill it
+    // (win32's stop is `taskkill /F`, which runs no barrier and leaves the lock for the next start to read as an unclean stop, V99)
+    try { await w.request({ socketPath: routing.socket, method: 'POST', path: '/off', body: { exit: true, now: true }, timeoutMs: OFF_ASK_MS }) } catch { /* it is already stopping: the wait below covers it */ } // what it still relayed (drained.rel) is what was cut
+  }
+  // a daemon asked to exit stops itself (its barrier, then exit 0): the caller's stop comes after that, not in the middle of it
+  if (!drained.gone && Number.isInteger(pid)) { for (const end = w.ms() + EXIT_WAIT_MS; w.alive(pid) && w.ms() < end;) await w.sleep(100) }
   return { routing, drained }
 }
 

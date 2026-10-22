@@ -1,4 +1,5 @@
-// test/helpers/leak-guard.cjs — `--require` preload for `npm test`: the run fails if its tests leave temp entries behind.
+// test/helpers/leak-guard.cjs — `--require` preload for `npm test`: the run fails if its tests leave something behind — a temp
+// entry, or a child process still running.
 //
 // The test runner's own process loads `--require` preloads and not `--import` ones, which is why this is CommonJS. It makes a
 // temp directory that belongs to this run alone and points TMPDIR (and TMP / TEMP) at it, so every test file's `os.tmpdir()` — the
@@ -9,7 +10,19 @@
 //
 // A leak is a directory, or an entry named like ours (`trocar-…`, `as-…`, `atrace-…`); a stray file some library drops in TMPDIR is
 // removed with the rest and not blamed on a test. The fix for a leak is `tmpDir()` from test/helpers/tmp.mjs, which removes the
-// directory when the test process ends, pass or fail. Guard: test/helpers/leak-guard.test.mjs.
+// directory when the test process ends, pass or fail.
+//
+// Children: `npm test` runs with `--test-force-exit`, so a child a test file started and did not end outlives the file as an
+// orphan (two `node -e … setInterval(…)` stubs were found alive 12–14 hours later). In a test file's process this preload tracks
+// every child started through `ChildProcess.prototype.spawn` (spawn, fork, exec and execFile all go through it; the sync calls
+// finish before they return), product code's children included. When the file's process exits, every one still running is
+// SIGKILLed. One that would have lived on is also blamed: a marker `trocar-child-<pid>-<command>` holding the test file and the
+// full command is left in the run's directory, and the runner names it and fails the run. Not blamed: a child that has exited
+// and was not reaped yet (a zombie), one the test sent a signal, and one with an IPC channel — the product's forked workers exit
+// when the channel closes, and a full run in report-only mode (2026-10-22) found nothing else: of 8 children alive at their file's end, 6
+// were zombies and 2 were seal workers. The fix for a blamed child is to end it in a `finally` and await its 'exit' event.
+//
+// Guard: test/helpers/leak-guard.test.mjs.
 'use strict'
 const fs = require('node:fs')
 const os = require('node:os')
@@ -17,6 +30,7 @@ const path = require('node:path')
 const { removeTree } = require('./rm-tree.cjs')
 
 const OURS = /^(trocar|as|atrace)-/
+const CHILD = 'trocar-child-'
 
 /** True for a directory; false for anything else, and for an entry that has gone since it was listed (it must not end the check). */
 function isDir(p) {
@@ -28,6 +42,11 @@ function leaked(dir, entries) {
   return entries.filter((name) => OURS.test(name) || isDir(path.join(dir, name)))
 }
 
+/** The marker a test file's process leaves for a child it killed: `trocar-child-<pid>-<first 40 chars of the command>`. */
+function childMarker(pid, command) {
+  return `${CHILD}${pid}-${command.slice(0, 40).replace(/[^A-Za-z0-9._-]+/g, '_')}`
+}
+
 // the runner is the process that was started with --test; a test file's process has NODE_TEST_CONTEXT, and a plain `node file` has neither
 if (process.execArgv.includes('--test') && !process.env.NODE_TEST_CONTEXT) {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-run-'))
@@ -35,15 +54,62 @@ if (process.execArgv.includes('--test') && !process.env.NODE_TEST_CONTEXT) {
   process.on('exit', () => {
     let left = []
     try { left = leaked(runDir, fs.readdirSync(runDir)) } catch { /* the run's directory was taken away: nothing to blame */ }
-    if (left.length) {
-      const shown = left.map((name) => `  ${name}${isDir(path.join(runDir, name)) ? '/' : ''}`)
-      const many = left.length === 1
-      fs.writeSync(2, `\nleak-guard: ${left.length} temp ${many ? 'entry' : 'entries'} made by this test run ${many ? 'was' : 'were'} not removed (removed now):\n${shown.join('\n')}\n` +
-        `  find the test that made one with: grep -rn "'${left[0].replace(/[A-Za-z0-9]{6}$/, '')}" test\n` +
+    const children = left.filter((name) => name.startsWith(CHILD))
+    const entries = left.filter((name) => !name.startsWith(CHILD))
+    if (children.length) {
+      const shown = children.map((name) => {
+        let what = name
+        try { const m = JSON.parse(fs.readFileSync(path.join(runDir, name), 'utf8')); what = `pid ${m.pid} from ${m.file}: ${m.command}` } catch { /* a marker cut short: its name says enough */ }
+        return `  ${what}`
+      })
+      fs.writeSync(2, `\nleak-guard: ${children.length} child ${children.length === 1 ? 'process was' : 'processes were'} still running when the test file that started ${children.length === 1 ? 'it' : 'them'} ended (killed now):\n${shown.join('\n')}\n` +
+        "  end each child in a finally and await its 'exit' event\n")
+      process.exitCode = 1
+    }
+    if (entries.length) {
+      const shown = entries.map((name) => `  ${name}${isDir(path.join(runDir, name)) ? '/' : ''}`)
+      const many = entries.length === 1
+      fs.writeSync(2, `\nleak-guard: ${entries.length} temp ${many ? 'entry' : 'entries'} made by this test run ${many ? 'was' : 'were'} not removed (removed now):\n${shown.join('\n')}\n` +
+        `  find the test that made one with: grep -rn "'${entries[0].replace(/[A-Za-z0-9]{6}$/, '')}" test\n` +
         '  make test directories with tmpDir() from test/helpers/tmp.mjs; it removes them when the test process ends, pass or fail\n')
       process.exitCode = 1
     }
     removeTree(runDir)
+  })
+}
+
+/** Of `pids`, the ones that have exited and wait to be reaped: their 'exit' had not been seen yet, which is no leak. On Windows an
+ *  exited process makes process.kill throw, so none is listed there. `/bin/ps` because a test may point PATH at its stubs. */
+function zombies(pids) {
+  if (process.platform === 'win32' || !pids.length) return new Set()
+  const r = require('node:child_process').spawnSync('/bin/ps', ['-o', 'pid=', '-o', 'stat=', '-p', pids.join(',')], { encoding: 'utf8' })
+  return new Set(String(r.stdout ?? '').split('\n').map((l) => l.trim().split(/\s+/)).filter(([, stat]) => stat?.startsWith('Z')).map(([pid]) => Number(pid)))
+}
+
+if (process.env.NODE_TEST_CONTEXT) {
+  const { ChildProcess } = require('node:child_process')
+  const runDir = os.tmpdir() // now, before a test points TMPDIR somewhere else
+  const running = new Map() // child → it was started with an IPC channel
+  const spawn = ChildProcess.prototype.spawn
+  ChildProcess.prototype.spawn = function (...args) {
+    const result = spawn.apply(this, args)
+    if (this.pid) {
+      running.set(this, Boolean(this.channel))
+      this.once('exit', () => running.delete(this))
+    }
+    return result
+  }
+  process.on('exit', () => {
+    const left = [...running.keys()].filter((child) => child.exitCode === null && child.signalCode === null)
+    const dead = zombies(left.map((child) => child.pid))
+    for (const child of left) {
+      try { process.kill(child.pid, 'SIGKILL') } catch { continue } // gone already
+      // blamed: a child that would have lived on. Not one that has exited already, one the test signalled, or one with an IPC
+      // channel (fork's children here exit when the channel closes: src/collector/seal-worker.mjs, src/query/worker.mjs)
+      if (dead.has(child.pid) || child.killed || running.get(child)) continue
+      const command = child.spawnargs.join(' ')
+      try { fs.writeFileSync(path.join(runDir, childMarker(child.pid, command)), JSON.stringify({ pid: child.pid, file: process.argv[1], command })) } catch { /* the run's directory is gone */ }
+    }
   })
 }
 

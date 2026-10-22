@@ -15,13 +15,13 @@ for (const wire of ['http', 'chat', 'threads', 'ws']) {
     const s = bigSession({ home, wire, growth: 600, subEvery: 3, subLanes: 3, subLen: 6 })
     s.append(24)
     const recs = fs.readFileSync(s.file, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) // a call's id is <segment>:<line> (3.5)
-    const doc = await runQuery('session', { id: s.id, limit: 500 }, { home })
-    const lanes = doc.analyzed.lanes
+    const doc = await runQuery('session', { id: s.id }, { home })
+    const lanes = doc.lanes
     assert.ok(lanes.some((l) => l.kind === 'main') && lanes.some((l) => l.kind === 'subagent'))
     for (const l of lanes) {
-      const rec = recs[Number(String(l.calls[0].id).split(':').pop()) - 1]
-      assert.ok(rec, `lane ${l.id}: its first call names a record`)
-      assert.equal(l.task, firstAskOf(rec, recs), `lane ${l.id}`)
+      const rec = recs[Number(String(l.first).split(':').pop()) - 1]
+      assert.ok(rec, `lane ${l.lane}: its first call names a record`)
+      assert.equal(l.task, firstAskOf(rec, recs), `lane ${l.lane}`)
       assert.ok(!String(l.label).includes('subagent:'), l.label)
     }
   })
@@ -73,9 +73,9 @@ for (const flat of ['chat', 'ws'])
     const opts = { home, growth: 600, subEvery: 3, subLanes: 3, subLen: 6, preamble: PREAMBLE }
     const a = bigSession({ ...opts, wire: 'http' }), b = bigSession({ ...opts, wire: flat, segment: '20261020T170000Z', seed: 11 })
     a.append(18); b.append(18)
-    const doc = await runQuery('session', { id: a.id, limit: 500 }, { home })
-    const subs = doc.analyzed.lanes.filter((l) => l.kind === 'subagent')
-    assert.ok(new Set(subs.map((l) => l.calls[0].wireFormat)).size === 2, 'sub-agent lanes on both wires')
-    for (const l of subs) assert.ok(l.task && !PREAMBLE.startsWith(l.task.slice(0, 20)), `lane ${l.id} is not named by the preamble: ${l.task}`)
+    const doc = await runQuery('session', { id: a.id }, { home })
+    const subs = doc.lanes.filter((l) => l.kind === 'subagent')
+    assert.ok(new Set(subs.map((l) => l.first.split(':')[0])).size === 2, 'sub-agent lanes on both wires (each wire its own segment)')
+    for (const l of subs) assert.ok(l.task && !PREAMBLE.startsWith(l.task.slice(0, 20)), `lane ${l.lane} is not named by the preamble: ${l.task}`)
     assert.equal(new Set(subs.map((l) => l.task)).size, subs.length, 'each sub-agent its own task')
   })

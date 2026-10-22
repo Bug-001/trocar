@@ -16,6 +16,11 @@ export const RAW_JOURNAL_FAILURES = Object.freeze(['refused', 'failed'])
 export const SEGMENT_PROBLEMS = Object.freeze(['record-unparseable', 'record-unreadable', 'segment-unreadable', 'index-unwritable'])
 /** The notes the context projection puts into a read's errors (src/query/projection.mjs; level 'note', RFC 4.3 §4): it was rebuilt, or could not be written. */
 export const PROJECTION_NOTES = Object.freeze(['projection-rebuilt', 'projection-write-failed'])
+/** The codes of an unreadable ref in a `block` read's errors (src/query/named/block.mjs; 3.5 §会话读, 1.6 C.5). */
+export const BLOCK_PROBLEMS = Object.freeze(['record-missing', 'record-unreadable', 'field-missing'])
+
+/** The codes of a `session` read's own errors (src/query/named/session.mjs; 3.5 §会话读): no such session, a member that did not read back or extract. */
+export const SESSION_PROBLEMS = Object.freeze(['session-unknown', 'record-unreadable', 'record-unparseable'])
 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])
@@ -67,9 +72,10 @@ export const RESTART_REASONS = Object.freeze(['config-after-start', 'env-frozen'
 /** Codes trocar names itself, by part (the grouping is documentation; the set is flat). */
 export const CODES_BY_PART = Object.freeze({
   daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'start-failed', 'control-endpoint-held', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error',
-    'query-failed'], // control-endpoint-held: the control socket / pipe accepts a connection but answers nothing, so this daemon cannot serve and did not start (D62 ⑥, D38)
+    'query-failed', 'projection-write-failed'], // control-endpoint-held: the control socket / pipe accepts a connection but answers nothing, so this daemon cannot serve and did not start (D62 ⑥, D38)
     // query-failed — D63 (4.6 §事件与码): the query worker crashed, exited non-zero or did not answer in time; that query is still answered (a re-fork, or the caller's local path)
-  record: ['record-error', 'file-replaced'],
+    // projection-write-failed — 4.3 §4 盘满: the query worker could not write a context projection; answers are unchanged, one record per episode
+  record: ['record-error', 'file-replaced', 'late-write'], // late-write: a write that reached the record store after the stop made it final (1.6 §5.2); not written, said once per kind
   raw: ['seal-failed', 'index-failed'], // index-failed: the daemon could not keep a segment's index current (D62); the records are on disk and the next query indexes them itself, and says so (`index-cold`)
   tracker: ['judge-error', 'unwatch-error', 'ambiguous', 'exe-unreadable', 'watch-failed', 'config-error', 'settings-unparsable', 'settings-unreadable', 'environ-unreadable'],
   // a harness's configuration or files, read or written (the Claude Code settings layers have their own codes, above)
@@ -80,7 +86,7 @@ export const CODES_BY_PART = Object.freeze({
   note: ['ok'], // the code of an agent-trusted line
   helper: ['helper-error', 'heartbeat-failed', 'heartbeat-gap', 'loader-down', 'loader-timeout'],
   engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response', 'prior-proxy-unknown',
-    'trust-rejected', 'pac-peer-refused', 'pac-owner-unread', 'upstream-header-ignored', 'holders-unreadable'], // the last two (4.11 P7 · P12): X-Trocar-Upstream from a form whose hook does not send it (ignored, its value never recorded); the holder poll could not read the process table (the kept doors stay) // pac-peer-refused: the PAC door (no credentials) refused a peer not of this user (4.11 P10) // a decrypted connection whose client refused trocar's leaf: level 'critical', one per (pid, host) (D51④)
+    'trust-rejected', 'pac-peer-refused', 'pac-owner-unread', 'upstream-header-ignored', 'holders-unreadable', 'door-record-unreadable'], // the last three (4.11 P7 · P12): X-Trocar-Upstream from a form whose hook does not send it (ignored, its value never recorded); the holder poll could not read the process table (the kept doors stay); the door's durable record door-seen.json could not be read at start (its lives are not known: every live process of a harness that was on holds) // pac-peer-refused: the PAC door (no credentials) refused a peer not of this user (4.11 P10) // a decrypted connection whose client refused trocar's leaf: level 'critical', one per (pid, host) (D51④)
   ws: ['write-failed', 'decode-failed', 'broken', 'recorder-error', 'pattern-invalid'],
   // retention.json cannot be read / parsed / holds a cell that is neither full nor log (the call is kept in full), or the
   // classifier threw; a traffic pattern that does not compile is `pattern-invalid` (above), also under where 'retention'; a hand edit whose line in
@@ -151,7 +157,7 @@ const NET_STATUS_REASONS = Object.freeze(['not-routed', 'proxy-changed', 'elevat
 
 // What `trocar status` says of an agent that is not captured (RFC 1.6 §2 / V32, 4.6 §记录「事件与码的名字」): one name from this closed set, whatever the reason. trocar's own, then every trust
 // reason above (the resolver's and the harnesses' own). A block of its own, as the ones above are. The Windows collector's reasons (ROUTE_STATUS_REASONS: what a form that is not captured says; ROUTE_TRUST_REASONS: why a running agent is not trusted) are part of it. `negative-cache` is also a code of the engine.
-export const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing', 'entry-changed', 'link-missing', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'negative-cache',
+export const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing', 'entry-changed', 'link-missing', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'negative-cache', 'not-seen',
   'cert-not-installed', 'cert-root-pending', 'cert-root-declined', 'cert-root-missing', 'cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file']) // the cert group's status reasons that have a producer (1.6 §9.7, 4.11 §3 ⑱)
 export const STATUS_REASONS = Object.freeze([...new Set([...STATUS_OWN_REASONS, ...NET_STATUS_REASONS, ...ROUTE_STATUS_REASONS, ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])])
 

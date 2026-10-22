@@ -38,7 +38,7 @@ for (const wire of ['http', 'threads', 'ws', 'chat']) for (const [subEvery, subL
     const home = path.join(tmpDir('trocar-frozen-'), '.trocar')
     const s = bigSession({ home, wire, growth: 2_000, subEvery, subLanes, late, subLen: 10, seed: subEvery + subLanes + late })
     s.append(30)
-    for (const p of [{ id: s.id, after: '0', limit: '60' }, { id: s.id, after: '12', limit: '5' }]) {
+    for (const p of [{ id: s.id }, { id: s.id, limit: '5' }]) {
       const plain = await session(home, p)
       const [cold, seen] = await frozen(() => session(home, p))
       assert.ok(seen > 0, 'the fold parsed request bodies, and they were frozen')
