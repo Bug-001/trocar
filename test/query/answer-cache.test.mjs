@@ -10,6 +10,7 @@ import fs from 'node:fs'
 import { answer } from '../../src/query/answers.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { extendSession } from '../../src/query/named/session.mjs'
 
 // An fs that says which raw segment files were opened or read (a record read back, or the live segment indexed again).
 function counting() {
@@ -66,6 +67,19 @@ for (const wire of ['http', 'threads', 'ws']) {
     assert.equal(sansNotes(doc), sansNotes(JSON.parse(fresh.bytes)), 'the session grew: answered as another process answers it')
   })
 }
+
+test('a session answered with pending is answered again, once the worker\'s slices folded every member, with no pending and the local path\'s bytes', async () => {
+  const home = path.join(tmpDir('trocar-answers-'), '.trocar')
+  const A = bigSession({ home, id: 'cccc-0000-4a1b-9c2d-000000000003', growth: 4_000, subEvery: 3, compactAt: 40_000, subLanes: 3, late: 2 })
+  A.append(160)
+  const ctx = { home, fs, writer: true }, req = { name: 'session', params: { id: A.id }, indent: 0 }
+  const first = JSON.parse((await answer(req, ctx)).bytes)
+  assert.ok(first.pending, 'the worker\'s 50 ms slice left members above the mark')
+  while (await extendSession(ctx, A.id, Infinity));
+  const done = await answer(req, ctx)
+  assert.equal(JSON.parse(done.bytes).pending, undefined)
+  assert.ok(done.bytes.equals((await answer(req, { home, fs: { ...fs } })).bytes), 'the local path\'s bytes')
+})
 
 test('an unknown query name is still the caller\'s mistake', async () => {
   const home = path.join(tmpDir('trocar-answers-'), '.trocar')

@@ -1,10 +1,10 @@
-// test/query/session-read.test.mjs — `session` over the context projection (RFC 3.5 §会话读; 1.6 §4.1 / C.5): its pages (#5), its
-// `--since` delta against the document at a mark (#19), its answer at the extraction frontier (#25), and the byte-identity flag of a
-// cache break served on a row (3.3:75, 3.3 #12).
+// test/query/session-read.test.mjs — `session` over the context projection and its fold log (RFC 3.5 §会话读; 1.6 §4.1 / C.5): its
+// pages and their records (#5), its `--since` delta against the document at a mark (#19), its answer at the reduction frontier
+// (#25), `unknown` (C1), the local path over a fold log the worker wrote (3.5:42), and the byte-identity flag of a cache break
+// served on a row (3.3:75, 3.3 #12).
 //
 // Sessions are generated (test/query/big-session.mjs) into temp homes and read through runQuery as every path reads them. A second
-// "process" is the same code with its own fs object (src/query/warm.mjs fsTag: nothing warm is shared), so a delta made from the
-// marks a state kept and one reduced afresh are compared.
+// "process" is the same code with its own fs object (src/query/warm.mjs fsTag: nothing warm is shared).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -16,6 +16,8 @@ import { compareStep } from '../../src/view/step-order.mjs'
 import { run as runQueryCli } from '../../src/cli/query.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
+import { extendSession } from '../../src/query/named/session.mjs'
+import { foldLogFile } from '../../src/query/fold-log.mjs'
 
 const homeOf = (p) => path.join(tmpDir(p), '.trocar')
 const session = (home, params, ctx = {}) => runQuery('session', params, { home, fs, ...ctx })
@@ -95,7 +97,7 @@ for (const wire of ['http', 'chat', 'ws']) for (const arrival of LATE) {
       assert.equal(d.base, M)
       assert.equal(canon(apply(full, d)), canon(now), `after ${more} more`)
       const afresh = await session(home, { id: s.id, since: M }, { fs: { ...fs } })
-      assert.equal(canon(afresh), canon(d), 'the document at M reduced afresh in another process gives the same delta')
+      assert.equal(JSON.stringify(afresh), JSON.stringify(d), 'a process with no warm state (the fallback) gives the same delta, byte for byte')
       full = now
     }
     for (const unknown of ['20990101T000000Z:1', 'not-a-rid']) {
@@ -105,6 +107,70 @@ for (const wire of ['http', 'chat', 'ws']) for (const arrival of LATE) {
     }
   })
 }
+
+// A Claude Code session whose calls are interleaved with members that are no call: requests of no LLM, and (`unknown`) LLM
+// requests to an endpoint no dissector reads as a call (C1). Seeded: how many follow each call.
+function mixed(home, { calls, unknown = 0, seed = 7 }) {
+  const id = `mix${seed}000-0000-4a1b-9c2d-000000000001`, lines = []
+  const hdr = { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-claude-code-session-id': id }
+  let r = seed, t = Date.parse('2026-10-22T10:00:00.000Z')
+  const rand = (n) => { r = (r * 1103515245 + 12345) % 2147483648; return r % n }
+  const rec = (endpoint, method, llm, body, resp) => {
+    const ts = new Date(t += 1000).toISOString()
+    lines.push(JSON.stringify({ ts, endpoint, method, req_headers: hdr, req_body: body, resp: { status: 200, kind: 'json', body: resp }, id: `r_${lines.length}`, ts_request: ts,
+      is_llm_call: llm, capture: 'transparent', host: 'api.anthropic.com', traffic_class: llm ? 'llm' : 'other', proc: { pid: 1, exe: '/x/claude', agent: 'claude-code' } }))
+  }
+  const ends = []
+  for (let n = 0; n < calls; n++) {
+    rec('/v1/messages', 'POST', true, JSON.stringify({ model: 'claude-opus-4-8', max_tokens: 9, messages: [{ role: 'user', content: [{ type: 'text', text: `turn ${n}` }] }] }),
+      { id: `msg_${n}`, model: 'claude-opus-4-8', stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 3, output_tokens: 1 } })
+    for (let k = rand(3); k > 0; k--) rec(`/api/other/${rand(5)}`, 'GET', false, '', { ok: true })
+    if (n < unknown) { const e = `/v1/mystery/${n % 2}`; ends.push(e); rec(e, 'POST', true, JSON.stringify({ model: 'mystery-1', input: 'x' }), { ok: true }) }
+  }
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
+  fs.writeFileSync(path.join(home, 'raw', '20261022T100000Z.ndjson'), lines.join('\n') + '\n')
+  return { id, endpoints: [...new Set(ends)] }
+}
+const stepRec = (a, b) => compareStep(a.ts_request, a.id, b.ts_request, b.id)
+
+test('3.5 #5: --before a member that is no call row is refused; walking --before pages, each page\'s records are the members in its span, every member once', async () => {
+  for (const seed of [3, 11]) {
+    const home = homeOf('trocar-sread-mix-'), m = mixed(home, { calls: 30, unknown: 3, seed })
+    const members = sessionGroups(await indexRows({ home, fs, errors: [] })).get(m.id)
+    const all = await session(home, { id: m.id })
+    const rows = new Set(all.calls.map((r) => r.rid)), item = members.find((r) => !rows.has(String(r.id)))
+    assert.ok(item, 'the session has a member that is no call row')
+    await assert.rejects(session(home, { id: m.id, before: String(item.id) }), QueryArgError)
+    assert.equal(await cliExit(home, { id: m.id, before: String(item.id) }), EXIT.usage, '--before a member that is no call row: exit 2')
+    for (const limit of [1, 4]) {
+      const seen = []
+      let page = await session(home, { id: m.id, limit: String(limit) })
+      for (;;) {
+        // its span: after the row before it (the last row of the next older page), up to its last row (the newest page: no end)
+        const last = page.calls.at(-1), older = page.more ? await session(home, { id: m.id, limit: String(limit), before: page.calls[0].rid }) : null
+        const lo = older && older.calls.at(-1), newest = seen.length === 0
+        for (const rec of page.records) {
+          if (!newest) assert.ok(stepRec(rec, { ts_request: last.ts, id: last.rid }) <= 0, `limit ${limit}: a page's record is not after its last row`)
+          if (lo) assert.ok(stepRec(rec, { ts_request: lo.ts, id: lo.rid }) > 0, `limit ${limit}: a page's record is after the row before it`)
+        }
+        seen.unshift(...page.records.map((r) => r.id))
+        if (!older) break
+        page = older
+      }
+      assert.deepEqual(seen, members.map((r) => ({ id: String(r.id), ts_request: r.ts })).sort(stepRec).map((r) => r.id), `limit ${limit}: every member exactly once, in step order`)
+    }
+  }
+})
+
+test('C1: records no dissector reads as a call are counted with their endpoints in `unknown`; a session with none has no `unknown`', async () => {
+  for (const unknown of [0, 1, 4]) {
+    const home = homeOf('trocar-sread-unk-'), m = mixed(home, { calls: 6, unknown })
+    const doc = await session(home, { id: m.id })
+    if (!unknown) { assert.equal('unknown' in doc, false); continue }
+    assert.equal(doc.unknown.records, unknown)
+    assert.deepEqual([...doc.unknown.endpoints].sort(), m.endpoints.sort())
+  }
+})
 
 // An fs that fails the read-back of one record (at its own offset), as a record that cannot be read again would.
 function failingAt(row) {
@@ -137,6 +203,21 @@ test('3.5 #25: with members above the frontier the answer is the document at the
   assert.ok(!doc.calls.some((r) => r.rid === String(lost.id)), 'the failed member is not a row')
   assert.ok(doc.records.some((r) => r.id === String(lost.id)), 'it is among the records')
   assert.deepEqual(doc.errors.filter((e) => e.where === String(lost.id)).map((e) => e.code), ['record-unreadable'])
+})
+
+test('3.5:42 local: over a fold log the worker finished, the local path answers the worker\'s bytes and leaves the log\'s bytes as they were', async () => {
+  const home = homeOf('trocar-sread-local-')
+  const s = bigSession({ home, growth: 2_000, subEvery: 3, compactAt: 20_000, subLanes: 2, late: 2 })
+  s.append(40)
+  const worker = { writer: true }
+  await session(home, { id: s.id }, worker)
+  while (await extendSession({ home, fs, ...worker }, s.id, Infinity));
+  const w = await session(home, { id: s.id }, worker)
+  assert.equal(w.pending, undefined)
+  const file = foldLogFile(home, s.id), bytes = fs.readFileSync(file)
+  const local = await session(home, { id: s.id }, { fs: { ...fs } })
+  assert.equal(JSON.stringify(local), JSON.stringify(w), 'the local answer is the worker\'s, byte for byte')
+  assert.ok(fs.readFileSync(file).equals(bytes), 'the fold log is as the worker left it')
 })
 
 // 3.3:75: the byte-identity of a reusable prefix compares each block's verbatim slice with its cache_control member cut out.
