@@ -128,31 +128,6 @@ export const sessionMetaOfFacts = (facts) => sessionDoc(facts);
 // the HEAVY payload (flat block list / norm.text / nonBlockKeys) rides ONLY on calls of the window
 // [cursor, cursor+limit) that fit the page's body budget (pageView). The others are marked `paged_out`
 // (invariant 4 — the body was not shipped on THIS page, not silently dropped).
-// ONE COPY OF EACH CALL ON THE WIRE.
-//
-// analyze() returns the same call objects in THREE places — `steps` (global order), `lanes[].calls`
-// (partitioned) and `streams[].calls` — because in-process they are shared references and cost
-// nothing. JSON.stringify does not share: it wrote every call, and every block of it, three times.
-// Measured on the 8-call sample: 216 KB of `analyzed`, of which 73 KB was `streams`, 69 KB `steps`
-// and 73 KB `lanes` — the same content, thrice.
-//
-// The board reads NEITHER `streams` NOR `steps`: it renders entirely from `lanes` (buildLanes). So
-// the wire carries `steps` as the one array of call objects, and a lane names its calls by `gi` —
-// the global index it already carries. The browser re-hydrates in one map(). `streams` is dropped
-// outright; nothing has ever read it.
-//
-// This is a WIRE transform only: the in-process view keeps its shared references, so every
-// server-side consumer (paging, memoisation, tests) is untouched.
-// (The other full-text channel, `lanes[].events[].text`, is NOT slimmed here. It carried a verbatim
-// second copy of every user message and tool_result — 7.8 of 10.1 MB on a 40-call fixture — but it
-// was dead weight in-process too: nothing reads it after analyze() derives the event. So it is
-// dropped at its source, in analyze(), rather than projected away at the wire.)
-function onWire(analyzed) {
-  if (!analyzed) return analyzed;
-  const { streams, ...rest } = analyzed;
-  const lanes = (analyzed.lanes || []).map((l) => ({ ...l, calls: (l.calls || []).map((c) => c.gi) }));
-  return { ...rest, lanes };
-}
 // D40: the calls of a session that were kept as a log line only — how many, which setting did it, and the newest few with what is still
 // known of them (time, endpoint, status, the wire sizes). null when there are none. Nothing here is a body: there is none to show.
 const LOGGED_SHOWN = 50;
@@ -191,17 +166,15 @@ function itemOf(r) {
   };
 }
 /**
- * sessionFold(sessionId, {read}) → { push(rec, key), view(keys, {bound}), bodyOf(call, rec), filled(call, body) } — ONE session, folded record by
- * record (3.5 §内存有界; src/view/assemble.mjs createAssembler; `read(ids)` yields records back by id, in the order asked, for a
- * cross-record context whose items the fold no longer holds — src/dissect/chain.mjs — and for a lane folded again). push() takes the
- * session's records in step order within each lane, the lanes in any order (createAssembler); `key` names the record
+ * sessionFold(sessionId) → { push(rec, key), view(keys, {bound}), bodyOf(call, rec), filled(call, body) } — ONE session, folded record by
+ * record (src/view/assemble.mjs createAssembler). push() takes the session's records in step order; `key` names the record
  * (its id, or the record itself when ids may repeat). view(keys) is the session document over the records `keys` names, in that
  * order, with every call in its META form; it does not change the fold, so more records can be pushed after it. bodyOf(call, rec)
  * is that call's body built from its record — it never changes for that call object (a lane folded again makes new ones), so it
  * may be kept; filled(call, body) is the call with that body put back (a new object), for the calls a page ships (pageView's `fill`).
  */
-export function sessionFold(sessionId, { read = null } = {}) {
-  const asm = createAssembler({ read });
+export function sessionFold(sessionId) {
+  const asm = createAssembler();
   const items = new Map();
   return {
     push(r, key = r) {
@@ -383,27 +356,6 @@ export function pageView(view, spec = {}, { fill = null, budget = Infinity } = {
   const baseline = lo > 0 && lo <= total ? lo - 1 : null;
   const page = { cursor: lo, limit: limit === Infinity ? null : (limit | 0), total, returned, baseline, nextCursor, hasMore: nextCursor != null };
   return { ...out, page };
-}
-
-// Project an assembled view onto WHAT THE BOARD ACTUALLY READS, for the wire.
-//
-// analyze() stores each call in three arrays — `steps`, `lanes[].calls`, `streams[].calls` — as the
-// SAME object. In memory that is one object and two extra references; serialized it is three full
-// copies, because JSON has no references. The browser reads `lanes` (buildLanes, index.html:823) and
-// `stats`, and never touches the other two: `grep -n '\.steps\|\.streams' src/web/index.html`
-// returns nothing. So two thirds of every session response was inert — 20.5 MB shipped for 6.4 MB of
-// distinct content on a 6-call fixture with 1.2 MB contexts.
-//
-// This is orthogonal to paging and compounded with it: paging bounds WHICH calls carry bodies, this
-// bounds how many times each one is written out. Together they are what let a large session's window
-// stay under V8's max string instead of 500-ing.
-//
-// A PROJECTION, never a mutation: the same assembled view is memoized and backs later page requests,
-// and server-side callers (the test suite) legitimately read `steps`. Returns a new object.
-export function forWire(view) {
-  if (!view || !view.analyzed) return view;
-  const { streams, ...analyzed } = view.analyzed;
-  return { ...view, analyzed: onWire(analyzed) };
 }
 
 // ── the reduced document mapped to 3.5 §会话读 (RFC 4.3 §3; src/view/reduce.mjs) ───────────────────────────────────────────────────────
