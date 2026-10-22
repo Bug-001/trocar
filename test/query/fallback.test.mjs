@@ -56,3 +56,32 @@ test('400 IS the verdict: the core\'s own usage error is raised here, not comput
     })
   } finally { await p.stop() }
 })
+
+test('3.5 归约前沿: after a `session` answer with pending the CLI asks `since=<its mark>` with only the id, then the original parameters once, and prints that whole answer', async () => {
+  const home = rawHome('trocar-fb-')
+  const asked = []
+  // pending twice (marks m1, m2), then a since answer with none, then the whole document the CLI asked for
+  const answers = [
+    { base: null, mark: 'm1', pending: { done: 1, total: 4 }, calls: [] },
+    { base: 'm1', mark: 'm2', pending: { done: 2, total: 4 }, calls: [] },
+    { base: 'm2', mark: 'm4', calls: [] },
+    { base: null, mark: 'm4', more: false, calls: [{ rid: 'm4' }] },
+  ]
+  const last = JSON.stringify(answers.at(-1))
+  const p = await plane({ routes: { 'GET /query': async ({ query, res }) => {
+    asked.push(Object.fromEntries(query))
+    const text = JSON.stringify(answers[Math.min(asked.length, answers.length) - 1])
+    res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text) }); res.end(text)
+  } } })
+  try {
+    const params = { id: 's1', limit: '5', before: 'm9' }
+    const got = await queryDocument('session', params, { home, dir: p.dir, platform: 'darwin' })
+    assert.equal(got.via, 'daemon')
+    assert.equal(got.text, last, 'the printed text is the last whole document, never a pending or since answer')
+    const want = { name: 'session', indent: '0' }
+    assert.deepEqual(asked[0], { ...params, ...want })
+    for (const [i, mark] of [[1, 'm1'], [2, 'm2']]) assert.deepEqual(asked[i], { id: 's1', since: mark, ...want }, `ask ${i} follows the mark of the answer before it`)
+    assert.deepEqual(asked.at(-1), { ...params, ...want }, 'the last ask is the original parameters')
+    assert.equal(asked.length, 4)
+  } finally { await p.stop() }
+})

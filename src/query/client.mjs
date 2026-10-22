@@ -43,7 +43,6 @@ export const LOCAL_ENV = Object.freeze(['TROCAR_PRICING'])
 export const DEADLINE_MS = 5000
 /** How long the CLI waits before it asks again for an answer that still carries `pending` (3.5 §归约前沿). */
 const PENDING_WAIT_MS = 200
-const pendingOf = (text) => (text.includes('"pending"') ? JSON.parse(text).pending : null)
 
 /** Which path a name and an environment take, without asking anything: `true` = this process must answer it.
  *  A caller that injects its own `fs` or `now` reads its own files on its own clock, which the daemon's worker
@@ -56,20 +55,27 @@ export const localOnly = (name, env = {}) => LOCAL_ONLY.includes(name) || LOCAL_
  * (the collector directory, where this platform's daemon says how to reach it) — `home` = ~/.trocar, `userHome` =
  * the user's home. Throws what the query core throws (QueryArgError for an unknown name or parameter) on either path.
  * An answer from the daemon that carries `pending` (its worker has not folded every member yet) is asked again after
- * PENDING_WAIT_MS until it carries none (3.5 §归约前沿: the terminal prints a whole answer); one whose `pending.done` does not grow
- * within `deadlineMs` is answered here instead, where the local path folds everything and never has `pending`.
+ * PENDING_WAIT_MS until it carries none (3.5 §归约前沿: the terminal prints a whole answer) — a `session` as `{id, since: <the
+ * newest answer's mark>}` (its own parameters while that mark is null), then once more with its own parameters, which is what is
+ * printed; one whose `pending.done` does not grow within `deadlineMs` is answered here instead, where the local path folds
+ * everything and never has `pending`.
  */
 export async function queryDocument(name, params = {}, { home, userHome, dir, platform, env, deps, fs, now, indent = 0, deadlineMs = DEADLINE_MS } = {}) {
   if (!localOnly(name, env || {}) && !fs && !now) {
     const ep = controlEndpointFor({ platform, dir, env: env || {} })
     if (ep.socketPath) {
       try {
-        const q = searchOf(params)
-        q.set('name', name); q.set('indent', String(indent))
-        for (let done = -1, grew = Date.now(); ;) {
-          const text = (await ep.request({ socketPath: ep.socketPath, path: `${QUERY_PATH}?${q}`, timeoutMs: deadlineMs, raw: true })).toString('utf8')
-          const p = pendingOf(text)
-          if (!p) return { text, via: 'daemon' }
+        const ask = (ps) => { const q = searchOf(ps); q.set('name', name); q.set('indent', String(indent)); return `${QUERY_PATH}?${q}` }
+        // `whole` = this ask carries the caller's own parameters: only its answer may be printed
+        for (let done = -1, grew = Date.now(), at = ask(params), whole = true; ;) {
+          const text = (await ep.request({ socketPath: ep.socketPath, path: at, timeoutMs: deadlineMs, raw: true })).toString('utf8')
+          const d = text.includes('"pending"') ? JSON.parse(text) : null, p = d && d.pending
+          if (!p && whole) return { text, via: 'daemon' }
+          // a `session` that is still folding is followed by its delta from the newest mark (3.5 §归约前沿): the
+          // poll costs the newly folded members, not the whole document; once none is pending, the caller's own ask
+          const mark = p && name === 'session' ? d.mark : null
+          whole = mark == null; at = whole ? ask(params) : ask({ id: params.id, since: mark })
+          if (!p) continue
           if (p.done > done) { done = p.done; grew = Date.now() }
           else if (Date.now() - grew >= deadlineMs) break // the fold stopped making progress: this process folds it all
           await new Promise((d) => setTimeout(d, PENDING_WAIT_MS))
