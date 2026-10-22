@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { warmCache, heapBudget, hold, heapFlags, heapEnv, WORKER_MEMORY_MB } from '../../src/query/warm.mjs'
+import { warmCache, heapBudget, hold, heapFlags, workerEnv, WORKER_MEMORY_MB } from '../../src/query/warm.mjs'
 
 const cost = (v) => v.cost
 
@@ -62,10 +62,15 @@ for (const mb of [96, 128]) {
 
 // The worker inherits the daemon's environment (the Windows login task carries the user's NODE_OPTIONS into it), and V8 lets an
 // inherited --max-old-space-size override --max-heap-size: the worker forked as the service forks it keeps its own heap anyway.
-for (const opts of ['--max-old-space-size=8192', '--max-old-space-size=64 --max-semi-space-size=64', '--max_old_space_size=8192 --no-warnings']) {
+for (const opts of ['--max-old-space-size=8192', '--max-old-space-size=64 --max-semi-space-size=64', '--max_old_space_size=8192 --no-warnings',
+  '--max-old-space-size-percentage=50', '--max-old-space-size="8192"']) {
   test(`3.5 §内存有界: a worker forked under NODE_OPTIONS=${opts} has the heap the service gives it`, () => {
     const limit = execFileSync(process.execPath, [...heapFlags(), '-e', 'console.log(require("v8").getHeapStatistics().heap_size_limit)'],
-      { encoding: 'utf8', env: heapEnv({ ...process.env, NODE_OPTIONS: opts }) })
+      { encoding: 'utf8', env: workerEnv({ ...process.env, NODE_OPTIONS: opts }) })
     assert.equal(Number(limit), WORKER_MEMORY_MB * 1048576)
   })
 }
+
+test('3.5 §内存有界: the worker\'s environment has no NODE_OPTIONS key in any case and keeps every other key', () => {
+  assert.deepEqual(workerEnv({ Node_Options: 'x', NODE_OPTIONS: 'y', A: '1' }), { A: '1' })
+})
