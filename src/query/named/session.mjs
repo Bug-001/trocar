@@ -30,9 +30,9 @@ import { trocarHome } from '../../paths.mjs';
 import { extractMembers, blockAt, CHUNK_STORED } from '../../view/extract.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { recordsAt, STRETCH_HEAP } from '../records.mjs';
-import { indexRows, sessionGroups } from '../rows.mjs';
-import { openProjection, posCmp, STORE_HEAP } from '../projection.mjs';
-import { rowsKey, warmCache, fsTag, heapBudget, heapCeiling, hold, steadyBytes, liveHeap, usedHeap } from '../warm.mjs';
+import { indexRows, sessionGroups, sessionFacts } from '../rows.mjs';
+import { openProjection, STORE_HEAP } from '../projection.mjs';
+import { warmCache, fsTag, heapBudget, heapCeiling, hold, steadyBytes, liveHeap, usedHeap } from '../warm.mjs';
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
@@ -58,29 +58,17 @@ const BOUND_STEPS = 10;
 const STORES = 8;
 
 const stepOrder = (a, b) => compareStep(a.ts, a.id, b.ts, b.id);
-const calls = (rs) => rs.reduce((n, r) => n + (r.is_llm && !r.log_only ? 1 : 0), 0);
-const stored = (rs) => rs.reduce((n, r) => n + (r.stored_bytes || 0), 0);
 const mb = (n) => Math.round((n / 1048576) * 10) / 10;
+// the calls, stored bytes and largest stored bytes of some rows, added to one at a time
+const sums = () => ({ n: 0, calls: 0, stored: 0, max: 1 });
+const sum = (a, r) => { a.n++; a.calls += r.is_llm && !r.log_only ? 1 : 0; a.stored += r.stored_bytes || 0; a.max = Math.max(a.max, r.stored_bytes || 0); };
+const workOf = (max) => (CHUNK_STORED + 2 ** Math.ceil(Math.log2(max))) * WORK_PER_STORED + STRETCH_HEAP;
 /** What reducing `rows` costs besides its rows' spine, reserved before anything is read: a chunk being extracted and the largest
  *  row, rounded up to a power of two so a new largest row does not move the cut, and the read's shared caches (STRETCH_HEAP). */
 export function working(rows) {
-  let max = 1;
-  for (const r of rows) max = Math.max(max, r.stored_bytes || 0);
-  return (CHUNK_STORED + 2 ** Math.ceil(Math.log2(max))) * WORK_PER_STORED + STRETCH_HEAP;
-}
-/** The rows (in step order) a reduction reads: all while their spine fits the budget beside the work and the steady caches
- *  (`others`, counted in whole steps so their refreshes do not move it; the other caches give way), else the newest that do less
- *  one step, on a grid of steps → {read, bound (the document's `truncated`), room}. A step is the rows a tenth of the budget holds,
- *  at most a quarter of the rows that fit: the cut moves once a step and shows at least half of what fits (a session's index rows
- *  and blocks, never cut, can leave its spine less than two budget steps). */
-function fitting(rows, perRow, others) {
-  const stepBytes = heapBudget() / BOUND_STEPS;
-  const room = heapBudget() - working(rows) - Math.ceil(others / stepBytes) * stepBytes;
-  const n = Math.floor(room / perRow);
-  if (rows.length <= n) return { read: rows, bound: null, room };
-  const step = Math.max(1, Math.min(Math.floor(stepBytes / perRow), Math.floor(n / 4))), cap = Math.max(1, n - step);
-  const read = rows.slice(Math.min(Math.ceil((rows.length - cap) / step) * step, rows.length - 1));
-  return { read, room, bound: { shown: calls(read), total: calls(rows), kept_mb: mb(stored(read)), file_mb: mb(stored(rows)) } };
+  const a = sums();
+  for (const r of rows) sum(a, r);
+  return workOf(a.max);
 }
 /** A reduction stopped by the MEASURED bound after `rows` rows. */
 class HeapBound extends Error {
@@ -102,22 +90,77 @@ function bounded(m, rows, bytes) {
 const perRows = new Map();
 const PER_ROW_KEPT = 64;
 
-// The plan of a member list — its write order, what fits, by id — made once per list: indexRows hands back the same frozen array
-// while no segment moved, so sessionGroups does too. Made again when a reduction measured the session's rows dearer.
-const plans = new WeakMap();
-// The store's distinct blocks are reserved beside the steady caches, in whole steps so the plan is made again only when a step is passed.
-function planOf(members, k, blocks) {
+// THE PLAN of a session's member list, kept with its store (`store.plan`): the members by id, their facts (src/query/rows.mjs
+// sessionFacts), the version key, the cut, the extraction cursor `ex` and the write-order column `pos`. A member's place in write order
+// is its place in the list (indexRows: segments in segmentCmp order, lines in order; sessionGroups keeps it), so `pos` maps a row's
+// slot in the projection to that place (-1: none yet), filled as the cursor passes members with rows. A list that extends the last
+// one (its first member and the last one's last member at the same places) extends the plan by its new members; any other (a segment
+// indexed again, a store opened again) makes it afresh. So a slice and an answer cost by the new members (3.5 后台抽取与归约).
+function planOf(members, k, store, id) {
   const perRow = perRows.get(k) || SPINE_PER_ROW, stepBytes = heapBudget() / BOUND_STEPS;
-  const blockSteps = Math.ceil((blocks * SPINE_PER_BLOCK) / stepBytes);
-  let p = plans.get(members);
-  if (!p || p.perRow !== perRow || p.blockSteps !== blockSteps) {
-    const { read, bound, room } = fitting([...members].sort(stepOrder), perRow, steadyBytes() + blockSteps * stepBytes);
-    p = { perRow, blockSteps, read, bound, room, limit: room + working(read),
-      byId: new Map(members.map((r) => [String(r.id), r])), order: members.map((r) => String(r.id)).sort(posCmp), key: rowsKey(members).id };
-    plans.set(members, p);
+  const blockSteps = Math.ceil((store.defCount * SPINE_PER_BLOCK) / stepBytes);
+  let p = store.plan;
+  if (p && p.members === members && p.perRow === perRow && p.blockSteps === blockSteps) return p;
+  const n0 = p ? p.members.length : 0;
+  if (!p || n0 > members.length || String(members[0].id) !== p.first || String(members[n0 - 1].id) !== p.last) {
+    p = store.plan = { store, members: [], first: String(members[0].id), last: null, all: sums(), byId: new Map(), facts: sessionFacts(String(id)),
+      ex: 0, pos: new Int32Array(0), gen: 0, start: -1, read: [], shown: null };
   }
+  const added = members.slice(p.members.length);
+  for (const r of added) { p.byId.set(String(r.id), r); sum(p.all, r); p.facts.add(r); }
+  p.members = members; p.last = String(members[members.length - 1].id);
+  p.key = `${p.all.n}:${p.first}:${p.last}:${p.all.stored + p.all.n}`;
+  cut(p, perRow, blockSteps, added);
+  p.gen++;
   return p;
 }
+/** The rows (in step order) a reduction reads: all while their spine fits the budget beside the work and the steady caches (counted
+ *  in whole steps so their refreshes do not move it; the other caches give way), else the newest that do less one step, on a grid of
+ *  steps → p.read, p.bound (the document's `truncated`), p.room. A step is the rows a tenth of the budget holds, at most a quarter of
+ *  the rows that fit: the cut moves once a step and shows at least half of what fits (a session's index rows and blocks, never cut,
+ *  can leave its spine less than two budget steps). The store's distinct blocks are reserved beside the steady caches, in whole steps.
+ *  While the cut's first place stays and the new rows sort after its first row, they are put into the kept order. */
+function cut(p, perRow, blockSteps, added) {
+  const stepBytes = heapBudget() / BOUND_STEPS, a = p.all, others = steadyBytes() + blockSteps * stepBytes;
+  const room = heapBudget() - workOf(a.max) - Math.ceil(others / stepBytes) * stepBytes;
+  const n = Math.floor(room / perRow);
+  let start = 0;
+  if (a.n > n) {
+    const step = Math.max(1, Math.min(Math.floor(stepBytes / perRow), Math.floor(n / 4))), cap = Math.max(1, n - step);
+    start = Math.min(Math.ceil((a.n - cap) / step) * step, a.n - 1);
+  }
+  if (start === p.start && (start === 0 || added.every((r) => stepOrder(r, p.read[0]) > 0))) for (const r of added) { placeIn(p.read, r); sum(p.shown, r); }
+  else {
+    p.read = [...p.members].sort(stepOrder).slice(start);
+    p.shown = sums();
+    for (const r of p.read) sum(p.shown, r);
+  }
+  Object.assign(p, { start, perRow, blockSteps, room, work: workOf(p.shown.max), limit: room + workOf(p.shown.max),
+    bound: start ? { shown: p.shown.calls, total: a.calls, kept_mb: mb(p.shown.stored), file_mb: mb(a.stored) } : null });
+}
+// `r` put into `read` (in step order) after the rows it does not sort before, searched from the end: a new row lands near the end
+function placeIn(read, r) {
+  let lo = read.length - 1, hi = read.length;
+  for (let d = 1; lo >= 0 && stepOrder(read[lo], r) > 0; d *= 2) { hi = lo; lo -= d; }
+  for (lo = Math.max(lo + 1, 0); lo < hi;) { const m = (lo + hi) >> 1; if (stepOrder(read[m], r) > 0) hi = m; else lo = m + 1; }
+  read.splice(lo, 0, r);
+}
+// the extraction cursor moved to `to`: the members it passed (each with a row) get their place in `pos`
+function passed(p, to) {
+  for (; p.ex < to; p.ex++) {
+    const s = p.store.rows.slotOf(String(p.members[p.ex].id));
+    if (s >= p.pos.length) { const g = new Int32Array(Math.max(256, 2 * (s + 1))).fill(-1); g.set(p.pos); p.pos = g; }
+    p.pos[s] = p.ex;
+  }
+}
+/** posOf(p, rid) → the member's place in write order (its place in the list), -1 when it is no member. */
+function posOf(p, rid) {
+  const s = p.store.rows.slotOf(rid);
+  if (s !== undefined && s < p.pos.length && p.pos[s] >= 0) return p.pos[s];
+  return p.byId.has(rid) ? p.members.findIndex((r) => String(r.id) === rid) : -1; // a member past the extraction cursor
+}
+// in the cut: at or after its first row in step order (the cut reads a suffix of the members in step order)
+const inCut = (p, r) => p.start === 0 || stepOrder(r, p.read[0]) >= 0;
 const keyOf = ({ fs, home, writer }, id) => `${fsTag(fs)}\n${home}\n${id}\n${writer === true ? 'w' : 'r'}`;
 
 // The segment index of THIS request, read once whether version() asked first (src/query/answers.mjs) or not.
@@ -175,13 +218,13 @@ export function saveIndexes() {
     try { if (st) st.log.saveIndex(dumpColumns(sync(st.cols, st.log))); } catch { /* the next idle period */ }
   }
 }
-const cutOf = (plan) => (plan.read.length ? String(plan.read[0].id) : null);
+const cutOf = (plan) => (plan.start ? String(plan.read[0].id) : null);
 // Whether a fold log was folded under this plan's cut: its last frontier's `n` (the members folded) = the members of the cut up to
 // its `f` that did not fail. A log folded under another cut would serve a reader that must cut a log folded uncut.
 function foldedUnder(log, plan, f) {
   if (!plan.byId.has(f)) return false;
   let n = 0;
-  for (const r of plan.read) { const rid = String(r.id); if (posCmp(rid, f) <= 0 && !log.failures.get(rid)) n++; }
+  for (let i = 0, to = posOf(plan, f); i <= to; i++) { const r = plan.members[i]; if (inCut(plan, r) && !log.failures.get(String(r.id))) n++; }
   return n === log.read(log.frontier).n;
 }
 // A state from scratch: the session's fold log (the worker's file; the local path's opened write:false) when it was folded under this
@@ -190,7 +233,7 @@ function foldedUnder(log, plan, f) {
 // §内存有界: a cut that moves restarts the fold and its log), the worker's beside the projection (4.3 §4), the local path's in memory.
 function stateOf(ctx, id, store, plan) {
   const s = { base: liveHeap(), store, perRow: plan.perRow, cut: cutOf(plan), n: 0, cost: 0, sink: [], hook: null, resolve: null,
-    cols: columns(store.rows.slotOf), view: null, R: null, T: null, relay: null, target: null };
+    cols: columns(store.rows.slotOf), view: null, R: null, T: null, relay: null, target: null, fc: 0, fp: null };
   const writer = ctx.writer === true, home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   const open = () => openFoldLog({ home, fs, key: id, write: writer, projection: { id: store.id, bytes: store.bytes }, errors: s.sink });
   const log = open(), m = markOf(log);
@@ -209,22 +252,26 @@ function stateOf(ctx, id, store, plan) {
   s.R = reductionOf(s, s.log);
   return s;
 }
-// Fold the members of the cut up to the extraction frontier `F` for `ms`; a rebuild first up to the file log's frontier, then it
-// takes the file log over and goes on.
+// Fold the members of the cut before the extraction cursor `F` for `ms`, in write order from the fold cursor `fc` (the first member
+// not yet handed to the reduction, by the plan `fp` it was walked under: another plan walks again from the start); a rebuild first up
+// to the file log's frontier, then it takes the file log over and goes on. Handed BATCH at a time, so a slice's work is by what it folds.
+const BATCH = 256;
 function fold(s, plan, F, ms) {
   const t0 = performance.now();
-  for (;;) {
-    const upTo = s.target ?? F;
-    if (upTo == null) return;
-    if (!s.R) { s.T = memoryLog(s.store); s.R = reductionOf(s, s.T); }
-    const want = [];
-    for (const r of plan.read) { const rid = String(r.id); if (posCmp(rid, upTo) <= 0 && !s.R.has(rid) && s.store.rows.has(rid)) want.push(rid); }
-    if (want.length) {
+  if (s.fp !== plan) { s.fp = plan; s.fc = 0; }
+  for (let added = false; ;) {
+    const to = s.target != null ? posOf(plan, s.target) + 1 : F, end = Math.min(to, F);
+    if (!s.R) { s.T = memoryLog(s.store); s.R = reductionOf(s, s.T); s.fc = 0; }
+    while (s.fc < end) {
+      if (added && performance.now() - t0 >= ms) return;
+      const want = [];
+      for (; s.fc < end && want.length < BATCH; s.fc++) { const r = plan.members[s.fc], rid = String(r.id); if (inCut(plan, r) && !s.R.has(rid)) want.push(rid); }
+      if (!want.length) continue;
       const rest = s.R.add(want, { budgetMs: ms - (performance.now() - t0) });
-      s.n += want.length - rest.length;
-      if (rest.length) return;
+      s.n += want.length - rest.length; added = true;
+      if (rest.length) { s.fc = posOf(plan, rest[0]); return; }
     }
-    if (s.target == null) return;
+    if (s.target == null || end < to) return;
     s.relay.cur = s.log; s.T.close(); s.T = null; s.target = null;
   }
 }
@@ -235,16 +282,14 @@ function fold(s, plan, F, ms) {
 function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress, errors }) {
   let st = box.old;
   box.old = null;
-  // in the cut: at or after its first row in step order (the cut reads a suffix of the members in step order)
-  const inCut = (rid) => { const r = plan.byId.get(rid); return !!r && stepOrder(r, plan.read[0]) >= 0; };
-  const same = st && st.store === store && st.perRow === plan.perRow && (st.target != null ? st.cut === cutOf(plan) : st.R.members().every(inCut));
+  const same = st && st.store === store && st.perRow === plan.perRow && st.cut === cutOf(plan);
   if (st && !same) { closeState(st); st = null; }
   if (!st) st = stateOf(ctx, id, store, plan);
   // a state grown across requests is held against the heap it began from
   const meter = { base: st.base, since: 0, gap: 0, limit: plan.limit, n: st.n };
   st.resolve = resolve;
   st.hook = (rid) => { progress(); bounded(meter, ++meter.n, (plan.byId.get(rid) || {}).stored_bytes || 0); };
-  const past = () => plan.read.some((r) => posCmp(String(r.id), st.target) > 0 && store.rows.has(String(r.id)));
+  const past = () => { for (let i = posOf(plan, st.target) + 1; i < F; i++) if (inCut(plan, plan.members[i])) return true; return false; };
   const now = st.target == null || (ctx.writer === true ? !request : past());
   try { if (foldMs > 0 && now) fold(st, plan, F, foldMs); } catch (e) { closeState(st); throw e; }
   errors.push(...st.sink.splice(0));
@@ -264,23 +309,24 @@ async function advance(ctx, id, { budgetMs, request }) {
   if (request) errors.push(...store.opened.splice(0));
   // extraction errors are the member's own (its row says why, on every answer), not this request's
   const read = (rs) => { progress(); return recordsAt({ home: ctx.home, fs: ctx.fs, rows: rs.filter(Boolean), errors: [], remember: false }); };
-  const exErrors = [];
-  const ex = extractMembers({ store, members, recordsAt: read, sessionId: id, budgetMs: request ? budgetMs : Math.max(1, budgetMs - (performance.now() - t0)), errors: exErrors });
+  const exErrors = [], from = planOf(members, k, store, id).ex;
+  const ex = extractMembers({ store, members, recordsAt: read, sessionId: id, budgetMs: request ? budgetMs : Math.max(1, budgetMs - (performance.now() - t0)), errors: exErrors, from });
+  passed(planOf(members, k, store, id), ex.done);
   persisted(ctx, exErrors);
   errors.push(...exErrors);
   const foldMs = request ? budgetMs : budgetMs - (performance.now() - t0);
   const resolve = (ref) => {
-    const row = planOf(members, k, store.defCount).byId.get(parseTextRef(ref).recordId);
+    const row = planOf(members, k, store, id).byId.get(parseTextRef(ref).recordId);
     const rec = row && recordsAt({ home: ctx.home, fs: ctx.fs, rows: [row], errors: [], remember: false })[0];
     return rec ? blockAt(rec, ref) : null;
   };
   for (;;) {
-    const plan = planOf(members, k, store.defCount);
+    const plan = planOf(members, k, store, id);
     const box = { old: states.take(k) };
-    const release = hold(working(plan.read));
+    const release = hold(plan.work);
     let st;
     try {
-      st = grow(box, { ctx, id, store, plan, F: ex.frontier, foldMs, request, resolve, progress, errors });
+      st = grow(box, { ctx, id, store, plan, F: ex.done, foldMs, request, resolve, progress, errors });
       frontiers.set(k, markOf(st.log));
       if (usedHeap() > heapCeiling() && liveHeap() > heapCeiling()) { closeState(st); throw new HeapBound(st.n); }
     } catch (e) {
@@ -306,7 +352,7 @@ export async function extendSession(ctx, id, budgetMs) {
   const r = await advance(ctx, String(id), { budgetMs, request: false });
   if (!r) return false;
   const { st, plan, ex } = r;
-  return ex.done < ex.total || st.target != null || plan.read.some((row) => !st.R.has(String(row.id)));
+  return ex.done < ex.total || st.target != null || st.fp !== plan || st.fc < plan.members.length;
 }
 
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the
@@ -318,13 +364,15 @@ export async function sessionState(ctx, id) {
   const r = await advance(ctx, String(id), { budgetMs: ctx.writer === true ? SLICE_MS : Infinity, request: true });
   if (!r) return null;
   const { st, plan, members, ex, errors } = r, mark = markOf(st.log);
-  if (!(st.view && st.view.f === st.log.frontier && st.view.members === members && st.view.plan === plan)) {
+  if (!(st.view && st.view.f === st.log.frontier && st.view.plan === plan && st.view.gen === plan.gen)) {
     st.view = null; // the old view let go before the new one is built
-    st.view = { f: st.log.frontier, members, plan, V: viewOf({ id: String(id), log: st.log, cols: st.cols, members, plan, mark }) };
+    st.view = { f: st.log.frontier, plan, gen: plan.gen, V: viewOf({ id: String(id), log: st.log, cols: st.cols, members, plan, mark }) };
   }
-  const V = st.view.V, at = (rid) => mark != null && posCmp(rid, mark) <= 0;
-  const above = ex.done < ex.total || plan.read.some((row) => !at(String(row.id)));
-  return { id: String(id), rows: members, store: st.store, mark, pending: above ? { done: members.filter((m) => at(String(m.id))).length, total: members.length } : null,
+  // the members at or below the mark are the first `done` of the list; any of the cut past them is above it
+  const V = st.view.V, done = mark == null ? 0 : posOf(plan, mark) + 1;
+  let above = ex.done < ex.total;
+  for (let i = done; !above && i < members.length; i++) above = inCut(plan, members[i]);
+  return { id: String(id), rows: members, store: st.store, mark, pending: above ? { done, total: members.length } : null,
     truncated: plan.bound, V, failed: V.failed, errors, st, plan };
 }
 
@@ -336,7 +384,7 @@ export async function version(ctx) {
   const { rows, errors } = await indexed(ctx);
   const members = sessionGroups(rows).get(String(p.id));
   if (!members) return null;
-  const k = keyOf(ctx, p.id), store = storeOf(ctx, String(p.id), k), plan = planOf(members, k, store.defCount);
+  const k = keyOf(ctx, p.id), store = storeOf(ctx, String(p.id), k), plan = planOf(members, k, store, p.id);
   return { key: JSON.stringify([plan.key, frontiers.get(k) ?? null, plan.bound]), errors };
 }
 
@@ -347,7 +395,9 @@ function thenOf(s, M) {
   const { st, plan } = s, off = st.log.frontierAt(M);
   if (off != null) return { then: { log: st.log, off, mark: M }, cands: st.log.changedSince(off), close: () => {} };
   const T = memoryLog(st.store), R = reduction(st.store, { log: T, resolve: st.resolve, errors: [] });
-  R.add(plan.read.map((r) => String(r.id)).filter((rid) => posCmp(rid, M) <= 0 && st.store.rows.has(rid)));
+  const upTo = [];
+  for (let i = 0, to = posOf(plan, M); i <= to; i++) { const r = plan.members[i], rid = String(r.id); if (inCut(plan, r) && st.store.rows.has(rid)) upTo.push(rid); }
+  R.add(upTo);
   const a = T.changedSince(-1), b = st.log.changedSince(-1);
   return { then: { log: T, off: T.frontier ?? -1, mark: M }, cands: { rids: new Set([...a.rids, ...b.rids]), lanes: new Set([...a.lanes, ...b.lanes]) }, close: () => T.close() };
 }
@@ -369,7 +419,7 @@ export async function run(ctx) {
   if (before != null && !V.has(before)) throw new QueryArgError(`trocar query session: --before ${JSON.stringify(before)} is not a call of this session`);
   const head = { mark: s.mark, ...(s.pending ? { pending: s.pending } : null), truncated: s.truncated };
   const body = { meta: V.meta, stats: V.stats, logged: V.logged, probes: V.probes };
-  if (since != null && s.plan.byId.has(since) && s.mark != null && posCmp(since, s.mark) <= 0) {
+  if (since != null && s.mark != null && s.plan.byId.has(since) && posOf(s.plan, since) <= posOf(s.plan, s.mark)) {
     const { then, cands, close } = thenOf(s, since);
     try {
       const { unknown, ...d } = deltaOf(V, then, cands);

@@ -414,32 +414,40 @@ const CHUNK = 16;
 const contexts = new WeakMap(); // store → its extraction context (slices of one session go on with the same one)
 
 /**
- * extractMembers({store, members, recordsAt, sessionId, budgetMs, clock, errors}) → { frontier, done, total } (design §3.4
- * "Extraction frontier"). `members`: the session's index rows; `recordsAt(rows)` → their records (one that does not read back is
- * left out). Extracts the members the store has no row for, in write order (posCmp), until `budgetMs` of `clock` is spent, appending
+ * extractMembers({store, members, recordsAt, sessionId, budgetMs, clock, errors, from}) → { frontier, done, total } (design §3.4
+ * "Extraction frontier"). `members`: the session's index rows in write order (src/query/rows.mjs: segments in segmentCmp order,
+ * lines in order); `from`: a cursor, the place of a member such that every member before it has a row (0, or the `done` of a call
+ * over a list this one extends). `recordsAt(rows)` → their records (one that does not read back is left out). Extracts the members
+ * from the cursor on that the store has no row for, in write order, until `budgetMs` of `clock` is spent, appending
  * each chunk's definitions and rows; `errors`: the answering request's (where a store note goes). A member that fails to extract gets
  * a row { x: { unparsed: reason } } appended as held (a `t` line the next open cuts off), so the next open tries it again (§3.9); so
  * are the rows extracted after it (one that continues it, or is written against it, would otherwise be stored without it), so what
  * a later open reads is the rows of one pass over a prefix. What extraction holds is a chunk of records, the store's indexes and the
  * context's per-lane / per-link ids: not the rows (4.3 §4). frontier: the largest rid such that every member up to it has a row;
- * done / total: members with a row, members. A keyless record gets the session's synthesized key (3.4 合成键), as the query does.
+ * done: the members up to it (the cursor the next call goes on from); total: the members. A keyless record gets the session's
+ * synthesized key (3.4 合成键), as the query does. The work is by the members from the cursor on, never by the members before it.
  */
-export function extractMembers({ store, members, recordsAt, sessionId = null, budgetMs = Infinity, clock = () => performance.now(), errors = undefined }) {
-  const order = members.map((m) => String(m.id)).sort(posCmp);
-  const t0 = clock(), spent = () => clock() - t0 >= budgetMs;
-  const todo = order.filter((rid) => !store.rows.has(rid));
-  if (todo.length && !contexts.has(store)) contexts.set(store, createExtractContext(store));
-  const ctx = contexts.get(store), byId = todo.length ? new Map(members.map((m) => [String(m.id), m])) : null;
-  for (let i = 0; i < todo.length && !spent();) {
-    let j = i + 1;
-    for (let sum = byId.get(todo[i]).stored_bytes || 0; j < todo.length && j - i < CHUNK && (sum += byId.get(todo[j]).stored_bytes || 0) <= CHUNK_STORED;) j++;
-    const part = todo.slice(i, j), got = new Map();
-    for (const r of recordsAt(part.map((rid) => byId.get(rid))) || []) if (r) got.set(String(r.id), r);
+export function extractMembers({ store, members, recordsAt, sessionId = null, budgetMs = Infinity, clock = () => performance.now(), errors = undefined, from = 0 }) {
+  const t0 = clock(), spent = () => clock() - t0 >= budgetMs, idOf = (i) => String(members[i].id), has = (i) => store.rows.has(idOf(i));
+  let at = from;
+  const settle = () => { while (at < members.length && has(at)) at++; };
+  settle();
+  for (let i = at; i < members.length && !spent();) {
+    const part = []; // the next members with no row: at most CHUNK, their stored bytes at most CHUNK_STORED (the first whatever its size)
+    for (let sum = 0; i < members.length && part.length < CHUNK; i++) {
+      if (has(i)) continue;
+      const b = members[i].stored_bytes || 0;
+      if (part.length && sum + b > CHUNK_STORED) break;
+      sum += b; part.push(i);
+    }
+    if (!part.length) break;
+    if (!contexts.has(store)) contexts.set(store, createExtractContext(store));
+    const ctx = contexts.get(store), got = new Map();
+    for (const r of recordsAt(part.map((k) => members[k])) || []) if (r) got.set(String(r.id), r);
     const defs = [], rows = [], held = [];
-    for (const rid of part) {
-      if (spent() && (rows.length || held.length)) break;
-      i++;
-      const rec = got.get(rid);
+    for (const k of part) {
+      if (spent() && (rows.length || held.length)) { i = k; break; }
+      const rid = idOf(k), rec = got.get(rid);
       if (rec && sessionId != null && sessionKeyOf(rec).key == null) Object.defineProperty(rec, '_synthKey', { value: sessionId, enumerable: false, configurable: true, writable: true });
       let out = null, why = rec ? null : 'the record did not read back';
       if (rec) try { out = extract(rec, ctx); } catch (e) { why = `extraction failed: ${e && e.message ? e.message : e}`; }
@@ -451,8 +459,6 @@ export function extractMembers({ store, members, recordsAt, sessionId = null, bu
     if (held.length) store.append({ rows: held }, { held: true, errors });
     ctx.flushed();
   }
-  let frontier = null, done = 0;
-  for (const rid of order) if (store.rows.has(rid)) done++;
-  for (const rid of order) { if (!store.rows.has(rid)) break; frontier = rid; }
-  return { frontier, done, total: order.length };
+  settle();
+  return { frontier: at ? idOf(at - 1) : null, done: at, total: members.length };
 }

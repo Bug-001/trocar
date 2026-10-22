@@ -7,7 +7,6 @@ import { sessionMetaOfFacts, itemsView } from '../view/board.mjs';
 import { unknownSummary } from '../view/assemble.mjs';
 import { compareStep } from '../view/step-order.mjs';
 import { posCmp } from './projection.mjs';
-import { sessionFactsOf } from './rows.mjs';
 import { QueryArgError } from './named/index.mjs';
 
 /** `--limit`: rows a page holds at most, its default and its ceiling (3.5 §会话读). */
@@ -140,7 +139,7 @@ function itemsOf(cols, log) {
 
 /** viewOf({id, log, cols, members, plan, mark}) → what every answer at the log's frontier reads besides its page: the rows' order
  *  (cols), the lane headers in the order of their first row, stats (the last frontier line's `st`), logged, probes, unknown, the
- *  failed members, meta (the index rows), and the cut (`plan.read`, the index rows the reduction reads, in step order) and mark the
+ *  failed members, meta (the plan's facts of the index rows, src/query/rows.mjs sessionFacts), and the cut (`plan.read`, the index rows the reduction reads, in step order) and mark the
  *  records are taken from. */
 export function viewOf({ id, log, cols, members, plan, mark }) {
   sync(cols, log);
@@ -151,7 +150,7 @@ export function viewOf({ id, log, cols, members, plan, mark }) {
   return {
     log, f, cols, plan, mark, lanes, failed: its.failed, logged: its.logged, probes: its.probes, unknown: its.unknown,
     stats: fl ? fl.st : { calls: 0, streams: 0, subagents: 0, monitors: 0, compactions: 0, totalIn: 0, totalOut: 0, peakCtx: 0 },
-    meta: sessionMetaOfFacts({ ...sessionFactsOf(id, members), title: main ? main.task ?? null : null }),
+    meta: sessionMetaOfFacts({ ...plan.facts.facts(), title: main ? main.task ?? null : null }),
     has: (rid) => { const k = cols.slotOf(rid); return k !== undefined && cols.ts[k] !== undefined; },
   };
 }
