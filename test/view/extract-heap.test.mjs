@@ -24,10 +24,10 @@ import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from '../query/big-session.mjs'
-import { WORKER_MEMORY_MB } from '../../src/query/warm.mjs'
+import { WORKER_MEMORY_MB, heapFlags } from '../../src/query/warm.mjs'
 
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
-const HEAP_MB = WORKER_MEMORY_MB / 6 // the child's old space: a share of the worker's (the bound is a share of whatever it is)
+const HEAP_MB = WORKER_MEMORY_MB / 6 // the child's heap: a share of the worker's (the bound is a share of whatever it is)
 const SLACK_PER_CALL = 2 * 1024
 const N = 2_000
 const SLACK_PER_DEF = 512
@@ -66,7 +66,7 @@ function run(calls, shape = LANES, { medium = 'file', heapMb = HEAP_MB, every = 
   s.append(calls)
   let out
   try {
-    out = execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', `--max-old-space-size=${heapMb}`, '--input-type=module', '-e', CHILD, home, s.id, medium, String(every)],
+    out = execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', ...heapFlags(heapMb), '--input-type=module', '-e', CHILD, home, s.id, medium, String(every)],
       { encoding: 'utf8', maxBuffer: 1 << 20, stdio: ['ignore', 'pipe', 'pipe'] })
   } catch (e) {
     assert.fail(`extracting ${calls} calls (${medium}) at ${heapMb} MB did not finish (exit ${e.status}): ${String(e.stderr).split('\n').find((l) => /FATAL|Error/.test(l)) || ''}`)

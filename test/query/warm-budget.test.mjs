@@ -2,7 +2,9 @@
 // is made BEFORE a value is computed, and what is past the whole budget is answered once and never kept.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { warmCache, heapBudget, hold } from '../../src/query/warm.mjs'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { warmCache, heapBudget, hold, heapFlags } from '../../src/query/warm.mjs'
 
 const cost = (v) => v.cost
 
@@ -35,3 +37,25 @@ test('3.5 §内存有界: a value past the whole budget is answered once and nev
   c.get('after', 1, () => ({ cost: B * 0.5 }))
   assert.ok(c.peek('after', 1), 'released, the room is the caches\' again')
 })
+
+// The budget and the ceiling are shares of the heap the process can use, both generations (heapFlags: V8's heap_size_limit is then
+// the whole heap). A process of the heap the service gives its worker, at two sizes, holds live data past its ceiling without dying:
+// started with --max-old-space-size instead, its limit counts a 48 MB young generation on top of its old space, and at these sizes
+// the ceiling (three quarters of that) is past the old space, so it dies of the heap before the ceiling stops anything.
+const FILL = `
+const { heapCeiling, heapBudget, liveHeap } = await import(${JSON.stringify(new URL('../../src/query/warm.mjs', import.meta.url).href)})
+const keep = []
+while (liveHeap() <= heapCeiling()) for (let i = 0; i < 2; i++) keep.push(new Array(1 << 17).fill(i + 0.5)) // 1 MB each
+console.log(JSON.stringify({ live: liveHeap(), ceiling: heapCeiling(), budget: heapBudget() }))`
+for (const mb of [96, 128]) {
+  test(`3.5 §内存有界: a ${mb} MB heap as the worker is given one holds live data past its ceiling without dying`, () => {
+    const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
+    let out
+    try {
+      out = JSON.parse(execFileSync(process.execPath, ['--require', NO_REAL_OS, ...heapFlags(mb), '--input-type=module', '-e', FILL], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }))
+    } catch (e) {
+      assert.fail(`a ${mb} MB heap died before its ceiling (exit ${e.status}): ${String(e.stderr).split('\n').find((l) => /FATAL/.test(l)) || ''}`)
+    }
+    assert.ok(out.budget < out.ceiling && out.ceiling <= mb * 1048576, JSON.stringify(out))
+  })
+}

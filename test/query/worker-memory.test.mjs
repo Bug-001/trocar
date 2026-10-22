@@ -22,6 +22,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { within } from '../helpers/bounded.mjs'
+import { heapFlags } from '../../src/query/warm.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
@@ -40,7 +41,7 @@ test(`3.5 验收 11: a ${shape.wire} session growing past the worker heap while 
   s.growTo(4 * MB)
   const failed = []
   const svc = createQueryService({ home, failure: (where, e) => failed.push(`${e.code}: ${e.message}`),
-    fork: (h, ...argv) => fork(WORKER, [h, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: ['--require', NO_REAL_OS, `--max-old-space-size=${HEAP_MB}`] }) })
+    fork: (h, ...argv) => fork(WORKER, [h, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: ['--require', NO_REAL_OS, ...heapFlags(HEAP_MB)] }) })
   const { server } = createServer({ home, token: TOKEN, query: svc })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
   const base = `http://127.0.0.1:${server.address().port}`
