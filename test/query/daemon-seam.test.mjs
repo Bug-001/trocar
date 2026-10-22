@@ -26,7 +26,8 @@ import { run as runQueryCli } from '../../src/cli/query.mjs'
 import { commandNamed } from '../../src/cli/commands.mjs'
 import { parseArgs } from '../../src/cli/args.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
-import { queryDocument } from '../../src/query/client.mjs'
+import { queryDocument, QUERY_PATH } from '../../src/query/client.mjs'
+import { bigSession } from './big-session.mjs'
 import { ensureBoardPort, freeOnLoopback, BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
@@ -52,12 +53,15 @@ const pause = (ms) => new Promise((d) => setTimeout(d, ms))
  * A generated corpus under a model world and the real daemon over it, once the daemon has sealed every segment it found (a sealed
  * segment says a torn line the live one leaves unsaid: the disk changes under a read until then); `alone` is a copy of that settled
  * corpus with no daemon to find, `pristine` the generated segments as written. `forks` are the query workers the daemon started, in
- * order. `board`: the board's port recorded as install records it (4.4 #12).
+ * order. `board`: the board's port recorded as install records it (4.4 #12). `big`: the stored bytes of one more session
+ * (big-session.mjs) written beside the corpus, far more than one in-request slice folds → its id as `s.big`.
  */
-async function seam({ seed, queryIdleMs, board = false }) {
+async function seam({ seed, queryIdleMs, board = false, big = 0 }) {
   const w = await modelWorld({ os: 'darwin' })
   const trocar = path.join(w.home, '.trocar')
   generate({ home: trocar, seed, bytes: 3_000_000, segmentBytes: 1 << 20 })
+  const bigId = big ? bigSession({ home: trocar, subLanes: 4, late: 3 }) : null
+  if (bigId) bigId.growTo(big)
   const pristine = tmpDir('trocar-gen-')
   fs.cpSync(path.join(trocar, 'raw'), pristine, { recursive: true })
   let port = null
@@ -77,7 +81,7 @@ async function seam({ seed, queryIdleMs, board = false }) {
   const opts = { home: w.home, env: w.env, platform: 'darwin' }
   const ctx = { home: trocar, userHome: w.home, dir: w.dir, platform: 'darwin', env: w.env }
   const s = {
-    w, trocar, alone, pristine, port, forks, box, ctx,
+    w, trocar, alone, pristine, port, forks, box, ctx, big: bigId && bigId.id,
     /** the CLI over the daemon's HOME, and over the copy no daemon serves */
     cli: (argv) => cli(argv, opts),
     local: (argv) => cli(argv, { home: alone, env: { ...w.env, HOME: alone }, platform: 'darwin' }),
@@ -220,16 +224,25 @@ test('darwin: the cold read is local, the worker is warmed behind it, and a call
 /** The session document `session --id <id>` prints through the daemon, parsed, and the bytes. */
 const fullOf = async (s, id) => { const r = await s.daemon(['session', '--id', id, '--json']); return { doc: JSON.parse(r.out), text: r.out } }
 
-test('darwin · 3.5 #7 · #25: a never-projected session through the daemon — the CLI asks until no pending, exits 0, and prints the local bytes', { timeout: 90_000 }, async () => {
-  const s = await seam({ seed: 7 })
+test('darwin · 3.5 #7 · #25: a never-projected session through the daemon — its first worker answer carries pending, the CLI asks until none, exits 0, and prints the local bytes', { timeout: 180_000 }, async () => {
+  const s = await seam({ seed: 7, big: 16 << 20 })
   try {
-    const id = biggestSession((await s.warm('sessions')).text)
-    const { doc, text } = await fullOf(s, id)
+    const id = s.big
+    // the worker's own first answer, on the endpoint the platform picks: it stops at the fold frontier (3.5 #25)
+    const ep = controlEndpointFor({ platform: 'darwin', dir: s.w.dir, env: s.w.env })
+    const q = new URLSearchParams({ name: 'session', id, indent: '0' })
+    const first = JSON.parse((await within(ep.request({ socketPath: ep.socketPath, path: `${QUERY_PATH}?${q}`, raw: true }), 30_000, 'the first worker answer')).toString('utf8'))
+    assert.ok(first.pending, 'the first worker answer of a never-projected session carries pending')
+    assert.ok(first.pending.done < first.pending.total)
+    // the terminal asks on until the worker has folded every member, and prints that whole answer
+    const r = await within(s.cli(['session', '--id', id, '--json']), 120_000, 'session through the daemon')
+    assert.equal(r.exit, 0, r.out)
+    const doc = JSON.parse(r.out)
     assert.equal(doc.pending, undefined, 'the terminal prints a whole answer: no pending')
     assert.equal(doc.base, null)
-    const l = await s.local(['session', '--id', id, '--json'])
+    const l = await within(s.local(['session', '--id', id, '--json']), 120_000, 'session locally')
     assert.equal(l.exit, 0, l.out)
-    assert.equal(text === l.out, true, `the daemon path and the local path print the same bytes:\n  daemon ${text.length} B\n  local  ${l.out.length} B`)
+    assert.equal(r.out === l.out, true, `the daemon path and the local path print the same bytes:\n  daemon ${r.out.length} B\n  local  ${l.out.length} B`)
   } finally { await s.box.stop() }
 })
 
