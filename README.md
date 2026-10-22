@@ -45,10 +45,13 @@ diverging block's rebuilt text. The cause is a structural estimate from comparin
 provider's real boundary — `usage` stays the numeric truth. "Emit the tools array in a stable order" is a one-line
 fix you cannot find without seeing the wire.
 
-**"My prefix looked identical — why was I billed a miss?"** trocar hashes the reusable prefix (SHA-256
-over each block's canonical text — tools re-serialized, messages rebuilt from their parsed blocks — not over the
-wire bytes) and cross-checks it against what the provider's `usage` actually credited.
-`read=0, write>0` is labelled a TTL rebuild, not a bug; `read=0, write=0` on a prefix that hashes identical is
+**"My prefix looked identical — why was I billed a miss?"** trocar checks the reusable prefix block by block
+against the call it is compared with: each block's own slice of the request bytes, with only its `cache_control`
+marker cut out, must have the same SHA-256 on both sides. A marker that moved still counts as identical; a tools
+schema that differs only in whitespace or number spelling does not, and neither does a block with no slice of its
+own in the request (it is never called identical). The board then cross-checks that against what the provider's
+`usage` actually credited.
+`read=0, write>0` is labelled a TTL rebuild, not a bug; `read=0, write=0` on a byte-identical prefix is
 flagged as a provider contradiction. The structural guess and the numeric truth are shown separately
 and never conflated.
 
@@ -194,17 +197,30 @@ the board is the HTTP shell (D59); there is no separate ETL step and no database
 daemon's query worker, which stays warm and keeps the segment index current as it captures, so a query about a
 session you are looking at answers in milliseconds; the board's answers come gzipped. The worker stays warm while
 someone asks (an open board asks every 1.5 s) and leaves after two minutes with nothing asked, giving its memory back;
-the next query starts a new one. A session is read call by call, and one answer carries the message bodies of one
-page of steps plus a short line for every step. The worker's memory is bounded: a session too large for it shows its
-newest calls that fit and says so (**Showing only the latest N / M calls (file X MB)**); the cut moves by a tenth of
-the budget at a time, and between moves each refresh reads on with the new calls only. The worker also measures its
-heap while it reads: a session that costs more per call than estimated is cut shorter, never read until the worker
-runs out of memory. A session that cannot be read says so in one sentence with **Retry**; the reason is under
-**Technical details**. Every other board screen that cannot read something (overview, traffic, settings,
-session list, capture log) does the same. The first open of a very large
-session after the worker has left reads it from the start, which takes a while (about half a minute for a
-5.4k-call session). It is not a prerequisite: with no daemon — or none that answers
-yet — the command reads the records itself and gives the same document, only slower. Long results page with
+the next query starts a new one. A session is read call by call: each call is taken apart once into a context
+file beside the index, and the session's summary rows are written to a second file as they are worked out, so
+reopening a session reads those two files and does not take the records apart again.
+`trocar query session --id <id>` gives the newest page of call rows (at most 1,000 rows and 1 MB) with every lane's
+header; `--before <call>` gives the page just before that call, `--limit <n>` makes pages smaller, and
+`--since <mark>` gives only what changed since the `mark` of an earlier answer (the board asks this every 1.5 s).
+`trocar query lane --id <id> --lane <key>` gives one lane's steps: the last page by default, `--from <call>` the
+steps after that call, `--to <call>` the page that ends just before it. Each step is its block list as changes
+against the step before, with the definitions of the blocks the page brings, the files the lane has seen and
+the resources it holds. `trocar query block --ref <ref>` opens one block's verbatim bytes; give `--ref` more than
+once to get several in one answer, in the order asked (a ref that cannot be read says why in `errors`).
+A session the worker has not finished reading answers at once with what it has, and says how far it got
+(`pending: {done, total}`); the worker reads on in the background, and the CLI asks again until the answer is
+complete (it reads the records itself if the worker stops making progress). The first open of a very large session
+takes a while: about 4 minutes in the background for a 16k-call session, during which the board shows it filling
+in. The worker's memory is bounded: a session too large for it shows its newest calls that fit and says so
+(**Showing only the latest N / M calls (file X MB)**); a cut session always shows at least half of what fits, and
+the cut moves by a tenth of the budget at a time, so between moves each refresh reads on with the new calls only.
+The worker also measures its heap while it reads: a session that costs more per call than estimated is cut shorter,
+never read until the worker runs out of memory. A session that cannot be read says so in one sentence with
+**Retry**; the reason is under **Technical details**. Every other board screen that cannot read something
+(overview, traffic, settings, session list, capture log) does the same. It is not a prerequisite: with no
+daemon — or none that answers yet — the command reads the records itself and gives the same document, only
+slower. Long results page with
 `--limit` and `--after <cursor>`, where the cursor is the `page.next` of the document before it.
 `trocar query traffic` is one line per agent and host, with requests and bytes sent and received (sums over
 the calls that recorded a size, so they are a floor). `trocar query overview` is the board's stats card: sessions,
