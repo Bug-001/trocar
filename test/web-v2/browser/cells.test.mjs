@@ -95,7 +95,7 @@ async function copyCase(chromium) {
     const refs = await openLaidCells(b.page)
     assert.ok(refs.length >= 1, 'a Raw cell with layout spans was opened')
     for (const ref of refs) {
-      const bytes = (await b.get('block', { ref })).doc.bytes
+      const bytes = (await b.get('block', { ref })).doc.blocks[0].bytes
       assert.equal(typeof bytes, 'string', `GET /api/block answered bytes for ${ref}`)
       const { out, touchedLay, shown } = await randomCopies(b.page, ref, PER_CELL)
       assert.ok(touchedLay > 0, 'some selections end inside a .lay span')
@@ -135,7 +135,7 @@ test('an open cell whose bytes left the cache asks once per need and gives the s
     await openBusiest(b)
     const [ref] = await openLaidCells(b.page)
     assert.ok(ref, 'a Raw cell was opened')
-    const bytes = (await b.get('block', { ref })).doc.bytes
+    const bytes = (await b.get('block', { ref })).doc.blocks[0].bytes
     const asks = () => b.requests.filter((r) => r.url.startsWith('/api/block?') && new URLSearchParams(r.url.split('?')[1]).get('ref') === ref).length
     const sel = `#ctxwin .cell[data-ref="${ref.replace(/"/g, '\\"')}"]`
     const evict = () => b.page.evaluate(async (r) => (await import('/replay/cell.mjs')).bodyCache.delete(r), ref)
@@ -199,21 +199,22 @@ test('Shift+V redraws the cells within one window height below the visible area 
     assert.ok(h, 'an open cell far enough down to start below the visible area')
     const cellsBelow = () => b.page.evaluate((h) => {
       const R = document.querySelector('#ctxwin').getBoundingClientRect()
-      return [...document.querySelectorAll('#ctxwin .cell')].map((c) => ({ mode: c.dataset.mode, below: c.getBoundingClientRect().top - R.bottom })).filter((x) => x.below > 0 && x.below < h)
+      return [...document.querySelectorAll('#ctxwin .cell')].map((c) => ({ ck: c.dataset.ck, mode: c.dataset.mode, below: c.getBoundingClientRect().top - R.bottom })).filter((x) => x.below > 0 && x.below < h)
     }, h)
+    // the same cells afterwards, by their data-ck (a cell drawn shorter in the other mode moves the ones below it up)
+    const modesOf = (cks) => b.page.evaluate((cks) => cks.map((ck) => document.querySelector(`#ctxwin .cell[data-ck="${CSS.escape(ck)}"]`)?.dataset.mode ?? null), cks)
     const before = await cellsBelow()
     assert.ok(before.length > 0 && before.every((c) => c.mode === before[0].mode), 'open cells below the visible area, one mode')
     const want = before[0].mode === 'raw' ? 'read' : 'raw'
     await b.page.evaluate(() => {
       const R = document.querySelector('#ctxwin').getBoundingClientRect()
-      const head = [...document.querySelectorAll('#ctxwin .cblk > .cbh')].find((x) => { const r = x.getBoundingClientRect(); return r.bottom > R.top && r.top < R.bottom })
+      // the key goes to a visible part of a row: its head, or — when an open cell fills the visible area — that cell's body
+      const head = [...document.querySelectorAll('#ctxwin .cblk > .cbh, #ctxwin .cblk .cellraw')].find((x) => { const r = x.getBoundingClientRect(); return r.bottom > R.top && r.top < R.bottom })
       head.focus({ preventScroll: true })
       head.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', shiftKey: true, bubbles: true, cancelable: true }))
     })
     await b.page.evaluate(() => new Promise((r) => { let n = 60; const f = () => (--n ? requestAnimationFrame(f) : r()); requestAnimationFrame(f) }))
-    const after = await cellsBelow()
-    assert.ok(after.length > 0)
-    assert.deepEqual(after.filter((c) => c.mode !== want), [], 'every cell within one height below the visible area is redrawn')
+    assert.deepEqual(await modesOf(before.map((c) => c.ck)), before.map(() => want), 'every cell within one height below the visible area is redrawn')
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
