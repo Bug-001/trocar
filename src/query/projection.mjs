@@ -26,7 +26,7 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { indexDir } from './index-build.mjs';
+import { indexDir, segmentCmp } from './index-build.mjs';
 import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
 import { lineFile, saveSidecar, loadSidecar } from './line-file.mjs';
@@ -53,12 +53,11 @@ export const projectionFile = (home, sessionKey) => path.join(ctxDir(home), `${h
 const newId = () => randomBytes(12).toString('base64url');
 const pairKey = (a, b) => `${a}\n${b}`;
 
-/** posCmp(ridA, ridB): write order of two record ids `<segment>:<line>` — segment instant, collision suffix, line. */
+/** posCmp(ridA, ridB): write order of two record ids `<segment>:<line>` — the segments' order (segmentCmp), then the line. */
 export function posCmp(a, b) {
   const pa = parseRecordId(a), pb = parseRecordId(b);
   if (!pa || !pb) return pa ? -1 : pb ? 1 : String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
-  const [sa, na = 1] = pa.segment.split('-'), [sb, nb = 1] = pb.segment.split('-');
-  return sa < sb ? -1 : sa > sb ? 1 : (Number(na) - Number(nb)) || (pa.lineNo - pb.lineNo);
+  return segmentCmp(pa.segment, pb.segment) || (pa.lineNo - pb.lineNo);
 }
 
 // Every line of `file` from byte `from` (a line's start) with its byte offset and length (newline excluded), read in chunks; `nl`: it

@@ -92,26 +92,43 @@ const isProbe = (r) => /count_tokens/.test(r.path || '');
  *  `overview`'s usage and the usage sidecar's fill), never a second copy of it. */
 export const isModelCall = (r) => r.is_llm && !r.log_only;
 
-/** One session's facts, the way src/view/board.mjs derives them from the records themselves (sessionMetaFor):
- *  the harness of the first row that had `proc`, else of the first that had headers; the entrypoint of the
- *  first row that had headers; calls / logged / probes / other complementary, so they sum to the session. */
-export function sessionFactsOf(id, rows) {
-  const first = rows.find((r) => r.has_proc) || rows.find((r) => r.has_headers);
-  const harness = first ? first.harness_id : null;
-  const withHeaders = rows.find((r) => r.has_headers);
+/** sessionFacts(id) → {add(row), facts()}: one session's facts over the rows added so far, in member order, the way
+ *  src/view/board.mjs derives them from the records themselves (sessionMetaFor): the harness of the first row that had `proc`, else
+ *  of the first that had headers; the entrypoint of the first row that had headers; calls / logged / probes / other complementary,
+ *  so they sum to the session. A growing session adds its new members only (src/query/named/session.mjs). */
+export function sessionFacts(id) {
+  let proc = null, headers = null, wire = null, calls = 0, logged = 0, probes = 0, other = 0, sub = false, last = '', synth = false;
   return {
-    session_id: id,
-    entrypoint: withHeaders ? withHeaders.entrypoint : null,
-    harness,
-    harness_inferred: !!(first && first.harness_inferred),
-    // a harness that can be pointed at ANY backend has no provider unless the wire showed one (gate G10)
-    provider: harness == null ? null : LEGACY_PROVIDER[harness] ?? rows.map((r) => wireProviderOfEndpoint(r.path)).find(Boolean) ?? null,
-    calls: rows.filter(isModelCall).length,
-    logged: rows.filter((r) => r.is_llm && r.log_only).length,
-    probes: rows.filter(isProbe).length,
-    other: rows.filter((r) => !r.is_llm && !isProbe(r)).length,
-    has_subagent: rows.some((r) => r.subagent),
-    last_ts: rows.reduce((m, r) => (String(r.ts || '') > m ? String(r.ts || '') : m), ''),
-    session_synthesized: rows.some((r) => r.synthesized),
+    add(r) {
+      if (!proc && r.has_proc) proc = r;
+      if (!headers && r.has_headers) headers = r;
+      if (!wire) wire = wireProviderOfEndpoint(r.path) || null;
+      if (isModelCall(r)) calls++; else if (r.is_llm) logged++;
+      if (isProbe(r)) probes++; else if (!r.is_llm) other++;
+      if (r.subagent) sub = true;
+      if (String(r.ts || '') > last) last = String(r.ts || '');
+      if (r.synthesized) synth = true;
+    },
+    facts() {
+      const first = proc || headers, harness = first ? first.harness_id : null;
+      return {
+        session_id: id,
+        entrypoint: headers ? headers.entrypoint : null,
+        harness,
+        harness_inferred: !!(first && first.harness_inferred),
+        // a harness that can be pointed at ANY backend has no provider unless the wire showed one (gate G10)
+        provider: harness == null ? null : LEGACY_PROVIDER[harness] ?? wire ?? null,
+        calls, logged, probes, other,
+        has_subagent: sub,
+        last_ts: last,
+        session_synthesized: synth,
+      };
+    },
   };
+}
+/** One session's facts over its rows (sessionFacts). */
+export function sessionFactsOf(id, rows) {
+  const f = sessionFacts(id);
+  for (const r of rows) f.add(r);
+  return f.facts();
 }
