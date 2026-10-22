@@ -159,14 +159,17 @@ export function replyBlocks(rec, { d, format }) {
   return out;
 }
 
-/** blockAt(rec, ref) → the flat entry of the block `ref` names in `rec` (a request or a reply block), as extraction built it, or null. */
+/** blockAt(rec, ref) → the flat entry of the block `ref` names in `rec` (a request or a reply block), as extraction built it, or null.
+ *  Within its record a block is named by its field and byte range (4.2 text_ref = record id + range): the stream half of the ref
+ *  says which file the record was read from, which a seal renames. */
+const spanOf = (ref) => { const i = ref.indexOf('::'); return i < 0 ? ref : ref.slice(i); };
 export function blockAt(rec, ref) {
   const wire = callWireOf(rec);
   if (!wire || ref == null) return null;
-  const { flat, at } = requestBlocks(rec, wire);
-  const i = at.findIndex((a) => a.ref === ref);
+  const { flat, at } = requestBlocks(rec, wire), want = spanOf(ref), same = (r) => r != null && spanOf(r) === want;
+  const i = at.findIndex((a) => same(a.ref));
   if (i >= 0) return flat[i];
-  const p = replyBlocks(rec, wire).find((x) => x.ref === ref);
+  const p = replyBlocks(rec, wire).find((x) => same(x.ref));
   return p ? p.b : null;
 }
 

@@ -45,3 +45,14 @@ test('a change past 4,096 characters breaks the cache at its block', () => {
     assert.equal(b.cause, 'content-changed', `at ${at}`);
   }
 });
+
+test('4.2 text_ref = record id + byte range: a block extracted while its file had another name resolves on the record as read now', () => {
+  const at = 4_200, recs = session(at), byId = new Map(recs.map((r) => [r.id, r]));
+  // extracted while the segment's file was named otherwise (a sealed name), read back now under its stream
+  const renamed = new Map(recs.map((r) => [r.id, Object.defineProperty({ ...r }, '_stream', { value: `${SEG}.sealed`, enumerable: false })]));
+  const store = openProjection({ home: tmpDir('trocar-break-'), key: KEY }), members = recs.map((r) => ({ id: r.id }));
+  extractMembers({ store, members, recordsAt: (rows) => rows.map((m) => renamed.get(m.id)) });
+  const doc = reduce(store, members, { resolve: (ref) => blockAt(byId.get(parseTextRef(ref).recordId), ref) });
+  const b = doc.rows.find((r) => r.rid === recs[K].id).cacheBreak;
+  assert.deepEqual({ idx: b.idx, cause: b.cause }, { idx: breakAt(at).idx, cause: breakAt(at).cause })
+});
