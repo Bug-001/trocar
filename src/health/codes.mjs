@@ -20,7 +20,8 @@ export const PROJECTION_NOTES = Object.freeze(['projection-rebuilt', 'projection
 export const BLOCK_PROBLEMS = Object.freeze(['record-missing', 'record-unreadable', 'field-missing'])
 
 /** The codes of a `session` read's own errors (src/query/named/session.mjs; 3.5 §会话读): no such session, a member that did not read back or extract. */
-export const SESSION_PROBLEMS = Object.freeze(['session-unknown', 'record-unreadable', 'record-unparseable'])
+export const SESSION_PROBLEMS = Object.freeze(['session-unknown', 'record-unreadable', 'record-unparseable',
+  'record-missing', 'field-missing']) // a member whose block the reduction could not read back (3.5 §读不全不静默)
 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])

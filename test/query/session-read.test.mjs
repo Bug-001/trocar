@@ -19,6 +19,7 @@ import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { extendSession } from '../../src/query/named/session.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
 import { apply, canon, byStep } from '../helpers/session-apply.mjs'
+import { BLOCK_PROBLEMS, SESSION_PROBLEMS } from '../../src/health/codes.mjs'
 
 const homeOf = (p) => path.join(tmpDir(p), '.trocar')
 const session = (home, params, ctx = {}) => runQuery('session', params, { home, fs, ...ctx })
@@ -181,6 +182,53 @@ test('3.5 #25: with members above the frontier the answer is the document at the
   assert.ok(!doc.calls.some((r) => r.rid === String(lost.id)), 'the failed member is not a row')
   assert.ok(doc.records.some((r) => r.id === String(lost.id)), 'it is among the records')
   assert.deepEqual(doc.errors.filter((e) => e.where === String(lost.id)).map((e) => e.code), ['record-unreadable'])
+})
+
+// An fs over which the first record read a second time (a block's text read back for a cache-break detail: extraction reads each
+// record once) cannot be read from then on, as a record that went away after it was extracted.
+function lostOnReread(rows) {
+  const at = new Map(rows.map((r) => [`${r.offset - 1}:${r.stored_bytes + 2}`, String(r.id)])), seen = new Set(), lost = { rid: null }
+  const rfs = { ...fs, readSync: (fd, buf, off, len, pos) => {
+    const rid = at.get(`${pos}:${len}`)
+    if (rid != null && lost.rid == null && seen.has(rid)) lost.rid = rid
+    if (rid != null && rid === lost.rid) throw new Error('EIO')
+    if (rid != null) seen.add(rid)
+    return fs.readSync(fd, buf, off, len, pos)
+  } }
+  return { rfs, lost }
+}
+test('3.5 #4: a block the reduction cannot read back fails its member with a closed-set code; the fold goes on and nothing crashes', async () => {
+  const home = homeOf('trocar-sread-block-')
+  const s = bigSession({ home, growth: 300, subEvery: 3, compactAt: 3_000 })
+  s.append(40)
+  const clean = homeOf('trocar-sread-block-clean-')
+  fs.cpSync(path.join(home, 'raw'), path.join(clean, 'raw'), { recursive: true })
+  const members = sessionGroups(await indexRows({ home, fs, errors: [] })).get(s.id)
+  const { rfs, lost } = lostOnReread(members)
+  const worker = { fs: rfs, writer: true }
+  while (await extendSession({ home, ...worker }, s.id, Infinity));
+  assert.ok(lost.rid != null, 'the fold read a block\'s text back')
+  const full = await session(home, { id: s.id }, worker)
+  const failed = full.errors.filter((e) => BLOCK_PROBLEMS.includes(e.code) && members.some((r) => String(r.id) === e.where)).map((e) => e.where)
+  assert.ok(failed.length > 0, 'the member whose block did not read back is in errors')
+  const since = await session(home, { id: s.id, since: String(members[1].id) }, worker)
+  for (const doc of [full, since]) {
+    assert.equal(doc.ok, false)
+    for (const rid of failed) {
+      const e = doc.errors.find((x) => x.where === rid)
+      assert.ok(e && SESSION_PROBLEMS.includes(e.code) && BLOCK_PROBLEMS.includes(e.code), `${rid}: a closed-set code`)
+    }
+  }
+  const want = (await session(clean, { id: s.id })).calls.map((r) => r.rid).filter((rid) => !failed.includes(rid))
+  assert.deepEqual(full.calls.map((r) => r.rid), want, 'the failed members are no rows; every other call is')
+  for (const h of full.lanes) assert.equal((await runQuery('lane', { id: s.id, lane: h.lane }, { home, ...worker })).command, 'lane')
+  // a call appended later is folded and answered; another process answers from the fold log with the same bytes
+  s.append(1)
+  while (await extendSession({ home, ...worker }, s.id, Infinity));
+  const after = await session(home, { id: s.id }, worker)
+  const last = sessionGroups(await indexRows({ home, fs, errors: [] })).get(s.id).at(-1)
+  assert.ok(after.calls.some((r) => r.rid === String(last.id)), 'the call appended later is a row')
+  assert.equal(JSON.stringify(await session(home, { id: s.id }, { fs: { ...rfs }, writer: true })), JSON.stringify(after))
 })
 
 test('3.5:42 local: over a fold log the worker finished, the local path answers the worker\'s bytes and leaves the log\'s bytes as they were', async () => {

@@ -163,6 +163,11 @@ const ridOf = (m) => String(m && typeof m === 'object' ? m.id : m);
 const isCall = (row) => !!(row && row.x && Array.isArray(row.x.secs));
 const enoent = () => { throw Object.assign(new Error('no file: the fold log is held in memory'), { code: 'ENOENT' }); };
 const NO_FILE = { statSync: enoent, openSync: enoent, closeSync() {}, readSync: () => 0 };
+/** A block a cache-break detail needs whose text did not read back (3.5 §读不全不静默): `code` one of BLOCK_PROBLEMS
+ *  (src/health/codes.mjs), `rid` the member whose take needed it. A resolver throws it to say why; null from it is `record-missing`. */
+export class BlockUnread extends Error {
+  constructor(code, reason) { super(reason); this.code = code; this.rid = null; }
+}
 /** memoryLog(store) → a fold log (src/query/fold-log.mjs) held in memory only, over no file: what reduce() folds into. */
 export const memoryLog = (store) => openFoldLog({ home: '/', fs: NO_FILE, key: 'reduce', write: false, projection: { id: store.id, bytes: store.bytes } });
 
@@ -213,7 +218,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   const failed = new Map(), items = []; // failed rid → its line's offset; the item lines' offsets
   const found = new Map(); // break details worked out by this reduction, written as `brk` lines once an add is done
   const heads = new Map(), written = new Map(); // lane key → its header line's digest; spawn → the child lane its call line names
-  let pend = [], newItems = [], newFailed = [], inStep = false, last = -1, top = null, n = 0, F;
+  let pend = [], newItems = [], newFailed = [], inStep = false, last = -1, top = null, n = 0, F, taking = null;
   const before = (a, b) => compareStep(cts[a], ridAt(a), cts[b], ridAt(b));
   const byStep = (a, b) => { const p = slotOf(a), q = slotOf(b); return ts[p] != null && ts[q] != null ? compareStep(ts[p], a, ts[q], b) : 0; };
   const setDig = (k, h) => { if (k >= dig.length) { const d = new Float64Array(Math.max(2 * dig.length, k + 1)).fill(NaN); d.set(dig); dig = d; } dig[k] = h; };
@@ -279,8 +284,9 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     const D = store.readDef(bid);
     if (D.ref == null) return D; // unaddressable: its body is inline
     if (!resolve) throw new Error(`block ${bid} needs its text for a cache-break detail and no resolver was given`);
-    const b = resolve(D.ref);
-    if (!b) throw new Error(`block ${bid}: ${D.ref} does not resolve`);
+    let b;
+    try { b = resolve(D.ref); } catch (e) { if (e instanceof BlockUnread) e.rid ??= taking; throw e; }
+    if (!b) throw Object.assign(new BlockUnread('record-missing', `block ${bid}: ${D.ref} does not resolve`), { rid: taking });
     return b;
   };
   function detail(pk, ck) {
@@ -316,7 +322,8 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     return brk;
   }
   // a fold's push: a call that sorts before its lane's last call puts the lane in again, its rows in step order with this one in place
-  function pushOf(take, drop) {
+  function pushOf(own, drop) {
+    const take = (rid, row) => { taking = rid; return own(rid, row); };
     return (rid, row) => {
       const S = take(rid, row), cs = S.rids, me = cs[cs.length - 1];
       if (cs.length < 2 || before(cs[cs.length - 2], me) < 0) return;
@@ -357,8 +364,10 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     const t0 = performance.now();
     const fresh = [...new Set(list.map(String))].filter((rid) => !has(rid)).sort(posCmp);
     let rest = [];
-    try {
-      if (!fresh.length) { /* nothing new */ } else if (!inStep && (last < 0 || posCmp(fresh[0], ridAt(last)) > 0)) {
+    // a member whose block did not read back fails, and the fold is rebuilt without it (one more member each round, so it ends)
+    for (let first = true; ; first = false) try {
+      if (!first) again();
+      else if (!fresh.length) { /* nothing new */ } else if (!inStep && (last < 0 || posCmp(fresh[0], ridAt(last)) > 0)) {
         reader = (rid) => store.rows.get(rid);
         for (let i = 0; i < fresh.length; i++) { // write order: each row read once, as it is folded
           if (i && performance.now() - t0 >= budgetMs) { rest = fresh.slice(i); break; }
@@ -373,11 +382,15 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
         if (!next.length) { /* only failures */ } else if (inStep && last >= 0 && byStep(next[0], ridAt(last)) > 0) for (const rid of next) step(rid, held.get(rid));
         else again();
       }
+      break;
     } catch (e) {
-      if (!(e instanceof OrderBound) || inStep) throw e;
+      if (e instanceof BlockUnread && e.rid != null && !failed.has(e.rid)) {
+        const k = slotOf(e.rid);
+        failed.set(e.rid, -1); n--; newFailed.push({ x: e.rid, reason: e.message, code: e.code });
+        if (dig[k] > 0 || dig[k] < 0) put(k, { g: e.rid }); // it had a call line: it is no call now
+      } else if (!(e instanceof OrderBound) || inStep) throw e;
+      else inStep = true; // sub-agents told apart only by order: from scratch, in step order
       for (const rid of fresh) if (!has(rid)) read(rid);
-      inStep = true; // sub-agents told apart only by order: from scratch, in step order
-      again();
     }
     settle();
     if (found.size) { store.append({ brks: [...found.values()] }, { errors }); found.clear(); }

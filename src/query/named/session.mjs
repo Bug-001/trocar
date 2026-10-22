@@ -24,7 +24,7 @@
 // reduction whose MEASURED heap passes what was reserved stops (HeapBound, checked per row folded) and the session is cut again
 // by the rows it got through; a cut that moves restarts the fold and its log.
 import nodeFs from 'node:fs';
-import { reduction, memoryLog, REDUCE_HEAP, LEDGER_BYTES } from '../../view/reduce.mjs';
+import { reduction, memoryLog, BlockUnread, REDUCE_HEAP, LEDGER_BYTES } from '../../view/reduce.mjs';
 import { openFoldLog, foldLogFile, LOG_BYTES } from '../fold-log.mjs';
 import { trocarHome } from '../../paths.mjs';
 import { extractMembers, blockAt, CHUNK_STORED } from '../../view/extract.mjs';
@@ -315,10 +315,16 @@ async function advance(ctx, id, { budgetMs, request }) {
   persisted(ctx, exErrors);
   errors.push(...exErrors);
   const foldMs = request ? budgetMs : budgetMs - (performance.now() - t0);
+  // a block's text read back for a cache-break detail, or BlockUnread with a BLOCK_PROBLEMS code; a definition's ref names a record
+  // this store extracted (a stitched block's too: extraction stitches from the store's own rows), so a member's
   const resolve = (ref) => {
-    const row = planOf(members, k, store, id).byId.get(parseTextRef(ref).recordId);
-    const rec = row && recordsAt({ home: ctx.home, fs: ctx.fs, rows: [row], errors: [], remember: false })[0];
-    return rec ? blockAt(rec, ref) : null;
+    const rid = parseTextRef(ref).recordId, row = planOf(members, k, store, id).byId.get(rid);
+    if (!row) throw new BlockUnread('record-missing', `no member of this session is record ${rid}`);
+    const errs = [], rec = recordsAt({ home: ctx.home, fs: ctx.fs, rows: [row], errors: errs, remember: false })[0];
+    if (!rec) throw new BlockUnread('record-unreadable', `record ${rid} could not be read back: ${errs.map((e) => e.reason).join('; ') || 'no record'}`);
+    const b = blockAt(rec, ref);
+    if (!b) throw new BlockUnread('field-missing', `record ${rid} has no block at ${ref}`);
+    return b;
   };
   for (;;) {
     const plan = planOf(members, k, store, id);
