@@ -3,14 +3,18 @@
 // One lane's page of steps: each step's block-id list as ops against its parent step's list, its reply ids, the attributes its added
 // positions carry and its detail; the definitions the page brings that the client does not hold yet; the lane's resources, seen
 // paths and the events of the steps it covers. All from the session's state at the reduction frontier (src/query/named/session.mjs
-// sessionState): the lane's rids, user counts and compaction / summarize flags from the step-order columns (src/query/session-doc.mjs),
-// the events and ledger deltas from its fold log's call lines read by offset (the ledger replayed per answer: src/view/reduce.mjs
-// laneLedger), each list materialised from the context projection (src/view/reduce.mjs listOf), the definitions and row facts from
-// the projection's lines. No record is read (3.5 §会话读: a lane answer is the projection's).
+// sessionState): the lane's rids and slots, user counts and compaction / summarize flags from the step-order columns
+// (src/query/session-doc.mjs), the events and ledger deltas from its fold log's call lines read by offset, each list materialised
+// from the context projection (src/view/reduce.mjs listOf), the definitions and row facts from the projection's lines. No record is
+// read (3.5 §会话读: a lane answer is the projection's). The ledger (src/view/reduce.mjs laneLedger) is replayed from the lane's
+// first step, or from the one a kept ledger of the lane reached when no row of the lane at or before it changed since (3.5 §内存有界:
+// the kept ledgers, LEDGER_BYTES): an answer reads the lines of the steps it covers and of the steps the replay goes over.
 import { sessionState, version as sessionVersion } from './session.mjs';
-import { listOf, laneLedger } from '../../view/reduce.mjs';
+import { listOf, laneLedger, ledgerWeight, LEDGER_BYTES } from '../../view/reduce.mjs';
+import { lru } from '../projection.mjs';
 import { inheritedRender } from '../../view/render-kind.mjs';
-import { PAGE_BYTES, laneOf } from '../session-doc.mjs';
+import { PAGE_BYTES, laneOf, placeIn } from '../session-doc.mjs';
+import { compareStep } from '../../view/step-order.mjs';
 import { QueryArgError } from './index.mjs';
 
 export const params = Object.freeze(['id', 'lane', 'from', 'to']);
@@ -42,6 +46,21 @@ function opsOf(P, C) {
   return ops;
 }
 
+// The kept lane ledgers of a session's fold log (its state's): lane key → {maps, step, rid, off} = laneLedger's maps at the lane's
+// step `step` (rid `rid`), as the log stood at byte `off` (its frontier then). Weighed by ledgerWeight, LEDGER_BYTES in all.
+const ledgers = new WeakMap();
+// a kept ledger still good for the lane `lane` now: its step holds the same rid and no row of the lane at or before it changed since
+// (one that moved in or out of the lane before it moves its step's rid)
+function keptOf(cols, log, lane, e) {
+  if (!e || lane.rids[e.step] !== e.rid) return null;
+  const t = cols.ts[lane.slots[e.step]];
+  for (const rid of log.changedSince(e.off).rids) {
+    const k = cols.slotOf(rid);
+    if (cols.ts[k] !== undefined && cols.ln[k] === lane.v && compareStep(cols.ts[k], rid, t, e.rid) <= 0) return null;
+  }
+  return e;
+}
+
 export async function run(ctx) {
   const { params: p, errors } = ctx;
   const id = one(p.id), key = one(p.lane), from = one(p.from), to = one(p.to);
@@ -58,7 +77,7 @@ export async function run(ctx) {
   // a lane the session does not have (it can vanish between polls: `lanes_gone`) is an empty lane
   const { cols, log } = st.V;
   if (!cols.lanes.has(key)) return empty(st.mark);
-  const { store } = st, rids = laneOf(cols, key), n = rids.length, slots = rids.map(cols.slotOf);
+  const { store } = st, L = laneOf(cols, key), { rids, slots } = L, n = rids.length;
   const lines = new Map(), lineAt = (i) => { if (!lines.has(i)) lines.set(i, log.read(...log.latest(rids[i]))); return lines.get(i); };
   // the `user` events before step i (3.5: every `user` event's `k` is its place among the lane's, 1-based)
   const before = [0];
@@ -113,9 +132,9 @@ export async function run(ctx) {
   const bytesOf = (v) => Buffer.byteLength(JSON.stringify(v));
   const evBytes = (i, keep = () => true) => eventsAt(i).reduce((a, e) => a + (keep(e) ? bytesOf(e) : 0), 0);
 
-  const index = new Map(rids.map((r, i) => [r, i]));
+  const at = (rid) => (rid == null ? -1 : placeIn(cols, L, rid)), k = at(from);
   let lo, hi, base = null; // the page is steps [lo, hi)
-  const held = new Set(); // ids the client holds: those of every step up to `from`
+  const held = new Set(); // ids the client holds: those of the `from` step's list and reply (3.5 定义)
   const fresh = new Map(); // bid → the step whose list it is first met in (a tool_result's render joins its tool_use there)
   // the ids step i brings that neither the client nor the page holds yet, taken into the page, and their definitions' bytes
   function meet(i) {
@@ -126,10 +145,10 @@ export async function run(ctx) {
     return { added, bytes };
   }
   const drop = (added) => { for (const b of added) fresh.delete(b); };
-  if (from != null && index.has(from)) {
-    const k = index.get(from);
+  if (k >= 0) {
     base = from;
-    for (let i = 0; i <= k; i++) { for (const b of listAt(i).bids) held.add(b); for (const b of replyAt(i)) held.add(b); }
+    for (const b of listAt(k).bids) held.add(b);
+    for (const b of replyAt(k)) held.add(b);
     lo = k + 1; hi = lo;
     let bytes = 0;
     while (hi < n) {
@@ -140,7 +159,8 @@ export async function run(ctx) {
   } else {
     // the tail page, a reset (a `--from` not in the lane), or the page ending just before `--to`: grown backwards, its first step a
     // keyframe, the rest each against its parent; the lane's compaction and summarize events ride along whatever steps it covers
-    hi = to != null && index.has(to) ? index.get(to) : n;
+    const t = at(to);
+    hi = t >= 0 ? t : n;
     lo = hi;
     let rel = 0, defBytes = 0, ev = flagged.reduce((a, i) => a + evBytes(i, CS), 0);
     while (lo > 0) {
@@ -157,9 +177,17 @@ export async function run(ctx) {
   for (const i of base == null ? [...flagged.filter((x) => x < lo), ...page, ...flagged.filter((x) => x >= hi)] : page) {
     events.push(...(i >= lo && i < hi ? eventsAt(i) : eventsAt(i).filter(CS)));
   }
-  // the ledger replayed from every step's delta, each line read for it and let go
-  const { resources, seen } = laneLedger(rids.map((rid, i) => (lines.has(i) ? lines.get(i) : (({ c, d }) => ({ c, d }))(log.peek(...log.latest(rid))))),
-    base == null ? -1 : index.get(base));
+  // the ledger: a kept one of this lane gone on from (at `base`, or anywhere for a base:null answer), else replayed from the first
+  // step; each line read for it and let go; then kept at the last step
+  const b = base == null ? -1 : k, cache = ledgers.get(log) || ledgers.set(log, lru(LEDGER_BYTES)).get(log);
+  let e = keptOf(cols, log, L, cache.get(key));
+  if (e && b >= 0 && e.step !== b) e = null;
+  cache.delete(key); // gone on from in place below
+  const { resources, seen, kept } = laneLedger(rids, (i) => (lines.has(i) ? lines.get(i) : log.peek(...log.latest(rids[i]))).d, b, e);
+  if (kept) {
+    const w = ledgerWeight(kept);
+    if (w <= LEDGER_BYTES) cache.set(key, { ...kept, rid: rids[kept.step], off: log.frontier }, w);
+  }
   return {
     lane: key, base, mark: st.mark, steps, defs: [...fresh.keys()].map((b) => wireDef(b, listAt(fresh.get(b)).bids)).filter(Boolean),
     resources, seen, events,

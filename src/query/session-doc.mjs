@@ -2,7 +2,8 @@
 // (src/query/fold-log.mjs) at its last frontier (`mark` = the reduction frontier): rows, their events and the lane headers by
 // offset; logged / probes / unknown and the failures from the log's item and failed lines; records and meta from the segment
 // index's rows. Pure over what it is handed: no record is read and nothing is folded here (src/query/named/session.mjs folds).
-// Kept per call: its row's ts by its slot in the projection and its place in the step-order column; nothing else per member.
+// Kept per call: its row's ts by its slot in the projection and its place in the step-order column and its lane's; per member that
+// is no call, the facts of its item or failed line (itemsOf). An answer reads only the lines that changed since the last.
 import { sessionMetaOfFacts, itemsView } from '../view/board.mjs';
 import { unknownSummary } from '../view/assemble.mjs';
 import { compareStep } from '../view/step-order.mjs';
@@ -44,10 +45,11 @@ const recOf = (r) => ({ id: String(r.id), ts_request: r.ts ?? null, is_llm_call:
 
 /** columns(slotOf) → the step-order columns of a fold log's calls, by each call's slot in the projection (`slotOf`): its row's ts, its
  *  lane (`ln`, the lane keys interned in `keys`), how many `user` events it has (`uc`) and whether it has a compaction or summarize
- *  event (`cs`); the rids in step order; the live lane keys. sync() brings them to the log's frontier from the lines past the last
- *  sync, each moved row taken out and put back by binary search: a warm state and a cold open build the same columns. */
+ *  event (`cs`); the rids in step order, and each lane's rids and slots in step order (`by`, by lane int); the live lane keys. sync()
+ *  brings them to the log's frontier from the lines past the last sync (and keeps the lane headers it reads: `heads`), each moved row taken out and put back by binary search: a
+ *  warm state and a cold open build the same columns. */
 export const columns = (slotOf) => ({ at: -1, slotOf, ts: [], ln: new Int32Array(0), uc: new Int32Array(0), cs: new Uint8Array(0),
-  keys: new Map(), order: [], lanes: new Set(), its: null });
+  keys: new Map(), order: [], by: [], lanes: new Set(), heads: new Map(), its: null });
 const tsOf = (cols, rid) => cols.ts[cols.slotOf(rid)];
 // The columns in a fold log's sidecar (4.3 §4 旁索引, its `extra`): `s.at` the frontier they were synced to; by slot `s.tk` whether the
 // ts is undefined (0), null (1) or a string (2, in `s.ts` in slot order), `s.ln`, `s.uc`, `s.cs`; `s.keys` the lane keys in int order;
@@ -73,15 +75,21 @@ export function loadColumns(rows, p) {
   let j = 0;
   for (let k = 0; k < n; k++) if (tk[k]) cols.ts[k] = tk[k] === 1 ? null : p['s.ts'][j++];
   if (j !== p['s.ts'].length) return null;
-  for (const k of p['s.order']) { if (!(k >= 0 && k < n && tk[k])) return null; cols.order.push(rows.keyAt(k)); }
+  for (const k of p['s.order']) {
+    if (!(k >= 0 && k < n && tk[k])) return null;
+    const rid = rows.keyAt(k), l = byLane(cols, cols.ln[k]);
+    cols.order.push(rid); l.rids.push(rid); l.slots.push(k);
+  }
   return cols;
 }
-// where (t, rid) goes in the step-order column: the first place whose row sorts at or after it
-function placeOf(cols, t, rid) {
-  let lo = 0, hi = cols.order.length;
-  while (lo < hi) { const m = (lo + hi) >> 1, r = cols.order[m]; if (compareStep(tsOf(cols, r), r, t, rid) < 0) lo = m + 1; else hi = m; }
+// where (t, rid) goes in a step-order column (the session's, else a lane's rids): the first place whose row sorts at or after it
+function placeOf(cols, t, rid, order = cols.order) {
+  let lo = 0, hi = order.length;
+  while (lo < hi) { const m = (lo + hi) >> 1, r = order[m]; if (compareStep(tsOf(cols, r), r, t, rid) < 0) lo = m + 1; else hi = m; }
   return lo;
 }
+// the lane int `v`'s step order, made when first asked
+const byLane = (cols, v) => cols.by[v] || (cols.by[v] = { v, rids: [], slots: [] });
 // slot k of the typed columns, grown to hold it
 function slot(cols, k) {
   if (k < cols.ln.length) return;
@@ -97,27 +105,49 @@ export function sync(cols, log) {
     const k = cols.slotOf(rid);
     if (k === undefined) throw new Error(`the fold log names ${rid}, which the context projection has no row for`);
     const old = cols.ts[k], o = log.peek(...log.latest(rid)), r = rowOf(o);
-    if (old !== undefined) cols.order.splice(placeOf(cols, old, rid), 1);
+    if (old !== undefined) {
+      const l = byLane(cols, cols.ln[k]), j = placeOf(cols, old, rid, l.rids);
+      cols.order.splice(placeOf(cols, old, rid), 1); l.rids.splice(j, 1); l.slots.splice(j, 1);
+    }
     slot(cols, k);
     if (r) {
       cols.ts[k] = r.ts ?? null; cols.order.splice(placeOf(cols, cols.ts[k], rid), 0, rid);
-      cols.ln[k] = laneInt(cols, r.lane); cols.uc[k] = o.e.filter((e) => e.type === 'user').length;
+      cols.ln[k] = laneInt(cols, r.lane);
+      const l = byLane(cols, cols.ln[k]), j = placeOf(cols, cols.ts[k], rid, l.rids);
+      l.rids.splice(j, 0, rid); l.slots.splice(j, 0, k);
+      cols.uc[k] = o.e.filter((e) => e.type === 'user').length;
       cols.cs[k] = o.e.some((e) => e.type === 'compaction' || e.type === 'summarize') ? 1 : 0;
     } else { cols.ts[k] = undefined; cols.ln[k] = -1; cols.uc[k] = 0; cols.cs[k] = 0; }
   }
-  for (const key of ch.lanes) { if (log.read(...log.lane(key)).l != null) cols.lanes.add(key); else cols.lanes.delete(key); }
+  for (const key of ch.lanes) {
+    const h = headOf(log.peek(...log.lane(key)));
+    if (h) { cols.lanes.add(key); cols.heads.set(key, h); } else { cols.lanes.delete(key); cols.heads.delete(key); }
+  }
   cols.at = f;
   return cols;
 }
-/** laneOf(cols, key) → the rids of the lane `key` in step order, from the synced columns; [] for a lane they do not hold. */
+/** laneOf(cols, key) → {v, rids, slots} of the lane `key` (its int, its rids and slots in step order), from the synced columns (the
+ *  columns' own arrays: read only); empty for a lane they do not hold. */
 export function laneOf(cols, key) {
   const v = cols.keys.get(key);
-  return v === undefined ? [] : cols.order.filter((rid) => cols.ln[cols.slotOf(rid)] === v);
+  return v === undefined ? { v: -1, rids: [], slots: [] } : byLane(cols, v);
+}
+/** placeIn(cols, lane, rid) → the place of `rid` in the lane `laneOf` gave, or -1 when it is not a row of it: by binary search. */
+export function placeIn(cols, lane, rid) {
+  const k = cols.slotOf(rid);
+  if (k === undefined || cols.ts[k] === undefined || cols.ln[k] !== lane.v) return -1;
+  const i = placeOf(cols, cols.ts[k], rid, lane.rids);
+  return lane.rids[i] === rid ? i : -1;
 }
 
-// the log's item lines in step order
-const itemLines = (log) => [...log.items.keys()].map((rid) => log.read(...log.items.get(rid)))
-  .sort((a, b) => compareStep(a.it ? a.it.ts_request : null, a.i, b.it ? b.it.ts_request : null, b.i));
+const itemCmp = (a, b) => compareStep(a.it ? a.it.ts_request : null, a.i, b.it ? b.it.ts_request : null, b.i);
+const failCmp = (a, b) => posCmp(a.id, b.id);
+// `fact` into the sorted list `list` (by `cmp`), in place of `was`
+function put(list, cmp, was, fact) {
+  const at = (x) => { let lo = 0, hi = list.length; while (lo < hi) { const m = (lo + hi) >> 1; if (cmp(list[m], x) < 0) lo = m + 1; else hi = m; } return lo; };
+  if (was) list.splice(at(was), 1);
+  list.splice(at(fact), 0, fact);
+}
 // the records no dissector read as a call (3.5 §会话读 `unknown`, C1): with rows, the LLM ones; with none, those or else all
 function unknownOf(lines, hasRows) {
   const llm = (o) => !!(o.it && o.it.is_llm_call);
@@ -127,14 +157,27 @@ function unknownOf(lines, hasRows) {
   const s = unknownSummary(list, hasRows);
   return { records: s.records, reason: s.reason, endpoints: s.endpoints };
 }
-// logged, probes, unknown and the failed members, made again only when the log's item or failed lines (or whether it has rows) changed
+// The facts of the log's item lines ({i, it, u}, in step order) and failed lines ({id, reason, code}, by position), kept and brought to
+// its frontier from the lines past the last time (each read once); logged, probes, unknown and the failed members made from them again
+// only when they (or whether the log has rows) changed.
 function itemsOf(cols, log) {
-  const ni = log.items.size, nx = log.failures.size, rows = cols.order.length > 0, c = cols.its;
-  if (c && c.ni === ni && c.nx === nx && c.rows === rows) return c;
-  const lines = itemLines(log);
-  const failed = [...log.failures.keys()].map((rid) => { const { x, reason, code } = log.read(...log.failures.get(rid)); return { id: x, reason, code }; })
-    .sort((a, b) => posCmp(a.id, b.id));
-  return (cols.its = { ni, nx, rows, ...itemsView(lines.filter((o) => o.it).map((o) => o.it)), unknown: unknownOf(lines, rows), failed });
+  const c = cols.its || (cols.its = { at: -1, items: new Map(), list: [], fails: new Map(), failed: [], view: null });
+  const f = log.frontier ?? -1, rows = cols.order.length > 0;
+  if (f !== c.at) {
+    for (const rid of log.items.since(c.at)) {
+      const { i, it, u } = log.peek(...log.items.get(rid)), o = { i, it, u };
+      put(c.list, itemCmp, c.items.get(rid), o); c.items.set(rid, o);
+    }
+    for (const rid of log.failures.since(c.at)) {
+      const { x, reason, code } = log.peek(...log.failures.get(rid)), o = { id: x, reason, code };
+      put(c.failed, failCmp, c.fails.get(rid), o); c.fails.set(rid, o);
+    }
+    c.at = f; c.view = null;
+  }
+  if (!c.view || c.view.rows !== rows) {
+    c.view = { rows, ...itemsView(c.list.filter((o) => o.it).map((o) => o.it)), unknown: unknownOf(c.list, rows), failed: c.failed.slice() };
+  }
+  return c.view;
 }
 
 /** viewOf({id, log, cols, members, plan, mark}) → what every answer at the log's frontier reads besides its page: the rows' order
@@ -145,7 +188,8 @@ export function viewOf({ id, log, cols, members, plan, mark }) {
   sync(cols, log);
   const f = log.frontier, its = itemsOf(cols, log);
   const at = (rid) => (tsOf(cols, rid) === undefined ? Infinity : placeOf(cols, tsOf(cols, rid), rid));
-  const lanes = [...cols.lanes].map((k) => headOf(log.read(...log.lane(k)))).sort((a, b) => at(a.first) - at(b.first));
+  const head = (k) => cols.heads.get(k) || cols.heads.set(k, headOf(log.read(...log.lane(k)))).get(k); // a loaded column's: read once
+  const lanes = [...cols.lanes].map(head).sort((a, b) => at(a.first) - at(b.first));
   const main = lanes.find((l) => l.kind === 'main'), fl = f == null ? null : log.read(f);
   return {
     log, f, cols, plan, mark, lanes, failed: its.failed, logged: its.logged, probes: its.probes, unknown: its.unknown,
@@ -200,7 +244,7 @@ export function deltaOf(V, then, cands) {
   }
   calls.sort((x, y) => compareStep(x.r.ts ?? null, x.c, y.r.ts ?? null, y.c));
   const M = then.mark, upToM = (rid) => posCmp(rid, M) <= 0;
-  const was = unknownOf(itemLines(V.log).filter((o) => upToM(o.i)), V.cols.order.some(upToM));
+  const was = unknownOf(V.cols.its.list.filter((o) => upToM(o.i)), V.cols.order.some(upToM));
   return {
     ...(JSON.stringify(was) !== JSON.stringify(V.unknown) ? { unknown: V.unknown ?? null } : null),
     calls: calls.map((o) => o.r), gone: gone.sort(posCmp), lanes: V.lanes.filter((h) => lanes.has(h.lane)), lanes_gone: lanesGone.sort(posCmp),

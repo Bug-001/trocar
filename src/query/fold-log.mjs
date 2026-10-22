@@ -10,7 +10,8 @@
 // pb}` a frontier, after each fold step (`pb` = the projection's bytes then). `p` (set by append) = the offset of the previous line
 // of the same rid (calls and gones) or lane key (lanes and lane gones), null for the first: versionAt walks it.
 //   In the heap: rid → its latest call / gone line, lane key → its latest line, rid → its latest item line and its latest failed line
-// (offset and length in typed columns, an index per kind), frontier rid → offset; nothing else per line. Lines are read back by offset through a cache of two times LOG_BYTES of heap (projection.mjs lru).
+// (offset and length in typed columns, an index per kind, its slots also linked in the order of their latest offset so what changed
+// past an offset is found from the newest back: changedSince, `since`), frontier rid → offset; nothing else per line. Lines are read back by offset through a cache of two times LOG_BYTES of heap (projection.mjs lru).
 //   Open: a header of another FOLD_V or a pid not the projection's id, or a line that does not parse before the last → the file is
 // deleted and the log starts empty, with one `projection-rebuilt` note (D38). Then it is cut back to the last frontier whose `pb` ≤
 // the projection's bytes (a step whose frontier is missing or torn, or that the projection no longer holds, is dropped with all
@@ -32,6 +33,35 @@ const KINDS = new Set(['c', 'g', 'l', 'lg', 'i', 'x', 'f']);
 
 export const foldLogFile = (home, key) => projectionFile(home, key).replace(/\.ndjson$/, '.fold.ndjson');
 
+// lineIndex() whose slots are also linked in the order of their latest offset, the newest last (a set moves its slot there; a load
+// links them by offset): since(off) → the keys whose latest offset is past `off`, walked back from the newest, O(what it returns)
+function byOffset() {
+  const idx = lineIndex();
+  let prev = new Int32Array(64), next = new Int32Array(64), on = new Uint8Array(64), tail = -1;
+  function last(i) {
+    if (i === tail) return;
+    if (i >= on.length) {
+      const m = Math.max(i + 1, 2 * on.length), g = (a) => { const b = new a.constructor(m); b.set(a); return b; };
+      prev = g(prev); next = g(next); on = g(on);
+    }
+    if (on[i]) { if (prev[i] >= 0) next[prev[i]] = next[i]; prev[next[i]] = prev[i]; } // not the tail: it has a next
+    prev[i] = tail; next[i] = -1; on[i] = 1;
+    if (tail >= 0) next[tail] = i;
+    tail = i;
+  }
+  return {
+    get: idx.get, keys: idx.keys, dump: idx.dump, get size() { return idx.size; },
+    set(k, o, l) { idx.set(k, o, l); last(idx.slotOf(k)); },
+    load(p) { idx.load(p); [...p[1].keys()].sort((a, b) => p[1][a] - p[1][b]).forEach(last); },
+    clear() { idx.clear(); on.fill(0); tail = -1; },
+    since(off) {
+      const out = [];
+      for (let i = tail; i >= 0; i = prev[i]) { const k = idx.keyAt(i); if (!(idx.get(k)[0] > off)) break; out.push(k); }
+      return out;
+    },
+  };
+}
+
 const parse = (t) => { try { return JSON.parse(t); } catch { return undefined; } };
 // a line's kind, or undefined when it is not one
 function kindOf(o) {
@@ -48,7 +78,7 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
   let sink = errors; // the errors of the request whose append is running
   const lines = lineFile({ fs, file, write, onFail: (e) => sink.push({ where: 'fold-log', code: 'projection-write-failed', level: 'note',
     reason: `The fold log could not be written (${e.code || e.message}); this session's reduction is kept in memory and done again next time.` }) });
-  const calls = lineIndex(), lanes = lineIndex(), items = lineIndex(), fails = lineIndex(), fronts = new Map();
+  const calls = byOffset(), lanes = byOffset(), items = byOffset(), fails = byOffset(), fronts = new Map();
   const own = { i: items, x: fails };
   const cache = lru(2 * LOG_BYTES); // offset → [line, length]
   let last; // the last frontier's offset
@@ -158,8 +188,7 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
     }
     return at;
   }
-  const keyed = (idx) => ({ get: (id) => idx.get(id), keys: () => idx.keys(), get size() { return idx.size; } });
-  const past = (idx, off) => { const out = []; for (const k of idx.keys()) if (idx.get(k)[0] > off) out.push(k); return out; };
+  const keyed = (idx) => ({ get: (id) => idx.get(id), keys: () => idx.keys(), since: (off) => idx.since(off), get size() { return idx.size; } });
 
   /** saveIndex(extra) → whether it wrote the sidecar: up to the end of the last frontier line, when that grew since the last save
    *  (written logs only). `extra`: [[name, array]] parts a caller adds (no name of the form `<c|l|i|x|f>.<k|o|l>`), handed back by
@@ -183,7 +212,8 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
     get saved() { return saved; },
     latest: (rid) => calls.get(rid),
     lane: (k) => lanes.get(k),
-    /** The item lines and the failed lines by rid (their latest), as {get(rid) → location, keys() in first-written order, size}. */
+    /** The item lines and the failed lines by rid (their latest), as {get(rid) → location, keys() in first-written order, since(off)
+     *  → the rids whose latest line lies past byte `off` (newest first), size}. */
     items: keyed(items),
     failures: keyed(fails),
     read: (off, len) => entry(off, len)[0],
@@ -191,8 +221,8 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
     peek: (off, len) => { const e = cache.get(off); return e ? e[0] : JSON.parse(lines.read(off, len).toString('utf8')); },
     /** The latest line of `rid` at or before byte `off`: walks `p` back from its latest line. */
     versionAt,
-    /** The rids and lane keys whose latest line lies past byte `off`. */
-    changedSince: (off) => ({ rids: past(calls, off), lanes: past(lanes, off) }),
+    /** The rids and lane keys whose latest line lies past byte `off` (newest first): O(how many). */
+    changedSince: (off) => ({ rids: calls.since(off), lanes: lanes.since(off) }),
     get frontier() { return last; },
     frontierAt: (rid) => fronts.get(rid),
     get bytes() { return lines.bytes; },

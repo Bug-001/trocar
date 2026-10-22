@@ -24,7 +24,7 @@
 // reduction whose MEASURED heap passes what was reserved stops (HeapBound, checked per row folded) and the session is cut again
 // by the rows it got through; a cut that moves restarts the fold and its log.
 import nodeFs from 'node:fs';
-import { reduction, memoryLog, REDUCE_HEAP } from '../../view/reduce.mjs';
+import { reduction, memoryLog, REDUCE_HEAP, LEDGER_BYTES } from '../../view/reduce.mjs';
 import { openFoldLog, foldLogFile, LOG_BYTES } from '../fold-log.mjs';
 import { trocarHome } from '../../paths.mjs';
 import { extractMembers, blockAt, CHUNK_STORED } from '../../view/extract.mjs';
@@ -296,8 +296,8 @@ function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress
   st.cost = costOf(st, plan.perRow);
   return st;
 }
-// What a kept state weighs: its calls and its store's blocks, the store's, the reduction's and the log's caches.
-const costOf = (st, perRow) => Math.max(st.n, st.cols.order.length) * perRow + st.store.defCount * SPINE_PER_BLOCK + STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES;
+// What a kept state weighs: its calls and its store's blocks, the store's, the reduction's and the log's caches, its kept lane ledgers.
+const costOf = (st, perRow) => Math.max(st.n, st.cols.order.length) * perRow + st.store.defCount * SPINE_PER_BLOCK + STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES + LEDGER_BYTES;
 
 // One slice: extraction, then folding with what is left of `budgetMs` (a request: SLICE_MS of each; the local path: everything).
 async function advance(ctx, id, { budgetMs, request }) {
