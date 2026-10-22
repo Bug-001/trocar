@@ -220,7 +220,7 @@ test('query: the records a real daemon wrote are listed and handed back byte for
     const relayBody = up.got[0].subarray(up.got[0].indexOf('\r\n\r\n') + 4).toString('utf8')
     // the whole record, unspanned: the request body exactly as it went on the wire
     const whole = await runQuery('block', { ref: `${segment}:1` }, { home })
-    assert.deepEqual([whole.bytes, whole.truncated], [relayBody, null])
+    assert.deepEqual(whole.blocks.map((b) => [b.bytes, b.truncated]), [[relayBody, null]])
     c.destroy()
   } finally { await d.stop(); up.close(); p.done(); s.done() }
 })

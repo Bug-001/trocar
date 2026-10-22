@@ -73,6 +73,19 @@ test('a parameter given more than once is a list, and a parameter that takes one
   } finally { f.close(); }
 });
 
+// 4.4 #1: a repeated `ref` reaches the query as the list it is, in order — /api/block?ref=a&ref=b answers runQuery('block', {ref: [a, b]}).
+test('4.4 #1: /api/block with ref repeated is runQuery block over the refs as a list, in order', async () => {
+  const h = home();
+  const f = await serveFace({ home: h });
+  try {
+    const refs = [`${SEGMENT}:2`, `${SEGMENT}:99`, `${SEGMENT}:1`];
+    const r = await get(f.port, `/api/block?${refs.map((x) => 'ref=' + encodeURIComponent(x)).join('&')}`);
+    assert.equal(r.status, 200, r.body.slice(0, 200));
+    assert.deepEqual(JSON.parse(r.body), JSON.parse(JSON.stringify(await runQuery('block', { ref: refs }, { home: h }))));
+    assert.deepEqual(JSON.parse(r.body).blocks.map((b) => b.ref), refs);
+  } finally { f.close(); }
+});
+
 test('V80: no second read path is left in the shell or the page', () => {
   const files = [path.join(ROOT, 'src', 'server.mjs'), ...fs.readdirSync(path.join(ROOT, 'src', 'web'), { recursive: true }).map((f) => path.join(ROOT, 'src', 'web', f))];
   for (const f of files) {

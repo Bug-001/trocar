@@ -13,6 +13,7 @@ import { openProjection } from '../../src/query/projection.mjs'
 import { listOf } from '../../src/view/reduce.mjs'
 import { compareStep } from '../../src/view/step-order.mjs'
 import { PAGE_BYTES } from '../../src/query/session-doc.mjs'
+import { BLOCK_PROBLEMS } from '../../src/health/codes.mjs'
 
 const homeOf = (p) => path.join(tmpDir(p), '.trocar')
 const q = (name, home, params, ctx = {}) => runQuery(name, params, { home, fs, ...ctx })
@@ -332,4 +333,70 @@ test('3.5 #28 (lane): tail, --from and reset pages of every shape keep the close
     }
   }
   assert.ok(monitors > 0, 'the security-monitor call is a monitor event of its lane')
+})
+
+// ── 3.5 #28 (the session and block parts): the same closed sets on the seven-shapes HOME, a long Message Threads session beside ─
+const S_FULL = ['schema', 'command', 'ok', 'errors', 'base', 'mark', 'pending', 'truncated', 'more', 'meta', 'stats', 'logged', 'probes', 'unknown', 'lanes', 'calls', 'events', 'records']
+const S_SINCE = ['schema', 'command', 'ok', 'errors', 'base', 'mark', 'pending', 'truncated', 'meta', 'stats', 'logged', 'probes', 'unknown', 'calls', 'gone', 'lanes', 'lanes_gone', 'events', 'records']
+const ROW = ['rid', 'lane', 'ts', 'ctx', 'comp', 'usage', 'tools', 'status', 'error', 'errMsg', 'unparsed', 'rec', 'compaction', 'compactionInferred', 'gt', 'probe', 'reqIncomplete', 'wsIncomplete', 'respIncomplete', 'wire', 'cacheBreak']
+const ROW_WIRE = ['cacheSemanticsKnown', 'contextState', 'contextMissing', 'reqEncoding', 'labels']
+const BREAK = ['cause', 'attribution', 'idx', 'refRid', 'gt', 'firstCall']
+const LANE_HEAD = ['lane', 'kind', 'icon', 'label', 'task', 'note', 'count', 'first', 'last', 'peakCtx', 'spawnRid', 'parent', 'flagged']
+const RECORD = ['id', 'ts_request', 'is_llm_call', 'response']
+const BLOCK_TOP = ['schema', 'command', 'ok', 'errors', 'blocks']
+const BLOCK_ITEM = ['ref', 'bytes', 'encoding', 'fidelity', 'truncated']
+// 3.5 marks `pending?` and `unknown?` optional; a row's fields are left out when it has none
+const OPTIONAL = ['pending', 'unknown']
+function sessionSets(d, closed, sample) {
+  subset(d, closed, 'session'); covers(d, Object.fromEntries(Object.entries(sample).filter(([k]) => !OPTIONAL.includes(k))), 'session')
+  for (const r of d.calls) {
+    subset(r, ROW, 'row'); for (const k of ['rid', 'lane']) assert.ok(k in r, `row: ${k} is missing`)
+    subset(r.rec, ['id', 'request'], 'row.rec'); if (r.rec.request) subset(r.rec.request, ['model'], 'row.rec.request')
+    if (r.wire) { subset(r.wire, ROW_WIRE, 'row.wire'); for (const l of r.wire.labels || []) subset(l, ['id', 'label'], 'row.wire.labels') }
+    if (r.cacheBreak) subset(r.cacheBreak, BREAK, 'row.cacheBreak')
+  }
+  for (const h of d.lanes) { subset(h, LANE_HEAD, 'lane header'); covers(h, sample.lanes[0], 'lane header') }
+  for (const e of d.events) subset(e, ['type', 'rid', 'lane'], 'event')
+  for (const r of d.records) { subset(r, RECORD, 'record'); covers(r, sample.records[0], 'record'); subset(r.response, ['status'], 'record.response') }
+}
+
+test('3.5 #28 (session, block): full, --since and pending sessions keep the closed sets; a multi-ref block answers one item per ref, in order', async () => {
+  const home = sevenHome()
+  const big = bigSession({ home, wire: 'threads', growth: 4_000, subEvery: 3, subLanes: 3, late: 2 })
+  big.append(160)
+  // pending: the worker's first answers stop at the reduction frontier while the long session's members are still extracted
+  let pend = null
+  for (let i = 0; i < 400 && !pend; i++) { const d = await q('session', home, { id: big.id }, { writer: true }); if (d.pending) pend = d }
+  assert.ok(pend, 'an answer carried pending before the slices ended')
+  sessionSets(pend, S_FULL, contract.session_pending)
+  assert.ok('pending' in pend && Number.isInteger(pend.pending.done) && pend.pending.done < pend.pending.total)
+  await settled(home, big.id)
+  const refs = { req: [], reply: [] }
+  const { sessions } = await q('sessions', home, {})
+  for (const { session_id: id } of sessions) {
+    const full = await q('session', home, { id })
+    sessionSets(full, S_FULL, contract.session_full)
+    assert.equal(full.base, null)
+    const since = full.records[0].id, d = await q('session', home, { id, since })
+    sessionSets(d, S_SINCE, contract.session_since)
+    assert.equal(d.base, since)
+    for (const { lane } of full.lanes) {
+      const p = await q('lane', home, { id, lane }), byBid = new Map(p.defs.map((x) => [x.bid, x]))
+      for (const st of p.steps) for (const b of st.reply) { const r = byBid.get(b); if (r && r.ref && /::resp\./.test(r.ref)) refs.reply.push(r.ref) }
+      for (const x of p.defs) if (x.ref && !/::resp\./.test(x.ref)) refs.req.push(x.ref)
+    }
+  }
+  assert.ok(refs.req.length && refs.reply.length, 'a request ref and a reply ref were met')
+  const missing = `${refs.req[0].split('#').pop().split('::')[0].split(':')[0]}:999999`
+  const asked = [refs.req[0], refs.reply[0], missing]
+  const b = await q('block', home, { ref: asked })
+  subset(b, BLOCK_TOP, 'block'); covers(b, contract.block_multi, 'block')
+  assert.deepEqual(b.blocks.map((x) => x.ref), asked, 'one item per ref, in the order given')
+  for (const x of b.blocks) { subset(x, BLOCK_ITEM, 'block item'); covers(x, contract.block_multi.blocks[0], 'block item') }
+  for (const x of b.blocks) {
+    const errs = b.errors.filter((e) => e.where === x.ref)
+    assert.equal(x.bytes === null, errs.length > 0, `${x.ref}: bytes null ⇔ an errors entry where it`)
+    for (const e of errs) assert.ok(BLOCK_PROBLEMS.includes(e.code), `${e.code} is a BLOCK_PROBLEMS code`)
+  }
+  assert.deepEqual(b.blocks.map((x) => typeof x.bytes), ['string', 'string', 'object'], 'the request and reply refs read; the missing record does not')
 })
