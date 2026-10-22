@@ -92,6 +92,25 @@ test('GET /query without a name is the caller\'s mistake, not a failure', async 
   }
 })
 
+test('3.5 §内存有界: the worker the service forks by default carries none of the daemon\'s NODE_OPTIONS', async () => {
+  const dir = tmpDir('trocar-qsvc-env-')
+  const mark = path.join(dir, 'mark.cjs')
+  fs.writeFileSync(mark, `require('node:fs').appendFileSync(${JSON.stringify(path.join(dir, 'ran'))}, process.pid + '\\n')\n`)
+  const was = process.env.NODE_OPTIONS
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-') })
+  try {
+    process.env.NODE_OPTIONS = `--require ${JSON.stringify(mark)} --max-old-space-size=8192`
+    const { res } = await warmed(svc)
+    assert.equal(res.status, 200)
+    assert.deepEqual(JSON.parse(res.text()).segments, [])
+    assert.equal(fs.existsSync(path.join(dir, 'ran')), false, 'a --require in the daemon\'s NODE_OPTIONS ran in the worker')
+  } finally {
+    if (was === undefined) delete process.env.NODE_OPTIONS
+    else process.env.NODE_OPTIONS = was
+    svc.stop()
+  }
+})
+
 test('no worker: the caller is told at once and the worker is warmed with that same query (D63, the cold path)', async () => {
   const home = rawHome('trocar-qsvc-')
   const svc = createQueryService({ home, fork: alive })
