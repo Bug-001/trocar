@@ -28,7 +28,7 @@ import { openProjection, posCmp, STORE_HEAP } from '../projection.mjs';
 import { rowsKey, warmCache, fsTag, heapBudget, heapCeiling, hold, steadyBytes, liveHeap, usedHeap } from '../warm.mjs';
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
-import { documentOf, serialOf, keep, deltaOf, pageOf, limitOf } from '../session-doc.mjs';
+import { documentOf, serialOf, keep, legacyDeltaOf as deltaOf, legacyPageOf as pageOf, limitOf } from '../session-doc.mjs';
 
 export const params = Object.freeze(['id', 'since', 'before', 'limit']);
 
