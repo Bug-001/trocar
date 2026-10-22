@@ -38,12 +38,11 @@ const [home, id] = process.argv.slice(1)
 await indexRows({ home, errors: [] }) // the segment index's rows: the bound's \`steady\`, not the session's spine
 global.gc(); global.gc()
 const before = process.memoryUsage().heapUsed
-// asked until no pending, the worker's background driven until it has nothing left (a cold state's rebuild included), then asked
-// once more: what is measured is the rebuilt state and the step-order columns. In a function of its own, so the top-level frame's
-// registers keep no answer.
+// asked once (a forked worker's first answer), the worker's background driven until it has nothing left (a cold state's rebuild
+// included, when a member lies past the fold log's frontier), then asked once more: what is measured is the rebuilt state and the
+// step-order columns. In a function of its own, so the top-level frame's registers keep no answer.
 const ask = async () => {
-  let doc
-  do doc = await runQuery('session', { id, limit: '20' }, { home, writer: true }); while (doc.pending)
+  let doc = await runQuery('session', { id, limit: '20' }, { home, writer: true })
   while (await extendSession({ home, writer: true }, id, Infinity));
   doc = await runQuery('session', { id, limit: '20' }, { home, writer: true })
   return { calls: doc.lanes.reduce((n, l) => n + l.count, 0), truncated: doc.truncated }
@@ -75,7 +74,8 @@ const read = (opts, calls) => {
 // call); by 2N the LRU is full and what the shared-value cache still fills up to 4N (~300 B a call) stays inside the slope, and 2N → 4N
 // doubles every per-call and per-block table once, as a step of the session's growth does. The session is extracted and folded between
 // the reads as the worker does in the background, so each read is the cold open of a projected session (a worker that went idle and
-// was forked again); READ then drives the rebuild, so the call term measures the rebuilt state and the step-order columns.
+// was forked again) with one call past its log's frontier; READ then drives the rebuild, so the call term measures the rebuilt
+// state and the step-order columns.
 // What a distinct block of this shape keeps in the heap measured (heapUsed: the store's bid index and block columns, not their typed
 // arrays' backing stores), measured 2026-10-22 single-threaded at live(0.12) with 2 against 12 tools a call (15,003 → 29,993 blocks,
 // one table doubling, the same calls).
@@ -83,8 +83,11 @@ const BLOCK_COLUMNS = 77
 test('what a session read keeps grows by at most SPINE_PER_ROW a call', { timeout: 240_000 }, async () => {
   const { calls: N, ...opts } = live(0.12)
   const home = path.join(tmpDir('trocar-spine-'), '.trocar'), s = bigSession({ home, ...opts })
-  const grow = async () => { s.append(N); while (await extendSession({ home, writer: true }, s.id, Infinity)); }
-  const grown = async () => { await grow(); await grow(); return cold(home, s.id) }
+  const grow = async (own) => { s.append(N); while (await extendSession({ home, fs: own, writer: true }, s.id, Infinity)); }
+  // one call past the fold log's frontier before the cold read, so the read rebuilds the state (an unchanged session is answered
+  // from its log, not refolded: 3.5:42); the read extracts it, so each round grows on a store of its own (a fresh fs object: the
+  // projection opened again), as a worker forked again does
+  const grown = async () => { const own = { ...fs }; await grow(own); await grow(own); s.append(1); return cold(home, s.id) }
   try {
     const two = await grown(), four = await grown()
     for (const [r, n] of [[two, 2 * N], [four, 4 * N]]) {

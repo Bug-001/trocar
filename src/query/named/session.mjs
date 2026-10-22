@@ -275,10 +275,12 @@ function fold(s, plan, F, ms) {
     s.relay.cur = s.log; s.T.close(); s.T = null; s.target = null;
   }
 }
+// Whether a member of the cut extracted (before `F`) lies past the log's frontier `target`: only then is a cold state rebuilt.
+const pastOf = (plan, target, F) => { for (let i = posOf(plan, target) + 1; i < F; i++) if (inCut(plan, plan.members[i])) return true; return false; };
 // The kept state grown when it was made over this store and cut (a state answering from its log: the same first row of the cut; a
-// reduction: no row the cut dropped), else a state from scratch (the old state's only reference, `box.old`, dropped first). The
-// worker's request folds nothing while a cold state is rebuilt (its background does); the local path folds when members lie past
-// the log's frontier.
+// reduction: no row the cut dropped), else a state from scratch (the old state's only reference, `box.old`, dropped first). A cold
+// state is rebuilt only when a member of the cut lies past the log's frontier (an unchanged session is answered from its log), and
+// never in the worker's request (its background does); the local path rebuilds in the request.
 function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress, errors }) {
   let st = box.old;
   box.old = null;
@@ -289,8 +291,7 @@ function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress
   const meter = { base: st.base, since: 0, gap: 0, limit: plan.limit, n: st.n };
   st.resolve = resolve;
   st.hook = (rid) => { progress(); bounded(meter, ++meter.n, (plan.byId.get(rid) || {}).stored_bytes || 0); };
-  const past = () => { for (let i = posOf(plan, st.target) + 1; i < F; i++) if (inCut(plan, plan.members[i])) return true; return false; };
-  const now = st.target == null || (ctx.writer === true ? !request : past());
+  const now = st.target == null || (!(ctx.writer === true && request) && pastOf(plan, st.target, F));
   try { if (foldMs > 0 && now) fold(st, plan, F, foldMs); } catch (e) { closeState(st); throw e; }
   errors.push(...st.sink.splice(0));
   st.cost = costOf(st, plan.perRow);
@@ -353,12 +354,12 @@ async function advance(ctx, id, { budgetMs, request }) {
 
 /** extendSession(ctx, id, budgetMs) → whether the session still has members to extract or fold (3.5 后台抽取与归约): one background
  *  slice of the query worker (`ctx.writer`), the index read included: extraction in write order, then folding (or a cold state's
- *  rebuild) with what is left of `budgetMs`. */
+ *  rebuild, when a member lies past its log's frontier) with what is left of `budgetMs`. */
 export async function extendSession(ctx, id, budgetMs) {
   const r = await advance(ctx, String(id), { budgetMs, request: false });
   if (!r) return false;
   const { st, plan, ex } = r;
-  return ex.done < ex.total || st.target != null || st.fp !== plan || st.fc < plan.members.length;
+  return ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.members.length);
 }
 
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the

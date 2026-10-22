@@ -17,8 +17,9 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
-import { extendSession, sessionState, version } from '../../src/query/named/session.mjs'
+import { extendSession, saveIndexes, sessionState, version } from '../../src/query/named/session.mjs'
 import { PAGE_BYTES } from '../../src/query/session-doc.mjs'
+import { openProjection } from '../../src/query/projection.mjs'
 
 const BASE = { growth: 2_000, compactAt: 20_000, subEvery: 4, subLanes: 3, late: 2 }
 const LEDGERS = { small: { ...BASE, paths: 4 }, page: { ...BASE, paths: 80, pathPool: 20_000 } }
@@ -124,7 +125,13 @@ async function workAt(calls, opts) {
     assert.equal(d.base, tip, 'answered from the tip')
   })
   const ledger = await count(async () => { if (cursor) await runQuery('lane', { id: s.id, lane: main, ledger: cursor }, ctxOf(at.rows)) })
-  return { members: at.members, fresh, callLines, itemLines, slices: sliced, since, from, ledger, item, ledgerBytes }
+  // the worker gone idle (its sidecars saved) and forked again over the session, unchanged: a second fs object, so a fresh store and
+  // state, its background driven until it says no more work; beside it, what opening the projection alone reads (its sidecar and
+  // the break lines it names, by the breaks: 4.3 §4 旁索引)
+  saveIndexes()
+  const again = { ...own }, reopen = await count(async () => { while (await extendSession({ home, fs: again, writer: true, once: { index: { rows: at.rows, errors: [] } } }, s.id, Infinity)); })
+  const open = await count(async () => openProjection({ home, fs: { ...own }, key: s.id, write: false }).close())
+  return { members: at.members, fresh, callLines, itemLines, slices: sliced, since, from, ledger, item, ledgerBytes, reopen: reopen.bytes - reopen.fold - open.bytes }
 }
 
 const runs = {}
@@ -158,5 +165,12 @@ test('bytes `session --since` (a new call, a new member that is no call), `lane 
     // the ledger: what `lane --from` and `lane --ledger` read of the fold log (the call lines a replay goes over)
     over.push(...['from', 'ledger'].filter((x) => b[x].fold > a[x].fold + b.callLines).map((x) => `${x} (fold log)`))
     assert.deepEqual(over, [], `${k}: bytes read at ${a.members} / ${b.members} members: ${JSON.stringify({ a, b })}`)
+  }
+})
+
+test('a worker forked again over an unchanged session reads no more of its projection past opening it at 4N than at N: it does not refold it (3.5:42)', { timeout: 300_000 }, async () => {
+  for (const k of Object.keys(LEDGERS)) {
+    const { a, b } = await both(k)
+    assert.ok(b.reopen <= a.reopen, `${k}: projection bytes the reopened worker read past opening it, at ${a.members} / ${b.members} members: ${a.reopen} / ${b.reopen}`)
   }
 })
