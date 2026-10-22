@@ -73,12 +73,29 @@ test('a session answered with pending is answered again, once the worker\'s slic
   const A = bigSession({ home, id: 'cccc-0000-4a1b-9c2d-000000000003', growth: 4_000, subEvery: 3, compactAt: 40_000, subLanes: 3, late: 2 })
   A.append(160)
   const ctx = { home, fs, writer: true }, req = { name: 'session', params: { id: A.id }, indent: 0 }
-  const first = JSON.parse((await answer(req, ctx)).bytes)
+  // an answer with `pending` has no version part (4.4 §条件 GET #9): its tag is `-`; a whole one's is the version's digest
+  const TAG = /^[0-9a-f]{20}$/
+  const tagged = (got) => {
+    const doc = JSON.parse(got.bytes)
+    if (doc.pending) assert.equal(got.tag, '-', 'an answer with pending carries no tag')
+    else assert.match(got.tag, TAG)
+    return doc
+  }
+  const first = tagged(await answer(req, ctx))
   assert.ok(first.pending, 'the worker\'s 50 ms slice left members above the mark')
   while (await extendSession(ctx, A.id, Infinity));
   const done = await answer(req, ctx)
-  assert.equal(JSON.parse(done.bytes).pending, undefined)
+  assert.equal(tagged(done).pending, undefined)
   assert.ok(done.bytes.equals((await answer(req, { home, fs: { ...fs } })).bytes), 'the local path\'s bytes')
+  // a worker that starts again (its own fs: nothing warm shared) over a session that grew answers from the fold log at its frontier,
+  // the new members above it: the same version on every ask until a slice folds them, and still no tag while `pending` says so
+  A.append(20)
+  const again = { home, fs: { ...fs }, writer: true }
+  let pendings = 0
+  for (let i = 0; i < 3; i++) if (tagged(await answer(req, again)).pending) pendings++
+  assert.ok(pendings > 0, 'the new members were answered with pending')
+  while (await extendSession(again, A.id, Infinity));
+  assert.equal(tagged(await answer(req, again)).pending, undefined)
 })
 
 test('an unknown query name is still the caller\'s mistake', async () => {

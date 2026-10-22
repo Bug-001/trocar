@@ -138,11 +138,17 @@ test('4.4 #9 two-part: another session grows → 304; this one grows → 200 wit
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
   const A = bigSession({ home, id: 'aaaa-0000-4a1b-9c2d-000000000001', segment: '20261020T100000Z', growth: 500, subEvery: 0, seed: 3 })
   const B = bigSession({ home, id: 'bbbb-0000-4a1b-9c2d-000000000002', segment: '20261020T110000Z', growth: 500, subEvery: 0, seed: 5 })
-  A.append(4); B.append(4)
+  A.append(150); B.append(4) // A: more calls than one 50 ms slice folds, so its first answers carry `pending`
   const f = await serveFace({ home })
-  const ask = (inm) => request(f.port, `/api/session?id=${A.id}`, { headers: withToken(inm ? { 'if-none-match': inm } : {}) })
+  // an answer still folding (`pending`) has no version part, so no ETag (4.4 §条件 GET): every 200 is checked
+  let pendings = 0
+  const ask = async (inm) => {
+    const r = await request(f.port, `/api/session?id=${A.id}`, { headers: withToken(inm ? { 'if-none-match': inm } : {}) })
+    if (r.status === 200 && JSON.parse(r.body).pending) { pendings++; assert.equal(r.headers.etag, undefined, 'a pending answer carries no ETag') }
+    return r
+  }
   const parts = (etag) => /^"([0-9a-f]+):([^":]+)"$/.exec(etag || '')?.slice(1)
-  // an answer still folding (`pending`) carries no tag: ask until the worker has it whole
+  // ask until the worker has it whole
   const tagged = async (inm) => {
     for (;;) { const r = await ask(inm); assert.equal(r.status, 200); if (r.headers.etag) return r; await new Promise((d) => setTimeout(d, 50)) }
   }
@@ -168,5 +174,6 @@ test('4.4 #9 two-part: another session grows → 304; this one grows → 200 wit
     A.append(2)
     const grown = await within(tagged(other.headers.etag), 30_000, 'the grown session, tagged')
     assert.notEqual(parts(grown.headers.etag)[1], version, 'this session grew: a new version part')
+    assert.ok(pendings > 0, 'a fold that outlasts one slice was answered with pending at least once')
   } finally { f.close() }
 })
