@@ -4,11 +4,12 @@
 // the server's `note` and every raw value ride in 技术细节. The input is listed block by block and opens to verbatim bytes
 // (AC-1); the reply is the PARSED one and is marked as such — 逐字 is only ever written for a proven block.
 // `el` is #detail (shared with the other screens); the desk wires and clears it while mounted.
-import { esc, kf, clip } from '../core/fmt.mjs'
+import { esc, kf } from '../core/fmt.mjs'
 import { techDetailsHtml } from '../core/ui.mjs'
 import { nearestByTs } from './lanes.mjs'
 import { when } from './analysis.mjs'
 import { faithOf, FF, ffBadgeHtml, fillBody, tagWord } from './blocks.mjs'
+import { cellOf, cellBodyHtml, modeOf, wireCells } from './cell.mjs'
 import { replyMarkHtml } from './rawpanel.mjs' // the reply's ONE fidelity mark: the same resolve rule as the raw panel (2.3)
 import { costCellHtml } from './stepbar.mjs' // the cost cell's one home (2.2); the drawer's own words stay here
 import { clearRange } from './rails.mjs'
@@ -25,17 +26,16 @@ export function costRowHtml(c, table, tableErr) {
   return `<div class="din" style="color:var(--dim)">${esc(model)} · output ${kf(c.usage.out)} tokens · ≈ ${costCellHtml(model, c.usage, table, tableErr)}</div>`
 }
 
-// the reply: parsed by the server, folded when long — marked by the SAME resolve rule as the raw panel (2.2/2.3/2.6 §A:
-// resolvable respRefs[].ref → no mark; partially stored → 「◐ 回复没采全」; else 「◐ 解析后的回复」; 逐字 is never written
+// the reply: parsed by the server, drawn as a cell like every other body — marked by the SAME resolve rule as the raw panel
+// (2.2/2.3/2.6 §A: resolvable respRefs[].ref → no mark; partially stored → 「◐ 回复没采全」; else 「◐ 解析后的回复」; 逐字 is never written
 // for it). A monitor's verdict text is shown as-is, with no mark of its own beyond that.
 function outputHtml(c) {
   if (c.error || (c.status != null && c.status !== 200)) return `<div class="din">${esc(W.FAILED_NO_REPLY)}${c.errMsg ? techDetailsHtml([['reason', String(c.errMsg)]], { id: 'dfail' }) : ''}</div>`
   if (c.paged_out) return `<div class="din">${esc(W.REPLY_WORD)}: <span class="pobadge">${esc(W.PAGED_TITLE)}</span></div>`
   const out = (c.norm && c.norm.text) || ''
   if (!out) return `<div class="din">${esc(W.REPLY_WORD)}: <b>(none)</b></div>`
-  const long = out.length > 160 || out.includes('\n')
-  return `<div class="din">${esc(W.REPLY_WORD)} ${replyMarkHtml(c)}</div>` +
-    (long ? `<pre class="dpre">${esc(clip(out, 4000))}</pre>${out.length > 4000 ? `<div class="cbsrc warn">${esc(W.clipShownNote(4000, out.length))}</div>` : ''}` : `<div class="din"><b>${esc(out)}</b></div>`)
+  const cell = cellOf({ inline: out, r: { as: 'text' } }) // the parsed text itself; replyMarkHtml says it is parsed
+  return `<div class="din">${esc(W.REPLY_WORD)} ${replyMarkHtml(c)}</div>` + cellBodyHtml(cell, modeOf(cell.bid))
 }
 
 // a block's size with its unit: chars when the server baked them, else bytes (a byte count labelled 字符 would be a wrong
@@ -118,5 +118,6 @@ export function wireDetail(el, s) {
     if (row.classList.contains('open') && b && body && !body.dataset.filled) fillBody(s.ctx.api, body, b)
   }
   el.addEventListener('click', onClick)
-  return () => el.removeEventListener('click', onClick)
+  const cells = wireCells([s.root, el].filter(Boolean), s) // every body in the desk and the drawer is a cell
+  return () => { el.removeEventListener('click', onClick); cells() }
 }

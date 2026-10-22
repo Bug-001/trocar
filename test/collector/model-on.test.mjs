@@ -179,3 +179,74 @@ test('D55① · model: after install → on → off, every phase-install item is
     assert.deepEqual([again.exit, again.refused, again.on.sort()], [0, [], [...first.on].sort()], JSON.stringify(again.refused))
   } finally { await d.close() }
 })
+
+// A7 · 4.11 P12: `on` writes the history fields over a real run — the first on starts the history (`since`); an on that moves some door groups of h
+// marks them (`door_since`) and keeps the windows, so a process from an earlier window is still a holder; one that moves every group restarts the
+// history there, and a process from before is not a holder. Generic over the harness's groups: the test reads them from the run, never names one.
+test('A7 · door moves per group: some moved → windows kept + door_since; all moved → windows gone, since = that on_at', async () => {
+  const { holdersOf } = await import('../../src/off/holders.mjs')
+  const w = await modelWorld({ commands: ['claude'] }) // the CLI and the desktop app: a harness with two door groups
+  fs.mkdirSync(path.join(w.home, 'Applications', 'Claude.app'), { recursive: true })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const d = await daemon(w)
+  const T0 = Date.now() + 60_000, at = (k) => new Date(T0 + k * 60_000)
+  const L = () => readManifest(w.dir).liveness
+  const ingress = () => JSON.parse(fs.readFileSync(path.join(w.dir, 'ingress.json'), 'utf8')).groupPorts
+  const off = (k) => undoHarnesses({ dir: w.dir, home: w.home, manifest: readManifest(w.dir), ids: null, procs: async () => [], now: at(k) })
+  try {
+    const first = await on(w, { now: () => at(0) })
+    assert.equal(first.exit, 0, JSON.stringify(first.problems))
+    const groupsOf = (h) => [...new Set(first.planned.filter((x) => x.harness === h).map((x) => `${h}:${x.route}`))]
+    const h = first.on.find((x) => groupsOf(x).length >= 2)
+    assert.ok(h, 'some harness here has two door groups')
+    assert.equal(L()[h].since, at(0).toISOString(), 'the first on starts the history')
+    await off(1)
+    await on(w, { now: () => at(2) }); await off(3)
+    assert.deepEqual([L()[h].windows.length, L()[h].since, L()[h].door_since], [1, at(0).toISOString(), undefined], 'nothing moved: the window kept, no door_since')
+    const [g] = groupsOf(h), taken = ingress()[g]
+    await on(w, { now: () => at(4), isFree: async (p) => p !== taken }); await off(5)
+    const some = L()[h]
+    assert.deepEqual([some.windows.length, some.since, some.door_since], [2, at(0).toISOString(), { [g]: at(4).toISOString() }])
+    // a process of h by its own identity (D51), from the first window: the candidates are its CLI and its app, kept when h's record names them
+    const { harnessesOf } = await import('../../src/off/signature.mjs')
+    const p = [path.join(w.home, '.local', 'bin', 'claude'), '/Applications/Claude.app/Contents/MacOS/Claude']
+      .map((exe) => ({ pid: 77, ppid: 1, uid: 501, startedAt: T0 + 30_000, exe, argv: [exe], env: () => null, envRead: false }))
+      .find((x) => harnessesOf({ [h]: L()[h] }, x).includes(h))
+    assert.ok(p, `a process of ${h}`)
+    const mine = holdersOf({ manifest: readManifest(w.dir), procs: [p], doorSeen: [{ harness: h, group: g, pid: 77, start: p.startedAt, kind: 'accept', at: at(0.6).toISOString(), n: 1 }] })
+    assert.deepEqual(mine.filter((x) => x.harness === h).map((x) => x.why), ['started-in-window'], 'from the first window: a holder (the old door row is no evidence now)')
+    assert.deepEqual(holdersOf({ manifest: readManifest(w.dir), procs: [p] }).filter((x) => x.harness === h).map((x) => x.why), ['started-in-window'], 'and without any row')
+    const ports = ingress()
+    await on(w, { now: () => at(6), isFree: async (q) => !groupsOf(h).some((x) => ports[x] === q) }); await off(7)
+    const all = L()[h]
+    assert.deepEqual([all.windows, all.since, all.door_since], [undefined, at(6).toISOString(), undefined])
+    assert.deepEqual(holdersOf({ manifest: readManifest(w.dir), procs: [p] }).filter((x) => x.harness === h), [], 'from before every group moved: not a holder')
+  } finally { await d.close() }
+})
+
+// 4.11 P12: `windows` keeps at most WINDOWS_MAX; the on that trims the earliest one deletes `since`, so a process started in the trimmed window (after
+// the carrier) is judged in the safe direction (history-unknown), never as one from a known gap
+test('P12 · an on over a full windows list trims the earliest and deletes since; a process from the trimmed window is a history-unknown holder', async () => {
+  const { holdersOf, WINDOWS_MAX } = await import('../../src/off/holders.mjs')
+  const { saveManifest } = await import('../../src/off/manifest.mjs')
+  const { harnessesOf } = await import('../../src/off/signature.mjs')
+  const w = await modelWorld({ commands: ['codex'] })
+  assert.equal((await w.install()).exit, 0)
+  const d = await daemon(w)
+  try {
+    const T0 = Date.now() + 60_000, at = (k) => new Date(T0 + k * 60_000)
+    assert.equal((await on(w, { now: () => at(0) })).exit, 0)
+    const m = readManifest(w.dir), h = Object.keys(m.liveness).find((x) => m.liveness[x] && m.liveness[x].on_at)
+    m.liveness[h] = { ...m.liveness[h], windows: Array.from({ length: WINDOWS_MAX }, (_, k) => ({ on_at: at(2 * k).toISOString(), off_at: at(2 * k + 1).toISOString() })), on_at: at(2 * WINDOWS_MAX).toISOString(), off_at: at(2 * WINDOWS_MAX + 1).toISOString() }
+    saveManifest(w.dir, m)
+    assert.equal((await on(w, { now: () => at(2 * WINDOWS_MAX + 2) })).exit, 0)
+    const l = readManifest(w.dir).liveness[h]
+    assert.deepEqual([l.windows.length, l.windows[0].on_at, 'since' in l], [WINDOWS_MAX, at(2).toISOString(), false])
+    await undoHarnesses({ dir: w.dir, home: w.home, manifest: readManifest(w.dir), ids: null, procs: async () => [], now: at(2 * WINDOWS_MAX + 3) })
+    const p = [path.join(w.home, '.local', 'bin', h), path.join(w.home, 'bin', 'codex'), '/usr/local/bin/codex']
+      .map((exe) => ({ pid: 88, ppid: 1, uid: 501, startedAt: T0 + 30_000, exe, argv: [exe], env: () => null, envRead: false }))
+      .find((x) => harnessesOf({ [h]: l }, x).includes(h))
+    assert.ok(p, `a process of ${h}`)
+    assert.deepEqual(holdersOf({ manifest: readManifest(w.dir), procs: [p] }).filter((x) => x.harness === h).map((x) => x.why), ['history-unknown'])
+  } finally { await d.close() }
+})

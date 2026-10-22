@@ -104,7 +104,7 @@ for (const wire of ['http', 'chat', 'threads', 'ws']) for (const subLanes of [1,
 // The blocks axis (3.5 §内存有界, SPINE_PER_BLOCK): the same calls with fresh tool definitions on every call or none (unique texts
 // either way): what the read still holds grows by at most SPINE_PER_BLOCK a distinct block (the projection's `d` lines).
 test('what a session read keeps grows by at most SPINE_PER_BLOCK a distinct block', { timeout: 120_000 }, () => {
-  const few = read({ tools: 0 }, 40), many = read({ tools: 1_500 }, 40)
+  const few = read({ freshTools: 0 }, 40), many = read({ freshTools: 1_500 }, 40)
   const per = (many.retained - few.retained) / (many.blocks - few.blocks)
   assert.ok(per <= SPINE_PER_BLOCK, `${Math.round(per)} B retained a distinct block (${few.blocks} → ${many.blocks} blocks, ${few.retained} → ${many.retained} B), SPINE_PER_BLOCK ${SPINE_PER_BLOCK}`)
 })

@@ -42,6 +42,9 @@
   --ct-tooluse:   #7E7520;
   --ct-result:    #788389;
   --ct-hatch:     #788389;   /* image / other / not loaded: texture, not a hue */
+  /* block cells: diff and error tints under ink, diff hunk heads and JSON-tree text (RFC 2.3 §两种模式) */
+  --diff-add-bg: #DCEDE1; --diff-del-bg: #F5E1DE; --diff-hunk: #3D5A80; --err-bg: #FAE6E3;
+  --j-key: #5B4294; --j-str: #1F6845; --j-num: #8A4600; --j-lit: #8B3A6E;
   /* type */
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", system-ui, sans-serif;
   --mono: "SF Mono", ui-monospace, Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", monospace;
@@ -79,6 +82,8 @@
     --trace: #A3B0B3; --cursor: #E0E7E7; --cursor-ink: #0F1415;
     --ct-tools: #8F9BAA; --ct-system: #A88EE8; --ct-user: #6EA4EE; --ct-assistant: #4FBFB0;
     --ct-thinking: #DD82BE; --ct-tooluse: #C9BF5C; --ct-result: #6E7A80; --ct-hatch: #6E7A80;
+    --diff-add-bg: #1E3328; --diff-del-bg: #3A2624; --diff-hunk: #93B4DC; --err-bg: #3B2321;
+    --j-key: #B9A2F0; --j-str: #7FCFA4; --j-num: #E8B36A; --j-lit: #E397C9;
     --shadow-float: 0 10px 28px rgb(0 0 0 / .55), 0 0 0 1px rgb(255 255 255 / .04);
     --shadow: rgb(0 0 0 / .5); --shadow-lg: rgb(0 0 0 / .6);
   }
@@ -93,6 +98,8 @@
   --trace: #45555B; --cursor: #132026; --cursor-ink: #EEF1F0;
   --ct-tools: #5A6C88; --ct-system: #7F5DBE; --ct-user: #336CBA; --ct-assistant: #23807A;
   --ct-thinking: #A84785; --ct-tooluse: #7E7520; --ct-result: #788389; --ct-hatch: #788389;
+  --diff-add-bg: #DCEDE1; --diff-del-bg: #F5E1DE; --diff-hunk: #3D5A80; --err-bg: #FAE6E3;
+  --j-key: #5B4294; --j-str: #1F6845; --j-num: #8A4600; --j-lit: #8B3A6E;
   --shadow-float: 0 8px 24px rgb(19 32 38 / .16), 0 1px 2px rgb(19 32 38 / .08);
   --shadow: rgb(19 32 38 / .28); --shadow-lg: rgb(19 32 38 / .38);
 }
@@ -106,6 +113,8 @@
   --trace: #A3B0B3; --cursor: #E0E7E7; --cursor-ink: #0F1415;
   --ct-tools: #8F9BAA; --ct-system: #A88EE8; --ct-user: #6EA4EE; --ct-assistant: #4FBFB0;
   --ct-thinking: #DD82BE; --ct-tooluse: #C9BF5C; --ct-result: #6E7A80; --ct-hatch: #6E7A80;
+  --diff-add-bg: #1E3328; --diff-del-bg: #3A2624; --diff-hunk: #93B4DC; --err-bg: #3B2321;
+  --j-key: #B9A2F0; --j-str: #7FCFA4; --j-num: #E8B36A; --j-lit: #E397C9;
   --shadow-float: 0 10px 28px rgb(0 0 0 / .55), 0 0 0 1px rgb(255 255 255 / .04);
   --shadow: rgb(0 0 0 / .5); --shadow-lg: rgb(0 0 0 / .6);
 }

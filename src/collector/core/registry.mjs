@@ -48,7 +48,8 @@ export function validateDescriptor(d) {
 
 /** What `off` needs to judge, from the install manifest alone, which live process may hold what trocar wrote for this harness (4.6 撤销顺序
  *  第 2 / 5 步; manifest `liveness.<harness>`): `identity`, the harness's name list compiled — its presets with the user's `agentList` additions for it
- *  merged in (its `ignore` items not applied) (the same on every OS, D51) — as JSON; whether the harness re-reads its entry while running; and until when a running one still trusts
+ *  merged in (its `ignore` items not applied) (the same on every OS, D51) — as JSON; whether a running process re-reads a route of this OS (`rereads`,
+ *  the door-holder datum) and whether it re-reads its trust entry (`trust_rereads`, read by uninstall's steps 2 / 3 / 5 only); and until when a running one still trusts
  *  trocar after `off` — the data form of `trust.afterUninstall` ('restart' when it declares none, and when it is a function of the process, which a
  *  manifest cannot hold: Hermes). With `trust.untilEnviron` (Kimi), only a process whose environment names that variable at a file of trocar's is
  *  reported at all. */
@@ -63,7 +64,8 @@ export function livenessOf(d, { agentList = [], os = null } = {}) {
     // `ignore` items are not applied: they stop capture, not trust — the entry is per harness, so an ignored name still loads its bundle and must
     // stay a holder for `off` (D50; off's withAgentList adds only the additions too)
     identity: serializeSignature(compileAll(new Map([[d.name, d]]), (agentList || []).filter((e) => !e.ignore)).get(d.name)),
-    rereads: !!t.rereadsEntry || routes.some((r) => r.rereads === true),
+    rereads: routes.some((r) => r.rereads === true), // no os (Linux) or no routes: none
+    trust_rereads: !!t.rereadsEntry,
     ...(routes.length && routes.every((r) => r.perRequest === true) ? { per_request: true } : {}),
     until: typeof t.afterUninstall === 'string' ? t.afterUninstall : 'restart',
     ...(typeof t.untilEnviron === 'string' ? { until_environ: t.untilEnviron } : {}),

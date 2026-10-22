@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { boardHome, serveBoard } from '../real-face.mjs'
+import { CONTROL_TOKEN_HEADER } from '../../../src/off/token-header.mjs'
 
 const SHOTS = fileURLToPath(new URL('./shots/', import.meta.url))
 const CHANNEL = { channel: 'chrome' }
@@ -23,10 +24,20 @@ export async function probe({ importer = () => import('playwright-core'), env = 
 /** The board on a fresh temp HOME in a fresh Chrome. `token`: true = the face's token, a string = that token, false = no fragment.
  *  `missing` lists every static file answered ≥ 400 (`<status> <path>`).
  *  `setup(page)` runs before the first navigation (routes a case must hold from the first request on).
+ *  `home`: a prebuilt {userHome, home} served instead of boardHome({bytes}). `base`: an external board's URL carrying `#t=<token>` — no
+ *  face is started (`face` is null) and `get` reads that board with the token header.
  *  `requests` logs every /api and /control response as {url, method, body (the request's post data, or null), status, start (ms epoch the request began), t (ms epoch it answered)}; `errors` collects pageerrors; `get(name, params)` reads the face directly (no page, no request log). Always `await stop()`. */
-export async function withBoard({ bytes, token = true, width = 1280, height = 900, theme = 'light', chromium, setup } = {}) {
+export async function withBoard({ bytes, home, base, token = true, width = 1280, height = 900, theme = 'light', chromium, setup } = {}) {
   chromium ||= (await import('playwright-core')).chromium
-  const face = await serveBoard(boardHome({ bytes }))
+  const face = base ? null : await serveBoard(home || boardHome({ bytes }))
+  const ext = base && new URL(base), extToken = ext && new URLSearchParams(ext.hash.slice(1)).get('t')
+  const get = face ? face.get : async (name, params = {}) => {
+    const r = await fetch(new URL(`/api/${name}?${new URLSearchParams(params)}`, ext.origin), { headers: { [CONTROL_TOKEN_HEADER]: extToken } })
+    const body = await r.text()
+    let doc = null
+    try { doc = JSON.parse(body) } catch { /* not JSON: doc stays null */ }
+    return { status: r.status, doc }
+  }
   const requests = []
   const errors = []
   const missing = []
@@ -34,7 +45,7 @@ export async function withBoard({ bytes, token = true, width = 1280, height = 90
   const stop = async () => {
     try { await page?.close() } finally {
       try { await context?.close() } finally {
-        try { await browser?.close() } finally { await face.close() }
+        try { await browser?.close() } finally { await face?.close() }
       }
     }
   }
@@ -49,10 +60,10 @@ export async function withBoard({ bytes, token = true, width = 1280, height = 90
       if (/^\/(api|control)\//.test(u.pathname)) requests.push({ url: u.pathname + u.search, method: r.request().method(), body: r.request().postData(), status: r.status(), start: r.request().timing().startTime, t: Date.now() })
     })
     await setup?.(page)
-    const t = token === true ? face.token : token
-    await page.goto(`${face.base}/${t ? `#t=${encodeURIComponent(t)}` : ''}`, { waitUntil: 'load' })
+    const t = token === true ? face?.token : token
+    await page.goto(face ? `${face.base}/${t ? `#t=${encodeURIComponent(t)}` : ''}` : base, { waitUntil: 'load' })
   } catch (e) { await stop(); throw e }
-  return { url: face.base, get: face.get, page, stop, requests, errors, missing }
+  return { url: face ? face.base : ext.origin, get, face, page, stop, requests, errors, missing }
 }
 
 export const mark = (page, name) => page.evaluate((n) => { performance.mark(n) }, name)

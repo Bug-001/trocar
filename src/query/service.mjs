@@ -142,6 +142,9 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     const c = spawn(home)
     child = c
     c.stdout.on('data', (b) => { if (child === c) onData(b) })
+    // A worker the OS killed (SIGKILL, a heap OOM) breaks the pipe under the next write: EPIPE arrives here, and unheard it would be
+    // an uncaught exception that takes this process down. The 'close' that follows fails the query with the exit's reason.
+    c.stdin.on('error', () => {})
     c.stderr.on('data', (b) => { // the reason a crash gives, for the D38 record: its head (bounded) and its tail
       const t = String(b)
       if (errHead.length < STDERR_HEAD) errHead += t.slice(0, STDERR_HEAD - errHead.length)

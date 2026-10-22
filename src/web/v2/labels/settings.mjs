@@ -8,7 +8,8 @@ export const CARD_DISK = 'Disk', CARD_PRICE = 'Unit prices', CARD_UNPRICED = 'Mo
 // 磁盘卡
 export const DISK_TOTAL = 'Used by trocar', DISK_PER_DAY = 'Estimated growth per day', AS_OF = 'as of',
   CAPTURE_PAGE_LINE = 'Each agent\'s switch and the local network environment are on the capture page', CAPTURE_PAGE_HREF = '#/capture',
-  BAD_FILES = (n) => `${n} capture file problem${n === 1 ? '' : 's'} when read`, BAD_FILES_SHOW = 'Show which', READ_FAIL = 'Could not read this page'
+  BAD_FILES = (n) => `${n} capture file problem${n === 1 ? '' : 's'} when read`, BAD_FILES_SHOW = 'Show which', THIS_PAGE = 'This page',
+  FILES_CHECK = 'The capture file check'
 
 // 磁盘上的文件(技术细节)
 export const FILES_SEAL_RATIO = 'Sealed compression ratio', ESTIMATE = 'estimate', FILES_SEAL_NONE = 'No readable sealed files',
@@ -56,7 +57,7 @@ export const PRICE_NOTE = 'Estimated cost = usage × the unit prices here; a loc
   PRICE_READ_ONLY = 'Read-only on the board; to change a price, edit the price table',
   PRICE_FROM = (p) => `From ${p}`, PRICE_DEFAULT = 'Using trocar\'s built-in default unit prices',
   COL_KEY = 'Model name contains', COL_IN = 'input', COL_OUT = 'output', COL_WRITE = 'cache write', COL_READ = 'cache read',
-  PRICE_READ_FAIL = 'Could not read the price table', PRICE_BAD_SHAPE = 'The price table has the wrong shape',
+  PRICE_TABLE = 'The price table', PRICE_BAD_SHAPE = 'The price table has the wrong shape',
   UNPRICED_AS_OF = 'as of', UNPRICED_SESSIONS = (n) => `used in at least ${n} sessions`,
   UNPRICED_NONE = 'Every model in use has a unit price', UNPRICED_NO_MODEL = 'no model name',
   COPY_TEMPLATE = 'Copy template',

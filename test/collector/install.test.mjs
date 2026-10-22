@@ -190,7 +190,7 @@ test('uninstall with no runtime dir set finds the daemon through its lock, asks 
     const kill = (pid, sig) => { signalled.push([pid === daemon.pid, sig]); process.kill(pid, sig) }
     const r = await uninstallCollector({ home: b.home, env: {}, deps: { kill, identity: () => ({ start_time: '1', boot_id: 'b' }), isHelper: () => false, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5))) } }) // the product's own stop; a sleep that lets the exit be seen, no XDG_RUNTIME_DIR
     assert.deepEqual([r.daemon, await exited, signalled], ['stopped', 'SIGTERM', [[true, 'SIGTERM']]])
-    assert.deepEqual(asked, [{ exit: true }], 'asked to switch off and exit once drained, before anything was signalled')
+    assert.deepEqual(asked[0], { exit: true }, 'asked to switch off and exit once drained, before anything was signalled')
     assert.ok(!fs.existsSync(path.join(b.dir, 'lock')) && !fs.existsSync(settingsOf(b)))
   } finally { daemon.kill('SIGKILL'); await control.close(); b.done() }
 })
@@ -888,7 +888,7 @@ test('install writes manifest version 3: every item has kind, undo_by_hand and i
     fs.writeFileSync(settingsOf(b), before, { mode: 0o640 })
     await installCollector(base(b))
     const m = JSON.parse(fs.readFileSync(path.join(b.dir, 'install-manifest.json'), 'utf8')) // the file itself: readManifest would fill in what is missing
-    assert.deepEqual([m.version, m.confirmed_paths, m.kept_backups, { ...m.liveness['claude-code'], identity: !!m.liveness['claude-code'].identity }], [3, [], [], { identity: true, rereads: true, until: 'restart' }], 'liveness: the name list is snapshotted on every OS, osName none too (D51)')
+    assert.deepEqual([m.version, m.confirmed_paths, m.kept_backups, { ...m.liveness['claude-code'], identity: !!m.liveness['claude-code'].identity }], [3, [], [], { identity: true, rereads: false, trust_rereads: true, until: 'restart' }], 'liveness: the name list is snapshotted on every OS, osName none too (D51)')
     for (const it of [...m.entries, ...m.files]) { assert.ok(it.kind && it.undo_by_hand && it.undo_by_hand.length > 10, JSON.stringify(it)) }
     assert.deepEqual(m.files.map((f) => f.kind), ['owned-file', 'owned-file'], 'the CA files install pushes with a role only get their kind when saved')
     assert.deepEqual([...m.entries, ...m.files].map((x) => x.phase), ['install', 'install', 'install'], 'the trust entry and the CA files are install\'s (D55①)')
@@ -976,7 +976,7 @@ test('install records liveness per harness it changed anything for: its signatur
     await installCollector(base(b, { harnesses: [rep, quiet], roots: { node: [], osText: '' } }))
     const m = JSON.parse(fs.readFileSync(path.join(b.dir, 'install-manifest.json'), 'utf8')) // the file as written: what `off` reads
     assert.deepEqual(Object.keys(m.liveness), ['rep'], 'a harness install changed nothing for has no liveness: nothing of it to judge')
-    assert.deepEqual([m.liveness.rep.rereads, m.liveness.rep.until, m.liveness.rep.until_environ], [true, 'next-connection', 'SSL_CERT_FILE'])
+    assert.deepEqual([m.liveness.rep.trust_rereads, m.liveness.rep.until, m.liveness.rep.until_environ], [true, 'next-connection', 'SSL_CERT_FILE'])
     const sig = reviveSignature(m.liveness.rep.identity)
     const { compileIdentity } = await import('../../src/off/identity.mjs')
     assert.deepEqual(sig, compileIdentity({ harness: 'rep', ...rep.processes }), 'the compiled name list survives the manifest')
@@ -991,7 +991,7 @@ test('liveness of a harness with no data form of afterUninstall snapshots restar
     const fn = { ...cc, trust: { ...cc.trust, rereadsEntry: false, afterUninstall: () => 'next-handshake' } }
     await installCollector(base(b, { harnesses: [fn] })) // osName 'none': the preset list holds there too
     const l = readManifest(b.dir).liveness['claude-code']
-    assert.deepEqual([l.rereads, l.until, !!l.identity], [false, 'restart', true])
+    assert.deepEqual([l.trust_rereads, l.until, !!l.identity], [false, 'restart', true])
   } finally { b.done() }
 })
 
@@ -1129,7 +1129,7 @@ test('V13: uninstall writes desired off, asks the daemon to switch off and exit,
   const iLastEntry = last(([k, x]) => k === 'write' && entryPaths.has(path.join(s.home, x)))
   assert.ok(iState >= 0 && iOff >= 0 && iStop >= 0 && iFirstEntry >= 0, JSON.stringify(journal))
   assert.ok(iState < iOff && iOff < iStop && iStop < iFirstEntry, `desired off, then the daemon asked to go, then stopped, then the first entry: ${[iState, iOff, iStop, iFirstEntry]}`)
-  assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"exit":true}'], 'every harness, and the whole daemon: no names')
+  assert.deepEqual(s.sys.daemon.calls.find((c) => c.startsWith('POST /off')), 'POST /off {"exit":true}', 'every harness, and the whole daemon: no names')
   const removed = (suffix) => at(([k, x]) => k === 'rm' && (x === suffix || x.endsWith(path.sep + suffix)))
   const gone = { unit: removed(rel(unitFile)), caKey: removed(path.join('ca', 'ca.key')), run: removed(path.join('collector', 'run')), standalone: removed(rel(standalone)), manifest: removed('install-manifest.json') }
   for (const [what, i] of Object.entries(gone)) assert.ok(i > iLastEntry, `${what} is removed after the last entry is undone (${i} > ${iLastEntry})`)

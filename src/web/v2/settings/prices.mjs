@@ -7,7 +7,7 @@ import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
 import { esc } from '../core/fmt.mjs'
 import { priceMatch } from '../core/metrics.mjs'
-import { techDetailsHtml } from '../core/ui.mjs'
+import { techDetailsHtml, readFailure } from '../core/ui.mjs'
 import * as W from '../labels/settings.mjs'
 
 // priceRows(pricingDoc) → [{id, input, output, write, read}]: `pricing.models[]` in the server's own order; null when there is
@@ -70,6 +70,8 @@ export function mount(el, ctx) {
     if (p.ok) { readAt = api.now(); paintHead() }
   }
 
+  const failHtml = (f, href) => `<p class="err">${esc(f.line)} · <a href="${href}">${W.RETRY}</a></p>${f.tech}`
+
   function paint({ pricing, overview }) {
     const rows = priceRows(pricing)
     const cards = []
@@ -78,7 +80,7 @@ export function mount(el, ctx) {
       `<p class="cap">${W.PRICE_NOTE}</p>` +
       `<p class="cap" data-note="read-only">${W.PRICE_READ_ONLY}</p>` +
       (pricing ? sourceHtml(pricing) : '') +
-      (error ? `<p class="err">${esc(W.PRICE_READ_FAIL)}: ${esc(error.error || ('HTTP ' + error.status))} · <a href="#/settings/prices">${W.RETRY}</a></p>`
+      (error ? failHtml(readFailure(W.PRICE_TABLE, error, { id: 'ptech-fail' }), '#/settings/prices')
         : rows ? priceTable(rows) : `<p class="err">${W.PRICE_BAD_SHAPE}</p>`) +
       techDetailsHtml([[W.COL_KEY, W.TECH_MATCH], [W.COL_WRITE, W.TECH_WRITE_ONE], ['price table', W.TECH_PRICING_PATH]], { id: 'ptech' }) +
       `</div>`)

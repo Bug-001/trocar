@@ -12,10 +12,11 @@ import { parseTextRef } from '../../src/raw/refs.mjs'
 import { blockBodyHtml } from '../../src/web/v2/replay/blocks.mjs'
 
 const entities = { '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#13;': '\r', '&amp;': '&' }
+// the Raw cell as a browser reads it: one leading newline after <pre> dropped, jsonlay's layout spans removed, references read back
 const shown = (html) => {
-  const m = /<pre class="cbpre">([\s\S]*?)<\/pre>/.exec(html)
-  assert.ok(m, 'a <pre class="cbpre"> body')
-  return (m[1].startsWith('\n') ? m[1].slice(1) : m[1]).replace(/&(lt|gt|quot|#39|#13|amp);/g, (e) => entities[e])
+  const m = /<pre class="cellraw">([\s\S]*?)<\/pre>/.exec(html)
+  assert.ok(m, 'a <pre class="cellraw"> body')
+  return (m[1].startsWith('\n') ? m[1].slice(1) : m[1]).replace(/<span class="lay" aria-hidden="true">[^<]*<\/span>/g, '').replace(/&(lt|gt|quot|#39|#13|amp);/g, (e) => entities[e])
 }
 
 test('1.4 #7 · AC-1: every request block of every session, every page, is the source record\'s bytes in /api/block and on screen', { timeout: 120_000 }, async () => {

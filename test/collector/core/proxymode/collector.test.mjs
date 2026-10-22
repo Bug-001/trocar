@@ -20,6 +20,9 @@ import { newManifest, saveManifest } from '../../../../src/off/manifest.mjs'
 import { checkRecord, CODES } from '../../../../src/health/codes.mjs'
 import { custodyStub } from '../../../helpers/custody-stub.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
+import { readDoorSeen, DOOR_SEEN_FILE } from '../../../../src/off/door-seen.mjs'
+import { compileIdentity } from '../../../../src/off/identity.mjs'
+import { serializeSignature } from '../../../../src/off/signature.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { ROOT, INSTALLED, descs, newWorld, ctxOf, worldOf, combos, makeRoot } from './verdict-world.mjs'
 import { CERT_VARS } from '../../../../src/collector/core/proxymode/upstream-trust.mjs'
@@ -36,10 +39,10 @@ const ready = { state: () => 'ready' }
 const manifestOf = (h, { on = [], liveness = {} } = {}) => ({ ...newManifest(), entries: [{ phase: 'install', harness: h, kind: 'json-key', path: '/x', installed_at: iso(INSTALLED) }, { phase: 'install', harness: null, kind: 'system-root', installed_at: iso(INSTALLED) }, ...on], liveness })
 
 /** One collector over one harness: `w` is what the injected readers answer now (facts, env, cwd, verdict ctx, manifest, process table). */
-async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null, others = [], forget, holds } = {}) {
+async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null, others = [], forget, holds, dir = tmpDir() } = {}) {
   const records = [], ctx = { os, home: '/h', dirs: {}, join: path.posix.join, readFile: (p) => w.ctx.readFile(p), readdir: (d) => w.ctx.readdir(d), exists: (p) => w.ctx.exists(p), policy: (s) => w.ctx.policy(s) }
   w.ctx ||= ctxOf(newWorld(os))
-  const c = createModelCollector({ harnesses: [desc, ...others], dir: '/nowhere', ctx, custody, rootPem, proxyOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, record: (r) => records.push(r),
+  const c = createModelCollector({ harnesses: [desc, ...others], dir, ctx, custody, rootPem, proxyOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, record: (r) => records.push(r),
     identify: (f) => (f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => ({ pid: w.pid, source: 'socket-table', ms: 1, ...(w.owner || {}) }), factsOf: async () => w.facts,
     proc: { envOf: async (_, names) => (w.envCalls = (w.envCalls || 0) + 1, w.env == null ? null : (w.asked && w.asked.push(...names), Object.fromEntries(Object.entries(w.env).filter(([k]) => names.includes(k))))), cwdOf: async () => w.cwd ?? null, parentOf: async () => null }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
     readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => { if (w.manifestErr) throw w.manifestErr; return w.manifest || manifestOf(desc.name) }, procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5, ...(forget ? { forget } : {}), ...(holds ? { holds } : {}) })
@@ -310,7 +313,7 @@ test('CM23 · an idle holder keeps the door forward-only; mayExit stays false un
   assert.equal(c.mayExit(), false)
   assert.equal((await c.holders()).count, 1)
   w.procs = []
-  for (let i = 0; i < 3 && Object.keys(c.doors()).length; i++) { await pending.shift()?.(); await new Promise((r) => setImmediate(r)) }
+  for (let i = 0; i < 8 && Object.keys(c.doors()).length; i++) { await pending.shift()?.(); await new Promise((r) => setImmediate(r)) }
   assert.deepEqual(c.doors(), {}, 'the holder left: the door closes')
   assert.ok(opened.some((x) => x.closed === g))
   assert.equal(c.mayExit(), true)
@@ -318,6 +321,7 @@ test('CM23 · an idle holder keeps the door forward-only; mayExit stays false un
 })
 
 // ---- CM6: the issuer over the custody -------------------------------------------------------------------------------------------------------------
+const acceptVerdicts = (dir) => readDoorSeen({ dir }).rows.filter((r) => r.kind === 'accept').map((r) => [r.group, r.pid, r.start, r.decrypt, r.reason ?? null])
 const rootForm = CASES.find(({ f, os }) => f.trust === 'root' && f.verified[os] === true && !f.hostTree && !(f.forwardOnlyHosts || []).length)
 for (const [what, custody, code] of [['custody unavailable', 'unavailable', 'cert-intermediate-unavailable'], ['the root key not in its custody', null, 'cert-key-missing']]) {
   test(`CM6 · ${what} → forward only, ${code}`, async () => {
@@ -325,13 +329,15 @@ for (const [what, custody, code] of [['custody unavailable', 'unavailable', 'cer
     let cus = custody
     if (cus === null) { cus = custodyStub(); cus.create(); cus.switches.keyLost = true }
     const g = `${d.name}:${f.route}`
-    const { c, records } = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, custody: cus, w: { pid: ++pid, facts: { agent: d.name, uid: 501, startedAt: INSTALLED + 1 }, env: {}, cwd: '/' } })
+    const dir = tmpDir()
+    const { c, records } = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, dir, custody: cus, w: { pid: ++pid, facts: { agent: d.name, uid: 501, startedAt: INSTALLED + 1 }, env: {}, cwd: '/' } })
     await c.on({ harnesses: [d.name], groups: { [g]: 18105 } })
     const meta = await c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })
     assert.equal(meta.decrypt, false)
     assert.ok(records.some((r) => r.code === code && r.pid === pid), JSON.stringify(records))
     assert.throws(() => c.issuer.secureContextFor('a.test'), /no intermediate/)
     c.close()
+    assert.deepEqual(acceptVerdicts(dir), [[g, pid, INSTALLED + 1, false, code]], 'the durable accept row carries the door\'s judgement (P12)')
   })
 }
 
@@ -364,7 +370,8 @@ test('CM6 · a forward-only verdict on the issuer\'s state is not kept: once the
   const g = `${d.name}:${f.route}`
   stub.switches.keyLost = true // the shared custody, whose root the rig installs: its key goes missing, then comes back
   try {
-    const { c, records } = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, timers, w: { pid: ++pid, facts: { agent: d.name, uid: 501, startedAt: INSTALLED + 1 }, env: {}, cwd: '/' } })
+    const dir = tmpDir()
+    const { c, records } = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, dir, timers, w: { pid: ++pid, facts: { agent: d.name, uid: 501, startedAt: INSTALLED + 1 }, env: {}, cwd: '/' } })
     await c.on({ harnesses: [d.name], groups: { [g]: 18106 } })
     const ask = async () => (await c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })).decrypt
     assert.equal(await ask(), false); assert.equal(await ask(), false)
@@ -374,6 +381,7 @@ test('CM6 · a forward-only verdict on the issuer\'s state is not kept: once the
     assert.equal(c.issuer.state(), 'ready')
     assert.equal(await ask(), true)
     c.close()
+    assert.deepEqual(acceptVerdicts(dir), [[g, pid, INSTALLED + 1, true, null]], 'the durable accept row holds the latest judgement, its forward reason gone (P12)')
   } finally { stub.switches.keyLost = false }
 })
 
@@ -415,7 +423,7 @@ test('CM23 · a second off answers GET /holders and mayExit from its own table, 
   w.now = T1 + 2; await connect()
   w.now = T1 + 10; live(T1, T1 + 10); assert.equal((await c.off({ harnesses: [d.name] })).holders, 1)
   table = [] // the first holder exits: the poll answers [] and stops, its door closes
-  for (let i = 0; i < 3 && Object.keys(c.doors()).length; i++) { await pending.shift()?.(); await new Promise((r) => setImmediate(r)) }
+  for (let i = 0; i < 8 && Object.keys(c.doors()).length; i++) { await pending.shift()?.(); await new Promise((r) => setImmediate(r)) }
   assert.deepEqual(c.doors(), {})
   // window 2: a new holder; the poll's own table read hangs (the real lsof's seconds), the off's first read answers
   table = [{ pid: 52, startedAt: T2 + 1 }]; w.pid = 52; w.facts = { agent: d.name, startedAt: T2 + 1 }
@@ -430,15 +438,99 @@ test('CM23 · a second off answers GET /holders and mayExit from its own table, 
   } finally { release(); c.close() }
 })
 
+// ---- A9 / A10: the door's durable record (P12 「门的持久记录」) ------------------------------------------------------------------------------------
+const doorRows = (dir) => readDoorSeen({ dir }).rows
+const fireAll = async (pending, rounds = 4) => { for (let i = 0; i < rounds; i++) { for (const fn of pending.splice(0)) await fn(); await new Promise((r) => setImmediate(r)) } }
+
+test('A9 (a) · a life the door accepted is a holder of a NEW collector over the same dir (a daemon restart, no new connection); without the accept it is not', async () => {
+  const d = descs[0], f = d.proxyMode.forms.find((x) => x.os.includes('darwin')), g = `${d.name}:${f.route}`
+  const T1 = INSTALLED + 100, P = 61, START = INSTALLED - 50, table = [{ pid: P, startedAt: START }]
+  for (const accept of [true, false]) {
+    const dir = tmpDir()
+    const { c: c1 } = await rig({ desc: d, dir, w: { pid: P, facts: { agent: d.name, startedAt: START }, env: {}, procs: table, now: T1, manifest: manifestOf(d.name, { liveness: { [d.name]: { on_at: iso(T1) } } }) } })
+    await c1.on({ harnesses: [d.name], groups: { [g]: 18110 } })
+    if (accept) { await c1.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } }) }
+    c1.close()
+    const { c: c2 } = await rig({ desc: d, dir, w: { procs: table, now: T1 + 20, manifest: manifestOf(d.name, { liveness: { [d.name]: { on_at: iso(T1), off_at: iso(T1 + 10) } } }) } })
+    const got = await c2.holders()
+    assert.deepEqual(got.holders.map((h) => [h.harness, h.pid]), accept ? [[d.name, P]] : [], accept ? 'the durable accept row names the holder' : 'no door row: not a holder')
+    c2.close()
+  }
+})
+
+test('A9 (b) · after a poll tick the door rows of a life that left the process table are gone; a live one stays', async () => {
+  const pending = []
+  const timers = { setTimeout: (fn) => { pending.push(fn); return pending.length }, clearTimeout: () => {} }
+  const d = descs[0], f = d.proxyMode.forms.find((x) => x.os.includes('darwin')), g = `${d.name}:${f.route}`
+  const T1 = INSTALLED + 100, dir = tmpDir()
+  const { c, w } = await rig({ desc: d, dir, timers, w: { pid: 71, facts: { agent: d.name, startedAt: T1 + 1 }, env: {}, procs: [{ pid: 71, startedAt: T1 + 1 }, { pid: 72, startedAt: T1 + 1 }], now: T1, manifest: manifestOf(d.name, { liveness: { [d.name]: { on_at: iso(T1) } } }) } })
+  await c.on({ harnesses: [d.name], groups: { [g]: 18111 } })
+  w.now = T1 + 2
+  for (const p of [71, 72]) { w.pid = p; await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } }) }
+  w.now = T1 + 10; w.manifest = manifestOf(d.name, { liveness: { [d.name]: { on_at: iso(T1), off_at: iso(T1 + 10) } } })
+  await c.off({ harnesses: [d.name] })
+  w.procs = [{ pid: 72, startedAt: T1 + 1 }]
+  await fireAll(pending)
+  c.close()
+  assert.deepEqual([...new Set(doorRows(dir).map((r) => r.pid))], [72])
+})
+
+test('A9 (d) · a collector with no door traffic writes no door record', async () => {
+  const d = descs[0], f = d.proxyMode.forms.find((x) => x.os.includes('darwin')), g = `${d.name}:${f.route}`, dir = tmpDir()
+  const { c } = await rig({ desc: d, dir, w: { procs: [{ pid: 5, startedAt: INSTALLED + 1 }] } })
+  await c.on({ harnesses: [d.name], groups: { [g]: 18112 } })
+  await c.off({ harnesses: [d.name] })
+  c.close()
+  assert.equal(fs.existsSync(path.join(dir, DOOR_SEEN_FILE)), false)
+})
+
+test('A9 (e) · a door record unreadable at start: said as door-record-unreadable; the record written back stays not known while a process of the harness from before lives, and is whole once none does', async () => {
+  const d = descs[0], dir = tmpDir(), T1 = INSTALLED + 100
+  fs.writeFileSync(path.join(dir, DOOR_SEEN_FILE), '{not json')
+  const identity = serializeSignature(compileIdentity({ harness: d.name, names: [{ name: 'agentq' }] }))
+  const p = (pid, startedAt) => ({ pid, ppid: 1, uid: 501, startedAt, exe: '/opt/agentq', argv: ['agentq'], env: () => null, envRead: false })
+  const manifest = manifestOf(d.name, { liveness: { [d.name]: { identity, rereads: false, since: iso(INSTALLED), on_at: iso(INSTALLED + 1), off_at: iso(INSTALLED + 2) } } })
+  const run = async (procs) => {
+    const { c, records } = await rig({ desc: d, dir, w: { procs, now: T1, manifest } })
+    const got = await c.holders()
+    c.close()
+    return { got, said: records.filter((r) => r.code === 'door-record-unreadable').length }
+  }
+  const before = await run([p(91, T1 - 50)])
+  assert.equal(before.said, 1)
+  assert.deepEqual(before.got.holders.map((h) => [h.pid, h.why]), [[91, 'history-unknown']])
+  assert.equal(readDoorSeen({ dir }).rows, null, 'a process from before the unreadable moment lives: still not known')
+  const after = await run([p(92, T1 + 500)])
+  assert.deepEqual(after.got.holders, [], 'none from before: the door evidence is known again')
+  assert.deepEqual(readDoorSeen({ dir }).rows, [], 'and the file says so')
+})
+
+test('A10 · PAC GETs are counted per life: two from one life are one kind:\'pac\' row with n = 2 at the latest time; a new life of the same pid gets its own row', async () => {
+  const dir = tmpDir(), S1 = INSTALLED + 1, S2 = INSTALLED + 500
+  const { c, w } = await rig({ desc: pacDesc, dir, w: { pid: 81, facts: { agent: pacDesc.name, uid: 501, startedAt: S1 }, now: INSTALLED + 10 } })
+  await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18113 } })
+  const get = () => c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })
+  await get(); w.now = INSTALLED + 20; await get()
+  w.facts = { ...w.facts, startedAt: S2 }; w.now = INSTALLED + 600; await get()
+  c.close()
+  const pac = doorRows(dir).filter((r) => r.kind === 'pac').map((r) => [r.group, r.pid, r.start, r.n, r.at]).sort((a, b) => a[2] - b[2])
+  assert.deepEqual(pac, [[pacG, 81, S1, 2, INSTALLED + 20], [pacG, 81, S2, 1, INSTALLED + 600]])
+})
+
 // ---- ① / G4: no writes; the recorded ports; a taken port ----------------------------------------------------------------------------------------
-test('4.11 ① · on / off / restore / lookup write nothing: a recording fs over the real state, ingress and manifest files sees zero writes', async () => {
+test('4.11 ① · on / off / restore / lookup write none of state, ingress or the manifest: a recording fs sees writes to the door record (P12) and nothing else', async () => {
   const dir = tmpDir()
   const d = descs[0], f = d.proxyMode.forms.find((x) => x.os.includes('darwin')), g = `${d.name}:${f.route}`
   await loadIngressConfig({ dir, groups: [g], isFree: async () => true })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), [d.name], 'on'))
   saveManifest(dir, manifestOf(d.name))
-  const writes = []
-  const rec = new Proxy(fs, { get: (t, k) => (typeof t[k] === 'function' && /write|rename|mkdir|unlink|rm|copy|chmod|append|truncate|symlink|utimes/i.test(String(k)) ? (...a) => { writes.push(k); return t[k](...a) } : t[k]) })
+  const writes = [], fds = new Map() // the path each write touches (an fd call: the path it was opened for writing)
+  const rec = new Proxy(fs, { get: (t, k) => {
+    const fn = t[k]
+    if (k === 'openSync') return (p, fl = 'r', ...r) => { const fd = fn.call(t, p, fl, ...r); if (fl !== 'r') { fds.set(fd, String(p)); writes.push(String(p)) } return fd }
+    if (typeof fn !== 'function' || !/write|rename|mkdir|unlink|rm|copy|chmod|append|truncate|symlink|utimes/i.test(String(k))) return fn
+    return (...a) => { writes.push(typeof a[0] === 'string' ? a[0] : fds.get(a[0]) ?? `fd ${a[0]}`); return fn.apply(t, a) }
+  } })
   const c = createModelCollector({ harnesses: [d], dir, fs: rec, ctx: { os: 'darwin', home: '/h', dirs: {}, readFile: () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, readdir: () => [] }, custody: 'unavailable', proxyOf,
     identify: () => ({ reason: 'match', agent: d.name }), ownerOf: async () => ({ pid: 9 }), factsOf: async () => ({ startedAt: INSTALLED + 1 }) })
   c.bindDoors({ open: async () => {}, close: async () => {} })
@@ -447,8 +539,10 @@ test('4.11 ① · on / off / restore / lookup write nothing: a recording fs over
   await c.on({ harnesses: [d.name], groups: { [g]: port } })
   await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
   await c.off({ harnesses: [d.name] })
-  assert.deepEqual(writes, [])
-  c.close()
+  c.close() // flushes the door record synchronously: what is asserted does not hang on the throttle timer
+  const isDoorRecord = (p) => p === dir || (path.dirname(p) === dir && path.basename(p).startsWith(DOOR_SEEN_FILE))
+  assert.deepEqual(writes.filter((p) => !isDoorRecord(p)), [], 'state.json, ingress.json and the manifest are not written')
+  assert.ok(writes.some((p) => p !== dir && isDoorRecord(p)), 'the lookup\'s accept row reached the door record')
 })
 
 test('① / G4 · restore reopens the desired harnesses on ingress.json\'s recorded ports; a taken port gives engine-port-taken and no door', async () => {

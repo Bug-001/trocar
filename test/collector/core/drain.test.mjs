@@ -150,6 +150,15 @@ test('gate: now destroys both sockets at once (cut) — an idle connection is cl
   assert.deepEqual([i.c.destroyed, i.c.ended], [0, 1])
 })
 
+test('gate: a tee that throws on the ask is fail-open (waiting); with now the connection is cut all the same — no gate failure outlives `now`', () => {
+  for (const now of [false, true]) {
+    const a = gateOf()
+    a.tee.boundary = () => { throw new Error('boom') }
+    assert.equal(a.g.start({ now }), now ? 'cut' : 'waiting')
+    assert.deepEqual([a.c.destroyed, a.u.destroyed, a.failures.map((f) => f.code)], [now ? 1 : 0, now ? 1 : 0, ['engine-error']])
+  }
+})
+
 test('gate: a throw inside it is fail-open — the held bytes go on unchanged, engine-error is recorded, the connection is not gated any more', () => {
   const { g, tee, failures } = gateOf()
   tee.markAdded = () => { throw new Error('boom') }

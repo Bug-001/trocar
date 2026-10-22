@@ -139,7 +139,7 @@ function serviceTechHtml(h, v) {
   if (d.since) rows.push(['since', fmtWhen(d.since)])
   if (d.error) rows.push(['state could not be read', String(d.error)])
   if (v.raw != null) rows.push(['state', M(String(v.raw))])
-  if (v.reason && v.state !== 'unreadable') rows.push(['reason', String(v.reason)])
+  if (v.reason) rows.push(['reason', String(v.reason)])
   // Linux only: the OS keeps the service after logout or not; a boolean is said in the row (false) or not at all (true)
   if (h && h.linger === 'unknown') rows.push(['after logout', `not known${h.linger_reason ? ` · ${h.linger_reason}` : ''}`])
   for (const p of list(h && h.holders)) if (p) rows.push(['holder', M(`${p.harness ?? '?'} · pid ${p.pid ?? '?'}${p.name ? ` · ${p.name}` : ''}`)])

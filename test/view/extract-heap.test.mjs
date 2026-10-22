@@ -99,7 +99,7 @@ test('one lane that never compacts peaks under half the heap', () => {
 })
 
 test(`calls that bring new tool definitions grow the peak by at most SLACK_PER_DEF for each`, () => {
-  const tools = 40, n = 500, shape = { wire: 'threads', growth: 2_000, subEvery: 0, compactAt: 200_000, tools }
+  const tools = 40, n = 500, shape = { wire: 'threads', growth: 2_000, subEvery: 0, compactAt: 200_000, freshTools: tools }
   const one = peakOf(n, shape), two = peakOf(2 * n, shape)
   assert.ok(two - one <= n * tools * SLACK_PER_DEF, `${n} calls peak at ${mb(one)}, ${2 * n} at ${mb(two)}: past ${SLACK_PER_DEF} bytes for each of ${n * tools} new definitions`)
 })
