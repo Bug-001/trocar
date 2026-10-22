@@ -44,7 +44,9 @@ global.gc(); global.gc()
 const retained = process.memoryUsage().heapUsed - before
 const blocks = defs(fs.readFileSync(projectionFile(home, id)))
 console.log(JSON.stringify({ calls, truncated, retained, blocks }))`
-const cold = (home, id) => JSON.parse(execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', ...heapFlags(), '--input-type=module', '-e', READ, home, id],
+// single-threaded: a concurrent compile job still in flight holds a closure and its context across the read's last GCs (+1.33 MB on
+// one read in about two at live(0.12)), a V8 artefact that is not what the read keeps
+const cold = (home, id) => JSON.parse(execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', '--single-threaded', ...heapFlags(), '--input-type=module', '-e', READ, home, id],
   { encoding: 'utf8', maxBuffer: 1 << 20 }))
 const read = (opts, calls) => {
   const home = path.join(tmpDir('trocar-spine-'), '.trocar'), s = bigSession({ home, ...opts })
@@ -58,28 +60,32 @@ const read = (opts, calls) => {
 
 // The call term: a session of the user's live session's shape (test/query/big-session.mjs live: a dozen subagent lanes side by side,
 // late calls, paths in tool results, written files, long first prompts with reminders, shared system prompts, clusters of MB-sized
-// records) read cold at N and at 2N calls, N past what fills the fixed caches: each read holds at most its calls × SPINE_PER_ROW and
-// its blocks × SPINE_PER_BLOCK beside K, and what 2N holds more than N is at most N × SPINE_PER_ROW beside what its new blocks
-// measure, BLOCK_COLUMNS each: crediting them SPINE_PER_BLOCK, their reservation, would leave ~8 blocks a call of slack and the
-// slope green until a call cost ~2.4 × SPINE_PER_ROW. The session is extracted between the reads as the worker extracts it in the
-// background, so each read is the cold open of a projected session (a worker that went idle and was forked again).
-// What a distinct block of this shape keeps (its store slot and block columns), measured 2026-10-22 as SPINE_PER_ROW was (heap
-// snapshot dominators, live(0.24) → live(0.48)).
-const BLOCK_COLUMNS = 147
-test('what a session read keeps grows by at most SPINE_PER_ROW a call', { timeout: 120_000 }, async () => {
+// records) read cold at 2N and at 4N calls: each read holds at most its calls × SPINE_PER_ROW and its blocks × SPINE_PER_BLOCK beside
+// K, and what 4N holds more than 2N is at most 2N × SPINE_PER_ROW beside what its new blocks measure, BLOCK_COLUMNS each. The fixed
+// caches are not full at N (from N to 2N the projection's shared-value cache grows ~1 MB and the reduction's list LRU ~0.5 MB, ~1 KB a
+// call); by 2N the LRU is full and what the shared-value cache still fills up to 4N (~300 B a call) stays inside the slope, and 2N → 4N
+// doubles every per-call and per-block table once, as a step of the session's growth does. The session is extracted between the reads
+// as the worker extracts it in the background, so each read is the cold open of a projected session (a worker that went idle and was
+// forked again).
+// What a distinct block of this shape keeps in the heap measured (heapUsed: the store's bid index and block columns, not their typed
+// arrays' backing stores), measured 2026-10-22 single-threaded at live(0.12) with 2 against 12 tools a call (15,003 → 29,993 blocks,
+// one table doubling, the same calls).
+const BLOCK_COLUMNS = 77
+test('what a session read keeps grows by at most SPINE_PER_ROW a call', { timeout: 240_000 }, async () => {
   const { calls: N, ...opts } = live(0.12)
   const home = path.join(tmpDir('trocar-spine-'), '.trocar'), s = bigSession({ home, ...opts })
-  const grown = async () => { s.append(N); while (await extendSession({ home, writer: true }, s.id, Infinity)); return cold(home, s.id) }
+  const grow = async () => { s.append(N); while (await extendSession({ home, writer: true }, s.id, Infinity)); }
+  const grown = async () => { await grow(); await grow(); return cold(home, s.id) }
   try {
-    const one = await grown(), two = await grown()
-    for (const [r, n] of [[one, N], [two, 2 * N]]) {
+    const two = await grown(), four = await grown()
+    for (const [r, n] of [[two, 2 * N], [four, 4 * N]]) {
       assert.ok(r.calls > 0.99 * n && r.truncated === null, `${r.calls} of ${n} calls read, truncated ${JSON.stringify(r.truncated)}`)
       const bound = r.calls * SPINE_PER_ROW + r.blocks * SPINE_PER_BLOCK + K
       assert.ok(r.retained <= bound, `${r.retained} B retained for ${r.calls} calls and ${r.blocks} blocks, past ${bound} B`)
     }
-    const per = (two.retained - one.retained - (two.blocks - one.blocks) * BLOCK_COLUMNS) / (two.calls - one.calls)
+    const per = (four.retained - two.retained - (four.blocks - two.blocks) * BLOCK_COLUMNS) / (four.calls - two.calls)
     assert.ok(SPINE_PER_ROW <= 1024, `SPINE_PER_ROW ${SPINE_PER_ROW} B: past 3.5's 1 KiB a call`)
-    assert.ok(per <= SPINE_PER_ROW, `${Math.round(per)} B a call (${one.retained} → ${two.retained} B, ${one.blocks} → ${two.blocks} blocks, ${one.calls} → ${two.calls} calls), SPINE_PER_ROW ${SPINE_PER_ROW}`)
+    assert.ok(per <= SPINE_PER_ROW, `${Math.round(per)} B a call (${two.retained} → ${four.retained} B, ${two.blocks} → ${four.blocks} blocks, ${two.calls} → ${four.calls} calls), SPINE_PER_ROW ${SPINE_PER_ROW}`)
   } finally { fs.rmSync(path.dirname(home), { recursive: true, force: true }) } // a live-shaped session is hundreds of MB on disk
 })
 
