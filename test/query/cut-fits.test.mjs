@@ -75,11 +75,13 @@ test('3.5 §内存有界: a cut session whose rows cost what the plan reckons sh
 })
 
 // Rows far dearer than the estimate (every call uses a tool no call before it did, its name thousands of characters: the fold's tool
-// map keeps each distinct name, ~16 KB a call): the estimate's cut reads more than the room holds at what they cost, the fold passes
+// map keeps each distinct name, ~8 KB a call at 16,000): the estimate's cut reads more than the room holds at what they cost, the fold passes
 // its reservation and stops, and the measured bound cuts again by the rows the fold got through, never fewer than half of those asked,
 // the cost rounded up to a quarter power of two; the cut then shows at least half of what that fits — not a sliver of it.
+// The session past a 112 MB reader's room at 16,000 characters a name is 7,000 calls (a 128 MB reader at 32,000: 12,000 calls, 1.7 GB
+// on disk and a minute to grow): growing it is most of this case's time.
 test('3.5 §内存有界: a cut session whose rows cost far more than the plan reckons is cut by the measured bound to at least half of what fits', { timeout: 180_000 }, () => {
-  const c = cut({ growth: 150, subEvery: 4, subLanes: 3, subLen: 12, wire: 'threads', compactAt: 3_000, cc: 4, names: 32_000 }, 128)
+  const c = cut({ growth: 150, subEvery: 4, subLanes: 3, subLen: 12, wire: 'threads', compactAt: 3_000, cc: 4, names: 16_000 }, 112)
   // the fewest calls the estimate's cut shows (the test above): the rows asked
   const asked = Math.max(c.room - 2 * c.step, c.room / 2) / c.SPINE_PER_ROW - 1
   assert.ok(c.shown < asked, `${c.shown} calls shown, not fewer than the ${Math.floor(asked)} the estimate asks for: the measured bound did not cut (else this test proves nothing)`)
