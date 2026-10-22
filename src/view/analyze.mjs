@@ -843,14 +843,18 @@ export function createAnalyzer({ keep = true } = {}) {
 /** laneMeta(kind) → {icon, label, note?} of an analyzer lane's kind; eventOnly(kind): no ReAct events, resources or seen paths. */
 export const laneMeta = (kind) => LANE_META[kind]
 export const eventOnly = (kind) => EVENT_ONLY_KINDS.has(kind)
-/** replayLedger(steps) → {resources, seen} of a lane from its steps' ledger deltas (`step.ld` of a keep:false analyzer), `steps`
- *  [[n, ld]] in the lane's order (n increasing): what the analyzer's own ledger holds then, a step named by its `n`. */
-export function replayLedger(steps) {
+/** replayLedger(steps, after?) → {resources, seen} of a lane from its steps' ledger deltas (`step.ld` of a keep:false analyzer), `steps`
+ *  [[n, ld]] in the lane's order (n increasing): what the analyzer's own ledger holds then, a step named by its `n`. `after(n,
+ *  resources, seen)`: called after each step with the ledger's maps as they stand then (resources by `kind::label`, seen by path). */
+export function replayLedger(steps, after) {
   const resMap = new Map(), seenMap = new Map()
-  for (const [n, ld] of steps) for (const op of ld) {
-    if (op[0] === 'r') addRes(resMap, op[1], op[2], n, op[3], op[4] ?? undefined)
-    else if (op[0] === 's') seeIn(seenMap, op[1], n, op[2])
-    else for (const r of resMap.values()) { const last = r.segments[r.segments.length - 1]; if (last.evict == null) last.evict = n }
+  for (const [n, ld] of steps) {
+    for (const op of ld) {
+      if (op[0] === 'r') addRes(resMap, op[1], op[2], n, op[3], op[4] ?? undefined)
+      else if (op[0] === 's') seeIn(seenMap, op[1], n, op[2])
+      else for (const r of resMap.values()) { const last = r.segments[r.segments.length - 1]; if (last.evict == null) last.evict = n }
+    }
+    if (after) after(n, resMap, seenMap)
   }
   return { resources: [...resMap.values()], seen: [...seenMap.values()] }
 }

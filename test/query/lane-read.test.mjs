@@ -12,6 +12,7 @@ import { runQuery } from '../../src/query/named/index.mjs'
 import { openProjection } from '../../src/query/projection.mjs'
 import { listOf } from '../../src/view/reduce.mjs'
 import { compareStep } from '../../src/view/step-order.mjs'
+import { PAGE_BYTES } from '../../src/query/session-doc.mjs'
 
 const homeOf = (p) => path.join(tmpDir(p), '.trocar')
 const q = (name, home, params, ctx = {}) => runQuery(name, params, { home, fs, ...ctx })
@@ -27,16 +28,68 @@ function rebuild(page, held) {
   }
   return held
 }
-// The lane read whole: the tail page, then each page before it by `--to` → {rids, lists, defs}.
+// What a client holds of a lane besides its lists (3.5 §会话读 `lane`): events by step, resources by key, seen by path.
+const holding = () => ({ events: new Map(), res: new Map(), seen: new Map() })
+const resKey = (r) => `${r.kind}::${r.label}`
+// An answer merged into what is held: the events of each step it covers replaced; its other events (a base:null page's compaction and
+// summarize events) merged by (type, rid); resources replaced by key, seen by path; the events of steps no longer held let go.
+function absorb(H, p, rids) {
+  const covered = new Set(p.steps.map((s) => s.rid)), extra = new Map()
+  for (const rid of covered) H.events.set(rid, [])
+  for (const e of p.events) {
+    if (covered.has(e.rid)) H.events.get(e.rid).push(e)
+    else { const k = `${e.type}\u0000${e.rid}`; if (!extra.has(k)) extra.set(k, []); extra.get(k).push(e) }
+  }
+  for (const list of extra.values()) {
+    const { type, rid } = list[0], was = H.events.get(rid) || [], at = was.findIndex((e) => e.type === type)
+    const kept = was.filter((e) => e.type !== type)
+    kept.splice(at < 0 ? kept.length : at, 0, ...list)
+    H.events.set(rid, kept)
+  }
+  for (const r of p.resources) H.res.set(resKey(r), r)
+  for (const f of p.seen) H.seen.set(f.path, f)
+  if (rids) { const keep = new Set(rids); for (const rid of H.events.keys()) if (!keep.has(rid)) H.events.delete(rid) }
+  return H
+}
+// The rule, on one answer: its events are its steps', but for a base:null page's compaction and summarize events; a page of more
+// than one step ships ≤ PAGE_BYTES of steps, definitions and events.
+const CS = (e) => e.type === 'compaction' || e.type === 'summarize'
+const bytes = (list) => list.reduce((a, x) => a + Buffer.byteLength(JSON.stringify(x)), 0)
+function pageRule(p) {
+  const own = new Set(p.steps.map((st) => st.rid))
+  for (const e of p.events) assert.ok(own.has(e.rid) || (p.base == null && CS(e)), `${e.type} ${e.rid}: an event of a step of the page`)
+  if (p.steps.length > 1) assert.ok(bytes(p.steps) + bytes(p.defs) + bytes(p.events) <= PAGE_BYTES, 'a page of more than one step fits PAGE_BYTES')
+}
+// a --from answer's resources and seen: each new to the client or differing from the one it holds, when the client holds the ledger
+// at the answer's base (it asked from its tip: 3.5 sends what differs from the ledger at `base`, which a client that asked from
+// before its tip, or reads a later page of the same delta, does not hold)
+function sends(p, H, atTip) {
+  pageRule(p)
+  if (!atTip) return
+  for (const r of p.resources) assert.notDeepEqual(r, H.res.get(resKey(r)), `${resKey(r)}: sent only when new or changed`)
+  for (const f of p.seen) assert.notDeepEqual(f, H.seen.get(f.path), `${f.path}: sent only when new or changed`)
+}
+// The rule, on a lane read whole: every base:null page carries the lane's compaction and summarize events; its user events' k run
+// 1..n in step order.
+function wholeRule(W) {
+  const all = flat(W.H, W.rids).events, key = (e) => `${e.type} ${e.rid}`
+  for (const p of W.pages) { pageRule(p); assert.deepEqual(new Set(p.events.filter(CS).map(key)), new Set(all.filter(CS).map(key)), 'a base:null page: the lane\'s compaction and summarize events') }
+  assert.deepEqual(all.filter((e) => e.type === 'user').map((e) => e.k), all.filter((e) => e.type === 'user').map((_, i) => i + 1), 'user k: 1..n in step order')
+}
+// what is held, in the lane's step order
+const flat = (H, rids) => ({ events: rids.flatMap((rid) => H.events.get(rid) || []), resources: Object.fromEntries(H.res), seen: Object.fromEntries(H.seen) })
+// The lane read whole: the tail page, then each page before it by `--to` → {rids, lists, defs, pages, H (what it holds)}.
 async function whole(home, id, lane, ctx) {
   const pages = []
   for (let p = await q('lane', home, { id, lane }, ctx); ; p = await q('lane', home, { id, lane, to: p.prev }, ctx)) {
     pages.unshift(p)
     if (p.prev == null) break
   }
-  const held = new Map(), defs = new Map()
-  for (const p of pages) { assert.equal(p.base, null); rebuild(p, held); for (const d of p.defs) defs.set(d.bid, d) }
-  return { rids: pages.flatMap((p) => p.steps.map((s) => s.rid)), held, defs, pages }
+  const held = new Map(), defs = new Map(), H = holding()
+  for (const p of pages) { assert.equal(p.base, null); rebuild(p, held); for (const d of p.defs) defs.set(d.bid, d); absorb(H, p) }
+  const W = { rids: pages.flatMap((p) => p.steps.map((s) => s.rid)), held, defs, pages, H }
+  wholeRule(W)
+  return W
 }
 // Every session read until nothing is pending (the worker's slices), its projection written.
 async function settled(home, id) {
@@ -94,24 +147,28 @@ function fromFor(held, key, d, rowTs) {
 
 // http: a new subagent every few calls whose first call is late (its lane's key changes: lanes_gone, the held rows relaned); chat:
 // subagents told apart by order only, late calls sorting before a held tip. No generator drops a row (`gone`): fromFor handles it.
-for (const [wire, axes] of [['http', { late: 8, subLanes: 1, subLen: 6 }], ['chat', { late: 8, subLanes: 3 }]]) {
-  test(`3.5 #26: ${wire} — lanes held through since deltas and --from reads (late rows before the tip, relanes) equal the lanes read whole`, async () => {
+for (const [wire, axes] of [['http', { late: 8, subLanes: 1, subLen: 6, paths: 4 }], ['chat', { late: 8, subLanes: 3 }]]) {
+  test(`3.5 #26: ${wire} — lanes held through since deltas and --from reads (late rows before the tip, relanes): lists, events (k), resources and seen equal the lanes read whole`, async () => {
     const home = homeOf('trocar-lane-hold-')
     const s = bigSession({ home, wire, growth: 150, subEvery: 2, compactAt: 1_200, ...axes })
     s.append(3)
     let doc = await q('session', home, { id: s.id })
     const rowTs = new Map(doc.calls.map((r) => [r.rid, r.ts]))
-    const lanes = new Map() // key → {rids, lists}
+    const tally = { atTip: 0, cs: 0, user: 0, res: 0, seen: 0 }
+    const lanes = new Map() // key → {rids, lists, H}
     const fetch = async (key, from, keep, held) => {
       const lists = new Map(held ? held.rids.slice(0, keep).map((r) => [r, held.lists.get(r)]) : [])
       const rids = held ? held.rids.slice(0, keep) : []
-      if (from == null) { const W = await whole(home, s.id, key); return { rids: W.rids, lists: W.held } }
+      if (from == null) { const W = await whole(home, s.id, key); return { rids: W.rids, lists: W.held, H: W.H } }
+      const H = held.H
       for (let f = from; ;) {
         const p = await q('lane', home, { id: s.id, lane: key, from: f })
         assert.equal(p.base, f, `${key}: --from ${f} is a step the client holds`)
         rebuild(p, lists)
         rids.push(...p.steps.map((st) => st.rid))
-        if (p.next == null) return { rids, lists }
+        if (f === from && keep === held.rids.length) { tally.atTip++; sends(p, H, true) } else sends(p, H, false)
+        absorb(H, p, rids)
+        if (p.next == null) return { rids, lists, H }
         f = p.next
       }
     }
@@ -136,12 +193,47 @@ for (const [wire, axes] of [['http', { late: 8, subLanes: 1, subLen: 6 }], ['cha
         const W = await whole(home, s.id, key)
         assert.deepEqual(held.rids, W.rids, `after ${k + 1}: ${key} steps`)
         for (const rid of W.rids) assert.deepEqual(held.lists.get(rid), W.held.get(rid), `after ${k + 1}: ${key} ${rid}`)
+        const F = flat(held.H, held.rids)
+        assert.deepEqual(F, flat(W.H, W.rids), `after ${k + 1}: ${key} events, resources and seen`)
+        tally.cs += F.events.filter(CS).length; tally.user += F.events.filter((e) => e.type === 'user').length
+        tally.res += Object.keys(F.resources).length; tally.seen += Object.keys(F.seen).length
       }
     }
     assert.ok(late > 0, 'a late row sorted before a held tip at least once')
     if (wire === 'http') assert.ok(relaned > 0, 'a held row changed lanes at least once')
+    // the chat wire's fold has compaction events only: no user events, resources or seen paths
+    for (const k of wire === 'http' ? Object.keys(tally) : ['atTip', 'cs']) assert.ok(tally[k] > 0, `${k}: met at least once`)
   })
 }
+
+// 3.5:61-66 the rule, on a main lane of several pages with compactions: every page (whole, and a --from chain from its first step)
+// ships its own steps' events, the base:null ones the lane's compaction and summarize events too, within PAGE_BYTES; user k 1..n.
+test('3.5 lane: events are the page\'s steps\', base:null adds the lane\'s compactions, user k runs 1..n, a page fits PAGE_BYTES', async () => {
+  const home = homeOf('trocar-lane-rule-')
+  const s = bigSession({ home, growth: 300, subEvery: 0, compactAt: 40_000, paths: 4 })
+  s.append(600)
+  const doc = await settled(home, s.id), lane = doc.lanes.find((l) => l.kind === 'main').lane
+  const W = await whole(home, s.id, lane, { writer: true })
+  assert.ok(W.pages.length > 1 && W.pages.some((p) => p.steps.length > 1), 'the lane spans pages')
+  assert.ok(flat(W.H, W.rids).events.some(CS), 'the lane has compactions')
+  for (let f = W.rids[0], n = 0; ; n++) {
+    const p = await q('lane', home, { id: s.id, lane, from: f }, { writer: true })
+    pageRule(p)
+    if (p.next == null) { assert.ok(n > 0, 'the --from chain spans pages'); break }
+    f = p.next
+  }
+})
+
+// 3.5:63 no cap: a lane whose tool results name more than 200 distinct paths ships every one at base:null.
+test('3.5 lane: seen is the ledger\'s entries uncapped — more than 200 paths seen, more than 200 sent', async () => {
+  const home = homeOf('trocar-lane-seen-')
+  const s = bigSession({ home, growth: 300, subEvery: 0, paths: 300 })
+  s.append(3)
+  const doc = await q('session', home, { id: s.id }), lane = doc.lanes.find((l) => l.kind === 'main').lane
+  const p = await q('lane', home, { id: s.id, lane })
+  assert.equal(p.base, null)
+  assert.ok(new Set(p.seen.map((f) => f.path)).size > 200, 'every seen path is sent')
+})
 
 // ── 3.5 #28 (the lane part): the closed sets, on a session of each harness shape ─────────────────────────────────────────────────
 const TOP = ['schema', 'command', 'ok', 'errors', 'lane', 'base', 'mark', 'steps', 'defs', 'resources', 'seen', 'events', 'prev', 'next']
@@ -177,6 +269,8 @@ function closedSets(p, sample) {
   }
   for (const s of p.seen) subset(s, SEEN, 'seen')
   for (const e of p.events) { assert.ok('rid' in e && 'lane' in e && !('step' in e) && !('streamId' in e), 'event: rid and lane, no step / streamId') }
+  const user = (sample.events || []).find((e) => e.type === 'user')
+  for (const e of p.events.filter((x) => x.type === 'user')) { if (user) covers(e, user, 'user event'); assert.ok(Number.isInteger(e.k) && e.k >= 1, 'a user event carries k') }
 }
 
 // One session per HTTP shape (codex's WebSocket wire is generated in #23), four turns; on Claude Code a security-monitor call too.
@@ -227,6 +321,12 @@ test('3.5 #28 (lane): tail, --from and reset pages of every shape keep the close
         const W = await whole(home, id, lane)
         const held = rebuild(p, new Map([[base, W.held.get(base)]]))
         for (const st of p.steps) for (const b of [...held.get(st.rid), ...st.reply]) assert.ok(W.defs.has(b) && (p.defs.some((d) => d.bid === b) || [...W.held.get(base), ...tail.steps[0].reply].includes(b)), `${lane} --from: ${b} is in its defs or its base page's`)
+      }
+      // a fresh process (its own fs object, no state) over the fold log the writer left answers the warm bytes
+      await settled(home, id)
+      for (const params of [{ id, lane }, ...(tail.steps.length > 1 ? [{ id, lane, from: tail.steps[0].rid }] : [])]) {
+        const warm = await q('lane', home, params, { writer: true }), cold = await q('lane', home, params, { writer: true, fs: { ...fs } })
+        assert.equal(JSON.stringify(cold), JSON.stringify(warm), `${lane} ${params.from ?? 'tail'}: a fresh process answers the warm bytes`)
       }
       for (const e of tail.events.filter((x) => x.type === 'monitor')) { monitors++; assert.ok('verdict' in e && 'flagged' in e, 'a monitor event carries verdict and flagged') }
     }

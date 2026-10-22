@@ -289,9 +289,9 @@ export async function extendSession(ctx, id, budgetMs) {
   return ex.done < ex.total || st.target != null || plan.read.some((row) => !st.R.has(String(row.id)));
 }
 
-/** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, doc: {lanes}, R: {log, view},
- *  failed, errors, plan}: the session after this request's slice (the local path: everything), read from its fold log at the
- *  reduction frontier `mark` (V: src/query/session-doc.mjs viewOf; `R` the shape src/view/reduce.mjs laneDoc reads), `pending:
+/** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the
+ *  session after this request's slice (the local path: everything), read from its fold log at the reduction frontier `mark` (V:
+ *  src/query/session-doc.mjs viewOf, its columns synced to that frontier), `pending:
  *  {done, total}` while members are above the mark (`done` = the members at or below it), the cut. `errors`: the index's problems
  *  and the store's notes. The state stays warm. */
 export async function sessionState(ctx, id) {
@@ -305,7 +305,7 @@ export async function sessionState(ctx, id) {
   const V = st.view.V, at = (rid) => mark != null && posCmp(rid, mark) <= 0;
   const above = ex.done < ex.total || plan.read.some((row) => !at(String(row.id)));
   return { id: String(id), rows: members, store: st.store, mark, pending: above ? { done: members.filter((m) => at(String(m.id))).length, total: members.length } : null,
-    truncated: plan.bound, V, doc: { lanes: V.lanes }, R: { log: st.log, view: () => ({ calls: V.cols.order }) }, failed: V.failed, errors, st, plan };
+    truncated: plan.bound, V, failed: V.failed, errors, st, plan };
 }
 
 /** version(ctx) → {key, errors} | null (3.5 §谁执行它 答案缓存): the session's member rows, its reduction frontier as it is now, the

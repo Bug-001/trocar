@@ -43,10 +43,12 @@ const rowOf = (o) => (o && o.c != null ? o.r : null);
 const headOf = (o) => { if (!o || o.l == null) return null; const { l, p, ...h } = o; return h; };
 const recOf = (r) => ({ id: String(r.id), ts_request: r.ts ?? null, is_llm_call: !!r.is_llm, response: { status: r.status ?? null } });
 
-/** columns(slotOf) → the step-order columns of a fold log's calls: each call row's ts by its rid's slot in the projection
- *  (`slotOf`), the rids in step order, the live lane keys; sync() brings them to the log's frontier from the lines past the last
+/** columns(slotOf) → the step-order columns of a fold log's calls, by each call's slot in the projection (`slotOf`): its row's ts, its
+ *  lane (`ln`, the lane keys interned in `keys`), how many `user` events it has (`uc`) and whether it has a compaction or summarize
+ *  event (`cs`); the rids in step order; the live lane keys. sync() brings them to the log's frontier from the lines past the last
  *  sync, each moved row taken out and put back by binary search: a warm state and a cold open build the same columns. */
-export const columns = (slotOf) => ({ at: -1, slotOf, ts: [], order: [], lanes: new Set(), its: null });
+export const columns = (slotOf) => ({ at: -1, slotOf, ts: [], ln: new Int32Array(0), uc: new Int32Array(0), cs: new Uint8Array(0),
+  keys: new Map(), order: [], lanes: new Set(), its: null });
 const tsOf = (cols, rid) => cols.ts[cols.slotOf(rid)];
 // where (t, rid) goes in the step-order column: the first place whose row sorts at or after it
 function placeOf(cols, t, rid) {
@@ -54,6 +56,13 @@ function placeOf(cols, t, rid) {
   while (lo < hi) { const m = (lo + hi) >> 1, r = cols.order[m]; if (compareStep(tsOf(cols, r), r, t, rid) < 0) lo = m + 1; else hi = m; }
   return lo;
 }
+// slot k of the typed columns, grown to hold it
+function slot(cols, k) {
+  if (k < cols.ln.length) return;
+  const n = Math.max(k + 1, 2 * cols.ln.length, 64);
+  for (const c of ['ln', 'uc', 'cs']) { const a = new cols[c].constructor(n); a.set(cols[c]); cols[c] = a; }
+}
+const laneInt = (cols, key) => { let v = cols.keys.get(key); if (v === undefined) cols.keys.set(key, (v = cols.keys.size)); return v; };
 export function sync(cols, log) {
   const f = log.frontier;
   if (f == null || f === cols.at) return cols;
@@ -61,13 +70,23 @@ export function sync(cols, log) {
   for (const rid of ch.rids) {
     const k = cols.slotOf(rid);
     if (k === undefined) throw new Error(`the fold log names ${rid}, which the context projection has no row for`);
-    const old = cols.ts[k], r = rowOf(log.read(...log.latest(rid)));
+    const old = cols.ts[k], o = log.read(...log.latest(rid)), r = rowOf(o);
     if (old !== undefined) cols.order.splice(placeOf(cols, old, rid), 1);
-    if (r) { cols.ts[k] = r.ts ?? null; cols.order.splice(placeOf(cols, cols.ts[k], rid), 0, rid); } else cols.ts[k] = undefined;
+    slot(cols, k);
+    if (r) {
+      cols.ts[k] = r.ts ?? null; cols.order.splice(placeOf(cols, cols.ts[k], rid), 0, rid);
+      cols.ln[k] = laneInt(cols, r.lane); cols.uc[k] = o.e.filter((e) => e.type === 'user').length;
+      cols.cs[k] = o.e.some((e) => e.type === 'compaction' || e.type === 'summarize') ? 1 : 0;
+    } else { cols.ts[k] = undefined; cols.ln[k] = -1; cols.uc[k] = 0; cols.cs[k] = 0; }
   }
   for (const key of ch.lanes) { if (log.read(...log.lane(key)).l != null) cols.lanes.add(key); else cols.lanes.delete(key); }
   cols.at = f;
   return cols;
+}
+/** laneOf(cols, key) → the rids of the lane `key` in step order, from the synced columns; [] for a lane they do not hold. */
+export function laneOf(cols, key) {
+  const v = cols.keys.get(key);
+  return v === undefined ? [] : cols.order.filter((rid) => cols.ln[cols.slotOf(rid)] === v);
 }
 
 // the log's item lines in step order

@@ -519,27 +519,28 @@ export function skeletonOf(R) {
   return { rows, lanes, events, ...(failed.length ? { failed } : null), ...(unknown ? { unknown } : null),
     stats: f ? f.st : { calls: 0, streams: 0, subagents: 0, monitors: 0, compactions: 0, totalIn: 0, totalOut: 0, peakCtx: 0 }, ...itemsView(its.map((o) => o.it)), records };
 }
+/** laneLedger(lines, base?) → {resources, seen} of a lane from its call lines in step order (their ledger deltas `d`, replayed by
+ *  analyze.mjs replayLedger), steps named by rid: resources' segments {enter, evict} and loads {rid, range, via}; seen paths {path,
+ *  firstRid, count}, every entry in the ledger's order. With `base` (a step's place in `lines`): only the entries new after it or
+ *  whose bytes differ from the ledger's at it (3.5 §会话读 `lane`). */
+export function laneLedger(lines, base = -1) {
+  const at = (n) => (n == null ? n : lines[n].c);
+  const res = ({ segments, loads, ...r }) => ({ ...r, segments: segments.map((g) => ({ enter: at(g.enter), evict: at(g.evict) })),
+    loads: loads.map(({ step, ...x }) => ({ rid: at(step), ...x })) });
+  const see = (f) => ({ path: f.path, firstRid: at(f.firstStep), count: f.count });
+  let was = null;
+  const snap = (m, wire) => new Map([...m].map(([k, v]) => [k, JSON.stringify(wire(v))]));
+  const L = replayLedger(lines.map((o, n) => [n, o.d || []]), (n, r, s) => { if (n === base) was = { r: snap(r, res), s: snap(s, see) }; });
+  const resources = L.resources.map(res), seen = L.seen.map(see);
+  if (!was) return { resources, seen };
+  return { resources: resources.filter((r) => was.r.get(`${r.kind}::${r.label}`) !== JSON.stringify(r)), seen: seen.filter((f) => was.s.get(f.path) !== JSON.stringify(f)) };
+}
 /** laneDoc(R, key) → {rids, events, resources, seen} of the lane `key` names, read from R's fold log: its calls in step order, their
- *  lane events, and its ledger replayed from the calls' deltas (analyze.mjs replayLedger), steps named by rid: resources' segments
- *  {enter, evict} and loads {rid, range, via}; seen paths {path, firstRid, count} not opened, the 200 first seen. */
+ *  lane events, and its ledger (laneLedger). */
 export function laneDoc(R, key) {
-  const { log } = R, rids = [], events = [], steps = [];
-  for (const rid of R.view().calls) {
-    const o = log.read(...log.latest(rid));
-    if (o.r.lane !== key) continue;
-    rids.push(rid); events.push(...o.e); steps.push([steps.length, o.d || []]);
-  }
-  const at = (n) => (n == null ? n : rids[n]);
-  const { resources, seen } = replayLedger(steps);
-  const opened = [...new Set(resources.filter((r) => r.kind === 'file').map((r) => r.label))];
-  const sameFile = (a, c) => a === c || a.endsWith('/' + c) || c.endsWith('/' + a);
-  return {
-    rids, events,
-    resources: resources.map(({ segments, loads, ...r }) => ({ ...r, segments: segments.map((g) => ({ enter: at(g.enter), evict: at(g.evict) })),
-      loads: loads.map(({ step, ...x }) => ({ rid: at(step), ...x })) })),
-    seen: seen.filter((f) => !opened.some((o) => sameFile(o, f.path))).sort((a, c) => a.firstStep - c.firstStep || c.count - a.count).slice(0, 200)
-      .map((f) => ({ path: f.path, firstRid: at(f.firstStep), count: f.count })),
-  };
+  const { log } = R, lines = [];
+  for (const rid of R.view().calls) { const o = log.read(...log.latest(rid)); if (o.r.lane === key) lines.push(o); }
+  return { rids: lines.map((o) => o.c), events: lines.flatMap((o) => o.e), ...laneLedger(lines) };
 }
 
 const recFacts = (it) => (it ? { ts_request: it.ts_request, is_llm_call: !!it.is_llm_call, response: { status: it.status ?? null } } : {});

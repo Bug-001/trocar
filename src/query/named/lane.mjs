@@ -2,13 +2,15 @@
 //
 // One lane's page of steps: each step's block-id list as ops against its parent step's list, its reply ids, the attributes its added
 // positions carry and its detail; the definitions the page brings that the client does not hold yet; the lane's resources, seen
-// paths and events. All from the session's reduced state (src/query/named/session.mjs sessionState): the lane's rids, events and
-// ledger from the session's fold log (src/view/reduce.mjs laneDoc), each list materialised from the context projection (src/view/reduce.mjs listOf), the
-// definitions and row facts from the projection's lines. No record is read (3.5 §会话读: a lane answer is the projection's).
+// paths and the events of the steps it covers. All from the session's state at the reduction frontier (src/query/named/session.mjs
+// sessionState): the lane's rids, user counts and compaction / summarize flags from the step-order columns (src/query/session-doc.mjs),
+// the events and ledger deltas from its fold log's call lines read by offset (the ledger replayed per answer: src/view/reduce.mjs
+// laneLedger), each list materialised from the context projection (src/view/reduce.mjs listOf), the definitions and row facts from
+// the projection's lines. No record is read (3.5 §会话读: a lane answer is the projection's).
 import { sessionState, version as sessionVersion } from './session.mjs';
-import { listOf, laneDoc } from '../../view/reduce.mjs';
+import { listOf, laneLedger } from '../../view/reduce.mjs';
 import { inheritedRender } from '../../view/render-kind.mjs';
-import { PAGE_BYTES } from '../session-doc.mjs';
+import { PAGE_BYTES, laneOf } from '../session-doc.mjs';
 import { QueryArgError } from './index.mjs';
 
 export const params = Object.freeze(['id', 'lane', 'from', 'to']);
@@ -54,8 +56,17 @@ export async function run(ctx) {
   }
   errors.push(...st.errors);
   // a lane the session does not have (it can vanish between polls: `lanes_gone`) is an empty lane
-  if (!st.doc.lanes.some((h) => h.lane === key)) return empty(st.mark);
-  const L = laneDoc(st.R, key), { store } = st, rids = L.rids, n = rids.length;
+  const { cols, log } = st.V;
+  if (!cols.lanes.has(key)) return empty(st.mark);
+  const { store } = st, rids = laneOf(cols, key), n = rids.length, slots = rids.map(cols.slotOf);
+  const lines = new Map(), lineAt = (i) => { if (!lines.has(i)) lines.set(i, log.read(...log.latest(rids[i]))); return lines.get(i); };
+  // the `user` events before step i (3.5: every `user` event's `k` is its place among the lane's, 1-based)
+  const before = [0];
+  for (const k of slots) before.push(before.at(-1) + cols.uc[k]);
+  const CS = (e) => e.type === 'compaction' || e.type === 'summarize';
+  const eventsAt = (i) => { let j = before[i]; return lineAt(i).e.map((e) => (e.type === 'user' ? { ...e, k: ++j } : e)); };
+  const flagged = [];
+  for (let i = 0; i < n; i++) if (cols.cs[slots[i]]) flagged.push(i);
   const lists = new Map(), defs = new Map(), wires = new Map();
   const rowOf = (i) => store.rows.get(rids[i]);
   const listAt = (i) => {
@@ -100,6 +111,7 @@ export async function run(ctx) {
     return step;
   }
   const bytesOf = (v) => Buffer.byteLength(JSON.stringify(v));
+  const evBytes = (i, keep = () => true) => eventsAt(i).reduce((a, e) => a + (keep(e) ? bytesOf(e) : 0), 0);
 
   const index = new Map(rids.map((r, i) => [r, i]));
   let lo, hi, base = null; // the page is steps [lo, hi)
@@ -121,28 +133,36 @@ export async function run(ctx) {
     lo = k + 1; hi = lo;
     let bytes = 0;
     while (hi < n) {
-      const m = meet(hi), add = bytesOf(stepAt(hi, false)) + m.bytes;
+      const m = meet(hi), add = bytesOf(stepAt(hi, false)) + m.bytes + evBytes(hi);
       if (hi > lo && bytes + add > PAGE_BYTES) { drop(m.added); break; }
       bytes += add; hi++;
     }
   } else {
     // the tail page, a reset (a `--from` not in the lane), or the page ending just before `--to`: grown backwards, its first step a
-    // keyframe, the rest each against its parent
+    // keyframe, the rest each against its parent; the lane's compaction and summarize events ride along whatever steps it covers
     hi = to != null && index.has(to) ? index.get(to) : n;
     lo = hi;
-    let rel = 0, defBytes = 0;
+    let rel = 0, defBytes = 0, ev = flagged.reduce((a, i) => a + evBytes(i, CS), 0);
     while (lo > 0) {
-      const s = lo - 1, m = meet(s), next = lo < hi ? bytesOf(stepAt(lo, false)) : 0;
-      if (lo < hi && rel + next + bytesOf(stepAt(s, true)) + defBytes + m.bytes > PAGE_BYTES) { drop(m.added); break; }
-      rel += next; defBytes += m.bytes; lo = s;
+      const s = lo - 1, m = meet(s), next = lo < hi ? bytesOf(stepAt(lo, false)) : 0, e = evBytes(s, (x) => !CS(x));
+      if (lo < hi && rel + next + bytesOf(stepAt(s, true)) + defBytes + m.bytes + ev + e > PAGE_BYTES) { drop(m.added); break; }
+      rel += next; defBytes += m.bytes; ev += e; lo = s;
     }
   }
   const steps = [];
   for (let i = lo; i < hi; i++) steps.push(stepAt(i, base == null && i === lo));
   if (base != null && steps.length) steps[0].parent = base;
+  // the page's steps' events; at base:null also the compaction / summarize events of the lane's other steps; in step order
+  const events = [], page = steps.map((_, j) => lo + j);
+  for (const i of base == null ? [...flagged.filter((x) => x < lo), ...page, ...flagged.filter((x) => x >= hi)] : page) {
+    events.push(...(i >= lo && i < hi ? eventsAt(i) : eventsAt(i).filter(CS)));
+  }
+  // the ledger replayed from every step's delta, each line read for it and let go
+  const { resources, seen } = laneLedger(rids.map((rid, i) => (lines.has(i) ? lines.get(i) : (({ c, d }) => ({ c, d }))(log.read(...log.latest(rid))))),
+    base == null ? -1 : index.get(base));
   return {
     lane: key, base, mark: st.mark, steps, defs: [...fresh.keys()].map((b) => wireDef(b, listAt(fresh.get(b)).bids)).filter(Boolean),
-    resources: L.resources, seen: L.seen, events: L.events,
+    resources, seen, events,
     prev: lo > 0 && steps.length ? rids[lo] : null, next: hi < n && steps.length ? rids[hi - 1] : null,
   };
 }
