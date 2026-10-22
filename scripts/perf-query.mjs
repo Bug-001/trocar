@@ -15,12 +15,14 @@ import { QUERIES } from '../src/query/named/index.mjs'
 
 export const DEFAULT_RUNS = 5
 const CLI = path.join(import.meta.dirname, '..', 'bin', 'trocar.mjs')
-// Queries that need a parameter take its value from another query's document (附录 C.5 key → the flag to pass).
+// Queries that need parameters take their values from another query's document (附录 C.5 key → the flags to pass), the
+// arguments that document was asked with included: `args(doc, its argv)` → the argv, or null when the document has no value.
 // `block` is measured on the LAST record of the biggest segment: that is the worst case for reading one record
 // back (§4.1 ≤ 0.3 s), and the ref `<segment>:<line>` is what C.5 calls a record.
 const ARG_FROM = {
-  session: { query: 'sessions', flag: '--id', pick: (d) => (d.sessions || [])[0]?.session_id },
-  block: { query: 'segments', flag: '--ref', pick: (d) => { const s = (d.segments || []).filter((x) => x.records > 0).sort((a, b) => a.bytes - b.bytes).pop(); return s ? `${s.segment}:${s.records}` : null } },
+  session: { query: 'sessions', args: (d) => { const id = (d.sessions || [])[0]?.session_id; return id ? ['--id', id] : null } },
+  block: { query: 'segments', args: (d) => { const s = (d.segments || []).filter((x) => x.records > 0).sort((a, b) => a.bytes - b.bytes).pop(); return s ? ['--ref', `${s.segment}:${s.records}`] : null } },
+  lane: { query: 'session', args: (d, argv) => { const l = (d.lanes || [])[0]?.lane; return l ? [...argv, '--lane', l] : null } },
 }
 
 /** The named queries to measure: every name `trocar query` has (src/query/named/index.mjs QUERIES — one fact, one place). */
@@ -91,18 +93,22 @@ export async function measure({ home, runs = DEFAULT_RUNS, names = queryNames(),
   if (build.status !== 0 || index.bytes === 0) { index.status = build.status; index.error = build.status ? build.stderr : 'the build wrote no index file' }
 
   const docs = new Map([['segments', build.doc]])
-  // A query whose parameter comes from another document is given it, even when that one is measured later.
-  const docOf = (name) => { if (!docs.has(name)) docs.set(name, runQuery(home, ['query', name]).doc); return docs.get(name) || {} }
+  // A query whose parameters come from another document is given them, even when that one is measured later.
+  const argv = new Map()
+  const argvOf = (name) => {
+    if (!argv.has(name)) { const from = ARG_FROM[name]; argv.set(name, from ? from.args(docOf(from.query), argvOf(from.query) || []) : []) }
+    return argv.get(name)
+  }
+  const docOf = (name) => { if (!docs.has(name)) docs.set(name, argvOf(name) && runQuery(home, ['query', name, ...argvOf(name)]).doc); return docs.get(name) || {} }
   const queries = []
   for (const name of names) {
-    const arg = ARG_FROM[name]
-    const value = arg ? arg.pick(docOf(arg.query)) : null
-    if (arg && !value) { queries.push({ query: name, skipped: `no value for ${arg.flag} in the ${arg.query} document` }); continue }
+    const args = argvOf(name)
+    if (!args) { queries.push({ query: name, skipped: `no value for its arguments in the ${ARG_FROM[name].query} document` }); continue }
     const times = []
     let last = null
-    for (let i = 0; i < runs; i++) { last = runQuery(home, value ? ['query', name, arg.flag, value] : ['query', name]); times.push(last.ms) }
+    for (let i = 0; i < runs; i++) { last = runQuery(home, ['query', name, ...args]); times.push(last.ms) }
     docs.set(name, last.doc)
-    queries.push({ query: name, ...(value ? { arg: `${arg.flag} ${value}` } : {}), runs: times.map((t) => Math.round(t)), median_ms: Math.round(median(times)), status: last.status, ...(last.status ? { error: last.stderr } : {}) })
+    queries.push({ query: name, ...(args.length ? { arg: args.join(' ') } : {}), runs: times.map((t) => Math.round(t)), median_ms: Math.round(median(times)), status: last.status, ...(last.status ? { error: last.stderr } : {}) })
   }
 
   const rawDir = path.join(trocarHome, 'raw')
