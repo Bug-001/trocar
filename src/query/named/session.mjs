@@ -36,12 +36,9 @@ export const params = Object.freeze(['id', 'since', 'before', 'limit']);
  *  value index, the plan's entry, the kept mark's digest), until a reduction of THIS session measured it (HeapBound below).
  *  Measured 2026-10-22 as what a read of a test/query/big-session.mjs live(0.48) session holds more than one of live(0.24), per
  *  call, after a forced GC, the objects each part dominates summed (a heap snapshot: the caches of K and the blocks' columns left
- *  out): 1,838 B, of it 1,252 B the analyzer's lane ledgers (resources and seen paths) and 586 B the rest (the reduction state and
- *  its mark 328, the row and shared value index 204, the plan 54). A fold that keeps nothing needs no ledger (its deltas do not
- *  depend on it and replayLedger rebuilds it): without it, 586 × 1.25 fits 3.5's 1 KiB. The figure stays at its old value until
- *  then and until the cut tests size their sessions for it (test/query/cut-fits.test.mjs: rows = the room ÷ the figure):
- *  see 3.5 §内存有界. */
-export const SPINE_PER_ROW = 16 * 1024;
+ *  out): 602 B (the reduction state and its mark 345, the row and shared value index 203, the plan 54; the analyzer of a fold
+ *  that keeps nothing keeps no ledger, replayLedger rebuilds it from the deltas), × 1.25. */
+export const SPINE_PER_ROW = 752;
 /** What the reduction keeps in the heap per distinct block of the session (its store's slot, its block columns and interned keys:
  *  src/view/reduce.mjs, src/query/projection.mjs): 222 B measured (after a forced GC, in a heap of the worker's size) as what a
  *  read of a test/query/big-session.mjs live(0.004) session holds more with 1,500 fresh tool definitions a call than with none, per

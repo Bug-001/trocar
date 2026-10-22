@@ -650,8 +650,9 @@ export function createAnalyzer({ keep = true } = {}) {
   function eventsOf(s, st, step, view, E) {
     // the lane's ledger, and what this step did to it (step.ld, when the fold keeps no step: replayLedger)
     const D = keep ? null : step.ld
-    const addR = (kind, label, via, range) => { addRes(st.resMap, kind, label, step.at, via, range); if (D) D.push(['r', kind, label, via, range ?? null]) }
-    const see = (s, cap) => { seeIn(st.seenMap, s, step.at, cap); if (D && s) D.push(['s', s, cap]) }
+    // a fold that keeps nothing keeps no ledger either: its deltas do not depend on it, and replayLedger rebuilds it from them
+    const addR = (kind, label, via, range) => { if (D) D.push(['r', kind, label, via, range ?? null]); else addRes(st.resMap, kind, label, step.at, via, range) }
+    const see = (s, cap) => { if (D) { if (s) D.push(['s', s, cap]) } else seeIn(st.seenMap, s, step.at, cap) }
     const f = view.facts, reply = f.reply
     // monitor + aux-family lanes: no ReAct/resource extraction — just one event per call
     if (EVENT_ONLY_KINDS.has(s.kind)) {
@@ -704,11 +705,11 @@ export function createAnalyzer({ keep = true } = {}) {
     let newMsgs
     if (verdict.compaction) {
       Object.assign(step, compactionMeta(verdict, preambleNew))
-      for (const res of st.resMap.values()) {
+      if (D) D.push(['x'])
+      else for (const res of st.resMap.values()) {
         const last = res.segments[res.segments.length - 1]
         if (last.evict == null) last.evict = step.at
       }
-      if (D) D.push(['x'])
       newMsgs = msgs
     } else if (drop) {
       newMsgs = []

@@ -196,6 +196,8 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
   return {
     get file() { return file }, id,
     get calls() { return n },
+    /** How many calls that ended late are not written yet (each written once its time has come). */
+    get held() { return held.length },
     append(k = 1) {
       let out = [], len = 0
       const flush = () => {
