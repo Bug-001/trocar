@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { warmCache, heapBudget, hold, heapFlags } from '../../src/query/warm.mjs'
+import { warmCache, heapBudget, hold, heapFlags, heapEnv, WORKER_MEMORY_MB } from '../../src/query/warm.mjs'
 
 const cost = (v) => v.cost
 
@@ -57,5 +57,15 @@ for (const mb of [96, 128]) {
       assert.fail(`a ${mb} MB heap died before its ceiling (exit ${e.status}): ${String(e.stderr).split('\n').find((l) => /FATAL/.test(l)) || ''}`)
     }
     assert.ok(out.budget < out.ceiling && out.ceiling <= mb * 1048576, JSON.stringify(out))
+  })
+}
+
+// The worker inherits the daemon's environment (the Windows login task carries the user's NODE_OPTIONS into it), and V8 lets an
+// inherited --max-old-space-size override --max-heap-size: the worker forked as the service forks it keeps its own heap anyway.
+for (const opts of ['--max-old-space-size=8192', '--max-old-space-size=64 --max-semi-space-size=64', '--max_old_space_size=8192 --no-warnings']) {
+  test(`3.5 §内存有界: a worker forked under NODE_OPTIONS=${opts} has the heap the service gives it`, () => {
+    const limit = execFileSync(process.execPath, [...heapFlags(), '-e', 'console.log(require("v8").getHeapStatistics().heap_size_limit)'],
+      { encoding: 'utf8', env: heapEnv({ ...process.env, NODE_OPTIONS: opts }) })
+    assert.equal(Number(limit), WORKER_MEMORY_MB * 1048576)
   })
 }

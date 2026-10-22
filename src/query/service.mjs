@@ -21,7 +21,7 @@
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { QUERY_PATH, QUERY_NAMES, WINDOW_PARAMS, paramsOf } from './client.mjs'
-import { heapFlags } from './warm.mjs'
+import { heapFlags, heapEnv } from './warm.mjs'
 import { OS_PROMPT_MS } from '../off/root-store.mjs'
 
 const WORKER = fileURLToPath(new URL('./worker.mjs', import.meta.url))
@@ -53,7 +53,7 @@ const NL = 0x0a
 const SINK = { writeHead() {}, write() { return true }, end() {}, once() {} }
 const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon yet: it is being started, read this one locally' })
 
-const forkWorker = (home) => fork(WORKER, [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: heapFlags() })
+const forkWorker = (home) => fork(WORKER, [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: heapFlags(), env: heapEnv() })
 
 const logLine = (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`) // the daemon's stdout is its log
 const mb = (n) => `${(n / 1048576).toFixed(1)} MB`

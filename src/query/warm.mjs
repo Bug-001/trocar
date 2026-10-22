@@ -49,6 +49,18 @@ export const WORKER_MEMORY_MB = 384
  *  generation on top (3 × its semi-space, 48 MB at V8's default): a process started with it reckons its budget and ceiling past its
  *  old space and dies of the heap instead of cutting (measured 2026-10-22: --max-old-space-size=128 reports a 176 MB limit). */
 export const heapFlags = (mb = WORKER_MEMORY_MB) => [`--max-heap-size=${mb}`]
+/** The environment to fork a process of heapFlags() in: `env` with the heap-size flags taken out of its NODE_OPTIONS. A child inherits
+ *  the parent's NODE_OPTIONS (the Windows login task carries the user's into the daemon), and V8 lets a --max-old-space-size there
+ *  override the command line's --max-heap-size (measured 2026-10-22, node 22: 8192 → an 8195 MB limit; 64 → a 448 MB limit over a
+ *  64 MB old space). NODE_OPTIONS refuses --max-heap-size itself, and every other option in it is kept as written. */
+const HEAP_OPTION = /(^|\s)"?--max[-_](?:old|semi)[-_]space[-_]size=[^\s"]*"?(?=\s|$)/g
+export function heapEnv(env = process.env) {
+  if (!env.NODE_OPTIONS) return env
+  const rest = env.NODE_OPTIONS.replace(HEAP_OPTION, '$1').trim()
+  const out = { ...env, NODE_OPTIONS: rest }
+  if (!rest) delete out.NODE_OPTIONS
+  return out
+}
 /** What one stored byte of a record costs in the heap once read back and parsed (measured: 0.97x on generated Claude Code
  *  sessions, 1.62-1.69x on the user's real one, 2026-10-21). */
 export const HEAP_PER_STORED = 2
