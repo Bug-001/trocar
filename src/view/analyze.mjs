@@ -28,6 +28,7 @@ import { compactionVerdict, hasCompactionPreamble } from '../identity/session-id
 import { respOf } from './assemble.mjs'
 import { HEAD, taskOf } from './blockmeta.mjs'
 import { streamParts } from '../dissect/sse-spans.mjs'
+import { num52, numTable } from '../query/projection.mjs'
 export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
 
 const FILE_OPS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
@@ -520,7 +521,20 @@ export function createAnalyzer({ keep = true } = {}) {
   const usageOf = new WeakMap() // step → its call's usage (callFacts)
   let n = 0, top = null, late = false, byOrder = false
   const state = new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, ask, tools }
-  const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', ask: null, tools: new Map() })
+  // a fold that keeps nothing keeps a lane's tool names (tool use id → name) in one table of numbers for all its lanes, keyed by the
+  // lane state's generation and the id (num52: two ids of one number would share a name, odds about n² / 2⁵³), a name as an index
+  let toolT = null, toolGen = 0
+  const toolNames = [], toolIx = new Map()
+  function toolsOf() {
+    if (keep) return new Map()
+    if (!toolT) toolT = numTable()
+    const g = toolGen++ + ':'
+    return {
+      set(id, name) { let i = toolIx.get(name); if (i === undefined) { i = toolNames.length; toolNames.push(name); toolIx.set(name, i) } toolT.set(num52(g + id), i) },
+      get(id) { const i = toolT.get(num52(g + id)); return i === undefined ? undefined : toolNames[i] },
+    }
+  }
+  const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', ask: null, tools: toolsOf() })
   function mkStream(kind) {
     const s = { id: 's' + streams.length, kind, calls: [], events: [], n: 0 }
     streams.push(s)

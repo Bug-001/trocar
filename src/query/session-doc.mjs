@@ -1,7 +1,7 @@
 // src/query/session-doc.mjs — the session answer's document, page and delta (RFC 3.5 §会话读, 1.6 C.5), from a reduced state that
 // src/query/named/session.mjs holds (its `doc`: src/view/reduce.mjs skeletonDoc). Pure over the state: no record, store or heap is touched here.
 import { sessionMetaOfFacts } from '../view/board.mjs';
-import { num52 } from '../view/reduce.mjs';
+import { num52 } from './projection.mjs';
 import { compareStep } from '../view/step-order.mjs';
 import { sessionFactsOf } from './rows.mjs';
 import { QueryArgError } from './named/index.mjs';

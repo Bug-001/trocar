@@ -6,6 +6,7 @@
 // the document is let go.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -46,6 +47,7 @@ const read = (opts, calls) => {
   s.append(calls)
   const out = JSON.parse(execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', `--max-old-space-size=${WORKER_MEMORY_MB}`, '--input-type=module', '-e', READ, home, s.id],
     { encoding: 'utf8', maxBuffer: 1 << 20 }))
+  fs.rmSync(path.dirname(home), { recursive: true, force: true }) // a live-shaped session is hundreds of MB on disk
   assert.ok(out.calls > 0.99 * calls, `${out.calls} of ${calls} calls read`)
   assert.equal(out.truncated, null)
   return out
@@ -56,7 +58,7 @@ const read = (opts, calls) => {
 // records) of N and 2N calls, N past what fills the fixed caches: what 2N holds more than N is at most N × SPINE_PER_ROW beside its
 // new blocks × SPINE_PER_BLOCK.
 test('what a session read keeps grows by at most SPINE_PER_ROW a call', { timeout: 600_000 }, () => {
-  const { calls: N, ...opts } = live(0.12), one = read(opts, N), two = read(opts, 2 * N)
+  const { calls: N, ...opts } = live(0.24), one = read(opts, N), two = read(opts, 2 * N)
   const per = (two.retained - one.retained - (two.blocks - one.blocks) * SPINE_PER_BLOCK) / (two.calls - one.calls)
   assert.ok(per <= SPINE_PER_ROW, `${Math.round(per)} B a call (${one.retained} → ${two.retained} B, ${one.blocks} → ${two.blocks} blocks, ${one.calls} → ${two.calls} calls), SPINE_PER_ROW ${SPINE_PER_ROW}`)
 })

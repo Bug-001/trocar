@@ -10,7 +10,7 @@
 // pb}` a frontier, after each fold step (`pb` = the projection's bytes then). `p` (set by append) = the offset of the previous line
 // of the same rid (calls and gones) or lane key (lanes and lane gones), null for the first: versionAt walks it.
 //   In the heap: rid → its latest call / gone line and lane key → its latest line (offset and length in typed columns), frontier rid
-// → offset; nothing else per line. Lines are read back by offset through a cache of LOG_BYTES of heap (one to two times).
+// → offset; nothing else per line. Lines are read back by offset through a cache of two times LOG_BYTES of heap (projection.mjs lru).
 //   Open: a header of another FOLD_V or a pid not the projection's id, or a line that does not parse before the last → the file is
 // deleted and the log starts empty, with one `projection-rebuilt` note (D38). Then it is cut back to the last frontier whose `pb` ≤
 // the projection's bytes (a step whose frontier is missing or torn, or that the projection no longer holds, is dropped with all
@@ -19,10 +19,10 @@
 import nodeFs from 'node:fs';
 import { trocarHome } from '../paths.mjs';
 import { lineFile } from './line-file.mjs';
-import { projectionFile, linesOf, lineIndex, gens, HEAP_PER_LINE_BYTE } from './projection.mjs';
+import { projectionFile, linesOf, lineIndex, lru, HEAP_PER_LINE_BYTE } from './projection.mjs';
 
 export const FOLD_V = 1;
-/** The heap the read cache keeps of parsed lines (one to two times it): a K term of the reduction's bound (3.5 §内存有界). */
+/** The heap the read cache keeps of parsed lines (two times it): a K term of the reduction's bound (3.5 §内存有界). */
 export const LOG_BYTES = 4 << 20;
 const CHAIN = { c: 'rid', g: 'rid', l: 'lane', lg: 'lane' };
 const KINDS = new Set(['c', 'g', 'l', 'lg', 'i', 'x', 'f']);
@@ -46,7 +46,7 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
   const lines = lineFile({ fs, file, write, onFail: (e) => sink.push({ where: 'fold-log', code: 'projection-write-failed', level: 'note',
     reason: `The fold log could not be written (${e.code || e.message}); this session's reduction is kept in memory and done again next time.` }) });
   const calls = lineIndex(), lanes = lineIndex(), fronts = new Map();
-  const cache = gens(LOG_BYTES); // offset → [line, length]
+  const cache = lru(2 * LOG_BYTES); // offset → [line, length]
   let last; // the last frontier's offset
   const take = (k, id, off, len) => {
     if (k === 'f') { fronts.set(id, off); last = off; } else if (CHAIN[k]) (CHAIN[k] === 'rid' ? calls : lanes).set(id, off, len);

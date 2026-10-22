@@ -35,13 +35,13 @@ export const PROJ_V = 7;
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
 const SHARE_DEPTH = 3, SHARE_MIN = 48;
 // rows and shared values read back are kept by what they weigh in the heap (a row grows with its context: a count let a long
-// lane's rows hold most of the heap, 2026-10-22), the value keys looked for by count; each cache holds one to two times its figure
+// lane's rows hold most of the heap, 2026-10-22), the value keys looked for by count; each cache holds two times its figure
 const ROW_HEAP = 2 << 20, SHARED_HEAP = 2 << 20, SEEN = 1 << 14;
 // what a row or shared value read back costs in the heap per byte of its line: 2.6 measured (after a forced GC) on rows read back
 // with their shared values put back unshared, from test/query/big-session.mjs live(0.08) and live(0.2) (a row parsed alone 1.9, a
 // shared value 1.95), 3.5-7 on the user's live session (a heap diagnosis); 2026-10-22
 export const HEAP_PER_LINE_BYTE = 4;
-/** What an open store keeps at most of rows and shared values read back (each cache holds one to two times its figure): the heap
+/** What an open store keeps at most of rows and shared values read back (each cache holds two times its figure): the heap
  *  a warm session's store costs beside its reduction (src/query/named/session.mjs). */
 export const STORE_HEAP = 2 * (ROW_HEAP + SHARED_HEAP);
 const CHUNK = 1 << 20;
@@ -90,53 +90,89 @@ function eachSlot(v, depth, visit) {
   if (!isObj(v) || depth >= SHARE_DEPTH) return;
   for (const k of Array.isArray(v) ? v.keys() : Object.keys(v)) if (visit(v, k)) eachSlot(v[k], depth + 1, visit);
 }
-// key → [offset, length] of a line on disk: a Map to a slot, the places in two typed columns (no array per key); a slot never
-// changes while the store is open, and names its key back (the array shares the Map's key strings)
-export function lineIndex() {
-  const slot = new Map(), names = [];
-  let off = new Float64Array(256), len = new Uint32Array(256);
+// a 52-bit number of a string (two 32-bit FNV-style hashes), for a table of numbers: a hit is verified against the value itself
+export const num52 = (v) => {
+  let a = 0x811c9dc5, b = 0x9747b28c;
+  for (let i = 0; i < v.length; i++) { const c = v.charCodeAt(i); a = Math.imul(a ^ c, 0x01000193); b = Math.imul(b ^ c, 0x5bd1e995) ^ (b >>> 15); }
+  return (a >>> 0) * 0x100000 + ((b >>> 0) & 0xfffff);
+};
+/** numTable() → 52-bit numbers → int32 values, open addressing in two typed arrays filled to at most three quarters (a Map's entry
+ *  costs about 40 B, a key here 16 to 32 B). */
+export function numTable() {
+  let cap = 1024, n = 0, keys = new Float64Array(cap), vals = new Int32Array(cap).fill(-1);
+  const index = (x) => { let i = x % cap; while (vals[i] >= 0 && keys[i] !== x) i = (i + 1) & (cap - 1); return i; };
+  const put = (x, v) => { const i = index(x); if (vals[i] < 0) n++; keys[i] = x; vals[i] = v; };
   return {
-    has: (k) => slot.has(k),
-    get: (k) => { const i = slot.get(k); return i === undefined ? undefined : [off[i], len[i]]; },
+    get: (x) => { const v = vals[index(x)]; return v >= 0 ? v : undefined; },
+    set(x, v) {
+      if (4 * (n + 1) > 3 * cap) {
+        const ok = keys, ov = vals;
+        cap *= 2; n = 0; keys = new Float64Array(cap); vals = new Int32Array(cap).fill(-1);
+        for (let i = 0; i < ok.length; i++) if (ov[i] >= 0) put(ok[i], ov[i]);
+      }
+      put(x, v);
+    },
+  };
+}
+// key → [offset, length] of a line on disk: a slot found through the key's number (numTable; a key whose number another key took
+// first in a Map of its own), the places in two typed columns; a slot never changes while the store is open, and names its key back
+export function lineIndex() {
+  let first = numTable(), spill = new Map();
+  const names = [];
+  let off = new Float64Array(256), len = new Uint32Array(256);
+  const slotOf = (k) => { const s = first.get(num52(k)); return s === undefined ? undefined : names[s] === k ? s : spill.get(k); };
+  return {
+    has: (k) => slotOf(k) !== undefined,
+    get: (k) => { const i = slotOf(k); return i === undefined ? undefined : [off[i], len[i]]; },
     set(k, o, l) {
-      let i = slot.get(k);
+      let i = slotOf(k);
       if (i === undefined) {
-        i = slot.size;
+        i = names.length;
         if (i === off.length) { const o2 = new Float64Array(2 * i), l2 = new Uint32Array(2 * i); o2.set(off); l2.set(len); off = o2; len = l2; }
-        slot.set(k, i); names.push(k);
+        const h = num52(k);
+        if (first.get(h) === undefined) first.set(h, i); else spill.set(k, i);
+        names.push(k);
       }
       off[i] = o; len[i] = l;
     },
-    slotOf: (k) => slot.get(k),
+    slotOf,
     keyAt: (i) => names[i],
-    keys: () => slot.keys(),
-    get size() { return slot.size; },
-    clear: () => { slot.clear(); names.length = 0; },
+    keys: () => names.values(),
+    get size() { return names.length; },
+    clear: () => { first = numTable(); spill = new Map(); names.length = 0; },
   };
 }
-// a cache in two generations: an entry goes into the current one, which becomes the old one (the old one dropped) once what it
-// holds weighs `cap`; a hit in the old one moves to the current one. So it keeps at least the last `cap` of weight used and at
-// most 2 × `cap` (plus one entry), every operation O(1). (Evicting the oldest entry of one Map in insertion order costs time with
-// the Map's size in V8, whose deleted entries stay as holes the next eviction walks: 6 µs an eviction at 32768 entries, 2026-10-22.)
-export function gens(cap) {
-  let cur = new Map(), old = new Map(), w = 0;
-  const put = (k, v, kw) => {
-    cur.set(k, [v, kw]); w += kw;
-    if (w >= cap) { old = cur; cur = new Map(); w = 0; }
+/** lru(max) → a cache that holds at most `max` of weight (plus its newest entry): the least recently used entry goes first. Uses
+ *  are kept in a queue whose stale places are skipped and compacted away, so every operation is O(1) amortised (evicting the oldest
+ *  entry of one Map in insertion order costs time with the Map's size in V8, whose deleted entries stay as holes the next eviction
+ *  walks: 6 µs an eviction at 32768 entries, 2026-10-22). Once full it holds its figure, so a heap measured past that does not swing
+ *  with when a generation turned over. */
+export function lru(max) {
+  let map = new Map(), q = [], h = 0, w = 0;
+  const compact = () => {
+    const nq = [];
+    for (let j = h; j < q.length; j++) { const k = q[j], e = k !== undefined && map.get(k); if (e && e.at === j) { e.at = nq.length; nq.push(k); } }
+    q = nq; h = 0;
+  };
+  const touch = (k, e) => { e.at = q.length; q.push(k); if (q.length > 2 * map.size + 64) compact(); };
+  const evict = () => {
+    while (w > max && map.size > 1) {
+      const k = q[h], e = k !== undefined && map.get(k);
+      q[h++] = undefined;
+      if (e && e.at === h - 1) { map.delete(k); w -= e.w; }
+    }
   };
   return {
-    get(k) {
-      const e = cur.get(k);
-      if (e) return e[0];
-      const o = old.get(k);
-      if (!o) return undefined;
-      old.delete(k); put(k, o[0], o[1]);
-      return o[0];
+    get(k) { const e = map.get(k); if (!e) return undefined; touch(k, e); return e.v; },
+    has: (k) => map.has(k),
+    set(k, v, kw = 1) {
+      const e = map.get(k);
+      if (e) w -= e.w;
+      const n = { v, w: kw, at: 0 };
+      map.set(k, n); w += kw; touch(k, n); evict();
     },
-    has: (k) => cur.has(k) || old.has(k),
-    set(k, v, kw = 1) { const e = cur.get(k); if (e) w -= e[1]; old.delete(k); put(k, v, kw); },
-    delete(k) { const e = cur.get(k); if (e) { w -= e[1]; cur.delete(k); } old.delete(k); },
-    clear() { cur = new Map(); old = new Map(); w = 0; },
+    delete(k) { const e = map.get(k); if (e) { w -= e.w; map.delete(k); } },
+    clear() { map = new Map(); q = []; h = 0; w = 0; },
   };
 }
 
@@ -149,11 +185,11 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     reason: `The context projection could not be written (${e.code || e.message}); this session is kept in memory and extracted again next time.` }) });
   const at = lineIndex(); // bid → its line
   const rowAt = lineIndex(); // rid → its line
-  const rowCache = gens(ROW_HEAP); // rid → row, weighed in heap
+  const rowCache = lru(2 * ROW_HEAP); // rid → row, weighed in heap
   const brks = new Map();
   const sharedAt = lineIndex(); // shared value key → its line
-  const sharedCache = gens(SHARED_HEAP); // one object for every row read while it is kept
-  const seen = gens(SEEN); // content keys of the values at share positions written last
+  const sharedCache = lru(2 * SHARED_HEAP); // one object for every row read while it is kept
+  const seen = lru(2 * SEEN); // content keys of the values at share positions written last
 
   const refsHeld = (row) => { let ok = true; eachSlot(row, 0, (h, k) => { const v = h[k]; if (!isRef(v)) return isObj(v); if (!sharedAt.has(v.$s)) ok = false; return false; }); return ok; };
   const lineAt = ([o, l]) => JSON.parse(lines.read(o, l).toString('utf8'));
@@ -271,6 +307,9 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
       return row;
     },
     get size() { return rowAt.size; },
+    /** a row's slot: 0, 1, … in the order the store took them in, fixed while it is open; keyAt(slot) names it back */
+    slotOf: (rid) => rowAt.slotOf(rid),
+    keyAt: (slot) => rowAt.keyAt(slot),
     keys: () => rowAt.keys(),
     *values() { for (const k of rowAt.keys()) yield rows.get(k); },
     *[Symbol.iterator]() { for (const k of rowAt.keys()) yield [k, rows.get(k)]; },

@@ -32,11 +32,15 @@ import { documentOf, serialOf, keep, deltaOf, pageOf, limitOf } from '../session
 
 export const params = Object.freeze(['id', 'since', 'before', 'limit']);
 
-/** What a session read keeps in the heap per call (the reduction's columns, its lane's ledger share, the plan's and the marks' entries),
- *  until a reduction of THIS session measured it (HeapBound below). Measured 2026-10-22 (after a forced GC, in a heap of the worker's
- *  size, what a read of a test/query/big-session.mjs live(0.24) session holds more than one of live(0.12), per call, its new blocks
- *  at SPINE_PER_BLOCK taken out): 5,488 B (12,437 B before the fold log). The figure stays at its old value until it is ≤ 1 KiB
- *  (3.5 §内存有界). */
+/** What a session read keeps in the heap per call (the reduction's columns and its lanes' shares, the projection's row and shared
+ *  value index, the plan's entry, the kept mark's digest), until a reduction of THIS session measured it (HeapBound below).
+ *  Measured 2026-10-22 as what a read of a test/query/big-session.mjs live(0.48) session holds more than one of live(0.24), per
+ *  call, after a forced GC, the objects each part dominates summed (a heap snapshot: the caches of K and the blocks' columns left
+ *  out): 1,838 B, of it 1,252 B the analyzer's lane ledgers (resources and seen paths) and 586 B the rest (the reduction state and
+ *  its mark 328, the row and shared value index 204, the plan 54). A fold that keeps nothing needs no ledger (its deltas do not
+ *  depend on it and replayLedger rebuilds it): without it, 586 × 1.25 fits 3.5's 1 KiB. The figure stays at its old value until
+ *  then and until the cut tests size their sessions for it (test/query/cut-fits.test.mjs: rows = the room ÷ the figure):
+ *  see 3.5 §内存有界. */
 export const SPINE_PER_ROW = 16 * 1024;
 /** What the reduction keeps in the heap per distinct block of the session (its store's slot, its block columns and interned keys:
  *  src/view/reduce.mjs, src/query/projection.mjs): 222 B measured (after a forced GC, in a heap of the worker's size) as what a
@@ -102,7 +106,7 @@ function planOf(members, k, blocks) {
   let p = plans.get(members);
   if (!p || p.perRow !== perRow || p.blockSteps !== blockSteps) {
     const { read, bound, room } = fitting([...members].sort(stepOrder), perRow, steadyBytes() + blockSteps * stepBytes);
-    p = { perRow, blockSteps, read, bound, room, limit: room + working(read), inCut: new Set(read.map((r) => String(r.id))),
+    p = { perRow, blockSteps, read, bound, room, limit: room + working(read),
       byId: new Map(members.map((r) => [String(r.id), r])), order: members.map((r) => String(r.id)).sort(posCmp), key: rowsKey(members).id };
     plans.set(members, p);
   }
@@ -169,7 +173,6 @@ export async function sessionState(ctx, id) {
   const errors = [...index.errors], k = keyOf(ctx, id), progress = ctx.progress || (() => {});
   const store = storeOf(ctx, String(id), k);
   errors.push(...store.opened.splice(0));
-  const byIdAll = new Map(members.map((r) => [String(r.id), r]));
   // extraction errors are the member's own (its row says why, on every answer), not this request's
   const read = (rs) => { progress(); return recordsAt({ home: ctx.home, fs: ctx.fs, rows: rs.filter(Boolean), errors: [], remember: false }); };
   const ex = extractMembers({ store, members, recordsAt: read, sessionId: String(id), budgetMs: ctx.writer === true ? 50 : Infinity, errors });
@@ -178,7 +181,7 @@ export async function sessionState(ctx, id) {
   const last = planOf(members, k, store.defCount).order.at(-1);
   const pending = mark == null || posCmp(mark, last) < 0 ? { done: ex.done, total: ex.total } : null;
   const resolve = (ref) => {
-    const row = byIdAll.get(parseTextRef(ref).recordId);
+    const row = planOf(members, k, store.defCount).byId.get(parseTextRef(ref).recordId);
     const rec = row && recordsAt({ home: ctx.home, fs: ctx.fs, rows: [row], errors: [], remember: false })[0];
     return rec ? blockAt(rec, ref) : null;
   };
@@ -191,7 +194,7 @@ export async function sessionState(ctx, id) {
       const st = grow(box, { ctx, id: String(id), store, plan, want, resolve, progress, errors });
       const doc = skeletonOf(st.R);
       // the document is built beside the state: past the ceiling, the session is cut as if its reduction had stopped here
-      if (usedHeap() > heapCeiling() && liveHeap() > heapCeiling()) throw new HeapBound(st.rids.size);
+      if (usedHeap() > heapCeiling() && liveHeap() > heapCeiling()) throw new HeapBound(st.R.members().length);
       states.get(k, st, () => st);
       return { id: String(id), rows: members, store, mark, pending, truncated: plan.bound, doc, R: st.R, errors, kept: st, plan, key: k };
     } catch (e) {
@@ -207,7 +210,7 @@ export async function sessionState(ctx, id) {
   }
 }
 // What a kept state weighs: its rows and its store's blocks, the marks kept, the store's and the reduction's caches.
-const costOf = (st, perRow) => st.rids.size * perRow + st.store.defCount * SPINE_PER_BLOCK + st.markBytes + STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES;
+const costOf = (st, perRow) => st.n * perRow + st.store.defCount * SPINE_PER_BLOCK + st.markBytes + STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES;
 // A reduction from scratch writes a fold log from scratch (3.5 §内存有界: a cut that moves restarts the fold and its log): the
 // worker's beside the projection (4.3 §4), the local path's in memory only.
 function freshLog(ctx, id, store, errors) {
@@ -221,19 +224,21 @@ function freshLog(ctx, id, store, errors) {
 function grow(box, { ctx, id, store, plan, want, resolve, progress, errors }) {
   let st = box.old;
   box.old = null;
-  if (st && !(st.store === store && st.perRow === plan.perRow && [...st.rids].every((r) => plan.inCut.has(r)))) { st.R.log.close(); st = null; }
+  // in the cut: at or after its first row in step order (the cut reads a suffix of the members in step order)
+  const inCut = (rid) => { const r = plan.byId.get(rid); return !!r && stepOrder(r, plan.read[0]) >= 0; };
+  if (st && !(st.store === store && st.perRow === plan.perRow && st.R.members().every(inCut))) { st.R.log.close(); st = null; }
   if (!st) {
-    st = { base: liveHeap(), store, perRow: plan.perRow, rids: new Set(), marks: new Map(), markBytes: 0, cost: 0, sink: [], hook: null, resolve: null };
+    st = { base: liveHeap(), store, perRow: plan.perRow, n: 0, marks: new Map(), markBytes: 0, cost: 0, sink: [], hook: null, resolve: null };
     const s = st;
     s.R = reduction(store, { log: freshLog(ctx, id, store, s.sink), resolve: (ref) => s.resolve(ref), errors: s.sink, progress: (rid) => s.hook(rid) });
   }
   // a state grown across requests is held against the heap it began from (the extraction of a session read for the first time
   // grows it a slice at a time: no one reduction of it is from scratch)
-  const meter = { base: st.base, since: 0, gap: 0, limit: plan.limit, n: st.rids.size };
+  const meter = { base: st.base, since: 0, gap: 0, limit: plan.limit, n: st.n };
   st.resolve = resolve;
   st.hook = (rid) => { progress(); bounded(meter, ++meter.n, (plan.byId.get(rid) || {}).stored_bytes || 0); };
-  const fresh = want.filter((rid) => !st.rids.has(rid));
-  if (fresh.length) { st.R.add(fresh); for (const rid of fresh) st.rids.add(rid); }
+  const fresh = want.filter((rid) => !st.R.has(rid));
+  if (fresh.length) { st.R.add(fresh); st.n += fresh.length; }
   errors.push(...st.sink.splice(0));
   st.cost = costOf(st, plan.perRow);
   return st;

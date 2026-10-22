@@ -19,12 +19,12 @@ import { compareStep } from './step-order.mjs';
 import { compactionVerdict } from '../identity/session-identity.mjs';
 import { boardDissectorOf } from '../dissect/registry.mjs';
 import { COMP_KEYS, tellApart, taskOf, HEAD } from './blockmeta.mjs';
-import { posCmp, gens } from '../query/projection.mjs';
+import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
 import { openFoldLog } from '../query/fold-log.mjs';
 
 const KEYFRAME = 32; // a materialised list kept every KEYFRAME links of a base chain
-// what the lists kept (keyframes and the lists asked last) and the facts read back may weigh in the heap: each a cache in two
-// generations (src/query/projection.mjs gens), so it holds one to two times its figure
+// what the lists kept (keyframes and the lists asked last) and the facts read back may weigh in the heap: each a cache of two times
+// its figure (src/query/projection.mjs lru)
 const LIST_BYTES = 2 << 20, FACTS_BYTES = 2 << 20;
 /** What a store's reduction caches hold at most beside its block columns (src/query/named/session.mjs counts it with the store's). */
 export const REDUCE_HEAP = 2 * (LIST_BYTES + FACTS_BYTES);
@@ -34,30 +34,6 @@ export const REDUCE_HEAP = 2 * (LIST_BYTES + FACTS_BYTES);
 // slot, filled from its line the first time a slot is asked for; a definition's facts `f` are read from its line when asked (the
 // blocks of messages new to their lane, a lane's first prompt), through a cache weighed in bytes. So a block costs a few columns,
 // never its definition (3.5 §内存有界 SPINE_PER_BLOCK).
-// a 52-bit number of a string (two 32-bit FNV-style hashes), for an interner's Map: a hit is verified against the value itself
-export const num52 = (v) => {
-  let a = 0x811c9dc5, b = 0x9747b28c;
-  for (let i = 0; i < v.length; i++) { const c = v.charCodeAt(i); a = Math.imul(a ^ c, 0x01000193); b = Math.imul(b ^ c, 0x5bd1e995) ^ (b >>> 15); }
-  return (a >>> 0) * 0x100000 + ((b >>> 0) & 0xfffff);
-};
-// 52-bit numbers → slots, open addressing in two typed arrays filled to at most three quarters (a Map's entry keyed by a number past
-// 31 bits costs about 50 B, a key here 16 to 32 B)
-function numTable() {
-  let cap = 1024, n = 0, keys = new Float64Array(cap), vals = new Int32Array(cap).fill(-1);
-  const index = (x) => { let i = x % cap; while (vals[i] >= 0 && keys[i] !== x) i = (i + 1) & (cap - 1); return i; };
-  const put = (x, v) => { const i = index(x); if (vals[i] < 0) n++; keys[i] = x; vals[i] = v; };
-  return {
-    get: (x) => { const v = vals[index(x)]; return v >= 0 ? v : undefined; },
-    set(x, v) {
-      if (4 * (n + 1) > 3 * cap) {
-        const ok = keys, ov = vals;
-        cap *= 2; n = 0; keys = new Float64Array(cap); vals = new Int32Array(cap).fill(-1);
-        for (let i = 0; i < ok.length; i++) if (ov[i] >= 0) put(ok[i], ov[i]);
-      }
-      put(x, v);
-    },
-  };
-}
 // value → the first slot that had it; `read(slot)` → that slot's value (read back to verify a hit: a collision never merges two)
 function interner(read) {
   const first = numTable(), spill = new Map(); // spill: values whose number another value holds
@@ -86,7 +62,7 @@ function blocksOf(store) {
     bytes = m(Uint32Array, bytes); chars = m(Uint32Array, chars); sec = m(Uint16Array, sec); role = m(Uint16Array, role); bucket = m(Uint16Array, bucket);
     cap = to;
   };
-  const E = enumOf(), facts = gens(FACTS_BYTES);
+  const E = enumOf(), facts = lru(2 * FACTS_BYTES);
   const readDef = (k) => {
     const D = store.readDef(store.defBid(k));
     if (!D) throw new Error(`the context projection has no definition for block ${store.defBid(k)}`);
@@ -139,8 +115,10 @@ function listsOf(store) {
     if (k === undefined) throw new Error(`the context projection has no definition for block ${bid}`);
     return k;
   };
-  const held = gens(LIST_BYTES); // rid → its list: keyframes and the lists asked last alike
-  const keep = (e) => { held.set(e.rid, e, 8 * (e.list.length + e.mb.length) + 96); return e; };
+  const held = lru(2 * LIST_BYTES); // rid → its list: keyframes and the lists asked last alike
+  // a list weighs 16 B an element (arrays of small integers built by push: 8 B an element and up to half again of spare room; at
+  // 8 B an element the cache held 7.3 MB at its 4 MB figure, test/query/big-session.mjs live(0.48), 2026-10-22)
+  const keep = (e) => { held.set(e.rid, e, 16 * (e.list.length + e.mb.length) + 160); return e; };
   const apply = (base, { k = 0, patch, add }, map) => {
     const out = base ? base.slice(0, k) : [];
     for (const [i, v] of patch || []) out[i] = map(v);
@@ -219,40 +197,47 @@ export function reduce(store, members, { mark = undefined, resolve = null, error
  * differ from the rid's latest (an 8-byte digest per rid). After each add, in order: the lines of calls whose lane key or spawned
  * lane changed, lane header lines that changed (3.5 lane-header closed set), lane-gone lines, item lines (members that are no call),
  * failed lines, and one frontier line `{f: the last rid in write order, n: members folded, pb: the projection's bytes, st: stats}`.
- *   The heap keeps per member its rid, int and step-order ts; per call its lane, digest and the stats' columns; per lane its rids in
- * step order, its base and last call (their lists through the bounded list cache), last composition, first prompt and the
- * analyzer's state; the spawns' 60-character prompt heads for linking. No call, event or document is kept.
+ *   The heap keeps per member, by its row's slot in the store, its step-order ts and its latest line's digest; per lane its calls'
+ * slots in step order, its base and last call (their lists through the bounded list cache), last composition, first prompt, the
+ * sums its header and the stats read, and the analyzer's state (its lane ledgers among it); the spawns' 60-character prompt
+ * heads for linking. No call, event or document is kept. `members()`: the rids read so far, failed ones included.
  * `progress(rid)` is called once per row folded (the worker's silence clock, 3.5:46).
  */
 export function reduction(store, { log, resolve = null, errors = undefined, progress = null } = {}) {
   const L = listsOf(store), B = blocksOf(store);
-  const rids = [], ix = new Map(), ts = [], cts = [], sub = [], dig = [], ctx = [], cmp = [], tin = [], tout = [];
+  // per member, by its row's slot in the store (store.rows.slotOf): its ts and its call's own ts (step order; one string when they
+  // are equal), the digest of its latest line (NaN: none yet; 0: an item)
+  const ts = [], cts = [];
+  let dig = new Float64Array(1024).fill(NaN);
+  const ridAt = (k) => store.rows.keyAt(k), slotOf = (rid) => store.rows.slotOf(rid);
   const failed = new Map(), items = []; // failed rid → its line's offset; the item lines' offsets
   const found = new Map(); // break details worked out by this reduction, written as `brk` lines once an add is done
   const heads = new Map(), written = new Map(); // lane key → its header line's digest; spawn → the child lane its call line names
   let pend = [], newItems = [], newFailed = [], inStep = false, last = -1, top = null, n = 0, F;
-  const intOf = (rid) => { let k = ix.get(rid); if (k === undefined) { k = rids.length; rids.push(rid); ix.set(rid, k); } return k; };
-  const before = (a, b) => compareStep(cts[a], rids[a], cts[b], rids[b]);
-  const byStep = (a, b) => { const p = ix.get(a), q = ix.get(b); return ts[p] != null && ts[q] != null ? compareStep(ts[p], a, ts[q], b) : 0; };
+  const before = (a, b) => compareStep(cts[a], ridAt(a), cts[b], ridAt(b));
+  const byStep = (a, b) => { const p = slotOf(a), q = slotOf(b); return ts[p] != null && ts[q] != null ? compareStep(ts[p], a, ts[q], b) : 0; };
+  const setDig = (k, h) => { if (k >= dig.length) { const d = new Float64Array(Math.max(2 * dig.length, k + 1)).fill(NaN); d.set(dig); dig = d; } dig[k] = h; };
   const flush = () => { if (pend.length) log.append(pend, { errors }); pend = []; };
-  const put = (k, line) => { const h = num52(JSON.stringify(line)); if (dig[k] === h) return; dig[k] = h; pend.push(line); if (pend.length >= 256) flush(); };
+  const put = (k, line) => { const h = num52(JSON.stringify(line)); if (dig[k] === h) return; setDig(k, h); pend.push(line); if (pend.length >= 256) flush(); };
   // the latest line of a call, changed by `edit` (false: unchanged), written again
-  const rewrite = (k, edit) => { flush(); const at = log.latest(rids[k]); if (!at) return; const { p, ...o } = log.read(...at); const line = structuredClone(o); if (edit(line) !== false) put(k, line); };
+  const rewrite = (k, edit) => { flush(); const at = log.latest(ridAt(k)); if (!at) return; const { p, ...o } = log.read(...at); const line = structuredClone(o); if (edit(line) !== false) put(k, line); };
 
+  // a lane's sums for the stats and its header (its calls' peak context, compactions, tokens in and out, monitor flags)
+  const sums = () => ({ peak: 0, cmp: 0, tin: 0, tout: 0, flags: 0 });
   // ── one pass of the fold: its lanes, from scratch on again()
   const fold = () => ({ subs: new Map(), flat: new Map(), dls: new Map(), an: null, spawns: [], links: new Map(), uid: 0, relink: false, fresh: [], subsNew: [] });
   F = fold();
   let rowOf = (rid) => store.rows.get(rid);
   // a doc lane (what the document shows as one lane: a sub-agent's analyzer lane, else a kind) and the sub-lanes it holds
   const dlOf = (S) => { let d = F.dls.get(S.dl); if (!d) F.dls.set(S.dl, d = { id: S.dl, parts: new Set(), first: -1, moved: false }); d.parts.add(S); return d; };
-  const keyOf = (S) => rids[F.dls.get(S.dl).first];
+  const keyOf = (S) => ridAt(F.dls.get(S.dl).first);
   function newSub(fmt, kind, dl) {
-    const S = { fmt, kind, dl, uid: F.uid++, rids: [], base: -1, last: -1, comp: null, ask: null, info: null, flags: 0 };
+    const S = { fmt, kind, dl, uid: F.uid++, rids: [], base: -1, last: -1, comp: null, ask: null, info: null, ...sums() };
     dlOf(S); F.subsNew.push(S);
     return S;
   }
   function dropSub(S) {
-    S.rids = []; S.base = S.last = -1; S.comp = null; S.info = null; S.flags = 0;
+    S.rids = []; S.base = S.last = -1; S.comp = null; S.info = null; Object.assign(S, sums());
     F.spawns = F.spawns.filter((s) => s.S !== S); F.relink = true;
     const d = F.dls.get(S.dl);
     let first = -1;
@@ -261,11 +246,11 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   }
   // a call folded: its columns, its place in its lane, its line
   function emit(k, S, call, ev, ld, usage) {
-    sub[k] = S; ctx[k] = call.ctx || 0; cmp[k] = call.compaction ? 1 : 0; tin[k] = usage.input_tokens || 0; tout[k] = usage.output_tokens || 0;
+    S.peak = Math.max(S.peak, call.ctx || 0); S.cmp += call.compaction ? 1 : 0; S.tin += usage.input_tokens || 0; S.tout += usage.output_tokens || 0;
     S.rids.push(k);
     const d = F.dls.get(S.dl);
     if (d.first < 0 || before(k, d.first) < 0) { if (d.first >= 0) d.moved = true; d.first = k; }
-    const key = rids[d.first], rid = rids[k];
+    const key = ridAt(d.first), rid = ridAt(k);
     const e = ev.map(({ step, streamId, childStreamId, ...x }, i) => {
       const out = { ...x, rid, lane: key };
       if (x.type === 'monitor' && x.flagged) S.flags++;
@@ -281,11 +266,11 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     const it = (store.rows.get(rid) || {}).x;
     put(k, { c: rid, r: callRow(call, key), e, d: ld, rc: recFacts(it && it.item) });
   }
-  const K = { B, cacheOf, pushOf, emit, newSub, at: (rid, row) => L.at(rid, rowOf, row), baseOf, lastOf, int: (rid) => ix.get(rid) };
+  const K = { B, cacheOf, pushOf, emit, newSub, at: (rid, row) => L.at(rid, rowOf, row), baseOf, lastOf, int: slotOf };
   function push(rid, row, reader) {
     rowOf = reader;
-    const k = ix.get(rid), x = row.x || {};
-    if (!isCall(row)) { if (dig[k] === undefined) { dig[k] = 0; newItems.push(k); } return; }
+    const k = slotOf(rid), x = row.x || {};
+    if (!isCall(row)) { if (!(dig[k] >= 0)) { setDig(k, 0); newItems.push(k); } return; }
     if (!F.flat.has(x.format)) F.flat.set(x.format, x.format === 'anthropic' ? anthropicFold(K, F) : flatFold(boardDissectorOf(x.format), K, F));
     F.flat.get(x.format).push(rid, row);
   }
@@ -308,8 +293,8 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   }
   const seq = (list, attrs) => ({ n: list.length, key: (i) => B.key(list[i]), vol: (i) => !!(attrs[i] && attrs[i].volatile), sec: (i) => B.sec(list[i]), name: (i) => B.name(list[i]) });
   // a lane's base (its last call that chained a prefix) and last call, from their rows and the list cache
-  function baseOf(k) { if (k < 0) return null; const rid = rids[k]; return { rid, list: L.at(rid, rowOf).list, attrs: rowOf(rid).attrs || {} }; }
-  function lastOf(S) { return S.last < 0 ? null : { list: L.at(rids[S.last], rowOf).list, comp: S.comp }; }
+  function baseOf(k) { if (k < 0) return null; const rid = ridAt(k); return { rid, list: L.at(rid, rowOf).list, attrs: rowOf(rid).attrs || {} }; }
+  function lastOf(S) { return S.last < 0 ? null : { list: L.at(ridAt(S.last), rowOf).list, comp: S.comp }; }
   // a call's cache break against its lane's base, and the byte-identity of the prefix before it (3.3:75, acceptance #12): no claim
   // over a context shown in part or edited by the server; else each position of [0, idx) holds, on both sides, a block whose
   // verbatim slice with its cache_control cut out has the same SHA-256 (`vh`), volatile positions skipped; a block with no verbatim
@@ -335,7 +320,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     return (rid, row) => {
       const S = take(rid, row), cs = S.rids, me = cs[cs.length - 1];
       if (cs.length < 2 || before(cs[cs.length - 2], me) < 0) return;
-      const ids = cs.slice(0, -1).map((k) => rids[k]);
+      const ids = cs.slice(0, -1).map(ridAt);
       drop(S); dropSub(S);
       let pending = true;
       for (const id of ids) {
@@ -347,20 +332,21 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   }
 
   let reader = (rid) => store.rows.get(rid);
-  const step = (rid, row) => { push(rid, row, reader); last = ix.get(rid); if (progress) progress(rid); };
+  const step = (rid, row) => { push(rid, row, reader); last = slotOf(rid); if (progress) progress(rid); };
   // a row read: a failed one noted, else its order kept (the row returned)
   function read(rid) {
     const row = store.rows.get(rid);
     if (!row) throw new Error(`the context projection has no row for ${rid}`);
-    const k = intOf(rid), x = row.x || {};
+    const k = slotOf(rid), x = row.x || {};
     if (top == null || posCmp(rid, top) > 0) top = rid;
     if (typeof x.unparsed === 'string' && !x.item) { if (!failed.has(rid)) { failed.set(rid, -1); newFailed.push({ x: rid, reason: x.unparsed, code: x.code || 'record-unparseable' }); } return null; }
     n++;
     ts[k] = x.item ? x.item.ts_request : null;
-    cts[k] = !isCall(row) ? ts[k] : x.format === 'anthropic' ? (x.facts || {}).ts_request : x.ts; // the call's own ts (its step order)
+    const c = !isCall(row) ? ts[k] : x.format === 'anthropic' ? (x.facts || {}).ts_request : x.ts; // the call's own ts (its step order)
+    cts[k] = c === ts[k] ? ts[k] : c;
     return row;
   }
-  const folded = () => rids.filter((rid, k) => ts[k] !== undefined && !failed.has(rid));
+  const folded = () => { const out = []; ts.forEach((t, k) => { const rid = ridAt(k); if (!failed.has(rid)) out.push(rid); }); return out; };
   // from scratch over everything added, each row read again
   function again() {
     F = fold(); last = -1; reader = (rid) => store.rows.get(rid);
@@ -372,7 +358,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     const fresh = [...new Set(list.map(String))].filter((rid) => !has(rid)).sort(posCmp);
     let rest = [];
     try {
-      if (!fresh.length) { /* nothing new */ } else if (!inStep && (last < 0 || posCmp(fresh[0], rids[last]) > 0)) {
+      if (!fresh.length) { /* nothing new */ } else if (!inStep && (last < 0 || posCmp(fresh[0], ridAt(last)) > 0)) {
         reader = (rid) => store.rows.get(rid);
         for (let i = 0; i < fresh.length; i++) { // write order: each row read once, as it is folded
           if (i && performance.now() - t0 >= budgetMs) { rest = fresh.slice(i); break; }
@@ -384,7 +370,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
         for (const rid of fresh) { const row = read(rid); if (row) held.set(rid, row); }
         const next = [...held.keys()].sort(byStep);
         reader = (rid) => held.get(rid) || store.rows.get(rid);
-        if (!next.length) { /* only failures */ } else if (inStep && last >= 0 && byStep(next[0], rids[last]) > 0) for (const rid of next) step(rid, held.get(rid));
+        if (!next.length) { /* only failures */ } else if (inStep && last >= 0 && byStep(next[0], ridAt(last)) > 0) for (const rid of next) step(rid, held.get(rid));
         else again();
       }
     } catch (e) {
@@ -397,13 +383,13 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     if (found.size) { store.append({ brks: [...found.values()] }, { errors }); found.clear(); }
     return rest;
   }
-  const has = (rid) => { const k = ix.get(String(rid)); return k !== undefined && (ts[k] !== undefined || failed.has(String(rid))); };
+  const has = (rid) => { const k = slotOf(String(rid)); return k !== undefined && (ts[k] !== undefined || failed.has(String(rid))); };
 
   // after an add: the calls whose lane key or child lane moved, the lane headers, the items, the failures, the frontier
   function settle() {
     flush();
     for (const d of F.dls.values()) if (d.moved) {
-      const key = rids[d.first];
+      const key = ridAt(d.first);
       for (const S of d.parts) for (const k of S.rids) rewrite(k, (o) => {
         if (o.r.lane === key) return false;
         o.r.lane = key; for (const e of o.e) e.lane = key;
@@ -420,7 +406,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     const now = headers(), lines = [];
     for (const [key, h] of now) { const g = num52(JSON.stringify(h)); if (heads.get(key) !== g) { heads.set(key, g); lines.push({ l: key, ...h }); } }
     for (const key of [...heads.keys()]) if (!now.has(key)) { heads.delete(key); lines.push({ lg: key }); }
-    for (const k of newItems) { const x = store.rows.get(rids[k]).x || {}; lines.push({ i: rids[k], it: x.item || null, ...(x.unknown ? { u: x.unknown } : null) }); }
+    for (const k of newItems) { const x = store.rows.get(ridAt(k)).x || {}; lines.push({ i: ridAt(k), it: x.item || null, ...(x.unknown ? { u: x.unknown } : null) }); }
     lines.push(...newFailed);
     if (top != null) lines.push({ f: top, n, pb: store.bytes, st: stats() });
     flush();
@@ -458,17 +444,16 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
       if (!parts.length) continue;
       let count = 0, lastK = -1, peak = 1, flagged = 0;
       for (const S of parts) {
-        count += S.rids.length; flagged += S.flags;
+        count += S.rids.length; flagged += S.flags; peak = Math.max(peak, S.peak);
         const l = S.rids[S.rids.length - 1];
         if (lastK < 0 || before(l, lastK) > 0) lastK = l;
-        for (const k of S.rids) if (ctx[k] > peak) peak = ctx[k];
       }
       const lead = parts.slice().sort((a, b) => before(fmtFirst.get(a.fmt), fmtFirst.get(b.fmt)))[0], firstS = parts.find((S) => S.rids[0] === d.first);
       const meta = lead.fmt === 'anthropic' ? { kind: lead.kind, ...laneMeta(lead.kind) } : FLAT_LANES[lead.kind];
       const sp = lead.fmt === 'anthropic' && lead.kind === 'subagent' ? best.get(lead) : null;
-      const h = { lane: rids[d.first], kind: meta.kind, icon: meta.icon, label: meta.label, task: sp ? sp.arg || taskOf(lead.ask) : null,
-        ...(meta.note ? { note: meta.note } : null), count, first: rids[d.first], last: rids[lastK], peakCtx: peak,
-        spawnRid: sp ? rids[sp.k] : null, parent: sp ? keyOf(sp.S) : null, flagged };
+      const h = { lane: ridAt(d.first), kind: meta.kind, icon: meta.icon, label: meta.label, task: sp ? sp.arg || taskOf(lead.ask) : null,
+        ...(meta.note ? { note: meta.note } : null), count, first: ridAt(d.first), last: ridAt(lastK), peakCtx: peak,
+        spawnRid: sp ? ridAt(sp.k) : null, parent: sp ? keyOf(sp.S) : null, flagged };
       if (!sp) h[HEAD] = firstS.ask ?? null;
       out.push(h);
     }
@@ -479,13 +464,10 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   // the session's stats (the record fold's: analyze.mjs finish, assemble.mjs flatLaneView, mergeViews)
   function stats() {
     const s = { calls: 0, streams: 0, subagents: 0, monitors: 0, compactions: 0, totalIn: 0, totalOut: 0, peakCtx: 0 };
-    for (let k = 0; k < rids.length; k++) {
-      if (!sub[k] || !sub[k].rids.length) continue;
-      s.calls++; s.compactions += cmp[k]; s.totalIn += tin[k]; s.totalOut += tout[k]; if (ctx[k] > s.peakCtx) s.peakCtx = ctx[k];
-    }
     const kinds = new Set();
     for (const S of F.subs.values()) {
       if (!S.rids.length) continue;
+      s.calls += S.rids.length; s.compactions += S.cmp; s.totalIn += S.tin; s.totalOut += S.tout; if (S.peak > s.peakCtx) s.peakCtx = S.peak;
       if (S.fmt !== 'anthropic') { const kk = `${S.fmt}\n${S.kind}`; if (kinds.has(kk)) continue; kinds.add(kk); }
       s.streams++;
       if (S.kind === 'subagent') s.subagents++;
@@ -495,11 +477,12 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   }
   const R = {
     add, has, log,
+    members: () => [...folded(), ...failed.keys()],
     get frontier() { return top; },
     // what skeletonDoc reads besides the log: the calls in step order, the lanes in the order of their first call, items and failures
     view: () => ({
-      calls: rids.map((_, k) => k).filter((k) => sub[k] && sub[k].rids.length).sort(before).map((k) => rids[k]),
-      lanes: [...F.dls.values()].filter((d) => d.first >= 0 && [...d.parts].some((S) => S.rids.length)).map((d) => d.first).sort(before).map((k) => rids[k]),
+      calls: [...F.subs.values()].flatMap((S) => S.rids).sort(before).map(ridAt),
+      lanes: [...F.dls.values()].filter((d) => d.first >= 0 && [...d.parts].some((S) => S.rids.length)).map((d) => d.first).sort(before).map(ridAt),
       items, failed: [...failed.values()],
     }),
   };
