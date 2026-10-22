@@ -16,7 +16,9 @@
 // thread's continuation does too) and the cache markers (`cache_control` on the system block and on the last message's last block) —
 // so a request body has the size and the long keys a real one has.
 // `reads`: each turn's tool call is a Bash command that reads `reads` distinct files (cat a b c …), so every call adds as many
-// resources to its lane — a call whose meta legitimately costs far more than an average one.
+// resources to its lane's ledger.
+// `names`: each turn's tool call is a tool no call before it used, its name `names` characters long (an MCP tool of a server of its
+// own): the fold's tool map keeps each distinct name, so every call keeps that much more for as long as the fold lives.
 // `tools`: on the Anthropic wires, how many tool definitions each call carries that no call before it did (fresh names and schemas).
 // What the user's live session has besides (every one OFF by default, and drawn from a random stream of its own, so a session
 // without them is byte for byte what it was):
@@ -56,9 +58,9 @@ function words(next, chars) {
   return s
 }
 /** One turn's three messages, ~`growth` bytes of fresh text. */
-function turn(next, i, growth, reads) {
+function turn(next, i, growth, reads, names) {
   const id = `toolu_${i}`
-  const call = () => (reads ? { name: 'Bash', input: { command: 'cat ' + Array.from({ length: reads }, (_, k) => `/w/${i}/${k}.mjs`).join(' ') } }
+  const call = () => (names ? { name: `mcp__s${i}__` + words(next, names).trim().replace(/\W+/g, '_'), input: {} } : reads ? { name: 'Bash', input: { command: 'cat ' + Array.from({ length: reads }, (_, k) => `/w/${i}/${k}.mjs`).join(' ') } }
     : { name: ['Read', 'Edit', 'Bash'][i % 3], input: { file_path: `/work/src/${words(next, 8).trim()}.mjs` } })
   return [
     { role: 'user', content: [{ type: 'text', text: words(next, growth * 0.3) }] },
@@ -73,7 +75,7 @@ function turn(next, i, growth, reads) {
  * thread or chain) once it holds more than `compactAt` characters.
  * `append(n)` appends the next n calls (as the daemon would, one line each) and returns the session's stored bytes so far.
  */
-export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '', cc = 0, reads = 0, tools = 0,
+export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '', cc = 0, reads = 0, names = 0, tools = 0,
   paths = 0, prompt = 0, writes = 0, bigEvery = 0, bigBytes = 2_000_000, bigRun = 4, shared = 0, seal = 64 << 10 } = {}) {
   const next = rng(seed), delay = rng(seed + 1), xr = rng(seed + 2)
   let file = path.join(home, 'raw', `${segment}.ndjson`)
@@ -102,7 +104,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
     const sub = !big && subEvery > 0 && n % subEvery === subEvery - 1
     const lane = sub ? subs[nsub++ % subLanes] : main
     if (sub ? lane.msgs.length > subLen : lane.chars > compactAt) Object.assign(lane, { msgs: [], sent: 0, prev: null, n: lane.n + 1, chars: 0 })
-    const t = turn(next, n, sub ? Math.round(growth / 4) : growth, reads)
+    const t = turn(next, n, sub ? Math.round(growth / 4) : growth, reads, names)
     lane.msgs.push(...t)
     if (sub && preamble && lane.msgs.length === 3) lane.msgs[0].content[0].text = `${preamble}\n${lane.msgs[0].content[0].text}` // a subagent's first prompt
     if (prompt && lane.msgs.length === 3) t[0].content.unshift(everyLane, remind(words(xr, prompt / 2)))

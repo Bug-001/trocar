@@ -8,8 +8,8 @@
 // half of it. The
 // plan reckons SPINE_PER_ROW until a fold measured more (the measured bound: a fold whose heap passes the whole reservation stops,
 // and the plan reads as many rows as it got through, its cost rounded up to a quarter power of two), so rows that cost the estimate
-// are cut by the estimate, never harder (review 2026-10-21: dividing the heap's whole growth by the rows folded showed ~1 % of the
-// user's session).
+// are cut by the estimate, and rows far dearer by what they cost: never to a sliver (review 2026-10-21: dividing the heap's whole
+// growth by the rows folded showed ~1 % of the user's session).
 //
 // One cold query in a process of its own with a small heap (test/query/past-room.mjs readerFlags), of a session grown and extracted
 // past its room beforehand (pastRoom), so a session past its budget stays small.
@@ -72,4 +72,17 @@ test('3.5 §内存有界: a cut session whose rows cost what the plan reckons sh
   assert.ok(c.kept <= bound, `${mb(c.kept)} MB kept for ${c.shown} calls and ${c.blocks} blocks, past ${mb(bound)} MB`)
   assert.ok(c.shown * c.SPINE_PER_ROW >= Math.max(c.room - 2 * c.step, c.room / 2) - c.SPINE_PER_ROW,
     `${c.shown} / ${c.total} calls shown, ${mb(c.shown * c.SPINE_PER_ROW)} MB at ${c.SPINE_PER_ROW} B each, of a ${mb(c.room)} MB room: more than two ${mb(c.step)} MB steps or half of it short (${(c.perRow / 1024).toFixed(1)} KiB kept a call)`)
+})
+
+// Rows far dearer than the estimate (every call uses a tool no call before it did, its name thousands of characters: the fold's tool
+// map keeps each distinct name, ~16 KB a call): the estimate's cut reads more than the room holds at what they cost, the fold passes
+// its reservation and stops, and the measured bound cuts again by the rows the fold got through, never fewer than half of those asked,
+// the cost rounded up to a quarter power of two; the cut then shows at least half of what that fits — not a sliver of it.
+test('3.5 §内存有界: a cut session whose rows cost far more than the plan reckons is cut by the measured bound to at least half of what fits', { timeout: 180_000 }, () => {
+  const c = cut({ growth: 150, subEvery: 4, subLanes: 3, subLen: 12, wire: 'threads', compactAt: 3_000, cc: 4, names: 32_000 }, 128)
+  // the fewest calls the estimate's cut shows (the test above): the rows asked
+  const asked = Math.max(c.room - 2 * c.step, c.room / 2) / c.SPINE_PER_ROW - 1
+  assert.ok(c.shown < asked, `${c.shown} calls shown, not fewer than the ${Math.floor(asked)} the estimate asks for: the measured bound did not cut (else this test proves nothing)`)
+  const fits = asked / 2 / 2 ** 0.25
+  assert.ok(c.shown >= fits / 2, `${c.shown} / ${c.total} calls shown: fewer than half of the ${Math.floor(fits)} that fit at least (half of the ${Math.floor(asked)} asked, the cost rounded up)`)
 })
