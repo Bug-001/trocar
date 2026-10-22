@@ -72,3 +72,13 @@ test('(c) a read that fails is reported in errors, and the next read of the same
   assert.deepEqual(json(recordsAt({ home, rows: rowsOf(N), errors: again, remember: false })), plain)
   assert.deepEqual(again, [])
 })
+
+test('4.2 #3 封存往返: the source pointer a record read back mints is the same before and after its segment is sealed', async () => {
+  const { rawRefOf } = await import('../../src/view/assemble.mjs')
+  const home = rawHome()
+  writeSegment(home, SEG, lines('r', 3))
+  const before = recordsAt({ home, rows: rowsOf(3), remember: false }).map(rawRefOf)
+  await sealSegment(path.join(home, 'raw', `${SEG}.ndjson`), { lockFile: path.join(home, 'collector', 'lock'), journal: null })
+  assert.ok(before.every(Boolean))
+  assert.deepEqual(recordsAt({ home, rows: rowsOf(3), remember: false }).map(rawRefOf), before, 'a text_ref minted on the plaintext still names the record once sealed')
+})

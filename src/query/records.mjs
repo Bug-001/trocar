@@ -106,7 +106,7 @@ function readRows({ home, fs, rows }) {
     try {
       for (const k of ks) {
         const r = rows[k];
-        try { out[k] = recordOf(read(r), segment, r.lineNo, stream); }
+        try { out[k] = recordOf(read(r), segment, r.lineNo, read.stream ? read.stream(r) : stream); }
         catch (e) { errors.push(failedRead(r.id, `cannot be read back: ${String((e && e.message) || e)}`, !(e instanceof SyntaxError))); }
       }
     } finally { read.close(); }
@@ -190,6 +190,8 @@ function sealedReader(file, fs) {
     if (b.length && b[b.length - 1] === NL) b = b.subarray(0, b.length - 1);
     return b.toString('utf8');
   };
+  // a sealed record keeps the stream it was written to, so a text_ref minted on the plaintext names it still (4.2 #3)
+  read.stream = (r) => sf.streams[sf.records[at.get(r.lineNo)][R.stream]];
   read.close = () => {};   // a release: the shared reader is closed by releaseShared, at the end of this stretch
   return read;
 }
