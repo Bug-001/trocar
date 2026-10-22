@@ -19,7 +19,7 @@ export const reviewing = (lane) => lane.kind === 'monitor' || lane.kind === 'tok
 // ── ticks ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 // a call a monitor verdict flagged: the verdict lives in its held lane's `events` (type monitor, 3.5 §会话读); a lane that is
 // not held says nothing per call (its header's `flagged` marks the row name)
-const flaggedOf = (s, lane, c) => { const h = s.desk && s.desk.held.get(lane.id), e = h && h.events.get(`monitor\u001f${c.rid}`); return !!(e && e.flagged === true) }
+const flaggedOf = (s, lane, c) => { const h = s.desk && s.desk.held.get(lane.id), e = h && (h.events.get(c.rid) || []).find((x) => x.type === 'monitor'); return !!(e && e.flagged === true) }
 
 // ticks outside the brush window are culled, not piled at the edges; data-i stays the index inside the lane.
 // A failed call draws ×; a monitor verdict flagged true carries the mark.

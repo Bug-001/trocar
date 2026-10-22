@@ -10,6 +10,10 @@
 //   readTouched(desk, touched, read[, stale]) → {ok, error?, done} | null   those lanes read on; a failed one waits in desk.lagging
 //   applyLane(desk, answer) → {reset}                            a tail / reset page, an older (--to) page, a --from page
 //   listOf(desk, rid) → bid[] | null    stepOf(desk, rid) → {row, lane, held, flat, reply, attrs, detail}
+//   laneEvents(desk, key) → event[]      askOrdinal(desk, key, rid) → k | 0 | null (2.2 K, E1)
+//   applyLedger / ledgerAsk / ledgerDone / readLedger   the `ledger_next` chain (3.5 `resources` 与 `seen`)
+//   seenFiles(desk, key) → [{path, firstRid, count}] | null   seen minus the lane's opened files (2.4:148, E6)
+// A whole-lane read answers the tail page only; older steps come back by `prev` (`to`) pages.
 
 import { compareStep } from '../../../view/step-order.mjs'
 
@@ -117,13 +121,13 @@ export function applySession(desk, a, { before = false } = {}) {
   return { reset: false, touched }
 }
 
-const newHeld = () => ({ steps: new Map(), rids: [], prev: null, next: null, resources: new Map(), seen: new Map(), events: new Map(), kf: new Map() })
+// held lane: steps by rid in step order (`rids`), lane events per rid (several per rid), the ledger by resource key / path, and
+// the `ledger_next` cursors still to read
+const newHeld = () => ({ steps: new Map(), rids: [], prev: null, next: null, resources: new Map(), seen: new Map(), events: new Map(), kf: new Map(), cursors: new Set() })
 
 // drop held steps from index i on, with their cached keyframes and lane events
 function cut(h, i) {
-  const gone = new Set(h.rids.splice(i))
-  for (const rid of gone) { h.steps.delete(rid); h.kf.delete(rid) }
-  for (const [k, e] of h.events) if (gone.has(e.rid)) h.events.delete(k)
+  for (const rid of h.rids.splice(i)) { h.steps.delete(rid); h.kf.delete(rid); h.events.delete(rid) }
 }
 
 /**
@@ -180,10 +184,20 @@ export async function readTouched(desk, touched, read, stale = () => false) {
 
 function merge(map, items, id) { for (const x of items || []) map.set(id(x), x) }
 
+/** A resource's identity (E5): the server's `resKey` / `key`, else `kind::label` (3.5's ledger key). */
+export const resKeyOf = (r) => r.resKey || r.key || r.kind + '::' + r.label
+
+function mergeLedger(h, a) {
+  merge(h.resources, a.resources, resKeyOf)
+  merge(h.seen, a.seen, (x) => x.path)
+}
+
 /**
  * A page without a base and without `next` (tail, reset) replaces the lane's held steps; one without a base but with
- * `next` is an older (--to) page put before them; a page with a base extends the held steps after `base`.
- * Definitions merge by bid; resources / seen / events by identity (key, path, type+rid), the answer's one wins.
+ * `next` is an older (--to) page put before them; a page with a base extends the held steps after `base`. Never pass a
+ * `--ledger` answer here (applyLedger). Definitions merge by bid; resources by resKeyOf and seen by path, the answer's one
+ * wins. Events: every step the answer covers gets the answer's events; the others it carries (a base:null answer's
+ * compaction / summarize) merge by (type, rid). A base:null answer resets the pending ledger cursors to its `ledger_next`.
  */
 export function applyLane(desk, a) {
   merge(desk.defs, a.defs, (d) => d.bid)
@@ -205,10 +219,90 @@ export function applyLane(desk, a) {
   for (const s of fresh) h.steps.set(s.rid, s)
   const rids = fresh.map((s) => s.rid)
   h.rids = a.base == null && !reset ? [...rids, ...h.rids] : [...h.rids, ...rids]
-  merge(h.resources, a.resources, (x) => x.key)
-  merge(h.seen, a.seen, (x) => x.path)
-  merge(h.events, a.events, (x) => `${x.type}\u001f${x.rid}`)
+  mergeLedger(h, a)
+  if (a.base == null) h.cursors = new Set()
+  if (a.ledger_next != null) h.cursors.add(a.ledger_next)
+  const covered = new Set(a.steps.map((s) => s.rid))
+  for (const rid of covered) h.events.delete(rid)
+  for (const e of a.events || []) {
+    const list = h.events.get(e.rid) || h.events.set(e.rid, []).get(e.rid)
+    const i = covered.has(e.rid) ? -1 : list.findIndex((x) => x.type === e.type)
+    if (i < 0) list.push(e); else list[i] = e
+  }
   return { reset }
+}
+
+/** The held lane's events in step order (a rid's own events in the order they came); [] when the lane is not held. */
+export function laneEvents(desk, key) {
+  const h = desk.held.get(key)
+  if (!h) return []
+  const ts = (rid) => desk.rows.get(rid)?.ts ?? h.steps.get(rid)?.ts ?? ''
+  return [...h.events.keys()].sort((x, y) => compareStep(ts(x), x, ts(y), y)).flatMap((rid) => h.events.get(rid))
+}
+
+/**
+ * 2.2's K (E1): the `k` of the last `user` event at or before `rid` among the held events; 0 when there is none and the held
+ * steps start at the lane's first step; null when the held pages cannot know it (`rid` not held, or its user event lies
+ * before the held steps).
+ */
+export function askOrdinal(desk, key, rid) {
+  const h = desk.held.get(key)
+  if (!h || !h.steps.has(rid)) return null
+  const ts = (r) => desk.rows.get(r)?.ts ?? h.steps.get(r)?.ts ?? ''
+  let best = null
+  for (const [r, list] of h.events) {
+    if (!h.steps.has(r) || compareStep(ts(r), r, ts(rid), rid) > 0) continue
+    for (const e of list) if (e.type === 'user' && e.k != null && (!best || compareStep(ts(best.rid), best.rid, ts(r), r) < 0)) best = e
+  }
+  return best ? best.k : h.prev === null ? 0 : null
+}
+
+/** A `--ledger C` answer for held lane `key`: merges only its resources / seen; C is read, its own `ledger_next` is pending. */
+export function applyLedger(desk, key, cursor, a) {
+  const h = desk.held.get(key)
+  if (!h) return
+  mergeLedger(h, a)
+  h.cursors.delete(cursor)
+  if (a.ledger_next != null) h.cursors.add(a.ledger_next)
+}
+
+/** The next ledger read of held lane `key`, or null when none is pending. */
+export function ledgerAsk(desk, key) {
+  const c = desk.held.get(key)?.cursors.values().next().value
+  return c == null ? null : { lane: key, ledger: c }
+}
+
+/** The lane is held and its ledger chain is read to the end (2.4's group counts are exact). */
+export const ledgerDone = (desk, key) => !!desk.held.get(key) && desk.held.get(key).cursors.size === 0
+
+/**
+ * Read lane `key`'s ledger chain to the end with `read(name, params)` (envelope {ok, data, error}). A failed read stops and
+ * leaves its cursor pending. → {ok: true} | {ok: false, error}; null when `stale()` turned true.
+ */
+export async function readLedger(desk, key, read, stale = () => false) {
+  for (let q = ledgerAsk(desk, key); q; q = ledgerAsk(desk, key)) {
+    const r = await read('lane', q)
+    if (stale()) return null
+    if (!r || !r.ok || !r.data) return { ok: false, error: (r && r.error) || 'cause not known' }
+    applyLedger(desk, key, q.ledger, r.data)
+  }
+  return { ok: true }
+}
+
+// the same file under two spellings: equal, or one is a path suffix of the other (absolute vs relative)
+const sameFile = (a, b) => a === b || a.endsWith('/' + b) || b.endsWith('/' + a)
+
+/**
+ * 2.4's 「只见到名字」 (2.4:148): the held lane's `seen` minus every path naming a file the lane opened (sameFile), in the
+ * step order of `firstRid`, then `count` descending (E6). Uncapped (SEEN_CAP is the renderer's). null when not held.
+ */
+export function seenFiles(desk, key) {
+  const h = desk.held.get(key)
+  if (!h) return null
+  const opened = [...h.resources.values()].filter((r) => r.kind === 'file').map((r) => String(r.label))
+  const ts = (rid) => desk.rows.get(rid)?.ts ?? h.steps.get(rid)?.ts ?? ''
+  return [...h.seen.values()].filter((x) => !opened.some((p) => sameFile(p, x.path)))
+    .sort((x, y) => compareStep(ts(x.firstRid), x.firstRid, ts(y.firstRid), y.firstRid) || y.count - x.count)
 }
 
 function applyOps(p, s) {

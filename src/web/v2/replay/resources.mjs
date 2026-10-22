@@ -10,8 +10,8 @@ import { resState } from './lanes.mjs'
 import { relPath, midClip } from './analysis.mjs'
 import { navGroupHtml, jumpToStepAndBlock } from './outline.mjs'
 import * as W from '../labels/replay.mjs'
+import { resKeyOf, laneEvents } from './model.mjs'
 
-export const resKeyOf = (r) => r.resKey || r.key || r.kind + '::' + r.label
 const SEEN_CAP = 40
 // a resource is datable (has a lifecycle to speak of) only with a usable segment list; the six display groups and the
 // < 1200 px fold line's N count the same set (1.2 §窄屏). An UNKNOWN kind is never dropped (2.4 Edge cases): it renders
@@ -26,7 +26,7 @@ const stepWordOf = (s) => {
 // the anchor lane's ledger as the desk holds it; null while that lane is not held
 function ledgerOf(s) {
   const h = s.desk && s.anchor && s.desk.held.get(s.anchor.id)
-  return h ? { res: [...h.resources.values()], seen: [...h.seen.values()], events: [...h.events.values()] } : null
+  return h ? { res: [...h.resources.values()], seen: [...h.seen.values()], events: laneEvents(s.desk, s.anchor.id) } : null
 }
 
 // a read file's visible name is cut in the middle past this many characters; the hover keeps the full path (2.4)
