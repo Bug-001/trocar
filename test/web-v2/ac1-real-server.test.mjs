@@ -1,5 +1,5 @@
 // test/web-v2/ac1-real-server.test.mjs — 1.4 验收 #7, AC-1 on the real server: for the demo session and every session of the
-// generated multi-harness set, every request block a session document names (every page, followed to the end) reads back
+// generated multi-harness set, every request block of every held step's list (the desk read as the board reads it: `session`, every lane's pages) reads back
 // through `GET /api/block` as exactly the bytes its text_ref spans in the record on disk, and the board displays those bytes
 // (the <pre> read the way a browser parses it). The slice is taken here from the segment file itself, not through the query
 // code under test. The generated set is the seven harnesses' wire shapes (scripts/gen-dataset.mjs).
@@ -10,6 +10,8 @@ import path from 'node:path'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { parseTextRef } from '../../src/raw/refs.mjs'
 import { blockBodyHtml } from '../../src/web/v2/replay/blocks.mjs'
+import { stepOf } from '../../src/web/v2/replay/model.mjs'
+import { deskFrom } from './desk-world.mjs'
 
 const entities = { '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#13;': '\r', '&amp;': '&' }
 // the Raw cell as a browser reads it: one leading newline after <pre> dropped, jsonlay's layout spans removed, references read back
@@ -31,26 +33,26 @@ test('1.4 #7 · AC-1: every request block of every session, every page, is the s
   try {
     const sessions = (await face.get('sessions')).doc.sessions
     assert.ok(new Set(sessions.map((s) => s.harness)).size >= 7, `the set covers the seven harnesses: ${[...new Set(sessions.map((s) => s.harness))]}`)
+    const get = async (name, params) => (await face.get(name, params)).doc
     let checked = 0
     for (const { session_id: id } of sessions) {
-      let after = null, doc
-      do {
-        doc = (await face.get('session', { id, ...(after != null ? { after } : {}) })).doc
-        const refs = new Set([...JSON.stringify(doc.analyzed).matchAll(/"text_ref":"((?:[^"\\]|\\.)+)"/g)].map((m) => JSON.parse(`"${m[1]}"`)))
-        for (const ref of refs) {
-          const { field, start, end, recordId } = parseTextRef(ref)
-          if (field != null || start == null) continue // a reply field or a whole record: not a request block span
-          const rec = recordOf(recordId)
-          if (typeof rec.req_body !== 'string') continue // a body stored compressed or parsed: /api/block says decoded / reserialized (block.mjs), not verbatim
-          const block = (await face.get('block', { ref })).doc
-          const want = rec.req_body.slice(start, end)
-          assert.equal(block.bytes, want, `${ref}: /api/block bytes = the record's span`)
-          assert.equal(block.fidelity.verbatim, true, `${ref}: a span of the stored request is verbatim`)
-          if (want.length <= 20000) assert.equal(shown(blockBodyHtml({ status: 'ok', text: block.bytes }, { text_ref: ref })), want, `${ref}: displayed as captured`)
-          checked++
-        }
-        after = doc.page.next
-      } while (doc.page.has_more)
+      const desk = await deskFrom(get, id)
+      for (const [key, head] of desk.lanes) assert.equal(desk.held.get(key)?.steps.size, head.count, `${id} lane ${key}: every step held`)
+      const refs = new Set()
+      for (const h of desk.held.values()) for (const rid of h.steps.keys()) for (const b of stepOf(desk, rid).flat) if (b.ref != null) refs.add(b.ref)
+      for (const ref of refs) {
+        const { field, start, end, recordId } = parseTextRef(ref)
+        if (field != null || start == null) continue // a reply field or a whole record: not a request block span
+        const rec = recordOf(recordId)
+        if (typeof rec.req_body !== 'string') continue // a body stored compressed or parsed: /api/block says decoded / reserialized (block.mjs), not verbatim
+        const [block] = (await face.get('block', { ref })).doc.blocks
+        const want = rec.req_body.slice(start, end)
+        assert.equal(block.ref, ref)
+        assert.equal(block.bytes, want, `${ref}: /api/block bytes = the record's span`)
+        assert.equal(block.fidelity.verbatim, true, `${ref}: a span of the stored request is verbatim`)
+        if (want.length <= 20000) assert.equal(shown(blockBodyHtml({ status: 'ok', text: block.bytes }, { text_ref: ref })), want, `${ref}: displayed as captured`)
+        checked++
+      }
     }
     assert.ok(checked > 100, `request blocks checked: ${checked}`)
   } finally { await face.close() }
