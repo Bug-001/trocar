@@ -45,6 +45,8 @@ export const HEAP_PER_LINE_BYTE = 4;
  *  a warm session's store costs beside its reduction (src/query/named/session.mjs). */
 export const STORE_HEAP = 2 * (ROW_HEAP + SHARED_HEAP);
 const CHUNK = 1 << 20;
+/** The first read of a line scan (linesOf), doubling up to CHUNK. */
+export const FIRST_CHUNK = 4 << 10;
 const NAME = /^([0-9a-f]{32})(?:\.fold)?\.(?:ndjson|idx(?:\.tmp)?)$/; // a projection, its fold log (src/query/fold-log.mjs), their sidecars
 
 const ctxDir = (home) => path.join(indexDir(home), 'ctx');
@@ -66,10 +68,11 @@ export function* linesOf(fs, file, from = 0) {
   let fd;
   try { fd = fs.openSync(file, 'r'); } catch (e) { if (e.code === 'ENOENT') return; throw e; }
   try {
-    let carry = Buffer.alloc(0), at = from, pos = from, n;
+    // reads of FIRST_CHUNK, doubling up to CHUNK: a caller that stops after the first lines (a header) reads about them only
+    let carry = Buffer.alloc(0), at = from, pos = from, n, size = FIRST_CHUNK;
     const buf = Buffer.alloc(CHUNK);
-    while ((n = fs.readSync(fd, buf, 0, CHUNK, pos)) > 0) {
-      pos += n;
+    while ((n = fs.readSync(fd, buf, 0, size, pos)) > 0) {
+      pos += n; size = Math.min(2 * size, CHUNK);
       const b = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n);
       let from = 0, i;
       while ((i = b.indexOf(10, from)) !== -1) { yield { off: at + from, len: i - from, text: b.toString('utf8', from, i), nl: true }; from = i + 1; }

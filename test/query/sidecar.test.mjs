@@ -10,8 +10,9 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { saveIndexes, extendSession } from '../../src/query/named/session.mjs'
-import { openProjection, projectionFile, gcProjections } from '../../src/query/projection.mjs'
+import { openProjection, projectionFile, gcProjections, FIRST_CHUNK } from '../../src/query/projection.mjs'
 import { openFoldLog, foldLogFile } from '../../src/query/fold-log.mjs'
+import { loadSidecar } from '../../src/query/line-file.mjs'
 
 const SEG = '20261020T164737Z'
 const FIRST = 8, MORE = 6
@@ -71,6 +72,27 @@ function stores(home, id) {
   p.close(); log.close()
   return out
 }
+// What a cold open reads of the projection and the fold log (4.3 §4: the header line, then only the lines past what the sidecar
+// covers), against that bound: the header line in the scan's first read (FIRST_CHUNK), the newline that ends what a sidecar covers,
+// and the lines of the breaks (`b`) a projection's sidecar names by offset
+function openRead(home, id) {
+  const fds = new Set(), files = [projectionFile(home, id), foldLogFile(home, id)]
+  let read = 0
+  const own = { ...fs,
+    openSync(p, ...a) { const fd = fs.openSync(p, ...a); if (files.includes(String(p))) fds.add(fd); else fds.delete(fd); return fd },
+    closeSync(fd) { fds.delete(fd); return fs.closeSync(fd) },
+    readSync(fd, ...a) { const n = fs.readSync(fd, ...a); if (fds.has(fd)) read += n; return n },
+    readFileSync(p, ...a) { const b = fs.readFileSync(p, ...a); if (files.includes(String(p))) read += b.length; return b },
+  }
+  const p = openProjection({ home, fs: own, key: id, write: false, errors: [] })
+  const log = openFoldLog({ home, fs: own, key: id, write: false, projection: { id: p.id, bytes: p.bytes }, errors: [] })
+  p.close(); log.close()
+  const bound = files.reduce((a, f) => {
+    const b = fs.readFileSync(f), sc = loadSidecar({ fs, file: f })
+    return a + b.length - sc.head.bytes + Math.max(FIRST_CHUNK, b.indexOf(10) + 1) + 1 + (sc.parts['b.l'] || []).reduce((x, y) => x + y, 0)
+  }, 0)
+  return { read, bound }
+}
 async function agree(withSide, without, id, tag) {
   assert.deepEqual(stores(withSide, id), stores(without, id), `${tag}: the stores`)
   const a = await answers(withSide, id), b = await answers(without, id)
@@ -82,6 +104,8 @@ test('4.3 #7: a cold open through the sidecars answers what a scan answers, byte
   for (const wire of WIRES) for (const arrival of ARRIVALS) {
     const tag = `${wire} late=${arrival.late} subLanes=${arrival.subLanes}`
     const { home, id } = await written(wire, arrival)
+    const { read, bound } = openRead(copy(home), id)
+    assert.ok(read <= bound, `${tag}: a cold open read ${read} bytes of the projection and the fold log, past the header and what the sidecars cover ${bound}`)
     await agree(copy(home), copy(home, false), id, tag)
   }
 })
