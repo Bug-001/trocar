@@ -20,6 +20,7 @@ import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { extendSession, saveIndexes, sessionState, version } from '../../src/query/named/session.mjs'
 import { PAGE_BYTES } from '../../src/query/session-doc.mjs'
 import { openProjection } from '../../src/query/projection.mjs'
+import { segmentIndex } from '../../src/query/index-build.mjs'
 
 const BASE = { growth: 2_000, compactAt: 20_000, subEvery: 4, subLanes: 3, late: 2 }
 const LEDGERS = { small: { ...BASE, paths: 4 }, page: { ...BASE, paths: 80, pathPool: 20_000 } }
@@ -46,13 +47,14 @@ async function workAt(calls, opts) {
   // a worker of its own (nothing warm shared with another size: src/query/warm.mjs fsTag), over an fs that counts what it reads of
   // the projection and the fold log
   const fds = new Map(), touched = new Set()
-  let counting = false, bytes = 0, fold = 0
+  let counting = false, bytes = 0, fold = 0, idx = 0
+  const segment = path.basename(s.file, '.ndjson'), segIdx = path.join(home, 'index', `${segment}.json`), idxFds = new Set()
   const facts = new Set()
   const own = { ...fs,
-    openSync(p, ...a) { const fd = fs.openSync(p, ...a); if (CTX.test(String(p))) fds.set(fd, String(p).endsWith('.fold.ndjson')); else fds.delete(fd); return fd },
-    closeSync(fd) { fds.delete(fd); return fs.closeSync(fd) },
-    readSync(fd, ...a) { const n = fs.readSync(fd, ...a); if (counting && fds.has(fd)) { bytes += n; if (fds.get(fd)) fold += n } return n },
-    readFileSync(p, ...a) { const b = fs.readFileSync(p, ...a); if (counting && CTX.test(String(p))) { bytes += b.length; if (String(p).endsWith('.fold.ndjson')) fold += b.length } return b },
+    openSync(p, ...a) { const fd = fs.openSync(p, ...a); if (CTX.test(String(p))) fds.set(fd, String(p).endsWith('.fold.ndjson')); else fds.delete(fd); if (String(p) === segIdx) idxFds.add(fd); else idxFds.delete(fd); return fd },
+    closeSync(fd) { fds.delete(fd); idxFds.delete(fd); return fs.closeSync(fd) },
+    readSync(fd, ...a) { const n = fs.readSync(fd, ...a); if (counting && fds.has(fd)) { bytes += n; if (fds.get(fd)) fold += n } if (counting && idxFds.has(fd)) idx += n; return n },
+    readFileSync(p, ...a) { const b = fs.readFileSync(p, ...a); if (counting && CTX.test(String(p))) { bytes += b.length; if (String(p).endsWith('.fold.ndjson')) fold += b.length } if (counting && String(p) === segIdx) idx += b.length; return b },
   }
   // the index's rows of now, each a Proxy noting a read of a member of the session; the session's groups made before counting
   const index = async () => {
@@ -65,7 +67,7 @@ async function workAt(calls, opts) {
     return { rows, members: sessionGroups(rows).get(s.id).length }
   }
   const ctxOf = (rows) => ({ home, fs: own, writer: true, once: { index: { rows, errors: [] } } })
-  const count = async (work) => { touched.clear(); facts.clear(); bytes = fold = 0; counting = true; try { await work() } finally { counting = false } return { rows: touched.size, bytes, fold, facts: facts.size } }
+  const count = async (work) => { touched.clear(); facts.clear(); bytes = fold = idx = 0; counting = true; try { await work() } finally { counting = false } return { rows: touched.size, bytes, fold, facts: facts.size, idx } }
   const slices = (at) => count(async () => { while (await extendSession(ctxOf(at.rows), s.id, 50)); })
 
   let at = await index()
@@ -119,6 +121,7 @@ async function workAt(calls, opts) {
     const d = await runQuery('session', { id: s.id, since: mark }, ctxOf(at.rows))
     assert.equal(d.base, mark, 'answered as a delta')
     assert.equal(d.pending, undefined)
+    mark = d.mark
   })
   const from = await count(async () => {
     const d = await runQuery('lane', { id: s.id, lane: main, from: tip }, ctxOf(at.rows))
@@ -131,7 +134,16 @@ async function workAt(calls, opts) {
   saveIndexes()
   const again = { ...own }, reopen = await count(async () => { while (await extendSession({ home, fs: again, writer: true, once: { index: { rows: at.rows, errors: [] } } }, s.id, Infinity)); })
   const open = await count(async () => openProjection({ home, fs: { ...own }, key: s.id, write: false }).close())
-  return { members: at.members, fresh, callLines, itemLines, slices: sliced, since, from, ledger, item, ledgerBytes, reopen: reopen.bytes - reopen.fold - open.bytes }
+  // the segment's index as the daemon keeps it (4.2 谁写哪一笔 ①): a pass after each new call; `session --since` with nothing
+  // pre-built (its version, its rows) read it after the call before; one new call later, what it reads of that file (4.2:49)
+  const follow = { home, fs: own, writer: true }
+  const sinceCold = async () => { await version({ ...follow, params: { id: s.id } }); mark = (await runQuery('session', { id: s.id, since: mark }, follow)).mark }
+  await segmentIndex({ home, segment, owner: true })
+  s.append(1); await segmentIndex({ home, segment, owner: true }); await sinceCold()
+  const idxWas = fs.statSync(segIdx).size
+  s.append(1); await segmentIndex({ home, segment, owner: true })
+  const indexRead = { ...(await count(sinceCold)), entries: fs.statSync(segIdx).size - idxWas }
+  return { members: at.members, fresh, callLines, itemLines, slices: sliced, since, from, ledger, item, ledgerBytes, reopen: reopen.bytes - reopen.fold - open.bytes, index: indexRead }
 }
 
 const runs = {}
@@ -173,4 +185,37 @@ test('a worker forked again over an unchanged session reads no more of its proje
     const { a, b } = await both(k)
     assert.ok(b.reopen <= a.reopen, `${k}: projection bytes the reopened worker read past opening it, at ${a.members} / ${b.members} members: ${a.reopen} / ${b.reopen}`)
   }
+})
+
+test('bytes `session --since` reads of the segment index after one new call the keeper indexed do not grow with the segment (4.2:49, 3.5:40②)', { timeout: 300_000 }, async () => {
+  for (const k of Object.keys(LEDGERS)) {
+    const { a, b } = await both(k)
+    assert.ok(b.index.idx > 0 && b.index.idx <= a.index.idx + b.index.entries, `${k}: index bytes read at ${a.members} / ${b.members} members: ${a.index.idx} / ${b.index.idx} (+${b.index.entries} new)`)
+  }
+})
+
+// 3.5:45 · 4.3:37: when only the newest segment grew, the row list and the session groups add its new rows; nothing before them is
+// built again or read again. Rows built = row objects that were not in the list before; rows read = reads of a session id of a row
+// the list had before (each such row notes them).
+async function rowWork(calls) {
+  const home = path.join(tmpDir('trocar-rows-'), '.trocar')
+  const s = bigSession({ home, ...BASE })
+  const segment = path.basename(s.file, '.ndjson'), own = { ...fs }
+  s.append(calls); await segmentIndex({ home, segment, owner: true })
+  const was = await indexRows({ home, fs: own })
+  sessionGroups(was)
+  let read = 0
+  for (const r of was) { const v = r.session_id; Object.defineProperty(r, 'session_id', { get() { read++; return v }, enumerable: true }) }
+  const before = new Set(was)
+  s.append(1); await segmentIndex({ home, segment, owner: true })
+  const now = await indexRows({ home, fs: own })
+  const groups = sessionGroups(now), work = { rows: was.length, fresh: now.length - was.length, built: now.filter((r) => !before.has(r)).length, read }
+  assert.deepEqual(groups.get(s.id), now.filter((r) => r.session_id === s.id), 'the grown group holds every row of the session, in order')
+  return work
+}
+
+test('index rows built or read when only the newest segment grew do not grow with the rows before (3.5:45, 4.3:37)', { timeout: 120_000 }, async () => {
+  const a = await rowWork(300), b = await rowWork(1200)
+  assert.ok(b.rows > 3 * a.rows, 'about four times the rows')
+  assert.ok(b.built + b.read <= a.built + a.read + b.fresh, `rows built + read at ${a.rows} / ${b.rows} rows (+${b.fresh} new): ${JSON.stringify({ a, b })}`)
 })

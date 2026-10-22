@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { rawHome, writeSegment, envLine } from './raw-home.mjs'
-import { segmentIndex, allSegments, indexDir } from '../../src/query/index-build.mjs'
+import { segmentIndex, allSegments, indexDir, warmSegmentIndex } from '../../src/query/index-build.mjs'
 
 const SEG = '20261018T100000Z', SEG2 = '20261018T110000Z'
 // The stored mark: the last complete `{"m":…}` line of the append-only index document (4.2 §段索引).
@@ -353,4 +353,43 @@ test('a reader takes only a FRESH lock as "being written", and asks nothing abou
   const old = Date.now() / 1000 - 600
   fs.utimesSync(lock, old, old)
   assert.deepEqual((await allSegments({ home })).map((s) => s.state), ['closed'], 'a lock nobody has refreshed for ten minutes names nothing: the daemon that held it is gone')
+})
+
+// 4.2:49: a reader that read the segment's index before reads only past the last complete mark it read, while the index file is the
+// same file and that mark line's bytes are unchanged; else whole. Over generated sequences of what happens to the index file — the
+// keeper's appends (in chunks), a torn batch it later cuts back, the file cut back in place to an earlier mark, a whole rewrite
+// (a new file by rename), lines the reader cannot parse, and sealing — the reader that kept reading answers what a whole read answers.
+test('读者从上次读到的 mark 往后读:条目与问题和整读相同(残批截回、原地截短、整体重写、封存)', async () => {
+  const { sealSegment } = await import('../../src/raw/seal.mjs')
+  for (let seed = 1; seed <= 6; seed++) {
+    let x = seed * 7919
+    const rnd = () => ((x = (x * 48271) % 2147483647) / 2147483647)
+    const home = rawHome()
+    const raw = path.join(home, 'raw', `${SEG}.ndjson`), idx = path.join(indexDir(home), `${SEG}.json`)
+    const own = { ...fs } // its own warm entries: the reader that keeps reading
+    let n = 0
+    const grow = () => { const k = 1 + Math.floor(rnd() * 4); writeSegment(home, SEG, Array.from({ length: k }, () => (rnd() < 0.1 ? 'not json' : { id: `r${n++}` }))) }
+    const keep = async () => { for (let i = 0; i < 8; i++) if ((await segmentIndex({ home, segment: SEG, owner: true, maxBytes: rnd() < 0.5 ? 400 : Infinity })).done) break }
+    const ops = {
+      keeper: keep,
+      torn: () => { if (fs.existsSync(idx)) fs.appendFileSync(idx, `${JSON.stringify({ id: `${SEG}:999`, ts: null })}\n{"id":"${SEG}:10`) },
+      shrink: () => { // cut back in place (same file) to its first mark
+        if (!fs.existsSync(idx)) return
+        const lines = fs.readFileSync(idx, 'utf8').split('\n'), m = lines.findIndex((l) => l.startsWith('{"m":'))
+        if (m >= 0) fs.writeFileSync(idx, lines.slice(0, m + 1).join('\n') + '\n')
+      },
+      rewrite: async () => { fs.rmSync(idx, { force: true }); await keep() },
+    }
+    const names = Object.keys(ops)
+    for (let step = 0; step < 30; step++) {
+      grow() // the segment moves, so the reader reads again
+      await ops[names[Math.floor(rnd() * names.length)]]()
+      const kept = await warmSegmentIndex({ home, segment: SEG, fs: own }), whole = await segmentIndex({ home, segment: SEG })
+      assert.deepEqual({ records: kept.records, problems: kept.problems }, { records: whole.records, problems: whole.problems }, `seed ${seed} step ${step}`)
+    }
+    await keep()
+    await sealSegment(raw, { lockFile: path.join(home, 'collector', 'lock'), journal: null })
+    const kept = await warmSegmentIndex({ home, segment: SEG, fs: own }), whole = await segmentIndex({ home, segment: SEG })
+    assert.deepEqual({ records: kept.records, problems: kept.problems }, { records: whole.records, problems: whole.problems }, `seed ${seed} sealed`)
+  }
 })
