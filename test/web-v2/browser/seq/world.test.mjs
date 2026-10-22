@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { HARNESSES } from '../../../../src/dissect/harnesses.mjs'
 import { serveBoard } from '../../real-face.mjs'
-import { makeWorld, mainCount } from './world.mjs'
+import { makeWorld, mainCount, settled } from './world.mjs'
 import { deskFrom } from '../../desk-world.mjs'
 
 // the header each wire's generator keys its session by (test/query/big-session.mjs)
@@ -45,7 +45,8 @@ test('W2 the http session carries subagent lanes, a failed call, a compaction, a
   const face = await serveBoard(world)
   try {
     const id = world.sessions.find((s) => s.wire === 'http').id
-    // the desk as the board reads it: every row of `session`, every lane's pages (3.5 §会话读)
+    // the desk as the board reads it once the reduction has caught up: every row of `session`, every lane's pages (3.5 §会话读)
+    await settled(face.get, id)
     const desk = await deskFrom(async (name, p) => (await face.get(name, p)).doc, id)
     const lanes = [...desk.lanes.values()], calls = [...desk.rows.values()], blocks = [...desk.defs.values()]
     assert.ok(lanes.some((l) => l.kind === 'subagent'), 'K-08 a subagent lane')

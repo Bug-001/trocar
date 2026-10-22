@@ -63,9 +63,19 @@ export function makeWorld({ seed = 1, big = false } = {}) {
   }
 }
 
-/** The main lane's call count of session `id`: its lane header's `count` in one `session` read (3.5 §会话读 车道头). */
+/** The `session` answer of `id` once the reduction has caught up (no `pending`, 3.5 §会话读 #25); throws past `ms`. */
+export async function settled(get, id, ms = 20_000) {
+  for (const t0 = Date.now(); ;) {
+    const { status, doc } = await get('session', { id })
+    if (status !== 200 || !Array.isArray(doc?.lanes)) throw new Error(`session ${id}: ${status} ${String(doc?.error ?? "").slice(0, 400)}`)
+    if (!doc.pending) return doc
+    if (Date.now() - t0 > ms) throw new Error(`session ${id}: still pending ${JSON.stringify(doc.pending)} after ${ms} ms`)
+    await new Promise((r) => setTimeout(r, 100))
+  }
+}
+
+/** The main lane's call count of session `id`: its lane header's `count` in a settled `session` answer (3.5 §会话读 车道头). */
 export async function mainCount(get, id) {
-  const { status, doc } = await get('session', { id })
-  if (status !== 200 || !Array.isArray(doc?.lanes)) throw new Error(`session ${id}: ${status} ${String(doc?.error ?? "").slice(0, 400)}`)
+  const doc = await settled(get, id)
   return (doc.lanes.find((l) => l.kind === 'main') || doc.lanes[0])?.count ?? 0
 }
