@@ -17,7 +17,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
-import { extendSession, version } from '../../src/query/named/session.mjs'
+import { extendSession, sessionState, version } from '../../src/query/named/session.mjs'
 import { PAGE_BYTES } from '../../src/query/session-doc.mjs'
 
 const BASE = { growth: 2_000, compactAt: 20_000, subEvery: 4, subLanes: 3, late: 2 }
@@ -46,6 +46,7 @@ async function workAt(calls, opts) {
   // the projection and the fold log
   const fds = new Map(), touched = new Set()
   let counting = false, bytes = 0, fold = 0
+  const facts = new Set()
   const own = { ...fs,
     openSync(p, ...a) { const fd = fs.openSync(p, ...a); if (CTX.test(String(p))) fds.set(fd, String(p).endsWith('.fold.ndjson')); else fds.delete(fd); return fd },
     closeSync(fd) { fds.delete(fd); return fs.closeSync(fd) },
@@ -63,7 +64,7 @@ async function workAt(calls, opts) {
     return { rows, members: sessionGroups(rows).get(s.id).length }
   }
   const ctxOf = (rows) => ({ home, fs: own, writer: true, once: { index: { rows, errors: [] } } })
-  const count = async (work) => { touched.clear(); bytes = fold = 0; counting = true; try { await work() } finally { counting = false } return { rows: touched.size, bytes, fold } }
+  const count = async (work) => { touched.clear(); facts.clear(); bytes = fold = 0; counting = true; try { await work() } finally { counting = false } return { rows: touched.size, bytes, fold, facts: facts.size } }
   const slices = (at) => count(async () => { while (await extendSession(ctxOf(at.rows), s.id, 50)); })
 
   let at = await index()
@@ -93,6 +94,16 @@ async function workAt(calls, opts) {
     assert.equal(d.pending, undefined)
     mark = d.mark
   })
+  // the kept item facts of the folded state (its list and its map hold the same objects), each a Proxy noting a read
+  const its = (await sessionState(ctxOf(at.rows), s.id)).V.cols.its
+  const noted = (o) => new Proxy(o, {
+    get(t, k) { if (counting) facts.add(t); return t[k] },
+    has(t, k) { if (counting) facts.add(t); return k in t },
+    ownKeys(t) { if (counting) facts.add(t); return Reflect.ownKeys(t) },
+  })
+  const wrapped = new Map([...its.items].map(([, o]) => [o, noted(o)]))
+  its.list = its.list.map((o) => wrapped.get(o) ?? o)
+  for (const [rid, o] of its.items) its.items.set(rid, wrapped.get(o))
   // one new call
   const before = at.members
   s.append(1)
@@ -127,6 +138,13 @@ test('rows touched by background slices, `session --since` and `lane --from` aft
     if (k === 'page') assert.ok(a.ledgerBytes > PAGE_BYTES && b.ledgerBytes > PAGE_BYTES, `the main lane's ledger is past a page at both sizes: ${a.ledgerBytes} / ${b.ledgerBytes}`)
     const over = ['slices', 'since', 'from', 'ledger'].filter((x) => b[x].rows > a[x].rows + b.fresh)
     assert.deepEqual(over, [], `${k}: member rows touched at ${a.members} / ${b.members} members (+${b.fresh} new): ${JSON.stringify({ a, b })}`)
+  }
+})
+
+test('kept item facts `session --since` reads after one new call do not grow with the members (3.5:42 「回答只读变了的那些的行」)', { timeout: 300_000 }, async () => {
+  for (const k of Object.keys(LEDGERS)) {
+    const { a, b } = await both(k)
+    assert.ok(b.since.facts <= a.since.facts + b.fresh, `${k}: item facts read at ${a.members} / ${b.members} members (+${b.fresh} new): ${a.since.facts} / ${b.since.facts}`)
   }
 })
 

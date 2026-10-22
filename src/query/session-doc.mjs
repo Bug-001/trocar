@@ -166,13 +166,13 @@ function itemsOf(cols, log) {
   if (f !== c.at) {
     for (const rid of log.items.since(c.at)) {
       const { i, it, u } = log.peek(...log.items.get(rid)), o = { i, it, u };
-      put(c.list, itemCmp, c.items.get(rid), o); c.items.set(rid, o);
+      put(c.list, itemCmp, c.items.get(rid), o); c.items.set(rid, o); c.view = null;
     }
     for (const rid of log.failures.since(c.at)) {
       const { x, reason, code } = log.peek(...log.failures.get(rid)), o = { id: x, reason, code };
-      put(c.failed, failCmp, c.fails.get(rid), o); c.fails.set(rid, o);
+      put(c.failed, failCmp, c.fails.get(rid), o); c.fails.set(rid, o); c.view = null;
     }
-    c.at = f; c.view = null;
+    c.at = f;
   }
   if (!c.view || c.view.rows !== rows) {
     c.view = { rows, ...itemsView(c.list.filter((o) => o.it).map((o) => o.it)), unknown: unknownOf(c.list, rows), failed: c.failed.slice() };
@@ -243,8 +243,12 @@ export function deltaOf(V, then, cands) {
     else if (!b && a) lanesGone.push(key);
   }
   calls.sort((x, y) => compareStep(x.r.ts ?? null, x.c, y.r.ts ?? null, y.c));
-  const M = then.mark, upToM = (rid) => posCmp(rid, M) <= 0;
-  const was = unknownOf(V.cols.its.list.filter((o) => upToM(o.i)), V.cols.order.some(upToM));
+  // `unknown` at M is the one now when, on the shared log, no item line past M's frontier has a record no dissector read and whether
+  // a row exists is the same at M (no call changed past it, else a row at or below M): an item line is written once per rid
+  const M = then.mark, upToM = (rid) => posCmp(rid, M) <= 0, its = V.cols.its, order = V.cols.order;
+  const same = then.log === V.log && !V.log.items.since(then.off).some((rid) => its.items.get(rid).u)
+    && (cands.rids.length === 0 || order.some(upToM) === order.length > 0);
+  const was = same ? V.unknown : unknownOf(its.list.filter((o) => upToM(o.i)), order.some(upToM));
   return {
     ...(JSON.stringify(was) !== JSON.stringify(V.unknown) ? { unknown: V.unknown ?? null } : null),
     calls: calls.map((o) => o.r), gone: gone.sort(posCmp), lanes: V.lanes.filter((h) => lanes.has(h.lane)), lanes_gone: lanesGone.sort(posCmp),
