@@ -124,8 +124,8 @@
     ],
     "seen": [{"path": "test/app.test.mjs", "firstRid": "20261021T101500Z:13", "count": 1}],
     "events": [
-      {"type": "user", "rid": "20261021T101500Z:12", "lane": "20261021T101500Z:12"},
-      {"type": "user", "rid": "20261021T101500Z:14", "lane": "20261021T101500Z:12"}
+      {"type": "user", "rid": "20261021T101500Z:12", "lane": "20261021T101500Z:12", "k": 1},
+      {"type": "user", "rid": "20261021T101500Z:14", "lane": "20261021T101500Z:12", "k": 2}
     ],
     "prev": null,
     "next": null
@@ -150,7 +150,7 @@
       {"bid": "XrJCrraFUoYpE9YCz_Nt6w", "fh": "aX-BPtQYR5QCcAcnTEMnKQ", "ref": "s1/main#20261021T101500Z:17::resp.raw::300-620", "sec": "reply", "role": "assistant", "kind": "text", "ff": "text", "head": {"role": "assistant", "tag": "text", "label": "text"}, "preview": "Done.", "chars": 5, "bytes": 320, "r": {"as": "markdown"}}
     ],
     "resources": [],
-    "seen": [{"path": "test/app.test.mjs", "firstRid": "20261021T101500Z:13", "count": 1}],
+    "seen": [],
     "events": [],
     "prev": null,
     "next": null
@@ -183,7 +183,7 @@
     ],
     "seen": [{"path": "src/config.mjs", "firstRid": "20261021T101500Z:19", "count": 1}],
     "events": [
-      {"type": "user", "rid": "20261021T101500Z:15", "lane": "20261021T101500Z:15"},
+      {"type": "user", "rid": "20261021T101500Z:15", "lane": "20261021T101500Z:15", "k": 1},
       {"type": "tool", "rid": "20261021T101500Z:18", "lane": "20261021T101500Z:15"},
       {"type": "tool", "rid": "20261021T101500Z:19", "lane": "20261021T101500Z:15"}
     ],
