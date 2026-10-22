@@ -52,14 +52,16 @@ function absorb(H, p, rids) {
   if (rids) { const keep = new Set(rids); for (const rid of H.events.keys()) if (!keep.has(rid)) H.events.delete(rid) }
   return H
 }
-// The rule, on one answer: its events are its steps', but for a base:null page's compaction and summarize events; a page of more
-// than one step ships ≤ PAGE_BYTES of steps, definitions and events.
+// The rule, on one answer: its events are its steps', but for a base:null page's compaction and summarize events; an answer of more
+// than one step or ledger entry ships ≤ PAGE_BYTES of steps, definitions, events, resources and seen.
 const CS = (e) => e.type === 'compaction' || e.type === 'summarize'
 const bytes = (list) => list.reduce((a, x) => a + Buffer.byteLength(JSON.stringify(x)), 0)
 function pageRule(p) {
   const own = new Set(p.steps.map((st) => st.rid))
   for (const e of p.events) assert.ok(own.has(e.rid) || (p.base == null && CS(e)), `${e.type} ${e.rid}: an event of a step of the page`)
-  if (p.steps.length > 1) assert.ok(bytes(p.steps) + bytes(p.defs) + bytes(p.events) <= PAGE_BYTES, 'a page of more than one step fits PAGE_BYTES')
+  if (p.steps.length + p.resources.length + p.seen.length > 1) {
+    assert.ok(bytes(p.steps) + bytes(p.defs) + bytes(p.events) + bytes(p.resources) + bytes(p.seen) <= PAGE_BYTES, 'an answer of more than one step or entry fits PAGE_BYTES')
+  }
 }
 // a --from answer's resources and seen: each new to the client or differing from the one it holds, when the client holds the ledger
 // at the answer's base (it asked from its tip: 3.5 sends what differs from the ledger at `base`, which a client that asked from
@@ -79,16 +81,32 @@ function wholeRule(W) {
 }
 // what is held, in the lane's step order
 const flat = (H, rids) => ({ events: rids.flatMap((rid) => H.events.get(rid) || []), resources: Object.fromEntries(H.res), seen: Object.fromEntries(H.seen) })
-// The lane read whole: the tail page, then each page before it by `--to` → {rids, lists, defs, pages, H (what it holds)}.
+// The ledger an answer leaves to its `ledger_next` (3.5 `resources` 与 `seen`): the `--ledger` answers to the end of the chain, each
+// within the rule, holding no step.
+async function chain(home, id, lane, p, ctx) {
+  const out = []
+  for (let c = p.ledger_next; c != null; c = out.at(-1).ledger_next) {
+    const L = await q('lane', home, { id, lane, ledger: c }, ctx)
+    pageRule(L)
+    assert.ok(L.resources.length + L.seen.length > 0, 'a --ledger answer takes one entry at least')
+    assert.deepEqual([L.base, L.steps, L.defs, L.events, L.prev, L.next], [null, [], [], [], null, null], 'a --ledger answer holds no step')
+    out.push(L)
+  }
+  return out
+}
+// The lane read whole: the tail page and its ledger chain, then each page before it by `--to` → {rids, lists, defs, pages, ledger
+// (the chain's answers), H (what it holds)}.
 async function whole(home, id, lane, ctx) {
   const pages = []
   for (let p = await q('lane', home, { id, lane }, ctx); ; p = await q('lane', home, { id, lane, to: p.prev }, ctx)) {
     pages.unshift(p)
     if (p.prev == null) break
   }
+  const ledger = await chain(home, id, lane, pages.at(-1), ctx)
   const held = new Map(), defs = new Map(), H = holding()
   for (const p of pages) { assert.equal(p.base, null); rebuild(p, held); for (const d of p.defs) defs.set(d.bid, d); absorb(H, p) }
-  const W = { rids: pages.flatMap((p) => p.steps.map((s) => s.rid)), held, defs, pages, H }
+  for (const L of ledger) absorb(H, L)
+  const W = { rids: pages.flatMap((p) => p.steps.map((s) => s.rid)), held, defs, pages, ledger, H }
   wholeRule(W)
   return W
 }
@@ -148,19 +166,19 @@ function fromFor(held, key, d, rowTs) {
 
 // http: a new subagent every few calls whose first call is late (its lane's key changes: lanes_gone, the held rows relaned); chat:
 // subagents told apart by order only, late calls sorting before a held tip. No generator drops a row (`gone`): fromFor handles it.
-for (const [wire, axes] of [['http', { late: 8, subLanes: 1, subLen: 6, paths: 4 }], ['chat', { late: 8, subLanes: 3 }]]) {
-  test(`3.5 #26: ${wire} — lanes held through since deltas and --from reads (late rows before the tip, relanes): lists, events (k), resources and seen equal the lanes read whole`, async () => {
+for (const [wire, axes] of [['http', { late: 8, subLanes: 1, subLen: 6, paths: 4, reads: 1_500 }], ['chat', { late: 8, subLanes: 3 }]]) {
+  test(`3.5 #26: ${wire} — lanes held through since deltas, --from reads and their ledger_next (late rows before the tip, relanes): lists, events (k), resources and seen equal the lanes read whole`, async () => {
     const home = homeOf('trocar-lane-hold-')
     const s = bigSession({ home, wire, growth: 150, subEvery: 2, compactAt: 1_200, ...axes })
     s.append(3)
     let doc = await q('session', home, { id: s.id })
     const rowTs = new Map(doc.calls.map((r) => [r.rid, r.ts]))
-    const tally = { atTip: 0, cs: 0, user: 0, res: 0, seen: 0 }
+    const tally = { atTip: 0, cs: 0, user: 0, res: 0, seen: 0, chained: 0 }
     const lanes = new Map() // key → {rids, lists, H}
     const fetch = async (key, from, keep, held) => {
       const lists = new Map(held ? held.rids.slice(0, keep).map((r) => [r, held.lists.get(r)]) : [])
       const rids = held ? held.rids.slice(0, keep) : []
-      if (from == null) { const W = await whole(home, s.id, key); return { rids: W.rids, lists: W.held, H: W.H } }
+      if (from == null) { const W = await whole(home, s.id, key); tally.chained += W.ledger.length; return { rids: W.rids, lists: W.held, H: W.H } }
       const H = held.H
       for (let f = from; ;) {
         const p = await q('lane', home, { id: s.id, lane: key, from: f })
@@ -169,6 +187,7 @@ for (const [wire, axes] of [['http', { late: 8, subLanes: 1, subLen: 6, paths: 4
         rids.push(...p.steps.map((st) => st.rid))
         if (f === from && keep === held.rids.length) { tally.atTip++; sends(p, H, true) } else sends(p, H, false)
         absorb(H, p, rids)
+        for (const L of await chain(home, s.id, key, p)) { tally.chained++; absorb(H, L, rids) }
         if (p.next == null) return { rids, lists, H }
         f = p.next
       }
@@ -236,8 +255,38 @@ test('3.5 lane: seen is the ledger\'s entries uncapped — more than 200 paths s
   assert.ok(new Set(p.seen.map((f) => f.path)).size > 200, 'every seen path is sent')
 })
 
+// 3.5:63 the ledger in pages: a main lane whose resources and seen paths are far past PAGE_BYTES. The tail, a --from chain from its
+// first step and every --ledger answer each fit PAGE_BYTES; the tail's ledger chain ships each key once, every seen path the calls
+// sent (invariant 4: the count exact) and a resource per file each call's command read.
+test('3.5 lane: a ledger past PAGE_BYTES goes by ledger_next — every answer fits, the chain holds each key once and every path seen', async () => {
+  const home = homeOf('trocar-lane-ledger-')
+  const reads = 300, s = bigSession({ home, growth: 300, subEvery: 0, paths: 80, reads, compactAt: 200_000 })
+  s.append(40)
+  const doc = await settled(home, s.id), lane = doc.lanes.find((l) => l.kind === 'main').lane
+  const tail = await q('lane', home, { id: s.id, lane }, { writer: true })
+  pageRule(tail)
+  const L = await chain(home, s.id, lane, tail, { writer: true })
+  assert.ok(L.length > 1, 'the ledger spans --ledger answers')
+  closedSets(L[0], contract.lane_ledger)
+  const res = [tail, ...L].flatMap((p) => p.resources.map(resKey)), seen = [tail, ...L].flatMap((p) => p.seen.map((f) => f.path))
+  assert.ok(bytes([tail, ...L].flatMap((p) => [...p.resources, ...p.seen])) > 2 * PAGE_BYTES, 'the ledger is far past a page')
+  assert.equal(new Set(res).size, res.length, 'each resource once')
+  assert.equal(new Set(seen).size, seen.length, 'each seen path once')
+  assert.deepEqual(new Set(seen), new Set(s.paths.map((x) => x.replace(/^\//, ''))), 'every path the calls sent is seen, exactly')
+  // each turn's command reads `reads` files of its own, sent with the next call (the last turn's not yet)
+  assert.equal(res.length, reads * (s.calls - 1), 'a resource per file each sent command read')
+  let chained = 0
+  for (let f = (await whole(home, s.id, lane, { writer: true })).rids[0]; f != null;) {
+    const p = await q('lane', home, { id: s.id, lane, from: f }, { writer: true })
+    pageRule(p)
+    chained += (await chain(home, s.id, lane, p, { writer: true })).length
+    f = p.next
+  }
+  assert.ok(chained > 0, 'a --from answer left entries to its ledger_next')
+})
+
 // ── 3.5 #28 (the lane part): the closed sets, on a session of each harness shape ─────────────────────────────────────────────────
-const TOP = ['schema', 'command', 'ok', 'errors', 'lane', 'base', 'mark', 'steps', 'defs', 'resources', 'seen', 'events', 'prev', 'next']
+const TOP = ['schema', 'command', 'ok', 'errors', 'lane', 'base', 'mark', 'steps', 'defs', 'resources', 'seen', 'events', 'prev', 'next', 'ledger_next']
 const STEP = ['rid', 'parent', 'ops', 'reply', 'attrs', 'detail']
 const DETAIL = ['norm', 'respRefs', 'nonBlockKeys', 'extraMessages', 'wire']
 const NORM = ['stop_reason', 'usage']
@@ -257,7 +306,7 @@ function closedSets(p, sample) {
     subset(st.detail.norm, NORM, 'detail.norm'); covers(st.detail.norm, sample.steps[0].detail.norm, 'detail.norm')
     for (const a of Object.values(st.attrs)) subset(a, ATTR, 'attrs')
   }
-  const must = Object.keys(sample.defs[0]).filter((k) => DEF.includes(k) && !['label', 'name', 'mcp', 'cc', 'resKey'].includes(k))
+  const must = Object.keys(sample.defs[0] || {}).filter((k) => DEF.includes(k) && !['label', 'name', 'mcp', 'cc', 'resKey'].includes(k))
   for (const d of p.defs) {
     subset(d, DEF, 'def'); for (const k of must) assert.ok(k in d, `def: ${k} is missing`)
     subset(d.head, HEAD, 'def.head'); subset(d.r, R, 'def.r')

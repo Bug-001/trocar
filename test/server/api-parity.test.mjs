@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { QUERIES, QueryArgError, runQuery } from '../../src/query/named/index.mjs';
 import { rawHome, writeSegment, requiredFor } from '../query/raw-home.mjs';
 import { serveFace, request, withToken } from './face.mjs';
+import { bigSession } from '../query/big-session.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SEGMENT = '20261018T100000Z';
@@ -83,6 +84,32 @@ test('4.4 #1: /api/block with ref repeated is runQuery block over the refs as a 
     assert.equal(r.status, 200, r.body.slice(0, 200));
     assert.deepEqual(JSON.parse(r.body), JSON.parse(JSON.stringify(await runQuery('block', { ref: refs }, { home: h }))));
     assert.deepEqual(JSON.parse(r.body).blocks.map((b) => b.ref), refs);
+  } finally { f.close(); }
+});
+
+// 3.5 lane `--ledger`: /api/lane over a ledger cursor answers what runQuery does; with --from or --to, or a cursor no answer gave,
+// the same 400 runQuery's QueryArgError is.
+test('3.5 lane: /api/lane with ledger is runQuery lane --ledger; ledger with from / to or a malformed cursor is the same 400', async () => {
+  const h = rawHome('trocar-parity-ledger-');
+  const s = bigSession({ home: h, growth: 300, subEvery: 0, reads: 300 });
+  s.append(24);
+  const f = await serveFace({ home: h });
+  const api = async (params) => get(f.port, `/api/lane?${new URLSearchParams(params)}`);
+  try {
+    for (let i = 0; i < 200 && JSON.parse((await get(f.port, `/api/session?id=${s.id}`)).body).pending; i++);
+    const doc = JSON.parse((await get(f.port, `/api/session?id=${s.id}`)).body), lane = doc.lanes.find((l) => l.kind === 'main').lane;
+    const tail = JSON.parse((await api({ id: s.id, lane })).body);
+    assert.ok(tail.ledger_next, 'the lane\'s ledger goes past its tail page');
+    const params = { id: s.id, lane, ledger: tail.ledger_next }, r = await api(params);
+    assert.equal(r.status, 200, r.body.slice(0, 200));
+    assert.deepEqual(JSON.parse(r.body), JSON.parse(JSON.stringify(await runQuery('lane', params, { home: h }))));
+    for (const bad of [{ ...params, from: tail.steps[0].rid }, { ...params, to: tail.steps[0].rid }, { ...params, ledger: 'not-a-cursor' }]) {
+      const e = await runQuery('lane', bad, { home: h }).then(() => null, (x) => x);
+      assert.ok(e instanceof QueryArgError, JSON.stringify(bad));
+      const b = await api(bad);
+      assert.equal(b.status, 400, JSON.stringify(bad));
+      assert.deepEqual(JSON.parse(b.body), { error: e.message });
+    }
   } finally { f.close(); }
 });
 

@@ -91,6 +91,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
   let n = 0, nsub = 0, nmain = 0, stored = 0, ms = Date.parse('2026-10-20T16:47:37Z'), bigLeft = 0
   const system = [{ type: 'text', text: 'You are a coding assistant operating in a terminal.' }, ...(shared ? [{ type: 'text', text: words(xr, shared) }] : [])]
   const sysText = system.map((b) => b.text).join('\n\n')
+  let shown = 0
   const named = [], slug = (k) => words(xr, k).trim().replace(/[\s.]+/g, '-')
   const pathOf = () => {
     if (named.length && xr() < 0.5) return named[Math.floor(xr() * named.length)]
@@ -122,6 +123,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
     if (paths) {
       const some = (k) => Array.from({ length: k }, pathOf)
       t[0].content[t[0].content.length - 1].text += ` See ${some(Math.ceil(paths / 2)).join(' and ')}.`
+      shown = named.length // a call sends its turn's prose, not yet its tool result
       t[2].content[0].content += '\n' + some(paths).map((p, k) => `${p}:${k + 1}: ${slug(4)}`).join('\n')
     }
     if (writes) {
@@ -213,6 +215,8 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
     get held() { return held.length },
     /** the main lane's calls generated so far */
     get mains() { return nmain },
+    /** the distinct file paths the calls generated so far sent (`paths`, without `writes`) */
+    get paths() { return named.slice(0, shown) },
     append(k = 1) {
       let out = [], len = 0
       const flush = () => {

@@ -206,7 +206,8 @@ header; `--before <call>` gives the page just before that call, `--limit <n>` ma
 `trocar query lane --id <id> --lane <key>` gives one lane's steps: the last page by default, `--from <call>` the
 steps after that call, `--to <call>` the page that ends just before it. Each step is its block list as changes
 against the step before, with the definitions of the blocks the page brings, the files the lane has seen and
-the resources it holds. `trocar query block --ref <ref>` opens one block's verbatim bytes; give `--ref` more than
+the resources it holds. When those do not all fit in the 1 MB page beside the steps, the answer's `ledger_next`
+names the rest: `--ledger <ledger_next>` gives the next part, until `ledger_next` is null. `trocar query block --ref <ref>` opens one block's verbatim bytes; give `--ref` more than
 once to get several in one answer, in the order asked (a ref that cannot be read says why in `errors`).
 A session the worker has not finished reading answers at once with what it has, and says how far it got
 (`pending: {done, total}`); the worker reads on in the background, and the CLI asks again until the answer is

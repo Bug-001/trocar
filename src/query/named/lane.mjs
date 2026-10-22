@@ -1,4 +1,4 @@
-// src/query/named/lane.mjs — `trocar query lane --id <id> --lane <key> [--from RID | --to RID]` (RFC 3.5 §会话读, 1.6 §4.1 / C.5).
+// src/query/named/lane.mjs — `trocar query lane --id <id> --lane <key> [--from RID | --to RID | --ledger C]` (RFC 3.5 §会话读, 1.6 §4.1 / C.5).
 //
 // One lane's page of steps: each step's block-id list as ops against its parent step's list, its reply ids, the attributes its added
 // positions carry and its detail; the definitions the page brings that the client does not hold yet; the lane's resources, seen
@@ -8,7 +8,9 @@
 // from the context projection (src/view/reduce.mjs listOf), the definitions and row facts from the projection's lines. No record is
 // read (3.5 §会话读: a lane answer is the projection's). The ledger (src/view/reduce.mjs laneLedger) is replayed from the lane's
 // first step, or from the one a kept ledger of the lane reached when no row of the lane at or before it changed since (3.5 §内存有界:
-// the kept ledgers, LEDGER_BYTES): an answer reads the lines of the steps it covers and of the steps the replay goes over.
+// the kept ledgers, LEDGER_BYTES): an answer reads the lines of the steps it covers and of the steps the replay goes over. The ledger
+// entries an answer owes go in key order into the room its page leaves; the rest are named by `ledger_next`, a cursor `--ledger`
+// goes on from (3.5 `resources` 与 `seen`).
 import { sessionState, version as sessionVersion } from './session.mjs';
 import { listOf, laneLedger, ledgerWeight, LEDGER_BYTES } from '../../view/reduce.mjs';
 import { lru } from '../projection.mjs';
@@ -17,7 +19,7 @@ import { PAGE_BYTES, laneOf, placeIn } from '../session-doc.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { QueryArgError } from './index.mjs';
 
-export const params = Object.freeze(['id', 'lane', 'from', 'to']);
+export const params = Object.freeze(['id', 'lane', 'from', 'to', 'ledger']);
 
 const one = (v) => (v == null || v === '' ? null : String(v));
 const pick = (o, keys) => { const out = {}; if (o) for (const k of keys) if (o[k] !== undefined) out[k] = o[k]; return out; };
@@ -27,6 +29,19 @@ const BODY = ['text', 'block', 'desc', 'schema'];
 const fhWire = (hex) => (typeof hex === 'string' && /^[0-9a-f]{32}/.test(hex) ? Buffer.from(hex.slice(0, 32), 'hex').toString('base64url') : null);
 // a position's attributes on the wire, and the key a copy is matched by (a block id with the attributes it carries there)
 const attrOf = (a) => { const o = pick(a, ['query', 'volatile']); return Object.keys(o).length ? o : null; };
+// The ledger's wire order (3.5 `resources` 与 `seen`): resources by `kind::label`, then seen by `path`, code-unit order. A cursor =
+// base64url of JSON [list, the last key shipped] ('' before the first); `--ledger C` answers the entries after it, its key gone or not.
+const LISTS = ['resources', 'seen'];
+const keyOf = [(r) => `${r.kind}::${r.label}`, (f) => f.path];
+const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+function cursorOf(c) {
+  let v = null;
+  try { v = JSON.parse(Buffer.from(c, 'base64url').toString('utf8')); } catch { /* malformed: below */ }
+  if (!Array.isArray(v) || v.length !== 2 || !LISTS.includes(v[0]) || typeof v[1] !== 'string') {
+    throw new QueryArgError('trocar query lane: --ledger takes the ledger_next of an earlier lane answer');
+  }
+  return [LISTS.indexOf(v[0]), v[1]];
+}
 
 /** opsOf(P, C) → ops rebuilding token list C from P: `[0, from, len]` copies P[from, from+len), `[1, …]` adds; greedy, the longest
  *  run at each place (the run that goes on from the last copy tried first). Tokens compare by ===. */
@@ -63,12 +78,13 @@ function keptOf(cols, log, lane, e) {
 
 export async function run(ctx) {
   const { params: p, errors } = ctx;
-  const id = one(p.id), key = one(p.lane), from = one(p.from), to = one(p.to);
+  const id = one(p.id), key = one(p.lane), from = one(p.from), to = one(p.to), ledger = one(p.ledger);
   if (id == null) throw new QueryArgError('trocar query lane: --id is required (a session id; `trocar query sessions` lists them)');
   if (key == null) throw new QueryArgError('trocar query lane: --lane is required (a lane key; `trocar query session` lists the lanes)');
-  if (from != null && to != null) throw new QueryArgError('trocar query lane: --from and --to cannot be given together');
+  if ([from, to, ledger].filter((x) => x != null).length > 1) throw new QueryArgError('trocar query lane: give at most one of --from, --to and --ledger');
+  const after = ledger == null ? null : cursorOf(ledger);
   const st = await sessionState(ctx, id);
-  const empty = (mark) => ({ lane: key, base: null, mark, steps: [], defs: [], resources: [], seen: [], events: [], prev: null, next: null });
+  const empty = (mark) => ({ lane: key, base: null, mark, steps: [], defs: [], resources: [], seen: [], events: [], prev: null, next: null, ledger_next: null });
   if (!st) {
     errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
     return empty(null);
@@ -145,7 +161,8 @@ export async function run(ctx) {
     return { added, bytes };
   }
   const drop = (added) => { for (const b of added) fresh.delete(b); };
-  if (k >= 0) {
+  if (after) lo = hi = 0; // a --ledger answer: no step
+  else if (k >= 0) {
     base = from;
     for (const b of listAt(k).bids) held.add(b);
     for (const b of replyAt(k)) held.add(b);
@@ -174,7 +191,7 @@ export async function run(ctx) {
   if (base != null && steps.length) steps[0].parent = base;
   // the page's steps' events; at base:null also the compaction / summarize events of the lane's other steps; in step order
   const events = [], page = steps.map((_, j) => lo + j);
-  for (const i of base == null ? [...flagged.filter((x) => x < lo), ...page, ...flagged.filter((x) => x >= hi)] : page) {
+  for (const i of after ? [] : base == null ? [...flagged.filter((x) => x < lo), ...page, ...flagged.filter((x) => x >= hi)] : page) {
     events.push(...(i >= lo && i < hi ? eventsAt(i) : eventsAt(i).filter(CS)));
   }
   // the ledger: a kept one of this lane gone on from (at `base`, or anywhere for a base:null answer), else replayed from the first
@@ -188,10 +205,24 @@ export async function run(ctx) {
     const w = ledgerWeight(kept);
     if (w <= LEDGER_BYTES) cache.set(key, { ...kept, rid: rids[kept.step], off: log.frontier }, w);
   }
+  const wireDefs = [...fresh.keys()].map((b) => wireDef(b, listAt(fresh.get(b)).bids)).filter(Boolean);
+  // the entries owed (at --ledger: those after its cursor) in key order, into the room the page leaves (a --ledger answer takes one
+  // at least); `ledger_next` names the last one shipped when some are left
+  const owed = [resources, seen].flatMap((list, j) => list.map((e) => [j, keyOf[j](e), e]))
+    .filter(([j, kk]) => !after || j > after[0] || (j === after[0] && kk > after[1]))
+    .sort((a, b) => a[0] - b[0] || cmp(a[1], b[1]));
+  const out = [[], []];
+  let room = PAGE_BYTES - bytesOf(steps) - bytesOf(wireDefs) - bytesOf(events), i = 0;
+  for (; i < owed.length; i++) {
+    const w = bytesOf(owed[i][2]) + 1;
+    if (w > room && !(after && i === 0)) break;
+    room -= w; out[owed[i][0]].push(owed[i][2]);
+  }
+  const last = i > 0 ? owed[i - 1] : [0, ''];
   return {
-    lane: key, base, mark: st.mark, steps, defs: [...fresh.keys()].map((b) => wireDef(b, listAt(fresh.get(b)).bids)).filter(Boolean),
-    resources, seen, events,
+    lane: key, base, mark: st.mark, steps, defs: wireDefs, resources: out[0], seen: out[1], events,
     prev: lo > 0 && steps.length ? rids[lo] : null, next: hi < n && steps.length ? rids[hi - 1] : null,
+    ledger_next: i < owed.length ? Buffer.from(JSON.stringify([LISTS[last[0]], last[1]])).toString('base64url') : null,
   };
 }
 
@@ -199,5 +230,5 @@ export async function run(ctx) {
 export async function version(ctx) {
   const v = await sessionVersion(ctx);
   const p = ctx.params;
-  return v && { key: JSON.stringify([v.key, one(p.lane), one(p.from), one(p.to)]), errors: v.errors };
+  return v && { key: JSON.stringify([v.key, one(p.lane), one(p.from), one(p.to), one(p.ledger)]), errors: v.errors };
 }

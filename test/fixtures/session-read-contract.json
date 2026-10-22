@@ -128,7 +128,8 @@
       {"type": "user", "rid": "20261021T101500Z:14", "lane": "20261021T101500Z:12", "k": 2}
     ],
     "prev": null,
-    "next": null
+    "next": null,
+    "ledger_next": null
   },
   "lane_ops": {
     "schema": 2,
@@ -153,7 +154,8 @@
     "seen": [],
     "events": [],
     "prev": null,
-    "next": null
+    "next": null,
+    "ledger_next": null
   },
   "lane_reset": {
     "schema": 2,
@@ -188,7 +190,30 @@
       {"type": "tool", "rid": "20261021T101500Z:19", "lane": "20261021T101500Z:15"}
     ],
     "prev": null,
-    "next": null
+    "next": null,
+    "ledger_next": null
+  },
+  "lane_ledger": {
+    "schema": 2,
+    "command": "lane",
+    "ok": true,
+    "errors": [],
+    "lane": "20261021T101500Z:12",
+    "base": null,
+    "mark": "20261021T101500Z:17",
+    "steps": [],
+    "defs": [],
+    "resources": [
+      {"kind": "file", "label": "test/app.test.mjs", "via": "Read", "hits": 1, "segments": [{"enter": "20261021T101500Z:13", "evict": null}], "loads": [{"rid": "20261021T101500Z:13", "range": "full file", "via": "Read"}]}
+    ],
+    "seen": [
+      {"path": "src/app.mjs", "firstRid": "20261021T101500Z:14", "count": 2},
+      {"path": "test/app.test.mjs", "firstRid": "20261021T101500Z:13", "count": 1}
+    ],
+    "events": [],
+    "prev": null,
+    "next": null,
+    "ledger_next": "WyJzZWVuIiwidGVzdC9hcHAudGVzdC5tanMiXQ"
   },
   "block_multi": {
     "schema": 2,

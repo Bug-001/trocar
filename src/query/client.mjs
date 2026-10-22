@@ -19,7 +19,7 @@ export const LOCAL_ONLY = Object.freeze(['status', 'doctor'])
 export const QUERY_NAMES = Object.freeze(['status', 'doctor', 'sessions', 'session', 'lane', 'calls', 'traffic', 'overview', 'block', 'classes', 'segments', 'pricing'])
 /** The window parameters: they move which part of a document is shipped, never what is asked, so a failure is
  *  remembered per query WITHOUT them (service.mjs, 3.5 §读不全不静默): a board whose window moved asks the same thing. */
-export const WINDOW_PARAMS = Object.freeze(['since', 'before', 'limit', 'from', 'to'])
+export const WINDOW_PARAMS = Object.freeze(['since', 'before', 'limit', 'from', 'to', 'ledger'])
 /** A query string → query parameters, one rule on every path (1.6 §4.1 参数): a parameter given more than once is the
  *  list of its values, in order; once, its value. `skip` = the route's own keys. Whether a list is taken is the query
  *  core's call (named/index.mjs checked()). */
