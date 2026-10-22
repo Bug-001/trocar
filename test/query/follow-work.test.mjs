@@ -48,6 +48,7 @@ async function workAt(calls, opts) {
   // the projection and the fold log
   const fds = new Map(), touched = new Set()
   let counting = false, bytes = 0, fold = 0, idx = 0
+  let tsReads = 0
   const segment = path.basename(s.file, '.ndjson'), segIdx = path.join(home, 'index', `${segment}.json`), idxFds = new Set()
   const facts = new Set()
   const own = { ...fs,
@@ -67,7 +68,7 @@ async function workAt(calls, opts) {
     return { rows, members: sessionGroups(rows).get(s.id).length }
   }
   const ctxOf = (rows) => ({ home, fs: own, writer: true, once: { index: { rows, errors: [] } } })
-  const count = async (work) => { touched.clear(); facts.clear(); bytes = fold = idx = 0; counting = true; try { await work() } finally { counting = false } return { rows: touched.size, bytes, fold, facts: facts.size, idx } }
+  const count = async (work) => { touched.clear(); facts.clear(); bytes = fold = idx = 0; tsReads = 0; counting = true; try { await work() } finally { counting = false } return { rows: touched.size, bytes, fold, facts: facts.size, idx, ts: tsReads } }
   const slices = (at) => count(async () => { while (await extendSession(ctxOf(at.rows), s.id, 50)); })
 
   let at = await index()
@@ -84,6 +85,9 @@ async function workAt(calls, opts) {
     if (!d.ledger_next) break
   }
 
+  // the folded state's step-order columns, each read of a row's time noted (the order of the lanes is by their first rows')
+  const cols = (await sessionState(ctxOf(at.rows), s.id)).V.cols
+  cols.ts = new Proxy(cols.ts, { get(t, k) { if (counting && typeof k === 'string' && /^\d+$/.test(k)) tsReads++; return t[k] } })
   // one new member that is no call
   nonCalls(s.file, 1, calls / 2)
   at = await index()
@@ -97,6 +101,7 @@ async function workAt(calls, opts) {
     assert.equal(d.pending, undefined)
     mark = d.mark
   })
+  assert.equal((await sessionState(ctxOf(at.rows), s.id)).V.cols, cols, 'the same folded state answered')
   // the kept item facts of the folded state (its list and its map hold the same objects), each a Proxy noting a read
   const its = (await sessionState(ctxOf(at.rows), s.id)).V.cols.its
   const noted = (o) => new Proxy(o, {
@@ -218,4 +223,11 @@ test('index rows built or read when only the newest segment grew do not grow wit
   const a = await rowWork(300), b = await rowWork(1200)
   assert.ok(b.rows > 3 * a.rows, 'about four times the rows')
   assert.ok(b.built + b.read <= a.built + a.read + b.fresh, `rows built + read at ${a.rows} / ${b.rows} rows (+${b.fresh} new): ${JSON.stringify({ a, b })}`)
+})
+
+test('row times `session --since` reads after one new member that is no call do not grow with the lanes (3.5:42 「回答只读变了的那些的行」)', { timeout: 300_000 }, async () => {
+  for (const k of Object.keys(LEDGERS)) {
+    const { a, b } = await both(k)
+    assert.ok(b.item.ts <= a.item.ts + b.fresh, `${k}: row times read at ${a.members} / ${b.members} members: ${a.item.ts} / ${b.item.ts}`)
+  }
 })

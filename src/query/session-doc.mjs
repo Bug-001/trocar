@@ -49,7 +49,7 @@ const recOf = (r) => ({ id: String(r.id), ts_request: r.ts ?? null, is_llm_call:
  *  brings them to the log's frontier from the lines past the last sync (and keeps the lane headers it reads: `heads`), each moved row taken out and put back by binary search: a
  *  warm state and a cold open build the same columns. */
 export const columns = (slotOf) => ({ at: -1, slotOf, ts: [], ln: new Int32Array(0), uc: new Int32Array(0), cs: new Uint8Array(0),
-  keys: new Map(), order: [], by: [], lanes: new Set(), heads: new Map(), its: null });
+  keys: new Map(), order: [], by: [], lanes: new Set(), heads: new Map(), its: null, sorted: null });
 const tsOf = (cols, rid) => cols.ts[cols.slotOf(rid)];
 // The columns in a fold log's sidecar (4.3 §4 旁索引, its `extra`): `s.at` the frontier they were synced to; by slot `s.tk` whether the
 // ts is undefined (0), null (1) or a string (2, in `s.ts` in slot order), `s.ln`, `s.uc`, `s.cs`; `s.keys` the lane keys in int order;
@@ -119,8 +119,14 @@ export function sync(cols, log) {
       cols.cs[k] = o.e.some((e) => e.type === 'compaction' || e.type === 'summarize') ? 1 : 0;
     } else { cols.ts[k] = undefined; cols.ln[k] = -1; cols.uc[k] = 0; cols.cs[k] = 0; }
   }
+  // the kept lane order (viewOf) holds while every lane's first row is the one it was sorted by and kept its place; a new lane is
+  // placed into it there
+  const S = cols.sorted;
+  if (S && ch.rids.some((rid) => S.firsts.has(rid))) cols.sorted = null;
   for (const key of ch.lanes) {
     const h = headOf(log.peek(...log.lane(key)));
+    if (cols.sorted && h && !cols.lanes.has(key)) { S.fresh.push(key); S.firsts.add(h.first); }
+    else if (cols.sorted && (!h || !S.firsts.has(h.first))) cols.sorted = null;
     if (h) { cols.lanes.add(key); cols.heads.set(key, h); } else { cols.lanes.delete(key); cols.heads.delete(key); }
   }
   cols.at = f;
@@ -189,7 +195,19 @@ export function viewOf({ id, log, cols, members, plan, mark }) {
   const f = log.frontier, its = itemsOf(cols, log);
   const at = (rid) => (tsOf(cols, rid) === undefined ? Infinity : placeOf(cols, tsOf(cols, rid), rid));
   const head = (k) => cols.heads.get(k) || cols.heads.set(k, headOf(log.read(...log.lane(k)))).get(k); // a loaded column's: read once
-  const lanes = [...cols.lanes].map(head).sort((a, b) => at(a.first) - at(b.first));
+  // in the order of their first row, sorted again only when a lane came, went or has another first row (sync): the lanes grow with
+  // the session, an answer's work does not (3.5:42)
+  if (!cols.sorted) {
+    const keys = [...cols.lanes].sort((a, b) => at(head(a).first) - at(head(b).first));
+    cols.sorted = { keys, firsts: new Set(keys.map((k) => head(k).first)), fresh: [] };
+  }
+  for (const k of cols.sorted.fresh.splice(0)) { // after the lanes that sort with it, as the stable sort puts a lane that came later
+    const keys = cols.sorted.keys, t = at(head(k).first);
+    let lo = 0, hi = keys.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (at(head(keys[m]).first) <= t) lo = m + 1; else hi = m; }
+    keys.splice(lo, 0, k);
+  }
+  const lanes = cols.sorted.keys.map(head);
   const main = lanes.find((l) => l.kind === 'main'), fl = f == null ? null : log.read(f);
   return {
     log, f, cols, plan, mark, lanes, failed: its.failed, logged: its.logged, probes: its.probes, unknown: its.unknown,
