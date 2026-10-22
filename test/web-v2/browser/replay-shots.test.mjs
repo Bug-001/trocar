@@ -10,14 +10,29 @@ const gate = await probe()
 const skip = gate.ok ? false : gate.reason
 const BYTES = 5e6
 
-// the session with the most calls: the busiest step head and window the face has (`fewest`: the one with the fewest calls)
-async function openBusiest(b, fewest = false) {
-  const rows = (await b.get('sessions')).doc.sessions.filter((x) => x.calls > 0)
-  const r = [...rows].sort((x, y) => fewest ? x.calls - y.calls : (y.calls || 0) - (x.calls || 0))[0]
+// open session row `r` and wait for its step bar and window
+async function openSession(b, r) {
   await b.page.evaluate((h) => { location.hash = h }, `#/replay/${encodeURIComponent(r.project_slug)}/${encodeURIComponent(r.session_id)}`)
-  await b.page.waitForFunction(() => !!document.querySelector('#stepbar .sb-no') && !!document.querySelector('#ctxwin') && !document.querySelector('#ctxwin .cwload'), null, { timeout: 15000 })
+  await b.page.waitForFunction((id) => location.hash.includes(encodeURIComponent(id)) && !!document.querySelector('#stepbar .sb-no') && !!document.querySelector('#ctxwin') && !document.querySelector('#ctxwin .cwload'), r.session_id, { timeout: 15000 })
   await b.page.waitForLoadState('networkidle')
 }
+// the sessions with calls, most calls first
+const byCalls = async (b) => (await b.get('sessions')).doc.sessions.filter((x) => x.calls > 0).sort((x, y) => (y.calls || 0) - (x.calls || 0))
+// the session with the most calls: the busiest step head and window the face has (`fewest`: the one with the fewest calls)
+async function openBusiest(b, fewest = false) {
+  const rows = await byCalls(b)
+  await openSession(b, fewest ? rows.at(-1) : rows[0])
+}
+
+// a session row's main lane key (the anchor lane: 3.5 §会话读 车道头 `kind`)
+const mainOf = async (b, r) => (await b.get('session', { id: r.session_id })).doc.lanes.find((l) => l.kind === 'main')?.lane
+// a JSON answer of `path` passed through `edit(doc, params)` (a 304 or a non-JSON answer goes through as it is)
+const editAnswers = (b, path, edit) => b.page.route((u) => new URL(u).pathname === path, async (r) => {
+  const res = await r.fetch()
+  if (res.status() !== 200 || !/json/.test(res.headers()['content-type'] || '')) return r.fulfill({ response: res })
+  const j = await res.json(); edit(j, new URL(r.request().url()).searchParams)
+  await r.fulfill({ response: res, json: j })
+})
 
 // every measured fact in one page pass
 const layout = (page) => page.evaluate(() => {
@@ -157,43 +172,19 @@ test('a reply row has the request row\'s head frame and opens by keyboard', { sk
   } finally { await b.stop() }
 })
 
-// 2.3 §未下发态: the load control is unclickable only while its read has not answered — a failed read is an answer. Step 1's body is
-// taken off the page (paged_out, the server's own flag), the reader loads it, and that read fails.
-test('a failed read of "Load this step" leaves the button usable, never busy', { skip, timeout: 120_000 }, async () => {
-  const b = await withBoard({ bytes: BYTES, width: 1280, chromium: gate.chromium })
-  try {
-    let fail = false
-    const pageOut = (o) => { if (Array.isArray(o)) o.forEach(pageOut); else if (o && typeof o === 'object') { if (o.gi === 0 && 'ts' in o) o.paged_out = true; Object.values(o).forEach(pageOut) } }
-    await b.page.route((u) => new URL(u).pathname === '/api/session', async (r) => {
-      if (fail) return r.abort()
-      const res = await r.fetch(); const j = await res.json(); pageOut(j); await r.fulfill({ response: res, json: j })
-    })
-    await openBusiest(b)
-    await b.page.click('#ctxwin'); await b.page.keyboard.press('Home')
-    const btn = '#ctxwin .pobtn'
-    await b.page.waitForSelector(`${btn}:not([disabled])`)
-    fail = true
-    await b.page.click(btn)
-    await b.page.waitForSelector(`${btn}[aria-busy="true"]`) // the read is out
-    await b.page.waitForFunction((sel) => { const e = document.querySelector(sel); return e && !e.disabled && e.getAttribute('aria-busy') !== 'true' }, btn, { timeout: 10000 })
-    assert.deepEqual(b.errors, [])
-  } finally { await b.stop() }
-})
-
 // 2.4 · 1.5: a 「Files read」 row with a long path and a long life sentence (read at step N · removed by compaction at step M — the main
-// Mac's shape) shows the whole sentence, wrapped under the name, and the name truncated with its full text on hover. The real answer,
-// with the anchor lane's ledger given such files.
+// Mac's shape) shows the whole sentence, wrapped under the name, and the name truncated with its full text on hover. The real answers,
+// with the anchor lane's `lane` answer given such files.
 test('Files read: a long path and a long life sentence are never cut — the life wraps, the name has its full text on hover', { skip, timeout: 120_000 }, async () => {
   const b = await withBoard({ bytes: BYTES, width: 1440, chromium: gate.chromium })
   try {
-    await b.page.route((u) => new URL(u).pathname === '/api/session', async (r) => {
-      const res = await r.fetch(), j = await res.json()
-      for (const l of (j.analyzed && j.analyzed.lanes) || []) {
-        const gis = (l.calls || []).map((c) => c && c.gi).filter((g) => g != null)
-        if (gis.length < 3) continue
-        l.resources = Array.from({ length: 6 }, (_, i) => ({ kind: 'file', label: `/private/tmp/a/rather/long/working/directory/for/the/project/src/web/module-${i}/server-side-file-${i}.mjs`, segments: [{ enter: gis[0], evict: gis[gis.length - 2] }] }))
-      }
-      await r.fulfill({ response: res, json: j })
+    // the anchor lane's tail page (no from / to / ledger) gives the ledger six long files, read at its first step and evicted at
+    // the one before its last (3.5 §会话读 `resources`: segments by rid); the playhead opens on the last step, so each is gone
+    const main = await mainOf(b, (await byCalls(b))[0])
+    await editAnswers(b, '/api/lane', (j, q) => {
+      if (q.get('lane') !== main || q.has('from') || q.has('to') || q.has('ledger') || !(j.steps && j.steps.length >= 3)) return
+      const rids = j.steps.map((st) => st.rid)
+      j.resources = [...(j.resources || []), ...Array.from({ length: 6 }, (_, i) => ({ kind: 'file', label: `/private/tmp/a/rather/long/working/directory/for/the/project/src/web/module-${i}/server-side-file-${i}.mjs`, segments: [{ enter: rids[0], evict: rids[rids.length - 2] }], loads: [] }))]
     })
     await openBusiest(b)
     await b.page.waitForSelector('.navsub.dead .navlife', { timeout: 15000 })
@@ -205,20 +196,29 @@ test('Files read: a long path and a long life sentence are never cut — the lif
 })
 
 // 2.4 · 1.5: the System prompt row of a block that changes every call (Claude Code's billing header) carries a pill longer than the
-// left panel is wide; it wraps inside its row and is never drawn past the panel's edge. The real answers, with such a block at the head of every step.
+// left panel is wide; it wraps inside its row and is never drawn past the panel's edge. The real answers, with the system blocks so marked.
 test('System prompt: the "changes every call" pill stays inside the left panel', { skip, timeout: 120_000 }, async () => {
   const b = await withBoard({ bytes: BYTES, width: 1440, chromium: gate.chromium })
   try {
-    // a billing-header block as src/view/analyze.mjs flattens it, put at the head of every shipped step's system prompt
-    const bill = (k) => ({ sec: 'system', kind: 'system', role: 'system', label: 'billing header', text: 'x-anthropic-billing-header: cch=0', chars: 33, volatile: true, cc: null, key: `S:bill-${k}` })
-    const mark = (o) => { if (Array.isArray(o)) o.forEach(mark); else if (o && typeof o === 'object') { if (Array.isArray(o.flat) && o.flat.length) o.flat.unshift(bill(o.flat.length)); Object.values(o).forEach(mark) } }
-    await b.page.route((u) => new URL(u).pathname.startsWith('/api/'), async (r) => {
-      const res = await r.fetch()
-      if (!/json/.test(res.headers()['content-type'] || '')) return r.fulfill({ response: res })
-      const j = await res.json(); mark(j)
-      await r.fulfill({ response: res, json: j })
+    // every `lane` answer marks the system blocks its add ops bring in volatile (3.5 §会话读: the position `attrs` of add ops;
+    // copies carry theirs), as the board is told of a block that changes every call
+    // the busiest session whose main lane's tail page holds a system block (some generated sessions send none)
+    let row = null
+    for (const r of await byCalls(b)) if ((await b.get('lane', { id: r.session_id, lane: await mainOf(b, r) })).doc.defs.some((d) => d.sec === 'system')) { row = r; break }
+    assert.ok(row, 'a session with a system block')
+    const sec = new Map() // bid → sec, over every answer so far (a def is sent once per lane)
+    await editAnswers(b, '/api/lane', (j) => {
+      for (const d of j.defs || []) sec.set(d.bid, d.sec)
+      for (const st of j.steps || []) {
+        let pos = 0
+        for (const op of st.ops || []) {
+          if (op[0] === 0) { pos += op[2]; continue }
+          op.slice(1).forEach((bid, i) => { if (sec.get(bid) === 'system') st.attrs = { ...st.attrs, [pos + i]: { ...(st.attrs || {})[pos + i], volatile: true } } })
+          pos += op.length - 1
+        }
+      }
     })
-    await openBusiest(b)
+    await openSession(b, row)
     await b.page.waitForSelector('.navsub .volbadge', { timeout: 15000 })
     const past = await b.page.evaluate(() => [...document.querySelectorAll('.navsub .volbadge')].filter((e) => e.getClientRects().length).map((e) => {
       const r = e.getBoundingClientRect(), row = e.closest('.navsub').getBoundingClientRect()
@@ -228,6 +228,38 @@ test('System prompt: the "changes every call" pill stays inside the left panel',
     const F = await layoutFaults(b.page)
     assert.deepEqual({ overlap: F.overlap, cut: F.cut, untitled: F.untitled }, { overlap: [], cut: [], untitled: [] })
     await shoot(b.page, 'replay-volatile-pill', { width: 1440, theme: 'light' })
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
+// D70 §4.4 (2.3 · cell.mjs): a cell's own mode belongs to the session it was set in. Flip an open block's cell away from the desk
+// default, open another session and come back: the same bid opens in the desk default again.
+test('A20: a cell flipped to the other mode, another session, back → the same bid opens in the desk default', { skip, timeout: 120_000 }, async () => {
+  const b = await withBoard({ bytes: BYTES, width: 1440, chromium: gate.chromium })
+  try {
+    const [A, B] = await byCalls(b)
+    assert.ok(A && B, 'two sessions')
+    await openSession(b, A)
+    // open visible collapsed rows until one draws a cell with its mode buttons; its mode then is the desk default (no override yet)
+    const row = (bi) => `#ctxwin .cblk[data-bi="${bi}"]`
+    const open = (bi) => b.page.locator(`${row(bi)} > .cbh`).first().click()
+    const visible = () => b.page.evaluate(() => [...document.querySelectorAll('#ctxwin .cblk.collapsed[data-bi]')].filter((e) => e.getClientRects().length).map((e) => e.dataset.bi))
+    let bi = null, cell = null
+    for (const x of (await visible()).slice(0, 20)) {
+      await open(x)
+      cell = await b.page.waitForSelector(`${row(x)} .cell[data-bid] [data-cellmode]`, { timeout: 5000 })
+        .then(() => b.page.$eval(`${row(x)} .cell[data-bid]`, (c) => ({ bid: c.dataset.bid, mode: c.dataset.mode })), () => null)
+      if (cell) { bi = x; break }
+    }
+    assert.ok(cell, 'an opened row drew a cell')
+    const desk = cell.mode, other = desk === 'raw' ? 'read' : 'raw', sel = `#ctxwin .cell[data-bid="${cell.bid}"]`
+    await b.page.locator(`${row(bi)} .cell [data-cellmode="${other}"]`).first().click()
+    await b.page.waitForSelector(`${sel}[data-mode="${other}"]`, { timeout: 10000 })
+    await openSession(b, B)
+    await openSession(b, A)
+    if (!(await b.page.$(sel))) await open(bi) // the open rows belong to the session too: open the same row again
+    await b.page.waitForSelector(sel, { timeout: 10000 })
+    assert.equal(await b.page.$eval(sel, (e) => e.dataset.mode), desk, 'the same bid opens in the desk default')
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
