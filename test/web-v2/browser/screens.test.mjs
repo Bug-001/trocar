@@ -3,7 +3,7 @@
 // relaxed, D64⑥). Shots: every screen × 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, stats, shoot, layoutFaults } from './harness.mjs'
+import { probe, withBoard, stats, shoot, layoutFaults, timed } from './harness.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { COMMANDS } from '../../../src/web/v2/labels/capture.mjs'
 
@@ -11,34 +11,6 @@ const gate = await probe()
 const skip = gate.ok ? false : gate.reason
 const BYTES = 5e6
 const samples = { sessionOpen: [], stepClick: [], stepKey: [], button: [] }
-
-// One in-page wait, armed BEFORE the input: it marks the first pointerdown / keydown (the real input event Playwright sends), then
-// polls frames until the condition holds and lets that frame paint (a task after the rAF) before measuring. Returns ms, input → painted.
-// Conditions: 'replay' = the step head and the context window drawn (not its loading state); 'step' = the step head no longer reads
-// `arg` and the window is drawn; 'sel' = an element matches the selector `arg`.
-async function timed(page, cond, arg, act) {
-  await page.evaluate(() => { // armed and awaited before the input, so the input can never outrun the listener
-    performance.clearMarks('in')
-    const arm = () => { performance.mark('in'); removeEventListener('pointerdown', arm, true); removeEventListener('keydown', arm, true) }
-    addEventListener('pointerdown', arm, true); addEventListener('keydown', arm, true)
-  })
-  await act()
-  return page.evaluate(([cond, a]) => new Promise((resolve, reject) => {
-    const q = (s) => document.querySelector(s)
-    const holds = {
-      replay: () => location.hash.startsWith('#/replay/') && !!q('#stepbar .sb-no') && !!q('#ctxwin') && !q('#ctxwin .cwload'),
-      step: () => !!q('#stepbar .sb-no') && q('#stepbar .sb-no').textContent !== a && !q('#ctxwin .cwload'),
-      sel: () => !!q(a),
-    }[cond]
-    const t0 = performance.now()
-    const tick = () => {
-      if (performance.getEntriesByName('in').length && holds()) return setTimeout(() => resolve(performance.measure('m', 'in').duration), 0)
-      if (performance.now() - t0 > 10000) return reject(new Error(`not drawn in 10 s: ${cond} ${a ?? ''} (input seen: ${performance.getEntriesByName('in').length > 0})`))
-      requestAnimationFrame(tick)
-    }
-    tick()
-  }), [cond, arg])
-}
 
 // a sidebar link: a top-level item is clicked, a sub-item is reached through its flyout (hover the parent, then click)
 async function nav(page, href) {
