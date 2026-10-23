@@ -117,7 +117,7 @@ for (const platform of ['darwin', 'win32']) {
         assert.deepEqual((await ask('GET', '/status')).doors, { [g]: port }, 'one door, on its recorded port')
         assert.equal((await ask('GET', '/status')).code, codeId(), 'D67⑤: the model daemon says which code it runs — what `trocar update` compares against')
         // §1.3 (macOS test machine, 2026-10-18): the model daemon reports the connection counts, so `status` never has to say they are not known
-        assert.deepEqual((await ask('GET', '/status')).relayed, { closing: 0, waiting: 0 }, 'the reply carries the counts of what is still relayed')
+        assert.deepEqual((await ask('GET', '/status')).relayed, { closing: 0, waiting: 0, scope: 'memory' }, 'the reply carries the counts of what is still relayed, counted in memory')
         assert.ok(Number.isInteger((await ask('GET', '/status')).engine.active), 'V101: the reply carries the engine\'s open count that `status` reads as connections')
         const flows = () => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join('') : '')
         assert.doesNotMatch(flows(), /engine-port-taken/)
