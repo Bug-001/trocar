@@ -44,6 +44,7 @@ function whitelist(h, why) {
   if (slots.some((x) => x >= 6 && x <= 8)) assert.ok(!slots.some((x) => x === 3 || x === 9), `${why}: a stand-in replaces ③④⑨`)
   return slots
 }
+const ALL_OPEN = { has: () => true, get: () => true } // a fold memory that holds every turn open
 const bis = (h) => [...h.matchAll(/class="cblk[^"]*"[^>]*data-bi="(\d+)"/g)].map((m) => +m[1])
 
 test('1.4 #1 · #8: over generated desks every step draws its rows in list order, sections as they come, messages in turns, inside the whitelist', async () => {
@@ -54,7 +55,12 @@ test('1.4 #1 · #8: over generated desks every step draws its rows in list order
       for (let p = 0; p < lane.calls.length; p++) {
         const s = stateOf(desk, p, { anchor: lane }), h = ctxWindowHtml(s), flat = stepOf(desk, lane.calls[p].rid).flat
         whitelist(h, `seed ${seed} ${lane.calls[p].rid}`)
-        assert.deepEqual(bis(h), flat.map((_, i) => i), 'data-bi strictly increasing = the materialised list')
+        assert.ok(bis(h).every((x, i, a) => !i || x > a[i - 1]), 'data-bi strictly increasing')
+        const BODY = '<div class="cwturnbody" data-kids>'
+        for (const m of h.matchAll(/<div class="cwturn collapsed"/g)) { const t = h.slice(m.index), i = t.indexOf(BODY); assert.ok(i > 0 && !/class="cblk/.test(t.slice(0, i)) && t.startsWith('</div>', i + BODY.length), 'a folded turn draws its head only') }
+        const all = ctxWindowHtml({ ...s, turnFold: ALL_OPEN })
+        whitelist(all, `seed ${seed} ${lane.calls[p].rid}, every turn open`)
+        assert.deepEqual(bis(all), flat.map((_, i) => i), 'every turn open: data-bi = the materialised list')
         const secs = [...h.matchAll(/class="cwsec" id="sec-([^"]+)"/g)].map((m) => m[1])
         assert.deepEqual(secs, flat.map((b) => b.sec).filter((x, i, a) => x !== a[i - 1]), 'a header where the section changes, in list order')
         for (const t of tops(h).filter((c) => c.includes('cblk'))) assert.ok(!t.includes('s-messages'), 'a message row lives in a turn')

@@ -1,6 +1,7 @@
 // src/web/v2/replay/model.mjs — the replay desk's data model over the three session reads (RFC 3.5 §会话读; 2.3 #22).
 //
-// Pure: no DOM, fetch, timers or module state. The desk holds the session's skeleton rows by rid in step order, the lane
+// Pure: no DOM, fetch or timers; the only module state is the per-desk memo of materialised steps (a cache: dropped by every
+// apply*, so a read never sees a stale step). The desk holds the session's skeleton rows by rid in step order, the lane
 // headers by key (the lane's first rid), held lanes as steps with ops, and block definitions by bid. A step's bid list is
 // materialised from the nearest keyframe by its ops; one keyframe is cached every 32 steps of a walk. The playhead is a rid,
 // step numbers are derived (indexOf / ridAt).
@@ -18,6 +19,9 @@
 import { compareStep } from '../../../view/step-order.mjs'
 
 const KF_EVERY = 32
+// stepOf's memo (2.3 §读与画「长对话的窗口」 rule 1): a step is materialised once per desk change; the newest few are kept
+const MEMO = new WeakMap(), MEMO_CAP = 8
+const changed = (desk) => MEMO.delete(desk)
 
 export function createDesk() {
   return {
@@ -77,6 +81,7 @@ function setEvents(desk, rids, events) {
 export function applySession(desk, a, { before = false } = {}) {
   const touched = new Map()
   if (a.base != null && a.base !== desk.mark) return { reset: false, touched }
+  changed(desk)
   scalars(desk, a)
   if (a.base == null) {
     desk.lanes = new Map((a.lanes || []).map((h) => [h.lane, h]))
@@ -205,6 +210,7 @@ function mergeLedger(h, a) {
  * an older page of a held lane leaves them as they are.
  */
 export function applyLane(desk, a) {
+  changed(desk)
   merge(desk.defs, a.defs, (d) => d.bid)
   let h = desk.held.get(a.lane)
   const steps = a.steps.map((s) => ({ ...s, ts: desk.rows.get(s.rid)?.ts }))
@@ -271,6 +277,7 @@ export function askOrdinal(desk, key, rid) {
 export function applyLedger(desk, key, cursor, a) {
   const h = desk.held.get(key)
   if (!h) return
+  changed(desk)
   mergeLedger(h, a)
   h.cursors.delete(cursor)
   if (a.ledger_next != null) h.cursors.add(a.ledger_next)
@@ -361,8 +368,20 @@ export function listOf(desk, rid) {
   return m ? m.ids.slice() : null
 }
 
-/** A step as the renderer reads it; `flat` has one block per list position (content key `fh`, identity `bid`). */
+/** A step as the renderer reads it; `flat` has one block per list position (content key `fh`, identity `bid`). The answer is
+ * shared by every caller until the desk changes: read it, never mutate it. */
 export function stepOf(desk, rid) {
+  let m = MEMO.get(desk)
+  if (!m) MEMO.set(desk, m = new Map())
+  let st = m.get(rid)
+  if (!st) {
+    st = materialStep(desk, rid)
+    m.set(rid, st)
+    if (m.size > MEMO_CAP) m.delete(m.keys().next().value)
+  }
+  return st
+}
+function materialStep(desk, rid) {
   const row = desk.rows.get(rid) ?? null
   const [lane, h] = heldOf(desk, rid)
   const s = h?.steps.get(rid), m = s && materialise(h, rid)
