@@ -41,8 +41,8 @@ function hash(s) {
   return (h >>> 0).toString(16).padStart(8, '0')
 }
 const sysText = (r) => (r.request?.system || []).map((b) => b.text || '').join('\n')
-const isSub = (r) => /cc_is_subagent=true/.test(sysText(r))
-const isMonitor = (r) => /you are a security monitor/i.test(sysText(r))
+const isSub = (sys) => /cc_is_subagent=true/.test(sys)
+const isMonitor = (sys) => /you are a security monitor/i.test(sys)
 const userTextOf = (r) => (r.request?.messages || [])
   .map((m) => Array.isArray(m.content) ? m.content.map((b) => (b.type === 'text' ? b.text || '' : '')).join('') : String(m.content || ''))
   .join(' ')
@@ -374,7 +374,7 @@ export function callFacts(r) {
   const req = r.request, rs = respOf(r) || {}, nr = normResp(r), h = hintsOf(r)
   const status = rs.status ?? null
   const reqIncomplete = reqIncompleteOf(r)
-  const sub = h.lane === 'subagent' || isSub(r), monitor = isMonitor(r)
+  const sys = sysText(r), sub = h.lane === 'subagent' || isSub(sys), monitor = isMonitor(sys)
   const u = nr.usage, text = nr.text || ''
   const firstUser = sub ? req.messages.find((m) => m.role === 'user') : null
   return defined({
