@@ -54,11 +54,11 @@ test('4.4 conditional GET: a held ETag is sent back as If-None-Match and a 304 a
   })
 })
 
-test('D71③ a 2xx answer carries `bytes`: the length of its decoded body', async () => {
+test('D71③ a 2xx answer carries `bytes`: its body\'s UTF-8 bytes, which bound the session cache (0.2 §5)', async () => {
   for (const text of ['{"a":"é漢字"}', '[]', '', '  ']) {
     await withFetch(() => new Response(text, { status: 200 }), async () => {
       const r = await api.get('sessions', { bytes: text })
-      assert.equal(r.ok, true); assert.equal(r.bytes, text.length)
+      assert.equal(r.ok, true); assert.equal(r.bytes, Buffer.byteLength(text))
     })
   }
 })

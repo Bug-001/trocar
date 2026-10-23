@@ -27,6 +27,10 @@ test('2.3 §逐格覆盖 · D71③: an override belongs to the session desk it w
   overrideScope('p::A'); setMode(bid, other)
   overrideScope('p::B'); assert.equal(modeOf(bid), desk, 'another session draws the same bid in the desk default')
   overrideScope('p::A'); assert.equal(modeOf(bid), other, 'back on the cached desk the override holds')
+  overrideScope('p::B') // another desk setting many overrides never evicts this desk's: the cap is per desk
+  for (let i = 0; i < 1200; i++) setMode(cellOf({ sec: 'messages', role: 'user', kind: 'text', key: 'K:many' + i, text_ref: 's/main#r3::0-3', chars: 3, preview: 'abc' }).bid, other)
+  overrideScope('p::A'); assert.equal(modeOf(bid), other, 'a busy cached desk leaves this desk\'s override in place')
+  clearOverrides('p::B')
   clearOverrides('p::A'); assert.equal(modeOf(bid), desk, 'an evicted desk drops its overrides')
   overrideScope('')
 })

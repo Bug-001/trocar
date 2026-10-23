@@ -11,7 +11,7 @@ const gate = await probe()
 const skip = gate.ok ? false : gate.reason
 const NODE_CAP = 64 // spec 2.3:192
 
-test('2.3 #31: a step adds and removes at most 64 nodes in the resource explorer, and the patched explorer equals the direct draw', { skip }, async (t) => {
+test('2.3 #31: a step adds, removes or changes at most 64 nodes in the resource explorer, and the patched explorer equals the direct draw', { skip }, async () => {
   const w = world(5, { calls: 2100, page: 2100, files: 1500, talk: { pre: 10, len: 300, every: 40, tail: 0 } })
   const main = w.full().lanes.find((l) => l.kind === 'main')
   const M = w.laneRidsAt().get(main.lane).length, mid = Math.floor(M / 2)
@@ -31,12 +31,13 @@ test('2.3 #31: a step adds and removes at most 64 nodes in the resource explorer
       if (await head.count()) await head.first().click()
     }
     const rows = await page.evaluate(() => document.querySelectorAll('#resexp [data-navres], #resexp .navchip').length)
-    if (rows < 200) return t.skip(`the explorer shows ${rows} rows: the world does not have the shape this case is about`)
+    assert.ok(rows >= 200, `the explorer shows ${rows} rows: the world must have the shape this case is about`)
     await page.evaluate(() => {
       window.__mut = 0
       const size = (n) => 1 + (n.querySelectorAll ? n.querySelectorAll('*').length : 0)
-      new MutationObserver((rs) => { for (const r of rs) for (const n of [...r.addedNodes, ...r.removedNodes]) window.__mut += size(n) })
-        .observe(document.querySelector('#resexp'), { childList: true, subtree: true })
+      // 2.3 #31 counts nodes added, removed and changed: an attribute or text change counts one node
+      new MutationObserver((rs) => { for (const r of rs) if (r.type === 'childList') { for (const n of [...r.addedNodes, ...r.removedNodes]) window.__mut += size(n) } else window.__mut += 1 })
+        .observe(document.querySelector('#resexp'), { childList: true, subtree: true, attributes: true, characterData: true })
     })
     const direct = () => page.evaluate(async () => {
       const el = document.querySelector('#resexp'), { serialize } = await import(new URL('./core/units.mjs', document.baseURI).href)
@@ -53,11 +54,11 @@ test('2.3 #31: a step adds and removes at most 64 nodes in the resource explorer
         await drawn(at)
         const n = await page.evaluate(() => window.__mut)
         worst = Math.max(worst, n)
-        assert.ok(n <= NODE_CAP, `${key} to step ${at}: ${n} nodes added and removed in #resexp`)
+        assert.ok(n <= NODE_CAP, `${key} to step ${at}: ${n} nodes added, removed or changed in #resexp`)
         assert.ok(await direct(), `${key} to step ${at}: the patched explorer differs from its units drawn directly`)
       }
     }
-    console.log(`# resource explorer: ${rows} rows, worst step ${worst} nodes added + removed (cap ${NODE_CAP})`)
+    console.log(`# resource explorer: ${rows} rows, worst step ${worst} nodes added, removed or changed (cap ${NODE_CAP})`)
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })

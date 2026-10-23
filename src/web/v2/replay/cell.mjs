@@ -154,7 +154,9 @@ export const modeOf = (bid, opt) => overrides.get(scope + bid) ?? deskMode(opt)
 export function setMode(bid, m, opt) {
   overrides.delete(scope + bid)
   if (MODES.has(m) && m !== deskMode(opt)) overrides.set(scope + bid, m)
-  if (overrides.size > OVERRIDES) overrides.delete(overrides.keys().next().value)
+  let n = 0 // the cap is per desk: another cached desk's overrides are not this desk's to evict (2.3 §逐格覆盖)
+  for (const k of overrides.keys()) if (k.startsWith(scope)) n++
+  if (n > OVERRIDES) for (const k of overrides.keys()) if (k.startsWith(scope)) { overrides.delete(k); break }
 }
 
 // ── drawing ───────────────────────────────────────────────────────────────────────────────────────────────────────────
