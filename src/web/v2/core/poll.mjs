@@ -44,20 +44,22 @@ export function createPoller({ run, now = Date.now, base, alive = () => true, id
   return { poll }
 }
 
-// startPoll({run, base, now, doc}) → {poll(byReader), stop()}: a createPoller driven by a timer every `base` ms (a fixed phase from
-// the start), idle while `doc` is hidden, one read at once on start (when visible) and the moment `doc` is visible again. A read that throws
+// startPoll({run, base, now, doc}) → {poll(byReader), stop()}: a createPoller driven by a timer every `base` ms, idle while `doc` is
+// hidden, one read at once on start (when visible) and the moment `doc` is visible again. A reader's read and a visible-again read
+// restart the timer, so no timer read comes less than `base` after them (4.4: never faster than the table). A read that throws
 // counts as a failure. After stop() nothing reads and the listener is gone.
 export function startPoll({ run, base, now = () => Date.now(), doc = globalThis.document }) {
   let stopped = false, timer = 0
   const safe = async () => { try { return await run() } catch { return { ok: false } } }
   const p = createPoller({ run: safe, base, now, alive: () => !stopped, idle: () => !!(doc && doc.hidden) })
   const tick = () => { if (stopped) return; timer = setTimeout(tick, base); p.poll(false) }
-  const onVis = () => { if (doc && !doc.hidden) p.poll(true) }
+  const byReader = () => { if (stopped) return; clearTimeout(timer); timer = setTimeout(tick, base); return p.poll(true) }
+  const onVis = () => { if (doc && !doc.hidden) byReader() }
   if (doc && doc.addEventListener) doc.addEventListener('visibilitychange', onVis)
   timer = setTimeout(tick, base)
   if (!(doc && doc.hidden)) p.poll(true)
   return {
-    poll: (byReader = true) => p.poll(byReader),
+    poll: (reader = true) => (reader ? byReader() : p.poll(false)),
     stop() {
       stopped = true; clearTimeout(timer)
       if (doc && doc.removeEventListener) doc.removeEventListener('visibilitychange', onVis)

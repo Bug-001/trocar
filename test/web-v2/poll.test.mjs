@@ -163,4 +163,23 @@ for (const base of new Set(Object.values(INTERVAL))) {
     for (let i = 0; i < 10; i++) { mock.timers.tick(base); await w.settle() }
     assert.equal(w.reads.length, 2, 'after stop(): zero reads')
   })
+
+  test(`startPoll base ${base}: after a reader's or a visible-again read at t no timer read comes before t + base`, async (t) => {
+    mock.timers.enable({ apis: ['setTimeout', 'Date'] }); t.after(() => mock.timers.reset())
+    for (const by of ['reader', 'visible'])
+      for (const at of [1, Math.floor(base / 2), base - 100, base - 1]) {
+        const w = world(() => ({}))
+        const p = startPoll({ run: w.run, base, doc: w.doc })
+        await w.settle()
+        mock.timers.tick(at)
+        if (by === 'reader') p.poll(); else w.vis()
+        await w.settle()
+        const t0 = Date.now(), n = w.reads.length
+        assert.equal(w.reads.at(-1), t0, `${by} at ${at}: the read happens at once`)
+        for (let i = 0; i < 3 * base; i += 50) { mock.timers.tick(50); await w.settle() }
+        const next = w.reads.slice(n)
+        assert.ok(next.length > 0 && next[0] >= t0 + base, `${by} at ${at}: next timer read at ${next[0] - t0} ms, the period is ${base}`)
+        p.stop()
+      }
+  })
 }
