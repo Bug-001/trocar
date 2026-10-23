@@ -38,8 +38,8 @@ function slotOf(desk, arr, rid) {
 }
 const place = (desk, arr, rid) => arr.splice(slotOf(desk, arr, rid), 0, rid)
 function unplace(desk, arr, rid) {
-  const j = slotOf(desk, arr, rid), i = arr[j] === rid ? j : arr.lastIndexOf(rid)
-  if (i >= 0) arr.splice(i, 1)
+  const j = slotOf(desk, arr, rid) // callers remove a row while its old ts is still in desk.rows, so the order holds
+  if (arr[j] === rid) arr.splice(j, 1)
 }
 
 function addRow(desk, row) {

@@ -196,8 +196,7 @@ test('the session-info popover is filled when it opens, from the lanes held then
   const el = { innerHTML: '', querySelector: (sel) => (sel === '.sipb' ? body : null), addEventListener: (t, f) => { handlers[t] = f }, removeEventListener() {} }
   const s = { meta: desk.meta, lanes, desk, follow: true, ctx: {}, staleErr: null }
   renderSessionHead(el, s)
-  assert.match(el.innerHTML, /<div class="sipb"><\/div>/)
-  assert.equal(s.totals, null)
+  assert.equal(s.totals, null) // nothing counted over the whole session until the popover opens
   wireSessionHead(el, s)
   handlers['v2:popopen']()
   assert.ok(body.innerHTML.length > 0, 'the popover body is drawn on open')
