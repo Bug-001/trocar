@@ -136,3 +136,22 @@ test('1.2 #23 the 4th session opened evicts the least recently seen: back on the
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
+
+test('1.2 #24 a cold open of a replay route sends its first full `session` read before any status / pricing read, and only one', { skip }, async () => {
+  const b = await board()
+  try {
+    const { page } = b
+    const href = await firstRow(page)
+    // a new document on the replay route with the token already in this tab's sessionStorage (the #t= boot put it there)
+    await page.evaluate((h) => history.replaceState(null, '', h), href)
+    await page.reload({ waitUntil: 'commit' })
+    await until(page, () => !!document.querySelector('#stepbar .sb-no'))
+    // in the order the page sent them (Resource Timing: a routed answer does not delay its entry's start)
+    const sent = (await page.evaluate(() => performance.getEntriesByType('resource').map((e) => [e.startTime, e.name])))
+      .sort((a, b) => a[0] - b[0]).map(([, n]) => new URL(n)).filter((u) => u.pathname.startsWith('/api/'))
+    const full = (u) => u.pathname === '/api/session' && !u.searchParams.has('since') && !u.searchParams.has('before')
+    const i = sent.findIndex(full), j = sent.findIndex((u) => u.pathname === '/api/status' || u.pathname === '/api/pricing')
+    assert.ok(i >= 0 && (j < 0 || i < j), `the first full session read leads: ${sent.map((u) => u.pathname + u.search).join(' ')}`)
+    assert.equal(sent.filter(full).length, 1, sent.map((u) => u.pathname + u.search).join(' '))
+  } finally { await b.stop() }
+})

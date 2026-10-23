@@ -6,6 +6,59 @@
 <script>/* the theme preference, before the first paint (1.5): light / dark pin it, anything else follows the system */try{var t=localStorage.getItem("trocar.v2.theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}</script>
 <title>trocar</title>
 <link rel="icon" href="data:," /><!-- the tab icon: main.mjs draws the brand mark into it; this empty one keeps the browser from asking for /favicon.ico -->
+<!-- 1.2 #24: a cold replay open sends its first session read before the module graph has loaded (core/first.mjs, fetched first), and the
+     static import closure of main.mjs and replay/replay.mjs is fetched in parallel at once, first.mjs's own modules leading
+     (test/web-v2/imports.test.mjs holds the list to the graph) -->
+<script type="module" async src="./core/first.mjs"></script>
+<link rel="modulepreload" href="./core/http.mjs" />
+<link rel="modulepreload" href="/off/token-header.mjs" />
+<link rel="modulepreload" href="./core/router.mjs" />
+<link rel="modulepreload" href="./core/chips.mjs" />
+<link rel="modulepreload" href="./core/fmt.mjs" />
+<link rel="modulepreload" href="./core/labels.mjs" />
+<link rel="modulepreload" href="./labels/common.mjs" />
+<link rel="modulepreload" href="./labels/shell.mjs" />
+<link rel="modulepreload" href="./core/ui.mjs" />
+<link rel="modulepreload" href="./main.mjs" />
+<link rel="modulepreload" href="./core/api.mjs" />
+<link rel="modulepreload" href="./core/store.mjs" />
+<link rel="modulepreload" href="./core/keys.mjs" />
+<link rel="modulepreload" href="./core/dom.mjs" />
+<link rel="modulepreload" href="./shell/sidebar.mjs" />
+<link rel="modulepreload" href="./core/icons.mjs" />
+<link rel="modulepreload" href="./shell/safemount.mjs" />
+<link rel="modulepreload" href="./labels/capture.mjs" />
+<link rel="modulepreload" href="./replay/replay.mjs" />
+<link rel="modulepreload" href="./replay/session-cache.mjs" />
+<link rel="modulepreload" href="./replay/keymap.mjs" />
+<link rel="modulepreload" href="./replay/lanes.mjs" />
+<link rel="modulepreload" href="./replay/model.mjs" />
+<link rel="modulepreload" href="/view/step-order.mjs" />
+<link rel="modulepreload" href="./replay/analysis.mjs" />
+<link rel="modulepreload" href="./labels/replay.mjs" />
+<link rel="modulepreload" href="./core/metrics.mjs" />
+<link rel="modulepreload" href="./replay/fold.mjs" />
+<link rel="modulepreload" href="./replay/follow.mjs" />
+<link rel="modulepreload" href="./replay/cell.mjs" />
+<link rel="modulepreload" href="./labels/cells.mjs" />
+<link rel="modulepreload" href="./replay/jsonlay.mjs" />
+<link rel="modulepreload" href="./replay/kinds.mjs" />
+<link rel="modulepreload" href="./replay/loader.mjs" />
+<link rel="modulepreload" href="./core/poll.mjs" />
+<link rel="modulepreload" href="./replay/timeline.mjs" />
+<link rel="modulepreload" href="./replay/jump.mjs" />
+<link rel="modulepreload" href="./replay/rails.mjs" />
+<link rel="modulepreload" href="./replay/ctxwin.mjs" />
+<link rel="modulepreload" href="./core/units.mjs" />
+<link rel="modulepreload" href="./replay/stepbar.mjs" />
+<link rel="modulepreload" href="./replay/blocks.mjs" />
+<link rel="modulepreload" href="./replay/rawpanel.mjs" />
+<link rel="modulepreload" href="./replay/outline.mjs" />
+<link rel="modulepreload" href="./replay/pricing.mjs" />
+<link rel="modulepreload" href="./replay/resources.mjs" />
+<link rel="modulepreload" href="./replay/detail.mjs" />
+<link rel="modulepreload" href="./replay/layout.mjs" />
+<link rel="modulepreload" href="./replay/header.mjs" />
 <link rel="stylesheet" href="./css/base.css" />
 <link rel="stylesheet" href="./css/shell.css" />
 <link rel="stylesheet" href="./css/library.css" />

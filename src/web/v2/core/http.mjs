@@ -16,7 +16,8 @@ export function configure({ token: t = null } = {}) { token = t }
 
 let forbidden = false
 const onForbid = []
-export function onForbidden(fn) { onForbid.push(fn) }
+// a callback registered after the latch closed runs at once (a boot read — core/first.mjs — can be answered 403 before main.mjs registers)
+export function onForbidden(fn) { onForbid.push(fn); if (forbidden) try { fn() } catch (e) { console.error('onForbidden failed', e) } }
 const FORBIDDEN = Object.freeze({ ok: false, status: 403, error: 'HTTP 403' })
 
 const held = new Map() // full URL → {etag, data} from a 200 that carried an ETag
@@ -58,11 +59,22 @@ function latch(status) {
   for (const fn of onForbid) try { fn() } catch (e) { console.error('onForbidden failed', e) }
 }
 
+// early(path, params): a read sent before the screen that wants it exists (core/first.mjs, 1.2 #24). Its answer is kept by full URL and
+// handed, once, to the first get() of that URL; it went through get(), so the ETag is recorded once and a 403 latches as any other.
+const earlyReads = new Map()
+export function early(path, params) { earlyReads.set(path + qs(params), get(path, params)) }
+
 // `hold:false` keeps only the ETag of the URL, and a 304 answers {ok:true, status:304, data:null}: the caller has the document
 export async function get(path, params, { signal, hold = true } = {}) {
   if (forbidden) return FORBIDDEN
   if (signal && signal.aborted) return { ok: false, status: 0, error: ABORTED }
   const url = path + qs(params)
+  const pre = earlyReads.get(url)
+  if (pre) { // not abortable: a caller that cancels while it is on its way gets ABORTED, never the answer
+    earlyReads.delete(url)
+    const r = await pre
+    return signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : r
+  }
   const headers = {}
   if (token) headers[CONTROL_TOKEN_HEADER] = token
   const was = hold ? held.get(url) : tags.has(url) ? { etag: tags.get(url) } : undefined
