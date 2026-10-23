@@ -133,7 +133,10 @@ const DESK_KEY = 'trocar.v2.cellView'
 const MODES = new Set(['raw', 'read'])
 const local = () => { try { return globalThis.localStorage ?? null } catch { return null } }
 let desk = null // the last desk mode set here, for when storage cannot hold it
-const overrides = new Map() // bid -> mode; Map order = least recently set first
+const overrides = new Map() // scope + bid -> mode; Map order = least recently set first
+// the overrides are the shown desk's: each cached desk (session-cache.mjs) keeps its own under its session key (2.3 §逐格覆盖)
+let scope = ''
+export const overrideScope = (key) => { scope = String(key) + '\n' }
 
 export function deskMode({ storage = local() } = {}) {
   try { const v = storage && storage.getItem(DESK_KEY); if (MODES.has(v)) return v } catch { /* storage denied: memory, then Raw */ }
@@ -144,12 +147,13 @@ export function setDeskMode(m, { storage = local() } = {}) {
   overrides.clear()
   try { storage && storage.setItem(DESK_KEY, desk) } catch { /* full or denied: the choice holds for this page only */ }
 }
-export const clearOverrides = () => overrides.clear()
-export const modeOf = (bid, opt) => overrides.get(bid) ?? deskMode(opt)
+// a desk that leaves the cache drops its overrides
+export const clearOverrides = (key) => { for (const k of [...overrides.keys()]) if (k.startsWith(String(key) + '\n')) overrides.delete(k) }
+export const modeOf = (bid, opt) => overrides.get(scope + bid) ?? deskMode(opt)
 // set one cell's mode; back to the desk default drops its override
 export function setMode(bid, m, opt) {
-  overrides.delete(bid)
-  if (MODES.has(m) && m !== deskMode(opt)) overrides.set(bid, m)
+  overrides.delete(scope + bid)
+  if (MODES.has(m) && m !== deskMode(opt)) overrides.set(scope + bid, m)
   if (overrides.size > OVERRIDES) overrides.delete(overrides.keys().next().value)
 }
 
