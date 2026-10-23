@@ -76,6 +76,22 @@ test('A2: full(M0) plus the since deltas equals full(now); an unknown mark (base
     assert.deepEqual(VIEW(stale), VIEW(ref), `seed ${seed}: unknown mark`)
   }
   for (const [k, v] of Object.entries(seen)) assert.ok(v > 0, `the worlds' deltas include ${k}`)
+  // a cut session, followed with --since the previous answer's mark as is: across the moved cut the answer is the full
+  // document and the desk is replaced by it; after it the deltas carry the cut mark on
+  let crossed = 0, after = 0
+  for (const seed of SEEDS) {
+    const w = world(seed, { cut: true }), desk = createDesk()
+    applySession(desk, w.full(w.marks[0]))
+    for (const at of w.marks.slice(1)) {
+      const d = w.since(desk.mark, at), out = applySession(desk, d)
+      if (d.base == null) { crossed++; assert.equal(out.reset, true, `seed ${seed} at ${at}`) } else if (String(d.base).includes('@')) after++
+    }
+    const ref = createDesk()
+    applySession(ref, w.full())
+    assert.deepEqual(VIEW(desk), VIEW(ref), `seed ${seed}: cut`)
+    assert.equal(desk.mark, w.full().mark)
+  }
+  assert.ok(crossed > 0 && after > 0, `a cut moved (${crossed}) and deltas went on under it (${after})`)
 })
 
 // Hold every lane through the deltas, re-reading each touched lane by the ask rule; returns the first mismatch or null.

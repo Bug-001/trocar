@@ -45,7 +45,7 @@ function encode(P, C) {
   return ops
 }
 
-export function world(seed, { calls: count } = {}) {
+export function world(seed, { calls: count, cut: cuts = false } = {}) {
   const r = rng(seed), int = (a, b) => a + Math.floor(r() * (b - a + 1))
   const nLanes = int(2, 5), n = count ?? int(18, 40), page = int(3, 7), room = page + int(0, 3), lroom = int(1, 3)
   const files = Array.from({ length: 5 }, (_, j) => `src/f${j}.mjs`), pick = (xs) => xs[int(0, xs.length - 1)]
@@ -164,17 +164,29 @@ export function world(seed, { calls: count } = {}) {
 
   // `unknown` (3.5 §会话读) holds from the middle mark on: a full answer carries it only where it holds; a delta only where it differs from M's
   const unknownAt = (M) => (unknown && marks.indexOf(M) >= marks.length >> 1 ? unknown : null)
+  // `cut` (opt-in): from the mark 3/4 in, the session is cut before its third row in step order then; a mark names its cut
+  // (`rid@cut`), and a delta across a moved cut is the full document (3.5 §会话读). A cut document leaves out rows before it.
+  const cutRid = cuts ? [...docAt(marks[(marks.length * 3) >> 2]).rows.values()].sort(stepCmp)[2].rid : null
+  const cutAt = (M) => (cutRid && marks.indexOf(M) >= (marks.length * 3) >> 2 ? cutRid : null)
+  const markOf = (M) => (cutAt(M) ? `${M}@${cutAt(M)}` : M)
+  function sdoc(M) {
+    const d = docAt(M), c = cutAt(M)
+    if (!c) return d
+    const keep = (rid) => stepCmp(d.rows.get(rid), d.rows.get(c)) >= 0
+    return { ...d, rows: new Map([...d.rows].filter(([rid]) => keep(rid))), events: d.events.filter((e) => keep(e.rid)) }
+  }
   function full(M = now) {
-    const d = docAt(M), calls = [...d.rows.values()], u = unknownAt(M)
-    return { ...head(d), base: null, mark: M, more: false, ...(u ? { unknown: u } : null), lanes: [...d.lanes.values()], calls, events: d.events,
+    const d = sdoc(M), calls = [...d.rows.values()], u = unknownAt(M)
+    return { ...head(d), base: null, mark: markOf(M), more: false, ...(u ? { unknown: u } : null), lanes: [...d.lanes.values()], calls, events: d.events,
       records: recordsOf(d, calls.map((c) => c.rid)) }
   }
 
   function since(M, at = now) {
-    if (!marks.includes(M) || marks.indexOf(M) > marks.indexOf(at)) return full(at)
-    const o = docAt(M), d = docAt(at), same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+    const [m, c = null] = String(M).split('@')
+    if (!marks.includes(m) || marks.indexOf(m) > marks.indexOf(at) || c !== cutAt(m) || c !== cutAt(at)) return full(at)
+    const o = sdoc(m), d = sdoc(at), same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
     const calls = [...d.rows.values()].filter((row) => !same(o.rows.get(row.rid), row)), rids = new Set(calls.map((c) => c.rid))
-    return { ...head(d), base: M, mark: at, ...(unknownAt(M) !== unknownAt(at) ? { unknown: unknownAt(at) } : null), calls, gone: [...o.rows.keys()].filter((rid) => !d.rows.has(rid)),
+    return { ...head(d), base: M, mark: markOf(at), ...(unknownAt(M) !== unknownAt(at) ? { unknown: unknownAt(at) } : null), calls, gone: [...o.rows.keys()].filter((rid) => !d.rows.has(rid)),
       lanes: [...d.lanes.values()].filter((h) => !same(o.lanes.get(h.lane), h)), lanes_gone: [...o.lanes.keys()].filter((k) => !d.lanes.has(k)),
       events: d.events.filter((e) => rids.has(e.rid)), records: recordsOf(d, calls.map((c) => c.rid)) }
   }
