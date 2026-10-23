@@ -6,6 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard } from './harness.mjs'
 import { world } from '../desk-world.mjs'
+import { QUERIES } from '../../../src/query/named/index.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -67,6 +68,10 @@ test('2.3 #25: scrubbing the desk reads nothing before a 100 ms rest, keeps ≤ 
     await page.clock.runFor(200)
     await page.waitForTimeout(300)
     for (const e of log) assert.ok(e.inFlight <= 1, `a second ${e.k} read went out while one was in flight`)
+    // 3.5 · 1.6 C.5: a step read names only its query's parameters (the real server refuses any other: `block` takes --ref alone)
+    assert.ok(log.some((e) => e.k === 'block'), 'the rested steps read some bodies')
+    const extra = log.flatMap((e) => [...new Set(new URL(e.r.url()).searchParams.keys())].filter((k) => !QUERIES[e.k].params.includes(k)).map((k) => `${e.k} ${k}`))
+    assert.deepEqual([...new Set(extra)], [])
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })

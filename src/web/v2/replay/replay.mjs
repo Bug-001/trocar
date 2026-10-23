@@ -353,7 +353,8 @@ function mountDesk(el, ctx) {
   s.followOn = followOn
 
   // ── a step's own reads: its lane, its open rows' bodies, the lane's older pages (2.3 §读与画; 3.5:69) ─────────────────
-  const read = (name, p, opts) => api.get(name, { id: s.id, ...p }, opts)
+  // the session's own reads name it; a `block` read names only its refs (3.5: `block` takes --ref alone, any other parameter is refused)
+  const read = (name, p, opts) => api.get(name, name === 'block' ? p : { id: s.id, ...p }, opts)
   const laneIndex = (key, rid) => { const r = s.desk.laneRids.get(key); return r ? r.indexOf(rid) : -1 }
   // the refs of a held step's bodies on show and not cached: its reply parts (the window's default-open kind, 2.3:195, and the raw panel) and the rows the reader opened
   function openRefs(rid) {
