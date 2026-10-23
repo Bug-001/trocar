@@ -497,9 +497,11 @@ export const CHUNK_STORED = 8 * 1048576;
 const CHUNK = 16;
 const contexts = new WeakMap(); // store → its extraction context (slices of one session go on with the same one)
 /** extractSeed(store) → the parts ([[name, array]]) of the extraction context of `store` for its sidecar (store.saveIndex), [] when
- *  it has none or holds rows the store does not; an open that loads that sidecar hands them back as `store.saved` (4.3 §4 旁索引). */
+ *  it holds rows the store does not; an open that loads that sidecar hands them back as `store.saved` (4.3 §4 旁索引). A store that
+ *  extracted nothing yet gets its context here, seeded from what it was opened with, so a sidecar written after a fold alone keeps it. */
 export function extractSeed(store) {
-  const ctx = contexts.get(store), seed = ctx && ctx.seed();
+  if (!contexts.has(store)) contexts.set(store, createExtractContext(store, store.saved));
+  const seed = contexts.get(store).seed();
   return seed ? Object.entries(seed) : [];
 }
 

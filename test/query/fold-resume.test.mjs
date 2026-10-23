@@ -179,3 +179,25 @@ test('a reopened worker over a grown session folds only the new members: what it
   const M = 6, a = await reopenAt(300, M), b = await reopenAt(1200, M)
   assert.ok(b.read <= a.read + b.appended, `projection and fold log bytes read past opening at 300 / 1200 calls (+${M} new): ${JSON.stringify({ a, b })}`)
 })
+
+// A worker that only folds still writes the extraction context into the projection's sidecar (4.3 §4 旁索引). The projection holds
+// every call row but no break detail and the fold log is gone (what a worker killed after its extraction ran ahead of its fold leaves,
+// the sidecars lost too): a fresh worker extracts nothing, its fold writes the break details, so the projection grows and its sidecar
+// is written again at the idle period. Its `e.n` names every call row, so the next open seeds from it and scans none of them.
+test('a worker that folds without extracting keeps the extraction seed in the projection sidecar (4.3 §4 旁索引)', { timeout: 300_000 }, async () => {
+  const home = path.join(tmpDir('trocar-foldonly-'), '.trocar')
+  const s = bigSession({ home, ...SHAPE, subEvery: 4, paths: 4 })
+  s.append(300)
+  while (await extendSession({ home, writer: true }, s.id, Infinity));
+  const file = projectionFile(home, s.id), log = foldLogFile(home, s.id)
+  const lines = fs.readFileSync(file, 'utf8').split('\n')
+  assert.ok(lines.some((l) => l.startsWith('{"b"')), 'the session has break details')
+  fs.writeFileSync(file, lines.filter((l) => !l.startsWith('{"b"')).join('\n'))
+  for (const f of [sidecarOf(file), log, sidecarOf(log)]) fs.rmSync(f, { force: true })
+  const own = { ...fs } // a second fs object: fresh stores and states
+  while (await extendSession({ home, fs: own, writer: true }, s.id, Infinity));
+  saveIndexes()
+  const sc = loadSidecar({ file }), calls = new Set(linesOf(file).filter((o) => o.c).map((o) => o.c.rid)).size
+  assert.ok(sc && sc.parts['e.n'], 'the projection sidecar holds the extraction seed')
+  assert.equal(sc.parts['e.n'][0], calls)
+})

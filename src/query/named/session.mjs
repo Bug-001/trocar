@@ -241,7 +241,7 @@ export function saveIndexes() {
 // the log ends at the frontier line the sidecar covers to, so the state is the one the sidecar's indexes describe. A sidecar that
 // cannot be written is not one: the next open scans, the next fold rebuilds.
 function sidecars(store) {
-  try { store.saveIndex(extractSeed(store)); } catch { /* the next idle period */ }
+  try { if (!store.indexed) store.saveIndex(extractSeed(store)); } catch { /* the next idle period */ }
   const st = fileLogs.get(store);
   if (!st || !store.indexed) return;
   try {
@@ -307,17 +307,19 @@ function seed(s) {
 // them. Else false (the local path's log past it, a mismatch, a state that does not read back or is not of this store): the caller
 // rebuilds up to the log's frontier (`target`), as without one.
 function resumed(s) {
-  const sv = s.log.saved, meta = sv && sv.parts['r.m'];
-  if (!meta || !(sv.parts['r.s'] instanceof Uint8Array)) return false;
+  const sv = s.log.saved, meta = sv && sv.parts['r.m'], state = sv && sv.parts['r.s'];
+  if (sv) delete sv.parts['r.s']; // read once here, whether taken or not: not held while the state lives
+  if (!meta || !(state instanceof Uint8Array)) return false;
   let from;
   try {
     const m = JSON.parse(meta[0]);
     if (m.rv !== REDUCE_V || m.cut !== s.cut) return false;
-    from = v8.deserialize(sv.parts['r.s']);
+    from = v8.deserialize(state);
   } catch { return false; }
   if (!(sv.bytes > s.log.frontier)) {
     if (!s.writer) return false;
     s.log.close(); s.log = s.open(sv.bytes); seed(s); s.view = null; s.target = markOf(s.log);
+    if (s.log.saved) delete s.log.saved.parts['r.s'];
     if (s.log.bytes !== sv.bytes) return false;
   }
   const target = s.target;
