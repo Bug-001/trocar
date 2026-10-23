@@ -310,6 +310,23 @@ test('(d) frontier: the largest rid with every member up to it extracted; done: 
   }
 });
 
+test('(d) sliced: over budget-cut slices each member is read once, and the rows are those of one pass (3.5 后台抽取与归约)', () => {
+  const all = stitchedSessions();
+  for (const name of ['threads', 'ws']) {
+    const recs = all[name], members = membersOf(recs), read = reader(recs);
+    const one = opened(tmpDir('trocar-extract-'));
+    extractMembers({ store: one, members, recordsAt: read });
+    const store = opened(tmpDir('trocar-extract-'));
+    let asked = 0, r = { done: 0 };
+    do {
+      let now = 0;
+      r = extractMembers({ store, members, recordsAt: (rows) => { asked += rows.length; return read(rows); }, budgetMs: 2, clock: () => now++, from: r.done });
+    } while (r.done < r.total);
+    assert.equal(asked, members.length, `${name}: every member read once`);
+    for (const x of recs) assert.deepEqual(store.rows.get(x.id), one.rows.get(x.id), `${name} ${x.id}`);
+  }
+});
+
 test('(d) a member that does not read back is held with every row after it; the next open goes on to the rows of one pass', () => {
   const all = stitchedSessions();
   for (const name of ['threads', 'ws']) {
