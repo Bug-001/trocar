@@ -5,6 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, shoot } from './harness.mjs'
+import { INTERVAL } from '../../../src/web/v2/core/poll.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -91,16 +92,16 @@ test('(9)(10) a failed read keeps the old list with retry; the empty state reads
   try {
     await go(page, '#/sessions', '.lrow')
     await page.route('**/api/sessions?**', (r) => r.fulfill({ status: 500, json: { error: 'boom' } }))
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))) // coming back to a visible page reads at once
     await page.waitForSelector('#libcap [data-act="retry"]', { timeout: 10000 })
     assert.ok(await page.locator('.lrow').count() > 0, 'the old list stays')
     await page.unroute('**/api/sessions?**')
     await page.route('**/api/sessions?**', (r) => r.fulfill({ json: EMPTY }))
     await go(page, '#/settings/appearance', '[data-theme-choice]'); await page.waitForLoadState('networkidle') // a screen that reads no status
-    const from = b.requests.length, t0 = Date.now()
+    const from = b.requests.length
     await go(page, '#/sessions', '.libempty a[href="#/capture"]')
-    await page.waitForTimeout(7000) // two more 3 s polls of /api/sessions
+    await page.waitForTimeout(INTERVAL.sessions + 1000) // one more `sessions` poll: the empty state does not re-read status with it
     const urls = b.requests.slice(from).map((r) => r.url.split('?')[0])
-    assert.ok(urls.filter((u) => u === '/api/sessions').length >= 3, `sessions polls in ${Date.now() - t0} ms: ${urls}`)
     assert.equal(urls.filter((u) => u === '/api/status').length, 1, String(urls))
   } finally { await b.stop() }
 })

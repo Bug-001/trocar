@@ -192,7 +192,7 @@ test('K-30: with no token the page names `trocar board`, draws no navigation and
   const b = await withBoard({ bytes: 0, token: false, chromium: gate.chromium })
   try {
     await b.page.waitForSelector('main.forbidden')
-    await b.page.waitForTimeout(4000) // longer than the shortest poll (3 s): a poll that survived the 403 would show here
+    await b.page.waitForTimeout(4000) // longer than two of the shortest poll (`session`, 1.5 s): a poll that survived the 403 would show here
     assert.ok((await b.page.textContent('body')).includes(COMMANDS.board))
     const code = b.page.locator('main.forbidden code') // the command reads as one line (a desk-only grid rule once squeezed it to 6 px)
     assert.equal(await code.evaluate((e) => e.getClientRects().length), 1)

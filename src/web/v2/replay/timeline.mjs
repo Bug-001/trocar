@@ -13,6 +13,7 @@ import { cacheState, isBreak, breakCost, usageOf, priceMatch, costOf, isFailed }
 import { CT_ORDER, callComp, hitTier, refRowOf } from './analysis.mjs'
 import { anchorJump } from './jump.mjs'
 import { laneEvents } from './model.mjs'
+import { stepRef } from './lanes.mjs'
 import { laneWord } from '../labels/replay.mjs'
 import * as W from '../labels/replay.mjs'
 // the composition colours' keys, in the bars' stacking order: [class suffix, word]
@@ -181,7 +182,7 @@ export function renderSaw(el, s) {
   // rid (`lane` answer, `k` · `preview`); while that page is not held the hover names only the step (no K, no guess)
   const held = isMain && s.desk ? new Map(laneEvents(s.desk, s.anchor.id).filter((e) => e.type === 'user').map((e) => [e.rid, e])) : new Map()
   const asks = (isMain ? s.anchor.events || [] : []).filter((e) => e && e.type === 'user' && e.rid != null)
-    .map((e) => ({ i: s.anchor.ridLocal ? s.anchor.ridLocal.get(e.rid) : null, ev: held.get(e.rid) || null }))
+    .map((e) => ({ i: s.anchor.ridLocal ? s.anchor.ridLocal.get(e.rid) : null, rid: e.rid, ev: held.get(e.rid) || null }))
     .filter((a) => a.i != null && a.i >= lo && a.i < hi)
   const askrow = q(el, '#askrow')
   if (askrow) {
@@ -194,7 +195,7 @@ export function renderSaw(el, s) {
     for (let i = lo; i < hi; i++) {
       const arr = byStep.get(i)
       const ks = arr ? arr.filter((a) => a.ev && a.ev.k != null).map((a) => a.ev.k) : []
-      const tip = arr ? [...new Set(arr.map((a) => (a.ev && a.ev.k != null ? W.askScaleTip(a.ev.k, a.ev.preview || '') : `step ${(s.anchor.base || 0) + i + 1}`)))].join('\n') : ''
+      const tip = arr ? [...new Set(arr.map((a) => (a.ev && a.ev.k != null ? W.askScaleTip(a.ev.k, a.ev.preview || '') : W.askScaleStepTip(stepRef(s.lanes, a.rid)))))].join('\n') : ''
       h += arr ? `<span class="atick" data-i="${i}"${ks.length ? ` data-k="${ks.join(' ')}"` : ''} title="${esc(tip)}"></span>` : '<span class="acell"></span>'
     }
     q(el, '#askscale').innerHTML = h

@@ -18,7 +18,8 @@ import { buildLanes, anchorLane, stepsOf, nearestByTs } from './lanes.mjs'
 import { createDesk, applySession, applyLane, readTouched, mergeTouch, readLedger, ledgerDone, stepOf as deskStep } from './model.mjs'
 import { breakSteps } from './analysis.mjs'
 import { loadFold, saveFold } from './fold.mjs'
-import { landPlayhead, createPoller, createStepReads } from './follow.mjs'
+import { landPlayhead, createStepReads } from './follow.mjs'
+import { createPoller, INTERVAL } from '../core/poll.mjs'
 import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
 import { renderContextWindow, wireCtxWin, emptyFrameHtml, rowKeys } from './ctxwin.mjs'
@@ -36,7 +37,7 @@ import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
 import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION } from '../labels/replay.mjs'
 import { readFailure } from '../core/ui.mjs'
 
-const POLL_MS = 1500
+const POLL_MS = INTERVAL.session
 const BUSY_MS = 150 // 2.3 §车道未到手: how long a step whose lane is not held leaves the desk as it is
 const SLICE_MS = 8 // 3.7: an answer is applied in slices of at most this long, yielding between them
 const SLICE_ROWS = 100
@@ -459,7 +460,7 @@ function mountDesk(el, ctx) {
     renderHeader(); if (s.anchor) { s.renderRaw(); refreshDrawer() }
   }
 
-  // one read in flight; a failed read backs off; the reader's own actions read at once (follow.mjs createPoller). A hidden tab and a
+  // one read in flight; a failed read backs off; the reader's own actions read at once (core/poll.mjs createPoller). A hidden tab and a
   // session the server does not know read nothing by themselves. One poller per session: its loop stops as soon as the session changes.
   const idle = () => (typeof document !== 'undefined' && document.hidden) || s.notListed
   const makePoller = () => { const key = sessionKey()

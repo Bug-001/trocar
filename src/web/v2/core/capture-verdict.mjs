@@ -9,8 +9,9 @@ import { harnessKey, harnessName, HARNESS_ORDER } from './chips.mjs'
 import { RESTART_CODES, UNKNOWN_REASON } from '../labels/capture.mjs'
 import { HEALTH_WORDS, HEALTH_READ } from '../labels/common.mjs'
 import { failureBrief, statusReason } from '../../../cli/words.mjs'
+import { startPoll, INTERVAL } from './poll.mjs'
 
-export const CAPH_MS = 5000 // the poll period of the pages that show this card while visible (4.4 §live-poll: `status` is the costliest read)
+export const CAPH_MS = INTERVAL.status // the poll period of the pages that show this card while visible (4.4 §live-poll: `status` is the costliest read)
 
 // state → { mark, cls }. cls: ok | warn | bad | dim. `loading`, `stale`, `unreadable` and `unrecognized` are the board's read states.
 const LOOK = Object.freeze({
@@ -183,34 +184,22 @@ export function failureSentence(g) {
 }
 
 // ── the poll of `status` (1.5 §采集状态 轮询 — the one place, so the 总览 / 采集 / 采集记录 pages cannot disagree) ──
-// While the page is visible: one read every CAPH_MS, never two in flight; hidden: no reads, and one read the moment the
-// page is visible again. Every answer — including a failure — goes through capHealthPatch into the store (a failure keeps
-// the last good answer, so the page keeps showing it under its 截至 mark). onAnswer(s) runs after each store write, on the
-// caller's clock. → { stop(), refresh() } — refresh() reads at once (after a write), still never two in flight: a refresh
-// that lands while a read is out may be answered from before the write, so one more read starts the moment that answer lands.
+// core/poll.mjs startPoll at CAPH_MS: while the page is visible one read per period, never two in flight, backing off after a
+// failure (K-29); hidden: no reads, and one read the moment the page is visible again. Every answer — including a failure — goes
+// through capHealthPatch into the store (a failure keeps the last good answer, so the page keeps showing it under its 截至 mark).
+// onAnswer(s) runs after each store write, on the caller's clock. → { stop(), refresh() } — refresh() reads at once (after a
+// write), still never two in flight: a refresh that lands while a read is out may be answered from before the write, so one more
+// read starts the moment that answer lands.
 export function pollCaptureHealth({ api, store, doc = typeof document === 'undefined' ? null : document, onAnswer = null }) {
-  let timer = 0, inFlight = false, stopped = false, again = false
-  const schedule = () => { if (!stopped) { clearTimeout(timer); timer = setTimeout(tick, CAPH_MS) } }
-  const tick = async () => {
-    if (stopped || inFlight) return (stopped ? undefined : schedule())
-    if (doc && doc.hidden) return schedule() // hidden: no read; visibilitychange fires the read on return
-    inFlight = true; again = false
+  let stopped = false
+  const run = async () => {
     let r
     try { r = await api.get('status') } catch (e) { r = { ok: false, error: String((e && e.message) || e) } }
-    inFlight = false
-    if (stopped) return
+    if (stopped) return r
     store.set(capHealthPatch(r, api.now()))
     if (onAnswer) { try { onAnswer(store.get()) } catch { /* a listener that throws must not stop the poll */ } }
-    if (again) tick(); else schedule()
+    return { ok: !!(r && r.ok) }
   }
-  const onVis = () => { if (!stopped && doc && !doc.hidden) { clearTimeout(timer); tick() } }
-  if (doc && doc.addEventListener) doc.addEventListener('visibilitychange', onVis)
-  tick() // the first read at once
-  return {
-    refresh() { if (stopped) return; if (inFlight) { again = true; return } clearTimeout(timer); tick() },
-    stop() {
-      stopped = true; clearTimeout(timer)
-      if (doc && doc.removeEventListener) doc.removeEventListener('visibilitychange', onVis)
-    },
-  }
+  const p = startPoll({ run, base: CAPH_MS, doc })
+  return { refresh() { if (!stopped) p.poll() }, stop() { stopped = true; p.stop() } }
 }
