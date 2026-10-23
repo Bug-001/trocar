@@ -12,17 +12,20 @@ export const base = (p) => String(p).replace(/\/+$/, '').split('/').pop() || p
 // D58: the page's words are English; the browser default could print "3:59:48 PM" or a day-first date). `h23` (not hour12:false)
 // so midnight is 00:…, never 24:….
 const LOCALE = 'en-CA', CLOCK = { hourCycle: 'h23' }
+// one formatter each, made on first use (toLocale*String builds a new one per call: a rail's hundreds of tick titles paid that each)
+const T = { hour: 'numeric', minute: 'numeric', second: 'numeric' }
+let timeFmt = null, stampFmt = null
 // the time of day of an ISO string or epoch ms; '' for an empty or unparseable value (never the words "Invalid Date")
 export const fmtTime = (ts) => {
   if (ts == null || ts === '') return ''
   const d = new Date(ts)
-  return isNaN(d) ? '' : d.toLocaleTimeString(LOCALE, CLOCK)
+  return isNaN(d) ? '' : (timeFmt ||= new Intl.DateTimeFormat(LOCALE, { ...CLOCK, ...T })).format(d)
 }
 // date and time ("2026-10-07, 15:59:48"); '—' for an empty value, an unparseable one as it came
 export const fmtStamp = (ts) => {
   if (ts == null || ts === '') return '—'
   const d = new Date(ts)
-  return isNaN(d) ? String(ts) : d.toLocaleString(LOCALE, CLOCK)
+  return isNaN(d) ? String(ts) : (stampFmt ||= new Intl.DateTimeFormat(LOCALE, { ...CLOCK, year: 'numeric', month: 'numeric', day: 'numeric', ...T })).format(d)
 }
 // time when the day is today, date-time otherwise; '—' for an empty value. `now` is injectable so mock mode can
 // pin "today" to the mock clock.

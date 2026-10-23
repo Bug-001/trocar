@@ -29,14 +29,18 @@ export function createDesk() {
 
 const tsOf = (desk, rid) => desk.rows.get(rid)?.ts ?? ''
 
-// insert rid into an array kept in step order (the row must already be in desk.rows)
-function place(desk, arr, rid) {
+// where rid stands (or would stand) in an array kept in step order: a binary search (the row must be in desk.rows)
+function slotOf(desk, arr, rid) {
   const ts = tsOf(desk, rid)
   let lo = 0, hi = arr.length
   while (lo < hi) { const m = (lo + hi) >> 1; if (compareStep(tsOf(desk, arr[m]), arr[m], ts, rid) < 0) lo = m + 1; else hi = m }
-  arr.splice(lo, 0, rid)
+  return lo
 }
-function unplace(arr, rid) { const i = arr.lastIndexOf(rid); if (i >= 0) arr.splice(i, 1) }
+const place = (desk, arr, rid) => arr.splice(slotOf(desk, arr, rid), 0, rid)
+function unplace(desk, arr, rid) {
+  const j = slotOf(desk, arr, rid), i = arr[j] === rid ? j : arr.lastIndexOf(rid)
+  if (i >= 0) arr.splice(i, 1)
+}
 
 function addRow(desk, row) {
   desk.rows.set(row.rid, row)
@@ -45,9 +49,9 @@ function addRow(desk, row) {
   place(desk, desk.laneRids.get(row.lane), row.rid)
 }
 function removeRow(desk, row) {
-  unplace(desk.order, row.rid)
+  unplace(desk, desk.order, row.rid)
   const l = desk.laneRids.get(row.lane)
-  if (l) { unplace(l, row.rid); if (!l.length) desk.laneRids.delete(row.lane) }
+  if (l) { unplace(desk, l, row.rid); if (!l.length) desk.laneRids.delete(row.lane) }
   desk.rows.delete(row.rid)
 }
 
