@@ -198,9 +198,11 @@ the board is the HTTP shell (D59); there is no separate ETL step and no database
 daemon's query worker, which stays warm and keeps the segment index current as it captures, so a query about a
 session you are looking at answers in milliseconds; the board's answers come gzipped. The worker stays warm while
 someone asks (an open board asks every 1.5 s) and leaves after two minutes with nothing asked, giving its memory back;
-the next query starts a new one. A session is read call by call: each call is taken apart once into a context
-file beside the index, and the session's summary rows are written to a second file as they are worked out, so
-reopening a session reads those two files and does not take the records apart again.
+the next query starts a new one. The worker keeps the segment index's rows in a compact form outside its JavaScript
+heap, so how much of a session it can read barely shrinks as the capture home grows. A session is read call by call:
+each call is taken apart once into a context file beside the index, and the session's summary rows are
+written to a second file as they are worked out, so reopening a session reads those two files and does not take the
+records apart again.
 `trocar query session --id <id>` gives the newest page of call rows (at most 1,000 rows and 1 MB) with every lane's
 header; `--before <call>` gives the page just before that call, `--limit <n>` makes pages smaller, and
 `--since <mark>` gives only what changed since the `mark` of an earlier answer (the board asks this every 1.5 s).

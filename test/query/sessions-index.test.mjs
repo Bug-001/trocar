@@ -96,6 +96,6 @@ test('a row whose offset no longer lands on its line is read by the scan, never 
   const home = dataset()
   const rows = (await indexRows({ home })).filter((r) => r.offset != null).slice(0, 20)
   const right = recordsAt({ home, rows }).map((r) => JSON.stringify(r))
-  const stale = recordsAt({ home, rows: rows.map((r) => ({ ...r, offset: r.offset + 1 })) }).map((r) => JSON.stringify(r))
+  const stale = recordsAt({ home, rows: rows.map((r) => ({ ...r.toJSON(), offset: r.offset + 1 })) }).map((r) => JSON.stringify(r))
   assert.deepEqual(stale, right)
 })

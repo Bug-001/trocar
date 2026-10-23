@@ -12,7 +12,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs, not the other way round
-import { SPINE_PER_ROW, SPINE_PER_BLOCK, extendSession } from '../../src/query/named/session.mjs'
+import { SPINE_PER_ROW, SPINE_PER_BLOCK, PLAN_PER_MEMBER, extendSession } from '../../src/query/named/session.mjs'
 import { STORE_HEAP } from '../../src/query/projection.mjs'
 import { REDUCE_HEAP } from '../../src/view/reduce.mjs'
 import { LOG_BYTES } from '../../src/query/fold-log.mjs'
@@ -122,6 +122,39 @@ test('what a session read keeps grows by at most SPINE_PER_BLOCK a distinct bloc
   assert.ok(per <= SPINE_PER_BLOCK, `${Math.round(per)} B retained a distinct block (${few.blocks} → ${many.blocks} blocks, ${few.retained} → ${many.retained} B), SPINE_PER_BLOCK ${SPINE_PER_BLOCK}`)
 })
 
+// The plan's members (3.5 §内存有界, PLAN_PER_MEMBER): the plan holds every member of the session, the ones its cut leaves out too
+// (its member array's flyweight rows, each with the cell the step-order sort decoded last, and the by-id map), so the cut charges
+// them beside the blocks, never cut. A session of 20,000 members' plan, cut to a few hundred rows by its store's blocks, in a heap
+// of the worker's size: what the plan holds once made, a member at most PLAN_PER_MEMBER.
+const PLAN = `
+await import(${JSON.stringify(QUERY)}) // first: the registry imports session.mjs
+const { planOf, working, CACHES, SPINE_PER_ROW, SPINE_PER_BLOCK, PLAN_PER_MEMBER } = await import(${JSON.stringify(new URL('../../src/query/named/session.mjs', import.meta.url).href)})
+const { indexRows, sessionGroups } = await import(${JSON.stringify(new URL('../../src/query/rows.mjs', import.meta.url).href)})
+const { heapBudget, steadyBytes } = await import(${JSON.stringify(new URL('../../src/query/warm.mjs', import.meta.url).href)})
+const [home, id] = process.argv.slice(1)
+const rows = await indexRows({ home, errors: [] })
+// a turn between collections: a member array is held by a WeakRef (rows.mjs sessionGroups), kept until the job that made it ends
+const live = async () => { await new Promise((r) => setTimeout(r, 0)); global.gc(); global.gc(); return process.memoryUsage().heapUsed }
+const n = sessionGroups(rows).get(id).length
+// blocks that leave room for 1,000 rows beside the members
+const defCount = Math.floor((heapBudget() - working(sessionGroups(rows).get(id)) - steadyBytes() - n * PLAN_PER_MEMBER - CACHES - 1000 * SPINE_PER_ROW) / SPINE_PER_BLOCK)
+const keep = []
+const before = await live()
+const make = () => { const store = { plan: null, defCount }; planOf(sessionGroups(rows).get(id), 'plan', store, id); keep.push(store); return store.plan }
+const { bound } = make()
+console.log(JSON.stringify({ members: n, shown: bound && bound.shown, retained: (await live()) - before }))`
+test('the plan of a cut session keeps at most PLAN_PER_MEMBER a member', { timeout: 60_000 }, () => {
+  const home = path.join(tmpDir('trocar-spine-'), '.trocar'), s = bigSession({ home, wire: 'threads', growth: 40, subEvery: 4, subLanes: 3, subLen: 12, compactAt: 3_000 })
+  s.append(20_000)
+  try {
+    const out = JSON.parse(execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', '--single-threaded', ...heapFlags(), '--input-type=module', '-e', PLAN, home, s.id],
+      { encoding: 'utf8', maxBuffer: 1 << 20 }))
+    assert.ok(out.shown && out.shown < out.members / 10, `${out.shown} of ${out.members} members shown (else this test proves nothing)`)
+    const per = out.retained / out.members
+    assert.ok(per <= PLAN_PER_MEMBER, `${Math.round(per)} B a member (${out.retained} B for ${out.members} members), PLAN_PER_MEMBER ${PLAN_PER_MEMBER}`)
+  } finally { fs.rmSync(path.dirname(home), { recursive: true, force: true }) }
+})
+
 // A session past the heap bound that goes on growing (a live one, followed): the cut moves in steps, not with every new row, so the
 // spine is folded on with the new rows instead of from scratch on every poll (3.5 §内存有界). Twenty one-call growths in a worker-sized
 // heap smaller than the session (a quarter more rows than its room for the spine holds at SPINE_PER_ROW, test/query/past-room.mjs):
@@ -140,8 +173,8 @@ for await (const _ of (await import('node:readline')).createInterface({ input: p
 test('a session past the heap bound that keeps growing keeps its cut between steps, so it is folded on, not from scratch', { timeout: 120_000 }, async () => {
   const home = path.join(tmpDir('trocar-spine-'), '.trocar')
   // Message Threads, subagents side by side
-  const s = await grower({ home, heapMb: 128, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12 } })
-  const reader = spawn(process.execPath, [...readerFlags(128), '--input-type=module', '-e', GROWING, home, s.id], { stdio: ['pipe', 'pipe', 'inherit'] })
+  const s = await grower({ home, heapMb: 160, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12 } })
+  const reader = spawn(process.execPath, [...readerFlags(160), '--input-type=module', '-e', GROWING, home, s.id], { stdio: ['pipe', 'pipe', 'inherit'] })
   const lines = createInterface({ input: reader.stdout })[Symbol.asyncIterator]()
   const answer = async () => { const { value, done } = await lines.next(); assert.ok(!done, 'the reader ended'); return JSON.parse(value) }
   try {
@@ -171,8 +204,8 @@ for await (const line of (await import('node:readline')).createInterface({ input
 }`
 test('a session past the heap bound followed with --since: a mark names its cut, a delta under it is the document, a moved cut answers in full', { timeout: 120_000 }, async () => {
   const home = path.join(tmpDir('trocar-spine-'), '.trocar'), CHUNK = 60
-  const s = await grower({ home, heapMb: 128, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12 } })
-  const reader = spawn(process.execPath, [...readerFlags(128), '--input-type=module', '-e', FOLLOW, home, s.id], { stdio: ['pipe', 'pipe', 'inherit'] })
+  const s = await grower({ home, heapMb: 160, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12 } })
+  const reader = spawn(process.execPath, [...readerFlags(160), '--input-type=module', '-e', FOLLOW, home, s.id], { stdio: ['pipe', 'pipe', 'inherit'] })
   const lines = createInterface({ input: reader.stdout, crlfDelay: Infinity })[Symbol.asyncIterator]()
   const ask = async (since) => { reader.stdin.write(JSON.stringify({ since }) + '\n'); const { value, done } = await lines.next(); assert.ok(!done, 'the reader ended'); return JSON.parse(value) }
   const byLane = (ls) => JSON.stringify([...ls].sort((a, b) => (a.lane < b.lane ? -1 : 1)))
@@ -185,7 +218,7 @@ test('a session past the heap bound followed with --since: a mark names its cut,
       assert.equal(lane, now.mark, 'a lane answer carries the session\'s mark')
       if (prev) {
         const moved = Math.abs(now.truncated.shown - prev.truncated.shown) > CHUNK
-        if (moved) { assert.equal(d.base, null, `a --since ${prev.mark} across a moved cut (now ${now.mark}) answers in full`); break }
+        if (moved) { assert.equal(d.base, null, `a --since ${prev.mark} across a moved cut (now ${now.mark}) answers in full`); if (steps) break; prev = now; for (let i = 0; i < CHUNK; i++) await s.more(); continue }
         assert.equal(d.base, prev.mark, 'under the same cut, --since answers a delta')
         const a = apply(prev, d), first = now.calls[0]
         assert.equal(JSON.stringify(a.calls.filter((r) => byStep(r, first) >= 0)), JSON.stringify(now.calls), 'the applied rows are now\'s')

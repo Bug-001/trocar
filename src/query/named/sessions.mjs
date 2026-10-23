@@ -19,7 +19,7 @@ export const params = Object.freeze(['harness', 'since', 'until', 'limit', 'afte
 export async function run({ home, fs, now, params: p, errors, later = null }) {
   const keep = tsFilter(p, now), harness = listOf(p.harness);
   const index = await indexRows({ home, fs, errors });
-  const rows = index.filter((r) => keep(r.ts));
+  const rows = p.since == null && p.until == null ? index : index.filter((r) => keep(r.ts)); // no window: the list and its session index
   const rowsOf = new Map();
   const all = [...sessionGroups(rows)]
     .map(([id, rs]) => { rowsOf.set(id, rs); return sessionFactsOf(id, rs); })
