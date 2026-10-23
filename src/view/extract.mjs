@@ -12,7 +12,7 @@
 import { createHash } from 'node:crypto';
 import { admitted, flatBlockText, blockFacts, callFacts, normResp, replyPartsAnthropic, linearContext } from './analyze.mjs';
 import { hydrateForBoard, anthropicFlat, flatRequest, rawRefOf, wireOf, respRefsOf, extraMessagesOf, unknownFacts, respOf, slimRec, nonBlockKeysOf } from './assemble.mjs';
-import { slimBlock, compBucket, firstHuman } from './blockmeta.mjs';
+import { slimBlock, compBucket, firstHuman, blockQuery } from './blockmeta.mjs';
 import { renderOf } from './render-kind.mjs';
 import { blockSpans } from '../adapters/cc.mjs';
 import { resourceRef as ccResourceRef } from '../dissect/cc.mjs';
@@ -82,8 +82,10 @@ function factsOf(b) {
 }
 
 /** definition(b, ref, exact, why) → { bid, def }: `exact` the text the ref names (null: no span, `why` says why). */
+// a block's id: its verbatim slice's when it has a span, its content's otherwise (3.5 §会话读)
+const bidFor = (b, ref, exact) => (ref != null && exact != null ? bidOf(b.sec, b.role, exact) : unaddressableBid(b.sec, b.role, contentOf(b)));
 export function definition(b, ref, exact, why = null) {
-  const bid = ref != null && exact != null ? bidOf(b.sec, b.role, exact) : unaddressableBid(b.sec, b.role, contentOf(b));
+  const bid = bidFor(b, ref, exact);
   const s = slimBlock(b, ref != null && exact != null ? ref : null, why);
   // vh: only of a verbatim slice. A block with no span has none, nor one whose faithfulness says its bytes are not the wire's
   // (metadata, summarized, omitted, truncated). An opaque block (signature-only reasoning) is unreadable, not unproven: its span
@@ -282,9 +284,12 @@ const counts = (x) => x.facts || x; // where a call's msgCount is (the Anthropic
 export function extract(rec, ctx) {
   const rid = String(rec.id), pos = rid, wire = callWireOf(rec);
   if (!wire) return { defs: [], row: { rid, pos, x: { item: itemFacts(rec), ...(isLogOnly(rec) ? null : { unknown: jsonClean(unknownFacts(rec)) }) } } };
+  // identity before definition (4.3 §3): a block the session has a definition for costs its bid and its place's query, nothing more
   const defs = [], local = new Set(), take = (b, at) => {
-    const { bid, def, query } = definition(b, at.ref, at.exact, at.why);
-    if (!ctx.store.hasDef(bid) && !local.has(bid)) { local.add(bid); defs.push(def); }
+    const bid = bidFor(b, at.ref, at.exact);
+    if (ctx.store.hasDef(bid) || local.has(bid)) return { bid, query: blockQuery(b) };
+    const { def, query } = definition(b, at.ref, at.exact, at.why);
+    local.add(bid); defs.push(def);
     return { bid, query };
   };
   const rules = WIRE_RULES[wire.format === 'anthropic' ? 'anthropic' : 'openai'];
