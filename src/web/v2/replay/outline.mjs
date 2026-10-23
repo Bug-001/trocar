@@ -3,6 +3,7 @@
 // scrub, and a step with no call clears it. The resource lifecycle lives on the right page (resources.mjs) and MUST NOT
 // appear here (B-split). `el` is #ctxnav; `s` is the replay desk's state object.
 import { esc, kf } from '../core/fmt.mjs'
+import { KIDS, serialize, keyed, patchInto } from '../core/units.mjs'
 import { humanTurns, hasChangeLine, foldWs, QUIET_CAUSES } from './analysis.mjs'
 import { stepOf, laneEvents } from './model.mjs'
 import { toggleCtxBlock, ensureRow } from './ctxwin.mjs'
@@ -10,14 +11,15 @@ import { anchorJump, blockJump } from './jump.mjs'
 import { stepRef } from './lanes.mjs'
 import * as W from '../labels/replay.mjs'
 
-// a collapsible group of the outline / resource lists (2.4 shares this shell); words only — no pictographs.
+// a collapsible group of the outline / resource lists (2.4 shares this shell), as units: the head ('h:' + key) and, when open,
+// the kids box (key) holding `kids` (units) — a head that changes is redrawn alone, its kids stay. Words only, no pictographs.
 // role="button" + tabindex: the head is keyboard-focusable and Enter/Space toggle it (wireOutline's keydown).
 // `count`: '' = the group has no count; null = a count not known yet — an empty aria-busy box, no digit, no word (2.4:67)
-export function navGroupHtml(s, key, label, count, kidsHtml, { hint = '' } = {}) {
+export function navGroup(s, key, label, count, kids, { hint = '' } = {}) {
   const open = s.navOpen.has(key)
   const ct = count === '' ? '' : count == null ? '<span class="navct" aria-busy="true"></span>' : `<span class="navct">${count}</span>`
-  return `<div class="navrow head ${open ? 'open' : ''}" role="button" tabindex="0" data-navtoggle="${esc(key)}"${hint ? ` title="${esc(hint)}"` : ''}><span class="navlbl">${esc(label)}</span>${ct}</div>` +
-    (open ? `<div class="navkids">${kidsHtml}</div>` : '')
+  const head = { key: 'h:' + key, html: `<div class="navrow head ${open ? 'open' : ''}" role="button" tabindex="0" data-navtoggle="${esc(key)}"${hint ? ` title="${esc(hint)}"` : ''}><span class="navlbl">${esc(label)}</span>${ct}</div>` }
+  return open ? [head, { key, html: `<div class="navkids" data-kids>${KIDS}</div>`, kids }] : [head]
 }
 
 // What the outline can honestly say about a step. A call that did not parse (`unparsed`) or was never captured (`rec` null) has
@@ -91,23 +93,26 @@ const kidHtml = {
   msg: (k) => `<div class="navsub" role="button" tabindex="0" data-jumpfi="${k.jump}"><span class="nsl">${esc(k.label)}</span>${k.guess ? `<span class="nsx" title="${esc(W.QUERY_GUESS_TIP)}">${esc(W.GUESS)}</span>` : ''}${k.since ? `<span class="nsx navsince" data-jumprid="${esc(k.since.rid)}" role="button" tabindex="0" title="Move the playhead to step ${k.since.n}">${esc(W.askSince(k.since.n))}</span>` : ''}</div>`,
 }
 
-export function outlineHtml(s) {
+// the outline as keyed units (2.3 三个面板按键打补丁): a group's rows are keyed by the block they jump to
+export function outlineUnits(s) {
   const e = outlineEntries(s)
-  if (!e.head) return ''
-  let h = `<div class="navz">${esc(e.head)}</div>`
-  if (e.off) h += `<div class="navwhy">${esc(e.off.why)}</div>`
+  if (!e.head) return []
+  const out = [{ key: 'head', html: `<div class="navz">${esc(e.head)}</div>` }]
+  if (e.off) out.push({ key: 'why', html: `<div class="navwhy">${esc(e.off.why)}</div>` })
   for (const g of e.groups) {
     // a group of an unheld step: the tools group names the row's count, the others hold a sized empty row (no words, no 0)
-    const kids = g.kids === null ? (g.tools > 0 ? `<div class="navsub" data-tools="${g.tools}"><span class="nsl mono">${g.tools} tool definitions</span></div>` : g.tools === 0 ? `<div class="navsub empty">${esc(W.NO_TOOLS)}</div>` : BUSY_ROW)
-      : !g.kids ? '' : g.kids.length ? g.kids.map(kidHtml[g.key]).join('') : `<div class="navsub empty">${esc(g.key === 'tools' ? W.NO_TOOLS : g.key === 'sys' ? W.NO_SYS : W.NO_ASK)}</div>`
-    h += navGroupHtml(s, g.key, g.label, '', kids)
+    const kids = g.kids === null ? [{ key: 'unheld', html: g.tools > 0 ? `<div class="navsub" data-tools="${g.tools}"><span class="nsl mono">${g.tools} tool definitions</span></div>` : g.tools === 0 ? `<div class="navsub empty">${esc(W.NO_TOOLS)}</div>` : BUSY_ROW }]
+      : !g.kids ? [] : g.kids.length ? keyed(g.kids.map((k) => ({ key: String(k.jump), html: kidHtml[g.key](k) })))
+        : [{ key: 'none', html: `<div class="navsub empty">${esc(g.key === 'tools' ? W.NO_TOOLS : g.key === 'sys' ? W.NO_SYS : W.NO_ASK)}</div>` }]
+    out.push(...navGroup(s, g.key, g.label, '', kids))
   }
-  if (e.changeLine) h += `<div class="navrow" data-jump="cachebrk" role="button" tabindex="0"><span class="navlbl">${esc(W.JUMP_TO_CHANGE)}</span></div>`
-  return h
+  if (e.changeLine) out.push({ key: 'change', html: `<div class="navrow" data-jump="cachebrk" role="button" tabindex="0"><span class="navlbl">${esc(W.JUMP_TO_CHANGE)}</span></div>` })
+  return out
 }
+export const outlineHtml = (s) => serialize(outlineUnits(s))
 // a sized empty row while the step's lane is on its way: no words, no count, no control (2.5 #9)
 const BUSY_ROW = '<div class="navsub busy" aria-busy="true"></div>'
-export function renderOutline(el, s) { el.innerHTML = outlineHtml(s) }
+export function renderOutline(el, s) { patchInto(el, outlineUnits(s)) }
 
 // ── jumps ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // a jump scrolls instantly when the viewer asked the system for less motion (1.5)

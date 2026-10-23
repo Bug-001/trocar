@@ -10,6 +10,7 @@ import { relPath, ROUTING_LABELS } from './analysis.mjs'
 import { showBody, bodyFor } from './blocks.mjs'
 import { stepOf } from './model.mjs'
 import { stepRef } from './lanes.mjs'
+import { keyed, patchInto } from '../core/units.mjs'
 import * as W from '../labels/replay.mjs'
 
 // ── the reply: its parts · stop reason · ONE fidelity mark ─────────────────────────────────────────────────────────
@@ -39,18 +40,15 @@ export function replyMarkHtml(r) {
 }
 // a reply part's body: a cell like every other body (2.6 §A), slot-marked so the panel fills it once the bytes arrive
 const partBody = (d) => `<div class="rpbody" data-rpb="${esc(d.bid)}">${bodyFor({ ...d, text_ref: d.ref })}</div>`
-// the reply of one step as this panel's compact rows (the window draws the same replyOf as block rows: ctxwin.mjs)
-export function replyHtml(r, techId = 'rpfail') {
+// the reply of one step as this panel's compact rows (the window draws the same replyOf as block rows: ctxwin.mjs); a part's
+// unit is keyed by its bid, so a body already filled stays when the step's other rows change
+function replyUnits(r) {
   // the visible line is the fixed sentence; the server's raw reason is a tech detail (1.5 §数据规则)
-  if (r.failed) return `<div class="rpk"><b>${esc(W.REPLY_WORD)}</b> · ${esc(W.FAILED_NO_REPLY)}${r.failed.reason ? techDetailsHtml([['reason', r.failed.reason]], { id: techId }) : ''}</div>`
-  let h = `<div class="rpk rpreply"><b>${esc(W.REPLY_WORD)}</b> ${replyMarkHtml(r)}</div>`
-  for (const d of r.parts) {
-    if (d.kind === 'thinking') h += `<div class="rpk rpthink">${esc(W.THINKING_ROW)}${partBody(d)}</div>`
-    else if (d.kind === 'tool_use') h += `<div class="rpk">${esc(W.toolCallRow(d.name || ''))}${partBody(d)}</div>`
-    else h += partBody(d)
-  }
-  if (r.stop) h += `<div class="rpk">${W.stopReasonRow(`<span class="mono">${esc(r.stop)}</span>`)}</div>`
-  return h
+  if (r.failed) return [{ key: 'reply', html: `<div class="rpk"><b>${esc(W.REPLY_WORD)}</b> · ${esc(W.FAILED_NO_REPLY)}${r.failed.reason ? techDetailsHtml([['reason', r.failed.reason]], { id: 'rpfail' }) : ''}</div>` }]
+  const parts = keyed(r.parts.map((d) => ({ key: 'rp:' + d.bid, html: d.kind === 'thinking' ? `<div class="rpk rpthink">${esc(W.THINKING_ROW)}${partBody(d)}</div>`
+    : d.kind === 'tool_use' ? `<div class="rpk">${esc(W.toolCallRow(d.name || ''))}${partBody(d)}</div>` : partBody(d) })))
+  return [{ key: 'reply', html: `<div class="rpk rpreply"><b>${esc(W.REPLY_WORD)}</b> ${replyMarkHtml(r)}</div>` }, ...parts,
+    ...(r.stop ? [{ key: 'stop', html: `<div class="rpk">${W.stopReasonRow(`<span class="mono">${esc(r.stop)}</span>`)}</div>` }] : [])]
 }
 // ── the pieces the capture can still hand over verbatim: reply bytes · non-block request keys · later messages ─────
 // the lane step's lists, as the panel reads them: a bare locator string is that ref; an object form `{key: ref}` is one key each
@@ -88,7 +86,7 @@ function extraHtml(d) {
 // ── the wire: the transport in words; format / vendor are 技术细节, not a visible row (2.6 §A) ──────────────────────────
 const wireHtml = (w) => `<div class="rpk"><b>${esc(w.transport === 'ws' ? W.TRANSPORT_WS : W.TRANSPORT_HTTP)}</b></div>`
 // what capturing changed for the client (D37): one visible line each — never hidden in a hover (invariant 4)
-const observerHtml = (w) => (w.observerEffect || []).map((o) => `<div class="rpk rpobs">${esc(o.text || o.what || '')}</div>`).join('')
+const observerUnits = (w) => keyed((w.observerEffect || []).map((o) => ({ key: 'obs', html: `<div class="rpk rpobs">${esc(o.text || o.what || '')}</div>` })))
 function techHtml(c, d, w, r) {
   const bits = []
   if (w.format) bits.push(['format', w.format])
@@ -104,27 +102,38 @@ function techHtml(c, d, w, r) {
   return techDetailsHtml(bits, { id: 'rptech' })
 }
 // a step whose lane is not held: the rows that need the lane are sized empty frames — no text, no control (2.6 §A)
-const busyRowsHtml = () => '<div class="rpk rpbusy" aria-busy="true"></div>'.repeat(3)
+const BUSY_ROW = '<div class="rpk rpbusy" aria-busy="true"></div>'
+const busyRowsHtml = () => BUSY_ROW.repeat(3)
+
+// the panel as keyed units, one per row (2.3 三个面板按键打补丁): head, model, the reply's rows, raw reply, parameters, extra
+// messages, transport, what capturing changed, technical details — a row whose html is unchanged keeps its node
+function rawPanel(s) {
+  const call = s.anchor && s.anchor.calls[s.playhead]
+  if (!call) return { units: [], parts: [] }
+  const u = (key, html) => (html ? [{ key, html }] : [])
+  const ref = stepRef(s.lanes, call.rid)
+  const n = ref ? (ref.step ? ref.n : ref.k) : s.playhead + 1
+  const head = u('head', `<div class="rphd">${esc(W.RAW_HEAD(n))}${s.anchor.kind === 'main' ? '' : `<span class="rpsub"> · ${esc(W.callNo(W.laneWord(s.anchor.kind), n, ref ? ref.m : s.anchor.calls.length))}</span>`}</div>`)
+  if (!call.rec) return { units: [...head, ...u('empty', `<div class="rpempty">${esc(W.NO_REQUEST)}</div>`)], parts: [] }
+  const model = String((call.rec.request || {}).model || '')
+  const modelLine = u('model', model ? `<div class="rpk mono">${esc(model)}</div>` : '')
+  const st = s.desk ? stepOf(s.desk, call.rid) : null
+  const d = (st && st.detail) || {}, w = { ...(call.wire || {}), ...(d.wire || {}) }
+  if (!st || !st.held) return { units: [...head, ...modelLine, ...u('wire', wireHtml(w)), ...[0, 1, 2].map((i) => ({ key: 'busy' + i, html: BUSY_ROW }))], parts: [] }
+  const r = replyOf({ row: call, reply: st.reply, detail: d })
+  return { parts: r.parts, units: [...head, ...modelLine, ...replyUnits(r), ...u('rawreply', rawReplyHtml(d, w)), ...u('params', paramsHtml(call, d)),
+    ...u('extra', extraHtml(d)), ...u('wire', wireHtml(w)), ...observerUnits(w), ...u('tech', techHtml(call, d, w, r))] }
+}
+export const rawPanelUnits = (s) => rawPanel(s).units
 
 export function renderRawPanel(el, s) {
   if (s.viewPin) return renderResourceView(el, s)
-  const call = s.anchor && s.anchor.calls[s.playhead]
-  if (!call) { el.innerHTML = ''; return }
-  const ref = stepRef(s.lanes, call.rid)
-  const n = ref ? (ref.step ? ref.n : ref.k) : s.playhead + 1
-  const head = `<div class="rphd">${esc(W.RAW_HEAD(n))}${s.anchor.kind === 'main' ? '' : `<span class="rpsub"> · ${esc(W.callNo(W.laneWord(s.anchor.kind), n, ref ? ref.m : s.anchor.calls.length))}</span>`}</div>`
-  if (!call.rec) { el.innerHTML = head + `<div class="rpempty">${esc(W.NO_REQUEST)}</div>`; return }
-  const model = String((call.rec.request || {}).model || '')
-  const modelLine = model ? `<div class="rpk mono">${esc(model)}</div>` : ''
-  const st = s.desk ? stepOf(s.desk, call.rid) : null
-  const d = (st && st.detail) || {}, w = { ...(call.wire || {}), ...(d.wire || {}) }
-  if (!st || !st.held) { el.innerHTML = head + modelLine + wireHtml(w) + busyRowsHtml(); return }
-  const r = replyOf({ row: call, reply: st.reply, detail: d })
-  el.innerHTML = head + modelLine + replyHtml(r) + rawReplyHtml(d, w) + paramsHtml(call, d) + extraHtml(d) + wireHtml(w) + observerHtml(w) + techHtml(call, d, w, r)
+  const { units, parts } = rawPanel(s)
+  patchInto(el, units)
   // the reply's cells whose bytes are not here show the pending box; the step's own reads fetch them once the playhead rests
   // (2.3 §快速拖动) and repaint; a body whose read failed shows that failure here
   if (el.querySelectorAll && s.bodyFail && s.bodyFail.size) {
-    const defs = new Map(r.parts.map((p) => [p.bid, p]))
+    const defs = new Map(parts.map((p) => [p.bid, p]))
     for (const slot of el.querySelectorAll('[data-rpb]')) { const p = defs.get(slot.dataset.rpb), got = p && s.bodyFail.get(p.ref); if (got && slot.querySelector('pre[data-ref]')) showBody(slot, { ...p, text_ref: p.ref }, got) }
   }
 }

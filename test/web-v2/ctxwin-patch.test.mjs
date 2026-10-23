@@ -6,7 +6,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createDesk, applySession, laneAsk } from '../../src/web/v2/replay/model.mjs'
 import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
-import { ctxWindowUnits, ctxWindowHtml, patchUnits, applyOps, fillGroup } from '../../src/web/v2/replay/ctxwin.mjs'
+import { ctxWindowUnits, ctxWindowHtml, fillGroup } from '../../src/web/v2/replay/ctxwin.mjs'
+import { patchUnits, applyOps } from '../../src/web/v2/core/units.mjs'
 import { world, readLane, deskFrom } from './desk-world.mjs'
 
 const SEEDS = Array.from({ length: 24 }, (_, i) => i + 1)

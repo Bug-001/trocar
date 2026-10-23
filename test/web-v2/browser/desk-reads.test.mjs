@@ -23,6 +23,13 @@ test('2.3 #25: scrubbing the desk reads nothing before a 100 ms rest, keeps ≤ 
     page.on('request', (r) => { const k = kindOf(r.url()); if (k) { out[k]++; log.push({ k, r, inFlight: out[k], aborted: false }) } })
     const end = (aborted) => (r) => { const x = log.find((e) => e.r === r); if (x) { out[x.k]--; x.aborted = aborted } }
     page.on('requestfinished', end(false)); page.on('requestfailed', end(true))
+    // the anchor lane's oldest page answered: the history chains have brought the whole lane (2.3 加载器)
+    const main = w.full().lanes.find((h) => h.kind === 'main').lane
+    let historyIn = false
+    page.on('response', async (r) => {
+      const q = new URL(r.url()).searchParams
+      if (new URL(r.url()).pathname === '/api/lane' && q.get('lane') === main && !q.has('ledger') && !q.has('from') && (await r.json().catch(() => null))?.prev === null) historyIn = true
+    })
     await serveWorld(page, w)
     await page.route('**/api/block?**', (route) => {
       if (hold) { held.push(route); return }
@@ -34,6 +41,8 @@ test('2.3 #25: scrubbing the desk reads nothing before a 100 ms rest, keeps ≤ 
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     await page.waitForSelector('#stepbar .sb-no')
     await page.waitForFunction(() => !document.querySelector('#ctxwin [aria-busy="true"]'))
+    for (const t0 = Date.now(); !historyIn && Date.now() - t0 < 15000;) await page.waitForTimeout(50) // the drag runs over a history all in hand
+    assert.ok(historyIn, 'the anchor lane\'s history came in')
     await page.waitForLoadState('networkidle')
     // from here the page's time moves only when the test moves it
     await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000))
@@ -157,7 +166,7 @@ test('A32: the anchor lane reads its ledger chain to the end before any older pa
     await page.waitForSelector('#ctxwin .cblk', { state: 'attached' })
     const mine = () => log.filter((q) => q.get('lane') === main)
     const t0 = Date.now()
-    // every older page of the anchor lane, down to its first (one per quiet poll)
+    // every older page of the anchor lane, down to its first (back to back, 2.3 加载器)
     while (Date.now() - t0 < 30000 && !firstPage) await page.waitForTimeout(100)
     await page.waitForTimeout(500)
     const seq = mine()

@@ -1,6 +1,6 @@
 // test/web-v2/desk-world.mjs — a generated session world and a reference server over it (RFC 3.5 §会话读), exports only.
 //
-// world(seed[, {calls, cut, page, files, talk}]): 2-5 lanes (main + sub-agents), calls written in arrival order whose ts sometimes sorts before rows already
+// world(seed[, {calls, cut, page, spage, files, talk}]): 2-5 lanes (main + sub-agents), calls written in arrival order whose ts sometimes sorts before rows already
 // written (late rows), relanes and gone rows carried by later members, and per-step bid lists drawn by appends, mid-list
 // inserts, replacements and compactions. Each call draws lane events (user · tool · compaction on a compacted list ·
 // summarize), opened resources and raw `seen` paths (opened ones, their absolute spelling, the same name in another dir).
@@ -8,6 +8,8 @@
 // sets of test/fixtures/session-read-contract.json, by 3.5 §会话读's rules: pages bounded by `room` units (a step or a ledger
 // entry is one), the ledger in key order filling what the steps leave and named on by `ledger_next`, `k` on user events,
 // defs against the base step; ops are a greedy copy/add encoding.
+// `spage` (opt-in): the session's skeleton comes in pages of that many rows, newest first — `session` answers the newest, `--before R`
+// the ones before R in step order — with `more` as it is; without it a `session` answer holds every row.
 // `talk: {pre, len, every, tail}` (opt-in; without it the world is the same for every seed): a long main conversation. Most calls
 // are the main lane's (the last one always); its lists start from `pre` system/tools blocks and grow by appends only, evenly, to
 // `len` blocks at its last step (no compaction, no late rows, no relane or gone); a human prompt (attr `query`) opens a turn every
@@ -49,7 +51,7 @@ function encode(P, C) {
   return ops
 }
 
-export function world(seed, { calls: count, cut: cuts = false, page: pageSize, files: fileCount = 5, talk = null } = {}) {
+export function world(seed, { calls: count, cut: cuts = false, page: pageSize, spage, files: fileCount = 5, talk = null } = {}) {
   const r = rng(seed), int = (a, b) => a + Math.floor(r() * (b - a + 1))
   const nLanes = int(2, 5), n = count ?? int(18, 40), page = pageSize ?? int(3, 7), room = page + int(0, 3), lroom = pageSize ?? int(1, 3)
   const files = Array.from({ length: fileCount }, (_, j) => `src/f${j}.mjs`), pick = (xs) => xs[int(0, xs.length - 1)]
@@ -188,10 +190,14 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, f
     const keep = (rid) => stepCmp(d.rows.get(rid), d.rows.get(c)) >= 0
     return { ...d, rows: new Map([...d.rows].filter(([rid]) => keep(rid))), events: d.events.filter((e) => keep(e.rid)) }
   }
-  function full(M = now) {
-    const d = sdoc(M), calls = [...d.rows.values()], u = unknownAt(M)
-    return { ...head(d), base: null, mark: markOf(M), more: false, ...(u ? { unknown: u } : null), lanes: [...d.lanes.values()], calls, events: d.events,
-      records: recordsOf(d, calls.map((c) => c.rid)) }
+  // the rows before `before` in step order (all of them without it), the last `limit` of them when paged
+  function full(M = now, { before = null, limit = spage } = {}) {
+    const d = sdoc(M), u = unknownAt(M)
+    let rows = [...d.rows.values()]
+    if (before != null) { const b = d.rows.get(before); rows = b ? rows.filter((r) => stepCmp(r, b) < 0) : [] }
+    const calls = limit ? rows.slice(Math.max(0, rows.length - limit)) : rows, ids = new Set(calls.map((c) => c.rid))
+    return { ...head(d), base: null, mark: markOf(M), more: calls.length < rows.length, ...(u ? { unknown: u } : null), lanes: [...d.lanes.values()], calls,
+      events: calls.length < d.rows.size ? d.events.filter((e) => ids.has(e.rid)) : d.events, records: recordsOf(d, calls.map((c) => c.rid)) }
   }
 
   function since(M, at = now) {
@@ -243,7 +249,7 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, f
 
   /** get(name, params) as the board's api would answer it, at mark `at`. */
   const get = (at = now) => async (name, p = {}) => name === 'session'
-    ? (p.since != null ? since(p.since, at) : full(at))
+    ? (p.since != null ? since(p.since, at) : full(at, { before: p.before ?? null }))
     : lane(p.lane, { from: p.from, to: p.to, ledger: p.ledger }, at)
 
   return { seed, marks, now, page, full, since, lane, get,

@@ -232,38 +232,6 @@ test('System prompt: the "changes every call" pill stays inside the left panel',
   } finally { await b.stop() }
 })
 
-// D70 §4.4 (2.3 · cell.mjs): a cell's own mode belongs to the session it was set in. Flip an open block's cell away from the desk
-// default, open another session and come back: the same bid opens in the desk default again.
-test('A20: a cell flipped to the other mode, another session, back → the same bid opens in the desk default', { skip, timeout: 120_000 }, async () => {
-  const b = await withBoard({ bytes: BYTES, width: 1440, chromium: gate.chromium })
-  try {
-    const [A, B] = await byCalls(b)
-    assert.ok(A && B, 'two sessions')
-    await openSession(b, A)
-    // open visible collapsed rows until one draws a cell with its mode buttons; its mode then is the desk default (no override yet)
-    const row = (bi) => `#ctxwin .cblk[data-bi="${bi}"]`
-    const open = (bi) => b.page.locator(`${row(bi)} > .cbh`).first().click()
-    const visible = () => b.page.evaluate(() => [...document.querySelectorAll('#ctxwin .cblk.collapsed[data-bi]')].filter((e) => e.getClientRects().length).map((e) => e.dataset.bi))
-    let bi = null, cell = null
-    for (const x of (await visible()).slice(0, 20)) {
-      await open(x)
-      cell = await b.page.waitForSelector(`${row(x)} .cell[data-bid] [data-cellmode]`, { timeout: 5000 })
-        .then(() => b.page.$eval(`${row(x)} .cell[data-bid]`, (c) => ({ bid: c.dataset.bid, mode: c.dataset.mode })), () => null)
-      if (cell) { bi = x; break }
-    }
-    assert.ok(cell, 'an opened row drew a cell')
-    const desk = cell.mode, other = desk === 'raw' ? 'read' : 'raw', sel = `#ctxwin .cell[data-bid="${cell.bid}"]`
-    await b.page.locator(`${row(bi)} .cell [data-cellmode="${other}"]`).first().click()
-    await b.page.waitForSelector(`${sel}[data-mode="${other}"]`, { timeout: 10000 })
-    await openSession(b, B)
-    await openSession(b, A)
-    if (!(await b.page.$(sel))) await open(bi) // the open rows belong to the session too: open the same row again
-    await b.page.waitForSelector(sel, { timeout: 10000 })
-    assert.equal(await b.page.$eval(sel, (e) => e.dataset.mode), desk, 'the same bid opens in the desk default')
-    assert.deepEqual(b.errors, [])
-  } finally { await b.stop() }
-})
-
 // 1.5 K-29 · D58: a session that never loaded and whose read failed says ONE sentence and offers Retry; the reason — a worker's
 // crash with V8's native stack — is only in the collapsed technical details, never in the body.
 test('a session whose first read failed: one sentence and Retry; the reason only in the collapsed technical details', { skip, timeout: 120_000 }, async () => {

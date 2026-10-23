@@ -22,7 +22,7 @@ const stateOf = (lane, extra = {}) => {
   const desk = deskOf([lane]), lanes = buildLanes(desk), anchor = anchorLane(lanes)
   return { desk, lanes, anchor, anchorTs: anchor.calls.map((c) => Date.parse(c.ts)), view: { lo: 0, hi: anchor.calls.length }, playhead: 0, sawView: 'ctx', collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false, meta: { project_path: '/w/p' }, navOpen: new Set(ALL_OPEN), navSeenExpanded: false, ...extra }
 }
-// a group header's count, the way navGroupHtml writes it: <span class="navlbl">label</span><span class="navct">N</span>
+// a group header's count, the way navGroup writes it: <span class="navlbl">label</span><span class="navct">N</span>
 const grpCount = (h, label) => { const m = h.match(new RegExp(`navlbl">${label}</span><span class="navct">(\\d+)</span>`)); return m ? +m[1] : null }
 
 test('#10 bad data degrades, never throws: unknown kinds land in 其他资源 with the kind on hover; undated rows carry no step', () => {

@@ -1,0 +1,29 @@
+{
+  "name": "I-leak-replay-1",
+  "invariant": "I-leak",
+  "sig": "I-leak:replay",
+  "fp": "",
+  "seed": 1,
+  "big": false,
+  "viewport": 1280,
+  "theme": "light",
+  "steps": [
+    {"a":"open","p":{"via":"row","f":0.2}},
+    {"a":"nav","p":{"key":"step:prev"}},
+    {"a":"screen","p":{"hash":"#/overview"}},
+    {"a":"history","p":{"go":"back"}},
+    {"a":"grow","p":{"k":1}},
+    {"a":"screen","p":{"hash":"#/sessions"}},
+    {"a":"history","p":{"go":"back"}},
+    {"a":"follow","p":{"via":"key"}},
+    {"a":"screen","p":{"hash":"#/traffic"}},
+    {"a":"grow","p":{"k":2}},
+    {"a":"history","p":{"go":"back"}},
+    {"a":"open","p":{"via":"row","f":0.6}},
+    {"a":"history","p":{"go":"back"}},
+    {"a":"history","p":{"go":"forward"}},
+    {"a":"history","p":{"go":"back"}}
+  ],
+  "status": "fixed",
+  "detail": "hand-written (S1-Q): leave the replay desk for another screen or session and come back to the same session by Back / Forward, parked and following, with growth while away (1.2:100 离开再回来, D71③); every invariant holds on each return"
+}
