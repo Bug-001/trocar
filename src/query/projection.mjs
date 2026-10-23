@@ -43,7 +43,7 @@ const ROW_HEAP = 2 << 20, SHARED_HEAP = 2 << 20, SEEN = 1 << 14;
 export const HEAP_PER_LINE_BYTE = 4;
 // the share keys of the values last written at each slot path (encode): at most MEMO_SLOTS paths and MEMO_CHARS characters of their
 // JSON text, the least recently used dropped first; a text costs at most 2 bytes a character in the heap
-const MEMO_SLOTS = 1024, MEMO_CHARS = 1 << 20;
+const MEMO_SLOTS = 1024, MEMO_CHARS = 1 << 18;
 /** What an open store keeps at most of rows and shared values read back (each cache holds two times its figure) and of the share
  *  keys it remembers by slot: the heap a warm session's store costs beside its reduction (src/query/named/session.mjs). */
 export const STORE_HEAP = 2 * (ROW_HEAP + SHARED_HEAP) + 2 * MEMO_CHARS;
