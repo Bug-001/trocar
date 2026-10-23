@@ -20,7 +20,7 @@ function observeLongTasks() {
 }
 
 test('2.3 归约前沿 · D64②: a session growing by 1,000 members a poll — following, scrubbing and lane jumps run no long task; step p95 within the line', { skip }, async () => {
-  const w = world(12, { calls: 30000, page: 1500 })
+  const w = world(12, { calls: 30000, page: 1500, files: 600 })
   const b = await withBoard({ bytes: 1e5, width: 1440, chromium: gate.chromium, setup: (page) => page.addInitScript(observeLongTasks) })
   try {
     const { page } = b
