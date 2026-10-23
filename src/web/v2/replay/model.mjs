@@ -55,7 +55,7 @@ function scalars(desk, a) {
   for (const k of ['truncated', 'meta', 'stats', 'logged', 'probes']) if (k in a) desk[k] = a[k]
   desk.pending = a.pending ?? null
   if (!a.pending) desk.firstPending = false
-  desk.unknown = a.unknown ?? null
+  if (a.base == null || 'unknown' in a) desk.unknown = a.unknown ?? null // a delta carries `unknown` only where it changed (3.5 §会话读)
   desk.errors = a.errors ?? []
 }
 

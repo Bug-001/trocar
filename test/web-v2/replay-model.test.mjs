@@ -44,7 +44,7 @@ test('A1 (2.3 #22): lane pages materialise to lists whose every bid is defined a
   }
 })
 
-const VIEW = (d) => ({ rows: d.rows, order: d.order, lanes: d.lanes, laneRids: d.laneRids, events: d.events })
+const VIEW = (d) => ({ rows: d.rows, order: d.order, lanes: d.lanes, laneRids: d.laneRids, events: d.events, unknown: d.unknown })
 
 test('A2: full(M0) plus the since deltas equals full(now); an unknown mark (base:null) replaces everything', () => {
   const seen = { late: 0, gone: 0, relane: 0, lanesGone: 0 }

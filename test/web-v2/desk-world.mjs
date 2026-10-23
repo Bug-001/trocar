@@ -162,9 +162,11 @@ export function world(seed, { calls: count } = {}) {
     stats: { calls: d.rows.size, lanes: d.lanes.size }, logged: 0, probes: 0 })
   const recordsOf = (d, rids) => rids.map((rid) => ({ id: rid, ts_request: d.rows.get(rid).ts, is_llm_call: true, response: { status: d.rows.get(rid).status } }))
 
+  // `unknown` (3.5 §会话读) holds from the middle mark on: a full answer carries it only where it holds; a delta only where it differs from M's
+  const unknownAt = (M) => (unknown && marks.indexOf(M) >= marks.length >> 1 ? unknown : null)
   function full(M = now) {
-    const d = docAt(M), calls = [...d.rows.values()]
-    return { ...head(d), base: null, mark: M, more: false, ...(unknown ? { unknown } : null), lanes: [...d.lanes.values()], calls, events: d.events,
+    const d = docAt(M), calls = [...d.rows.values()], u = unknownAt(M)
+    return { ...head(d), base: null, mark: M, more: false, ...(u ? { unknown: u } : null), lanes: [...d.lanes.values()], calls, events: d.events,
       records: recordsOf(d, calls.map((c) => c.rid)) }
   }
 
@@ -172,7 +174,7 @@ export function world(seed, { calls: count } = {}) {
     if (!marks.includes(M) || marks.indexOf(M) > marks.indexOf(at)) return full(at)
     const o = docAt(M), d = docAt(at), same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
     const calls = [...d.rows.values()].filter((row) => !same(o.rows.get(row.rid), row)), rids = new Set(calls.map((c) => c.rid))
-    return { ...head(d), base: M, mark: at, calls, gone: [...o.rows.keys()].filter((rid) => !d.rows.has(rid)),
+    return { ...head(d), base: M, mark: at, ...(unknownAt(M) !== unknownAt(at) ? { unknown: unknownAt(at) } : null), calls, gone: [...o.rows.keys()].filter((rid) => !d.rows.has(rid)),
       lanes: [...d.lanes.values()].filter((h) => !same(o.lanes.get(h.lane), h)), lanes_gone: [...o.lanes.keys()].filter((k) => !d.lanes.has(k)),
       events: d.events.filter((e) => rids.has(e.rid)), records: recordsOf(d, calls.map((c) => c.rid)) }
   }
@@ -245,6 +247,8 @@ export async function deskFrom(get, id) {
   const desk = createDesk()
   let a = await get('session', { id })
   applySession(desk, a)
+  // an answer at the reduction frontier (`pending`) is followed by --since its mark until one comes without it, as the board's poll does (3.5:43)
+  for (let d = a; d.pending;) { d = await get('session', { id, since: d.mark }); applySession(desk, d) }
   while (a.more) { a = await get('session', { id, before: desk.order[0] }); applySession(desk, a, { before: true }) }
   const read = async (name, p) => ({ ok: true, data: await get(name, { id, ...p }) })
   for (const key of desk.lanes.keys()) { await readLane(get, id, desk, { lane: key }); await readLedger(desk, key, read) }
