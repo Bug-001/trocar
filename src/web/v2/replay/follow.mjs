@@ -1,22 +1,15 @@
 // replay/follow.mjs — the replay desk's live-follow policy, pure so it can be tested without a DOM: where the playhead lands after
-// a fetch (and whether the URL's `step` has to follow it), and when a step's own reads (its lane, its open rows' bodies) go out.
-// The poll loop itself is core/poll.mjs.
+// a fetch, and when a step's own reads (its lane, its open rows' bodies) go out. The poll loop itself is core/poll.mjs.
 import { loadBodies } from './cell.mjs'
 
 // Where the playhead lands after a fetch that left the anchor lane with N (≥ 1) calls. `initialStep` is the 1-based step the URL
-// named when the screen opened (null otherwise): start there, clamped into range. Otherwise a playhead that follows the live end
-// moves to the last call as the session grows, and any playhead is clamped if the lane shrank.
-// → { playhead, follow, syncUrl } — `syncUrl` is true when the URL's `step` may no longer name the playhead: the URL step was out of
-// range, or the playhead moved by itself (following growth, or a clamp). The caller then rewrites the step with `replace`, so a
-// reload lands where the board is and growth leaves no history entry per call.
+// named when the screen opened (null otherwise): that step pins the playhead, clamped into range, with follow off even on the newest
+// step (1.2 §路由). Otherwise a playhead that follows the live end moves to the last call as the session grows, and any playhead is
+// clamped if the lane shrank. → { playhead, follow }
 export function landPlayhead({ N, playhead, follow, initialStep }) {
   const last = N - 1
-  if (initialStep != null) {
-    const ph = Math.max(0, Math.min(last, initialStep - 1))
-    return { playhead: ph, follow: ph === last, syncUrl: ph !== initialStep - 1 }
-  }
-  const ph = Math.min(follow ? last : playhead, last)
-  return { playhead: ph, follow, syncUrl: ph !== playhead }
+  if (initialStep != null) return { playhead: Math.max(0, Math.min(last, initialStep - 1)), follow: false }
+  return { playhead: Math.min(follow ? last : playhead, last), follow }
 }
 
 // Where a page sits around call `gi`: `{after, limit}` with it at the middle. The desk no longer pages (D69); this stays only

@@ -3,10 +3,9 @@
 // scrub, and a step with no call clears it. The resource lifecycle lives on the right page (resources.mjs) and MUST NOT
 // appear here (B-split). `el` is #ctxnav; `s` is the replay desk's state object.
 import { esc, kf } from '../core/fmt.mjs'
-import { attrSel } from '../core/dom.mjs'
 import { humanTurns, hasChangeLine, foldWs, QUIET_CAUSES } from './analysis.mjs'
 import { stepOf, laneEvents } from './model.mjs'
-import { toggleCtxBlock, openTurnFor, openTurnOfNode } from './ctxwin.mjs'
+import { toggleCtxBlock, ensureRow } from './ctxwin.mjs'
 import { anchorJump, blockJump } from './jump.mjs'
 import { stepRef } from './lanes.mjs'
 import * as W from '../labels/replay.mjs'
@@ -116,24 +115,23 @@ const motion = () => (typeof matchMedia === 'function' && matchMedia('(prefers-r
 const flash = (el, ms) => { el.classList.add('hl'); setTimeout(() => el.classList.remove('hl'), ms) }
 export function jumpToAnchor(s, id) {
   let el = s.root.querySelector('#' + id)
+  // the 变化线 goes with its row: in a folded turn or a group not drawn yet, draw that row first (2.3 §读与画「长对话的窗口」)
+  const call = !el && id === 'cachebrk' && s.anchor && s.anchor.calls[s.playhead], win = call && s.root.querySelector('#ctxwin')
+  if (win && call.cacheBreak) { ensureRow(win, s, call.cacheBreak.idx); el = s.root.querySelector('#' + id) }
   if (!el) return
-  const win = s.root.querySelector('#ctxwin')
-  if (win && openTurnOfNode(win, s, el)) { el = s.root.querySelector('#' + id); if (!el) return } // a marker in a folded turn is hidden: unfold it first
   el.scrollIntoView({ block: 'start', behavior: motion() }); flash(el, 1600)
 }
 export function jumpToBlockIndex(s, fi) {
-  const win = s.root.querySelector('#ctxwin')
-  openTurnFor(win, s, fi) // a block in a collapsed turn: open the turn first (this repaints the window)
-  const blk = win.querySelector(`.cblk[data-bi="${fi}"]`)
+  const blk = ensureRow(s.root.querySelector('#ctxwin'), s, fi) // a folded turn opened, its group drawn
   if (!blk) return
   if (blk.classList.contains('collapsed')) toggleCtxBlock(s, blk)
   blk.scrollIntoView({ block: 'center', behavior: motion() }); flash(blk, 2000)
 }
-// open and highlight the block that carries a resource, in the step the playhead is on. Goes through the block's index so a block inside a
-// folded turn gets its turn opened first (a hidden element cannot be scrolled to).
+// open and highlight the block that carries a resource, in the step the playhead is on. Found in the step's list, not the DOM:
+// its row may sit in a folded turn or a group not drawn yet, which the jump draws first.
 export function jumpToResourceBlock(s, resKey) {
-  const blk = s.root.querySelector(`#ctxwin .cblk[data-rk="${attrSel(resKey)}"]`)
-  if (blk) jumpToBlockIndex(s, +blk.dataset.bi)
+  const fi = (s.curFlat || []).findIndex((b) => b.resKey === resKey)
+  if (fi >= 0) jumpToBlockIndex(s, fi)
 }
 // move to a step and land on a block of it. When that step's lane is not held the landing waits for the lane (jump.mjs).
 export function jumpToStepAndBlock(s, step, resKey) { s.jumpTo(step, resKey ? blockJump(resKey) : null) }

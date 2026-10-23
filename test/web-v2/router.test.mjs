@@ -75,25 +75,62 @@ test('document.title is the screen\'s name and the product\'s — a host page al
   assert.deepEqual(Object.keys(SCREEN_NAME).sort(), ['capture', 'capture-log', 'library', 'overview', 'replay', 'session-link', 'settings-appearance', 'settings-prices', 'settings-storage', 'traffic', 'traffic-host'])
 })
 
-// ── A-M4: scrubbing must not hammer history.replaceState ─────────────────────────────────────────────────────────────
-// Holding ← / → fires dozens of URL writes a second. Safari throws a SecurityError after ~100 calls in 30 s and Chromium drops
-// the excess silently, so the URL step could end stale. Replace-writes coalesce into one trailing write; the last value always lands.
+// ── A-M4: scrubbing must not hammer history.replaceState (1.2 §路由 createUrlWriter) ──────────────────────────────────
+// Holding ← / → fires dozens of URL writes a second; WebKit throws after 100 history calls in 30 s. A write ≥ gap after the last one
+// lands in the same task (a reload right after a lone step change carries it); denser ones are ≥ gap apart; the last value always lands.
 import { mock } from 'node:test'
 import * as router from '../../src/web/v2/core/router.mjs'
 
-test('trailing writer: only the last value of a burst is written, after the quiet period; flush and cancel are exact', () => {
-  const log = [], timers = new Map(); let nextId = 1
-  const w = router.createTrailingWriter({
-    write: (v) => log.push(v), delay: 120,
-    setTimer: (f, ms) => { const id = nextId++; timers.set(id, { f: () => { timers.delete(id); f() }, ms }); return id }, clearTimer: (id) => timers.delete(id),
+// a writer on an injected clock: `at(t)` runs every timer due by t, in order, then sets the clock to t
+function rig(gap) {
+  let now = 0, nextId = 1
+  const timers = new Map(), log = []
+  const w = router.createUrlWriter({
+    write: (v) => log.push({ v, t: now }), gap, now: () => now,
+    setTimer: (f, ms) => { const id = nextId++; timers.set(id, { f, due: now + ms }); return id }, clearTimer: (id) => timers.delete(id),
   })
-  w.set('a'); w.set('b'); w.set('c')
-  assert.deepEqual(log, []); assert.equal(timers.size, 1, 'one timer for the whole burst'); assert.equal([...timers.values()][0].ms, 120)
-  assert.deepEqual(w.pending(), { value: 'c' })
-  ;[...timers.values()][0].f()
-  assert.deepEqual(log, ['c']); assert.equal(w.pending(), null)
-  w.set('d'); w.flush(); assert.deepEqual(log, ['c', 'd']); assert.equal(timers.size, 0, 'flush drops the timer'); w.flush(); assert.deepEqual(log, ['c', 'd'], 'nothing pending: nothing written')
-  w.set('e'); w.cancel(); assert.equal(timers.size, 0); assert.equal(w.pending(), null); w.flush(); assert.deepEqual(log, ['c', 'd'])
+  const at = (t) => {
+    for (;;) {
+      const due = [...timers.entries()].filter(([, x]) => x.due <= t).sort((p, q) => p[1].due - q[1].due)[0]
+      if (!due) break
+      timers.delete(due[0]); now = Math.max(now, due[1].due); due[1].f()
+    }
+    now = t
+  }
+  return { w, log, at, timers }
+}
+
+test('1.2 #13 createUrlWriter: a set ≥ gap after the last write lands before set() returns; writes are ≥ gap apart; the last value lands by lastSet + gap', () => {
+  let seed = 7
+  const rnd = () => { seed = (seed * 1103515245 + 12345) >>> 0; return seed / 2 ** 32 }
+  const gap = router.WRITE_GAP_MS
+  for (let round = 0; round < 200; round++) {
+    const { w, log, at } = rig(gap)
+    const sets = []
+    let t = 0
+    for (let k = 0, n = 1 + Math.floor(rnd() * 40); k < n; k++) {
+      t += rnd() < 0.3 ? gap + Math.floor(rnd() * 3 * gap) : Math.floor(rnd() * gap / 2)
+      at(t)
+      const lastWrite = log.length ? log[log.length - 1].t : -Infinity, before = log.length, v = `v${k}`
+      const idle = w.pending() == null
+      w.set(v); sets.push({ v, t })
+      if (idle && t - lastWrite >= gap) assert.deepEqual(log.slice(before), [{ v, t }], `round ${round}: written in the same task`)
+    }
+    at(t + gap)
+    for (let i = 1; i < log.length; i++) assert.ok(log[i].t - log[i - 1].t >= gap, `round ${round}: writes ${gap} ms apart`)
+    assert.equal(log.at(-1).v, sets.at(-1).v, 'the last value lands'); assert.ok(log.at(-1).t <= sets.at(-1).t + gap)
+    let j = 0
+    for (const x of log) { while (j < sets.length && sets[j].v !== x.v) j++; assert.ok(j < sets.length, 'writes are a subsequence of the sets'); j++ }
+    assert.equal(w.pending(), null)
+  }
+})
+
+test('1.2 #13 createUrlWriter: flush writes the pending value now; cancel drops it', () => {
+  const { w, log, at, timers } = rig(350)
+  w.set('a'); at(10); w.set('b')
+  assert.deepEqual(w.pending(), { value: 'b' })
+  w.flush(); assert.deepEqual(log.map((x) => x.v), ['a', 'b']); assert.equal(timers.size, 0); w.flush(); assert.equal(log.length, 2)
+  at(20); w.set('c'); w.cancel(); at(2000); assert.equal(log.length, 2); assert.equal(w.pending(), null)
 })
 
 // a window the router can run against in Node: history / location are what it touches
@@ -110,20 +147,18 @@ function fakeWindow() {
   return { calls, loc, hist, listeners }
 }
 
-test('router: a burst of replace-writes becomes one write of the last value; current() and subscribers see each value at once', () => {
+test('router: current() and subscribers see each value of a burst of replace-writes at once; the URL ends on the last', () => {
   mock.timers.enable({ apis: ['setTimeout'] })
   try {
     const win = fakeWindow(), seen = []
     router.onRoute((r) => seen.push(r.params.step))
-    router.go({ area: 'replay', screen: 'replay', project: 'p', id: 'i', params: {} }, { replace: true }); win.calls.length = 0; mock.timers.tick(500); win.calls.length = 0
-    for (let k = 1; k <= 40; k++) router.setParams({ step: String(k) }) // 40 scrubs: setParams merges onto the PENDING route, not the stale hash
-    assert.equal(win.calls.length, 0, 'nothing written while the burst is on')
-    assert.equal(router.current().params.step, '40', 'the route is the latest one even though the URL has not caught up')
-    assert.equal(seen[seen.length - 1], '40')
-    mock.timers.tick(119); assert.equal(win.calls.length, 0)
-    mock.timers.tick(1)
-    assert.deepEqual(win.calls, [['replace', '#/replay/p/i?step=40']], 'one write, the last value')
-    assert.equal(router.current().params.step, '40'); assert.equal(win.loc.hash, '#/replay/p/i?step=40')
+    router.go({ area: 'replay', screen: 'replay', project: 'p', id: 'i', params: {} }, { replace: true })
+    for (let k = 1; k <= 40; k++) {
+      router.setParams({ step: String(k) }) // setParams merges onto the PENDING route, not the stale hash
+      assert.equal(router.current().params.step, String(k)); assert.equal(seen[seen.length - 1], String(k))
+    }
+    mock.timers.tick(router.WRITE_GAP_MS)
+    assert.equal(win.loc.hash, '#/replay/p/i?step=40'); assert.equal(router.current().params.step, '40')
   } finally { mock.timers.reset() }
 })
 

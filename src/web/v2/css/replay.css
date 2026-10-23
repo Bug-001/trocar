@@ -221,7 +221,7 @@
   .newmark{font-size:10px;color:var(--fg);border:1px solid var(--rule);border-radius:8px;padding:0 5px;white-space:nowrap;}
   .cblk.is-new{box-shadow:inset 2px 0 0 var(--ink);}
   /* one block */
-  .cblk{border:1px solid var(--border);border-radius:6px;margin-bottom:4px;overflow:hidden;background:var(--raised);scroll-margin-top:8px;content-visibility:auto;contain-intrinsic-size:auto 28px;}
+  .cblk{border:1px solid var(--border);border-radius:6px;margin-bottom:4px;overflow:hidden;background:var(--raised);scroll-margin-top:8px;content-visibility:auto;contain-intrinsic-size:auto var(--cblk-ih);}
   .cblk.s-tools{background:color-mix(in srgb,var(--amber) 4%,transparent);}
   .cblk.s-system{background:color-mix(in srgb,var(--purple) 5%,transparent);}
   .cblk.hl{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 55%,transparent);}
@@ -250,6 +250,10 @@
   .cwturnn{color:var(--dimmer);font-size:10px;white-space:nowrap;border:1px solid var(--border);border-radius:10px;padding:0 6px;font-family:var(--mono);}
   .qlabel{font-size:10px;color:var(--dim);border:1px solid var(--border);border-radius:10px;padding:0 6px;margin-right:6px;white-space:nowrap;}
   .cwturnbody{padding:2px 8px 6px;} .cwturn.collapsed .cwturnbody{display:none;}
+  /* rows of an open card in groups (2.3 §读与画「长对话的窗口」): a drawn group is transparent to layout; a placeholder holds K
+     closed rows' off-screen height (.cblk's intrinsic size + 2 px border + 4 px margin), no text, no control */
+  :root{--cblk-ih:28px;} /* a closed row's size while off screen: .cblk's contain-intrinsic-size and the placeholder's pitch */
+  .cwgroup{display:contents;} .cwgroup[aria-busy]{display:block;height:calc(var(--n) * (var(--cblk-ih) + 6px));}
   /* D12 全展/全折 便捷键 */
   .cwfoldall{display:flex;gap:6px;justify-content:flex-end;margin:-2px 0 5px;}
   .foldallbtn{background:none;border:1px solid var(--border);border-radius:10px;color:var(--dim);font-size:10px;font-family:var(--mono);padding:1px 7px;cursor:pointer;}
