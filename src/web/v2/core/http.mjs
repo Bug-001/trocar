@@ -36,7 +36,7 @@ function qs(params) {
   return s ? '?' + s : ''
 }
 
-// body text → { empty:true } | { json } (which may be a literal null) | { bad:true } (a complete body that is not JSON)
+// body text → { empty:true, len } | { json, len } (which may be a literal null) | { bad:true } (a complete body that is not JSON)
 // | { cut:true } (the body never fully arrived: the connection broke after the head — a transient failure, 1.5 K-29)
 export const CUT_OFF = 'the answer did not arrive in full'
 const CUT = Object.freeze({ ok: false, status: 0, error: CUT_OFF })
@@ -48,8 +48,8 @@ export const ABORTED = 'cancelled'
 async function readBody(r) {
   let t
   try { t = await r.text() } catch { return { cut: true } }
-  if (t.trim() === '') return { empty: true }
-  try { return { json: JSON.parse(t) } } catch { return { bad: true } }
+  if (t.trim() === '') return { empty: true, len: t.length }
+  try { return { json: JSON.parse(t), len: t.length } } catch { return { bad: true } }
 }
 
 function latch(status) {
@@ -89,7 +89,7 @@ export async function get(path, params, { signal, hold = true } = {}) {
   if (b.bad) return { ok: false, status: r.status, error: 'not JSON' }
   const etag = r.headers.get('etag')
   if (etag) { if (hold) remember(held, url, { etag, data: body }); else remember(tags, url, etag) }
-  return { ok: true, data: body } // an empty 2xx is a success carrying null
+  return { ok: true, data: body, bytes: b.len } // an empty 2xx is a success carrying null; `bytes` = the decoded body's length (the session cache's measure, D71③)
 }
 
 // → {ok, status, data, error}: data is the parsed JSON answer (null when there is none), whatever the status; a network error is status 0

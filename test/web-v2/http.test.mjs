@@ -45,13 +45,22 @@ test('4.4 conditional GET: a held ETag is sent back as If-None-Match and a 304 a
   const doc = { sessions: [{ id: 'a' }], next: null }
   await withFetch((url, init) => (headerOf(init, 'if-none-match') === '"e1"' ? new Response(null, { status: 304 }) : json(doc, 200, { etag: '"e1"' })), async (calls) => {
     const first = await api.get('sessions', { harness: 'cond-test' })
-    assert.deepEqual(first, { ok: true, data: doc })
+    assert.equal(first.ok, true); assert.deepEqual(first.data, doc)
     const second = await api.get('sessions', { harness: 'cond-test' })
     assert.equal(headerOf(calls[1].init, 'if-none-match'), '"e1"')
     assert.equal(second.ok, true); assert.deepEqual(second.data, doc)
     await api.get('sessions', { harness: 'cond-test-other' })
     assert.equal(headerOf(calls[2].init, 'if-none-match'), undefined)
   })
+})
+
+test('D71③ a 2xx answer carries `bytes`: the length of its decoded body', async () => {
+  for (const text of ['{"a":"é漢字"}', '[]', '', '  ']) {
+    await withFetch(() => new Response(text, { status: 200 }), async () => {
+      const r = await api.get('sessions', { bytes: text })
+      assert.equal(r.ok, true); assert.equal(r.bytes, text.length)
+    })
+  }
 })
 
 // a fetch that answers only when told to, and rejects with an AbortError when its signal aborts (as real fetch does)
