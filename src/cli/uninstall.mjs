@@ -162,7 +162,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     if (w.deps.releaseHeld) await w.deps.releaseHeld(null) // 5.1: held requests are released unchanged (a seam; 5.1 is not built)
 
     // 2 · 3 · 4: the daemon is asked to go and drains, the autostart is disabled, the daemon is stopped, the link is confirmed gone
-    const { routing, drained } = await drainDaemon(w, { drainMs: deps.drainMs }) // the one drain-then-stop path; `update`'s daemon replacement takes it too (D67①)
+    const { routing, drained } = await drainDaemon(w, { drainMs: deps.drainMs, by: 'uninstall' }) // the one drain-then-stop path; `update`'s daemon replacement takes it too (D67①)
     receipt.routing = { confirmed: routing.confirmed, state: routing.state, how: routing.how }
     receipt.daemon = routing.daemon; receipt.relayed = routing.relayed
     if (routing.relayed_reason) receipt.relayed_reason = routing.relayed_reason

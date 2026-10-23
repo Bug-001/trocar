@@ -19,7 +19,7 @@ test('one read of the helper: the row whose LOCAL end is the peer answers its pi
       row('127.0.0.1:18112', '0.0.0.0:0', process.pid, 'LISTEN'))
   }
   const r = await ownerOfSocket({ exec, peer: PEER, socktablePath: '/x/socktable' })
-  assert.deepEqual([r.pid, r.source], [42177, 'socket-table'])
+  assert.deepEqual([r.pid, r.source, r.sameUser], [42177, 'socket-table', true], 'the helper lists only this user\'s processes: a resolved holder is this user\'s (4.11 P10)')
   assert.ok(r.ms >= 0)
   assert.deepEqual(asks, [['/x/socktable', []]])
 })

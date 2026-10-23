@@ -240,14 +240,14 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   // sees a boundary (as `off` does); wait for that up to graceMs; then cut what is left (rows say `cut-by-stop`), and destroy the client socket of
   // every connection still there — one in its lookup, one whose gate failed or threw — so none outlives the cut. Then wait for every cut flow's row and
   // envelopes, so what the stop writes after it (daemon-stop) comes after them; a flow that has still not ended `boundMs` later rejects close() with   // `stop-failed` (the stop records it and goes on: the stop is bounded, V99). closing / waiting: what the first ask found; cut: what the grace left.
-  async function close({ graceMs = 2000, boundMs = 2000 } = {}) {
+  async function close({ graceMs = 2000, boundMs = 2000, who = null } = {}) { // who: the command stopping the daemon (update / uninstall), named in the cut rows
     const closing = Promise.all(servers.map((s) => new Promise((res) => s.close(res))))
     if (ingress) ingress.closeIdle() // handshakes and health tunnels are not flows: nothing of an agent's is lost, and they would hold close() for their idle timeout
     const asked = drain({ agents: null })
     let timer = null
     await Promise.race([drained({ agents: null }), new Promise((r) => { timer = setTimeout(r, graceMs) })])
     clearTimeout(timer)
-    const left = drain({ agents: null, now: true, by: 'stop' })
+    const left = drain({ agents: null, now: true, by: 'stop', who })
     const cutNow = (e) => { try { const st = e.handle.state(); return st === 'cut' || st === 'closed' || st === 'done' } catch { return false } }
     left.cut += lookups.size + [...flows].filter((e) => !e.handle || !cutNow(e)).length // in its lookup, not yet a handle, or a gate that threw or failed open: the socket below cuts it
     for (const s of [...lookups.values(), ...[...flows].map((e) => e.socket)]) { try { s.destroy() } catch { /* already gone */ } }
@@ -268,12 +268,12 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   // message — or, on `now`, is cut. → {closing, waiting, cut}: still on its way out / waiting for its own close (a spliced
   // connection, a WebSocket whose turn end is not seen) / cut. Connections closed at once are in none of them.
   const mine = (e, agents) => !agents || agents.has(e.agent)
-  function drain({ agents = null, now = false, by = 'off' } = {}) {
+  function drain({ agents = null, now = false, by = 'off', who = null } = {}) {
     const out = { closing: 0, waiting: 0, cut: 0 }
     for (const e of [...flows]) {
       if (!mine(e, agents) || !e.handle) continue
       let r
-      try { r = e.handle.start({ now, by }) } catch (err) { failure({ code: 'engine-error', agent: e.agent, reason: `closing a connection after off failed: ${String((err && err.message) || err)}` }); onError(err); continue }
+      try { r = e.handle.start({ now, by, ...(who ? { who } : {}) }) } catch (err) { failure({ code: 'engine-error', agent: e.agent, reason: `closing a connection after off failed: ${String((err && err.message) || err)}` }); onError(err); continue }
       if (r === 'closing' || r === 'waiting' || r === 'cut') out[r]++
     }
     return out
