@@ -1,6 +1,6 @@
 // test/web-v2/desk-world.mjs — a generated session world and a reference server over it (RFC 3.5 §会话读), exports only.
 //
-// world(seed[, {calls, cut, page, files}]): 2-5 lanes (main + sub-agents), calls written in arrival order whose ts sometimes sorts before rows already
+// world(seed[, {calls, cut, page, files, talk}]): 2-5 lanes (main + sub-agents), calls written in arrival order whose ts sometimes sorts before rows already
 // written (late rows), relanes and gone rows carried by later members, and per-step bid lists drawn by appends, mid-list
 // inserts, replacements and compactions. Each call draws lane events (user · tool · compaction on a compacted list ·
 // summarize), opened resources and raw `seen` paths (opened ones, their absolute spelling, the same name in another dir).
@@ -8,6 +8,10 @@
 // sets of test/fixtures/session-read-contract.json, by 3.5 §会话读's rules: pages bounded by `room` units (a step or a ledger
 // entry is one), the ledger in key order filling what the steps leave and named on by `ledger_next`, `k` on user events,
 // defs against the base step; ops are a greedy copy/add encoding.
+// `talk: {pre, len, every, tail}` (opt-in; without it the world is the same for every seed): a long main conversation. Most calls
+// are the main lane's (the last one always); its lists start from `pre` system/tools blocks and grow by appends only, evenly, to
+// `len` blocks at its last step (no compaction, no late rows, no relane or gone); a human prompt (attr `query`) opens a turn every
+// `every` message blocks, and the last `tail` message blocks are one turn. The other lanes are drawn as without it.
 // deskFrom(get, id) reads `session`, every lane's tail and then its older pages, then the lane's ledger chain.
 import { createHash } from 'node:crypto'
 import { createDesk, applySession, applyLane, readLedger } from '../../src/web/v2/replay/model.mjs'
@@ -45,7 +49,7 @@ function encode(P, C) {
   return ops
 }
 
-export function world(seed, { calls: count, cut: cuts = false, page: pageSize, files: fileCount = 5 } = {}) {
+export function world(seed, { calls: count, cut: cuts = false, page: pageSize, files: fileCount = 5, talk = null } = {}) {
   const r = rng(seed), int = (a, b) => a + Math.floor(r() * (b - a + 1))
   const nLanes = int(2, 5), n = count ?? int(18, 40), page = pageSize ?? int(3, 7), room = page + int(0, 3), lroom = pageSize ?? int(1, 3)
   const files = Array.from({ length: fileCount }, (_, j) => `src/f${j}.mjs`), pick = (xs) => xs[int(0, xs.length - 1)]
@@ -65,12 +69,21 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, f
     return b
   }
   const shared = [bid('system', 'system'), bid('tools', 'system')]
+  const T = talk && (() => {
+    const lanes = Array.from({ length: n }, (_, i) => (i < nLanes ? i : i === n - 1 || r() < 0.85 ? 0 : int(1, nLanes - 1)))
+    const M = lanes.filter((l) => l === 0).length, N = talk.len - talk.pre, q0 = N - (talk.tail || 0)
+    const tag = (b, q) => { if (q) attrsOf.set(b, { query: true }); else attrsOf.delete(b); return b }
+    const msg = (m) => { const q = m === q0 || (m < q0 && m % talk.every === 0); return tag(bid('messages', q || m % 2 ? 'user' : 'assistant'), q) }
+    return { lanes, M, N, msg, j: 0, m: 0, pre: Array.from({ length: talk.pre }, (_, j) => tag(bid(j ? 'tools' : 'system', 'system'), false)) }
+  })()
   const last = []  // the list of the previous ARRIVED call of each lane
   const calls = []
   for (let i = 0; i < n; i++) {
-    const lane = i < nLanes ? i : int(0, nLanes - 1)
-    let list = last[lane] ? [...last[lane]] : [...shared, bid('messages', 'user')], compacted = false
-    if (last[lane]) {
+    const lane = T ? T.lanes[i] : i < nLanes ? i : int(0, nLanes - 1)
+    const talking = T && lane === 0
+    let list = talking ? [...(last[0] || T.pre)] : last[lane] ? [...last[lane]] : [...shared, bid('messages', 'user')], compacted = false
+    if (talking) for (const c = Math.max(1, Math.floor((T.N * ++T.j) / T.M)); T.m < c;) list.push(T.msg(T.m++))
+    else if (last[lane]) {
       const kind = r()
       if (kind < 0.45) for (let k = int(1, 3); k; k--) list.push(bid('messages', k % 2 ? 'assistant' : 'user'))
       else if (kind < 0.65) list.splice(int(1, list.length), 0, bid('messages', 'user'))
@@ -78,11 +91,11 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, f
       else { list = [...list.slice(0, int(1, 2)), bid('messages', 'user')]; compacted = true }
     }
     last[lane] = list
-    const late = i > 2 && r() < 0.3
+    const late = !T && i > 2 && r() < 0.3
     const ts = new Date(T0 + (late ? (i - int(1, 6)) * 1000 + int(0, 999) : i * 1000)).toISOString()
     const effects = []
-    if (i > 3 && r() < 0.15) effects.push({ kind: 'relane', at: int(0, i - 1), lane: int(0, nLanes - 1) })
-    if (i > 3 && r() < 0.1) effects.push({ kind: 'gone', at: int(0, i - 1) })
+    if (!T && i > 3 && r() < 0.15) effects.push({ kind: 'relane', at: int(0, i - 1), lane: int(0, nLanes - 1) })
+    if (!T && i > 3 && r() < 0.1) effects.push({ kind: 'gone', at: int(0, i - 1) })
     calls.push({ rid: `20261021T101500Z:${1000 + i}`, lane, ts, list, reply: Array.from({ length: int(0, 2) }, () => bid('reply', 'assistant')),
       status: r() < 0.1 ? 529 : 200, effects,
       evs: [...(r() < 0.35 ? ['user'] : []), ...(r() < 0.2 ? ['tool'] : []), ...(compacted ? ['compaction'] : []), ...(r() < 0.08 ? ['summarize'] : [])],
