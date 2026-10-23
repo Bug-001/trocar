@@ -1,6 +1,6 @@
 // test/web-v2/browser/desk-load.test.mjs — 2.3 #29, #30 and #32 on the mounted desk, in the real Chrome, the session reads answered from a
 // generated long session (desk-world.mjs, 3.5 §会话读's reference server) whose skeleton and anchor lane each come in ≥ 6 pages and
-// whose every answer waits L ms: the loader keeps ≤ 3 reads out, each history chain sends its next read as soon as the last one ended,
+// whose every answer waits L ms: the loader keeps ≤ 3 reads out (rows the reader opens meanwhile included), each history chain sends its next read as soon as the last one ended,
 // and the whole history is in within the two chains' back-to-back time (#29); a named step older than the held part lands directly,
 // no step in between is ever drawn (#30). Runs only under `npm run test:browser`.
 import test from 'node:test'
@@ -54,6 +54,9 @@ test('2.3 #29: the loader keeps ≤ 3 reads out, each history chain reads back t
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     assert.ok(await until(page, async () => (await steps(page)).length > 0), 'the desk drew a step')
     const painted = (await steps(page))[0].t
+    // the reader opens rows while the chains run: their bodies' reads go through the same loader (≤ 3 out still holds)
+    const opened = await page.evaluate(() => { const hs = [...document.querySelectorAll('#ctxwin .cblk.collapsed:not(.removed):not([data-rp]) > .cbh')].slice(0, 4); for (const h of hs) h.click(); return hs.length })
+    assert.ok(opened > 1, `the drawn step has rows to open (${opened})`)
     const skel = () => log.filter((e) => e.k === 'session'), anchor = () => log.filter((e) => e.k === 'lane' && e.q.get('lane') === main && (e.q.has('to') || e.q.has('ledger')))
     const ended = (xs, last) => xs.some((e) => e.doc && last(e.doc))
     assert.ok(await until(page, async () => ended(skel(), (d) => d.more === false) && ended(anchor().filter((e) => e.q.has('to')), (d) => d.prev === null), 20000),
@@ -66,10 +69,12 @@ test('2.3 #29: the loader keeps ≤ 3 reads out, each history chain reads back t
     let out = 0, most = 0
     for (const [, d] of edges) { out += d; most = Math.max(most, out) }
     assert.ok(most <= 3, `${most} loader reads were out at once`)
-    // (2) on each chain the next read goes out ≤ 50 ms after the last one ended: no poll beat in between
+    // (2) on each chain the next read goes out ≤ 50 ms after the last one ended, or waits only while the loader is full (the reader's
+    // reads go first): no poll beat in between
+    const outAt = (t) => log.filter((e) => e.start <= t && (e.end ?? Infinity) > t).length
     for (const [name, xs] of [['skeleton', S], ['anchor lane', A]]) {
       const gaps = xs.slice(1).map((e, i) => e.start - xs[i].end)
-      assert.ok(gaps.every((g) => g <= 50), `${name} chain gaps (ms): ${gaps}`)
+      assert.ok(gaps.every((g, i) => g <= 50 || outAt(xs[i].end + 50) === 3), `${name} chain gaps (ms): ${gaps}`)
     }
     // (3) the whole history is in within the longer chain's back-to-back time
     const done = Math.max(...[...S, ...A].map((e) => e.end)), pages = Math.max(S.length, A.length)

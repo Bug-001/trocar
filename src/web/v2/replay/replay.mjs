@@ -150,6 +150,9 @@ function openDesk(ctx, route0) {
   const E = { saw: $('#saw'), rails: $('#rails'), deskhead: $('#deskhead'), stepbar: $('#stepbar'), ctxwin: $('#ctxwin'), ctxnav: $('#ctxnav'), resexp: $('#resexp'), rawpanel: $('#rawpanel'), detail: document.getElementById('detail') }
   let host = null // the element the desk hangs in while attached
   let size = 0 // the session and lane answers it applied, in decoded characters (bytes(): the session cache's measure)
+  let missed = false // an answer applied while detached was not drawn: attach() repaints every area
+  // the areas' own reads (an opened row's bodies in the window, the drawer, the raw panel) go through the desk's loader too (2.3 加载器)
+  const areaApi = { ...api, get: (n, p, o) => (n === 'block' || n === 'lane' ? via(n === 'block' ? 0 : 1, n, p, o) : api.get(n, p, o)) }
 
   // ── the state every area renders from ────────────────────────────────────────────────────────────────────────────
   const fresh = () => ({
@@ -163,7 +166,7 @@ function openDesk(ctx, route0) {
     laneErr: new Map(), bodyFail: new Map(), // a step read that failed: lane key → reason, ref → its failed body (2.3 §读失败)
   })
   const s = {
-    ctx: { ...ctx, api }, root, dead: false, project: route0.project, id: route0.id, initialStep: hasStep(route0) ? stepParam(route0.params.step).step : null,
+    ctx: { ...ctx, api: areaApi }, root, dead: false, project: route0.project, id: route0.id, initialStep: hasStep(route0) ? stepParam(route0.params.step).step : null,
     ...fresh(), headFollow: null, health: null,
     openBlocks: new Set(), turnLanded: new Set(), // open rows by key (bid#n, rp:bid): they survive a step change while the bid stays
     reads, // aborted when the desk is disposed (evicted from the session cache)
@@ -279,6 +282,7 @@ function openDesk(ctx, route0) {
     paintPlayhead()
   }
   function paintPlayhead() {
+    if (!host) { missed = true; return } // a detached desk draws nothing: attach() repaints
     const c = curCall()
     if (!c || s.playRid == null) return // a named step not here yet on a desk that never drew: ⑧ stays
     const held = heldAt(c), t = nowMs()
@@ -299,6 +303,7 @@ function openDesk(ctx, route0) {
     aim()
   }
   function renderAll() {
+    if (!host) { missed = true; return }
     renderHeader()
     if (!s.anchor) return
     renderSaw(E.saw, s); renderRails(E.rails, s); watchRails(); renderOverview(E.saw, s)
@@ -440,7 +445,8 @@ function openDesk(ctx, route0) {
       onBodies: (rid, got, refs) => {
         if (!mine()) return
         refs.forEach((ref, i) => { if (isRetryable(got[i])) s.bodyFail.set(ref, got[i]); else s.bodyFail.delete(ref) })
-        if (rid === s.playRid && s.anchor) { renderContextWindow(E.ctxwin, s); s.renderRaw() }
+        if (rid !== s.playRid || !s.anchor) return
+        if (host) { renderContextWindow(E.ctxwin, s); s.renderRaw() } else { s.lastPhSig = null; missed = true }
       },
     })
   }
@@ -453,10 +459,10 @@ function openDesk(ctx, route0) {
     if ((a && a.lane === openLane) || (!a && rid == null)) openLane = null
     if (a) wanted.delete(a.lane)
     if (s.anchor && s.initialStep != null) landNamed()
-    if (a && s.anchor && s.playRid != null && a.lane !== s.anchor.id) { renderRails(E.rails, s); watchRails() }
+    if (a && host && s.anchor && s.playRid != null && a.lane !== s.anchor.id) { renderRails(E.rails, s); watchRails() }
     if (s.anchor) { paintPlayhead(); refreshDrawer() }
     if (was && !openLane) aim()
-    for (const k of wanted) if (!s.desk.held.has(k)) { steps.prefetch(k); break }
+    if (host) for (const k of wanted) if (!s.desk.held.has(k)) { steps.prefetch(k); break }
     history()
   }
   // the anchor lane's pending ledger cursors, read to the end in the one lane slot after any answer of that lane (2.4's counts are
@@ -464,14 +470,14 @@ function openDesk(ctx, route0) {
   // redraw only the explorer; when the chain ends the resting playhead asks again for what the gate held back.
   function chainLedger(byPoll = false) {
     const key = s.anchor && s.anchor.id, desk = s.desk, sk = sessionKey(), signal = s.reads ? s.reads.signal : undefined
-    if (!key || chaining || (ledgerFailed && !byPoll) || !desk.held.has(key) || ledgerDone(desk, key)) return
+    if (!key || !host || chaining || (ledgerFailed && !byPoll) || !desk.held.has(key) || ledgerDone(desk, key)) return
     chaining = true
     const gone = () => s.dead || sk !== sessionKey() || desk !== s.desk || !!(signal && signal.aborted)
-    steps.laneSlot(() => readLedger(desk, key, laneRead(signal, 2), gone)).then((r) => {
+    steps.laneSlot(() => readLedger(desk, key, laneRead(signal, 2), gone, () => host != null)).then((r) => {
       chaining = false
       if (!r || gone()) return
       ledgerFailed = !r.ok
-      if (s.playRid != null) renderResources(E.resexp, s)
+      if (s.playRid != null) { if (host) renderResources(E.resexp, s); else missed = true }
       if (r.ok && s.playRid != null && openLane == null) { targeted = s.playRid; steps.target(s.playRid) }
       if (s.anchor && s.anchor.id !== key) chainLedger()
       history()
@@ -484,7 +490,7 @@ function openDesk(ctx, route0) {
   let skeleton = false, historyFailed = false
   const older = new Set() // the lanes whose older-page chain is running
   function history(byPoll = false) {
-    if (s.dead || !s.anchor || s.notListed || (historyFailed && !byPoll)) return
+    if (s.dead || !host || !s.anchor || s.notListed || (historyFailed && !byPoll)) return
     historyFailed = false
     if (s.desk.more && !skeleton) skeletonChain()
     const k = s.anchor.id, h = s.desk.held.get(k)
@@ -496,7 +502,7 @@ function openDesk(ctx, route0) {
     skeleton = true
     const sk = sessionKey(), signal = s.reads.signal, gone = () => s.dead || sk !== sessionKey()
     try {
-      while (s.desk.more && s.desk.order.length && !gone()) {
+      while (s.desk.more && s.desk.order.length && host && !gone()) { // a detached desk sends no next page: attach() resumes
         const at = s.desk.order[0]
         const res = await via(3, 'session', { before: at }, { signal })
         if (gone()) return
@@ -516,7 +522,7 @@ function openDesk(ctx, route0) {
         let q = null
         const r = await steps.laneSlot(() => {
           const h = s.desk.held.get(key)
-          q = h && h.prev != null && !(s.anchor && key === s.anchor.id && ledgerFirst()) ? { lane: key, to: h.prev } : null
+          q = host && h && h.prev != null && !(s.anchor && key === s.anchor.id && ledgerFirst()) ? { lane: key, to: h.prev } : null
           return q && via(pri, 'lane', q, { signal })
         })
         if (!q || gone()) return
@@ -654,14 +660,14 @@ function openDesk(ctx, route0) {
     unpin(keep)
     const moved = placePlayhead(prevRow)
     // the open: the playhead's lane (a named step's: the anchor lane) is read in the same turn, not after the 100 ms rest
-    if (first && openLane == null) {
+    if (first && openLane == null && host) {
       const lk = s.playRid != null ? !deskStep(desk, s.playRid).held && desk.rows.get(s.playRid).lane : !desk.held.has(s.anchor.id) && s.anchor.id
       if (lk) { openLane = lk; steps.prefetch(lk) }
     }
     if (s.playRid == null) { renderHeader(); chainLedger(); history(); return result({ ok: true, pending: desk.pending || undefined }) } // ⑧ until the named step is here
     // the followed step's open reply bodies in one read before it is drawn (C3), so its newest reply shows with its bytes; the same
     // read carries the ±NEAR prefetch (2.3 §正文预取), so the rest after it finds nothing left and a delta stays one `block` (4.4:52)
-    if (s.follow && moved && !first) {
+    if (s.follow && moved && !first && host) {
       const refs = openRefs(s.playRid)
       if (refs.length) { await loadBodies({ get: (n, p, o) => via(0, n, p, o) }, [...refs, ...nearRefs(s.playRid)], { signal }); if (stale()) return }
     }
@@ -729,7 +735,7 @@ function openDesk(ctx, route0) {
   // hang the desk in `el` as it was left; the URL decides the view only when it names a step (1.2 §路由「离开再回来」)
   function attach(el, ctx, route) {
     host = el
-    s.ctx = { ...ctx, api }
+    s.ctx = { ...ctx, api: areaApi }
     overrideScope(sessionKey())
     el.replaceChildren(root)
     for (const [sel, top] of scrolls) { const n = $(sel); if (n) n.scrollTop = top }
@@ -742,10 +748,13 @@ function openDesk(ctx, route0) {
     watchRails()
     timer = setInterval(() => poll(false), POLL_MS) // the desk keeps reading; 「跟随最新」 only decides whether the playhead follows growth
     if (hasStep(route)) update(route)
-    if (s.anchor) paintPlayhead() // a step left mid-wait draws now; the URL names the drawn step at once (syncUrl)
+    // a step left mid-wait draws now; the URL names the drawn step at once (syncUrl). Answers applied while away were not drawn: all areas then
+    if (s.anchor) { if (missed) { missed = false; renderAll() } else paintPlayhead() }
+    chainLedger(); history() // the chains a leave paused go on (a desk whose history was complete reads nothing here)
     poll(true) // the first open, or one `since` on its mark
   }
-  // leave the page: the poll stops, every listener outside the root goes, the reads in flight finish into the detached nodes
+  // leave the page: the poll stops, every listener outside the root goes, the reads in flight finish into the desk's state (drawn on
+  // return); no chain sends its next read while detached (1.2 §路由「离开再回来」)
   function detach() {
     if (!host) return
     scrolls = SCROLLED.map((sel) => [sel, $(sel) ? $(sel).scrollTop : 0])

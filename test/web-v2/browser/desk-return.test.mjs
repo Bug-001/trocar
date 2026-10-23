@@ -120,6 +120,37 @@ test('1.2 #23 a desk left while following comes back following, its URL naming n
   } finally { await b.stop() }
 })
 
+test('1.2 #23 a desk left while its history loads sends no next history read while away, and reads the rest once back', { skip }, async () => {
+  const L = 300, long = world(5, { calls: 160, page: 16, spage: 16, talk: { pre: 3, len: 60, every: 6, tail: 4 } })
+  const b = await withBoard({ bytes: 1e5, width: 1280, chromium: gate.chromium })
+  try {
+    const { page } = b
+    // the history reads (a lane page, an older skeleton page): when each started; the skeleton chain's end from its answers
+    const started = [], ends = []
+    const history = (u) => u.pathname === '/api/lane' || (u.pathname === '/api/session' && u.searchParams.has('before'))
+    page.on('request', (r) => { if (history(new URL(r.url()))) started.push(Date.now()) })
+    page.on('response', async (r) => { const u = new URL(r.url()); if (u.pathname === '/api/session' && u.searchParams.has('before')) { const d = await r.json().catch(() => null); if (d && d.more === false) ends.push(Date.now()) } })
+    await serveWorld(page, long, { latency: L })
+    await page.evaluate(() => { location.hash = '#/replay/p/S' })
+    await until(page, () => !!document.querySelector('.desk #stepbar .sb-no'))
+    await new Promise((r) => setTimeout(r, L + 100))
+    const left = Date.now()
+    await page.evaluate(() => { location.hash = '#/sessions' })
+    await until(page, () => !document.querySelector('.desk'))
+    await new Promise((r) => setTimeout(r, 6 * L))
+    assert.ok(started.some((t) => t <= left) && !ends.length, 'the history was still loading when the reader left')
+    // a read in flight at the leave ends within L; nothing new starts after it
+    assert.deepEqual(started.filter((t) => t > left + L).map((t) => t - left), [], 'history reads started while away (ms after the leave)')
+    const back = Date.now()
+    await page.evaluate(() => history.back())
+    await until(page, () => !!document.querySelector('.desk #stepbar .sb-no'))
+    while (!ends.length && Date.now() - back < 20000) await new Promise((r) => setTimeout(r, 50))
+    assert.ok(ends.length > 0, 'back on the desk, its history chains go on to the end')
+    assert.ok(started.some((t) => t >= back))
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
 test('1.2 #23 the 4th session opened evicts the least recently seen: back on the 1st, its first session read has no since', { skip }, async () => {
   const b = await board()
   try {
