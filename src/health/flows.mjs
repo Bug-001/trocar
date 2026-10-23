@@ -230,7 +230,7 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
       const key = groupKey(r)
       const g = groups.get(key) || { key, count: 0, first_ts: r.ts, last_ts: r.ts, last: null }
       g.count += weight(r); g.last_ts = r.ts; g.last = pick(r)
-      groups.set(key, g)
+      groups.delete(key); groups.set(key, g) // the Map's order is the order of each group's newest record
       if (agent) { const a = agentRow(agent); a.last_failure = r.ts; a.last_failure_key = key }
     } else if (isRow(r)) {
       if (notCapturedClass(r.not_captured, r.reason) === 'expected') {
@@ -242,7 +242,7 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
       else if (r.decision === 'decrypt' && r.not_captured == null && agent) agentRow(agent).last_captured = r.ts
     }
   }
-  out.groups = [...groups.values()]
+  out.groups = [...groups.values()].reverse() // newest record first: one ts can hold several lines, the log's order breaks the tie (C.3)
   out.agents = [...agents.values()]
   // one batch per kind: the newest run's lines
   for (const k of ['install', 'uninstall']) out.install[k] = lastRun(out.install[k])

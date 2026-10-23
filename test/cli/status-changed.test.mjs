@@ -56,6 +56,16 @@ test('C.3 failures.groups: at most 50, the newest first, and the cut is in error
   assert.ok(doc.errors.some((e) => e.where === 'capture health'))
 })
 
+test('C.3 failures.groups: the same last_ts — the group whose newest line was written later is first (the log\'s order breaks the tie)', async () => {
+  const s = await installedHome()
+  const t = ago(1000)
+  for (const order of [['code-a', 'code-b'], ['code-b', 'code-a']]) {
+    const recs = [{ ts: ago(5000), event: 'failure', where: 'engine', code: order[0] }, ...order.map((code) => ({ ts: t, event: 'failure', where: 'engine', code }))]
+    const doc = await docOf(s, { request: down(), deps: { captureHealth: () => healthOf(recs) } })
+    assert.deepEqual(doc.failures.groups.map((g) => g.code), [order[1], order[0]])
+  }
+})
+
 test('validateReceipt: the C.3 status document validates; a status changed item without undo is exactly one problem naming it', async () => {
   const { s } = await seeded()
   const doc = await docOf(s, { request: asDaemon(reply()) })

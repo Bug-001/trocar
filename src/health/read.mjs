@@ -84,9 +84,9 @@ const groupsOf = (recs, now, key = groupKey) => {
     const k = key(r)
     const g = m.get(k) || { key: k, count: 0, first_ts: r.ts, last_ts: r.ts, last: null }
     g.count += 1 + (typeof r.suppressed === 'number' ? r.suppressed : 0); g.last_ts = r.ts; g.last = pick(r)
-    m.set(k, g)
+    m.delete(k); m.set(k, g) // ordered by each group's newest record
   }
-  return [...m.values()]
+  return [...m.values()].reverse() // newest record first, the log's order breaking a tie of ts (C.3)
 }
 
 // The notes the last install / uninstall wrote (install-note / uninstall-note): in the window read, else in the day
