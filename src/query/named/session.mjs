@@ -30,7 +30,7 @@ import v8 from 'node:v8';
 import { reduction, memoryLog, BlockUnread, REDUCE_HEAP, LEDGER_BYTES, REDUCE_V } from '../../view/reduce.mjs';
 import { openFoldLog, foldLogFile, LOG_BYTES } from '../fold-log.mjs';
 import { trocarHome } from '../../paths.mjs';
-import { extractMembers, blockAt, CHUNK_STORED } from '../../view/extract.mjs';
+import { extractMembers, extractSeed, blockAt, CHUNK_STORED } from '../../view/extract.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { recordsAt, releaseDecoded, STRETCH_HEAP } from '../records.mjs';
 import { indexRows, sessionGroups, sessionFacts } from '../rows.mjs';
@@ -241,7 +241,7 @@ export function saveIndexes() {
 // the log ends at the frontier line the sidecar covers to, so the state is the one the sidecar's indexes describe. A sidecar that
 // cannot be written is not one: the next open scans, the next fold rebuilds.
 function sidecars(store) {
-  try { store.saveIndex(); } catch { /* the next idle period */ }
+  try { store.saveIndex(extractSeed(store)); } catch { /* the next idle period */ }
   const st = fileLogs.get(store);
   if (!st || !store.indexed) return;
   try {
