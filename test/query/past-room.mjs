@@ -3,8 +3,8 @@
 // would spend minutes extracting it a 50 ms slice at a time. It is extracted and folded as it grows (extendSession), uncut: the
 // reader's plan cuts it, so the reader finds a fold log of another cut and folds its own from scratch.
 //
-// The room is what the plan reckons (src/query/named/session.mjs cut): the reader's budget less the work, the steady caches and
-// the distinct blocks (SPINE_PER_BLOCK each), at their bytes. The blocks are the projection's
+// The room is what the plan reckons (src/query/named/session.mjs cut): the reader's budget less the work, the steady caches, the
+// distinct blocks (SPINE_PER_BLOCK each), the plan's members (PLAN_PER_MEMBER each) and the fixed caches K (CACHES), at their bytes. The blocks are the projection's
 // `d` lines, so the session is extracted as it grows (as the worker extracts it) and they are counted as they are written.
 import { execFileSync, spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
@@ -24,11 +24,11 @@ const BUDGET = `const { heapBudget } = await import(${at('../../src/query/warm.m
 export async function growPast(s, { home, budget }) {
   const fs = await import('node:fs')
   await import('../../src/query/named/index.mjs') // first: the registry imports session.mjs
-  const { SPINE_PER_ROW, SPINE_PER_BLOCK, CACHES, working, extendSession } = await import('../../src/query/named/session.mjs')
+  const { SPINE_PER_ROW, SPINE_PER_BLOCK, PLAN_PER_MEMBER, CACHES, working, extendSession } = await import('../../src/query/named/session.mjs')
   const { steadyBytes } = await import('../../src/query/warm.mjs')
   const { projectionFile } = await import('../../src/query/projection.mjs')
   const { indexRows, sessionGroups } = await import('../../src/query/rows.mjs')
-  const room = (rows, blocks) => budget - working(rows) - steadyBytes() - blocks * SPINE_PER_BLOCK - CACHES
+  const room = (rows, blocks) => budget - working(rows) - steadyBytes() - blocks * SPINE_PER_BLOCK - rows.length * PLAN_PER_MEMBER - CACHES
   // the projection's definition lines, counted over the bytes appended since the last count
   let blocks = 0, read = 0, tail = ''
   const count = () => {

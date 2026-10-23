@@ -12,7 +12,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs, not the other way round
-import { SPINE_PER_ROW, SPINE_PER_BLOCK, extendSession } from '../../src/query/named/session.mjs'
+import { SPINE_PER_ROW, SPINE_PER_BLOCK, PLAN_PER_MEMBER, extendSession } from '../../src/query/named/session.mjs'
 import { STORE_HEAP } from '../../src/query/projection.mjs'
 import { REDUCE_HEAP } from '../../src/view/reduce.mjs'
 import { LOG_BYTES } from '../../src/query/fold-log.mjs'
@@ -120,6 +120,39 @@ test('what a session read keeps grows by at most SPINE_PER_BLOCK a distinct bloc
   const few = read({ freshTools: 0 }, 40), many = read({ freshTools: 1_500 }, 40)
   const per = (many.retained - few.retained) / (many.blocks - few.blocks)
   assert.ok(per <= SPINE_PER_BLOCK, `${Math.round(per)} B retained a distinct block (${few.blocks} → ${many.blocks} blocks, ${few.retained} → ${many.retained} B), SPINE_PER_BLOCK ${SPINE_PER_BLOCK}`)
+})
+
+// The plan's members (3.5 §内存有界, PLAN_PER_MEMBER): the plan holds every member of the session, the ones its cut leaves out too
+// (its member array's flyweight rows, each with the cell the step-order sort decoded last, and the by-id map), so the cut charges
+// them beside the blocks, never cut. A session of 20,000 members' plan, cut to a few hundred rows by its store's blocks, in a heap
+// of the worker's size: what the plan holds once made, a member at most PLAN_PER_MEMBER.
+const PLAN = `
+await import(${JSON.stringify(QUERY)}) // first: the registry imports session.mjs
+const { planOf, working, CACHES, SPINE_PER_ROW, SPINE_PER_BLOCK, PLAN_PER_MEMBER } = await import(${JSON.stringify(new URL('../../src/query/named/session.mjs', import.meta.url).href)})
+const { indexRows, sessionGroups } = await import(${JSON.stringify(new URL('../../src/query/rows.mjs', import.meta.url).href)})
+const { heapBudget, steadyBytes } = await import(${JSON.stringify(new URL('../../src/query/warm.mjs', import.meta.url).href)})
+const [home, id] = process.argv.slice(1)
+const rows = await indexRows({ home, errors: [] })
+// a turn between collections: a member array is held by a WeakRef (rows.mjs sessionGroups), kept until the job that made it ends
+const live = async () => { await new Promise((r) => setTimeout(r, 0)); global.gc(); global.gc(); return process.memoryUsage().heapUsed }
+const n = sessionGroups(rows).get(id).length
+// blocks that leave room for 1,000 rows beside the members
+const defCount = Math.floor((heapBudget() - working(sessionGroups(rows).get(id)) - steadyBytes() - n * PLAN_PER_MEMBER - CACHES - 1000 * SPINE_PER_ROW) / SPINE_PER_BLOCK)
+const keep = []
+const before = await live()
+const make = () => { const store = { plan: null, defCount }; planOf(sessionGroups(rows).get(id), 'plan', store, id); keep.push(store); return store.plan }
+const { bound } = make()
+console.log(JSON.stringify({ members: n, shown: bound && bound.shown, retained: (await live()) - before }))`
+test('the plan of a cut session keeps at most PLAN_PER_MEMBER a member', { timeout: 60_000 }, () => {
+  const home = path.join(tmpDir('trocar-spine-'), '.trocar'), s = bigSession({ home, wire: 'threads', growth: 40, subEvery: 4, subLanes: 3, subLen: 12, compactAt: 3_000 })
+  s.append(20_000)
+  try {
+    const out = JSON.parse(execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', '--single-threaded', ...heapFlags(), '--input-type=module', '-e', PLAN, home, s.id],
+      { encoding: 'utf8', maxBuffer: 1 << 20 }))
+    assert.ok(out.shown && out.shown < out.members / 10, `${out.shown} of ${out.members} members shown (else this test proves nothing)`)
+    const per = out.retained / out.members
+    assert.ok(per <= PLAN_PER_MEMBER, `${Math.round(per)} B a member (${out.retained} B for ${out.members} members), PLAN_PER_MEMBER ${PLAN_PER_MEMBER}`)
+  } finally { fs.rmSync(path.dirname(home), { recursive: true, force: true }) }
 })
 
 // A session past the heap bound that goes on growing (a live one, followed): the cut moves in steps, not with every new row, so the
