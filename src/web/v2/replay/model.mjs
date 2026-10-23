@@ -197,13 +197,17 @@ function mergeLedger(h, a) {
  * `next` is an older (--to) page put before them; a page with a base extends the held steps after `base`. Never pass a
  * `--ledger` answer here (applyLedger). Definitions merge by bid; resources by resKeyOf and seen by path, the answer's one
  * wins. Events: every step the answer covers gets the answer's events; the others it carries (a base:null answer's
- * compaction / summarize) merge by (type, rid). A base:null answer resets the pending ledger cursors to its `ledger_next`.
+ * compaction / summarize) merge by (type, rid). A tail or reset answer resets the pending ledger cursors to its `ledger_next`;
+ * an older page of a held lane leaves them as they are.
  */
 export function applyLane(desk, a) {
   merge(desk.defs, a.defs, (d) => d.bid)
   let h = desk.held.get(a.lane)
   const steps = a.steps.map((s) => ({ ...s, ts: desk.rows.get(s.rid)?.ts }))
   let reset = false
+  // an older page of a lane already held: its ledger head (3.5: a base:null page sends the whole ledger again) only merges;
+  // the tail's chain and the --from deltas keep the ledger current at mark, so its cursors stay as they are
+  const olderHeld = a.base == null && a.next != null && !!h
   if (a.base == null && a.next == null) {
     h = newHeld(); desk.held.set(a.lane, h); reset = true
     h.prev = a.prev ?? null
@@ -220,8 +224,10 @@ export function applyLane(desk, a) {
   const rids = fresh.map((s) => s.rid)
   h.rids = a.base == null && !reset ? [...rids, ...h.rids] : [...h.rids, ...rids]
   mergeLedger(h, a)
-  if (a.base == null) h.cursors = new Set()
-  if (a.ledger_next != null) h.cursors.add(a.ledger_next)
+  if (!olderHeld) {
+    if (a.base == null) h.cursors = new Set()
+    if (a.ledger_next != null) h.cursors.add(a.ledger_next)
+  }
   const covered = new Set(a.steps.map((s) => s.rid))
   for (const rid of covered) h.events.delete(rid)
   for (const e of a.events || []) {

@@ -251,7 +251,7 @@ test('A29 (2.4 #1 #9): seenFiles = the lane\'s seen minus the files it opened (a
 })
 
 test('A30 (3.5 ledger_next): the chain gives the whole ledger at mark, ledgerDone turns true only at its end, a ledger page touches no step', async () => {
-  let chains = 0
+  let chains = 0, older = 0
   for (const seed of SEEDS) {
     const w = world(seed), desk = createDesk()
     applySession(desk, w.full())
@@ -260,15 +260,19 @@ test('A30 (3.5 ledger_next): the chain gives the whole ledger at mark, ledgerDon
       applyLane(desk, tail)
       assert.equal(ledgerDone(desk, key), tail.ledger_next === null, `seed ${seed} ${key}`)
       if (tail.ledger_next) { chains++; assert.deepEqual(ledgerAsk(desk, key), { lane: key, ledger: tail.ledger_next }) }
+      // an older page carries the ledger head again (base:null); a cursor the chain still owes survives it, none is added
+      const ask = ledgerAsk(desk, key)
+      for (let p = tail; p.prev != null;) { p = w.lane(key, { to: p.prev }); older++; applyLane(desk, p); assert.deepEqual(ledgerAsk(desk, key), ask, `seed ${seed} ${key} older page`) }
       assert.deepEqual(await readLedger(desk, key, reader(w, w.now)), { ok: true })
       assert.equal(ledgerDone(desk, key), true)
+      for (let p = w.lane(key, { to: desk.held.get(key).rids[0] }); p.steps.length; p = w.lane(key, { to: p.steps[0].rid })) { applyLane(desk, p); assert.equal(ledgerDone(desk, key), true, `seed ${seed} ${key} done stays done`) }
       const h = desk.held.get(key), whole = w.ledgerAt(key)
       const byKey = (xs, k) => [...xs].sort((a, b) => (k(a) < k(b) ? -1 : 1))
       assert.deepEqual(byKey(h.resources.values(), (r) => `${r.kind}::${r.label}`), whole.resources, `seed ${seed} ${key} resources`)
       assert.deepEqual(byKey(h.seen.values(), (x) => x.path), whole.seen, `seed ${seed} ${key} seen`)
     }
   }
-  assert.ok(chains > 0, 'some ledger overflows its tail page')
+  assert.ok(chains > 0 && older > 0, `some ledger overflows its tail page (${chains}), some lane has older pages (${older})`)
   // a failed ledger read stops and keeps its cursor pending
   const desk = createDesk()
   applySession(desk, fx.session_full)

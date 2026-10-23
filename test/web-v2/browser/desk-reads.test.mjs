@@ -122,7 +122,9 @@ test('2.3 §读失败: a step whose lane never arrived says it could not be read
 })
 
 // A32 · 3.5 §手里车道的页 (E4): after the first paint the anchor lane's ledger is read along its `ledger_next` chain, in the one
-// lane slot, before any older (`to`) page of that lane; each read names the previous answer's cursor, none is read twice
+// lane slot, before any older (`to`) page of that lane; each read names the previous answer's cursor, none is read twice. An
+// older page carries the ledger head and its `ledger_next` again (3.5: base:null sends the whole ledger): no cursor is read a
+// second time for it, and once the counts are exact no 2.4 count goes back to the busy box
 test('A32: the anchor lane reads its ledger chain to the end before any older page, one lane read in flight, no cursor twice', { skip }, async () => {
   const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
   try {
@@ -145,14 +147,26 @@ test('A32: the anchor lane reads its ledger chain to the end before any older pa
       if (q.get('lane') !== main) return route.fallback()
       const c = q.get('ledger')
       if (c != null && /^c\d+$/.test(c)) { const i = +c.slice(1); return json(route, { ...w.lane(main, {}), steps: [], defs: [], events: [], prev: null, next: null, ...page1(all, i), ledger_next: next(i + 1) }) }
-      if (c != null || q.has('from') || q.has('to')) return route.fallback()
+      if (c != null || q.has('from')) return route.fallback()
+      if (q.has('to')) { const a = w.lane(main, { to: q.get('to') }); firstPage ||= a.prev == null; return json(route, { ...a, ...page1(all, 0), ledger_next: next(1) }) }
       return json(route, { ...w.lane(main, {}), ...page1(all, 0), ledger_next: next(1) })
     })
+    let firstPage = false
+    // once the chain has ended and the explorer drew no busy box, any busy box in it again is counted
+    await page.evaluate(() => {
+      window.__busyAgain = 0
+      const busy = () => !!document.querySelector('#resexp [aria-busy="true"]')
+      new MutationObserver(() => { if (window.__exact && busy()) window.__busyAgain++; else if (window.__chainEnd && !busy() && document.querySelector('#resexp .resz')) window.__exact = true })
+        .observe(document.body, { subtree: true, childList: true, attributes: true })
+    })
+    page.on('requestfinished', (r) => { const q = new URL(r.url()).searchParams; if (q.get('lane') === main && q.get('ledger') === `c${all.length - 1}`) page.evaluate(() => { window.__chainEnd = true }).catch(() => {}) })
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     await page.waitForSelector('#ctxwin .cblk', { state: 'attached' })
     const mine = () => log.filter((q) => q.get('lane') === main)
     const t0 = Date.now()
-    while (Date.now() - t0 < 15000 && !mine().some((q) => q.has('to'))) await page.waitForTimeout(100)
+    // every older page of the anchor lane, down to its first (one per quiet poll)
+    while (Date.now() - t0 < 30000 && !firstPage) await page.waitForTimeout(100)
+    await page.waitForTimeout(500)
     const seq = mine()
     const tail = seq.findIndex((q) => !q.has('from') && !q.has('to') && !q.has('ledger'))
     const firstTo = seq.findIndex((q) => q.has('to'))
@@ -163,7 +177,10 @@ test('A32: the anchor lane reads its ledger chain to the end before any older pa
     const chain = ledgers.filter(([i]) => i < firstTo)
     assert.deepEqual(chain.map(([, c]) => c), all.slice(1).map((_, i) => `c${i + 1}`), 'each ledger read names the previous answer\'s ledger_next, to the end')
     assert.ok(chain.every(([i]) => i > tail), 'after the tail read')
-    assert.equal(new Set(ledgers.map(([, c]) => c)).size, ledgers.length, 'no cursor read twice')
+    assert.ok(firstPage && seq.filter((q) => q.has('to')).length >= 2, `the anchor lane's older pages were read to its first (${seq.filter((q) => q.has('to')).length})`)
+    assert.equal(new Set(ledgers.map(([, c]) => c)).size, ledgers.length, `no cursor read twice: ${ledgers.map(([, c]) => c)}`)
+    assert.equal(await page.evaluate(() => window.__exact === true), true, 'the explorer\'s counts became exact')
+    assert.equal(await page.evaluate(() => window.__busyAgain), 0, 'no count went back to the busy box')
     assert.ok(most <= 1, `${most} lane reads were in flight at once`)
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
