@@ -7,7 +7,7 @@
 import { esc, kf, usd } from '../core/fmt.mjs'
 import { attrSel } from '../core/dom.mjs'
 import { when } from './analysis.mjs'
-import { xOf, inWindow, nearestByX, nearestByTs, turnsReviewed } from './lanes.mjs'
+import { xOf, windowCalls, nearestByX, nearestByTs, turnsReviewed } from './lanes.mjs'
 import { usageOf, priceMatch, costOf } from '../core/metrics.mjs'
 import { laneKind, laneWord, SUBAGENT_ROW, BG_ROW, TC_ROW, laneTimes, callsWord, TC_SAMPLED_TIP, TC_NO_SIZE, FLAGGED_WORD, REVIEW_TIP, ONLY_MAIN } from '../labels/replay.mjs'
 import { L } from '../core/labels.mjs'
@@ -24,7 +24,7 @@ const flaggedOf = (s, lane, c) => { const h = s.desk && s.desk.held.get(lane.id)
 // ticks outside the brush window are culled, not piled at the edges; data-i stays the index inside the lane.
 // A failed call draws ×; a monitor verdict flagged true carries the mark.
 export function renderTicks(lane, s) {
-  const win = lane.calls.map((c, i) => ({ c, i })).filter((o) => inWindow(s.anchorTs, s.view, o.c.ts))
+  const win = windowCalls(lane, s.anchorTs, s.view)
   const x = (c) => (xOf(s.anchorTs, s.view, c.ts) * 100).toFixed(2)
   const w = laneWord(lane.kind)
   const tip = (c, i) => `${w} · call ${i + 1} · ${when(c.ts)} · ${failOf(c) ? 'call failed' : kf(c.ctx) + ' tok'}`
@@ -46,7 +46,7 @@ export function renderTicks(lane, s) {
 // each one clickable, opening that call in the drawer
 function collapsedMarks(lanes, s) {
   const x = (c) => (xOf(s.anchorTs, s.view, c.ts) * 100).toFixed(2)
-  return lanes.flatMap((l) => l.calls.map((c, i) => ({ c, i, l })).filter((o) => inWindow(s.anchorTs, s.view, o.c.ts) && (failOf(o.c) || flaggedOf(s, o.l, o.c))))
+  return lanes.flatMap((l) => windowCalls(l, s.anchorTs, s.view).filter((o) => failOf(o.c) || flaggedOf(s, l, o.c)).map((o) => ({ ...o, l })))
     .map(({ c, i, l }) => {
       const head = `${laneWord(l.kind)} · call ${i + 1} · ${when(c.ts)}`
       return failOf(c)

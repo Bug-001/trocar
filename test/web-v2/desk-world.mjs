@@ -1,6 +1,6 @@
 // test/web-v2/desk-world.mjs — a generated session world and a reference server over it (RFC 3.5 §会话读), exports only.
 //
-// world(seed): 2-5 lanes (main + sub-agents), calls written in arrival order whose ts sometimes sorts before rows already
+// world(seed[, {calls, cut, page, files}]): 2-5 lanes (main + sub-agents), calls written in arrival order whose ts sometimes sorts before rows already
 // written (late rows), relanes and gone rows carried by later members, and per-step bid lists drawn by appends, mid-list
 // inserts, replacements and compactions. Each call draws lane events (user · tool · compaction on a compacted list ·
 // summarize), opened resources and raw `seen` paths (opened ones, their absolute spelling, the same name in another dir).
@@ -45,10 +45,10 @@ function encode(P, C) {
   return ops
 }
 
-export function world(seed, { calls: count, cut: cuts = false } = {}) {
+export function world(seed, { calls: count, cut: cuts = false, page: pageSize, files: fileCount = 5 } = {}) {
   const r = rng(seed), int = (a, b) => a + Math.floor(r() * (b - a + 1))
-  const nLanes = int(2, 5), n = count ?? int(18, 40), page = int(3, 7), room = page + int(0, 3), lroom = int(1, 3)
-  const files = Array.from({ length: 5 }, (_, j) => `src/f${j}.mjs`), pick = (xs) => xs[int(0, xs.length - 1)]
+  const nLanes = int(2, 5), n = count ?? int(18, 40), page = pageSize ?? int(3, 7), room = page + int(0, 3), lroom = pageSize ?? int(1, 3)
+  const files = Array.from({ length: fileCount }, (_, j) => `src/f${j}.mjs`), pick = (xs) => xs[int(0, xs.length - 1)]
   // a seen path: an opened file as written, its absolute spelling, the same name in another dir, or a name never opened
   const spell = (p) => pick([p, `/w/proj/${p}`, p.replace('src/', 'lib/'), `docs/n${int(0, 3)}.md`])
   const unknown = seed % 3 === 0 ? { records: 1, reason: 'No registered dissector reads this record as a call.', endpoints: ['/v1/x'] } : null

@@ -5,8 +5,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createDesk, applySession, applyLane, laneAsk, listOf, stepOf, readTouched, laneEvents, askOrdinal, applyLedger, ledgerAsk, ledgerDone,
-  readLedger, seenFiles } from '../../src/web/v2/replay/model.mjs'
+  readLedger, seenFiles, mergeTouch } from '../../src/web/v2/replay/model.mjs'
 import { world, readLane, deskFrom } from './desk-world.mjs'
+import { slicesOf } from '../../src/web/v2/replay/replay.mjs'
 
 const fx = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const SEEDS = Array.from({ length: 40 }, (_, i) => i + 1)
@@ -92,6 +93,31 @@ test('A2: full(M0) plus the since deltas equals full(now); an unknown mark (base
     assert.equal(desk.mark, w.full().mark)
   }
   assert.ok(crossed > 0 && after > 0, `a cut moved (${crossed}) and deltas went on under it (${after})`)
+})
+
+// 2.3 §读与画: a big answer (a full one, or a delta while a session is read for the first time) is applied in slices that yield between
+// them; applied in order they leave the desk, and the held lanes' touched steps, as the answer applied whole does
+test('A2 slices: an answer applied in slices equals it applied whole — rows, step order, lanes, events, touched held lanes', async () => {
+  let sliced = 0
+  for (const seed of SEEDS.slice(0, 12)) {
+    const w = world(seed, { calls: 700 }), m = w.marks
+    const whole = createDesk(), parts = createDesk()
+    for (const d of [whole, parts]) {
+      for (const s of d === whole ? [w.full(m[120])] : slicesOf(w.full(m[120]), false)) applySession(d, s)
+      for (const key of d.lanes.keys()) await readLane(w.get(m[120]), 'S', d, { lane: key })
+    }
+    assert.deepEqual(VIEW(parts), VIEW(whole), `seed ${seed}: full`)
+    for (let i = 120 + 150 + seed * 7; i < m.length; i += 150 + seed * 7) {
+      const a = w.since(whole.mark, m[i]), sl = slicesOf(a, false), touched = new Map()
+      sliced += sl.length > 1
+      const want = applySession(whole, a).touched
+      for (const s of sl) for (const [k, v] of applySession(parts, s).touched) mergeTouch(touched, k, v)
+      assert.deepEqual(VIEW(parts), VIEW(whole), `seed ${seed} at ${m[i]}`)
+      assert.deepEqual(touched, want, `seed ${seed} at ${m[i]}: touched`)
+      assert.equal(parts.mark, whole.mark)
+    }
+  }
+  assert.ok(sliced > 0, 'some deltas were sliced')
 })
 
 // Hold every lane through the deltas, re-reading each touched lane by the ask rule; returns the first mismatch or null.

@@ -167,6 +167,8 @@ export function installUi(doc = typeof document === 'undefined' ? null : documen
     if (!layer) return
     if (open && open.btn === btn && !pinned) { if (hover !== open.hover) open.hover = hover; return }
     close(false)
+    // a layer whose body is worked out only when shown fills it on this event, before it is placed
+    if (typeof CustomEvent === 'function') btn.dispatchEvent(new CustomEvent('v2:popopen', { bubbles: true }))
     layer.hidden = false; btn.setAttribute('aria-expanded', 'true')
     place(btn, layer)
     open = { btn, layer, pinned, hover }

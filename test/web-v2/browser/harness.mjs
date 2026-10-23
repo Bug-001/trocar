@@ -70,6 +70,52 @@ export const mark = (page, name) => page.evaluate((n) => { performance.mark(n) }
 /** ms from `startMark` to now, recorded as measure `name`. */
 export const measure = (page, name, startMark) => page.evaluate(([n, s]) => performance.measure(n, s).duration, [name, startMark])
 
+/** ms from the input `act` makes (its first pointerdown / keydown, marked by a listener armed and awaited before it, so the input can
+ *  never outrun it) until `cond` holds and that frame has painted: 'replay' (a session's window drawn), 'step' (the step head no longer
+ *  reads `arg` and the window is drawn), 'sel' (selector `arg` matches). Rejects after 10 s. */
+export async function timed(page, cond, arg, act) {
+  await page.evaluate(() => {
+    performance.clearMarks('in')
+    const arm = () => { performance.mark('in'); removeEventListener('pointerdown', arm, true); removeEventListener('keydown', arm, true) }
+    addEventListener('pointerdown', arm, true); addEventListener('keydown', arm, true)
+  })
+  await act()
+  return page.evaluate(([cond, a]) => new Promise((resolve, reject) => {
+    const q = (s) => document.querySelector(s)
+    const holds = {
+      replay: () => location.hash.startsWith('#/replay/') && !!q('#stepbar .sb-no') && !!q('#ctxwin') && !q('#ctxwin .cwload'),
+      step: () => !!q('#stepbar .sb-no') && q('#stepbar .sb-no').textContent !== a && !q('#ctxwin .cwload'),
+      sel: () => !!q(a),
+    }[cond]
+    const t0 = performance.now()
+    const tick = () => {
+      if (performance.getEntriesByName('in').length && holds()) return setTimeout(() => resolve(performance.measure('m', 'in').duration), 0)
+      if (performance.now() - t0 > 10000) return reject(new Error(`not drawn in 10 s: ${cond} ${a ?? ''} (input seen: ${performance.getEntriesByName('in').length > 0})`))
+      requestAnimationFrame(tick)
+    }
+    tick()
+  }), [cond, arg])
+}
+
+/** The board's `session` and `lane` reads answered from desk-world `w` (desk-world.mjs, 3.5 §会话读's reference server) at the mark
+ *  w.marks[k], k starting at `from` (default the last). `grow` > 0: a session still being read for the first time (3.5 §归约前沿) — each
+ *  `since` read moves k on by `grow` members, and every answer before the last mark carries `pending: {done, total}`.
+ *  → { left() }: the members not reached yet. */
+export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0 } = {}) {
+  const last = w.marks.length - 1
+  let k = Math.min(from, last)
+  const json = (route, doc) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(doc) })
+  const session = (doc) => (k < last ? { ...doc, pending: { done: k + 1, total: last + 1 } } : doc)
+  await page.route('**/api/session?**', (route) => {
+    const q = new URL(route.request().url()).searchParams
+    if (!q.has('since')) return json(route, session(w.full(w.marks[k])))
+    k = Math.min(last, k + grow)
+    json(route, session(w.since(q.get('since'), w.marks[k])))
+  })
+  await page.route('**/api/lane?**', (route) => { const q = new URL(route.request().url()).searchParams; json(route, w.lane(q.get('lane'), { from: q.get('from') ?? undefined, to: q.get('to') ?? undefined, ledger: q.get('ledger') ?? undefined }, w.marks[k])) })
+  return { left: () => last - k }
+}
+
 /** Nearest-rank p50 / p95 of a list of ms. */
 export function stats(samples) {
   const s = [...samples].sort((a, b) => a - b)
