@@ -407,8 +407,9 @@ function callX(rec, { d, format }, { h, req, unparsed }) {
 }
 
 // ── the build driver ────────────────────────────────────────────────────────────────────────────────────────────────────────────
-/** What extraction reads at once, in stored bytes: consecutive members whose `stored_bytes` sum to at most this (at least one), so
- *  the records it holds at a time are a reservation the reading side makes before it reads (src/query/named/session.mjs working()). */
+/** What one append of extraction covers, in stored bytes: consecutive members whose `stored_bytes` sum to at most this (at least
+ *  one). Records are read one at a time, but the rows and definitions extracted from them are held until the append, so this is
+ *  the reservation the reading side makes before it reads (src/query/named/session.mjs working()). */
 export const CHUNK_STORED = 8 * 1048576;
 // and at most this many: a row lists its whole context however few bytes its record stores (a thread's continuation stores its
 // delta), so the rows a chunk holds until it is appended are bounded by count (by bytes alone, 800 rows of a lane that never
@@ -425,7 +426,7 @@ const contexts = new WeakMap(); // store → its extraction context (slices of o
  * each chunk's definitions and rows; `errors`: the answering request's (where a store note goes). A member that fails to extract gets
  * a row { x: { unparsed: reason } } appended as held (a `t` line the next open cuts off), so the next open tries it again (§3.9); so
  * are the rows extracted after it (one that continues it, or is written against it, would otherwise be stored without it), so what
- * a later open reads is the rows of one pass over a prefix. What extraction holds is a chunk of records, the store's indexes and the
+ * a later open reads is the rows of one pass over a prefix. What extraction holds is one record at a time, a chunk's rows until its append, the store's indexes and the
  * context's per-lane / per-link ids: not the rows (4.3 §4). frontier: the largest rid such that every member up to it has a row;
  * done: the members up to it (the cursor the next call goes on from); total: the members. A keyless record gets the session's
  * synthesized key (3.4 合成键), as the query does. The work is by the members from the cursor on, never by the members before it.

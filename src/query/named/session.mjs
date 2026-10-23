@@ -51,7 +51,7 @@ export const SPINE_PER_ROW = 792;
  *  read of a test/query/big-session.mjs live(0.004) session holds more with 1,500 fresh tool definitions a call than with none, per
  *  block more, × 1.25 (2026-10-22). */
 export const SPINE_PER_BLOCK = 280;
-// What extraction's work costs in the heap per stored byte of what it reads at once (CHUNK_STORED, src/view/extract.mjs).
+// What extraction's work costs in the heap per stored byte of what one append covers (CHUNK_STORED, src/view/extract.mjs).
 const WORK_PER_STORED = 4;
 // The cut moves by the rows 1/BOUND_STEPS of the budget holds, so a live session is not reduced from scratch on every new row.
 const BOUND_STEPS = 10;
@@ -63,7 +63,7 @@ const mb = (n) => Math.round((n / 1048576) * 10) / 10;
 const sums = () => ({ n: 0, calls: 0, stored: 0, max: 1 });
 const sum = (a, r) => { a.n++; a.calls += r.is_llm && !r.log_only ? 1 : 0; a.stored += r.stored_bytes || 0; a.max = Math.max(a.max, r.stored_bytes || 0); };
 const workOf = (max) => (CHUNK_STORED + 2 ** Math.ceil(Math.log2(max))) * WORK_PER_STORED + STRETCH_HEAP;
-/** What reducing `rows` costs besides its rows' spine, reserved before anything is read: a chunk being extracted and the largest
+/** What reducing `rows` costs besides its rows' spine, reserved before anything is read: a chunk being extracted (held until its append) and the largest
  *  row, rounded up to a power of two so a new largest row does not move the cut, and the read's shared caches (STRETCH_HEAP). */
 export function working(rows) {
   const a = sums();

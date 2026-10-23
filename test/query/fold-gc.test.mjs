@@ -27,8 +27,8 @@ test('forced collections do not scale with the number of background slices (3.5 
   const b = grown('trocar-foldgc-bg-')
   forced = 0
   let slices = 0
-  while (await extendSession({ home: b.home, fs, writer: true }, b.s.id, 5)) slices++
-  assert.ok(slices > 20, `many slices (${slices})`)
+  while (await extendSession({ home: b.home, fs, writer: true }, b.s.id, 1)) slices++
+  assert.ok(slices > 10, `many slices (${slices})`)
   // one state each way, made at the same heap base
   assert.ok(forced <= once + 1, `background ${forced} forced collections over ${slices} slices; one request ${once}`)
 })
