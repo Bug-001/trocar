@@ -255,6 +255,11 @@ function mountDesk(el, ctx) {
   }
   // the playhead's panels, at most once per animation frame: a call inside a frame that already drew waits for the next one
   let inFrame = false, queued = false, busyTimer = null
+  // the outline, the explorer and the raw panel follow the window in a task of their own (2.3 归约前沿: no task over 50 ms): a step of a
+  // long session is the window's thousands of nodes plus the ledger's lists, and one task drew both. Several paints before it runs
+  // draw these once, for the playhead then.
+  let sideDue = false
+  const drawSides = () => { if (sideDue) return; sideDue = true; yieldNow().then(() => { sideDue = false; if (!s.dead && s.anchor) { s.renderNav(); s.renderRaw() } }) }
   function drawPlayhead() {
     if (inFrame) { if (!queued) { queued = true; frame(() => { queued = false; if (!s.dead) paintPlayhead() }) } return }
     inFrame = true; frame(() => { inFrame = false })
@@ -273,7 +278,7 @@ function mountDesk(el, ctx) {
     s.renderStep() // 'Step N / M' moves with every new call
     if (sig !== s.lastPhSig) {
       // drawn from what is here: the open rows' bodies are read by the step's own reads once the playhead rests (aim)
-      renderContextWindow(E.ctxwin, s, { busy: f === 'busy' }); s.renderNav(); s.renderRaw(); s.lastPhSig = sig
+      renderContextWindow(E.ctxwin, s, { busy: f === 'busy' }); drawSides(); s.lastPhSig = sig
     }
     if (s.follow !== s.headFollow) renderHeader() // the follow chip (a scrub onto or off the live end, a tick selection)
     jumps.settle() // a jump that was waiting for this step's lane lands now that the window shows it

@@ -299,19 +299,22 @@ export async function readLedger(desk, key, read, stale = () => false) {
   return { ok: true }
 }
 
-// the same file under two spellings: equal, or one is a path suffix of the other (absolute vs relative)
-const sameFile = (a, b) => a === b || a.endsWith('/' + b) || b.endsWith('/' + a)
+// the same file under two spellings: equal, or one is a path suffix of the other (absolute vs relative). As sets: x names an opened
+// file p when x is p or one of p's '/'-suffixes (`tails`), or p is one of x's. Two set lookups per spelling instead of a scan of every
+// opened file per seen path (a long lane's thousands of seen paths × hundreds of opened files was 15-23 ms of every repaint).
+const tails = (p) => { const out = [p]; for (let i = p.indexOf('/'); i >= 0; i = p.indexOf('/', i + 1)) out.push(p.slice(i + 1)); return out }
 
 /**
- * 2.4's 「只见到名字」 (2.4:148): the held lane's `seen` minus every path naming a file the lane opened (sameFile), in the
+ * 2.4's 「只见到名字」 (2.4:148): the held lane's `seen` minus every path naming a file the lane opened (same file, above), in the
  * step order of `firstRid`, then `count` descending (E6). Uncapped (SEEN_CAP is the renderer's). null when not held.
  */
 export function seenFiles(desk, key) {
   const h = desk.held.get(key)
   if (!h) return null
   const opened = [...h.resources.values()].filter((r) => r.kind === 'file').map((r) => String(r.label))
+  const openedTails = new Set(opened.flatMap(tails)), openedSet = new Set(opened)
   const ts = (rid) => desk.rows.get(rid)?.ts ?? h.steps.get(rid)?.ts ?? ''
-  return [...h.seen.values()].filter((x) => !opened.some((p) => sameFile(p, x.path)))
+  return [...h.seen.values()].filter((x) => !openedTails.has(x.path) && !tails(x.path).some((t) => openedSet.has(t)))
     .sort((x, y) => compareStep(ts(x.firstRid), x.firstRid, ts(y.firstRid), y.firstRid) || y.count - x.count)
 }
 
