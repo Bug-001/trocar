@@ -20,6 +20,7 @@ import { heapFlags } from '../../src/query/warm.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession, live } from './big-session.mjs'
 import { grower, readerFlags } from './past-room.mjs'
+import { apply, canon, byStep } from '../helpers/session-apply.mjs'
 
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
 const QUERY = new URL('../../src/query/named/index.mjs', import.meta.url).href
@@ -149,6 +150,55 @@ test('a session past the heap bound that keeps growing keeps its cut between ste
     assert.ok(shown.every((x) => x > 0), `cut every time: ${shown}`)
     const moves = shown.slice(1).filter((x, i) => x !== shown[i] + 1).length
     assert.ok(moves <= 1, `the cut moved ${moves} times in 20 one-call growths: ${shown}`)
+  } finally { reader.stdin.end(); reader.kill(); s.stop(); fs.rmSync(path.dirname(home), { recursive: true, force: true }) }
+})
+
+// The same session followed with `--since` (3.5 §会话读: a mark names its cut; a --since M under another cut answers the full
+// document): the reader asks the whole document and `--since` the previous answer's mark after each chunk of calls, and one lane
+// (its answer carries the session's mark), until the cut moves. Under one cut the mark is `<rid>@<the cut's first rid>` (the first
+// record once the pages are walked back) and the delta applied to the previous document is now's; across a moved cut the answer is
+// full (`base: null`), whatever the cut moved to.
+const FOLLOW = `
+const { runQuery } = await import(${JSON.stringify(QUERY)})
+const [home, id] = process.argv.slice(1)
+const q = async (name, p) => { let d; do d = await runQuery(name, { id, ...p }, { home, writer: true }); while (d.pending); return d }
+for await (const line of (await import('node:readline')).createInterface({ input: process.stdin })) {
+  const { since } = JSON.parse(line), now = await q('session', {})
+  let first = now
+  while (first.more) first = await q('session', { before: first.calls[0].rid })
+  const lane = await q('lane', { lane: now.lanes[now.lanes.length - 1].lane })
+  console.log(JSON.stringify({ now, cut: first.records[0].id, lane: lane.mark, d: since == null ? null : await q('session', { since }) }))
+}`
+test('a session past the heap bound followed with --since: a mark names its cut, a delta under it is the document, a moved cut answers in full', { timeout: 120_000 }, async () => {
+  const home = path.join(tmpDir('trocar-spine-'), '.trocar'), CHUNK = 60
+  const s = await grower({ home, heapMb: 128, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12 } })
+  const reader = spawn(process.execPath, [...readerFlags(128), '--input-type=module', '-e', FOLLOW, home, s.id], { stdio: ['pipe', 'pipe', 'inherit'] })
+  const lines = createInterface({ input: reader.stdout, crlfDelay: Infinity })[Symbol.asyncIterator]()
+  const ask = async (since) => { reader.stdin.write(JSON.stringify({ since }) + '\n'); const { value, done } = await lines.next(); assert.ok(!done, 'the reader ended'); return JSON.parse(value) }
+  const byLane = (ls) => JSON.stringify([...ls].sort((a, b) => (a.lane < b.lane ? -1 : 1)))
+  try {
+    let prev = null, steps = 0
+    for (;;) {
+      const { now, cut, lane, d } = await ask(prev && prev.mark)
+      assert.ok(now.truncated, 'the session is cut')
+      assert.equal(now.mark, `${now.calls[now.calls.length - 1].rid}@${cut}`, 'the mark names the cut')
+      assert.equal(lane, now.mark, 'a lane answer carries the session\'s mark')
+      if (prev) {
+        const moved = Math.abs(now.truncated.shown - prev.truncated.shown) > CHUNK
+        if (moved) { assert.equal(d.base, null, `a --since ${prev.mark} across a moved cut (now ${now.mark}) answers in full`); break }
+        assert.equal(d.base, prev.mark, 'under the same cut, --since answers a delta')
+        const a = apply(prev, d), first = now.calls[0]
+        assert.equal(JSON.stringify(a.calls.filter((r) => byStep(r, first) >= 0)), JSON.stringify(now.calls), 'the applied rows are now\'s')
+        assert.equal(byLane(a.lanes), byLane(now.lanes), 'the applied lanes are now\'s')
+        assert.equal(JSON.stringify([a.mark, a.truncated, a.meta, a.stats]), JSON.stringify([now.mark, now.truncated, now.meta, now.stats]))
+        if (!now.more) assert.equal(canon({ ...a, more: false, lanes: [] }), canon({ ...now, lanes: [] }), 'the whole document once it is one page')
+        steps++
+      }
+      assert.ok(steps < 40, `the cut did not move in ${steps} chunks of ${CHUNK} calls`)
+      prev = now
+      for (let i = 0; i < CHUNK; i++) await s.more()
+    }
+    assert.ok(steps > 0, 'a delta under one cut was checked before the cut moved')
   } finally { reader.stdin.end(); reader.kill(); s.stop(); fs.rmSync(path.dirname(home), { recursive: true, force: true }) }
 })
 
