@@ -16,7 +16,7 @@ import { compareStep } from '../../src/view/step-order.mjs'
 import { run as runQueryCli } from '../../src/cli/query.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
-import { extendSession, markOn, sinceAt } from '../../src/query/named/session.mjs'
+import { extendSession, markOn, sinceAt, version } from '../../src/query/named/session.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
 import { apply, canon, byStep } from '../helpers/session-apply.mjs'
 import { BLOCK_PROBLEMS, SESSION_PROBLEMS } from '../../src/health/codes.mjs'
@@ -281,6 +281,21 @@ test('3.5 #4: a block the reduction cannot read back fails its member with a clo
     assert.ok(later.errors.some((e) => e.where === rid), `${rid} is still in errors`)
     assert.ok(!later.calls.some((r) => r.rid === rid), `${rid} is still no row`)
   }
+})
+
+test('3.5:42 background: extraction and the fold each get half of a slice, so the frontier moves on every slice from the first', async () => {
+  const home = homeOf('trocar-sread-half-')
+  const s = bigSession({ home, growth: 2_000, subEvery: 3, compactAt: 20_000, subLanes: 2, late: 2 })
+  s.append(120)
+  const ctx = { home, fs, writer: true }
+  const frontier = async () => JSON.parse((await version({ ...ctx, params: { id: s.id } })).key)[1]
+  let before = await frontier(), slices = 0
+  while (await extendSession({ ...ctx }, s.id, 10)) {
+    const now = await frontier()
+    assert.ok(now != null && now !== before, `slice ${slices}: the frontier moved (${before} → ${now})`)
+    before = now; slices++
+  }
+  assert.ok(slices > 2, `more than one slice (${slices})`)
 })
 
 test('3.5:42 local: over a fold log the worker finished, the local path answers the worker\'s bytes and leaves the log\'s bytes as they were', async () => {

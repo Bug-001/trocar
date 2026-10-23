@@ -445,12 +445,13 @@ export function extractMembers({ store, members, recordsAt, sessionId = null, bu
     }
     if (!part.length) break;
     if (!contexts.has(store)) contexts.set(store, createExtractContext(store));
-    const ctx = contexts.get(store), got = new Map();
-    for (const r of recordsAt(part.map((k) => members[k])) || []) if (r) got.set(String(r.id), r);
+    // each member's record is read just before it is extracted, so a slice that runs out leaves no read record behind (the next
+    // slice would read it again); within one slice the reads share one stretch's caches
+    const ctx = contexts.get(store);
     const defs = [], rows = [], held = [];
     for (const k of part) {
       if (spent() && (rows.length || held.length)) { i = k; break; }
-      const rid = idOf(k), rec = got.get(rid);
+      const rid = idOf(k), rec = (recordsAt([members[k]]) || []).find((r) => r && String(r.id) === rid);
       if (rec && sessionId != null && sessionKeyOf(rec).key == null) Object.defineProperty(rec, '_synthKey', { value: sessionId, enumerable: false, configurable: true, writable: true });
       let out = null, why = rec ? null : 'the record did not read back';
       if (rec) try { out = extract(rec, ctx); } catch (e) { why = `extraction failed: ${e && e.message ? e.message : e}`; }
