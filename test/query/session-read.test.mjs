@@ -155,8 +155,6 @@ test('C1: records no dissector reads as a call are counted with their endpoints 
   }
 })
 
-// A delta carries the records of its `calls` only (3.5 §会话读 增量), so a mixed session is compared on its call rows' records.
-const callRecords = (doc) => { const rows = new Set(doc.calls.map((r) => r.rid)); return { ...doc, records: doc.records.filter((r) => rows.has(r.id)) } }
 test('3.5 #19 unknown: over sessions whose `unknown` records come before, among and after the first rows, apply(full(M), since(M)) is full(now) with `unknown`, on the local path and the worker\'s shared log', async () => {
   for (const writer of [false, true]) for (const seed of [1, 5]) for (const by of [1, 4]) for (const lead of [0, 3]) for (const unknown of [0, 4]) {
     const home = homeOf('trocar-sread-unkd-'), m = mixed(home, { calls: 12, unknown, lead, seed }), ctx = { fs: { ...fs }, writer }
@@ -169,7 +167,7 @@ test('3.5 #19 unknown: over sessions whose `unknown` records come before, among 
       fs.appendFileSync(m.file, m.lines.slice(upTo, upTo + more).join('\n') + '\n')
       upTo += more
       const d = await q({ since: full.mark }), now = await q({})
-      assert.equal(canon(callRecords(apply(full, d))), canon(callRecords(now)), `writer ${writer} seed ${seed} by ${by} lead ${lead} unknown ${unknown}: ${upTo} lines`)
+      assert.equal(canon(apply(full, d)), canon(now), `writer ${writer} seed ${seed} by ${by} lead ${lead} unknown ${unknown}: ${upTo} lines`)
       full = now
     }
     if (lead + unknown) assert.ok(full.unknown, 'the session ends with `unknown`')

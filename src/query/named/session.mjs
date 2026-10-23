@@ -403,16 +403,18 @@ export async function version(ctx) {
 
 const one = (v) => (v == null || v === '' ? null : String(v));
 // The candidates and the log `--since M` is taken against: this log at M's frontier line (only what changed past it), else the
-// members of the cut up to M folded into a throwaway log (every rid and lane of either log).
+// members of the cut up to M folded into a throwaway log (every rid and lane of either log); `added`: the cut's members past M up to
+// the mark, whose records the delta carries.
 function thenOf(s, M) {
-  const { st, plan } = s, off = st.log.frontierAt(M);
-  if (off != null) return { then: { log: st.log, off, mark: M }, cands: st.log.changedSince(off), close: () => {} };
+  const { st, plan } = s, off = st.log.frontierAt(M), added = [];
+  for (let i = posOf(plan, M) + 1, to = posOf(plan, s.mark); i <= to; i++) if (inCut(plan, plan.members[i])) added.push(plan.members[i]);
+  if (off != null) return { then: { log: st.log, off, mark: M, added }, cands: st.log.changedSince(off), close: () => {} };
   const T = memoryLog(st.store), R = reduction(st.store, { log: T, resolve: st.resolve, errors: [] });
   const upTo = [];
   for (let i = 0, to = posOf(plan, M); i <= to; i++) { const r = plan.members[i], rid = String(r.id); if (inCut(plan, r) && st.store.rows.has(rid)) upTo.push(rid); }
   R.add(upTo);
   const a = T.changedSince(-1), b = st.log.changedSince(-1);
-  return { then: { log: T, off: T.frontier ?? -1, mark: M }, cands: { rids: new Set([...a.rids, ...b.rids]), lanes: new Set([...a.lanes, ...b.lanes]) }, close: () => T.close() };
+  return { then: { log: T, off: T.frontier ?? -1, mark: M, added }, cands: { rids: new Set([...a.rids, ...b.rids]), lanes: new Set([...a.lanes, ...b.lanes]) }, close: () => T.close() };
 }
 
 export async function run(ctx) {

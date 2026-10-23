@@ -244,10 +244,18 @@ export function pageOf(V, before, limit) {
   return { more: start > 0, lanes: V.lanes, calls: lines.map((o) => o.r), events: eventsOf(lines), records };
 }
 
+// the records of the members `added` and of the rows `calls`, each once, in step order
+function recordsOf(V, added, calls) {
+  const rows = new Map(added.map((r) => [String(r.id), r]));
+  for (const o of calls) rows.set(o.c, V.plan.byId.get(o.c));
+  return [...rows.values()].sort((a, b) => compareStep(a.ts ?? null, String(a.id), b.ts ?? null, String(b.id))).map(recOf);
+}
+
 /** deltaOf(V, then, cands) → the rows and lane headers at V's frontier that are new or whose bytes differ from those of the log
  *  `then.log` at byte `then.off`, and what that had that V has not, among the candidates `cands: {rids, lanes}` (the shared log's
- *  changedSince, else every rid and lane of either log); their events and records (their index rows); `unknown` when it differs
- *  from the one at `then.mark` (null when it is gone). */
+ *  changedSince, else every rid and lane of either log); their events; the records (index rows) of those rows and of the members
+ *  `then.added` (the cut's members past `then.mark` up to V's mark, calls or not: what a full page holds of them), in step order;
+ *  `unknown` when it differs from the one at `then.mark` (null when it is gone). */
 export function deltaOf(V, then, cands) {
   const calls = [], gone = [], lanes = new Set(), lanesGone = [];
   for (const rid of cands.rids) {
@@ -270,6 +278,6 @@ export function deltaOf(V, then, cands) {
   return {
     ...(JSON.stringify(was) !== JSON.stringify(V.unknown) ? { unknown: V.unknown ?? null } : null),
     calls: calls.map((o) => o.r), gone: gone.sort(posCmp), lanes: V.lanes.filter((h) => lanes.has(h.lane)), lanes_gone: lanesGone.sort(posCmp),
-    events: eventsOf(calls), records: calls.map((o) => recOf(V.plan.byId.get(o.c))),
+    events: eventsOf(calls), records: recordsOf(V, then.added, calls),
   };
 }
