@@ -18,6 +18,7 @@ import { blockSpans } from '../adapters/cc.mjs';
 import { resourceRef as ccResourceRef } from '../dissect/cc.mjs';
 import { resourceRef as oaResourceRef, faithfulness as oaFaithfulness } from '../dissect/openai.mjs';
 import { scanJson, spanAt } from '../dissect/json-scan.mjs';
+import { scannedRequestBody, sharesBody } from '../dissect/request-body.mjs';
 import { fieldTextOf } from '../dissect/record-fields.mjs';
 import { composeTextRef } from '../raw/refs.mjs';
 import { boardDissectorFor, wireFormatOf, flatLaneOf } from '../dissect/registry.mjs';
@@ -115,7 +116,7 @@ const NO_STREAM = 'the record carries no id or stream to address';
 // The call read once: the Anthropic wire's hydrated record (`h`), or a flat-lane wire's parsed request (`req`, `unparsed`).
 function readCall(rec, { d, format }) {
   if (format === 'anthropic') return { h: admitted(hydrateForBoard(rec, null)) };
-  const copy = { ...rec }; // flatRequest sets `request` on the record it is given: the caller's record stays as it was
+  const copy = sharesBody({ ...rec }, rec); // flatRequest sets `request` on the record it is given: the caller's record stays as it was
   return { h: copy, ...flatRequest(d, copy, null) };
 }
 /** requestBlocks(rec, wire, read?) → { flat, at: [{ref, exact, why}] } — the request's blocks, each with the exact text its ref names. */
@@ -128,8 +129,7 @@ export function requestBlocks(rec, wire, read = readCall(rec, wire)) {
     return { flat, at: flat.map((_, i) => locate(base, body, spans && spans[i])) };
   }
   const flat = wire.d.boardFlat(read.req, read.h);
-  let root = null;
-  if (body != null) try { root = scanJson(body); } catch { root = null; }
+  const root = body != null ? scannedRequestBody(rec) : null;
   return { flat, at: flat.map((b) => locate(base, body, root && Array.isArray(b.path) ? spanAt(root, b.path) : null)) };
 }
 const locate = (base, text, span, field = null) => {
@@ -165,14 +165,26 @@ export function replyBlocks(rec, { d, format }) {
  *  Within its record a block is named by its field and byte range (4.2 text_ref = record id + range): the stream half of the ref
  *  says which file the record was read from, which a seal renames. */
 const spanOf = (ref) => { const i = ref.indexOf('::'); return i < 0 ? ref : ref.slice(i); };
+// A record's block tables, built once per record object (a cache-break detail reads two blocks of one record, the next break of the
+// lane one more): the request's span → flat entry, the reply's built when a ref is not the request's.
+const tables = new WeakMap();
 export function blockAt(rec, ref) {
-  const wire = callWireOf(rec);
-  if (!wire || ref == null) return null;
-  const { flat, at } = requestBlocks(rec, wire), want = spanOf(ref), same = (r) => r != null && spanOf(r) === want;
-  const i = at.findIndex((a) => same(a.ref));
-  if (i >= 0) return flat[i];
-  const p = replyBlocks(rec, wire).find((x) => same(x.ref));
-  return p ? p.b : null;
+  if (ref == null) return null;
+  let t = tables.get(rec);
+  if (!t) {
+    const wire = callWireOf(rec);
+    if (!wire) return null;
+    const { flat, at } = requestBlocks(rec, wire), req = new Map();
+    at.forEach((a, i) => { if (a.ref != null && !req.has(spanOf(a.ref))) req.set(spanOf(a.ref), flat[i]); });
+    tables.set(rec, (t = { wire, req, reply: null }));
+  }
+  const want = spanOf(ref);
+  if (t.req.has(want)) return t.req.get(want);
+  if (!t.reply) {
+    t.reply = new Map();
+    for (const x of replyBlocks(rec, t.wire)) if (x.ref != null && !t.reply.has(spanOf(x.ref))) t.reply.set(spanOf(x.ref), x.b);
+  }
+  return t.reply.get(want) ?? null;
 }
 
 // ── the call row ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
