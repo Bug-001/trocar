@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { QUERIES, QueryArgError, runQuery } from '../../src/query/named/index.mjs';
 import { rawHome, writeSegment, requiredFor } from '../query/raw-home.mjs';
 import { serveFace, request, withToken } from './face.mjs';
+import { bigSession } from '../query/big-session.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SEGMENT = '20261018T100000Z';
@@ -59,6 +60,57 @@ test('V80: every named query answers the same document through HTTP as through r
   } finally { f.close(); }
   // `status` reads the process list; both sides were refused it on purpose (above), so the ledger is cleared here.
   takeRefusals();
+});
+
+test('a parameter given more than once is a list, and a parameter that takes one value refuses it: 400 (1.6 §4.1 参数)', async () => {
+  const f = await serveFace({ home: home() });
+  try {
+    for (const [name, q] of Object.entries(QUERIES)) {
+      for (const p of q.params.filter((k) => !(q.lists || []).includes(k))) {
+        const r = await get(f.port, `/api/${name}?${p}=1&${p}=2`);
+        assert.equal(r.status, 400, `${name} ?${p}=1&${p}=2 → ${r.status}`);
+      }
+    }
+  } finally { f.close(); }
+});
+
+// 4.4 #1: a repeated `ref` reaches the query as the list it is, in order — /api/block?ref=a&ref=b answers runQuery('block', {ref: [a, b]}).
+test('4.4 #1: /api/block with ref repeated is runQuery block over the refs as a list, in order', async () => {
+  const h = home();
+  const f = await serveFace({ home: h });
+  try {
+    const refs = [`${SEGMENT}:2`, `${SEGMENT}:99`, `${SEGMENT}:1`];
+    const r = await get(f.port, `/api/block?${refs.map((x) => 'ref=' + encodeURIComponent(x)).join('&')}`);
+    assert.equal(r.status, 200, r.body.slice(0, 200));
+    assert.deepEqual(JSON.parse(r.body), JSON.parse(JSON.stringify(await runQuery('block', { ref: refs }, { home: h }))));
+    assert.deepEqual(JSON.parse(r.body).blocks.map((b) => b.ref), refs);
+  } finally { f.close(); }
+});
+
+// 3.5 lane `--ledger`: /api/lane over a ledger cursor answers what runQuery does; with --from or --to, or a cursor no answer gave,
+// the same 400 runQuery's QueryArgError is.
+test('3.5 lane: /api/lane with ledger is runQuery lane --ledger; ledger with from / to or a malformed cursor is the same 400', async () => {
+  const h = rawHome('trocar-parity-ledger-');
+  const s = bigSession({ home: h, growth: 300, subEvery: 0, reads: 300 });
+  s.append(24);
+  const f = await serveFace({ home: h });
+  const api = async (params) => get(f.port, `/api/lane?${new URLSearchParams(params)}`);
+  try {
+    for (let i = 0; i < 200 && JSON.parse((await get(f.port, `/api/session?id=${s.id}`)).body).pending; i++);
+    const doc = JSON.parse((await get(f.port, `/api/session?id=${s.id}`)).body), lane = doc.lanes.find((l) => l.kind === 'main').lane;
+    const tail = JSON.parse((await api({ id: s.id, lane })).body);
+    assert.ok(tail.ledger_next, 'the lane\'s ledger goes past its tail page');
+    const params = { id: s.id, lane, ledger: tail.ledger_next }, r = await api(params);
+    assert.equal(r.status, 200, r.body.slice(0, 200));
+    assert.deepEqual(JSON.parse(r.body), JSON.parse(JSON.stringify(await runQuery('lane', params, { home: h }))));
+    for (const bad of [{ ...params, from: tail.steps[0].rid }, { ...params, to: tail.steps[0].rid }, { ...params, ledger: 'not-a-cursor' }]) {
+      const e = await runQuery('lane', bad, { home: h }).then(() => null, (x) => x);
+      assert.ok(e instanceof QueryArgError, JSON.stringify(bad));
+      const b = await api(bad);
+      assert.equal(b.status, 400, JSON.stringify(bad));
+      assert.deepEqual(JSON.parse(b.body), { error: e.message });
+    }
+  } finally { f.close(); }
 });
 
 test('V80: no second read path is left in the shell or the page', () => {

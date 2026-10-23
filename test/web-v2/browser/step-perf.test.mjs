@@ -1,6 +1,5 @@
-// test/web-v2/browser/step-perf.test.mjs — a step change on the replay desk (D64② · 1.2 §键盘 · 1.5 K-18), on the real face in
-// the real Chrome: a step change sends no request, the step bar and the brush show a focus ring, a step outside the loaded page
-// paints its head at once and the honest "not on this page" state, and the ms are printed against BOARD_LINES (never asserted,
+// test/web-v2/browser/step-perf.test.mjs — a step change on the replay desk (D64② · 1.2 §键盘), on the real face in the real
+// Chrome: a step change sends no request, the step bar and the brush show a focus ring, and the ms are printed against BOARD_LINES (never asserted,
 // D64⑥: acceptance numbers come from the test machines, not this one). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -10,10 +9,7 @@ import { BOARD_LINES } from '../perf-lines.mjs'
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
 const BYTES = 5e6
-// gen-dataset sizes its long sessions from the budget (about √(bytes · 0.08 / 3500) turns): 5 MB gives 11 calls, all on one page;
-// 200 MB gives sessions past the desk's 60-call page, so the first step of one is paged out
-const PAGED_BYTES = 2e8
-const samples = { stepClick: [], stepKey: [], largeStep: [] }
+const samples = { stepClick: [], stepKey: [] }
 
 // the timed() pattern of screens.test.mjs: armed before the input, marks the first pointerdown / keydown, polls frames until the
 // step head no longer reads `prev` and the window is drawn, lets that frame paint, then measures input → painted
@@ -98,46 +94,6 @@ test('1.2 §键盘: Tab reaches the step bar and the brush, and each shows an ou
       if (hit && !seen.has(hit.where)) { assert.notEqual(hit.outline, 'none', `${hit.where} has a focus ring`); seen.add(hit.where) }
     }
     assert.deepEqual([...seen].sort(), ['brush', 'stepbar'])
-  } finally { await b.stop() }
-})
-
-test('K-18: Home onto a step outside the loaded page paints step 1 in one frame and "load this step", and fetches only when asked', { skip }, async () => {
-  const b = await withBoard({ bytes: PAGED_BYTES, chromium: gate.chromium })
-  try {
-    const list = (await b.get('sessions')).doc.sessions
-    const longest = [...list].sort((x, y) => y.calls - x.calls)[0]
-    // the face's own session document says its first step is outside the tail page the desk opens on
-    const tail = (await b.get('session', { id: longest.session_id, after: Math.max(0, longest.calls - 60), limit: 60 })).doc
-    const main = (tail.analyzed.lanes || []).find((l) => l.kind === 'main')
-    assert.ok(main && main.calls.length > 1 && main.calls[0].paged_out, `${longest.session_id}: its first step is paged out on the tail page`)
-    await openSession(b.page, longest.session_id)
-
-    // largest step: the tail step carries the whole grown context; bounce onto it 20 times from its neighbour
-    for (let i = 0; i < 20; i++) {
-      const last = await b.page.textContent('#stepbar .sb-no')
-      await b.page.keyboard.press('ArrowLeft')
-      await b.page.waitForFunction((t) => document.querySelector('#stepbar .sb-no').textContent !== t && !document.querySelector('#ctxwin .cwload'), last)
-      const prev = await b.page.textContent('#stepbar .sb-no')
-      samples.largeStep.push(await timed(b.page, prev, () => b.page.keyboard.press('End')))
-    }
-    await b.page.waitForTimeout(300)
-
-    const t0 = Date.now()
-    const inOneFrame = await b.page.evaluate(() => new Promise((resolve) => {
-      // our rAF is queued before the desk's (capture phase); the frame after both is the first one painted after the key
-      addEventListener('keydown', () => requestAnimationFrame(() => setTimeout(() => resolve(document.querySelector('#stepbar .sb-no').textContent), 0)), { capture: true, once: true })
-      dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
-    }))
-    assert.match(inOneFrame, /^\D*1\s*\//, 'the step head reads step 1 in the first painted frame')
-    assert.ok(await b.page.locator('#ctxwin #loadpage').count(), 'the window shows its load-this-step control')
-    assert.ok((await b.page.textContent('#ctxwin')).trim().length > 0, 'never an empty window')
-    await b.page.waitForTimeout(2000) // past the desk's 1.5 s timer: a fetch the step change caused would have answered
-    assert.deepEqual(since(b, t0).filter((u) => /^\/api\/session\?/.test(u)), [], 'no body fetched before the control is used')
-    const t1 = Date.now()
-    await b.page.click('#ctxwin #loadpage')
-    await b.page.waitForFunction(() => !document.querySelector('#ctxwin #loadpage'), null, { timeout: 10000 })
-    assert.ok(since(b, t1).some((u) => /^\/api\/session\?/.test(u)), 'the control fetches the page that holds the step')
-    assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
 

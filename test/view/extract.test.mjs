@@ -288,13 +288,13 @@ test('(c) a restart — rows 0..k stored, the store reopened from disk — goes 
   }
 });
 
-test('(d) frontier: the largest rid with every member up to it extracted; done / total count members', () => {
+test('(d) frontier: the largest rid with every member up to it extracted; done: the members up to it, the cursor to go on from', () => {
   const recs = stitchedSessions().threads, members = membersOf(recs), recordsAt = reader(recs);
   const store = opened(tmpDir('trocar-extract-'));
   // some later members first: the frontier stops at the first gap
   extractMembers({ store, members: members.filter((_, i) => i < 3 || (i >= 6 && i < 9)), recordsAt });
   let r = extractMembers({ store, members, recordsAt, budgetMs: 0 });
-  assert.deepEqual(r, { frontier: recs[2].id, done: 6, total: recs.length });
+  assert.deepEqual(r, { frontier: recs[2].id, done: 3, total: recs.length });
   // a budget that runs out midway: what it extracted is the next members in write order, and the frontier says how far
   for (const budget of [3, 6]) {
     let now = 0;
@@ -305,7 +305,8 @@ test('(d) frontier: the largest rid with every member up to it extracted; done /
     const todo = recs.filter((x) => !before.has(x.id)).map((x) => x.id);
     assert.ok(taken.length > 0 && taken.length < todo.length, `budget ${budget} stops midway`);
     assert.deepEqual(taken, todo.slice(0, taken.length), 'in write order');
-    assert.deepEqual(r, { frontier: gap === 0 ? null : recs[(gap < 0 ? recs.length : gap) - 1].id, done: has.filter(Boolean).length, total: recs.length });
+    const done = gap < 0 ? recs.length : gap;
+    assert.deepEqual(r, { frontier: done === 0 ? null : recs[done - 1].id, done, total: recs.length });
   }
 });
 

@@ -20,10 +20,18 @@ export function onForbidden(fn) { onForbid.push(fn) }
 const FORBIDDEN = Object.freeze({ ok: false, status: 403, error: 'HTTP 403' })
 
 const held = new Map() // full URL → {etag, data} from a 200 that carried an ETag
+const tags = new Map() // full URL → etag, for reads with hold:false (the desk's session / lane reads keep their own document)
+function remember(map, url, v) {
+  map.delete(url); map.set(url, v)
+  if (map.size > HELD_MAX) map.delete(map.keys().next().value)
+}
 
+// an array value is one repeated parameter, in order (`ref=a&ref=b`, 3.5 block --ref)
 function qs(params) {
   const sp = new URLSearchParams()
-  for (const [k, v] of Object.entries(params || {})) if (v != null && v !== '') sp.set(k, String(v))
+  for (const [k, v] of Object.entries(params || {})) {
+    for (const x of Array.isArray(v) ? v : [v]) if (x != null && x !== '') sp.append(k, String(x))
+  }
   const s = sp.toString()
   return s ? '?' + s : ''
 }
@@ -50,13 +58,14 @@ function latch(status) {
   for (const fn of onForbid) try { fn() } catch (e) { console.error('onForbidden failed', e) }
 }
 
-export async function get(path, params, { signal } = {}) {
+// `hold:false` keeps only the ETag of the URL, and a 304 answers {ok:true, status:304, data:null}: the caller has the document
+export async function get(path, params, { signal, hold = true } = {}) {
   if (forbidden) return FORBIDDEN
   if (signal && signal.aborted) return { ok: false, status: 0, error: ABORTED }
   const url = path + qs(params)
   const headers = {}
   if (token) headers[CONTROL_TOKEN_HEADER] = token
-  const was = held.get(url)
+  const was = hold ? held.get(url) : tags.has(url) ? { etag: tags.get(url) } : undefined
   if (was) headers['if-none-match'] = was.etag
   const ac = new AbortController()
   let timedOut = false
@@ -67,7 +76,7 @@ export async function get(path, params, { signal } = {}) {
   let r, b
   try {
     try { r = await fetch(url, { cache: 'no-store', headers, signal: ac.signal }) } catch (e) { return ended({ ok: false, status: 0, error: String((e && e.message) || e) }) }
-    if (r.status === 304) return was ? { ok: true, data: was.data } : { ok: false, status: 304, error: 'HTTP 304' }
+    if (r.status === 304) return !was ? { ok: false, status: 304, error: 'HTTP 304' } : hold ? { ok: true, data: was.data } : { ok: true, status: 304, data: null }
     b = await readBody(r) // inside the deadline: a body that stalls is aborted and lands in readBody's catch
   } finally {
     clearTimeout(timer)
@@ -79,11 +88,7 @@ export async function get(path, params, { signal } = {}) {
   if (!r.ok) return { ok: false, status: r.status, error: (body && body.error) || 'HTTP ' + r.status }
   if (b.bad) return { ok: false, status: r.status, error: 'not JSON' }
   const etag = r.headers.get('etag')
-  if (etag) {
-    held.delete(url)
-    held.set(url, { etag, data: body })
-    if (held.size > HELD_MAX) held.delete(held.keys().next().value)
-  }
+  if (etag) { if (hold) remember(held, url, { etag, data: body }); else remember(tags, url, etag) }
   return { ok: true, data: body } // an empty 2xx is a success carrying null
 }
 

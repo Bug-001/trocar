@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assembleSession } from '../../src/view/assemble.mjs';
-import { sessionView, forWire } from '../../src/view/board.mjs';
+import { sessionView } from '../../src/view/board.mjs';
 
 const hermes = (id, sec, endpoint, body) => ({ id, ts_request: `2026-10-06T00:00:0${sec}Z`, is_llm_call: true, endpoint,
   capture: 'transparent', proc: { pid: 1, exe: '/x/hermes', agent: 'hermes' }, req_headers: {},
@@ -20,9 +20,6 @@ test('a session mixing the Chat and Anthropic wires renders both, with one globa
   for (const l of A.lanes) l.calls.forEach((c, i) => assert.equal(l.giLocal.get(c.gi), i));
   assert.equal(A.provider, 'mixed');
   assert.deepEqual([A.stats.calls, A.unknown], [3, undefined]);
-  // what the browser receives: lanes name their calls by gi, and every gi rehydrates to the right call
-  const W = forWire({ analyzed: A }).analyzed;
-  for (const l of W.lanes) for (const gi of l.calls) assert.equal(W.steps[gi].gi, gi);
 });
 
 test('a page of a mixed session ships bodies by the global index', () => {

@@ -15,7 +15,7 @@ const SID = 's-1'
 const BODY = '{"model":"m"}' // what test/query/raw-home.mjs stores as the request body
 // §4.1 的必填参数在 test/query/raw-home.mjs 一处(`session --id` · `block --ref`)
 const required = (name) => requiredFor(name, { segment: SEG, session: SID })
-const NEEDS_PARAM = ['block', 'session']
+const NEEDS_PARAM = ['block', 'session', 'lane']
 const homeWithData = () => {
   const home = rawHome()
   writeSegment(home, SEG, [
@@ -57,19 +57,18 @@ test('sessions / session / block / pricing 的顶层键照 C.5', async () => {
   assert.deepEqual([sessions.sessions[0].session_id, sessions.sessions[0].calls], [SID, 1])
 
   const session = await runQuery('session', { id: SID }, { home })
-  assert.deepEqual(Object.keys(session).sort(), ['analyzed', 'command', 'errors', 'logged', 'meta', 'ok', 'page', 'probes', 'records', 'schema', 'truncated'])
-  assert.deepEqual(Object.keys(session.page).sort(), ['baseline', 'cursor', 'has_more', 'limit', 'next', 'returned', 'total'])
+  assert.deepEqual(Object.keys(session).sort(), ['base', 'calls', 'command', 'errors', 'events', 'lanes', 'logged', 'mark', 'meta', 'more', 'ok', 'probes', 'records', 'schema', 'stats', 'truncated'])
   assert.deepEqual(Object.keys(session.records[0]).sort(), ['id', 'is_llm_call', 'response', 'ts_request'])
   assert.equal(session.records[0].id, `${SEG}:1`)
-  // C.5:`steps` 与 `streams` 在进程内是同一批对象,序列化就是三份拷贝 → 都不上线;
-  // 没有「只记日志」的调用时 `logged` 是 null,不是 []。
-  assert.deepEqual([session.analyzed.steps, session.analyzed.streams, session.logged], [undefined, undefined, null])
-  assert.ok(Array.isArray(session.analyzed.lanes) && session.analyzed.stats)
+  // 没有「只记日志」的调用时 `logged` 是 null,不是 [](C.5)
+  assert.deepEqual([session.base, session.mark, session.logged], [null, session.records[session.records.length - 1].id, null])
+  assert.ok(Array.isArray(session.lanes) && session.stats)
   assert.equal(session.truncated, null)
 
   const block = await runQuery('block', { ref: `${SEG}:1` }, { home })
-  assert.deepEqual(Object.keys(block).sort(), ['bytes', 'command', 'encoding', 'errors', 'fidelity', 'ok', 'ref', 'schema', 'truncated'])
-  assert.deepEqual([block.bytes, block.encoding, block.fidelity, block.truncated], [BODY, 'identity', { verbatim: true }, null])
+  assert.deepEqual(Object.keys(block).sort(), ['blocks', 'command', 'errors', 'ok', 'schema'])
+  assert.deepEqual(block.blocks.map((b) => Object.keys(b).sort()), [['bytes', 'encoding', 'fidelity', 'ref', 'truncated']])
+  assert.deepEqual(block.blocks.map((b) => [b.ref, b.bytes, b.encoding, b.fidelity, b.truncated]), [[`${SEG}:1`, BODY, 'identity', { verbatim: true }, null]])
 
   const pricing = await runQuery('pricing', {}, { home })
   assert.deepEqual(Object.keys(pricing).sort(), ['command', 'errors', 'models', 'ok', 'schema', 'source'])
@@ -91,11 +90,10 @@ test('block 只认 `<段>:<行>` 的记录 id;读不到的记录进 errors,文�
   await assert.rejects(() => runQuery('block', { ref: 'req_00001' }, { home }), QueryArgError, '旧的 ref 形状不认')
   await assert.rejects(() => runQuery('block', { ref: 's/capture.ndjson#req_00001::0-3' }, { home }), QueryArgError)
   const gone = await runQuery('block', { ref: `${SEG}:99` }, { home })
-  assert.deepEqual([gone.ok, gone.bytes, gone.errors.length], [false, null, 1])
-  assert.match(gone.errors[0].reason, new RegExp(`${SEG}:99`))
+  assert.deepEqual([gone.ok, gone.blocks[0].bytes, gone.errors.map((e) => [e.where, e.code])], [false, null, [[`${SEG}:99`, 'record-missing']]])
   // 一段字节 = 整条正文的那一段
   const span = await runQuery('block', { ref: `${SID}/${SEG}.ndjson#${SEG}:1::2-7` }, { home })
-  assert.equal(span.bytes, BODY.slice(2, 7))
+  assert.equal(span.blocks[0].bytes, BODY.slice(2, 7))
 })
 
 test('segments 的顶层键与每段的键照 C.5', async () => {

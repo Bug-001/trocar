@@ -11,6 +11,7 @@ import * as segments from './segments.mjs';
 import * as classes from './classes.mjs';
 import * as sessions from './sessions.mjs';
 import * as session from './session.mjs';
+import * as lane from './lane.mjs';
 import * as calls from './calls.mjs';
 import * as block from './block.mjs';
 import * as pricing from './pricing.mjs';
@@ -22,19 +23,22 @@ import * as src from '../stamp.mjs';
 /** A name or a parameter the table does not have (1.6 §4.1 退出码 2). */
 export class QueryArgError extends Error { constructor(m) { super(m); this.name = 'QueryArgError'; } }
 
+// `times`: the parameters a name reads as times (stampOf's clock tick); `session --since` is a record id, not a time.
+const TIMES = Object.freeze(['since', 'until']);
 export const QUERIES = Object.freeze({
   // `status` and `doctor` are the same documents the two commands print: the query IS that document
   // (src/cli/status.mjs statusDoc / doctor.mjs doctorDoc), so the two can never disagree.
   status: { params: Object.freeze(['harness']), run: (c) => verdict('status', c), stamp: () => null },
   doctor: { params: Object.freeze(['harness']), run: (c) => verdict('doctor', c), stamp: () => null },
-  sessions: { params: sessions.params, run: sessions.run, stamp: src.usage }, // its titles come from the usage sidecars (4.4 §人类标题的来源)
+  sessions: { params: sessions.params, run: sessions.run, stamp: src.usage, times: TIMES }, // its titles come from the usage sidecars (4.4 §人类标题的来源)
   session: { params: session.params, run: session.run, version: session.version, stamp: src.corpus },
-  calls: { params: calls.params, run: calls.run, stamp: src.corpus },
-  traffic: { params: traffic.params, run: traffic.run, stamp: src.corpus },
-  overview: { params: overview.params, run: overview.run, stamp: src.usage },
-  block: { params: block.params, run: block.run, stamp: src.corpus },
+  lane: { params: lane.params, run: lane.run, version: lane.version, stamp: src.corpus },
+  calls: { params: calls.params, run: calls.run, stamp: src.corpus, times: TIMES },
+  traffic: { params: traffic.params, run: traffic.run, stamp: src.corpus, times: TIMES },
+  overview: { params: overview.params, run: overview.run, stamp: src.usage, times: TIMES },
+  block: { params: block.params, lists: block.lists, run: block.run, stamp: src.corpus },
   classes: { params: classes.params, run: classes.run, stamp: src.classes, clock: true },
-  segments: { params: segments.params, run: segments.run, stamp: src.corpus },
+  segments: { params: segments.params, run: segments.run, stamp: src.corpus, times: TIMES },
   pricing: { params: pricing.params, run: pricing.run, stamp: src.pricing },
 });
 
@@ -120,7 +124,7 @@ export async function runQuery(name, params = {}, ctx = {}) {
   const q = checked(name, params);
   const errors = [];
   const body = await q.run({ ...ctx, home, fs, now, params, errors });
-  return { schema: SCHEMA_VERSION, command: name, ok: errors.length === 0, ...body, errors };
+  return { schema: SCHEMA_VERSION, command: name, ok: !errors.some((e) => !e.level), ...body, errors };
 }
 
 /**
@@ -138,14 +142,18 @@ export async function versionOf(name, params = {}, ctx = {}) {
 function checked(name, params) {
   const q = Object.hasOwn(QUERIES, name) ? QUERIES[name] : null;
   if (!q) throw new QueryArgError(`trocar query: no query called ${JSON.stringify(name)} (names: ${Object.keys(QUERIES).join(', ')})`);
-  for (const k of Object.keys(params)) if (!q.params.includes(k)) throw new QueryArgError(`trocar query ${name}: no parameter --${k} (its parameters: ${q.params.length ? q.params.map((p) => '--' + p).join(' ') : 'none'})`);
+  for (const k of Object.keys(params)) {
+    if (!q.params.includes(k)) throw new QueryArgError(`trocar query ${name}: no parameter --${k} (its parameters: ${q.params.length ? q.params.map((p) => '--' + p).join(' ') : 'none'})`);
+    // A parameter given more than once is a list; only the entry's `lists` take one (1.6 §4.1 参数).
+    if (Array.isArray(params[k]) && !(q.lists || []).includes(k)) throw new QueryArgError(`trocar query ${name}: --${k} takes one value, and it was given ${params[k].length}`);
+  }
   return q;
 }
 
 /**
  * stampOf(name, params, {home, fs, now, env}) → the ETag value (sha1 hex) of that answer, or null for a name that
  * reads the machine rather than the disk (4.4 §条件 GET). Stat only: the files the answer depends on, plus
- * `floor(now / 60 s)` when the answer reads the clock (`classes`, or a relative `--since` / `--until`), so an
+ * `floor(now / 60 s)` when the answer reads the clock (`classes`, or a relative time among the name's `times`), so an
  * answer that is stale only because time passed is stale by at most one minute. Throws what runQuery throws.
  */
 export function stampOf(name, params = {}, ctx = {}) {
@@ -154,7 +162,7 @@ export function stampOf(name, params = {}, ctx = {}) {
   const parts = q.stamp({ home, fs, env });
   if (parts == null) return null;
   let clock = !!q.clock;
-  for (const k of ['since', 'until']) if (params[k] != null) { parseTime(params[k], { name: k, now: 0 }); clock ||= REL.test(String(params[k]).trim()); }
+  for (const k of q.times || []) if (params[k] != null) { parseTime(params[k], { name: k, now: 0 }); clock ||= REL.test(String(params[k]).trim()); }
   if (clock) parts.push(`tick:${Math.floor(now() / 60e3)}`);
   return createHash('sha1').update(JSON.stringify([name, params, ...parts])).digest('hex');
 }

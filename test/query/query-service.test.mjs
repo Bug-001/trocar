@@ -92,6 +92,25 @@ test('GET /query without a name is the caller\'s mistake, not a failure', async 
   }
 })
 
+test('3.5 §内存有界: the worker the service forks by default carries none of the daemon\'s NODE_OPTIONS', async () => {
+  const dir = tmpDir('trocar-qsvc-env-')
+  const mark = path.join(dir, 'mark.cjs')
+  fs.writeFileSync(mark, `require('node:fs').appendFileSync(${JSON.stringify(path.join(dir, 'ran'))}, process.pid + '\\n')\n`)
+  const was = process.env.NODE_OPTIONS
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-') })
+  try {
+    process.env.NODE_OPTIONS = `--require ${JSON.stringify(mark)} --max-old-space-size=8192`
+    const { res } = await warmed(svc)
+    assert.equal(res.status, 200)
+    assert.deepEqual(JSON.parse(res.text()).segments, [])
+    assert.equal(fs.existsSync(path.join(dir, 'ran')), false, 'a --require in the daemon\'s NODE_OPTIONS ran in the worker')
+  } finally {
+    if (was === undefined) delete process.env.NODE_OPTIONS
+    else process.env.NODE_OPTIONS = was
+    svc.stop()
+  }
+})
+
 test('no worker: the caller is told at once and the worker is warmed with that same query (D63, the cold path)', async () => {
   const home = rawHome('trocar-qsvc-')
   const svc = createQueryService({ home, fork: alive })
@@ -361,18 +380,18 @@ const ANSWER = `const b = '{"ok":true}'; process.stdout.write('200 ' + b.length 
 test('#20: a subject that keeps timing out while its window moves writes one query-failed; its cool-down forks nothing and doubles with each failure', async () => {
   const { svc, said, st, ask } = episodic(() => SILENT)
   try {
-    await assert.rejects(ask({ id: 'S', after: '0', limit: '10' }))
+    await assert.rejects(ask({ id: 'S', since: '0', limit: '10' }))
     assert.equal(st.forks, 1)
     assert.equal(said.length, 1)
     assert.ok(said[0].where === 'daemon' && said[0].code === 'query-failed')
-    for (const [after, limit] of [['5', '10'], ['9', '40'], ['120', '3']]) {
-      await assert.rejects(ask({ id: 'S', after, limit }), (e) => e.message === said[0].reason, 'answered at once with the episode\'s reason')
+    for (const w of [{ since: '5', limit: '10' }, { before: '9', limit: '40' }, { from: '120', to: '130' }]) {
+      await assert.rejects(ask({ id: 'S', ...w }), (e) => e.message === said[0].reason, 'answered at once with the episode\'s reason')
     }
     st.clock = CRASH_COOLDOWN_MS - 1
-    await assert.rejects(ask({ id: 'S', after: '200' }))
+    await assert.rejects(ask({ id: 'S', before: '200' }))
     assert.equal(st.forks, 1, 'no fork while the cool-down runs, whatever the window')
     st.clock = CRASH_COOLDOWN_MS
-    await assert.rejects(ask({ id: 'S', after: '201' }))
+    await assert.rejects(ask({ id: 'S', from: '201' }))
     assert.equal(st.forks, 2, 'after the cool-down the subject is tried once')
     st.clock = CRASH_COOLDOWN_MS + 2 * CRASH_COOLDOWN_MS - 1
     await assert.rejects(ask({ id: 'S' }))
@@ -389,9 +408,9 @@ test('#20: a subject that keeps timing out while its window moves writes one que
 test('#20: a crash and then a timeout of the same subject are one episode, one record', async () => {
   const { svc, said, st, ask } = episodic((n) => (n === 1 ? CRASH : SILENT))
   try {
-    await assert.rejects(ask({ id: 'S', after: '0' }))
+    await assert.rejects(ask({ id: 'S', before: '0' }))
     st.clock = CRASH_COOLDOWN_MS
-    await assert.rejects(ask({ id: 'S', after: '7' }))
+    await assert.rejects(ask({ id: 'S', before: '7' }))
     assert.equal(st.forks, 2, 'the timeout was a real try')
     assert.equal(said.length, 1)
   } finally { svc.stop() }
@@ -403,8 +422,8 @@ test('#20: an answer ends the episode, so the next failure of that subject is a 
   try {
     await assert.rejects(ask({ id: 'S' }))
     st.clock = CRASH_COOLDOWN_MS
-    await ask({ id: 'S', after: '3' })
-    await assert.rejects(ask({ id: 'S', after: '4' }))
+    await ask({ id: 'S', before: '3' })
+    await assert.rejects(ask({ id: 'S', before: '4' }))
     assert.equal(said.length, 2)
     assert.equal(st.forks, 2, 'no cool-down was left over from the ended episode')
   } finally { svc.stop() }
@@ -432,5 +451,65 @@ test('#20: a control verb\'s subject includes its body: a failed click does not 
     assert.equal(said.length, 3)
     await assert.rejects(click({ on: true, harness: 'claude' }))
     assert.equal(st.forks, 3, 'the same click is cooling')
+  } finally { svc.stop() }
+})
+
+test('a projection the worker cannot write: both answers whole, one persisted projection-write-failed record (4.3 §4 盘满, D38)', { timeout: 120_000 }, async () => {
+  const home = path.join(tmpDir('trocar-qsvc-full-'), '.trocar')
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  const s = bigSession({ home })
+  s.growTo(4 << 20)
+  const ctxDir = path.join(home, 'index', 'ctx')
+  fs.mkdirSync(ctxDir, { recursive: true, mode: 0o700 })
+  fs.chmodSync(ctxDir, 0o500)
+  const said = []
+  const svc = createQueryService({ home, failure: (where, e) => said.push({ where, code: e.code }), fork: workerFork })
+  try {
+    for (let i = 0; i < 2; i++) {
+      const res = recorder()
+      await within(svc.relay({ name: 'session', params: { id: s.id }, res }), 60_000, 'the session is answered')
+      assert.equal(res.status, 200)
+      assert.equal(JSON.parse(res.text()).command, 'session', 'the whole document')
+    }
+    const got = said.filter((x) => x.code === 'projection-write-failed')
+    assert.equal(got.length, 1, 'one record for the episode')
+    assert.ok(isWhere(got[0].where) && isCode(got[0].code))
+  } finally { svc.stop(); fs.chmodSync(ctxDir, 0o700) }
+})
+
+// 3.5 #27 服务队列: one request in flight; the rest are served block, lane, session, then the others, first come first served
+// within a class; a caller gone before its turn is never written to the worker. The stub answers each line 100 ms after it arrives
+// and the fork records every line the service writes to it.
+const queueWorld = () => {
+  const got = []
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), failure: () => {}, fork: () => {
+    const c = spawn(process.execPath, ['-e', `process.stdin.on('data', (d) => { for (const l of String(d).split('\\n').filter(Boolean)) setTimeout(() => process.stdout.write('200 2\\n{}'), 100) })`], { stdio: ['pipe', 'pipe', 'pipe'] })
+    const w = c.stdin.write.bind(c.stdin)
+    c.stdin.write = (l, ...a) => (got.push(JSON.parse(l).params.tag), w(l, ...a))
+    return c
+  } })
+  const ask = (name, tag, res = recorder()) => svc.relay({ name, params: { tag }, res })
+  return { svc, got, ask }
+}
+
+test('#27: with one request in flight, the queue is served block, lane, session, then the rest', async () => {
+  const { svc, got, ask } = queueWorld()
+  try {
+    const all = [ask('segments', 'first'), ask('sessions', 'sessions'), ask('session', 'session'), ask('lane', 'lane'), ask('block', 'block')]
+    await within(Promise.all(all), 10_000, 'every queued request')
+    assert.deepEqual(got, ['first', 'block', 'lane', 'session', 'sessions'])
+  } finally { svc.stop() }
+})
+
+test('#27: a queued request whose caller closed before its turn is never written to the worker', async () => {
+  const { svc, got, ask } = queueWorld()
+  const gone = Object.assign(new EventEmitter(), { writeHead() {}, write: () => true, end() {} })
+  try {
+    const first = ask('segments', 'first')
+    const left = ask('session', 'left', gone)
+    const later = ask('sessions', 'later')
+    gone.emit('close')
+    await within(Promise.all([first, left, later]), 10_000, 'every request settles')
+    assert.deepEqual(got, ['first', 'later'])
   } finally { svc.stop() }
 })

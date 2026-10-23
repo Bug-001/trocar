@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sessionView, pageView, forWire } from '../../src/view/board.mjs';
+import { sessionView, pageView } from '../../src/view/board.mjs';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,14 +22,9 @@ import { fileURLToPath } from 'node:url';
 // The contract this pins: a paged-out call must be treated as UNKNOWN (no comparison possible),
 // never as EMPTY (everything changed). `paged_out` is the signal — not the shape of `flat`.
 //
-// UPDATED for the one-copy-per-call wire contract (2026-07-20). Each call now crosses the wire
-// exactly once: `analyzed.steps` is THE array of call objects, `analyzed.lanes[].calls` names them by
-// `gi` NUMBER, and `analyzed.streams` is dropped outright (onWire, src/view/board.mjs:162). So the
-// old "slim all three arrays" assertion is re-aimed at the property it existed to protect — the
-// payload must not carry any call's body more than once — which the new shape enforces structurally.
 // Blocks are also bodyless now (metadata + `text_ref`), except for v0/demo-converted records like
 // this fixture, whose original wire bytes are gone and whose blocks are therefore inlined + flagged
-// `unaddressable`. Neither change touches what THIS file pins: paged_out vs `flat: []`.
+// `unaddressable`. That does not touch what THIS file pins: paged_out vs `flat: []`.
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLE = path.join(HERE, '..', '..', 'samples', 'demo-session.ndjson');
@@ -90,34 +85,6 @@ test('a paged-out call still keeps `rec`, so `prevCall.rec` cannot gate it eithe
 //     tail-bounding existed to avoid).
 // (3) covered above: `flat: []` is truthy.
 
-// PAGING × THE WIRE TRANSFORM, composed in the order the server composes them (server.mjs:306/313:
-// sessionView(page) → forWire). Order matters and has bitten before: while onWire ran INSIDE
-// sessionView, pageView received lanes that were already gi NUMBERS, read `c.gi` off a number
-// (undefined → "out of window") and slimCall()d each one into a `{paged_out:true, flat:[]}` stub with
-// no gi, no ts, no ctx. The browser's buildLanes (index.html:832) only rehydrates entries that are
-// `typeof === 'number'`, so it kept those stubs and the timeline drew a lane of gi-less, ctx-less
-// bars; and pageView's `total`, counted over the deduped union of steps + lane entries, saw the stubs
-// as distinct objects and reported an 8-call session as 16 — walking the cursor a whole window past
-// the end. Paging must slim CALL OBJECTS, and the gi-number projection must happen after it.
-test('a paged view survives forWire: lanes stay gi numbers, total counts the session once', () => {
-  const paged = sessionView(records, SID, { page: { cursor: 0, limit: 2 } });
-  assert.equal(paged.page.total, 8,
-    'page.total must count the real session once — double-counting steps + lanes walks the cursor '
-    + 'past the end');
-  assert.equal(paged.page.nextCursor, 2, 'and the cursor advances by the window, not by the miscount');
-
-  const wire = forWire(paged);
-  assert.deepEqual(wire.analyzed.lanes[0].calls, [0, 1, 2, 3, 4, 5, 6, 7],
-    'a lane names its calls by gi NUMBER after paging too — an object stub here is unrehydratable');
-  const steps = wire.analyzed.steps || [];
-  for (const gi of wire.analyzed.lanes[0].calls) {
-    const c = steps[gi];
-    assert.ok(c && c.gi === gi, `lane entry ${gi} must index the matching call in steps`);
-    assert.ok(c.ctx != null && c.ts != null,
-      `call ${gi} must keep the cheap meta the timeline draws with, paged out or not`);
-  }
-});
-
 test('paging slims `steps` too, or the payload never actually shrinks', () => {
   const full = sessionView(records, SID);
   const paged = sessionView(records, SID, { page: { cursor: 0, limit: 2 } });
@@ -129,37 +96,3 @@ test('paging slims `steps` too, or the payload never actually shrinks', () => {
   assert.ok(fatSteps.length <= 2, `only the window may carry blocks in steps; ${fatSteps.length} do`);
 });
 
-// analyze() puts each call object in THREE places, not two: `steps`, `lanes[].calls`, AND
-// `streams[].calls`. Slimming the first two still shipped every verbatim body through the third, so a
-// deep window on a real session returned HTTP 500 "Invalid string length" — the response overran
-// V8's max string on the way out, which the board renders as its empty state, i.e. it reports that a
-// session with hundreds of calls has none. Paging that does not shrink the payload is not paging.
-//
-// The wire contract now settles this structurally instead of by slimming three arrays: onWire()
-// drops `streams` outright and reduces `lanes[].calls` to gi numbers, leaving `steps` as the one
-// carrier of call objects. So the assertion is aimed at the invariant itself — NO call's body may
-// appear in the payload more than once, whichever array it came through.
-test('every call crosses the wire exactly once — no array duplicates a body', () => {
-  // The wire is what 500'd, so measure the wire: sessionView(page) → forWire, as server.mjs does.
-  const view = forWire(sessionView(records, SID, { page: { cursor: 0, limit: 2 } }));
-  const wire = JSON.stringify(view.analyzed);
-  const steps = view.analyzed.steps || [];
-  assert.ok(steps.length, 'precondition: steps carries the call objects');
-  assert.equal(((view.analyzed.streams || []).flatMap((s) => s.calls || [])).length, 0,
-    '`streams` was a third full copy of every call and nothing ever read it — it must not be on the wire');
-
-  // Each call's record id is unique in the fixture, and `rec` is serialized once per copy of the
-  // call object, so this count IS the number of times that call was written out. Three copies —
-  // steps + lanes + streams — is what 500'd a real session.
-  for (const c of steps) {
-    const marker = `"rec":{"id":${JSON.stringify(String(c.rec.id))}`;
-    const n = wire.split(marker).length - 1;
-    assert.equal(n, 1, `call ${c.rec.id} was serialized ${n}× into analyzed — one copy per call, or `
-      + 'the window overruns V8\'s max string and /api/session 500s');
-  }
-
-  // …and only the window (plus the one diff baseline) may carry blocks at all.
-  const fat = steps.filter((c) => !c.paged_out && c.flat && c.flat.length);
-  assert.ok(fat.length && fat.length <= 3,
-    `steps shipped ${fat.length} fat calls for a 2-wide window (window + diff baseline = 3 max)`);
-});

@@ -9,8 +9,6 @@ export const IDS = Object.freeze(['I-pageerror', 'I-console', 'I-blank', 'I-keep
   'I-mem', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-memcap'])
 
 export const PENDING = new Map([
-  ['I-longtask', 'no task of the page over 50 ms (D64 ②)'],
-  ['I-loadstep', 'no "Load this step" control and no step whose content is missing from the page'],
   ['I-memcap', 'the page heap stays under memCapBytes (80 MB)'],
 ])
 
@@ -29,7 +27,7 @@ export const LIMITS = Object.freeze({
   memRatio: 1.5, memSlackBytes: 10 * 2 ** 20, // plan §Invariants I-mem
   memCapBytes: 80 * 2 ** 20, // pending: no spec line sets this cap yet
   followMs: 15000, // spec/01-trocar-rfc/1.4-central-board.md:71-73 · 4.4:51
-  longtaskMs: 50, // pending: D64 ② · plan …prefix-reads-and-cells.md §3.7
+  longtaskMs: 50, // D64 ②: no task of the page's own over 50 ms
 })
 
 const STACK = [/^\s*at \S.*:\d+:\d+\)?\s*$/m, /FATAL ERROR/, /<--- Last few GCs --->/, /\b(?:node|v8)::\w/]
@@ -67,7 +65,13 @@ const viewOf = (page) => page.evaluate((sel) => {
     step: m ? +m[1] : null, of: m ? +m[2] : null,
     heads: [...document.querySelectorAll('#ctxwin .cblk[data-bi]')].map((e) => `${e.dataset.bi}:${e.dataset.sec || ''}`),
     reply: !!document.querySelector('#ctxwin .cwreply'),
-    loadStep: !!document.querySelector('[data-load-step], [data-state="missed"], .pobadge'),
+    // a load control (2.3 #10 · 1.2 读取状态): any [data-load-step]; on the desk, any control inside an aria-busy frame or the
+    // read-state line ([data-read-state])
+    loadStep: ((ctl) => {
+      const desk = /^#\/?replay\//.test(location.hash)
+      const el = document.querySelector(['[data-load-step]', ...(desk ? [`[aria-busy="true"] ${ctl}`, `[data-read-state] ${ctl}`] : [])].join(', '))
+      return el && `${el.tagName.toLowerCase()} ${el.matches('[data-load-step]') ? '[data-load-step]' : el.closest('[data-read-state]') ? 'in [data-read-state]' : 'in [aria-busy="true"]'}`
+    })(':is(button, a, [role=button], [tabindex])'),
     // the rendered text with the captured blocks invisible for this one synchronous read: innerText skips visibility:hidden, which
     // changes no box (no layout shift, no scroll clamped) and no frame is drawn in between
     own: ((root) => {
@@ -81,39 +85,52 @@ const viewOf = (page) => page.evaluate((sel) => {
   }
 }, CAPTURED)
 
-/** I-rate over the probe's fetch log (see LIMITS for every bound). → [detail] */
+// the tail's follow-up reads (4.4:52): one `lane` read per touched held lane per `session` delta, one `block` read per followed delta
+const DELTA_PACED = new Set(['lane', 'block'])
+// what I-rate paces: a name, and for `lane` each lane of each session apart (an older page, `to`, apart from the tail); null =
+// not paced: a lane's ledger chain (`ledger=`) reads one cursor after another by design (3.5 §手里车道的页)
+const rateKey = (url) => {
+  const name = nameOf(url)
+  if (name !== 'lane') return name
+  const q = new URLSearchParams(url.split('?')[1] || '')
+  if (q.has('ledger')) return null
+  return `lane ${q.get('id')} ${q.get('lane')}${q.has('to') ? ' to' : ''}`
+}
+
+/** I-rate over the probe's fetch log (see LIMITS for every bound; the session rule is 4.4:52 as decided in C2). → [detail] */
 function rateFaults(log, { actions = [], hidden = [] } = {}) {
   const out = []
   const [lo, hi] = LIMITS.actionWindowMs
   const byReader = (t) => actions.some((a) => t >= a.t + lo && t <= a.t + hi)
   const hiddenAt = (t) => hidden.some((h) => t > h.from && (h.to == null || t < h.to))
-  const returnRead = new Set()
-  for (const h of hidden) if (h.to != null) {
-    const seen = new Set()
-    for (const e of log) if (e.start >= h.to && e.start <= h.to + LIMITS.returnReadMs && !seen.has(nameOf(e.url))) { seen.add(nameOf(e.url)); returnRead.add(e) }
-  }
-  // a route change opens a screen: its first read of each name within openReadMs is the opening read (4.4 「打开时」)
-  const opened = new Set()
   const sorted = [...log].filter((x) => x.method === 'GET').sort((a, b) => a.start - b.start)
-  for (const a of actions) if (a.a === 'hashchange' || a.a === 'popstate') {
-    const seen = new Set()
-    for (const e of sorted) if (e.start >= a.t + LIMITS.actionWindowMs[0] && e.start <= a.t + LIMITS.openReadMs && !seen.has(nameOf(e.url))) { seen.add(nameOf(e.url)); opened.add(e) }
-  }
-  const last = new Map() // name → {start, dur, fails}
+  // the first read of each key in a window is the screen's own: on becoming visible again (4.4:49-51) and on opening (4.4 「打开时」)
+  const exempt = new Set()
+  const firstIn = (from, to) => { const seen = new Set(); for (const e of sorted) if (e.start >= from && e.start <= to && !seen.has(rateKey(e.url))) { seen.add(rateKey(e.url)); exempt.add(e) } }
+  for (const h of hidden) if (h.to != null) firstIn(h.to, h.to + LIMITS.returnReadMs)
+  for (const a of actions) if (a.a === 'hashchange' || a.a === 'popstate') firstIn(a.t + lo, a.t + LIMITS.openReadMs)
+  const last = new Map() // key → {start, dur, fails, pending, recovered}
+  let sessionAt = -Infinity // the start of the latest `session` read, whatever caused it
   for (const e of sorted) {
-    const name = nameOf(e.url)
-    if (byReader(e.start) || returnRead.has(e) || opened.has(e)) { last.delete(name); continue }
+    const name = nameOf(e.url), key = rateKey(e.url), p = last.get(key)
+    const since = sessionAt, failed = failedRead(e)
+    if (name === 'session') sessionAt = e.start
+    if (key == null) continue
+    if (byReader(e.start) || exempt.has(e)) { last.delete(key); continue } // the reader's read starts the timer's chain over
+    last.set(key, { start: e.start, dur: (e.end ?? e.start) - e.start, fails: failed ? (p ? p.fails : 0) + 1 : 0, pending: !!e.pending, recovered: !failed && !!p && p.fails > 0 })
     if (hiddenAt(e.start)) out.push(`${name} read at ${e.start} while hidden`)
-    const p = last.get(name)
-    if (p) {
-      const base = LIMITS.interval[name] || LIMITS.intervalOther
-      let want = Math.min(base * 2 ** p.fails, LIMITS.backoffCapMs)
-      if (name === 'session' && !p.fails) want = Math.max(want, LIMITS.sessionDurFactor * p.dur)
-      const gap = e.start - p.start
-      if (gap < LIMITS.rateSlack * want) out.push(`${name}: ${gap} ms after the last timer read, expected ≥ ${Math.round(LIMITS.rateSlack * want)} ms`)
+    if (!p) continue
+    const base = DELTA_PACED.has(name) ? LIMITS.interval.session : LIMITS.interval[name] || LIMITS.intervalOther
+    if (DELTA_PACED.has(name) && !p.fails) {
+      if (since <= p.start) out.push(`${key}: read again with no session delta in between`)
+      continue
     }
-    const fails = failedRead(e) ? (p ? p.fails : 0) + 1 : 0
-    last.set(name, { start: e.start, dur: (e.end ?? e.start) - e.start, fails })
+    // after k failures in a row: interval × 2^(k-1), ≤ 30 s; after a success: the interval, and for `session` (C2) 3 × that read's
+    // duration unless it answered `pending` or ended a back-off
+    let want = p.fails ? Math.min(base * 2 ** (p.fails - 1), LIMITS.backoffCapMs) : base
+    if (name === 'session' && !p.fails && !p.pending && !p.recovered) want = Math.max(want, LIMITS.sessionDurFactor * p.dur)
+    const gap = e.start - p.start
+    if (gap < LIMITS.rateSlack * want) out.push(`${key}: ${gap} ms after the last timer read, expected ≥ ${Math.round(LIMITS.rateSlack * want)} ms`)
   }
   return out
 }
@@ -190,7 +207,7 @@ export async function check(ctx) {
   if (desk && qs.has('step') && !qs.has('call') && +qs.get('step') !== v.step) bad('I-url', `step=${qs.get('step')} while step ${v.step} is shown`)
   if (!real && CJK.test(v.bodyText)) bad('I-cjk', `CJK in the page: ${JSON.stringify(v.bodyText.match(CJK)[0])}`)
 
-  if (s.longtaskMax > LIMITS.longtaskMs) pending.push({ id: 'I-longtask', value: s.longtaskMax, pointer: PENDING.get('I-longtask') })
-  if (v.loadStep) pending.push({ id: 'I-loadstep', value: true, pointer: PENDING.get('I-loadstep') })
+  if (s.longtaskMax > LIMITS.longtaskMs) bad('I-longtask', `a long task of ${Math.round(s.longtaskMax)} ms`)
+  if (v.loadStep) bad('I-loadstep', `a load control: ${v.loadStep}`)
   return { violations, pending, view: { t: Date.now(), hash: v.hash, step: v.step, heads: v.heads } }
 }

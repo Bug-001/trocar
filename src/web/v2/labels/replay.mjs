@@ -77,12 +77,10 @@ export const compCulprit = (seg, pct) => `Largest part: ${SEG_NAME[seg] || seg} 
 export const TOOLS_ESTIMATED = 'Tool definitions were stored as metadata only; the size of this part is an estimate'
 export const DIAGNOSE_ONLY = 'This only says where the growth comes from; whether to cut anything is up to the agent'
 export const COMPACTION_REWRITE = 'Compaction: the whole context was rewritten, not appended block by block'
-export const compOffPage = (n) => `The content of step ${n} is not on the current page, so the growth cannot be computed`
-export const COMP_SELF = Object.freeze({ paged: 'This step\'s content is not on the current page, so the breakdown cannot be computed', unparsed: 'This step\'s request could not be parsed', none: 'No request was captured for this step' })
+export const COMP_SELF = Object.freeze({ unparsed: 'This step\'s request could not be parsed', none: 'No request was captured for this step' })
 export const compSize = (n) => `Content of this request: ${n}`
 export const growthLine = (delta, segW, less = false) => `${delta} ${less ? 'less' : 'more'} than the previous step` + (segW ? `, mostly in ${segW}` : '')
 export const growthVs = (n, delta, segW, less = false) => `${delta} ${less ? 'less' : 'more'} than step ${n}` + (segW ? `, mostly in ${segW}` : '')
-export const LOAD_STEP = (n) => `Load step ${n}`
 
 // ── the ≈ $ popover ───────────────────────────────────────────────────────────────────────────────────────────────────
 export const COST_CALIBRE = 'Local estimate (usage × unit price), not a bill'
@@ -192,11 +190,6 @@ export const FF_TIP = Object.freeze({
 })
 export const INLINE_NOTE = 'This text came inline with the block; it is not cut verbatim from the raw capture'
 export const NO_BODY = 'This block has no body and no source location'
-export const FETCHING = 'Fetching…'
-// a body that is one JSON value can be read as its text: a reading aid, never the wire bytes (2.3 §block 卡 体)
-export const SHOW_DECODED = 'Show as text'
-export const SHOW_WIRE_BYTES = 'Show wire bytes'
-export const DECODED_NOTE = 'Decoded from the JSON on the wire; these are not the wire bytes.'
 export const clipNote = (n) => `…(${n} characters in total; only the first 20000 are shown)`
 // the raw panel's reply / the drawer's reply: the display clip said once, in 2.6 §A's own words (the context window's
 // blocks keep clipNote above — 2.3 K-07 pins that wording for them)
@@ -229,22 +222,19 @@ export const changeFirstTip = (headW) => `First differing block: ${headW}`
 export const removedList = (n, k2) => `Blocks in step ${k2} that are not in this step: ${n}`
 
 // the 代替态 (1.4 ⑤–⑧, words 2.3)
-export const PAGED_TITLE = 'This step\'s content is not on the current page'
-export const PAGED_FULL = 'The full raw record is on disk'
-export const PAGED_PARTIAL = 'The captured part is on disk'
-export const LOAD_THIS_STEP = 'Load this step'
-export const LOADING_THIS_STEP = 'Loading this step…'
-export const PAGE_MISSED = 'The page that came back still did not carry this step'
 export const RETRY = 'Retry'
-// the desk's failure state when the session never loaded (1.5 K-29): one sentence; the reason is in the technical details
-export const SESSION_READ_FAILED = 'This session could not be read.'
-export const LIST_READ_FAILED = 'The session list could not be read.'
+// what a failed read of the desk names (1.5 K-29, core/ui.mjs readFailure): the never-drawn failure and the stale line
+export const THIS_SESSION = 'This session'
+// the window's failure state when the playhead step's lane read failed (2.3 §读失败, 1.5 K-29); the reason is in the technical details
+export const STEP_READ_FAILED = 'This step could not be read.'
 export const notRefreshed = (t, why) => `Not refreshed since ${t} · ${why}`
+// 1.2 §会话头 读取状态: the server is still extracting this session (first read: share done; later: calls still to catch up)
+export const readingFirst = (pct) => `Reading this session for the first time · ${pct} %`
+export const catchingUp = (n) => `Catching up · ${n} new calls`
 export const FOLLOW_PAUSED = 'Following is paused: the last read failed'
 export const UNPARSED_TITLE = 'This step\'s request could not be parsed; there is no context to show'
 export const UNPARSED_KEEP = 'The raw record is on disk, unchanged'
 export const NO_REQUEST = 'No request was captured for this step'
-export const LOADING = 'Loading…'
 
 // ── the session info popover (1.2 §信息弹出层, the rows in order) ────────────────────────────────────────────────────
 export const COST_LINE = '≈ cost'
@@ -351,7 +341,6 @@ export const CAP_VERBATIM = 'Tool definitions were captured verbatim; expand the
 export const CAP_METADATA = 'Metadata only: name, parameter count, description length; not the verbatim schema'
 // the pinned panel's honest fallbacks
 export const RES_NOT_FOUND = 'No single matching block in the context of this step: it may have been read earlier or already removed. Click the step number on this row to jump to the step that read it.'
-export const RES_NOT_LOADED = 'The body of this step has not loaded yet; it shows once that page arrives.'
 
 // ── the raw panel (2.6 §A) ───────────────────────────────────────────────────────────────────────────────────────────
 export const RAW_WORD = 'Raw'

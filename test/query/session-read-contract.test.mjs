@@ -59,6 +59,10 @@ function lists(page, known, held = new Map()) {
 
 test('lane pages: ids defined, keyframe only without a base, copies within the parent, base names the page they extend', () => {
   for (const k of LANES) for (const d of doc[k].defs) { assert.match(d.bid, BID, `${k}: bid`); assert.match(d.fh, BID, `${k}: fh`) }
+  for (const k of LANES) {
+    const ks = doc[k].events.filter((e) => e.type === 'user').map((e) => e.k)
+    for (const [i, n] of ks.entries()) assert.ok(Number.isInteger(n) && n >= 1 && (i === 0 || n > ks[i - 1]), `${k}: user event k ${n} is an ordinal ≥ 1, rising along the page`)
+  }
   const key = new Set(doc.lane_keyframe.defs.map((d) => d.bid))
   const held = lists(doc.lane_keyframe, key)
   lists(doc.lane_reset, new Set(doc.lane_reset.defs.map((d) => d.bid)))

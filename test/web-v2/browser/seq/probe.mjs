@@ -1,6 +1,7 @@
 // test/web-v2/browser/seq/probe.mjs — what the sequence harness can only see from inside the page, installed before the board's own
 // scripts run (page.addInitScript): live listeners on window / document / other targets (keyed by target, type, listener, capture),
-// live intervals, in-flight fetches and the log of every /api · /control fetch (start, end, status, failed / aborted / cut body),
+// live intervals, in-flight fetches and the log of every /api · /control fetch (start, end, status, failed / aborted / cut body, an
+// answer carrying `pending`),
 // AbortControllers created / aborted, long tasks, console.error calls, and a per-frame sampler of two reader-visible faults:
 //   blank — after #screen first held visible content, a frame where it has no element child or no visible text (1.5 K-29);
 //   keep  — a replay desk that was drawn (#ctxwin holds rows) for the route still in the hash, replaced by the never-drawn failure
@@ -62,7 +63,7 @@ function pageProbe() {
   window.fetch = function (input, init) {
     const url = new URL(typeof input === 'string' ? input : input.url || String(input), location.href)
     const board = /^\/(api|control)\//.test(url.pathname)
-    const e = board ? { url: url.pathname + url.search, method: ((init && init.method) || (input && input.method) || 'GET').toUpperCase(), start: now(), end: null, status: null, failed: false, aborted: false, cut: false } : null
+    const e = board ? { url: url.pathname + url.search, method: ((init && init.method) || (input && input.method) || 'GET').toUpperCase(), start: now(), end: null, status: null, failed: false, aborted: false, cut: false, pending: false } : null
     if (e) push(S.fetchLog, e)
     S.inflight++
     let p
@@ -70,11 +71,14 @@ function pageProbe() {
     return p.then((r) => { S.inflight--; if (e) { e.end = now(); e.status = r.status; byResponse.set(r, e) } return r },
       (err) => { S.inflight--; if (e) { e.end = now(); e.status = 0; e.failed = true; e.aborted = !!(err && err.name === 'AbortError') } throw err })
   }
+  // an answer carrying `pending` (3.5 §抽取前沿: the server is still extracting) is marked: I-rate's next-read rule depends on it (4.4:52)
+  const pendingOf = (m, x) => { try { const d = m === 'text' ? (x.includes('"pending"') ? JSON.parse(x) : null) : m === 'json' ? x : null; return !!d && d.pending != null } catch { return false } }
   for (const m of ['text', 'json', 'arrayBuffer']) {
     const orig = Response.prototype[m]
     Response.prototype[m] = function (...a) {
       const e = byResponse.get(this)
-      return orig.apply(this, a).catch((err) => { if (e) { e.cut = true; e.aborted = !!(err && err.name === 'AbortError') } throw err })
+      return orig.apply(this, a).then((x) => { if (e) e.pending = pendingOf(m, x); return x },
+        (err) => { if (e) { e.cut = true; e.aborted = !!(err && err.name === 'AbortError') } throw err })
     }
   }
 
@@ -85,6 +89,7 @@ function pageProbe() {
   }
 
   // ── long tasks, console.error ─────────────────────────────────────────────────────────────────────────────────────────────
+  // a task of the page's own (a timer, an event, a parse) over 50 ms; code a test runs through page.evaluate is no task and is not seen
   try { new PerformanceObserver((l) => { for (const x of l.getEntries()) push(S.longtasks, { t: performance.timeOrigin + x.startTime, ms: x.duration }) }).observe({ type: 'longtask', buffered: true }) } catch { /* no long-task timing here */ }
   const ce = console.error
   console.error = function (...a) { push(S.consoleErrors, { t: now(), msg: a.map((x) => String(x && x.stack ? x.message : x)).join(' ').slice(0, 300) }); return ce.apply(this, a) }

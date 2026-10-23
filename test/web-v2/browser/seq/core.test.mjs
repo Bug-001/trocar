@@ -1,10 +1,12 @@
-// core.test.mjs — the sequence harness's two pure parts, no browser (runs in `npm test`): ddmin shrinks to a 1-minimal failing list
-// and never hands back a list that did not fail; generate() is a pure function of its seed; a violation's key tells two bugs of one
-// `<id>:<screen>` apart but not two runs of one bug.
+// core.test.mjs — the sequence harness's pure parts, no browser (runs in `npm test`): ddmin shrinks to a 1-minimal failing list
+// and never hands back a list that did not fail; generate() is a pure function of its seed and the default seeds draw every action
+// kind; a violation's key tells two bugs of one `<id>:<screen>` apart but not two runs of one bug; a saved regression's replay
+// counts by its status.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ddmin } from './shrink.mjs'
-import { generate, keyOf } from './runner.mjs'
+import { generate, keyOf, replayTodo, replayFailure, DEFAULT_SEEDS, DEFAULT_STEPS } from './runner.mjs'
+import { ACTIONS } from './actions.mjs'
 import { fingerprint } from './invariants.mjs'
 
 // fails iff the list holds an 'x' somewhere before a 'y'
@@ -38,4 +40,19 @@ test('R4 two runs of one bug share a key; another bug of the same invariant and 
   assert.equal(keyOf(v(a)), keyOf(v(a.replace('1712', '33').replace('second', 'other'))), 'numbers and later items are not identity')
   assert.notEqual(keyOf(v(a)), keyOf(v('RangeError: Maximum call stack size exceeded')))
   assert.notEqual(keyOf(v(a)), keyOf({ sig: 'I-console:replay', fp: fingerprint(a) }))
+})
+
+test('R5 every action kind occurs in generate(seed) over the default seeds (a weight table that never draws a row tests nothing with it)', () => {
+  const drawn = new Set(DEFAULT_SEEDS.flatMap((seed) => generate(seed, DEFAULT_STEPS, null).map((s) => s.a)))
+  assert.deepEqual(ACTIONS.map((x) => x.a).filter((a) => !drawn.has(a)), [])
+})
+
+test('R6 a fixed regression whose replay meets its own key fails; open and flaky ones are todo, never red', () => {
+  const reg = { name: 'I-url-replay-4', sig: 'I-url:replay', fp: fingerprint('step=# while step # is shown'), status: 'fixed' }
+  const met = { violation: { sig: reg.sig, fp: reg.fp, step: 3, detail: 'step=2 while step 1 is shown', screenshot: 'x.png' } }
+  assert.equal(replayTodo(reg), false)
+  assert.ok(replayFailure(reg, met))
+  assert.equal(replayFailure(reg, {}), null)
+  for (const status of ['open', 'flaky']) assert.ok(replayTodo({ ...reg, status }))
+  assert.equal(replayTodo({ ...reg, status: 'new' }), false)
 })

@@ -1,21 +1,26 @@
-// replay/lanes.mjs — lane building and the shared time axis. Pure: the anchor lane's call times (`anchorTs`, epoch ms, one per
-// anchor call) and the brush window (`view = {lo, hi}`, step indices) are arguments, never module state.
+// replay/lanes.mjs — lane objects over the desk model and the shared time axis. Pure: the anchor lane's call times (`anchorTs`,
+// epoch ms, one per anchor call) and the brush window (`view = {lo, hi}`, step indices) are arguments, never module state.
 
-// C.5 `session`: each lane carries its call objects (`analyzed.lanes[].calls`). `giLocal` (gi → index inside the lane) arrives
-// as {} over JSON, so it is rebuilt here as a Map.
-export function buildLanes(analyzed, probes) {
-  const ls = ((analyzed && analyzed.lanes) || []).map((l) => {
-    const calls = (l.calls || []).filter((c) => c && typeof c === 'object')
-    return { ...l, calls, giLocal: new Map(calls.map((c, i) => [c.gi, i])) }
-  })
+// A lane object for the renderers: the lane header (3.5 §会话读) + its skeleton rows in step order (`calls`), `ridLocal`
+// (rid → index in `calls`), `base` (rows of this lane older than the loaded ones: the header's `count` is the full truth) and
+// the session events on its rows. Built from the desk model (replay/model.mjs); `prev` / `changed` reuse the objects of lanes
+// no answer touched, so an unchanged lane is never rebuilt per poll.
+function laneObject(desk, h) {
+  const calls = (desk.laneRids.get(h.lane) || []).map((rid) => desk.rows.get(rid))
+  return { ...h, id: h.lane, calls, ridLocal: new Map(calls.map((c, i) => [c.rid, i])), base: Math.max(0, (h.count ?? calls.length) - calls.length),
+    events: calls.flatMap((c) => desk.events.get(c.rid) || []) }
+}
+export function buildLanes(desk, probes, { prev = null, changed = null } = {}) {
+  const old = new Map((prev || []).map((l) => [l.id, l]))
+  const ls = [...desk.lanes.values()].map((h) => (changed && !changed.has(h.lane) && old.get(h.lane)) || laneObject(desk, h))
   const series = (probes && probes.series) || []
   if (series.length) {
     // a count_tokens measurement is a ruler, not a conversation and not a lane of the server's: its own row key
     // 'token-count' (2.1's table) never collides with the server's `probe` lane (a warm-up request) — 1.3 #16.
     const count = (probes && probes.count) || series.length // the full truth: series only holds the ones with a size
-    const calls = series.map((p, i) => ({ gi: i, ts: p.ts, ctx: p.tokens || 0, probe: true, usage: null }))
-    ls.push({ id: 'token-count', kind: 'token-count', label: 'token count', calls, count, events: [], resources: null,
-      giLocal: new Map(calls.map((c, i) => [c.gi, i])), peakCtx: calls.reduce((m, c) => Math.max(m, c.ctx), 1), flagged: 0 })
+    const calls = series.map((p, i) => ({ rid: `token-count:${i}`, ts: p.ts, ctx: p.tokens || 0, probe: true, usage: null }))
+    ls.push({ id: 'token-count', kind: 'token-count', label: 'token count', calls, count, base: 0, events: [],
+      ridLocal: new Map(calls.map((c, i) => [c.rid, i])), peakCtx: calls.reduce((m, c) => Math.max(m, c.ctx), 1), flagged: false })
   }
   return ls
 }
@@ -24,17 +29,18 @@ export function buildLanes(analyzed, probes) {
 export const anchorLane = (lanes) => (lanes || []).find((l) => l.kind === 'main') || (lanes || [])[0] || null
 export const stepsOf = (lanes) => { const a = anchorLane(lanes); return a ? a.calls : [] }
 
-// ── numbering (1.2 §编号): the ONE conversion from a global gi to the words the board shows ─────────────────────────
-// 「第 N 步」 names ONLY a call of the main lane (N = its index there + 1, M = the main lane's call count). Any other
-// lane's call is 「<lane 词> · 第 k 次调用」, never a step number; the lane object rides along so the caller can open its
-// drawer or word it. → { step:true, n, m } | { step:false, lane, k, m } | null (a gi in no lane: the words are the
-// caller's business — nothing here invents a step for it).
-export function stepRef(lanes, gi) {
-  if (gi == null) return null
+// ── numbering (1.2 §编号): the ONE conversion from a record id to the words the board shows ──────────────────────────
+// 「第 N 步」 names ONLY a call of the main lane (N = its place in step order + 1, M = the main lane header's count). Any
+// other lane's call is 「<lane 词> · 第 k 次调用」, never a step number; the lane object rides along so the caller can open
+// its drawer or word it. → { step:true, n, m } | { step:false, lane, k, m } | null (a rid in no loaded lane: the words are
+// the caller's business — nothing here invents a step for it).
+export function stepRef(lanes, rid) {
+  if (rid == null) return null
   const ls = lanes || []
+  const at = (l) => { const i = l.ridLocal && l.ridLocal.get(rid); return i == null ? null : (l.base || 0) + i + 1 }
   const main = ls.find((l) => l.kind === 'main')
-  if (main) { const n = main.giLocal && main.giLocal.get(gi); if (n != null) return { step: true, n: n + 1, m: main.calls.length } }
-  for (const l of ls) { const k = l.giLocal && l.giLocal.get(gi); if (k != null) return { step: false, lane: l, k: k + 1, m: l.calls.length } }
+  if (main) { const n = at(main); if (n != null) return { step: true, n, m: main.count ?? main.calls.length } }
+  for (const l of ls) { const k = at(l); if (k != null) return { step: false, lane: l, k, m: l.count ?? l.calls.length } }
   return null
 }
 
@@ -92,9 +98,9 @@ export function nearestByX(lane, anchorTs, view, f) {
 export const turnsReviewed = (anchorTs, ts) => { const t = toMs(ts); return anchorTs.filter((x) => x <= t).length }
 
 // where a resource stands at the playhead: 'pend' (not yet entered) · 'live' (in a segment that holds the playhead) · 'evicted'.
-// `giLocal` maps a gi to its index in the anchor lane; a gi outside it sits past the end (N).
-export function resState(playhead, segments, giLocal, N) {
-  const L = (gi) => { const v = giLocal.get(gi); return v == null ? N : v }
+// `ridLocal` maps a rid to its index in the anchor lane; a rid outside it sits past the end (N).
+export function resState(playhead, segments, ridLocal, N) {
+  const L = (rid) => { const v = ridLocal.get(rid); return v == null ? N : v }
   const segs = segments || []
   if (!segs.length) return 'pend'
   if (L(segs[0].enter) > playhead) return 'pend'

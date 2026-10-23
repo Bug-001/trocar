@@ -197,33 +197,81 @@ const markLine = (m) => `${JSON.stringify({ m, v: INDEX_V })}\n`;
 const fpDigest = (read, end) => { const h = createHash('sha256'); for (const [a, b] of fpRanges(end)) h.update(read(a, b)); return h.digest('base64'); };
 
 // The whole document, for a READER: everything up to the last complete mark line.
-// → { mark, records, problems } | null (no usable index).
-export function readIndex(fs, file, v = INDEX_V) {
-  let buf;
+// → { mark, records, problems, read } | null (no usable index). `read` is where this read stopped: the file (its ino), the byte
+// just past the last complete mark line, and that line's bytes. Given an earlier answer over the same file (`past`), a reader
+// reads only the bytes past that mark while the file is still that one (same ino: a whole rewrite is a rename, a new file) and
+// the mark line's bytes at its offset are unchanged (the keeper cuts a torn batch back to a mark, never before the last one it
+// wrote); else whole. The entries are the whole read's either way (4.2:49): keeping them current costs the new lines (D62).
+export function readIndex(fs, file, v = INDEX_V, past = null) {
+  if (past && past.read) { const got = readPast(fs, file, v, past); if (got !== undefined) return got; }
+  let ino = null, buf;
+  try { ino = fs.statSync(file).ino } catch { /* read below says whether it is there */ }
   try { buf = fs.readFileSync(file) } catch { return null; }
   // ONE JSON.parse over the document, not one per line: a JSON line never holds a raw newline, so the document is an
   // array once every newline is a comma (≈ 1.5× faster than per line on a 20 k-entry index — this is the path every
   // query pays). A torn last batch makes that parse fail, and then the line loop takes what is complete.
   let lines;
   try { lines = JSON.parse(asArray(buf)); } catch { lines = completeLines(buf); }
-  const got = { mark: null, records: [], problems: [] };
-  // the last complete mark is what the document asserts; the lines after it are a batch that was cut off
-  let upTo = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const o = lines[i];
-    if (!o || typeof o !== 'object') break;
-    if (!o.m) continue;
-    if (o.v !== v) return null;      // another format: stale, rebuilt like any stale index
-    got.mark = o.m; upTo = i;
-  }
-  if (!got.mark) return null;
+  const got = { mark: null, records: [], problems: [], read: null };
+  const upTo = lastMark(lines, v, got);
+  if (upTo === null || !got.mark) return null;
   for (let i = 0; i < upTo; i++) {        // no spread: one segment can hold ~85 k entries
     const o = lines[i];
     if (o.m) continue;
     if (o.p) got.problems.push(o.p); else got.records.push(o);
   }
+  got.read = readTo(buf, 0, upTo, ino);
   return got;
 }
+// The index of the last complete mark line of `lines` (its mark into got.mark), -1 when none; null when a mark is of another
+// format (stale, rebuilt like any stale index). A line that is no object ends what is read.
+function lastMark(lines, v, got) {
+  let upTo = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const o = lines[i];
+    if (!o || typeof o !== 'object') break;
+    if (!o.m) continue;
+    if (o.v !== v) return null;
+    got.mark = o.m; upTo = i;
+  }
+  return upTo;
+}
+// Where a read of `buf` (the file's bytes from `base`) that ends with line `upTo` stopped: { ino, at, line }.
+function readTo(buf, base, upTo, ino) {
+  if (ino == null) return null;
+  let start = 0, at = 0;
+  for (let i = 0; i <= upTo; i++) { const nl = buf.indexOf(NL, at); if (nl < 0) return null; start = at; at = nl + 1; }
+  return { ino, at: base + at, line: Buffer.from(buf.subarray(start, at)) };
+}
+// The bytes past `past`'s mark → the answer a whole read gives, or undefined: the file is not the one `past` read (read whole).
+function readPast(fs, file, v, past) {
+  const { ino, at, line } = past.read;
+  let fd;
+  try { fd = fs.openSync(file, 'r'); } catch { return undefined; }
+  try {
+    const st = fs.fstatSync(fd);
+    const from = at - line.length;
+    if (st.ino !== ino || st.size < at) return undefined;
+    const buf = Buffer.alloc(st.size - from);
+    let n = 0;
+    while (n < buf.length) { const r = fs.readSync(fd, buf, n, buf.length - n, from + n); if (!r) break; n += r; }
+    if (n < line.length || !buf.subarray(0, line.length).equals(line)) return undefined;
+    const tail = buf.subarray(line.length, n), lines = completeLines(tail);
+    const got = { mark: past.mark, records: null, problems: null, read: null };
+    const upTo = lastMark(lines, v, got);
+    if (upTo === null) return null;
+    if (upTo < 0) return past;                     // nothing new is asserted yet: the same answer
+    const records = [], problems = [];
+    for (let i = 0; i < upTo; i++) { const o = lines[i]; if (o.m) continue; if (o.p) problems.push(o.p); else records.push(o); }
+    got.records = records.length ? past.records.concat(records) : past.records;
+    got.problems = problems.length ? past.problems.concat(problems) : past.problems;
+    got.read = readTo(tail, at, upTo, ino);
+    continued.add(got);
+    return got;
+  } catch { return undefined; } finally { try { fs.closeSync(fd); } catch { /* gone */ } }
+}
+// The answers readPast built on an earlier one (with `past` itself): their records begin with that answer's records.
+const continued = new WeakSet();
 // Every complete line of a document whose end is torn (the fallback above).
 function completeLines(buf) {
   const out = [];
@@ -384,7 +432,9 @@ export function storeIndex(fs, file, lines, problems, at = null) {
 export const problemEntry = (where, p) => ({ where, code: p.code, ...(p.level ? { level: p.level } : {}), reason: p.reason });
 
 /**
- * segmentIndex({home, segment, maxBytes, owner}) → { segment, source, records, problems, bytesRead, done }
+ * segmentIndex({home, segment, maxBytes, owner, past}) → { segment, source, records, problems, bytesRead, done, stored, grown }
+ *   past / stored: a reader's index read (readIndex) — the one it went on from, and the one it made (null for the owner).
+ *   grown: these records begin, line by line, with those of the answer `past` came with.
  *   records: [{ id, ts, harness, class, host, path, status, stored_bytes, sent_bytes, received_bytes, session_key, is_llm }]
  *     — every record of the segment for a reader; for an `owner` resuming, only the ones THIS pass indexed (it reads
  *     the stored mark alone, never the stored entries, so that its cost stays proportional to the new bytes).
@@ -402,17 +452,21 @@ export const problemEntry = (where, p) => ({ where, code: p.code, ...(p.level ? 
  *     mark to its current size, so the answer is the scan's answer; anything else falls back to the scan.
  * Never throws for a segment it cannot read: the reason is in `problems` and the caller lists it in `errors`.
  */
-export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null } = {}) {
+export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null, past = null } = {}) {
   const problems = [];
   const source = segmentSource(home, segment, fs);
   const sealed = /\.sealed$/.test(source);
   const idxFile = path.join(indexDir(home), `${segment}.json`);
   // the keeper needs the stored mark and where it ended (only it appends); a reader needs the entries behind it
-  const stored = owner && !sealed ? tailMark(fs, idxFile) : readIndex(fs, idxFile);
+  const stored = owner && !sealed ? tailMark(fs, idxFile) : readIndex(fs, idxFile, INDEX_V, past);
   const how = usability(fs, source, stored);
   // A stored index remembers what it could NOT read, and says it again on every later read: a problem
   // that only the read which BUILT the index reports would go silent the second time (D38).
-  if (how === 'reuse') return { segment, source, records: stored.records || [], problems: stored.problems || [], bytesRead: 0, done: true };
+  // a reader's answer that carries on from `past`'s (the index file read on from its mark, the segment only appended to): its records
+  // begin with the records of the answer `past` came with, line by line (warmSegmentIndex below)
+  const grown = !owner && !!past && (stored === past || continued.has(stored)) && how !== 'rebuild';
+  const kept = owner ? null : stored;
+  if (how === 'reuse') return { segment, source, records: stored.records || [], problems: stored.problems || [], bytesRead: 0, done: true, stored: kept, grown };
   const prior = how === 'resume' && stored.problems ? stored.problems : []; // stored by an earlier pass, said again
   let got;
   try {
@@ -422,9 +476,9 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
         || scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes);
   } catch (e) {
     problems.push({ code: 'segment-unreadable', reason: `${path.basename(source)}: ${String((e && e.message) || e)}` });
-    return { segment, source, records: stored && how === 'resume' ? stored.records || [] : [], problems: [...prior, ...problems], bytesRead: 0, done: true };
+    return { segment, source, records: stored && how === 'resume' ? stored.records || [] : [], problems: [...prior, ...problems], bytesRead: 0, done: true, stored: kept, grown: false };
   }
-  const records = how === 'resume' && stored.records ? [...stored.records, ...got.records] : got.records;
+  const records = how === 'resume' && stored.records ? stored.records.concat(got.records) : got.records;
   // what this pass found goes INTO the document, so a later read says it again; `index-unwritable` is about
   // this write, not about the file, so it stays out of the lines.
   if (sealed || owner) {
@@ -438,7 +492,7 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
     const mb = Math.round(got.bytesRead / (1 << 20));
     said.push({ code: 'index-cold', level: 'note', reason: `This read indexed ${mb} MB of capture file ${segment} itself (${how === 'rebuild' ? 'all of it' : 'the part not indexed yet'}), which is why it was slow. Nothing is missing. trocar's background service normally does this while it captures; it was not running when these records arrived, the index was deleted, or trocar was updated.` });
   }
-  return { segment, source, records, problems: said, bytesRead: got.bytesRead, done: got.done };
+  return { segment, source, records, problems: said, bytesRead: got.bytesRead, done: got.done, stored: kept, grown };
 }
 
 // WARM (D63 ①, 1.6 §4.1 附近的查询): THE one reading of a segment's index rows — everything that wants them
@@ -448,6 +502,13 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
 // in this file and not in the readers because `allSegments` is in this file: a warm wrapper in rows.mjs that
 // `allSegments` also called would be a cycle between the two modules.
 const segRows = warmCache({ cost: (v) => v.records.length * 320, steady: true }); // ~320 B per index row in memory (measured on the reference dataset)
+// Which records array a row list was built from, and which one a segment's newer answer extends line by line: rows.mjs adds
+// only the new rows when only the newest segment grew (3.5:45). Numbers, so a newer answer never keeps an older one alive.
+const ids = new WeakMap(), grew = new WeakMap();
+let idSeq = 0;
+export const recordsId = (records) => { let n = ids.get(records); if (n == null) ids.set(records, (n = ++idSeq)); return n; };
+/** grownFrom(records) → the recordsId of the earlier answer of the same segment whose records these begin with, else undefined. */
+export const grownFrom = (records) => grew.get(records);
 // Both files, so a plaintext that is sealed (or a sealed file rebuilt) is a new stamp: the plaintext wins while it exists (4.2:30).
 export const segStamp = (home, segment, fs) => `${statKey(path.join(rawDir(home), `${segment}.ndjson`), fs)}|${statKey(path.join(rawDir(home), `${segment}.sealed`), fs)}`;
 /** warmSegmentIndex({home, segment, fs}) → the same `segmentIndex()` answer, read from disk only when that segment's
@@ -456,8 +517,11 @@ export const segStamp = (home, segment, fs) => `${statKey(path.join(rawDir(home)
  *  served from memory did none of that work, and an index write does not move the stamp (3.5 读不全 #17). */
 export const warmSegmentIndex = async ({ home = trocarHome(), segment, fs = nodeFs } = {}) => {
   let notes = [];
-  const kept = await segRows.get(`${fsTag(fs)}\n${home}\n${segment}`, segStamp(home, segment, fs), async () => {
-    const got = await segmentIndex({ home, segment, fs });
+  const kept = await segRows.get(`${fsTag(fs)}\n${home}\n${segment}`, segStamp(home, segment, fs), async (old) => {
+    // the answer this segment had: its index read goes on from where that one stopped (4.2:49)
+    const prev = old ? await Promise.resolve(old).catch(() => null) : null; // kept as the promise it was computed as
+    const got = await segmentIndex({ home, segment, fs, past: prev && prev.stored });
+    if (got.grown && got.records !== prev.records && got.records.length >= prev.records.length) grew.set(got.records, recordsId(prev.records));
     notes = got.problems.filter((p) => p.level);
     return notes.length ? { ...got, problems: got.problems.filter((p) => !p.level) } : got;
   });
@@ -503,7 +567,14 @@ export async function allSegments({ home = trocarHome(), fs = nodeFs, lockState 
   }
   return out;
 }
-/** segmentFiles(home, fs) → [[segment, {plain, sealed}]], oldest first: which segments raw/ holds, from the names alone. */
+/** segmentCmp(a, b): the order segments were opened in — the opening instant, then the collision suffix as a number (`-10` after
+ *  `-9`); the one rule segmentFiles lists segments by and posCmp (src/query/projection.mjs) orders record ids by, so a session's
+ *  member list (src/query/rows.mjs) is in write order. */
+export function segmentCmp(a, b) {
+  const [sa, na = 1] = String(a).split('-'), [sb, nb = 1] = String(b).split('-');
+  return sa < sb ? -1 : sa > sb ? 1 : Number(na) - Number(nb);
+}
+/** segmentFiles(home, fs) → [[segment, {plain, sealed}]], oldest first (segmentCmp): which segments raw/ holds, from the names alone. */
 export function segmentFiles(home = trocarHome(), fs = nodeFs) {
   let names;
   try { names = fs.readdirSync(rawDir(home)); } catch { return []; }
@@ -515,6 +586,6 @@ export function segmentFiles(home = trocarHome(), fs = nodeFs) {
     at[p.sealed ? 'sealed' : 'plain'] = true;
     seen.set(p.segment, at);
   }
-  return [...seen].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return [...seen].sort(([a], [b]) => segmentCmp(a, b));
 }
 const sizeOf = (fs, f) => { try { return fs.statSync(f).size; } catch { return 0; } };
