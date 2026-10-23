@@ -116,7 +116,7 @@ import { hidesReason, reasonsWith, visibleOf, outsideCollapsed } from './visible
 test('K-29: a stale session draws a Retry outside the head that reads again; no stale state, no line', () => {
   const meta = { session_id: 's1', harness: 'cc', project_slug: 'p', project_path: '/w/p' }
   let handler = null, polls = 0
-  const el = { innerHTML: '', addEventListener: (t, f) => { handler = f }, removeEventListener() {} }
+  const el = { innerHTML: '', addEventListener: (t, f) => { if (t === 'click') handler = f }, removeEventListener() {} }
   const s = { meta, lanes: [], follow: true, A: null, ctx: {}, staleErr: { r: { ok: false, status: 500, error: 'x' }, since: Date.now() - 5000 }, poll: () => { polls++ } }
   renderSessionHead(el, s)
   assert.match(el.innerHTML, /data-retry/)
@@ -185,4 +185,21 @@ test('K-20: the unreadable-records fact appears iff unknown.records > 0; reason 
       assert.ok(tech > 0 && html.indexOf(t) > tech, `${t} only after the tech-details element`)
     }
   }
+})
+
+// 2.3 归约前沿: the session-info popover's numbers walk every call, so they are drawn when it opens (`v2:popopen`, core/ui.mjs), from the
+// lanes held then — an answer that lands while it is shut does not pay for them
+test('the session-info popover is filled when it opens, from the lanes held then; the head drawn with an answer leaves it empty', async () => {
+  const w = world(3), desk = await deskFrom(w.get(), 'S')
+  const lanes = buildLanes(desk, { count: 0, series: [] })
+  const handlers = {}, body = { innerHTML: '' }
+  const el = { innerHTML: '', querySelector: (sel) => (sel === '.sipb' ? body : null), addEventListener: (t, f) => { handlers[t] = f }, removeEventListener() {} }
+  const s = { meta: desk.meta, lanes, desk, follow: true, ctx: {}, staleErr: null }
+  renderSessionHead(el, s)
+  assert.match(el.innerHTML, /<div class="sipb"><\/div>/)
+  assert.equal(s.totals, null)
+  wireSessionHead(el, s)
+  handlers['v2:popopen']()
+  assert.ok(body.innerHTML.length > 0, 'the popover body is drawn on open')
+  assert.ok(s.totals && s.totals.cost, 'the totals are worked out on open')
 })

@@ -39,7 +39,7 @@ import { readFailure } from '../core/ui.mjs'
 
 const POLL_MS = INTERVAL.session
 const BUSY_MS = 150 // 2.3 §车道未到手: how long a step whose lane is not held leaves the desk as it is
-const SLICE_MS = 8 // 3.7: an answer is applied in slices of at most this long, yielding between them
+const SLICE_MS = 8 // 2.3 §读与画: an answer is applied in slices of at most this long, yielding between them
 const SLICE_ROWS = 100
 
 // the desk's own head: the session head (title · chip · 项目 · 跟随最新 · ⓘ) and the quiet 会话保真行 under it (1.2 §会话头).
@@ -112,12 +112,13 @@ const yieldNow = () => (globalThis.scheduler && typeof globalThis.scheduler.yiel
     : new Promise((r) => setTimeout(r, 0)))
 const frame = (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16))
 
-// a session answer as slices whose application in order equals applying it whole (3.7: ≤ SLICE_MS of main-thread work each).
-// A full answer's first slice is full; the rest are deltas on its mark. An older (--before) page slices into older pages. A
-// delta is small (one poll's growth) and applied whole.
-function slicesOf(a, before) {
+// a session answer as slices whose application in order equals applying it whole (2.3 §读与画: ≤ SLICE_MS of main-thread work each).
+// The first slice is the answer itself with its first rows (a delta's `gone` and `lanes_gone` go with it: they never name a lane or row
+// another slice brings); the rest are deltas on its mark. An older (--before) page slices into older pages. A delta while a big
+// session is read for the first time brings a thousand rows and more (2.3 归约前沿), so it is sliced like a full answer.
+export function slicesOf(a, before) {
   const calls = a.calls || []
-  if (a.base != null || calls.length <= SLICE_ROWS) return [a]
+  if (calls.length <= SLICE_ROWS) return [a]
   const out = []
   for (let i = 0; i < calls.length; i += SLICE_ROWS) {
     const part = calls.slice(i, i + SLICE_ROWS), rids = new Set(part.map((r) => r.rid))
@@ -506,7 +507,7 @@ function mountDesk(el, ctx) {
     if (changed) for (const rid of [...(a.calls || []).map((r) => r.rid), ...(a.gone || [])]) { const o = desk.rows.get(rid); if (o) changed.add(o.lane) }
     if (changed) for (const r of a.calls || []) changed.add(r.lane)
     const keep = pin(), prevRow = curCall()
-    // applied in slices that yield (3.7), checking between them that the session is still this one
+    // applied in slices that yield (2.3 §读与画), checking between them that the session is still this one
     const touched = new Map()
     let t0 = nowMs()
     for (const part of same ? [] : slicesOf(a, before)) {

@@ -201,9 +201,9 @@ export function renderSessionHead(el, s) {
   const html = sessionHeadHtml({ meta: s.meta, lanes: s.lanes, follow: s.follow, stale: !!s.staleErr, libraryHash: s.ctx && s.ctx.store ? s.ctx.store.get().libraryHash : '' })
   if (!html) { el.innerHTML = ''; return }
   const desk = s.desk
-  s.totals = desk ? totalsOf(s) : null
-  // the popover body replaces the placeholder the builder had to leave (infoButton needs its layer's html up front)
-  const head = html.replace('<div class="sipre">…</div>', `<div class="sipb">${sessionInfoHtml({ meta: s.meta, lanes: s.lanes, probes: desk ? desk.probes : null, totals: s.totals, truncated: desk && desk.truncated })}</div>`)
+  // the popover's numbers walk every call of the session: they are worked out when it opens (fillInfo), never per answer (2.3 归约前沿)
+  s.totals = null
+  const head = html.replace('<div class="sipre">…</div>', '<div class="sipb"></div>')
   const d = desk ? { truncated: desk.truncated, unknown: desk.unknown, logged: desk.logged, errors: desk.errors, gap: s.gap, harness: s.meta && s.meta.harness } : null
   el.innerHTML = `<div class="sesshead">${head}</div>` + readStateHtml(desk) + (d ? fidelityLineHtml(d) : '') + staleLineHtml(s.staleErr)
 }
@@ -217,7 +217,16 @@ export function staleLineHtml(st) {
   return `<div class="fidline fidstale">${esc(W.notRefreshed(fmtWhen(st.since), f.line))}<span class="fidsep">·</span><button type="button" class="linkbtn" data-retry="1">${esc(W.RETRY)}</button></div>${f.tech}`
 }
 
+// the session-info popover is opening: its body is drawn from the lanes held now
+function fillInfo(el, s) {
+  const b = el.querySelector('.sipb'), desk = s.desk
+  if (!b) return
+  s.totals = desk ? totalsOf(s) : null
+  b.innerHTML = sessionInfoHtml({ meta: s.meta, lanes: s.lanes, probes: desk ? desk.probes : null, totals: s.totals, truncated: desk && desk.truncated })
+}
+
 export function wireSessionHead(el, s) {
+  const onOpen = () => fillInfo(el, s)
   const onClick = (e) => {
     const t = e.target
     if (t.closest('[data-retry]')) { if (s.poll) s.poll(); return }
@@ -234,5 +243,6 @@ export function wireSessionHead(el, s) {
     }
   }
   el.addEventListener('click', onClick)
-  return () => el.removeEventListener('click', onClick)
+  el.addEventListener('v2:popopen', onOpen)
+  return () => { el.removeEventListener('click', onClick); el.removeEventListener('v2:popopen', onOpen) }
 }
