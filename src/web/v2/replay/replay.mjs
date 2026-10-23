@@ -365,6 +365,9 @@ function mountDesk(el, ctx) {
     poll(true)
   }
   s.followOn = followOn
+  // the reader turns following off (f, the chip): the head and the URL (which now names the drawn step) follow at once
+  function followOff() { s.follow = false; renderHeader() }
+  s.followOff = followOff
 
   // ── a step's own reads: its lane, its open rows' bodies, the lane's older pages (2.3 §读与画; 3.5:69) ─────────────────
   // the session's own reads name it; a `block` read names only its refs (3.5: `block` takes --ref alone, any other parameter is refused)
@@ -599,7 +602,7 @@ function mountDesk(el, ctx) {
     if (!a) return
     e.preventDefault()
     if (a.keys) openModal({ title: KEYS_TITLE, bodyHtml: `<dl class="keylist">${KEY_LIST.map(([k, w]) => `<dt><kbd>${esc(k)}</kbd></dt><dd>${esc(w)}</dd>`).join('')}</dl>` })
-    else if (a.follow) { if (s.follow) { s.follow = false; renderHeader() } else followOn() }
+    else if (a.follow) { if (s.follow) followOff(); else followOn() }
     else { if (keyTarget == null) frame(paintKey); keyTarget = a.to }
   }
   setScreenKeys(onKey)
