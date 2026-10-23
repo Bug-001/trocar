@@ -7,9 +7,10 @@
 // The window is a list of keyed units (2.3 §读与画 · 窗口按 bid 打补丁): a request row's key is `bid#occurrence`, a reply row's
 // `rp:` + bid, a turn's its anchor; a unit's `html` carries no position (positions ride `set`, written on placement), so a
 // step change patches the window and an open row whose bid survives keeps its DOM.
-//   ctxWindowUnits(s) → units   fillGroup(units, s, key) → [units, ops]   ctxWindowHtml(s) = serialize(units)   patchUnits(prev, next) → ops   applyOps(units, ops)
+//   ctxWindowUnits(s) → units   fillGroup(units, s, key) → [units, ops]   ctxWindowHtml(s) = serialize(units)   (units, their patch and the DOM applier: core/units.mjs)
 //   renderContextWindow(el, s[, {busy}]) patch + land   wireCtxWin(el, s) listeners
 import { esc, bytes } from '../core/fmt.mjs'
+import { KIDS, serialize, patchInto } from '../core/units.mjs'
 import { techDetailsHtml } from '../core/ui.mjs'
 import * as W from '../labels/replay.mjs'
 import { messageTurns, keyDiff, refRowOf, hasChangeLine, callFacts } from './analysis.mjs'
@@ -95,12 +96,6 @@ export function busyFramesHtml(s, row) {
   return `<div class="cwbusy" aria-busy="true">${frames}</div>`
 }
 
-// ── units ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
-// A unit is {key, html, kids?, set?}. A unit with kids carries `KIDS` inside its one [data-kids] element, where the kids go.
-const KIDS = '<!--kids-->'
-const withSet = (h, set) => (set ? h.replace('>', Object.entries(set).map(([k, v]) => ` ${k}="${esc(String(v))}"`).join('') + '>') : h)
-const serialOne = (u) => { const h = withSet(u.html, u.set); return u.kids ? h.replace(KIDS, () => serialize(u.kids)) : h }
-export const serialize = (units) => units.map(serialOne).join('')
 // the request rows' keys: bid + '#' + its occurrence in the list (the same bid may stand twice)
 export function rowKeys(flat) {
   const seen = new Map()
@@ -259,41 +254,6 @@ function replyUnit(s, st, call) {
   })
   return { key: 'reply', html: `<div class="cwreply">${head}<div class="cwrrows" data-kids>${KIDS}</div></div>`, kids }
 }
-
-// ── the DOM applier: a node whose unit is unchanged is never touched ─────────────────────────────────────────────────
-const slotOf = (n) => (n.matches('[data-kids]') ? n : n.querySelector('[data-kids]'))
-function build(u) {
-  const t = document.createElement('template')
-  t.innerHTML = withSet(u.kids ? u.html.replace(KIDS, '') : u.html, u.set)
-  const n = t.content.firstElementChild
-  n.__k = u.key
-  if (u.kids) slotOf(n).append(...u.kids.map(build))
-  return n
-}
-function domApply(box, ops) {
-  const at = new Map([...box.children].map((c) => [c.__k, c]))
-  for (const [op, key, a, b] of ops) {
-    const n = at.get(key)
-    if (op === 'del') { n.remove(); at.delete(key) }
-    else if (op === 'put' || op === 'move') { const x = op === 'put' ? build(a) : n, p = at.get(op === 'put' ? b : a); box.insertBefore(x, p ? p.nextSibling : box.firstChild); at.set(key, x) }
-    else if (op === 'set') for (const [k, v] of Object.entries(a || {})) n.setAttribute(k, String(v))
-    else if (op === 'wrap') morph(n, build({ key, html: a, kids: [] }))
-    else if (op === 'kids') domApply(slotOf(n), a)
-  }
-}
-// a container takes its new html in place (2.3 §读与画「长对话的窗口」 rule 3): its attributes become x's (the placed `set` data-*
-// attributes stay), every child outside the path to its slot is replaced, and the slot's children are never moved
-function morph(n, x) {
-  for (const k of n.getAttributeNames()) if (!x.hasAttribute(k) && !k.startsWith('data-')) n.removeAttribute(k)
-  for (const k of x.getAttributeNames()) if (n.getAttribute(k) !== x.getAttribute(k)) n.setAttribute(k, x.getAttribute(k))
-  if (n.hasAttribute('data-kids')) return
-  const ns = [...n.children], xs = [...x.children]
-  xs.forEach((c, i) => { const m = ns[i]; if (!m) n.append(c); else if (m.matches('[data-kids]') || m.querySelector('[data-kids]')) morph(m, c); else m.replaceWith(c) })
-  for (const m of ns.slice(xs.length)) m.remove()
-}
-// tag a freshly written window's nodes with their unit keys (the first paint is one innerHTML)
-function tag(box, units) { [...box.children].forEach((c, i) => { const u = units[i]; if (!u) return; c.__k = u.key; if (u.kids) tag(slotOf(c), u.kids) }) }
-
 // ── repaint: patch to the units, fill open bodies, land once per step, then fill the placeholders ──────────────────────
 // A step whose lane is not held keeps the rows already drawn unless `busy` (the desk's 150 ms decision, 2.3 §车道未到手).
 // `focus`: a list position whose group is drawn now (a jump); otherwise the landing target, else the row at the window's top.
@@ -350,13 +310,8 @@ function nextHolder(units) {
   const g = gs[i >= 0 ? i : gs.findIndex((x) => !x.kids)]
   return g ? g.key : null
 }
-function paint(el, units, ops = null) {
-  // patch only a window this module drew last (anyone who wrote el.innerHTML since gets a fresh paint)
-  const live = typeof document !== 'undefined' && el.children && el.__units && el.children.length === el.__units.length && el.__units.every((u, i) => el.children[i].__k === u.key)
-  if (live) domApply(el, ops || patchUnits(el.__units, units))
-  else { el.innerHTML = serialize(units); if (el.children && typeof document !== 'undefined') tag(el, units) }
-  el.__units = units
-}
+// patch only a window this module drew last (anyone who wrote el.innerHTML since gets a fresh paint)
+const paint = patchInto
 // an open row whose bytes are not cached shows the sized pending cell; the step's own reads fetch them once the playhead rests
 // (2.3 §快速拖动). A body whose read failed shows that failure and its reason here.
 function hydrate(el, s) {
@@ -495,53 +450,4 @@ export function wireCtxWin(el, s) {
   el.addEventListener('click', onClick)
   el.addEventListener('keydown', onKey)
   return () => { el.removeEventListener('click', onClick); el.removeEventListener('keydown', onKey) }
-}
-
-// ── the patch: ops over keyed units (pure) ────────────────────────────────────────────────────────────────────────────
-// ['del', key] · ['put', key, unit, after] (a new node after sibling `after`, null = first) · ['move', key, after] ·
-// ['wrap', key, html] (a container's own html; its kids stay) · ['set', key, set|null] · ['kids', key, ops]. A unit whose key
-// survives with the same html and set, in its order, gets no op at all.
-const sameSet = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
-function stableKeys(prev, next) { // the survivors that keep their relative order: a longest increasing run of prev positions
-  const at = new Map(prev.map((u, i) => [u.key, i])), seq = next.map((u) => at.get(u.key)).filter((i) => i != null)
-  const tails = [], link = new Array(seq.length)
-  seq.forEach((v, i) => {
-    let lo = 0, hi = tails.length
-    while (lo < hi) { const m = (lo + hi) >> 1; if (seq[tails[m]] < v) lo = m + 1; else hi = m }
-    link[i] = lo ? tails[lo - 1] : -1; tails[lo] = i
-  })
-  const keep = new Set()
-  for (let i = tails.at(-1) ?? -1; i >= 0; i = link[i]) keep.add(prev[seq[i]].key)
-  return keep
-}
-export function patchUnits(prev, next) {
-  const P = new Map(prev.map((u) => [u.key, u])), N = new Set(next.map((u) => u.key)), keep = stableKeys(prev, next), ops = []
-  for (const u of prev) if (!N.has(u.key)) ops.push(['del', u.key])
-  let after = null
-  for (const u of next) {
-    const p = P.get(u.key)
-    if (!p || !!p.kids !== !!u.kids || (!u.kids && p.html !== u.html)) { if (p) ops.push(['del', u.key]); ops.push(['put', u.key, u, after]) }
-    else {
-      if (!keep.has(u.key)) ops.push(['move', u.key, after])
-      if (u.kids && p.html !== u.html) ops.push(['wrap', u.key, u.html])
-      if (!sameSet(p.set, u.set)) ops.push(['set', u.key, u.set ?? null])
-      if (u.kids) { const k = patchUnits(p.kids, u.kids); if (k.length) ops.push(['kids', u.key, k]) }
-    }
-    after = u.key
-  }
-  return ops
-}
-const placeAfter = (arr, x, after) => { const i = after == null ? 0 : arr.findIndex((u) => u.key === after) + 1; arr.splice(i, 0, x) }
-export function applyOps(tree, ops) {
-  const arr = tree.slice(), find = (k) => arr.findIndex((u) => u.key === k)
-  for (const [op, key, a, b] of ops) {
-    const i = find(key)
-    if (op === 'del') arr.splice(i, 1)
-    else if (op === 'put') placeAfter(arr, a, b)
-    else if (op === 'move') { const [x] = arr.splice(i, 1); placeAfter(arr, x, a) }
-    else if (op === 'wrap') arr[i] = { ...arr[i], html: a }
-    else if (op === 'set') { const { set, ...x } = arr[i]; arr[i] = a == null ? x : { ...x, set: a } }
-    else if (op === 'kids') arr[i] = { ...arr[i], kids: applyOps(arr[i].kids, a) }
-  }
-  return arr
 }
