@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createPricingLoader, PRICING_MS } from '../../src/web/v2/replay/pricing.mjs'
-import { backoffMs } from '../../src/web/v2/replay/follow.mjs'
+import { backoffMs } from '../../src/web/v2/core/poll.mjs'
 import { costCellHtml, priceStateNote } from '../../src/web/v2/replay/stepbar.mjs'
 import { costRowHtml } from '../../src/web/v2/replay/detail.mjs'
 import { costOf, priceMatch } from '../../src/web/v2/core/metrics.mjs'

@@ -7,7 +7,7 @@
 // `fetchPricing()` → an api envelope { ok, data, status, error }; data is the server's models[] document (core/metrics.mjs priceTableOf).
 // load(byReader) → Promise<boolean>: did the state (table or reason) change.
 import { priceTableOf } from '../core/metrics.mjs'
-import { createPoller } from './follow.mjs'
+import { createPoller } from '../core/poll.mjs'
 
 export const PRICING_MS = 30000 // 4.4 live-poll: `pricing` is read every 30 s
 export function createPricingLoader(fetchPricing, initial = null, { now = Date.now, base = PRICING_MS } = {}) {

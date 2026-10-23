@@ -18,7 +18,8 @@ import { buildLanes, anchorLane, stepsOf, nearestByTs } from './lanes.mjs'
 import { createDesk, applySession, applyLane, readTouched, mergeTouch, readLedger, ledgerDone, stepOf as deskStep } from './model.mjs'
 import { breakSteps } from './analysis.mjs'
 import { loadFold, saveFold } from './fold.mjs'
-import { landPlayhead, createPoller, createStepReads } from './follow.mjs'
+import { landPlayhead, createStepReads } from './follow.mjs'
+import { createPoller } from '../core/poll.mjs'
 import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
 import { renderContextWindow, wireCtxWin, emptyFrameHtml, rowKeys } from './ctxwin.mjs'
@@ -459,7 +460,7 @@ function mountDesk(el, ctx) {
     renderHeader(); if (s.anchor) { s.renderRaw(); refreshDrawer() }
   }
 
-  // one read in flight; a failed read backs off; the reader's own actions read at once (follow.mjs createPoller). A hidden tab and a
+  // one read in flight; a failed read backs off; the reader's own actions read at once (core/poll.mjs createPoller). A hidden tab and a
   // session the server does not know read nothing by themselves. One poller per session: its loop stops as soon as the session changes.
   const idle = () => (typeof document !== 'undefined' && document.hidden) || s.notListed
   const makePoller = () => { const key = sessionKey()
