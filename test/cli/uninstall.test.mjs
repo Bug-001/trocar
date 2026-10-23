@@ -147,7 +147,7 @@ test('1.6 §1.1: the daemon is asked to exit and is waited for while it closes t
   const s = await installedHome({ names: ['claude-code'], daemon: { relayed: { closing: 2, waiting: 1, cut: 0 }, exitOnOff: false } })
   const c = fakeClock()
   const request = async (q) => {
-    if (q.method === 'GET' && q.path === '/status' && s.sys.daemon.calls.some((x) => x.startsWith('POST /off'))) { polls++; return { ...(await s.sys.daemon.request(q)), relayed: { closing: polls < 3 ? 2 : 0, waiting: 1, cut: 0 } } }
+    if (q.method === 'GET' && q.path === '/status' && s.sys.daemon.calls.some((x) => x.startsWith('POST /off'))) { polls++; return { ...(await s.sys.daemon.request(q)), relayed: { closing: polls < 3 ? 2 : 0, waiting: 1, cut: 0, scope: 'memory' } } }
     return s.sys.daemon.request(q)
   }
   const stopped = []
@@ -162,7 +162,7 @@ test('1.6 §1.1: the daemon is asked to exit and is waited for while it closes t
 test('1.6 §1.1: a connection that does not close within 30 s is cut too — the wait is bounded, and the cut is counted', async () => {
   const s = await installedHome({ names: ['claude-code'], daemon: { relayed: { closing: 2, waiting: 1, cut: 0 }, exitOnOff: false } })
   const c = fakeClock(); const t0 = c.ms()
-  const request = async (q) => (q.path === '/status' && s.sys.daemon.calls.some((x) => x.startsWith('POST /off')) ? { ...(await s.sys.daemon.request(q)), relayed: { closing: 2, waiting: 1, cut: 0 } } : s.sys.daemon.request(q))
+  const request = async (q) => (q.path === '/status' && s.sys.daemon.calls.some((x) => x.startsWith('POST /off')) ? { ...(await s.sys.daemon.request(q)), relayed: { closing: 2, waiting: 1, cut: 0, scope: 'memory' } } : s.sys.daemon.request(q))
   let at = null
   const r = await s.uninstall({ yes: true, deps: { request, ...c, stopDaemon: async () => { at = c.ms() - t0; return { stopped: true, how: 'systemctl', pid: 4242, signals: ['systemctl-stop'], helper_pid: null } } } })
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
@@ -237,7 +237,7 @@ test('uninstall: the drain is polled on the socket that answered — with XDG_RU
   const request = async (q) => {
     sockets.push(q.socketPath)
     if (!q.socketPath) throw Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:80'), { code: 'ECONNREFUSED' }) // what node does with no socket path: an HTTP request to localhost
-    if (q.method === 'GET' && q.path === '/status' && s.sys.daemon.calls.some((x) => x.startsWith('POST /off'))) { polls++; return { ...(await s.sys.daemon.request(q)), relayed: { closing: polls < 3 ? 2 : 0, waiting: 1, cut: 0 } } }
+    if (q.method === 'GET' && q.path === '/status' && s.sys.daemon.calls.some((x) => x.startsWith('POST /off'))) { polls++; return { ...(await s.sys.daemon.request(q)), relayed: { closing: polls < 3 ? 2 : 0, waiting: 1, cut: 0, scope: 'memory' } } }
     return s.sys.daemon.request(q)
   }
   const stoppedAt = []
