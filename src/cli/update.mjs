@@ -212,7 +212,7 @@ async function replaceDaemon({ env, home, platform, deps, dir, root, fs, problem
   if (running === codeId(root)) return { restarted: false, notes }
   const { offWorld, drainDaemon } = await import('../off/orchestrate.mjs')
   const w = offWorld({ home, env, deps: { ...deps, platform } })
-  const { routing } = await drainDaemon(w, { drainMs: deps.drainMs })
+  const { routing } = await drainDaemon(w, { drainMs: deps.drainMs, by: 'update' })
   notes.push(...routing.notes)
   const stopped = routing.stop || (routing.confirmed ? await w.stopDaemon({ unitManaged: w.unitManaged() }) : null)
   const pid = (stopped && Number.isInteger(stopped.pid) ? stopped.pid : null) ?? (Number.isInteger(routing.daemon.pid) ? routing.daemon.pid : null)

@@ -113,9 +113,11 @@ export function handleFlow(client, meta, ctx) {
   let drainAsked = false
   // the gate says it is about to close (or cut) the connection: the engine did it, not the client (the leaf-rejection judge ignores it), and a
   // cut says so on the row — before the sockets are destroyed, because a TLS socket emits its close events inside destroy()
-  // `cutBy`: what asked for the cut — `off` (off --now) or `stop` (the daemon's stop barrier, 1.6 §5.2) — set by start() below
-  let cutBy = 'off'
-  const onGateClosed = (kind) => { selfClosed = true; if (kind === 'cut' && !rec.error) rec.error = cutBy === 'stop' ? { type: 'cut-by-stop', message: 'the connection was cut by the daemon\'s stop', side: 'engine' } : { type: 'cut-by-off', message: 'the connection was cut by trocar off --now', side: 'engine' } }
+  // `cutBy`: what asked for the cut — `off` (the operator's off --now) or `stop` (the daemon's stop barrier, 1.6 §5.2); `cutWho`: the command
+  // that stopped the daemon (`update` / `uninstall`), named in the row so it never says a command the user did not run — set by start() below
+  let cutBy = 'off', cutWho = null
+  const stopText = () => (cutWho ? `the connection was cut when trocar ${cutWho} stopped the daemon` : 'the connection was cut by the daemon\'s stop')
+  const onGateClosed = (kind) => { selfClosed = true; if (kind === 'cut' && !rec.error) rec.error = cutBy === 'stop' ? { type: 'cut-by-stop', message: stopText(), side: 'engine' } : { type: 'cut-by-off', message: 'the connection was cut by trocar off --now', side: 'engine' } }
   let upstream = null       // the TCP connection to the original destination
   let reached = false       // that connection was made (Node clears `connecting` before it emits a failed connect's error, so it is kept here)
   let firstByteTimer = null
@@ -233,9 +235,10 @@ export function handleFlow(client, meta, ctx) {
   // What the engine's drain() asks of this flow (RFC 1.6 §1.3). start() → 'closing' | 'waiting' | 'closed' | 'cut';
   // state() → 'open' (not asked) | 'closing' | 'waiting' | 'closed' | 'cut' | 'done'.
   if (ctx.register) ctx.register({
-    start({ now = false, by = 'off' } = {}) {
+    start({ now = false, by = 'off', who = null } = {}) {
       if (finished) return 'closed'
       cutBy = by
+      if (who) cutWho = who
       if (gate) {
         return gate.start({ now })
       }

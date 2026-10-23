@@ -184,12 +184,23 @@ function storeWithSealing({ P, failure }) {
  *  store becomes final, the index settles, daemon-stop is written with `relayed` (absent when the engine step failed: it is in `failed`), the failure
  *  recorder becomes final (later lines → stderr only), and the lock's one owner removes it last: a lock still there at the next start means this
  *  stop never finished. Every step runs; one that fails is recorded with its reason, never thrown past the rest (D38). → {failed: [where…]} */
+// Who asked the whole daemon to stop (1.6 §5.2): `update` and `uninstall` name themselves on their exit requests, so the rows the stop cuts say
+// cut-by-stop and that command, and daemon-stop's reason is it; an exit request with no `by` is the operator's own off (cut-by-off, reason off).
+const STOP_BY = Object.freeze(['update', 'uninstall'])
+function stopByOf(b) {
+  if (b.by === undefined) return null
+  if (!STOP_BY.includes(b.by)) throw Object.assign(new Error(`"by" names the command stopping the daemon: one of ${STOP_BY.join(', ')}`), { status: 400 })
+  if (b.exit !== true) throw Object.assign(new Error('"by" goes with "exit": it names who stops the whole daemon'), { status: 400 })
+  return b.by
+}
+const drainBy = (by) => (by ? { by: 'stop', who: by } : {}) // engine.drain's: the stop's own label, with the command that asked
+
 async function stopTail({ engine, graceMs, store, seal, failure, lock, signal, reason, before = async () => {}, after = async () => {} }) {
   const failed = []
   const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
   await before(step)
   let relayed = null
-  await step('engine', async () => { relayed = await engine.close({ graceMs }) })
+  await step('engine', async () => { relayed = await engine.close({ graceMs, ...(STOP_BY.includes(reason) ? { who: reason } : {}) }) })
   await after(step)
   await step('record', () => store.close())
   await step('raw', () => seal.settle()) // the index of what this daemon wrote, including the segment just closed (D62)
@@ -702,10 +713,11 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         for (const k of ['now', 'exit']) if (b[k] !== undefined && typeof b[k] !== 'boolean') throw Object.assign(new Error(`"${k}" must be true or false`), { status: 400 })
         const names = namesOf(body, { allowState: true })
         if (b.exit === true && names) throw Object.assign(new Error('"exit" stops the whole daemon: it takes no harness names (leave them out)'), { status: 400 })
+        const by = stopByOf(b)
         const r = await sw.off({ harnesses: names })
-        const relayed = engine.drain({ agents: names ? new Set(names) : null, now: b.now === true })
+        const relayed = engine.drain({ agents: names ? new Set(names) : null, now: b.now === true, ...drainBy(by) })
         const st = await status()
-        if (b.exit === true) exitWhenDrained(b.now === true)
+        if (b.exit === true) exitWhenDrained(b.now === true, by)
         return { ...st, ...(r.noop ? { noop: true } : {}), unwatched: r.unwatched, confirmed: r.unwatch_failed.length === 0 && (sw.anyOn() || st.actual === 'off'), relayed, pid: process.pid }
       },
     })
@@ -726,11 +738,11 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // meanwhile talks to this daemon (`on` starts one only when none is running). `exitAsked` counts the requests; /on and a newer /off {exit} both
     // bump it, so only the latest request may stop the daemon, and never while some harness is on — an exit would leave state.json saying on with
     // nothing attached and, being a clean exit, no supervisor to restart it.
-    function exitWhenDrained(now) {
+    function exitWhenDrained(now, by = null) {
       const mine = ++exitAsked
       const left = engine.drained({ agents: null })
       const ready = now ? Promise.race([left, new Promise((r) => setTimeout(r, 500))]) : left
-      ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => { if (mine === exitAsked && !sw.anyOn()) return stop({ reason: 'off' }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
+      ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => { if (mine === exitAsked && !sw.anyOn()) return stop({ reason: by || 'off' }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
     }
     async function doStop({ signal = null, reason = null } = {}) {
       seal.stop() // the segment store.close() closes below is sealed by the next start's scan, not by a worker this stop cuts off
@@ -787,7 +799,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   collector = createModelCollector({ harnesses: list, dir: P.dir, identify: registry.match, ownerOf: parts.ownerOf, factsOf: parts.factsOf, proc: parts.proc,
     ctx: sourcesCtx({ os: A.os, home, env, dirs: b.dirs, policy: b.policy }), systemProxy: parts.systemProxy, custody: b.custody || 'unavailable', rootPem, procTable: parts.procTable,
     record: event, event, proxyOf: parts.proxyOf, templates: TEMPLATES, agentList: () => ({ entries: agents }), ownSid: parts.ownSid || null, openConns: () => engine.stats().active,
-    drain: ({ harnesses: hs, now }) => engine.drain({ agents: hs ? new Set(hs) : null, now }), // null: every connection (an off that stops the daemon)
+    drain: ({ harnesses: hs, now, by }) => engine.drain({ agents: hs ? new Set(hs) : null, now, ...drainBy(by) }), // null: every connection (an off that stops the daemon)
     upstreamRoots: upstreamRootsOf({ A, env, upstreamCa, event }),
     // the process of a negative-cache key exited, or its door closed: its entries go, as runDaemon's onGone does (4.8 §5.5; the fold clears by neg_key)
     holds: (who) => engine.holdsNegKey(who),
@@ -801,7 +813,8 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     // the connections of the harnesses that are off and still relayed (1.6 §1.3), as runDaemon reports them: the engine counts
     // what it holds in memory, so this costs nothing. Without it `status` said "Connections unknown (the daemon's reply does not
     // carry the connection counts)" on every model-mode machine — a reason about trocar's own IPC (a macOS test machine 2026-10-18).
-    const off = new Set(Object.entries(d).filter(([, e]) => e && e.desired === 'off').map(([h]) => h))
+    // off in THIS daemon's memory, not state.json's desired: an update's exit drain leaves the file saying on (1.6 §5.2), and the wait reads this
+    const off = new Set(list.filter((x) => !collector.isOn(x.name)).map((x) => x.name))
     return { code: VERSION, pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), agents: collector.verdicts(), negatives: engine.negatives(), relayed: engine.relayed({ agents: off }), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
@@ -837,10 +850,11 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     // once, as runDaemon's exitWhenDrained does: whatever the engine still holds after half a second goes through the stop barrier
     'POST /off': gate(async (q) => {
       const b = body(q)
-      const r = await collector.off(b)
+      const by = stopByOf(b)
+      const r = await collector.off({ ...b, by })
       if (b.exit === true) {
         const mine = ++exitAsked; clearInterval(exitTimer)
-        const go = () => { if (mine === exitAsked) { clearInterval(exitTimer); stop({ reason: 'off' }) } }
+        const go = () => { if (mine === exitAsked) { clearInterval(exitTimer); stop({ reason: by || 'off' }) } }
         if (b.now === true) Promise.race([engine.drained({ agents: null }), new Promise((res) => setTimeout(res, 500))]).then(() => new Promise((res) => setTimeout(res, 50))).then(go)
         else exitTimer = setInterval(() => { if (collector.mayExit()) go() }, 250)
       }

@@ -354,14 +354,14 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       return { doors: out, ...(skipped.length ? { skipped } : {}) }
     },
     /** off (§3 ②): the harnesses leave the on set; a door with a holder stays forward-only, the others close; the poll watches what is kept. */
-    async off({ harnesses: hs = null, now = false, exit = false } = {}) {
+    async off({ harnesses: hs = null, now = false, exit = false, by = null } = {}) {
       const ids = exit || !hs || !hs.length ? [...onSet] : hs
       for (const h of ids) { if (onSet.delete(h)) offAt.set(h, clock()) }
       let rows = null
       try { rows = await holdersNow() } catch { rows = null } // unreadable: unknown, every door stays
       if (rows) await settle(rows)
       if (kept().length) poll.start(rows) // this off's own table: never the last watch's answer
-      const relayed = drain ? await drain({ harnesses: exit ? null : ids, now: !!now }) : null // exit: the whole daemon goes, so every connection it relays, whatever harness
+      const relayed = drain ? await drain({ harnesses: exit ? null : ids, now: !!now, ...(by ? { by } : {}) }) : null // exit: the whole daemon goes, so every connection it relays, whatever harness
       return { pid, actual: onSet.size ? 'on' : 'off', confirmed: true, relayed, holders: rows ? rows.length : null }
     },
     lookupIngress,
