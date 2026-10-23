@@ -2,9 +2,9 @@
 // §内存有界: 只读从尾部往前放得进的记录,至多少一步,截断点落在步格上).
 //
 // The room is the spine's share of the read side's budget: the budget less the working set of a fold (working()), the steady
-// caches and the distinct blocks (SPINE_PER_BLOCK each) counted in whole budget steps (a tenth of the budget). A cut session reads
+// caches and the distinct blocks (SPINE_PER_BLOCK each) at their bytes. A cut session reads
 // the newest rows that fit the room less at most one step, the cut on the step grid (a step: a tenth of the budget, at most a
-// quarter of the room): its rows, each at what the plan reckons a row costs, fill the room less at most two steps, and at least
+// quarter of the room, rounded down to a power of two): its rows, each at what the plan reckons a row costs, fill the room less at most two steps, and at least
 // half of it. The
 // plan reckons SPINE_PER_ROW until a fold measured more (the measured bound: a fold whose heap passes the whole reservation stops,
 // and the plan reads as many rows as it got through, its cost rounded up to a quarter power of two), so rows that cost the estimate
@@ -43,9 +43,9 @@ const { truncated } = doc, total = doc.lanes.reduce((n, l) => n + l.count, 0)
 doc = null
 const kept = liveHeap() - before // the spine and the store's blocks, kept warm for the next look
 const rows = sessionGroups(await indexRows({ home, errors: [] })).get(id), blocks = defs(fs.readFileSync(projectionFile(home, id)))
-// the room: the budget less the work, the steady caches and the distinct blocks, each counted in whole steps
+// the room: the budget less the work, the steady caches and the distinct blocks, at their bytes
 const step = heapBudget() / 10
-const room = heapBudget() - working(rows) - Math.ceil(steadyBytes() / step) * step - Math.ceil(blocks * SPINE_PER_BLOCK / step) * step
+const room = heapBudget() - working(rows) - steadyBytes() - blocks * SPINE_PER_BLOCK
 console.log(JSON.stringify({ truncated, total, rows: rows.length, kept, room, step, blocks, SPINE_PER_ROW, SPINE_PER_BLOCK, STORE_HEAP }))`
 
 const cut = (shape, heapMb) => {

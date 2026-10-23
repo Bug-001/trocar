@@ -18,11 +18,11 @@
 // its log, the step-order columns) is kept; it is let go (take(): the only reference dropped) before a state from scratch, so the heap
 // never holds two. The reduction frontier of each session is kept for version().
 //
-// THE CUT (3.5 §内存有界, a backstop): the reduction keeps SPINE_PER_ROW a row and SPINE_PER_BLOCK a distinct block of its store (the
-// blocks reserved beside the steady caches); only when the rows past what the budget holds beside
-// the work and the steady caches does it reduce the newest that fit, less one step, on a grid of steps (`truncated` says so). A
-// reduction whose MEASURED heap passes what was reserved stops (HeapBound, checked per row folded) and the session is cut again
-// by the rows it got through; a cut that moves restarts the fold and its log.
+// THE CUT (3.5 §内存有界, a backstop): the reduction keeps SPINE_PER_ROW a row and SPINE_PER_BLOCK a distinct block of its store;
+// only when the rows pass what the budget holds beside the work, the steady caches and the blocks (those two never cut, counted at
+// their bytes) does it reduce the newest that fit, less one step, on a grid of steps (`truncated` says so); no room for one row is
+// an error. A reduction whose MEASURED heap passes what was reserved stops (HeapBound, checked per row folded) and the session is
+// cut again by the rows it got through; a cut that moves restarts the fold and its log.
 import nodeFs from 'node:fs';
 import { reduction, memoryLog, BlockUnread, REDUCE_HEAP, LEDGER_BYTES } from '../../view/reduce.mjs';
 import { openFoldLog, foldLogFile, LOG_BYTES } from '../fold-log.mjs';
@@ -97,10 +97,9 @@ const PER_ROW_KEPT = 64;
 // one (its first member and the last one's last member at the same places) extends the plan by its new members; any other (a segment
 // indexed again, a store opened again) makes it afresh. So a slice and an answer cost by the new members (3.5 后台抽取与归约).
 function planOf(members, k, store, id) {
-  const perRow = perRows.get(k) || SPINE_PER_ROW, stepBytes = heapBudget() / BOUND_STEPS;
-  const blockSteps = Math.ceil((store.defCount * SPINE_PER_BLOCK) / stepBytes);
+  const perRow = perRows.get(k) || SPINE_PER_ROW;
   let p = store.plan;
-  if (p && p.members === members && p.perRow === perRow && p.blockSteps === blockSteps) return p;
+  if (p && p.members === members && p.perRow === perRow && p.blocks === store.defCount) return p;
   const n0 = p ? p.members.length : 0;
   if (!p || n0 > members.length || String(members[0].id) !== p.first || String(members[n0 - 1].id) !== p.last) {
     p = store.plan = { store, members: [], first: String(members[0].id), last: null, all: sums(), byId: new Map(), facts: sessionFacts(String(id)),
@@ -110,24 +109,27 @@ function planOf(members, k, store, id) {
   for (const r of added) { p.byId.set(String(r.id), r); sum(p.all, r); p.facts.add(r); }
   p.members = members; p.last = String(members[members.length - 1].id);
   p.key = `${p.all.n}:${p.first}:${p.last}:${p.all.stored + p.all.n}`;
-  cut(p, perRow, blockSteps, added);
+  cut(p, perRow, added);
   p.gen++;
   return p;
 }
-/** The rows (in step order) a reduction reads: all while their spine fits the budget beside the work and the steady caches (counted
- *  in whole steps so their refreshes do not move it; the other caches give way), else the newest that do less one step, on a grid of
- *  steps → p.read, p.bound (the document's `truncated`), p.room. A step is the rows a tenth of the budget holds, at most a quarter of
- *  the rows that fit: the cut moves once a step and shows at least half of what fits (a session's index rows and blocks, never cut,
- *  can leave its spine less than two budget steps). The store's distinct blocks are reserved beside the steady caches, in whole steps.
- *  While the cut's first place stays and the new rows sort after its first row, they are put into the kept order. */
-function cut(p, perRow, blockSteps, added) {
-  const stepBytes = heapBudget() / BOUND_STEPS, a = p.all, others = steadyBytes() + blockSteps * stepBytes;
-  const room = heapBudget() - workOf(a.max) - Math.ceil(others / stepBytes) * stepBytes;
+/** The rows (in step order) a reduction reads: all while their spine fits the budget beside the work, the steady caches and the
+ *  store's distinct blocks (the never-cut terms, at their bytes: the other caches give way), else the newest that do less one step,
+ *  on a grid of steps → p.read, p.bound (the document's `truncated`), p.room. A step is the rows a tenth of the budget holds or a
+ *  quarter of the rows that fit, the fewer, rounded down to a power of two (the grids nest). The cut only moves forward, and stays
+ *  while it shows the fit less two steps, so a steady entry let go or a finer grid does not refold: a cut session shows at least half
+ *  of what fits. No room for one row is an error, never a sliver (3.5 §内存有界). While the cut's first place stays and the new rows
+ *  sort after its first row, they are put into the kept order. */
+function cut(p, perRow, added) {
+  const stepBytes = heapBudget() / BOUND_STEPS, a = p.all, others = steadyBytes() + p.store.defCount * SPINE_PER_BLOCK;
+  const room = heapBudget() - workOf(a.max) - others;
   const n = Math.floor(room / perRow);
+  if (n < 1) { p.blocks = -1; throw new Error(`the heap holds no room for this session (${mb(heapBudget())} MB budget, ${mb(others)} MB of index rows and blocks)`); }
   let start = 0;
   if (a.n > n) {
-    const step = Math.max(1, Math.min(Math.floor(stepBytes / perRow), Math.floor(n / 4))), cap = Math.max(1, n - step);
+    const step = 2 ** Math.floor(Math.log2(Math.max(1, Math.min(stepBytes / perRow, n / 4)))), cap = n - step;
     start = Math.min(Math.ceil((a.n - cap) / step) * step, a.n - 1);
+    if (p.start > start && a.n - p.start >= cap - step) start = p.start;
   }
   if (start === p.start && (start === 0 || added.every((r) => stepOrder(r, p.read[0]) > 0))) for (const r of added) { placeIn(p.read, r); sum(p.shown, r); }
   else {
@@ -135,7 +137,7 @@ function cut(p, perRow, blockSteps, added) {
     p.shown = sums();
     for (const r of p.read) sum(p.shown, r);
   }
-  Object.assign(p, { start, perRow, blockSteps, room, work: workOf(p.shown.max), limit: room + workOf(p.shown.max),
+  Object.assign(p, { start, perRow, blocks: p.store.defCount, room, work: workOf(p.shown.max), limit: room + workOf(p.shown.max),
     bound: start ? { shown: p.shown.calls, total: a.calls, kept_mb: mb(p.shown.stored), file_mb: mb(a.stored) } : null });
 }
 // `r` put into `read` (in step order) after the rows it does not sort before, searched from the end: a new row lands near the end

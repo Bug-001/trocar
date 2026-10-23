@@ -3,8 +3,8 @@
 // would spend minutes extracting it a 50 ms slice at a time. It is extracted and folded as it grows (extendSession), uncut: the
 // reader's plan cuts it, so the reader finds a fold log of another cut and folds its own from scratch.
 //
-// The room is what the plan reckons (src/query/named/session.mjs fitting): the reader's budget less the work, the steady caches and
-// the distinct blocks (SPINE_PER_BLOCK each), each counted in whole steps of a tenth of the budget. The blocks are the projection's
+// The room is what the plan reckons (src/query/named/session.mjs cut): the reader's budget less the work, the steady caches and
+// the distinct blocks (SPINE_PER_BLOCK each), at their bytes. The blocks are the projection's
 // `d` lines, so the session is extracted as it grows (as the worker extracts it) and they are counted as they are written.
 import { execFileSync, spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
@@ -28,8 +28,7 @@ export async function growPast(s, { home, budget }) {
   const { steadyBytes } = await import('../../src/query/warm.mjs')
   const { projectionFile } = await import('../../src/query/projection.mjs')
   const { indexRows, sessionGroups } = await import('../../src/query/rows.mjs')
-  const step = budget / 10
-  const room = (rows, blocks) => budget - working(rows) - Math.ceil(steadyBytes() / step) * step - Math.ceil(blocks * SPINE_PER_BLOCK / step) * step
+  const room = (rows, blocks) => budget - working(rows) - steadyBytes() - blocks * SPINE_PER_BLOCK
   // the projection's definition lines, counted over the bytes appended since the last count
   let blocks = 0, read = 0, tail = ''
   const count = () => {
