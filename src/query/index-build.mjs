@@ -40,6 +40,7 @@ import { R, FLAG_NL, FLAG_UNPARSEABLE } from '../raw/format.mjs';
 import { trocarHome, collectorHome } from '../paths.mjs';
 import { readDaemonLock } from '../off/daemon-stop.mjs';
 import { statKey, warmCache, fsTag } from './warm.mjs';
+import { rowTable, isRowTable } from './row-table.mjs';
 
 const rawDir = (home = trocarHome()) => path.join(home, 'raw');
 export const indexDir = (home = trocarHome()) => path.join(home, 'index');
@@ -520,13 +521,28 @@ export const warmSegmentIndex = async ({ home = trocarHome(), segment, fs = node
   const kept = await segRows.get(`${fsTag(fs)}\n${home}\n${segment}`, segStamp(home, segment, fs), async (old) => {
     // the answer this segment had: its index read goes on from where that one stopped (4.2:49)
     const prev = old ? await Promise.resolve(old).catch(() => null) : null; // kept as the promise it was computed as
-    const got = await segmentIndex({ home, segment, fs, past: prev && prev.stored });
+    const got = columnar(await segmentIndex({ home, segment, fs, past: prev && prev.stored }), segment);
     if (got.grown && got.records !== prev.records && got.records.length >= prev.records.length) grew.set(got.records, recordsId(prev.records));
     notes = got.problems.filter((p) => p.level);
     return notes.length ? { ...got, problems: got.problems.filter((p) => !p.level) } : got;
   });
   return notes.length ? { ...kept, problems: [...kept.problems, ...notes] } : kept;
 };
+
+// The rows a warm entry keeps, as one column store per segment (src/query/row-table.mjs): `records` is a view on it, and so is
+// `stored.records` (what the next read concatenates onto, readPast · the resume above) when it is a prefix of `records` — the
+// same array, or resume's `stored.records.concat(…)` — so a row is held once. A view's concat answers a view, so once both are
+// views they stay views; plain arrays come only from a whole read.
+const prefixOf = (s, r) => { if (s.length > r.length) return false; for (let i = 0; i < s.length; i++) if (s[i] !== r[i]) return false; return true; };
+function columnar(got, segment) {
+  const { records: r, stored } = got, s = stored && stored.records;
+  if (isRowTable(r)) return got;
+  if (s && !isRowTable(s) && prefixOf(s, r)) {
+    const sv = rowTable(s, segment);
+    return { ...got, records: r === s ? sv : sv.concat(r.slice(s.length)), stored: { ...stored, records: sv } };
+  }
+  return { ...got, records: rowTable(r, segment), ...(s && !isRowTable(s) ? { stored: { ...stored, records: rowTable(s, segment) } } : {}) };
+}
 
 // WHICH SEGMENT IS BEING WRITTEN (main-session decision, 2026-10-18): there is no `.closed` marker.
 // The running daemon records its current segment in its lock file (~/.trocar/collector/lock), and a
@@ -560,10 +576,18 @@ export async function allSegments({ home = trocarHome(), fs = nodeFs, lockState 
   for (const [segment, at] of seen) {
     const { records, problems, source } = await warmSegmentIndex({ home, segment, fs });
     const sealedBytes = at.sealed ? sizeOf(fs, path.join(rawDir(home), `${segment}.sealed`)) : null;
-    const bytes = at.plain ? sizeOf(fs, path.join(rawDir(home), `${segment}.ndjson`)) : records.reduce((n, r) => n + r.stored_bytes + 1, 0);
-    const stamps = records.map((r) => r.ts).filter(Boolean).sort();
+    // one pass through the accessor: the summed stored bytes (a sealed segment), and the first and last call time as strings sort
+    let stored = 0, from = null, to = null;
+    for (const r of records) {
+      stored += r.stored_bytes + 1;
+      const ts = r.ts;
+      if (!ts) continue;
+      if (from === null || String(ts) < String(from)) from = ts;
+      if (to === null || String(ts) > String(to)) to = ts;
+    }
+    const bytes = at.plain ? sizeOf(fs, path.join(rawDir(home), `${segment}.ndjson`)) : stored;
     out.push({ segment, state: at.plain ? (segment === current ? 'writing' : 'closed') : 'sealed', path: source,
-      records: records.length, bytes, sealed_bytes: sealedBytes, from: stamps[0] ?? null, to: stamps[stamps.length - 1] ?? null, problems });
+      records: records.length, bytes, sealed_bytes: sealedBytes, from, to, problems });
   }
   return out;
 }

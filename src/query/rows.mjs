@@ -58,7 +58,7 @@ function rowList(segs, old) {
   const done = old ? old.segs.slice(0, i) : [];
   for (const { segment, records, entry } of segs.slice(i)) {
     for (let k = out.length - (done.length ? done[done.length - 1].end : 0); k < records.length; k++) {
-      const r = records[k];
+      const r = records.at(k).toJSON(); // a row copy until the row list is columns too (S3)
       const synth = r.synth_hash ? assign({ harness: r.harness_id, hash: r.synth_hash, ms: Date.parse(r.ts || '') }) : null;
       out.push({ ...r, segment, lineNo: Number(String(r.id).split(':').pop()), session_id: r.session_key ?? synth ?? null, synthesized: !!synth });
     }

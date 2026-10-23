@@ -385,11 +385,11 @@ test('读者从上次读到的 mark 往后读:条目与问题和整读相同(残
       grow() // the segment moves, so the reader reads again
       await ops[names[Math.floor(rnd() * names.length)]]()
       const kept = await warmSegmentIndex({ home, segment: SEG, fs: own }), whole = await segmentIndex({ home, segment: SEG })
-      assert.deepEqual({ records: kept.records, problems: kept.problems }, { records: whole.records, problems: whole.problems }, `seed ${seed} step ${step}`)
+      assert.deepEqual({ records: [...kept.records].map((r) => JSON.stringify(r)), problems: kept.problems }, { records: whole.records.map((r) => JSON.stringify(r)), problems: whole.problems }, `seed ${seed} step ${step}`)
     }
     await keep()
     await sealSegment(raw, { lockFile: path.join(home, 'collector', 'lock'), journal: null })
     const kept = await warmSegmentIndex({ home, segment: SEG, fs: own }), whole = await segmentIndex({ home, segment: SEG })
-    assert.deepEqual({ records: kept.records, problems: kept.problems }, { records: whole.records, problems: whole.problems }, `seed ${seed} sealed`)
+    assert.deepEqual({ records: [...kept.records].map((r) => JSON.stringify(r)), problems: kept.problems }, { records: whole.records.map((r) => JSON.stringify(r)), problems: whole.problems }, `seed ${seed} sealed`)
   }
 })
