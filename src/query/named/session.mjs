@@ -30,7 +30,7 @@ import v8 from 'node:v8';
 import { reduction, memoryLog, BlockUnread, REDUCE_HEAP, LEDGER_BYTES, REDUCE_V } from '../../view/reduce.mjs';
 import { openFoldLog, foldLogFile, LOG_BYTES } from '../fold-log.mjs';
 import { trocarHome } from '../../paths.mjs';
-import { extractMembers, extractSeed, blockAt, CHUNK_STORED } from '../../view/extract.mjs';
+import { extractMembers, extractSeed, blockAt, CHUNK_STORED, TAIL_HEAP, releaseTails } from '../../view/extract.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { recordsAt, releaseDecoded, STRETCH_HEAP } from '../records.mjs';
 import { indexRows, sessionGroups, sessionFacts } from '../rows.mjs';
@@ -64,8 +64,8 @@ const WORK_PER_STORED = 4;
 // The cut moves by the rows 1/BOUND_STEPS of the budget holds, so a live session is not reduced from scratch on every new row.
 const BOUND_STEPS = 10;
 /** K (3.5 §内存有界): the fixed caches a session read fills and keeps beside its spine, each a byte cap of its own module (the store's
- *  rows and shared values, the reduction's lists and facts, the fold log's lines, the lane ledgers), never given way to the ledger. */
-export const CACHES = STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES + LEDGER_BYTES;
+ *  rows and shared values, the reduction's lists and facts, the fold log's lines, the lane ledgers, extraction's lane tails), never given way to the ledger. */
+export const CACHES = STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES + LEDGER_BYTES + TAIL_HEAP;
 const STORES = 8;
 
 const stepOrder = (a, b) => compareStep(a.ts, a.id, b.ts, b.id);
@@ -232,6 +232,7 @@ const fileLogs = new WeakMap();
  *  the sealed segments are let go too: an idle worker does not hold them (3.5 §冷路径). */
 export function saveIndexes() {
   releaseDecoded();
+  releaseTails();
   for (const s of stores.values()) sidecars(s);
 }
 // The store's sidecar first (the log's names the projection's bytes); then, when it covers every line of the store (none while the

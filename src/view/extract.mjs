@@ -135,7 +135,7 @@ export function requestBlocks(rec, wire, read = readCall(rec, wire)) {
 const locate = (base, text, span, field = null) => {
   if (!span || text == null) return { ref: null, exact: null, why: null };
   if (!base) return { ref: null, exact: null, why: NO_STREAM };
-  return { ref: composeTextRef(base, span, field), exact: text.slice(span[0], span[1]), why: null };
+  return { ref: composeTextRef(base, span, field), exact: text.slice(span[0], span[1]), why: null, span };
 };
 
 // a reply part as a flat entry of the same vocabulary (section messages, role assistant)
@@ -354,6 +354,30 @@ const FILE_KEY = 'file::';
 // A pending file tool_use of an earlier record, as a block linearContext links a result to: the same id, the same file.
 const linkStub = (id, key) => ({ type: 'tool_use', id, name: '', input: { file_path: key.slice(FILE_KEY.length) } });
 const counts = (x) => x.facts || x; // where a call's msgCount is (the Anthropic wire's facts, a flat lane's x)
+/** TAIL_HEAP: the byte cap of the lane tails (K, 3.5 §内存有界): per store and lane hint, the previous request's body and, for each of
+ *  its request blocks that has a span, [sec, role, from, to, bid]. A request block at the same place, of the same section and role,
+ *  byte-identical to that slice, inherits its bid unhashed (4.3 §3: the same input, the same hash). Least recently kept go first;
+ *  a body bigger than the cap is not kept. Bytes = 2 × the body's characters + TAIL_PER_BLOCK a block. */
+export const TAIL_HEAP = 4 << 20;
+const TAIL_PER_BLOCK = 128;
+const tails = new Map(), storeIds = new WeakMap();
+let tailBytes = 0, storeSeq = 0;
+const tailKey = (store, hint) => { if (!storeIds.has(store)) storeIds.set(store, ++storeSeq); return `${storeIds.get(store)}\n${hint}`; };
+const dropTail = (k) => { const t = tails.get(k); if (t) { tails.delete(k); tailBytes -= t.bytes; } };
+function keepTail(k, body, blocks) {
+  dropTail(k);
+  const bytes = 2 * body.length + TAIL_PER_BLOCK * blocks.length;
+  if (bytes > TAIL_HEAP) return;
+  for (const [o] of tails) { if (tailBytes + bytes <= TAIL_HEAP) break; dropTail(o); }
+  tails.set(k, { body, blocks, bytes }); tailBytes += bytes;
+}
+/** releaseTails(): lets the lane tails go (the idle worker's saveIndexes, src/query/named/session.mjs). */
+export function releaseTails() { tails.clear(); tailBytes = 0; }
+// the bid of request block b at place i when the lane's previous request has the same bytes there (null: hash it)
+const inherited = (tail, i, b, at) => {
+  const t = tail && at.ref != null && at.exact != null ? tail.blocks[i] : null;
+  return t && t[0] === b.sec && t[1] === b.role && t[3] - t[2] === at.exact.length && at.exact === tail.body.slice(t[2], t[3]) ? t[4] : null;
+};
 
 /**
  * extract(record, ctx) → { defs, row }. defs: the definitions of the record's blocks that `ctx` has not seen. row: a call's
@@ -368,8 +392,8 @@ export function extract(rec, ctx) {
   const rid = String(rec.id), pos = rid, wire = callWireOf(rec);
   if (!wire) return { defs: [], row: { rid, pos, x: { item: itemFacts(rec), ...(isLogOnly(rec) ? null : { unknown: jsonClean(unknownFacts(rec)) }) } } };
   // identity before definition (4.3 §3): a block the session has a definition for costs its bid and its place's query, nothing more
-  const defs = [], local = new Set(), take = (b, at) => {
-    const bid = bidFor(b, at.ref, at.exact);
+  const defs = [], local = new Set(), take = (b, at, known = null) => {
+    const bid = known ?? bidFor(b, at.ref, at.exact);
     if (ctx.store.hasDef(bid) || local.has(bid)) return { bid, query: blockQuery(b) };
     const { def, query } = definition(b, at.ref, at.exact, at.why);
     local.add(bid); defs.push(def);
@@ -383,9 +407,11 @@ export function extract(rec, ctx) {
   const st = linker && linker.stitchOf ? linker.stitchOf(rec) : null;
   // the call's own blocks, by section
   const { flat, at } = requestBlocks(rec, wire, read);
-  const own = { tools: [], system: [], messages: [] }, ownFlat = [];
+  const body = reqText(rec), tstore = ctx.store || ctx, tail = body != null ? tails.get(tailKey(tstore, laneHintOf(rec, wire.format, x.lane))) : null;
+  const own = { tools: [], system: [], messages: [] }, ownFlat = [], tailBlocks = [];
   flat.forEach((b, i) => {
-    const { bid, query } = take(b, at[i]);
+    const { bid, query } = take(b, at[i], inherited(tail, i, b, at[i]));
+    tailBlocks.push(at[i].ref != null && at[i].exact != null ? [b.sec, b.role, at[i].span[0], at[i].span[1], bid] : null);
     own[b.sec === 'tools' || b.sec === 'system' ? b.sec : 'messages'].push({ bid, a: attrsOf(b, query), mi: b.mi, b });
     if (b.sec === 'messages') ownFlat.push(b);
   });
@@ -452,6 +478,7 @@ export function extract(rec, ctx) {
   const row = jsonClean({ rid, pos, base: base ? base.rid : null, ...d, reply, mb: delta(base && base.mb, mb), attrs: attrDelta(base && base.attrs, d, attrs), x });
   for (const def of defs) ctx.defined(def.bid); // only once the record extracted whole: a record that throws leaves no trace
   ctx.took(row, { list, mb, attrs, depth: base ? base.depth + 1 : 0 });
+  if (body != null) keepTail(tailKey(tstore, x.hint), body, tailBlocks);
   return { defs, row };
 }
 

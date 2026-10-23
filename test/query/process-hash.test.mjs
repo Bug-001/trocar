@@ -1,6 +1,6 @@
 // test/query/process-hash.test.mjs — RFC 4.3 §4 门槛「哈希按线上字节有界」(D71②): while one session goes from extraction to its first
 // answer, every byte node:crypto hashes in the process (extraction, the raw line checks, the projection, the sealed frame index tail:
-// the whole process, not extraction alone, which test/view/extract-hash.test.mjs bounds) stays within twice the session's wire bytes.
+// the whole process) stays within twice the session's wire bytes.
 //
 // Wire bytes of a session = Σ over its records of the request body's bytes + the bytes of the response text its reply blocks are cut
 // from (resp.raw when it is a string; else the response body's JSON).
@@ -27,7 +27,7 @@ const wireBytes = (rec) => bytesOf(rec.req_body || '')
 
 for (const wire of ['http', 'threads']) {
   test(`a ${wire} session from extraction to its answer hashes at most twice its wire bytes, the whole process`,
-    { todo: 'whole-process hashing is still over 2x its wire bytes', timeout: 300_000 }, async () => {
+    { timeout: 300_000 }, async () => {
       const home = path.join(tmpDir('trocar-process-hash-'), '.trocar')
       const s = bigSession({ home, wire, cc: 16, growth: 2_000, subEvery: 4, subLen: 20, seal: 256 << 10 })
       for (let i = 0; i < 4; i++) { s.append(40); await s.seal() }
