@@ -659,10 +659,11 @@ function openDesk(ctx, route0) {
       if (lk) { openLane = lk; steps.prefetch(lk) }
     }
     if (s.playRid == null) { renderHeader(); chainLedger(); history(); return result({ ok: true, pending: desk.pending || undefined }) } // ⑧ until the named step is here
-    // the followed step's open reply bodies in one read before it is drawn (C3), so its newest reply shows with its bytes
+    // the followed step's open reply bodies in one read before it is drawn (C3), so its newest reply shows with its bytes; the same
+    // read carries the ±NEAR prefetch (2.3 §正文预取), so the rest after it finds nothing left and a delta stays one `block` (4.4:52)
     if (s.follow && moved && !first) {
       const refs = openRefs(s.playRid)
-      if (refs.length) { await loadBodies({ get: (n, p, o) => via(0, n, p, o) }, refs, { signal }); if (stale()) return }
+      if (refs.length) { await loadBodies({ get: (n, p, o) => via(0, n, p, o) }, [...refs, ...nearRefs(s.playRid)], { signal }); if (stale()) return }
     }
     // brush window: a new session starts on the whole of it when that fits the lane, else on the last steps that fit — or, when the
     // URL named an earlier step, on the ones around it. On live growth keep the reader's window, extending it when parked at the end.
