@@ -26,7 +26,7 @@ import { compactionVerdict, hasCompactionPreamble } from '../identity/session-id
 // analyze.mjs too; the cycle is safe because respOf is only CALLED at runtime, after both modules
 // have finished evaluating. test/view/analyze-admission.test.mjs pins both module load orders.)
 import { respOf } from './assemble.mjs'
-import { HEAD, taskOf } from './blockmeta.mjs'
+import { HEAD, taskOf, shorten } from './blockmeta.mjs'
 import { streamParts } from '../dissect/sse-spans.mjs'
 import { num52, numTable } from '../query/projection.mjs'
 export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
@@ -241,7 +241,8 @@ const FIRST_TEXT_CHARS = 4096
 
 // A text as an event shows it: whitespace runs squashed, trimmed, its first 200 characters, and its length.
 const PREVIEW_CHARS = 200
-const evText = (s) => ({ preview: own(s.replace(/\s+/g, ' ').trim().slice(0, PREVIEW_CHARS)), chars: s.length })
+// (shorten: the same squash, read only as far as the preview needs; a tool result's whole text is never copied for 200 chars of it)
+const evText = (s) => ({ preview: own(shorten(s, PREVIEW_CHARS)), chars: s.length })
 
 // SEEN PATHS. A block's path-like tokens (the lane's "seen but never opened" files), in text order as runs [i, n] over its distinct
 // paths `p`: the lane replays them against its own ledger with its per-block cap of NEW paths (seeIn), which is where the scan of
@@ -290,7 +291,7 @@ const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g
 const R_OPEN = '<system-reminder>', R_CLOSE = '</system-reminder>'
 function piece(s) {
   const t = s.trim()
-  return { len: s.length, lead: s.length - s.trimStart().length, trail: t ? s.length - s.trimEnd().length : s.length, head: own(t.replace(/\s+/g, ' ').slice(0, PREVIEW_CHARS)) }
+  return { len: s.length, lead: s.length - s.trimStart().length, trail: t ? s.length - s.trimEnd().length : s.length, head: own(shorten(t, PREVIEW_CHARS)) }
 }
 // s without its reminders as a piece `m`, and, when a reminder in it never closes, `o`: the piece up to that reminder (what is left of
 // s when a later block closes it)

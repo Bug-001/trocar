@@ -98,7 +98,7 @@ const WS = /\s/;
 // never emitted (trim again).
 // The characters are collected and joined ONCE: `out += c` per character left a V8 cons-string tree of ~90 nodes behind
 // every preview (~2 KB of heap for 90 chars), which an assembled window of 60 large calls held as 167 MB (measured).
-const shorten = (s, max = PREVIEW_MAX) => {
+export const shorten = (s, max = PREVIEW_MAX) => {
   const t = String(s || '');
   const out = [];
   let pending = false;
