@@ -88,8 +88,9 @@ for (const wire of ['http', 'chat', 'ws']) for (const arrival of LATE) {
 }
 
 // A Claude Code session whose calls are interleaved with members that are no call: requests of no LLM, and (`unknown`) LLM
-// requests to an endpoint no dissector reads as a call (C1). Seeded: how many follow each call.
-function mixed(home, { calls, unknown = 0, seed = 7 }) {
+// requests to an endpoint no dissector reads as a call (C1): after each of the first `unknown` calls, and `lead` of them before the
+// first call. Seeded: how many follow each call. → {id, endpoints, lines, file} (the whole file written).
+function mixed(home, { calls, unknown = 0, lead = 0, seed = 7 }) {
   const id = `mix${seed}000-0000-4a1b-9c2d-000000000001`, lines = []
   const hdr = { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-claude-code-session-id': id }
   let r = seed, t = Date.parse('2026-10-22T10:00:00.000Z')
@@ -100,15 +101,18 @@ function mixed(home, { calls, unknown = 0, seed = 7 }) {
       is_llm_call: llm, capture: 'transparent', host: 'api.anthropic.com', traffic_class: llm ? 'llm' : 'other', proc: { pid: 1, exe: '/x/claude', agent: 'claude-code' } }))
   }
   const ends = []
+  const unk = (n) => { const e = `/v1/mystery/${n % 2}`; ends.push(e); rec(e, 'POST', true, JSON.stringify({ model: 'mystery-1', input: 'x' }), { ok: true }) }
+  for (let n = 0; n < lead; n++) { unk(n); rec('/api/other/1', 'GET', false, '', { ok: true }) }
   for (let n = 0; n < calls; n++) {
     rec('/v1/messages', 'POST', true, JSON.stringify({ model: 'claude-opus-4-8', max_tokens: 9, messages: [{ role: 'user', content: [{ type: 'text', text: `turn ${n}` }] }] }),
       { id: `msg_${n}`, model: 'claude-opus-4-8', stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 3, output_tokens: 1 } })
     for (let k = rand(3); k > 0; k--) rec(`/api/other/${rand(5)}`, 'GET', false, '', { ok: true })
-    if (n < unknown) { const e = `/v1/mystery/${n % 2}`; ends.push(e); rec(e, 'POST', true, JSON.stringify({ model: 'mystery-1', input: 'x' }), { ok: true }) }
+    if (n < unknown) unk(n)
   }
-  fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
-  fs.writeFileSync(path.join(home, 'raw', '20261022T100000Z.ndjson'), lines.join('\n') + '\n')
-  return { id, endpoints: [...new Set(ends)] }
+  const file = path.join(home, 'raw', '20261022T100000Z.ndjson')
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, lines.join('\n') + '\n')
+  return { id, endpoints: [...new Set(ends)], lines, file }
 }
 const stepRec = (a, b) => compareStep(a.ts_request, a.id, b.ts_request, b.id)
 
@@ -148,6 +152,27 @@ test('C1: records no dissector reads as a call are counted with their endpoints 
     if (!unknown) { assert.equal('unknown' in doc, false); continue }
     assert.equal(doc.unknown.records, unknown)
     assert.deepEqual([...doc.unknown.endpoints].sort(), m.endpoints.sort())
+  }
+})
+
+// A delta carries the records of its `calls` only (3.5 §会话读 增量), so a mixed session is compared on its call rows' records.
+const callRecords = (doc) => { const rows = new Set(doc.calls.map((r) => r.rid)); return { ...doc, records: doc.records.filter((r) => rows.has(r.id)) } }
+test('3.5 #19 unknown: over sessions whose `unknown` records come before, among and after the first rows, apply(full(M), since(M)) is full(now) with `unknown`, on the local path and the worker\'s shared log', async () => {
+  for (const writer of [false, true]) for (const seed of [1, 5]) for (const by of [1, 4]) for (const lead of [0, 3]) for (const unknown of [0, 4]) {
+    const home = homeOf('trocar-sread-unkd-'), m = mixed(home, { calls: 12, unknown, lead, seed }), ctx = { fs: { ...fs }, writer }
+    const q = async (params) => { if (writer) while (await extendSession({ home, ...ctx }, m.id, Infinity)); return session(home, { id: m.id, ...params }, ctx) }
+    let upTo = 1, step = seed
+    fs.writeFileSync(m.file, m.lines.slice(0, upTo).join('\n') + '\n')
+    let full = await q({})
+    while (upTo < m.lines.length) {
+      const more = 1 + (step++ % by) // one member at a time: a first row arrives with no record past M that no dissector read
+      fs.appendFileSync(m.file, m.lines.slice(upTo, upTo + more).join('\n') + '\n')
+      upTo += more
+      const d = await q({ since: full.mark }), now = await q({})
+      assert.equal(canon(callRecords(apply(full, d))), canon(callRecords(now)), `writer ${writer} seed ${seed} by ${by} lead ${lead} unknown ${unknown}: ${upTo} lines`)
+      full = now
+    }
+    if (lead + unknown) assert.ok(full.unknown, 'the session ends with `unknown`')
   }
 })
 
