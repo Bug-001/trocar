@@ -403,6 +403,17 @@ function openDesk(ctx, route0) {
     const rows = [...st.reply, ...st.flat.filter((b, i) => s.openBlocks.has(keys[i]))]
     return [...new Set(rows.map((d) => d.ref).filter((r) => r && !bodyCache.has(r)))]
   }
+  // the reply parts' refs of the held steps up to NEAR on either side of `rid` on the anchor lane, not cached: read with the rest's
+  // own bodies so a step within reach draws its reply at once (2.3 §正文预取)
+  const NEAR = 8
+  function nearRefs(rid) {
+    const calls = s.anchor ? s.anchor.calls : [], i = calls[s.playhead] && calls[s.playhead].rid === rid ? s.playhead : calls.findIndex((c) => c.rid === rid)
+    if (i < 0) return []
+    return calls.slice(Math.max(0, i - NEAR), i + NEAR + 1).flatMap((c) => {
+      const st = deskStep(s.desk, c.rid)
+      return st.held ? st.reply.map((d) => d.ref).filter((r) => r && !bodyCache.has(r)) : []
+    })
+  }
   // what a resting playhead still lacks: its lane (or the older page that holds it), its open bodies. The lanes' remaining older
   // pages come by the history chains (history())
   // the anchor lane's ledger chain comes before any older page (3.5 §手里车道的页): while it is pending (and not failed) no `to` read
@@ -415,9 +426,9 @@ function openDesk(ctx, route0) {
     if (!h || !h.steps.has(rid)) {
       const older = h && h.prev != null && h.rids.length && laneIndex(key, rid) < laneIndex(key, h.rids[0])
       if (older && ledgerFirst()) return null
-      return { lane: older ? { lane: key, to: h.prev } : { lane: key }, refs: [] }
+      return { lane: older ? { lane: key, to: h.prev } : { lane: key }, refs: [...new Set(nearRefs(rid))] }
     }
-    return { lane: null, refs: openRefs(rid) }
+    return { lane: null, refs: [...new Set([...openRefs(rid), ...nearRefs(rid)])] }
   }
   const wanted = new Set() // lanes asked for by the drawer or a rail while another read was out
   let targeted = null, openLane = null

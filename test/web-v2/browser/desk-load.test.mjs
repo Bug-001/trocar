@@ -1,11 +1,11 @@
-// test/web-v2/browser/desk-load.test.mjs — 2.3 #29 and #30 on the mounted desk, in the real Chrome, the session reads answered from a
+// test/web-v2/browser/desk-load.test.mjs — 2.3 #29, #30 and #32 on the mounted desk, in the real Chrome, the session reads answered from a
 // generated long session (desk-world.mjs, 3.5 §会话读's reference server) whose skeleton and anchor lane each come in ≥ 6 pages and
 // whose every answer waits L ms: the loader keeps ≤ 3 reads out, each history chain sends its next read as soon as the last one ended,
 // and the whole history is in within the two chains' back-to-back time (#29); a named step older than the held part lands directly,
 // no step in between is ever drawn (#30). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld } from './harness.mjs'
+import { probe, withBoard, serveWorld, blockBytes } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 
 const gate = await probe()
@@ -119,4 +119,56 @@ test('2.3 #30: a step named older than the held part lands directly within 1 s, 
       assert.deepEqual(b.errors, [])
     } finally { await b.stop() }
   }
+})
+
+test('2.3 #32: a rest of 100 ms reads the reply bodies of the anchor lane\'s ±8 held steps in one block read; stepping there draws them at once', { skip }, async () => {
+  const w = world(5, { calls: 60, page: 100, spage: 100, talk: { pre: 3, len: 30, every: 6, tail: 4 } }), R = 8
+  const main = w.full().lanes.find((h) => h.kind === 'main').lane
+  // every main step's reply refs, from the lane's pages
+  const replyRefs = new Map()
+  for (let to, a; !a || a.prev != null; to = a.prev) {
+    a = w.lane(main, { to })
+    const ref = new Map(a.defs.map((d) => [d.bid, d.ref]))
+    for (const st of a.steps) replyRefs.set(st.rid, st.reply.map((b) => ref.get(b)))
+  }
+  const failed = new Set(w.full(w.now, { limit: 0 }).calls.filter((c) => c.status !== 200).map((c) => c.rid)) // a failed call's reply shows no parts
+  const rids = w.laneRidsAt().get(main), k = rids.length - 2 * R - 3 // 1-based, the 17 around it all held, away from the newest
+  assert.ok(k - R >= 1, 'the main lane is long enough')
+  const near = rids.slice(k - 1 - R, k + R), nearRefs = new Set(near.flatMap((rid) => replyRefs.get(rid)))
+  assert.ok(nearRefs.size >= R, 'the steps around have replies')
+  const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
+  try {
+    const { page } = b
+    const blocks = [] // every block read: when it went out, the refs it asked for
+    page.on('request', (r) => { const u = new URL(r.url()); if (u.pathname === '/api/block') blocks.push({ t: Date.now(), refs: u.searchParams.getAll('ref') }) })
+    await serveWorld(page, w, { latency: 200 })
+    await page.evaluate(() => { location.hash = '#/replay/p/S' })
+    await page.waitForSelector('#stepbar .sb-no')
+    await page.waitForTimeout(800)
+    const asked = new Set(blocks.flatMap((x) => x.refs)), t0 = Date.now()
+    await page.evaluate((k) => { location.hash = `#/replay/p/S?step=${k}` }, k)
+    await page.waitForTimeout(600)
+    // (1) exactly one block read, carrying every not-yet-read reply ref of the 17 steps
+    const rest = blocks.filter((x) => x.t >= t0)
+    assert.equal(rest.length, 1, `block reads after the rest on step ${k}: ${rest.length}`)
+    const missing = [...nearRefs].filter((ref) => !asked.has(ref) && !rest[0].refs.includes(ref))
+    assert.deepEqual(missing, [], 'the rest read carries the ±8 steps\' reply refs')
+    // (2) each of the 17 steps, reached by ←/→ and rested on ≥ 150 ms, shows its open reply part with its bytes, no placeholder
+    const t1 = Date.now()
+    const at = async (n) => {
+      assert.match(await page.textContent('#stepbar .sb-no'), new RegExp(`(^|\\D)${n}\\s*/`), `on step ${n}`)
+      const reply = await page.evaluate(() => { const r = document.querySelector('#ctxwin .cwreply'); return r && { waiting: r.querySelectorAll('pre[data-ref]').length, text: r.textContent } })
+      const refs = replyRefs.get(rids[n - 1])
+      if (!refs.length || failed.has(rids[n - 1])) return
+      assert.ok(reply, `step ${n}: the reply is drawn`)
+      assert.equal(reply.waiting, 0, `step ${n}: the reply bodies are drawn, none waits`)
+      assert.ok(refs.some((ref) => reply.text.includes(blockBytes(ref))), `step ${n}: a reply part shows its bytes`)
+    }
+    for (let n = k - 1; n >= k - R; n--) { await page.keyboard.press('ArrowLeft'); await page.waitForTimeout(150); await at(n) }
+    for (let n = k - R + 1; n <= k + R; n++) { await page.keyboard.press('ArrowRight'); await page.waitForTimeout(150); await at(n) }
+    // (3) no later block read asks for any of them again
+    const again = blocks.filter((x) => x.t >= t1).flatMap((x) => x.refs).filter((ref) => nearRefs.has(ref))
+    assert.deepEqual(again, [], 'no later block read carries the 17 steps\' reply refs')
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
 })
