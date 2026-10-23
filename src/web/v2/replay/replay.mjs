@@ -180,7 +180,7 @@ function mountDesk(el, ctx) {
   s.setDiff = (idx) => { s.diffRef = idx; drawPlayhead() }
   s.renderStep = () => { E.stepbar.innerHTML = stepBarHtml(s) }
 
-  function renderHeader() { s.headFollow = s.follow; renderSessionHead(E.deskhead, s) }
+  function renderHeader() { s.headFollow = s.follow; renderSessionHead(E.deskhead, s); syncUrl() }
 
   // ── empty and failed states: every widget that carries per-session data is neutralised, nothing of the last session stays ──
   // `msg` empty → ⑧, the empty frame (1.4: no text, no control); else the honest failure sentence, Retry, and the reason in details
@@ -281,6 +281,7 @@ function mountDesk(el, ctx) {
       renderContextWindow(E.ctxwin, s, { busy: f === 'busy' }); drawSides(); s.lastPhSig = sig
     }
     if (s.follow !== s.headFollow) renderHeader() // the follow chip (a scrub onto or off the live end, a tick selection)
+    syncUrl() // the one write point for the drawn step: every path that draws a step reaches it
     jumps.settle() // a jump that was waiting for this step's lane lands now that the window shows it
     aim()
   }
@@ -300,7 +301,14 @@ function mountDesk(el, ctx) {
 
   // ── navigation ───────────────────────────────────────────────────────────────────────────────────────────────────
   const shownStep = () => (s.anchor ? (s.anchor.base || 0) + s.playhead + 1 : null)
-  function syncUrl() { const n = shownStep(); if (n != null) router.setParams({ step: String(n) }, { replace: true }) } // scrubbing is not a navigation
+  // the URL says what the reader sees (1.2 §路由): following → no step and no call; otherwise the drawn step. Written only on a
+  // difference (every write counts toward WebKit's limit; our own write comes back through update() as a no-op), replacing history
+  function syncUrl() {
+    const n = shownStep(), r = router.current()
+    if (n == null || s.initialStep != null || !alive() || r.screen !== 'replay' || r.id !== s.id || r.project !== s.project) return // a named step not landed yet keeps its URL
+    const want = s.follow ? { step: null, call: null } : { step: String(n) }, have = r.params
+    if (Object.entries(want).some(([k, v]) => (have[k] ?? null) !== v)) router.setParams(want, { replace: true })
+  }
   // `followLanding`: 跟随最新 brought the playhead here (followOn) → this step lands on the reply; any other move lands by the change
   // line. Set BEFORE the repaint below, because the landing runs once per step, inside that repaint (1.4 §打开一步时落在哪).
   function setPlayhead(i, manual, followLanding = false) {
@@ -322,7 +330,6 @@ function mountDesk(el, ctx) {
     repositionBrush(E.saw, s)
     drawPlayhead()
     restoreSelection()
-    syncUrl()
   }
   // how many bars #sawrow can draw (timeline.mjs barsThatFit). A lane that has no width yet (not laid out, or not in the document) cannot
   // judge: no limit. Measured on the bars row's grid column, not on #sawrow: the detail lanes narrow to the window's bar count (1.3)
@@ -560,7 +567,6 @@ function mountDesk(el, ctx) {
     if (first && !deskStep(desk, s.playRid).held) { openLane = desk.rows.get(s.playRid).lane; steps.prefetch(openLane) }
     renderAll()
     refreshDrawer()
-    if (s.initialStep == null && (first || moved || String(router.current().params.step ?? '') !== String(shownStep()))) syncUrl()
     reask()
     chainLedger(true)
     if (quiet) olderPage()
@@ -621,12 +627,14 @@ function mountDesk(el, ctx) {
         renderEmpty('')
         poll(); return
       }
-      if (!hasStep(route)) return
-      // the same session, only the step moved (our own scrubbing lands here too, and is a no-op): clamp and rewrite (1.2:91)
+      // the same session (our own URL writes land here too, and are no-ops). No step and no call = follow the newest (1.2:91)
+      if (!hasStep(route)) { if (route.params.call == null && !s.follow) followOn(); return }
       if (!s.anchor) { s.initialStep = stepParam(route.params.step).step; return }
+      // a named step pins it with follow off; the move is not the reader's, so landing on the newest call does not turn follow on
       const p = stepParam(route.params.step, s.anchor.count ?? s.anchor.calls.length)
-      if (p.step === shownStep() && !p.rewrite) return
-      setPlayhead(p.step - 1 - (s.anchor.base || 0), true)
+      if (p.step === shownStep() && !p.rewrite && !s.follow) return
+      s.follow = false
+      setPlayhead(p.step - 1 - (s.anchor.base || 0), false)
     },
     unmount() {
       s.dead = true

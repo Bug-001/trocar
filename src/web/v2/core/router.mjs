@@ -110,18 +110,24 @@ export function documentTitle(r) {
   return (r && r.screen === 'traffic-host' && r.host ? `${name} · ${r.host}` : name) + TITLE_SUFFIX
 }
 
-// ── trailing writer ───────────────────────────────────────────────────────────────────────────────────────────────
-// Scrubbing (← / → held down) and typing in a filter box fire dozens of URL writes a second. Safari throws a SecurityError after
-// ~100 history calls in 30 s and Chromium silently drops the excess, so the URL could end on a stale step. Replace-writes are
-// therefore debounced into ONE trailing write; the last value always lands (flush() writes it now, e.g. when the page goes away).
-// The scheduler is injectable so a test needs no real clock.
-export const REPLACE_DELAY_MS = 120
-export function createTrailingWriter({ write, delay = REPLACE_DELAY_MS, setTimer = (f, ms) => setTimeout(f, ms), clearTimer = (t) => clearTimeout(t) }) {
-  let timer = null, has = false, value
+// ── URL writer ────────────────────────────────────────────────────────────────────────────────────────────────────
+// Scrubbing (← / → held down) and typing in a filter box fire dozens of URL writes a second, and WebKit throws a SecurityError after
+// 100 history calls in 30 s. 1.2 §路由: a set when the last write is ≥ `gap` ago writes in the same task, so a lone change is in the URL
+// before a reload can start (Chromium's reload takes the URL as it is; the pagehide flush does not reach it). Otherwise ONE timer at
+// last write + `gap` writes the newest value: writes stay ≥ `gap` apart and the last value always lands (flush() writes it now, e.g.
+// when the page goes away). Clock and scheduler are injectable so a test needs no real clock.
+export const WRITE_GAP_MS = 350
+export function createUrlWriter({ write, gap = WRITE_GAP_MS, now = () => performance.now(), setTimer = (f, ms) => setTimeout(f, ms), clearTimer = (t) => clearTimeout(t) }) {
+  let timer = null, has = false, value, last = -Infinity
   const stop = () => { if (timer != null) { clearTimer(timer); timer = null } }
-  const fire = () => { timer = null; if (has) { has = false; write(value) } }
+  const fire = () => { timer = null; if (has) { has = false; last = now(); write(value) } }
   return {
-    set(v) { value = v; has = true; stop(); timer = setTimer(fire, delay) },
+    set(v) {
+      value = v; has = true
+      if (timer != null) return
+      const wait = last + gap - now()
+      if (wait <= 0) fire(); else timer = setTimer(fire, wait)
+    },
     flush() { stop(); fire() },
     cancel() { stop(); has = false },
     pending() { return has ? { value } : null },
@@ -143,7 +149,7 @@ function historyWrite(kind, h) {
     return false
   }
 }
-const writer = createTrailingWriter({
+const writer = createUrlWriter({
   write(h) { effective = null; historyWrite('replaceState', h); lastHref = location.href },
 })
 
@@ -173,12 +179,12 @@ function wire() {
 export function current() { return parseHash(effective != null ? effective : location.hash) }
 
 // push (or replace) the route in history, then tell subscribers. pushState does not fire hashchange, so we dispatch.
-// A replace is coalesced (see above); a push first lands the pending replace on the entry it leaves, so the way back is exact.
+// A replace is rate-bounded (see above); a push first lands the pending replace on the entry it leaves, so the way back is exact.
 export function go(route, { replace = false } = {}) {
   wire()
   const h = formatHash(route)
   const same = (effective != null ? effective : location.hash) === h
-  if (replace || same) { effective = h; writer.set(h) }
+  if (replace || same) { if (!same) { effective = h; writer.set(h) } } // the same value is not written: every write counts toward WebKit's limit
   else {
     writer.flush(); effective = null
     if (!historyWrite('pushState', h)) location.hash = h // blocked: a plain hash change still makes the entry and the URL
