@@ -72,15 +72,17 @@ test('openTurnFor: a click into an explicitly folded card opens it AND writes th
 test('query rows: 「第 N 步起」 pairs from the last, a mismatch kills it and every earlier one', () => {
   const flat = [blk({ query: '第一问,稍微长一点的问题文字' }), blk({ query: '第二问' }), blk({ query: '第三问' })]
   const lanes = [{ kind: 'main', rows: [{}, {}, {}], blocks: [[], [], flat] }]
-  const ev = (i, preview) => ({ type: 'user', rid: `R0-${i}`, lane: 'R0-0', preview })
+  const ev = (i, preview) => ({ type: 'user', rid: `R0-${i}`, k: i + 1, preview })
+  // the main lane's `lane` answer carries the user events with their preview (2.5:16)
+  const held = (ls, events) => ls.map((l, i) => (i ? l : { ...l, events }))
   // events pair from the LAST backwards; the middle preview does not prefix-match → it and the first stay unnumbered
-  let s = deskState(lanes, { playhead: 2, events: [ev(0, '第一问,稍微长一点的问题文字'), ev(1, '完全不相关的另一段'), ev(2, '第三问')] })
+  let s = deskState(held(lanes, [ev(0, '第一问,稍微长一点的问题文字'), ev(1, '完全不相关的另一段'), ev(2, '第三问')]), { playhead: 2 })
   assert.deepEqual(queryStepLabels(s, humanTurns(stepOf(s.desk, 'R0-2').flat)), [null, null, { n: 3, rid: 'R0-2' }], 'a failed pair kills its own and every earlier number')
-  s = deskState(lanes, { playhead: 2, navOpen: new Set(['msg']), events: [ev(0, '第一问,稍微长一点的问题文字'), ev(1, '第二问'), ev(2, '第三问')] })
+  s = deskState(held(lanes, [ev(0, '第一问,稍微长一点的问题文字'), ev(1, '第二问'), ev(2, '第三问')]), { playhead: 2, navOpen: new Set(['msg']) })
   assert.deepEqual(queryStepLabels(s, humanTurns(stepOf(s.desk, 'R0-2').flat)).map((x) => x && x.n), [1, 2, 3], 'N = stepRef(event.rid)')
   assert.match(outlineHtml(s), /data-jumprid="R0-0"/)
   // an event after the playhead's step is not counted: on step 2 only two events precede, so only the last two rows pair
-  const s1 = deskState([{ kind: 'main', rows: [{}, {}, {}], blocks: [[], flat, []] }], { playhead: 1, events: [ev(0, '第二问'), ev(1, '第三问'), ev(2, 'later')] })
+  const s1 = deskState(held([{ kind: 'main', rows: [{}, {}, {}], blocks: [[], flat, []] }], [ev(0, '第二问'), ev(1, '第三问'), ev(2, 'later')]), { playhead: 1 })
   assert.deepEqual(queryStepLabels(s1, humanTurns(flat)).map((x) => x && x.n), [null, 1, 2])
   // no user events → no numbers
   assert.ok(!/data-jumprid/.test(outlineHtml(deskState(lanes, { playhead: 2, navOpen: new Set(['msg']) }))))

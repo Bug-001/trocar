@@ -8,7 +8,7 @@ import { popover, menuButton, mark } from '../core/ui.mjs'
 import { cacheState, usageOf, breakCost, priceMatch, costOf } from '../core/metrics.mjs'
 import { segTax, TAX_ORDER, hasChangeLine, callFacts, refRowOf } from './analysis.mjs'
 import { stepRef } from './lanes.mjs'
-import { stepOf } from './model.mjs'
+import { stepOf, askOrdinal } from './model.mjs'
 import * as W from '../labels/replay.mjs'
 
 const modelOf = (c) => (c && c.rec && c.rec.request && c.rec.request.model) || null
@@ -16,9 +16,9 @@ const modelOf = (c) => (c && c.rec && c.rec.request && c.rec.request.model) || n
 const errMsgOf = (c) => { const e = c && c.error; if (!e) return ''; return typeof e === 'string' ? e : (e.message || e.msg || '') }
 
 // ── the cost cell trio (from rawpanel.mjs; D14 — a LOCAL estimate, never a wire fact) ───────────────────────────────
-// the state of the price table itself, when there is no table to look a price up in: a failed read names its reason, an
-// unanswered one says so. Empty when the table is there.
-export const priceStateNote = (table, err) => (table ? '' : err ? `The price table could not be read: ${err}` : 'Loading the price table')
+// the state of the price table itself, when there is no table to look a price up in: a failed read names its reason; an
+// unanswered one says nothing (no "loading" word anywhere, 2.3:173). Empty when the table is there.
+export const priceStateNote = (table, err) => (table || !err ? '' : `The price table could not be read: ${err}`)
 // the price a model's cost is read through: exact key, or the LONGEST table key occurring in the model id (then every place
 // that shows it labels it 「按 <键> 的单价」). No key at all → null: unknown, never a guess.
 export const priceMatchOf = (table, model) => priceMatch(table, model)
@@ -26,7 +26,7 @@ export const priceMatchOf = (table, model) => priceMatch(table, model)
 // else dollars, ≈-marked by the caller (unknown is never $0)
 export function costCellHtml(model, u, table, tableErr) {
   if (!u) return `— <span class="estnote">${esc(W.COST_WHY['no-usage'])}</span>`
-  if (!table) return `— <span class="estnote">${esc(priceStateNote(table, tableErr))}</span>`
+  if (!table) return tableErr ? `— <span class="estnote">${esc(priceStateNote(table, tableErr))}</span>` : '—'
   const m = priceMatch(table, model)
   if (!m) return `— <span class="estnote">${esc(W.COST_WHY['no-price'])}</span>`
   return `<b>${usd(costOf(m.row, u))}</b>` + (m.exact ? '' : ` <span class="estnote">${esc(W.PRICE_BY_KEY(m.key))}</span>`)
@@ -117,8 +117,8 @@ export function costPopoverHtml(call, { table = null, tableErr = null } = {}) {
   const m = u && table ? priceMatch(table, modelOf(call)) : null
   if (m && m.exact === false) rows.push(`<div class="pp-note">${esc(W.PRICE_BY_KEY(m.key))}</div>`)
   if (!m || !u) {
-    const why = st.state === 'failed' ? W.COST_WHY.failed : !u ? W.COST_WHY['no-usage'] : !table ? W.priceTableNote(table, tableErr) : W.COST_WHY['no-price']
-    rows.push(`<div class="pp-note">${esc(why)}</div>`)
+    const why = st.state === 'failed' ? W.COST_WHY.failed : !u ? W.COST_WHY['no-usage'] : !table ? priceStateNote(table, tableErr) : W.COST_WHY['no-price']
+    if (why) rows.push(`<div class="pp-note">${esc(why)}</div>`)
   }
   rows.push(`<div class="pp-link"><a href="#/settings/prices">${W.SEE_PRICES}</a></div>`)
   return rows.join('')
@@ -154,9 +154,9 @@ export function stepBarHtml(s) {
   const n = ref0 ? (ref0.step ? ref0.n : ref0.k) : s.playhead + 1, M = ref0 ? ref0.m : s.anchor.calls.length
   const no = isMain ? W.stepNo(n, M) : W.callNo(W.laneWord(s.anchor.kind), n, M)
   const model = modelOf(call)
-  // 第 K 次提问: the anchor lane's user events (each names its call by rid) at or before this step in step order
-  const at = (rid) => { const i = s.anchor.ridLocal && s.anchor.ridLocal.get(rid); return i == null ? Infinity : i }
-  const ask = (s.anchor.events || []).filter((e) => e && e.type === 'user' && e.rid != null && at(e.rid) <= s.playhead).length
+  // 第 K 次提问 (2.2 K row): the `k` of the main lane's last user event at or before this step, from the held pages; not
+  // drawn when there is none or the held pages do not reach it (askOrdinal null) — never a count of the held events
+  const ask = isMain && s.desk ? askOrdinal(s.desk, s.anchor.id, call.rid) : null
   // ◐: the call-level fidelity facts (words owned by 2.3's 调用保真行; here only the mark and the server's own texts)
   // lit iff the row has words (callFacts, one source with the row; capture routing is not a fidelity fact)
   const fid = callFacts(call)
@@ -174,7 +174,7 @@ export function stepBarHtml(s) {
   return `<span class="sb-nav"><button type="button" class="sbbtn" data-step="prev" aria-label="${esc(W.STEP_PREV)}" title="${esc(W.STEP_PREV)}">‹</button>` +
     `<b class="sb-no">${esc(no)}</b>` +
     `<button type="button" class="sbbtn" data-step="next" aria-label="${esc(W.STEP_NEXT)}" title="${esc(W.STEP_NEXT)}">›</button></span>` +
-    (ask ? `<span class="sb-ask" title="${esc(W.askNo(ask))}">${esc(W.askNo(ask))}</span>` : '') +
+    (ask >= 1 ? `<span class="sb-ask" data-k="${ask}" title="${esc(W.askNo(ask))}">${esc(W.askNo(ask))}</span>` : '') +
     `<span class="sb-time" title="${esc(call.ts || '')}">${esc(fmtTime(call.ts) || '—')}</span>` +
     `<span class="sb-model"${model ? ` title="${esc(model)}"` : ''}>${esc(model || '—')}</span>` +
     (hasFid ? `<span class="sb-fid">${mark('part', fidTxt || undefined)}</span>` : '') +

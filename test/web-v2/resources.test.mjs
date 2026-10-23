@@ -11,6 +11,7 @@ import * as W from '../../src/web/v2/labels/replay.mjs'
 import { relPath } from '../../src/web/v2/replay/analysis.mjs'
 import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
 import { deskOf } from './desk-world.mjs'
+import { applyLane, applyLedger, seenFiles } from '../../src/web/v2/replay/model.mjs'
 
 // the main lane's six rows are R0-0 … R0-5 (deskOf); `ledger` is its lane answer's {resources, seen, events}
 const R = (i) => `R0-${i}`
@@ -150,5 +151,47 @@ test('resource state on rids: pending / live / evicted at every playhead', () =>
       const want = ph < a ? 'pend' : live ? '' : 'dead'
       assert.equal(row[1].trim(), want, `${JSON.stringify(segs)} @${ph}`)
     }
+  }
+})
+
+// A34 (2.4 #1, 2.4:67 · :148): 只见到名字 leaves out every opened file under either spelling; while the anchor lane's
+// `ledger_next` chain is unread, each count the ledger gives is an empty busy box (no digit, never a 0); the compaction
+// count (lane events) is exact once the lane is held; the chain read to its end → the counts are the ledger's.
+test('A34 seen minus opened files; ledger counts busy until the ledger chain is read, then the ledger\'s', () => {
+  const key = R(0), cwd = '/w/p'
+  const res = [
+    { kind: 'file', label: `${cwd}/src/a.mjs`, segments: [{ enter: R(0), evict: null }] },
+    { kind: 'file', label: 'src/b.mjs', segments: [{ enter: R(1), evict: null }] },
+    { kind: 'scaffold', label: 'CLAUDE.md', segments: [{ enter: R(0), evict: null }] },
+    { kind: 'capability', label: 'srv', segments: [{ enter: R(0), evict: null }] },
+  ].map((r) => ({ key: `${r.kind}:${r.label}`, ...r }))
+  const seen = [`${cwd}/src/a.mjs`, 'src/a.mjs', `${cwd}/src/b.mjs`, `${cwd}/notes.md`, 'docs/x.md']
+    .map((path, i) => ({ path, count: 1 + i, firstRid: R(i) }))
+  const events = [{ type: 'compaction', rid: R(2), from: 10, to: 3 }]
+  const steps = Array.from({ length: 6 }, (_, i) => ({ rid: R(i), parent: null, ops: [[1]], reply: [], attrs: {}, detail: null }))
+  const s = stateOf(anchorOf({}), { meta: { project_path: cwd } })
+  // the tail page carries half the ledger and names the rest by ledger_next
+  applyLane(s.desk, { lane: key, base: null, prev: null, next: null, steps, defs: [], resources: res.slice(0, 2), seen: seen.slice(0, 3), events, ledger_next: 'c1' })
+  const heads = (h) => new Map([...h.matchAll(/<div class="navrow head[^"]*"[^>]*data-navtoggle="([^"]+)"[^>]*>([\s\S]*?)<\/div>/g)].map((m) => [m[1], m[2]]))
+  const ledgerKeys = ['life-file', 'life-load', 'life-seen', 'life-cap', 'life-dl', 'life-other', 'life-others']
+  let hs = heads(resourcesHtml(s))
+  assert.ok([...hs.keys()].some((k) => ledgerKeys.includes(k)), 'some ledger group is drawn while the chain is unread')
+  for (const [k, inner] of hs) {
+    if (!ledgerKeys.includes(k)) continue
+    assert.match(inner, /<span class="navct" aria-busy="true"><\/span>/, `${k}: the count is a busy box`)
+    assert.ok(!/\d/.test(inner.replace(/<[^>]*>/g, '')), `${k}: no digit while not known`)
+  }
+  assert.equal(grpCount(resourcesHtml(s), W.RES_GRP.comp), events.length, 'the compaction count is exact once the lane is held')
+  applyLedger(s.desk, key, 'c1', { resources: res.slice(2), seen: seen.slice(3), ledger_next: null })
+  const h = resourcesHtml(s)
+  assert.ok(!/aria-busy/.test(h), 'the chain is read: nothing is busy')
+  const shown = seenFiles(s.desk, key)
+  assert.equal(grpCount(h, `${W.RES_GRP.seen} · ${W.GUESS}`), shown.length)
+  for (const [kind, grp] of [['file', 'file'], ['scaffold', 'load'], ['capability', 'cap']]) assert.equal(grpCount(h, W.RES_GRP[grp]), res.filter((r) => r.kind === kind).length, kind)
+  const chips = [...h.matchAll(/<span class="navchip[^"]*"[^>]*title="([^"]*)"/g)].map((m) => m[1])
+  assert.equal(chips.length, shown.length)
+  for (const r of res.filter((x) => x.kind === 'file')) {
+    const base = r.label.split('/').pop()
+    assert.ok(!chips.some((t) => t.includes(base)), `${r.label}: an opened file is not a name-only chip under any spelling`)
   }
 })

@@ -5,7 +5,7 @@
 import { esc, kf } from '../core/fmt.mjs'
 import { attrSel } from '../core/dom.mjs'
 import { humanTurns, hasChangeLine, foldWs, QUIET_CAUSES } from './analysis.mjs'
-import { stepOf } from './model.mjs'
+import { stepOf, laneEvents } from './model.mjs'
 import { toggleCtxBlock, openTurnFor, openTurnOfNode } from './ctxwin.mjs'
 import { anchorJump, blockJump } from './jump.mjs'
 import { stepRef } from './lanes.mjs'
@@ -13,9 +13,11 @@ import * as W from '../labels/replay.mjs'
 
 // a collapsible group of the outline / resource lists (2.4 shares this shell); words only — no pictographs.
 // role="button" + tabindex: the head is keyboard-focusable and Enter/Space toggle it (wireOutline's keydown).
+// `count`: '' = the group has no count; null = a count not known yet — an empty aria-busy box, no digit, no word (2.4:67)
 export function navGroupHtml(s, key, label, count, kidsHtml, { hint = '' } = {}) {
   const open = s.navOpen.has(key)
-  return `<div class="navrow head ${open ? 'open' : ''}" role="button" tabindex="0" data-navtoggle="${esc(key)}"${hint ? ` title="${esc(hint)}"` : ''}><span class="navlbl">${esc(label)}</span>${count !== '' && count != null ? `<span class="navct">${count}</span>` : ''}</div>` +
+  const ct = count === '' ? '' : count == null ? '<span class="navct" aria-busy="true"></span>' : `<span class="navct">${count}</span>`
+  return `<div class="navrow head ${open ? 'open' : ''}" role="button" tabindex="0" data-navtoggle="${esc(key)}"${hint ? ` title="${esc(hint)}"` : ''}><span class="navlbl">${esc(label)}</span>${ct}</div>` +
     (open ? `<div class="navkids">${kidsHtml}</div>` : '')
 }
 
@@ -27,14 +29,15 @@ const bodyState = (call) => call.unparsed ? { why: W.UNPARSED_LINE } : !call.rec
 // the playhead step's blocks: null while its lane is not held
 const flatOf = (s, call) => (s.desk && call ? stepOf(s.desk, call.rid).flat : null)
 
-// 「第 N 步起」: pair the query rows with the main lane's user events from the LAST one backwards — a pair matches only
-// when the shorter folded text is a prefix of the other; the first pair that fails kills its number and every earlier
-// row's (a shifted pairing would misname them). Only on the main lane, only through stepRef(); never a guess.
+// 「第 N 步起」: pair the query rows with the held main lane's user events (the `lane` answer's, which carry `preview`; 2.5:16)
+// from the LAST one backwards — a pair matches only when the shorter folded text is a prefix of the other; the first pair
+// that fails kills its number and every earlier row's (a shifted pairing would misname them). An event whose page is not
+// held is not there to pair, so its row has no number. Only on the main lane, only through stepRef(); never a guess.
 export function queryStepLabels(s, turns) {
   const anchor = s.anchor
   if (!anchor || anchor.kind !== 'main' || !turns.length) return []
   const at = (rid) => { const i = anchor.ridLocal && anchor.ridLocal.get(rid); return i == null ? Infinity : i }
-  const evs = (anchor.events || []).filter((e) => e && e.type === 'user' && e.rid != null && at(e.rid) <= s.playhead)
+  const evs = (s.desk ? laneEvents(s.desk, anchor.id) : []).filter((e) => e && e.type === 'user' && e.rid != null && at(e.rid) <= s.playhead)
   if (!evs.length) return []
   const out = new Array(turns.length).fill(null)
   for (let k = 0; k < Math.min(evs.length, turns.length); k++) {

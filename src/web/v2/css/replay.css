@@ -274,6 +274,8 @@
   .navrow .navic{width:15px;text-align:center;flex:0 0 auto;}
   .navrow .navlbl{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .navrow .navct{font-family:var(--mono);font-size:10px;color:var(--dimmer);}
+  /* a ledger count not known yet (2.4:67): a sized empty box where the digits go, no words */
+  .navrow .navct[aria-busy="true"]{display:inline-block;width:2ch;height:10px;border-radius:2px;background:color-mix(in srgb,var(--fg) 6%,transparent);}
   .navrow.head .navlbl{color:var(--fg);font-weight:600;}
   .navrow.head::before{content:"▸";color:var(--dimmer);font-size:10px;margin-right:-2px;}
   .navrow.head.open::before{content:"▾";}

@@ -12,6 +12,7 @@ import { L } from '../core/labels.mjs'
 import { cacheState, isBreak, breakCost, usageOf, priceMatch, costOf, isFailed } from '../core/metrics.mjs'
 import { CT_ORDER, callComp, hitTier, refRowOf } from './analysis.mjs'
 import { anchorJump } from './jump.mjs'
+import { laneEvents } from './model.mjs'
 import { laneWord } from '../labels/replay.mjs'
 import * as W from '../labels/replay.mjs'
 // the composition colours' keys, in the bars' stacking order: [class suffix, word]
@@ -175,9 +176,12 @@ export function renderSaw(el, s) {
   }
   // the cache band
   q(el, '#cacherow').innerHTML = win.map(([c, i]) => cacheCell(c, i, s)).join('')
-  // the 提问刻度: only where the server ships user events (1.3 §提问刻度); an event names its call by rid → ridLocal
-  const asks = (s.anchor.events || []).filter((e) => e && e.type === 'user' && e.rid != null)
-    .map((e, k) => ({ k: k + 1, i: s.anchor.ridLocal ? s.anchor.ridLocal.get(e.rid) : null, preview: e.preview || '' }))
+  // the 提问刻度 (1.3 §提问刻度): the ticks from the main lane's skeleton user events (the `session` answer's, on the lane
+  // object); an event names its call by rid → ridLocal. The hover's K and opening come from the held lane's event with that
+  // rid (`lane` answer, `k` · `preview`); while that page is not held the hover names only the step (no K, no guess)
+  const held = isMain && s.desk ? new Map(laneEvents(s.desk, s.anchor.id).filter((e) => e.type === 'user').map((e) => [e.rid, e])) : new Map()
+  const asks = (isMain ? s.anchor.events || [] : []).filter((e) => e && e.type === 'user' && e.rid != null)
+    .map((e) => ({ i: s.anchor.ridLocal ? s.anchor.ridLocal.get(e.rid) : null, ev: held.get(e.rid) || null }))
     .filter((a) => a.i != null && a.i >= lo && a.i < hi)
   const askrow = q(el, '#askrow')
   if (askrow) {
@@ -189,7 +193,9 @@ export function renderSaw(el, s) {
     let h = ''
     for (let i = lo; i < hi; i++) {
       const arr = byStep.get(i)
-      h += arr ? `<span class="atick" data-i="${i}" title="${esc(arr.map((a) => W.askScaleTip(a.k, a.preview)).join('\n'))}"></span>` : '<span class="acell"></span>'
+      const ks = arr ? arr.filter((a) => a.ev && a.ev.k != null).map((a) => a.ev.k) : []
+      const tip = arr ? [...new Set(arr.map((a) => (a.ev && a.ev.k != null ? W.askScaleTip(a.ev.k, a.ev.preview || '') : `step ${(s.anchor.base || 0) + i + 1}`)))].join('\n') : ''
+      h += arr ? `<span class="atick" data-i="${i}"${ks.length ? ` data-k="${ks.join(' ')}"` : ''} title="${esc(tip)}"></span>` : '<span class="acell"></span>'
     }
     q(el, '#askscale').innerHTML = h
   }
