@@ -2,7 +2,7 @@
 // §内存有界: 只读从尾部往前放得进的记录,至多少一步,截断点落在步格上).
 //
 // The room is the spine's share of the read side's budget: the budget less the working set of a fold (working()), the steady
-// caches and the distinct blocks (SPINE_PER_BLOCK each) at their bytes. A cut session reads
+// caches, the distinct blocks (SPINE_PER_BLOCK each) and the fixed caches (CACHES, K) at their bytes. A cut session reads
 // the newest rows that fit the room less at most one step, the cut on the step grid (a step: a tenth of the budget, at most a
 // quarter of the room, rounded down to a power of two): its rows, each at what the plan reckons a row costs, fill the room less at most two steps, and at least
 // half of it. The
@@ -19,8 +19,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { REDUCE_HEAP } from '../../src/view/reduce.mjs'
-import { LOG_BYTES } from '../../src/query/fold-log.mjs'
 import { pastRoom, readerFlags } from './past-room.mjs'
 
 const at = (p) => JSON.stringify(new URL(p, import.meta.url).href)
@@ -28,9 +26,9 @@ const at = (p) => JSON.stringify(new URL(p, import.meta.url).href)
 const READ = `
 const fs = await import('node:fs')
 const { runQuery } = await import(${at('../../src/query/named/index.mjs')}) // first: the registry imports session.mjs
-const { SPINE_PER_ROW, SPINE_PER_BLOCK, working } = await import(${at('../../src/query/named/session.mjs')})
+const { SPINE_PER_ROW, SPINE_PER_BLOCK, CACHES, working } = await import(${at('../../src/query/named/session.mjs')})
 const { heapBudget, steadyBytes, liveHeap } = await import(${at('../../src/query/warm.mjs')})
-const { STORE_HEAP, projectionFile } = await import(${at('../../src/query/projection.mjs')})
+const { projectionFile } = await import(${at('../../src/query/projection.mjs')})
 const { indexRows, sessionGroups } = await import(${at('../../src/query/rows.mjs')})
 // the projection's definition lines, counted over its bytes (a Buffer, outside the heap measured)
 const defs = (b) => { let n = 0; for (let i = b.indexOf('\\n{"d":'); i >= 0; i = b.indexOf('\\n{"d":', i + 1)) n++; return n }
@@ -45,8 +43,8 @@ const kept = liveHeap() - before // the spine and the store's blocks, kept warm 
 const rows = sessionGroups(await indexRows({ home, errors: [] })).get(id), blocks = defs(fs.readFileSync(projectionFile(home, id)))
 // the room: the budget less the work, the steady caches and the distinct blocks, at their bytes
 const step = heapBudget() / 10
-const room = heapBudget() - working(rows) - steadyBytes() - blocks * SPINE_PER_BLOCK
-console.log(JSON.stringify({ truncated, total, rows: rows.length, kept, room, step, blocks, SPINE_PER_ROW, SPINE_PER_BLOCK, STORE_HEAP }))`
+const room = heapBudget() - working(rows) - steadyBytes() - blocks * SPINE_PER_BLOCK - CACHES
+console.log(JSON.stringify({ truncated, total, rows: rows.length, kept, room, step, blocks, SPINE_PER_ROW, SPINE_PER_BLOCK, CACHES }))`
 
 const cut = (shape, heapMb) => {
   const home = path.join(tmpDir('trocar-cutfits-'), '.trocar'), id = pastRoom({ home, shape, heapMb })
@@ -65,10 +63,10 @@ const mb = (n) => (n / 1048576).toFixed(1)
 test('3.5 §内存有界: a cut session whose rows cost what the plan reckons shows the calls that fit the room, less at most two steps and at least half', { timeout: 120_000 }, () => {
   // Claude Code on Message Threads, its tool definitions and cache markers riding every request (cc): a body has the long keys and
   // the resent items a real one has
-  const c = cut({ growth: 150, subEvery: 4, subLanes: 3, subLen: 12, wire: 'threads', compactAt: 3_000, cc: 4 }, 128)
+  const c = cut({ growth: 150, subEvery: 4, subLanes: 3, subLen: 12, wire: 'threads', compactAt: 3_000, cc: 4 }, 160)
   // the calls shown and the store's blocks, beside the fixed caches (3.5 §内存有界 K): the store's, the reduction's lists and facts,
   // the fold log's lines
-  const bound = c.shown * c.SPINE_PER_ROW + c.blocks * c.SPINE_PER_BLOCK + c.STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES
+  const bound = c.shown * c.SPINE_PER_ROW + c.blocks * c.SPINE_PER_BLOCK + c.CACHES
   assert.ok(c.kept <= bound, `${mb(c.kept)} MB kept for ${c.shown} calls and ${c.blocks} blocks, past ${mb(bound)} MB`)
   assert.ok(c.shown * c.SPINE_PER_ROW >= Math.max(c.room - 2 * c.step, c.room / 2) - c.SPINE_PER_ROW,
     `${c.shown} / ${c.total} calls shown, ${mb(c.shown * c.SPINE_PER_ROW)} MB at ${c.SPINE_PER_ROW} B each, of a ${mb(c.room)} MB room: more than two ${mb(c.step)} MB steps or half of it short (${(c.perRow / 1024).toFixed(1)} KiB kept a call)`)
@@ -78,10 +76,10 @@ test('3.5 §内存有界: a cut session whose rows cost what the plan reckons sh
 // map keeps each distinct name, ~8 KB a call at 16,000): the estimate's cut reads more than the room holds at what they cost, the fold passes
 // its reservation and stops, and the measured bound cuts again by the rows the fold got through, never fewer than half of those asked,
 // the cost rounded up to a quarter power of two; the cut then shows at least half of what that fits — not a sliver of it.
-// The session past a 112 MB reader's room at 16,000 characters a name is 7,000 calls (a 128 MB reader at 32,000: 12,000 calls, 1.7 GB
-// on disk and a minute to grow): growing it is most of this case's time.
+// A 160 MB reader at 32,000 characters a name: growing the session past its room is most of this case's time. At 144 MB with
+// 16,000 the measured bound never fires (2,928 calls shown against 1,934 asked): the dear rows fit in the W + K slack.
 test('3.5 §内存有界: a cut session whose rows cost far more than the plan reckons is cut by the measured bound to at least half of what fits', { timeout: 180_000 }, () => {
-  const c = cut({ growth: 150, subEvery: 4, subLanes: 3, subLen: 12, wire: 'threads', compactAt: 3_000, cc: 4, names: 16_000 }, 112)
+  const c = cut({ growth: 150, subEvery: 4, subLanes: 3, subLen: 12, wire: 'threads', compactAt: 3_000, cc: 4, names: 32_000 }, 160)
   // the fewest calls the estimate's cut shows (the test above): the rows asked
   const asked = Math.max(c.room - 2 * c.step, c.room / 2) / c.SPINE_PER_ROW - 1
   assert.ok(c.shown < asked, `${c.shown} calls shown, not fewer than the ${Math.floor(asked)} the estimate asks for: the measured bound did not cut (else this test proves nothing)`)

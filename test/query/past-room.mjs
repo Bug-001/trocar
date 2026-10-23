@@ -24,11 +24,11 @@ const BUDGET = `const { heapBudget } = await import(${at('../../src/query/warm.m
 export async function growPast(s, { home, budget }) {
   const fs = await import('node:fs')
   await import('../../src/query/named/index.mjs') // first: the registry imports session.mjs
-  const { SPINE_PER_ROW, SPINE_PER_BLOCK, working, extendSession } = await import('../../src/query/named/session.mjs')
+  const { SPINE_PER_ROW, SPINE_PER_BLOCK, CACHES, working, extendSession } = await import('../../src/query/named/session.mjs')
   const { steadyBytes } = await import('../../src/query/warm.mjs')
   const { projectionFile } = await import('../../src/query/projection.mjs')
   const { indexRows, sessionGroups } = await import('../../src/query/rows.mjs')
-  const room = (rows, blocks) => budget - working(rows) - steadyBytes() - blocks * SPINE_PER_BLOCK
+  const room = (rows, blocks) => budget - working(rows) - steadyBytes() - blocks * SPINE_PER_BLOCK - CACHES
   // the projection's definition lines, counted over the bytes appended since the last count
   let blocks = 0, read = 0, tail = ''
   const count = () => {

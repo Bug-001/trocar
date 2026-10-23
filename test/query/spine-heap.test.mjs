@@ -140,8 +140,8 @@ for await (const _ of (await import('node:readline')).createInterface({ input: p
 test('a session past the heap bound that keeps growing keeps its cut between steps, so it is folded on, not from scratch', { timeout: 120_000 }, async () => {
   const home = path.join(tmpDir('trocar-spine-'), '.trocar')
   // Message Threads, subagents side by side
-  const s = await grower({ home, heapMb: 128, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12 } })
-  const reader = spawn(process.execPath, [...readerFlags(128), '--input-type=module', '-e', GROWING, home, s.id], { stdio: ['pipe', 'pipe', 'inherit'] })
+  const s = await grower({ home, heapMb: 160, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12 } })
+  const reader = spawn(process.execPath, [...readerFlags(160), '--input-type=module', '-e', GROWING, home, s.id], { stdio: ['pipe', 'pipe', 'inherit'] })
   const lines = createInterface({ input: reader.stdout })[Symbol.asyncIterator]()
   const answer = async () => { const { value, done } = await lines.next(); assert.ok(!done, 'the reader ended'); return JSON.parse(value) }
   try {
@@ -171,8 +171,8 @@ for await (const line of (await import('node:readline')).createInterface({ input
 }`
 test('a session past the heap bound followed with --since: a mark names its cut, a delta under it is the document, a moved cut answers in full', { timeout: 120_000 }, async () => {
   const home = path.join(tmpDir('trocar-spine-'), '.trocar'), CHUNK = 60
-  const s = await grower({ home, heapMb: 128, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12 } })
-  const reader = spawn(process.execPath, [...readerFlags(128), '--input-type=module', '-e', FOLLOW, home, s.id], { stdio: ['pipe', 'pipe', 'inherit'] })
+  const s = await grower({ home, heapMb: 160, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12 } })
+  const reader = spawn(process.execPath, [...readerFlags(160), '--input-type=module', '-e', FOLLOW, home, s.id], { stdio: ['pipe', 'pipe', 'inherit'] })
   const lines = createInterface({ input: reader.stdout, crlfDelay: Infinity })[Symbol.asyncIterator]()
   const ask = async (since) => { reader.stdin.write(JSON.stringify({ since }) + '\n'); const { value, done } = await lines.next(); assert.ok(!done, 'the reader ended'); return JSON.parse(value) }
   const byLane = (ls) => JSON.stringify([...ls].sort((a, b) => (a.lane < b.lane ? -1 : 1)))
@@ -185,7 +185,7 @@ test('a session past the heap bound followed with --since: a mark names its cut,
       assert.equal(lane, now.mark, 'a lane answer carries the session\'s mark')
       if (prev) {
         const moved = Math.abs(now.truncated.shown - prev.truncated.shown) > CHUNK
-        if (moved) { assert.equal(d.base, null, `a --since ${prev.mark} across a moved cut (now ${now.mark}) answers in full`); break }
+        if (moved) { assert.equal(d.base, null, `a --since ${prev.mark} across a moved cut (now ${now.mark}) answers in full`); if (steps) break; prev = now; for (let i = 0; i < CHUNK; i++) await s.more(); continue }
         assert.equal(d.base, prev.mark, 'under the same cut, --since answers a delta')
         const a = apply(prev, d), first = now.calls[0]
         assert.equal(JSON.stringify(a.calls.filter((r) => byStep(r, first) >= 0)), JSON.stringify(now.calls), 'the applied rows are now\'s')
