@@ -79,15 +79,16 @@ export function elevationOf(row) {
   return { elevated: null, inferred: false }
 }
 
-/** factsOfPid(pid, { exec, env, psTimeoutMs }) → ProcFacts | null — the facts of ONE process, asked targeted (the two asks of the file
+/** factsOfPid(pid, { exec, env, psTimeoutMs, onUnread }) → ProcFacts | null — the facts of ONE process, asked targeted (the two asks of the file
  *  header: the `ps` row, then the native helper for the real executable; ps's word stands when neither it nor the `comm` fallback has one
  *  — fail-safe, it matches no path pattern, never a wrong one). null = the pid is gone or `ps` failed (a dead process between the accept
  *  and the ask is the common case, not an error). The caller caches by pid + startedAt: a wrapped pid (another life, another start time)
- *  is asked again, a living one is asked once; the helper's answer is cached here too, so the cwd its reader asks for later is free. */
-export function factsOfPid(pid, { exec = null, env = process.env, psTimeoutMs = PS_TIMEOUT_MS, procenvPath = nativePath(NATIVE.procenv), cache = procCache } = {}) {
+ *  is asked again, a living one is asked once; the helper's answer is cached here too, so the cwd its reader asks for later is free. `onUnread(why)`:
+ *  told why `ps` gave nothing (its timeout or exit code), for the record of whoever needed the facts (D38). */
+export function factsOfPid(pid, { exec = null, env = process.env, psTimeoutMs = PS_TIMEOUT_MS, procenvPath = nativePath(NATIVE.procenv), cache = procCache, onUnread = () => {} } = {}) {
   if (!Number.isInteger(pid)) throw new TypeError('factsOfPid needs the pid (an integer)')
   return then(execTool('ps', ['-p', String(pid), '-o', 'pid=,ppid=,uid=,comm=,lstart=,args='], { run: exec, env: psEnv(env), timeoutMs: psTimeoutMs }), (r) => {
-    if (r.code !== 0) return null // a dead pid among them; the caller's null is the honest answer
+    if (r.code !== 0) { onUnread(r.code === null ? `ps -p ${pid} did not answer within ${psTimeoutMs} ms` : `ps -p ${pid} exited with ${r.code}`); return null } // a dead pid among them; the caller's null is the honest answer
     const line = String(r.out).split('\n').find((l) => l.trim() !== '')
     if (!line) return null
     const m = PS_ROW.exec(line)

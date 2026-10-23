@@ -214,8 +214,10 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   async function servePac({ peer, user, path: p, left = async () => false }) {
     const d = doors.get(user)
     if (!d || d.auth) return null
-    const { pid: q, why, sameUser } = await ident.owningPid(peer)
-    const facts = q != null ? await ident.factsCached(q) : sameUser ? { sameUser: true } : null
+    const { pid: q, why: ownerWhy, sameUser } = await ident.owningPid(peer)
+    const read = q != null ? await ident.factsCached(q) : null
+    const facts = read || (sameUser ? { sameUser: true } : null) // the socket table's own-user proof stands when the pid's facts cannot be read (P10)
+    const why = ownerWhy || (q != null && !read ? (ident.cache.get(q) || {}).unread || null : null)
     const a = peerAllowed({ ...(facts || {}), pid: q }, self), mine = a.ok
     if (!mine && !a.unread) { // another user's, for certain: refused (P10)
       record({ event: 'failure', where: 'ingress', code: a.code, peer, reason: `a request for trocar's proxy settings file (PAC) was refused: ${a.detail}` })

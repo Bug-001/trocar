@@ -42,8 +42,9 @@ export function parseSockTable(text) {
  *  free while the table is read), asked as `exec(socktablePath, [], { timeoutMs })` → Promise<{ code, out, err }>: `code: 0`
  *  with the table in `out`, `code: null` when the runner killed it at `timeoutMs`, anything else a failure, and a rejection when the tool could
  *  not be asked at all (or the runner's own exec-closed, which is an operator's close and not a failure). source = 'socket-table' when a pid is
- *  answered, null with the pid. `ms` is what the question cost. A null pid says `why` ('no-row' · 'shared' · 'unreadable'); 'shared' also says
- *  `sameUser: true` (the helper lists only this user's processes, so every holder is this user's). A peer address that is not an IPv4 literal is answered null at once (the
+ *  answered, null with the pid. `ms` is what the question cost. A null pid says `why` ('no-row' · 'shared' · 'unreadable'). An answered pid and
+ *  'shared' also say `sameUser: true`: the helper lists only this user's processes, so every holder it names is this user's (4.11 P10) — a
+ *  proof that stands when the pid's own `ps` cannot answer (a few-second DarkWake). A peer address that is not an IPv4 literal is answered null at once (the
  *  engine's doors bind 127.0.0.1 only, D47: an IPv6 peer cannot be one of the agents' entries). */
 export async function ownerOfSocket({ exec, peer, socktablePath = nativePath(NATIVE.socktable), timeoutMs = TABLE_HANG_MS, now = Date.now, onFailure = () => {} }) {
   if (!exec || typeof exec !== 'function') throw new TypeError('ownerOfSocket needs the injected exec runner (execTool\'s shape, async)')
@@ -66,7 +67,7 @@ export async function ownerOfSocket({ exec, peer, socktablePath = nativePath(NAT
     if (answer.code !== 0) return unavailable(`socktable exited with ${answer.code}${answer.err ? `: ${answer.err}` : ''}`)
     const holders = new Set()
     for (const r of parseSockTable(answer.out)) if (r.laddr === addr && r.lport === peer.port && r.pid > 0 && r.pid !== process.pid) holders.add(r.pid) // the engine's accepted socket names the peer as its FOREIGN end and is never a holder; the pid exclusion is belt and braces
-    if (holders.size === 1) return { pid: [...holders][0], source: 'socket-table', ms: Math.max(0, now() - t0) }
+    if (holders.size === 1) return { pid: [...holders][0], source: 'socket-table', ms: Math.max(0, now() - t0), sameUser: true } // this user's: the helper lists no other
     if (holders.size === 0) return { ...none(), why: 'no-row' }
     if (read >= REREADS) return { ...none(), why: 'shared', sameUser: true } // the helper lists only this user's processes: every holder is this user's
     await new Promise((resolve) => setTimeout(resolve, REREAD_MS)) // awaited and 10 ms: kept ref'd, an unref'd wait would let a caller with nothing else open end mid-question
