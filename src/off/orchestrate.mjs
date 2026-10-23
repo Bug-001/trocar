@@ -113,6 +113,9 @@ export function desiredOff(w, ids, installed) {
 // the daemon's connection counts: POST /off answers {closing, waiting, cut}, GET /status {closing, waiting} (nothing is cut by a status read), so `cut` is optional
 const count = (v) => Number.isInteger(v) && v >= 0
 const counts = (r) => (r && count(r.closing) && count(r.waiting) && (r.cut === undefined || count(r.cut)) ? { closing: r.closing, waiting: r.waiting, cut: r.cut ?? 0 } : null)
+// a status may end the drain wait only when it counted what the daemon holds in memory (`scope: 'memory'`): an older daemon, the one an update
+// replaces, counts only harnesses whose state.json says off, and an update leaves the file on, so its 0 does not mean drained (1.6 §5.2)
+const statusCounts = (r) => (r && r.scope === 'memory' ? counts(r) : null)
 
 const EXIT_WAIT_MS = 10_000 // a daemon asked to exit at once stops within its stop grace (2 s) and the half second its `now` exit waits; past this the caller's stop takes over
 export const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the connections it can see the end of
@@ -123,7 +126,7 @@ async function waitForDrain(w, first, boundMs, socketPath) {
   let rel = counts(first), gone = false
   for (const end = w.ms() + boundMs; rel && rel.closing > 0 && w.ms() < end;) {
     await w.sleep(200)
-    try { rel = counts((await w.request({ socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).relayed) || rel } catch (e) {
+    try { rel = statusCounts((await w.request({ socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).relayed) || rel } catch (e) {
       gone = !!e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') // exited by itself (it drained), or not answering: nothing more to wait for
       break
     }

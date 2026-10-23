@@ -238,7 +238,7 @@ export function handleFlow(client, meta, ctx) {
     start({ now = false, by = 'off', who = null } = {}) {
       if (finished) return 'closed'
       cutBy = by
-      if (who) cutWho = who
+      cutWho = who // each ask names its own command (or none): an update's withdrawn exit does not name a later stop's cut
       if (gate) {
         return gate.start({ now })
       }
