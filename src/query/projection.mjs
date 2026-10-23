@@ -116,6 +116,13 @@ export function numTable() {
       }
       put(x, v);
     },
+    // dump() → [keys, values] as they lie; load(dump) into an empty table gives it the same entries
+    dump: () => [keys.slice(), vals.slice()],
+    load([ks, vs]) {
+      if (n || ks.length !== vs.length || ks.length & (ks.length - 1)) throw new RangeError('not a table of numbers of this shape');
+      cap = ks.length; keys = ks.slice(); vals = vs.slice(); n = 0;
+      for (const v of vals) if (v >= 0) n++;
+    },
   };
 }
 // key → [offset, length] of a line on disk: a slot found through the key's number (numTable; a key whose number another key took

@@ -511,29 +511,34 @@ export class OrderBound extends Error {}
 // keep: false (src/view/reduce.mjs, which writes each call out as it is folded): no call, step or event is kept: pushView's step
 // carries its events (`step.ev`) and its ledger delta (`step.ld`, replayLedger below), a spawn event its prompt's head (`head`, 60
 // characters, for linking) instead of the tool's input; finish() is not on that path.
-export function createAnalyzer({ keep = true } = {}) {
-  const streams = []
-  let mainStream = null, curSub = null, monitorStream = null, probeStream = null, prevKind = null
-  const auxStreams = new Map()
-  const subByKey = new Map() // one subagent stream per agent the harness names (3.4 agent-id), else per server-held thread
+// from (keep: false): what snapshot() gave, through v8.serialize and back (src/view/reduce.mjs REDUCE_V): the fold goes on from it.
+export function createAnalyzer({ keep = true, from = null } = {}) {
+  if (from && keep) throw new Error('only a fold that keeps nothing resumes from a snapshot')
+  const o = from || {}
+  const streams = o.streams || []
+  let mainStream = o.mainStream ?? null, curSub = o.curSub ?? null, monitorStream = o.monitorStream ?? null, probeStream = o.probeStream ?? null, prevKind = o.prevKind ?? null
+  const auxStreams = o.auxStreams || new Map()
+  const subByKey = o.subByKey || new Map() // one subagent stream per agent the harness names (3.4 agent-id), else per server-held thread
+  // (keep: false needs neither across pushes: no step is kept, and the reducer asks laneOf right after pushView)
   const steps = new Map() // the fold's own counter → its step (events and resources name a step by it until finish)
   const laneOfStep = new WeakMap() // step → its stream
   const usageOf = new WeakMap() // step → its call's usage (callFacts)
-  let n = 0, top = null, late = false, byOrder = false
-  const state = new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, ask, tools }
+  let n = o.n ?? 0, top = o.top ?? null, late = o.late ?? false, byOrder = o.byOrder ?? false
+  const state = o.state || new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, ask, tools }
   // a fold that keeps nothing keeps a lane's tool names (tool use id → name) in one table of numbers for all its lanes, keyed by the
-  // lane state's generation and the id (num52: two ids of one number would share a name, odds about n² / 2⁵³), a name as an index
-  let toolT = null, toolGen = 0
-  const toolNames = [], toolIx = new Map()
-  function toolsOf() {
-    if (keep) return new Map()
+  // lane state's generation `g` and the id (num52: two ids of one number would share a name, odds about n² / 2⁵³), a name as an index
+  let toolT = null, toolGen = o.toolGen ?? 0
+  if (o.toolT) { toolT = numTable(); toolT.load(o.toolT) }
+  const toolNames = o.toolNames || [], toolIx = o.toolIx || new Map()
+  const toolsOf = () => (keep ? new Map() : { g: toolGen++ + ':' })
+  const setTool = (t, id, name) => {
+    if (keep) { t.set(id, name); return }
+    let i = toolIx.get(name)
+    if (i === undefined) { i = toolNames.length; toolNames.push(name); toolIx.set(name, i) }
     if (!toolT) toolT = numTable()
-    const g = toolGen++ + ':'
-    return {
-      set(id, name) { let i = toolIx.get(name); if (i === undefined) { i = toolNames.length; toolNames.push(name); toolIx.set(name, i) } toolT.set(num52(g + id), i) },
-      get(id) { const i = toolT.get(num52(g + id)); return i === undefined ? undefined : toolNames[i] },
-    }
+    toolT.set(num52(t.g + id), i)
   }
+  const getTool = (t, id) => { if (keep) return t.get(id); const i = toolT ? toolT.get(num52(t.g + id)) : undefined; return i === undefined ? undefined : toolNames[i] }
   const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', ask: null, tools: toolsOf() })
   function mkStream(kind) {
     const s = { id: 's' + streams.length, kind, calls: [], events: [], n: 0 }
@@ -717,8 +722,8 @@ export function createAnalyzer({ keep = true } = {}) {
       newMsgs = msgs.slice(st.prevCount)
     }
     // tool uses from the messages new to the lane (the rest were new once: a lane's state is O(new), not O(context)), then the reply's
-    for (const m of newMsgs) for (const [id, name] of m.uses) st.tools.set(id, name)
-    for (const c of reply.tools) st.tools.set(c.id, c.name)
+    for (const m of newMsgs) for (const [id, name] of m.uses) setTool(st.tools, id, name)
+    for (const c of reply.tools) setTool(st.tools, c.id, c.name)
     if (step.compaction)
       E.push({ type: 'compaction', step: step.at, streamId: s.id, from: step.evictedFrom, to: step.evictedTo,
         // the event travels to the UI on its own — it MUST carry the inference marker with it,
@@ -741,7 +746,7 @@ export function createAnalyzer({ keep = true } = {}) {
       if (m.role !== 'user') continue
       for (const b of m.blocks) {
         if (b.type !== 'tool_result') continue
-        E.push({ type: 'observation', step: step.at, streamId: s.id, source: st.tools.get(b.tool_use_id) || 'tool', tool_use_id: b.tool_use_id,
+        E.push({ type: 'observation', step: step.at, streamId: s.id, source: getTool(st.tools, b.tool_use_id) || 'tool', tool_use_id: b.tool_use_id,
           ...(b.obs ? shown(b.obs) : { text: undefined }) })
       }
     }
@@ -837,7 +842,14 @@ export function createAnalyzer({ keep = true } = {}) {
   }
   // ask(lane, text): the lane's first prompt, said by the caller that holds the first call's blocks (src/view/blockmeta.mjs firstHuman)
   const ask = (s, text) => { state.get(s).ask = text }
-  return { push, pushView, finish, drop, ask, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()], firstText: (s) => state.get(s).firstText }
+  // snapshot() (keep: false) → the fold's state as plain data, its streams shared by identity (the caller's lanes name them): to be
+  // serialised before the next push
+  const snapshot = () => {
+    if (keep) throw new Error('only a fold that keeps nothing snapshots')
+    return { streams, mainStream, curSub, monitorStream, probeStream, prevKind, auxStreams, subByKey, n, top, late, byOrder, state,
+      toolT: toolT && toolT.dump(), toolGen, toolNames, toolIx }
+  }
+  return { push, pushView, finish, drop, ask, snapshot, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()], firstText: (s) => state.get(s).firstText }
 }
 
 /** laneMeta(kind) → {icon, label, note?} of an analyzer lane's kind; eventOnly(kind): no ReAct events, resources or seen paths. */

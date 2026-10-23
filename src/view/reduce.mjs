@@ -27,6 +27,8 @@ const KEYFRAME = 32; // a materialised list kept every KEYFRAME links of a base 
 // what the lists kept (keyframes and the lists asked last) and the facts read back may weigh in the heap: each a cache of two times
 // its figure (src/query/projection.mjs lru)
 const LIST_BYTES = 2 << 20, FACTS_BYTES = 2 << 20;
+/** The shape of reduction().snapshot(): one more whenever what it holds changes. */
+export const REDUCE_V = 1;
 /** What a store's reduction caches hold at most beside its block columns (src/query/named/session.mjs counts it with the store's). */
 export const REDUCE_HEAP = 2 * (LIST_BYTES + FACTS_BYTES);
 
@@ -35,7 +37,10 @@ export const REDUCE_HEAP = 2 * (LIST_BYTES + FACTS_BYTES);
 // slot, filled from its line the first time a slot is asked for; a definition's facts `f` are read from its line when asked (the
 // blocks of messages new to their lane, a lane's first prompt), through a cache weighed in bytes. So a block costs a few columns,
 // never its definition (3.5 §内存有界 SPINE_PER_BLOCK).
-// value → the first slot that had it; `read(slot)` → that slot's value (read back to verify a hit: a collision never merges two)
+// value → the first slot that had it; `read(slot)` → that slot's value (read back to verify a hit: a collision never merges two).
+// Its ids are compared for equality only, within one call (cacheOf, breakOf), and no state or line holds one: whatever order an
+// interner fills in, two slots share an id iff their values are equal, so a reduction resumed over a store opened afresh (and its
+// interners filled afresh) folds the same bytes, and the interners are no part of a snapshot.
 function interner(read) {
   const first = numTable(), spill = new Map(); // spill: values whose number another value holds
   return (v, slot) => {
@@ -212,18 +217,24 @@ export function reduce(store, members, { mark = undefined, resolve = null, error
  * `progress(rid)` is called once per row folded (the worker's silence clock, 3.5:46). `failedBefore(rid)` → the failed line
  * `{x, reason, code}` a member already has in the fold log this reduction rebuilds up to, or null: such a member stays failed, as a
  * member whose record did not parse (3.5 §读不全不静默: failed until the fold log is rebuilt).
+ *   `snapshot()` (between adds) → the reduction's state as plain data (Map, Set, arrays, typed arrays, plain objects; REDUCE_V), to be
+ * passed through v8.serialize (in one call: its lanes are shared by identity) before the next add; `from`: such a snapshot, of this
+ * store (its id, and at least the rows it had), with `log` the fold log it folded into: the reduction goes on from it as the one that
+ * took it would. What only saves work (the list and facts caches, the fold log's read cache) is no part of it.
  */
-export function reduction(store, { log, resolve = null, errors = undefined, progress = null, failedBefore = null } = {}) {
+export function reduction(store, { log, resolve = null, errors = undefined, progress = null, failedBefore = null, from = null } = {}) {
   const L = listsOf(store), B = blocksOf(store);
+  if (from && (from.v !== REDUCE_V || from.store !== store.id || !(from.rows <= store.rows.size))) throw new RangeError('not a snapshot of a reduction of this store');
   // per member, by its row's slot in the store (store.rows.slotOf): its ts and its call's own ts (step order; one string when they
-  // are equal), the digest of its latest line (NaN: none yet; 0: an item)
-  const ts = [], cts = [];
-  let dig = new Float64Array(1024).fill(NaN);
+  // are equal), the digest of its latest line (NaN: none yet; 0: an item); failed rid → its line's offset; the item lines' offsets;
+  // lane key → its header line's digest; spawn → the child lane its call line names
+  const st = from || { ts: [], cts: [], dig: new Float64Array(1024).fill(NaN), failed: new Map(), items: [], heads: new Map(), written: new Map(),
+    inStep: false, last: -1, top: null, n: 0, F: null };
+  const { ts, cts, failed, items, heads, written } = st;
+  let { dig, inStep, last, top, n } = st;
   const ridAt = (k) => store.rows.keyAt(k), slotOf = (rid) => store.rows.slotOf(rid);
-  const failed = new Map(), items = []; // failed rid → its line's offset; the item lines' offsets
   const found = new Map(); // break details worked out by this reduction, written as `brk` lines once an add is done
-  const heads = new Map(), written = new Map(); // lane key → its header line's digest; spawn → the child lane its call line names
-  let pend = [], newItems = [], newFailed = [], inStep = false, last = -1, top = null, n = 0, F, taking = null;
+  let pend = [], newItems = [], newFailed = [], F, taking = null;
   const before = (a, b) => compareStep(cts[a], ridAt(a), cts[b], ridAt(b));
   const byStep = (a, b) => { const p = slotOf(a), q = slotOf(b); return ts[p] != null && ts[q] != null ? compareStep(ts[p], a, ts[q], b) : 0; };
   const setDig = (k, h) => { if (k >= dig.length) { const d = new Float64Array(Math.max(2 * dig.length, k + 1)).fill(NaN); d.set(dig); dig = d; } dig[k] = h; };
@@ -281,9 +292,12 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     rowOf = reader;
     const k = slotOf(rid), x = row.x || {};
     if (!isCall(row)) { if (!(dig[k] >= 0)) { setDig(k, 0); newItems.push(k); } return; }
-    if (!F.flat.has(x.format)) F.flat.set(x.format, x.format === 'anthropic' ? anthropicFold(K, F) : flatFold(boardDissectorOf(x.format), K, F));
+    if (!F.flat.has(x.format)) F.flat.set(x.format, foldOf(x.format));
     F.flat.get(x.format).push(rid, row);
   }
+  // a wire's fold, from its state in a snapshot or anew
+  const foldOf = (fmt, s = null) => (fmt === 'anthropic' ? anthropicFold(K, F, s) : flatFold(boardDissectorOf(fmt), K, F, s));
+  if (st.F) { const { flat, ...rest } = st.F; Object.assign(F, rest); for (const [fmt, s] of flat) F.flat.set(fmt, foldOf(fmt, s)); }
   // the break detail of a pair of blocks: from the projection, else from both blocks' texts (once)
   const blockOf = (bid) => {
     const D = store.readDef(bid);
@@ -499,6 +513,12 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   }
   const R = {
     add, has, log,
+    snapshot() {
+      if (pend.length || found.size) throw new Error('a reduction is snapshotted between adds only');
+      const { flat, firstText, an, ...rest } = F;
+      return { v: REDUCE_V, store: store.id, rows: store.rows.size, ts, cts, dig, failed, items, heads, written, inStep, last, top, n,
+        F: { ...rest, flat: [...flat].map(([fmt, f]) => [fmt, f.snapshot()]) } };
+    },
     members: () => [...folded(), ...failed.keys()],
     get frontier() { return top; },
     // what skeletonDoc reads besides the log: the calls in step order, the lanes in the order of their first call, items and failures
@@ -590,8 +610,8 @@ const recFacts = (it) => (it ? { ts_request: it.ts_request, is_llm_call: !!it.is
 
 // The Anthropic wire's fold: the analyzer's lanes (createAnalyzer, fed call views, keeping nothing), each call baked against its
 // lane's base and written out.
-function anthropicFold({ at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int }, F) {
-  const an = createAnalyzer({ keep: false });
+function anthropicFold({ at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int }, F, from) {
+  const an = createAnalyzer({ keep: false, from: from && from.an });
   F.firstText = (S) => an.firstText(S.stream);
   // a call's view: its messages' roles from the columns, their tool uses and block facts read when the analyzer asks (the messages
   // new to the lane: analyze.mjs eventsOf)
@@ -628,14 +648,14 @@ function anthropicFold({ at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, i
     emit(k, S, call, call.ev, call.ld, x.facts.usage || {});
     return S;
   }
-  return { push: pushOf(take, (S) => an.drop(S.stream)) };
+  return { push: pushOf(take, (S) => an.drop(S.stream)), snapshot: () => ({ an: an.snapshot() }) };
 }
 
 // A flat-lane wire's fold (assemble.mjs flatLaneFold over rows): a lane per agent (a subagent named by the harness's agent id or the
 // wire's own, the rest by lane kind), each call's compaction verdict on the dissector's message count, its cache break against its
 // lane's last call that did not fail; the document names lanes by kind (flatLaneView): one doc lane per kind.
-function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int }, F) {
-  const lanes = new Map();
+function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int }, F, from) {
+  const lanes = from ? from.lanes : new Map();
   function take(rid, row) {
     const x = row.x, e = at(rid, row), list = e.list, attrs = e.attrs, h = x.hints || {}, k = int(rid);
     const kind = x.lane, agent = kind === 'subagent' ? h.laneKey ?? x.agent ?? null : null;
@@ -668,7 +688,7 @@ function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int
     emit(k, S, call, ev, [], x.nu || {});
     return S;
   }
-  return { push: pushOf(take, () => {}) };
+  return { push: pushOf(take, () => {}), snapshot: () => ({ lanes }) };
 }
 
 // The first human prompt of a list (blockmeta firstHuman, from each user text's `human` fact).
