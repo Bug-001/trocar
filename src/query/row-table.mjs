@@ -36,7 +36,17 @@ const fits = (keys, e) => {
 };
 const EXC = { toJSON() { return { ...this }; } };
 
-function store(own) { return { own, pre: own == null ? null : `${own}:`, keys: null, cols: null, n: 0, cap: 0, exc: new Map(), Row: null }; }
+// What a store holds in the V8 heap (3.5 §内存有界 `steady`), each constant measured with liveHeap() (forced GC before and after,
+// divided by the count; 2026-10-23, node 22) × 1.25: the store with its view and Row class 1,560 B; a column 800 B (its object, the
+// two typed-array objects — their backing stores are outside the heap, resident memory only, not charged —, its dictionary's array
+// and Map, its getter); a dictionary entry 68 B (its slot, its Map entry, the string's header) plus the string's characters, 2 B
+// each (a two-byte string's; one-byte measured 0.96 B); a row kept whole 1,700 B (an index row's 21 keys and their strings) plus its
+// JSON text's characters at the same 2 B.
+const TABLE_HEAP = 1_950, COLUMN_HEAP = 1_000, DICT_HEAP = 85, EXC_HEAP = 2_150;
+const CHAR_HEAP = 2.5;
+const sized = (v) => Math.ceil(CHAR_HEAP * (typeof v === 'string' ? v.length : 0));
+
+function store(own) { return { own, pre: own == null ? null : `${own}:`, keys: null, cols: null, n: 0, cap: 0, exc: new Map(), Row: null, heap: TABLE_HEAP }; }
 
 function get(s, col, i) {
   const c = col.codes[i];
@@ -51,7 +61,7 @@ function put(s, col, i, v) {
   else if (typeof v === 'string' && (p = ownNo(s.pre, v)) !== null) code = OWN;
   else {
     let k = col.code.get(v);
-    if (k === undefined) { k = col.dict.length; col.dict.push(v); col.code.set(v, k); }
+    if (k === undefined) { k = col.dict.length; col.dict.push(v); col.code.set(v, k); s.heap += DICT_HEAP + sized(v); }
     code = DICT + k;
   }
   if (p !== null) (col.pay || (col.pay = new Float64Array(s.cap)))[i] = p;
@@ -66,12 +76,13 @@ function append(s, e) {
   }
   if (!s.keys) setKeys(s, Object.keys(e));
   const i = s.n++;
-  if (!fits(s.keys, e)) { s.exc.set(i, Object.freeze(Object.assign(Object.create(EXC), e))); return; }
+  if (!fits(s.keys, e)) { s.exc.set(i, Object.freeze(Object.assign(Object.create(EXC), e))); s.heap += EXC_HEAP + sized(JSON.stringify(e)); return; }
   for (let c = 0; c < s.keys.length; c++) put(s, s.cols[c], i, e[s.keys[c]]);
 }
 
 function setKeys(s, keys) {
   s.keys = keys;
+  s.heap += COLUMN_HEAP * keys.length;
   s.cols = keys.map(() => ({ codes: new Uint8Array(s.cap), pay: null, dict: [], code: new Map() }));
   // a row: its position, behind getters on a per-store prototype — read-only, and `{ ...row }` copies nothing (use toJSON)
   class Row {
@@ -96,6 +107,7 @@ function same(s, i, e) {
 class RowView {
   #s; #n;
   constructor(s, n) { this.#s = s; this.#n = n; Object.freeze(this); }
+  static store(v) { return v.#s; }
   get length() { return this.#n; }
   at(i) {
     i = Math.trunc(i) || 0;
@@ -131,5 +143,8 @@ export function rowTable(entries = [], own = null) {
   for (const e of entries) append(s, e);
   return new RowView(s, s.n);
 }
+/** heapOf(...views) → the V8 heap their stores hold (the constants above), each store once however many views share it;
+ *  what is no view holds none here. */
+export const heapOf = (...views) => { let n = 0; for (const s of new Set(views.filter(isRowTable).map(RowView.store))) n += s.heap; return n; };
 /** isRowTable(x) → whether x is a view rowTable made. */
-export const isRowTable = (x) => x instanceof RowView;
+export function isRowTable(x) { return x instanceof RowView; }

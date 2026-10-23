@@ -40,7 +40,7 @@ import { R, FLAG_NL, FLAG_UNPARSEABLE } from '../raw/format.mjs';
 import { trocarHome, collectorHome } from '../paths.mjs';
 import { readDaemonLock } from '../off/daemon-stop.mjs';
 import { statKey, warmCache, fsTag } from './warm.mjs';
-import { rowTable, isRowTable } from './row-table.mjs';
+import { rowTable, isRowTable, heapOf } from './row-table.mjs';
 
 const rawDir = (home = trocarHome()) => path.join(home, 'raw');
 export const indexDir = (home = trocarHome()) => path.join(home, 'index');
@@ -502,7 +502,11 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
 // file: a closed or sealed segment is read once per process, the live one again when it grew (never stale). It lives
 // in this file and not in the readers because `allSegments` is in this file: a warm wrapper in rows.mjs that
 // `allSegments` also called would be a cycle between the two modules.
-const segRows = warmCache({ cost: (v) => v.records.length * 320, steady: true }); // ~320 B per index row in memory (measured on the reference dataset)
+// What an entry holds in the V8 heap: its row store (row-table.mjs heapOf, charged once when `stored.records` shares it) and the
+// answer around it, SEGMENT_HEAP: the answer, `stored`, the stamp and the cache entry, 7,200 B measured with liveHeap() over 400
+// and 800 generated segments (forced GC before and after, less the stores' heapOf, divided by the segments) × 1.25.
+const SEGMENT_HEAP = 9_000;
+const segRows = warmCache({ cost: (v) => SEGMENT_HEAP + heapOf(v.records, v.stored && v.stored.records), steady: true });
 // Which records array a row list was built from, and which one a segment's newer answer extends line by line: rows.mjs adds
 // only the new rows when only the newest segment grew (3.5:45). Numbers, so a newer answer never keeps an older one alive.
 const ids = new WeakMap(), grew = new WeakMap();
