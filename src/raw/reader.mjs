@@ -64,6 +64,9 @@ export function openSealed(file, { fs = nodeFs, frameCache = createFrameCache(8)
   } catch (e) { try { fs.closeSync(fd); } catch {} throw e; }
 }
 
+// Line instances whose sha256 has been checked (a line cache hit hands out the same instance again).
+const verified = new WeakSet();
+
 function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache, lineCache }) {
   const { frames, shards, streams, records } = tables;
   const name = path.basename(file);
@@ -109,30 +112,34 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache, lineCac
     if (out.length !== dlen) throw bad(`frame ${f} decodes to ${out.length} bytes, index says ${dlen}`);
     return out;
   }
+  // 4.2 「读」: a line's sha256 is checked before it is handed out, once per rebuilt instance. A predecessor
+  // rebuilt only to rebuild its successor is not checked on its own: were it wrong, the successor's check fails.
   const check = (i, line) => {
+    if (verified.has(line)) return line;
     const r = records[i];
     if (line.length !== r[R.len] || createHash('sha256').update(line).digest('base64') !== r[R.sha]) throw bad(`record ${i} fails its sha256 check`);
+    verified.add(line);
     return line;
   };
-  // getLine(j) supplies a predecessor; random access recurses, sequential reads use their window.
+  // getLine(j) supplies a predecessor, unchecked; random access recurses, sequential reads use their window.
   const build = (i, enc, getLine) => {
     const r = records[i];
-    const line = r[R.kind] === 0 ? Buffer.from(enc) : applySafe(i, getLine(r[R.back]), enc);
-    return check(i, line);
+    return r[R.kind] === 0 ? Buffer.from(enc) : applySafe(i, getLine(r[R.back]), enc);
   };
   const applySafe = (i, pred, enc) => { try { return applyOps(pred, enc); } catch (e) { throw bad(`record ${i}: ${e.message}`); } };
   const encOf = (fb, r) => fb.subarray(r[R.off], r[R.off] + r[R.enc]);
 
-  function lineAt(i) {
+  function rebuilt(i) {
     if (!(i >= 0 && i < records.length)) throw new RangeError(`${name}: no record ${i}`);
     const ck = key + ':' + i;
     const was = lineCache.get(ck);
     if (was) return was;
     const r = records[i];
-    const line = build(i, encOf(frameAt(r[R.frame]), r), lineAt);   // depth bounded by the open-time check
+    const line = build(i, encOf(frameAt(r[R.frame]), r), rebuilt);   // depth bounded by the open-time check
     lineCache.set(ck, line);
     return line;
   }
+  const lineAt = (i) => check(i, rebuilt(i));
 
   // Sequential iteration in file order (= source line order). Memory: one frame + ≤ CANDIDATES lines.
   // With `onError(i, err, entry)`, a record that cannot be decoded is reported and skipped instead of
@@ -147,7 +154,7 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache, lineCac
       try {
         if (r[R.frame] !== f) { f = r[R.frame]; fb = null; fErr = null; try { fb = decodeFrame(f); } catch (e) { fErr = e; } }
         if (fErr) throw fErr;
-        line = build(i, encOf(fb, r), (j) => win.get(j) || lineAt(j));
+        line = check(i, build(i, encOf(fb, r), (j) => win.get(j) || rebuilt(j)));
       } catch (e) {
         if (!onError) throw e;
         onError(i, e, entry(i));
