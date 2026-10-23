@@ -449,3 +449,51 @@ test('3.5 #28 (session, block): full, --since and pending sessions keep the clos
   }
   assert.deepEqual(b.blocks.map((x) => typeof x.bytes), ['string', 'string', 'object'], 'the request and reply refs read; the missing record does not')
 })
+
+// 3.5 §会话读 定义 `name?` / 2.6:42: a tool call's definition carries its tool's name, on each wire's request and reply. Two calls
+// per session: the second request holds the first reply's call; the names are read back from each record's bytes.
+test('3.5 定义 name: every tool_use definition of a lane answer carries the name its record\'s bytes give, on each wire', async () => {
+  const home = homeOf('trocar-lane-toolname-')
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
+  const W = {
+    anthropic: { host: 'api.anthropic.com', endpoint: '/v1/messages', agent: 'claude-code', hdr: (sid) => ({ 'x-claude-code-session-id': sid, 'user-agent': 'claude-cli/2.1.0 (external, cli)' }),
+      call: (id, name) => ({ type: 'tool_use', id, name, input: { file_path: `/w/${name}.mjs` } }),
+      req: (prior) => ({ model: 'm', max_tokens: 9, messages: [{ role: 'user', content: 'go' }, ...(prior ? [{ role: 'assistant', content: [prior] }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: prior.id, content: 'ok' }] }] : [])] }),
+      reply: (c) => ({ id: `msg_${c.id}`, model: 'm', stop_reason: 'tool_use', content: [c], usage: { input_tokens: 3, output_tokens: 1 } }) },
+    chat: { host: 'api.deepseek.com', endpoint: '/chat/completions', agent: 'dsh', hdr: (sid) => ({ 'x-deepseek-harness-session-id': sid }),
+      call: (id, name) => ({ id, type: 'function', function: { name, arguments: JSON.stringify({ file_path: `/w/${name}.mjs` }) } }),
+      req: (prior) => ({ model: 'm', messages: [{ role: 'user', content: 'go' }, ...(prior ? [{ role: 'assistant', content: null, tool_calls: [prior] }, { role: 'tool', tool_call_id: prior.id, content: 'ok' }] : [])] }),
+      reply: (c) => ({ id: `c_${c.id}`, model: 'm', choices: [{ index: 0, finish_reason: 'tool_calls', message: { role: 'assistant', content: null, tool_calls: [c] } }], usage: { prompt_tokens: 3, completion_tokens: 1 } }) },
+    responses: { host: 'chatgpt.com', endpoint: '/backend-api/codex/responses', agent: 'codex', hdr: (sid) => ({ 'session-id': sid, originator: 'codex_cli_rs' }),
+      call: (id, name) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify({ file_path: `/w/${name}.mjs` }) }),
+      req: (prior) => ({ model: 'm', instructions: 'x', input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'go' }] }, ...(prior ? [prior, { type: 'function_call_output', call_id: prior.call_id, output: 'ok' }] : [])] }),
+      reply: (c) => ({ id: `resp_${c.call_id}`, model: 'm', status: 'completed', output: [c], usage: { input_tokens: 3, output_tokens: 1 } }) },
+  }
+  const lines = [], ids = []
+  let n = 0
+  for (const [wire, w] of Object.entries(W)) {
+    const sid = `tn-${wire}-4a1b-9c2d-000000000001`
+    ids.push(sid)
+    let prior = null
+    for (const name of ['Read', 'Edit']) {
+      const c = w.call(`call_${++n}`, name), ts = `2026-10-23T10:00:${String(n).padStart(2, '0')}.000Z`
+      lines.push(JSON.stringify({ ts, endpoint: w.endpoint, method: 'POST', req_headers: { host: w.host, 'content-type': 'application/json', ...w.hdr(sid) }, req_body: JSON.stringify(w.req(prior)),
+        resp: { status: 200, kind: 'json', body: w.reply(c) }, id: `req_${n}`, ts_request: ts, is_llm_call: true, capture: 'transparent', host: w.host, traffic_class: 'llm',
+        proc: { pid: 1, exe: `/x/${w.agent}`, agent: w.agent } }))
+      prior = c
+    }
+  }
+  fs.writeFileSync(path.join(home, 'raw', '20261023T100000Z.ndjson'), lines.join('\n') + '\n')
+  for (const id of ids) {
+    const doc = await q('session', home, { id })
+    const tools = []
+    for (const { lane } of doc.lanes) tools.push(...(await q('lane', home, { id, lane })).defs.filter((d) => d.kind === 'tool_use'))
+    assert.equal(tools.length, 3, `${id}: two replies' calls and one request's`)
+    assert.deepEqual(tools.map((d) => d.name).sort(), ['Edit', 'Read', 'Read'], `${id}: the names the wire gives`)
+    for (const d of tools) {
+      // its own bytes: the ref read back, or (a JSON reply has no span per block) the block inlined as parsed
+      const bytes = d.ref ? (await q('block', home, { ref: d.ref })).blocks[0].bytes : JSON.stringify(d.inline.block)
+      assert.ok(bytes.includes(JSON.stringify(d.name)), `${id}: def ${d.bid} names ${JSON.stringify(d.name)}, the name in its bytes`)
+    }
+  }
+})

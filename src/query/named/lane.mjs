@@ -11,7 +11,7 @@
 // the kept ledgers, LEDGER_BYTES): an answer reads the lines of the steps it covers and of the steps the replay goes over. The ledger
 // entries an answer owes go in key order into the room its page leaves; the rest are named by `ledger_next`, a cursor `--ledger`
 // goes on from (3.5 `resources` 与 `seen`).
-import { sessionState, version as sessionVersion } from './session.mjs';
+import { sessionState, markOn, version as sessionVersion } from './session.mjs';
 import { listOf, laneLedger, ledgerWeight, LEDGER_BYTES } from '../../view/reduce.mjs';
 import { lru } from '../projection.mjs';
 import { inheritedRender } from '../../view/render-kind.mjs';
@@ -24,6 +24,7 @@ export const params = Object.freeze(['id', 'lane', 'from', 'to', 'ledger']);
 const one = (v) => (v == null || v === '' ? null : String(v));
 const pick = (o, keys) => { const out = {}; if (o) for (const k of keys) if (o[k] !== undefined) out[k] = o[k]; return out; };
 // A definition on the wire (3.5 §会话读 定义 closed set): `fh` as 22 base64url characters (the first 128 bits of the stored digest).
+// `name`: a tool definition's, or a tool call's tool (the projection keeps a call's as `toolName`, the flat entry's own word).
 const OPTIONAL = ['label', 'name', 'mcp', 'cc'];
 const BODY = ['text', 'block', 'desc', 'schema'];
 const fhWire = (hex) => (typeof hex === 'string' && /^[0-9a-f]{32}/.test(hex) ? Buffer.from(hex.slice(0, 32), 'hex').toString('base64url') : null);
@@ -92,7 +93,7 @@ export async function run(ctx) {
   errors.push(...st.errors);
   // a lane the session does not have (it can vanish between polls: `lanes_gone`) is an empty lane
   const { cols, log } = st.V;
-  if (!cols.lanes.has(key)) return empty(st.mark);
+  if (!cols.lanes.has(key)) return empty(markOn(st.plan, st.mark));
   const { store } = st, L = laneOf(cols, key), { rids, slots } = L, n = rids.length;
   const lines = new Map(), lineAt = (i) => { if (!lines.has(i)) lines.set(i, log.read(...log.latest(rids[i]))); return lines.get(i); };
   // the `user` events before step i (3.5: every `user` event's `k` is its place among the lane's, 1-based)
@@ -127,7 +128,7 @@ export async function run(ctx) {
     let w = null;
     if (d) {
       const ff = d.ff || {};
-      w = { bid, fh: fhWire(d.fh), ref: d.ref ?? null, sec: d.sec, role: d.role, kind: d.kind, ...pick(d, OPTIONAL), ff, head: d.head,
+      w = { bid, fh: fhWire(d.fh), ref: d.ref ?? null, sec: d.sec, role: d.role, kind: d.kind, ...pick(d, OPTIONAL), ...(d.toolName ? { name: d.toolName } : null), ff, head: d.head,
         preview: d.preview, chars: d.chars, bytes: d.bytes, ...(d.resKey ? { resKey: d.resKey } : null), r: pick(renderIn(d, list), ['as', 'tone', 'title', 'f']) };
       if (ff.unaddressable) Object.assign(w, { ref: null, unaddressable: ff.unaddressable, inline: pick(d, BODY) });
     }
@@ -220,7 +221,7 @@ export async function run(ctx) {
   }
   const last = i > 0 ? owed[i - 1] : [0, ''];
   return {
-    lane: key, base, mark: st.mark, steps, defs: wireDefs, resources: out[0], seen: out[1], events,
+    lane: key, base, mark: markOn(st.plan, st.mark), steps, defs: wireDefs, resources: out[0], seen: out[1], events,
     prev: lo > 0 && steps.length ? rids[lo] : null, next: hi < n && steps.length ? rids[hi - 1] : null,
     ledger_next: i < owed.length ? Buffer.from(JSON.stringify([LISTS[last[0]], last[1]])).toString('base64url') : null,
   };
