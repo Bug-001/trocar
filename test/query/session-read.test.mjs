@@ -89,15 +89,18 @@ for (const wire of ['http', 'chat', 'ws']) for (const arrival of LATE) {
 
 // A Claude Code session whose calls are interleaved with members that are no call: requests of no LLM, and (`unknown`) LLM
 // requests to an endpoint no dissector reads as a call (C1): after each of the first `unknown` calls, and `lead` of them before the
-// first call. Seeded: how many follow each call. → {id, endpoints, lines, file} (the whole file written).
-function mixed(home, { calls, unknown = 0, lead = 0, seed = 7 }) {
+// first call; `late`: some members that are no call carry a ts_request before the call written before them (step order ≠ file
+// order). Seeded: how many follow each call, which are late. → {id, endpoints, lines, file (the whole file written), back (how many late)}.
+function mixed(home, { calls, unknown = 0, lead = 0, late = false, seed = 7 }) {
   const id = `mix${seed}000-0000-4a1b-9c2d-000000000001`, lines = []
   const hdr = { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-claude-code-session-id': id }
-  let r = seed, t = Date.parse('2026-10-22T10:00:00.000Z')
+  let r = seed, t = Date.parse('2026-10-22T10:00:00.000Z'), call = null, back = 0
   const rand = (n) => { r = (r * 1103515245 + 12345) % 2147483648; return r % n }
   const rec = (endpoint, method, llm, body, resp) => {
-    const ts = new Date(t += 1000).toISOString()
-    lines.push(JSON.stringify({ ts, endpoint, method, req_headers: hdr, req_body: body, resp: { status: 200, kind: 'json', body: resp }, id: `r_${lines.length}`, ts_request: ts,
+    const ts = new Date(t += 1000).toISOString(), early = !llm && late && call != null && rand(2) === 0
+    if (llm) call = t
+    if (early) back++
+    lines.push(JSON.stringify({ ts, endpoint, method, req_headers: hdr, req_body: body, resp: { status: 200, kind: 'json', body: resp }, id: `r_${lines.length}`, ts_request: early ? new Date(call - 500).toISOString() : ts,
       is_llm_call: llm, capture: 'transparent', host: 'api.anthropic.com', traffic_class: llm ? 'llm' : 'other', proc: { pid: 1, exe: '/x/claude', agent: 'claude-code' } }))
   }
   const ends = []
@@ -112,7 +115,7 @@ function mixed(home, { calls, unknown = 0, lead = 0, seed = 7 }) {
   const file = path.join(home, 'raw', '20261022T100000Z.ndjson')
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, lines.join('\n') + '\n')
-  return { id, endpoints: [...new Set(ends)], lines, file }
+  return { id, endpoints: [...new Set(ends)], lines, file, back }
 }
 const stepRec = (a, b) => compareStep(a.ts_request, a.id, b.ts_request, b.id)
 
@@ -155,10 +158,11 @@ test('C1: records no dissector reads as a call are counted with their endpoints 
   }
 })
 
-test('3.5 #19 unknown: over sessions whose `unknown` records come before, among and after the first rows, apply(full(M), since(M)) is full(now) with `unknown`, on the local path and the worker\'s shared log', async () => {
-  for (const writer of [false, true]) for (const seed of [1, 5]) for (const by of [1, 4]) for (const lead of [0, 3]) for (const unknown of [0, 4]) {
-    const home = homeOf('trocar-sread-unkd-'), m = mixed(home, { calls: 12, unknown, lead, seed }), ctx = { fs: { ...fs }, writer }
+test('3.5 #19 unknown: over sessions whose `unknown` records come before, among and after the first rows, and members that are no call written after a call they step before, apply(full(M), since(M)) is full(now) with `unknown`, on the local path and the worker\'s shared log', async () => {
+  for (const writer of [false, true]) for (const seed of [1, 5]) for (const by of [1, 4]) for (const lead of [0, 3]) for (const unknown of [0, 4]) for (const late of [false, true]) {
+    const home = homeOf('trocar-sread-unkd-'), m = mixed(home, { calls: 12, unknown, lead, late, seed }), ctx = { fs: { ...fs }, writer }
     const q = async (params) => { if (writer) while (await extendSession({ home, ...ctx }, m.id, Infinity)); return session(home, { id: m.id, ...params }, ctx) }
+    assert.equal(m.back > 0, late, 'late: some members that are no call step before the call written before them')
     let upTo = 1, step = seed
     fs.writeFileSync(m.file, m.lines.slice(0, upTo).join('\n') + '\n')
     let full = await q({})
@@ -167,7 +171,7 @@ test('3.5 #19 unknown: over sessions whose `unknown` records come before, among 
       fs.appendFileSync(m.file, m.lines.slice(upTo, upTo + more).join('\n') + '\n')
       upTo += more
       const d = await q({ since: full.mark }), now = await q({})
-      assert.equal(canon(apply(full, d)), canon(now), `writer ${writer} seed ${seed} by ${by} lead ${lead} unknown ${unknown}: ${upTo} lines`)
+      assert.equal(canon(apply(full, d)), canon(now), `writer ${writer} seed ${seed} by ${by} lead ${lead} unknown ${unknown} late ${late}: ${upTo} lines`)
       full = now
     }
     if (lead + unknown) assert.ok(full.unknown, 'the session ends with `unknown`')
