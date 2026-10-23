@@ -24,6 +24,7 @@ export const params = Object.freeze(['id', 'lane', 'from', 'to', 'ledger']);
 const one = (v) => (v == null || v === '' ? null : String(v));
 const pick = (o, keys) => { const out = {}; if (o) for (const k of keys) if (o[k] !== undefined) out[k] = o[k]; return out; };
 // A definition on the wire (3.5 §会话读 定义 closed set): `fh` as 22 base64url characters (the first 128 bits of the stored digest).
+// `name`: a tool definition's, or a tool call's tool (the projection keeps a call's as `toolName`, the flat entry's own word).
 const OPTIONAL = ['label', 'name', 'mcp', 'cc'];
 const BODY = ['text', 'block', 'desc', 'schema'];
 const fhWire = (hex) => (typeof hex === 'string' && /^[0-9a-f]{32}/.test(hex) ? Buffer.from(hex.slice(0, 32), 'hex').toString('base64url') : null);
@@ -127,7 +128,7 @@ export async function run(ctx) {
     let w = null;
     if (d) {
       const ff = d.ff || {};
-      w = { bid, fh: fhWire(d.fh), ref: d.ref ?? null, sec: d.sec, role: d.role, kind: d.kind, ...pick(d, OPTIONAL), ff, head: d.head,
+      w = { bid, fh: fhWire(d.fh), ref: d.ref ?? null, sec: d.sec, role: d.role, kind: d.kind, ...pick(d, OPTIONAL), ...(d.toolName ? { name: d.toolName } : null), ff, head: d.head,
         preview: d.preview, chars: d.chars, bytes: d.bytes, ...(d.resKey ? { resKey: d.resKey } : null), r: pick(renderIn(d, list), ['as', 'tone', 'title', 'f']) };
       if (ff.unaddressable) Object.assign(w, { ref: null, unaddressable: ff.unaddressable, inline: pick(d, BODY) });
     }
