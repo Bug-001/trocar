@@ -90,9 +90,10 @@ One command takes this checkout to the newest code and leaves the machine the wa
 capture on again for the agents that had it on. It prints the plan — which commit to which commit,
 and which agents go off and on again — and asks first; `--yes` answers, `--dry-run` only prints.
 While it runs those agents are not captured (their connections still work), and the collector is
-replaced the way `uninstall` stops it: connections it still holds get up to 30 s to finish, then the old collector cuts
-the rest (a call left open, such as a WebSocket) and stops itself cleanly, so the new one does not report that the previous
-one ended without a clean stop. An update that stops half way leaves a note
+replaced the way `uninstall` stops it: a response still on its way gets up to 30 s to finish (the update goes on as soon
+as it has), then the old collector cuts the rest (a call left open, such as a WebSocket) and stops itself cleanly, so the
+new one does not report that the previous one ended without a clean stop. The rows of what it cut, and its stop record,
+say that `update` (or `uninstall`) stopped it. An update that stops half way leaves a note
 behind: run `trocar update` again and it goes on from where it stopped.
 
 A machine that ran the build from before the rename moves over once, by hand: that build's own `uninstall`, then
