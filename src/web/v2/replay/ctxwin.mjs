@@ -7,7 +7,7 @@
 // The window is a list of keyed units (2.3 §读与画 · 窗口按 bid 打补丁): a request row's key is `bid#occurrence`, a reply row's
 // `rp:` + bid, a turn's its anchor; a unit's `html` carries no position (positions ride `set`, written on placement), so a
 // step change patches the window and an open row whose bid survives keeps its DOM.
-//   ctxWindowUnits(s) → units   ctxWindowHtml(s) = serialize(units)   patchUnits(prev, next) → ops   applyOps(units, ops)
+//   ctxWindowUnits(s) → units   fillGroup(units, s, key) → [units, ops]   ctxWindowHtml(s) = serialize(units)   patchUnits(prev, next) → ops   applyOps(units, ops)
 //   renderContextWindow(el, s[, {busy}]) patch + land   wireCtxWin(el, s) listeners
 import { esc, bytes } from '../core/fmt.mjs'
 import { techDetailsHtml } from '../core/ui.mjs'
@@ -147,7 +147,8 @@ const hash = (str) => { let h = 2166136261; for (let i = 0; i < str.length; i++)
 const GROUP_HTML = `<div class="cwgroup" data-kids>${KIDS}</div>`
 const holderHtml = (n) => `<div class="cwgroup" aria-busy="true" style="--n:${n}"></div>`
 
-/** The window as keyed units (pure but for the desk's scratch: s.curFlat / s.curKeys / s.curReply / s.curRemoved / s.drawn).
+/** The window as keyed units (pure but for the desk's scratch: s.curFlat / s.curKeys / s.curReply / s.curRemoved / s.drawn,
+ * and s.later: each placeholder's rows, built, by group key — what fillGroup draws in its place).
  * `all`: every group drawn (the full draw). Otherwise the groups drawn are s.drawn's, those holding an open row or the change
  * line, and — given `focus` (a list position) — the focus's group and its nearest neighbours up to ROW_BUDGET rows. */
 export function ctxWindowUnits(s, { all = false, focus = null } = {}) {
@@ -211,6 +212,7 @@ export function ctxWindowUnits(s, { all = false, focus = null } = {}) {
   })
   drawPlan(groups, all, focus)
   s.drawn = new Set(groups.filter((g) => g.drawn).map((g) => g.key))
+  s.later = new Map(groups.filter((g) => !g.drawn).map((g) => [g.key, g.rows]))
   for (const g of groups) { g.html = g.drawn ? GROUP_HTML : holderHtml(g.n); if (g.drawn) g.kids = g.rows; delete g.rows; delete g.at; delete g.n; delete g.must; delete g.drawn }
   const reply = replyUnit(s, st, call) // ⑨
   return reply ? [...out, reply] : out
@@ -319,10 +321,25 @@ function fillLater(el, s) {
     if (el.__gen !== gen || !el.isConnected || ridNow(s) !== rid) return
     const next = nextHolder(el.__units)
     if (!next) return
-    s.drawn.add(next)
-    paint(el, ctxWindowUnits(s))
+    const [units, ops] = fillGroup(el.__units, s, next)
+    paint(el, units, ops)
     fillLater(el, s)
   })
+}
+/** One placeholder drawn (2.3 §读与画「长对话的窗口」 rule 4: one group per task): the units with group `key` holding the
+ * rows s.later set aside for it, and the ops that make that change alone — the whole step is not rebuilt. */
+export function fillGroup(units, s, key) {
+  const g = { key, html: GROUP_HTML, kids: s.later.get(key) }
+  s.later.delete(key); s.drawn.add(key)
+  const swap = (us) => {
+    for (let i = 0; i < us.length; i++) {
+      const u = us[i]
+      if (u.key === key) { const arr = us.slice(); arr[i] = g; return [arr, [['del', key], ['put', key, g, i ? us[i - 1].key : null]]] }
+      if (u.kids && !isGroup(u)) { const r = swap(u.kids); if (r) { const arr = us.slice(); arr[i] = { ...u, kids: r[0] }; return [arr, [['kids', u.key, r[1]]]] } }
+    }
+    return null
+  }
+  return swap(units)
 }
 // the placeholder next to a drawn group (after it, else before it), else the first one
 function nextHolder(units) {
@@ -333,10 +350,10 @@ function nextHolder(units) {
   const g = gs[i >= 0 ? i : gs.findIndex((x) => !x.kids)]
   return g ? g.key : null
 }
-function paint(el, units) {
+function paint(el, units, ops = null) {
   // patch only a window this module drew last (anyone who wrote el.innerHTML since gets a fresh paint)
   const live = typeof document !== 'undefined' && el.children && el.__units && el.children.length === el.__units.length && el.__units.every((u, i) => el.children[i].__k === u.key)
-  if (live) domApply(el, patchUnits(el.__units, units))
+  if (live) domApply(el, ops || patchUnits(el.__units, units))
   else { el.innerHTML = serialize(units); if (el.children && typeof document !== 'undefined') tag(el, units) }
   el.__units = units
 }

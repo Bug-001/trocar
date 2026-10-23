@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createDesk, applySession, laneAsk } from '../../src/web/v2/replay/model.mjs'
 import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
-import { ctxWindowUnits, ctxWindowHtml, patchUnits, applyOps } from '../../src/web/v2/replay/ctxwin.mjs'
+import { ctxWindowUnits, ctxWindowHtml, patchUnits, applyOps, fillGroup } from '../../src/web/v2/replay/ctxwin.mjs'
 import { world, readLane, deskFrom } from './desk-world.mjs'
 
 const SEEDS = Array.from({ length: 24 }, (_, i) => i + 1)
@@ -123,4 +123,30 @@ test('2.3 #28: with groups — patched from step to step and from partly drawn t
     }
   }
   assert.ok(multi > 0, 'the walks cover cards whose rows form several groups')
+})
+
+// 2.3 §读与画「长对话的窗口」 rule 4: a fill task draws one group — its ops re-create that placeholder alone, they turn the
+// window into the one fillGroup returns, and once every placeholder is filled the window equals the full draw
+test('2.3 #28: each fill draws one group with ops on that group alone; filled to the end, the window equals the full draw', async () => {
+  let filled = 0
+  for (const seed of SEEDS.slice(0, 4)) {
+    const w = world(seed, { calls: 240, page: 240, talk: { pre: 12, len: 520, every: seed % 2 ? 40 : 160, tail: seed % 3 ? 0 : 300 } })
+    const desk = await deskFrom(w.get(), 'S'), r = rng(seed)
+    const lane = buildLanes(desk).find((l) => l.calls.length > 20), n = lane.calls.length
+    for (let k = 0; k < 6; k++) {
+      const s = stateOf(desk, { anchor: lane, playhead: n - 1 - Math.floor(r() * 40) })
+      for (const u of ctxWindowUnits(s).filter((x) => x.key.startsWith('q:'))) s.turnFold.set(u.html.match(/data-anchor="([^"]*)"/)[1], r() < 0.7)
+      let units = ctxWindowUnits(s, { focus: Math.floor(r() * 600) })
+      const holders = (us) => us.flatMap((u) => (u.html.includes('aria-busy') ? [u.key] : u.kids ? holders(u.kids) : []))
+      for (let left = holders(units); left.length; left = holders(units)) {
+        const key = left[Math.floor(r() * left.length)]
+        const [next, ops] = fillGroup(units, s, key)
+        assert.deepEqual([...recreated(ops)].map((x) => x.split('/').at(-1)), [key], `seed ${seed}: the ops touch group ${key} alone`)
+        assert.deepEqual(applyOps(units, ops), next, `seed ${seed}: the ops make the returned window`)
+        units = next; filled++
+      }
+      assert.deepEqual(units, ctxWindowUnits(s, { all: true }), `seed ${seed} step ${s.playhead}: filled to the end = the full draw`)
+    }
+  }
+  assert.ok(filled > 0, 'the walks fill placeholders')
 })
