@@ -3,13 +3,18 @@
 // unchanged is never touched (an open row, a selection or a focused control in it stays).
 // A unit is {key, html, kids?, set?}: `html` is ONE element; a unit with kids carries `KIDS` inside its one [data-kids]
 // element, where the kids go; `set` = attributes written on placement (positions), kept out of `html`. Keys are unique per level.
-//   serialize(units) → html   patchUnits(prev, next) → ops   applyOps(units, ops) → units   patchInto(el, units[, ops])
+//   serialize(units) → html   keyed(units) → units   patchUnits(prev, next) → ops   applyOps(units, ops) → units   patchInto(el, units[, ops])
 import { esc } from './fmt.mjs'
 
 export const KIDS = '<!--kids-->'
 const withSet = (h, set) => (set ? h.replace('>', Object.entries(set).map(([k, v]) => ` ${k}="${esc(String(v))}"`).join('') + '>') : h)
 const serialOne = (u) => { const h = withSet(u.html, u.set); return u.kids ? h.replace(KIDS, () => serialize(u.kids)) : h }
 export const serialize = (units) => units.map(serialOne).join('')
+// keys made unique within one level: key + '#' + its occurrence (the same name may stand twice)
+export function keyed(units) {
+  const seen = new Map()
+  return units.map((u) => { const n = seen.get(u.key) || 0; seen.set(u.key, n + 1); return { ...u, key: `${u.key}#${n}` } })
+}
 
 // ── the patch: ops over keyed units (pure) ────────────────────────────────────────────────────────────────────────────
 // ['del', key] · ['put', key, unit, after] (a new node after sibling `after`, null = first) · ['move', key, after] ·
