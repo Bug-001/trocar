@@ -203,7 +203,13 @@ function relayOf(log) {
   for (const k of ['frontier', 'bytes', 'items', 'failures']) Object.defineProperty(r, k, { get: () => r.cur[k] });
   return r;
 }
-const reductionOf = (s, log) => { s.relay = relayOf(log); return reduction(s.store, { log: s.relay, resolve: (ref) => s.resolve(ref), errors: s.sink, progress: (rid) => s.hook(rid) }); };
+// A rebuild up to the file log's frontier (`s.target`) keeps the members that log has failed failed (3.5 §读不全不静默).
+const reductionOf = (s, log) => {
+  s.relay = relayOf(log);
+  const file = s.target != null ? s.log : null;
+  const failedBefore = file && ((rid) => { const at = file.failures.get(rid); return at ? file.peek(...at) : null; });
+  return reduction(s.store, { log: s.relay, resolve: (ref) => s.resolve(ref), errors: s.sink, progress: (rid) => s.hook(rid), failedBefore });
+};
 function closeState(s) { if (fileLogs.get(s.store) === s) fileLogs.delete(s.store); s.log.close(); if (s.T) s.T.close(); }
 // store → the state that holds its fold log file open (the worker's)
 const fileLogs = new WeakMap();

@@ -206,9 +206,11 @@ export function reduce(store, members, { mark = undefined, resolve = null, error
  * slots in step order, its base and last call (their lists through the bounded list cache), last composition, first prompt, the
  * sums its header and the stats read, and the analyzer's state (its lane ledgers among it); the spawns' 60-character prompt
  * heads for linking. No call, event or document is kept. `members()`: the rids read so far, failed ones included.
- * `progress(rid)` is called once per row folded (the worker's silence clock, 3.5:46).
+ * `progress(rid)` is called once per row folded (the worker's silence clock, 3.5:46). `failedBefore(rid)` → the failed line
+ * `{x, reason, code}` a member already has in the fold log this reduction rebuilds up to, or null: such a member stays failed, as a
+ * member whose record did not parse (3.5 §读不全不静默: failed until the fold log is rebuilt).
  */
-export function reduction(store, { log, resolve = null, errors = undefined, progress = null } = {}) {
+export function reduction(store, { log, resolve = null, errors = undefined, progress = null, failedBefore = null } = {}) {
   const L = listsOf(store), B = blocksOf(store);
   // per member, by its row's slot in the store (store.rows.slotOf): its ts and its call's own ts (step order; one string when they
   // are equal), the digest of its latest line (NaN: none yet; 0: an item)
@@ -346,7 +348,11 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     if (!row) throw new Error(`the context projection has no row for ${rid}`);
     const k = slotOf(rid), x = row.x || {};
     if (top == null || posCmp(rid, top) > 0) top = rid;
-    if (typeof x.unparsed === 'string' && !x.item) { if (!failed.has(rid)) { failed.set(rid, -1); newFailed.push({ x: rid, reason: x.unparsed, code: x.code || 'record-unparseable' }); } return null; }
+    const was = failedBefore && failedBefore(rid);
+    if (was || (typeof x.unparsed === 'string' && !x.item)) {
+      if (!failed.has(rid)) { failed.set(rid, -1); newFailed.push(was ? { x: rid, reason: was.reason, code: was.code } : { x: rid, reason: x.unparsed, code: x.code || 'record-unparseable' }); }
+      return null;
+    }
     n++;
     ts[k] = x.item ? x.item.ts_request : null;
     const c = !isCall(row) ? ts[k] : x.format === 'anthropic' ? (x.facts || {}).ts_request : x.ts; // the call's own ts (its step order)

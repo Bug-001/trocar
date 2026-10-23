@@ -229,6 +229,18 @@ test('3.5 #4: a block the reduction cannot read back fails its member with a clo
   const last = sessionGroups(await indexRows({ home, fs, errors: [] })).get(s.id).at(-1)
   assert.ok(after.calls.some((r) => r.rid === String(last.id)), 'the call appended later is a row')
   assert.equal(JSON.stringify(await session(home, { id: s.id }, { fs: { ...rfs }, writer: true })), JSON.stringify(after))
+  // a member that failed stays failed until the fold log is rebuilt (3.5 §读不全不静默): a process whose block reads back rebuilds up
+  // to the log's frontier for a call past it, and its answer still has the failed members out of every row and every lane count
+  s.append(1)
+  const healed = { fs: { ...fs }, writer: true }
+  while (await extendSession({ home, ...healed }, s.id, Infinity));
+  const later = await session(home, { id: s.id, limit: '1000' }, healed)
+  assert.equal(later.lanes.reduce((a, h) => a + h.count, 0), later.calls.length, 'the lanes count the rows')
+  assert.equal(later.stats.calls, later.calls.length, 'the stats count the rows')
+  for (const rid of failed) {
+    assert.ok(later.errors.some((e) => e.where === rid), `${rid} is still in errors`)
+    assert.ok(!later.calls.some((r) => r.rid === rid), `${rid} is still no row`)
+  }
 })
 
 test('3.5:42 local: over a fold log the worker finished, the local path answers the worker\'s bytes and leaves the log\'s bytes as they were', async () => {
