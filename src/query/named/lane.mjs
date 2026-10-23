@@ -11,7 +11,7 @@
 // the kept ledgers, LEDGER_BYTES): an answer reads the lines of the steps it covers and of the steps the replay goes over. The ledger
 // entries an answer owes go in key order into the room its page leaves; the rest are named by `ledger_next`, a cursor `--ledger`
 // goes on from (3.5 `resources` 与 `seen`).
-import { sessionState, version as sessionVersion } from './session.mjs';
+import { sessionState, markOn, version as sessionVersion } from './session.mjs';
 import { listOf, laneLedger, ledgerWeight, LEDGER_BYTES } from '../../view/reduce.mjs';
 import { lru } from '../projection.mjs';
 import { inheritedRender } from '../../view/render-kind.mjs';
@@ -93,7 +93,7 @@ export async function run(ctx) {
   errors.push(...st.errors);
   // a lane the session does not have (it can vanish between polls: `lanes_gone`) is an empty lane
   const { cols, log } = st.V;
-  if (!cols.lanes.has(key)) return empty(st.mark);
+  if (!cols.lanes.has(key)) return empty(markOn(st.plan, st.mark));
   const { store } = st, L = laneOf(cols, key), { rids, slots } = L, n = rids.length;
   const lines = new Map(), lineAt = (i) => { if (!lines.has(i)) lines.set(i, log.read(...log.latest(rids[i]))); return lines.get(i); };
   // the `user` events before step i (3.5: every `user` event's `k` is its place among the lane's, 1-based)
@@ -221,7 +221,7 @@ export async function run(ctx) {
   }
   const last = i > 0 ? owed[i - 1] : [0, ''];
   return {
-    lane: key, base, mark: st.mark, steps, defs: wireDefs, resources: out[0], seen: out[1], events,
+    lane: key, base, mark: markOn(st.plan, st.mark), steps, defs: wireDefs, resources: out[0], seen: out[1], events,
     prev: lo > 0 && steps.length ? rids[lo] : null, next: hi < n && steps.length ? rids[hi - 1] : null,
     ledger_next: i < owed.length ? Buffer.from(JSON.stringify([LISTS[last[0]], last[1]])).toString('base64url') : null,
   };

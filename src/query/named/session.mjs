@@ -225,6 +225,14 @@ export function saveIndexes() {
   }
 }
 const cutOf = (plan) => (plan.start ? String(plan.read[0].id) : null);
+/** markOn(plan, rid) → the mark on the wire (3.5 id): the frontier rid, and when the plan is cut `@` and its cut's first rid, so a
+ *  mark names the cut its document was answered under. sinceAt(plan, M) → the rid M names when its cut is this plan's, else null:
+ *  a document under another cut has members the cut's move let in or out that no delta carries (3.5 #19), so M is not known. */
+export const markOn = (plan, rid) => (rid == null || !cutOf(plan) ? rid : `${rid}@${cutOf(plan)}`);
+export function sinceAt(plan, M) {
+  const i = M.indexOf('@');
+  return (i < 0 ? null : M.slice(i + 1)) === cutOf(plan) ? (i < 0 ? M : M.slice(0, i)) : null;
+}
 // Whether a fold log was folded under this plan's cut: its last frontier's `n` (the members folded) = the members of the cut up to
 // its `f` that did not fail. A log folded under another cut would serve a reader that must cut a log folded uncut.
 function foldedUnder(log, plan, f) {
@@ -432,10 +440,11 @@ export async function run(ctx) {
   errors.push(...s.errors, ...s.failed.map((f) => ({ where: f.id, code: f.code, reason: f.reason })));
   const { V } = s;
   if (before != null && !V.has(before)) throw new QueryArgError(`trocar query session: --before ${JSON.stringify(before)} is not a call of this session`);
-  const head = { mark: s.mark, ...(s.pending ? { pending: s.pending } : null), truncated: s.truncated };
+  const head = { mark: markOn(s.plan, s.mark), ...(s.pending ? { pending: s.pending } : null), truncated: s.truncated };
   const body = { meta: V.meta, stats: V.stats, logged: V.logged, probes: V.probes };
-  if (since != null && s.mark != null && s.plan.byId.has(since) && posOf(s.plan, since) <= posOf(s.plan, s.mark)) {
-    const { then, cands, close } = thenOf(s, since);
+  const M = since == null ? null : sinceAt(s.plan, since);
+  if (M != null && s.mark != null && s.plan.byId.has(M) && posOf(s.plan, M) <= posOf(s.plan, s.mark)) {
+    const { then, cands, close } = thenOf(s, M);
     try {
       const { unknown, ...d } = deltaOf(V, then, cands);
       return { base: since, ...head, ...body, ...(unknown !== undefined ? { unknown } : null), ...d };

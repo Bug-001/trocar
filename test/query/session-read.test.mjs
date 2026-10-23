@@ -16,7 +16,7 @@ import { compareStep } from '../../src/view/step-order.mjs'
 import { run as runQueryCli } from '../../src/cli/query.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
-import { extendSession } from '../../src/query/named/session.mjs'
+import { extendSession, markOn, sinceAt } from '../../src/query/named/session.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
 import { apply, canon, byStep } from '../helpers/session-apply.mjs'
 import { BLOCK_PROBLEMS, SESSION_PROBLEMS } from '../../src/health/codes.mjs'
@@ -79,13 +79,26 @@ for (const wire of ['http', 'chat', 'ws']) for (const arrival of LATE) {
       assert.equal(JSON.stringify(afresh), JSON.stringify(d), 'a process with no warm state (the fallback) gives the same delta, byte for byte')
       full = now
     }
-    for (const unknown of ['20990101T000000Z:1', 'not-a-rid']) {
+    for (const unknown of ['20990101T000000Z:1', 'not-a-rid', `${full.mark}@${full.calls[0].rid}`]) { // the last: a cut this uncut session is not under
       const d = await session(home, { id: s.id, since: unknown })
       assert.equal(d.base, null)
       assert.equal(canon(d), canon(full), `an unknown mark (${unknown}) answers the full document`)
     }
   })
 }
+
+// 3.5:58 / #19 when the cut moves: members at or before M enter or leave the cut and no delta carries them, so a mark names the cut
+// its document was answered under and a --since M under another cut is not known (the full document). Growing a session past a
+// small heap's room until its cut moves is minutes of work (test/query/past-room.mjs), so the rule is held at the seam that decides.
+test('3.5 #19 moved cut: a mark names its cut; --since a mark of another cut (or none) is not known, of the same cut is its rid', () => {
+  const plans = [{ start: 0, read: [{ id: 'seg:1' }] }, { start: 3, read: [{ id: 'seg:4' }] }, { start: 3, read: [{ id: 'seg:2' }] }, { start: 6, read: [{ id: 'seg:7' }] }]
+  for (const [a, then] of plans.entries()) for (const [b, now] of plans.entries()) {
+    const M = markOn(then, 'seg:9')
+    assert.equal(markOn(then, null), null, 'an empty session has no mark')
+    assert.equal(sinceAt(now, M), a === b || (!then.start && !now.start) ? 'seg:9' : null, `${M} under plan ${b}`)
+  }
+  assert.equal(markOn(plans[0], 'seg:9'), 'seg:9', 'an uncut session\'s mark is the bare rid')
+})
 
 // A Claude Code session whose calls are interleaved with members that are no call: requests of no LLM, and (`unknown`) LLM
 // requests to an endpoint no dissector reads as a call (C1): after each of the first `unknown` calls, and `lead` of them before the
