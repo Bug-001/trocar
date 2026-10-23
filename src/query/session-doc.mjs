@@ -49,7 +49,7 @@ const recOf = (r) => ({ id: String(r.id), ts_request: r.ts ?? null, is_llm_call:
  *  brings them to the log's frontier from the lines past the last sync (and keeps the lane headers it reads: `heads`), each moved row taken out and put back by binary search: a
  *  warm state and a cold open build the same columns. */
 export const columns = (slotOf) => ({ at: -1, slotOf, ts: [], ln: new Int32Array(0), uc: new Int32Array(0), cs: new Uint8Array(0),
-  keys: new Map(), order: [], by: [], lanes: new Set(), heads: new Map(), its: null });
+  keys: new Map(), order: [], by: [], lanes: new Set(), heads: new Map(), its: null, sorted: null });
 const tsOf = (cols, rid) => cols.ts[cols.slotOf(rid)];
 // The columns in a fold log's sidecar (4.3 §4 旁索引, its `extra`): `s.at` the frontier they were synced to; by slot `s.tk` whether the
 // ts is undefined (0), null (1) or a string (2, in `s.ts` in slot order), `s.ln`, `s.uc`, `s.cs`; `s.keys` the lane keys in int order;
@@ -119,8 +119,14 @@ export function sync(cols, log) {
       cols.cs[k] = o.e.some((e) => e.type === 'compaction' || e.type === 'summarize') ? 1 : 0;
     } else { cols.ts[k] = undefined; cols.ln[k] = -1; cols.uc[k] = 0; cols.cs[k] = 0; }
   }
+  // the kept lane order (viewOf) holds while every lane's first row is the one it was sorted by and kept its place; a new lane is
+  // placed into it there
+  const S = cols.sorted;
+  if (S && ch.rids.some((rid) => S.firsts.has(rid))) cols.sorted = null;
   for (const key of ch.lanes) {
     const h = headOf(log.peek(...log.lane(key)));
+    if (cols.sorted && h && !cols.lanes.has(key)) { S.fresh.push(key); S.firsts.add(h.first); }
+    else if (cols.sorted && (!h || !S.firsts.has(h.first))) cols.sorted = null;
     if (h) { cols.lanes.add(key); cols.heads.set(key, h); } else { cols.lanes.delete(key); cols.heads.delete(key); }
   }
   cols.at = f;
@@ -166,13 +172,13 @@ function itemsOf(cols, log) {
   if (f !== c.at) {
     for (const rid of log.items.since(c.at)) {
       const { i, it, u } = log.peek(...log.items.get(rid)), o = { i, it, u };
-      put(c.list, itemCmp, c.items.get(rid), o); c.items.set(rid, o);
+      put(c.list, itemCmp, c.items.get(rid), o); c.items.set(rid, o); c.view = null;
     }
     for (const rid of log.failures.since(c.at)) {
       const { x, reason, code } = log.peek(...log.failures.get(rid)), o = { id: x, reason, code };
-      put(c.failed, failCmp, c.fails.get(rid), o); c.fails.set(rid, o);
+      put(c.failed, failCmp, c.fails.get(rid), o); c.fails.set(rid, o); c.view = null;
     }
-    c.at = f; c.view = null;
+    c.at = f;
   }
   if (!c.view || c.view.rows !== rows) {
     c.view = { rows, ...itemsView(c.list.filter((o) => o.it).map((o) => o.it)), unknown: unknownOf(c.list, rows), failed: c.failed.slice() };
@@ -189,7 +195,19 @@ export function viewOf({ id, log, cols, members, plan, mark }) {
   const f = log.frontier, its = itemsOf(cols, log);
   const at = (rid) => (tsOf(cols, rid) === undefined ? Infinity : placeOf(cols, tsOf(cols, rid), rid));
   const head = (k) => cols.heads.get(k) || cols.heads.set(k, headOf(log.read(...log.lane(k)))).get(k); // a loaded column's: read once
-  const lanes = [...cols.lanes].map(head).sort((a, b) => at(a.first) - at(b.first));
+  // in the order of their first row, sorted again only when a lane came, went or has another first row (sync): the lanes grow with
+  // the session, an answer's work does not (3.5:42)
+  if (!cols.sorted) {
+    const keys = [...cols.lanes].sort((a, b) => at(head(a).first) - at(head(b).first));
+    cols.sorted = { keys, firsts: new Set(keys.map((k) => head(k).first)), fresh: [] };
+  }
+  for (const k of cols.sorted.fresh.splice(0)) { // after the lanes that sort with it, as the stable sort puts a lane that came later
+    const keys = cols.sorted.keys, t = at(head(k).first);
+    let lo = 0, hi = keys.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (at(head(keys[m]).first) <= t) lo = m + 1; else hi = m; }
+    keys.splice(lo, 0, k);
+  }
+  const lanes = cols.sorted.keys.map(head);
   const main = lanes.find((l) => l.kind === 'main'), fl = f == null ? null : log.read(f);
   return {
     log, f, cols, plan, mark, lanes, failed: its.failed, logged: its.logged, probes: its.probes, unknown: its.unknown,
@@ -226,10 +244,18 @@ export function pageOf(V, before, limit) {
   return { more: start > 0, lanes: V.lanes, calls: lines.map((o) => o.r), events: eventsOf(lines), records };
 }
 
+// the records of the members `added` and of the rows `calls`, each once, in step order
+function recordsOf(V, added, calls) {
+  const rows = new Map(added.map((r) => [String(r.id), r]));
+  for (const o of calls) rows.set(o.c, V.plan.byId.get(o.c));
+  return [...rows.values()].sort((a, b) => compareStep(a.ts ?? null, String(a.id), b.ts ?? null, String(b.id))).map(recOf);
+}
+
 /** deltaOf(V, then, cands) → the rows and lane headers at V's frontier that are new or whose bytes differ from those of the log
  *  `then.log` at byte `then.off`, and what that had that V has not, among the candidates `cands: {rids, lanes}` (the shared log's
- *  changedSince, else every rid and lane of either log); their events and records (their index rows); `unknown` when it differs
- *  from the one at `then.mark` (null when it is gone). */
+ *  changedSince, else every rid and lane of either log); their events; the records (index rows) of those rows and of the members
+ *  `then.added` (the cut's members past `then.mark` up to V's mark, calls or not: what a full page holds of them), in step order;
+ *  `unknown` when it differs from the one at `then.mark` (null when it is gone). */
 export function deltaOf(V, then, cands) {
   const calls = [], gone = [], lanes = new Set(), lanesGone = [];
   for (const rid of cands.rids) {
@@ -243,11 +269,15 @@ export function deltaOf(V, then, cands) {
     else if (!b && a) lanesGone.push(key);
   }
   calls.sort((x, y) => compareStep(x.r.ts ?? null, x.c, y.r.ts ?? null, y.c));
-  const M = then.mark, upToM = (rid) => posCmp(rid, M) <= 0;
-  const was = unknownOf(V.cols.its.list.filter((o) => upToM(o.i)), V.cols.order.some(upToM));
+  // `unknown` at M is the one now when, on the shared log, no item line past M's frontier has a record no dissector read and whether
+  // a row exists is the same at M (no call changed past it, else a row at or below M): an item line is written once per rid
+  const M = then.mark, upToM = (rid) => posCmp(rid, M) <= 0, its = V.cols.its, order = V.cols.order;
+  const same = then.log === V.log && !V.log.items.since(then.off).some((rid) => its.items.get(rid).u)
+    && (cands.rids.length === 0 || order.some(upToM) === order.length > 0);
+  const was = same ? V.unknown : unknownOf(its.list.filter((o) => upToM(o.i)), order.some(upToM));
   return {
     ...(JSON.stringify(was) !== JSON.stringify(V.unknown) ? { unknown: V.unknown ?? null } : null),
     calls: calls.map((o) => o.r), gone: gone.sort(posCmp), lanes: V.lanes.filter((h) => lanes.has(h.lane)), lanes_gone: lanesGone.sort(posCmp),
-    events: eventsOf(calls), records: calls.map((o) => recOf(V.plan.byId.get(o.c))),
+    events: eventsOf(calls), records: recordsOf(V, then.added, calls),
   };
 }

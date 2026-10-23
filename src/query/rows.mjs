@@ -9,7 +9,7 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import { createSynthAssigner } from '../dissect/synth-key.mjs';
 import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
-import { segmentFiles, warmSegmentIndex, problemEntry } from './index-build.mjs';
+import { segmentFiles, warmSegmentIndex, problemEntry, recordsId, grownFrom } from './index-build.mjs';
 import { trocarHome } from '../paths.mjs';
 import { warmCache, fsTag } from './warm.mjs';
 
@@ -27,9 +27,6 @@ export const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(
 // after the segment before; nothing moved → the SAME (frozen) array, so sessionGroups' memo below holds too.
 const ROW_HEAP = 400; // a row object here: the segment's ~320 B row (index-build.mjs segRows) plus segment / lineNo / session_id
 const lists = warmCache({ max: 4, cost: (v) => v.rows.length * ROW_HEAP, steady: true });
-const entryIds = new WeakMap();
-let entrySeq = 0;
-const entryId = (records) => { let n = entryIds.get(records); if (n == null) entryIds.set(records, (n = ++entrySeq)); return n; };
 const copyOpen = (open) => new Map([...open].map(([k, v]) => [k, { ...v }])); // the rule moves `lastMs` in place
 
 /**
@@ -43,7 +40,7 @@ export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [] 
   for (const [segment] of segmentFiles(home, fs)) {
     const { records, problems } = await warmSegmentIndex({ home, segment, fs });
     for (const pr of problems) errors.push(problemEntry(`segments/${segment}`, pr));
-    segs.push({ segment, records, entry: entryId(records) });
+    segs.push({ segment, records, entry: recordsId(records) });
   }
   const stamp = segs.map((s) => `${s.segment}#${s.entry}`).join('\n');
   return lists.get(`${fsTag(fs)}\n${home}`, stamp, (old) => rowList(segs, old)).rows;
@@ -51,18 +48,28 @@ export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [] 
 function rowList(segs, old) {
   let i = 0;
   if (old) while (i < segs.length && i < old.segs.length && old.segs[i].segment === segs[i].segment && old.segs[i].entry === segs[i].entry) i++;
-  const out = i ? old.rows.slice(0, old.segs[i - 1].end) : [];
-  const open = i ? copyOpen(old.segs[i - 1].open) : new Map();
+  // only the newest segment grew, and its records begin with the ones its rows were built from (index-build.mjs grownFrom): its
+  // rows so far stay, and its new records are added, the synthesized-key rule resumed from where those rows left it (3.5:45)
+  const grown = !!old && i === segs.length - 1 && i === old.segs.length - 1 && old.segs[i].segment === segs[i].segment && grownFrom(segs[i].records) === old.segs[i].entry;
+  const kept = grown ? i + 1 : i;
+  const out = kept ? old.rows.slice(0, old.segs[kept - 1].end) : [];
+  const open = kept ? copyOpen(old.segs[kept - 1].open) : new Map();
   const assign = createSynthAssigner({ open });
   const done = old ? old.segs.slice(0, i) : [];
   for (const { segment, records, entry } of segs.slice(i)) {
-    for (const r of records) {
+    for (let k = out.length - (done.length ? done[done.length - 1].end : 0); k < records.length; k++) {
+      const r = records[k];
       const synth = r.synth_hash ? assign({ harness: r.harness_id, hash: r.synth_hash, ms: Date.parse(r.ts || '') }) : null;
       out.push({ ...r, segment, lineNo: Number(String(r.id).split(':').pop()), session_id: r.session_key ?? synth ?? null, synthesized: !!synth });
     }
     done.push({ segment, entry, end: out.length, open: copyOpen(open) });
   }
-  return { rows: Object.freeze(out), segs: done };
+  const rows = Object.freeze(out);
+  // the groups of the rows before, when they were asked for, grow by the new rows: a new member array only for a session that got
+  // rows, the others the same arrays (sessionGroups below)
+  const was = grown && groups.get(old.rows);
+  if (was) groups.set(rows, addGroups(new Map(was), rows, old.rows.length, true));
+  return { rows, segs: done };
 }
 
 /** as_of (附录 C.5): the newest call time in the WHOLE index — what every number of an index-reading document is
@@ -76,13 +83,21 @@ const groups = new WeakMap();
 export function sessionGroups(rows) {
   const was = groups.get(rows);
   if (was) return was;
-  const g = new Map();
-  for (const r of rows) {
-    if (!r.session_id) continue;
-    if (!g.has(r.session_id)) g.set(r.session_id, []);
-    g.get(r.session_id).push(r);
-  }
+  const g = addGroups(new Map(), rows, 0, false);
   groups.set(rows, g);
+  return g;
+}
+// `g` with the rows from `from` on added; `shared` = its arrays are another list's groups', copied before the first push
+function addGroups(g, rows, from, shared) {
+  const own = shared ? new Set() : null;
+  for (let k = from; k < rows.length; k++) {
+    const r = rows[k];
+    if (!r.session_id) continue;
+    let m = g.get(r.session_id);
+    if (!m) { g.set(r.session_id, (m = [])); if (own) own.add(m); }
+    else if (own && !own.has(m)) { g.set(r.session_id, (m = m.slice())); own.add(m); }
+    m.push(r);
+  }
   return g;
 }
 

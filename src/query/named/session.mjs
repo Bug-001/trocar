@@ -24,7 +24,7 @@
 // reduction whose MEASURED heap passes what was reserved stops (HeapBound, checked per row folded) and the session is cut again
 // by the rows it got through; a cut that moves restarts the fold and its log.
 import nodeFs from 'node:fs';
-import { reduction, memoryLog, REDUCE_HEAP, LEDGER_BYTES } from '../../view/reduce.mjs';
+import { reduction, memoryLog, BlockUnread, REDUCE_HEAP, LEDGER_BYTES } from '../../view/reduce.mjs';
 import { openFoldLog, foldLogFile, LOG_BYTES } from '../fold-log.mjs';
 import { trocarHome } from '../../paths.mjs';
 import { extractMembers, blockAt, CHUNK_STORED } from '../../view/extract.mjs';
@@ -203,7 +203,13 @@ function relayOf(log) {
   for (const k of ['frontier', 'bytes', 'items', 'failures']) Object.defineProperty(r, k, { get: () => r.cur[k] });
   return r;
 }
-const reductionOf = (s, log) => { s.relay = relayOf(log); return reduction(s.store, { log: s.relay, resolve: (ref) => s.resolve(ref), errors: s.sink, progress: (rid) => s.hook(rid) }); };
+// A rebuild up to the file log's frontier (`s.target`) keeps the members that log has failed failed (3.5 §读不全不静默).
+const reductionOf = (s, log) => {
+  s.relay = relayOf(log);
+  const file = s.target != null ? s.log : null;
+  const failedBefore = file && ((rid) => { const at = file.failures.get(rid); return at ? file.peek(...at) : null; });
+  return reduction(s.store, { log: s.relay, resolve: (ref) => s.resolve(ref), errors: s.sink, progress: (rid) => s.hook(rid), failedBefore });
+};
 function closeState(s) { if (fileLogs.get(s.store) === s) fileLogs.delete(s.store); s.log.close(); if (s.T) s.T.close(); }
 // store → the state that holds its fold log file open (the worker's)
 const fileLogs = new WeakMap();
@@ -275,10 +281,12 @@ function fold(s, plan, F, ms) {
     s.relay.cur = s.log; s.T.close(); s.T = null; s.target = null;
   }
 }
+// Whether a member of the cut extracted (before `F`) lies past the log's frontier `target`: only then is a cold state rebuilt.
+const pastOf = (plan, target, F) => { for (let i = posOf(plan, target) + 1; i < F; i++) if (inCut(plan, plan.members[i])) return true; return false; };
 // The kept state grown when it was made over this store and cut (a state answering from its log: the same first row of the cut; a
-// reduction: no row the cut dropped), else a state from scratch (the old state's only reference, `box.old`, dropped first). The
-// worker's request folds nothing while a cold state is rebuilt (its background does); the local path folds when members lie past
-// the log's frontier.
+// reduction: no row the cut dropped), else a state from scratch (the old state's only reference, `box.old`, dropped first). A cold
+// state is rebuilt only when a member of the cut lies past the log's frontier (an unchanged session is answered from its log), and
+// never in the worker's request (its background does); the local path rebuilds in the request.
 function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress, errors }) {
   let st = box.old;
   box.old = null;
@@ -289,8 +297,7 @@ function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress
   const meter = { base: st.base, since: 0, gap: 0, limit: plan.limit, n: st.n };
   st.resolve = resolve;
   st.hook = (rid) => { progress(); bounded(meter, ++meter.n, (plan.byId.get(rid) || {}).stored_bytes || 0); };
-  const past = () => { for (let i = posOf(plan, st.target) + 1; i < F; i++) if (inCut(plan, plan.members[i])) return true; return false; };
-  const now = st.target == null || (ctx.writer === true ? !request : past());
+  const now = st.target == null || (!(ctx.writer === true && request) && pastOf(plan, st.target, F));
   try { if (foldMs > 0 && now) fold(st, plan, F, foldMs); } catch (e) { closeState(st); throw e; }
   errors.push(...st.sink.splice(0));
   st.cost = costOf(st, plan.perRow);
@@ -315,10 +322,16 @@ async function advance(ctx, id, { budgetMs, request }) {
   persisted(ctx, exErrors);
   errors.push(...exErrors);
   const foldMs = request ? budgetMs : budgetMs - (performance.now() - t0);
+  // a block's text read back for a cache-break detail, or BlockUnread with a BLOCK_PROBLEMS code; a definition's ref names a record
+  // this store extracted (a stitched block's too: extraction stitches from the store's own rows), so a member's
   const resolve = (ref) => {
-    const row = planOf(members, k, store, id).byId.get(parseTextRef(ref).recordId);
-    const rec = row && recordsAt({ home: ctx.home, fs: ctx.fs, rows: [row], errors: [], remember: false })[0];
-    return rec ? blockAt(rec, ref) : null;
+    const rid = parseTextRef(ref).recordId, row = planOf(members, k, store, id).byId.get(rid);
+    if (!row) throw new BlockUnread('record-missing', `no member of this session is record ${rid}`);
+    const errs = [], rec = recordsAt({ home: ctx.home, fs: ctx.fs, rows: [row], errors: errs, remember: false })[0];
+    if (!rec) throw new BlockUnread('record-unreadable', `record ${rid} could not be read back: ${errs.map((e) => e.reason).join('; ') || 'no record'}`);
+    const b = blockAt(rec, ref);
+    if (!b) throw new BlockUnread('field-missing', `record ${rid} has no block at ${ref}`);
+    return b;
   };
   for (;;) {
     const plan = planOf(members, k, store, id);
@@ -347,12 +360,12 @@ async function advance(ctx, id, { budgetMs, request }) {
 
 /** extendSession(ctx, id, budgetMs) → whether the session still has members to extract or fold (3.5 后台抽取与归约): one background
  *  slice of the query worker (`ctx.writer`), the index read included: extraction in write order, then folding (or a cold state's
- *  rebuild) with what is left of `budgetMs`. */
+ *  rebuild, when a member lies past its log's frontier) with what is left of `budgetMs`. */
 export async function extendSession(ctx, id, budgetMs) {
   const r = await advance(ctx, String(id), { budgetMs, request: false });
   if (!r) return false;
   const { st, plan, ex } = r;
-  return ex.done < ex.total || st.target != null || st.fp !== plan || st.fc < plan.members.length;
+  return ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.members.length);
 }
 
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the
@@ -390,16 +403,18 @@ export async function version(ctx) {
 
 const one = (v) => (v == null || v === '' ? null : String(v));
 // The candidates and the log `--since M` is taken against: this log at M's frontier line (only what changed past it), else the
-// members of the cut up to M folded into a throwaway log (every rid and lane of either log).
+// members of the cut up to M folded into a throwaway log (every rid and lane of either log); `added`: the cut's members past M up to
+// the mark, whose records the delta carries.
 function thenOf(s, M) {
-  const { st, plan } = s, off = st.log.frontierAt(M);
-  if (off != null) return { then: { log: st.log, off, mark: M }, cands: st.log.changedSince(off), close: () => {} };
+  const { st, plan } = s, off = st.log.frontierAt(M), added = [];
+  for (let i = posOf(plan, M) + 1, to = posOf(plan, s.mark); i <= to; i++) if (inCut(plan, plan.members[i])) added.push(plan.members[i]);
+  if (off != null) return { then: { log: st.log, off, mark: M, added }, cands: st.log.changedSince(off), close: () => {} };
   const T = memoryLog(st.store), R = reduction(st.store, { log: T, resolve: st.resolve, errors: [] });
   const upTo = [];
   for (let i = 0, to = posOf(plan, M); i <= to; i++) { const r = plan.members[i], rid = String(r.id); if (inCut(plan, r) && st.store.rows.has(rid)) upTo.push(rid); }
   R.add(upTo);
   const a = T.changedSince(-1), b = st.log.changedSince(-1);
-  return { then: { log: T, off: T.frontier ?? -1, mark: M }, cands: { rids: new Set([...a.rids, ...b.rids]), lanes: new Set([...a.lanes, ...b.lanes]) }, close: () => T.close() };
+  return { then: { log: T, off: T.frontier ?? -1, mark: M, added }, cands: { rids: new Set([...a.rids, ...b.rids]), lanes: new Set([...a.lanes, ...b.lanes]) }, close: () => T.close() };
 }
 
 export async function run(ctx) {
