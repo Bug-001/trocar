@@ -26,15 +26,14 @@ async function fresh() {
   act('reload'); await b.page.reload({ waitUntil: 'load' }); await drawn(b.page); await quiet()
 }
 // the desk follows the newest step of the settled session: its step bar shows m / m (m = the server's main-lane count) with
-// 跟随最新 on, and the URL names step m. Both are waited for, never assumed: the first answer can be a pending fold's part (13 of
-// 27 steps), and the step reaches the URL 120 ms after the bar (core/router.mjs's trailing write, which a reload started sooner
-// does not carry). A reload lands on the step the URL names (1.2:91) and follows only if that is the newest one.
+// 跟随最新 on, and the URL names no step (1.2 §路由: a following desk's URL names neither step nor call, so a reload follows
+// too). Both are waited for, never assumed: the first answer can be a pending fold's part (13 of 27 steps).
 async function following() {
   const m = await mainCount(b.get, id)
   await b.page.waitForFunction((k) => {
     const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
     return !!x && +x[1] === k && +x[2] === k && document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'true' &&
-      new URLSearchParams(location.hash.split('?')[1] || '').get('step') === String(k)
+      !new URLSearchParams(location.hash.split('?')[1] || '').has('step')
   }, m, { timeout: 20000 })
 }
 const frames = (n) => b.page.evaluate((k) => new Promise((r) => { const f = () => (--k ? requestAnimationFrame(f) : r()); requestAnimationFrame(f) }), n)
@@ -193,6 +192,19 @@ test('V-url the hash names another step than the one shown', { skip }, async () 
     const n = +/(\d+)\s*\//.exec(document.querySelector('#stepbar .sb-no').textContent)[1]
     const [route, q] = location.hash.split('?'), p = new URLSearchParams(q || '')
     p.set('step', String(n === 1 ? 2 : 1)); history.replaceState(null, '', `${route}?${p}`)
+  })
+  assert.ok(ids(await check(ctx())).includes('I-url'))
+})
+
+test('V-url-follow the hash names no step while the desk does not follow', { skip }, async () => {
+  await fresh()
+  await go(hash) // the earlier cases leave a step in the URL: a stepless desk route follows (1.2 §路由)
+  await following()
+  act('f'); await b.page.keyboard.press('f') // 跟随最新 off: the desk writes the shown step
+  await b.page.waitForFunction(() => document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'false' && /[?&]step=/.test(location.hash))
+  await b.page.evaluate(() => {
+    const [route, q] = location.hash.split('?'), p = new URLSearchParams(q || '')
+    p.delete('step'); history.replaceState(null, '', p.size ? `${route}?${p}` : route)
   })
   assert.ok(ids(await check(ctx())).includes('I-url'))
 })
