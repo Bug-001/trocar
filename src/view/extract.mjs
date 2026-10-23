@@ -192,6 +192,23 @@ export function materialize(baseList, { k, patch, add }) {
   for (const [i, v] of patch || []) out[i] = v;
   return out.concat(add || []);
 }
+/** materializeAttrs(baseAttrs, {k, attrs}) → a row's attributes by position: its base's before `k`, then its own (a null deletes). */
+export function materializeAttrs(baseAttrs, { k = 0, attrs }) {
+  const out = {};
+  if (baseAttrs) for (const i in baseAttrs) { if (+i >= k) break; out[i] = baseAttrs[i]; }
+  for (const i in attrs) if (attrs[i] == null) delete out[i]; else out[i] = attrs[i];
+  return out;
+}
+// A call's attributes (by position) against its base's: the positions its delta brings (at or after k, patched) and those before k
+// whose attribute is not the base's (a null deletes one); a keyframe keeps them all
+function attrDelta(was, { k, patch }, now) {
+  if (!was) return now;
+  const out = {};
+  for (const [i] of patch) out[i] = now[i] || null;
+  for (const i in was) if (+i < k && !(i in out) && !(i in now)) out[i] = null;
+  for (const i in now) if (+i >= k || (!(i in out) && JSON.stringify(now[i]) !== JSON.stringify(was[i]))) out[i] = now[i];
+  return out;
+}
 /** A call's base is the last call extracted with the same lane hint; a chain of more than KEYFRAME links starts over (null base). */
 const KEYFRAME = 128;
 
@@ -229,7 +246,7 @@ export function createExtractContext(store = null) {
   };
   const remember = (e) => { memo.delete(e.rid); memo.set(e.rid, e); if (memo.size > MEMO) memo.delete(memo.keys().next().value); return e; };
   if (store && store.rows) for (const row of store.rows.values()) note(row);
-  // a call row's { rid, list, mb, depth } through its base chain (iteratively: a chain is up to KEYFRAME links)
+  // a call row's { rid, list, mb, attrs, depth } through its base chain (iteratively: a chain is up to KEYFRAME links)
   function listsOf(rid) {
     if (memo.has(rid)) return remember(memo.get(rid));
     const path = [];
@@ -240,7 +257,7 @@ export function createExtractContext(store = null) {
     }
     for (let i = path.length - 1; i >= 0; i--) {
       const r = path[i];
-      at = remember({ rid: r.rid, list: materialize(at && at.list, r), mb: materialize(at && at.mb, r.mb), depth: at && r.base != null ? at.depth + 1 : 0 });
+      at = remember({ rid: r.rid, list: materialize(at && at.list, r), mb: materialize(at && at.mb, r.mb), attrs: materializeAttrs(at && at.attrs, r), depth: at && r.base != null ? at.depth + 1 : 0 });
     }
     return at;
   }
@@ -264,7 +281,6 @@ const attrsOf = (b, query) => {
   if (query) a.query = query;
   return Object.keys(a).length ? a : null;
 };
-const toMap = (attrs) => { const o = {}; attrs.forEach((a, i) => { if (a) o[i] = a; }); return o; };
 // The resource key of a file a tool_use reads or writes (src/dissect/cc.mjs resourceRef): the only kind linkStubs carries across
 // records, as linearContext links only file results to their tool_use.
 const FILE_KEY = 'file::';
@@ -307,17 +323,19 @@ export function extract(rec, ctx) {
     if (b.sec === 'messages') ownFlat.push(b);
   });
   const pred = st && st.cont ? ctx.linked(st.scope, st.prev) : null;
-  let tools = own.tools, system = own.system, inherited = [], predX = null, base = null, state = null;
+  // what a continuation inherits of its predecessor's messages and reply, as they stand there: block ids, attributes and message
+  // starts by position from the first message (no object a position)
+  let tools = own.tools, system = own.system, inh = { bids: [], attrs: {}, starts: [] }, predX = null, base = null, state = null;
   if (pred) {
     predX = pred.x;
-    const P = ctx.listsOf(pred.rid), [pt, ps] = predX.secs;
-    const ent = (lo, hi) => P.list.slice(lo, hi).map((bid, k) => ({ bid, a: pred.attrs[lo + k] || null }));
+    const P = ctx.listsOf(pred.rid), [pt, ps] = predX.secs, lo = pt + ps;
+    const ent = (from, to) => P.list.slice(from, to).map((bid, k) => ({ bid, a: P.attrs[from + k] || null }));
     if (st.inherit.tools !== 'own') tools = ent(0, pt);
-    if (st.inherit.system === 'inherit') system = ent(pt, pt + ps);
-    else if (st.inherit.system === 'patch') system = patchSystem(ent(pt, pt + ps), own.system, (e) => !!(e.a && e.a.volatile));
-    const pmb = P.mb.filter((i) => i >= pt + ps).map((i) => i - pt - ps), pm = ent(pt + ps);
-    inherited = pm.map((e, k) => ({ ...e, start: pmb.includes(k) }))
-      .concat(pred.reply.map((bid, j) => ({ bid, a: null, start: (predX.rmb || []).includes(j) })));
+    if (st.inherit.system === 'inherit') system = ent(pt, lo);
+    else if (st.inherit.system === 'patch') system = patchSystem(ent(pt, lo), own.system, (e) => !!(e.a && e.a.volatile));
+    inh = { bids: P.list.slice(lo).concat(pred.reply), attrs: {}, starts: P.mb.filter((i) => i >= lo).map((i) => i - lo) };
+    for (const i in P.attrs) if (+i >= lo) inh.attrs[i - lo] = P.attrs[i];
+    for (const j of predX.rmb || []) inh.starts.push(P.list.length - lo + j);
     base = P.depth < KEYFRAME ? P : null;
     const s = predX.wire.contextState, m = predX.wire.contextMissing ?? null;
     state = s === 'partial' || s === 'server_edited' ? { contextState: s, missing: m } : { contextState: 'reconstructed', missing: null };
@@ -334,26 +352,27 @@ export function extract(rec, ctx) {
     const stubs = linked.filter((b) => b.mi === 0), lmsg = linked.filter((b) => b.mi !== 0);
     mine = mine.map((e, k) => ({ ...e, a: attrsOf(lmsg[k] || e.b, e.a && e.a.query) }));
     open = open.map(([id, [rel, key]], k) => [id, [rel, key], !stubs[k] || stubs[k].resPending]);
-    inherited = inherited.map((e) => ({ ...e }));
-    for (const [, [rel], pending] of open) if (inherited[rel]) {
-      const a = { ...(inherited[rel].a || {}), resRole: 'request' };
+    for (const [, [rel], pending] of open) if (rel < inh.bids.length) {
+      const a = { ...(inh.attrs[rel] || {}), resRole: 'request' };
       if (pending) a.resPending = true; else delete a.resPending;
-      inherited[rel].a = a;
+      inh.attrs[rel] = a;
     }
     open = open.filter((o) => o[2]).map(([id, v]) => [id, v]);
   }
-  const msgs = inherited.concat(mine), head = tools.concat(system), all = head.concat(msgs);
-  const list = all.map((e) => e.bid), attrs = all.map((e) => e.a), mb = [];
-  msgs.forEach((e, k) => { if (e.start) mb.push(head.length + k); });
+  const head = tools.concat(system), H = head.length, I = inh.bids.length;
+  const list = head.map((e) => e.bid).concat(inh.bids, mine.map((e) => e.bid)), attrs = {}, mb = inh.starts.map((i) => H + i);
+  head.forEach((e, i) => { if (e.a) attrs[i] = e.a; });
+  for (const i in inh.attrs) attrs[H + +i] = inh.attrs[i];
+  mine.forEach((e, k) => { if (e.a) attrs[H + I + k] = e.a; if (e.start) mb.push(H + I + k); });
   if (st && st.unstored != null) x.unstored = st.unstored; // a call whose request was not stored: no context, its reply real
   if (st) {
     // what a successor stitches from this row: where it is found, its reply's message starts, its pending file tool_uses
     Object.assign(x, { link: st.link, scope: st.scope, gap: st.gap, continued: st.cont, rmb,
       lineage: !st.cont ? st.link || rid : predX ? predX.lineage : st.prev || rid });
     if (rules.links) {
-      const off = inherited.length;
+      const off = I;
       mine.forEach((e, k) => { if (e.a && e.a.resRole === 'request' && e.a.resPending) open.push([e.b.block.id, [off + k, e.b.resKey]]); });
-      rp.forEach((p, j) => { if (p.b.kind === 'tool_use' && String(p.b.resKey).startsWith(FILE_KEY)) open.push([p.b.block.id, [msgs.length + j, p.b.resKey]]); });
+      rp.forEach((p, j) => { if (p.b.kind === 'tool_use' && String(p.b.resKey).startsWith(FILE_KEY)) open.push([p.b.block.id, [I + mine.length + j, p.b.resKey]]); });
       x.open = Object.fromEntries(open);
       x.toolAdj = (predX ? predX.toolAdj || 0 : 0) + ownFlat.reduce((n, b) => n + (b.kind === 'tool_addition') - (b.kind === 'tool_removal'), 0);
     }
@@ -362,9 +381,10 @@ export function extract(rec, ctx) {
   x.secs = [tools.length, system.length];
   x.hint = laneHintOf(rec, wire.format, x.lane);
   if (!pred) { const prev = ctx.prevOf(x.hint); base = prev && prev.depth < KEYFRAME ? prev : null; }
-  const row = jsonClean({ rid, pos, base: base ? base.rid : null, ...delta(base && base.list, list), reply, mb: delta(base && base.mb, mb), attrs: toMap(attrs), x });
-  for (const d of defs) ctx.defined(d.bid); // only once the record extracted whole: a record that throws leaves no trace
-  ctx.took(row, { list, mb, depth: base ? base.depth + 1 : 0 });
+  const d = delta(base && base.list, list);
+  const row = jsonClean({ rid, pos, base: base ? base.rid : null, ...d, reply, mb: delta(base && base.mb, mb), attrs: attrDelta(base && base.attrs, d, attrs), x });
+  for (const def of defs) ctx.defined(def.bid); // only once the record extracted whole: a record that throws leaves no trace
+  ctx.took(row, { list, mb, attrs, depth: base ? base.depth + 1 : 0 });
   return { defs, row };
 }
 

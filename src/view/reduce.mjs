@@ -20,6 +20,7 @@ import { compactionVerdict } from '../identity/session-identity.mjs';
 import { boardDissectorOf } from '../dissect/registry.mjs';
 import { COMP_KEYS, tellApart, taskOf, HEAD } from './blockmeta.mjs';
 import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
+import { materializeAttrs } from './extract.mjs';
 import { openFoldLog } from '../query/fold-log.mjs';
 
 const KEYFRAME = 32; // a materialised list kept every KEYFRAME links of a base chain
@@ -107,6 +108,7 @@ function blocksOf(store) {
 }
 
 // ── lists ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const attrCount = (a) => { let n = 0; for (const _ in a) n++; return n; };
 const LISTS = new WeakMap(); // store → its lists (blocks as the store's definition slots)
 function listsOf(store) {
   if (LISTS.has(store)) return LISTS.get(store);
@@ -118,7 +120,8 @@ function listsOf(store) {
   const held = lru(2 * LIST_BYTES); // rid → its list: keyframes and the lists asked last alike
   // a list weighs 16 B an element (arrays of small integers built by push: 8 B an element and up to half again of spare room; at
   // 8 B an element the cache held 7.3 MB at its 4 MB figure, test/query/big-session.mjs live(0.48), 2026-10-22)
-  const keep = (e) => { held.set(e.rid, e, 16 * (e.list.length + e.mb.length) + 160); return e; };
+  // an attribute entry weighs as a few list elements (its key, its object's slot; the attribute objects are the rows' own)
+  const keep = (e) => { held.set(e.rid, e, 16 * (e.list.length + e.mb.length + 4 * attrCount(e.attrs)) + 160); return e; };
   const apply = (base, { k = 0, patch, add }, map) => {
     const out = base ? base.slice(0, k) : [];
     for (const [i, v] of patch || []) out[i] = map(v);
@@ -126,7 +129,7 @@ function listsOf(store) {
     return out;
   };
   const same = (v) => v;
-  // a call row's { rid, list (slots), mb, depth }, through its base chain from the nearest list held; `head`: the row itself when the
+  // a call row's { rid, list (slots), mb, attrs, depth }, through its base chain from the nearest list held; `head`: the row itself when the
   // caller holds it, `rowOf`: how a row of the chain is read
   function at(rid, rowOf = (r) => store.rows.get(r), head = null) {
     const hit = held.get(rid);
@@ -143,7 +146,7 @@ function listsOf(store) {
     if (!e && !path.length) return null;
     for (let i = path.length - 1; i >= 0; i--) {
       const r = path[i], from = r.base != null ? e : null;
-      e = { rid: r.rid, list: apply(from && from.list, r, int), mb: apply(from && from.mb, r.mb || {}, same), depth: from ? from.depth + 1 : 0 };
+      e = { rid: r.rid, list: apply(from && from.list, r, int), mb: apply(from && from.mb, r.mb || {}, same), attrs: materializeAttrs(from && from.attrs, { k: r.k, attrs: r.attrs || {} }), depth: from ? from.depth + 1 : 0 };
       if (e.depth % KEYFRAME === 0) keep(e);
     }
     return keep(e);
@@ -154,8 +157,8 @@ function listsOf(store) {
 }
 /** listOf(store, rid) → { bids, attrs, mb } of a call row: its list of block ids, its attributes by position, its message starts. */
 export function listOf(store, rid) {
-  const L = listsOf(store), e = L.at(String(rid)), row = store.rows.get(String(rid));
-  return e ? { bids: e.list.map(L.bid), attrs: row.attrs || {}, mb: e.mb.slice() } : null;
+  const L = listsOf(store), e = L.at(String(rid));
+  return e ? { bids: e.list.map(L.bid), attrs: e.attrs, mb: e.mb.slice() } : null;
 }
 
 // ── reduce ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -301,7 +304,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
   }
   const seq = (list, attrs) => ({ n: list.length, key: (i) => B.key(list[i]), vol: (i) => !!(attrs[i] && attrs[i].volatile), sec: (i) => B.sec(list[i]), name: (i) => B.name(list[i]) });
   // a lane's base (its last call that chained a prefix) and last call, from their rows and the list cache
-  function baseOf(k) { if (k < 0) return null; const rid = ridAt(k); return { rid, list: L.at(rid, rowOf).list, attrs: rowOf(rid).attrs || {} }; }
+  function baseOf(k) { if (k < 0) return null; const rid = ridAt(k); const e = L.at(rid, rowOf); return { rid, list: e.list, attrs: e.attrs }; }
   function lastOf(S) { return S.last < 0 ? null : { list: L.at(ridAt(S.last), rowOf).list, comp: S.comp }; }
   // a call's cache break against its lane's base, and the byte-identity of the prefix before it (3.3:75, acceptance #12): no claim
   // over a context shown in part or edited by the server; else each position of [0, idx) holds, on both sides, a block whose
@@ -606,7 +609,7 @@ function anthropicFold({ at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, i
     return { facts: row.x.facts, messages };
   }
   function take(rid, row) {
-    const x = row.x, e = at(rid, row), list = e.list, attrs = row.attrs || {}, k = int(rid);
+    const x = row.x, e = at(rid, row), list = e.list, attrs = e.attrs, k = int(rid);
     const call = an.pushView(view(row, list, e.mb));
     const lane = an.laneOf(call);
     let S = F.subs.get(lane);
@@ -634,7 +637,7 @@ function anthropicFold({ at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, i
 function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int }, F) {
   const lanes = new Map();
   function take(rid, row) {
-    const x = row.x, e = at(rid, row), list = e.list, attrs = row.attrs || {}, h = x.hints || {}, k = int(rid);
+    const x = row.x, e = at(rid, row), list = e.list, attrs = e.attrs, h = x.hints || {}, k = int(rid);
     const kind = x.lane, agent = kind === 'subagent' ? h.laneKey ?? x.agent ?? null : null;
     const lk = agent == null ? kind : `${kind}\n${agent}`;
     let S = lanes.get(lk);
