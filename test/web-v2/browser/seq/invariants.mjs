@@ -14,7 +14,7 @@ export const PENDING = new Map([
 
 export const LIMITS = Object.freeze({
   consoleGraceMs: 2000, // an armed fault window's console.error tail (plan §Invariants I-console)
-  interval: Object.freeze({ status: 5000, sessions: 3000, session: 1500 }), // spec/01-trocar-rfc/4.4-server.md:45-52
+  interval: Object.freeze({ status: 5000, sessions: 15000, session: 1500 }), // spec/01-trocar-rfc/4.4-server.md:45-52
   intervalOther: 30000, // 4.4:52 「其余 … 每 30 s」
   backoffCapMs: 30000, // 1.5 K-29 (spec/01-trocar-rfc/1.5-states-aesthetics.md:76): doubling, capped at 30 s
   sessionDurFactor: 3, // 4.4:51 the timer's next read waits ≥ 3 × the last read's duration
@@ -88,11 +88,12 @@ const viewOf = (page) => page.evaluate((sel) => {
 // the tail's follow-up reads (4.4:52): one `lane` read per touched held lane per `session` delta, one `block` read per followed delta
 const DELTA_PACED = new Set(['lane', 'block'])
 // what I-rate paces: a name, and for `lane` each lane of each session apart (an older page, `to`, apart from the tail); null =
-// not paced: a lane's ledger chain (`ledger=`) reads one cursor after another by design (3.5 §手里车道的页)
+// not paced: a lane's ledger chain (`ledger=`) and the later pages of one `sessions` read (`after=`, C.5) read one cursor after
+// another by design (3.5 §手里车道的页)
 const rateKey = (url) => {
-  const name = nameOf(url)
+  const name = nameOf(url), q = new URLSearchParams(url.split('?')[1] || '')
+  if (name === 'sessions' && q.has('after')) return null
   if (name !== 'lane') return name
-  const q = new URLSearchParams(url.split('?')[1] || '')
   if (q.has('ledger')) return null
   return `lane ${q.get('id')} ${q.get('lane')}${q.has('to') ? ' to' : ''}`
 }

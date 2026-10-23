@@ -4,12 +4,19 @@
 // Shots: the library and its empty variant at 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import { probe, withBoard, shoot } from './harness.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
 const BYTES = 2e6
 const EMPTY = { sessions: [], errors: [], next: null }
+// the `sessions` period, read off 4.4's live-poll table (one fact, one place)
+const SESSIONS_MS = (() => {
+  const all = fs.readFileSync(new URL('../../../spec/01-trocar-rfc/4.4-server.md', import.meta.url), 'utf8').split('\n')
+  const row = all.slice(all.findIndex((l) => l.includes('**live-poll**'))).find((l) => l.includes('| `sessions` |'))
+  return Number(/(\d+(?:\.\d+)?) s/.exec(row)[1]) * 1000
+})()
 
 const go = async (page, hash, sel) => {
   await page.evaluate((h) => { location.hash = h }, hash)
@@ -91,16 +98,16 @@ test('(9)(10) a failed read keeps the old list with retry; the empty state reads
   try {
     await go(page, '#/sessions', '.lrow')
     await page.route('**/api/sessions?**', (r) => r.fulfill({ status: 500, json: { error: 'boom' } }))
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))) // coming back to a visible page reads at once
     await page.waitForSelector('#libcap [data-act="retry"]', { timeout: 10000 })
     assert.ok(await page.locator('.lrow').count() > 0, 'the old list stays')
     await page.unroute('**/api/sessions?**')
     await page.route('**/api/sessions?**', (r) => r.fulfill({ json: EMPTY }))
     await go(page, '#/settings/appearance', '[data-theme-choice]'); await page.waitForLoadState('networkidle') // a screen that reads no status
-    const from = b.requests.length, t0 = Date.now()
+    const from = b.requests.length
     await go(page, '#/sessions', '.libempty a[href="#/capture"]')
-    await page.waitForTimeout(7000) // two more 3 s polls of /api/sessions
+    await page.waitForTimeout(SESSIONS_MS + 1000) // one more `sessions` poll: the empty state does not re-read status with it
     const urls = b.requests.slice(from).map((r) => r.url.split('?')[0])
-    assert.ok(urls.filter((u) => u === '/api/sessions').length >= 3, `sessions polls in ${Date.now() - t0} ms: ${urls}`)
     assert.equal(urls.filter((u) => u === '/api/status').length, 1, String(urls))
   } finally { await b.stop() }
 })

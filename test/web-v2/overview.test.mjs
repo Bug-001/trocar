@@ -2,13 +2,14 @@
 // links to its page, no false 「nothing to handle」, the window moves only the stats, no alert semantics, read-only, first use,
 // the recent list and the harness identity. Status documents are the C.3 sample of spec 1.6 with fields changed per case; the
 // closed set of health.state is read off the same table. Assertions are on fields, hrefs, marks and element kinds, never prose.
-import test from 'node:test'
+import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import {
   overviewItems, capCardHtml, itemsCardHtml, statsCardHtml, renderBody, recentRows, recentCardHtml, mount, POLL, SKELETON, headHtml,
 } from '../../src/web/v2/overview/overview.mjs'
 import { capHealthPatch } from '../../src/web/v2/core/capture-verdict.mjs'
+import { backoffMs, INTERVAL } from '../../src/web/v2/core/poll.mjs'
 import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, UNKNOWN_ICON, harnessKey, harnessName } from '../../src/web/v2/core/chips.mjs'
 import { TITLE_FROM_WIRE } from '../../src/web/v2/labels/replay.mjs'
 import { TITLE_FROM_AGENT, FILES_NOT_READ } from '../../src/web/v2/labels/overview.mjs'
@@ -492,5 +493,31 @@ test('A17 the slow reads go at most two at a time, a window change included, and
     }
     assert.ok(most <= 2, `most in flight ${most}`)
     assert.deepEqual([...asked].sort(), [...SLOW].sort())
+  } finally { inst.unmount() }
+})
+
+test('K-29 on the overview: every GET fails for 120 s → each name\'s reads are at least its back-off apart; none while hidden', async (t) => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  const listeners = new Map(), had = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  globalThis.document = { hidden: false, addEventListener: (k, f) => listeners.set(k, f), removeEventListener: (k) => listeners.delete(k) }
+  t.after(() => { mock.timers.reset(); if (had) Object.defineProperty(globalThis, 'document', had); else delete globalThis.document })
+  const at = {}
+  const { inst } = fakeMount({ hold: (name) => { (at[name] ||= []).push(Date.now()); return Promise.resolve({ ok: false, status: 500, error: 'down' }) } })
+  const idle = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)) }
+  const run = async (ms) => { for (let i = 0; i < ms; i += 250) { mock.timers.tick(250); await idle() } }
+  try {
+    await idle(); await run(120000)
+    for (const name of ['status', 'sessions', 'classes', 'pricing', 'segments', 'traffic', 'overview']) {
+      const reads = at[name] || [], base = INTERVAL[name] ?? INTERVAL.other
+      assert.ok(reads.length >= 2, `${name}: ${reads.length} reads`)
+      for (let k = 1; k < reads.length; k++) {
+        const gap = reads[k] - reads[k - 1]
+        assert.ok(gap >= backoffMs(k, base), `${name}: read ${k + 1} came ${gap} ms after failure ${k}; the back-off is ${backoffMs(k, base)}`)
+      }
+    }
+    const before = Object.values(at).flat().length
+    globalThis.document.hidden = true
+    await run(120000)
+    assert.equal(Object.values(at).flat().length, before, 'no read while hidden')
   } finally { inst.unmount() }
 })

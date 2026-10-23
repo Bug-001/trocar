@@ -11,11 +11,11 @@ import { setScreenKeys } from '../core/keys.mjs'
 import { mark, techDetailsHtml, readFailure } from '../core/ui.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { formatHash } from '../core/router.mjs'
+import { startPoll, INTERVAL } from '../core/poll.mjs'
 import * as W from '../labels/library.mjs'
 import { parseFilters, filtersToParams, hasFilters, flattenSessions, applyFilters, listEntries, selectedKey, sessionKey, rowModel, listSignature, filterSignature, scrollDecision, agentMenuModel, agentMenuSignature, projectOptions, captionFacts, loadSessions, capShotMaker, emptyBoardState, filteredAgentLine, agentLabel, WINDOWS } from './logic.mjs'
 
-const ROW_H = 50, GROUP_H = 28, POLL_MS = 3000
-const hidden = () => typeof document !== 'undefined' && document.hidden
+const ROW_H = 50, GROUP_H = 28
 
 // the screen's fixed DOM: page head, then the tool row, the caption row, the header, the list. No bare text node
 // sits between the head and the table (1.2 §页头), and the words live in labels — the shape is pinned by the tests.
@@ -120,7 +120,7 @@ export function filteredEmptyHtml(shot, f) {
 
 export function mount(el, ctx) {
   const { api, store, router, toast } = ctx
-  let data = null, errR = null, sig = null, loaded = false, dead = false, vl = null, timer = 0
+  let data = null, errR = null, sig = null, loaded = false, dead = false, vl = null, poller = null
   let rows = [], entries = [], total = 0, lastFilterSig = null, prevSelKey = null
   let agentSig = null, projSig = null, sortSig = null, headHtml = '', readAt = null
   const cap = capShotMaker(() => api.get('status'), () => api.now()) // the one-shot capture-health read (空态 · the filtered agent)
@@ -217,18 +217,20 @@ export function mount(el, ctx) {
     paintTools(); paintCaption(); paintList()
   }
 
-  // ── data: every 3 s while the page is visible; repaint only when what the list shows changed ───────────────────────
+  // ── data: 4.4's `sessions` period while visible, backing off after a failure (core/poll.mjs); repaint only when what the list
+  // shows changed. → {ok} for the poller
   async function poll() {
     let r
     try { r = await loadSessions(api) } catch (e) { r = { ok: false, error: String((e && e.message) || e) } }
-    if (dead) return
+    if (dead) return r
     const nextErr = r.ok ? null : r, next = r.ok ? r.data : data
     const s = listSignature(next, nextErr)
     const first = !loaded; loaded = true
     if (r.ok) readAt = api.now()
-    if (s === sig && !first) { paintHead(); return } // nothing the list shows changed: no repaint (the head's 数据读于 still moves)
+    if (s === sig && !first) { paintHead(); return r } // nothing the list shows changed: no repaint (the head's 数据读于 still moves)
     sig = s; data = next; errR = nextErr
     paintHead(); refresh()
+    return r
   }
 
   // ── opening a row and moving the highlight ─────────────────────────────────────────────────────────────────────────
@@ -261,7 +263,7 @@ export function mount(el, ctx) {
       e.preventDefault(); if (ent && ent.s) open(ent.s)
     }),
     delegate(listEl, 'click', '[data-act="clear"]', () => set({ q: null, h: null, project: null, window: null })),
-    delegate(listEl, 'click', '[data-act="retry"]', () => poll()),
+    delegate(listEl, 'click', '[data-act="retry"]', () => poller.poll()),
     delegate(el, 'click', '[data-agent]', (e, b) => {
       const id = b.dataset.agent, h = f.h.includes(id) ? f.h.filter((x) => x !== id) : [...f.h, id]
       set({ h: h.length ? h.join(',') : null })
@@ -273,16 +275,13 @@ export function mount(el, ctx) {
   ]
   qEl.addEventListener('input', () => set({ q: qEl.value }))
   clearEl.addEventListener('click', () => set({ q: null, h: null, project: null, window: null }))
-  const onVis = () => { if (!document.hidden) poll() }
-  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis)
   qEl.value = f.q
   paintHead(); paintTools(); paintList()
-  poll(); timer = setInterval(() => { if (!hidden()) poll() }, POLL_MS)
+  poller = startPoll({ run: poll, base: INTERVAL.sessions })
   return {
     update(route) { f = parseFilters(route.params); if (loaded) refresh(); else paintTools(); paintHead() },
     unmount() {
-      dead = true; clearInterval(timer)
-      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVis)
+      dead = true; poller.stop()
       offs.forEach((off) => off())
       if (vl) { vl.destroy(); vl = null }
       setScreenKeys(null)
