@@ -380,6 +380,8 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
       savedAt = lines.bytes;
       return true;
     },
+    /** Whether its sidecar covers every line it holds (saveIndex wrote it, or nothing grew since): none while it holds `t` rows. */
+    get indexed() { return lines.settled && !heldRows && lines.bytes > 0 && lines.bytes === savedAt; },
     /** The header's id (taken now when the file is made or rebuilt); `bytes`: the length of the whole lines it holds. */
     get id() { return id; },
     get bytes() { return lines.bytes; },

@@ -9,9 +9,11 @@
 //
 // SLICES (3.5 后台抽取与归约): the worker (`ctx.writer`) extracts ≤ 50 ms and then folds ≤ 50 ms in a request; extendSession() does
 // the same in background slices. A state from scratch opens the session's fold log and answers from it when it was folded under
-// this plan's cut (its last frontier's `n`), without folding: the worker's background rebuilds the reduction into a throwaway log
-// and takes the file log over at its frontier, writing nothing before that; the local path (no writer: the log opened write:false,
-// new lines in an off-heap arena, nothing on disk) folds nothing when the log covers every member, else everything in the request.
+// this plan's cut (its last frontier's `n`), without folding. When a member lies past that frontier the reduction is resumed from
+// the state the log's sidecar holds (resumed(): over the log, or the worker's log cut back to what the state covers), else rebuilt
+// into a throwaway log that takes the file log over at its frontier, writing nothing before that; the local path (no writer: the log
+// opened write:false, new lines in an off-heap arena, nothing on disk) folds nothing when the log covers every member, else
+// everything in the request. The worker saves the sidecars at idle and every max(256, n/8) calls folded (sidecars()).
 // A log folded under another cut is folded again from scratch (the worker deletes and rewrites it; the local path in memory).
 //
 // WARM (D63 ①; 3.5 §缓存按依赖失效): per (fs, home, session, writer) the projection store stays open and the state (the reduction,
@@ -24,7 +26,8 @@
 // so); no room for one row is an error. A reduction whose MEASURED heap passes what was reserved stops (HeapBound, checked per row
 // folded) and the session is cut again by the rows it got through; a cut that moves restarts the fold and its log.
 import nodeFs from 'node:fs';
-import { reduction, memoryLog, BlockUnread, REDUCE_HEAP, LEDGER_BYTES } from '../../view/reduce.mjs';
+import v8 from 'node:v8';
+import { reduction, memoryLog, BlockUnread, REDUCE_HEAP, LEDGER_BYTES, REDUCE_V } from '../../view/reduce.mjs';
 import { openFoldLog, foldLogFile, LOG_BYTES } from '../fold-log.mjs';
 import { trocarHome } from '../../paths.mjs';
 import { extractMembers, blockAt, CHUNK_STORED } from '../../view/extract.mjs';
@@ -215,28 +218,42 @@ function relayOf(log) {
   return r;
 }
 // A rebuild up to the file log's frontier (`s.target`) keeps the members that log has failed failed (3.5 §读不全不静默).
-const reductionOf = (s, log) => {
+const reductionOf = (s, log, from = null) => {
   s.relay = relayOf(log);
   const file = s.target != null ? s.log : null;
   const failedBefore = file && ((rid) => { const at = file.failures.get(rid); return at ? file.peek(...at) : null; });
-  return reduction(s.store, { log: s.relay, resolve: (ref) => s.resolve(ref), errors: s.sink, progress: (rid) => s.hook(rid), failedBefore });
+  return reduction(s.store, { log: s.relay, resolve: (ref) => s.resolve(ref), errors: s.sink, progress: (rid) => s.hook(rid), failedBefore, from });
 };
 function closeState(s) { if (fileLogs.get(s.store) === s) fileLogs.delete(s.store); s.log.close(); if (s.T) s.T.close(); }
 // store → the state that holds its fold log file open (the worker's)
 const fileLogs = new WeakMap();
-/** saveIndexes(): the sidecars (4.3 §4 旁索引) of every open store and its fold log whose file grew since its last save, the store's
- *  first (the log's sidecar names the projection's bytes), the log's with the state's step-order columns synced to its frontier.
- *  The worker calls it once an idle period; the local path's are never written (opened write:false). A sidecar that cannot be
- *  written is not one: the next open scans. The decoded frames and lines of the sealed segments are let go too: an idle worker does
- *  not hold them (3.5 §冷路径). */
+/** saveIndexes(): the sidecars (4.3 §4 旁索引) of every open store and its fold log whose file grew since its last save (sidecars()).
+ *  The worker calls it once an idle period; the local path's are never written (opened write:false). The decoded frames and lines of
+ *  the sealed segments are let go too: an idle worker does not hold them (3.5 §冷路径). */
 export function saveIndexes() {
   releaseDecoded();
-  for (const s of stores.values()) {
-    try { s.saveIndex(); } catch { /* the next idle period */ }
-    const st = fileLogs.get(s);
-    try { if (st) st.log.saveIndex(dumpColumns(sync(st.cols, st.log))); } catch { /* the next idle period */ }
-  }
+  for (const s of stores.values()) sidecars(s);
 }
+// The store's sidecar first (the log's names the projection's bytes); then, when it covers every line of the store (none while the
+// store holds `t` rows: an open cuts them off, and the state's rows with them), the fold log's: the state's step-order columns synced to
+// its frontier and, when the state is a live reduction writing into this file log (never a rebuild's, before it takes the log over),
+// that reduction's state (`r.s`, v8.serialize of R.snapshot()) and what it was folded under (`r.m`: REDUCE_V, the cut). Between adds
+// the log ends at the frontier line the sidecar covers to, so the state is the one the sidecar's indexes describe. A sidecar that
+// cannot be written is not one: the next open scans, the next fold rebuilds.
+function sidecars(store) {
+  try { store.saveIndex(); } catch { /* the next idle period */ }
+  const st = fileLogs.get(store);
+  if (!st || !store.indexed) return;
+  try {
+    const live = st.R && st.target == null && st.relay.cur === st.log;
+    st.log.saveIndex([...dumpColumns(sync(st.cols, st.log)),
+      ...(live ? [['r.s', v8.serialize(st.R.snapshot())], ['r.m', [JSON.stringify({ rv: REDUCE_V, cut: st.cut })]]] : [])]);
+  } catch { /* the next idle period */ }
+  st.saved = st.n;
+}
+// During a fold the worker saves both sidecars once it folded max(SAVE_MIN, folded / SAVE_PART) calls since the last save: a worker
+// killed in a long fold resumes near where it was, and the saves of a first fold write O(n log n) bytes, not O(n²) (4.3 §4 旁索引).
+const SAVE_MIN = 256, SAVE_PART = 8;
 const cutOf = (plan) => (plan.start ? String(plan.read[0].id) : null);
 /** markOn(plan, rid) → the mark on the wire (3.5 id): the frontier rid, and when the plan is cut `@` and its cut's first rid, so a
  *  mark names the cut its document was answered under. sinceAt(plan, M) → the rid M names when its cut is this plan's, else null:
@@ -259,15 +276,14 @@ function foldedUnder(log, plan, f) {
 // were synced at or before its frontier (sync() then reads only the lines past them); else a reduction from scratch into a fold log from scratch (3.5
 // §内存有界: a cut that moves restarts the fold and its log), the worker's beside the projection (4.3 §4), the local path's in memory.
 function stateOf(ctx, id, store, plan) {
-  const s = { base: liveHeap(), meter: null, store, perRow: plan.perRow, cut: cutOf(plan), n: 0, cost: 0, sink: [], hook: null, resolve: null,
-    cols: columns(store.rows.slotOf), view: null, R: null, T: null, relay: null, target: null, fc: 0, fp: null };
   const writer = ctx.writer === true, home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
-  const open = () => openFoldLog({ home, fs, key: id, write: writer, projection: { id: store.id, bytes: store.bytes }, errors: s.sink });
+  const open = (upTo) => openFoldLog({ home, fs, key: id, write: writer, projection: { id: store.id, bytes: store.bytes }, errors: s.sink, upTo });
+  const s = { base: liveHeap(), meter: null, store, perRow: plan.perRow, cut: cutOf(plan), n: 0, cost: 0, sink: [], hook: null, resolve: null,
+    cols: columns(store.rows.slotOf), view: null, R: null, T: null, relay: null, target: null, fc: 0, fp: null, writer, open, saved: 0 };
   const log = open(), m = markOf(log);
   if (m != null && foldedUnder(log, plan, m)) {
-    const c = log.saved && loadColumns(store.rows, log.saved.parts);
-    if (c && c.at <= log.frontier) s.cols = c;
-    s.log = log; s.target = m; if (writer) fileLogs.set(store, s);
+    s.log = log; s.target = m; seed(s);
+    if (writer) fileLogs.set(store, s);
     return s;
   }
   log.close();
@@ -279,6 +295,38 @@ function stateOf(ctx, id, store, plan) {
   s.R = reductionOf(s, s.log);
   return s;
 }
+// the state's step-order columns from its log's sidecar when they were synced at or before its frontier (sync() then reads only the
+// lines past them), else from scratch
+function seed(s) {
+  const sv = s.log.saved, c = sv && loadColumns(s.store.rows, sv.parts);
+  s.cols = c && c.at <= s.log.frontier ? c : columns(s.store.rows.slotOf);
+}
+// A cold state's reduction resumed from the state its log's sidecar holds (4.3 §4 旁索引) when it was folded under this cut and
+// REDUCE_V: it covers the log's last frontier → over the log as it is; it covers less (a worker killed after a save) and this is the
+// worker → over the log opened again cut back to what it covers. The members it folded are `R.has`, so the fold cursor walks past
+// them. Else false (the local path's log past it, a mismatch, a state that does not read back or is not of this store): the caller
+// rebuilds up to the log's frontier (`target`), as without one.
+function resumed(s) {
+  const sv = s.log.saved, meta = sv && sv.parts['r.m'];
+  if (!meta || !(sv.parts['r.s'] instanceof Uint8Array)) return false;
+  let from;
+  try {
+    const m = JSON.parse(meta[0]);
+    if (m.rv !== REDUCE_V || m.cut !== s.cut) return false;
+    from = v8.deserialize(sv.parts['r.s']);
+  } catch { return false; }
+  if (!(sv.bytes > s.log.frontier)) {
+    if (!s.writer) return false;
+    s.log.close(); s.log = s.open(sv.bytes); seed(s); s.view = null; s.target = markOf(s.log);
+    if (s.log.bytes !== sv.bytes) return false;
+  }
+  const target = s.target;
+  s.target = null;
+  try { s.R = reductionOf(s, s.log, from); } catch { s.target = target; return false; }
+  s.n = s.saved = from.n; s.fc = 0;
+  if (s.meter) s.meter.n = s.n;
+  return true;
+}
 // Fold the members of the cut before the extraction cursor `F` for `ms`, in write order from the fold cursor `fc` (the first member
 // not yet handed to the reduction, by the plan `fp` it was walked under: another plan walks again from the start); a rebuild first up
 // to the file log's frontier, then it takes the file log over and goes on. Handed BATCH at a time, so a slice's work is by what it folds.
@@ -286,9 +334,9 @@ const BATCH = 256;
 function fold(s, plan, F, ms) {
   const t0 = performance.now();
   if (s.fp !== plan) { s.fp = plan; s.fc = 0; }
+  if (!s.R && !resumed(s)) { s.T = s.target != null ? memoryLog(s.store) : null; s.R = reductionOf(s, s.T || s.log); s.fc = 0; }
   for (let added = false; ;) {
     const to = s.target != null ? posOf(plan, s.target) + 1 : F, end = Math.min(to, F);
-    if (!s.R) { s.T = memoryLog(s.store); s.R = reductionOf(s, s.T); s.fc = 0; }
     while (s.fc < end) {
       if (added && performance.now() - t0 >= ms) return;
       const want = [];
@@ -296,6 +344,7 @@ function fold(s, plan, F, ms) {
       if (!want.length) continue;
       const rest = s.R.add(want, { budgetMs: ms - (performance.now() - t0) });
       s.n += want.length - rest.length; added = true;
+      if (s.writer && s.target == null && s.n - s.saved >= Math.max(SAVE_MIN, s.n / SAVE_PART)) sidecars(s.store);
       if (rest.length) { s.fc = posOf(plan, rest[0]); return; }
     }
     if (s.target == null || end < to) return;
