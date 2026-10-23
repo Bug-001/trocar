@@ -10,7 +10,12 @@
 // The playhead, the selected tick, the compare step and the brush edges are held as rids; step numbers are derived. The URL
 // carries the step (`?step=N`, 1-based): scrubbing replaces it (no history pile-up), a different session is a new entry.
 // Contract: mount(el, ctx) → {update(route), unmount()}; ctx = {api, store, router}; the start route is ctx.router.current().
+// Each session has its own desk instance (openDesk): its state, root and nodes, its reads under its own AbortController. Leaving it (another
+// screen, another session) detaches it into the session cache (session-cache.mjs, D71③): its poll stops, its root leaves the page, its
+// reads in flight finish. Coming back attaches the same instance — the step it showed — and polls once, which is `since` its mark.
 import { esc } from '../core/fmt.mjs'
+import { api as rootApi, scoped } from '../core/api.mjs'
+import { sessionCache } from './session-cache.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
 import { openModal } from '../core/dom.mjs'
 import { keyAction } from './keymap.mjs'
@@ -32,7 +37,7 @@ import { openDetail, closeDetail, wireDetail } from './detail.mjs'
 import { initLayout } from './layout.mjs'
 import { renderSessionHead, wireSessionHead, captureGap } from './header.mjs'
 import { stepBarHtml, wireStepBar } from './stepbar.mjs'
-import { loadBodies, bodyCache, clearOverrides, isRetryable } from './cell.mjs'
+import { loadBodies, bodyCache, clearOverrides, overrideScope, isRetryable } from './cell.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
 import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION } from '../labels/replay.mjs'
 import { readFailure } from '../core/ui.mjs'
@@ -128,14 +133,22 @@ export function slicesOf(a, before) {
   return out
 }
 
-function mountDesk(el, ctx) {
-  const { api, store, router } = ctx
-  el.innerHTML = `<div class="desk">${DESKHEAD}${SKELETON}</div>`
-  // every query runs inside the desk's own root: a desk whose DOM was replaced keeps working on its detached nodes, never on null
-  const root = el.querySelector('.desk')
+const SCROLLED = ['#ctxwin', '#ctxnav', '#resexp', '#rawpanel', '#rails'] // scroll positions a detached node loses
+const keyOf = (route) => route.project + '::' + route.id
+
+// one session's desk, detached until attach(el, ctx, route); → {key, attach, detach, update, dispose, bytes}
+function openDesk(ctx, route0) {
+  // its own reads: the screen's ctx.api is aborted when the screen unmounts, and this desk outlives that in the session cache
+  const reads = new AbortController()
+  const api = scoped(rootApi, reads.signal)
+  const root = document.createElement('div')
+  root.className = 'desk'
+  root.innerHTML = DESKHEAD + SKELETON
+  // every query runs inside the desk's own root: a detached desk keeps working on its own nodes, never on null
   const $ = (sel) => root.querySelector(sel)
   const E = { saw: $('#saw'), rails: $('#rails'), deskhead: $('#deskhead'), stepbar: $('#stepbar'), ctxwin: $('#ctxwin'), ctxnav: $('#ctxnav'), resexp: $('#resexp'), rawpanel: $('#rawpanel'), detail: document.getElementById('detail') }
-  const route0 = router.current()
+  let host = null // the element the desk hangs in while attached
+  let size = 0 // the session and lane answers it applied, in decoded characters (bytes(): the session cache's measure)
 
   // ── the state every area renders from ────────────────────────────────────────────────────────────────────────────
   const fresh = () => ({
@@ -149,15 +162,15 @@ function mountDesk(el, ctx) {
     laneErr: new Map(), bodyFail: new Map(), // a step read that failed: lane key → reason, ref → its failed body (2.3 §读失败)
   })
   const s = {
-    ctx, root, dead: false, project: route0.project, id: route0.id, initialStep: hasStep(route0) ? stepParam(route0.params.step).step : null,
+    ctx: { ...ctx, api }, root, dead: false, project: route0.project, id: route0.id, initialStep: hasStep(route0) ? stepParam(route0.params.step).step : null,
     ...fresh(), headFollow: null, health: null,
     openBlocks: new Set(), turnLanded: new Set(), // open rows by key (bid#n, rp:bid): they survive a step change while the bid stays
-    reads: typeof AbortController === 'function' ? new AbortController() : null, // aborted when the session changes or the desk closes
-    pricing: store.get().pricing || null, pricingErr: null,
+    reads, // aborted when the desk is disposed (evicted from the session cache)
+    pricing: ctx.store.get().pricing || null, pricingErr: null,
     turnFold: loadFold(storage()),
   }
   const sessionKey = () => s.project + '::' + s.id
-  const alive = () => !s.dead && E.ctxwin.isConnected && el.contains(E.ctxwin)
+  const alive = () => !s.dead && host != null && root.isConnected
 
   // ── actions the areas call back into ─────────────────────────────────────────────────────────────────────────────
   s.persistFold = () => saveFold(storage(), s.turnFold)
@@ -196,21 +209,8 @@ function mountDesk(el, ctx) {
     for (const id of ['#sawstart', '#sawend', '#viewrange']) $(id).textContent = ''
     $('#sawgut').textContent = 'Context'; $('#viewswitch').innerHTML = ''; $('#complegend').innerHTML = ''; $('#nomain').style.display = 'none'
     renderProblemNav(E.saw, s) // no problems: the row name stops quoting the last session's count and ‹ › disappear
-    closeDetail(E.detail, s)
+    if (host) closeDetail(E.detail, s) // the drawer is shared by every screen: a detached desk closed it when it left
   }
-  function resetSession() {
-    jumps.clear()
-    // a different session: nothing of the last one may survive — the model, the reader's choices, each cell's own mode (D70 §4.4)
-    Object.assign(s, fresh())
-    clearOverrides()
-    root.classList.remove('notlisted')
-    // the last session's reads in flight are cancelled, and its loops cannot hold this one
-    if (s.reads) { s.reads.abort(); s.reads = new AbortController() }
-    poller = makePoller(); steps = makeStepReads(); targeted = null; openLane = null; quiet = false; wanted.clear(); ledgerFailed = false; chaining = false
-    s.openBlocks.clear(); s.turnLanded.clear()
-    E.stepbar.innerHTML = ''
-  }
-
   // ── rids: what the reader holds survives an answer that moves step numbers (a late row, an older page, a relane) ─────────
   function pin() {
     const a = s.anchor, at = (i) => (a && a.calls[i] ? a.calls[i].rid : null)
@@ -304,10 +304,10 @@ function mountDesk(el, ctx) {
   // the URL says what the reader sees (1.2 §路由): following → no step and no call; otherwise the drawn step. Written only on a
   // difference (every write counts toward WebKit's limit; our own write comes back through update() as a no-op), replacing history
   function syncUrl() {
-    const n = shownStep(), r = router.current()
+    const n = shownStep(), r = s.ctx.router.current()
     if (n == null || s.initialStep != null || !alive() || r.screen !== 'replay' || r.id !== s.id || r.project !== s.project) return // a named step not landed yet keeps its URL
     const want = s.follow ? { step: null, call: null } : { step: String(n) }, have = r.params
-    if (Object.entries(want).some(([k, v]) => (have[k] ?? null) !== v)) router.setParams(want, { replace: true })
+    if (Object.entries(want).some(([k, v]) => (have[k] ?? null) !== v)) s.ctx.router.setParams(want, { replace: true })
   }
   // `followLanding`: 跟随最新 brought the playhead here (followOn) → this step lands on the reply; any other move lands by the change
   // line. Set BEFORE the repaint below, because the landing runs once per step, inside that repaint (1.4 §打开一步时落在哪).
@@ -372,6 +372,8 @@ function mountDesk(el, ctx) {
   // ── a step's own reads: its lane, its open rows' bodies, the lane's older pages (2.3 §读与画; 3.5:69) ─────────────────
   // the session's own reads name it; a `block` read names only its refs (3.5: `block` takes --ref alone, any other parameter is refused)
   const read = (name, p, opts) => api.get(name, name === 'block' ? p : { id: s.id, ...p }, opts)
+  // a lane read of the poll or the ledger chain, its answer counted in bytes()
+  const laneRead = (signal) => (name, q) => read(name, q, { signal, hold: false }).then((r) => { if (r && r.ok) size += r.bytes || 0; return r })
   const laneIndex = (key, rid) => { const r = s.desk.laneRids.get(key); return r ? r.indexOf(rid) : -1 }
   // the refs of a held step's bodies on show and not cached: its reply parts (the window's default-open kind, 2.3:195, and the raw panel) and the rows the reader opened
   function openRefs(rid) {
@@ -411,7 +413,7 @@ function mountDesk(el, ctx) {
       onLane: (rid, r, q) => {
         if (!mine()) return
         const a = r && r.ok ? r.data : null
-        if (a) { applyLane(s.desk, a); s.laneErr.delete(a.lane); if (s.anchor && a.lane === s.anchor.id) chainLedger() } else if (q) s.laneErr.set(q.lane, (r && r.error) || 'cause not known')
+        if (a) { size += r.bytes || 0; applyLane(s.desk, a); s.laneErr.delete(a.lane); if (s.anchor && a.lane === s.anchor.id) chainLedger() } else if (q) s.laneErr.set(q.lane, (r && r.error) || 'cause not known')
         const was = openLane
         if ((a && a.lane === openLane) || (!a && rid == null)) openLane = null
         if (a) { wanted.delete(a.lane); if (s.anchor && a.lane !== s.anchor.id) { renderRails(E.rails, s); watchRails() } }
@@ -426,7 +428,7 @@ function mountDesk(el, ctx) {
       },
     })
   }
-  let steps = makeStepReads()
+  const steps = makeStepReads()
   // the anchor lane's pending ledger cursors, read to the end in the one lane slot after any answer of that lane (2.4's counts are
   // exact once it ends). A failed read leaves its cursor pending for the next poll (`byPoll`), never an immediate retry. Its answers
   // redraw only the explorer; when the chain ends the resting playhead asks again for what the gate held back.
@@ -435,7 +437,7 @@ function mountDesk(el, ctx) {
     if (!key || chaining || (ledgerFailed && !byPoll) || !desk.held.has(key) || ledgerDone(desk, key)) return
     chaining = true
     const gone = () => s.dead || sk !== sessionKey() || desk !== s.desk || !!(signal && signal.aborted)
-    steps.laneSlot(() => readLedger(desk, key, (name, q) => read(name, q, { signal, hold: false }), gone)).then((r) => {
+    steps.laneSlot(() => readLedger(desk, key, laneRead(signal), gone)).then((r) => {
       chaining = false
       if (!r || gone()) return
       ledgerFailed = !r.ok
@@ -472,7 +474,7 @@ function mountDesk(el, ctx) {
   async function loadPricing() {
     if (!(await prices.load()) || s.dead) return
     s.pricing = prices.table(); s.pricingErr = prices.err()
-    if (s.pricing) store.set({ pricing: s.pricing })
+    if (s.pricing) s.ctx.store.set({ pricing: s.pricing })
     renderHeader(); if (s.anchor) { s.renderRaw(); refreshDrawer() }
   }
 
@@ -480,9 +482,9 @@ function mountDesk(el, ctx) {
   // session the server does not know read nothing by themselves. One poller per session: its loop stops as soon as the session changes.
   const idle = () => (typeof document !== 'undefined' && document.hidden) || s.notListed
   const makePoller = () => { const key = sessionKey()
-    return createPoller({ base: POLL_MS, now: () => api.now(), alive: () => !s.dead && key === sessionKey(), idle,
+    return createPoller({ base: POLL_MS, now: () => api.now(), alive: () => !s.dead && host != null && key === sessionKey(), idle,
       run: async () => { try { return await pollOnce() } catch (e) { if (s.dead || key !== sessionKey() || (e && e.name === 'AbortError')) return; console.error(e); return { ok: false } } } }) }
-  let poller = makePoller()
+  const poller = makePoller()
   function poll(byReader = true) {
     if (s.dead || (!byReader && idle())) return
     loadPricing().catch((e) => console.error(e))
@@ -511,6 +513,7 @@ function mountDesk(el, ctx) {
     if (same && !desk.lagging.size) { quiet = true; if (hadStale) renderHeader(); reask(); chainLedger(true); olderPage(); return { ok: true } }
     // nothing new, but a lane an earlier read failed on is read now: an empty delta carries it through the same path
     const a = same ? { base: desk.mark, mark: desk.mark } : res.data
+    if (!same) size = (a.base == null && !before ? 0 : size) + (res.bytes || 0) // a full answer replaces the whole desk
     // the server knows no such session (meta null, nothing captured): said HERE, with a way back; the timer stops reading it
     if (a.base == null && !before && a.meta == null && !(a.calls || []).length) {
       s.goodKey = null; s.notListed = true; renderEmpty(''); E.ctxwin.innerHTML = notListedHtml(); E.ctxwin.__units = null; root.classList.add('notlisted'); renderHeader(); return { ok: true }
@@ -532,7 +535,7 @@ function mountDesk(el, ctx) {
     }
     // each held lane the delta touched (and one an earlier read failed on) reads on by 3.5's from-rule, in the step reads' one
     // lane slot; a failed read keeps that lane's drawn steps, leaves it for the next poll and says so in the header (K-29)
-    const lt = await steps.laneSlot(() => readTouched(desk, touched, (name, q) => read(name, q, { signal, hold: false }), stale))
+    const lt = await steps.laneSlot(() => readTouched(desk, touched, laneRead(signal), stale))
     if (!lt || stale()) return
     for (const k of [...touched.keys(), ...lt.done]) changed?.add(k)
     for (const k of lt.done) s.laneErr.delete(k)
@@ -584,6 +587,7 @@ function mountDesk(el, ctx) {
   }
   api.get('status').then((r) => { if (!s.dead && r.ok) { s.health = r.data; judgeGap(); if (s.anchor) renderHeader() } }).catch((e) => console.error(e))
 
+  // ── the desk's own listeners (inside its root): wired once, kept while it is detached, dropped by dispose() ──────────────
   const onRp = () => { s.rpOpen = !s.rpOpen; const rp = $('#rightpage'); if (rp) { rp.classList.toggle('open', s.rpOpen); const b = $('#rpbar'); if (b) b.setAttribute('aria-expanded', String(s.rpOpen)) } }
   const rpbar = $('#rpbar')
   const onRpKey = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRp() } }
@@ -592,7 +596,9 @@ function mountDesk(el, ctx) {
   E.ctxwin.addEventListener('click', onRetry)
   const offs = [() => { rpbar.removeEventListener('click', onRp); rpbar.removeEventListener('keydown', onRpKey); E.ctxwin.removeEventListener('click', onRetry); E.rails.removeEventListener('mouseover', onRailHover) },
     wireTimeline(E.saw, s), wireRails(E.rails, s), wireCtxWin(E.ctxwin, s), wireOutline(E.ctxnav, s), wireResources(E.resexp, s),
-    wireRawPanel(E.rawpanel, s), wireDetail(E.detail, s), wireSessionHead(E.deskhead, s), wireStepBar(E.stepbar, s), initLayout(root)]
+    wireRawPanel(E.rawpanel, s), wireSessionHead(E.deskhead, s), wireStepBar(E.stepbar, s), initLayout(root)]
+
+  // ── what lives outside the root (the page's keys and events, the shared drawer, timers, observers): only while attached ─────
   // 1.2 §键盘: a held key moves the target at once and paints at most once per frame
   let keyTarget = null
   const paintKey = () => { const t = keyTarget; keyTarget = null; if (!s.dead && t != null) setPlayhead(t, true) }
@@ -605,61 +611,87 @@ function mountDesk(el, ctx) {
     else if (a.follow) { if (s.follow) followOff(); else followOn() }
     else { if (keyTarget == null) frame(paintKey); keyTarget = a.to }
   }
-  setScreenKeys(onKey)
   // popovers and menus close themselves first and stop the key (core/keys.mjs); here: the call drawer, then the bottom row
   const onEscape = () => { if (E.detail.classList.contains('open')) closeDetail(E.detail, s); else if (s.rpOpen) onRp() }
-  document.addEventListener('v2:escape', onEscape)
   const onVis = () => { if (!document.hidden) poll(true) } // back in view: read now, not a tick later
-  document.addEventListener('visibilitychange', onVis)
-  const timer = setInterval(() => poll(false), POLL_MS) // the desk keeps reading; 「跟随最新」 only decides whether the playhead follows growth
   // the lane's width changes with the window and with the right-page divider: watch both. Only a window that no longer fits is touched.
   const refit = () => { if (s.anchor && alive() && fitView()) { renderSaw(E.saw, s); renderRails(E.rails, s); watchRails(); renderOverview(E.saw, s) } }
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(refit) : null
-  if (ro) ro.observe($('#sawrow').closest('.tkrow'))
-  window.addEventListener('resize', refit)
+  let timer = null, unwireDetail = null, scrolls = []
 
   renderEmpty('')
-  poll()
 
-  return {
-    alive,
-    update(route) {
-      if (route.project !== s.project || route.id !== s.id) { // another session
-        s.project = route.project; s.id = route.id; resetSession()
-        s.initialStep = hasStep(route) ? stepParam(route.params.step).step : null
-        renderEmpty('')
-        poll(); return
-      }
-      // the same session (our own URL writes land here too, and are no-ops). No step and no call = follow the newest (1.2:91)
-      if (!hasStep(route)) { if (route.params.call == null && !s.follow) followOn(); return }
-      if (!s.anchor) { s.initialStep = stepParam(route.params.step).step; return }
-      // a named step pins it with follow off; the move is not the reader's, so landing on the newest call does not turn follow on
-      const p = stepParam(route.params.step, s.anchor.count ?? s.anchor.calls.length)
-      if (p.step === shownStep() && !p.rewrite && !s.follow) return
-      s.follow = false
-      setPlayhead(p.step - 1 - (s.anchor.base || 0), false)
-    },
-    unmount() {
-      s.dead = true
-      if (s.reads) s.reads.abort()
-      if (busyTimer != null) clearTimeout(busyTimer)
-      document.removeEventListener('visibilitychange', onVis)
-      clearInterval(timer); if (ro) ro.disconnect(); if (io) io.disconnect(); window.removeEventListener('resize', refit)
-      for (const f of offs) { try { f() } catch (e) { console.error(e) } }
-      setScreenKeys(null)
-      document.removeEventListener('v2:escape', onEscape)
-      closeDetail(E.detail, s); E.detail.innerHTML = ''
-      E.deskhead.innerHTML = ''; E.stepbar.innerHTML = ''
-    },
+  // hang the desk in `el` as it was left; the URL decides the view only when it names a step (1.2 §路由「离开再回来」)
+  function attach(el, ctx, route) {
+    host = el
+    s.ctx = { ...ctx, api }
+    overrideScope(sessionKey())
+    el.replaceChildren(root)
+    for (const [sel, top] of scrolls) { const n = $(sel); if (n) n.scrollTop = top }
+    unwireDetail = wireDetail(E.detail, s)
+    setScreenKeys(onKey)
+    document.addEventListener('v2:escape', onEscape)
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('resize', refit)
+    if (ro) ro.observe($('#sawrow').closest('.tkrow'))
+    watchRails()
+    timer = setInterval(() => poll(false), POLL_MS) // the desk keeps reading; 「跟随最新」 only decides whether the playhead follows growth
+    if (hasStep(route)) update(route)
+    if (s.anchor) paintPlayhead() // a step left mid-wait draws now; the URL names the drawn step at once (syncUrl)
+    poll(true) // the first open, or one `since` on its mark
   }
+  // leave the page: the poll stops, every listener outside the root goes, the reads in flight finish into the detached nodes
+  function detach() {
+    if (!host) return
+    scrolls = SCROLLED.map((sel) => [sel, $(sel) ? $(sel).scrollTop : 0])
+    clearInterval(timer); timer = null
+    if (busyTimer != null) { clearTimeout(busyTimer); busyTimer = null }
+    jumps.clear()
+    setScreenKeys(null)
+    document.removeEventListener('v2:escape', onEscape)
+    document.removeEventListener('visibilitychange', onVis)
+    window.removeEventListener('resize', refit)
+    if (ro) ro.disconnect()
+    if (io) io.disconnect()
+    closeDetail(E.detail, s); E.detail.innerHTML = ''
+    unwireDetail(); unwireDetail = null
+    root.remove()
+    host = null
+  }
+  // out of the session cache: its reads are aborted and nothing of it writes again
+  function dispose() {
+    detach()
+    s.dead = true
+    reads.abort()
+    for (const f of offs) { try { f() } catch (e) { console.error(e) } }
+    clearOverrides(sessionKey())
+  }
+  // the same session's route moved (our own URL writes land here too, and are no-ops). No step and no call = follow the newest (1.2:91)
+  function update(route) {
+    if (host && !root.isConnected) host.replaceChildren(root) // something wrote over the screen: hang the desk back
+    if (!hasStep(route)) { if (route.params.call == null && !s.follow) followOn(); return }
+    if (!s.anchor) { s.initialStep = stepParam(route.params.step).step; return }
+    // a named step pins it with follow off; the move is not the reader's, so landing on the newest call does not turn follow on
+    const p = stepParam(route.params.step, s.anchor.count ?? s.anchor.calls.length)
+    if (p.step === shownStep() && !p.rewrite && !s.follow) return
+    s.follow = false
+    setPlayhead(p.step - 1 - (s.anchor.base || 0), false)
+  }
+  return { key: sessionKey(), attach, detach, update, dispose, bytes: () => size }
 }
 
-// The screen: a desk whose DOM was replaced under it (another screen wrote into the shared element) is mounted afresh on the next
-// route instead of drawing into detached nodes; it never throws for want of its own elements.
+// The screen: the route's session from the session cache, or a new desk; another session or another screen detaches it back into the cache
 export function mount(el, ctx) {
-  let d = mountDesk(el, ctx)
+  let d = null
+  const show = (route) => {
+    const key = keyOf(route)
+    d = sessionCache.take(key) || sessionCache.put(key, openDesk(ctx, route))
+    d.attach(el, ctx, route)
+  }
+  const leave = () => { d.detach(); sessionCache.release(d.key) }
+  show(ctx.router.current())
   return {
-    update(route) { if (!d.alive()) { d.unmount(); d = mountDesk(el, ctx); return } d.update(route) },
-    unmount() { d.unmount() },
+    update(route) { if (keyOf(route) !== d.key) { leave(); show(route) } else d.update(route) },
+    unmount: leave,
   }
 }
