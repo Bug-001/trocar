@@ -29,7 +29,7 @@ import { openFoldLog, foldLogFile, LOG_BYTES } from '../fold-log.mjs';
 import { trocarHome } from '../../paths.mjs';
 import { extractMembers, blockAt, CHUNK_STORED } from '../../view/extract.mjs';
 import { compareStep } from '../../view/step-order.mjs';
-import { recordsAt, STRETCH_HEAP } from '../records.mjs';
+import { recordsAt, releaseDecoded, STRETCH_HEAP } from '../records.mjs';
 import { indexRows, sessionGroups, sessionFacts } from '../rows.mjs';
 import { openProjection, STORE_HEAP } from '../projection.mjs';
 import { warmCache, fsTag, heapBudget, heapCeiling, hold, steadyBytes, liveHeap, usedHeap } from '../warm.mjs';
@@ -227,8 +227,10 @@ const fileLogs = new WeakMap();
 /** saveIndexes(): the sidecars (4.3 §4 旁索引) of every open store and its fold log whose file grew since its last save, the store's
  *  first (the log's sidecar names the projection's bytes), the log's with the state's step-order columns synced to its frontier.
  *  The worker calls it once an idle period; the local path's are never written (opened write:false). A sidecar that cannot be
- *  written is not one: the next open scans. */
+ *  written is not one: the next open scans. The decoded frames and lines of the sealed segments are let go too: an idle worker does
+ *  not hold them (3.5 §冷路径). */
 export function saveIndexes() {
+  releaseDecoded();
   for (const s of stores.values()) {
     try { s.saveIndex(); } catch { /* the next idle period */ }
     const st = fileLogs.get(s);
