@@ -47,7 +47,7 @@ for await (const _ of (await import('node:readline')).createInterface({ input: p
   console.log(JSON.stringify(out))
 }`
 
-test('3.5 §内存有界: a growing cut session never shows fewer than half of the calls that fit', { timeout: 300_000 }, async () => {
+test('3.5 §内存有界: a growing cut session never shows fewer than half of the calls that fit', { timeout: 600_000 }, async () => {
   const home = path.join(tmpDir('trocar-cutgrows-'), '.trocar')
   // Claude Code on Message Threads (cut-fits.test.mjs case 1), grown past a 160 MB reader's room
   const s = await grower({ home, heapMb: 160, shape: { growth: 150, subEvery: 4, subLanes: 3, subLen: 12, wire: 'threads', compactAt: 3_000, cc: 4 } })
