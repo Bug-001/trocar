@@ -112,11 +112,12 @@ test('the read-state line is present iff the answer is pending, and holds no but
 // 1.5 K-29: after a failed read of a drawn session, one quiet stale line sits under the head with a Retry that reads at once
 // (s.poll — the reader's path, not the timer's); a good answer drops it
 import { renderSessionHead, wireSessionHead, staleLineHtml, fidelityFacts } from '../../src/web/v2/replay/header.mjs'
+import { hidesReason, reasonsWith, visibleOf, outsideCollapsed } from './visible.mjs'
 test('K-29: a stale session draws a Retry outside the head that reads again; no stale state, no line', () => {
   const meta = { session_id: 's1', harness: 'cc', project_slug: 'p', project_path: '/w/p' }
   let handler = null, polls = 0
   const el = { innerHTML: '', addEventListener: (t, f) => { handler = f }, removeEventListener() {} }
-  const s = { meta, lanes: [], follow: true, A: null, ctx: {}, staleErr: { reason: 'x', since: Date.now() - 5000 }, poll: () => { polls++ } }
+  const s = { meta, lanes: [], follow: true, A: null, ctx: {}, staleErr: { r: { ok: false, status: 500, error: 'x' }, since: Date.now() - 5000 }, poll: () => { polls++ } }
   renderSessionHead(el, s)
   assert.match(el.innerHTML, /data-retry/)
   assert.ok(!el.innerHTML.split('class="sesshead"')[1].split('</div>')[0].includes('data-retry'), 'not inside the session head itself')
@@ -128,16 +129,22 @@ test('K-29: a stale session draws a Retry outside the head that reads again; no 
   assert.equal(staleLineHtml(null), '')
 })
 
-// V05: the visible stale line carries only the reason's first line; the whole reason (a native stack, say) is in 技术细节
-test('V05: a multi-line stale reason shows its first line only; the rest lives in the tech details', () => {
-  const token = 'TOKEN_<b>&_' + Math.random().toString(36).slice(2)
-  const html = staleLineHtml({ since: new Date(Date.now() - 5000).toISOString(), reason: `read failed\n${token}\n    at frame (x.js:1:2)` })
-  const tech = html.indexOf('class="disc"')
-  assert.ok(tech > 0, 'a tech-details element')
-  const escTok = token.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  assert.ok(!html.slice(0, tech).includes(escTok) && !html.slice(0, tech).includes(token), 'not in the visible line')
-  assert.ok(html.slice(tech).includes(escTok), 'in the tech details, escaped')
-  assert.ok(!html.includes(token), 'never unescaped')
+// A21 · 1.5 K-29: the stale line's visible words are the board's own (readFailure); the failed answer's reason (any status, a
+// native stack, markup) stays escaped in the collapsed technical details; Retry is there
+test('A21: a stale line keeps every reason out of its visible text, escaped in collapsed details, with a Retry', () => {
+  let n = 0
+  for (const status of [0, 404, 500, undefined]) {
+    for (const reason of reasonsWith('TOKEN')) {
+      const t = `tok-${++n}-s9`, error = reason.replace('TOKEN', t)
+      const r = status === undefined ? { ok: false, error } : { ok: false, status, error }
+      const html = staleLineHtml({ since: new Date(Date.now() - 5000).toISOString(), r })
+      const where = `${status} · ${n}`
+      assert.ok(visibleOf(html).trim(), `${where}: a visible line`)
+      assert.ok(/<div class="disc-b"[^>]*\shidden>/.test(html), `${where}: details are collapsed`)
+      hidesReason(html, t, error.includes(t), where)
+      assert.match(outsideCollapsed(html), /data-retry/, `${where}: a Retry control`)
+    }
+  }
 })
 
 // V05: while the desk is stale the follow chip says it is paused; its pressed state is the reader's choice and does not change

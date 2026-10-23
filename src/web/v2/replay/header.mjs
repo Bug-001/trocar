@@ -6,7 +6,7 @@
 import { esc, fmtWhen, fmtUp, usd } from '../core/fmt.mjs'
 import { copyBtn } from '../core/dom.mjs'
 import { chipFor, harnessKey } from '../core/chips.mjs'
-import { infoButton, techDetailsHtml } from '../core/ui.mjs'
+import { infoButton, techDetailsHtml, readFailure } from '../core/ui.mjs'
 import { sessionTotals, priceMatch } from '../core/metrics.mjs'
 import { stepsOf } from './lanes.mjs'
 import * as W from '../labels/replay.mjs'
@@ -209,15 +209,12 @@ export function renderSessionHead(el, s) {
 }
 
 // 1.5 K-29: a read failed after this session was drawn — the desk keeps the last good answer; one quiet line says since when it is
-// not refreshed, the reason's first line (cut short), and offers to read again now (a reader's action: the back-off does not
-// hold it). The whole reason — a native stack, say — goes to the collapsed 技术细节, never the line.
+// not refreshed and the cause class in the board's own words (readFailure), and offers to read again now (a reader's action: the
+// back-off does not hold it). `st.r` is the failed answer {status, error}; its reason goes only to the collapsed 技术细节.
 export function staleLineHtml(st) {
   if (!st) return ''
-  const full = String(st.reason || '')
-  const first = full.split('\n')[0].trim()
-  const why = first.length > 80 ? first.slice(0, 79).trimEnd() + '…' : first
-  return `<div class="fidline fidstale">${esc(W.notRefreshed(fmtWhen(st.since), why))}<span class="fidsep">·</span><button type="button" class="linkbtn" data-retry="1">${esc(W.RETRY)}</button></div>` +
-    (full && full !== why ? techDetailsHtml([['reason', full]], { id: 'staletech' }) : '')
+  const f = readFailure(W.THIS_SESSION, st.r, { id: 'staletech' })
+  return `<div class="fidline fidstale">${esc(W.notRefreshed(fmtWhen(st.since), f.line))}<span class="fidsep">·</span><button type="button" class="linkbtn" data-retry="1">${esc(W.RETRY)}</button></div>${f.tech}`
 }
 
 export function wireSessionHead(el, s) {

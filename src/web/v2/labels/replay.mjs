@@ -223,8 +223,8 @@ export const removedList = (n, k2) => `Blocks in step ${k2} that are not in this
 
 // the 代替态 (1.4 ⑤–⑧, words 2.3)
 export const RETRY = 'Retry'
-// the desk's failure state when the session never loaded (1.5 K-29): one sentence; the reason is in the technical details
-export const SESSION_READ_FAILED = 'This session could not be read.'
+// what a failed read of the desk names (1.5 K-29, core/ui.mjs readFailure): the never-drawn failure and the stale line
+export const THIS_SESSION = 'This session'
 // the window's failure state when the playhead step's lane read failed (2.3 §读失败, 1.5 K-29); the reason is in the technical details
 export const STEP_READ_FAILED = 'This step could not be read.'
 export const notRefreshed = (t, why) => `Not refreshed since ${t} · ${why}`

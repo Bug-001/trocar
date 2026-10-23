@@ -15,7 +15,7 @@ const kindOf = (url) => (/\/api\/(block|lane)\b/.exec(new URL(url).pathname) || 
 async function serveWorld(page, w) {
   const json = (route, doc) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(doc) })
   await page.route('**/api/session?**', (route) => { const q = new URL(route.request().url()).searchParams; json(route, q.has('since') ? w.since(q.get('since')) : w.full()) })
-  await page.route('**/api/lane?**', (route) => { const q = new URL(route.request().url()).searchParams; json(route, w.lane(q.get('lane'), { from: q.get('from') ?? undefined, to: q.get('to') ?? undefined })) })
+  await page.route('**/api/lane?**', (route) => { const q = new URL(route.request().url()).searchParams; json(route, w.lane(q.get('lane'), { from: q.get('from') ?? undefined, to: q.get('to') ?? undefined, ledger: q.get('ledger') ?? undefined })) })
 }
 
 test('2.3 #25: scrubbing the desk reads nothing before a 100 ms rest, keeps ≤ 1 lane and ≤ 1 block in flight, aborts the left step\'s read', { skip }, async () => {
@@ -112,6 +112,54 @@ test('2.3 §读失败: a step whose lane never arrived says it could not be read
     await page.click('#ctxwin [data-fail="lane"] [data-retry]')
     await page.waitForSelector('#ctxwin .cblk', { state: 'attached', timeout: 15000 })
     assert.equal(await page.locator('#ctxwin [data-fail]').count(), 0)
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
+// A32 · 3.5 §手里车道的页 (E4): after the first paint the anchor lane's ledger is read along its `ledger_next` chain, in the one
+// lane slot, before any older (`to`) page of that lane; each read names the previous answer's cursor, none is read twice
+test('A32: the anchor lane reads its ledger chain to the end before any older page, one lane read in flight, no cursor twice', { skip }, async () => {
+  const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
+  try {
+    const { page } = b, w = world(7, { calls: 60 })
+    const main = w.full().lanes.find((h) => h.kind === 'main').lane
+    // the anchor's whole ledger in key order, one entry per page after the tail's first
+    const L = w.ledgerAt(main), all = [...L.resources.map((e) => ['resources', e]), ...L.seen.map((e) => ['seen', e])]
+    assert.ok(all.length >= 3, `the world's main lane has a ledger to chain (${all.length})`)
+    const page1 = (from, at) => ({ resources: from.slice(at, at + 1).filter(([l]) => l === 'resources').map(([, e]) => e), seen: from.slice(at, at + 1).filter(([l]) => l === 'seen').map(([, e]) => e) })
+    const next = (i) => (i < all.length ? `c${i}` : null)
+    const log = []
+    let out = 0, most = 0
+    page.on('request', (r) => { if (new URL(r.url()).pathname === '/api/lane') { out++; most = Math.max(most, out); log.push(new URL(r.url()).searchParams) } })
+    const end = (r) => { if (new URL(r.url()).pathname === '/api/lane') out-- }
+    page.on('requestfinished', end); page.on('requestfailed', end)
+    await serveWorld(page, w)
+    const json = (route, doc) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(doc) })
+    await page.route('**/api/lane?**', (route) => {
+      const q = new URL(route.request().url()).searchParams
+      if (q.get('lane') !== main) return route.fallback()
+      const c = q.get('ledger')
+      if (c != null && /^c\d+$/.test(c)) { const i = +c.slice(1); return json(route, { ...w.lane(main, {}), steps: [], defs: [], events: [], prev: null, next: null, ...page1(all, i), ledger_next: next(i + 1) }) }
+      if (c != null || q.has('from') || q.has('to')) return route.fallback()
+      return json(route, { ...w.lane(main, {}), ...page1(all, 0), ledger_next: next(1) })
+    })
+    await page.evaluate(() => { location.hash = '#/replay/p/S' })
+    await page.waitForSelector('#ctxwin .cblk', { state: 'attached' })
+    const mine = () => log.filter((q) => q.get('lane') === main)
+    const t0 = Date.now()
+    while (Date.now() - t0 < 15000 && !mine().some((q) => q.has('to'))) await page.waitForTimeout(100)
+    const seq = mine()
+    const tail = seq.findIndex((q) => !q.has('from') && !q.has('to') && !q.has('ledger'))
+    const firstTo = seq.findIndex((q) => q.has('to'))
+    const ledgers = seq.map((q, i) => [i, q.get('ledger')]).filter(([, c]) => c != null)
+    assert.ok(tail >= 0, 'the anchor lane was read')
+    assert.ok(firstTo >= 0, 'the world\'s main lane has older pages, read once the chain ends')
+    // the chain the tail opened, all of it before the first older page (an older page's own ledger_next is chained after it)
+    const chain = ledgers.filter(([i]) => i < firstTo)
+    assert.deepEqual(chain.map(([, c]) => c), all.slice(1).map((_, i) => `c${i + 1}`), 'each ledger read names the previous answer\'s ledger_next, to the end')
+    assert.ok(chain.every(([i]) => i > tail), 'after the tail read')
+    assert.equal(new Set(ledgers.map(([, c]) => c)).size, ledgers.length, 'no cursor read twice')
+    assert.ok(most <= 1, `${most} lane reads were in flight at once`)
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })

@@ -172,7 +172,7 @@ export async function readTouched(desk, touched, read, stale = () => false) {
       if (stale()) return null
       if (!lr || !lr.ok || !lr.data) {
         for (const [j, v] of all) if (!done.includes(j)) desk.lagging.set(j, v)
-        return { ok: false, error: (lr && lr.error) || 'cause not known', done }
+        return { ok: false, status: lr && lr.status, error: (lr && lr.error) || 'cause not known', done }
       }
       applyLane(desk, lr.data)
       q = lr.data.base != null && lr.data.next ? { lane: k, from: lr.data.next } : null
@@ -283,7 +283,7 @@ export async function readLedger(desk, key, read, stale = () => false) {
   for (let q = ledgerAsk(desk, key); q; q = ledgerAsk(desk, key)) {
     const r = await read('lane', q)
     if (stale()) return null
-    if (!r || !r.ok || !r.data) return { ok: false, error: (r && r.error) || 'cause not known' }
+    if (!r || !r.ok || !r.data) return { ok: false, status: r && r.status, error: (r && r.error) || 'cause not known' }
     applyLedger(desk, key, q.ledger, r.data)
   }
   return { ok: true }

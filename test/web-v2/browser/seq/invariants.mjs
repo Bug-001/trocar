@@ -87,11 +87,13 @@ const viewOf = (page) => page.evaluate((sel) => {
 
 // the tail's follow-up reads (4.4:52): one `lane` read per touched held lane per `session` delta, one `block` read per followed delta
 const DELTA_PACED = new Set(['lane', 'block'])
-// what I-rate paces: a name, and for `lane` each lane of each session apart (an older page, `to`, apart from the tail)
+// what I-rate paces: a name, and for `lane` each lane of each session apart (an older page, `to`, apart from the tail); null =
+// not paced: a lane's ledger chain (`ledger=`) reads one cursor after another by design (3.5 §手里车道的页)
 const rateKey = (url) => {
   const name = nameOf(url)
   if (name !== 'lane') return name
   const q = new URLSearchParams(url.split('?')[1] || '')
+  if (q.has('ledger')) return null
   return `lane ${q.get('id')} ${q.get('lane')}${q.has('to') ? ' to' : ''}`
 }
 
@@ -113,6 +115,7 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
     const name = nameOf(e.url), key = rateKey(e.url), p = last.get(key)
     const since = sessionAt, failed = failedRead(e)
     if (name === 'session') sessionAt = e.start
+    if (key == null) continue
     if (byReader(e.start) || exempt.has(e)) { last.delete(key); continue } // the reader's read starts the timer's chain over
     last.set(key, { start: e.start, dur: (e.end ?? e.start) - e.start, fails: failed ? (p ? p.fails : 0) + 1 : 0, pending: !!e.pending, recovered: !failed && !!p && p.fails > 0 })
     if (hiddenAt(e.start)) out.push(`${name} read at ${e.start} while hidden`)

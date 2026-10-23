@@ -110,6 +110,22 @@ test('V-rate ten timer-less reads of status in a row', { skip }, async () => {
   assert.ok(ids(await check(ctx())).includes('I-rate'))
 })
 
+// A33 · E7: a lane's ledger chain (`ledger=`) is one read after another by design (3.5 §手里车道的页), not paced; the same chain
+// as `from=` reads with no session delta between them is
+test('V-rate a ledger chain is not paced; the same chain of from= reads is', { skip }, async () => {
+  const chain = (param) => b.page.evaluate(async ([sid, p]) => {
+    const base = `/api/lane?id=${encodeURIComponent(sid)}&lane=L1`
+    await fetch(base).catch(() => {})
+    for (let i = 1; i <= 6; i++) { await new Promise((r) => setTimeout(r, 50)); await fetch(`${base}&${p}=c${i}`).catch(() => {}) }
+  }, [id, param])
+  await fresh()
+  await chain('ledger')
+  assert.ok(!ids(await check(ctx())).includes('I-rate'), 'a ledger chain is not paced')
+  await fresh()
+  await chain('from')
+  assert.ok(ids(await check(ctx())).includes('I-rate'), 'from= reads are')
+})
+
 test('V-write a POST from the page', { skip }, async () => {
   await fresh()
   await b.page.route('**/api/seq-write', (r) => r.fulfill({ status: 204 }))

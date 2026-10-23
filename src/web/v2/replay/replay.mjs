@@ -15,7 +15,7 @@ import { setScreenKeys } from '../core/keys.mjs'
 import { openModal } from '../core/dom.mjs'
 import { keyAction } from './keymap.mjs'
 import { buildLanes, anchorLane, stepsOf, nearestByTs } from './lanes.mjs'
-import { createDesk, applySession, applyLane, readTouched, mergeTouch, stepOf as deskStep } from './model.mjs'
+import { createDesk, applySession, applyLane, readTouched, mergeTouch, readLedger, ledgerDone, stepOf as deskStep } from './model.mjs'
 import { breakSteps } from './analysis.mjs'
 import { loadFold, saveFold } from './fold.mjs'
 import { landPlayhead, createPoller, createStepReads } from './follow.mjs'
@@ -33,8 +33,8 @@ import { renderSessionHead, wireSessionHead, captureGap } from './header.mjs'
 import { stepBarHtml, wireStepBar } from './stepbar.mjs'
 import { loadBodies, bodyCache, clearOverrides, isRetryable } from './cell.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
-import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, SESSION_READ_FAILED } from '../labels/replay.mjs'
-import { techDetailsHtml } from '../core/ui.mjs'
+import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION } from '../labels/replay.mjs'
+import { readFailure } from '../core/ui.mjs'
 
 const POLL_MS = 1500
 const BUSY_MS = 150 // 2.3 §车道未到手: how long a step whose lane is not held leaves the desk as it is
@@ -204,7 +204,7 @@ function mountDesk(el, ctx) {
     root.classList.remove('notlisted')
     // the last session's reads in flight are cancelled, and its loops cannot hold this one
     if (s.reads) { s.reads.abort(); s.reads = new AbortController() }
-    poller = makePoller(); steps = makeStepReads(); targeted = null; openLane = null; quiet = false; wanted.clear()
+    poller = makePoller(); steps = makeStepReads(); targeted = null; openLane = null; quiet = false; wanted.clear(); ledgerFailed = false; chaining = false
     s.openBlocks.clear(); s.turnLanded.clear()
     E.stepbar.innerHTML = ''
   }
@@ -368,15 +368,19 @@ function mountDesk(el, ctx) {
   // page, one per resting rid while the playhead is fewer than 32 steps from the held edge (3.5:69, in time for a scrub), and one
   // per quiet poll (`olderOk`): the remaining pages come newest first, each after a reader's move or a `session` read (4.4:52)
   let olderOk = false, olderFor = null
+  // the anchor lane's ledger chain comes before any older page (3.5 §手里车道的页): while it is pending (and not failed) no `to` read
+  let ledgerFailed = false, chaining = false
+  const ledgerFirst = () => { const k = s.anchor && s.anchor.id; return !!k && s.desk.held.has(k) && !ledgerDone(s.desk, k) && !ledgerFailed }
   function need(rid) {
     const row = s.desk.rows.get(rid)
     if (!row) return null
     const key = row.lane, h = s.desk.held.get(key)
     if (!h || !h.steps.has(rid)) {
       const older = h && h.prev != null && h.rids.length && laneIndex(key, rid) < laneIndex(key, h.rids[0])
+      if (older && ledgerFirst()) return null
       return { lane: older ? { lane: key, to: h.prev } : { lane: key }, refs: [] }
     }
-    const older = h.prev != null && (olderOk || (olderFor !== rid && laneIndex(key, rid) - laneIndex(key, h.rids[0]) < 32))
+    const older = h.prev != null && !ledgerFirst() && (olderOk || (olderFor !== rid && laneIndex(key, rid) - laneIndex(key, h.rids[0]) < 32))
     if (older) { olderOk = false; olderFor = rid }
     return { lane: older ? { lane: key, to: h.prev } : null, refs: openRefs(rid) }
   }
@@ -389,7 +393,7 @@ function mountDesk(el, ctx) {
       onLane: (rid, r, q) => {
         if (!mine()) return
         const a = r && r.ok ? r.data : null
-        if (a) { applyLane(s.desk, a); s.laneErr.delete(a.lane) } else if (q) s.laneErr.set(q.lane, (r && r.error) || 'cause not known')
+        if (a) { applyLane(s.desk, a); s.laneErr.delete(a.lane); if (s.anchor && a.lane === s.anchor.id) chainLedger() } else if (q) s.laneErr.set(q.lane, (r && r.error) || 'cause not known')
         const was = openLane
         if ((a && a.lane === openLane) || (!a && rid == null)) openLane = null
         if (a) { wanted.delete(a.lane); if (s.anchor && a.lane !== s.anchor.id) { renderRails(E.rails, s); watchRails() } }
@@ -405,6 +409,23 @@ function mountDesk(el, ctx) {
     })
   }
   let steps = makeStepReads()
+  // the anchor lane's pending ledger cursors, read to the end in the one lane slot after any answer of that lane (2.4's counts are
+  // exact once it ends). A failed read leaves its cursor pending for the next poll (`byPoll`), never an immediate retry. Its answers
+  // redraw only the explorer; when the chain ends the resting playhead asks again for what the gate held back.
+  function chainLedger(byPoll = false) {
+    const key = s.anchor && s.anchor.id, desk = s.desk, sk = sessionKey(), signal = s.reads ? s.reads.signal : undefined
+    if (!key || chaining || (ledgerFailed && !byPoll) || !desk.held.has(key) || ledgerDone(desk, key)) return
+    chaining = true
+    const gone = () => s.dead || sk !== sessionKey() || desk !== s.desk || !!(signal && signal.aborted)
+    steps.laneSlot(() => readLedger(desk, key, (name, q) => read(name, q, { signal, hold: false }), gone)).then((r) => {
+      chaining = false
+      if (!r || gone()) return
+      ledgerFailed = !r.ok
+      renderResources(E.resexp, s)
+      if (r.ok && s.playRid != null && openLane == null) { targeted = s.playRid; steps.target(s.playRid) }
+      if (s.anchor && s.anchor.id !== key) chainLedger()
+    }, (e) => { chaining = false; console.error(e) })
+  }
   // the playhead's rid changed: its reads go out once it rests (createStepReads); the open's own lane read is not cut short
   function aim() { if (s.playRid != null && s.playRid !== targeted && openLane == null) { targeted = s.playRid; steps.target(s.playRid) } }
   s.wantLane = (key) => { if (s.desk.held.has(key)) return; wanted.add(key); steps.prefetch(key) }
@@ -417,12 +438,13 @@ function mountDesk(el, ctx) {
   // ── reading the session ──────────────────────────────────────────────────────────────────────────────────────────
   // a failed read is said IN the content area (no banner, no dot): one plain sentence, Retry, and the reason — a worker's crash,
   // say — in the collapsed 技术细节, never in the body (1.5 K-29)
-  const fail = (reason) => { s.errNote = `<button type="button" class="linkbtn" data-retry="1">${esc(RETRY)}</button>${techDetailsHtml([['reason', reason]], { id: 'readtech' })}` }
+  // `r` is the failed answer {status, error}: the visible words are readFailure's, the reason only in the details
+  const fail = (r) => { const f = readFailure(THIS_SESSION, r, { id: 'readtech' }); s.errNote = `<button type="button" class="linkbtn" data-retry="1">${esc(RETRY)}</button>${f.tech}`; return f.line }
   // a desk that has drawn this session keeps every area as it is and says quietly, in the 会话保真行, since when it is not refreshed
   // and why; only a session that never drew shows the failure in the content area
-  function readFailed(reason) {
-    if (s.goodKey === sessionKey()) s.staleErr = { reason, since: s.goodAt }
-    else { fail(reason); renderEmpty(SESSION_READ_FAILED) }
+  function readFailed(r) {
+    if (s.goodKey === sessionKey()) s.staleErr = { r, since: s.goodAt }
+    else renderEmpty(fail(r))
     renderHeader()
     return { ok: false }
   }
@@ -453,7 +475,7 @@ function mountDesk(el, ctx) {
   // a quiet poll lets the resting playhead's lane read its next older page (need)
   // a step read that failed is asked again on the poll's schedule (2.3 §读失败)
   const reask = () => { if ((s.laneErr.size || s.bodyFail.size) && s.playRid != null && openLane == null) { targeted = s.playRid; steps.target(s.playRid) } }
-  const olderPage = () => { const h = s.playRid != null && s.desk.held.get((s.desk.rows.get(s.playRid) || {}).lane); if (h && h.prev != null && openLane == null) { olderOk = true; targeted = s.playRid; steps.target(s.playRid) } }
+  const olderPage = () => { if (ledgerFirst()) return; const h = s.playRid != null && s.desk.held.get((s.desk.rows.get(s.playRid) || {}).lane); if (h && h.prev != null && openLane == null) { olderOk = true; targeted = s.playRid; steps.target(s.playRid) } }
 
   async function pollOnce() {
     const key = sessionKey(), reads = s.reads, signal = reads ? reads.signal : undefined, desk = s.desk
@@ -463,12 +485,12 @@ function mountDesk(el, ctx) {
     const res = before ? await read('session', { before: desk.order[0] }, { signal })
       : desk.mark != null ? await read('session', { since: desk.mark }, { signal, hold: false }) : await read('session', {}, { signal })
     if (stale()) return
-    if (!res.ok) return readFailed(res.error || 'cause not known')
+    if (!res.ok) return readFailed(res)
     const lastGood = s.goodAt
     s.errNote = null; s.goodKey = key; s.goodAt = api.now()
     const hadStale = !!s.staleErr; s.staleErr = null
     const same = res.status === 304 || !res.data
-    if (same && !desk.lagging.size) { quiet = true; if (hadStale) renderHeader(); reask(); olderPage(); return { ok: true } }
+    if (same && !desk.lagging.size) { quiet = true; if (hadStale) renderHeader(); reask(); chainLedger(true); olderPage(); return { ok: true } }
     // nothing new, but a lane an earlier read failed on is read now: an empty delta carries it through the same path
     const a = same ? { base: desk.mark, mark: desk.mark } : res.data
     // the server knows no such session (meta null, nothing captured): said HERE, with a way back; the timer stops reading it
@@ -496,7 +518,7 @@ function mountDesk(el, ctx) {
     if (!lt || stale()) return
     for (const k of [...touched.keys(), ...lt.done]) changed?.add(k)
     for (const k of lt.done) s.laneErr.delete(k)
-    if (!lt.ok) { s.staleErr = { reason: lt.error, since: lastGood }; s.goodAt = lastGood }
+    if (!lt.ok) { s.staleErr = { r: lt, since: lastGood }; s.goodAt = lastGood }
     const result = (ok) => (lt.ok ? ok : { ok: false })
     s.meta = desk.meta
     s.lanes = buildLanes(desk, { count: desk.probes || 0, series: [] }, { prev: s.lanes, changed })
@@ -532,6 +554,7 @@ function mountDesk(el, ctx) {
     refreshDrawer()
     if (s.initialStep == null && (first || moved || String(router.current().params.step ?? '') !== String(shownStep()))) syncUrl()
     reask()
+    chainLedger(true)
     if (quiet) olderPage()
     return result({ ok: true, pending: desk.pending || undefined })
   }
