@@ -68,6 +68,19 @@ export function openSealed(file, { fs = nodeFs, frameCache = createFrameCache(8)
 const verified = new WeakSet();
 
 function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache, lineCache }) {
+  // close() releases only the fd: the tables stay, and the next frame read reopens the file and checks it is
+  // still the file they describe (dev, ino, size, mtime), so a kept reader never reads another file's bytes.
+  const fdOf = () => {
+    if (fd !== null) return fd;
+    const nfd = fs.openSync(file, 'r');
+    let now;
+    try { now = fs.fstatSync(nfd); } catch (e) { try { fs.closeSync(nfd); } catch {} throw e; }
+    if (now.dev !== st.dev || now.ino !== st.ino || now.size !== st.size || now.mtimeMs !== st.mtimeMs) {
+      try { fs.closeSync(nfd); } catch {}
+      throw new Error(`${path.basename(file)}: the sealed file changed since its reader was opened`);
+    }
+    return (fd = nfd);
+  };
   const { frames, shards, streams, records } = tables;
   const name = path.basename(file);
   const bad = (msg) => new Error(`${name}: ${msg} — the sealed file is corrupt`);
@@ -105,7 +118,7 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache, lineCac
     const [off, clen, dlen] = frames[f];
     const c = Buffer.alloc(clen);
     let got = 0;
-    while (got < clen) { const n = fs.readSync(fd, c, got, clen - got, off + got); if (!n) break; got += n; }
+    while (got < clen) { const n = fs.readSync(fdOf(), c, got, clen - got, off + got); if (!n) break; got += n; }
     if (got !== clen) throw bad(`frame ${f} is truncated`);
     let out;
     try { out = zlib.brotliDecompressSync(c); } catch (e) { throw bad(`frame ${f} does not decode (${e.message})`); }
@@ -193,6 +206,6 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache, lineCac
     file, size: st.size, dev: st.dev, ino: st.ino, indexOffset, frames, shards, streams, records, deltas,
     get count() { return records.length; },
     entry, lineAt, lines, find,
-    close() { try { fs.closeSync(fd); } catch {} },
+    close() { if (fd === null) return; try { fs.closeSync(fd); } catch {} fd = null; },
   };
 }
