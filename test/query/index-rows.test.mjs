@@ -76,3 +76,19 @@ if (process.argv[2]) process.stdout.write(JSON.stringify(await answerAll(process
     asks.forEach(([name], i) => assert.equal(warm[i], cold[i], `step ${step}: ${name}`))
   }
 })
+
+test('段索引行按列存:时刻列读回的文本 = 存进去的文本 = toISOString,沿年份、日界与毫秒位生成', async () => {
+  const { rowTable, isoText } = await import('../../src/query/row-table.mjs')
+  const MAX = Date.parse('9999-12-31T23:59:59.999Z')
+  let x = 7
+  const rnd = (n) => { x = (x * 1103515245 + 12345) % 2147483648; return x % n }
+  const ms = [0, -1, MAX, MAX + 1, -62198755200000, Date.parse('2024-02-29T23:59:59.999Z'), Date.parse('2026-12-31T23:59:59.000Z')]
+  for (let i = 0; i < 4000; i++) ms.push(rnd(2) ? rnd(MAX) + rnd(1000) : -rnd(1e12) * 1000 - rnd(1000))
+  // days alternating and repeating, so a row's day is never assumed to be the one read before it
+  for (let i = 0; i < 200; i++) ms.push(Date.parse('2026-11-01T00:00:00Z') + (i % 3 === 0 ? -1 : i % 3) * 86_399_990 + i)
+  const entries = ms.map((m, i) => ({ id: `r${i}`, ts: new Date(m).toISOString() }))
+  ms.forEach((m, i) => assert.equal(isoText(m), entries[i].ts)) // the decoder alone: a wrong one would also refuse to encode, unseen below
+  const view = rowTable(entries)
+  for (let pass = 0; pass < 2; pass++) // forwards, then backwards
+    for (let k = 0; k < entries.length; k++) { const i = pass ? entries.length - 1 - k : k; assert.equal(view.at(i).ts, entries[i].ts, `ms ${ms[i]}`) }
+})

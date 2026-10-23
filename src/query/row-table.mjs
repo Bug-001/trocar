@@ -21,7 +21,7 @@ const resize = (a, cap) => { const b = new a.constructor(cap); b.set(a); return 
 const isoMs = (v) => {
   if (v.charCodeAt(v.length - 1) !== 90) return null; // 'Z': toISOString always ends so
   const ms = Date.parse(v);
-  return Number.isFinite(ms) && new Date(ms).toISOString() === v ? ms : null;
+  return Number.isFinite(ms) && isoText(ms) === v ? ms : null;
 };
 const ownNo = (pre, v) => {
   if (pre === null || !v.startsWith(pre)) return null;
@@ -48,9 +48,22 @@ const sized = (v) => Math.ceil(CHAR_HEAP * (typeof v === 'string' ? v.length : 0
 
 function store(own) { return { own, pre: own == null ? null : `${own}:`, keys: null, cols: null, n: 0, cap: 0, exc: new Map(), Row: null, heap: TABLE_HEAP }; }
 
+// an ISO cell back to its text: the same string as `new Date(ms).toISOString()` (which costs ~0.7 µs, and a scan reads every row's
+// time), from the day's 'YYYY-MM-DDT' (rows run in time order, so one slot holds it) and the time of day; years outside 0000–9999
+// (a sign and six digits) go through toISOString
+const DAY = 864e5, MAX_MS = 253402300800000, p2 = (n) => (n < 10 ? '0' : '') + n;
+let day = NaN, dayText = '';
+export function isoText(ms) {
+  if (!(ms >= 0 && ms < MAX_MS)) return new Date(ms).toISOString();
+  const d = Math.floor(ms / DAY);
+  if (d !== day) { day = d; dayText = new Date(d * DAY).toISOString().slice(0, 11); }
+  const t = ms - d * DAY, h = Math.floor(t / 36e5), m = Math.floor(t / 6e4) % 60, sec = Math.floor(t / 1e3) % 60, f = t % 1e3;
+  return `${dayText}${p2(h)}:${p2(m)}:${p2(sec)}.${f < 100 ? (f < 10 ? '00' : '0') : ''}${f}Z`;
+}
+
 function get(s, col, i) {
   const c = col.codes[i];
-  return c >= DICT ? col.dict[c - DICT] : c === NULL ? null : c === NUM ? col.pay[i] : c === ISO ? new Date(col.pay[i]).toISOString() : s.pre + col.pay[i];
+  return c >= DICT ? col.dict[c - DICT] : c === NULL ? null : c === NUM ? col.pay[i] : c === ISO ? isoText(col.pay[i]) : s.pre + col.pay[i];
 }
 
 function put(s, col, i, v) {
@@ -146,5 +159,10 @@ export function rowTable(entries = [], own = null) {
 /** heapOf(...views) → the V8 heap their stores hold (the constants above), each store once however many views share it;
  *  what is no view holds none here. */
 export const heapOf = (...views) => { let n = 0; for (const s of new Set(views.filter(isRowTable).map(RowView.store))) n += s.heap; return n; };
+// A view's cells with no row object: `keysOf(view)` its columns, `wholeAt(view, i)` row i when it is kept whole (else undefined),
+// `cellAt(view, c, i)` row i's value in column c.
+export const keysOf = (view) => RowView.store(view).keys;
+export const wholeAt = (view, i) => { const s = RowView.store(view); return s.exc.size ? s.exc.get(i) : undefined; };
+export const cellAt = (view, c, i) => { const s = RowView.store(view); return get(s, s.cols[c], i); };
 /** isRowTable(x) → whether x is a view rowTable made. */
 export function isRowTable(x) { return x instanceof RowView; }

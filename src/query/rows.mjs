@@ -12,7 +12,7 @@ import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mj
 import { segmentFiles, warmSegmentIndex, problemEntry, recordsId, grownFrom } from './index-build.mjs';
 import { trocarHome } from '../paths.mjs';
 import { warmCache, fsTag } from './warm.mjs';
-import { rowTable, heapOf } from './row-table.mjs';
+import { rowTable, heapOf, keysOf, wholeAt, cellAt } from './row-table.mjs';
 
 // WARM (D63 ①, 1.6 §4.1 附近的查询): the rows of one segment come from the ONE warm reading of its index
 // (src/query/index-build.mjs `warmSegmentIndex`, which `allSegments` reads through as well), kept against that
@@ -71,7 +71,7 @@ function rowList(segs, old) {
     if (!a) { index.set(sid, (a = [])); mine.add(a); } else if (!mine.has(a)) { index.set(sid, (a = a.slice())); mine.add(a); }
     a.push(at); slots++;
   };
-  if (!extend) for (const p of parts) for (let k = 0; k < p.end - p.start; k++) { const sid = p.d.at(k).session_id; if (sid) place(sid, p.start + k); }
+  if (!extend) for (const p of parts) for (let k = 0; k < p.end - p.start; k++) { const sid = cellAt(p.d, 0, k); if (sid) place(sid, p.start + k); }
   for (let j = i; j < segs.length; j++) {
     const { segment, records: view, entry } = segs[j], was = grown && j === i ? old.parts[i] : null;
     const start = was ? was.start : j ? parts[j - 1].end : 0, k0 = was ? was.end - was.start : 0;
@@ -97,34 +97,40 @@ function rowList(segs, old) {
   return { rows, parts, index, slots, heap };
 }
 
-// A row of a row list: the segment's index row (row-table.mjs flyweight) and what the list derives, read through getters. One class
-// per index key set, so a row is three references; a row the segment keeps whole is a frozen plain object.
-const classes = new WeakMap(), byKeys = new Map();
+// A row of a row list: ONE read-only flyweight (part, position) whose getters read the segment's column store and the list's derived
+// one straight (row-table.mjs `cellAt`), so a scan makes one small object per row; it keeps the last cell it read, so a sort that
+// compares `ts` decodes each row's time once. One class per index key set; a row the segment keeps whole is a frozen plain object.
+const byKeys = new Map(), classes = new WeakMap();
 const LISTED = { toJSON() { return { ...this }; } };
 function listRow(p, k) {
-  const b = p.view.at(k);
-  if (Object.isFrozen(b)) { const d = p.d.at(k); return Object.freeze(Object.assign(Object.create(LISTED), b, { segment: p.segment, lineNo: lineOf(b.id), session_id: d.session_id, synthesized: d.synthesized })); }
-  const proto = Object.getPrototypeOf(b);
-  let Row = classes.get(proto);
+  const x = wholeAt(p.view, k);
+  if (x) return Object.freeze(Object.assign(Object.create(LISTED), x, { segment: p.segment, lineNo: lineOf(x.id), session_id: cellAt(p.d, 0, k), synthesized: cellAt(p.d, 1, k) }));
+  const keys = keysOf(p.view);
+  let Row = classes.get(keys);
   if (!Row) {
-    const keys = Object.keys(b.toJSON()), id = JSON.stringify(keys);
+    const id = JSON.stringify(keys);
     if (!byKeys.has(id)) byKeys.set(id, rowClass(keys));
-    classes.set(proto, (Row = byKeys.get(id)));
+    classes.set(keys, (Row = byKeys.get(id)));
   }
-  return new Row(b, p, k);
+  return new Row(p, k);
 }
 function rowClass(keys) {
   class Row {
-    #b; #p; #k;
-    constructor(b, p, k) { this.#b = b; this.#p = p; this.#k = k; }
-    static base(r) { return r.#b; }
+    #p; #k; #c = -1; #v;
+    constructor(p, k) { this.#p = p; this.#k = k; }
+    static cell(r, c) { if (r.#c !== c) { r.#v = cellAt(r.#p.view, c, r.#k); r.#c = c; } return r.#v; }
     get segment() { return this.#p.segment; }
-    get lineNo() { return lineOf(this.#b.id); }
-    get session_id() { return this.#p.d.at(this.#k).session_id; }
-    get synthesized() { return this.#p.d.at(this.#k).synthesized; }
-    toJSON() { return { ...this.#b.toJSON(), segment: this.segment, lineNo: this.lineNo, session_id: this.session_id, synthesized: this.synthesized }; }
+    get lineNo() { return lineOf(this.id); }
+    // the derived columns, in the order rowList writes them: session_id, synthesized (always scalars, so never a row kept whole)
+    get session_id() { return cellAt(this.#p.d, 0, this.#k); }
+    get synthesized() { return cellAt(this.#p.d, 1, this.#k); }
+    toJSON() {
+      const o = {};
+      for (const key of keys) o[key] = this[key];
+      return Object.assign(o, { segment: this.segment, lineNo: this.lineNo, session_id: this.session_id, synthesized: this.synthesized });
+    }
   }
-  for (const key of keys) Object.defineProperty(Row.prototype, key, { get() { return Row.base(this)[key]; } });
+  keys.forEach((key, c) => Object.defineProperty(Row.prototype, key, { get() { return Row.cell(this, c); } }));
   return Row;
 }
 
@@ -157,10 +163,13 @@ class RowList {
 /** as_of (附录 C.5): the newest call time in the WHOLE index — what every number of an index-reading document is
  *  counted as of (invariant 4); null when the index has no row with a time. */
 export const asOf = (rows) => {
+  if (asOfs.has(rows)) return asOfs.get(rows);
   let m = null;
   for (const r of rows) { const ts = r.ts; if (ts && (m == null || String(ts) > m)) m = String(ts); }
+  if (rows instanceof RowList) asOfs.set(rows, m); // a row list never changes (a moved segment is a new list)
   return m;
 };
+const asOfs = new WeakMap();
 
 // The member arrays a row list's groups made, by session, through WeakRefs: alive exactly while something (a session's plan) holds
 // them, so the same session asked again gets the same array.
