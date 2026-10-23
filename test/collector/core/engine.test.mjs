@@ -243,3 +243,23 @@ test('engine: the stop is bounded — a connection that does not end after the c
     await within(closed, 1000, 'the client socket closed by the cut')
   }
 })
+
+// the stop owes the rows (1.6 §5.2): off closed an idle keep-alive at once (trocar's FIN) and its row is written, but the agent keeps its half open —
+// that socket holds the listener's close past the bound with no flow left. The stop closes it; it is no stop-failed and no "rows may be missing" (D38).
+test('engine: a stop after off closed a keep-alive the agent holds half-open — no flow open, the row written — resolves within the bound, every listener closed (1.6 §5.2, V99, D38)', T, async () => {
+  const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
+  const up = tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)) }, (s) => { s.on('error', () => {}); s.on('data', () => s.write('HTTP/1.1 200 OK\r\ncontent-length: 1\r\n\r\nx')) })
+  await new Promise((r) => up.listen(0, '127.0.0.1', r))
+  const trocarCa = createCa(), rows = []
+  const engine = createEngine({ redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 7, agent: 'x', decrypt: true }), issuer: createLeafIssuer(loadCa(trocarCa)), upstreamCa: upCa.certPem, store: { envelope() {}, flow(r) { rows.push(r) } } })
+  const { port } = await engine.listen({})
+  const raw = net.connect({ port, host: '127.0.0.1', allowHalfOpen: true }); raw.on('error', () => {}) // the agent keeps its half after trocar's FIN
+  const c = tls.connect({ socket: raw, servername: 'relay.test', ca: [trocarCa.certPem, upCa.certPem], allowHalfOpen: true }, () => c.write('GET / HTTP/1.1\r\nhost: relay.test\r\n\r\n')); c.on('error', () => {})
+  await within(new Promise((r) => c.on('data', (d) => { if (String(d).endsWith('x')) r() })), 4000, 'the response')
+  engine.drain({ agents: null }) // off: the idle keep-alive is closed at once
+  await within((async () => { while (rows.length === 0) await new Promise((r) => setTimeout(r, 10)) })(), 8000, 'the flow row')
+  const t0 = Date.now()
+  await engine.close({ graceMs: 0, boundMs: 300 }) // resolves only once every door's listener has closed: that socket closed too
+  assert.ok(Date.now() - t0 < 300, `close() took ${Date.now() - t0} ms`)
+  c.destroy(); up.close()
+})
