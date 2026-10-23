@@ -24,6 +24,7 @@ import { createDesk, applySession, applyLane, readTouched, mergeTouch, readLedge
 import { breakSteps } from './analysis.mjs'
 import { loadFold, saveFold } from './fold.mjs'
 import { landPlayhead, createStepReads } from './follow.mjs'
+import { createLoader } from './loader.mjs'
 import { createPoller, INTERVAL } from '../core/poll.mjs'
 import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
@@ -372,8 +373,13 @@ function openDesk(ctx, route0) {
   // ── a step's own reads: its lane, its open rows' bodies, the lane's older pages (2.3 §读与画; 3.5:69) ─────────────────
   // the session's own reads name it; a `block` read names only its refs (3.5: `block` takes --ref alone, any other parameter is refused)
   const read = (name, p, opts) => api.get(name, name === 'block' ? p : { id: s.id, ...p }, opts)
-  // a lane read of the poll or the ledger chain, its answer counted in bytes()
-  const laneRead = (signal) => (name, q) => read(name, q, { signal, hold: false }).then((r) => { if (r && r.ok) size += r.bytes || 0; return r })
+  // every read but the poll's own `session` goes through the desk's loader (2.3 加载器): at most 3 in flight, the next one at once
+  const loader = createLoader({ max: 3 })
+  const join = (a, b) => (a && b ? AbortSignal.any([a, b]) : a || b)
+  const via = (pri, name, p, o = {}) => loader.run(pri, (sig) => read(name, p, { ...o, signal: join(o.signal, sig) }))
+    .catch((e) => ({ ok: false, status: 0, error: String((e && e.message) || e) }))
+  // a lane read of the poll (pri 1) or the ledger chain (pri 2), its answer counted in bytes()
+  const laneRead = (signal, pri = 1) => (name, q) => via(pri, name, q, { signal, hold: false }).then((r) => { if (r && r.ok) size += r.bytes || 0; return r })
   const laneIndex = (key, rid) => { const r = s.desk.laneRids.get(key); return r ? r.indexOf(rid) : -1 }
   // the refs of a held step's bodies on show and not cached: its reply parts (the window's default-open kind, 2.3:195, and the raw panel) and the rows the reader opened
   function openRefs(rid) {
@@ -409,7 +415,7 @@ function openDesk(ctx, route0) {
   function makeStepReads() {
     const key = sessionKey(), mine = () => !s.dead && key === sessionKey()
     return createStepReads({
-      get: read, need,
+      get: read, need, loader,
       onLane: (rid, r, q) => {
         if (!mine()) return
         const a = r && r.ok ? r.data : null
@@ -437,7 +443,7 @@ function openDesk(ctx, route0) {
     if (!key || chaining || (ledgerFailed && !byPoll) || !desk.held.has(key) || ledgerDone(desk, key)) return
     chaining = true
     const gone = () => s.dead || sk !== sessionKey() || desk !== s.desk || !!(signal && signal.aborted)
-    steps.laneSlot(() => readLedger(desk, key, laneRead(signal), gone)).then((r) => {
+    steps.laneSlot(() => readLedger(desk, key, laneRead(signal, 2), gone)).then((r) => {
       chaining = false
       if (!r || gone()) return
       ledgerFailed = !r.ok
@@ -558,7 +564,7 @@ function openDesk(ctx, route0) {
     // the followed step's open reply bodies in one read before it is drawn (C3), so its newest reply shows with its bytes
     if (s.follow && moved && !first) {
       const refs = openRefs(s.playRid)
-      if (refs.length) { await loadBodies(api, refs, { signal }); if (stale()) return }
+      if (refs.length) { await loadBodies({ get: (n, p, o) => via(0, n, p, o) }, refs, { signal }); if (stale()) return }
     }
     // brush window: a new session starts on the whole of it when that fits the lane, else on the last steps that fit — or, when the
     // URL named an earlier step, on the ones around it. On live growth keep the reader's window, extending it when parked at the end.
@@ -663,6 +669,7 @@ function openDesk(ctx, route0) {
     detach()
     s.dead = true
     reads.abort()
+    loader.clear()
     for (const f of offs) { try { f() } catch (e) { console.error(e) } }
     clearOverrides(sessionKey())
   }
