@@ -13,7 +13,7 @@
     {"a":"open","p":{"via":"short","f":0.506}}
   ],
   "screenshot": "test/web-v2/browser/shots/seq/I-rate-replay-2.png",
-  "status": "open",
+  "status": "fixed",
   "detail": "the desk reads `sessions` on every 1.5 s session tick (pollOnce → loadSessions), against 4.4's 3 s for that name",
   "owner": "desk (lane D)",
   "suspect": "src/web/v2/replay/replay.mjs:334"
