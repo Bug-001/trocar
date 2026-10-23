@@ -2,6 +2,9 @@
 // no screen can poll faster than 4.4's table, keep reading while hidden, or hammer a failing read. Pure but for the timer and the
 // document's visibility, both injectable.
 
+// the periods of 4.4 §live-poll's table, by query name (one fact, one place)
+export const INTERVAL = Object.freeze({ status: 5000, sessions: 15000, session: 1500, other: 30000 })
+
 // ── the poll loop: one read in flight, back-off after a failure (1.5 K-29) ──────────────────────────────────────────────
 export const BACKOFF_MAX_MS = 30000
 // the wait after `n` (≥ 1) failures in a row: the poll interval doubled n times, at most BACKOFF_MAX_MS
@@ -39,4 +42,25 @@ export function createPoller({ run, now = Date.now, base, alive = () => true, id
     } finally { busy = false }
   }
   return { poll }
+}
+
+// startPoll({run, base, now, doc}) → {poll(byReader), stop()}: a createPoller driven by a timer every `base` ms (a fixed phase from
+// the start), idle while `doc` is hidden, one read at once on start (when visible) and the moment `doc` is visible again. A read that throws
+// counts as a failure. After stop() nothing reads and the listener is gone.
+export function startPoll({ run, base, now = () => Date.now(), doc = globalThis.document }) {
+  let stopped = false, timer = 0
+  const safe = async () => { try { return await run() } catch { return { ok: false } } }
+  const p = createPoller({ run: safe, base, now, alive: () => !stopped, idle: () => !!(doc && doc.hidden) })
+  const tick = () => { if (stopped) return; timer = setTimeout(tick, base); p.poll(false) }
+  const onVis = () => { if (doc && !doc.hidden) p.poll(true) }
+  if (doc && doc.addEventListener) doc.addEventListener('visibilitychange', onVis)
+  timer = setTimeout(tick, base)
+  if (!(doc && doc.hidden)) p.poll(true)
+  return {
+    poll: (byReader = true) => p.poll(byReader),
+    stop() {
+      stopped = true; clearTimeout(timer)
+      if (doc && doc.removeEventListener) doc.removeEventListener('visibilitychange', onVis)
+    },
+  }
 }

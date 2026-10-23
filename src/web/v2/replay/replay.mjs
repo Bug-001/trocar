@@ -19,7 +19,7 @@ import { createDesk, applySession, applyLane, readTouched, mergeTouch, readLedge
 import { breakSteps } from './analysis.mjs'
 import { loadFold, saveFold } from './fold.mjs'
 import { landPlayhead, createStepReads } from './follow.mjs'
-import { createPoller } from '../core/poll.mjs'
+import { createPoller, INTERVAL } from '../core/poll.mjs'
 import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
 import { renderContextWindow, wireCtxWin, emptyFrameHtml, rowKeys } from './ctxwin.mjs'
@@ -37,7 +37,7 @@ import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
 import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION } from '../labels/replay.mjs'
 import { readFailure } from '../core/ui.mjs'
 
-const POLL_MS = 1500
+const POLL_MS = INTERVAL.session
 const BUSY_MS = 150 // 2.3 §车道未到手: how long a step whose lane is not held leaves the desk as it is
 const SLICE_MS = 8 // 3.7: an answer is applied in slices of at most this long, yielding between them
 const SLICE_ROWS = 100

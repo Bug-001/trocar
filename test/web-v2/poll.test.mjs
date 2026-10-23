@@ -1,8 +1,8 @@
 // test/web-v2/poll.test.mjs — the board's one poll engine (core/poll.mjs; 1.5 K-29, 4.4 §live-poll): createPoller's policy over a
-// fake clock.
-import test from 'node:test'
+// fake clock, and startPoll's timer and visibility over node's mock timers for every period of 4.4's table.
+import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
-import { createPoller, backoffMs, BACKOFF_MAX_MS } from '../../src/web/v2/core/poll.mjs'
+import { createPoller, startPoll, backoffMs, BACKOFF_MAX_MS, INTERVAL } from '../../src/web/v2/core/poll.mjs'
 
 // ── the poll loop (1.5 K-29): a fake clock and a fake reader ────────────────────────────────────────────────────────────
 function rig(answers) {
@@ -114,3 +114,53 @@ test('A7 (C2): after a slow success without pending no timer read comes before 3
   }
 })
 
+// ── startPoll over every period of 4.4's table (mock timers; a fake document and reader) ─────────────────────────────────
+import fs from 'node:fs'
+
+test('INTERVAL is 4.4 §live-poll\'s table', () => {
+  const all = fs.readFileSync(new URL('../../spec/01-trocar-rfc/4.4-server.md', import.meta.url), 'utf8').split('\n')
+  const rows = all.slice(all.findIndex((l) => l.includes('**live-poll**')))
+  const period = (name) => Number(/(\d+(?:\.\d+)?) s/.exec(rows.find((l) => l.includes(`| \`${name}\``)))[1]) * 1000
+  assert.deepEqual(INTERVAL, { status: period('status'), sessions: period('sessions'), session: period('session'), other: period('classes') })
+})
+
+function world(answer) {
+  const listeners = new Map(), reads = []
+  const doc = { hidden: false, addEventListener: (t, f) => listeners.set(t, f), removeEventListener: (t, f) => { if (listeners.get(t) === f) listeners.delete(t) } }
+  const run = async () => { reads.push(Date.now()); return answer(reads.length) }
+  const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)) }
+  return { doc, run, reads, listeners, settle, vis: () => listeners.get('visibilitychange')() }
+}
+
+for (const base of new Set(Object.values(INTERVAL))) {
+  test(`startPoll base ${base}: after k failures no timer read before backoffMs(k); a success brings back the base`, async (t) => {
+    mock.timers.enable({ apis: ['setTimeout', 'Date'] }); t.after(() => mock.timers.reset())
+    for (let k = 1; k <= 5; k++) {
+      const w = world((n) => (n <= k ? { ok: false } : {}))
+      const p = startPoll({ run: w.run, base, doc: w.doc })
+      await w.settle()
+      while (w.reads.length < k + 2) { mock.timers.tick(base); await w.settle() }
+      for (let i = 1; i <= k; i++) {
+        const gap = w.reads[i] - w.reads[i - 1]
+        assert.ok(gap >= backoffMs(i, base), `k=${k}: read ${i} came ${gap} ms after failure ${i}, the back-off is ${backoffMs(i, base)}`)
+      }
+      assert.equal(w.reads[k + 1] - w.reads[k], base, `k=${k}: one success brings back the plain period`)
+      p.stop()
+    }
+  })
+
+  test(`startPoll base ${base}: hidden reads nothing; visible again reads once at once; stop() reads nothing and drops the listener`, async (t) => {
+    mock.timers.enable({ apis: ['setTimeout', 'Date'] }); t.after(() => mock.timers.reset())
+    const w = world(() => ({}))
+    const p = startPoll({ run: w.run, base, doc: w.doc })
+    await w.settle(); assert.equal(w.reads.length, 1, 'one read at once on start')
+    w.doc.hidden = true
+    for (let i = 0; i < 10; i++) { mock.timers.tick(base); await w.settle() }
+    assert.equal(w.reads.length, 1, 'hidden: zero reads over 10 periods')
+    w.doc.hidden = false; w.vis(); await w.settle()
+    assert.equal(w.reads.length, 2, 'visible again: exactly one read at once')
+    p.stop(); assert.equal(w.listeners.size, 0, 'stop() removes the listener')
+    for (let i = 0; i < 10; i++) { mock.timers.tick(base); await w.settle() }
+    assert.equal(w.reads.length, 2, 'after stop(): zero reads')
+  })
+}
