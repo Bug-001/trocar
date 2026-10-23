@@ -31,7 +31,7 @@ import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
 import { lineFile, saveSidecar, loadSidecar } from './line-file.mjs';
 
-export const PROJ_V = 7;
+export const PROJ_V = 8;
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
 const SHARE_DEPTH = 3, SHARE_MIN = 48;
 // rows and shared values read back are kept by what they weigh in the heap (a row grows with its context: a count let a long
@@ -115,6 +115,13 @@ export function numTable() {
         for (let i = 0; i < ok.length; i++) if (ov[i] >= 0) put(ok[i], ov[i]);
       }
       put(x, v);
+    },
+    // dump() → [keys, values] as they lie; load(dump) into an empty table gives it the same entries
+    dump: () => [keys.slice(), vals.slice()],
+    load([ks, vs]) {
+      if (n || ks.length !== vs.length || ks.length & (ks.length - 1)) throw new RangeError('not a table of numbers of this shape');
+      cap = ks.length; keys = ks.slice(); vals = vs.slice(); n = 0;
+      for (const v of vals) if (v >= 0) n++;
     },
   };
 }
@@ -261,13 +268,13 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     id = newId();
     for (const m of [at, rowAt, rowCache, brks, sharedAt, sharedCache, seen]) m.clear();
     brkAt[0].length = brkAt[1].length = 0;
-    bytes = savedAt = 0;
+    bytes = savedAt = 0; saved = null;
     if (write) { try { fs.rmSync(file, { force: true }); } catch { /* cut before the next append */ } }
     lines.cut(0);
     errors.push({ where: 'projection', code: 'projection-rebuilt', level: 'note', reason });
   };
 
-  let head = true, bad = null, bytes = 0, id = newId(), savedAt = 0, heldRows = false;
+  let head = true, bad = null, bytes = 0, id = newId(), savedAt = 0, heldRows = false, saved = null;
   // the sidecar (4.3 §4 旁索引) of this header's id: the indexes and the breaks of its first `bytes`, or nothing of it
   function loaded() {
     const sc = loadSidecar({ fs, file });
@@ -276,6 +283,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
       const p = sc.parts;
       for (const [n, idx] of [['d', at], ['r', rowAt], ['s', sharedAt]]) idx.load([p[`${n}.k`], p[`${n}.o`], p[`${n}.l`]]);
       for (let i = 0; i < p['b.o'].length; i++) take({ b: lineAt([p['b.o'][i], p['b.l'][i]]).b }, p['b.o'][i], p['b.l'][i]);
+      saved = Object.fromEntries(Object.entries(p).filter(([n]) => !/^([drs]\.[kol]|b\.[ol])$/.test(n)));
     } catch {
       for (const m of [at, rowAt, sharedAt, brks]) m.clear();
       brkAt[0].length = brkAt[1].length = 0;
@@ -362,17 +370,22 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     brks,
     brk: (prevBid, curBid) => brks.get(pairKey(prevBid, curBid)),
     append,
-    /** saveIndex() → whether it wrote the sidecar (4.3 §4 旁索引): written stores only, none while the store holds `t` rows or
-     *  when nothing grew since the last. */
-    saveIndex() {
+    /** saveIndex(extra) → whether it wrote the sidecar (4.3 §4 旁索引): written stores only, none while the store holds `t` rows or
+     *  when nothing grew since the last. `extra`: [[name, array]] parts a caller adds (no name of the form `<d|r|s>.<k|o|l>`,
+     *  `b.<o|l>`), handed back by the next open that loads the sidecar as `saved`. */
+    saveIndex(extra = []) {
       if (!lines.settled || heldRows || !lines.bytes || lines.bytes === savedAt) return false;
       const parts = [];
       for (const [n, idx] of [['d', at], ['r', rowAt], ['s', sharedAt]]) { const [k, o, l] = idx.dump(); parts.push([`${n}.k`, k], [`${n}.o`, o], [`${n}.l`, l]); }
-      parts.push(['b.o', Float64Array.from(brkAt[0])], ['b.l', Uint32Array.from(brkAt[1])]);
+      parts.push(['b.o', Float64Array.from(brkAt[0])], ['b.l', Uint32Array.from(brkAt[1])], ...extra);
       saveSidecar({ fs, file, head: { id, bytes: lines.bytes }, parts });
       savedAt = lines.bytes;
       return true;
     },
+    /** Whether its sidecar covers every line it holds (saveIndex wrote it, or nothing grew since): none while it holds `t` rows. */
+    get indexed() { return lines.settled && !heldRows && lines.bytes > 0 && lines.bytes === savedAt; },
+    /** What the sidecar this open loaded carried besides the indexes ({name: array}), or null (saveIndex). */
+    get saved() { return saved; },
     /** The header's id (taken now when the file is made or rebuilt); `bytes`: the length of the whole lines it holds. */
     get id() { return id; },
     get bytes() { return lines.bytes; },

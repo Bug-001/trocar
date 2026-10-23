@@ -209,8 +209,8 @@ export function compBuckets(flat) {
  * presents as a research finding. It also belongs here on principle (invariant 3): `<system-reminder>`
  * is Claude-Code-shaped knowledge, and the browser must not branch on a harness's wire shape.
  */
-function blockQuery(b) {
-  return queryOf(b, bodyTextOf(b));
+export function blockQuery(b) {
+  return isUserText(b) ? queryOf(b, bodyTextOf(b)) : null; // only a user text has one: no body text built for the rest
 }
 // …over a body text the caller already has (slimBlock builds it once for chars, preview and this).
 const isUserText = (b) => !!b && b.sec === 'messages' && b.role === 'user' && b.kind === 'text';

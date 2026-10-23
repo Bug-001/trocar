@@ -10,7 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
-import { extract, createExtractContext, materialize } from '../../src/view/extract.mjs';
+import { extract, createExtractContext, materialize, materializeAttrs } from '../../src/view/extract.mjs';
 import { assembleSession } from '../../src/view/assemble.mjs';
 import { parseTextRef } from '../../src/raw/refs.mjs';
 import { fieldTextOf } from '../../src/dissect/record-fields.mjs';
@@ -208,7 +208,8 @@ const listsOf = (rows) => {
   const memo = new Map();
   const of = (rid, key) => {
     if (memo.has(rid + key)) return memo.get(rid + key);
-    const row = rows.get(rid), v = materialize(row.base == null ? null : of(row.base, key), key === 'list' ? row : row.mb);
+    const row = rows.get(rid), was = row.base == null ? null : of(row.base, key);
+    const v = key === 'attrs' ? materializeAttrs(was, row) : materialize(was, key === 'list' ? row : row.mb);
     memo.set(rid + key, v);
     return v;
   };
@@ -244,7 +245,7 @@ test('(b) id-level == item-level: each stitched list is the planner-stitched fla
     const ids = new Set(stitchedIds(recs));
     assert.ok(steps.some((s) => ids.has(String(s.id))), name);
     for (const s of steps) {
-      const rid = String(s.id), row = rows.get(rid), list = of(rid, 'list'), at = `${name} ${rid}`;
+      const rid = String(s.id), row = rows.get(rid), list = of(rid, 'list'), attrs = of(rid, 'attrs'), at = `${name} ${rid}`;
       assert.equal(list.length, s.flat.length, `${at} length`);
       s.flat.forEach((b, i) => {
         const d = defs.get(list[i]);
@@ -253,7 +254,7 @@ test('(b) id-level == item-level: each stitched list is the planner-stitched fla
           assert.deepEqual([d.sec, d.role, d.kind, d.fh], [b.sec, b.role, b.kind, fh(whole.get(rid)[i])], `${at} #${i} reply block`);
           assert.ok(d.ref == null || !fromRequest(d.ref), `${at} #${i} is a reply definition`);
         }
-        const { query, ...a } = row.attrs[i] || {};
+        const { query, ...a } = attrs[i] || {};
         assert.deepEqual(a, attrsWant(b), `${at} #${i} attrs`);
       });
       const mb = [];

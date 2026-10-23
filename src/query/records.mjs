@@ -11,7 +11,6 @@ import { recordId } from '../collector/core/record/segments.mjs';
 import { normalizeRecord } from '../raw/ingest.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
 import { openSealed, createLineCache } from '../raw/reader.mjs';
-import { FRAME_BYTES } from '../raw/writer.mjs';
 import { R } from '../raw/format.mjs';
 import { segmentIndex, segmentSource } from './index-build.mjs';
 import { trocarHome } from '../paths.mjs';
@@ -139,15 +138,15 @@ function plainReader(file, fs) {
 }
 
 // A sealed segment knows where every record is: its own index names the line number of each frame.
-// Every read of one sealed file within ONE synchronous stretch shares one open reader and one pair of decode caches: a cold
-// fold asks for a long session's records in chunks, and an open per chunk decoded the same frames and rebuilt the same delta
-// chains again (3.5 #21 — brotli was 3.8 s of a 25 s fold of a 5.9k-call session). The first open schedules one setImmediate
-// that closes every reader and empties both caches, so no fd and no decoded frame outlives the read: a sealed file may be
-// replaced or deleted (Windows refuses that while an fd is open), and the heap budget never pays for them.
-// The frames are kept by their decoded bytes (a frame is FRAME_BYTES of lines, more when one record is larger): twelve frames'
-// worth measured 17.6 s against eight's re-decodes. A byte-bounded cache of Buffers is what the line cache is, so it is one.
-const SHARED_FRAME_BYTES = 12 * FRAME_BYTES;
-const SHARED_LINE_BYTES = 32 << 20;    // rebuilt delta predecessors of one chunk: 32 MiB kept the sibling chains of the fold resident
+// Every read of one sealed file within ONE synchronous stretch shares one open reader: a cold fold asks for a long session's
+// records in chunks. The first open schedules one setImmediate that closes every reader, so no fd outlives the stretch: a sealed
+// file may be replaced or deleted (Windows refuses that while an fd is open), and no reader's line maps stay in the heap.
+// The decoded frames and the rebuilt lines outlive the stretch (3.5 §冷路径, D71 ②): the fold runs in slices, and a slice that ends
+// inside a frame made the next one decode it again (4 216 brotli decodes for 1 113 frames). They are keyed by the file's identity
+// (dev:ino:size:mtime) and the frame / record number — a replaced file is another identity — and byte-capped; releaseDecoded()
+// empties them when the worker goes idle.
+const SHARED_FRAME_BYTES = 48 << 20;
+const SHARED_LINE_BYTES = 16 << 20;
 const SHARED_FILES = 32;               // open fds of one stretch; past it the least recently opened one is closed
 // an open reader's line maps (its index's record table and the line → record map): 15.75 MB for 32 readers over the user's
 // sealed segments (a heap diagnosis, 2026-10-22)
@@ -157,21 +156,34 @@ const READER_HEAP = 512 << 10;
  *  the V8 heap (12 decoded frames and 64 lines of 0.5 MB: heapUsed +0.11 MB, external +78 MB, 2026-10-22): their byte caps
  *  bound the process's resident memory, not its heap. */
 export const STRETCH_HEAP = SHARED_FILES * READER_HEAP;
-const shared = { files: new Map(), frameCache: createLineCache(SHARED_FRAME_BYTES), lineCache: createLineCache(SHARED_LINE_BYTES), armed: false };
+const decoded = { frames: createLineCache(SHARED_FRAME_BYTES), lines: createLineCache(SHARED_LINE_BYTES) };
+/** releaseDecoded(): empties the decoded frames and rebuilt lines (the worker's idle point). */
+export function releaseDecoded() { decoded.frames.clear(); decoded.lines.clear(); }
+const shared = { files: new Map(), armed: false };
 const dropReader = (e) => { try { e.sf.close(); } catch { /* already closed: nothing to release */ } };
 function releaseShared() {
   for (const e of shared.files.values()) dropReader(e);
-  shared.files.clear(); shared.frameCache.clear(); shared.lineCache.clear(); shared.armed = false;
+  shared.files.clear(); shared.armed = false;
 }
 // the file's identity: a replaced file (rename, rewrite) is a different reader, even within one stretch
 const statKey = (st) => `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}`;
+// an injected fs (tests) is another file system: its dev:ino may name another file
+const fsIds = new WeakMap();
+let fsSeq = 0;
+const fsId = (fs) => { let n = fsIds.get(fs); if (n === undefined) fsIds.set(fs, n = fsSeq++); return n; };
+// the reader keys its entries by its open (`<seq>:<dev>:<ino>:<n>`); the shared caches key them by the file's bytes
+const byIdentity = (cache, id) => {
+  const k = (ck) => id + ck.slice(ck.lastIndexOf(':'));
+  return { get: (ck) => cache.get(k(ck)), set: (ck, v) => cache.set(k(ck), v) };
+};
 
 function sharedSealed(file, fs) {
   const key = statKey(fs.statSync(file));
   let e = shared.files.get(file);
   if (e && (e.key !== key || e.fs !== fs)) { dropReader(e); shared.files.delete(file); e = undefined; }
   if (e) return e;
-  const sf = openSealed(file, { fs, frameCache: shared.frameCache, lineCache: shared.lineCache });
+  const id = `${fsId(fs)}:${key}`;
+  const sf = openSealed(file, { fs, frameCache: byIdentity(decoded.frames, id), lineCache: byIdentity(decoded.lines, id) });
   const at = new Map();
   for (let i = 0; i < sf.count; i++) at.set(Number(sf.records[i][R.lineNo]) + 1, i);
   if (shared.files.size >= SHARED_FILES) { const [f, old] = shared.files.entries().next().value; dropReader(old); shared.files.delete(f); }

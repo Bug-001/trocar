@@ -34,6 +34,15 @@ export function saveSidecar({ fs = nodeFs, file, head, parts }) {
   } catch (e) { try { fs.rmSync(tmp, { force: true }); } catch { /* the next save */ } throw e; }
 }
 
+// a str part's strings, each decoded on its own: a split of one decoded string would give slices that keep all of it alive while any one
+// is kept (the indexes keep every key for as long as the file is open)
+function strings(b, from, to) {
+  const out = [];
+  for (let at = from - 1; from < to && at < to; from = at + 1) { at = b.indexOf(10, from); if (at < 0 || at > to) at = to; out.push(b.toString('utf8', from, at)); }
+  if (to > 0 && b[to - 1] === 10 && out.length) out.push('');
+  return out;
+}
+
 /** loadSidecar({fs, file}) → {head, parts: {name: array}} | null: missing, unreadable, of another version, short or long, or covering
  *  more than `file` holds or not ending at a line's end. */
 export function loadSidecar({ fs = nodeFs, file }) {
@@ -46,7 +55,7 @@ export function loadSidecar({ fs = nodeFs, file }) {
     let at = nl + 1;
     for (const [name, type, n] of desc) {
       if (!Number.isSafeInteger(n) || n < 0 || at + n > b.length || (type !== 'str' && (!TYPES[type] || n % TYPES[type].BYTES_PER_ELEMENT))) return null;
-      parts[name] = type === 'str' ? (n ? b.toString('utf8', at, at + n).split('\n') : []) : new TYPES[type](b.buffer.slice(b.byteOffset + at, b.byteOffset + at + n));
+      parts[name] = type === 'str' ? strings(b, at, at + n) : new TYPES[type](b.buffer.slice(b.byteOffset + at, b.byteOffset + at + n));
       at += n;
     }
     if (at !== b.length) return null;
