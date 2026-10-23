@@ -27,7 +27,6 @@ import * as W from '../labels/overview.mjs'
 import { WINDOW_LABEL, UNTITLED, READING } from '../labels/common.mjs'
 
 const DAY = 24 * 3600e3
-export const POLL = Object.freeze({ health: INTERVAL.status, sessions: INTERVAL.sessions, slow: INTERVAL.other })
 const NO_ANSWER = Object.freeze({ status: null, error: null }) // a read that handed back nothing: no cause class known
 
 // the route's window param, or 24h when it is not one of the three (1.7 §页头)
@@ -292,7 +291,7 @@ export function statsCardHtml(s, now) {
   const disk = diskBytes(s.classes)
   const head = `<section class="ovcard stats${other ? ' reading' : ''}"${other ? ' aria-busy="true"' : ''} aria-label="${esc(W.CARD.stats)}"><h2 class="ovh">${esc(W.CARD.stats)}</h2>` +
     (other ? `<p class="ovsub">${esc(READING)}</p>` : '') +
-    `<p class="ovsub">${esc(W.AS_OF(D.as_of ? fmtWhen(parseTs(D.as_of), now) : '—', POLL.slow / 1000))} · ${esc(W.SCOPE_LINE)}</p>` +
+    `<p class="ovsub">${esc(W.AS_OF(D.as_of ? fmtWhen(parseTs(D.as_of), now) : '—', INTERVAL.other / 1000))} · ${esc(W.SCOPE_LINE)}</p>` +
     (missing ? `<p class="ovsub warn">${esc(missing)}</p>` : '') + cov +
     (priceFail ? priceFailHtml(priceFail) : '')
   const foot = (disk != null ? `<p class="ovsub">${esc(W.DISK_USE(bytes(disk)))} · <a href="#/settings/storage">${esc(W.SEE_STORAGE)}</a></p>` : '') + `</section>`

@@ -6,7 +6,7 @@ import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import {
-  overviewItems, capCardHtml, itemsCardHtml, statsCardHtml, renderBody, recentRows, recentCardHtml, mount, POLL, SKELETON, headHtml,
+  overviewItems, capCardHtml, itemsCardHtml, statsCardHtml, renderBody, recentRows, recentCardHtml, mount, SKELETON, headHtml,
 } from '../../src/web/v2/overview/overview.mjs'
 import { capHealthPatch } from '../../src/web/v2/core/capture-verdict.mjs'
 import { backoffMs, INTERVAL } from '../../src/web/v2/core/poll.mjs'
@@ -66,7 +66,7 @@ test('#1 the capture card says a sentence for every capture state, a 503, a stal
   cases.push(['unknown with reason', { data: { ...quiet(), health: { state: 'unknown', reason: 'lock unreadable' } }, okAt: NOW }])
   const p = capHealthPatch({ ok: false, status: 503, error: 'health unreadable' }, NOW)
   cases.push(['503', { data: p.capH, okAt: p.capHOkAt }])
-  cases.push(['stale', { data: quiet(), okAt: NOW - 2 * POLL.health - 1 }])
+  cases.push(['stale', { data: quiet(), okAt: NOW - 2 * INTERVAL.status - 1 }])
   cases.push(['never read, failed', { data: null, okAt: null, err: 'ECONNREFUSED' }])
   cases.push(['unrecognized state', { data: { ...quiet(), health: { state: 'zz-new' } }, okAt: NOW }])
   cases.push(['read_errors', { data: { ...quiet(), health: { state: 'ok', since: iso(H), read_errors: 2 } }, okAt: NOW }])
