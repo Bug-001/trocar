@@ -178,6 +178,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   //           closeGroups(ids) is the other half — a door the plan no longer carries stops accepting and is forgotten.
   // The first host binds first, then the rest reuse the resolved port, so 127.0.0.1 and ::1 share one.
   const boundGroups = new Map() // group id → { port, servers }: the doors this engine already listens on
+  const accepted = new Set() // every socket a door accepted, until it closes: the stop closes what is left once the rows are written
   async function listen({ port = 0, hosts = ['127.0.0.1'], ingress: ing = null, groups = null } = {}) {
     const transparent = typeof redirector.lookup === 'function'
     const wanted = (groups || []).filter((g) => g && typeof g.id === 'string' && g.id !== '')
@@ -189,7 +190,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       const bindNext = () => {
         if (i >= hosts.length) { resolve(boundPort); return }
         const host = hosts[i++]
-        const srv = net.createServer(handler)
+        const srv = net.createServer((sock) => { accepted.add(sock); sock.once('close', () => accepted.delete(sock)); handler(sock) })
         srv.once('error', reject)
         srv.listen(boundPort, host, () => {
           srv.removeListener('error', reject)
@@ -241,7 +242,8 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   // every connection still there — one in its lookup, one whose gate failed or threw — so none outlives the cut. Then wait for every cut flow's row and
   // envelopes, so what the stop writes after it (daemon-stop) comes after them; a flow that has still not ended `boundMs` later rejects close() with   // `stop-failed` (the stop records it and goes on: the stop is bounded, V99). closing / waiting: what the first ask found; cut: what the grace left.
   async function close({ graceMs = 2000, boundMs = 2000, who = null } = {}) { // who: the command stopping the daemon (update / uninstall), named in the cut rows
-    const closing = Promise.all(servers.map((s) => new Promise((res) => s.close(res))))
+    let open = servers.length
+    const closing = Promise.all(servers.map((s) => new Promise((res) => s.close(() => { open--; res() }))))
     if (ingress) ingress.closeIdle() // handshakes and health tunnels are not flows: nothing of an agent's is lost, and they would hold close() for their idle timeout
     const asked = drain({ agents: null })
     let timer = null
@@ -251,10 +253,13 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     const cutNow = (e) => { try { const st = e.handle.state(); return st === 'cut' || st === 'closed' || st === 'done' } catch { return false } }
     left.cut += lookups.size + [...flows].filter((e) => !e.handle || !cutNow(e)).length // in its lookup, not yet a handle, or a gate that threw or failed open: the socket below cuts it
     for (const s of [...lookups.values(), ...[...flows].map((e) => e.socket)]) { try { s.destroy() } catch { /* already gone */ } }
-    const rest = (async () => { await Promise.allSettled([...lookups.keys()]); await Promise.allSettled([...active]); await drained({ agents: null }); await closing })()
+    // the rows written, a socket still on a door carries no flow (off's FIN on a keep-alive the agent has not closed yet, a handshake): closed here
+    const rest = (async () => { await Promise.allSettled([...lookups.keys()]); await Promise.allSettled([...active]); await drained({ agents: null }); for (const s of accepted) s.destroy(); await closing })()
     const late = await Promise.race([rest.then(() => false), new Promise((r) => { timer = setTimeout(() => r(true), boundMs) })])
     clearTimeout(timer)
-    if (late) throw Object.assign(new Error(`${flows.size + lookups.size} connection(s) had not ended ${boundMs} ms after the stop cut them; their rows may be missing`), { code: 'stop-failed' })
+    const unended = flows.size + lookups.size
+    if (late && unended) throw Object.assign(new Error(`${unended} connection(s) had not ended ${boundMs} ms after the stop cut them; their rows may be missing`), { code: 'stop-failed' })
+    if (late) throw Object.assign(new Error(`${open} listener(s) had not closed ${boundMs} ms after the stop although every connection was closed; no row is affected`), { code: 'stop-failed' })
     return { closing: asked.closing, waiting: asked.waiting, cut: left.cut }
   }
 
