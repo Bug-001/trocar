@@ -306,9 +306,11 @@ export function createExtractContext(store = null, seed = null) {
     }
     for (let i = path.length - 1; i >= 0; i--) {
       const r = path[i];
-      at = remember({ rid: r.rid, list: materialize(at && at.list, r), mb: materialize(at && at.mb, r.mb), attrs: materializeAttrs(at && at.attrs, r), depth: at && r.base != null ? at.depth + 1 : 0 });
+      at = { rid: r.rid, list: materialize(at && at.list, r), mb: materialize(at && at.mb, r.mb), attrs: materializeAttrs(at && at.attrs, r), depth: at && r.base != null ? at.depth + 1 : 0 };
     }
-    return at;
+    // only the list asked for is kept, not the chain's lists on the way to it: a lane's tip is what is asked again (its next call's
+    // base, a continuation's predecessor), and the memo's places are its lanes', not one walk's (MEMO)
+    return at && remember(at);
   }
   return {
     held: false, // a member before the ones being extracted has no row on disk (it failed): what follows is kept in memory only
