@@ -192,9 +192,12 @@ test('darwin: the cold read is local, the worker is warmed behind it, and a call
   const w = await modelWorld({ os: 'darwin' })
   const trocar = path.join(w.home, '.trocar')
   generate({ home: trocar, seed: 11, bytes: 3_000_000, segmentBytes: 1 << 20 })
-  const box = await liveUnit({ w, platform: 'darwin' })
+  // the worker the start-up sweep forks (4.4 §答案文件) leaves on its idle clock first: the cold path is the one with no worker running
+  const forks = []
+  const box = await liveUnit({ w, platform: 'darwin', daemon: { queryIdleMs: 5000, fork: (...a) => { const c = workerFork(...a); forks.push(c); return c } } })
   box.unit.start()
   await within(box.starting, 20_000, 'the real daemon started')
+  await within((async () => { while (!forks.length || forks.some((c) => c.exitCode === null && c.signalCode === null)) await pause(100) })(), 30_000, 'the sweep\'s worker left')
   const ctx = { home: trocar, userHome: w.home, dir: w.dir, platform: 'darwin', env: w.env }
   /** The one read client, over the real socket it resolves itself: `via` says WHO answered. */
   const ask = (name, params = {}) => queryDocument(name, params, ctx)
@@ -216,7 +219,10 @@ test('darwin: the cold read is local, the worker is warmed behind it, and a call
     await hangUp({ socketPath: control.path, token: control.token, path: `/query?name=session&id=${encodeURIComponent(id)}&indent=2` })
     const after = await ask('session', { id })
     assert.equal(after.via, 'daemon', 'the next query is still answered by the worker, not by the fallback')
-    assert.equal(JSON.parse(after.text).ok, true)
+    // a whole session answer (its `ok` is the corpus's: the generated segments carry an unparseable line, which a read after the seal says)
+    const doc = JSON.parse(after.text)
+    assert.equal(doc.command, 'session')
+    assert.ok(doc.calls.length > 0)
   } finally {
     await box.stop()
   }

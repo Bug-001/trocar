@@ -312,12 +312,16 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
    *  in flight opens an episode of subject KICK, and while it cools no kick forks — a live worker (a query's) still gets it; after
    *  stop() a kick does nothing. */
   let stopped = false
-  const kick = (ids) => {
-    if (stopped || !Array.isArray(ids) || !ids.length || (!child && cooling(KICK))) return
+  const tell = (m) => {
+    if (stopped || (!child && cooling(KICK))) return
     const c = child || start()
-    if (c.connected) c.send({ kick: ids.map(String) }, () => {}) // a send that fails is the worker's close, which says it
+    if (c.connected) c.send(m, () => {}) // a send that fails is the worker's close, which says it
     idleClock()
   }
+  const kick = (ids) => { if (Array.isArray(ids) && ids.length) tell({ kick: ids.map(String) }) }
+  /** The daemon's start (4.4 §答案文件): the worker writes a tier-0 head for every session that has none, at its first idle period
+   *  (3.5 §谁执行它「答案文件」). Forked like a kick, under the same cool-down and stop rules. */
+  const sweep = () => tell({ sweep: true })
 
   /** Hand `line` to the worker (forked if there is none: run() starts it) and let its frame flow into `res`. */
   const answer = (line, res, ms, name, subject) => {
@@ -373,5 +377,5 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   /** Fork a worker (if there is none) and run this query with nobody waiting: the board's page load warms it (4.4). */
   const warm = ({ name, params = {} }) => warmUp(lineOf(name, params), name, subjectOf(name, params))
 
-  return { route, relay, control, warm, kick, path: QUERY_PATH, stop: () => { stopped = true; clearInterval(statsTimer); statsTimer = null; drop('the daemon is stopping') } }
+  return { route, relay, control, warm, kick, sweep, path: QUERY_PATH, stop: () => { stopped = true; clearInterval(statsTimer); statsTimer = null; drop('the daemon is stopping') } }
 }

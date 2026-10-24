@@ -23,7 +23,7 @@ import { createTracker } from './core/tracker.mjs'
 import { createSwitch, readState } from './core/switch.mjs'
 import { startControlServer, controlSocketPath } from './core/control.mjs'
 import { createQueryService } from '../query/service.mjs'
-import { createServer as createBoard } from '../server.mjs'
+import { createServer as createBoard, tipTable } from '../server.mjs'
 import { readIngressConfig } from './core/ingress-config.mjs'
 import { readCa } from './core/tls/ca-store.mjs'
 import { tryOpLock } from '../off/lock.mjs'
@@ -166,7 +166,8 @@ function storeWithSealing({ P, failure, query }) {
   const home = path.dirname(P.dir)
   const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
   // kick: the record ids of the model calls a pass indexed go to the read route's worker, which folds their sessions as captured (3.5 §后台抽取与归约)
-  const keeper = createIndexKeeper({ home, failure, kick: (ids) => query.svc.kick(ids) })
+  // tips: the same pass's calls with a session key, for the board's x-trocar-tip (4.4 §答案文件)
+  const keeper = createIndexKeeper({ home, failure, kick: (ids) => query.svc.kick(ids), tips: query.tips.add })
   store.onRecord(keeper.wrote) // on the write path: one Set add and at most one timer (index-keeper.mjs)
   let queue = null
   const seal = {
@@ -242,7 +243,7 @@ export function lockKeeper({ file, fields, segmentOf = () => null }) {
  *  closes, so a worker a stop cuts off is not left behind. */
 function queryRouteFor({ P, failure, fork, queryIdleMs }) {
   const svc = createQueryService({ home: path.dirname(P.dir), failure, fork, idleMs: queryIdleMs })
-  return { routes: { 'GET /query': svc.route }, stop: svc.stop, svc }
+  return { routes: { 'GET /query': svc.route }, stop: svc.stop, svc, tips: tipTable() }
 }
 
 /** The board's token (4.4, D26③): 32 random bytes, base64url, in <collector>/board.token (0600). Kept across restarts so a bookmarked URL
@@ -261,7 +262,7 @@ function boardToken(dir) {
  *  never tries another: a port it cannot listen on is `port-taken` with one failure record (D38), and capture and /query go on.
  *  routes(r) adds the board to the control routes: `GET /status` gains `board: {port, state, reason}` (never the token), and
  *  `GET /board` answers `{port, state, reason, token}` for `trocar board`. start() once the daemon is ready; stop() before the control server closes. */
-function boardFor({ P, failure, query, log = () => {} }) {
+function boardFor({ P, failure, query, tips, log = () => {} }) {
   let st = { port: null, state: 'no-port', reason: 'no board port recorded: run trocar install' }
   let server = null, token = null, started = Promise.resolve(), stopped = false
   async function listen() {
@@ -270,7 +271,7 @@ function boardFor({ P, failure, query, log = () => {} }) {
     const port = cfg.boardPort
     try {
       token = boardToken(P.dir)
-      const s = createBoard({ home: path.dirname(P.dir), token, query }).server
+      const s = createBoard({ home: path.dirname(P.dir), token, query, tips }).server
       s.on('clientError', (e, sock) => sock.destroy())
       await new Promise((resolve, reject) => { s.once('error', reject); s.listen(port, '127.0.0.1', resolve) })
       s.on('error', (e) => log('board', e)) // after the listen: the board never takes the daemon down
@@ -327,7 +328,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     }
   }
   const query = queryRouteFor({ P, failure, fork, queryIdleMs })
-  const board = boardFor({ P, failure, query: query.svc, log })
+  const board = boardFor({ P, failure, query: query.svc, tips: query.tips.of, log })
   const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: board.routes({ 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off'), ...query.routes }) }) // throws if another daemon answers
 
   let redirector = null
@@ -724,6 +725,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     })
     markReady()
     board.start() // never fails the start: a board that cannot listen is a state and a record
+    query.svc.sweep() // the read route is up: a tier-0 head for every session without one (4.4 §答案文件, 3.5 §谁执行它)
 
     // stop({signal}) — signal: what stopped it (SIGTERM, SIGINT, SIGHUP = the terminal closed or the user logged out,
     // SIGQUIT), else `reason`. Returns {failed: [where…]}: a step that failed makes `collector start` exit non-zero. It
@@ -829,7 +831,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   // (launchd / the task bringing the daemon back while the user runs on) never binds a group's port a second time
   const ready = new Promise((r) => { markReady = r })
   const gate = (fn) => async (q) => { await ready; return fn(q) }
-  const board = boardFor({ P, failure, query: query.svc, log })
+  const board = boardFor({ P, failure, query: query.svc, tips: query.tips.of, log })
   const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: board.routes({
     'GET /status': gate(status),
     'GET /holders': gate(() => collector.holders()),
@@ -870,6 +872,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     await collector.start()
     markReady()
     board.start() // never fails the start: a board that cannot listen is a state and a record
+    query.svc.sweep() // the read route is up: a tier-0 head for every session without one (4.4 §答案文件, 3.5 §谁执行它)
     const me = await identity(process.pid) // an async reader here (runDaemon's model branch): the requests markReady released go on meanwhile
     selfId = me
     const lock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }, segmentOf: () => store.currentSegment })

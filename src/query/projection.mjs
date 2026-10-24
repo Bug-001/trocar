@@ -26,6 +26,7 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
+import { ctxKey } from './ctx-key.mjs';
 import { indexDir, segmentCmp } from './index-build.mjs';
 import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
@@ -51,7 +52,7 @@ const FLAT = /^([0-9a-f]{32})(?:\.fold)?\.(?:ndjson|idx(?:\.tmp)?)$/; // the fla
 const DIR = /^[0-9a-f]{32}$/;
 
 const ctxDir = (home) => path.join(indexDir(home), 'ctx');
-const hashOf = (key) => createHash('sha256').update(String(key)).digest('hex').slice(0, 32);
+const hashOf = ctxKey;
 /** The session's directory (4.3 §4 目录): its projection `extract.*`, its fold log `fold.*` (src/query/fold-log.mjs). */
 export const sessionDir = (home, sessionKey) => path.join(ctxDir(home), hashOf(sessionKey));
 /** The projection's plain file from byte 0: all its lines while none is sealed (line-file.mjs). */
