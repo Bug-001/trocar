@@ -405,6 +405,19 @@ test('#20: a subject that keeps timing out while its window moves writes one que
   } finally { svc.stop() }
 })
 
+test('#12 · #20: with no worker, the cold route answers a cooling subject 500 with its reason and forks nothing', async () => {
+  const { svc, said, st, ask } = episodic(() => CRASH)
+  try {
+    await assert.rejects(ask({ id: 'S' }))
+    assert.equal(st.forks, 1)
+    const res = recorder()
+    await assert.rejects(svc.route({ query: new URLSearchParams({ name: 'session', id: 'S', since: '4' }), res }), (e) => e.message === said[0].reason && !e.status)
+    assert.notEqual(res.status, 503, 'not a cold 503: no worker is coming for a cooling subject')
+    await new Promise((d) => setTimeout(d, 50))
+    assert.equal(st.forks, 1, 'nothing forked inside the cool-down')
+  } finally { svc.stop() }
+})
+
 test('#20: a crash and then a timeout of the same subject are one episode, one record', async () => {
   const { svc, said, st, ask } = episodic((n) => (n === 1 ? CRASH : SILENT))
   try {

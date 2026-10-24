@@ -265,7 +265,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
 
   /** Fork a worker and give it this very query, with nobody waiting for the answer: the next query finds it warm. */
   const warmUp = (line, name, subject) => {
-    if (cooling(subject)) return // nothing to warm a cooling subject with: the cold caller reads locally all the same
+    if (cooling(subject)) return // nothing to warm a cooling subject with (the route already answered it 500)
     enqueue(name, () => run(line, SINK, deadlineMs, name, subject)).catch(() => {})
   }
 
@@ -326,13 +326,18 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     if (!QUERY_NAMES.includes(name)) throw Object.assign(new Error(`trocar query: no query called ${JSON.stringify(name)} (names: ${QUERY_NAMES.join(', ')})`), { status: 400 })
     const params = paramsOf(query, ['name', 'indent'])
     const line = lineOf(name, params, query.get('indent') || 0)
+    const subject = subjectOf(name, params)
+    // A cooling subject is answered 500 with its episode's reason, worker or not (3.5 #12, #20): a 503 would make the
+    // caller wait on a worker that the cool-down never forks.
+    const ep = cooling(subject)
+    if (ep) throw new Error(ep.reason)
     if (!child) { // the cold path: answered at once, warmed behind the answer (see the head of this file)
-      warmUp(line, name, subjectOf(name, params))
+      warmUp(line, name, subject)
       res.writeHead(503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(NO_WORKER) })
       res.end(NO_WORKER)
       return undefined
     }
-    return answer(line, res, deadlineMs, name, subjectOf(name, params))
+    return answer(line, res, deadlineMs, name, subject)
   }
 
   /** The board's `GET /api/<name>` (4.4, D66): the same frame path, but the board has no local path to fall back to,
