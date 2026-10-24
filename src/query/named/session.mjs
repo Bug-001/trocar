@@ -310,6 +310,14 @@ function seed(s) {
   const sv = s.log.saved, c = sv && loadColumns(s.store.rows, sv.parts);
   s.cols = c && c.at <= s.log.frontier ? c : columns(s.store.rows.slotOf);
 }
+// v8.deserialize, every typed array in its own bytes: the default makes an aligned one a view over the whole serialized state, which
+// would stay alive (as large as the state itself) for as long as the reduction holds that array.
+function thaw(buf) {
+  const d = new v8.DefaultDeserializer(buf);
+  d._readHostObject = function () { const v = v8.DefaultDeserializer.prototype._readHostObject.call(this); return Buffer.isBuffer(v) ? Buffer.from(v) : new v.constructor(v); };
+  d.readHeader();
+  return d.readValue();
+}
 // A cold state's reduction resumed from the state its log's sidecar holds (4.3 §4 旁索引) when it was folded under this cut and
 // REDUCE_V: it covers the log's last frontier → over the log as it is; it covers less (a worker killed after a save) and this is the
 // worker → over the log opened again cut back to what it covers. The members it folded are `R.has`, so the fold cursor walks past
@@ -323,7 +331,7 @@ function resumed(s) {
   try {
     const m = JSON.parse(meta[0]);
     if (m.rv !== REDUCE_V || m.cut !== s.cut) return false;
-    from = v8.deserialize(state);
+    from = thaw(state);
   } catch { return false; }
   if (!(sv.bytes > s.log.frontier)) {
     if (!s.writer) return false;
