@@ -18,8 +18,9 @@ import { inheritedRender } from '../../view/render-kind.mjs';
 import { PAGE_BYTES, laneOf, placeIn } from '../session-doc.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { QueryArgError } from './index.mjs';
+import { renderSpan, sealedOf } from '../ctx-files.mjs';
 
-export const params = Object.freeze(['id', 'lane', 'from', 'to', 'ledger']);
+export const params = Object.freeze(['id', 'lane', 'from', 'to', 'ledger', 'pack', 'tail']);
 
 const one = (v) => (v == null || v === '' ? null : String(v));
 const pick = (o, keys) => { const out = {}; if (o) for (const k of keys) if (o[k] !== undefined) out[k] = o[k]; return out; };
@@ -77,32 +78,17 @@ function keptOf(cols, log, lane, e) {
   return e;
 }
 
-export async function run(ctx) {
-  const { params: p, errors } = ctx;
-  const id = one(p.id), key = one(p.lane), from = one(p.from), to = one(p.to), ledger = one(p.ledger);
-  if (id == null) throw new QueryArgError('trocar query lane: --id is required (a session id; `trocar query sessions` lists them)');
-  if (key == null) throw new QueryArgError('trocar query lane: --lane is required (a lane key; `trocar query session` lists the lanes)');
-  if ([from, to, ledger].filter((x) => x != null).length > 1) throw new QueryArgError('trocar query lane: give at most one of --from, --to and --ledger');
-  const after = ledger == null ? null : cursorOf(ledger);
-  const st = await sessionState(ctx, id);
-  const empty = (mark) => ({ lane: key, base: null, mark, steps: [], defs: [], resources: [], seen: [], events: [], prev: null, next: null, ledger_next: null });
-  if (!st) {
-    errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
-    return empty(null);
-  }
-  errors.push(...st.errors);
-  // a lane the session does not have (it can vanish between polls: `lanes_gone`) is an empty lane
-  const { cols, log } = st.V;
-  if (!cols.lanes.has(key)) return empty(markOn(st.plan, st.mark));
-  const { store } = st, L = laneOf(cols, key), { rids, slots } = L, n = rids.length;
+/** laneStepper(st, key) → the steps of the lane `key` of a session state (sessionState): {L, n, rids, lines, lineAt(i), eventsAt(i),
+ *  listAt(i), replyAt(i), step(i, prev), defOf(bid, list)}. step(i, prev) = step i with its ops against step `prev`'s list (−1: a
+ *  keyframe, every position added), parent = step `prev`'s rid (null for −1); defOf = a definition on the wire, its render joined with
+ *  the tool_use of the list `list` (the first it is asked with: cached by bid). Lists, lines and definitions are read once each. */
+export function laneStepper(st, key) {
+  const { store } = st, { cols, log } = st.V, L = laneOf(cols, key), { rids, slots } = L;
   const lines = new Map(), lineAt = (i) => { if (!lines.has(i)) lines.set(i, log.read(...log.latest(rids[i]))); return lines.get(i); };
   // the `user` events before step i (3.5: every `user` event's `k` is its place among the lane's, 1-based)
   const before = [0];
   for (const k of slots) before.push(before.at(-1) + cols.uc[k]);
-  const CS = (e) => e.type === 'compaction' || e.type === 'summarize';
   const eventsAt = (i) => { let j = before[i]; return lineAt(i).e.map((e) => (e.type === 'user' ? { ...e, k: ++j } : e)); };
-  const flagged = [];
-  for (let i = 0; i < n; i++) if (cols.cs[slots[i]]) flagged.push(i);
   const lists = new Map(), defs = new Map(), wires = new Map();
   const rowOf = (i) => store.rows.get(rids[i]);
   const listAt = (i) => {
@@ -135,17 +121,42 @@ export async function run(ctx) {
     wires.set(bid, w);
     return w;
   }
-  // step i with ops against step i-1 (a keyframe when `key`): {step, bids it references}
-  function stepAt(i, keyframe) {
+  function step(i, prev) {
     const C = listAt(i), row = rowOf(i), x = row.x || {};
-    const ops = keyframe || i === 0 ? [[1, ...C.toks.map((_, k) => k)]] : opsOf(listAt(i - 1).toks, C.toks);
+    const ops = prev < 0 ? [[1, ...C.toks.map((_, k) => k)]] : opsOf(listAt(prev).toks, C.toks);
     const attrs = {};
     for (const op of ops) if (op[0] === 1) for (let k = 1; k < op.length; k++) { const a = attrOf(C.attrs[op[k]]); if (a) attrs[op[k]] = a; op[k] = C.bids[op[k]]; }
-    const step = { rid: rids[i], parent: i > 0 ? rids[i - 1] : null, ops, reply: replyAt(i), attrs,
+    return { rid: rids[i], parent: prev < 0 ? null : rids[prev], ops, reply: replyAt(i), attrs,
       detail: { norm: { stop_reason: x.stop_reason ?? null, usage: (x.facts ? x.facts.usage : x.nu) ?? null }, respRefs: x.respRefs || [],
         nonBlockKeys: x.nonBlockKeys || [], extraMessages: x.extraMessages || [], wire: x.wire ?? null } };
-    return step;
   }
+  return { L, n: rids.length, rids, lines, lineAt, eventsAt, listAt, replyAt, step, defOf: wireDef };
+}
+
+export async function run(ctx) {
+  const { params: p, errors } = ctx;
+  const id = one(p.id), key = one(p.lane), from = one(p.from), to = one(p.to), ledger = one(p.ledger);
+  if (id == null) throw new QueryArgError('trocar query lane: --id is required (a session id; `trocar query sessions` lists them)');
+  if (p.pack != null || p.tail != null) return fileAnswer(ctx, id, key != null || from != null || to != null || ledger != null);
+  if (key == null) throw new QueryArgError('trocar query lane: --lane is required (a lane key; `trocar query session` lists the lanes)');
+  if ([from, to, ledger].filter((x) => x != null).length > 1) throw new QueryArgError('trocar query lane: give at most one of --from, --to and --ledger');
+  const after = ledger == null ? null : cursorOf(ledger);
+  const st = await sessionState(ctx, id);
+  const empty = (mark) => ({ lane: key, base: null, mark, steps: [], defs: [], resources: [], seen: [], events: [], prev: null, next: null, ledger_next: null });
+  if (!st) {
+    errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
+    return empty(null);
+  }
+  errors.push(...st.errors);
+  // a lane the session does not have (it can vanish between polls: `lanes_gone`) is an empty lane
+  const { cols, log } = st.V;
+  if (!cols.lanes.has(key)) return empty(markOn(st.plan, st.mark));
+  const S = laneStepper(st, key), { L, rids, lines, listAt, replyAt, eventsAt } = S, n = rids.length, wireDef = S.defOf;
+  const CS = (e) => e.type === 'compaction' || e.type === 'summarize';
+  const flagged = [];
+  for (let i = 0; i < n; i++) if (cols.cs[L.slots[i]]) flagged.push(i);
+  // step i with ops against step i-1 (a keyframe when `keyframe`); its parent is step i-1 either way (the page's base names it)
+  const stepAt = (i, keyframe) => { const s = S.step(i, keyframe || i === 0 ? -1 : i - 1); s.parent = i > 0 ? rids[i - 1] : null; return s; };
   const bytesOf = (v) => Buffer.byteLength(JSON.stringify(v));
   const evBytes = (i, keep = () => true) => eventsAt(i).reduce((a, e) => a + (keep(e) ? bytesOf(e) : 0), 0);
 
@@ -227,9 +238,24 @@ export async function run(ctx) {
   };
 }
 
+// `--pack <n>.<part>` / `--tail <part>` (3.5 §会话读): the NDJSON text of a sealed pack or of the open tail, as `{$text}` (named/index.mjs
+// runQuery hands it on as the answer's bytes). Both render from the state (ctx-files.mjs renderSpan).
+async function fileAnswer(ctx, id, others) {
+  const { pack, tail } = ctx.params;
+  if (others || (pack != null && tail != null)) throw new QueryArgError('trocar query lane: --pack and --tail go with --id only, one of them at a time');
+  const m = pack != null ? /^(0|[1-9]\d{0,8})\.(main|rest)$/.exec(String(pack)) : /^()(main|rest)$/.exec(String(tail));
+  if (!m) throw new QueryArgError(pack != null ? 'trocar query lane: --pack takes <n>.<part>: a pack number, a dot, and main or rest' : 'trocar query lane: --tail takes main or rest');
+  const st = await sessionState(ctx, id);
+  if (!st) { ctx.errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' }); return {}; }
+  const sealed = sealedOf(st), part = m[2];
+  if (pack == null) return { $text: renderSpan(st, sealed, part, true) };
+  if (Number(m[1]) >= sealed) throw new QueryArgError(`trocar query lane: pack ${m[1]} is not sealed yet; its calls are in the tail`);
+  return { $text: renderSpan(st, Number(m[1]), part) };
+}
+
 /** version(ctx) → the session's version (session.mjs: its member rows, frontier and cut) and the lane's parameters. */
 export async function version(ctx) {
   const v = await sessionVersion(ctx);
   const p = ctx.params;
-  return v && { key: JSON.stringify([v.key, one(p.lane), one(p.from), one(p.to), one(p.ledger)]), errors: v.errors };
+  return v && { key: JSON.stringify([v.key, one(p.lane), one(p.from), one(p.to), one(p.ledger), one(p.pack), one(p.tail)]), errors: v.errors };
 }

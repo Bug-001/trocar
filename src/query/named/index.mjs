@@ -124,6 +124,7 @@ export async function runQuery(name, params = {}, ctx = {}) {
   const q = checked(name, params);
   const errors = [];
   const body = await q.run({ ...ctx, home, fs, now, params, errors });
+  if (body && typeof body.$text === 'string') return body; // an answer that is text (lane --pack / --tail: NDJSON), its bytes as they are
   return { schema: SCHEMA_VERSION, command: name, ok: !errors.some((e) => !e.level), ...body, errors };
 }
 

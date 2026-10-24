@@ -40,7 +40,7 @@ import { warmCache, fsTag, heapBudget, heapCeiling, hold, steadyBytes, liveHeap,
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
-import { headDoc, headFile, tier0Doc, writeHead } from '../ctx-files.mjs';
+import { headDoc, headFile, packsOf, tier0Doc, writeHead } from '../ctx-files.mjs';
 
 export const params = Object.freeze(['id', 'since', 'before', 'limit', 'head']);
 
@@ -502,7 +502,7 @@ const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.trun
 const headDue = (ctx, id, pending) => { if (ctx.writer !== true) return false; const h = heads.get(id); return !pending || !h || performance.now() - h.t >= HEAD_MS; };
 /** headOf(s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs). */
 const headOf = (s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors)
-  : headDoc({ ...s, mark: markOn(s.plan, s.mark), markTs: s.plan.byId.get(s.mark)?.ts ?? null }));
+  : headDoc({ ...s, ...(s.files || packsOf(s)), mark: markOn(s.plan, s.mark), markTs: s.plan.byId.get(s.mark)?.ts ?? null }));
 function putHead(ctx, s, doc = null) {
   const h = heads.get(s.id), sig = sigOf(s), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   if (h && h.sig === sig && fs.existsSync(headFile(home, s.id))) return;
@@ -532,7 +532,7 @@ function stateAt(r, id) {
   let above = ex.done < ex.total;
   for (let i = done; !above && i < members.length; i++) above = inCut(plan, members[i]);
   return { id, rows: members, store: st.store, mark, pending: above ? { done, total: members.length, work: st.store.work } : null,
-    truncated: plan.bound, V, failed: V.failed, errors, indexErrors, st, plan };
+    truncated: plan.bound, V, failed: V.failed, errors, indexErrors, st, plan, pos: (rid) => posOf(plan, rid), cut: (row) => inCut(plan, row) };
 }
 
 /** version(ctx) → {key, errors} | null (3.5 §谁执行它 答案缓存): the session's member rows, its reduction frontier as it is now, the

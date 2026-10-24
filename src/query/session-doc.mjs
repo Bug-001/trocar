@@ -35,14 +35,14 @@ function rowAt(log, rid, off) {
   return v ? log.read(...v) : null;
 }
 // the lane's line as it stood at byte `off`, or null
-function laneAt(log, key, off) {
+export function laneAt(log, key, off) {
   let at = log.lane(key);
   while (at && at[0] > off) { const p = log.read(...at).p; at = p == null ? null : [p]; }
   return at ? log.read(...at) : null;
 }
 const rowOf = (o) => (o && o.c != null ? o.r : null);
 const headOf = (o) => { if (!o || o.l == null) return null; const { l, p, ...h } = o; return h; };
-const recOf = (r) => ({ id: String(r.id), ts_request: r.ts ?? null, is_llm_call: !!r.is_llm, response: { status: r.status ?? null } });
+export const recOf = (r) => ({ id: String(r.id), ts_request: r.ts ?? null, is_llm_call: !!r.is_llm, response: { status: r.status ?? null } });
 
 /** columns(slotOf) → the step-order columns of a fold log's calls, by each call's slot in the projection (`slotOf`): its row's ts, its
  *  lane (`ln`, the lane keys interned in `keys`), how many `user` events it has (`uc`) and whether it has a compaction or summarize
