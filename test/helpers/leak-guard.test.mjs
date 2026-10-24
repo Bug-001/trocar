@@ -6,7 +6,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from './tmp.mjs'
 import guard from './leak-guard.cjs'
@@ -19,8 +20,7 @@ delete env.NODE_TEST_CONTEXT
 delete env.NODE_OPTIONS
 
 /** Runs `node --test --test-force-exit --require <guard>` on a generated test file, TMPDIR pointing at a scratch dir of its own. */
-function run(body) {
-  const scratch = tmpDir('trocar-guardtest-')
+function run(body, scratch = tmpDir('trocar-guardtest-')) {
   const file = path.join(scratch, 'fixture.test.mjs')
   fs.writeFileSync(file, `import test from 'node:test'\nimport fs from 'node:fs'\nimport os from 'node:os'\nimport path from 'node:path'\nimport { tmpDir } from ${JSON.stringify(TMP_HELPER)}\n${body}\n`)
   const r = spawnSync(process.execPath, ['--test', '--test-force-exit', '--test-reporter=tap', '--require', GUARD, file], { env: { ...env, TMPDIR: scratch }, encoding: 'utf8', timeout: 60_000 })
@@ -109,4 +109,63 @@ test('leak-guard: leaked() — directories and our prefixes count, a stray libra
   assert.deepEqual(leaked(dir, fs.readdirSync(dir).sort()), ['as-y', 'atrace-z', 'trocar-x', 'whatever'])
   // an entry that went away between the listing and the check does not end the check (an exception there turned the guard off)
   assert.deepEqual(leaked(dir, ['gone-before-lstat', 'trocar-gone', 'whatever']), ['trocar-gone', 'whatever'])
+})
+
+const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms))
+async function until(what, ok) {
+  for (let i = 0; i < 300; i++) { const v = ok(); if (v) return v; await sleep(50) }
+  throw new Error(`timed out waiting for ${what}`)
+}
+
+/** A real runner under the guard in `scratch` whose one test waits until `go()` is called; resolves once its run directory is made. */
+async function waitingRunner(scratch) {
+  const sig = tmpDir('trocar-guardsig-')
+  const [pidFile, goFile] = [path.join(sig, 'pid'), path.join(sig, 'go')]
+  const file = path.join(sig, 'wait.test.mjs')
+  fs.writeFileSync(file, `import test from 'node:test'\nimport fs from 'node:fs'\ntest('waits', async () => { fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); while (!fs.existsSync(${JSON.stringify(goFile)})) await new Promise((ok) => setTimeout(ok, 50)) })\n`)
+  const runner = spawn(process.execPath, ['--test', '--test-force-exit', '--require', GUARD, file], { env: { ...env, TMPDIR: scratch }, stdio: 'ignore' })
+  const exited = once(runner, 'exit')
+  const filePid = Number(await until('the waiting test to start', () => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8')))
+  const dir = fs.readdirSync(scratch).find((n) => n.startsWith('trocar-run-'))
+  assert.ok(dir, 'the runner made its run directory')
+  return {
+    dir, runner,
+    kill: async () => { runner.kill('SIGKILL'); await exited },
+    // lets the test end; the test file's process is waited for even when its runner was killed and it lives on as an orphan
+    go: async () => { fs.writeFileSync(goFile, ''); await exited; await until('the test file to end', () => !alive(filePid)) },
+  }
+}
+
+test('leak-guard: a run removes the run directory a killed runner left behind, and keeps the one of a runner still running', async () => {
+  const scratch = tmpDir('trocar-guardtest-')
+  const dead = await waitingRunner(scratch)
+  let live
+  try {
+    await dead.kill()
+    assert.ok(fs.existsSync(path.join(scratch, dead.dir)), 'a killed runner leaves its directory (the leak)')
+    live = await waitingRunner(scratch)
+    const r = run(`test('nothing', () => {})`, scratch)
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(fs.existsSync(path.join(scratch, dead.dir)), false, 'the killed runner\'s directory is gone')
+    assert.ok(fs.existsSync(path.join(scratch, live.dir)), 'the running runner\'s directory is kept')
+  } finally {
+    await dead.go()
+    if (live) await live.go()
+  }
+  assert.equal(live.runner.exitCode, 0, 'the runner whose directory was kept finished its run')
+})
+
+test('leak-guard: a run directory with no runner recorded is removed once a day old and kept while fresh; one whose pid now runs another process is removed', () => {
+  const scratch = tmpDir('trocar-guardtest-')
+  const mk = (name, owner) => { const d = path.join(scratch, name); fs.mkdirSync(d); if (owner) fs.writeFileSync(path.join(d, '.runner'), JSON.stringify(owner)); return d }
+  const stale = mk('trocar-run-stale')
+  const day = (Date.now() - 25 * 3600 * 1000) / 1000
+  fs.utimesSync(stale, day, day)
+  const fresh = mk('trocar-run-fresh')
+  const reused = mk('trocar-run-reused', { pid: process.pid, start: 'Thu Jan  1 00:00:00 1970' })
+  const r = run(`test('nothing', () => {})`, scratch)
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(fs.existsSync(stale), false, 'the day-old one is removed')
+  assert.ok(fs.existsSync(fresh), 'the fresh one is kept')
+  if (process.platform !== 'win32') assert.equal(fs.existsSync(reused), false, 'a live pid with another start time is no owner')
 })
