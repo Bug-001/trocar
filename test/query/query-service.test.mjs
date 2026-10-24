@@ -526,3 +526,25 @@ test('#27: a queued request whose caller closed before its turn is never written
     assert.deepEqual(got, ['first', 'later'])
   } finally { svc.stop() }
 })
+
+// 3.5 §后台抽取与归约 kick: a worker a kick forked that dies opens an episode of subject `kick` (one D38 record), and while it cools no
+// kick forks again — a fold that crashes is not re-forked by every pass of the index keeper. After stop() a kick forks nothing.
+test('kick: a kicked worker that dies is one record, and the next kick inside its cool-down forks nothing; after stop() a kick forks nothing', async () => {
+  const said = []
+  let forks = 0, child = null
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), now: () => 0, failure: (where, e) => said.push([where, e.code]),
+    fork: () => { forks++; return (child = spawn(process.execPath, ['-e', 'process.exit(3)'], { stdio: ['pipe', 'pipe', 'pipe'] })) } })
+  try {
+    svc.kick(['s1'])
+    assert.equal(forks, 1, 'no worker: the kick forks one')
+    await once(child, 'close')
+    await new Promise((d) => setImmediate(d))
+    assert.deepEqual(said, [['daemon', 'query-failed']], 'the death is said once, with a closed-set code')
+    svc.kick(['s1'])
+    assert.equal(forks, 1, 'inside the cool-down a kick forks nothing')
+  } finally { svc.stop() }
+  const stopped = createQueryService({ home: rawHome('trocar-qsvc-'), fork: () => { forks++; return dead() } })
+  stopped.stop()
+  stopped.kick(['s1'])
+  assert.equal(forks, 1, 'a kick after stop() forks nothing')
+})

@@ -197,8 +197,10 @@ Reading the records across sessions is `trocar query <name>` — the one core th
 the board is the HTTP shell (D59); there is no separate ETL step and no database to load. Both go through the
 daemon's query worker, which stays warm and keeps the segment index current as it captures, so a query about a
 session you are looking at answers in milliseconds; the board's answers come gzipped. The worker stays warm while
-someone asks (an open board asks every 1.5 s) and leaves after two minutes with nothing asked, giving its memory back;
-the next query starts a new one. The worker keeps the segment index's rows in a compact form outside its JavaScript
+someone asks (an open board asks every 1.5 s) and leaves two minutes after the last query or newly captured model
+call, giving its memory back; the next query starts a new one. While the daemon captures, it names to the worker the
+sessions that got new model calls, and the worker reads those calls in the background at low priority, so a running
+session is already read when you open it. The worker keeps the segment index's rows in a compact form outside its JavaScript
 heap, so how much of a session it can read barely shrinks as the capture home grows. A session is read call by call:
 each call is taken apart once into a context file beside the index, and the session's summary rows are
 written to a second file as they are worked out, so reopening a session reads those two files and does not take the

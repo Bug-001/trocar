@@ -162,10 +162,11 @@ function noteUncleanStop(lock, failure) {
  *  store.close(): the segment the stop closes is sealed by the next start's scan, not by a worker the stop cuts off,
  *  and nothing of trocar's writes anything after the stop (the tail the stop closes is indexed by that next start's
  *  sealer, and until then a query resumes it from the last indexed byte). */
-function storeWithSealing({ P, failure }) {
+function storeWithSealing({ P, failure, query }) {
   const home = path.dirname(P.dir)
   const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
-  const keeper = createIndexKeeper({ home, failure })
+  // kick: the sessions of the model calls a pass indexed go to the read route's worker, which folds them as captured (3.5 §后台抽取与归约)
+  const keeper = createIndexKeeper({ home, failure, kick: (keys) => query.svc.kick(keys) })
   store.onRecord(keeper.wrote) // on the write path: one Set add and at most one timer (index-keeper.mjs)
   let queue = null
   const seal = {
@@ -364,7 +365,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     }, caCheckMs)
     caTimer.unref()
     const retention = classesHook({ home: path.dirname(P.dir), failure }) // D60③, engine-data.mjs
-    const { store, seal } = storeWithSealing({ P, failure })
+    const { store, seal } = storeWithSealing({ P, failure, query })
     seal.start() // after noteUncleanStop above: the gate (the control server) has claimed the collector
     // switch / helper events: their own descriptor (events.mjs, a lost line becomes a log-gap), and every failure
     // among them carries `reason`
@@ -784,7 +785,8 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   const parts = model.parts || (await doorPartsFor({ os: A.os, env, event, failure, io: model.io || {} }))
   let rootPem = null
   try { rootPem = fs.readFileSync(path.join(P.caDir, 'trocar-ca.pem'), 'utf8') } catch { /* no root: the issuer says so, every door forwards only */ }
-  const { store, seal } = storeWithSealing({ P, failure }) // 4.2 §自动封存, the same wiring as runDaemon's
+  const query = queryRouteFor({ P, failure, fork, queryIdleMs }) // before the store: the keeper kicks its worker (storeWithSealing)
+  const { store, seal } = storeWithSealing({ P, failure, query }) // 4.2 §自动封存, the same wiring as runDaemon's
   let collector = null
   // status's per-harness entries: state.json's; unreadable → what this daemon has on (its in-memory switch), never a silent empty list (D38)
   const desired = () => { try { return readStateFile(P.state).state.harnesses || {} } catch { return Object.fromEntries(list.filter((d) => collector.isOn(d.name)).map((d) => [d.name, { desired: 'on' }])) } }
@@ -827,7 +829,6 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   // (launchd / the task bringing the daemon back while the user runs on) never binds a group's port a second time
   const ready = new Promise((r) => { markReady = r })
   const gate = (fn) => async (q) => { await ready; return fn(q) }
-  const query = queryRouteFor({ P, failure, fork, queryIdleMs })
   const board = boardFor({ P, failure, query: query.svc, log })
   const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: board.routes({
     'GET /status': gate(status),
