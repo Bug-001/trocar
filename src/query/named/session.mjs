@@ -177,8 +177,9 @@ function posOf(p, rid) {
 const inCut = (p, r) => p.start === 0 || stepOrder(r, p.read[0]) >= 0;
 const keyOf = ({ fs, home, writer }, id) => `${fsTag(fs)}\n${home}\n${id}\n${writer === true ? 'w' : 'r'}`;
 
-// The segment index of THIS request, read once whether version() asked first (src/query/answers.mjs) or not.
-async function indexed({ home, fs, once }) {
+// The segment index of THIS request, read once whether version() asked first (src/query/answers.mjs) or not; the worker's
+// background reads it through here too, once per kick (src/query/worker.mjs kickedSessions).
+export async function indexed({ home, fs, once }) {
   if (once && once.index) return once.index;
   const errors = [], got = { rows: await indexRows({ home, fs, errors }), errors };
   if (once) once.index = got;

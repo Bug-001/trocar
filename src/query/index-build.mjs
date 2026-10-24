@@ -515,20 +515,22 @@ export const recordsId = (records) => { let n = ids.get(records); if (n == null)
 /** grownFrom(records) → the recordsId of the earlier answer of the same segment whose records these begin with, else undefined. */
 export const grownFrom = (records) => grew.get(records);
 // Both files, so a plaintext that is sealed (or a sealed file rebuilt) is a new stamp: the plaintext wins while it exists (4.2:30).
+// `at` ({plain, sealed}, segmentFiles): which of the two the caller's raw/ listing just named; a file it did not name is stamped as
+// absent without a stat (a reader stamps every segment on every read: the stats were 1.8 ms of a followed call's 12, 2026-10-24).
 const stampFiles = new Map(); // home + segment → its two files' paths (built once: a read stamps every segment)
-export const segStamp = (home, segment, fs) => {
+export const segStamp = (home, segment, fs, at = null) => {
   const k = `${home}\n${segment}`;
   let f = stampFiles.get(k);
   if (!f) stampFiles.set(k, (f = [path.join(rawDir(home), `${segment}.ndjson`), path.join(rawDir(home), `${segment}.sealed`)]));
-  return `${statKey(f[0], fs)}|${statKey(f[1], fs)}`;
+  return `${!at || at.plain ? statKey(f[0], fs) : null}|${!at || at.sealed ? statKey(f[1], fs) : null}`;
 };
-/** warmSegmentIndex({home, segment, fs}) → the same `segmentIndex()` answer, read from disk only when that segment's
+/** warmSegmentIndex({home, segment, fs, at}) → the same `segmentIndex()` answer, read from disk only when that segment's
  *  file moved. For READERS only: a pass of the daemon's keeper (`owner`) writes, so it is never served from memory.
  *  A note (`level`, e.g. `index-cold`) is about the read that RAN segmentIndex, so it is never kept: a later read
  *  served from memory did none of that work, and an index write does not move the stamp (3.5 读不全 #17). */
-export const warmSegmentIndex = async ({ home = trocarHome(), segment, fs = nodeFs } = {}) => {
+export const warmSegmentIndex = async ({ home = trocarHome(), segment, fs = nodeFs, at = null } = {}) => {
   let notes = [];
-  const kept = await segRows.get(`${fsTag(fs)}\n${home}\n${segment}`, segStamp(home, segment, fs), async (old) => {
+  const kept = await segRows.get(`${fsTag(fs)}\n${home}\n${segment}`, segStamp(home, segment, fs, at), async (old) => {
     // the answer this segment had: its index read goes on from where that one stopped (4.2:49)
     const prev = old ? await Promise.resolve(old).catch(() => null) : null; // kept as the promise it was computed as
     const got = columnar(await segmentIndex({ home, segment, fs, past: prev && prev.stored }), segment);
@@ -584,7 +586,7 @@ export async function allSegments({ home = trocarHome(), fs = nodeFs, lockState 
   const current = L.state === 'running' && L.lock ? L.lock.segment || null : null;
   const out = [];
   for (const [segment, at] of seen) {
-    const { records, problems, source } = await warmSegmentIndex({ home, segment, fs });
+    const { records, problems, source } = await warmSegmentIndex({ home, segment, fs, at });
     const sealedBytes = at.sealed ? sizeOf(fs, path.join(rawDir(home), `${segment}.sealed`)) : null;
     // one pass through the accessor: the summed stored bytes (a sealed segment), and the first and last call time as strings sort
     let stored = 0, from = null, to = null;

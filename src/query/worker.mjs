@@ -37,7 +37,7 @@ import { pathToFileURL } from 'node:url'
 import { LOCAL_ENV } from './client.mjs'
 import { answer } from './answers.mjs'
 import { lowerPriority } from '../low-priority.mjs'
-import { extendSession, saveIndexes } from './named/session.mjs'
+import { extendSession, indexed, saveIndexes } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
 import { gcProjections, posCmp } from './projection.mjs'
 
@@ -112,13 +112,13 @@ const follow = new Set() // the sessions the daemon kicked (3.5 §后台抽取�
 const kicked = new Set() // the record ids of the kicked model calls, not yet looked up: their sessions go to `follow`
 /** The sessions of the kicked records, by the one session rule (sessionGroups: a synthesized key too). The kicked calls are the
  *  newest rows, so each session's members are looked at from its last back to the oldest kicked id only. */
-async function kickedSessions() {
+async function kickedSessions(ctx) {
   const ids = [...kicked]
   kicked.clear()
   let oldest = ids[0]
   for (const id of ids) if (posCmp(id, oldest) < 0) oldest = id
   const want = new Set(ids)
-  for (const [sid, ms] of sessionGroups(await indexRows({ home, errors: [] }))) {
+  for (const [sid, ms] of sessionGroups((await indexed(ctx)).rows)) { // the slice below reads the same index (`once`)
     for (let i = ms.length - 1; i >= 0 && posCmp(String(ms[i].id), oldest) >= 0; i--) if (want.has(String(ms[i].id))) { follow.add(sid); break }
   }
 }
@@ -133,13 +133,13 @@ const notIdle = () => {
 async function background() {
   if (busy) return
   const ctx = { home, fs: nodeFs, writer: true, persist, once }
-  if (target == null && !follow.size && kicked.size) await kickedSessions()
+  if (target == null && !follow.size && kicked.size) await kickedSessions(ctx)
   if (target == null && follow.size) { const [k] = follow; follow.delete(k); target = k }
   if (target == null && !newestDone) {
     if (notIdle()) return
     newestDone = true
     let best = null
-    for (const [id, ms] of sessionGroups(await indexRows({ home, errors: [] }))) for (const r of ms) if (best == null || posCmp(String(r.id), best[1]) > 0) best = [id, String(r.id)]
+    for (const [id, ms] of sessionGroups((await indexed(ctx)).rows)) for (const r of ms) if (best == null || posCmp(String(r.id), best[1]) > 0) best = [id, String(r.id)]
     target = best && best[0]
   }
   if (target != null) {
