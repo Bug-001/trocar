@@ -9,12 +9,251 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { createDesk, listOf, indexOf, ridAt } from '../../src/web/v2/replay/model.mjs'
+import { createDesk, listOf, stepOf, indexOf, ridAt, laneEvents } from '../../src/web/v2/replay/model.mjs'
 import { parseLines, applyFile } from '../../src/web/v2/replay/packs.mjs'
+import { world } from './desk-world.mjs'
 
 const fx = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const text = (lines) => lines.map((l) => JSON.stringify(l)).join('\n') + '\n'
 const J = JSON.stringify
+
+function rng(seed) {
+  let a = (seed * 2654435761) >>> 0 || 1
+  return () => { a ^= a << 13; a ^= a >>> 17; a ^= a << 5; return (a >>> 0) / 4294967296 }
+}
+
+// greedy copy/add ops (3.5): the longest run of the parent's list at each point is copied, the rest is added
+function encode(P, C) {
+  const at = new Map()
+  P.forEach((b, i) => at.has(b) || at.set(b, i))
+  const ops = []
+  for (let i = 0; i < C.length;) {
+    const s = at.get(C[i])
+    let l = 0
+    if (s != null) while (s + l < P.length && i + l < C.length && P[s + l] === C[i + l]) l++
+    if (l) { ops.push([0, s, l]); i += l; continue }
+    const last = ops.at(-1)
+    if (last?.[0] === 1) last.push(C[i]); else ops.push([1, C[i]])
+    i++
+  }
+  return ops
+}
+
+function session(seed, opts, P) {
+  const w = world(seed, { page: 1e6, ...opts }), { marks } = w
+  const defs = new Map(), attr = new Map(), memo = new Map()
+  // the document at mark index j: rows, heads, lane rids, and per rid its whole-lane step (reply, detail; attrs per bid)
+  const at = (j) => {
+    if (memo.has(j)) return memo.get(j)
+    const M = marks[j], doc = w.full(M), laneRids = w.laneRidsAt(M), steps = new Map()
+    for (const h of doc.lanes) {
+      const a = w.lane(h.lane, {}, M)
+      for (const d of a.defs) defs.set(d.bid, d)
+      for (const s of a.steps) {
+        steps.set(s.rid, s)
+        let pos = 0
+        for (const [op, ...xs] of s.ops) if (op === 0) pos += xs[1]; else for (const b of xs) { if (s.attrs[pos]) attr.set(b, s.attrs[pos]); pos++ }
+      }
+    }
+    const d = { M, rows: new Map(doc.calls.map((r) => [r.rid, r])), heads: new Map(doc.lanes.map((h) => [h.lane, h])), laneRids, steps, doc }
+    memo.set(j, d)
+    return d
+  }
+  const partOfHead = (h) => (h.kind === 'main' ? 'main' : 'rest')
+  const partOf = (d, rid) => (d.rows.has(rid) && partOfHead(d.heads.get(d.rows.get(rid).lane)) === 'main' ? 'main' : 'rest')
+  // a part's rows, steps and records over members `mem` at mark index j
+  function render(j, mem, part) {
+    const d = at(j), mine = mem.filter((rid) => partOf(d, rid) === part), live = new Set(mine.filter((rid) => d.rows.has(rid)))
+    const c = new Map(), s = new Map(), r = new Map()
+    for (const rid of mine) {
+      const row = d.rows.get(rid)
+      r.set(rid, { id: rid, ts_request: row?.ts ?? '', is_llm_call: !!row, response: { status: row?.status ?? 200 } })
+      if (!row) continue
+      c.set(rid, row)
+      const lr = d.laneRids.get(row.lane), i = lr.indexOf(rid)
+      let p = i - 1
+      while (p >= 0 && !live.has(lr[p])) p--
+      const parent = p >= 0 ? lr[p] : null, list = w.list(rid)
+      const ops = parent ? encode(w.list(parent), list) : [[1, ...list]], attrs = {}
+      let pos = 0
+      for (const [op, ...xs] of ops) if (op === 0) pos += xs[1]; else for (const b of xs) { if (attr.has(b)) attrs[pos] = attr.get(b); pos++ }
+      const ws = d.steps.get(rid)
+      s.set(rid, { rid, lane: row.lane, i, parent, ops, reply: ws.reply, attrs, detail: ws.detail,
+        events: w.eventsAt(row.lane, d.M).filter((e) => e.rid === rid) })
+    }
+    return { c, s, r }
+  }
+  // lanes whose head changed at a mark in [lo, hi), as they are at hi - 1
+  const changedHeads = (lo, hi, part) => {
+    const keys = new Set()
+    for (let j = lo; j < hi; j++) for (const [k, h] of at(j).heads) if (J(h) !== J(j ? at(j - 1).heads.get(k) : null)) keys.add(k)
+    return [...keys].map((k) => at(hi - 1).heads.get(k)).filter((h) => h && partOfHead(h) === part)
+  }
+  const docHead = (o) => ({ schema: 2, command: 'lane', ok: true, errors: [], v: 1, id: 'S', ...o })
+  // pack n (part) with its rows and steps as at mark index j
+  function pack(n, part, j, fail) {
+    const lo = P * n, hi = P * (n + 1), mem = marks.slice(lo, hi), R = render(j, mem, part), out = [docHead({ pack: { n, part, s0: lo, s1: hi } })]
+    for (const h of changedHeads(lo, hi, part)) out.push({ l: h })
+    const sent = new Set()
+    for (const rid of mem) {
+      if (R.c.has(rid)) out.push({ c: R.c.get(rid) })
+      const s = R.s.get(rid)
+      if (!s) continue
+      for (const b of [...w.list(rid), ...s.reply]) if (!sent.has(b)) { sent.add(b); out.push({ d: defs.get(b) }) }
+      out.push({ s })
+    }
+    for (const r of R.r.values()) out.push({ r })
+    if (fail && mem.length) out.push({ x: { where: mem[0], code: fail, reason: 'unreadable member' } })
+    return out
+  }
+  // tail n (part) as appended through mark index `upTo`; a ghost (a copy of its first row, `g` once the tail reaches mark) and, at
+  // the end, every step again as a keyframe are the tail's overriding lines
+  const ghosts = new Set()
+  const keyframe = (s) => {
+    const list = w.list(s.rid), attrs = {}
+    list.forEach((b, i) => attr.has(b) && (attrs[i] = attr.get(b)))
+    return { ...s, parent: null, ops: [[1, ...list]], attrs }
+  }
+  function tail(n, part, upTo) {
+    const lo = P * n, out = [docHead({ tail: { n, part, s0: lo } })], last = new Map(), sent = new Set()
+    let ghost = null
+    for (let j = lo; j <= upTo; j++) {
+      for (const h of changedHeads(j, j + 1, part)) out.push({ l: h })
+      const mem = marks.slice(lo, j + 1), R = render(j, mem, part)
+      for (const rid of mem) {
+        const s = R.s.get(rid)
+        if (s) for (const b of [...w.list(rid), ...s.reply]) if (!sent.has(b)) { sent.add(b); out.push({ d: defs.get(b) }) }
+        for (const [k, v] of [['c', R.c.get(rid)], ['s', s], ['r', R.r.get(rid)]]) {
+          if (v && J(v) !== last.get(k + rid)) { last.set(k + rid, J(v)); out.push({ [k]: v }) }
+        }
+        if (!R.c.has(rid) && last.has('c' + rid)) { for (const k of 'csr') last.delete(k + rid); out.push({ g: rid }) }
+        if (!ghost && R.c.has(rid)) {
+          const row = { ...R.c.get(rid), rid: rid + 'g' }, s = { ...keyframe(R.s.get(rid)), rid: row.rid, events: [{ type: 'user', rid: row.rid, lane: row.lane, k: 1 }] }
+          ghost = row.rid; ghosts.add(ghost)
+          out.push({ c: row }, { s }, { r: { id: ghost, ts_request: row.ts, is_llm_call: true, response: { status: 200 } } }, { c: { ...row, ctx: row.ctx + 1 } })
+        }
+      }
+    }
+    for (const [k, v] of last) if (k[0] === 's') out.push({ s: keyframe(JSON.parse(v)) })
+    if (ghost && upTo === marks.length - 1) out.push({ g: ghost })
+    return out
+  }
+  return { w, at, pack, tail, keyframe, attr, defs, ghosts, N: Math.floor(marks.length / P), now: marks.length - 1 }
+}
+
+const CASES = [
+  ...Array.from({ length: 50 }, (_, i) => ({ seed: i + 1, opts: { calls: 30 + (i % 5) * 12 } })),
+  ...[1, 2, 3].map((s) => ({ seed: 100 + s, opts: { calls: 80, talk: { pre: 6, len: 1400, every: 9, tail: 30 } } })),
+]
+
+test('A16 (3.5 §会话读 pack / tail): packs and the tail in any order give the session at mark', () => {
+  for (const { seed, opts } of CASES) {
+    const r = rng(seed), int = (a, b) => a + Math.floor(r() * (b - a + 1)), P = opts.talk ? int(33, 40) : int(3, 9)
+    const S = session(seed, opts, P), { w, N, now } = S, seal = (n) => P * (n + 1) - 1
+    const fails = new Set()
+    // every pack's two parts as they are at mark (a `fail` on every third pack's main), and the version written at its seal
+    const finals = [], stale = []
+    for (let n = 0; n < N; n++) for (const part of ['main', 'rest']) {
+      const fail = n % 3 === 0 && part === 'main' ? 'record-unreadable' : null
+      const f = { file: { kind: 'pack', n, part }, lines: S.pack(n, part, now, fail) }
+      for (const l of f.lines) if (l.x) fails.add(J(l.x))
+      finals.push(f)
+      const old = S.pack(n, part, seal(n), fail && 'stale-failure')
+      if (J(old) !== J(f.lines)) stale.push({ file: f.file, lines: old })
+    }
+    // the open tail of each part read in chunks at random byte cuts (each from where the last read used up); the tail before it
+    // as the board last read it before it sealed
+    const chunks = [], tails = { main: S.tail(N, 'main', now), rest: S.tail(N, 'rest', now) }
+    // a rid that moves from the main part to the rest part while the tail is open: its lines then `g` in main; in rest it is first
+    // in another lane, with an event, then in its own
+    const src = tails.main.find((l) => l.s)?.s
+    let moved = null
+    if (src) {
+      const rid = src.rid + 'm', row0 = { ...S.at(now).rows.get(src.rid), rid }, row = { ...row0, lane: rid }, list = w.list(src.rid)
+      const head = { lane: rid, kind: 'subagent', icon: 'agent', label: 'Agent m', task: '', count: 1, first: rid, last: rid, peakCtx: row.ctx,
+        spawnRid: null, parent: null, flagged: false }
+      const step = (lane, i) => ({ ...S.keyframe(src), rid, lane, i, events: [] }), rec = { r: { id: rid, ts_request: row.ts, is_llm_call: true, response: { status: 200 } } }
+      tails.main.splice(tails.main.findIndex((l) => l.s) + 1, 0, { c: row0 }, { s: step(row0.lane, src.i) }, rec)
+      tails.main.push({ g: rid })
+      const sent = new Set(tails.rest.filter((l) => l.d).map((l) => l.d.bid))
+      const X = [...S.at(now).heads.values()].find((h) => h.kind !== 'main')?.lane
+      const before = X ? [{ c: { ...row, lane: X } }, { s: { ...step(X, 1e4), events: [{ type: 'user', rid, lane: X, k: 1 }] } }] : []
+      tails.rest.push({ l: head }, ...[...new Set([...list, ...src.reply])].filter((b) => !sent.has(b)).map((b) => ({ d: S.defs.get(b) })), ...before,
+        { c: row }, { s: step(rid, 0) }, rec)
+      moved = { rid, row, head, list }
+    }
+    for (const part of ['main', 'rest']) {
+      const bytes = new TextEncoder().encode(text(tails[part]))
+      let from = 0, first = true
+      for (const cut of [...Array.from({ length: int(0, 2) }, () => int(0, bytes.length)).sort((a, b) => a - b), bytes.length]) {
+        if (cut < from) continue
+        const p = parseLines(bytes.subarray(from, cut), { head: first })
+        if (first && !p.head) continue
+        chunks.push({ file: { kind: 'tail', n: N, part }, lines: p.lines, head: p.head })
+        from += p.used; first = false
+      }
+      if (N > 0) chunks.unshift({ file: { kind: 'tail', n: N - 1, part }, lines: S.tail(N - 1, part, int(P * (N - 1), seal(N - 1))).slice(1) })
+    }
+    // any order: finals shuffled with some loaded twice; a pack's sealed version before either final of its n; tail chunks in
+    // their own order at random places among them
+    const order = [...finals, ...finals.filter(() => r() < 0.2)].sort(() => r() - 0.5)
+    for (const s of stale) {
+      const first = order.findIndex((f) => f.file.kind === 'pack' && f.file.n === s.file.n)
+      order.splice(int(0, first), 0, s)
+    }
+    const k = { main: 0, rest: 0 }
+    for (const c of chunks) {
+      const at = int(c.file.n < N ? 0 : k[c.file.part], order.length)
+      order.splice(at, 0, c)
+      for (const p in k) if (k[p] > at) k[p]++
+      if (c.file.n === N) k[c.file.part] = at + 1
+    }
+    // the board reads the desk between loads (memoised steps, step numbers)
+    const desk = createDesk(), load = (dk, f) => applyFile(dk, f.file, { head: f.head ?? null, lines: f.lines[0]?.schema ? f.lines.slice(1) : f.lines })
+    for (const f of order) {
+      load(desk, f)
+      if (r() < 0.3) for (const [key, h] of desk.held) { ridAt(desk, key, 0); for (const rid of [...h.steps.keys()].slice(-3)) stepOf(desk, rid) }
+    }
+    // every other pack only: its steps keep their numbers in a lane held with gaps
+    const gaps = createDesk(), some = finals.filter((f) => f.file.n % 2 === 0)
+    for (const f of some) load(gaps, f)
+    for (const { s } of some.flatMap((f) => f.lines).filter((l) => l.s)) {
+      assert.equal(indexOf(gaps, s.lane, s.rid), s.i, `seed ${seed} gaps ${s.rid}`)
+      assert.equal(ridAt(gaps, s.lane, s.i), s.rid, `seed ${seed} gaps ${s.lane} ${s.i}`)
+      assert.deepEqual(listOf(gaps, s.rid), w.list(s.rid), `seed ${seed} gaps list ${s.rid}`)
+    }
+
+    const d = S.at(now), msg = `seed ${seed} P ${P}`
+    assert.equal(desk.rows.size, d.rows.size + !!moved, msg)
+    if (moved) {
+      assert.deepEqual(desk.rows.get(moved.rid), moved.row, `${msg} moved row`)
+      assert.deepEqual(desk.lanes.get(moved.rid), moved.head, `${msg} moved head`)
+      assert.deepEqual(listOf(desk, moved.rid), moved.list, `${msg} moved list`)
+      assert.equal(indexOf(desk, moved.rid, moved.rid), 0, `${msg} moved step`)
+      assert.equal(desk.events.has(moved.rid), false, `${msg} moved events`)
+    }
+    for (const [rid, row] of d.rows) {
+      assert.deepEqual(desk.rows.get(rid), row, `${msg} row ${rid}`)
+      assert.deepEqual(desk.events.get(rid) ?? [], d.doc.events.filter((e) => e.rid === rid), `${msg} events ${rid}`)
+    }
+    for (const [key, rids] of d.laneRids) {
+      assert.deepEqual(desk.lanes.get(key), d.heads.get(key), `${msg} head ${key}`)
+      assert.deepEqual(laneEvents(desk, key), w.eventsAt(key, d.M), `${msg} lane events ${key}`)
+      rids.forEach((rid, i) => {
+        const list = w.list(rid)
+        assert.deepEqual(listOf(desk, rid), list, `${msg} list ${rid}`)
+        assert.deepEqual(stepOf(desk, rid).attrs, list.map((b) => S.attr.get(b) ?? null), `${msg} attrs ${rid}`)
+        assert.equal(indexOf(desk, key, rid), i, `${msg} indexOf ${rid}`)
+        assert.equal(ridAt(desk, key, i), rid, `${msg} ridAt ${key} ${i}`)
+        for (const b of list) assert.ok(desk.defs.has(b), `${msg} def ${b}`)
+      })
+    }
+    for (const rid of w.marks) assert.equal(desk.records.get(rid)?.is_llm_call, d.rows.has(rid), `${msg} record ${rid}`)
+    assert.equal(desk.records.size, w.marks.length + !!moved, msg)
+    for (const g of S.ghosts) assert.equal(listOf(desk, g), null, `${msg} gone ${g}`)
+    assert.deepEqual(new Set(desk.errors.map(J)), fails, msg)
+  }
+})
 
 test('A16 (3.5 契约样例): the lane_pack and lane_tail samples land their rows and steps in the desk', () => {
   const desk = createDesk()
