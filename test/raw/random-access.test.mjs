@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { sealSegment } from '../../src/raw/seal.mjs';
 import { openSealed, createLineCache } from '../../src/raw/reader.mjs';
 import { segmentLines } from '../../src/query/records.mjs';
@@ -15,7 +16,11 @@ import { envelope, toLine, writeShard, tmpDir } from './helpers.mjs';
 
 const SEGMENT = '20261018T000000Z';
 const TURNS = 60;
-const FRAME = 16 * 1024;   // many frames in miniature: what 4 MiB frames are to a 128 MB segment
+const FRAME = 16 * 1024;
+// A frozen format-v1 sealed segment (4.2, D72④: v1 files stay readable after the v1 encoder is gone): a growing
+// conversation with delta chains across frames, written by the v1 writer at commit a7b9f049b5759d22af652cb8b4685cb9cf46c9eb.
+// How it was made: test/raw/sealed-file.test.mjs header.
+const V1 = fileURLToPath(new URL('../fixtures/sealed-v1/20261005T100000Z.sealed', import.meta.url));   // many frames in miniature: what 4 MiB frames are to a 128 MB segment
 
 // A session the way the storage layer is optimized for and the sealer really sees: every call re-sends the whole
 // history plus one turn, and the new turn is incompressible, so the delta is the turn and the frames fill up.
@@ -53,12 +58,10 @@ test('printing one record of a sealed segment reads a fraction of the file, and 
 });
 
 test('a delta chain several records share is rebuilt once per reader, not once per record', async () => {
-  const b = sealedBox();
-  const res = await sealSegment(b.file, { lockFile: b.lock, journal: null, frameBytes: FRAME });
   const lineCache = createLineCache();
-  const sf = openSealed(res.sealed, { lineCache });
+  const sf = openSealed(V1, { lineCache });
   try {
-    assert.ok(sf.deltas > TURNS / 2, `the fixture really is stored as deltas (${sf.deltas} of ${sf.count})`);
+    assert.ok(sf.deltas > 0, 'the fixture holds delta records');
     // every record by random access, newest first — each one walks its chain back towards its keyframe
     for (let i = sf.count - 1; i >= 0; i--) assert.ok(sf.lineAt(i).length > 0);
     assert.ok(lineCache.stats.builds <= sf.count,
