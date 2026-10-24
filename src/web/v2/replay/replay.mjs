@@ -598,6 +598,8 @@ function openDesk(ctx, route0) {
       s.goodKey = null; s.notListed = true; renderEmpty(''); E.ctxwin.innerHTML = notListedHtml(); E.ctxwin.__units = null; root.classList.add('notlisted'); renderHeader(); return { ok: true }
     }
     if (s.notListed) { s.notListed = false; root.classList.remove('notlisted') }
+    // left while the head was on its way: the head is the round's last read (a detached desk sends no next read); attach's round reads the tails
+    if (!host) { if (h.data) await serial(() => redraw(null)); return { ok: true } }
     const rs = head.open ? await Promise.all(['main', 'rest'].map((part) => readTail(part, head.open.n, signal))) : []
     if (stale()) return
     const bad = rs.find((r) => !r.ok)

@@ -1,0 +1,16 @@
+{
+  "name": "I-rate-replay-3",
+  "invariant": "I-rate",
+  "sig": "I-rate:replay",
+  "fp": "d/open.main: # ms after the last timer read, expected ≥ # ms",
+  "seed": 3,
+  "big": false,
+  "viewport": 768,
+  "theme": "light",
+  "steps": [
+    {"a":"switchInFlight","p":{"a":0.876,"b":0.069,"ms":6041}}
+  ],
+  "screenshot": "test/web-v2/browser/shots/seq/I-rate-replay-3.png",
+  "status": "fixed",
+  "detail": "d/open.main: 1194 ms after the last timer read, expected ≥ 1200 ms | d/open.rest: 1194 ms after the last timer read, expected ≥ 1200 ms | d/open.main: 302 ms after the last timer read, expected ≥ 1200 ms"
+}

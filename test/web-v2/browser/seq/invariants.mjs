@@ -90,12 +90,13 @@ const viewOf = (page) => page.evaluate((sel) => {
 // a poll round's follow-up reads (4.4 live-poll): one `lane --from` (the anchor lane's ledger) per round that brought anchor-lane
 // steps, one `block` read per followed new call
 const DELTA_PACED = new Set(['lane', 'block'])
-// what I-rate paces: a name, and for `lane` each lane of each session apart; null = not paced: the desk's loader — the sealed packs
+// what I-rate paces: a name, the answer files (`d/head`, `d/open.<part>`) of each session apart, and for `lane` each lane of each session apart; null = not paced: the desk's loader — the sealed packs
 // (`d/p<n>.<part>`), a lane's ledger (`ledger=`, and the `to=` page that opens it), 2.3 加载器 · 3.5 §手里车道的页 — and
 // the later pages of one `sessions` read (`after=`, C.5) read one cursor after another by design
 const rateKey = (url) => {
   const name = nameOf(url), q = new URLSearchParams(url.split('?')[1] || '')
   if ((name === 'sessions' && q.has('after')) || (name === 'session' && q.has('before')) || /^d\/p\d/.test(name)) return null
+  if (/^d\//.test(name)) return `${name} ${q.get('id')}`
   if (name !== 'lane') return name
   if (q.has('ledger') || q.has('to')) return null
   return `lane ${q.get('id')} ${q.get('lane')}`

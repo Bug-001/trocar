@@ -2,7 +2,7 @@
 // the session cache. Back from the library (its row, or Back) or from the overview (Back), it draws the step it showed within
 // BOARD_LINES.routeBack, the follow chip as it was, and before its poll timer's first tick reads one poll round only — at most one
 // conditional head read and one Range read per open tail, no pack, no `session`, no `lane` but the ledger chain's own continuation (4.4
-// live-poll); a following desk still follows; the 4th session opened evicts the least recently seen one, whose next open reads its tails
+// live-poll); a desk left while a round's head is on its way reads no tail or pack after it; a following desk still follows; the 4th session opened evicts the least recently seen one, whose next open reads its tails
 // whole. The answer files are served from desk-world (3.5 §会话读's reference server) for any id. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -155,6 +155,30 @@ test('1.2 #23 a desk left while its packs load sends no next pack read while awa
     while (!ends.length && Date.now() - back < 20000) await new Promise((r) => setTimeout(r, 50))
     assert.ok(ends.length > 0, 'back on the desk, the loader reads every pack')
     assert.ok(started.some((t) => t >= back))
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
+test('1.2 #23 a desk left while its poll round\'s head is on its way reads no tail and no pack after it lands', { skip }, async () => {
+  const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
+  try {
+    const { page } = b, files = [], held = []
+    let hold = false
+    page.on('request', (r) => { const p = new URL(r.url()).pathname; if (/^\/api\/d\/(open|p\d)/.test(p)) files.push([p, Date.now()]) })
+    await serveWorld(page, w)
+    await page.route('**/api/d/head?**', (route) => (hold ? held.push(route) : route.fallback()))
+    await page.evaluate(() => { location.hash = '#/replay/p/S' })
+    await until(page, () => !!document.querySelector('.desk #stepbar .sb-no'))
+    hold = true
+    for (const t0 = Date.now(); !held.length && Date.now() - t0 < 4 * INTERVAL.session;) await new Promise((r) => setTimeout(r, 20))
+    assert.ok(held.length, 'a poll round\'s head read went out')
+    await page.evaluate(() => { location.hash = '#/sessions' })
+    await until(page, () => !document.querySelector('.desk'))
+    const left = Date.now()
+    hold = false
+    for (const r of held.splice(0)) await r.fallback()
+    await new Promise((r) => setTimeout(r, AFTER))
+    assert.deepEqual(files.filter(([, t]) => t > left).map(([p]) => p), [], 'answer files read while away')
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
