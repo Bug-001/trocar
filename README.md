@@ -129,8 +129,8 @@ trocar (only what that agent is missing), and **a traffic class's level** (the s
 only). Where the board cannot make the change (not installed, or running as root), it shows no control and
 puts the command in the row's technical details. `trocar install` and `trocar uninstall` stay in the CLI: the
 board has no control for them. Replay keys: ← → (Shift: ten steps), Home, End, n / p (next / previous step with a
-problem), f (follow latest), ? (the key list), Esc. Following latest keeps the newest step in view as calls arrive,
-and the context window ends with that step's reply: its text, thinking and tool calls. The address bar reproduces what you see: while following it names no step, otherwise the step on screen. A replay link without a step follows the session live and is still following after a reload, and a link with a step stays on that step, with following off. The replay desk reads a session in parts as you move through it: a step whose part has not arrived keeps its outline and costs on screen and fills in when its part comes, with no load button anywhere; while the session itself is still being read, one quiet line under the header says how far the read has got. Leave the replay desk and come back to the same session (from Sessions, Back, the sidebar or a link) and it shows the step you left, without reading again what it already had. A link that names a step lands on that step directly; the desk no longer walks back to it page by page. The whole history of a session arrives seconds after you open it, read in the background one part right after another rather than one part per refresh. The resource explorer shows each group's count once the lane's whole list of files and resources has been read; until then the count is left blank, never a partial number. A refresh that fails keeps the
+problem), [ / ] (previous / next compaction), f (follow latest), ? (the key list), Esc. Following latest keeps the newest step in view as calls arrive,
+and the context window ends with that step's reply: its text, thinking and tool calls. The address bar reproduces what you see: while following it names no step, otherwise the step on screen. A replay link without a step follows the session live and is still following after a reload, and a link with a step stays on that step, with following off. A session opens at once, also from cold (a new tab, an empty browser cache, no query worker running): the daemon sends a small summary of the session that the worker wrote earlier, and from it the page draws the header with its totals, the whole-session overview, the bars of the part you are in, the step number, the lane names and an empty context frame of the right size; the step's blocks fill in a moment later. On a 21k-call live session that first page was drawn within 48 ms (p95). A session is cut into parts at its compactions: the row above the trace says **Part k of n · steps a–b** (with **(inferred)** when the boundary is a guess), ‹ and › or [ and ] go to the part before or after, the overview marks every boundary, and the bars stay inside the part you are in. Going to the next part took 15 ms (p95) on that session. The rest of the session is read in the background, at most three pieces at a time: first the piece holding your step, then the pieces next to it, then the rest of its part, then everything else from newest to oldest. A step whose piece has not arrived keeps its outline and costs on screen and fills in when its piece comes, with no load button anywhere; a link that names a step reads that step's piece first. While the desk follows a session it asks every 1.5 s only for the bytes added since its last look; when nothing new was captured, nothing comes back and no worker starts. Leave the replay desk and come back to the same session (from Sessions, Back, the sidebar or a link) and it shows the step you left and asks for nothing but one such look. One quiet line under the header says how current the view is: **Reading this session for the first time · N %** while the worker reads a session it has never read (until then the overview shows calls over time only, with no bars per step and no parts), and **N newer calls are not shown yet** when the capture holds calls the summary on screen does not; it goes away with the next summary. The resource explorer shows each group's count once the lane's whole list of files and resources has been read; until then the count is left blank, never a partial number. A refresh that fails keeps the
 last good view on screen, says it is out of date, and tries again with a growing pause. When an agent is not captured, its row says why in the same sentence `trocar status` prints in its NOTE column (one
 catalog, `src/cli/words.mjs`, a sentence for every reason).
 
@@ -197,28 +197,35 @@ Reading the records across sessions is `trocar query <name>` — the one core th
 the board is the HTTP shell (D59); there is no separate ETL step and no database to load. Both go through the
 daemon's query worker, which stays warm and keeps the segment index current as it captures, so a query about a
 session you are looking at answers in milliseconds; the board's answers come gzipped. The worker stays warm while
-someone asks (an open board asks every 1.5 s) and leaves two minutes after the last query, newly captured model
+someone asks (an open board's look for new calls is answered from files and does not wake it) and leaves two minutes after the last query, newly captured model
 call or piece of background reading, giving its memory back; the next query starts a new one. So a first read longer
 than two minutes is finished, not cut off and started over, and a stop or crash in the middle of one loses at most its
 last minute: the worker saves its place at least once a minute while it reads. While the daemon captures, it hands the worker each batch
 of newly captured model calls, and the worker reads them, and works out their sessions itself, in the background at low
 priority, so a running session of any harness is already read when you open it. The cost: while an agent is being
-captured the worker stays resident — on the user's 25k-call session about 135–140 MB of memory between calls (at most
-159 MB, within the 160 MB target), about 600 MB right after a first read — and it spends about 19 ms of CPU on each
-newly captured call, against a target of about 12 ms that is not met yet; the first new call of a session that was never read
-starts its whole first read in the background (about a minute on that session). The worker keeps the segment index's rows in a compact form outside its JavaScript
+captured the worker stays resident. On a generated 5,000-call session this build spends about 39 ms of CPU on each newly
+captured call, twice the 20 ms of the previous build on the same data, and holds 138 MB of memory between calls, at most
+199 MB: the target is about 12 ms and 160 MB, and neither is met yet. The first new call of a session that was never read
+starts its whole first read in the background (about a minute on a 25k-call session). The worker keeps the segment index's rows in a compact form outside its JavaScript
 heap, so how much of a session it can read barely shrinks as the capture home grows. A session is read call by call:
-each call is taken apart once into a context file beside the index, and the session's summary rows are
-written to a second file as they are worked out, so reopening a session reads those two files and does not take the
-records apart again.
+each call is taken apart once, and the session's summary rows are written down as they are worked out, both into the
+session's own directory `~/.trocar/index/ctx/<k>/`, so reopening a session reads those files and does not take the
+records apart again. The worker writes the board's answers there as well: the session's summary (`head.json.gz`), one
+pair of files per 512 calls once they are settled (`p<n>.main` for the main conversation, `p<n>.rest` for everything
+else), and the two files of the part still growing (`open.main`, `open.rest`), which only ever grow at the end. The
+daemon sends these files as they are, never parsing them; a file that is not there yet is asked of the worker, which
+writes it and answers.
 `trocar query session --id <id>` gives the newest page of call rows (at most 1,000 rows and 1 MB) with every lane's
 header; `--before <call>` gives the page just before that call, `--limit <n>` makes pages smaller, and
-`--since <mark>` gives only what changed since the `mark` of an earlier answer (the board asks this every 1.5 s).
+`--since <mark>` gives only what changed since the `mark` of an earlier answer, and `--head` gives the session's summary,
+the same bytes the board opens from.
 `trocar query lane --id <id> --lane <key>` gives one lane's steps: the last page by default, `--from <call>` the
 steps after that call, `--to <call>` the page that ends just before it. Each step is its block list as changes
 against the step before, with the definitions of the blocks the page brings, the files the lane has seen and
 the resources it holds. When those do not all fit in the 1 MB page beside the steps, the answer's `ledger_next`
-names the rest: `--ledger <ledger_next>` gives the next part, until `ledger_next` is null. `trocar query block --ref <ref>` opens one block's verbatim bytes; give `--ref` more than
+names the rest: `--ledger <ledger_next>` gives the next part, until `ledger_next` is null. `--pack <n>.main` (or
+`.rest`) gives the board's file for the session's n-th settled group of 512 calls (counting from 0), and `--tail main` (or `rest`) the file
+of the part still growing. `trocar query block --ref <ref>` opens one block's verbatim bytes; give `--ref` more than
 once to get several in one answer, in the order asked (a ref that cannot be read says why in `errors`).
 A session the worker has not finished reading answers at once with what it has, and says how far it got
 (`pending: {done, total, work}`, where `work` counts what the worker has read and folded so far and grows while it
@@ -440,6 +447,14 @@ builds stay as they are and remain readable. An older trocar refuses a segment s
 and says why, so going back to an older build is not supported. A segment that fails to seal
 keeps its plain copy, is tried again at the next daemon start, and shows in `trocar status`. There is
 no manual seal command.
+
+What the board reads beside the records is kept small the same way. Each session has one directory under
+`~/.trocar/index/ctx/`, and the settled part of its two working files is stored as brotli pieces of about 8 MiB, with
+only the end that still grows kept plain. On the 21k-call live session everything trocar keeps for it (its share of
+the raw segments and of the segment index, plus that directory) came to 498 MB, 0.84× the 590 MB of Claude Code's own
+log for it; before this build it was 972 MB, 2.0×. The derived files alone (the directory, its share of the segment index and the usage
+files) are 0.26× of that log, above the 0.1× target. The directories together are capped at 512 MiB: past that, the sessions
+used longest ago lose theirs, never one that is open or followed, and it is rebuilt from the records the next time.
 
 ```sh
 trocar raw <segment>[:<from>[-<to>]]   # print records byte for byte, sealed or not
