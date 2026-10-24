@@ -1,6 +1,6 @@
 // test/web-v2/browser/desk-pending.test.mjs — 2.3 §读与画 (归约前沿) · D64② · D69 on the mounted desk while a big session is read for the
 // first time: its session reads are answered from a generated world of 30,000 calls on three lanes (desk-world.mjs) whose mark moves on
-// by 1,000 members at each `since` read and carries `pending` until the last one, so every poll brings hundreds of rows, relanes and
+// by 1,000 members at each head read and carries `pending` until the last one, so every poll brings hundreds of rows, relanes and
 // events. While it grows the reader follows, scrubs 60 steps by ←/→ and jumps by the overlay rows' ticks: no task of the page's own
 // runs over I-longtask's line, and a step change's p95 is within BOARD_LINES.stepClick. Runs only under `npm run test:browser`.
 import test from 'node:test'
@@ -24,7 +24,7 @@ test('2.3 归约前沿 · D64②: a session growing by 1,000 members a poll — 
   const b = await withBoard({ bytes: 1e5, width: 1440, chromium: gate.chromium, setup: (page) => page.addInitScript(observeLongTasks) })
   try {
     const { page } = b
-    const growth = await serveWorld(page, w, { from: 4000, grow: 1000 })
+    const growth = await serveWorld(page, w, { from: 4000, grow: 1000, pack: 512 })
     await page.route('**/api/block?**', (route) => route.fulfill({ status: 200, contentType: 'application/json',
       body: JSON.stringify({ blocks: new URL(route.request().url()).searchParams.getAll('ref').map((ref) => ({ ref, bytes: 'x', encoding: 'utf8', fidelity: 'verbatim', truncated: false })), errors: [] }) }))
     const longTasks = () => page.evaluate(() => window.__lt.splice(0))
