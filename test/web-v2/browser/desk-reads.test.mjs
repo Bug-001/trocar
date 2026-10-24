@@ -98,6 +98,14 @@ test('4.4 live-poll: a following desk shows each new call after it lands, read b
     const tails = b.requests.filter((r) => r.url.startsWith('/api/d/open.main?'))
     assert.ok(tails.filter((r) => r.status === 206).length > 0, 'new lines came by Range (206)')
     assert.ok(tails.slice(1).every((r) => r.range != null), 'after the first read every tail read is a Range read')
+    // 2.3 加载器 · A32: the anchor lane grew, so its ledger moves on by `lane --from <the tip it stood at>` (its steps came from the tail);
+    // each such read starts from a different tip, and there are no more of them than head answers that brought the lane new steps
+    const froms = b.requests.filter((r) => r.url.startsWith('/api/lane?')).map((r) => new URLSearchParams(r.url.split('?')[1]))
+      .filter((q) => q.get('lane') === main && q.get('from') != null).map((q) => q.get('from'))
+    const grew = b.requests.filter((r) => r.url.startsWith('/api/d/head?') && r.status === 200).length - 1
+    assert.ok(froms.length >= 1, 'the grown anchor lane\'s ledger is read on by `lane --from`')
+    assert.equal(new Set(froms).size, froms.length, `no tip read on twice: ${froms}`)
+    assert.ok(froms.length <= grew, `${froms.length} ledger reads for ${grew} head answers that grew the session`)
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
