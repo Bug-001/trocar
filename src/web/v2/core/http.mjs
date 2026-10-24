@@ -107,15 +107,16 @@ export async function get(path, params, { signal, hold = true, cond = true } = {
   return { ok: true, data: body, bytes: b.len, ...tipOf(r) } // `tip`: x-trocar-tip when the answer carries it (4.4 §答案文件); an empty 2xx is a success carrying null; `bytes` = the body's UTF-8 bytes (the session cache's measure, 0.2 §5, D71③)
 }
 
-// getText(path, params, {range, signal}): a text read of an answer file (4.4 §答案文件) — `range` (a byte offset) asks `Range: bytes=<range>-`.
-// → {ok, status, text, range, tip} | {ok:false, status, error}: `range` = the Content-Range header, `tip` = x-trocar-tip; a 206, a 200 and a
+// getText(path, params, {range, tag, signal}): a text read of an answer file (4.4 §答案文件) — `range` (a byte offset) asks `Range: bytes=<range>-`,
+// with `If-Range: <tag>` when a tag is given (the tail's generation: another one answers 200, the whole file).
+// → {ok, status, text, range, etag, tip} | {ok:false, status, error}: `range` = the Content-Range header, `tip` = x-trocar-tip; a 206, a 200 and a
 // 416 (the file is shorter than the offset: `range` names its size) are all answers. The browser decompresses a gzip file itself.
-export async function getText(path, params, { range = null, signal } = {}) {
+export async function getText(path, params, { range = null, tag = null, signal } = {}) {
   if (forbidden) return FORBIDDEN
   if (signal && signal.aborted) return { ok: false, status: 0, error: ABORTED }
   const headers = {}
   if (token) headers[CONTROL_TOKEN_HEADER] = token
-  if (range != null) headers.range = `bytes=${range}-`
+  if (range != null) { headers.range = `bytes=${range}-`; if (tag) headers['if-range'] = tag }
   const ac = new AbortController()
   let timedOut = false
   const timer = setTimeout(() => { timedOut = true; ac.abort() }, READ_DEADLINE_MS)
@@ -131,7 +132,7 @@ export async function getText(path, params, { range = null, signal } = {}) {
     if (signal) signal.removeEventListener('abort', cancel)
   }
   latch(r.status)
-  const out = { status: r.status, range: r.headers.get('content-range'), tip: r.headers.get('x-trocar-tip') }
+  const out = { status: r.status, range: r.headers.get('content-range'), etag: r.headers.get('etag'), tip: r.headers.get('x-trocar-tip') }
   if (r.ok || r.status === 416) return { ok: true, text, ...out }
   let error = 'HTTP ' + r.status
   try { error = JSON.parse(text).error || error } catch { /* not JSON: the status says it */ }

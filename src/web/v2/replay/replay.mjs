@@ -599,12 +599,13 @@ function openDesk(ctx, route0) {
   // a body read that failed is asked again on the poll's schedule (2.3 §读失败)
   const reask = () => { if (s.bodyFail.size && s.playRid != null) { targeted = s.playRid; steps.target(s.playRid) } }
 
-  // the open tails (4.4 live-poll): `Range: bytes=<held>-` on the tail the head names; the whole file when none is held of that n, when it
-  // is shorter than what is held (416 naming a smaller size: rewritten) or when what came is not its lines. → {ok, anchor} | a failed answer
-  const tails = new Map() // part → {n, used}
+  // the open tails (4.4 live-poll): `Range: bytes=<held>-` with `If-Range: <its tag>` on the tail the head names; a 200 is a new file (its
+  // generation changed), applied whole. The whole file when none is held of that n or with no tag (a relayed answer has none), when it is
+  // shorter than what is held (416 naming a smaller size) or when what came is not its lines. → {ok, anchor} | a failed answer
+  const tails = new Map() // part → {n, used, tag}
   async function readTail(part, n, signal, whole = false) {
-    const t = tails.get(part), from = whole || !t || t.n !== n ? null : t.used
-    const r = await getText(`/api/d/open.${part}`, { id: s.id }, { range: from, signal })
+    const t = tails.get(part), from = whole || !t || t.n !== n || !t.tag ? null : t.used
+    const r = await getText(`/api/d/open.${part}`, { id: s.id }, { range: from, tag: from == null ? null : t.tag, signal })
     if (!r.ok) return r
     if (r.status === 416) { const size = Number((/\/(\d+)/.exec(r.range || '') || [])[1]); return size === from ? { ok: true } : readTail(part, n, signal, true) }
     let parsed
@@ -612,7 +613,7 @@ function openDesk(ctx, route0) {
     if (r.status !== 206 && parsed.head && parsed.head.tail && parsed.head.tail.n !== n) n = parsed.head.tail.n
     const used = (r.status === 206 ? from : 0) + parsed.used
     return serial(() => {
-      tails.set(part, { n, used }); keep(`t.${part}`, used)
+      tails.set(part, { n, used, tag: r.etag }); keep(`t.${part}`, used)
       const ch = applyParsed({ kind: 'tail', n, part, whole: r.status !== 206 }, parsed)
       const anchor = !!ch && !!s.anchor && parsed.lines.some((l) => l.s && l.s.lane === s.anchor.id)
       return redraw(ch).then((x) => ({ ok: true, anchor, x }))
