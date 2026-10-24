@@ -83,7 +83,10 @@ export function chapterHere(s) {
   const end = N ? no(N - 1) + 1 : 0
   const chs = head && head.chapters && head.chapters.length && a && a.id === head.axis ? head.chapters : [{ s0: 0, s1: end, ts0: null, inferred: false }]
   const g = N ? no(s.playhead) : 0, k = chapterAt(chs, g), pos = (x) => firstAt(no, N, x)
-  return { chs, g, end, pos, c0: pos(chs[k].s0), c1: k === chs.length - 1 ? N : pos(chs[k].s1) }
+  if (!N) return { chs, g, end, pos, c0: 0, c1: 0 }
+  const at = Math.max(0, Math.min(N - 1, s.playhead)) // the span always holds the playhead, even where the lane's numbers are not in order
+  const c0 = Math.min(at, pos(chs[k].s0)), c1 = Math.max(at + 1, k === chs.length - 1 ? N : pos(chs[k].s1))
+  return { chs, g, end, pos, c0, c1 }
 }
 
 export const windowOf = (s) => {
@@ -251,10 +254,10 @@ export function renderSaw(el, s) {
     }
     q(el, '#askscale').innerHTML = h
   }
-  // the axis: step numbers (call counts when the anchor is not the main lane)
-  const unit = (v) => (isMain ? `step ${v}` : `call ${v}`)
-  q(el, '#sawstart').textContent = unit(lo + 1)
-  q(el, '#sawend').textContent = unit(hi) // the total is the step bar's (one fact, one place)
+  // the axis: step numbers (call counts when the anchor is not the main lane) — the steps' own, global numbers (D13)
+  const unit = (v) => (isMain ? `step ${v}` : `call ${v}`), no = (i) => (s.anchor.no ? s.anchor.no(i) : i) + 1
+  q(el, '#sawstart').textContent = unit(no(lo))
+  q(el, '#sawend').textContent = unit(no(hi - 1)) // the total is the step bar's (one fact, one place)
   // the main track's own corner: the view word + this session's peak
   q(el, '#sawgut').innerHTML = `${esc(costView ? W.VIEW_COST : (isMain ? 'Context' : laneWord(s.anchor.kind)))} <b title="${esc(peakTip)}">${esc(peak)}</b>`
   // the legend row
@@ -262,7 +265,7 @@ export function renderSaw(el, s) {
   q(el, '#complegend').title = costView ? W.COST_LEGEND : W.COMP_LEGEND // the legend row stays one line; a cut part keeps its words here
   q(el, '#complegend').innerHTML = costView ? `<span>${esc(W.COST_LEGEND)}</span>` :
     `<span>${esc(W.COMP_LEGEND)}</span><span class="barlegend" title="${esc(BAR_KEYS.map((k) => k[1]).join(' · '))}">${BAR_KEYS.map(([c, w]) => `<i class="ct-${c}"></i>${esc(w)}`).join('')}</span>`
-  q(el, '#viewrange').textContent = W.showSteps(lo + 1, hi)
+  q(el, '#viewrange').textContent = W.showSteps(no(lo), no(hi - 1))
   const ch = chapterHere(s), nav = q(el, '#chapnav')
   if (nav) nav.innerHTML = chapterNavHtml(ch.chs, ch.g, ch.end)
   q(el, '#nomain').style.display = isMain ? 'none' : ''

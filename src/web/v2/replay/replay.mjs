@@ -56,7 +56,7 @@ const DESKHEAD = `<div id="deskhead"></div>`
 export const SKELETON = `<div id="pages">
 <div id="leftpage">
 <div id="saw">
-  <div class="tkrow tkrow-chap"><div class="tgut"></div><div class="tlane"><div class="chapnav" id="chapnav"></div></div></div>
+  <div class="chaprow"><div class="tgut"></div><div class="chapnav" id="chapnav"></div></div>
   <div class="tkrow tkrow-problem"><div class="tgut tgut-prob" id="probnav">Problems</div><div class="tlane"><div class="probrow" id="probrow"></div></div></div>
   <div class="tkrow tkrow-bars"><div class="tgut tgut-ctx" id="sawgut">Context</div><div class="tlane"><div class="sawrow" id="sawrow"><div id="reviewbracket"><span class="rbend" aria-hidden="true">inferred</span></div></div></div></div>
   <div class="tkrow"><div class="tgut">Cache</div><div class="tlane"><div class="cacherow" id="cacherow"></div></div></div>
@@ -373,6 +373,7 @@ function openDesk(ctx, route0) {
   }
   // a window wider than the lane draws is clipped, and the steps it clips are the latest ones: shrink it, keeping the playhead in it
   function fitView() {
+    if (!s.anchor || !s.anchor.calls.length) return false
     const { c0, c1 } = chapterHere(s), inside = s.view.lo >= c0 && s.view.hi <= c1 && s.view.lo < s.view.hi // 1.3 §章: never across a chapter's edge
     const w = fitWindow({ lo: inside ? s.view.lo : c0, hi: inside ? s.view.hi : c1, K: sawCapacity(), playhead: s.playhead })
     if (w.lo === s.view.lo && w.hi === s.view.hi) return false
