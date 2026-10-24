@@ -198,9 +198,12 @@ the board is the HTTP shell (D59); there is no separate ETL step and no database
 daemon's query worker, which stays warm and keeps the segment index current as it captures, so a query about a
 session you are looking at answers in milliseconds; the board's answers come gzipped. The worker stays warm while
 someone asks (an open board asks every 1.5 s) and leaves two minutes after the last query or newly captured model
-call, giving its memory back; the next query starts a new one. While the daemon captures, it names to the worker the
-sessions that got new model calls, and the worker reads those calls in the background at low priority, so a running
-session is already read when you open it. The worker keeps the segment index's rows in a compact form outside its JavaScript
+call, giving its memory back; the next query starts a new one. While the daemon captures, it hands the worker each batch
+of newly captured model calls, and the worker reads them, and works out their sessions itself, in the background at low
+priority, so a running session of any harness is already read when you open it. The cost: while an agent is being
+captured the worker stays resident — on the user's 23k-call session about 285 MB between calls, 578 MB right after a
+first read, against a 160 MB target that is not met yet — and the first new call of a session that was never read
+starts its whole first read in the background (about a minute on that session). The worker keeps the segment index's rows in a compact form outside its JavaScript
 heap, so how much of a session it can read barely shrinks as the capture home grows. A session is read call by call:
 each call is taken apart once into a context file beside the index, and the session's summary rows are
 written to a second file as they are worked out, so reopening a session reads those two files and does not take the
