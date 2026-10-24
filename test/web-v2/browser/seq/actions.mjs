@@ -10,7 +10,7 @@ import { FAULT_KINDS, killWorkerMidRead } from './faults.mjs'
 
 // controls that write (core/harness-switch.mjs switch / Set up; settings/storage.mjs levels) and every button of a modal (a confirm)
 export const DENY = '[role=switch],[data-hctl],[data-keep],[data-lvl],[data-class],.v2-modal button,.v2-modal [role=button]'
-const FAULT_NAMES = ['session', 'lane', 'block', 'sessions', 'status', 'overview', 'traffic', 'classes', 'pricing', 'segments', 'calls']
+const FAULT_NAMES = ['d', 'lane', 'block', 'sessions', 'status', 'overview', 'traffic', 'classes', 'pricing', 'segments', 'calls']
 const SCREENS = ['#/overview', '#/sessions', '#/capture', '#/capture/log', '#/traffic', '#/settings/storage', '#/settings/prices', '#/settings/appearance']
 const TOGGLES = { block: '#ctxwin .cblk[data-bi] > .cbh', reply: '#ctxwin .cblk[data-rp] > .cbh', turn: '#ctxwin .cwturnhd', rail: '#rails [data-toggle], #rails [data-railunfold]', tick: '#rails .tick[data-lane]', rpbar: '#rpbar', details: '#screen details > summary', row: '#screen [aria-expanded][aria-controls]' }
 const NAV_KEYS = ['ArrowLeft', 'ArrowRight', 'Shift+ArrowLeft', 'Shift+ArrowRight', 'Home', 'End', 'step:prev', 'step:next']
@@ -128,7 +128,7 @@ export const ACTIONS = [
     const rows = await library(ctx)
     if (rows.length < 2) return SKIP
     const A = rowAt(rows, p.a), B = rows[(rows.indexOf(A) + 1 + Math.floor(p.b * (rows.length - 1))) % rows.length]
-    ctx.faults.arm({ kind: 'latency', name: 'session', n: 1, ms: p.ms })
+    ctx.faults.arm({ kind: 'latency', name: 'd', n: 1, ms: p.ms })
     await go(ctx.page, deskHash(A))
     await go(ctx.page, deskHash(B))
   }),
@@ -146,8 +146,8 @@ export const ACTIONS = [
   world('kill', 2, () => ({}), async (ctx) => {
     // on the desk the kill lands in a `session` read; elsewhere in whichever read comes next (the worker answers every name)
     const desk = (await hashOf(ctx.page)).startsWith('#/replay/'), from = Date.now()
-    const r = await killWorkerMidRead(ctx.b, { name: desk ? 'session' : null })
-    if (!r.skipped) ctx.faults.log.push({ name: desk ? 'session' : '*', kind: 'kill', from, to: Date.now() })
+    const r = await killWorkerMidRead(ctx.b, { name: desk ? 'd' : null })
+    if (!r.skipped) ctx.faults.log.push({ name: desk ? 'd' : '*', kind: 'kill', from, to: Date.now() })
     return r.skipped ? SKIP : undefined
   }),
 ]

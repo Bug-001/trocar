@@ -166,12 +166,12 @@ test('V-mem the DOM inflated across a revisit', { skip }, async () => {
 
 test('V-follow following, the session grows and its reads are aborted', { skip }, async () => {
   await fresh()
-  await b.page.route('**/api/session?**', (r) => r.abort())
+  await b.page.route('**/api/d/**', (r) => r.abort())
   try {
     const grownAt = Date.now(); world.grow(2)
-    const r = await check(ctx({ follow: true, grownAt, faults: [{ name: 'abort-session', kind: 'route', from: grownAt, to: null }] }))
+    const r = await check(ctx({ follow: true, grownAt, faults: [{ name: 'abort-d', kind: 'route', from: grownAt, to: null }] }))
     assert.ok(ids(r).includes('I-follow'))
-  } finally { await b.page.unroute('**/api/session?**') }
+  } finally { await b.page.unroute('**/api/d/**') }
 })
 
 test('V-hold not following, growth and an unrecorded step key', { skip }, async () => {

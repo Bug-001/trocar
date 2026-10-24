@@ -15,7 +15,8 @@ export const PENDING = new Map([
 
 export const LIMITS = Object.freeze({
   consoleGraceMs: 2000, // an armed fault window's console.error tail (plan §Invariants I-console)
-  interval: Object.freeze({ status: 5000, sessions: 15000, session: 1500 }), // spec/01-trocar-rfc/4.4-server.md:45-52
+  // the desk's poll round (4.4 live-poll): the head and a Range read of each open tail, 1.5 s
+  interval: Object.freeze({ status: 5000, sessions: 15000, session: 1500, 'd/head': 1500, 'd/open.main': 1500, 'd/open.rest': 1500 }), // spec/01-trocar-rfc/4.4-server.md:45-52
   intervalOther: 30000, // 4.4:52 「其余 … 每 30 s」
   backoffCapMs: 30000, // 1.5 K-29 (spec/01-trocar-rfc/1.5-states-aesthetics.md:76): doubling, capped at 30 s
   sessionDurFactor: 3, // 4.4:51 the timer's next read waits ≥ 3 × the last read's duration
@@ -86,14 +87,15 @@ const viewOf = (page) => page.evaluate((sel) => {
   }
 }, CAPTURED)
 
-// the tail's follow-up reads (4.4:52): one `lane` read per touched held lane per `session` delta, one `block` read per followed delta
+// a poll round's follow-up reads (4.4 live-poll): one `lane --from` (the anchor lane's ledger) per round that brought anchor-lane
+// steps, one `block` read per followed new call
 const DELTA_PACED = new Set(['lane', 'block'])
-// what I-rate paces: a name, and for `lane` each lane of each session apart; null = not paced: the desk's history chains — a lane's
-// ledger (`ledger=`) and older pages (`to=`), the skeleton's older pages (`session` `before=`), 2.3 加载器 · 3.5 §手里车道的页 — and
+// what I-rate paces: a name, and for `lane` each lane of each session apart; null = not paced: the desk's loader — the sealed packs
+// (`d/p<n>.<part>`), a lane's ledger (`ledger=`, and the `to=` page that opens it), 2.3 加载器 · 3.5 §手里车道的页 — and
 // the later pages of one `sessions` read (`after=`, C.5) read one cursor after another by design
 const rateKey = (url) => {
   const name = nameOf(url), q = new URLSearchParams(url.split('?')[1] || '')
-  if ((name === 'sessions' && q.has('after')) || (name === 'session' && q.has('before'))) return null
+  if ((name === 'sessions' && q.has('after')) || (name === 'session' && q.has('before')) || /^d\/p\d/.test(name)) return null
   if (name !== 'lane') return name
   if (q.has('ledger') || q.has('to')) return null
   return `lane ${q.get('id')} ${q.get('lane')}`
@@ -112,11 +114,11 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
   for (const h of hidden) if (h.to != null) firstIn(h.to, h.to + LIMITS.returnReadMs)
   for (const a of actions) if (a.a === 'hashchange' || a.a === 'popstate') firstIn(a.t + lo, a.t + LIMITS.openReadMs)
   const last = new Map() // key → {start, dur, fails, pending, recovered}
-  let sessionAt = -Infinity // the start of the latest `session` read, whatever caused it
+  let sessionAt = -Infinity // the start of the latest poll round (its head read, or a `session` read), whatever caused it
   for (const e of sorted) {
     const name = nameOf(e.url), key = rateKey(e.url), p = last.get(key)
     const since = sessionAt, failed = failedRead(e)
-    if (name === 'session') sessionAt = e.start
+    if (name === 'session' || name === 'd/head') sessionAt = e.start
     if (key == null) continue
     if (byReader(e.start) || exempt.has(e)) { last.delete(key); continue } // the reader's read starts the timer's chain over
     last.set(key, { start: e.start, dur: (e.end ?? e.start) - e.start, fails: failed ? (p ? p.fails : 0) + 1 : 0, pending: !!e.pending, recovered: !failed && !!p && p.fails > 0 })
@@ -130,7 +132,7 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
     // after k failures in a row: interval × 2^(k-1), ≤ 30 s; after a success: the interval, and for `session` (C2) 3 × that read's
     // duration unless it answered `pending` or ended a back-off
     let want = p.fails ? Math.min(base * 2 ** (p.fails - 1), LIMITS.backoffCapMs) : base
-    if (name === 'session' && !p.fails && !p.pending && !p.recovered) want = Math.max(want, LIMITS.sessionDurFactor * p.dur)
+    if ((name === 'session' || name === 'd/head') && !p.fails && !p.pending && !p.recovered) want = Math.max(want, LIMITS.sessionDurFactor * p.dur)
     const gap = e.start - p.start
     if (gap < LIMITS.rateSlack * want) out.push(`${key}: ${gap} ms after the last timer read, expected ≥ ${Math.round(LIMITS.rateSlack * want)} ms`)
   }

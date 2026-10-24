@@ -4,7 +4,7 @@
 // Kinds (1.5 K-29 · 4.4): latency (the real answer, held ms) · e500 / e503 (the server's own error shape, `{error}`, src/server.mjs
 // sendJson; the 500 reason is a long V8-native-stack-like text, like the worker OOM a reader saw) · cut (200 whose content-length
 // promises more than the body holds: the answer is not received in full) · abort (connection reset) · e304 (304 for a URL the page
-// holds no ETag for). killWorkerMidRead(b) SIGKILLs the real query worker while a `session` read is in flight.
+// holds no ETag for). killWorkerMidRead(b) SIGKILLs the real query worker while a desk read (an answer file, /api/d/*) is in flight.
 // Exports only: nothing runs at import.
 
 import http from 'node:http'
@@ -92,7 +92,7 @@ export async function installFaults(page) {
 
 /** Wait for the next /api/<name> request to be issued (any /api/ read when name is null), then SIGKILL the query worker(s).
  *  No such read within `timeout`: the kill lands between reads. → {killed, midRead} or {skipped:true} (no face, or no worker alive). */
-export async function killWorkerMidRead(b, { name = 'session', timeout = 6000 } = {}) {
+export async function killWorkerMidRead(b, { name = 'd', timeout = 6000 } = {}) {
   if (!b.face) return { skipped: true }
   const want = (r) => { const n = nameOf(new URL(r.url())); return name ? n === name : !!n }
   const req = await b.page.waitForRequest(want, { timeout }).catch(() => null)
