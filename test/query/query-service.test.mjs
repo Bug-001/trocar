@@ -573,4 +573,37 @@ test('kick: the kicked record ids fold their sessions, a synthesized-key session
     for (const s of [keyed, synth]) await within((async () => { while (!fs.existsSync(foldLogFile(home, s.session_id))) await new Promise((d) => setTimeout(d, 50)) })(), 20_000, `the ${s.session_synthesized ? 'synthesized' : 'keyed'} session was folded with no query`)
   } finally { svc.stop() }
 })
+// 3.5 #32 (§后台抽取与归约 kick): the kick's cool-down blocks only the fork. A kicked worker that died opens an episode of subject
+// `kick`; a worker a query forked inside that cool-down is alive, and a kick then reaches it — its session is folded with no query on
+// it — and forks nothing.
+test('kick: inside the kick cool-down a live worker still gets the kick, and the kick forks nothing (3.5 #32)', { timeout: 30_000 }, async () => {
+  const { foldLogFile } = await import('../../src/query/fold-log.mjs')
+  const { recordId } = await import('../../src/collector/core/record/segments.mjs')
+  const { runQuery } = await import('../../src/query/named/index.mjs')
+  const home = rawHome('trocar-qsvc-')
+  const segment = '20261024T110000Z'
+  // two sessions: the kicked one is the older, so the worker's own idle fold (the newest index row's session) is never it
+  const line = (n, key) => JSON.stringify({ ts: `2026-10-24T11:00:0${n}.000Z`, endpoint: '/v1/chat/completions', method: 'POST',
+    req_headers: { 'content-type': 'application/json' }, req_body: JSON.stringify({ model: 'm', prompt_cache_key: key, messages: [{ role: 'user', content: `ask ${n}` }] }),
+    resp: { status: 200, kind: 'json', body: { choices: [{ message: { role: 'assistant', content: `answer ${n}` } }] } },
+    id: `req_${n}`, ts_request: `2026-10-24T11:00:0${n}.000Z`, is_llm_call: true, capture: 'transparent', host: 'api.example.test', traffic_class: 'llm',
+    proc: { pid: 9, exe: '/x/kimi', agent: 'kimi' } })
+  writeSegmentLines(home, segment, [line(1, 'cool-kicked-1'), line(2, 'cool-newest-2')])
+  const sessions = (await runQuery('sessions', {}, { home })).sessions
+  assert.equal(sessions.length, 2, 'the corpus has its two sessions')
+  const session = sessions.at(-1) // the list is newest first
+  let forks = 0, first = null
+  const svc = createQueryService({ home, now: () => 0, idleMs: 20_000,
+    fork: (h) => (++forks === 1 ? (first = spawn(process.execPath, ['-e', 'process.exit(3)'], { stdio: ['pipe', 'pipe', 'pipe'] })) : workerFork(h)) })
+  try {
+    svc.kick([recordId(segment, 1)])
+    await once(first, 'close')
+    await new Promise((d) => setImmediate(d))
+    await warmed(svc) // a query forks a live worker inside the kick's cool-down
+    const forked = forks
+    svc.kick([recordId(segment, 1)])
+    await within((async () => { while (!fs.existsSync(foldLogFile(home, session.session_id))) await new Promise((d) => setTimeout(d, 50)) })(), 20_000, 'the live worker folded the kicked session with no query on it')
+    assert.equal(forks, forked, 'the kick forked nothing')
+  } finally { svc.stop() }
+})
 const writeSegmentLines = (home, segment, lines) => fs.appendFileSync(path.join(home, 'raw', `${segment}.ndjson`), lines.join('\n') + '\n', { mode: 0o600 })
