@@ -64,17 +64,20 @@ export const localOnly = (name, env = {}) => LOCAL_ONLY.includes(name) || LOCAL_
  * `deadlineMs` → this process folds it all, where the local path never has `pending`.
  */
 export async function queryDocument(name, params = {}, { home, userHome, dir, platform, env, deps, fs, now, indent = 0, deadlineMs = DEADLINE_MS, say } = {}) {
-  const local = async (handOff) => {
+  const tell = (line) => { if (say) say(line) }
+  // `why` is said once the document is there: a read the query core refuses was answered by no one
+  const local = async (handOff, why) => {
     const { runQuery } = await import('./named/index.mjs')
     // `env` only when the caller gave one: an empty object here is not "no environment", it is an environment with
     // nothing in it, and it defeated the default the commands themselves set (cli/status.mjs `env = process.env`),
     // so the board answered `/api/status` and `/api/doctor` as if the machine had no environment at all.
-    return { text: JSON.stringify(await runQuery(name, params, { home, userHome, platform, deps, fs, now, ...(env ? { env } : {}), ...(handOff ? { handOff } : {}) }), null, indent), via: 'local' }
+    const text = JSON.stringify(await runQuery(name, params, { home, userHome, platform, deps, fs, now, ...(env ? { env } : {}), ...(handOff ? { handOff } : {}) }), null, indent)
+    if (why) tell(why)
+    return { text, via: 'local' }
   }
   if (localOnly(name, env || {}) || fs || now) return local(false)
-  const tell = (line) => { if (say) say(line) }
   const ep = controlEndpointFor({ platform, dir, env: env || {} })
-  if (!ep.socketPath) { tell('No trocar daemon is running, so this query is answered here.'); return local(false) }
+  if (!ep.socketPath) return local(false, 'No trocar daemon is running, so this query was answered here.')
   const ask = (ps) => { const q = searchOf(ps); q.set('name', name); q.set('indent', String(indent)); return `${QUERY_PATH}?${q}` }
   // `whole` = this ask carries the caller's own parameters: only its answer may be printed; `seen` = the last pending answer's
   // progress, `moved` = when it last moved; `waiting` = this read waits on the worker
@@ -95,15 +98,10 @@ export async function queryDocument(name, params = {}, { home, userHome, dir, pl
       // 503 (no warm worker yet) first answers from what is on disk, and waits on the worker for what is not.
       if (e && e.status === 400) throw await asQueryError(e)
       if (!(e && e.status === 503)) {
-        tell(e && e.status ? `The trocar daemon could not answer (HTTP ${e.status}), so this query is answered here.` : 'No trocar daemon answered, so this query is answered here.')
-        return local(false)
+        return local(false, e && e.status ? `The trocar daemon could not answer (HTTP ${e.status}), so this query was answered here.` : 'No trocar daemon answered, so this query was answered here.')
       }
       if (!waiting) {
-        try {
-          const r = await local(true)
-          tell('The trocar daemon was not ready yet, so this query was answered here.')
-          return r
-        } catch (h) { if (!h || h.code !== 'hand-off') throw h }
+        try { return await local(true, 'The trocar daemon was not ready yet, so this query was answered here.') } catch (h) { if (!h || h.code !== 'hand-off') throw h }
         wait(null); moved = Date.now()
       }
       if (Date.now() - moved >= deadlineMs) break
