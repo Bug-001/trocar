@@ -22,6 +22,10 @@ async function answers(home, id) {
 }
 const FLAT = { 'extract.0.ndjson': '.ndjson', 'extract.idx': '.idx', 'fold.0.ndjson': '.fold.ndjson', 'fold.idx': '.fold.idx' }
 
+// the directory as the first read finds it: not there · holding answer files only (the start-up sweep writes a tier-0 head for every
+// session without one before any read, 3.5 §谁执行它) · holding a store of its own beside flat copies (a home that was read before the fix)
+const PRE = ['none', 'answers', 'store']
+
 test('4.3 #9: the flat layout is renamed into ctx/<k>/ on the first read; the answers are the same bytes', { timeout: 300_000 }, async () => {
   for (const wire of ['http', 'threads']) {
     const home = path.join(tmpDir('trocar-layout-'), '.trocar')
@@ -30,18 +34,23 @@ test('4.3 #9: the flat layout is renamed into ctx/<k>/ on the first read; the an
     await answers(home, s.id)
     saveIndexes()
     // copies at new paths: a store of their own in this process, opened cold
-    const [kept, flat] = ['kept', 'flat'].map((t) => { const to = path.join(tmpDir(`trocar-layout-${t}-`), '.trocar'); fs.cpSync(home, to, { recursive: true }); return to })
+    const kept = path.join(tmpDir('trocar-layout-kept-'), '.trocar'); fs.cpSync(home, kept, { recursive: true })
     const before = await answers(kept, s.id)
-    const dir = sessionDir(flat, s.id), inode = {}
-    for (const n of fs.readdirSync(dir)) if (/^(head\.|open\.|p\d+\.)/.test(n)) fs.rmSync(path.join(dir, n)) // the answer files (3.5): the flat layout had none
-    assert.deepEqual(fs.readdirSync(dir).sort(), Object.keys(FLAT).sort(), `${wire}: the directory layout is what was built`)
-    for (const [n, ext] of Object.entries(FLAT)) { fs.renameSync(path.join(dir, n), dir + ext); inode[n] = fs.statSync(dir + ext).ino }
-    fs.rmdirSync(dir)
-    const after = await answers(flat, s.id)
-    assert.equal(after, before, `${wire}: the answers after the move`)
-    const ctx = path.dirname(dir)
-    assert.deepEqual(fs.readdirSync(ctx).filter((n) => n.startsWith(path.basename(dir))), [path.basename(dir)], `${wire}: no flat file is left`)
-    for (const n of Object.keys(FLAT)) assert.equal(fs.statSync(path.join(dir, n)).ino, inode[n], `${wire}: ${n} is the flat file renamed, not a copy`)
-    assert.equal(fs.statSync(dir).mode & 0o777, 0o700)
+    for (const pre of PRE) {
+      const flat = path.join(tmpDir(`trocar-layout-${pre}-`), '.trocar'); fs.cpSync(home, flat, { recursive: true })
+      const dir = sessionDir(flat, s.id), inode = {}
+      if (pre === 'none') for (const n of fs.readdirSync(dir)) if (/^(head\.|open\.|p\d+\.)/.test(n)) fs.rmSync(path.join(dir, n)) // the flat layout had no answer files
+      for (const [n, ext] of Object.entries(FLAT)) {
+        if (pre === 'store') { fs.copyFileSync(path.join(dir, n), dir + ext); inode[n] = fs.statSync(path.join(dir, n)).ino; continue }
+        fs.renameSync(path.join(dir, n), dir + ext); inode[n] = fs.statSync(dir + ext).ino
+      }
+      if (pre === 'none') fs.rmdirSync(dir)
+      const after = await answers(flat, s.id)
+      assert.equal(after, before, `${wire} · ${pre}: the answers after the move`)
+      const ctx = path.dirname(dir)
+      assert.deepEqual(fs.readdirSync(ctx).filter((n) => n.startsWith(path.basename(dir))), [path.basename(dir)], `${wire} · ${pre}: no flat file is left`)
+      for (const n of Object.keys(FLAT)) assert.equal(fs.statSync(path.join(dir, n)).ino, inode[n], `${wire} · ${pre}: ${n} is ${pre === 'store' ? 'the directory\'s own' : 'the flat file renamed, not a copy'}`)
+      if (pre === 'none') assert.equal(fs.statSync(dir).mode & 0o777, 0o700) // the others: the copy made that directory
+    }
   }
 })
