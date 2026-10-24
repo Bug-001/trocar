@@ -25,8 +25,8 @@ import { segmentIndex } from '../../src/query/index-build.mjs'
 
 const BASE = { growth: 2_000, compactAt: 20_000, subEvery: 4, subLanes: 3, late: 2 }
 const LEDGERS = { small: { ...BASE, paths: 4 }, page: { ...BASE, paths: 80, pathPool: 20_000 } }
-const CTX = /[\\/]index[\\/]ctx[\\/][^\\/]+\.ndjson$/
-const ctxBytes = (home) => { const d = path.join(home, 'index', 'ctx'); return fs.readdirSync(d).filter((f) => f.endsWith('.ndjson')).reduce((a, f) => a + fs.statSync(path.join(d, f)).size, 0) }
+const CTX = /[\\/]index[\\/]ctx[\\/][0-9a-f]{32}[\\/][^\\/]+\.ndjson$/
+const ctxBytes = (home) => { const d = path.join(home, 'index', 'ctx'); return fs.readdirSync(d, { recursive: true }).filter((f) => f.endsWith('.ndjson')).reduce((a, f) => a + fs.statSync(path.join(d, f)).size, 0) }
 // k members that are no call, written after the calls and stamped within a second of the last record: requests of no LLM on the
 // session's own headers (the last record's)
 function nonCalls(file, k, from) {
@@ -53,10 +53,10 @@ async function workAt(calls, opts) {
   const segment = path.basename(s.file, '.ndjson'), segIdx = path.join(home, 'index', `${segment}.json`), idxFds = new Set()
   const facts = new Set()
   const own = { ...fs,
-    openSync(p, ...a) { const fd = fs.openSync(p, ...a); if (CTX.test(String(p))) fds.set(fd, String(p).endsWith('.fold.ndjson')); else fds.delete(fd); if (String(p) === segIdx) idxFds.add(fd); else idxFds.delete(fd); return fd },
+    openSync(p, ...a) { const fd = fs.openSync(p, ...a); if (CTX.test(String(p))) fds.set(fd, path.basename(String(p)).startsWith('fold.')); else fds.delete(fd); if (String(p) === segIdx) idxFds.add(fd); else idxFds.delete(fd); return fd },
     closeSync(fd) { fds.delete(fd); idxFds.delete(fd); return fs.closeSync(fd) },
     readSync(fd, ...a) { const n = fs.readSync(fd, ...a); if (counting && fds.has(fd)) { bytes += n; if (fds.get(fd)) fold += n } if (counting && idxFds.has(fd)) idx += n; return n },
-    readFileSync(p, ...a) { const b = fs.readFileSync(p, ...a); if (counting && CTX.test(String(p))) { bytes += b.length; if (String(p).endsWith('.fold.ndjson')) fold += b.length } if (counting && String(p) === segIdx) idx += b.length; return b },
+    readFileSync(p, ...a) { const b = fs.readFileSync(p, ...a); if (counting && CTX.test(String(p))) { bytes += b.length; if (path.basename(String(p)).startsWith('fold.')) fold += b.length } if (counting && String(p) === segIdx) idx += b.length; return b },
   }
   // the index's rows of now, each a Proxy noting a read of a member of the session; the session's groups made before counting
   const index = async () => {

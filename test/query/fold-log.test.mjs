@@ -5,6 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { snapshot } from './raw-home.mjs'
@@ -78,13 +79,14 @@ const open = (home, o = {}) => openFoldLog({ home, fs, key: KEY, projection: PRO
 const notes = (errors) => errors.map(({ where, code, level }) => ({ code, level, where: typeof where }))
 const REBUILT = [{ code: 'projection-rebuilt', level: 'note', where: 'string' }]
 
-test('4.3 #7 fold log: its file sits beside the projection, mode 0600', () => {
+test('4.3 #7 fold log: its file sits beside the projection in the session directory (0700), mode 0600', () => {
   const home = tmpDir('trocar-fold-')
   write(open(home), steps(1, 2))
-  const file = foldLogFile(home, KEY), proj = projectionFile(home, KEY)
-  assert.equal(path.dirname(file), path.dirname(proj))
-  assert.equal(path.basename(file), path.basename(proj).replace(/\.ndjson$/, '.fold.ndjson'))
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600)
+  const dir = path.join(home, 'index', 'ctx', createHash('sha256').update(KEY).digest('hex').slice(0, 32))
+  assert.equal(foldLogFile(home, KEY), path.join(dir, 'fold.0.ndjson'))
+  assert.equal(projectionFile(home, KEY), path.join(dir, 'extract.0.ndjson'))
+  assert.equal(fs.statSync(dir).mode & 0o777, 0o700)
+  assert.equal(fs.statSync(foldLogFile(home, KEY)).mode & 0o777, 0o600)
 })
 
 test('4.3 #7 fold log: a reopened log gives the same latest lines, item and failed lines by rid, versionAt answers and frontiers', () => {

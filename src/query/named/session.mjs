@@ -28,7 +28,7 @@
 import nodeFs from 'node:fs';
 import v8 from 'node:v8';
 import { reduction, memoryLog, BlockUnread, REDUCE_HEAP, LEDGER_BYTES, REDUCE_V } from '../../view/reduce.mjs';
-import { openFoldLog, foldLogFile, LOG_BYTES } from '../fold-log.mjs';
+import { openFoldLog, LOG_BYTES } from '../fold-log.mjs';
 import { trocarHome } from '../../paths.mjs';
 import { extractMembers, extractSeed, blockAt, CHUNK_STORED, TAIL_HEAP, releaseTails } from '../../view/extract.mjs';
 import { compareStep } from '../../view/step-order.mjs';
@@ -299,11 +299,9 @@ function stateOf(ctx, id, store, plan) {
     if (writer) fileLogs.set(store, s);
     return s;
   }
+  if (writer) log.remove(); // every file of it (4.3 §4 分片)
   log.close();
-  if (writer) {
-    try { fs.rmSync(foldLogFile(home, id), { force: true }); } catch { /* the open below cuts what it cannot read */ }
-    s.log = open();
-  } else s.log = memoryLog(store);
+  s.log = writer ? open() : memoryLog(store);
   if (writer) fileLogs.set(store, s);
   s.R = reductionOf(s, s.log);
   return s;

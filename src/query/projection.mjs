@@ -1,5 +1,5 @@
 // src/query/projection.mjs — the CONTEXT PROJECTION's store (RFC 4.3 §4, D69): one append-only NDJSON
-// file per session, `index/ctx/<first 32 hex of sha256(session key)>.ndjson`, that keeps what extraction found so a
+// line file per session, `index/ctx/<first 32 hex of sha256(session key)>/extract.*` (4.3 §4 目录 · 分片), that keeps what extraction found so a
 // warm session is not re-extracted. Storage only: it knows a definition by `def.bid`, a call row by `row.rid` and a
 // break by its `brk` pair, and nothing else of their contents. A projection like the index (invariant 2, D59): delete
 // it and the next open rebuilds it, answer for answer the same.
@@ -29,7 +29,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { indexDir, segmentCmp } from './index-build.mjs';
 import { parseRecordId } from '../collector/core/record/segments.mjs';
 import { trocarHome } from '../paths.mjs';
-import { lineFile, saveSidecar, loadSidecar } from './line-file.mjs';
+import { lineFile } from './line-file.mjs';
 
 export const PROJ_V = 8;
 const CAP_BYTES = 512 << 20; // the total's ceiling (gcProjections)
@@ -47,14 +47,27 @@ const MEMO_SLOTS = 1024, MEMO_CHARS = 1 << 18;
 /** What an open store keeps at most of rows and shared values read back (each cache holds two times its figure) and of the share
  *  keys it remembers by slot: the heap a warm session's store costs beside its reduction (src/query/named/session.mjs). */
 export const STORE_HEAP = 2 * (ROW_HEAP + SHARED_HEAP) + 2 * MEMO_CHARS;
-const CHUNK = 1 << 20;
-/** The first read of a line scan (linesOf), doubling up to CHUNK. */
-export const FIRST_CHUNK = 4 << 10;
-const NAME = /^([0-9a-f]{32})(?:\.fold)?\.(?:ndjson|idx(?:\.tmp)?)$/; // a projection, its fold log (src/query/fold-log.mjs), their sidecars
+const FLAT = /^([0-9a-f]{32})(?:\.fold)?\.(?:ndjson|idx(?:\.tmp)?)$/; // the flat layout's files (migrateFlat)
+const DIR = /^[0-9a-f]{32}$/;
 
 const ctxDir = (home) => path.join(indexDir(home), 'ctx');
 const hashOf = (key) => createHash('sha256').update(String(key)).digest('hex').slice(0, 32);
-export const projectionFile = (home, sessionKey) => path.join(ctxDir(home), `${hashOf(sessionKey)}.ndjson`);
+/** The session's directory (4.3 §4 目录): its projection `extract.*`, its fold log `fold.*` (src/query/fold-log.mjs). */
+export const sessionDir = (home, sessionKey) => path.join(ctxDir(home), hashOf(sessionKey));
+/** The projection's plain file from byte 0: all its lines while none is sealed (line-file.mjs). */
+export const projectionFile = (home, sessionKey) => path.join(sessionDir(home, sessionKey), 'extract.0.ndjson');
+
+/** migrateFlat({home, fs, key}): the flat layout's files of the session (`ctx/<k>.ndjson`, `<k>.idx`, `<k>.fold.ndjson`,
+ *  `<k>.fold.idx`) renamed into `ctx/<k>/` when that is not there yet (4.3 §4 迁移): rename only, never a copy (D27③); offsets
+ *  do not change, so the sidecars still hold. */
+export function migrateFlat({ home = trocarHome(), fs = nodeFs, key }) {
+  const flat = path.join(ctxDir(home), hashOf(key)), dir = sessionDir(home, key);
+  if (!fs.existsSync(`${flat}.ndjson`) || fs.existsSync(dir)) return;
+  fs.mkdirSync(dir, { mode: 0o700 });
+  for (const [from, to] of [['.ndjson', 'extract.0.ndjson'], ['.idx', 'extract.idx'], ['.fold.ndjson', 'fold.0.ndjson'], ['.fold.idx', 'fold.idx']]) {
+    try { fs.renameSync(`${flat}${from}`, path.join(dir, to)); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  }
+}
 const newId = () => randomBytes(12).toString('base64url');
 const pairKey = (a, b) => `${a}\n${b}`;
 
@@ -63,27 +76,6 @@ export function posCmp(a, b) {
   const pa = parseRecordId(a), pb = parseRecordId(b);
   if (!pa || !pb) return pa ? -1 : pb ? 1 : String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
   return segmentCmp(pa.segment, pb.segment) || (pa.lineNo - pb.lineNo);
-}
-
-// Every line of `file` from byte `from` (a line's start) with its byte offset and length (newline excluded), read in chunks; `nl`: it
-// ended in a newline.
-export function* linesOf(fs, file, from = 0) {
-  let fd;
-  try { fd = fs.openSync(file, 'r'); } catch (e) { if (e.code === 'ENOENT') return; throw e; }
-  try {
-    // reads of FIRST_CHUNK, doubling up to CHUNK: a caller that stops after the first lines (a header) reads about them only
-    let carry = Buffer.alloc(0), at = from, pos = from, n, size = FIRST_CHUNK;
-    const buf = Buffer.alloc(CHUNK);
-    while ((n = fs.readSync(fd, buf, 0, size, pos)) > 0) {
-      pos += n; size = Math.min(2 * size, CHUNK);
-      const b = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n);
-      let from = 0, i;
-      while ((i = b.indexOf(10, from)) !== -1) { yield { off: at + from, len: i - from, text: b.toString('utf8', from, i), nl: true }; from = i + 1; }
-      at += from;
-      carry = Buffer.from(b.subarray(from));
-    }
-    if (carry.length) yield { off: at, len: carry.length, text: carry.toString('utf8'), nl: false };
-  } finally { fs.closeSync(fd); }
 }
 
 const parse = (t) => { try { return JSON.parse(t); } catch { return undefined; } };
@@ -199,9 +191,9 @@ export function lru(max) {
 /** openProjection({home, fs, key, write, errors}) → the session's store (see the head of this file). `errors`: where notes go
  *  when an append names no other sink (an append of a later request passes that request's `errors`). */
 export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = true, errors = [] } = {}) {
-  const file = projectionFile(home, key);
+  if (write) try { migrateFlat({ home, fs, key }); } catch { /* the flat files stay where they are; the store is extracted again */ }
   let sink = errors; // the errors of the request whose append is running
-  const lines = lineFile({ fs, file, write, onFail: (e) => sink.push({ where: 'projection', code: 'projection-write-failed', level: 'note',
+  const lines = lineFile({ fs, base: path.join(sessionDir(home, key), 'extract'), write, onFail: (e) => sink.push({ where: 'projection', code: 'projection-write-failed', level: 'note',
     reason: `The context projection could not be written (${e.code || e.message}); this session is kept in memory and extracted again next time.` }) });
   const at = lineIndex(); // bid → its line
   const rowAt = lineIndex(); // rid → its line
@@ -292,15 +284,14 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     for (const m of [at, rowAt, rowCache, brks, sharedAt, sharedCache, seen, memo]) m.clear();
     brkAt[0].length = brkAt[1].length = 0; memoChars = 0;
     bytes = savedAt = 0; saved = null;
-    if (write) { try { fs.rmSync(file, { force: true }); } catch { /* cut before the next append */ } }
-    lines.cut(0);
+    lines.remove();
     errors.push({ where: 'projection', code: 'projection-rebuilt', level: 'note', reason });
   };
 
   let head = true, bad = null, bytes = 0, id = newId(), savedAt = 0, heldRows = false, saved = null;
   // the sidecar (4.3 §4 旁索引) of this header's id: the indexes and the breaks of its first `bytes`, or nothing of it
   function loaded() {
-    const sc = loadSidecar({ fs, file });
+    const sc = lines.loadSidecar();
     if (!sc || sc.head.id !== id) return false;
     try {
       const p = sc.parts;
@@ -316,7 +307,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     return true;
   }
   function scan(from) {
-    for (const l of linesOf(fs, file, from)) {
+    for (const l of lines.scan(from)) {
       if (bad) { rebuilt(bad); bad = null; return false; } // a bad line that was not the last
       const o = parse(l.text);
       if (head) {
@@ -334,9 +325,10 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     }
     return false;
   }
-  if (scan(0)) scan(bytes);
+  if (!lines.unreadable && scan(0)) scan(bytes);
+  if (lines.unreadable) rebuilt(`The stored context projection's files are not whole (${lines.unreadable}); it is rebuilt from the capture.`);
   lines.cut(bytes); // a torn or held tail is cut off before the next append
-  if (write && bytes) { try { const t = new Date(); fs.utimesSync(file, t, t); } catch { /* the GC order only */ } }
+  lines.touch(); // the GC order
 
   /** append({defs, rows, brks}, {held, errors}): `held` rows are written as `t` lines, which the next open cuts off with all that
    *  follows them (rows extracted after a member that failed: §3.9); `errors` is where this append's note goes. */
@@ -401,7 +393,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
       const parts = [];
       for (const [n, idx] of [['d', at], ['r', rowAt], ['s', sharedAt]]) { const [k, o, l] = idx.dump(); parts.push([`${n}.k`, k], [`${n}.o`, o], [`${n}.l`, l]); }
       parts.push(['b.o', Float64Array.from(brkAt[0])], ['b.l', Uint32Array.from(brkAt[1])], ...extra);
-      saveSidecar({ fs, file, head: { id, bytes: lines.bytes }, parts });
+      lines.saveSidecar({ head: { id, bytes: lines.bytes }, parts });
       savedAt = lines.bytes;
       return true;
     },
@@ -415,38 +407,32 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
   };
 }
 
-/** gcProjections({home, fs, liveKeys, keepKeys, capBytes}) → {deleted: [file]}: drops the projections of sessions not in
- *  `liveKeys`, then the least recently opened (mtime: opening touches it) until the total is within `capBytes` (512 MiB).
- *  A projection and its fold log go together and count together. Never one of `keepKeys` (the sessions open or followed:
- *  evicting one would cost its whole extraction on the next read). `liveKeys` is required: no list is not "no session lives".
- *  Only files named like a projection or a fold log, only under index/ctx/. */
+/** gcProjections({home, fs, liveKeys, keepKeys, capBytes}) → {deleted: [path]}: by session directory (4.3 §4 回收; its size = the
+ *  sum of its files): drops the directories of sessions not in `liveKeys`, then the least recently opened (the newest mtime of its
+ *  files: opening touches the projection) until the total is within `capBytes` (512 MiB), and the flat layout's files of sessions
+ *  not live. Never one of `keepKeys` (the sessions open or followed: evicting one would cost its whole extraction on the next
+ *  read). `liveKeys` is required: no list is not "no session lives". Only names of the session hash, only under index/ctx/. */
 export function gcProjections({ home = trocarHome(), fs = nodeFs, liveKeys, keepKeys = [], capBytes = CAP_BYTES } = {}) {
   if (!liveKeys || typeof liveKeys[Symbol.iterator] !== 'function') throw new TypeError('gcProjections needs liveKeys, the sessions that still have members');
   const dir = ctxDir(home);
   let names;
   try { names = fs.readdirSync(dir); } catch (e) { if (e.code === 'ENOENT') return { deleted: [] }; throw e; }
   const keep = new Set([...keepKeys].map(hashOf)), live = new Set([...liveKeys].map(hashOf));
-  const pairs = new Map(); // hash → {files, size, t}
-  for (const n of names) {
-    const m = NAME.exec(n);
-    if (!m) continue;
-    const p = pairs.get(m[1]) || { h: m[1], files: [], size: 0, t: 0 };
-    pairs.set(m[1], p);
-    p.files.push(n);
-    try { const st = fs.statSync(path.join(dir, n)); p.size += st.size; p.t = Math.max(p.t, st.mtimeMs); } catch { /* gone meanwhile */ }
-  }
-  const deleted = [];
-  const drop = (p) => { for (const n of p.files) { try { fs.rmSync(path.join(dir, n), { force: true }); deleted.push(path.join(dir, n)); } catch { /* the next GC */ } } };
-  const kept = [];
+  const deleted = [], kept = [];
+  const drop = (p, o) => { try { fs.rmSync(p, { force: true, ...o }); deleted.push(p); return true; } catch { return false; /* the next GC */ } };
   let total = 0;
-  for (const p of pairs.values()) {
-    if (!live.has(p.h) && !keep.has(p.h)) { drop(p); continue; }
-    total += p.size;
-    if (!keep.has(p.h)) kept.push(p);
+  for (const n of names) {
+    const p = path.join(dir, n), m = FLAT.exec(n), h = m ? m[1] : DIR.test(n) ? n : null;
+    if (!h || keep.has(h)) continue;
+    if (m) { if (!live.has(h)) drop(p); continue; }
+    if (!live.has(h)) { drop(p, { recursive: true }); continue; }
+    const u = { p, size: 0, t: 0 };
+    try { for (const f of fs.readdirSync(p)) { const st = fs.statSync(path.join(p, f)); u.size += st.size; u.t = Math.max(u.t, st.mtimeMs); } } catch { /* gone meanwhile */ }
+    total += u.size; kept.push(u);
   }
-  for (const p of kept.sort((a, b) => a.t - b.t)) {
+  for (const u of kept.sort((a, b) => a.t - b.t)) {
     if (total <= capBytes) break;
-    drop(p); total -= p.size;
+    if (drop(u.p, { recursive: true })) total -= u.size;
   }
   return { deleted };
 }

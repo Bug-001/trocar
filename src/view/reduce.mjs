@@ -171,7 +171,7 @@ export function listOf(store, rid) {
 const ridOf = (m) => String(m && typeof m === 'object' ? m.id : m);
 const isCall = (row) => !!(row && row.x && Array.isArray(row.x.secs));
 const enoent = () => { throw Object.assign(new Error('no file: the fold log is held in memory'), { code: 'ENOENT' }); };
-const NO_FILE = { statSync: enoent, openSync: enoent, closeSync() {}, readSync: () => 0 };
+const NO_FILE = { statSync: enoent, readdirSync: enoent, openSync: enoent, closeSync() {}, readSync: () => 0 };
 /** A block a cache-break detail needs whose text did not read back (3.5 §读不全不静默): `code` one of BLOCK_PROBLEMS
  *  (src/health/codes.mjs), `rid` the member whose take needed it. A resolver throws it to say why; null from it is `record-missing`. */
 export class BlockUnread extends Error {

@@ -15,6 +15,7 @@ import { bigSession } from '../query/big-session.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { recordsAt } from '../../src/query/records.mjs'
 import { openProjection, projectionFile } from '../../src/query/projection.mjs'
+import { sidecarOf } from '../../src/query/line-file.mjs'
 import { extractMembers, extractSeed } from '../../src/view/extract.mjs'
 import { replyIdOf } from '../../src/dissect/cc-threads.mjs'
 
@@ -53,7 +54,7 @@ test('a continuation naming an early reply still stitches when the context is se
 
   const bare = path.join(tmpDir('trocar-extract-seed-'), '.trocar')
   fs.cpSync(home, bare, { recursive: true })
-  fs.rmSync(projectionFile(bare, s.id).replace(/\.ndjson$/, '.idx'))
+  fs.rmSync(sidecarOf(projectionFile(bare, s.id)))
   const lines = []
   for (const h of [home, bare]) {
     const st = openProjection({ home: h, key: s.id })

@@ -1,5 +1,5 @@
-// src/query/fold-log.mjs — the FOLD LOG's store (RFC 4.3 §4 折叠日志): one append-only NDJSON file per session beside its
-// projection, `index/ctx/<the projection's hash>.fold.ndjson`, that keeps what the reduction produced so a cold open reads it back
+// src/query/fold-log.mjs — the FOLD LOG's store (RFC 4.3 §4 折叠日志): one append-only NDJSON line file per session beside its
+// projection, `index/ctx/<the projection's hash>/fold.*` (4.3 §4 目录 · 分片), that keeps what the reduction produced so a cold open reads it back
 // instead of folding again. Storage only: it knows a line by its kind and key, nothing of its contents (the one exception, a
 // frontier's `pb`, ties the log to the projection's bytes). A projection like the index (invariant 2, D59): delete it and the next
 // fold writes it again.
@@ -17,14 +17,15 @@
 // the projection's bytes (a step whose frontier is missing or torn, or that the projection no longer holds, is dropped with all
 // after it), cut from the file before the next append. The lines sit on src/query/line-file.mjs: `write: false` and a write that
 // fails keep them in the off-heap arena at the offsets they will have; `projection-write-failed` once per episode.
-//   Its sidecar (4.3 §4 旁索引, `<hash>.fold.idx`, saveIndex) holds the indexes and frontiers up to the end of a frontier line: an
+//   Its sidecar (4.3 §4 旁索引, `fold.idx`, saveIndex) holds the indexes and frontiers up to the end of a frontier line: an
 // open whose header names the projection loads it when it is of this FOLD_V and its frontier's `pb` ≤ the projection's bytes, and
 // scans only past it. `upTo` (the end of a frontier line): what lies past it is cut as a torn tail is, so a sidecar that covers
 // exactly it stays the log's (session.mjs resumes a reduction whose state that sidecar holds).
 import nodeFs from 'node:fs';
+import path from 'node:path';
 import { trocarHome } from '../paths.mjs';
-import { lineFile, saveSidecar, loadSidecar } from './line-file.mjs';
-import { projectionFile, linesOf, lineIndex, lru, HEAP_PER_LINE_BYTE } from './projection.mjs';
+import { lineFile } from './line-file.mjs';
+import { sessionDir, lineIndex, lru, HEAP_PER_LINE_BYTE } from './projection.mjs';
 
 export const FOLD_V = 1;
 /** The heap the read cache keeps of parsed lines (two times it): a K term of the reduction's bound (3.5 §内存有界). */
@@ -32,7 +33,8 @@ export const LOG_BYTES = 4 << 20;
 const CHAIN = { c: 'rid', g: 'rid', l: 'lane', lg: 'lane' };
 const KINDS = new Set(['c', 'g', 'l', 'lg', 'i', 'x', 'f']);
 
-export const foldLogFile = (home, key) => projectionFile(home, key).replace(/\.ndjson$/, '.fold.ndjson');
+/** The fold log's plain file from byte 0: all its lines while none is sealed (line-file.mjs). */
+export const foldLogFile = (home, key) => path.join(sessionDir(home, key), 'fold.0.ndjson');
 
 // lineIndex() whose slots are also linked in the order of their latest offset, the newest last (a set moves its slot there; a load
 // links them by offset): since(off) → the keys whose latest offset is past `off`, walked back from the newest, O(what it returns)
@@ -75,9 +77,8 @@ function kindOf(o) {
  *  Locations are `[offset, length]` (latest, lane, versionAt) or an offset (frontier, frontierAt); read(off, len?) parses the line
  *  there (shared with the cache: read-only). */
 export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = true, projection, errors = [], upTo = Infinity } = {}) {
-  const file = foldLogFile(home, key);
   let sink = errors; // the errors of the request whose append is running
-  const lines = lineFile({ fs, file, write, onFail: (e) => sink.push({ where: 'fold-log', code: 'projection-write-failed', level: 'note',
+  const lines = lineFile({ fs, base: path.join(sessionDir(home, key), 'fold'), write, onFail: (e) => sink.push({ where: 'fold-log', code: 'projection-write-failed', level: 'note',
     reason: `The fold log could not be written (${e.code || e.message}); this session's reduction is kept in memory and done again next time.` }) });
   const calls = byOffset(), lanes = byOffset(), items = byOffset(), fails = byOffset(), fronts = new Map();
   const own = { i: items, x: fails };
@@ -92,12 +93,12 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
   const OWN = [['c', calls], ['l', lanes], ['i', items], ['x', fails]];
   const rebuild = (reason) => {
     calls.clear(); lanes.clear(); items.clear(); fails.clear(); fronts.clear(); last = undefined; step = []; end = savedAt = 0; saved = null;
-    if (write) { try { fs.rmSync(file, { force: true }); } catch { /* cut before the next append */ } }
+    lines.remove();
     errors.push({ where: 'fold-log', code: 'projection-rebuilt', level: 'note', reason });
   };
   // the sidecar of this projection, FOLD_V and a frontier the projection still holds, or nothing of it
   function loaded() {
-    const sc = loadSidecar({ fs, file }), h = sc && sc.head;
+    const sc = lines.loadSidecar(), h = sc && sc.head;
     if (!h || h.pid !== projection.id || h.fold !== FOLD_V || !(h.pb <= projection.bytes) || !(h.bytes <= upTo) || !Number.isFinite(h.last)) return false;
     try {
       const p = sc.parts;
@@ -114,7 +115,7 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
     return true;
   }
   function scan(from) {
-    for (const l of linesOf(fs, file, from)) {
+    for (const l of lines.scan(from)) {
       if (bad) { rebuild(bad); return false; } // a bad line that was not the last
       if (l.off >= upTo) return false;
       const o = parse(l.text);
@@ -133,7 +134,8 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
     }
     return false;
   }
-  if (scan(0)) scan(end);
+  if (!lines.unreadable && scan(0)) scan(end);
+  if (lines.unreadable) rebuild(`The stored fold log's files are not whole (${lines.unreadable}); it is folded again.`);
   step = [];
   lines.cut(end);
 
@@ -202,7 +204,7 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
     const parts = [];
     for (const [n, idx] of OWN) { const [k, o, l] = idx.dump(); parts.push([`${n}.k`, k], [`${n}.o`, o], [`${n}.l`, l]); }
     parts.push(['f.k', [...fronts.keys()]], ['f.o', Float64Array.from(fronts.values())], ...extra);
-    saveSidecar({ fs, file, head: { pid: projection.id, fold: FOLD_V, bytes, pb: f.pb, last }, parts });
+    lines.saveSidecar({ head: { pid: projection.id, fold: FOLD_V, bytes, pb: f.pb, last }, parts });
     savedAt = bytes;
     return true;
   }
@@ -229,5 +231,7 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
     frontierAt: (rid) => fronts.get(rid),
     get bytes() { return lines.bytes; },
     close: () => lines.close(),
+    /** remove(): no lines; a written log deletes every file of it now (a fold from scratch). */
+    remove: () => { lines.remove(); calls.clear(); lanes.clear(); items.clear(); fails.clear(); fronts.clear(); last = undefined; savedAt = 0; saved = null; },
   };
 }
