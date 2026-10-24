@@ -33,7 +33,7 @@ test('4.3 #9: the flat layout is renamed into ctx/<k>/ on the first read; the an
     const [kept, flat] = ['kept', 'flat'].map((t) => { const to = path.join(tmpDir(`trocar-layout-${t}-`), '.trocar'); fs.cpSync(home, to, { recursive: true }); return to })
     const before = await answers(kept, s.id)
     const dir = sessionDir(flat, s.id), inode = {}
-    fs.rmSync(path.join(dir, 'head.json.gz'), { force: true }) // an answer file (3.5): the flat layout had none
+    for (const n of fs.readdirSync(dir)) if (/^(head\.|open\.|p\d+\.)/.test(n)) fs.rmSync(path.join(dir, n)) // the answer files (3.5): the flat layout had none
     assert.deepEqual(fs.readdirSync(dir).sort(), Object.keys(FLAT).sort(), `${wire}: the directory layout is what was built`)
     for (const [n, ext] of Object.entries(FLAT)) { fs.renameSync(path.join(dir, n), dir + ext); inode[n] = fs.statSync(dir + ext).ino }
     fs.rmdirSync(dir)

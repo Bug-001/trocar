@@ -178,3 +178,150 @@ export function packsOf(s) {
   return { packs, open: { n: N, s0: spans[N][0] } };
 }
 
+// ── The writer (3.5 §谁执行它「答案文件」): the query worker only, after each slice ─────────────────────────────────────────────────
+/** packFile / tailFile (home, id, …) → a pack's and a tail's file in the session's directory. */
+export const packFile = (home, id, n, part) => path.join(sessionDir(home, id), `p${n}.${part}.ndjson.gz`);
+export const tailFile = (home, id, part) => path.join(sessionDir(home, id), `open.${part}.ndjson`);
+const PARTS = ['main', 'rest'];
+const sha = (t) => createHash('sha1').update(t).digest('hex');
+// fold log → {f: the log's frontier offset the files stand at, open, packs[n]: {n, s0, s1, tag, h: [sha main, sha rest]}, tails, rec}
+const writers = new WeakMap();
+/** filesAt(log) → the fold-log offset the session's answer files stand at (−1: none): saved with the fold sidecar as `w.f`, so a
+ *  worker that starts again re-renders what changed past it (named/session.mjs sidecars). */
+export const filesAt = (log) => (writers.has(log) ? writers.get(log).f : -1);
+/** forget(log): the files are written afresh at the next slice (a write that failed). */
+export const forget = (log) => { writers.delete(log); };
+// a file's text, or null when it is missing, does not gunzip, is torn or its head line has another v
+function readText(fs, file, gz) {
+  try {
+    const b = fs.readFileSync(file), t = (gz ? gunzipSync(b) : b).toString('utf8');
+    return t.endsWith('\n') && JSON.parse(t.slice(0, t.indexOf('\n'))).v === CTX_V ? t : null;
+  } catch { return null; }
+}
+// first place in lane L whose step does not sort before (ts, rid)
+function lowerBound(cols, L, ts, rid) {
+  let lo = 0, hi = L.rids.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (compareStep(cols.ts[L.slots[m]], L.rids[m], ts, rid) < 0) lo = m + 1; else hi = m; }
+  return lo;
+}
+// What changed in the fold log past byte `off`, for the spans below `open` (sealed) and the open one: a row that came, went, moved or
+// changed moves every later step of its lane (old and new) — their `i`, the `k` of their user events, the axis numbers — so the
+// packs holding those steps are dirty and those steps in the open span are appended again; a lane whose header changed dirties the
+// files that held and hold its last step; a failed member its span.
+function dirtyOf(s, off, open) {
+  const V = s.V, { cols, log } = V, ax = axisOf(V), packs = new Set(), opens = new Set(), gone = [], lanes = [], fails = [], from = new Map();
+  const touch = (key, ts, rid) => { const L = laneOf(cols, key); if (L.v < 0) return; const j = lowerBound(cols, L, ts, rid); if (!(from.get(key) <= j)) from.set(key, j); };
+  const rowOf = (at) => { const o = at && log.read(...at); return o && o.c != null ? o.r : null; };
+  const ch = log.changedSince(off);
+  for (const rid of ch.rids) {
+    const r = rowOf(log.latest(rid)), w = off < 0 ? null : rowOf(log.versionAt(rid, off)), n = spanOf(s, rid);
+    if (r) touch(r.lane, r.ts ?? null, rid);
+    if (w) touch(w.lane, w.ts ?? null, rid);
+    if (n >= 0 && n < open) packs.add(n);
+    else if (n >= open && !r && w) gone.push([rid, w.lane === ax ? 'main' : 'rest']);
+  }
+  for (const [key, j] of from) {
+    const L = laneOf(cols, key);
+    for (let t = j; t < L.rids.length; t++) { const n = spanOf(s, L.rids[t]); if (n >= open) opens.add(L.rids[t]); else if (n >= 0) packs.add(n); }
+  }
+  const heads = new Map(V.lanes.map((h) => [h.lane, h])), relabel = new Set();
+  for (const key of ch.lanes) {
+    const h = heads.get(key), was = off < 0 ? null : laneAt(log, key, off);
+    for (const last of [h && h.last, was && was.last]) { const n = last == null ? -1 : spanOf(s, last); if (n >= 0 && n < open) relabel.add(n); }
+    if (h && spanOf(s, h.last) >= open) lanes.push(h);
+  }
+  const failed = new Map(V.failed.map((f) => [f.id, f]));
+  for (const rid of log.failures.since(off)) { const n = spanOf(s, rid); if (n >= 0 && n < open) packs.add(n); else if (failed.has(rid)) fails.push(failed.get(rid)); }
+  return { packs, relabel, opens, gone, lanes, fails, axis: from.has(ax) };
+}
+
+/** writeFiles(ctx, s) → {packs, open} of the head: brings the session's pack and tail files to the state `s` (the worker's, after a
+ *  slice). The first slice of a session in this worker (or of a fold log opened again) re-renders the packs with fold-log lines past
+ *  the offset its sidecar says the files stood at, takes the others from their files when whole (else renders them), and writes both
+ *  tails afresh; later slices seal the spans the mark passed (and start the next tail), re-render dirty packs and append to the tails.
+ *  A file is written only when its text differs. */
+export function writeFiles(ctx, s) {
+  if (s.mark == null) return { packs: [], open: null };
+  const home = ctx.home, fs = ctx.fs || nodeFs, id = s.id, log = s.V.log, N = sealedOf(s), ax = axisOf(s.V);
+  let W = writers.get(log);
+  if (W && W.ax === ax && W.f === log.frontier) return W.files;
+  const first = !W || W.ax !== ax;
+  if (first) {
+    const w = log.saved && log.saved.parts['w.f'];
+    W = { ax, f: w && w.length ? w[0] : -1, open: N, packs: [], tails: null, rec: 0, files: null, memo: { steps: new Map(), defs: new Map() } };
+    writers.set(log, W);
+  }
+  const d = dirtyOf(s, W.f, Math.min(W.open, N)), spans = axisSpans(s);
+  if (d.axis) for (const p of W.packs) if (p && p.s0 === p.s1) d.packs.add(p.n);
+  W.packs.length = Math.min(W.packs.length, N);
+  for (let n = 0; n < N; n++) {
+    const k = W.packs[n], files = PARTS.map((p) => packFile(home, id, n, p));
+    if (k && !d.packs.has(n) && d.relabel.has(n)) { // only lane headers moved: the file's lines with the `{l}` lines made again
+      const texts = PARTS.map((p, i) => {
+        const t = readText(fs, files[i], true), lines = t && t.slice(0, -1).split('\n');
+        if (!lines) return null;
+        let j = 1;
+        while (j < lines.length && lines[j].startsWith('{"l":')) j++;
+        return textOf([JSON.parse(lines[0]), ...headsOf(s, n, p)]) + (j < lines.length ? `${lines.slice(j).join('\n')}\n` : '');
+      });
+      if (!texts.includes(null)) {
+        texts.forEach((t, i) => { if (k.h[i] !== sha(t)) putFile(fs, files[i], gzipSync(Buffer.from(t, 'utf8'))); });
+        W.packs[n] = { ...k, tag: tagOf(texts[0], texts[1]), h: texts.map(sha) };
+        continue;
+      }
+      d.packs.add(n);
+    }
+    if (k && !d.packs.has(n)) continue;
+    // a pack sealed before this worker and unchanged since: its files, when whole
+    let texts = first && !d.packs.has(n) && !d.relabel.has(n) ? files.map((f) => readText(fs, f, true)) : null;
+    if (!texts || texts.includes(null)) {
+      texts = PARTS.map((p) => render(s, n, p, false, n >= W.open ? W.memo : null).text);
+      texts.forEach((t, i) => { if (k ? k.h[i] !== sha(t) : readText(fs, files[i], true) !== t) putFile(fs, files[i], gzipSync(Buffer.from(t, 'utf8'))); });
+    }
+    W.packs[n] = { n, s0: spans[n][0], s1: spans[n][1], tag: tagOf(texts[0], texts[1]), h: texts.map(sha) };
+  }
+  const fresh = (part) => {
+    const { text, wrote } = render(s, N, part, true, W.memo), file = tailFile(home, id, part);
+    if (readText(fs, file, false) !== text) putFile(fs, file, Buffer.from(text, 'utf8'));
+    W.tails[part] = { size: Buffer.byteLength(text), defs: wrote };
+  };
+  const upTo = upToOf(s);
+  if (N !== W.open) W.memo = { steps: new Map(), defs: new Map() }; // the sealed span's steps let go
+  if (first || N !== W.open || !W.tails) { W.tails = {}; for (const p of PARTS) fresh(p); }
+  else appendTails(s, W, d, N, upTo, fs, (part) => tailFile(home, id, part), fresh);
+  W.rec = upTo; W.open = N; W.f = log.frontier;
+  W.files = { packs: W.packs.map(({ n, s0, s1, tag }) => ({ n, s0, s1, tag })), open: { n: N, s0: spans[N][0] } };
+  return W.files;
+}
+// The tails' appends: the lanes whose header changed and whose last step is in the open span, the changed steps of the span in step
+// order (each against the step of its lane before it in the span: they are all in the file; none within 64 steps → a keyframe), the
+// records of the members past the last append, the failed members, the rids no longer a call. A tail whose size is not the one
+// written (torn, removed, replaced) is written afresh instead.
+function appendTails(s, W, d, N, upTo, fs, fileOf, fresh) {
+  const { cols, log } = s.V, ax = W.ax, add = { main: [], rest: [] }, partOf = (key) => (key === ax ? 'main' : 'rest');
+  for (const h of d.lanes) add[partOf(h.lane)].push({ l: h });
+  const calls = [...d.opens].filter((rid) => isRow(cols, rid)).sort((x, y) => compareStep(cols.ts[cols.slotOf(x)], x, cols.ts[cols.slotOf(y)], y));
+  const steppers = new Map();
+  for (const rid of calls) {
+    const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key)).get(key), i = placeIn(cols, S.L, rid);
+    let p = -1;
+    for (let t = i - 1; t >= 0 && t >= i - 64; t--) if (spanOf(s, S.rids[t]) >= N) { p = t; break; }
+    add[partOf(key)].push(...stepLines(S, key, i, p, W.tails[partOf(key)].defs, W.memo));
+  }
+  const axV = ax == null ? -2 : cols.keys.get(ax);
+  for (let q = W.rec; q < upTo; q++) {
+    const r = s.plan.members[q], rid = String(r.id);
+    if (s.cut(r)) add[isRow(cols, rid) && cols.ln[cols.slotOf(rid)] === axV ? 'main' : 'rest'].push({ r: recOf(r) });
+  }
+  for (const f of d.fails) add.rest.push({ x: { where: f.id, code: f.code, reason: f.reason } });
+  for (const [rid, part] of d.gone) add[part].push({ g: rid });
+  for (const part of PARTS) {
+    if (!add[part].length) continue;
+    const file = fileOf(part), t = textOf(add[part]);
+    let size = -1;
+    try { size = fs.statSync(file).size; } catch { /* gone */ }
+    if (size !== W.tails[part].size) { fresh(part); continue; }
+    fs.appendFileSync(file, t);
+    W.tails[part].size += Buffer.byteLength(t);
+  }
+}

@@ -43,7 +43,7 @@ import { answer } from './answers.mjs'
 import { lowerPriority } from '../low-priority.mjs'
 import { extendSession, indexed, saveIndexes } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
-import { gcProjections, posCmp } from './projection.mjs'
+import { gcProjections, posCmp, sessionDir } from './projection.mjs'
 import { headFile, tier0Doc, writeHead } from './ctx-files.mjs'
 
 const home = process.argv[2]
@@ -117,6 +117,19 @@ let busy = 0, lastAt = Date.now(), target = null, newestDone = true, gcDone = fa
 // The sweep (3.5 §谁执行它「答案文件」): at the first idle period of this worker's life, and again on the daemon's `{sweep: true}`, a
 // tier-0 head (ctx-files.mjs, from the segment index only) for every session whose head file is absent. One pass over the sessions.
 let sweepDue = true
+// The upgrade queue (3.5 §谁执行它「答案文件」): after the sweep, the sessions with a fold log and no tail file (folded before the answer
+// files existed, the flat layout's moved in) are folded in idle slices, each to its end, which writes its head, packs and tails: the
+// answered and followed first, then the most recently active. Made once per sweep, each session taken once, so it ends.
+let upgrade = null
+async function upgradeQueue(ctx) {
+  const list = []
+  for (const [id, ms] of sessionGroups((await indexed(ctx)).rows)) {
+    let names = []
+    try { names = nodeFs.readdirSync(sessionDir(home, id)) } catch { continue }
+    if (!names.includes('open.main.ndjson') && names.some((f) => f.startsWith('fold.'))) list.push([answered.has(id) || follow.has(id), String(ms[ms.length - 1].id), id])
+  }
+  return list.sort((a, b) => (b[0] - a[0]) || posCmp(b[1], a[1])).map((x) => x[2])
+}
 const answered = new Set() // the sessions this worker answered: never collected under it
 const follow = new Set() // the sessions the daemon kicked (3.5 §后台抽取与归约): folded in turn from their checkpoints
 const kicked = new Set() // the record ids of the kicked model calls, not yet looked up: their sessions go to `follow`
@@ -169,6 +182,13 @@ async function background() {
       try { if (writeHead(home, id, tier0Doc(id, ms, index.errors))) wrote++ } catch (e) { say(e) }
     }
     if (wrote) worked()
+    upgrade = null
+    return kick()
+  }
+  if (upgrade == null) upgrade = await upgradeQueue(ctx)
+  if (upgrade.length) {
+    if (busy || notIdle()) return
+    target = upgrade.shift()
     return kick()
   }
   if (gcDone || busy || notIdle()) return // once per idle period, IDLE_SLICE_MS after the last request or kick: not after every burst

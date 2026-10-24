@@ -40,7 +40,7 @@ import { warmCache, fsTag, heapBudget, heapCeiling, hold, steadyBytes, liveHeap,
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
-import { headDoc, headFile, packsOf, tier0Doc, writeHead } from '../ctx-files.mjs';
+import { filesAt, forget, headDoc, headFile, packsOf, tier0Doc, writeFiles, writeHead } from '../ctx-files.mjs';
 
 export const params = Object.freeze(['id', 'since', 'before', 'limit', 'head']);
 
@@ -260,7 +260,8 @@ function sidecars(store) {
   try {
     const live = st.R && st.target == null && st.relay.cur === st.log;
     st.log.saveIndex([...dumpColumns(sync(st.cols, st.log)),
-      ...(live ? [['r.s', v8.serialize(st.R.snapshot())], ['r.m', [JSON.stringify({ rv: REDUCE_V, cut: st.cut })]]] : [])]);
+      ...(live ? [['r.s', v8.serialize(st.R.snapshot())], ['r.m', [JSON.stringify({ rv: REDUCE_V, cut: st.cut })]]] : []),
+      ['w.f', Float64Array.of(filesAt(st.log))]], filesAt(st.log)); // where the answer files stand (ctx-files.mjs writeFiles)
   } catch { /* the next idle period */ }
   st.saved = st.n; st.savedAt = performance.now();
 }
@@ -489,7 +490,9 @@ export async function extendSession(ctx, id, budgetMs) {
   if (!r) return false;
   const { st, plan, ex } = r;
   const more = ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n);
-  if (headDue(ctx, String(id), more)) putHead(ctx, stateAt(r, String(id)));
+  const s = stateAt(r, String(id));
+  files(ctx, s);
+  if (headDue(ctx, String(id), more)) putHead(ctx, s);
   return more;
 }
 
@@ -500,6 +503,12 @@ const HEAD_MS = 2000;
 const heads = new Map(); // session id → {t, sig} of its last head write in this worker
 const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated]);
 const headDue = (ctx, id, pending) => { if (ctx.writer !== true) return false; const h = heads.get(id); return !pending || !h || performance.now() - h.t >= HEAD_MS; };
+/** files(ctx, s) → the session's pack and tail files brought to the state `s` (the worker only: ctx-files.mjs writeFiles), their
+ *  `packs` / `open` kept on `s` for its head; a write that failed is done afresh at the next slice. */
+export function files(ctx, s) {
+  if (ctx.writer !== true || s.mark == null) return;
+  try { s.files = writeFiles({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs }, s); } catch { forget(s.V.log); }
+}
 /** headOf(s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs). */
 const headOf = (s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors)
   : headDoc({ ...s, ...(s.files || packsOf(s)), mark: markOn(s.plan, s.mark), markTs: s.plan.byId.get(s.mark)?.ts ?? null }));
@@ -577,6 +586,7 @@ export async function run(ctx) {
     errors.push(...idx.errors, { where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
     return { base: null, mark: null, truncated: null, more: false, meta: null, stats: null, logged: null, probes: null, lanes: [], calls: [], events: [], records: [] };
   }
+  files(ctx, s);
   if (asHead) {
     const doc = headOf(s);
     if (headDue(ctx, id, s.pending)) putHead(ctx, s, doc);

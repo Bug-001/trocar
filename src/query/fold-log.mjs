@@ -89,7 +89,7 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
     else own[k].set(id, off, len);
   };
 
-  let head = true, bad = null, end = 0, step = [], savedAt = 0, saved = null;
+  let head = true, bad = null, end = 0, step = [], savedAt = 0, saved = null, savedTag = null;
   const OWN = [['c', calls], ['l', lanes], ['i', items], ['x', fails]];
   const rebuild = (reason) => {
     calls.clear(); lanes.clear(); items.clear(); fails.clear(); fronts.clear(); last = undefined; step = []; end = savedAt = 0; saved = null;
@@ -194,13 +194,14 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
   }
   const keyed = (idx) => ({ get: (id) => idx.get(id), keys: () => idx.keys(), since: (off) => idx.since(off), get size() { return idx.size; } });
 
-  /** saveIndex(extra) → whether it wrote the sidecar: up to the end of the last frontier line, when that grew since the last save
-   *  (written logs only). `extra`: [[name, array]] parts a caller adds (no name of the form `<c|l|i|x|f>.<k|o|l>`), handed back by
+  /** saveIndex(extra, tag) → whether it wrote the sidecar: up to the end of the last frontier line, when that grew or `tag` (a value
+   *  the caller's parts follow) changed since the last save (written logs only). `extra`: [[name, array]] parts a caller adds (no name of the form `<c|l|i|x|f>.<k|o|l>`), handed back by
    *  the next open that loads the sidecar as `saved.parts` (`saved.bytes`: what they cover). */
-  function saveIndex(extra = []) {
+  function saveIndex(extra = [], tag = null) {
     if (!lines.settled || last === undefined) return false;
     const [f, len] = entry(last), bytes = last + len + 1;
-    if (bytes === savedAt) return false;
+    if (bytes === savedAt && tag === savedTag) return false;
+    savedTag = tag;
     const parts = [];
     for (const [n, idx] of OWN) { const [k, o, l] = idx.dump(); parts.push([`${n}.k`, k], [`${n}.o`, o], [`${n}.l`, l]); }
     parts.push(['f.k', [...fronts.keys()]], ['f.o', Float64Array.from(fronts.values())], ...extra);
