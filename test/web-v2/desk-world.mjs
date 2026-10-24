@@ -1,6 +1,6 @@
 // test/web-v2/desk-world.mjs — a generated session world and a reference server over it (RFC 3.5 §会话读), exports only.
 //
-// world(seed[, {calls, cut, page, spage, files, talk}]): 2-5 lanes (main + sub-agents), calls written in arrival order whose ts sometimes sorts before rows already
+// world(seed[, {calls, cut, page, spage, files, talk, compact}]): 2-5 lanes (main + sub-agents), calls written in arrival order whose ts sometimes sorts before rows already
 // written (late rows), relanes and gone rows carried by later members, and per-step bid lists drawn by appends, mid-list
 // inserts, replacements and compactions. Each call draws lane events (user · tool · compaction on a compacted list ·
 // summarize), opened resources and raw `seen` paths (opened ones, their absolute spelling, the same name in another dir).
@@ -8,6 +8,7 @@
 // sets of test/fixtures/session-read-contract.json, by 3.5 §会话读's rules: pages bounded by `room` units (a step or a ledger
 // entry is one), the ledger in key order filling what the steps leave and named on by `ledger_next`, `k` on user events,
 // defs against the base step; ops are a greedy copy/add encoding.
+// `compact` (≤ 0.35, default 0.15): the share of a lane's later calls whose list is compacted.
 // `spage` (opt-in): the session's skeleton comes in pages of that many rows, newest first — `session` answers the newest, `--before R`
 // the ones before R in step order — with `more` as it is; without it a `session` answer holds every row.
 // `talk: {pre, len, every, tail}` (opt-in; without it the world is the same for every seed): a long main conversation. Most calls
@@ -51,7 +52,7 @@ function encode(P, C) {
   return ops
 }
 
-export function world(seed, { calls: count, cut: cuts = false, page: pageSize, spage, files: fileCount = 5, talk = null } = {}) {
+export function world(seed, { calls: count, cut: cuts = false, page: pageSize, spage, files: fileCount = 5, talk = null, compact = 0.15 } = {}) {
   const r = rng(seed), int = (a, b) => a + Math.floor(r() * (b - a + 1))
   const nLanes = int(2, 5), n = count ?? int(18, 40), page = pageSize ?? int(3, 7), room = page + int(0, 3), lroom = pageSize ?? int(1, 3)
   const files = Array.from({ length: fileCount }, (_, j) => `src/f${j}.mjs`), pick = (xs) => xs[int(0, xs.length - 1)]
@@ -89,7 +90,7 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, s
       const kind = r()
       if (kind < 0.45) for (let k = int(1, 3); k; k--) list.push(bid('messages', k % 2 ? 'assistant' : 'user'))
       else if (kind < 0.65) list.splice(int(1, list.length), 0, bid('messages', 'user'))
-      else if (kind < 0.85) list[int(0, list.length - 1)] = bid('messages', 'user')
+      else if (kind < 1 - compact) list[int(0, list.length - 1)] = bid('messages', 'user')
       else { list = [...list.slice(0, int(1, 2)), bid('messages', 'user')]; compacted = true }
     }
     last[lane] = list

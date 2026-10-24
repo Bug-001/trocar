@@ -487,24 +487,31 @@ function openDesk(ctx, route0) {
     if (s.dead || !host || !s.desk.head || (packFailed && !byPoll)) return
     packFailed = false
     const due = packsDue()
-    for (; jobs < Math.min(3, due.length); jobs++) loader.run(due[jobs].pri, packJob).catch(() => {}).finally(() => { jobs--; if (!s.dead) fill() })
+    for (; jobs < Math.min(3, due.length); jobs++) loader.run(due[jobs].pri, packJob).then((x) => x && x.applied).catch(() => {}).finally(() => { jobs--; if (!s.dead) fill() })
   }
+  // a pack's reads hold a loader slot; its applies do not: they wait their turn on `serial` after the slot is free, since a redraw's own
+  // reads (the followed step's bodies) go through the loader too — a slot held while waiting on `serial` deadlocks the desk
   async function packJob(signal) {
     const p = host && !packFailed ? packsDue()[0] : null // a detached desk sends no next read: attach() goes on
     if (!p) return
     const sk = sessionKey(), tag = s.desk.head.packs.find((x) => x.n === p.n).tag, gone = () => s.dead || sk !== sessionKey() || signal.aborted
     packing.add(p.n)
+    const applies = []
+    let whole = false, err = null
     try {
       for (const part of ['main', 'rest']) {
         const r = await getText(`/api/d/p${p.n}.${part}`, { id: s.id }, { signal: join(signal, s.reads.signal) })
-        if (gone()) return
+        if (gone()) break
         let parsed = null
         try { parsed = r.ok && r.status === 200 ? parseLines(r.text) : null } catch { /* not the file's lines: a failure like any other */ }
-        if (!parsed) { packFailed = true; if (s.playRid == null && s.initialStep != null) readFailed(r.ok ? { status: r.status, error: 'not the file\'s lines' } : r); return }
-        await serial(() => { if (gone()) return; keep(`p${p.n}.${part}`, r.text.length); return redraw(applyParsed({ kind: 'pack', n: p.n, part }, parsed)) })
+        if (!parsed) { packFailed = true; if (s.playRid == null && s.initialStep != null) readFailed(r.ok ? { status: r.status, error: 'not the file\'s lines' } : r); break }
+        applies.push(serial(() => { if (gone()) return; keep(`p${p.n}.${part}`, r.text.length); return redraw(applyParsed({ kind: 'pack', n: p.n, part }, parsed)) }))
+        whole = part === 'rest'
       }
-      packTag.set(p.n, tag)
-    } finally { packing.delete(p.n) }
+    } catch (e) { err = e }
+    const applied = Promise.all(applies).then(() => { if (whole) packTag.set(p.n, tag) }).finally(() => packing.delete(p.n))
+    if (err) { applied.catch(() => {}); throw err }
+    return { applied }
   }
 
   // ── the anchor lane's ledger (3.5 §手里车道的页, `resources` 与 `seen`): a `lane --to <its first step>` page (no step, the whole ledger
