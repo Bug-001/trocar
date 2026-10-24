@@ -201,8 +201,9 @@ someone asks (an open board asks every 1.5 s) and leaves two minutes after the l
 call, giving its memory back; the next query starts a new one. While the daemon captures, it hands the worker each batch
 of newly captured model calls, and the worker reads them, and works out their sessions itself, in the background at low
 priority, so a running session of any harness is already read when you open it. The cost: while an agent is being
-captured the worker stays resident — on the user's 23k-call session about 285 MB between calls, 578 MB right after a
-first read, against a 160 MB target that is not met yet — and the first new call of a session that was never read
+captured the worker stays resident — on the user's 25k-call session about 135–140 MB of memory between calls (at most
+159 MB, within the 160 MB target), about 600 MB right after a first read — and it spends about 19 ms of CPU on each
+newly captured call, against a target of about 12 ms that is not met yet; the first new call of a session that was never read
 starts its whole first read in the background (about a minute on that session). The worker keeps the segment index's rows in a compact form outside its JavaScript
 heap, so how much of a session it can read barely shrinks as the capture home grows. A session is read call by call:
 each call is taken apart once into a context file beside the index, and the session's summary rows are
