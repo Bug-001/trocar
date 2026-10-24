@@ -111,15 +111,15 @@ const PER_ROW_KEPT = 64;
 export function planOf(members, k, store, id) {
   const perRow = perRows.get(k) || SPINE_PER_ROW;
   let p = store.plan;
-  if (p && p.members === members && p.perRow === perRow && p.blocks === store.defCount) return p;
-  const n0 = p ? p.members.length : 0;
+  if (p && p.members === members && p.n === members.length && p.perRow === perRow && p.blocks === store.defCount) return p;
+  const n0 = p ? p.n : 0; // a member array grows in place (rows.mjs sessionGroups): the plan counts what it took
   if (!p || n0 > members.length || String(members[0].id) !== p.first || String(members[n0 - 1].id) !== p.last) {
     p = store.plan = { store, members: [], first: String(members[0].id), last: null, all: sums(), byId: new Map(), facts: sessionFacts(String(id)),
       ex: 0, pos: new Int32Array(0), gen: 0, start: -1, read: [], shown: null };
   }
-  const added = members.slice(p.members.length);
+  const added = members.slice(p.n || 0);
   for (const r of added) { p.byId.set(String(r.id), r); sum(p.all, r); p.facts.add(r); }
-  p.members = members; p.last = String(members[members.length - 1].id);
+  p.members = members; p.n = members.length; p.last = String(members[members.length - 1].id);
   p.key = `${p.all.n}:${p.first}:${p.last}:${p.all.stored + p.all.n}`;
   cut(p, perRow, added);
   p.gen++;
@@ -470,7 +470,7 @@ export async function extendSession(ctx, id, budgetMs) {
   const r = await advance(ctx, String(id), { budgetMs, request: false });
   if (!r) return false;
   const { st, plan, ex } = r;
-  return ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.members.length);
+  return ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n);
 }
 
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the

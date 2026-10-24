@@ -209,15 +209,30 @@ test('index rows when only the newest segment grew: untouched groups keep their 
   writeSegment(home, '20261020T000000Z', [{ id: 'o1', sessionKey: 'other-1', harness: 'opencode' }, { id: 'o2', sessionKey: 'other-1', harness: 'opencode' }])
   await segmentIndex({ home, segment: '20261020T000000Z', owner: true })
   s.append(300); await segmentIndex({ home, segment, owner: true })
-  const was = await indexRows({ home }), before = sessionGroups(was), other = before.get('other-1'), mine = before.get(s.id)
+  const was = await indexRows({ home }), before = sessionGroups(was), other = before.get('other-1')
   s.append(1); await segmentIndex({ home, segment, owner: true })
   const now = await indexRows({ home }), groups = sessionGroups(now)
   assert.ok(now !== was && now.length > was.length)
   assert.equal(groups.get('other-1'), other, 'a session with no new row keeps its member array')
   const json = (rs) => rs.map((r) => JSON.stringify(r))
   assert.deepEqual(json(groups.get(s.id)), json(now.filter((r) => r.session_id === s.id)), 'the grown group holds every row of the session, in order')
-  assert.ok(groups.get(s.id).length > mine.length)
   assert.equal(await indexRows({ home }), now, 'nothing moved: the same row list')
+})
+
+// 3.5 #29: successive row lists share a session's positions and its member array, both grown in place; a list asked after a newer
+// one grew them still yields its own rows of the session, and the newer one all of its rows.
+test('a session group of an older row list yields that list\'s rows after a newer list grew the shared arrays (3.5 #29)', { timeout: 120_000 }, async () => {
+  const home = path.join(tmpDir('trocar-rows-'), '.trocar')
+  const s = bigSession({ home, ...BASE })
+  const segment = path.basename(s.file, '.ndjson')
+  s.append(300); await segmentIndex({ home, segment, owner: true })
+  const was = await indexRows({ home }), held = sessionGroups(was).get(s.id)
+  s.append(2); await segmentIndex({ home, segment, owner: true })
+  const now = await indexRows({ home }), grown = sessionGroups(now).get(s.id)
+  const json = (rs) => rs.map((r) => JSON.stringify(r)), own = (l) => json(l.filter((r) => r.session_id === s.id))
+  assert.ok(now !== was && own(now).length > own(was).length && held.length > 0)
+  assert.deepEqual(json(sessionGroups(was).get(s.id)), own(was), 'the older list keeps its own members')
+  assert.deepEqual(json(grown), own(now), 'the grown group holds every row of the session, in order')
 })
 
 test('row times `session --since` reads after one new member that is no call do not grow with the lanes (3.5:42 「回答只读变了的那些的行」)', { timeout: 300_000 }, async () => {

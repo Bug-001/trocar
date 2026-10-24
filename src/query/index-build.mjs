@@ -515,7 +515,13 @@ export const recordsId = (records) => { let n = ids.get(records); if (n == null)
 /** grownFrom(records) → the recordsId of the earlier answer of the same segment whose records these begin with, else undefined. */
 export const grownFrom = (records) => grew.get(records);
 // Both files, so a plaintext that is sealed (or a sealed file rebuilt) is a new stamp: the plaintext wins while it exists (4.2:30).
-export const segStamp = (home, segment, fs) => `${statKey(path.join(rawDir(home), `${segment}.ndjson`), fs)}|${statKey(path.join(rawDir(home), `${segment}.sealed`), fs)}`;
+const stampFiles = new Map(); // home + segment → its two files' paths (built once: a read stamps every segment)
+export const segStamp = (home, segment, fs) => {
+  const k = `${home}\n${segment}`;
+  let f = stampFiles.get(k);
+  if (!f) stampFiles.set(k, (f = [path.join(rawDir(home), `${segment}.ndjson`), path.join(rawDir(home), `${segment}.sealed`)]));
+  return `${statKey(f[0], fs)}|${statKey(f[1], fs)}`;
+};
 /** warmSegmentIndex({home, segment, fs}) → the same `segmentIndex()` answer, read from disk only when that segment's
  *  file moved. For READERS only: a pass of the daemon's keeper (`owner`) writes, so it is never served from memory.
  *  A note (`level`, e.g. `index-cold`) is about the read that RAN segmentIndex, so it is never kept: a later read
