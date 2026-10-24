@@ -82,11 +82,11 @@ function factsOf(b) {
   return { ...blockFacts(bl), bucket: compBucket(b), human: firstHuman([b]) ?? undefined };
 }
 
-/** definition(b, ref, exact, why) → { bid, def }: `exact` the text the ref names (null: no span, `why` says why). */
+/** definition(b, ref, exact, why, bid) → { bid, def }: `exact` the text the ref names (null: no span, `why` says why); `bid` the
+ *  block's id when the caller already hashed it (4.3 §3: a block is hashed once). */
 // a block's id: its verbatim slice's when it has a span, its content's otherwise (3.5 §会话读)
 const bidFor = (b, ref, exact) => (ref != null && exact != null ? bidOf(b.sec, b.role, exact) : unaddressableBid(b.sec, b.role, contentOf(b)));
-export function definition(b, ref, exact, why = null) {
-  const bid = bidFor(b, ref, exact);
+export function definition(b, ref, exact, why = null, bid = bidFor(b, ref, exact)) {
   const s = slimBlock(b, ref != null && exact != null ? ref : null, why);
   // vh: only of a verbatim slice. A block with no span has none, nor one whose faithfulness says its bytes are not the wire's
   // (metadata, summarized, omitted, truncated). An opaque block (signature-only reasoning) is unreadable, not unproven: its span
@@ -395,7 +395,7 @@ export function extract(rec, ctx) {
   const defs = [], local = new Set(), take = (b, at, known = null) => {
     const bid = known ?? bidFor(b, at.ref, at.exact);
     if (ctx.store.hasDef(bid) || local.has(bid)) return { bid, query: blockQuery(b) };
-    const { def, query } = definition(b, at.ref, at.exact, at.why);
+    const { def, query } = definition(b, at.ref, at.exact, at.why, bid);
     local.add(bid); defs.push(def);
     return { bid, query };
   };
