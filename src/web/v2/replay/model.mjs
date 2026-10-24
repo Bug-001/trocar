@@ -4,7 +4,8 @@
 // apply*, so a read never sees a stale step). The desk holds the session's skeleton rows by rid in step order, the lane
 // headers by key (the lane's first rid), held lanes as steps with ops, and block definitions by bid. A step's bid list is
 // materialised from the nearest keyframe by its ops; one keyframe is cached every 32 steps of a walk. The playhead is a rid,
-// step numbers are derived (indexOf / ridAt).
+// step numbers are derived (indexOf / ridAt): from the steps' own `i` when pack / tail files feed the desk (packs.mjs), else
+// from the loaded rows.
 //
 //   applySession(desk, answer[, {before}]) → {reset, touched}   a full answer, a --since delta, or a --before page
 //   laneAsk(desk, key, touched) → {lane, from?}                  3.5's from-rule for a held lane the delta touched
@@ -21,13 +22,15 @@ import { compareStep } from '../../../view/step-order.mjs'
 const KF_EVERY = 32
 // stepOf's memo (2.3 §读与画「长对话的窗口」 rule 1): a step is materialised once per desk change; the newest few are kept
 const MEMO = new WeakMap(), MEMO_CAP = 8
-const changed = (desk) => MEMO.delete(desk)
+export const changed = (desk) => MEMO.delete(desk)
 
 export function createDesk() {
   return {
     mark: null, pending: null, firstPending: true, truncated: null, meta: null, stats: null, logged: 0, probes: 0,
     unknown: null, errors: [], more: false, lagging: new Map(),
     rows: new Map(), order: [], lanes: new Map(), laneRids: new Map(), events: new Map(), held: new Map(), defs: new Map(),
+    // fed by pack / tail files (packs.mjs): the files held by key, each rid's owning file, records by id, def refs, the head answer
+    files: new Map(), owner: new Map(), records: new Map(), defRefs: new Map(), stepLane: new Map(), head: null,
   }
 }
 
@@ -46,13 +49,13 @@ function unplace(desk, arr, rid) {
   if (arr[j] === rid) arr.splice(j, 1)
 }
 
-function addRow(desk, row) {
+export function addRow(desk, row) {
   desk.rows.set(row.rid, row)
   place(desk, desk.order, row.rid)
   if (!desk.laneRids.has(row.lane)) desk.laneRids.set(row.lane, [])
   place(desk, desk.laneRids.get(row.lane), row.rid)
 }
-function removeRow(desk, row) {
+export function removeRow(desk, row) {
   unplace(desk, desk.order, row.rid)
   const l = desk.laneRids.get(row.lane)
   if (l) { unplace(desk, l, row.rid); if (!l.length) desk.laneRids.delete(row.lane) }
@@ -131,8 +134,9 @@ export function applySession(desk, a, { before = false } = {}) {
 }
 
 // held lane: steps by rid in step order (`rids`), lane events per rid (several per rid), the ledger by resource key / path, and
-// the `ledger_next` cursors still to read
-const newHeld = () => ({ steps: new Map(), rids: [], prev: null, next: null, resources: new Map(), seen: new Map(), events: new Map(), kf: new Map(), cursors: new Set() })
+// the `ledger_next` cursors still to read; `byI` = step number → rid over the steps that carry their lane index `i` (built on read)
+export const newHeld = () => ({ steps: new Map(), rids: [], prev: null, next: null, resources: new Map(), seen: new Map(), events: new Map(), kf: new Map(),
+  cursors: new Set(), byI: null })
 
 // drop held steps from index i on, with their cached keyframes and lane events
 function cut(h, i) {
@@ -398,11 +402,24 @@ function materialStep(desk, rid) {
 // loaded rows are the newest part of the session, so a lane's loaded rids are the last ones of its header's count
 const offset = (desk, key) => { const n = desk.laneRids.get(key)?.length ?? 0; return Math.max(0, (desk.lanes.get(key)?.count ?? n) - n) }
 
+// a held lane fed by files: its steps carry `i`, so step numbers hold for steps that are not contiguous
+function numbered(desk, key) {
+  const h = desk.held.get(key)
+  if (!h || !h.steps.size || h.steps.values().next().value.i == null) return null
+  if (!h.byI) { h.byI = new Map(); for (const s of h.steps.values()) h.byI.set(s.i, s.rid) }
+  return h
+}
+
 /** The step number of `rid` in lane `key` (0-based), or -1. */
 export function indexOf(desk, key, rid) {
+  const h = numbered(desk, key)
+  if (h) return h.steps.get(rid)?.i ?? -1
   const i = desk.laneRids.get(key)?.indexOf(rid) ?? -1
   return i < 0 ? -1 : i + offset(desk, key)
 }
 
 /** The rid at step number `n` of lane `key`, or null when that row is not loaded. */
-export const ridAt = (desk, key, n) => desk.laneRids.get(key)?.[n - offset(desk, key)] ?? null
+export function ridAt(desk, key, n) {
+  const h = numbered(desk, key)
+  return h ? h.byI.get(n) ?? null : desk.laneRids.get(key)?.[n - offset(desk, key)] ?? null
+}
