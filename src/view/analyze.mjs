@@ -511,7 +511,9 @@ export class OrderBound extends Error {}
 // `streamId`), so a fold can go on (push more) after it.
 // keep: false (src/view/reduce.mjs, which writes each call out as it is folded): no call, step or event is kept: pushView's step
 // carries its events (`step.ev`) and its ledger delta (`step.ld`, replayLedger below), a spawn event its prompt's head (`head`, 60
-// characters, for linking) instead of the tool's input; finish() is not on that path.
+// characters, for linking) instead of the tool's input, and what its push did to the lane's tool names (`step.undo`); finish() is
+// not on that path. A lane goes back to an earlier state (rewind: what save() gave right after a push, the undo of every push after
+// it): what a fold of the lane's calls up to that push from the start would have left.
 // from (keep: false): what snapshot() gave, through v8.serialize and back (src/view/reduce.mjs REDUCE_V): the fold goes on from it.
 export function createAnalyzer({ keep = true, from = null } = {}) {
   if (from && keep) throw new Error('only a fold that keeps nothing resumes from a snapshot')
@@ -537,8 +539,13 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
     let i = toolIx.get(name)
     if (i === undefined) { i = toolNames.length; toolNames.push(name); toolIx.set(name, i) }
     if (!toolT) toolT = numTable()
-    toolT.set(num52(t.g + id), i)
+    const key = num52(t.g + id)
+    if (undo) undo.push(key, toolT.get(key))
+    toolT.set(key, i)
   }
+  let undo = null // the tool names the push being folded set: [key, the index it had (undefined: none)], …
+  // an index whose name is none: a tool name a rewind takes back
+  const none = () => { let i = toolIx.get(undefined); if (i === undefined) { i = toolNames.length; toolNames.push(undefined); toolIx.set(undefined, i) } return i }
   const getTool = (t, id) => { if (keep) return t.get(id); const i = toolT ? toolT.get(num52(t.g + id)) : undefined; return i === undefined ? undefined : toolNames[i] }
   const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', ask: null, tools: toolsOf() })
   function mkStream(kind) {
@@ -646,8 +653,9 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
     // what the collapsed row shows anyway, and `text_omitted` states in place that the full text lives on this step's blocks (an
     // event is derived from them and owns no byte span of its own, so there is no honest locator to mint here).
     const E = keep ? stream.events : []
-    if (!keep) { Object.defineProperty(step, 'ev', { value: E }); Object.defineProperty(step, 'ld', { value: [] }) }
+    if (!keep) { Object.defineProperty(step, 'ev', { value: E }); Object.defineProperty(step, 'ld', { value: [] }); Object.defineProperty(step, 'undo', { value: (undo = []) }) }
     eventsOf(stream, st, step, view, E)
+    undo = null
     return step
   }
   const shown = (m) => ({ preview: own(m.preview), chars: m.chars, text_omitted: TEXT_OMITTED })
@@ -850,7 +858,15 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
     return { streams, mainStream, curSub, monitorStream, probeStream, prevKind, auxStreams, subByKey, n, top, late, byOrder, state,
       toolT: toolT && toolT.dump(), toolGen, toolNames, toolIx }
   }
-  return { push, pushView, finish, drop, ask, snapshot, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()], firstText: (s) => state.get(s).firstText }
+  // save(lane) → the lane's state as a push left it (its first text is set by its first push and stays: a rewind keeps that push);
+  // rewind(lane, saved, undos): back to it, `undos` the steps' `undo` of every push of the lane after it, oldest first
+  const save = (s) => { const st = state.get(s); return { n: s.n, last: s._lastMsg, prevInfo: st.prevInfo, prevCount: st.prevCount, prevCtx: st.prevCtx } }
+  function rewind(s, saved, undos) {
+    for (let u = undos.length - 1; u >= 0; u--) for (let i = undos[u].length - 2; i >= 0; i -= 2) toolT.set(undos[u][i], undos[u][i + 1] ?? none())
+    const { n, last, ...st } = saved
+    s.n = n; s._lastMsg = last; Object.assign(state.get(s), st)
+  }
+  return { push, pushView, finish, drop, ask, snapshot, save, rewind, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()], firstText: (s) => state.get(s).firstText }
 }
 
 /** laneMeta(kind) → {icon, label, note?} of an analyzer lane's kind; eventOnly(kind): no ReAct events, resources or seen paths. */

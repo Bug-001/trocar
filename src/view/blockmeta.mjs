@@ -231,27 +231,32 @@ export function firstHuman(flat) {
 export const HEAD = Symbol('first prompt');
 // Sub-agents a spawn does not name are told apart by their first prompts (4.4 §看板 v2 需要的补充 `lanes[].task`): a lane's task starts at the
 // line where its prompt departs from the sibling it shares the longest prefix with (an identical prompt is no sibling to depart from).
-// Sorted, that sibling is a neighbour: n lanes cost a sort, not n² comparisons. → Map<lane, offset> (0: from the start).
-function departures(heads) {
-  const list = heads.filter(([, h]) => h).sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
-  const common = (a, b) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
-  const out = new Map();
-  for (let i = 0; i < list.length; i++) {
-    const [s, h] = list[i];
-    let d = 0;
-    for (let j = i - 1; j >= 0; j--) if (list[j][1] !== h) { d = Math.max(d, common(h, list[j][1])); break; }
-    for (let j = i + 1; j < list.length; j++) if (list[j][1] !== h) { d = Math.max(d, common(h, list[j][1])); break; }
-    out.set(s, d < h.length ? h.lastIndexOf('\n', d - 1) + 1 : 0);
-  }
-  return out;
+// Sorted, that sibling is a neighbour of its distinct prompts: n lanes cost a sort, not n² comparisons, and a prompt that comes or
+// goes moves the offsets of its two neighbours only (departer).
+const common = (a, b) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
+const departOf = (h, p, n) => { const d = Math.max(p == null ? 0 : common(h, p), n == null ? 0 : common(h, n)); return d > 0 && d < h.length ? h.lastIndexOf('\n', d - 1) + 1 : 0; };
+/** departer(heads?) → the offsets of a set of first prompts that changes a prompt at a time: add(h) / remove(h) (equal prompts
+ *  counted, one entry) → the prompts whose offset changed; offset(h) → where h departs from its siblings (0: from the start). */
+export function departer(heads = []) {
+  const U = [...new Set(heads)].sort(), cnt = new Map(), off = new Map();
+  for (const h of heads) cnt.set(h, (cnt.get(h) || 0) + 1);
+  U.forEach((h, i) => off.set(h, departOf(h, U[i - 1], U[i + 1])));
+  const find = (h) => { let lo = 0, hi = U.length; while (lo < hi) { const m = (lo + hi) >> 1; if (U[m] < h) lo = m + 1; else hi = m; } return lo; };
+  const redo = (out, ...is) => { for (const i of is) if (i >= 0 && i < U.length) { const h = U[i], o = departOf(h, U[i - 1], U[i + 1]); if (off.get(h) !== o) { off.set(h, o); out.push(h); } } return out; };
+  return {
+    add(h) { const c = cnt.get(h) || 0; cnt.set(h, c + 1); if (c) return []; const i = find(h); U.splice(i, 0, h); return redo([], i - 1, i, i + 1); },
+    remove(h) { const c = cnt.get(h) || 0; if (c > 1) { cnt.set(h, c - 1); return []; } if (!c) return []; cnt.delete(h); off.delete(h); const i = find(h); U.splice(i, 1); return redo([], i - 1, i); },
+    offset: (h) => off.get(h) || 0,
+  };
 }
+/** departs(lane) → whether a lane's first prompt is told apart from its siblings': a sub-agent's that no spawn named. */
+export const departs = (l) => l.kind === 'subagent' && !!l[HEAD];
 /** tellApart(lanes) → lanes, each lane that carries its first prompt (`lane[HEAD]`: no spawn named it) given its `task` (4.4 §看板 v2
  *  需要的补充): that prompt, a sub-agent's from the line it departs from its siblings — every such sub-agent lane of the session, whatever
  *  wire it came on, so the rule is one (invariant 3). Run once, on the session's whole set of lanes. */
 export function tellApart(lanes) {
-  const open = lanes.filter((l) => HEAD in l);
-  const departs = departures(open.filter((l) => l.kind === 'subagent').map((l) => [l, l[HEAD]]));
-  for (const l of open) l.task = taskOf(l[HEAD] && l[HEAD].slice(departs.get(l) || 0));
+  const open = lanes.filter((l) => HEAD in l), heads = departer(open.filter(departs).map((l) => l[HEAD]));
+  for (const l of open) l.task = taskOf(l[HEAD] && l[HEAD].slice(departs(l) ? heads.offset(l[HEAD]) : 0));
   return lanes;
 }
 

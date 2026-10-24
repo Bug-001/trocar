@@ -5,9 +5,10 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { bigSession, firstAskOf } from '../query/big-session.mjs'
+import { bigSession, firstAskOf, rng } from '../query/big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { sessionView } from '../../src/view/board.mjs'
+import { departer } from '../../src/view/blockmeta.mjs'
 
 for (const wire of ['http', 'chat', 'threads', 'ws']) {
   test(`${wire}: every lane's task is its first call's first prompt, and no label says "subagent:"`, async () => {
@@ -79,3 +80,34 @@ for (const flat of ['chat', 'ws'])
     for (const l of subs) assert.ok(l.task && !PREAMBLE.startsWith(l.task.slice(0, 20)), `lane ${l.lane} is not named by the preamble: ${l.task}`)
     assert.equal(new Set(subs.map((l) => l.task)).size, subs.length, 'each sub-agent its own task')
   })
+
+// departer (4.4 §看板 v2 需要的补充 `lanes[].task`): a prompt departs from its siblings at the line where it parts from the DISTINCT prompt
+// it shares the longest prefix with (an identical prompt is no sibling); 0 when it parts at the start, never parts, or has no sibling.
+// Seeded add / remove sequences over prompts that share long multi-line preambles, with duplicates, prefixes and a leading newline.
+test('departer: after every add and remove each prompt departs where the brute-force rule says, and every prompt that moved is named', () => {
+  const ref = (h, present) => {
+    let d = -1
+    for (const o of present) if (o !== h) { let i = 0; while (i < h.length && i < o.length && h[i] === o[i]) i++; d = Math.max(d, i) }
+    return d <= 0 || d >= h.length ? 0 : h.lastIndexOf('\n', d - 1) + 1
+  }
+  const pre = (tag, n) => Array.from({ length: n }, (_, i) => `[${tag}] shared line ${i}: work in the given worktree`).join('\n')
+  for (const seed of [3, 17, 29, 101]) {
+    const next = rng(seed), pick = (a) => a[Math.floor(next() * a.length)]
+    const pres = [pre('a', 30), pre('a', 12), pre('b', 30), '', '\n']
+    const tails = ['', '\n## task: retry queue', '\n## task: retry queue\nmore', '\n## task: review', 'x', '\n## task: review the branch\n']
+    const pool = Array.from({ length: 24 }, () => pick(pres) + pick(tails)).filter(Boolean)
+    const dep = departer(), held = []
+    for (let op = 0; op < 400; op++) {
+      const before = new Map([...new Set(held)].map((h) => [h, ref(h, new Set(held))]))
+      let moved
+      if (held.length && next() < 0.45) moved = dep.remove(held.splice(Math.floor(next() * held.length), 1)[0])
+      else { const h = pick(pool); held.push(h); moved = dep.add(h) }
+      const present = new Set(held)
+      for (const h of present) {
+        const want = ref(h, present)
+        assert.equal(dep.offset(h), want, `seed ${seed} op ${op}: ${JSON.stringify(h.slice(-40))}`)
+        if (before.get(h) !== want) assert.ok(moved.includes(h), `seed ${seed} op ${op}: a prompt whose offset moved is named`)
+      }
+    }
+  }
+})
