@@ -1,0 +1,2 @@
+# raw bytes: no end-of-line conversion on any checkout (the CRLF line and the bare tail are under test)
+* -text

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // bench/raw-bench.mjs — D35 benchmarks on a generated shard (4.6 E3 / E4). Not part of `npm test`.
 //   node bench/raw-bench.mjs seal <raw/<segment>.ndjson> <lock>   E4: seal one segment, default heap
-//   node bench/raw-bench.mjs read <sessionsDir> [n=1000] [seed=7]  E3: random raw_ref reads in a NEW process
+//   node bench/raw-bench.mjs read <dir of .sealed> [n=1000] [seed=7] E3: random raw_ref reads in a NEW process
 // Prints one JSON line of numbers. Run on synthetic data only (bench/raw-gen.mjs).
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,14 +28,13 @@ if (mode === 'seal') {
   const ses = a, n = Number(b || 1000);
   let seed = Number(c || 7) >>> 0;
   const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 2 ** 32);
-  const files = fs.readdirSync(ses, { withFileTypes: true }).filter((e) => e.isDirectory())
-    .flatMap((e) => fs.readdirSync(path.join(ses, e.name)).filter((x) => x.endsWith('.sealed')).map((x) => [e.name, path.join(ses, e.name, x)]));
+  const files = fs.readdirSync(ses).filter((x) => x.endsWith('.sealed')).map((x) => path.join(ses, x));   // flat, as raw/ holds them
   const refs = [];
   let totalFrames = 0, totalBytes = 0;
   const pool = [];
-  for (const [sid, f] of files) {
+  for (const f of files) {
     const sf = openSealed(f); totalFrames += sf.frames.length; totalBytes += sf.size;
-    for (let i = 0; i < sf.count; i++) { const e = sf.entry(i); if (e.id) pool.push(`${sid}/${e.stream}#${e.id}::0-64`); }
+    for (let i = 0; i < sf.count; i++) { const e = sf.entry(i); if (e.id) pool.push(`${e.stream}#${e.id}::0-64`); }
     sf.close();
   }
   for (let i = 0; i < n; i++) refs.push(pool[Math.floor(rnd() * pool.length)]);

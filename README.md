@@ -428,9 +428,13 @@ run `sudo trocar setup-helper` again to replace it.
 Raw captures grow with the square of a conversation (every call re-sends the whole history), so they
 dwarf the agent's own logs. The daemon appends records to a segment under `~/.trocar/raw/` and closes
 it at 128 MB or when the daemon stops. It then seals each closed segment by itself, one at a time: a
-lossless re-encoding (per-record byte deltas + brotli frames + an index), typically a few percent of
-the original. Every reader reads sealed segments directly and shows exactly the same records; the
-plain copy is deleted only after every record decodes back byte for byte. A segment that fails to seal
+lossless re-encoding that stores each repeated piece of the segment once, keeps for every record the
+list of pieces that make it up, and packs both into brotli frames with an index. On 12 segments of a
+long live session this came to 7.3 % of the original, about 38 % smaller than the format earlier
+builds wrote (11.7 %), and sealing took 29 % less time. Every reader reads sealed segments directly
+and shows exactly the same records; the plain copy is deleted only after every record decodes back byte for byte. Segments sealed by earlier
+builds stay as they are and remain readable. An older trocar refuses a segment sealed by this build
+and says why, so going back to an older build is not supported. A segment that fails to seal
 keeps its plain copy, is tried again at the next daemon start, and shows in `trocar status`. There is
 no manual seal command.
 
