@@ -12,7 +12,7 @@ import { sealSegment, SealRefused } from '../../src/raw/seal.mjs';
 import { recordId } from '../../src/collector/core/record/segments.mjs';
 import { tmpDir, e1Lines, writeShard, listFiles, decodeAll } from './helpers.mjs';
 import { segmentLines } from '../../src/query/records.mjs';
-import { VERSION } from '../../src/raw/format.mjs';
+const V2 = 2;   // spec 4.2 「封存格式」: the sealer writes container version 2, named in the header
 
 const SEAL = fileURLToPath(new URL('../../src/raw/seal.mjs', import.meta.url));
 const SEGMENT = '20261005T100000Z';
@@ -40,8 +40,8 @@ test('E1: a sealed segment rebuilds every record byte for byte, with the same re
   const whole = Buffer.concat([...got.keys()].sort((x, y) => x - y).map((k) => got.get(k).line));
   assert.equal(createHash('sha256').update(whole).digest('hex'), res.sha256);
   // The container version the sealer writes is both in the file header (u16 LE at 8) and in its journal line (D72①).
-  assert.equal(fs.readFileSync(res.sealed).readUInt16LE(8), VERSION);
-  assert.equal(fs.readFileSync(b.journal, 'utf8').trim().split('\n').map(JSON.parse).at(-1).format, VERSION);
+  assert.equal(fs.readFileSync(res.sealed).readUInt16LE(8), V2);
+  assert.equal(fs.readFileSync(b.journal, 'utf8').trim().split('\n').map(JSON.parse).at(-1).format, V2);
 });
 
 test('E9: the temp and the sealed file are 0600', async () => {

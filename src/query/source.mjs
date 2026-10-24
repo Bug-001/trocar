@@ -326,7 +326,7 @@ const listRoot = (root, exclude = null) => {
 // `source` may be one path or SEVERAL roots (the home and the collector directory). Scanning only the
 // first would make raw-byte refs from the other root unresolvable — the block viewer would report
 // "record not found" for bytes that are on disk.
-export async function buildResolver(source, { retryMs = 30000, exclude = null, lister = (root) => listRoot(root, exclude), frameCache = createFrameCache(8), unreadableSealed = null, onIndexChange = null } = {}) {
+export async function buildResolver(source, { retryMs = 30000, exclude = null, lister = (root) => listRoot(root, exclude), frameCache = createFrameCache(), unreadableSealed = null, onIndexChange = null } = {}) {
   const roots = (Array.isArray(source) ? source : [source]).filter(Boolean);
   if (roots.length > 1) return buildMultiResolver(roots, { retryMs, exclude });
   const sourcePath = roots[0];
@@ -628,7 +628,7 @@ async function buildMultiResolver(roots, { exclude, ...opts }) {
   // the roots a listing can include: one that cannot be listed is left out of it (and fails alone)
   const listable = () => roots.filter((r) => { try { listSources([r]); return true; } catch { return false; } });
   const shared = { at: null, ls: null };
-  const frameCache = createFrameCache(8);   // one frame LRU for every root's sealed files
+  const frameCache = createFrameCache();   // one frame LRU for every root's sealed files
   const unreadableSealed = () => parts.flatMap((p) => (p.scan && p.scan.unreadableSealed) || []);
   // Re-poisons every root whenever one root's index changes (a rebuild swapped in, a new file indexed),
   // in the same tick — never on a later await, when a lookup may already have run.
