@@ -7,6 +7,7 @@
 import { sessionMetaOfFacts, itemsView } from '../view/board.mjs';
 import { unknownSummary } from '../view/assemble.mjs';
 import { compareStep } from '../view/step-order.mjs';
+import { COMP_KEYS } from '../view/blockmeta.mjs';
 import { posCmp } from './projection.mjs';
 import { QueryArgError } from './named/index.mjs';
 
@@ -45,14 +46,35 @@ const recOf = (r) => ({ id: String(r.id), ts_request: r.ts ?? null, is_llm_call:
 
 /** columns(slotOf) → the step-order columns of a fold log's calls, by each call's slot in the projection (`slotOf`): its row's ts, its
  *  lane (`ln`, the lane keys interned in `keys`), how many `user` events it has (`uc`) and whether it has a compaction or summarize
- *  event (`cs`); the rids in step order, and each lane's rids and slots in step order (`by`, by lane int); the live lane keys. sync()
+ *  event (`cs`), its context bytes (`cx`), its largest composition bucket and share (`cb`) and its flag bits (`fl`, flagsOf); the rids in step order, and each lane's rids and slots in step order (`by`, by lane int); the live lane keys. sync()
  *  brings them to the log's frontier from the lines past the last sync (and keeps the lane headers it reads: `heads`), each moved row taken out and put back by binary search: a
  *  warm state and a cold open build the same columns. */
 export const columns = (slotOf) => ({ at: -1, slotOf, ts: [], ln: new Int32Array(0), uc: new Int32Array(0), cs: new Uint8Array(0),
+  cx: new Float64Array(0), cb: new Uint8Array(0), fl: new Uint8Array(0),
   keys: new Map(), order: [], by: [], lanes: new Set(), heads: new Map(), its: null, sorted: null });
 const tsOf = (cols, rid) => cols.ts[cols.slotOf(rid)];
+// The flag bits of a step (3.5 §会话读 `session --head` `cols`), from the low bit: compaction, inferred compaction, a cache break that
+// changed the prefix (a cause outside the quiet ones, src/web/v2/core/metrics.mjs QUIET_CAUSES), failed, a user ask, summarize, a
+// subagent spawned, no usage (a call that did not fail and reported none).
+export const FLAG = Object.freeze({ compaction: 1, inferred: 2, cacheBreak: 4, failed: 8, user: 16, summarize: 32, spawn: 64, noUsage: 128 });
+const QUIET = new Set(['append', 'first-call', 'volatile-nonce-only']);
+const EVENT_FLAG = { user: FLAG.user, summarize: FLAG.summarize, spawn: FLAG.spawn };
+function flagsOf(r, events) {
+  let f = 0;
+  for (const e of events) f |= e.type === 'compaction' ? FLAG.compaction | (e.inferred ? FLAG.inferred : 0) : EVENT_FLAG[e.type] || 0;
+  const b = r.cacheBreak, failed = !!r.error || (r.status != null && r.status !== 200);
+  if (b && b.cause && !b.firstCall && !QUIET.has(b.cause)) f |= FLAG.cacheBreak;
+  if (failed) f |= FLAG.failed; else if (r.usage == null) f |= FLAG.noUsage;
+  return f;
+}
+// The largest composition bucket (its index in COMP_KEYS, high 4 bits) and its share of the composition in 15ths (low 4 bits).
+function compByte(comp) {
+  let top = -1, max = 0, sum = 0;
+  COMP_KEYS.forEach((k, i) => { const v = (comp && comp[k]) || 0; sum += v; if (v > max) { max = v; top = i; } });
+  return top < 0 ? 0 : (top << 4) | Math.round((15 * max) / sum);
+}
 // The columns in a fold log's sidecar (4.3 §4 旁索引, its `extra`): `s.at` the frontier they were synced to; by slot `s.tk` whether the
-// ts is undefined (0), null (1) or a string (2, in `s.ts` in slot order), `s.ln`, `s.uc`, `s.cs`; `s.keys` the lane keys in int order;
+// ts is undefined (0), null (1) or a string (2, in `s.ts` in slot order), `s.ln`, `s.uc`, `s.cs`, `s.cx`, `s.cb`, `s.fl`; `s.keys` the lane keys in int order;
 // `s.order` the step order as slots; `s.lanes` the live lane keys. A string holding a newline, or a value of another type, saves none.
 const strs = (a) => a.every((x) => typeof x === 'string' && !x.includes('\n'));
 /** dumpColumns(cols) → the sidecar parts of synced columns ([] when they cannot be: never synced, or a key no `str` part holds). */
@@ -62,7 +84,7 @@ export function dumpColumns(cols) {
   const keys = [...cols.keys.keys()], lanes = [...cols.lanes];
   if (cols.at < 0 || !strs(ts) || !strs(keys) || !strs(lanes)) return [];
   return [['s.at', Float64Array.of(cols.at)], ['s.tk', tk], ['s.ts', ts], ['s.ln', cols.ln.slice(0, n)], ['s.uc', cols.uc.slice(0, n)],
-    ['s.cs', cols.cs.slice(0, n)], ['s.keys', keys], ['s.order', Int32Array.from(cols.order, (rid) => cols.slotOf(rid))], ['s.lanes', lanes]];
+    ['s.cs', cols.cs.slice(0, n)], ['s.cx', cols.cx.slice(0, n)], ['s.cb', cols.cb.slice(0, n)], ['s.fl', cols.fl.slice(0, n)], ['s.keys', keys], ['s.order', Int32Array.from(cols.order, (rid) => cols.slotOf(rid))], ['s.lanes', lanes]];
 }
 /** loadColumns(rows, parts) → the columns dumpColumns saved, over the projection's rows (`slotOf`, `keyAt`, `size`): equal to a sync
  *  to their `at`; null when the parts are not of that shape or name a slot the rows do not have. */
@@ -70,8 +92,9 @@ export function loadColumns(rows, p) {
   const at = p['s.at'], tk = p['s.tk'], n = tk ? tk.length : -1;
   if (!(at instanceof Float64Array) || at.length !== 1 || !(tk instanceof Uint8Array) || n > rows.size || !Array.isArray(p['s.ts'])) return null;
   for (const c of ['s.ln', 's.uc']) if (!(p[c] instanceof Int32Array) || p[c].length !== n) return null;
-  if (!(p['s.cs'] instanceof Uint8Array) || p['s.cs'].length !== n || !(p['s.order'] instanceof Int32Array) || !Array.isArray(p['s.keys']) || !Array.isArray(p['s.lanes'])) return null;
-  const cols = { ...columns(rows.slotOf), at: at[0], ln: p['s.ln'], uc: p['s.uc'], cs: p['s.cs'], keys: new Map(p['s.keys'].map((k, i) => [k, i])), lanes: new Set(p['s.lanes']) };
+  for (const [c, T] of [['s.cs', Uint8Array], ['s.cx', Float64Array], ['s.cb', Uint8Array], ['s.fl', Uint8Array]]) if (!(p[c] instanceof T) || p[c].length !== n) return null;
+  if (!(p['s.order'] instanceof Int32Array) || !Array.isArray(p['s.keys']) || !Array.isArray(p['s.lanes'])) return null;
+  const cols = { ...columns(rows.slotOf), at: at[0], ln: p['s.ln'], uc: p['s.uc'], cs: p['s.cs'], cx: p['s.cx'], cb: p['s.cb'], fl: p['s.fl'], keys: new Map(p['s.keys'].map((k, i) => [k, i])), lanes: new Set(p['s.lanes']) };
   let j = 0;
   for (let k = 0; k < n; k++) if (tk[k]) cols.ts[k] = tk[k] === 1 ? null : p['s.ts'][j++];
   if (j !== p['s.ts'].length) return null;
@@ -94,7 +117,7 @@ const byLane = (cols, v) => cols.by[v] || (cols.by[v] = { v, rids: [], slots: []
 function slot(cols, k) {
   if (k < cols.ln.length) return;
   const n = Math.max(k + 1, 2 * cols.ln.length, 64);
-  for (const c of ['ln', 'uc', 'cs']) { const a = new cols[c].constructor(n); a.set(cols[c]); cols[c] = a; }
+  for (const c of ['ln', 'uc', 'cs', 'cx', 'cb', 'fl']) { const a = new cols[c].constructor(n); a.set(cols[c]); cols[c] = a; }
 }
 const laneInt = (cols, key) => { let v = cols.keys.get(key); if (v === undefined) cols.keys.set(key, (v = cols.keys.size)); return v; };
 export function sync(cols, log) {
@@ -117,7 +140,8 @@ export function sync(cols, log) {
       l.rids.splice(j, 0, rid); l.slots.splice(j, 0, k);
       cols.uc[k] = o.e.filter((e) => e.type === 'user').length;
       cols.cs[k] = o.e.some((e) => e.type === 'compaction' || e.type === 'summarize') ? 1 : 0;
-    } else { cols.ts[k] = undefined; cols.ln[k] = -1; cols.uc[k] = 0; cols.cs[k] = 0; }
+      cols.cx[k] = r.ctx || 0; cols.cb[k] = compByte(r.comp); cols.fl[k] = flagsOf(r, o.e);
+    } else { cols.ts[k] = undefined; cols.ln[k] = -1; cols.uc[k] = 0; cols.cs[k] = 0; cols.cx[k] = 0; cols.cb[k] = 0; cols.fl[k] = 0; }
   }
   // the kept lane order (viewOf) holds while every lane's first row is the one it was sorted by and kept its place; a new lane is
   // placed into it there

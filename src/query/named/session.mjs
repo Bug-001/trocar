@@ -40,8 +40,9 @@ import { warmCache, fsTag, heapBudget, heapCeiling, hold, steadyBytes, liveHeap,
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
+import { headDoc, headFile, tier0Doc, writeHead } from '../ctx-files.mjs';
 
-export const params = Object.freeze(['id', 'since', 'before', 'limit']);
+export const params = Object.freeze(['id', 'since', 'before', 'limit', 'head']);
 
 /** What a session read keeps in the heap per call (the reduction's columns and its lanes' shares, the projection's row and shared
  *  value index, the plan's entry, the kept mark's digest), until a reduction of THIS session measured it (HeapBound below).
@@ -476,7 +477,7 @@ async function advance(ctx, id, { budgetMs, request }) {
       continue;
     } finally { release(); kept.clear(); keptBytes = 0; keeping = false; }
     states.get(k, st, () => st); // kept once the work's reservation is given back: the next slice grows it
-    return { st, plan, members, ex, errors };
+    return { st, plan, members, ex, errors, indexErrors: index.errors };
   }
 }
 
@@ -487,7 +488,26 @@ export async function extendSession(ctx, id, budgetMs) {
   const r = await advance(ctx, String(id), { budgetMs, request: false });
   if (!r) return false;
   const { st, plan, ex } = r;
-  return ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n);
+  const more = ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n);
+  if (headDue(ctx, String(id), more)) putHead(ctx, stateAt(r, String(id)));
+  return more;
+}
+
+// The head file (3.5 §谁执行它「答案文件」): the worker writes it at the end of a request or background slice of the session, once
+// HEAD_MS passed since its last write or when nothing of the session is left to extract or fold; never on a timer. A head at the
+// mark (and cut) it was last written at is not made again while its file is there.
+const HEAD_MS = 2000;
+const heads = new Map(); // session id → {t, sig} of its last head write in this worker
+const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated]);
+const headDue = (ctx, id, pending) => { if (ctx.writer !== true) return false; const h = heads.get(id); return !pending || !h || performance.now() - h.t >= HEAD_MS; };
+/** headOf(s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs). */
+const headOf = (s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors)
+  : headDoc({ ...s, mark: markOn(s.plan, s.mark), markTs: s.plan.byId.get(s.mark)?.ts ?? null }));
+function putHead(ctx, s, doc = null) {
+  const h = heads.get(s.id), sig = sigOf(s), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
+  if (h && h.sig === sig && fs.existsSync(headFile(home, s.id))) return;
+  try { writeHead(home, s.id, doc || headOf(s), fs); } catch { return; } // a head not written is written at the next slice
+  heads.set(s.id, { t: performance.now(), sig });
 }
 
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the
@@ -498,8 +518,11 @@ export async function extendSession(ctx, id, budgetMs) {
  *  and the store's notes. The state stays warm. */
 export async function sessionState(ctx, id) {
   const r = await advance(ctx, String(id), { budgetMs: ctx.writer === true ? SLICE_MS : Infinity, request: true });
-  if (!r) return null;
-  const { st, plan, members, ex, errors } = r, mark = markOf(st.log);
+  return r && stateAt(r, String(id));
+}
+// the session state of one slice's result (advance)
+function stateAt(r, id) {
+  const { st, plan, members, ex, errors, indexErrors } = r, mark = markOf(st.log);
   if (!(st.view && st.view.f === st.log.frontier && st.view.plan === plan && st.view.gen === plan.gen)) {
     st.view = null; // the old view let go before the new one is built
     st.view = { f: st.log.frontier, plan, gen: plan.gen, V: viewOf({ id: String(id), log: st.log, cols: st.cols, members, plan, mark }) };
@@ -508,8 +531,8 @@ export async function sessionState(ctx, id) {
   const V = st.view.V, done = mark == null ? 0 : posOf(plan, mark) + 1;
   let above = ex.done < ex.total;
   for (let i = done; !above && i < members.length; i++) above = inCut(plan, members[i]);
-  return { id: String(id), rows: members, store: st.store, mark, pending: above ? { done, total: members.length, work: st.store.work } : null,
-    truncated: plan.bound, V, failed: V.failed, errors, st, plan };
+  return { id, rows: members, store: st.store, mark, pending: above ? { done, total: members.length, work: st.store.work } : null,
+    truncated: plan.bound, V, failed: V.failed, errors, indexErrors, st, plan };
 }
 
 /** version(ctx) → {key, errors} | null (3.5 §谁执行它 答案缓存): the session's member rows, its reduction frontier as it is now, the
@@ -545,6 +568,8 @@ export async function run(ctx) {
   const id = one(p.id), since = one(p.since), before = one(p.before);
   if (id == null) throw new QueryArgError('trocar query session: --id is required (a session id; `trocar query sessions` lists them)');
   if (since != null && before != null) throw new QueryArgError('trocar query session: --since and --before cannot be given together');
+  const asHead = p.head != null && p.head !== false && p.head !== 'false' && p.head !== '0';
+  if (asHead && (since != null || before != null || p.limit != null)) throw new QueryArgError('trocar query session: --head cannot be given with --since, --before or --limit');
   const limit = limitOf(p.limit);
   const s = await sessionState(ctx, id);
   if (!s) {
@@ -552,6 +577,13 @@ export async function run(ctx) {
     errors.push(...idx.errors, { where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
     return { base: null, mark: null, truncated: null, more: false, meta: null, stats: null, logged: null, probes: null, lanes: [], calls: [], events: [], records: [] };
   }
+  if (asHead) {
+    const doc = headOf(s);
+    if (headDue(ctx, id, s.pending)) putHead(ctx, s, doc);
+    errors.push(...doc.errors);
+    return doc;
+  }
+  if (headDue(ctx, id, s.pending)) putHead(ctx, s);
   errors.push(...s.errors, ...s.failed.map((f) => ({ where: f.id, code: f.code, reason: f.reason })));
   const { V } = s;
   if (before != null && !V.has(before)) throw new QueryArgError(`trocar query session: --before ${JSON.stringify(before)} is not a call of this session`);

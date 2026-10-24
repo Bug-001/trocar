@@ -44,6 +44,7 @@ import { lowerPriority } from '../low-priority.mjs'
 import { extendSession, indexed, saveIndexes } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
 import { gcProjections, posCmp } from './projection.mjs'
+import { headFile, tier0Doc, writeHead } from './ctx-files.mjs'
 
 const home = process.argv[2]
 // The board's control verbs (`{control, body}`, 4.4 §控制面) run the CLI's own functions, which take `deps` for what they ask of the machine.
@@ -113,6 +114,9 @@ const SLICE_MS = 50, IDLE_SLICE_MS = 2000
 const say = (e) => process.stderr.write(`trocar query worker: background work failed: ${(e && e.stack) || e}\n`) // the daemon keeps stderr (D38)
 // newestDone starts true: only a request opens the newest-session scan, never a kick (a worker forked for a kick has none to follow).
 let busy = 0, lastAt = Date.now(), target = null, newestDone = true, gcDone = false, queued = false, timer = null, once = {}
+// The sweep (3.5 §谁执行它「答案文件」): at the first idle period of this worker's life, and again on the daemon's `{sweep: true}`, a
+// tier-0 head (ctx-files.mjs, from the segment index only) for every session whose head file is absent. One pass over the sessions.
+let sweepDue = true
 const answered = new Set() // the sessions this worker answered: never collected under it
 const follow = new Set() // the sessions the daemon kicked (3.5 §后台抽取与归约): folded in turn from their checkpoints
 const kicked = new Set() // the record ids of the kicked model calls, not yet looked up: their sessions go to `follow`
@@ -155,6 +159,18 @@ async function background() {
     if (more) progress(); else worked() // a slice done: the daemon's idle clock starts again
     return kick()
   }
+  if (sweepDue) {
+    if (busy || notIdle()) return
+    sweepDue = false
+    const index = await indexed(ctx)
+    let wrote = 0
+    for (const [id, ms] of sessionGroups(index.rows)) {
+      if (nodeFs.existsSync(headFile(home, id))) continue
+      try { if (writeHead(home, id, tier0Doc(id, ms, index.errors))) wrote++ } catch (e) { say(e) }
+    }
+    if (wrote) worked()
+    return kick()
+  }
   if (gcDone || busy || notIdle()) return // once per idle period, IDLE_SLICE_MS after the last request or kick: not after every burst
   gcDone = true
   saveIndexes() // the sidecars of what this busy period grew, before the GC counts them
@@ -180,10 +196,12 @@ process.stdin.on('data', (d) => {
 // The daemon's kick (service.mjs kick): the record ids of model calls just indexed. `once` is dropped so the next slice reads the
 // index again and sees the new members and their sessions; the idle period starts again, so the sidecars and the GC wait for the burst to end.
 process.on('message', (m) => {
+  if (m && m.sweep === true) { sweepDue = true; kick(); return }
   if (!m || !Array.isArray(m.kick)) return
   for (const id of m.kick) kicked.add(String(id))
   once = {}; gcDone = false; lastAt = Date.now()
   kick()
 })
+kick() // the first idle period: the sweep
 process.stdin.on('end', () => process.exit(0))
 process.on('disconnect', () => process.exit(0)) // the daemon is gone: so is the reason to be here
