@@ -30,7 +30,7 @@ import v8 from 'node:v8';
 import { reduction, memoryLog, BlockUnread, REDUCE_HEAP, LEDGER_BYTES, REDUCE_V } from '../../view/reduce.mjs';
 import { openFoldLog, foldLogFile, LOG_BYTES } from '../fold-log.mjs';
 import { trocarHome } from '../../paths.mjs';
-import { extractMembers, extractSeed, blockAt, CHUNK_STORED } from '../../view/extract.mjs';
+import { extractMembers, extractSeed, blockAt, CHUNK_STORED, TAIL_HEAP, releaseTails } from '../../view/extract.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { recordsAt, releaseDecoded, STRETCH_HEAP } from '../records.mjs';
 import { indexRows, sessionGroups, sessionFacts } from '../rows.mjs';
@@ -64,8 +64,8 @@ const WORK_PER_STORED = 4;
 // The cut moves by the rows 1/BOUND_STEPS of the budget holds, so a live session is not reduced from scratch on every new row.
 const BOUND_STEPS = 10;
 /** K (3.5 §内存有界): the fixed caches a session read fills and keeps beside its spine, each a byte cap of its own module (the store's
- *  rows and shared values, the reduction's lists and facts, the fold log's lines, the lane ledgers), never given way to the ledger. */
-export const CACHES = STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES + LEDGER_BYTES;
+ *  rows and shared values, the reduction's lists and facts, the fold log's lines, the lane ledgers, extraction's lane tails), never given way to the ledger. */
+export const CACHES = STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES + LEDGER_BYTES + TAIL_HEAP;
 const STORES = 8;
 
 const stepOrder = (a, b) => compareStep(a.ts, a.id, b.ts, b.id);
@@ -232,6 +232,7 @@ const fileLogs = new WeakMap();
  *  the sealed segments are let go too: an idle worker does not hold them (3.5 §冷路径). */
 export function saveIndexes() {
   releaseDecoded();
+  releaseTails();
   for (const s of stores.values()) sidecars(s);
 }
 // The store's sidecar first (the log's names the projection's bytes); then, when it covers every line of the store (none while the
@@ -241,7 +242,7 @@ export function saveIndexes() {
 // the log ends at the frontier line the sidecar covers to, so the state is the one the sidecar's indexes describe. A sidecar that
 // cannot be written is not one: the next open scans, the next fold rebuilds.
 function sidecars(store) {
-  try { store.saveIndex(extractSeed(store)); } catch { /* the next idle period */ }
+  try { if (!store.indexed) store.saveIndex(extractSeed(store)); } catch { /* the next idle period */ }
   const st = fileLogs.get(store);
   if (!st || !store.indexed) return;
   try {
@@ -307,17 +308,19 @@ function seed(s) {
 // them. Else false (the local path's log past it, a mismatch, a state that does not read back or is not of this store): the caller
 // rebuilds up to the log's frontier (`target`), as without one.
 function resumed(s) {
-  const sv = s.log.saved, meta = sv && sv.parts['r.m'];
-  if (!meta || !(sv.parts['r.s'] instanceof Uint8Array)) return false;
+  const sv = s.log.saved, meta = sv && sv.parts['r.m'], state = sv && sv.parts['r.s'];
+  if (sv) delete sv.parts['r.s']; // read once here, whether taken or not: not held while the state lives
+  if (!meta || !(state instanceof Uint8Array)) return false;
   let from;
   try {
     const m = JSON.parse(meta[0]);
     if (m.rv !== REDUCE_V || m.cut !== s.cut) return false;
-    from = v8.deserialize(sv.parts['r.s']);
+    from = v8.deserialize(state);
   } catch { return false; }
   if (!(sv.bytes > s.log.frontier)) {
     if (!s.writer) return false;
     s.log.close(); s.log = s.open(sv.bytes); seed(s); s.view = null; s.target = markOf(s.log);
+    if (s.log.saved) delete s.log.saved.parts['r.s'];
     if (s.log.bytes !== sv.bytes) return false;
   }
   const target = s.target;
@@ -397,12 +400,24 @@ async function advance(ctx, id, { budgetMs, request }) {
   const foldMs = request ? budgetMs : Math.max(budgetMs / 2, budgetMs - (performance.now() - t0));
   // a block's text read back for a cache-break detail, or BlockUnread with a BLOCK_PROBLEMS code; a definition's ref names a record
   // this store extracted (a stitched block's too: extraction stitches from the store's own rows), so a member's
+  // within the slice the records read back stay by id, their stored bytes at most CHUNK_STORED, the least recently used first out
+  // (a break's two blocks and the lane's next break read one record once); let go when the slice's fold ends
+  const kept = new Map();
+  let keptBytes = 0, keeping = true;
   const resolve = (ref) => {
     const rid = parseTextRef(ref).recordId, row = planOf(members, k, store, id).byId.get(rid);
     if (!row) throw new BlockUnread('record-missing', `no member of this session is record ${rid}`);
-    const errs = [], rec = recordsAt({ home: ctx.home, fs: ctx.fs, rows: [row], errors: errs, remember: false })[0];
-    if (!rec) throw new BlockUnread('record-unreadable', `record ${rid} could not be read back: ${errs.map((e) => e.reason).join('; ') || 'no record'}`);
-    const b = blockAt(rec, ref);
+    let e = kept.get(rid);
+    if (e) kept.delete(rid);
+    else {
+      const errs = [], rec = recordsAt({ home: ctx.home, fs: ctx.fs, rows: [row], errors: errs, remember: false })[0];
+      if (!rec) throw new BlockUnread('record-unreadable', `record ${rid} could not be read back: ${errs.map((x) => x.reason).join('; ') || 'no record'}`);
+      e = { rec, bytes: row.stored_bytes || 0 };
+      keptBytes += e.bytes;
+      for (const [old, o] of kept) { if (keptBytes <= CHUNK_STORED) break; kept.delete(old); keptBytes -= o.bytes; }
+    }
+    if (keeping) kept.set(rid, e); else keptBytes = 0;
+    const rec = e.rec, b = blockAt(rec, ref);
     if (!b) throw new BlockUnread('field-missing', `record ${rid} has no block at ${ref}`);
     return b;
   };
@@ -425,7 +440,7 @@ async function advance(ctx, id, { budgetMs, request }) {
       perRows.set(k, 2 ** (Math.ceil(Math.log2(plan.room / fit) * 4) / 4));
       if (perRows.size > PER_ROW_KEPT) perRows.delete(perRows.keys().next().value);
       continue;
-    } finally { release(); }
+    } finally { release(); kept.clear(); keptBytes = 0; keeping = false; }
     states.get(k, st, () => st); // kept once the work's reservation is given back: the next slice grows it
     return { st, plan, members, ex, errors };
   }

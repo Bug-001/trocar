@@ -15,7 +15,7 @@ import { mintRawRef, composeTextRef } from '../raw/refs.mjs';
 import { fieldTextOf, TEXT_REF_FIELD } from '../dissect/record-fields.mjs';
 import { sessionKeyOf, observerEffectsOf, hintsOf } from '../dissect/harnesses.mjs';
 import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf, flatLaneOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
-import { parsedRequestBody } from '../dissect/request-body.mjs';
+import { parsedRequestBody, scannedRequestBody, sharesBody } from '../dissect/request-body.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
 import { cacheSemanticsKnown } from '../cache/cache-events.mjs';
 import { requestEncodingOf } from '../dissect/request-body.mjs';
@@ -94,7 +94,7 @@ export function hydrateForBoard(r, ctx = null) {
   // `_stream` is deliberately non-enumerable (so it never appears in stored or shipped JSON) — which
   // means a spread silently drops it, and every block downstream loses the half of its text_ref that
   // says WHICH capture file its bytes are in. Silent, because the result is simply a missing locator.
-  const out = { ...r, request, response: r.response || r.resp || {} };
+  const out = sharesBody({ ...r, request, response: r.response || r.resp || {} }, r); // the copy's stored body parses and scans as r's
   if (r._stream) Object.defineProperty(out, '_stream', { value: r._stream, enumerable: false, configurable: true });
   if (ctx) Object.defineProperty(out, '_ctx', { value: ctx, enumerable: false, configurable: true });
   // The body parsed, and we hold the result: say so, so the label side (capture-labels.bodyUnparsedOf,
@@ -382,8 +382,7 @@ function withRefs(flat, rec) {
 // path is absent from the bytes, or a record that cannot be addressed, is shipped inline and labelled
 // unaddressable by slimBlock (invariant 4).
 function withPathRefs(flat, rec) {
-  let root = null;
-  try { root = typeof rec.req_body === 'string' ? scanJson(rec.req_body) : null; } catch { root = null; }
+  const root = scannedRequestBody(rec);
   const base = rawRefOf(rec);
   return flat.map((b) => {
     const span = base && root && Array.isArray(b.path) ? spanAt(root, b.path) : null;
@@ -435,9 +434,9 @@ export function withLocatedRefs(flat, locateFn, scans = new Map()) {
     let m = scans.get(rec);
     if (!m) scans.set(rec, (m = new Map()));
     if (!m.has(field)) {
-      const t = field === 'req_body' ? (typeof rec.req_body === 'string' ? rec.req_body : null) : (fieldTextOf(rec, field).text ?? null);
       let root = null;
-      try { root = t != null ? scanJson(t) : null; } catch { root = null; }
+      if (field === 'req_body') root = scannedRequestBody(rec);
+      else { const t = fieldTextOf(rec, field).text ?? null; try { root = t != null ? scanJson(t) : null; } catch { root = null; } }
       m.set(field, root);
     }
     return m.get(field);
@@ -499,8 +498,7 @@ function scalarOf(text, node) {
 }
 export function nonBlockKeysOf(rec, format) {
   if (!rec || typeof rec.req_body !== 'string') return [];
-  let root = null;
-  try { root = scanJson(rec.req_body); } catch { return []; }
+  const root = scannedRequestBody(rec);   // the record's one scan (src/dissect/request-body.mjs)
   if (!root || root.kind !== 'object') return [];
   const keep = blockKeysOf(format);
   const base = rawRefOf(rec);

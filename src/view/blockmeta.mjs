@@ -88,27 +88,19 @@ function bodyTextOf(b) {
 }
 
 const PREVIEW_MAX = 90;
-// JS's own `\s` class — and exactly what String.trim removes, so ONE definition drives the scan below.
-const WS = /\s/;
-// `String(s).replace(/\s+/g, ' ').trim().slice(0, PREVIEW_MAX)`, BOUNDED: the regex form built a whole
-// second copy of every block body — a 200 KB tool_result collapsed in full to keep 90 chars of it, 243 ms
-// of a 115-call session plus the garbage behind its peak RSS. This scans the source once and stops at
-// PREVIEW_MAX, which on normal text means reading ~90 chars instead of 200 000. Same string out: leading
-// whitespace is skipped (trim), each whitespace RUN becomes one space, and a run with nothing after it is
-// never emitted (trim again).
-// The characters are collected and joined ONCE: `out += c` per character left a V8 cons-string tree of ~90 nodes behind
-// every preview (~2 KB of heap for 90 chars), which an assembled window of 60 large calls held as 167 MB (measured).
-const shorten = (s, max = PREVIEW_MAX) => {
+// `String(s).replace(/\s+/g, ' ').trim().slice(0, PREVIEW_MAX)`, BOUNDED: the regex form over the whole text built a second
+// copy of every block body — a 200 KB tool_result collapsed in full to keep 90 chars of it. Squashing a prefix gives a prefix of
+// the whole squash (a run cut at the prefix's end is still one space), so once the squashed, left-trimmed prefix is longer than
+// `max` its first `max` characters are the answer (the right trim can only drop the whole squash's last character); a prefix too
+// short to tell is read again four times longer. The answer is copied out (`' ' + x`, sliced) so it holds no larger string.
+// (`\s` is exactly what String.trim removes)
+const WS_RUN = /\s+/g;
+export const shorten = (s, max = PREVIEW_MAX) => {
   const t = String(s || '');
-  const out = [];
-  let pending = false;
-  for (let i = 0; i < t.length && out.length < max; i++) {
-    const c = t[i];
-    if (WS.test(c)) { if (out.length) pending = true; continue; }
-    if (pending) { out.push(' '); pending = false; if (out.length >= max) break; }
-    out.push(c);
+  for (let n = 2 * max + 64; ; n *= 4) {
+    const all = n >= t.length, q = (all ? t : t.slice(0, n)).replace(WS_RUN, ' ').trimStart();
+    if (all || q.length > max) return (' ' + (all ? q.trimEnd() : q).slice(0, max)).slice(1);
   }
-  return out.join('');
 };
 
 // Short arg preview for a tool_use header: the ONE field that says what the call is doing.

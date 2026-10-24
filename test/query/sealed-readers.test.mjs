@@ -82,3 +82,28 @@ test('4.2 #3 封存往返: the source pointer a record read back mints is the sa
   assert.ok(before.every(Boolean))
   assert.deepEqual(recordsAt({ home, rows: rowsOf(3), remember: false }).map(rawRefOf), before, 'a text_ref minted on the plaintext still names the record once sealed')
 })
+
+test('(d) a sealed file read again after the read yielded keeps its reader: no fd is open in between, and its index tail is not hashed again', async () => {
+  const crypto = await import('node:crypto')
+  const N = 12
+  const { home, plain, sealed } = await sealedHome('d', N)
+  const open = new Map()
+  const spy = { ...fs,
+    openSync: (...a) => { const fd = fs.openSync(...a); if (a[0] === sealed) open.set(fd, true); return fd },
+    closeSync: (fd) => { open.delete(fd); return fs.closeSync(fd) } }
+  const update = crypto.Hash.prototype.update
+  let hashed = 0
+  crypto.Hash.prototype.update = function (d, ...rest) { hashed += Buffer.byteLength(d); return update.call(this, d, ...rest) }
+  try {
+    const rows = rowsOf(N)
+    assert.deepEqual(json(recordsAt({ home, fs: spy, rows: [rows[0]], remember: false })), [plain[0]])
+    await tick()
+    assert.equal(open.size, 0, 'no fd on the sealed file outlives the read')
+    hashed = 0
+    assert.deepEqual(json(recordsAt({ home, fs: spy, rows: [rows[N - 1]], remember: false })), [plain[N - 1]])
+    // the only bytes hashed are the handed-out line's own sha256 check (4.2 「读」), not the index tail again
+    assert.ok(hashed <= Buffer.byteLength(lines('d', N)[N - 1]) + 1, `hashed ${hashed} bytes`)
+    await tick()
+    assert.equal(open.size, 0, 'no fd on the sealed file outlives the read')
+  } finally { crypto.Hash.prototype.update = update }
+})

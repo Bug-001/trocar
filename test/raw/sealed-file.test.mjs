@@ -137,6 +137,54 @@ test('an index that is self-consistent but points at the wrong bytes fails the s
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+// 4.2 「读」: the sha256 is checked on the bytes handed to the caller. A predecessor decoded only to
+// rebuild its successor is vouched for by the successor's check; asked for itself, it is checked too.
+test('a line is checked when handed out; a predecessor only through its successor', async () => {
+  const { readIndex, indexTailBytes, trailerBytes, R } = await import('../../src/raw/format.mjs');
+  const dir = tmp();
+  try {
+    const ls = lines(40);
+    const file = writeFile(dir, ls);
+    const buf = fs.readFileSync(file);
+    const fd = fs.openSync(file, 'r');
+    const { tables, indexOffset } = readIndex(fs, fd, buf.length); fs.closeSync(fd);
+    const j = tables.records.findIndex((r) => r[R.kind] === 1);
+    assert.ok(j > 0, 'the growing conversation seals into delta records');
+    const p = tables.records[j][R.back];
+    tables.records[p][R.sha] = tables.records[j][R.sha];              // p's recorded sha256 is now wrong
+    const tail = indexTailBytes(tables);
+    fs.writeFileSync(file, Buffer.concat([buf.subarray(0, indexOffset), tail, trailerBytes(indexOffset, tail.length)]));
+    const sf = openSealed(file);
+    assert.ok(sf.lineAt(j).equals(ls[j]), 'the successor rebuilds from p and passes its own check');
+    assert.throws(() => sf.lineAt(p), /sha256/);
+    sf.close();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('reading one record hashes no more than that record\'s bytes', async () => {
+  const { createHash } = await import('node:crypto');
+  const { R } = await import('../../src/raw/format.mjs');
+  const dir = tmp();
+  try {
+    const ls = lines(60);
+    const file = writeFile(dir, ls);
+    const sf = openSealed(file);
+    const depth = (i) => { let d = 0; for (let r = sf.records[i]; r[R.kind] === 1; r = sf.records[r[R.back]]) d++; return d; };
+    let tip = 0;
+    for (let i = 0; i < ls.length; i++) if (depth(i) > depth(tip)) tip = i;
+    assert.ok(depth(tip) >= 2, 'a chain of at least two steps');
+    const proto = Object.getPrototypeOf(createHash('sha256'));
+    const orig = proto.update;
+    let hashed = 0;
+    proto.update = function (data, ...rest) { hashed += Buffer.byteLength(data); return orig.call(this, data, ...rest); };
+    let line;
+    try { line = sf.lineAt(tip); } finally { proto.update = orig; }
+    assert.ok(line.equals(ls[tip]));
+    assert.ok(hashed <= ls[tip].length, `hashed ${hashed} bytes to hand out one ${ls[tip].length}-byte line`);
+    sf.close();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 // One shard split across many sessions feeds one writer per session. Their predecessor rings share a
 // memory budget (review F15): the total stays under it, and every output still decodes exactly.
 test('writers of one seal share a ring budget; the cap costs compression, never bytes', () => {

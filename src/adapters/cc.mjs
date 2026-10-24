@@ -10,6 +10,7 @@
 //   • model/schema.mjs (3.2) → mapUsage('cc', rawUsage)  (canonical usage mapping)
 import { contentHash, hashSpan, spanOf } from './content-hash.mjs';
 import { scanJson } from '../dissect/json-scan.mjs';
+import { storedRequestBody, scannedRequestBody } from '../dissect/request-body.mjs';
 import { collectExtra } from './contract.mjs';
 import { ENVELOPE_CONSUMED, v0RequestOf } from './envelope.mjs';
 import { wireFormatOf, contextStateOf } from '../dissect/registry.mjs';
@@ -259,11 +260,15 @@ export function parseBlocks(record) {
 // than being filled with a guess: the row then says its body is unresolvable instead of showing
 // someone else's bytes (invariant 2/4).
 export function blockSpans(record) {
-  const src = reqSource(record);
-  let req;
-  try { req = JSON.parse(src) } catch { req = {} }
-  let root = null;
-  try { root = scanJson(src) } catch { root = null }
+  let req, root = null;
+  if (typeof record?.req_body === 'string') { // the record's one parse and one scan of its stored body (src/dissect/request-body.mjs)
+    req = storedRequestBody(record) ?? {};
+    root = scannedRequestBody(record);
+  } else {
+    const src = reqSource(record);
+    try { req = JSON.parse(src) } catch { req = {} }
+    try { root = scanJson(src) } catch { root = null }
+  }
   const props = root && root.kind === 'object' ? root.props : new Map();
   const toolsNode = props.get('tools');
   const sysNode = props.get('system');

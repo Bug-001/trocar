@@ -11,7 +11,7 @@
 // (extraction's bound, 4.3 §4). Breaks are held. A `t` line is a held row (extracted after a member that failed, §3.9): opening stops at the first one and cuts the
 // file there before the next append, so what is read back is always the rows of one pass over a prefix.
 //   Shared values (`s`): a value that recurs across rows (a lane's facts, a call's attributes, the wire's labels) is written once.
-// Top down to SHARE_DEPTH levels under a row, a value of SHARE_MIN bytes or more whose content was seen among the last SEEN (to 2 × SEEN)
+// Top down to SHARE_DEPTH levels under a row, a value of SHARE_MIN bytes or more whose content was seen among the last SEEN (to 2 × SEEN) such
 // values looked at, or is shared already, is written as an `s` line keyed by its hash and stands in the row as `{"$s":key}`; a value not
 // seen stays inline and its children are looked at. A row read back puts each shared value back as one object every row read
 // while it is kept shares. An original value of the reference's own shape is always shared, so a reference is never ambiguous.
@@ -41,9 +41,12 @@ const ROW_HEAP = 2 << 20, SHARED_HEAP = 2 << 20, SEEN = 1 << 14;
 // with their shared values put back unshared, from test/query/big-session.mjs live(0.08) and live(0.2) (a row parsed alone 1.9, a
 // shared value 1.95), 3.5-7 on the user's live session (a heap diagnosis); 2026-10-22
 export const HEAP_PER_LINE_BYTE = 4;
-/** What an open store keeps at most of rows and shared values read back (each cache holds two times its figure): the heap
- *  a warm session's store costs beside its reduction (src/query/named/session.mjs). */
-export const STORE_HEAP = 2 * (ROW_HEAP + SHARED_HEAP);
+// the share keys of the values last written at each slot path (encode): at most MEMO_SLOTS paths and MEMO_CHARS characters of their
+// JSON text, the least recently used dropped first; a text costs at most 2 bytes a character in the heap
+const MEMO_SLOTS = 1024, MEMO_CHARS = 1 << 18;
+/** What an open store keeps at most of rows and shared values read back (each cache holds two times its figure) and of the share
+ *  keys it remembers by slot: the heap a warm session's store costs beside its reduction (src/query/named/session.mjs). */
+export const STORE_HEAP = 2 * (ROW_HEAP + SHARED_HEAP) + 2 * MEMO_CHARS;
 const CHUNK = 1 << 20;
 /** The first read of a line scan (linesOf), doubling up to CHUNK. */
 export const FIRST_CHUNK = 4 << 10;
@@ -246,28 +249,48 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
   // what an append writes of a row: a recurring value (or one of a reference's shape) as an `s` line and a reference
   const note = (v) => { const j = JSON.stringify(v); return j === undefined ? null : j; };
   const shares = new Set(); // keys given an `s` line by the append being built
+  // a value's share key (the sha256 of its JSON), taken from the memo when the value last written at the same slot path had the same JSON
+  const memo = new Map(); // slot path → [JSON, key], least recently used first
+  let memoChars = 0;
+  function keyAt(at, j) {
+    const m = memo.get(at);
+    if (m) { memo.delete(at); memoChars -= m[0].length; }
+    const key = m && m[0] === j ? m[1] : keyOf(j);
+    if (j.length <= MEMO_CHARS) { memo.set(at, [j, key]); memoChars += j.length; }
+    for (const [p, e] of memo) { if (memo.size <= MEMO_SLOTS && memoChars <= MEMO_CHARS) break; memo.delete(p); memoChars -= e[0].length; }
+    return key;
+  }
+  // A value shorter than SHARE_MIN is never shared, nor is anything under it (its children are shorter), unless it is of a reference's
+  // shape or holds one: it is not hashed and not counted as seen.
   function encode(row, out) {
     const copy = { ...row };
-    eachSlot(copy, 0, (h, k) => {
-      const v = h[k], j = note(v);
-      if (j == null) return false;
-      const key = keyOf(j);
-      if (isRef(v) || (j.length >= SHARE_MIN && (seen.has(key) || sharedAt.has(key) || shares.has(key)))) {
-        if (!sharedAt.has(key) && !shares.has(key)) { shares.add(key); out.push({ s: { k: key, v } }); }
-        h[k] = { $s: key };
-        return false;
+    const walk = (h, depth, at) => {
+      if (depth >= SHARE_DEPTH) return;
+      for (const k of Array.isArray(h) ? h.keys() : Object.keys(h)) {
+        const v = h[k], j = note(v), p = `${at}\0${k}`;
+        if (j == null) continue;
+        const ref = isRef(v);
+        if (ref || j.length >= SHARE_MIN) {
+          const key = keyAt(p, j);
+          if (ref || seen.has(key) || sharedAt.has(key) || shares.has(key)) {
+            if (!sharedAt.has(key) && !shares.has(key)) { shares.add(key); out.push({ s: { k: key, v } }); }
+            h[k] = { $s: key };
+            continue;
+          }
+          seen.set(key, true);
+        } else if (!j.includes('"$s"')) continue;
+        if (!isObj(v)) continue;
+        h[k] = Array.isArray(v) ? v.slice() : { ...v };
+        walk(h[k], depth + 1, p);
       }
-      seen.set(key, true);
-      if (!isObj(v)) return false;
-      h[k] = Array.isArray(v) ? v.slice() : { ...v };
-      return true;
-    });
+    };
+    walk(copy, 0, '');
     return copy;
   }
   const rebuilt = (reason) => {
     id = newId();
-    for (const m of [at, rowAt, rowCache, brks, sharedAt, sharedCache, seen]) m.clear();
-    brkAt[0].length = brkAt[1].length = 0;
+    for (const m of [at, rowAt, rowCache, brks, sharedAt, sharedCache, seen, memo]) m.clear();
+    brkAt[0].length = brkAt[1].length = 0; memoChars = 0;
     bytes = savedAt = 0; saved = null;
     if (write) { try { fs.rmSync(file, { force: true }); } catch { /* cut before the next append */ } }
     lines.cut(0);
