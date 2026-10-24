@@ -7,7 +7,7 @@ import { snap as probeSnap } from './probe.mjs'
 import { WRITE_GAP_MS } from '../../../../src/web/v2/core/router.mjs'
 
 export const IDS = Object.freeze(['I-pageerror', 'I-console', 'I-blank', 'I-keep', 'I-stack', 'I-hscroll', 'I-rate', 'I-write', 'I-leak',
-  'I-mem', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-memcap'])
+  'I-mem', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap'])
 
 export const PENDING = new Map([
   ['I-memcap', 'the page heap stays under memCapBytes (80 MB)'],
@@ -30,6 +30,8 @@ export const LIMITS = Object.freeze({
   memCapBytes: 80 * 2 ** 20, // pending: no spec line sets this cap yet
   followMs: 15000, // spec/01-trocar-rfc/1.4-central-board.md:71-73 · 4.4:51
   longtaskMs: 50, // D64 ②: no task of the page's own over 50 ms
+  loaderMax: 3, // spec/01-trocar-rfc/2.3-context-window.md:186 加载器: at most 3 of the desk's loader reads on their way at once
+  chapterSettleMs: 1000, // the chapter row and the step bar are drawn by one paint; a check that lands between two frames looks again
 })
 
 const STACK = [/^\s*at \S.*:\d+:\d+\)?\s*$/m, /FATAL ERROR/, /<--- Last few GCs --->/, /\b(?:node|v8)::\w/]
@@ -82,6 +84,11 @@ const viewOf = (page) => page.evaluate((sel) => {
       try { return root.innerText } finally { root.removeAttribute('data-seq-own') }
     })(document.querySelector('#content') || document.body),
     bodyText: document.body.innerText,
+    // the chapter row (1.3 §章): the label's global span [s0, s1); the playhead's step (1-based data-n, the real or the rough step
+    // label); the drawn window's first and last step (1-based, the axis ends)
+    chapter: ((l) => l && { s0: +l.dataset.s0, s1: +l.dataset.s1 })(document.querySelector('#chapnav .chaplabel')),
+    at: ((e) => (e ? +e.dataset.n : null))(document.querySelector('#stepbar .sb-no[data-n], #stepbar .sb-at[data-n]')),
+    win: ['#sawstart', '#sawend'].map((id) => +((/\d+/.exec(document.querySelector(id)?.textContent || '') || [])[0] ?? NaN)),
     sideways: document.documentElement.scrollWidth > innerWidth,
     dom: document.getElementsByTagName('*').length,
   }
@@ -122,6 +129,9 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
     if (name === 'session' || name === 'd/head') sessionAt = e.start
     if (key == null) continue
     if (byReader(e.start) || exempt.has(e)) { last.delete(key); continue } // the reader's read starts the timer's chain over
+    // an open tail read again in its own poll round (no head read since) is the round's whole read after a Range answer that was not
+    // the file's lines or a 416 (4.4 §答案文件, replay.mjs readTail): once per round
+    if (p && /^d\/open/.test(name) && since <= p.start && !p.chained) { last.set(key, { ...p, chained: true }); continue }
     last.set(key, { start: e.start, dur: (e.end ?? e.start) - e.start, fails: failed ? (p ? p.fails : 0) + 1 : 0, pending: !!e.pending, recovered: !failed && !!p && p.fails > 0 })
     if (hiddenAt(e.start)) out.push(`${name} read at ${e.start} while hidden`)
     if (!p) continue
@@ -136,6 +146,32 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
     if ((name === 'session' || name === 'd/head') && !p.fails && !p.pending && !p.recovered) want = Math.max(want, LIMITS.sessionDurFactor * p.dur)
     const gap = e.start - p.start
     if (gap < LIMITS.rateSlack * want) out.push(`${key}: ${gap} ms after the last timer read, expected ≥ ${Math.round(LIMITS.rateSlack * want)} ms`)
+  }
+  return out
+}
+
+// the desk's loader reads (2.3 加载器): the sealed packs, a lane's ledger chain (`ledger=` / `to=`), block bodies
+const loaderRead = (url) => { const name = nameOf(url), q = new URLSearchParams(url.split('?')[1] || ''); return /^d\/p\d/.test(name) || name === 'block' || (name === 'lane' && (q.has('ledger') || q.has('to'))) }
+
+/** I-pack over the probe's fetch log: within one visit of a route (the desk is mounted once per route), a pack file is read again at
+ *  the same head tag only after a read of that pack failed; at most LIMITS.loaderMax loader reads are on their way at once. → [detail] */
+function packFaults(log) {
+  const out = [], sorted = log.filter((x) => x.method === 'GET').sort((a, b) => a.start - b.start)
+  const heads = sorted.filter((e) => e.tags && e.end != null).sort((a, b) => a.end - b.end)
+  const tagAt = (id, n, t) => { let tag; for (const h of heads) if (h.end <= t && new URLSearchParams(h.url.split('?')[1]).get('id') === id) tag = h.tags[n]; return tag }
+  const held = new Map() // `<route> <id> <n> <part>` → the tag it was read at
+  for (const e of sorted) {
+    const m = /^d\/p(\d+)\.(\w+)$/.exec(nameOf(e.url))
+    if (m) {
+      const id = new URLSearchParams(e.url.split('?')[1]).get('id'), pack = `${e.route} ${id} ${m[1]}`, key = `${pack} ${m[2]}`, tag = tagAt(id, m[1], e.start)
+      if (failedRead(e) || e.aborted || (e.end != null && e.status !== 200)) { for (const k of [...held.keys()]) if (k.startsWith(`${pack} `)) held.delete(k); continue }
+      if (held.has(key) && held.get(key) === tag) out.push(`${nameOf(e.url)} read again at tag ${tag}`)
+      if (e.end != null) held.set(key, tag)
+    }
+    if (loaderRead(e.url)) {
+      const on = sorted.filter((x) => x.route === e.route && loaderRead(x.url) && x.start <= e.start && (x.end == null || x.end > e.start)).length
+      if (on > LIMITS.loaderMax) out.push(`${on} loader reads on their way at once`)
+    }
   }
   return out
 }
@@ -223,6 +259,22 @@ export async function check(ctx) {
     if (x.step != null && urlOff(x)) bad('I-url', urlOff(x))
   }
   if (!real && CJK.test(v.bodyText)) bad('I-cjk', `CJK in the page: ${JSON.stringify(v.bodyText.match(CJK)[0])}`)
+
+  // I-chapter (1.3 §章): the playhead's step lies in the chapter the label names, and so does the drawn window
+  const chapterOff = (x) => {
+    if (screen !== 'replay' || !x.chapter || x.at == null || x.win.some(Number.isNaN)) return null
+    const { s0, s1 } = x.chapter, g = x.at - 1, [a, b] = x.win.map((n) => n - 1)
+    if (!(s0 <= g && g < s1)) return `step ${g} outside its chapter [${s0}, ${s1})`
+    if (!(s0 <= a && b < s1)) return `window [${a}, ${b}] outside the chapter [${s0}, ${s1})`
+    return null
+  }
+  if (chapterOff(v)) {
+    let x = v
+    for (const t0 = Date.now(); chapterOff(x) && Date.now() - t0 < LIMITS.chapterSettleMs;) { await page.waitForTimeout(100); x = await viewOf(page) }
+    if (chapterOff(x)) bad('I-chapter', chapterOff(x))
+  }
+  const pk = packFaults(s.fetchLog)
+  if (pk.length) bad('I-pack', pk.slice(0, 3).join(' | '))
 
   if (s.longtaskMax > LIMITS.longtaskMs) bad('I-longtask', `a long task of ${Math.round(s.longtaskMax)} ms`)
   if (v.loadStep) bad('I-loadstep', `a load control: ${v.loadStep}`)

@@ -1,7 +1,8 @@
 // invariants.test.mjs — every invariant of the sequence harness can go red on the real board: one board on makeWorld() with the probe
 // installed and the Claude Code session open; V0 a settled, followed, grown desk breaks none; each V-<id> plants exactly that fault
 // (through page.evaluate, a route, an unrecorded keydown, or growth with the session reads aborted) and check() names it; A17 a tiny
-// static page the harness serves (not the board) proves the probe sees a long task. Runs only under `npm run test:browser`.
+// static page the harness serves (not the board) proves the probe sees a long task; A18 / A19 static pages break I-chapter and I-pack.
+// Runs only under `npm run test:browser`.
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard } from '../harness.mjs'
@@ -241,5 +242,49 @@ test('A17 a planted 120 ms busy loop is a long task ≥ 100 ms and an I-longtask
       assert.equal(longtaskMax >= 100, loop, `long task max ${longtaskMax} ms`)
       assert.equal(ids(r).includes('I-longtask'), loop)
     } finally { await pg.close() }
+  }
+})
+
+// a static page the harness serves at `hash` (not the board), its /api/* answered by `api(url)` → {body, ms}; resolves once
+// window.__planted is true
+async function plantedPage(html, hash, api = () => ({ body: '{}' })) {
+  const pg = await b.page.context().newPage()
+  await installProbe(pg)
+  await pg.route('**/seq-planted.html', (r) => r.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><meta charset="utf-8"><title>planted</title>${html}` }))
+  await pg.route('**/api/**', async (r) => { const a = api(new URL(r.request().url())); await new Promise((ok) => setTimeout(ok, a.ms || 0)); await r.fulfill({ contentType: 'application/json', body: a.body }).catch(() => {}) })
+  await pg.goto(`${b.url}/seq-planted.html${hash}`)
+  await pg.waitForFunction(() => window.__planted === true, null, { timeout: 10000 })
+  return pg
+}
+
+// the chapter row of 1.3 §章 as the desk draws it: label [10, 20), the step label's data-n (1-based), the axis ends (1-based)
+const chapterPage = (n, a, z) => `<div id="stepbar"><b class="sb-no" data-n="${n}">x</b></div><div id="chapnav"><span class="chaplabel" data-s0="10" data-s1="20"></span></div>
+  <span id="sawstart">step ${a}</span><span id="sawend">step ${z}</span><script>window.__planted = true</script>`
+
+test('A18 I-chapter: a playhead or a drawn window outside the label\'s chapter is a violation; both inside it is none', { skip }, async () => {
+  for (const [n, a, z, red] of [[15, 11, 20, false], [25, 11, 20, true], [15, 11, 21, true], [11, 10, 20, true]]) {
+    const pg = await plantedPage(chapterPage(n, a, z), '#/replay/p/x')
+    try { assert.equal(ids(await check({ page: pg })).includes('I-chapter'), red, `step ${n}, window ${a}-${z}`) } finally { await pg.close() }
+  }
+})
+
+// the head names pack 0 at tag `a`; then the page reads `reads` (a list of /api/d/... paths, all at once)
+const packPage = (reads) => `<script>(async () => {
+  await (await fetch('/api/d/head?id=x')).json()
+  const one = async (p) => (await fetch(p)).text()
+  await Promise.all(${JSON.stringify(reads)}.map((r) => (Array.isArray(r) ? r.reduce((q, p) => q.then(() => one(p)), Promise.resolve()) : one(r))))
+  window.__planted = true })()</script>`
+
+test('A19 I-pack: a pack read twice at one head tag, or four loader reads at once, is a violation; one read each and three at once are none', { skip }, async () => {
+  const api = (u) => (u.pathname === '/api/d/head' ? { body: JSON.stringify({ packs: [{ n: 0, tag: 'a' }, { n: 1, tag: 'b' }] }) } : { body: '', ms: 300 })
+  const P = (f) => `/api/d/${f}?id=x`
+  for (const [reads, red] of [
+    [[[P('p0.main'), P('p0.rest')]], false],
+    [[[P('p0.main'), P('p0.main')]], true],
+    [[P('p0.main'), P('p1.main'), '/api/block?id=x&ref=r1'], false],
+    [[P('p0.main'), P('p1.main'), '/api/block?id=x&ref=r1', '/api/lane?id=x&lane=m&ledger=1'], true],
+  ]) {
+    const pg = await plantedPage(packPage(reads), '#/replay/p/x', api)
+    try { assert.equal(ids(await check({ page: pg })).includes('I-pack'), red, JSON.stringify(reads)) } finally { await pg.close() }
   }
 })

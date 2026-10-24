@@ -6,9 +6,13 @@
 // Exports only: node --test runs every .mjs, so nothing here runs at import. No CJK in what it writes (bigSession's syllables).
 import { boardHome } from '../../real-face.mjs'
 import { bigSession } from '../../../query/big-session.mjs'
+import { PACK_MEMBERS } from '../../../../src/query/ctx-files.mjs'
 
 export const LIVE_SEGMENT = '20261020T164737Z'
 const HUGE = 30_000
+// the http session's calls: three sealed packs (3.5 PACK_MEMBERS members each; a member is one call here) and 8 calls short of the
+// fourth, so the board opens on sealed packs, chapters (a compaction every ~40 main calls) and an open tail that a run's growth seals
+export const HTTP_CALLS = 4 * PACK_MEMBERS - 8
 // Claude Code's requests carry their tool definitions (a call with ≤ 2 messages and none reads as a utility call, not the main lane)
 const TOOLS = ['Read', 'Edit', 'Bash'].map((name) => ({ name, description: `${name} a file or run a command.`, input_schema: { type: 'object', properties: { file_path: { type: 'string' } } } }))
 
@@ -17,7 +21,8 @@ const idOf = (seed, k) => `5e9${String(seed).padStart(5, '0').slice(-5)}-0000-4a
 
 /**
  * makeWorld({seed, big}) → { userHome, home, sessions:[{id, wire}], live:[id], hugeBytes, grow(k), late(k), fresh(n) }.
- * Tens of calls per session by default (a cold fold stays fast); `big` grows the http session to hundreds of calls / several MB.
+ * The http session has HTTP_CALLS calls (sealed packs, chapters, an open tail one growth step from sealing; tens of MB), the others
+ * tens; `big` grows the http session to 3,000 calls.
  * grow(k) appends the next k calls of every live session → { calls, main, by: {id: {calls, main}} }, `main` = the main-lane calls among
  * them, counted by the generator. late(k) grows only the sessions whose subagent calls end late, by k calls past their late bound,
  * so the lines held back land before the tip (late rows, relanes). fresh(n) starts one more session (never read yet) in the live
@@ -27,7 +32,7 @@ export function makeWorld({ seed = 1, big = false } = {}) {
   const { userHome, home } = boardHome()
   const base = { home, segment: LIVE_SEGMENT, growth: 1_200, tools: TOOLS }
   const specs = [
-    { wire: 'http', subEvery: 3, subLanes: 3, late: 3, compactAt: big ? 80_000 : 50_000, hugeEvery: 7, hugeBytes: HUGE, imageEvery: 5, failEvery: 6, n: big ? 300 : 40 },
+    { wire: 'http', subEvery: 3, subLanes: 3, late: 3, compactAt: big ? 80_000 : 50_000, hugeEvery: 7, hugeBytes: HUGE, imageEvery: 5, failEvery: 6, n: big ? 3_000 : HTTP_CALLS },
     { wire: 'threads', subEvery: 4, compactAt: 25_000, n: 24 },
     { wire: 'ws', subEvery: 4, compactAt: 25_000, n: 24 },
     { wire: 'chat', subEvery: 4, failEvery: 9, n: 24 },

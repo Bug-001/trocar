@@ -4,15 +4,23 @@
 // Kinds (1.5 K-29 · 4.4): latency (the real answer, held ms) · e500 / e503 (the server's own error shape, `{error}`, src/server.mjs
 // sendJson; the 500 reason is a long V8-native-stack-like text, like the worker OOM a reader saw) · cut (200 whose content-length
 // promises more than the body holds: the answer is not received in full) · abort (connection reset) · e304 (304 for a URL the page
-// holds no ETag for). killWorkerMidRead(b) SIGKILLs the real query worker while a desk read (an answer file, /api/d/*) is in flight.
+// holds no ETag for) · shrink (an open tail's Range read answered 416 with `content-range: bytes */<a smaller size>`, as after the tail
+// sealed into a pack and started over; 4.4 §答案文件). The answer files /api/d/<f> are three names: d/head, d/pack (p<n>.<part>),
+// d/open (open.<part>). killWorkerMidRead(b) SIGKILLs the real query worker while a desk read (an answer file, /api/d/*) is in flight.
 // Exports only: nothing runs at import.
 
 import http from 'node:http'
 import { once } from 'node:events'
 
-export const FAULT_KINDS = ['latency', 'e500', 'e503', 'cut', 'abort', 'e304']
+export const FAULT_KINDS = ['latency', 'e500', 'e503', 'cut', 'abort', 'e304', 'shrink']
 
-const nameOf = (u) => (u.pathname.match(/^\/api\/([^/?]+)/) || [])[1] || null
+const FILE = [[/^head$/, 'd/head'], [/^p\d+\./, 'd/pack'], [/^open\./, 'd/open']]
+/** The query name of a board URL: /api/<name>, and for an answer file /api/d/<f> the kind of file (d/head · d/pack · d/open). */
+export const nameOf = (u) => {
+  const [, name, f] = u.pathname.match(/^\/api\/([^/?]+)(?:\/([^/?]+))?/) || []
+  if (name !== 'd') return name || null
+  return (FILE.find(([re]) => re.test(f || '')) || [])[1] || 'd'
+}
 
 /** A worker-OOM-like native stack: a first line, ~40 frames, then V8's GC trailer. */
 export function nativeStack(frames = 40) {
@@ -57,7 +65,8 @@ export async function installFaults(page) {
     if (req.method() !== 'GET' && req.method() !== 'HEAD') { writes.push(`${req.method()} ${u.pathname}`); return route.abort('blockedbyclient').catch(() => {}) }
     const name = nameOf(u)
     const etag = !!req.headers()['if-none-match'] // a 304 is a fault only where the page holds no ETag
-    const f = name && queue.find((q) => q.name === name && !(q.kind === 'e304' && etag))
+    const from = /^bytes=(\d+)-/.exec(req.headers().range || '') // a 416 answers a Range read only
+    const f = name && queue.find((q) => q.name === name && !(q.kind === 'e304' && etag) && !(q.kind === 'shrink' && !from))
     if (!f) return route.fallback()
     if (!f.entry) log.push(f.entry = { name, kind: f.kind, from: Date.now(), to: null })
     if (--f.n <= 0) queue.splice(queue.indexOf(f), 1)
@@ -75,6 +84,7 @@ export async function installFaults(page) {
         await route.continue({ url: await cutUrl(res.status(), res.headers(), body) })
       } else if (f.kind === 'abort') await route.abort('connectionreset')
       else if (f.kind === 'e304') await route.fulfill({ status: 304, headers: { etag: '"seq-unknown"' }, body: '' })
+      else if (f.kind === 'shrink') await route.fulfill({ status: 416, headers: { 'content-range': `bytes */${Math.floor(+from[1] / 2)}` }, body: '' })
     } catch { /* the page dropped the request (navigation, its own abort) while the fault held it */ }
     if (last) f.entry.to = Date.now()
   }
@@ -90,11 +100,11 @@ export async function installFaults(page) {
   }
 }
 
-/** Wait for the next /api/<name> request to be issued (any /api/ read when name is null), then SIGKILL the query worker(s).
+/** Wait for the next /api/<name> request to be issued (`d` is every answer file; any /api/ read when name is null), then SIGKILL the query worker(s).
  *  No such read within `timeout`: the kill lands between reads. → {killed, midRead} or {skipped:true} (no face, or no worker alive). */
 export async function killWorkerMidRead(b, { name = 'd', timeout = 6000 } = {}) {
   if (!b.face) return { skipped: true }
-  const want = (r) => { const n = nameOf(new URL(r.url())); return name ? n === name : !!n }
+  const want = (r) => { const n = nameOf(new URL(r.url())); return name ? n === name || n?.startsWith(`${name}/`) : !!n }
   const req = await b.page.waitForRequest(want, { timeout }).catch(() => null)
   const killed = b.face.killWorker() // no read came: the worker still dies between two reads, the next one meets the restart
   return killed ? { killed, midRead: !!req } : { skipped: true }

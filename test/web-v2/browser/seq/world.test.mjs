@@ -1,12 +1,13 @@
 // world.test.mjs — the sequence harness's world as the real face reads it (no browser): every generated session is listed with its
 // harness (W1), the Claude Code session carries the shapes the sequences poke at (1.5 K-08 subagents, K-12 failures, K-13
 // compaction, an image block, a block past the display clip; W2), and grow() moves the server's main-lane count by exactly what the
-// generator appended (W3).
+// generator appended (W3); the http session opens on sealed packs and chapters and its tail seals as it grows (W4).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { HARNESSES } from '../../../../src/dissect/harnesses.mjs'
 import { serveBoard } from '../../real-face.mjs'
-import { makeWorld, mainCount, settled } from './world.mjs'
+import { makeWorld, mainCount, settled, HTTP_CALLS } from './world.mjs'
+import { PACK_MEMBERS } from '../../../../src/query/ctx-files.mjs'
 import { deskFrom } from '../../desk-world.mjs'
 
 // the header each wire's generator keys its session by (test/query/big-session.mjs)
@@ -74,5 +75,22 @@ test('W3 after grow(k) the server\'s main-lane count rises by exactly the main c
       }
       assert.equal(got, want, id)
     }
+  } finally { await face.close() }
+})
+
+test('W4 the http session opens on ≥ 3 sealed packs and ≥ 3 chapters, and growth seals its open tail into the next pack', async () => {
+  const world = makeWorld({ seed: 4 })
+  const face = await serveBoard(world)
+  try {
+    const id = world.sessions.find((s) => s.wire === 'http').id
+    const head = async () => { await settled(face.get, id); const { status, doc } = await face.get('session', { id, head: 1 }); assert.equal(status, 200); return doc }
+    const h0 = await head()
+    assert.ok(h0.packs.length >= 3, `${h0.packs.length} sealed packs`)
+    assert.ok(h0.chapters.length >= 3, `${h0.chapters.length} chapters`)
+    world.grow(PACK_MEMBERS - (HTTP_CALLS % PACK_MEMBERS))
+    let h1
+    for (const t0 = Date.now(); Date.now() - t0 < 10_000; await new Promise((r) => setTimeout(r, 200))) if ((h1 = await head()).packs.length > h0.packs.length) break
+    assert.equal(h1.packs.length, h0.packs.length + 1)
+    assert.ok(h1.open.n > h0.open.n)
   } finally { await face.close() }
 })

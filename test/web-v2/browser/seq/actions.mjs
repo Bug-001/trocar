@@ -1,7 +1,8 @@
 // test/web-v2/browser/seq/actions.mjs — everything one sequence step can do, as data plus a runner. A step is `{a, p}`: `a` names a
 // row of ACTIONS, `p` is plain JSON drawn at generation time (fractions and choices, never DOM handles), so a sequence serializes,
 // replays and shrinks. Targets are resolved when the step runs; one that is absent on the current screen is `{skipped:true}`.
-// Reader rows (real:true) are what a reader does with mouse and keys (routes 1.2:83-105, keys 1.2:262-269); world rows (real:false)
+// Reader rows (real:true) are what a reader does with mouse and keys (routes 1.2:83-105, keys 1.2:262-269; the chapter row's ‹ › and
+// [ ] 1.3 §章; a deep link to a step that may sit in a sealed pack the loader has not read, 2.3 加载器); world rows (real:false)
 // are grow, late growth (rows landing before the tip), a fresh session opened, a worker kill mid-read and arming a route fault. No step ever clicks a control that writes (DENY), and faults.mjs aborts
 // any non-GET request anyway. Selectors are ids, classes and data attributes, never wording. Exports only: nothing runs at import.
 import { setHidden } from './probe.mjs'
@@ -10,7 +11,7 @@ import { FAULT_KINDS, killWorkerMidRead } from './faults.mjs'
 
 // controls that write (core/harness-switch.mjs switch / Set up; settings/storage.mjs levels) and every button of a modal (a confirm)
 export const DENY = '[role=switch],[data-hctl],[data-keep],[data-lvl],[data-class],.v2-modal button,.v2-modal [role=button]'
-const FAULT_NAMES = ['d', 'lane', 'block', 'sessions', 'status', 'overview', 'traffic', 'classes', 'pricing', 'segments', 'calls']
+const FAULT_NAMES = ['d/head', 'd/pack', 'd/open', 'lane', 'block', 'sessions', 'status', 'overview', 'traffic', 'classes', 'pricing', 'segments', 'calls']
 const SCREENS = ['#/overview', '#/sessions', '#/capture', '#/capture/log', '#/traffic', '#/settings/storage', '#/settings/prices', '#/settings/appearance']
 const TOGGLES = { block: '#ctxwin .cblk[data-bi] > .cbh', reply: '#ctxwin .cblk[data-rp] > .cbh', turn: '#ctxwin .cwturnhd', rail: '#rails [data-toggle], #rails [data-railunfold]', tick: '#rails .tick[data-lane]', rpbar: '#rpbar', details: '#screen details > summary', row: '#screen [aria-expanded][aria-controls]' }
 const NAV_KEYS = ['ArrowLeft', 'ArrowRight', 'Shift+ArrowLeft', 'Shift+ArrowRight', 'Home', 'End', 'step:prev', 'step:next']
@@ -53,6 +54,7 @@ async function library(ctx) {
   ctx._lib = { t: Date.now(), rows }
   return rows
 }
+const deskOf = (hash) => { const m = /^#\/replay\/[^/]+\/([^/?]+)/.exec(hash); return m ? decodeURIComponent(m[1]) : null }
 const deskHash = (row) => `#/replay/${encodeURIComponent(row.project_slug)}/${encodeURIComponent(row.session_id)}`
 const rowAt = (rows, f) => rows[Math.min(rows.length - 1, Math.floor(f * rows.length))]
 
@@ -80,6 +82,15 @@ async function deepLink(ctx, p) {
   return go(ctx.page, `${deskHash(row)}?step=${encodeURIComponent(String(step))}`)
 }
 
+// a step of the desk on screen (else of the session at fraction f of the library) at fraction `at` of its main lane, by the router
+async function stepLink(ctx, { f, at }) {
+  const rows = await library(ctx), here = deskOf(await hashOf(ctx.page))
+  const row = rows.find((x) => x.session_id === here) || (rows.length && rowAt(rows, f))
+  if (!row) return SKIP
+  const m = (await mainCount(ctx.b.get, row.session_id).catch(() => 0)) || 1
+  await go(ctx.page, `${deskHash(row)}?step=${Math.max(1, Math.ceil(at * m))}`)
+}
+
 async function hostPage(ctx, { f }) {
   const sel = '#screen a[href^="#/traffic/host/"]'
   if (!(await ctx.page.$(sel))) { await go(ctx.page, '#/traffic'); await ctx.page.waitForSelector(sel, { timeout: 5000 }).catch(() => {}) }
@@ -103,6 +114,9 @@ export const ACTIONS = [
   reader('open', 10, (r) => ({ via: pick(r, ['row', 'link', 'short']), f: frac(r) }), openSession),
   reader('nav', 12, (r) => ({ key: pick(r, NAV_KEYS) }), (ctx, p) =>
     p.key.startsWith('step:') ? clickIn(ctx.page, `#stepbar [data-step="${p.key.slice(5)}"]`, 0) : press(ctx.page, p.key)),
+  reader('chapterPrev', 3, (r) => ({ via: pick(r, ['click', 'key']) }), (ctx, p) => (p.via === 'key' ? press(ctx.page, '[') : clickIn(ctx.page, '#chapPrev', 0))),
+  reader('chapterNext', 3, (r) => ({ via: pick(r, ['click', 'key']) }), (ctx, p) => (p.via === 'key' ? press(ctx.page, ']') : clickIn(ctx.page, '#chapNext', 0))),
+  reader('stepLink', 3, (r) => ({ f: frac(r), at: frac(r) }), stepLink),
   reader('saw', 6, (r) => ({ x: frac(r) }), (ctx, p) => clickIn(ctx.page, '#saw', 0, p.x)),
   reader('follow', 5, (r) => ({ via: pick(r, ['key', 'chip']) }), (ctx, p) =>
     p.via === 'key' ? press(ctx.page, 'f') : clickIn(ctx.page, '[data-follow]', 0)),
@@ -128,7 +142,7 @@ export const ACTIONS = [
     const rows = await library(ctx)
     if (rows.length < 2) return SKIP
     const A = rowAt(rows, p.a), B = rows[(rows.indexOf(A) + 1 + Math.floor(p.b * (rows.length - 1))) % rows.length]
-    ctx.faults.arm({ kind: 'latency', name: 'd', n: 1, ms: p.ms })
+    ctx.faults.arm({ kind: 'latency', name: 'd/head', n: 1, ms: p.ms })
     await go(ctx.page, deskHash(A))
     await go(ctx.page, deskHash(B))
   }),
@@ -142,9 +156,10 @@ export const ACTIONS = [
     if (!row) return SKIP
     await go(ctx.page, deskHash(row))
   }),
-  world('fault', 5, (r) => ({ kind: pick(r, FAULT_KINDS), name: pick(r, FAULT_NAMES), n: int(r, 1, 3), ms: int(r, 0, 20000) }), (ctx, p) => ctx.faults.arm(p)),
+  // a shrink answers an open tail's Range read: it is armed on d/open only
+  world('fault', 5, (r) => { const kind = pick(r, FAULT_KINDS), name = pick(r, FAULT_NAMES); return { kind, name: kind === 'shrink' ? 'd/open' : name, n: int(r, 1, 3), ms: int(r, 0, 20000) } }, (ctx, p) => ctx.faults.arm(p)),
   world('kill', 2, () => ({}), async (ctx) => {
-    // on the desk the kill lands in a `session` read; elsewhere in whichever read comes next (the worker answers every name)
+    // on the desk the kill lands in an answer-file read (/api/d/*); elsewhere in whichever read comes next (the worker answers every name)
     const desk = (await hashOf(ctx.page)).startsWith('#/replay/'), from = Date.now()
     const r = await killWorkerMidRead(ctx.b, { name: desk ? 'd' : null })
     if (!r.skipped) ctx.faults.log.push({ name: desk ? 'd' : '*', kind: 'kill', from, to: Date.now() })

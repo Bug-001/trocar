@@ -1,7 +1,7 @@
 // test/web-v2/browser/seq/probe.mjs — what the sequence harness can only see from inside the page, installed before the board's own
 // scripts run (page.addInitScript): live listeners on window / document / other targets (keyed by target, type, listener, capture),
 // live intervals, in-flight fetches and the log of every /api · /control fetch (start, end, status, failed / aborted / cut body, an
-// answer carrying `pending`),
+// answer carrying `pending`, the route (hash before `?`) it was sent from, and for a head answer its sealed packs' tags {n: tag}),
 // AbortControllers created / aborted, long tasks, console.error calls, and a per-frame sampler of two reader-visible faults:
 //   blank — after #screen first held visible content, a frame where it has no element child or no visible text (1.5 K-29);
 //   keep  — a replay desk that was drawn (#ctxwin holds rows) for the route still in the hash, replaced by the never-drawn failure
@@ -63,7 +63,7 @@ function pageProbe() {
   window.fetch = function (input, init) {
     const url = new URL(typeof input === 'string' ? input : input.url || String(input), location.href)
     const board = /^\/(api|control)\//.test(url.pathname)
-    const e = board ? { url: url.pathname + url.search, method: ((init && init.method) || (input && input.method) || 'GET').toUpperCase(), start: now(), end: null, status: null, failed: false, aborted: false, cut: false, pending: false } : null
+    const e = board ? { url: url.pathname + url.search, method: ((init && init.method) || (input && input.method) || 'GET').toUpperCase(), start: now(), end: null, status: null, failed: false, aborted: false, cut: false, pending: false, route: location.hash.split('?')[0], tags: null } : null
     if (e) push(S.fetchLog, e)
     S.inflight++
     let p
@@ -72,12 +72,21 @@ function pageProbe() {
       (err) => { S.inflight--; if (e) { e.end = now(); e.status = 0; e.failed = true; e.aborted = !!(err && err.name === 'AbortError') } throw err })
   }
   // an answer carrying `pending` (3.5 §抽取前沿: the server is still extracting) is marked: I-rate's next-read rule depends on it (4.4:52)
-  const pendingOf = (m, x) => { try { const d = m === 'text' ? (x.includes('"pending"') ? JSON.parse(x) : null) : m === 'json' ? x : null; return !!d && d.pending != null } catch { return false } }
+  // a head answer's sealed packs are kept as {n: tag} (I-pack)
+  const docOf = (m, x) => { try { return m === 'text' ? (x.includes('"pending"') || x.includes('"packs"') ? JSON.parse(x) : null) : m === 'json' ? x : null } catch { return null } }
   for (const m of ['text', 'json', 'arrayBuffer']) {
     const orig = Response.prototype[m]
     Response.prototype[m] = function (...a) {
       const e = byResponse.get(this)
-      return orig.apply(this, a).then((x) => { if (e) e.pending = pendingOf(m, x); return x },
+      return orig.apply(this, a).then((x) => {
+        if (e) {
+          // the board reads every answer as bytes (core/http.mjs readBody): a head answer's bytes are decoded here
+          const d = m === 'arrayBuffer' ? (e.url.startsWith('/api/d/head') ? docOf('text', new TextDecoder().decode(x)) : null) : docOf(m, x)
+          e.pending = !!d && d.pending != null
+          if (d && Array.isArray(d.packs) && e.url.startsWith('/api/d/head')) e.tags = Object.fromEntries(d.packs.map((p) => [p.n, p.tag]))
+        }
+        return x
+      },
         (err) => { if (e) { e.cut = true; e.aborted = !!(err && err.name === 'AbortError') } throw err })
     }
   }
