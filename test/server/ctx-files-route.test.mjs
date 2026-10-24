@@ -168,9 +168,9 @@ test('4.4 #17 A15: the keeper\'s new model calls of a keyed session ride on x-tr
     ts_request: new Date(Date.parse('2026-10-24T10:00:00Z') + i * 1000).toISOString(), req_headers: { 'content-type': 'application/json' },
     resp: { status: 200, kind: 'json', body: { ok: true } }, body_wire_bytes: { req: 10, resp: 20 }, ...body,
   })
-  const KEY = 'tip-session-1'
+  const KEY = 'tip-session-1', N = 70 // more calls than a tip lists (4.4: ≤ 64)
   try {
-    for (let i = 0; i < 70; i++) {
+    for (let i = 0; i < N; i++) {
       assert.equal(store.envelope(env(i, { endpoint: '/v1/responses', proc: { pid: 7, agent: 'codex' }, req_headers: { 'content-type': 'application/json', 'session-id': KEY }, req_body: JSON.stringify({ model: 'gpt-5', input: `turn ${i}` }) })).ok, true)
       if (i % 4 === 0) assert.equal(store.envelope(env(i, { endpoint: '/v1/chat/completions', host: 'api.moonshot.cn', proc: { pid: 8, agent: 'kimi' }, req_body: JSON.stringify({ model: 'kimi', messages: [{ role: 'system', content: 'You are Kimi.' }, { role: 'user', content: `q ${i}` }] }) })).ok, true)
       if (i % 10 === 9) { await pause(20); await keeper.idle() } // several passes: the table keeps the newest across them
@@ -178,7 +178,7 @@ test('4.4 #17 A15: the keeper\'s new model calls of a keyed session ride on x-tr
     await pause(20); await keeper.idle()
     const doc = JSON.parse((await w.api(`/api/session?id=${KEY}&limit=200`)).body)
     const rids = doc.calls.map((c) => c.rid)
-    assert.equal(rids.length, 70, 'the keyed session holds the 70 calls')
+    assert.equal(rids.length, N, 'the keyed session holds every call written')
     for (const f of ['head', 'open.main']) {
       const r = await w.d(f, f === 'head' ? gz : {}, KEY)
       assert.equal(r.headers['x-trocar-tip'], rids.slice(-64).join(' '), `${f}: the newest 64, oldest first`)
