@@ -125,8 +125,9 @@ async function upgradeQueue(ctx) {
   const list = []
   for (const [id, ms] of sessionGroups((await indexed(ctx)).rows)) {
     let names = []
-    try { names = nodeFs.readdirSync(sessionDir(home, id)) } catch { continue }
-    if (!names.includes('open.main.ndjson') && names.some((f) => f.startsWith('fold.'))) list.push([answered.has(id) || follow.has(id), String(ms[ms.length - 1].id), id])
+    try { names = nodeFs.readdirSync(sessionDir(home, id)) } catch { /* no directory: the flat layout's fold log still counts */ }
+    const flat = nodeFs.existsSync(`${sessionDir(home, id)}.fold.ndjson`) // moved in when the fold opens it (4.3 §4 迁移)
+    if (!names.includes('open.main.ndjson') && (flat || names.some((f) => f.startsWith('fold.')))) list.push([answered.has(id) || follow.has(id), String(ms[ms.length - 1].id), id])
   }
   return list.sort((a, b) => (b[0] - a[0]) || posCmp(b[1], a[1])).map((x) => x[2])
 }

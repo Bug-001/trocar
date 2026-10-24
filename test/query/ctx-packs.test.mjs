@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { gunzipSync, gzipSync } from 'node:zlib'
+import { gunzipSync, gzipSync, brotliDecompressSync } from 'node:zlib'
 import { createQueryService } from '../../src/query/service.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { sessionDir } from '../../src/query/projection.mjs'
@@ -165,18 +165,34 @@ test('3.5 #35 A10: a missing head, a truncated pack, a pack of another v and a t
   for (const f of hit) assert.ok(fs.readFileSync(file(f)).equals(fs.readFileSync(path.join(dirOf(x), f))), `${f}: rewritten to the untouched home's bytes`)
 })
 
+// the layout the fold log is in when the worker starts: the session's directory, or the flat layout (4.3 §4 迁移), which the start-up
+// sweep's tier-0 head finds with a directory holding that head only
+const FLAT = { 'extract.0.ndjson': '.ndjson', 'extract.idx': '.idx', 'fold.0.ndjson': '.fold.ndjson', 'fold.idx': '.fold.idx' }
 test('3.5 #35 A9: a session folded before the answer files (fold log, no head, no packs) gets a tier-1 head and its packs from the worker\'s idle slices, the bytes of a fresh fold', { timeout: 600_000 }, async () => {
   const x = await folded('http')
-  const m = { home: path.join(tmpDir('trocar-packs-m-'), '.trocar'), id: x.id }
-  fs.cpSync(x.home, m.home, { recursive: true })
-  for (const f of fs.readdirSync(dirOf(m))) if (/^(p\d+\.|open\.|head\.)/.test(f)) fs.unlinkSync(path.join(dirOf(m), f))
-  const w = workerFork(m.home)
-  try {
-    await until(() => { const h = tryHead(m); return h && h.tier === 1 && h.pending == null && fs.existsSync(path.join(dirOf(m), 'open.rest.ndjson')) }, 120_000, 'the upgrade wrote a tier-1 head and the tails')
-  } finally { w.kill() }
-  assert.equal(fileText(m, 'head.json.gz'), fileText(x, 'head.json.gz'))
-  assert.deepEqual(packNames(m), packNames(x))
-  for (const f of packNames(x)) assert.ok(fs.readFileSync(path.join(dirOf(m), f)).equals(fs.readFileSync(path.join(dirOf(x), f))), `${f}: a fresh fold's bytes`)
+  for (const layout of ['dir', 'flat']) {
+    const m = { home: path.join(tmpDir(`trocar-packs-m-${layout}-`), '.trocar'), id: x.id }
+    fs.cpSync(x.home, m.home, { recursive: true })
+    for (const f of fs.readdirSync(dirOf(m))) if (/^(p\d+\.|open\.|head\.)/.test(f)) fs.unlinkSync(path.join(dirOf(m), f))
+    if (layout === 'flat') { // each line file whole from byte 0 (its sealed parts in order, then its plain tail), offsets unchanged
+      const d = dirOf(m), names = fs.readdirSync(d)
+      for (const base of ['extract', 'fold']) {
+        const parts = names.filter((n) => n.startsWith(`${base}.`) && n.endsWith('.br')).sort((a, b) => Number(a.split('.')[1].split('-')[0]) - Number(b.split('.')[1].split('-')[0]))
+        const tail = names.filter((n) => new RegExp(`^${base}\\.\\d+\\.ndjson$`).test(n))
+        assert.equal(tail.length, 1, `${base}: one plain tail`)
+        fs.writeFileSync(d + FLAT[`${base}.0.ndjson`], Buffer.concat([...parts.map((n) => brotliDecompressSync(fs.readFileSync(path.join(d, n)))), fs.readFileSync(path.join(d, tail[0]))]))
+        fs.renameSync(path.join(d, `${base}.idx`), d + FLAT[`${base}.idx`])
+      }
+      fs.rmSync(d, { recursive: true })
+    }
+    const w = workerFork(m.home)
+    try {
+      await until(() => { const h = tryHead(m); return h && h.tier === 1 && h.pending == null && fs.existsSync(path.join(dirOf(m), 'open.rest.ndjson')) }, 120_000, `${layout}: the upgrade wrote a tier-1 head and the tails`)
+    } finally { w.kill() }
+    assert.equal(fileText(m, 'head.json.gz'), fileText(x, 'head.json.gz'), layout)
+    assert.deepEqual(packNames(m), packNames(x), layout)
+    for (const f of packNames(x)) assert.ok(fs.readFileSync(path.join(dirOf(m), f)).equals(fs.readFileSync(path.join(dirOf(x), f))), `${layout} · ${f}: a fresh fold's bytes`)
+  }
 })
 
 test('3.5 §会话读 contract: every line kind and key is in the closed sets; rows, lane headers and records are the session answer\'s; a definition comes before its first use; each lane\'s first step in a file is a keyframe', { timeout: 600_000 }, async () => {
