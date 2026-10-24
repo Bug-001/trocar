@@ -135,8 +135,9 @@ export function applySession(desk, a, { before = false } = {}) {
 
 // held lane: steps by rid in step order (`rids`), lane events per rid (several per rid), the ledger by resource key / path, and
 // the `ledger_next` cursors still to read; `byI` = step number → rid over the steps that carry their lane index `i` (built on read)
+// `ledgered` = a page carrying the whole ledger at its mark (a base:null lane answer) was applied: the cursors then say what is left
 export const newHeld = () => ({ steps: new Map(), rids: [], prev: null, next: null, resources: new Map(), seen: new Map(), events: new Map(), kf: new Map(),
-  cursors: new Set(), byI: null })
+  cursors: new Set(), byI: null, ledgered: false })
 
 // drop held steps from index i on, with their cached keyframes and lane events
 function cut(h, i) {
@@ -239,7 +240,7 @@ export function applyLane(desk, a) {
   h.rids = a.base == null && !reset ? [...rids, ...h.rids] : [...h.rids, ...rids]
   mergeLedger(h, a)
   if (!olderHeld) {
-    if (a.base == null) h.cursors = new Set()
+    if (a.base == null) { h.cursors = new Set(); h.ledgered = true }
     if (a.ledger_next != null) h.cursors.add(a.ledger_next)
   }
   const covered = new Set(a.steps.map((s) => s.rid))
@@ -277,11 +278,14 @@ export function askOrdinal(desk, key, rid) {
   return best ? best.k : h.prev === null ? 0 : null
 }
 
-/** A `--ledger C` answer for held lane `key`: merges only its resources / seen; C is read, its own `ledger_next` is pending. */
+/** A ledger page for held lane `key`, its steps left alone: a `--ledger C` answer (C is read), or with `cursor` null a lane answer's
+ *  ledger part — a base:null one carries the whole ledger at its mark (it replaces what is held), a `--from` one what changed since its base.
+ *  Its own `ledger_next` is pending. */
 export function applyLedger(desk, key, cursor, a) {
   const h = desk.held.get(key)
   if (!h) return
   changed(desk)
+  if (cursor == null && a.base == null) { h.resources = new Map(); h.seen = new Map(); h.cursors = new Set(); h.ledgered = true }
   mergeLedger(h, a)
   h.cursors.delete(cursor)
   if (a.ledger_next != null) h.cursors.add(a.ledger_next)
@@ -294,7 +298,7 @@ export function ledgerAsk(desk, key) {
 }
 
 /** The lane is held and its ledger chain is read to the end (2.4's group counts are exact). */
-export const ledgerDone = (desk, key) => !!desk.held.get(key) && desk.held.get(key).cursors.size === 0
+export const ledgerDone = (desk, key) => !!desk.held.get(key)?.ledgered && desk.held.get(key).cursors.size === 0
 
 /**
  * Read lane `key`'s ledger chain to the end with `read(name, params)` (envelope {ok, data, error}). A failed read stops and

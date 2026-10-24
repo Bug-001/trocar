@@ -9,7 +9,9 @@
 // a rid that one tail lets go (g, or the tail sealed) comes back from another tail that still has it.
 //
 //   parseLines(text | bytes[, {head}]) → {head, lines, used}   only whole lines; `used` = bytes through the last newline
-//   applyFile(desk, {kind:'pack', n, part} | {kind:'tail', n?, part}, parsed) → false when the file is already sealed
+//   applyFile(desk, {kind:'pack', n, part} | {kind:'tail', n?, part, whole?}, parsed) → false when the file is already sealed;
+//     `whole` = the tail's bytes from 0 (a rewritten tail): what it held before is let go first
+//   applyHead(desk, head) → the `session --head` answer as the desk's head: its scalars and its lane heads
 // Lane heads merge by precedence: desk.head's (the `session --head` answer) > a tail's > a higher pack n's.
 
 import { changed, addRow, removeRow, newHeld } from './model.mjs'
@@ -100,7 +102,8 @@ export function applyFile(desk, file, { head, lines }) {
   if (tail && desk.files.has(`p${n}.${part}`)) return false
   changed(desk)
   const key = `${tail ? 't' : 'p'}${n}.${part}`, touched = new Set()
-  if (!tail) { dropFile(desk, key, touched); dropFile(desk, `t${n}.${part}`, touched) }
+  if (!tail || file.whole) dropFile(desk, key, touched)
+  if (!tail) dropFile(desk, `t${n}.${part}`, touched)
   let e = desk.files.get(key)
   if (!e) desk.files.set(key, e = { kind: file.kind, n, rids: new Set(), heads: new Map(), fails: new Map(), bids: new Set(), lines: tail ? new Map() : null })
   for (const line of lines) {
@@ -116,14 +119,29 @@ export function applyFile(desk, file, { head, lines }) {
     else if (k === 'x') e.fails.set(`${x.where} ${x.code}`, x)
     else if (k === 'g' && tail) { e.lines.delete(x); release(desk, e, x) }
   }
+  mergeHeads(desk, touched)
+  const fails = [...desk.files.values()].flatMap((o) => [...o.fails.values()])
+  desk.errors = [...desk.errors.filter((x) => !FAILS.has(x)), ...fails]
+  for (const x of fails) FAILS.add(x)
+  return true
+}
+function mergeHeads(desk, touched) {
   for (const lane of touched) {
     let best = desk.head?.lanes?.find((h) => h.lane === lane), r = -1
     if (!best) for (const o of desk.files.values()) { const h = o.heads.get(lane); if (h && rank(o) > r) { best = h; r = rank(o) } }
     if (best) desk.lanes.set(lane, best); else desk.lanes.delete(lane)
   }
-  const fails = [...desk.files.values()].flatMap((o) => [...o.fails.values()])
-  desk.errors = [...desk.errors.filter((x) => !FAILS.has(x)), ...fails]
-  for (const x of fails) FAILS.add(x)
-  return true
+}
+
+const SCALARS = ['mark', 'pending', 'truncated', 'meta', 'stats', 'logged', 'probes', 'unknown']
+export function applyHead(desk, head) {
+  changed(desk)
+  const touched = new Set([...(desk.head?.lanes || []), ...(head.lanes || [])].map((h) => h.lane))
+  desk.head = head
+  for (const k of SCALARS) desk[k] = head[k] ?? null
+  desk.logged = head.logged ?? 0; desk.probes = head.probes ?? 0
+  if (!head.pending) desk.firstPending = false
+  desk.errors = [...(head.errors || []), ...desk.errors.filter((x) => FAILS.has(x))]
+  mergeHeads(desk, touched)
 }
 const FAILS = new WeakSet() // the errors entries that came from files (replaced on every apply)
