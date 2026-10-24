@@ -26,11 +26,12 @@ test('every answer carries the common keys', () => {
   }
 })
 
-test('session: a delta is based on a full answer\'s mark; pending is {done, total}', () => {
+test('session: a delta is based on a full answer\'s mark; pending is {done, total, work}', () => {
   assert.equal(doc.session_full.base, null)
   assert.equal(doc.session_since.base, doc.session_full.mark)
   const { pending } = doc.session_pending
   assert.ok(Number.isInteger(pending.done) && Number.isInteger(pending.total) && pending.done < pending.total)
+  assert.ok(Number.isInteger(pending.work) && pending.work >= 0)
 })
 
 // A page's steps rebuilt from their ops: every bid is defined, copies stay in the parent's list.

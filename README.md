@@ -213,7 +213,8 @@ the resources it holds. When those do not all fit in the 1 MB page beside the st
 names the rest: `--ledger <ledger_next>` gives the next part, until `ledger_next` is null. `trocar query block --ref <ref>` opens one block's verbatim bytes; give `--ref` more than
 once to get several in one answer, in the order asked (a ref that cannot be read says why in `errors`).
 A session the worker has not finished reading answers at once with what it has, and says how far it got
-(`pending: {done, total}`); the worker reads on in the background, and the CLI asks again until the answer is
+(`pending: {done, total, work}`, where `work` counts what the worker has read and folded so far and grows while it
+works, even when `done` cannot move yet); the worker reads on in the background, and the CLI asks again until the answer is
 complete (it reads the records itself if the worker stops making progress). The first open of a very large session
 takes a while: about 4 minutes in the background for a 16k-call session, during which the board shows it filling
 in. The worker's memory is bounded: a session too large for it shows its newest calls that fit and says so

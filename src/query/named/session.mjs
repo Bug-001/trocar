@@ -194,6 +194,7 @@ function storeOf(ctx, id, k) {
   const opened = [];
   s = openProjection({ home: ctx.home, fs: ctx.fs, key: id, write: ctx.writer === true, errors: opened });
   s.opened = opened;
+  s.work = 0; // members extracted and handed to a reduction while the store lives: `pending.work` (3.5 §会话读)
   stores.set(k, s);
   for (const [kk, v] of stores) { if (stores.size <= STORES) break; stores.delete(kk); const st = states.take(kk); if (st) closeState(st); frontiers.delete(kk); v.close(); }
   return s;
@@ -346,7 +347,7 @@ function fold(s, plan, F, ms) {
       for (; s.fc < end && want.length < BATCH; s.fc++) { const r = plan.members[s.fc], rid = String(r.id); if (inCut(plan, r) && !s.R.has(rid)) want.push(rid); }
       if (!want.length) continue;
       const rest = s.R.add(want, { budgetMs: ms - (performance.now() - t0) });
-      s.n += want.length - rest.length; added = true;
+      s.n += want.length - rest.length; s.store.work += want.length - rest.length; added = true;
       if (s.writer && s.target == null && s.n - s.saved >= Math.max(SAVE_MIN, s.n / SAVE_PART)) sidecars(s.store);
       if (rest.length) { s.fc = posOf(plan, rest[0]); return; }
     }
@@ -391,9 +392,10 @@ async function advance(ctx, id, { budgetMs, request }) {
   if (request) errors.push(...store.opened.splice(0));
   // extraction errors are the member's own (its row says why, on every answer), not this request's
   const read = (rs) => { progress(); return recordsAt({ home: ctx.home, fs: ctx.fs, rows: rs.filter(Boolean), errors: [], remember: false }); };
-  const exErrors = [], from = planOf(members, k, store, id).ex;
+  const exErrors = [], from = planOf(members, k, store, id).ex, had = store.rows.size;
   const ex = extractMembers({ store, members, recordsAt: read, sessionId: id, budgetMs: request ? budgetMs : Math.max(1, budgetMs / 2 - (performance.now() - t0)), errors: exErrors, from });
   passed(planOf(members, k, store, id), ex.done);
+  store.work += store.rows.size - had;
   persisted(ctx, exErrors);
   errors.push(...exErrors);
   // a background slice: extraction has half of it, the fold at least the other half, so the frontier moves from the first slice
@@ -422,6 +424,7 @@ async function advance(ctx, id, { budgetMs, request }) {
     return b;
   };
   for (;;) {
+    keeping = true; // a HeapBound retry keeps what it reads again
     const plan = planOf(members, k, store, id);
     const box = { old: states.take(k) };
     const release = hold(plan.work);
@@ -459,7 +462,8 @@ export async function extendSession(ctx, id, budgetMs) {
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the
  *  session after this request's slice (the local path: everything), read from its fold log at the reduction frontier `mark` (V:
  *  src/query/session-doc.mjs viewOf, its columns synced to that frontier), `pending:
- *  {done, total}` while members are above the mark (`done` = the members at or below it), the cut. `errors`: the index's problems
+ *  {done, total, work}` while members are above the mark (`done` = the members at or below it; `work` = the store's members
+ *  extracted and handed to a reduction so far, a rebuild's included), the cut. `errors`: the index's problems
  *  and the store's notes. The state stays warm. */
 export async function sessionState(ctx, id) {
   const r = await advance(ctx, String(id), { budgetMs: ctx.writer === true ? SLICE_MS : Infinity, request: true });
@@ -473,7 +477,7 @@ export async function sessionState(ctx, id) {
   const V = st.view.V, done = mark == null ? 0 : posOf(plan, mark) + 1;
   let above = ex.done < ex.total;
   for (let i = done; !above && i < members.length; i++) above = inCut(plan, members[i]);
-  return { id: String(id), rows: members, store: st.store, mark, pending: above ? { done, total: members.length } : null,
+  return { id: String(id), rows: members, store: st.store, mark, pending: above ? { done, total: members.length, work: st.store.work } : null,
     truncated: plan.bound, V, failed: V.failed, errors, st, plan };
 }
 
