@@ -23,7 +23,7 @@
 // THE WRITER (4.3 §4 写者): this process alone writes the context projections (`writer: true` on every answer's ctx). BACKGROUND
 // WORK (3.5 后台抽取), one scheduler: while no request line is waiting or being answered (the last frame written whole), it runs
 // slices of ≤ SLICE_MS — the members of the session last answered (session / lane) extracted until none is left, then those of the
-// sessions the daemon kicked (`{kick: keys}` on IPC: new model calls just indexed), then, after IDLE_SLICE_MS with no request, those
+// sessions of the model calls the daemon kicked (`{kick: ids}` on IPC: their record ids, just indexed), then, after IDLE_SLICE_MS with no request, those
 // of the session of the newest index row (a request's, never a kick's), then, IDLE_SLICE_MS after the last request or kick, once the
 // sidecars and a projection GC (gcProjections) — yielding
 // with setImmediate between slices, so a request line that arrives is read before the next one. Slices are not requests: the daemon's
@@ -109,6 +109,19 @@ const say = (e) => process.stderr.write(`trocar query worker: background work fa
 let busy = 0, lastAt = Date.now(), target = null, newestDone = true, gcDone = false, queued = false, timer = null, once = {}
 const answered = new Set() // the sessions this worker answered: never collected under it
 const follow = new Set() // the sessions the daemon kicked (3.5 §后台抽取与归约): folded in turn from their checkpoints
+const kicked = new Set() // the record ids of the kicked model calls, not yet looked up: their sessions go to `follow`
+/** The sessions of the kicked records, by the one session rule (sessionGroups: a synthesized key too). The kicked calls are the
+ *  newest rows, so each session's members are looked at from its last back to the oldest kicked id only. */
+async function kickedSessions() {
+  const ids = [...kicked]
+  kicked.clear()
+  let oldest = ids[0]
+  for (const id of ids) if (posCmp(id, oldest) < 0) oldest = id
+  const want = new Set(ids)
+  for (const [sid, ms] of sessionGroups(await indexRows({ home, errors: [] }))) {
+    for (let i = ms.length - 1; i >= 0 && posCmp(String(ms[i].id), oldest) >= 0; i--) if (want.has(String(ms[i].id))) { follow.add(sid); break }
+  }
+}
 const kick = () => { if (!queued && !busy) { queued = true; setImmediate(() => { queued = false; background().catch(say) }) } }
 /** Wait until IDLE_SLICE_MS after the last request or kick: true when the scheduler must come back later (its one timer is armed). */
 const notIdle = () => {
@@ -120,6 +133,7 @@ const notIdle = () => {
 async function background() {
   if (busy) return
   const ctx = { home, fs: nodeFs, writer: true, persist, once }
+  if (target == null && !follow.size && kicked.size) await kickedSessions()
   if (target == null && follow.size) { const [k] = follow; follow.delete(k); target = k }
   if (target == null && !newestDone) {
     if (notIdle()) return
@@ -155,11 +169,11 @@ process.stdin.on('data', (d) => {
     }, say).finally(() => { busy--; lastAt = Date.now(); kick() })
   }
 })
-// The daemon's kick (service.mjs kick): sessions of model calls just indexed. `once` is dropped so the next slice reads the index
-// again and sees the new members; the idle period starts again, so the sidecars and the GC wait for the burst to end.
+// The daemon's kick (service.mjs kick): the record ids of model calls just indexed. `once` is dropped so the next slice reads the
+// index again and sees the new members and their sessions; the idle period starts again, so the sidecars and the GC wait for the burst to end.
 process.on('message', (m) => {
   if (!m || !Array.isArray(m.kick)) return
-  for (const k of m.kick) follow.add(String(k))
+  for (const id of m.kick) kicked.add(String(id))
   once = {}; gcDone = false; lastAt = Date.now()
   kick()
 })

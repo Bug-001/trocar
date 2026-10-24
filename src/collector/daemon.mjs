@@ -165,8 +165,8 @@ function noteUncleanStop(lock, failure) {
 function storeWithSealing({ P, failure, query }) {
   const home = path.dirname(P.dir)
   const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
-  // kick: the sessions of the model calls a pass indexed go to the read route's worker, which folds them as captured (3.5 §后台抽取与归约)
-  const keeper = createIndexKeeper({ home, failure, kick: (keys) => query.svc.kick(keys) })
+  // kick: the record ids of the model calls a pass indexed go to the read route's worker, which folds their sessions as captured (3.5 §后台抽取与归约)
+  const keeper = createIndexKeeper({ home, failure, kick: (ids) => query.svc.kick(ids) })
   store.onRecord(keeper.wrote) // on the write path: one Set add and at most one timer (index-keeper.mjs)
   let queue = null
   const seal = {

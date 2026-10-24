@@ -35,7 +35,7 @@ export const CHUNK_BYTES = KEEPER_CHUNK_BYTES // ~15 ms of parsing per turn of t
 
 /**
  * createIndexKeeper({ home, failure, kick }) → { wrote, flush, pause, idle, stop }
- *   kick(keys):      after each debounced pass, the session keys of the model calls it indexed (once, never thrown onto the write path).
+ *   kick(ids):       after each debounced pass, the record ids of the model calls it indexed (once, never thrown onto the write path).
  *   wrote(segment):  a record was appended there (called from the store's write path: it must stay trivial).
  *   flush(segment):  index it fully, and never touch it again — the segment is closed. → the chain's promise.
  *   handOff(segment): give its index to the sealer NOW — a pass in flight stops before its next write (seal-queue's
@@ -63,14 +63,15 @@ export function createIndexKeeper({ home, failure = () => {}, kick = () => {}, i
     timer.unref() // the index is a cache: it never keeps the process alive
   }
 
-  // The pass's kick (3.5 §后台抽取与归约, D63 ①): the session keys of the model calls this pass indexed from the facts it was
-  // handed, once per pass, so the query worker folds them as they are captured. Taken from the entries this keeper already built:
-  // nothing here parses a body or computes a query. A scan pass (no facts) kicks nothing; the next query folds what it indexed.
+  // The pass's kick (3.5 §后台抽取与归约, D63 ①): the record ids of the model calls this pass indexed from the facts it was
+  // handed, once per pass, so the query worker folds their sessions as they are captured. Which session a record is in is the
+  // worker's to say (sessionGroups, the synthesized keys included): nothing here parses a body, knows a session or computes a
+  // query. A scan pass (no facts) kicks nothing; the next query folds what it indexed.
   async function drain() {
-    const keys = new Set()
-    for (const segment of pending) { pending.delete(segment); await catchUp(segment, keys) }
-    if (!keys.size || stopped) return
-    try { kick([...keys]) } catch { /* the kick is a hint: a query folds the same members */ }
+    const ids = []
+    for (const segment of pending) { pending.delete(segment); await catchUp(segment, ids) }
+    if (!ids.length || stopped) return
+    try { kick(ids) } catch { /* the kick is a hint: a query folds the same members */ }
   }
 
   // Measurement seam for scripts/perf-capture.mjs (D62): nothing is installed unless that script set the hook, so
@@ -84,7 +85,7 @@ export function createIndexKeeper({ home, failure = () => {}, kick = () => {}, i
 
   // One segment, chunk by chunk, until its index covers every complete line it has. A failure is the daemon's to
   // report (D38); the answer stays correct, because the next query builds what is missing and says `index-cold`.
-  async function catchUp(segment, keys = null) {
+  async function catchUp(segment, ids = null) {
     while (!stopped && !given.has(segment)) {
       let r
       // What this pass already knows: the entries of the lines written since the last one. Taken away before the
@@ -92,7 +93,7 @@ export function createIndexKeeper({ home, failure = () => {}, kick = () => {}, i
       // pass's mark); a pass that fails or that has to scan simply leaves that list empty, and the scan is the truth.
       const entries = fresh.get(segment) || null
       fresh.delete(segment)
-      if (keys && entries) for (const { entry } of entries) if (entry.is_llm && !entry.log_only && entry.session_key != null) keys.add(entry.session_key)
+      if (ids && entries) for (const { entry } of entries) if (entry.is_llm && !entry.log_only) ids.push(entry.id)
       try { r = await measured(() => index({ home, segment, maxBytes: chunkBytes, owner: true, entries })) } catch (e) {
         indexFailed(segment, `keeping the index of ${segment} current failed (${String((e && e.message) || e)})`)
         return

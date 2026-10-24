@@ -548,3 +548,29 @@ test('kick: a kicked worker that dies is one record, and the next kick inside it
   stopped.kick(['s1'])
   assert.equal(forks, 1, 'a kick after stop() forks nothing')
 })
+
+// 3.5 #32 (§后台抽取与归约 kick): the kick carries record ids and the worker says which session each is in, by the one session rule —
+// so a session whose key is synthesized at read time (a `synth: true` harness with no key in its body) is folded as captured just
+// like a keyed one. Axis: the key is in the body, or it is not. Each kicked session gets its fold log with no query asked.
+test('kick: the kicked record ids fold their sessions, a synthesized-key session as well as a keyed one (3.5 #32)', { timeout: 30_000 }, async () => {
+  const { runQuery } = await import('../../src/query/named/index.mjs')
+  const { foldLogFile } = await import('../../src/query/fold-log.mjs')
+  const { recordId } = await import('../../src/collector/core/record/segments.mjs')
+  const home = rawHome('trocar-qsvc-')
+  const segment = '20261024T100000Z'
+  const line = (n, body) => JSON.stringify({ ts: `2026-10-24T10:00:0${n}.000Z`, endpoint: '/v1/chat/completions', method: 'POST',
+    req_headers: { 'content-type': 'application/json' }, req_body: JSON.stringify({ model: 'm', ...body, messages: [{ role: 'system', content: 'You are a test.' }, { role: 'user', content: `ask ${n}` }] }),
+    resp: { status: 200, kind: 'json', body: { choices: [{ message: { role: 'assistant', content: `answer ${n}` } }] } },
+    id: `req_${n}`, ts_request: `2026-10-24T10:00:0${n}.000Z`, is_llm_call: true, capture: 'transparent', host: 'api.example.test', traffic_class: 'llm',
+    proc: { pid: 9, exe: '/x/kimi', agent: 'kimi' } })
+  writeSegmentLines(home, segment, [line(1, { prompt_cache_key: 'keyed-session-1' }), line(2, {})])
+  const sessions = (await runQuery('sessions', {}, { home })).sessions
+  const synth = sessions.find((s) => s.session_synthesized), keyed = sessions.find((s) => !s.session_synthesized)
+  assert.ok(synth && keyed, 'the corpus has one session of each kind')
+  const svc = createQueryService({ home, fork: workerFork, idleMs: 20_000 })
+  try {
+    svc.kick([recordId(segment, 1), recordId(segment, 2)])
+    for (const s of [keyed, synth]) await within((async () => { while (!fs.existsSync(foldLogFile(home, s.session_id))) await new Promise((d) => setTimeout(d, 50)) })(), 20_000, `the ${s.session_synthesized ? 'synthesized' : 'keyed'} session was folded with no query`)
+  } finally { svc.stop() }
+})
+const writeSegmentLines = (home, segment, lines) => fs.appendFileSync(path.join(home, 'raw', `${segment}.ndjson`), lines.join('\n') + '\n', { mode: 0o600 })

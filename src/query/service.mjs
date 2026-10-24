@@ -305,14 +305,14 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     return task
   }
 
-  /** The index keeper's kick (3.5 §后台抽取与归约): the sessions of model calls just indexed, handed to the worker (forked if there is
-   *  none) to fold at low priority. One IPC line: this process parses no body and computes nothing. A worker that dies with no request
+  /** The index keeper's kick (3.5 §后台抽取与归约): the record ids of model calls just indexed, handed to the worker (forked if there
+   *  is none), which folds their sessions at low priority. One IPC line: this process parses no body, knows no session, computes nothing. A worker that dies with no request
    *  in flight opens an episode of subject KICK, and while it cools no kick forks; after stop() a kick does nothing. */
   let stopped = false
-  const kick = (keys) => {
-    if (stopped || !Array.isArray(keys) || !keys.length || cooling(KICK)) return
+  const kick = (ids) => {
+    if (stopped || !Array.isArray(ids) || !ids.length || cooling(KICK)) return
     const c = child || start()
-    if (c.connected) c.send({ kick: keys.map(String) }, () => {}) // a send that fails is the worker's close, which says it
+    if (c.connected) c.send({ kick: ids.map(String) }, () => {}) // a send that fails is the worker's close, which says it
     idleClock()
   }
 
