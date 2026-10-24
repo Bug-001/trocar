@@ -28,7 +28,7 @@ import { loadFold, saveFold } from './fold.mjs'
 import { landPlayhead, createStepReads, packOrder } from './follow.mjs'
 import { createLoader } from './loader.mjs'
 import { createPoller, INTERVAL } from '../core/poll.mjs'
-import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow, renderRough as roughRows } from './timeline.mjs'
+import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow, renderRough as roughRows, chapterHere, placeView } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
 import { renderContextWindow, wireCtxWin, emptyFrameHtml, rowKeys } from './ctxwin.mjs'
 import { renderOutline, wireOutline, jumpToAnchor, jumpToResourceBlock } from './outline.mjs'
@@ -56,6 +56,7 @@ const DESKHEAD = `<div id="deskhead"></div>`
 export const SKELETON = `<div id="pages">
 <div id="leftpage">
 <div id="saw">
+  <div class="tkrow tkrow-chap"><div class="tgut"></div><div class="tlane"><div class="chapnav" id="chapnav"></div></div></div>
   <div class="tkrow tkrow-problem"><div class="tgut tgut-prob" id="probnav">Problems</div><div class="tlane"><div class="probrow" id="probrow"></div></div></div>
   <div class="tkrow tkrow-bars"><div class="tgut tgut-ctx" id="sawgut">Context</div><div class="tlane"><div class="sawrow" id="sawrow"><div id="reviewbracket"><span class="rbend" aria-hidden="true">inferred</span></div></div></div></div>
   <div class="tkrow"><div class="tgut">Cache</div><div class="tlane"><div class="cacherow" id="cacherow"></div></div></div>
@@ -176,6 +177,11 @@ function openDesk(ctx, route0) {
   s.queueJump = (jump) => jumps.queue(s.playhead, jump)
   s.openDetail = (lane, i) => openDetail(E.detail, s, lane, i)
   s.setPlayhead = setPlayhead
+  // ‹ › and [ ] (1.3 §章): to global step g — at once when its row is here, else as a named step whose bars come from the head's cols
+  s.chapterGo = (g) => {
+    const rid = s.anchor ? ridAt(s.desk, s.anchor.id, g) : null, i = rid != null ? s.anchor.ridLocal.get(rid) : undefined
+    if (i != null) setPlayhead(i, true); else nameStep(g + 1)
+  }
   s.setView = setView
   // the 内容对比步 (2.3): the compare menu's choice survives scrubbing, clears on a session switch
   s.setDiff = (idx) => { s.diffRef = idx; drawPlayhead() }
@@ -193,7 +199,7 @@ function openDesk(ctx, route0) {
     E.ctxwin.innerHTML = msg ? `<div class="empty">${esc(msg)}${s.errNote ? `<div class="emptywhy">${s.errNote}</div>` : ''}</div>` : emptyFrameHtml()
     E.ctxnav.innerHTML = ''; E.rails.innerHTML = ''; E.resexp.innerHTML = ''; E.rawpanel.innerHTML = ''
     $('#sawrow').innerHTML = '<div id="reviewbracket"><span class="rbend" aria-hidden="true">inferred</span></div>'; $('#cacherow').innerHTML = ''; $('#ovstrip').innerHTML = ''
-    $('#probrow').innerHTML = ''; $('#askscale').innerHTML = ''; $('#askrow').style.display = 'none'
+    $('#probrow').innerHTML = ''; $('#chapnav').innerHTML = ''; $('#askscale').innerHTML = ''; $('#askrow').style.display = 'none'
     for (const id of ['#sawstart', '#sawend', '#viewrange']) $(id).textContent = ''
     $('#sawgut').textContent = 'Context'; $('#viewswitch').innerHTML = ''; $('#complegend').innerHTML = ''; $('#nomain').style.display = 'none'
     renderProblemNav(E.saw, s) // no problems: the row name stops quoting the last session's count and ‹ › disappear
@@ -289,7 +295,8 @@ function openDesk(ctx, route0) {
     if (!host) { missed = true; return }
     if (!s.anchor || s.playRid == null) { renderRough(); return }
     renderHeader()
-    renderSaw(E.saw, s); renderRails(E.rails, s); watchRails(); renderOverview(E.saw, s)
+    if (!namedRows()) { renderSaw(E.saw, s); renderOverview(E.saw, s) }
+    renderRails(E.rails, s); watchRails()
     paintPlayhead()
     restoreSelection()
   }
@@ -308,6 +315,12 @@ function openDesk(ctx, route0) {
     if (head.lanesMore) E.rails.insertAdjacentHTML('beforeend', `<div class="railsmore" data-more="${head.lanesMore}">${esc(moreLanes(head.lanesMore))}</div>`)
     E.ctxwin.__units = null; E.ctxwin.innerHTML = emptyFrameHtml(head.last ? head.last.n : 0)
     if (!roughMarked && typeof performance !== 'undefined') { roughMarked = true; performance.mark('desk-rough') }
+  }
+  // a named step not here yet (a chapter jump, Home) on a desk that has drawn: its chapter's bars from the head, the rest as it was
+  function namedRows() {
+    const head = s.desk.head
+    if (s.initialStep == null || !head || !head.tier || !head.steps) return false
+    roughRows(E.saw, s, Math.min(head.steps, s.initialStep) - 1, sawCapacity()); return true
   }
   // the drawer was built from the rows of an earlier answer: repaint it for the selected tick
   function refreshDrawer() {
@@ -338,11 +351,11 @@ function openDesk(ctx, route0) {
     if (np !== s.playhead) s.turnLanded.clear() // a different call: no landing turn lingers; open rows stay by bid (1.4:114)
     s.playhead = np; s.playRid = s.anchor.calls[np].rid
     if (manual) s.follow = np === N - 1 // the reader's move: on the newest call it follows, anywhere else it does not
-    // keep the scrub target inside the brush window: pan it, keep its width
-    if (np < s.view.lo || np >= s.view.hi) {
-      const w = Math.max(1, s.view.hi - s.view.lo)
-      const lo = Math.min(Math.max(0, np - ((w / 2) | 0)), Math.max(0, N - w))
-      s.view.lo = lo; s.view.hi = Math.min(N, lo + w)
+      // keep the scrub target inside the brush window, which stays inside its chapter (1.3 §章): pan it, keeping its width; another
+    // chapter's window becomes this chapter's
+    const ch = chapterHere(s), v = placeView(s.view, np, ch.c0, ch.c1, sawCapacity())
+    if (v.lo !== s.view.lo || v.hi !== s.view.hi) {
+      s.view.lo = v.lo; s.view.hi = v.hi
       renderSaw(E.saw, s); renderRails(E.rails, s); watchRails()
     } else markCurrent(E.saw, s) // the common case: only the current marks move
     repositionBrush(E.saw, s)
@@ -360,14 +373,16 @@ function openDesk(ctx, route0) {
   }
   // a window wider than the lane draws is clipped, and the steps it clips are the latest ones: shrink it, keeping the playhead in it
   function fitView() {
-    const w = fitWindow({ lo: s.view.lo, hi: s.view.hi, K: sawCapacity(), playhead: s.playhead })
+    const { c0, c1 } = chapterHere(s), inside = s.view.lo >= c0 && s.view.hi <= c1 && s.view.lo < s.view.hi // 1.3 §章: never across a chapter's edge
+    const w = fitWindow({ lo: inside ? s.view.lo : c0, hi: inside ? s.view.hi : c1, K: sawCapacity(), playhead: s.playhead })
     if (w.lo === s.view.lo && w.hi === s.view.hi) return false
     s.view.lo = w.lo; s.view.hi = w.hi; return true
   }
   function setView(lo, hi, redraw) {
     const N = s.anchor ? s.anchor.calls.length : 0
     if (!N) return
-    lo = Math.max(0, Math.min(N - 1, Math.round(lo))); hi = Math.max(lo + 1, Math.min(N, Math.round(hi)))
+    const { c0, c1 } = chapterHere(s) // the brush pans and zooms inside the playhead's chapter (1.3 §章)
+    lo = Math.max(c0, Math.min(c1 - 1, Math.round(lo))); hi = Math.max(lo + 1, Math.min(c1, Math.round(hi)))
     ;({ lo, hi } = capWindow({ lo, hi, prev: s.view, K: sawCapacity(), playhead: s.playhead })) // never wider than the lane can draw
     if (lo === s.view.lo && hi === s.view.hi && redraw !== true) return
     s.view.lo = lo; s.view.hi = hi
@@ -526,7 +541,7 @@ function openDesk(ctx, route0) {
     s.initialStep = n; s.follow = false
     const i = namedAt()
     if (i >= 0) { setPlayhead(i, false); return }
-    renderHeader(); fill()
+    renderHeader(); if (s.playRid != null) namedRows(); fill()
   }
   // the playhead's rid changed: its reads go out once it rests (createStepReads)
   function aim() { if (s.playRid != null && s.playRid !== targeted) { targeted = s.playRid; steps.target(s.playRid); fill() } }
@@ -668,8 +683,7 @@ function openDesk(ctx, route0) {
       if (keepPins.atEnd) s.view.hi = N // a window parked at the live end grows with it
       s.view.hi = Math.min(N, s.view.hi || N); s.view.lo = Math.max(0, Math.min(s.view.lo, N - 1)); if (s.view.hi <= s.view.lo) s.view.hi = Math.min(N, s.view.lo + 1)
     }
-    if (s.playhead < s.view.lo || s.playhead >= s.view.hi) { const w = Math.max(1, s.view.hi - s.view.lo); s.view.lo = Math.min(Math.max(0, s.playhead - ((w / 2) | 0)), Math.max(0, N - w)); s.view.hi = Math.min(N, s.view.lo + w) }
-    fitView()
+    const ch = chapterHere(s); s.view = placeView(s.view, s.playhead, ch.c0, ch.c1, sawCapacity())
     renderAll()
     refreshDrawer()
     chainLedger()
@@ -701,12 +715,14 @@ function openDesk(ctx, route0) {
   const paintKey = () => { const t = keyTarget; keyTarget = null; if (!s.dead && t != null) setPlayhead(t, true) }
   const onKey = (e) => {
     if (e.key === 'Escape' || !s.anchor || e.ctrlKey || e.metaKey || e.altKey) return
-    const a = keyAction(e, { at: keyTarget ?? s.playhead, n: s.anchor.calls.length, problems: s.problems })
+    const at = keyTarget ?? s.playhead, ch = chapterHere(s)
+    const a = keyAction(e, { at, n: s.anchor.calls.length, problems: s.problems, chapters: ch.chs, step: s.anchor.no ? s.anchor.no(at) : at })
     if (!a) return
     e.preventDefault()
     if (a.keys) openModal({ title: KEYS_TITLE, bodyHtml: `<dl class="keylist">${KEY_LIST.map(([k, w]) => `<dt><kbd>${esc(k)}</kbd></dt><dd>${esc(w)}</dd>`).join('')}</dl>` })
     else if (a.follow) { if (s.follow) followOff(); else followOn() }
     else if (s.playRid == null) return // a named step is still on its way to a desk that never drew
+    else if (a.chapter != null) { keyTarget = null; s.chapterGo(a.chapter) }
     else if (e.key === 'Home') { keyTarget = null; nameStep(1) } // step 1 may be older than the held part: it lands when it is here
     else { if (keyTarget == null) frame(paintKey); keyTarget = a.to }
   }

@@ -265,6 +265,10 @@ export const PROBLEM_ROW = 'Problems'
 export const problemPager = (k, n) => (!n ? 'Problems' : k == null ? count(n, 'problem') : `Problem ${k}/${n}`)
 export const PROBLEM_PREV = 'Previous problem'
 export const PROBLEM_NEXT = 'Next problem'
+// the chapter row (1.3 §章): the part of the session between two compactions, and the arrows across them
+export const CHAPTER_PREV = 'Previous compaction'
+export const CHAPTER_NEXT = 'Next compaction'
+export const chapterLabel = (k, n, a, b, inferred) => `Part ${k} of ${n} · ${a === b ? `step ${a}` : `steps ${a}–${b}`}${inferred ? ' (inferred)' : ''}`
 export const breakFlagTip = (n, costW, struct) => `Cache break at step ${n} · ${costW}` + (struct ? ` · ${L.STRUCT_EST}` : '')
 export const BREAK_COST_NONE = 'extra cost cannot be computed'
 export const failTip = (n, msg) => `Call failed at step ${n}${msg ? ` (${msg})` : ''}`
@@ -393,6 +397,7 @@ export const KEY_LIST = Object.freeze([
   ['Shift + ← / →', 'Ten steps back / forward'],
   ['Home / End', 'First / last step'],
   ['n / p', 'Next / previous step with a problem'],
+  ['[ / ]', 'Back / forward across a compaction'],
   ['f', 'Follow the latest step on or off'],
   ['Esc', 'Close the topmost layer'],
   ['?', 'This list'],

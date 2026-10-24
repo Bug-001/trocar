@@ -6,9 +6,11 @@
 //   renderSaw(el, s)       all rows for the brush window — rebuilt when the window or the data changes
 //   markCurrent(el, s)     scrubbing: only the .cur marks, the pager's k and the position label move
 //   renderOverview(el, s)  the whole-session strip and its brush
-//   renderRough(el, s, at, K)  the rough page's rows from the session head alone (2.3 §大致页面), before a row of the axis lane is drawn
+//   renderRough(el, s, at, K)  the rough page's rows from the session head alone (2.3 §大致页面), before a row of the axis lane is drawn,
+//                          and the rows of a named step (a chapter jump, Home) while its pack is on its way
+//   chapterNavHtml / chapterTicksHtml / chapterHere   the chapter row (1.3 §章: ‹, 「Part k of n · steps a–b」, ›) and the overview's ticks
 // `el` is #saw; `s` is the replay desk's state object (replay.mjs owns it).
-import { esc, kf, usd } from '../core/fmt.mjs'
+import { esc, kf, usd, fmtTime } from '../core/fmt.mjs'
 import { L } from '../core/labels.mjs'
 import { cacheState, isBreak, breakCost, usageOf, priceMatch, costOf, isFailed } from '../core/metrics.mjs'
 import { CT_ORDER, callComp, hitTier, refRowOf } from './analysis.mjs'
@@ -39,6 +41,49 @@ export function capWindow({ lo, hi, prev, K, playhead }) {
   if (hi === prev.hi && lo !== prev.lo) return { lo: hi - K, hi }
   if (lo === prev.lo && hi !== prev.hi) return { lo, hi: lo + K }
   return fitWindow({ lo, hi, K, playhead })
+}
+
+// ── chapters (1.3 §章): the axis between compactions, from the head's `chapters` ─────────────────────────────────────────
+// a chapter table is the head's ([{s0, s1, ts0, inferred}], global step numbers, s1 exclusive); the last chapter also holds the steps
+// that came after the head was written. chapterAt → the index of the chapter holding step g (0 before the first).
+export function chapterAt(chs, g) {
+  let lo = 0, hi = chs.length - 1
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (chs[m].s0 <= g) lo = m; else hi = m - 1 }
+  return lo
+}
+// where ‹ (dir < 0) / › (dir > 0) land from step g: the previous chapter's last step / the next chapter's first (that compaction); null at the ends
+export function chapterJump(chs, g, dir) {
+  const k = chapterAt(chs, g), c = chs[k + (dir < 0 ? -1 : 1)]
+  return c ? (dir < 0 ? c.s1 - 1 : c.s0) : null
+}
+// the window for playhead `at` inside the chapter span [c0, c1) (local indexes): a window from elsewhere becomes the chapter's; one in it
+// pans to hold the playhead, keeping its width; then at most K bars around the playhead
+export function placeView({ lo, hi }, at, c0, c1, K) {
+  if (lo < c0 || hi > c1 || hi <= lo) { lo = c0; hi = c1 } else if (at < lo || at >= hi) { const w = hi - lo; lo = Math.min(Math.max(c0, at - (w >> 1)), c1 - w); hi = lo + w }
+  return fitWindow({ lo, hi, K, playhead: at })
+}
+const tipOf = (word, c) => (c ? `${word} · step ${c.s0 + 1}${c.ts0 ? ' · ' + fmtTime(c.ts0) : ''}` : word)
+// the chapter row: ‹, the label (data-part / data-of / data-s0 / data-s1 / data-inferred, global steps), ›. `end` = the steps there are now.
+// The first chapter's ‹ and the last one's › are disabled, never hidden or moved (1.3 §章); each hover names the compaction it crosses.
+export function chapterNavHtml(chs, g, end) {
+  const k = chapterAt(chs, g), c = chs[k], last = k === chs.length - 1, s1 = last ? Math.max(c.s1, end) : c.s1
+  const btn = (id, ch, to, tip, sym) => `<button type="button" class="pgbtn chapbtn" id="${id}"${to == null ? ' disabled' : ` data-to="${to}"`} aria-label="${esc(tip)}" title="${esc(tip)}">${sym}</button>`
+  return btn('chapPrev', c, k ? c.s0 - 1 : null, k ? tipOf(W.CHAPTER_PREV, c) : W.CHAPTER_PREV, '‹') +
+    `<span class="chaplabel" data-part="${k + 1}" data-of="${chs.length}" data-s0="${c.s0}" data-s1="${s1}" data-inferred="${!!c.inferred}">${esc(W.chapterLabel(k + 1, chs.length, c.s0 + 1, s1, !!c.inferred))}</span>` +
+    btn('chapNext', chs[k + 1], last ? null : chs[k + 1].s0, last ? W.CHAPTER_NEXT : tipOf(W.CHAPTER_NEXT, chs[k + 1]), '›')
+}
+// a tick on the overview at each chapter's start; `pos(g)` places step g on the strip's N
+export const chapterTicksHtml = (chs, pos, N) => chs.map((c) => `<span class="ovchap" aria-hidden="true" style="left:${((pos(c.s0) / N) * 100).toFixed(3)}%"></span>`).join('')
+// the first local index whose global step is ≥ g (the anchor lane may hold gaps while its packs are read)
+function firstAt(no, N, g) { let lo = 0, hi = N; while (lo < hi) { const m = (lo + hi) >> 1; if (no(m) < g) lo = m + 1; else hi = m } return lo }
+// the desk's chapters around its playhead: the head's table when the anchor is the head's axis lane, else one chapter; `c0` / `c1` are
+// the playhead chapter's span in the anchor's local indexes, `pos` maps a global step onto them
+export function chapterHere(s) {
+  const a = s.anchor, N = a ? a.calls.length : 0, head = s.desk && s.desk.head, no = a && a.no ? (i) => a.no(i) : (i) => i
+  const end = N ? no(N - 1) + 1 : 0
+  const chs = head && head.chapters && head.chapters.length && a && a.id === head.axis ? head.chapters : [{ s0: 0, s1: end, ts0: null, inferred: false }]
+  const g = N ? no(s.playhead) : 0, k = chapterAt(chs, g), pos = (x) => firstAt(no, N, x)
+  return { chs, g, end, pos, c0: pos(chs[k].s0), c1: k === chs.length - 1 ? N : pos(chs[k].s1) }
 }
 
 export const windowOf = (s) => {
@@ -218,6 +263,8 @@ export function renderSaw(el, s) {
   q(el, '#complegend').innerHTML = costView ? `<span>${esc(W.COST_LEGEND)}</span>` :
     `<span>${esc(W.COMP_LEGEND)}</span><span class="barlegend" title="${esc(BAR_KEYS.map((k) => k[1]).join(' · '))}">${BAR_KEYS.map(([c, w]) => `<i class="ct-${c}"></i>${esc(w)}`).join('')}</span>`
   q(el, '#viewrange').textContent = W.showSteps(lo + 1, hi)
+  const ch = chapterHere(s), nav = q(el, '#chapnav')
+  if (nav) nav.innerHTML = chapterNavHtml(ch.chs, ch.g, ch.end)
   q(el, '#nomain').style.display = isMain ? 'none' : ''
   if (!isMain) q(el, '#nomain').textContent = q(el, '#nomain').title = W.noMainLane(laneWord(s.anchor.kind))
   markCurrent(el, s)
@@ -241,12 +288,12 @@ export function renderOverview(el, s) {
   if (!N) { strip.innerHTML = ''; return }
   // do not destroy the brush (and its pointer capture) mid-drag: just reposition; rebuild when the drag ends
   if (s.brushDragging) { repositionBrush(el, s); return }
-  const peak = Math.max(1, s.anchor.peakCtx), calls = s.anchor.calls
-  strip.innerHTML = stripHtml(N, (i) => (calls[i].ctx || 0) / peak, (i) => isFailed(calls[i])) + BRUSH()
+  const peak = Math.max(1, s.anchor.peakCtx), calls = s.anchor.calls, ch = chapterHere(s)
+  strip.innerHTML = stripHtml(N, (i) => (calls[i].ctx || 0) / peak, (i) => isFailed(calls[i])) + chapterTicksHtml(ch.chs, ch.pos, N) + BRUSH()
   repositionBrush(el, s)
 }
 const BRUSH = () => '<div class="ovpin" id="ovpin"></div>' +
-  `<div class="ovbrush" id="ovbrush" tabindex="0" aria-label="${esc(W.BRUSH_LABEL)}" title="Drag = pan · drag an edge = zoom · double-click = all (in a long session that does not fit the row above, the largest range that fits)"><span class="ovh ovh-l"></span><span class="ovh ovh-r"></span></div>`
+  `<div class="ovbrush" id="ovbrush" tabindex="0" aria-label="${esc(W.BRUSH_LABEL)}" title="Drag = pan · drag an edge = zoom · double-click = the whole part between two compactions (when it does not fit the row above, the largest range that fits)"><span class="ovh ovh-l"></span><span class="ovh ovh-r"></span></div>`
 // the strip's backdrop over N points: `val(i)` its height (0–1), `failed(i)`; `sampled` says a point is not one step even when N ≤ 240
 function stripHtml(N, val, failed, sampled = false) {
   let bg
@@ -280,22 +327,26 @@ export const repositionBrush = (el, s) => placeBrush(el, s.anchor ? s.anchor.cal
 // roughWindow(head, at, K) → {lo, hi}: the window of at most K bars around step `at` inside the chapter that holds it (the whole axis
 // when the head names no chapter)
 export function roughWindow(head, at, K) {
-  const ch = (head.chapters || []).find((c) => at >= c.s0 && at < c.s1) || { s0: 0, s1: head.steps }
-  return fitWindow({ lo: ch.s0, hi: ch.s1, K, playhead: at })
+  const chs = head.chapters && head.chapters.length ? head.chapters : [{ s0: 0, s1: head.steps }], k = chapterAt(chs, at)
+  return fitWindow({ lo: chs[k].s0, hi: k === chs.length - 1 ? Math.max(chs[k].s1, at + 1) : chs[k].s1, K, playhead: at })
 }
 // The overview from the head's `cols` and, with one cell a step, the window's bars: the axis lane's row when it is here, else its cols
 // bar (height, largest composition bucket, failed and compaction from the flags). Tier 0 (1.5 K-31): the calls by time, marked sampled,
 // no bars. Nothing here is a control: the rough bars carry no data-i.
 export function renderRough(el, s, at, K) {
-  const head = s.desk.head, N = head.steps, rows = q(el, '#sawrow')
+  const head = s.desk.head, N = head.steps, rows = q(el, '#sawrow'), nav = q(el, '#chapnav')
+  for (const id of ['#probrow', '#cacherow', '#askscale']) { const r = q(el, id); if (r) r.innerHTML = '' } // rows of a step drawn before stay off
   if (!head.tier) {
+    if (nav) nav.innerHTML = ''
     const bs = head.buckets || [], mx = Math.max(1, ...bs.map((b) => b.calls))
     q(el, '#ovstrip').innerHTML = bs.length ? stripHtml(bs.length, (i) => bs[i].calls / mx, () => false, true) : ''
     rows.innerHTML = BRACKET()
     return
   }
   const cells = cellsOf(head.cols), per = head.bucket || 1, pk = Math.max(1, head.peak), at3 = (i) => 3 * Math.floor(i / per)
-  q(el, '#ovstrip').innerHTML = stripHtml(N, (i) => cells[at3(i)] / 255, (i) => !!(cells[at3(i) + 2] & FLAG.failed)) + BRUSH()
+  const chs = head.chapters && head.chapters.length ? head.chapters : [{ s0: 0, s1: N, ts0: null, inferred: false }]
+  q(el, '#ovstrip').innerHTML = stripHtml(N, (i) => cells[at3(i)] / 255, (i) => !!(cells[at3(i) + 2] & FLAG.failed)) + chapterTicksHtml(chs, (g) => g, N) + BRUSH()
+  if (nav) nav.innerHTML = chapterNavHtml(chs, at, N)
   const { lo, hi } = roughWindow(head, at, K)
   placeBrush(el, N, lo, hi, at)
   let bars = ''
@@ -330,7 +381,7 @@ export function wireTimeline(el, s) {
   const move = (e) => {
     if (!mode) return
     const n = N(), d = Math.round(((e.clientX - startX) / stripW()) * n)
-    if (mode === 'pan') { const dd = Math.max(-startLo, Math.min(n - startHi, d)); s.setView(startLo + dd, startHi + dd, false) }
+    if (mode === 'pan') { const { c0, c1 } = chapterHere(s), dd = Math.max(c0 - startLo, Math.min(c1 - startHi, d)); s.setView(startLo + dd, startHi + dd, false) } // never across a chapter's edge
     else if (mode === 'l') s.setView(Math.min(startHi - 1, startLo + d), startHi, false)
     else s.setView(startLo, Math.max(startLo + 1, startHi + d), false)
   }
@@ -352,6 +403,7 @@ export function wireTimeline(el, s) {
     const bar = e.target.closest('#sawrow .bar')
     if (bar) { s.setPlayhead(+bar.dataset.i, true); return }
     const btn = e.target.closest('button')
+    if (btn && (btn.id === 'chapPrev' || btn.id === 'chapNext')) { if (btn.dataset.to != null) s.chapterGo(+btn.dataset.to); return } // works on the rough page too
     if (!btn || !s.anchor) return
     if (btn.id === 'probPrev' || btn.id === 'probNext') {
       const j = problemJump(s.anchor.calls, s.problems || [], s.playhead, btn.id === 'probNext' ? 1 : -1)
