@@ -15,6 +15,7 @@ import { rawHome } from './raw-home.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import fs from 'node:fs'
+import zlib from 'node:zlib'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
@@ -617,8 +618,14 @@ const writeSegmentLines = (home, segment, lines) => fs.appendFileSync(path.join(
 // or kick. A kicked cold fold several times longer than idleMs is folded to its frontier before the worker leaves, and the checkpoint
 // it leaves (the fold log's sidecar with the reduction state at that frontier, 4.3 §4 旁索引) is what a fresh worker resumes from.
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
-const lastFrontier = (file) => { try { const f = fs.readFileSync(file, 'utf8').split('\n').filter((l) => l.startsWith('{"f"')).at(-1); return f ? JSON.parse(f) : null } catch { return null } }
-const stateOf = (file) => { const sc = loadSidecar({ file }), m = sc && sc.parts['r.m']; return sc && sc.parts['r.s'] && m && JSON.parse(m[0]).rv === REDUCE_V ? sc.head : null }
+// the fold log's text: its sealed brotli parts in offset order, then its plain tail (4.3 §4 分片)
+const foldBytes = (file) => {
+  const dir = path.dirname(file), at = (n) => Number(n.split('.')[1].split('-')[0])
+  return fs.readdirSync(dir).filter((n) => /^fold\.\d+(-\d+\.br|\.ndjson)$/.test(n)).sort((a, b) => at(a) - at(b))
+    .map((n) => (n.endsWith('.br') ? zlib.brotliDecompressSync(fs.readFileSync(path.join(dir, n))) : fs.readFileSync(path.join(dir, n)))).reduce((a, b) => Buffer.concat([a, b]), Buffer.alloc(0))
+}
+const lastFrontier = (file) => { try { const f = foldBytes(file).toString('utf8').split('\n').filter((l) => l.startsWith('{"f"')).at(-1); return f ? JSON.parse(f) : null } catch { return null } }
+const stateOf = (file) => { const sc = loadSidecar({ file, endsLine: (n) => foldBytes(file)[n - 1] === 10 }), m = sc && sc.parts['r.m']; return sc && sc.parts['r.s'] && m && JSON.parse(m[0]).rv === REDUCE_V ? sc.head : null }
 async function kickedFold({ calls, wire, idleMs, env = {}, killWhen = null }) {
   const home = path.join(tmpDir('trocar-qsvc-fold-'), '.trocar')
   const s = bigSession({ home, wire, subEvery: 4, subLanes: 3, late: 2 })
@@ -653,7 +660,7 @@ test('kick: a kicked fold several times longer than idleMs is folded to its fron
   t.diagnostic(JSON.stringify({ took, members: members.length, frontier: f && f.f }))
   assert.equal(f && f.f, String(members.at(-1).id), 'the worker left with the session folded to its frontier')
   const st = stateOf(log)
-  assert.ok(st && st.bytes === fs.statSync(log).size, 'the fold log\'s sidecar holds the reduction state at that frontier')
+  assert.ok(st && st.bytes === foldBytes(log).length, 'the fold log\'s sidecar holds the reduction state at that frontier')
   assert.ok(took > 3 * IDLE, `the fold took several idle periods (${took} ms): else this case shows nothing`)
 })
 
