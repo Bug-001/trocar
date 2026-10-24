@@ -35,6 +35,7 @@ import { compareStep } from '../../view/step-order.mjs';
 import { recordsAt, releaseDecoded, STRETCH_HEAP } from '../records.mjs';
 import { indexRows, sessionGroups, sessionFacts } from '../rows.mjs';
 import { openProjection, STORE_HEAP } from '../projection.mjs';
+import { releaseParts } from '../line-file.mjs';
 import { warmCache, fsTag, heapBudget, heapCeiling, hold, steadyBytes, liveHeap, usedHeap } from '../warm.mjs';
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
@@ -242,7 +243,8 @@ const fileLogs = new WeakMap();
 export function saveIndexes() {
   releaseDecoded();
   releaseTails();
-  for (const s of stores.values()) sidecars(s);
+  for (const s of stores.values()) { sidecars(s); try { s.seal(); fileLogs.get(s)?.log.seal(); } catch { /* the next idle period */ } }
+  releaseParts();
 }
 // The store's sidecar first (the log's names the projection's bytes); then, when it covers every line of the store (none while the
 // store holds `t` rows: an open cuts them off, and the state's rows with them), the fold log's: the state's step-order columns synced to

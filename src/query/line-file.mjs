@@ -1,14 +1,17 @@
-// src/query/line-file.mjs — an append-only file of newline-ended lines, read back by byte offset (RFC 4.3 §4 上下文投影 写者). The
-// projection store (src/query/projection.mjs) and the fold log keep where each line is and read it back when asked, so their heap
-// does not grow with what they hold.
-//   The lines past the file's end live in an off-heap ARENA (Buffers: external memory, not the V8 heap): `write: false` (the local
-// path, which writes nothing) appends every line there; `write: true` appends to the file, and a write that fails keeps the text in
-// the arena (`onFail(error)` once per episode of failures) and writes it with the next append that works. The arena starts at the
-// file's end, so an offset handed out never changes. One descriptor for reads, closed by close() or, failing that, when the
-// line file is collected.
-//   A SIDECAR (4.3 §4 旁索引) beside it, `<name>.idx`, holds what a scan of the file's first `bytes` would have put in the heap: the
+// src/query/line-file.mjs — an append-only line file of newline-ended lines, read back by global byte offset (RFC 4.3 §4 上下文投影
+// 分片 · 写者). The projection store (src/query/projection.mjs) and the fold log keep where each line is and read it back when asked,
+// so their heap does not grow with what they hold.
+//   On disk, in the session's directory: SEALED PARTS `<name>.<a>-<b>.br` (the brotli of exactly the bytes [a, b), cut at a line
+// end, chaining from 0) and one PLAIN TAIL `<name>.<T>.ndjson` (the bytes from T, the last part's end): offsets never change when
+// a prefix is sealed. A part read is decoded once into a cache of decoded parts capped by bytes, off the V8 heap (releaseParts()
+// drops it). The lines past the disk's end live in an off-heap ARENA (Buffers: external memory, not the V8 heap): `write: false`
+// (the local path, which writes nothing) appends every line there; `write: true` appends to the tail, and a write that fails keeps
+// the text in the arena (`onFail(error)` once per episode of failures) and writes it with the next append that works. The arena
+// starts at the disk's end, so an offset handed out never changes. One descriptor for reads of the tail, closed by close(), by
+// seal(), or, failing that, when the line file is collected.
+//   A SIDECAR (4.3 §4 旁索引) beside it, `<name>.idx`, holds what a scan of the first `bytes` would have put in the heap: the
 // header line `{v: SIDECAR_V, …head, bytes, parts: [[name, type, byteLength]]}`, then each part's bytes. Never a second source: a
-// sidecar that does not load is a scan. The file created anew or truncated drops its sidecar first.
+// sidecar that does not load is a scan. The lines created anew or cut drop their sidecar before the next write.
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -249,6 +252,31 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
     if (carry) yield { off: at, len: carry.length, text: carry.toString('utf8'), nl: false };
   }
 
+  /** seal({partBytes}) → whether it sealed: while the settled tail holds partBytes or more, the next part (to the first line end at
+   *  or past partBytes) is written, then the tail from the last part's end, then the old tail removed (4.3 §4 分片: killed at any
+   *  point, the next open reads the same lines). */
+  function seal({ partBytes = PART_BYTES } = {}) {
+    if (!write || arena || trunc || junk || end - T < partBytes) return false;
+    close();
+    const old = tailOf(T), f = fs.openSync(old, 'r');
+    let a = T, made = false;
+    try {
+      while (end - a >= partBytes) {
+        let b = 0;
+        for (let pos = a + partBytes - 1; !b && pos < end; pos += 1 << 16) { const c = readAt(fs, f, pos - T, Math.min(1 << 16, end - pos)), i = c.indexOf(10); if (i >= 0) b = pos + i + 1; }
+        if (!b) break; // no line ends there (none of a settled tail)
+        const raw = readAt(fs, f, a - T, b - a);
+        durable(fs, partOf(a, b), zlib.brotliCompressSync(raw, { params: { ...BROTLI, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: raw.length } }));
+        parts.push(partAt({ path: partOf(a, b), a, b })); C = a = b; made = true;
+      }
+      durable(fs, tailOf(a), end > a ? readAt(fs, f, a - T, end - a) : Buffer.alloc(0));
+    } finally { fs.closeSync(f); }
+    T = a;
+    fs.rmSync(old, { force: true });
+    syncDir(fs, dir);
+    return made;
+  }
+
   function cut(len) {
     if (len >= end) return;
     starts = []; bufs = []; arena = 0; end = len; trunc = write;
@@ -267,7 +295,7 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
   }
 
   const self = {
-    append, read, scan, cut, remove, close,
+    append, read, scan, cut, remove, seal, close,
     touch() { if (write && end) try { const t = new Date(); fs.utimesSync(tailOf(T), t, t); } catch { /* the GC order only */ } },
     loadSidecar: () => loadSidecar({ fs, file: side, endsLine: (n) => n <= end && read(n - 1, 1)[0] === 10 }),
     saveSidecar: ({ head, parts: ps2 }) => saveSidecar({ fs, file: side, head, parts: ps2 }),
