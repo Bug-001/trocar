@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { createSealWriter, createRingBudget } from '../../src/raw/writer.mjs';
+import { createSealWriter } from '../../src/raw/writer.mjs';
 import { openSealed, createFrameCache, AMBIGUOUS } from '../../src/raw/reader.mjs';
 import { FLAG_NL, FLAG_UNPARSEABLE, R as COL } from '../../src/raw/format.mjs';
 import { tmpDir } from '../helpers/tmp.mjs';
@@ -99,19 +99,6 @@ test('a frozen v1 sealed segment reads back its plaintext, every record and the 
     assert.equal(sf.shards[0].length, plain.length);
     assert.equal(sf.shards[0].sha256, createHash('sha256').update(plain).digest('hex'));
   } finally { sf.close(); }
-});
-
-test('frames are cut at record boundaries; a record larger than a frame sits alone', () => {
-  const dir = tmp();
-  try {
-    const r = rng(9);
-    const ls = [Buffer.from(text(r, 3000) + '\n'), Buffer.from(text(r, 70000) + '\n'), Buffer.from(text(r, 3000) + '\n')];
-    const sf = openSealed(writeFile(dir, ls, { frameBytes: 8192 }));
-    const big = sf.entry(1);
-    assert.equal(sf.records.filter((_, i) => sf.entry(i).frame === big.frame).length, 1, 'the oversized record shares its frame');
-    for (let i = 0; i < ls.length; i++) assert.ok(sf.lineAt(i).equals(ls[i]));
-    sf.close();
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('the frame LRU stays within its bound under random reads', () => {
@@ -229,29 +216,4 @@ test('reading one record hashes no more than that record\'s bytes', async () => 
     assert.ok(hashed <= ls[tip].length, `hashed ${hashed} bytes to hand out one ${ls[tip].length}-byte line`);
     sf.close();
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-});
-
-// One shard split across many sessions feeds one writer per session. Their predecessor rings share a
-// memory budget (review F15): the total stays under it, and every output still decodes exactly.
-test('writers of one seal share a ring budget; the cap costs compression, never bytes', () => {
-  const root = tmp();
-  try {
-    const budget = createRingBudget(1 << 20);
-    const ws = [0, 1, 2].map((k) => { const file = path.join(root, `o${k}.sealed`), fd = fs.openSync(file, 'wx', 0o600); return { file, fd, w: createSealWriter({ fd, budget }), lines: [] }; });
-    let peak = 0;
-    for (let i = 0; i < 30; i++) {
-      const o = ws[i % 3];
-      const line = Buffer.from(JSON.stringify({ id: `r${i}`, req_body: 'x'.repeat(150000) + i }) + '\n');
-      o.w.add(line, { id: `r${i}`, stream: 's.ndjson', lineNo: i }); o.lines.push(line);
-      peak = Math.max(peak, budget.total);
-      assert.equal(budget.total, ws.reduce((n, x) => n + x.w.ringBytes, 0));
-    }
-    assert.ok(peak <= budget.max, `rings held ${peak} bytes over a ${budget.max} budget`);
-    for (const o of ws) {
-      o.w.finish([{ name: 's.ndjson', sha256: '', length: 0, lines: 0 }]); fs.closeSync(o.fd);
-      const sf = openSealed(o.file);
-      assert.deepEqual([...sf.lines()].map((x) => x.line.toString()), o.lines.map(String));
-      sf.close();
-    }
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

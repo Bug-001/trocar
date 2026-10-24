@@ -1,7 +1,7 @@
 // src/raw/reader.mjs — read a D35 sealed file (RFC 4.2 §原始层封存 「读」).
 //
-// Random access: (stream, id) → index entry → decode the frames it needs (at most CHAIN_MAX steps
-// back to a keyframe) → rebuild the line → check its sha256. Decoded frames go into a bounded LRU
+// Random access: (stream, id) → index entry → decode the frames it needs (v1: at most CHAIN_MAX steps back to a
+// keyframe; v2: the record's splice frame, then the chunk frames its ranges name) → rebuild the line → check its sha256. Decoded frames go into a bounded LRU
 // that SEVERAL sealed files can share, so a resolver over many files still holds ~8 frames, not 8 per
 // file. Sequential reads (`lines()`) decode one frame at a time and keep only a short window of
 // recent lines, so a loader never holds a whole sealed file in memory (4.6 §日志体积预算).
@@ -13,7 +13,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { applyOps, CHAIN_MAX, CANDIDATES } from './delta.mjs';
-import { readIndex, R, FLAG_NL, FLAG_UNPARSEABLE, HEADER_LEN } from './format.mjs';
+import { readIndex, readVarint, unzigzag, R, FLAG_NL, FLAG_UNPARSEABLE, HEADER_LEN, KIND_CHUNK, KIND_SPLICE, REC_SPLICE } from './format.mjs';
 
 export const AMBIGUOUS = -2;
 
@@ -59,15 +59,15 @@ export function openSealed(file, { fs = nodeFs, frameCache = createFrameCache(8)
   const fd = fs.openSync(file, 'r');
   try {
     const st = fs.fstatSync(fd);
-    const { tables, indexOffset } = readIndex(fs, fd, st.size, path.basename(file));
-    return makeReader({ fs, fd, file, st, tables, indexOffset, frameCache, lineCache });
+    const { tables, indexOffset, version } = readIndex(fs, fd, st.size, path.basename(file));
+    return makeReader({ fs, fd, file, st, tables, indexOffset, version, frameCache, lineCache });
   } catch (e) { try { fs.closeSync(fd); } catch {} throw e; }
 }
 
 // Line instances whose sha256 has been checked (a line cache hit hands out the same instance again).
 const verified = new WeakSet();
 
-function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache, lineCache }) {
+function makeReader({ fs, fd, file, st, tables, indexOffset, version, frameCache, lineCache }) {
   // close() releases only the fd: the tables stay, and the next frame read reopens the file and checks it is
   // still the file they describe (dev, ino, size, mtime), so a kept reader never reads another file's bytes.
   const fdOf = () => {
@@ -85,12 +85,14 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache, lineCac
   const name = path.basename(file);
   const bad = (msg) => new Error(`${name}: ${msg} — the sealed file is corrupt`);
   // Structural checks up front, so a malformed index fails at open, not halfway through a render.
+  const v2 = version === 2;
+  if (v2) checkV2();
   let end = HEADER_LEN;
-  for (const [off, clen] of frames) { if (off !== end || clen <= 0) throw bad(`frame table out of order at ${off}`); end += clen; }
-  if (end !== indexOffset) throw bad('frames do not end where the index tail begins');
+  if (!v2) for (const [off, clen] of frames) { if (off !== end || clen <= 0) throw bad(`frame table out of order at ${off}`); end += clen; }
+  if (!v2 && end !== indexOffset) throw bad('frames do not end where the index tail begins');
   const depth = new Uint8Array(records.length);
   let deltas = 0;
-  for (let i = 0; i < records.length; i++) {
+  for (let i = 0; !v2 && i < records.length; i++) {
     const r = records[i];
     const fr = frames[r[R.frame]];
     if (!fr || r[R.off] + r[R.enc] > fr[2] || !streams[r[R.stream]] || !shards[r[R.shard]]) throw bad(`record ${i} points outside its frame or tables`);
@@ -104,6 +106,46 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache, lineCac
       depth[i] = d;
     } else if (r[R.kind] !== 0) throw bad(`record ${i} has unknown kind ${r[R.kind]}`);
   }
+  // v2 (4.2 文件布局 · 拼接表): frames sorted by offset tile [HEADER_LEN, indexOffset) exactly, each a chunk or splice
+  // frame; every record is a splice whose list lies inside a splice frame, in non-decreasing frame order.
+  function checkV2() {
+    let end = HEADER_LEN;
+    for (const f of frames.map((x, n) => [x, n]).sort((a, b) => a[0][0] - b[0][0])) {
+      const [off, clen, dlen, kind] = f[0];
+      if (off !== end || !(clen > 0) || !(dlen >= 0) || (kind !== KIND_CHUNK && kind !== KIND_SPLICE)) throw bad(`frame ${f[1]} overlaps, leaves a gap or has an unknown kind`);
+      end += clen;
+    }
+    if (end !== indexOffset) throw bad('frames do not end where the index tail begins');
+    for (let i = 0; i < records.length; i++) {
+      const r = records[i];
+      const fr = frames[r[R.frame]];
+      if (r[R.kind] !== REC_SPLICE || r[R.back] !== -1) throw bad(`record ${i} has unknown kind ${r[R.kind]}`);
+      if (!fr || fr[3] !== KIND_SPLICE || !(r[R.off] >= 0 && r[R.enc] >= 0) || r[R.off] + r[R.enc] > fr[2] || !streams[r[R.stream]] || !shards[r[R.shard]]) throw bad(`record ${i} points outside its splice frame or tables`);
+      if (i && r[R.frame] < records[i - 1][R.frame]) throw bad(`record ${i} is out of frame order`);
+    }
+  }
+  // v2 build: decode the splice list, check every range against its chunk frame, splice the bytes.
+  function spliced(i, getFrame) {
+    const r = records[i];
+    const list = getFrame(r[R.frame]).subarray(r[R.off], r[R.off] + r[R.enc]);
+    const parts = [];
+    let p = 0, f = 0, e = 0, total = 0;
+    try {
+      while (p < list.length) {
+        let df, dof, len;
+        [df, p] = readVarint(list, p); [dof, p] = readVarint(list, p); [len, p] = readVarint(list, p);
+        f += unzigzag(df); const off = e + unzigzag(dof);
+        const fr = frames[f];
+        if (!fr || fr[3] !== KIND_CHUNK || !(len >= 1) || off < 0 || off + len > fr[2]) throw new Error(`range ${f}:${off}+${len} is outside its chunk frame`);
+        if ((total += len) > r[R.len]) throw new Error(`splices past its ${r[R.len]}-byte length`);
+        parts.push(getFrame(f).subarray(off, off + len));
+        e = off + len;
+      }
+    } catch (err) { throw bad(`record ${i}: ${err.message}`); }
+    if (total !== r[R.len]) throw bad(`record ${i} splices ${total} bytes, index says ${r[R.len]}`);
+    return Buffer.concat(parts, total);
+  }
+
   const key = `${++fileSeq}:${st.dev}:${st.ino}`;
 
   const frameAt = (f) => {
@@ -148,7 +190,7 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache, lineCac
     const was = lineCache.get(ck);
     if (was) return was;
     const r = records[i];
-    const line = build(i, encOf(frameAt(r[R.frame]), r), rebuilt);   // depth bounded by the open-time check
+    const line = v2 ? spliced(i, frameAt) : build(i, encOf(frameAt(r[R.frame]), r), rebuilt);   // depth bounded by the open-time check
     lineCache.set(ck, line);
     return line;
   }
@@ -159,6 +201,7 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache, lineCac
   // ending the iteration — later frames are independent, so the rest still reads, and every loss is
   // counted by the caller (no silent failure). Without it, the first error throws.
   function* lines({ onError = null } = {}) {
+    if (v2) { yield* linesV2(onError); return; }
     const win = new Map();
     let f = -1, fb = null, fErr = null;
     for (let i = 0; i < records.length; i++) {
@@ -174,6 +217,21 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache, lineCac
         continue;
       }
       win.set(i, line); win.delete(i - CANDIDATES);
+      yield { i, line, entry: entry(i) };
+    }
+  }
+
+  // v2 in order: its own 16-frame window (4.2 「读」: ~4 groups' current frames + 7 recent + the splice frame).
+  function* linesV2(onError) {
+    const cache = createFrameCache(16);
+    const getFrame = (f) => { let b = cache.get(f); if (!b) { b = decodeFrame(f); cache.set(f, b); } return b; };
+    for (let i = 0; i < records.length; i++) {
+      let line;
+      try { line = check(i, spliced(i, getFrame)); } catch (e) {
+        if (!onError) throw e;
+        onError(i, e, entry(i));
+        continue;
+      }
       yield { i, line, entry: entry(i) };
     }
   }

@@ -15,6 +15,8 @@
 //   tag 1 = INSERT → head, then `len` literal bytes
 // The ops run to the end of the record's span (the index gives its length), so they need no count.
 
+import { readVarint } from './format.mjs';
+
 export const WINDOW = 32;        // rolling-hash window
 export const STRIDE = 16;        // predecessor positions indexed every STRIDE bytes
 export const MIN_MATCH = 64;     // shortest accepted COPY in the middle region
@@ -137,15 +139,6 @@ export function encodeOps(A, B) {
   }
   if (bPos < B.length) { out.varint((B.length - bPos) * 2 + 1); out.bytes(B.subarray(bPos)); }
   return Buffer.from(out.done());
-}
-
-function readVarint(buf, pos) {
-  let x = 0, mul = 1, b;
-  do {
-    if (pos >= buf.length) throw new Error('delta ops corrupt: truncated varint');
-    b = buf[pos++]; x += (b & 127) * mul; mul *= 128;
-  } while (b & 128);
-  return [x, pos];
 }
 
 // Decode: run the ops over the predecessor line. Every bound is checked — a sealed file is read as
