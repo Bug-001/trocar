@@ -219,7 +219,7 @@ A session the worker has not finished reading answers at once with what it has, 
 works, even when `done` cannot move yet); the worker reads on in the background, and the CLI asks again until the answer is
 complete (it reads the records itself if the worker stops making progress for 5 s, or no daemon runs). When no worker is
 running yet, a read is answered at once from what is already on disk; a session the worker must still read is
-not read a second time beside it: the CLI waits on the worker instead, and says so on stderr (never under `--json`). The first open of a very large session
+not read a second time beside it: the CLI waits on the worker instead. Without `--json`, the CLI says on stderr when it waits on the worker and when it answers by itself, and why; with `--json`, stderr stays empty. The first open of a very large session
 takes a while: about 4 minutes in the background for a 16k-call session, during which the board shows it filling
 in. The worker's memory is bounded: a session too large for it shows its newest calls that fit and says so
 (**Showing only the latest N / M calls (file X MB)**); a cut session always shows at least half of what fits, and
