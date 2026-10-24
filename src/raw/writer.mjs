@@ -21,7 +21,7 @@ import { cutPoints } from './chunk.mjs';
 import { headerBytes, indexTailBytes, trailerBytes, pushVarint, zigzag, FLAG_NL, FLAG_UNPARSEABLE, KIND_CHUNK, KIND_SPLICE, REC_SPLICE } from './format.mjs';
 
 export const FRAME_BYTES = 4 << 20;   // ~4 MiB of decoded bytes per frame (D35 ④)
-const OPEN = 4, RECENT = 7;
+const OPEN = 32, RECENT = 7;   // OPEN ≥ the stream groups a real segment interleaves (13–24 measured); 4 thrashed into tiny frames
 const BROTLI = { [zlib.constants.BROTLI_PARAM_QUALITY]: 9, [zlib.constants.BROTLI_PARAM_LGWIN]: 24 };
 
 export function createSealWriter({ fd, fs = nodeFs, frameBytes = FRAME_BYTES } = {}) {
