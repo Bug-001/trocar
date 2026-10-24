@@ -185,7 +185,12 @@ async function indexed({ home, fs, once }) {
   return got;
 }
 // A hand-off lets the read-only store go: the worker writes the members it lacks, which a store opened before cannot see.
-function letGo(k, e) { const s = stores.get(k), st = states.take(k); if (st) closeState(st); stores.delete(k); frontiers.delete(k); if (s) s.close(); return e; }
+function letGo(k, e) { closeStore(k); return e; }
+// Every store closes here (a hand-off, the eviction past STORES): its reduction state with it, and its `work` stays with the worker.
+function closeStore(k) { const s = stores.get(k), st = states.take(k); if (st) closeState(st); stores.delete(k); frontiers.delete(k); if (s) { works.set(k, s.work); s.close(); } }
+// session key → `pending.work` (3.5 §会话读): the members extracted and handed to a reduction for it in this worker, across its store's
+// close and reopen, so it only grows while the worker lives (3.5:43). One number per session the worker opened.
+const works = new Map();
 // The projection store of a session, open across requests (the least recently used closed past STORES). What opening it said (a
 // rebuild) stays with the store (`opened`) until the next answer of that session says it, whoever opened it: a background slice
 // has no caller to tell.
@@ -196,9 +201,9 @@ function storeOf(ctx, id, k) {
   const opened = [];
   s = openProjection({ home: ctx.home, fs: ctx.fs, key: id, write: ctx.writer === true, errors: opened });
   s.opened = opened;
-  s.work = 0; // members extracted and handed to a reduction while the store lives: `pending.work` (3.5 §会话读)
+  s.work = works.get(k) || 0; // `pending.work`, counted on the open store and kept by closeStore
   stores.set(k, s);
-  for (const [kk, v] of stores) { if (stores.size <= STORES) break; stores.delete(kk); const st = states.take(kk); if (st) closeState(st); frontiers.delete(kk); v.close(); }
+  for (const kk of stores.keys()) { if (stores.size <= STORES) break; closeStore(kk); }
   return s;
 }
 
