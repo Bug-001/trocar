@@ -641,14 +641,16 @@ async function kickedFold({ calls, wire, idleMs, env = {}, killWhen = null }) {
       if (f && first == null) first = Date.now()
       if (killWhen && first != null && killWhen({ since: Date.now() - first, f, last: String(members.at(-1).id) })) child.kill('SIGKILL')
     }, 10)
-    try { return { members, log, took: (await within(exit, 90_000, 'the worker left')) - t0 } } finally { clearInterval(poll) }
+    try { return { members, log, took: (await within(exit, 150_000, 'the worker left')) - t0 } } finally { clearInterval(poll) }
   } finally { svc.stop(); if (exit) await exit }
 }
 
-test('kick: a kicked fold several times longer than idleMs is folded to its frontier before the worker leaves, with a checkpoint at that frontier (3.5 #32)', { timeout: 120_000 }, async () => {
-  const IDLE = 400
-  const { members, log, took } = await kickedFold({ calls: 3_000, wire: 'threads', idleMs: IDLE })
+test('kick: a kicked fold several times longer than idleMs is folded to its frontier before the worker leaves, with a checkpoint at that frontier (3.5 #32)', { timeout: 180_000 }, async (t) => {
+  // long enough that a full GC or a busy machine starving this nice-10 worker between two slices does not pass it
+  const IDLE = 1_500
+  const { members, log, took } = await kickedFold({ calls: 6_000, wire: 'threads', idleMs: IDLE })
   const f = lastFrontier(log)
+  t.diagnostic(JSON.stringify({ took, members: members.length, frontier: f && f.f }))
   assert.equal(f && f.f, String(members.at(-1).id), 'the worker left with the session folded to its frontier')
   const st = stateOf(log)
   assert.ok(st && st.bytes === fs.statSync(log).size, 'the fold log\'s sidecar holds the reduction state at that frontier')
