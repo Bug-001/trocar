@@ -40,7 +40,7 @@ import { warmCache, fsTag, heapBudget, heapCeiling, hold, steadyBytes, liveHeap,
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
-import { filesAt, forget, headDoc, headFile, packsOf, tier0Doc, writeFiles, writeHead } from '../ctx-files.mjs';
+import { filesAt, filesParts, forget, headDoc, headFile, packsOf, tier0Doc, writeFiles, writeHead } from '../ctx-files.mjs';
 
 export const params = Object.freeze(['id', 'since', 'before', 'limit', 'head']);
 
@@ -261,7 +261,7 @@ function sidecars(store) {
     const live = st.R && st.target == null && st.relay.cur === st.log;
     st.log.saveIndex([...dumpColumns(sync(st.cols, st.log)),
       ...(live ? [['r.s', v8.serialize(st.R.snapshot())], ['r.m', [JSON.stringify({ rv: REDUCE_V, cut: st.cut })]]] : []),
-      ['w.f', Float64Array.of(filesAt(st.log))]], filesAt(st.log)); // where the answer files stand (ctx-files.mjs writeFiles)
+      ...filesParts(st.log)], filesAt(st.log)); // where the answer files stand (ctx-files.mjs writeFiles)
   } catch { /* the next idle period */ }
   st.saved = st.n; st.savedAt = performance.now();
 }

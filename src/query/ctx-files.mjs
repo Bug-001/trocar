@@ -164,13 +164,15 @@ const textOf = (lines) => lines.map((o) => `${JSON.stringify(o)}\n`).join('');
  *  the previous step of its lane in this file (none: a keyframe); `{r}` for the part's members in write order; `{x}` (rest) for
  *  the failed members of the span. A function of the state alone. */
 export const renderSpan = (s, n, part, tail = false) => render(s, n, part, tail).buf.toString('utf8');
+// a span's doc-head line
+const docLine = (s, n, part, tail, [s0, s1] = axisSpans(s)[n]) => docOf(errorsOf(s.indexErrors, []), { id: s.id, ...(tail ? { tail: { n, part, s0 } } : { pack: { n, part, s0, s1 } }) }, 'lane');
 function render(s, n, part, tail, memo = null, spans = axisSpans(s)) {
   const V = s.V, { cols, log } = V, ax = axisOf(V), main = part === 'main', a = n * PACK_MEMBERS;
   const axV = ax == null ? -2 : cols.keys.get(ax), onAxis = (rid) => isRow(cols, rid) && cols.ln[cols.slotOf(rid)] === axV;
   const members = s.plan.members.slice(a, Math.min(a + PACK_MEMBERS, upToOf(s))).filter((r) => s.cut(r)), [s0, s1] = spans[n];
   // each line made into bytes at once (outside the heap): a span's text can be tens of MB
   const chunks = [], out = { push: (...os) => { for (const o of os) chunks.push(Buffer.from(`${JSON.stringify(o)}\n`, 'utf8')); } };
-  out.push(docOf(errorsOf(s.indexErrors, []), { id: s.id, ...(tail ? { tail: { n, part, s0 } } : { pack: { n, part, s0, s1 } }) }, 'lane'));
+  out.push(docLine(s, n, part, tail, spans[n]));
   if (tail) out.push(...headsOf(s, part));
   const calls = members.map((r) => String(r.id)).filter((rid) => isRow(cols, rid) && onAxis(rid) === main);
   calls.sort((x, y) => compareStep(cols.ts[cols.slotOf(x)], x, cols.ts[cols.slotOf(y)], y));
@@ -202,9 +204,14 @@ const PARTS = ['main', 'rest'];
 const sha = (t) => createHash('sha1').update(t).digest('hex');
 // fold log → {f: the log's frontier offset the files stand at, open, packs[n]: {n, s0, s1, tag, h: [sha main, sha rest]}, tails, rec}
 const writers = new WeakMap();
-/** filesAt(log) → the fold-log offset the session's answer files stand at (−1: none): saved with the fold sidecar as `w.f`, so a
- *  worker that starts again re-renders what changed past it (named/session.mjs sidecars). */
+/** filesAt(log) → the fold-log offset the session's answer files stand at (−1: none). filesParts(log) → the fold sidecar's parts
+ *  that say so (named/session.mjs sidecars): `w.f` that offset, so a worker that starts again re-renders the packs that changed past
+ *  it; `w.t` the tails' checkpoint (the axis, the records appended up to, each tail's size), so it appends to the tails. */
 export const filesAt = (log) => (writers.has(log) ? writers.get(log).f : -1);
+export function filesParts(log) {
+  const W = writers.get(log);
+  return [['w.f', Float64Array.of(W ? W.f : -1)], ...(W && W.tails ? [['w.t', [JSON.stringify({ ax: W.ax, rec: W.rec, size: PARTS.map((p) => W.tails[p].size) })]]] : [])];
+}
 /** forget(log): the files are written afresh at the next slice (a write that failed). */
 export const forget = (log) => { writers.delete(log); };
 // a file's bytes (gunzipped), or null when it is missing, does not gunzip, is torn or its head line has another v
@@ -215,6 +222,16 @@ function readText(fs, file, gz) {
   } catch { return null; }
 }
 const same = (a, b) => !!a && a.equals(b);
+// The tail `part` of span n a worker before this one wrote, carried on by appends: whole, of the size its checkpoint says (nothing
+// was written to it after the checkpoint), its doc-head line the one a render now writes (same v, span, s0, errors); the definitions
+// it holds read back from its `{d}` lines. Else null: it is written afresh (a fresh render is as valid at any time).
+function carried(s, fs, file, n, part, size) {
+  const t = readText(fs, file, false), head = Buffer.from(textOf([docLine(s, n, part, true)]), 'utf8');
+  if (!t || t.length !== size || !t.subarray(0, head.length).equals(head)) return null;
+  const defs = new Set(), D = Buffer.from('\n{"d":');
+  for (let j = t.indexOf(D); j >= 0; j = t.indexOf(D, j + 1)) defs.add(JSON.parse(t.subarray(j + 1, t.indexOf(10, j + 1)).toString('utf8')).d.bid);
+  return { size, defs };
+}
 // first place in lane L whose step does not sort before (ts, rid)
 function lowerBound(cols, L, ts, rid) {
   let lo = 0, hi = L.rids.length;
@@ -250,8 +267,9 @@ function dirtyOf(s, off, open) {
 
 /** writeFiles(ctx, s) → {packs, open} of the head: brings the session's pack and tail files to the state `s` (the worker's, after a
  *  slice). The first slice of a session in this worker (or of a fold log opened again) re-renders the packs with fold-log lines past
- *  the offset its sidecar says the files stood at, takes the others from their files when whole (else renders them), and writes both
- *  tails afresh; later slices seal the spans the mark passed (and start the next tail), re-render dirty packs and append to the tails.
+ *  the offset its sidecar says the files stood at, takes the others from their files when whole (else renders them), and carries
+ *  on the tails its sidecar's checkpoint vouches for (carried), writing the others afresh; later slices seal the spans the mark passed
+ *  (and start the next tail), re-render dirty packs and append to the tails.
  *  A file is written only when its text differs. */
 export function writeFiles(ctx, s) {
   if (s.mark == null) return { packs: [], open: null };
@@ -260,8 +278,15 @@ export function writeFiles(ctx, s) {
   if (W && W.ax === ax && W.f === log.frontier) return W.files;
   const first = !W || W.ax !== ax;
   if (first) {
-    const w = log.saved && log.saved.parts['w.f'];
-    W = { ax, f: w && w.length ? w[0] : -1, open: N, packs: [], tails: null, rec: 0, files: null, memo: lru(MEMO_BYTES), sp: [] };
+    const parts = (log.saved && log.saved.parts) || {}, w = parts['w.f'], f = w && w.length ? w[0] : -1;
+    // a worker that starts again: the tails the last one wrote, carried on where whole and as its checkpoint says (D71②③)
+    let c = null, tails = null;
+    try { c = !W && f >= 0 ? JSON.parse(parts['w.t'][0]) : null; } catch { /* no checkpoint: afresh */ }
+    if (c && c.ax === ax) {
+      const got = PARTS.map((p, i) => carried(s, fs, tailFile(home, id, p), N, p, c.size?.[i]));
+      if (got.some(Boolean)) tails = Object.fromEntries(PARTS.map((p, i) => [p, got[i] || { size: -1, defs: new Set() }])); // −1: afresh
+    }
+    W = { ax, f, open: N, packs: [], tails, rec: tails ? c.rec : 0, files: null, memo: lru(MEMO_BYTES), sp: [] };
     writers.set(log, W);
   }
   const d = dirtyOf(s, W.f, Math.min(W.open, N)), spans = spansOf(s, axisSteps(s, W.sp, first ? 0 : d.axis ?? W.sp.length));
@@ -286,7 +311,7 @@ export function writeFiles(ctx, s) {
   };
   const upTo = upToOf(s);
   if (N !== W.open) W.memo = lru(MEMO_BYTES); // the sealed span's steps let go
-  if (first || N !== W.open || !W.tails) { W.tails = {}; for (const p of PARTS) fresh(p); }
+  if (N !== W.open || !W.tails) { W.tails = {}; for (const p of PARTS) fresh(p); }
   else appendTails(s, W, d, N, upTo, fs, (part) => tailFile(home, id, part), fresh);
   W.rec = upTo; W.open = N; W.f = log.frontier;
   W.files = { packs: W.packs.map(({ n, s0, s1, tag }) => ({ n, s0, s1, tag })), open: { n: N, s0: spans[N][0] } };
@@ -295,7 +320,7 @@ export function writeFiles(ctx, s) {
 // The tails' appends: the lanes whose header changed, the changed steps of the span in step
 // order (each against the step of its lane before it in the span: they are all in the file; none within 64 steps → a keyframe), the
 // records of the members past the last append, the failed members, the rids no longer a call. A tail whose size is not the one
-// written (torn, removed, replaced) is written afresh instead.
+// written (torn, removed, replaced, or not carried on from the last worker) is written afresh instead.
 function appendTails(s, W, d, N, upTo, fs, fileOf, fresh) {
   const { cols, log } = s.V, ax = W.ax, add = { main: [], rest: [] }, partOf = (key) => (key === ax ? 'main' : 'rest');
   for (const h of d.lanes) add[partOf(h.lane)].push({ l: h });
@@ -315,11 +340,12 @@ function appendTails(s, W, d, N, upTo, fs, fileOf, fresh) {
   for (const f of d.fails) add.rest.push({ x: { where: f.id, code: f.code, reason: f.reason } });
   for (const [rid, part] of d.gone) add[part].push({ g: rid });
   for (const part of PARTS) {
-    if (!add[part].length) continue;
-    const file = fileOf(part), t = textOf(add[part]);
+    const file = fileOf(part);
     let size = -1;
     try { size = fs.statSync(file).size; } catch { /* gone */ }
     if (size !== W.tails[part].size) { fresh(part); continue; }
+    if (!add[part].length) continue;
+    const t = textOf(add[part]);
     fs.appendFileSync(file, t);
     W.tails[part].size += Buffer.byteLength(t);
   }
