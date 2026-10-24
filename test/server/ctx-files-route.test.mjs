@@ -1,11 +1,12 @@
 // test/server/ctx-files-route.test.mjs — the daemon's fifth duty: GET /api/d/<f>?id= hands out the answer files the query worker wrote
 // (RFC 4.4 §答案文件, 验收 15 · 16 · 17; D63 ① · D71 ①). Real processes: the board face on a real loopback socket, the real query
 // service forking the real worker (no-real-os preloaded), the real record store and index keeper for the tips, a real daemon for the
-// start-up sweep. Nothing is injected on the seam; the one injected fs is the negative case's spy (no read outside ctx/<k>/).
+// start-up sweep, and a real daemon whose door captures a keyed call, served back on its own board (keeper → tips → /api/d). Nothing is injected on the seam; the one injected fs is the negative case's spy (no read outside ctx/<k>/).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import http from 'node:http'
+import tls from 'node:tls'
 import path from 'node:path'
 import { once } from 'node:events'
 import { gunzipSync } from 'node:zlib'
@@ -23,6 +24,13 @@ import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from '../query/big-session.mjs'
 import { TOKEN, withToken } from './face.mjs'
+import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
+import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
+import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
+import { ensureBoardPort, freeOnLoopback, BOARD_RANGE, readIngressConfig } from '../../src/collector/core/ingress-config.mjs'
+import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
+import { runOnCli } from '../../src/cli/on.mjs'
+import { BODY, REPLY, agentOf, darwinExec, freePort, through } from '../helpers/model-io.mjs'
 
 const CALLS = 1_100 // ≥ 2 sealed packs of 512 (3.5 PACK_MEMBERS)
 const pause = (ms) => new Promise((d) => setTimeout(d, ms))
@@ -209,4 +217,48 @@ test('4.4 #17 A9: a daemon started on a home without heads writes a tier-0 head 
     await until(() => ids.every((id) => headOf(id)), 60_000, 'a head for every session')
     for (const id of ids) assert.equal(headOf(id).tier, 0, `${id}: a tier-0 head`)
   } finally { await box.stop() }
+})
+
+test('4.4 #17 A15 · daemon: a keyed call captured through the real door → the daemon\'s board serves /api/d/head as the worker\'s head file, with x-trocar-tip naming that call', { timeout: 120_000 }, async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  const from = BOARD_RANGE[0] + Math.floor(Math.random() * 80) // as test/server/daemon-board.e2e.test.mjs: parallel files do not race for one port
+  assert.ok((await ensureBoardPort({ dir: w.dir, isFree: async (p) => p >= from && freeOnLoopback(p) })).port)
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  const trocar = path.dirname(w.dir)
+  fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')
+  const rootPem = fs.readFileSync(path.join(w.dir, 'ca', 'trocar-ca.pem'), 'utf8')
+  const upCa = createCa({ commonName: 'e2e upstream CA' }), upIssuer = createLeafIssuer(loadCa(upCa))
+  const mock = tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)) }, (s) => { s.on('error', () => {}); let b = ''; s.on('data', (d) => { b += d; if (b.includes(BODY)) s.write(REPLY) }) })
+  await new Promise((r) => mock.listen(0, '127.0.0.1', r))
+  const target = `localhost:${mock.address().port}`, KEY = 'daemon-tip-session'
+  const bundle = path.join(w.home, 'codex-ca.pem'); fs.writeFileSync(bundle, rootPem + upCa.certPem)
+  const a = agentOf({ w, name: w.harnesses.find((h) => h.name === 'codex').processes.names[0].name, env: { SSL_CERT_FILE: bundle } })
+  const box = await liveUnit({ w, platform: 'darwin', io: { exec: darwinExec(a) }, daemon: { fork: workerFork, queryIdleMs: 1500 } })
+  const open = []
+  try {
+    const io = { out: () => {}, err: () => {}, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
+    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+    assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), 0)
+    const u = new URL(/^HTTPS_PROXY=(\S+)$/m.exec(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'))[1].replace(/^["']|["']$/g, ''))
+    const auth = Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64')
+    const req = `POST /v1/responses HTTP/1.1\r\nHost: ${target}\r\ncontent-type: application/json\r\nsession-id: ${KEY}\r\ncontent-length: ${Buffer.byteLength(BODY)}\r\n\r\n${BODY}`
+    a.ports.add(await freePort())
+    const one = await through({ door: Number(u.port), auth, target, localPort: [...a.ports].at(-1), ca: [rootPem], req, open })
+    assert.equal(one.reply, REPLY)
+    await one.end()
+    // the daemon's own board: the port install recorded, the token it keeps
+    const port = readIngressConfig({ dir: w.dir }).boardPort
+    const tok = { [CONTROL_TOKEN_HEADER]: fs.readFileSync(path.join(w.dir, 'board.token'), 'utf8') }
+    const headFile = path.join(sessionDir(trocar, KEY), 'head.json.gz')
+    // the keeper's pass kicks the worker (its fold writes the head) and hands the call to the tip table; no query is made before the head is there
+    await until(() => fs.existsSync(headFile), 60_000, 'the worker the keeper kicked wrote the keyed session\'s head')
+    const rid = await within((async () => { for (;;) { const c = JSON.parse((await get(port, `/api/session?id=${KEY}`, tok)).body).calls || []; if (c.length) return c[0].rid; await pause(50) } })(), 20_000, 'the call in the session')
+    let r = null
+    await until(async () => { r = await get(port, `/api/d/head?id=${KEY}`, { ...tok, ...gz }); return r.status === 200 && fs.existsSync(headFile) && unzip(r.body) === unzip(fs.readFileSync(headFile)) }, 20_000, 'the daemon\'s /api/d/head is the head file')
+    assert.equal(r.headers['x-trocar-tip'], rid, 'the daemon\'s keeper → tip table → board names the captured call')
+  } finally {
+    for (const s of open) s.destroy()
+    await box.stop()
+    await new Promise((res) => mock.close(res))
+  }
 })
