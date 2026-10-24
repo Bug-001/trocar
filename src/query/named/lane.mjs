@@ -68,6 +68,8 @@ function opsOf(P, C) {
 // The kept lane ledgers of a session's fold log (its state's): lane key → {maps, step, rid, off} = laneLedger's maps at the lane's
 // step `step` (rid `rid`), as the log stood at byte `off` (its frontier then). Weighed by ledgerWeight, LEDGER_BYTES in all.
 const ledgers = new WeakMap();
+// the definitions a lane stepper keeps read (bytes, about)
+const DEF_BYTES = 8 << 20;
 // a kept ledger still good for the lane `lane` now: its step holds the same rid and no row of the lane at or before it changed since
 // (one that moved in or out of the lane before it moves its step's rid)
 function keptOf(cols, log, lane, e) {
@@ -81,7 +83,7 @@ function keptOf(cols, log, lane, e) {
 }
 
 /** laneStepper(st, key) → the steps of the lane `key` of a session state (sessionState): {L, n, rids, lines, lineAt(i), eventsAt(i),
- *  listAt(i), replyAt(i), step(i, prev), defOf(bid, list)}. step(i, prev) = step i with its ops against step `prev`'s list (−1: a
+ *  listAt(i), replyAt(i), step(i, prev), defOf(bid, list), release(keep)}. step(i, prev) = step i with its ops against step `prev`'s list (−1: a
  *  keyframe, every position added), parent = step `prev`'s rid (null for −1); defOf = a definition on the wire, its render joined with
  *  the tool_use of the list `list` (the first it is asked with: cached by bid). Lists, lines and definitions are read once each. */
 export function laneStepper(st, key) {
@@ -91,7 +93,8 @@ export function laneStepper(st, key) {
   const before = [0];
   for (const k of slots) before.push(before.at(-1) + cols.uc[k]);
   const eventsAt = (i) => { let j = before[i]; return lineAt(i).e.map((e) => (e.type === 'user' ? { ...e, k: ++j } : e)); };
-  const lists = new Map(), defs = new Map(), wires = new Map();
+  // the definitions read, by bytes about (their strings: a tool's name can be tens of KB), the least recently used out
+  const lists = new Map(), defs = lru(DEF_BYTES), wires = new Map();
   const rowOf = (i) => store.rows.get(rids[i]);
   const listAt = (i) => {
     if (!lists.has(i)) {
@@ -101,7 +104,12 @@ export function laneStepper(st, key) {
     return lists.get(i);
   };
   const replyAt = (i) => rowOf(i).reply || [];
-  const defOf = (bid) => { if (!defs.has(bid)) defs.set(bid, store.readDef(bid) || null); return defs.get(bid); };
+  const defOf = (bid) => {
+    if (defs.has(bid)) return defs.get(bid);
+    const d = store.readDef(bid) || null;
+    defs.set(bid, d, 128 + (d ? 2 * ((d.preview || '').length + (d.toolName || '').length + (d.label || '').length + (d.ref || '').length) : 0));
+    return d;
+  };
   // a tool_result whose own sniff is plain text takes its render from its tool_use's (render-kind.mjs inheritedRender): the tool_use
   // of the same id in the list it is first seen in
   function renderIn(d, list) {
@@ -132,7 +140,9 @@ export function laneStepper(st, key) {
       detail: { norm: { stop_reason: x.stop_reason ?? null, usage: (x.facts ? x.facts.usage : x.nu) ?? null }, respRefs: x.respRefs || [],
         nonBlockKeys: x.nonBlockKeys || [], extraMessages: x.extraMessages || [], wire: x.wire ?? null } };
   }
-  return { L, n: rids.length, rids, lines, lineAt, eventsAt, listAt, replyAt, step, defOf: wireDef };
+  // release(keep): let go of every list but step `keep`'s, of the lines read and of the wire definitions (a render walks a span)
+  const release = (keep) => { for (const k of lists.keys()) if (k !== keep) lists.delete(k); lines.clear(); wires.clear(); };
+  return { L, n: rids.length, rids, lines, lineAt, eventsAt, listAt, replyAt, step, defOf: wireDef, release };
 }
 
 export async function run(ctx) {

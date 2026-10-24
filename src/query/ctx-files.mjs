@@ -10,7 +10,7 @@ import { SCHEMA_VERSION } from '../cli/schema.mjs';
 import { sessionMetaOfFacts } from '../view/board.mjs';
 import { listOf } from '../view/reduce.mjs';
 import { compareStep } from '../view/step-order.mjs';
-import { sessionDir } from './projection.mjs';
+import { lru, sessionDir } from './projection.mjs';
 import { isModelCall, sessionFactsOf } from './rows.mjs';
 import { laneOf, laneAt, placeIn, recOf, FLAG } from './session-doc.mjs';
 import { laneStepper } from './named/lane.mjs';
@@ -126,17 +126,21 @@ export function axisSpans(s) {
 // The ids it brings that the file lacks are those its ops add, in list order, then its reply's: every id of its parent's list is in the
 // file already. `memo` (the writer's, for the open span): a step and a definition are made once for the tail and the pack it is sealed
 // into; a step is a function of the projection's rows of it and its parent (extracted once each), so the two rids key it.
+// what a kept step or definition weighs in the heap, about: its JSON's bytes and the entry
+const weigh = (v) => 96 + (v ? 2 * JSON.stringify(v).length : 0);
+/** The open span's memo holds this much at most (the least recently used out): a fixed cache beside the reduction's (3.5 §内存有界). */
+const MEMO_BYTES = 4 << 20;
 function stepLines(S, key, i, p, wrote, memo = null) {
   const rid = S.rids[i], k = memo && `${rid}\n${p < 0 ? '' : S.rids[p]}`;
-  let st = memo && memo.steps.get(k);
-  if (!st) { st = S.step(i, p); if (memo) memo.steps.set(k, st); }
+  let st = memo && memo.get(k);
+  if (!st) { st = S.step(i, p); if (memo) memo.set(k, st, weigh(st)); }
   const out = [{ c: S.lineAt(i).r }];
   for (const bid of [...st.ops.flatMap((op) => (op[0] === 1 ? op.slice(1) : [])), ...st.reply]) {
     if (wrote.has(bid)) continue;
     wrote.add(bid);
     const dk = `${bid}\n${rid}`;
-    let w = memo ? memo.defs.get(dk) : undefined;
-    if (w === undefined) { w = S.defOf(bid, S.listAt(i).bids); if (memo) memo.defs.set(dk, w); }
+    let w = memo ? memo.get(dk) : undefined;
+    if (w === undefined) { w = S.defOf(bid, S.listAt(i).bids); if (memo) memo.set(dk, w, weigh(w)); }
     if (w) out.push({ d: w });
   }
   out.push({ s: { rid: st.rid, lane: key, i, parent: st.parent, ops: st.ops, reply: st.reply, attrs: st.attrs, detail: st.detail, events: S.eventsAt(i) } });
@@ -150,12 +154,14 @@ const textOf = (lines) => lines.map((o) => `${JSON.stringify(o)}\n`).join('');
  *  file holding its last step); per call of the part in step order its row, the definitions not yet in the file, its step against
  *  the previous step of its lane in this file (none: a keyframe); `{r}` for the part's members in write order; `{x}` (rest) for
  *  the failed members of the span. A function of the state alone. */
-export const renderSpan = (s, n, part, tail = false) => render(s, n, part, tail).text;
+export const renderSpan = (s, n, part, tail = false) => render(s, n, part, tail).buf.toString('utf8');
 function render(s, n, part, tail, memo = null) {
   const V = s.V, { cols, log } = V, ax = axisOf(V), main = part === 'main', a = n * PACK_MEMBERS;
   const axV = ax == null ? -2 : cols.keys.get(ax), onAxis = (rid) => isRow(cols, rid) && cols.ln[cols.slotOf(rid)] === axV;
   const members = s.plan.members.slice(a, Math.min(a + PACK_MEMBERS, upToOf(s))).filter((r) => s.cut(r)), [s0, s1] = axisSpans(s)[n];
-  const out = [docOf(errorsOf(s.indexErrors, []), { id: s.id, ...(tail ? { tail: { n, part, s0 } } : { pack: { n, part, s0, s1 } }) }, 'lane')];
+  // each line made into bytes at once (outside the heap): a span's text can be tens of MB
+  const chunks = [], out = { push: (...os) => { for (const o of os) chunks.push(Buffer.from(`${JSON.stringify(o)}\n`, 'utf8')); } };
+  out.push(docOf(errorsOf(s.indexErrors, []), { id: s.id, ...(tail ? { tail: { n, part, s0 } } : { pack: { n, part, s0, s1 } }) }, 'lane'));
   out.push(...headsOf(s, n, part));
   const calls = members.map((r) => String(r.id)).filter((rid) => isRow(cols, rid) && onAxis(rid) === main);
   calls.sort((x, y) => compareStep(cols.ts[cols.slotOf(x)], x, cols.ts[cols.slotOf(y)], y));
@@ -164,17 +170,18 @@ function render(s, n, part, tail, memo = null) {
     const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key)).get(key), i = placeIn(cols, S.L, rid);
     out.push(...stepLines(S, key, i, prev.has(key) ? prev.get(key) : -1, wrote, memo));
     prev.set(key, i);
+    S.release(i);
   }
   for (const r of members) if (onAxis(String(r.id)) === main) out.push({ r: recOf(r) });
   if (!main) for (const f of V.failed) if (spanOf(s, f.id) === n) out.push({ x: { where: f.id, code: f.code, reason: f.reason } });
-  return { text: textOf(out), wrote };
+  return { buf: Buffer.concat(chunks), wrote };
 }
-const tagOf = (main, rest) => createHash('sha1').update(`${main}\n${rest}`).digest('hex').slice(0, 16);
+const tagOf = (main, rest) => createHash('sha1').update(main).update('\n').update(rest).digest('hex').slice(0, 16);
 /** packsOf(s) → {packs, open} of the head, each sealed pack rendered (the local path: no writer keeps them). */
 export function packsOf(s) {
   if (s.mark == null) return { packs: [], open: null };
   const N = sealedOf(s), spans = axisSpans(s), packs = [];
-  for (let n = 0; n < N; n++) packs.push({ n, s0: spans[n][0], s1: spans[n][1], tag: tagOf(renderSpan(s, n, 'main'), renderSpan(s, n, 'rest')) });
+  for (let n = 0; n < N; n++) packs.push({ n, s0: spans[n][0], s1: spans[n][1], tag: tagOf(render(s, n, 'main').buf, render(s, n, 'rest').buf) });
   return { packs, open: { n: N, s0: spans[N][0] } };
 }
 
@@ -191,13 +198,14 @@ const writers = new WeakMap();
 export const filesAt = (log) => (writers.has(log) ? writers.get(log).f : -1);
 /** forget(log): the files are written afresh at the next slice (a write that failed). */
 export const forget = (log) => { writers.delete(log); };
-// a file's text, or null when it is missing, does not gunzip, is torn or its head line has another v
+// a file's bytes (gunzipped), or null when it is missing, does not gunzip, is torn or its head line has another v
 function readText(fs, file, gz) {
   try {
-    const b = fs.readFileSync(file), t = (gz ? gunzipSync(b) : b).toString('utf8');
-    return t.endsWith('\n') && JSON.parse(t.slice(0, t.indexOf('\n'))).v === CTX_V ? t : null;
+    const b = gz ? gunzipSync(fs.readFileSync(file)) : fs.readFileSync(file);
+    return b[b.length - 1] === 10 && JSON.parse(b.subarray(0, b.indexOf(10)).toString('utf8')).v === CTX_V ? b : null;
   } catch { return null; }
 }
+const same = (a, b) => !!a && a.equals(b);
 // first place in lane L whose step does not sort before (ts, rid)
 function lowerBound(cols, L, ts, rid) {
   let lo = 0, hi = L.rids.length;
@@ -248,7 +256,7 @@ export function writeFiles(ctx, s) {
   const first = !W || W.ax !== ax;
   if (first) {
     const w = log.saved && log.saved.parts['w.f'];
-    W = { ax, f: w && w.length ? w[0] : -1, open: N, packs: [], tails: null, rec: 0, files: null, memo: { steps: new Map(), defs: new Map() } };
+    W = { ax, f: w && w.length ? w[0] : -1, open: N, packs: [], tails: null, rec: 0, files: null, memo: lru(MEMO_BYTES) };
     writers.set(log, W);
   }
   const d = dirtyOf(s, W.f, Math.min(W.open, N)), spans = axisSpans(s);
@@ -257,15 +265,17 @@ export function writeFiles(ctx, s) {
   for (let n = 0; n < N; n++) {
     const k = W.packs[n], files = PARTS.map((p) => packFile(home, id, n, p));
     if (k && !d.packs.has(n) && d.relabel.has(n)) { // only lane headers moved: the file's lines with the `{l}` lines made again
+      const L = Buffer.from('{"l":');
       const texts = PARTS.map((p, i) => {
-        const t = readText(fs, files[i], true), lines = t && t.slice(0, -1).split('\n');
-        if (!lines) return null;
-        let j = 1;
-        while (j < lines.length && lines[j].startsWith('{"l":')) j++;
-        return textOf([JSON.parse(lines[0]), ...headsOf(s, n, p)]) + (j < lines.length ? `${lines.slice(j).join('\n')}\n` : '');
+        const t = readText(fs, files[i], true);
+        if (!t) return null;
+        const h = t.indexOf(10) + 1;
+        let j = h;
+        while (j < t.length && t.subarray(j, j + L.length).equals(L)) j = t.indexOf(10, j) + 1;
+        return Buffer.concat([t.subarray(0, h), Buffer.from(textOf(headsOf(s, n, p)), 'utf8'), t.subarray(j)]);
       });
       if (!texts.includes(null)) {
-        texts.forEach((t, i) => { if (k.h[i] !== sha(t)) putFile(fs, files[i], gzipSync(Buffer.from(t, 'utf8'))); });
+        texts.forEach((t, i) => { if (k.h[i] !== sha(t)) putFile(fs, files[i], gzipSync(t)); });
         W.packs[n] = { ...k, tag: tagOf(texts[0], texts[1]), h: texts.map(sha) };
         continue;
       }
@@ -275,18 +285,18 @@ export function writeFiles(ctx, s) {
     // a pack sealed before this worker and unchanged since: its files, when whole
     let texts = first && !d.packs.has(n) && !d.relabel.has(n) ? files.map((f) => readText(fs, f, true)) : null;
     if (!texts || texts.includes(null)) {
-      texts = PARTS.map((p) => render(s, n, p, false, n >= W.open ? W.memo : null).text);
-      texts.forEach((t, i) => { if (k ? k.h[i] !== sha(t) : readText(fs, files[i], true) !== t) putFile(fs, files[i], gzipSync(Buffer.from(t, 'utf8'))); });
+      texts = PARTS.map((p) => render(s, n, p, false, n >= W.open ? W.memo : null).buf);
+      texts.forEach((t, i) => { if (k ? k.h[i] !== sha(t) : !same(readText(fs, files[i], true), t)) putFile(fs, files[i], gzipSync(t)); });
     }
     W.packs[n] = { n, s0: spans[n][0], s1: spans[n][1], tag: tagOf(texts[0], texts[1]), h: texts.map(sha) };
   }
   const fresh = (part) => {
-    const { text, wrote } = render(s, N, part, true, W.memo), file = tailFile(home, id, part);
-    if (readText(fs, file, false) !== text) putFile(fs, file, Buffer.from(text, 'utf8'));
-    W.tails[part] = { size: Buffer.byteLength(text), defs: wrote };
+    const { buf, wrote } = render(s, N, part, true, W.memo), file = tailFile(home, id, part);
+    if (!same(readText(fs, file, false), buf)) putFile(fs, file, buf);
+    W.tails[part] = { size: buf.length, defs: wrote };
   };
   const upTo = upToOf(s);
-  if (N !== W.open) W.memo = { steps: new Map(), defs: new Map() }; // the sealed span's steps let go
+  if (N !== W.open) W.memo = lru(MEMO_BYTES); // the sealed span's steps let go
   if (first || N !== W.open || !W.tails) { W.tails = {}; for (const p of PARTS) fresh(p); }
   else appendTails(s, W, d, N, upTo, fs, (part) => tailFile(home, id, part), fresh);
   W.rec = upTo; W.open = N; W.f = log.frontier;
