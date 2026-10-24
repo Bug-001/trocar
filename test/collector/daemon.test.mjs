@@ -38,6 +38,9 @@ import { readManifest, saveManifest, PHASES } from '../../src/off/manifest.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { harnessOf } from '../../src/dissect/harnesses.mjs'
+import { workerFork } from '../helpers/worker-fork.mjs'
+import { foldLogFile } from '../../src/query/fold-log.mjs'
+import { recordId } from '../../src/collector/core/record/segments.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const UID = process.getuid()
@@ -176,6 +179,55 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
     assert.equal(after.trim().split('\n').length, 2, 'the first call and the one that was in flight when off came')
     await until(() => flowsOf(s).some((f) => f.decision === 'decrypt' && f.agent === 'claude-code' && f.pid === 4242))
   } finally { await d.stop(); up.close(); p.done(); s.done() }
+})
+
+// 3.5 #32 (§后台抽取与归约 kick, D63 ①): a session is folded as it is captured. The real daemon records LLM calls of one session and
+// nobody queries; the index keeper kicks the query service with the session's key, the worker it forks folds each call into the
+// session's fold log, and leaves once the kicks stop (its idle clock is the daemon's, restarted by every kick).
+test('daemon: every captured LLM call of a session is folded with no query at all, and the kicked worker then leaves (3.5 #32)', { timeout: 60000 }, async () => {
+  const s = sandbox(); const p = fakeProc(); const up = await relay()
+  const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
+  fs.mkdirSync(path.join(s.home, '.claude'))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
+  await install(s)
+  const { arch, clients } = fakeArch(p)
+  const forks = []
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, upstreamCa: up.ca.certPem,
+    queryIdleMs: 1500, fork: (...a) => { const c = workerFork(...a); forks.push(c); return c } })
+  let c = null
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    p.add(4343, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4343, pid: 4343, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4343 && a.trusted))
+    const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
+    await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4343, decrypt: 1 })
+    c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') }); await once(c, 'secureConnect')
+    const sid = '6a1b7c2d-0000-4000-8000-000000000032'
+    const send = (text) => new Promise((resolve) => {
+      const body = JSON.stringify({ model: 'claude-x', max_tokens: 16, system: [{ type: 'text', text: 'You are a test.' }], messages: [{ role: 'user', content: [{ type: 'text', text }] }] })
+      let reply = ''
+      const onData = (x) => { reply += x; if (reply.endsWith(REPLY)) { c.off('data', onData); resolve(reply) } }
+      c.on('data', onData)
+      c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test:${up.port}\r\nanthropic-version: 2023-06-01\r\nx-claude-code-session-id: ${sid}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`)
+    })
+    const rawDir = path.join(s.home, '.trocar', 'raw')
+    const trocar = path.join(s.home, '.trocar')
+    const frontier = () => { // the last frontier line of the session's fold log: the call the reduction reached (4.3 §4)
+      let t = ''; try { t = fs.readFileSync(foldLogFile(trocar, sid), 'utf8') } catch { return null }
+      const fs_ = t.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l) } catch { return null } }).filter((l) => l && 'f' in l)
+      return fs_.length ? fs_[fs_.length - 1].f : null
+    }
+    for (let n = 1; n <= 3; n++) {
+      await send(`trocar-fold-${n}`)
+      const segment = path.basename(await until(() => fs.readdirSync(rawDir).find((f) => f.endsWith('.ndjson'))), '.ndjson')
+      const lines = await until(() => { const t = fs.readFileSync(path.join(rawDir, `${segment}.ndjson`), 'utf8'); return t.includes(`trocar-fold-${n}`) && t.trim().split('\n').length })
+      await until(() => frontier() === recordId(segment, lines), 20000) // folded as captured: no query was asked
+    }
+    assert.ok(forks.length >= 1, 'the kicks forked a worker')
+    const last = forks[forks.length - 1] // the service takes its listeners away when it ends it, so its exit is read off the handle
+    await until(() => last.exitCode !== null || last.signalCode !== null, 20000)
+  } finally { if (c) c.destroy(); await d.stop(); up.close(); p.done(); s.done() }
 })
 
 // The READ side of the same slice, through `trocar query` on its default paths: a real daemon records one

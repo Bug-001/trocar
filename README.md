@@ -197,8 +197,13 @@ Reading the records across sessions is `trocar query <name>` — the one core th
 the board is the HTTP shell (D59); there is no separate ETL step and no database to load. Both go through the
 daemon's query worker, which stays warm and keeps the segment index current as it captures, so a query about a
 session you are looking at answers in milliseconds; the board's answers come gzipped. The worker stays warm while
-someone asks (an open board asks every 1.5 s) and leaves after two minutes with nothing asked, giving its memory back;
-the next query starts a new one. The worker keeps the segment index's rows in a compact form outside its JavaScript
+someone asks (an open board asks every 1.5 s) and leaves two minutes after the last query or newly captured model
+call, giving its memory back; the next query starts a new one. While the daemon captures, it hands the worker each batch
+of newly captured model calls, and the worker reads them, and works out their sessions itself, in the background at low
+priority, so a running session of any harness is already read when you open it. The cost: while an agent is being
+captured the worker stays resident — on the user's 23k-call session about 285 MB between calls, 578 MB right after a
+first read, against a 160 MB target that is not met yet — and the first new call of a session that was never read
+starts its whole first read in the background (about a minute on that session). The worker keeps the segment index's rows in a compact form outside its JavaScript
 heap, so how much of a session it can read barely shrinks as the capture home grows. A session is read call by call:
 each call is taken apart once into a context file beside the index, and the session's summary rows are
 written to a second file as they are worked out, so reopening a session reads those two files and does not take the
@@ -213,8 +218,11 @@ the resources it holds. When those do not all fit in the 1 MB page beside the st
 names the rest: `--ledger <ledger_next>` gives the next part, until `ledger_next` is null. `trocar query block --ref <ref>` opens one block's verbatim bytes; give `--ref` more than
 once to get several in one answer, in the order asked (a ref that cannot be read says why in `errors`).
 A session the worker has not finished reading answers at once with what it has, and says how far it got
-(`pending: {done, total}`); the worker reads on in the background, and the CLI asks again until the answer is
-complete (it reads the records itself if the worker stops making progress). The first open of a very large session
+(`pending: {done, total, work}`, where `work` counts what the worker has read and folded so far and grows while it
+works, even when `done` cannot move yet); the worker reads on in the background, and the CLI asks again until the answer is
+complete (it reads the records itself if the worker stops making progress for 5 s, or no daemon runs). When no worker is
+running yet, a read is answered at once from what is already on disk; a session the worker must still read is
+not read a second time beside it: the CLI waits on the worker instead. Without `--json`, the CLI says on stderr when it waits on the worker and when it answers by itself, and why; with `--json`, stderr stays empty. The first open of a very large session
 takes a while: about 4 minutes in the background for a 16k-call session, during which the board shows it filling
 in. The worker's memory is bounded: a session too large for it shows its newest calls that fit and says so
 (**Showing only the latest N / M calls (file X MB)**); a cut session always shows at least half of what fits, and

@@ -34,7 +34,8 @@ export const DEBOUNCE_MS = 1_000 // one pass per burst; the tail a query may sti
 export const CHUNK_BYTES = KEEPER_CHUNK_BYTES // ~15 ms of parsing per turn of the event loop (a macOS machine: ~260 MB/s)
 
 /**
- * createIndexKeeper({ home, failure }) → { wrote, flush, pause, idle, stop }
+ * createIndexKeeper({ home, failure, kick }) → { wrote, flush, pause, idle, stop }
+ *   kick(ids):       after each debounced pass, the record ids of the model calls it indexed (once, never thrown onto the write path).
  *   wrote(segment):  a record was appended there (called from the store's write path: it must stay trivial).
  *   flush(segment):  index it fully, and never touch it again — the segment is closed. → the chain's promise.
  *   handOff(segment): give its index to the sealer NOW — a pass in flight stops before its next write (seal-queue's
@@ -45,7 +46,7 @@ export const CHUNK_BYTES = KEEPER_CHUNK_BYTES // ~15 ms of parsing per turn of t
  *                    after that this keeper has written its last byte. The daemon's stop awaits it.
  * `index` / `debounceMs` / `chunkBytes` are test seams.
  */
-export function createIndexKeeper({ home, failure = () => {}, index = segmentIndex, debounceMs = DEBOUNCE_MS, chunkBytes = CHUNK_BYTES }) {
+export function createIndexKeeper({ home, failure = () => {}, kick = () => {}, index = segmentIndex, debounceMs = DEBOUNCE_MS, chunkBytes = CHUNK_BYTES }) {
   const pending = new Set()   // segments with appended bytes that may not be in their index yet
   const handed = new Set()    // segments flushed at close: the sealer's child owns their index from then on
   const given = new Set()     // handed over WHILE a pass may be in flight: that pass MUST stop before it writes again
@@ -62,8 +63,15 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
     timer.unref() // the index is a cache: it never keeps the process alive
   }
 
+  // The pass's kick (3.5 §后台抽取与归约, D63 ①): the record ids of the model calls this pass indexed from the facts it was
+  // handed, once per pass, so the query worker folds their sessions as they are captured. Which session a record is in is the
+  // worker's to say (sessionGroups, the synthesized keys included): nothing here parses a body, knows a session or computes a
+  // query. A scan pass (no facts) kicks nothing; the next query folds what it indexed.
   async function drain() {
-    for (const segment of pending) { pending.delete(segment); await catchUp(segment) }
+    const ids = []
+    for (const segment of pending) { pending.delete(segment); await catchUp(segment, ids) }
+    if (!ids.length || stopped) return
+    try { kick(ids) } catch { /* the kick is a hint: a query folds the same members */ }
   }
 
   // Measurement seam for scripts/perf-capture.mjs (D62): nothing is installed unless that script set the hook, so
@@ -77,7 +85,7 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
 
   // One segment, chunk by chunk, until its index covers every complete line it has. A failure is the daemon's to
   // report (D38); the answer stays correct, because the next query builds what is missing and says `index-cold`.
-  async function catchUp(segment) {
+  async function catchUp(segment, ids = null) {
     while (!stopped && !given.has(segment)) {
       let r
       // What this pass already knows: the entries of the lines written since the last one. Taken away before the
@@ -85,6 +93,7 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
       // pass's mark); a pass that fails or that has to scan simply leaves that list empty, and the scan is the truth.
       const entries = fresh.get(segment) || null
       fresh.delete(segment)
+      if (ids && entries) for (const { entry } of entries) if (entry.is_llm && !entry.log_only) ids.push(entry.id)
       try { r = await measured(() => index({ home, segment, maxBytes: chunkBytes, owner: true, entries })) } catch (e) {
         indexFailed(segment, `keeping the index of ${segment} current failed (${String((e && e.message) || e)})`)
         return

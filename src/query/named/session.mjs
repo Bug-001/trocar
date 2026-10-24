@@ -184,6 +184,8 @@ async function indexed({ home, fs, once }) {
   if (once) once.index = got;
   return got;
 }
+// A hand-off lets the read-only store go: the worker writes the members it lacks, which a store opened before cannot see.
+function letGo(k, e) { const s = stores.get(k), st = states.take(k); if (st) closeState(st); stores.delete(k); frontiers.delete(k); if (s) s.close(); return e; }
 // The projection store of a session, open across requests (the least recently used closed past STORES). What opening it said (a
 // rebuild) stays with the store (`opened`) until the next answer of that session says it, whoever opened it: a background slice
 // has no caller to tell.
@@ -194,6 +196,7 @@ function storeOf(ctx, id, k) {
   const opened = [];
   s = openProjection({ home: ctx.home, fs: ctx.fs, key: id, write: ctx.writer === true, errors: opened });
   s.opened = opened;
+  s.work = 0; // members extracted and handed to a reduction while the store lives: `pending.work` (3.5 §会话读)
   stores.set(k, s);
   for (const [kk, v] of stores) { if (stores.size <= STORES) break; stores.delete(kk); const st = states.take(kk); if (st) closeState(st); frontiers.delete(kk); v.close(); }
   return s;
@@ -346,7 +349,7 @@ function fold(s, plan, F, ms) {
       for (; s.fc < end && want.length < BATCH; s.fc++) { const r = plan.members[s.fc], rid = String(r.id); if (inCut(plan, r) && !s.R.has(rid)) want.push(rid); }
       if (!want.length) continue;
       const rest = s.R.add(want, { budgetMs: ms - (performance.now() - t0) });
-      s.n += want.length - rest.length; added = true;
+      s.n += want.length - rest.length; s.store.work += want.length - rest.length; added = true;
       if (s.writer && s.target == null && s.n - s.saved >= Math.max(SAVE_MIN, s.n / SAVE_PART)) sidecars(s.store);
       if (rest.length) { s.fc = posOf(plan, rest[0]); return; }
     }
@@ -372,10 +375,20 @@ function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress
   st.resolve = resolve;
   st.hook = (rid) => { progress(); bounded(meter, ++meter.n, (plan.byId.get(rid) || {}).stored_bytes || 0); };
   const now = st.target == null || (!(ctx.writer === true && request) && pastOf(plan, st.target, F));
-  try { if (foldMs > 0 && now) fold(st, plan, F, foldMs); } catch (e) { closeState(st); throw e; }
+  try {
+    if (foldMs > 0 && now && ctx.handOff && ctx.writer !== true && (st.target != null || unfolded(st, plan, F))) throw new HandOff(id);
+    if (foldMs > 0 && now) fold(st, plan, F, foldMs);
+  } catch (e) { closeState(st); throw e; }
   errors.push(...st.sink.splice(0));
   st.cost = costOf(st, plan.perRow);
   return st;
+}
+// Whether a reduction (target null) has a member of the cut before `F` still to take.
+const unfolded = (st, plan, F) => { for (let i = st.fp === plan ? st.fc : 0; i < F; i++) { const r = plan.members[i]; if (inCut(plan, r) && !st.R.has(String(r.id))) return true; } return false; };
+/** Thrown on the local path when `ctx.handOff` is set and this read would extract or fold a member (3.5 §谁执行它): the caller asks
+ *  the daemon's worker, which is building it, instead of building it a second time beside it. */
+export class HandOff extends Error {
+  constructor(id) { super(`session ${id}: its projection or fold log does not cover every member yet`); this.name = 'HandOff'; this.code = 'hand-off'; }
 }
 // What a kept state weighs: its calls and its store's blocks, the store's, the reduction's and the log's caches, its kept lane ledgers.
 const costOf = (st, perRow) => Math.max(st.n, st.cols.order.length) * perRow + st.store.defCount * SPINE_PER_BLOCK + CACHES;
@@ -391,9 +404,11 @@ async function advance(ctx, id, { budgetMs, request }) {
   if (request) errors.push(...store.opened.splice(0));
   // extraction errors are the member's own (its row says why, on every answer), not this request's
   const read = (rs) => { progress(); return recordsAt({ home: ctx.home, fs: ctx.fs, rows: rs.filter(Boolean), errors: [], remember: false }); };
-  const exErrors = [], from = planOf(members, k, store, id).ex;
+  const exErrors = [], from = planOf(members, k, store, id).ex, had = store.rows.size;
+  if (ctx.handOff && ctx.writer !== true) for (let i = from; i < members.length; i++) if (!store.rows.has(String(members[i].id))) throw letGo(k, new HandOff(id));
   const ex = extractMembers({ store, members, recordsAt: read, sessionId: id, budgetMs: request ? budgetMs : Math.max(1, budgetMs / 2 - (performance.now() - t0)), errors: exErrors, from });
   passed(planOf(members, k, store, id), ex.done);
+  store.work += store.rows.size - had;
   persisted(ctx, exErrors);
   errors.push(...exErrors);
   // a background slice: extraction has half of it, the fold at least the other half, so the frontier moves from the first slice
@@ -422,6 +437,7 @@ async function advance(ctx, id, { budgetMs, request }) {
     return b;
   };
   for (;;) {
+    keeping = true; // a HeapBound retry keeps what it reads again
     const plan = planOf(members, k, store, id);
     const box = { old: states.take(k) };
     const release = hold(plan.work);
@@ -431,6 +447,7 @@ async function advance(ctx, id, { budgetMs, request }) {
       frontiers.set(k, markOf(st.log));
       if (usedHeap() > heapCeiling() && liveHeap() > heapCeiling()) { closeState(st); throw new HeapBound(st.n); }
     } catch (e) {
+      if (e instanceof HandOff) throw letGo(k, e);
       if (!(e instanceof HeapBound)) throw e;
       // the measured bound: the rows the stopped fold got through fill the room, never fewer than half those asked for, the cost
       // rounded up to a quarter power of two (3.5 §内存有界); the stopped state is closed and garbage by now
@@ -459,7 +476,8 @@ export async function extendSession(ctx, id, budgetMs) {
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the
  *  session after this request's slice (the local path: everything), read from its fold log at the reduction frontier `mark` (V:
  *  src/query/session-doc.mjs viewOf, its columns synced to that frontier), `pending:
- *  {done, total}` while members are above the mark (`done` = the members at or below it), the cut. `errors`: the index's problems
+ *  {done, total, work}` while members are above the mark (`done` = the members at or below it; `work` = the store's members
+ *  extracted and handed to a reduction so far, a rebuild's included), the cut. `errors`: the index's problems
  *  and the store's notes. The state stays warm. */
 export async function sessionState(ctx, id) {
   const r = await advance(ctx, String(id), { budgetMs: ctx.writer === true ? SLICE_MS : Infinity, request: true });
@@ -473,7 +491,7 @@ export async function sessionState(ctx, id) {
   const V = st.view.V, done = mark == null ? 0 : posOf(plan, mark) + 1;
   let above = ex.done < ex.total;
   for (let i = done; !above && i < members.length; i++) above = inCut(plan, members[i]);
-  return { id: String(id), rows: members, store: st.store, mark, pending: above ? { done, total: members.length } : null,
+  return { id: String(id), rows: members, store: st.store, mark, pending: above ? { done, total: members.length, work: st.store.work } : null,
     truncated: plan.bound, V, failed: V.failed, errors, st, plan };
 }
 

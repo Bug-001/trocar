@@ -39,6 +39,8 @@ export const CRASH_COOLDOWN_MS = 60_000
 /** The longest that cool-down grows: a fold that never fits then costs at most four cold forks an hour, and a condition that
  *  went away (the session stopped growing, memory came back) is still tried again within a quarter of an hour. */
 export const FAILURE_BACKOFF_MAX_MS = 15 * 60_000
+/** The subject a worker's death is remembered by when it died with no request in flight: on what kicks gave it. */
+const KICK = 'kick'
 const coolOf = (ep) => Math.min(CRASH_COOLDOWN_MS * 2 ** (ep.n - 1), FAILURE_BACKOFF_MAX_MS)
 /** What a failure is remembered by: the name and every parameter but the window (stable key order). */
 const subjectOf = (name, params = {}) => `${name} ${JSON.stringify(Object.keys(params).filter((k) => !WINDOW_PARAMS.includes(k)).sort().map((k) => [k, Array.isArray(params[k]) ? params[k].map(String) : String(params[k])]))}`
@@ -165,12 +167,13 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
       // a D38 record the worker owes (4.3 盘满 `projection-write-failed`): written here, where the daemon's records are
       if (m.failure && typeof m.failure.code === 'string') failure('daemon', Object.assign(new Error(String(m.failure.reason)), { code: m.failure.code }))
     })
-    c.on('error', (e) => { if (child === c) { const why = `the query worker could not be started: ${e.message}`; fault(pending && pending.subject, why); drop(why) } })
+    c.on('error', (e) => { if (child === c) { const why = `the query worker could not be started: ${e.message}`; fault(pending ? pending.subject : KICK, why); drop(why) } })
     c.on('close', (code, signal) => { // 'close', not 'exit': every byte it wrote to stdout and stderr has been read by then
       if (child !== c) return
       const said = stderrReason()
       const reason = `the query worker exited (${signal ? `signal ${signal}` : `code ${code}`})${said ? `: ${said}` : ''}`
-      fault(pending && pending.subject, reason)
+      // with no request in flight it died on what a kick gave it: that episode is the kick's, so a crashing fold is not re-forked by every kick
+      fault(pending ? pending.subject : KICK, reason)
       drop(reason)
     })
     return c
@@ -265,7 +268,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
 
   /** Fork a worker and give it this very query, with nobody waiting for the answer: the next query finds it warm. */
   const warmUp = (line, name, subject) => {
-    if (cooling(subject)) return // nothing to warm a cooling subject with: the cold caller reads locally all the same
+    if (cooling(subject)) return // nothing to warm a cooling subject with (the route already answered it 500)
     enqueue(name, () => run(line, SINK, deadlineMs, name, subject)).catch(() => {})
   }
 
@@ -285,17 +288,32 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     }
   }
 
+  /** The idle clock, (re)started when nothing is queued or in flight: the worker leaves idleMs after the last request or kick. */
+  const idleClock = () => {
+    clearTimeout(idle)
+    if (asked || !child) return
+    idle = setTimeout(() => { if (!asked) drop('the query worker was idle') }, idleMs)
+    idle.unref?.()
+  }
+
   /** Every request is counted from the moment it is queued until it is answered or failed; at none, the idle clock starts. */
   const counted = (task) => {
     asked++
     clearTimeout(idle)
-    const done = () => {
-      if (--asked || !child) return
-      idle = setTimeout(() => { if (!asked) drop('the query worker was idle') }, idleMs)
-      idle.unref?.()
-    }
+    const done = () => { --asked; idleClock() }
     task.then(done, done)
     return task
+  }
+
+  /** The index keeper's kick (3.5 §后台抽取与归约): the record ids of model calls just indexed, handed to the worker (forked if there
+   *  is none), which folds their sessions at low priority. One IPC line: this process parses no body, knows no session, computes nothing. A worker that dies with no request
+   *  in flight opens an episode of subject KICK, and while it cools no kick forks; after stop() a kick does nothing. */
+  let stopped = false
+  const kick = (ids) => {
+    if (stopped || !Array.isArray(ids) || !ids.length || cooling(KICK)) return
+    const c = child || start()
+    if (c.connected) c.send({ kick: ids.map(String) }, () => {}) // a send that fails is the worker's close, which says it
+    idleClock()
   }
 
   /** Hand `line` to the worker (forked if there is none: run() starts it) and let its frame flow into `res`. */
@@ -326,13 +344,18 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     if (!QUERY_NAMES.includes(name)) throw Object.assign(new Error(`trocar query: no query called ${JSON.stringify(name)} (names: ${QUERY_NAMES.join(', ')})`), { status: 400 })
     const params = paramsOf(query, ['name', 'indent'])
     const line = lineOf(name, params, query.get('indent') || 0)
+    const subject = subjectOf(name, params)
+    // A cooling subject is answered 500 with its episode's reason, worker or not (3.5 #12, #20): a 503 would make the
+    // caller wait on a worker that the cool-down never forks.
+    const ep = cooling(subject)
+    if (ep) throw new Error(ep.reason)
     if (!child) { // the cold path: answered at once, warmed behind the answer (see the head of this file)
-      warmUp(line, name, subjectOf(name, params))
+      warmUp(line, name, subject)
       res.writeHead(503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(NO_WORKER) })
       res.end(NO_WORKER)
       return undefined
     }
-    return answer(line, res, deadlineMs, name, subjectOf(name, params))
+    return answer(line, res, deadlineMs, name, subject)
   }
 
   /** The board's `GET /api/<name>` (4.4, D66): the same frame path, but the board has no local path to fall back to,
@@ -347,5 +370,5 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   /** Fork a worker (if there is none) and run this query with nobody waiting: the board's page load warms it (4.4). */
   const warm = ({ name, params = {} }) => warmUp(lineOf(name, params), name, subjectOf(name, params))
 
-  return { route, relay, control, warm, path: QUERY_PATH, stop: () => { clearInterval(statsTimer); statsTimer = null; drop('the daemon is stopping') } }
+  return { route, relay, control, warm, kick, path: QUERY_PATH, stop: () => { stopped = true; clearInterval(statsTimer); statsTimer = null; drop('the daemon is stopping') } }
 }
