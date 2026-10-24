@@ -55,8 +55,9 @@ export function createSealWriter({ fd, fs = nodeFs, frameBytes = FRAME_BYTES } =
   const splice = newBuf(KIND_SPLICE);
   const seen = new Map();               // sha256 of a chunk → [frame, offset]
 
-  // line: the record's exact bytes INCLUDING its "\n" (if any). Chunk buffers keep references to it until their frame
-  // is written, so callers MUST NOT reuse the buffer.
+  // line: the record's exact bytes INCLUDING its "\n" (if any). A chunk buffer keeps a view of the line until its frame is
+  // written, so callers MUST NOT reuse the buffer; a line whose new bytes are under half of it is copied instead, so a
+  // buffer that fills slowly does not pin hundreds of mostly-reused lines.
   function add(line, { id = null, stream, shard = 0, lineNo, unparseable = false, group = '' }) {
     const idx = records.length;
     const sofar = through.get(group) || 0;
@@ -102,10 +103,13 @@ export function createSealWriter({ fd, fs = nodeFs, frameBytes = FRAME_BYTES } =
         if (e < n) at[e] = null;
         j = e;
       }
+      let fresh = 0;
+      for (let j = 0; j < n; j++) if (!at[j]) fresh += size(j);
+      const own = fresh * 2 < line.length ? (x) => Buffer.from(x) : (x) => x;
       for (let j = 0; j < n; j++) {
         const a = at[j] === MINE ? seen.get(hs[j]) : at[j];
         if (a) { range(a[0], a[1], size(j)); continue; }
-        const off = append(buf, line.subarray(cuts[j], cuts[j + 1]));
+        const off = append(buf, own(line.subarray(cuts[j], cuts[j + 1])));
         seen.set(hs[j], [buf.frame, off]);
         range(buf.frame, off, size(j));
       }
