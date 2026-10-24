@@ -17,8 +17,9 @@ test('the fixture holds exactly the answers 3.5 §会话读 lists', () => {
   assert.deepEqual(Object.keys(doc).sort(), names.sort())
 })
 
-test('every answer carries the common keys', () => {
-  for (const [k, a] of Object.entries(doc)) {
+test('every answer carries the common keys (an NDJSON answer: on its first line, the doc head)', () => {
+  for (const [k, v] of Object.entries(doc)) {
+    const a = Array.isArray(v) ? v[0] : v
     assert.equal(a.schema, 2, k)
     assert.equal(typeof a.command, 'string', k)
     assert.equal(typeof a.ok, 'boolean', k)
