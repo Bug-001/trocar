@@ -224,12 +224,15 @@ function readText(fs, file, gz) {
 const same = (a, b) => !!a && a.equals(b);
 // The tail `part` of span n a worker before this one wrote, carried on by appends: whole, of the size its checkpoint says (nothing
 // was written to it after the checkpoint), its doc-head line the one a render now writes (same v, span, s0, errors); the definitions
-// it holds read back from its `{d}` lines. Else null: it is written afresh (a fresh render is as valid at any time).
+// it holds read back from its `{d}` lines. Else (a line that does not parse too) null: it is written afresh (a fresh render is as
+// valid at any time).
 function carried(s, fs, file, n, part, size) {
   const t = readText(fs, file, false), head = Buffer.from(textOf([docLine(s, n, part, true)]), 'utf8');
   if (!t || t.length !== size || !t.subarray(0, head.length).equals(head)) return null;
   const defs = new Set(), D = Buffer.from('\n{"d":');
-  for (let j = t.indexOf(D); j >= 0; j = t.indexOf(D, j + 1)) defs.add(JSON.parse(t.subarray(j + 1, t.indexOf(10, j + 1)).toString('utf8')).d.bid);
+  try {
+    for (let j = t.indexOf(D); j >= 0; j = t.indexOf(D, j + 1)) defs.add(JSON.parse(t.subarray(j + 1, t.indexOf(10, j + 1)).toString('utf8')).d.bid);
+  } catch { return null; }
   return { size, defs };
 }
 // first place in lane L whose step does not sort before (ts, rid)
@@ -284,7 +287,7 @@ export function writeFiles(ctx, s) {
     try { c = !W && f >= 0 ? JSON.parse(parts['w.t'][0]) : null; } catch { /* no checkpoint: afresh */ }
     if (c && c.ax === ax) {
       const got = PARTS.map((p, i) => carried(s, fs, tailFile(home, id, p), N, p, c.size?.[i]));
-      if (got.some(Boolean)) tails = Object.fromEntries(PARTS.map((p, i) => [p, got[i] || { size: -1, defs: new Set() }])); // −1: afresh
+      if (got.some(Boolean)) tails = Object.fromEntries(PARTS.map((p, i) => [p, got[i] || { size: NaN, defs: new Set() }])); // NaN: no size, a missing file's −1 neither, is it: afresh
     }
     W = { ax, f, open: N, packs: [], tails, rec: tails ? c.rec : 0, files: null, memo: lru(MEMO_BYTES), sp: [] };
     writers.set(log, W);

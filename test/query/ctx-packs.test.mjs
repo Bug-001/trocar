@@ -96,10 +96,11 @@ const until = (ok, ms, what) => { let t; return within(new Promise((d) => { t = 
 const tryHead = (h) => { try { return headOf(h) } catch { return null } }
 
 // A tail applied as a client applies it (later lines for the same key override earlier ones): per rid its latest row and its
-// latest step with the list its ops rebuild against the parent's list (the parent's latest line before it in the file), per bid its
-// definition, per lane its header, per member its record, per failed member its failure; `g` drops a rid.
+// latest step with the list its ops rebuild against the parent's list (the parent's latest line before it in the file), per bid a
+// kept step refers to its definition (one written for a step since gone stays: the tail only appends), per lane its header, per
+// member its record, per failed member its failure; `g` drops a rid.
 function applied(text) {
-  const rows = new Map(), steps = new Map(), lists = new Map(), defs = new Map(), heads = new Map(), recs = new Map(), fails = new Map()
+  const rows = new Map(), steps = new Map(), lists = new Map(), uses = new Map(), defs = new Map(), heads = new Map(), recs = new Map(), fails = new Map()
   for (const o of linesOf(text).slice(1)) {
     if (o.c) rows.set(o.c.rid, JSON.stringify(o.c))
     else if (o.d) defs.set(o.d.bid, JSON.stringify(o.d))
@@ -112,10 +113,11 @@ function applied(text) {
       const list = s.ops.flatMap((op) => (op[0] === 0 ? P.slice(op[1], op[1] + op[2]) : op.slice(1)))
       lists.set(s.rid, list)
       steps.set(s.rid, JSON.stringify({ lane: s.lane, i: s.i, list, reply: s.reply, detail: s.detail, events: s.events }))
-    } else if (o.g) { rows.delete(o.g); steps.delete(o.g) }
+      uses.set(s.rid, [...list, ...s.reply])
+    } else if (o.g) { rows.delete(o.g); steps.delete(o.g); uses.delete(o.g) }
   }
-  const of = (m) => Object.fromEntries([...m].sort())
-  return { rows: of(rows), steps: of(steps), defs: of(defs), heads: of(heads), recs: of(recs), fails: of(fails) }
+  const of = (m) => Object.fromEntries([...m].sort()), used = new Set([...uses.values()].flat())
+  return { rows: of(rows), steps: of(steps), defs: of([...defs].filter(([bid]) => used.has(bid))), heads: of(heads), recs: of(recs), fails: of(fails) }
 }
 
 test('3.5 #33 A7: per sealed span gunzip(file) = the worker\'s `lane --pack` = the local path\'s; the worker\'s `lane --tail` = the tail file, the local one apply-equal to it', { timeout: 600_000 }, async () => {
@@ -331,6 +333,12 @@ test('3.5 §会话读 {l}: a sealed pack is not rewritten when its lanes grow on
 
 test('3.5 §谁执行它「答案文件」: a worker that starts again continues the tails the last one wrote — the board\'s held bytes stay the file\'s first bytes; the tail applies to a one-pass rendering', { timeout: 600_000 }, async () => {
   const home = homeOf(), s = bigSession({ home, wire: 'http', ...SHAPE }), tails = () => ['main', 'rest'].map((p) => fs.readFileSync(path.join(sessionDir(home, s.id), `open.${p}.ndjson`)))
+  const onePass = async (part, file) => { // the tail file: the doc-head line a one-pass rendering's, applying to it
+    const local = (await runQuery('lane', { id: s.id, tail: part }, { home })).$text, text = file.toString('utf8')
+    assert.equal(local.slice(0, local.indexOf('\n')), text.slice(0, text.indexOf('\n')), `tail ${part}: the doc-head line is a one-pass rendering's`)
+    assert.deepEqual(applied(text), applied(local), `tail ${part}: applies to the one-pass rendering`)
+    assert.deepEqual(headsIn(text), headsIn(local), `tail ${part}: the last {l} of each lane is the one-pass rendering's`)
+  }
   s.append(560)
   await drive(home, s.id, { ms: 6, seed: 4 }) // worker 1, in slices (its tails appended to): its last idle save is the checkpoint
   const n = headOf({ home, id: s.id }).open.n, before = tails()
@@ -342,9 +350,14 @@ test('3.5 §谁执行它「答案文件」: a worker that starts again continues
   const after = tails()
   for (const [i, part] of ['main', 'rest'].entries()) {
     assert.ok(after[i].length > before[i].length && after[i].subarray(0, before[i].length).equals(before[i]), `tail ${part}: begins with the bytes the last worker wrote`)
-    const local = (await runQuery('lane', { id: s.id, tail: part }, { home })).$text
-    assert.equal(local.slice(0, local.indexOf('\n')), after[i].toString('utf8').slice(0, after[i].indexOf(10)), `tail ${part}: the doc-head line is a one-pass rendering's`)
-    assert.deepEqual(applied(after[i].toString('utf8')), applied(local), `tail ${part}: applies to the one-pass rendering`)
-    assert.deepEqual(headsIn(after[i].toString('utf8')), headsIn(local), `tail ${part}: the last {l} of each lane is the one-pass rendering's`)
+    await onePass(part, after[i])
   }
+  // a tail gone while no worker ran: the next worker writes it whole and carries the other on
+  fs.rmSync(path.join(sessionDir(home, s.id), 'open.rest.ndjson'))
+  s.append(40)
+  await drive(home, s.id) // a new worker, more calls, in one slice
+  assert.equal(headOf({ home, id: s.id }).open.n, n, 'no pack was sealed in between')
+  const last = tails()
+  assert.ok(last[0].subarray(0, after[0].length).equals(after[0]), 'tail main: begins with the bytes the last worker wrote')
+  for (const [i, part] of ['main', 'rest'].entries()) await onePass(part, last[i])
 })
