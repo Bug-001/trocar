@@ -154,9 +154,6 @@ export function ctxWindowUnits(s, { all = false, focus = null } = {}) {
   if (!call.rec) return [...out, { key: 'noreq', html: noRequestHtml() }] // ⑦
   if (call.unparsed) return [...out, { key: 'unparsed', html: unparsedHtml(call) }] // ⑥
   const st = s.desk ? stepOf(s.desk, call.rid) : null
-  // its lane's read failed: the K-29 sentence, Retry, the reason in the technical details — never empty frames (2.3 §读失败)
-  const why = st && !st.held && s.laneErr ? s.laneErr.get(st.lane) : null
-  if (why) return [...out, { key: 'lanefail', html: `<div class="empty" data-fail="lane">${esc(W.STEP_READ_FAILED)}<div class="emptywhy"><button type="button" class="linkbtn" data-retry="1">${esc(W.RETRY)}</button>${techDetailsHtml([['reason', why]], { id: 'lanetech' })}</div></div>` }]
   if (!st || !st.held) return [...out, { key: 'frames', html: busyFramesHtml(s, call) }]
   const flat = st.flat, keys = rowKeys(flat)
   s.curFlat = flat; s.curKeys = keys

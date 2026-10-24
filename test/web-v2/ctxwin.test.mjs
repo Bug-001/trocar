@@ -224,15 +224,3 @@ test('the real face: every main step of the demo session draws inside the whitel
   } finally { await face.close() }
 })
 
-test('2.3 §读失败 (K-29): a step whose lane read failed says so in place — Retry, the reason in the details — never empty frames', () => {
-  const desk = desk1([[blk()], [blk()]], undefined, { held: false }), s = stateOf(desk, 1)
-  assert.ok(ctxWindowUnits(s).some((u) => u.key === 'frames'), 'not held, no failure: the sized empty frames')
-  const reason = 'the worker exited (code 1)', lane = stepOf(desk, s.anchor.calls[1].rid).lane
-  s.laneErr = new Map([[lane, reason]])
-  const units = ctxWindowUnits(s), fail = units.find((u) => /data-fail="lane"/.test(u.html))
-  assert.ok(!units.some((u) => u.key === 'frames' || /aria-busy/.test(u.html)), 'no busy frame stands in for the failure')
-  assert.ok(fail && /data-retry=/.test(fail.html), 'the failure carries Retry')
-  assert.ok(fail.html.includes(reason), 'the reason is in the window')
-  s.laneErr = new Map([['another lane', reason]])
-  assert.ok(ctxWindowUnits(s).some((u) => u.key === 'frames'), "another lane's failure is not this step's")
-})

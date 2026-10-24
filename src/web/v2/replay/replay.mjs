@@ -47,8 +47,6 @@ import { readFailure } from '../core/ui.mjs'
 
 const POLL_MS = INTERVAL.session
 const BUSY_MS = 150 // 2.3 §车道未到手: how long a step whose lane is not held leaves the desk as it is
-const SLICE_MS = 8 // 2.3 §读与画: an answer is applied in slices of at most this long, yielding between them
-const SLICE_ROWS = 100
 
 // the desk's own head: the session head (title · chip · 项目 · 跟随最新 · ⓘ) and the quiet 会话保真行 under it (1.2 §会话头).
 // No statistic and no banner ever lives here: the numbers are behind ⓘ, a failed read says so in the content area.
@@ -92,7 +90,7 @@ export function playheadSig(s, frame = 'rows') {
   const ref = a && s.diffRef != null ? a.calls[s.diffRef] : null
   return JSON.stringify([a && a.id, c, frame, st && st.held ? [st.flat.map((b) => b.bid), st.reply, st.detail] : null,
     ref ? ref.rid : null, [...(s.openBlocks || [])].sort(), [...(s.navOpen || [])].sort(), s.viewPin ? s.viewPin.resKey : null,
-    !!s.pricing, s.pricingErr || null, (st && s.laneErr && s.laneErr.get(st.lane)) || null, s.bodyFail ? s.bodyFail.size : 0])
+    !!s.pricing, s.pricingErr || null, s.bodyFail ? s.bodyFail.size : 0])
 }
 
 // 2.3 §车道未到手: a step whose lane is held draws its rows; one that is not keeps the desk as it is for BUSY_MS from `since`
@@ -119,22 +117,6 @@ const yieldNow = () => (globalThis.scheduler && typeof globalThis.scheduler.yiel
   : typeof MessageChannel === 'function' ? new Promise((r) => { const c = new MessageChannel(); c.port1.onmessage = () => { c.port1.close(); r() }; c.port2.postMessage(0) })
     : new Promise((r) => setTimeout(r, 0)))
 const frame = (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16))
-
-// a session answer as slices whose application in order equals applying it whole (2.3 §读与画: ≤ SLICE_MS of main-thread work each).
-// The first slice is the answer itself with its first rows (a delta's `gone` and `lanes_gone` go with it: they never name a lane or row
-// another slice brings); the rest are deltas on its mark. An older (--before) page slices into older pages. A delta while a big
-// session is read for the first time brings a thousand rows and more (2.3 归约前沿), so it is sliced like a full answer.
-export function slicesOf(a, before) {
-  const calls = a.calls || []
-  if (calls.length <= SLICE_ROWS) return [a]
-  const out = []
-  for (let i = 0; i < calls.length; i += SLICE_ROWS) {
-    const part = calls.slice(i, i + SLICE_ROWS), rids = new Set(part.map((r) => r.rid))
-    const events = (a.events || []).filter((e) => rids.has(e.rid))
-    out.push(i === 0 || before ? { ...a, calls: part, events } : { ...a, base: a.mark, calls: part, events, gone: [], lanes_gone: [] })
-  }
-  return out
-}
 
 const SCROLLED = ['#ctxwin', '#ctxnav', '#resexp', '#rawpanel', '#rails'] // scroll positions a detached node loses
 const keyOf = (route) => route.project + '::' + route.id
@@ -165,7 +147,7 @@ function openDesk(ctx, route0) {
     navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
     railsFolded: typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches, rpOpen: false,
     gap: null, totals: null, errNote: null, lastPhSig: null, unheld: null, notListed: false, goodKey: null, goodAt: null, staleErr: null,
-    laneErr: new Map(), bodyFail: new Map(), // a step read that failed: lane key → reason, ref → its failed body (2.3 §读失败)
+    bodyFail: new Map(), // a body read that failed: ref → its failed body (2.3 §读失败)
   })
   const s = {
     ctx: { ...ctx, api: areaApi }, root, dead: false, project: route0.project, id: route0.id, initialStep: hasStep(route0) ? stepParam(route0.params.step).step : null,

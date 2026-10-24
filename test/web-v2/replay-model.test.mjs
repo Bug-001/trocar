@@ -4,10 +4,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { createDesk, applySession, applyLane, laneAsk, listOf, stepOf, readTouched, laneEvents, askOrdinal, applyLedger, ledgerAsk, ledgerDone,
-  readLedger, seenFiles, mergeTouch } from '../../src/web/v2/replay/model.mjs'
+import { createDesk, applySession, applyLane, listOf, stepOf, laneEvents, askOrdinal, applyLedger, ledgerAsk, ledgerDone,
+  readLedger, seenFiles } from '../../src/web/v2/replay/model.mjs'
 import { world, readLane, deskFrom } from './desk-world.mjs'
-import { slicesOf } from '../../src/web/v2/replay/replay.mjs'
 
 const fx = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const SEEDS = Array.from({ length: 40 }, (_, i) => i + 1)
@@ -97,58 +96,6 @@ test('A2: full(M0) plus the since deltas equals full(now); an unknown mark (base
 
 // 2.3 §读与画: a big answer (a full one, or a delta while a session is read for the first time) is applied in slices that yield between
 // them; applied in order they leave the desk, and the held lanes' touched steps, as the answer applied whole does
-test('A2 slices: an answer applied in slices equals it applied whole — rows, step order, lanes, events, touched held lanes', async () => {
-  let sliced = 0
-  for (const seed of SEEDS.slice(0, 12)) {
-    const w = world(seed, { calls: 700 }), m = w.marks
-    const whole = createDesk(), parts = createDesk()
-    for (const d of [whole, parts]) {
-      for (const s of d === whole ? [w.full(m[120])] : slicesOf(w.full(m[120]), false)) applySession(d, s)
-      for (const key of d.lanes.keys()) await readLane(w.get(m[120]), 'S', d, { lane: key })
-    }
-    assert.deepEqual(VIEW(parts), VIEW(whole), `seed ${seed}: full`)
-    for (let i = 120 + 150 + seed * 7; i < m.length; i += 150 + seed * 7) {
-      const a = w.since(whole.mark, m[i]), sl = slicesOf(a, false), touched = new Map()
-      sliced += sl.length > 1
-      const want = applySession(whole, a).touched
-      for (const s of sl) for (const [k, v] of applySession(parts, s).touched) mergeTouch(touched, k, v)
-      assert.deepEqual(VIEW(parts), VIEW(whole), `seed ${seed} at ${m[i]}`)
-      assert.deepEqual(touched, want, `seed ${seed} at ${m[i]}: touched`)
-      assert.equal(parts.mark, whole.mark)
-    }
-  }
-  assert.ok(sliced > 0, 'some deltas were sliced')
-})
-
-// Hold every lane through the deltas, re-reading each touched lane by the ask rule; returns the first mismatch or null.
-async function follow(seed, ask) {
-  const w = world(seed), m = w.marks
-  let M = m[Math.floor(m.length / 3)]
-  const desk = createDesk()
-  applySession(desk, w.full(M))
-  for (const key of desk.lanes.keys()) await readLane(w.get(M), 'S', desk, { lane: key })
-  for (let i = m.indexOf(M) + 1; i < m.length; i += 1 + (seed + i) % 2) {
-    const next = m[i], { touched } = applySession(desk, w.since(M, next))
-    for (const key of touched.keys()) await readLane(w.get(next), 'S', desk, ask(desk, key, touched))
-    for (const key of desk.lanes.keys()) if (!desk.held.has(key)) await readLane(w.get(next), 'S', desk, { lane: key })
-    M = next
-    for (const [key, rids] of w.laneRidsAt(M)) {
-      const h = desk.held.get(key)
-      if (JSON.stringify(h.rids) !== JSON.stringify(rids)) return `seed ${seed} at ${M} lane ${key}: held ${h.rids} vs ${rids}`
-      for (const rid of rids) if (JSON.stringify(listOf(desk, rid)) !== JSON.stringify(w.list(rid))) return `seed ${seed} ${rid}: list`
-    }
-  }
-  return null
-}
-
-test('A3 (3.5:67): lanes held through deltas and laneAsk reads equal the lanes read whole; asking from the tip does not', async () => {
-  for (const seed of SEEDS) assert.equal(await follow(seed, laneAsk), null)
-  const tipOnly = (desk, key) => { const h = desk.held.get(key); return h?.rids.length ? { lane: key, from: h.rids.at(-1) } : { lane: key } }
-  const misses = []
-  for (const seed of SEEDS) misses.push(await follow(seed, tipOnly))
-  assert.ok(misses.some(Boolean), 'a from=tip rule misses late rows and relanes')
-})
-
 test('the world answers with the fixture\'s key sets, both ways', async () => {
   const keys = (o) => Object.keys(o).sort()
   const closed = (name, fxItems, items) => {
@@ -204,7 +151,7 @@ function eventsMatch(w, desk, at) {
   return null
 }
 
-test('A27 (3.5 events): over tail, --to, --from and reset reads each held rid\'s events are the world\'s; compaction / summarize arrive with the tail', async () => {
+test('A27 (3.5 events): over tail and --to reads each held rid\'s events are the world\'s; compaction / summarize arrive with the tail', async () => {
   let older = 0
   for (const seed of SEEDS) {
     const w = world(seed), m = w.marks
@@ -217,21 +164,11 @@ test('A27 (3.5 events): over tail, --to, --from and reset reads each held rid\'s
       older += h.prev !== null && csOf(w.eventsAt(key, M)).some((x) => !h.rids.includes(x.split(' ')[1]))
     }
     assert.equal(eventsMatch(w, desk, M), null, `seed ${seed} tail pages`)
-    for (let i = m.indexOf(M) + 1; i < m.length; i++) {
-      const next = m[i], op = (seed + i) % 4
-      if (op === 0) {
-        // an older page for every held lane that has one
-        for (const [key, h] of desk.held) if (h.prev) applyLane(desk, w.lane(key, { to: h.prev }, M))
-      } else if (op === 3) {
-        const { touched } = applySession(desk, w.since('20261021T101500Z:not-a-member', next))
-        assert.equal((await readTouched(desk, touched, reader(w, next))).ok, true)
-        M = next
-      } else {
-        const { touched } = applySession(desk, w.since(M, next))
-        assert.equal((await readTouched(desk, touched, reader(w, next))).ok, true)
-        M = next
-      }
-      assert.equal(eventsMatch(w, desk, M), null, `seed ${seed} at ${M} (op ${op})`)
+    // an older page for every held lane that has one, to the lanes' first steps
+    for (let more = true; more;) {
+      more = false
+      for (const [key, h] of desk.held) if (h.prev) { applyLane(desk, w.lane(key, { to: h.prev }, M)); more = true }
+      assert.equal(eventsMatch(w, desk, M), null, `seed ${seed} older pages`)
     }
   }
   assert.ok(older > 0, 'some tail page carries compaction / summarize of steps before it')
@@ -333,8 +270,7 @@ test('A31 (3.5 tail page): a reset holds the tail page only, prev pages restore 
   let resent = 0
   for (const seed of SEEDS) {
     const w = world(seed, { calls: 60 }), desk = await deskFrom(w.get(), 'S'), lanes = w.laneRidsAt()
-    const { touched } = applySession(desk, w.since('20261021T101500Z:not-a-member'))
-    assert.equal((await readTouched(desk, touched, reader(w, w.now))).ok, true)
+    for (const key of lanes.keys()) applyLane(desk, w.lane(key)) // a tail page of a held lane resets it
     for (const [key, rids] of lanes) {
       const h = desk.held.get(key)
       assert.deepEqual(h.rids, w.lane(key).steps.map((s) => s.rid), `seed ${seed} ${key}: the tail page only`)

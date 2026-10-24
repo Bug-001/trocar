@@ -224,8 +224,6 @@ export const removedList = (n, k2) => `Blocks in step ${k2} that are not in this
 export const RETRY = 'Retry'
 // what a failed read of the desk names (1.5 K-29, core/ui.mjs readFailure): the never-drawn failure and the stale line
 export const THIS_SESSION = 'This session'
-// the window's failure state when the playhead step's lane read failed (2.3 §读失败, 1.5 K-29); the reason is in the technical details
-export const STEP_READ_FAILED = 'This step could not be read.'
 export const notRefreshed = (t, why) => `Not refreshed since ${t} · ${why}`
 // 1.2 §会话头 读取状态: the server is still extracting this session (first read: share done; later: calls still to catch up)
 export const readingFirst = (pct) => `Reading this session for the first time · ${pct} %`

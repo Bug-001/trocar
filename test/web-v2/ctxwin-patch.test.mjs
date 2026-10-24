@@ -4,11 +4,10 @@
 // the same window as a desk read whole.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createDesk, applySession, laneAsk } from '../../src/web/v2/replay/model.mjs'
 import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
-import { ctxWindowUnits, ctxWindowHtml, swapGroup } from '../../src/web/v2/replay/ctxwin.mjs'
+import { ctxWindowUnits, swapGroup } from '../../src/web/v2/replay/ctxwin.mjs'
 import { patchUnits, applyOps } from '../../src/web/v2/core/units.mjs'
-import { world, readLane, deskFrom } from './desk-world.mjs'
+import { world, deskFrom } from './desk-world.mjs'
 
 const SEEDS = Array.from({ length: 24 }, (_, i) => i + 1)
 function rng(seed) { let a = seed >>> 0 || 1; return () => ((a = Math.imul(a ^ (a >>> 13), 0x5bd1e995) + 0x9e3779b9 >>> 0) / 4294967296) }
@@ -67,35 +66,6 @@ test('A11 (2.3 #22 · 1.4:114): a window patched across random steps equals the 
     const tree = (depth) => pick(['a', 'b', 'c', 'd', 'e', 'f']).map((key) => ({ key, html: r() < 0.3 ? '<i>x</i>' : '<i>y</i>',
       ...(r() < 0.5 ? { set: { 'data-bi': Math.floor(r() * 3) } } : {}), ...(depth && r() < 0.4 ? { kids: tree(depth - 1) } : {}) }))
     for (let k = 0; k < 40; k++) { const prev = tree(2), next = tree(2); assert.deepEqual(applyOps(prev, patchUnits(prev, next)), next, `seed ${seed}`) }
-  }
-})
-
-test('A12: at every mark, the window drawn from a desk held through deltas equals the window of a desk read whole', async () => {
-  for (const seed of SEEDS.slice(0, 12)) {
-    const w = world(seed), m = w.marks, r = rng(seed)
-    let M = m[Math.floor(m.length / 3)]
-    const desk = createDesk()
-    applySession(desk, w.full(M))
-    for (const key of desk.lanes.keys()) await readLane(w.get(M), 'S', desk, { lane: key })
-    for (let i = m.indexOf(M) + 1; i < m.length; i++) {
-      const next = m[i], { touched } = applySession(desk, w.since(M, next))
-      for (const key of touched.keys()) await readLane(w.get(next), 'S', desk, laneAsk(desk, key, touched))
-      for (const key of desk.lanes.keys()) if (!desk.held.has(key)) await readLane(w.get(next), 'S', desk, { lane: key })
-      M = next
-      const whole = await deskFrom(w.get(M), 'S')
-      const open = new Set()
-      for (const lane of buildLanes(whole)) {
-        const a = stateOf(desk, { openBlocks: open }), b = stateOf(whole, { openBlocks: new Set(open) })
-        a.anchor = a.lanes.find((l) => l.id === lane.id); b.anchor = lane
-        assert.ok(a.anchor, `seed ${seed} at ${M}: lane ${lane.id} is on both desks`)
-        for (let p = 0; p < lane.calls.length; p++) {
-          a.playhead = b.playhead = p
-          const hb = ctxWindowHtml(b)
-          assert.equal(ctxWindowHtml(a), hb, `seed ${seed} at ${M} lane ${lane.id} step ${p}`)
-          if (r() < 0.2 && b.curKeys && b.curKeys.length) { const k = b.curKeys[Math.floor(r() * b.curKeys.length)]; a.openBlocks.add(k); b.openBlocks.add(k) }
-        }
-      }
-    }
   }
 })
 

@@ -8,8 +8,6 @@
 // from the loaded rows.
 //
 //   applySession(desk, answer[, {before}]) → {reset, touched}   a full answer, a --since delta, or a --before page
-//   laneAsk(desk, key, touched) → {lane, from?}                  3.5's from-rule for a held lane the delta touched
-//   readTouched(desk, touched, read[, stale]) → {ok, error?, done} | null   those lanes read on; a failed one waits in desk.lagging
 //   applyLane(desk, answer) → {reset}                            a tail / reset page, an older (--to) page, a --from page
 //   listOf(desk, rid) → bid[] | null    stepOf(desk, rid) → {row, lane, held, flat, reply, attrs, detail}
 //   laneEvents(desk, key) → event[]      askOrdinal(desk, key, rid) → k | 0 | null (2.2 K, E1)
@@ -27,7 +25,7 @@ export const changed = (desk) => MEMO.delete(desk)
 export function createDesk() {
   return {
     mark: null, pending: null, firstPending: true, truncated: null, meta: null, stats: null, logged: 0, probes: 0,
-    unknown: null, errors: [], more: false, lagging: new Map(),
+    unknown: null, errors: [], more: false,
     rows: new Map(), order: [], lanes: new Map(), laneRids: new Map(), events: new Map(), held: new Map(), defs: new Map(),
     // fed by pack / tail files (packs.mjs): the files held by key, each rid's owning file, records by id, def refs, the head answer
     files: new Map(), owner: new Map(), records: new Map(), defRefs: new Map(), stepLane: new Map(), head: null,
@@ -142,58 +140,6 @@ export const newHeld = () => ({ steps: new Map(), rids: [], prev: null, next: nu
 // drop held steps from index i on, with their cached keyframes and lane events
 function cut(h, i) {
   for (const rid of h.rids.splice(i)) { h.steps.delete(rid); h.kf.delete(rid); h.events.delete(rid) }
-}
-
-/**
- * 3.5's from-rule: every affected row after the held tip → `from = tip`; otherwise `from` = the held step before the earliest
- * affected one, or the whole lane when there is none. Nothing is dropped here: the held steps stay drawn until the answer
- * arrives, and applyLane cuts after its `base` (or replaces the lane) then — a failed read leaves the desk as it was.
- */
-export function laneAsk(desk, key, touched) {
-  const h = desk.held.get(key), t = touched?.get(key)
-  if (!h || !h.rids.length || t?.earliest === null) return { lane: key }
-  // a held step's ts: its row's, or the one it had when it was stored (a gone row has none left)
-  const ts = (rid) => desk.rows.get(rid)?.ts ?? h.steps.get(rid)?.ts ?? ''
-  const atOrAfter = (rid) => rid === t.earliest || compareStep(ts(rid), rid, t.ts, t.earliest) >= 0
-  const tip = h.rids.at(-1)
-  if (!t || !atOrAfter(tip)) return { lane: key, from: tip }
-  const i = h.rids.findIndex(atOrAfter)
-  return i ? { lane: key, from: h.rids[i - 1] } : { lane: key }
-}
-
-/** Put `v` for lane `k` into a touched map, keeping the earliest affected step (`earliest: null`, the whole lane, wins). */
-export function mergeTouch(map, k, v) {
-  const u = map.get(k)
-  if (!u || u.earliest === null) { if (!u) map.set(k, v); return }
-  if (v.earliest === null || compareStep(v.ts, v.earliest, u.ts, u.earliest) < 0) map.set(k, v)
-}
-
-/**
- * Read on each held lane in `touched` and in desk.lagging, forward page by page by the from-rule. `read(name, params)` resolves
- * an envelope {ok, data, error}. The first failed read stops: that lane and every lane not read yet go to desk.lagging with
- * their touched entries (the next call reads them), and their held steps stay as they are.
- * → {ok: true, done} | {ok: false, error, done} (`done`: the lanes read to the end); null when `stale()` turned true.
- */
-export async function readTouched(desk, touched, read, stale = () => false) {
-  const all = new Map(touched)
-  for (const [k, v] of desk.lagging) if (desk.lanes.has(k)) mergeTouch(all, k, v)
-  desk.lagging = new Map()
-  const done = []
-  for (const k of all.keys()) {
-    let q = laneAsk(desk, k, all)
-    for (let n = 0; q && n < 50; n++) {
-      const lr = await read('lane', q)
-      if (stale()) return null
-      if (!lr || !lr.ok || !lr.data) {
-        for (const [j, v] of all) if (!done.includes(j)) desk.lagging.set(j, v)
-        return { ok: false, status: lr && lr.status, error: (lr && lr.error) || 'cause not known', done }
-      }
-      applyLane(desk, lr.data)
-      q = lr.data.base != null && lr.data.next ? { lane: k, from: lr.data.next } : null
-    }
-    done.push(k)
-  }
-  return { ok: true, done }
 }
 
 function merge(map, items, id) { for (const x of items || []) map.set(id(x), x) }
