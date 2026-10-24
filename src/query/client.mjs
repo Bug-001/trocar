@@ -53,47 +53,77 @@ export const localOnly = (name, env = {}) => LOCAL_ONLY.includes(name) || LOCAL_
  * queryDocument(name, params, ctx) → { text, via }: `text` is the whole document, serialized with `indent` and
  * ready to be written as it stands; `via` is 'daemon' or 'local'. `ctx` is the query core's context plus `dir`
  * (the collector directory, where this platform's daemon says how to reach it) — `home` = ~/.trocar, `userHome` =
- * the user's home. Throws what the query core throws (QueryArgError for an unknown name or parameter) on either path.
- * An answer from the daemon that carries `pending` (its worker has not folded every member yet) is asked again after
- * PENDING_WAIT_MS until it carries none (3.5 §归约前沿: the terminal prints a whole answer) — a `session` as `{id, since: <the
- * newest answer's mark>}` (its own parameters while that mark is null), then once more with its own parameters, which is what is
- * printed; one whose `pending.done` does not grow within `deadlineMs` is answered here instead, where the local path folds
- * everything and never has `pending`.
+ * the user's home — and `say(line)`, told in plain words when this read waits on the daemon's worker and when it is
+ * answered here, and why (1.6 §4.1 「谁答」; the CLI passes none under --json). Throws what the query core throws
+ * (QueryArgError for an unknown name or parameter) on either path.
+ * THE COLD PATH (3.5 §谁执行它): a 503 (no warm worker yet) is answered here at once with what is on disk (`handOff`); a read that
+ * would extract or fold a member here instead waits on the worker the daemon forked for it. An answer that carries `pending` is asked
+ * again after PENDING_WAIT_MS until it carries none (3.5 §归约前沿: the terminal prints a whole answer) — a `session` as `{id, since:
+ * <the newest answer's mark>}` (its own parameters while that mark is null), then once more with its own parameters, which is what is
+ * printed. A 503 while waiting is no progress yet; a pending answer is progress when its `done` or `work` moved. No progress within
+ * `deadlineMs` → this process folds it all, where the local path never has `pending`.
  */
-export async function queryDocument(name, params = {}, { home, userHome, dir, platform, env, deps, fs, now, indent = 0, deadlineMs = DEADLINE_MS } = {}) {
-  if (!localOnly(name, env || {}) && !fs && !now) {
-    const ep = controlEndpointFor({ platform, dir, env: env || {} })
-    if (ep.socketPath) {
-      try {
-        const ask = (ps) => { const q = searchOf(ps); q.set('name', name); q.set('indent', String(indent)); return `${QUERY_PATH}?${q}` }
-        // `whole` = this ask carries the caller's own parameters: only its answer may be printed
-        for (let done = -1, grew = Date.now(), at = ask(params), whole = true; ;) {
-          const text = (await ep.request({ socketPath: ep.socketPath, path: at, timeoutMs: deadlineMs, raw: true })).toString('utf8')
-          const d = text.includes('"pending"') ? JSON.parse(text) : null, p = d && d.pending
-          if (!p && whole) return { text, via: 'daemon' }
-          // a `session` that is still folding is followed by its delta from the newest mark (3.5 §归约前沿): the
-          // poll costs the newly folded members, not the whole document; once none is pending, the caller's own ask
-          const mark = p && name === 'session' ? d.mark : null
-          whole = mark == null; at = whole ? ask(params) : ask({ id: params.id, since: mark })
-          if (!p) continue
-          if (p.done > done) { done = p.done; grew = Date.now() }
-          else if (Date.now() - grew >= deadlineMs) break // the fold stopped making progress: this process folds it all
-          await new Promise((d) => setTimeout(d, PENDING_WAIT_MS))
-        }
-      } catch (e) {
-        // 400 is the query core's own verdict on these very arguments, so this process must raise the same error
-        // instead of computing it again. EVERYTHING else is answered locally: no daemon, a refused socket, a wrong
-        // token (401 — the control plane's, not the query core's), an older daemon with no such route (404), no warm
-        // worker (503), a wedge. A verdict on the arguments is the only answer this process may take over.
-        if (e && e.status === 400) throw await asQueryError(e)
-      }
-    }
+export async function queryDocument(name, params = {}, { home, userHome, dir, platform, env, deps, fs, now, indent = 0, deadlineMs = DEADLINE_MS, say } = {}) {
+  const local = async (handOff) => {
+    const { runQuery } = await import('./named/index.mjs')
+    // `env` only when the caller gave one: an empty object here is not "no environment", it is an environment with
+    // nothing in it, and it defeated the default the commands themselves set (cli/status.mjs `env = process.env`),
+    // so the board answered `/api/status` and `/api/doctor` as if the machine had no environment at all.
+    return { text: JSON.stringify(await runQuery(name, params, { home, userHome, platform, deps, fs, now, ...(env ? { env } : {}), ...(handOff ? { handOff } : {}) }), null, indent), via: 'local' }
   }
-  const { runQuery } = await import('./named/index.mjs')
-  // `env` only when the caller gave one: an empty object here is not "no environment", it is an environment with
-  // nothing in it, and it defeated the default the commands themselves set (cli/status.mjs `env = process.env`),
-  // so the board answered `/api/status` and `/api/doctor` as if the machine had no environment at all.
-  return { text: JSON.stringify(await runQuery(name, params, { home, userHome, platform, deps, fs, now, ...(env ? { env } : {}) }), null, indent), via: 'local' }
+  if (localOnly(name, env || {}) || fs || now) return local(false)
+  const tell = (line) => { if (say) say(line) }
+  const ep = controlEndpointFor({ platform, dir, env: env || {} })
+  if (!ep.socketPath) { tell('No trocar daemon is running, so this query is answered here.'); return local(false) }
+  const ask = (ps) => { const q = searchOf(ps); q.set('name', name); q.set('indent', String(indent)); return `${QUERY_PATH}?${q}` }
+  // `whole` = this ask carries the caller's own parameters: only its answer may be printed; `seen` = the last pending answer's
+  // progress, `moved` = when it last moved; `waiting` = this read waits on the worker
+  let at = ask(params), whole = true, waiting = false, seen = null, moved = Date.now()
+  const wait = (p) => {
+    if (waiting) return
+    waiting = true
+    tell(`Waiting for the trocar daemon to read this ${name}${p ? ` (${p.done} of ${p.total} records)` : ''}.`)
+  }
+  for (;;) {
+    let text
+    try {
+      text = (await ep.request({ socketPath: ep.socketPath, path: at, timeoutMs: deadlineMs, raw: true })).toString('utf8')
+    } catch (e) {
+      // 400 is the query core's own verdict on these very arguments, so this process must raise the same error
+      // instead of computing it again. EVERYTHING else is answered locally: no daemon, a refused socket, a wrong
+      // token (401 — the control plane's, not the query core's), an older daemon with no such route (404), a wedge.
+      // 503 (no warm worker yet) first answers from what is on disk, and waits on the worker for what is not.
+      if (e && e.status === 400) throw await asQueryError(e)
+      if (!(e && e.status === 503)) {
+        tell(e && e.status ? `The trocar daemon could not answer (HTTP ${e.status}), so this query is answered here.` : 'No trocar daemon answered, so this query is answered here.')
+        return local(false)
+      }
+      if (!waiting) {
+        try {
+          const r = await local(true)
+          tell('The trocar daemon was not ready yet, so this query was answered here.')
+          return r
+        } catch (h) { if (!h || h.code !== 'hand-off') throw h }
+        wait(null); moved = Date.now()
+      }
+      if (Date.now() - moved >= deadlineMs) break
+      await new Promise((d) => setTimeout(d, PENDING_WAIT_MS))
+      continue
+    }
+    const d = text.includes('"pending"') ? JSON.parse(text) : null, p = d && d.pending
+    if (!p && whole) return { text, via: 'daemon' }
+    // a `session` that is still folding is followed by its delta from the newest mark (3.5 §归约前沿): the
+    // poll costs the newly folded members, not the whole document; once none is pending, the caller's own ask
+    const mark = p && name === 'session' ? d.mark : null
+    whole = mark == null; at = whole ? ask(params) : ask({ id: params.id, since: mark })
+    if (!p) continue
+    wait(p)
+    if (!seen || p.done !== seen.done || p.work !== seen.work) { seen = p; moved = Date.now() }
+    else if (Date.now() - moved >= deadlineMs) break // the fold stopped making progress: this process folds it all
+    await new Promise((d) => setTimeout(d, PENDING_WAIT_MS))
+  }
+  tell(`The trocar daemon made no progress for ${Math.round(deadlineMs / 1000)} s, so it is read here instead.`)
+  return local(false)
 }
 
 /** The daemon's 400 as the error the local path would have thrown (the message is the query core's own). */

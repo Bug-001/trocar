@@ -37,7 +37,8 @@ export async function run(argv, { io, json, args, home, env, platform, deps }) {
   try {
     // The same two spacings printJson gives: indented for a person at a terminal, one line into a pipe (§1.2) —
     // asked of whoever computes the document, so its bytes are written on as they came (D63②: the two paths print the same bytes).
-    const { text } = await queryDocument(name, params, { home: trocarHome(home), userHome: home, dir: collectorDir(home), platform, env, deps, indent: io.stdout && io.stdout.isTTY ? 2 : 0 })
+    // What it is doing goes to stderr in plain words, never under --json (§1.2: stderr carries nothing then).
+    const { text } = await queryDocument(name, params, { home: trocarHome(home), userHome: home, dir: collectorDir(home), platform, env, deps, indent: io.stdout && io.stdout.isTTY ? 2 : 0, ...(json ? {} : { say: io.err }) })
     io.out(text)
     return EXIT.ok
   } catch (e) {

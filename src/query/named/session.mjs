@@ -184,6 +184,8 @@ async function indexed({ home, fs, once }) {
   if (once) once.index = got;
   return got;
 }
+// A hand-off lets the read-only store go: the worker writes the members it lacks, which a store opened before cannot see.
+function letGo(k, e) { const s = stores.get(k), st = states.take(k); if (st) closeState(st); stores.delete(k); frontiers.delete(k); if (s) s.close(); return e; }
 // The projection store of a session, open across requests (the least recently used closed past STORES). What opening it said (a
 // rebuild) stays with the store (`opened`) until the next answer of that session says it, whoever opened it: a background slice
 // has no caller to tell.
@@ -373,10 +375,20 @@ function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress
   st.resolve = resolve;
   st.hook = (rid) => { progress(); bounded(meter, ++meter.n, (plan.byId.get(rid) || {}).stored_bytes || 0); };
   const now = st.target == null || (!(ctx.writer === true && request) && pastOf(plan, st.target, F));
-  try { if (foldMs > 0 && now) fold(st, plan, F, foldMs); } catch (e) { closeState(st); throw e; }
+  try {
+    if (foldMs > 0 && now && ctx.handOff && ctx.writer !== true && (st.target != null || unfolded(st, plan, F))) throw new HandOff(id);
+    if (foldMs > 0 && now) fold(st, plan, F, foldMs);
+  } catch (e) { closeState(st); throw e; }
   errors.push(...st.sink.splice(0));
   st.cost = costOf(st, plan.perRow);
   return st;
+}
+// Whether a reduction (target null) has a member of the cut before `F` still to take.
+const unfolded = (st, plan, F) => { for (let i = st.fp === plan ? st.fc : 0; i < F; i++) { const r = plan.members[i]; if (inCut(plan, r) && !st.R.has(String(r.id))) return true; } return false; };
+/** Thrown on the local path when `ctx.handOff` is set and this read would extract or fold a member (3.5 §谁执行它): the caller asks
+ *  the daemon's worker, which is building it, instead of building it a second time beside it. */
+export class HandOff extends Error {
+  constructor(id) { super(`session ${id}: its projection or fold log does not cover every member yet`); this.name = 'HandOff'; this.code = 'hand-off'; }
 }
 // What a kept state weighs: its calls and its store's blocks, the store's, the reduction's and the log's caches, its kept lane ledgers.
 const costOf = (st, perRow) => Math.max(st.n, st.cols.order.length) * perRow + st.store.defCount * SPINE_PER_BLOCK + CACHES;
@@ -393,6 +405,7 @@ async function advance(ctx, id, { budgetMs, request }) {
   // extraction errors are the member's own (its row says why, on every answer), not this request's
   const read = (rs) => { progress(); return recordsAt({ home: ctx.home, fs: ctx.fs, rows: rs.filter(Boolean), errors: [], remember: false }); };
   const exErrors = [], from = planOf(members, k, store, id).ex, had = store.rows.size;
+  if (ctx.handOff && ctx.writer !== true) for (let i = from; i < members.length; i++) if (!store.rows.has(String(members[i].id))) throw letGo(k, new HandOff(id));
   const ex = extractMembers({ store, members, recordsAt: read, sessionId: id, budgetMs: request ? budgetMs : Math.max(1, budgetMs / 2 - (performance.now() - t0)), errors: exErrors, from });
   passed(planOf(members, k, store, id), ex.done);
   store.work += store.rows.size - had;
@@ -434,6 +447,7 @@ async function advance(ctx, id, { budgetMs, request }) {
       frontiers.set(k, markOf(st.log));
       if (usedHeap() > heapCeiling() && liveHeap() > heapCeiling()) { closeState(st); throw new HeapBound(st.n); }
     } catch (e) {
+      if (e instanceof HandOff) throw letGo(k, e);
       if (!(e instanceof HeapBound)) throw e;
       // the measured bound: the rows the stopped fold got through fill the room, never fewer than half those asked for, the cost
       // rounded up to a quarter power of two (3.5 §内存有界); the stopped state is closed and garbage by now

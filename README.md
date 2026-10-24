@@ -215,7 +215,9 @@ once to get several in one answer, in the order asked (a ref that cannot be read
 A session the worker has not finished reading answers at once with what it has, and says how far it got
 (`pending: {done, total, work}`, where `work` counts what the worker has read and folded so far and grows while it
 works, even when `done` cannot move yet); the worker reads on in the background, and the CLI asks again until the answer is
-complete (it reads the records itself if the worker stops making progress). The first open of a very large session
+complete (it reads the records itself if the worker stops making progress for 5 s, or no daemon runs). When no worker is
+running yet, a read is answered at once from what is already on disk; a session the worker must still read is
+not read a second time beside it: the CLI waits on the worker instead, and says so on stderr (never under `--json`). The first open of a very large session
 takes a while: about 4 minutes in the background for a 16k-call session, during which the board shows it filling
 in. The worker's memory is bounded: a session too large for it shows its newest calls that fit and says so
 (**Showing only the latest N / M calls (file X MB)**); a cut session always shows at least half of what fits, and
