@@ -33,6 +33,11 @@ function headOf(n, w, cuts, tail = 3) {
   return { steps, packs, open: { n, s0: n * w }, chapters: ends.slice(1).map((s1, k) => ({ k, s0: ends[k], s1 })) }
 }
 
+test('2.3 加载器: a head with no sealed pack (with or without an open tail, or no head yet) has nothing for the loader', () => {
+  for (const head of [null, { steps: 0, packs: [] }, { steps: 3, packs: [], open: { n: 0, s0: 0 } }, { steps: 0 }])
+    for (const at of [null, 0, 2]) assert.deepEqual(packOrder(head, at), [], JSON.stringify({ head, at }))
+})
+
 test('2.3 加载器: the playhead\'s pack first, then its neighbours, then its chapter\'s other packs, then the rest newest first; held packs are left out', () => {
   for (const [n, w, cuts] of [[1, 5, []], [6, 4, [9]], [12, 3, [5, 17, 30]], [9, 7, [0, 63]]]) {
     const head = headOf(n, w, cuts)

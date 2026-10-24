@@ -1,0 +1,17 @@
+{
+  "name": "I-console-replay-1",
+  "invariant": "I-console",
+  "sig": "I-console:replay",
+  "fp": "Cannot read properties of undefined (reading 'n')",
+  "seed": 1,
+  "big": false,
+  "viewport": 390,
+  "theme": "light",
+  "steps": [
+    {"a":"host","p":{"f":0.375}},
+    {"a":"open","p":{"via":"link","f":0.287}}
+  ],
+  "screenshot": "test/web-v2/browser/shots/seq/I-console-replay-1.png",
+  "status": "fixed",
+  "detail": "Cannot read properties of undefined (reading 'n')"
+}

@@ -25,7 +25,8 @@ export const pagePlace = (gi, limit) => {
 // packs of its chapter (head.chapters), 4 the rest, newest first. Each pack is read `main` then `rest`.
 export function packOrder(head, at, held = () => false) {
   const packs = (head && head.packs) || [], open = head && head.open
-  const tail = at == null || (open != null && at >= open.s0) || !packs.length
+  if (!packs.length) return []
+  const tail = at == null || (open != null && at >= open.s0)
   const home = tail ? (open ? open.n : packs.at(-1).n + 1) : (packs.find((p) => at >= p.s0 && at < p.s1) || packs.reduce((a, p) => (Math.abs(p.s0 - at) < Math.abs(a.s0 - at) ? p : a))).n
   const step = tail ? Math.max(0, (head.steps || 1) - 1) : at
   const ch = ((head && head.chapters) || []).find((c) => step >= c.s0 && step < c.s1)
