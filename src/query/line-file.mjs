@@ -46,23 +46,31 @@ function strings(b, from, to) {
 /** loadSidecar({fs, file}) → {head, parts: {name: array}} | null: missing, unreadable, of another version, short or long, or covering
  *  more than `file` holds or not ending at a line's end. */
 export function loadSidecar({ fs = nodeFs, file }) {
+  // each part read into a buffer of its own: no copy of the whole file is held while the parts are taken out of it (a resumed
+  // session's sidecar is tens of MB, and the garbage would stay until the next full collection)
+  let fd;
   try {
-    const b = fs.readFileSync(sidecarOf(file)), nl = b.indexOf(10);
+    fd = fs.openSync(sidecarOf(file), 'r');
+    const size = fs.fstatSync(fd).size, read = (n, pos, into = Buffer.allocUnsafe(n)) => (fs.readSync(fd, into, 0, n, pos) === n ? into : null);
+    let hb = Buffer.alloc(0), nl = -1;
+    while (nl < 0 && hb.length < size) { const c = read(Math.min(1 << 16, size - hb.length), hb.length); if (!c) return null; nl = c.indexOf(10); nl = nl < 0 ? -1 : hb.length + nl; hb = Buffer.concat([hb, c]); }
     if (nl < 0) return null;
-    const { v, parts: desc, ...head } = JSON.parse(b.toString('utf8', 0, nl));
+    const { v, parts: desc, ...head } = JSON.parse(hb.toString('utf8', 0, nl));
     if (v !== SIDECAR_V || !Array.isArray(desc) || !Number.isSafeInteger(head.bytes) || head.bytes < 1) return null;
     const parts = {};
     let at = nl + 1;
     for (const [name, type, n] of desc) {
-      if (!Number.isSafeInteger(n) || n < 0 || at + n > b.length || (type !== 'str' && (!TYPES[type] || n % TYPES[type].BYTES_PER_ELEMENT))) return null;
-      parts[name] = type === 'str' ? strings(b, at, at + n) : new TYPES[type](b.buffer.slice(b.byteOffset + at, b.byteOffset + at + n));
+      if (!Number.isSafeInteger(n) || n < 0 || at + n > size || (type !== 'str' && (!TYPES[type] || n % TYPES[type].BYTES_PER_ELEMENT))) return null;
+      const b = read(n, at, type === 'str' ? undefined : new Uint8Array(new ArrayBuffer(n)));
+      if (!b) return null;
+      parts[name] = type === 'str' ? strings(b, 0, n) : new TYPES[type](b.buffer);
       at += n;
     }
-    if (at !== b.length) return null;
-    const fd = fs.openSync(file, 'r'), last = Buffer.alloc(1);
-    try { if (fs.readSync(fd, last, 0, 1, head.bytes - 1) !== 1 || last[0] !== 10) return null; } finally { fs.closeSync(fd); }
+    if (at !== size) return null;
+    const fl = fs.openSync(file, 'r'), last = Buffer.alloc(1);
+    try { if (fs.readSync(fl, last, 0, 1, head.bytes - 1) !== 1 || last[0] !== 10) return null; } finally { fs.closeSync(fl); }
     return { head, parts };
-  } catch { return null; }
+  } catch { return null; } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { /* closed */ } }
 }
 
 const held = new FinalizationRegistry(({ fs, fd }) => { try { fs.closeSync(fd); } catch { /* already closed */ } });
