@@ -18,6 +18,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
+import { foldLogFile } from '../../src/query/fold-log.mjs'
+import { loadSidecar } from '../../src/query/line-file.mjs'
+import { REDUCE_V } from '../../src/view/reduce.mjs'
+import { heapFlags, workerEnv } from '../../src/query/warm.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 // A worker that answers one query (the warm-up's) and then dies on the next, which is how a caller WAITING for a
@@ -607,3 +612,56 @@ test('kick: inside the kick cool-down a live worker still gets the kick, and the
   } finally { svc.stop() }
 })
 const writeSegmentLines = (home, segment, lines) => fs.appendFileSync(path.join(home, 'raw', `${segment}.ndjson`), lines.join('\n') + '\n', { mode: 0o600 })
+
+// 3.5 §后台抽取与归约 · #32: the daemon's idle clock counts from the worker's last background slice as well as from its last request
+// or kick. A kicked cold fold several times longer than idleMs is folded to its frontier before the worker leaves, and the checkpoint
+// it leaves (the fold log's sidecar with the reduction state at that frontier, 4.3 §4 旁索引) is what a fresh worker resumes from.
+const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
+const lastFrontier = (file) => { try { const f = fs.readFileSync(file, 'utf8').split('\n').filter((l) => l.startsWith('{"f"')).at(-1); return f ? JSON.parse(f) : null } catch { return null } }
+const stateOf = (file) => { const sc = loadSidecar({ file }), m = sc && sc.parts['r.m']; return sc && sc.parts['r.s'] && m && JSON.parse(m[0]).rv === REDUCE_V ? sc.head : null }
+async function kickedFold({ calls, wire, idleMs, env = {}, killWhen = null }) {
+  const home = path.join(tmpDir('trocar-qsvc-fold-'), '.trocar')
+  const s = bigSession({ home, wire, subEvery: 4, subLanes: 3, late: 2 })
+  s.append(calls)
+  const members = sessionGroups(await indexRows({ home, errors: [] })).get(s.id)
+  const log = foldLogFile(home, s.id)
+  let child = null, exit = null
+  const svc = createQueryService({ home, idleMs, fork: (h) => {
+    child = fork(WORKER, [h], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: ['--require', NO_REAL_OS, ...heapFlags()], env: { ...workerEnv(), ...env } })
+    const pid = child.pid // the service drops its listeners when it ends a worker: its exit is seen by its pid
+    exit = new Promise((d) => { const t = setInterval(() => { try { process.kill(pid, 0) } catch { clearInterval(t); d(Date.now()) } }, 10) })
+    return child
+  } })
+  try {
+    const t0 = Date.now()
+    svc.kick(members.map((r) => String(r.id)))
+    let first = null
+    const poll = setInterval(() => {
+      const f = lastFrontier(log)
+      if (f && first == null) first = Date.now()
+      if (killWhen && first != null && killWhen({ since: Date.now() - first, f, last: String(members.at(-1).id) })) child.kill('SIGKILL')
+    }, 10)
+    try { return { members, log, took: (await within(exit, 90_000, 'the worker left')) - t0 } } finally { clearInterval(poll) }
+  } finally { svc.stop(); if (exit) await exit }
+}
+
+test('kick: a kicked fold several times longer than idleMs is folded to its frontier before the worker leaves, with a checkpoint at that frontier (3.5 #32)', { timeout: 120_000 }, async () => {
+  const IDLE = 400
+  const { members, log, took } = await kickedFold({ calls: 3_000, wire: 'threads', idleMs: IDLE })
+  const f = lastFrontier(log)
+  assert.equal(f && f.f, String(members.at(-1).id), 'the worker left with the session folded to its frontier')
+  const st = stateOf(log)
+  assert.ok(st && st.bytes === fs.statSync(log).size, 'the fold log\'s sidecar holds the reduction state at that frontier')
+  assert.ok(took > 3 * IDLE, `the fold took several idle periods (${took} ms): else this case shows nothing`)
+})
+
+test('a worker SIGKILLed after several checkpoint intervals of a fold leaves a reduction state to resume from (3.5 §后台抽取与归约, 4.3 §4 旁索引)', { timeout: 120_000 }, async () => {
+  const EVERY = 50
+  let killedAt = null
+  const { members, log } = await kickedFold({ calls: 250, wire: 'http', idleMs: 60_000, env: { TROCAR_CHECKPOINT_MS: String(EVERY) },
+    killWhen: ({ since, f, last }) => { if (killedAt == null && since >= 4 * EVERY) killedAt = f.f === last ? 'after the end' : 'mid-fold'; return killedAt != null } })
+  assert.ok(members.length < 256, 'fewer members than the count rule saves at: only the time rule can have saved')
+  assert.equal(killedAt, 'mid-fold', 'the worker was killed before its fold ended')
+  const st = stateOf(log)
+  assert.ok(st && st.bytes > 0, 'the fold log\'s sidecar holds a reduction state the next worker resumes from')
+})

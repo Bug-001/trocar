@@ -26,9 +26,13 @@
 // sessions of the model calls the daemon kicked (`{kick: ids}` on IPC: their record ids, just indexed), then, after IDLE_SLICE_MS with no request, those
 // of the session of the newest index row (a request's, never a kick's), then, IDLE_SLICE_MS after the last request or kick, once the
 // sidecars and a projection GC (gcProjections) — yielding
-// with setImmediate between slices, so a request line that arrives is read before the next one. Slices are not requests: the daemon's
-// idle clock never sees them, so it ends this process with work left all the same (the next one goes on from the frontier); its kill
-// may cut a slice, which leaves at most a torn last line that the next open cuts off (4.3 §上下文投影).
+// with setImmediate between slices, so a request line that arrives is read before the next one. Slices are not requests, but each is
+// reported (`{progress: true}`, throttled like a query's; a target's last slice and the idle save at once): the daemon's idle clock
+// starts again from it, so this process leaves QUERY_IDLE_MS after its last request, kick or slice, never in the middle of a fold
+// (3.5 后台抽取与归约). The work is bounded — each target is dropped at its frontier, the newest session once per request, the
+// sidecars once per idle period — so the slices stop when nothing new comes, and a slice that never ends reports nothing. A kill
+// (a stop, an update, a crash) may cut a slice, which leaves at most a torn last line that the next open cuts off (4.3 §上下文投影),
+// and loses at most the fold since the last checkpoint (session.mjs CHECKPOINT_MS).
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -62,6 +66,8 @@ const progress = () => {
   said = t
   process.send({ progress: true })
 }
+/** The end of a run of background work, said at once: the daemon's idle clock counts from it (3.5 后台抽取与归约). */
+const worked = () => { said = 0; progress() }
 const write = (status, body, enc, cpu, tag) => new Promise((done) => {
   process.stdout.write(`${status} ${body.length} ${enc} ${cpu} ${tag}\n`, () => { if (body.length) process.stdout.write(body, done); else done() })
 })
@@ -146,12 +152,14 @@ async function background() {
     let more = false
     try { more = await extendSession(ctx, target, SLICE_MS) } catch (e) { say(e) }
     if (!more) target = null
+    if (more) progress(); else worked() // a slice done: the daemon's idle clock starts again
     return kick()
   }
   if (gcDone || busy || notIdle()) return // once per idle period, IDLE_SLICE_MS after the last request or kick: not after every burst
   gcDone = true
   saveIndexes() // the sidecars of what this busy period grew, before the GC counts them
   gcProjections({ home, liveKeys: [...sessionGroups(await indexRows({ home, errors: [] })).keys()], keepKeys: answered })
+  worked()
 }
 
 let buf = '', chain = Promise.resolve() // one at a time: a request is answered before the next is read

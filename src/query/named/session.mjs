@@ -13,7 +13,7 @@
 // the state the log's sidecar holds (resumed(): over the log, or the worker's log cut back to what the state covers), else rebuilt
 // into a throwaway log that takes the file log over at its frontier, writing nothing before that; the local path (no writer: the log
 // opened write:false, new lines in an off-heap arena, nothing on disk) folds nothing when the log covers every member, else
-// everything in the request. The worker saves the sidecars at idle and every max(256, n/8) calls folded (sidecars()).
+// everything in the request. The worker saves the sidecars at idle, every max(256, n/8) calls folded and every CHECKPOINT_MS (sidecars()).
 // A log folded under another cut is folded again from scratch (the worker deletes and rewrites it; the local path in memory).
 //
 // WARM (D63 ①; 3.5 §缓存按依赖失效): per (fs, home, session, writer) the projection store stays open and the state (the reduction,
@@ -259,11 +259,14 @@ function sidecars(store) {
     st.log.saveIndex([...dumpColumns(sync(st.cols, st.log)),
       ...(live ? [['r.s', v8.serialize(st.R.snapshot())], ['r.m', [JSON.stringify({ rv: REDUCE_V, cut: st.cut })]]] : [])]);
   } catch { /* the next idle period */ }
-  st.saved = st.n;
+  st.saved = st.n; st.savedAt = performance.now();
 }
 // During a fold the worker saves both sidecars once it folded max(SAVE_MIN, folded / SAVE_PART) calls since the last save: a worker
 // killed in a long fold resumes near where it was, and the saves of a first fold write O(n log n) bytes, not O(n²) (4.3 §4 旁索引).
-const SAVE_MIN = 256, SAVE_PART = 8;
+// And once CHECKPOINT_MS passed since the last save, whatever was folded: a kill loses at most that much of a slow fold (3.5
+// 后台抽取与归约). A save writes the whole reduction state, so at most once a minute it is a small part of the fold's own work.
+// TROCAR_CHECKPOINT_MS, read once, shortens it for a test.
+const SAVE_MIN = 256, SAVE_PART = 8, CHECKPOINT_MS = Number(process.env.TROCAR_CHECKPOINT_MS) || 60_000;
 const cutOf = (plan) => (plan.start ? String(plan.read[0].id) : null);
 /** markOn(plan, rid) → the mark on the wire (3.5 id): the frontier rid, and when the plan is cut `@` and its cut's first rid, so a
  *  mark names the cut its document was answered under. sinceAt(plan, M) → the rid M names when its cut is this plan's, else null:
@@ -289,7 +292,7 @@ function stateOf(ctx, id, store, plan) {
   const writer = ctx.writer === true, home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   const open = (upTo) => openFoldLog({ home, fs, key: id, write: writer, projection: { id: store.id, bytes: store.bytes }, errors: s.sink, upTo });
   const s = { base: liveHeap(), meter: null, store, perRow: plan.perRow, cut: cutOf(plan), n: 0, cost: 0, sink: [], hook: null, resolve: null,
-    cols: columns(store.rows.slotOf), view: null, R: null, T: null, relay: null, target: null, fc: 0, fp: null, writer, open, saved: 0 };
+    cols: columns(store.rows.slotOf), view: null, R: null, T: null, relay: null, target: null, fc: 0, fp: null, writer, open, saved: 0, savedAt: performance.now() };
   const log = open(), m = markOf(log);
   if (m != null && foldedUnder(log, plan, m)) {
     s.log = log; s.target = m; seed(s);
@@ -364,7 +367,7 @@ function fold(s, plan, F, ms) {
       if (!want.length) continue;
       const rest = s.R.add(want, { budgetMs: ms - (performance.now() - t0) });
       s.n += want.length - rest.length; s.store.work += want.length - rest.length; added = true;
-      if (s.writer && s.target == null && s.n - s.saved >= Math.max(SAVE_MIN, s.n / SAVE_PART)) sidecars(s.store);
+      if (s.writer && s.target == null && (s.n - s.saved >= Math.max(SAVE_MIN, s.n / SAVE_PART) || performance.now() - s.savedAt >= CHECKPOINT_MS)) sidecars(s.store);
       if (rest.length) { s.fc = posOf(plan, rest[0]); return; }
     }
     if (s.target == null || end < to) return;

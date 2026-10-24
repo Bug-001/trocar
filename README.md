@@ -197,8 +197,10 @@ Reading the records across sessions is `trocar query <name>` — the one core th
 the board is the HTTP shell (D59); there is no separate ETL step and no database to load. Both go through the
 daemon's query worker, which stays warm and keeps the segment index current as it captures, so a query about a
 session you are looking at answers in milliseconds; the board's answers come gzipped. The worker stays warm while
-someone asks (an open board asks every 1.5 s) and leaves two minutes after the last query or newly captured model
-call, giving its memory back; the next query starts a new one. While the daemon captures, it hands the worker each batch
+someone asks (an open board asks every 1.5 s) and leaves two minutes after the last query, newly captured model
+call or piece of background reading, giving its memory back; the next query starts a new one. So a first read longer
+than two minutes is finished, not cut off and started over, and a stop or crash in the middle of one loses at most its
+last minute: the worker saves its place at least once a minute while it reads. While the daemon captures, it hands the worker each batch
 of newly captured model calls, and the worker reads them, and works out their sessions itself, in the background at low
 priority, so a running session of any harness is already read when you open it. The cost: while an agent is being
 captured the worker stays resident — on the user's 25k-call session about 135–140 MB of memory between calls (at most
