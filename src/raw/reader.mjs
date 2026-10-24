@@ -17,9 +17,10 @@ import { readIndex, readVarint, unzigzag, R, FLAG_NL, FLAG_UNPARSEABLE, HEADER_L
 export const AMBIGUOUS = -2;
 
 // One LRU bounded in BYTES, for decoded frames and for rebuilt lines; the buffers are handed out shared and read-only.
-// Frames are bounded by bytes, not by count: a v2 file interleaves up to OPEN stream groups' chunk frames plus RECENT
-// flushed ones and the splice frame (src/raw/writer.mjs), most of them small, so a reader in record order needs ~40 frames
-// live at once — an 8-frame window decoded the same frames over and over (1,793 decodes for 33 frames on a real segment).
+// Frames are bounded by bytes, not by count: frames differ in size (a group's chunk frame, a small splice frame, a frame
+// holding one over-frame record), and what a reader in record order needs at once is a set of frames, not a count —
+// the newest 12 chunk frames + 1 splice frame of a v2 file (4.2 「读」; an 8-frame cache decoded the same frames over and
+// over: 1,793 decodes for 33 frames on a real segment).
 // `keepNewest`: the entry just set stays even when it alone is over the budget (a frame is about to be read; a line
 // bigger than the whole budget is never resident).
 function byteLru(maxBytes, counted, keepNewest) {
@@ -44,7 +45,7 @@ function byteLru(maxBytes, counted, keepNewest) {
   };
 }
 
-export const FRAME_CACHE_BYTES = 64 << 20;   // ≥ the decoded working set of an in-order read (4.2 「读」)
+export const FRAME_CACHE_BYTES = 64 << 20;   // the frame budget of a reader: its shared cache, and the in-order window (4.2 「读」)
 export const createFrameCache = ({ bytes = FRAME_CACHE_BYTES } = {}) => byteLru(bytes, 'decodes', true);
 
 // Rebuilt LINES, shared the way the frame cache is. A record stored as a delta is rebuilt from its predecessor, which may
@@ -201,8 +202,8 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, version, frameCache
   // With `onError(i, err, entry)`, a record that cannot be decoded is reported and skipped instead of
   // ending the iteration — later frames are independent, so the rest still reads, and every loss is
   // counted by the caller (no silent failure). Without it, the first error throws.
-  function* lines({ onError = null } = {}) {
-    if (v2) { yield* linesV2(onError); return; }
+  function* lines({ onError = null, windowBytes = FRAME_CACHE_BYTES } = {}) {
+    if (v2) { yield* linesV2(onError, windowBytes); return; }
     const win = new Map();
     let f = -1, fb = null, fErr = null;
     for (let i = 0; i < records.length; i++) {
@@ -223,9 +224,11 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, version, frameCache
   }
 
   // v2 in order: its own window of chunk frames, each held from its first use to its last (a first pass over the splice
-  // lists finds the last), so it holds exactly the frames later records still need — the writer keeps that to the
-  // newest 12 (4.2 「读」). Splice frames go through the shared byte-bounded cache, so that pass decodes them for both.
-  function* linesV2(onError) {
+  // lists finds the last), so it holds the frames later records still need — for a file this writer made, at most the
+  // newest 12 (4.2 「读」). The window is also capped at windowBytes whatever the file: over it, the frames held longest
+  // go first and are decoded again if a later record names them, so any valid file reads, in bounded memory. Splice
+  // frames go through the shared byte-bounded cache, so that pass decodes them for both.
+  function* linesV2(onError, windowBytes) {
     const last = new Int32Array(frames.length).fill(-1);
     for (let i = 0; i < records.length; i++) {
       const r = records[i];
@@ -235,10 +238,15 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, version, frameCache
       } catch { /* a bad list or splice frame fails below, at its record */ }
     }
     const live = new Map();
+    let held = 0;
+    const drop = (f) => { held -= live.get(f).length; live.delete(f); };
     const getFrame = (f) => {
       if (frames[f][3] === KIND_SPLICE) return frameAt(f);
       let b = live.get(f);
-      if (!b) { b = decodeFrame(f); live.set(f, b); }
+      if (b) return b;
+      b = decodeFrame(f);
+      for (const k of live.keys()) { if (held + b.length <= windowBytes) break; drop(k); }
+      live.set(f, b); held += b.length;
       return b;
     };
     for (let i = 0; i < records.length; i++) {
@@ -247,7 +255,7 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, version, frameCache
         if (!onError) throw e;
         onError(i, e, entry(i));
         continue;
-      } finally { for (const f of live.keys()) if (last[f] <= i) live.delete(f); }
+      } finally { for (const f of live.keys()) if (last[f] <= i) drop(f); }
       yield { i, line, entry: entry(i) };
     }
   }

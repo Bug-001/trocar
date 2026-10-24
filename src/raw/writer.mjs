@@ -7,9 +7,10 @@
 //   · groups: a group key gets its own chunk buffer once frameBytes of its records have gone through the shared buffer
 //     (until then its records share one buffer, in arrival order — a stream that never fills a frame is no stream);
 //     at most OPEN own buffers are open, the least recently used is flushed when another opens;
-//   · a stored chunk is reused only from a chunk frame among the newest WINDOW frames numbered (open or flushed); an open
-//     buffer whose frame falls out of that window is flushed first. Reading in record order therefore needs only the
-//     newest WINDOW frames plus the splice frame, whatever the number of groups;
+//   · a stored chunk is reused only from a chunk frame among the newest WINDOW frame numbers (open or flushed), counting
+//     the number the record's own buffer is about to take; an open buffer whose frame falls out of that window is flushed
+//     first. Every frame one record names therefore lies within WINDOW consecutive numbers, and a read in record order
+//     holds at most WINDOW chunk frames plus the splice frame at once, whatever the number of groups;
 //   · per record at most MAX_FRAMES frames: its own buffer, its splice frame, and the MAX_FRAMES − 2 other frames it
 //     takes the most bytes from; a reusable chunk anywhere else, and a run of reusable chunks shorter than MIN_RUN bytes,
 //     is stored again next to the record's new bytes (where brotli sees it in context) and the dedup map points at the copy;
@@ -70,7 +71,8 @@ export function createSealWriter({ fd, fs = nodeFs, frameBytes = FRAME_BYTES } =
       buf = newBuf(KIND_CHUNK);
     }
     groups.set(key, buf);
-    const low = frames.length - WINDOW;   // chunks are reused only from frames numbered ≥ low
+    // chunks are reused only from frames numbered ≥ low; a fresh own buffer takes number frames.length, inside the window
+    const low = frames.length + (buf.frame < 0 ? 1 : 0) - WINDOW;
     for (const b of groups.values()) if (b.frame >= 0 && b.frame < low) flush(b);
 
     const list = [];

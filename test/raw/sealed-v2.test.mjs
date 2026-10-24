@@ -11,7 +11,8 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { createSealWriter } from '../../src/raw/writer.mjs';
 import { openSealed, createFrameCache } from '../../src/raw/reader.mjs';
-import { readIndex, indexTailBytes, trailerBytes, R, FLAG_NL, FLAG_UNPARSEABLE } from '../../src/raw/format.mjs';
+import { readIndex, indexTailBytes, trailerBytes, headerBytes, R, FLAG_NL, FLAG_UNPARSEABLE } from '../../src/raw/format.mjs';
+import { createHash, randomBytes } from 'node:crypto';
 import { tmpDir } from '../helpers/tmp.mjs';
 
 function rng(seed) { let s = seed >>> 0; return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 2 ** 32); }
@@ -192,9 +193,7 @@ function* interleaved(dir) {
   }
 }
 
-// 4.2 「读」: a read in record order decodes each frame about once, however many stream groups interleave — a record
-// names only chunk frames among the newest 12, so a cache of 12 chunk frames + 1 splice frame is enough (the default
-// byte-bounded one holds far more).
+// 4.2 「读」: a read in record order decodes each frame about once, however many stream groups interleave.
 test('an in-order read of many interleaved groups decodes each frame about once, with lineAt and with lines()', () => {
   const dir = tmpDir('trocar-v2-');
   for (const [groups, recs, file] of interleaved(dir)) {
@@ -202,21 +201,87 @@ test('an in-order read of many interleaved groups decodes each frame about once,
     let decodes = 0;
     zlib.brotliDecompressSync = (...a) => { decodes++; return real(...a); };
     try {
-      const probe = openSealed(file), biggest = Math.max(...probe.frames.map((f) => f[2]));
-      probe.close();
-      const window = () => createFrameCache({ bytes: 13 * biggest });   // 12 chunk frames + 1 splice frame (4.2 「读」)
-      for (const [way, frameCache] of [['lineAt', undefined], ['lines', undefined], ['lineAt', window()]]) {
+      for (const way of ['lineAt', 'lines']) {
         decodes = 0;
-        const sf = openSealed(file, { frameCache });
+        const sf = openSealed(file);
         try {
           if (way === 'lineAt') for (let i = 0; i < recs.length; i++) assert.ok(sf.lineAt(i).equals(recs[i].line));
           else for (const { i, line } of sf.lines()) assert.ok(line.equals(recs[i].line));
           assert.ok(sf.frames.length > 40, `${groups} groups: enough frames to matter (${sf.frames.length})`);
-          assert.ok(decodes <= 1.1 * sf.frames.length, `${groups} groups, ${way}${frameCache ? ' in a 13-frame cache' : ''}: ${decodes} decodes for ${sf.frames.length} frames`);
+          assert.ok(decodes <= 1.1 * sf.frames.length, `${groups} groups, ${way}: ${decodes} decodes for ${sf.frames.length} frames`);
         } finally { sf.close(); }
       }
     } finally { zlib.brotliDecompressSync = real; }
   }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// The chunk frames each record names, read from the splice lists as 4.2 words them.
+function chunkFramesOf(file) {
+  const { buf, tables } = index(file);
+  const lists = new Map();
+  return tables.records.map((r) => {
+    if (!lists.has(r[R.frame])) { const [off, clen] = tables.frames[r[R.frame]]; lists.set(r[R.frame], zlib.brotliDecompressSync(buf.subarray(off, off + clen))); }
+    const xs = varints(lists.get(r[R.frame]).subarray(r[R.off], r[R.off] + r[R.enc]));
+    const out = new Set();
+    for (let k = 0, f = 0; k < xs.length; k += 3) out.add((f += unzz(xs[k])));
+    return [...out];
+  });
+}
+
+// 4.2 「读」: a record names only chunk frames among the newest 12 numbers, so a read in record order holds at most 12
+// chunk frames at once (each from its first use to its last) plus the splice frame.
+test('the chunk frames of every record lie within 12 numbers, and an in-order read needs at most 12 at once', () => {
+  const dir = tmpDir('trocar-v2-');
+  const files = [...interleaved(dir)].map(([groups, , file]) => [`${groups} groups`, file]);
+  for (const seed of [1, 2, 3]) files.push([`seed ${seed}`, writeV2(path.join(dir, `g${seed}.sealed`), generate(seed, 400), { frameBytes: 8 * 1024 })]);
+  for (const [what, file] of files) {
+    const per = chunkFramesOf(file), first = new Map(), last = new Map();
+    per.forEach((fs_, i) => {
+      if (fs_.length) assert.ok(Math.max(...fs_) - Math.min(...fs_) < 12, `${what}: record ${i} names frames ${Math.min(...fs_)}…${Math.max(...fs_)}`);
+      for (const f of fs_) { if (!first.has(f)) first.set(f, i); last.set(f, i); }
+    });
+    const delta = new Int32Array(per.length + 1);
+    for (const [f, a] of first) { delta[a]++; delta[last.get(f) + 1]--; }
+    let live = 0, most = 0;
+    for (let i = 0; i < per.length; i++) most = Math.max(most, (live += delta[i]));
+    assert.ok(most <= 12, `${what}: ${most} chunk frames live at once`);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// 4.2 「读」: the in-order window is capped in bytes whatever the file — here every record names frame 0 and its own
+// frame, so a window under two frames must drop frame 0 and decode it again, and still hand out every line exactly.
+test('an in-order read of a file whose records keep naming an early frame stays within its byte window and reads exactly', () => {
+  const dir = tmpDir('trocar-v2-');
+  const S = 32 * 1024, K = 12;
+  const raw = Array.from({ length: K }, () => randomBytes(S));
+  const parts = [headerBytes(2)], frames = [];
+  let pos = parts[0].length;
+  for (const d of raw) { const c = zlib.brotliCompressSync(d); frames.push([pos, c.length, d.length, 0]); parts.push(c); pos += c.length; }
+  const lists = [leb([zz(0), zz(0), S])], lines = [raw[0]];
+  for (let i = 1; i < K; i++) { lists.push(leb([zz(0), zz(0), 10, zz(i), zz(-10), S])); lines.push(Buffer.concat([raw[0].subarray(0, 10), raw[i]])); }
+  const splice = Buffer.concat(lists), sc = zlib.brotliCompressSync(splice);
+  frames.push([pos, sc.length, splice.length, 1]); parts.push(sc);
+  let off = 0;
+  const records = lines.map((line, i) => { const r = [`r${i}`, 0, K, off, lists[i].length, line.length, 2, -1, createHash('sha256').update(line).digest('base64'), 0, 0, i]; off += lists[i].length; return r; });
+  const file = path.join(dir, 'early.sealed');
+  rewrite(file, { body: Buffer.concat(parts), tables: { frames, shards: [{ name: 's.ndjson', sha256: '00'.repeat(32), length: 0, lines: K }], streams: ['s.ndjson'], records } });
+  const real = zlib.brotliDecompressSync;
+  let decodes = 0;
+  zlib.brotliDecompressSync = (...a) => { decodes++; return real(...a); };
+  try {
+    for (const [windowBytes, more] of [[undefined, false], [1.5 * S, true]]) {
+      decodes = 0;
+      const sf = openSealed(file);
+      try {
+        let n = 0;
+        for (const { i, line } of sf.lines({ windowBytes })) { assert.ok(line.equals(lines[i]), `record ${i}`); n++; }
+        assert.equal(n, K);
+        assert.equal(decodes > K + 1, more, `window ${windowBytes}: ${decodes} decodes for ${K + 1} frames`);
+      } finally { sf.close(); }
+    }
+  } finally { zlib.brotliDecompressSync = real; }
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
