@@ -35,7 +35,7 @@ export const CHUNK_BYTES = KEEPER_CHUNK_BYTES // ~15 ms of parsing per turn of t
 
 /**
  * createIndexKeeper({ home, failure, kick }) → { wrote, flush, pause, idle, stop }
- *   kick(ids):       after each debounced pass, the record ids of the model calls it indexed (once, never thrown onto the write path).
+ *   kick(ids):       after each pass (debounced or at close), the record ids of the model calls it indexed (once, never thrown onto the write path).
  *   wrote(segment):  a record was appended there (called from the store's write path: it must stay trivial).
  *   flush(segment):  index it fully, and never touch it again — the segment is closed. → the chain's promise.
  *   handOff(segment): give its index to the sealer NOW — a pass in flight stops before its next write (seal-queue's
@@ -64,15 +64,16 @@ export function createIndexKeeper({ home, failure = () => {}, kick = () => {}, i
   }
 
   // The pass's kick (3.5 §后台抽取与归约, D63 ①): the record ids of the model calls this pass indexed from the facts it was
-  // handed, once per pass, so the query worker folds their sessions as they are captured. Which session a record is in is the
-  // worker's to say (sessionGroups, the synthesized keys included): nothing here parses a body, knows a session or computes a
-  // query. A scan pass (no facts) kicks nothing; the next query folds what it indexed.
-  async function drain() {
+  // handed, once per pass — the debounced one and the close pass alike — so the query worker folds their sessions as they are
+  // captured. Which session a record is in is the worker's to say (sessionGroups, the synthesized keys included): nothing here
+  // parses a body, knows a session or computes a query. A scan pass (no facts) kicks nothing; the next query folds what it indexed.
+  async function pass(segments) {
     const ids = []
-    for (const segment of pending) { pending.delete(segment); await catchUp(segment, ids) }
+    for (const segment of segments) { segments.delete(segment); await catchUp(segment, ids) }
     if (!ids.length || stopped) return
     try { kick(ids) } catch { /* the kick is a hint: a query folds the same members */ }
   }
+  const drain = () => pass(pending)
 
   // Measurement seam for scripts/perf-capture.mjs (D62): nothing is installed unless that script set the hook, so
   // the product path is one `typeof` per pass.
@@ -136,7 +137,7 @@ export function createIndexKeeper({ home, failure = () => {}, kick = () => {}, i
     },
     flush(segment) {
       if (stopped || !segment) return chain
-      if (!handed.has(segment)) { pending.delete(segment); handed.add(segment); after(() => catchUp(segment)) }
+      if (!handed.has(segment)) { pending.delete(segment); handed.add(segment); after(() => pass(new Set([segment]))) }
       return chain
     },
     /** The seal queue waited for `flush` and gave up (its deadline): this segment's index is the sealer's from NOW,

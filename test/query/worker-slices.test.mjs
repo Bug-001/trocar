@@ -25,7 +25,7 @@ const until = (ok, ms, what) => { let t; return within(new Promise((d) => { t = 
 const homeOf = () => { const home = path.join(tmpDir('trocar-slices-'), '.trocar'); fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 }); return home }
 const sizeOf = (f) => { try { return fs.statSync(f).size } catch { return 0 } }
 
-test('a never-projected session answers with pending, extraction goes on with nobody asking, and the idle exit leaves work for the next worker (3.5 #24)', { timeout: 300_000 }, async () => {
+test('a never-projected session answers with pending, extraction goes on with nobody asking, and the worker leaves idle only once the session is done (3.5 #24, #32)', { timeout: 300_000 }, async () => {
   const home = homeOf()
   const s = bigSession({ home, subLanes: 4, late: 3 })
   s.growTo(128 << 20) // far more than one 50 ms slice extracts
@@ -43,13 +43,14 @@ test('a never-projected session answers with pending, extraction goes on with no
     // (b) with no request, the projection grows: extraction runs with nobody asking
     const file = projectionFile(home, s.id), size0 = sizeOf(file)
     await until(() => sizeOf(file) > size0, 10_000, 'the projection grew with nobody asking')
-    // the idle clock is the daemon's: slices hold none, so the worker leaves on it with members still to extract
+    // the idle clock is the daemon's, and it counts from the worker's last background slice: the worker leaves on it once the
+    // session is extracted and folded, not with members left
     const w = kids[0]
-    await until(() => w.exitCode !== null || w.signalCode !== null, IDLE * 10, 'the idle worker left')
-    assert.deepEqual(said, [], 'an idle exit with work left is no failure')
+    await until(() => w.exitCode !== null || w.signalCode !== null, 120_000, 'the idle worker left')
+    assert.deepEqual(said, [], 'an idle exit is no failure')
     const next = await ask(svc, 'session', { id: s.id })
     assert.equal(kids.length, 2, 'the next query forked a new worker')
-    assert.ok(next.pending, 'members remained when the idle worker left')
+    assert.equal(next.pending, undefined, 'no member remained when the idle worker left')
   } finally { svc.stop() }
 })
 

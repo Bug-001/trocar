@@ -28,7 +28,7 @@ export function fsTag(fs = nodeFs) {
 /** A file's identity, the same three fields the index layer calls a match (src/query/index-build.mjs `usability`):
  *  size + mtime + ctime. `null` when there is no such file — which is itself a stamp (it may come back). */
 export function statKey(file, fs = nodeFs) {
-  try { const s = fs.statSync(file); return `${s.size}:${s.mtimeMs}:${s.ctimeMs}` } catch { return null }
+  try { const s = fs.statSync(file, { throwIfNoEntry: false }); return s ? `${s.size}:${s.mtimeMs}:${s.ctimeMs}` : null } catch { return null } // no file: no error built
 }
 
 /** A row list's identity (src/query/rows.mjs rows): the records it names were appended once and are never

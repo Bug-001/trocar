@@ -13,7 +13,7 @@
 // the state the log's sidecar holds (resumed(): over the log, or the worker's log cut back to what the state covers), else rebuilt
 // into a throwaway log that takes the file log over at its frontier, writing nothing before that; the local path (no writer: the log
 // opened write:false, new lines in an off-heap arena, nothing on disk) folds nothing when the log covers every member, else
-// everything in the request. The worker saves the sidecars at idle and every max(256, n/8) calls folded (sidecars()).
+// everything in the request. The worker saves the sidecars at idle, every max(256, n/8) calls folded and every CHECKPOINT_MS (sidecars()).
 // A log folded under another cut is folded again from scratch (the worker deletes and rewrites it; the local path in memory).
 //
 // WARM (D63 ①; 3.5 §缓存按依赖失效): per (fs, home, session, writer) the projection store stays open and the state (the reduction,
@@ -111,15 +111,15 @@ const PER_ROW_KEPT = 64;
 export function planOf(members, k, store, id) {
   const perRow = perRows.get(k) || SPINE_PER_ROW;
   let p = store.plan;
-  if (p && p.members === members && p.perRow === perRow && p.blocks === store.defCount) return p;
-  const n0 = p ? p.members.length : 0;
+  if (p && p.members === members && p.n === members.length && p.perRow === perRow && p.blocks === store.defCount) return p;
+  const n0 = p ? p.n : 0; // a member array grows in place (rows.mjs sessionGroups): the plan counts what it took
   if (!p || n0 > members.length || String(members[0].id) !== p.first || String(members[n0 - 1].id) !== p.last) {
     p = store.plan = { store, members: [], first: String(members[0].id), last: null, all: sums(), byId: new Map(), facts: sessionFacts(String(id)),
       ex: 0, pos: new Int32Array(0), gen: 0, start: -1, read: [], shown: null };
   }
-  const added = members.slice(p.members.length);
+  const added = members.slice(p.n || 0);
   for (const r of added) { p.byId.set(String(r.id), r); sum(p.all, r); p.facts.add(r); }
-  p.members = members; p.last = String(members[members.length - 1].id);
+  p.members = members; p.n = members.length; p.last = String(members[members.length - 1].id);
   p.key = `${p.all.n}:${p.first}:${p.last}:${p.all.stored + p.all.n}`;
   cut(p, perRow, added);
   p.gen++;
@@ -177,15 +177,21 @@ function posOf(p, rid) {
 const inCut = (p, r) => p.start === 0 || stepOrder(r, p.read[0]) >= 0;
 const keyOf = ({ fs, home, writer }, id) => `${fsTag(fs)}\n${home}\n${id}\n${writer === true ? 'w' : 'r'}`;
 
-// The segment index of THIS request, read once whether version() asked first (src/query/answers.mjs) or not.
-async function indexed({ home, fs, once }) {
+// The segment index of THIS request, read once whether version() asked first (src/query/answers.mjs) or not; the worker's
+// background reads it through here too, once per kick (src/query/worker.mjs kickedSessions).
+export async function indexed({ home, fs, once }) {
   if (once && once.index) return once.index;
   const errors = [], got = { rows: await indexRows({ home, fs, errors }), errors };
   if (once) once.index = got;
   return got;
 }
 // A hand-off lets the read-only store go: the worker writes the members it lacks, which a store opened before cannot see.
-function letGo(k, e) { const s = stores.get(k), st = states.take(k); if (st) closeState(st); stores.delete(k); frontiers.delete(k); if (s) s.close(); return e; }
+function letGo(k, e) { closeStore(k); return e; }
+// Every store closes here (a hand-off, the eviction past STORES): its reduction state with it, and its `work` stays with the worker.
+function closeStore(k) { const s = stores.get(k), st = states.take(k); if (st) closeState(st); stores.delete(k); frontiers.delete(k); if (s) { works.set(k, s.work); s.close(); } }
+// session key → `pending.work` (3.5 §会话读): the members extracted and handed to a reduction for it in this worker, across its store's
+// close and reopen, so it only grows while the worker lives (3.5:43). One number per session the worker opened.
+const works = new Map();
 // The projection store of a session, open across requests (the least recently used closed past STORES). What opening it said (a
 // rebuild) stays with the store (`opened`) until the next answer of that session says it, whoever opened it: a background slice
 // has no caller to tell.
@@ -196,9 +202,9 @@ function storeOf(ctx, id, k) {
   const opened = [];
   s = openProjection({ home: ctx.home, fs: ctx.fs, key: id, write: ctx.writer === true, errors: opened });
   s.opened = opened;
-  s.work = 0; // members extracted and handed to a reduction while the store lives: `pending.work` (3.5 §会话读)
+  s.work = works.get(k) || 0; // `pending.work`, counted on the open store and kept by closeStore
   stores.set(k, s);
-  for (const [kk, v] of stores) { if (stores.size <= STORES) break; stores.delete(kk); const st = states.take(kk); if (st) closeState(st); frontiers.delete(kk); v.close(); }
+  for (const kk of stores.keys()) { if (stores.size <= STORES) break; closeStore(kk); }
   return s;
 }
 
@@ -253,11 +259,14 @@ function sidecars(store) {
     st.log.saveIndex([...dumpColumns(sync(st.cols, st.log)),
       ...(live ? [['r.s', v8.serialize(st.R.snapshot())], ['r.m', [JSON.stringify({ rv: REDUCE_V, cut: st.cut })]]] : [])]);
   } catch { /* the next idle period */ }
-  st.saved = st.n;
+  st.saved = st.n; st.savedAt = performance.now();
 }
 // During a fold the worker saves both sidecars once it folded max(SAVE_MIN, folded / SAVE_PART) calls since the last save: a worker
 // killed in a long fold resumes near where it was, and the saves of a first fold write O(n log n) bytes, not O(n²) (4.3 §4 旁索引).
-const SAVE_MIN = 256, SAVE_PART = 8;
+// And once CHECKPOINT_MS passed since the last save, whatever was folded: a kill loses at most that much of a slow fold (3.5
+// 后台抽取与归约). A save writes the whole reduction state, so at most once a minute it is a small part of the fold's own work.
+// TROCAR_CHECKPOINT_MS, read once, shortens it for a test.
+const SAVE_MIN = 256, SAVE_PART = 8, CHECKPOINT_MS = Number(process.env.TROCAR_CHECKPOINT_MS) || 60_000;
 const cutOf = (plan) => (plan.start ? String(plan.read[0].id) : null);
 /** markOn(plan, rid) → the mark on the wire (3.5 id): the frontier rid, and when the plan is cut `@` and its cut's first rid, so a
  *  mark names the cut its document was answered under. sinceAt(plan, M) → the rid M names when its cut is this plan's, else null:
@@ -283,7 +292,7 @@ function stateOf(ctx, id, store, plan) {
   const writer = ctx.writer === true, home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   const open = (upTo) => openFoldLog({ home, fs, key: id, write: writer, projection: { id: store.id, bytes: store.bytes }, errors: s.sink, upTo });
   const s = { base: liveHeap(), meter: null, store, perRow: plan.perRow, cut: cutOf(plan), n: 0, cost: 0, sink: [], hook: null, resolve: null,
-    cols: columns(store.rows.slotOf), view: null, R: null, T: null, relay: null, target: null, fc: 0, fp: null, writer, open, saved: 0 };
+    cols: columns(store.rows.slotOf), view: null, R: null, T: null, relay: null, target: null, fc: 0, fp: null, writer, open, saved: 0, savedAt: performance.now() };
   const log = open(), m = markOf(log);
   if (m != null && foldedUnder(log, plan, m)) {
     s.log = log; s.target = m; seed(s);
@@ -305,6 +314,14 @@ function seed(s) {
   const sv = s.log.saved, c = sv && loadColumns(s.store.rows, sv.parts);
   s.cols = c && c.at <= s.log.frontier ? c : columns(s.store.rows.slotOf);
 }
+// v8.deserialize, every typed array in its own bytes: the default makes an aligned one a view over the whole serialized state, which
+// would stay alive (as large as the state itself) for as long as the reduction holds that array.
+function thaw(buf) {
+  const d = new v8.DefaultDeserializer(buf);
+  d._readHostObject = function () { const v = v8.DefaultDeserializer.prototype._readHostObject.call(this); return Buffer.isBuffer(v) ? Buffer.from(v) : new v.constructor(v); };
+  d.readHeader();
+  return d.readValue();
+}
 // A cold state's reduction resumed from the state its log's sidecar holds (4.3 §4 旁索引) when it was folded under this cut and
 // REDUCE_V: it covers the log's last frontier → over the log as it is; it covers less (a worker killed after a save) and this is the
 // worker → over the log opened again cut back to what it covers. The members it folded are `R.has`, so the fold cursor walks past
@@ -318,7 +335,7 @@ function resumed(s) {
   try {
     const m = JSON.parse(meta[0]);
     if (m.rv !== REDUCE_V || m.cut !== s.cut) return false;
-    from = v8.deserialize(state);
+    from = thaw(state);
   } catch { return false; }
   if (!(sv.bytes > s.log.frontier)) {
     if (!s.writer) return false;
@@ -350,7 +367,7 @@ function fold(s, plan, F, ms) {
       if (!want.length) continue;
       const rest = s.R.add(want, { budgetMs: ms - (performance.now() - t0) });
       s.n += want.length - rest.length; s.store.work += want.length - rest.length; added = true;
-      if (s.writer && s.target == null && s.n - s.saved >= Math.max(SAVE_MIN, s.n / SAVE_PART)) sidecars(s.store);
+      if (s.writer && s.target == null && (s.n - s.saved >= Math.max(SAVE_MIN, s.n / SAVE_PART) || performance.now() - s.savedAt >= CHECKPOINT_MS)) sidecars(s.store);
       if (rest.length) { s.fc = posOf(plan, rest[0]); return; }
     }
     if (s.target == null || end < to) return;
@@ -470,7 +487,7 @@ export async function extendSession(ctx, id, budgetMs) {
   const r = await advance(ctx, String(id), { budgetMs, request: false });
   if (!r) return false;
   const { st, plan, ex } = r;
-  return ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.members.length);
+  return ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n);
 }
 
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the

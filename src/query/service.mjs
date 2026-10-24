@@ -16,7 +16,7 @@
 // that was 842-1142 ms against 548 ms locally. It answers 503 at once, which the one read client reads as "no warm
 // worker" and answers locally, at local speed; the same query line then warms a worker in the background, so the
 // next query is the warm one. "No worker while nobody queries" (D63) is untouched: nothing is forked until a query
-// arrives, and a worker nobody has asked anything for QUERY_IDLE_MS leaves (3.5 谁执行它). The DAEMON keeps that clock, not
+// arrives, and a worker that answered, was kicked or ran a background slice last QUERY_IDLE_MS ago leaves (3.5 谁执行它). The DAEMON keeps that clock, not
 // the worker: it alone knows whether a request is in flight or queued (a worker's own timer was off for as long as one of
 // its answers was unfinished, so a stuck answer kept it, and its warm heap, for good), and the clock starts only when
 // nothing is, so an idle exit never cuts a query and is not a failure. The board's `relay` (4.4, D66) has no local path, so it is the one caller that waits for a fork.
@@ -160,10 +160,11 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
       if (errHead.length < STDERR_HEAD) errHead += t.slice(0, STDERR_HEAD - errHead.length)
       errTail = (errTail + t).slice(-STDERR_TAIL)
     })
-    // a worker still working says so (worker.mjs PROGRESS_MS): its silence clock starts again (3.5:42)
+    // a worker still working says so (worker.mjs PROGRESS_MS): its silence clock starts again (3.5:42), and so does the idle
+    // clock when no request is queued or in flight: a background slice is work, so a long kicked fold is not cut (3.5 后台抽取与归约)
     c.on('message', (m) => {
       if (child !== c || !m) return
-      if (m.progress === true && pending && !paused) arm(pending)
+      if (m.progress === true) { if (pending && !paused) arm(pending); idleClock() }
       // a D38 record the worker owes (4.3 盘满 `projection-write-failed`): written here, where the daemon's records are
       if (m.failure && typeof m.failure.code === 'string') failure('daemon', Object.assign(new Error(String(m.failure.reason)), { code: m.failure.code }))
     })
@@ -288,7 +289,8 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     }
   }
 
-  /** The idle clock, (re)started when nothing is queued or in flight: the worker leaves idleMs after the last request or kick. */
+  /** The idle clock, (re)started when nothing is queued or in flight: the worker leaves idleMs after the last request, kick or
+   *  background slice it reported. */
   const idleClock = () => {
     clearTimeout(idle)
     if (asked || !child) return
@@ -307,10 +309,11 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
 
   /** The index keeper's kick (3.5 §后台抽取与归约): the record ids of model calls just indexed, handed to the worker (forked if there
    *  is none), which folds their sessions at low priority. One IPC line: this process parses no body, knows no session, computes nothing. A worker that dies with no request
-   *  in flight opens an episode of subject KICK, and while it cools no kick forks; after stop() a kick does nothing. */
+   *  in flight opens an episode of subject KICK, and while it cools no kick forks — a live worker (a query's) still gets it; after
+   *  stop() a kick does nothing. */
   let stopped = false
   const kick = (ids) => {
-    if (stopped || !Array.isArray(ids) || !ids.length || cooling(KICK)) return
+    if (stopped || !Array.isArray(ids) || !ids.length || (!child && cooling(KICK))) return
     const c = child || start()
     if (c.connected) c.send({ kick: ids.map(String) }, () => {}) // a send that fails is the worker's close, which says it
     idleClock()

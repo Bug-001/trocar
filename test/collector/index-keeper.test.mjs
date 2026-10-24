@@ -216,3 +216,27 @@ test('交接之后在飞的那趟不再写:封存器换掉索引文件,新文件
   await tick(); await keeper.idle()
   assert.deepEqual(fs.readFileSync(idxFile(h)), sealer)
 })
+
+// 3.5 #32 (§后台抽取与归约 kick, 4.2 §段索引): the close pass kicks too — the model calls written since the last debounced pass
+// are handed to the worker when the segment closes, not lost with the debounce the close pre-empted. Axis: model call, non-LLM,
+// log-only; only the model calls are kicked, by their record ids.
+test('the close pass kicks the model calls written since the last pass, and only those (3.5 #32)', async () => {
+  const { createRecordStore } = await import('../../src/collector/core/record/store.mjs')
+  const h = tmpDir('trocar-keeper-kick-')
+  fs.mkdirSync(path.join(h, 'collector'), { recursive: true })
+  const kicked = []
+  const store = createRecordStore({ root: path.join(h, 'collector') })
+  const keeper = createIndexKeeper({ home: h, debounceMs: 60_000, kick: (ids) => kicked.push(...ids) })
+  store.onRecord((seg, facts) => keeper.wrote(seg, facts))
+  const env = (i, extra) => ({ id: `r${i}`, ts: '2026-10-24T00:00:00.000Z', ts_request: '2026-10-24T00:00:00.000Z', method: 'POST', endpoint: '/v1/responses',
+    host: 'api.openai.com', traffic_class: 'llm', is_llm_call: true, req_headers: { 'content-type': 'application/json' },
+    req_body: JSON.stringify({ model: 'gpt-5', prompt_cache_key: 'sess-1', input: 'x' }), resp: { status: 200, kind: 'json', body: { ok: true } },
+    proc: { pid: 4242, agent: 'codex' }, ...extra })
+  const kinds = [{}, { is_llm_call: false, traffic_class: 'other', host: 'example.test' }, { body_retention: 'log' }, {}]
+  kinds.forEach((k, i) => assert.equal(store.envelope(env(i + 1, k)).ok, true))
+  const segment = store.currentSegment
+  try {
+    await keeper.flush(segment)
+    assert.deepEqual(kicked, [`${segment}:1`, `${segment}:4`], 'the close pass kicked exactly the model calls it indexed')
+  } finally { await keeper.stop(); store.close() }
+})

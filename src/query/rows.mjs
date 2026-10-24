@@ -46,8 +46,8 @@ const lineOf = (id) => Number(String(id).split(':').pop());
  */
 export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [] } = {}) {
   const segs = [];
-  for (const [segment] of segmentFiles(home, fs)) {
-    const { records, problems } = await warmSegmentIndex({ home, segment, fs });
+  for (const [segment, at] of segmentFiles(home, fs)) {
+    const { records, problems } = await warmSegmentIndex({ home, segment, fs, at });
     for (const pr of problems) errors.push(problemEntry(`segments/${segment}`, pr));
     segs.push({ segment, records, entry: recordsId(records) });
   }
@@ -62,14 +62,15 @@ function rowList(segs, old) {
   const grown = !!old && i === segs.length - 1 && i === old.parts.length - 1 && old.parts[i].segment === segs[i].segment && grownFrom(segs[i].records) === old.parts[i].entry;
   const parts = old ? old.parts.slice(0, i) : [];
   // the positions the old list had all stay (only rows were added after them): its session index goes on, a session's positions
-  // copied before its first new one; else it is built again from the derived columns
+  // appended past the old list's count of them (a list reads its own `n` of a shared array; the array is copied only when another
+  // list appended to it already); else it is built again from the derived columns
   const from = grown ? old.parts[i].end : i ? parts[i - 1].end : 0, extend = !!old && from === old.rows.length;
   const index = extend ? new Map(old.index) : new Map(), mine = new Set();
   let slots = extend ? old.slots : 0;
   const place = (sid, at) => {
-    let a = index.get(sid);
-    if (!a) { index.set(sid, (a = [])); mine.add(a); } else if (!mine.has(a)) { index.set(sid, (a = a.slice())); mine.add(a); }
-    a.push(at); slots++;
+    let v = index.get(sid);
+    if (!v) { index.set(sid, (v = { a: [], n: 0 })); mine.add(v); } else if (!mine.has(v)) { index.set(sid, (v = { a: v.a.length === v.n ? v.a : v.a.slice(0, v.n), n: v.n })); mine.add(v); }
+    v.a.push(at); v.n++; slots++;
   };
   if (!extend) for (const p of parts) for (let k = 0; k < p.end - p.start; k++) { const sid = cellAt(p.d, 0, k); if (sid) place(sid, p.start + k); }
   for (let j = i; j < segs.length; j++) {
@@ -195,16 +196,15 @@ function listGroups(rows) {
   let refs = built.get(rows);
   if (!refs) built.set(rows, (refs = new Map()));
   // the array still held for `id` when it is this list's (a list before this one made it: its positions are a prefix of these),
-  // grown by the new members
+  // grown by the new members: a session's member array only grows, so what a member costs is its own row (an older list that asks
+  // after a newer one grew it gets its own array)
   const held = (id, at) => {
     const ref = refs.get(id), a = ref && ref.deref();
-    if (!a || a.length > at.length) return null;
-    if (a.length === at.length) return a;
-    const grown = a.concat(at.slice(a.length).map((i) => rows.at(i)));
-    refs.set(id, new WeakRef(grown));
-    return grown;
+    if (!a || a.length > at.n) return null;
+    for (let i = a.length; i < at.n; i++) a.push(rows.at(at.a[i])); // grown in place: a holder counts the members it took (planOf)
+    return a;
   };
-  const make = (at) => at.map((i) => rows.at(i));
+  const make = (at) => at.a.slice(0, at.n).map((i) => rows.at(i));
   return {
     get size() { return index.size; },
     has: (id) => index.has(id),
