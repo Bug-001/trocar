@@ -3,6 +3,7 @@
 // node --test runs every .mjs, so nothing here runs at import. The browser suite runs only under `npm run test:browser`
 // (TROCAR_PLAYWRIGHT=1); anywhere else probe() says why it is not ok and the cases skip with that reason.
 import fs from 'node:fs'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { boardHome, serveBoard } from '../real-face.mjs'
@@ -26,7 +27,7 @@ export async function probe({ importer = () => import('playwright-core'), env = 
  *  `setup(page)` runs before the first navigation (routes a case must hold from the first request on).
  *  `home`: a prebuilt {userHome, home} served instead of boardHome({bytes}). `base`: an external board's URL carrying `#t=<token>` — no
  *  face is started (`face` is null) and `get` reads that board with the token header.
- *  `requests` logs every /api and /control response as {url, method, body (the request's post data, or null), status, start (ms epoch the request began), t (ms epoch it answered)}; `errors` collects pageerrors; `get(name, params)` reads the face directly (no page, no request log). Always `await stop()`. */
+ *  `requests` logs every /api (the answer files /api/d/* too) and /control response as {url, method, body (the request's post data, or null), range (its Range header, or null), status, start (ms epoch the request began), t (ms epoch it answered)}; `errors` collects pageerrors; `get(name, params)` reads the face directly (no page, no request log). Always `await stop()`. */
 export async function withBoard({ bytes, home, base, token = true, width = 1280, height = 900, theme = 'light', chromium, setup } = {}) {
   chromium ||= (await import('playwright-core')).chromium
   const face = base ? null : await serveBoard(home || boardHome({ bytes }))
@@ -57,7 +58,7 @@ export async function withBoard({ bytes, home, base, token = true, width = 1280,
     page.on('response', (r) => {
       const u = new URL(r.url())
       if (!/^\/(api|control)\//.test(u.pathname) && r.status() >= 400) missing.push(`${r.status()} ${u.pathname}`) // a static file the page asked for and did not get (a /favicon.ico once)
-      if (/^\/(api|control)\//.test(u.pathname)) requests.push({ url: u.pathname + u.search, method: r.request().method(), body: r.request().postData(), status: r.status(), start: r.request().timing().startTime, t: Date.now() })
+      if (/^\/(api|control)\//.test(u.pathname)) requests.push({ url: u.pathname + u.search, method: r.request().method(), body: r.request().postData(), range: r.request().headers().range ?? null, status: r.status(), start: r.request().timing().startTime, t: Date.now() })
     })
     await setup?.(page)
     const t = token === true ? face?.token : token
@@ -97,22 +98,49 @@ export async function timed(page, cond, arg, act) {
   }), [cond, arg])
 }
 
-/** The board's `session` and `lane` reads answered from desk-world `w` (desk-world.mjs, 3.5 §会话读's reference server) at the mark
- *  w.marks[k], k starting at `from` (default the last). `grow` > 0: a session still being read for the first time (3.5 §归约前沿) — each
- *  `since` read moves k on by `grow` members, and every answer before the last mark carries `pending: {done, total}`.
- *  `latency`: every answer waits that many ms first. → { left() }: the members not reached yet. */
-export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0, latency = 0 } = {}) {
+/** The board's reads answered from desk-world `w` (desk-world.mjs, 3.5 §会话读's reference server) at the mark w.marks[k], k starting at
+ *  `from` (default the last): the answer files /api/d/head (ETag, 304 on If-None-Match), /api/d/p<n>.<part> (`pack` members a pack) and
+ *  /api/d/open.<part> (append-only: each read appends the lines of the open span that changed since the last one, `g` for a rid that
+ *  left it; `Range: bytes=N-` → 206 or 416 as 4.4 §答案文件), and `lane` (the ledger) and `block`. `grow` > 0: a session still being read
+ *  for the first time (3.5 §归约前沿) — each head read moves k on by `grow` members, and every head before the last mark carries
+ *  `pending: {done, total}`. `latency`: every answer waits that many ms first. → { left() }: the members not reached yet. */
+export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0, latency = 0, pack = 32 } = {}) {
   const last = w.marks.length - 1
-  let k = Math.min(from, last)
+  let k = Math.min(from, last), at = null, f = null
   const json = (route, doc) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(doc) })
-  const session = (doc) => (k < last ? { ...doc, pending: { done: k + 1, total: last + 1 } } : doc)
   const wait = () => new Promise((r) => setTimeout(r, latency))
-  await page.route('**/api/session?**', async (route) => {
+  const now = () => { if (at !== k) { at = k; f = w.files(w.marks[k], pack); if (k < last) f.head = { ...f.head, pending: { done: k + 1, total: last + 1 } } } return f }
+  const tails = new Map() // part → {n, text, last: Map(id → its lines' JSON)}
+  function tail(part) {
+    const { head, docHead, open } = now(), n = head.open.n
+    let t = tails.get(part)
+    if (!t || t.n !== n) tails.set(part, t = { n, text: JSON.stringify(docHead({ tail: { n, part, s0: head.open.s0 } })) + '\n', last: new Map() })
+    const seen = new Set()
+    for (const [id, lines] of open(part)) {
+      const j = lines.map((x) => JSON.stringify(x) + '\n').join('')
+      seen.add(id)
+      if (t.last.get(id) !== j) { t.text += j; t.last.set(id, j) }
+    }
+    for (const id of [...t.last.keys()]) if (!seen.has(id)) { t.last.delete(id); if (!id.startsWith('l:')) t.text += JSON.stringify({ g: id }) + '\n' }
+    return Buffer.from(t.text)
+  }
+  await page.route('**/api/d/**', async (route) => {
     await wait()
-    const q = new URL(route.request().url()).searchParams
-    if (!q.has('since')) return json(route, session(w.full(w.marks[k], { before: q.get('before') })))
-    k = Math.min(last, k + grow)
-    json(route, session(w.since(q.get('since'), w.marks[k])))
+    const req = route.request(), u = new URL(req.url()), name = u.pathname.slice('/api/d/'.length)
+    if (name === 'head') {
+      k = Math.min(last, k + (at == null ? 0 : grow))
+      const body = JSON.stringify(now().head), etag = `"${createHash('sha1').update(body).digest('hex').slice(0, 16)}"`
+      if (req.headers()['if-none-match'] === etag) return route.fulfill({ status: 304, headers: { etag } })
+      return route.fulfill({ status: 200, contentType: 'application/json', headers: { etag }, body })
+    }
+    const pk = /^p(\d+)\.(main|rest)$/.exec(name), op = /^open\.(main|rest)$/.exec(name)
+    if (pk) { const text = now().pack(+pk[1], pk[2]); return text == null ? json(route, { error: 'no such pack' }) : route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: text }) }
+    if (!op) return route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"unknown endpoint"}' })
+    const buf = tail(op[1]), r = /^bytes=(\d+)-$/.exec(req.headers().range || '')
+    if (!r) return route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: buf })
+    const from = +r[1]
+    if (from >= buf.length) return route.fulfill({ status: 416, headers: { 'content-range': `bytes */${buf.length}` }, body: '' })
+    route.fulfill({ status: 206, contentType: 'application/x-ndjson', headers: { 'content-range': `bytes ${from}-${buf.length - 1}/${buf.length}` }, body: buf.subarray(from) })
   })
   await page.route('**/api/lane?**', async (route) => { await wait(); const q = new URL(route.request().url()).searchParams; json(route, w.lane(q.get('lane'), { from: q.get('from') ?? undefined, to: q.get('to') ?? undefined, ledger: q.get('ledger') ?? undefined }, w.marks[k])) })
   // 3.5 §会话读 `block`: one item per asked ref, its bytes made from the ref (the shape of session-read-contract.json `block_multi`)

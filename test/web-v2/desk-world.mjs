@@ -247,12 +247,62 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, s
       prev: lo > 0 && hi > lo ? cs[lo].rid : null, next: hi < cs.length && hi > lo ? cs[hi - 1].rid : null })
   }
 
+  // ── the answer files at mark `at` (3.5 session --head, lane --pack / --tail): members in arrival order, `P` to a pack; a rid lives in
+  // the file of its own arrival span, `main` = the axis (main) lane's lines, `rest` the others. → {head, pack(n, part) → text, open(part) →
+  // [[rid | `l:<lane>`, lines]] (the open span's rendering, one entry per rid and per lane head: serveWorld appends the changed ones to its tail)}
+  function answerFiles(at = now, P = 64) {
+    const d = docAt(at), k = marks.indexOf(at) + 1, sealed = Math.floor(k / P), arrival = new Map(calls.map((c, j) => [c.rid, j]))
+    const axis = [...d.lanes.values()].find((h) => h.kind === 'main')?.lane ?? null, mainCs = d.laneCalls.get(axis) || []
+    const evs = new Map(), place = new Map()
+    for (const [key, cs] of d.laneCalls) { for (const e of laneEventsOf(key, cs)) (evs.get(e.rid) || evs.set(e.rid, []).get(e.rid)).push(e); cs.forEach((c, i) => place.set(c.rid, [key, i])) }
+    const spanOf = (rid) => Math.floor(arrival.get(rid) / P), partOf = (key) => (key === axis ? 'main' : 'rest')
+    const fileOf = new Map() // `${n}.${part}` → {rids (step order), heads}
+    const into = (n, part) => fileOf.get(`${n}.${part}`) || fileOf.set(`${n}.${part}`, { rids: [], heads: [] }).get(`${n}.${part}`)
+    for (const [key, cs] of d.laneCalls) {
+      for (const c of cs) into(spanOf(c.rid), partOf(key)).rids.push(c.rid)
+      into(spanOf(cs.at(-1).rid), partOf(key)).heads.push(d.lanes.get(key))
+    }
+    // the lines of a file: its lane heads, then per rid (step order) its row, the definitions it meets first, its step, its record
+    const linesOf = (f) => {
+      const out = f.heads.map((h) => [`l:${h.lane}`, [{ l: h }]]), sent = new Set(), prevIn = new Map()
+      for (const rid of f.rids) {
+        const c = byRid.get(rid), [key, i] = place.get(rid), p = prevIn.get(key) ?? null
+        prevIn.set(key, c)
+        const ops = p ? encode(p.list, c.list) : [[1, ...c.list]], attrs = {}
+        let pos = 0
+        for (const op of ops) { if (op[0] === 0) { pos += op[2]; continue } for (const b of op.slice(1)) { if (attrsOf.has(b)) attrs[pos] = attrsOf.get(b); pos++ } }
+        const ds = [...c.list, ...c.reply].filter((b) => !sent.has(b) && sent.add(b)).map((b) => ({ d: defs.get(b) }))
+        out.push([rid, [{ c: d.rows.get(rid) }, ...ds, { s: { rid, lane: key, i, parent: p ? p.rid : null, ops, reply: c.reply, attrs, events: evs.get(rid) || [],
+          detail: { norm: { stop_reason: 'end_turn', usage: null }, respRefs: [], nonBlockKeys: {}, extraMessages: [], wire: { reqEncoding: 'identity' } } } },
+        { r: recordsOf(d, [rid])[0] }]])
+      }
+      return out
+    }
+    const text = (doc, f) => [doc, ...linesOf(f).flatMap(([, ls]) => ls)].map((x) => JSON.stringify(x) + '\n').join('')
+    const docHead = (o) => ({ schema: 2, command: 'lane', ok: true, errors: [], v: 1, id: 'S', ...o })
+    const span = (n) => { const is = (fileOf.get(`${n}.main`)?.rids || []).map((rid) => place.get(rid)[1]); return is.length ? [Math.min(...is), Math.max(...is) + 1] : [0, 0] }
+    const packs = Array.from({ length: sealed }, (_, n) => {
+      const [s0, s1] = span(n), t = ['main', 'rest'].map((part) => text(docHead({ pack: { n, part, s0, s1 } }), fileOf.get(`${n}.${part}`) || { rids: [], heads: [] })).join('')
+      return { n, s0, s1, tag: createHash('sha1').update(t).digest('hex').slice(0, 16) }
+    })
+    const openS0 = Math.min(mainCs.length, ...((fileOf.get(`${sealed}.main`)?.rids || []).map((rid) => place.get(rid)[1])))
+    const cuts = mainCs.flatMap((c, i) => (i && c.evs.includes('compaction') ? [i] : [])), ends = [0, ...cuts, mainCs.length]
+    const head = { schema: 2, command: 'session', ok: true, errors: [], v: 1, id: 'S', tier: 1, mark: at, markTs: byRid.get(at).ts, pending: null, truncated: null, failed: 0,
+      meta: { session_id: 'S', harness: 'claude-code', title: 'World' }, stats: { calls: d.rows.size, lanes: d.lanes.size }, logged: 0, probes: 0,
+      ...(unknownAt(at) ? { unknown: unknownAt(at) } : null), axis, steps: mainCs.length, peak: Math.max(0, ...mainCs.map((c) => d.rows.get(c.rid).ctx)), cols: '', bucket: 1,
+      chapters: ends.slice(1).map((s1, j) => ({ k: j, s0: ends[j], s1, rid0: mainCs[ends[j]]?.rid ?? null, ts0: mainCs[ends[j]]?.ts ?? null, ts1: mainCs[s1 - 1]?.ts ?? null, inferred: false, peakCtx: 0 })).filter((c) => c.s1 > c.s0),
+      packs, open: { n: sealed, s0: openS0 }, lanes: [...d.lanes.values()], lanesMore: 0, last: mainCs.length ? { rid: mainCs.at(-1).rid, n: mainCs.at(-1).list.length } : null }
+    return { head, docHead,
+      pack: (n, part) => (n < sealed ? text(docHead({ pack: { n, part, s0: packs[n].s0, s1: packs[n].s1 } }), fileOf.get(`${n}.${part}`) || { rids: [], heads: [] }) : null),
+      open: (part) => linesOf(fileOf.get(`${sealed}.${part}`) || { rids: [], heads: [] }) }
+  }
+
   /** get(name, params) as the board's api would answer it, at mark `at`. */
   const get = (at = now) => async (name, p = {}) => name === 'session'
     ? (p.since != null ? since(p.since, at) : full(at, { before: p.before ?? null }))
     : lane(p.lane, { from: p.from, to: p.to, ledger: p.ledger }, at)
 
-  return { seed, marks, now, page, full, since, lane, get,
+  return { seed, marks, now, page, full, since, lane, get, files: answerFiles,
     list: (rid) => byRid.get(rid).list,
     /** lane `key`'s whole ledger at mark `at`: {resources, seen} in key order */
     ledgerAt: (key, at = now) => pack(ledgerOf(docAt(at).laneCalls.get(key) || []), Infinity),
