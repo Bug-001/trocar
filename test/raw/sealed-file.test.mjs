@@ -101,13 +101,14 @@ test('a frozen v1 sealed segment reads back its plaintext, every record and the 
   } finally { sf.close(); }
 });
 
-test('the frame LRU stays within its bound under random reads', () => {
+test('the frame LRU stays within its byte bound under random reads', () => {
   const dir = tmp();
   try {
     const ls = lines(80);
-    const cache = createFrameCache(2);
+    const bytes = 3 * 8192;
+    const cache = createFrameCache({ bytes });
     const sf = openSealed(writeFile(dir, ls, { frameBytes: 8192 }), { frameCache: cache });
-    for (let k = 0; k < 200; k++) { const i = (k * 37) % ls.length; assert.ok(sf.lineAt(i).equals(ls[i])); assert.ok(cache.size <= 2); }
+    for (let k = 0; k < 200; k++) { const i = (k * 37) % ls.length; assert.ok(sf.lineAt(i).equals(ls[i])); assert.ok(cache.bytes <= bytes || cache.size === 1, `${cache.bytes} bytes in ${cache.size} frames`); }
     sf.close();
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

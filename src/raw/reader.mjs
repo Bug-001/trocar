@@ -2,9 +2,8 @@
 //
 // Random access: (stream, id) → index entry → decode the frames it needs (v1: at most CHAIN_MAX steps back to a
 // keyframe; v2: the record's splice frame, then the chunk frames its ranges name) → rebuild the line → check its sha256. Decoded frames go into a bounded LRU
-// that SEVERAL sealed files can share, so a resolver over many files still holds ~8 frames, not 8 per
-// file. Sequential reads (`lines()`) decode one frame at a time and keep only a short window of
-// recent lines, so a loader never holds a whole sealed file in memory (4.6 §日志体积预算).
+// that SEVERAL sealed files can share, so a resolver over many files still holds one byte budget, not one per
+// file. Sequential reads (`lines()`) keep only a bounded window of frames and recent lines, so a loader never holds a whole sealed file in memory (4.6 §日志体积预算).
 //
 // Every check throws rather than returning bytes: a sealed file is the source truth, and a damaged
 // one must surface as damaged, never as plausible wrong text (invariant 4).
@@ -17,45 +16,47 @@ import { readIndex, readVarint, unzigzag, R, FLAG_NL, FLAG_UNPARSEABLE, HEADER_L
 
 export const AMBIGUOUS = -2;
 
-export function createFrameCache(max = 8) {
+// One LRU bounded in BYTES, for decoded frames and for rebuilt lines; the buffers are handed out shared and read-only.
+// Frames are bounded by bytes, not by count: a v2 file interleaves up to OPEN stream groups' chunk frames plus RECENT
+// flushed ones and the splice frame (src/raw/writer.mjs), most of them small, so a reader in record order needs ~40 frames
+// live at once — an 8-frame window decoded the same frames over and over (1,793 decodes for 33 frames on a real segment).
+// `keepNewest`: the entry just set stays even when it alone is over the budget (a frame is about to be read; a line
+// bigger than the whole budget is never resident).
+function byteLru(maxBytes, counted, keepNewest) {
   const m = new Map();
-  const stats = { hits: 0, decodes: 0, maxResident: 0 };
-  return {
-    get(k) { const v = m.get(k); if (v !== undefined) { stats.hits++; m.delete(k); m.set(k, v); } return v; },
-    set(k, v) { stats.decodes++; m.set(k, v); while (m.size > max) m.delete(m.keys().next().value); stats.maxResident = Math.max(stats.maxResident, m.size); },
-    clear() { m.clear(); },
-    get size() { return m.size; },
-    stats,
-  };
-}
-
-// Rebuilt LINES, bounded by bytes, shared the way the frame cache is. A record stored as a delta is rebuilt from its
-// predecessor, which may itself be a delta (up to CHAIN_MAX steps), so N records of one session walked their chains
-// independently: 112 records of the reference dataset cost 1 190 rebuilds — each one an applyOps plus a sha256 over a
-// ~380 KB line — and `query session` over sealed segments paid 221 ms for 42 MB of bytes (D62 A2, the sealed half).
-// Siblings of one chain now rebuild it once. Bounded in BYTES because one line can be megabytes (4.6 §日志体积预算),
-// and the buffers are handed out shared and read-only, exactly like the decoded frames.
-export function createLineCache(maxBytes = 16 << 20) {
-  const m = new Map();
-  const stats = { hits: 0, builds: 0 };
+  const stats = { hits: 0, [counted]: 0, maxResident: 0 };
   let held = 0;
   return {
     get(k) { const v = m.get(k); if (v !== undefined) { stats.hits++; m.delete(k); m.set(k, v); } return v; },
     set(k, v) {
-      stats.builds++;
-      if (v.length > maxBytes) return;                 // one line bigger than the whole budget is never resident
+      stats[counted]++;
+      if (!keepNewest && v.length > maxBytes) return;
+      const was = m.get(k);
+      if (was !== undefined) { m.delete(k); held -= was.length; }
       m.set(k, v); held += v.length;
       for (const [ek, ev] of m) { if (held <= maxBytes) break; if (ek === k) continue; m.delete(ek); held -= ev.length; }
+      stats.maxResident = Math.max(stats.maxResident, m.size);
     },
     clear() { m.clear(); held = 0; },
+    get size() { return m.size; },
     get bytes() { return held; },
     stats,
   };
 }
 
+export const FRAME_CACHE_BYTES = 64 << 20;   // ≥ the decoded working set of an in-order read (4.2 「读」)
+export const createFrameCache = ({ bytes = FRAME_CACHE_BYTES } = {}) => byteLru(bytes, 'decodes', true);
+
+// Rebuilt LINES, shared the way the frame cache is. A record stored as a delta is rebuilt from its predecessor, which may
+// itself be a delta (up to CHAIN_MAX steps), so N records of one session walked their chains independently: 112 records
+// of the reference dataset cost 1 190 rebuilds — each one an applyOps plus a sha256 over a ~380 KB line — and `query
+// session` over sealed segments paid 221 ms for 42 MB of bytes (D62 A2, the sealed half). Siblings of one chain now
+// rebuild it once. Bounded in BYTES because one line can be megabytes (4.6 §日志体积预算).
+export const createLineCache = (maxBytes = 16 << 20) => byteLru(maxBytes, 'builds', false);
+
 let fileSeq = 0;
 
-export function openSealed(file, { fs = nodeFs, frameCache = createFrameCache(8), lineCache = createLineCache() } = {}) {
+export function openSealed(file, { fs = nodeFs, frameCache = createFrameCache(), lineCache = createLineCache() } = {}) {
   const fd = fs.openSync(file, 'r');
   try {
     const st = fs.fstatSync(fd);
@@ -221,9 +222,9 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, version, frameCache
     }
   }
 
-  // v2 in order: its own 16-frame window (4.2 「读」: ~4 groups' current frames + 7 recent + the splice frame).
+  // v2 in order: its own frame window, bounded in bytes like the shared one (4.2 「读」).
   function* linesV2(onError) {
-    const cache = createFrameCache(16);
+    const cache = createFrameCache();
     const getFrame = (f) => { let b = cache.get(f); if (!b) { b = decodeFrame(f); cache.set(f, b); } return b; };
     for (let i = 0; i < records.length; i++) {
       let line;

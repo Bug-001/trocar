@@ -15,7 +15,7 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { createSealWriter, FRAME_BYTES } from './writer.mjs';
-import { openSealed, createFrameCache } from './reader.mjs';
+import { openSealed } from './reader.mjs';
 import { appendJournal } from './journal.mjs';
 import { VERSION } from './format.mjs';
 import { parseSegment } from '../collector/core/record/segments.mjs';
@@ -141,7 +141,7 @@ function* readLines(fs, fd) {
 // line), then rebuild the whole segment in line order and compare its length and sha256 with what was read. Any gap,
 // duplicate or mismatch throws.
 export function verifySealed(fs, sealed, { name, sum, length, lines }) {
-  const f = openSealed(sealed, { fs, frameCache: createFrameCache(8) });
+  const f = openSealed(sealed, { fs });
   try {
     const whole = createHash('sha256');
     let total = 0, want = 0;

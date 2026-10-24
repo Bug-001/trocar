@@ -74,7 +74,7 @@ for (const name of segs) {
     }
     // 4. every record v1 vs v2, and the v2 whole against the plaintext's sha256.
     // 5. frames per v2 record: the frame keys the reader asks for while rebuilding it, with no line cache.
-    const touched = new Set(), fc = createFrameCache(16);
+    const touched = new Set(), fc = createFrameCache();
     const v2 = openSealed(s2.sealed, {
       frameCache: { get: (k) => { touched.add(k); return fc.get(k); }, set: (k, v) => { touched.add(k); fc.set(k, v); } },
       lineCache: { get: () => undefined, set: () => {} },

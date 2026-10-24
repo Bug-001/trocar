@@ -175,3 +175,37 @@ test('a v2 file is refused by a v1-only reader and an unknown version is refused
     assert.equal(got, null, `relabelled version ${version} yielded records`);
   }
 });
+
+// 4.2 「读」: a read in record order decodes each frame about once, however many stream groups interleave — the frame
+// window is bounded in bytes, so the ~OPEN + RECENT + 1 frames live at once in a v2 file stay resident.
+test('an in-order read of many interleaved groups decodes each frame about once, with lineAt and with lines()', () => {
+  const dir = tmpDir('trocar-v2-');
+  for (const [groups, skew] of [[17, 1], [24, 3], [48, 2]]) {
+    const r = rng(groups * 7 + skew);
+    const hist = Array.from({ length: groups }, () => []);
+    const recs = [];
+    for (let i = 0; i < 1200; i++) {
+      const g = Math.floor(groups * r() ** skew);                            // skewed: a few groups carry most records
+      hist[g].push(text(r, 80 + Math.floor(r() * 400)));
+      const line = Buffer.from(JSON.stringify({ id: `r${i}`, g, messages: hist[g].slice(-40) }) + '\n');
+      recs.push({ line, meta: { id: `r${i}`, stream: 's.ndjson', shard: 0, lineNo: i, group: `host${g}/v1/messages` } });
+    }
+    const file = writeV2(path.join(dir, `${groups}.sealed`), recs, { frameBytes: 16 * 1024 });
+    const real = zlib.brotliDecompressSync;
+    let decodes = 0;
+    zlib.brotliDecompressSync = (...a) => { decodes++; return real(...a); };
+    try {
+      for (const way of ['lineAt', 'lines']) {
+        decodes = 0;
+        const sf = openSealed(file);
+        try {
+          if (way === 'lineAt') for (let i = 0; i < recs.length; i++) assert.ok(sf.lineAt(i).equals(recs[i].line));
+          else for (const { i, line } of sf.lines()) assert.ok(line.equals(recs[i].line));
+          assert.ok(sf.frames.length > 40, `${groups} groups: enough frames to matter (${sf.frames.length})`);
+          assert.ok(decodes <= 1.1 * sf.frames.length, `${groups} groups, ${way}: ${decodes} decodes for ${sf.frames.length} frames`);
+        } finally { sf.close(); }
+      }
+    } finally { zlib.brotliDecompressSync = real; }
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
