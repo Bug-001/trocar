@@ -160,7 +160,12 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
         if (tagsOf(req.headers['if-none-match']).includes(etag.slice(1, -1))) { res.writeHead(304, { etag, 'cache-control': 'no-store' }); return res.end(); }
         Object.assign(base, { etag, 'content-encoding': 'gzip', vary: 'accept-encoding' });
       } else {
-        const r = /^bytes=(\d+)-$/.exec(String(req.headers.range || ''));
+        // the tail's generation (§答案文件 代标签): the same while the worker appends, another once it renames a new file in; a Range
+        // read whose If-Range names another one is the whole file (RFC 9110 §13.1.5). bigint: a win32 file id passes 2^53
+        const g = io.fstatSync(fd, { bigint: true });
+        base.etag = `"${g.ino}-${g.birthtimeNs}"`;
+        const ifRange = req.headers['if-range'];
+        const r = ifRange == null || ifRange === base.etag ? /^bytes=(\d+)-$/.exec(String(req.headers.range || '')) : null;
         if (r) {
           from = Number(r[1]);
           if (from >= size) { res.writeHead(416, { ...base, 'content-range': `bytes */${size}`, 'content-length': 0 }); return res.end(); }

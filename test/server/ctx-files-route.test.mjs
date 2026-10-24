@@ -23,7 +23,7 @@ import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from '../query/big-session.mjs'
-import { TOKEN, withToken } from './face.mjs'
+import { TOKEN, withToken, serveFace, request } from './face.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
@@ -261,4 +261,50 @@ test('4.4 #17 A15 · daemon: a keyed call captured through the real door → the
     await box.stop()
     await new Promise((res) => mock.close(res))
   }
+})
+
+// 4.4 §答案文件「代标签」: the tail's ETag names its generation — the same while the worker only appends, another once it renames a
+// whole new file in (its temp file + same-dir rename, ctx-files.mjs putFile) — and a Range read with If-Range of another generation is
+// the whole new file (RFC 9110 §13.1.5), so a reader never applies the new file's bytes from an offset into the old one.
+test('4.4 #15 tail generation: the tag holds over an append and changes on every rename-replace; If-Range of another tag → 200 whole', { timeout: 60_000 }, async () => {
+  const home = path.join(tmpDir('trocar-dfiles-gen-'), '.trocar'), id = 'gen-session'
+  const dir = sessionDir(home, id), file = path.join(dir, 'open.main.ndjson')
+  fs.mkdirSync(dir, { recursive: true })
+  const replace = (text) => { fs.writeFileSync(`${file}.tmp`, text); fs.renameSync(`${file}.tmp`, file) }
+  const face = await serveFace({ home })
+  try {
+    const d = (h = {}) => request(face.port, `/api/d/open.main?id=${id}`, { headers: withToken(h) })
+    const a = '{"tail":1}\n{"c":"a1"}\n'
+    replace(a)
+    const r0 = await d()
+    assert.equal(r0.status, 200)
+    const e1 = r0.headers.etag
+    assert.match(String(e1), /^"[^"]+"$/, 'the whole read carries a strong tag')
+    fs.appendFileSync(file, '{"c":"a2"}\n')
+    const r1 = await d({ range: `bytes=${a.length}-`, 'if-range': e1 })
+    assert.equal(r1.status, 206, 'the same generation after an append: the Range is served')
+    assert.equal(r1.body, '{"c":"a2"}\n')
+    assert.equal(r1.headers.etag, e1, 'an append keeps the tag')
+    const held = fs.statSync(file).size
+    const r2 = await d({ range: `bytes=${held}-`, 'if-range': e1 })
+    assert.equal(r2.status, 416)
+    assert.equal(r2.headers.etag, e1, 'a 416 carries the tag')
+    // another render whose line boundary falls at exactly the held offset, renamed in at once with the same size first
+    const b = '{"tail":2}\n{"c":"b1"}\n{"c":"b2"}\n'
+    replace(b.slice(0, held - 1).padEnd(held - 1, ' ') + '\n')
+    const same = await d({ range: `bytes=${held}-`, 'if-range': e1 })
+    assert.equal(same.status, 200, 'a replaced file of the same size is not the held one')
+    const e2 = same.headers.etag
+    assert.notEqual(e2, e1)
+    replace(b + '{"c":"b3"}\n')
+    const r3 = await d({ range: `bytes=${held}-`, 'if-range': e2 })
+    assert.equal(r3.status, 200, 'If-Range of another generation: the Range is not served')
+    assert.equal(r3.body, fs.readFileSync(file, 'utf8'), 'the whole new file')
+    assert.equal(r3.headers['content-range'], undefined)
+    const e3 = r3.headers.etag
+    assert.ok(e3 !== e1 && e3 !== e2, `three generations, three tags: ${e1} ${e2} ${e3}`)
+    const r4 = await d({ range: `bytes=${held}-`, 'if-range': e3 })
+    assert.equal(r4.status, 206, 'the new tag serves the Range again')
+    assert.equal(r4.headers.etag, e3)
+  } finally { face.close() }
 })
