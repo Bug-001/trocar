@@ -1,12 +1,14 @@
 // Seal v2 cut points (4.2 §封存格式 · 编码器, SHOULD). cutPoints(line) is a pure function of the line
 // bytes: it knows JSON syntax only — no field names, providers or harnesses. The points only steer how
 // well repeated content dedupes across records; any tiling is correct, so every failure degrades to CDC.
-//   · a JSON container spanning > MAX bytes is cut at each member / element start, recursively;
+//   · a line of at most MAX bytes is one chunk; a JSON container spanning > MAX bytes is cut at each member / element
+//     start, recursively (MAX = 8 KB: 1 KB dedupes a little more of the LLM bodies but splits every small record and
+//     event into ~30-byte members whose splice entries and lost brotli context cost more than they save);
 //   · a string whose content starts with { or [ is descended one level through an escape-aware view
 //     (level-0 \" is a level-1 quote, \\ a level-1 backslash) — envelopes carry bodies as JSON strings;
 //   · long plain strings, spans nested deeper than DEPTH and anything that does not tokenize: gear CDC.
 
-const MAX = 1024, DEPTH = 64;
+const MAX = 8192, DEPTH = 64;
 const CMIN = 512, CMAX = 16384, MASK = (1 << 11) - 1; // CDC: ≥ 512 B, ~2 KB average, ≤ 16 KB
 const GEAR = new Uint32Array(256);
 { let s = 0x9e3779b9; for (let i = 0; i < 256; i++) { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; GEAR[i] = s >>> 0; } }
@@ -114,6 +116,7 @@ function container(b, s, e, lvl, cuts, depth) {
 export function cutPoints(line) {
   const n = line.length;
   if (n === 0) return [0];
+  if (n <= MAX) return [0, n];
   let cuts = [];
   try { container(line, 0, n, 0, cuts, 0); } catch { cuts = []; cdc(line, 0, n, cuts); }
   const sorted = Float64Array.from(cuts).sort();

@@ -222,17 +222,32 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, version, frameCache
     }
   }
 
-  // v2 in order: its own frame window, bounded in bytes like the shared one (4.2 「读」).
+  // v2 in order: its own window of chunk frames, each held from its first use to its last (a first pass over the splice
+  // lists finds the last), so it holds exactly the frames later records still need — the writer keeps that to the
+  // newest 12 (4.2 「读」). Splice frames go through the shared byte-bounded cache, so that pass decodes them for both.
   function* linesV2(onError) {
-    const cache = createFrameCache();
-    const getFrame = (f) => { let b = cache.get(f); if (!b) { b = decodeFrame(f); cache.set(f, b); } return b; };
+    const last = new Int32Array(frames.length).fill(-1);
+    for (let i = 0; i < records.length; i++) {
+      const r = records[i];
+      try {
+        const list = frameAt(r[R.frame]).subarray(r[R.off], r[R.off] + r[R.enc]);
+        for (let p = 0, f = 0, x; p < list.length;) { [x, p] = readVarint(list, p); f += unzigzag(x); [, p] = readVarint(list, p); [, p] = readVarint(list, p); last[f] = i; }
+      } catch { /* a bad list or splice frame fails below, at its record */ }
+    }
+    const live = new Map();
+    const getFrame = (f) => {
+      if (frames[f][3] === KIND_SPLICE) return frameAt(f);
+      let b = live.get(f);
+      if (!b) { b = decodeFrame(f); live.set(f, b); }
+      return b;
+    };
     for (let i = 0; i < records.length; i++) {
       let line;
       try { line = check(i, spliced(i, getFrame)); } catch (e) {
         if (!onError) throw e;
         onError(i, e, entry(i));
         continue;
-      }
+      } finally { for (const f of live.keys()) if (last[f] <= i) live.delete(f); }
       yield { i, line, entry: entry(i) };
     }
   }

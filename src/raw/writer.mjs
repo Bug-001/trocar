@@ -1,14 +1,18 @@
 // src/raw/writer.mjs — encode records into one format-v2 sealed file (RFC 4.2 §封存格式).
 //
 // A record = byte ranges of chunk frames in this same file, spliced in order. Each line is cut (src/raw/chunk.mjs,
-// cutPoints), every chunk is stored once (by sha256) in its group's open chunk buffer, and the record's splice list goes
+// cutPoints), every chunk is stored once (by sha256) in an open chunk buffer (its group's, or the shared one), and the record's splice list goes
 // into the one splice buffer, in record order. The heuristics below are SHOULD (4.2 编码器) and only steer the ratio:
 // any ranges that splice back the exact line are valid.
-//   · groups: each group key has an open chunk buffer; at most OPEN of them are open (the least recently used is
-//     flushed when another opens);
-//   · a stored chunk is reused only from this group's open buffer or one of the last RECENT flushed chunk frames;
-//     otherwise its bytes are stored again and the dedup map points at the copy — so a record touches at most
-//     1 splice frame + 1 open + RECENT flushed chunk frames;
+//   · groups: a group key gets its own chunk buffer once frameBytes of its records have gone through the shared buffer
+//     (until then its records share one buffer, in arrival order — a stream that never fills a frame is no stream);
+//     at most OPEN own buffers are open, the least recently used is flushed when another opens;
+//   · a stored chunk is reused only from a chunk frame among the newest WINDOW frames numbered (open or flushed); an open
+//     buffer whose frame falls out of that window is flushed first. Reading in record order therefore needs only the
+//     newest WINDOW frames plus the splice frame, whatever the number of groups;
+//   · per record at most MAX_FRAMES frames: its own buffer, its splice frame, and the MAX_FRAMES − 2 other frames it
+//     takes the most bytes from; a reusable chunk anywhere else, and a run of reusable chunks shorter than MIN_RUN bytes,
+//     is stored again next to the record's new bytes (where brotli sees it in context) and the dedup map points at the copy;
 //   · buffers flush once they are ≥ frameBytes after a record, never mid-record.
 //
 // The caller opens the destination (0600, in the target directory) and owns fsync / rename; this module only turns
@@ -21,7 +25,11 @@ import { cutPoints } from './chunk.mjs';
 import { headerBytes, indexTailBytes, trailerBytes, pushVarint, zigzag, FLAG_NL, FLAG_UNPARSEABLE, KIND_CHUNK, KIND_SPLICE, REC_SPLICE } from './format.mjs';
 
 export const FRAME_BYTES = 4 << 20;   // ~4 MiB of decoded bytes per frame (D35 ④)
-const OPEN = 32, RECENT = 7;   // OPEN ≥ the stream groups a real segment interleaves (13–24 measured); 4 thrashed into tiny frames
+// 4.2 编码器 · D35 ③ (SHOULD, not exported): reuse only from the newest WINDOW frames, at most MAX_FRAMES frames per
+// record — 4.2 「读」 bounds an in-order read by them; OPEN own buffers; reusable runs < MIN_RUN bytes are stored again.
+const WINDOW = 12, MAX_FRAMES = 9, OPEN = 8, MIN_RUN = 256;
+const SHARED = Symbol('shared');          // the buffer of the groups that have not filled a frame yet
+const MINE = Symbol('mine');              // a chunk the record being added stores earlier in itself
 const BROTLI = { [zlib.constants.BROTLI_PARAM_QUALITY]: 9, [zlib.constants.BROTLI_PARAM_LGWIN]: 24 };
 
 export function createSealWriter({ fd, fs = nodeFs, frameBytes = FRAME_BYTES } = {}) {
@@ -34,17 +42,16 @@ export function createSealWriter({ fd, fs = nodeFs, frameBytes = FRAME_BYTES } =
   // A buffer: { frame (number, assigned at the first byte), parts, len, kind }.
   const newBuf = (kind) => ({ frame: -1, parts: [], len: 0, kind });
   const append = (b, bytes) => { if (b.frame < 0) b.frame = frames.push(null) - 1; const off = b.len; b.parts.push(bytes); b.len += bytes.length; return off; };
-  const recent = [];                    // the last RECENT flushed chunk frames, oldest first
   const flush = (b) => {
     if (b.frame < 0) return;
     const raw = b.parts.length === 1 ? b.parts[0] : Buffer.concat(b.parts, b.len);
     const out = zlib.brotliCompressSync(raw, { params: { ...BROTLI, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: raw.length } });
     frames[b.frame] = [pos, out.length, raw.length, b.kind];
     write(out);
-    if (b.kind === KIND_CHUNK) { recent.push(b.frame); if (recent.length > RECENT) recent.shift(); }
     b.frame = -1; b.parts = []; b.len = 0;
   };
-  const groups = new Map();             // group key → open chunk buffer, least recently used first
+  const groups = new Map();             // group key (or SHARED) → open chunk buffer, least recently used first
+  const through = new Map();            // group key → bytes of its records so far
   const splice = newBuf(KIND_SPLICE);
   const seen = new Map();               // sha256 of a chunk → [frame, offset]
 
@@ -52,13 +59,18 @@ export function createSealWriter({ fd, fs = nodeFs, frameBytes = FRAME_BYTES } =
   // is written, so callers MUST NOT reuse the buffer.
   function add(line, { id = null, stream, shard = 0, lineNo, unparseable = false, group = '' }) {
     const idx = records.length;
-    let buf = groups.get(group);
-    if (buf) groups.delete(group);
+    const sofar = through.get(group) || 0;
+    through.set(group, sofar + line.length);
+    const key = sofar >= frameBytes ? group : SHARED;
+    let buf = groups.get(key);
+    if (buf) groups.delete(key);
     else {
       if (groups.size >= OPEN) { const [k, old] = groups.entries().next().value; flush(old); groups.delete(k); }
       buf = newBuf(KIND_CHUNK);
     }
-    groups.set(group, buf);
+    groups.set(key, buf);
+    const low = frames.length - WINDOW;   // chunks are reused only from frames numbered ≥ low
+    for (const b of groups.values()) if (b.frame >= 0 && b.frame < low) flush(b);
 
     const list = [];
     let pf = 0, pe = 0, cf = -1, cs = 0, cl = 0;   // the open range (frame, start, length), merged while contiguous
@@ -68,15 +80,34 @@ export function createSealWriter({ fd, fs = nodeFs, frameBytes = FRAME_BYTES } =
       emit(); cf = f; cs = off; cl = len;
     };
     if (line.length) {
-      const cuts = cutPoints(line);
-      for (let k = 1; k < cuts.length; k++) {
-        const c = line.subarray(cuts[k - 1], cuts[k]);
-        const h = createHash('sha256').update(c).digest('base64');
-        const at = seen.get(h);
-        if (at && (at[0] === buf.frame || recent.includes(at[0]))) { range(at[0], at[1], c.length); continue; }
-        const off = append(buf, c);
-        seen.set(h, [buf.frame, off]);
-        range(buf.frame, off, c.length);
+      const cuts = cutPoints(line), n = cuts.length - 1, size = (j) => cuts[j + 1] - cuts[j];
+      // at[j]: the [frame, offset] chunk j reuses, MINE (a chunk this record stores earlier), or null (store it);
+      // from: each other frame → the bytes this record could take from it
+      const hs = [], at = [], mine = new Set(), from = new Map();
+      for (let j = 0; j < n; j++) {
+        const h = hs[j] = createHash('sha256').update(line.subarray(cuts[j], cuts[j + 1])).digest('base64');
+        const a = mine.has(h) ? MINE : seen.get(h);
+        if (a === MINE || a?.[0] >= low) at[j] = a;
+        else { at[j] = null; mine.add(h); }
+        if (at[j] && a !== MINE && a[0] !== buf.frame) from.set(a[0], (from.get(a[0]) || 0) + size(j));
+      }
+      // Keep a reuse only in a run of ≥ MIN_RUN bytes of kept reuses (own buffer, or one of the MAX_FRAMES − 2 frames it
+      // takes the most from); everything else is stored again.
+      const keep = new Set([...from].sort((x, y) => y[1] - x[1]).slice(0, MAX_FRAMES - 2).map((x) => x[0]));
+      const kept = (a) => a && (a === MINE || a[0] === buf.frame || keep.has(a[0]));
+      for (let j = 0; j < n; j++) {
+        let e = j, run = 0;
+        while (e < n && kept(at[e])) run += size(e++);
+        if (run < MIN_RUN) at.fill(null, j, e);
+        if (e < n) at[e] = null;
+        j = e;
+      }
+      for (let j = 0; j < n; j++) {
+        const a = at[j] === MINE ? seen.get(hs[j]) : at[j];
+        if (a) { range(a[0], a[1], size(j)); continue; }
+        const off = append(buf, line.subarray(cuts[j], cuts[j + 1]));
+        seen.set(hs[j], [buf.frame, off]);
+        range(buf.frame, off, size(j));
       }
       emit();
     }

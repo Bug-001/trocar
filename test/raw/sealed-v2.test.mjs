@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { createSealWriter } from '../../src/raw/writer.mjs';
-import { openSealed } from '../../src/raw/reader.mjs';
+import { openSealed, createFrameCache } from '../../src/raw/reader.mjs';
 import { readIndex, indexTailBytes, trailerBytes, R, FLAG_NL, FLAG_UNPARSEABLE } from '../../src/raw/format.mjs';
 import { tmpDir } from '../helpers/tmp.mjs';
 
@@ -63,7 +63,7 @@ test('generated shapes across interleaved groups read back byte-identical, with 
     const frameBytes = (8 + ((seed * 7) % 25)) * 1024;
     const sf = openSealed(writeV2(path.join(dir, `s${seed}.sealed`), recs, { frameBytes }));
     try {
-      assert.ok(sf.frames.length > 9, `seed ${seed}: the generator must spill past the reuse window (frames ${sf.frames.length})`);
+      assert.ok(sf.frames.length > 13, `seed ${seed}: the generator must spill past the reuse window (frames ${sf.frames.length})`);
       const r = rng(seed * 31);
       const order = recs.map((_, i) => i).sort(() => r() - 0.5);
       for (const i of order) assert.ok(sf.lineAt(i).equals(recs[i].line), `seed ${seed}: record ${i} by random access`);
@@ -176,36 +176,60 @@ test('a v2 file is refused by a v1-only reader and an unknown version is refused
   }
 });
 
-// 4.2 「读」: a read in record order decodes each frame about once, however many stream groups interleave — the frame
-// window is bounded in bytes, so the ~OPEN + RECENT + 1 frames live at once in a v2 file stay resident.
-test('an in-order read of many interleaved groups decodes each frame about once, with lineAt and with lines()', () => {
-  const dir = tmpDir('trocar-v2-');
+// Many skewed, interleaved stream groups at a small frame size: a few groups carry most records.
+function* interleaved(dir) {
   for (const [groups, skew] of [[17, 1], [24, 3], [48, 2]]) {
     const r = rng(groups * 7 + skew);
     const hist = Array.from({ length: groups }, () => []);
     const recs = [];
     for (let i = 0; i < 1200; i++) {
-      const g = Math.floor(groups * r() ** skew);                            // skewed: a few groups carry most records
+      const g = Math.floor(groups * r() ** skew);
       hist[g].push(text(r, 80 + Math.floor(r() * 400)));
       const line = Buffer.from(JSON.stringify({ id: `r${i}`, g, messages: hist[g].slice(-40) }) + '\n');
       recs.push({ line, meta: { id: `r${i}`, stream: 's.ndjson', shard: 0, lineNo: i, group: `host${g}/v1/messages` } });
     }
-    const file = writeV2(path.join(dir, `${groups}.sealed`), recs, { frameBytes: 16 * 1024 });
+    yield [groups, recs, writeV2(path.join(dir, `${groups}.sealed`), recs, { frameBytes: 16 * 1024 })];
+  }
+}
+
+// 4.2 「读」: a read in record order decodes each frame about once, however many stream groups interleave — a record
+// names only chunk frames among the newest 12, so a cache of 12 chunk frames + 1 splice frame is enough (the default
+// byte-bounded one holds far more).
+test('an in-order read of many interleaved groups decodes each frame about once, with lineAt and with lines()', () => {
+  const dir = tmpDir('trocar-v2-');
+  for (const [groups, recs, file] of interleaved(dir)) {
     const real = zlib.brotliDecompressSync;
     let decodes = 0;
     zlib.brotliDecompressSync = (...a) => { decodes++; return real(...a); };
     try {
-      for (const way of ['lineAt', 'lines']) {
+      const probe = openSealed(file), biggest = Math.max(...probe.frames.map((f) => f[2]));
+      probe.close();
+      const window = () => createFrameCache({ bytes: 13 * biggest });   // 12 chunk frames + 1 splice frame (4.2 「读」)
+      for (const [way, frameCache] of [['lineAt', undefined], ['lines', undefined], ['lineAt', window()]]) {
         decodes = 0;
-        const sf = openSealed(file);
+        const sf = openSealed(file, { frameCache });
         try {
           if (way === 'lineAt') for (let i = 0; i < recs.length; i++) assert.ok(sf.lineAt(i).equals(recs[i].line));
           else for (const { i, line } of sf.lines()) assert.ok(line.equals(recs[i].line));
           assert.ok(sf.frames.length > 40, `${groups} groups: enough frames to matter (${sf.frames.length})`);
-          assert.ok(decodes <= 1.1 * sf.frames.length, `${groups} groups, ${way}: ${decodes} decodes for ${sf.frames.length} frames`);
+          assert.ok(decodes <= 1.1 * sf.frames.length, `${groups} groups, ${way}${frameCache ? ' in a 13-frame cache' : ''}: ${decodes} decodes for ${sf.frames.length} frames`);
         } finally { sf.close(); }
       }
     } finally { zlib.brotliDecompressSync = real; }
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// D35 ③ · 4.2 编码器: a record touches at most 9 frames (the frames its rebuild asks the cache for, line cache off).
+test('no record of many interleaved groups needs more than 9 frames', () => {
+  const dir = tmpDir('trocar-v2-');
+  for (const [groups, recs, file] of interleaved(dir)) {
+    const touched = new Set(), fc = createFrameCache();
+    const frameCache = { get: (k) => { touched.add(k); return fc.get(k); }, set: (k, v) => fc.set(k, v) };
+    const sf = openSealed(file, { frameCache, lineCache: { get: () => undefined, set: () => {} } });
+    try {
+      for (let i = 0; i < recs.length; i++) { touched.clear(); sf.lineAt(i); assert.ok(touched.size <= 9, `${groups} groups: record ${i} needs ${touched.size} frames`); }
+    } finally { sf.close(); }
   }
   fs.rmSync(dir, { recursive: true, force: true });
 });
