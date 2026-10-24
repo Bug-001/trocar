@@ -228,6 +228,10 @@ export const notRefreshed = (t, why) => `Not refreshed since ${t} · ${why}`
 // 1.2 §会话头 读取状态: the server is still extracting this session (first read: share done; later: calls still to catch up)
 export const readingFirst = (pct) => `Reading this session for the first time · ${pct} %`
 export const catchingUp = (n) => `Catching up · ${n} new calls`
+// 1.5 K-32: the head drawn is older than what the capture has indexed
+export const behindBy = (n, more) => `${n}${more ? '+' : ''} newer calls are not shown yet`
+// 2.3 §大致页面: the lanes the session head does not list by name
+export const moreLanes = (n) => `${n} more lanes`
 export const FOLLOW_PAUSED = 'Following is paused: the last read failed'
 export const UNPARSED_TITLE = 'This step\'s request could not be parsed; there is no context to show'
 export const UNPARSED_KEEP = 'The raw record is on disk, unchanged'

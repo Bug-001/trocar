@@ -8,6 +8,7 @@ import { sessionMetaOfFacts, itemsView } from '../view/board.mjs';
 import { unknownSummary } from '../view/assemble.mjs';
 import { compareStep } from '../view/step-order.mjs';
 import { COMP_KEYS } from '../view/blockmeta.mjs';
+import { FLAG } from '../view/head-cols.mjs';
 import { posCmp } from './projection.mjs';
 import { QueryArgError } from './named/index.mjs';
 
@@ -53,10 +54,9 @@ export const columns = (slotOf) => ({ at: -1, slotOf, ts: [], ln: new Int32Array
   cx: new Float64Array(0), cb: new Uint8Array(0), fl: new Uint8Array(0),
   keys: new Map(), order: [], by: [], lanes: new Set(), heads: new Map(), its: null, sorted: null });
 const tsOf = (cols, rid) => cols.ts[cols.slotOf(rid)];
-// The flag bits of a step (3.5 §会话读 `session --head` `cols`), from the low bit: compaction, inferred compaction, a cache break that
-// changed the prefix (a cause outside the quiet ones, src/web/v2/core/metrics.mjs QUIET_CAUSES), failed, a user ask, summarize, a
-// subagent spawned, no usage (a call that did not fail and reported none).
-export const FLAG = Object.freeze({ compaction: 1, inferred: 2, cacheBreak: 4, failed: 8, user: 16, summarize: 32, spawn: 64, noUsage: 128 });
+// The flag bits of a step: one definition with the board (src/view/head-cols.mjs). A cache break counts when its cause is outside the quiet
+// ones (src/web/v2/core/metrics.mjs QUIET_CAUSES).
+export { FLAG };
 const QUIET = new Set(['append', 'first-call', 'volatile-nonce-only']);
 const EVENT_FLAG = { user: FLAG.user, summarize: FLAG.summarize, spawn: FLAG.spawn };
 function flagsOf(r, events) {

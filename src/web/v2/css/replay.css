@@ -355,7 +355,7 @@
   /* ⑥ ⑦ the stand-in states (1.4); ⑧ and an unheld lane's frames: empty, aria-busy, sized from the row's composition */
   .cwunparsed,.cwnoreq{margin:24px auto;max-width:560px;padding:14px 16px;border:1px dashed var(--rule-2);border-radius:6px;font-size:11.5px;color:var(--dim);line-height:1.6;}
   .cwunparsed .cwuhd,.cwnoreq{color:var(--fg);}
-  .cwbusy{min-height:84px;}
+  .cwbusy{min-height:max(84px, min(calc(var(--n, 0) * 28px), 100%));}
   .cwframe{height:calc(var(--fr, 1) * 28px);margin:16px 0 6px;border:1px dashed var(--rule-2);border-radius:6px;background:color-mix(in srgb,var(--fg) 2%,transparent);}
   .rpbusy{height:28px;border-radius:4px;background:color-mix(in srgb,var(--fg) 3%,transparent);}
 

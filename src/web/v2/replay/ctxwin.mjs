@@ -83,8 +83,8 @@ export function removedSectionHtml(removed, refK, open) {
 const unparsedHtml = (call) => `<div class="cwunparsed"><div class="cwuhd">${esc(W.UNPARSED_TITLE)}</div><div class="cwub">${esc(W.UNPARSED_KEEP)}</div>` +
   (call.errMsg ? techDetailsHtml([['errMsg', call.errMsg]], { id: 'cwu-tech' }) : '') + `</div>`
 const noRequestHtml = () => `<div class="cwnoreq">${esc(W.NO_REQUEST)}</div>`
-// ⑧: no text, no control — an empty frame the skeleton replaces (1.4 ⑧)
-export const emptyFrameHtml = () => '<div class="cwbusy" aria-busy="true"></div>'
+// ⑧: no text, no control — an empty frame the skeleton replaces (1.4 ⑧); `n` > 0 sizes it for that many rows (2.3 §大致页面: head.last.n)
+export const emptyFrameHtml = (n = 0) => `<div class="cwbusy" aria-busy="true"${n > 0 ? ` style="--n:${n}"` : ''}></div>`
 // the section frames of a step whose lane is not held (2.3 §车道未到手): one per section the row's composition names, sized
 // from its bytes (a row ≈ 28 px), no text, aria-busy; the lane's arrival replaces them
 const FRAME_SECS = [['tools', ['tools']], ['system', ['system']], ['messages', null]]

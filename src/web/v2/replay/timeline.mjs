@@ -6,16 +6,18 @@
 //   renderSaw(el, s)       all rows for the brush window — rebuilt when the window or the data changes
 //   markCurrent(el, s)     scrubbing: only the .cur marks, the pager's k and the position label move
 //   renderOverview(el, s)  the whole-session strip and its brush
+//   renderRough(el, s, at, K)  the rough page's rows from the session head alone (2.3 §大致页面), before a row of the axis lane is drawn
 // `el` is #saw; `s` is the replay desk's state object (replay.mjs owns it).
 import { esc, kf, usd } from '../core/fmt.mjs'
 import { L } from '../core/labels.mjs'
 import { cacheState, isBreak, breakCost, usageOf, priceMatch, costOf, isFailed } from '../core/metrics.mjs'
 import { CT_ORDER, callComp, hitTier, refRowOf } from './analysis.mjs'
 import { anchorJump } from './jump.mjs'
-import { laneEvents } from './model.mjs'
+import { laneEvents, ridAt } from './model.mjs'
 import { stepRef } from './lanes.mjs'
 import { laneWord } from '../labels/replay.mjs'
 import * as W from '../labels/replay.mjs'
+import { FLAG, cellsOf } from '../../../view/head-cols.mjs'
 // the composition colours' keys, in the bars' stacking order: [class suffix, word]
 const BAR_KEYS = [['tools', 'tools'], ['system', 'system'], ['user', 'messages'], ['assistant', 'reply'], ['thinking', 'thinking'], ['tool_use', 'tool call'], ['tool_result', 'tool result']]
 
@@ -133,6 +135,12 @@ function cacheCell(c, i, s) {
   return `<div class="cbar ${cls}" data-i="${i}" title="${esc(W.cacheCellPct(pct))}"></div>`
 }
 
+// one bar of the 上下文大小 view: height ∝ the step's context against `pk`; a failed step is a fixed red bar (never a cache miss)
+const ctxBarHtml = (c, n, attr, cur, pk) => {
+  const f = isFailed(c), h = f ? 20 : Math.max(3, Math.round(((c.ctx || 0) / pk) * 72))
+  return `<div class="bar ${f ? 'err' : ''} ${c.compaction ? 'compact' : ''} ${cur ? 'cur' : ''}" ${attr} style="height:${h}px" title="step ${n} · ${f ? 'call failed' : kf(c.ctx) + ' tok'}">${f ? '' : barSegsHtml(c, h)}</div>`
+}
+
 // ── the main track ────────────────────────────────────────────────────────────────────────────────────────────────
 // one bar of the 花费 view: height ∝ the step's ≈ estimate; uncomputable steps are hatched, never $0-tall
 function costBarHtml(c, i, s, maxCost) {
@@ -144,6 +152,7 @@ function costBarHtml(c, i, s, maxCost) {
   return { h: Math.max(3, Math.round((v / Math.max(1e-9, maxCost)) * 72)), html: '', tip: `≈ ${usd(v)}` + (m.exact ? '' : ` · ${W.PRICE_BY_KEY(m.key)}`) }
 }
 
+const BRACKET = () => '<div id="reviewbracket"><span class="rbend" aria-hidden="true">' + esc(W.GUESS) + '</span></div>'
 export function renderSaw(el, s) {
   if (!s.anchor) return
   const { lo, hi, N } = windowOf(s)
@@ -162,7 +171,7 @@ export function renderSaw(el, s) {
     let maxCost = 0, any = false
     for (const [c] of win) { const u = usageOf(c), m = u ? priceRowOf(s, c) : null; const v = m ? costOf(m.row, u) : null; if (v != null) { any = true; if (v > maxCost) maxCost = v } }
     peak = any ? `≈ ${usd(maxCost)}` : '≈ —'
-    q(el, '#sawrow').innerHTML = '<div id="reviewbracket"><span class="rbend" aria-hidden="true">' + esc(W.GUESS) + '</span></div>' + win.map(([c, i]) => {
+    q(el, '#sawrow').innerHTML = BRACKET() + win.map(([c, i]) => {
       const b = costBarHtml(c, i, s, maxCost)
       return `<div class="bar cost ${isFailed(c) ? 'err' : ''} ${i === s.playhead ? 'cur' : ''}" data-i="${i}" style="height:${b.h}px" title="step ${i + 1} · ${esc(b.tip)}">${b.html}</div>`
     }).join('')
@@ -170,10 +179,7 @@ export function renderSaw(el, s) {
     const pk = Math.max(1, s.anchor.peakCtx)
     peak = `${kf(pk)} tok`
     peakTip = 'The largest real input total of a main thread step (input + cache read + cache write)'
-    q(el, '#sawrow').innerHTML = '<div id="reviewbracket"><span class="rbend" aria-hidden="true">' + esc(W.GUESS) + '</span></div>' + win.map(([c, i]) => {
-      const h = isFailed(c) ? 20 : Math.max(3, Math.round(((c.ctx || 0) / pk) * 72))
-      return `<div class="bar ${isFailed(c) ? 'err' : ''} ${c.compaction ? 'compact' : ''} ${i === s.playhead ? 'cur' : ''}" data-i="${i}" style="height:${h}px" title="step ${i + 1} · ${isFailed(c) ? 'call failed' : kf(c.ctx) + ' tok'}">${isFailed(c) ? '' : barSegsHtml(c, h)}</div>`
-    }).join('')
+    q(el, '#sawrow').innerHTML = BRACKET() + win.map(([c, i]) => ctxBarHtml(c, i + 1, `data-i="${i}"`, i === s.playhead, pk)).join('')
   }
   // the cache band
   q(el, '#cacherow').innerHTML = win.map(([c, i]) => cacheCell(c, i, s)).join('')
@@ -235,37 +241,78 @@ export function renderOverview(el, s) {
   if (!N) { strip.innerHTML = ''; return }
   // do not destroy the brush (and its pointer capture) mid-drag: just reposition; rebuild when the drag ends
   if (s.brushDragging) { repositionBrush(el, s); return }
-  const peak = Math.max(1, s.anchor.peakCtx)
-  let bg = '', sampled = false
-  if (N <= OVW_BARCAP) {
-    bg = '<div class="ovbars">' + s.anchor.calls.map((c, i) => {
-      const h = Math.max(1, Math.round(((c.ctx || 0) / peak) * 20))
-      return `<div class="ovbar ${isFailed(c) ? 'err' : ''}" style="height:${h}px" title="step ${i + 1}"></div>`
-    }).join('') + '</div>'
+  const peak = Math.max(1, s.anchor.peakCtx), calls = s.anchor.calls
+  strip.innerHTML = stripHtml(N, (i) => (calls[i].ctx || 0) / peak, (i) => isFailed(calls[i])) + BRUSH()
+  repositionBrush(el, s)
+}
+const BRUSH = () => '<div class="ovpin" id="ovpin"></div>' +
+  `<div class="ovbrush" id="ovbrush" tabindex="0" aria-label="${esc(W.BRUSH_LABEL)}" title="Drag = pan · drag an edge = zoom · double-click = all (in a long session that does not fit the row above, the largest range that fits)"><span class="ovh ovh-l"></span><span class="ovh ovh-r"></span></div>`
+// the strip's backdrop over N points: `val(i)` its height (0–1), `failed(i)`; `sampled` says a point is not one step even when N ≤ 240
+function stripHtml(N, val, failed, sampled = false) {
+  let bg
+  if (N <= OVW_BARCAP && !sampled) {
+    bg = '<div class="ovbars">'
+    for (let i = 0; i < N; i++) bg += `<div class="ovbar ${failed(i) ? 'err' : ''}" style="height:${Math.max(1, Math.round(val(i) * 20))}px" title="step ${i + 1}"></div>`
+    bg += '</div>'
   } else {
     // many steps: one point per bucket on the SAME /N axis as the brush and the pin. Only labelled "sampled" when buckets
     // really merge steps (N > 240); for 60 < N <= 240 it is per step and a label would be false.
-    const B = Math.min(N, 240); sampled = N > B
+    const B = Math.min(N, 240); sampled ||= N > B
     const pts = []
     for (let k = 0; k < B; k++) {
       const a = Math.floor((k * N) / B), b = Math.max(a + 1, Math.floor(((k + 1) * N) / B))
       let mx = 0
-      for (let j = a; j < b && j < N; j++) { const cv = s.anchor.calls[j].ctx || 0; if (cv > mx) mx = cv }
-      pts.push((((a + b) / 2 / N) * 100).toFixed(2) + ',' + (22 - Math.max(0.5, (mx / peak) * 20)).toFixed(2))
+      for (let j = a; j < b && j < N; j++) { const v = val(j); if (v > mx) mx = v }
+      pts.push((((a + b) / 2 / N) * 100).toFixed(2) + ',' + (22 - Math.max(0.5, mx * 20)).toFixed(2))
     }
     bg = `<svg class="ovsvg" viewBox="0 0 100 22" preserveAspectRatio="none"><polyline points="${pts.join(' ')}"/></svg>`
   }
-  strip.innerHTML = bg +
-    (sampled ? `<span class="ovsample" title="Sampled: one point per bucket, not one per step (the strip is a map, not verbatim data)">${esc(L.SAMPLED)}</span>` : '') +
-    '<div class="ovpin" id="ovpin"></div>' +
-    `<div class="ovbrush" id="ovbrush" tabindex="0" aria-label="${esc(W.BRUSH_LABEL)}" title="Drag = pan · drag an edge = zoom · double-click = all (in a long session that does not fit the row above, the largest range that fits)"><span class="ovh ovh-l"></span><span class="ovh ovh-r"></span></div>`
-  repositionBrush(el, s)
+  return bg + (sampled ? `<span class="ovsample" title="Sampled: one point per bucket, not one per step (the strip is a map, not verbatim data)">${esc(L.SAMPLED)}</span>` : '')
 }
-export function repositionBrush(el, s) {
-  const N = s.anchor ? s.anchor.calls.length : 1
+function placeBrush(el, N, lo, hi, at) {
   const b = q(el, '#ovbrush')
-  if (b) { b.style.left = ((s.view.lo / N) * 100).toFixed(3) + '%'; b.style.width = (((s.view.hi - s.view.lo) / N) * 100).toFixed(3) + '%' }
-  const p = q(el, '#ovpin'); if (p) p.style.left = (((s.playhead + 0.5) / N) * 100).toFixed(3) + '%'
+  if (b) { b.style.left = ((lo / N) * 100).toFixed(3) + '%'; b.style.width = (((hi - lo) / N) * 100).toFixed(3) + '%' }
+  const p = q(el, '#ovpin'); if (p) p.style.left = (((at + 0.5) / N) * 100).toFixed(3) + '%'
+}
+export const repositionBrush = (el, s) => placeBrush(el, s.anchor ? s.anchor.calls.length : 1, s.view.lo, s.view.hi, s.playhead)
+
+// ── the rough page (2.3 §大致页面, 1.3 §章): the session head alone ─────────────────────────────────────────────────────
+// roughWindow(head, at, K) → {lo, hi}: the window of at most K bars around step `at` inside the chapter that holds it (the whole axis
+// when the head names no chapter)
+export function roughWindow(head, at, K) {
+  const ch = (head.chapters || []).find((c) => at >= c.s0 && at < c.s1) || { s0: 0, s1: head.steps }
+  return fitWindow({ lo: ch.s0, hi: ch.s1, K, playhead: at })
+}
+// The overview from the head's `cols` and, with one cell a step, the window's bars: the axis lane's row when it is here, else its cols
+// bar (height, largest composition bucket, failed and compaction from the flags). Tier 0 (1.5 K-31): the calls by time, marked sampled,
+// no bars. Nothing here is a control: the rough bars carry no data-i.
+export function renderRough(el, s, at, K) {
+  const head = s.desk.head, N = head.steps, rows = q(el, '#sawrow')
+  if (!head.tier) {
+    const bs = head.buckets || [], mx = Math.max(1, ...bs.map((b) => b.calls))
+    q(el, '#ovstrip').innerHTML = bs.length ? stripHtml(bs.length, (i) => bs[i].calls / mx, () => false, true) : ''
+    rows.innerHTML = BRACKET()
+    return
+  }
+  const cells = cellsOf(head.cols), per = head.bucket || 1, pk = Math.max(1, head.peak), at3 = (i) => 3 * Math.floor(i / per)
+  q(el, '#ovstrip').innerHTML = stripHtml(N, (i) => cells[at3(i)] / 255, (i) => !!(cells[at3(i) + 2] & FLAG.failed)) + BRUSH()
+  const { lo, hi } = roughWindow(head, at, K)
+  placeBrush(el, N, lo, hi, at)
+  let bars = ''
+  for (let i = lo; per === 1 && i < hi; i++) {
+    const rid = ridAt(s.desk, head.axis, i), row = rid != null ? s.desk.rows.get(rid) : null
+    if (row) { bars += ctxBarHtml(row, i + 1, `data-step="${i}"`, i === at, pk); continue }
+    const f = cells[3 * i + 2], failed = !!(f & FLAG.failed), h = failed ? 20 : Math.max(3, Math.round((cells[3 * i] / 255) * 72))
+    bars += `<div class="bar ${failed ? 'err' : ''} ${f & FLAG.compaction ? 'compact' : ''} ${i === at ? 'cur' : ''}" data-step="${i}" style="height:${h}px" title="step ${i + 1}">` +
+      (failed ? '' : `<span class="ct-${CT_ORDER[cells[3 * i + 1] >> 4] || 'other'}" style="height:${h}px"></span>`) + '</div>'
+  }
+  rows.innerHTML = BRACKET() + bars
+  const page = el.closest ? el.closest('#leftpage') : null
+  if (page) page.style.setProperty('--nbars', String(Math.max(1, hi - lo)))
+  q(el, '#sawstart').textContent = `step ${lo + 1}`
+  q(el, '#sawend').textContent = `step ${hi}`
+  q(el, '#sawgut').innerHTML = `Context <b>${esc(kf(head.peak) + ' tok')}</b>`
+  q(el, '#viewrange').textContent = W.showSteps(lo + 1, hi)
 }
 
 // One set of listeners for the life of the screen. The brush is rebuilt on redraw, so its pointer events are delegated from the

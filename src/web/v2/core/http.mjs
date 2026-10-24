@@ -67,6 +67,7 @@ export function early(path, params, opts) { earlyReads.set(path + qs(params), ge
 
 // `hold:false` keeps only the ETag of the URL, and a 304 answers {ok:true, status:304, data:null}: the caller has the document;
 // `cond:false` asks without If-None-Match (a caller that holds no document of that URL yet)
+const tipOf = (r) => { const t = r.headers.get('x-trocar-tip'); return t ? { tip: t } : {} }
 export async function get(path, params, { signal, hold = true, cond = true } = {}) {
   if (forbidden) return FORBIDDEN
   if (signal && signal.aborted) return { ok: false, status: 0, error: ABORTED }
@@ -90,7 +91,7 @@ export async function get(path, params, { signal, hold = true, cond = true } = {
   let r, b
   try {
     try { r = await fetch(url, { cache: 'no-store', headers, signal: ac.signal }) } catch (e) { return ended({ ok: false, status: 0, error: String((e && e.message) || e) }) }
-    if (r.status === 304) return !was ? { ok: false, status: 304, error: 'HTTP 304' } : hold ? { ok: true, data: was.data } : { ok: true, status: 304, data: null }
+    if (r.status === 304) return !was ? { ok: false, status: 304, error: 'HTTP 304' } : hold ? { ok: true, data: was.data } : { ok: true, status: 304, data: null, ...tipOf(r) }
     b = await readBody(r) // inside the deadline: a body that stalls is aborted and lands in readBody's catch
   } finally {
     clearTimeout(timer)
@@ -103,7 +104,7 @@ export async function get(path, params, { signal, hold = true, cond = true } = {
   if (b.bad) return { ok: false, status: r.status, error: 'not JSON' }
   const etag = r.headers.get('etag')
   if (etag) { if (hold) remember(held, url, { etag, data: body }); else remember(tags, url, etag) }
-  return { ok: true, data: body, bytes: b.len } // an empty 2xx is a success carrying null; `bytes` = the body's UTF-8 bytes (the session cache's measure, 0.2 §5, D71③)
+  return { ok: true, data: body, bytes: b.len, ...tipOf(r) } // `tip`: x-trocar-tip when the answer carries it (4.4 §答案文件); an empty 2xx is a success carrying null; `bytes` = the body's UTF-8 bytes (the session cache's measure, 0.2 §5, D71③)
 }
 
 // getText(path, params, {range, signal}): a text read of an answer file (4.4 §答案文件) — `range` (a byte offset) asks `Range: bytes=<range>-`.

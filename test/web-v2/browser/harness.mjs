@@ -24,13 +24,14 @@ export async function probe({ importer = () => import('playwright-core'), env = 
 
 /** The board on a fresh temp HOME in a fresh Chrome. `token`: true = the face's token, a string = that token, false = no fragment.
  *  `missing` lists every static file answered ≥ 400 (`<status> <path>`).
+ *  `idleMs`: the face's query worker idles out after that many ms (the service's default when absent).
  *  `setup(page)` runs before the first navigation (routes a case must hold from the first request on).
  *  `home`: a prebuilt {userHome, home} served instead of boardHome({bytes}). `base`: an external board's URL carrying `#t=<token>` — no
  *  face is started (`face` is null) and `get` reads that board with the token header.
  *  `requests` logs every /api (the answer files /api/d/* too) and /control response as {url, method, body (the request's post data, or null), range (its Range header, or null), status, start (ms epoch the request began), t (ms epoch it answered)}; `errors` collects pageerrors; `get(name, params)` reads the face directly (no page, no request log). Always `await stop()`. */
-export async function withBoard({ bytes, home, base, token = true, width = 1280, height = 900, theme = 'light', chromium, setup } = {}) {
+export async function withBoard({ bytes, home, base, idleMs, token = true, width = 1280, height = 900, theme = 'light', chromium, setup } = {}) {
   chromium ||= (await import('playwright-core')).chromium
-  const face = base ? null : await serveBoard(home || boardHome({ bytes }))
+  const face = base ? null : await serveBoard({ ...(home || boardHome({ bytes })), idleMs })
   const ext = base && new URL(base), extToken = ext && new URLSearchParams(ext.hash.slice(1)).get('t')
   const get = face ? face.get : async (name, params = {}) => {
     const r = await fetch(new URL(`/api/${name}?${new URLSearchParams(params)}`, ext.origin), { headers: { [CONTROL_TOKEN_HEADER]: extToken } })

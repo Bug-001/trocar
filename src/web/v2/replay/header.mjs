@@ -188,12 +188,24 @@ export function totalsOf(s) {
 
 // 1.2 §会话头 读取状态: while the server is still extracting this session (`pending{done, total}` on the session answer) one quiet
 // line says how far — the first read as a share, later the calls still to catch up. Words only: no control (D69).
+// 1.5 K-32: a head behind the capture names how many calls came after it (`behind`, behindOf).
 export function readStateHtml(desk) {
-  const p = desk && desk.pending
-  if (!p) return ''
+  const p = desk && desk.pending, b = desk && desk.behind
+  if (!p) return b ? `<div class="fidline readstate" data-read-state="behind" data-behind="${b.n}">${esc(W.behindBy(b.n, b.more))}</div>` : ''
   const done = Number(p.done) || 0, total = Number(p.total) || 0
   const words = desk.firstPending ? W.readingFirst(total > 0 ? Math.floor((done / total) * 100) : 0) : W.catchingUp(Math.max(0, total - done))
-  return `<div class="fidline readstate" data-read-state>${esc(words)}</div>`
+  return `<div class="fidline readstate" data-read-state="${desk.firstPending ? 'reading' : 'catching-up'}">${esc(words)}</div>`
+}
+// behindOf(tip, mark) → {n, more} | null (1.5 K-32): of the tip ids (`x-trocar-tip`, the newest model calls, oldest first) the ones that
+// come after the head's `mark` in record order (segment, then line); `more` when none of them is at or before it — more may lie beyond
+// the list. null when there is no tip or nothing after the mark.
+const placeOf = (id) => { const j = String(id).lastIndexOf(':'); return [String(id).slice(0, j), Number(String(id).slice(j + 1))] }
+const after = ([sa, la], [sb, lb]) => sa > sb || (sa === sb && la > lb)
+export function behindOf(tip, mark) {
+  const ids = String(tip || '').split(' ').filter(Boolean)
+  if (!ids.length || mark == null) return null
+  const m = placeOf(mark), n = ids.filter((id) => after(placeOf(id), m)).length
+  return n ? { n, more: n === ids.length } : null
 }
 
 export function renderSessionHead(el, s) {

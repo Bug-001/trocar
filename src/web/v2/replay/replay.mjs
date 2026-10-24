@@ -28,7 +28,7 @@ import { loadFold, saveFold } from './fold.mjs'
 import { landPlayhead, createStepReads, packOrder } from './follow.mjs'
 import { createLoader } from './loader.mjs'
 import { createPoller, INTERVAL } from '../core/poll.mjs'
-import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow } from './timeline.mjs'
+import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow, renderRough as roughRows } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
 import { renderContextWindow, wireCtxWin, emptyFrameHtml, rowKeys } from './ctxwin.mjs'
 import { renderOutline, wireOutline, jumpToAnchor, jumpToResourceBlock } from './outline.mjs'
@@ -38,11 +38,11 @@ import { renderResources, wireResources } from './resources.mjs'
 import { renderRawPanel, wireRawPanel } from './rawpanel.mjs'
 import { openDetail, closeDetail, wireDetail } from './detail.mjs'
 import { initLayout } from './layout.mjs'
-import { renderSessionHead, wireSessionHead, captureGap } from './header.mjs'
-import { stepBarHtml, wireStepBar } from './stepbar.mjs'
+import { renderSessionHead, wireSessionHead, captureGap, behindOf } from './header.mjs'
+import { stepBarHtml, roughStepHtml, wireStepBar } from './stepbar.mjs'
 import { loadBodies, bodyCache, clearOverrides, overrideScope, isRetryable } from './cell.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
-import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION } from '../labels/replay.mjs'
+import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION, moreLanes } from '../labels/replay.mjs'
 import { readFailure } from '../core/ui.mjs'
 
 const POLL_MS = INTERVAL.session
@@ -287,11 +287,27 @@ function openDesk(ctx, route0) {
   }
   function renderAll() {
     if (!host) { missed = true; return }
+    if (!s.anchor || s.playRid == null) { renderRough(); return }
     renderHeader()
-    if (!s.anchor) return
     renderSaw(E.saw, s); renderRails(E.rails, s); watchRails(); renderOverview(E.saw, s)
     paintPlayhead()
     restoreSelection()
+  }
+  // 2.3 §大致页面 (D71①): until the playhead stands on a row, the session head alone draws the page — the header, the whole-session
+  // overview, the playhead chapter's bars, the step label, the lane names, a context frame sized from head.last (no text, no control);
+  // the first such paint is marked 'desk-rough'. A tier-0 head draws the calls by time and no bars (1.5 K-31).
+  let roughMarked = false
+  function renderRough() {
+    renderHeader()
+    const head = s.desk.head
+    if (!host || !head || !head.steps) return
+    const at = Math.max(0, Math.min(head.steps, s.initialStep ?? head.steps) - 1)
+    roughRows(E.saw, s, at, sawCapacity())
+    E.stepbar.innerHTML = head.tier ? roughStepHtml(at + 1, head.steps) : ''
+    renderRails(E.rails, s); watchRails()
+    if (head.lanesMore) E.rails.insertAdjacentHTML('beforeend', `<div class="railsmore" data-more="${head.lanesMore}">${esc(moreLanes(head.lanesMore))}</div>`)
+    E.ctxwin.__units = null; E.ctxwin.innerHTML = emptyFrameHtml(head.last ? head.last.n : 0)
+    if (!roughMarked && typeof performance !== 'undefined') { roughMarked = true; performance.mark('desk-rough') }
   }
   // the drawer was built from the rows of an earlier answer: repaint it for the selected tick
   function refreshDrawer() {
@@ -592,7 +608,8 @@ function openDesk(ctx, route0) {
     s.errNote = null; s.goodKey = key; s.goodAt = api.now()
     const hadStale = !!s.staleErr; s.staleErr = null
     if (h.data) { keep('head', h.bytes || 0); applyHead(desk, h.data) }
-    const head = desk.head
+    const head = desk.head, wasBehind = JSON.stringify(desk.behind ?? null)
+    desk.behind = behindOf(h.tip, head.mark) // 1.5 K-32: the tip ids after the head's mark, from every head answer (a 304 too)
     // the server knows no such session (meta null, nothing captured): said HERE, with a way back; the timer stops reading it
     if (head.meta == null && !head.steps) {
       s.goodKey = null; s.notListed = true; renderEmpty(''); E.ctxwin.innerHTML = notListedHtml(); E.ctxwin.__units = null; root.classList.add('notlisted'); renderHeader(); return { ok: true }
@@ -600,6 +617,9 @@ function openDesk(ctx, route0) {
     if (s.notListed) { s.notListed = false; root.classList.remove('notlisted') }
     // left while the head was on its way: the head is the round's last read (a detached desk sends no next read); attach's round reads the tails
     if (!host) { if (h.data) await serial(() => redraw(null)); return { ok: true } }
+    if (h.data && s.playRid == null) await serial(() => redraw(null)) // the rough page from the head, before any file (2.3 §大致页面)
+    else if (JSON.stringify(desk.behind) !== wasBehind) renderHeader()
+    if (stale()) return
     const rs = head.open ? await Promise.all(['main', 'rest'].map((part) => readTail(part, head.open.n, signal))) : []
     if (stale()) return
     const bad = rs.find((r) => !r.ok)
@@ -623,8 +643,9 @@ function openDesk(ctx, route0) {
       if (desk.head && !desk.head.steps) {
         renderEmpty('')
         E.ctxwin.innerHTML = `<div class="empty">${esc(desk.probes ? `This session has only token counts (${desk.probes}), no model calls to replay.` : 'No model calls have been captured in this session yet.')}</div>`
+        renderHeader(); return
       }
-      renderHeader(); return
+      renderRough(); return
     }
     if (s.anchor !== prevAnchor) { s.anchorTs = s.anchor.calls.map((c) => Date.parse(c.ts)); s.breaks = breakSteps(s.anchor.calls); s.problems = problemSteps(s.anchor) }
     return settle(keepPins, prevRow)
@@ -633,7 +654,7 @@ function openDesk(ctx, route0) {
     const desk = s.desk, key = sessionKey(), first = s.viewSig !== key, signal = s.reads.signal
     unpin(keepPins)
     const moved = placePlayhead(prevRow)
-    if (s.playRid == null) { renderHeader(); chainLedger(); fill(); return } // ⑧ until the named step is here
+    if (s.playRid == null) { renderRough(); chainLedger(); fill(); return } // the rough page until the named step is here
     // the followed step's open reply bodies in one read before it is drawn (C3), so its newest reply shows with its bytes; the same
     // read carries the ±NEAR prefetch (2.3 §正文预取), so the rest after it finds nothing left and a delta stays one `block` (4.4:52)
     if (s.follow && moved && !first && host) {
