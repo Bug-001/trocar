@@ -135,9 +135,10 @@ function spansOf(s, sp) {
 // The ids it brings that the file lacks are those its ops add, in list order, then its reply's: every id of its parent's list is in the
 // file already. `memo` (the writer's, for the open span): a step and a definition are made once for the tail and the pack it is sealed
 // into; a step is a function of the projection's rows of it and its parent (extracted once each), so the two rids key it. The lane
-// steppers read the store's definitions through it too (by bid), so a list's tool_use is not read again at every slice.
-/** The open span's memo holds this much at most (the least recently used out): one of K's fixed caches (3.5 §内存有界). */
-export const MEMO_BYTES = 4 << 20;
+// steppers keep each block's tool_use facts in it too (by bid: lane.mjs laneStepper `uses`), so a list is not read again at every slice.
+/** memoBytes() → what the open span's memo holds at most (the least recently used out): one of K's fixed caches (3.5 §内存有界). A
+ *  function, hoisted: named/session.mjs reads it while it is evaluated, which can be before this module is (the cycle through lane.mjs). */
+export function memoBytes() { return 4 << 20; }
 function stepLines(S, key, i, p, wrote, memo = null) {
   const rid = S.rids[i], k = memo && `${rid}\n${p < 0 ? '' : S.rids[p]}`;
   let st = memo && memo.get(k);
@@ -148,7 +149,7 @@ function stepLines(S, key, i, p, wrote, memo = null) {
     wrote.add(bid);
     const dk = `${bid}\n${rid}`;
     let w = memo ? memo.get(dk) : undefined;
-    if (w === undefined) { w = S.defOf(bid, S.listAt(i).bids); if (memo) memo.set(dk, w, weigh(w)); }
+    if (w === undefined) { w = S.defOf(bid, S.listAt(i)); if (memo) memo.set(dk, w, weigh(w)); }
     if (w) out.push({ d: w });
   }
   out.push({ s: { rid: st.rid, lane: key, i, parent: st.parent, ops: st.ops, reply: st.reply, attrs: st.attrs, detail: st.detail, events: S.eventsAt(i) } });
@@ -287,7 +288,7 @@ export function writeFiles(ctx, s) {
       const got = PARTS.map((p, i) => carried(s, fs, tailFile(home, id, p), N, p, c.size?.[i]));
       if (got.some(Boolean)) tails = Object.fromEntries(PARTS.map((p, i) => [p, got[i] || { size: NaN, defs: new Set() }])); // NaN: no size, a missing file's −1 neither, is it: afresh
     }
-    W = { ax, f, open: N, packs: [], tails, rec: tails ? c.rec : 0, files: null, memo: lru(MEMO_BYTES), sp: [] };
+    W = { ax, f, open: N, packs: [], tails, rec: tails ? c.rec : 0, files: null, memo: lru(memoBytes()), sp: [] };
     writers.set(log, W);
   }
   const d = dirtyOf(s, W.f, Math.min(W.open, N)), spans = spansOf(s, axisSteps(s, W.sp, first ? 0 : d.axis ?? W.sp.length));
@@ -311,7 +312,7 @@ export function writeFiles(ctx, s) {
     W.tails[part] = { size: buf.length, defs: wrote };
   };
   const upTo = upToOf(s);
-  if (N !== W.open) W.memo = lru(MEMO_BYTES); // the sealed span's steps let go
+  if (N !== W.open) W.memo = lru(memoBytes()); // the sealed span's steps let go
   if (N !== W.open || !W.tails) { W.tails = {}; for (const p of PARTS) fresh(p); }
   else appendTails(s, W, d, N, upTo, fs, (part) => tailFile(home, id, part), fresh);
   W.rec = upTo; W.open = N; W.f = log.frontier;

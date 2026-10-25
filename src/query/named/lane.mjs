@@ -84,12 +84,14 @@ function keptOf(cols, log, lane, e) {
 
 /** weigh(v) → what a kept step or definition holds in the heap, about: its JSON's bytes (every field) and the entry. */
 export const weigh = (v) => 96 + (v ? 2 * JSON.stringify(v).length : 0);
-/** laneStepper(st, key, defs) → the steps of the lane `key` of a session state (sessionState): {L, n, rids, lines, lineAt(i), eventsAt(i),
+/** laneStepper(st, key, uses) → the steps of the lane `key` of a session state (sessionState): {L, n, rids, lines, lineAt(i), eventsAt(i),
  *  listAt(i), replyAt(i), step(i, prev), defOf(bid, list), release(keep)}. step(i, prev) = step i with its ops against step `prev`'s list (−1: a
  *  keyframe, every position added), parent = step `prev`'s rid (null for −1); defOf = a definition on the wire, its render joined with
- *  the tool_use of the list `list` (the first it is asked with: cached by bid). Lists, lines and definitions are read once each; `defs`
- *  (an lru, the store's definitions by bid: a definition is its bid's) may be one kept across steppers (ctx-files.mjs, the writer). */
-export function laneStepper(st, key, defs = lru(DEF_BYTES)) {
+ *  the tool_use of the list `list` (a listAt(i); the first it is asked with: cached by bid). Lists, lines and definitions are read once each; `uses`
+ *  (an lru by bid: a block's tool_use id and the render a tool_result inherits from it, 0 for a block that is no tool_use; a function
+ *  of its bid) may be one kept across steppers (ctx-files.mjs, the writer's memo), so a list's blocks are not read again at every
+ *  slice, and what it keeps is these few fields, never the definitions. */
+export function laneStepper(st, key, uses = lru(DEF_BYTES)) {
   const { store } = st, { cols, log } = st.V, L = laneOf(cols, key), { rids, slots } = L;
   const lines = new Map(), lineAt = (i) => { if (!lines.has(i)) lines.set(i, log.read(...log.latest(rids[i]))); return lines.get(i); };
   // the `user` events before step i (3.5: every `user` event's `k` is its place among the lane's, 1-based), walked from the last place
@@ -98,12 +100,12 @@ export function laneStepper(st, key, defs = lru(DEF_BYTES)) {
   const before = (i) => { for (; bi < i; bi++) bs += cols.uc[slots[bi]]; for (; bi > i; bi--) bs -= cols.uc[slots[bi - 1]]; return bs; };
   const eventsAt = (i) => { let j = before(i); return lineAt(i).e.map((e) => (e.type === 'user' ? { ...e, k: ++j } : e)); };
   // the definitions read, by bytes about (their strings: a tool's name can be tens of KB), the least recently used out
-  const lists = new Map(), wires = new Map();
+  const lists = new Map(), defs = lru(DEF_BYTES), wires = new Map();
   const rowOf = (i) => store.rows.get(rids[i]);
   const listAt = (i) => {
     if (!lists.has(i)) {
       const l = listOf(store, rids[i]) || { bids: [], attrs: {} };
-      lists.set(i, { bids: l.bids, attrs: l.attrs, toks: l.bids.map((b, k) => { const a = attrOf(l.attrs[k]); return a ? `${b}\u001f${JSON.stringify(a)}` : b; }) });
+      lists.set(i, { bids: l.bids, attrs: l.attrs, m0: l.mb && l.mb.length ? l.mb[0] : 0, toks: l.bids.map((b, k) => { const a = attrOf(l.attrs[k]); return a ? `${b}\u001f${JSON.stringify(a)}` : b; }) });
     }
     return lists.get(i);
   };
@@ -111,15 +113,21 @@ export function laneStepper(st, key, defs = lru(DEF_BYTES)) {
   const defOf = (bid) => {
     if (defs.has(bid)) return defs.get(bid);
     const d = store.readDef(bid) || null;
-    defs.set(bid, d, weigh(d));
+    defs.set(bid, d, 128 + (d ? 2 * ((d.preview || '').length + (d.toolName || '').length + (d.label || '').length + (d.ref || '').length) : 0));
     return d;
   };
   // a tool_result whose own sniff is plain text takes its render from its tool_use's (render-kind.mjs inheritedRender): the tool_use
-  // of the same id in the list it is first seen in
+  // of the same id in the list it is first seen in (`list` a listAt(i): a tool_use is a block of the messages, from its first start m0)
+  function useOf(b) {
+    if (uses.has(b)) return uses.get(b);
+    const u = defOf(b), v = u && u.f && u.f.type === 'tool_use' ? [u.f.id, inheritedRender(u.r) || null] : 0;
+    uses.set(b, v, weigh(v));
+    return v;
+  }
   function renderIn(d, list) {
     const own = d.r || { as: 'text' }, useId = d.f && d.f.tool_use_id;
     if (own.as !== 'text' || useId == null) return own;
-    for (const b of list) { const u = defOf(b); if (u && u.f && u.f.type === 'tool_use' && u.f.id === useId) return inheritedRender(u.r) || own; }
+    for (let j = list.m0; j < list.bids.length; j++) { const u = useOf(list.bids[j]); if (u && u[0] === useId) return u[1] || own; }
     return own;
   }
   function wireDef(bid, list) {
@@ -185,7 +193,7 @@ export async function run(ctx) {
     const added = [];
     for (const b of [...listAt(i).bids, ...replyAt(i)]) if (!held.has(b) && !fresh.has(b)) { fresh.set(b, i); added.push(b); }
     let bytes = 0;
-    for (const b of added) { const w = wireDef(b, listAt(i).bids); if (w) bytes += bytesOf(w); }
+    for (const b of added) { const w = wireDef(b, listAt(i)); if (w) bytes += bytesOf(w); }
     return { added, bytes };
   }
   const drop = (added) => { for (const b of added) fresh.delete(b); };
@@ -233,7 +241,7 @@ export async function run(ctx) {
     const w = ledgerWeight(kept);
     if (w <= LEDGER_BYTES) cache.set(key, { ...kept, rid: rids[kept.step], off: log.frontier }, w);
   }
-  const wireDefs = [...fresh.keys()].map((b) => wireDef(b, listAt(fresh.get(b)).bids)).filter(Boolean);
+  const wireDefs = [...fresh.keys()].map((b) => wireDef(b, listAt(fresh.get(b)))).filter(Boolean);
   // the entries owed (at --ledger: those after its cursor) in key order, into the room the page leaves (a --ledger answer takes one
   // at least); `ledger_next` names the last one shipped when some are left
   const owed = [resources, seen].flatMap((list, j) => list.map((e) => [j, keyOf[j](e), e]))
