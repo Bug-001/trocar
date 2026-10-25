@@ -626,7 +626,7 @@ const foldBytes = (file) => {
 }
 const lastFrontier = (file) => { try { const f = foldBytes(file).toString('utf8').split('\n').filter((l) => l.startsWith('{"f"')).at(-1); return f ? JSON.parse(f) : null } catch { return null } }
 const stateOf = (file) => { const sc = loadSidecar({ file, endsLine: (n) => foldBytes(file)[n - 1] === 10 }), m = sc && sc.parts['r.m']; return sc && sc.parts['r.s'] && m && JSON.parse(m[0]).rv === REDUCE_V ? sc.head : null }
-async function kickedFold({ calls, wire, idleMs, env = {}, killWhen = null }) {
+async function kickedFold({ calls, wire, idleMs, env = {}, killWhen = null, kicked = (members) => members.map((r) => String(r.id)) }) {
   const home = path.join(tmpDir('trocar-qsvc-fold-'), '.trocar')
   const s = bigSession({ home, wire, subEvery: 4, subLanes: 3, late: 2 })
   s.append(calls)
@@ -641,14 +641,14 @@ async function kickedFold({ calls, wire, idleMs, env = {}, killWhen = null }) {
   } })
   try {
     const t0 = Date.now()
-    svc.kick(members.map((r) => String(r.id)))
+    svc.kick(kicked(members))
     let first = null
     const poll = setInterval(() => {
       const f = lastFrontier(log)
       if (f && first == null) first = Date.now()
       if (killWhen && first != null && killWhen({ since: Date.now() - first, f, last: String(members.at(-1).id) })) child.kill('SIGKILL')
     }, 10)
-    try { return { members, log, took: (await within(exit, 150_000, 'the worker left')) - t0 } } finally { clearInterval(poll) }
+    try { return { home, id: s.id, members, log, took: (await within(exit, 150_000, 'the worker left')) - t0 } } finally { clearInterval(poll) }
   } finally { svc.stop(); if (exit) await exit }
 }
 
@@ -662,6 +662,15 @@ test('kick: a kicked fold several times longer than idleMs is folded to its fron
   const st = stateOf(log)
   assert.ok(st && st.bytes === foldBytes(log).length, 'the fold log\'s sidecar holds the reduction state at that frontier')
   assert.ok(took > 3 * IDLE, `the fold took several idle periods (${took} ms): else this case shows nothing`)
+})
+
+// 3.5 §后台抽取与归约 kick (D71①②): the keeper kicks the record ids of the new calls only, so a session never folded before is folded
+// from its start by a kick of its last record id alone, with no read: its head is tier 1 at its last member, nothing pending.
+test('kick: a never-folded session kicked by its last record id alone is folded to its end with no read (head tier 1, pending null)', { timeout: 180_000 }, async () => {
+  const { home, id, members, log } = await kickedFold({ calls: 600, wire: 'http', idleMs: 1_500, kicked: (ms) => [String(ms.at(-1).id)] })
+  assert.equal(lastFrontier(log)?.f, String(members.at(-1).id), 'the fold log stands at the last member')
+  const head = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(path.dirname(log), 'head.json.gz'))))
+  assert.deepEqual([head.tier, head.pending, head.mark], [1, null, String(members.at(-1).id)], 'the head: tier 1 at the last member, nothing pending')
 })
 
 test('a worker SIGKILLed after several checkpoint intervals of a fold leaves a reduction state to resume from (3.5 §后台抽取与归约, 4.3 §4 旁索引)', { timeout: 120_000 }, async () => {
