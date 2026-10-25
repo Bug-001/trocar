@@ -12,6 +12,8 @@ import { gunzipSync, gzipSync, brotliDecompressSync } from 'node:zlib'
 import { createQueryService } from '../../src/query/service.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { sessionDir } from '../../src/query/projection.mjs'
+import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
+import { PACK_MEMBERS } from '../../src/query/ctx-files.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -227,4 +229,23 @@ test('3.5 §会话读 contract: every line kind and key is in the closed sets; r
   }
   assert.equal(seen.calls.size, rows.size, 'every call is a step of one file')
   assert.equal(seen.lanes.size, lanes.size, 'every lane has its header in a file')
+})
+
+// 3.5 §会话读 `{l}` (D71③): lane headers live in the tails only, so a sealed pack is not rewritten when a lane with steps in it goes on
+// into the open span (its last step leaves the pack, its header changes). No late calls: no row of a sealed span changes.
+test('3.5 §会话读 {l}: a sealed pack is not rewritten when its lanes grow on into the open span', { timeout: 600_000 }, async () => {
+  const home = homeOf(), s = bigSession({ home, wire: 'http', ...SHAPE, late: 0 }), h = { home, id: s.id }
+  s.append(2 * PACK_MEMBERS + 8) // just past a seal: the lanes running then have their last steps in the sealed pack
+  await drive(home, s.id)
+  const names = packNames(h), was = headOf(h)
+  assert.ok(names.length >= 4, 'at least two sealed packs')
+  const before = Object.fromEntries(names.map((f) => [f, [statOf(path.join(dirOf(h), f)), fileText(h, f)]]))
+  await new Promise((ok) => setTimeout(ok, 20)) // a rewrite has another mtime
+  s.append(200)
+  await drive(home, s.id)
+  const now = headOf(h), members = sessionGroups(await indexRows({ home, errors: [] })).get(s.id), pos = new Map(members.map((r, i) => [String(r.id), i]))
+  const sealedEnd = PACK_MEMBERS * was.open.n
+  const crossed = was.lanes.filter((l) => pos.get(l.last) < sealedEnd && now.lanes.some((m) => m.lane === l.lane && m.last !== l.last))
+  assert.ok(crossed.length >= 1, 'a lane whose last step was in a sealed pack went on into the open span: else this case shows nothing')
+  for (const f of names) assert.deepEqual([statOf(path.join(dirOf(h), f)), fileText(h, f)], before[f], `${f} was not rewritten`)
 })

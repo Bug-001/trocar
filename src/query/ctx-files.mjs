@@ -12,11 +12,11 @@ import { listOf } from '../view/reduce.mjs';
 import { compareStep } from '../view/step-order.mjs';
 import { lru, sessionDir } from './projection.mjs';
 import { isModelCall, sessionFactsOf } from './rows.mjs';
-import { laneOf, laneAt, placeIn, recOf, FLAG } from './session-doc.mjs';
+import { laneOf, placeIn, recOf, FLAG } from './session-doc.mjs';
 import { laneStepper } from './named/lane.mjs';
 
 /** The answer files' format version (3.5 `v`). */
-export const CTX_V = 1;
+export const CTX_V = 2;
 /** The lane headers a head lists at most, the axis lane first, then the most recently active (3.5 `lanes`, SHOULD 64). */
 export const HEAD_LANES = 64;
 // cells of `cols` at most (3.5 `bucket`), failed members `errors` names at most, tier-0 time buckets at most
@@ -115,9 +115,18 @@ const spanOf = (s, rid) => { const p = s.pos(rid); return p < 0 ? -1 : Math.floo
 const isRow = (cols, rid) => { const k = cols.slotOf(rid); return k !== undefined && cols.ts[k] !== undefined; };
 /** axisSpans(s) → [s0, s1] per span 0..sealedOf(s): the axis steps its members cover (smallest, largest + 1); a span with none
  *  covers the empty range at the count of axis steps in the spans before it. */
-export function axisSpans(s) {
-  const V = s.V, N = sealedOf(s) + 1, lo = new Array(N).fill(Infinity), hi = new Array(N).fill(-1), below = new Array(N + 1).fill(0), ax = axisOf(V);
-  if (ax != null) laneOf(V.cols, ax).rids.forEach((rid, i) => { const n = spanOf(s, rid); if (n < 0 || n >= N) return; lo[n] = Math.min(lo[n], i); hi[n] = i + 1 > hi[n] ? i + 1 : hi[n]; below[n + 1]++; });
+export const axisSpans = (s) => spansOf(s, axisSteps(s));
+// the span of each axis step, in step order; `sp` (the writer's, of the last slice) is kept below place `j`: the axis rows before it
+// did not move (dirtyOf), so a slice looks at the axis steps from its first changed one only
+function axisSteps(s, sp = [], j = 0) {
+  const ax = axisOf(s.V), rids = ax == null ? [] : laneOf(s.V.cols, ax).rids;
+  sp.length = rids.length;
+  for (let t = Math.min(j, rids.length); t < rids.length; t++) sp[t] = spanOf(s, rids[t]);
+  return sp;
+}
+function spansOf(s, sp) {
+  const N = sealedOf(s) + 1, lo = new Array(N).fill(Infinity), hi = new Array(N).fill(-1), below = new Array(N + 1).fill(0);
+  for (let i = 0; i < sp.length; i++) { const n = sp[i]; if (n < 0 || n >= N) continue; if (i < lo[n]) lo[n] = i; hi[n] = i + 1; below[n + 1]++; }
   for (let n = 1; n <= N; n++) below[n] += below[n - 1];
   return lo.map((a, n) => (hi[n] < 0 ? [below[n], below[n]] : [a, hi[n]]));
 }
@@ -146,23 +155,22 @@ function stepLines(S, key, i, p, wrote, memo = null) {
   out.push({ s: { rid: st.rid, lane: key, i, parent: st.parent, ops: st.ops, reply: st.reply, attrs: st.attrs, detail: st.detail, events: S.eventsAt(i) } });
   return out;
 }
-// the `{l}` lines of a span's part: the part's lanes whose last step lies in it (they follow the doc-head line)
-const headsOf = (s, n, part) => { const ax = axisOf(s.V); return s.V.lanes.filter((h) => (h.lane === ax) === (part === 'main') && spanOf(s, h.last) === n).map((h) => ({ l: h })); };
+// the `{l}` lines of a tail: every lane header of its part (they follow the doc-head line); a pack has none (3.5 `{l}`)
+const headsOf = (s, part) => { const ax = axisOf(s.V); return s.V.lanes.filter((h) => (h.lane === ax) === (part === 'main')).map((h) => ({ l: h })); };
 const textOf = (lines) => lines.map((o) => `${JSON.stringify(o)}\n`).join('');
 /** renderSpan(s, n, part, tail) → the NDJSON text of pack n's `part` (`main` = the axis lane's, `rest` = the rest), or of the open
- *  tail when `tail`: the doc-head line; `{l}` for the part's lanes whose last step lies in the span (each lane's header in the one
- *  file holding its last step); per call of the part in step order its row, the definitions not yet in the file, its step against
+ *  tail when `tail`: the doc-head line; a tail's `{l}` for every lane of the part; per call of the part in step order its row, the definitions not yet in the file, its step against
  *  the previous step of its lane in this file (none: a keyframe); `{r}` for the part's members in write order; `{x}` (rest) for
  *  the failed members of the span. A function of the state alone. */
 export const renderSpan = (s, n, part, tail = false) => render(s, n, part, tail).buf.toString('utf8');
-function render(s, n, part, tail, memo = null) {
+function render(s, n, part, tail, memo = null, spans = axisSpans(s)) {
   const V = s.V, { cols, log } = V, ax = axisOf(V), main = part === 'main', a = n * PACK_MEMBERS;
   const axV = ax == null ? -2 : cols.keys.get(ax), onAxis = (rid) => isRow(cols, rid) && cols.ln[cols.slotOf(rid)] === axV;
-  const members = s.plan.members.slice(a, Math.min(a + PACK_MEMBERS, upToOf(s))).filter((r) => s.cut(r)), [s0, s1] = axisSpans(s)[n];
+  const members = s.plan.members.slice(a, Math.min(a + PACK_MEMBERS, upToOf(s))).filter((r) => s.cut(r)), [s0, s1] = spans[n];
   // each line made into bytes at once (outside the heap): a span's text can be tens of MB
   const chunks = [], out = { push: (...os) => { for (const o of os) chunks.push(Buffer.from(`${JSON.stringify(o)}\n`, 'utf8')); } };
   out.push(docOf(errorsOf(s.indexErrors, []), { id: s.id, ...(tail ? { tail: { n, part, s0 } } : { pack: { n, part, s0, s1 } }) }, 'lane'));
-  out.push(...headsOf(s, n, part));
+  if (tail) out.push(...headsOf(s, part));
   const calls = members.map((r) => String(r.id)).filter((rid) => isRow(cols, rid) && onAxis(rid) === main);
   calls.sort((x, y) => compareStep(cols.ts[cols.slotOf(x)], x, cols.ts[cols.slotOf(y)], y));
   const steppers = new Map(), prev = new Map(), wrote = new Set();
@@ -181,7 +189,7 @@ const tagOf = (main, rest) => createHash('sha1').update(main).update('\n').updat
 export function packsOf(s) {
   if (s.mark == null) return { packs: [], open: null };
   const N = sealedOf(s), spans = axisSpans(s), packs = [];
-  for (let n = 0; n < N; n++) packs.push({ n, s0: spans[n][0], s1: spans[n][1], tag: tagOf(render(s, n, 'main').buf, render(s, n, 'rest').buf) });
+  for (let n = 0; n < N; n++) packs.push({ n, s0: spans[n][0], s1: spans[n][1], tag: tagOf(render(s, n, 'main', false, null, spans).buf, render(s, n, 'rest', false, null, spans).buf) });
   return { packs, open: { n: N, s0: spans[N][0] } };
 }
 
@@ -214,8 +222,8 @@ function lowerBound(cols, L, ts, rid) {
 }
 // What changed in the fold log past byte `off`, for the spans below `open` (sealed) and the open one: a row that came, went, moved or
 // changed moves every later step of its lane (old and new) — their `i`, the `k` of their user events, the axis numbers — so the
-// packs holding those steps are dirty and those steps in the open span are appended again; a lane whose header changed dirties the
-// files that held and hold its last step; a failed member its span.
+// packs holding those steps are dirty and those steps in the open span are appended again; a lane whose header changed is appended
+// to its tail; a failed member dirties its span. `axis`: the first place of the axis lane that moved (undefined: none).
 function dirtyOf(s, off, open) {
   const V = s.V, { cols, log } = V, ax = axisOf(V), packs = new Set(), opens = new Set(), gone = [], lanes = [], fails = [], from = new Map();
   const touch = (key, ts, rid) => { const L = laneOf(cols, key); if (L.v < 0) return; const j = lowerBound(cols, L, ts, rid); if (!(from.get(key) <= j)) from.set(key, j); };
@@ -232,15 +240,11 @@ function dirtyOf(s, off, open) {
     const L = laneOf(cols, key);
     for (let t = j; t < L.rids.length; t++) { const n = spanOf(s, L.rids[t]); if (n >= open) opens.add(L.rids[t]); else if (n >= 0) packs.add(n); }
   }
-  const heads = new Map(V.lanes.map((h) => [h.lane, h])), relabel = new Set();
-  for (const key of ch.lanes) {
-    const h = heads.get(key), was = off < 0 ? null : laneAt(log, key, off);
-    for (const last of [h && h.last, was && was.last]) { const n = last == null ? -1 : spanOf(s, last); if (n >= 0 && n < open) relabel.add(n); }
-    if (h && spanOf(s, h.last) >= open) lanes.push(h);
-  }
+  const heads = new Map(V.lanes.map((h) => [h.lane, h]));
+  for (const key of ch.lanes) if (heads.has(key)) lanes.push(heads.get(key));
   const failed = new Map(V.failed.map((f) => [f.id, f]));
   for (const rid of log.failures.since(off)) { const n = spanOf(s, rid); if (n >= 0 && n < open) packs.add(n); else if (failed.has(rid)) fails.push(failed.get(rid)); }
-  return { packs, relabel, opens, gone, lanes, fails, axis: from.has(ax) };
+  return { packs, opens, gone, lanes, fails, axis: from.get(ax) };
 }
 
 /** writeFiles(ctx, s) → {packs, open} of the head: brings the session's pack and tail files to the state `s` (the worker's, after a
@@ -256,42 +260,25 @@ export function writeFiles(ctx, s) {
   const first = !W || W.ax !== ax;
   if (first) {
     const w = log.saved && log.saved.parts['w.f'];
-    W = { ax, f: w && w.length ? w[0] : -1, open: N, packs: [], tails: null, rec: 0, files: null, memo: lru(MEMO_BYTES) };
+    W = { ax, f: w && w.length ? w[0] : -1, open: N, packs: [], tails: null, rec: 0, files: null, memo: lru(MEMO_BYTES), sp: [] };
     writers.set(log, W);
   }
-  const d = dirtyOf(s, W.f, Math.min(W.open, N)), spans = axisSpans(s);
-  if (d.axis) for (const p of W.packs) if (p && p.s0 === p.s1) d.packs.add(p.n);
+  const d = dirtyOf(s, W.f, Math.min(W.open, N)), spans = spansOf(s, axisSteps(s, W.sp, first ? 0 : d.axis ?? W.sp.length));
+  if (d.axis !== undefined) for (const p of W.packs) if (p && p.s0 === p.s1) d.packs.add(p.n);
   W.packs.length = Math.min(W.packs.length, N);
   for (let n = 0; n < N; n++) {
     const k = W.packs[n], files = PARTS.map((p) => packFile(home, id, n, p));
-    if (k && !d.packs.has(n) && d.relabel.has(n)) { // only lane headers moved: the file's lines with the `{l}` lines made again
-      const L = Buffer.from('{"l":');
-      const texts = PARTS.map((p, i) => {
-        const t = readText(fs, files[i], true);
-        if (!t) return null;
-        const h = t.indexOf(10) + 1;
-        let j = h;
-        while (j < t.length && t.subarray(j, j + L.length).equals(L)) j = t.indexOf(10, j) + 1;
-        return Buffer.concat([t.subarray(0, h), Buffer.from(textOf(headsOf(s, n, p)), 'utf8'), t.subarray(j)]);
-      });
-      if (!texts.includes(null)) {
-        texts.forEach((t, i) => { if (k.h[i] !== sha(t)) putFile(fs, files[i], gzipSync(t)); });
-        W.packs[n] = { ...k, tag: tagOf(texts[0], texts[1]), h: texts.map(sha) };
-        continue;
-      }
-      d.packs.add(n);
-    }
     if (k && !d.packs.has(n)) continue;
     // a pack sealed before this worker and unchanged since: its files, when whole
-    let texts = first && !d.packs.has(n) && !d.relabel.has(n) ? files.map((f) => readText(fs, f, true)) : null;
+    let texts = first && !d.packs.has(n) ? files.map((f) => readText(fs, f, true)) : null;
     if (!texts || texts.includes(null)) {
-      texts = PARTS.map((p) => render(s, n, p, false, n >= W.open ? W.memo : null).buf);
+      texts = PARTS.map((p) => render(s, n, p, false, n >= W.open ? W.memo : null, spans).buf);
       texts.forEach((t, i) => { if (k ? k.h[i] !== sha(t) : !same(readText(fs, files[i], true), t)) putFile(fs, files[i], gzipSync(t)); });
     }
     W.packs[n] = { n, s0: spans[n][0], s1: spans[n][1], tag: tagOf(texts[0], texts[1]), h: texts.map(sha) };
   }
   const fresh = (part) => {
-    const { buf, wrote } = render(s, N, part, true, W.memo), file = tailFile(home, id, part);
+    const { buf, wrote } = render(s, N, part, true, W.memo, spans), file = tailFile(home, id, part);
     if (!same(readText(fs, file, false), buf)) putFile(fs, file, buf);
     W.tails[part] = { size: buf.length, defs: wrote };
   };
@@ -303,7 +290,7 @@ export function writeFiles(ctx, s) {
   W.files = { packs: W.packs.map(({ n, s0, s1, tag }) => ({ n, s0, s1, tag })), open: { n: N, s0: spans[N][0] } };
   return W.files;
 }
-// The tails' appends: the lanes whose header changed and whose last step is in the open span, the changed steps of the span in step
+// The tails' appends: the lanes whose header changed, the changed steps of the span in step
 // order (each against the step of its lane before it in the span: they are all in the file; none within 64 steps → a keyframe), the
 // records of the members past the last append, the failed members, the rids no longer a call. A tail whose size is not the one
 // written (torn, removed, replaced) is written afresh instead.
