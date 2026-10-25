@@ -102,7 +102,7 @@ export async function timed(page, cond, arg, act) {
 /** The board's reads answered from desk-world `w` (desk-world.mjs, 3.5 §会话读's reference server) at the mark w.marks[k], k starting at
  *  `from` (default the last): the answer files /api/d/head (ETag, 304 on If-None-Match), /api/d/p<n>.<part> (`pack` members a pack) and
  *  /api/d/open.<part> (append-only: each read appends the lines of the open span that changed since the last one, `g` for a rid that
- *  left it; `Range: bytes=N-` → 206 or 416 as 4.4 §答案文件), and `lane` (the ledger) and `block`. `grow` > 0: a session still being read
+ *  left it; one generation tag per n; `Range: bytes=N-` → 206 or 416, an If-Range of another tag → 200, as 4.4 §答案文件), and `lane` (the ledger) and `block`. `grow` > 0: a session still being read
  *  for the first time (3.5 §归约前沿) — each head read moves k on by `grow` members, and every head before the last mark carries
  *  `pending: {done, total}`. `latency`: every answer waits that many ms first. → { left() }: the members not reached yet. */
 export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0, latency = 0, pack = 32 } = {}) {
@@ -137,11 +137,12 @@ export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0,
     const pk = /^p(\d+)\.(main|rest)$/.exec(name), op = /^open\.(main|rest)$/.exec(name)
     if (pk) { const text = now().pack(+pk[1], pk[2]); return text == null ? json(route, { error: 'no such pack' }) : route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: text }) }
     if (!op) return route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"unknown endpoint"}' })
-    const buf = tail(op[1]), r = /^bytes=(\d+)-$/.exec(req.headers().range || '')
-    if (!r) return route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: buf })
+    const buf = tail(op[1]), etag = `"${op[1]}-${tails.get(op[1]).n}"`, ir = req.headers()['if-range']
+    const r = ir == null || ir === etag ? /^bytes=(\d+)-$/.exec(req.headers().range || '') : null
+    if (!r) return route.fulfill({ status: 200, contentType: 'application/x-ndjson', headers: { etag }, body: buf })
     const from = +r[1]
-    if (from >= buf.length) return route.fulfill({ status: 416, headers: { 'content-range': `bytes */${buf.length}` }, body: '' })
-    route.fulfill({ status: 206, contentType: 'application/x-ndjson', headers: { 'content-range': `bytes ${from}-${buf.length - 1}/${buf.length}` }, body: buf.subarray(from) })
+    if (from >= buf.length) return route.fulfill({ status: 416, headers: { etag, 'content-range': `bytes */${buf.length}` }, body: '' })
+    route.fulfill({ status: 206, contentType: 'application/x-ndjson', headers: { etag, 'content-range': `bytes ${from}-${buf.length - 1}/${buf.length}` }, body: buf.subarray(from) })
   })
   await page.route('**/api/lane?**', async (route) => { await wait(); const q = new URL(route.request().url()).searchParams; json(route, w.lane(q.get('lane'), { from: q.get('from') ?? undefined, to: q.get('to') ?? undefined, ledger: q.get('ledger') ?? undefined }, w.marks[k])) })
   // 3.5 §会话读 `block`: one item per asked ref, its bytes made from the ref (the shape of session-read-contract.json `block_multi`)
