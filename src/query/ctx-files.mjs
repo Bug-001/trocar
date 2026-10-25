@@ -134,7 +134,8 @@ function spansOf(s, sp) {
 // its list and reply bring that `wrote` (the file's) does not hold yet, the step.
 // The ids it brings that the file lacks are those its ops add, in list order, then its reply's: every id of its parent's list is in the
 // file already. `memo` (the writer's, for the open span): a step and a definition are made once for the tail and the pack it is sealed
-// into; a step is a function of the projection's rows of it and its parent (extracted once each), so the two rids key it.
+// into; a step is a function of the projection's rows of it and its parent (extracted once each), so the two rids key it. The lane
+// steppers read the store's definitions through it too (by bid), so a list's tool_use is not read again at every slice.
 // what a kept step or definition weighs in the heap, about: its JSON's bytes and the entry
 const weigh = (v) => 96 + (v ? 2 * JSON.stringify(v).length : 0);
 /** The open span's memo holds this much at most (the least recently used out): a fixed cache beside the reduction's (3.5 §内存有界). */
@@ -175,7 +176,7 @@ function render(s, n, part, tail, memo = null, spans = axisSpans(s)) {
   calls.sort((x, y) => compareStep(cols.ts[cols.slotOf(x)], x, cols.ts[cols.slotOf(y)], y));
   const steppers = new Map(), prev = new Map(), wrote = new Set();
   for (const rid of calls) {
-    const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key)).get(key), i = placeIn(cols, S.L, rid);
+    const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key, memo || undefined)).get(key), i = placeIn(cols, S.L, rid);
     out.push(...stepLines(S, key, i, prev.has(key) ? prev.get(key) : -1, wrote, memo));
     prev.set(key, i);
     S.release(i);
@@ -267,8 +268,9 @@ export function writeFiles(ctx, s) {
   if (d.axis !== undefined) for (const p of W.packs) if (p && p.s0 === p.s1) d.packs.add(p.n);
   W.packs.length = Math.min(W.packs.length, N);
   for (let n = 0; n < N; n++) {
-    const k = W.packs[n], files = PARTS.map((p) => packFile(home, id, n, p));
+    const k = W.packs[n];
     if (k && !d.packs.has(n)) continue;
+    const files = PARTS.map((p) => packFile(home, id, n, p));
     // a pack sealed before this worker and unchanged since: its files, when whole
     let texts = first && !d.packs.has(n) ? files.map((f) => readText(fs, f, true)) : null;
     if (!texts || texts.includes(null)) {
@@ -300,7 +302,7 @@ function appendTails(s, W, d, N, upTo, fs, fileOf, fresh) {
   const calls = [...d.opens].filter((rid) => isRow(cols, rid)).sort((x, y) => compareStep(cols.ts[cols.slotOf(x)], x, cols.ts[cols.slotOf(y)], y));
   const steppers = new Map();
   for (const rid of calls) {
-    const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key)).get(key), i = placeIn(cols, S.L, rid);
+    const key = log.read(...log.latest(rid)).r.lane, S = steppers.get(key) || steppers.set(key, laneStepper(s, key, W.memo)).get(key), i = placeIn(cols, S.L, rid);
     let p = -1;
     for (let t = i - 1; t >= 0 && t >= i - 64; t--) if (spanOf(s, S.rids[t]) >= N) { p = t; break; }
     add[partOf(key)].push(...stepLines(S, key, i, p, W.tails[partOf(key)].defs, W.memo));

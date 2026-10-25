@@ -82,19 +82,21 @@ function keptOf(cols, log, lane, e) {
   return e;
 }
 
-/** laneStepper(st, key) → the steps of the lane `key` of a session state (sessionState): {L, n, rids, lines, lineAt(i), eventsAt(i),
+/** laneStepper(st, key, defs) → the steps of the lane `key` of a session state (sessionState): {L, n, rids, lines, lineAt(i), eventsAt(i),
  *  listAt(i), replyAt(i), step(i, prev), defOf(bid, list), release(keep)}. step(i, prev) = step i with its ops against step `prev`'s list (−1: a
  *  keyframe, every position added), parent = step `prev`'s rid (null for −1); defOf = a definition on the wire, its render joined with
- *  the tool_use of the list `list` (the first it is asked with: cached by bid). Lists, lines and definitions are read once each. */
-export function laneStepper(st, key) {
+ *  the tool_use of the list `list` (the first it is asked with: cached by bid). Lists, lines and definitions are read once each; `defs`
+ *  (an lru, the store's definitions by bid: a definition is its bid's) may be one kept across steppers (ctx-files.mjs, the writer). */
+export function laneStepper(st, key, defs = lru(DEF_BYTES)) {
   const { store } = st, { cols, log } = st.V, L = laneOf(cols, key), { rids, slots } = L;
   const lines = new Map(), lineAt = (i) => { if (!lines.has(i)) lines.set(i, log.read(...log.latest(rids[i]))); return lines.get(i); };
-  // the `user` events before step i (3.5: every `user` event's `k` is its place among the lane's, 1-based)
-  const before = [0];
-  for (const k of slots) before.push(before.at(-1) + cols.uc[k]);
-  const eventsAt = (i) => { let j = before[i]; return lineAt(i).e.map((e) => (e.type === 'user' ? { ...e, k: ++j } : e)); };
+  // the `user` events before step i (3.5: every `user` event's `k` is its place among the lane's, 1-based), walked from the last place
+  // asked: a stepper made for a slice's few steps does not sum the whole lane up front
+  let bi = 0, bs = 0;
+  const before = (i) => { for (; bi < i; bi++) bs += cols.uc[slots[bi]]; for (; bi > i; bi--) bs -= cols.uc[slots[bi - 1]]; return bs; };
+  const eventsAt = (i) => { let j = before(i); return lineAt(i).e.map((e) => (e.type === 'user' ? { ...e, k: ++j } : e)); };
   // the definitions read, by bytes about (their strings: a tool's name can be tens of KB), the least recently used out
-  const lists = new Map(), defs = lru(DEF_BYTES), wires = new Map();
+  const lists = new Map(), wires = new Map();
   const rowOf = (i) => store.rows.get(rids[i]);
   const listAt = (i) => {
     if (!lists.has(i)) {

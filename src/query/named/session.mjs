@@ -493,6 +493,7 @@ export async function extendSession(ctx, id, budgetMs) {
   const s = stateAt(r, String(id));
   files(ctx, s);
   if (headDue(ctx, String(id), more)) putHead(ctx, s);
+  if (!more) releaseParts(); // folded to its frontier: between calls the worker holds no decoded part (3.5:40 ⑤)
   return more;
 }
 
