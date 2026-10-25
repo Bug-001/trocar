@@ -147,6 +147,7 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
   let junk = false, unreadable = null, trunc = false; // trunc: the disk may hold bytes past `end`: made so before the next write
   let starts = [], bufs = [], arena = 0; // the arena: each append's text, by the offset of its first byte
   let failing = false, fd = null;
+  let covers = Infinity; // the bytes the sidecar on disk covers, once this handle loaded or saved it; unknown: all
 
   const found = files(), ps = found.filter((f) => !f.tmp && f.b !== undefined).sort((x, y) => x.a - y.a);
   for (const p of ps) { if (p.a !== C || !(p.b > p.a)) { unreadable = `${path.basename(p.path)} does not follow the parts before it`; break; } C = p.b; }
@@ -196,7 +197,7 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
     if (write) {
       try {
         fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-        if (trunc || !end) fs.rmSync(sidecarOf(side), { force: true }); // what it covers is no longer there
+        if (!end || (trunc && covers > end)) fs.rmSync(sidecarOf(side), { force: true }); // what it covers is no longer there
         if (trunc) settle();
         trunc = true; // until the append is known whole
         const out = arena ? Buffer.concat([...bufs, buf]) : buf;
@@ -301,8 +302,8 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
   const self = {
     append, read, scan, cut, remove, seal, close,
     touch() { if (write && end) try { const t = new Date(); fs.utimesSync(tailOf(T), t, t); } catch { /* the GC order only */ } },
-    loadSidecar: () => loadSidecar({ fs, file: side, endsLine: (n) => n <= end && read(n - 1, 1)[0] === 10 }),
-    saveSidecar: ({ head, parts: ps2 }) => saveSidecar({ fs, file: side, head, parts: ps2 }),
+    loadSidecar() { const r = loadSidecar({ fs, file: side, endsLine: (n) => n <= end && read(n - 1, 1)[0] === 10 }); covers = r ? r.head.bytes : Infinity; return r; },
+    saveSidecar({ head, parts: ps2 }) { covers = Infinity; saveSidecar({ fs, file: side, head, parts: ps2 }); covers = head.bytes; },
     get bytes() { return end + arena; }, get settled() { return write && !arena && !trunc; }, get unreadable() { return unreadable; },
   };
   return self;

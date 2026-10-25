@@ -12,7 +12,7 @@ import { runQuery } from '../../src/query/named/index.mjs'
 import { saveIndexes, extendSession } from '../../src/query/named/session.mjs'
 import { openProjection, projectionFile, gcProjections, sessionDir } from '../../src/query/projection.mjs'
 import { openFoldLog, foldLogFile } from '../../src/query/fold-log.mjs'
-import { loadSidecar, FIRST_CHUNK } from '../../src/query/line-file.mjs'
+import { loadSidecar, FIRST_CHUNK, lineFile } from '../../src/query/line-file.mjs'
 
 const SEG = '20261020T164737Z'
 const FIRST = 8, MORE = 6
@@ -236,4 +236,27 @@ test('4.3 §4 旁索引: a cold open seeded from the step-order columns in the f
     assert.equal(JSON.stringify(a), JSON.stringify(b), wire)
   }
   assert.ok(nonCalls > 0, 'a member that is no call was written')
+})
+
+// 3.5:42 (a restarted worker carries on from the checkpoint): a resume cuts what lies past the lines it keeps, then appends. The
+// sidecar covers [0, its bytes); a cut at or past them keeps that prefix byte for byte, so the next append keeps the sidecar; a cut
+// below them drops bytes it covers, so the append removes it. Over every line end as the sidecar's bytes and every line end (with
+// and without a torn tail) as the cut.
+test('3.5:42: a cut that keeps what the sidecar covers keeps the sidecar through the next append; a cut below it removes it', () => {
+  const lines = ['a\n', 'bé\n', 'ccc\n', '中中\n', 'e\n'], ends = lines.map((_, i) => Buffer.byteLength(lines.slice(0, i + 1).join('')))
+  for (const covers of ends) for (const at of ends) for (const torn of [false, true]) {
+    const dir = tmpDir('trocar-side-cut-'), base = path.join(dir, 'x')
+    let lf = lineFile({ fs, base })
+    for (const l of lines) lf.append(l)
+    if (torn) lf.append('half')
+    lf.saveSidecar({ head: { bytes: covers }, parts: [['k', ['s']]] })
+    lf.close()
+    lf = lineFile({ fs, base })
+    assert.equal(lf.loadSidecar()?.head.bytes, covers)
+    lf.cut(at)
+    lf.append('f\n')
+    lf.close()
+    const kept = loadSidecar({ fs, file: `${base}.ndjson`, endsLine: () => true })
+    assert.equal(kept?.head.bytes, at >= covers ? covers : undefined, `sidecar at ${covers}, cut at ${at}${torn ? ' past a torn tail' : ''}`)
+  }
 })
