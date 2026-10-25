@@ -95,6 +95,9 @@ export const FIRST_CHUNK = 4 << 10;
 // parts decoded (a Buffer's bytes are external memory, not the V8 heap), by path and the file's identity, least recently used first
 const decoded = new Map();
 let decodedBytes = 0;
+// parts that did not decode, by the same identity: an open that finds one is not one line file (the local path, which does not
+// remove it, rebuilds in memory instead of decoding it again at a read; 4.3 §4 分片)
+const undecodable = new Set();
 /** releaseParts(): drop every decoded part (the worker's idle period). */
 export function releaseParts() { decoded.clear(); decodedBytes = 0; }
 function plainOf(fs, p) {
@@ -150,8 +153,8 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
   const tails = found.filter((f) => !f.tmp && f.t !== undefined).sort((x, y) => y.t - x.t);
   const tail = tails.find((f) => f.t === C) || tails.find((f) => f.t < C);
   if (!unreadable && !tail && tails.length) unreadable = `the plain tail of ${name} begins past its parts`;
-  if (unreadable) { junk = true; C = 0; trunc = write; } else {
-    parts = ps.map(partAt);
+  if (!unreadable) { parts = ps.map(partAt); const bad = parts.find((p) => undecodable.has(p.key)); if (bad) unreadable = `${path.basename(bad.path)} does not decode`; }
+  if (unreadable) { parts = []; junk = true; C = 0; trunc = write; } else {
     T = tail ? tail.t : C;
     end = Math.max(C, tail ? T + fs.statSync(tail.path).size : C);
     if (write) {
@@ -169,6 +172,7 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
   // a part that does not decode: the file is not one line file; a writer removes the part, so the next open rebuilds
   function broken(p, e) {
     unreadable = `${path.basename(p.path)} does not decode (${e.code || e.message})`;
+    undecodable.add(p.key);
     if (write) try { fs.rmSync(p.path, { force: true }); } catch { /* the next open */ }
   }
   const partIndex = (off) => { let lo = 0, hi = parts.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (parts[mid].a <= off) lo = mid; else hi = mid - 1; } return lo; };

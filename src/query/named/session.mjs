@@ -188,6 +188,17 @@ export async function indexed({ home, fs, once }) {
 function letGo(k, e) { closeStore(k); return e; }
 // Every store closes here (a hand-off, the eviction past STORES): its reduction state with it, and its `work` stays with the worker.
 function closeStore(k) { const s = stores.get(k), st = states.take(k); if (st) closeState(st); stores.delete(k); frontiers.delete(k); if (s) { works.set(k, s.work); s.close(); } }
+/** again(ctx, id, f) → f(), and f() once more when it threw ELINEPART (line-file.mjs: a part first decoded after the open, which
+ *  a sidecar lets skip the scan, did not decode): the session's warm store and its state (fold log, reduction) are let go first,
+ *  so the second opens them again and rebuilds that line file with its projection-rebuilt note (4.3 §4 分片). Any other error is
+ *  thrown as it is. In the same request: the next one would do the same rebuild, and this answer already says it. */
+export async function again(ctx, id, f) {
+  try { return await f(); } catch (e) {
+    if (!e || e.code !== 'ELINEPART' || id == null) throw e;
+    closeStore(keyOf(ctx, String(id))); lagging.delete(String(id));
+    return f();
+  }
+}
 // session key → `pending.work` (3.5 §会话读): the members extracted and handed to a reduction for it in this worker, across its store's
 // close and reopen, so it only grows while the worker lives (3.5:43). One number per session the worker opened.
 const works = new Map();
@@ -490,7 +501,7 @@ async function advance(ctx, id, { budgetMs, request }) {
  *  rebuild, when a member lies past its log's frontier): half of `budgetMs` each, the fold also what extraction left. */
 export async function extendSession(ctx, id, budgetMs) {
   let r;
-  try { r = await advance(ctx, String(id), { budgetMs, request: false }); } catch (e) { await stopped(ctx, String(id), e); throw e; }
+  try { r = await again(ctx, id, () => advance(ctx, String(id), { budgetMs, request: false })); } catch (e) { await stopped(ctx, String(id), e); throw e; }
   if (!r) return false;
   const { st, plan, ex } = r;
   const more = ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n);

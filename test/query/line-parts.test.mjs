@@ -1,7 +1,8 @@
 // test/query/line-parts.test.mjs — 4.3 §4 分片 (acceptance 4.3 #17): a line file is sealed parts `<name>.<a>-<b>.br` (the brotli of
 // its global bytes [a, b), cut at a line end, chaining from 0) and one plain tail `<name>.<T>.ndjson`. Over seeded line sequences
 // (1 B to 3 MiB, non-ASCII, lines that end exactly where a part ends) sealed at random points: every line reads back by its offset;
-// a seal killed at any of its writes reopens to the same lines and one tail; a part deleted or not decoding rebuilds the store.
+// a seal killed at any of its writes reopens to the same lines and one tail; a part deleted or not decoding, found at the open or
+// at its first read after a sidecar open, rebuilds that line file with one note and answers what the undamaged home answers.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -11,6 +12,9 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { lineFile, releaseParts } from '../../src/query/line-file.mjs'
 import { openProjection, sessionDir } from '../../src/query/projection.mjs'
 import { openFoldLog } from '../../src/query/fold-log.mjs'
+import { bigSession } from './big-session.mjs'
+import { runQuery } from '../../src/query/named/index.mjs'
+import { extendSession, saveIndexes } from '../../src/query/named/session.mjs'
 
 const rng = (seed) => () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32)
 const CHARS = ['a', 'z', ' ', 'é', 'ж', '中', '😀', '"', '\\']
@@ -92,32 +96,50 @@ test('4.3 #17: a seal killed after any of its writes reopens to the same lines a
   assert.deepEqual([...seen].sort(), ['a part renamed, the old tail there', 'a part tmp left', 'the new tail tmp left'])
 })
 
-// a store whose lines are sealed into parts, one part of `name` damaged: the next open of that store rebuilds it with one note
-function damaged(name, damage) {
-  const home = tmpDir('trocar-parts-store-'), key = 'session-parts', errors = []
-  const p = openProjection({ home, fs, key, errors })
-  for (let i = 1; i <= 40; i++) p.append({ defs: [{ bid: `b${i}`, text: `${'ж'.repeat(300)} ${i}` }], rows: [{ rid: `20261021T054349Z:${i}`, bids: [`b${i}`] }] })
-  const log = openFoldLog({ home, fs, key, projection: { id: p.id, bytes: p.bytes }, errors })
-  for (let i = 1; i <= 40; i++) log.append([{ c: `20261021T054349Z:${i}`, s: '中'.repeat(200) }, { f: `20261021T054349Z:${i}`, n: i, pb: p.bytes }])
-  assert.ok(p.seal({ partBytes: 4096 }) && log.seal({ partBytes: 4096 }))
-  p.close(); log.close()
-  assert.deepEqual(errors, [])
-  releaseParts()
-  const dir = sessionDir(home, key)
-  damage(path.join(dir, fs.readdirSync(dir).filter((n) => n.startsWith(`${name}.`) && n.endsWith('.br')).sort()[1]))
-  const again = [], q = openProjection({ home, fs, key, errors: again })
-  const l = name === 'fold' ? openFoldLog({ home, fs, key, projection: { id: q.id, bytes: q.bytes }, errors: again }) : null
-  return { again, held: name === 'fold' ? l.changedSince(-1).rids.length : [...q.rows.keys()].length }
+// A session read as every path reads it (runQuery: `session`, then `lane` for each of its lanes) → the answers without their errors,
+// and the errors as [where, code, level].
+async function answers(ctx, id) {
+  const docs = [await runQuery('session', { id }, ctx)]
+  for (const l of docs[0].lanes) docs.push(await runQuery('lane', { id, lane: l.lane }, ctx))
+  return { text: JSON.stringify(docs.map(({ errors, ...d }) => d)), errors: docs.flatMap((d) => d.errors.map((e) => [e.where, e.code, e.level])) }
 }
+const drain = async (ctx, id) => { if (ctx.writer) for (let i = 0; i < 500 && await extendSession(ctx, id, Infinity); i++); }
 
-test('4.3 #17: a part deleted or not decoding: the store is rebuilt, with one projection-rebuilt note', () => {
+test('4.3 #17: a part deleted or not decoding, found at the open or at its first read: one projection-rebuilt note, the same answers', { timeout: 300_000 }, async () => {
+  // a session whose projection and fold log are sealed into small parts, their sidecars saved (the worker's idle period)
+  const base = path.join(tmpDir('trocar-parts-home-'), '.trocar'), s = bigSession({ home: base, wire: 'http', growth: 200, subEvery: 3 })
+  s.append(12)
+  await drain({ home: base, fs, writer: true }, s.id)
+  saveIndexes()
+  const fsx = { ...fs }, p = openProjection({ home: base, fs: fsx, key: s.id }), log = openFoldLog({ home: base, fs: fsx, key: s.id, projection: { id: p.id, bytes: p.bytes } })
+  assert.ok(p.seal({ partBytes: 4096 }) && log.seal({ partBytes: 4096 }))
+  p.close(); log.close(); releaseParts()
   const flip = (f) => { const b = fs.readFileSync(f); b[3] ^= 0xff; b[Math.floor(b.length / 2)] ^= 0x5a; fs.writeFileSync(f, b) }
   const garble = (f) => fs.writeFileSync(f, zlib.brotliCompressSync(Buffer.from('not the bytes it held\n')))
-  for (const [where, name] of [['projection', 'extract'], ['fold-log', 'fold']]) {
-    for (const [tag, damage] of [['deleted', (f) => fs.rmSync(f)], ['flipped', flip], ['another length', garble]]) {
-      const { again, held } = damaged(name, damage)
-      assert.deepEqual(again.map((e) => [e.where, e.code, e.level]), [[where, 'projection-rebuilt', 'note']], `${name} ${tag}`)
-      assert.equal(held, 0, `${name} ${tag}: the store starts empty`)
+  const copy = () => { const h = path.join(tmpDir('trocar-parts-case-'), '.trocar'); fs.cpSync(base, h, { recursive: true }); return h }
+  for (const writer of [true, false]) {
+    const want = (await answers({ home: copy(), fs: { ...fs }, writer }, s.id)).text
+    for (const [where, name] of [['projection', 'extract'], ['fold-log', 'fold']]) {
+      for (const [kind, damage] of [['deleted', (f) => fs.rmSync(f)], ['flipped', flip], ['another length', garble]]) {
+        for (const sidecar of [false, true]) {
+          const tag = `${writer ? 'worker' : 'local'} · ${name} ${kind} · ${sidecar ? 'sidecar: decoded at its first read' : 'no sidecar: the open scans'}`
+          const home = copy(), dir = sessionDir(home, s.id), ctx = { home, fs: { ...fs }, writer }
+          damage(path.join(dir, fs.readdirSync(dir).filter((n) => n.startsWith(`${name}.`) && n.endsWith('.br')).sort()[1]))
+          if (!sidecar) for (const n of ['extract.idx', 'fold.idx']) fs.rmSync(path.join(dir, n))
+          releaseParts()
+          const first = await answers(ctx, s.id)
+          // the fold log names the projection it was folded from (4.3 §4 折叠日志 `pid`): a rebuilt projection rebuilds it too, with its own note
+          const notes = (where === 'projection' ? ['projection', 'fold-log'] : [where]).map((w) => [w, 'projection-rebuilt', 'note'])
+          assert.deepEqual(first.errors.sort(), notes.sort(), `${tag}: the first read`)
+          if (!writer) assert.equal(first.text, want, `${tag}: the first read's answers`)
+          await drain(ctx, s.id)
+          for (let k = 2; k <= 3; k++) {
+            const later = await answers(ctx, s.id)
+            assert.deepEqual(later.errors, [], `${tag}: read ${k}`)
+            assert.equal(later.text, want, `${tag}: read ${k}'s answers`)
+          }
+        }
+      }
     }
   }
 })
