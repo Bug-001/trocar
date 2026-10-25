@@ -20,11 +20,11 @@
 // its log, the step-order columns) is kept; it is let go (take(): the only reference dropped) before a state from scratch, so the heap
 // never holds two. The reduction frontier of each session is kept for version().
 //
-// THE CUT (3.5 §内存有界, a backstop): the reduction keeps SPINE_PER_ROW a row and SPINE_PER_BLOCK a distinct block of its store;
-// only when the rows pass what the budget holds beside the work, the steady caches, the blocks, the plan's members (PLAN_PER_MEMBER
-// each) and the fixed caches K (CACHES; those never cut, counted at their bytes) does it reduce the newest that fit, less one step, on a grid of steps (`truncated` says
-// so); no room for one row is an error. A reduction whose MEASURED heap passes what was reserved stops (HeapBound, checked per row
-// folded) and the session is cut again by the rows it got through; a cut that moves restarts the fold and its log.
+// THE CUT (3.5 §内存有界「截断只是兜底,按实测的堆截」, a backstop): the constants below are the design bound acceptance #11 measures,
+// never a cut: a session is read whole until a fold of it in THIS process measured its live heap within half a step of the budget
+// (HeapBound, checked per row folded); then it reads the newest rows that fold got through (at least half of those asked), less one
+// step, on a grid of steps (`truncated` says so), and a cut that moves restarts the fold and its log. No room for one row, measured,
+// is an error.
 import nodeFs from 'node:fs';
 import v8 from 'node:v8';
 import { reduction, memoryLog, BlockUnread, REDUCE_HEAP, LEDGER_BYTES, REDUCE_V } from '../../view/reduce.mjs';
@@ -36,7 +36,7 @@ import { recordsAt, releaseDecoded, STRETCH_HEAP } from '../records.mjs';
 import { indexRows, sessionGroups, sessionFacts } from '../rows.mjs';
 import { openProjection, STORE_HEAP } from '../projection.mjs';
 import { releaseParts } from '../line-file.mjs';
-import { warmCache, fsTag, heapBudget, heapCeiling, hold, steadyBytes, liveHeap, usedHeap } from '../warm.mjs';
+import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap } from '../warm.mjs';
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
@@ -63,7 +63,7 @@ export const SPINE_PER_BLOCK = 280;
 export const PLAN_PER_MEMBER = 260;
 // What extraction's work costs in the heap per stored byte of what one append covers (CHUNK_STORED, src/view/extract.mjs).
 const WORK_PER_STORED = 4;
-// The cut moves by the rows 1/BOUND_STEPS of the budget holds, so a live session is not reduced from scratch on every new row.
+// A step: 1/BOUND_STEPS of the budget for the measured bound, of the rows that fit for the cut, so a live session is not reduced from scratch on every new row.
 const BOUND_STEPS = 10;
 /** K (3.5 §内存有界): the fixed caches a session read fills and keeps beside its spine, each a byte cap of its own module (the store's
  *  rows and shared values, the reduction's lists and facts, the fold log's lines, the lane ledgers, extraction's lane tails), never given way to the ledger. */
@@ -88,20 +88,23 @@ class HeapBound extends Error {
   constructor(rows) { super('the session reduction passed the heap ceiling'); this.rows = rows; }
 }
 // Per row folded: the live heap (a full collection) is looked at when the stored bytes folded since the last look reach `m.gap` (half
-// of what is left of the reservation at WORK_PER_STORED a byte), by the members' stored bytes, never by the allocated heap, so two
-// processes look at the same rows. What the reduction holds is what the heap grew by since it began (`m.base`, measured for a
-// reduction from scratch, and kept by a state grown across requests), held against the whole reservation (`m.limit`) and the ceiling.
+// of what is left of the budget at WORK_PER_STORED a byte), by the members' stored bytes, never by the allocated heap, so two
+// processes look at the same rows. The fold stops when the live heap comes within half a step of the budget or passes the ceiling.
+// What the reduction holds (`m.held`, its weight in the shared ledger: costOf) is what the heap grew by since it began (`m.base`,
+// measured for a state from scratch, and kept by a state grown across requests).
 function bounded(m, rows, bytes) {
-  const used = usedHeap();
   m.since += bytes;
-  if (used <= heapCeiling() && (m.base == null || m.since < m.gap)) return;
-  const live = liveHeap(), grew = live - (m.base || 0);
-  if (live > heapCeiling() || (m.base != null && grew > m.limit - heapBudget() / BOUND_STEPS / 2)) throw new HeapBound(rows);
-  m.since = 0; m.gap = (m.limit - grew) / 2 / WORK_PER_STORED;
+  if (usedHeap() <= heapCeiling() && m.since < m.gap) return;
+  const line = heapBudget() - heapBudget() / BOUND_STEPS / 2;
+  let live = liveHeap();
+  if (live > line) { hold(heapBudget())(); live = liveHeap(); } // every other kept entry gives way before this fold is cut
+  m.held = live - m.base;
+  if (live > line || live > heapCeiling()) throw new HeapBound(rows);
+  m.since = 0; m.gap = (line - live) / 2 / WORK_PER_STORED;
 }
-// What a row of each session costs as a reduction of it measured (session key → bytes), at most PER_ROW_KEPT sessions.
-const perRows = new Map();
-const PER_ROW_KEPT = 64;
+// The rows of each session a fold of it measured to fit (session key → rows), at most FITS_KEPT sessions.
+const fits = new Map();
+const FITS_KEPT = 64;
 
 // THE PLAN of a session's member list, kept with its store (`store.plan`): the members by id, their facts (src/query/rows.mjs
 // sessionFacts), the version key, the cut, the extraction cursor `ex` and the write-order column `pos`. A member's place in write order
@@ -110,10 +113,9 @@ const PER_ROW_KEPT = 64;
 // one (its first member and the last one's last member at the same places) extends the plan by its new members; any other (a segment
 // indexed again, a store opened again) makes it afresh. So a slice and an answer cost by the new members (3.5 后台抽取与归约).
 // Exported for test/query/cut-grows.test.mjs, which grows a plan without records.
-export function planOf(members, k, store, id) {
-  const perRow = perRows.get(k) || SPINE_PER_ROW;
+export function planOf(members, k, store, id, fit = fits.get(k) ?? Infinity) {
   let p = store.plan;
-  if (p && p.members === members && p.n === members.length && p.perRow === perRow && p.blocks === store.defCount) return p;
+  if (p && p.members === members && p.n === members.length && p.fit === fit) return p;
   const n0 = p ? p.n : 0; // a member array grows in place (rows.mjs sessionGroups): the plan counts what it took
   if (!p || n0 > members.length || String(members[0].id) !== p.first || String(members[n0 - 1].id) !== p.last) {
     p = store.plan = { store, members: [], first: String(members[0].id), last: null, all: sums(), byId: new Map(), facts: sessionFacts(String(id)),
@@ -123,25 +125,20 @@ export function planOf(members, k, store, id) {
   for (const r of added) { p.byId.set(String(r.id), r); sum(p.all, r); p.facts.add(r); }
   p.members = members; p.n = members.length; p.last = String(members[members.length - 1].id);
   p.key = `${p.all.n}:${p.first}:${p.last}:${p.all.stored + p.all.n}`;
-  cut(p, perRow, added);
+  cut(p, fit, added);
   p.gen++;
   return p;
 }
-/** The rows (in step order) a reduction reads: all while their spine fits the budget beside the work, the steady caches, the
- *  store's distinct blocks, the plan's members and the fixed caches K (CACHES: byte-capped, one large read fills them; the never-cut terms, at their
- *  bytes), else the newest that do less one step, on a grid of steps → p.read, p.bound (the document's `truncated`), p.room. A
- *  step is the rows a tenth of the budget holds or a quarter of the rows that fit, the fewer, rounded down to a power of two (the grids nest). The cut only moves forward, and stays
- *  while it shows the fit less two steps, so a steady entry let go or a finer grid does not refold: a cut session shows at least half
- *  of what fits. No room for one row is an error, never a sliver (3.5 §内存有界). While the cut's first place stays and the new rows
- *  sort after its first row, they are put into the kept order. */
-function cut(p, perRow, added) {
-  const stepBytes = heapBudget() / BOUND_STEPS, a = p.all, others = steadyBytes() + p.store.defCount * SPINE_PER_BLOCK + a.n * PLAN_PER_MEMBER + CACHES;
-  const room = heapBudget() - workOf(a.max) - others;
-  const n = Math.floor(room / perRow);
-  if (n < 1) { p.blocks = -1; throw new Error(`the heap holds no room for this session (${mb(heapBudget())} MB budget, ${mb(others)} MB of index rows, blocks, members and caches)`); }
+/** The rows (in step order) a reduction reads: all until a fold of this session measured `fit` rows to fit (3.5 §内存有界), else the
+ *  newest `fit` less one step, on a grid of steps → p.read, p.bound (the document's `truncated`). A step is a tenth of the rows that
+ *  fit, rounded down to a power of two (the grids nest). The cut only moves forward, and stays while it shows the fit less two steps,
+ *  so a finer grid does not refold: a cut session shows at least half of what fits. While the cut's first place stays and the new
+ *  rows sort after its first row, they are put into the kept order. */
+function cut(p, fit, added) {
+  const a = p.all, n = fit;
   let start = 0;
   if (a.n > n) {
-    const step = 2 ** Math.floor(Math.log2(Math.max(1, Math.min(stepBytes / perRow, n / 4)))), cap = n - step;
+    const step = 2 ** Math.floor(Math.log2(Math.max(1, n / BOUND_STEPS))), cap = n - step;
     start = Math.min(Math.ceil((a.n - cap) / step) * step, a.n - 1);
     if (p.start > start && a.n - p.start >= cap - step) start = p.start;
   }
@@ -151,7 +148,7 @@ function cut(p, perRow, added) {
     p.shown = sums();
     for (const r of p.read) sum(p.shown, r);
   }
-  Object.assign(p, { start, perRow, blocks: p.store.defCount, room, work: workOf(p.shown.max), limit: room + workOf(p.shown.max) + CACHES,
+  Object.assign(p, { start, fit, work: workOf(p.shown.max),
     bound: start ? { shown: p.shown.calls, total: a.calls, kept_mb: mb(p.shown.stored), file_mb: mb(a.stored) } : null });
 }
 // `r` put into `read` (in step order) after the rows it does not sort before, searched from the end: a new row lands near the end
@@ -295,7 +292,7 @@ function foldedUnder(log, plan, f) {
 function stateOf(ctx, id, store, plan) {
   const writer = ctx.writer === true, home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   const open = (upTo) => openFoldLog({ home, fs, key: id, write: writer, projection: { id: store.id, bytes: store.bytes }, errors: s.sink, upTo });
-  const s = { base: liveHeap(), meter: null, store, perRow: plan.perRow, cut: cutOf(plan), n: 0, cost: 0, sink: [], hook: null, resolve: null,
+  const s = { base: liveHeap(), meter: null, store, cut: cutOf(plan), n: 0, cost: 0, sink: [], hook: null, resolve: null,
     cols: columns(store.rows.slotOf), view: null, R: null, T: null, relay: null, target: null, fc: 0, fp: null, writer, open, saved: 0, savedAt: performance.now() };
   const log = open(), m = markOf(log);
   if (m != null && foldedUnder(log, plan, m)) {
@@ -385,12 +382,12 @@ const pastOf = (plan, target, F) => { for (let i = posOf(plan, target) + 1; i < 
 function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress, errors }) {
   let st = box.old;
   box.old = null;
-  const same = st && st.store === store && st.perRow === plan.perRow && st.cut === cutOf(plan);
+  const same = st && st.store === store && st.cut === cutOf(plan);
   if (st && !same) { closeState(st); st = null; }
   if (!st) st = stateOf(ctx, id, store, plan);
   // a state grown across requests is held against the heap it began from; its meter is kept with it, so the live heap is looked at
   // by the stored bytes folded since the last look across slices, not once per slice
-  const meter = Object.assign(st.meter ||= { base: st.base, since: 0, gap: 0 }, { limit: plan.limit, n: st.n });
+  const meter = Object.assign(st.meter ||= { base: st.base, since: 0, gap: 0, held: null }, { n: st.n });
   st.resolve = resolve;
   st.hook = (rid) => { progress(); bounded(meter, ++meter.n, (plan.byId.get(rid) || {}).stored_bytes || 0); };
   const now = st.target == null || (!(ctx.writer === true && request) && pastOf(plan, st.target, F));
@@ -399,7 +396,8 @@ function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress
     if (foldMs > 0 && now) fold(st, plan, F, foldMs);
   } catch (e) { closeState(st); throw e; }
   errors.push(...st.sink.splice(0));
-  st.cost = costOf(st, plan.perRow);
+  if (st.meter.held == null) st.meter.held = liveHeap() - st.base; // a state just made: what it holds, measured once
+  st.cost = costOf(st);
   return st;
 }
 // Whether a reduction (target null) has a member of the cut before `F` still to take.
@@ -409,8 +407,9 @@ const unfolded = (st, plan, F) => { for (let i = st.fp === plan ? st.fc : 0; i <
 export class HandOff extends Error {
   constructor(id) { super(`session ${id}: its projection or fold log does not cover every member yet`); this.name = 'HandOff'; this.code = 'hand-off'; }
 }
-// What a kept state weighs: its calls and its store's blocks, the store's, the reduction's and the log's caches, its kept lane ledgers.
-const costOf = (st, perRow) => Math.max(st.n, st.cols.order.length) * perRow + st.store.defCount * SPINE_PER_BLOCK + CACHES;
+// What a kept state weighs in the shared ledger: the heap it was measured to hold (3.5 §内存有界: never an estimate past the budget,
+// which would leave it unkept and rebuilt from scratch every slice).
+const costOf = (st) => Math.max(0, st.meter.held);
 
 // One slice: extraction, then folding (a request: SLICE_MS of each; a background slice: half of `budgetMs` each, the fold also what
 // extraction left; the local path: everything).
@@ -468,13 +467,13 @@ async function advance(ctx, id, { budgetMs, request }) {
     } catch (e) {
       if (e instanceof HandOff) throw letGo(k, e);
       if (!(e instanceof HeapBound)) throw e;
-      // the measured bound: the rows the stopped fold got through fill the room, never fewer than half those asked for, the cost
-      // rounded up to a quarter power of two (3.5 §内存有界); the stopped state is closed and garbage by now
-      const fit = Math.max(e.rows, Math.floor(plan.read.length / 2)) - 1;
-      if (fit < 1) throw new Error(`the heap holds no room for this session (${mb(heapCeiling())} MB ceiling)`);
-      perRows.delete(k);
-      perRows.set(k, 2 ** (Math.ceil(Math.log2(plan.room / fit) * 4) / 4));
-      if (perRows.size > PER_ROW_KEPT) perRows.delete(perRows.keys().next().value);
+      // the measured bound: the rows the stopped fold got through are the rows that fit, never fewer than half those asked for,
+      // rounded down to a quarter power of two (3.5 §内存有界); the stopped state is closed and garbage by now
+      const got = Math.max(e.rows, Math.floor(plan.read.length / 2)) - 1, fit = got < 1 ? 0 : Math.floor(2 ** (Math.floor(Math.log2(got) * 4) / 4));
+      if (fit < 1) throw new Error(`the heap holds no room for this session (${mb(heapBudget())} MB budget)`);
+      fits.delete(k);
+      fits.set(k, fit);
+      if (fits.size > FITS_KEPT) fits.delete(fits.keys().next().value);
       continue;
     } finally { release(); kept.clear(); keptBytes = 0; keeping = false; }
     states.get(k, st, () => st); // kept once the work's reservation is given back: the next slice grows it
