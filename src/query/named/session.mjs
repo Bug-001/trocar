@@ -235,10 +235,12 @@ const reductionOf = (s, log, from = null) => {
 function closeState(s) { if (fileLogs.get(s.store) === s) fileLogs.delete(s.store); s.log.close(); if (s.T) s.T.close(); }
 // store → the state that holds its fold log file open (the worker's)
 const fileLogs = new WeakMap();
-/** saveIndexes(): the sidecars (4.3 §4 旁索引) of every open store and its fold log whose file grew since its last save (sidecars()).
- *  The worker calls it once an idle period; the local path's are never written (opened write:false). The decoded frames and lines of
+/** saveIndexes(): the sidecars (4.3 §4 旁索引) of every open store and its fold log whose file grew since its last save (sidecars()),
+ *  after the heads a slice left behind (headAt). The worker calls it once an idle period; the local path's are never written (opened write:false). The decoded frames and lines of
  *  the sealed segments are let go too: an idle worker does not hold them (3.5 §冷路径). */
 export function saveIndexes() {
+  for (const { s, home, fs } of lagging.values()) putHead({ home, fs }, s); // the heads behind their session's state (headAt)
+  lagging.clear(); // one that failed is written by the session's next slice
   releaseDecoded();
   releaseTails();
   for (const s of stores.values()) { sidecars(s); try { s.seal(); fileLogs.get(s)?.log.seal(); } catch { /* the next idle period */ } }
@@ -491,18 +493,26 @@ export async function extendSession(ctx, id, budgetMs) {
   const more = ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n);
   const s = stateAt(r, String(id));
   files(ctx, s);
-  if (headDue(ctx, String(id), more)) putHead(ctx, s);
+  headAt(ctx, s);
   if (!more) releaseParts(); // folded to its frontier: between calls the worker holds no decoded part (3.5:40 ⑤)
   return more;
 }
 
-// The head file (3.5 §谁执行它「答案文件」): the worker writes it at the end of a request or background slice of the session, once
-// HEAD_MS passed since its last write or when nothing of the session is left to extract or fold; never on a timer. A head at the
-// mark (and cut) it was last written at is not made again while its file is there.
-const HEAD_MS = 2000;
+// The head file (3.5 §谁执行它「答案文件」): the worker writes it at the end of a request or background slice of the session when it
+// wrote none of it yet, once HEAD_MS passed since its last write, or when the file is absent; never on a timer. The state of a
+// slice that did not write it is kept (the last one per session, dropped once written) and the idle save (saveIndexes) writes it.
+// A head at the mark (and cut) it was last written at is not made again while its file is there. TROCAR_HEAD_MS, read once, sets it
+// for a test.
+const HEAD_MS = Number(process.env.TROCAR_HEAD_MS) || 2000;
 const heads = new Map(); // session id → {t, sig} of its last head write in this worker
+const lagging = new Map(); // session id → {s, home, fs}: the state whose head a slice did not write
 const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated]);
-const headDue = (ctx, id, pending) => { if (ctx.writer !== true) return false; const h = heads.get(id); return !pending || !h || performance.now() - h.t >= HEAD_MS; };
+function headAt(ctx, s, doc = null) {
+  if (ctx.writer !== true) return;
+  const h = heads.get(s.id), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
+  if (!h || performance.now() - h.t >= HEAD_MS || !fs.existsSync(headFile(home, s.id))) putHead(ctx, s, doc);
+  else lagging.set(s.id, { s, home, fs });
+}
 /** files(ctx, s) → the session's pack and tail files brought to the state `s` (the worker only: ctx-files.mjs writeFiles), their
  *  `packs` / `open` kept on `s` for its head; a write that failed is done afresh at the next slice. */
 export function files(ctx, s) {
@@ -514,9 +524,11 @@ const headOf = (s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors)
   : headDoc({ ...s, ...(s.files || packsOf(s)), mark: markOn(s.plan, s.mark), markTs: s.plan.byId.get(s.mark)?.ts ?? null }));
 function putHead(ctx, s, doc = null) {
   const h = heads.get(s.id), sig = sigOf(s), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
-  if (h && h.sig === sig && fs.existsSync(headFile(home, s.id))) return;
-  try { writeHead(home, s.id, doc || headOf(s), fs); } catch { return; } // a head not written is written at the next slice
-  heads.set(s.id, { t: performance.now(), sig });
+  if (!(h && h.sig === sig && fs.existsSync(headFile(home, s.id)))) {
+    try { writeHead(home, s.id, doc || headOf(s), fs); } catch { return; } // a head not written is written at the next slice
+    heads.set(s.id, { t: performance.now(), sig });
+  }
+  lagging.delete(s.id);
 }
 
 /** sessionState(ctx, id) → null (no such session) | {id, rows, store, mark, pending, truncated, V, failed, errors, plan}: the
@@ -589,11 +601,11 @@ export async function run(ctx) {
   files(ctx, s);
   if (asHead) {
     const doc = headOf(s);
-    if (headDue(ctx, id, s.pending)) putHead(ctx, s, doc);
+    headAt(ctx, s, doc);
     errors.push(...doc.errors);
     return doc;
   }
-  if (headDue(ctx, id, s.pending)) putHead(ctx, s);
+  headAt(ctx, s);
   errors.push(...s.errors, ...s.failed.map((f) => ({ where: f.id, code: f.code, reason: f.reason })));
   const { V } = s;
   if (before != null && !V.has(before)) throw new QueryArgError(`trocar query session: --before ${JSON.stringify(before)} is not a call of this session`);

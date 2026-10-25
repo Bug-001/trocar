@@ -256,6 +256,7 @@ process.stdin.on('data', async (b) => {
     buf = buf.slice(i + 1)
     let k = 0
     while (await extendSession({ home, writer: true }, id, 1 + r() * ms)) { if (r() < 0.1) saveIndexes(); if (++k === kill) process.kill(process.pid, 'SIGKILL') }
+    saveIndexes() // the round over: the worker's idle period (its save writes a head a slice left behind)
     process.stdout.write('done\\n')
   }
 })`
