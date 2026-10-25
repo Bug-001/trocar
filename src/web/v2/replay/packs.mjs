@@ -12,7 +12,9 @@
 //   applyFile(desk, {kind:'pack', n, part} | {kind:'tail', n?, part, whole?}, parsed) → false when the file is already sealed;
 //     `whole` = the tail's bytes from 0 (a rewritten tail): what it held before is let go first
 //   applyHead(desk, head) → the `session --head` answer as the desk's head: its scalars and its lane heads
-// Lane heads merge by precedence: desk.head's (the `session --head` answer) > a tail's > a higher pack n's.
+// Lane heads: a held tail's (the highest n) over desk.head's (the `session --head` answer); packs hold none. The worker writes the
+// head at most every HEAD_MS and a poll round reads it before the tails, so a held tail's header is never older than the head's.
+// desk.newest = the newest member the desk holds in record order (placeOf / after): the head's mark or a held `{r}` id (1.5 K-32).
 
 import { changed, addRow, removeRow, newHeld } from './model.mjs'
 
@@ -26,6 +28,10 @@ export function parseLines(src, { head = true } = {}) {
 }
 
 const rank = (e) => (e.kind === 'pack' ? e.n : e.n + 0.5)
+// a member id `<segment>:<line>` in record order: segment, then line
+export const placeOf = (id) => { const j = String(id).lastIndexOf(':'); return [String(id).slice(0, j), Number(String(id).slice(j + 1))] }
+export const after = ([sa, la], [sb, lb]) => sa > sb || (sa === sb && la > lb)
+const held = (desk, id) => { if (id != null && (desk.newest == null || after(placeOf(id), placeOf(desk.newest)))) desk.newest = String(id) }
 
 // held steps fed by files are found by rid (desk.stepLane: rid → the lane holding its step) and numbered by `i`; the page
 // model's step list (h.rids) is not kept
@@ -61,7 +67,7 @@ function putStep(desk, { events = [], ...s }) {
   } else { h.events.delete(s.rid); desk.events.delete(s.rid) }
 }
 
-const put = { c: putRow, s: putStep, r: (desk, x) => desk.records.set(x.id, x) }
+const put = { c: putRow, s: putStep, r: (desk, x) => { desk.records.set(x.id, x); held(desk, x.id) } }
 
 // take rid for file e; a tail never takes it from a pack
 function claim(desk, e, rid) {
@@ -127,8 +133,9 @@ export function applyFile(desk, file, { head, lines }) {
 }
 function mergeHeads(desk, touched) {
   for (const lane of touched) {
-    let best = desk.head?.lanes?.find((h) => h.lane === lane), r = -1
-    if (!best) for (const o of desk.files.values()) { const h = o.heads.get(lane); if (h && rank(o) > r) { best = h; r = rank(o) } }
+    let best = null, r = -1
+    for (const o of desk.files.values()) { const h = o.heads.get(lane); if (h && rank(o) > r) { best = h; r = rank(o) } }
+    best ??= desk.head?.lanes?.find((h) => h.lane === lane)
     if (best) desk.lanes.set(lane, best); else desk.lanes.delete(lane)
   }
 }
@@ -138,6 +145,7 @@ export function applyHead(desk, head) {
   changed(desk)
   const touched = new Set([...(desk.head?.lanes || []), ...(head.lanes || [])].map((h) => h.lane))
   desk.head = head
+  held(desk, head.mark)
   for (const k of SCALARS) desk[k] = head[k] ?? null
   desk.logged = head.logged ?? 0; desk.probes = head.probes ?? 0
   if (!head.pending) desk.firstPending = false

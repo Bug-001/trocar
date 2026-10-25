@@ -222,7 +222,7 @@ function openDesk(ctx, route0) {
   // a named step (the URL's `step=`, Home) → its index in the anchor lane once its skeleton row and its lane are here, else -1
   // (2.3 §点名的一步不在手里). A lane read that failed lands it too: the step then says so (2.3 §读失败)
   function namedAt() {
-    const a = s.anchor, M = (s.desk.head && s.desk.head.steps) || a.count || a.calls.length
+    const a = s.anchor, M = Math.max((s.desk.head && s.desk.head.steps) || 0, a.count || 0, a.calls.length) // the head's steps may lag the tails' (HEAD_MS)
     const rid = ridAt(s.desk, a.id, Math.max(1, Math.min(M, s.initialStep)) - 1), i = rid == null ? undefined : a.ridLocal.get(rid)
     return i ?? -1
   }
@@ -633,8 +633,10 @@ function openDesk(ctx, route0) {
     s.errNote = null; s.goodKey = key; s.goodAt = api.now()
     const hadStale = !!s.staleErr; s.staleErr = null
     if (h.data) { keep('head', h.bytes || 0); applyHead(desk, h.data) }
-    const head = desk.head, wasBehind = JSON.stringify(desk.behind ?? null)
-    desk.behind = behindOf(h.tip, head.mark) // 1.5 K-32: the tip ids after the head's mark, from every head answer (a 304 too)
+    const head = desk.head
+    // 1.5 K-32: the tip ids after the newest member held, from every head answer (a 304 too), again once the tails brought theirs
+    const behind = () => { const was = JSON.stringify(desk.behind ?? null); desk.behind = behindOf(h.tip, desk.newest); return JSON.stringify(desk.behind) !== was }
+    const moved = behind()
     // the server knows no such session (meta null, nothing captured): said HERE, with a way back; the timer stops reading it
     if (head.meta == null && !head.steps) {
       s.goodKey = null; s.notListed = true; renderEmpty(''); E.ctxwin.innerHTML = notListedHtml(); E.ctxwin.__units = null; root.classList.add('notlisted'); renderHeader(); return { ok: true }
@@ -643,13 +645,14 @@ function openDesk(ctx, route0) {
     // left while the head was on its way: the head is the round's last read (a detached desk sends no next read); attach's round reads the tails
     if (!host) { if (h.data) await serial(() => redraw(null)); return { ok: true } }
     if (h.data && s.playRid == null) await serial(() => redraw(null)) // the rough page from the head, before any file (2.3 §大致页面)
-    else if (JSON.stringify(desk.behind) !== wasBehind) renderHeader()
+    else if (moved) renderHeader()
     if (stale()) return
     const rs = head.open ? await Promise.all(['main', 'rest'].map((part) => readTail(part, head.open.n, signal))) : []
     if (stale()) return
     const bad = rs.find((r) => !r.ok)
     if (bad) { s.staleErr = { r: bad, since: lastGood }; s.goodAt = lastGood }
-    if (h.data || hadStale || bad) { await serial(() => redraw(h.data ? null : new Set())); renderHeader() }
+    const caught = behind()
+    if (h.data || hadStale || bad) { await serial(() => redraw(h.data ? null : new Set())); renderHeader() } else if (caught) renderHeader()
     fill(true); reask()
     chainLedger(true, rs.some((r) => r.anchor))
     return bad ? { ok: false } : { ok: true, pending: head.pending || undefined }

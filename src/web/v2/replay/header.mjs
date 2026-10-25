@@ -9,6 +9,7 @@ import { chipFor, harnessKey } from '../core/chips.mjs'
 import { infoButton, techDetailsHtml, readFailure } from '../core/ui.mjs'
 import { sessionTotals, priceMatch } from '../core/metrics.mjs'
 import { stepsOf } from './lanes.mjs'
+import { placeOf, after } from './packs.mjs'
 import * as W from '../labels/replay.mjs'
 
 // the main lane's first and last step times: its header names them by rid (`first` / `last`, 3.5 §会话读) and the skeleton rows
@@ -197,10 +198,8 @@ export function readStateHtml(desk) {
   return `<div class="fidline readstate" data-read-state="${desk.firstPending ? 'reading' : 'catching-up'}">${esc(words)}</div>`
 }
 // behindOf(tip, mark) → {n, more} | null (1.5 K-32): of the tip ids (`x-trocar-tip`, the newest model calls, oldest first) the ones that
-// come after the head's `mark` in record order (segment, then line); `more` when none of them is at or before it — more may lie beyond
-// the list. null when there is no tip or nothing after the mark.
-const placeOf = (id) => { const j = String(id).lastIndexOf(':'); return [String(id).slice(0, j), Number(String(id).slice(j + 1))] }
-const after = ([sa, la], [sb, lb]) => sa > sb || (sa === sb && la > lb)
+// come after `mark` (the newest member the desk holds: packs.mjs desk.newest) in record order; `more` when none of them is at or before
+// it — more may lie beyond the list. null when there is no tip or nothing after the mark.
 export function behindOf(tip, mark) {
   const ids = String(tip || '').split(' ').filter(Boolean)
   if (!ids.length || mark == null) return null

@@ -10,7 +10,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createDesk, listOf, stepOf, indexOf, ridAt, laneEvents } from '../../src/web/v2/replay/model.mjs'
-import { parseLines, applyFile } from '../../src/web/v2/replay/packs.mjs'
+import { parseLines, applyFile, applyHead } from '../../src/web/v2/replay/packs.mjs'
+import { behindOf } from '../../src/web/v2/replay/header.mjs'
 import { world } from './desk-world.mjs'
 
 const fx = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
@@ -286,4 +287,30 @@ test('A16 parseLines: a read cut at any byte takes whole lines only, and `used` 
     const rest = parseLines(bytes.subarray(p.used), { head: false })
     assert.deepEqual([...[p.head].filter(Boolean), ...p.lines, ...rest.lines], lines, `cut ${k} then the rest`)
   }
+})
+
+// 3.5 §会话读 `{l}`: the head is written at most every HEAD_MS and the board reads it before the tails, so a lane header from a held
+// tail (the highest n) wins over the head's; a pack holds none, so once pack n replaced tail n the head's is used until tail n+1 has one.
+test('3.5 §会话读 {l}: a held tail\'s lane header wins over the head\'s, the head\'s stands once its tail is sealed into a pack', () => {
+  const desk = createDesk(), head = (count) => ({ mark: 'S:1', lanes: [{ lane: 'A', count }] })
+  const tail = (n, count) => parseLines(text([{ tail: { n, part: 'main', s0: 0 } }, { l: { lane: 'A', count } }]))
+  applyHead(desk, head(3))
+  applyFile(desk, { kind: 'tail', part: 'main' }, tail(0, 5))
+  assert.equal(desk.lanes.get('A').count, 5, 'the tail\'s header over the head\'s')
+  applyHead(desk, head(3))
+  assert.equal(desk.lanes.get('A').count, 5, 'a head read again does not take the lane back')
+  applyFile(desk, { kind: 'pack', part: 'main' }, parseLines(text([{ pack: { n: 0, part: 'main', s0: 0, s1: 1 } }])))
+  assert.equal(desk.lanes.get('A').count, 3, 'tail 0 sealed: the head\'s header')
+  applyFile(desk, { kind: 'tail', part: 'main' }, tail(1, 7))
+  assert.equal(desk.lanes.get('A').count, 7, 'tail 1\'s header')
+})
+
+// 1.5 K-32: the calls behind are the tip ids after the newest member the desk holds — the head's mark, or a held `{r}` id past it.
+test('1.5 K-32: a call a held tail brought is not counted behind; one past it is', () => {
+  const desk = createDesk(), r = (id) => ({ r: { id, ts_request: null, is_llm_call: true, response: { status: 200 } } })
+  applyHead(desk, { mark: 'S:9', lanes: [] })
+  applyFile(desk, { kind: 'tail', part: 'rest' }, parseLines(text([{ tail: { n: 0, part: 'rest', s0: 0 } }, r('S:12')])))
+  applyFile(desk, { kind: 'tail', part: 'main' }, parseLines(text([{ tail: { n: 0, part: 'main', s0: 0 } }, r('S:10')])))
+  assert.equal(behindOf('S:9 S:10 S:12', desk.newest), null, 'the newest held member is S:12, over both tails')
+  assert.deepEqual(behindOf('S:10 S:12 T:3', desk.newest), { n: 1, more: false })
 })
