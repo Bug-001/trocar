@@ -9,7 +9,7 @@ import http from 'node:http'
 import tls from 'node:tls'
 import path from 'node:path'
 import { once } from 'node:events'
-import { gunzipSync } from 'node:zlib'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import { createServer, tipTable } from '../../src/server.mjs'
 import { createQueryService } from '../../src/query/service.mjs'
 import { createIndexKeeper } from '../../src/collector/index-keeper.mjs'
@@ -35,6 +35,19 @@ import { BODY, REPLY, agentOf, darwinExec, freePort, through } from '../helpers/
 const CALLS = 1_100 // ≥ 2 sealed packs of 512 (3.5 PACK_MEMBERS)
 const pause = (ms) => new Promise((d) => setTimeout(d, ms))
 const until = async (ok, ms, what) => within((async () => { while (!(await ok())) await pause(50) })(), ms, what)
+// A wait on the worker is bounded by what it reports, not by a fixed window: it lasts while `moving()` keeps changing (a slice reported
+// on the IPC channel, 3.5:42; the head's pending.done) and fails after STALL ms with no change. → its duration in ms.
+const STALL = 30_000
+const whileMoving = async (ok, moving, what) => {
+  const t0 = Date.now()
+  let seen = moving(), at = t0
+  while (!(await ok())) {
+    const now = moving()
+    if (now !== seen) { seen = now; at = Date.now() } else if (Date.now() - at > STALL) throw new Error(`${what}: no progress for ${STALL} ms`)
+    await pause(50)
+  }
+  return Date.now() - t0
+}
 const gz = { 'accept-encoding': 'gzip' }
 
 const get = (port, p, headers = {}) => new Promise((resolve, reject) => {
@@ -53,9 +66,9 @@ function theWorld() {
     fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
     const s = bigSession({ home, wire: 'http', growth: 300, subEvery: 4, subLanes: 2, late: 3 })
     s.append(CALLS)
-    const forks = []
+    const forks = [], reported = { n: 0 }
     // idleMs outlasts the worker's idle period (worker.mjs IDLE_SLICE_MS): its save writes the head the last slice left behind (3.5 答案文件)
-    const svc = createQueryService({ home, idleMs: 4000, fork: (...a) => { const c = workerFork(...a); forks.push(c); return c } })
+    const svc = createQueryService({ home, idleMs: 4000, fork: (...a) => { const c = workerFork(...a); c.on('message', () => { reported.n++ }); forks.push(c); return c } })
     const tips = tipTable()
     const { server } = createServer({ home, token: TOKEN, query: svc, tips: tips.of })
     server.listen(0, '127.0.0.1'); await once(server, 'listening')
@@ -63,7 +76,9 @@ function theWorld() {
     const dir = sessionDir(home, s.id), file = (f) => path.join(dir, f)
     const d = (f, h = {}, id = s.id) => get(port, `/api/d/${f}?id=${encodeURIComponent(id)}`, withToken(h))
     const gone = () => forks.every((c) => c.exitCode !== null || c.signalCode !== null)
-    return { home, id: s.id, svc, tips, server, port, forks, dir, file, d, gone, api: (p, h = {}) => get(port, p, withToken(h)) }
+    // the worker leaves on its idle clock, which each reported slice starts again: waited for as long as it still reports
+    const left = (what) => whileMoving(gone, () => reported.n, what)
+    return { home, id: s.id, svc, tips, server, port, forks, reported, dir, file, d, gone, left, waits: {}, api: (p, h = {}) => get(port, p, withToken(h)) }
   })()
   return world
 }
@@ -74,19 +89,22 @@ function folded() {
     const w = await theWorld()
     const first = await w.d('head', gz) // no head file yet: relayed, which forks the worker and makes the session its to follow
     assert.equal(first.status, 200)
-    await until(async () => {
-      const r = await w.d('head', gz)
-      return r.status === 200 && JSON.parse(unzip(r.body)).pending == null && fs.existsSync(w.file('open.rest.ndjson'))
-    }, 300_000, 'the worker folded the session and wrote its files')
-    await until(() => w.gone(), 30_000, 'the worker left on its idle clock')
+    let done = null
+    w.waits.fold = await whileMoving(async () => {
+      const r = await w.d('head', gz), head = r.status === 200 ? JSON.parse(unzip(r.body)) : null
+      done = head?.pending?.done ?? done
+      return head != null && head.pending == null && fs.existsSync(w.file('open.rest.ndjson'))
+    }, () => `${w.reported.n} ${done}`, 'the worker folded the session and wrote its files')
+    w.waits.left = await w.left('the worker left on its idle clock')
     return w
   })()
   return foldedWorld
 }
 test.after(async () => { if (world) { const w = await world; w.server.close(); w.svc.stop() } })
 
-test('4.4 #15 A7: /api/d/head, every pack and both tails are the files\' bytes, and the worker\'s own answers of the same queries', { timeout: 420_000 }, async () => {
+test('4.4 #15 A7: /api/d/head, every pack and both tails are the files\' bytes, and the worker\'s own answers of the same queries', { timeout: 420_000 }, async (t) => {
   const w = await folded()
+  t.diagnostic(JSON.stringify(w.waits))
   const head = JSON.parse(unzip(fs.readFileSync(w.file('head.json.gz'))))
   assert.ok(head.packs.length >= 2, 'at least two sealed packs')
   const dHead = await w.d('head', gz)
@@ -113,9 +131,9 @@ test('4.4 #15 A7: /api/d/head, every pack and both tails are the files\' bytes, 
   }
 })
 
-test('4.4 #16 A14: with the files there a read forks nothing; with the head gone one read forks the worker, which writes the file it answers', { timeout: 420_000 }, async () => {
+test('4.4 #16 A14: with the files there a read forks nothing; with the head gone one read forks the worker, which writes the file it answers', { timeout: 420_000 }, async (t) => {
   const w = await folded()
-  await until(() => w.gone(), 30_000, 'no worker is running')
+  t.diagnostic(JSON.stringify({ ...w.waits, again: await w.left('no worker is running') }))
   const n0 = w.forks.length
   const asks = [['head', gz, 'head.json.gz'], ['p0.main', gz, 'p0.main.ndjson.gz'], ['p1.rest', gz, 'p1.rest.ndjson.gz'], ['open.main', {}, 'open.main.ndjson'], ['open.rest', { range: 'bytes=0-' }, 'open.rest.ndjson']]
   for (let i = 0; i < 20; i++) {
@@ -131,39 +149,49 @@ test('4.4 #16 A14: with the files there a read forks nothing; with the head gone
   assert.equal(unzip(r.body), unzip(fs.readFileSync(w.file('head.json.gz'))), 'the answer is the head file the worker then wrote')
 })
 
-test('4.4 #15: the HTTP contract — 304 on the tag, Range in and past the tail, the closed name set, the token', { timeout: 420_000 }, async () => {
-  const w = await folded()
-  const h = await w.d('head', gz)
-  assert.ok(h.headers.etag)
-  const again = await w.d('head', { ...gz, 'if-none-match': h.headers.etag })
-  assert.equal(again.status, 304)
-  assert.equal(again.body.length, 0)
-  const tail = fs.readFileSync(w.file('open.main.ndjson')), size = tail.length, mid = Math.floor(size / 2)
-  const part = await w.d('open.main', { range: `bytes=${mid}-` })
-  assert.equal(part.status, 206)
-  assert.equal(part.headers['content-range'], `bytes ${mid}-${size - 1}/${size}`)
-  assert.equal(part.headers['content-encoding'], undefined, 'a 206 is the bytes as they are')
-  assert.ok(part.body.equals(tail.subarray(mid)))
-  for (const at of [size, size + 1000]) {
-    const r = await w.d('open.main', { range: `bytes=${at}-` })
-    assert.equal(r.status, 416, `Range at ${at}`)
-    assert.equal(r.headers['content-range'], `bytes */${size}`)
-  }
-  assert.equal((await w.d('head', {}, '')).status, 400, 'no id')
-  assert.equal((await get(w.port, `/api/d/head?id=${encodeURIComponent(w.id)}`)).status, 403, 'no token')
+// the contract is of the route over whatever files are there: a home of its own with a written head and tail, no session folded
+test('4.4 #15: the HTTP contract — 304 on the tag, Range in and past the tail, the closed name set, the token', { timeout: 60_000 }, async () => {
+  const home = path.join(tmpDir('trocar-dcontract-'), '.trocar'), id = 'S-contract', dir = sessionDir(home, id), file = (f) => path.join(dir, f)
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(file('head.json.gz'), gzipSync(JSON.stringify({ v: 1, id })))
+  fs.writeFileSync(file('open.main.ndjson'), Array.from({ length: 40 }, (_, i) => `${JSON.stringify({ r: { id: `seg:${i}`, pad: 'x'.repeat(i % 7) } })}\n`).join(''))
+  const never = { relay: () => assert.fail('relayed'), warm: () => {} }
+  const { server } = createServer({ home, token: TOKEN, query: never })
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  const d = (f, h = {}, sid = id) => get(server.address().port, `/api/d/${f}?id=${encodeURIComponent(sid)}`, withToken(h))
+  try {
+    const h = await d('head', gz)
+    assert.ok(h.headers.etag)
+    const again = await d('head', { ...gz, 'if-none-match': h.headers.etag })
+    assert.equal(again.status, 304)
+    assert.equal(again.body.length, 0)
+    const tail = fs.readFileSync(file('open.main.ndjson')), size = tail.length, mid = Math.floor(size / 2)
+    const part = await d('open.main', { range: `bytes=${mid}-` })
+    assert.equal(part.status, 206)
+    assert.equal(part.headers['content-range'], `bytes ${mid}-${size - 1}/${size}`)
+    assert.equal(part.headers['content-encoding'], undefined, 'a 206 is the bytes as they are')
+    assert.ok(part.body.equals(tail.subarray(mid)))
+    for (const at of [size, size + 1000]) {
+      const r = await d('open.main', { range: `bytes=${at}-` })
+      assert.equal(r.status, 416, `Range at ${at}`)
+      assert.equal(r.headers['content-range'], `bytes */${size}`)
+    }
+    assert.equal((await d('head', {}, '')).status, 400, 'no id')
+    assert.equal((await get(server.address().port, `/api/d/head?id=${encodeURIComponent(id)}`)).status, 403, 'no token')
+  } finally { server.close() }
 
   // the closed name set: nothing outside it is read (an injected fs that records every call, as gate.test.mjs does)
   const touched = []
   const spy = new Proxy(fs, { get: (t, k) => (typeof t[k] === 'function' ? (...a) => { touched.push([k, a[0]]); return t[k](...a) } : t[k]) })
-  const { server } = createServer({ home: w.home, token: TOKEN, query: { relay: () => assert.fail('relayed'), warm: () => {} }, fs: spy })
-  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  const face = createServer({ home, token: TOKEN, query: never, fs: spy }).server
+  face.listen(0, '127.0.0.1'); await once(face, 'listening')
   try {
-    const q = `?id=${encodeURIComponent(w.id)}`
+    const q = `?id=${encodeURIComponent(id)}`
     for (const p of ['/api/d/foo', '/api/d/p1.side', '/api/d/head.json.gz', '/api/d/open.main.ndjson', '/api/d/p1234567.main', '/api/d/..%2F..%2Fraw', '/api/d/%2e%2e%2fhead', '/api/d/open.main%2F..%2F..%2Fx', '/api/d/x/../../../etc/passwd', '/api/d/head/']) {
-      const r = await get(server.address().port, p + q, withToken())
+      const r = await get(face.address().port, p + q, withToken())
       assert.equal(r.status, 404, p)
     }
-  } finally { server.close() }
+  } finally { face.close() }
   assert.deepEqual(touched, [], 'no file was opened for a name outside the set')
 })
 
