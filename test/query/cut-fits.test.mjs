@@ -18,12 +18,14 @@ const at = (p) => JSON.stringify(new URL(p, import.meta.url).href)
 const READ = `
 const { runQuery } = await import(${at('../../src/query/named/index.mjs')}) // first: the registry imports session.mjs
 const { heapBudget, liveHeap } = await import(${at('../../src/query/warm.mjs')})
+const { indexRows } = await import(${at('../../src/query/rows.mjs')})
 const [home, id] = process.argv.slice(1)
+const rows = await indexRows({ home, errors: [] })
 let doc, peak = 0
 do { doc = await runQuery('session', { id, limit: '60' }, { home, writer: true }); peak = Math.max(peak, liveHeap()) } while (doc.pending)
 const { truncated } = doc, total = doc.lanes.reduce((n, l) => n + l.count, 0)
 doc = null
-console.log(JSON.stringify({ truncated, total, peak, budget: heapBudget() }))`
+console.log(JSON.stringify({ truncated, total, peak, budget: heapBudget(), shared: (await indexRows({ home, errors: [] })) === rows }))`
 
 const mb = (n) => (n / 1048576).toFixed(1)
 
@@ -37,6 +39,9 @@ test('3.5 §内存有界: a session whose fold passes the budget is cut by the m
     const t = c.truncated
     assert.ok(t && t.shown < t.total, `a session of calls holding twice the budget is cut: ${JSON.stringify(t)}`)
     assert.equal(c.total, t.shown, 'the lanes count the calls shown')
+    // the segment index rows are what every query reads again (3.5 §内存有界 steady: never given way): the fold the bound stopped let
+    // go of the other caches, not of them, so no segment having moved, the reader holds the same rows it began with
+    assert.ok(c.shared, 'the segment index rows were built again although no segment moved')
     assert.ok(c.peak <= c.budget, `the live heap peaked at ${mb(c.peak)} MB, past the ${mb(c.budget)} MB budget`)
     // what fits: the calls a fold holds in the budget at their names' bytes at most; the cut shows at least half of that, less a step
     const fits = Math.floor(c.budget / shape.names / 2)

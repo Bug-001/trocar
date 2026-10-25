@@ -111,6 +111,11 @@ export function hold(bytes) {
   return () => { if (on) { on = false; total -= bytes; held -= bytes } }
 }
 
+/** Every kept entry but the steady ones let go (src/query/named/session.mjs: a fold about to be stopped by the measured bound, 3.5
+ *  §内存有界). A steady entry is never let go here: the plan of every session read holds the rows it is made of, so letting it go
+ *  frees nothing and the next read builds the rows a second time beside the ones the plan holds. */
+export function yieldCaches() { for (const e of lru) if (!e.steady) forget(e) }
+
 /**
  * warmCache({max, cost}) → { get(id, stamp, compute, estimate), peek(id, stamp) }: `compute(previous)` runs when this `id` was never
  * seen or its `stamp` moved (`previous` = the value it held, if any, which the cache lets go of); otherwise the remembered value comes back untouched. `cost(value)` is what the value costs in the HEAP (an

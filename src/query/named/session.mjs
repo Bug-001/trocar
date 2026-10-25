@@ -36,7 +36,7 @@ import { recordsAt, releaseDecoded, STRETCH_HEAP } from '../records.mjs';
 import { indexRows, sessionGroups, sessionFacts } from '../rows.mjs';
 import { openProjection, STORE_HEAP } from '../projection.mjs';
 import { releaseParts } from '../line-file.mjs';
-import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap } from '../warm.mjs';
+import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yieldCaches } from '../warm.mjs';
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
@@ -97,7 +97,7 @@ function bounded(m, rows, bytes) {
   if (usedHeap() <= heapCeiling() && m.since < m.gap) return;
   const line = heapBudget() - heapBudget() / BOUND_STEPS / 2;
   let live = liveHeap();
-  if (live > line) { hold(heapBudget())(); live = liveHeap(); } // every other kept entry gives way before this fold is cut
+  if (live > line) { yieldCaches(); live = liveHeap(); } // every other kept entry but the steady ones gives way before this fold is cut
   m.held = live - m.base;
   if (live > line || live > heapCeiling()) throw new HeapBound(rows);
   m.since = 0; m.gap = (line - live) / 2 / WORK_PER_STORED;
