@@ -1,7 +1,8 @@
 // test/query/ctx-head-due.test.mjs — when the worker writes ctx/<k>/head.json.gz (RFC 3.5 §谁执行它「答案文件」, 验收 #36): at the end of
-// a request or slice only once HEAD_MS passed since its last write or when the file is absent; the idle sidecar save writes a head
-// that lags the session's state. In process with ctx.writer:true; HEAD_MS is raised through TROCAR_HEAD_MS (read once, at load) so
-// the in-window slice does not depend on how busy the machine is.
+// a request or slice only when a part only the head carries changed (here: a sealed pack, a new chapter on the axis), when this
+// worker wrote none of the session yet, or when the file is absent; a slice that only grows the open span leaves the file as it was,
+// whatever time passed. The idle sidecar save writes a head that lags the session's state. In process with ctx.writer:true; one
+// call per slice, each slice's packs and chapters taken from the local path's head at the same mark.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -9,28 +10,48 @@ import path from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { runQuery } from '../../src/query/named/index.mjs'
+import { extendSession, saveIndexes } from '../../src/query/named/session.mjs'
+import { sessionDir } from '../../src/query/projection.mjs'
 
-process.env.TROCAR_HEAD_MS = '600000'
-const { runQuery } = await import('../../src/query/named/index.mjs')
-const { extendSession, saveIndexes } = await import('../../src/query/named/session.mjs')
-const { sessionDir } = await import('../../src/query/projection.mjs')
-delete process.env.TROCAR_HEAD_MS
+const J = JSON.stringify, PACK = 512 // 3.5 §会话读 `lane --pack`: pack n = the members at write positions [512n, 512(n+1))
 
-test('3.5 #36: a slice inside HEAD_MS leaves the head as it was; the idle save writes the local path\'s head at the same mark; a removed head is written by the next request', { timeout: 120_000 }, async () => {
+test('3.5 #36: only a slice that seals a pack or starts a chapter rewrites the head; the idle save writes the local path\'s head at the same mark; a removed head is written by the next request', { timeout: 300_000 }, async () => {
   const home = path.join(tmpDir('trocar-headdue-'), '.trocar')
-  const s = bigSession({ home, id: 'eeee-0000-4a1b-9c2d-000000000005', subLanes: 2, subEvery: 4 })
-  s.append(40)
+  // subagents that never compact (subLen), so the session's compactions are the main lane's chapters
+  const s = bigSession({ home, id: 'eeee-0000-4a1b-9c2d-000000000005', growth: 300, subEvery: 4, subLanes: 2, subLen: 1e9, compactAt: 30_000 })
   const ctx = { home, writer: true }, file = path.join(sessionDir(home, s.id), 'head.json.gz')
   const onDisk = () => gunzipSync(fs.readFileSync(file)).toString('utf8')
-  while (await extendSession(ctx, s.id, Infinity));
-  const m1 = JSON.parse(onDisk()).mark
-  assert.ok(m1, 'the first slice wrote a tier-1 head')
-  s.append(12)
-  while (await extendSession(ctx, s.id, Infinity));
-  assert.equal(JSON.parse(onDisk()).mark, m1, 'a slice at the frontier inside HEAD_MS did not write the head')
+  const fold = async () => { while (await extendSession(ctx, s.id, Infinity)); }
+  let members = 40
+  s.append(members)
+  await fold()
+  assert.equal(JSON.parse(onDisk()).tier, 1, 'the worker\'s first slice of the session wrote a tier-1 head')
+  // per slice: the local path's head at the same mark (the truth of its packs and chapters) and the head file after it
+  const shape = (d) => J([d.packs.length, d.open && d.open.n, d.chapters.length])
+  let last = onDisk(), sealed = 0, chaptered = 0, quiet = 0
+  while (members < PACK + 30) {
+    s.append(1); members++
+    await fold()
+    const text = onDisk(), local = JSON.parse(J(await runQuery('session', { id: s.id, head: true }, { home }))), was = JSON.parse(last)
+    if (shape(local) !== shape(was)) {
+      sealed += local.packs.length !== was.packs.length; chaptered += local.chapters.length !== was.chapters.length
+      assert.equal(text, J(local), `the slice at ${members} members sealed a pack or started a chapter: it wrote the head at its mark`)
+      last = text
+    } else {
+      quiet++
+      assert.equal(text, last, `a slice at ${members} members that only grew the open span left the head file as it was`)
+    }
+  }
+  assert.ok(sealed === 1 && chaptered >= 2 && quiet > 100, `the run sealed a pack (${sealed}), started chapters (${chaptered}) and grew the open span (${quiet})`)
+  // one more slice that only grows the open span, with no local read after it (in this process the local path's slice of the session
+  // lets go of the state a worker slice left behind: the two never share a process otherwise)
+  s.append(1)
+  await fold()
+  const behind = onDisk()
   saveIndexes()
-  const local = JSON.stringify(await runQuery('session', { id: s.id, head: true }, { home }))
-  assert.notEqual(JSON.parse(local).mark, m1)
+  const local = J(await runQuery('session', { id: s.id, head: true }, { home }))
+  assert.notEqual(JSON.parse(behind).mark, JSON.parse(local).mark, 'the last slice left the head behind the session')
   assert.equal(onDisk(), local, 'the idle save wrote the head of the session\'s state: the local path\'s bytes')
   fs.unlinkSync(file)
   const answer = JSON.stringify(await runQuery('session', { id: s.id, head: true }, ctx))

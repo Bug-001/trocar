@@ -13,7 +13,8 @@
 //     `whole` = the tail's bytes from 0 (a rewritten tail): what it held before is let go first
 //   applyHead(desk, head) → the `session --head` answer as the desk's head: its scalars and its lane heads
 // Lane heads: a held tail's (the highest n) over desk.head's (the `session --head` answer); packs hold none. The worker writes the
-// head at most every HEAD_MS and a poll round reads it before the tails, so a held tail's header is never older than the head's.
+// head only when a part only it carries changes and a poll round reads it before the tails, so a held tail's header is never older
+// than the head's.
 // desk.newest = the newest member the desk holds in record order (placeOf / after): the head's mark or a held `{r}` id (1.5 K-32).
 
 import { changed, addRow, removeRow, newHeld } from './model.mjs'

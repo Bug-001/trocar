@@ -512,15 +512,24 @@ export async function extendSession(ctx, id, budgetMs) {
   return more;
 }
 
-// The head file (3.5 §谁执行它「答案文件」): the worker writes it at the end of a request or background slice of the session when it
-// wrote none of it yet, once HEAD_MS passed since its last write, or when the file is absent; never on a timer. The state of a
-// slice that did not write it is kept (the last one per session, dropped once written) and the idle save (saveIndexes) writes it.
-// A head at the mark (and cut) it was last written at is not made again while its file is there. TROCAR_HEAD_MS, read once, sets it
-// for a test.
-const HEAD_MS = Number(process.env.TROCAR_HEAD_MS) || 2000;
-const heads = new Map(); // session id → {t, sig} of its last head write in this worker
+// The head file (3.5 §谁执行它「答案文件」): the worker writes it at the end of a request or background slice of the session when the
+// file is absent, when it wrote none of it yet, or when a part only the head carries changed (shapeOf); never on a timer. The parts
+// every call moves (mark, steps, cols, lane heads, stats …) do not make it due: the tails carry them. The state of a slice that did
+// not write it is kept (the last one per session, dropped once written) and the idle save (saveIndexes) writes it. A head at the mark
+// (and cut) it was last written at is not made again while its file is there.
+const heads = new Map(); // session id → {sig, shape} of its last head write in this worker
 const lagging = new Map(); // session id → {s, home, fs}: the state whose head a slice did not write (advance lets it go before a slice)
 const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated]);
+// the parts only the head carries, in O(packs): tier, axis, the packs (with their tags) and the open span, the compactions (a new
+// chapter on the axis; one on another lane too), the cut, pending's presence, the failures and the index's codes, and the meta the
+// board takes from the head alone (src/web/v2/replay/header.mjs) — never a count that grows with each call
+const META = ['title', 'title_source', 'session_id', 'harness', 'harnesses', 'project_slug', 'project_path'];
+function shapeOf(s) {
+  if (s.mark == null) return JSON.stringify([0, s.indexErrors.map((e) => e.code)]);
+  const V = s.V, ax = V.lanes.find((l) => l.kind === 'main') || V.lanes[0] || null;
+  return JSON.stringify([1, ax && ax.lane, s.files || null, V.stats.compactions, s.truncated, !!s.pending, s.failed.length,
+    s.indexErrors.filter((e) => !e.level).map((e) => e.code), META.map((k) => V.meta && V.meta[k])]);
+}
 // A background fold that stopped (3.5 §会话读「`session --head`」 pending.stopped, D38②): the slice that threw writes the head at once,
 // with the stop's code (FOLD_STOPS) and the first line of its message; the same stop again writes nothing. The session's next slice
 // that does not throw clears it (extendSession). A request's own failure is its answer (a 500), not a stop.
@@ -534,13 +543,13 @@ async function stopped(ctx, id, e) {
   if (h && h.sig === sig && fs.existsSync(headFile(home, id))) return;
   try {
     const index = await indexed(ctx), members = sessionGroups(index.rows).get(id);
-    if (members) { writeHead(home, id, stoppedHead(home, id, members, index.errors, stop, fs), fs); heads.set(id, { t: performance.now(), sig }); }
+    if (members) { writeHead(home, id, stoppedHead(home, id, members, index.errors, stop, fs), fs); heads.set(id, { sig, shape: null }); }
   } catch { /* a head not written is written at the next stop or slice */ }
 }
-function headAt(ctx, s, doc = null) {
+function headAt(ctx, s) {
   if (ctx.writer !== true) return;
   const h = heads.get(s.id), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
-  if (!h || performance.now() - h.t >= HEAD_MS || !fs.existsSync(headFile(home, s.id))) putHead(ctx, s, doc);
+  if (!h || h.shape !== shapeOf(s) || !fs.existsSync(headFile(home, s.id))) putHead(ctx, s);
   else lagging.set(s.id, { s, home, fs });
 }
 /** files(ctx, s) → the session's pack and tail files brought to the state `s` (the worker only: ctx-files.mjs writeFiles), their
@@ -556,7 +565,7 @@ function putHead(ctx, s, doc = null) {
   const h = heads.get(s.id), sig = sigOf(s), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
   if (!(h && h.sig === sig && fs.existsSync(headFile(home, s.id)))) {
     try { writeHead(home, s.id, doc || headOf(s), fs); } catch { return; } // a head not written is written at the next slice
-    heads.set(s.id, { t: performance.now(), sig });
+    heads.set(s.id, { sig, shape: shapeOf(s) });
   }
   lagging.delete(s.id);
 }
@@ -631,7 +640,7 @@ export async function run(ctx) {
   files(ctx, s);
   if (asHead) {
     const doc = headOf(s);
-    headAt(ctx, s, doc);
+    if (ctx.writer === true) putHead(ctx, s, doc); // the answer is the file (writeHead: the same bytes are not written)
     errors.push(...doc.errors);
     return doc;
   }

@@ -289,8 +289,8 @@ test('A16 parseLines: a read cut at any byte takes whole lines only, and `used` 
   }
 })
 
-// 3.5 §会话读 `{l}`: the head is written at most every HEAD_MS and the board reads it before the tails, so a lane header from a held
-// tail (the highest n) wins over the head's; a pack holds none, so once pack n replaced tail n the head's is used until tail n+1 has one.
+// 3.5 §会话读 `{l}`: the worker writes the head only when a part only it carries changed and the board reads it before the tails, so a
+// lane header from a held tail (the highest n) wins over the head's; a pack holds none, so once pack n replaced tail n the head's is used until tail n+1 has one.
 test('3.5 §会话读 {l}: a held tail\'s lane header wins over the head\'s, the head\'s stands once its tail is sealed into a pack', () => {
   const desk = createDesk(), head = (count) => ({ mark: 'S:1', lanes: [{ lane: 'A', count }] })
   const tail = (n, count) => parseLines(text([{ tail: { n, part: 'main', s0: 0 } }, { l: { lane: 'A', count } }]))
@@ -313,4 +313,34 @@ test('1.5 K-32: a call a held tail brought is not counted behind; one past it is
   applyFile(desk, { kind: 'tail', part: 'main' }, parseLines(text([{ tail: { n: 0, part: 'main', s0: 0 } }, r('S:10')])))
   assert.equal(behindOf('S:9 S:10 S:12', desk.newest), null, 'the newest held member is S:12, over both tails')
   assert.deepEqual(behindOf('S:10 S:12 T:3', desk.newest), { n: 1, more: false })
+})
+
+// 3.5 §谁执行它「答案文件」 head / 1.5 K-32: a head left behind by the open span (written at an earlier mark of it) with the packs and
+// tails gives the desk the head at the tails' mark gives — the same rows, lane heads and newest member. The files are the worker's,
+// written for a generated session (src/query/ctx-files.mjs); the newer head is the local path's at the same mark.
+test('3.5 答案文件 head: an older head of the open span with the same packs and tails gives the desk the newer head gives', { timeout: 120_000 }, async () => {
+  const { gunzipSync } = await import('node:zlib'), path = await import('node:path')
+  const { tmpDir } = await import('../helpers/tmp.mjs'), { bigSession } = await import('../query/big-session.mjs')
+  const { runQuery } = await import('../../src/query/named/index.mjs'), { extendSession } = await import('../../src/query/named/session.mjs')
+  const { sessionDir } = await import('../../src/query/projection.mjs')
+  const home = path.join(tmpDir('trocar-oldhead-'), '.trocar')
+  const s = bigSession({ home, id: 'eeee-0000-4a1b-9c2d-000000000006', growth: 300, subEvery: 4, subLanes: 2, subLen: 1e9 })
+  const ctx = { home, writer: true }, dir = sessionDir(home, s.id), read = (f) => fs.readFileSync(path.join(dir, f))
+  const fold = async () => { while (await extendSession(ctx, s.id, Infinity)); }
+  s.append(520) // pack 0 sealed, the open span begun
+  await fold()
+  const older = JSON.parse(gunzipSync(read('head.json.gz')).toString('utf8'))
+  s.append(12)
+  await fold()
+  const newer = JSON.parse(J(await runQuery('session', { id: s.id, head: true }, { home })))
+  assert.ok(older.mark !== newer.mark && older.open.n === newer.open.n && J(older.packs) === J(newer.packs) && J(older.lanes) !== J(newer.lanes),
+    'the older head is of the same packs, at an earlier mark, its lane heads behind')
+  const files = [...older.packs.flatMap(({ n }) => ['main', 'rest'].map((part) => [{ kind: 'pack', n, part }, parseLines(gunzipSync(read(`p${n}.${part}.ndjson.gz`)))])),
+    ...['main', 'rest'].map((part) => [{ kind: 'tail', n: older.open.n, part, whole: true }, parseLines(read(`open.${part}.ndjson`))])]
+  const deskOf = (head) => { const d = createDesk(); applyHead(d, head); for (const [f, p] of files) applyFile(d, f, p); return d }
+  const a = deskOf(older), b = deskOf(newer)
+  assert.ok(b.rows.size > 0)
+  assert.deepEqual([...a.rows].sort(), [...b.rows].sort(), 'the same rows')
+  assert.deepEqual(new Map([...a.lanes].sort()), new Map([...b.lanes].sort()), 'the same lane heads')
+  assert.equal(a.newest, b.newest, 'the same newest member')
 })
