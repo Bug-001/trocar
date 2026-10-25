@@ -8,10 +8,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { gunzipSync, gzipSync, brotliDecompressSync } from 'node:zlib'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import { createQueryService } from '../../src/query/service.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { sessionDir } from '../../src/query/projection.mjs'
+import { lineFile } from '../../src/query/line-file.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { PACK_MEMBERS, CTX_V } from '../../src/query/ctx-files.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
@@ -193,12 +194,11 @@ test('3.5 #35 A9: a session folded before the answer files (fold log, no head, n
     fs.cpSync(x.home, m.home, { recursive: true })
     for (const f of fs.readdirSync(dirOf(m))) if (/^(p\d+\.|open\.|head\.)/.test(f)) fs.unlinkSync(path.join(dirOf(m), f))
     if (layout === 'flat') { // each line file whole from byte 0 (its sealed parts in order, then its plain tail), offsets unchanged
-      const d = dirOf(m), names = fs.readdirSync(d)
+      const d = dirOf(m)
       for (const base of ['extract', 'fold']) {
-        const parts = names.filter((n) => n.startsWith(`${base}.`) && n.endsWith('.br')).sort((a, b) => Number(a.split('.')[1].split('-')[0]) - Number(b.split('.')[1].split('-')[0]))
-        const tail = names.filter((n) => new RegExp(`^${base}\\.\\d+\\.ndjson$`).test(n))
-        assert.equal(tail.length, 1, `${base}: one plain tail`)
-        fs.writeFileSync(d + FLAT[`${base}.0.ndjson`], Buffer.concat([...parts.map((n) => brotliDecompressSync(fs.readFileSync(path.join(d, n)))), fs.readFileSync(path.join(d, tail[0]))]))
+        const lf = lineFile({ fs, base: path.join(d, base), write: false })
+        fs.writeFileSync(d + FLAT[`${base}.0.ndjson`], Buffer.concat([...lf.scan()].map((l) => Buffer.from(l.nl ? `${l.text}\n` : l.text))))
+        lf.close()
         fs.renameSync(path.join(d, `${base}.idx`), d + FLAT[`${base}.idx`])
       }
       fs.rmSync(d, { recursive: true })

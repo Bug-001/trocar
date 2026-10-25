@@ -21,7 +21,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
-import { loadSidecar } from '../../src/query/line-file.mjs'
+import { lineFile, loadSidecar } from '../../src/query/line-file.mjs'
 import { REDUCE_V } from '../../src/view/reduce.mjs'
 import { heapFlags, workerEnv } from '../../src/query/warm.mjs'
 
@@ -618,11 +618,10 @@ const writeSegmentLines = (home, segment, lines) => fs.appendFileSync(path.join(
 // or kick. A kicked cold fold several times longer than idleMs is folded to its frontier before the worker leaves, and the checkpoint
 // it leaves (the fold log's sidecar with the reduction state at that frontier, 4.3 §4 旁索引) is what a fresh worker resumes from.
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
-// the fold log's text: its sealed brotli parts in offset order, then its plain tail (4.3 §4 分片)
+// the fold log's text: its sealed parts, then its plain tail, read through the line file (4.3 §4 分片)
 const foldBytes = (file) => {
-  const dir = path.dirname(file), at = (n) => Number(n.split('.')[1].split('-')[0])
-  return fs.readdirSync(dir).filter((n) => /^fold\.\d+(-\d+\.br|\.ndjson)$/.test(n)).sort((a, b) => at(a) - at(b))
-    .map((n) => (n.endsWith('.br') ? zlib.brotliDecompressSync(fs.readFileSync(path.join(dir, n))) : fs.readFileSync(path.join(dir, n)))).reduce((a, b) => Buffer.concat([a, b]), Buffer.alloc(0))
+  const lf = lineFile({ fs, base: path.join(path.dirname(file), 'fold'), write: false })
+  try { return Buffer.concat([...lf.scan()].map((l) => Buffer.from(l.nl ? `${l.text}\n` : l.text))) } finally { lf.close() }
 }
 const lastFrontier = (file) => { try { const f = foldBytes(file).toString('utf8').split('\n').filter((l) => l.startsWith('{"f"')).at(-1); return f ? JSON.parse(f) : null } catch { return null } }
 // the member index of the last frontier in the fold log's first `bytes` bytes (all of it when undefined); -1 when there is none

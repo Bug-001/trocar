@@ -1,11 +1,12 @@
 // src/query/line-file.mjs — an append-only line file of newline-ended lines, read back by global byte offset (RFC 4.3 §4 上下文投影
 // 分片 · 写者). The projection store (src/query/projection.mjs) and the fold log keep where each line is and read it back when asked,
 // so their heap does not grow with what they hold.
-//   On disk, in the session's directory: SEALED PARTS `<name>.<a>-<b>.br` (the brotli of exactly the bytes [a, b), cut at a line
-// end, chaining from 0) and one PLAIN TAIL `<name>.<T>.ndjson` (the bytes from T, the last part's end): offsets never change when
-// a prefix is sealed. A part read is decoded once into a cache of decoded parts capped by bytes, off the V8 heap (releaseParts()
-// drops it). The lines past the disk's end live in an off-heap ARENA (Buffers: external memory, not the V8 heap): `write: false`
-// (the local path, which writes nothing) appends every line there; `write: true` appends to the tail, and a write that fails keeps
+//   On disk, in the session's directory: SEALED PARTS `<name>.<a>-<b>.br` (exactly the bytes [a, b), cut at a line end, chaining
+// from 0, as independently decodable brotli FRAMES each cut at a line end, then their table) and one PLAIN TAIL `<name>.<T>.ndjson`
+// (the bytes from T, the last part's end): offsets never change when a prefix is sealed. A line read decodes the one frame that
+// holds it, once, into a cache of decoded frames capped by bytes, off the V8 heap (releaseParts() drops it). The lines past the
+// disk's end live in an off-heap ARENA (Buffers: external memory, not the V8 heap): `write: false` (the local path, which writes
+// nothing) appends every line there; `write: true` appends to the tail, and a write that fails keeps
 // the text in the arena (`onFail(error)` once per episode of failures) and writes it with the next append that works. The arena
 // starts at the disk's end, so an offset handed out never changes. One descriptor for reads of the tail, closed by close(), by
 // seal(), or, failing that, when the line file is collected.
@@ -87,27 +88,66 @@ const held = new FinalizationRegistry(({ fs, fd }) => { try { fs.closeSync(fd); 
 /** Plain bytes a sealed part holds at least (4.3 §4 分片, about 8 MiB, SHOULD): seal() cuts at the first line end at or past it. */
 export const PART_BYTES = 8 << 20;
 const BROTLI = { [zlib.constants.BROTLI_PARAM_QUALITY]: 9, [zlib.constants.BROTLI_PARAM_LGWIN]: 24 }; // as src/raw/writer.mjs
-const DECODED_BYTES = 32 << 20; // the decoded parts kept, by bytes
+const DECODED_BYTES = 32 << 20; // the decoded frames kept, by bytes
 const CHUNK = 1 << 20;
 /** The first read of a scan of the plain tail, doubling up to CHUNK: a caller that stops after the first lines reads about them only. */
 export const FIRST_CHUNK = 4 << 10;
 
-// parts decoded (a Buffer's bytes are external memory, not the V8 heap), by path and the file's identity, least recently used first
+// frames decoded (a Buffer's bytes are external memory, not the V8 heap), by path, the file's identity and the frame, least recently
+// used first
 const decoded = new Map();
 let decodedBytes = 0;
 // parts that did not decode, by the same identity: an open that finds one is not one line file (the local path, which does not
 // remove it, rebuilds in memory instead of decoding it again at a read; 4.3 §4 分片)
 const undecodable = new Set();
-/** releaseParts(): drop every decoded part (the worker's idle period). */
+/** releaseParts(): drop every decoded frame (the worker's idle period). */
 export function releaseParts() { decoded.clear(); decodedBytes = 0; }
-function plainOf(fs, p) {
-  let b = decoded.get(p.key);
-  if (b) { decoded.delete(p.key); decoded.set(p.key, b); return b; }
-  b = zlib.brotliDecompressSync(fs.readFileSync(p.path));
-  if (b.length !== p.b - p.a) throw new RangeError(`${path.basename(p.path)} decodes to ${b.length} bytes`);
-  decoded.set(p.key, b); decodedBytes += b.length;
-  for (const [k, v] of decoded) { if (decodedBytes <= DECODED_BYTES || k === p.key) break; decoded.delete(k); decodedBytes -= v.length; }
-  return b;
+/** Plain bytes a frame of a sealed part holds at least (4.3 §4 分片): seal() cuts a part into independently decodable frames, each at
+ *  the first line end at or past it, so a line lies in one frame and reading it decodes that frame only. */
+export const FRAME_BYTES = 256 << 10;
+const MAGIC = 0x31465254; // "TRF1"
+/** framed(raw, frameBytes) → a sealed part's bytes: the brotli of each frame of `raw` (cut at the first line end at or past
+ *  frameBytes from its start), then the frame table (per frame: compressed length, plain length; u32 LE), the frame count, MAGIC. */
+function framed(raw, frameBytes = FRAME_BYTES) {
+  const out = [], table = [];
+  for (let a = 0; a < raw.length;) {
+    let z = raw.indexOf(10, a + frameBytes - 1) + 1;
+    if (z <= 0) z = raw.length;
+    const x = raw.subarray(a, z), y = zlib.brotliCompressSync(x, { params: { ...BROTLI, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: x.length } });
+    out.push(y); table.push(y.length, x.length); a = z;
+  }
+  const t = Buffer.alloc(4 * table.length + 8);
+  table.forEach((v, i) => t.writeUInt32LE(v, 4 * i));
+  t.writeUInt32LE(table.length / 2, 4 * table.length); t.writeUInt32LE(MAGIC, 4 * table.length + 4);
+  return Buffer.concat([...out, t]);
+}
+// a part's frame table: [compressed start, plain start] per frame and the plain end, read once per part (its tail bytes)
+function tableOf(fs, p) {
+  if (p.t) return p.t;
+  const fd = fs.openSync(p.path, 'r');
+  try {
+    const size = fs.fstatSync(fd).size, tail = size >= 8 ? readAt(fs, fd, size - 8, 8) : null, n = tail ? tail.readUInt32LE(0) : 0;
+    if (!tail || tail.readUInt32LE(4) !== MAGIC || !n || 8 * n + 8 > size) throw new RangeError(`${path.basename(p.path)} has no frame table`);
+    const t = readAt(fs, fd, size - 8 - 8 * n, 8 * n), c = new Float64Array(n + 1), q = new Float64Array(n + 1);
+    for (let i = 0; i < n; i++) { c[i + 1] = c[i] + t.readUInt32LE(8 * i); q[i + 1] = q[i] + t.readUInt32LE(8 * i + 4); }
+    if (c[n] + 8 * n + 8 !== size || q[n] !== p.b - p.a) throw new RangeError(`${path.basename(p.path)}'s frame table does not tile it`);
+    return (p.t = { c, q, n });
+  } finally { fs.closeSync(fd); }
+}
+// the frame of part p covering its plain byte `rel`: {buf, at} (at: the frame's plain start in the part), decoded once into the cache
+function frameOf(fs, p, rel) {
+  const { c, q, n } = tableOf(fs, p);
+  let lo = 0, hi = n - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (q[mid] <= rel) lo = mid; else hi = mid - 1; }
+  const key = `${p.key}#${lo}`;
+  let b = decoded.get(key);
+  if (b) { decoded.delete(key); decoded.set(key, b); return { buf: b, at: q[lo] }; }
+  const fd = fs.openSync(p.path, 'r');
+  try { b = zlib.brotliDecompressSync(readAt(fs, fd, c[lo], c[lo + 1] - c[lo])); } finally { fs.closeSync(fd); }
+  if (b.length !== q[lo + 1] - q[lo]) throw new RangeError(`${path.basename(p.path)} frame ${lo} decodes to ${b.length} bytes`);
+  decoded.set(key, b); decodedBytes += b.length;
+  for (const [k, v] of decoded) { if (decodedBytes <= DECODED_BYTES || k === key) break; decoded.delete(k); decodedBytes -= v.length; }
+  return { buf: b, at: q[lo] };
 }
 function syncDir(fs, dir) { try { const d = fs.openSync(dir, 'r'); try { fs.fsyncSync(d); } finally { fs.closeSync(d); } } catch { /* a platform with no directory fsync */ } }
 // `file` holds `buf` whole or is as it was: a temp file, fsynced, renamed over, the directory fsynced
@@ -125,8 +165,8 @@ function readAt(fs, fd, pos, n) {
 
 /** lineFile({fs, base, write, onFail}) → {append(text) → the offset of its first byte, read(off, len) → Buffer, scan(from), bytes,
  *  settled, unreadable, cut(len), remove(), seal({partBytes}), touch(), loadSidecar(), saveSidecar({head, parts}), close()}.
- *  `base` = `<dir>/<name>`: the lines' global bytes [0, end) are the sealed parts `<name>.<a>-<b>.br` (the brotli of exactly
- *  [a, b), cut at a line end, chaining from 0 to C) then the plain tail `<name>.<C>.ndjson`; the sidecar is `<name>.idx`. Content
+ *  `base` = `<dir>/<name>`: the lines' global bytes [0, end) are the sealed parts `<name>.<a>-<b>.br` (exactly [a, b) framed,
+ *  cut at a line end, chaining from 0 to C) then the plain tail `<name>.<C>.ndjson`; the sidecar is `<name>.idx`. Content
  *  blind: bytes and line ends only. `settled`: written, every byte on disk (no arena, nothing to cut): a sidecar may be saved, a
  *  part sealed. `bytes`: the end (the disk's bytes that count, then the arena's). `cut(len)`: what lies past `len` is no longer
  *  there (a torn tail, a file rebuilt); with `write` the disk is made so before the next write (parts past it removed, the one it
@@ -177,14 +217,16 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
     if (write) try { fs.rmSync(p.path, { force: true }); } catch { /* the next open */ }
   }
   const partIndex = (off) => { let lo = 0, hi = parts.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (parts[mid].a <= off) lo = mid; else hi = mid - 1; } return lo; };
-  function plain(p) { try { return plainOf(fs, p); } catch (e) { broken(p, e); throw Object.assign(new Error(unreadable), { code: 'ELINEPART' }); } }
+  function frame(p, rel) { try { return frameOf(fs, p, rel); } catch (e) { broken(p, e); throw Object.assign(new Error(unreadable), { code: 'ELINEPART' }); } }
+  // part p's plain bytes [0, n): its frames from the first
+  const prefix = (p, n) => { const bs = []; for (let at = 0; at < n;) { const f = frame(p, at); bs.push(f.buf); at = f.at + f.buf.length; } return Buffer.concat(bs).subarray(0, n); };
 
   // the disk made to hold [0, end) only: the tail truncated, or the parts past `end` removed (the newest first, so what is left
   // always chains from 0) and the one `end` falls in turned back into the tail
   function settle() {
     if (!junk && end >= C) { try { fs.truncateSync(tailOf(T), end - T); } catch (e) { if (e.code !== 'ENOENT') throw e; } return; }
     const keep = junk ? [] : parts.filter((p) => p.b <= end), nc = keep.length ? keep[keep.length - 1].b : 0;
-    const pre = end > nc ? plain(parts[keep.length]).subarray(0, end - nc) : null;
+    const pre = end > nc ? prefix(parts[keep.length], end - nc) : null;
     close();
     const kept = new Set(keep.map((p) => p.path)), rank = (f) => (f.b === undefined || f.tmp ? Infinity : f.a);
     for (const f of files().sort((x, y) => rank(y) - rank(x))) if (!kept.has(f.path)) fs.rmSync(f.path, { force: true });
@@ -224,7 +266,9 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
     if (off < C) {
       const p = parts[partIndex(off)];
       if (off + len > p.b) throw new RangeError(`no line at byte ${off} of ${name}`);
-      return plain(p).subarray(off - p.a, off - p.a + len);
+      const { buf, at } = frame(p, off - p.a), from = off - p.a - at;
+      if (from + len > buf.length) throw new RangeError(`no line at byte ${off} of ${name}`);
+      return buf.subarray(from, from + len);
     }
     if (fd == null) { fd = fs.openSync(tailOf(T), 'r'); held.register(self, { fs, fd }, self); }
     const b = Buffer.alloc(len);
@@ -235,9 +279,11 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
   // the disk's bytes from `from`, chunk by chunk (a chunk is overwritten by the next)
   function* chunks(from) {
     for (let i = partIndex(from); from < C && i < parts.length; i++) {
-      let b;
-      try { b = plainOf(fs, parts[i]); } catch (e) { broken(parts[i], e); return; }
-      yield b.subarray(from - parts[i].a); from = parts[i].b;
+      while (from < parts[i].b) {
+        let f;
+        try { f = frameOf(fs, parts[i], from - parts[i].a); } catch (e) { broken(parts[i], e); return; }
+        yield f.buf.subarray(from - parts[i].a - f.at); from = parts[i].a + f.at + f.buf.length;
+      }
     }
     let f;
     try { f = fs.openSync(tailOf(T), 'r'); } catch (e) { if (e.code === 'ENOENT') return; throw e; }
@@ -257,10 +303,10 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
     if (carry) yield { off: at, len: carry.length, text: carry.toString('utf8'), nl: false };
   }
 
-  /** seal({partBytes}) → whether it sealed: while the settled tail holds partBytes or more, the next part (to the first line end at
-   *  or past partBytes) is written, then the tail from the last part's end, then the old tail removed (4.3 §4 分片: killed at any
-   *  point, the next open reads the same lines). */
-  function seal({ partBytes = PART_BYTES } = {}) {
+  /** seal({partBytes, frameBytes}) → whether it sealed: while the settled tail holds partBytes or more, the next part (to the first
+   *  line end at or past partBytes, framed by frameBytes) is written, then the tail from the last part's end, then the old tail
+   *  removed (4.3 §4 分片: killed at any point, the next open reads the same lines). */
+  function seal({ partBytes = PART_BYTES, frameBytes = FRAME_BYTES } = {}) {
     if (!write || arena || trunc || junk || end - T < partBytes) return false;
     close();
     const old = tailOf(T), f = fs.openSync(old, 'r');
@@ -271,7 +317,7 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
         for (let pos = a + partBytes - 1; !b && pos < end; pos += 1 << 16) { const c = readAt(fs, f, pos - T, Math.min(1 << 16, end - pos)), i = c.indexOf(10); if (i >= 0) b = pos + i + 1; }
         if (!b) break; // no line ends there (none of a settled tail)
         const raw = readAt(fs, f, a - T, b - a);
-        durable(fs, partOf(a, b), zlib.brotliCompressSync(raw, { params: { ...BROTLI, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: raw.length } }));
+        durable(fs, partOf(a, b), framed(raw, frameBytes));
         parts.push(partAt({ path: partOf(a, b), a, b })); C = a = b; made = true;
       }
       durable(fs, tailOf(a), end > a ? readAt(fs, f, a - T, end - a) : Buffer.alloc(0));

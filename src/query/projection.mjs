@@ -384,7 +384,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     defBid: (slot) => at.keyAt(slot),
     get defCount() { return at.size; },
     close: () => lines.close(),
-    /** seal({partBytes}) → whether the projection sealed a part of its lines (line-file.mjs; the worker's idle period). */
+    /** seal({partBytes, frameBytes}) → whether the projection sealed a part of its lines (line-file.mjs; the worker's idle period). */
     seal: (o) => lines.seal(o),
     rows,
     brks,

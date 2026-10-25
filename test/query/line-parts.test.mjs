@@ -1,8 +1,11 @@
-// test/query/line-parts.test.mjs — 4.3 §4 分片 (acceptance 4.3 #17): a line file is sealed parts `<name>.<a>-<b>.br` (the brotli of
-// its global bytes [a, b), cut at a line end, chaining from 0) and one plain tail `<name>.<T>.ndjson`. Over seeded line sequences
-// (1 B to 3 MiB, non-ASCII, lines that end exactly where a part ends) sealed at random points: every line reads back by its offset;
-// a seal killed at any of its writes reopens to the same lines and one tail; a part deleted or not decoding, found at the open or
-// at its first read after a sidecar open, rebuilds that line file with one note and answers what the undamaged home answers.
+// test/query/line-parts.test.mjs — 4.3 §4 分片 (acceptance 4.3 #8): a line file is sealed parts `<name>.<a>-<b>.br` (its global
+// bytes [a, b), cut at a line end, chaining from 0, as brotli frames that each decode alone, then the frame table) and one plain tail
+// `<name>.<T>.ndjson`. Over seeded line sequences (1 B to 3 MiB, non-ASCII, lines that end exactly where a part ends, lines longer
+// than a frame) sealed at random points with random part and frame sizes: every line reads back by its offset, and a read reads from
+// disk at most the frame that holds the line and the table, in any order, cold or not; a seal killed at any of its writes reopens to
+// the same lines and one tail; a part deleted, not decoding, of the format before frames or with a table that does not tile it, found
+// at the open or at its first read after a sidecar open, rebuilds that line file with one note and answers what the undamaged home
+// answers.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -37,6 +40,49 @@ function shape(dir, tag) {
   assert.equal(+tails[0][3], c, `${tag}: the tail starts where the parts end`)
   return { parts, c }
 }
+// a sealed part's frames as 4.3 §4 分片 lays them out: each frame's brotli in turn, then the table (per frame: compressed length,
+// plain length; u32 LE), the frame count, "TRF1". The table tiles the file; each frame decodes alone to whole lines of `plain` (the
+// part's bytes), in order.
+function framesOf(file, plain) {
+  const b = fs.readFileSync(file), n = b.length >= 8 ? b.readUInt32LE(b.length - 8) : 0, table = 8 * n + 8
+  assert.ok(b.length >= 8 && b.toString('latin1', b.length - 4) === 'TRF1' && n > 0 && table <= b.length, `${path.basename(file)}: a frame table`)
+  const frames = []
+  let c = 0, q = 0
+  for (let i = 0; i < n; i++) {
+    const zc = b.readUInt32LE(b.length - table + 8 * i), zq = b.readUInt32LE(b.length - table + 8 * i + 4), x = zlib.brotliDecompressSync(b.subarray(c, c + zc))
+    assert.ok(x.length === zq && x[zq - 1] === 10 && (!plain || x.equals(plain.subarray(q, q + zq))), `${path.basename(file)}: frame ${i} decodes alone to its lines`)
+    frames.push({ q, zq, zc }); c += zc; q += zq
+  }
+  assert.equal(c + table, b.length, `${path.basename(file)}: the table tiles it`)
+  if (plain) assert.equal(q, plain.length, `${path.basename(file)}: the frames hold the part's bytes`)
+  return { frames, table }
+}
+const plainOf = (file) => { const { frames } = framesOf(file); const b = fs.readFileSync(file); let c = 0; return Buffer.concat(frames.map((f) => zlib.brotliDecompressSync(b.subarray(c, (c += f.zc))))) }
+// each line read through a fresh handle in a seeded order, the decoded frames dropped before about half of them: the bytes read
+// from a part ≤ the frame that holds the line + the table
+function readsFrames(dir, want, r, tag) {
+  const { parts } = shape(dir, tag), lay = parts.map(([a, b]) => {
+    const plain = Buffer.concat(want.filter((l) => l.off >= a && l.off < b).map((l) => l.buf))
+    return { a, b, ...framesOf(path.join(dir, `x.${a}-${b}.br`), plain) }
+  })
+  let read = 0
+  const fds = new Set(), counting = { ...fs,
+    openSync(p, ...x) { const fd = fs.openSync(p, ...x); if (String(p).endsWith('.br')) fds.add(fd); else fds.delete(fd); return fd },
+    closeSync(fd) { fds.delete(fd); return fs.closeSync(fd) },
+    readSync(fd, ...x) { const n = fs.readSync(fd, ...x); if (fds.has(fd)) read += n; return n },
+    readFileSync(p, ...x) { const b = fs.readFileSync(p, ...x); if (String(p).endsWith('.br')) read += b.length; return b },
+  }
+  const order = want.map((l) => [r(), l]).sort((x, y) => x[0] - y[0]).map(([, l]) => l)
+  for (const l of order) {
+    if (r() < 0.5) releaseParts()
+    const lf = lineFile({ fs: counting, base: path.join(dir, 'x'), write: false })
+    read = 0
+    assert.ok(lf.read(l.off, l.len).equals(l.buf), `${tag}: the line at ${l.off}`)
+    lf.close()
+    const p = lay.find((x) => l.off >= x.a && l.off < x.b), f = p && p.frames.find((x) => l.off - p.a >= x.q && l.off - p.a < x.q + x.zq)
+    assert.ok(read <= (p ? f.zc + p.table : 0), `${tag}: the line at ${l.off} read ${read} bytes of parts (its frame ${f ? f.zc : 0} + the table ${p ? p.table : 0})`)
+  }
+}
 function readsBack(dir, want, tag) {
   releaseParts()
   const lf = lineFile({ fs, base: path.join(dir, 'x') })
@@ -46,7 +92,7 @@ function readsBack(dir, want, tag) {
   lf.close()
 }
 
-test('4.3 #17: every line reads back by its offset whatever was sealed; the disk is parts from 0 and one tail', { timeout: 300_000 }, () => {
+test('4.3 #8: every line reads back by its offset whatever was sealed; the disk is parts from 0 and one tail', { timeout: 300_000 }, () => {
   for (const seed of [1, 2, 3]) {
     const r = rng(seed), dir = tmpDir('trocar-parts-'), lf = lineFile({ fs, base: path.join(dir, 'x') }), want = []
     for (let i = 0; i < 300; i++) {
@@ -56,7 +102,7 @@ test('4.3 #17: every line reads back by its offset whatever was sealed; the disk
         // a part size that ends exactly at a line end, or any
         const t = shape(dir, `seed ${seed}`).c, ends = want.filter((l) => l.off + l.len > t).map((l) => l.off + l.len - t)
         const partBytes = r() < 0.5 ? ends[Math.floor(r() * ends.length)] : 1 + Math.floor(r() * 300_000)
-        lf.seal({ partBytes })
+        lf.seal({ partBytes, frameBytes: r() < 0.3 ? 1 + Math.floor(r() * 2_000) : 1 + Math.floor(r() * 100_000) })
         shape(dir, `seed ${seed} after a seal`)
         for (const l of want) assert.ok(lf.read(l.off, l.len).equals(l.buf), `seed ${seed}: the line at ${l.off}, same process`)
       }
@@ -64,14 +110,15 @@ test('4.3 #17: every line reads back by its offset whatever was sealed; the disk
     lf.close()
     assert.ok(shape(dir, `seed ${seed}`).parts.length > 1, `seed ${seed}: parts were sealed`)
     readsBack(dir, want, `seed ${seed}: reopened`)
+    readsFrames(dir, want, r, `seed ${seed}: one frame a read`)
   }
 })
 
-test('4.3 #17: a seal killed after any of its writes reopens to the same lines and one tail', { timeout: 300_000 }, () => {
+test('4.3 #8: a seal killed after any of its writes reopens to the same lines and one tail', { timeout: 300_000 }, () => {
   const r = rng(9), src = tmpDir('trocar-parts-'), want = []
   const lf = lineFile({ fs, base: path.join(src, 'x') })
   for (let i = 0; i < 60; i++) { const buf = Buffer.from(lineOf(r)); want.push({ off: lf.append(buf.toString()), len: buf.length, buf }) }
-  lf.seal({ partBytes: 50_000 }) // a part already there: the next seal chains on it
+  lf.seal({ partBytes: 50_000, frameBytes: 7_000 }) // a part already there: the next seal chains on it
   for (let i = 0; i < 60; i++) { const buf = Buffer.from(lineOf(r)); want.push({ off: lf.append(buf.toString()), len: buf.length, buf }) }
   lf.close()
   const seen = new Set()
@@ -82,7 +129,7 @@ test('4.3 #17: a seal killed after any of its writes reopens to the same lines a
     const kill = (f) => (...a) => { if (++n >= k) throw Object.assign(new Error('killed'), { code: 'KILLED' }); return f(...a) }
     const dying = { ...fs, writeFileSync: kill(fs.writeFileSync), fsyncSync: kill(fs.fsyncSync), renameSync: kill(fs.renameSync), rmSync: kill(fs.rmSync) }
     let done = false
-    try { lineFile({ fs: dying, base: path.join(dir, 'x') }).seal({ partBytes: 10_000 }); done = true } catch (e) { if (e.code !== 'KILLED') throw e }
+    try { lineFile({ fs: dying, base: path.join(dir, 'x') }).seal({ partBytes: 10_000, frameBytes: 3_000 }); done = true } catch (e) { if (e.code !== 'KILLED') throw e }
     // where in the seal's order it was killed (4.3 §4 分片)
     const names = fs.readdirSync(dir), m = names.map((n) => NAMES.exec(n)).filter(Boolean)
     const c = Math.max(0, ...m.filter((x) => x[2]).map((x) => +x[2])), t = Math.min(...m.filter((x) => x[3]).map((x) => +x[3]))
@@ -105,7 +152,7 @@ async function answers(ctx, id) {
 }
 const drain = async (ctx, id) => { if (ctx.writer) for (let i = 0; i < 500 && await extendSession(ctx, id, Infinity); i++); }
 
-test('4.3 #17: a part deleted or not decoding, found at the open or at its first read: one projection-rebuilt note, the same answers', { timeout: 300_000 }, async () => {
+test('4.3 #8: a part deleted or not decoding, found at the open or at its first read: one projection-rebuilt note, the same answers', { timeout: 300_000 }, async () => {
   // a session whose projection and fold log are sealed into small parts, their sidecars saved (the worker's idle period)
   const base = path.join(tmpDir('trocar-parts-home-'), '.trocar'), s = bigSession({ home: base, wire: 'http', growth: 200, subEvery: 3 })
   s.append(12)
@@ -116,11 +163,13 @@ test('4.3 #17: a part deleted or not decoding, found at the open or at its first
   p.close(); log.close(); releaseParts()
   const flip = (f) => { const b = fs.readFileSync(f); b[3] ^= 0xff; b[Math.floor(b.length / 2)] ^= 0x5a; fs.writeFileSync(f, b) }
   const garble = (f) => fs.writeFileSync(f, zlib.brotliCompressSync(Buffer.from('not the bytes it held\n')))
+  const unframed = (f) => fs.writeFileSync(f, zlib.brotliCompressSync(plainOf(f))) // the part as sealed before frames: one brotli of its bytes
+  const untiled = (f) => fs.writeFileSync(f, Buffer.concat([Buffer.from([0]), fs.readFileSync(f)]))
   const copy = () => { const h = path.join(tmpDir('trocar-parts-case-'), '.trocar'); fs.cpSync(base, h, { recursive: true }); return h }
   for (const writer of [true, false]) {
     const want = (await answers({ home: copy(), fs: { ...fs }, writer }, s.id)).text
     for (const [where, name] of [['projection', 'extract'], ['fold-log', 'fold']]) {
-      for (const [kind, damage] of [['deleted', (f) => fs.rmSync(f)], ['flipped', flip], ['another length', garble]]) {
+      for (const [kind, damage] of [['deleted', (f) => fs.rmSync(f)], ['flipped', flip], ['another length', garble], ['unframed', unframed], ['untiled', untiled]]) {
         for (const sidecar of [false, true]) {
           const tag = `${writer ? 'worker' : 'local'} · ${name} ${kind} · ${sidecar ? 'sidecar: decoded at its first read' : 'no sidecar: the open scans'}`
           const home = copy(), dir = sessionDir(home, s.id), ctx = { home, fs: { ...fs }, writer }
@@ -138,6 +187,8 @@ test('4.3 #17: a part deleted or not decoding, found at the open or at its first
             assert.deepEqual(later.errors, [], `${tag}: read ${k}`)
             assert.equal(later.text, want, `${tag}: read ${k}'s answers`)
           }
+          // the worker rebuilt the line file: every part left on disk is framed (none of the format before frames is read again)
+          if (writer) for (const n of fs.readdirSync(dir).filter((m) => m.endsWith('.br'))) framesOf(path.join(dir, n))
         }
       }
     }

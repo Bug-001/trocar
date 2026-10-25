@@ -232,7 +232,7 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
     frontierAt: (rid) => fronts.get(rid),
     get bytes() { return lines.bytes; },
     close: () => lines.close(),
-    /** seal({partBytes}) → whether the log sealed a part of its lines (line-file.mjs; the worker's idle period). */
+    /** seal({partBytes, frameBytes}) → whether the log sealed a part of its lines (line-file.mjs; the worker's idle period). */
     seal: (o) => lines.seal(o),
     /** remove(): no lines; a written log deletes every file of it now (a fold from scratch). */
     remove: () => { lines.remove(); calls.clear(); lanes.clear(); items.clear(); fails.clear(); fronts.clear(); last = undefined; savedAt = 0; saved = null; },
