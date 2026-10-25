@@ -10,6 +10,7 @@ import { world, deskFrom } from './desk-world.mjs'
 import { buildLanes, anchorLane, stepRef } from '../../src/web/v2/replay/lanes.mjs'
 import { createDesk, applySession } from '../../src/web/v2/replay/model.mjs'
 import { sessionHeadHtml, readStateHtml } from '../../src/web/v2/replay/header.mjs'
+import { FOLD_STOPS } from '../../src/health/codes.mjs'
 import { stepBarHtml } from '../../src/web/v2/replay/stepbar.mjs'
 import { SKELETON } from '../../src/web/v2/replay/replay.mjs'
 import * as W from '../../src/web/v2/labels/replay.mjs'
@@ -107,6 +108,25 @@ test('the read-state line is present iff the answer is pending, and holds no but
   applySession(desk, fx.session_full)
   assert.equal(readStateHtml(desk), '', 'no pending: no line')
   assert.equal(readStateHtml(createDesk()), '', 'nothing read: no line')
+})
+
+// 1.5 K-31 · 3.5 #37: a head whose background fold stopped (pending.stopped) says reading stopped, its code in the technical details;
+// for every FOLD_STOPS code, at a first read and a later one
+test('a stopped fold: the read-state line is the stopped one, its code in the technical details; without the stop it is the reading line', () => {
+  const fx = JSON.parse(readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
+  for (const code of FOLD_STOPS) {
+    for (const answer of [fx.session_pending, { ...fx.session_pending, mark: 'later', pending: { done: 5, total: 9 } }]) {
+      const desk = createDesk()
+      applySession(desk, { ...answer, pending: { ...answer.pending, stopped: { code, reason: 'why it stopped' } } })
+      const html = readStateHtml(desk)
+      assert.match(html, /data-read-state="stopped"/, code)
+      const tech = html.slice(html.indexOf('class="tech"'))
+      assert.ok(html.includes('class="tech"') && tech.includes(code), `${code}: the code is in the technical details`)
+      assert.ok(!html.slice(0, html.indexOf('class="tech"')).includes(code), `${code}: the code is not in the visible line`)
+      applySession(desk, answer)
+      assert.match(readStateHtml(desk), /data-read-state="(reading|catching-up)"/, 'without the stop: reading or catching up')
+    }
+  }
 })
 
 // 1.5 K-29: after a failed read of a drawn session, one quiet stale line sits under the head with a Retry that reads at once

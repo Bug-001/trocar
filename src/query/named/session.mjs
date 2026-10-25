@@ -40,7 +40,7 @@ import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yi
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
-import { filesAt, filesParts, forget, headDoc, headFile, packsOf, tier0Doc, writeFiles, writeHead, memoBytes } from '../ctx-files.mjs';
+import { filesAt, filesParts, forget, headDoc, headFile, packsOf, stoppedHead, tier0Doc, writeFiles, writeHead, memoBytes } from '../ctx-files.mjs';
 
 export const params = Object.freeze(['id', 'since', 'before', 'limit', 'head']);
 
@@ -474,7 +474,7 @@ async function advance(ctx, id, { budgetMs, request }) {
       // the measured bound: the rows the stopped fold got through are the rows that fit, never fewer than half those asked for,
       // rounded down to a quarter power of two (3.5 §内存有界); the stopped state is closed and garbage by now
       const got = Math.max(e.rows, Math.floor(plan.read.length / 2)) - 1, fit = got < 1 ? 0 : Math.floor(2 ** (Math.floor(Math.log2(got) * 4) / 4));
-      if (fit < 1) throw new Error(`the heap holds no room for this session (${mb(heapBudget())} MB budget)`);
+      if (fit < 1) throw Object.assign(new Error(`the heap holds no room for this session (${mb(heapBudget())} MB budget)`), { code: 'heap-no-room' });
       fits.delete(k);
       fits.set(k, fit);
       if (fits.size > FITS_KEPT) fits.delete(fits.keys().next().value);
@@ -489,13 +489,14 @@ async function advance(ctx, id, { budgetMs, request }) {
  *  slice of the query worker (`ctx.writer`), the index read included: extraction in write order, then folding (or a cold state's
  *  rebuild, when a member lies past its log's frontier): half of `budgetMs` each, the fold also what extraction left. */
 export async function extendSession(ctx, id, budgetMs) {
-  const r = await advance(ctx, String(id), { budgetMs, request: false });
+  let r;
+  try { r = await advance(ctx, String(id), { budgetMs, request: false }); } catch (e) { await stopped(ctx, String(id), e); throw e; }
   if (!r) return false;
   const { st, plan, ex } = r;
   const more = ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n);
   const s = stateAt(r, String(id));
   files(ctx, s);
-  headAt(ctx, s);
+  if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); // a stop is cleared at once
   if (!more) releaseParts(); // folded to its frontier: between calls the worker holds no decoded part (3.5:40 ⑤)
   return more;
 }
@@ -509,6 +510,22 @@ const HEAD_MS = Number(process.env.TROCAR_HEAD_MS) || 2000;
 const heads = new Map(); // session id → {t, sig} of its last head write in this worker
 const lagging = new Map(); // session id → {s, home, fs}: the state whose head a slice did not write (advance lets it go before a slice)
 const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated]);
+// A background fold that stopped (3.5 §会话读「`session --head`」 pending.stopped, D38②): the slice that threw writes the head at once,
+// with the stop's code (FOLD_STOPS) and the first line of its message; the same stop again writes nothing. The session's next slice
+// that does not throw clears it (extendSession). A request's own failure is its answer (a 500), not a stop.
+const stops = new Set(); // the session ids whose last background slice threw
+async function stopped(ctx, id, e) {
+  if (ctx.writer !== true || e instanceof HandOff) return;
+  const stop = { code: e && e.code === 'heap-no-room' ? 'heap-no-room' : 'fold-failed', reason: String((e && e.message) || e).split('\n')[0] };
+  const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, sig = JSON.stringify(['stopped', stop]), h = heads.get(id);
+  stops.add(id);
+  lagging.delete(id);
+  if (h && h.sig === sig && fs.existsSync(headFile(home, id))) return;
+  try {
+    const index = await indexed(ctx), members = sessionGroups(index.rows).get(id);
+    if (members) { writeHead(home, id, stoppedHead(home, id, members, index.errors, stop, fs), fs); heads.set(id, { t: performance.now(), sig }); }
+  } catch { /* a head not written is written at the next stop or slice */ }
+}
 function headAt(ctx, s, doc = null) {
   if (ctx.writer !== true) return;
   const h = heads.get(s.id), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;

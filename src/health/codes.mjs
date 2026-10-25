@@ -22,6 +22,9 @@ export const BLOCK_PROBLEMS = Object.freeze(['record-missing', 'record-unreadabl
 /** The codes of a `session` read's own errors (src/query/named/session.mjs; 3.5 §会话读): no such session, a member that did not read back or extract. */
 export const SESSION_PROBLEMS = Object.freeze(['session-unknown', 'record-unreadable', 'record-unparseable',
   'record-missing', 'field-missing']) // a member whose block the reduction could not read back (3.5 §读不全不静默)
+/** Why a session's background fold stopped (`pending.stopped.code` in its head, src/query/named/session.mjs; 3.5 §会话读「`session --head`」):
+ *  not even one row of the session fits the heap's budget, or any other error a slice threw. */
+export const FOLD_STOPS = Object.freeze(['heap-no-room', 'fold-failed'])
 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])

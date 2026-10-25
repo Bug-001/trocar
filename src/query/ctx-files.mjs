@@ -86,6 +86,18 @@ export function tier0Doc(id, members, errors) {
   });
 }
 
+/** stoppedHead(home, id, members, errors, stopped, fs) → the head of a session whose background fold stopped (3.5 §会话读「`session
+ *  --head`」 pending.stopped): the head on disk, else the tier-0 head of `members`, with `pending: {done, total, stopped}` (`done` = the
+ *  members at or below its mark). */
+export function stoppedHead(home, id, members, errors, stopped, fs = nodeFs) {
+  let d = null;
+  try { d = JSON.parse(gunzipSync(fs.readFileSync(headFile(home, id))).toString('utf8')); } catch { /* none yet, or torn */ }
+  if (!d || d.v !== CTX_V) d = tier0Doc(id, members, errors);
+  const rid = d.mark == null ? null : String(d.mark).replace(/@.*$/, ''); // a cut's mark is `rid@cut` (named/session.mjs markOn)
+  const done = d.pending ? d.pending.done : rid == null ? 0 : members.findIndex((r) => String(r.id) === rid) + 1;
+  return { ...d, pending: { done, total: members.length, stopped } };
+}
+
 /** writeHead(home, id, doc, fs) → whether the file changed: the gzip of the doc's compact JSON (putFile); nothing is written when the
  *  bytes are the file's. */
 export function writeHead(home, id, doc, fs = nodeFs) {

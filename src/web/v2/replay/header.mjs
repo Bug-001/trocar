@@ -190,9 +190,13 @@ export function totalsOf(s) {
 // 1.2 §会话头 读取状态: while the server is still extracting this session (`pending{done, total}` on the session answer) one quiet
 // line says how far — the first read as a share, later the calls still to catch up. Words only: no control (D69).
 // 1.5 K-32: a head behind the capture names how many calls came after it (`behind`, behindOf).
+// 1.5 K-31: a head whose background fold stopped (`pending.stopped`) says so instead.
 export function readStateHtml(desk) {
   const p = desk && desk.pending, b = desk && desk.behind
   if (!p) return b ? `<div class="fidline readstate" data-read-state="behind" data-behind="${b.n}">${esc(W.behindBy(b.n, b.more))}</div>` : ''
+  const stop = p.stopped // 1.5 K-31: the background fold stopped; its code and reason only in the technical details
+  if (stop) return `<div class="fidline readstate" data-read-state="stopped">${esc(W.FOLD_STOPPED[stop.code] || W.FOLD_STOPPED['fold-failed'])}</div>` +
+    techDetailsHtml([[String(stop.code ?? ''), String(stop.reason ?? '')]], { id: 'readtech' })
   const done = Number(p.done) || 0, total = Number(p.total) || 0
   const words = desk.firstPending ? W.readingFirst(total > 0 ? Math.floor((done / total) * 100) : 0) : W.catchingUp(Math.max(0, total - done))
   return `<div class="fidline readstate" data-read-state="${desk.firstPending ? 'reading' : 'catching-up'}">${esc(words)}</div>`

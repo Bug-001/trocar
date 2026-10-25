@@ -228,6 +228,12 @@ export const notRefreshed = (t, why) => `Not refreshed since ${t} · ${why}`
 // 1.2 §会话头 读取状态: the server is still extracting this session (first read: share done; later: calls still to catch up)
 export const readingFirst = (pct) => `Reading this session for the first time · ${pct} %`
 export const catchingUp = (n) => `Catching up · ${n} new calls`
+// 1.5 K-31: the server's background read of this session stopped (the head's pending.stopped), one line per code of
+// src/health/codes.mjs FOLD_STOPS (the board does not import it); the code and the reason are in the technical details
+export const FOLD_STOPPED = Object.freeze({
+  'heap-no-room': 'Reading this session stopped: it does not fit in the memory the reader has',
+  'fold-failed': 'Reading this session stopped on an error',
+})
 // 1.5 K-32: the head drawn is older than what the capture has indexed
 export const behindBy = (n, more) => `${n}${more ? '+' : ''} newer calls are not shown yet`
 // 2.3 §大致页面: the lanes the session head does not list by name
