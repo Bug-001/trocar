@@ -285,7 +285,8 @@ function dirtyOf(s, off, open) {
 
 /** writeFiles(ctx, s) → {packs, open} of the head: brings the session's pack and tail files to the state `s` (the worker's, after a
  *  slice). The first slice of a session in this worker (or of a fold log opened again) re-renders the packs with fold-log lines past
- *  the offset its sidecar says the files stood at, takes the others from their files when whole (else renders them), and carries
+ *  the offset its sidecar says the files stood at, takes the others from their files when whole and written under the axis it has
+ *  (its checkpoint's; else renders them), and carries
  *  on the tails its sidecar's checkpoint vouches for (carried), writing the others afresh; later slices seal the spans the mark passed
  *  (and start the next tail), re-render dirty packs and append to the tails.
  *  A file is written only when its text differs. */
@@ -295,10 +296,11 @@ export function writeFiles(ctx, s) {
   let W = writers.get(log);
   if (W && W.ax === ax && W.f === log.frontier) return W.files;
   const first = !W || W.ax !== ax;
+  let c = null; // the checkpoint of the worker before this one: the axis its files were written under (else unknown: none is kept)
   if (first) {
     const parts = (log.saved && log.saved.parts) || {}, w = parts['w.f'], f = w && w.length ? w[0] : -1;
     // a worker that starts again: the tails the last one wrote, carried on where whole and as its checkpoint says (D71②③)
-    let c = null, tails = null;
+    let tails = null;
     try { c = !W && f >= 0 ? JSON.parse(parts['w.t'][0]) : null; } catch { /* no checkpoint: afresh */ }
     if (c && c.ax === ax) {
       const got = PARTS.map((p, i) => carried(s, fs, tailFile(home, id, p), N, p, c.size?.[i]));
@@ -314,8 +316,9 @@ export function writeFiles(ctx, s) {
     const k = W.packs[n];
     if (k && !d.packs.has(n)) continue;
     const files = PARTS.map((p) => packFile(home, id, n, p));
-    // a pack sealed before this worker and unchanged since: its files, when whole
-    let texts = first && !d.packs.has(n) ? files.map((f) => readText(fs, f, true)) : null;
+    // a pack sealed before this worker and unchanged since, its files written under this axis (a pack's main / rest split is the
+    // axis's): its files, when whole
+    let texts = c && c.ax === ax && !d.packs.has(n) ? files.map((f) => readText(fs, f, true)) : null;
     if (!texts || texts.includes(null)) {
       texts = PARTS.map((p) => render(s, n, p, false, n >= W.open ? W.memo : null, spans).buf);
       texts.forEach((t, i) => { if (k ? k.h[i] !== sha(t) : !same(readText(fs, files[i], true), t)) putFile(fs, files[i], gzipSync(t)); });

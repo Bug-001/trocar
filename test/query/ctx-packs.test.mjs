@@ -31,24 +31,30 @@ const REC = ['id', 'ts_request', 'is_llm_call', 'response']
 const ERR = ['where', 'code', 'reason']
 
 // The worker's background in a process of its own: slices of `ms` (0: one slice that does everything), an idle save at seeded
-// slices, SIGKILL after slice `kill` (0: never).
+// slices, SIGKILL after slice `kill` (0: never). `then`: once folded to the end and saved, the process waits while then() runs
+// (the session grows) and folds on in the same process.
 const DRIVER = `
 await import(${at('../../src/query/named/index.mjs')})
 const { extendSession, saveIndexes } = await import(${at('../../src/query/named/session.mjs')})
 const { rng } = await import(${at('./big-session.mjs')})
-const [home, id, ms, kill, seed] = [process.argv[1], process.argv[2], Number(process.argv[3]), Number(process.argv[4]), Number(process.argv[5])]
+const [home, id, ms, kill, seed, rounds] = [process.argv[1], process.argv[2], Number(process.argv[3]), Number(process.argv[4]), Number(process.argv[5]), Number(process.argv[6])]
 const r = rng(seed)
 let k = 0
-while (await extendSession({ home, writer: true }, id, ms ? 1 + r() * ms : 1e9)) {
-  if (r() < 0.2) saveIndexes()
-  if (++k === kill) process.kill(process.pid, 'SIGKILL')
-  await new Promise((ok) => setImmediate(ok))
+for (let round = 0; round < rounds; round++) {
+  if (round) { process.stdout.write('folded\\n'); await new Promise((ok) => process.stdin.once('data', ok)) }
+  while (await extendSession({ home, writer: true }, id, ms ? 1 + r() * ms : 1e9)) {
+    if (r() < 0.2) saveIndexes()
+    if (++k === kill) process.kill(process.pid, 'SIGKILL')
+    await new Promise((ok) => setImmediate(ok))
+  }
+  saveIndexes()
 }
-saveIndexes()`
-async function drive(home, id, { ms = 0, kill = 0, seed = 1 } = {}) {
-  const c = spawn(process.execPath, ['--require', NO_REAL_OS, '--input-type=module', '-e', DRIVER, home, id, String(ms), String(kill), String(seed)], { stdio: ['ignore', 'pipe', 'pipe'] })
+process.exit(0)`
+async function drive(home, id, { ms = 0, kill = 0, seed = 1, then = null } = {}) {
+  const c = spawn(process.execPath, ['--require', NO_REAL_OS, '--input-type=module', '-e', DRIVER, home, id, String(ms), String(kill), String(seed), then ? '2' : '1'], { stdio: ['pipe', 'pipe', 'pipe'] })
   let err = ''
   c.stderr.on('data', (b) => { err += b })
+  if (then) c.stdout.once('data', async () => { await then(); c.stdin.write('go\n') })
   const [code, signal] = await within(new Promise((ok) => c.on('close', (...a) => ok(a))), 240_000, 'the fold process', () => c.kill('SIGKILL'))
   assert.ok(code === 0 || (kill && signal === 'SIGKILL'), `the fold process failed: ${err.split('\n').slice(0, 6).join(' / ')}`)
 }
@@ -361,4 +367,40 @@ test('3.5 §谁执行它「答案文件」: a worker that starts again continues
   const last = tails()
   assert.ok(last[0].subarray(0, after[0].length).equals(after[0]), 'tail main: begins with the bytes the last worker wrote')
   for (const [i, part] of ['main', 'rest'].entries()) await onePass(part, last[i])
+})
+
+// 3.5 #34, the axis lane changing: a session of one-call subagent lanes and no main lane (subEvery 1, subLen 0: the axis is the
+// lane of the earliest call, 1.3), every call ending up to `late` calls later (seed 35: the call that sorts first arrives at write
+// place 684, past the first seal) — the axis lane changes after a pack was sealed. Folded in slices in one worker, and by a worker
+// that starts again after the change (its checkpoint's axis the old one), every pack file is the one-pass fold's bytes.
+test('3.5 #34 axis: after the axis lane changes past a sealed pack, the same worker and a worker that starts again write the one-pass fold\'s packs', { timeout: 600_000 }, async () => {
+  const AXIS = { wire: 'http', subEvery: 1, subLen: 0, late: 1_500, seed: 35, growth: 1_000 }, ALL = 1_700
+  const grown = (home, upTo) => { const s = bigSession({ home, ...AXIS }); s.append(upTo); return s }
+  const one = { home: homeOf() }, same = { home: homeOf() }, again = { home: homeOf() }
+  one.id = grown(one.home, ALL).id
+  await drive(one.home, one.id)
+  // the same session grown in steps: past the first seal and before the late call that sorts first (a worker folds it and saves its
+  // checkpoint), then to its end — folded on by a worker that started before the change (`same`: the change comes in its slices) or
+  // after it (`again`)
+  const upTo = (s, k) => { while (s.calls - s.held < k) s.append(1); return s }
+  const s1 = upTo(bigSession({ home: same.home, ...AXIS }), PACK_MEMBERS + 40), s2 = upTo(bigSession({ home: again.home, ...AXIS }), PACK_MEMBERS + 40)
+  same.id = s1.id; again.id = s2.id
+  await drive(same.home, same.id, { ms: 6, seed: 2 })
+  await drive(again.home, again.id, { ms: 6, seed: 3 })
+  const was = headOf(again)
+  assert.ok(was.packs.length >= 1, 'a pack was sealed before the axis changed')
+  upTo(s1, PACK_MEMBERS + 80)
+  await drive(same.home, same.id, { ms: 6, seed: 4, then: () => s1.append(ALL - s1.calls) })
+  s2.append(ALL - s2.calls)
+  await drive(again.home, again.id)
+  const want = headOf(one), names = packNames(one)
+  assert.notEqual(want.axis, was.axis, 'the axis lane changed after the seal: else this case shows nothing')
+  assert.ok(names.length >= 2 && want.packs.length * 2 === names.length)
+  const bad = []
+  for (const [how, h] of [['the same worker', same], ['a worker that starts again', again]]) {
+    if (JSON.stringify(packNames(h)) !== JSON.stringify(names)) { bad.push(`${how}: the pack files`); continue }
+    if (JSON.stringify(headOf(h).packs.map((p) => p.tag)) !== JSON.stringify(want.packs.map((p) => p.tag))) bad.push(`${how}: the head's pack tags`)
+    for (const f of names) if (fileText(h, f) !== fileText(one, f)) bad.push(`${how}: ${f}`)
+  }
+  assert.deepEqual(bad, [], 'every pack file and tag is the one-pass fold\'s')
 })
