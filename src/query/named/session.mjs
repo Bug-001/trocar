@@ -459,6 +459,7 @@ async function advance(ctx, id, { budgetMs, request }) {
   for (;;) {
     keeping = true; // a HeapBound retry keeps what it reads again
     const plan = planOf(members, k, store, id);
+    lagging.delete(String(id)); // its state holds the old one: let go before this one grows (headAt keeps the new one)
     const box = { old: states.take(k) };
     const release = hold(plan.work);
     let st;
@@ -505,7 +506,7 @@ export async function extendSession(ctx, id, budgetMs) {
 // for a test.
 const HEAD_MS = Number(process.env.TROCAR_HEAD_MS) || 2000;
 const heads = new Map(); // session id → {t, sig} of its last head write in this worker
-const lagging = new Map(); // session id → {s, home, fs}: the state whose head a slice did not write
+const lagging = new Map(); // session id → {s, home, fs}: the state whose head a slice did not write (advance lets it go before a slice)
 const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated]);
 function headAt(ctx, s, doc = null) {
   if (ctx.writer !== true) return;

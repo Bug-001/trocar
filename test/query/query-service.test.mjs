@@ -665,9 +665,10 @@ test('kick: a kicked fold several times longer than idleMs is folded to its fron
 })
 
 // 3.5 §后台抽取与归约 kick (D71①②): the keeper kicks the record ids of the new calls only, so a session never folded before is folded
-// from its start by a kick of its last record id alone, with no read: its head is tier 1 at its last member, nothing pending.
+// from its start by a kick of its last record id alone, with no read: its head is tier 1 at its last member, nothing pending. The
+// daemon's idle clock outlasts the worker's idle period (worker.mjs IDLE_SLICE_MS), whose save writes a head the last slice left behind.
 test('kick: a never-folded session kicked by its last record id alone is folded to its end with no read (head tier 1, pending null)', { timeout: 180_000 }, async () => {
-  const { home, id, members, log } = await kickedFold({ calls: 600, wire: 'http', idleMs: 1_500, kicked: (ms) => [String(ms.at(-1).id)] })
+  const { home, id, members, log } = await kickedFold({ calls: 600, wire: 'http', idleMs: 4_000, kicked: (ms) => [String(ms.at(-1).id)] })
   assert.equal(lastFrontier(log)?.f, String(members.at(-1).id), 'the fold log stands at the last member')
   const head = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(path.dirname(log), 'head.json.gz'))))
   assert.deepEqual([head.tier, head.pending, head.mark], [1, null, String(members.at(-1).id)], 'the head: tier 1 at the last member, nothing pending')

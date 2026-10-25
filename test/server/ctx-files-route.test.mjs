@@ -54,7 +54,8 @@ function theWorld() {
     const s = bigSession({ home, wire: 'http', growth: 300, subEvery: 4, subLanes: 2, late: 3 })
     s.append(CALLS)
     const forks = []
-    const svc = createQueryService({ home, idleMs: 1500, fork: (...a) => { const c = workerFork(...a); forks.push(c); return c } })
+    // idleMs outlasts the worker's idle period (worker.mjs IDLE_SLICE_MS): its save writes the head the last slice left behind (3.5 答案文件)
+    const svc = createQueryService({ home, idleMs: 4000, fork: (...a) => { const c = workerFork(...a); forks.push(c); return c } })
     const tips = tipTable()
     const { server } = createServer({ home, token: TOKEN, query: svc, tips: tips.of })
     server.listen(0, '127.0.0.1'); await once(server, 'listening')
