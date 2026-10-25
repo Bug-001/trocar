@@ -82,6 +82,8 @@ function keptOf(cols, log, lane, e) {
   return e;
 }
 
+/** weigh(v) → what a kept step or definition holds in the heap, about: its JSON's bytes (every field) and the entry. */
+export const weigh = (v) => 96 + (v ? 2 * JSON.stringify(v).length : 0);
 /** laneStepper(st, key, defs) → the steps of the lane `key` of a session state (sessionState): {L, n, rids, lines, lineAt(i), eventsAt(i),
  *  listAt(i), replyAt(i), step(i, prev), defOf(bid, list), release(keep)}. step(i, prev) = step i with its ops against step `prev`'s list (−1: a
  *  keyframe, every position added), parent = step `prev`'s rid (null for −1); defOf = a definition on the wire, its render joined with
@@ -109,7 +111,7 @@ export function laneStepper(st, key, defs = lru(DEF_BYTES)) {
   const defOf = (bid) => {
     if (defs.has(bid)) return defs.get(bid);
     const d = store.readDef(bid) || null;
-    defs.set(bid, d, 128 + (d ? 2 * ((d.preview || '').length + (d.toolName || '').length + (d.label || '').length + (d.ref || '').length) : 0));
+    defs.set(bid, d, weigh(d));
     return d;
   };
   // a tool_result whose own sniff is plain text takes its render from its tool_use's (render-kind.mjs inheritedRender): the tool_use

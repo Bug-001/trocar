@@ -13,7 +13,7 @@ import { compareStep } from '../view/step-order.mjs';
 import { lru, sessionDir } from './projection.mjs';
 import { isModelCall, sessionFactsOf } from './rows.mjs';
 import { laneOf, placeIn, recOf, FLAG } from './session-doc.mjs';
-import { laneStepper } from './named/lane.mjs';
+import { laneStepper, weigh } from './named/lane.mjs';
 
 /** The answer files' format version (3.5 `v`). */
 export const CTX_V = 2;
@@ -136,10 +136,8 @@ function spansOf(s, sp) {
 // file already. `memo` (the writer's, for the open span): a step and a definition are made once for the tail and the pack it is sealed
 // into; a step is a function of the projection's rows of it and its parent (extracted once each), so the two rids key it. The lane
 // steppers read the store's definitions through it too (by bid), so a list's tool_use is not read again at every slice.
-// what a kept step or definition weighs in the heap, about: its JSON's bytes and the entry
-const weigh = (v) => 96 + (v ? 2 * JSON.stringify(v).length : 0);
-/** The open span's memo holds this much at most (the least recently used out): a fixed cache beside the reduction's (3.5 §内存有界). */
-const MEMO_BYTES = 4 << 20;
+/** The open span's memo holds this much at most (the least recently used out): one of K's fixed caches (3.5 §内存有界). */
+export const MEMO_BYTES = 4 << 20;
 function stepLines(S, key, i, p, wrote, memo = null) {
   const rid = S.rids[i], k = memo && `${rid}\n${p < 0 ? '' : S.rids[p]}`;
   let st = memo && memo.get(k);

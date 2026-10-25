@@ -40,17 +40,17 @@ import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yi
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
-import { filesAt, filesParts, forget, headDoc, headFile, packsOf, tier0Doc, writeFiles, writeHead } from '../ctx-files.mjs';
+import { filesAt, filesParts, forget, headDoc, headFile, packsOf, tier0Doc, writeFiles, writeHead, MEMO_BYTES } from '../ctx-files.mjs';
 
 export const params = Object.freeze(['id', 'since', 'before', 'limit', 'head']);
 
 /** What a session read keeps in the heap per call (the reduction's columns and its lanes' shares, the projection's row and shared
  *  value index, the plan's entry, the kept mark's digest), until a reduction of THIS session measured it (HeapBound below).
- *  Measured 2026-10-22 as what a cold read of a test/query/big-session.mjs live(0.48) session holds more than one of live(0.24),
- *  per call, after a forced GC, the objects each part dominates summed (a heap snapshot's dominator tree; the caches of K, the
- *  segment index rows and the blocks' columns left out): 633 B (the reduction state and its marks 346, the row and shared value
- *  index 203, the plan 84), × 1.25. */
-export const SPINE_PER_ROW = 792;
+ *  Measured 2026-10-25 as what a cold read of a test/query/big-session.mjs live(0.48) session holds more than one of live(0.24),
+ *  per call, after a forced GC, the blocks' columns taken off (test/query/spine-heap.test.mjs's call term), with the answer files'
+ *  writer memo (MEMO_BYTES, a cache of K full at both reads but not to the same heap: its entries' mix differs) held to one entry:
+ *  773 B, the same on 6b999704, × 1.25. */
+export const SPINE_PER_ROW = 966;
 /** What the reduction keeps in the heap per distinct block of the session (its store's slot, its block columns and interned keys:
  *  src/view/reduce.mjs, src/query/projection.mjs): 222 B measured (after a forced GC, in a heap of the worker's size) as what a
  *  read of a test/query/big-session.mjs live(0.004) session holds more with 1,500 fresh tool definitions a call than with none, per
@@ -67,7 +67,7 @@ const WORK_PER_STORED = 4;
 const BOUND_STEPS = 10;
 /** K (3.5 §内存有界): the fixed caches a session read fills and keeps beside its spine, each a byte cap of its own module (the store's
  *  rows and shared values, the reduction's lists and facts, the fold log's lines, the lane ledgers, extraction's lane tails), never given way to the ledger. */
-export const CACHES = STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES + LEDGER_BYTES + TAIL_HEAP;
+export const CACHES = STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES + LEDGER_BYTES + TAIL_HEAP + MEMO_BYTES;
 const STORES = 8;
 
 const stepOrder = (a, b) => compareStep(a.ts, a.id, b.ts, b.id);
