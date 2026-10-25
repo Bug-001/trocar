@@ -106,6 +106,10 @@ export function writeHead(home, id, doc, fs = nodeFs) {
   putFile(fs, file, bytes);
   return true;
 }
+/** writeSkip(home, id, rid, fs): the upgrade queue's marker (3.5 §谁执行它「答案文件」, 4.3 §4「目录」): this session, whose last member
+ *  was `rid`, was folded to its end (or stopped) and still has no tail file. */
+export const skipFile = (home, id) => path.join(sessionDir(home, id), 'upgrade.skip');
+export const writeSkip = (home, id, rid, fs = nodeFs) => putFile(fs, skipFile(home, id), Buffer.from(rid, 'utf8'));
 // A whole file written to a temporary file and renamed over (EPERM / EBUSY, a reader holding it on Windows: tried 3 times).
 function putFile(fs, file, bytes) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
