@@ -249,7 +249,7 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, s
   }
 
   // ── the answer files at mark `at` (3.5 session --head, lane --pack / --tail): members in arrival order, `P` to a pack; a rid lives in
-  // the file of its own arrival span, `main` = the axis (main) lane's lines, `rest` the others. → {head, pack(n, part) → text, open(part) →
+  // the file of its own arrival span, `main` = the axis (main) lane's lines, `rest` the others; every lane head in the open tail. → {head, pack(n, part) → text, open(part) →
   // [[rid | `l:<lane>`, lines]] (the open span's rendering, one entry per rid and per lane head: serveWorld appends the changed ones to its tail)}
   function answerFiles(at = now, P = 64) {
     const d = docAt(at), k = marks.indexOf(at) + 1, sealed = Math.floor(k / P), arrival = new Map(calls.map((c, j) => [c.rid, j]))
@@ -261,7 +261,7 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, s
     const into = (n, part) => fileOf.get(`${n}.${part}`) || fileOf.set(`${n}.${part}`, { rids: [], heads: [] }).get(`${n}.${part}`)
     for (const [key, cs] of d.laneCalls) {
       for (const c of cs) into(spanOf(c.rid), partOf(key)).rids.push(c.rid)
-      into(spanOf(cs.at(-1).rid), partOf(key)).heads.push(d.lanes.get(key))
+      into(sealed, partOf(key)).heads.push(d.lanes.get(key)) // a lane head lives in the open tail only (3.5 `{l}`)
     }
     // the lines of a file: its lane heads, then per rid (step order) its row, the definitions it meets first, its step, its record
     const linesOf = (f) => {

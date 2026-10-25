@@ -276,8 +276,7 @@
     "ledger_next": "WyJzZWVuIiwidGVzdC9hcHAudGVzdC5tanMiXQ"
   },
   "lane_pack": [
-    {"schema": 2, "command": "lane", "ok": true, "errors": [], "v": 1, "id": "s1", "pack": {"n": 0, "part": "main", "s0": 0, "s1": 3}},
-    {"l": {"lane": "20261021T101500Z:12", "kind": "main", "icon": "main", "label": "Main", "task": "", "count": 5, "first": "20261021T101500Z:12", "last": "20261021T101500Z:17", "peakCtx": 2800, "spawnRid": null, "parent": null, "flagged": false}},
+    {"schema": 2, "command": "lane", "ok": true, "errors": [], "v": 2, "id": "s1", "pack": {"n": 0, "part": "main", "s0": 0, "s1": 3}},
     {"c": {"rid": "20261021T101500Z:12", "lane": "20261021T101500Z:12", "ts": "2026-10-21T10:15:12.000Z", "ctx": 1600, "comp": {"system": 250, "user": 1200, "tools": 150}, "usage": {"input": 1600, "output": 80, "cache_read": 1400, "cache_write": 200}, "tools": 0, "status": 200, "rec": {"id": "20261021T101500Z:12", "request": {"model": "claude-x"}}, "wire": {"cacheSemanticsKnown": true, "contextState": "complete", "contextMissing": 0, "reqEncoding": "identity", "labels": []}, "cacheBreak": {"cause": "first", "attribution": "none", "idx": 0, "refRid": null, "gt": null, "firstCall": true}}},
     {"d": {"bid": "UYtn5lJTHF_n4l1rLDtO9g", "fh": "PcnlXQfMWxeSVm6aVeQFGw", "ref": "s1/main#20261021T101500Z:12::1200-1450", "sec": "system", "role": "system", "kind": "text", "ff": "text", "head": {"role": "system", "tag": "text", "label": "text"}, "preview": "You are a coding agent.", "chars": 23, "bytes": 250, "r": {"as": "markdown"}}},
     {"d": {"bid": "u4IDDbwryroyqQvy4geoSg", "fh": "yQTv1uGxhW2sG1KA89QSxg", "ref": "s1/main#20261021T101500Z:12::1450-1600", "sec": "messages", "role": "user", "kind": "text", "ff": "text", "head": {"role": "user", "tag": "text", "label": "text"}, "preview": "Fix the failing test", "chars": 20, "bytes": 150, "r": {"as": "markdown"}}},
@@ -297,7 +296,7 @@
     {"r": {"id": "20261021T101500Z:14", "ts_request": "2026-10-21T10:15:14.000Z", "is_llm_call": true, "response": {"status": 529}}}
   ],
   "lane_tail": [
-    {"schema": 2, "command": "lane", "ok": true, "errors": [], "v": 1, "id": "s1", "tail": {"n": 1, "part": "main", "s0": 3}},
+    {"schema": 2, "command": "lane", "ok": true, "errors": [], "v": 2, "id": "s1", "tail": {"n": 1, "part": "main", "s0": 3}},
     {"l": {"lane": "20261021T101500Z:12", "kind": "main", "icon": "main", "label": "Main", "task": "", "count": 5, "first": "20261021T101500Z:12", "last": "20261021T101500Z:17", "peakCtx": 2800, "spawnRid": null, "parent": null, "flagged": false}},
     {"c": {"rid": "20261021T101500Z:16", "lane": "20261021T101500Z:12", "ts": "2026-10-21T10:15:16.000Z", "ctx": 2600, "comp": {"system": 250, "user": 2200, "tools": 150}, "usage": {"input": 2600, "output": 80, "cache_read": 2400, "cache_write": 200}, "tools": 0, "status": 200, "rec": {"id": "20261021T101500Z:16", "request": {"model": "claude-x"}}, "wire": {"cacheSemanticsKnown": true, "contextState": "complete", "contextMissing": 0, "reqEncoding": "identity", "labels": []}, "cacheBreak": {"cause": "ttl", "attribution": "time", "idx": 2, "refRid": "20261021T101500Z:13", "gt": true, "firstCall": false}, "compaction": true}},
     {"d": {"bid": "UYtn5lJTHF_n4l1rLDtO9g", "fh": "PcnlXQfMWxeSVm6aVeQFGw", "ref": "s1/main#20261021T101500Z:12::1200-1450", "sec": "system", "role": "system", "kind": "text", "ff": "text", "head": {"role": "system", "tag": "text", "label": "text"}, "preview": "You are a coding agent.", "chars": 23, "bytes": 250, "r": {"as": "markdown"}}},

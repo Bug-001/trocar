@@ -3,8 +3,8 @@
 // lane's tip, relanes, gone rows, compactions; `talk` for lists up to 1,400 bids); the renderer below writes its files by the
 // spec's line rules (it is the format, not product code): pack n = the members at write positions [P·n, P·(n+1)), main = the
 // main lane's, rest = the others; `parent` = the previous step of its lane in the same file; defs once per file before the
-// first step using them; a file's `l` lines = the heads of lanes that changed while it was open, as they were when it sealed
-// (the tail: appended at each change). The tail is appended mark by mark: a changed row / step / record is written again, a
+// first step using them; `l` lines only in a tail: every head of its part when it is written whole (at its seal), then the heads that
+// change (appended at each change); a pack has none. The tail is appended mark by mark: a changed row / step / record is written again, a
 // rid that stops being a call of the part gets `g`.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -89,11 +89,11 @@ function session(seed, opts, P) {
     for (let j = lo; j < hi; j++) for (const [k, h] of at(j).heads) if (J(h) !== J(j ? at(j - 1).heads.get(k) : null)) keys.add(k)
     return [...keys].map((k) => at(hi - 1).heads.get(k)).filter((h) => h && partOfHead(h) === part)
   }
+  const allHeads = (j, part) => [...at(j).heads.values()].filter((h) => partOfHead(h) === part)
   const docHead = (o) => ({ schema: 2, command: 'lane', ok: true, errors: [], v: 1, id: 'S', ...o })
   // pack n (part) with its rows and steps as at mark index j
   function pack(n, part, j, fail) {
     const lo = P * n, hi = P * (n + 1), mem = marks.slice(lo, hi), R = render(j, mem, part), out = [docHead({ pack: { n, part, s0: lo, s1: hi } })]
-    for (const h of changedHeads(lo, hi, part)) out.push({ l: h })
     const sent = new Set()
     for (const rid of mem) {
       if (R.c.has(rid)) out.push({ c: R.c.get(rid) })
@@ -117,8 +117,9 @@ function session(seed, opts, P) {
   function tail(n, part, upTo) {
     const lo = P * n, out = [docHead({ tail: { n, part, s0: lo } })], last = new Map(), sent = new Set()
     let ghost = null
+    if (lo > 0) out.push(...allHeads(lo - 1, part).map((h) => ({ l: h }))) // written whole when the mark sealed pack n - 1
     for (let j = lo; j <= upTo; j++) {
-      for (const h of changedHeads(j, j + 1, part)) out.push({ l: h })
+      for (const h of j === 0 ? allHeads(0, part) : changedHeads(j, j + 1, part)) out.push({ l: h })
       const mem = marks.slice(lo, j + 1), R = render(j, mem, part)
       for (const rid of mem) {
         const s = R.s.get(rid)
