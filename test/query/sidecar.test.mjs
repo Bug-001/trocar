@@ -12,7 +12,7 @@ import { runQuery } from '../../src/query/named/index.mjs'
 import { saveIndexes, extendSession } from '../../src/query/named/session.mjs'
 import { openProjection, projectionFile, gcProjections, sessionDir } from '../../src/query/projection.mjs'
 import { openFoldLog, foldLogFile } from '../../src/query/fold-log.mjs'
-import { loadSidecar, FIRST_CHUNK, lineFile } from '../../src/query/line-file.mjs'
+import { loadSidecar, saveSidecar, FIRST_CHUNK, lineFile } from '../../src/query/line-file.mjs'
 
 const SEG = '20261020T164737Z'
 const FIRST = 8, MORE = 6
@@ -258,5 +258,20 @@ test('3.5:42: a cut that keeps what the sidecar covers keeps the sidecar through
     lf.close()
     const kept = loadSidecar({ fs, file: `${base}.ndjson`, endsLine: () => true })
     assert.equal(kept?.head.bytes, at >= covers ? covers : undefined, `sidecar at ${covers}, cut at ${at}${torn ? ' past a torn tail' : ''}`)
+  }
+})
+
+test('4.3 §4 旁索引: a sidecar loads back every part it was saved with, str parts of any length and script included', () => {
+  const dir = tmpDir('trocar-sidecar-'), file = path.join(dir, 'x.ndjson')
+  fs.writeFileSync(file, 'a\n')
+  for (const n of [0, 1, 4095, 4096, 4097, 9000]) {
+    const strs = Array.from({ length: n }, (_, i) => (i % 7 === 3 ? '' : i % 5 === 0 ? `键${i}·é😀` : `k${i}`))
+    const parts = [['s', strs], ['f', Float64Array.from({ length: n }, (_, i) => i / 3)], ['t', ['only']]]
+    saveSidecar({ file, head: { bytes: 2 }, parts })
+    const got = loadSidecar({ file })
+    assert.ok(got, `n=${n}: loads`)
+    assert.deepEqual(got.parts.s, strs, `n=${n}: the str part`)
+    assert.deepEqual([...got.parts.f], [...parts[1][1]], `n=${n}: the f64 part`)
+    assert.deepEqual(got.parts.t, ['only'])
   }
 })

@@ -25,19 +25,26 @@ export const sidecarOf = (file) => file.replace(/(\.\d+)?\.ndjson$/, '') + '.idx
 /** saveSidecar({fs, file, head, parts}): `file`'s sidecar, written to a temp file in its directory then renamed over (0600). `head`
  *  carries `bytes` (the length it covers); `parts`: [[name, a typed array of TYPES or an array of strings (`str`: none holds "\n")]]. */
 export function saveSidecar({ fs = nodeFs, file, head, parts }) {
-  const bufs = [], desc = [];
+  const outs = [], desc = [];
   for (const [name, v] of parts) {
     const type = Array.isArray(v) ? 'str' : Object.keys(TYPES).find((t) => v instanceof TYPES[t]);
     if (!type) throw new TypeError(`sidecar part ${name}: not one of str, ${Object.keys(TYPES).join(', ')}`);
     if (type === 'str' && v.some((x) => String(x).includes('\n'))) throw new TypeError(`sidecar part ${name}: a string holds a newline`);
-    const b = type === 'str' ? Buffer.from(v.join('\n'), 'utf8') : Buffer.from(v.buffer, v.byteOffset, v.byteLength);
-    bufs.push(b); desc.push([name, type, b.length]);
+    const n = type === 'str' ? v.reduce((a, x, i) => a + Buffer.byteLength(x == null ? '' : String(x)) + (i ? 1 : 0), 0) : v.byteLength;
+    outs.push(type === 'str' ? strChunks(v) : [Buffer.from(v.buffer, v.byteOffset, v.byteLength)]); desc.push([name, type, n]);
   }
+  // written part by part, a str part a few thousand strings at a time: neither the whole sidecar nor one part's text (tens of MB on a
+  // long session) is made in memory to write it
   const side = sidecarOf(file), tmp = `${side}.tmp`;
   try {
-    fs.writeFileSync(tmp, Buffer.concat([Buffer.from(`${JSON.stringify({ ...head, v: SIDECAR_V, parts: desc })}\n`), ...bufs]), { mode: 0o600 });
+    const fd = fs.openSync(tmp, 'w', 0o600), put = (b) => { for (let o = 0; o < b.length;) o += fs.writeSync(fd, b, o); };
+    try { put(Buffer.from(`${JSON.stringify({ ...head, v: SIDECAR_V, parts: desc })}\n`)); for (const o of outs) for (const b of o) put(b); } finally { fs.closeSync(fd); }
     fs.renameSync(tmp, side);
   } catch (e) { try { fs.rmSync(tmp, { force: true }); } catch { /* the next save */ } throw e; }
+}
+// the bytes of v.join('\n'), 4,096 strings at a time
+function* strChunks(v) {
+  for (let i = 0; i < v.length; i += 4096) yield Buffer.from(v.slice(i, i + 4096).join('\n') + (i + 4096 < v.length ? '\n' : ''), 'utf8');
 }
 
 // a str part's strings, each decoded on its own: a split of one decoded string would give slices that keep all of it alive while any one
@@ -87,7 +94,9 @@ const held = new FinalizationRegistry(({ fs, fd }) => { try { fs.closeSync(fd); 
 
 /** Plain bytes a sealed part holds at least (4.3 §4 分片, about 8 MiB, SHOULD): seal() cuts at the first line end at or past it. */
 export const PART_BYTES = 8 << 20;
-const BROTLI = { [zlib.constants.BROTLI_PARAM_QUALITY]: 9, [zlib.constants.BROTLI_PARAM_LGWIN]: 24 }; // as src/raw/writer.mjs
+// brotli q9 with the smallest window that covers the frame (10..24 bits): a decoder sizes its ring buffer by the stream's window, so a
+// 256 KiB frame written with a 16 MiB window would take that much memory at each decode for no smaller output (4.3 §4 分片)
+const Z = zlib.constants, brotliOf = (n) => ({ [Z.BROTLI_PARAM_QUALITY]: 9, [Z.BROTLI_PARAM_LGWIN]: Math.min(24, Math.max(10, Math.ceil(Math.log2(n + 16)))), [Z.BROTLI_PARAM_SIZE_HINT]: n });
 const DECODED_BYTES = 32 << 20; // the decoded frames kept, by bytes
 const CHUNK = 1 << 20;
 /** The first read of a scan of the plain tail, doubling up to CHUNK: a caller that stops after the first lines reads about them only. */
@@ -113,7 +122,7 @@ function framed(raw, frameBytes = FRAME_BYTES) {
   for (let a = 0; a < raw.length;) {
     let z = raw.indexOf(10, a + frameBytes - 1) + 1;
     if (z <= 0) z = raw.length;
-    const x = raw.subarray(a, z), y = zlib.brotliCompressSync(x, { params: { ...BROTLI, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: x.length } });
+    const x = raw.subarray(a, z), y = zlib.brotliCompressSync(x, { params: brotliOf(x.length) });
     out.push(y); table.push(y.length, x.length); a = z;
   }
   const t = Buffer.alloc(4 * table.length + 8);
