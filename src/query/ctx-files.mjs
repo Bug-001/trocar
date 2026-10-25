@@ -278,10 +278,10 @@ function dirtyOf(s, off, open) {
     const L = laneOf(cols, key);
     for (let t = j; t < L.rids.length; t++) { const n = spanOf(s, L.rids[t]); if (n >= open) opens.add(L.rids[t]); else if (n >= 0) packs.add(n); }
   }
-  const heads = new Map(V.lanes.map((h) => [h.lane, h]));
-  for (const key of ch.lanes) if (heads.has(key)) lanes.push(heads.get(key));
-  const failed = new Map(V.failed.map((f) => [f.id, f]));
-  for (const rid of log.failures.since(off)) { const n = spanOf(s, rid); if (n >= 0 && n < open) packs.add(n); else if (failed.has(rid)) fails.push(failed.get(rid)); }
+  // the headers of V.lanes by key are the columns' (session-doc.mjs viewOf): no map of every lane is made for the few that changed
+  for (const key of ch.lanes) if (cols.lanes.has(key)) lanes.push(cols.heads.get(key));
+  const failing = log.failures.since(off), failed = failing.length ? new Map(V.failed.map((f) => [f.id, f])) : null;
+  for (const rid of failing) { const n = spanOf(s, rid); if (n >= 0 && n < open) packs.add(n); else if (failed.has(rid)) fails.push(failed.get(rid)); }
   return { packs, opens, gone, lanes, fails, axis: from.get(ax) };
 }
 
