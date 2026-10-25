@@ -236,14 +236,15 @@ function closeState(s) { if (fileLogs.get(s.store) === s) fileLogs.delete(s.stor
 // store → the state that holds its fold log file open (the worker's)
 const fileLogs = new WeakMap();
 /** saveIndexes(): the sidecars (4.3 §4 旁索引) of every open store and its fold log whose file grew since its last save (sidecars()),
- *  after the heads a slice left behind (headAt). The worker calls it once an idle period; the local path's are never written (opened write:false). The decoded frames and lines of
+ *  then the heads a slice left behind (headAt). The worker calls it once an idle period; the local path's are never written (opened write:false). The decoded frames and lines of
  *  the sealed segments are let go too: an idle worker does not hold them (3.5 §冷路径). */
 export function saveIndexes() {
-  for (const { s, home, fs } of lagging.values()) putHead({ home, fs }, s); // the heads behind their session's state (headAt)
-  lagging.clear(); // one that failed is written by the session's next slice
   releaseDecoded();
   releaseTails();
   for (const s of stores.values()) { sidecars(s); try { s.seal(); fileLogs.get(s)?.log.seal(); } catch { /* the next idle period */ } }
+  // then the heads behind their session's state (headAt): the checkpoint first; one that failed is written by the next slice
+  for (const { s, home, fs } of lagging.values()) putHead({ home, fs }, s);
+  lagging.clear();
   releaseParts();
 }
 // The store's sidecar first (the log's names the projection's bytes); then, when it covers every line of the store (none while the
