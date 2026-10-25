@@ -110,6 +110,50 @@ test('4.4 live-poll: a following desk shows each new call after it lands, read b
   } finally { await b.stop() }
 })
 
+// 4.4 §答案文件 代标签: the worker renamed a new render of open.main in (its axis lane changed, a rebuilt fold log) whose line boundary
+// falls at exactly the offset the desk holds; the desk's If-Range read gets the whole new file, so none of the old render stays
+test('4.4 §答案文件: a tail replaced by a render with a line boundary at the held offset leaves the desk holding the new file only', { skip }, async () => {
+  const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
+  try {
+    const { page } = b, w = world(11, { calls: 30 }), f = w.files(w.now, 32), n = f.head.open.n
+    const line = (x) => JSON.stringify(x) + '\n', main = f.head.axis
+    const T = line(f.docHead({ tail: { n, part: 'main', s0: f.head.open.s0 } })) + f.open('main').flatMap(([, ls]) => ls).map(line).join('')
+    // the old render: the new one's lines and one more main step (a keyframe copied under a rid the new render does not have)
+    const steps = f.open('main').filter(([id]) => !id.startsWith('l:')).map(([, ls]) => ls)
+    const key = steps.find((ls) => ls.some((x) => x.s && x.s.lane === main && x.s.parent == null))
+    const lastTs = Math.max(...steps.map((ls) => Date.parse(ls[0].c.ts))), last = Math.max(...steps.flatMap((ls) => ls.filter((x) => x.s && x.s.lane === main).map((x) => x.s.i)))
+    const { cacheBreak, ...row } = key[0].c, ks = key.find((x) => x.s).s
+    let X = line({ c: { ...row, rid: 'old-render', ts: new Date(lastTs + 1000).toISOString() } }) + line({ s: { ...ks, rid: 'old-render', i: last + 1, events: [] } })
+    // the new render past T: one line the desk already holds, so the two files are the same length and the new one ends on a line there
+    let Y = T.split('\n').at(-2) + '\n'
+    const pad = (t, k) => t.slice(0, -1) + ' '.repeat(k - t.length) + '\n', L = Math.max(X.length, Y.length)
+    X = pad(X, L); Y = pad(Y, L)
+    const files = { A: T + X, B: T + Y }
+    assert.equal(files.A.length, files.B.length)
+    let cur = 'A'
+    await serveWorld(page, w, { pack: 32 })
+    await page.route('**/api/d/open.main?**', (route) => {
+      const req = route.request(), buf = Buffer.from(files[cur]), etag = `"${cur}"`, ir = req.headers()['if-range']
+      const r = ir == null || ir === etag ? /^bytes=(\d+)-$/.exec(req.headers().range || '') : null
+      if (!r) return route.fulfill({ status: 200, contentType: 'application/x-ndjson', headers: { etag }, body: buf })
+      if (+r[1] >= buf.length) return route.fulfill({ status: 416, headers: { etag, 'content-range': `bytes */${buf.length}` }, body: '' })
+      route.fulfill({ status: 206, contentType: 'application/x-ndjson', headers: { etag, 'content-range': `bytes ${r[1]}-${buf.length - 1}/${buf.length}` }, body: buf.subarray(+r[1]) })
+    })
+    await page.evaluate(() => { location.hash = '#/replay/p/S' })
+    // the following desk's playhead is on the anchor lane's newest step: its number (data-n) names how many steps the desk holds
+    const at = () => page.evaluate(() => +(document.querySelector('#stepbar .sb-no')?.dataset.n || 0))
+    await page.waitForFunction((m) => +(document.querySelector('#stepbar .sb-no')?.dataset.n || 0) === m, f.head.steps + 1, { timeout: 10000 })
+      .catch(async (e) => { throw new Error(`the old render's extra step is not followed: ${await at()} for ${f.head.steps + 1} (${e.message})`) })
+    const before = b.requests.length
+    cur = 'B'
+    // two poll rounds past the replace
+    for (const t0 = Date.now(); b.requests.slice(before).filter((r) => r.url.startsWith('/api/d/open.main?')).length < 2 && Date.now() - t0 < 10000;) await page.waitForTimeout(100)
+    await page.waitForTimeout(300)
+    assert.equal(await at(), f.head.steps, 'the old render\'s step is gone: the desk holds the new file\'s steps only')
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
 // 2.3 §读失败 · K-29 on the mounted desk: a poll round whose tail reads fail never turns drawn steps into empty frames, and says why in place
 test('2.3 §读失败: a poll round whose tail reads fail keeps the drawn window and says so in the header; the next round reads on', { skip }, async () => {
   const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
