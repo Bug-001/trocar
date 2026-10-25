@@ -71,6 +71,6 @@ for (const opts of ['--max-old-space-size=8192', '--max-old-space-size=64 --max-
   })
 }
 
-test('3.5 §内存有界: the worker\'s environment has no NODE_OPTIONS key in any case and keeps every other key', () => {
-  assert.deepEqual(workerEnv({ Node_Options: 'x', NODE_OPTIONS: 'y', A: '1' }), { A: '1' })
+test('3.5 §内存有界 · ⑤: the worker\'s environment has no NODE_OPTIONS key in any case, keeps every other key and turns the allocator\'s large-block cache off', () => {
+  assert.deepEqual(workerEnv({ Node_Options: 'x', NODE_OPTIONS: 'y', A: '1', MallocLargeCache: '1' }), { A: '1', MallocLargeCache: '0' })
 })
