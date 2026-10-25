@@ -288,7 +288,7 @@ function dirtyOf(s, off, open) {
  *  the offset its sidecar says the files stood at, takes the others from their files when whole and written under the axis it has
  *  (its checkpoint's; else renders them), and carries
  *  on the tails its sidecar's checkpoint vouches for (carried), writing the others afresh; later slices seal the spans the mark passed
- *  (and start the next tail), re-render dirty packs and append to the tails.
+ *  (and start the next tail), re-render the packs whose rows or doc head ([s0, s1]) changed and append to the tails.
  *  A file is written only when its text differs. */
 export function writeFiles(ctx, s) {
   if (s.mark == null) return { packs: [], open: null };
@@ -310,11 +310,10 @@ export function writeFiles(ctx, s) {
     writers.set(log, W);
   }
   const d = dirtyOf(s, W.f, Math.min(W.open, N)), spans = spansOf(s, axisSteps(s, W.sp, first ? 0 : d.axis ?? W.sp.length));
-  if (d.axis !== undefined) for (const p of W.packs) if (p && p.s0 === p.s1) d.packs.add(p.n);
   W.packs.length = Math.min(W.packs.length, N);
   for (let n = 0; n < N; n++) {
     const k = W.packs[n];
-    if (k && !d.packs.has(n)) continue;
+    if (k && !d.packs.has(n) && k.s0 === spans[n][0] && k.s1 === spans[n][1]) continue; // its rows and its doc head as written
     const files = PARTS.map((p) => packFile(home, id, n, p));
     // a pack sealed before this worker and unchanged since, its files written under this axis (a pack's main / rest split is the
     // axis's): its files, when whole
