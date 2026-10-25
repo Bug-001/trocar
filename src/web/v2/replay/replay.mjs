@@ -600,8 +600,9 @@ function openDesk(ctx, route0) {
   const reask = () => { if (s.bodyFail.size && s.playRid != null) { targeted = s.playRid; steps.target(s.playRid) } }
 
   // the open tails (4.4 live-poll): `Range: bytes=<held>-` with `If-Range: <its tag>` on the tail the head names; a 200 is a new file (its
-  // generation changed), applied whole. The whole file when none is held of that n or with no tag (a relayed answer has none), when it is
-  // shorter than what is held (416 naming a smaller size) or when what came is not its lines. → {ok, anchor} | a failed answer
+  // generation changed), applied whole. The whole file when none is held of that n or with no tag, when it is shorter than what is held
+  // (416 naming a smaller size) or when what came is not its lines. A relayed answer carries no generation tag: none, or the named
+  // query's version, which the next If-Range does not match (200 whole). → {ok, anchor} | a failed answer
   const tails = new Map() // part → {n, used, tag}
   async function readTail(part, n, signal, whole = false) {
     const t = tails.get(part), from = whole || !t || t.n !== n || !t.tag ? null : t.used
