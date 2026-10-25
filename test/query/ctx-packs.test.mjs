@@ -13,7 +13,7 @@ import { createQueryService } from '../../src/query/service.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { sessionDir } from '../../src/query/projection.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
-import { PACK_MEMBERS } from '../../src/query/ctx-files.mjs'
+import { PACK_MEMBERS, CTX_V } from '../../src/query/ctx-files.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -156,7 +156,9 @@ test('3.5 #35 A10: a missing head, a truncated pack, a pack of another v and a t
   const hit = ['head.json.gz', 'p0.main.ndjson.gz', 'p1.rest.ndjson.gz', 'open.main.ndjson']
   fs.unlinkSync(file(hit[0]))
   fs.truncateSync(file(hit[1]), Math.floor(fs.statSync(file(hit[1])).size / 2))
-  fs.writeFileSync(file(hit[2]), gzipSync(Buffer.from(fileText(z, hit[2]).replace(/"v":1,/, '"v":999,'))))
+  const other = fileText(z, hit[2]).replace(`"v":${CTX_V},`, '"v":999,')
+  assert.notEqual(other, fileText(z, hit[2]), 'the pack is of another v now')
+  fs.writeFileSync(file(hit[2]), gzipSync(Buffer.from(other)))
   fs.truncateSync(file(hit[3]), fs.statSync(file(hit[3])).size - 3)
   const others = fs.readdirSync(d).filter((f) => /^(p\d+\.|open\.|head\.)/.test(f) && !hit.includes(f))
   assert.ok(others.length >= 5)
@@ -229,6 +231,77 @@ test('3.5 §会话读 contract: every line kind and key is in the closed sets; r
   }
   assert.equal(seen.calls.size, rows.size, 'every call is a step of one file')
   assert.equal(seen.lanes.size, lanes.size, 'every lane has its header in a file')
+})
+
+// The worker following a growing session: one process that, per line `<ms> <seed> <kill>` on stdin, folds to the frontier in slices
+// of up to `ms` (SIGKILL after slice `kill`, 0: never) and answers `done`; the files are written by the same writer across rounds.
+const FOLLOWER = `
+await import(${at('../../src/query/named/index.mjs')})
+const { extendSession, saveIndexes } = await import(${at('../../src/query/named/session.mjs')})
+const { rng } = await import(${at('./big-session.mjs')})
+const home = process.argv[1], id = process.argv[2]
+let buf = ''
+process.stdin.on('data', async (b) => {
+  buf += b
+  for (let i; (i = buf.indexOf('\\n')) >= 0;) {
+    const [ms, seed, kill] = buf.slice(0, i).split(' ').map(Number), r = rng(seed)
+    buf = buf.slice(i + 1)
+    let k = 0
+    while (await extendSession({ home, writer: true }, id, 1 + r() * ms)) { if (r() < 0.1) saveIndexes(); if (++k === kill) process.kill(process.pid, 'SIGKILL') }
+    process.stdout.write('done\\n')
+  }
+})`
+function follower(home, id) {
+  const c = spawn(process.execPath, ['--require', NO_REAL_OS, '--input-type=module', '-e', FOLLOWER, home, id], { stdio: ['pipe', 'pipe', 'pipe'] })
+  let out = '', err = '', exit = null
+  c.stdout.on('data', (b) => { out += b })
+  c.stderr.on('data', (b) => { err += b })
+  const gone = new Promise((ok) => c.on('close', (code, signal) => ok(exit = { code, signal })))
+  return {
+    round: async (ms, seed, kill = 0) => {
+      const n = out.split('\n').length
+      c.stdin.write(`${ms} ${seed} ${kill}\n`)
+      await until(() => exit || out.split('\n').length > n, 240_000, 'a round')
+      if (exit) { assert.ok(kill && exit.signal === 'SIGKILL', `the follower failed: ${err.split('\n').slice(0, 6).join(' / ')}`); return false }
+      return true
+    },
+    stop: () => { c.kill(); return gone },
+  }
+}
+// per lane its last `{l}` line in a file
+const headsIn = (text) => { const m = new Map(); for (const o of linesOf(text).slice(1)) if (o.l) m.set(o.l.lane, JSON.stringify(o.l)); return Object.fromEntries([...m].sort()) }
+
+// 3.5 §会话读 pack / tail (D71②③ · 不变式 2): a session followed as it grows — rounds of a few new calls (late ones among them) each
+// folded in small slices by one process, killed mid-fold twice and resumed by a new one — leaves the head and every pack the bytes of a
+// fresh fold of the same disk, and tails that apply to the local rendering: the same rows and steps, and as the last `{l}` of each
+// lane every lane header of the part.
+test('3.5 §会话读: a session followed as it grows (seals, late calls, kills mid-fold) leaves the bytes of a fresh fold; its tails apply to the local rendering, lane headers included', { timeout: 600_000 }, async () => {
+  const x = await folded('http'), home = homeOf(), s = bigSession({ home, wire: 'http', ...SHAPE }), r = rng(5)
+  s.append(300)
+  let f = follower(home, s.id), round = 0, kills = 0
+  try {
+    while (s.calls < CALLS) {
+      const k = Math.min(CALLS - s.calls, 1 + Math.floor(r() * (r() < 0.2 ? 80 : 12)))
+      s.append(k)
+      if (!(await f.round(4, ++round, k > 40 && kills < 2 ? 2 : 0))) { kills++; f = follower(home, s.id); assert.ok(await f.round(4, ++round)) }
+    }
+  } finally { await f.stop() }
+  assert.equal(kills, 2, 'killed mid-fold twice')
+  assert.ok(fs.readFileSync(s.file).equals(fs.readFileSync(path.join(x.home, 'raw', path.basename(s.file)))), 'the same disk')
+  const y = { home, id: s.id }, names = packNames(x)
+  assert.ok(round > 40 && names.length >= 6, 'many rounds, at least three sealed packs')
+  assert.deepEqual(packNames(y), names)
+  assert.equal(fileText(y, 'head.json.gz'), fileText(x, 'head.json.gz'), 'the heads')
+  for (const n of names) assert.equal(fileText(y, n), fileText(x, n), `${n}: the same bytes`)
+  const lanes = headOf(x).lanes
+  for (const part of ['main', 'rest']) {
+    const local = (await runQuery('lane', { id: y.id, tail: part }, { home: y.home })).$text, file = fileText(y, `open.${part}.ndjson`)
+    assert.deepEqual(applied(file), applied(local), `tail ${part}: the appended file applies to the local rendering`)
+    assert.deepEqual(headsIn(file), headsIn(local), `tail ${part}: the last {l} of each lane is the local rendering's`)
+    for (const n of names.filter((m) => m.endsWith(`.${part}.ndjson.gz`))) assert.deepEqual(headsIn(fileText(y, n)), {}, `${n}: a pack holds no lane header`)
+  }
+  const all = { ...headsIn(fileText(y, 'open.main.ndjson')), ...headsIn(fileText(y, 'open.rest.ndjson')) }
+  for (const h of lanes) assert.equal(all[h.lane], JSON.stringify(h), `lane ${h.lane}: the tails hold the head's lane header`)
 })
 
 // 3.5 §会话读 `{l}` (D71③): lane headers live in the tails only, so a sealed pack is not rewritten when a lane with steps in it goes on
