@@ -237,13 +237,15 @@ function readText(fs, file, gz) {
   } catch { return null; }
 }
 const same = (a, b) => !!a && a.equals(b);
+// a file's text begins with the doc-head line `o`
+const headed = (t, o) => { const h = Buffer.from(textOf([o]), 'utf8'); return !!t && t.subarray(0, h.length).equals(h); };
 // The tail `part` of span n a worker before this one wrote, carried on by appends: whole, of the size its checkpoint says (nothing
 // was written to it after the checkpoint), its doc-head line the one a render now writes (same v, span, s0, errors); the definitions
 // it holds read back from its `{d}` lines. Else (a line that does not parse too) null: it is written afresh (a fresh render is as
 // valid at any time).
 function carried(s, fs, file, n, part, size) {
-  const t = readText(fs, file, false), head = Buffer.from(textOf([docLine(s, n, part, true)]), 'utf8');
-  if (!t || t.length !== size || !t.subarray(0, head.length).equals(head)) return null;
+  const t = readText(fs, file, false);
+  if (!t || t.length !== size || !headed(t, docLine(s, n, part, true))) return null;
   const defs = new Set(), D = Buffer.from('\n{"d":');
   try {
     for (let j = t.indexOf(D); j >= 0; j = t.indexOf(D, j + 1)) defs.add(JSON.parse(t.subarray(j + 1, t.indexOf(10, j + 1)).toString('utf8')).d.bid);
@@ -316,8 +318,8 @@ export function writeFiles(ctx, s) {
     if (k && !d.packs.has(n) && k.s0 === spans[n][0] && k.s1 === spans[n][1]) continue; // its rows and its doc head as written
     const files = PARTS.map((p) => packFile(home, id, n, p));
     // a pack sealed before this worker and unchanged since, its files written under this axis (a pack's main / rest split is the
-    // axis's): its files, when whole
-    let texts = c && c.ax === ax && !d.packs.has(n) ? files.map((f) => readText(fs, f, true)) : null;
+    // axis's): its files, when whole and their doc head ([s0, s1]) the one a render now writes
+    let texts = c && c.ax === ax && !d.packs.has(n) ? files.map((f, i) => { const t = readText(fs, f, true); return headed(t, docLine(s, n, PARTS[i], false, spans[n])) ? t : null; }) : null;
     if (!texts || texts.includes(null)) {
       texts = PARTS.map((p) => render(s, n, p, false, n >= W.open ? W.memo : null, spans).buf);
       texts.forEach((t, i) => { if (k ? k.h[i] !== sha(t) : !same(readText(fs, files[i], true), t)) putFile(fs, files[i], gzipSync(t)); });

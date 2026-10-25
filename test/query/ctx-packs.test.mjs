@@ -404,3 +404,28 @@ test('3.5 #34 axis: after the axis lane changes past a sealed pack, the same wor
   }
   assert.deepEqual(bad, [], 'every pack file and tag is the one-pass fold\'s')
 })
+
+// 3.5 #34, a sealed pack's doc head changing while its rows do not (3.5:45: such a pack is rewritten whole): subagents only, told
+// apart by order (`marked`), two side by side; call 1 ends late (`hold`), past the second seal. Its arrival folds span 0 again in step
+// order and the axis lane (the earliest call's) loses a step there, so pack 1, which holds no axis step, gets another [s0, s1] with
+// the same rows. A worker that starts again on the checkpoint saved before the arrival writes the one-pass fold's packs and head.
+test('3.5 #34 doc head: a pack whose [s0, s1] changed while its rows did not, met by a worker that starts again, is the one-pass fold\'s bytes', { timeout: 600_000 }, async () => {
+  const LATE = 2 * PACK_MEMBERS + 80, ALL = LATE + 40
+  const SHAPE1 = { wire: 'http', subEvery: 1, subLanes: 2, subLen: 30, growth: 600, marked: true, hold: { 1: LATE } }
+  const one = { home: homeOf() }, again = { home: homeOf() }
+  const s1 = bigSession({ home: one.home, ...SHAPE1 }), s2 = bigSession({ home: again.home, ...SHAPE1 })
+  one.id = s1.id; again.id = s2.id
+  s1.append(ALL)
+  await drive(one.home, one.id)
+  s2.append(LATE - 1) // past the second seal, call 1 not written yet
+  await drive(again.home, again.id) // its last idle save is the checkpoint
+  const was = headOf(again)
+  s2.append(ALL - s2.calls)
+  await drive(again.home, again.id)
+  const want = headOf(one), names = packNames(one)
+  assert.ok(was.packs.length >= 2, 'two sealed packs before the late call')
+  assert.ok(want.packs.some((p) => p.n < was.packs.length && (p.s0 !== was.packs[p.n].s0 || p.s1 !== was.packs[p.n].s1)), 'a sealed pack\'s [s0, s1] changed: else this case shows nothing')
+  assert.deepEqual(packNames(again), names)
+  assert.equal(fileText(again, 'head.json.gz'), fileText(one, 'head.json.gz'), 'the heads')
+  for (const f of names) assert.equal(fileText(again, f), fileText(one, f), `${f}: the one-pass fold's bytes`)
+})
