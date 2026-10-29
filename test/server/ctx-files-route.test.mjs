@@ -58,30 +58,30 @@ const get = (port, p, headers = {}) => new Promise((resolve, reject) => {
 })
 const unzip = (b) => gunzipSync(b).toString('utf8')
 
-/** One home: a generated session of CALLS members, the face over the real service; `forks` are the workers it started, in order. */
-let world = null
-function theWorld() {
-  world ||= (async () => {
-    const home = path.join(tmpDir('trocar-dfiles-'), '.trocar')
-    fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
-    const s = bigSession({ home, wire: 'http', growth: 300, subEvery: 4, subLanes: 2, late: 3 })
-    s.append(CALLS)
-    const forks = [], reported = { n: 0 }
-    // idleMs outlasts the worker's idle period (worker.mjs IDLE_SLICE_MS): its save writes the head the last slice left behind (3.5 答案文件)
-    const svc = createQueryService({ home, idleMs: 4000, fork: (...a) => { const c = workerFork(...a); c.on('message', () => { reported.n++ }); forks.push(c); return c } })
-    const tips = tipTable()
-    const { server } = createServer({ home, token: TOKEN, query: svc, tips: tips.of })
-    server.listen(0, '127.0.0.1'); await once(server, 'listening')
-    const port = server.address().port
-    const dir = sessionDir(home, s.id), file = (f) => path.join(dir, f)
-    const d = (f, h = {}, id = s.id) => get(port, `/api/d/${f}?id=${encodeURIComponent(id)}`, withToken(h))
-    const gone = () => forks.every((c) => c.exitCode !== null || c.signalCode !== null)
-    // the worker leaves on its idle clock, which each reported slice starts again: waited for as long as it still reports
-    const left = (what) => whileMoving(gone, () => reported.n, what)
-    return { home, id: s.id, svc, tips, server, port, forks, reported, dir, file, d, gone, left, waits: {}, api: (p, h = {}) => get(port, p, withToken(h)) }
-  })()
-  return world
+/** A home of its own with a generated session of `calls` members (none when 0), the face over the real service; `forks` are the
+ *  workers it started, in order. */
+async function open(calls) {
+  const home = path.join(tmpDir('trocar-dfiles-'), '.trocar')
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  const s = bigSession({ home, wire: 'http', growth: 300, subEvery: 4, subLanes: 2, late: 3 })
+  if (calls) s.append(calls)
+  const forks = [], reported = { n: 0 }
+  // idleMs outlasts the worker's idle period (worker.mjs IDLE_SLICE_MS): its save writes the head the last slice left behind (3.5 答案文件)
+  const svc = createQueryService({ home, idleMs: 4000, fork: (...a) => { const c = workerFork(...a); c.on('message', () => { reported.n++ }); forks.push(c); return c } })
+  const tips = tipTable()
+  const { server } = createServer({ home, token: TOKEN, query: svc, tips: tips.of })
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  const port = server.address().port
+  const dir = sessionDir(home, s.id), file = (f) => path.join(dir, f)
+  const d = (f, h = {}, id = s.id) => get(port, `/api/d/${f}?id=${encodeURIComponent(id)}`, withToken(h))
+  const gone = () => forks.every((c) => c.exitCode !== null || c.signalCode !== null)
+  // the worker leaves on its idle clock, which each reported slice starts again: waited for as long as it still reports
+  const left = (what) => whileMoving(gone, () => reported.n, what)
+  return { home, id: s.id, svc, tips, server, port, forks, reported, dir, file, d, gone, left, waits: {}, api: (p, h = {}) => get(port, p, withToken(h)) }
 }
+/** The home A7 and A14 share: CALLS members. */
+let world = null
+const theWorld = () => (world ||= open(CALLS))
 /** The world once the worker folded the whole session (its head has no `pending`, its tails are written) and left on its idle clock. */
 let foldedWorld = null
 function folded() {
@@ -196,7 +196,7 @@ test('4.4 #15: the HTTP contract — 304 on the tag, Range in and past the tail,
 })
 
 test('4.4 #17 A15: the keeper\'s new model calls of a keyed session ride on x-trocar-tip, the newest 64 oldest first; a synthesized-key session has none', { timeout: 120_000 }, async () => {
-  const w = await theWorld()
+  const w = await open(0) // its own home and service: what A7 and A14 left in theirs is not this case's
   const store = createRecordStore({ root: path.join(w.home, 'collector') })
   const keeper = createIndexKeeper({ home: w.home, kick: w.svc.kick, tips: w.tips.add, debounceMs: 5 })
   store.onRecord((seg, facts) => keeper.wrote(seg, facts))
@@ -226,7 +226,7 @@ test('4.4 #17 A15: the keeper\'s new model calls of a keyed session ride on x-tr
     const r = await w.d('head', gz, synth[0])
     assert.equal(r.status, 200)
     assert.equal(r.headers['x-trocar-tip'], undefined, 'no tip for a synthesized key')
-  } finally { await keeper.stop(); store.close() }
+  } finally { await keeper.stop(); store.close(); w.server.close(); w.svc.stop() }
 })
 
 test('4.4 #17 A9: a daemon started on a home without heads writes a tier-0 head for every session, with no query made', { timeout: 120_000 }, async () => {
