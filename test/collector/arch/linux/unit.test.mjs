@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { unitText, unitPath, wantsLink, removeWantsLinks, systemctl, UNIT_NAME } from '../../../../src/collector/arch/linux/unit.mjs'
+import { unitText, unitPath, wantsLink, removeWantsLinks, systemctl, userUnit, UNIT_NAME } from '../../../../src/collector/arch/linux/unit.mjs'
 import { commandNamed } from '../../../../src/cli/commands.mjs'
 
 test('unit: absolute quoted ExecStart, restart on failure, no capability-stripping directives', () => {
@@ -49,4 +49,17 @@ test('unit: wants/ symlinks left behind are removed; systemctl runs as --user an
     assert.deepEqual(seen, [['systemctl', '--user', 'enable', '--now', UNIT_NAME]])
     assert.deepEqual(systemctl(['enable'], { run: () => ({ status: null, error: new Error('spawn systemctl ENOENT') }) }), { code: null, out: '', err: 'spawn systemctl ENOENT' })
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
+})
+
+// D61 / 1.6 §3.3: `registered()` is the question `on` asks before it writes. The answers are systemctl 255's on Ubuntu 24.04 (measured 2026-10-30):
+// a manager that knows the unit prints its state; with no systemd --user to ask it prints no state, exits 1 and says why on stderr — which is "could not be read", not "not registered".
+test('unit: registered() reads is-enabled — enabled, not-found, switched off, and a systemctl that could not ask any manager', () => {
+  const answering = (status, stdout, stderr = '') => userUnit({ home: '/home/ada', node: '/usr/bin/node', script: '/opt/trocar/bin/trocar.mjs', run: () => ({ status, stdout, stderr }) }).registered()
+  assert.equal(answering(0, 'enabled\n').state, 'present')
+  assert.equal(answering(4, 'not-found\n').state, 'absent')
+  for (const off of ['disabled', 'masked', 'linked']) assert.equal(answering(1, `${off}\n`).state, 'disabled', `${off}: the file is there, the entry is off`)
+  const noBus = answering(1, '', 'Failed to connect to bus: No such file or directory\n')
+  assert.equal(noBus.state, 'unknown', 'no manager answered: nothing was asked')
+  assert.match(noBus.err, /Failed to connect to bus/, 'with systemctl\'s own reason')
+  assert.equal(userUnit({ home: '/home/ada', node: '/usr/bin/node', script: '/x', run: () => ({ status: null, error: new Error('spawn systemctl ENOENT') }) }).registered().state, 'unknown')
 })

@@ -9,7 +9,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { runInstallCli } from '../../src/cli/install.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
-import { fakeIo, fakeSystem, onCtx, seedClaude, snapshot } from './fixtures/on-ctx.mjs'
+import { fakeIo, fakeSystem, onCtx, seedClaude, snapshot, changedFiles } from './fixtures/on-ctx.mjs'
 import { unitPath, UNIT_NAME } from '../../src/collector/arch/linux/unit.mjs'
 
 const certBytes = (home) => Object.fromEntries(Object.entries(snapshot(home)).filter(([k]) => k.startsWith('.trocar/collector/ca/') || k === '.claude/settings.json'))
@@ -100,4 +100,46 @@ test('Linux on after install with a certificate item gone: on leaves it gone, ex
   assert.equal(await runOnCli(['--yes'], onCtx(home, io)), 1, io.text())
   assert.match(io.text(), /"trocar off", then "trocar install" and "trocar on"/, 'the way back is install\'s')
   assert.equal(fs.readFileSync(settings, 'utf8'), '{"model":"x"}\n', 'on did not write the key')
+})
+
+// D61 (1.6 §3.2 step 5 and exit codes, §3.3): a Linux box where systemctl --user has no manager to ask — the answers are systemctl 255's on Ubuntu 24.04
+// with no user bus (measured 2026-10-30): exit 1, no state on stdout, the reason on stderr. The login entry is an install item like any other: not
+// registered = install not finished (exit 1, `autostart.enabled: false`), and `on` refuses with the reason it could not be read. Once a manager answers,
+// the same `trocar install` — the fix line of that refusal — registers it, though every certificate item is already in place, and `on` goes on.
+test('Linux install with no systemd --user: exit 1, the entry not enabled and said as a problem; on refuses it as unreadable; once a manager answers, install again registers it and on goes on', async () => {
+  const home = tmpDir('trocar-install-nobus-')
+  seedClaude(home)
+  let manager = false
+  const sys = fakeSystem({ up: false })
+  const run = (file, args) => {
+    const cmd = [file, ...args].join(' ')
+    if (!manager && file === 'systemctl') { sys.exec.calls.push(cmd); return { status: 1, stdout: '', stderr: 'Failed to connect to bus: No such file or directory' } }
+    return sys.exec.run(file, args)
+  }
+  const ctx = (io) => ({ ...onCtx(home, io, { exec: { run }, daemon: sys.daemon }), platform: 'linux' })
+  const io = fakeIo()
+  assert.equal(await runInstallCli(['--yes', '--json'], ctx(io)), 1, io.text())
+  const r = io.json()
+  assert.deepEqual([r.ok, r.autostart.enabled, r.autostart.entry, r.daemon.state], [false, false, unitPath(home), 'not-running'], io.text())
+  assert.equal(r.problems.length, 1, JSON.stringify(r.problems))
+  assert.match(r.problems[0], /Failed to connect to bus/, 'the reason is systemctl\'s own')
+  assert.ok(!r.notes.includes(r.problems[0]), 'said once, as a problem')
+  const certs = certBytes(home)
+
+  const before = snapshot(home)
+  const refused = fakeIo()
+  assert.equal(await runOnCli(['--yes', '--json'], ctx(refused)), 2, refused.text())
+  assert.equal(refused.json().error.code, 'autostart-missing')
+  assert.match(refused.json().error.message, /could not be read \(.*Failed to connect to bus/, 'unreadable, not "not registered"')
+  assert.match(refused.json().error.message, /Run: trocar install$/)
+  assert.deepEqual(changedFiles(before, snapshot(home)).filter((f) => !f.startsWith('.trocar/collector/flows/')), [], 'not a byte but the refusal\'s own record')
+
+  manager = true
+  const again = fakeIo()
+  assert.equal(await runInstallCli(['--yes'], ctx(again)), 0, again.text())
+  assert.ok(sys.exec.calls.includes(`systemctl --user enable --now ${UNIT_NAME}`), `the second install registers the entry (${sys.exec.calls.join(' | ')})`)
+  assert.deepEqual(certBytes(home), certs, 'and writes no certificate byte')
+  assertEnglish(again.text(), 'the install that registers the entry again')
+  const on = fakeIo()
+  assert.equal(await runOnCli(['--yes'], onCtx(home, on, { exec: { run }, daemon: sys.daemon })), 0, on.text())
 })

@@ -130,7 +130,9 @@ export function autostartBlock({ unit, osName }) {
   if (!unit) return null
   const q = unit.registered()
   if (q.state === 'present') return null
-  return `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : q.state === 'disabled' ? 'is registered but switched off' : `could not be read (${q.err || 'no reason given'})`}: the collector would not start at the next login, and the agents trocar points at its doors would all fail to connect. Nothing was changed. Run: trocar install`
+  // what the next login would undo, in the mode's own terms: the proxy mode points the agents at doors; the driver mode (Linux) writes no agent file, so its agents go direct, uncaptured
+  const after = isModelOs(osName) ? 'and the agents trocar points at its doors would all fail to connect' : 'and capture would stop there while trocar says it is on'
+  return `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : q.state === 'disabled' ? 'is registered but switched off' : `could not be read (${q.err || 'no reason given'})`}: the collector would not start at the next login, ${after}. Nothing was changed. Run: trocar install`
 }
 
 /** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
@@ -368,8 +370,10 @@ function noteRun({ dir, run, final, written, notes, fs, log = null }) {
   return put
 }
 
-// The legacy shape of the install half: what the harness tests, the test rigs and `collector install` (before `on`) call. Never a confirmation, never state.json
-// or a daemon; `already` says every item was in place (no onPlan, nothing written, no event). A unit is enabled with `unit.enable()` (enable --now).
+// The legacy shape of the install half: what the harness tests, the test rigs and `collector install` (before `on`) call. Never a confirmation, never state.json;
+// `already` says every file item was in place (no onPlan, nothing written). A unit is enabled with `unit.enable()` (enable --now) on EVERY run, `already` or not:
+// a login entry switched off or never registered since (no systemd --user at the first install) is what a second install puts back — the fix line of `on`'s
+// autostart-missing (1.6 §3.2 补装, §3.3) — and a registration that fails is a problem of the run (`daemon.problems`, exit 1), never only a note.
 export async function installCollector({ home = os.homedir(), ...opts } = {}) {
   refuseRoot('install')
   const dir = collectorHome(path.join(home, '.trocar'))
@@ -377,21 +381,23 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
     const fs = opts.fs || nodeFs
     const now = opts.now || (() => new Date())
     const plan = await planOn({ home, ...opts })
-    if (installComplete(plan._.prior) && !plan.writing) return { already: true, manifest: plan._.prior, plan: null }
+    // D61: the login registration and the daemon, through the one seam every command uses — so Linux's install probes before it starts too
+    // (拉起不是重启, R8: a daemon someone started by hand is never started a second time), and no `--now` is issued blind.
+    const register = (put, reload) => (opts.unit ? ensureDaemonUp({ osName: opts.osName, dir, env: opts.env || process.env, fs, unit: opts.unit, register: true, reload, put, ...(opts.request ? { request: opts.request } : {}), ...(opts.socketPath ? { socketPath: opts.socketPath } : {}), ...(opts.sleep ? { pause: opts.sleep } : {}) }) : null)
+    if (installComplete(plan._.prior) && !plan.writing) {
+      const entryBefore = opts.unit && typeof opts.unit.registered === 'function' ? opts.unit.registered().state : null // the receipt's head: "nothing was changed" only if the entry was there
+      return { already: true, entryBefore, manifest: plan._.prior, plan: null, daemon: await register(runEventWriter({ dir, base: { run }, notes: [], fs }), false) }
+    }
     const onPlan = opts.onPlan || (() => {})
     onPlan(plan)
     const m = openManifest({ dir, plan, now, fs })
     const { manifest, final, written } = await writeInstall({ dir, home, plan, m, osName: opts.osName, harnesses: opts.harnesses, freePort: opts.freePort || freeEnginePort, now, fs })
     const put = noteRun({ dir, run, final, written, notes: final.notes, fs })
-    // D61: the login registration and the daemon, through the one seam every command uses — so Linux's install probes before it starts too
-    // (拉起不是重启, R8: a daemon someone started by hand is never started a second time), and no `--now` is issued blind.
-    if (opts.unit) {
-      const dmn = await ensureDaemonUp({ osName: opts.osName, dir, env: opts.env || process.env, fs, unit: opts.unit, register: true, reload: written.unit === 'rewrite', put, ...(opts.request ? { request: opts.request } : {}), ...(opts.socketPath ? { socketPath: opts.socketPath } : {}), ...(opts.sleep ? { pause: opts.sleep } : {}) })
-      for (const n of dmn.notes) if (!final.notes.includes(n)) final.notes.push(n)
-    }
+    const dmn = await register(put, written.unit === 'rewrite')
+    if (dmn) for (const n of dmn.notes) if (!final.notes.includes(n) && !dmn.problems.includes(n)) final.notes.push(n) // a problem is said once, as a problem (附录 C.1)
     const counts = { entries: manifest.entries.length, files: manifest.files.filter((f) => f.role === 'trust-file').length, notes: final.notes.length }
-    put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: 'installed', counts, reason: `installed: ${counts.entries} trust entr${counts.entries === 1 ? 'y' : 'ies'} and ${counts.files} trust file(s) written, ${counts.notes} note(s)` })
-    return { already: false, manifest, plan: final }
+    put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: dmn && dmn.problems.length ? 'partial' : 'installed', counts, reason: `installed: ${counts.entries} trust entr${counts.entries === 1 ? 'y' : 'ies'} and ${counts.files} trust file(s) written, ${counts.notes} note(s)${dmn && dmn.problems.length ? `; not done: ${dmn.problems.join('; ')}` : ''}` })
+    return { already: false, manifest, plan: final, daemon: dmn }
   })
 }
 
@@ -635,7 +641,7 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
           const entry = osName === 'win32' ? 'the scheduled task \\trocar\\collector' : osName === 'darwin' ? `the LaunchAgent ${unit.path}` : null
           unitFailed = entry // a systemd line is Linux's alone: a Mac or Windows user told to run `systemctl --user` has been handed nothing (tested on Windows 2026-10-11 and macOS 2026-10-18)
             ? `${entry} was not registered or run (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}"${daemonLog ? `, and ${daemonLog} says why it did not start` : ''}`
-            : `${unit.path} is written but "systemctl --user enable${was.up ? '' : ' --now'}" failed (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
+            : `${unit.path} is written but "systemctl --user enable${was.up ? '' : ' --now'}" failed (${rr.err || `exit ${rr.code}`}); trocar on needs this login entry, so run trocar install again in a login session where systemd --user runs` // a daemon started by hand is no way round it: `on` asks the entry first (1.6 §3.3)
           put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed })
         }
         notes.push(unitFailed); problems.push(unitFailed)

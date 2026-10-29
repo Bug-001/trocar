@@ -191,15 +191,20 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   if (!done) return EXIT.incomplete
   if (done.failed) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, notes: [done.failed] }, null, 2)); else io.err(`trocar install: ${done.failed}`); return EXIT.incomplete }
   const { stdl, r, board, written } = done
-  const receipt = { ...newReceipt('install'), ok: !board, ...(board ? { pending: [board] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...new Set([...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created), ...(written ? [ingressPath] : [])])], standalone: standalonePath(home), planned: planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes: r.plan ? r.plan.notes : [] }
+  // D61 (1.6 §3.2 step 5): the login entry is an item of the install like any other — one that could not be registered is a problem and exit 1, never only a note
+  const dmn = r.daemon || { up: false, started: false, problems: [], unitFailed: null }
+  const problems = dmn.problems
+  const receipt = { ...newReceipt('install'), ok: !board && !problems.length, ...(problems.length ? { problems } : {}), ...(board ? { pending: [board] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...new Set([...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created), ...(written ? [ingressPath] : [])])], standalone: standalonePath(home), planned: planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes: r.plan ? r.plan.notes : [],
+    ...(r.daemon ? { daemon: { state: dmn.up ? 'running' : 'not-running', started: dmn.started }, autostart: { entry: args.unit.path, enabled: !dmn.unitFailed } } : {}) }
   if (json) io.out(JSON.stringify(receipt, null, 2))
-  else io.out(fit([r.already ? 'Already installed. Nothing was changed.' : "Installed. trocar's certificates are in place.",
+  else io.out(fit([problems.length ? 'trocar install did not finish. What is missing is below.' : r.already && r.entryBefore && r.entryBefore !== 'present' ? 'Installed. The certificates were in place; the login entry is registered again.' : r.already ? 'Already installed. Nothing was changed.' : "Installed. trocar's certificates are in place.",
     ...(r.already ? [] : changeLines(receipt, { home })),
     ...receipt.notes.map((n) => `Note: ${n}`),
     ...(board ? [`Not done yet: the board's port is pending (${board.reason}). Run again: trocar install`] : []),
-    'Next: trocar on',
+    ...problems.map((p) => `Problem: ${p}`),
+    ...(problems.length ? [] : ['Next: trocar on']), // on refuses without the login entry (1.6 §3.3): it is no next step until install has finished
     `If trocar itself breaks: ${tilde(standalonePath(home), home)}`]).join('\n'))
-  return board ? EXIT.incomplete : EXIT.ok
+  return board || problems.length ? EXIT.incomplete : EXIT.ok
 }
 
 // Set up (only): a row of the plan is one of that harness's forms whose own carrier install has not placed (setupOf's `missing`, the judgement
