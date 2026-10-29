@@ -4,7 +4,7 @@
 // (0.1 §2). test/cli/harness-names.test.mjs holds it equal to the descriptors loadHarnesses() finds. Imports nothing.
 
 /** The code ids, in 1.6 §1.6's order (the order the commands list and resolve them). */
-export const HARNESS_IDS = Object.freeze(['claude-code', 'codex', 'opencode', 'kimi-code', 'deepseek-dsh', 'hermes', 'z-code'])
+export const HARNESS_IDS = Object.freeze(['claude-code', 'codex', 'opencode', 'kimi-code', 'deepseek-dsh', 'hermes', 'z-code', 'pi'])
 
 /** Short names accepted as input. */
 export const NAME_ALIASES = Object.freeze({ claude: 'claude-code', dsh: 'deepseek-dsh', kimi: 'kimi-code', zcode: 'z-code' })

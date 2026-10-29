@@ -34,6 +34,7 @@ export const MARKER_PATHS = Object.freeze({
   'deepseek-dsh': [{ how: 'line', file: '.dsh/cordis.patch.yml', yaml: true }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/index.js' }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/package.json', exact: PLUGIN_MANIFEST }],
   'kimi-code': [...RC_FILES.map((f) => ({ how: 'line', file: f })), { how: 'owned-file', file: '.trocar/collector/bin/kimi' }],
   'z-code': [{ how: 'json-value', file: '.zcode/cli/config.json', keys: ['network', 'caCertFile'] }],
+  pi: [{ how: 'owned-file', file: '.pi/agent/extensions/trocar-ca.js' }],
 })
 
 const BLOCK_OPEN = `# >>> ${SENTINEL} >>>`
