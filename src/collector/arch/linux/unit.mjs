@@ -75,7 +75,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, sp
     registered: () => {
       const r = sc(['is-enabled', UNIT_NAME])
       if (r.code === 0 && r.out !== 'enabled-runtime') return { state: 'present' }
-      if (r.code === null || !r.out) return { state: 'unknown', err: `systemctl --user is-enabled ${r.code === null ? 'did not run' : 'could not ask systemd --user'} (${r.err || 'no reason given'})` }
+      if (r.code === null || !r.out) return { state: 'unknown', err: `${r.code === null ? 'systemctl did not run' : 'no systemd --user answered'}: ${r.err || 'no reason given'}` }
       return { state: r.out === 'not-found' ? 'absent' : 'disabled' }
     },
     start: (carry = null) => startDirect(carry),

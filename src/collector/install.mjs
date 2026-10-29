@@ -131,7 +131,7 @@ export function autostartBlock({ unit, osName }) {
   const q = unit.registered()
   if (q.state === 'present') return null
   // what the next login would undo, in the mode's own terms: the proxy mode points the agents at doors; the driver mode (Linux) writes no agent file, so its agents go direct, uncaptured
-  const after = isModelOs(osName) ? 'and the agents trocar points at its doors would all fail to connect' : 'and capture would stop there while trocar says it is on'
+  const after = isModelOs(osName) ? 'and the agents trocar points at its doors would all fail to connect' : 'and capture would stop then while trocar still says it is on'
   return `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : q.state === 'disabled' ? 'is registered but switched off' : `could not be read (${q.err || 'no reason given'})`}: the collector would not start at the next login, ${after}. Nothing was changed. Run: trocar install`
 }
 
