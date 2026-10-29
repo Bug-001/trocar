@@ -17,6 +17,10 @@ const mac = (exe, args) => ({ os: 'darwin', exe, argv: [exe, ...args], env: null
 const lin = (exe, argv, env = new Map()) => ({ os: 'linux', exe, argv, env })
 const said = (m) => [m.agent, m.reason, m.harness ?? null]
 
+test('every harness has at least one seed: its name list is tested on a real process shape, not only on its own examples', () => {
+  assert.deepEqual(ALL.map((d) => d.name).filter((n) => !SEEDS.some((s) => s.harness === n)), [])
+})
+
 test('R1 / W3: every seed, and every install variant of it (prefix, editor dir, case, .exe, (deleted), spaces and CJK, symlinked argv[0], Windows quotes and slashes), is the harness it IS — null: no agent', () => {
   const wrong = []
   let n = 0
