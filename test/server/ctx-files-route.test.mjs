@@ -82,7 +82,9 @@ async function open(calls) {
 /** The home A7 and A14 share: CALLS members. */
 let world = null
 const theWorld = () => (world ||= open(CALLS))
-/** The world once the worker folded the whole session (its head has no `pending`, its tails are written) and left on its idle clock. */
+/** The world once the worker folded the whole session (its head has no `pending`, its tails are written) and left on its idle clock.
+ *  A7 and A14 have no fixed timeout: the worker runs at low priority (worker.mjs lowerPriority), so under the full suite's load its
+ *  fold takes as long as it is given CPU; every wait on it lasts while it reports progress and fails after STALL ms without. */
 let foldedWorld = null
 function folded() {
   foldedWorld ||= (async () => {
@@ -102,7 +104,7 @@ function folded() {
 }
 test.after(async () => { if (world) { const w = await world; w.server.close(); w.svc.stop() } })
 
-test('4.4 #15 A7: /api/d/head, every pack and both tails are the files\' bytes, and the worker\'s own answers of the same queries', { timeout: 420_000 }, async (t) => {
+test('4.4 #15 A7: /api/d/head, every pack and both tails are the files\' bytes, and the worker\'s own answers of the same queries', async (t) => {
   const w = await folded()
   t.diagnostic(JSON.stringify(w.waits))
   const head = JSON.parse(unzip(fs.readFileSync(w.file('head.json.gz'))))
@@ -131,7 +133,7 @@ test('4.4 #15 A7: /api/d/head, every pack and both tails are the files\' bytes, 
   }
 })
 
-test('4.4 #16 A14: with the files there a read forks nothing; with the head gone one read forks the worker, which writes the file it answers', { timeout: 420_000 }, async (t) => {
+test('4.4 #16 A14: with the files there a read forks nothing; with the head gone one read forks the worker, which writes the file it answers', async (t) => {
   const w = await folded()
   t.diagnostic(JSON.stringify({ ...w.waits, again: await w.left('no worker is running') }))
   const n0 = w.forks.length
