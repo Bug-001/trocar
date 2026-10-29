@@ -27,7 +27,7 @@ import { hostSetOf } from '../host-agent.mjs'
 import { CODE } from '../codes.mjs'
 import { agentTrustSet, createAgentTrust, CERT_VARS } from './upstream-trust.mjs'
 import { redactProxyUrl } from '../../../netenv/redact.mjs'
-import { readProxySetting } from '../../../netenv/adopt.mjs'
+import { proxyFileValues } from '../../../netenv/adopt.mjs'
 
 const untracked = (reason) => ({ not_captured: 'untracked', reason })
 const split = (g) => { const i = String(g).lastIndexOf(':'); return { harness: g.slice(0, i), routeId: g.slice(i + 1) } }
@@ -36,13 +36,14 @@ const ISSUER_CODES = new Set([CODE.certIntermediateUnavailable, CODE.certKeyMiss
 const CACHE_MAX = 4096 // every per-process map is bounded, the oldest entry goes first (the arch's caches' bound)
 const keep = (m, k, v) => { m.delete(k); m.set(k, v); if (m.size > CACHE_MAX) m.delete(m.keys().next().value) }
 const PID_KEY = /^(\d+)(?:@(.+))?$/ // a negative-cache key of a process: "<pid>@<start>", or "<pid>" when the start time was not read
-/** Every env name a descriptor's proxy-mode data reads (trust sources, blockers, directory overrides), its proxy variables, the hook's and the
+/** Every env name a descriptor's proxy-mode data reads (trust sources, blockers, directory overrides), its proxy variables and the variables that move its proxy files, the hook's and the
  *  certificate variables the union reads (⑭, CERT_VARS): what
  *  `proc.envOf` is asked for — never the whole environment (4.9 §5.2). */
 function envNamesOf(desc) {
   const out = new Set([...((desc.proxy && desc.proxy.env) || []), HOOK_ENV, ...CERT_VARS])
   const walk = (v) => { if (Array.isArray(v)) v.forEach(walk); else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) (k === 'env' && typeof x === 'string' ? out.add(x) : walk(x)) }
   walk(desc.proxyMode)
+  for (const f of (desc.proxy && desc.proxy.files) || []) if (typeof f.env === 'string') out.add(f.env)
   return [...out]
 }
 
@@ -116,12 +117,15 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   const doorOf = (d) => ({ g: d.g, harness: d.harness, forms: formsOn(byName.get(d.harness), d.routeId) })
   const self = ownSid ? { sid: ownSid } : { uid: ownUid }
 
-  /** The proxy a harness's own files (`proxy.files`) hold, the paths resolved with the process's env, read through ctx (P7 step 3's fill); throws when unread. */
-  const proxyFileOf = (desc) => (env) => {
-    const fsLike = { readFileSync: (p) => ctx.readFile(p), statSync: () => ({ mtimeMs: 0 }) }
-    const s = readProxySetting(desc, { home: ctx.home, env: env instanceof Map ? Object.fromEntries(env) : env || {}, fs: fsLike, vars: false })
-    if (s.unknown) throw new Error(s.unknown.reason)
-    return s.raw ?? null
+  /** What a harness's own files (`proxy.files`) set for one process life (P7 step 3), the paths resolved with its env, read through ctx: once per pid +
+   *  start, as the agent applied them at start (a later edit is not the agent's); an unread answer, or one of an unknown start, at most once a second (D38). */
+  const fcache = new Map(), fsLike = { readFileSync: (p) => ctx.readFile(p), statSync: () => ({ mtimeMs: 0 }) }
+  const proxyFileOf = (desc, pid, start) => (env) => {
+    const k = `${pid}\0${start ?? ''}\0${desc.name}`, hit = fcache.get(k)
+    if (hit && (hit.at == null || clock() - hit.at <= 1000)) return hit.answer
+    const answer = proxyFileValues(desc, { home: ctx.home, env: env instanceof Map ? Object.fromEntries(env) : env || {}, fs: fsLike })
+    keep(fcache, k, { at: answer.unknown || start == null ? clock() : null, answer })
+    return answer
   }
   const priorOf = (d) => { const e = itemsOfPhase(manifest(), 'on').find((i) => i.harness === d.harness && i.route === d.routeId && typeof i.prior_value === 'string'); return e ? e.prior_value : null }
 
@@ -197,11 +201,11 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const allowed = own.length > 0 && own.every((f) => sendsHeader(byName.get(id.agent), f)) // only a form whose hook sends the header (P7 step 1)
     const ports = [...doors.values()].map((x) => x.port)
     const isTrocarDoor = (v) => isTrocarDoorUrl(v, { ports })
-    const up = d.auth ? await upstreamFor({ desc, facts: pf, recordedPrior: priorOf(d), systemProxy: systemProxy(), header, headerAllowed: allowed, isTrocarDoor, proxyFile: proxyFileOf(desc) })
+    const up = d.auth ? await upstreamFor({ desc, facts: pf, recordedPrior: priorOf(d), systemProxy: systemProxy(), header, headerAllowed: allowed, isTrocarDoor, proxyFile: proxyFileOf(desc, id.pid, (id.facts && id.facts.startedAt) ?? null) })
       : await pacLeg({ systemProxy: systemProxy(), header, isTrocarDoor }) // an auth:false door is a PAC's: it dials the own leg that PAC names (P10)
     if (known) answered(d.g, id.pid, up)
     if ((up.notes || []).some((n) => n.note === 'header-ignored')) fail(CODE.upstreamHeaderIgnored, `pid ${id.pid ?? '?'} sent X-Trocar-Upstream at the ${d.g} door, but no hook of its form sends it: ignored (its value is not recorded)`, { door: d.g, pid: id.pid })
-    if (up.code && once(`${up.code}\0${id.pid}\0${(id.facts && id.facts.startedAt) ?? ''}\0${d.g}`)) { fail(up.code, `the proxy pid ${id.pid ?? '?'} would have used without trocar could not be recovered; the door dials ${up.url ? 'the system proxy' : 'direct'}`, { door: d.g, pid: id.pid }) }
+    if (up.code && once(`${up.code}\0${id.pid}\0${(id.facts && id.facts.startedAt) ?? ''}\0${d.g}`)) { fail(up.code, `the proxy pid ${id.pid ?? '?'} would have used without trocar could not be recovered; the door dials ${up.url ? 'the system proxy' : 'direct'}${up.detail ? ` (${up.detail})` : ''}`, { door: d.g, pid: id.pid }) }
     let dial = { kind: 'direct' }
     if (up.url != null && !bypassHit(up.bypass, target.address)) {
       dial = proxyOf(up.url)

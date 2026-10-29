@@ -17,12 +17,15 @@
 //                 ignored and `notes` says so (`{ note: 'header-ignored' }`; a skipped door is `{ note: 'door-skipped', source }`; never a value: the caller records them)
 //   isTrocarDoor  (text) → bool; default `isTrocarDoorUrl`. Applied at EVERY source: a door is never an upstream.
 //   transport     'http' | 'ws': which half of `proxy.systemProxy` says whether the agent follows the system proxy
-//   proxyFile     (env) → the proxy text the agent's own files (`proxy.files`, paths resolved with this env) hold, or null; throws when one could not be read
+//   proxyFile     (env) → what the agent's own files (`proxy.files`, paths resolved with this env) set: { values: [{ name, value, applies }] } (adopt.mjs
+//                 proxyFileValues) | { unknown: { reason, detail } }; called at most once per answer, and only when a file can change it
 //
-// Steps: 1 hook (the header when allowed, then TROCAR_PRIOR_PROXY; 'none' = no proxy) · 2 config-prior · 3 process-env (the agent's order; a door
-// value walks parentOf upward; a process with no proxy variable fills it from its own proxy file at start, as the agent does: a reader of the launch
-// environment cannot see that fill) · 4 system-proxy (followers only; with its bypass) · 5 direct. Step 3 that cannot be recovered (the env unreadable,
-// the parent gone after a door) is `unknown`: the system proxy if there is one (follower or not), else direct, with code `prior-proxy-unknown`.
+// Steps: 1 hook (the header when allowed, then TROCAR_PRIOR_PROXY; 'none' = no proxy) · 2 config-prior · 3 process-env (the agent's order, name by name:
+// an `override` file's value, else the environment's, else a `fill` file's — the agent applies its files at start, in process, where a reader of the
+// launch environment cannot see it; a door value in a file is skipped file by file, one in the environment walks parentOf upward, whose processes are
+// read by their environment alone) · 4 system-proxy (followers only; with its bypass) · 5 direct. Step 3 that cannot be recovered (the env or a file it
+// needs unreadable, the parent gone after a door) is `unknown`: the system proxy if there is one (follower or not), else direct, with code
+// `prior-proxy-unknown` (and the unread file's `detail`).
 import { CODE } from '../codes.mjs'
 
 export const HOOK_ENV = 'TROCAR_PRIOR_PROXY'
@@ -85,7 +88,7 @@ export async function upstreamFor({ desc, form = null, facts = null, recordedPri
     if (door(sys.url)) { notes.push({ note: 'door-skipped', source: 'system-proxy' }); return null }
     return out(source, sys.url, { bypass: sys.bypass, ...wpad, ...extra })
   }
-  const unknown = () => viaSystem('unknown', { code: CODE.priorProxyUnknown }) ?? out('unknown', null, { code: CODE.priorProxyUnknown })
+  const unknown = (why = null) => { const x = { code: CODE.priorProxyUnknown, ...(why ? { detail: `${why.reason}: ${why.detail}` } : {}) }; return viaSystem('unknown', x) ?? out('unknown', null, x) }
 
   // 1. hook: per process, so only with an identity
   const h = textOf(header)
@@ -99,22 +102,29 @@ export async function upstreamFor({ desc, form = null, facts = null, recordedPri
   const prior = textOf(recordedPrior)
   if (prior !== null) { const r = take('config-prior', prior); if (r) return r }
 
-  // 3. process-env: the first variable the agent reads that is set; a door walks up to the process that started it
+  // 3. process-env: the first name the agent reads that has a value once its own files are applied; a door in the environment walks up to the process that started it
   if (facts) {
     let p = facts
     for (let depth = 0; ; depth++) {
       if (!p || p.env == null) return unknown()
-      const name = desc.proxy.env.find((n) => textOf(envGet(p.env, n)) !== null)
-      if (name === undefined) { // this process has no proxy variable: the agent fills it from its own proxy file, if that holds one; else the user had none
-        if (depth > 0 || !proxyFile) break
-        let v
-        try { v = textOf(proxyFile(p.env)) } catch { return unknown() } // an unread file may hold the value that wins (D38)
-        const r = v === null ? null : take('process-env', v)
-        if (r) return r
-        break
+      let files, walk = false
+      /** The first non-door value `applies` files give `name` (a door: the next file), an unknown when a file is unread (it may hold the value that wins, D38), else null. */
+      const fromFiles = (name, applies) => {
+        if (depth > 0 || !proxyFile || !(desc.proxy.files || []).some((f) => f.applies === applies)) return null
+        files ??= proxyFile(p.env) || { values: [] }
+        if (files.unknown) return unknown(files.unknown)
+        for (const x of files.values) if (x.name === name && x.applies === applies) { const v = textOf(x.value), r = v === null ? null : take('process-env', v); if (r) return r }
+        return null
       }
-      const r = take('process-env', textOf(envGet(p.env, name)))
-      if (r) return r
+      for (const name of desc.proxy.env) {
+        const o = fromFiles(name, 'override')
+        if (o) return o
+        const v = textOf(envGet(p.env, name))
+        if (v !== null) { const r = take('process-env', v); if (r) return r; walk = true; break }
+        const f = fromFiles(name, 'fill')
+        if (f) return f
+      }
+      if (!walk) break // no name has a value: the user had none
       if (depth >= MAX_DEPTH || typeof p.parentOf !== 'function') return unknown()
       try { p = await p.parentOf() } catch { return unknown() }
     }

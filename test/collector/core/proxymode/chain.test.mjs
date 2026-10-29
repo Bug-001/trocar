@@ -170,26 +170,36 @@ test('CM20 identity failed: the hook (env or header) and the process env are not
   await assert.rejects(upstreamFor({ desc: {} }), TypeError)
 })
 
-// P7 step 3's fill: an agent fills a proxy name its environment lacks from its own proxy file at start (pi's settings.json `httpProxy`, a dotenv
-// read). A launch-environment reader (macOS) never sees that fill, so the chain reads the file; where the hook's TROCAR_PRIOR_PROXY is readable
-// (the PEB) step 1 answers first with what the hook saw after the fill. Axes: {env, file, both, neither} × {hook readable, launch env only} ×
-// {file unread, file a door}, over every descriptor that reads a proxy file. Invariant: the environment wins, the file fills, a door is never dialled.
-test('CM20 step 3 fill: env × proxy file × hook readable; the environment wins, the file fills what it lacks, an unread file is unknown', async () => {
-  const FILE = 'http://file.corp:8080'
+// P7 step 3 with the agent's own proxy files: name by name in the agent's order, an `override` file's value, else the environment's, else a `fill` file's
+// (the agent applies them at start, in process, where a launch-environment reader cannot see it). Generated over every descriptor that reads a proxy file,
+// under both semantics: {no name, each name} set in the env × {no name, each name} set by the file, as a value, a door, a door then a later value, or
+// unread × hook readable or not. The oracle is the rule as written; a needed unread file is unknown and says which file, a door is never dialled.
+test('CM20 step 3 files: per name, override over the env, fill under it, a door skipped file by file, an unread needed file unknown', async () => {
+  const FILE = 'http://file.corp:8080', LATER = 'http://later.corp:8080'
   let n = 0
-  for (const d of descs.filter((x) => x.proxy.files.length && x.proxy.env.length)) for (const name of d.proxy.env) {
-    for (const env of [false, true]) for (const file of [null, FILE, DOOR, 'unread']) for (const hook of [false, true]) {
-      const seen = env ? CORP : file === FILE ? FILE : null // what the agent's own environment holds after its start-time fill
-      const e = { ...(env ? { [name]: CORP } : {}), ...(hook ? { [HOOK_ENV]: seen ?? 'none' } : {}) }
-      const proxyFile = (pe) => { assert.equal(pe, e, 'the file path is resolved with the process\'s own env'); if (file === 'unread') throw new Error('EACCES'); return file }
+  for (const base of descs.filter((x) => x.proxy.files.length)) for (const applies of ['override', 'fill']) {
+    const d = { ...base, proxy: { ...base.proxy, files: base.proxy.files.map((f) => ({ ...f, applies })) } }
+    const N = d.proxy.env
+    for (const envName of [null, ...N]) for (const fileName of [null, ...N]) for (const kind of ['value', 'door', 'door-then-value', 'unread']) for (const hook of [false, true]) {
+      if (fileName === null && kind !== 'value') continue
+      const fileOf = (name) => (name !== fileName ? null : kind === 'value' ? FILE : kind === 'door-then-value' ? LATER : kind === 'unread' ? FILE : null) // what the agent got from its files
+      const envOf = (name) => (name === envName ? CORP : null)
+      const effective = (name) => (applies === 'override' ? fileOf(name) ?? envOf(name) : envOf(name) ?? fileOf(name))
+      const seenName = N.find((x) => effective(x) !== null), seen = seenName === undefined ? null : effective(seenName)
+      const e = { ...(envName ? { [envName]: CORP } : {}), ...(hook ? { [HOOK_ENV]: seen ?? 'none' } : {}) }
+      const values = fileName === null ? [] : kind === 'value' ? [{ name: fileName, value: FILE, applies }] : kind === 'door' ? [{ name: fileName, value: DOOR, applies }] : [{ name: fileName, value: DOOR, applies }, { name: fileName, value: LATER, applies }]
+      const proxyFile = (pe) => { assert.equal(pe, e, 'the file path is resolved with the process\'s own env'); return kind === 'unread' ? { unknown: { reason: 'denied', detail: '/f/.env: EACCES' } } : { values } }
       const r = await upstreamFor({ desc: d, facts: facts(e), proxyFile, isTrocarDoor: isDoor })
-      const want = hook ? { source: 'hook', url: seen } : env ? { source: 'process-env', url: CORP } : file === 'unread' ? { source: 'unknown', url: null } : { source: seen ? 'process-env' : 'direct', url: seen }
-      assert.deepEqual({ source: r.source, url: r.url }, want, `${d.name} ${name} env=${env} file=${file} hook=${hook}`)
-      assert.notEqual(r.url, DOOR)
+      const needsFile = applies === 'override' || N[0] !== envName // a fill file is read only for a name the env lacks, before the env's
+      const want = hook ? { source: 'hook', url: seen } : kind === 'unread' && needsFile ? { source: 'unknown', url: null } : { source: seen ? 'process-env' : 'direct', url: seen }
+      const label = `${d.name} ${applies} env=${envName} file=${fileName}:${kind} hook=${hook}`
+      assert.deepEqual({ source: r.source, url: r.url }, want, label)
+      if (want.source === 'unknown') assert.match(r.detail, /EACCES/, `${label}: the record says which file and why (D38)`)
+      assert.notEqual(r.url, DOOR, label)
       n++
     }
-    const noId = await upstreamFor({ desc: d, facts: null, proxyFile: () => FILE })
-    assert.equal(noId.source, 'direct', `${d.name}: without an identity step 3 (and its fill) does not run`)
+    const noId = await upstreamFor({ desc: d, facts: null, proxyFile: () => ({ values: [{ name: N[0], value: FILE, applies }] }) })
+    assert.equal(noId.source, 'direct', `${d.name}: without an identity step 3 (and its files) does not run`)
   }
-  assert.ok(n >= 16 * 2, `cases: ${n}`)
+  assert.ok(n >= 5 * 2 * 20, `cases: ${n}`)
 })
