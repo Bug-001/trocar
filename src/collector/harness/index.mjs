@@ -7,6 +7,7 @@
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { normalizeName } from '../../off/identity.mjs'
+import { TEMPLATES } from './templates/index.mjs'
 
 const SCHEME = ['http', 'https', 'socks4', 'socks5', 'socks5h']
 const MEASURED = ['lab', 'inferred']
@@ -99,7 +100,7 @@ function proxyModeProblems(pm) {
     oneOf(c.kind, PM.cert, `${at}.kind`)
     if (c.kind === 'config-key') { loc(c.file, `${at}.file`, true); oneOf(c.format, PM.format, `${at}.format`); oneOf(c.semantics, PM.semantics, `${at}.semantics`); cond(c.when, `${at}.when`) }
     if (c.kind === 'wrapper') { loc(c.binDir, `${at}.binDir`, true); oneOf(c.layout, PM.layout, `${at}.layout`); if (!nonEmpty(c.command) || !nonEmpty(c.certVar)) say('shape', `${at} needs command and certVar`) }
-    if (c.kind === 'plugin') { loc(c.dir, `${at}.dir`, true); if (!nonEmpty(c.template)) say('shape', `${at}.template is missing`); if (!obj(c.loader)) say('shape', `${at}.loader is missing`); else { loc(c.loader.file, `${at}.loader.file`, true); oneOf(c.loader.format, PM.format, `${at}.loader.format`) } }
+    if (c.kind === 'plugin') { loc(c.dir, `${at}.dir`, true); if (!(Object.hasOwn(TEMPLATES, String(c.template)) && TEMPLATES[c.template].addsRoot)) say('shape', `${at}.template names no hook that adds the trocar root in process (P11 rule 4)`); if (!obj(c.loader)) say('shape', `${at}.loader is missing`); else { loc(c.loader.file, `${at}.loader.file`, true); oneOf(c.loader.format, PM.format, `${at}.loader.format`) } }
   }
   for (const [id, t] of Object.entries(trusts)) {
     const at = `trusts.${id}`
