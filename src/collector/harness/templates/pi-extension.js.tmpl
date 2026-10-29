@@ -1,0 +1,56 @@
+// trocar extension for pi (spec 4.11 P9 `pi-extension`). Written once by `trocar install` as <agent dir>/extensions/trocar-pi-extension.js;
+// pi discovers it and default-imports it once, in the process that holds the model connection, before that process opens one. Everything
+// happens at import, and only once per process:
+//   trust — adds the trocar root to Node's default roots in this process (appended, nothing taken away; a root already there is not added
+//           again). Not under --use-openssl-ca, not when tls.setDefaultCACertificates is missing, not when the root file has no PEM —
+//           and then it never routes either (§3 ⑦): a connection through the door with no root in the process would fail its handshake.
+//   route — with the root added, reads the switch file at the absolute path baked at install, once. Present (its first line is the door):
+//           TROCAR_PRIOR_PROXY records this process's own proxy (the first set name of pi's precedence list that is not the door; `none`
+//           when none is set), every proxy name points at the door, and the bypass list (both spellings) becomes loopback ∪ its own value
+//           (P6). pi builds its environment-reading dispatcher after extensions load, so this routes every model connection; fetch is not
+//           wrapped. Absent → the environment is left as it was. A pi started while on keeps routing after off: it is a holder (P12).
+// It calls no host API (the factory does nothing), reads and changes no request or response bytes, connects nowhere itself, writes no
+// file and no agent config, never throws.
+import tls from 'node:tls'
+import fs from 'node:fs'
+
+const CA_FILE = __TROCAR_CA_FILE__
+const SWITCH = __TROCAR_SWITCH__
+const PROXY_ENV = __TROCAR_PROXY_ENV__
+const PROXY_NAMES = __TROCAR_PROXY_NAMES__
+const NO_PROXY_ENV = __TROCAR_NO_PROXY_ENV__
+const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '::1'] // P6, the same three as entries.mjs LOOPBACK
+const body = (pem) => pem.replace(/-----[^-]+-----|\s/g, '')
+
+function addRoot() {
+  if (typeof tls.setDefaultCACertificates !== 'function' || typeof tls.getCACertificates !== 'function') return false
+  if ([...process.execArgv, ...String(process.env.NODE_OPTIONS || '').split(/\s+/)].includes('--use-openssl-ca')) return false
+  const roots = fs.readFileSync(CA_FILE, 'utf8').match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g)
+  if (!roots) return false
+  const have = tls.getCACertificates('default'), seen = new Set(have.map(body))
+  const fresh = roots.filter((p) => !seen.has(body(p)) && seen.add(body(p)))
+  if (fresh.length) tls.setDefaultCACertificates([...have, ...fresh])
+  return true
+}
+
+let door = null
+try { if (addRoot()) door = fs.readFileSync(SWITCH, 'utf8').split(/\r?\n/)[0] || null } catch { door = null }
+
+if (door) try {
+  const env = process.env
+  let prior = null, sawDoor = false
+  for (const k of PROXY_ENV) { const v = env[k]; if (!v) continue; if (v !== door) { prior = v; break } sawDoor = true }
+  if (prior) env.TROCAR_PRIOR_PROXY = prior
+  else if (!sawDoor || !env.TROCAR_PRIOR_PROXY) env.TROCAR_PRIOR_PROXY = 'none'
+  for (const k of PROXY_NAMES) env[k] = door
+} catch { /* an extension never stops its host */ }
+
+if (door) try { // P6: loopback ∪ the bypass list this process already has; case-insensitive dedupe, first spelling and order kept
+  const env = process.env, seen = new Set(), hosts = []
+  for (const v of [LOOPBACK_HOSTS.join(','), ...NO_PROXY_ENV.map((k) => env[k])]) {
+    for (const h of String(v || '').split(',').map((x) => x.trim()).filter(Boolean)) if (!seen.has(h.toLowerCase())) { seen.add(h.toLowerCase()); hosts.push(h) }
+  }
+  for (const k of NO_PROXY_ENV) env[k] = hosts.join(',')
+} catch { /* an extension never stops its host */ }
+
+export default function () {}
