@@ -103,6 +103,13 @@ for (const h of ROOT_ONLY) {
     assert.deepEqual(Object.keys(mod).sort(), EXPORTS[h], 'the shape its host loads')
   })
 
+  test(`T13 stub runtime, ${h}: a second import in the same process (pi's /reload) finds the CA already in the default roots, adds nothing and writes the same marker`, async () => {
+    const already = [...ROOTS, `${CA.certPem.trim()}\n`] // the same certificate; how the default store spells it may differ in white space
+    const { calls } = await load(SRC[h], { tlsApi: { getCACertificates: () => [...already] } })
+    assert.ok(!calls.some((c) => c[0] === 'tls.setDefaultCACertificates'), 'the roots are left as they are')
+    assert.deepEqual(calls.slice(-2), markerCalls)
+  })
+
   test(`T13 stub runtime, ${h}: no setDefaultCACertificates, --use-openssl-ca, a missing / non-PEM CA file, a failing call → nothing added, no marker, no throw`, async () => {
     const noApi = await load(SRC[h], { tlsApi: { setDefaultCACertificates: undefined } })
     assert.deepEqual(noApi.calls, [], 'Node < 22.19: nothing is even read')
