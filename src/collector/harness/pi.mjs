@@ -9,12 +9,23 @@
 // Trust: on Linux, trocar's extension <agent dir>/extensions/trocar-ca.js appends the trocar CA to Node's default roots and writes the
 // per-pid marker (the dsh plugin's body, 4.6); on macOS / Windows the P9 template pi-extension adds the root and reads the switch file once.
 import path from 'node:path'
-import { expandHome } from '../core/config-read.mjs'
+import { expandHome, parseJsonc } from '../core/config-read.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
-import { envProxies } from './_common.mjs'
+import { envProxies, urlHostsDeep } from './_common.mjs'
 import { renderPlugin } from './_plugins.mjs'
 
 const agentDir = (get, home) => expandHome(get('PI_CODING_AGENT_DIR'), home) || path.join(home, '.pi', 'agent')
+
+// The hosts <agent dir>/models.json names (pi's models docs): a provider's `baseUrl` replaces the built-in one, a custom provider needs one, a model
+// may carry its own. pi reads the file as JSON with comments; one trocar cannot parse is reported (D38) and names no host.
+function configHosts(ctx) {
+  const file = path.join(agentDir((k) => ctx.env.get(k), ctx.home), 'models.json')
+  const text = ctx.readText(file)
+  if (text == null) return []
+  const { data, errors } = parseJsonc(text)
+  if (errors && ctx.unparsable) ctx.unparsable(file)
+  return data && typeof data === 'object' ? urlHostsDeep(data.providers, /^baseUrl$/) : []
+}
 
 function inject(ctx) {
   return {
@@ -75,7 +86,17 @@ export default {
     exclude: [{ name: 'node', args: 'pi-launcher\\.js' }],
     longLived: [{ args: '(^| )--mode( |=)rpc( |$)' }],
   },
-  hosts: ['api.anthropic.com', 'api.openai.com', 'chatgpt.com', 'generativelanguage.googleapis.com', 'api.mistral.ai', 'openrouter.ai', 'radius.pi.dev'],
+  // The fixed default base URL of each provider built into pi-ai (its provider catalog, plus pi's own radius gateway). A host made from the user's
+  // region or account (Vertex `{location}-aiplatform`, Azure, other Bedrock regions) is in the set only when models.json names it (configHosts).
+  hosts: [
+    'api.anthropic.com', 'api.openai.com', 'chatgpt.com', 'generativelanguage.googleapis.com', 'api.mistral.ai', 'openrouter.ai', 'us.openrouter.ai', 'radius.pi.dev',
+    'api.individual.githubcopilot.com', 'api.kimi.com', 'api.moonshot.ai', 'api.moonshot.cn', 'api.x.ai', 'api.z.ai', 'open.bigmodel.cn', 'api.minimax.io', 'api.minimaxi.com',
+    'api.deepseek.com', 'api.groq.com', 'api.cerebras.ai', 'api.fireworks.ai', 'api.together.ai', 'router.huggingface.co', 'inference.baseten.co', 'integrate.api.nvidia.com',
+    'api.meta.ai', 'api.ant-ling.com', 'api.typesafe.ai', 'opencode.ai', 'ai-gateway.vercel.sh', 'gateway.ai.cloudflare.com', 'api.cloudflare.com',
+    'api.xiaomimimo.com', 'token-plan-ams.xiaomimimo.com', 'token-plan-cn.xiaomimimo.com', 'token-plan-sgp.xiaomimimo.com',
+    'token-plan.ap-southeast-1.maas.aliyuncs.com', 'token-plan.cn-beijing.maas.aliyuncs.com', 'bedrock-runtime.us-east-1.amazonaws.com', 'bedrock-runtime.eu-central-1.amazonaws.com',
+  ],
+  configHosts,
   proxy,
   proxyMode,
   proxies: (ctx) => envProxies(ctx.env, proxy.env),

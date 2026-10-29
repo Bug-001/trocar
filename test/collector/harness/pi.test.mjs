@@ -39,3 +39,18 @@ test('pi trust: the marker trusts; without it var-missing / ca-not-in-file / fil
     assert.ok(pi.trust.hints['no-marker'])
   } finally { s.done() }
 })
+
+test('pi configHosts: every baseUrl under models.json providers (provider and model level) joins the row\'s hosts, in the agent dir PI_CODING_AGENT_DIR names; an unparsable file is reported and names none', () => {
+  const s = sandbox()
+  try {
+    const doc = '// a relay\n{ "providers": { "anthropic": { "baseUrl": "https://relay.example.com/v1" }, "local": { "baseUrl": "http://127.0.0.1:11434/v1", "api": "openai-completions", "models": [{ "id": "m", "baseUrl": "https://model.example.net/v1" }] } }, }\n'
+    for (const [env, dir] of [[{}, '.pi/agent'], [{ PI_CODING_AGENT_DIR: '~/alt-pi' }, 'alt-pi']]) {
+      s.put(path.join(dir, 'models.json'), doc)
+      assert.deepEqual(judge(pi, ctxFor({ home: s.home, argv: AGENT, env })).hosts.sort(), ['127.0.0.1', 'model.example.net', 'relay.example.com'], JSON.stringify(env))
+    }
+    s.put('.pi/agent/models.json', '{ "providers": ')
+    const bad = []
+    assert.deepEqual(judge(pi, ctxFor({ home: s.home, argv: AGENT, unparsable: (f) => bad.push(f) })).hosts, [])
+    assert.deepEqual(bad, [path.join(s.home, '.pi/agent/models.json')])
+  } finally { s.done() }
+})
