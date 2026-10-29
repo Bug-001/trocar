@@ -7,6 +7,7 @@ import { rootCertDer, certPem } from '../../../../src/collector/core/tls/cert.mj
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import eighth from '../../harness/fixtures/eighth.mjs'
 
+import { HOOK_PID_ENV } from '../../../../src/collector/core/proxymode/chain.mjs'
 export const DAY = 86400e3
 export function makeRoot(subject) {
   const k = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
@@ -62,7 +63,7 @@ export function ctxOf(w) {
 }
 
 export const STATES = ['unset', 'root', 'lacks', 'missing', 'unreadable', 'broken']
-export const BASE = { known: true, verified: true, host: null, start: 'after', when: true, sources: null, issuer: true, blocker: null, envNull: false, cwdNull: false }
+export const BASE = { known: true, verified: true, host: null, start: 'after', when: true, sources: null, issuer: true, blocker: null, envNull: false, cwdNull: false, hookPid: null }
 /** The declared world of one case: the descriptor form on `os` with the axes `over` set (BASE otherwise) → { c, w, form, facts }. */
 export function worldOf(d, f, os, over) {
   const c = { ...BASE, host: d.hosts[0], ...over }
@@ -79,6 +80,7 @@ export function worldOf(d, f, os, over) {
     if (s !== 'missing') w.ca[ca] = s
   })
   if (c.blocker !== null) setLeaf(w, leaves(d.proxyMode.blockers[c.blocker].at)[0], 'http://blocked.corp:3128')
+  if (c.hookPid) w.env[HOOK_PID_ENV] = c.hookPid === 'own' ? '4242' : '4141' // the pid an in-process hook wrote: this process's own (facts.pid below), or a parent's
   if (c.envNull) w.env = null
   if (c.cwdNull) w.cwd = null
   const form = { ...f, verified: { ...f.verified, [os]: c.verified } }

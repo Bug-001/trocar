@@ -61,7 +61,7 @@ for (const { d, f, os } of CASES) {
     const rigs = { true: await rig({ desc, os }), false: await rig({ desc, os, custody: 'unavailable' }) }
     for (const r of Object.values(rigs)) await r.c.on({ harnesses: [d.name], groups: { [g]: 18100 } })
     const t = f.trust !== 'root' && d.proxyMode.trusts[f.trust]
-    const axes = [{}, { known: false }, { verified: { reason: 'not-measured' } }, { start: 'before' }, { start: 'unknown' }, { issuer: false }, { envNull: true }, { cwdNull: true },
+    const axes = [{}, { known: false }, { verified: { reason: 'not-measured' } }, { start: 'before' }, { start: 'unknown' }, { issuer: false }, { envNull: true }, { cwdNull: true }, { hookPid: 'other' },
       ...(f.forwardOnlyHosts || []).map((host) => ({ host })), { host: 'telemetry.unrelated.example' }, { hostSet: [...d.hosts, 'relay.corp.example'], host: 'relay.corp.example' },
       ...d.proxyMode.blockers.map((_, i) => ({ blocker: i })), ...(t && t.sources.length ? [...combos(t)].map((sources) => ({ sources })) : [])]
     for (const over of axes) {
@@ -187,6 +187,27 @@ test('CM20 · meta.upstream equals upstreamFor over env × system proxy × prior
       assert.deepEqual(meta.upstream, dialOf(want, 'api.example'), `${d.name} known=${known} env=${JSON.stringify(env)} sp=${!!sp} prior=${prior}`)
       if (!known) assert.notEqual(meta.upstream.host, 'env.corp', 'step 3 never runs without an identity')
       assert.deepEqual(c.upstreams()[g] || [], known ? [{ pid, source: want.source, url_redacted: want.url }] : [], 'status reads the door\'s own answer per process (1.6 §9.4); none for a peer it could not tell')
+      c.close()
+    }
+  }
+})
+
+test('CM20 / ⑥ · an unidentified process at a credentialed door (an agent\'s child that inherited a hook\'s env) dials the hook value from its own env; unread is prior-proxy-unknown, never a silent direct', async () => {
+  for (const d of descs.filter((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin') && x.proxyMode.routes[f.route]?.auth !== false))) {
+    const f = d.proxyMode.forms.find((x) => x.os.includes('darwin') && d.proxyMode.routes[x.route]?.auth !== false)
+    const g = `${d.name}:${f.route}`
+    for (const [label, w, want] of [
+      ['hook value', { facts: { agent: null, startedAt: INSTALLED + 1 }, env: { TROCAR_PRIOR_PROXY: 'http://corp.example:3128' } }, { kind: 'http', host: 'corp.example', port: 3128 }],
+      ['env unread', { facts: { agent: null, startedAt: INSTALLED + 1 }, env: null }, null],
+      ['no pid', { pid: null, facts: null, env: {} }, null],
+    ]) {
+      const { c, records } = await rig({ desc: d, w: { pid: ++pid, ...w } })
+      await c.on({ harnesses: [d.name], groups: { [g]: 18104 } })
+      const meta = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+      if (want) assert.deepEqual(meta.upstream, want, `${d.name} · ${label}`)
+      else assert.equal(records.filter((r) => r.code === 'prior-proxy-unknown').length, 1, `${d.name} · ${label}: said once (D38) — ${JSON.stringify(records)}`)
+      assert.equal(meta.decrypt, false, 'an unidentified process is only forwarded')
+      for (const x of records) assert.deepEqual(checkRecord(x), [], JSON.stringify(x))
       c.close()
     }
   }

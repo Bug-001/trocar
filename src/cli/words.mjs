@@ -236,6 +236,7 @@ export function statusReason(code, { harness = '', pid = null } = {}) {
     'form-unsupported': [`this form of ${h} cannot be captured with the proxy it is set to use`],
     'outside-host-set': [`${h} talked to a host outside the ones trocar reads for it, so that traffic is only forwarded`],
     'chromium-child': [`a helper process of ${h} that makes no model calls; it is never decrypted`],
+    'hook-inherited': [`this ${h} process inherited trocar's proxy from its parent but did not load trocar's plugin itself, so it is only forwarded`, `start ${h} directly, with its plugins loaded`],
     // the trust resolver's generic reasons (src/collector/core/trust)
     'var-missing': ["this process's environment has no trocar trust entry in effect", null, 'trocar install'],
     'file-unreadable': ['the certificate file the trust entry points to could not be read', `fix the read permission of that file, then restart ${h}`],

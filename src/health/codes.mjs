@@ -63,7 +63,7 @@ export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'eve
 export const TRUST_REASONS = Object.freeze([
   'var-missing', 'env-frozen', 'config-after-start', 'start-time-unknown', 'file-unreadable', 'ca-not-in-file', 'replace-without-ca', 'shadowed',
   'verify-disabled', 'marker-stale', 'marker-pending', 'no-marker', 'ca-unusable', 'environ-unreadable', 'config-unreadable',
-  'settings-unparsable', 'settings-unreadable', 'chromium-child',
+  'settings-unparsable', 'settings-unreadable', 'chromium-child', 'hook-inherited',
   'not-verified', 'outside-host-set', // proxy mode's verdict (4.11 P11): the form or host is not verified for decryption; a hostTree form's host program talking off its host set (the door's untracked reason, the same word)
   // a harness's own
   'settings-ignored-managed-by-host', 'settings-ignored-restricted', 'settings-ignored-setting-sources', 'dsh-use-openssl-ca', 'dsh-node-too-old',
