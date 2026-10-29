@@ -102,8 +102,8 @@ export default {
       { name: 'node', entry: '((^|/)pi|/+@earendil-works/+pi-coding-agent/+dist/+(bundle/+)?(cli|rpc-entry)\\.js)$' },
       { name: 'node', entry: '(^|/)dist/+cli\\.js$', args: '(^| )--mode( |=)rpc( |$)' },
     ],
+    // no longLived: it only turns a var-missing verdict into env-frozen, and pi's refine reads every missing trust as no-marker
     exclude: [{ name: 'node', args: 'pi-launcher\\.js' }],
-    longLived: [{ args: '(^| )--mode( |=)rpc( |$)' }],
   },
   // The fixed default base URL of each provider built into pi-ai (its provider catalog, plus pi's own radius gateway). A host made from the user's
   // region or account (Vertex `{location}-aiplatform`, Azure, other Bedrock regions) is in the set only when models.json names it (configHosts).
