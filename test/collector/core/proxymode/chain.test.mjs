@@ -169,3 +169,27 @@ test('CM20 identity failed: the hook (env or header) and the process env are not
   assert.deepEqual(r.notes, [{ note: 'header-ignored' }])
   await assert.rejects(upstreamFor({ desc: {} }), TypeError)
 })
+
+// P7 step 3's fill: an agent fills a proxy name its environment lacks from its own proxy file at start (pi's settings.json `httpProxy`, a dotenv
+// read). A launch-environment reader (macOS) never sees that fill, so the chain reads the file; where the hook's TROCAR_PRIOR_PROXY is readable
+// (the PEB) step 1 answers first with what the hook saw after the fill. Axes: {env, file, both, neither} × {hook readable, launch env only} ×
+// {file unread, file a door}, over every descriptor that reads a proxy file. Invariant: the environment wins, the file fills, a door is never dialled.
+test('CM20 step 3 fill: env × proxy file × hook readable; the environment wins, the file fills what it lacks, an unread file is unknown', async () => {
+  const FILE = 'http://file.corp:8080'
+  let n = 0
+  for (const d of descs.filter((x) => x.proxy.files.length && x.proxy.env.length)) for (const name of d.proxy.env) {
+    for (const env of [false, true]) for (const file of [null, FILE, DOOR, 'unread']) for (const hook of [false, true]) {
+      const seen = env ? CORP : file === FILE ? FILE : null // what the agent's own environment holds after its start-time fill
+      const e = { ...(env ? { [name]: CORP } : {}), ...(hook ? { [HOOK_ENV]: seen ?? 'none' } : {}) }
+      const proxyFile = (pe) => { assert.equal(pe, e, 'the file path is resolved with the process\'s own env'); if (file === 'unread') throw new Error('EACCES'); return file }
+      const r = await upstreamFor({ desc: d, facts: facts(e), proxyFile, isTrocarDoor: isDoor })
+      const want = hook ? { source: 'hook', url: seen } : env ? { source: 'process-env', url: CORP } : file === 'unread' ? { source: 'unknown', url: null } : { source: seen ? 'process-env' : 'direct', url: seen }
+      assert.deepEqual({ source: r.source, url: r.url }, want, `${d.name} ${name} env=${env} file=${file} hook=${hook}`)
+      assert.notEqual(r.url, DOOR)
+      n++
+    }
+    const noId = await upstreamFor({ desc: d, facts: null, proxyFile: () => FILE })
+    assert.equal(noId.source, 'direct', `${d.name}: without an identity step 3 (and its fill) does not run`)
+  }
+  assert.ok(n >= 16 * 2, `cases: ${n}`)
+})

@@ -27,6 +27,7 @@ import { hostSetOf } from '../host-agent.mjs'
 import { CODE } from '../codes.mjs'
 import { agentTrustSet, createAgentTrust, CERT_VARS } from './upstream-trust.mjs'
 import { redactProxyUrl } from '../../../netenv/redact.mjs'
+import { readProxySetting } from '../../../netenv/adopt.mjs'
 
 const untracked = (reason) => ({ not_captured: 'untracked', reason })
 const split = (g) => { const i = String(g).lastIndexOf(':'); return { harness: g.slice(0, i), routeId: g.slice(i + 1) } }
@@ -115,6 +116,13 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   const doorOf = (d) => ({ g: d.g, harness: d.harness, forms: formsOn(byName.get(d.harness), d.routeId) })
   const self = ownSid ? { sid: ownSid } : { uid: ownUid }
 
+  /** The proxy a harness's own files (`proxy.files`) hold, the paths resolved with the process's env, read through ctx (P7 step 3's fill); throws when unread. */
+  const proxyFileOf = (desc) => (env) => {
+    const fsLike = { readFileSync: (p) => ctx.readFile(p), statSync: () => ({ mtimeMs: 0 }) }
+    const s = readProxySetting(desc, { home: ctx.home, env: env instanceof Map ? Object.fromEntries(env) : env || {}, fs: fsLike, vars: false })
+    if (s.unknown) throw new Error(s.unknown.reason)
+    return s.raw ?? null
+  }
   const priorOf = (d) => { const e = itemsOfPhase(manifest(), 'on').find((i) => i.harness === d.harness && i.route === d.routeId && typeof i.prior_value === 'string'); return e ? e.prior_value : null }
 
   /** The process's env, cwd and parent walk, read once per pid + start when read (P7, 4.9 §5.2). An answer with env or cwd unread, or of a process
@@ -189,7 +197,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const allowed = own.length > 0 && own.every((f) => sendsHeader(byName.get(id.agent), f)) // only a form whose hook sends the header (P7 step 1)
     const ports = [...doors.values()].map((x) => x.port)
     const isTrocarDoor = (v) => isTrocarDoorUrl(v, { ports })
-    const up = d.auth ? await upstreamFor({ desc, facts: pf, recordedPrior: priorOf(d), systemProxy: systemProxy(), header, headerAllowed: allowed, isTrocarDoor })
+    const up = d.auth ? await upstreamFor({ desc, facts: pf, recordedPrior: priorOf(d), systemProxy: systemProxy(), header, headerAllowed: allowed, isTrocarDoor, proxyFile: proxyFileOf(desc) })
       : await pacLeg({ systemProxy: systemProxy(), header, isTrocarDoor }) // an auth:false door is a PAC's: it dials the own leg that PAC names (P10)
     if (known) answered(d.g, id.pid, up)
     if ((up.notes || []).some((n) => n.note === 'header-ignored')) fail(CODE.upstreamHeaderIgnored, `pid ${id.pid ?? '?'} sent X-Trocar-Upstream at the ${d.g} door, but no hook of its form sends it: ignored (its value is not recorded)`, { door: d.g, pid: id.pid })

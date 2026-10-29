@@ -729,3 +729,22 @@ test('4.6 §开关 · isOn follows on / off; a state.json that cannot be read at
   assert.equal(r.c.isOn(d.name), false)
   r.c.close()
 })
+
+// P7 step 3's fill at the door (the wiring): the door reads the harness's own proxy file through ctx, with the path resolved by the process's env, so
+// a process whose launch env has no proxy variable dials the file's proxy; one with a variable dials that. Every descriptor with a proxy file.
+test('CM20 · the door fills step 3 from the harness\'s own proxy file (ctx, the process\'s env), the environment first', async () => {
+  const FILE = 'http://file.corp:4'
+  for (const d of descs.filter((x) => x.proxy.files.length && x.proxyMode.forms.some((f) => f.os.includes('darwin')))) {
+    const f = d.proxyMode.forms.find((x) => x.os.includes('darwin')), g = `${d.name}:${f.route}`
+    const file = d.proxy.files[0].path({ home: '/h', env: {} }), f0 = d.proxy.files[0]
+    const text = f0.format === 'json' ? JSON.stringify(f0.keys[0].reduceRight((v, k) => ({ [k]: v }), FILE)) : `${f0.keys[0]}=${FILE}\n`
+    for (const env of [{}, { [d.proxy.env[0]]: 'http://env.corp:1' }]) {
+      const base = ctxOf(newWorld('darwin'))
+      const { c } = await rig({ desc: d, w: { pid: ++pid, facts: { agent: d.name, startedAt: INSTALLED + 1 }, env, ctx: { ...base, readFile: (p) => (p === file ? text : base.readFile(p)) } } })
+      await c.on({ harnesses: [d.name], groups: { [g]: 18101 } })
+      const meta = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+      assert.equal(meta.upstream.host, env[d.proxy.env[0]] ? 'env.corp' : 'file.corp', `${d.name} env=${JSON.stringify(env)}: ${JSON.stringify(meta.upstream)}`)
+      c.close()
+    }
+  }
+})

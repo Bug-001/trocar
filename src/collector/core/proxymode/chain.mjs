@@ -3,7 +3,7 @@
 // which variables the agent reads, in its order, and whether it follows the system proxy). Readers are injected: the process facts and the parent walk
 // come from the OS backend (cached there by pid + start), the system proxy from the OS reader, already in the shape below. Nothing here does I/O.
 //
-// upstreamFor({ desc, form, facts, recordedPrior, systemProxy, header, headerAllowed, isTrocarDoor, transport }) →
+// upstreamFor({ desc, form, facts, recordedPrior, systemProxy, header, headerAllowed, isTrocarDoor, transport, proxyFile }) →
 //   { url: string | null, source, bypass: [row], code?, pac?, wpad?, unreadable?, notes? }
 //   source ∈ 'hook' | 'config-prior' | 'process-env' | 'system-proxy' | 'direct' | 'unknown'
 //
@@ -17,9 +17,11 @@
 //                 ignored and `notes` says so (`{ note: 'header-ignored' }`; a skipped door is `{ note: 'door-skipped', source }`; never a value: the caller records them)
 //   isTrocarDoor  (text) → bool; default `isTrocarDoorUrl`. Applied at EVERY source: a door is never an upstream.
 //   transport     'http' | 'ws': which half of `proxy.systemProxy` says whether the agent follows the system proxy
+//   proxyFile     (env) → the proxy text the agent's own files (`proxy.files`, paths resolved with this env) hold, or null; throws when one could not be read
 //
 // Steps: 1 hook (the header when allowed, then TROCAR_PRIOR_PROXY; 'none' = no proxy) · 2 config-prior · 3 process-env (the agent's order; a door
-// value walks parentOf upward) · 4 system-proxy (followers only; with its bypass) · 5 direct. Step 3 that cannot be recovered (the env unreadable,
+// value walks parentOf upward; a process with no proxy variable fills it from its own proxy file at start, as the agent does: a reader of the launch
+// environment cannot see that fill) · 4 system-proxy (followers only; with its bypass) · 5 direct. Step 3 that cannot be recovered (the env unreadable,
 // the parent gone after a door) is `unknown`: the system proxy if there is one (follower or not), else direct, with code `prior-proxy-unknown`.
 import { CODE } from '../codes.mjs'
 
@@ -62,7 +64,7 @@ function systemOf(sp) {
   return url === null ? null : { url, bypass: Array.isArray(sp.bypass) ? sp.bypass : [], ...wpad }
 }
 
-export async function upstreamFor({ desc, form = null, facts = null, recordedPrior = null, systemProxy = null, header = null, headerAllowed = false, isTrocarDoor = isTrocarDoorUrl, transport = 'http' } = {}) {
+export async function upstreamFor({ desc, form = null, facts = null, recordedPrior = null, systemProxy = null, header = null, headerAllowed = false, isTrocarDoor = isTrocarDoorUrl, transport = 'http', proxyFile = null } = {}) {
   if (!desc || !desc.proxy || !Array.isArray(desc.proxy.env)) throw new TypeError('upstreamFor needs the harness descriptor (its proxy.env)')
   void form // the caller judges headerAllowed by the form; the chain itself treats every form alike
   const notes = []
@@ -103,7 +105,14 @@ export async function upstreamFor({ desc, form = null, facts = null, recordedPri
     for (let depth = 0; ; depth++) {
       if (!p || p.env == null) return unknown()
       const name = desc.proxy.env.find((n) => textOf(envGet(p.env, n)) !== null)
-      if (name === undefined) break // this process has no proxy variable: the user had none
+      if (name === undefined) { // this process has no proxy variable: the agent fills it from its own proxy file, if that holds one; else the user had none
+        if (depth > 0 || !proxyFile) break
+        let v
+        try { v = textOf(proxyFile(p.env)) } catch { return unknown() } // an unread file may hold the value that wins (D38)
+        const r = v === null ? null : take('process-env', v)
+        if (r) return r
+        break
+      }
       const r = take('process-env', textOf(envGet(p.env, name)))
       if (r) return r
       if (depth >= MAX_DEPTH || typeof p.parentOf !== 'function') return unknown()
