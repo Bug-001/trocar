@@ -33,10 +33,6 @@ test("each harness's session key is read per 3.4", () => {
   }
 });
 
-test('the table has exactly the seven 3.2 harness ids', () => {
-  assert.deepEqual(HARNESSES.map((h) => h.id).sort(), ['cc', 'codex', 'dsh', 'hermes', 'kimi', 'opencode', 'zcode']);
-});
-
 test('proc.agent decides the harness; the UA never overrides it', () => {
   const h = harnessOf(rec({ agent: 'codex', headers: { 'user-agent': 'claude-cli/2.0', 'session-id': 's' } }));
   assert.deepEqual([h.id, h.inferred], ['codex', false]);

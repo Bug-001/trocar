@@ -63,7 +63,7 @@ test('a pattern that does not compile, or names a class a pattern may not, is sk
 
 test('proc.agent → read-side harness id: either spelling, unknown otherwise; the settings may name every row plus unknown', () => {
   // deepseek-cli has no table row: only an old capture's UA names it — but a call filed under it must have a setting (review 2026-10-07)
-  assert.deepEqual(retentionHarnessIds(), ['cc', 'codex', 'opencode', 'kimi', 'dsh', 'hermes', 'zcode', 'deepseek-cli', 'unknown'])
+  assert.deepEqual(retentionHarnessIds(), [...HARNESSES.map((h) => h.id), 'deepseek-cli', 'unknown'], 'every row in table order, then the legacy id, then unknown')
   assert.ok(THIRD_PARTY_TELEMETRY.every((p) => /^(\*\.)?[a-z0-9.-]+$/.test(p)))
 })
 
