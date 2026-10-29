@@ -1,6 +1,7 @@
 // fixtures/eighth.mjs — CM27's eighth harness (spec 4.11 §2.4, plan A.5): a harness that exists only as data. No import, no function anywhere: it must load
 // and validate through the real loader (src/collector/harness/index.mjs) with zero code of its own. It uses every route kind, every cert kind, a trust with
-// a precedence and a condition, a policy blocker and an effect, so the validation sees every axis. The flow half and the static guard are T25.
+// a precedence and a condition, a policy blocker and an effect, and a plugin cert both with a loader and without one (the host finds the hook in its
+// folder), so the validation sees every axis. The flow half and the static guard are T25.
 export default {
   name: 'eighth',
   runtime: 'node',
@@ -24,6 +25,7 @@ export default {
       { id: 'eighth.env', os: ['darwin'], route: 'dotenv', cert: 'root', trust: 'root', present: [{ base: 'home', dir: '.eighth-env', env: 'EIGHTH_ENV_HOME' }], verified: { darwin: true } },
       { id: 'eighth.native', os: ['darwin', 'win32'], route: 'switch', cert: 'wrap', trust: 'node', present: [{ base: 'home', path: '.eighth/bin/eighth' }], verified: { darwin: true, win32: true } },
       { id: 'eighth.plugin', os: ['win32'], route: 'switch', cert: 'hook', trust: 'root', present: [{ base: 'home', path: '.eighth/plugins' }], verified: { win32: true } },
+      { id: 'eighth.ext', os: ['darwin', 'win32'], route: 'switch', cert: 'ext', trust: 'node', present: [{ base: 'home', path: '.eighth/extensions' }], verified: { darwin: true, win32: true } },
       { id: 'eighth.folder', os: ['darwin', 'win32'], route: 'folder', cert: 'root', trust: 'root', present: [{ base: 'appSupport', path: 'eighth-host' }], verified: { darwin: true, win32: true } },
     ],
     routes: {
@@ -37,6 +39,7 @@ export default {
     certs: {
       bundle: { kind: 'config-key', file: { base: 'home', dir: '.eighth', env: 'EIGHTH_HOME', path: 'settings.json' }, format: 'json', keys: ['env', 'EXTRA_CA'], semantics: 'add', when: { src: [{ file: { base: 'cwd', path: '.eighth/settings.json' }, format: 'json', keys: ['env', 'CERT_STORE'] }, { env: 'CERT_STORE' }], equals: 'bundled' } },
       wrap: { kind: 'wrapper', command: 'eighth', binDir: { base: 'home', path: '.eighth/bin' }, certVar: 'NODE_EXTRA_CA_CERTS', layout: 'native-binary' },
+      ext: { kind: 'plugin', template: 'pi-extension', dir: { base: 'home', path: '.eighth/extensions' } },
       hook: { kind: 'plugin', template: 'cordis-plugin', dir: { base: 'home', path: '.eighth/plugins' }, loader: { file: { base: 'home', path: '.eighth/plugins.yml' }, format: 'yaml', keys: ['*', 'insert'] } },
     },
     trusts: {
