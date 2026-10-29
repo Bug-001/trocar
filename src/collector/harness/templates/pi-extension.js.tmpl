@@ -1,14 +1,16 @@
 // trocar extension for pi (spec 4.11 P9 `pi-extension`). Written once by `trocar install` as <agent dir>/extensions/trocar-pi-extension.js;
-// pi discovers it and default-imports it once, in the process that holds the model connection, before that process opens one. Everything
-// happens at import, and only once per process:
-//   trust — adds the trocar root to Node's default roots in this process (appended, nothing taken away; a root already there is not added
-//           again). Not under --use-openssl-ca, not when tls.setDefaultCACertificates is missing, not when the root file has no PEM —
-//           and then it never routes either (§3 ⑦): a connection through the door with no root in the process would fail its handshake.
-//   route — with the root added, reads the switch file at the absolute path baked at install, once. Present (its first line is the door):
-//           TROCAR_PRIOR_PROXY records this process's own proxy (the first set name of pi's precedence list that is not the door; `none`
-//           when none is set), every proxy name points at the door, and the bypass list (both spellings) becomes loopback ∪ its own value
-//           (P6). pi builds its environment-reading dispatcher after extensions load, so this routes every model connection; fetch is not
-//           wrapped. Absent → the environment is left as it was. A pi started while on keeps routing after off: it is a holder (P12).
+// pi discovers it and default-imports it in the process that holds the model connection, before that process opens one; pi's /reload
+// imports it again in the same process. Everything happens at import:
+//   trust — on every import, adds the trocar root to Node's default roots in this process (appended, nothing taken away; a root already
+//           there is not added again). Not under --use-openssl-ca, not when tls.setDefaultCACertificates is missing, not when the root file
+//           has no PEM — and then it never routes either (§3 ⑦): a connection through the door with no root in the process would fail its handshake.
+//   route — on the first import of the process only (the decision is latched on globalThis, so a re-import keeps it): with the root added,
+//           reads the switch file at the absolute path baked at install. Present (its first line is the door): TROCAR_PRIOR_PROXY records
+//           this process's own proxy (the first set name of pi's precedence list that is not the door; `none` when none is set),
+//           TROCAR_HOOK_PID = this pid, every proxy name points at the door, and the bypass list (both spellings) becomes loopback ∪ its own
+//           value (P6). pi builds its environment-reading dispatcher after extensions load, so this routes every model connection; fetch is
+//           not wrapped. Absent → the environment is left as it was. A pi started while on keeps routing after off: it is a holder (P12);
+//           one started while off stays unrouted after on, /reload or not.
 // It calls no host API (the factory does nothing), reads and changes no request or response bytes, connects nowhere itself, writes no
 // file and no agent config, never throws.
 import tls from 'node:tls'
@@ -33,8 +35,14 @@ function addRoot() {
   return true
 }
 
+const LATCH = Symbol.for('trocar.pi-extension')
+let added = false
+try { added = addRoot() } catch { added = false }
 let door = null
-try { if (addRoot()) door = fs.readFileSync(SWITCH, 'utf8').split(/\r?\n/)[0] || null } catch { door = null }
+if (!globalThis[LATCH]) {
+  globalThis[LATCH] = true
+  try { if (added) door = fs.readFileSync(SWITCH, 'utf8').split(/\r?\n/)[0] || null } catch { door = null }
+}
 
 if (door) try {
   const env = process.env
@@ -42,6 +50,7 @@ if (door) try {
   for (const k of PROXY_ENV) { const v = env[k]; if (!v) continue; if (v !== door) { prior = v; break } sawDoor = true }
   if (prior) env.TROCAR_PRIOR_PROXY = prior
   else if (!sawDoor || !env.TROCAR_PRIOR_PROXY) env.TROCAR_PRIOR_PROXY = 'none'
+  env.TROCAR_HOOK_PID = String(process.pid)
   for (const k of PROXY_NAMES) env[k] = door
 } catch { /* an extension never stops its host */ }
 

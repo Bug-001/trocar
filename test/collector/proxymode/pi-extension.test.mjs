@@ -16,7 +16,8 @@ import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 const NODE_TLS_ROOTS = typeof tls.setDefaultCACertificates === 'function' && typeof tls.getCACertificates === 'function'
 const PROXY_ENV = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']
 const NO_PROXY_ENV = ['NO_PROXY', 'no_proxy']
-const WATCHED = [...PROXY_ENV, ...NO_PROXY_ENV, 'TROCAR_PRIOR_PROXY', 'NODE_OPTIONS']
+const WATCHED = [...PROXY_ENV, ...NO_PROXY_ENV, 'TROCAR_PRIOR_PROXY', 'TROCAR_HOOK_PID', 'NODE_OPTIONS']
+const LATCH = Symbol.for('trocar.pi-extension') // the per-process start decision; each world is a fresh process
 const DOOR = 'http://127.0.0.1:18107'
 const U = 'http://proxy.corp.example:3128'
 const LOOPBACK = ['localhost', '127.0.0.1', '::1'] // P6
@@ -32,12 +33,16 @@ async function world({ env = {}, door = null } = {}) {
     for (const k of Object.keys(process.env)) if (!(k in saved.env)) delete process.env[k]
     Object.assign(process.env, saved.env)
     tls.setDefaultCACertificates(saved.roots)
+    delete globalThis[LATCH]
   }
+  delete globalThis[LATCH]
   for (const k of WATCHED) delete process.env[k]
   Object.assign(process.env, env)
   const d = tmpDir()
   const sw = path.join(d, 'state', 'switch', 'pi')
-  if (door) { fs.mkdirSync(path.dirname(sw), { recursive: true }); fs.writeFileSync(sw, `${door}\n`) }
+  // setDoor(door | null) writes or removes the switch file (the operator's `on` / `off` between two imports)
+  const setDoor = (v) => { if (v) { fs.mkdirSync(path.dirname(sw), { recursive: true }); fs.writeFileSync(sw, `${v}\n`) } else fs.rmSync(sw, { force: true }) }
+  setDoor(door)
   // importOne({ caFile }) renders a fresh copy and imports it; caFile: 'ok' | 'missing' | 'not-pem'
   const importOne = async ({ caFile = 'ok' } = {}) => {
     const c = tmpDir()
@@ -49,7 +54,7 @@ async function world({ env = {}, door = null } = {}) {
     fs.writeFileSync(file, text)
     return import(pathToFileURL(file).href)
   }
-  return { importOne, restore }
+  return { importOne, setDoor, restore }
 }
 
 // P6: loopback ∪ the user's list (both spellings), case-insensitive dedupe, first spelling and order kept
@@ -92,6 +97,7 @@ test('CM36 (c) switch present: every proxy name is the door, the prior proxy is 
         await w.importOne()
         for (const k of PROXY_ENV) assert.equal(process.env[k], DOOR, `${label} ${k}`)
         assert.equal(process.env.TROCAR_PRIOR_PROXY, prior, label)
+        assert.equal(process.env.TROCAR_HOOK_PID, String(process.pid), label)
         for (const k of NO_PROXY_ENV) assert.equal(process.env[k], merged(env), `${label} ${k}`)
       } finally { w.restore() }
     }
@@ -130,5 +136,32 @@ test('CM36 (f) the factory touches nothing of its host: called with an object th
     const mod = await w.importOne()
     const hostile = new Proxy({}, { get() { throw new Error('host API touched') }, has() { throw new Error('host API touched') } })
     await mod.default(hostile)
+  } finally { w.restore() }
+})
+
+test('CM36 (g) a re-import in the same process (pi /reload) keeps the start decision: the root is still added, the environment is not touched again', { skip: !NODE_TLS_ROOTS }, async () => {
+  // absent at start, then present: the process stays unrouted
+  let w = await world({ env: { HTTPS_PROXY: U, NO_PROXY: 'corp.example' } })
+  try {
+    await w.importOne()
+    const before = snap()
+    w.setDoor(DOOR)
+    await w.importOne()
+    assert.deepEqual(snap(), before)
+    assert.equal(process.env.TROCAR_HOOK_PID, undefined)
+    assert.equal(rootCount(), 1)
+  } finally { w.restore() }
+  // door A at start, then door B: the environment still names door A and the prior is unchanged
+  const B = 'http://127.0.0.1:18108'
+  w = await world({ env: { HTTPS_PROXY: U }, door: DOOR })
+  try {
+    await w.importOne()
+    const before = snap()
+    w.setDoor(B)
+    await w.importOne()
+    assert.deepEqual(snap(), before)
+    for (const k of PROXY_ENV) assert.equal(process.env[k], DOOR, k)
+    assert.equal(process.env.TROCAR_PRIOR_PROXY, U)
+    assert.equal(process.env.TROCAR_HOOK_PID, String(process.pid))
   } finally { w.restore() }
 })
