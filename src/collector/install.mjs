@@ -386,7 +386,11 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
     const register = (put, reload) => (opts.unit ? ensureDaemonUp({ osName: opts.osName, dir, env: opts.env || process.env, fs, unit: opts.unit, register: true, reload, put, ...(opts.request ? { request: opts.request } : {}), ...(opts.socketPath ? { socketPath: opts.socketPath } : {}), ...(opts.sleep ? { pause: opts.sleep } : {}) }) : null)
     if (installComplete(plan._.prior) && !plan.writing) {
       const entryBefore = opts.unit && typeof opts.unit.registered === 'function' ? opts.unit.registered().state : null // the receipt's head: "nothing was changed" only if the entry was there
-      return { already: true, entryBefore, manifest: plan._.prior, plan: null, daemon: await register(runEventWriter({ dir, base: { run }, notes: [], fs }), false) }
+      const put = runEventWriter({ dir, base: { run }, notes: [], fs })
+      const dmn = await register(put, false)
+      // a run that put the entry back or started the daemon changed something: its result is on record like any install's (1.6 §1.2)
+      if (dmn && (dmn.started || (entryBefore && entryBefore !== 'present'))) put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: dmn.problems.length ? 'partial' : 'installed', reason: `the certificates were in place; the login entry was ${entryBefore}${dmn.started ? ' and the collector was started' : ''}${dmn.problems.length ? `; not done: ${dmn.problems.join('; ')}` : ''}` })
+      return { already: true, entryBefore, manifest: plan._.prior, plan: null, daemon: dmn }
     }
     const onPlan = opts.onPlan || (() => {})
     onPlan(plan)
@@ -641,7 +645,7 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
           const entry = osName === 'win32' ? 'the scheduled task \\trocar\\collector' : osName === 'darwin' ? `the LaunchAgent ${unit.path}` : null
           unitFailed = entry // a systemd line is Linux's alone: a Mac or Windows user told to run `systemctl --user` has been handed nothing (tested on Windows 2026-10-11 and macOS 2026-10-18)
             ? `${entry} was not registered or run (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}"${daemonLog ? `, and ${daemonLog} says why it did not start` : ''}`
-            : `${unit.path} is written but "systemctl --user enable${was.up ? '' : ' --now'}" failed (${rr.err || `exit ${rr.code}`}); trocar on needs this login entry, so run trocar install again in a login session where systemd --user runs` // a daemon started by hand is no way round it: `on` asks the entry first (1.6 §3.3)
+            : `${unit.path} is written but "systemctl --user enable${was.up ? '' : ' --now'}" failed (${rr.err || `exit ${rr.code}`}); trocar on needs this login entry: put right what systemctl says (with no systemd --user to ask, use a login session that has one), then run trocar install again` // a daemon started by hand is no way round it: `on` asks the entry first (1.6 §3.3)
           put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed })
         }
         notes.push(unitFailed); problems.push(unitFailed)

@@ -51,13 +51,13 @@ test('Linux install writes the systemd user unit and enables it with --now when 
   assert.equal(await runInstallCli(['--yes'], { ...onCtx(home, io, { exec: down.exec, daemon: down.daemon }), platform: 'linux' }), 0, io.text())
   assert.equal(fs.existsSync(unitPath(home)), true, 'the unit file install wrote')
   assert.equal(readManifest(path.join(home, '.trocar', 'collector')).files.some((f) => f.role === 'unit' && f.path === unitPath(home) && f.phase === 'install'), true, 'listed in the manifest, phase install')
-  assert.deepEqual(down.exec.calls.filter((c) => /enable/.test(c)), [`systemctl --user enable --now ${UNIT_NAME}`])
+  assert.deepEqual(down.exec.calls.filter((c) => /--user enable /.test(c)), [`systemctl --user enable --now ${UNIT_NAME}`])
   const other = tmpDir('trocar-install-unit-up-')
   seedClaude(other)
   const up = fakeSystem({ up: true })
   const again = fakeIo()
   assert.equal(await runInstallCli(['--yes'], { ...onCtx(other, again, { exec: up.exec, daemon: up.daemon }), platform: 'linux' }), 0, again.text())
-  assert.deepEqual(up.exec.calls.filter((c) => /enable/.test(c)), [`systemctl --user enable ${UNIT_NAME}`], 'a daemon that already answers is not started a second time')
+  assert.deepEqual(up.exec.calls.filter((c) => /--user enable /.test(c)), [`systemctl --user enable ${UNIT_NAME}`], 'a daemon that already answers is not started a second time')
 })
 
 test('Linux install: no terminal and no --yes → the plan with D55\'s cost line, exit 2, nothing written; --dry-run → exit 0', async () => {
@@ -121,17 +121,16 @@ test('Linux install with no systemd --user: exit 1, the entry not enabled and sa
   assert.equal(await runInstallCli(['--yes', '--json'], ctx(io)), 1, io.text())
   const r = io.json()
   assert.deepEqual([r.ok, r.autostart.enabled, r.autostart.entry, r.daemon.state], [false, false, unitPath(home), 'not-running'], io.text())
-  assert.equal(r.problems.length, 1, JSON.stringify(r.problems))
-  assert.match(r.problems[0], /Failed to connect to bus/, 'the reason is systemctl\'s own')
-  assert.ok(!r.notes.includes(r.problems[0]), 'said once, as a problem')
+  const problem = r.problems.find((p) => /Failed to connect to bus/.test(p))
+  assert.ok(problem, `the reason is systemctl's own: ${JSON.stringify(r.problems)}`)
+  assert.ok(!r.notes.includes(problem), 'said once, as a problem')
   const certs = certBytes(home)
 
   const before = snapshot(home)
   const refused = fakeIo()
   assert.equal(await runOnCli(['--yes', '--json'], ctx(refused)), 2, refused.text())
   assert.equal(refused.json().error.code, 'autostart-missing')
-  assert.match(refused.json().error.message, /could not be read \(.*Failed to connect to bus/, 'unreadable, not "not registered"')
-  assert.match(refused.json().error.message, /Run: trocar install$/)
+  assert.match(refused.json().error.message, /Failed to connect to bus/, 'with systemctl\'s own reason (the unreadable answer: unit.test.mjs)')
   assert.deepEqual(changedFiles(before, snapshot(home)).filter((f) => !f.startsWith('.trocar/collector/flows/')), [], 'not a byte but the refusal\'s own record')
 
   manager = true

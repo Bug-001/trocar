@@ -58,6 +58,7 @@ test('unit: registered() reads is-enabled — enabled, not-found, switched off, 
   assert.equal(answering(0, 'enabled\n').state, 'present')
   assert.equal(answering(4, 'not-found\n').state, 'absent')
   for (const off of ['disabled', 'masked', 'linked']) assert.equal(answering(1, `${off}\n`).state, 'disabled', `${off}: the file is there, the entry is off`)
+  assert.equal(answering(0, 'enabled-runtime\n').state, 'disabled', 'enabled only until the next boot: not the login entry')
   const noBus = answering(1, '', 'Failed to connect to bus: No such file or directory\n')
   assert.equal(noBus.state, 'unknown', 'no manager answered: nothing was asked')
   assert.match(noBus.err, /Failed to connect to bus/, 'with systemctl\'s own reason')
