@@ -82,15 +82,20 @@ export const HARNESSES = Object.freeze([
     observerEffects: [effect('zcode-node-https', 'network.caCertFile in ~/.zcode/cli/config.json',
       'HTTP client switched from undici to node:https: a new Agent per request, no ALPN (inferred, lab check pending)')] },
   { ...ROW, id: 'pi', agents: ['pi'],
-    // the affinity headers its OpenAI-style and Anthropic providers send, then the Responses body key; a direct
-    // Anthropic or most chat-completions calls carry none → synthesized (src/dissect/synth-key.mjs, gate G11)
-    sessionKeys: [H('x-session-id', 'medium'), H('session_id', 'medium'), H('x-session-affinity', 'medium'), B(['prompt_cache_key'])],
+    // measured (pi 1.4.0, default configuration): openai-responses sends header session_id, Codex (WebSocket upgrade and SSE) header
+    // session-id, both with body prompt_cache_key, all three = pi's session id; anthropic-messages (API key or OAuth) and chat-completions
+    // send none → synthesized (src/dissect/synth-key.mjs, gate G11)
+    sessionKeys: [H('session_id'), H('session-id'), B(['prompt_cache_key'])],
     synth: true,
+    // the summary request (same endpoint, no tools, one user message) starts its system prompt with this sentence; a JSON string's start
+    compaction: [{ marker: /(?<!\\)"You are a context summarization assistant\./ }],
     observerEffects: [
-      effect('pi-extension', 'trocar trust extension', 'trocar code runs inside the agent process', LINUX),
+      effect('pi-extension', 'trocar trust extension', 'trocar code runs inside the agent process and pi lists it on its startup screen', LINUX),
       effect('pi-route-extension', 'trocar extension placed by install',
-        'trocar code runs inside the agent process; while capture is on, the proxy variables it sets are inherited by the commands pi\'s tools run', DOOR)],
-    traffic: [T('pi.dev', 'telemetry', '^/api/report-install')] },
+        'trocar code runs inside the agent process and pi lists it on its startup screen; while capture is on, the proxy variables it sets are inherited by the commands pi\'s tools run', DOOR)],
+    // pi.dev: the install report (its version check is other, kept in full); github.com and its release assets: the fd / rg downloads of
+    // pi's first interactive start (none in print or rpc mode)
+    traffic: [T('pi.dev', 'telemetry', '^/api/report-install'), T('github.com', 'files'), T('release-assets.githubusercontent.com', 'files')] },
 ]);
 
 // Ordered union of every header session key the table declares, then the legacy ones. Only for raw lines that
