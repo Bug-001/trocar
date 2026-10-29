@@ -30,7 +30,7 @@ test('every harness file has a proxy export of the 4.11 §2.3 shape, and the loa
   for (const [proxy, re] of bad) assert.match(proxyProblems(proxy).join('; '), re)
 })
 
-test('the values of the seven are the ones measured on a Windows test machine: env, system proxy, SOCKS', () => {
+test('the values of each harness are the ones measured on a Windows test machine: env, system proxy, SOCKS', () => {
   const row = (n) => { const p = by[n].proxy; return { env: p.env.includes('HTTPS_PROXY') || p.env.includes('ZCODE_HTTP_PROXY'), http: p.systemProxy.http, ws: p.systemProxy.ws, unsupported: p.unsupported, schemes: p.schemes, branches: p.branches } }
   assert.deepEqual(row('claude-code'), { env: true, http: false, ws: false, unsupported: { socks4: 'fails', socks5: 'fails', socks5h: 'fails' }, schemes: ['http', 'https'], branches: ['all'] })
   assert.deepEqual(row('codex'), { env: true, http: true, ws: false, unsupported: { socks4: 'silent-direct', socks5: 'silent-direct', socks5h: 'silent-direct' }, schemes: ['http', 'https'], branches: ['http', 'ws'] })
@@ -39,9 +39,10 @@ test('the values of the seven are the ones measured on a Windows test machine: e
   assert.deepEqual(row('deepseek-dsh'), { env: true, http: false, ws: false, unsupported: { socks4: 'silent-direct', socks5: 'silent-direct', socks5h: 'silent-direct' }, schemes: ['http', 'https'], branches: ['all'] })
   assert.deepEqual(row('hermes'), { env: true, http: true, ws: true, unsupported: {}, schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'], branches: ['all'] })
   assert.deepEqual(row('z-code'), { env: true, http: false, ws: false, unsupported: { socks4: 'fails', socks5: 'fails' }, schemes: ['http', 'https', 'socks5h'], branches: ['all'] })
+  assert.deepEqual(row('pi'), { env: true, http: false, ws: false, unsupported: { socks5: 'fails' }, schemes: ['http', 'https'], branches: ['all'] })
   // Windows is measured for these seven; Linux for claude-code alone (V54, on a test machine: a real `claude -p` behind a CONNECT proxy named in its settings.json env); macOS
   // for none. A harness added later says what was measured for it in its own `measured`, which the shape test above holds to lab | inferred.
-  for (const n of ['claude-code', 'codex', 'opencode', 'kimi-code', 'deepseek-dsh', 'hermes', 'z-code'])
+  for (const n of ['claude-code', 'codex', 'opencode', 'kimi-code', 'deepseek-dsh', 'hermes', 'z-code', 'pi'])
     assert.deepEqual(by[n].proxy.measured, { win32: 'lab', linux: n === 'claude-code' ? 'lab' : 'inferred', darwin: 'inferred' }, `${n}: measured on Windows${n === 'claude-code' ? ' and Linux' : ''}, inferred elsewhere`)
 })
 
@@ -60,6 +61,8 @@ test('the files a harness reads a proxy from resolve against HOME and its own co
   assert.equal(at('hermes')[0].path, path.join(HOME, '.hermes', '.env'))
   assert.equal(at('hermes', { HERMES_HOME: '/h' })[0].path, '/h/.env')
   assert.deepEqual(at('z-code'), [{ path: path.join(HOME, '.zcode', 'cli', 'config.json'), format: 'json', keys: [['network', 'httpProxy']] }])
+  assert.deepEqual(at('pi'), [{ path: path.join(HOME, '.pi', 'agent', 'settings.json'), format: 'json', keys: [['httpProxy']] }])
+  assert.equal(at('pi', { PI_CODING_AGENT_DIR: '/p' })[0].path, '/p/settings.json')
   assert.deepEqual(at('opencode'), [], 'OpenCode reads its proxy from the environment only')
   assert.deepEqual(at('kimi-code'), [])
   // the variable a file entry names as its relocation is the one its path reads: the door fetches exactly the named ones from the process (4.11 P7 step 3)
