@@ -52,7 +52,7 @@ test('CM23 wiring: after install, a dsh started inside the on window is no holde
 })
 
 // Claude Code's trust entry re-reads (trust.rereadsEntry) but its settings route does not: a Claude started before on that never came through the
-// door is no holder after off (2026-10-21 win lab: six Claude Desktop processes from before install were listed)
+// door is no holder after off (seen on Windows: six Claude Desktop processes started before install were listed)
 const ccWorld = async (doorSeen) => {
   const w = await modelWorld({ commands: ['claude'] })
   const r = await w.install({ wrapperKit: { renderWrapper } })

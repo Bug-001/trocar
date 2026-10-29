@@ -1,4 +1,4 @@
-// test/off/win32.test.mjs — the Windows seams under `off` (plan Task 9(b), W54; RFC 4.8 §4.2, §7; 1.6 §1.4 第 2 / 5 步): the process table
+// test/off/win32.test.mjs — the Windows seams under `off` (W54; RFC 4.8 §4.2, §7; 1.6 §1.4 第 2 / 5 步): the process table
 // and the lock identity from one fixed powershell question each, and the stop order — the supervisor parent goes FIRST (a daemon killed
 // first would be re-spawned by it), then the daemon, both through taskkill. Every OS tool is a recording runner answering a fixed shape;
 // no real powershell or taskkill ever runs (0.1 §3). The control-pipe seam has its own file, test/off/win32-control.test.mjs.

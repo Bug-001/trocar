@@ -878,7 +878,7 @@ test('install: a failure that cannot be recorded keeps its own message and says 
   } finally { b.done() }
 })
 
-// ---- D39③ / 1.6 R2 R3 (Task 3): backups before every user-file change, manifest version 2 --------------------------------------
+// ---- D39③ / 1.6 R2 R3: backups before every user-file change, manifest version 2 --------------------------------------
 const backupsIn = (b) => (fs.existsSync(path.join(b.home, '.trocar', 'backup')) ? fs.readdirSync(path.join(b.home, '.trocar', 'backup')).sort().map((n) => path.join(b.home, '.trocar', 'backup', n)) : [])
 
 test('install writes manifest version 3: every item has kind, undo_by_hand and its phase, and an existing settings file is backed up (0700/0600) before it changes (R2, R3)', async () => {
@@ -964,7 +964,7 @@ test('a manifest of a version this build does not read stops install before anyt
   } finally { b.done() }
 })
 
-// ---- D39 / 4.6 撤销顺序 (Task 4): the liveness snapshot — what `off` needs to judge, with no descriptor in sight, which live process may hold what ----
+// ---- D39 / 4.6 撤销顺序: the liveness snapshot — what `off` needs to judge, with no descriptor in sight, which live process may hold what ----
 test('install records liveness per harness it changed anything for: its signature as JSON, whether it re-reads its entry, until when a running one still trusts', async () => {
   const b = box()
   try {
@@ -1106,7 +1106,7 @@ test('V13: uninstall writes desired off, asks the daemon to switch off and exit,
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   const entryPaths = new Set(s.manifest().entries.flatMap((e) => [e.path, e.real_path].filter(Boolean)))
   const unitFile = path.join(s.home, '.config', 'systemd', 'user', 'trocar-collector.service')
-  const standalone = standalonePath(s.home); fs.mkdirSync(path.dirname(standalone), { recursive: true }); fs.writeFileSync(standalone, '#!/usr/bin/env node\n') // what `on` leaves there (Task 8)
+  const standalone = standalonePath(s.home); fs.mkdirSync(path.dirname(standalone), { recursive: true }); fs.writeFileSync(standalone, '#!/usr/bin/env node\n') // what `on` leaves there
   for (const keep of ['capture-2026-10-06.ndjson', 'audit/a.ndjson', 'replays/r.ndjson']) { fs.mkdirSync(path.dirname(path.join(s.dir, keep)), { recursive: true }); fs.writeFileSync(path.join(s.dir, keep), '{"keep":true}\n') }
   const journal = []
   const rel = (f) => path.relative(s.home, f)

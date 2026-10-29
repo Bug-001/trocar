@@ -1,5 +1,5 @@
 // test/helpers/proc-variants.mjs — bend one process seed (test/helpers/proc-seeds.mjs) along the axes an install varies on, keeping what the
-// process IS (plan 2026-10-14-d51-name-allowlist G2): every variant has the seed's `harness` and `source`, plus `variant` naming the axis. The
+// process IS: every variant has the seed's `harness` and `source`, plus `variant` naming the axis. The
 // axes: the install prefix (Homebrew and its Caskroom, npm global, nvm, volta, pnpm, bun, a version-named file under ~/.local/share/<prog>/versions,
 // /Applications and ~/Applications; on Windows AppData\Local\Programs, Program Files, scoop, an MSIX WindowsApps package), the editor extension
 // directories (.vscode .cursor .vscode-insiders .vscode-oss .windsurf), letter case, `.exe`, ` (deleted)`, directories with spaces and Chinese,

@@ -47,7 +47,7 @@ test('differential: for every process seed and its variants, matchHarness over t
 
 // ── on: the snapshot written ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // The install side writes the snapshot the same on every OS (the header): macOS's old trust plan went with its descriptor overlays, so a darwin box
-// is installed by the Linux plan and judged by `off` against macOS's process tables — the half of these tests that stays (plan 2026-10-15 §A.6, P12).
+// is installed by the Linux plan and judged by `off` against macOS's process tables — the half of these tests that stays (4.11 P12).
 const installOs = (osName) => (osName === 'darwin' ? 'linux' : osName)
 async function codexBox(asked = 'darwin') {
   const osName = installOs(asked)

@@ -1,6 +1,6 @@
 // test/helpers/proc-seeds.mjs — measured and specified process shapes of the seven harnesses, with the harness each one IS (or null: not an
 // agent, or a helper the harness's exclude items drop). These are regression seeds, not rules (RFC 4.6 「按 harness」 table note, 0.1 §2): the
-// expectation of each comes from a source independent of the name list it checks (plan 2026-10-14-d51-name-allowlist G4) — the RFC row, a lab
+// expectation of each comes from a source independent of the name list it checks — the RFC row, a lab
 // run, a review finding, or an existing harness test's example — and `source` says which. test/helpers/proc-variants.mjs bends each one along
 // the install axes; test/collector/identity-presets.test.mjs (T4) asserts the harness of every seed and variant.
 //
@@ -12,7 +12,7 @@ const W = String.raw`C:\Users\u`
 const S46 = 'spec 4.6:132-138 (按 harness 预设名单)'
 const DF = 'test/collector/harness/darwin-forms.test.mjs:24-145 at 839ee1e5 (retired with the macOS form tables)'
 const WF = 'test/collector/harness/win32-forms.test.mjs:21-102 at 60c8d165 (retired with the Windows overlays; the forms now live in proxyMode.forms of the base descriptors)'
-const P = 'plan 2026-10-14-d51-name-allowlist §4 (P:162-189)'
+const P = 'RFC 4.6 name list (D51)'
 
 const winCmd = (argv) => argv.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ')
 const w = (exe, args, harness, source, more = {}) => { const argv = [exe, ...args]; return { os: 'win32', exe, argv, cmdline: winCmd(argv), harness, source, ...more } }
