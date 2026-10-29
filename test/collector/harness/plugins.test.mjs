@@ -14,11 +14,12 @@ import { CA } from './_ctx.mjs'
 
 // the plugin needs tls.setDefaultCACertificates (Node >= 22.19) and the probe tls.getCACertificates (>= 22.15); an older Node (the CI matrix has 20) skips the real-Node test, so every Node counts the same tests
 const NODE_TLS_ROOTS = typeof tls.setDefaultCACertificates === 'function' && typeof tls.getCACertificates === 'function'
-const SRC = { dsh: 'dsh/index.js', opencode: 'opencode/trocar-ca.js', pi: 'pi/trocar-ca.js' }
+// dsh and pi share the root-only body and differ only in the exports their host looks for
+const SRC = { dsh: ['node-roots.js', 'dsh/exports.js'], opencode: 'opencode/trocar-ca.js', pi: ['node-roots.js', 'pi/exports.js'] }
 // the plugins that only add the root (no fetch wrapper), and the exports each host loads
 const ROOT_ONLY = ['dsh', 'pi']
 const EXPORTS = { dsh: ['apply', 'name'], opencode: ['TrocarCaPlugin'], pi: ['default'] }
-const read = (rel) => fs.readFileSync(new URL(rel, PLUGIN_SOURCES), 'utf8')
+const read = (rel) => [rel].flat().map((r) => fs.readFileSync(new URL(r, PLUGIN_SOURCES), 'utf8')).join('')
 const code = (src) => src.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s\/\/ .*$/gm, '')
 
 test('T13 static: each plugin imports only node:fs and node:tls, calls only the allowed fs functions, never names a network API, a body or rejectUnauthorized', () => {
@@ -70,7 +71,7 @@ async function load(rel, { caText = CA.certPem, tlsApi = {}, fetch = null } = {}
   const src = rendered.replace("import fs from 'node:fs'", 'const fs = globalThis.__trocarT13.fs').replace("import tls from 'node:tls'", 'const tls = globalThis.__trocarT13.tls')
   assert.ok(!/^import /m.test(src), 'every import replaced by its stub')
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-t13-'))
-  const file = path.join(dir, path.basename(rel).replace(/\.js$/, '.mjs'))
+  const file = path.join(dir, path.basename([rel].flat()[0]).replace(/\.js$/, '.mjs'))
   fs.writeFileSync(file, src)
   const realFetch = globalThis.fetch
   globalThis.__trocarT13 = { fs: fsStub, tls: tlsStub }

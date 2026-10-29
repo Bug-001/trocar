@@ -9,7 +9,7 @@
 // started with --no-extensions or its settings leave the file out. Proxy: the proxy names from the environment, and settings.json
 // `httpProxy` filling what the environment lacks; no OS proxy.
 // Trust: on Linux, trocar's extension <agent dir>/extensions/trocar-ca.js appends the trocar CA to Node's default roots and writes the
-// per-pid marker (the dsh plugin's body, 4.6); on macOS / Windows the P9 template pi-extension adds the root and reads the switch file once.
+// per-pid marker (the root-only body it shares with dsh, 4.6); on macOS / Windows the P9 template pi-extension adds the root and reads the switch file once.
 import path from 'node:path'
 import { expandHome, parseJsonc } from '../core/config-read.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
@@ -33,7 +33,7 @@ function inject(ctx) {
   return {
     owned: [{
       path: path.join(agentDir((k) => ctx.env.get(k), ctx.home), 'extensions', 'trocar-ca.js'), role: 'plugin', mode: 0o644,
-      data: renderPlugin('pi/trocar-ca.js', { caFile: ctx.caPem, markerDir: path.join(ctx.collectorDir, 'run', 'trust') }),
+      data: renderPlugin(['node-roots.js', 'pi/exports.js'], { caFile: ctx.caPem, markerDir: path.join(ctx.collectorDir, 'run', 'trust') }),
     }],
     notes: [{ code: 'harness-note', text: "a pi started with --no-extensions, or whose settings leave trocar's extension out, does not load it and is not captured" }],
   }

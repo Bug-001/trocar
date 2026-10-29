@@ -56,7 +56,7 @@ function inject(ctx) {
   const entry = path.join(dir, 'index.js')
   return {
     owned: [
-      { path: entry, role: 'plugin', data: renderPlugin('dsh/index.js', { caFile: ctx.caPem, markerDir: path.join(ctx.collectorDir, 'run', 'trust') }) },
+      { path: entry, role: 'plugin', data: renderPlugin(['node-roots.js', 'dsh/exports.js'], { caFile: ctx.caPem, markerDir: path.join(ctx.collectorDir, 'run', 'trust') }) },
       { path: path.join(dir, 'package.json'), role: 'plugin', data: ANONYMOUS_MODULE_MANIFEST },
     ],
     entries: [{ kind: 'text', format: 'yaml-list', path: path.join(dshHome(ctx.env, ctx.home), 'cordis.patch.yml'), line: `- insert: [{ name: ${JSON.stringify(entry)} }] ${lineComment("loads trocar's CA trust plugin")}`, semantic: 'append' }],
