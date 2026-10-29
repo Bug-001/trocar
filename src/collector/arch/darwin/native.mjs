@@ -1,4 +1,4 @@
-// native.mjs — where the macOS native pieces live in the package and the sha256 they are pinned to (plan decision #10).
+// native.mjs — where the macOS native pieces live in the package and the sha256 they are pinned to (RFC 4.9 §3 ⑮).
 // The binaries are committed prebuilt (scripts/build-darwin-native.sh is the one deliberate rebuild) and native/pins.json is the
 // ONE place their hashes are written; `npm pack` copies both and nothing rebuilds at pack time.
 import crypto from 'node:crypto'

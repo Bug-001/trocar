@@ -1,4 +1,4 @@
-// sign-helper.swift — trocar's macOS key custody (RFC 4.11 P1 `keychain`, plan decision #10)
+// sign-helper.swift — trocar's macOS key custody (RFC 4.11 P1 `keychain`)
 // The root's P-256 private key lives in the user's login keychain, not extractable
 // and sensitive (the flags at the top level as well, R3-M1); its ACL names this binary, so only this binary signs with it.
 // It signs nothing a caller hands it: it BUILDS both certificates itself (CM3) — the root (CA pathLen 1, KU keyCertSign|cRLSign,

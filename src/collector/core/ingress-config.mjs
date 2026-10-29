@@ -1,4 +1,4 @@
-// ingress-config.mjs — the ports and secrets proxy mode needs, chosen once and kept (spec 4.11 §3 ①, plan decision #16; lifted from the twins
+// ingress-config.mjs — the ports and secrets proxy mode needs, chosen once and kept (spec 4.11 §3 ①; lifted from the twins
 // arch/{darwin,win32}/ingress-config.mjs it replaces).
 //
 // `~/.trocar/collector/ingress.json` (0600) holds the engine's ingress port, one door port per entry group (a group is a route id: every form on that

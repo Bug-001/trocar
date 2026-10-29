@@ -1,5 +1,5 @@
 // status-facts.mjs (core/proxymode) — the one OS-neutral reader of what `status` and `doctor` say per form in the collector model (RFC 1.6 §9.4
-// `certificate` / `proxy`, 4.11 §1 「status 按 harness 显示这条链」, CM21, CM31, CM32; plan §E.7 rulings 2 and 6). Per installed harness × present form
+// `certificate` / `proxy`, 4.11 §1 「status 按 harness 显示这条链」, CM21, CM31, CM32). Per installed harness × present form
 // (descriptor proxyMode.forms, `present`): the certificate from the install-phase manifest items, the proxy from the phase:on items (the value
 // written, `prior_value`) and the daemon's doors. The upstream is the door's own rule (chain.mjs upstreamFor) with no process (steps 2, 4, 5), unless
 // the daemon answered for a process of that door (its `upstreams`). Names no OS and no harness; every reader is injected (ctx, fs, drift).

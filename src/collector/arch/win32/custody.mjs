@@ -1,4 +1,4 @@
-// custody.mjs — the Windows key custody (RFC 4.11 P1 `cng`, plan decision #9): the P1 interface over the one-shot custody.ps1. The
+// custody.mjs — the Windows key custody (RFC 4.11 P1 `cng`): the P1 interface over the one-shot custody.ps1. The
 // root key is a non-exportable CNG key (TPM first, else the Software KSP) and never enters Node; every root signature is one script
 // run, and the script builds what it signs itself (CM3). The verbs, the argv and the 'unavailable' value are core/tls/custody-cli.mjs's,
 // shared with the macOS signing helper. The resident helper stays read-only: key operations are never one of its verbs (4.8 §1, W1).
