@@ -14,7 +14,8 @@ const MEASURED = ['lab', 'inferred']
 const nonEmpty = (s) => typeof s === 'string' && s !== ''
 
 /** Problems with a descriptor's `proxy` export against the shape of 4.11 §2.3 (`[]` = fine):
- *  `{ env: [names the agent reads, preferred first], files: [{ path: ({ home, env }) => file, format: 'json' | 'dotenv', keys: [key path | name, …] }], systemProxy: { http, ws } (true | false | 'unknown':
+ *  `{ env: [names the agent reads, preferred first], files: [{ path: ({ home, env }) => file, format: 'json' | 'dotenv', keys: [key path | name, …], applies: 'override' | 'fill' (over the launch env, or only the names
+ *  it lacks: 4.11 P7 step 3), env?: the variable that relocates the file, names?: [the env names a JSON key that is not itself one stands for] }], systemProxy: { http, ws } (true | false | 'unknown':
  *  does it follow the OS proxy setting, per transport), schemes: [the proxy URL schemes it takes], unsupported: { <scheme>: 'silent-direct' | 'fails' }, branches: ['all'] | ['http', 'ws'],
  *  measured: { win32, linux, darwin }: 'lab' | 'inferred', restart: { hint, processes, managed? } }` (`managed: true`: the settings live in a process the agent's windows do not end, which `doctor` then names by pid). A harness with more to say (proxy mode's per-form data, 4.8 §2.3) adds keys; these must be there. */
 export function proxyProblems(p) {
@@ -24,6 +25,7 @@ export function proxyProblems(p) {
   if (!Array.isArray(p.files)) bad.push('files: not a list')
   else p.files.forEach((f, i) => {
     if (!f || typeof f.path !== 'function' || !['json', 'dotenv'].includes(f.format) || !Array.isArray(f.keys) || !f.keys.length) bad.push(`files[${i}]: needs path(), format json | dotenv and a non-empty keys list`)
+    else if (!['override', 'fill'].includes(f.applies) || (f.env !== undefined && !nonEmpty(f.env)) || (f.names !== undefined && !(Array.isArray(f.names) && f.names.length && f.names.every((n) => (p.env || []).includes(n))))) bad.push(`files[${i}]: applies is override or fill, env a variable name, names a list of env's names`)
   })
   for (const k of ['http', 'ws']) if (![true, false, 'unknown'].includes(p.systemProxy && p.systemProxy[k])) bad.push(`systemProxy.${k}: not true, false or 'unknown'`)
   if (!Array.isArray(p.schemes) || !p.schemes.length || !p.schemes.every((s) => SCHEME.includes(s))) bad.push(`schemes: not a list of ${SCHEME.join(' | ')}`)

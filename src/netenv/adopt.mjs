@@ -16,20 +16,37 @@ const unknown = (reason, detail) => ({ unknown: { reason, detail } })
 const dig = (obj, keys) => keys.reduce((o, k) => (o && typeof o === 'object' ? o[k] : undefined), obj)
 const present = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
 
-/** One file of a harness's `proxy.files`: → { value, key } | { none: true } | { unknown } — the first key it holds a value for, in the order the descriptor lists them. */
-function fromFile(file, f, fs) {
+/** One file of a harness's `proxy.files`: → { values: [{ value, key, last }], mtimeMs } (every key it holds a value for, in the order the descriptor lists them;
+ *  `last` = the key's last segment) | { unknown }. A file that is not there holds none. */
+function valuesOf(file, f, fs) {
   let text, mtimeMs
-  try { text = fs.readFileSync(file, 'utf8'); mtimeMs = fs.statSync(file).mtimeMs } catch (e) { return e && e.code === 'ENOENT' ? { none: true } : unknown(e && e.code === 'EACCES' ? 'denied' : 'absent', `${file}: ${errCode(e)}`) }
+  try { text = fs.readFileSync(file, 'utf8'); mtimeMs = fs.statSync(file).mtimeMs } catch (e) { return e && e.code === 'ENOENT' ? { values: [] } : unknown(e && e.code === 'EACCES' ? 'denied' : 'absent', `${file}: ${errCode(e)}`) }
   if (f.format === 'json') {
     const { data, error } = parseJsonc(text)
     if (error) return unknown('unparseable', `${file} does not parse as JSON`)
-    if (data == null) return { none: true } // no document: no proxy in it
-    for (const keys of f.keys) { const v = present(dig(data, keys)); if (v) return { value: v, key: keys.join('.'), mtimeMs } }
-  } else {
-    const vars = parseDotenv(text)
-    for (const k of f.keys) { const v = present(vars.get(k)); if (v) return { value: v, key: k, mtimeMs } }
+    if (data == null) return { values: [] } // no document: no proxy in it
+    return { values: f.keys.map((keys) => ({ value: present(dig(data, keys)), key: keys.join('.'), last: keys[keys.length - 1] })).filter((x) => x.value), mtimeMs }
   }
-  return { none: true }
+  const vars = parseDotenv(text)
+  return { values: f.keys.map((k) => ({ value: present(vars.get(k)), key: k, last: k })).filter((x) => x.value), mtimeMs }
+}
+/** → { value, key } | { none: true } | { unknown }: the first key the file holds a value for. */
+function fromFile(file, f, fs) {
+  const r = valuesOf(file, f, fs)
+  return r.unknown ? r : r.values.length ? { ...r.values[0], mtimeMs: r.mtimeMs } : { none: true }
+}
+
+/** What a harness's own files (`proxy.files`) set, name by name, as its agent applies them at start (4.11 P7 step 3): → `{ values: [{ name, value, applies }] }`
+ *  in the descriptor's order (files, then keys) | `{ unknown: { reason, detail } }` (a file that could not be read or parsed: it may hold the value that wins).
+ *  A dotenv key is its name; a JSON key path whose last segment is one of `proxy.env` is that name, else it stands for the entry's `names` (default: all of them). */
+export function proxyFileValues(desc, { home, env = {}, fs = nodeFs } = {}) {
+  const p = desc.proxy, out = []
+  for (const f of p.files || []) {
+    const r = valuesOf(f.path({ home, env }), f, fs)
+    if (r.unknown) return r
+    for (const x of r.values) for (const name of p.env.includes(x.last) ? [x.last] : f.names || p.env) out.push({ name, value: x.value, applies: f.applies })
+  }
+  return { values: out }
 }
 
 /**

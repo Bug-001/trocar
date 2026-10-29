@@ -126,7 +126,7 @@ function inject(ctx) {
 // forms only `socks5h` is taken (a socks5 / socks4 proxy makes the request fail).
 const proxy = {
   env: ['ZCODE_HTTP_PROXY'],
-  files: [{ path: ({ home }) => path.join(home, '.zcode', 'cli', 'config.json'), format: 'json', keys: [['network', 'httpProxy']] }],
+  files: [{ path: ({ home }) => path.join(home, '.zcode', 'cli', 'config.json'), format: 'json', keys: [['network', 'httpProxy']], applies: 'fill' }],
   systemProxy: { http: false, ws: false },
   schemes: ['http', 'https', 'socks5h'],
   unsupported: { socks4: 'fails', socks5: 'fails' },

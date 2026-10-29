@@ -18,6 +18,8 @@ test('every harness file has a proxy export of the 4.11 §2.3 shape, and the loa
     [undefined, /no proxy export/],
     [{ ...good, env: [] }, /env: not a list/],
     [{ ...good, files: [{ path: 'x', format: 'json', keys: [] }] }, /files\[0\]/],
+    [{ ...good, files: [{ ...good.files[0], applies: 'always' }] }, /files\[0\]/],
+    [{ ...good, files: [{ ...good.files[0], names: ['NOT_A_PROXY_NAME'] }] }, /files\[0\]/],
     [{ ...good, systemProxy: { http: 'maybe', ws: false } }, /systemProxy\.http/],
     [{ ...good, unsupported: { socks5: 'ignored' } }, /unsupported\.socks5/],
     [{ ...good, branches: ['http'] }, /branches/],
@@ -60,6 +62,8 @@ test('the files a harness reads a proxy from resolve against HOME and its own co
   assert.deepEqual(at('z-code'), [{ path: path.join(HOME, '.zcode', 'cli', 'config.json'), format: 'json', keys: [['network', 'httpProxy']] }])
   assert.deepEqual(at('opencode'), [], 'OpenCode reads its proxy from the environment only')
   assert.deepEqual(at('kimi-code'), [])
+  // the variable a file entry names as its relocation is the one its path reads: the door fetches exactly the named ones from the process (4.11 P7 step 3)
+  for (const d of all) for (const f of d.proxy.files) if (f.env) assert.ok(f.path({ home: HOME, env: { [f.env]: '/moved' } }).startsWith('/moved/'), `${d.name}: ${f.env} moves ${f.path({ home: HOME, env: {} })}`)
 })
 
 test('every harness says how to get a running agent to read a proxy again, and Z-Code names its own variable first', () => {
