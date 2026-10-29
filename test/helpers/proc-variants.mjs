@@ -92,7 +92,8 @@ export function variantsOf(seed) {
     const sep = os === 'win32' ? '\\' : '/'
     const home = os === 'win32' ? String.raw`C:\Users\u` : os === 'darwin' ? '/Users/u' : '/home/u'
     const script = seed.argv[at].replace(/^[A-Za-z]:/, '').replace(/[\\/]/g, sep)
-    add('entry-space-cjk', seed.exe, seed.argv.map((x, i) => (i === at ? `${home}${sep}My Tools${sep}我的 工具${script}` : x)))
+    const lead = script.startsWith(sep) ? '' : sep // a relative entry (resolved against the cwd) gets its own separator
+    add('entry-space-cjk', seed.exe, seed.argv.map((x, i) => (i === at ? `${home}${sep}My Tools${sep}我的 工具${lead}${script}` : x)))
     const FLAGS = ['--no-warnings', '--max-old-space-size=512', '--enable-source-maps']
     for (let n = 0; n <= FLAGS.length; n++) add(`flags:${n}`, seed.exe, [...seed.argv.slice(0, at), ...FLAGS.slice(0, n), ...seed.argv.slice(at)])
   }

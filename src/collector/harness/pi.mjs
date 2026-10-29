@@ -92,10 +92,16 @@ export default {
   runtime: 'node',
   // Which processes are pi (D51 preset, every OS): argv[0] `pi` (the Bun binary; on macOS also the node pi retitles, with `pi-rpc` for
   // rpc-entry.js), and node whose entry is pi's bin (…/pi: macOS before the retitle, npm's invoked <prefix>/bin/pi or the managed
-  // …/node_modules/.bin/pi) or the package's bundled cli.js / rpc-entry.js (Windows keeps that command line; separators may repeat). The managed
-  // launcher node (…/pi-launcher.js, Windows) only waits for its child and is not it.
+  // …/node_modules/.bin/pi) or the package's cli.js / rpc-entry.js, bundled or not (Windows keeps that command line, measured for the bundled
+  // cli.js; the unbundled one there is inferred from Windows never retitling; separators may repeat). pi's RpcClient runs `node dist/cli.js
+  // --mode rpc` with the package as cwd when its caller passes no cliPath (macOS, measured): that relative entry is pi only with the rpc flag.
+  // The managed launcher node (…/pi-launcher.js, Windows) only waits for its child and is not it.
   processes: {
-    names: [{ name: 'pi' }, { name: 'pi-rpc' }, { name: 'node', entry: '((^|/)pi|/+@earendil-works/+pi-coding-agent/+dist/+bundle/+(cli|rpc-entry)\\.js)$' }],
+    names: [
+      { name: 'pi' }, { name: 'pi-rpc' },
+      { name: 'node', entry: '((^|/)pi|/+@earendil-works/+pi-coding-agent/+dist/+(bundle/+)?(cli|rpc-entry)\\.js)$' },
+      { name: 'node', entry: '(^|/)dist/+cli\\.js$', args: '(^| )--mode( |=)rpc( |$)' },
+    ],
     exclude: [{ name: 'node', args: 'pi-launcher\\.js' }],
     longLived: [{ args: '(^| )--mode( |=)rpc( |$)' }],
   },
