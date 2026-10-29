@@ -56,7 +56,9 @@ const proxy = {
 }
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3): data only. The install-time extension in pi's extensions dir carries the root and reads
-// the switch file once at import (so a pi started while on is a holder, P12); every form has it.
+// the switch file once at import (so a pi started while on is a holder, P12); every form has it. Verified: the official install's pi accepted a
+// leaf chained to the root with only the extension adding it (fetch, WebSocket and node:https; both test machines). npm's and rpc mode were
+// measured with the root in NODE_EXTRA_CA_CERTS only; the door judges them by their verified sibling (one door, D51) until measured themselves.
 const PI = (p) => ({ base: 'home', dir: '.pi/agent', env: 'PI_CODING_AGENT_DIR', path: p })
 const NOT_MEASURED = { reason: 'not-measured' }
 const form = (id, present, verified = NOT_MEASURED) => ({ id, os: ['darwin', 'win32'], route: 'switch', cert: 'ext', trust: 'node', present, verified: { darwin: verified, win32: verified } })
@@ -64,7 +66,7 @@ const proxyMode = {
   forms: [
     // only the official installer writes install/current-version (its launcher reads it; both OS); <agent dir>/bin is not a sign of it: pi
     // downloads fd / rg there for every install
-    form('pi.cli', [PI('install/current-version')]),
+    form('pi.cli', [PI('install/current-version')], true),
     form('pi.npm', [{ command: 'pi' }]),
     form('pi.rpc', [{ command: 'pi' }]),
     // the Bun binary is an archive unpacked anywhere and leaves nothing of its own to probe, so any `pi` on PATH stands for it; it stays
