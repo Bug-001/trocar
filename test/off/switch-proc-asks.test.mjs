@@ -121,9 +121,9 @@ test('D62: `on` on Windows asks the daemon for the table once and starts no powe
   const box = await liveUnit({ w, platform: 'win32' })
   const t = tools()
   const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: box.unit }
-  assert.equal(await runInstallCli(['--yes'], { io: fakeIo(), env: w.env, home: w.home, platform: 'win32', deps }), 0)
-  await withScratchCwd('win32', async () => {
+  await withScratchCwd('win32', async () => { // install already starts the daemon (enable --now), so it runs in the scratch cwd too
     try {
+      assert.equal(await runInstallCli(['--yes'], { io: fakeIo(), env: w.env, home: w.home, platform: 'win32', deps }), 0)
       const io = fakeIo()
       const exit = await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform: 'win32', deps: { ...deps, parts: box.parts, exec: t.run, daemonReader: warmReader(), sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 25))) } })
       assert.equal(exit, 0, io.text())
