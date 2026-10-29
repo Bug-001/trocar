@@ -6,7 +6,7 @@
 import path from 'node:path'
 import { standaloneCommand } from '../off/paths.mjs'
 import { noColor, WIDTH, wrap, pairs, size } from './text.mjs'
-import { HARNESS_IDS } from './harness-names.mjs'
+import { HARNESS_IDS } from '../off/harness-names.mjs'
 
 /** `/home/alice/.claude/x` → `~/.claude/x` when `p` is under `home`. */
 export const tilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)

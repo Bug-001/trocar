@@ -157,7 +157,7 @@ export async function measure({ home, runs = DEFAULT_RUNS, only = null }) {
   const segDoc = run(home, ['query', 'segments'])
   const sesDoc = run(home, ['query', 'sessions'])
   const big = (segDoc.doc?.segments || []).filter((s) => s.records > 0).sort((a, b) => a.bytes - b.bytes).pop()
-  const { HARNESS_IDS } = await import('../src/cli/harness-names.mjs')  // one fact, one place (0.1 §2)
+  const { HARNESS_IDS } = await import('../src/off/harness-names.mjs')  // one fact, one place (0.1 §2)
   const vars = {
     session: (sesDoc.doc?.sessions || [])[0]?.session_id ?? null,
     ref: big ? `${big.segment}:${big.records}` : null,

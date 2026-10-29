@@ -6,7 +6,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import http from 'node:http'
 import os from 'node:os'
-import { runOffCli, resolveOffNames } from '../../src/off/main.mjs'
+import { runOffCli } from '../../src/off/main.mjs'
+import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { formatOffReceipt } from '../../src/off/receipt.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { fakeIo, snapshot } from '../cli/fixtures/on-ctx.mjs'
@@ -20,12 +21,9 @@ test('V6 (off): an unknown option and an unknown harness exit 2, name what is kn
   const s = await installedHome({ names: ['claude-code', 'codex'] }); const before = snapshot(s.home)
   let io = fakeIo(); assert.equal(await runOffCli(['--nope'], ctx(s, io)), 2); assert.match(io.text(), /unknown option '--nope'/)
   io = fakeIo(); assert.equal(await runOffCli(['clade', 'codex'], ctx(s, io)), 2)
-  assert.match(io.text(), /^trocar off: unknown harness 'clade'\. Known: claude-code, codex, hermes, opencode, deepseek-dsh, kimi-code, z-code\n/, 'the §1.6 line: the name that is not one, then the names that are, with no alias among them')
+  assert.ok(io.text().startsWith(`trocar off: unknown harness 'clade'. Known: ${HARNESS_IDS.join(', ')}\n`), 'the §1.6 line: the name that is not one, then the names that are, with no alias among them')
   assert.deepEqual(snapshot(s.home), before, 'exit 2: not one byte moved, nothing asked of the daemon')
   assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), [])
-  assert.deepEqual(resolveOffNames(['claude', 'claude-code', 'kimi']), { ok: true, ids: ['claude-code', 'kimi-code'] })
-  assert.deepEqual(resolveOffNames([]), { ok: true, ids: null })
-  assert.equal(resolveOffNames(['constructor']).ok, false, 'a property name of Object is not a harness')
 })
 
 test('V5 (names and --json): off claude and off claude-code give the same result; --json is ONE document that names claude-code only, never the alias; the receipt validates (R5)', async () => {

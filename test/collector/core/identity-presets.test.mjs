@@ -6,7 +6,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { createRegistry } from '../../../src/collector/core/registry.mjs'
-import { HARNESS_IDS } from '../../../src/off/identity.mjs'
 import { SEEDS } from '../../helpers/proc-seeds.mjs'
 import { variantsOf } from '../../helpers/proc-variants.mjs'
 
@@ -17,10 +16,6 @@ const win = (exe, args, more = {}) => ({ os: 'win32', exe, argv: [exe, ...args],
 const mac = (exe, args) => ({ os: 'darwin', exe, argv: [exe, ...args], env: null })
 const lin = (exe, argv, env = new Map()) => ({ os: 'linux', exe, argv, env })
 const said = (m) => [m.agent, m.reason, m.harness ?? null]
-
-test('HARNESS_IDS (src/off, which imports nothing outside itself) names exactly the harnesses loadHarnesses finds', () => {
-  assert.deepEqual([...HARNESS_IDS].sort(), ALL.map((d) => d.name).sort())
-})
 
 test('R1 / W3: every seed, and every install variant of it (prefix, editor dir, case, .exe, (deleted), spaces and CJK, symlinked argv[0], Windows quotes and slashes), is the harness it IS — null: no agent', () => {
   const wrong = []

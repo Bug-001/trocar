@@ -83,7 +83,7 @@ describe('CM27: the eighth harness through the switch, from data alone', { concu
       assert.deepEqual(invariants.cm26({ snaps }), [], 'CM26')
       assert.deepEqual(invariants.d54({ a: r.s2, b: r.s3, verb: 'on' }), [], 'D54: on; on')
       // nothing of a data-only harness installed → no table names it: `off eighth` is an unknown name (exit 2, R4) and the second, unnamed off is the first
-      // to do anything. The CLI's fixed name tables are the one place a harness is still added by code (src/cli/harness-names.mjs).
+      // to do anything. The one name table (src/off/harness-names.mjs) is still written by hand; test/cli/harness-names.test.mjs holds it to the descriptors.
       if (spec.form) assert.deepEqual(invariants.d54({ a: r.s4, b: r.s5, verb: 'off' }), [], 'D54: off; off')
       else assert.equal(r.off.exit, 2, r.off.text)
       assert.deepEqual(editKept(r), [], 'D48②')
