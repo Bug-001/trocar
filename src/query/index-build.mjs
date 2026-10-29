@@ -9,7 +9,7 @@
 // harness, class, host, path, status, stored and wire bytes, session key, and whether it is a model call.
 // No body, no headers — those are read back from the segment itself (src/query/source.mjs).
 //
-// INVALIDATION is the identity rule of src/query/source.mjs (mtime / ctime + the first and last 4 KB
+// INVALIDATION is the identity rule of src/query/source.mjs (size, mtime, ctime + the first and last 4 KB
 // before the last indexed line), not a rule of its own: a segment that only GREW is resumed from the
 // byte offset where its last complete line ended, so the段 being written costs its new bytes, never a
 // re-read; anything else (a rewrite, a truncation, a different file at the same name) rebuilds whole.
@@ -180,8 +180,7 @@ function scanSealed(fs, file, segment, problems) {
       const rec = recordOf(line, segment, lineNo, problems);
       if (rec) records.push(rec);
     }
-    const st = fs.statSync(file);
-    return { records, mark: { size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, sealed: true }, bytesRead: st.size, done: true };
+    return { records, mark: sealedMark(fs, file), bytesRead: fs.statSync(file).size, done: true };
   } finally { sf.close(); }
 }
 
@@ -367,20 +366,33 @@ export function plainMark(fs, source, end, lines) {
   } finally { fs.closeSync(fd); }
 }
 
-// Reusable as it is (nothing changed), resumable from mark.end (appended bytes only), or neither.
+// The mark of a sealed segment (the index, or the usage sidecar, covers it whole): its fp is over the whole file.
+export function sealedMark(fs, file) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const st = fs.fstatSync(fd);
+    return { size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, end: st.size, fp: fpDigest((a, b) => readRangeSync(fd, a, b), st.size), sealed: true };
+  } finally { fs.closeSync(fd); }
+}
+
+// Reusable as it is (nothing changed), resumable from mark.end (appended bytes only), or neither. Size and mtime the
+// same but ctime not: the file was copied, restored or moved (a clone, a backup, Migration Assistant — a new inode and
+// ctime over the same bytes), or only its mode changed; the fp says whether the bytes are still the indexed ones, and
+// the same bytes reuse the index (4.2 §段索引 失效与增量). A mark with no fp (written before marks had one) is rebuilt.
 export function usability(fs, source, stored) {
   if (!stored) return 'rebuild';
   const m = stored.mark;
   let st;
   try { st = fs.statSync(source); } catch { return 'rebuild'; }
   if (!!m.sealed !== /\.sealed$/.test(source)) return 'rebuild';
-  if (st.size === m.size && st.mtimeMs === m.mtimeMs && st.ctimeMs === m.ctimeMs) return 'reuse';
+  if (st.size === m.size && st.mtimeMs === m.mtimeMs && (st.ctimeMs === m.ctimeMs || sameBytesBefore(fs, source, m))) return 'reuse';
   if (m.sealed || st.size < m.size) return 'rebuild';  // a sealed file never grows
   return sameBytesBefore(fs, source, m) ? 'resume' : 'rebuild';
 }
 // The identity rule of src/query/source.mjs, over the digest the mark stores: the file is the one that was indexed
 // only when the bytes before the last indexed line are still the bytes that were indexed (an append).
 function sameBytesBefore(fs, source, m) {
+  if (typeof m.fp !== 'string' || !Number.isFinite(m.end)) return false;
   let fd;
   try { fd = fs.openSync(source, 'r'); } catch { return false; }
   try { return fpDigest((a, b) => readRangeSync(fd, a, b), m.end) === m.fp; } catch { return false; } finally { try { fs.closeSync(fd); } catch { /* already gone */ } }

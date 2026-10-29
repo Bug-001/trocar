@@ -393,3 +393,39 @@ test('读者从上次读到的 mark 往后读:条目与问题和整读相同(残
     assert.deepEqual({ records: [...kept.records].map((r) => JSON.stringify(r)), problems: kept.problems }, { records: whole.records.map((r) => JSON.stringify(r)), problems: whole.problems }, `seed ${seed} sealed`)
   }
 })
+
+// 4.2 §段索引 失效与增量: a home cloned, restored from a backup or moved by Migration Assistant has every file's bytes and
+// mtime but a new inode and ctime. The derived files over it are still right (不变式 2), so they are reused, not rebuilt (D71③).
+test('克隆 / 恢复出来的 home(字节与 mtime 相同,inode 与 ctime 全换):段索引照用不重建,答案逐字节相同;封存段改一个字节就重建', async () => {
+  const { sealSegment } = await import('../../src/raw/seal.mjs')
+  const { runQuery } = await import('../../src/query/named/index.mjs')
+  const home = rawHome()
+  const T = 1_790_000_000 // whole seconds, so a copy can carry the mtime exactly
+  const sealedF = writeSegment(home, SEG, [{ id: 'a', sessionKey: 's-1', harness: 'opencode' }, { id: 'b', sessionKey: 's-1', harness: 'opencode', ts: '2026-10-18T10:00:02.000Z' }])
+  writeSegment(home, SEG2, [{ id: 'c', sessionKey: 's-1', harness: 'opencode', ts: '2026-10-18T11:00:00.000Z' }])
+  await sealSegment(sealedF, { lockFile: path.join(home, 'collector', 'lock'), journal: null })
+  for (const f of fs.readdirSync(path.join(home, 'raw'))) fs.utimesSync(path.join(home, 'raw', f), T, T)
+  await segmentIndex({ home, segment: SEG2, owner: true })
+  const id = (await runQuery('sessions', {}, { home })).sessions[0].session_id
+  const want = JSON.stringify(await runQuery('session', { id }, { home }))
+  const idx = (h) => path.join(indexDir(h), `${SEG}.json`)
+  assert.ok(fs.existsSync(idx(home)), 'the sealed segment has its index')
+  const copy = rawHome()
+  const clone = (from, to) => {
+    for (const e of fs.readdirSync(from, { withFileTypes: true })) {
+      const a = path.join(from, e.name), b = path.join(to, e.name)
+      if (e.isDirectory()) { fs.mkdirSync(b, { recursive: true }); clone(a, b) } else { fs.copyFileSync(a, b); const st = fs.statSync(a); fs.utimesSync(b, st.atimeMs / 1000, st.mtimeMs / 1000) }
+    }
+  }
+  clone(home, copy)
+  const before = { bytes: fs.readFileSync(idx(copy)), mtimeMs: fs.statSync(idx(copy)).mtimeMs }
+  assert.equal(JSON.stringify(await runQuery('session', { id }, { home: copy })), want)
+  assert.deepEqual({ bytes: fs.readFileSync(idx(copy)), mtimeMs: fs.statSync(idx(copy)).mtimeMs }, before, 'the index of the copy is not rewritten')
+  // same size, same mtime, one byte different: not the bytes that were indexed
+  const sealedCopy = path.join(copy, 'raw', `${SEG}.sealed`), buf = fs.readFileSync(sealedCopy)
+  buf[buf.length >> 1] ^= 0xff
+  fs.writeFileSync(sealedCopy, buf)
+  fs.utimesSync(sealedCopy, T, T)
+  await segmentIndex({ home: copy, segment: SEG })
+  assert.notDeepEqual(fs.readFileSync(idx(copy)), before.bytes, 'a sealed segment whose bytes changed is indexed again')
+})
