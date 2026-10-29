@@ -6,9 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createStepReads } from '../../src/web/v2/replay/follow.mjs'
 import { loadBodies, bodyCache } from '../../src/web/v2/replay/cell.mjs'
-import { createDesk, applySession, applyLane, laneAsk, readTouched, stepOf, listOf, indexOf, ridAt } from '../../src/web/v2/replay/model.mjs'
-import { ctxWindowUnits } from '../../src/web/v2/replay/ctxwin.mjs'
-import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
+import { createDesk, applySession, applyLane, stepOf, indexOf } from '../../src/web/v2/replay/model.mjs'
 import { world, readLane } from './desk-world.mjs'
 
 const SEEDS = Array.from({ length: 30 }, (_, i) => i + 1)
@@ -121,105 +119,3 @@ test('loadBodies (3.5 block): one read for the refs not held; each item fills by
 })
 
 // Hold every lane of `w` at mark M (session, then each lane whole).
-async function heldDesk(w, M) {
-  const desk = createDesk()
-  applySession(desk, w.full(M))
-  for (const key of desk.lanes.keys()) await readLane(w.get(M), 'S', desk, { lane: key })
-  return desk
-}
-const flatOf = (desk, rid) => stepOf(desk, rid).flat?.map((f) => f.bid) ?? null
-const snapshot = (desk) => new Map([...desk.held.values()].flatMap((h) => h.rids).map((rid) => [rid, flatOf(desk, rid)]))
-function samePlayheads(desk, before, why) {
-  for (const [rid, flat] of before) {
-    if (!desk.rows.has(rid)) continue // a gone row
-    const lane = laneOf(desk, rid)
-    assert.equal(ridAt(desk, lane, indexOf(desk, lane, rid)), rid, `${why}: the playhead rid ${rid} still resolves`)
-    assert.deepEqual(flatOf(desk, rid), flat, `${why}: ${rid} shows the same blocks`)
-  }
-}
-
-test('A4/A5 (2.3 #23): a late row before the playhead, and a reset of its lane once the lane lands, leave the playhead and its blocks', async () => {
-  let late = 0
-  for (const seed of SEEDS) {
-    const w = world(seed), m = w.marks
-    let M = m[Math.floor(m.length / 3)]
-    const desk = await heldDesk(w, M)
-    for (let i = m.indexOf(M) + 1; i < m.length; i++) {
-      const next = m[i], d = w.since(M, next), before = snapshot(desk)
-      late += d.calls.some((c) => !desk.rows.has(c.rid) && [...before.keys()].some((rid) => desk.rows.get(rid)?.lane === c.lane && c.ts < desk.rows.get(rid).ts))
-      const { touched } = applySession(desk, d)
-      for (const key of touched.keys()) await readLane(w.get(next), 'S', desk, laneAsk(desk, key, touched))
-      for (const key of desk.lanes.keys()) if (!desk.held.has(key)) await readLane(w.get(next), 'S', desk, { lane: key })
-      samePlayheads(desk, before, `seed ${seed} at ${next}`)
-      M = next
-    }
-    const before = snapshot(desk), { reset, touched } = applySession(desk, w.since('20261021T101500Z:not-a-member'))
-    assert.equal(reset, true)
-    for (const key of touched.keys()) await readLane(w.get(), 'S', desk, laneAsk(desk, key, touched))
-    samePlayheads(desk, before, `seed ${seed} after a reset`)
-  }
-  assert.ok(late > 0, 'the worlds include late rows before a held step')
-})
-
-test('A4/A5 (2.3 #23): following, after a delta and its laneAsk read the newest call holds its reply definitions', async () => {
-  for (const seed of SEEDS) {
-    const w = world(seed), m = w.marks
-    let M = m[Math.floor(m.length / 2)]
-    const desk = await heldDesk(w, M)
-    for (let i = m.indexOf(M) + 1; i < m.length; i++) {
-      const next = m[i], { touched } = applySession(desk, w.since(M, next))
-      for (const key of touched.keys()) await readLane(w.get(next), 'S', desk, laneAsk(desk, key, touched))
-      for (const key of desk.lanes.keys()) if (!desk.held.has(key)) await readLane(w.get(next), 'S', desk, { lane: key })
-      M = next
-      const newest = desk.order.at(-1), want = w.lane(laneOf(desk, newest), {}, next).steps.find((s) => s.rid === newest).reply
-      const reply = stepOf(desk, newest).reply
-      assert.deepEqual(reply.map((d) => d.bid), want, `seed ${seed} ${newest}`)
-      for (const d of reply) assert.ok(d.ref, `seed ${seed} ${newest}: ${d.bid} has its definition`)
-    }
-  }
-})
-
-const env = (data) => ({ ok: true, status: 200, data }) // the board api's envelope around a world answer
-
-// the window's units for each anchor step that `rids` names (2.3 §车道未到手: 'frames' = the empty aria-busy boxes)
-function unitKeys(desk, rids) {
-  const lanes = buildLanes(desk), anchor = anchorLane(lanes), out = new Map()
-  anchor.calls.forEach((c, i) => {
-    if (!rids.has(c.rid)) return
-    const s = { desk, lanes, anchor, playhead: i, diffRef: null, navOpen: new Set(), openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), ctx: {}, laneErr: new Map() }
-    out.set(c.rid, ctxWindowUnits(s).map((u) => u.key))
-  })
-  return out
-}
-
-test('2.3 §读失败: a lane read that fails after a full or a late-row answer keeps every drawn step; the lane is read on the next call', async () => {
-  const seen = { full: 0, delta: 0, partial: 0 }
-  for (const seed of SEEDS) {
-    const w = world(seed), m = w.marks, r = rng(seed), M = m[Math.floor(m.length / 2)]
-    // full: the worker restarted, so `since` answers in full at the same mark (rows unchanged); delta: the next member's rows
-    for (const kind of ['full', 'delta']) {
-      const at = kind === 'full' ? M : m[m.indexOf(M) + 1], desk = await heldDesk(w, M)
-      const before = snapshot(desk), laneWas = new Map([...desk.rows].map(([rid, row]) => [rid, row.lane]))
-      const { touched } = applySession(desk, kind === 'full' ? w.since('20261021T101500Z:not-a-member', M) : w.since(M, at))
-      if (!touched.size) continue
-      seen[kind]++
-      // the failure comes after 0-2 good pages when the rows did not change (a partial read then redraws the same steps)
-      let good = kind === 'full' ? Math.floor(r() * Math.min(3, touched.size)) : 0 // a whole-lane ask is one tail page: fewer good reads than lanes
-      seen.partial += good > 0
-      const read = new Set() // lanes a good page answered: those are redrawn from it (a tail page replaces the lane, 3.5)
-      const res = await readTouched(desk, touched, async (name, p) => (good-- > 0 ? (read.add(p.lane), env(await w.get(at)(name, p))) : { ok: false, status: 500, error: 'the worker exited' }))
-      assert.equal(res.ok, false, `seed ${seed} ${kind}`)
-      assert.equal(res.error, 'the worker exited', `seed ${seed} ${kind}: the reason travels`)
-      for (const k of touched.keys()) assert.ok(desk.lagging.has(k) || res.done.includes(k), `seed ${seed} ${kind}: ${k} is read again or done`)
-      const kept = new Set([...before.keys()].filter((rid) => desk.rows.get(rid)?.lane === laneWas.get(rid) && !read.has(laneWas.get(rid))))
-      assert.ok(kept.size, `seed ${seed} ${kind}: some drawn steps are on lanes the failure left`)
-      for (const rid of kept) assert.deepEqual(flatOf(desk, rid), before.get(rid), `seed ${seed} ${kind}: ${rid} still shows its blocks`)
-      for (const [rid, keys] of unitKeys(desk, kept)) assert.ok(!keys.includes('frames'), `seed ${seed} ${kind}: ${rid} is not empty frames`)
-      // the next poll (nothing new) reads the lanes that waited, and they hold the world's lists
-      const next = await readTouched(desk, new Map(), async (name, p) => env(await w.get(at)(name, p)))
-      assert.equal(next.ok, true); assert.equal(desk.lagging.size, 0, `seed ${seed} ${kind}: nothing waits`)
-      for (const k of next.done) for (const rid of desk.held.get(k).rids) assert.deepEqual(listOf(desk, rid), w.list(rid), `seed ${seed} ${kind}: ${rid}`)
-    }
-  }
-  for (const [k, v] of Object.entries(seen)) assert.ok(v > 0, `the worlds include ${k} cases`)
-})

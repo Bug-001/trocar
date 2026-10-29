@@ -28,6 +28,13 @@
 // (same pid and same start time, so a reused pid is no owner). Another `npm test` running at the same time keeps its directory; one
 // without the record (left by an older guard, or just made) is removed only once it is a day old.
 //
+// The cwd: `npm test` runs in the repo root, and a test that writes or binds a RELATIVE path leaves it there (2026-10-29: win32 pipe names
+// `\\.\pipe\trocar-<hex>`, served as unix sockets on a Mac, piled up by the dozen in three worktrees' roots). The runner lists its cwd when it
+// starts and again after every test file has ended; a name in the second listing and not in the first fails the run and is named. Only the
+// runner compares, and only the end state counts, so a file's temp entry that another file sees while files run in parallel, made and removed
+// before the end, is no leak; an entry that was there before the run is never blamed. Nothing found there is removed: the cwd is a working
+// tree, and the name says what to look for.
+//
 // Guard: test/helpers/leak-guard.test.mjs.
 'use strict'
 const fs = require('node:fs')
@@ -58,6 +65,8 @@ function childMarker(pid, command) {
 
 // the runner is the process that was started with --test; a test file's process has NODE_TEST_CONTEXT, and a plain `node file` has neither
 if (process.execArgv.includes('--test') && !process.env.NODE_TEST_CONTEXT) {
+  const root = process.cwd()
+  const before = new Set(names(root))
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), RUN))
   sweep(runDir)
   for (const key of ['TMPDIR', 'TMP', 'TEMP']) process.env[key] = runDir
@@ -85,7 +94,18 @@ if (process.execArgv.includes('--test') && !process.env.NODE_TEST_CONTEXT) {
       process.exitCode = 1
     }
     removeTree(runDir)
+    const added = names(root).filter((name) => !before.has(name))
+    if (added.length) {
+      fs.writeSync(2, `\nleak-guard: ${added.length} ${added.length === 1 ? 'entry' : 'entries'} appeared in ${root} during this run and ${added.length === 1 ? 'is' : 'are'} still there (left in place):\n` +
+        `${added.map((name) => `  ${name}`).join('\n')}\n  a test wrote or bound a relative path; give it an absolute one under tmpDir() from test/helpers/tmp.mjs\n`)
+      process.exitCode = 1
+    }
   })
+}
+
+/** The names in `dir`, or none when it cannot be listed (a cwd taken away is nothing to blame). */
+function names(dir) {
+  try { return fs.readdirSync(dir) } catch { return [] }
 }
 
 /** pid → start time of the process running under it now, for those of `pids` that run; without `process.pid` in it, nothing is

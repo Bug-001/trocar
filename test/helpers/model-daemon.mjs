@@ -3,7 +3,7 @@
 // at the daemon's first start, exactly when the CLI's poll looks for it). Only the world outside trocar is stubbed: the key custody (modelWorld's),
 // the door's OS readers (no process is anybody's: identity answers null), the process table (box.procs, empty unless a test puts a holder there), the lock identity. restart({ custody }):
 // the daemon stopped and started again (launchd / the task bringing it back), optionally over another custody. A win32 pipe name is served on this host as a relative socket path, so the caller
-// runs inside a scratch cwd (withScratchCwd) for platform win32.
+// runs inside a scratch cwd (withScratchCwd) for platform win32 — every step that may start the daemon, install's enable --now included.
 import path from 'node:path'
 import { startDaemon } from '../../src/collector/daemon.mjs'
 import { tmpDir } from './tmp.mjs'

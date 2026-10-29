@@ -20,10 +20,10 @@ delete env.NODE_TEST_CONTEXT
 delete env.NODE_OPTIONS
 
 /** Runs `node --test --test-force-exit --require <guard>` on a generated test file, TMPDIR pointing at a scratch dir of its own. */
-function run(body, scratch = tmpDir('trocar-guardtest-')) {
+function run(body, scratch = tmpDir('trocar-guardtest-'), cwd = undefined) {
   const file = path.join(scratch, 'fixture.test.mjs')
   fs.writeFileSync(file, `import test from 'node:test'\nimport fs from 'node:fs'\nimport os from 'node:os'\nimport path from 'node:path'\nimport { tmpDir } from ${JSON.stringify(TMP_HELPER)}\n${body}\n`)
-  const r = spawnSync(process.execPath, ['--test', '--test-force-exit', '--test-reporter=tap', '--require', GUARD, file], { env: { ...env, TMPDIR: scratch }, encoding: 'utf8', timeout: 60_000 })
+  const r = spawnSync(process.execPath, ['--test', '--test-force-exit', '--test-reporter=tap', '--require', GUARD, file], { cwd, env: { ...env, TMPDIR: scratch }, encoding: 'utf8', timeout: 60_000 })
   return { ...r, scratch, left: fs.readdirSync(scratch).filter((n) => n !== 'fixture.test.mjs') }
 }
 
@@ -35,6 +35,21 @@ test('leak-guard: a test that leaves a directory behind fails the run, and the m
   assert.match(r.stderr, /^ {2}trocar-leaky-[A-Za-z0-9]{6}\/$/m)
   assert.match(r.stderr, /grep -rn "'trocar-leaky-" test/)
   assert.deepEqual(r.left, [], 'the guard removed what it found, and its own run directory')
+})
+
+// the cwd `npm test` runs in is the repo root: a test that binds or writes a relative path (a win32 pipe name served on a Mac, 2026-10-29) leaves it
+// there. The runner lists the cwd at its start and at its end; only a name that is new at the end is the run's — one there before, or one a test
+// made and removed (another file's temp entry, while files run in parallel), is not.
+test('leak-guard: an entry the run leaves in its cwd fails the run and is named; one there before, or made and removed, is not', () => {
+  const root = tmpDir('trocar-guardroot-')
+  fs.writeFileSync(path.join(root, 'was-here'), '')
+  const clean = run(`test('made and removed', () => { fs.writeFileSync('passing-through', ''); fs.rmSync('passing-through') })`, undefined, root)
+  assert.equal(clean.status, 0, clean.stderr)
+  const name = '\\\\.\\pipe\\trocar-0011223344556677'
+  const r = run(`test('leaves', () => { fs.writeFileSync(${JSON.stringify(name)}, '') })`, undefined, root)
+  assert.equal(r.status, 1)
+  assert.ok(r.stderr.includes(name), r.stderr)
+  assert.ok(!r.stderr.includes('was-here'), r.stderr)
 })
 
 const alive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }

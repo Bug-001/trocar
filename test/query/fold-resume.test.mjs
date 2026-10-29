@@ -145,8 +145,8 @@ test('killed at any point and resumed from the sidecar: every answer and every k
 // by the members (follow-work.test.mjs's counting fs). N calls folded whole and saved at an idle period; M new calls appended; a
 // fresh worker (a second fs object: fresh stores and states) folds to the end. The extraction context of a store opened anew is
 // seeded from the projection's sidecar (4.3 §4 旁索引), so it reads no call row the sidecar covers.
-const CTX = /[\\/]index[\\/]ctx[\\/][^\\/]+\.ndjson$/
-const ctxBytes = (home) => { const d = path.join(home, 'index', 'ctx'); return fs.readdirSync(d).filter((f) => f.endsWith('.ndjson')).reduce((a, f) => a + fs.statSync(path.join(d, f)).size, 0) }
+const CTX = /[\\/]index[\\/]ctx[\\/][0-9a-f]{32}[\\/][^\\/]+\.ndjson$/
+const ctxBytes = (home) => { const d = path.join(home, 'index', 'ctx'); return fs.readdirSync(d, { recursive: true }).filter((f) => f.endsWith('.ndjson')).reduce((a, f) => a + fs.statSync(path.join(d, f)).size, 0) }
 async function reopenAt(calls, M) {
   const home = path.join(tmpDir('trocar-regrow-'), '.trocar')
   const s = bigSession({ home, ...SHAPE, subEvery: 4, paths: 4 })

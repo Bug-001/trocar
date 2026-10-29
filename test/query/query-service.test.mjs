@@ -15,12 +15,13 @@ import { rawHome } from './raw-home.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import fs from 'node:fs'
+import zlib from 'node:zlib'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
-import { loadSidecar } from '../../src/query/line-file.mjs'
+import { lineFile, loadSidecar } from '../../src/query/line-file.mjs'
 import { REDUCE_V } from '../../src/view/reduce.mjs'
 import { heapFlags, workerEnv } from '../../src/query/warm.mjs'
 
@@ -617,44 +618,66 @@ const writeSegmentLines = (home, segment, lines) => fs.appendFileSync(path.join(
 // or kick. A kicked cold fold several times longer than idleMs is folded to its frontier before the worker leaves, and the checkpoint
 // it leaves (the fold log's sidecar with the reduction state at that frontier, 4.3 §4 旁索引) is what a fresh worker resumes from.
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
-const lastFrontier = (file) => { try { const f = fs.readFileSync(file, 'utf8').split('\n').filter((l) => l.startsWith('{"f"')).at(-1); return f ? JSON.parse(f) : null } catch { return null } }
-const stateOf = (file) => { const sc = loadSidecar({ file }), m = sc && sc.parts['r.m']; return sc && sc.parts['r.s'] && m && JSON.parse(m[0]).rv === REDUCE_V ? sc.head : null }
-async function kickedFold({ calls, wire, idleMs, env = {}, killWhen = null }) {
+// the fold log's text: its sealed parts, then its plain tail, read through the line file (4.3 §4 分片)
+const foldBytes = (file) => {
+  const lf = lineFile({ fs, base: path.join(path.dirname(file), 'fold'), write: false })
+  try { return Buffer.concat([...lf.scan()].map((l) => Buffer.from(l.nl ? `${l.text}\n` : l.text))) } finally { lf.close() }
+}
+const lastFrontier = (file) => { try { const f = foldBytes(file).toString('utf8').split('\n').filter((l) => l.startsWith('{"f"')).at(-1); return f ? JSON.parse(f) : null } catch { return null } }
+const stateOf = (file) => { const sc = loadSidecar({ file, endsLine: (n) => foldBytes(file)[n - 1] === 10 }), m = sc && sc.parts['r.m']; return sc && sc.parts['r.s'] && m && JSON.parse(m[0]).rv === REDUCE_V ? sc.head : null }
+// `runs` are the workers the kicks forked
+async function kickedFold({ calls, wire, idleMs, env = {}, killWhen = null, kicked = (members) => members.map((r) => String(r.id)) }) {
   const home = path.join(tmpDir('trocar-qsvc-fold-'), '.trocar')
   const s = bigSession({ home, wire, subEvery: 4, subLanes: 3, late: 2 })
   s.append(calls)
   const members = sessionGroups(await indexRows({ home, errors: [] })).get(s.id)
   const log = foldLogFile(home, s.id)
   let child = null, exit = null
+  const runs = []
   const svc = createQueryService({ home, idleMs, fork: (h) => {
     child = fork(WORKER, [h], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: ['--require', NO_REAL_OS, ...heapFlags()], env: { ...workerEnv(), ...env } })
     const pid = child.pid // the service drops its listeners when it ends a worker: its exit is seen by its pid
     exit = new Promise((d) => { const t = setInterval(() => { try { process.kill(pid, 0) } catch { clearInterval(t); d(Date.now()) } }, 10) })
+    runs.push(pid)
     return child
   } })
   try {
     const t0 = Date.now()
-    svc.kick(members.map((r) => String(r.id)))
+    svc.kick(kicked(members))
     let first = null
     const poll = setInterval(() => {
       const f = lastFrontier(log)
       if (f && first == null) first = Date.now()
       if (killWhen && first != null && killWhen({ since: Date.now() - first, f, last: String(members.at(-1).id) })) child.kill('SIGKILL')
     }, 10)
-    try { return { members, log, took: (await within(exit, 150_000, 'the worker left')) - t0 } } finally { clearInterval(poll) }
+    try {
+      const at = await within(exit, 150_000, 'the worker left')
+      return { home, id: s.id, members, log, runs, took: at - t0 }
+    } finally { clearInterval(poll) }
   } finally { svc.stop(); if (exit) await exit }
 }
 
-test('kick: a kicked fold several times longer than idleMs is folded to its frontier before the worker leaves, with a checkpoint at that frontier (3.5 #32)', { timeout: 180_000 }, async (t) => {
-  // long enough that a full GC or a busy machine starving this nice-10 worker between two slices does not pass it
-  const IDLE = 1_500
-  const { members, log, took } = await kickedFold({ calls: 6_000, wire: 'threads', idleMs: IDLE })
+test('kick: a kicked fold several times longer than idleMs is folded to its frontier before the worker leaves, with a checkpoint at that frontier (3.5 #32)', { timeout: 600_000 }, async (t) => {
+  // above the worker's own idle period (worker.mjs IDLE_SLICE_MS), as the daemon's QUERY_IDLE_MS is: the worker's idle save runs
+  const IDLE = 4_000
+  const { members, log, took, runs } = await kickedFold({ calls: 6_000, wire: 'threads', idleMs: IDLE })
   const f = lastFrontier(log)
-  t.diagnostic(JSON.stringify({ took, members: members.length, frontier: f && f.f }))
+  t.diagnostic(JSON.stringify({ took, members: members.length, workers: runs.length }))
+  assert.equal(runs.length, 1, 'one worker folded the whole session: the idle clock never stopped it mid-fold')
   assert.equal(f && f.f, String(members.at(-1).id), 'the worker left with the session folded to its frontier')
   const st = stateOf(log)
-  assert.ok(st && st.bytes === fs.statSync(log).size, 'the fold log\'s sidecar holds the reduction state at that frontier')
+  assert.ok(st && st.bytes === foldBytes(log).length, 'the fold log\'s sidecar holds the reduction state at that frontier')
   assert.ok(took > 3 * IDLE, `the fold took several idle periods (${took} ms): else this case shows nothing`)
+})
+
+// 3.5 §后台抽取与归约 kick (D71①②): the keeper kicks the record ids of the new calls only, so a session never folded before is folded
+// from its start by a kick of its last record id alone, with no read: its head is tier 1 at its last member, nothing pending. The
+// daemon's idle clock outlasts the worker's idle period (worker.mjs IDLE_SLICE_MS), whose save writes a head the last slice left behind.
+test('kick: a never-folded session kicked by its last record id alone is folded to its end with no read (head tier 1, pending null)', { timeout: 180_000 }, async () => {
+  const { home, id, members, log } = await kickedFold({ calls: 600, wire: 'http', idleMs: 4_000, kicked: (ms) => [String(ms.at(-1).id)] })
+  assert.equal(lastFrontier(log)?.f, String(members.at(-1).id), 'the fold log stands at the last member')
+  const head = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(path.dirname(log), 'head.json.gz'))))
+  assert.deepEqual([head.tier, head.pending, head.mark], [1, null, String(members.at(-1).id)], 'the head: tier 1 at the last member, nothing pending')
 })
 
 test('a worker SIGKILLed after several checkpoint intervals of a fold leaves a reduction state to resume from (3.5 §后台抽取与归约, 4.3 §4 旁索引)', { timeout: 120_000 }, async () => {

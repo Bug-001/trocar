@@ -39,7 +39,7 @@ export async function run(argv, { io, json, args, home, env, platform, deps }) {
     // asked of whoever computes the document, so its bytes are written on as they came (D63②: the two paths print the same bytes).
     // What it is doing goes to stderr in plain words, never under --json (§1.2: stderr carries nothing then).
     const { text } = await queryDocument(name, params, { home: trocarHome(home), userHome: home, dir: collectorDir(home), platform, env, deps, indent: io.stdout && io.stdout.isTTY ? 2 : 0, ...(json ? {} : { say: io.err }) })
-    io.out(text)
+    io.out(text.endsWith('\n') ? text.slice(0, -1) : text) // NDJSON ends with its newline; out() writes one
     return EXIT.ok
   } catch (e) {
     if (e && e.name === 'QueryArgError') return refuse('usage', errText(e), EXIT.usage)

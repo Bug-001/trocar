@@ -37,6 +37,11 @@
 //   main context compacts after the cluster.
 // `shared`: the system prompt every lane sends (subagents included) gains a block of `shared` characters; the `cc` tool definitions
 //   are already one set every lane sends.
+// `quiet` = [at, k]: calls at … at + k − 1 are all subagents' — the main lane pauses (k ≥ 2 × 512 − 1 leaves a sealed pack with no
+//   main step) while its context stays open (with a large `compactAt`, its definitions grow old).
+// `marked`: on the Anthropic wires a subagent's call carries Claude Code's `cc_is_subagent=true` system marker instead of its agent id
+//   header, so subagents are told apart by order (3.4).
+// `hold` = {n: k}: call n ends late, written once k calls are (a late call at a place of its own choosing, with or without `late`).
 // `seal()`: seals the segment written so far through the product's sealSegment (frames of `seal` bytes, so reads go through frames
 //   and delta chains) and goes on in a new segment; the record ids already written do not change.
 // live(scale) gives all of them in the proportions of the user's live session.
@@ -82,7 +87,7 @@ function turn(next, i, growth, reads, names) {
  * `append(n)` appends the next n calls (as the daemon would, one line each) and returns the session's stored bytes so far.
  */
 export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, subLanes = 1, late = 0, compactAt = 1_000_000, segment = '20261020T164737Z', preamble = '', cc = 0, reads = 0, names = 0, freshTools = 0, hugeEvery = 0, hugeBytes = 40_000, imageEvery = 0, failEvery = 0, tools = null,
-  paths = 0, pathPool = 0, prompt = 0, writes = 0, bigEvery = 0, bigBytes = 2_000_000, bigRun = 4, shared = 0, seal = 64 << 10 } = {}) {
+  paths = 0, pathPool = 0, prompt = 0, writes = 0, bigEvery = 0, bigBytes = 2_000_000, bigRun = 4, shared = 0, quiet = null, marked = false, hold = null, seal = 64 << 10 } = {}) {
   const next = rng(seed), delay = rng(seed + 1), xr = rng(seed + 2)
   let file = path.join(home, 'raw', `${segment}.ndjson`)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
@@ -108,7 +113,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
   const line = () => {
     if (bigEvery > 0 && n % bigEvery === bigEvery - 1) bigLeft = bigRun
     const big = bigLeft > 0
-    const sub = !big && subEvery > 0 && n % subEvery === subEvery - 1
+    const sub = !big && ((subEvery > 0 && n % subEvery === subEvery - 1) || (quiet && n >= quiet[0] && n < quiet[0] + quiet[1]))
     const lane = sub ? subs[nsub++ % subLanes] : main
     if (sub ? lane.msgs.length > subLen : lane.chars > compactAt) Object.assign(lane, { msgs: [], sent: 0, prev: null, n: lane.n + 1, chars: 0 })
     const t = turn(next, n, sub ? Math.round(growth / 4) : growth, reads, names)
@@ -140,7 +145,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
     lane.chars += sub ? Math.round(growth / 4) : growth
     const ts = new Date((ms += 4_000)).toISOString()
     const text = words(next, 200)
-    const agent = sub ? `agent-${lane.k}-${lane.n}` : null
+    const agent = sub && !marked ? `agent-${lane.k}-${lane.n}` : null
     const reqId = `req_${String(n + 1).padStart(5, '0')}`
     const usage = { input_tokens: 40, output_tokens: 120, cache_read_input_tokens: 1000 * n, cache_creation_input_tokens: 300 }
     const ask = lane.msgs.slice(0, -2), delta = ask.slice(lane.sent)
@@ -185,7 +190,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
       const mark = (ms) => (cc && ms.length ? [...ms.slice(0, -1), { ...ms[ms.length - 1], content: ms[ms.length - 1].content.map((c, i, a) => (i === a.length - 1 ? { ...c, cache_control: { type: 'ephemeral' } } : c)) }] : ms)
       const sys = cc ? system.map((b, i, a) => (i === a.length - 1 ? { ...b, cache_control: { type: 'ephemeral' } } : b)) : system
       const body = { model: MODEL, max_tokens: 4096, ...(sent.length ? { tools: sent } : {}), ...(threads && lane.prev ? { thread: { type: 'continue', previous_message_id: lane.prev }, messages: mark(delta) }
-        : { ...(threads ? { thread: { type: 'create' } } : {}), system: sys, messages: mark(ask) }) }
+        : { ...(threads ? { thread: { type: 'create' } } : {}), system: sub && marked ? [...sys, { type: 'text', text: 'x-anthropic-billing-header: cc_is_subagent=true;' }] : sys, messages: mark(ask) }) }
       env = {
         ts, endpoint: '/v1/messages', method: 'POST',
         req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-app': 'cli', 'x-claude-code-session-id': id, ...(agent ? { 'x-claude-code-agent-id': agent } : {}), 'anthropic-version': '2023-06-01' },
@@ -199,7 +204,7 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
       else if (threads) { lane.prev = msgId; lane.msgs.splice(lane.sent, 0, { role: 'assistant', content: reply }); lane.sent++ }
     }
     n++
-    const due = sub && late ? n + Math.floor(delay() * (late + 1)) : n
+    const due = Math.max(sub && late ? n + Math.floor(delay() * (late + 1)) : n, (hold && hold[n - 1]) || 0)
     if (due > n) { held.push([JSON.stringify(env), due]); return null }
     return JSON.stringify(env)
   }

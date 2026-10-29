@@ -52,9 +52,11 @@ export const heapFlags = (mb = WORKER_MEMORY_MB) => [`--max-heap-size=${mb}`]
 /** The environment to fork the query worker in: `env` without any key whose upper-case form is NODE_OPTIONS (Windows keys are
  *  case-insensitive). The worker is trocar's own process, so nothing in a user's NODE_OPTIONS is meant for it, and 3.5's heap bound
  *  needs its heap to be exactly heapFlags(): V8 lets an inherited --max-old-space-size (or -percentage) override --max-heap-size, and
- *  the Windows login task carries the user's NODE_OPTIONS into the daemon (measured 2026-10-22, node 22: 8192 → an 8195 MB limit). */
+ *  the Windows login task carries the user's NODE_OPTIONS into the daemon (measured 2026-10-22, node 22: 8192 → an 8195 MB limit).
+ *  And MallocLargeCache=0: macOS's allocator keeps freed large blocks for reuse, counted in the physical footprint, so a cold fold's or
+ *  a seal's tens of MB of transient buffers stayed in it for tens of calls (3.5:40 ⑤; other platforms' allocators ignore it). */
 export function workerEnv(env = process.env) {
-  return Object.fromEntries(Object.entries(env).filter(([k]) => k.toUpperCase() !== 'NODE_OPTIONS'))
+  return { ...Object.fromEntries(Object.entries(env).filter(([k]) => k.toUpperCase() !== 'NODE_OPTIONS')), MallocLargeCache: '0' }
 }
 /** What one stored byte of a record costs in the heap once read back and parsed (measured: 0.97x on generated Claude Code
  *  sessions, 1.62-1.69x on the user's real one, 2026-10-21). */
@@ -108,6 +110,11 @@ export function hold(bytes) {
   let on = true
   return () => { if (on) { on = false; total -= bytes; held -= bytes } }
 }
+
+/** Every kept entry but the steady ones let go (src/query/named/session.mjs: a fold about to be stopped by the measured bound, 3.5
+ *  §内存有界). A steady entry is never let go here: the plan of every session read holds the rows it is made of, so letting it go
+ *  frees nothing and the next read builds the rows a second time beside the ones the plan holds. */
+export function yieldCaches() { for (const e of lru) if (!e.steady) forget(e) }
 
 /**
  * warmCache({max, cost}) → { get(id, stamp, compute, estimate), peek(id, stamp) }: `compute(previous)` runs when this `id` was never

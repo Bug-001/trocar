@@ -72,8 +72,8 @@ function railHtml(l, s, { sub = false } = {}) {
       sum += v; if (m.exact === false) from = true
     }
     const task = String(l.task != null && l.task !== '' ? l.task : l.label || '')
-    name = `${task} · ${callsWord(l.calls.length)}` + (sum > 0 || from ? ` · ≈ ${from ? 'from ' : ''}${usd(sum)}` : '')
-  } else name = laneTimes(laneWord(l.kind), l.calls.length)
+    name = `${task} · ${callsWord(l.count ?? l.calls.length)}` + (sum > 0 || from ? ` · ≈ ${from ? 'from ' : ''}${usd(sum)}` : '')
+  } else name = laneTimes(laneWord(l.kind), l.count ?? l.calls.length)
   // the row name ellipsizes in the gutter; its hover carries the whole of it, the lane's own label and the kind's hint
   const lab = String(l.label || '')
   const tip = [name, lab && !name.includes(lab) ? lab : '', l.flagged === true ? FLAGGED_WORD : '', hint].filter(Boolean).join(' · ')
@@ -115,7 +115,7 @@ export function renderRails(el, s) {
   if (bgs.length) {
     const open = s.bgOpen
     html += `<div class="rail tkrow">` +
-      `<div class="tgut railname group ${open ? '' : 'col'}" data-grouptoggle="bg" title="${esc(laneKind('aux').hint)}"><span class="tw">${open ? '▾' : '▸'}</span> <span class="tn">${esc(BG_ROW(bgs.reduce((n, l) => n + l.calls.length, 0)))}</span></div>` +
+      `<div class="tgut railname group ${open ? '' : 'col'}" data-grouptoggle="bg" title="${esc(laneKind('aux').hint)}"><span class="tw">${open ? '▾' : '▸'}</span> <span class="tn">${esc(BG_ROW(bgs.reduce((n, l) => n + (l.count ?? l.calls.length), 0)))}</span></div>` +
       `<div class="tlane">${open ? '' : `<div class="railbody groupbody">${collapsedMarks(bgs, s)}</div>`}</div></div>` +
       (open ? `<div class="bgkids">${bgs.map((l) => railHtml(l, s)).join('')}</div>` : '')
   }

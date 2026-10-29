@@ -1,13 +1,16 @@
 // replay/lanes.mjs — lane objects over the desk model and the shared time axis. Pure: the anchor lane's call times (`anchorTs`,
 // epoch ms, one per anchor call) and the brush window (`view = {lo, hi}`, step indices) are arguments, never module state.
+import { indexOf } from './model.mjs'
 
 // A lane object for the renderers: the lane header (3.5 §会话读) + its skeleton rows in step order (`calls`), `ridLocal`
 // (rid → index in `calls`), `base` (rows of this lane older than the loaded ones: the header's `count` is the full truth) and
 // the session events on its rows. Built from the desk model (replay/model.mjs); `prev` / `changed` reuse the objects of lanes
 // no answer touched, so an unchanged lane is never rebuilt per poll.
+// `no(i)` = the 0-based step number of calls[i]: its step's own `i` when files feed the desk (the held rows may have gaps), else base + i
 function laneObject(desk, h) {
-  const calls = (desk.laneRids.get(h.lane) || []).map((rid) => desk.rows.get(rid))
-  return { ...h, id: h.lane, calls, ridLocal: new Map(calls.map((c, i) => [c.rid, i])), base: Math.max(0, (h.count ?? calls.length) - calls.length),
+  const calls = (desk.laneRids.get(h.lane) || []).map((rid) => desk.rows.get(rid)), base = Math.max(0, (h.count ?? calls.length) - calls.length)
+  return { ...h, id: h.lane, calls, ridLocal: new Map(calls.map((c, i) => [c.rid, i])), base,
+    no: (i) => { const x = calls[i] ? indexOf(desk, h.lane, calls[i].rid) : -1; return x >= 0 ? x : base + i },
     events: calls.flatMap((c) => desk.events.get(c.rid) || []) }
 }
 export function buildLanes(desk, probes, { prev = null, changed = null } = {}) {
@@ -37,7 +40,7 @@ export const stepsOf = (lanes) => { const a = anchorLane(lanes); return a ? a.ca
 export function stepRef(lanes, rid) {
   if (rid == null) return null
   const ls = lanes || []
-  const at = (l) => { const i = l.ridLocal && l.ridLocal.get(rid); return i == null ? null : (l.base || 0) + i + 1 }
+  const at = (l) => { const i = l.ridLocal && l.ridLocal.get(rid); return i == null ? null : (l.no ? l.no(i) : (l.base || 0) + i) + 1 }
   const main = ls.find((l) => l.kind === 'main')
   if (main) { const n = at(main); if (n != null) return { step: true, n, m: main.count ?? main.calls.length } }
   for (const l of ls) { const k = at(l); if (k != null) return { step: false, lane: l, k, m: l.count ?? l.calls.length } }

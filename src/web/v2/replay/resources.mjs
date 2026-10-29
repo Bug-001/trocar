@@ -21,8 +21,8 @@ const hasSeg = (r) => !!(r && r.segments && r.segments.length)
 
 // 「第 N 步」 on the main lane, 「第 k 次调用」 when the session has no main lane (1.2 §编号); N counts the lane's rows not loaded yet
 const stepWordOf = (s) => {
-  const isMain = s.anchor && s.anchor.kind === 'main', base = (s.anchor && s.anchor.base) || 0
-  return (localIdx) => (isMain ? `step ${base + localIdx + 1}` : `call ${base + localIdx + 1}`)
+  const isMain = s.anchor && s.anchor.kind === 'main', no = (i) => (s.anchor && s.anchor.no ? s.anchor.no(i) : ((s.anchor && s.anchor.base) || 0) + i)
+  return (localIdx) => (isMain ? `step ${no(localIdx) + 1}` : `call ${no(localIdx) + 1}`)
 }
 // the anchor lane's ledger as the desk holds it; null while that lane is not held. `seen` is 2.4's 只见到名字 (seenFiles:
 // the opened files taken out); `done` = its ledger_next chain is read to the end, so the ledger's counts are exact (2.4:67)

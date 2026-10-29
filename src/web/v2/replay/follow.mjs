@@ -19,6 +19,22 @@ export const pagePlace = (gi, limit) => {
   return g >= h ? { after: g - h, limit } : { after: 0, limit: 2 * g + 1 }
 }
 
+// ── the loader's order of the sealed packs (2.3 §读与画 加载器, 点名的一步) ─────────────────────────────────────────────
+// packOrder(head, at, held) → [{n, pri}] over head.packs not `held(pack)`, in fetch order: pri 1 the pack whose [s0, s1) holds main-axis
+// step `at` (none when `at` is null or in the open tail, `at` ≥ open.s0: the poll reads that), 2 its neighbours, 3 the rest of the
+// packs of its chapter (head.chapters), 4 the rest, newest first. Each pack is read `main` then `rest`.
+export function packOrder(head, at, held = () => false) {
+  const packs = (head && head.packs) || [], open = head && head.open
+  if (!packs.length) return []
+  const tail = at == null || (open != null && at >= open.s0)
+  const home = tail ? (open ? open.n : packs.at(-1).n + 1) : (packs.find((p) => at >= p.s0 && at < p.s1) || packs.reduce((a, p) => (Math.abs(p.s0 - at) < Math.abs(a.s0 - at) ? p : a))).n
+  const step = tail ? Math.max(0, (head.steps || 1) - 1) : at
+  const ch = ((head && head.chapters) || []).find((c) => step >= c.s0 && step < c.s1)
+  const pri = (p) => (p.n === home ? 1 : Math.abs(p.n - home) === 1 ? 2 : ch && p.s0 < ch.s1 && p.s1 > ch.s0 ? 3 : 4)
+  return packs.filter((p) => !held(p)).map((p) => ({ n: p.n, pri: pri(p) }))
+    .sort((a, b) => a.pri - b.pri || (a.pri === 2 ? a.n - b.n : b.n - a.n))
+}
+
 // ── a step's own reads (2.3 §读与画 快速拖动; 4.4 live-poll, C3) ───────────────────────────────────────────────────────────
 // createStepReads({get, setTimer, clearTimer, need, onLane, onBodies, restMs, loader}) → {target(rid), prefetch(key), laneSlot(fn)}. Injected, no DOM.
 //   · with a `loader` (loader.mjs) every read goes through it: a `block` read at pri 0, a `lane` read at pri 1

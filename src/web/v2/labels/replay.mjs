@@ -224,12 +224,20 @@ export const removedList = (n, k2) => `Blocks in step ${k2} that are not in this
 export const RETRY = 'Retry'
 // what a failed read of the desk names (1.5 K-29, core/ui.mjs readFailure): the never-drawn failure and the stale line
 export const THIS_SESSION = 'This session'
-// the window's failure state when the playhead step's lane read failed (2.3 §读失败, 1.5 K-29); the reason is in the technical details
-export const STEP_READ_FAILED = 'This step could not be read.'
 export const notRefreshed = (t, why) => `Not refreshed since ${t} · ${why}`
 // 1.2 §会话头 读取状态: the server is still extracting this session (first read: share done; later: calls still to catch up)
 export const readingFirst = (pct) => `Reading this session for the first time · ${pct} %`
 export const catchingUp = (n) => `Catching up · ${n} new calls`
+// 1.5 K-31: the server's background read of this session stopped (the head's pending.stopped), one line per code of
+// src/health/codes.mjs FOLD_STOPS (the board does not import it); the code and the reason are in the technical details
+export const FOLD_STOPPED = Object.freeze({
+  'heap-no-room': 'Reading this session stopped: it does not fit in the memory the reader has',
+  'fold-failed': 'Reading this session stopped on an error',
+})
+// 1.5 K-32: the head drawn is older than what the capture has indexed
+export const behindBy = (n, more) => `${n}${more ? '+' : ''} newer calls are not shown yet`
+// 2.3 §大致页面: the lanes the session head does not list by name
+export const moreLanes = (n) => `${n} more lanes`
 export const FOLLOW_PAUSED = 'Following is paused: the last read failed'
 export const UNPARSED_TITLE = 'This step\'s request could not be parsed; there is no context to show'
 export const UNPARSED_KEEP = 'The raw record is on disk, unchanged'
@@ -263,6 +271,10 @@ export const PROBLEM_ROW = 'Problems'
 export const problemPager = (k, n) => (!n ? 'Problems' : k == null ? count(n, 'problem') : `Problem ${k}/${n}`)
 export const PROBLEM_PREV = 'Previous problem'
 export const PROBLEM_NEXT = 'Next problem'
+// the chapter row (1.3 §章): the part of the session between two compactions, and the arrows across them
+export const CHAPTER_PREV = 'Previous compaction'
+export const CHAPTER_NEXT = 'Next compaction'
+export const chapterLabel = (k, n, a, b, inferred) => `Part ${k} of ${n} · ${a === b ? `step ${a}` : `steps ${a}–${b}`}${inferred ? ' (inferred)' : ''}`
 export const breakFlagTip = (n, costW, struct) => `Cache break at step ${n} · ${costW}` + (struct ? ` · ${L.STRUCT_EST}` : '')
 export const BREAK_COST_NONE = 'extra cost cannot be computed'
 export const failTip = (n, msg) => `Call failed at step ${n}${msg ? ` (${msg})` : ''}`
@@ -391,6 +403,7 @@ export const KEY_LIST = Object.freeze([
   ['Shift + ← / →', 'Ten steps back / forward'],
   ['Home / End', 'First / last step'],
   ['n / p', 'Next / previous step with a problem'],
+  ['[ / ]', 'Back / forward across a compaction'],
   ['f', 'Follow the latest step on or off'],
   ['Esc', 'Close the topmost layer'],
   ['?', 'This list'],

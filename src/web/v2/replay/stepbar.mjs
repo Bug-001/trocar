@@ -146,6 +146,8 @@ const flatOf = (s, call) => (s.desk && call ? stepOf(s.desk, call.rid).flat : nu
 // a call's number in its lane: 「第 N / M 步」 on the main lane, 「<lane 词> · 第 k / M 次调用」 elsewhere (stepRef, 1.2 §编号)
 const localNo = (s, call) => { const r = call && stepRef(s.lanes, call.rid); return r ? (r.step ? r.n : r.k) : null }
 
+// the rough page's step label (2.3 §大致页面): step n of m from the session head, no control
+export const roughStepHtml = (n, m) => `<span class="sb-nav"><b class="sb-at" data-n="${n}" data-m="${m}">${esc(W.stepNo(n, m))}</b></span>`
 export function stepBarHtml(s) {
   const call = s.anchor && s.anchor.calls[s.playhead]
   if (!call) return ''
@@ -172,7 +174,7 @@ export function stepBarHtml(s) {
   const cref = contentRefOf(s)
   // the parts go straight into #stepbar (replay.mjs owns the element): no inner wrapper, so no second #stepbar
   return `<span class="sb-nav"><button type="button" class="sbbtn" data-step="prev" aria-label="${esc(W.STEP_PREV)}" title="${esc(W.STEP_PREV)}">‹</button>` +
-    `<b class="sb-no">${esc(no)}</b>` +
+    `<b class="sb-no" data-n="${n}">${esc(no)}</b>` +
     `<button type="button" class="sbbtn" data-step="next" aria-label="${esc(W.STEP_NEXT)}" title="${esc(W.STEP_NEXT)}">›</button></span>` +
     (ask >= 1 ? `<span class="sb-ask" data-k="${ask}" title="${esc(W.askNo(ask))}">${esc(W.askNo(ask))}</span>` : '') +
     `<span class="sb-time" title="${esc(call.ts || '')}">${esc(fmtTime(call.ts) || '—')}</span>` +

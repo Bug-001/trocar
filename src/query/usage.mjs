@@ -16,7 +16,7 @@ import { stepOrder } from '../view/analyze.mjs';
 import { mapUsage } from '../model/schema.mjs';
 import { recordsAt } from './records.mjs';
 import { isModelCall } from './rows.mjs';
-import { indexDir, readIndex, tailMark, usability, storeIndex, segmentSource, plainMark, segStamp, warmSegmentIndex } from './index-build.mjs';
+import { indexDir, readIndex, tailMark, usability, storeIndex, segmentSource, plainMark, sealedMark, segStamp, warmSegmentIndex } from './index-build.mjs';
 import { warmCache, fsTag, statKey } from './warm.mjs';
 import { trocarHome } from '../paths.mjs';
 
@@ -123,7 +123,6 @@ async function fillOne({ home, fs, segment }) {
   const problems = [];
   const said = () => { for (const p of problems) noteProblem(home, fs, segment, `${p.code}: ${p.reason}`); };
   if (/\.sealed$/.test(source)) {
-    const st = fs.statSync(source);
     if (usability(fs, source, readIndex(fs, file, USAGE_V)) === 'reuse') return;
     const lines = [];
     for (const chunk of chunksOf(rows, needed)) {
@@ -132,7 +131,7 @@ async function fillOne({ home, fs, segment }) {
       lines.push(...got.lines);
       await tick();
     }
-    lines.push(markLine({ size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, sealed: true }));
+    lines.push(markLine(sealedMark(fs, source)));
     storeIndex(fs, file, lines, problems, null);
     said();
     return;

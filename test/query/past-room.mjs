@@ -1,11 +1,11 @@
-// test/query/past-room.mjs — a session past a small reader's room for its spine (RFC 3.5 §内存有界), grown and extracted in a
-// process with a large heap: growing and extracting it is not what the cut tests measure, and a reader with a heap that small
-// would spend minutes extracting it a 50 ms slice at a time. It is extracted and folded as it grows (extendSession), uncut: the
-// reader's plan cuts it, so the reader finds a fold log of another cut and folds its own from scratch.
+// test/query/past-room.mjs — a session past a small reader's heap budget for real (RFC 3.5 §内存有界「截断只是兜底,按实测的堆截」),
+// grown and extracted in a process of its own: growing and extracting it is not what the cut tests measure, and a reader with a heap
+// that small would spend minutes extracting it a 50 ms slice at a time. It is extracted as it grows, never folded: the reader folds
+// it from scratch and is cut by what its fold measures.
 //
-// The room is what the plan reckons (src/query/named/session.mjs cut): the reader's budget less the work, the steady caches, the
-// distinct blocks (SPINE_PER_BLOCK each), the plan's members (PLAN_PER_MEMBER each) and the fixed caches K (CACHES), at their bytes. The blocks are the projection's
-// `d` lines, so the session is extracted as it grows (as the worker extracts it) and they are counted as they are written.
+// Past the budget for real: every call of the shape uses a tool no call before it did, its name `names` characters long, which the
+// fold's tool map keeps for as long as the fold lives (test/query/big-session.mjs), so a fold of N calls holds at least N × names
+// bytes; the session is grown until that is twice the reader's budget.
 import { execFileSync, spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
@@ -18,37 +18,31 @@ const at = (p) => JSON.stringify(new URL(p, import.meta.url).href)
 export const readerFlags = (heapMb) => ['--require', NO_REAL_OS, '--expose-gc', ...heapFlags(heapMb)]
 
 const BUDGET = `const { heapBudget } = await import(${at('../../src/query/warm.mjs')}); console.log(heapBudget())`
-/** growPast(s, {home, budget}) → grows the bigSession `s` (test/query/big-session.mjs, writing into `home`) 500 calls at a time,
- *  extracting and folding it as the worker's background does, until it holds a quarter more rows than a reader whose heap budget is `budget` has room for,
- *  each at SPINE_PER_ROW. In-process: the query modules' caches of this process hold the session. */
-export async function growPast(s, { home, budget }) {
-  const fs = await import('node:fs')
-  await import('../../src/query/named/index.mjs') // first: the registry imports session.mjs
-  const { SPINE_PER_ROW, SPINE_PER_BLOCK, PLAN_PER_MEMBER, CACHES, working, extendSession } = await import('../../src/query/named/session.mjs')
-  const { steadyBytes } = await import('../../src/query/warm.mjs')
-  const { projectionFile } = await import('../../src/query/projection.mjs')
+/** growPast(s, {home, budget, names}) → grows the bigSession `s` (test/query/big-session.mjs, writing into `home`, its calls each
+ *  keeping `names` bytes in a fold) 500 calls at a time, extracting it as the worker's background does, until a fold of it holds
+ *  twice `budget`. In-process: the query modules' caches of this process hold the session. */
+export async function growPast(s, { home, budget, names }) {
+  if (!(names > 0)) throw new Error('growPast: a shape whose calls are dear for real (names > 0)')
+  const { openProjection } = await import('../../src/query/projection.mjs')
+  const { extractMembers } = await import('../../src/view/extract.mjs')
+  const { recordsAt } = await import('../../src/query/records.mjs')
   const { indexRows, sessionGroups } = await import('../../src/query/rows.mjs')
-  const room = (rows, blocks) => budget - working(rows) - steadyBytes() - blocks * SPINE_PER_BLOCK - rows.length * PLAN_PER_MEMBER - CACHES
-  // the projection's definition lines, counted over the bytes appended since the last count
-  let blocks = 0, read = 0, tail = ''
-  const count = () => {
-    const fd = fs.openSync(projectionFile(home, s.id), 'r'), size = fs.fstatSync(fd).size, b = Buffer.alloc(size - read)
-    fs.readSync(fd, b, 0, b.length, read); fs.closeSync(fd); read = size
-    const lines = (tail + b.toString('latin1')).split('\n'); tail = lines.pop()
-    for (const l of lines) if (l.startsWith('{"d":')) blocks++
-  }
-  for (let rows = []; rows.length * SPINE_PER_ROW <= 1.25 * room(rows, blocks);) {
-    s.append(500)
-    while (await extendSession({ home, writer: true }, s.id, Infinity));
-    rows = sessionGroups(await indexRows({ home, errors: [] })).get(s.id); count()
-  }
+  const store = openProjection({ home, key: s.id, write: true, errors: [] })
+  try {
+    for (let calls = 0; calls * names <= 2 * budget;) {
+      s.append(500)
+      const members = sessionGroups(await indexRows({ home, errors: [] })).get(s.id)
+      calls = members.length
+      extractMembers({ store, members, sessionId: s.id, recordsAt: (rs) => recordsAt({ home, rows: rs.filter(Boolean), errors: [], remember: false }) })
+    }
+  } finally { store.close() }
 }
 const GROW = `
 const { bigSession } = await import(${at('./big-session.mjs')})
 const { growPast } = await import(${at('./past-room.mjs')})
 const [home, shape, budget] = [process.argv[1], JSON.parse(process.argv[2]), Number(process.argv[3])]
 const s = bigSession({ home, ...shape })
-await growPast(s, { home, budget })
+await growPast(s, { home, budget, names: shape.names })
 console.log(JSON.stringify({ id: s.id }))
 // one call more for each line read (grower)
 for await (const _ of (await import('node:readline')).createInterface({ input: process.stdin })) { s.append(1); console.log('{}') }`

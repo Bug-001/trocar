@@ -71,7 +71,8 @@ export async function queryDocument(name, params = {}, { home, userHome, dir, pl
     // `env` only when the caller gave one: an empty object here is not "no environment", it is an environment with
     // nothing in it, and it defeated the default the commands themselves set (cli/status.mjs `env = process.env`),
     // so the board answered `/api/status` and `/api/doctor` as if the machine had no environment at all.
-    const text = JSON.stringify(await runQuery(name, params, { home, userHome, platform, deps, fs, now, ...(env ? { env } : {}), ...(handOff ? { handOff } : {}) }), null, indent)
+    const doc = await runQuery(name, params, { home, userHome, platform, deps, fs, now, ...(env ? { env } : {}), ...(handOff ? { handOff } : {}) })
+    const text = typeof doc.$text === 'string' ? doc.$text : JSON.stringify(doc, null, indent) // a text answer (lane --pack / --tail) as it is
     if (why) tell(why)
     return { text, via: 'local' }
   }
@@ -108,7 +109,9 @@ export async function queryDocument(name, params = {}, { home, userHome, dir, pl
       await new Promise((d) => setTimeout(d, PENDING_WAIT_MS))
       continue
     }
-    const d = text.includes('"pending"') ? JSON.parse(text) : null, p = d && d.pending
+    let d = null
+    if (text.includes('"pending"')) try { d = JSON.parse(text) } catch { /* NDJSON (lane --pack / --tail): never pending */ }
+    const p = d && d.pending
     if (!p && whole) return { text, via: 'daemon' }
     // a `session` that is still folding is followed by its delta from the newest mark (3.5 §归约前沿): the
     // poll costs the newly folded members, not the whole document; once none is pending, the caller's own ask
