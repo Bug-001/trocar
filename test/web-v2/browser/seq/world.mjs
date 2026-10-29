@@ -68,13 +68,15 @@ export function makeWorld({ seed = 1, big = false } = {}) {
   }
 }
 
-/** The `session` answer of `id` once the reduction has caught up (no `pending`, 3.5 §会话读 #25); throws past `ms`. */
+/** The `session` answer of `id` once the reduction has caught up (no `pending`, 3.5 §会话读 #25), waited for as long as its
+ *  `pending` keeps moving (the reduction's progress, 3.5 §后台抽取与归约); throws after `ms` with no move. */
 export async function settled(get, id, ms = 20_000) {
-  for (const t0 = Date.now(); ;) {
+  for (let at = Date.now(), seen = null; ;) {
     const { status, doc } = await get('session', { id })
     if (status !== 200 || !Array.isArray(doc?.lanes)) throw new Error(`session ${id}: ${status} ${String(doc?.error ?? "").slice(0, 400)}`)
     if (!doc.pending) return doc
-    if (Date.now() - t0 > ms) throw new Error(`session ${id}: still pending ${JSON.stringify(doc.pending)} after ${ms} ms`)
+    const now = JSON.stringify(doc.pending)
+    if (now !== seen) { seen = now; at = Date.now() } else if (Date.now() - at > ms) throw new Error(`session ${id}: still pending ${now} with no progress for ${ms} ms`)
     await new Promise((r) => setTimeout(r, 100))
   }
 }

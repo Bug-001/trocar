@@ -66,15 +66,8 @@ test('W3 after grow(k) the server\'s main-lane count rises by exactly the main c
     for (const id of world.live) before[id] = await mainCount(face.get, id)
     const g = world.grow(5)
     assert.ok(g.main > 0)
-    for (const id of world.live) {
-      const want = before[id] + g.by[id].main
-      let got
-      for (const t0 = Date.now(); Date.now() - t0 < 5_000; await new Promise((r) => setTimeout(r, 200))) {
-        got = await mainCount(face.get, id)
-        if (got === want) break
-      }
-      assert.equal(got, want, id)
-    }
+    // the next settled answer has them: the reader stats the segment on every query (3.5 §会话读), so no window to retry in
+    for (const id of world.live) assert.equal(await mainCount(face.get, id), before[id] + g.by[id].main, id)
   } finally { await face.close() }
 })
 
