@@ -42,18 +42,19 @@ function expected(c, d, f, w) {
   if (c.start === 'before') return 'config-after-start'
   // Rule 4: "the trocar root is in the process's trust set: it is when the form's cert is a plugin carrier (the hook adds the root in process) or the
   // trust's `when` does not hold; otherwise the first set source in the agent's own precedence must name a file holding the root (else ca-not-in-file);
-  // none set → var-missing when a source is `required` or the base is Node's own roots, else it holds (system roots hold the user-level root)."
+  // none set → var-missing when a source is `required` or the base is Node's own roots, else it holds (system roots hold the user-level root).
+  // A source, or the file it names, that cannot be read forwards uncached even for a plugin carrier: ⑭ still verifies with it (D38)."
   const t = f.trust !== 'root' && d.proxyMode.trusts[f.trust]
   const pluginCarrier = (d.proxyMode.certs || {})[f.cert]?.kind === 'plugin'
-  if (t && !pluginCarrier) {
+  if (t) {
     const w8 = t.when && firstOf(w, t.when.src)
     if (w8 && w8.error) return w8.error
     const applies = !t.when || (w8.set && w8.value === t.when.equals)
     const first = applies ? t.sources.map((s) => firstOf(w, s.from)).find((r) => r.error || r.set) : undefined
     if (first && first.error) return first.error
     if (first && w.ca[first.value] === 'unreadable') return 'file-unreadable'
-    if (first && w.ca[first.value] !== 'root') return 'ca-not-in-file' // lacks the root, or no such file
-    if (applies && !first && (t.sources.some((s) => s.required) || t.base === 'node')) return 'var-missing'
+    if (!pluginCarrier && first && w.ca[first.value] !== 'root') return 'ca-not-in-file' // lacks the root, or no such file
+    if (!pluginCarrier && applies && !first && (t.sources.some((s) => s.required) || t.base === 'node')) return 'var-missing'
   }
   if (!c.issuer) return 'cert-intermediate-unavailable'
   for (const b of d.proxyMode.blockers) {
@@ -153,22 +154,14 @@ test('CM6 · issuer present but not ready → forward with cert-intermediate-una
   assert.equal(got.code, 'cert-intermediate-unavailable')
 })
 
-// Rule 4 by name, on the real descriptors: a plugin carrier puts the root in the process whatever its sources say; Node's own roots and a required
-// source never do when nothing is set.
-test('CM22 · rule 4 on real forms: plugin carrier trusted with any source state; Node base or required source unset → var-missing', () => {
-  const at = (name, pick) => { const d = descs.find((x) => x.name === name); return { d, f: d.proxyMode.forms.find(pick) } }
-  const dsh = at('deepseek-dsh', (f) => f.id === 'deepseek-dsh.cli')
-  const cc = at('claude-code', (f) => f.trust === 'bundled')
-  const kimi = at('kimi-code', (f) => f.cert === 'wrapper')
-  const rows = [
-    [dsh, { sources: ['unset'] }, null], // env {}: NODE_EXTRA_CA_CERTS unset
-    [dsh, { sources: ['lacks'] }, null], // NODE_EXTRA_CA_CERTS names a relay CA without the trocar root
-    [cc, { when: true, sources: cc.d.proxyMode.trusts.bundled.sources.map(() => 'unset') }, 'var-missing'],
-    [kimi, { sources: ['unset'] }, 'var-missing'],
-  ]
-  for (const [{ d, f }, over, want] of rows) for (const os of f.os) {
+// A regression seed for rule 4 on dsh's real form, with literal expectations: the plugin puts the root in the process whatever its source says, but
+// an env that cannot be read still forwards (⑭ verifies with it).
+test('CM22 · dsh plugin carrier: source unset or lacking the root → decrypt; env unreadable → environ-unreadable', () => {
+  const d = descs.find((x) => x.name === 'deepseek-dsh'), f = d.proxyMode.forms.find((x) => x.id === 'deepseek-dsh.cli')
+  const rows = [[{ sources: ['unset'] }, null], [{ sources: ['lacks'] }, null], [{ envNull: true }, 'environ-unreadable']]
+  for (const [over, want] of rows) for (const os of f.os) {
     const got = run(d, f, os, over)
-    assert.equal(got.decrypt, want === null, `${f.id} · ${os}`)
+    assert.equal(got.decrypt, want === null, `${os} · ${JSON.stringify(over)}`)
     if (want) assert.equal(got.code, want)
   }
 })
