@@ -40,10 +40,11 @@ test('the values of each harness are the ones measured on a Windows test machine
   assert.deepEqual(row('hermes'), { env: true, http: true, ws: true, unsupported: {}, schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'], branches: ['all'] })
   assert.deepEqual(row('z-code'), { env: true, http: false, ws: false, unsupported: { socks4: 'fails', socks5: 'fails' }, schemes: ['http', 'https', 'socks5h'], branches: ['all'] })
   assert.deepEqual(row('pi'), { env: true, http: false, ws: false, unsupported: { socks5: 'fails' }, schemes: ['http', 'https'], branches: ['all'] })
-  // Windows is measured for these seven; Linux for claude-code alone (V54, on a test machine: a real `claude -p` behind a CONNECT proxy named in its settings.json env); macOS
-  // for none. A harness added later says what was measured for it in its own `measured`, which the shape test above holds to lab | inferred.
+  // Windows is measured for these eight; Linux for claude-code alone (V54, on a test machine: a real `claude -p` behind a CONNECT proxy named in its settings.json env); macOS
+  // for pi alone (its environment names, their order and NO_PROXY, on a test machine). A harness added later says what was measured for it in its own `measured`, which the
+  // shape test above holds to lab | inferred.
   for (const n of ['claude-code', 'codex', 'opencode', 'kimi-code', 'deepseek-dsh', 'hermes', 'z-code', 'pi'])
-    assert.deepEqual(by[n].proxy.measured, { win32: 'lab', linux: n === 'claude-code' ? 'lab' : 'inferred', darwin: 'inferred' }, `${n}: measured on Windows${n === 'claude-code' ? ' and Linux' : ''}, inferred elsewhere`)
+    assert.deepEqual(by[n].proxy.measured, { win32: 'lab', linux: n === 'claude-code' ? 'lab' : 'inferred', darwin: n === 'pi' ? 'lab' : 'inferred' }, `${n}: measured on Windows${n === 'claude-code' ? ' and Linux' : n === 'pi' ? ' and macOS' : ''}, inferred elsewhere`)
 })
 
 test('the files a harness reads a proxy from resolve against HOME and its own config-dir variable', () => {

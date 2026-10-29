@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import path from 'node:path'
 import pi from '../../../src/collector/harness/pi.mjs'
 import { planTrust } from '../../../src/collector/core/trust/plan.mjs'
+import { isPresent } from '../../../src/collector/core/proxymode/sources.mjs'
 import { sandbox, ctxFor, judge, plantMarker, CA, OTHER } from './_ctx.mjs'
 
 const AGENT = ['node', '/usr/local/bin/pi', '-p', 'hi']
@@ -53,4 +54,14 @@ test('pi configHosts: every baseUrl under models.json providers (provider and mo
     assert.deepEqual(judge(pi, ctxFor({ home: s.home, argv: AGENT, unparsable: (f) => bad.push(f) })).hosts, [])
     assert.deepEqual(bad, [path.join(s.home, '.pi/agent/models.json')])
   } finally { s.done() }
+})
+
+test('pi.cli is present only where the official installer left <agent dir>/install/current-version; <agent dir>/bin (fd / rg, any install) and a pi on PATH are not it', () => {
+  const cli = pi.proxyMode.forms.find((f) => f.id === 'pi.cli')
+  for (const os of ['darwin', 'win32']) {
+    const at = (files, env = {}, which = () => '/usr/local/bin/pi') => isPresent(cli, { os, home: '/h', env, join: path.posix.join, exists: (f) => files.includes(f), which })
+    assert.equal(at(['/h/.pi/agent/bin', '/h/.pi/agent/bin/rg']), false, `${os}: an npm pi that downloaded its tools`)
+    assert.equal(at(['/h/.pi/agent/install/current-version']), true, `${os}: the managed install`)
+    assert.equal(at(['/p/install/current-version'], { PI_CODING_AGENT_DIR: '/p' }), true, `${os}: in the agent dir PI_CODING_AGENT_DIR names`)
+  }
 })

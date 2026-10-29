@@ -1,8 +1,10 @@
-// pi.mjs — pi (@earendil-works/pi-coding-agent; RFC 4.6 §身份与信任 pi rows, 4.11 §2.3, D37). Facts: pi 1.4.0 on a Windows test machine
-// (the managed install, npm's shims, the Bun binary, rpc mode) and the pi source. The managed install starts a launcher node
-// (…/bin/pi-launcher.js) that only waits for its child node, which runs …/@earendil-works/pi-coding-agent/dist/bundle/cli.js and holds every
-// connection; npm's shim runs that cli.js in one node (its %dp0% can double a separator); the Bun build is one pi(.exe). pi's tool
-// subprocesses (Git bash on Windows) inherit its whole environment, PI_CODING_AGENT / AI_AGENT included, so those never name the agent.
+// pi.mjs — pi (@earendil-works/pi-coding-agent; RFC 4.6 §身份与信任 pi rows, 4.11 §2.3, D37). Facts: pi 1.4.0 measured on a macOS and a
+// Windows test machine (the managed install, npm's, rpc mode; the Bun binary on Windows only) and the pi source. On Windows the managed install
+// starts a launcher node (…/bin/pi-launcher.js) that only waits for its child node, which runs …/@earendil-works/pi-coding-agent/dist/bundle/cli.js
+// and holds every connection; npm's shim runs that cli.js in one node (its %dp0% can double a separator); the Bun build is one pi(.exe). On macOS
+// every form is one node (the managed sh launcher execs it), and pi overwrites its whole argv with its title `pi` (`pi-rpc` when started by the
+// package's rpc-entry.js) about 0.3 s after start, before its first connection; the exe stays node. pi's tool subprocesses (bash; Git bash on
+// Windows) inherit its whole environment, PI_CODING_AGENT / AI_AGENT included, so those never name the agent.
 // Agent dir: $PI_CODING_AGENT_DIR (a leading ~ expanded), else ~/.pi/agent; pi imports every file in its extensions/ at start, unless
 // started with --no-extensions or its settings leave the file out. Proxy: the proxy names from the environment, and settings.json
 // `httpProxy` filling what the environment lacks; no OS proxy.
@@ -37,16 +39,19 @@ function inject(ctx) {
   }
 }
 
-// How pi reads a proxy (RFC 1.6 §9.7): HTTPS_PROXY / HTTP_PROXY from its environment at start; settings.json `httpProxy` fills only what
-// the environment lacks; no OS proxy. A SOCKS proxy makes the request fail.
+// How pi reads a proxy (RFC 4.11 §2.3; the fields in 1.6 附录 B): the proxy names from its environment at start, the lowercase spelling first
+// (undici's order: with both set to different values on macOS, https_proxy wins); settings.json `httpProxy` fills only what the environment lacks,
+// and pi copies it into its environment before it loads extensions; no OS proxy. A SOCKS proxy makes the request fail.
 const proxy = {
-  env: ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'],
+  env: ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY'],
   files: [{ path: ({ home, env }) => path.join(agentDir((k) => env[k], home), 'settings.json'), format: 'json', keys: [['httpProxy']] }],
   systemProxy: { http: false, ws: false },
   schemes: ['http', 'https'],
   unsupported: { socks5: 'fails' },
   branches: ['all'],
-  measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: a test machine; elsewhere inferred from it, until measured
+  // macOS: the environment names, their order and NO_PROXY measured; settings `httpProxy` and project settings measured on Windows (the same JS).
+  // Linux: inferred from those, until measured
+  measured: { win32: 'lab', darwin: 'lab', linux: 'inferred' },
   restart: { hint: 'Quit pi (and the program running pi --mode rpc), then start it again (it reads the switch once, at start)', processes: 'pi' },
 }
 
@@ -57,9 +62,13 @@ const NOT_MEASURED = { reason: 'not-measured' }
 const form = (id, present, verified = NOT_MEASURED) => ({ id, os: ['darwin', 'win32'], route: 'switch', cert: 'ext', trust: 'node', present, verified: { darwin: verified, win32: verified } })
 const proxyMode = {
   forms: [
-    form('pi.cli', [PI('bin'), { command: 'pi' }]),
+    // only the official installer writes install/current-version (its launcher reads it; both OS); <agent dir>/bin is not a sign of it: pi
+    // downloads fd / rg there for every install
+    form('pi.cli', [PI('install/current-version')]),
     form('pi.npm', [{ command: 'pi' }]),
     form('pi.rpc', [{ command: 'pi' }]),
+    // the Bun binary is an archive unpacked anywhere and leaves nothing of its own to probe, so any `pi` on PATH stands for it; it stays
+    // out of scope (Bun has no tls.setDefaultCACertificates, so the extension cannot add the root)
     form('pi.bin', [{ command: 'pi' }], { reason: 'out-of-scope' }),
   ],
   routes: {
@@ -79,10 +88,12 @@ const proxyMode = {
 export default {
   name: 'pi',
   runtime: 'node',
-  // Which processes are pi (D51 preset, every OS): the Bun binary pi, and node whose entry is pi's bin (…/pi) or the package's bundled cli.js
-  // (separators may repeat); the managed launcher node (…/pi-launcher.js) only waits for its child and is not it.
+  // Which processes are pi (D51 preset, every OS): argv[0] `pi` (the Bun binary; on macOS also the node pi retitles, with `pi-rpc` for
+  // rpc-entry.js), and node whose entry is pi's bin (…/pi: macOS before the retitle, npm's invoked <prefix>/bin/pi or the managed
+  // …/node_modules/.bin/pi) or the package's bundled cli.js / rpc-entry.js (Windows keeps that command line; separators may repeat). The managed
+  // launcher node (…/pi-launcher.js, Windows) only waits for its child and is not it.
   processes: {
-    names: [{ name: 'pi' }, { name: 'node', entry: '((^|/)pi|/+@earendil-works/+pi-coding-agent/+dist/+bundle/+cli\\.js)$' }],
+    names: [{ name: 'pi' }, { name: 'pi-rpc' }, { name: 'node', entry: '((^|/)pi|/+@earendil-works/+pi-coding-agent/+dist/+bundle/+(cli|rpc-entry)\\.js)$' }],
     exclude: [{ name: 'node', args: 'pi-launcher\\.js' }],
     longLived: [{ args: '(^| )--mode( |=)rpc( |$)' }],
   },

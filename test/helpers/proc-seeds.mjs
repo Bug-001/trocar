@@ -26,6 +26,8 @@ const NODE = String.raw`C:\Program Files\nodejs\node.exe`
 const PI_HOME = `${W}\\.pi\\agent`
 const PI_CLI = String.raw`@earendil-works\pi-coding-agent\dist\bundle\cli.js`
 const PIW = 'pi 1.4.0 on a Windows test machine'
+const PIM = 'pi 1.4.0 on a macOS test machine (lab measurement)'
+const MNODE = '/opt/homebrew/bin/node'
 
 export const SEEDS = [
   // ── claude-code ──
@@ -100,7 +102,13 @@ export const SEEDS = [
   l('/usr/bin/node', ['node', '/usr/local/bin/kimi', '-p', 'hi'], 'kimi-code', 'test/collector/harness/kimi-code.test.mjs:28 (the npm bin symlink through env node)'),
   l('/usr/bin/node', ['node', '/usr/lib/node_modules/@moonshot-ai/kimi-code/dist/main.mjs'], 'kimi-code', 'test/collector/harness/kimi-code.test.mjs:29'),
   w(`${W}\\.kimi-code\\bin\\kimi.exe`, ['-p', 'hi'], 'kimi-code', `${WF} (kimi-code.cli)`),
-  // ── pi ── (Windows only: macOS and Linux not measured yet)
+  // ── pi ── (macOS and Windows; Linux not measured yet)
+  d(MNODE, [], 'pi', `${PIM} (the managed install once pi retitles itself: argv is its title, the exe stays node)`, 'pi'),
+  d(MNODE, ['', ''], 'pi', `${PIM} (--mode rpc keeps the title pi; the rest of the overwritten argv is empty)`, 'pi'),
+  d(MNODE, [], 'pi', `${PIM} (the package's rpc-entry.js retitles itself pi-rpc)`, 'pi-rpc'),
+  d(MNODE, [`${U}/.local/bin/../../.pi/agent/install/releases/1.4.0/node_modules/.bin/pi`, '-p', 'hi'], 'pi', `${PIM} (the managed install before the retitle: the sh launcher execs node on the unresolved path)`, 'node'),
+  d(MNODE, [`${U}/.npm-global/bin/pi`, '-p', 'hi'], 'pi', `${PIM} (npm's install before the retitle: argv names the invoked link, not cli.js)`, 'node'),
+  d('/bin/bash', ['-c', 'echo hi'], null, `${PIM} (a tool's bash under pi never connects to a model)`),
   w(NODE, [`${PI_HOME}\\install\\releases\\1.4.0\\node_modules\\${PI_CLI}`, '-p', 'hi'], 'pi', `${PIW} (the managed install: the launcher's child node holds the connection)`),
   w(NODE, [`${PI_HOME}\\install\\releases\\1.4.0\\node_modules\\${PI_CLI}`, '--mode', 'rpc'], 'pi', `${PIW} (the managed install in rpc mode)`),
   w(NODE, [`${PI_HOME}\\bin\\pi-launcher.js`, '-p', 'hi'], null, `${PIW} (the managed launcher waits for its child and never connects)`, { argv: ['node', `${PI_HOME}\\bin\\pi-launcher.js`, '-p', 'hi'], cmdline: `"node" ${PI_HOME}\\bin\\pi-launcher.js -p hi` }),
