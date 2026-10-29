@@ -81,6 +81,16 @@ export const HARNESSES = Object.freeze([
     lane: [{ header: 'x-zcode-session-type', equals: 'subagent', lane: 'subagent' }], // values not yet seen live
     observerEffects: [effect('zcode-node-https', 'network.caCertFile in ~/.zcode/cli/config.json',
       'HTTP client switched from undici to node:https: a new Agent per request, no ALPN (inferred, lab check pending)')] },
+  { ...ROW, id: 'pi', agents: ['pi'],
+    // the affinity headers its OpenAI-style and Anthropic providers send, then the Responses body key; a direct
+    // Anthropic or most chat-completions calls carry none → synthesized (src/dissect/synth-key.mjs, gate G11)
+    sessionKeys: [H('x-session-id', 'medium'), H('session_id', 'medium'), H('x-session-affinity', 'medium'), B(['prompt_cache_key'])],
+    synth: true,
+    observerEffects: [
+      effect('pi-extension', 'trocar trust extension', 'trocar code runs inside the agent process', LINUX),
+      effect('pi-route-extension', 'trocar extension placed by install',
+        'trocar code runs inside the agent process; while capture is on, the proxy variables it sets are inherited by the commands pi\'s tools run', DOOR)],
+    traffic: [T('pi.dev', 'telemetry', '^/api/report-install')] },
 ]);
 
 // Ordered union of every header session key the table declares, then the legacy ones. Only for raw lines that
@@ -104,7 +114,7 @@ export const LEGACY_PROVIDER = Object.freeze({ cc: 'anthropic', codex: 'openai',
 export function wireProviderOfEndpoint(endpoint) {
   const ep = String(endpoint || '').split('?')[0];
   if (/(^|\/)(responses|chat\/completions)$/.test(ep)) return 'openai';
-  if (/(^|\/)messages$/.test(ep)) return 'anthropic';
+  if (/(^|\/)v1\/messages$/.test(ep)) return 'anthropic'; // D3: a bare /messages (a gateway's own route) is no wire
   return null;
 }
 

@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  HARNESSES, harnessOf, sessionKeyOf, hintsOf, observerEffectsOf, headerOf,
+  HARNESSES, harnessOf, sessionKeyOf, hintsOf, observerEffectsOf, headerOf, wireProviderOfEndpoint,
 } from '../../src/dissect/harnesses.mjs';
 
 const proc = (agent, pid = 4242) => ({ pid, exe: '/x/' + agent, agent });
@@ -132,4 +132,31 @@ test('observer effects by capture mode: a proxy-mode call carries no Linux-only 
 test('headerOf is case-insensitive over both envelope header keys', () => {
   assert.equal(headerOf({ req_headers: { 'Session-Id': 'a' } }, 'session-id'), 'a');
   assert.equal(headerOf({ request_headers: { 'session-id': 'b' } }, 'Session-Id'), 'b');
+});
+
+// 3.4 pi row: the session headers pi's providers send (openai-completions / openai-responses / anthropic-messages) and
+// the body prompt_cache_key; each alone keys the session with the value it carries.
+test('pi: each of its session signals keys the session with the value given', () => {
+  for (const headers of [{ 'x-session-id': 's1' }, { session_id: 's1' }, { 'x-session-affinity': 's1' }]) {
+    assert.equal(sessionKeyOf(rec({ agent: 'pi', headers })).key, 's1', Object.keys(headers)[0]);
+  }
+  assert.equal(sessionKeyOf(rec({ agent: 'pi', body: { model: 'm', prompt_cache_key: 's1', input: [] } })).key, 's1');
+});
+
+test('pi: an inference call with none of its keys has no key, and its row synthesizes one', () => {
+  const r = rec({ agent: 'pi', headers: { 'user-agent': 'x' }, body: { model: 'm', messages: [] } });
+  assert.equal(sessionKeyOf(r).key, null);
+  assert.equal(harnessOf(r).row.synth, true);
+});
+
+test('pi: the trust extension is its Linux effect, the install-time extension its door effect (3.1)', () => {
+  const ids = (capture) => (observerEffectsOf(rec({ agent: 'pi', capture })) || []).map((e) => e.id);
+  assert.deepEqual(ids('transparent'), ['pi-extension']);
+  assert.deepEqual(ids('proxy'), ['pi-route-extension']);
+});
+
+// D3 / 0.2: only an endpoint ending /v1/messages (relay prefixes and a querystring allowed) is the Anthropic wire.
+test('wireProviderOfEndpoint: /v1/messages is anthropic, a bare /messages is no wire, responses / chat completions are openai', () => {
+  for (const [ep, want] of [['/v1/messages', 'anthropic'], ['/anthropic/v1/messages?beta=true', 'anthropic'], ['/messages', null],
+    ['/v1/responses', 'openai'], ['/v1/chat/completions', 'openai']]) assert.equal(wireProviderOfEndpoint(ep), want, ep);
 });

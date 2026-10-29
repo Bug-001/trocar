@@ -121,3 +121,7 @@ test('unmatchedClasses: a class no usable pattern of the row names is unmatched;
   assert.deepEqual(unmatchedClasses('b', rows), ['session-sync', 'files', 'account'])
   assert.deepEqual(unmatchedClasses('c', rows), ['session-sync', 'files', 'account'])
 })
+
+test('pi: its install report to pi.dev is telemetry', () => {
+  assert.equal(classify({ harness: 'pi', host: 'pi.dev', endpoint: '/api/report-install?version=1.0.0' }), 'telemetry')
+})
