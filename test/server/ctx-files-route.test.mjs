@@ -215,7 +215,11 @@ test('4.4 #17 A15: the keeper\'s new model calls of a keyed session ride on x-tr
       if (i % 10 === 9) { await pause(20); await keeper.idle() } // several passes: the table keeps the newest across them
     }
     await pause(20); await keeper.idle()
-    const doc = JSON.parse((await w.api(`/api/session?id=${KEY}&limit=200`)).body)
+    // a just-forked worker answers within its slice budget and may stop at the reduction frontier (3.5 pending): read until it has none,
+    // for as long as pending.done moves
+    let doc = null
+    await whileMoving(async () => { doc = JSON.parse((await w.api(`/api/session?id=${KEY}&limit=200`)).body); return doc.pending == null },
+      () => doc?.pending?.done, 'the keyed session folded to its last call')
     const rids = doc.calls.map((c) => c.rid)
     assert.equal(rids.length, N, 'the keyed session holds every call written')
     for (const f of ['head', 'open.main']) {
