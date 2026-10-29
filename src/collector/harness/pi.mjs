@@ -44,7 +44,7 @@ function inject(ctx) {
 // and pi copies it into its environment before it loads extensions; no OS proxy. A SOCKS proxy makes the request fail.
 const proxy = {
   env: ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY'],
-  files: [{ path: ({ home, env }) => path.join(agentDir((k) => env[k], home), 'settings.json'), format: 'json', keys: [['httpProxy']] }],
+  files: [{ path: ({ home, env }) => path.join(agentDir((k) => env[k], home), 'settings.json'), format: 'json', keys: [['httpProxy']], applies: 'fill', env: 'PI_CODING_AGENT_DIR', names: ['HTTPS_PROXY', 'HTTP_PROXY'] }], // pi: HTTP(S)_PROXY ??= httpProxy
   systemProxy: { http: false, ws: false },
   schemes: ['http', 'https'],
   unsupported: { socks5: 'fails' },
