@@ -118,12 +118,14 @@ for (const wire of ['http', 'chat', 'threads', 'ws']) for (const subLanes of [1,
   })
 }
 
-// The blocks axis (3.5 §内存有界, SPINE_PER_BLOCK): the same calls with fresh tool definitions on every call or none (unique texts
-// either way): what the read still holds grows by at most SPINE_PER_BLOCK a distinct block (the projection's `d` lines).
-test('what a session read keeps grows by at most SPINE_PER_BLOCK a distinct block', { timeout: 120_000 }, () => {
-  const few = read({ freshTools: 0 }, 40), many = read({ freshTools: 1_500 }, 40)
-  const per = (many.retained - few.retained) / (many.blocks - few.blocks)
-  assert.ok(per <= SPINE_PER_BLOCK, `${Math.round(per)} B retained a distinct block (${few.blocks} → ${many.blocks} blocks, ${few.retained} → ${many.retained} B), SPINE_PER_BLOCK ${SPINE_PER_BLOCK}`)
+// The blocks axis (3.5 §内存有界, SPINE_PER_BLOCK): the same calls with 750 or 1,500 fresh tool definitions on every call (unique
+// texts either way, one table doubling): what the read still holds grows by at most SPINE_PER_BLOCK a distinct block (the
+// projection's `d` lines). Both reads are past what fills K's byte-capped caches (the writer memo's 4 MiB of tool_use facts, the
+// chain tails' request bodies: 0 against 1,500 tools put that fill, ~70 B a block, on the block term). The median of three pairs.
+test('what a session read keeps grows by at most SPINE_PER_BLOCK a distinct block', { timeout: 240_000 }, () => {
+  const pairs = [0, 1, 2].map(() => [read({ freshTools: 750 }, 40), read({ freshTools: 1_500 }, 40)])
+  const pers = pairs.map(([few, many]) => (many.retained - few.retained) / (many.blocks - few.blocks)).sort((a, b) => a - b)
+  assert.ok(pers[1] <= SPINE_PER_BLOCK, `${pers.map(Math.round)} B retained a distinct block (${JSON.stringify(pairs)}), SPINE_PER_BLOCK ${SPINE_PER_BLOCK}`)
 })
 
 // The plan's members (3.5 §内存有界, PLAN_PER_MEMBER): the plan holds every member of the session, the ones its cut leaves out too

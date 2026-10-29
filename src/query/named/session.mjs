@@ -53,8 +53,9 @@ export const params = Object.freeze(['id', 'since', 'before', 'limit', 'head']);
 export const SPINE_PER_ROW = 792;
 /** What the reduction keeps in the heap per distinct block of the session (its store's slot, its block columns and interned keys:
  *  src/view/reduce.mjs, src/query/projection.mjs): 222 B measured (after a forced GC, in a heap of the worker's size) as what a
- *  read of a test/query/big-session.mjs live(0.004) session holds more with 1,500 fresh tool definitions a call than with none, per
- *  block more, × 1.25 (2026-10-22). */
+ *  read of a test/query/big-session.mjs session holds more with 1,500 fresh tool definitions a call than with none, per block
+ *  more, × 1.25 (2026-10-22, before K held the writer memo). Measured since between 750 and 1,500 fresh tool definitions a call,
+ *  where K's byte-capped caches are full in both reads: 143–184 B (2026-10-29). */
 export const SPINE_PER_BLOCK = 280;
 /** What the plan keeps in the heap per member of the session, cut off or not (its member array's flyweight row with the cell the
  *  step-order sort decoded last, and its entry in the by-id map with the id's text): 209 B measured (2026-10-23, forced GC, a plan
