@@ -19,7 +19,7 @@ import { stepRef } from './lanes.mjs'
 import { stepOf } from './model.mjs'
 import { setFold, turnAnchorKey, turnIsOpen } from './fold.mjs'
 import { ctxBlockHtml, blockRowHtml, fillBody, showBody, faithOf, faithNow, ffBadgeHtml, tagWord, bodyFor } from './blocks.mjs'
-import { replyOf, replyMarkHtml } from './rawpanel.mjs' // one reply rule, two drawings (2.3 §这一步的回复 · 2.6 §A)
+import { replyOf, partMark } from './rawpanel.mjs' // one reply rule, two drawings (2.3 §这一步的回复 · 2.6 §A)
 
 export { blockBodyHtml } from './blocks.mjs'
 
@@ -225,9 +225,10 @@ function drawPlan(groups, all, focus) {
 /** The full draw: every open turn's rows (what the window holds once a fill has run to the end). */
 export const ctxWindowHtml = (s) => serialize(ctxWindowUnits(s, { all: true }))
 
-// ── ⑨ this step's reply (2.3 §这一步的回复): one head (the word · the ONE fidelity mark · the stop reason), then one block row
-// per reply definition through the request's row component, its body a cell. A reply row is not a request block: no data-bi /
-// data-rk / data-sec / data-ff, no 新 / cache / volatile / per-row fidelity marks. Default open = the rows of the first present
+// ── ⑨ this step's reply (2.3 §这一步的回复): one block row per reply definition through the request's row component, in the
+// request rows' form — no head; each row its own fidelity mark (partMark, proven rows as a request's: data-ff + screen-reader
+// word), the stop reason on the last row's head, the rows a group a screen reader names. A reply row is not a request block:
+// no data-bi / data-rk / data-sec, no 新 / cache / volatile marks. Default open = the rows of the first present
 // kind among text → tool call → thinking; a reader's flip is `rp:<bid>` in s.openBlocks, kept while the step stays, reset on
 // a step change (2.3:195).
 const REPLY_OPEN_ORDER = ['text', 'tool_use', 'thinking']
@@ -236,20 +237,24 @@ export const replyDef = (d) => ({ ...d, text_ref: d.ref })
 function replyUnit(s, st, call) {
   if (s.replyFor !== call.rid) { for (const k of [...s.openBlocks]) if (String(k).startsWith('rp:')) s.openBlocks.delete(k); s.replyFor = call.rid }
   const r = replyOf({ row: call, reply: st.reply, detail: st.detail })
-  if (r.failed) return { key: 'reply', html: `<div class="cwreply"><div class="cwrhd"><b>${esc(W.REPLY_WORD)}</b> · ${esc(W.FAILED_NO_REPLY)}${r.failed.reason ? techDetailsHtml([['reason', r.failed.reason]], { id: 'cwfail' }) : ''}</div></div>` }
-  const head = `<div class="cwrhd"><b>${esc(W.REPLY_WORD)}</b>${replyMarkHtml(r)}${r.stop ? `<span>${W.stopReasonRow(`<span class="mono">${esc(r.stop)}</span>`)}</span>` : ''}</div>`
+  const group = (inner) => ({ key: 'reply', html: `<div class="cwreply" role="group" aria-label="${esc(W.REPLY_WORD)}">${inner}</div>` })
+  if (r.failed) return group(`<div class="cwrline">${esc(W.FAILED_NO_REPLY)}${r.failed.reason ? techDetailsHtml([['reason', r.failed.reason]], { id: 'cwfail' }) : ''}</div>`)
+  const stop = r.stop ? `<span class="cbstop">${W.stopReasonRow(`<span class="mono">${esc(r.stop)}</span>`)}</span>` : ''
+  if (!r.parts.length) return group(`<div class="cwrline">${esc(W.EMPTY_REPLY)}${stop}</div>`)
   const first = REPLY_OPEN_ORDER.find((k) => r.parts.some((d) => d.kind === k))
   s.curReply = new Map()
   const seen = new Map()
-  const kids = r.parts.map((d) => {
+  const kids = r.parts.map((d, i) => {
     const n = seen.get(d.bid) || 0; seen.set(d.bid, n + 1)
     const key = 'rp:' + d.bid + (n ? '#' + n : ''), b = replyDef(d)
     s.curReply.set(key, b)
-    const open = (d.kind === first) !== s.openBlocks.has(key)
+    const open = (d.kind === first) !== s.openBlocks.has(key), f = partMark(d) || 'verbatim'
+    const mark = f === 'verbatim' ? `<span class="sr-only">,${esc(W.FF_WORD.verbatim)}</span>` : ffBadgeHtml(f)
     return { key, html: blockRowHtml({ role: 'assistant', tag: replyTag(d), label: d.preview || '' }, {
-      cls: `r-assistant k-${esc(d.kind)}`, attrs: ` data-rp="${esc(key)}"`, chars: typeof d.chars === 'number' ? d.chars : null, open, body: open ? bodyFor(b) : '' }) }
+      cls: `r-assistant k-${esc(d.kind)}`, attrs: ` data-rp="${esc(key)}" data-ff="${f}"`, badges: mark + (i === r.parts.length - 1 ? stop : ''),
+      chars: typeof d.chars === 'number' ? d.chars : null, open, body: open ? bodyFor(b) : '' }) }
   })
-  return { key: 'reply', html: `<div class="cwreply">${head}<div class="cwrrows" data-kids>${KIDS}</div></div>`, kids }
+  return { ...group(`<div class="cwrrows" data-kids>${KIDS}</div>`), kids }
 }
 // ── repaint: patch to the units, fill open bodies, land once per step, then fill the placeholders ──────────────────────
 // A step whose lane is not held keeps the rows already drawn unless `busy` (the desk's 150 ms decision, 2.3 §车道未到手).
