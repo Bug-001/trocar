@@ -17,10 +17,13 @@ export const isCredentialHeader = (name) => {
  * {ok, status, data, error}; the record (data.records[0]) carries that one value, every other credential still blanked. */
 export const revealHeader = (api, ref, name, opts) => api.get('calls', { ref, reveal: String(name).trim().toLowerCase() }, opts)
 
-/** Any URL credentials in a text → `***@` (1.9 §保真边界: 代理地址里的用户名与密码一律显示成 `***@`)。
- * Covers scheme://user:pass@host in any position; an already-redacted `***@` passes through unchanged. Pure, no DOM. */
+/** Any URL userinfo in a text → `***@` (1.9 §保真边界: 代理地址里的用户名与密码一律显示成 `***@`): a user alone, a password alone, and
+ * a password holding an `@` it did not escape, up to the last `@` of the authority as a URL parser reads it; never past white space,
+ * `/ ? #`, a quote or a backslash, so it stays inside one JSON string. The CLI's receipts hide by the same rule (src/off/io.mjs
+ * hideUserinfo; capture-page.test.mjs compares the two). An already-redacted `***@` passes through unchanged. Pure, no DOM. */
+const USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#"'`<>\\@]*(?:@[^\s/?#"'`<>\\@]*)*@/gi
 export function redactUrlCredentials(text) {
-  return String(text ?? '').replace(/([a-zA-Z][\w+.-]*:\/\/)([^\s/@:]+):([^\s/@]*)@/g, '$1***@')
+  return String(text ?? '').replace(USERINFO, '$1***@')
 }
 
 /** The same, escaped for HTML — the form every renderer here actually interpolates. */
