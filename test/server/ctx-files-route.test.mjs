@@ -66,8 +66,9 @@ async function open(calls) {
   const s = bigSession({ home, wire: 'http', growth: 300, subEvery: 4, subLanes: 2, late: 3 })
   if (calls) s.append(calls)
   const forks = [], reported = { n: 0 }
-  // idleMs outlasts the worker's idle period (worker.mjs IDLE_SLICE_MS): its save writes the head the last slice left behind (3.5 答案文件)
-  const svc = createQueryService({ home, idleMs: 4000, fork: (...a) => { const c = workerFork(...a); c.on('message', () => { reported.n++ }); forks.push(c); return c } })
+  // the service's own idle clock: the worker runs niced (worker.mjs lowerPriority), so on a busy machine its slices land further apart
+  // than a test idleMs of a few seconds, and by the rule it then leaves mid-fold with nothing here to fork it again
+  const svc = createQueryService({ home, fork: (...a) => { const c = workerFork(...a); c.on('message', () => { reported.n++ }); forks.push(c); return c } })
   const tips = tipTable()
   const { server } = createServer({ home, token: TOKEN, query: svc, tips: tips.of })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
@@ -75,14 +76,14 @@ async function open(calls) {
   const dir = sessionDir(home, s.id), file = (f) => path.join(dir, f)
   const d = (f, h = {}, id = s.id) => get(port, `/api/d/${f}?id=${encodeURIComponent(id)}`, withToken(h))
   const gone = () => forks.every((c) => c.exitCode !== null || c.signalCode !== null)
-  // the worker leaves on its idle clock, which each reported slice starts again: waited for as long as it still reports
-  const left = (what) => whileMoving(gone, () => reported.n, what)
+  // the worker ended as the daemon's stop ends it (how it leaves on its idle clock is query-service.test.mjs's case)
+  const left = async (what) => { svc.stop(); return whileMoving(gone, () => reported.n, what) }
   return { home, id: s.id, svc, tips, server, port, forks, reported, dir, file, d, gone, left, waits: {}, api: (p, h = {}) => get(port, p, withToken(h)) }
 }
 /** The home the #15 and #16 cases share: CALLS members. */
 let world = null
 const theWorld = () => (world ||= open(CALLS))
-/** The world once the worker folded the whole session (its head has no `pending`, its tails are written) and left on its idle clock.
+/** The world once the worker folded the whole session (its head has no `pending`, its tails are written) and is gone.
  *  The #15 and #16 cases have no fixed timeout: the worker runs at low priority (worker.mjs lowerPriority), so under the full suite's load its
  *  fold takes as long as it is given CPU; every wait on it lasts while it reports progress and fails after STALL ms without. */
 let foldedWorld = null
@@ -97,7 +98,7 @@ function folded() {
       done = head?.pending?.done ?? done
       return head != null && head.pending == null && fs.existsSync(w.file('open.rest.ndjson'))
     }, () => `${w.reported.n} ${done}`, 'the worker folded the session and wrote its files')
-    w.waits.left = await w.left('the worker left on its idle clock')
+    w.waits.left = await w.left('the worker is gone')
     return w
   })()
   return foldedWorld
