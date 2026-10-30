@@ -184,11 +184,9 @@ test('W25 off and uninstall (no source tree, no helper): the standalone check of
 
 // ---- the Node preflight (4.8 §7) ----------------------------------------------------------------------------------------------------------------
 
-test('W24 `on` on darwin refuses a Node below 22.15 (4.9 §7, MA5: a root added in the keychain is only in getCACertificates(\'system\')) with a doctor line that says what was found and what is needed; package.json engines stays the floor Linux / Windows keep', () => {
+test('W24 `on` on darwin refuses a Node below 22.15 (4.9 §7, MA5: a root added in the keychain is only in getCACertificates(\'system\')) with a doctor line that says what was found and what is needed', () => {
   const NODE_MIN = '22.15' // 4.9 §7's number, asserted against the answer's own `min` below
   assert.equal(nodePreflight({ versions: { node: '24.0.0' } }).min, NODE_MIN)
-  const engines = JSON.parse(fs.readFileSync(new URL('../../../../package.json', import.meta.url), 'utf8')).engines.node
-  assert.equal(engines, '>=20', 'engines unchanged: Linux and Windows still accept 20 (the win32 test holds its preflight to it)')
   for (const v of ['22.15.0', '22.23.1', '23.0.0', '24.1.0']) assert.deepEqual(nodePreflight({ versions: { node: v } }), { ok: true, have: v, min: NODE_MIN }, v)
   for (const v of ['22.14.0', '22.0.0', '20.19.5', '20.0.0', '18.20.4', '16.0.0']) {
     const r = nodePreflight({ versions: { node: v } })

@@ -93,7 +93,7 @@ async function darwinRoots({ tls = nodeTls, exec = null, timeoutMs = SECURITY_TI
     for (const key of ['bundled', 'system']) { // 'bundled' first: Node's text is the steadier one for a certificate both sources hold
       try { merge(tls.getCACertificates(key), `node-${key}`) } catch (e) { failed(`node-${key}: ${e.code || e.message}`) }
     }
-  } else failed('getCACertificates: not available (Node ≥ 22.15 has it)') // Node 20 still gets the standard set from the security export, but the keychain's local anchors — the enterprise roots — are only in 'system'
+  } else failed('getCACertificates: not available (Node ≥ 22.15 has it)') // a Node before 22.15 still gets the standard set from the security export, but the keychain's local anchors — the enterprise roots — are only in 'system'
   try {
     const r = execTool('security', ['find-certificate', '-a', '-p', SYSTEM_ROOTS_KEYCHAIN], { run: exec, timeoutMs })
     if (r.code === 0) merge(r.out.match(ROOT_PEM_BLOCK) || [], 'security')

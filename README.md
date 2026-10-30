@@ -64,7 +64,7 @@ thinking / tool_use / tool_result), so you see *which* part grew and when.
 
 ## Install
 
-From npm (Node ≥ 20). The package is `trocar-cli`; the command it installs is `trocar`.
+From npm (Node ≥ 22). The package is `trocar-cli`; the command it installs is `trocar`.
 
 ```sh
 npm i -g trocar-cli
