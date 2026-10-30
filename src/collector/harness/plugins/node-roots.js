@@ -1,12 +1,12 @@
-// trocar collector: trust plugin for DeepSeek dsh. Written by `trocar collector install` into trocar's own plugin
-// directory and loaded by one sentinel-marked row of ~/.dsh/cordis.patch.yml; `trocar collector uninstall` removes
-// both (RFC 4.6 §身份与信任, D37④ bounded exception, acceptance T13). What it does, and nothing else:
+// trocar collector: trust plugin for a Node agent that imports one module of trocar's (DeepSeek dsh, pi). `trocar collector install`
+// writes it where that agent loads it, followed by the exports that agent looks for (plugins/<harness>/exports.js); `trocar collector
+// uninstall` removes it (RFC 4.6 §身份与信任, D37④ bounded exception, acceptance T13). What it does, and nothing else:
 //   reads   the trocar CA file, Node's default roots, this process's own Node flags and start time
-//   changes Node's default trusted roots to those defaults + the trocar CA (appended, nothing taken away)
+//   changes Node's default trusted roots to those defaults + the trocar CA (appended, nothing taken away; not again when it is already in)
 //   writes  one marker, <marker dir>/<pid> = this process's start time, so the trocar engine knows the CA is in
-// It never touches request or response bytes, opens no connection, writes no agent config. It adds nothing and
-// writes no marker when tls.setDefaultCACertificates is missing (Node < 22.19), under --use-openssl-ca (the call
-// would then replace the roots), or when the CA file is missing or not PEM; it never throws.
+// It never touches request or response bytes, opens no connection, writes no agent config, registers nothing with the agent. It adds
+// nothing and writes no marker when tls.setDefaultCACertificates is missing (Node < 22.19), under --use-openssl-ca (the call would then
+// replace the roots), or when the CA file is missing or not PEM; it never throws.
 import fs from 'node:fs'
 import tls from 'node:tls'
 
@@ -26,7 +26,10 @@ function addCa() {
   let ca = null
   try { ca = PEM.exec(fs.readFileSync(CA_FILE, 'utf8')) } catch { return }
   if (!ca) return
-  tls.setDefaultCACertificates([...tls.getCACertificates('default'), ca[0]])
+  const body = (pem) => pem.replace(/-----[^-]+-----|\s/g, '')
+  const roots = tls.getCACertificates('default')
+  // pi's /reload imports it again in the same process: a CA already in the roots is not appended twice; the marker is rewritten as is
+  if (!roots.some((r) => body(r) === body(ca[0]))) tls.setDefaultCACertificates([...roots, ca[0]])
   const ticks = startTicks()
   const tmp = `${MARKER_DIR}/.${process.pid}.tmp`
   fs.writeFileSync(tmp, ticks, { mode: 0o600 })
@@ -34,6 +37,3 @@ function addCa() {
 }
 
 try { addCa() } catch { /* trocar never stops the agent from starting */ }
-
-export const name = 'trocar-ca'
-export function apply() {}

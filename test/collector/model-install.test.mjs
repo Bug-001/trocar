@@ -10,6 +10,9 @@ import { modelWorld } from '../helpers/model-world.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import { certBlocks } from '../../src/off/pem.mjs'
+import { loadHarnesses } from '../../src/collector/harness/index.mjs'
+import { runUninstall } from '../../src/cli/uninstall.mjs'
+import { recordingExec } from '../cli/fixtures/on-ctx.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
 const put = (f, data) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, data) }
@@ -231,4 +234,26 @@ test('CM35 · 1.6 V67: the key present and readable → install calls create zer
   const creates = w.custody.calls.filter((c) => c.verb === 'create').length
   await w.install({ wrapperKit: { renderWrapper }, now: later })
   assert.equal(w.custody.calls.filter((c) => c.verb === 'create').length, creates)
+})
+
+// CM37: a plugin cert with no loader (the host finds files in its folder) → install writes the hook file alone, no loader row; uninstall takes it out
+test('CM37: a loaderless plugin cert → one owned plugin file in its folder, no text entry there, uninstall leaves the folder as it was', async () => {
+  const [eighth] = await loadHarnesses(new URL('./harness/fixtures/', import.meta.url))
+  const w = await modelWorld()
+  const ext = path.join(w.home, '.eighth', 'extensions')
+  fs.mkdirSync(ext, { recursive: true })
+  const before = snapshot(ext)
+  await w.install({ harnesses: [eighth] })
+  const m = readManifest(w.dir)
+  const mine = [...m.entries, ...m.files].filter((e) => e.harness === 'eighth' && e.phase === 'install')
+  const file = path.join(ext, 'trocar-pi-extension.js')
+  const under = mine.filter((e) => e.path.startsWith(`${ext}${path.sep}`))
+  assert.deepEqual(under.map((e) => [e.kind, e.role, e.path]), [['owned-file', 'plugin', file]])
+  assert.ok(fs.existsSync(file))
+  const texts = mine.filter((e) => e.kind === 'text')
+  assert.deepEqual(texts.filter((e) => e.path.startsWith(`${ext}${path.sep}`) || e.format === 'yaml-list'), [])
+  const exec = recordingExec()
+  const { exit, receipt } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: 'darwin', exec: exec.run, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501 } })
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  assert.deepEqual(snapshot(ext), before)
 })

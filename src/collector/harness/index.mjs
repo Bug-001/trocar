@@ -3,17 +3,19 @@
 // There are no per-OS overlay files: macOS and Windows data is the base descriptor's `proxyMode`, with `perOs({ darwin, win32 })`
 // where a path differs (spec 4.11 §2.3).
 // The registry (core) validates them; this file never imports core/engine or arch/. It also checks the one export
-// every descriptor owes `trocar status` and `trocar doctor` (RFC 1.6 §9.7): `proxy`, how its agent reads a proxy.
+// every descriptor owes `trocar status` and `trocar doctor` (RFC 4.11 §2.3; status draws it per 1.6 附录 A): `proxy`, how its agent reads a proxy.
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { normalizeName } from '../../off/identity.mjs'
+import { TEMPLATES } from './templates/index.mjs'
 
 const SCHEME = ['http', 'https', 'socks4', 'socks5', 'socks5h']
 const MEASURED = ['lab', 'inferred']
 const nonEmpty = (s) => typeof s === 'string' && s !== ''
 
-/** Problems with a descriptor's `proxy` export against the shape of 1.6 §9.7 (`[]` = fine):
- *  `{ env: [names the agent reads, preferred first], files: [{ path: ({ home, env }) => file, format: 'json' | 'dotenv', keys: [key path | name, …] }], systemProxy: { http, ws } (true | false | 'unknown':
+/** Problems with a descriptor's `proxy` export against the shape of 4.11 §2.3 (`[]` = fine):
+ *  `{ env: [names the agent reads, preferred first], files: [{ path: ({ home, env }) => file, format: 'json' | 'dotenv', keys: [key path | name, …], applies: 'override' | 'fill' (over the launch env, or only the names
+ *  it lacks: 4.11 P7 step 3), env?: the variable that relocates the file, names?: [the env names a JSON key that is not itself one stands for] }], systemProxy: { http, ws } (true | false | 'unknown':
  *  does it follow the OS proxy setting, per transport), schemes: [the proxy URL schemes it takes], unsupported: { <scheme>: 'silent-direct' | 'fails' }, branches: ['all'] | ['http', 'ws'],
  *  measured: { win32, linux, darwin }: 'lab' | 'inferred', restart: { hint, processes, managed? } }` (`managed: true`: the settings live in a process the agent's windows do not end, which `doctor` then names by pid). A harness with more to say (proxy mode's per-form data, 4.8 §2.3) adds keys; these must be there. */
 export function proxyProblems(p) {
@@ -23,6 +25,7 @@ export function proxyProblems(p) {
   if (!Array.isArray(p.files)) bad.push('files: not a list')
   else p.files.forEach((f, i) => {
     if (!f || typeof f.path !== 'function' || !['json', 'dotenv'].includes(f.format) || !Array.isArray(f.keys) || !f.keys.length) bad.push(`files[${i}]: needs path(), format json | dotenv and a non-empty keys list`)
+    else if (!['override', 'fill'].includes(f.applies) || (f.env !== undefined && !nonEmpty(f.env)) || (f.names !== undefined && !(Array.isArray(f.names) && f.names.length && f.names.every((n) => (p.env || []).includes(n))))) bad.push(`files[${i}]: applies is override or fill, env a variable name, names a list of env's names`)
   })
   for (const k of ['http', 'ws']) if (![true, false, 'unknown'].includes(p.systemProxy && p.systemProxy[k])) bad.push(`systemProxy.${k}: not true, false or 'unknown'`)
   if (!Array.isArray(p.schemes) || !p.schemes.length || !p.schemes.every((s) => SCHEME.includes(s))) bad.push(`schemes: not a list of ${SCHEME.join(' | ')}`)
@@ -99,7 +102,7 @@ function proxyModeProblems(pm) {
     oneOf(c.kind, PM.cert, `${at}.kind`)
     if (c.kind === 'config-key') { loc(c.file, `${at}.file`, true); oneOf(c.format, PM.format, `${at}.format`); oneOf(c.semantics, PM.semantics, `${at}.semantics`); cond(c.when, `${at}.when`) }
     if (c.kind === 'wrapper') { loc(c.binDir, `${at}.binDir`, true); oneOf(c.layout, PM.layout, `${at}.layout`); if (!nonEmpty(c.command) || !nonEmpty(c.certVar)) say('shape', `${at} needs command and certVar`) }
-    if (c.kind === 'plugin') { loc(c.dir, `${at}.dir`, true); if (!nonEmpty(c.template)) say('shape', `${at}.template is missing`); if (!obj(c.loader)) say('shape', `${at}.loader is missing`); else { loc(c.loader.file, `${at}.loader.file`, true); oneOf(c.loader.format, PM.format, `${at}.loader.format`) } }
+    if (c.kind === 'plugin') { loc(c.dir, `${at}.dir`, true); if (!(Object.hasOwn(TEMPLATES, String(c.template)) && TEMPLATES[c.template].addsRoot)) say('shape', `${at}.template names no hook that adds the trocar root in process (P11 rule 4)`); if (c.loader !== undefined) { if (!obj(c.loader)) say('shape', `${at}.loader is not an object`); else { loc(c.loader.file, `${at}.loader.file`, true); if (c.loader.format !== 'yaml') say('kind', `${at}.loader.format is ${JSON.stringify(c.loader.format)}, not yaml (the one format with a row edit)`) } } }
   }
   for (const [id, t] of Object.entries(trusts)) {
     const at = `trusts.${id}`
@@ -143,10 +146,13 @@ function proxyModeProblems(pm) {
     cond(b.when, `blockers[${i}].when`)
     for (const id of b.forms || []) if (!ids.has(id)) say('resolve', `blockers[${i}].forms names ${JSON.stringify(id)}, no form`)
   })
-  for (const [i, e] of (pm.effects || []).entries()) {
+  for (const [i, e] of (pm.effects === undefined || Array.isArray(pm.effects) ? pm.effects || [] : (say('shape', 'effects is not a list'), [])).entries()) {
     if (!obj(e) || !nonEmpty(e.id) || !nonEmpty(e.when) || !Array.isArray(e.paths) || !e.paths.length) { say('shape', `effects[${i}] is not { id, paths, when }`); continue }
     e.paths.forEach((p, k) => loc(p, `effects[${i}].paths[${k}]`, false))
   }
+  ;(pm.notes === undefined || Array.isArray(pm.notes) ? pm.notes || [] : (say('shape', 'notes is not a list'), [])).forEach((n, i) => {
+    if (!obj(n) || !nonEmpty(n.id) || !nonEmpty(n.text)) say('shape', `notes[${i}] is not { id, text }`)
+  })
   return bad
 }
 
@@ -157,7 +163,7 @@ export async function loadHarnesses(dirUrl = new URL('./', import.meta.url)) {
   for (const n of names) {
     const d = (await import(new URL(n, dirUrl).href)).default
     const bad = proxyProblems(d && d.proxy)
-    if (bad.length) throw new Error(`harness ${n}: its proxy export is wrong (RFC 1.6 §9.7): ${bad.join('; ')}`)
+    if (bad.length) throw new Error(`harness ${n}: its proxy export is wrong (RFC 4.11 §2.3, the proxy block): ${bad.join('; ')}`)
     const pmBad = d.proxyMode === undefined ? ['shape: no proxyMode (every harness says how proxy mode reaches it, spec 4.11 §2.4)'] : proxyModeProblems(d.proxyMode)
     if (pmBad.length) throw new Error(`harness ${d.name || n} (${n}): its proxyMode is wrong (spec 4.11 §2.3): ${pmBad.join('; ')}`)
     out.push(d)

@@ -2,7 +2,7 @@
 
 ## 界面词表
 
-看板的英文名词以本表为准:一个概念只用一个词,表与 `src/web/v2/labels/**` 的字符串一一对应。标 (CLI) 的词由命令行定(`src/cli/words.mjs` · `status-text.mjs` · `harness-names.mjs`),是查表不是翻译,看板不另起措辞。「not used」是被否掉的拼法,`test/web-v2/english.test.mjs` 从本表读它们,看板代码的字符串里出现即红。harness 名与类别 id(`llm` `token-count` `session-sync` `telemetry` `files` `account` `other`)是数据,不进本表。
+看板的英文名词以本表为准:一个概念只用一个词,表与 `src/web/v2/labels/**` 的字符串一一对应。标 (CLI) 的词由命令行定(`src/cli/words.mjs` · `status-text.mjs` · `src/off/harness-names.mjs`),是查表不是翻译,看板不另起措辞。「not used」是被否掉的拼法,`test/web-v2/english.test.mjs` 从本表读它们,看板代码的字符串里出现即红。harness 名与类别 id(`llm` `token-count` `session-sync` `telemetry` `files` `account` `other`)是数据,不进本表。
 
 | concept | English | not used |
 |---|---|---|

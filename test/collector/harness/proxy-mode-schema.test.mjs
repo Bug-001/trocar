@@ -33,6 +33,9 @@ const MUTATIONS = {
   'write-target': (pm) => { pm.routes[firstRoute(pm)].file = { base: 'abs', path: '/Library/Managed Preferences/agent.plist' } },
   'write-target (perOs)': (pm) => { pm.routes[firstRoute(pm)].file = { perOs: { darwin: { base: 'home', path: '.agent.json' }, win32: { base: 'abs', path: 'C:/ProgramData/Agent/settings.json' } } } },
   'write-target (cwd)': (pm) => { pm.routes[firstRoute(pm)].file = { base: 'cwd', path: '.agent/settings.json' } },
+  'shape (notes)': (pm) => { pm.notes = [{ id: 'launch-flag' }] },
+  'shape (notes list)': (pm) => { pm.notes = 'a launch flag skips the hook' },
+  'shape (effects list)': (pm) => { pm.effects = { id: 'residue' } },
 }
 
 // The real loader over a directory of one generated module per descriptor; the module hands back an object built here (functions and all).
@@ -144,3 +147,32 @@ test("codex: SSL_CERT_FILE in $CODEX_HOME/.env beats the process env (Codex appl
   assert.equal(first({ SSL_CERT_FILE: '/env/ca.pem' }), '/dotenv/ca.pem', '.env over the process env')
   assert.equal(first({ CODEX_HOME: path.join(root, 'other'), SSL_CERT_FILE: '/env/ca.pem' }), '/env/ca.pem', 'CODEX_HOME moves the .env')
 })
+
+// A plugin cert is judged to put the root in the process (P11 rule 4), so it may name only a hook that does: an on-phase route hook or an unknown
+// template is refused.
+for (const d of subjects.filter((x) => Object.values(x.proxyMode.certs || {}).some((c) => c.kind === 'plugin'))) {
+  for (const template of ['opencode-plugin', 'no-such-hook']) {
+    test(`${d.name}: a plugin cert naming ${template} is refused at load`, async () => {
+      const pm = structuredClone(d.proxyMode)
+      for (const c of Object.values(pm.certs)) if (c.kind === 'plugin') c.template = template
+      await assert.rejects(loadOne({ ...d, proxyMode: pm }), new RegExp(`harness ${d.name} .*shape: `))
+    })
+  }
+}
+
+// CM37: a plugin cert's loader is optional (the host finds the hook in its folder); a declared one names the one format with a row edit primitive
+for (const d of subjects.filter((x) => Object.values(x.proxyMode.certs || {}).some((c) => c.kind === 'plugin'))) {
+  test(`CM37 · ${d.name}: plugin certs without a loader load; a loader whose format is not yaml is refused under kind, at its path`, async () => {
+    const bare = structuredClone(d.proxyMode)
+    for (const c of Object.values(bare.certs)) if (c.kind === 'plugin') delete c.loader
+    assert.equal((await loadOne({ ...d, proxyMode: bare })).length, 1)
+    const pm = structuredClone(d.proxyMode)
+    const [id, c] = Object.entries(pm.certs).find(([, x]) => x.kind === 'plugin')
+    c.loader = { file: { base: 'home', path: '.plugins.json' }, format: 'json', keys: ['plugins'] }
+    await assert.rejects(loadOne({ ...d, proxyMode: pm }), (e) => {
+      assert.match(e.message, new RegExp(`harness ${d.name} `))
+      assert.match(e.message, new RegExp(`\\bkind: certs\\.${id}\\.loader\\.format\\b`), e.message)
+      return true
+    })
+  })
+}

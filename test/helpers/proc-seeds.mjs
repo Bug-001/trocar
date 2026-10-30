@@ -1,4 +1,4 @@
-// test/helpers/proc-seeds.mjs — measured and specified process shapes of the seven harnesses, with the harness each one IS (or null: not an
+// test/helpers/proc-seeds.mjs — measured and specified process shapes of the harnesses, with the harness each one IS (or null: not an
 // agent, or a helper the harness's exclude items drop). These are regression seeds, not rules (RFC 4.6 「按 harness」 table note, 0.1 §2): the
 // expectation of each comes from a source independent of the name list it checks — the RFC row, a lab
 // run, a review finding, or an existing harness test's example — and `source` says which. test/helpers/proc-variants.mjs bends each one along
@@ -22,6 +22,12 @@ const l = (exe, argv, harness, source, env) => (env ? { os: 'linux', exe, argv, 
 const HERMES_BOOT = "import hermes_bootstrap; import hermes_cli.main as m; m.run()"
 const ZCJS = '/Applications/ZCode.app/Contents/Resources/app/resources/glm/zcode.cjs'
 const NET = ['--type=utility', '--utility-sub-type=network.mojom.NetworkService']
+const NODE = String.raw`C:\Program Files\nodejs\node.exe`
+const PI_HOME = `${W}\\.pi\\agent`
+const PI_CLI = String.raw`@earendil-works\pi-coding-agent\dist\bundle\cli.js`
+const PIW = 'pi 1.4.0 on a Windows test machine'
+const PIM = 'pi 1.4.0 on a macOS test machine (lab measurement)'
+const MNODE = '/opt/homebrew/bin/node'
 
 export const SEEDS = [
   // ── claude-code ──
@@ -96,6 +102,22 @@ export const SEEDS = [
   l('/usr/bin/node', ['node', '/usr/local/bin/kimi', '-p', 'hi'], 'kimi-code', 'test/collector/harness/kimi-code.test.mjs:28 (the npm bin symlink through env node)'),
   l('/usr/bin/node', ['node', '/usr/lib/node_modules/@moonshot-ai/kimi-code/dist/main.mjs'], 'kimi-code', 'test/collector/harness/kimi-code.test.mjs:29'),
   w(`${W}\\.kimi-code\\bin\\kimi.exe`, ['-p', 'hi'], 'kimi-code', `${WF} (kimi-code.cli)`),
+  // ── pi ── (macOS and Windows; Linux not measured yet)
+  d(MNODE, [], 'pi', `${PIM} (the managed install once pi retitles itself: argv is its title, the exe stays node)`, 'pi'),
+  d(MNODE, ['', ''], 'pi', `${PIM} (--mode rpc keeps the title pi; the rest of the overwritten argv is empty)`, 'pi'),
+  d(MNODE, [], 'pi', `${PIM} (the package's rpc-entry.js retitles itself pi-rpc)`, 'pi-rpc'),
+  d(MNODE, [`${U}/.local/bin/../../.pi/agent/install/releases/1.4.0/node_modules/.bin/pi`, '-p', 'hi'], 'pi', `${PIM} (the managed install before the retitle: the sh launcher execs node on the unresolved path)`, 'node'),
+  d(MNODE, [`${U}/.npm-global/bin/pi`, '-p', 'hi'], 'pi', `${PIM} (npm's install before the retitle: argv names the invoked link, not cli.js)`, 'node'),
+  d(MNODE, ['dist/cli.js', '--mode', 'rpc'], 'pi', `${PIM} (pi's RpcClient with its default cliPath, before the retitle: cli.js relative to the package as cwd)`, 'node'),
+  d(MNODE, [`${U}/proj/node_modules/@earendil-works/pi-coding-agent/dist/cli.js`, '--mode', 'rpc'], 'pi', "pi 1.4.0 source (an RpcClient caller passes the package's cli.js as an absolute cliPath; the shape before the retitle)", 'node'),
+  d(MNODE, [`${U}/work/other-tool/dist/cli.js`, '--mode', 'rpc'], null, "another package's absolute dist/cli.js in rpc mode is not pi: only the relative entry with the rpc flag is", 'node'),
+  d('/bin/bash', ['-c', 'echo hi'], null, `${PIM} (a tool's bash under pi never connects to a model)`),
+  w(NODE, [`${PI_HOME}\\install\\releases\\1.4.0\\node_modules\\${PI_CLI}`, '-p', 'hi'], 'pi', `${PIW} (the managed install: the launcher's child node holds the connection)`),
+  w(NODE, [`${PI_HOME}\\install\\releases\\1.4.0\\node_modules\\${PI_CLI}`, '--mode', 'rpc'], 'pi', `${PIW} (the managed install in rpc mode)`),
+  w(NODE, [`${PI_HOME}\\bin\\pi-launcher.js`, '-p', 'hi'], null, `${PIW} (the managed launcher waits for its child and never connects)`, { argv: ['node', `${PI_HOME}\\bin\\pi-launcher.js`, '-p', 'hi'], cmdline: `"node" ${PI_HOME}\\bin\\pi-launcher.js -p hi` }),
+  w(NODE, [`${W}\\AppData\\Roaming\\npm\\\\node_modules\\${PI_CLI}`], 'pi', `${PIW} (the npm pi.cmd shim: one node, its %dp0% gives a doubled separator)`, { argv: ['node', `${W}\\AppData\\Roaming\\npm\\\\node_modules\\${PI_CLI}`], cmdline: `"node" "${W}\\AppData\\Roaming\\npm\\\\node_modules\\${PI_CLI}"` }),
+  w(`${W}\\pi\\pi.exe`, ['-p', 'hi'], 'pi', `${PIW} (the Bun binary: one process)`),
+  w(String.raw`C:\Program Files\Git\bin\bash.exe`, ['-c', 'ls'], null, `${PIW} (a tool's Git bash under pi never connects to a model)`),
   // ── z-code ──
   d('/Applications/ZCode.app/Contents/MacOS/ZCode', [ZCJS, 'app-server', '--stdio'], 'z-code', `${DF} (z-code.cli)`),
   d('/Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper', [], 'z-code', `${DF} (z-code.desktop: the title zcode-cli, mac-matrix-2 run 20261013T035417)`, 'zcode-cli'),

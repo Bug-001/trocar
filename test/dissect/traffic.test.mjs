@@ -63,7 +63,9 @@ test('a pattern that does not compile, or names a class a pattern may not, is sk
 
 test('proc.agent → read-side harness id: either spelling, unknown otherwise; the settings may name every row plus unknown', () => {
   // deepseek-cli has no table row: only an old capture's UA names it — but a call filed under it must have a setting (review 2026-10-07)
-  assert.deepEqual(retentionHarnessIds(), ['cc', 'codex', 'opencode', 'kimi', 'dsh', 'hermes', 'zcode', 'deepseek-cli', 'unknown'])
+  const ids = retentionHarnessIds()
+  for (const id of [...HARNESSES.map((h) => h.id), 'deepseek-cli', 'unknown']) assert.ok(ids.includes(id), `${id} has a setting`)
+  assert.equal(new Set(ids).size, ids.length, 'each once')
   assert.ok(THIRD_PARTY_TELEMETRY.every((p) => /^(\*\.)?[a-z0-9.-]+$/.test(p)))
 })
 
@@ -118,4 +120,11 @@ test('unmatchedClasses: a class no usable pattern of the row names is unmatched;
   assert.deepEqual(unmatchedClasses('a', rows), ['session-sync', 'account'], 'files has a usable pattern; the account one does not compile; telemetry is not a pattern-only class')
   assert.deepEqual(unmatchedClasses('b', rows), ['session-sync', 'files', 'account'])
   assert.deepEqual(unmatchedClasses('c', rows), ['session-sync', 'files', 'account'])
+})
+
+test('pi: its install report to pi.dev is telemetry; the fd / rg downloads of its first interactive start (github.com, release assets) are files', () => {
+  assert.equal(classify({ harness: 'pi', host: 'pi.dev', endpoint: '/api/report-install?version=1.0.0' }), 'telemetry')
+  assert.equal(classify({ harness: 'pi', host: 'github.com', endpoint: '/org/tool/releases/download/v1/tool.tar.gz' }), 'files')
+  assert.equal(classify({ harness: 'pi', host: 'release-assets.githubusercontent.com', endpoint: '/github-production-release-asset/1' }), 'files')
+  assert.equal(classify({ harness: 'codex', host: 'github.com', endpoint: '/x' }), 'other', 'only pi\'s row says so')
 })

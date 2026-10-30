@@ -1,8 +1,8 @@
 // main.mjs (src/off) — `trocar off [harness…] [--now] [--dry-run] [--yes] [--json]` as a command line (RFC 1.6 §2, §3, R4–R7): parses the arguments,
 // refuses root, resolves the harness names, runs runOff and prints its receipt. `trocar off` and the standalone `~/.trocar/bin/trocar-off` run this same file
-// (R3), so it may import nothing outside src/off (0.1 §2) — which is why the §3 name table is written here too (OFF_NAMES) and test/cli/harness-names.test.mjs
-// holds it equal to src/cli/harness-names.mjs. Everything the world gives is a `deps` entry (see orchestrate.mjs), plus `getuid`. A platform without a collector
-// finds nothing to undo and says so (D39⑥ executed 2026-10-11: the old capture's off went with it; what it left on a machine is cleaned by hand, README).
+// (R3), so it may import nothing outside src/off (0.1 §2) — the §1.6 name table is ./harness-names.mjs, which the CLI imports too. Everything the world gives
+// is a `deps` entry (see orchestrate.mjs), plus `getuid`. A platform without a collector finds nothing to undo and says so (D39⑥ executed 2026-10-11: the
+// old capture's off went with it; what it left on a machine is cleaned by hand, README).
 // Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error, nothing touched.
 import nodeOs from 'node:os'
 import { runOff } from './orchestrate.mjs'
@@ -11,31 +11,10 @@ import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, makeIo } from './io.mjs'
 import { readManifest } from './manifest.mjs'
 import { collectorDir } from './paths.mjs'
-
-/** 1.6 §3: the harness code ids (in the order commands list them) and the short names accepted as input. A copy of src/cli/harness-names.mjs. */
-export const OFF_NAMES = Object.freeze({
-  ids: Object.freeze(['claude-code', 'codex', 'hermes', 'opencode', 'deepseek-dsh', 'kimi-code', 'z-code']),
-  aliases: Object.freeze({ claude: 'claude-code', dsh: 'deepseek-dsh', kimi: 'kimi-code', zcode: 'z-code' }),
-})
+import { NAME_ALIASES, resolveHarnesses } from './harness-names.mjs'
 
 const OFF_USAGE = 'usage: trocar off [<harness>...] [--now] [--yes] [--dry-run] [--json]'
 const OFF_FLAGS = new Set(['--now', '--dry-run', '--yes', '--json'])
-
-/** `[harness…]` as typed → `{ ok: true, ids }` (null = none named = all; else code ids in table order, a repeat once) or `{ ok: false, unknown, known }`. Case is not folded.
- *  `installed`: the harness ids the install manifest names; each is a name too, so a harness added as descriptor data alone can be turned off (CM27). */
-export function resolveOffNames(names, installed = []) {
-  if (!names || names.length === 0) return { ok: true, ids: null }
-  const chosen = new Set(), unknown = []
-  for (const raw of names) {
-    const name = String(raw)
-    const id = Object.hasOwn(OFF_NAMES.aliases, name) ? OFF_NAMES.aliases[name] : OFF_NAMES.ids.includes(name) || installed.includes(name) ? name : null
-    if (id) chosen.add(id)
-    else if (!unknown.includes(name)) unknown.push(name)
-  }
-  const extra = [...new Set(installed)].filter((id) => !OFF_NAMES.ids.includes(id))
-  if (unknown.length) return { ok: false, unknown, known: [...OFF_NAMES.ids, ...extra, ...Object.keys(OFF_NAMES.aliases)] }
-  return { ok: true, ids: [...OFF_NAMES.ids, ...extra].filter((id) => chosen.has(id)) }
-}
 
 /** The harness ids the install manifest names (install's list and the entries' owners); [] when there is none or it cannot be read (the fixed names still work). */
 function installedIds(home) {
@@ -56,8 +35,8 @@ export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdo
       flags.add(a)
     } else names.push(a)
   }
-  const named = resolveOffNames(names, names.length ? installedIds(home) : [])
-  if (!named.ok) { io.err(`trocar off: unknown harness '${named.unknown[0]}'. Known: ${named.known.filter((n) => !Object.hasOwn(OFF_NAMES.aliases, n)).join(', ')}`); return EXIT.usage }
+  const named = resolveHarnesses(names, names.length ? installedIds(home) : []) // a harness the manifest names is a name too, so one added as descriptor data alone can be turned off (CM27)
+  if (!named.ok) { io.err(`trocar off: unknown harness '${named.unknown[0]}'. Known: ${named.known.filter((n) => !Object.hasOwn(NAME_ALIASES, n)).join(', ')}`); return EXIT.usage }
   const json = flags.has('--json')
   // §1.2: under `--json` stdout holds the one document and stderr is EMPTY — so no listing on stderr and no question: an `off` with no install record
   // puts its plan in the receipt's `planned` and exits 1, the way install / on / uninstall answer a run that needs a yes (review 2026-10-18).

@@ -8,7 +8,8 @@ import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { SEEDS } from '../helpers/proc-seeds.mjs'
 import { variantsOf } from '../helpers/proc-variants.mjs'
-import { WIDE, HARNESS_IDS, normalizeName, processNames, name0, argRest, entryOf, compileIdentity, readAgentList, mergeAgentList } from '../../src/off/identity.mjs'
+import { WIDE, normalizeName, processNames, name0, argRest, entryOf, compileIdentity, readAgentList, mergeAgentList } from '../../src/off/identity.mjs'
+import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { identityView, matchPattern, serializeSignature, reviveSignature } from '../../src/off/signature.mjs'
 import { matchHarness } from '../helpers/one-harness.mjs'
 
@@ -180,7 +181,7 @@ test('readAgentList: absent, ok, and one item per problem code (code, index, an 
     [7, 'args-not-regex'], [8, 'args-too-long'], [9, 'duplicate'], [10, 'unknown-harness'],
   ])
   const detail = Object.fromEntries(r.problems.map((p) => [p.index, p.detail]))
-  for (const id of HARNESS_IDS) assert.match(detail[3], new RegExp(id), 'unknown-harness lists the seven ids')
+  for (const id of HARNESS_IDS) assert.match(detail[3], new RegExp(id), 'unknown-harness lists every id')
   assert.match(detail[5], /"codex"/, 'the separator detail names the program name to write')
   assert.match(detail[6], /python.*"args"/, 'the wide-name detail says to add args')
   assert.match(detail[8], /201.*200/)

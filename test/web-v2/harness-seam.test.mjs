@@ -1,7 +1,8 @@
 // test/web-v2/harness-seam.test.mjs — the harness seam (invariant 3 / AC-3, guard named in 1.2 §agent chip): the set of
 // harness ids is computed from the SERVER's table (src/dissect/harnesses.mjs rows + the legacy row) plus the CLI aliases
 // core/chips.mjs folds in; no string literal outside core/chips.mjs and assets/harness/ equals one of them; every chip
-// row has its icon file; labels/ keys no harness-defined code (those carry their own words from the server, S15).
+// row has its icon file; labels/ keys no harness-defined code (those carry their own words from the server, S15); every harness the collector
+// loads has its read-side row and its chip (e).
 // (d) — the same chip DOM for every harness on the session head — lands with UI-R1's session head; chipFor's structure
 // is asserted in test/web-v2/core.test.mjs meanwhile.
 import test from 'node:test'
@@ -10,7 +11,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HARNESSES, LEGACY_HARNESS_IDS } from '../../src/dissect/harnesses.mjs'
-import { CHIP, HARNESS_ORDER, ALIASES } from '../../src/web/v2/core/chips.mjs'
+import { CHIP, HARNESS_ORDER, ALIASES, harnessKey } from '../../src/web/v2/core/chips.mjs'
+import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 
 const V2 = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'web', 'v2')
 
@@ -25,6 +27,18 @@ test('the scanner is not vacuous: the server table and the chip table agree on t
   assert.ok(IDS.size >= 12, `expected the id vocabulary, found ${IDS.size}`)
   assert.deepEqual(HARNESS_ORDER, [...HARNESSES.map((h) => h.id), ...LEGACY_HARNESS_IDS], 'the chip table is the server table, in order')
   for (const a of Object.keys(ALIASES)) assert.ok(IDS.has(a) && IDS.has(ALIASES[a]))
+})
+
+// (e): the seam starts at the collector. A descriptor alone (src/collector/harness/<h>.mjs) captures; without a read-side row its calls are an
+// unknown agent and without a chip the board names it so — nothing above would turn red, since it checks the chips against the rows only
+test('every harness the collector loads has a read-side row naming it in `agents`, and the chip table folds it onto that row', async () => {
+  const missing = []
+  for (const { name } of await loadHarnesses()) {
+    const row = HARNESSES.find((h) => h.agents.includes(name))
+    if (!row) missing.push(`${name}: no row of src/dissect/harnesses.mjs has it in agents`)
+    else if (harnessKey(name) !== row.id) missing.push(`${name}: core/chips.mjs folds it onto ${JSON.stringify(harnessKey(name))}, not onto its row ${JSON.stringify(row.id)}`)
+  }
+  assert.deepEqual(missing, [])
 })
 
 // every '…' "…" `…` literal (and an unquoted { key: }) under src/web/v2, outside the two homes of harness ids

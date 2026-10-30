@@ -9,7 +9,7 @@ import nodeOs from 'node:os'
 import path from 'node:path'
 import { STATUS_REASONS, RESTART_REASONS } from '../health/codes.mjs'
 import { EXIT, newReceipt, UNDO_LINE } from '../off/schema.mjs' // the keys and the exit codes themselves (D62): `status` prints a receipt, it does not VALIDATE one, so it does not pay for ./schema.mjs's checker and the closed lists under it
-import { HARNESS_IDS, resolveHarnesses } from './harness-names.mjs'
+import { HARNESS_IDS, resolveHarnesses } from '../off/harness-names.mjs'
 import { collectorDir, stateFile, trocarHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
 import { readManifest, itemsOfPhase, daemonMayStart } from '../off/manifest.mjs'

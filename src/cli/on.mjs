@@ -8,7 +8,7 @@
 import os from 'node:os'
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { resolveHarnesses } from './harness-names.mjs'
+import { resolveHarnesses } from '../off/harness-names.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
 import { formatOnReceipt, formatPlan, planItems } from './receipt.mjs'

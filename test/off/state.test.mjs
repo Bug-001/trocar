@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { STATE_VERSION, emptyState, migrateV1, readStateFile, setDesired, writeStateAtomic } from '../../src/off/state.mjs'
-import { HARNESS_IDS } from '../../src/cli/harness-names.mjs'
+import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const NOW = new Date('2026-10-07T10:00:00.000Z')

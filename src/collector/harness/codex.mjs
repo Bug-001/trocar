@@ -73,7 +73,7 @@ function inject(ctx) {
 // TUI) or the environment. Model HTTP follows the OS proxy and ignores SOCKS; its WebSocket does not follow the OS proxy (Windows test machine L2 / L16, 4.8 §2.3).
 const proxy = {
   env: ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy'],
-  files: [{ path: ({ home, env }) => path.join(codexHome(new Map(Object.entries(env)), home), '.env'), format: 'dotenv', keys: ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy'] }],
+  files: [{ path: ({ home, env }) => path.join(codexHome(new Map(Object.entries(env)), home), '.env'), env: 'CODEX_HOME', format: 'dotenv', keys: ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy'], applies: 'override' }],
   systemProxy: { http: true, ws: false },
   schemes: ['http', 'https'],
   unsupported: { socks4: 'silent-direct', socks5: 'silent-direct', socks5h: 'silent-direct' },

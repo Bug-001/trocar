@@ -1,5 +1,5 @@
 // _plugins.mjs — the in-process trust plugins (RFC 4.6 §身份与信任「进程内插件:有界例外」, D37④) and the launch shims
-// (4.6 Kimi row): their sources live in plugins/<harness>/ and shims/<command>, and install writes them with this
+// (4.6 Kimi row): their sources live in plugins/ (node-roots.js, the root-only body dsh and pi share, then plugins/<harness>/) and shims/<command>, and install writes them with this
 // user's CA file (and the plugins' marker directory) filled in. The plugin sources are checked statically and run
 // against stubs by test/collector/harness/plugins.test.mjs (T13); the shim is run by its harness's test. Linux only: the
 // Windows plugin sources (plugins/win32/) went with the overlays; proxy mode's plugin templates are harness/templates/ (core/proxymode/hooks/render.mjs).
@@ -8,8 +8,9 @@ import fs from 'node:fs'
 export const PLUGIN_SOURCES = new URL('./plugins/', import.meta.url)
 const SLOTS = { caFile: "'__TROCAR_CA_FILE__'", markerDir: "'__TROCAR_MARKER_DIR__'" }
 
+// `rel` is one source, or a list read in order and joined (the shared root-only body, then the exports its host looks for).
 export function renderPlugin(rel, { caFile, markerDir }) {
-  const src = fs.readFileSync(new URL(rel, PLUGIN_SOURCES), 'utf8')
+  const src = [rel].flat().map((r) => fs.readFileSync(new URL(r, PLUGIN_SOURCES), 'utf8')).join('')
   for (const [k, slot] of Object.entries(SLOTS)) if (src.split(slot).length !== 2) throw new Error(`plugin ${rel}: expected exactly one ${slot} (${k})`)
   return src.replace(SLOTS.caFile, JSON.stringify(caFile)).replace(SLOTS.markerDir, JSON.stringify(markerDir))
 }

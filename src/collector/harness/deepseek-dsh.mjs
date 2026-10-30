@@ -56,7 +56,7 @@ function inject(ctx) {
   const entry = path.join(dir, 'index.js')
   return {
     owned: [
-      { path: entry, role: 'plugin', data: renderPlugin('dsh/index.js', { caFile: ctx.caPem, markerDir: path.join(ctx.collectorDir, 'run', 'trust') }) },
+      { path: entry, role: 'plugin', data: renderPlugin(['node-roots.js', 'dsh/exports.js'], { caFile: ctx.caPem, markerDir: path.join(ctx.collectorDir, 'run', 'trust') }) },
       { path: path.join(dir, 'package.json'), role: 'plugin', data: ANONYMOUS_MODULE_MANIFEST },
     ],
     entries: [{ kind: 'text', format: 'yaml-list', path: path.join(dshHome(ctx.env, ctx.home), 'cordis.patch.yml'), line: `- insert: [{ name: ${JSON.stringify(entry)} }] ${lineComment("loads trocar's CA trust plugin")}`, semantic: 'append' }],
@@ -68,7 +68,7 @@ function inject(ctx) {
 // environment lacks); no OS proxy. It does not take SOCKS: a SOCKS proxy is ignored and the request goes direct, silently.
 const proxy = {
   env: ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'],
-  files: [{ path: ({ home, env }) => path.join(dshHome(new Map(Object.entries(env)), home), '.env'), format: 'dotenv', keys: ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'] }],
+  files: [{ path: ({ home, env }) => path.join(dshHome(new Map(Object.entries(env)), home), '.env'), env: 'DSH_HOME', format: 'dotenv', keys: ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'], applies: 'fill' }],
   systemProxy: { http: false, ws: false },
   schemes: ['http', 'https'],
   unsupported: { socks4: 'silent-direct', socks5: 'silent-direct', socks5h: 'silent-direct' },

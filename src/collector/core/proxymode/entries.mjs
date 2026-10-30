@@ -20,7 +20,8 @@ import { CODE } from '../codes.mjs'
 
 export const LOOPBACK = Object.freeze(['localhost', '127.0.0.1', '::1'])
 export const PAC_PATH = '/trocar.pac' // P10: the daemon serves the PAC here on the PAC group's door
-const HOST_TREE_NOTE = 'every extension in this host goes through the door, forward only'
+// a hostTree form's note (CM31): it names the form, since status prints it under the harness, beside forms that run on their own
+const hostTreeNote = (form) => `${form} runs inside another program: every other extension there connects through trocar too, and trocar passes those connections on without capturing them`
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/ // an entry id that names a file in the library and nothing outside it
 
 /** P6: loopback ∪ the user's values at the entry place (both spellings) ∪ the persistent env's NO_PROXY; case-insensitive dedupe, first spelling kept, order kept. */
@@ -177,7 +178,8 @@ export function routeEntry(kind) {
   }
 }
 
-/** Which routes `on` writes for a harness (spec 4.11 §3, CM31): only routes a present form uses; a form a blocker matches gets none.
+/** Which routes `on` writes for a harness (spec 4.11 §3, CM31): only routes a present form uses; a form a blocker matches gets none. With a route
+ *  to write, the descriptor's `effects` (CM32) and `notes` (CM38) come back as harness-notes.
  *  → { routes: [{ id, route, forms }], notRouted: [{ form, code, reason, at }], notes: [harness-note] } */
 export function planRoutes(desc, ctx) {
   const pm = desc.proxyMode, routes = new Map(), blocked = [], notes = []
@@ -190,9 +192,10 @@ export function planRoutes(desc, ctx) {
     if (hit) { blocked.push({ form: f.id, code: 'not-routed', ...hit }); continue }
     if (!routes.has(f.route)) routes.set(f.route, { id: f.route, route: pm.routes[f.route], forms: [] })
     routes.get(f.route).forms.push(f.id)
-    if (f.hostTree) notes.push({ code: CODE.harnessNote, form: f.id, text: HOST_TREE_NOTE })
+    if (f.hostTree) notes.push({ code: CODE.harnessNote, form: f.id, text: hostTreeNote(f.id) })
   }
   if (routes.size) for (const e of pm.effects || []) notes.push({ code: CODE.harnessNote, id: e.id, paths: e.paths.flatMap((p) => resolveLoc(p, ctx)), text: e.when })
+  if (routes.size) for (const n of pm.notes || []) notes.push({ code: CODE.harnessNote, id: n.id, text: n.text }) // CM38: a launch that skips the hook
   return { routes: [...routes.values()], notRouted: blocked, notes }
 }
 

@@ -13,7 +13,7 @@ import nodeOs from 'node:os'
 import path from 'node:path'
 import { EXIT, newReceipt } from '../off/schema.mjs' // as in status.mjs: the keys and the exit codes, not ./schema.mjs's checker (D62)
 import { unknown } from './text.mjs'
-import { resolveHarnesses } from './harness-names.mjs'
+import { resolveHarnesses } from '../off/harness-names.mjs'
 import { statusFacts, statusDocOf } from './status.mjs'
 import { diagnose, renderFindings } from '../netenv/findings.mjs'
 import { serveSource } from '../paths.mjs'

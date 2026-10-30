@@ -61,7 +61,7 @@ for (const { d, f, os } of CASES) {
     const rigs = { true: await rig({ desc, os }), false: await rig({ desc, os, custody: 'unavailable' }) }
     for (const r of Object.values(rigs)) await r.c.on({ harnesses: [d.name], groups: { [g]: 18100 } })
     const t = f.trust !== 'root' && d.proxyMode.trusts[f.trust]
-    const axes = [{}, { known: false }, { verified: { reason: 'not-measured' } }, { start: 'before' }, { start: 'unknown' }, { issuer: false }, { envNull: true }, { cwdNull: true },
+    const axes = [{}, { known: false }, { verified: { reason: 'not-measured' } }, { start: 'before' }, { start: 'unknown' }, { issuer: false }, { envNull: true }, { cwdNull: true }, { hookPid: 'other' },
       ...(f.forwardOnlyHosts || []).map((host) => ({ host })), { host: 'telemetry.unrelated.example' }, { hostSet: [...d.hosts, 'relay.corp.example'], host: 'relay.corp.example' },
       ...d.proxyMode.blockers.map((_, i) => ({ blocker: i })), ...(t && t.sources.length ? [...combos(t)].map((sources) => ({ sources })) : [])]
     for (const over of axes) {
@@ -187,6 +187,27 @@ test('CM20 · meta.upstream equals upstreamFor over env × system proxy × prior
       assert.deepEqual(meta.upstream, dialOf(want, 'api.example'), `${d.name} known=${known} env=${JSON.stringify(env)} sp=${!!sp} prior=${prior}`)
       if (!known) assert.notEqual(meta.upstream.host, 'env.corp', 'step 3 never runs without an identity')
       assert.deepEqual(c.upstreams()[g] || [], known ? [{ pid, source: want.source, url_redacted: want.url }] : [], 'status reads the door\'s own answer per process (1.6 §9.4); none for a peer it could not tell')
+      c.close()
+    }
+  }
+})
+
+test('CM20 / ⑥ · an unidentified process at a credentialed door (an agent\'s child that inherited a hook\'s env) dials the hook value from its own env; unread is prior-proxy-unknown, never a silent direct', async () => {
+  for (const d of descs.filter((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin') && x.proxyMode.routes[f.route]?.auth !== false))) {
+    const f = d.proxyMode.forms.find((x) => x.os.includes('darwin') && d.proxyMode.routes[x.route]?.auth !== false)
+    const g = `${d.name}:${f.route}`
+    for (const [label, w, want] of [
+      ['hook value', { facts: { agent: null, startedAt: INSTALLED + 1 }, env: { TROCAR_PRIOR_PROXY: 'http://corp.example:3128' } }, { kind: 'http', host: 'corp.example', port: 3128 }],
+      ['env unread', { facts: { agent: null, startedAt: INSTALLED + 1 }, env: null }, null],
+      ['no pid', { pid: null, facts: null, env: {} }, null],
+    ]) {
+      const { c, records } = await rig({ desc: d, w: { pid: ++pid, ...w } })
+      await c.on({ harnesses: [d.name], groups: { [g]: 18104 } })
+      const meta = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+      if (want) assert.deepEqual(meta.upstream, want, `${d.name} · ${label}`)
+      else assert.equal(records.filter((r) => r.code === 'prior-proxy-unknown').length, 1, `${d.name} · ${label}: said once (D38) — ${JSON.stringify(records)}`)
+      assert.equal(meta.decrypt, false, 'an unidentified process is only forwarded')
+      for (const x of records) assert.deepEqual(checkRecord(x), [], JSON.stringify(x))
       c.close()
     }
   }
@@ -728,4 +749,31 @@ test('4.6 §开关 · isOn follows on / off; a state.json that cannot be read at
   await r.c.off({ harnesses: [d.name] })
   assert.equal(r.c.isOn(d.name), false)
   r.c.close()
+})
+
+// P7 step 3's files at the door (the wiring): the door reads the harness's own proxy file through ctx, at the path the process's own env gives (the
+// variable that moves it is fetched from the process), once per process life; an `override` file wins over the env, a `fill` file only fills; an unread
+// file is said with its errno. Every descriptor with a proxy file and a macOS form, its directory left in place and moved.
+test('CM20 · the door applies the harness\'s own proxy file (ctx, the process\'s env, its directory moved), once per process life', async () => {
+  const FILE = 'http://file.corp:4', ENV = 'http://env.corp:1'
+  for (const d of descs.filter((x) => x.proxy.files.length && x.proxyMode.forms.some((f) => f.os.includes('darwin')))) {
+    const f = d.proxyMode.forms.find((x) => x.os.includes('darwin')), g = `${d.name}:${f.route}`, f0 = d.proxy.files[0]
+    const text = f0.format === 'json' ? JSON.stringify(f0.keys[0].reduceRight((v, k) => ({ [k]: v }), FILE)) : `${f0.keys[0]}=${FILE}\n`
+    for (const moved of f0.env ? [{}, { [f0.env]: '/moved' }] : [{}]) for (const set of [false, true]) for (const unread of [false, true]) {
+      const env = { ...moved, ...(set ? { [d.proxy.env[0]]: ENV } : {}) }, file = f0.path({ home: '/h', env })
+      const base = ctxOf(newWorld('darwin')), reads = []
+      const readFile = (p) => { reads.push(p); if (p !== file) return base.readFile(p); if (unread) throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); return text }
+      const { c, records } = await rig({ desc: d, w: { pid: ++pid, facts: { agent: d.name, startedAt: INSTALLED + 1 }, env, ctx: { ...base, readFile } } })
+      await c.on({ harnesses: [d.name], groups: { [g]: 18101 } })
+      const label = `${d.name} ${f0.applies} env=${JSON.stringify(env)} unread=${unread}`
+      const ask = () => c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+      const meta = await ask()
+      if (unread && (f0.applies === 'override' || !set)) {
+        assert.equal(meta.upstream.kind, 'direct', label)
+        assert.ok(records.some((r) => r.event === 'failure' && r.code === 'prior-proxy-unknown' && r.reason.includes('EACCES') && r.reason.includes(file)), `${label}: the record names the file and the errno (D38)`)
+      } else assert.equal(meta.upstream.host, set && f0.applies === 'fill' ? 'env.corp' : 'file.corp', label)
+      if (!unread) { const before = reads.filter((p) => p === file).length; await ask(); assert.equal(reads.filter((p) => p === file).length, before, `${label}: read once per process life`) }
+      c.close()
+    }
+  }
 })

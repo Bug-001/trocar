@@ -9,8 +9,8 @@ stores the raw bytes verbatim, and replays them step by step. Nothing to integra
 
 Observe-only today: it never originates a request and never uses your app's token on its own, and it binds loopback only. A request is only ever changed or re-sent by you, on purpose (D30; none of that is built yet).
 
-The v1 harnesses (D37): **Claude Code**, **Codex**, **OpenCode**, **Kimi Code**, **DeepSeek `dsh`**, **Hermes** and
-**Z-Code**. Whether one of them has been shown to capture verbatim end to end on an OS:
+The v1 harnesses (D37): **Claude Code**, **Codex**, **OpenCode**, **Kimi Code**, **DeepSeek `dsh`**, **Hermes**,
+**Z-Code** and **pi**. Whether one of them has been shown to capture verbatim end to end on an OS:
 
 | harness | macOS | Windows | Linux |
 |---|---|---|---|
@@ -21,6 +21,7 @@ The v1 harnesses (D37): **Claude Code**, **Codex**, **OpenCode**, **Kimi Code**,
 | DeepSeek `dsh` | yes | yes | yes |
 | Hermes | yes | yes | yes |
 | Z-Code | yes | yes | yes |
+| pi | not yet | not yet | not yet |
 
 `yes` = at least one of that harness's main forms (CLI, VS Code extension, desktop app) was driven end to end on that
 OS and its calls came out verbatim; `not yet` = that has not been shown there. What is not shown is not claimed.
@@ -295,10 +296,11 @@ start history is incomplete, is `not-seen`: never a reason to call the agent not
 its key is still in custody and the daemon could make its intermediate (`cert-not-installed`, `cert-key-missing`,
 `cert-intermediate-unavailable`), and which certificate files trocar did not append to because they are not yours
 (`not-users-file`). `trocar status <harness>` prints these per form (a `certificate:` and a `proxy:` line, then trocar's value beside
-yours); `status --json` has them under `forms`. trocar only reads your proxy settings and never writes anything into a VPN.
+yours), then each note a harness carries, such as a way of starting the agent that skips trocar's hook and so is not
+captured; `status --json` has them under `forms`. trocar only reads your proxy settings and never writes anything into a VPN.
 
-The collector has descriptors for seven harnesses (D37) — `claude-code`, `codex` (its WebSocket transport is recorded
-call by call), `opencode`, `deepseek-dsh`, `kimi-code`, `hermes` and `z-code` — on all three platforms. Which form of
+The collector has descriptors for eight harnesses (D37) — `claude-code`, `codex` (its WebSocket transport is recorded
+call by call), `opencode`, `deepseek-dsh`, `kimi-code`, `hermes`, `z-code` and `pi` — on all three platforms. Which form of
 which one has been shown to capture verbatim on which platform is the table at the top of this README.
 
 **Linux** is driver mode (RFC 4.6, D31): an eBPF helper steers only the connections of agent processes you run to a
@@ -313,15 +315,15 @@ agent group, loopback only, no TUN, never the system proxy, nothing written into
   **user-level** root — the one OS prompt (macOS asks for your login password, Windows asks yes / no). That alone covers
   Claude Code (Desktop included), Codex, Hermes, OpenCode and Kimi's VS Code extension. Where the root does not reach,
   the certificate goes into what the agent itself reads: Z-Code's `network.caCertFile` (a bundle of Node's roots plus
-  trocar's), a wrapper in Kimi's install directory, DeepSeek `dsh`'s plugin, and Claude Code's settings only if you set
-  `CLAUDE_CODE_CERT_STORE=bundled`. When you already point a setting at a certificate file of your own, trocar appends a
+  trocar's), a wrapper in Kimi's install directory, DeepSeek `dsh`'s plugin, pi's extension, and Claude Code's settings
+  only if you set `CLAUDE_CODE_CERT_STORE=bundled`. When you already point a setting at a certificate file of your own, trocar appends a
   marked block to that file and leaves the setting alone. Nothing goes into your login environment, nothing needs
   administrator rights, no launcher is added and your `PATH` is not changed. Each harness's carrier is in its
   descriptor (`proxyMode` in `src/collector/harness/<harness>.mjs`), one entry per form.
 - `on` asks the daemon to open the doors, then writes only proxy entries: a proxy key in the agent's own config
   (Claude Code's `settings.json`, Codex's and Hermes's `.env`, Z-Code's CLI config, an OpenCode plugin, Kimi VS Code's
-  `http.proxy`, Claude Desktop's config library) or a switch file in `~/.trocar/collector/switch/` that Kimi's wrapper
-  and dsh's plugin read. The door connects onward through the proxy the agent would have used without trocar.
+  `http.proxy`, Claude Desktop's config library) or a switch file in `~/.trocar/collector/switch/` that Kimi's wrapper,
+  dsh's plugin and pi's extension read. The door connects onward through the proxy the agent would have used without trocar.
 - `off` removes those entries and switch files; your edits to unrelated keys during `on` stay, and a proxy key you
   changed yourself keeps your value. It kills and restarts nothing: a process started while capture was on keeps its
   door, which now only forwards (no decryption, no record), and `trocar status` says how many are left (its
@@ -346,9 +348,9 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 |---|---|---|
 | capability helper (Linux, once per machine, `sudo`) | `/usr/local/libexec/trocar/trocar-redirector`, root 0755, file caps `cap_bpf,cap_net_admin,cap_perfmon` — no setuid, no account, no system unit | `sudo trocar setup-helper --remove` |
 | root / CA (per user) | Linux: `~/.trocar/collector/ca/` (key 0600), in **no** trust store · macOS: login keychain key + user trust · Windows: CNG key + `CurrentUser\Root`; `~/.trocar/collector/ca/trocar-ca.pem` is the public certificate | `trocar uninstall` |
-| certificate carriers (`install`) | Linux: each agent's trust entry, written by `install` (Claude Code `env.NODE_EXTRA_CA_CERTS`, OpenCode / dsh plugins, Codex / Hermes `.env` blocks, Z-Code `network.caCertFile`, combined bundles `combined-<agent>.pem`) · macOS / Windows: the carriers above | `trocar uninstall` |
+| certificate carriers (`install`) | Linux: each agent's trust entry, written by `install` (Claude Code `env.NODE_EXTRA_CA_CERTS`, OpenCode / dsh plugins, pi's extension, Codex / Hermes `.env` blocks, Z-Code `network.caCertFile`, combined bundles `combined-<agent>.pem`) · macOS / Windows: the carriers above | `trocar uninstall` |
 | proxy entries (`on`) | macOS / Windows: the proxy keys and switch files above; Linux: none (the helper steers) | `trocar off` |
-| autostart unit (per user) | Linux: `~/.config/systemd/user/trocar-collector.service` · macOS: `~/Library/LaunchAgents/com.trocar.collector.plist` · Windows: the scheduled task `\trocar\collector`; each runs `trocar daemon` | registered and enabled by `trocar install`; `on` and `off` never touch it (D61), `trocar uninstall` removes it |
+| autostart unit (per user) | Linux: `~/.config/systemd/user/trocar-collector.service` · macOS: `~/Library/LaunchAgents/com.trocar.collector.plist` · Windows: the scheduled task `\trocar\collector`; each runs `trocar daemon` | registered and enabled by `trocar install` (it exits 1 when it cannot, e.g. with no systemd --user on Linux, and `on` then refuses); `on` and `off` never touch it (D61), `trocar uninstall` removes it |
 | install manifest | `~/.trocar/collector/install-manifest.json` — every file and key it changed, never a copy of your file | removed last by `trocar uninstall` |
 | backups of your files | `~/.trocar/backup/` (0700, files 0600): the file as it was before trocar changed it — API keys included | `off` leaves them; `uninstall` deletes them all |
 | the standalone undo | `~/.trocar/bin/trocar-off`, written by `install`; `trocar doctor` checks it is current | `trocar uninstall` |
@@ -384,7 +386,7 @@ To add a name, or to stop capturing one, write `~/.trocar/agents.json`:
     { "harness": "codex", "name": "codex", "ignore": true } ] }
 ```
 
-`harness` is one of the seven ids; `name` is a bare executable name (no path); `args` is a regular expression
+`harness` is one of the harness ids; `name` is a bare executable name (no path); `args` is a regular expression
 tested against the arguments, and an interpreter name must have one. `ignore: true` removes that harness's preset
 items with this name (with `args`, only the item with exactly that pattern). The daemon picks up a changed file
 within seconds, without a restart. A broken item is skipped and the rest are used; a broken file is ignored as a

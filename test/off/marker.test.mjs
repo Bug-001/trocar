@@ -9,7 +9,7 @@ import { installCollector } from '../../src/collector/install.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { ANONYMOUS_MODULE_MANIFEST } from '../../src/collector/harness/_plugins.mjs'
-import { HARNESS_IDS } from '../../src/cli/harness-names.mjs'
+import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { planByMarker, undoByMarker, MARKER_PATHS } from '../../src/off/marker.mjs'
 import { backupsOf, writeBackup } from '../../src/off/backup.mjs'
 import { manifestPath } from '../../src/off/manifest.mjs'
@@ -34,14 +34,12 @@ async function lostManifest() {
   return { home, sh, original, dir, rel: (p) => path.relative(home, p) }
 }
 
-test('planByMarker finds, with no manifest, every change of the seven harnesses by trocar\'s own marks, and plans the values and blocks before the lines before the plugins', async () => {
+test('planByMarker finds, with no manifest, every change of every harness by trocar\'s own marks, and plans the values and blocks before the lines before the plugins', async () => {
   const s = await lostManifest()
   const plan = planByMarker({ home: s.home })
-  assert.deepEqual(plan.map((p) => [p.harness, s.rel(p.path), p.how]), [
-    ['claude-code', '.claude/settings.json', 'json-value'], ['codex', '.codex/.env', 'block'], ['hermes', '.hermes/.env', 'block'], ['z-code', '.zcode/cli/config.json', 'json-value'],
-    ['deepseek-dsh', '.dsh/cordis.patch.yml', 'line'], ['kimi-code', '.bashrc', 'line'],
-    ['opencode', '.config/opencode/plugins/trocar-ca.js', 'owned-file'], ['deepseek-dsh', '.trocar/collector/plugins/dsh/index.js', 'owned-file'], ['deepseek-dsh', '.trocar/collector/plugins/dsh/package.json', 'owned-file'], ['kimi-code', '.trocar/collector/bin/kimi', 'owned-file'],
-  ])
+  const rank = (p) => (p.how === 'owned-file' ? 2 : p.how === 'line' ? 1 : 0)
+  assert.deepEqual(plan.map(rank), plan.map(rank).sort(), 'values and blocks, then lines, then owned files')
+  assert.deepEqual([...new Set(plan.map((p) => p.harness))].sort(), [...HARNESS_IDS].sort(), 'every harness installed is found')
   assert.deepEqual(plan.find((p) => p.harness === 'hermes').detail, { blocks: 1, commented: 1 }, 'the block, and the line of the user it put out of effect')
   assert.deepEqual(planByMarker({ home: s.home, ids: ['codex', 'kimi-code'] }).map((p) => [p.harness, p.how]), [['codex', 'block'], ['kimi-code', 'line'], ['kimi-code', 'owned-file']])
   assert.deepEqual(Object.keys(MARKER_PATHS).sort(), [...HARNESS_IDS].sort(), 'every harness has places to look')
@@ -51,8 +49,9 @@ test('undoByMarker takes trocar out of each file and nothing else: blocks and li
   const s = await lostManifest()
   const cc = s.sh.files['claude-code'][0]
   const doc = JSON.parse(read(cc)); doc.theme = 'dark'; fs.writeFileSync(cc, JSON.stringify(doc, null, 2) + '\n') // the user edits the file after install (CC rewrites its settings)
-  const results = undoByMarker(planByMarker({ home: s.home }), { home: s.home })
-  assert.deepEqual(results.map((r) => r.result), Array(10).fill('undone-by-marker'), 'the code `off` records and the receipt shows')
+  const plan = planByMarker({ home: s.home })
+  const results = undoByMarker(plan, { home: s.home })
+  assert.deepEqual(results.map((r) => r.result), plan.map(() => 'undone-by-marker'), 'the code `off` records and the receipt shows')
   const by = (h, how) => results.find((r) => r.harness === h && r.how === how)
   assert.equal(read(s.sh.files.codex[0]), s.original[s.sh.files.codex[0]], 'a block: byte for byte')
   assert.equal(read(s.sh.files.hermes[0]), s.original[s.sh.files.hermes[0]], 'the block is out and the user\'s own SSL_CERT_FILE line is back as it was')

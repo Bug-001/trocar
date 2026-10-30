@@ -1,6 +1,6 @@
 // codes.mjs — the D38 closed sets (RFC 4.6 §记录「失败不静默」): every name a collector record may carry in
 // `event`, `where`, `code` and `not_captured`, and which of them are failures. Writers (src/collector/**) and
-// readers (`trocar collector status`; later GET /api/capture-health) take the names from here and nowhere else.
+// readers (`trocar status`, the board's `status` query, the daemon's GET /status) take the names from here and nowhere else.
 // Leaf module (0.1 §2): it imports nothing.
 //   A failure turns the board's indicator ⚠; an expected `not_captured` (not captured by design) is counted and
 // listed, never ⚠. A Node errno (ENOSPC, EACCES, ERR_SSL_…) goes into `code` unchanged; free text only in `reason`.
@@ -63,7 +63,7 @@ export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'eve
 export const TRUST_REASONS = Object.freeze([
   'var-missing', 'env-frozen', 'config-after-start', 'start-time-unknown', 'file-unreadable', 'ca-not-in-file', 'replace-without-ca', 'shadowed',
   'verify-disabled', 'marker-stale', 'marker-pending', 'no-marker', 'ca-unusable', 'environ-unreadable', 'config-unreadable',
-  'settings-unparsable', 'settings-unreadable', 'chromium-child',
+  'settings-unparsable', 'settings-unreadable', 'chromium-child', 'hook-inherited',
   'not-verified', 'outside-host-set', // proxy mode's verdict (4.11 P11): the form or host is not verified for decryption; a hostTree form's host program talking off its host set (the door's untracked reason, the same word)
   // a harness's own
   'settings-ignored-managed-by-host', 'settings-ignored-restricted', 'settings-ignored-setting-sources', 'dsh-use-openssl-ca', 'dsh-node-too-old',

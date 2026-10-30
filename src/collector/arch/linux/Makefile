@@ -3,7 +3,14 @@
 #           -> trocar.skel.h (bpftool gen skeleton) -> trocar-redirector (cc + libbpf).
 # All four outputs are generated build artifacts and are .gitignore'd — never committed.
 
-BPFTOOL  ?= $(shell command -v bpftool 2>/dev/null || echo /usr/sbin/bpftool)
+# The kernel's own type information, which vmlinux.h is generated from (a kernel built without BTF cannot run the helper).
+BTF      ?= /sys/kernel/btf/vmlinux
+# The bpftool: the first candidate that reads this kernel's BTF (a raw dump succeeds) among PATH's, /usr/sbin's and every linux-tools build,
+# newest version first. Ubuntu's /usr/sbin/bpftool is a wrapper that refuses a kernel it has no linux-tools package for (cloud and container
+# kernels) while a linux-tools build of another version may read it; an old build may not read a newer kernel's BTF, which the dump shows.
+# BPFTOOL=<path> on the command line or in the environment wins.
+BPFTOOL_TRY ?= $(shell command -v bpftool 2>/dev/null) /usr/sbin/bpftool $(shell ls -d /usr/lib/linux-tools/*/bpftool 2>/dev/null | sort -rV)
+BPFTOOL  ?= $(shell for b in $(BPFTOOL_TRY); do "$$b" btf dump file $(BTF) format raw >/dev/null 2>&1 && { echo "$$b"; break; }; done)
 CLANG    ?= clang
 CC       ?= cc
 
@@ -26,11 +33,15 @@ LDLIBS   := -l:libbpf.a -lelf -lz
 BUILD_HASH := $(shell (cat $(RD_DIR)/redirector.c $(BPF_DIR)/trocar.bpf.c $(BPF_DIR)/trocar.h 2>/dev/null | sha256sum 2>/dev/null | cut -c1-12) || echo unknown)
 BUILD_HASH := $(if $(BUILD_HASH),$(BUILD_HASH),unknown)
 
+# a recipe that fails removes its half-written target (an empty vmlinux.h would look up to date to the next make)
+.DELETE_ON_ERROR:
 .PHONY: all clean selftest
 all: $(BIN)
 
 $(VMLINUX):
-	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
+	@test -r $(BTF) || { echo 'this kernel has no BTF ($(BTF)): the helper needs a kernel built with it' >&2; exit 1; }
+	@test -n "$(BPFTOOL)" || { echo 'no bpftool here reads this kernel'"'"'s BTF: install bpftool or linux-tools (a recent version), or set BPFTOOL=<path>' >&2; exit 1; }
+	$(BPFTOOL) btf dump file $(BTF) format c > $@
 
 $(BPF_OBJ): $(BPF_DIR)/trocar.bpf.c $(BPF_DIR)/trocar.h $(VMLINUX)
 	$(CLANG) $(BPF_CFLAGS) -c $< -o $@

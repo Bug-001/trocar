@@ -40,17 +40,25 @@ function expected(c, d, f, w) {
   if (f.hostTree && !(c.hostSet || d.hosts).includes(c.host)) return 'outside-host-set'
   if (c.start === 'unknown') return 'start-time-unknown'
   if (c.start === 'before') return 'config-after-start'
+  // Rule 4: "the trocar root is in the process's trust set: it is when the form's cert is a plugin carrier (the hook adds the root in process) or the
+  // trust's `when` does not hold; otherwise the first set source in the agent's own precedence must name a file holding the root (else ca-not-in-file);
+  // none set → var-missing when a source is `required` or the base is Node's own roots, else it holds (system roots hold the user-level root).
+  // A source, or the file it names, that cannot be read forwards uncached even for a plugin carrier: ⑭ still verifies with it (D38)."
   const t = f.trust !== 'root' && d.proxyMode.trusts[f.trust]
-  if (t && t.sources.length) {
-    let on = true
-    if (t.when) { const r = firstOf(w, t.when.src); if (r.error) return r.error; on = r.set && r.value === t.when.equals }
-    if (on) {
-      const first = t.sources.map((s) => firstOf(w, s.from)).find((r) => r.error || r.set)
-      if (first && first.error) return first.error
-      if (!first) { if (t.base === 'node' || t.sources.some((s) => s.required)) return 'var-missing' }
-      else if (w.ca[first.value] === 'unreadable') return 'file-unreadable'
-      else if (w.ca[first.value] !== 'root') return 'ca-not-in-file' // lacks the root, or missing
-    }
+  const pluginCarrier = (d.proxyMode.certs || {})[f.cert]?.kind === 'plugin'
+  // ... "a plugin carrier's process whose env holds TROCAR_HOOK_PID other than its own pid inherited the door and never ran the hook: hook-inherited"
+  // ... "a plugin carrier's process whose env cannot be read: environ-unreadable, uncached (whether it ran the hook is not known, D38)"
+  if (pluginCarrier && c.envNull) return 'environ-unreadable'
+  if (pluginCarrier && c.hookPid === 'other' && !c.envNull) return 'hook-inherited'
+  if (t) {
+    const w8 = t.when && firstOf(w, t.when.src)
+    if (w8 && w8.error) return w8.error
+    const applies = !t.when || (w8.set && w8.value === t.when.equals)
+    const first = applies ? t.sources.map((s) => firstOf(w, s.from)).find((r) => r.error || r.set) : undefined
+    if (first && first.error) return first.error
+    if (first && w.ca[first.value] === 'unreadable') return 'file-unreadable'
+    if (!pluginCarrier && first && w.ca[first.value] !== 'root') return 'ca-not-in-file' // lacks the root, or no such file
+    if (!pluginCarrier && applies && !first && (t.sources.some((s) => s.required) || t.base === 'node')) return 'var-missing'
   }
   if (!c.issuer) return 'cert-intermediate-unavailable'
   for (const b of d.proxyMode.blockers) {
@@ -106,6 +114,7 @@ for (const { d, f, os } of CASES) {
     run(d, f, os, { start: 'unknown' })
     run(d, f, os, { issuer: false }) // CM6, verdict side
     run(d, f, os, { envNull: true })
+    for (const hookPid of ['own', 'other']) run(d, f, os, { hookPid }) // a plugin carrier's process that ran the hook itself, or inherited the door
     run(d, f, os, { cwdNull: true })
     d.proxyMode.blockers.forEach((b, i) => {
       const got = run(d, f, os, { blocker: i })
@@ -148,4 +157,28 @@ test('CM6 · issuer present but not ready → forward with cert-intermediate-una
   const facts = { name: d.name, pid: 1, startedAt: INSTALLED + 1, env: {}, cwd: CWD }
   const got = verdictOf({ desc: d, form: f, facts, record: RECORD, issuer: { state: () => 'unavailable', leafFor: () => null }, host: d.hosts[0], ctx: ctxOf(newWorld(f.os[0])) })
   assert.equal(got.code, 'cert-intermediate-unavailable')
+})
+
+// A regression seed for rule 4 on dsh's real form, with literal expectations: the plugin puts the root in the process whatever its source says, but
+// an env that cannot be read still forwards (⑭ verifies with it).
+test('CM22 · dsh plugin carrier: source unset or lacking the root → decrypt; env unreadable → environ-unreadable', () => {
+  const d = descs.find((x) => x.name === 'deepseek-dsh'), f = d.proxyMode.forms.find((x) => x.id === 'deepseek-dsh.cli')
+  const rows = [[{ sources: ['unset'] }, null], [{ sources: ['lacks'] }, null], [{ envNull: true }, 'environ-unreadable']]
+  for (const [over, want] of rows) for (const os of f.os) {
+    const got = run(d, f, os, over)
+    assert.equal(got.decrypt, want === null, `${os} · ${JSON.stringify(over)}`)
+    if (want) assert.equal(got.code, want)
+  }
+})
+
+// Rule 4 when nothing else reads the env: a plugin carrier with trust `root` and no blockers. TROCAR_HOOK_PID is then the only thing the verdict
+// reads from the env, so an env that cannot be read must forward uncached, never decrypt a process that may have inherited the door (D38).
+test('CM22 · plugin carrier, trust root, no blockers: env unreadable → environ-unreadable, uncached; a parent\'s hook pid → hook-inherited', () => {
+  const d = { ...eighth, proxyMode: { ...eighth.proxyMode, blockers: [] } }, f = d.proxyMode.forms.find((x) => x.id === 'eighth.plugin')
+  for (const os of f.os) {
+    const unread = run(d, f, os, { envNull: true })
+    assert.deepEqual([unread.decrypt, unread.code, unread.unread], [false, 'environ-unreadable', true], os)
+    assert.equal(run(d, f, os, { hookPid: 'other' }).code, 'hook-inherited', os)
+    assert.equal(run(d, f, os, { hookPid: 'own' }).decrypt, true, os)
+  }
 })

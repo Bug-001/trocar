@@ -238,12 +238,14 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         return r.ok ? { state: r.result } : { state: 'skipped', code: r.code, why: r.why }
       }
       if (c.kind === 'plugin') {
-        const pdir = resolveLoc(c.dir, ctx)[0], loader = resolveLoc(c.loader.file, ctx)[0]
-        if (!pdir || !loader) return { state: 'skipped', code: 'not-routed', why: 'the plugin folder does not resolve here' }
+        const pdir = resolveLoc(c.dir, ctx)[0], loader = c.loader ? resolveLoc(c.loader.file, ctx)[0] : null // no loader: the host finds files in the folder
+        if (!pdir || (c.loader && !loader)) return { state: 'skipped', code: 'not-routed', why: 'the plugin folder or its loader does not resolve here' }
         if (!renderHook) return { state: 'skipped', code: 'not-routed', why: 'this build was given no hook renderer' }
-        const hook = renderHook(c.template, { CA_FILE: ca.pem, SWITCH: path.join(dir, 'switch', desc.name), PROXY_ENV: (desc.proxy && desc.proxy.env) || [], NO_PROXY_ENV: noProxyNames(desc) })
+        const names = (desc.proxy && desc.proxy.env) || []
+        const hook = renderHook(c.template, { CA_FILE: ca.pem, SWITCH: path.join(dir, 'switch', desc.name), PROXY_ENV: names, PROXY_NAMES: names, NO_PROXY_ENV: noProxyNames(desc) })
         const file = path.join(pdir, hook.name), text = hook.text
         owned(file, 'plugin', desc.name, text, 0o644)
+        if (!c.loader) return { state: 'placed' }
         const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file: loader, edit: { format: 'yaml-list', line: `- ${c.loader.keys.at(-1)}: [{ name: ${JSON.stringify(file)} }] ${lineComment("loads trocar's CA trust plugin")}` }, home, now: now(), fs })
         said('plugin-loader', e ? 'written' : 'intact', { path: loader, harness: desc.name })
         return { state: 'placed' }

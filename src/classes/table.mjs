@@ -17,7 +17,7 @@ import path from 'node:path'
 import { trocarHome, classesFile, classesLog } from '../paths.mjs'
 import { LLM_ENDPOINT_PATHS, TOKEN_COUNT_ENDPOINT_PATHS, RETENTION_LEVELS } from '../capture/envelope.mjs'
 import { HARNESSES } from '../dissect/harnesses.mjs'
-import { HARNESS_IDS } from '../cli/harness-names.mjs'
+import { HARNESS_IDS } from '../off/harness-names.mjs'
 import { THIRD_PARTY_TELEMETRY } from '../dissect/traffic.mjs'
 
 // not exported: the interface is BUILTIN / readTable / classify / keepOf / plan / edit (+ ClassArgError); the CLI prints what

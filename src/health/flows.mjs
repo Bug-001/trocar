@@ -1,5 +1,5 @@
-// flows.mjs — read the collector's flows/ back from the newest line and fold it (D38; RFC 4.4 /api/capture-health,
-// 4.6 §记录「看得到」). Shared by the board's endpoint and `trocar collector status` (src/health/read.mjs).
+// flows.mjs — read the collector's flows/ back from the newest line and fold it (D38; RFC 4.6
+// §记录「看得到」). Shared by `trocar status`, the board's `status` query and the daemon's GET /status (src/health/read.mjs).
 //   readFlows: day files <UTC date>.ndjson newest first — until the lines read
 // reach back past the last daemon-start AND cover the 24 h window, or until `maxBytes` (then `truncated`). A missing
 // flows/ is "nothing recorded yet"; an unreadable one throws (the endpoint answers 503, never "no failures"); one
@@ -212,7 +212,7 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
   }
   out.unknown_procs = [...unknownProcs.values()]
   out.conditions = [...[ca, degraded, version, mismatch, retention, agentList].filter(Boolean), ...untrusted.values(), ...neg.values()].map((c) => ({ ...c, failure: true }))
-  // critical first (D51④, 4.6 §事件与码): status and /api/capture-health show them at the top; the rest keep their order
+  // critical first (D51④, 4.6 §事件与码): status and the board's `status` query show them at the top; the rest keep their order
   out.conditions = [...rejected.values()].map((c) => ({ ...c, level: 'critical', failure: true })).concat(out.conditions)
   const rank = (c) => (LEVELS.includes(c.level) ? LEVELS.indexOf(c.level) : LEVELS.length)
   out.conditions.sort((a, b) => rank(a) - rank(b))

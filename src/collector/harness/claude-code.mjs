@@ -139,8 +139,8 @@ const configDir = ({ home, env }) => env.CLAUDE_CONFIG_DIR || path.join(home, '.
 const proxy = {
   env: ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'],
   files: [
-    { path: (c) => path.join(configDir(c), 'settings.json'), format: 'json', keys: PROXY_KEYS },
-    { path: (c) => (c.env.CLAUDE_CONFIG_DIR ? path.join(c.env.CLAUDE_CONFIG_DIR, '.claude.json') : path.join(c.home, '.claude.json')), format: 'json', keys: PROXY_KEYS },
+    { path: (c) => path.join(configDir(c), 'settings.json'), env: 'CLAUDE_CONFIG_DIR', format: 'json', keys: PROXY_KEYS, applies: 'override' },
+    { path: (c) => (c.env.CLAUDE_CONFIG_DIR ? path.join(c.env.CLAUDE_CONFIG_DIR, '.claude.json') : path.join(c.home, '.claude.json')), env: 'CLAUDE_CONFIG_DIR', format: 'json', keys: PROXY_KEYS, applies: 'override' },
   ],
   systemProxy: { http: false, ws: false },
   schemes: ['http', 'https'],

@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { HARNESSES, LEGACY_HARNESS_IDS } from '../../src/dissect/harnesses.mjs'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'web', 'v2')
 // every .mjs / .html / .css under `dir`, except assets/ (the harness icons and their SOURCES.md are data rows of the
@@ -28,15 +29,17 @@ const FAMILY_RE = new RegExp(`(?<![a-z0-9_])(?:${FAMILY.join('|')})(?![a-z0-9_])
 const CHIPS_MAY_SAY = new Set(['kimi', 'deepseek', 'claude']) // a harness's display name (Kimi Code, DeepSeek dsh, Claude Code)
 // tool names as string literals (a capitalised "Read" at the start of an English comment is not a branch)
 const TOOLS = [/['"`](Read|Write|Edit|Bash|Grep|Glob|Skill|Task|TodoWrite|WebFetch|WebSearch|NotebookEdit|MultiEdit|Agent|apply_patch|shell)['"`]/, /mcp__/, /\bfile_path\b/]
-// harness ids: as a string in any quote style ('cc', "cc", `cc`), or as an unquoted object key ({ cc: … }, , codex: …)
-const IDS = [
-  /(['"`])(?:cc|codex|opencode|kimi|dsh|hermes|zcode|claude-code|kimi-code|deepseek-dsh|deepseek-cli|z-code)\1/,
-  /[{,]\s*(?:cc|codex|opencode|kimi|dsh|hermes|zcode)\s*:/,
-]
+// harness ids, read from the server's table: each row's id and proc.agent spellings, and the legacy row (a descriptor's name is among the
+// spellings, test/web-v2/harness-seam.test.mjs (e)) — so a new harness is scanned for once it has its row. WORD_IDS: the ones that can be a key
+const ALL_IDS = [...new Set([...HARNESSES.flatMap((h) => [h.id, ...h.agents]), ...LEGACY_HARNESS_IDS])]
+const WORD_IDS = ALL_IDS.filter((id) => /^[A-Za-z_$][\w$]*$/.test(id))
+const alt = (ids) => ids.map((id) => id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+// as a string in any quote style ('cc', "cc", `cc`), or as an unquoted object key ({ cc: … }, , codex: …)
+const IDS = [new RegExp(`(['"\`])(?:${alt(ALL_IDS)})\\1`), new RegExp(`[{,]\\s*(?:${alt(WORD_IDS)})\\s*:`)]
 // …and as a whole token inside a longer string or template ('x:codex:y', `${a}-hermes`), or inside a regex literal (/^(cc|codex)$/, /hermes/):
 // the other two ways of branching on a harness. A plain identifier (`const cc = 1`, `b.cc`) is not a literal and is not matched.
-const ID_TOKEN = /(?<![A-Za-z0-9_.])(?:cc|codex|opencode|kimi|dsh|hermes|zcode)(?![A-Za-z0-9_])/i
-const EXACT_ID = /^(?:cc|codex|opencode|kimi|dsh|hermes|zcode|claude-code|kimi-code|deepseek-dsh|deepseek-cli|z-code)$/
+const ID_TOKEN = new RegExp(`(?<![A-Za-z0-9_.])(?:${alt(WORD_IDS)})(?![A-Za-z0-9_])`, 'i')
+const EXACT_ID = new RegExp(`^(?:${alt(ALL_IDS)})$`)
 // every '…' "…" `…` literal on one line, minus a literal that IS an id (the IDS rule above counts those once)
 function embeddedIdLiterals(text) {
   const out = []

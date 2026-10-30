@@ -39,15 +39,22 @@ const RULES = {
 const langOf = (rel) => (rel.endsWith('.dash.tmpl') ? 'sh' : rel.endsWith('.cs') ? 'cs' : 'js')
 const violations = (rel, text) => RULES[langOf(rel)].filter(([, re]) => re.test(code(text, langOf(rel)))).map(([what]) => `${rel}: ${what}`)
 
+const DOOR_ID = /^(d|door|DOOR)$/
+// the identifier each route points at: a ProxyAgent's uri, fetch's proxy option, or `env[k] = <id>` over PROXY_NAMES
+const routes = (c) => [
+  ...c.matchAll(/new\s+[\w.]*ProxyAgent\s*\(\s*\{\s*uri:\s*(\w+)/g),
+  ...c.matchAll(/proxy:\s*(\w+)\s*\}/g),
+  ...c.matchAll(/for\s*\(\s*const\s+(\w+)\s+of\s+PROXY_NAMES\s*\)\s*\w+\[\1\]\s*=\s*(\w+)/g),
+].map((m) => m.at(-1))
+
 test('CM14 hook contract: no template writes a file, connects anywhere but the door, or touches request / response bytes', () => {
   assert.ok(JS_TEMPLATES.length >= 2)
   for (const rel of [...JS_TEMPLATES, ...WRAPPERS]) assert.deepEqual(violations(rel, read(rel)), [], rel)
-  // the JS templates' only connection is the door: a ProxyAgent to it (cordis) or fetch's own proxy option (opencode)
+  // the JS templates' only route is the door: a ProxyAgent to it, fetch's own proxy option, or the proxy names pointed at it
   for (const rel of JS_TEMPLATES) {
-    const c = code(read(rel), 'js')
-    const routes = [...c.matchAll(/new\s+[\w.]*ProxyAgent\s*\(\s*\{\s*uri:\s*(\w+)/g)].map((m) => m[1]).concat([...c.matchAll(/proxy:\s*(\w+)\s*\}/g)].map((m) => m[1]))
-    assert.ok(routes.length >= 1, `${rel}: it routes somewhere`)
-    for (const r of routes) assert.match(r, /^(d|DOOR)$/, `${rel}: a route goes to the door (${r})`)
+    const r = routes(code(read(rel), 'js'))
+    assert.ok(r.length >= 1, `${rel}: it routes somewhere`)
+    assert.deepEqual(r.filter((id) => !DOOR_ID.test(id)), [], `${rel}: every route goes to the door`)
   }
 })
 
@@ -62,6 +69,9 @@ test('CM14 the scan fails on a planted violation of every rule', () => {
     for (const p of plants) assert.notDeepEqual(violations(rel, p), [], `${lang}: ${p}`)
   }
   assert.deepEqual(violations('x.dash.tmpl', 'IFS= read -r d 2>/dev/null <"$1"'), [], 'reading the switch file, errors silenced, is allowed')
+  for (const p of ['for (const k of PROXY_NAMES) env[k] = upstream', 'new u.ProxyAgent({ uri: other })', 'inner(input, { proxy: other })']) {
+    assert.notDeepEqual(routes(code(p, 'js')).filter((id) => !DOOR_ID.test(id)), [], `a route not to the door: ${p}`)
+  }
 })
 
 test('CM14 the routing slots live only in harness/templates and the arch wrapper files', () => {

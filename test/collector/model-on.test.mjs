@@ -14,7 +14,8 @@ import { startControlServer } from '../../src/collector/core/control.mjs'
 import { daemonMayStart, readManifest } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
-import { isPresent } from '../../src/collector/core/proxymode/sources.mjs'
+import { isPresent, resolveLoc } from '../../src/collector/core/proxymode/sources.mjs'
+import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { modelFormFacts } from '../../src/collector/core/proxymode/status-facts.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
@@ -66,6 +67,27 @@ test('e2e: a Kimi-only machine — install placed the wrapper; on asks the daemo
     assert.deepEqual(m.files.filter((f) => f.phase === 'on').map((f) => f.role), ['switch'], 'on wrote the switch file only: no certificate')
   } finally { await d.close() }
 })
+
+// CM38 (4.11): a descriptor's notes reach on's result for the harness it turned on, through the real seam (plan → daemon → write → result; no OS
+// branch on the way, so darwin's endpoint stands for both — entries-forms plans every OS). Generated over every descriptor that carries notes, its
+// first darwin form made present the way the descriptor tells it is.
+for (const d of (await loadHarnesses()).filter((x) => (x.proxyMode.notes || []).length)) {
+  const f = d.proxyMode.forms.find((x) => x.os.includes('darwin'))
+  if (!f) continue
+  test(`CM38: on turns ${d.name} on (${f.id} present) and its result carries each descriptor note once, with its id and text`, async () => {
+    const p = f.present[0]
+    const w = await modelWorld({ commands: p.command ? [p.command] : [] })
+    for (const file of p.command ? [] : resolveLoc(p, w.ctx)) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '') }
+    assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+    const dm = await daemon(w)
+    try {
+      const r = await on(w, { ids: [d.name] })
+      assert.equal(r.exit, 0, JSON.stringify(r))
+      const said = r.notes.filter((n) => n.harness === d.name && n.code === 'harness-note' && n.id).map((n) => [n.id, n.text])
+      for (const n of d.proxyMode.notes) assert.deepEqual(said.filter(([id]) => id === n.id), [[n.id, n.text]], `note ${n.id}`)
+    } finally { await dm.close() }
+  })
+}
 
 const DRIFTS = {
   'the wrapper replaced by the installer': (w) => fs.writeFileSync(w.kimi, Buffer.concat([MACHO, Buffer.from('new release')])),

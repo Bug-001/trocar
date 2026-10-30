@@ -169,3 +169,62 @@ test('CM20 identity failed: the hook (env or header) and the process env are not
   assert.deepEqual(r.notes, [{ note: 'header-ignored' }])
   await assert.rejects(upstreamFor({ desc: {} }), TypeError)
 })
+
+// P7 step 1 / ⑥ for a process the door cannot identify (an agent's tool subprocess that inherited an in-process hook's environment): its own hook value
+// comes first, then 2, 4, 5 — step 3 never runs for it; its environment unread (or no pid) is unknown, never a silent direct (D38, invariant 6).
+test('CM20 unidentified process at a door: its own hook value first, then 2, 4, 5; its environment unread is unknown', async () => {
+  const hookOnly = (env) => ({ pid: 100, start: 1, env, hookOnly: true })
+  for (const d of descs) for (const prior of [null, PARENT]) for (const sp of [null, VERGE]) {
+    const at = (env) => upstreamFor({ desc: d, facts: hookOnly(env), recordedPrior: prior, systemProxy: sp, isTrocarDoor: isDoor })
+    const noId = await upstreamFor({ desc: d, facts: null, recordedPrior: prior, systemProxy: sp, isTrocarDoor: isDoor })
+    const label = `${d.name} prior=${prior} sp=${!!sp}`
+    const hooked = await at({ [HOOK_ENV]: CORP, [d.proxy.env[0]]: DOOR })
+    assert.deepEqual([hooked.source, hooked.url], ['hook', CORP], `${label}: the inherited hook value is the upstream`)
+    assert.deepEqual([(await at({ [HOOK_ENV]: 'none' })).source, (await at({ [HOOK_ENV]: 'none' })).url], ['hook', null], `${label}: none is no proxy`)
+    for (const env of [{}, { [HOOK_ENV]: DOOR }, { [d.proxy.env[0]]: HOOKED }]) {
+      const r = await at(env)
+      assert.deepEqual([r.source, r.url, r.code], [noId.source, noId.url, noId.code], `${label} env=${JSON.stringify(env)}: no hook value → steps 2, 4, 5 (never step 3)`)
+    }
+    const unread = await at(null)
+    if (prior) assert.deepEqual([unread.source, unread.url], ['config-prior', PARENT], `${label}: a recorded prior still answers (a route on recorded has no in-process hook)`)
+    else {
+      assert.equal(unread.source, 'unknown', `${label}: unread is unknown, not direct`)
+      assert.equal(unread.code, CODE.priorProxyUnknown)
+      assert.equal(unread.url, sp ? VERGE.url : null, `${label}: the system proxy when there is one`)
+    }
+  }
+})
+
+// P7 step 3 with the agent's own proxy files: name by name in the agent's order, an `override` file's value, else the environment's, else a `fill` file's
+// (the agent applies them at start, in process, where a launch-environment reader cannot see it). Generated over every descriptor that reads a proxy file,
+// under both semantics: {no name, each name} set in the env × {no name, each name} set by the file, as a value, a door, a door then a later value, or
+// unread × hook readable or not. The oracle is the rule as written; a needed unread file is unknown and says which file, a door is never dialled.
+test('CM20 step 3 files: per name, override over the env, fill under it, a door skipped file by file, an unread needed file unknown', async () => {
+  const FILE = 'http://file.corp:8080', LATER = 'http://later.corp:8080'
+  let n = 0
+  for (const base of descs.filter((x) => x.proxy.files.length)) for (const applies of ['override', 'fill']) {
+    const d = { ...base, proxy: { ...base.proxy, files: base.proxy.files.map((f) => ({ ...f, applies })) } }
+    const N = d.proxy.env
+    for (const envName of [null, ...N]) for (const fileName of [null, ...N]) for (const kind of ['value', 'door', 'door-then-value', 'unread']) for (const hook of [false, true]) {
+      if (fileName === null && kind !== 'value') continue
+      const fileOf = (name) => (name !== fileName ? null : kind === 'value' ? FILE : kind === 'door-then-value' ? LATER : kind === 'unread' ? FILE : null) // what the agent got from its files
+      const envOf = (name) => (name === envName ? CORP : null)
+      const effective = (name) => (applies === 'override' ? fileOf(name) ?? envOf(name) : envOf(name) ?? fileOf(name))
+      const seenName = N.find((x) => effective(x) !== null), seen = seenName === undefined ? null : effective(seenName)
+      const e = { ...(envName ? { [envName]: CORP } : {}), ...(hook ? { [HOOK_ENV]: seen ?? 'none' } : {}) }
+      const values = fileName === null ? [] : kind === 'value' ? [{ name: fileName, value: FILE, applies }] : kind === 'door' ? [{ name: fileName, value: DOOR, applies }] : [{ name: fileName, value: DOOR, applies }, { name: fileName, value: LATER, applies }]
+      const proxyFile = (pe) => { assert.equal(pe, e, 'the file path is resolved with the process\'s own env'); return kind === 'unread' ? { unknown: { reason: 'denied', detail: '/f/.env: EACCES' } } : { values } }
+      const r = await upstreamFor({ desc: d, facts: facts(e), proxyFile, isTrocarDoor: isDoor })
+      const needsFile = applies === 'override' || N[0] !== envName // a fill file is read only for a name the env lacks, before the env's
+      const want = hook ? { source: 'hook', url: seen } : kind === 'unread' && needsFile ? { source: 'unknown', url: null } : { source: seen ? 'process-env' : 'direct', url: seen }
+      const label = `${d.name} ${applies} env=${envName} file=${fileName}:${kind} hook=${hook}`
+      assert.deepEqual({ source: r.source, url: r.url }, want, label)
+      if (want.source === 'unknown') assert.match(r.detail, /EACCES/, `${label}: the record says which file and why (D38)`)
+      assert.notEqual(r.url, DOOR, label)
+      n++
+    }
+    const noId = await upstreamFor({ desc: d, facts: null, proxyFile: () => ({ values: [{ name: N[0], value: FILE, applies }] }) })
+    assert.equal(noId.source, 'direct', `${d.name}: without an identity step 3 (and its files) does not run`)
+  }
+  assert.ok(n >= 5 * 2 * 20, `cases: ${n}`)
+})
