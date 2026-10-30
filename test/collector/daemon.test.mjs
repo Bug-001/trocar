@@ -22,7 +22,7 @@ import { codeId } from '../../src/version.mjs'
 const CODE = codeId() // D67⑤: the daemon records which code it runs, the one place that says it
 const osBundleRoots = osRootsFor('linux') // the Linux reader, through the one table
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
-import { createRedirectorClient } from '../../src/collector/arch/linux/redirector-client.mjs'
+import { createRedirectorClient, REDIRECTOR_PROTO } from '../../src/collector/arch/linux/redirector-client.mjs'
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
@@ -486,14 +486,31 @@ test('daemon: a helper death is degraded and on reports why; a protocol mismatch
     const failures = statusFailures(await req(s.sock, 'GET', '/status')).map((f) => f.event)
     assert.ok(failures.includes('helper-down') && failures.includes('attach-failed'), `status reports both (D38): ${failures}`)
   } finally { await d.stop() }
-  const mis = fakeArch(p, { TROCAR_FAKE_PROTO: '3' })
+  const mis = fakeArch(p, { TROCAR_FAKE_PROTO: String(REDIRECTOR_PROTO + 1) })
   const d2 = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: mis.arch, harnesses: [cc] })
   try {
     const on = await req(s.sock, 'POST', '/on', {})
     assert.deepEqual([on.actual, on.helper.ok], ['off', false])
-    assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && /protocol 3/.test(f.reason)), 'every failure record carries reason (D38)')
-    assert.ok(flowsOf(s).some((f) => f.event === 'helper-version-mismatch' && /speaks protocol 3, this daemon expects 2; run "sudo trocar setup-helper"/.test(f.reason)))
+    assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && f.reason), 'every failure record carries reason (D38)')
+    assert.ok(flowsOf(s).some((f) => f.event === 'helper-version-mismatch' && f.got === REDIRECTOR_PROTO + 1 && f.expected === REDIRECTOR_PROTO && f.reason))
   } finally { await d2.stop(); p.done(); s.done() }
+})
+
+// R4 (1.6): 1 = the daemon could not start, and then it ends. A helper that exits at start (a namespace it refuses, a kernel below the floor)
+// used to leave the engine listening: the process never ended, held the port, and the next start was refused as engine-port-taken.
+test('daemon: a helper that exits at start leaves nothing listening; the next start takes the same engine port', async () => {
+  const s = sandbox(); const p = fakeProc()
+  const probe = net.createServer(); await new Promise((r) => probe.listen(0, '127.0.0.1', r))
+  const port = probe.address().port; await new Promise((r) => probe.close(r))
+  try {
+    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => port })
+    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p, {}, { args: ['-e', 'process.exit(6)'] }).arch, harnesses: [cc] }))
+    const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] })
+    try {
+      assert.equal(d.port, port)
+      assert.ok(!flowsOf(s).some((f) => f.where === 'engine' && f.code === 'EADDRINUSE'), 'its [::1] address was free too')
+    } finally { await d.stop() }
+  } finally { p.done(); s.done() }
 })
 
 test('daemon: the install-time engine port held by another process → start fails with the reason, no helper spawned, nothing steered (G3)', async () => {
@@ -1678,18 +1695,21 @@ test('daemon: POST /off {exit:true, now:true} cuts the spliced connection and st
   })
 })
 
-test('daemon: POST /off {exit, now, by:\'update\'} — the update stopping the daemon — cuts the splice as cut-by-stop naming update, and daemon-stop says update (1.6 §5.2)', async () => {
-  await withSplice(async ({ s, d, raw, flows }) => {
-    const off = await req(s.sock, 'POST', '/off', { exit: true, now: true, by: 'update' })
-    assert.deepEqual(off.relayed, { closing: 0, waiting: 0, cut: 1 })
-    await d.exited
-    if (!raw.destroyed) await once(raw, 'close')
-    const row = flows().find((f) => f.decision === 'splice')
-    assert.equal(row.error.type, 'cut-by-stop')
-    assert.match(row.error.message, /\bupdate\b/)
-    assert.equal(flows().find((f) => f.event === 'daemon-stop').reason, 'update')
+// `update` today; `a-later-command` is a command this daemon's code does not know: a newer copy replacing it names itself all the same (1.6 §5.2)
+for (const by of ['update', 'a-later-command']) {
+  test(`daemon: POST /off {exit, now, by:'${by}'} — that command stopping the daemon — cuts the splice as cut-by-stop naming it, and daemon-stop says it (1.6 §5.2)`, async () => {
+    await withSplice(async ({ s, d, raw, flows }) => {
+      const off = await req(s.sock, 'POST', '/off', { exit: true, now: true, by })
+      assert.deepEqual(off.relayed, { closing: 0, waiting: 0, cut: 1 })
+      await d.exited
+      if (!raw.destroyed) await once(raw, 'close')
+      const row = flows().find((f) => f.decision === 'splice')
+      assert.equal(row.error.type, 'cut-by-stop')
+      assert.ok(row.error.message.includes(by), row.error.message)
+      assert.equal(flows().find((f) => f.event === 'daemon-stop').reason, by)
+    })
   })
-})
+}
 
 test('daemon: an update\'s exit that /on withdrew does not name update on a later stop\'s cut — /off {exit, by:\'update\'}, /on, then the daemon is stopped: the splice row says cut-by-stop without update (1.6 §5.2)', async () => {
   await withSplice(async ({ s, d, raw, flows }) => {
@@ -1703,9 +1723,9 @@ test('daemon: an update\'s exit that /on withdrew does not name update on a late
   })
 })
 
-test('daemon: /off takes boolean now and exit only, exit takes no harness names, and by (update / uninstall) goes with exit; a refusal is a 400 that changes nothing (1.6 §1.4)', async () => {
+test('daemon: /off takes boolean now and exit only, exit takes no harness names, and by (a command name, not off) goes with exit; a refusal is a 400 that changes nothing (1.6 §1.4, §5.2)', async () => {
   await withSplice(async ({ s, d }) => {
-    for (const body of [{ now: 'yes' }, { exit: 1 }, { exit: true, harnesses: ['claude-code'] }, { exit: true, by: 'off' }, { by: 'update' }]) {
+    for (const body of [{ now: 'yes' }, { exit: 1 }, { exit: true, harnesses: ['claude-code'] }, { exit: true, by: 'off' }, { exit: true, by: 7 }, { exit: true, by: 'Not a name' }, { by: 'update' }]) {
       await assert.rejects(req(s.sock, 'POST', '/off', body), (e) => e.status === 400, JSON.stringify(body))
     }
     assert.equal((await req(s.sock, 'GET', '/status')).desired, 'on', 'nothing was turned off')

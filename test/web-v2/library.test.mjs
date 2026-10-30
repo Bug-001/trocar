@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { parseFilters, filtersToParams, applyFilters, listEntries, captionFacts, listSignature, capShotMaker, emptyBoardState, filteredAgentLine, agentMenuModel, flattenSessions } from '../../src/web/v2/library/logic.mjs'
 import { rowHtml, captionHtml, readFailHtml, filteredEmptyHtml, SKELETON } from '../../src/web/v2/library/library.mjs'
 import { harnessKey, harnessName, isKnownHarness } from '../../src/web/v2/core/chips.mjs'
-import { captureVerdict } from '../../src/web/v2/core/capture-verdict.mjs'
+import { captureVerdict, capHealthPatch } from '../../src/web/v2/core/capture-verdict.mjs'
 import { esc } from '../../src/web/v2/core/fmt.mjs'
 import * as W from '../../src/web/v2/labels/library.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
@@ -120,14 +120,14 @@ test('(10) empty state: the line is the capture verdict of the status read once;
     stopped: { status: 200, data: { health: { state: 'not-running', since: new Date(NOW - 3 * 3600e3).toISOString() } } },
     failing: { status: 200, data: { health: { state: 'failing', n: 1 }, harnesses: { codex: { captured: false } } } },
     ok: { status: 200, data: { health: { state: 'ok' } } },
-    503: { status: 503, error: 'health file unreadable', data: { error: 'health file unreadable' } },
+    unreadable: { status: 200, data: { errors: [{ where: 'capture health', reason: 'health file unreadable' }] } },
   }
   for (const [name, r] of Object.entries(docs)) {
     let reads = 0
     const shot = capShotMaker(async () => { reads++; return { ok: r.status === 200, ...r } }, () => NOW)
     await Promise.all([shot.read(), shot.read()]); await shot.read(); await shot.read()
     assert.equal(reads, 1, name)
-    const want = r.status === 503 ? captureVerdict({ unreadable: r.error }, { okAt: NOW, now: NOW }).text : name === 'ok' ? W.CAPTURING_HINT : captureVerdict(r.data, { okAt: NOW, now: NOW }).text
+    const want = name === 'ok' ? W.CAPTURING_HINT : captureVerdict(capHealthPatch({ ok: true, ...r }, NOW).capH, { okAt: NOW, now: NOW }).text
     assert.equal(emptyBoardState(shot.settled).line, want, name)
   }
 })

@@ -187,23 +187,25 @@ function storeWithSealing({ P, failure, query }) {
  *  store becomes final, the index settles, daemon-stop is written with `relayed` (absent when the engine step failed: it is in `failed`), the failure
  *  recorder becomes final (later lines → stderr only), and the lock's one owner removes it last: a lock still there at the next start means this
  *  stop never finished. Every step runs; one that fails is recorded with its reason, never thrown past the rest (D38). → {failed: [where…]} */
-// Who asked the whole daemon to stop (1.6 §5.2): `update` and `uninstall` name themselves on their exit requests, so the rows the stop cuts say
-// cut-by-stop and that command, and daemon-stop's reason is it; an exit request with no `by` is the operator's own off (cut-by-off, reason off).
-const STOP_BY = Object.freeze(['update', 'uninstall'])
+// Who asked the whole daemon to stop (1.6 §5.2): the command that stops it (`update`, `install` replacing a daemon on other code, `uninstall`) names itself on
+// its exit requests, so the rows the stop cuts say cut-by-stop and that command, and daemon-stop's reason is it; an exit request with no `by` is the operator's
+// own off (cut-by-off, reason off). The name is not held to a list: the command replacing a daemon is newer code than the daemon, and a list of the
+// daemon's day once refused it (an earlier build answered install with a 400) — so any command name is recorded as given.
+const COMMAND_NAME = /^[a-z][a-z0-9-]{0,31}$/
 function stopByOf(b) {
   if (b.by === undefined) return null
-  if (!STOP_BY.includes(b.by)) throw Object.assign(new Error(`"by" names the command stopping the daemon: one of ${STOP_BY.join(', ')}`), { status: 400 })
+  if (typeof b.by !== 'string' || !COMMAND_NAME.test(b.by) || b.by === 'off') throw Object.assign(new Error('"by" names the command stopping the daemon: lower-case letters, digits and hyphens, at most 32, and not off (an exit request without by is off\'s)'), { status: 400 })
   if (b.exit !== true) throw Object.assign(new Error('"by" goes with "exit": it names who stops the whole daemon'), { status: 400 })
   return b.by
 }
 const drainBy = (by) => (by ? { by: 'stop', who: by } : {}) // engine.drain's: the stop's own label, with the command that asked
 
-async function stopTail({ engine, graceMs, store, seal, failure, lock, signal, reason, before = async () => {}, after = async () => {} }) {
+async function stopTail({ engine, graceMs, store, seal, failure, lock, signal, reason, who = null, before = async () => {}, after = async () => {} }) {
   const failed = []
   const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
   await before(step)
   let relayed = null
-  await step('engine', async () => { relayed = await engine.close({ graceMs, ...(STOP_BY.includes(reason) ? { who: reason } : {}) }) })
+  await step('engine', async () => { relayed = await engine.close({ graceMs, ...(who ? { who } : {}) }) })
   await after(step)
   await step('record', () => store.close())
   await step('raw', () => seal.settle()) // the index of what this daemon wrote, including the segment just closed (D62)
@@ -332,7 +334,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   const board = boardFor({ P, failure, query: query.svc, tips: query.tips.of, log })
   const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: board.routes({ 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off'), ...query.routes }) }) // throws if another daemon answers
 
-  let redirector = null
+  let redirector = null, engine = null, seal = null // what a failed start closes again (below)
   try {
     // First the previous run (4.6 §事件与码): an unclean stop is the first line of this start; readers take this start's
     // lines from here on as this run's, up to and past daemon-start — the CA check below included.
@@ -367,11 +369,13 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     }, caCheckMs)
     caTimer.unref()
     const retention = classesHook({ home: path.dirname(P.dir), failure }) // D60③, engine-data.mjs
-    const { store, seal } = storeWithSealing({ P, failure, query })
+    const sealing = storeWithSealing({ P, failure, query })
+    const { store } = sealing
+    seal = sealing.seal
     seal.start() // after noteUncleanStop above: the gate (the control server) has claimed the collector
     // switch / helper events: their own descriptor (events.mjs, a lost line becomes a log-gap), and every failure
     // among them carries `reason`
-    let engine = null // created after the tracker; the tracker's onGone reaches it at call time
+    // engine: created after the tracker; the tracker's onGone reaches it at call time
     const event = (e) => failure.write({ ...e, ...(e.error != null && e.reason == null ? { reason: String(e.error) } : {}) })
 
     const nextAgentList = agentListWatch({ home: netHome, write: (rec) => failure.write(rec) }) // at start here, then on every 5 s check
@@ -391,7 +395,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         done.add(u.transport)
         note({ event: 'agent-transport', pid: row.pid, agent: row.agent, transport: u.transport, var: u.var, reason: u.reason })
       }
-      if (row.watchError) failure('watch', coded(new Error(`watching ${row.agent} pid ${row.pid} failed: ${row.watchError}`), 'watch-failed'))
+      if (row.watchError) failure('watch', coded(new Error(`watching ${row.agent} pid ${row.pid} failed: ${row.watchError}`), 'watch-failed'), { pid: row.pid, agent: row.agent })
       if (row.configError) failure('harness', coded(new Error(`${row.agent} pid ${row.pid}: reading its configuration failed (${row.configError}); judged on its known hosts only`), 'config-error'))
       for (const r of row.readErrors || []) failure('harness', Object.assign(new Error(`${row.agent} pid ${row.pid}: ${r} exists but cannot be read; judged as if it were absent`), { code: CODE.configUnreadable }), { pid: row.pid, agent: row.agent })
       const broken = new Set((row.brokenLayers || []).map((l) => l.file)) // a Claude Code settings file has its own, fuller record below (D-9)
@@ -747,16 +751,16 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       const mine = ++exitAsked
       const left = engine.drained({ agents: null })
       const ready = now ? Promise.race([left, new Promise((r) => setTimeout(r, 500))]) : left
-      ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => { if (mine === exitAsked && !sw.anyOn()) return stop({ reason: by || 'off' }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
+      ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => { if (mine === exitAsked && !sw.anyOn()) return stop({ reason: by || 'off', who: by }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
     }
-    async function doStop({ signal = null, reason = null } = {}) {
+    async function doStop({ signal = null, reason = null, who = null } = {}) {
       seal.stop() // the segment store.close() closes below is sealed by the next start's scan, not by a worker this stop cuts off
       board.stop(); query.stop()
       clearInterval(lockTimer); clearInterval(caTimer); clearInterval(checkTimer); clearTimeout(bundleRetry)
       if (!helperDown) { try { const s = await redirector.status(); if (s && s.drops) lastDrops = s.drops } catch { /* the helper is going: what was last read is written */ } }
       noteDrops({ force: true }) // drops not yet reported are written, not lost
       failure.flush() // folded counts are written, not lost
-      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason,
+      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason, who,
         before: async (step) => {
           await step('control', () => control.close())
           clearInterval(bundleTimer)
@@ -769,6 +773,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     failure.flush()
     await control.close()
     if (redirector) await redirector.close().catch((w) => failure('helper', w)) // the start failure itself is recorded by startDaemon
+    if (seal) seal.stop()
+    if (engine) await engine.close({ graceMs: 0 }).catch((w) => failure('engine', w)) // nothing left listening: the process ends, and the port is free for the next start
     board.stop(); query.stop()
     throw e
   }
@@ -777,8 +783,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 // The collector model's daemon (4.11 §1 on / off, §3 ① ②): macOS and Windows. It writes no agent file and no ingress.json — `trocar on`
 // writes them after POST /on opened the doors and read them back; the daemon opens doors, judges at the door, signs leaves through the custody, keeps
 // a door forward-only while its holders live after off (P12), and exits after `off {exit}` only when mayExit says so. `model`: test seams only —
-// { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone } — the endpoint, the control server and the
-// engine are always the real ones.
+// { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone, routes: (routes) => routes, a test's stand-in
+// for an earlier build's handler of a route } — the endpoint, the control server and the engine are always the real ones.
 async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork, queryIdleMs, code }) {
   const list = harnesses || (await loadHarnesses())
   const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
@@ -834,7 +840,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   const ready = new Promise((r) => { markReady = r })
   const gate = (fn) => async (q) => { await ready; return fn(q) }
   const board = boardFor({ P, failure, query: query.svc, tips: query.tips.of, log })
-  const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: board.routes({
+  const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: board.routes((model.routes || ((r) => r))({
     'GET /status': gate(status),
     'GET /holders': gate(() => collector.holders()),
     ...query.routes,
@@ -860,13 +866,13 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       const r = await collector.off({ ...b, by })
       if (b.exit === true) {
         const mine = ++exitAsked; clearInterval(exitTimer)
-        const go = () => { if (mine === exitAsked) { clearInterval(exitTimer); stop({ reason: by || 'off' }) } }
+        const go = () => { if (mine === exitAsked) { clearInterval(exitTimer); stop({ reason: by || 'off', who: by }) } }
         if (b.now === true) Promise.race([engine.drained({ agents: null }), new Promise((res) => setTimeout(res, 500))]).then(() => new Promise((res) => setTimeout(res, 50))).then(go)
         else exitTimer = setInterval(() => { if (collector.mayExit()) go() }, 250)
       }
       return r
     }),
-  }) })
+  })) })
   // only now: the control server refuses a start while another daemon answers, so a lock read before it may be a live daemon's (runDaemon's order)
   noteUncleanStop(P.lock, failure)
   seal.start() // only now (the gate claimed the collector): the lock read before this could have been a live daemon's
@@ -887,11 +893,11 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: code, foreground: !!foreground, upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: null })
     let stopping = null, markExited
     const exited = new Promise((r) => { markExited = r })
-    const doStop = async ({ signal = null, reason = null } = {}) => {
+    const doStop = async ({ signal = null, reason = null, who = null } = {}) => {
       seal.stop() // as in runDaemon: the last segment is left to the next start's scan
       board.stop(); query.stop()
       clearInterval(lockTimer); clearInterval(listTimer); clearInterval(exitTimer)
-      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason,
+      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason, who,
         before: (step) => step('control', () => control.close()),
         after: async (step) => { collector.close(); await step('helper', () => parts.close && parts.close()) } })
     }

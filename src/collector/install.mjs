@@ -120,6 +120,8 @@ const shortLine = (l) => String(l).split(' # ')[0].trim()
 const DAEMON_CMD = 'trocar daemon' // 1.6 §2: the autostart unit's ExecStart is this command (units written before the rename run its alias `collector start`)
 /** The login entry in the platform's own words (a Windows user told to run `systemctl` has been handed nothing; tested on Windows 2026-10-11 and macOS 2026-10-18). */
 const entryWords = (osName, unit) => (osName === 'win32' ? 'the scheduled task \\trocar\\collector' : osName === 'darwin' ? `the LaunchAgent ${(unit && unit.name) || 'com.trocar.collector'}` : 'the systemd user unit trocar-collector.service')
+/** `registered()`'s answer in one phrase: the refusal below and install's read-back of the entry it registered (ensureDaemonUp) say it the same way. */
+const entryState = (osName, unit, q) => `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : q.state === 'disabled' ? 'is registered but switched off' : `could not be read (${q.err || 'no reason given'})`}`
 
 /** 附录 C.1: the code of the refusal below (one place, mirrored by src/cli/json.mjs's ERROR_CODES). */
 export const AUTOSTART_MISSING = 'autostart-missing'
@@ -134,7 +136,7 @@ export function autostartBlock({ unit, osName }) {
   if (q.state === 'present') return null
   // what the next login would undo, in the mode's own terms: the proxy mode points the agents at doors; the driver mode (Linux) writes no agent file, so its agents go direct, uncaptured
   const after = isModelOs(osName) ? 'and the agents trocar points at its doors would all fail to connect' : 'and capture would stop then while trocar still says it is on'
-  return `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : q.state === 'disabled' ? 'is registered but switched off' : `could not be read (${q.err || 'no reason given'})`}: the collector would not start at the next login, ${after}. Nothing was changed. Run: trocar install`
+  return `${entryState(osName, unit, q)}: the collector would not start at the next login, ${after}. Nothing was changed. Run: trocar install`
 }
 
 /** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
@@ -544,7 +546,7 @@ export async function turnOn(opts = {}) {
     const up = d.up
     notes.push(...d.notes); problems.push(...d.problems); if (d.halt) halt = true
     const pid = readLockPid(dir, fs)
-    receipt.daemon = { state: up ? 'running' : 'not-running', started, ...(pid ? { pid } : {}) }
+    receipt.daemon = { state: d.state, started, ...(pid ? { pid } : {}) }
     // the links last: the daemon attaches on this request, and answers with the state it reached
     if (up && !halt) checked(() => guard())
     let reached = false // V104: the result line lists the targets only when the daemon took the request and reached on
@@ -584,7 +586,7 @@ const GONE_PIPE = /EPIPE|ECONNRESET|socket hang up|ECONNABORTED/i
 // Second seam of the same incident (caught on a macOS test machine, 2026-10-11): on darwin / win32 control.json is written by the daemon AT ITS
 // FIRST START, so a FIRST install has no endpoint to resolve before the unit runs — resolving once up here kept sock null through the whole
 // poll and every first `on` ended "no daemon answers on null", exit 1, while the daemon was up and healthy. The probe re-resolves while
-// → { up, started, sock, ask, unitFailed, notes, problems, halt }: `halted()` is asked before the daemon is touched and after each poll (R12: an `off` that
+// → { up, state, started, sock, ask, unitFailed, notes, problems, halt }: `halted()` is asked before the daemon is touched and after each poll (R12: an `off` that
 // lands meanwhile stops the run); `put` records each failure. `register` (D61) is `install`'s arm: the login registration is made and the daemon started
 // (`unit.enable`, with `--now` only when nothing answers — 拉起不是重启, R8). Without it (`on`'s arm) the registration is NEVER touched: the daemon is
 // started through the OS mechanism install registered (`unit.startNow()`), and directly when that refuses (no systemd --user bus, a job that is not loaded).
@@ -634,8 +636,8 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       // until launchd spawned the job, and launchd spawns one at most once every ThrottleInterval seconds (10 s, launchd's default: trocar writes no
       // ThrottleInterval, D62 ⑥ and darwin/autostart.mjs). An `off` no longer asks the daemon to exit, so `on` normally finds it already up and never
       // gets here; this note is what says so when it does. No "run trocar install" in it: on darwin `install` rewrites the plist and calls
-      // enable({now: false}), which does not reload an already loaded job, so the rewrite takes effect at the next login (D61,
-      // darwin/autostart.mjs enable) — only enable({now: true}) boots the job out and bootstraps it again.
+      // enable({now: false}), which does not reload an already loaded job (darwin/autostart.mjs enable); a running daemon on another copy's
+      // code is what install replaces (drain, stop, enable({now: true}), 1.6 §3.2 step 5, src/cli/replace-daemon.mjs).
       const startMs = ms() - startAt
       if (startMs >= SLOW_START_MS) notes.push(`${entryWords(osName, unit)} held the collector's start for ${startMs} ms; trocar waited on the OS, not on work of its own${osName === 'darwin' ? ' (launchd spawns a job at most once every ThrottleInterval seconds, 10 s by default)' : ''}`)
       if (rr && rr.code === 0 && rr.warn) notes.push(rr.warn) // the arch's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say) — the Run-value it could not take out, the daemon it started directly because /Run's SUCCESS was a lie
@@ -665,7 +667,20 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       }
     }
   } else if (!up) notes.push(`no login entry and no collector running: start it with ${DAEMON_CMD} (it follows what is turned on)${was.why ? `; ${was.why}` : ''}`)
-  return { up, started: started && up, sock, ask, unitFailed, notes, problems, halt }
+  // 1.6 §3.3 / 附录 C.2: what install says about the login entry is the entry asked again (the question `on` asks before it writes), never
+  // "no error was seen": a run the stuck daemon above halted registered nothing
+  if (register && unit && !unitFailed) {
+    const q = unit.registered()
+    if (q.state !== 'present') {
+      // a daemon that answered before the run was not started by the entry, and install starts no second one beside it (拉起不是重启, R8)
+      unitFailed = `${entryState(osName, unit, q)} after this install, so trocar on will refuse until it is: ${was.up ? 'a collector the login entry did not start is answering, and install does not start a second one; stop that collector, then run trocar install again' : was.stuck ? 'the collector that does not answer (the problem above) has to stop first: run trocar off, then trocar install again' : 'run trocar install again'}`
+      put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed })
+      notes.push(unitFailed); problems.push(unitFailed)
+    }
+  }
+  // the receipts' `daemon.state` (1.6 C.2), said here once for install, update and on: a daemon that holds the socket and does not answer is
+  // not-responding, as `trocar status` says it (C.3), never not-running
+  return { up, state: up ? 'running' : was.stuck ? 'not-responding' : 'not-running', started: started && up, sock, ask, unitFailed, notes, problems, halt }
 }
 function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'lock'), 'utf8')).pid ?? null } catch { return null } }
 

@@ -9,6 +9,8 @@ import { ctxWindowHtml, ctxWindowUnits, landingTarget, renderContextWindow } fro
 import { QUIET_CAUSES } from '../../src/web/v2/replay/analysis.mjs'
 import { stepOf } from '../../src/web/v2/replay/model.mjs'
 import * as W from '../../src/web/v2/labels/replay.mjs'
+import { esc } from '../../src/web/v2/core/fmt.mjs'
+import { bodyFor, bodyCache } from '../../src/web/v2/replay/blocks.mjs'
 import { deskOf, world, deskFrom } from './desk-world.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
@@ -171,24 +173,65 @@ test('1.4 #10: landing — follow → ⑨; a reader\'s step → the change line,
 
 // ── ⑨ the reply (2.3 #13) ───────────────────────────────────────────────────────────────────────────────────────
 const replyDesk = (replies, rows) => desk1(replies.map(() => [sys({ key: 's' }), blk({ key: 'q', query: true })]), rows || replies.map(() => ({})),
-  { replies, details: replies.map(() => ({ norm: { stop_reason: 'tool_use' } })) })
-const seg = (h) => h.slice(h.lastIndexOf('<div class="cwreply">'))
+  { replies, details: replies.map(() => ({ norm: { stop_reason: 'STOP-q' } })) })
+const seg = (h) => h.slice(h.lastIndexOf('<div class="cwreply"'))
 const rows = (h) => [...seg(h).matchAll(/<div class="cblk([^"]*)"([^>]*)>/g)].map((m) => ({ cls: m[1], attrs: m[2] }))
+// each reply row's head html (the .cbh up to its closing tag; a head holds only spans)
+const heads = (h) => [...seg(h).matchAll(/<div class="cbh"[^>]*>(.*?)<\/div>/g)].map((m) => m[1])
+const visible = (h) => h.replace(/<[^>]*>/g, ' ')
 
-test('2.3 #13: one row per reply def through the row component, no request attributes; data-bi only on request rows; one mark at most', () => {
+test('2.3 #13: one row per reply def in the request rows\' form: no head, its own fidelity mark, the stop reason on the last row', () => {
   const desk = replyDesk([[rp('thinking'), rp('text'), rp('tool_use'), rp('tool_use', { name: 'Read' })]])
-  const h = ctxWindowHtml(stateOf(desk)), rs = rows(h)
-  assert.equal(rs.length, 4)
-  for (const r of rs) { assert.match(r.attrs, /data-rp="rp:/); for (const a of ['data-bi', 'data-rk', 'data-ff']) assert.ok(!r.attrs.includes(a), a) }
-  for (const x of ['newmark', 'bpbadge', 'volbadge', 'ffbadge']) assert.ok(!seg(h).includes(x), x)
+  const h = ctxWindowHtml(stateOf(desk)), rs = rows(h), hs = heads(h)
+  assert.equal(rs.length, 4); assert.equal(hs.length, 4)
+  assert.match(seg(h), /^<div class="cwreply" role="group" aria-label="[^"]+"/, 'a group a screen reader can name')
+  assert.ok(!visible(seg(h)).includes(W.REPLY_WORD), 'no visible head word')
+  for (const r of rs) {
+    assert.match(r.attrs, /data-rp="rp:/)
+    for (const a of ['data-bi', 'data-rk', 'data-sec']) assert.ok(!r.attrs.includes(a), a)
+    assert.equal((r.attrs.match(/data-ff="/g) || []).length, 1, 'one fidelity value per row')
+    assert.match(r.attrs, /data-ff="verbatim"/, 'every part on its resp.raw span: proven')
+  }
+  for (const x of ['newmark', 'bpbadge', 'volbadge', 'ffbadge', 'rpmark']) assert.ok(!seg(h).includes(x), x)
   assert.equal(bis(h).length, stepOf(desk, 'R0-0').flat.length)
-  assert.ok(seg(h).includes('Bash') && seg(h).includes('Read'), 'tool rows carry the tool name')
-  assert.ok(seg(h).includes('tool_use'), 'the stop reason from detail.norm')
-  assert.equal((seg(h).match(/class="rpmark"/g) || []).length, 0, 'every part on its resp.raw span: no mark')
-  const parsed = ctxWindowHtml(stateOf(replyDesk([[rp('text', { ref: 's/m#R::10-20' }), rp('text')]])))
-  assert.equal((seg(parsed).match(/class="rpmark"/g) || []).length, 1, 'one mark for the segment')
+  assert.ok(hs[2].includes('Bash') && hs[3].includes('Read'), 'tool rows carry the tool name')
+  assert.equal((seg(h).match(/STOP-q/g) || []).length, 1, 'the stop reason once')
+  assert.ok(hs[3].includes('STOP-q'), 'on the last row\'s head')
+})
+
+test('2.3 #13: a part without its span says parsed on its own row; an incomplete reply leaves that to the call line', () => {
+  const parsed = ctxWindowHtml(stateOf(replyDesk([[rp('text', { ref: 's/m#R::10-20' }), rp('tool_use')]])))
+  const [a, b] = rows(parsed), [ha, hb] = heads(parsed)
+  assert.match(a.attrs, /data-ff="parsed"/); assert.equal((ha.match(/class="ffbadge/g) || []).length, 1); assert.ok(ha.includes(esc(W.REPLY_PARSED)))
+  assert.match(b.attrs, /data-ff="verbatim"/); assert.ok(!hb.includes('ffbadge'), 'a proven row shows no mark')
+  // a known non-verbatim value on the part's definition is that value's mark, as on a request row (an encrypted thinking on its span)
+  const opaque = ctxWindowHtml(stateOf(replyDesk([[rp('thinking', { ff: { faithfulness: 'opaque' } })]])))
+  assert.match(rows(opaque)[0].attrs, /data-ff="opaque"/); assert.ok(heads(opaque)[0].includes('class="ffbadge') && !heads(opaque)[0].includes('sr-only'))
   const part = ctxWindowHtml(stateOf(replyDesk([[rp('text')]], [{ respIncomplete: { truncated: true } }])))
-  assert.equal((seg(part).match(/class="rpmark"/g) || []).length, 1)
+  assert.match(rows(part)[0].attrs, /data-ff="verbatim"/); assert.ok(!seg(part).includes('ffbadge'))
+})
+
+test('2.3 #13: a reply with no parts is one line with its stop reason', () => {
+  const h = seg(ctxWindowHtml(stateOf(replyDesk([[]]))))
+  assert.ok(!h.includes('class="cblk')); assert.ok(h.includes('STOP-q'))
+})
+
+test('2.3 #13: an opened reply row whose body came back unproven keeps that mark on every repaint', () => {
+  const ref = 's/m#R::resp.raw::9001-9', s = stateOf(replyDesk([[rp('text', { ref })]]))
+  bodyCache.set(ref, { status: 'absent' }) // a 404 is cached (cell.mjs); the row was proven by its span until the body said otherwise
+  try {
+    for (let k = 0; k < 2; k++) {
+      const h = ctxWindowHtml(s), [r] = rows(h), [hd] = heads(h)
+      assert.match(r.attrs, /data-ff="notfetched"/); assert.ok(hd.includes('class="ffbadge'), 'a visible mark'); assert.ok(!hd.includes('sr-only'), 'no screen-reader verbatim')
+    }
+  } finally { bodyCache.delete(ref) }
+})
+
+test('2.3 #13: a reply with no readable part says so without claiming the reply was empty', () => {
+  const h = seg(ctxWindowHtml(stateOf(replyDesk([[]], [{ respIncomplete: { undecoded: true } }]))))
+  assert.ok(!h.includes('class="cblk')); assert.ok(visible(h).includes(W.UNREAD_REPLY) && !visible(h).includes(W.EMPTY_REPLY))
+  const known = seg(ctxWindowHtml(stateOf(replyDesk([[]]))))
+  assert.ok(visible(known).includes(W.EMPTY_REPLY))
 })
 
 test('2.3:195: default open text → tool call → thinking; a flip stays across re-renders of the step, not across a step change', () => {
@@ -207,6 +250,7 @@ test('2.3:195: default open text → tool call → thinking; a flip stays across
 test('2.3 #13: a failed step\'s segment is one line, its reason in the technical details', () => {
   const h = seg(ctxWindowHtml(stateOf(replyDesk([[rp('text')]], [{ error: 'ERR-boom-q', status: 500 }]))))
   assert.ok(!h.includes('class="cblk')); assert.ok(h.indexOf('ERR-boom-q') > h.indexOf('id="cwfail'))
+  assert.ok(visible(h).includes(W.FAILED_NO_REPLY) && !visible(h).includes(W.REPLY_WORD + ' '))
 })
 
 test('the real face: every main step of the demo session draws inside the whitelist with one row per reply def', async () => {
@@ -224,3 +268,67 @@ test('the real face: every main step of the demo session draws inside the whitel
   } finally { await face.close() }
 })
 
+// 2.3 §没有 def.ref: a block the capture cannot point into (a plain-JSON reply has no span per block) carries its body in `def.inline`,
+// and the opened row shows that text — never "no body and no source location" (the demo session's replies are plain JSON)
+test('the real face: an opened reply row with no source location shows the text its definition carries', async () => {
+  const face = await serveBoard(boardHome())
+  try {
+    const id = (await face.get('sessions')).doc.sessions[0].session_id
+    const desk = await deskFrom((n, p) => face.get(n, p).then((r) => r.doc), id)
+    const s = stateOf(desk)
+    let seen = 0
+    for (let p = 0; p < s.anchor.calls.length; p++) {
+      const st = stepOf(desk, s.anchor.calls[p].rid)
+      if (!st.held || s.anchor.calls[p].error) continue
+      s.playhead = p
+      for (const d of st.reply) if (d.ref == null) s.openBlocks.add('rp:' + d.bid) // a flip opens the rows that are closed by default…
+      const open = seg(ctxWindowHtml(s))
+      for (const d of st.reply) if (d.ref == null) s.openBlocks.delete('rp:' + d.bid) // …and closes the one open by default; both views are read
+      const h = open + seg(ctxWindowHtml(s)), bodies = [...h.matchAll(/<pre class="cellraw">([\s\S]*?)<\/pre>/g)].map((m) => m[1]).join('\n')
+      for (const d of st.reply.filter((x) => x.ref == null)) {
+        seen++
+        assert.ok(d.inline && typeof d.inline === 'object', `step ${p + 1} ${d.bid}: the definition carries its body (3.5 §会话读)`)
+        const text = d.inline.block?.text ?? d.inline.text
+        if (text) assert.ok(bodies.includes(esc(text.slice(0, 24))), `step ${p + 1} ${d.bid}: the opened row's body cell holds the reply's text`)
+      }
+      assert.ok(!h.includes(esc(W.NO_BODY)), `step ${p + 1}: no reply row says it has no body`)
+    }
+    assert.ok(seen > 0, 'the demo session has reply parts with no source location')
+  } finally { await face.close() }
+})
+
+
+// 3.5 §会话读: an unaddressable tools definition brings its description and schema in `inline`; the wire carries no `verbatim`
+test('an unaddressable tools definition shows the description and schema it brings in inline', () => {
+  const d = { bid: 'tb', fh: 'tb', sec: 'tools', role: 'system', kind: 'text', name: 'Bash', head: { role: 'system', tag: 'def', label: 'Bash' }, preview: 'Bash',
+    chars: 40, bytes: 40, r: { as: 'text' }, ref: null, unaddressable: 'inline', ff: { unaddressable: 'inline' }, inline: { desc: 'DESC-q runs one command', schema: { type: 'object', properties: { SCHEMA_q: { type: 'string' } } } } }
+  const h = bodyFor({ ...d, text_ref: d.ref })
+  assert.ok(h.includes('DESC-q') && h.includes('SCHEMA_q'), h.slice(0, 300))
+})
+
+// 2.3 §保真标:证明规则 over the real wire: a definition says its fidelity in `ff.faithfulness` (3.5 §会话读). A row whose value is
+// absent or verbatim and that has a source location is proven, a tools block too; only a value outside the set is unknown
+test('the real face: each request row carries the fidelity its definition sends, never "unknown" for a known value', async () => {
+  const face = await serveBoard(boardHome())
+  try {
+    const id = (await face.get('sessions')).doc.sessions[0].session_id
+    const desk = await deskFrom((n, p) => face.get(n, p).then((r) => r.doc), id)
+    const s = stateOf(desk), KNOWN = new Set(Object.keys(W.FF_WORD))
+    let seen = 0
+    for (let p = 0; p < s.anchor.calls.length; p++) {
+      s.playhead = p
+      const st = stepOf(desk, s.anchor.calls[p].rid)
+      if (!st.held) continue
+      const h = ctxWindowHtml(s), ff = new Map([...h.matchAll(/<div class="cblk[^"]*"[^>]*data-ff="([^"]*)"[^>]*data-bi="(\d+)"/g)].map((m) => [+m[2], m[1]]))
+      assert.ok(!h.includes('[object Object]'), `step ${p + 1}: a mark's title is an object`)
+      st.flat.forEach((d, i) => {
+        const v = d.ff && d.ff.faithfulness, got = ff.get(i)
+        if (got == null) return // a row in a folded turn is not drawn
+        seen++
+        assert.equal(got === 'unknown', v != null && !KNOWN.has(v), `step ${p + 1} row ${i}: ff ${JSON.stringify(d.ff)} drew ${got}`)
+        if (d.ref && (v == null || v === 'verbatim')) assert.equal(got, 'verbatim', `step ${p + 1} row ${i} (${d.sec})`) // tools blocks too (2.3)
+      })
+    }
+    assert.ok(seen > 0)
+  } finally { await face.close() }
+})

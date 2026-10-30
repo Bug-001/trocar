@@ -142,7 +142,7 @@ function collectorHealth({ dir, harnesses, now, fs, alive, identity, maxBytes, r
     unclean: ls.state === 'stale',
   }
   let flows
-  // an unreadable flows/ throws (the endpoint's 503); what could be read rides along for `collector status`
+  // an unreadable flows/ throws (`status` then has no `health` and names it in `errors`, 1.6 C.3); what could be read rides along for `collector status`
   try { flows = readFlows({ dir, now, fs, maxBytes }) } catch (e) { e.collector = { present: true, installed, residue, daemon }; throw e }
   read.files.push(...flows.files); read.errors.push(...flows.errors); read.unparsable += flows.unparsable
   if (flows.truncated) read.truncated = true

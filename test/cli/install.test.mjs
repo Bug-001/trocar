@@ -96,6 +96,19 @@ test('install --yes --json: the receipt (fingerprint, carriers, residual risk, c
 })
 const tmpHomeOf = () => tmpDir('trocar-model-2-') // a second HOME, made where the leak guard sweeps
 
+// 1.6 §3.3 / 附录 C.2: `autostart.enabled` is the login entry asked again after the run, not "no error was seen". A daemon that holds the control
+// socket and does not answer stops the run before anything is registered; launchd then has no such job, and the receipt must not say it starts at login.
+test('install: a daemon that does not answer stops the run before the login entry is registered, and the receipt says it is not enabled', async () => {
+  let loaded = false
+  const launchctl = { calls: [], run: (file, args) => { launchctl.calls.push([file, ...args].join(' ')); if (args[0] === 'bootstrap') loaded = true; return args[0] === 'print' && !loaded ? { status: 113, stdout: '', stderr: 'Could not find service' } : { status: 0, stdout: '', stderr: '' } } }
+  const { io, exit } = await cli(['--yes', '--json'], { over: { launchctl, exec: launchctl.run, request: async () => { throw Object.assign(new Error('timed out after 2000 ms'), { code: 'ETIMEDOUT' }) } } })
+  assert.equal(exit, 1, io.text())
+  const r = io.json()
+  assert.deepEqual([r.ok, r.autostart.enabled, r.daemon.state], [false, false, 'not-responding'])
+  assert.equal(launchctl.calls.some((c) => / bootstrap /.test(c)), false, 'nothing was registered')
+  assert.deepEqual(validateReceipt(r), [])
+})
+
 // the documented order — install, then on — through the CLI: install writes the root, its carriers and
 // the inert autostart unit; on enables the unit, which starts the REAL daemon (test/helpers/model-daemon.mjs), asks it for the doors and writes the entries.
 for (const platform of ['darwin', 'win32']) {
@@ -191,3 +204,18 @@ test('4.4 §Plan 「端口」 · V67: install records the board\'s port in ingre
   assert.equal(await runInstallCli(['--yes'], { io: io2, env: w.env, home: w.home, platform: 'darwin', deps: { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns } }), 0, io2.text())
   assert.deepEqual([fs.readFileSync(file), fs.statSync(file).mtimeMs], [bytes, mtime])
 })
+
+// V108, the third failure: a collector on other code that cannot be stopped (it refuses the drain) is left running — exit 1, ok false, problems,
+// not replaced, and the receipt says it still runs. A real daemon always obeys the drain (test/cli/install-replace-e2e.test.mjs), so the
+// refusal is the control channel's answer here. A 400 naming `by` (an earlier build that does not know install) is asked once more as update, never
+// again: a collector that refuses that too is left the same way; any other refusal is not asked again (1.6 §3.2 step 5).
+for (const [why, status, asks] of [['refuses the drain', 409, ['install']], ['refuses by:install and by:update', 400, ['install', 'update']]]) {
+  test(`V108: install leaves a collector on other code that ${why}, and says so`, async () => {
+    const posted = []
+    const refuse = async ({ method, body }) => { if (method === 'POST') { posted.push(body.by); throw Object.assign(new Error(`${status}: "by" is not one this collector knows`), { status }) } return {} }
+    const { io, exit } = await cli(['--yes', '--json'], { over: { daemonCode: async () => '0.1.0+0000000', request: refuse, daemonState: async () => ({ state: 'running', socket: 'control.sock', lock: { pid: 4242 } }), drainMs: 0 } })
+    const r = io.json()
+    assert.deepEqual([exit, r.ok, r.problems.length > 0, r.daemon.replaced, r.daemon.state], [1, false, true, false, 'running'], io.text())
+    assert.deepEqual(posted, asks, 'the exit requests the collector was sent')
+  })
+}

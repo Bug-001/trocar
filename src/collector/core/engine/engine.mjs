@@ -20,7 +20,8 @@ import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
 // upstreamCa: extra CAs the engine trusts upstream (test seam); systemCa: stands in for the OS store
 // (tests; undefined = read it): PEM text / array, or a systemRoots()-shaped {certs, errors}. The upstream trust set is built once (RFC 4.6 §引擎 5, tls/roots.mjs).
 // timing (tests): {firstByteTimeoutMs, upstreamSlowMs, preludeStallMs} — the engine's waits, 5 s each by default; rejectWindowMs — the leaf
-// rejection window (flow.mjs REJECT_WINDOW_MS, 10 s).
+// rejection window (flow.mjs REJECT_WINDOW_MS, 10 s); slowEngineMs — past it from accepting a connection to our TLS server, a zero-data close before our
+// handshake completes is recorded as engine-slow and counts toward the entry without trust-rejected (flow.mjs SLOW_ENGINE_MS, 2 s); now — the negative cache's clock (negcache.mjs retry_at).
 // ingressToken: the install's ingress token (4.8 §3), required for listen({ingress}).
 export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, retention = null, describe = () => ({}), onError = () => {}, onFailure = null, onHeld = () => {}, timing = {}, drainTimeoutMs, ingressToken = null }) {
   const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0, notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }
@@ -32,10 +33,10 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   // (pid, host) pairs the engine no longer tries to decrypt (RFC 4.6 §引擎 5). A hit is spliced and
   // labelled in flows/; the redirector is never told (the kernel can only stop a whole process).
   // Every write into it is a failure event (D-12, 4.6 §记录 负缓存写入): from then on this (pid, host) is spliced, not
-  // captured, until the process exits (the daemon calls forgetPid and records the clearing).
-  const neg = createNegativeCache()
+  // captured, until its retry_at (negcache.mjs), or until the process exits (the daemon calls forgetPid and records the clearing).
+  const neg = createNegativeCache({ now: timing.now })
   // neg_key: what the entry is keyed by — "<pid>", or "<route>.<group>" for a connection with no pid (4.8 §5.5)
-  const negWritten = (made, key, o) => { if (made) { const e = neg.get(key); failure({ code: 'negative-cache', pid: e.pid ?? null, neg_key: e.negKey, agent: e.agent, host: e.host, cause: e.cause, reason: `${e.host} is no longer decrypted for ${e.pid != null ? `pid ${e.pid}` : e.negKey} (${e.cause}${e.rejections > 1 ? `, ${e.rejections} times in a row` : ''}); its connections there are passed through until ${e.pid != null ? 'it exits' : 'every process of that form has exited'}` }) } return made }
+  const negWritten = (made, key, o) => { if (made) { const e = neg.get(key); failure({ code: 'negative-cache', pid: e.pid ?? null, neg_key: e.negKey, agent: e.agent, host: e.host, cause: e.cause, retry_at: new Date(e.retry_at).toISOString(), reason: `${e.host} is no longer decrypted for ${e.pid != null ? `pid ${e.pid}` : e.negKey} (${e.cause}${e.rejections > 1 ? `, ${e.rejections} times in a row` : ''}); its connections there are passed through until ${new Date(e.retry_at).toISOString()}, then decrypted again` }) } return made }
   // onHeld(negKey): the cache now holds something under this key — a strike below the threshold or an entry — so whoever clears keys when their
   // process or door is gone (the daemon's sweep, 4.8 §5.5) watches it from the first rejection, not only from the first record
   const held = (o) => { try { onHeld(String(o.meta.negKey ?? o.meta.pid)) } catch (e) { onError(e) } }
@@ -74,6 +75,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     lookups.set(p, socket)
   }
   async function accept(socket) {
+    const acceptedAt = Date.now() // before the owner question: a slow lookup is the engine being slow (flow.mjs SLOW_ENGINE_MS)
     counters.total++
     // The accepted socket is ours from here. Until handleFlow attaches its own listeners (after the
     // lookup), a client reset would be an uncaughtException that takes the collector down (RFC 4.6
@@ -101,7 +103,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       onError(Object.assign(new Error(reason), { code: 'lookup-miss' }))
       return
     }
-    runFlow(socket, meta, connectUpstream || defaultConnect, duringLookup)
+    runFlow(socket, { ...meta, acceptedAt }, connectUpstream || defaultConnect, duringLookup)
   }
 
   // FlowExtras from the daemon, merged into the meta. A throw must not cost the agent its connection: the flow goes on with

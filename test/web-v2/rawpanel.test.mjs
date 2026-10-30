@@ -9,6 +9,7 @@ import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
 import { stepOf } from '../../src/web/v2/replay/model.mjs'
 import { deskOf, deskFrom } from './desk-world.mjs'
 import * as W from '../../src/web/v2/labels/replay.mjs'
+import { esc, kf } from '../../src/web/v2/core/fmt.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
 const el = () => ({ _h: '', set innerHTML(v) { this._h = v }, get innerHTML() { return this._h }, querySelector: () => null })
@@ -145,5 +146,25 @@ test('a failed call\'s reason appears only inside the reply\'s tech details', ()
       const d = h.lastIndexOf('<div class="disc"', i)
       assert.ok(d > -1 && !h.slice(d, i).includes('</div></div>'), 'occurrence outside a disclosure')
     }
+  }
+})
+
+// 2.4 §能力的分档: a pinned capability's tier is the 2.3 proof rule over its wire definitions (`ff.faithfulness` · `ref`); each row is
+// what the definition carries (name · chars)
+test('a pinned capability: the tier by the proof rule over wire-shaped tool definitions, each row its name and characters', () => {
+  const tool = (name, o) => ({ sec: 'tools', role: 'system', kind: 'text', name, resKey: 'mcp::X', head: { role: 'system', tag: 'def', label: name }, preview: name, chars: 1234, bytes: 1300, ...o })
+  const span = (n) => ({ ref: `s/x#1::${n}-${n + 9}`, ff: { faithfulness: 'verbatim' } })
+  const inline = { ref: null, unaddressable: 'inline', ff: { unaddressable: 'inline' }, inline: { desc: 'd' } }
+  for (const [defs, tier] of [
+    [[tool('T1', span(0)), tool('T2', span(20))], W.CAP_VERBATIM],
+    [[tool('T1', { ref: 's/x#1::0-9', ff: { faithfulness: 'metadata' } }), tool('T2', { ref: null, ff: { faithfulness: 'metadata' } })], W.CAP_METADATA],
+    [[tool('T1', span(0)), tool('T2', inline)], W.CAP_MIXED],
+  ]) {
+    const desk = deskOf([{ kind: 'main', rows: [{ rec: { request: { model: 'm1' }, id: 'rec-1' } }], blocks: [defs] }])
+    const e = el(), s = stateOf(desk, { viewPin: { resKey: 'mcp::X', label: 'X' } })
+    s.curFlat = stepOf(desk, s.anchor.calls[0].rid).flat
+    renderResourceView(e, s)
+    assert.ok(e.innerHTML.includes(esc(tier)), tier)
+    for (const t of defs) assert.ok(e.innerHTML.includes(esc(W.capToolRow(t.name, kf(t.chars)))), t.name)
   }
 })
