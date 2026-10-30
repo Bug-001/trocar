@@ -101,7 +101,7 @@ const steeredOf = (p) => (p.watched === 'decrypt' ? true : p.watched === 'unknow
 function judged(F, h, hf) {
   const j = judgeHarness({
     desired: F.desired[h] ?? null, entryIntact: entryIntact(hf), entryWhy: hf.entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: F.link.attached, helper: F.link.helper || 'ok', daemon: F.daemon.state,
-    procs: hf.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative, start: p.start })), installedAt: hf.installedAt,
+    procs: hf.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative, start: p.start })), installedAt: hf.installedAt, formsHere: hf.formsHere ?? true,
   })
   return { captured: j.captured, reason: (j.rows.find((r) => r.reason) || {}).reason ?? null, rows: j.rows }
 }
@@ -236,6 +236,11 @@ function proxyTopology(F, h, hf) {
       }
       branches.push({ name, form: fm.id, path, off_path: [a, ...off.ids], on_path: vd.on, captured: vd.captured, reason: vd.reason })
     }
+  }
+  if (!branches.length && hf.formsHere === false) { // none of its forms is on this machine (4.11 P5): what runs under its name goes its own way, trocar is on none of it
+    const a = agentOf(g, h, hf.procs[0] || null), off = tail(g, F, hf, hf.setting || { value: null, source: [] }, followsOf(hf, 'http'))
+    g.edge(a, off.ids[0], off.first.via, { evidence: off.first.evidence, inferred: off.first.inferred })
+    branches.push({ name: 'all', form: null, path: [a, ...off.ids], off_path: [a, ...off.ids], on_path: false, captured: false, reason: F.desired[h] === 'off' ? 'desired-off' : 'not-routed' })
   }
   if (!branches.length) throw new Error('the harness has no form to draw')
   // the drift of a field trocar owns (4.8 §10.3): the user changed the entry's key, trocar is bypassed — the line names the one command that re-adopts it. Driver mode's proxy-changed is

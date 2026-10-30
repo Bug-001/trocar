@@ -38,12 +38,14 @@ export function sourcesCtx({ os, home, env = process.env, cwd = process.cwd(), d
   }
 }
 
-/** The harnesses with a form of this OS present on this machine (4.11 `present`, over the sources ctx with the platform's dirs): with no names,
- *  `status` lists them beside the ones trocar's own records know (1.6 §3.5). Reads only. */
-export async function presentHarnesses({ os, home, env = process.env, harnesses, fs = nodeFs }) {
+/** The forms of this OS present on this machine (4.11 `present`, over the sources ctx with the platform's dirs), per harness that has forms here:
+ *  { <harness>: [form id] } — an empty list = none of them is installed. With no names `status` lists the harnesses with one beside the ones trocar's
+ *  own records know (1.6 §3.5); a harness with none is not captured (4.11 P5). Reads only. */
+export async function presentForms({ os, home, env = process.env, harnesses, fs = nodeFs }) {
   const [{ dirsOf }, { isPresent }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../core/proxymode/sources.mjs')])
   const ctx = sourcesCtx({ os, home, env, dirs: dirsOf(home, env), fs })
-  return harnesses.filter((d) => d.proxyMode && d.proxyMode.forms.some((f) => f.os.includes(os) && isPresent(f, ctx))).map((d) => d.name)
+  const here = (d) => d.proxyMode.forms.filter((f) => f.os.includes(os))
+  return Object.fromEntries(harnesses.filter((d) => d.proxyMode && here(d).length).map((d) => [d.name, here(d).filter((f) => isPresent(f, ctx)).map((f) => f.id)]))
 }
 
 /** backendsFor({ os, home, run, env, fs }) → { custody, rootStore, installHelper, wrapperKit, facts, dirs, policy } for macOS / Windows. */
