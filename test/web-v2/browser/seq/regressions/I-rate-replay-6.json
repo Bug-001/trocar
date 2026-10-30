@@ -39,6 +39,6 @@
   "screenshot": "test/web-v2/browser/shots/seq/I-rate-replay-6.png",
   "status": "fixed",
   "detail": "a followed delta of two new steps read the followed step's reply (C3) and, 100 ms later, the rest's ±8 prefetch read the other new step's reply: two `block` reads in one delta (4.4:52); the C3 read now carries the prefetch refs",
-  "owner": "desk (lane S1)",
+  "owner": "desk",
   "suspect": "src/web/v2/replay/replay.mjs settle() C3 read"
 }

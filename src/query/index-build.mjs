@@ -568,7 +568,7 @@ function columnar(got, segment) {
   return { ...got, records: rowTable(r, segment), ...(s && !isRowTable(s) ? { stored: { ...stored, records: rowTable(s, segment) } } : {}) };
 }
 
-// WHICH SEGMENT IS BEING WRITTEN (main-session decision, 2026-10-18): there is no `.closed` marker.
+// WHICH SEGMENT IS BEING WRITTEN: there is no `.closed` marker.
 // The running daemon records its current segment in its lock file (~/.trocar/collector/lock), and a
 // lock only counts when its pid is alive and the lock is fresh (src/off/daemon-stop.mjs readDaemonLock).
 //

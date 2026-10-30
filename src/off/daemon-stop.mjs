@@ -102,7 +102,7 @@ const refuseRealKill = () => {
 }
 const defaultKill = (pid, signal) => { if (process.env.TROCAR_TEST_SANDBOX === '1') refuseRealKill(); process.kill(pid, signal) }
 
-// ── the Windows stop (RFC 4.8 §4.2, §7; plan Task 9(b)) ──────────────────────────────────────────────────────────────────────
+// ── the Windows stop (RFC 4.8 §4.2, §7) ─────────────────────────────────────────────────────────────────────────────────────
 // `process.kill` on Windows is a hard kill with no drain and no kernel switch, and the supervised daemon would be re-spawned by its parent,
 // so: the supervisor goes FIRST (supervisor.lock names its pid and start time, both checked before anything is signalled), then the daemon
 // (from `lock`, identity checked as on the other platforms), each through `taskkill /PID <pid> /F` — this is the stuck-daemon path of 1.6

@@ -52,6 +52,6 @@
   "screenshot": "test/web-v2/browser/shots/seq/I-rate-sessions-5.png",
   "status": "fixed",
   "detail": "sessions: 3000 ms after the last timer read, expected ≥ 4800 ms: the library reads `sessions` on a fixed 3 s setInterval with no back-off after failed reads (K-29: interval × 2^(k−1) after k failures)",
-  "owner": "shell/overview/library/capture/settings/traffic (main fix lane)",
+  "owner": "shell/overview/library/capture/settings/traffic",
   "suspect": "src/web/v2/library/library.mjs:280"
 }

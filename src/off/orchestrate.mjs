@@ -74,7 +74,7 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
   return w
 }
 
-/** What the user does when a daemon that answers cannot be made to confirm that its routing is off (1.6 §1.5 「确认不了就不撤」 leaves the entries alone, so the way out is said, audit semantics 5):
+/** What the user does when a daemon that answers cannot be made to confirm that its routing is off (1.6 §1.5 「确认不了就不撤」 leaves the entries alone, so the way out is said):
  *  stopping the daemon takes its helper and the links with it, and then the command is run again. On darwin the agent is booted out first — a daemon stopped under a loaded LaunchAgent is pulled right back by KeepAlive (4.9 §4). */
 const wayOut = (w, pid) => w.unitManaged()
   ? (w.platform === 'darwin' ? `To go on, stop the autostart (launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}), so the daemon is not started again, then run the command again` : `To go on, stop the daemon (systemctl --user stop trocar-collector.service), which takes its links off with it, then run the command again`)
@@ -197,7 +197,7 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
     const helperGoneNow = () => helperGone(lock, { alive: w.alive, isHelper: w.isHelper })
     for (const end = w.ms() + 2000; lock && !helperGoneNow() && w.ms() < end;) await w.sleep(25) // a helper that is only now noticing its daemon died
     if (lock && !helperGoneNow()) await stopIt('is not running, but its helper still is')
-    else if (exit && w.unitManaged() && unitIsUp(w)) { // the autostart would bring a daemon back the moment this ends — systemd after RestartSec (Restart=on-failure), launchd at once (KeepAlive, the agent still loaded, 4.9 §4) — so it is stopped, as `uninstall` does (§1.4 第 5 步, audit semantics 4)
+    else if (exit && w.unitManaged() && unitIsUp(w)) { // the autostart would bring a daemon back the moment this ends — systemd after RestartSec (Restart=on-failure), launchd at once (KeepAlive, the agent still loaded, 4.9 §4) — so it is stopped, as `uninstall` does (§1.4 第 5 步)
       const s = await w.stopDaemon({ unitManaged: true })
       r.stop = s; r.how = s.how
       r.events.push({ kind: 'daemon-stop', how: s.how, signals: s.signals, stopped: s.stopped, pid: s.pid, reason: `no daemon is running, but the autostart would bring one back (${w.platform === 'darwin' ? 'the LaunchAgent is loaded: launchd KeepAlive' : 'the unit is up or about to restart: systemd Restart=on-failure'}); ${s.stopped ? (w.platform === 'darwin' ? 'booted out (launchctl bootout)' : 'stopped (systemctl stop, reset-failed)') : `NOT stopped${s.error ? `: ${s.error}` : ''}`}` })
@@ -482,7 +482,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     else if (!manifest) receipt.notes.push(`there is no usable install manifest${manifestError ? ` (${errMessage(manifestError)})` : ''}: ${marks.length ? `${marks.length} file(s) would be undone by trocar's own marks, after a yes` : 'no file holds trocar\'s marks'}`)
     for (const id of ids || []) if (manifest && !installed.includes(id)) receipt.skipped.push({ what: id, reason: 'trocar has nothing on its path (it was never set up, or it is already off)' })
     receipt.daemon = { pid: null, state: ids === null && !isProxyMode(w.platform) ? 'draining' : 'running' } // D62 ⑥: proxy mode's daemon keeps running
-    if (!hadAnything && !receipt.changed.length && !receipt.removed.length) { receipt.nothing_installed = true; receipt.log = null } // said as it is (audit semantics 7); nothing would be written, so there is no log to point at
+    if (!hadAnything && !receipt.changed.length && !receipt.removed.length) { receipt.nothing_installed = true; receipt.log = null } // said as it is; nothing would be written, so there is no log to point at
     return { receipt: shapeReceipt(receipt), exit: EXIT.ok }
   }
 
@@ -572,7 +572,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
 
     // 6 / 7 · the receipt and its result line
     if (!w.fs.existsSync(w.dir)) receipt.log = null // nothing was written to flows/: there is no log to point at (R1)
-    if (!hadAnything && !receipt.changed.length && !receipt.removed.length && !receipt.left.length && !receipt.problems.length && !(receipt.pending || []).length) receipt.nothing_installed = true // an `off` of a machine trocar is not on: it says so, instead of "trocar 已关闭采集" (audit semantics 7)
+    if (!hadAnything && !receipt.changed.length && !receipt.removed.length && !receipt.left.length && !receipt.problems.length && !(receipt.pending || []).length) receipt.nothing_installed = true // an `off` of a machine trocar is not on: it says so, instead of "trocar 已关闭采集"
     receipt.ok = receipt.problems.length === 0 && receipt.left.length === 0 // an item that was not undone is a not-done off (1.6 R3, R4), whatever else went well
     if (!receipt.ok && !receipt.problems.length) receipt.problems.push(`${receipt.left.length} item(s) were left as they are (listed above, with why); put that right, then run trocar off again`)
     const n = { changed: receipt.changed.length, removed: receipt.removed.length, left: receipt.left.length, still_trusting: (receipt.still_trusting || []).length }

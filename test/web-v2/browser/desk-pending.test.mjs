@@ -70,7 +70,7 @@ test('2.3 归约前沿 · D64②: a session growing by 1,000 members a poll — 
 
 // a world without compactions on its main lane: each answer brings sealed packs (three loader slots) while the followed step's bodies
 // need a slot of their own from inside a redraw. A pack holding its slot while waiting on the redraws froze the poll for good
-// (2026-10-25, seed 12 stopped at 12,000 of 30,000 members); the desk follows the growth to its end.
+// (seed 12 stopped at 12,000 of 30,000 members); the desk follows the growth to its end.
 test("2.3 加载器 · D64②: packs and the followed step's bodies share the loader without freezing the poll; the growth is followed to its end", { skip, timeout: 180_000 }, async () => {
   const w = world(12, { calls: 30000, page: 1500, files: 600, compact: 0.002 })
   const b = await withBoard({ bytes: 1e5, width: 1440, chromium: gate.chromium })

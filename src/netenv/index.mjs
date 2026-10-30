@@ -1,5 +1,5 @@
 // index.mjs (src/netenv) — trocar's own netenv.json: the adoption records and the topology (D49). ~/.trocar/netenv.json (0600; outside collector/, so a platform with no new collector writes it too) holds `schema`,
-// `adopted` (what `on` found of each agent's proxy, 1.6 §9.5) and `topology` (what `status` drew, 1.6 §9); the board reads it through `/api/capture-health` (4.4). trocar looks at no VPN / proxy software.
+// `adopted` (what `on` found of each agent's proxy, 1.6 §9.5) and `topology` (what `status` drew, 1.6 §9); the board reads it through the `status` query (1.6 C.3). trocar looks at no VPN / proxy software.
 // Read-only apart from this file: the only write in this directory is writeNetenv's own.
 import nodeFs from 'node:fs'
 import os from 'node:os'

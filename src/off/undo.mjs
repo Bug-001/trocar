@@ -124,7 +124,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   const rm = (p) => { sweepTemps(p, fs); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); out.removed.push(p) } }
   const fail = (item, reason) => { out.left.push({ path: item.path, harness: item.harness ?? null, result: 'error', reason }) }
   // What is removed, rewritten or rebuilt at a path the manifest names is inside ~/.trocar, where trocar puts its bundles, trust files and CA: a manifest that names another
-  // path is damaged or was edited, and following it would take the user's files (audit semantics 6). The item stays in the manifest, so the next run says it again.
+  // path is damaged or was edited, and following it would take the user's files. The item stays in the manifest, so the next run says it again.
   const outside = (f) => (strictlyInside(trocarHome(home), f.path, fs) ? null : `${f.path} is not inside ${trocarHome(home)}, so it is not trocar's to remove or rewrite (the install manifest names a file trocar does not make there: it is damaged or was edited); it is left as it is — correct that item in ${path.join(dir, 'install-manifest.json')} by hand, then run it again`)
   // an entry that could not be undone: why, and — when trocar kept a copy of the file as it was — the one command that puts it back and what that costs (R2:
   // "给出备份路径、手动 cp 命令和会丢掉什么"); the receipt prints `reason`, `--json` also carries `backup` and `restore`

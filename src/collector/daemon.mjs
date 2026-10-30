@@ -500,7 +500,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         // the proxy ingress's own answer (4.8 §5.1): a door's CONNECT arrives with the group id as the user (D47) — the redirector's lookupIngress resolves it (a flow's meta, a health probe, or null = refused)
         ...(typeof redirector.lookupIngress === 'function' ? { lookupIngress: (q) => redirector.lookupIngress(q) } : {}),
       },
-      // FlowExtras (plan 3c §2): the harness's WebSocket terminators and this process's own proxies. A throw: the
+      // FlowExtras (4.6 §引擎 3): the harness's WebSocket terminators and this process's own proxies. A throw: the
       // connection goes on without them, the engine records it, and flows/ gets it under its code (4.6 §记录)
       describe: (meta) => {
         try { return tracker.extrasFor(meta && meta.pid) } catch (e) {
@@ -793,7 +793,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   // status's per-harness entries: state.json's; unreadable → what this daemon has on (its in-memory switch), never a silent empty list (D38)
   const desired = () => { try { return readStateFile(P.state).state.harnesses || {} } catch { return Object.fromEntries(list.filter((d) => collector.isOn(d.name)).map((d) => [d.name, { desired: 'on' }])) } }
   const engine = createEngine({
-    redirector: { lookupIngress: (q) => collector.lookupIngress(q), servePac: (q) => collector.servePac(q) },
+    redirector: { lookupIngress: (q) => collector.lookupIngress(q), servePac: (q) => collector.servePac(q), ownerOfPeer: (p) => collector.ownerOfPeer(p) },
     issuer: { secureContextFor: (h) => collector.issuer.secureContextFor(h), issue: (h) => collector.issuer.issue(h) }, store, upstreamCa,
     ingressToken: crypto.randomBytes(24).toString('hex'), // the model listens on no shared ingress: each door carries its group's token (ingress.json's), this one guards nothing
     isRecording: (meta) => collector.isOn(meta && meta.agent), // the in-memory switch decryption uses too: no file read per request, no silent off on a read error (4.6 §开关)

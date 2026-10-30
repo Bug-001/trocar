@@ -22,7 +22,7 @@ const coldHome = () => {
   return home
 }
 
-test('C1 index-cold is a note: level note, a code apart from its reason, a valid document that is ok', async () => {
+test('index-cold is a note: level note, a code apart from its reason, a valid document that is ok', async () => {
   for (const [name, params] of READS) {
     const doc = await runQuery(name, params, { home: coldHome() })
     assert.deepEqual(validateQueryDoc(doc, name), [], name)
@@ -37,7 +37,7 @@ test('C1 index-cold is a note: level note, a code apart from its reason, a valid
   }
 })
 
-test('C2 a lost record is not a note: record-unparseable has its code and no level, and the document is not ok', async () => {
+test('a lost record is not a note: record-unparseable has its code and no level, and the document is not ok', async () => {
   const home = rawHome()
   writeSegment(home, SEG, [{ id: 'a' }, '{"this is not": json'])
   const doc = await runQuery('segments', {}, { home })
@@ -48,7 +48,7 @@ test('C2 a lost record is not a note: record-unparseable has its code and no lev
   for (const e of bad) assert.equal('level' in e, false)
 })
 
-test('C3 the note is about this read: once the index is current no note remains', async () => {
+test('the note is about this read: once the index is current no note remains', async () => {
   const home = coldHome()
   await segmentIndex({ home, segment: SEG, owner: true })
   for (const [name, params] of READS) {
@@ -57,7 +57,7 @@ test('C3 the note is about this read: once the index is current no note remains'
   }
 })
 
-test('C4 the note is not remembered: a later read in the same process, or after the keeper indexed, has none', async () => {
+test('the note is not remembered: a later read in the same process, or after the keeper indexed, has none', async () => {
   for (const [name, params] of READS) {
     const home = coldHome()
     const notes = async () => (await runQuery(name, params, { home })).errors.filter((e) => e.level === 'note')

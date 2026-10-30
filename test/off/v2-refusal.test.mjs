@@ -1,4 +1,4 @@
-// test/off/v2-refusal.test.mjs — CM29 (4.11 ruling ⑰, plan decision #11): a manifest of version 1 or 2 (written before the collector model) is never
+// test/off/v2-refusal.test.mjs — CM29 (4.11 ruling ⑰): a manifest of version 1 or 2 (written before the collector model) is never
 // migrated in-tree. Every command that can write — on, off, uninstall, the standalone trocar-off — refuses it BEFORE ANY write (the standalone copy
 // ~/.trocar/bin/trocar-off is not overwritten either), exits 1, and names the tools that undo it in order: the trocar from main before the collector
 // model (`trocar off`, then `trocar uninstall`), then the standalone copy, printed on Windows as `node "<path>"`. Cases are generated over

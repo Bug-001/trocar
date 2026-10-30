@@ -91,7 +91,7 @@ test('renderOverview with brushDragging: the backdrop is left untouched, only th
   assert.equal(map.get('ovbrush').style.left, '25.000%', 'and the geometry still matches the view')
 })
 
-// A5 (1.3 §主轨 compaction): the compaction cell is a mark with no visible text; its words ride the aria-label
+// 1.3 §主轨 compaction: the compaction cell is a mark with no visible text; its words ride the aria-label
 test('the problem lane\'s compaction cell has no text content and a non-empty aria-label', async () => {
   const { renderSaw } = await import('../../src/web/v2/replay/timeline.mjs')
   for (const inferred of [false, true]) {

@@ -75,7 +75,7 @@ test('document.title is the screen\'s name and the product\'s — a host page al
   assert.deepEqual(Object.keys(SCREEN_NAME).sort(), ['capture', 'capture-log', 'library', 'overview', 'replay', 'session-link', 'settings-appearance', 'settings-prices', 'settings-storage', 'traffic', 'traffic-host'])
 })
 
-// ── A-M4: scrubbing must not hammer history.replaceState (1.2 §路由 createUrlWriter) ──────────────────────────────────
+// ── scrubbing must not hammer history.replaceState (1.2 §路由 createUrlWriter) ──────────────────────────────────
 // Holding ← / → fires dozens of URL writes a second; WebKit throws after 100 history calls in 30 s. A write ≥ gap after the last one
 // lands in the same task (a reload right after a lone step change carries it); denser ones are ≥ gap apart; the last value always lands.
 import { mock } from 'node:test'

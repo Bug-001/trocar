@@ -70,7 +70,7 @@ test('a process of the same user in another session is listed by ps and answers 
   assert.deepEqual([f.pid, f.sessionId, f.sameUser], [20, 2, true])
 })
 
-// The backlog's repro runs the REAL door identity (createDoorIdentity, what the model's door asks) over the in-order helper (cases A and B):
+// This repro runs the REAL door identity (createDoorIdentity, what the model's door asks) over the in-order helper (cases A and B):
 // the reason a connection would be forwarded with is the door's (4.8 §5.3, the closed set in src/health/codes.mjs).
 const CC_IMG = 'C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe'
 const ALL = await loadHarnesses()

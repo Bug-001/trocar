@@ -179,6 +179,10 @@ export const briefText = (s, max = 100) => { const t = squashed(s); return t.len
  *  the overview alike: the catalog's sentence when it knows the code — the code and the raw reason are then the technical details' (the CLI prints the
  *  reason after it) — else the raw errno / `where/code` with the squashed reason, so an unknown code is never hidden; the `×count` multiplier is the caller's. */
 export function failureBrief(g) {
+  const from = g && typeof g.process === 'string' && g.process !== '' ? `, latest from ${g.process}${Number.isInteger(g.pid) ? ` pid ${g.pid}` : ''}` : '' // every failure that names its program, one way (1.6 §3.5)
+  return brief(g) + from
+}
+function brief(g) {
   const word = failureWord(g && g.where, g && g.code, (g && g.harness) || '')
   if (word) return word
   const reason = briefText((g && g.reason) || '')

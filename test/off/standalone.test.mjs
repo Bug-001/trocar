@@ -1,4 +1,4 @@
-// test/off/standalone.test.mjs — the single-file ~/.trocar/bin/trocar-off (RFC 1.6 R3; plan Task 8). V2: with the repository out of reach it undoes the same entries and prints what
+// test/off/standalone.test.mjs — the single-file ~/.trocar/bin/trocar-off (RFC 1.6 R3). V2: with the repository out of reach it undoes the same entries and prints what
 // `trocar off` prints. V11: what is generated imports node:* and nothing else. V35: a manifest or an item it does not know is left alone (exit 1, the hint is `trocar off`), `doctor`'s
 // check reports a stale copy, and every `on` rewrites it. A sandbox HOME in which the real `on` has run; the file that `on` wrote is the file that runs, in a child process that is
 // handed a copy in a directory of its own (no relative import could find the repo), a PATH of stubs (the sandbox guard allows those, and nothing else), and no NODE_PATH.

@@ -136,7 +136,7 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
     parts = { ownerOf: (q) => ownerOfSocket({ exec: execOf, ...q, onFailure: event }), factsOf: (pid, o) => procinfo.factsOfPid(pid, { ...run, ...(o || {}) }), proc: { envOf: (p, n, o) => procinfo.envOf(p, n, { ...o, ...run }), cwdOf: (p, o) => procinfo.cwdOf(p, { ...o, ...run }), parentOf: (p, o) => procinfo.parentOf(p, { ...o, ...run }) }, close: () => {} }
     watch = await systemProxyWatch({ up, read: up.readSystemProxy, io: io.exec ? { exec: io.exec } : {}, changes: io.exec ? null : (o) => up.scutilChanges({ ...o, env }), failure: (e) => failure('netenv', e), event }) // the OS's own change notice, unless a test injects the OS
   } else {
-    // no declared registry keys (plan §E.7 ruling 4): the model reads a policy value through policy.mjs (reg.exe), not this helper
+    // no declared registry keys: the model reads a policy value through policy.mjs (reg.exe), not this helper
     const [{ ownerOfSocket }, procinfo, { startHelper, regReadAllowed }] = await Promise.all([import('./win32/socktable.mjs'), import('./win32/procinfo.mjs'), import('./win32/helper.mjs')])
     const helper = startHelper({ env, onFailure: event, ...(io.helper || {}) })
     winHelper = helper

@@ -11,7 +11,7 @@
 // It carries no `prefixSha256` (the board only ever compared digests): `prefixByteIdentical` compares each block's verbatim slice
 // with its cache_control cut out (the definition's `vh`), never the frame text, so it can be false where the record fold says true.
 // One place it is more exact: the record fold keys a block by its first 4,096 characters (analyze.mjs BLK_KEY_CAP), so two blocks
-// that differ only past that are the same to it; here a block is its whole frame (one call of the user's live session, 2026-10-21).
+// that differ only past that are the same to it; here a block is its whole frame (real captures carry blocks that differ only past 4,096 characters).
 import { createAnalyzer, stepOrder, OrderBound, breakOf, blockDiff, compactionMeta, unparsedErrMsg, laneMeta, replayLedger } from './analyze.mjs';
 import { realGroundTruth, unknownSummary, FLAT_LANES } from './assemble.mjs';
 import { callRow, itemsView } from './board.mjs';
@@ -125,7 +125,7 @@ function listsOf(store) {
   };
   const held = lru(2 * LIST_BYTES); // rid → its list: keyframes and the lists asked last alike
   // a list weighs 16 B an element (arrays of small integers built by push: 8 B an element and up to half again of spare room; at
-  // 8 B an element the cache held 7.3 MB at its 4 MB figure, test/query/big-session.mjs live(0.48), 2026-10-22)
+  // 8 B an element the cache held 7.3 MB at its 4 MB figure, test/query/big-session.mjs live(0.48))
   // an attribute entry weighs as a few list elements (its key, its object's slot; the attribute objects are the rows' own)
   const keep = (e) => { held.set(e.rid, e, 16 * (e.list.length + e.mb.length + 4 * attrCount(e.attrs)) + 160); return e; };
   const apply = (base, { k = 0, patch, add }, map) => {
@@ -181,7 +181,7 @@ export class BlockUnread extends Error {
 export const memoryLog = (store) => openFoldLog({ home: '/', fs: NO_FILE, key: 'reduce', write: false, projection: { id: store.id, bytes: store.bytes } });
 
 /**
- * reduce(store, members, {mark, resolve, errors}) → skeletonDoc of the reduction at `mark` (design §3.4 "Extraction frontier"),
+ * reduce(store, members, {mark, resolve, errors}) → skeletonDoc of the reduction at `mark` (the 归约前沿 of 3.5 §访问模式; 4.3 §1 归约状态),
  * folded into a fold log held in memory: the members whose record id is ≤ mark (posCmp) and nothing else. `members`: the session's
  * index rows (or record ids); those up to the mark that the store holds a row for are folded. With no mark, the mark is the store's
  * frontier: the largest member such that every member up to it has a row. `pending: {done, total}` (members up to the mark that
@@ -200,7 +200,7 @@ export function reduce(store, members, { mark = undefined, resolve = null, error
 
 /**
  * reduction(store, {log, resolve, errors, progress}) → {add(rids, {budgetMs}) → the rids not reached, frontier, has(rid), log}: a
- * session's reduction that grows (design §3.4, 3.5 §内存有界), writing what it folds into the fold log `log` (src/query/fold-log.mjs).
+ * session's reduction that grows (3.5 §访问模式 "内存有界"), writing what it folds into the fold log `log` (src/query/fold-log.mjs).
  * `add(rids)`: member record ids that have a row, in any order. In write order each row is read from the store once, as it is
  * folded, until `budgetMs` is spent (the rest handed back); new rids that do not all sort after the last one folded (write order;
  * step order once the reduction is in step order) fold again from scratch over everything added, as an `OrderBound` does (sub-agents
@@ -664,7 +664,7 @@ function skeletonOf(R) {
  *  GC (232 B, all resources of one segment and load), × 1.25. */
 export const LEDGER_UNIT_BYTES = 300;
 /** The heap the kept lane ledgers may take (src/query/named/lane.mjs): a K term of the reduction's bound (3.5 §内存有界), each weighed
- *  by ledgerWeight; room for a lane of the shape of Q23 #6's generated 6,598-call session. */
+ *  by ledgerWeight; room for a lane of the generated 6,598-call session in test/query/big-session.mjs. */
 export const LEDGER_BYTES = 8 << 20;
 /** laneLedger(rids, deltaOf, base?, kept?) → {resources, seen, kept} of a lane from its steps' ledger deltas (deltaOf(i) → step i's
  *  `d` from its call line, asked only for the steps replayed; analyze.mjs replayLedger), `rids` its steps in step order (an entry's

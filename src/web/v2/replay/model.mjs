@@ -10,9 +10,9 @@
 //   applySession(desk, answer[, {before}]) → {reset, touched}   a full answer, a --since delta, or a --before page
 //   applyLane(desk, answer) → {reset}                            a tail / reset page, an older (--to) page, a --from page
 //   listOf(desk, rid) → bid[] | null    stepOf(desk, rid) → {row, lane, held, flat, reply, attrs, detail}
-//   laneEvents(desk, key) → event[]      askOrdinal(desk, key, rid) → k | 0 | null (2.2 K, E1)
+//   laneEvents(desk, key) → event[]      askOrdinal(desk, key, rid) → k | 0 | null (2.2 K)
 //   applyLedger / ledgerAsk / ledgerDone / readLedger   the `ledger_next` chain (3.5 `resources` 与 `seen`)
-//   seenFiles(desk, key) → [{path, firstRid, count}] | null   seen minus the lane's opened files (2.4:148, E6)
+//   seenFiles(desk, key) → [{path, firstRid, count}] | null   seen minus the lane's opened files (2.4:148)
 // A whole-lane read answers the tail page only; older steps come back by `prev` (`to`) pages.
 
 import { compareStep } from '../../../view/step-order.mjs'
@@ -144,7 +144,7 @@ function cut(h, i) {
 
 function merge(map, items, id) { for (const x of items || []) map.set(id(x), x) }
 
-/** A resource's identity (E5): the server's `resKey` / `key`, else `kind::label` (3.5's ledger key). */
+/** A resource's identity: the server's `resKey` / `key`, else `kind::label` (3.5's ledger key). */
 export const resKeyOf = (r) => r.resKey || r.key || r.kind + '::' + r.label
 
 function mergeLedger(h, a) {
@@ -208,7 +208,7 @@ export function laneEvents(desk, key) {
 }
 
 /**
- * 2.2's K (E1): the `k` of the last `user` event at or before `rid` among the held events; 0 when there is none and the held
+ * 2.2's K: the `k` of the last `user` event at or before `rid` among the held events; 0 when there is none and the held
  * steps start at the lane's first step; null when the held pages cannot know it (`rid` not held, or its user event lies
  * before the held steps).
  */
@@ -268,7 +268,7 @@ const tails = (p) => { const out = [p]; for (let i = p.indexOf('/'); i >= 0; i =
 
 /**
  * 2.4's 「只见到名字」 (2.4:148): the held lane's `seen` minus every path naming a file the lane opened (same file, above), in the
- * step order of `firstRid`, then `count` descending (E6). Uncapped (SEEN_CAP is the renderer's). null when not held.
+ * step order of `firstRid`, then `count` descending. Uncapped (SEEN_CAP is the renderer's). null when not held.
  */
 export function seenFiles(desk, key) {
   const h = desk.held.get(key)

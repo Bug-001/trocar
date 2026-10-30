@@ -1,5 +1,5 @@
 // test/collector/arch/darwin/identity-real.test.mjs — who a process is, from the REAL `ps` and the native `procenv` of a macOS machine (0.1 §3 约定 2 / 3, G3, G7;
-// RFC 4.6 「认进程」, 4.9 §5.3; D51; plan 2026-10-14-d51-name-allowlist §5 「0.1 约定 2 / 3」, §7 末段).
+// RFC 4.6 「认进程」, 4.9 §5.3; D51; 0.1 §3 约定 2 / 3).
 //
 // The install shapes of test/helpers/real-procs.mjs are made real (the system's `sleep`, copied under a tmpDir() and started), and each one goes
 // both ways a process is judged on darwin: the collector's targeted ask (procinfo factsOfPid → registry.match) and `off`'s table (listProcs →

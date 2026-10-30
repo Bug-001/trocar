@@ -72,7 +72,7 @@ const META = ['name', 'ttype', 'toolName', 'cc', 'mcp', 'label', 'descChars', 'p
 const BODY = ['text', 'block', 'desc', 'schema'];
 // a definition and a row are JSON documents: undefined members dropped, and every string a copy of its own. A string cut out of a
 // record (a regex match, a slice) keeps the whole text it was cut from alive, and a row is held for the life of the session's
-// extraction: on the user's 6.6k-call session that was ~200 KB of heap per row, against ~19 KB for the same row read from disk.
+// extraction: on a real 6.6k-call session that was ~200 KB of heap per row, against ~19 KB for the same row read from disk.
 const jsonClean = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 function factsOf(b) {
   if (b.sec === 'tools') return { type: 'tool', name: b.name || '', mcp: !!b.mcp, bucket: 'tools' };
@@ -90,7 +90,7 @@ export function definition(b, ref, exact, why = null, bid = bidFor(b, ref, exact
   const s = slimBlock(b, ref != null && exact != null ? ref : null, why);
   // vh: only of a verbatim slice. A block with no span has none, nor one whose faithfulness says its bytes are not the wire's
   // (metadata, summarized, omitted, truncated). An opaque block (signature-only reasoning) is unreadable, not unproven: its span
-  // is the wire's bytes, so it keeps its vh (on the user's live session 9,092 of 10,308 calls carry one in their prefix).
+  // is the wire's bytes, so it keeps its vh (on a measured live Claude Code session 9,092 of 10,308 calls carry one in their prefix).
   const verbatim = ref != null && exact != null && (b.faithfulness == null || b.faithfulness === 'verbatim' || b.faithfulness === 'opaque');
   const def = { bid, fh: fhOf(b), vh: verbatim ? vhOf(exact) : null, ref: s.text_ref ?? null, sec: b.sec, role: b.role, kind: b.kind, head: s.head, preview: s.preview,
     chars: s.chars, bytes: s.bytes, ff: jsonClean({ faithfulness: b.faithfulness, unaddressable: s.unaddressable }), r: renderOf(b), f: factsOf(b) };
@@ -225,7 +225,7 @@ function attrDelta(was, { k, patch }, now) {
 const KEYFRAME = 128;
 
 // The facts the session document reads of any record (src/view/board.mjs itemOf), its request headers left in the record: they differ
-// on every call (request ids, lengths), were a sixth of the projection, and are read of the few records that need them (P fix 2026-10-21).
+// on every call (request ids, lengths), were a sixth of the projection, and are read of the few records that need them.
 function itemFacts(r) {
   const rp = respOf(r) || {};
   return jsonClean({ id: r.id, is_llm_call: !!r.is_llm_call, ts_request: r.ts_request, ts: r.ts, endpoint: r.endpoint, proc: r.proc,
@@ -505,7 +505,7 @@ function stitchedFacts(x, { rec, st, predX, state, tools, ownMsgs }) {
   x.lane = f.sub ? 'subagent' : f.monitor ? 'monitor' : hintsOf(rec).lane || 'main';
 }
 
-// x: the per-call facts (design §3.2 "x"), all from this record. `nonBlockKeys`: the request's top-level keys that are no block
+// x: the per-call facts (3.5 §会话读), all from this record. `nonBlockKeys`: the request's top-level keys that are no block
 // (refs into the body and short scalars, never a body: assemble.mjs nonBlockKeysOf), what a lane answer's step detail ships (3.5 §会话读).
 function callX(rec, { d, format }, { h, req, unparsed }) {
   const st = (respOf(rec) || {}).status ?? null;
@@ -534,7 +534,7 @@ function callX(rec, { d, format }, { h, req, unparsed }) {
 export const CHUNK_STORED = 8 * 1048576;
 // and at most this many: a row lists its whole context however few bytes its record stores (a thread's continuation stores its
 // delta), so the rows a chunk holds until it is appended are bounded by count (by bytes alone, 800 rows of a lane that never
-// compacts, each a context of megabytes, passed the worker's heap: 2026-10-22)
+// compacts, each a context of megabytes, passed the worker's heap)
 const CHUNK = 16;
 const contexts = new WeakMap(); // store → its extraction context (slices of one session go on with the same one)
 /** extractSeed(store) → the parts ([[name, array]]) of the extraction context of `store` for its sidecar (store.saveIndex), [] when
@@ -547,13 +547,13 @@ export function extractSeed(store) {
 }
 
 /**
- * extractMembers({store, members, recordsAt, sessionId, budgetMs, clock, errors, from}) → { frontier, done, total } (design §3.4
- * "Extraction frontier"). `members`: the session's index rows in write order (src/query/rows.mjs: segments in segmentCmp order,
+ * extractMembers({store, members, recordsAt, sessionId, budgetMs, clock, errors, from}) → { frontier, done, total } (3.5 §访问模式
+ * "谁执行它"; 4.3 §3). `members`: the session's index rows in write order (src/query/rows.mjs: segments in segmentCmp order,
  * lines in order); `from`: a cursor, the place of a member such that every member before it has a row (0, or the `done` of a call
  * over a list this one extends). `recordsAt(rows)` → their records (one that does not read back is left out). Extracts the members
  * from the cursor on that the store has no row for, in write order, until `budgetMs` of `clock` is spent, appending
  * each chunk's definitions and rows; `errors`: the answering request's (where a store note goes). A member that fails to extract gets
- * a row { x: { unparsed: reason } } appended as held (a `t` line the next open cuts off), so the next open tries it again (§3.9); so
+ * a row { x: { unparsed: reason } } appended as held (a `t` line the next open cuts off), so the next open tries it again (4.3 §3); so
  * are the rows extracted after it (one that continues it, or is written against it, would otherwise be stored without it), so what
  * a later open reads is the rows of one pass over a prefix. What extraction holds is one record at a time, a chunk's rows until its append, the store's indexes and the
  * context's per-lane / per-link ids: not the rows (4.3 §4). frontier: the largest rid such that every member up to it has a row;

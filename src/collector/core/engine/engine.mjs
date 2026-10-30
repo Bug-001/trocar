@@ -155,6 +155,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       token: ingressToken, timing,
       lookupIngress: (q) => redirector.lookupIngress(q),
       servePac: typeof redirector.servePac === 'function' ? (q) => redirector.servePac(q) : null, // GET /trocar.pac on an auth:false door (4.11 P10)
+      ownerOfPeer: typeof redirector.ownerOfPeer === 'function' ? (p) => redirector.ownerOfPeer(p) : null, // who sent an opener the door cannot take (4.8 §5.1)
       connectUpstream: (dst) => (connectUpstream || defaultConnect)(dst),
       failure,
       // an ingress connection whose upstream refused or could not be reached never became a flow: its flows/ row is written here

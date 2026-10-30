@@ -197,7 +197,7 @@ test('valueOf: JSON when it parses, else the text itself', () => {
   }
 })
 
-// ── markdown, diff, media (T3) ─────────────────────────────────────────────────────────────────────────────────────────
+// ── markdown, diff, media ─────────────────────────────────────────────────────────────────────────────────────────
 const plain = () => str(12).replace(/[\u001b\r\n|*_`[\]\\#>~+-]/g, '') + 'w' // a table cell / text run with no markdown syntax in it
 
 test('markdown: an HTML tag stays text, a link is text and URL with no href, a pipe table becomes cells', () => {

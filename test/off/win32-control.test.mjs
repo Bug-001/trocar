@@ -1,4 +1,4 @@
-// test/off/win32-control.test.mjs — the Windows control seam under `off` (plan Task 9(b), W54; RFC 4.8 §7 控制面): the daemon listens on a
+// test/off/win32-control.test.mjs — the Windows control seam under `off` (W54; RFC 4.8 §7 控制面): the daemon listens on a
 // named pipe whose name and secret token live in <collector>\control.json — a pipe has no file mode, so the token is what keeps it to the
 // operator. `off` finds the endpoint, and every request carries the token. A node server on a unix socket stands in for the pipe: the token
 // travels in the same header either way. The reader is deliberately lighter than the writer's (src/off imports nothing outside itself, 0.1 §2).

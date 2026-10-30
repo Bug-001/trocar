@@ -1,6 +1,6 @@
 // entries-forms.test.mjs — which routes `on` writes (spec 4.11 §3, CM31), generated over every descriptor × OS × form: only the route of a present form
 // is written (Kimi CLI only → the VS Code settings untouched); no present form → nothing; a form a blocker matches gets no entry and says where;
-// hostTree forms and descriptor `effects` come back as harness-note data.
+// hostTree forms and descriptor `effects` and `notes` (CM38) come back as harness-note data.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -26,7 +26,8 @@ for (const h of harnesses) for (const os of OSES) {
       assert.ok(planRoutes(h, w.ctx).routes[0].forms.includes(f.id))
       for (const [id, r] of Object.entries(h.proxyMode.routes).filter(([id]) => id !== f.route)) { const p = routeFile(r, w.ctx); if (p) assert.equal(fs.existsSync(p), false, `${id} untouched`) }
       assert.equal(out.notes.filter((n) => n.form === f.id && n.code === 'harness-note').length, f.hostTree ? 1 : 0)
-      assert.equal(out.notes.filter((n) => n.id).length, (h.proxyMode.effects || []).length, 'descriptor effects are listed as notes')
+      const listed = [...(h.proxyMode.effects || []).map((e) => [e.id, e.when]), ...(h.proxyMode.notes || []).map((n) => [n.id, n.text])]
+      assert.deepEqual(out.notes.filter((n) => n.id).map((n) => [n.id, n.text]).sort(), listed.sort(), 'descriptor effects and notes are listed as notes, each once')
       assert.ok(out.notes.every((n) => n.code === 'harness-note' && typeof n.text === 'string'))
       if (h.proxyMode.routes[f.route].absent === 'not-routed') assert.deepEqual([out.results[0].ok, out.results[0].code, out.results[0].reason], [false, 'not-routed', 'absent'])
       else assert.equal(out.results[0].ok, true, JSON.stringify(out.results[0]))
@@ -51,6 +52,7 @@ for (const h of harnesses) for (const os of OSES) {
       assert.ok(out.notRouted.every((x) => x.code === 'not-routed' && x.reason === 'blocker' && typeof x.at === 'string' && x.at.length > 0))
       const free = new Set(forms.filter((f) => !covered.includes(f.id)).map((f) => f.route))
       assert.deepEqual(out.results.map((x) => x.route).sort(), [...free].sort(), 'a route only blocked forms use is not written')
+      if (!free.size) assert.deepEqual(out.notes, [], 'every present form blocked: no route, so no effect and no note (CM32, CM38)')
     })
   }
 }

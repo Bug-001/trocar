@@ -1,4 +1,4 @@
-// test/view/reduce-resume.test.mjs — a reduction's state snapshots and resumes in memory (C1, REDUCE_V): a reduction grown by seeded
+// test/view/reduce-resume.test.mjs — a reduction's state snapshots and resumes in memory (4.3 §4, REDUCE_V): a reduction grown by seeded
 // random batches, snapshotted at seeded random points, passed through v8.serialize and resumed over a store and a fold log opened
 // afresh, writes per key the bytes one pass over every member writes — every rid's latest line, every lane's latest header, the item
 // and failed lines (their `p` off), the last frontier (its `pb` off) — and gives the same skeletonDoc. Along the wire (Anthropic
@@ -81,7 +81,7 @@ function resumed(p, seed) {
   return { R, resumes };
 }
 
-test('C1-1 a reduction snapshotted, serialised and resumed over a store and fold log opened afresh writes what one pass writes', async (t) => {
+test('a reduction snapshotted, serialised and resumed over a store and fold log opened afresh writes what one pass writes', async (t) => {
   for (const [wire, opts, orderOnly] of SHAPES) {
     await t.test(`${wire}${orderOnly ? ` ${orderOnly}` : ''} ${JSON.stringify(opts)}`, () => {
       const p = projected(wire, opts, orderOnly);

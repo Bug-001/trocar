@@ -2,19 +2,19 @@
 // while it runs does not grow with the session's contexts. Its peak live heap at a small worker-like heap stays under half of it,
 // and a session twice as long peaks no higher than the shorter one plus SLACK_PER_CALL for each added call: what extraction keeps
 // of a call it has written is where that call's row and new blocks are on disk and the id a successor links it by, never the row,
-// its facts or its record (holding the rows cost ~10 KiB a call: the 2026-10-21 OOM class).
+// its facts or its record (holding the rows cost ~10 KiB a call, enough to run the worker out of heap).
 //   Nor does what it keeps grow with how long a context gets: one lane that never compacts, its context a few MB at the end,
-// still peaks under half the heap (rows kept by count held a long lane's rows, each the size of its context: 2026-10-22). A
+// still peaks under half the heap (rows kept by count held a long lane's rows, each the size of its context). A
 // session whose calls each bring new tool definitions grows by at most SLACK_PER_DEF for each new definition. And it runs in
 // time linear in the calls of a lane that compacts: four times the calls take at most SLOWER times as long (each operation of
-// the store's caches O(1); evicting from one Map in insertion order cost time with its size, 2026-10-22).
+// the store's caches O(1); evicting from one Map in insertion order cost time with its size).
 //
 // Both media of the store hold to it: the projection file (the worker) and the off-heap arena that writes nothing (the local path),
 // so neither keeps the rows in the V8 heap. And a cluster of records megabytes each is read a chunk of stored bytes at a time, so
 // extraction's peak stays within what the session reserves for its work (working(), src/query/named/session.mjs).
 //
 // Generated sessions (test/query/big-session.mjs): Message Threads (each call stitched to its predecessor's row), thirty subagent
-// lanes side by side, tool results of a few KB each turn, and the live session's paths, writes and prompts. Each session is
+// lanes side by side, tool results of a few KB each turn, and real-session-shaped paths, writes and prompts. Each session is
 // extracted whole in a process of its own; the peak is sampled after a forced GC once a chunk of records is read (every fourth
 // chunk, or every one), above the heap held once the index is read.
 import test from 'node:test'
@@ -54,7 +54,7 @@ sample()
 console.log(JSON.stringify({ done: r.done, total: r.total, peak, ms, cpu, working: working(members) }))`
 
 const LANES = { wire: 'threads', growth: 8_000, subEvery: 2, subLanes: 30, subLen: 12, compactAt: 400_000 }
-// the user's live session's axes (test/query/big-session.mjs live()) on the lanes above: paths named, prompts with their reminders, writes
+// the axes of a real session's shape (test/query/big-session.mjs live()) on the lanes above: paths named, prompts with their reminders, writes
 const SHAPED = { ...LANES, paths: 4, prompt: 12_000, writes: 1_200 }
 // the store's two media: a projection file (the worker), the off-heap arena that writes nothing (the local path)
 const MEDIA = ['file', 'arena']

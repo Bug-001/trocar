@@ -105,7 +105,7 @@ test('收回 partly not recorded stays in its cell; every agent cell has its ico
 
 // 1.10 行高固定: the host list is a fixed-height virtual list, so each row (the class folded under the endpoint on a small screen)
 // lies inside its own `.vrow` slot and its class line inside the row — no row spills into the next one's slot. 390 (folded) / 1280.
-test('V29: every host row and its class line lie inside the row\'s fixed-height slot (390 / 1280)', { skip, timeout: 240_000 }, async () => {
+test('every host row and its class line lie inside the row\'s fixed-height slot (390 / 1280)', { skip, timeout: 240_000 }, async () => {
   for (const width of [390, 1280]) {
     const b = await withBoard({ bytes: 2e6, width, chromium: gate.chromium })
     try {

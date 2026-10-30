@@ -35,7 +35,7 @@ test('playheadSig: equal for two answers of the same step; it moves with what th
   assert.equal(playheadSig(state(deskWith({ subRows: 3 }))), playheadSig(a), 'a sub-agent lane gaining calls does not repaint the window')
 })
 
-test('A16 (1.2:91 · I-url-replay-4/-6): the step parameter clamps to 1..M and says when the URL must be written back', () => {
+test('1.2:91 · I-url-replay-4/-6: the step parameter clamps to 1..M and says when the URL must be written back', () => {
   const M = 7
   const raws = ['abc', '-3', '0', '1', '4', '7', '8', '999', '2.5', ' 3', '1e1', 'NaN', '-0']
   for (let n = -4; n <= M + 4; n++) raws.push(String(n))

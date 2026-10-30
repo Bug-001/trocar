@@ -55,7 +55,7 @@ test('0.1 §2: the scan fails on a planted bad import of every shape, and ignore
   assert.ok(!got.some((p) => p.startsWith('good.mjs') || p.startsWith('b.mjs')), 'the clean files are not')
 })
 
-// The standalone trocar-off is these files concatenated (plan Task 8), so a top-level name declared in two of them would be one declaration
+// The standalone trocar-off is these files concatenated, so a top-level name declared in two of them would be one declaration
 // twice. Checked from the start, so a file added later cannot collide with a name an earlier task already took. Column-0 declarations only
 // (how every file here is written); a `const { a, b } = …` at the top level is refused so the check cannot be sidestepped by it.
 const DECL_RE = /^(?:export\s+)?(?:async\s+)?(?:function\*?|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm
@@ -74,7 +74,7 @@ function duplicateTopLevelNames(root) {
   return out
 }
 
-test('plan Task 8: top-level names are unique across src/off (the standalone copy is the files concatenated); the check fails on a planted duplicate', () => {
+test('top-level names are unique across src/off (the standalone copy is the files concatenated); the check fails on a planted duplicate', () => {
   assert.deepEqual(duplicateTopLevelNames(REPO), [])
   const root = tmpDir('trocar-offdup-'); fs.mkdirSync(path.join(root, 'src', 'off'), { recursive: true })
   const put = (n, t) => fs.writeFileSync(path.join(root, 'src', 'off', n), t)

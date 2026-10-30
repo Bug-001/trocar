@@ -36,7 +36,7 @@ function untouched(prev, next, path = '', out = []) {
   return out
 }
 
-test('A11 (2.3 #22 · 1.4:114): a window patched across random steps equals the fresh window; a surviving row with the same html is never re-created', async () => {
+test('2.3 #22 · 1.4:114: a window patched across random steps equals the fresh window; a surviving row with the same html is never re-created', async () => {
   let kept = 0, moved = 0
   for (const seed of SEEDS) {
     const w = world(seed), desk = await deskFrom(w.get(), 'S'), r = rng(seed)
