@@ -236,7 +236,7 @@ test('W13 an absolute-URI GET, a TLS hello and other bytes that are not CONNECT 
   assert.equal(L.upConns.length, 0)
   assert.deepEqual(L.failures.map((f) => [f.where, f.code]), Array(4).fill(['ingress', 'ingress-unknown']))
   assert.match(L.failures[0].reason, /GET/); assert.match(L.failures[1].reason, /0x16/)
-  assert.equal(JSON.stringify(L.failures).includes('trocar-health.invalid'), false, 'the reason names the method, not what the client put in the URL')
+  assert.equal(JSON.stringify(L.failures).includes('/spike'), false, 'the record names the method and host, never the path the client put in the URL')
   assert.equal(L.engine.stats().ingress.unknown, 4)
 })
 

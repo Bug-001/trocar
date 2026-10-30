@@ -10,6 +10,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import tls from 'node:tls'
 import { createDoorIdentity } from '../engine/door-identity.mjs'
+import { processNames } from '../../../off/identity.mjs'
 import { verdictOf, judgedForms, carrierAt } from './verdict.mjs'
 import { upstreamFor, isTrocarDoorUrl, isLoopbackHost, HOOK_ENV, HOOK_PID_ENV } from './chain.mjs'
 import { pacHandler, pacLeg, peerAllowed } from './pac.mjs'
@@ -383,6 +384,14 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     },
     lookupIngress,
     servePac,
+    /** Who holds the client's end of a door connection (the ingress's `ownerOfPeer`, 4.8 §5.1): the door's own owner and facts questions, within the
+     *  arch's budget → { pid, process, why? } — `why` the owner question's (or the facts reader's) reason when the pid or its name cannot be told. */
+    async ownerOfPeer(peer) {
+      const { pid, why } = await ident.owningPid(peer)
+      if (pid == null) return { pid: null, why: why || 'unanswered' }
+      const facts = await ident.factsCached(pid)
+      return facts ? { pid, process: processNames(facts)[0] ?? null } : { pid, process: null, why: (ident.cache.get(pid) || {}).unread || 'facts-unavailable' }
+    },
     /** Is `h` on in this daemon? The one switch both decryption (lookupIngress) and recording (the engine's isRecording) read (4.6 §开关). */
     isOn: (h) => onSet.has(h),
     /** The engine's onHeld: its negative cache holds a strike or an entry under `negKey`, to clear when its process or door is gone (4.8 §5.5). */

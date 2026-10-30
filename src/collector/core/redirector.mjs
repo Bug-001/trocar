@@ -29,6 +29,9 @@
 //       policy hands the engine for the row, ahead of any table lookup (4.8 §5.4, 4.6 §记录). `upstream.auth` is the user's own proxy's credentials, used for this one
 //       connection's prelude and then dropped (the flow only learns whether there were some). A redirector without `lookup` gets no
 //       transparent listener (Windows has no transparent rewrite).
+//   ownerOfPeer(peer): Promise<{pid, process?, why?}>
+//       Optional; the proxy-mode doors' (macOS / Windows). Who holds the client's end of an ingress connection, asked the way the door asks it
+//       for a lookup: the ingress names that process in an `ingress-unknown` record (pid null + `why` when it cannot be told; 4.8 §5.1).
 //   attach(): Promise<void>        — load kernel programs / start the OS redirector (Plan 2).
 //   detach(): Promise<void>        — unload them; fail-open leaves agent traffic direct (Plan 2).
 //   status(): Promise<object>      — expected vs actual kernel state (RFC 4.6 §开关语义) (Plan 2).
