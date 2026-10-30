@@ -290,7 +290,8 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
   // the line an index names at (off, len), parsed. A handle whose index predates another handle's cut-back (settle truncates the
   // tail in place, append writes there again) reads bytes of that other generation there, so they must be a whole line of the file
   // (a line end before and after them) that parses to an object; else the read throws ELINEPART as an undecodable part does (4.3 §4
-  // 分片). Before `off` a line end is so by construction at a part's end and at the tail's start: no frame is decoded for it.
+  // 分片). Only the plain tail can hold another generation (a sealed part is never rewritten in place), so the line end before `off`
+  // is checked there only, and no frame is decoded for it.
   function json(off, len) {
     try {
       const b = read(off, len + 1);
@@ -301,7 +302,7 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
   // the fault, said on stderr the first time per file (the daemon keeps it, D38)
   function fault(off, len) {
     const e = Object.assign(new Error(`${name}: no whole line at byte ${off} (${len} B): the file is not the generation its index was built from`), { code: 'ELINEPART' });
-    if (!told.has(base)) { told.add(base); process.stderr.write(`trocar query: ${dir}: ${e.message}; the session is read again\n`); }
+    if (!told.has(base)) { told.add(base); process.stderr.write(`trocar query: ${dir}: ${e.message}\n`); }
     return e;
   }
 
