@@ -1,6 +1,7 @@
 // src/web/v2/replay/model.mjs — the replay desk's data model over the three session reads (RFC 3.5 §会话读; 2.3 #22).
 //
-// Pure: no DOM, fetch, timers or module state. The desk holds the session's skeleton rows by rid in step order, the lane
+// Pure: no DOM, fetch or timers; the only module state is the per-desk memo of materialised steps (a cache: dropped by every
+// apply*, so a read never sees a stale step). The desk holds the session's skeleton rows by rid in step order, the lane
 // headers by key (the lane's first rid), held lanes as steps with ops, and block definitions by bid. A step's bid list is
 // materialised from the nearest keyframe by its ops; one keyframe is cached every 32 steps of a walk. The playhead is a rid,
 // step numbers are derived (indexOf / ridAt).
@@ -18,6 +19,9 @@
 import { compareStep } from '../../../view/step-order.mjs'
 
 const KF_EVERY = 32
+// stepOf's memo (2.3 §读与画「长对话的窗口」 rule 1): a step is materialised once per desk change; the newest few are kept
+const MEMO = new WeakMap(), MEMO_CAP = 8
+const changed = (desk) => MEMO.delete(desk)
 
 export function createDesk() {
   return {
@@ -29,14 +33,18 @@ export function createDesk() {
 
 const tsOf = (desk, rid) => desk.rows.get(rid)?.ts ?? ''
 
-// insert rid into an array kept in step order (the row must already be in desk.rows)
-function place(desk, arr, rid) {
+// where rid stands (or would stand) in an array kept in step order: a binary search (the row must be in desk.rows)
+function slotOf(desk, arr, rid) {
   const ts = tsOf(desk, rid)
   let lo = 0, hi = arr.length
   while (lo < hi) { const m = (lo + hi) >> 1; if (compareStep(tsOf(desk, arr[m]), arr[m], ts, rid) < 0) lo = m + 1; else hi = m }
-  arr.splice(lo, 0, rid)
+  return lo
 }
-function unplace(arr, rid) { const i = arr.lastIndexOf(rid); if (i >= 0) arr.splice(i, 1) }
+const place = (desk, arr, rid) => arr.splice(slotOf(desk, arr, rid), 0, rid)
+function unplace(desk, arr, rid) {
+  const j = slotOf(desk, arr, rid) // callers remove a row while its old ts is still in desk.rows, so the order holds
+  if (arr[j] === rid) arr.splice(j, 1)
+}
 
 function addRow(desk, row) {
   desk.rows.set(row.rid, row)
@@ -45,9 +53,9 @@ function addRow(desk, row) {
   place(desk, desk.laneRids.get(row.lane), row.rid)
 }
 function removeRow(desk, row) {
-  unplace(desk.order, row.rid)
+  unplace(desk, desk.order, row.rid)
   const l = desk.laneRids.get(row.lane)
-  if (l) { unplace(l, row.rid); if (!l.length) desk.laneRids.delete(row.lane) }
+  if (l) { unplace(desk, l, row.rid); if (!l.length) desk.laneRids.delete(row.lane) }
   desk.rows.delete(row.rid)
 }
 
@@ -73,6 +81,7 @@ function setEvents(desk, rids, events) {
 export function applySession(desk, a, { before = false } = {}) {
   const touched = new Map()
   if (a.base != null && a.base !== desk.mark) return { reset: false, touched }
+  changed(desk)
   scalars(desk, a)
   if (a.base == null) {
     desk.lanes = new Map((a.lanes || []).map((h) => [h.lane, h]))
@@ -201,6 +210,7 @@ function mergeLedger(h, a) {
  * an older page of a held lane leaves them as they are.
  */
 export function applyLane(desk, a) {
+  changed(desk)
   merge(desk.defs, a.defs, (d) => d.bid)
   let h = desk.held.get(a.lane)
   const steps = a.steps.map((s) => ({ ...s, ts: desk.rows.get(s.rid)?.ts }))
@@ -267,6 +277,7 @@ export function askOrdinal(desk, key, rid) {
 export function applyLedger(desk, key, cursor, a) {
   const h = desk.held.get(key)
   if (!h) return
+  changed(desk)
   mergeLedger(h, a)
   h.cursors.delete(cursor)
   if (a.ledger_next != null) h.cursors.add(a.ledger_next)
@@ -295,19 +306,22 @@ export async function readLedger(desk, key, read, stale = () => false) {
   return { ok: true }
 }
 
-// the same file under two spellings: equal, or one is a path suffix of the other (absolute vs relative)
-const sameFile = (a, b) => a === b || a.endsWith('/' + b) || b.endsWith('/' + a)
+// the same file under two spellings: equal, or one is a path suffix of the other (absolute vs relative). As sets: x names an opened
+// file p when x is p or one of p's '/'-suffixes (`tails`), or p is one of x's. Two set lookups per spelling instead of a scan of every
+// opened file per seen path (a long lane's thousands of seen paths × hundreds of opened files was 15-23 ms of every repaint).
+const tails = (p) => { const out = [p]; for (let i = p.indexOf('/'); i >= 0; i = p.indexOf('/', i + 1)) out.push(p.slice(i + 1)); return out }
 
 /**
- * 2.4's 「只见到名字」 (2.4:148): the held lane's `seen` minus every path naming a file the lane opened (sameFile), in the
+ * 2.4's 「只见到名字」 (2.4:148): the held lane's `seen` minus every path naming a file the lane opened (same file, above), in the
  * step order of `firstRid`, then `count` descending (E6). Uncapped (SEEN_CAP is the renderer's). null when not held.
  */
 export function seenFiles(desk, key) {
   const h = desk.held.get(key)
   if (!h) return null
   const opened = [...h.resources.values()].filter((r) => r.kind === 'file').map((r) => String(r.label))
+  const openedTails = new Set(opened.flatMap(tails)), openedSet = new Set(opened)
   const ts = (rid) => desk.rows.get(rid)?.ts ?? h.steps.get(rid)?.ts ?? ''
-  return [...h.seen.values()].filter((x) => !opened.some((p) => sameFile(p, x.path)))
+  return [...h.seen.values()].filter((x) => !openedTails.has(x.path) && !tails(x.path).some((t) => openedSet.has(t)))
     .sort((x, y) => compareStep(ts(x.firstRid), x.firstRid, ts(y.firstRid), y.firstRid) || y.count - x.count)
 }
 
@@ -354,8 +368,20 @@ export function listOf(desk, rid) {
   return m ? m.ids.slice() : null
 }
 
-/** A step as the renderer reads it; `flat` has one block per list position (content key `fh`, identity `bid`). */
+/** A step as the renderer reads it; `flat` has one block per list position (content key `fh`, identity `bid`). The answer is
+ * shared by every caller until the desk changes: read it, never mutate it. */
 export function stepOf(desk, rid) {
+  let m = MEMO.get(desk)
+  if (!m) MEMO.set(desk, m = new Map())
+  let st = m.get(rid)
+  if (!st) {
+    st = materialStep(desk, rid)
+    m.set(rid, st)
+    if (m.size > MEMO_CAP) m.delete(m.keys().next().value)
+  }
+  return st
+}
+function materialStep(desk, rid) {
   const row = desk.rows.get(rid) ?? null
   const [lane, h] = heldOf(desk, rid)
   const s = h?.steps.get(rid), m = s && materialise(h, rid)

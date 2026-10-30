@@ -7,7 +7,7 @@
 // The window is a list of keyed units (2.3 §读与画 · 窗口按 bid 打补丁): a request row's key is `bid#occurrence`, a reply row's
 // `rp:` + bid, a turn's its anchor; a unit's `html` carries no position (positions ride `set`, written on placement), so a
 // step change patches the window and an open row whose bid survives keeps its DOM.
-//   ctxWindowUnits(s) → units   ctxWindowHtml(s) = serialize(units)   patchUnits(prev, next) → ops   applyOps(units, ops)
+//   ctxWindowUnits(s) → units   fillGroup(units, s, key) → [units, ops]   ctxWindowHtml(s) = serialize(units)   patchUnits(prev, next) → ops   applyOps(units, ops)
 //   renderContextWindow(el, s[, {busy}]) patch + land   wireCtxWin(el, s) listeners
 import { esc, bytes } from '../core/fmt.mjs'
 import { techDetailsHtml } from '../core/ui.mjs'
@@ -99,29 +99,59 @@ export function busyFramesHtml(s, row) {
 // A unit is {key, html, kids?, set?}. A unit with kids carries `KIDS` inside its one [data-kids] element, where the kids go.
 const KIDS = '<!--kids-->'
 const withSet = (h, set) => (set ? h.replace('>', Object.entries(set).map(([k, v]) => ` ${k}="${esc(String(v))}"`).join('') + '>') : h)
-const serialOne = (u) => { const h = withSet(u.html, u.set); return u.kids ? h.replace(KIDS, serialize(u.kids)) : h }
+const serialOne = (u) => { const h = withSet(u.html, u.set); return u.kids ? h.replace(KIDS, () => serialize(u.kids)) : h }
 export const serialize = (units) => units.map(serialOne).join('')
 // the request rows' keys: bid + '#' + its occurrence in the list (the same bid may stand twice)
 export function rowKeys(flat) {
   const seen = new Map()
   return flat.map((b) => { const n = seen.get(b.bid) || 0; seen.set(b.bid, n + 1); return `${b.bid}#${n}` })
 }
-// the turns of a list, each run of consecutive message blocks grouped on its own (indices into the whole list)
+// the turns of a list, each run of consecutive message blocks grouped on its own (indices into the whole list), with `at[i]` =
+// the turn holding list position i (-1 outside messages). Memoised per list: stepOf hands out one list per step per desk change.
+const TURNS = new WeakMap()
 function turnsOf(flat) {
-  const out = []
+  let T = TURNS.get(flat)
+  if (T) return T
+  const list = [], at = new Int32Array(flat.length).fill(-1)
   for (let i = 0; i < flat.length;) {
     if (flat[i].sec !== 'messages') { i++; continue }
     let j = i
     while (j < flat.length && flat[j].sec === 'messages') j++
-    for (const t of messageTurns(flat.slice(i, j))) out.push({ ...t, items: t.items.map((k) => k + i) })
+    for (const t of messageTurns(flat.slice(i, j))) { const items = t.items.map((k) => k + i); for (const k of items) at[k] = list.length; list.push({ ...t, items }) }
     i = j
   }
-  return out
+  TURNS.set(flat, T = { list, at })
+  return T
 }
+const turnOpen = (s, flat, T, ti) => turnIsOpen(s.turnFold, flat, T.list[ti], ti, T.list.length - 1, s.turnLanded)
 const refNo = (s, row) => { const r = row && stepRef(s.lanes, row.rid); return r ? (r.step ? r.n : r.k) : null }
 
-/** The window as keyed units (pure but for the desk's scratch: s.curFlat / s.curKeys / s.curReply / s.curRemoved). */
-export function ctxWindowUnits(s) {
+// a closed request row's html is a function of its definition (content-addressed by bid) and three marks: kept per definition
+const ROWS = new WeakMap()
+function rowHtml(s, b, prevKeys, open, windowLine) {
+  const d = !open && s.desk && s.desk.defs && s.desk.defs.get(b.bid)
+  if (!d) return ctxBlockHtml(b, { prevKeys, open, windowLine })
+  const k = (b.volatile ? 1 : 0) | (prevKeys && !b.volatile && !prevKeys.has(b.key) ? 2 : 0) | (windowLine ? 4 : 0)
+  let m = ROWS.get(d)
+  if (!m) ROWS.set(d, m = new Map())
+  let h = m.get(k)
+  if (h == null) m.set(k, h = ctxBlockHtml(b, { prevKeys, open, windowLine }))
+  return h
+}
+
+// the rows of an open turn go in groups (2.3 §读与画「长对话的窗口」 rule 4): a boundary before a row whose key hashes to 0 mod
+// GROUP_MOD, at most GROUP_CAP rows, so an insert or a delete moves one group. A group not drawn is a placeholder sized by its
+// row count (it only ever holds closed rows), aria-busy, no text, no control.
+const GROUP_MOD = 50, GROUP_CAP = 200, ROW_BUDGET = 200
+const hash = (str) => { let h = 2166136261; for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619); return h >>> 0 }
+const GROUP_HTML = `<div class="cwgroup" data-kids>${KIDS}</div>`
+const holderHtml = (n) => `<div class="cwgroup" aria-busy="true" style="--n:${n}"></div>`
+
+/** The window as keyed units (pure but for the desk's scratch: s.curFlat / s.curKeys / s.curReply / s.curRemoved / s.drawn,
+ * and s.later: each placeholder's rows, built, by group key — what fillGroup draws in its place).
+ * `all`: every group drawn (the full draw). Otherwise the groups drawn are s.drawn's, those holding an open row or the change
+ * line, and — given `focus` (a list position) — the focus's group and its nearest neighbours up to ROW_BUDGET rows. */
+export function ctxWindowUnits(s, { all = false, focus = null } = {}) {
   const call = s.anchor && s.anchor.calls[s.playhead]
   if (!call) return [{ key: 'busy', html: emptyFrameHtml() }] // ⑧ the session has not been drawn yet
   const fid = callFidelityHtml(call) // ① — its fields are on the skeleton row, so it shows whether the lane is held or not
@@ -145,11 +175,13 @@ export function ctxWindowUnits(s) {
   s.curRemoved = (line && diff && diff.removedBlocks.length) ? diff.removedBlocks : []
   const removed = s.curRemoved.length ? removedSectionHtml(s.curRemoved, contentRefKOf(s), s.navOpen.has('cwremoved')) : ''
   const mark = (i) => (line && i === brk.idx ? [{ key: 'chline', html: line }, ...(removed ? [{ key: 'removed', html: removed }] : [])] : [])
-  const row = (b, i) => ({ key: keys[i], set: { 'data-bi': i }, html: ctxBlockHtml(b, { prevKeys: diff ? diff.refKeys : null, open: s.openBlocks.has(keys[i]), windowLine: !!winLine }) })
+  const prevKeys = diff ? diff.refKeys : null
+  const row = (b, i) => ({ key: keys[i], set: { 'data-bi': i }, html: rowHtml(s, b, prevKeys, s.openBlocks.has(keys[i]), !!winLine) })
   // ③ the sections, in list order: a header where the section changes, message blocks grouped into turns (a run of messages
   // is grouped on its own, so a block of another section between messages is drawn in its place, never dropped)
-  const turns = turnsOf(flat), lastTi = turns.length - 1, tk = new Map(), hk = new Map()
-  const head = (sec) => { const n = hk.get(sec) || 0; hk.set(sec, n + 1); out.push({ key: `sec:${sec}#${n}`, html: sectionHeaderHtml(sec, flat.filter((x) => x.sec === sec), { windowLine: !!winLine }) }) }
+  const T = turnsOf(flat), tk = new Map(), hk = new Map(), bySec = new Map(), groups = []
+  for (const b of flat) { if (!bySec.has(b.sec)) bySec.set(b.sec, []); bySec.get(b.sec).push(b) }
+  const head = (sec) => { const n = hk.get(sec) || 0; hk.set(sec, n + 1); out.push({ key: `sec:${sec}#${n}`, html: sectionHeaderHtml(sec, bySec.get(sec), { windowLine: !!winLine }) }) }
   let lastSec = null
   flat.forEach((b, i) => {
     if (b.sec !== lastSec) {
@@ -158,20 +190,48 @@ export function ctxWindowUnits(s) {
       lastSec = b.sec
     }
     if (b.sec !== 'messages') { out.push(...mark(i), row(b, i)); return }
-    const ti = turns.findIndex((t) => t.items[0] === i)
-    if (ti < 0) return // a later item of a turn already drawn
-    const t = turns[ti], open = turnIsOpen(s.turnFold, flat, t, ti, lastTi, s.turnLanded), anchor = turnAnchorKey(flat, t)
+    const ti = T.at[i], t = T.list[ti]
+    if (t.items[0] !== i) return // a later item of a turn already drawn
+    const open = turnOpen(s, flat, T, ti), anchor = turnAnchorKey(flat, t)
     const n = tk.get(anchor) || 0; tk.set(anchor, n + 1)
+    const kids = []
+    if (open) { // a folded turn draws its head only (rule 2); an open one its rows, in groups
+      let g = null
+      for (const j of t.items) {
+        if (!g || g.rows.length >= GROUP_CAP || hash(keys[j]) % GROUP_MOD === 0) { g = { key: 'g:' + keys[j], at: j, rows: [], must: false }; groups.push(g); kids.push(g) }
+        const m = mark(j)
+        g.rows.push(...m, row(flat[j], j)); g.n = (g.n || 0) + 1
+        if (m.length || s.openBlocks.has(keys[j]) || (s.drawn && s.drawn.has(g.key))) g.must = true
+      }
+    }
     out.push({ key: `q:${anchor}#${n}`, set: { 'data-turn': ti },
       html: `<div class="cwturn ${open ? '' : 'collapsed'}" data-anchor="${esc(anchor)}">` +
         `<div class="cwturnhd"><span class="cwturnq" title="${esc(t.label)}">${t.query ? '<span class="qlabel">prompt</span>' : ''}${esc(t.label)}${t.acts ? `<span class="qk">${esc(t.acts)}</span>` : ''}</span><span class="cwturnn">${t.items.length} blocks</span></div>` +
         `<div class="cwturnbody" data-kids>${KIDS}</div></div>`,
-      kids: t.items.flatMap((j) => [...mark(j), row(flat[j], j)]) })
+      kids })
   })
+  drawPlan(groups, all, focus)
+  s.drawn = new Set(groups.filter((g) => g.drawn).map((g) => g.key))
+  s.later = new Map(groups.filter((g) => !g.drawn).map((g) => [g.key, g.rows]))
+  for (const g of groups) { g.html = g.drawn ? GROUP_HTML : holderHtml(g.n); if (g.drawn) g.kids = g.rows; delete g.rows; delete g.at; delete g.n; delete g.must; delete g.drawn }
   const reply = replyUnit(s, st, call) // ⑨
   return reply ? [...out, reply] : out
 }
-export const ctxWindowHtml = (s) => serialize(ctxWindowUnits(s))
+// which groups are drawn: every one under `all`; else the ones that must be, the focus's group, then its nearest neighbours
+// (alternating after / before) until ROW_BUDGET rows are drawn
+function drawPlan(groups, all, focus) {
+  for (const g of groups) g.drawn = all || g.must
+  if (all || focus == null || !groups.length) return
+  let f = groups.findIndex((g, i) => i === groups.length - 1 || groups[i + 1].at > focus)
+  let rows = 0, lo = f, hi = f + 1
+  groups[f].drawn = true; rows += groups[f].n
+  while (rows < ROW_BUDGET && (lo > 0 || hi < groups.length)) {
+    if (hi < groups.length) { groups[hi].drawn = true; rows += groups[hi++].n }
+    if (rows < ROW_BUDGET && lo > 0) { groups[--lo].drawn = true; rows += groups[lo].n }
+  }
+}
+/** The full draw: every open turn's rows (what the window holds once a fill has run to the end). */
+export const ctxWindowHtml = (s) => serialize(ctxWindowUnits(s, { all: true }))
 
 // ── ⑨ this step's reply (2.3 §这一步的回复): one head (the word · the ONE fidelity mark · the stop reason), then one block row
 // per reply definition through the request's row component, its body a cell. A reply row is not a request block: no data-bi /
@@ -217,26 +277,83 @@ function domApply(box, ops) {
     if (op === 'del') { n.remove(); at.delete(key) }
     else if (op === 'put' || op === 'move') { const x = op === 'put' ? build(a) : n, p = at.get(op === 'put' ? b : a); box.insertBefore(x, p ? p.nextSibling : box.firstChild); at.set(key, x) }
     else if (op === 'set') for (const [k, v] of Object.entries(a || {})) n.setAttribute(k, String(v))
-    else if (op === 'wrap') { const x = build({ key, html: a, kids: [] }); slotOf(x).append(...slotOf(n).children); for (const k of n.getAttributeNames()) if (k.startsWith('data-') && !x.hasAttribute(k)) x.setAttribute(k, n.getAttribute(k)); n.replaceWith(x); at.set(key, x) }
+    else if (op === 'wrap') morph(n, build({ key, html: a, kids: [] }))
     else if (op === 'kids') domApply(slotOf(n), a)
   }
+}
+// a container takes its new html in place (2.3 §读与画「长对话的窗口」 rule 3): its attributes become x's (the placed `set` data-*
+// attributes stay), every child outside the path to its slot is replaced, and the slot's children are never moved
+function morph(n, x) {
+  for (const k of n.getAttributeNames()) if (!x.hasAttribute(k) && !k.startsWith('data-')) n.removeAttribute(k)
+  for (const k of x.getAttributeNames()) if (n.getAttribute(k) !== x.getAttribute(k)) n.setAttribute(k, x.getAttribute(k))
+  if (n.hasAttribute('data-kids')) return
+  const ns = [...n.children], xs = [...x.children]
+  xs.forEach((c, i) => { const m = ns[i]; if (!m) n.append(c); else if (m.matches('[data-kids]') || m.querySelector('[data-kids]')) morph(m, c); else m.replaceWith(c) })
+  for (const m of ns.slice(xs.length)) m.remove()
 }
 // tag a freshly written window's nodes with their unit keys (the first paint is one innerHTML)
 function tag(box, units) { [...box.children].forEach((c, i) => { const u = units[i]; if (!u) return; c.__k = u.key; if (u.kids) tag(slotOf(c), u.kids) }) }
 
-// ── repaint: patch to the units, fill open bodies, land once per step ────────────────────────────────────────────────
+// ── repaint: patch to the units, fill open bodies, land once per step, then fill the placeholders ──────────────────────
 // A step whose lane is not held keeps the rows already drawn unless `busy` (the desk's 150 ms decision, 2.3 §车道未到手).
-export function renderContextWindow(el, s, { busy = false } = {}) {
-  const units = ctxWindowUnits(s)
+// `focus`: a list position whose group is drawn now (a jump); otherwise the landing target, else the row at the window's top.
+export function renderContextWindow(el, s, { busy = false, focus = null } = {}) {
+  el.__gen = (el.__gen || 0) + 1
+  const t = landingDue(s)
+  const units = ctxWindowUnits(s, { focus: focus ?? (t ? t.fi : null) ?? topRow(el, s) ?? 0 })
   if (!busy && el.__units && units.some((u) => u.key === 'frames')) return
   paint(el, units)
   hydrate(el, s)
-  land(el, s)
+  if (t) land(el, s, t)
+  fillLater(el, s)
 }
-function paint(el, units) {
+const isGroup = (u) => u.html.startsWith('<div class="cwgroup"')
+const holders = (units) => units.some((u) => (isGroup(u) ? !u.kids : !!u.kids && holders(u.kids)))
+const ridNow = (s) => { const c = s.anchor && s.anchor.calls[s.playhead]; return c ? c.rid : null }
+const yieldNow = () => (globalThis.scheduler && typeof globalThis.scheduler.yield === 'function' ? globalThis.scheduler.yield()
+  : typeof MessageChannel === 'function' ? new Promise((r) => { const c = new MessageChannel(); c.port1.onmessage = () => { c.port1.close(); r() }; c.port2.postMessage(0) })
+    : new Promise((r) => setTimeout(r, 0)))
+// the groups not drawn yet, one per task, next to the ones drawn first; a newer repaint (el.__gen) ends this run
+function fillLater(el, s) {
+  if (typeof document === 'undefined' || !holders(el.__units || [])) return
+  const gen = el.__gen, rid = ridNow(s)
+  yieldNow().then(() => {
+    if (el.__gen !== gen || !el.isConnected || ridNow(s) !== rid) return
+    const next = nextHolder(el.__units)
+    if (!next) return
+    const [units, ops] = fillGroup(el.__units, s, next)
+    paint(el, units, ops)
+    fillLater(el, s)
+  })
+}
+/** One placeholder drawn (2.3 §读与画「长对话的窗口」 rule 4: one group per task): the units with group `key` holding the
+ * rows s.later set aside for it, and the ops that make that change alone — the whole step is not rebuilt. */
+export function fillGroup(units, s, key) {
+  const g = { key, html: GROUP_HTML, kids: s.later.get(key) }
+  s.later.delete(key); s.drawn.add(key)
+  const swap = (us) => {
+    for (let i = 0; i < us.length; i++) {
+      const u = us[i]
+      if (u.key === key) { const arr = us.slice(); arr[i] = g; return [arr, [['del', key], ['put', key, g, i ? us[i - 1].key : null]]] }
+      if (u.kids && !isGroup(u)) { const r = swap(u.kids); if (r) { const arr = us.slice(); arr[i] = { ...u, kids: r[0] }; return [arr, [['kids', u.key, r[1]]]] } }
+    }
+    return null
+  }
+  return swap(units)
+}
+// the placeholder next to a drawn group (after it, else before it), else the first one
+function nextHolder(units) {
+  const gs = []
+  const walk = (us) => { for (const u of us) { if (isGroup(u)) gs.push(u); else if (u.kids) walk(u.kids) } }
+  walk(units)
+  const i = gs.findIndex((g, j) => !g.kids && ((gs[j - 1] && gs[j - 1].kids) || (gs[j + 1] && gs[j + 1].kids)))
+  const g = gs[i >= 0 ? i : gs.findIndex((x) => !x.kids)]
+  return g ? g.key : null
+}
+function paint(el, units, ops = null) {
   // patch only a window this module drew last (anyone who wrote el.innerHTML since gets a fresh paint)
   const live = typeof document !== 'undefined' && el.children && el.__units && el.children.length === el.__units.length && el.__units.every((u, i) => el.children[i].__k === u.key)
-  if (live) domApply(el, patchUnits(el.__units, units))
+  if (live) domApply(el, ops || patchUnits(el.__units, units))
   else { el.innerHTML = serialize(units); if (el.children && typeof document !== 'undefined') tag(el, units) }
   el.__units = units
 }
@@ -271,20 +388,37 @@ export function landingTarget(s) {
   }
   return null
 }
-// the landing runs ONCE per rid, the first time its lane is held; later repaints of the same step never scroll again. A target
-// inside a folded turn opens that turn for this display only (s.turnLanded) — the D12 memory records the reader's own folds.
-function land(el, s) {
+// the landing runs ONCE per rid, the first time its lane is held; later repaints of the same step never scroll again. It is
+// decided before the units are built, so the target's group is drawn in the same paint. A target inside a folded turn opens
+// that turn for this display only (s.turnLanded) — the D12 memory records the reader's own folds.
+function landingDue(s) {
   const call = s.anchor && s.anchor.calls[s.playhead]
-  if (!call || s.landedFor === call.rid || !call.rec || call.unparsed || !s.desk || !stepOf(s.desk, call.rid).held) return
-  s.landedFor = call.rid
-  const t = landingTarget(s)
-  if (t && !t.reply) {
-    const flat = s.curFlat, fi = t.anchor ? t.idx : t.bi
-    const turns = turnsOf(flat), tu = turns.find((x) => x.items.includes(fi))
-    if (tu && !turnIsOpen(s.turnFold, flat, tu, turns.indexOf(tu), turns.length - 1, s.turnLanded)) { s.turnLanded.add(turnAnchorKey(flat, tu)); paint(el, ctxWindowUnits(s)) }
-  }
+  if (!call || s.landedFor === call.rid || !call.rec || call.unparsed || !s.desk) return null
+  const st = stepOf(s.desk, call.rid)
+  if (!st.held) return null
+  const t = landingTarget(s), flat = st.flat
+  if (!t) return { t, fi: null }
+  if (t.reply) return { t, fi: flat.length - 1 }
+  const fi = t.anchor ? t.idx : t.bi, T = turnsOf(flat), ti = T.at[fi] ?? -1
+  if (ti >= 0 && !turnOpen(s, flat, T, ti)) s.turnLanded.add(turnAnchorKey(flat, T.list[ti]))
+  return { t, fi }
+}
+function land(el, s, { t }) {
+  s.landedFor = s.anchor.calls[s.playhead].rid
   const node = !t || !el.querySelector ? null : t.reply ? el.querySelector('.cwreply') : t.anchor ? el.querySelector('#cachebrk') : el.querySelector(`.cblk[data-bi="${t.bi}"]`)
   if (node && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'start' })
+}
+// the list position of the row at the window's top (a drawn row, or the first row of a placeholder), from the window drawn now
+function topRow(el, s) {
+  if (typeof document === 'undefined' || !el.getBoundingClientRect || !s.curKeys) return null
+  const r = el.getBoundingClientRect(), y = Math.max(r.top, 0) + 4
+  if (y > r.bottom) return null
+  const hit = document.elementFromPoint(r.left + r.width / 2, y)
+  const blk = hit && hit.closest('.cblk[data-bi], .cwgroup[aria-busy]')
+  if (!blk) return null
+  if (blk.dataset.bi != null) return +blk.dataset.bi
+  const i = s.curKeys.indexOf(String(blk.__k).slice(2))
+  return i >= 0 ? i : null
 }
 
 // ── interaction ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -321,21 +455,20 @@ function toggleRemovedBlock(s, blk) {
 // a block inside a collapsed turn: open the turn first (returns whether the window had to be repainted). A jump is the
 // reader's own click (an outline row, a resource card — 2.5 §跳转联动), so the open goes into the D12 fold memory.
 export function openTurnFor(el, s, fi) {
-  const turns = turnsOf(s.curFlat), lastTi = turns.length - 1
-  const ti = turns.findIndex((t) => t.items.includes(fi))
-  if (ti >= 0 && !turnIsOpen(s.turnFold, s.curFlat, turns[ti], ti, lastTi, s.turnLanded)) {
-    setFold(s.turnFold, turnAnchorKey(s.curFlat, turns[ti]), true); s.persistFold(); renderContextWindow(el, s); return true
-  }
-  return false
+  const T = turnsOf(s.curFlat), ti = T.at[fi] ?? -1
+  if (ti < 0 || turnOpen(s, s.curFlat, T, ti)) return false
+  setFold(s.turnFold, turnAnchorKey(s.curFlat, T.list[ti]), true); s.persistFold(); renderContextWindow(el, s, { focus: fi }); return true
 }
-// a node inside a folded turn is display:none: open its turn first (the reader's own click, written to the D12 memory)
-export function openTurnOfNode(el, s, node) {
-  const turn = node && node.closest ? node.closest('.cwturn.collapsed') : null
-  if (!turn) return false
-  setFold(s.turnFold, turn.dataset.anchor, true); s.persistFold(); renderContextWindow(el, s); return true
+// the row at list position fi drawn and reachable (2.3 §读与画「长对话的窗口」 rule 2): its turn opened (the reader's jump, into
+// the D12 memory), its group drawn; → its .cblk, or null when the step has no such row
+export function ensureRow(el, s, fi) {
+  if (!s.curFlat || !s.curFlat[fi]) return null
+  const sel = `.cblk[data-bi="${fi}"]`
+  if (!openTurnFor(el, s, fi) && !el.querySelector(sel)) renderContextWindow(el, s, { focus: fi })
+  return el.querySelector(sel)
 }
 function foldAll(el, s, open) {
-  for (const t of turnsOf(s.curFlat)) setFold(s.turnFold, turnAnchorKey(s.curFlat, t), !!open)
+  for (const t of turnsOf(s.curFlat).list) setFold(s.turnFold, turnAnchorKey(s.curFlat, t), !!open)
   s.persistFold(); renderContextWindow(el, s)
 }
 

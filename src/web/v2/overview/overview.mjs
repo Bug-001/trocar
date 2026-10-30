@@ -3,9 +3,9 @@
 // the last two for 开始使用). Every number names its source: stats come ONLY from the C.5 `overview` document (D24), the
 // recent list is live from `sessions`, and the two are allowed to disagree by a few sessions — the stats card says 截至,
 // it never back-fills from the live list. The disk footer is `classes.disk.trocar_bytes`.
-// Polls (1.5 §轮询): `status` every CAPH_MS and `sessions` every 3 s while visible; classes · pricing · overview(window) ·
-// segments · traffic(24h) on open, on window change and every 30 s. Hidden stops everything; coming back reads at
-// once. All reads are GET; the page holds no button but the window links, the 技术细节 disclosures and 重试 (invariant 1) —
+// Polls (1.5 §轮询, core/poll.mjs): one poller per query name at 4.4 §live-poll's period — `status`, `sessions`, and classes ·
+// pricing · overview(window) · segments · traffic(24h) at the 「其余」 period, the stats also on a window change; each backs off
+// on its own after a failure (K-29). Hidden stops everything; coming back reads at once. All reads are GET; the page holds no button but the window links, the 技术细节 disclosures and 重试 (invariant 1) —
 // except on first use, where each agent row carries the capture page's one control (core/harness-switch.mjs: switch or Set up,
 // written only on a click through planConfirm); GET /control/status is read when first use is first seen and after a 405.
 // Contract: mount(el, ctx) → {update(route), unmount()}; ctx = {api, store, router, toast}.
@@ -15,9 +15,10 @@ import { esc, fmtWhen, relTime, bytes, usd } from '../core/fmt.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
 import { harnessKey, harnessName, harnessIcon, UNIDENTIFIED } from '../core/chips.mjs'
-import { captureVerdict, capHealthPatch, agentVerdicts, failureSentence, AGENT_TIER, CAPH_MS } from '../core/capture-verdict.mjs'
+import { captureVerdict, capHealthPatch, agentVerdicts, failureSentence, AGENT_TIER } from '../core/capture-verdict.mjs'
 import { priceMatch, costOf, hitRatio, priceTableOf } from '../core/metrics.mjs'
 import { loadSessions } from '../library/logic.mjs'
+import { startPoll, INTERVAL } from '../core/poll.mjs'
 import { unpricedModels } from '../settings/prices.mjs'
 import { failureBrief, failureWord } from '../../../cli/words.mjs'
 import { infoButton, techDetailsHtml, confirmDialog, readFailure } from '../core/ui.mjs'
@@ -26,20 +27,10 @@ import * as W from '../labels/overview.mjs'
 import { WINDOW_LABEL, UNTITLED, READING } from '../labels/common.mjs'
 
 const DAY = 24 * 3600e3
-export const POLL = Object.freeze({ health: CAPH_MS, sessions: 3000, slow: 30000 })
 const NO_ANSWER = Object.freeze({ status: null, error: null }) // a read that handed back nothing: no cause class known
 
 // the route's window param, or 24h when it is not one of the three (1.7 §页头)
 export const parseWindow = (p) => (p === '7d' || p === 'all') ? p : '24h'
-
-// ── the poll engine ──────────────────────────────────────────────────────────────────────────────────────────────────
-// One poll's decision at a heartbeat — pure, so the schedule is testable with a fake clock (caphealth-poll.test.mjs).
-// `due` is the one-shot nudge (page became visible, window changed, retry); lastAt null means never read.
-export function pollAction({ now, lastAt = null, inFlight = false, visible = true, period, due = false }) {
-  if (!visible) return 'idle'
-  if (inFlight) return 'wait'
-  return (due || lastAt == null || now - lastAt >= period) ? 'read' : 'wait'
-}
 
 // ── shared small helpers ─────────────────────────────────────────────────────────────────────────────────────────────
 const list = (x) => Array.isArray(x) ? x : []
@@ -300,7 +291,7 @@ export function statsCardHtml(s, now) {
   const disk = diskBytes(s.classes)
   const head = `<section class="ovcard stats${other ? ' reading' : ''}"${other ? ' aria-busy="true"' : ''} aria-label="${esc(W.CARD.stats)}"><h2 class="ovh">${esc(W.CARD.stats)}</h2>` +
     (other ? `<p class="ovsub">${esc(READING)}</p>` : '') +
-    `<p class="ovsub">${esc(W.AS_OF(D.as_of ? fmtWhen(parseTs(D.as_of), now) : '—', POLL.slow / 1000))} · ${esc(W.SCOPE_LINE)}</p>` +
+    `<p class="ovsub">${esc(W.AS_OF(D.as_of ? fmtWhen(parseTs(D.as_of), now) : '—', INTERVAL.other / 1000))} · ${esc(W.SCOPE_LINE)}</p>` +
     (missing ? `<p class="ovsub warn">${esc(missing)}</p>` : '') + cov +
     (priceFail ? priceFailHtml(priceFail) : '')
   const foot = (disk != null ? `<p class="ovsub">${esc(W.DISK_USE(bytes(disk)))} · <a href="#/settings/storage">${esc(W.SEE_STORAGE)}</a></p>` : '') + `</section>`
@@ -440,21 +431,17 @@ export function mount(el, ctx) {
   const s = { w: parseWindow(router.current().params.window), readAt: null, caph: { data: null, okAt: null, err: null, ok: null }, control: null, ui: new Map() }
   let ctlAsked = false
   for (const k of SLOTS) s[k] = { data: null, ok: null, err: null }
-  const polls = {
-    health: { lastAt: null, inFlight: false, due: true, period: POLL.health },
-    sessions: { lastAt: null, inFlight: false, due: true, period: POLL.sessions },
-    slow: { lastAt: null, inFlight: false, due: true, period: POLL.slow },
-  }
 
   el.innerHTML = SKELETON
   const zone = (id) => el.querySelector('#' + id)
   const zones = { head: zone('ovhead'), cap: zone('ovcap'), items: zone('ovitems'), agents: zone('ovagents'), stats: zone('ovstats'), recent: zone('ovrecent') }
   let sigs = {}
 
-  // fold one read into its slot: a failure keeps the last good data and marks the source failed this round
+  // fold one read into its slot: a failure keeps the last good data and marks the source failed this round. → {ok} for the poller
   const fold = (slot, r) => {
     if (r && r.ok) { s[slot] = { data: r.data, ok: true, err: null }; s.readAt = Date.now() }
     else s[slot] = { data: s[slot].data, ok: false, err: r || NO_ANSWER }
+    return { ok: !!(r && r.ok) }
   }
 
   // a repaint never takes the reader's place (1.7 §读取与刷新): a zone holding a text selection waits for the next render (its
@@ -485,9 +472,10 @@ export function mount(el, ctx) {
     const p = capHealthPatch(await api.get('status'), Date.now())
     if (p.capHOkAt != null) { s.caph = { data: p.capH, okAt: p.capHOkAt, err: null, ok: true }; s.readAt = Date.now() }
     else s.caph = { data: s.caph.data, okAt: s.caph.okAt, err: p.capHErr || 'reason unknown', ok: false }
+    return { ok: s.caph.ok }
   }
   const readControl = () => api.controlStatus().then((r) => { s.control = r }, (e) => { s.control = { ok: false, error: String(e) } }).finally(render)
-  const readSessions = async () => { fold('sessions', await loadSessions(api)) }
+  const readSessions = async () => fold('sessions', await loadSessions(api))
   // the five slow reads share two sockets (1.7 §读取与刷新: the browser's six per origin keep room for status and sessions), the
   // window's own stats read included; an aborted read gives its socket back at once, as the browser does
   let free = 2
@@ -517,42 +505,30 @@ export function mount(el, ctx) {
     return p
   }
   // the slow group's stats step lasts until the latest stats read ends (a window change mid-way replaces it in the same slot)
-  const statsSettled = async () => { let p = readStats(); for (;;) { await p.catch(() => {}); if (statsP === p) return; p = statsP } }
-  const SLOW = [
-    () => slowGet('classes').then((r) => fold('classes', r)),
-    () => slowGet('pricing').then((r) => fold('pricing', r)),
-    statsSettled,
-    () => slowGet('segments').then((r) => fold('segments', r)),
-    () => slowGet('traffic', { since: '24h' }).then((r) => fold('traffic', r)),
-  ]
-  const readSlow = () => Promise.all(SLOW.map((job) => Promise.resolve().then(job).catch(() => {}).then(render)))
-  const readers = { health: readHealth, sessions: readSessions, slow: readSlow }
-
-  // one heartbeat: ask each poll what to do; a read that is still out never starts a second one
-  const beat = () => {
-    if (dead) return
-    const now = Date.now(), visible = typeof document === 'undefined' || !document.hidden
-    for (const [name, p] of Object.entries(polls)) {
-      if (pollAction({ now, ...p, visible }) !== 'read') continue
-      p.inFlight = true; p.due = false
-      Promise.resolve(readers[name]()).catch(() => {}).finally(() => { p.inFlight = false; p.lastAt = Date.now(); render() })
-    }
+  const statsSettled = async () => { let p = readStats(); for (;;) { await p.catch(() => {}); if (statsP === p) return { ok: s.stats.ok !== false }; p = statsP } }
+  // one poller per query name (core/poll.mjs): its own period, its own back-off; every answer repaints
+  const SLOW = {
+    classes: () => slowGet('classes').then((r) => fold('classes', r)),
+    pricing: () => slowGet('pricing').then((r) => fold('pricing', r)),
+    overview: statsSettled,
+    segments: () => slowGet('segments').then((r) => fold('segments', r)),
+    traffic: () => slowGet('traffic', { since: '24h' }).then((r) => fold('traffic', r)),
   }
-  const timer = setInterval(beat, 250)
-  const onVis = () => { if (!document.hidden) for (const p of Object.values(polls)) p.due = true }
-  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis)
+  const jobs = { status: [readHealth, INTERVAL.status], sessions: [readSessions, INTERVAL.sessions], ...Object.fromEntries(Object.entries(SLOW).map(([k, f]) => [k, [f, INTERVAL.other]])) }
+  const polls = Object.fromEntries(Object.entries(jobs).map(([name, [read, base]]) =>
+    [name, startPoll({ base, run: () => Promise.resolve().then(read).finally(render) })]))
+  // a 重试 names its group: `health`, `sessions`, or `slow` (every 「其余」 read)
+  const GROUP = { health: ['status'], sessions: ['sessions'], slow: Object.keys(SLOW) }
   const onClick = (e) => {
     const b = e.target && e.target.closest ? e.target.closest('[data-act="retry"]') : null
     if (!b) return
-    const g = b.dataset.g
-    if (polls[g]) { polls[g].due = true; beat() }
+    for (const name of GROUP[b.dataset.g] || []) polls[name].poll()
   }
   el.addEventListener('click', onClick)
   const offCtl = wireHarnessControls(el, {
     api, state: s.ui, ask: (opts) => confirmDialog(opts, el.ownerDocument),
-    onDone: (out) => { if (out && out.status === 405) readControl(); polls.health.due = true; render(); beat() },
+    onDone: (out) => { if (out && out.status === 405) readControl(); render(); polls.status.poll() },
   })
-  beat()
   render() // drawn at once: every card says 读取中 until its first answer (1.5 覆盖)
 
   return {
@@ -564,8 +540,7 @@ export function mount(el, ctx) {
     },
     unmount() {
       dead = true
-      clearInterval(timer)
-      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVis)
+      for (const p of Object.values(polls)) p.stop()
       el.removeEventListener('click', onClick)
       offCtl()
       el.replaceChildren()

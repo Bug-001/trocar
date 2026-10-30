@@ -26,7 +26,8 @@ import { plistFilePath } from '../../src/off/darwin.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runUpdateCli } from '../../src/cli/update.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
-import { agentOf, flowsOf, freePort, through, win32Io } from '../helpers/model-io.mjs'
+import { agentOf, flowsOf, freePort, reqOf, through, win32Io } from '../helpers/model-io.mjs'
+import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 
 const CHILD = fileURLToPath(new URL('../collector/fixtures/model-daemon-child.mjs', import.meta.url))
@@ -52,15 +53,20 @@ function checkout() {
   return root
 }
 
-for (const platform of ['darwin', 'win32']) {
-test(`${platform}: update replaces a daemon holding a decrypted WebSocket — the old one cuts it, stops itself and exits 0 unkilled, the new start reads a clean stop`, { timeout: 90_000 }, async () => {
+const HEAD = 'HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 8\r\n\r\npong' // the reply's first half; the second 'pong' ends it
+const TITLE = {
+  ws: 'a decrypted WebSocket mid-turn — the old one cuts it (cut-by-stop, naming update), stops itself and exits 0 unkilled, the new start reads a clean stop',
+  http: 'a decrypted response that ends 1 s after the exit request — the drain wait sees it end (status relayed.closing 1, then the daemon goes) within 5 s, and nothing is cut',
+}
+for (const platform of ['darwin', 'win32']) for (const kind of ['ws', 'http']) {
+test(`${platform}: update replaces a daemon holding ${TITLE[kind]}`, { timeout: 90_000 }, async () => {
   const w = await modelWorld({ os: platform, commands: ['codex'] })
   fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')
   const upCa = createCa({ commonName: 'e2e upstream CA' }), upIssuer = createLeafIssuer(loadCa(upCa))
   const held = [], turns = [] // the upstream side of each WebSocket, and what the agent sent over it after the upgrade
   const mock = tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)) }, (s) => {
     s.on('error', () => {}); let b = ''
-    s.on('data', (d) => { if (held.includes(s)) { turns.push(d); return } b += d.toString('latin1'); if (b.includes('\r\n\r\n')) { held.push(s); s.write(SWITCH) } })
+    s.on('data', (d) => { if (held.includes(s)) { turns.push(d); return } b += d.toString('latin1'); if (b.includes('\r\n\r\n')) { held.push(s); s.write(kind === 'ws' ? SWITCH : HEAD) } })
   })
   await new Promise((r) => mock.listen(0, '127.0.0.1', r))
   const target = `localhost:${mock.address().port}`
@@ -79,7 +85,8 @@ test(`${platform}: update replaces a daemon holding a decrypted WebSocket — th
       env: watchEnv({ ...w.env, TMPDIR: os.tmpdir(), TROCAR_TEST_SANDBOX: '1', TROCAR_E2E_OS: platform, TROCAR_E2E_AGENT: agentFile, TROCAR_E2E_FX: fx }) })
     let out = '', err = ''
     child.stdout.on('data', (b) => { out += b }); child.stderr.on('data', (b) => { err += b })
-    const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })))
+    let goneAt = null
+    const exited = new Promise((resolve) => child.on('exit', (code, signal) => { goneAt = Date.now(); resolve({ code, signal }) }))
     await within(Promise.race([until(() => /trocar collector:/.test(out), 30_000, 'the readiness line'), exited.then((r) => { throw new Error(`the old daemon exited before it was ready: ${JSON.stringify(r)} ${err}`) })]), 30_000, `the readiness line (err=${err})`)
     const rootPem = fs.readFileSync(path.join(w.dir, 'ca', 'trocar-ca.pem'), 'utf8')
     fs.writeFileSync(bundle, rootPem + upCa.certPem)
@@ -90,10 +97,9 @@ test(`${platform}: update replaces a daemon holding a decrypted WebSocket — th
     assert.equal(await runOnCli(['codex', '--yes'], { io: quiet, env: w.env, home: w.home, platform, deps: { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: platform, harnesses: w.harnesses, arch: { unit: { userUnit: () => up } } }, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) } }), 0)
     const u = new URL(/^HTTPS_PROXY=(\S+)$/m.exec(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'))[1].replace(/^["']|["']$/g, ''))
     a.ports.add(await freePort()); publish()
-    const ws = await through({ door: Number(u.port), auth: Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64'), target, localPort: [...a.ports].at(-1), ca: [rootPem], req: upgradeOf(target), open })
-    assert.match(ws.reply, /^HTTP\/1\.1 101 /)
-    open.at(-1).write(masked(TURN))
-    await until(() => turns.length > 0, 5000, 'the turn reached the upstream')
+    const c = await through({ door: Number(u.port), auth: Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64'), target, localPort: [...a.ports].at(-1), ca: [rootPem], req: kind === 'ws' ? upgradeOf(target) : reqOf(target), open })
+    assert.match(c.reply, kind === 'ws' ? /^HTTP\/1\.1 101 / : /^HTTP\/1\.1 200 /)
+    if (kind === 'ws') { open.at(-1).write(masked(TURN)); await until(() => turns.length > 0, 5000, 'the turn reached the upstream') }
 
     // the update: the old daemon is under a loaded LaunchAgent (the plist install wrote); launchd and the login entry stand in
     fs.mkdirSync(path.dirname(plistFilePath(w.home)), { recursive: true }); fs.writeFileSync(plistFilePath(w.home), '<plist/>')
@@ -109,24 +115,37 @@ test(`${platform}: update replaces a daemon holding a decrypted WebSocket — th
       return win ? win.io.exec(file, args, opts) : { status: 1, stdout: '', stderr: `not faked: ${file}` }
     }
     const deps = {
-      root: checkout(), exec, getuid: () => 501, unit: box.unit, drainMs: 1000,
+      root: checkout(), exec, getuid: () => 501, unit: box.unit, drainMs: kind === 'ws' ? 1000 : 20_000, // http: a wait that cannot see the end would run 20 s, then cut
       identity: (pid) => ((pid === child.pid && childUp()) || pid === process.pid ? { start_time: '111', boot_id: 'boot-1' } : null), // what the daemons' lock stub wrote
       kill: (pid, signal) => { signalled.push(signal); if (pid !== child.pid) throw Object.assign(new Error('not the old daemon'), { code: 'ESRCH' }); process.kill(pid, signal) },
     }
     const io = fakeIo()
     const env = { ...w.env, TMPDIR: os.tmpdir(), PATH: `${w.env.PATH}${path.delimiter}${process.env.PATH}` }
-    const exit = await within(runUpdateCli(['--yes', '--json'], { io, home: w.home, platform, env, deps }), 60_000, 'trocar update')
+    const updating = runUpdateCli(['--yes', '--json'], { io, home: w.home, platform, env, deps })
+    let closingAt = null
+    if (kind === 'http') { // the old daemon's status, at its real endpoint (control.json), says the response is closing; it ends 1 s later
+      const ep = controlEndpointFor({ platform, dir: w.dir, env })
+      const closing = async () => { try { return (await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).relayed.closing } catch { return null } }
+      for (const end = Date.now() + 15_000; Date.now() < end && closingAt == null;) { if ((await closing()) === 1) closingAt = Date.now(); else await new Promise((r) => setTimeout(r, 25)) }
+      assert.ok(closingAt, 'GET /status said relayed.closing 1 once the update asked the old daemon to exit')
+      setTimeout(() => held.at(-1).write('pong'), 1000)
+    }
+    const exit = await within(updating, 60_000, 'trocar update')
     assert.equal(exit, EXIT.ok, io.text())
     assert.equal(io.json().restarted, true, 'the daemon was replaced')
 
     const r = await within(exited, 5000, 'the old daemon exit')
+    if (kind === 'http') assert.ok(goneAt - closingAt < 5000, `the drain ended ${goneAt - closingAt} ms after the response was closing (it ends at 1000 ms)`)
     assert.deepEqual([r.code, r.signal], [0, null], `the old daemon exited 0 by itself (err=${err})`)
     assert.deepEqual([reached, signalled.filter((x) => x === 'SIGKILL')], [[], []], 'the old daemon stopped itself: no manager stop and no SIGKILL had to reach it')
     const flows = flowsOf(w.dir)
     assert.deepEqual(flows.flatMap((x) => checkRecord(x)), [], 'every flows/ line is in the closed sets')
     const at = flows.findIndex((x) => x.event === 'daemon-stop' && x.pid === child.pid)
     assert.ok(at >= 0, 'the old daemon wrote its daemon-stop')
-    assert.ok(flows.slice(0, at).some((x) => x.error && /^cut-by-/.test(x.error.type)), `the cut WebSocket's row precedes daemon-stop: ${JSON.stringify(flows.filter((x) => x.flow_id))}`)
+    assert.equal(flows[at].reason, 'update', 'daemon-stop names the command that stopped it')
+    const cuts = flows.filter((x) => x.error && /^cut-by-/.test(x.error.type))
+    if (kind === 'ws') assert.ok(flows.slice(0, at).some((x) => x.error && x.error.type === 'cut-by-stop' && /\bupdate\b/.test(x.error.message)), `the cut WebSocket's row (cut-by-stop, naming update) precedes daemon-stop: ${JSON.stringify(flows.filter((x) => x.flow_id))}`)
+    else assert.deepEqual(cuts, [], 'the response ended on its own: nothing was cut')
     assert.ok(box.daemon, 'the new daemon is up')
     assert.deepEqual(flows.filter((x) => x.code === 'unclean-stop'), [], 'the new start read a clean stop')
   } finally {

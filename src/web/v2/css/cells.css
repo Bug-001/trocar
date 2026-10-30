@@ -78,7 +78,7 @@
 .tone-quiet{color:var(--ink-2);}
 
 /* a closed row costs nothing to lay out; browser find still sees its head */
-.cblk.collapsed{content-visibility:auto;contain-intrinsic-size:auto 28px;}
+.cblk.collapsed{content-visibility:auto;contain-intrinsic-size:auto var(--cblk-ih);}
 
 @media (max-width: 480px){
   .kd-kv{grid-template-columns:minmax(0,1fr);}

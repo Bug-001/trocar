@@ -80,7 +80,7 @@ export function pacHandler({ state }) {
 }
 
 /** Is the peer at the PAC door's accept this user's process (P10)? `peer`: the facts D51 identity reads (mac: `uid`, or the socket table's
- *  `sameUser` when no single pid could be named; win: `sid`, or the helper's `sameUser`); `self`: { uid } / { sid }. Anything else — another user,
+ *  `sameUser` when no single pid could be named or its facts could not be read; win: `sid`, or the helper's `sameUser`); `self`: { uid } / { sid }. Anything else — another user,
  *  or a peer not shown to be this user's — is refused: `{ ok:false, code, detail }`. It records nothing: the caller writes the one record of the
  *  connection (the ingress for a CONNECT, servePac for a GET). */
 export function peerAllowed(peer, self) {

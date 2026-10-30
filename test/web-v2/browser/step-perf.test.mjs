@@ -3,35 +3,13 @@
 // D64⑥: acceptance numbers come from the test machines, not this one). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, stats } from './harness.mjs'
+import { probe, withBoard, stats, timed } from './harness.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
 const BYTES = 5e6
 const samples = { stepClick: [], stepKey: [] }
-
-// the timed() pattern of screens.test.mjs: armed before the input, marks the first pointerdown / keydown, polls frames until the
-// step head no longer reads `prev` and the window is drawn, lets that frame paint, then measures input → painted
-async function timed(page, prev, act) {
-  await page.evaluate(() => {
-    performance.clearMarks('in')
-    const arm = () => { performance.mark('in'); removeEventListener('pointerdown', arm, true); removeEventListener('keydown', arm, true) }
-    addEventListener('pointerdown', arm, true); addEventListener('keydown', arm, true)
-  })
-  await act()
-  return page.evaluate((a) => new Promise((resolve, reject) => {
-    const q = (s) => document.querySelector(s)
-    const holds = () => !!q('#stepbar .sb-no') && q('#stepbar .sb-no').textContent !== a && !q('#ctxwin .cwload')
-    const t0 = performance.now()
-    const tick = () => {
-      if (performance.getEntriesByName('in').length && holds()) return setTimeout(() => resolve(performance.measure('m', 'in').duration), 0)
-      if (performance.now() - t0 > 10000) return reject(new Error(`step not drawn in 10 s (was ${a})`))
-      requestAnimationFrame(tick)
-    }
-    tick()
-  }), prev)
-}
 
 const stepNo = async (page) => (await page.textContent('#stepbar .sb-no')).match(/(\d+)\s*\/\s*(\d+)/).slice(1).map(Number)
 
@@ -67,7 +45,7 @@ test('D64②: 20 step changes by click and 20 by ←/→ send no request', { ski
         const act = by === 'click'
           ? () => b.page.click(`#stepbar .sbbtn[data-step="${dir < 0 ? 'prev' : 'next'}"]`)
           : () => b.page.keyboard.press(dir < 0 ? 'ArrowLeft' : 'ArrowRight')
-        samples[kind].push(await timed(b.page, prev, act))
+        samples[kind].push(await timed(b.page, 'step', prev, act))
       }
     }
     // the desk's own 1.5 s timer re-reads the session list while it is open; that is not a step change, everything else is

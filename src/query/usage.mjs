@@ -114,7 +114,7 @@ export function takeFillProblem({ home = trocarHome(), fs = nodeFs } = {}) {
 
 async function fillOne({ home, fs, segment }) {
   await tick();
-  const rows = (await warmSegmentIndex({ home, segment, fs })).records.map((r) => ({ ...r, segment, lineNo: lineOf(r.id) }));
+  const rows = (await warmSegmentIndex({ home, segment, fs })).records.map((r) => ({ ...r.toJSON(), segment, lineNo: lineOf(r.id) }));
   const needed = isModelCall;
   const source = segmentSource(home, segment, fs);
   const file = usageFile(home, segment);

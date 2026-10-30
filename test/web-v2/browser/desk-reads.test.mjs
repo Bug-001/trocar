@@ -4,20 +4,13 @@
 // flight, and the read of a step the playhead left is aborted. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard } from './harness.mjs'
+import { probe, withBoard, serveWorld } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { QUERIES } from '../../../src/query/named/index.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
 const kindOf = (url) => (/\/api\/(block|lane)\b/.exec(new URL(url).pathname) || [])[1] || null
-
-// the board's session reads answered from world `w` (the face itself answers everything else)
-async function serveWorld(page, w) {
-  const json = (route, doc) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(doc) })
-  await page.route('**/api/session?**', (route) => { const q = new URL(route.request().url()).searchParams; json(route, q.has('since') ? w.since(q.get('since')) : w.full()) })
-  await page.route('**/api/lane?**', (route) => { const q = new URL(route.request().url()).searchParams; json(route, w.lane(q.get('lane'), { from: q.get('from') ?? undefined, to: q.get('to') ?? undefined, ledger: q.get('ledger') ?? undefined })) })
-}
 
 test('2.3 #25: scrubbing the desk reads nothing before a 100 ms rest, keeps ≤ 1 lane and ≤ 1 block in flight, aborts the left step\'s read', { skip }, async () => {
   const b = await withBoard({ bytes: 1e5, chromium: gate.chromium, setup: (page) => page.clock.install() })

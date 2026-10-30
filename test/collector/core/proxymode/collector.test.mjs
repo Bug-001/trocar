@@ -43,7 +43,7 @@ async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w 
   const records = [], ctx = { os, home: '/h', dirs: {}, join: path.posix.join, readFile: (p) => w.ctx.readFile(p), readdir: (d) => w.ctx.readdir(d), exists: (p) => w.ctx.exists(p), policy: (s) => w.ctx.policy(s) }
   w.ctx ||= ctxOf(newWorld(os))
   const c = createModelCollector({ harnesses: [desc, ...others], dir, ctx, custody, rootPem, proxyOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, record: (r) => records.push(r),
-    identify: (f) => (f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => ({ pid: w.pid, source: 'socket-table', ms: 1, ...(w.owner || {}) }), factsOf: async () => w.facts,
+    identify: (f) => (f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => ({ pid: w.pid, source: 'socket-table', ms: 1, ...(w.owner || {}) }), factsOf: async (q, o) => { if (w.facts == null && w.factsWhy && o && o.onUnread) o.onUnread(w.factsWhy); return w.facts },
     proc: { envOf: async (_, names) => (w.envCalls = (w.envCalls || 0) + 1, w.env == null ? null : (w.asked && w.asked.push(...names), Object.fromEntries(Object.entries(w.env).filter(([k]) => names.includes(k))))), cwdOf: async () => w.cwd ?? null, parentOf: async () => null }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
     readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => { if (w.manifestErr) throw w.manifestErr; return w.manifest || manifestOf(desc.name) }, procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5, ...(forget ? { forget } : {}), ...(holds ? { holds } : {}) })
   c.bindDoors({ open: async (l) => { for (const x of l) { if (taken.has(x.port)) throw Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' }); opened.push(x) } }, close: async (ids) => { opened.push(...ids.map((id) => ({ closed: id }))) } })
@@ -247,7 +247,18 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   const sharedPac = await wrote(pacReq)
   assert.match(sharedPac.res.body, /PROXY 127\.0\.0\.1:18103/, 'and it gets the door PAC')
   assert.deepEqual(sharedPac.got, [], 'the door PAC to this user\'s process: nothing to record')
-  w.owner = null
+  // a DarkWake: the table names this user's pid, but its `ps` times out (facts null) — the table's own-user proof still holds (4.11 P10, CM33)
+  Object.assign(w, { pid: 63420, owner: { sameUser: true }, facts: null, factsWhy: 'ps -p 63420 did not answer within 2000 ms' })
+  const dark = await c.lookupIngress({ peer: PEER, user: pacG, target: { address: 'api.example', port: 443 } })
+  assert.equal(dark.refuse, undefined, 'this user\'s by the table, facts unread: not refused')
+  assert.deepEqual([dark.pid, dark.decrypt, dark.skip], [63420, false, { not_captured: 'untracked', reason: 'facts-unavailable' }], 'forwarded untracked')
+  const darkPac = await wrote(pacReq)
+  assert.match(darkPac.res.body, /PROXY 127\.0\.0\.1:18103/, 'and it gets the door PAC')
+  assert.deepEqual(darkPac.got, [], 'nothing to record')
+  w.owner = null // no own-user proof (another OS's table): not shown to be this user's, and the record says why the facts were not read (D38)
+  assert.match((await c.lookupIngress({ peer: PEER, user: pacG, target: { address: 'api.example', port: 443 } })).refuse.reason, /did not answer within 2000 ms/)
+  assert.match((await wrote(pacReq)).got[0].reason, /did not answer within 2000 ms/)
+  w.factsWhy = null
   w.pid = 77
   w.facts = { uid: 501, agent: pacDesc.name, startedAt: INSTALLED + 1 }
   w.manifest = manifestOf(pacDesc.name, { liveness: { [pacDesc.name]: { on_at: iso(INSTALLED), off_at: iso(INSTALLED + 10) } } })

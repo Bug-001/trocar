@@ -89,7 +89,6 @@ export const SEE_PRICES = 'Unit prices ›'
 export const COST_WHY = Object.freeze({
   failed: 'The call failed; no cost', 'no-usage': 'No usage returned; no cost', 'no-price': 'No unit price for this model',
 })
-export const priceTableNote = (table, err) => (table ? '' : err ? `The price table could not be read: ${err}` : 'Loading the price table')
 
 // ── the compare menu (2.3 §两个对比步; the control itself is 2.2's) ────────────────────────────────────────────────────
 export const COMPARE = 'Compare'
@@ -286,6 +285,8 @@ export const noMainLane = (laneW) => `This session has no main thread; the timel
 export const ONLY_MAIN = 'This session has only the main thread'
 export const peakCtx = (v) => `${v} tok` // kf() bakes the number; the peak is the main lane's real total_input
 export const askScaleTip = (k, preview) => `Prompt ${k}` + (preview ? ` ${preview}` : '')
+// an ask tick whose held event is not there yet names only its step (a stepRef(); nothing when the step is not known)
+export const askScaleStepTip = (ref) => (ref && ref.step ? `Step ${ref.n}` : '')
 // the overlay rows' names (2.1 / 1.3): the counts are the full truth, never the drawn ticks
 export const SUBAGENT_ROW = (n) => count(n, 'sub-agent')
 export const BG_ROW = (n) => count(n, 'background call')

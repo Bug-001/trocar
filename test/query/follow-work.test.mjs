@@ -15,6 +15,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { writeSegment } from './raw-home.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { extendSession, saveIndexes, sessionState, version } from '../../src/query/named/session.mjs'
@@ -199,30 +200,24 @@ test('bytes `session --since` reads of the segment index after one new call the 
   }
 })
 
-// 3.5:45 · 4.3:37: when only the newest segment grew, the row list and the session groups add its new rows; nothing before them is
-// built again or read again. Rows built = row objects that were not in the list before; rows read = reads of a session id of a row
-// the list had before (each such row notes them).
-async function rowWork(calls) {
+// 3.5:45 · 4.3:37: when only the newest segment grew, the row list and the session groups add its new rows: a session that got no
+// new row keeps its member array, the grown one holds every row of the session in order; nothing moved → the same row list.
+test('index rows when only the newest segment grew: untouched groups keep their arrays, the grown one holds every row in order (3.5:45, 4.3:37)', { timeout: 120_000 }, async () => {
   const home = path.join(tmpDir('trocar-rows-'), '.trocar')
   const s = bigSession({ home, ...BASE })
-  const segment = path.basename(s.file, '.ndjson'), own = { ...fs }
-  s.append(calls); await segmentIndex({ home, segment, owner: true })
-  const was = await indexRows({ home, fs: own })
-  sessionGroups(was)
-  let read = 0
-  for (const r of was) { const v = r.session_id; Object.defineProperty(r, 'session_id', { get() { read++; return v }, enumerable: true }) }
-  const before = new Set(was)
+  const segment = path.basename(s.file, '.ndjson')
+  writeSegment(home, '20261020T000000Z', [{ id: 'o1', sessionKey: 'other-1', harness: 'opencode' }, { id: 'o2', sessionKey: 'other-1', harness: 'opencode' }])
+  await segmentIndex({ home, segment: '20261020T000000Z', owner: true })
+  s.append(300); await segmentIndex({ home, segment, owner: true })
+  const was = await indexRows({ home }), before = sessionGroups(was), other = before.get('other-1'), mine = before.get(s.id)
   s.append(1); await segmentIndex({ home, segment, owner: true })
-  const now = await indexRows({ home, fs: own })
-  const groups = sessionGroups(now), work = { rows: was.length, fresh: now.length - was.length, built: now.filter((r) => !before.has(r)).length, read }
-  assert.deepEqual(groups.get(s.id), now.filter((r) => r.session_id === s.id), 'the grown group holds every row of the session, in order')
-  return work
-}
-
-test('index rows built or read when only the newest segment grew do not grow with the rows before (3.5:45, 4.3:37)', { timeout: 120_000 }, async () => {
-  const a = await rowWork(300), b = await rowWork(1200)
-  assert.ok(b.rows > 3 * a.rows, 'about four times the rows')
-  assert.ok(b.built + b.read <= a.built + a.read + b.fresh, `rows built + read at ${a.rows} / ${b.rows} rows (+${b.fresh} new): ${JSON.stringify({ a, b })}`)
+  const now = await indexRows({ home }), groups = sessionGroups(now)
+  assert.ok(now !== was && now.length > was.length)
+  assert.equal(groups.get('other-1'), other, 'a session with no new row keeps its member array')
+  const json = (rs) => rs.map((r) => JSON.stringify(r))
+  assert.deepEqual(json(groups.get(s.id)), json(now.filter((r) => r.session_id === s.id)), 'the grown group holds every row of the session, in order')
+  assert.ok(groups.get(s.id).length > mine.length)
+  assert.equal(await indexRows({ home }), now, 'nothing moved: the same row list')
 })
 
 test('row times `session --since` reads after one new member that is no call do not grow with the lanes (3.5:42 「回答只读变了的那些的行」)', { timeout: 300_000 }, async () => {

@@ -90,9 +90,10 @@ One command takes this checkout to the newest code and leaves the machine the wa
 capture on again for the agents that had it on. It prints the plan — which commit to which commit,
 and which agents go off and on again — and asks first; `--yes` answers, `--dry-run` only prints.
 While it runs those agents are not captured (their connections still work), and the collector is
-replaced the way `uninstall` stops it: connections it still holds get up to 30 s to finish, then the old collector cuts
-the rest (a call left open, such as a WebSocket) and stops itself cleanly, so the new one does not report that the previous
-one ended without a clean stop. An update that stops half way leaves a note
+replaced the way `uninstall` stops it: a response still on its way gets up to 30 s to finish (the update goes on as soon
+as it has), then the old collector cuts the rest (a call left open, such as a WebSocket) and stops itself cleanly, so the
+new one does not report that the previous one ended without a clean stop. The rows of what it cut, and its stop record,
+say that `update` (or `uninstall`) stopped it. An update that stops half way leaves a note
 behind: run `trocar update` again and it goes on from where it stopped.
 
 A machine that ran the build from before the rename moves over once, by hand: that build's own `uninstall`, then
@@ -129,7 +130,7 @@ only). Where the board cannot make the change (not installed, or running as root
 puts the command in the row's technical details. `trocar install` and `trocar uninstall` stay in the CLI: the
 board has no control for them. Replay keys: ← → (Shift: ten steps), Home, End, n / p (next / previous step with a
 problem), f (follow latest), ? (the key list), Esc. Following latest keeps the newest step in view as calls arrive,
-and the context window ends with that step's reply: its text, thinking and tool calls. The replay desk reads a session in parts as you move through it: a step whose part has not arrived keeps its outline and costs on screen and fills in when its part comes, with no load button anywhere; while the session itself is still being read, one quiet line under the header says how far the read has got. The resource explorer shows each group's count once the lane's whole list of files and resources has been read; until then the count is left blank, never a partial number. A refresh that fails keeps the
+and the context window ends with that step's reply: its text, thinking and tool calls. The address bar reproduces what you see: while following it names no step, otherwise the step on screen. A replay link without a step follows the session live and is still following after a reload, and a link with a step stays on that step, with following off. The replay desk reads a session in parts as you move through it: a step whose part has not arrived keeps its outline and costs on screen and fills in when its part comes, with no load button anywhere; while the session itself is still being read, one quiet line under the header says how far the read has got. The resource explorer shows each group's count once the lane's whole list of files and resources has been read; until then the count is left blank, never a partial number. A refresh that fails keeps the
 last good view on screen, says it is out of date, and tries again with a growing pause. When an agent is not captured, its row says why in the same sentence `trocar status` prints in its NOTE column (one
 catalog, `src/cli/words.mjs`, a sentence for every reason).
 
@@ -197,9 +198,11 @@ the board is the HTTP shell (D59); there is no separate ETL step and no database
 daemon's query worker, which stays warm and keeps the segment index current as it captures, so a query about a
 session you are looking at answers in milliseconds; the board's answers come gzipped. The worker stays warm while
 someone asks (an open board asks every 1.5 s) and leaves after two minutes with nothing asked, giving its memory back;
-the next query starts a new one. A session is read call by call: each call is taken apart once into a context
-file beside the index, and the session's summary rows are written to a second file as they are worked out, so
-reopening a session reads those two files and does not take the records apart again.
+the next query starts a new one. The worker keeps the segment index's rows in a compact form outside its JavaScript
+heap, so how much of a session it can read barely shrinks as the capture home grows. A session is read call by call:
+each call is taken apart once into a context file beside the index, and the session's summary rows are
+written to a second file as they are worked out, so reopening a session reads those two files and does not take the
+records apart again.
 `trocar query session --id <id>` gives the newest page of call rows (at most 1,000 rows and 1 MB) with every lane's
 header; `--before <call>` gives the page just before that call, `--limit <n>` makes pages smaller, and
 `--since <mark>` gives only what changed since the `mark` of an earlier answer (the board asks this every 1.5 s).

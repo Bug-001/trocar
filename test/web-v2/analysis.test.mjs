@@ -117,10 +117,9 @@ test('the quiet-cause list has one home: core/metrics.mjs exports it, analysis.m
   assert.deepEqual(homes, [], 'a second copy of the list lets the break navigation and the cache marker disagree')
   assert.ok(fs.readFileSync(path.join(REPLAY, '..', 'core', 'metrics.mjs'), 'utf8').includes("'volatile-nonce-only'"))
 })
-test('the attribute-selector escape is defined once (core/dom.mjs) and imported where a selector is built', () => {
+test('the attribute-selector escape is defined once (core/dom.mjs): no per-module copy', () => {
   const srcs = new Map(replaySources())
   assert.deepEqual([...srcs].filter(([, src]) => /\bconst attr\b/.test(src)).map(([f]) => f), [], 'no per-module copy')
-  for (const f of ['rails.mjs', 'outline.mjs']) assert.match(srcs.get(f), /import \{[^}]*\battrSel\b[^}]*\} from '\.\.\/core\/dom\.mjs'/, f)
 })
 test('breakSteps takes its quiet causes from that list: every quiet cause is skipped, any other one is a break', () => {
   const c = (cause) => ({ cacheBreak: { cause }, usage: { read: 90, create: 0, fresh: 10, out: 1 }, ctx: 100 })

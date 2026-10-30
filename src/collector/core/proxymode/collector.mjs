@@ -214,8 +214,10 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   async function servePac({ peer, user, path: p, left = async () => false }) {
     const d = doors.get(user)
     if (!d || d.auth) return null
-    const { pid: q, why, sameUser } = await ident.owningPid(peer)
-    const facts = q != null ? await ident.factsCached(q) : sameUser ? { sameUser: true } : null
+    const { pid: q, why: ownerWhy, sameUser } = await ident.owningPid(peer)
+    const read = q != null ? await ident.factsCached(q) : null
+    const facts = read || (sameUser ? { sameUser: true } : null) // the socket table's own-user proof stands when the pid's facts cannot be read (P10)
+    const why = ownerWhy || (q != null && !read ? (ident.cache.get(q) || {}).unread || null : null)
     const a = peerAllowed({ ...(facts || {}), pid: q }, self), mine = a.ok
     if (!mine && !a.unread) { // another user's, for certain: refused (P10)
       record({ event: 'failure', where: 'ingress', code: a.code, peer, reason: `a request for trocar's proxy settings file (PAC) was refused: ${a.detail}` })
@@ -354,14 +356,14 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       return { doors: out, ...(skipped.length ? { skipped } : {}) }
     },
     /** off (§3 ②): the harnesses leave the on set; a door with a holder stays forward-only, the others close; the poll watches what is kept. */
-    async off({ harnesses: hs = null, now = false, exit = false } = {}) {
+    async off({ harnesses: hs = null, now = false, exit = false, by = null } = {}) {
       const ids = exit || !hs || !hs.length ? [...onSet] : hs
       for (const h of ids) { if (onSet.delete(h)) offAt.set(h, clock()) }
       let rows = null
       try { rows = await holdersNow() } catch { rows = null } // unreadable: unknown, every door stays
       if (rows) await settle(rows)
       if (kept().length) poll.start(rows) // this off's own table: never the last watch's answer
-      const relayed = drain ? await drain({ harnesses: exit ? null : ids, now: !!now }) : null // exit: the whole daemon goes, so every connection it relays, whatever harness
+      const relayed = drain ? await drain({ harnesses: exit ? null : ids, now: !!now, ...(by ? { by } : {}) }) : null // exit: the whole daemon goes, so every connection it relays, whatever harness
       return { pid, actual: onSet.size ? 'on' : 'off', confirmed: true, relayed, holders: rows ? rows.length : null }
     },
     lookupIngress,

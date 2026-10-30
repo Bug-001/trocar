@@ -48,15 +48,16 @@ const toMs = (ts) => (typeof ts === 'number' ? ts : Date.parse(ts))
 
 // fractional step position in [0, n): which anchor call a wall-clock time falls at, plus how far toward the next one.
 // An anchor call itself sits at its own index i (so on the full window it lands at i/N, the last call included); a time after
-// the last call sits at the right edge of the last column.
+// the last call sits at the right edge of the last column. `anchorTs` is in step order, so `i` (the first index whose next time is
+// not before t) is a binary search: a render places every tick of a long session in O(log N) each, not O(N).
 export function stepPos(anchorTs, ts) {
   const t = toMs(ts), n = anchorTs.length
   if (!n) return 0
   if (t <= anchorTs[0]) return 0
   if (t === anchorTs[n - 1]) return n - 1
   if (t > anchorTs[n - 1]) return n - 1 + 0.999
-  let i = 0
-  while (i < n - 1 && anchorTs[i + 1] < t) i++
+  let i = 0, hi = n - 1
+  while (i < hi) { const m = (i + hi) >> 1; if (anchorTs[m + 1] < t) i = m + 1; else hi = m }
   return i + (t - anchorTs[i]) / Math.max(1, anchorTs[i + 1] - anchorTs[i])
 }
 // project a time into the brush window [lo, hi) → [0, 1). The full window is (i+frac)/n; a narrowed window rescales every
@@ -73,6 +74,18 @@ export function inWindow(anchorTs, view, ts) {
   const lo = view.lo | 0, hi = Math.max(lo + 1, view.hi || anchorTs.length), p = stepPos(anchorTs, ts)
   return p >= lo && p < hi
 }
+// the lane's calls in the brush window as [{c, i}] (i = the index in the lane): a lane's calls are in step order, so only the run
+// whose times lie in [anchorTs[lo], anchorTs[hi]] is looked at (two binary searches), and inWindow decides each of those. What a render
+// costs follows the window it draws, not the length of the lane.
+export function windowCalls(lane, anchorTs, view) {
+  const calls = lane.calls, n = anchorTs.length, lo = view.lo | 0, hi = Math.max(lo + 1, view.hi || n)
+  const first = (pred) => { let a = 0, b = calls.length; while (a < b) { const m = (a + b) >> 1; if (pred(toMs(calls[m].ts))) b = m; else a = m + 1 } return a }
+  const from = lo > 0 && lo < n ? first((t) => t >= anchorTs[lo]) : 0
+  const to = hi < n ? first((t) => t > anchorTs[hi]) : calls.length
+  const out = []
+  for (let i = from; i < to; i++) if (inWindow(anchorTs, view, calls[i].ts)) out.push({ c: calls[i], i })
+  return out
+}
 // index of the lane call nearest in time (over EVERY call, not just the drawn ticks); `fallback` is kept when ts is unparsable
 export function nearestByTs(lane, ts, fallback = 0) {
   const n = lane.calls.length
@@ -87,11 +100,10 @@ export function nearestByTs(lane, ts, fallback = 0) {
 // edge and would hijack edge clicks); the whole lane when none is in the window. Always a real index, drawn tick or not.
 export function nearestByX(lane, anchorTs, view, f) {
   let b = -1, bd = Infinity
-  lane.calls.forEach((c, i) => {
-    if (!inWindow(anchorTs, view, c.ts)) return
+  for (const { c, i } of windowCalls(lane, anchorTs, view)) {
     const d = Math.abs(xOf(anchorTs, view, c.ts) - f)
     if (d < bd) { bd = d; b = i }
-  })
+  }
   if (b < 0) lane.calls.forEach((c, i) => { const d = Math.abs(xOf(anchorTs, view, c.ts) - f); if (d < bd) { bd = d; b = i } })
   return b
 }

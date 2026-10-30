@@ -18,7 +18,8 @@ import { buildLanes, anchorLane, stepsOf, nearestByTs } from './lanes.mjs'
 import { createDesk, applySession, applyLane, readTouched, mergeTouch, readLedger, ledgerDone, stepOf as deskStep } from './model.mjs'
 import { breakSteps } from './analysis.mjs'
 import { loadFold, saveFold } from './fold.mjs'
-import { landPlayhead, createPoller, createStepReads } from './follow.mjs'
+import { landPlayhead, createStepReads } from './follow.mjs'
+import { createPoller, INTERVAL } from '../core/poll.mjs'
 import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
 import { renderContextWindow, wireCtxWin, emptyFrameHtml, rowKeys } from './ctxwin.mjs'
@@ -36,9 +37,9 @@ import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
 import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION } from '../labels/replay.mjs'
 import { readFailure } from '../core/ui.mjs'
 
-const POLL_MS = 1500
+const POLL_MS = INTERVAL.session
 const BUSY_MS = 150 // 2.3 §车道未到手: how long a step whose lane is not held leaves the desk as it is
-const SLICE_MS = 8 // 3.7: an answer is applied in slices of at most this long, yielding between them
+const SLICE_MS = 8 // 2.3 §读与画: an answer is applied in slices of at most this long, yielding between them
 const SLICE_ROWS = 100
 
 // the desk's own head: the session head (title · chip · 项目 · 跟随最新 · ⓘ) and the quiet 会话保真行 under it (1.2 §会话头).
@@ -111,12 +112,13 @@ const yieldNow = () => (globalThis.scheduler && typeof globalThis.scheduler.yiel
     : new Promise((r) => setTimeout(r, 0)))
 const frame = (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16))
 
-// a session answer as slices whose application in order equals applying it whole (3.7: ≤ SLICE_MS of main-thread work each).
-// A full answer's first slice is full; the rest are deltas on its mark. An older (--before) page slices into older pages. A
-// delta is small (one poll's growth) and applied whole.
-function slicesOf(a, before) {
+// a session answer as slices whose application in order equals applying it whole (2.3 §读与画: ≤ SLICE_MS of main-thread work each).
+// The first slice is the answer itself with its first rows (a delta's `gone` and `lanes_gone` go with it: they never name a lane or row
+// another slice brings); the rest are deltas on its mark. An older (--before) page slices into older pages. A delta while a big
+// session is read for the first time brings a thousand rows and more (2.3 归约前沿), so it is sliced like a full answer.
+export function slicesOf(a, before) {
   const calls = a.calls || []
-  if (a.base != null || calls.length <= SLICE_ROWS) return [a]
+  if (calls.length <= SLICE_ROWS) return [a]
   const out = []
   for (let i = 0; i < calls.length; i += SLICE_ROWS) {
     const part = calls.slice(i, i + SLICE_ROWS), rids = new Set(part.map((r) => r.rid))
@@ -178,7 +180,7 @@ function mountDesk(el, ctx) {
   s.setDiff = (idx) => { s.diffRef = idx; drawPlayhead() }
   s.renderStep = () => { E.stepbar.innerHTML = stepBarHtml(s) }
 
-  function renderHeader() { s.headFollow = s.follow; renderSessionHead(E.deskhead, s) }
+  function renderHeader() { s.headFollow = s.follow; renderSessionHead(E.deskhead, s); syncUrl() }
 
   // ── empty and failed states: every widget that carries per-session data is neutralised, nothing of the last session stays ──
   // `msg` empty → ⑧, the empty frame (1.4: no text, no control); else the honest failure sentence, Retry, and the reason in details
@@ -253,6 +255,11 @@ function mountDesk(el, ctx) {
   }
   // the playhead's panels, at most once per animation frame: a call inside a frame that already drew waits for the next one
   let inFrame = false, queued = false, busyTimer = null
+  // the outline, the explorer and the raw panel follow the window in a task of their own (2.3 归约前沿: no task over 50 ms): a step of a
+  // long session is the window's thousands of nodes plus the ledger's lists, and one task drew both. Several paints before it runs
+  // draw these once, for the playhead then.
+  let sideDue = false
+  const drawSides = () => { if (sideDue) return; sideDue = true; yieldNow().then(() => { sideDue = false; if (!s.dead && s.anchor) { s.renderNav(); s.renderRaw() } }) }
   function drawPlayhead() {
     if (inFrame) { if (!queued) { queued = true; frame(() => { queued = false; if (!s.dead) paintPlayhead() }) } return }
     inFrame = true; frame(() => { inFrame = false })
@@ -271,9 +278,10 @@ function mountDesk(el, ctx) {
     s.renderStep() // 'Step N / M' moves with every new call
     if (sig !== s.lastPhSig) {
       // drawn from what is here: the open rows' bodies are read by the step's own reads once the playhead rests (aim)
-      renderContextWindow(E.ctxwin, s, { busy: f === 'busy' }); s.renderNav(); s.renderRaw(); s.lastPhSig = sig
+      renderContextWindow(E.ctxwin, s, { busy: f === 'busy' }); drawSides(); s.lastPhSig = sig
     }
     if (s.follow !== s.headFollow) renderHeader() // the follow chip (a scrub onto or off the live end, a tick selection)
+    syncUrl() // the one write point for the drawn step: every path that draws a step reaches it
     jumps.settle() // a jump that was waiting for this step's lane lands now that the window shows it
     aim()
   }
@@ -293,7 +301,14 @@ function mountDesk(el, ctx) {
 
   // ── navigation ───────────────────────────────────────────────────────────────────────────────────────────────────
   const shownStep = () => (s.anchor ? (s.anchor.base || 0) + s.playhead + 1 : null)
-  function syncUrl() { const n = shownStep(); if (n != null) router.setParams({ step: String(n) }, { replace: true }) } // scrubbing is not a navigation
+  // the URL says what the reader sees (1.2 §路由): following → no step and no call; otherwise the drawn step. Written only on a
+  // difference (every write counts toward WebKit's limit; our own write comes back through update() as a no-op), replacing history
+  function syncUrl() {
+    const n = shownStep(), r = router.current()
+    if (n == null || s.initialStep != null || !alive() || r.screen !== 'replay' || r.id !== s.id || r.project !== s.project) return // a named step not landed yet keeps its URL
+    const want = s.follow ? { step: null, call: null } : { step: String(n) }, have = r.params
+    if (Object.entries(want).some(([k, v]) => (have[k] ?? null) !== v)) router.setParams(want, { replace: true })
+  }
   // `followLanding`: 跟随最新 brought the playhead here (followOn) → this step lands on the reply; any other move lands by the change
   // line. Set BEFORE the repaint below, because the landing runs once per step, inside that repaint (1.4 §打开一步时落在哪).
   function setPlayhead(i, manual, followLanding = false) {
@@ -315,7 +330,6 @@ function mountDesk(el, ctx) {
     repositionBrush(E.saw, s)
     drawPlayhead()
     restoreSelection()
-    syncUrl()
   }
   // how many bars #sawrow can draw (timeline.mjs barsThatFit). A lane that has no width yet (not laid out, or not in the document) cannot
   // judge: no limit. Measured on the bars row's grid column, not on #sawrow: the detail lanes narrow to the window's bar count (1.3)
@@ -351,6 +365,9 @@ function mountDesk(el, ctx) {
     poll(true)
   }
   s.followOn = followOn
+  // the reader turns following off (f, the chip): the head and the URL (which now names the drawn step) follow at once
+  function followOff() { s.follow = false; renderHeader() }
+  s.followOff = followOff
 
   // ── a step's own reads: its lane, its open rows' bodies, the lane's older pages (2.3 §读与画; 3.5:69) ─────────────────
   // the session's own reads name it; a `block` read names only its refs (3.5: `block` takes --ref alone, any other parameter is refused)
@@ -459,7 +476,7 @@ function mountDesk(el, ctx) {
     renderHeader(); if (s.anchor) { s.renderRaw(); refreshDrawer() }
   }
 
-  // one read in flight; a failed read backs off; the reader's own actions read at once (follow.mjs createPoller). A hidden tab and a
+  // one read in flight; a failed read backs off; the reader's own actions read at once (core/poll.mjs createPoller). A hidden tab and a
   // session the server does not know read nothing by themselves. One poller per session: its loop stops as soon as the session changes.
   const idle = () => (typeof document !== 'undefined' && document.hidden) || s.notListed
   const makePoller = () => { const key = sessionKey()
@@ -505,7 +522,7 @@ function mountDesk(el, ctx) {
     if (changed) for (const rid of [...(a.calls || []).map((r) => r.rid), ...(a.gone || [])]) { const o = desk.rows.get(rid); if (o) changed.add(o.lane) }
     if (changed) for (const r of a.calls || []) changed.add(r.lane)
     const keep = pin(), prevRow = curCall()
-    // applied in slices that yield (3.7), checking between them that the session is still this one
+    // applied in slices that yield (2.3 §读与画), checking between them that the session is still this one
     const touched = new Map()
     let t0 = nowMs()
     for (const part of same ? [] : slicesOf(a, before)) {
@@ -553,7 +570,6 @@ function mountDesk(el, ctx) {
     if (first && !deskStep(desk, s.playRid).held) { openLane = desk.rows.get(s.playRid).lane; steps.prefetch(openLane) }
     renderAll()
     refreshDrawer()
-    if (s.initialStep == null && (first || moved || String(router.current().params.step ?? '') !== String(shownStep()))) syncUrl()
     reask()
     chainLedger(true)
     if (quiet) olderPage()
@@ -586,7 +602,7 @@ function mountDesk(el, ctx) {
     if (!a) return
     e.preventDefault()
     if (a.keys) openModal({ title: KEYS_TITLE, bodyHtml: `<dl class="keylist">${KEY_LIST.map(([k, w]) => `<dt><kbd>${esc(k)}</kbd></dt><dd>${esc(w)}</dd>`).join('')}</dl>` })
-    else if (a.follow) { if (s.follow) { s.follow = false; renderHeader() } else followOn() }
+    else if (a.follow) { if (s.follow) followOff(); else followOn() }
     else { if (keyTarget == null) frame(paintKey); keyTarget = a.to }
   }
   setScreenKeys(onKey)
@@ -614,12 +630,14 @@ function mountDesk(el, ctx) {
         renderEmpty('')
         poll(); return
       }
-      if (!hasStep(route)) return
-      // the same session, only the step moved (our own scrubbing lands here too, and is a no-op): clamp and rewrite (1.2:91)
+      // the same session (our own URL writes land here too, and are no-ops). No step and no call = follow the newest (1.2:91)
+      if (!hasStep(route)) { if (route.params.call == null && !s.follow) followOn(); return }
       if (!s.anchor) { s.initialStep = stepParam(route.params.step).step; return }
+      // a named step pins it with follow off; the move is not the reader's, so landing on the newest call does not turn follow on
       const p = stepParam(route.params.step, s.anchor.count ?? s.anchor.calls.length)
-      if (p.step === shownStep() && !p.rewrite) return
-      setPlayhead(p.step - 1 - (s.anchor.base || 0), true)
+      if (p.step === shownStep() && !p.rewrite && !s.follow) return
+      s.follow = false
+      setPlayhead(p.step - 1 - (s.anchor.base || 0), false)
     },
     unmount() {
       s.dead = true

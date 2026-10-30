@@ -21,7 +21,9 @@ const msgOf = (e) => String((e && e.message) || e)
  * identityOf({ peer, door: { g, harness, forms }, target }) → { pid, source, ms, facts, exe, agent, hosted, why, unresolved? }: `why` is the untracked reason
  * (`pid-unresolved` · `facts-unavailable` · `other-user` · `outside-host-set` · `agent-helper` · `cmdline-pending` · `ambiguous` · `not-an-agent`), or null
  * with `agent` the harness the name list (or the host tree: `hosted`) names. With no pid, `unresolved` is the owner question's why and `facts` is
- * `{ sameUser: true }` when the socket table proved the end is this user's (else null). `cache`: pid → { startedAt, facts, door, host } — the last life met.
+ * `{ sameUser: true }` when the socket table proved the end is this user's (else null); so is a pid whose facts could not be read (`facts-unavailable`,
+ * `unresolved` then says why the facts reader failed). `cache`: pid → { startedAt, facts, door, host, unread } — the last life met; `unread`: why its
+ * facts could not be read (the reader's own words, D38), null when they were.
  */
 export function createDoorIdentity({ ownerOf = null, factsOf = null, identify, ownUid = process.getuid?.() ?? null, hostsOf = () => null, onFailure = () => {}, onEvent = () => {} } = {}) {
   if (typeof identify !== 'function') throw new TypeError('createDoorIdentity needs identify (registry.match): who a process is comes from the D51 name list')
@@ -33,10 +35,11 @@ export function createDoorIdentity({ ownerOf = null, factsOf = null, identify, o
    *  behind (4.8 W4 — the start time in the fresh answer keys the verdict to its life). Concurrent lookups of the same pid share the one ask. */
   function factsCached(pid) {
     if (inflight.has(pid)) return inflight.get(pid)
-    const ask = Promise.resolve().then(() => (typeof factsOf === 'function' ? factsOf(pid) : null)).then((facts) => {
+    let unread = null
+    const ask = Promise.resolve().then(() => (typeof factsOf === 'function' ? factsOf(pid, { onUnread: (why) => { unread = why } }) : null)).then((facts) => {
       const prev = cache.get(pid)
       const startedAt = facts && facts.startedAt != null ? facts.startedAt : null
-      cache.set(pid, { door: prev ? prev.door : null, host: prev && prev.startedAt === startedAt ? prev.host : null, startedAt, facts }) // a host-tree door's harness is this life's
+      cache.set(pid, { door: prev ? prev.door : null, host: prev && prev.startedAt === startedAt ? prev.host : null, startedAt, facts, unread: facts ? null : unread }) // a host-tree door's harness is this life's
       return facts
     }).finally(() => { inflight.delete(pid) })
     inflight.set(pid, ask)
@@ -51,7 +54,7 @@ export function createDoorIdentity({ ownerOf = null, factsOf = null, identify, o
     try {
       const r = await ownerOf({ peer })
       const pid = r && r.pid != null ? r.pid : null
-      return { pid, source: (r && r.source) || null, ms: r && r.ms != null ? r.ms : null, ...(pid == null && r && r.why ? { why: r.why } : {}), ...(pid == null && r && r.sameUser === true ? { sameUser: true } : {}) }
+      return { pid, source: (r && r.source) || null, ms: r && r.ms != null ? r.ms : null, ...(pid == null && r && r.why ? { why: r.why } : {}), ...(r && r.sameUser === true ? { sameUser: true } : {}) }
     } catch (e) {
       onFailure({ event: 'failure', where: 'helper', code: 'socktable-unavailable', reason: `the owner of a connection could not be asked for (${msgOf(e)}); the connection is spliced untracked` })
       return { ...none, why: 'unreadable' }
@@ -76,7 +79,10 @@ export function createDoorIdentity({ ownerOf = null, factsOf = null, identify, o
     // never a guessed pid (4.8 W4); a table that proves the end is this user's says so (the PAC door's only question, 4.11 P10), and the owner question's why travels on
     if (pid == null) return { ...out, facts: sameUser ? { sameUser: true } : null, unresolved, why: 'pid-unresolved' }
     const facts = await factsCached(pid)
-    if (!facts) return { ...out, why: 'facts-unavailable' } // gone between the accept and the ask, or unreadable: not the same as "not an agent"
+    if (!facts) { // gone between the accept and the ask, or unreadable: not the same as "not an agent"; the table's own-user proof still holds (P10)
+      const unread = (cache.get(pid) || {}).unread
+      return { ...out, facts: sameUser ? { sameUser: true } : null, ...(unread ? { unresolved: unread } : {}), why: 'facts-unavailable' }
+    }
     out.facts = facts
     out.exe = facts.exe ?? null
     const held = cache.get(pid)

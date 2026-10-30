@@ -4,6 +4,7 @@
 // PENDING ids are measured and reported, never failed. Selectors are the board's ids / classes / data attributes, never wording.
 // Exports only; nothing runs at import.
 import { snap as probeSnap } from './probe.mjs'
+import { WRITE_GAP_MS } from '../../../../src/web/v2/core/router.mjs'
 
 export const IDS = Object.freeze(['I-pageerror', 'I-console', 'I-blank', 'I-keep', 'I-stack', 'I-hscroll', 'I-rate', 'I-write', 'I-leak',
   'I-mem', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-memcap'])
@@ -14,7 +15,7 @@ export const PENDING = new Map([
 
 export const LIMITS = Object.freeze({
   consoleGraceMs: 2000, // an armed fault window's console.error tail (plan §Invariants I-console)
-  interval: Object.freeze({ status: 5000, sessions: 3000, session: 1500 }), // spec/01-trocar-rfc/4.4-server.md:45-52
+  interval: Object.freeze({ status: 5000, sessions: 15000, session: 1500 }), // spec/01-trocar-rfc/4.4-server.md:45-52
   intervalOther: 30000, // 4.4:52 「其余 … 每 30 s」
   backoffCapMs: 30000, // 1.5 K-29 (spec/01-trocar-rfc/1.5-states-aesthetics.md:76): doubling, capped at 30 s
   sessionDurFactor: 3, // 4.4:51 the timer's next read waits ≥ 3 × the last read's duration
@@ -56,13 +57,13 @@ async function heapUsed(page) {
   return (await s.send('Runtime.getHeapUsage')).usedSize
 }
 
-// the replay desk as the reader sees it: the step counter's two numbers and the window's request-row heads
+// the replay desk as the reader sees it: the step counter's two numbers, the 跟随最新 chip and the window's request-row heads
 const viewOf = (page) => page.evaluate((sel) => {
   const no = document.querySelector('#stepbar .sb-no')
   const m = no && /(\d+)\s*\/\s*(\d+)/.exec(no.textContent)
   return {
     hash: location.hash,
-    step: m ? +m[1] : null, of: m ? +m[2] : null,
+    step: m ? +m[1] : null, of: m ? +m[2] : null, follow: document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'true',
     heads: [...document.querySelectorAll('#ctxwin .cblk[data-bi]')].map((e) => `${e.dataset.bi}:${e.dataset.sec || ''}`),
     reply: !!document.querySelector('#ctxwin .cwreply'),
     // a load control (2.3 #10 · 1.2 读取状态): any [data-load-step]; on the desk, any control inside an aria-busy frame or the
@@ -88,11 +89,12 @@ const viewOf = (page) => page.evaluate((sel) => {
 // the tail's follow-up reads (4.4:52): one `lane` read per touched held lane per `session` delta, one `block` read per followed delta
 const DELTA_PACED = new Set(['lane', 'block'])
 // what I-rate paces: a name, and for `lane` each lane of each session apart (an older page, `to`, apart from the tail); null =
-// not paced: a lane's ledger chain (`ledger=`) reads one cursor after another by design (3.5 §手里车道的页)
+// not paced: a lane's ledger chain (`ledger=`) and the later pages of one `sessions` read (`after=`, C.5) read one cursor after
+// another by design (3.5 §手里车道的页)
 const rateKey = (url) => {
-  const name = nameOf(url)
+  const name = nameOf(url), q = new URLSearchParams(url.split('?')[1] || '')
+  if (name === 'sessions' && q.has('after')) return null
   if (name !== 'lane') return name
-  const q = new URLSearchParams(url.split('?')[1] || '')
   if (q.has('ledger')) return null
   return `lane ${q.get('id')} ${q.get('lane')}${q.has('to') ? ' to' : ''}`
 }
@@ -203,8 +205,20 @@ export async function check(ctx) {
   if (desk && !follow && prev && prev.step != null && grownAt != null && grownAt >= prev.t && !actions.some((a) => a.t > prev.t) && routeOf(prev.hash) === route) {
     if (v.step !== prev.step || v.heads.join() !== prev.heads.join()) bad('I-hold', `step ${prev.step} → ${v.step}, ${prev.heads.length} → ${v.heads.length} row heads`)
   }
-  const qs = paramsOf(v.hash)
-  if (desk && qs.has('step') && !qs.has('call') && +qs.get('step') !== v.step) bad('I-url', `step=${qs.get('step')} while step ${v.step} is shown`)
+  // I-url (1.2 §路由): `step=` names the shown step, and on the desk no step (and no call) ⇔ following. The URL may land up to
+  // WRITE_GAP_MS after the view (the writer's bound for a burst; a lone change is immediate)
+  const urlOff = (x) => {
+    const qs = paramsOf(x.hash)
+    if (qs.has('call')) return null
+    if (qs.has('step') && +qs.get('step') !== x.step) return `step=${qs.get('step')} while step ${x.step} is shown`
+    if (!qs.has('step') !== x.follow) return x.follow ? `step=${qs.get('step')} while following` : 'no step while not following'
+    return null
+  }
+  if (desk && urlOff(v)) {
+    let x = v
+    for (const t0 = Date.now(); urlOff(x) && x.step != null && Date.now() - t0 < WRITE_GAP_MS;) { await page.waitForTimeout(50); x = await viewOf(page) }
+    if (x.step != null && urlOff(x)) bad('I-url', urlOff(x))
+  }
   if (!real && CJK.test(v.bodyText)) bad('I-cjk', `CJK in the page: ${JSON.stringify(v.bodyText.match(CJK)[0])}`)
 
   if (s.longtaskMax > LIMITS.longtaskMs) bad('I-longtask', `a long task of ${Math.round(s.longtaskMax)} ms`)
