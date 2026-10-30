@@ -92,13 +92,36 @@ async function update({ io, env, home, platform, deps, flags }) {
     return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from: r.from, on: [] }, only: 'daemon' })
   }
 
-  // §5.5 · D67②: an npm copy is updated with npm; once a newer copy is installed, this replaces the collector that still runs the old one
+  /** The handover file (D67①) = an update of a moment ago that did not finish: this run is its step 4, whatever the code says. */
+  const pending = async () => readHandover(handover, fs, deps.harnessIds || (await (await import('../collector/harness/index.mjs')).loadHarnesses()).map((h) => h.name))
+  const resume = async (waiting) => {
+    if (waiting.dropped.length) r.notes.push(`${waiting.dropped.join(', ')}: this update's note names ${waiting.dropped.length > 1 ? 'agents' : 'an agent'} this trocar has no descriptor for, so capture is not switched on for ${waiting.dropped.length > 1 ? 'them' : 'it'}`)
+    const to = codeId(root)
+    const g = await gate([['Code', `${waiting.from || r.from} -> ${to}`], ['Switched on again', waiting.on.join(', ') || 'nothing was being captured']],
+      [{ what: 'finish', detail: `an update to ${to} is waiting to be finished: the collector is replaced, install runs again${waiting.on.length ? `, and capture is switched on again for ${waiting.on.join(', ')}` : ''}`, harnesses: waiting.on }], CUT)
+    if (g !== null) return g
+    return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting })
+  }
+
+  // §5.5 · D67②: an npm copy is updated with npm; the code npm put here is the new code, so this run is step 4 — the collector, install
+  // and `on` of the harnesses being captured, the same finish a git update ends with. The handover file is written first, so a finish that
+  // does not get through is taken up by the next run like any other.
   const pkg = npmCopy(root, fs)
   if (pkg) {
+    const waiting = await pending()
+    if (waiting) return resume(waiting)
     const running = await daemonCode({ platform, dir, env, fs, deps })
     r.to = r.from
-    if (typeof running === 'string' && running !== r.from) return daemonOnly(running)
-    return no('npm-package', `this trocar was installed with npm. Get the newest with npm i -g ${pkg}@latest, then run trocar update to restart the collector on it.`, EXIT.usage)
+    if (typeof running !== 'string' || running === r.from) {
+      return no('npm-package', `this trocar was installed with npm. Get the newest with npm i -g ${pkg}@latest, then run trocar update to restart the collector on it.`, EXIT.usage)
+    }
+    const on = harnessesOn({ home, fs })
+    if (on.error) return no('state-unreadable', on.error)
+    const g = await gate([['Code', `${running} -> ${r.from} (installed with npm)`], ['Switched on again', on.ids.join(', ') || 'nothing is being captured']],
+      [{ what: 'finish', detail: `the collector runs ${running}, so it is replaced by ${r.from}, install runs again${on.ids.length ? `, and capture is switched on again for ${on.ids.join(', ')}` : ''}`, harnesses: on.ids }], CUT)
+    if (g !== null) return g
+    try { writeHandover(handover, { from: running, on: on.ids }, fs) } catch (e) { return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so nothing was changed`) }
+    return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from: running, on: on.ids } })
   }
   // a git checkout is the other way (D67②); anything else is told how it was installed, and nothing is touched
   if (!gitDir(root)) return no('not-a-checkout', NOT_GIT, EXIT.usage)
@@ -118,16 +141,8 @@ async function update({ io, env, home, platform, deps, flags }) {
     return no('not-fast-forward', `this checkout has commits ${upstream.out} does not have, so it cannot be fast-forwarded. Push or put them aside, then run trocar update again`)
   }
 
-  // the handover file (D67①) = an update of a moment ago that did not finish: this run is its step 4, whatever the commits say
-  const waiting = readHandover(handover, fs, deps.harnessIds || (await (await import('../collector/harness/index.mjs')).loadHarnesses()).map((h) => h.name))
-  if (waiting) {
-    if (waiting.dropped.length) r.notes.push(`${waiting.dropped.join(', ')}: this update's note names ${waiting.dropped.length > 1 ? 'agents' : 'an agent'} this trocar has no descriptor for, so capture is not switched on for ${waiting.dropped.length > 1 ? 'them' : 'it'}`)
-    const to = codeId(root)
-    const g = await gate([['Code', `${waiting.from || r.from} -> ${to}`], ['Switched on again', waiting.on.join(', ') || 'nothing was being captured']],
-      [{ what: 'finish', detail: `an update to ${to} is waiting to be finished: the collector is replaced, install runs again${waiting.on.length ? `, and capture is switched on again for ${waiting.on.join(', ')}` : ''}`, harnesses: waiting.on }], CUT)
-    if (g !== null) return g
-    return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting })
-  }
+  const waiting = await pending()
+  if (waiting) return resume(waiting)
 
   if (head === target) {
     const running = await daemonCode({ platform, dir, env, fs, deps })
@@ -193,8 +208,10 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
   const replaced = await replaceDaemon({ env, home, platform, deps, dir, root, fs, problems })
   r.restarted = replaced.restarted
   if (replaced.notes.length) r.notes.push(...replaced.notes)
-  if (only === 'daemon') {
-    if (problems.length) return no('daemon-not-replaced', problems[0])
+  const daemonFailed = problems.length > 0
+  // the login entry runs another copy: install here would quietly point it at this one — which copy it runs is the operator's to say
+  if (only === 'daemon' || replaced.elsewhere) {
+    if (daemonFailed) { r.problems = problems; return no('daemon-not-replaced', problems[0]) }
     lines.push(`trocar is now running ${r.to}.`)
     return done(EXIT.ok)
   }
@@ -206,7 +223,7 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
     r.on = back.doc
     if (back.exit !== EXIT.ok) problems.push(`${waiting.on.join(', ')}: capture could not be switched on again (trocar on exit ${back.exit}). ${AGAIN}`)
   }
-  if (problems.length) { r.problems = problems; return no('not-finished', problems[0]) } // the file stays: the next run goes on from here
+  if (problems.length) { r.problems = problems; return no(daemonFailed ? 'daemon-not-replaced' : 'not-finished', problems[0]) } // the file stays: the next run goes on from here
   try { fs.rmSync(handover, { force: true }) } catch (e) { return no('handover-not-removed', `this update finished, but it could not be written off (${(e && e.message) || e})`) }
   lines.push(`trocar is now ${r.to} (it was ${r.from}).`,
     ...pairs([['Collector', r.restarted ? 'running the new code' : 'already running this code'], ['Capturing again', waiting.on.join(', ') || 'nothing was being captured']]))
@@ -235,6 +252,10 @@ async function replaceDaemon({ env, home, platform, deps, dir, root, fs, problem
   const up = await ensureDaemonUp({ osName: platform, dir, env, fs, unit, register: true, put: (e) => { if (e && e.reason) notes.push(e.reason) }, ...(deps.request ? { request: deps.request } : {}), ...(deps.socketPath ? { socketPath: deps.socketPath } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) })
   notes.push(...up.notes)
   if (!up.up) { problems.push(`the collector did not come back up (${up.problems[0] || 'it does not answer'}). ${AGAIN}`); return { restarted: false, notes } }
+  // a collector that answers is not yet one on THIS code: the login entry starts the copy install registered, and with npm another copy
+  // (global, a project's, the npx cache) is common — what it runs is asked again, never assumed (§5.5)
+  const now = await daemonCode({ platform, dir, env, fs, deps })
+  if (now !== codeId(root)) { problems.push(`the collector came back on ${now || 'code it does not name'}, not on ${codeId(root)}: the login entry starts another copy of trocar. Run trocar install from this copy, or run trocar update from the copy the login entry starts.`); return { restarted: true, notes, elsewhere: true } }
   return { restarted: true, notes }
 }
 

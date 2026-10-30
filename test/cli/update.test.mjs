@@ -158,18 +158,35 @@ test('V105: an npm copy whose collector runs it is exit 2 npm-package naming <na
   assert.equal(await runUpdateCli(['--json', '--yes'], t.c), EXIT.usage, t.io.text())
   assert.equal(t.io.json().error.code, 'not-a-checkout')
 
-  // (b) the user already installed a newer copy and the collector runs another code: it is stopped and comes back on this copy
-  let daemon = '0.1.0'
-  const unit = { path: '/login/entry', enable: () => { daemon = codeId(npmRoot); return { code: 0 } } }
-  const stopped = []
-  t = ctx(s, {
-    daemonCode: () => daemon,
-    deps: { root: npmRoot, unit, socketPath: path.join(s.base, 'control.sock'), request: async ({ method }) => (method === 'POST' ? { actual: 'off', confirmed: true, pid: 4242, relayed: { closing: 0, waiting: 0, cut: 0 } } : { code: daemon }), stopDaemon: async (o) => { stopped.push(o); return { stopped: true, pid: 4242, signals: ['SIGTERM'] } } },
-  })
-  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
-  assert.deepEqual(validateReceipt(t.io.json()), [])
-  assert.deepEqual([stopped.length > 0, daemon], [true, codeId(npmRoot)])
-  assert.equal(s.handover(), null)
+  // (b) the user already installed a newer copy and the collector runs another code: the same finish a git update ends with — the
+  // collector comes back on this copy, install runs again and what was being captured is switched on again (D67②: after the code is
+  // obtained, everything is the same). (c) the login entry starts ANOTHER copy (global vs project vs npx cache): the collector comes back
+  // on that one, so nothing of this copy's is installed, the update stays written down, and it is exit 1 daemon-not-replaced.
+  const was0 = s.stateBytes()
+  for (const [label, cameBackOn] of [['this copy', () => codeId(npmRoot)], ['another copy', () => '0.3.0']]) {
+    let daemon = '0.1.0'
+    const unit = { path: '/login/entry', enable: () => { daemon = cameBackOn(); return { code: 0 } } }
+    const stopped = []
+    t = ctx(s, {
+      daemonCode: () => daemon,
+      deps: { root: npmRoot, unit, socketPath: path.join(s.base, 'control.sock'), request: async ({ method }) => (method === 'POST' ? { actual: 'off', confirmed: true, pid: 4242, relayed: { closing: 0, waiting: 0, cut: 0 } } : { code: daemon }), stopDaemon: async (o) => { stopped.push(o); return { stopped: true, pid: 4242, signals: ['SIGTERM'] } } },
+    })
+    const exit = await runUpdateCli(['--yes', '--json'], t.c)
+    const receipt = t.io.json()
+    assert.deepEqual(validateReceipt(receipt), [], label)
+    assert.deepEqual([stopped.length > 0, receipt.from, s.stateBytes()], [true, '0.1.0', was0], label)
+    if (label === 'this copy') {
+      assert.equal(exit, EXIT.ok, t.io.text())
+      assert.deepEqual([t.calls.install.length, t.calls.on.map((a) => a.filter((x) => !x.startsWith('--')))], [1, [['codex']]], label)
+      assert.equal(s.handover(), null, label)
+    } else {
+      assert.equal(exit, EXIT.incomplete, t.io.text())
+      assert.equal(receipt.error.code, 'daemon-not-replaced', label)
+      assert.deepEqual([t.calls.install, t.calls.on], [[], []], label)
+      assert.deepEqual(s.handover(), { from: '0.1.0', on: ['codex'] }, `${label}: the update stays written down for the copy the entry starts`)
+      fs.rmSync(path.join(s.dir, 'update.json'))
+    }
+  }
 })
 
 // ── V95 · the code changes and the new code takes over ──────────────────────────────────────────────────────────────────────────────

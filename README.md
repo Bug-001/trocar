@@ -108,8 +108,10 @@ new one does not report that the previous one ended without a clean stop. The ro
 say that `update` (or `uninstall`) stopped it. An update that stops half way leaves a note
 behind: run `trocar update` again and it goes on from where it stopped.
 
-A copy installed with npm updates through npm: `npm i -g trocar-cli@latest`, then `trocar update` restarts the
-collector on the new code. Everything above is for a git checkout.
+A copy installed with npm updates through npm: `npm i -g trocar-cli@latest`, then `trocar update` finishes the
+way a git update does: the collector on the new code, `install` again, and the agents that were being captured
+switched on again. Run it from the copy the login entry starts (the one you ran `trocar install` from); from
+another copy the collector comes back on the copy the entry starts, and `update` says so and exits 1.
 
 A machine that ran the build from before the rename moves over once, by hand: that build's own `uninstall`, then
 a clone of this repo and `trocar install`. Nothing the old name left is read or kept.
