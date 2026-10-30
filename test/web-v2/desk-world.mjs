@@ -65,7 +65,7 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, s
   const bid = (sec, role) => {
     const b = createHash('sha256').update(`${seed}:${bn++}`).digest('base64url').slice(0, 22)
     const fh = createHash('sha256').update(`fh:${b}`).digest('base64url').slice(0, 22)
-    defs.set(b, { bid: b, fh, ref: `s/x#b${bn}::0-10`, sec, role, kind: 'text', ff: 'text', head: { role, tag: 'text', label: 'text' },
+    defs.set(b, { bid: b, fh, ref: `s/x#b${bn}::0-10`, sec, role, kind: 'text', ff: { faithfulness: 'verbatim' }, head: { role, tag: 'text', label: 'text' },
       preview: b.slice(0, 8), chars: 8, bytes: 10, r: { as: 'markdown' } })
     const x = r()
     if (x < 0.15) attrsOf.set(b, { query: true }); else if (x < 0.25) attrsOf.set(b, { volatile: true })
@@ -99,7 +99,7 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, s
     const effects = []
     if (!T && i > 3 && r() < 0.15) effects.push({ kind: 'relane', at: int(0, i - 1), lane: int(0, nLanes - 1) })
     if (!T && i > 3 && r() < 0.1) effects.push({ kind: 'gone', at: int(0, i - 1) })
-    calls.push({ rid: `20261021T101500Z:${1000 + i}`, lane, ts, list, reply: Array.from({ length: int(0, 2) }, () => bid('reply', 'assistant')),
+    calls.push({ rid: `20261021T101500Z:${1000 + i}`, lane, ts, list, reply: Array.from({ length: int(0, 2) }, () => bid('messages', 'assistant')),
       status: r() < 0.1 ? 529 : 200, effects,
       evs: [...(r() < 0.35 ? ['user'] : []), ...(r() < 0.2 ? ['tool'] : []), ...(compacted ? ['compaction'] : []), ...(r() < 0.08 ? ['summarize'] : [])],
       res: r() < 0.3 ? [{ kind: r() < 0.8 ? 'file' : 'skill', label: pick(files) }] : [],
@@ -360,7 +360,7 @@ export function deskOf(lanes, { events = [], ...answer } = {}) {
         ids.push(bid)
         if (query != null || volatile != null) attrs[p] = { query, volatile }
       })
-      const reply = (l.replies?.[i] || []).map((d) => { const bid = d.bid ?? `b${bn++}`; defs.push({ sec: 'reply', role: 'assistant', ...d, bid, fh: d.fh ?? bid }); return bid })
+      const reply = (l.replies?.[i] || []).map((d) => { const bid = d.bid ?? `b${bn++}`; defs.push({ sec: 'messages', role: 'assistant', ...d, bid, fh: d.fh ?? bid }); return bid })
       return { rid: rids[i], parent: null, ops: [[1, ...ids]], reply, attrs, detail: l.details?.[i] ?? null }
     })
     reads.push({ lane: key, base: null, steps, defs, resources: l.resources || [], seen: l.seen || [], events: l.events || [], prev: null, next: null })
