@@ -144,3 +144,15 @@ test("codex: SSL_CERT_FILE in $CODEX_HOME/.env beats the process env (Codex appl
   assert.equal(first({ SSL_CERT_FILE: '/env/ca.pem' }), '/dotenv/ca.pem', '.env over the process env')
   assert.equal(first({ CODEX_HOME: path.join(root, 'other'), SSL_CERT_FILE: '/env/ca.pem' }), '/env/ca.pem', 'CODEX_HOME moves the .env')
 })
+
+// A plugin cert is judged to put the root in the process (P11 rule 4), so it may name only a hook that does: an on-phase route hook or an unknown
+// template is refused.
+for (const d of subjects.filter((x) => Object.values(x.proxyMode.certs || {}).some((c) => c.kind === 'plugin'))) {
+  for (const template of ['opencode-plugin', 'no-such-hook']) {
+    test(`${d.name}: a plugin cert naming ${template} is refused at load`, async () => {
+      const pm = structuredClone(d.proxyMode)
+      for (const c of Object.values(pm.certs)) if (c.kind === 'plugin') c.template = template
+      await assert.rejects(loadOne({ ...d, proxyMode: pm }), new RegExp(`harness ${d.name} .*shape: `))
+    })
+  }
+}

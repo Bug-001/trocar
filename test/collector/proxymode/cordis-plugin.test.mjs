@@ -50,9 +50,10 @@ async function load({ caFile = 'ok', env = {} } = {}) {
   return { mod, log, req, on, off, restore }
 }
 
-test('CM12 index: cordis-plugin is an install-phase template whose connections carry the upstream header; opencode-plugin is on-phase', () => {
-  assert.deepEqual(TEMPLATES['cordis-plugin'], { file: 'cordis-plugin.mjs.tmpl', phase: 'install', sendsUpstreamHeader: true })
-  assert.deepEqual(TEMPLATES['opencode-plugin'], { file: 'opencode-plugin.js.tmpl', phase: 'on' })
+test('CM12 index: cordis-plugin is an install-phase template that adds the root and whose connections carry the upstream header; opencode-plugin is on-phase and adds no root', () => {
+  const c = TEMPLATES['cordis-plugin'], o = TEMPLATES['opencode-plugin']
+  assert.deepEqual([c.phase, c.sendsUpstreamHeader, c.addsRoot], ['install', true, true])
+  assert.deepEqual([o.phase, !!o.sendsUpstreamHeader, !!o.addsRoot], ['on', false, false]) // P11 rule 4: only a hook that adds the root may be a cert carrier
   for (const id of Object.keys(TEMPLATES)) assert.ok(fs.existsSync(templateUrl(id)), id)
 })
 

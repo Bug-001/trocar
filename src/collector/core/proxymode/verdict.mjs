@@ -33,8 +33,9 @@ function read(src, ctx, facts) {
 }
 const why = (r) => `${r.where}: ${r.error}`
 
-/** The trust rule (⑧⑨): null when the process trusts the trocar root through this form's trust, else the forward verdict. */
-function trustVerdict(t, ctx, facts, record) {
+/** The trust rule (⑧⑨): null when the process trusts the trocar root through this form's trust, else the forward verdict. `inProcess` (a plugin
+ *  carrier puts the root in the process): the sources then feed ⑭ only, so only a source or file that cannot be read forwards (D38). */
+function trustVerdict(t, ctx, facts, record, inProcess) {
   if (!t || !t.sources || !t.sources.length) return null
   if (t.when) {
     const r = read(t.when.src, ctx, facts)
@@ -44,6 +45,7 @@ function trustVerdict(t, ctx, facts, record) {
   let hit = null
   for (const s of t.sources) { const r = read(s.from, ctx, facts); if (r.error) return notRead(r); if (r.set) { hit = r; break } }
   if (!hit) {
+    if (inProcess) return null
     // Node's own roots never hold trocar's root, nor does a process whose required source is unset
     return t.base === 'node' || t.sources.some((s) => s.required) ? fwd('var-missing', `none of ${t.sources.length} trust source(s) is set for this process`) : null
   }
@@ -52,10 +54,10 @@ function trustVerdict(t, ctx, facts, record) {
   const file = isAbs(value) ? value : (ctx.join || path.join)(facts.cwd, value)
   let text
   try { text = ctx.readFile(file) } catch (e) {
-    if (absent(e)) return fwd('ca-not-in-file', `${hit.where} names ${file}, which does not exist`)
+    if (absent(e)) return inProcess ? null : fwd('ca-not-in-file', `${hit.where} names ${file}, which does not exist`)
     return fwd('file-unreadable', `${hit.where} names ${file}: ${(e && e.code) || e}`, { unread: true })
   }
-  return certBlocks(text).some((b) => hex(b.fp) === hex(record.rootFp256)) ? null : fwd('ca-not-in-file', `${hit.where} names ${file}, which does not hold the trocar root`)
+  return inProcess || certBlocks(text).some((b) => hex(b.fp) === hex(record.rootFp256)) ? null : fwd('ca-not-in-file', `${hit.where} names ${file}, which does not hold the trocar root`)
 }
 
 /** The forms a process of `desc` may be on `os` (on a door of route `routeId`, or any): of its forms here, the verified ones when any is — D51 names
@@ -97,7 +99,8 @@ export function verdictOf({ desc, form, facts = {}, record = {}, issuer, host, h
   if (sv === 'start-time-unknown') return fwd(sv, `the start time of pid ${facts.pid} could not be read`, { unread: true })
   if (sv) return fwd(sv, `pid ${facts.pid} started before trocar's settings for ${form.id} were in place (its proxy entry and the certificate it needs); restart it once`)
   const pctx = { ...ctx, env: facts.env || {}, cwd: facts.cwd ?? undefined } // the process's env and cwd, never the daemon's
-  const t = trustVerdict(form.trust !== 'root' && pm.trusts && pm.trusts[form.trust], pctx, facts, record)
+  const inProcess = (pm.certs || {})[form.cert]?.kind === 'plugin' // rule 4: a plugin carrier adds the root in process; its trust sources serve ⑭ only
+  const t = trustVerdict(form.trust !== 'root' && pm.trusts && pm.trusts[form.trust], pctx, facts, record, inProcess)
   if (t) return t
   if (!issuer || (issuer.state && issuer.state() !== 'ready')) return issuer && issuer.state() === 'key-missing' ? fwd('cert-key-missing', 'the root key is not in its custody: nothing signs leaves') : fwd('cert-intermediate-unavailable', 'no intermediate certificate to sign leaves with')
   for (const b of pm.blockers || []) {
