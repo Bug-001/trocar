@@ -278,3 +278,43 @@ test('kinship: the same membership across segments, after the index is deleted a
     }
   }
 })
+
+// Hermes keeps its compaction marker in the history, a user message every later call of that session carries; the call after a
+// compaction is a turn of its own session, not a summary request looking for one. Two keyless Hermes sessions on one task (the
+// same user text, two working directories) stay two however their compactions interleave (3.4 按内容认亲: the probe is the call
+// that is the compaction request)
+const MARK = '[CONTEXT COMPACTION — REFERENCE ONLY]'
+const hermesCall = (s, messages, ms, escaped) => {
+  const r = { ...call({ agent: 'hermes', host: 'llm.internal.test', path: '/v1/chat/completions', ms,
+    body: { model: 'm', tools: [{ type: 'function', function: { name: 'terminal', parameters: { type: 'object' } } }],
+      messages: [{ role: 'system', content: `You are Hermes Agent.\nCurrent working directory: /work/hermes-${s}` }, ...messages] } }), id: rid() }
+  return escaped ? { ...r, req_body: r.req_body.replace(/—/g, '\\u2014') } : r // Python's json.dumps escapes it
+}
+test('kinship: a Hermes call after a compaction stays in its own session; two sessions on one task never merge', async () => {
+  for (const lang of LANGS) {
+    for (const escaped of [false, true]) {
+      const task = userText(lang, 4242)
+      const turn = (t) => [{ role: 'user', content: task }, { role: 'assistant', content: `Done with step ${t}.` }, { role: 'user', content: `Step ${t + 1}.` }]
+      const compacted = (t) => [{ role: 'user', content: `${MARK} Earlier turns were compacted. The task: ${task}` },
+        { role: 'assistant', content: `Done with step ${t}.` }, { role: 'user', content: `Step ${t + 1}.` }]
+      // A and B interleaved: three turns each, then B compacts, then A compacts, each going on after its compaction
+      const plan = [['a', turn], ['b', turn], ['a', turn], ['b', turn], ['a', turn], ['b', turn],
+        ['b', compacted], ['a', turn], ['b', compacted], ['a', compacted], ['b', compacted], ['a', compacted]]
+      let ms = T0
+      const recs = plan.map(([s, shape], t) => ({ s, rec: hermesCall(s, shape(t), (ms += 20_000), escaped) }))
+      const home = homeOf([[SEG1, recs.map((x) => x.rec)]])
+      const m = await membership(home)
+      const board = groupSessions(fresh(recs.map((x) => x.rec)))
+      const boardOf = (rec) => [...board].find(([, rs]) => rs.some((r) => r.id === rec.id))[0]
+      const at = `${lang}/${escaped ? 'escaped' : 'literal'}`
+      for (const reader of ['query', 'board']) {
+        const keyOf = (x) => (reader === 'query' ? m.get(`${SEG1}:${recs.indexOf(x) + 1}`)[0] : boardOf(x.rec))
+        const by = { a: new Set(), b: new Set() }
+        for (const x of recs) by[x.s].add(keyOf(x))
+        assert.equal(by.a.size, 1, `${at}: A is one session (${reader})`)
+        assert.equal(by.b.size, 1, `${at}: B is one session (${reader})`)
+        assert.notEqual([...by.a][0], [...by.b][0], `${at}: A and B stay apart (${reader})`)
+      }
+    }
+  }
+})

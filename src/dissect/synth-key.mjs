@@ -4,7 +4,7 @@
 // session of the same harness and the same system-prompt hash when it starts within SYNTH_GAP_MS of that
 // session's latest call; otherwise it opens a new one. pid and connection are NOT inputs (3.4 关键区分: one
 // Hermes gateway serves many tasks). Callers feed records in file order; the board and the ETL both read the
-// capture files in sorted order, so they assign the same keys. A keyless call carrying its harness's compaction hint is first
+// capture files in sorted order, so they assign the same keys. A keyless call that is its harness's compaction request is first
 // matched to an open session of the same harness, keyed or synthesized, by the user text both carry (3.4 按内容认亲; pi's summary request). Leaf module.
 import { createHash } from 'node:crypto';
 import { harnessOf, sessionKeyOf, bodyOf, hintsOf } from './harnesses.mjs';
@@ -35,7 +35,7 @@ const stampOf = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(
 const FACTS = new WeakMap();
 
 // ── kinship (3.4 合成键 · 按内容认亲) ─────────────────────────────────────────────────────────────────────────────────────
-// A keyless call carrying its harness's compaction hint is looked for in the open sessions of that harness first, by the
+// A keyless call that is its harness's compaction request is looked for in the open sessions of that harness first, by the
 // user text both carry. Fingerprints: every WIN-character window of the whitespace-collapsed text, hashed, kept when the hash
 // falls on the sample (h % SAMPLE === 0) — the same rule on both sides, so a long enough shared fragment yields shared fingerprints
 // when it falls within what both sides keep (the caps below; else the call falls back to its synthesized key). Character windows, not words: CJK has no spaces. A fingerprint is stored as h / SAMPLE (a small integer).
@@ -69,8 +69,8 @@ export function createSynthKeys({ gapMs = SYNTH_GAP_MS } = {}) {
 }
 
 /** What a call brings to the rule, or null when it takes no part in it. Keyless → {harness, ms, hash, fp, probe}: `fp` is the
- *  fingerprints its session is recognized by, `probe` the ones it looks for its session with when it carries the harness's
- *  compaction hint, else null. Keyed (a `synth: true` harness only) → {harness, ms, key, fp}, with NO hash: a keyed call never opens or moves a synthesized group. A reader that cannot afford the body later (the
+ *  fingerprints its session is recognized by, `probe` the ones it looks for its session with when it is the harness's
+ *  compaction request, else null. Keyed (a `synth: true` harness only) → {harness, ms, key, fp}, with NO hash: a keyed call never opens or moves a synthesized group. A reader that cannot afford the body later (the
  *  segment index, 1.6 §4.1) stores these and asks the assigner below with them. */
 export function synthFactsOf(rec) {
   if (!rec || typeof rec !== 'object') return null;
@@ -89,9 +89,19 @@ function factsOf(rec) {
   const key = sessionKeyOf(rec).key;
   const texts = userTextsOf(bodyOf(rec)), fp = fingerprints([...texts].reverse(), FP_CAP);
   if (key) return { harness: h.id, ms, key, fp };
-  const hint = hintsOf(rec);
-  const probe = hint.compaction === true || hint.compactionMarker ? fingerprints(texts, PROBE_CAP) : null;
+  const probe = compactionRequest(rec, h.row) ? fingerprints(texts, PROBE_CAP) : null;
   return { harness: h.id, ms, hash: createHash('sha256').update(systemTextOf(bodyOf(rec)), 'utf8').digest('hex'), fp, probe };
+}
+
+// The call that is the compaction request: a header / request-kind hint, or its harness's text marker in its own system text
+// (pi's summary request), read as a JSON string so a marker anchored on a string's start holds. A marker in the history (Hermes
+// keeps one in every later call) marks a turn of the session it is in, not a call looking for one (3.4 按内容认亲).
+function compactionRequest(rec, row) {
+  const hint = hintsOf(rec);
+  if (hint.compaction === true) return true;
+  if (!hint.compactionMarker) return false;
+  const sys = JSON.stringify(systemTextOf(bodyOf(rec)));
+  return row.compaction.some((c) => c.marker && c.marker.test(sys));
 }
 
 /** The rule itself (gate G11), over those facts in the order the calls were captured → {key, kin} | null. Every call adds its
