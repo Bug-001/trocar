@@ -6,6 +6,7 @@
 import path from 'node:path'
 import { execTool } from '../../../off/exec.mjs'
 import { pathKey } from '../../../off/fsutil.mjs'
+import { dirsFor } from '../../../off/loc.mjs'
 import { POLICY_KEY_PATTERN, POLICY_NAME_PATTERN } from './helper.mjs'
 
 const HIVES = { HKCU: 'HKCU', HKEY_CURRENT_USER: 'HKCU', HKLM: 'HKLM', HKEY_LOCAL_MACHINE: 'HKLM' }
@@ -81,7 +82,4 @@ export const platformFacts = ({ run = null, env = process.env } = {}) => Object.
 
 /** sources.mjs's ctx.dirs on Windows: `appSupport` is %APPDATA% (Electron's appData), `localAppData` %LOCALAPPDATA%; each falls back to
  *  its default place under the home. */
-export const dirsOf = (home, env = process.env) => ({
-  appSupport: env.APPDATA || path.win32.join(home, 'AppData', 'Roaming'),
-  localAppData: env.LOCALAPPDATA || path.win32.join(home, 'AppData', 'Local'),
-})
+export const dirsOf = (home, env = process.env) => dirsFor('win32', home, env)
