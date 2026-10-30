@@ -378,6 +378,7 @@ export const VENDOR_WORD = 'Vendor'
 export const BACK_TO_RAW = 'Back to raw'
 export const FAILED_NO_REPLY = 'This call failed; there is no reply'
 export const EMPTY_REPLY = 'The reply has no content'
+export const UNREAD_REPLY = 'No part of the reply could be read'
 export const TECH_DETAILS = 'Technical details'
 
 // ── the call drawer (2.6 §B) ────────────────────────────────────────────────────────────────────────────────────────

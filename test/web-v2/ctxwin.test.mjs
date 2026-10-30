@@ -10,6 +10,7 @@ import { QUIET_CAUSES } from '../../src/web/v2/replay/analysis.mjs'
 import { stepOf } from '../../src/web/v2/replay/model.mjs'
 import * as W from '../../src/web/v2/labels/replay.mjs'
 import { esc } from '../../src/web/v2/core/fmt.mjs'
+import { bodyCache } from '../../src/web/v2/replay/blocks.mjs'
 import { deskOf, world, deskFrom } from './desk-world.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
@@ -210,6 +211,24 @@ test('2.3 #13: a part without its span says parsed on its own row; an incomplete
 test('2.3 #13: a reply with no parts is one line with its stop reason', () => {
   const h = seg(ctxWindowHtml(stateOf(replyDesk([[]]))))
   assert.ok(!h.includes('class="cblk')); assert.ok(h.includes('STOP-q'))
+})
+
+test('2.3 #13: an opened reply row whose body came back unproven keeps that mark on every repaint', () => {
+  const ref = 's/m#R::resp.raw::9001-9', s = stateOf(replyDesk([[rp('text', { ref })]]))
+  bodyCache.set(ref, { status: 'absent' }) // a 404 is cached (cell.mjs); the row was proven by its span until the body said otherwise
+  try {
+    for (let k = 0; k < 2; k++) {
+      const h = ctxWindowHtml(s), [r] = rows(h), [hd] = heads(h)
+      assert.match(r.attrs, /data-ff="notfetched"/); assert.ok(hd.includes('class="ffbadge'), 'a visible mark'); assert.ok(!hd.includes('sr-only'), 'no screen-reader verbatim')
+    }
+  } finally { bodyCache.delete(ref) }
+})
+
+test('2.3 #13: a reply with no readable part says so without claiming the reply was empty', () => {
+  const h = seg(ctxWindowHtml(stateOf(replyDesk([[]], [{ respIncomplete: { undecoded: true } }]))))
+  assert.ok(!h.includes('class="cblk')); assert.ok(visible(h).includes(W.UNREAD_REPLY) && !visible(h).includes(W.EMPTY_REPLY))
+  const known = seg(ctxWindowHtml(stateOf(replyDesk([[]]))))
+  assert.ok(visible(known).includes(W.EMPTY_REPLY))
 })
 
 test('2.3:195: default open text → tool call → thinking; a flip stays across re-renders of the step, not across a step change', () => {
