@@ -1,6 +1,6 @@
 // test/view/provider-unknown.test.mjs — D25 · `providerOf()` MUST have an explicit unknown state.
 //
-// Audit 2026-07-19 (spec 0.0-overview D25 row, defect (b)): `providerOf()` returned 'cc' for ANY
+// Spec 0.0-overview D25 row, defect (b): `providerOf()` returned 'cc' for ANY
 // record the OpenAI dissector did not claim, so foreign bytes (Gemini / DeepSeek / anything we have
 // no dissector for) were run through the CLAUDE CODE dissector and rendered under Claude Code's
 // vocabulary with NO label. Observed before the fix, on the Gemini record below:
