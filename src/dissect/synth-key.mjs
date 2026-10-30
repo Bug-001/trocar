@@ -14,11 +14,14 @@ export const SYNTH_RULE = 'sha256(first system text) + a 30-minute gap (3.4 åˆæ
 const textOf = (c) => (typeof c === 'string' ? c
   : Array.isArray(c) ? c.map((p) => (p && typeof p === 'object' ? (typeof p.text === 'string' ? p.text : '') : String(p ?? ''))).join('') : '');
 // The task anchor: the first system text of whichever wire the call used (Anthropic `system`, Responses
-// `instructions`, Chat's leading system / developer message). '' when there is none: still an anchor.
+// `instructions`, else the first system / developer item of its `input`; Chat's leading system / developer
+// message). '' when there is none: still an anchor.
 export function systemTextOf(body) {
   const b = body || {};
   if (b.system != null) return textOf(b.system);
   if (typeof b.instructions === 'string') return b.instructions;
+  const item = Array.isArray(b.input) ? b.input.find((x) => x && (x.role === 'system' || x.role === 'developer')) : null;
+  if (item) return textOf(item.content);
   const first = Array.isArray(b.messages) ? b.messages[0] : null;
   if (first && (first.role === 'system' || first.role === 'developer')) return textOf(first.content);
   return '';
