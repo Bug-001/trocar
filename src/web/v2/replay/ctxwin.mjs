@@ -18,8 +18,8 @@ import { contentRefOf, contentRefKOf } from './stepbar.mjs'
 import { stepRef } from './lanes.mjs'
 import { stepOf } from './model.mjs'
 import { setFold, turnAnchorKey, turnIsOpen } from './fold.mjs'
-import { ctxBlockHtml, blockRowHtml, fillBody, showBody, faithOf, faithNow, ffBadgeHtml, tagWord, bodyFor } from './blocks.mjs'
-import { replyOf, replyMarkHtml } from './rawpanel.mjs' // one reply rule, two drawings (2.3 §这一步的回复 · 2.6 §A)
+import { ctxBlockHtml, blockRowHtml, fillBody, showBody, faithOf, faithNow, ffBadgeHtml, tagWord, bodyFor, openedFf, bodyCache } from './blocks.mjs'
+import { replyOf, partMark } from './rawpanel.mjs' // one reply rule, two drawings (2.3 §这一步的回复 · 2.6 §A)
 
 export { blockBodyHtml } from './blocks.mjs'
 
@@ -225,9 +225,10 @@ function drawPlan(groups, all, focus) {
 /** The full draw: every open turn's rows (what the window holds once a fill has run to the end). */
 export const ctxWindowHtml = (s) => serialize(ctxWindowUnits(s, { all: true }))
 
-// ── ⑨ this step's reply (2.3 §这一步的回复): one head (the word · the ONE fidelity mark · the stop reason), then one block row
-// per reply definition through the request's row component, its body a cell. A reply row is not a request block: no data-bi /
-// data-rk / data-sec / data-ff, no 新 / cache / volatile / per-row fidelity marks. Default open = the rows of the first present
+// ── ⑨ this step's reply (2.3 §这一步的回复): one block row per reply definition through the request's row component, in the
+// request rows' form — no head; each row its own fidelity mark (partMark, proven rows as a request's: data-ff + screen-reader
+// word), the stop reason on the last row's head, the rows a group a screen reader names. A reply row is not a request block:
+// no data-bi / data-rk / data-sec, no 新 / cache / volatile marks. Default open = the rows of the first present
 // kind among text → tool call → thinking; a reader's flip is `rp:<bid>` in s.openBlocks, kept while the step stays, reset on
 // a step change (2.3:195).
 const REPLY_OPEN_ORDER = ['text', 'tool_use', 'thinking']
@@ -236,20 +237,26 @@ export const replyDef = (d) => ({ ...d, text_ref: d.ref })
 function replyUnit(s, st, call) {
   if (s.replyFor !== call.rid) { for (const k of [...s.openBlocks]) if (String(k).startsWith('rp:')) s.openBlocks.delete(k); s.replyFor = call.rid }
   const r = replyOf({ row: call, reply: st.reply, detail: st.detail })
-  if (r.failed) return { key: 'reply', html: `<div class="cwreply"><div class="cwrhd"><b>${esc(W.REPLY_WORD)}</b> · ${esc(W.FAILED_NO_REPLY)}${r.failed.reason ? techDetailsHtml([['reason', r.failed.reason]], { id: 'cwfail' }) : ''}</div></div>` }
-  const head = `<div class="cwrhd"><b>${esc(W.REPLY_WORD)}</b>${replyMarkHtml(r)}${r.stop ? `<span>${W.stopReasonRow(`<span class="mono">${esc(r.stop)}</span>`)}</span>` : ''}</div>`
+  const group = (inner) => ({ key: 'reply', html: `<div class="cwreply" role="group" aria-label="${esc(W.REPLY_WORD)}">${inner}</div>` })
+  if (r.failed) return group(`<div class="cwrline">${esc(W.FAILED_NO_REPLY)}${r.failed.reason ? techDetailsHtml([['reason', r.failed.reason]], { id: 'cwfail' }) : ''}</div>`)
+  const stop = r.stop ? `<span class="cbstop">${W.stopReasonRow(`<span class="mono">${esc(r.stop)}</span>`)}</span>` : ''
+  // no part: empty only when the bytes are whole; otherwise nothing is claimed about the content (the call line says why)
+  if (!r.parts.length) return group(`<div class="cwrline">${esc(r.mark === 'partial' ? W.UNREAD_REPLY : W.EMPTY_REPLY)}${stop}</div>`)
   const first = REPLY_OPEN_ORDER.find((k) => r.parts.some((d) => d.kind === k))
   s.curReply = new Map()
   const seen = new Map()
-  const kids = r.parts.map((d) => {
+  const kids = r.parts.map((d, i) => {
     const n = seen.get(d.bid) || 0; seen.set(d.bid, n + 1)
     const key = 'rp:' + d.bid + (n ? '#' + n : ''), b = replyDef(d)
     s.curReply.set(key, b)
-    const open = (d.kind === first) !== s.openBlocks.has(key)
+    // an opened body that came back unproven outranks the span's proof, on every repaint (2.3 §保真标, as faithNow for a request row)
+    const open = (d.kind === first) !== s.openBlocks.has(key), f = (open && openedFf(bodyCache.get(b.text_ref))) || partMark(d) || 'verbatim'
+    const mark = f === 'verbatim' ? `<span class="sr-only">,${esc(W.FF_WORD.verbatim)}</span>` : ffBadgeHtml(f)
     return { key, html: blockRowHtml({ role: 'assistant', tag: replyTag(d), label: d.preview || '' }, {
-      cls: `r-assistant k-${esc(d.kind)}`, attrs: ` data-rp="${esc(key)}"`, chars: typeof d.chars === 'number' ? d.chars : null, open, body: open ? bodyFor(b) : '' }) }
+      cls: `r-assistant k-${esc(d.kind)}`, attrs: ` data-rp="${esc(key)}" data-ff="${f}"`, badges: mark + (i === r.parts.length - 1 ? stop : ''),
+      chars: typeof d.chars === 'number' ? d.chars : null, open, body: open ? bodyFor(b) : '' }) }
   })
-  return { key: 'reply', html: `<div class="cwreply">${head}<div class="cwrrows" data-kids>${KIDS}</div></div>`, kids }
+  return { ...group(`<div class="cwrrows" data-kids>${KIDS}</div>`), kids }
 }
 // ── repaint: patch to the units, fill open bodies, land once per step, then fill the placeholders ──────────────────────
 // A step whose lane is not held keeps the rows already drawn unless `busy` (the desk's 150 ms decision, 2.3 §车道未到手).
@@ -365,7 +372,38 @@ function landingDue(s) {
 function land(el, s, { t }) {
   s.landedFor = s.anchor.calls[s.playhead].rid
   const node = !t || !el.querySelector ? null : t.reply ? el.querySelector('.cwreply') : t.anchor ? el.querySelector('#cachebrk') : el.querySelector(`.cblk[data-bi="${t.bi}"]`)
-  if (node && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'start' })
+  if (!node || typeof node.scrollIntoView !== 'function') return
+  unreal(s)
+  const real = typeof node.getBoundingClientRect === 'function' && el.querySelectorAll ? realBand(el, node) : []
+  node.scrollIntoView({ block: 'start' })
+  // real through one painted frame, so each remembers its real size (contain-intrinsic-size: auto) once off screen again
+  s.landReal = real
+  const raf = globalThis.requestAnimationFrame, done = () => { if (s.landReal === real) unreal(s) }
+  raf ? raf(() => raf(done)) : done()
+}
+const unreal = (s) => { for (const x of s.landReal || []) x.classList.remove('cwreal'); s.landReal = null }
+// A row or card off screen is laid out at its preset size (content-visibility: auto) until it comes on screen, and an open one is far
+// taller: scrolled against the preset sizes, the rows the landing passes grow after it and move the target. Those that can share the
+// screen with the target are made real (.cwreal) first: within one window height of its top, which holds as each is never shorter than
+// its preset. Card by card from the outside in (a card's rows count once the card is real), reading the rects of one level per layout.
+function realBand(el, node) {
+  const H = el.clientHeight, kids = new Map(), real = []
+  for (const x of el.querySelectorAll('.cblk, .cwturn')) {
+    const up = x.parentElement.closest('.cwturn'), k = up && el.contains(up) ? up : null
+    kids.has(k) ? kids.get(k).push(x) : kids.set(k, [x])
+  }
+  let level = kids.get(null) || []
+  while (level.length) {
+    const y = node.getBoundingClientRect().top, lo = y - H, hi = y + H, box = (i) => level[i].getBoundingClientRect()
+    let a = 0, b = level.length // in document order the rects go down: the first one whose bottom reaches the band
+    while (a < b) { const m = (a + b) >> 1; if (box(m).bottom < lo) a = m + 1; else b = m }
+    const hit = []
+    for (let i = a; i < level.length && box(i).top <= hi; i++) hit.push(level[i])
+    for (const x of hit) x.classList.add('cwreal')
+    real.push(...hit)
+    level = hit.flatMap((x) => x.classList.contains('collapsed') ? [] : kids.get(x) || [])
+  }
+  return real
 }
 // the list position of the row at the window's top (a drawn row, or the first row of a placeholder), from the window drawn now
 function topRow(el, s) {

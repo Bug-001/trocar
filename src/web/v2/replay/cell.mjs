@@ -83,7 +83,10 @@ export const loadBody = (api, ref) => loadBodies(api, [ref]).then(([got]) => got
 // a failed fetch that was not remembered: the next open asks again
 export const isRetryable = (got) => !!got && got.status === 'error'
 
-export const hasInline = (b) => b.text !== undefined || b.block !== undefined || b.desc !== undefined || b.schema !== undefined
+// the body a definition carries itself: a block the capture cannot point into brings it as `def.inline` (3.5 §会话读 · 2.3 §没有
+// def.ref, e.g. each part of a plain-JSON reply); a block built in the browser holds the same keys on itself
+const ownBody = (b) => (b.inline && typeof b.inline === 'object' ? b.inline : b)
+export const hasInline = (b) => { const x = ownBody(b); return x.text !== undefined || x.block !== undefined || x.desc !== undefined || x.schema !== undefined }
 export const isAddressed = (b) => !!b.text_ref && !hasInline(b)
 
 // the text of an inline message block (the block vocabulary: text · thinking · tool_use · tool_result · image · document)
@@ -101,14 +104,15 @@ export function rawContentText(bl) {
 }
 // the text of a block that carries its body inline
 export function inlineText(b) {
-  if (b.sec === 'tools') {
-    return b.verbatim
-      ? `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\n\ndescription:\n${b.desc || '—'}${b.schema !== undefined ? `\n\nschema:\n${JSON.stringify(b.schema, null, 2)}` : ''}`
+  const x = ownBody(b)
+  if (b.sec === 'tools') { // by what the definition carries: the wire sends no `verbatim`; an older capture kept neither text
+    return b.verbatim !== false && (x.desc !== undefined || x.schema !== undefined)
+      ? `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\n\ndescription:\n${x.desc || '—'}${x.schema !== undefined ? `\n\nschema:\n${JSON.stringify(x.schema, null, 2)}` : ''}`
       : `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\nparams (names only): ${(b.props || []).join(', ') || '—'}\ndescription: ${kf(b.descChars)} chars captured — schema text not retained (length only)\n\nMetadata only: the full JSON schema (parameter types / required / enums / nesting) and the description text were not captured. The model received the full schema; this is a capture boundary, not a display clip.`
   }
-  if (b.sec === 'system') return b.text
-  if (b.faithfulness === 'opaque') return String(rawContentText(b.block) || '') || '[Encrypted / redacted reasoning: the wire carries only a signature or ciphertext, no plaintext. There is nothing to restore verbatim.]'
-  return rawContentText(b.block)
+  if (b.sec === 'system') return x.text
+  if (b.faithfulness === 'opaque') return String(rawContentText(x.block) || '') || '[Encrypted / redacted reasoning: the wire carries only a signature or ciphertext, no plaintext. There is nothing to restore verbatim.]'
+  return rawContentText(x.block ?? x.text)
 }
 
 // ── the cell object ───────────────────────────────────────────────────────────────────────────────────────────────────

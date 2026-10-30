@@ -31,6 +31,7 @@ import { ensureBoardPort, freeOnLoopback, BOARD_RANGE, readIngressConfig } from 
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { BODY, REPLY, agentOf, darwinExec, freePort, through } from '../helpers/model-io.mjs'
+import { listenLocalhost } from '../helpers/localhost.mjs'
 
 const CALLS = 1_100 // ≥ 2 sealed packs of 512 (3.5 PACK_MEMBERS)
 const pause = (ms) => new Promise((d) => setTimeout(d, ms))
@@ -252,8 +253,7 @@ test('4.4 #17 tips · daemon: a keyed call captured through the real door → th
   const rootPem = fs.readFileSync(path.join(w.dir, 'ca', 'trocar-ca.pem'), 'utf8')
   const upCa = createCa({ commonName: 'e2e upstream CA' }), upIssuer = createLeafIssuer(loadCa(upCa))
   const mock = tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)) }, (s) => { s.on('error', () => {}); let b = ''; s.on('data', (d) => { b += d; if (b.includes(BODY)) s.write(REPLY) }) })
-  await new Promise((r) => mock.listen(0, '127.0.0.1', r))
-  const target = `localhost:${mock.address().port}`, KEY = 'daemon-tip-session'
+  const target = `localhost:${await listenLocalhost(mock)}`, KEY = 'daemon-tip-session'
   const bundle = path.join(w.home, 'codex-ca.pem'); fs.writeFileSync(bundle, rootPem + upCa.certPem)
   const a = agentOf({ w, name: w.harnesses.find((h) => h.name === 'codex').processes.names[0].name, env: { SSL_CERT_FILE: bundle } })
   const box = await liveUnit({ w, platform: 'darwin', io: { exec: darwinExec(a) }, daemon: { fork: workerFork, queryIdleMs: 1500 } })

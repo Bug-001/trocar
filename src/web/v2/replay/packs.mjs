@@ -17,7 +17,7 @@
 // than the head's.
 // desk.newest = the newest member the desk holds in record order (placeOf / after): the head's mark or a held `{r}` id (1.5 K-32).
 
-import { changed, addRow, removeRow, newHeld } from './model.mjs'
+import { changed, addRow, removeRow, newHeld, boardDef } from './model.mjs'
 
 const enc = new TextEncoder(), dec = new TextDecoder()
 
@@ -120,7 +120,7 @@ export function applyFile(desk, file, { head, lines }) {
       if (tail) { const kept = e.lines.get(rid) ?? e.lines.set(rid, {}).get(rid); kept[k] = x }
       if (claim(desk, e, rid)) put[k](desk, x)
     } else if (k === 'd') {
-      desk.defs.set(x.bid, x)
+      desk.defs.set(x.bid, boardDef(x))
       if (!e.bids.has(x.bid)) { e.bids.add(x.bid); desk.defRefs.set(x.bid, (desk.defRefs.get(x.bid) ?? 0) + 1) }
     } else if (k === 'l') { e.heads.set(x.lane, x); touched.add(x.lane) }
     else if (k === 'x') e.fails.set(`${x.where} ${x.code}`, x)
