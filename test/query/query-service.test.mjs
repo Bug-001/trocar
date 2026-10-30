@@ -21,6 +21,7 @@ import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
+import { runQuery } from '../../src/query/named/index.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
 import { lineFile, loadSidecar } from '../../src/query/line-file.mjs'
 import { REDUCE_V } from '../../src/view/reduce.mjs'
@@ -728,6 +729,15 @@ test('a worker SIGKILLed after several checkpoint intervals of a fold leaves a r
   assert.ok(st && st.bytes > 0, 'the fold log\'s sidecar holds a reduction state the next worker resumes from')
 })
 
+// A segment of other traffic (no model call, no session) holding `per` records: the bulk of a cold corpus.
+const filler = (home, g, per = 10_000) => {
+  const lines = []
+  for (let i = 0; i < per; i++) lines.push(JSON.stringify({ ts: '2026-10-24T09:00:00.000Z', endpoint: `/v1/other/${i}`, method: 'GET', req_headers: { accept: '*/*' }, req_body: null,
+    resp: { status: 200, kind: 'json', body: { ok: true } }, id: `o_${g}_${i}`, ts_request: '2026-10-24T09:00:00.000Z', is_llm_call: false, capture: 'transparent',
+    host: 'other.example.test', traffic_class: 'other', proc: { pid: 9, exe: '/x/kimi', agent: 'kimi' } }))
+  writeSegmentLines(home, `20261024T09${String(Math.floor(g / 60)).padStart(2, '0')}${String(g % 60).padStart(2, '0')}Z`, lines)
+}
+
 // 3.5 §后台抽取与归约 · #32: the segment index read before the first slice is background work too. A worker forked by a kick reads the
 // whole index to find the kicked call's session; on a cold corpus (no index yet: the read scans every raw line of every segment) that
 // read outlasts idleMs, and the worker reports it per segment and chunk, so the idle clock does not end it before the fold. Fork and
@@ -737,15 +747,7 @@ test('a worker SIGKILLed after several checkpoint intervals of a fold leaves a r
 // worker reports and fails after STALL ms without.
 test('kick: a segment index read longer than idleMs before the first slice is reported, and the kicked session is folded to its frontier (3.5 #32)', { timeout: 600_000 }, async (t) => {
   const { recordId } = await import('../../src/collector/core/record/segments.mjs')
-  const IDLE = 3_000, STALL = 30_000, PER = 10_000, READS = 2
-  // other traffic (no model call, no session): one cold segment of PER records
-  const filler = (home, g) => {
-    const lines = []
-    for (let i = 0; i < PER; i++) lines.push(JSON.stringify({ ts: '2026-10-24T09:00:00.000Z', endpoint: `/v1/other/${i}`, method: 'GET', req_headers: { accept: '*/*' }, req_body: null,
-      resp: { status: 200, kind: 'json', body: { ok: true } }, id: `o_${g}_${i}`, ts_request: '2026-10-24T09:00:00.000Z', is_llm_call: false, capture: 'transparent',
-      host: 'other.example.test', traffic_class: 'other', proc: { pid: 9, exe: '/x/kimi', agent: 'kimi' } }))
-    writeSegmentLines(home, `20261024T09${String(Math.floor(g / 60)).padStart(2, '0')}${String(g % 60).padStart(2, '0')}Z`, lines)
-  }
+  const IDLE = 3_000, STALL = 30_000, READS = 2
   // calibration: a first read pays the one-off costs, then the read of CAL more segments is the cost per segment
   const cal = rawHome('trocar-qsvc-cal-'), CAL = 3
   filler(cal, 0)
@@ -784,4 +786,40 @@ test('kick: a segment index read longer than idleMs before the first slice is re
     assert.deepEqual(said, [], 'an idle exit is not a query-failed')
     assert.ok(firstFold != null && firstFold > IDLE, `the read before the first slice outlasted idleMs (${firstFold} ms > ${IDLE} ms): else the calibration under-sized the corpus and this case shows nothing`)
   } finally { svc.stop() }
+})
+
+// 3.5 §后台抽取与归约: a request's own segment index read is reported as the read before the first slice is, after every segment and
+// every chunk a cold segment's scan reads; the daemon cuts only a SILENT worker, so a long read (a cold index: the first read after an
+// index format change scans every segment again) is answered, not cut as wedged. Axis: every name whose answer reads the whole index.
+// No timing: the reports are counted, not timed.
+const WHOLE_INDEX = ['segments', 'classes', 'sessions', 'overview', 'calls', 'traffic']
+test('every name that reads the whole segment index reports its read, at least once per segment (3.5 #32)', async () => {
+  const S = 3, home = rawHome('trocar-qsvc-')
+  for (let g = 0; g < S; g++) filler(home, g, 50)
+  for (const name of WHOLE_INDEX) {
+    let n = 0
+    const doc = await runQuery(name, {}, { home, progress: () => n++ })
+    assert.deepEqual(doc.errors, [], name)
+    assert.ok(n >= S, `${name}: ${n} reports for ${S} segments`)
+  }
+})
+
+// The same reports reach the daemon from a real worker (the IPC seam): a request that reads a cold index sends progress while it reads.
+// The worker is stopped as soon as it answers (before its first idle period, so no background work of its own reports), and the
+// messages are counted until its channels close: the IPC channel and stdout are two pipes, so arrival order says nothing.
+test('relay: a request reading a cold segment index sends progress on the IPC channel (3.5 #32)', async () => {
+  const home = rawHome('trocar-qsvc-')
+  for (let g = 0; g < 3; g++) filler(home, g, 50)
+  for (const name of WHOLE_INDEX) {
+    fs.rmSync(path.join(home, 'index'), { recursive: true, force: true })
+    let reports = 0, kid = null
+    const svc = createQueryService({ home, fork: (h) => { kid = workerFork(h); kid.on('message', (m) => { if (m && m.progress === true) reports++ }); return kid } })
+    const res = recorder()
+    try {
+      await within(svc.relay({ name, params: {}, res }), 60_000, `${name}: the relay settles`)
+    } finally { svc.stop() }
+    if (kid.exitCode === null && kid.signalCode === null) await within(once(kid, 'close'), 30_000, `${name}: the worker closes`)
+    assert.equal(res.status, 200, name)
+    assert.ok(reports >= 1, `${name}: progress while it read (${reports})`)
+  }
 })

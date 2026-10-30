@@ -16,9 +16,9 @@ import { listOf, paginate, tsFilter } from './index.mjs';
 
 export const params = Object.freeze(['harness', 'since', 'until', 'limit', 'after']);
 
-export async function run({ home, fs, now, params: p, errors, later = null }) {
+export async function run({ home, fs, now, params: p, errors, later = null, progress = null }) {
   const keep = tsFilter(p, now), harness = listOf(p.harness);
-  const index = await indexRows({ home, fs, errors });
+  const index = await indexRows({ home, fs, errors, progress });
   const rows = p.since == null && p.until == null ? index : index.filter((r) => keep(r.ts)); // no window: the list and its session index
   const rowsOf = new Map();
   const all = [...sessionGroups(rows)]

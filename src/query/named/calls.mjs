@@ -12,7 +12,7 @@ import { QueryArgError, listOf, paginate, tsFilter } from './index.mjs';
 
 export const params = Object.freeze(['class', 'harness', 'session', 'host', 'ref', 'since', 'until', 'limit', 'after', 'reveal']);
 
-export async function run({ home, fs, now, params: p, errors }) {
+export async function run({ home, fs, now, params: p, errors, progress = null }) {
   if (p.ref != null && !parseRecordId(String(p.ref))) throw new QueryArgError(`trocar query calls: --ref ${JSON.stringify(String(p.ref))} names no record — a record is \`<segment>:<line>\``);
   // `reveal` shows one credential-class header's value of one record (2.6 §保真边界 2): only with `ref`
   if (p.reveal != null && p.ref == null) throw new QueryArgError('trocar query calls: --reveal needs --ref — it shows one header of one record');
@@ -20,7 +20,7 @@ export async function run({ home, fs, now, params: p, errors }) {
   const keep = tsFilter(p, now), cls = listOf(p.class), harness = listOf(p.harness), sess = listOf(p.session),
     host = listOf(p.host), ref = listOf(p.ref);
   // Through the ONE warm, stat-revalidated reading of the index (src/query/rows.mjs, which `sessions` and `session` ask too).
-  const all = await indexRows({ home, fs, errors });
+  const all = await indexRows({ home, fs, errors, progress });
   const as_of = asOf(all);
   // --harness is the harness `sessions` decided (proc, else the UA), and the session is the one `sessions` grouped by (C.5)
   const rows = all.filter((r) => keep(r.ts) && (!harness || harness.has(r.harness_id)) && (!sess || sess.has(r.session_id))
