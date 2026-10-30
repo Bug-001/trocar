@@ -69,7 +69,7 @@ for (const platform of ['darwin', 'win32']) {
         fs.writeFileSync(bundle, rootPem + upCa.certPem) // what this codex trusts: the trocar root and the upstream's CA
 
         // `trocar on codex` through the CLI, at the running daemon's real endpoint (its unit is already up: the stand-in starts nothing)
-        const unit = { path: path.join(w.home, 'trocar-unit'), text: () => '', links: [], registered: () => ({ state: 'present' }), enable: () => ({ code: 0 }), start: () => ({ code: 0 }), startNow: () => ({ code: 0 }), registered: () => ({ state: 'present' }), reload: () => {} }
+        const unit = { path: path.join(w.home, 'trocar-unit'), text: () => '', links: [], enable: () => ({ code: 0 }), start: () => ({ code: 0 }), startNow: () => ({ code: 0 }), registered: () => ({ state: 'present' }), reload: () => {} }
         const io = { out: () => {}, err: () => {}, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
         const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: platform, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } }, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
         assert.equal(await runOnCli(['codex', '--yes'], { io, env: w.env, home: w.home, platform, deps }), 0)

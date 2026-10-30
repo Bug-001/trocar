@@ -35,7 +35,7 @@ function daemon({ sock, token }) {
   return { saw, start: new Promise((resolve) => srv.listen(sock, () => resolve())), close: () => new Promise((r) => srv.close(r)) }
 }
 
-const fakeUnit = (home) => ({ path: path.join(home, 'trocar-collector.service'), text: () => '# a unit this test never really starts', registered: () => ({ state: 'present' }), enable: () => ({ code: 0 }), start: () => ({ code: 0 }), startNow: () => ({ code: 0 }), registered: () => ({ state: 'present' }), reload: () => {} })
+const fakeUnit = (home) => ({ path: path.join(home, 'trocar-collector.service'), text: () => '# a unit this test never really starts', enable: () => ({ code: 0 }), start: () => ({ code: 0 }), startNow: () => ({ code: 0 }), registered: () => ({ state: 'present' }), reload: () => {} })
 /** A home with Claude Code actually installed (the plan refuses a home whose agent is not there: "no agent trocar can capture was found"). */
 const claudeHome = (root) => {
   const home = path.join(root, 'home'); fs.mkdirSync(path.join(home, '.claude'), { recursive: true })

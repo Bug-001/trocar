@@ -671,7 +671,8 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
   if (register && unit && !unitFailed) {
     const q = unit.registered()
     if (q.state !== 'present') {
-      unitFailed = `${entryState(osName, unit, q)} after this install, so trocar on will refuse until it is: run trocar install again`
+      // a daemon that answered before the run was not started by the entry, and install starts no second one beside it (拉起不是重启, R8)
+      unitFailed = `${entryState(osName, unit, q)} after this install, so trocar on will refuse until it is: ${was.up ? 'a collector the login entry did not start is answering, and install does not start a second one; stop that collector, then run trocar install again' : 'run trocar install again'}`
       put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed })
       notes.push(unitFailed); problems.push(unitFailed)
     }

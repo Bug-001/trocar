@@ -94,7 +94,7 @@ test(`${platform}: update replaces a daemon holding ${TITLE[kind]}`, { timeout: 
     fs.writeFileSync(bundle, rootPem + upCa.certPem)
 
     // capture on for codex at the old daemon's real endpoint, then the agent's WebSocket through its door, decrypted and left open
-    const up = { path: path.join(w.home, 'trocar-unit'), text: () => '', links: [], registered: () => ({ state: 'present' }), enable: () => ({ code: 0 }), start: () => ({ code: 0 }), startNow: () => ({ code: 0 }), registered: () => ({ state: 'present' }), reload: () => {} }
+    const up = { path: path.join(w.home, 'trocar-unit'), text: () => '', links: [], enable: () => ({ code: 0 }), start: () => ({ code: 0 }), startNow: () => ({ code: 0 }), registered: () => ({ state: 'present' }), reload: () => {} }
     const quiet = { out: () => {}, err: () => {}, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
     assert.equal(await runOnCli(['codex', '--yes'], { io: quiet, env: w.env, home: w.home, platform, deps: { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os: platform, harnesses: w.harnesses, arch: { unit: { userUnit: () => up } } }, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) } }), 0)
     const u = new URL(/^HTTPS_PROXY=(\S+)$/m.exec(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'))[1].replace(/^["']|["']$/g, ''))
