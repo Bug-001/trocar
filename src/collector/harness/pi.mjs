@@ -85,6 +85,8 @@ const proxyMode = {
   },
   userCertFiles: [],
   blockers: [],
+  // spec 4.11 CM38: such a pi never imports the extension, so it never reads the switch file and does not reach the door
+  notes: [{ id: 'extension-left-out', text: "a pi started with --no-extensions, or whose settings leave trocar's extension out, does not load it and is not captured" }],
 }
 
 export default {
