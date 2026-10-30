@@ -6,8 +6,8 @@
 // daemon side (iii) `trocar status` lists it with no daemon running.
 //   Where an F item is checked elsewhere, the test that does is named in place (F5, F8, F9). No `todo` is left: the
 // engine's connection-row codes (C2 T-1 / T-2 / T-4 / T-11..T-15) and the combined-bundle check (D-21) landed with the
-// merge of the lanes, and the last one, F5's WebSocket labels vs capture health, with the decision of
-// 2026-10-06 (the class split, 4.6 F5). F1(b), F1(d), F2 (table), F4 and F5 (HTTP and WebSocket) are plain tests.
+// merge of the lanes, and the last one, F5's WebSocket labels vs capture health, with the class split (4.6 F5).
+// F1(b), F1(d), F2 (table), F4 and F5 (HTTP and WebSocket) are plain tests.
 // [test-machine] items are listed at the end; they are not run here.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -374,7 +374,8 @@ test('F4 write failures: an event line that cannot be written is on stderr and i
     const gap = h.collector.failures.find((g) => g.key.startsWith('log-gap'))
     assert.equal(gap.last.lost, 1, 'the gap, with how many lines were lost')
   } finally { await d.stop(); p.done(); s.done() }
-  // flows/ itself unreadable → 503, never empty: test/health/flows.test.mjs "readFlows: … an unreadable flows/ throws (503) …"
+  // flows/ itself unreadable → captureHealth throws and `status` lists it in errors, never empty: test/health/flows.test.mjs
+  // "readFlows: … an unreadable flows/ throws …" and test/cli/status-health.test.mjs "4.6 F9: …"
 })
 
 test('F4 the connection row of a flow whose envelope could not be written carries write_failed, and the agent still gets its reply', async () => {
@@ -665,14 +666,15 @@ test('F5 WebSocket labels and capture health, by D38 class: a call cut at the ca
 
 // Elsewhere:
 //   F5 (labels): test/dissect/labels-english.test.mjs — every capture label id (partial, ws_truncated, undecoded,
-//       non-verbatim, the response-body ones) reaches the board's two read paths. Which of them turn capture health ⚠
-//       (by D38 class) is the F5 WebSocket test above.
+//       non-verbatim, the response-body ones) is produced, in English on the board's two read paths. Which of them turn
+//       capture health ⚠ (by D38 class) is the F5 WebSocket test above.
 //   F4 (the capture file itself unwritable on the daemon's path): test/collector/daemon.test.mjs "an envelope that cannot be
 //       written is a durable failure record" — record/EISDIR in flows/, and the agent still gets its reply.
 //   F8: the old capture's own failure events went with it (D39⑥ executed 2026-10-11); the reader half still is
 //       test/health/capture-health.test.mjs "the old capture: …" ("old MITM only is not 「未安装」").
-//   F9: test/health/capture-health.test.mjs and test/health/flows.test.mjs (503, installed:false, metadata only),
-//       test/server/gate.test.mjs (Host / Origin), test/web-v2/caphealth-poll.test.mjs (stale after two missed periods).
+//   F9: test/health/capture-health.test.mjs and test/health/flows.test.mjs (an unreadable flows/ throws, installed:false,
+//       metadata only), test/cli/status-health.test.mjs (status: errors and exit 3), test/server/gate.test.mjs (Host /
+//       Origin), test/web-v2/caphealth-poll.test.mjs (stale after two missed periods).
 //   F3(c), F3(i): test/collector/arch/linux/redirector-client.unit.test.mjs (heartbeat gap, monotonic timing),
 //       test/collector/core/events.test.mjs (the day never goes back), test/health/capture-health.test.mjs (not
 //       responding by the lock's age, pid / boot_id mismatch → not running).

@@ -8,7 +8,7 @@
 // So the documented happy path (arrange capture, then serve) showed "No sessions captured yet" while
 // the user's capture sat on disk one directory away, with nothing in the UI to explain why. Every new
 // user hit it. Inline defaults cannot be checked against each other; centralised ones can, and
-// test/paths.test.mjs now pins the invariant: whatever a capture writer writes, the default board reads.
+// test/paths.test.mjs now pins the invariant: whatever a capture writer writes, the default reader (`trocar doctor`) reads.
 //
 // The default source is a DIRECTORY, not a file: the server supports directory sources, and that is
 // what lets Claude Code / Codex / OpenCode sessions appear side by side on one board. A single-file
