@@ -42,12 +42,14 @@ const lineOf = (id) => Number(String(id).split(':').pop());
  * {…index row, segment, lineNo, session_id, synthesized}, oldest segment first, capture order inside a segment — the order the
  * synthesized keys (3.4 合成键) are assigned in, the same order the board stamps them in, so both name a session the same. It is
  * shared by every reader until a segment moves. What a segment could not say goes into `errors` (D38), never silently missing — on
- * every call.
+ * every call. `progress` is called after every segment and every chunk of raw bytes a cold segment's scan reads: the query worker
+ * reports that work, so the daemon's idle clock does not end it in the middle of a long read (3.5 后台抽取与归约).
  */
-export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [] } = {}) {
+export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [], progress = null } = {}) {
   const segs = [];
   for (const [segment, at] of segmentFiles(home, fs)) {
-    const { records, problems } = await warmSegmentIndex({ home, segment, fs, at });
+    const { records, problems } = await warmSegmentIndex({ home, segment, fs, at, progress });
+    if (progress) progress();
     for (const pr of problems) errors.push(problemEntry(`segments/${segment}`, pr));
     segs.push({ segment, records, entry: recordsId(records) });
   }

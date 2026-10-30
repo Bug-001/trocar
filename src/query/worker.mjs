@@ -159,7 +159,8 @@ const notIdle = () => {
 }
 async function background() {
   if (busy) return
-  const ctx = { home, fs: nodeFs, writer: true, persist, once }
+  // `progress`: the segment index read before the first slice is background work too, reported per segment and chunk (3.5 后台抽取与归约)
+  const ctx = { home, fs: nodeFs, writer: true, persist, once, progress }
   if (target == null && !follow.size && kicked.size) await kickedSessions(ctx)
   if (target == null && follow.size) { const [k] = follow; follow.delete(k); target = k }
   if (target == null && !newestDone) {
@@ -201,7 +202,7 @@ async function background() {
   if (gcDone || busy || notIdle()) return // once per idle period, IDLE_SLICE_MS after the last request or kick: not after every burst
   gcDone = true
   saveIndexes() // the sidecars of what this busy period grew, before the GC counts them
-  gcProjections({ home, liveKeys: [...sessionGroups(await indexRows({ home, errors: [] })).keys()], keepKeys: answered })
+  gcProjections({ home, liveKeys: [...sessionGroups(await indexRows({ home, errors: [], progress })).keys()], keepKeys: answered })
   worked()
 }
 

@@ -120,7 +120,8 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null 
 // → { records, mark, bytesRead, done }: mark.end = just past the last newline (where the next read resumes).
 // `maxBytes` stops the scan at the first line boundary past that many bytes (`done: false`); it always takes at least
 // one whole line, so a caller that loops until `done` always makes progress, however long a single line is.
-function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Infinity) {
+// `progress` is called after every chunk read: a scan of a cold segment is background work the query worker reports (3.5 后台抽取与归约).
+function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Infinity, progress = null) {
   const fd = fs.openSync(file, 'r');
   try {
     const st = fs.fstatSync(fd);
@@ -147,6 +148,7 @@ function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Inf
       }
       if (seg < n) pending = Buffer.concat([pending, buf.subarray(seg, n)]);
       pos += n;
+      if (progress) progress();
     }
     const end = lineStart;
     const done = pos >= st.size;
@@ -463,9 +465,10 @@ export const problemEntry = (where, p) => ({ where, code: p.code, ...(p.level ? 
  *   entries: what the daemon's keeper already knows about the lines it just wrote ([{lineNo, offset, storedBytes,
  *     entry}], in line order; see fromEntries). Taken ONLY when they account for the segment exactly from the stored
  *     mark to its current size, so the answer is the scan's answer; anything else falls back to the scan.
+ *   progress: called after every chunk the scan reads (a reader's; scanNdjson).
  * Never throws for a segment it cannot read: the reason is in `problems` and the caller lists it in `errors`.
  */
-export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null, past = null } = {}) {
+export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null, past = null, progress = null } = {}) {
   const problems = [];
   const source = segmentSource(home, segment, fs);
   const sealed = /\.sealed$/.test(source);
@@ -486,7 +489,7 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
     got = sealed
       ? scanSealed(fs, source, segment, problems)
       : (owner && fromEntries(fs, source, stored, how, entries))
-        || scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes);
+        || scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes, progress);
   } catch (e) {
     problems.push({ code: 'segment-unreadable', reason: `${path.basename(source)}: ${String((e && e.message) || e)}` });
     return { segment, source, records: stored && how === 'resume' ? stored.records || [] : [], problems: [...prior, ...problems], bytesRead: 0, done: true, stored: kept, grown: false };
@@ -540,12 +543,12 @@ export const segStamp = (home, segment, fs, at = null) => {
  *  file moved. For READERS only: a pass of the daemon's keeper (`owner`) writes, so it is never served from memory.
  *  A note (`level`, e.g. `index-cold`) is about the read that RAN segmentIndex, so it is never kept: a later read
  *  served from memory did none of that work, and an index write does not move the stamp (3.5 读不全 #17). */
-export const warmSegmentIndex = async ({ home = trocarHome(), segment, fs = nodeFs, at = null } = {}) => {
+export const warmSegmentIndex = async ({ home = trocarHome(), segment, fs = nodeFs, at = null, progress = null } = {}) => {
   let notes = [];
   const kept = await segRows.get(`${fsTag(fs)}\n${home}\n${segment}`, segStamp(home, segment, fs, at), async (old) => {
     // the answer this segment had: its index read goes on from where that one stopped (4.2:49)
     const prev = old ? await Promise.resolve(old).catch(() => null) : null; // kept as the promise it was computed as
-    const got = columnar(await segmentIndex({ home, segment, fs, past: prev && prev.stored }), segment);
+    const got = columnar(await segmentIndex({ home, segment, fs, past: prev && prev.stored, progress }), segment);
     if (got.grown && got.records !== prev.records && got.records.length >= prev.records.length) grew.set(got.records, recordsId(prev.records));
     notes = got.problems.filter((p) => p.level);
     return notes.length ? { ...got, problems: got.problems.filter((p) => !p.level) } : got;
