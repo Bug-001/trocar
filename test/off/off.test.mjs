@@ -912,3 +912,11 @@ test('1.6 §3.1 · D62 ⑥: a nameless off in proxy mode reads the routing back 
   assert.equal(good.exit, 0, JSON.stringify(good.receipt.problems))
   assert.deepEqual([good.receipt.routing.confirmed, good.receipt.daemon], [true, { pid: 4242, state: 'running' }])
 })
+
+test('the text receipt says a changed file once, as it says a removed file once: two entries of one file that ended the same way are one row; two that ended differently are two', () => {
+  const file = path.join('/h', 'Library', 'Application Support', 'Code', 'User', 'settings.json') // one file, two json entries (a proxy key and an array item)
+  const rows = (changed) => formatOffReceipt({ command: 'off', ok: true, outcome: 'done', changed, removed: [] }, { home: '/h' }).split('\n').filter((l) => l.includes('settings.json')).length
+  const restored = { harness: 'kimi-code', path: file, result: 'restored' }
+  assert.equal(rows([restored, { ...restored }]), 1)
+  assert.equal(rows([restored, { ...restored, result: 'old-command' }]), 2)
+})
