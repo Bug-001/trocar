@@ -94,9 +94,13 @@ for (const platform of ['darwin', 'win32']) for (const fail of [null, ...Object.
         assert.ok(flows.some((x) => x.event === 'daemon-stop' && x.reason === 'install'), 'the old daemon-stop names install')
         assert.equal(JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8')).install.code, codeId(rootB))
 
+        // both model daemons share the test's pid, so the daemon lifecycle lines say the pid did not change: none is added by the second install
+        const lifecycle = () => flowsOf(w.dir).filter((x) => x.event === 'daemon-start' || x.event === 'daemon-stop').length
+        const before = { pid: s.pid, lines: lifecycle() }
         const again = fakeIo()
         assert.equal(await runInstallCli(['--yes', '--json'], { io: again, env: w.env, home: w.home, platform, deps: depsB }), 0, again.text())
         assert.equal(again.json().daemon.replaced, false)
+        assert.deepEqual({ pid: (await status()).pid, lines: lifecycle() }, before, 'the second install neither stops nor starts the collector')
         assert.equal(again.json().daemon.started, false)
       } finally {
         await within(boxA.stop(), 10_000, 'daemon A stop').catch(() => {})
