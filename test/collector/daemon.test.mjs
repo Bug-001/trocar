@@ -22,7 +22,7 @@ import { codeId } from '../../src/version.mjs'
 const CODE = codeId() // D67⑤: the daemon records which code it runs, the one place that says it
 const osBundleRoots = osRootsFor('linux') // the Linux reader, through the one table
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
-import { createRedirectorClient } from '../../src/collector/arch/linux/redirector-client.mjs'
+import { createRedirectorClient, REDIRECTOR_PROTO } from '../../src/collector/arch/linux/redirector-client.mjs'
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
@@ -442,6 +442,31 @@ test('daemon: refuses to start uninstalled; desired state survives a restart; on
   } finally { p.done(); s.done() }
 })
 
+// 4.11 §3 ㉓ (CM39): an id outside this daemon's harness table that the install manifest names is not installed here — a version 1 state.json is
+// carried to the table's harnesses only, a bare `on` turns only those on, and status lists only those
+test('CM39 daemon: a manifest naming an id outside the table — a version 1 state and a bare on write and report table ids only', async () => {
+  for (const desired of ['on', 'off']) {
+    const s = sandbox(); const p = fakeProc()
+    try {
+      await install(s)
+      const m = readManifest(s.collector)
+      m.entries = [...m.entries, ...m.entries.map((e) => ({ ...e, harness: 'later-agent' }))]
+      saveManifest(s.collector, m)
+      const stateFile = path.join(s.collector, 'state.json')
+      fs.writeFileSync(stateFile, JSON.stringify({ version: 1, desired, updated_at: 'T0' }))
+      const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] })
+      try {
+        const st = await req(s.sock, 'POST', '/on', {})
+        const table = [cc.name]
+        const disk = JSON.parse(fs.readFileSync(stateFile, 'utf8')) // a version 1 file nothing rewrote holds no id at all
+        assert.deepEqual((disk.version === 2 ? Object.keys(disk.harnesses) : []).filter((id) => !table.includes(id)), [], desired)
+        assert.deepEqual(Object.keys(st.harnesses).filter((id) => !table.includes(id)), [], desired)
+        assert.deepEqual(Object.keys((await req(s.sock, 'GET', '/status')).harnesses).filter((id) => !table.includes(id)), [], desired)
+      } finally { await d.stop() }
+    } finally { p.done(); s.done() }
+  }
+})
+
 test('daemon: a helper death is degraded and on reports why; a protocol mismatch never attaches (G2); a second daemon is refused before spawning a helper', async () => {
   const s = sandbox(); const p = fakeProc()
   await install(s)
@@ -461,13 +486,13 @@ test('daemon: a helper death is degraded and on reports why; a protocol mismatch
     const failures = statusFailures(await req(s.sock, 'GET', '/status')).map((f) => f.event)
     assert.ok(failures.includes('helper-down') && failures.includes('attach-failed'), `status reports both (D38): ${failures}`)
   } finally { await d.stop() }
-  const mis = fakeArch(p, { TROCAR_FAKE_PROTO: '3' })
+  const mis = fakeArch(p, { TROCAR_FAKE_PROTO: String(REDIRECTOR_PROTO + 1) })
   const d2 = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: mis.arch, harnesses: [cc] })
   try {
     const on = await req(s.sock, 'POST', '/on', {})
     assert.deepEqual([on.actual, on.helper.ok], ['off', false])
-    assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && /protocol 3/.test(f.reason)), 'every failure record carries reason (D38)')
-    assert.ok(flowsOf(s).some((f) => f.event === 'helper-version-mismatch' && /speaks protocol 3, this daemon expects 2; run "sudo trocar setup-helper"/.test(f.reason)))
+    assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && f.reason), 'every failure record carries reason (D38)')
+    assert.ok(flowsOf(s).some((f) => f.event === 'helper-version-mismatch' && f.got === REDIRECTOR_PROTO + 1 && f.expected === REDIRECTOR_PROTO && f.reason))
   } finally { await d2.stop(); p.done(); s.done() }
 })
 
@@ -1670,18 +1695,21 @@ test('daemon: POST /off {exit:true, now:true} cuts the spliced connection and st
   })
 })
 
-test('daemon: POST /off {exit, now, by:\'update\'} — the update stopping the daemon — cuts the splice as cut-by-stop naming update, and daemon-stop says update (1.6 §5.2)', async () => {
-  await withSplice(async ({ s, d, raw, flows }) => {
-    const off = await req(s.sock, 'POST', '/off', { exit: true, now: true, by: 'update' })
-    assert.deepEqual(off.relayed, { closing: 0, waiting: 0, cut: 1 })
-    await d.exited
-    if (!raw.destroyed) await once(raw, 'close')
-    const row = flows().find((f) => f.decision === 'splice')
-    assert.equal(row.error.type, 'cut-by-stop')
-    assert.match(row.error.message, /\bupdate\b/)
-    assert.equal(flows().find((f) => f.event === 'daemon-stop').reason, 'update')
+// `update` today; `a-later-command` is a command this daemon's code does not know: a newer copy replacing it names itself all the same (1.6 §5.2)
+for (const by of ['update', 'a-later-command']) {
+  test(`daemon: POST /off {exit, now, by:'${by}'} — that command stopping the daemon — cuts the splice as cut-by-stop naming it, and daemon-stop says it (1.6 §5.2)`, async () => {
+    await withSplice(async ({ s, d, raw, flows }) => {
+      const off = await req(s.sock, 'POST', '/off', { exit: true, now: true, by })
+      assert.deepEqual(off.relayed, { closing: 0, waiting: 0, cut: 1 })
+      await d.exited
+      if (!raw.destroyed) await once(raw, 'close')
+      const row = flows().find((f) => f.decision === 'splice')
+      assert.equal(row.error.type, 'cut-by-stop')
+      assert.ok(row.error.message.includes(by), row.error.message)
+      assert.equal(flows().find((f) => f.event === 'daemon-stop').reason, by)
+    })
   })
-})
+}
 
 test('daemon: an update\'s exit that /on withdrew does not name update on a later stop\'s cut — /off {exit, by:\'update\'}, /on, then the daemon is stopped: the splice row says cut-by-stop without update (1.6 §5.2)', async () => {
   await withSplice(async ({ s, d, raw, flows }) => {
@@ -1695,9 +1723,9 @@ test('daemon: an update\'s exit that /on withdrew does not name update on a late
   })
 })
 
-test('daemon: /off takes boolean now and exit only, exit takes no harness names, and by (update / uninstall) goes with exit; a refusal is a 400 that changes nothing (1.6 §1.4)', async () => {
+test('daemon: /off takes boolean now and exit only, exit takes no harness names, and by (a command name, not off) goes with exit; a refusal is a 400 that changes nothing (1.6 §1.4, §5.2)', async () => {
   await withSplice(async ({ s, d }) => {
-    for (const body of [{ now: 'yes' }, { exit: 1 }, { exit: true, harnesses: ['claude-code'] }, { exit: true, by: 'off' }, { by: 'update' }]) {
+    for (const body of [{ now: 'yes' }, { exit: 1 }, { exit: true, harnesses: ['claude-code'] }, { exit: true, by: 'off' }, { exit: true, by: 7 }, { exit: true, by: 'Not a name' }, { by: 'update' }]) {
       await assert.rejects(req(s.sock, 'POST', '/off', body), (e) => e.status === 400, JSON.stringify(body))
     }
     assert.equal((await req(s.sock, 'GET', '/status')).desired, 'on', 'nothing was turned off')

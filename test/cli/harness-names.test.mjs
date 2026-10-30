@@ -55,9 +55,3 @@ test('harness names: what is not a string is unknown, not a crash', () => {
   assert.equal(r.ok, false)
   assert.deepEqual(r.unknown, ['null', '7'])
 })
-
-test('harness names: an id an install manifest names is a name too, after the table\'s (off of a harness this table does not know)', () => {
-  assert.deepEqual(resolveHarnesses(['acme', 'claude'], ['codex', 'acme']), { ok: true, ids: ['claude-code', 'acme'] })
-  assert.deepEqual(resolveHarnesses(['nope'], ['acme']).known, [...HARNESS_IDS, 'acme', ...Object.keys(NAME_ALIASES)])
-  assert.equal(resolveHarnesses(['acme']).ok, false, 'without a manifest naming it, it is unknown')
-})

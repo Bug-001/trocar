@@ -45,7 +45,7 @@ test('readFailure: the visible line holds none of the reason; the reason is esca
   assert.notEqual(readFailure('Stats', { status: 0 }).line, readFailure('Stats', { status: 500 }).line)
 })
 
-test('overview cards: stats and recent read failures, the price line and a 503 capture card keep the reason out of the visible text', () => {
+test('overview cards: stats and recent read failures, the price line and an unreadable capture card keep the reason out of the visible text', () => {
   const NOW = Date.parse('2026-10-20T12:00:00Z')
   const stats = { as_of: new Date(NOW - 3600e3).toISOString(), sessions: { total: 1 }, calls: { llm: 2 }, harnesses: [], usage: { rows: [], coverage: {} } }
   for (const status of [0, 500, 503]) {
@@ -61,12 +61,13 @@ test('overview cards: stats and recent read failures, the price line and a 503 c
       assert.ok(rc.includes('data-act="retry"'), where('recent'))
       const pr = statsCardHtml({ w: '24h', stats: { data: stats, ok: true, err: null, w: '24h' }, pricing: { data: null, ok: false, err: ans } }, NOW)
       hidesReason(pr, t, given, where('price line'))
-      if (status === 503 && given) {
-        const p = capHealthPatch(ans, NOW)
-        const cap = capCardHtml({ caph: { data: p.capH, okAt: p.capHOkAt, err: null, ok: true } }, NOW)
-        hidesReason(cap, t, true, where('capture'))
-      }
     }
+  }
+  for (const make of [0, 1, 2, 3]) { // a capture health the server could not read (no health, errors names it): its reason only in the collapsed details (K-29)
+    const t = tok(), reason = reasonsWith(t)[make]
+    if (reason === '') continue
+    const p = capHealthPatch({ ok: true, status: 200, data: { errors: [{ where: 'capture health', reason }] } }, NOW)
+    hidesReason(capCardHtml({ caph: { data: p.capH, okAt: p.capHOkAt, err: null, ok: true } }, NOW), t, true, `capture · ${make}`)
   }
 })
 

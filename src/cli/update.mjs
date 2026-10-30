@@ -4,6 +4,7 @@
 // The line D67① draws is「pulling the code」: the OLD code runs the checks, switches off the harnesses that are on (who wrote an entry
 // undoes it) and pulls; then it starts a NEW process on the new code, which finishes (the daemon, `install`, `on`). The handover is one
 // public command, one file that holds nothing but harness names (`~/.trocar/collector/update.json`), and the daemon's `code`.
+// The collector is replaced by replace-daemon.mjs, the routine `install` runs too.
 // After the merge this process loads nothing: everything it may need is imported above, and all it does is spawn the child and wait.
 //   runUpdateCli(argv, { io, env, home, platform, deps }) → exit (0 updated or already up to date · 1 not updated / not finished · 2 usage, an npm copy with nothing to finish, no git checkout, root, nobody to confirm)
 //   deps (0.1 §3): `exec` (the spawnSync-shaped runner of git / npm), `child` (what runs the new code's `trocar update`), `off` / `on` /
@@ -17,20 +18,19 @@ import { execTool, runAsync } from '../off/exec.mjs'
 import { collectorDir, stateFile } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
 import { readManifest } from '../off/manifest.mjs'
-import { controlEndpointFor } from '../off/control-client.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
 import { commandNamed, usageLine } from './commands.mjs'
 import { pairs, wrap } from './text.mjs'
 import { runOffCli } from '../off/main.mjs'
 import { runOnCli } from './on.mjs'
 import { runInstallCli } from './install.mjs'
+import { replaceDaemon, daemonCode, CUT } from './replace-daemon.mjs'
 
 const USAGE = usageLine(commandNamed('update'))
 const FLAGS = new Set(['--yes', '--dry-run', '--json'])
 const NOT_GIT = 'this trocar is not a git checkout, so it cannot update itself. Update it the way you installed it.'
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
 const AGAIN = 'Fix that, then run trocar update again'
-const CUT = 'Connections the collector still holds are cut when it is replaced.'
 const COST = `While it runs those agents are not captured; connections they make still work. ${CUT}`
 
 /** → the exit code. `argv` is what follows `update`. */
@@ -219,7 +219,7 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
   r.to = codeId(root)
   r.harnesses = waiting.on
   const problems = []
-  const replaced = await replaceDaemon({ env, home, platform, deps, dir, root, fs, problems })
+  const replaced = await replaceDaemon({ by: 'update', env, home, platform, deps, dir, root, fs, problems })
   r.restarted = replaced.restarted
   if (replaced.notes.length) r.notes.push(...replaced.notes)
   const daemonFailed = problems.length > 0
@@ -249,41 +249,6 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
   return done(EXIT.ok)
 }
 
-/** The daemon on this code: one that runs another (or answers no `code`) is taken out of the way the way `uninstall` takes it — the same
- *  drain-then-stop path (`drainDaemon`: `POST /off {exit:true}`, then the wait, §5.2) and the same `stopDaemon` — and pulled up again
- *  through the login entry install registered (a stopped LaunchAgent is booted out, so this bootstraps it, 4.9 §4).
- *  → `{ restarted, notes }`; what went wrong is pushed on `problems`. The three modules of this step are the new code's: they are loaded
- *  here, in the process that finishes, never in the one that merged. */
-async function replaceDaemon({ env, home, platform, deps, dir, root, fs, problems }) {
-  const notes = []
-  const running = await daemonCode({ platform, dir, env, fs, deps })
-  if (running === codeId(root)) return { restarted: false, notes }
-  const { offWorld, drainDaemon } = await import('../off/orchestrate.mjs')
-  const w = offWorld({ home, env, deps: { ...deps, platform } })
-  const { routing } = await drainDaemon(w, { drainMs: deps.drainMs, by: 'update' })
-  notes.push(...routing.notes)
-  const stopped = routing.stop || (routing.confirmed ? await w.stopDaemon({ unitManaged: w.unitManaged() }) : null)
-  const pid = (stopped && Number.isInteger(stopped.pid) ? stopped.pid : null) ?? (Number.isInteger(routing.daemon.pid) ? routing.daemon.pid : null)
-  if (!stopped || (!stopped.stopped && stopped.pid != null)) { problems.push(`the collector${pid == null ? '' : ` (pid ${pid})`} could not be stopped${stopped && stopped.error ? ` (${stopped.error})` : routing.problems[0] ? ` (${routing.problems[0]})` : ''}, so it still runs ${running || 'code of its own'}. ${AGAIN}`); return { restarted: false, notes } }
-  const { ensureDaemonUp } = await import('../collector/install.mjs')
-  const unit = deps.unit !== undefined ? deps.unit : await loginUnit({ home, env, platform, deps })
-  if (!unit) { problems.push('this platform has no login entry to start the collector through, so it was not replaced'); return { restarted: false, notes } }
-  const up = await ensureDaemonUp({ osName: platform, dir, env, fs, unit, register: true, put: (e) => { if (e && e.reason) notes.push(e.reason) }, ...(deps.request ? { request: deps.request } : {}), ...(deps.socketPath ? { socketPath: deps.socketPath } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) })
-  notes.push(...up.notes)
-  if (!up.up) { problems.push(`the collector did not come back up (${up.problems[0] || 'it does not answer'}). ${AGAIN}`); return { restarted: false, notes } }
-  // a collector that answers is not yet one on THIS code: the login entry starts the copy install registered, and with npm another copy
-  // (global, a project's, the npx cache) is common — what it runs is asked again, never assumed (§5.5)
-  const now = await daemonCode({ platform, dir, env, fs, deps })
-  if (now !== codeId(root)) { problems.push(`the collector came back on ${now || 'code it does not name'}, not on ${codeId(root)}: the login entry starts another copy of trocar. Run trocar install from this copy, or run trocar update from the copy the login entry starts.`); return { restarted: true, notes, elsewhere: true } }
-  return { restarted: true, notes }
-}
-
-const loginUnit = async ({ home, env, platform, deps }) => {
-  const arch = await (await import('../collector/daemon.mjs')).loadArch(platform)
-  if (!arch || !arch.unit || !arch.unit.userUnit) return null
-  return arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env })
-}
-
 /** The package name when the code at `root` is an npm copy — its path ends in `node_modules/<its own package.json name>` (a global or project
  *  install, the npx cache, a tarball installed with npm) — else null (§5.5, D67②). */
 function npmCopy(root, fs) {
@@ -301,18 +266,6 @@ function installedCode(home, fs) {
   if (m && m.unsupported) return null
   if (!m || !m.install || typeof m.install !== 'object') return undefined
   return typeof m.install.code === 'string' && m.install.code ? m.install.code : null
-}
-
-/** Which code the collector runs, as it says on its control channel (D67⑤): null when none answers or it names none. The endpoint is
- *  resolved the one way every caller resolves it (the 2026-10-11 incident): nothing platform-specific here. */
-async function daemonCode({ platform, dir, env, fs, deps }) {
-  if (deps.daemonCode) return await deps.daemonCode()
-  const ep = controlEndpointFor({ platform, dir, env, fs })
-  if (!ep.socketPath) return null
-  try {
-    const answer = await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 5000 })
-    return (answer && typeof answer.code === 'string' && answer.code) || null
-  } catch { return null }
 }
 
 /** `~/.trocar/collector/update.json` as written: `{ from, on: [harness…] }`, or null when there is none (or it holds no list of names).

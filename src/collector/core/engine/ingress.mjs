@@ -249,6 +249,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
   const idle = new Set() // sockets that are not a flow: still in the handshake, or a health tunnel (closeIdle ends them; flows finish on their own)
 
   async function handle(socket, door = null) {
+    const acceptedAt = Date.now() // before the opener, the lookup and the dial: the engine's slowness counts from here (flow.mjs SLOW_ENGINE_MS)
     counters.connections++
     idle.add(socket); socket.once('close', () => idle.delete(socket))
     socket.on('error', () => {}) // ours from accept: a reset while we answer is this connection's end, never an uncaught exception (handleFlow adds its own once it owns the socket)
@@ -267,13 +268,13 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     const r = reader(socket, { onTooMuch: () => { unknown('the client sent more than 256 KiB before the tunnel was open').catch(() => {}); socket.destroy() } }) // cut at once; its record follows
     const w = { up: 0, down: 0 } // the opener's bytes in, and trocar's answers out: not the agent's (§5.6)
     const say = (b) => { w.down += b.length; if (!socket.destroyed) socket.write(b) }
-    try { await serve(socket, r, peer, w, say, unknown, authFailed, door) } catch (e) {
+    try { await serve(socket, r, peer, w, say, unknown, authFailed, door, acceptedAt) } catch (e) {
       socket.destroy()
       failure({ code: 'engine-error', peer, reason: `the proxy ingress failed on a connection: ${msgOf(e)}` })
     }
   }
 
-  async function serve(socket, r, peer, w, say, unknown, authFailed, door = null) {
+  async function serve(socket, r, peer, w, say, unknown, authFailed, door = null, acceptedAt = Date.now()) {
     const doorHash = door && typeof door.token === 'string' && door.token.length > 0 ? sha(door.token) : null
     const deadline = Date.now() + openerMs
     const shut = async (why, end = 'destroy') => { const held = r.detach(); await unknown(why, held); socket[end]() } // read no more, record, then close
@@ -413,7 +414,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       if (x.rest.length) x.sock.unshift(x.rest)
       return x.sock
     }
-    handleFlow(socket, { ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}), credentialed }, wire: { up: w.up, down: w.down } }, { upstream: d.sock, redial })
+    handleFlow(socket, { ...base, acceptedAt, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}), credentialed }, wire: { up: w.up, down: w.down } }, { upstream: d.sock, redial })
   }
 
   async function dialUpstream(up, target, track, { slow: watchSlow = true } = {}) {

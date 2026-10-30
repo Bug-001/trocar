@@ -109,7 +109,7 @@ function sessionMetaFor(id, recs, title) {
     other: otherRecs(recs).length,
     has_subagent: hasSubagent(recs),
     last_ts: lastTs(recs),
-    session_synthesized: recs.some((r) => !!r._synthKey),
+    session_synthesized: recs.some((r) => !!r._synthKey && !r._kin), // a call joined by content (3.4 按内容认亲) infers nothing
     title,
   });
 }
@@ -156,6 +156,7 @@ function itemOf(r) {
   const light = {};
   for (const k of META_KEYS) if (r[k] !== undefined) light[k] = r[k];
   if (r._synthKey) Object.defineProperty(light, '_synthKey', { value: r._synthKey });
+  if (r._kin) Object.defineProperty(light, '_kin', { value: true });
   const w = r.body_wire_bytes || {};
   return {
     slim: { is_llm_call: !!r.is_llm_call, ts_request: r.ts_request, id: r.id, response: { status: rp.status ?? null } }, // R1: read via respOf (D10 `resp` + v0 `response`)

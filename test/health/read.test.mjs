@@ -7,6 +7,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { lockState, procIdentity, captureHealth, LOCK_FRESH_MS } from '../../src/health/read.mjs'
+import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
 
 function box() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-lock-')); return { dir, file: path.join(dir, 'lock'), done: () => fs.rmSync(dir, { recursive: true, force: true }) } }
 const LOCK = { pid: 4242, start_time: '9000', boot_id: 'b-1', helper_pid: 4243, engine_port: 7000, socket: '/run/s' }
@@ -52,7 +54,7 @@ test('captureHealth reads state.json per harness: all on → on, none → off, s
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-sw-read-'))
   const dir = path.join(home, 'collector'); fs.mkdirSync(dir, { recursive: true })
   const put = (v) => fs.writeFileSync(path.join(dir, 'state.json'), typeof v === 'string' ? v : JSON.stringify(v))
-  const sw = () => captureHealth({ home, now: Date.parse('2026-10-07T12:00:00Z'), alive: () => false }).collector.switch
+  const sw = () => captureHealth({ home, harnesses: ['a', 'b'], now: Date.parse('2026-10-07T12:00:00Z'), alive: () => false }).collector.switch
   try {
     assert.deepEqual(sw(), { desired: 'off', since: null, harnesses: {} }, 'never switched: off, and it says since nowhere')
     put({ version: 2, updated_at: 'T9', harnesses: { a: { desired: 'on', updated_at: 'T1' }, b: { desired: 'on', updated_at: 'T3' } } })
@@ -69,8 +71,17 @@ test('captureHealth reads state.json per harness: all on → on, none → off, s
     assert.deepEqual([sw().desired, sw().since], ['off', 'T6'])
     for (const bad of ['{ torn', '[]', JSON.stringify({ version: 3, harnesses: {} })]) {
       put(bad)
-      const h = captureHealth({ home, now: Date.now(), alive: () => false })
+      const h = captureHealth({ home, harnesses: ['a', 'b'], now: Date.now(), alive: () => false })
       assert.deepEqual([h.collector.switch.desired, typeof h.collector.switch.error, h.read.errors.length], [null, 'string', 1], `${bad}: unreadable is said, never "off"`)
     }
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
+})
+
+// 4.11 §3 ㉓ (CM39): the switch is read for the caller's table; an id outside it, even one that is on, is neither reported nor counted
+test('CM39: captureHealth reads the switch for the table only: a table id off and an outside id on read as off', () => {
+  const home = tmpDir('trocar-sw-table-'); const dir = path.join(home, 'collector'); fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ version: 2, updated_at: 'T0', harnesses: { [HARNESS_IDS[0]]: { desired: 'off', updated_at: 'T1' }, 'later-agent': { desired: 'on', updated_at: 'T2' } } }))
+  const sw = captureHealth({ home, harnesses: HARNESS_IDS, now: Date.parse('2026-10-07T12:00:00Z'), alive: () => false }).collector.switch
+  assert.equal(sw.desired, 'off')
+  assert.deepEqual(Object.keys(sw.harnesses), [HARNESS_IDS[0]])
 })

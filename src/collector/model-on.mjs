@@ -44,7 +44,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   const m = readManifest(dir, fs)
   if (!installUsable(m)) return { code: CODE.certNotInstalled, on: [], refused: [], routes: [], notes: [], problems: [`trocar is not installed for this user (no install record with a root): run ${INSTALL_HINT} first`], exit: 1 }
   const byName = new Map(harnesses.map((d) => [d.name, d]))
-  const wanted = ids || m.install.harnesses
+  const wanted = ids || harnesses.map((d) => d.name).filter((h) => m.install.harnesses.includes(h)) // 4.11 §3 ㉓: this copy's table, in its order
   const refused = [], on = []
   const unsure = [], root = await rootOf({ dir, m, rootStore, fs })
   for (const h of wanted) { // precondition ⑪ = status's `setup` (4.11 P4b, one judgement): only a harness that needs setup is refused, nothing written for it
@@ -93,7 +93,8 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   let doorsNow = {}
   try { doorsNow = ep.socketPath ? ((await ask({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).doors || {}) : {} } catch { doorsNow = {} }
   const was = await loadIngressConfig({ dir, groups, isFree, fs })
-  const cfg = await rebindTaken(was, async (port, g) => doorsNow[g] === port || isFree(port), { dir, isFree, fs })
+  // 4.11 §3 ㉓: a group of an id outside the table is another copy's — its port is never moved (the picker still avoids it)
+  const cfg = await rebindTaken(was, async (port, g) => !byName.has(g.split(':')[0]) || doorsNow[g] === port || isFree(port), { dir, isFree, fs })
   // a door group whose port or token is new (P12): when every group of h moved, the earlier windows lead nowhere now — they go and the history
   // restarts here (`since`); when some moved, `door_since` marks those groups, and a process from an earlier window may have read the old value
   const changed = new Set(was.created ? groups : [...was.added, ...cfg.rebound])

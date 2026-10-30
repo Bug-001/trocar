@@ -16,6 +16,7 @@ import cc from '../../src/collector/harness/claude-code.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
+import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
@@ -98,13 +99,13 @@ test('agent-list: a bad item is one agent-list-invalid with its index and code, 
     assert.equal(bad.length, 1, 'one failure for one file version, however many checks see it')
     assert.deepEqual([bad[0].event, bad[0].where, bad[0].code, bad[0].path], ['failure', 'harness', 'agent-list-invalid', s.list])
     assert.deepEqual(bad[0].problems.map((x) => [x.index, x.code]), [[0, 'unknown-harness']])
-    assert.ok(captureHealth({ home: path.dirname(s.collector) }).collector.conditions.some((c) => c.code === 'agent-list-invalid'), 'a broken list is a condition until it is fixed')
+    assert.ok(captureHealth({ harnesses: HARNESS_IDS, home: path.dirname(s.collector) }).collector.conditions.some((c) => c.code === 'agent-list-invalid'), 'a broken list is a condition until it is fixed')
 
     writeList(s, { version: 1, agents: [{ harness: 'claude-code', name: 'claude-nightly' }] })
     await until(async () => listEvents(s).some((l) => l.event === 'agent-list-ok'))
     await settle()
     assert.deepEqual(listEvents(s).map((l) => l.event), ['failure', 'agent-list-ok'])
-    assert.ok(!captureHealth({ home: path.dirname(s.collector) }).collector.conditions.some((c) => c.code === 'agent-list-invalid'), 'agent-list-ok ends the condition')
+    assert.ok(!captureHealth({ harnesses: HARNESS_IDS, home: path.dirname(s.collector) }).collector.conditions.some((c) => c.code === 'agent-list-invalid'), 'agent-list-ok ends the condition')
     assert.equal(await agentOf(s, 4303), 'claude-code')
   } finally { await d.stop() }
 })

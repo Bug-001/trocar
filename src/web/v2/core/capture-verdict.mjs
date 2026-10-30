@@ -40,7 +40,7 @@ function failingItems(doc) {
 
 // The 采集服务 state of one answer. `doc` is the last good answer (null before the first), `okAt` when it arrived (epoch ms), `err`
 // the reason of the last failed read (or null), `now` the clock. Precedence: two polls missed → stale; a failure before any answer →
-// stale with no time; no answer yet → loading; a 503 → unreadable; then `doc.health`; no `health` → not known (K-28).
+// stale with no time; no answer yet → loading; a capture health the server could not read → unreadable; then `doc.health`; no `health` → not known (K-28).
 // → { state, mark, cls, n, since, reason, raw, readErrors, text } — text is never empty.
 export function captureVerdict(doc, { okAt = null, err = null, now = Date.now() } = {}) {
   const mk = (state, text, x = {}) => ({ state, ...LOOK[state], n: null, since: null, reason: null, raw: null, readErrors: 0, text, ...x })
@@ -58,11 +58,14 @@ export function captureVerdict(doc, { okAt = null, err = null, now = Date.now() 
   return mk(state, text, { n: h.n ?? null, since: h.since ?? null, reason: h.reason ?? null, raw: known ? null : h.state ?? null, readErrors: h.read_errors || 0 })
 }
 
-// → the store patch ({capH, capHOkAt, capHErr}) for one api.get('status') result: any 200 document is a good answer; a 503 (the
-// server could not read the health: {unreadable}); anything else is a recorded failure, never a silent success.
+// → the store patch ({capH, capHOkAt, capHErr}) for one api.get('status') result: any 200 document is a good answer, and one whose capture
+// health the server could not read (no `health`, and `errors` names `capture health`: 1.6 C.3, 4.6 F9) carries that reason as `unreadable`;
+// anything else is a recorded failure, never a silent success.
 export function capHealthPatch(r, now = Date.now()) {
-  if (r && r.ok && r.data && typeof r.data === 'object') return { capH: r.data, capHOkAt: now, capHErr: null }
-  if (r && !r.ok && r.status === 503 && r.error) return { capH: { unreadable: r.error }, capHOkAt: now, capHErr: null }
+  if (r && r.ok && r.data && typeof r.data === 'object') {
+    const cut = !r.data.health && Array.isArray(r.data.errors) && r.data.errors.find((e) => e && e.where === 'capture health')
+    return { capH: cut ? { ...r.data, unreadable: String(cut.reason || 'reason unknown') } : r.data, capHOkAt: now, capHErr: null }
+  }
   return { capHErr: r && r.ok ? 'HTTP 200 · no document' : (r && (r.error || 'HTTP ' + r.status)) || 'reason unknown' }
 }
 

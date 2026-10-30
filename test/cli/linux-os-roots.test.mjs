@@ -15,6 +15,7 @@ import { SYSTEM_BUNDLES } from '../../src/collector/core/tls/roots.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { certBlocks } from '../../src/off/pem.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
+import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { formatInstallNotes } from '../../src/cli/status-text.mjs'
 import { fakeDaemon, fakeIo } from './fixtures/on-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -75,7 +76,7 @@ test('Linux on: a block of the OS bundle that does not parse is not in the combi
   assert.equal(rec.length, 1, `one record: ${JSON.stringify(r.flows.map((f) => [f.event, f.code]))}`)
   assert.deepEqual([rec[0].event, rec[0].where, rec[0].kind, rec[0].dropped, rec[0].files], ['install-note', 'install', 'note', 1, [r.bundle]])
   assert.match(r.text.replace(/\n\s+/g, ' '), /1 certificate in the OS roots could not be parsed and is not in the combined bundles/, 'the receipt says it too')
-  const doctorNotes = formatInstallNotes(captureHealth({ home: path.join(r.home, '.trocar') })) // what `doctor` prints of the last install
+  const doctorNotes = formatInstallNotes(captureHealth({ harnesses: HARNESS_IDS, home: path.join(r.home, '.trocar') })) // what `doctor` prints of the last install
   assert.ok(doctorNotes.some((l) => /could not be parsed/.test(l) && l.includes(r.bundle)), doctorNotes.join('\n')) // the note says what happened and names the bundle; a code name is never printed (D58)
   assert.deepEqual(r.flows.filter((f) => f.code === 'system-roots-unavailable'), [], 'the OS roots are there: not said missing')
 })
@@ -92,7 +93,7 @@ test('Linux on: no OS bundle on the machine → the bundle has Node\'s roots and
   assert.ok(rec[0].reason.includes(r.bundle), 'it names the bundle')
   for (const f of SYSTEM_BUNDLES) assert.ok(rec[0].reason.includes(f), `and every path looked at: ${f}`)
   assert.match(r.text.replace(/\n\s+/g, ' '), /carries Node's roots only: no OS trust bundle holds a certificate/, 'the receipt says it too')
-  const doctorNotes = formatInstallNotes(captureHealth({ home: path.join(r.home, '.trocar') })) // what `doctor` prints of the last install (doctor.mjs)
+  const doctorNotes = formatInstallNotes(captureHealth({ harnesses: HARNESS_IDS, home: path.join(r.home, '.trocar') })) // what `doctor` prints of the last install (doctor.mjs)
   assert.ok(doctorNotes.some((l) => /no OS trust bundle holds a certificate/.test(l) && l.includes(r.bundle)), doctorNotes.join('\n'))
 })
 

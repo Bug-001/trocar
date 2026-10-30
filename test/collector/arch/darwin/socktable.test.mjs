@@ -93,3 +93,76 @@ test('the ask needs its inputs: no exec runner is a TypeError, and neither is a 
   await assert.rejects(() => ownerOfSocket({ peer: PEER }), /needs the injected exec runner/)
   await assert.rejects(() => ownerOfSocket({ exec: async () => table(), peer: { address: '127.0.0.1' } }), /peer\.port is required/)
 })
+
+// MA13 (4.9 §5.3 step 1): owner questions asked at once share socktable reads, through the daemon's own wiring (doorPartsFor's darwin parts). The fake
+// runner is a kernel: `sockets` maps a peer port to its holders; each read snapshots it when it STARTS and answers a while later.
+function fakeKernel({ readMs = 30, failReads = new Set(), onSnapshot = () => {} } = {}) {
+  const k = { sockets: new Map(), reads: 0, inFlight: 0, maxInFlight: 0 }
+  k.run = (file, args) => {
+    if (!String(file).endsWith('socktable')) return Promise.resolve({ status: 0, stdout: '', stderr: '' }) // scutil and the rest: nothing to say
+    const n = ++k.reads
+    const rows = [...k.sockets].flatMap(([port, pids]) => pids.map((pid) => row(`127.0.0.1:${port}`, '127.0.0.1:18112', pid)))
+    onSnapshot(n, k)
+    k.inFlight++; k.maxInFlight = Math.max(k.maxInFlight, k.inFlight)
+    return new Promise((resolve) => setTimeout(() => { k.inFlight--; resolve(failReads.has(n) ? { status: 1, stdout: '', stderr: 'no table' } : { status: 0, stdout: rows.join('\n'), stderr: '' }) }, readMs))
+  }
+  return k
+}
+async function ownerOfVia(k, event = () => {}) {
+  const { doorPartsFor } = await import('../../../../src/collector/arch/model-backends.mjs')
+  return doorPartsFor({ os: 'darwin', env: { PATH: '/nonexistent' }, event, io: { exec: k.run } })
+}
+const settle = () => new Promise((r) => setImmediate(r))
+
+test('MA13: twenty questions asked at once each answer their own pid, and at most one socktable read runs at any moment', async () => {
+  const k = fakeKernel()
+  for (let i = 0; i < 20; i++) k.sockets.set(51000 + i, [7000 + i])
+  const parts = await ownerOfVia(k)
+  try {
+    const rs = await Promise.all([...Array(20).keys()].map((i) => parts.ownerOf({ peer: { address: '127.0.0.1', port: 51000 + i } })))
+    assert.deepEqual(rs.map((r) => [r.pid, r.source]), [...Array(20).keys()].map((i) => [7000 + i, 'socket-table']))
+    assert.equal(k.maxInFlight, 1)
+  } finally { parts.close() }
+})
+
+test('MA13: a socket that appears after a read started, asked about after that, is answered by a later read — its pid, not no-row', async () => {
+  const k = fakeKernel()
+  k.sockets.set(51100, [7100])
+  const parts = await ownerOfVia(k)
+  try {
+    const first = parts.ownerOf({ peer: { address: '127.0.0.1', port: 51100 } })
+    await settle()
+    assert.equal(k.inFlight, 1, 'read A is running')
+    k.sockets.set(51101, [7101]) // the late peer connects while read A runs
+    const late = await parts.ownerOf({ peer: { address: '127.0.0.1', port: 51101 } })
+    assert.deepEqual([late.pid, late.source, late.why], [7101, 'socket-table', undefined])
+    assert.equal((await first).pid, 7100)
+  } finally { parts.close() }
+})
+
+test('MA13: a read that answers code 1 is unreadable for every question that shared it', async () => {
+  const k = fakeKernel({ failReads: new Set([2]) })
+  for (let i = 0; i < 5; i++) k.sockets.set(51200 + i, [7200 + i])
+  const failures = []
+  const parts = await ownerOfVia(k, (rec) => failures.push(rec))
+  try {
+    const first = parts.ownerOf({ peer: { address: '127.0.0.1', port: 51200 } }) // starts read 1
+    await settle()
+    const shared = await Promise.all([1, 2, 3, 4].map((i) => parts.ownerOf({ peer: { address: '127.0.0.1', port: 51200 + i } }))) // all share read 2
+    assert.deepEqual(shared.map((r) => [r.pid, r.why]), [1, 2, 3, 4].map(() => [null, 'unreadable']))
+    assert.ok(failures.length > 0 && failures.every((f) => f.code === 'socktable-unavailable'))
+    assert.equal((await first).pid, 7200)
+  } finally { parts.close() }
+})
+
+test('MA13: several holders that resolve to one on a re-read still answer that pid when the re-reads are shared', async () => {
+  const k = fakeKernel({ readMs: 5, onSnapshot: (n, kk) => { if (n === 1) kk.sockets.set(51300, [7300]) } }) // the fork-window co-holder exits after read 1
+  k.sockets.set(51300, [7300, 7399])
+  k.sockets.set(51301, [7301])
+  const parts = await ownerOfVia(k)
+  try {
+    const [a, b] = await Promise.all([parts.ownerOf({ peer: { address: '127.0.0.1', port: 51300 } }), parts.ownerOf({ peer: { address: '127.0.0.1', port: 51301 } })])
+    assert.deepEqual([a.pid, a.source, b.pid], [7300, 'socket-table', 7301])
+    assert.equal(k.maxInFlight, 1)
+  } finally { parts.close() }
+})
