@@ -257,6 +257,18 @@ test('a helper that exits carries the exit name and its last stderr lines into d
   await p
 })
 
+// 4.6 §命名空间前提: a helper that cannot number processes the way this namespace does exits 6, and down names it.
+test('a helper refusing its namespace (exit 6) goes down with exit namespace', async () => {
+  const m = mock()
+  const c = createRedirectorClient({ binary: '/x/bin', spawn: m.spawn, autoHeartbeatMs: 0, parentPid: 1234 })
+  const down = once(c, 'down')
+  const p = c.start().catch(() => {})
+  m.child.exitCode = 6; m.child.emit('exit', 6, null)
+  const [d] = await down
+  assert.equal(d.exit, 'namespace')
+  await p
+})
+
 // D38: an orderly stop is the daemon's daemon-stop record, never a failure. Measured on Linux 2026-10-30: on stdin EOF the real helper says
 // {"ev":"down","reason":"loader exiting"} and exits 0, and that was written as helper-down — a "Problem" in status after every off, logout and unit stop.
 test('close(): the helper saying "loader exiting" and exiting 0 is the close, no down; ending any other way during close is still down, with its exit (D38)', async () => {
