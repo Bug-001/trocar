@@ -848,7 +848,8 @@ test('uninstall writes an uninstall-note for every result but a plain restore an
 test('the board\'s last install / uninstall is the newest run: a clean uninstall after one that left a note shows only its own result; a failed install says so (D1-5)', async () => {
   const b = box()
   const { captureHealth } = await import('../../src/health/read.mjs')
-  const last = () => captureHealth({ home: path.join(b.home, '.trocar'), alive: () => false }).collector.install
+  const { HARNESS_IDS } = await import('../../src/off/harness-names.mjs')
+  const last = () => captureHealth({ harnesses: HARNESS_IDS, home: path.join(b.home, '.trocar'), alive: () => false }).collector.install
   try {
     fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model":"x"}')
     await installCollector(base(b))

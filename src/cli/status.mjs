@@ -249,7 +249,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     } catch (e) { rethrowSandbox(e); read = { state: null, error: errMessage(e) } }
     f.linger = read.state === true || read.state === false ? { linger: read.state } : { linger: 'unknown', linger_reason: read.error || 'the linger state could not be read' }
   }
-  try { f.health = deps.captureHealth ? deps.captureHealth({ home: trocarHome(home) }) : captureHealth({ home: trocarHome(home), fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
+  try { f.health = deps.captureHealth ? deps.captureHealth({ home: trocarHome(home), harnesses: HARNESS_IDS }) : captureHealth({ home: trocarHome(home), harnesses: HARNESS_IDS, fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
   if (merged) f.identity = identityBlocks({ ids: f.harnesses.map((h) => h.id), merged, health: effectiveHealth(f).health })
   Object.assign(f, await certP)
   return f

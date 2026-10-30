@@ -23,7 +23,7 @@ function fakeRedirector({ failAttach = false } = {}) {
 const tmpState = () => path.join(tmpDir('trocar-sw-'), 'collector', 'state.json')
 const IN = () => ['claude-code', 'codex'] // the installed harnesses (the daemon: the ones its install manifest names)
 const pick = (o, keys) => Object.fromEntries(keys.map((k) => [k, o[k]]))
-const mk = (redirector, stateFile, extra = {}) => createSwitch({ redirector, stateFile, installed: IN, ...extra })
+const mk = (redirector, stateFile, extra = {}) => createSwitch({ redirector, stateFile, known: IN(), installed: IN, ...extra })
 const desiredIn = (f) => Object.fromEntries(Object.entries(readState(f, () => {}, { installed: IN() }).harnesses).map(([id, h]) => [id, h.desired]))
 const rewrite = (f, fn) => { const s = JSON.parse(fs.readFileSync(f, 'utf8')); fn(s); fs.writeFileSync(f, JSON.stringify(s)) } // an operator's edit, in place
 
@@ -146,7 +146,7 @@ test('V28: version 1 reads as version 2 for every installed harness; unreadable 
   fs.writeFileSync(file, '{not json')
   const errs = []; const bad = readState(file, (e) => errs.push(e), { installed: ['claude-code'] })
   assert.equal(bad.harnesses['claude-code'].desired, 'off'); assert.equal(errs.length, 1)
-  const sw = createSwitch({ redirector: fakeRedirector(), stateFile: file, installed: () => ['claude-code', 'codex'], onEvent: () => {} })
+  const sw = createSwitch({ redirector: fakeRedirector(), stateFile: file, known: IN(), installed: () => ['claude-code', 'codex'], onEvent: () => {} })
   await sw.off({ harnesses: ['codex'] })
   const back = JSON.parse(fs.readFileSync(file, 'utf8'))
   assert.equal(back.version, 2)
@@ -253,7 +253,7 @@ test('D40 default policy: no state file, or no policy written → all; an entry 
   fs.mkdirSync(dir, { recursive: true })
   const at = (name, body) => { const f = path.join(dir, name); fs.writeFileSync(f, JSON.stringify(body)); return f }
   const pol = (f, onError) => readState(f, onError, { installed: ['codex'] }).harnesses.codex.policy
-  const fresh = createSwitch({ redirector: fakeRedirector(), stateFile: path.join(dir, 'absent.json'), installed: () => ['codex'], onEvent: () => {} })
+  const fresh = createSwitch({ redirector: fakeRedirector(), stateFile: path.join(dir, 'absent.json'), known: IN(), installed: () => ['codex'], onEvent: () => {} })
   assert.equal((await fresh.report()).harnesses.codex.policy, 'all', 'a fresh install: no file, no entry, the default')
   assert.equal(pol(at('nopolicy.json', { version: 1, desired: 'on', extra_hosts: [] })), 'all', 'a version 1 state that never named one')
   assert.equal(pol(at('auto.json', { version: 1, desired: 'on', policy: 'auto', extra_hosts: [] })), 'auto', 'written auto is kept')
@@ -264,10 +264,24 @@ test('D40 default policy: no state file, or no policy written → all; an entry 
   assert.equal(pol(torn, (e) => errs.push(e)), 'all'); assert.equal(errs.length, 1, 'an unreadable file is still reported')
   // the first `on` of a fresh install writes `all`; a later `on` without a policy keeps what is there
   const stateFile = path.join(dir, 'fresh', 'state.json')
-  await createSwitch({ redirector: fakeRedirector(), stateFile, installed: () => ['codex'], onEvent: () => {} }).on()
+  await createSwitch({ redirector: fakeRedirector(), stateFile, known: IN(), installed: () => ['codex'], onEvent: () => {} }).on()
   assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).harnesses.codex.policy, 'all')
   const old = at('old-install.json', { version: 1, desired: 'off', policy: 'auto', extra_hosts: [] })
-  const sw = createSwitch({ redirector: fakeRedirector(), stateFile: old, installed: () => ['codex'], onEvent: () => {} })
+  const sw = createSwitch({ redirector: fakeRedirector(), stateFile: old, known: IN(), installed: () => ['codex'], onEvent: () => {} })
   assert.equal((await sw.on()).harnesses.codex.policy, 'auto', 'turning on does not change the policy of an install that wrote one')
   assert.equal((await sw.on({ policy: 'all' })).harnesses.codex.policy, 'all', 'the operator can still choose')
+})
+
+// 4.11 §3 ㉓ (CM39): the switch walks the daemon's own table; a state.json entry for an id outside it is never read, changed or reported
+test('CM39: an off with no names leaves an id outside the table byte for byte, and the view lists table ids only', async () => {
+  const f = tmpState(); fs.mkdirSync(path.dirname(f), { recursive: true })
+  const outside = { desired: 'on', policy: 'auto', extra_hosts: ['x.example'], updated_at: 'T1', note: 7 }
+  fs.writeFileSync(f, JSON.stringify({ version: 2, updated_at: 'T0', harnesses: { codex: { desired: 'on', policy: 'all', extra_hosts: [], updated_at: 'T0' }, 'later-agent': outside } }))
+  const sw = mk(fakeRedirector(), f)
+  await sw.restore()
+  const r = await sw.off()
+  assert.deepEqual(JSON.parse(fs.readFileSync(f, 'utf8')).harnesses['later-agent'], outside)
+  assert.equal(JSON.parse(fs.readFileSync(f, 'utf8')).harnesses.codex.desired, 'off')
+  assert.deepEqual(Object.keys(r.harnesses).filter((id) => !IN().includes(id)), [])
+  assert.equal(r.desired, 'off')
 })

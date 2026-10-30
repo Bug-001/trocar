@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { captureHealth, HealthUnreadable, LOCK_FRESH_MS } from '../../src/health/read.mjs'
+import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 
 const NOW = Date.parse('2026-10-06T12:00:00Z')
 const H = 3600e3
@@ -20,7 +21,7 @@ function home() {
   const manifest = (m) => { fs.mkdirSync(c, { recursive: true }); fs.writeFileSync(path.join(c, 'install-manifest.json'), typeof m === 'string' ? m : JSON.stringify(m)) }
   const lock = (agoMs = 0) => { fs.writeFileSync(path.join(c, 'lock'), JSON.stringify({ pid: 4242, ...ME })); const t = new Date(NOW - agoMs); fs.utimesSync(path.join(c, 'lock'), t, t) }
   const state = (desired, ts) => fs.writeFileSync(path.join(c, 'state.json'), JSON.stringify({ desired, updated_at: ts }))
-  const health = (o = {}) => captureHealth({ home: h, now: NOW, alive: () => true, identity: () => ME, ...o })
+  const health = (o = {}) => captureHealth({ harnesses: HARNESS_IDS, home: h, now: NOW, alive: () => true, identity: () => ME, ...o })
   return { h, c, flows, manifest, lock, state, health, done: () => fs.rmSync(h, { recursive: true, force: true }) }
 }
 const installed = (b) => { b.manifest({ version: 3, install: { state: 'complete' }, created_at: at(100 * H), entries: [], files: [] }); b.flows([{ ts: at(2 * H), event: 'daemon-start', pid: 4242 }]) }

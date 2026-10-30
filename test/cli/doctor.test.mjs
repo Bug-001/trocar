@@ -287,7 +287,7 @@ test('V66 wired: a process-unknown in ~/.trocar\'s flows/ reaches `doctor claude
   const s = await installedHome()
   unknownOnDisk(s.home)
   const line = JSON.stringify(NIGHTLY)
-  const daemon = asDaemon(reply({ health: captureHealth({ home: path.join(s.home, '.trocar') }) })) // what the daemon serves: the same fold of the same flows/
+  const daemon = asDaemon(reply({ health: captureHealth({ harnesses: HARNESS_IDS, home: path.join(s.home, '.trocar') }) })) // what the daemon serves: the same fold of the same flows/
   for (const platform of ['linux', 'darwin', 'win32']) {
     for (const [label, request] of [['no daemon', down()], ['daemon', daemon]]) {
       const what = `${platform}, ${label}`

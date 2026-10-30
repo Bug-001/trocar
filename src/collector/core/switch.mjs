@@ -35,7 +35,7 @@ export function readState(file, onError = () => {}, { installed = [] } = {}) {
 
 export function writeState(file, state) { writeStateAtomic(file, state) }
 
-export function createSwitch({ redirector, stateFile, installed = () => [], ensureReady = async () => {}, reconcile = null, onEvent = () => {} }) {
+export function createSwitch({ redirector, stateFile, known, installed = () => [], ensureReady = async () => {}, reconcile = null, onEvent = () => {} }) {
   const unreadable = (e) => onEvent({ event: 'failure', where: 'state', code: e.code || 'state-unparsable', reason: `${stateFile} is unreadable (${String((e && e.message) || e)}); the desired state reads as off until on/off rewrites it` })
   const keyOf = () => { try { const s = fs.statSync(stateFile); return `${s.ino}:${s.size}:${s.mtimeMs}` } catch (e) { return `gone:${(e && e.code) || 'error'}` } } // a rename (new inode), an edit or a removal changes it
   let diskKey = keyOf() // before the read: a change in between is seen by the next reload, never missed
@@ -47,9 +47,11 @@ export function createSwitch({ redirector, stateFile, installed = () => [], ensu
   let inFlight = 0 // on / off / a reload running: desired and actual legitimately differ until it returns (the 5 s check waits)
 
   const desiredOf = (id) => (state.harnesses[id] && state.harnesses[id].desired === 'on' ? 'on' : 'off')
-  const onIds = () => Object.keys(state.harnesses).filter((id) => desiredOf(id) === 'on')
+  // every walk starts from `known`, this daemon's own harness table (4.11 §3 ㉓): an id state.json holds outside it is never read, changed or reported
+  const walked = () => known.filter((id) => installed().includes(id) || state.harnesses[id])
+  const onIds = () => known.filter((id) => desiredOf(id) === 'on')
   const anyOn = () => onIds().length > 0
-  const view = () => Object.fromEntries([...new Set([...installed(), ...Object.keys(state.harnesses)])].map((id) => { const h = state.harnesses[id]; return [id, { desired: desiredOf(id), policy: h ? h.policy : DEFAULT_POLICY, extra_hosts: h ? [...h.extra_hosts] : [], updated_at: h ? h.updated_at : null }] }))
+  const view = () => Object.fromEntries(walked().map((id) => { const h = state.harnesses[id]; return [id, { desired: desiredOf(id), policy: h ? h.policy : DEFAULT_POLICY, extra_hosts: h ? [...h.extra_hosts] : [], updated_at: h ? h.updated_at : null }] }))
 
   async function actual() {
     if (degraded) return { actual: 'off', links: [], hb_age_ms: null } // a dead helper's links died with it (never pinned)
@@ -157,7 +159,7 @@ export function createSwitch({ redirector, stateFile, installed = () => [], ensu
   // brought to it (the hook), and only then — when no harness is left on — the links come off (1.6 §1.5).
   async function off({ harnesses = null } = {}) {
     await reloadIfChanged()
-    const ids = harnesses ? [...new Set(harnesses)] : [...new Set([...installed(), ...Object.keys(state.harnesses)])]
+    const ids = harnesses ? [...new Set(harnesses)] : walked()
     const turned = ids.filter((id) => desiredOf(id) === 'on')
     for (const id of ids) recording.delete(id)
     const changed = turned.length > 0

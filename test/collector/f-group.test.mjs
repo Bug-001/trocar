@@ -42,6 +42,7 @@ import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector
 import cc from '../../src/collector/harness/claude-code.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
 import { captureHealth, HealthUnreadable } from '../../src/health/read.mjs'
+import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { sealSegment } from '../../src/raw/seal.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
@@ -81,7 +82,7 @@ const flowsOf = (s) => {
 // cannot read throws, which the command states; here that is reported as the same 503 shape the HTTP
 // route used to answer, so every assertion below still reads one way.
 async function endpoint(s) {
-  try { return { status: 200, ...captureHealth({ home: s.trocar }) } }
+  try { return { status: 200, ...captureHealth({ harnesses: HARNESS_IDS, home: s.trocar }) } }
   catch (e) { if (e instanceof HealthUnreadable) return { status: 503, error: `capture health could not be read: ${e.message}` }; throw e }
 }
 // (iii): `trocar collector status` with no daemon answering — it reads the disk
