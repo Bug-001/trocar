@@ -98,7 +98,7 @@ const KEEP = ['ts', 'event', 'where', 'code', 'reason', 'suppressed', 'folded', 
   'type', 'index', 'desired', 'actual', 'links', 'counts', 'from', 'to', 'lost', 'exit', 'stderr', 'signal', 'failed',
   'version', 'foreground', 'linger', 'upstream_ca', 'dropped', 'neg_key', 'errno', 'route', 'phase', 'decision', 'inner',
   'not_captured', 'write_failed', 'transport', 'port', 'out', 'servername', 'op', 'outcome', 'records', 'originalKept', 'reader', 'target', 'source', 'id', 'run',
-  'level', 'door', 'process', 'alert', 'trust_entry', 'method', 'owner_unread'] // level..trust_entry: trust-rejected (D51④); method, owner_unread: ingress-unknown (4.8 §5.1)
+  'level', 'door', 'process', 'alert', 'trust_entry', 'method', 'owner_unread', 'retry_at'] // level..trust_entry: trust-rejected (D51④); method, owner_unread: ingress-unknown (4.8 §5.1)
 const CLIP = 1000
 const clip = (v) => (typeof v === 'string' && v.length > CLIP ? `${v.slice(0, CLIP)}… (${v.length} chars)` : v)
 /** A record cut down to metadata: listed fields only, long strings clipped and said so, `error` as {type, message, side}. */
@@ -194,7 +194,12 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     else if (r.event === 'helper-version-mismatch') version = { kind: 'helper-version', ...pick(r), since: r.ts }
     else if (r.event === 'switch') mismatch = r.actual && r.actual !== 'unknown' && r.desired !== r.actual ? { kind: 'state-mismatch', ...pick(r), since: r.ts } : null
     else if (r.event === 'failure' && r.code === 'state-mismatch') mismatch = { kind: 'state-mismatch', ...pick(r), since: r.ts }
-    else if (r.event === 'failure' && r.code === 'negative-cache') neg.set(`${r.neg_key ?? r.pid}\u0000${r.host}`, { kind: 'negative-cache', ...pick(r), since: r.ts })
+    // an entry ends at its retry time (4.6 W22): a record past it is no condition; one without retry_at stands until cleared
+    else if (r.event === 'failure' && r.code === 'negative-cache') {
+      const k = `${r.neg_key ?? r.pid}\u0000${r.host}`
+      if (r.retry_at != null && Date.parse(r.retry_at) <= now) neg.delete(k)
+      else neg.set(k, { kind: 'negative-cache', ...pick(r), since: r.ts })
+    }
     else if (r.event === 'failure' && r.code === 'trust-rejected') rejected.set(`${r.neg_key ?? r.pid}\u0000${r.host}`, { kind: 'trust-rejected', ...pick(r), since: r.ts })
     else if (r.event === 'failure' && r.code === 'ca-invalid') ca = { kind: 'ca-invalid', ...pick(r), since: r.ts }
     else if (r.event === 'ca-ok') ca = null // the daemon found the CA usable again and rebuilt what it signs with (D1-2)

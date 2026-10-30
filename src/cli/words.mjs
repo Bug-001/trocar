@@ -215,10 +215,10 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'no-marker': [`${who} started before capture was on`, `restart ${h}`],
     'kimi-not-via-shim': [`${h} did not start through the program trocar installed`],
     'not-seen': [`trocar has not seen ${who} use its proxy yet; its next connection is judged`], // no restart part (1.6 附录 B)
-    // by the engine's cause (1.6 附录 B): a restart fixes only a refused trocar certificate, not an upstream's certificate or handshake
-    'negative-cache': cause === 'upstream-cert' ? [`${hp} does not trust a host's certificate, so trocar passes that traffic on unread`]
-      : cause === 'upstream-handshake' ? [`the handshake between ${hp} and a host did not finish, so trocar passes that traffic on unread`]
-        : [`${hp} refused trocar's certificate`, 'restart it'],
+    // by the engine's cause (1.6 附录 B): every entry is tried again at its retry time; a restart captures sooner only a refused trocar certificate
+    'negative-cache': cause === 'upstream-cert' ? [`${hp} does not trust a host's certificate, so trocar passes that traffic on unread until it tries again`]
+      : cause === 'upstream-handshake' ? [`the handshake between ${hp} and a host did not finish, so trocar passes that traffic on unread until it tries again`]
+        : [`${hp} refused trocar's certificate`, 'trocar tries again by itself; a restart captures it now'],
     'daemon-not-running': ['trocar is not running in the background'],
     'daemon-not-responding': ['trocar runs in the background but does not answer'],
     'helper-missing': ["trocar's capture helper is missing or is the wrong version"],

@@ -48,7 +48,7 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
     const row = (v) => ({ pid: p.pid, ...v })
     if (world) return row(world)
     if (p.trusted === false) return row(verdict(false, p.reason === 'off' ? 'desired-off' : p.reason ?? null))
-    if (p.trusted === true) return row(p.negative ? { ...verdict(false, 'negative-cache'), ...(p.cause ? { cause: p.cause } : {}) } : verdict(true)) // the engine's cause picks the words (1.6 附录 B)
+    if (p.trusted === true) return row(p.negative ? { ...verdict(false, 'negative-cache'), ...(p.cause ? { cause: p.cause } : {}), ...(p.negatives ? { negatives: p.negatives } : {}) } : verdict(true)) // the engine's cause picks the words (1.6 附录 B)
     if (absent) return row(absent)
     if (entry) return row(entry)
     if (certificate) return row(certificate)

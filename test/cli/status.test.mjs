@@ -219,6 +219,23 @@ test('the daemon answers: each agent is captured or says why, and the exit code 
   assert.deepEqual(neg.harnesses['claude-code'].processes.map((p) => [p.pid, p.reason, p.cause]), [[4121, 'negative-cache', 'client-rejected-leaf']], 'the engine\'s cause rides on the process (1.6 附录 C.3)')
 })
 
+// 1.6 V106: a process with refused hosts lists every one of them with its cause and when trocar tries it again (the ms the engine gives, as ISO)
+test('V106 status --json: a process the engine holds two hosts of lists both, each with its cause and retry time', async () => {
+  const s = await installedHome()
+  const t1 = Date.parse('2026-10-30T12:10:00.000Z'), t2 = Date.parse('2026-10-30T13:00:00.000Z')
+  const negatives = [
+    { pid: 4121, negKey: '4121', agent: 'claude-code', host: 'api.anthropic.com', key: 'api.anthropic.com:443', cause: 'client-rejected-leaf', rejections: 1, at: t1 - 600e3, retry_at: t1, renewals: 0 },
+    { pid: 4121, negKey: '4121', agent: 'claude-code', host: 'statsig.anthropic.com', key: 'statsig.anthropic.com:443', cause: 'upstream-handshake', rejections: 2, at: t2 - 3600e3, retry_at: t2, renewals: 3 },
+  ]
+  const doc = (await run(s, ['claude-code', '--json'], { request: asDaemon(reply({ agents: [{ pid: 4121, agent: 'claude-code', trusted: true }], negatives })) })).io.json()
+  const p = doc.harnesses['claude-code'].processes.find((x) => x.pid === 4121)
+  assert.equal(p.reason, 'negative-cache')
+  assert.deepEqual(p.negatives, [
+    { host: 'api.anthropic.com', cause: 'client-rejected-leaf', retry_at: new Date(t1).toISOString() },
+    { host: 'statsig.anthropic.com', cause: 'upstream-handshake', retry_at: new Date(t2).toISOString() },
+  ])
+})
+
 test('the entry on disk decides when no process does: intact when the value is there (the file may have been rewritten), entry-missing when it is gone, entry-changed when it is something else', async () => {
   const s = await installedHome()
   const settings = path.join(s.home, '.claude', 'settings.json')

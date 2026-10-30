@@ -165,7 +165,7 @@ export function formatStatus(s) {
     if (a.unreachable && a.unreachable.length) lines.push(`    not captured (a transport trocar cannot reach): ${a.unreachable.map((u) => u.transport).join(', ')}`)
     if (a.trusted && a.not_via_trust_path && a.not_via_trust_path.length) lines.push(`    not captured (it did not read trocar's certificate): ${a.not_via_trust_path.map((b) => `${b.host} (${b.reason})`).join(', ')}`)
   }
-  for (const n of s.negatives || []) lines.push(`  not captured: pid ${n.pid} ${n.host} - ${n.cause}`)
+  for (const n of s.negatives || []) lines.push(`  not captured: pid ${n.pid} ${n.host} - ${n.cause}${Number.isFinite(n.retry_at) ? ` until ${new Date(n.retry_at).toISOString().replace(/\.\d{3}Z$/, 'Z')}` : ''}`)
   for (const u of s.unmatched || []) lines.push(`  pid ${u.pid} ${u.exe} fits more than one harness (${u.candidates.join(' and ')}), so it was not watched`)
   if (s.unjudged && s.unjudged.count) lines.push(`not judged: ${s.unjudged.count} process(es) of yours whose program could not be read: ${s.unjudged.sample.map((u) => `${u.pid} ${u.comm || unknown()}`).join(', ')}${s.unjudged.count > s.unjudged.sample.length ? ', ...' : ''}`)
   if (s.health) lines.push(...(s.health.error ? [s.health.error] : formatHealth(s.health, { daemonLine: false })))
