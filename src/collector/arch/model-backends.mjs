@@ -48,6 +48,23 @@ export async function presentForms({ os, home, env = process.env, harnesses, fs 
   return Object.fromEntries(harnesses.filter((d) => d.proxyMode && here(d).length).map((d) => [d.name, here(d).filter((f) => isPresent(f, ctx)).map((f) => f.id)]))
 }
 
+/** The program files a process of a form runs, for each form of this OS whose certificate carrier is the install-folder wrapper (4.11 P8: one native
+ *  program by name): { <form id>: [its place, the real program moved aside] }. A process of the harness running anything else (another install of
+ *  it) is on none of those forms (4.11 P5). Paths only, nothing is read. */
+export async function formPrograms({ os, home, env = process.env, harnesses }) {
+  const [{ dirsOf, platformFacts }, { targetOf }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../core/proxymode/hooks/wrapper.mjs')])
+  const ctx = { ...sourcesCtx({ os, home, env, dirs: dirsOf(home, env) }), facts: typeof platformFacts === 'function' ? platformFacts({ env }) : platformFacts }
+  const out = {}
+  for (const d of harnesses) {
+    for (const f of (d.proxyMode && d.proxyMode.forms) || []) {
+      const cert = f.os.includes(os) && (d.proxyMode.certs || {})[f.cert]
+      const t = cert && cert.kind === 'wrapper' ? targetOf(ctx, cert) : null
+      if (t) out[f.id] = [t.file, t.real]
+    }
+  }
+  return out
+}
+
 /** backendsFor({ os, home, run, env, fs }) → { custody, rootStore, installHelper, wrapperKit, facts, dirs, policy } for macOS / Windows. */
 export async function backendsFor({ os, home, run = null, env = process.env, fs = nodeFs }) {
   if (os === 'darwin') {

@@ -19,3 +19,4 @@ export async function netFactsDeps({ arch = null, harnesses = null, platform = p
 
 /** The forms of this OS present on this machine, per harness (proxy mode; 1.6 §3.5, 4.11 P5): the arch's reader, loaded only when asked. */
 export async function presentForms(o) { return (await import('./arch/model-backends.mjs')).presentForms(o) }
+export async function formPrograms(o) { return (await import('./arch/model-backends.mjs')).formPrograms(o) }

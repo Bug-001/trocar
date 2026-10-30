@@ -21,7 +21,8 @@ import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
 import { listProcs, identityFor, pidAlive, memoProcQuestions, procAskNotes, daemonProcReader } from '../off/proc.mjs'
 import { createRegistry } from '../collector/core/registry.mjs'
 import { judgedForms, carrierAt, startVerdict } from '../collector/core/proxymode/verdict.mjs'
-import { readAgentList, mergeAgentList, processNames, normalizeName } from '../off/identity.mjs'
+import { readAgentList, mergeAgentList, processNames } from '../off/identity.mjs'
+import { hostsProcess } from '../collector/core/host-agent.mjs'
 import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
 import { removeTrocarText, SENTINEL } from '../off/text-edit.mjs'
@@ -165,10 +166,15 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const negatives = new Set((reply && Array.isArray(reply.negatives) ? reply.negatives : []).map((n) => n.pid))
   const tableOf = new Map((table || []).map((p) => [p.pid, p]))
   // proxy mode: which forms of each harness are on this machine (4.11 `present`); null = it could not be read. A harness with none is not captured (4.11 P5)
-  let here = null, hereError = null
+  let here = null, hereError = null, programs = null
   if (isProxyMode(platform) && desc.value) {
     try { here = await (deps.presentForms || (await import('../collector/net-deps.mjs')).presentForms)({ os: platform, home, env, harnesses: desc.value, fs }) } catch (e) { rethrowSandbox(e); hereError = `which harnesses are on this machine could not be read (${errMessage(e)})` }
+    try { programs = await (deps.formPrograms || (await import('../collector/net-deps.mjs')).formPrograms)({ os: platform, home, env, harnesses: desc.value }) } catch (e) { rethrowSandbox(e); programs = null }
   }
+  // a form a process can be on: of a host-program form only the host's own processes (its `hosts.processes`, D51 names); of a form carried by the
+  // install-folder wrapper only its program, at its place or moved aside (4.11 P8). An exe not known, or programs not known, rules nothing out
+  const fileKey = (x) => (platform === 'win32' ? String(x).replace(/\\/g, '/').toLowerCase() : String(x))
+  const holds = (x, p) => (x.hosts && x.hosts.processes ? hostsProcess(x, p) : !programs || !programs[x.id] || !p.exe || programs[x.id].some((file) => fileKey(file) === fileKey(p.exe)))
   // with no names, every harness with a form present on this machine gets a row too, besides the ones trocar's records know (1.6 §3.5, D65④):
   // the row is where Set up and the board's on / off appear for a harness installed after trocar. Proxy mode only; `on` / `off` do not read this list.
   if (!names && isProxyMode(platform) && desc.value && daemonMayStart(m)) { // with trocar not installed there is nothing to set up or turn on: the summary says so
@@ -190,8 +196,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const forms = dsc ? judgedForms(dsc, platform) : []
     const present = forms.length ? (here ? here[id] || [] : null) : undefined // undefined: no form on this OS to be present (Linux; a harness with none here)
     if (present === null && hereError) why.push(hereError)
-    // the forms a process can be on: those that are here, and of a host-program form only the host's own processes (its `hosts.processes`, D51 names)
-    const formsOf = (p) => (present ? forms.filter((x) => present.includes(x.id) && (!x.hosts || !x.hosts.processes || x.hosts.processes.includes(normalizeName(p.exe || (p.argv || [])[0] || '')))) : forms)
+    const formsOf = (p) => (present ? forms.filter((x) => present.includes(x.id) && holds(x, p)) : forms) // the forms a process can be on: those that are here and can hold it
     const startOf = (p) => {
       if (!forms.length) return {}
       const mine = formsOf(p)
@@ -219,7 +224,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const own = fromReply && fromReply[id] && 'attached' in fromReply[id]
     const att = own ? { attached: [true, false].includes(fromReply[id].attached) ? fromReply[id].attached : null, reason: `the daemon could not tell whether it is listening for ${id} (it could not read its own record of where it listens)` } : { attached: f.link.attached, reason: f.link.reason }
     // `judge(cert)`: the verdict again once the forms' certificates are read (judgeCertificates, after the topology's facts): V32 puts the certificate between the entry and the start time
-    const formsHere = present === undefined ? true : present === null ? null : present.length > 0
+    const formsHere = present === undefined ? true : present === null ? null : forms.some((x) => present.includes(x.id)) // a form status judges (judgedForms) is here
     const judge = (cert = true) => {
       const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: isProxyMode(platform), formsHere, cert })
       if (merged) j.rows = j.rows.map((r) => { const name = r.pid != null ? hitName(tableOf.get(r.pid), merged[id]) : null; return name ? { ...r, name } : r }) // the name the process matched (1.6 §9.7)

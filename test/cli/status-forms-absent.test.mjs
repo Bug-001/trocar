@@ -18,14 +18,15 @@ import { fakeIo } from './fixtures/on-ctx.mjs'
 import { SOCK } from './fixtures/status-ctx.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
 import { darwinNetFacts } from '../../src/collector/arch/darwin/netfacts.mjs'
+import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 
 /** `status --json <h>` with the daemon up and attached for `h`, its memory empty: `h`'s processes are judged from the disk. */
-async function status(w, os, h, table, cmd = runStatusCli) {
+async function status(w, os, h, table, cmd = runStatusCli, more = {}) {
   const r = { pid: 99, doors: {}, harnesses: { [h]: { desired: 'on', attached: true } }, holders: null, agents: [], negatives: [], cert: { key: 'present', intermediate: 'ready', expires: '2026-12-22T09:00:02Z' }, engine: {} }
   const request = async (q) => (q.path === '/status' ? r : assert.fail(q.path))
   const io = fakeIo()
   const fsx = { ...fs, existsSync: (p) => String(p).startsWith(w.home + path.sep) && fs.existsSync(p) } // hermetic: the dev machine's /Applications never makes a form present
-  const exit = await cmd(['--json', h], { io, home: w.home, platform: os, env: w.env, deps: { request, socketPath: SOCK, procs: async () => table, spawn: absentSpawn, exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: darwinNetFacts }), rootStore: w.store, user: 'alice', fs: fsx } })
+  const exit = await cmd(['--json', h], { io, home: w.home, platform: os, env: w.env, deps: { request, socketPath: SOCK, procs: async () => table, spawn: absentSpawn, exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: darwinNetFacts }), rootStore: w.store, user: 'alice', fs: fsx, ...more } })
   return { exit, j: JSON.parse(io.stdoutText()) }
 }
 
@@ -83,6 +84,7 @@ test('4.11 P5 seed: Kimi Code with only its npm build is not captured, also besi
   const beside = await status(w, 'darwin', 'kimi-code', [npm])
   assert.deepEqual(said(beside.j.harnesses['kimi-code']), [[4200, false, 'not-routed']])
   assert.equal(beside.j.harnesses['kimi-code'].captured, false)
+  assert.ok(notRouted((await status(w, 'darwin', 'kimi-code', [npm], runDoctor)).j), 'beside the extension: a not-routed finding that installs a form')
   // the extension removed, trocar's VS Code entry still intact: nothing of Kimi's that trocar sets up is here
   fs.rmSync(path.join(w.home, '.vscode'), { recursive: true, force: true })
   for (const table of [[], [npm]]) {
@@ -96,6 +98,51 @@ test('4.11 P5 seed: Kimi Code with only its npm build is not captured, also besi
     assert.ok(f, 'a not-routed finding for kimi-code')
     assert.ok(f.commands.some((c) => c.run === 'trocar install'), 'its fix runs install once a form is there')
   }
+})
+
+const notRouted = (dj) => { const f = (dj.findings || []).find((y) => y.code === 'not-routed' && y.harness === 'kimi-code'); return !!f && f.commands.some((c) => c.run === 'trocar install') }
+
+test('4.11 P5 seed: beside the installer\'s own Kimi program, the npm build is on none of its forms; the installer\'s program is', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['kimi'] })
+  const bin = path.join(w.home, '.kimi-code', 'bin', 'kimi')
+  fs.mkdirSync(path.dirname(bin), { recursive: true }); fs.writeFileSync(bin, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])) // a Mach-O header: the wrapper's precondition
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: path.join(w.home, 'c.sock'), token: 'k'.repeat(32) }))
+  const opens = async (q) => (q.path === '/on' ? { doors: Object.fromEntries(Object.entries(q.body.groups).map(([g, p]) => [g, `http://127.0.0.1:${p}`])) } : { doors: {} })
+  assert.equal((await turnOnModel({ os: 'darwin', home: w.home, env: w.env, ids: ['kimi-code'], harnesses: w.harnesses, ctx: w.ctx, isFree: async () => true, renderHook, request: opens })).exit, 0)
+  writeStateAtomic(path.join(w.dir, 'state.json'), setDesired(emptyState(), ['kimi-code'], 'on'))
+  const later = Date.now() + 60_000
+  const npm = { pid: 4300, ppid: 1, uid: 501, startedAt: later, exe: '/usr/local/bin/node', argv: ['node', '/usr/local/lib/node_modules/@moonshot-ai/kimi-code/dist/main.mjs'], env: () => new Map() }
+  // the installer's program, as the wrapper runs it (moved aside) and as it is before a wrapper (its own place)
+  const natives = [path.join(path.dirname(bin), '.trocar-real', 'kimi'), bin].map((exe, i) => ({ pid: 4310 + i, ppid: 1, uid: 501, startedAt: later, exe, argv: ['kimi'], env: () => new Map() }))
+  for (const p of natives) {
+    const x = (await status(w, 'darwin', 'kimi-code', [p])).j.harnesses['kimi-code']
+    assert.notEqual(x.processes[0].reason, 'not-routed', `${p.exe}: on the CLI form`)
+  }
+  const { exit, j } = await status(w, 'darwin', 'kimi-code', [natives[0], npm])
+  const x = j.harnesses['kimi-code']
+  assert.deepEqual(x.processes.find((p) => p.pid === npm.pid) && [x.processes.find((p) => p.pid === npm.pid).captured, x.processes.find((p) => p.pid === npm.pid).reason], [false, 'not-routed'])
+  assert.equal(x.captured, false)
+  assert.equal(exit, EXIT.incomplete)
+  assert.ok(notRouted((await status(w, 'darwin', 'kimi-code', [natives[0], npm], runDoctor)).j), 'a not-routed finding that installs a form')
+})
+
+test('4.11 P5: a form status does not judge (one outside the verified ones, such as an out-of-scope app) is no form here', async () => {
+  const { loadHarnesses } = await import('../../src/collector/harness/index.mjs')
+  const { judgedForms } = await import('../../src/collector/core/proxymode/verdict.mjs')
+  let n = 0
+  for (const os of OSES) {
+    for (const d of (await loadHarnesses()).filter((x) => x.proxyMode)) {
+      const judged = new Set(judgedForms(d, os).map((f) => f.id))
+      const others = d.proxyMode.forms.filter((f) => f.os.includes(os) && !judged.has(f.id)).map((f) => f.id)
+      if (!others.length) continue
+      const w = await world(os, d.name)
+      const x = (await status(w, os, d.name, [], runStatusCli, { presentForms: async () => ({ [d.name]: others }) })).j.harnesses[d.name]
+      assert.deepEqual([x.captured, x.reason], [false, 'not-routed'], `${os} ${d.name} with only ${others.join(', ')}`)
+      n++
+    }
+  }
+  assert.ok(n > 0, 'some harness has a form outside the judged ones')
 })
 
 test('V32 order: no form here comes after the daemon\'s own verdict on a process and before the entry; not known stays not known', async () => {

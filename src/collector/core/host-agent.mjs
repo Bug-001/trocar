@@ -9,16 +9,19 @@ import { normalizeName, processNames } from '../../off/identity.mjs'
 import { whoseBy } from './registry.mjs'
 import { bypassRuleOf } from './upstream-shape.mjs'
 
-/** The form whose `hosts.processes` names this process (its exe or argv[0], normalized the one way names are, normalizeName) → { harness, form }, or null:
+/** Whether this form's `hosts.processes` names this process (its exe or argv[0], normalized the one way names are, normalizeName). */
+export function hostsProcess(form, facts) {
+  const names = processNames(facts || {})
+  return names.length > 0 && ((form && form.hosts && form.hosts.processes) || []).some((n) => names.includes(normalizeName(String(n))))
+}
+
+/** The form whose `hosts.processes` names this process (hostsProcess) → { harness, form }, or null:
  *  no form hosts it, or forms of two harnesses do (never a guess, 0.1 §5). Two forms of one harness hosting it: the first. */
 export function hostFormOf(groups, facts) {
-  const names = processNames(facts || {})
-  if (!names.length) return null
   let hit = null
   for (const x of groups || []) {
     for (const f of (x && x.forms) || []) {
-      const hosts = (f && f.hosts && f.hosts.processes) || []
-      if (!hosts.some((n) => names.includes(normalizeName(String(n))))) continue
+      if (!hostsProcess(f, facts)) continue
       if (hit && hit.harness !== x.harness) return null
       if (!hit) hit = { harness: x.harness, form: f }
     }
