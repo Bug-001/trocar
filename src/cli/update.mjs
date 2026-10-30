@@ -66,8 +66,8 @@ async function update({ io, env, home, platform, deps, flags }) {
   const no = (code, why, exit = EXIT.incomplete, under = null) => {
     r.error = { code, message: why }
     r.notes.push(why)
-    if (!json) io.err(`trocar update: ${why}`)
-    if (!json && under) io.err(under)
+    if (!json) for (const l of wrap(`trocar update: ${why}`)) io.err(l) // §1.1⑥: folded at 80 columns, never broken mid-word by the terminal
+    if (!json && under) for (const l of wrap(under)) io.err(l)
     r.ok = false
     if (json) io.out(JSON.stringify(r, null, 2))
     return exit

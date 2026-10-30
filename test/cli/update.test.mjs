@@ -17,6 +17,7 @@ import { writeStateAtomic, setDesired, emptyState } from '../../src/off/state.mj
 import { newManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
+import { assertEnglish } from '../helpers/english.mjs'
 
 const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
 const IDENTITY = ['-c', 'user.email=test@trocar.invalid', '-c', 'user.name=trocar test', '-c', 'commit.gpgsign=false']
@@ -219,6 +220,22 @@ test('V105: an npm copy whose collector and last install run it is exit 2 npm-pa
 })
 
 // 附录 C.2 `update`: `from` · `to` · `harnesses` are what the plan does — in its --dry-run receipt as in the finish's own
+
+test('§1.1⑥: a reason update stops on is folded inside 80 columns, for an npm copy and for a copy that is not a checkout', async () => {
+  const s = sandbox({ on: ['codex'] })
+  const name = `x-pkg-${Math.random().toString(36).slice(2, 8)}`
+  const npmRoot = path.join(s.base, 'lib', 'node_modules', name)
+  const plainRoot = path.join(s.base, 'plain')
+  for (const root of [npmRoot, plainRoot]) {
+    fs.mkdirSync(root, { recursive: true })
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name, version: '0.2.0' }) + '\n')
+  }
+  for (const root of [npmRoot, plainRoot]) {
+    const t = ctx(s, { deps: { root }, daemonCode: () => codeId(root) })
+    assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.usage, t.io.text())
+    assertEnglish(t.io.text(), `trocar update from ${path.basename(root)}`)
+  }
+})
 test('V105 · C.2: an npm copy\'s --dry-run receipt names the code it finishes from, this code and the agents switched on again; so does a finish waiting in update.json', async () => {
   const s = sandbox({ on: ['codex'] })
   const name = `x-pkg-${Math.random().toString(36).slice(2, 8)}`
