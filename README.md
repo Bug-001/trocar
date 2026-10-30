@@ -75,6 +75,15 @@ trocar on                       # then start capture
 `npx trocar-cli <command>` runs one command without installing, but run `trocar install` from a global install:
 it registers a login item that runs that copy, and npm may clear the `npx` cache.
 
+On Linux, build the capability helper and install it once per machine, before `trocar install`. The package carries
+its source, not a build: the build needs clang, make, bpftool, the libbpf, libelf and zlib headers, and a kernel
+with BTF. Build as yourself; only the second line needs root:
+
+```sh
+make -C "$(npm root -g)/trocar-cli/src/collector/arch/linux"
+sudo "$(command -v node)" "$(command -v trocar)" setup-helper   # root's PATH may lack node or trocar (an nvm node), so both go by their paths
+```
+
 The same five commands on every OS, in this order: `trocar install` (once) → `trocar on` → `trocar off` →
 `trocar status` (any time) → `trocar uninstall`. `install` lists every file it will touch and writes them after you
 confirm; until it has run, `trocar on` refuses (`error.code` `cert-not-installed`). `on` starts capture, `status` shows state,
@@ -88,8 +97,16 @@ node bin/trocar.mjs install     # once: the certificates
 node bin/trocar.mjs on          # then start capture
 ```
 
-From a GitHub Release: each Release carries the same tarball as npm and its `SHA256SUMS`. Check the sum, then
-`npm i -g` the `.tgz` file; it installs like the registry copy.
+From a GitHub Release: each Release carries the same tarball as npm and its `SHA256SUMS`. Download both into one
+folder, check the sum there, then `npm i -g` the `.tgz` file; it installs like the registry copy.
+
+```sh
+shasum -a 256 -c SHA256SUMS     # macOS; on Linux: sha256sum -c SHA256SUMS; each prints OK
+npm i -g ./trocar-cli-<version>.tgz
+```
+
+On Windows, in PowerShell, `(Get-FileHash .\trocar-cli-<version>.tgz -Algorithm SHA256).Hash -eq (Get-Content SHA256SUMS).Split(' ')[0]`
+prints `True` when the sum matches.
 
 ## Staying up to date
 
@@ -123,6 +140,7 @@ a clone of this repo and `trocar install`. Nothing the old name left is read or 
 trocar off                     # first: uninstall refuses while capture is on
 trocar uninstall               # removes all of trocar's changes; keeps your records (~/.trocar/raw)
 trocar uninstall --purge-data  # also deletes the records and their index (asks first)
+sudo "$(command -v node)" "$(command -v trocar)" setup-helper --remove   # Linux, last: the machine's capability helper
 ```
 
 `uninstall` always prints its plan and asks first; without a terminal and without `--yes` it changes
@@ -363,7 +381,7 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 
 | what | where | undo |
 |---|---|---|
-| capability helper (Linux, once per machine, `sudo`) | `/usr/local/libexec/trocar/trocar-redirector`, root 0755, file caps `cap_bpf,cap_net_admin,cap_perfmon` — no setuid, no account, no system unit | `sudo trocar setup-helper --remove` |
+| capability helper (Linux, once per machine, `sudo`) | `/usr/local/libexec/trocar/trocar-redirector`, root 0755, file caps `cap_bpf,cap_net_admin,cap_perfmon` — no setuid, no account, no system unit | `sudo "$(command -v node)" "$(command -v trocar)" setup-helper --remove` |
 | root / CA (per user) | Linux: `~/.trocar/collector/ca/` (key 0600), in **no** trust store · macOS: login keychain key + user trust · Windows: CNG key + `CurrentUser\Root`; `~/.trocar/collector/ca/trocar-ca.pem` is the public certificate | `trocar uninstall` |
 | certificate carriers (`install`) | Linux: each agent's trust entry, written by `install` (Claude Code `env.NODE_EXTRA_CA_CERTS`, OpenCode / dsh plugins, pi's extension, Codex / Hermes `.env` blocks, Z-Code `network.caCertFile`, combined bundles `combined-<agent>.pem`) · macOS / Windows: the carriers above | `trocar uninstall` |
 | proxy entries (`on`) | macOS / Windows: the proxy keys and switch files above; Linux: none (the helper steers) | `trocar off` |
@@ -374,7 +392,7 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 | captures | `~/.trocar/raw/<segment>.ndjson` and its `<segment>.sealed` (0600); `~/.trocar/index/` is a deletable accelerator; `flows/` holds connection metadata and failure records | kept unless `trocar uninstall --purge-data` (which deletes `flows/` too, then records there anything it could not undo) |
 
 ```sh
-sudo trocar setup-helper      # Linux, once per machine
+make -C "$(npm root -g)/trocar-cli/src/collector/arch/linux" && sudo "$(command -v node)" "$(command -v trocar)" setup-helper   # Linux, once per machine: build the helper, then install it
 trocar install                # once, per user: the certificates; lists every file it will change and asks (not in a terminal: add --yes)
 trocar on                     # refuses until install has run; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
 trocar status                 # each agent and why it is (not) captured, its proxy chain, the certificates, the recent failures
@@ -452,7 +470,7 @@ the daemon from its lock: not running, or stuck). One exception: an install refu
 anything (nothing installed yet, or run as root) has no collector directory to write into, so the
 command's output is its only report. An `off` or `uninstall` that cannot undo something exits 1 and
 keeps the install manifest for the next run. The Linux helper is a root-owned copy of the build, so after upgrading
-run `sudo trocar setup-helper` again to replace it.
+build it again and install it again (the two lines under Install) to replace it.
 
 ## Shrinking the raw logs — sealed segments (D35, D60)
 
