@@ -24,7 +24,9 @@ const within = (ms, what, p) => Promise.race([p, new Promise((_, no) => setTimeo
 // when a loop of the page's own keeps every other task waiting)
 let rests = 0
 const atRest = (page, when) => page.waitForFunction((tok) => {
-  const W = document.querySelector('#ctxwin'), z = window.__rest && window.__rest.tok === tok ? window.__rest : (window.__rest = { tok, n: 0, seen: -1, quiet: 0 })
+  const W = document.querySelector('#ctxwin')
+  let z = window.__rest
+  if (!z || z.tok !== tok || z.W !== W) { z?.mo?.disconnect(); z = window.__rest = { tok, W, n: 0, seen: -1, quiet: 0 } }
   if (W && !z.mo) { z.mo = new MutationObserver((rs) => { z.n += rs.length }); z.mo.observe(W, { subtree: true, childList: true }) }
   z.quiet = z.n === z.seen ? z.quiet + 1 : 0
   z.seen = z.n

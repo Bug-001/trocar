@@ -53,7 +53,7 @@ export const ffWord = (f) => W.FF_WORD[f] || W.FF_WORD.unknown
 // screen-reader word only (the section header says 以下逐字 once for a fully proven section).
 export function ffBadgeHtml(f, { tech = '' } = {}) {
   if (f == null || f === 'verbatim') return ''
-  return `<span class="ffbadge ff-${esc(f)}" data-ff="${esc(f)}"${tech ? ` title="${esc(tech)}"` : ''}>${esc(W.HALF_MARK + ' ' + ffWord(f))}</span>`
+  return `<span class="ffbadge ff-${esc(f)}" data-ff="${esc(f)}" title="${esc(tech || ffWord(f))}">${esc(W.HALF_MARK + ' ' + ffWord(f))}</span>`
 }
 // kept for the drawer's folded-row label (detail.mjs); the emoji forms are gone (2.3 砍掉的)
 export const FF = Object.freeze(Object.fromEntries(Object.entries(W.FF_WORD).map(([k, text]) => [k, { text }])))
