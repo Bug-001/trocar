@@ -36,7 +36,7 @@ Tests do not pin wording, layout, line counts or internal call order. A test tha
 
 The design lives in [`spec/01-trocar-rfc/`](spec/01-trocar-rfc/). For behaviour the spec covers:
 
-- read the unit that covers it, including its "source files and interfaces" and "acceptance" sections;
+- read the unit that covers it, including its sections 「涉及源文件与接口」 (the source files and interfaces) and 「验收(可跑 check)」 (the acceptance checks);
 - if your change alters the behaviour, change the spec in the same pull request, before the code;
 - turn each acceptance item you touch into a test that fails without your change, point at the existing test that covers it, or say why it does not apply.
 
@@ -44,7 +44,7 @@ If the spec looks wrong, say so in the pull request with the change you propose;
 
 ## Adding a harness
 
-A harness is data, not code. Add a descriptor in [`src/collector/harness/`](src/collector/harness/) that picks from the primitives in spec 4.11 §2 (which file, which key, which format). Do not add product-, version- or file-specific branches to the editing code; if a harness needs something the primitives cannot express, propose widening a primitive first.
+A harness is data, not code. Add a descriptor in [`src/collector/harness/`](src/collector/harness/) that picks from the primitives in spec 4.11 §2 (which file, which key, which format), following the steps of [spec 4.11 §2.4](spec/01-trocar-rfc/4.11-collector-model.md) ("加一个 harness", adding a harness). Do not add product-, version- or file-specific branches to the editing code; if a harness needs something the primitives cannot express, propose widening a primitive first.
 
 ## Commits and pull requests
 
@@ -55,4 +55,4 @@ A harness is data, not code. Add a descriptor in [`src/collector/harness/`](src/
 
 ## Licensing
 
-trocar is licensed under FSL-1.1-ALv2 (see [LICENSE](LICENSE)). By contributing you agree that your contribution is licensed under the project's license (FSL-1.1-ALv2) and that the maintainer may relicense it.
+trocar is licensed under FSL-1.1-ALv2 (see [LICENSE](LICENSE)). By contributing you agree that your contribution is licensed under the project's license (FSL-1.1-ALv2) and that the maintainer may relicense it; a change to the kernel-side eBPF program in `src/collector/arch/linux/bpf/` is licensed GPL-2.0-only OR MIT, as those files say. The pull request template asks you to tick this agreement; a pull request without it is not merged.

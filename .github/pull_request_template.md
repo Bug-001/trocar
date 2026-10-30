@@ -18,3 +18,7 @@
 
 - [ ] README.md updated (or no user-visible change)
 - [ ] docs/release-notes/ updated (or no user-visible change)
+
+## Licensing
+
+- [ ] I agree to the Licensing section of CONTRIBUTING.md: my contribution is licensed FSL-1.1-ALv2 and the maintainer may relicense it. (Required.)
