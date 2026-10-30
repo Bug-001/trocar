@@ -1,7 +1,7 @@
 // test/web-v2/harness-seam.test.mjs — the harness seam (invariant 3 / AC-3, guard named in 1.2 §agent chip): the set of
 // harness ids is computed from the SERVER's table (src/dissect/harnesses.mjs rows + the legacy row) plus the CLI aliases
 // core/chips.mjs folds in; no string literal outside core/chips.mjs and assets/harness/ equals one of them; every chip
-// row has its icon file; labels/ keys no harness-defined code (those carry their own words from the server, S15); every harness the collector
+// row has its icon file; labels/ keys no harness-defined code (those carry their own words from the server); every harness the collector
 // loads has its read-side row and its chip (e).
 // (d) — the same chip DOM for every harness on the session head — lands with UI-R1's session head; chipFor's structure
 // is asserted in test/web-v2/core.test.mjs meanwhile.

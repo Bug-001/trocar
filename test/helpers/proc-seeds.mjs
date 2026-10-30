@@ -1,7 +1,7 @@
 // test/helpers/proc-seeds.mjs — measured and specified process shapes of the harnesses, with the harness each one IS (or null: not an
 // agent, or a helper the harness's exclude items drop). These are regression seeds, not rules (RFC 4.6 「按 harness」 table note, 0.1 §2): the
-// expectation of each comes from a source independent of the name list it checks — the RFC row, a lab
-// run, a review finding, or an existing harness test's example — and `source` says which. test/helpers/proc-variants.mjs bends each one along
+// expectation of each comes from a source independent of the name list it checks — the RFC row, a measurement
+// on a real install, a design review of the shape, or an existing harness test's example — and `source` says which. test/helpers/proc-variants.mjs bends each one along
 // the install axes; test/collector/identity-presets.test.mjs (T4) asserts the harness of every seed and variant.
 //
 // Shape: { os, exe, argv, cmdline?, cmdlineState?, env?, harness, source }. `argv` is the process's logical argv (what Linux /proc gives and
@@ -25,8 +25,8 @@ const NET = ['--type=utility', '--utility-sub-type=network.mojom.NetworkService'
 const NODE = String.raw`C:\Program Files\nodejs\node.exe`
 const PI_HOME = `${W}\\.pi\\agent`
 const PI_CLI = String.raw`@earendil-works\pi-coding-agent\dist\bundle\cli.js`
-const PIW = 'pi 1.4.0 on a Windows test machine'
-const PIM = 'pi 1.4.0 on a macOS test machine (lab measurement)'
+const PIW = 'pi 1.4.0 on Windows (measured)'
+const PIM = 'pi 1.4.0 on macOS (measured)'
 const MNODE = '/opt/homebrew/bin/node'
 
 export const SEEDS = [

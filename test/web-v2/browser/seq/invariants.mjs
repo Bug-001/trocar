@@ -1,5 +1,5 @@
-// test/web-v2/browser/seq/invariants.mjs — the closed set of invariants a sequence run is held to (plan
-// for frontend sequence runs): check(ctx) turns one moment's evidence (the page, the probe's snapshot,
+// test/web-v2/browser/seq/invariants.mjs — the closed set of invariants a sequence run is held to:
+// check(ctx) turns one moment's evidence (the page, the probe's snapshot,
 // the request log, the reader's actions, armed fault windows) into violations. Every bound lives in LIMITS with its spec pointer;
 // PENDING ids are measured and reported, never failed. Selectors are the board's ids / classes / data attributes, never wording.
 // Exports only; nothing runs at import.
@@ -109,7 +109,7 @@ const rateKey = (url) => {
   return `lane ${q.get('id')} ${q.get('lane')}`
 }
 
-/** I-rate over the probe's fetch log (see LIMITS for every bound; the session rule is 4.4:52 as decided in C2). → [detail] */
+/** I-rate over the probe's fetch log (see LIMITS for every bound; the session rule is 4.4:52, live-poll). → [detail] */
 function rateFaults(log, { actions = [], hidden = [] } = {}) {
   const out = []
   const [lo, hi] = LIMITS.actionWindowMs
@@ -140,7 +140,7 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
       if (since <= p.start) out.push(`${key}: read again with no session delta in between`)
       continue
     }
-    // after k failures in a row: interval × 2^(k-1), ≤ 30 s; after a success: the interval, and for `session` (C2) 3 × that read's
+    // after k failures in a row: interval × 2^(k-1), ≤ 30 s; after a success: the interval, and for `session` (4.4 live-poll) 3 × that read's
     // duration unless it answered `pending` or ended a back-off
     let want = p.fails ? Math.min(base * 2 ** (p.fails - 1), LIMITS.backoffCapMs) : base
     if ((name === 'session' || name === 'd/head') && !p.fails && !p.pending && !p.recovered) want = Math.max(want, LIMITS.sessionDurFactor * p.dur)

@@ -1,7 +1,7 @@
 // test/query/real-session.test.mjs — LOCAL ONLY: the largest session of a real trocar home, built from nothing by the real worker
 // under its real heap in its background slices, answers its first paint whole (RFC 3.5 §后台抽取与归约 · §内存有界 · 验收; 4.3 验收
-// 8; D38). Generated sessions miss what real captures carry (2026-10-21: the worker died on the user's own session while every
-// generated one passed), so this runs before every `trocar update` on the machine that runs trocar:
+// 8; D38). Generated sessions miss what real captures carry (a real session once
+// killed the worker while every generated one passed), so this runs before every `trocar update` on the machine that runs trocar:
 // `TROCAR_REAL_HOME=<a trocar home> npm run test:real`. No timing is asserted: the numbers are measured and logged.
 //
 // The home is only read: the worker runs over a side home in a temp dir whose raw/ is a link to the real one and whose index/ is a

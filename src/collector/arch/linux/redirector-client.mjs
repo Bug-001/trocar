@@ -209,7 +209,7 @@ export function createRedirectorClient({
       stopHeartbeat()
       const exit = signal || HELPER_EXIT[code] || `code ${code}`
       // after its stderr is drained, so the tail is complete. Asked to close and gone with code 0: that is the close, said by nobody; any other end
-      // (a non-zero code, a signal — close()'s own SIGKILL after its wait included) is still the helper going down, with its exit (D-14)
+      // (a non-zero code, a signal — close()'s own SIGKILL after its wait included) is still the helper going down, with its exit (D38)
       const quiet = closing && code === 0 && !signal
       setImmediate(() => fail(signal ? `loader killed by ${signal}` : `loader exited with code ${code}${HELPER_EXIT[code] ? ` (${HELPER_EXIT[code]})` : ''}`, { exit }, { quiet }))
     })

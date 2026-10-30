@@ -91,7 +91,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
     : r.ok === false
       ? `Capture is not fully off${r.routing && r.routing.confirmed ? ': trocar is off their path, but some items were left' : ': see below'}.`
       : `Capture is off for ${scope}. trocar is no longer on ${r.all || ids.length > 1 ? 'their' : 'its'} path.`)]
-  if (r.nothing_installed) { // trocar is not on this machine: said first and alone, not "off" with a list of nothing (§1.1; audit semantics 7)
+  if (r.nothing_installed) { // trocar is not on this machine: said first and alone, not "off" with a list of nothing (§1.1)
     const out = [header || 'Nothing to turn off. trocar is not installed on this machine.']
     if ((r.skipped || []).length) for (const s of r.skipped) out.push(...fit(`  ${t(s.what)}: ${s.reason}`, '    '))
     if ((r.user_processes || []).length) for (const p of r.user_processes) out.push(...fit(`Still running, started by you: ${p.command} (pid ${p.pid}, ${p.note}).`))

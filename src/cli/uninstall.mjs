@@ -249,14 +249,14 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       }
       // the CA, the runtime state (with the plugins' trust markers), the lock files, the single-file undo program
       for (const f of m && !m.unsupported ? m.files.filter((x) => x.role === 'ca-key') : []) {
-        if (!strictlyInside(trocarHome(home), f.path, fs)) { // a manifest that names the CA key somewhere else is damaged or edited: that file is not trocar's (audit semantics 6)
+        if (!strictlyInside(trocarHome(home), f.path, fs)) { // a manifest that names the CA key somewhere else is damaged or edited: that file is not trocar's
           const reason = `${f.path}, named as the CA key, is not inside ${trocarHome(home)}, so it is not trocar's to remove; correct that item in ${manifestPath(w.dir)} by hand`
           receipt.left.push({ path: f.path, result: 'error', reason }); failed.push({ code: 'entry-not-undone', path: f.path, reason })
         } else rm(f.path)
       }
       if (!m) rm(path.join(w.dir, 'ca'))
       const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'trocar') : null
-      // `netenv.json` is the adopted records and the topology, for the board: trocar's own file, written outside collector/, so zero residue is not met without it (audit rule-b 8)
+      // `netenv.json` is the adopted records and the topology, for the board: trocar's own file, written outside collector/, so zero residue is not met without it
       // `logs/` is the daemon's own console (D46, 0.2:130): trocar's own, removed whole now that the daemon has stopped — its manifest entries (role 'daemon-log', Linux)
       // first so the receipt names the files, then the directory, which on macOS no entry names (launchd writes the LaunchAgent's StandardOutPath / StandardErrorPath itself)
       for (const f of m && !m.unsupported ? m.files.filter((x) => x.role === 'daemon-log') : []) rm(f.path)

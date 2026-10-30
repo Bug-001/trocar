@@ -4,7 +4,7 @@
 //      copies of one endpoint rule).
 //   2. (§3 convention 6 · §2 guard 2, D51) A harness's name list generalizes: a preset item is a NAME (no path, no version, no CPU architecture), an
 //      interpreter name carries an `args` pattern, and no `args` pins a version or an architecture; the OS twins hold no identity data at all. A pattern
-//      written from one measured path keeps every test green and silently stops capturing after the next update or on another machine (2026-10-13 audit, M3).
+//      written from one measured path keeps every test green and silently stops capturing after the next update or on another machine.
 //   3. (§3 convention 7) Tests pin no new counts (`.length, 17`): a count restates today's data, goes red when an item is added and stays green when the
 //      world changes. The files that still do are listed and may only shrink.
 import test from 'node:test'

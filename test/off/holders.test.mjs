@@ -168,35 +168,35 @@ const NS = ['agentx', '--type=utility', '--utility-sub-type=network.mojom.Networ
 const known = (extra = {}) => rec('agentx', { since: W1.on_at, windows: [W1], ...extra })
 const holderPids = (l, procs, doorSeen = []) => holdersOf({ manifest: manifest({ agentx: l }), procs, doorSeen }).map((x) => [x.pid, x.why])
 
-// A5 · a Chromium host (no --type) reads through its network service: the service's door row makes the host a holder; any other child does not
+// a Chromium host (no --type) reads through its network service: the service's door row makes the host a holder; any other child does not
 for (const [label, argv, folds] of [['network service', NS, true], ['no --type (a CLI child of the same name)', ['agentx'], false], ['--type=renderer', ['agentx', '--type=renderer'], false], ['--type=utility, another sub-type', ['agentx', '--type=utility', '--utility-sub-type=audio.mojom.AudioService'], false]]) {
-  test(`A5 · host fold: a host in a known gap whose child (${label}) came through the door is ${folds ? '' : 'not '}a holder`, () => {
+  test(`host fold: a host in a known gap whose child (${label}) came through the door is ${folds ? '' : 'not '}a holder`, () => {
     const host = tproc(63411, 1, GAP), child = tproc(63420, 63411, GAP + 50, argv)
     const got = holderPids(known(), [host, child], [{ harness: 'agentx', group: 'agentx:desktop', pid: 63420, start: GAP + 50, kind: 'pac', at: iso(ON + 10), n: 1 }])
     assert.deepEqual(got, folds ? [[63411, 'host-of'], [63420, 'door-seen']] : [[63420, 'door-seen']])
   })
 }
-test('A5 · seed: Desktop 63411 → 63971 → 63972 (bundled CLI, no --type): the grandchild\'s door row makes no holder of its parent or the host', () => {
+test('seed: Desktop 63411 → 63971 → 63972 (bundled CLI, no --type): the grandchild\'s door row makes no holder of its parent or the host', () => {
   const procs = [tproc(63411, 1, GAP), tproc(63971, 63411, GAP + 10), tproc(63972, 63971, GAP + 20)]
   assert.deepEqual(holderPids(known(), procs, [{ harness: 'agentx', group: 'agentx:cli', pid: 63972, start: GAP + 20, kind: 'accept', at: iso(ON + 5), n: 3, decrypt: true }]), [[63972, 'door-seen']])
 })
 
-// A6 · a process started in a known gap took what its nearest same-harness ancestor read (a shell between them is walked through)
+// a process started in a known gap took what its nearest same-harness ancestor read (a shell between them is walked through)
 for (const shell of [false, true]) for (const [where, start, holds] of [['in a window', ON - 5_000_000, true], ['in the gap too', GAP - 10, false]]) {
-  test(`A6 · ancestor${shell ? ' (through a shell)' : ''}: a child in a known gap whose ancestor started ${where} is ${holds ? '' : 'not '}a holder`, () => {
+  test(`ancestor${shell ? ' (through a shell)' : ''}: a child in a known gap whose ancestor started ${where} is ${holds ? '' : 'not '}a holder`, () => {
     const anc = tproc(500, 1, start), mid = tproc(501, 500, GAP, ['zsh'], 'zsh'), kid = tproc(502, shell ? 501 : 500, GAP + 5)
     const procs = shell ? [anc, mid, kid] : [anc, kid]
     const got = holderPids(known(), procs).filter(([pid]) => pid === 502)
     assert.deepEqual(got, holds ? [[502, 'ancestor']] : [])
   })
 }
-test('A6 · a ppid cycle ends the walk: no throw, no holder', () => {
+test('a ppid cycle ends the walk: no throw, no holder', () => {
   assert.deepEqual(holderPids(known(), [tproc(600, 601, GAP), tproc(601, 600, GAP + 1)]), [])
 })
 
-// A9 · this machine's record (2026-10-21): windows from 18:14:31Z, no `since` (written before it existed), the root installed at 16:45:14.503Z —
+// a regression seed (a macOS record, 2026-10-21): windows from 18:14:31Z, no `since` (written before it existed), the root installed at 16:45:14.503Z —
 // the Claude processes started at 16:47:34 and 17:11:24 may have read an entry nobody recorded (history-unknown); one from before the root did not
-test('A9 · a record without since: started after the carrier and before the earliest window → history-unknown; before the carrier → not a holder', () => {
+test('a record without since: started after the carrier and before the earliest window → history-unknown; before the carrier → not a holder', () => {
   const l = { identity: identity('agentx'), rereads: false, windows: [{ on_at: '2026-10-20T18:14:31Z', off_at: '2026-10-20T19:02:10Z' }], on_at: '2026-10-21T08:00:00Z', off_at: '2026-10-21T09:00:00Z' }
   const m = { ...manifest({ agentx: l }), entries: [{ kind: 'system-root', phase: 'install', installed_at: '2026-10-20T16:45:14.503Z' }] }
   const at = (t) => Date.parse(`2026-10-20T${t}Z`)
@@ -224,10 +224,10 @@ for (const [sl, start] of Object.entries(STARTS)) for (const since of [false, tr
   })
 }
 
-// A9 · off reads the door's durable record from its own dir: a process started in a known gap after off (no window, no ancestor) is held only by
+// off reads the door's durable record from its own dir: a process started in a known gap after off (no window, no ancestor) is held only by
 // its row; an unreadable record (a directory there) is "not known" — every live process of h holds (history-unknown), with a note; no file: none
 for (const doorFile of ['none', 'row', 'unreadable']) {
-  test(`A9 · off over door-seen.json ${doorFile}: the gap process is ${doorFile === 'none' ? 'not ' : ''}a holder`, async () => {
+  test(`off over door-seen.json ${doorFile}: the gap process is ${doorFile === 'none' ? 'not ' : ''}a holder`, async () => {
     const fs = (await import('node:fs')).default, path = (await import('node:path')).default
     const { tmpDir } = await import('../helpers/tmp.mjs')
     const { newManifest, saveManifest, readManifest } = await import('../../src/off/manifest.mjs')

@@ -68,7 +68,7 @@ const read = (opts, calls) => {
   return out
 }
 
-// The call term: a session of the user's live session's shape (test/query/big-session.mjs live: a dozen subagent lanes side by side,
+// The call term: a session of big-session.mjs's live() shape (a dozen subagent lanes side by side,
 // late calls, paths in tool results, written files, long first prompts with reminders, shared system prompts, clusters of MB-sized
 // records) read cold at 2N and at 4N calls: each read holds at most its calls × SPINE_PER_ROW and its blocks × SPINE_PER_BLOCK beside
 // K, and what 4N holds more than 2N is at most 2N × SPINE_PER_ROW beside what its new blocks measure, BLOCK_COLUMNS each. The fixed

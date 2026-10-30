@@ -391,8 +391,8 @@ test('#10 the first session arrives → no agent control and no start card are l
   assert.doesNotMatch(html, /class="ovcard start"/)
 })
 
-// ── audit 2026-10-21 (V11 · V25 · V26 · V29) ──────────────────────────────────────────────────────────────────────────
-test('A9 entries with level note are not counted: no O3 raw row for them, O6 counts only the rest', () => {
+// ── level notes, partial coverage, agent links, page head, window reads ──────────────────────────────────────────────────────────────────────────
+test('entries with level note are not counted: no O3 raw row for them, O6 counts only the rest', () => {
   const segs = ok({ segments: [{ to: iso(H), problems: [{ code: 'zz-note', level: 'note', reason: 'r' }, { code: 'zz-real', reason: 'r' }] }] })
   const keys = overviewItems(stateOf(quiet(), { segments: segs }), NOW).rows.filter((r) => r.cls === 'O3').map((r) => r.key)
   assert.deepEqual(keys, ['raw/zz-real'])
@@ -409,7 +409,7 @@ const usageDoc = (coverage, harnesses = [{ harness: A, sessions: 1, calls: 3, la
 const pricedState = (doc) => stateOf(quiet(), { stats: ok(doc), pricing: ok({ models: [{ model: 'zz-priced', input: 1, output: 2, cache_write: 1, cache_read: 0.1 }] }) })
 const spanOf = (html, cls) => (new RegExp(`<span class="${cls}"[^>]*>([^<]*)<`).exec(html) || [])[1]
 
-test('A10 partial coverage puts a floor on the money only: the hit text is the same, the cost text differs', () => {
+test('partial coverage puts a floor on the money only: the hit text is the same, the cost text differs', () => {
   const full = statsCardHtml(pricedState(usageDoc({ sessions_read: 2, sessions_in_window: 2 })), NOW)
   const part = statsCardHtml(pricedState(usageDoc({ sessions_read: 1, sessions_in_window: 2 })), NOW)
   assert.ok(spanOf(full, 'ovhit') != null && spanOf(full, 'ovcost') != null, full)
@@ -417,7 +417,7 @@ test('A10 partial coverage puts a floor on the money only: the hit text is the s
   assert.notEqual(spanOf(part, 'ovcost'), spanOf(full, 'ovcost'))
 })
 
-test('A11 the coverage note never prints the reason code; it reads the calls pair, else the sessions pair', () => {
+test('the coverage note never prints the reason code; it reads the calls pair, else the sessions pair', () => {
   const html = (cov) => statsCardHtml(pricedState(usageDoc(cov)), NOW)
   const bySessions = html({ sessions_read: 1, sessions_in_window: 2, reason: 'byte-budget' })
   assert.ok(!bySessions.includes('byte-budget')); assert.match(bySessions, /class="[^"]*\bovcov\b/)
@@ -425,7 +425,7 @@ test('A11 the coverage note never prints the reason code; it reads the calls pai
   assert.doesNotMatch(html({ sessions_read: 2, sessions_in_window: 2 }), /\bovcov\b/)
 })
 
-test('A12 an agent row with no session and no model call links to its traffic, not to sessions', () => {
+test('an agent row with no session and no model call links to its traffic, not to sessions', () => {
   const doc = usageDoc({}, [{ harness: A, sessions: 1, calls: 3, last_ts: iso(H) }, { harness: B, sessions: 0, calls: 0, last_ts: iso(H) }])
   for (const w of ['24h', '7d', 'all']) {
     const html = statsCardHtml({ ...pricedState(doc), w }, NOW)
@@ -435,7 +435,7 @@ test('A12 an agent row with no session and no model call links to its traffic, n
   }
 })
 
-test('A26a the page head is drawn once: the skeleton holds no <header>, headHtml one', () => {
+test('the page head is drawn once: the skeleton holds no <header>, headHtml one', () => {
   assert.ok(!SKELETON.includes('<header'))
   assert.equal((headHtml({ w: '24h', readAt: NOW }).match(/<header/g) || []).length, 1)
 })
@@ -444,7 +444,7 @@ const deferred = () => { let resolve; const promise = new Promise((r) => { resol
 const statsDoc = (total) => ({ ok: true, status: 200, data: { ...stateOf(quiet()).stats.data, sessions: { total } } })
 const tabOn = (html, w) => new RegExp(`href="#/overview\\?window=${w}"[^>]*aria-current`).test(html)
 
-test('A15 right after mount, before any answer: the head has its window tab, the stats and recent cards say reading, no card zone is blank', () => {
+test('right after mount, before any answer: the head has its window tab, the stats and recent cards say reading, no card zone is blank', () => {
   const { inst, zones } = fakeMount({ hold: () => new Promise(() => {}) })
   try {
     assert.ok(tabOn(zones.ovhead.innerHTML, '24h'))
@@ -453,7 +453,7 @@ test('A15 right after mount, before any answer: the head has its window tab, the
   } finally { inst.unmount() }
 })
 
-test('A16 a window change moves the tab at once and an answer for another window never reaches the stats card', async () => {
+test('a window change moves the tab at once and an answer for another window never reaches the stats card', async () => {
   const held = []
   const { inst, zones } = fakeMount({ hold: (name, params) => { if (name !== 'overview') return null; const d = deferred(); held.push({ since: params.since ?? null, d }); return d.promise } })
   try {
@@ -470,7 +470,7 @@ test('A16 a window change moves the tab at once and an answer for another window
   } finally { inst.unmount() }
 })
 
-test('A17 the slow reads go at most two at a time, a window change included, and all five are read in the end', async () => {
+test('the slow reads go at most two at a time, a window change included, and all five are read in the end', async () => {
   const SLOW = ['classes', 'pricing', 'overview', 'segments', 'traffic']
   const pending = [], asked = new Set()
   let most = 0

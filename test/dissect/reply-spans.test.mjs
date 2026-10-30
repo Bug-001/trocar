@@ -1,4 +1,4 @@
-// design §7.3 P · spec 4.2:61 (text_ref field segment resp.raw / resp.messages.<j>): every reply block of a call is
+// spec 4.2:61 (text_ref field segment resp.raw / resp.messages.<j>): every reply block of a call is
 // addressable. For each part with a span, the field text sliced at [a, b] and run through the SAME wire's reconstruction
 // gives the part's block; the expected blocks come from that reconstruction of the whole reply, as the collector stores it
 // (shapeResponse / buildWsEnvelope). Axes: wire × block kinds × multibyte text × line ending; blocks whose events

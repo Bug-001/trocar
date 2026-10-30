@@ -1,4 +1,4 @@
-// test/query/worker-cold-heap.test.mjs — a session shaped like the user's live Claude Code one, read cold by the real worker under
+// test/query/worker-cold-heap.test.mjs — a session shaped like a long live Claude Code session, read cold by the real worker under
 // its real heap, answers with a whole document (RFC 3.5 §内存有界: 工作进程 MUST NOT 因为任何一个会话的大小而退出; D38; invariant 4).
 //
 // The shape is what made the worker die on a real machine: Message Threads, many sub-agent lanes side by side whose

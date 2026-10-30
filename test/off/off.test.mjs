@@ -195,7 +195,7 @@ test('semantics 5: with no autostart unit managing it the way out names the pid 
 })
 
 // a manifest that names a file trocar never made (damaged, hand-edited, or from a bug) must not take the user's data with it: what `off` / `uninstall` remove, rewrite or
-// rebuild at a path the manifest gives has to be inside ~/.trocar (audit semantics 6)
+// rebuild at a path the manifest gives has to be inside ~/.trocar
 function victims(s) {
   const dirV = path.join(s.home, 'Documents', 'precious'), fileV = path.join(s.home, 'Documents', 'notes.txt'), keyV = path.join(s.home, '.ssh', 'id_test')
   fs.mkdirSync(dirV, { recursive: true }); fs.writeFileSync(path.join(dirV, 'thesis.txt'), 'years of work\n')

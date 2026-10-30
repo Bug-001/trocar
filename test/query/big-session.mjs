@@ -24,7 +24,7 @@
 // `hugeEvery` its tool_result is `hugeBytes` of text; `imageEvery` (http / threads) its first user message carries a base64 PNG image
 // block (the Messages shape); `failEvery` its response is an error (http / threads 529 overloaded_error, chat 500; ws: none), and a
 // thread's next call re-sends the delta the failed one carried. `tools` (http / threads): the tool definitions every request carries.
-// What the user's live session has besides (every one OFF by default, and drawn from a random stream of its own, so a session
+// What a long live Claude Code session has besides (every one OFF by default, and drawn from a random stream of its own, so a session
 // without them is byte for byte what it was):
 // `paths`: each turn's tool result names `paths` file paths and its prose half as many — absolute and relative, half of them new and
 //   half named before — so the seen ledger grows the way a real one does; with `pathPool`, once that many are named every one is named
@@ -44,7 +44,7 @@
 // `hold` = {n: k}: call n ends late, written once k calls are (a late call at a place of its own choosing, with or without `late`).
 // `seal()`: seals the segment written so far through the product's sealSegment (frames of `seal` bytes, so reads go through frames
 //   and delta chains) and goes on in a new segment; the record ids already written do not change.
-// live(scale) gives all of them in the proportions of the user's live session.
+// live(scale) gives all of them in the proportions of a long live Claude Code session.
 // Exports only: node --test runs every .mjs.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -247,10 +247,10 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
   }
 }
 
-/** live(scale) → bigSession options (and `calls`, how many to append) in the proportions of a measured live Claude Code session
+/** live(scale) → bigSession options (and `calls`, how many to append) in the proportions of a long Claude Code session
  *  (12.5k calls, ~36 calls a lane, ~149 KB a record, ~1 % of records over 1 MB in clusters, first prompts up
  *  to 16 KB of system-reminders, one system prompt and tool set across lanes). A regression seed, not an expectation: scale 1 is
- *  that session's size. */
+ *  that size. */
 export function live(scale = 1) {
   return { calls: Math.max(1, Math.round(12_500 * scale)), wire: 'http', growth: 2_500, subEvery: 2, subLanes: 12, subLen: 54, late: 6,
     compactAt: 110_000, cc: 16, shared: 12_000, paths: 4, prompt: 12_000, writes: 1_200, bigEvery: 400, bigBytes: 2_000_000, bigRun: 4 }

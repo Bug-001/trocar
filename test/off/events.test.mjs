@@ -1,6 +1,6 @@
 // test/off/events.test.mjs — src/off/events.mjs runEventWriter (RFC 1.6 R11 「写不进时先 stderr,恢复后第一条是 log-gap」, 4.6 §记录「记录本身写不成」, D38): the lines of one run of `off` /
 // `uninstall` / `on`. A line that cannot be written is never dropped quietly — stderr first, the receipt's notes, and the next line that can be written is preceded by a `log-gap` — which is
-// what the daemon's recorder (src/collector/core/events.mjs) does and the command line writer did not (audit rule-b 9).
+// what the daemon's recorder (src/collector/core/events.mjs) does and the command line writer did not.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'

@@ -202,10 +202,10 @@ test('D55① · model: after install → on → off, every phase-install item is
   } finally { await d.close() }
 })
 
-// A7 · 4.11 P12: `on` writes the history fields over a real run — the first on starts the history (`since`); an on that moves some door groups of h
+// 4.11 P12: `on` writes the history fields over a real run — the first on starts the history (`since`); an on that moves some door groups of h
 // marks them (`door_since`) and keeps the windows, so a process from an earlier window is still a holder; one that moves every group restarts the
 // history there, and a process from before is not a holder. Generic over the harness's groups: the test reads them from the run, never names one.
-test('A7 · door moves per group: some moved → windows kept + door_since; all moved → windows gone, since = that on_at', async () => {
+test('door moves per group: some moved → windows kept + door_since; all moved → windows gone, since = that on_at', async () => {
   const { holdersOf } = await import('../../src/off/holders.mjs')
   const w = await modelWorld({ commands: ['claude'] }) // the CLI and the desktop app: a harness with two door groups
   fs.mkdirSync(path.join(w.home, 'Applications', 'Claude.app'), { recursive: true })

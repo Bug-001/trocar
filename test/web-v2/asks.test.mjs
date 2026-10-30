@@ -1,4 +1,4 @@
-// test/web-v2/asks.test.mjs — 第 K 次提问 and the ask ticks over D69 answers (A35): the step head's K is the held main lane's
+// test/web-v2/asks.test.mjs — 第 K 次提问 and the ask ticks over D69 answers: the step head's K is the held main lane's
 // user-event `k` (2.2 K row), never a count of the held events, and is not drawn when the held pages cannot know it; the
 // ticks come from the `session` events, their hover's K / opening from the held `lane` event of that rid (1.3 §提问刻度);
 // the outline's 「第 N 步起」 pairs with held lane events only (2.5:16). Held pages here start mid-lane (`prev` set).
@@ -30,7 +30,7 @@ function world({ asks, from, laneEvents, queries = {} }) {
 }
 const dataK = (h, cls) => { const m = new RegExp(`<span class="${cls}"[^>]*>`).exec(h); return m ? (/data-k="([^"]*)"/.exec(m[0]) || [])[1] ?? '' : null }
 
-test('A35 the step head\'s K is the held user event\'s k; not drawn where the held pages cannot know it', () => {
+test('2.2 K: the step head\'s K is the held user event\'s k; not drawn where the held pages cannot know it', () => {
   for (const k of [2, 5, 9]) {
     // held from step 3 (index 2); the first held user event (index 3) is the lane's k-th ask: a count of held events says 1
     const at = world({ asks: [1, 3], from: 2, laneEvents: [{ type: 'user', rid: R(3), k, preview: 'p' }] })
@@ -45,7 +45,7 @@ test('A35 the step head\'s K is the held user event\'s k; not drawn where the he
   assert.equal(dataK(stepBarHtml(none(4)), 'sb-ask'), '1')
 })
 
-test('A35 the ask ticks come from the session events; the hover carries the held event\'s k and preview, no K when not held', () => {
+test('1.3 §提问刻度: the ask ticks come from the session events; the hover carries the held event\'s k and preview, no K when not held', () => {
   const preview = 'refactor the parser <b>'
   const at = world({ asks: [1, 3], from: 2, laneEvents: [{ type: 'user', rid: R(3), k: 5, preview }] })
   const nodes = new Map()
@@ -60,7 +60,7 @@ test('A35 the ask ticks come from the session events; the hover carries the held
   assert.ok(!/data-k=/.test(tick(1)), 'the page holding that ask is not held: no K')
 })
 
-test('A35 the outline\'s 「第 N 步起」 is there when the user event is held, absent when not', () => {
+test('2.5: the outline\'s 「第 N 步起」 is there when the user event is held, absent when not', () => {
   const q = 'fix the flaky test'
   // the playhead step (index 4) holds the question; its user event is on step index 3
   const held = world({ asks: [3], from: 2, queries: { 4: q }, laneEvents: [{ type: 'user', rid: R(3), k: 2, preview: q }] })
