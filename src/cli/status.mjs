@@ -125,9 +125,10 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   let state = null
   try { state = readStateFile(stateF, { fs, installed: installedIds, now: new Date(ms()) }).state } catch (e) { f.state = { error: e && e.code === 'state-unparsable' ? e.message : `${stateF}: ${errText(e)}` } }
   const fromReply = reply && reply.harnesses && typeof reply.harnesses === 'object' ? reply.harnesses : null
-  const ids = [...new Set([...installedIds, ...Object.keys(state ? state.harnesses : {}), ...Object.keys(fromReply || {}), ...(names || [])])]
-  const order = (id) => (HARNESS_IDS.includes(id) ? HARNESS_IDS.indexOf(id) : HARNESS_IDS.length)
-  let wanted = (names ? ids.filter((id) => names.includes(id)) : ids).sort((a, b) => order(a) - order(b) || a.localeCompare(b))
+  // 4.11 §3 ㉓: the walk starts from this copy's own table — an id only another copy knows is never listed or counted
+  const ids = HARNESS_IDS.filter((id) => installedIds.includes(id) || (state && id in state.harnesses) || (fromReply && id in fromReply) || (names && names.includes(id)))
+  let wanted = names ? ids.filter((id) => names.includes(id)) : ids
+  const order = (id) => (HARNESS_IDS.includes(id) ? HARNESS_IDS.indexOf(id) : HARNESS_IDS.length) // the rows of present forms below come from the descriptors
   // the kernel and the helper, as the daemon reports them; a kernel state the daemon could not read keeps its error (the daemon's `actual: 'unknown'` carries `error` and `error_code`: R11 — the reason is not dropped on the way to 不知道)
   const kernelReason = (r) => (r.actual === 'unknown' ? `the daemon could not read the kernel state: ${r.error || 'it gave no reason'}${r.error_code && !String(r.error || '').includes(r.error_code) ? ` (${r.error_code})` : ''}` : `the daemon's reply does not say whether the kernel has this instance's link (actual: ${JSON.stringify(r.actual ?? null)})`)
   const attached = reply ? (reply.actual === 'on' ? true : reply.actual === 'off' ? false : null) : null
@@ -144,6 +145,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const doorSeen = readDoorSeen({ dir, fs }).rows
   if (holdersP) f.holders = await holdersP
   else f.holders = m && table ? holdersOf({ manifest: m, procs: table, agentList: list, doorSeen }) : null
+  if (f.holders) f.holders = f.holders.filter((x) => HARNESS_IDS.includes(x.harness)) // ㉓: another copy's holders are its own to judge
   // the name list in effect NOW — the descriptors' presets with the user's agents.json merged in, its `ignore` applied — built by the daemon's own primitive
   // (createRegistry, the registry the doors and the tracker judge by), so `status` names the same harness for a process with a daemon and without (1.6 V65).
   // Not the manifest's liveness: that is `off`'s holder snapshot, a union that never drops a name and never applies `ignore` (the safe direction for `off` only).
@@ -254,7 +256,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     } catch (e) { rethrowSandbox(e); read = { state: null, error: errMessage(e) } }
     f.linger = read.state === true || read.state === false ? { linger: read.state } : { linger: 'unknown', linger_reason: read.error || 'the linger state could not be read' }
   }
-  try { f.health = deps.captureHealth ? deps.captureHealth({ home: trocarHome(home) }) : captureHealth({ home: trocarHome(home), fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
+  try { f.health = deps.captureHealth ? deps.captureHealth({ home: trocarHome(home), harnesses: HARNESS_IDS }) : captureHealth({ home: trocarHome(home), harnesses: HARNESS_IDS, fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
   if (merged) f.identity = identityBlocks({ ids: f.harnesses.map((h) => h.id), merged, health: effectiveHealth(f).health })
   Object.assign(f, await certP)
   return f
@@ -277,7 +279,7 @@ const certNeedsUser = (f) => !!(f.install && f.install.state && f.cert && (['cer
  *  axis only: nothing here judges a harness; the forms' `certificate` built from `cert.root` is the certificate step of the verdict (judgeCertificates, V32). Linux: no user root step (`none`), the key is the file `install` made, no intermediate. */
 async function installCertOf({ f, m, dir, fs, platform, home, env, deps }) {
   const rec = m && m.install ? m.install : null, model = isProxyMode(platform), reply = f.daemon.reply
-  const install = { state: rec ? rec.state ?? null : null, at: rec ? rec.at ?? null : null, harnesses: rec ? rec.harnesses || [] : [], pending: rec ? (rec.pending || []).map((p) => p.item) : [] }
+  const install = { state: rec ? rec.state ?? null : null, at: rec ? rec.at ?? null : null, harnesses: rec ? (rec.harnesses || []).filter((h) => HARNESS_IDS.includes(h)) : [], pending: rec ? (rec.pending || []).map((p) => p.item) : [] }
   let x = null, pemWhy = null // pemWhy: the certificate is there and cannot be read — not known, never "not installed"
   try { x = new crypto.X509Certificate(fs.readFileSync(path.join(dir, 'ca', 'trocar-ca.pem'))) } catch (e) { rethrowSandbox(e); if (!(e && e.code === 'ENOENT')) pemWhy = `trocar-ca.pem cannot be read (${errText(e)})` }
   const fp256 = x ? x.fingerprint256 : null, items = m ? [...(m.entries || []), ...(m.files || [])] : []
@@ -431,12 +433,12 @@ function failuresOf(f) {
 }
 
 /** 附录 C.3 `changed[]`: every place trocar changed or created for a harness (the install record's items of phase install and on), with the one
- *  command that undoes it. Machine-wide items (the root, the login entry) name no harness and are not listed. An unreadable record is null, never []. */
+ *  command that undoes it. Machine-wide items (the root, the login entry) name no harness and are not listed, nor are another copy's (4.11 §3 ㉓). An unreadable record is null, never []. */
 function changedOf(f) {
   if (f.manifest.error) return null
   const m = f.manifest.value
   const item = (x, undo) => ({ harness: x.harness, path: x.path, what: [x.kind || x.role, Array.isArray(x.keys) ? x.keys.join('.') : x.format].filter(Boolean).join(' '), undo })
-  return [...itemsOfPhase(m, 'install').filter((x) => x.harness).map((x) => item(x, UNDO_LINE.install)), ...itemsOfPhase(m, 'on').filter((x) => x.harness).map((x) => item(x, `${UNDO_LINE.on} ${x.harness}`))]
+  return [...itemsOfPhase(m, 'install').filter((x) => HARNESS_IDS.includes(x.harness)).map((x) => item(x, UNDO_LINE.install)), ...itemsOfPhase(m, 'on').filter((x) => HARNESS_IDS.includes(x.harness)).map((x) => item(x, `${UNDO_LINE.on} ${x.harness}`))]
 }
 
 /** The exit code of `status` (§3.5): 0 every harness that is on is captured · 1 some are not · 3 that cannot be judged. A stale record never decides it: the daemon's own answer does. */

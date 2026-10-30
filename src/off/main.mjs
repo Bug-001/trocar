@@ -9,20 +9,10 @@ import { runOff } from './orchestrate.mjs'
 import { formatOffReceipt } from './receipt.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, makeIo, hidingIo } from './io.mjs'
-import { readManifest } from './manifest.mjs'
-import { collectorDir } from './paths.mjs'
 import { NAME_ALIASES, resolveHarnesses } from './harness-names.mjs'
 
 const OFF_USAGE = 'usage: trocar off [<harness>...] [--now] [--yes] [--dry-run] [--json]'
 const OFF_FLAGS = new Set(['--now', '--dry-run', '--yes', '--json'])
-
-/** The harness ids the install manifest names (install's list and the entries' owners); [] when there is none or it cannot be read (the fixed names still work). */
-function installedIds(home) {
-  try {
-    const m = readManifest(collectorDir(home))
-    return m ? [...((m.install && m.install.harnesses) || []), ...(m.entries || []).map((e) => e && e.harness)].filter((x) => typeof x === 'string' && x) : []
-  } catch { return [] }
-}
 
 /** → the exit code. `argv` is what follows `off`. `io` = { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo; the process's own streams when none is given, which is how the
  *  standalone `trocar-off` calls it). `standalone`: this is the single-file copy (src/off/standalone.mjs ends in a call with it): the only difference is the words of what it
@@ -36,7 +26,7 @@ export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdo
       flags.add(a)
     } else names.push(a)
   }
-  const named = resolveHarnesses(names, names.length ? installedIds(home) : []) // a harness the manifest names is a name too, so one added as descriptor data alone can be turned off (CM27)
+  const named = resolveHarnesses(names, deps.harnessIds) // this copy's own table (4.11 §3 ㉓); a test world hands in the descriptors it serves
   if (!named.ok) { io.err(`trocar off: unknown harness '${named.unknown[0]}'. Known: ${named.known.filter((n) => !Object.hasOwn(NAME_ALIASES, n)).join(', ')}`); return EXIT.usage }
   const json = flags.has('--json')
   // §1.2: under `--json` stdout holds the one document and stderr is EMPTY — so no listing on stderr and no question: an `off` with no install record

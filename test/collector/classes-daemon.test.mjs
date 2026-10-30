@@ -22,6 +22,7 @@ import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { startMockUpstream } from '../lab/mock-upstream/server.mjs'
 import { makeLabCa } from '../lab/mock-upstream/lab-ca.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
+import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { BUILTIN } from '../../src/classes/table.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
@@ -149,13 +150,13 @@ test('D60③ at the daemon: classes.json is read per call, hot (≤ 1 s); `telem
     const ev = await until(() => flowsOf(s.dir).find((f) => f.event === 'failure' && f.where === 'classes'))
     assert.equal(ev.code, 'classes-unparsable'); assert.match(ev.reason, /builtin class table applies/)
     assert.equal(flowsOf(s.dir).filter((f) => f.event === 'failure' && f.where === 'classes').length, 1, 'one event per state change, not one per call')
-    const bad = captureHealth({ home: path.join(s.home, '.trocar') })
+    const bad = captureHealth({ harnesses: HARNESS_IDS, home: path.join(s.home, '.trocar') })
     assert.ok(bad.collector.conditions.some((c) => c.kind === 'classes'), 'a current condition: the top bar is ⚠'); assert.equal(bad.summary.state, 'failing')
     // fixed: classes-ok, the condition is gone
     setKeep('full'); await settle()
     await s.call({ ...batch(5), path: T })
     await until(() => flowsOf(s.dir).find((f) => f.event === 'classes-ok'))
-    assert.equal(captureHealth({ home: path.join(s.home, '.trocar') }).collector.conditions.some((c) => c.kind === 'classes'), false)
+    assert.equal(captureHealth({ harnesses: HARNESS_IDS, home: path.join(s.home, '.trocar') }).collector.conditions.some((c) => c.kind === 'classes'), false)
     assert.equal('body_retention' in last(T), false, 'back to full from the next call on')
   } finally { await s.done() }
 })

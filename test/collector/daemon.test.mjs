@@ -442,6 +442,31 @@ test('daemon: refuses to start uninstalled; desired state survives a restart; on
   } finally { p.done(); s.done() }
 })
 
+// 4.11 §3 ㉓ (CM39): an id outside this daemon's harness table that the install manifest names is not installed here — a version 1 state.json is
+// carried to the table's harnesses only, a bare `on` turns only those on, and status lists only those
+test('CM39 daemon: a manifest naming an id outside the table — a version 1 state and a bare on write and report table ids only', async () => {
+  for (const desired of ['on', 'off']) {
+    const s = sandbox(); const p = fakeProc()
+    try {
+      await install(s)
+      const m = readManifest(s.collector)
+      m.entries = [...m.entries, ...m.entries.map((e) => ({ ...e, harness: 'later-agent' }))]
+      saveManifest(s.collector, m)
+      const stateFile = path.join(s.collector, 'state.json')
+      fs.writeFileSync(stateFile, JSON.stringify({ version: 1, desired, updated_at: 'T0' }))
+      const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] })
+      try {
+        const st = await req(s.sock, 'POST', '/on', {})
+        const table = [cc.name]
+        const disk = JSON.parse(fs.readFileSync(stateFile, 'utf8')) // a version 1 file nothing rewrote holds no id at all
+        assert.deepEqual((disk.version === 2 ? Object.keys(disk.harnesses) : []).filter((id) => !table.includes(id)), [], desired)
+        assert.deepEqual(Object.keys(st.harnesses).filter((id) => !table.includes(id)), [], desired)
+        assert.deepEqual(Object.keys((await req(s.sock, 'GET', '/status')).harnesses).filter((id) => !table.includes(id)), [], desired)
+      } finally { await d.stop() }
+    } finally { p.done(); s.done() }
+  }
+})
+
 test('daemon: a helper death is degraded and on reports why; a protocol mismatch never attaches (G2); a second daemon is refused before spawning a helper', async () => {
   const s = sandbox(); const p = fakeProc()
   await install(s)

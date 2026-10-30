@@ -110,9 +110,9 @@ function ownedLikeDir(dir, chown) {
 
 // What status reports beside the live state: capture health read from disk by the reader the board uses
 // (src/health/read.mjs, D38) — failures by kind, current conditions, what could not be read (D-2: never "none").
-// `dir` is <trocar home>/collector.
-export function healthOnDisk(dir) {
-  try { return captureHealth({ home: path.dirname(dir) }) } catch (e) { return { error: `capture health could not be read: ${errText(e)}` } }
+// `dir` is <trocar home>/collector; `harnesses` is the daemon's own table (4.11 §3 ㉓): the switch is read for those ids only.
+export function healthOnDisk(dir, harnesses) {
+  try { return captureHealth({ home: path.dirname(dir), harnesses }) } catch (e) { return { error: `capture health could not be read: ${errText(e)}` } }
 }
 
 // The user's agent list ~/.trocar/agents.json (D51③, 4.6 R6): read again only when its stat key moved — inode:size:mtime, plus the mode (a chmod
@@ -560,9 +560,10 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       if (candidates.length) failure('tracker', Object.assign(new Error(`${reason}; its command line fits ${candidates.join(' and ')}`), { code: 'exe-unreadable' }), { pid, errno: code || null, candidates })
     })
 
-    // the harnesses `on` with no names means, and a version 1 state.json is carried to (1.6 §1.5, V28): the installed ones — those the install
-    // manifest names, because trocar wrote an entry or a file for them. One it never installed is no capture target: not judged, no agent-untrusted
-    const installed = () => [...new Set([...(manifest.entries || []), ...(manifest.files || [])].map((e) => e.harness).filter(Boolean))]
+    // the harnesses `on` with no names means, and a version 1 state.json is carried to (1.6 §1.5, V28): the installed ones — the table's harnesses the
+    // install manifest names, because trocar wrote an entry or a file for them (4.11 §3 ㉓: an id outside the table is never reached). One it never
+    // installed is no capture target: not judged, no agent-untrusted
+    const installed = () => { const named = new Set([...(manifest.entries || []), ...(manifest.files || [])].map((e) => e.harness)); return harnessList.map((d) => d.name).filter((id) => named.has(id)) }
     // a manifest the CLI wrote since (and that this build reads, and that is complete) replaces the one read at start; one that cannot be read leaves the old one, and says so
     const reloadManifest = () => {
       try { const fresh = readManifest(P.dir); if (fresh && !fresh.unsupported && daemonMayStart(fresh)) manifest = fresh } catch (e) { failure('daemon', coded(e, 'manifest-unreadable')) }
@@ -573,7 +574,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // so nothing is asked of it (no unwatch failure to record) and every pid counts as taken out
     const reconcileTable = () => { syncTracker(); return tracker.reconcile({ kernelGone: !!helperDown }) }
     // the switch calls this when harnesses go off, before the links come off: their processes leave the kernel watch table first
-    sw = createSwitch({ redirector, stateFile: P.state, installed, ensureReady, onEvent: event, reconcile: reconcileTable })
+    sw = createSwitch({ redirector, stateFile: P.state, known: harnessList.map((d) => d.name), installed, ensureReady, onEvent: event, reconcile: reconcileTable })
     // the file may only take capture away (switch.mjs). A harness the file turned off is off like one the route turned off: its connections still relayed
     // are closed where the engine sees a boundary (1.6 §1.3) — the CLI writes the file before it asks the route, and a daemon whose route nobody reached
     // would otherwise keep them for good
@@ -686,19 +687,19 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown, unparsable_lines: unparsable, timeouts },
         agents, running_untrusted: agents.filter((a) => !a.trusted && !a.off).length,
         unjudged: { count: unjudged.length, sample: unjudged.slice(0, 10).map((u) => ({ pid: u.pid, comm: u.comm, errno: u.errno })) },
-        health: healthOnDisk(P.dir),
+        health: healthOnDisk(P.dir, harnessList.map((d) => d.name)),
         events: failure.health(), // event lines lost (D-1): stderr had each, the next written line is a log-gap
       }
     }
     // The names a request carries (1.6 §1.5): absent / null = every harness; otherwise a non-empty array of strings, each a harness this daemon has
-    // a descriptor for (an `off` may also name one the state file holds). Anything else is a 400 that names the problem and changes nothing: a
+    // a descriptor for (4.11 §3 ㉓: its own table, nothing else). Anything else is a 400 that names the problem and changes nothing: a
     // string would otherwise spread into one name per character, a typo would be written to state.json as a harness that is on, and an empty
     // array would read as "all".
-    const namesOf = (body, { allowState = false } = {}) => {
+    const namesOf = (body) => {
       const h = body && typeof body === 'object' ? body.harnesses : undefined
       if (h == null) return null
       if (!Array.isArray(h) || h.length === 0 || h.some((x) => typeof x !== 'string' || !x)) throw Object.assign(new Error('"harnesses" must be a non-empty array of harness names (leave it out for all of them)'), { status: 400 })
-      const known = new Set([...registry.names(), ...installed(), ...(allowState ? Object.keys(sw.state().harnesses) : [])])
+      const known = new Set(registry.names())
       const unknown = h.filter((x) => !known.has(x))
       if (unknown.length) throw Object.assign(new Error(`unknown harness: ${unknown.join(', ')} (known: ${[...known].sort().join(', ')})`), { status: 400 })
       return h
@@ -718,7 +719,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       off: async ({ body }) => {
         const b = body && typeof body === 'object' ? body : {}
         for (const k of ['now', 'exit']) if (b[k] !== undefined && typeof b[k] !== 'boolean') throw Object.assign(new Error(`"${k}" must be true or false`), { status: 400 })
-        const names = namesOf(body, { allowState: true })
+        const names = namesOf(body)
         if (b.exit === true && names) throw Object.assign(new Error('"exit" stops the whole daemon: it takes no harness names (leave them out)'), { status: 400 })
         const by = stopByOf(b)
         const r = await sw.off({ harnesses: names })
@@ -820,7 +821,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   const status = async () => {
     const st = collector.issuer.state()
     const d = desired()
-    const hs = Object.fromEntries(Object.entries(d).map(([h, e]) => [h, { ...e, attached: collector.attached(h) }])) // per harness: its doors listen (status's `attached`, 1.6 V32)
+    const hs = Object.fromEntries(list.filter((x) => d[x.name]).map(({ name: h }) => [h, { ...d[h], attached: collector.attached(h) }])) // per harness: its doors listen (status's `attached`, 1.6 V32)
     // the connections of the harnesses that are off and still relayed (1.6 §1.3), as runDaemon reports them: the engine counts
     // what it holds in memory, so this costs nothing. Without it `status` said "Connections unknown (the daemon's reply does not
     // carry the connection counts)" on every model-mode machine — a reason about trocar's own IPC (a macOS test machine 2026-10-18).
