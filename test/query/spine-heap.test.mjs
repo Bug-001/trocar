@@ -188,8 +188,11 @@ test('the plan of a cut session keeps at most PLAN_PER_MEMBER a member', async (
 // the shown calls grow with the session between steps, and the cut moves at most once.
 // The session is grown and extracted in a process of its own (grower: growing it is not what is measured); the reader, one process
 // with a small heap kept across the reads (readerFlags), reads it on each line it is sent and answers with what it showed.
-// Message Threads, subagents side by side
-const PAST = { heapMb: 160, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12, names: 16_000 } }
+// Message Threads, subagents side by side, past the room of a 112 MB reader: the reader's heap sets how big the session is (a fold of
+// it holding twice the budget) and the cut's step (a tenth of the rows that fit, a power of two: 128 calls at 112 MB, 256 at 160 MB,
+// measured 2026-10-31), so a smaller reader is a smaller session past the same bound. Not below: the --since reader holds whole pages
+// of 16 KB tool names beside its reads, and at 80 MB it ran out of heap.
+const PAST = { heapMb: 112, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12, names: 16_000 } }
 const GROWING = `${TICK}
 const { runQuery } = await import(${JSON.stringify(QUERY)})
 const [home, id] = process.argv.slice(1)
@@ -229,7 +232,8 @@ for await (const line of (await import('node:readline')).createInterface({ input
   console.log(JSON.stringify({ now, cut: first.records[0].id, lane: lane.mark, d: since == null ? null : await q('session', { since }) }))
 }`
 test('a session past the heap bound followed with --since: a mark names its cut, a delta under it is the document, a moved cut answers in full', async () => {
-  const home = path.join(tmpDir('trocar-spine-'), '.trocar'), CHUNK = 60
+  // a chunk under a quarter of the cut's step (PAST): a step under one cut grows the shown calls by CHUNK, a moved cut changes them by more
+  const home = path.join(tmpDir('trocar-spine-'), '.trocar'), CHUNK = 30
   const s = await grower({ home, ...PAST })
   const reader = child([...readerFlags(PAST.heapMb), '--input-type=module', '-e', FOLLOW, home, s.id], 'the followed session read')
   const ask = (since) => { reader.send(JSON.stringify({ since })); return reader.next() }
