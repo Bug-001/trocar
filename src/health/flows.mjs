@@ -98,7 +98,7 @@ const KEEP = ['ts', 'event', 'where', 'code', 'reason', 'suppressed', 'folded', 
   'type', 'index', 'desired', 'actual', 'links', 'counts', 'from', 'to', 'lost', 'exit', 'stderr', 'signal', 'failed',
   'version', 'foreground', 'linger', 'upstream_ca', 'dropped', 'neg_key', 'errno', 'route', 'phase', 'decision', 'inner',
   'not_captured', 'write_failed', 'transport', 'port', 'out', 'servername', 'op', 'outcome', 'records', 'originalKept', 'reader', 'target', 'source', 'id', 'run',
-  'level', 'door', 'process', 'alert', 'trust_entry'] // the last five: trust-rejected (D51④)
+  'level', 'door', 'process', 'alert', 'trust_entry', 'method', 'owner_unread'] // level..trust_entry: trust-rejected (D51④); method, owner_unread: ingress-unknown (4.8 §5.1)
 const CLIP = 1000
 const clip = (v) => (typeof v === 'string' && v.length > CLIP ? `${v.slice(0, CLIP)}… (${v.length} chars)` : v)
 /** A record cut down to metadata: listed fields only, long strings clipped and said so, `error` as {type, message, side}. */

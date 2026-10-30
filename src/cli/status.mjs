@@ -374,6 +374,7 @@ function formsOf(f) {
 const GROUPS_MAX = 50
 const ROW = 'flow' // a connection row has no `where` of its own: FAILURE_WORDS keys its words under this one (a document field, not a flows/ record)
 const reasonText = (r) => (typeof r === 'string' && squashed(r)) || null
+const procOf = (l) => (typeof l.process === 'string' && l.process !== '' ? { process: l.process, pid: Number.isInteger(l.pid) ? l.pid : null } : {}) // the program a record names (1.6 C.3)
 function failuresOf(f) {
   const h = effectiveHealth(f).health
   if (!h) return null
@@ -382,7 +383,7 @@ function failuresOf(f) {
     const l = g.last || {}
     // a failure event's where / code; a connection row is `flow` with its not_captured; the raw journal's op / outcome; else the event
     const w = where || l.where || (l.event == null ? ROW : l.event)
-    return { level: 'problem', where: w, code: (l.code ?? l.not_captured ?? l.outcome ?? l.event ?? l.reason) || g.key, count: g.count || 1, first_ts: g.first_ts, last_ts: g.last_ts, agent: l.agent ?? l.harness, reason: reasonText(l.reason ?? (l.error && l.error.message)) }
+    return { level: 'problem', where: w, code: (l.code ?? l.not_captured ?? l.outcome ?? l.event ?? l.reason) || g.key, count: g.count || 1, first_ts: g.first_ts, last_ts: g.last_ts, agent: l.agent ?? l.harness, ...procOf(l), reason: reasonText(l.reason ?? (l.error && l.error.message)) }
   }
   const groups = [...(c.failures || []).map(problem(null)), ...((h.raw && h.raw.failures) || []).map(problem('raw'))]
   const expected = Object.values(c.expected || {}).reduce((n, x) => n + (Number(x) || 0), 0)
@@ -398,10 +399,10 @@ function failuresOf(f) {
   for (const p of parts) {
     const k = `${p.level}\u0000${p.where}\u0000${p.code}`, g = by.get(k)
     const harness = HARNESS_IDS.includes(p.agent) ? p.agent : null
-    if (!g) { by.set(k, { level: p.level, where: p.where, code: p.code, count: p.count, first_ts: p.first_ts, last_ts: p.last_ts, harness, reason: p.reason }); continue }
+    if (!g) { by.set(k, { level: p.level, where: p.where, code: p.code, count: p.count, first_ts: p.first_ts, last_ts: p.last_ts, harness, ...procOf(p), reason: p.reason }); continue }
     g.count += p.count
     if (String(p.first_ts) < String(g.first_ts)) g.first_ts = p.first_ts
-    if (String(p.last_ts) >= String(g.last_ts)) { g.last_ts = p.last_ts; g.reason = p.reason }
+    if (String(p.last_ts) >= String(g.last_ts)) { g.last_ts = p.last_ts; g.reason = p.reason; delete g.process; delete g.pid; Object.assign(g, procOf(p)) }
     if (g.harness !== harness) g.harness = null // one group from more than one harness: the group names none
   }
   const all = [...by.values()].map(({ harness, ...g }) => (harness ? { ...g, harness } : g)).sort((a, b) => (String(a.last_ts) < String(b.last_ts) ? 1 : String(a.last_ts) > String(b.last_ts) ? -1 : 0))

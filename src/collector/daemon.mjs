@@ -793,7 +793,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   // status's per-harness entries: state.json's; unreadable → what this daemon has on (its in-memory switch), never a silent empty list (D38)
   const desired = () => { try { return readStateFile(P.state).state.harnesses || {} } catch { return Object.fromEntries(list.filter((d) => collector.isOn(d.name)).map((d) => [d.name, { desired: 'on' }])) } }
   const engine = createEngine({
-    redirector: { lookupIngress: (q) => collector.lookupIngress(q), servePac: (q) => collector.servePac(q) },
+    redirector: { lookupIngress: (q) => collector.lookupIngress(q), servePac: (q) => collector.servePac(q), ownerOfPeer: (p) => collector.ownerOfPeer(p) },
     issuer: { secureContextFor: (h) => collector.issuer.secureContextFor(h), issue: (h) => collector.issuer.issue(h) }, store, upstreamCa,
     ingressToken: crypto.randomBytes(24).toString('hex'), // the model listens on no shared ingress: each door carries its group's token (ingress.json's), this one guards nothing
     isRecording: (meta) => collector.isOn(meta && meta.agent), // the in-memory switch decryption uses too: no file read per request, no silent off on a read error (4.6 §开关)

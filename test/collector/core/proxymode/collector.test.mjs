@@ -777,3 +777,12 @@ test('CM20 · the door applies the harness\'s own proxy file (ctx, the process\'
     }
   }
 })
+
+test('4.8 §5.1 · ownerOfPeer (the ingress-unknown sender): the door\'s owner and facts questions give pid + name; an owner or facts that cannot be told say why', async () => {
+  const r = await rig({ desc: descs[0], w: { pid: 4321, facts: { exe: '/opt/tools/bin/codex', argv: ['/opt/tools/bin/codex', 'exec'], uid: 501, startedAt: INSTALLED + 1 } } })
+  assert.deepEqual(await r.c.ownerOfPeer(PEER), { pid: 4321, process: 'codex' })
+  Object.assign(r.w, { pid: null, owner: { why: 'shared' } })
+  assert.deepEqual(await r.c.ownerOfPeer(PEER), { pid: null, why: 'shared' })
+  Object.assign(r.w, { pid: 4322, owner: {}, facts: null, factsWhy: 'ps did not answer' })
+  assert.deepEqual(await r.c.ownerOfPeer(PEER), { pid: 4322, process: null, why: 'ps did not answer' })
+})
