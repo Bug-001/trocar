@@ -10,6 +10,7 @@ import { QUIET_CAUSES } from '../../src/web/v2/replay/analysis.mjs'
 import { stepOf } from '../../src/web/v2/replay/model.mjs'
 import * as W from '../../src/web/v2/labels/replay.mjs'
 import { esc } from '../../src/web/v2/core/fmt.mjs'
+import { bodyFor } from '../../src/web/v2/replay/blocks.mjs'
 import { deskOf, world, deskFrom } from './desk-world.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
@@ -254,3 +255,11 @@ test('the real face: an opened reply row with no source location shows the text 
   } finally { await face.close() }
 })
 
+
+// 3.5 §会话读: an unaddressable tools definition brings its description and schema in `inline`; the wire carries no `verbatim`
+test('an unaddressable tools definition shows the description and schema it brings in inline', () => {
+  const d = { bid: 'tb', fh: 'tb', sec: 'tools', role: 'system', kind: 'text', name: 'Bash', head: { role: 'system', tag: 'def', label: 'Bash' }, preview: 'Bash',
+    chars: 40, bytes: 40, r: { as: 'text' }, ref: null, unaddressable: 'inline', ff: { unaddressable: 'inline' }, inline: { desc: 'DESC-q runs one command', schema: { type: 'object', properties: { SCHEMA_q: { type: 'string' } } } } }
+  const h = bodyFor({ ...d, text_ref: d.ref })
+  assert.ok(h.includes('DESC-q') && h.includes('SCHEMA_q'), h.slice(0, 300))
+})

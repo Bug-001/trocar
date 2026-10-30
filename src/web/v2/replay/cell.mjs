@@ -105,8 +105,8 @@ export function rawContentText(bl) {
 // the text of a block that carries its body inline
 export function inlineText(b) {
   const x = ownBody(b)
-  if (b.sec === 'tools') {
-    return b.verbatim
+  if (b.sec === 'tools') { // by what the definition carries: the wire sends no `verbatim`; an older capture kept neither text
+    return b.verbatim !== false && (x.desc !== undefined || x.schema !== undefined)
       ? `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\n\ndescription:\n${x.desc || '—'}${x.schema !== undefined ? `\n\nschema:\n${JSON.stringify(x.schema, null, 2)}` : ''}`
       : `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\nparams (names only): ${(b.props || []).join(', ') || '—'}\ndescription: ${kf(b.descChars)} chars captured — schema text not retained (length only)\n\nMetadata only: the full JSON schema (parameter types / required / enums / nesting) and the description text were not captured. The model received the full schema; this is a capture boundary, not a display clip.`
   }
