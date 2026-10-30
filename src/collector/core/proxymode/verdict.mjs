@@ -101,7 +101,8 @@ export function verdictOf({ desc, form, facts = {}, record = {}, issuer, host, h
   if (sv) return fwd(sv, `pid ${facts.pid} started before trocar's settings for ${form.id} were in place (its proxy entry and the certificate it needs); restart it once`)
   const pctx = { ...ctx, env: facts.env || {}, cwd: facts.cwd ?? undefined } // the process's env and cwd, never the daemon's
   const inProcess = (pm.certs || {})[form.cert]?.kind === 'plugin' // rule 4: a plugin carrier adds the root in process; its trust sources serve ⑭ only
-  const hookPid = inProcess && facts.env ? String(facts.env[HOOK_PID_ENV] ?? '').trim() : '' // ... unless the hook that wrote the env was a parent's
+  if (inProcess && facts.env == null) return fwd('environ-unreadable', 'the process environment could not be read, so whether this process ran the hook itself is not known', { unread: true }) // D38
+  const hookPid = inProcess ? String(facts.env[HOOK_PID_ENV] ?? '').trim() : '' // ... unless the hook that wrote the env was a parent's
   if (hookPid !== '' && hookPid !== String(facts.pid)) return fwd('hook-inherited', `pid ${facts.pid} inherited the door from its parent (pid ${hookPid}) and did not run the hook itself, so it holds no trocar root`)
   const t = trustVerdict(form.trust !== 'root' && pm.trusts && pm.trusts[form.trust], pctx, facts, record, inProcess)
   if (t) return t
