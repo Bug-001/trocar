@@ -6,7 +6,7 @@
 // daemon side (iii) `trocar status` lists it with no daemon running.
 //   Where an F item is checked elsewhere, the test that does is named in place (F5, F8, F9). No `todo` is left: the
 // engine's connection-row codes (C2 T-1 / T-2 / T-4 / T-11..T-15) and the combined-bundle check (D-21) landed with the
-// merge of the lanes, and the last one, F5's WebSocket labels vs the top bar, with the decision of
+// merge of the lanes, and the last one, F5's WebSocket labels vs capture health, with the decision of
 // 2026-10-06 (the class split, 4.6 F5). F1(b), F1(d), F2 (table), F4 and F5 (HTTP and WebSocket) are plain tests.
 // [test-machine] items are listed at the end; they are not run here.
 import test from 'node:test'
@@ -374,7 +374,7 @@ test('F4 write failures: an event line that cannot be written is on stderr and i
     const gap = h.collector.failures.find((g) => g.key.startsWith('log-gap'))
     assert.equal(gap.last.lost, 1, 'the gap, with how many lines were lost')
   } finally { await d.stop(); p.done(); s.done() }
-  // flows/ itself unreadable → 503, never empty: test/server-capture-health.test.mjs "unreadable flows/ → 503 …"
+  // flows/ itself unreadable → 503, never empty: test/health/flows.test.mjs "readFlows: … an unreadable flows/ throws (503) …"
 })
 
 test('F4 the connection row of a flow whose envelope could not be written carries write_failed, and the agent still gets its reply', async () => {
@@ -421,7 +421,7 @@ test('F7 sealing and reading: a seal refused on a file that is not a closed segm
   await assert.rejects(sealSegment(shard, { lockFile: path.join(s.collector, 'lock'), journal }))
   let h = await endpoint(s)
   assert.deepEqual(h.raw.problems.map((x) => [x.op, x.outcome]), [['seal', 'refused']])
-  assert.equal(h.summary.state, 'failing', 'the top bar turns ⚠')
+  assert.equal(h.summary.state, 'failing', 'capture health turns ⚠')
   // Nothing else can be sealed any more: only the daemon seals, and only a closed segment of raw/ (4.2 §自动封存), so
   // the old "a sealed flows/ day is still read" case cannot occur. Reading a sealed SEGMENT end to end (every record
   // by its id, byte for byte) is test/query/segment-index.test.mjs.
@@ -589,11 +589,11 @@ test('F1(d) a bundle rebuilt without a user CA it held (its source file moved) i
 })
 
 // F5 (WebSocket): the labels on a WebSocket call (不完整 / 已截断 / 未解码) say what is missing from
-// THAT call; the top bar goes ⚠ by the D38 class of what happened. A failed write, a message that cannot be decoded, and
+// THAT call; capture health goes ⚠ by the D38 class of what happened. A failed write, a message that cannot be decoded, and
 // data lost because a direction stopped being followed (or trocar's own code threw) are failure events: ⚠. A call cut at
 // the 64 MiB cap is by design: a label on the call (`ws_truncated`), no event, no ⚠. The real recorder writes the real
-// flows/ through the daemon's failure recorder, the endpoint is read over HTTP; the top bar maps `summary.state` 'failing'
-// to ⚠ N and 'ok' to ✓ (test/web/cap-health.test.mjs). The cap is lowered through the recorder's own option: the engine
+// flows/ through the daemon's failure recorder, and captureHealth() reads it back; how the board draws `summary.state` is
+// the overview card's and the capture page's (RFC 1.7 / 1.9). The cap is lowered through the recorder's own option: the engine
 // takes the 64 MiB constant, and a test that sends 64 MiB through TLS proves nothing more.
 const WS_FLOW = { id: 'ws-f5', host: 'api.openai.com', scheme: 'https', dst: { address: '10.0.0.1', port: 443, family: 4 }, proc: { pid: 7171, exe: CC_EXE, agent: 'claude-code' } }
 const wsUpgrade = (ext) => {
@@ -603,7 +603,7 @@ const wsUpgrade = (ext) => {
   return { req: { head: head(raw('GET /v1/responses HTTP/1.1', reqH), { method: 'GET', target: '/v1/responses', headers: reqH }) },
     resp: { head: head(raw('HTTP/1.1 101 Switching Protocols', respH), { status: 101, headers: respH }) } }
 }
-test('F5 WebSocket labels and the top bar, by D38 class: a call cut at the cap is a label only (✓); a failed write, an undecodable message and a stopped direction are failure events (⚠)', { timeout: 30000 }, async () => {
+test('F5 WebSocket labels and capture health, by D38 class: a call cut at the cap is a label only (✓); a failed write, an undecodable message and a stopped direction are failure events (⚠)', { timeout: 30000 }, async () => {
   const S = await scene()
   const failures = createFailureRecorder(S.s.collector) // as the daemon wires it into the engine and the recorder
   try {
@@ -625,7 +625,7 @@ test('F5 WebSocket labels and the top bar, by D38 class: a call cut at the cap i
     failures.flush()
     assert.deepEqual(flowsOf(S.s).filter((f) => f.where === 'ws'), [], 'no event is written for a cut at the cap')
     let h = await endpoint(S.s)
-    assert.equal(h.summary.state, 'ok', 'the top bar stays ✓')
+    assert.equal(h.summary.state, 'ok', 'capture health stays ✓')
     assert.deepEqual(await wsKeys(), [], 'and no WebSocket group is listed')
     out.length = 0
 
@@ -633,7 +633,7 @@ test('F5 WebSocket labels and the top bar, by D38 class: a call cut at the cap i
     const w = rec({ write: () => { throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }) } })
     w.fromClient(cli(1, ev('response.create'))); w.fromUpstream(srv(1, ev('response.completed')))
     h = await endpoint(S.s)
-    assert.equal(h.summary.state, 'failing', 'a failed write turns the top bar ⚠')
+    assert.equal(h.summary.state, 'failing', 'a failed write turns capture health ⚠')
     assert.deepEqual(await wsKeys(), ['ws/write-failed'])
 
     // (3) a message that cannot be decoded (RSV1 with no permessage-deflate agreed)
@@ -664,15 +664,15 @@ test('F5 WebSocket labels and the top bar, by D38 class: a call cut at the cap i
 })
 
 // Elsewhere:
-//   F5 (WebSocket): test/web/ws-incomplete.test.mjs — partial / ws_truncated / undecoded / non-verbatim reach /api/session
-//       and render as 不完整 / 已截断 / 未解码 / 非逐字, through both assemblers. Which of them turn the top bar ⚠ (by D38
-//       class) is the F5 WebSocket test above. Response-body labels: test/web/resp-incomplete.test.mjs.
+//   F5 (labels): test/dissect/labels-english.test.mjs — every capture label id (partial, ws_truncated, undecoded,
+//       non-verbatim, the response-body ones) reaches the board's two read paths. Which of them turn capture health ⚠
+//       (by D38 class) is the F5 WebSocket test above.
 //   F4 (the capture file itself unwritable on the daemon's path): test/collector/daemon.test.mjs "an envelope that cannot be
 //       written is a durable failure record" — record/EISDIR in flows/, and the agent still gets its reply.
 //   F8: the old capture's own failure events went with it (D39⑥ executed 2026-10-11); the reader half still is
 //       test/health/capture-health.test.mjs "the old capture: …" ("old MITM only is not 「未安装」").
-//   F9: test/server-capture-health.test.mjs (503, installed:false, metadata only, Host / Origin) and
-//       test/web/cap-health.test.mjs ("未刷新 · 截至 T" within 2 cycles with live unchecked).
+//   F9: test/health/capture-health.test.mjs and test/health/flows.test.mjs (503, installed:false, metadata only),
+//       test/server/gate.test.mjs (Host / Origin), test/web-v2/caphealth-poll.test.mjs (stale after two missed periods).
 //   F3(c), F3(i): test/collector/arch/linux/redirector-client.unit.test.mjs (heartbeat gap, monotonic timing),
 //       test/collector/core/events.test.mjs (the day never goes back), test/health/capture-health.test.mjs (not
 //       responding by the lock's age, pid / boot_id mismatch → not running).
