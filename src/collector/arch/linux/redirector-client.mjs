@@ -78,6 +78,7 @@ export function createRedirectorClient({
   let child = null
   let hbTimer = null
   let down = false
+  let closing = false // close() ended the helper's stdin: what follows is how an orderly stop ends, not the helper going down (D38)
   let readyResolve = null
   let readyReject = null
   let gate = beforeBeat
@@ -142,6 +143,8 @@ export function createRedirectorClient({
         emitter.emit('loader-error', { reason: msg.reason })
         return
       case 'down':
+        // the helper's own word when its stdin closes ("loader exiting", redirector.c) is, during close(), the stop the daemon asked for: its exit says the rest
+        if (closing) return
         fail(msg.reason || 'loader reported down')
         return
       default:
@@ -150,13 +153,14 @@ export function createRedirectorClient({
     }
   }
 
-  function fail(reason, extra = {}) {
+  function fail(reason, extra = {}, { quiet = false } = {}) {
     if (down) return
     down = true
     stopHeartbeat()
     for (const { reject } of pending.values()) reject(Object.assign(new Error('redirector loader down: ' + reason), { code: 'loader-down' }))
     pending.clear()
     if (readyReject) { readyReject(new Error('redirector loader down: ' + reason)); readyResolve = readyReject = null }
+    if (quiet) return // an orderly close: no `down`, so no helper-down failure (the daemon's own daemon-stop records the stop)
     emitter.emit('down', { reason, ...extra, ...(stderrTail.length ? { stderr: [...stderrTail] } : {}) })
   }
 
@@ -204,8 +208,10 @@ export function createRedirectorClient({
     child.on('exit', (code, signal) => {
       stopHeartbeat()
       const exit = signal || HELPER_EXIT[code] || `code ${code}`
-      // after its stderr is drained, so the tail is complete
-      setImmediate(() => fail(signal ? `loader killed by ${signal}` : `loader exited with code ${code}${HELPER_EXIT[code] ? ` (${HELPER_EXIT[code]})` : ''}`, { exit }))
+      // after its stderr is drained, so the tail is complete. Asked to close and gone with code 0: that is the close, said by nobody; any other end
+      // (a non-zero code, a signal — close()'s own SIGKILL after its wait included) is still the helper going down, with its exit (D-14)
+      const quiet = closing && code === 0 && !signal
+      setImmediate(() => fail(signal ? `loader killed by ${signal}` : `loader exited with code ${code}${HELPER_EXIT[code] ? ` (${HELPER_EXIT[code]})` : ''}`, { exit }, { quiet }))
     })
     child.on('error', (err) => {
       if (err && err.code === 'ENOENT') {
@@ -264,6 +270,7 @@ export function createRedirectorClient({
   async function close() {
     stopHeartbeat()
     if (!child) return
+    closing = true
     try { child.stdin.end() } catch { /* already closed */ }
     if (child.exitCode == null && child.signalCode == null) {
       await new Promise((resolve) => {

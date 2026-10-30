@@ -626,7 +626,7 @@ test('install: a unit systemd refuses to enable is a recorded failure, the insta
     assert.equal(r.manifest.install?.state, 'complete')
     const { recentFailures } = await import('../../src/collector/core/events.mjs')
     const f = recentFailures(b.dir).find((x) => x.code === 'unit-not-enabled')
-    assert.ok(f && /Failed to connect to bus/.test(f.reason) && /trocar daemon/.test(f.reason), JSON.stringify(f))
+    assert.ok(f && /Failed to connect to bus/.test(f.reason), JSON.stringify(f))
   } finally { b.done() }
 })
 

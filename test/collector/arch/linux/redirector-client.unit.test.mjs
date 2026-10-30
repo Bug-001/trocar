@@ -257,6 +257,25 @@ test('a helper that exits carries the exit name and its last stderr lines into d
   await p
 })
 
+// D38: an orderly stop is the daemon's daemon-stop record, never a failure. Measured on Linux 2026-10-30: on stdin EOF the real helper says
+// {"ev":"down","reason":"loader exiting"} and exits 0, and that was written as helper-down — a "Problem" in status after every off, logout and unit stop.
+test('close(): the helper saying "loader exiting" and exiting 0 is the close, no down; ending any other way during close is still down, with its exit (D-14)', async () => {
+  const clean = await started()
+  const downs = []; clean.c.on('down', (d) => downs.push(d))
+  clean.m.child.stdin.end = () => setImmediate(() => { clean.m.pushLine({ ev: 'down', reason: 'loader exiting' }); setImmediate(() => { clean.m.child.exitCode = 0; clean.m.child.emit('exit', 0, null) }) })
+  await clean.c.close()
+  await new Promise((r) => setTimeout(r, 20))
+  assert.deepEqual(downs, [], 'an orderly close is not the helper going down')
+  for (const [code, signal, exit] of [[9, null, 'code 9'], [null, 'SIGSEGV', 'SIGSEGV']]) {
+    const bad = await started()
+    const got = once(bad.c, 'down')
+    bad.m.child.stdin.end = () => setImmediate(() => { bad.m.pushLine({ ev: 'down', reason: 'loader exiting' }); setImmediate(() => { bad.m.child.exitCode = code; bad.m.child.signalCode = signal; bad.m.child.emit('exit', code, signal) }) })
+    await bad.c.close()
+    const [d] = await got
+    assert.equal(d.exit, exit, `a close that ends with ${signal || `code ${code}`} is reported`)
+  }
+})
+
 // ── the heartbeat gate (4.6 §开关语义, 1.6 §1.5): before each periodic beat the daemon re-reads state.json, and a stalled loop must
 // not beat again until it has ───────────────────────────────────────────────────────────────────────────────────────────────────────
 const beatsOf = (m) => m.frames().filter((f) => f.op === 'heartbeat').length
