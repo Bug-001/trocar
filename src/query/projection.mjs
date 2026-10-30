@@ -207,7 +207,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
   const seen = lru(2 * SEEN); // content keys of the values at share positions written last
 
   const refsHeld = (row) => { let ok = true; eachSlot(row, 0, (h, k) => { const v = h[k]; if (!isRef(v)) return isObj(v); if (!sharedAt.has(v.$s)) ok = false; return false; }); return ok; };
-  const lineAt = ([o, l]) => JSON.parse(lines.read(o, l).toString('utf8'));
+  const lineAt = ([o, l]) => lines.json(o, l);
   function sharedOf(k) {
     let v = sharedCache.get(k);
     if (v !== undefined) return v;
