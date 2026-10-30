@@ -27,14 +27,14 @@ export const noColor = () => IDENTITY
 
 /** `rows` (lists of cells) → lines, each column padded to its widest cell, `gap` spaces between, no trailing blanks. With `width`, a last cell that
  *  would run past it is folded on spaces under its own column, so the row still reads as one row and the terminal never folds it to column 0 (§1.1⑥,
- *  as `pairs` folds a value); a word longer than the room keeps its own line, unbroken. Without it, one line per row. */
+ *  as `pairs` folds a value); a word longer than the room is never broken, it stays whole on its line. Without it, one line per row. */
 export function columns(rows, { gap = 2, width = Infinity } = {}) {
   const w = []
   for (const row of rows) row.forEach((cell, i) => { w[i] = Math.max(w[i] || 0, String(cell ?? '').length) })
   return rows.flatMap((row) => {
     const head = row.slice(0, -1).map((cell, i) => String(cell ?? '').padEnd(w[i]) + ' '.repeat(gap)).join('')
     const last = String(row.at(-1) ?? '')
-    if (head.length + last.length <= width) return [`${head}${last}`.trimEnd()]
+    if (head.length + last.length <= width || !last.trim()) return [`${head}${last}`.trimEnd()]
     return wrap(last, width - head.length).map((t, i) => (i ? ' '.repeat(head.length) : head) + t)
   })
 }
