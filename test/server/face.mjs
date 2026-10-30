@@ -16,7 +16,7 @@ export const withToken = (h = {}) => ({ [CONTROL_TOKEN_HEADER]: TOKEN, ...h })
 export async function serveFace({ home, query, deps, failure, ...opts }) {
   const svc = query ? null : createQueryService({ home, failure, fork: (h) => (deps ? workerFork(h, deps) : workerFork(h)) })
   const relays = []
-  const q = query || { relay: (a) => (relays.push(a.name), svc.relay(a)), control: (a) => (relays.push(`control:${a.verb}`), svc.control(a)), warm: (a) => svc.warm(a) }
+  const q = query || { relay: (a) => (relays.push(a.name), svc.relay(a)), control: (a) => (relays.push(`control:${a.verb}`), svc.control(a)), warm: (a) => svc.warm(a), refresh: (a) => svc.refresh(a) }
   const { server } = createServer({ home, token: TOKEN, query: q, ...opts })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
   return { server, port: server.address().port, relays, close: () => { server.close(); svc?.stop() } }

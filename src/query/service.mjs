@@ -19,7 +19,8 @@
 // arrives, and a worker that answered, was kicked or ran a background slice last QUERY_IDLE_MS ago leaves (3.5 谁执行它). The DAEMON keeps that clock, not
 // the worker: it alone knows whether a request is in flight or queued (a worker's own timer was off for as long as one of
 // its answers was unfinished, so a stuck answer kept it, and its warm heap, for good), and the clock starts only when
-// nothing is, so an idle exit never cuts a query and is not a failure. The board's `relay` (4.4, D66) has no local path, so it is the one caller that waits for a fork.
+// nothing is, so an idle exit never cuts a query and is not a failure. The board's `relay` (4.4, D66) has no local path, so it is the one caller that waits for a fork,
+// except where the daemon hands out a stored answer (4.4 §存下的答案): `refresh` then queues the fresh one behind it.
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { QUERY_PATH, QUERY_NAMES, WINDOW_PARAMS, paramsOf } from './client.mjs'
@@ -42,8 +43,10 @@ export const FAILURE_BACKOFF_MAX_MS = 15 * 60_000
 /** The subject a worker's death is remembered by when it died with no request in flight: on what kicks gave it. */
 const KICK = 'kick'
 const coolOf = (ep) => Math.min(CRASH_COOLDOWN_MS * 2 ** (ep.n - 1), FAILURE_BACKOFF_MAX_MS)
-/** What a failure is remembered by: the name and every parameter but the window (stable key order). */
-const subjectOf = (name, params = {}) => `${name} ${JSON.stringify(Object.keys(params).filter((k) => !WINDOW_PARAMS.includes(k)).sort().map((k) => [k, Array.isArray(params[k]) ? params[k].map(String) : String(params[k])]))}`
+/** A name and its parameters as one string (stable key order, values as strings), leaving out the parameters in `skip`. */
+const keyOf = (name, params = {}, skip = []) => `${name} ${JSON.stringify(Object.keys(params).filter((k) => !skip.includes(k)).sort().map((k) => [k, Array.isArray(params[k]) ? params[k].map(String) : String(params[k])]))}`
+/** What a failure is remembered by: the name and every parameter but the window. */
+const subjectOf = (name, params = {}) => keyOf(name, params, WINDOW_PARAMS)
 /** A worker asked nothing this long leaves and gives its memory back: the board polls every 1.5 s while it is open, so it stays
  *  warm while anyone is looking; the next query after an idle exit forks a new one (3.5 谁执行它). */
 export const QUERY_IDLE_MS = 120_000
@@ -267,7 +270,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     c.stdin.write(line)
   })
 
-  /** Fork a worker and give it this very query, with nobody waiting for the answer: the next query finds it warm. */
+  /** Fork a worker and give it this very query, with nobody waiting for the answer: the next query finds it warm (route's cold 503). */
   const warmUp = (line, name, subject) => {
     if (cooling(subject)) return // nothing to warm a cooling subject with (the route already answered it 500)
     enqueue(name, () => run(line, SINK, deadlineMs, name, subject)).catch(() => {})
@@ -374,8 +377,25 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
    *  worker runs the CLI's own function (src/control/board.mjs). The caller checked the verb and parsed the small request body. */
   const control = ({ verb, body = {}, res }) => answer(JSON.stringify({ control: verb, body }) + '\n', res, controlDeadlineMs, `control/${verb}`, subjectOf(`control/${verb}`, body))
 
-  /** Fork a worker (if there is none) and run this query with nobody waiting: the board's page load warms it (4.4). */
-  const warm = ({ name, params = {} }) => warmUp(lineOf(name, params), name, subjectOf(name, params))
+  /** The daemon is about to hand out the stored answer of (name, params) (4.4 §存下的答案「刷新」): true when there is no worker or a
+   *  refresh of `name` is queued or running, and then a refresh of exactly these params is queued unless one still is (dedup); false
+   *  when stopped, when the subject is cooling (the relay answers 500 with its reason, D38), or when a warm worker is idle (the relay
+   *  answers fresh). No worker: run() forks one. */
+  const refreshing = new Set() // keyOf(name, params) of the refreshes queued or running
+  const refresh = ({ name, params = {} }) => {
+    const subject = subjectOf(name, params)
+    if (stopped || cooling(subject)) return false
+    if (child && ![...refreshing].some((k) => k.startsWith(`${name} `))) return false
+    const key = keyOf(name, params)
+    if (!refreshing.has(key)) {
+      refreshing.add(key)
+      enqueue(name, () => run(lineOf(name, params), SINK, deadlineMs, name, subject)).catch(() => {}).finally(() => refreshing.delete(key))
+    }
+    return true
+  }
 
-  return { route, relay, control, warm, kick, sweep, path: QUERY_PATH, stop: () => { stopped = true; clearInterval(statsTimer); statsTimer = null; drop('the daemon is stopping') } }
+  /** The board's page load (4.4, D64①): a refresh of the list, so a cold worker is forked and warming before the page asks. */
+  const warm = (a) => { refresh(a) }
+
+  return { route, relay, control, warm, refresh, kick, sweep, path: QUERY_PATH, stop: () => { stopped = true; clearInterval(statsTimer); statsTimer = null; drop('the daemon is stopping') } }
 }
