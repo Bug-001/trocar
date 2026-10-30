@@ -26,6 +26,7 @@ import { runOffCli } from '../../src/off/main.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { segmentIndex } from '../../src/query/index-build.mjs'
 import { PID, BODY, reqOf, REPLY, agentOf, darwinExec, win32Io, flowsOf, freePort, doorOpen, through, statusDoc } from '../helpers/model-io.mjs'
+import { listenLocalhost } from '../helpers/localhost.mjs'
 
 
 for (const platform of ['darwin', 'win32']) {
@@ -42,8 +43,7 @@ for (const platform of ['darwin', 'win32']) {
       s.on('error', () => {}); let b = Buffer.alloc(0) // the body ends the request
       s.on('data', (d) => { b = Buffer.concat([b, d]); if (b.includes(BODY)) { got.push(b); s.write(REPLY) } })
     })
-    await new Promise((r) => mock.listen(0, '127.0.0.1', r))
-    const target = `localhost:${mock.address().port}`, REQ = reqOf(target)
+    const target = `localhost:${await listenLocalhost(mock)}`, REQ = reqOf(target)
     const bundle = path.join(w.home, 'codex-ca.pem')
     fs.writeFileSync(bundle, rootPem + upCa.certPem) // what this codex trusts: the trocar root (CM22) and the upstream's CA
     const desc = w.harnesses.find((h) => h.name === 'codex')
@@ -164,8 +164,7 @@ for (const platform of ['darwin', 'win32']) {
     const rootPem = fs.readFileSync(path.join(w.dir, 'ca', 'trocar-ca.pem'), 'utf8')
     const mockCa = createCa({ commonName: 'e2e upstream CA' }), mockIssuer = createLeafIssuer(loadCa(mockCa))
     const mock = tls.createServer({ SNICallback: (s, cb) => cb(null, mockIssuer.secureContextFor(s)) }, (s) => { s.on('error', () => {}); let b = ''; s.on('data', (d) => { b += d; if (b.includes(BODY)) s.write(REPLY) }) })
-    await new Promise((r) => mock.listen(0, '127.0.0.1', r))
-    const target = `localhost:${mock.address().port}`
+    const target = `localhost:${await listenLocalhost(mock)}`
     const bundle = path.join(w.home, 'codex-ca.pem')
     fs.writeFileSync(bundle, rootPem + mockCa.certPem)
     const desc = w.harnesses.find((h) => h.name === 'codex')
