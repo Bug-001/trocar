@@ -7,7 +7,7 @@
 import { esc, kf } from '../core/fmt.mjs'
 import { techDetailsHtml, mark } from '../core/ui.mjs'
 import { relPath, ROUTING_LABELS } from './analysis.mjs'
-import { showBody, bodyFor } from './blocks.mjs'
+import { showBody, bodyFor, faithOf } from './blocks.mjs'
 import { stepOf } from './model.mjs'
 import { stepRef } from './lanes.mjs'
 import { keyed, patchInto } from '../core/units.mjs'
@@ -18,14 +18,19 @@ import * as W from '../labels/replay.mjs'
 // step's reply definitions (thinking · text · tool calls, each with its `ref`), `detail` = the lane step's detail. The mark:
 // the bytes only partially stored → 'partial' (「◐ 回复没采全」); every part resolving to its span of the streamed reply
 // (`…::resp.raw::a-b`) → null; anything else → 'parsed' (「◐ 解析后的回复」). 逐字 is never written without that span.
-// partMark(d) is the same rule for ONE part, as the window's rows mark it (the partial fact is the call line's, 2.3)
+// partMark(d) marks ONE part as the window's rows do: the request rows' proof rule (faithOf) over the part's span — proven on it
+// with no non-verbatim value, a known value is that value's mark, no span is 'parsed' (the partial fact is the call line's, 2.3)
 const RESP_SPAN = /::resp\.raw::\d+-\d+$/
-export const partMark = (d) => (RESP_SPAN.test(String(d.ref || '')) ? null : 'parsed')
+const onSpan = (d) => RESP_SPAN.test(String(d.ref || ''))
+export function partMark(d) {
+  const f = faithOf({ ...d, text_ref: onSpan(d) ? d.ref : null })
+  return f === 'verbatim' ? null : f === 'unaddressable' ? 'parsed' : f
+}
 const PARTIAL_LABELS = new Set(['resp-truncated', 'resp-partial', 'resp-undecoded'])
 export function replyOf({ row, reply, detail } = {}) {
   const c = row || {}, parts = reply || [], norm = (detail && detail.norm) || {}
   const partial = !!(c.respIncomplete || ((c.wire && c.wire.labels) || []).some((l) => PARTIAL_LABELS.has(l.id)))
-  const mark = partial ? 'partial' : parts.some(partMark) ? 'parsed' : null
+  const mark = partial ? 'partial' : parts.every(onSpan) ? null : 'parsed'
   // an unparsed step is a REQUEST-body fact; where the response itself parsed, the reply still renders (2.6 §A)
   let failed = null
   if (!(c.unparsed && parts.length) && (c.error || (c.status != null && c.status !== 200))) {
@@ -157,11 +162,13 @@ export function renderResourceView(el, s) {
   if (notHere) body = `<div class="rpk">${esc(notHere)}</div>`
   else if (call && !held) body = busyRowsHtml()
   else if (tools.length) {
-    // a capability = the tool definitions it put on the wire: listed as metadata, each row marked by its own faithfulness
-    const proven = tools.every((t) => t.verbatim === true && t.text_ref)
+    // a capability = the tool definitions it put on the wire, each a row of what its definition carries; the tier by the proof
+    // rule over all of them (2.4 §能力的分档): all proven · all an older capture's metadata · anything else
+    const ff = tools.map(faithOf), proven = ff.every((f) => f === 'verbatim')
+    const tier = proven ? W.CAP_VERBATIM : ff.every((f) => f === 'metadata') ? W.CAP_METADATA : W.CAP_MIXED
     body = `<div class="rpk"><b>${esc(pin.label || pin.resKey)}</b> · ${tools.length} tool definitions</div>` +
-      tools.map((t) => `<div class="rpk mono">${esc(t.name || '')} · ${kf(t.descChars || 0)}-character description · ${(t.props || []).length} parameters</div>`).join('') +
-      `<div class="rpk ${proven ? 'rpok' : 'rpwarn'}">${esc(proven ? W.CAP_VERBATIM : W.CAP_METADATA)}</div>`
+      tools.map((t) => `<div class="rpk mono">${esc(W.capToolRow(t.name || '', kf(t.chars || 0)))}</div>`).join('') +
+      `<div class="rpk ${proven ? 'rpok' : 'rpwarn'}">${esc(tier)}</div>`
   } else if (b) body = `<div class="pinbody" data-bi="${flat.indexOf(b)}"></div>`
   else body = `<div class="rpk">${esc(W.RES_NOT_FOUND)}</div>`
   el.innerHTML = `<div class="rphd">${esc(path)} <span class="rpx" id="rpx" role="button" tabindex="0">${esc(W.BACK_TO_RAW)}</span></div>${body}`

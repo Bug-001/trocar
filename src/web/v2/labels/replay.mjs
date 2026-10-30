@@ -352,6 +352,8 @@ export const jumpStepTip = (at) => `Jump to ${at}`
 // the capability's two tiers, by 2.3's proof rule
 export const CAP_VERBATIM = 'Tool definitions were captured verbatim; expand the tool block in the context window to see the full schema'
 export const CAP_METADATA = 'Metadata only: name, parameter count, description length; not the verbatim schema'
+export const CAP_MIXED = 'Not every one of these tool definitions is proven verbatim; each tool block in the context window carries its own mark'
+export const capToolRow = (name, chars) => `${name} · ${chars} characters`
 // the pinned panel's honest fallbacks
 export const RES_NOT_FOUND = 'No single matching block in the context of this step: it may have been read earlier or already removed. Click the step number on this row to jump to the step that read it.'
 

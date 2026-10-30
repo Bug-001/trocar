@@ -29,14 +29,8 @@ export function clipText(t) {
 // ── the proof rule (2.3): what a block's fidelity IS, and what it may claim ──────────────────────────────────────────
 const KNOWN_FF = new Set(['metadata', 'opaque', 'summarized', 'omitted', 'truncated'])
 // → one of: verbatim (proven — no visible word) · a known 3.2 value · unknown · unaddressable
+// a tools block by the same rule (2.3): an older capture's tool definitions say `metadata`
 export function faithOf(b) {
-  if (b.sec === 'tools') {
-    if (b.verbatim === true && b.text_ref && (b.faithfulness == null || b.faithfulness === 'verbatim')) return 'verbatim'
-    if (b.verbatim === false) return 'metadata' // D15 前的旧 trace: name + params + descChars, no schema text
-    if (b.faithfulness != null && KNOWN_FF.has(b.faithfulness)) return b.faithfulness
-    if (b.faithfulness != null && b.faithfulness !== 'verbatim') return 'unknown'
-    return 'unaddressable' // the schema rides inline and cannot be sliced out of the capture
-  }
   if (b.text_ref && (b.faithfulness == null || b.faithfulness === 'verbatim')) return 'verbatim'
   if (b.faithfulness === 'verbatim') return 'unaddressable' // claims verbatim but has nothing to resolve it from
   if (b.faithfulness != null && KNOWN_FF.has(b.faithfulness)) return b.faithfulness
@@ -112,7 +106,7 @@ export function noteBodyFidelity(blk, got) {
   if (blk.dataset.ff === f || (blk.dataset.ff && blk.dataset.ff !== 'verbatim')) return // an existing visible mark keeps its claim
   blk.dataset.ff = f
   const head = blk.querySelector(':scope > .cbh')
-  if (head) head.insertAdjacentHTML('beforeend', ffBadgeHtml(f, { tech: got && got.error }))
+  if (head) { head.insertAdjacentHTML('beforeend', ffBadgeHtml(f, { tech: got && got.error })); const sr = head.querySelector(':scope > .sr-only'); if (sr) sr.remove() }
   const root = blk.closest && (blk.closest('#ctxwin') || blk.closest('#detail'))
   const sec = blk.dataset.sec
   if (root && sec) { // the section can no longer claim 以下逐字

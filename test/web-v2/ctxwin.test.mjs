@@ -204,6 +204,9 @@ test('2.3 #13: a part without its span says parsed on its own row; an incomplete
   const [a, b] = rows(parsed), [ha, hb] = heads(parsed)
   assert.match(a.attrs, /data-ff="parsed"/); assert.equal((ha.match(/class="ffbadge/g) || []).length, 1); assert.ok(ha.includes(esc(W.REPLY_PARSED)))
   assert.match(b.attrs, /data-ff="verbatim"/); assert.ok(!hb.includes('ffbadge'), 'a proven row shows no mark')
+  // a known non-verbatim value on the part's definition is that value's mark, as on a request row (an encrypted thinking on its span)
+  const opaque = ctxWindowHtml(stateOf(replyDesk([[rp('thinking', { ff: { faithfulness: 'opaque' } })]])))
+  assert.match(rows(opaque)[0].attrs, /data-ff="opaque"/); assert.ok(heads(opaque)[0].includes('class="ffbadge') && !heads(opaque)[0].includes('sr-only'))
   const part = ctxWindowHtml(stateOf(replyDesk([[rp('text')]], [{ respIncomplete: { truncated: true } }])))
   assert.match(rows(part)[0].attrs, /data-ff="verbatim"/); assert.ok(!seg(part).includes('ffbadge'))
 })
@@ -265,3 +268,30 @@ test('the real face: every main step of the demo session draws inside the whitel
   } finally { await face.close() }
 })
 
+
+// 2.3 §保真标:证明规则 over the real wire: a definition says its fidelity in `ff.faithfulness` (3.5 §会话读). A row whose value is
+// absent or verbatim and that has a source location is proven, a tools block too; only a value outside the set is unknown
+test('the real face: each request row carries the fidelity its definition sends, never "unknown" for a known value', async () => {
+  const face = await serveBoard(boardHome())
+  try {
+    const id = (await face.get('sessions')).doc.sessions[0].session_id
+    const desk = await deskFrom((n, p) => face.get(n, p).then((r) => r.doc), id)
+    const s = stateOf(desk), KNOWN = new Set(Object.keys(W.FF_WORD))
+    let seen = 0
+    for (let p = 0; p < s.anchor.calls.length; p++) {
+      s.playhead = p
+      const st = stepOf(desk, s.anchor.calls[p].rid)
+      if (!st.held) continue
+      const h = ctxWindowHtml(s), ff = new Map([...h.matchAll(/<div class="cblk[^"]*"[^>]*data-ff="([^"]*)"[^>]*data-bi="(\d+)"/g)].map((m) => [+m[2], m[1]]))
+      assert.ok(!h.includes('[object Object]'), `step ${p + 1}: a mark's title is an object`)
+      st.flat.forEach((d, i) => {
+        const v = d.ff && d.ff.faithfulness, got = ff.get(i)
+        if (got == null) return // a row in a folded turn is not drawn
+        seen++
+        assert.equal(got === 'unknown', v != null && !KNOWN.has(v), `step ${p + 1} row ${i}: ff ${JSON.stringify(d.ff)} drew ${got}`)
+        if (d.ref && (v == null || v === 'verbatim')) assert.equal(got, 'verbatim', `step ${p + 1} row ${i} (${d.sec})`) // tools blocks too (2.3)
+      })
+    }
+    assert.ok(seen > 0)
+  } finally { await face.close() }
+})

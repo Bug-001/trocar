@@ -51,8 +51,10 @@ test('a tools-dominated context names tools as the culprit and the four shares s
   assert.equal(x.culprit, 'tools'); assert.ok(x.pct('tools') > 50)
   const sum = TAX_ORDER.reduce((a, k) => a + x.pct(k), 0); assert.ok(sum >= 98 && sum <= 102, `sum ${sum}`)
 })
-test('segTax without verbatim tools flags allVerbatim false; an empty window has no NaN', () => {
-  assert.equal(segTax([B({ sec: 'tools', kind: 'tool', verbatim: false })]).allVerbatim, false)
+test('segTax: tools an older capture kept as metadata flag allVerbatim false; an empty window has no NaN', () => {
+  // a step's block as the desk holds it: `faithfulness` is the wire's ff.faithfulness (model.mjs boardDef)
+  assert.equal(segTax([B({ sec: 'tools', kind: 'tool', faithfulness: 'metadata' })]).allVerbatim, false)
+  assert.equal(segTax([B({ sec: 'tools', kind: 'tool', faithfulness: 'verbatim' }), B({ sec: 'tools', kind: 'tool' })]).allVerbatim, true)
   const e = segTax([]); assert.equal(e.pct('tools'), 0); assert.equal(e.culprit, 'tools')
 })
 test('an unknown query is not guessed from the body: no query means no human turn', () => {
