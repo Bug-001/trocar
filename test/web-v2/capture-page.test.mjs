@@ -247,3 +247,20 @@ test('1.9 表空: no empty-table line while the install manifest cannot be read'
   d.errors = [{ where: ERR_WHERE.manifest, reason: 'x' }]
   assert.equal(/class="capfoot"/.test(page(d, CONTROL)), false)
 })
+
+// 1.9 §每个 agent 一行 第 3 条: a negative-cache condition is worded by its record's cause — on its agent's row and, with no agent, on the
+// service row — so an upstream's certificate is never said to be trocar's refused one
+test('1.9: a negative-cache condition is worded by its cause, on the agent row and on the service row', async () => {
+  const { agentVerdicts } = await import('../../src/web/v2/core/capture-verdict.mjs')
+  const { failureWord } = await import('../../src/cli/words.mjs')
+  const { esc } = await import('../../src/web/v2/core/fmt.mjs')
+  const word = (cause) => failureWord('engine', 'negative-cache', '', cause)
+  for (const [cause, other] of [['upstream-cert', 'client-rejected-leaf'], ['upstream-handshake', 'client-rejected-leaf'], ['client-rejected-leaf', 'upstream-cert']]) {
+    const k = { kind: 'negative-cache', where: 'engine', code: 'negative-cache', cause, pid: 4121, host: 'api.example.com', since: T }
+    const r = agentVerdicts(doc({ extra: { critical: [{ ...k, harness: 'codex' }] } })).find((x) => x.harness === harnessKey('codex'))
+    assert.ok(r.text.includes(word(cause)) && !r.text.includes(word(other)), `${cause}: ${r.text}`)
+    assert.equal(r.restart, false)
+    const html = page(doc({ extra: { critical: [k] } }), CONTROL)
+    assert.ok(html.includes(esc(word(cause))) && !html.includes(esc(word(other))), `${cause}: the service row`)
+  }
+})

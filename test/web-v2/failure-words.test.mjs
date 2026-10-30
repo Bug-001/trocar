@@ -65,3 +65,22 @@ test('no board label table keys a code the CLI\'s catalog words', async () => {
   }
   assert.deepEqual(hits, [])
 })
+
+// a negative-cache record carries its cause (the engine's: trocar's certificate refused, the upstream's certificate unverified, the upstream
+// handshake unfinished): the cause chooses the sentence, so one cause is never worded as another, nor as the bare code a group of mixed causes gets
+test('a negative-cache cause chooses its own sentence', () => {
+  const causes = ['client-rejected-leaf', 'upstream-cert', 'upstream-handshake']
+  const words = causes.map((c) => failureWord('engine', 'negative-cache', '', c))
+  assert.equal(new Set([...words, failureWord('engine', 'negative-cache')]).size, causes.length + 1, JSON.stringify(words))
+})
+
+// 1.6 附录 B: `status`'s reason for a negative-cache process follows its cause too; a restart is the fix only when the program refused trocar's
+// certificate (or the cause is not known) — an upstream's certificate or handshake is not changed by one
+test('statusReason: a negative-cache process is worded by its cause, and only a refused certificate is fixed by a restart', async () => {
+  const { statusReason } = await import('../../src/cli/words.mjs')
+  const of = (cause) => statusReason('negative-cache', { harness: 'z-code', pid: 7, cause })
+  const causes = ['client-rejected-leaf', 'upstream-cert', 'upstream-handshake']
+  assert.equal(new Set(causes.map((c) => of(c).text)).size, causes.length)
+  assert.deepEqual([of(null).text, of(null).fix != null], [of('client-rejected-leaf').text, true])
+  assert.deepEqual(causes.map((c) => of(c).fix != null), [true, false, false])
+})
