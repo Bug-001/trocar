@@ -132,6 +132,46 @@ test('V94: HEAD = upstream and the collector on this code is exit 0 and writes n
   assert.deepEqual([receipt.from, receipt.to], [codeId(s.root), codeId(s.root)])
 })
 
+// ── V105 · a copy installed with npm ────────────────────────────────────────────────────────────────────────────────────────────────
+test('V105: an npm copy whose collector runs it is exit 2 npm-package naming <name>@latest; one whose collector runs another code replaces it', async () => {
+  const s = sandbox({ on: ['codex'] })
+  const name = `x-pkg-${Math.random().toString(36).slice(2, 8)}`
+  const npmRoot = path.join(s.base, 'lib', 'node_modules', name)
+  fs.mkdirSync(npmRoot, { recursive: true })
+  fs.writeFileSync(path.join(npmRoot, 'package.json'), JSON.stringify({ name, version: '0.2.0' }) + '\n')
+
+  // (a) the collector already runs this copy: nothing changes, and the name to install comes from the copy's own package.json (D67②)
+  const was = s.stateBytes()
+  let t = ctx(s, { deps: { root: npmRoot }, daemonCode: () => codeId(npmRoot) })
+  assert.equal(await runUpdateCli(['--json', '--yes'], t.c), EXIT.usage, t.io.text())
+  const doc = t.io.json()
+  assert.equal(doc.error.code, 'npm-package')
+  assert.ok(doc.error.message.includes(`${name}@latest`))
+  assert.deepEqual([s.handover(), s.stateBytes()], [null, was])
+  assert.deepEqual([t.calls.off, t.calls.install, t.calls.child], [[], [], []])
+
+  // a plain directory with no .git, not under node_modules, is still not-a-checkout
+  const plainRoot = path.join(s.base, 'plain')
+  fs.mkdirSync(plainRoot)
+  fs.writeFileSync(path.join(plainRoot, 'package.json'), JSON.stringify({ name, version: '0.2.0' }) + '\n')
+  t = ctx(s, { deps: { root: plainRoot } })
+  assert.equal(await runUpdateCli(['--json', '--yes'], t.c), EXIT.usage, t.io.text())
+  assert.equal(t.io.json().error.code, 'not-a-checkout')
+
+  // (b) the user already installed a newer copy and the collector runs another code: it is stopped and comes back on this copy
+  let daemon = '0.1.0'
+  const unit = { path: '/login/entry', enable: () => { daemon = codeId(npmRoot); return { code: 0 } } }
+  const stopped = []
+  t = ctx(s, {
+    daemonCode: () => daemon,
+    deps: { root: npmRoot, unit, socketPath: path.join(s.base, 'control.sock'), request: async ({ method }) => (method === 'POST' ? { actual: 'off', confirmed: true, pid: 4242, relayed: { closing: 0, waiting: 0, cut: 0 } } : { code: daemon }), stopDaemon: async (o) => { stopped.push(o); return { stopped: true, pid: 4242, signals: ['SIGTERM'] } } },
+  })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(validateReceipt(t.io.json()), [])
+  assert.deepEqual([stopped.length > 0, daemon], [true, codeId(npmRoot)])
+  assert.equal(s.handover(), null)
+})
+
 // ── V95 · the code changes and the new code takes over ──────────────────────────────────────────────────────────────────────────────
 test('V95: the harnesses that are on go off into the handover file, HEAD fast-forwards, and the new code is run in a process of its own', async () => {
   for (const json of [false, true]) {
