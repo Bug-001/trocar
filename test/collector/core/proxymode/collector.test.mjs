@@ -1,4 +1,4 @@
-// test/collector/core/proxymode/collector.test.mjs — the collector model's daemon half (spec 4.11 §3 ① ② ③ ⑥, P2, P7, P10, P11, P12; plan §E.6 ruling 1).
+// test/collector/core/proxymode/collector.test.mjs — the collector model's daemon half (spec 4.11 §3 ① ② ③ ⑥, P2, P7, P10, P11, P12).
 // CM22 at the door: over every descriptor form and the verdict generator's axes (verdict-world.mjs), meta.decrypt equals verdictOf. CM20 / ⑥: meta.upstream
 // equals upstreamFor over env × system proxy × prior × identified, and the X-Trocar-Upstream gate. CM19 / CM33: the PAC door. CM23: an idle holder keeps
 // its door forward-only. CM6: no custody / no key. ① / G4: no writes; restore reuses the recorded ports; a taken port is engine-port-taken and no door.
@@ -470,11 +470,11 @@ test('CM23 · a second off answers GET /holders and mayExit from its own table, 
   } finally { release(); c.close() }
 })
 
-// ---- A9 / A10: the door's durable record (P12 「门的持久记录」) ------------------------------------------------------------------------------------
+// ---- the door's durable record (P12 「门的持久记录」) ------------------------------------------------------------------------------------
 const doorRows = (dir) => readDoorSeen({ dir }).rows
 const fireAll = async (pending, rounds = 4) => { for (let i = 0; i < rounds; i++) { for (const fn of pending.splice(0)) await fn(); await new Promise((r) => setImmediate(r)) } }
 
-test('A9 (a) · a life the door accepted is a holder of a NEW collector over the same dir (a daemon restart, no new connection); without the accept it is not', async () => {
+test('a life the door accepted is a holder of a NEW collector over the same dir (a daemon restart, no new connection); without the accept it is not', async () => {
   const d = descs[0], f = d.proxyMode.forms.find((x) => x.os.includes('darwin')), g = `${d.name}:${f.route}`
   const T1 = INSTALLED + 100, P = 61, START = INSTALLED - 50, table = [{ pid: P, startedAt: START }]
   for (const accept of [true, false]) {
@@ -490,7 +490,7 @@ test('A9 (a) · a life the door accepted is a holder of a NEW collector over the
   }
 })
 
-test('A9 (b) · after a poll tick the door rows of a life that left the process table are gone; a live one stays', async () => {
+test('after a poll tick the door rows of a life that left the process table are gone; a live one stays', async () => {
   const pending = []
   const timers = { setTimeout: (fn) => { pending.push(fn); return pending.length }, clearTimeout: () => {} }
   const d = descs[0], f = d.proxyMode.forms.find((x) => x.os.includes('darwin')), g = `${d.name}:${f.route}`
@@ -507,7 +507,7 @@ test('A9 (b) · after a poll tick the door rows of a life that left the process 
   assert.deepEqual([...new Set(doorRows(dir).map((r) => r.pid))], [72])
 })
 
-test('A9 (d) · a collector with no door traffic writes no door record', async () => {
+test('a collector with no door traffic writes no door record', async () => {
   const d = descs[0], f = d.proxyMode.forms.find((x) => x.os.includes('darwin')), g = `${d.name}:${f.route}`, dir = tmpDir()
   const { c } = await rig({ desc: d, dir, w: { procs: [{ pid: 5, startedAt: INSTALLED + 1 }] } })
   await c.on({ harnesses: [d.name], groups: { [g]: 18112 } })
@@ -516,7 +516,7 @@ test('A9 (d) · a collector with no door traffic writes no door record', async (
   assert.equal(fs.existsSync(path.join(dir, DOOR_SEEN_FILE)), false)
 })
 
-test('A9 (e) · a door record unreadable at start: said as door-record-unreadable; the record written back stays not known while a process of the harness from before lives, and is whole once none does', async () => {
+test('a door record unreadable at start: said as door-record-unreadable; the record written back stays not known while a process of the harness from before lives, and is whole once none does', async () => {
   const d = descs[0], dir = tmpDir(), T1 = INSTALLED + 100
   fs.writeFileSync(path.join(dir, DOOR_SEEN_FILE), '{not json')
   const identity = serializeSignature(compileIdentity({ harness: d.name, names: [{ name: 'agentq' }] }))
@@ -537,7 +537,7 @@ test('A9 (e) · a door record unreadable at start: said as door-record-unreadabl
   assert.deepEqual(readDoorSeen({ dir }).rows, [], 'and the file says so')
 })
 
-test('A10 · PAC GETs are counted per life: two from one life are one kind:\'pac\' row with n = 2 at the latest time; a new life of the same pid gets its own row', async () => {
+test('PAC GETs are counted per life: two from one life are one kind:\'pac\' row with n = 2 at the latest time; a new life of the same pid gets its own row', async () => {
   const dir = tmpDir(), S1 = INSTALLED + 1, S2 = INSTALLED + 500
   const { c, w } = await rig({ desc: pacDesc, dir, w: { pid: 81, facts: { agent: pacDesc.name, uid: 501, startedAt: S1 }, now: INSTALLED + 10 } })
   await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18113 } })
@@ -636,7 +636,7 @@ for (const ingress of [{ missing: true }, { error: 'EACCES' }]) for (const anyOn
   })
 }
 
-// ---- 2026-10-21: evidence that was not read is never kept (4.11 P7 · P11, D38) ------------------------------------------------------------------
+// ---- evidence that was not read is never kept (4.11 P7 · P11, D38) ------------------------------------------------------------------
 // Over every verified, non-host-tree form: the process env or cwd unreadable on the first connection, readable later — a connection after the
 // throttle second gets the verdict the readable world gives (never the first one's pinned forward); within that second the reader is asked once.
 const plain = CASES.filter(({ f, os }) => f.verified[os] === true && !f.hostTree && !(f.forwardOnlyHosts || []).length)
@@ -682,7 +682,7 @@ test('4.11 P11 · an unreadable manifest: the last good one is used and said onc
   r.c.close()
 })
 
-// ---- 2026-10-21: negative-cache keys per process life, cleared on exit (4.8 §5.5) ---------------------------------------------------------------
+// ---- negative-cache keys per process life, cleared on exit (4.8 §5.5) ---------------------------------------------------------------
 test('4.8 §5.5 · the negative-cache key is pid@start; a held key is forgotten when its process is gone from the table, a group key when its door closes', async () => {
   const { d, f, os } = rootForm, g = `${d.name}:${f.route}`
   const pending = [], forgot = []
@@ -725,7 +725,7 @@ test('4.8 §5.5 · a key the engine no longer holds anything under is dropped: n
   r.c.close()
 })
 
-// ---- 2026-10-21: forwarding by design is no failure event; the switch is the in-memory one (4.6 §连接行 · §开关) -------------------------------------
+// ---- forwarding by design is no failure event; the switch is the in-memory one (4.6 §连接行 · §开关) -------------------------------------
 test('4.6 §连接行 · a not-verified verdict writes no failure event (the row carries it); config-after-start writes one, once', async () => {
   const { d, f, os } = rootForm, g = `${d.name}:${f.route}`
   for (const [over, code, events] of [[{ verified: { reason: 'not-measured' } }, 'not-verified', 0], [{ start: 'before' }, 'config-after-start', 1]]) {
@@ -776,4 +776,13 @@ test('CM20 · the door applies the harness\'s own proxy file (ctx, the process\'
       c.close()
     }
   }
+})
+
+test('4.8 §5.1 · ownerOfPeer (the ingress-unknown sender): the door\'s owner and facts questions give pid + name; an owner or facts that cannot be told say why', async () => {
+  const r = await rig({ desc: descs[0], w: { pid: 4321, facts: { exe: '/opt/tools/bin/codex', argv: ['/opt/tools/bin/codex', 'exec'], uid: 501, startedAt: INSTALLED + 1 } } })
+  assert.deepEqual(await r.c.ownerOfPeer(PEER), { pid: 4321, process: 'codex' })
+  Object.assign(r.w, { pid: null, owner: { why: 'shared' } })
+  assert.deepEqual(await r.c.ownerOfPeer(PEER), { pid: null, why: 'shared' })
+  Object.assign(r.w, { pid: 4322, owner: {}, facts: null, factsWhy: 'ps did not answer' })
+  assert.deepEqual(await r.c.ownerOfPeer(PEER), { pid: 4322, process: null, why: 'ps did not answer' })
 })

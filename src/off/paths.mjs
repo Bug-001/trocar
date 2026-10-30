@@ -5,6 +5,8 @@
 import nodeFs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { DOOR_SEEN_FILE } from './door-seen.mjs'
+import { CONTROL_FILE } from './control-client.mjs'
 
 /** ~/.trocar (D27; the v0 prototype's ~/.atrace is read, never written, and is not here). */
 export const trocarHome = (home = os.homedir()) => path.join(home, '.trocar')
@@ -27,6 +29,9 @@ export const legacyLockPath = (home = os.homedir()) => path.join(trocarHome(home
 export const legacyEventsFile = (home = os.homedir()) => path.join(trocarHome(home), 'logs', 'mitm-events.ndjson')
 /** What the operator asked for, per harness (1.6 §1.5); the daemon reads the same file. */
 export const stateFile = (home = os.homedir()) => path.join(collectorDir(home), 'state.json')
+/** The daemon's own state in ~/.trocar/collector (not captures, 0.2): every uninstall removes these once the daemon has stopped, and its plan names
+ *  the same list, so for these files the plan and the act cannot drift. door-seen.json is read by uninstall's holder check first (4.11 P12). */
+export const COLLECTOR_STATE_FILES = ['state.json', CONTROL_FILE, 'board.token', 'update.json', DOOR_SEEN_FILE]
 /** The lock of the one command that changes state at a time (1.6 R12). */
 export const opLockFile = (home = os.homedir()) => path.join(collectorDir(home), 'op.lock')
 

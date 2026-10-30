@@ -1,4 +1,4 @@
-// custody.test.mjs — the macOS keychain custody over a STUB signing helper (CM3, stub side; the real helper is L1's, plan §E.3):
+// custody.test.mjs — the macOS keychain custody over a STUB signing helper (CM3, stub side; the real helper is L1's):
 // the stub is a node script named trocar-sign-helper in a temp dir that speaks the helper's verbs, exit codes and JSON, keeps its
 // key in a file there and logs every argv. The real helper is never run (it would write the login keychain).
 import test from 'node:test'

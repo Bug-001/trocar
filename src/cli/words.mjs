@@ -179,6 +179,10 @@ export const briefText = (s, max = 100) => { const t = squashed(s); return t.len
  *  the overview alike: the catalog's sentence when it knows the code — the code and the raw reason are then the technical details' (the CLI prints the
  *  reason after it) — else the raw errno / `where/code` with the squashed reason, so an unknown code is never hidden; the `×count` multiplier is the caller's. */
 export function failureBrief(g) {
+  const from = g && typeof g.process === 'string' && g.process !== '' ? `, latest from ${g.process}${Number.isInteger(g.pid) ? ` pid ${g.pid}` : ''}` : '' // every failure that names its program, one way (1.6 §3.5)
+  return brief(g) + from
+}
+function brief(g) {
   const word = failureWord(g && g.where, g && g.code, (g && g.harness) || '')
   if (word) return word
   const reason = briefText((g && g.reason) || '')
@@ -257,7 +261,7 @@ export function statusReason(code, { harness = '', pid = null } = {}) {
     'settings-ignored-setting-sources': [`${h} was started with settings sources that leave out trocar's certificate setting`],
     'dsh-use-openssl-ca': [`${h} runs with --use-openssl-ca, under which trocar cannot add its certificate`, 'start it without that flag'],
     'dsh-node-too-old': [`${h} runs on a Node too old to add a certificate while running`, 'run it on a newer Node'],
-    'kimi-npm-no-shim': [`this is the npm build of ${h}; trocar sets up only the installed one`],
+    'kimi-npm-no-shim': [`this is the npm build of ${h}; trocar sets up only the build from its own installer`],
     'desktop-ca-override': [`the desktop certificate setting of ${h} overrides the one trocar wrote`],
     'smart-app-control': [`Smart App Control is on, so trocar could not set up the install folder of ${h}`],
     // the rest of doctor's findings (1.6 附录 B, src/netenv/findings.mjs FINDING_CODES): the catalogue's "what" sentence, without the values a clause is not given

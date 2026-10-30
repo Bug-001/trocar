@@ -139,6 +139,6 @@ export default {
     afterUninstall: 'next-connection',
   },
   // One logical WebSocket call ends at one of these server messages (RFC 4.6 §传输与帧级记录). Data only: the daemon
-  // hands it to the engine per connection (describe → tracker.extrasFor, plan 3c WsTerminal shape).
+  // hands it to the engine per connection (describe → tracker.extrasFor, in the WsTerminal shape).
   wsTerminal: [{ pathSuffix: '/responses', patterns: ['^\\{"type":"(response\\.(completed|failed|incomplete)|error)"'] }],
 }

@@ -12,7 +12,7 @@ import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { EXIT, newReceipt } from '../off/schema.mjs' // as in status.mjs: the keys and the exit codes, not ./schema.mjs's checker (D62)
-import { unknown } from './text.mjs'
+import { unknown, shellArg as shq } from './text.mjs' // shq: a path with a space or a quote stays one argument of the chmod line
 import { resolveHarnesses } from '../off/harness-names.mjs'
 import { statusFacts, statusDocOf } from './status.mjs'
 import { diagnose, renderFindings } from '../netenv/findings.mjs'
@@ -26,7 +26,6 @@ const USAGE = 'usage: trocar doctor [<harness>...] [--json]'
 const LIMIT = 5000 // records sampled (the head of the capture)
 const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the tool failed" (0.1 §3)
 const errText = (e) => String((e && (e.code || e.message)) || e)
-const shq = (s) => (/^[\w@%+=:,./-]+$/.test(String(s)) ? String(s) : `'${String(s).replace(/'/g, "'\\''")}'`) // a path with a space or a quote stays one argument of the chmod line
 const indent = (s) => String(s).split('\n').map((l) => `  ${l}`).join('\n')
 
 /** Is `bin` an executable on PATH? Looked up in the files (no `which`: no process to start), `PATHEXT` on Windows. */

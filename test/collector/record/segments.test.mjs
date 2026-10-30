@@ -164,7 +164,7 @@ test('segments: a failed write says so and never throws into the forwarding path
   s.close()
 })
 
-// B3 (1.6 §5.2 / V99: the stop is a barrier): once closed the store is final — nothing written, no file created, the lock told nothing more; a
+// 1.6 §5.2 / V99 (the stop is a barrier): once closed the store is final — nothing written, no file created, the lock told nothing more; a
 // late write is said once per kind (late-write), and a second close is nothing.
 test('store: after close() a write of any kind is refused, creates no file, never tells the segment hook, and is said once per kind', () => {
   const home = tmpDir('trocar-seg-')
@@ -185,7 +185,7 @@ test('store: after close() a write of any kind is refused, creates no file, neve
   assert.deepEqual(errs.sort(), ['late-write', 'late-write', 'late-write', 'late-write'], 'one late-write per kind (envelope, flow, audit, replay)')
 })
 
-// B4 (1.6 §5.2: the lock has one owner): after release() the lock file is gone and stays gone — a timer refresh and the store's rollover hook
+// 1.6 §5.2 (the lock has one owner): after release() the lock file is gone and stays gone — a timer refresh and the store's rollover hook
 // after it write nothing back.
 test('lock: after release() the lock is gone and no later refresh — the timer\'s or a rollover\'s — writes it back', () => {
   const home = tmpDir('trocar-seg-')

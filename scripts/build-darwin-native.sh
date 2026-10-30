@@ -1,5 +1,5 @@
 #!/bin/sh
-# build-darwin-native.sh — the ONE deliberate rebuild of the macOS native pieces (plan decision #10, RFC 4.9 §3 ⑮).
+# build-darwin-native.sh — the ONE deliberate rebuild of the macOS native pieces (RFC 4.9 §3 ⑮).
 # Builds src/collector/arch/darwin/native/{trocar-sign-helper,procenv,socktable} as universal (arm64 + x86_64, macOS 13+) binaries and
 # rewrites native/pins.json with their sha256. Commit the binaries and pins.json together: `npm pack` copies them and nothing
 # rebuilds at pack time (a rebuild changes the helper's code hash, and the login keychain then asks for the password again, R3-M2).

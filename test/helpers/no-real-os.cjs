@@ -1,7 +1,7 @@
 // test/helpers/no-real-os.cjs — `--require` preload for `npm test`: no test process runs a real launchctl / systemctl / security /
 // certutil / loginctl.
 //
-// 0.1 §3 「不碰真实机器」: the author's Mac runs the old capture while the tests run, and the user's real launchctl, systemctl,
+// 0.1 §3 「不碰真实机器」: a developer machine may run a live capture while the tests run, and the user's real launchctl, systemctl,
 // security and certutil are one forgotten injected runner away. Three layers, because a rule that only the new code's own helper
 // honours protects nothing from the code that does not use the helper:
 //   1. TROCAR_TEST_SANDBOX=1, set here and inherited by every child a test starts. src/off/exec.mjs (`execTool`, the one way new

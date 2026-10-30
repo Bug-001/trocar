@@ -33,6 +33,6 @@
   "screenshot": "test/web-v2/browser/shots/seq/I-follow-replay-115.png",
   "status": "fixed",
   "detail": "following, the session grows while `sessions` answers slowly (10 s): the desk's tail read waits behind the listing (pollOnce awaits loadSessions first), so the step counter stays one call behind the server for over 15 s",
-  "owner": "desk (lane D)",
+  "owner": "desk",
   "suspect": "src/web/v2/replay/replay.mjs:334"
 }

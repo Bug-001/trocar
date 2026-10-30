@@ -28,8 +28,8 @@ import { OS_PROMPT_MS } from '../off/root-store.mjs'
 
 const WORKER = fileURLToPath(new URL('./worker.mjs', import.meta.url))
 const DEADLINE_MS = 30_000 // a worker SILENT this long is wedged, not slow: the queue must not be held for ever. A body waiting on a slow reader is not silence, nor is a fold that keeps reporting progress.
-/** A response full this long with no 'drain' is a reader that is not reading: it is let go (4.4 §Plan ③), or it held every read of
- *  every client behind it (17 min, 2026-10-21). Long enough that a merely slow reader of a large body is never cut. */
+/** A response full this long with no 'drain' is a reader that is not reading: it is let go (4.4 §Plan ③), or it holds every read of
+ *  every client behind it for as long as it stalls (once 17 minutes). Long enough that a merely slow reader of a large body is never cut. */
 const PAUSE_MS = 60_000
 const STATS_MS = 60_000 // the read-cost line in the daemon's log: once a minute, only when there were reads (4.4 §服务形状)
 /** How long a subject that just failed (crash or silence) is answered 500 with that failure's reason instead of being forked into

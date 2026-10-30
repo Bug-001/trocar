@@ -683,7 +683,7 @@ function openDesk(ctx, route0) {
     unpin(keepPins)
     const moved = placePlayhead(prevRow)
     if (s.playRid == null) { renderRough(); chainLedger(); fill(); return } // the rough page until the named step is here
-    // the followed step's open reply bodies in one read before it is drawn (C3), so its newest reply shows with its bytes; the same
+    // the followed step's open reply bodies in one read before it is drawn, so its newest reply shows with its bytes; the same
     // read carries the ±NEAR prefetch (2.3 §正文预取), so the rest after it finds nothing left and a delta stays one `block` (4.4:52)
     if (s.follow && moved && !first && host) {
       const refs = openRefs(s.playRid)

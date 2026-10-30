@@ -1,5 +1,5 @@
 // test/collector/core/tls/root.test.mjs — CM1 (RFC 4.11 §验收): the ROOT and INTERMEDIATE profiles of P1 / P2 and checkProfile, the one
-// checker install runs on the root a custody returns and the issuer on every intermediate (plan §E.5 #6). The stub custody's root and
+// checker install runs on the root a custody returns and the issuer on every intermediate. The stub custody's root and
 // intermediate pass; variants generated off the root's extension list each fail, with the violation named.
 import test from 'node:test'
 import assert from 'node:assert/strict'

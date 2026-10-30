@@ -1,4 +1,4 @@
-// native-pin.test.mjs — CM34 (RFC 4.11; plan decision #10): the committed macOS native binaries are exactly the pinned ones, and
+// native-pin.test.mjs — CM34 (RFC 4.11, RFC 4.9 §3 ⑮): the committed macOS native binaries are exactly the pinned ones, and
 // each is a universal Mach-O with an arm64 and an x86_64 slice. Read as bytes in JS: no tool runs, the binaries never run.
 import test from 'node:test'
 import assert from 'node:assert/strict'

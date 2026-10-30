@@ -229,7 +229,7 @@ test('tracker: hosts a harness declares as not via the trust path are never decr
   assert.deepEqual(tracker.agents().find((x) => x.pid === 601).bypass, [{ host: 'models.alpha.test', reason: 'before-plugin' }, { host: 'api.alpha.test', reason: 'ws-path' }])
 })
 
-test('tracker: extrasFor hands the engine this process\'s own proxies and the harness WebSocket terminators (plan 3c describe, 4.6 §引擎 3)', async () => {
+test('tracker: extrasFor hands the engine this process\'s own proxies and the harness WebSocket terminators (4.6 §引擎 3)', async () => {
   const delta = { ...agent, name: 'delta', processes: { names: [{ name: 'delta' }] },
     proxies: (ctx) => ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'].filter((k) => ctx.env.get(k)).map((k) => ({ url: ctx.env.get(k), source: `env:${k}` })),
     wsTerminal: [{ pathSuffix: '/ws', patterns: ['^\\{"done"'] }] }
@@ -248,7 +248,7 @@ test('tracker: extrasFor hands the engine this process\'s own proxies and the ha
   })
   assert.deepEqual(noTrust(tracker.extrasFor(551)), { wsTerminal: null, proxies: [] }, 'a harness that declares no proxy reader hands none over')
   assert.deepEqual([tracker.extrasFor(null), tracker.extrasFor(9999)], [{}, {}])
-  // its proxies are not decrypt hosts: the engine's proxy path decides from FlowExtras (4.6 §引擎 3, plan 3c-7)
+  // its proxies are not decrypt hosts: the engine's proxy path decides from FlowExtras (4.6 §引擎 3)
   assert.deepEqual(['proxy.example.com', 'plain-proxy.example.com'].map((h) => tracker.policy({ pid: 550 }, h)), [false, false])
   assert.deepEqual(toProxyEntry({ url: 'socks5h://[::1]:1080', source: 's' }), { scheme: 'socks5h', host: '::1', port: 1080, own: true, source: 's' })
   assert.deepEqual([toProxyEntry({ url: 'socks://127.0.0.1', source: 's' }).scheme, toProxyEntry({ url: 'https://h', source: 's' }).port], ['socks5', 443])
@@ -340,7 +340,7 @@ test('tracker: a harness reports a config file that does not parse; the row carr
   assert.deepEqual(tracker.agents()[0].parseErrors, ['/cfg/a.json'])
 })
 
-// ── the Windows verdict producer's core seams (4.8 §5.4 「谁产生判定」, W76; plan Task 8(v)) ──────────────────────────────────────────
+// ── the Windows verdict producer's core seams (4.8 §5.4 「谁产生判定」, W76) ───────────────────────────────────────────────────────────
 test('tracker: envRead:false says the OS never reads another process\'s environment — env null then judges by the layers instead of vetoing; a fill-mode layer (its value may be kept out of effect by a var the launch env holds, which cannot be checked) grants no trust', async () => {
   const layered = (mode) => ({ ...agent, name: 'omega', layers: () => [{ name: `the ${mode} layer`, file: path.join(dir, 'settings.env'), mode, vars: { EXTRA_CA: PEM }, live: true, mtimeMs: 1 }] })
   const rigLayer = (mode) => {

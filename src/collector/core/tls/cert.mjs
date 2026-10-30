@@ -3,7 +3,7 @@
 // `sign(tbs)` callback, so a root key held by an OS custody backend never enters Node (4.11 P2) — and PEM-wraps it;
 // certSubjectAndSki walks a finished cert back out for the leaf issuer (AKI = CA SKI). The root and intermediate
 // profiles of 4.11 P1/P2 live here once: the builders a custody backend uses, and checkProfile, which install runs on
-// the root a custody returns and the issuer on every intermediate (plan §E.5 #6).
+// the root a custody returns and the issuer on every intermediate.
 import crypto from 'node:crypto'
 import net from 'node:net'
 import { tlv, seq, set, int, oid, utf8, bitString, octet, bool, explicit, time, readTlv } from './der.mjs'
@@ -162,7 +162,7 @@ export function certSubjectAndSki(cert) {
   return { subject, ski: e ? Buffer.from(e.value.subarray(inner.start, inner.end)) : null }
 }
 
-// ---- the custody profiles (4.11 P1 / P2; plan §E.5 #6) ----------------------------------------------------------------------------
+// ---- the custody profiles (4.11 P1 / P2) ──────────────----------------------------------------------------------------------------
 /** The root a custody backend self-signs: no name constraints, CA pathLen 1, EKU serverAuth alone, P-256. */
 export const ROOT = Object.freeze({ name: 'root', pathLen: 1, selfSigned: true })
 /** The intermediate a custody backend issues for the daemon's in-memory key: CA pathLen 0, EKU serverAuth, 7 days, signed by the root. */

@@ -626,7 +626,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
       reqIncomplete: f.reqIncomplete,
       // a context stitched across records with a predecessor missing: what is shown is not what the model saw
       ctxPartial: f.ctxPartial,
-      wsIncomplete: f.wsIncomplete, // D38 R-4: a WebSocket call's labels (4.6 各说一件事)
+      wsIncomplete: f.wsIncomplete, // D38: a WebSocket call's labels (4.6 各说一件事)
       respIncomplete: f.respIncomplete, // a response body not decoded / not JSON / empty / partly parsed / cut
       // `error` now covers EVERY non-200 (was: only 5xx — so a 401/429 rendered as a normal call).
       error: f.failed,

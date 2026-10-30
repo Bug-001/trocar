@@ -349,7 +349,7 @@ test('on: root is refused by the library too (R7), and a missing helper stops it
   assert.deepEqual(snapshot(s.home), before)
 })
 
-// audit rule-b 7 (R1, R6, V7): a failed `on` that wrote nothing still pointed at `~/.trocar/bin/trocar-off` and the flows/ log, neither of which exists; and a dry run with the helper
+// (R1, R6, V7): a failed `on` that wrote nothing still pointed at `~/.trocar/bin/trocar-off` and the flows/ log, neither of which exists; and a dry run with the helper
 // missing exited 1 with no plan, so the plan could not be read before deciding to `sudo trocar setup-helper` — V7 says a dry run exits 0.
 test('R1 / R6: an `on` that stopped before writing anything says so — no change, nothing made, no undo and no log to point at, no trocar-off path (helper missing, no agent found, the lock held)', async () => {
   const noHelper = () => ({ ok: false, reason: 'no helper' })
@@ -390,7 +390,7 @@ test('R6 / V7: `on --dry-run` with the helper missing still prints the plan and 
   assert.equal((await s.run({ helperState: () => ({ ok: false, reason: 'no helper' }) })).exit, 1)
 })
 
-// audit rule-b 9 (R11): the lines of an `on` go through the same writer as `off`'s — a line that cannot be written reaches stderr first and the receipt's notes, and does not stop the install.
+// (R11): the lines of an `on` go through the same writer as `off`'s — a line that cannot be written reaches stderr first and the receipt's notes, and does not stop the install.
 test('R11: with flows/ unwritable `on` still installs (exit 0); stderr and the receipt say each line that could not be recorded', async () => {
   const s = await sandbox()
   const err = []

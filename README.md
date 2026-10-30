@@ -73,6 +73,15 @@ node bin/trocar.mjs install     # once: the certificates (or: npx --no-install t
 node bin/trocar.mjs on          # then start capture
 ```
 
+On Linux, build the capability helper from source and install it once per machine before `install`. It is
+the one step that needs root; build it as yourself:
+
+```sh
+sudo apt-get install build-essential clang libbpf-dev libelf-dev zlib1g-dev linux-tools-generic  # Ubuntu; Debian: bpftool, not linux-tools-generic
+make -C src/collector/arch/linux     # trocar-redirector: needs clang, make, bpftool, the libbpf, libelf and zlib headers, and a kernel with BTF
+sudo "$(command -v node)" bin/trocar.mjs setup-helper   # node by its path: sudo's PATH does not have an nvm node
+```
+
 The same five commands on every OS, in this order: `trocar install` (once) → `trocar on` → `trocar off` →
 `trocar status` (any time) → `trocar uninstall`. `install` lists every file it will touch and writes them after you
 confirm; until it has run, `trocar on` refuses (`error.code` `cert-not-installed`). `on` starts capture, `status` shows state,
@@ -296,7 +305,8 @@ start history is incomplete, is `not-seen`: never a reason to call the agent not
 its key is still in custody and the daemon could make its intermediate (`cert-not-installed`, `cert-key-missing`,
 `cert-intermediate-unavailable`), and which certificate files trocar did not append to because they are not yours
 (`not-users-file`). `trocar status <harness>` prints these per form (a `certificate:` and a `proxy:` line, then trocar's value beside
-yours); `status --json` has them under `forms`. trocar only reads your proxy settings and never writes anything into a VPN.
+yours), then each note a harness carries, such as a way of starting the agent that skips trocar's hook and so is not
+captured; `status --json` has them under `forms`. trocar only reads your proxy settings and never writes anything into a VPN.
 
 The collector has descriptors for eight harnesses (D37) — `claude-code`, `codex` (its WebSocket transport is recorded
 call by call), `opencode`, `deepseek-dsh`, `kimi-code`, `hermes`, `z-code` and `pi` — on all three platforms. Which form of
@@ -349,14 +359,14 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 | root / CA (per user) | Linux: `~/.trocar/collector/ca/` (key 0600), in **no** trust store · macOS: login keychain key + user trust · Windows: CNG key + `CurrentUser\Root`; `~/.trocar/collector/ca/trocar-ca.pem` is the public certificate | `trocar uninstall` |
 | certificate carriers (`install`) | Linux: each agent's trust entry, written by `install` (Claude Code `env.NODE_EXTRA_CA_CERTS`, OpenCode / dsh plugins, pi's extension, Codex / Hermes `.env` blocks, Z-Code `network.caCertFile`, combined bundles `combined-<agent>.pem`) · macOS / Windows: the carriers above | `trocar uninstall` |
 | proxy entries (`on`) | macOS / Windows: the proxy keys and switch files above; Linux: none (the helper steers) | `trocar off` |
-| autostart unit (per user) | Linux: `~/.config/systemd/user/trocar-collector.service` · macOS: `~/Library/LaunchAgents/com.trocar.collector.plist` · Windows: the scheduled task `\trocar\collector`; each runs `trocar daemon` | registered and enabled by `trocar install`; `on` and `off` never touch it (D61), `trocar uninstall` removes it |
+| autostart unit (per user) | Linux: `~/.config/systemd/user/trocar-collector.service` · macOS: `~/Library/LaunchAgents/com.trocar.collector.plist` · Windows: the scheduled task `\trocar\collector`; each runs `trocar daemon` | registered and enabled by `trocar install` (it exits 1 when it cannot, e.g. with no systemd --user on Linux, and `on` then refuses); `on` and `off` never touch it (D61), `trocar uninstall` removes it |
 | install manifest | `~/.trocar/collector/install-manifest.json` — every file and key it changed, never a copy of your file | removed last by `trocar uninstall` |
 | backups of your files | `~/.trocar/backup/` (0700, files 0600): the file as it was before trocar changed it — API keys included | `off` leaves them; `uninstall` deletes them all |
 | the standalone undo | `~/.trocar/bin/trocar-off`, written by `install`; `trocar doctor` checks it is current | `trocar uninstall` |
 | captures | `~/.trocar/raw/<segment>.ndjson` and its `<segment>.sealed` (0600); `~/.trocar/index/` is a deletable accelerator; `flows/` holds connection metadata and failure records | kept unless `trocar uninstall --purge-data` (which deletes `flows/` too, then records there anything it could not undo) |
 
 ```sh
-sudo trocar setup-helper      # Linux, once per machine
+make -C src/collector/arch/linux && sudo trocar setup-helper   # Linux, once per machine: build the helper, then install it
 trocar install                # once, per user: the certificates; lists every file it will change and asks (not in a terminal: add --yes)
 trocar on                     # refuses until install has run; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
 trocar status                 # each agent and why it is (not) captured, its proxy chain, the certificates, the recent failures
@@ -434,7 +444,7 @@ the daemon from its lock: not running, or stuck). One exception: an install refu
 anything (nothing installed yet, or run as root) has no collector directory to write into, so the
 command's output is its only report. An `off` or `uninstall` that cannot undo something exits 1 and
 keeps the install manifest for the next run. The Linux helper is a root-owned copy of the build, so after upgrading
-run `sudo trocar setup-helper` again to replace it.
+build it again (`make -C src/collector/arch/linux`) and run `sudo trocar setup-helper` to replace it.
 
 ## Shrinking the raw logs — sealed segments (D35, D60)
 

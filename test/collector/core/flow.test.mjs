@@ -214,7 +214,7 @@ test('a connection that carries data resets the count: rejected, accepted, rejec
 
 // The rule is about the CLIENT closing (RFC 4.6 §引擎 5: 客户端…随后关闭或 RST). A trusting client's idle
 // connection (a preconnect) that the upstream closes, or that the engine itself tears down, says nothing
-// about the leaf: no strike, no reason. (Fresh-context review finding: it used to count.)
+// about the leaf: no strike, no reason. (It used to count.)
 test('a trusting client\'s idle connection closed by the UPSTREAM is no rejection: no reason, no strike, still decrypted (W9)', async () => {
   const h = await harness({ upstream: httpsUpstream((s) => setTimeout(() => s.end(), 30)) })
   const idle = () => new Promise((resolve) => {

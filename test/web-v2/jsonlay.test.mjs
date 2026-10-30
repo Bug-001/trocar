@@ -53,7 +53,7 @@ function slices(text, budget) {
   }
 }
 
-test('C1: removing the .lay spans and un-escaping gives back the bytes, for every slicing', () => {
+test('removing the .lay spans and un-escaping gives back the bytes, for every slicing', () => {
   for (const t of CASES) {
     const whole = layout(t, 0, Infinity).html
     assert.equal(strip(whole), t)

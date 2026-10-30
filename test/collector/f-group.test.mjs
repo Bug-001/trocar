@@ -1,8 +1,9 @@
 // test/collector/f-group.test.mjs — RFC 4.6 验收 F 组 (D38 「失败不静默」), one runnable check per F item. Each check
 // makes the failure happen in the real component (the daemon over the fake helper and a synthetic /proc, the engine
 // with real TLS clients, install / uninstall, the sealer), then asserts what F asks of every item: (i) a durable record
-// on disk with a closed reason code; (ii) GET /api/capture-health — over HTTP, from a real `trocar serve` server —
-// shows the same reason; and for the daemon side (iii) `trocar collector status` lists it with no daemon running.
+// on disk with a closed reason code; (ii) the capture-health
+// reading (captureHealth(), what `trocar status` and the board's `status` query read) shows the same reason; and for the
+// daemon side (iii) `trocar status` lists it with no daemon running.
 //   Where an F item is checked elsewhere, the test that does is named in place (F5, F8, F9). No `todo` is left: the
 // engine's connection-row codes (C2 T-1 / T-2 / T-4 / T-11..T-15) and the combined-bundle check (D-21) landed with the
 // merge of the lanes, and the last one, F5's WebSocket labels vs the top bar, with the decision of

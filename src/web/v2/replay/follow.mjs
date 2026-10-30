@@ -12,13 +12,6 @@ export function landPlayhead({ N, playhead, follow, initialStep }) {
   return { playhead: Math.min(follow ? last : playhead, last), follow }
 }
 
-// Where a page sits around call `gi`: `{after, limit}` with it at the middle. The desk no longer pages (D69); this stays only
-// while test/query/worker-memory.test.mjs (lane Q, which drops it) imports it — D8 deletes it with that merge.
-export const pagePlace = (gi, limit) => {
-  const h = Math.floor(limit / 2), g = Math.max(0, gi | 0)
-  return g >= h ? { after: g - h, limit } : { after: 0, limit: 2 * g + 1 }
-}
-
 // ── the loader's order of the sealed packs (2.3 §读与画 加载器, 点名的一步) ─────────────────────────────────────────────
 // packOrder(head, at, held) → [{n, pri}] over head.packs not `held(pack)`, in fetch order: pri 1 the pack whose [s0, s1) holds main-axis
 // step `at` (none when `at` is null or in the open tail, `at` ≥ open.s0: the poll reads that), 2 its neighbours, 3 the rest of the
@@ -35,7 +28,7 @@ export function packOrder(head, at, held = () => false) {
     .sort((a, b) => a.pri - b.pri || (a.pri === 2 ? a.n - b.n : b.n - a.n))
 }
 
-// ── a step's own reads (2.3 §读与画 快速拖动; 4.4 live-poll, C3) ───────────────────────────────────────────────────────────
+// ── a step's own reads (2.3 §读与画 快速拖动; 4.4 live-poll) ───────────────────────────────────────────────────────────
 // createStepReads({get, setTimer, clearTimer, need, onLane, onBodies, restMs, loader}) → {target(rid), prefetch(key), laneSlot(fn)}. Injected, no DOM.
 //   · with a `loader` (loader.mjs) every read goes through it: a `block` read at pri 0, a `lane` read at pri 1
 //   · target(rid): the playhead's call. Once it has rested `restMs` with no newer target, need(rid) → {lane: {lane, from?, to?} |

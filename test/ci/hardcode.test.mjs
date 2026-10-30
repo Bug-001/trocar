@@ -4,7 +4,7 @@
 //      copies of one endpoint rule).
 //   2. (§3 convention 6 · §2 guard 2, D51) A harness's name list generalizes: a preset item is a NAME (no path, no version, no CPU architecture), an
 //      interpreter name carries an `args` pattern, and no `args` pins a version or an architecture; the OS twins hold no identity data at all. A pattern
-//      written from one measured path keeps every test green and silently stops capturing after the next update or on another machine (2026-10-13 audit, M3).
+//      written from one measured path keeps every test green and silently stops capturing after the next update or on another machine.
 //   3. (§3 convention 7) Tests pin no new counts (`.length, 17`): a count restates today's data, goes red when an item is added and stays green when the
 //      world changes. The files that still do are listed and may only shrink.
 import test from 'node:test'
@@ -50,7 +50,7 @@ test('1 · the fact scanner sees each kind and skips comments, IPs and OIDs (it 
 
 const ARCH = /aarch64|arm64|x86_64|amd64|\bx64\b|\bia32\b/i
 export const overfit = (p) => /\d+\\?\.\d+/.test(p) || ARCH.test(p)
-const TWIN_FORM_KEYS = new Set(['id', 'g', 'supported', 'hosts']) // a form is an entry group's, an opt-in item's and a matrix row's unit, never an identity (plan §2.9)
+const TWIN_FORM_KEYS = new Set(['id', 'g', 'supported', 'hosts']) // a form is an entry group's, an opt-in item's and a matrix row's unit, never an identity
 const TWIN_BANNED = ['processes', 'match', 'image', 'path']
 
 /** What guard 2 finds wrong in descriptors, one line each, led by `harness.path` (G8: the failure names where to fix it). */

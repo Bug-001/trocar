@@ -40,7 +40,7 @@ const count = (s, sub) => s.split(sub).length - 1
 const monos = (s) => [...s.matchAll(/<span class="mono">([\s\S]*?)<\/span>/g)].map((m) => m[1])
 const unesc = (s) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
 
-test('D1: the capture service row lists only harness-less commands — no <id>, never a bare on / off, each a 1.6 usage', () => {
+test('the capture service row lists only harness-less commands — no <id>, never a bare on / off, each a 1.6 usage', () => {
   const svc = rowsOf(page(doc())).get('*service')
   const cmds = monos(techText(svc)).map(unesc).filter((c) => /^(?:sudo )?trocar /.test(c))
   assert.ok(cmds.length > 0)
@@ -52,14 +52,14 @@ test('D1: the capture service row lists only harness-less commands — no <id>, 
   }
 })
 
-test('D2: a daemon error is escaped once', () => {
+test('a daemon error is escaped once', () => {
   const err = `it's "a" & <b>`
   const html = page(doc({ extra: { daemon: { running: true, responding: true, pid: 1, since: T, error: err } } }))
   assert.ok(html.includes(esc(err)))
   assert.ok(!html.includes(esc(esc(err))))
 })
 
-test('D3: branches that share a chain are one path row, and a node repeated next to itself is said once', () => {
+test('branches that share a chain are one path row, and a node repeated next to itself is said once', () => {
   const topology = { codex: { at: T, routing: 'proxy',
     nodes: [{ id: 'a', name: 'codex' }, { id: 'd', name: 'relay' }, { id: 'e', name: 'relay' }, { id: 'x', name: 'api.example' }],
     branches: [{ name: 'all', form: 'codex.cli', path: ['a', 'd', 'e', 'x'] }, { name: 'all', form: 'codex.app', path: ['a', 'd', 'e', 'x'] }, { name: 'b', form: 'codex.cli', path: ['a', 'x'] }] } }
@@ -73,7 +73,7 @@ test('D3: branches that share a chain are one path row, and a node repeated next
   }
 })
 
-test('D4: capture after logout is a row only while linger is unknown, and its reason is said once', () => {
+test('capture after logout is a row only while linger is unknown, and its reason is said once', () => {
   const keys = (d) => techOf(rowsOf(page(d)).get('*service')).map(([k]) => k)
   assert.deepEqual(keys(doc()), keys(doc({ extra: { linger: true } })))
   const reason = 'the linger file could not be read (EACCES)'
@@ -81,7 +81,7 @@ test('D4: capture after logout is a row only while linger is unknown, and its re
   assert.equal(count(techText(svc), esc(reason)), 1)
 })
 
-test('D5: changes group by file — each path once in the expand, a known kind in words, every CHANGE_KIND key a manifest kind', () => {
+test('changes group by file — each path once in the expand, a known kind in words, every CHANGE_KIND key a manifest kind', () => {
   for (const k of Object.keys(CHANGE_KIND)) assert.ok(KNOWN_KINDS.includes(k), k)
   const P1 = '~/.codex/config.toml', P2 = '~/.codex/trocar-plugin.js'
   const changed = [
@@ -100,7 +100,7 @@ test('D5: changes group by file — each path once in the expand, a known kind i
   }
 })
 
-test('D9: a text entry\'s format is said in words, never as its internal name; an unknown format is shown as it came', () => {
+test('a text entry\'s format is said in words, never as its internal name; an unknown format is shown as it came', () => {
   const fmts = Object.keys(CHANGE_FORMAT), odd = 'zz-unknown-format'
   assert.ok(fmts.length > 0)
   const changed = [...fmts, odd].map((f, i) => ({ harness: 'codex', path: `~/.codex/f${i}`, what: `text ${f}`, undo: 'trocar off codex' }))
@@ -109,7 +109,7 @@ test('D9: a text entry\'s format is said in words, never as its internal name; a
   assert.equal(monos(ex).filter((m) => m === odd).length, 1)
 })
 
-test('D6: each undo command is listed once, and one equal to a row command is not listed again', () => {
+test('each undo command is listed once, and one equal to a row command is not listed again', () => {
   const changed = [1, 2, 3, 4].map((i) => ({ harness: 'codex', path: `~/.codex/f${i}`, what: `json-key k${i}`, undo: 'trocar uninstall' }))
   changed.push({ harness: 'codex', path: '~/.codex/.env', what: 'text dotenv', undo: 'trocar off codex' })
   const tech = techText(rowsOf(page(doc({ extra: { changed } }))).get('codex'))
@@ -117,7 +117,7 @@ test('D6: each undo command is listed once, and one equal to a row command is no
   assert.equal(count(tech, 'trocar off codex'), 1)
 })
 
-test('D7: relayed connections — all zero says nothing, a non-zero count is a row, unknown carries its reason', () => {
+test('relayed connections — all zero says nothing, a non-zero count is a row, unknown carries its reason', () => {
   const tech = (extra) => techOf(rowsOf(page(doc({ extra }))).get('*service'))
   const none = tech({ relayed: undefined })
   assert.deepEqual(tech({ relayed: { closing: 0, waiting: 0, cut: 0 } }), none)
@@ -126,7 +126,7 @@ test('D7: relayed connections — all zero says nothing, a non-zero count is a r
   assert.ok(techText(rowsOf(page(doc({ extra: { relayed: 'unknown', relayed_reason: reason } }))).get('*service')).includes(esc(reason)))
 })
 
-test('D8: a finding says its reason with its code; an unknown code is shown as it came, never as reason unknown', () => {
+test('a finding says its reason with its code; an unknown code is shown as it came, never as reason unknown', () => {
   const known = STATUS_REASONS.find((c) => statusReason(c).text)
   assert.ok(known)
   const topology = { codex: { at: T, findings: [known, 'zz-unknown'] } }

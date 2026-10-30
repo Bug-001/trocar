@@ -1,11 +1,11 @@
-// registry.mjs — which harness a running process is, by NAME (RFC 4.6 §身份与信任, D51, D31②, D37; plan 2026-10-14-d51-name-allowlist §2.3).
+// registry.mjs — which harness a running process is, by NAME (RFC 4.6 §身份与信任, D51, D31②, D37).
 // It knows no harness and no OS. Each descriptor in src/collector/harness/ carries its preset list as DATA (`processes: { names, exclude,
 // longLived }`, one for every OS); the user's ~/.trocar/agents.json adds or ignores items (D51③, handed in as `agentList` / replaceAgentList).
 // Both compile once (src/off/identity.mjs compileIdentity) into patterns over the derived facts `names` / `name0` / `rest` (identityView), so
 // the tracker, the doors, `status` and `off` judge with one matcher. A process is judged on its own facts at exec time, never by its parent
 // (§子进程与嵌套 agent). Unknown or ambiguous means no agent: an unrecognised process is never folded into a known identity (0.1 §5, D25).
 //
-// match(facts) → { agent, descriptor, reason, harness?, candidates? }; reason (4.6 「按名单认」, plan §2.3):
+// match(facts) → { agent, descriptor, reason, harness?, candidates? }; reason (4.6 「按名单认」):
 //   match          exactly one harness claims it and none of its exclude items holds
 //   excluded       a name of `harness` and one of its exclude items holds (a helper of that harness)
 //   pending        a command line not known yet (win32 cmdlineState pending / cim-backoff) and the name is on a list: its args, its exclusions and
