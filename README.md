@@ -64,21 +64,32 @@ thinking / tool_use / tool_result), so you see *which* part grew and when.
 
 ## Install
 
-From source (Node ≥ 20). The package is not on npm, so there is no global `trocar` on your PATH: run
-it through the repo (or `npx --no-install trocar …`).
+From npm (Node ≥ 20). The package is `trocar-cli`; the command it installs is `trocar`.
 
 ```sh
-git clone https://github.com/Bug-001/trocar && cd trocar && npm install
-node bin/trocar.mjs install     # once: the certificates (or: npx --no-install trocar install)
-node bin/trocar.mjs on          # then start capture
+npm i -g trocar-cli
+trocar install                  # once: the certificates
+trocar on                       # then start capture
 ```
+
+`npx trocar-cli <command>` runs one command without installing, but run `trocar install` from a global install:
+it registers a login item that runs that copy, and npm may clear the `npx` cache.
 
 The same five commands on every OS, in this order: `trocar install` (once) → `trocar on` → `trocar off` →
 `trocar status` (any time) → `trocar uninstall`. `install` lists every file it will touch and writes them after you
 confirm; until it has run, `trocar on` refuses (`error.code` `cert-not-installed`). `on` starts capture, `status` shows state,
 `off` takes every trace of trocar off your agents' path, and the certificates stay until `trocar uninstall`.
 
-From a Release: not supported — `trocar update` needs a git checkout.
+From source: there is no global `trocar` on your PATH, so run it through the repo.
+
+```sh
+git clone https://github.com/Bug-001/trocar && cd trocar && npm install
+node bin/trocar.mjs install     # once: the certificates
+node bin/trocar.mjs on          # then start capture
+```
+
+From a GitHub Release: each Release carries the same tarball as npm and its `SHA256SUMS`. Check the sum, then
+`npm i -g` the `.tgz` file; it installs like the registry copy.
 
 ## Staying up to date
 
@@ -96,6 +107,9 @@ as it has), then the old collector cuts the rest (a call left open, such as a We
 new one does not report that the previous one ended without a clean stop. The rows of what it cut, and its stop record,
 say that `update` (or `uninstall`) stopped it. An update that stops half way leaves a note
 behind: run `trocar update` again and it goes on from where it stopped.
+
+A copy installed with npm updates through npm: `npm i -g trocar-cli@latest`, then `trocar update` restarts the
+collector on the new code. Everything above is for a git checkout.
 
 A machine that ran the build from before the rename moves over once, by hand: that build's own `uninstall`, then
 a clone of this repo and `trocar install`. Nothing the old name left is read or kept.
@@ -511,8 +525,6 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
   labelled on its call with the exact reason: **request: truncated at the capture limit** (cut at the 64 MiB
   capture cap) or **request: incomplete** (the capture did not get it whole, e.g. the upstream answered 413 before
   it was sent).
-- **No npm distribution, no LICENSE.** The package is `private`, so `npx trocar` does not exist. Clone
-  it and treat it as source-available for personal research.
 - **Personal research instrument.** Single-user, loopback-only. Your traffic goes on as it was: the one
   byte of its own trocar adds is the `Connection: close` line after `off` (labelled on the call), and a
   request is only ever changed or re-sent by you, on purpose (D30; not built yet). No cloud, no alerting.
@@ -554,3 +566,12 @@ Exit codes: 0 done · 1 not done, or a problem was found · 2 a usage error (not
 
 Design authority: [`spec/01-trocar-rfc/`](spec/01-trocar-rfc/) (entry `0.0-overview.md`). This README is
 the operator's quickstart, not the spec. `npm test` runs the test suite.
+
+## License
+
+trocar is licensed under the [Functional Source License, version 1.1, with Apache-2.0 as the future license](LICENSE)
+(FSL-1.1-ALv2). It is source-available: you may use, copy, modify and redistribute it for any purpose except a
+competing product or service. Each released version becomes Apache-2.0 two years after its release.
+
+Report a vulnerability privately as [SECURITY.md](SECURITY.md) says. How to contribute is in
+[CONTRIBUTING.md](CONTRIBUTING.md); what changed in each release is in [CHANGELOG.md](CHANGELOG.md).
