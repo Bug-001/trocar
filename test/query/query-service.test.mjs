@@ -793,7 +793,7 @@ test('kick: a segment index read longer than idleMs before the first slice is re
 // index format change scans every segment again) is answered, not cut as wedged. Axis: every name whose answer reads the whole index.
 // No timing: the reports are counted, not timed.
 const WHOLE_INDEX = ['segments', 'classes', 'sessions', 'overview', 'calls', 'traffic']
-test('every name that reads the whole segment index reports its read, at least once per segment (3.5 #32)', async () => {
+test('every name that reads the segment index on a request reports its read, at least once per segment (block: per ref) (3.5 #32)', async () => {
   const S = 3, home = rawHome('trocar-qsvc-')
   for (let g = 0; g < S; g++) filler(home, g, 50)
   for (const name of WHOLE_INDEX) {
@@ -802,6 +802,12 @@ test('every name that reads the whole segment index reports its read, at least o
     assert.deepEqual(doc.errors, [], name)
     assert.ok(n >= S, `${name}: ${n} reports for ${S} segments`)
   }
+  // block reads the segment of each ref: one ref into each segment, read on a cold index
+  fs.rmSync(path.join(home, 'index'), { recursive: true, force: true })
+  let n = 0
+  const refs = Array.from({ length: S }, (_, g) => `20261024T0900${String(g).padStart(2, '0')}Z:1`)
+  await runQuery('block', { ref: refs }, { home, progress: () => n++ })
+  assert.ok(n >= S, `block: ${n} reports for ${S} refs`)
 })
 
 // The same reports reach the daemon from a real worker (the IPC seam): a request that reads a cold index sends progress while it reads.
