@@ -1,20 +1,47 @@
 {
-  "name": "trocar",
+  "name": "trocar-cli",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
-  "description": "trocar — transparent, byte-faithful, cross-provider tracer of what an agent app really sends the LLM (product build).",
+  "description": "Records every byte an AI agent app sends to and receives from its LLM, and replays each step on a local board.",
+  "keywords": [
+    "llm",
+    "agent",
+    "observability",
+    "tracing",
+    "mitm",
+    "proxy",
+    "prompt-cache",
+    "claude-code",
+    "codex"
+  ],
+  "homepage": "https://github.com/Bug-001/trocar#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Bug-001/trocar.git"
+  },
+  "bugs": "https://github.com/Bug-001/trocar/issues",
+  "author": "Haitao Su",
+  "license": "FSL-1.1-ALv2",
   "engines": {
     "node": ">=20"
   },
+  "os": [
+    "darwin",
+    "win32",
+    "linux"
+  ],
   "bin": {
     "trocar": "bin/trocar.mjs"
   },
   "files": [
-    "src/",
     "bin/",
-    "README.md"
+    "src/",
+    "README.md",
+    "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "test": "node --test --test-force-exit --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs",
     "test:real": "node --test --test-force-exit --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs test/query/real-session.test.mjs",
