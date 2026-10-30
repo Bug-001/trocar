@@ -148,7 +148,7 @@ const CASES = [
   ...[1, 2, 3].map((s) => ({ seed: 100 + s, opts: { calls: 80, talk: { pre: 6, len: 1400, every: 9, tail: 30 } } })),
 ]
 
-test('A16 (3.5 §会话读 pack / tail): packs and the tail in any order give the session at mark', () => {
+test('3.5 §会话读 pack / tail: packs and the tail in any order give the session at mark', () => {
   for (const { seed, opts } of CASES) {
     const r = rng(seed), int = (a, b) => a + Math.floor(r() * (b - a + 1)), P = opts.talk ? int(33, 40) : int(3, 9)
     const S = session(seed, opts, P), { w, N, now } = S, seal = (n) => P * (n + 1) - 1
@@ -257,7 +257,7 @@ test('A16 (3.5 §会话读 pack / tail): packs and the tail in any order give th
   }
 })
 
-test('A16 (3.5 契约样例): the lane_pack and lane_tail samples land their rows and steps in the desk', () => {
+test('3.5 契约样例: the lane_pack and lane_tail samples land their rows and steps in the desk', () => {
   const desk = createDesk()
   for (const [name, file] of [['lane_pack', { kind: 'pack', n: 0, part: 'main' }], ['lane_tail', { kind: 'tail', part: 'main' }]]) {
     assert.equal(applyFile(desk, file, parseLines(text(fx[name]))), true, name)
@@ -275,7 +275,7 @@ test('A16 (3.5 契约样例): the lane_pack and lane_tail samples land their row
   assert.deepEqual(desk.lanes.get(fx.lane_tail[1].l.lane), fx.lane_tail[1].l)
 })
 
-test('A16 parseLines: a read cut at any byte takes whole lines only, and `used` is where the next read starts', () => {
+test('parseLines: a read cut at any byte takes whole lines only, and `used` is where the next read starts', () => {
   const lines = [{ schema: 2, tail: { n: 0 } }, { c: { rid: 'a', preview: 'naïve → ok' } }, { g: 'a' }]
   const bytes = new TextEncoder().encode(text(lines))
   const ends = [], enc = new TextEncoder()

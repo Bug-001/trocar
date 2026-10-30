@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// bench/raw-v2.mjs — container v1 vs v2 on real sealed segments (4.6 E11, AC2-AC7). Not part of `npm test`.
+// bench/raw-v2.mjs — container v1 vs v2 on real sealed segments (4.6 E11). Not part of `npm test`.
 //   node bench/raw-v2.mjs --sealed <dir of COPIED v1 .sealed files> --work <scratch dir>
 //                         [--baseline <repo root whose sealer writes v1>] [--limit N]
 // One segment at a time: rebuild its plaintext from the v1 file and seal it with this checkout (v2) and, with --baseline,

@@ -134,7 +134,7 @@ test('headerOf is case-insensitive over both envelope header keys', () => {
   assert.equal(headerOf({ request_headers: { 'session-id': 'b' } }, 'Session-Id'), 'b');
 });
 
-// 3.4 pi row, from the requests pi 1.4.0 sent on a test machine (default configuration; only the keys that matter copied, values made up):
+// 3.4 pi row, from the requests pi 1.4.0 sent (measured; default configuration; only the keys that matter copied, values made up):
 // openai-responses → header session_id + body prompt_cache_key; Codex over SSE and over the WebSocket upgrade → header session-id (+ the
 // same body key in each response.create); anthropic-messages and chat-completions → neither.
 const PI_SID = '0a1b2c3d-0000-7000-8000-000000000001';

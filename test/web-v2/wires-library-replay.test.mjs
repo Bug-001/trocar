@@ -86,7 +86,7 @@ test('(5) the block loader: a real block?ref= → its verbatim flag is the `bloc
 // 1.2 §会话保真行 K-20 (1.5 K-20; 3.5 §会话读 `unknown`): a record no dissector reads as a call — an LLM POST to an endpoint
 // no wire knows, written into the demo session the way the collector writes records — is counted in the `session` answer's
 // `unknown` and is a fact of the session head; without it, no `unknown` and no such fact.
-test('A36 · K-20: a record no dissector reads → `unknown.records` ≥ 1 and the head\'s fact carries its endpoint; none → neither', async () => {
+test('K-20: a record no dissector reads → `unknown.records` ≥ 1 and the head\'s fact carries its endpoint; none → neither', async () => {
   const ENDPOINT = '/v1/no-such-wire'
   for (const odd of [false, true]) {
     const { userHome, home } = boardHome()

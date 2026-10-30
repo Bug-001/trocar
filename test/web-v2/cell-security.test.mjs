@@ -64,7 +64,7 @@ function specs() {
   return out
 }
 
-test('C4: every kind over hostile content emits only allowed elements and attributes, never src or href', () => {
+test('every kind over hostile content emits only allowed elements and attributes, never src or href', () => {
   const vals = values()
   for (const r of specs()) {
     for (const [k, v] of vals.entries()) {
@@ -81,7 +81,7 @@ test('C4: every kind over hostile content emits only allowed elements and attrib
   }
 })
 
-test('C4: the Raw layout over hostile content emits only its own span', () => {
+test('the Raw layout over hostile content emits only its own span', () => {
   for (const [k, v] of values().entries()) {
     const text = typeof v === 'string' ? v : JSON.stringify(v, null, k % 2 ? 2 : 0)
     let at = 0, state = null

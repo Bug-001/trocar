@@ -4,7 +4,7 @@
 // The real service and the real worker fork with a small heap, over a temp HOME, read the way the board follows a session. The
 // session's estimate (its members at PLAN_PER_MEMBER, its rows at SPINE_PER_ROW, beside the work W and the fixed caches K) is past the
 // worker's budget, while what its fold really holds is not: a cut by that estimate would show the newest few calls, or no call at
-// all, of a session the heap holds whole (2026-10-25: a 210,000-call session in the 384 MB worker answered 500 "no room" with 100 MB
+// all, of a session the heap holds whole (e.g. a 210,000-call session in a 384 MB worker answered 500 "no room" with 100 MB
 // live; 5,000 calls in a 130 MB worker answered 500 at the first read with 47 MB resident).
 import test from 'node:test'
 import assert from 'node:assert/strict'

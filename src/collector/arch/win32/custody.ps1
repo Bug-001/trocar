@@ -1,5 +1,4 @@
-# custody.ps1 - trocar's Windows key custody (RFC 4.11 P1 `cng`), one-shot: one verb per run, then exit. Ported from
-# the Windows test machine's signing and certificate-chain scripts.
+# custody.ps1 - trocar's Windows key custody (RFC 4.11 P1 `cng`), one-shot: one verb per run, then exit.
 # The root's P-256 private key is a CNG key with ExportPolicy None, on the Microsoft Platform Crypto Provider (the TPM) when one takes it,
 # else the Software KSP (R3-W1). It signs nothing a caller hands it: it BUILDS both certificates itself (CM3) and signs them through
 # X509SignatureGenerator (R3-W2) - the root (CA pathLen 1, KU keyCertSign|cRLSign, EKU serverAuth, SKI) and the 7-day intermediate

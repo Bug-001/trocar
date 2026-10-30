@@ -259,7 +259,7 @@ test('a helper that exits carries the exit name and its last stderr lines into d
 
 // D38: an orderly stop is the daemon's daemon-stop record, never a failure. Measured on Linux 2026-10-30: on stdin EOF the real helper says
 // {"ev":"down","reason":"loader exiting"} and exits 0, and that was written as helper-down — a "Problem" in status after every off, logout and unit stop.
-test('close(): the helper saying "loader exiting" and exiting 0 is the close, no down; ending any other way during close is still down, with its exit (D-14)', async () => {
+test('close(): the helper saying "loader exiting" and exiting 0 is the close, no down; ending any other way during close is still down, with its exit (D38)', async () => {
   const clean = await started()
   const downs = []; clean.c.on('down', (d) => downs.push(d))
   clean.m.child.stdin.end = () => setImmediate(() => { clean.m.pushLine({ ev: 'down', reason: 'loader exiting' }); setImmediate(() => { clean.m.child.exitCode = 0; clean.m.child.emit('exit', 0, null) }) })

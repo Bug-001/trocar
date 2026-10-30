@@ -103,7 +103,7 @@ test('#7 the compaction group still draws with an empty ledger', () => {
   assert.equal(grpCount(empty, W.RES_GRP.file), null, 'no empty groups are drawn')
 })
 
-// A3 (2.4 element table): a long path is cut in the middle — the base name stays whole, the length fits unless the base
+// 2.4 element table: a long path is cut in the middle — the base name stays whole, the length fits unless the base
 // name alone is longer
 test('midClip keeps the base name whole and fits max unless the base name alone is longer', async () => {
   const { midClip } = await import('../../src/web/v2/replay/analysis.mjs')
@@ -154,10 +154,10 @@ test('resource state on rids: pending / live / evicted at every playhead', () =>
   }
 })
 
-// A34 (2.4 #1, 2.4:67 · :148): 只见到名字 leaves out every opened file under either spelling; while the anchor lane's
+// 2.4 #1, 2.4:67 · :148: 只见到名字 leaves out every opened file under either spelling; while the anchor lane's
 // `ledger_next` chain is unread, each count the ledger gives is an empty busy box (no digit, never a 0); the compaction
 // count (lane events) is exact once the lane is held; the chain read to its end → the counts are the ledger's.
-test('A34 seen minus opened files; ledger counts busy until the ledger chain is read, then the ledger\'s', () => {
+test('2.4 #1: seen minus opened files; ledger counts busy until the ledger chain is read, then the ledger\'s', () => {
   const key = R(0), cwd = '/w/p'
   const res = [
     { kind: 'file', label: `${cwd}/src/a.mjs`, segments: [{ enter: R(0), evict: null }] },

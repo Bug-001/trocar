@@ -478,7 +478,7 @@ test('semantics 2: an install manifest that parses but is not a manifest ({"vers
   }
 })
 
-// audit rule-b 6 (R11): with no daemon and no manifest — a fresh machine, or after uninstall — the process table is read all the same (the MANIFEST is needed only to match
+// (R11): with no daemon and no manifest — a fresh machine, or after uninstall — the process table is read all the same (the MANIFEST is needed only to match
 // processes to harnesses), and what could not be read is said with its reason, never silently dropped.
 test('R11: with no daemon and no install manifest the process table is still read — only the matching to harnesses is not known, and a table that could not be read is an error entry', async () => {
   const s = await installedHome()

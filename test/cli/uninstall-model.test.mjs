@@ -108,8 +108,8 @@ for (const doorFile of ['none', 'row', 'unreadable']) {
 }
 
 // invariant 5 · 0.2 (uninstall removes what is trocar's, the captures stay unless --purge-data): the door record is the daemon's own state, not a capture.
-// Once its rows hold no live holder, uninstall takes it with state.json; the plan names it; --purge-data then leaves no ~/.trocar at all (seen on a
-// macOS and a Windows test machine: ~/.trocar/collector/door-seen.json was the one file left).
+// Once its rows hold no live holder, uninstall takes it with state.json; the plan names it; --purge-data then leaves no ~/.trocar at all (seen on
+// macOS and Windows: ~/.trocar/collector/door-seen.json was the one file left).
 const withDoorRecord = (w) => { const f = path.join(w.dir, DOOR_SEEN_FILE); fs.writeFileSync(f, JSON.stringify({ version: 1, rows: [{ harness: 'codex', group: 'codex:cli', pid: 779, start: Date.now() - 5000, kind: 'accept', at: new Date().toISOString(), n: 1, decrypt: true }] })); return f }
 for (const purgeData of [false, true]) {
   test(`invariant 5 · uninstall${purgeData ? ' --purge-data' : ''} takes the door record of no live holder: the plan names it, ${purgeData ? 'no ~/.trocar is left' : 'the captures stay'}`, async () => {

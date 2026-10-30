@@ -1,6 +1,6 @@
 // test/query/session-read.test.mjs — `session` over the context projection and its fold log (RFC 3.5 §会话读; 1.6 §4.1 / C.5): its
 // pages and their records (#5), its `--since` delta against the document at a mark (#19), its answer at the reduction frontier
-// (#25), `unknown` (C1), the local path over a fold log the worker wrote (3.5:42), and the byte-identity flag of a cache break
+// (#25), `unknown`, the local path over a fold log the worker wrote (3.5:42), and the byte-identity flag of a cache break
 // served on a row (3.3:75, 3.3 #12).
 //
 // Sessions are generated (test/query/big-session.mjs) into temp homes and read through runQuery as every path reads them. A second
@@ -101,7 +101,7 @@ test('3.5 #19 moved cut: a mark names its cut; --since a mark of another cut (or
 })
 
 // A Claude Code session whose calls are interleaved with members that are no call: requests of no LLM, and (`unknown`) LLM
-// requests to an endpoint no dissector reads as a call (C1): after each of the first `unknown` calls, and `lead` of them before the
+// requests to an endpoint no dissector reads as a call: after each of the first `unknown` calls, and `lead` of them before the
 // first call; `late`: some members that are no call carry a ts_request before the call written before them (step order ≠ file
 // order). Seeded: how many follow each call, which are late. → {id, endpoints, lines, file (the whole file written), back (how many late)}.
 function mixed(home, { calls, unknown = 0, lead = 0, late = false, seed = 7 }) {
@@ -161,7 +161,7 @@ test('3.5 #5: --before a member that is no call row is refused; walking --before
   }
 })
 
-test('C1: records no dissector reads as a call are counted with their endpoints in `unknown`; a session with none has no `unknown`', async () => {
+test('records no dissector reads as a call are counted with their endpoints in `unknown`; a session with none has no `unknown`', async () => {
   for (const unknown of [0, 1, 4]) {
     const home = homeOf('trocar-sread-unk-'), m = mixed(home, { calls: 6, unknown })
     const doc = await session(home, { id: m.id })

@@ -77,7 +77,7 @@ for (const os of ['darwin', 'win32']) {
   })
 }
 
-// 1.6 §1 (2026-10-21): every real `on` leaves its receipt in flows/ — the run's lines end with one install-note kind:'result' carrying the harnesses it
+// 1.6 §1: every real `on` leaves its receipt in flows/ — the run's lines end with one install-note kind:'result' carrying the harnesses it
 // turned on and the ones it refused, a failed run too, and the board's carries source:'board' (an on after the board's off was invisible before)
 for (const os of ['darwin', 'win32']) {
   test(`1.6 §1 (${os}): a refused on started from the board leaves an install-note result line with source, harnesses and refused; a dry run leaves none`, async () => {

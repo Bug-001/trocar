@@ -77,9 +77,10 @@ it registers a login item that runs that copy, and npm may clear the `npx` cache
 
 On Linux, build the capability helper and install it once per machine, before `trocar install`. The package carries
 its source, not a build: the build needs clang, make, bpftool, the libbpf, libelf and zlib headers, and a kernel
-with BTF. Build as yourself; only the second line needs root:
+with BTF. Build as yourself; only the `sudo` lines need root:
 
 ```sh
+sudo apt-get install build-essential clang libbpf-dev libelf-dev zlib1g-dev linux-tools-generic  # Ubuntu; Debian: bpftool, not linux-tools-generic
 make -C "$(npm root -g)/trocar-cli/src/collector/arch/linux"
 sudo "$(command -v node)" "$(command -v trocar)" setup-helper   # root's PATH may lack node or trocar (an nvm node), so both go by their paths
 ```
@@ -93,6 +94,7 @@ From source: there is no global `trocar` on your PATH, so run it through the rep
 
 ```sh
 git clone https://github.com/Bug-001/trocar && cd trocar && npm install
+make -C src/collector/arch/linux && sudo "$(command -v node)" bin/trocar.mjs setup-helper   # Linux only, once per machine
 node bin/trocar.mjs install     # once: the certificates
 node bin/trocar.mjs on          # then start capture
 ```

@@ -38,7 +38,7 @@ function clock() {
 const laneOf = (desk, rid) => desk.rows.get(rid).lane
 const refsOf = (desk, rid) => { const st = stepOf(desk, rid); return st.held ? [...st.reply, ...st.flat.slice(-2)].map((d) => d.ref).filter(Boolean) : [] }
 
-test('A6 (2.3 #25): scrubbing keeps ≤ 1 lane and ≤ 1 block read in flight, asks only for a step rested 100 ms, aborts the left step\'s reads', async () => {
+test('2.3 #25: scrubbing keeps ≤ 1 lane and ≤ 1 block read in flight, asks only for a step rested 100 ms, aborts the left step\'s reads', async () => {
   const seen = { lane: 0, block: 0, aborted: 0, slot: 0 }
   for (const seed of SEEDS) {
     bodyCache.clear()

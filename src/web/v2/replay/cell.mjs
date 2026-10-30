@@ -1,7 +1,7 @@
 // replay/cell.mjs — one block body, drawn the same everywhere (spec 2.3 §两种模式, D70):
 // the request's blocks, the reply's parts, the raw panel's non-block keys and the drawer. A cell is
 // {bid, ref?, inline?, r, ff, chars, preview}. Two modes: Raw (the bytes, laid out by jsonlay; the default) and Readable (drawn
-// from the render spec r by kinds.mjs). The bytes are fetched, cached and copied by `ref` only (P1: a content key is not an
+// from the render spec r by kinds.mjs). The bytes are fetched, cached and copied by `ref` only (a content key is not an
 // exact-byte id); `bid` keys only view state. DOM-free above wireCells, so the strings can be tested in Node.
 import { esc, kf } from '../core/fmt.mjs'
 import * as W from '../labels/replay.mjs'
@@ -64,7 +64,7 @@ export function loadBodies(api, refs, { signal } = {}) {
         return out
       }
       const d = r.data || {}, errs = d.errors || []
-      // until the block route lands (D8): the one-ref answer is the item itself
+      // a `block` answer without a `blocks` array (one ref asked) is the item itself
       const items = Array.isArray(d.blocks) ? d.blocks : want.length === 1 ? [{ ...d, ref: want[0] }] : []
       const byRef = new Map(items.map((x) => [x.ref, x]))
       for (const ref of want) {
