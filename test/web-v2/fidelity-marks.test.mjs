@@ -3,11 +3,15 @@
 // its bytes behind a `ref`, or `ref: null` with the reason and the body in `inline`; it enters the desk through applyLane
 // (desk-world.mjs deskOf), as every definition does. The axes are generated: each `ff` value with and without a ref in each
 // section, an opened body's outcomes, reply parts on and off their resp.raw span, each fact of the call fidelity row. Structure
-// by class and data attribute, words only as the labels module has them.
+// by class and data attribute, words only as the labels module has them. The real face (real-face.mjs) for the demo sample and a
+// Codex WebSocket session missing a record.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
 import { ctxWindowHtml } from '../../src/web/v2/replay/ctxwin.mjs'
+import { stepBarHtml } from '../../src/web/v2/replay/stepbar.mjs'
 import { rawPanelUnits } from '../../src/web/v2/replay/rawpanel.mjs'
 import { serialize } from '../../src/web/v2/core/units.mjs'
 import { bodyCache, showBody } from '../../src/web/v2/replay/blocks.mjs'
@@ -15,7 +19,10 @@ import { loadBodies } from '../../src/web/v2/replay/cell.mjs'
 import { stepOf } from '../../src/web/v2/replay/model.mjs'
 import * as W from '../../src/web/v2/labels/replay.mjs'
 import { esc } from '../../src/web/v2/core/fmt.mjs'
-import { deskOf } from './desk-world.mjs'
+import { deskOf, deskFrom } from './desk-world.mjs'
+import { boardHome, serveBoard } from './real-face.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
+import { bigSession } from '../query/big-session.mjs'
 
 // 3.2's closed set of a block's faithfulness besides verbatim; a value outside it is one the board does not know
 const KNOWN = ['metadata', 'opaque', 'summarized', 'omitted', 'truncated']
@@ -268,4 +275,108 @@ test('2.3 #2 · 2.6 #3: a reply part is proven only on its resp.raw span, else p
     assert.equal(count(panel, 'class="rpmark"'), marked ? 1 : 0, `${why}: the panel's one mark`)
     if (marked) assert.ok(visible(panel).includes(w(partial ? W.REPLY_PARTIAL : W.REPLY_PARSED)), `${why}: its word`)
   })
+})
+
+// ── the call fidelity row (2.3 #8 · 1.4 #9; 必拒隐瞒) ─────────────────────────────────────────────────────────────────────
+const flags = (field, names, table) => names.map((f) => [`${field}.${f}`, { [field]: { [f]: true, text: `TEXT-${f}-q` } }, [table[f]], [`TEXT-${f}-q`]])
+// each fact of 2.3 §调用保真行 → the words the row must say, and the server's own text its technical details hold (the flag sets
+// are 2.3's table)
+const FACTS = [
+  ['partial + contextMissing', { wire: { contextState: 'partial', contextMissing: 'MISSING-q' } }, [W.CTX_FACT.partial, 'MISSING-q']],
+  ['partial, cause unknown', { wire: { contextState: 'partial' } }, [W.CTX_FACT.partialBare, W.CTX_FACT.unknownWhy]],
+  ['reconstructed', { wire: { contextState: 'reconstructed' } }, [W.CTX_FACT.reconstructed]],
+  ['server_edited', { wire: { contextState: 'server_edited' } }, [W.CTX_FACT.server_edited]],
+  ...flags('reqIncomplete', ['truncated', 'partial'], W.REQ_FACT),
+  ...flags('wsIncomplete', ['partial', 'truncated', 'undecoded', 'nonVerbatim'], W.WS_FACT),
+  ...flags('respIncomplete', ['undecoded', 'binary', 'notJson', 'empty', 'unparsed', 'truncated'], W.RESP_FACT),
+  ['a capture label', { wire: { labels: [{ id: 'label-q', label: 'LABEL-q says so', text: 'LABEL-TEXT-q' }] } }, ['LABEL-q says so'], ['LABEL-TEXT-q']],
+  ['reqEncoding', { wire: { reqEncoding: 'gzip' } }, [W.reqEncodingFact('gzip')]],
+]
+const ROUTING = { id: 'capture-routing', label: 'ROUTE-q', text: 'ROUTE-TEXT-q' }
+const factsOf = (h) => { const m = /<div class="cwfline">[\s\S]*?<span class="cwffacts">([^<]*)<\/span>/.exec(h); return m ? m[1] : null }
+// the row with its technical details: up to the window's first section
+const lineOf = (h) => h.slice(h.indexOf('<div class="cwfline">'), h.indexOf('<div class="cwsec"'))
+const headLit = (s) => stepBarHtml(s).includes('class="sb-fid"')
+
+test('2.3 #8 · 1.4 #9: each call fidelity fact is said once in the row, with the step head\'s ◐; no fact (capture routing included), no row', () => {
+  const cases = [...FACTS,
+    ['no fact', {}, null], ['complete', { wire: { contextState: 'complete' } }, null],
+    // capture routing is how the call reached trocar, not a fidelity fact (2.3 §调用保真行): never the row, never ◐
+    ['routing only', { wire: { labels: [ROUTING] } }, null],
+    ['routing beside a fact', { wire: { contextState: 'reconstructed', labels: [ROUTING] } }, [W.CTX_FACT.reconstructed]],
+    // one thing said once: a partial context naming the missing record swallows the connection's partial messages; a label the
+    // reply's or the messages' flag already says is not said again
+    ['partial swallows ws partial', { wire: { contextState: 'partial', contextMissing: 'MISSING-q' }, wsIncomplete: { partial: true } }, [W.CTX_FACT.partial]],
+    ...[['resp-truncated', 'respIncomplete', 'truncated', W.RESP_FACT], ['resp-undecoded', 'respIncomplete', 'undecoded', W.RESP_FACT], ['ws-truncated', 'wsIncomplete', 'truncated', W.WS_FACT]]
+      .map(([id, field, flag, table]) => [`${id} said by the flag`, { [field]: { [flag]: true }, wire: { labels: [{ id, label: 'DUP-q' }] } }, [table[flag]]]),
+  ]
+  const desk = deskOfSteps(cases.map(() => [def('system', undefined, true)]), { rows: cases.map(([, row]) => row) })
+  const s = stateOf(desk)
+  cases.forEach(([why, row, words, tech = []], p) => {
+    s.playhead = p
+    const h = ctxWindowHtml(s), facts = factsOf(h)
+    assert.equal(facts != null, words != null, `${why}: the row exists iff there is a fact`)
+    assert.equal(headLit(s), words != null, `${why}: the step head's ◐ iff the row`)
+    if (!words) return
+    assert.ok(h.indexOf('<div class="cwfline">') < h.indexOf('<div class="cwsec"'), `${why}: at the top of the window`)
+    for (const x of words) assert.equal(count(facts, w(x)), 1, `${why}: says ${JSON.stringify(x)} once`)
+    for (const x of ['ROUTE-q', 'DUP-q']) assert.ok(!facts.includes(x), `${why}: not ${x}`)
+    if (why === 'partial swallows ws partial') assert.ok(!facts.includes(w(W.WS_FACT.partial)), why)
+    for (const t of tech) assert.ok(lineOf(h).includes(t) && !facts.includes(t), `${why}: ${t} in the technical details, not the row's words`)
+  })
+})
+
+// ── the real face ───────────────────────────────────────────────────────────────────────────────────────────────────────
+const deskOfFace = async (face) => {
+  const id = (await face.get('sessions')).doc.sessions[0].session_id
+  return deskFrom((name, p) => face.get(name, p).then((r) => r.doc), id)
+}
+const eachStep = (desk, fn) => { for (const lane of buildLanes(desk)) for (let p = 0; p < lane.calls.length; p++) fn(stateOf(desk, p, { anchor: lane }), lane.calls[p]) }
+
+test('2.3 #2 (real face): every section of every demo step is proven', async () => {
+  const face = await serveBoard(boardHome())
+  try {
+    const desk = await deskOfFace(face)
+    let steps = 0
+    eachStep(desk, (s, call) => {
+      const st = stepOf(desk, call.rid)
+      if (!st.held) return
+      const h = ctxWindowHtml(s), why = `${call.rid}`
+      for (const r of rowsOf(h)) assertMark(r, 'verbatim', `${why} row ${r.bi}`)
+      assertHeaders(h, st.flat, why)
+      assert.ok(headersOf(h).every((x) => x.claims), `${why}: every section claims`)
+      steps++
+    })
+    assert.ok(steps > 0)
+  } finally { await face.close() }
+})
+
+// the ws session's record that a later one continues (previous_response_id names its response), in file order
+function continued(lines) {
+  const recs = lines.map((l) => JSON.parse(l)), prevOf = (r) => { try { return JSON.parse(r.req_body).previous_response_id || null } catch { return null } }
+  const named = recs.map(prevOf).find(Boolean)
+  return recs.findIndex((r, i) => prevOf(r) !== named && new RegExp(`${named}\\b`).test(lines[i]))
+}
+
+test('2.3 #8 · 1.4 #9 (real face): a Codex WebSocket call whose earlier record is missing says the context is incomplete and which record', async () => {
+  const userHome = tmpDir('trocar-board-'), home = path.join(userHome, '.trocar')
+  const ws = bigSession({ home, wire: 'ws', growth: 300, subEvery: 3, subLanes: 1 })
+  ws.append(8)
+  const lines = fs.readFileSync(ws.file, 'utf8').split('\n').filter(Boolean), gone = continued(lines)
+  assert.ok(gone >= 0, 'a record that a later one continues')
+  fs.writeFileSync(ws.file, lines.filter((_, i) => i !== gone).map((l) => l + '\n').join(''))
+  const face = await serveBoard({ userHome, home })
+  try {
+    const desk = await deskOfFace(face)
+    let partial = 0
+    eachStep(desk, (s, call) => {
+      if (!(call.wire && call.wire.contextState === 'partial')) return
+      partial++
+      const facts = factsOf(ctxWindowHtml(s)), why = call.rid
+      assert.ok(call.wire.contextMissing, `${why}: the server names the missing record`)
+      assert.ok(facts && facts.includes(w(W.CTX_FACT.partial)) && facts.includes(esc(call.wire.contextMissing)), `${why}: the row says it, with contextMissing`)
+      assert.ok(headLit(s), `${why}: the step head's ◐`)
+    })
+    assert.ok(partial > 0, 'the call after the missing record is partial')
+  } finally { await face.close() }
 })
