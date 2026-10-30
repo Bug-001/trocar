@@ -31,7 +31,7 @@ const home = async () => {
 }
 const leaks = (doc) => Object.values(SECRET).filter((s) => JSON.stringify(doc).includes(s.replace(/^(Bearer |sid=)/, '')))
 
-test('A4: no query document carries a credential value', async () => {
+test('no query document carries a credential value', async () => {
   const h = await home()
   assert.equal(Object.values(SECRET).every((s) => fs.readFileSync(path.join(h, 'raw', `${SEG}.ndjson`), 'utf8').includes(s)), true) // storage verbatim
   for (const name of DATA_QUERIES) {
@@ -43,7 +43,7 @@ test('A4: no query document carries a credential value', async () => {
   }
 })
 
-test('A5: calls --ref --reveal returns that one value; reveal without ref is an argument error', async () => {
+test('calls --ref --reveal returns that one value; reveal without ref is an argument error', async () => {
   const h = await home()
   const doc = await runQuery('calls', { ref: `${SEG}:1`, reveal: 'x-api-key' }, { home: h, now })
   assert.equal(doc.records.length, 1)

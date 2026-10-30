@@ -454,7 +454,7 @@ test('semantics 2: an install manifest of the wrong shape is treated as unreadab
   assert.deepEqual(t.userFiles(), snap, 'and wrote nothing')
 })
 
-// audit rule-b 8 (4.5 零残留): `~/.trocar/netenv.json` — what status / doctor / on last read of the VPN software, for the board — is trocar's own file and was never removed (mac and Linux);
+// (4.5 零残留): `~/.trocar/netenv.json` — what status / doctor / on last read of the VPN software, for the board — is trocar's own file and was never removed (mac and Linux);
 // with no daemon the receipt said 「守护进程(pid null)已停掉」 about a daemon that was not there.
 test('uninstall removes ~/.trocar/netenv.json with the rest of trocar\'s own files — the plan lists it, nothing but the kept captures is left in ~/.trocar — and with no daemon the receipt does not say one was stopped', async () => {
   const s = await installedHome({ names: ['claude-code'] }); keep(s)

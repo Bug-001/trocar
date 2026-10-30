@@ -137,27 +137,9 @@ test('W26 a second server on a live endpoint is refused, and the first one is no
 
 // ---- W25: refuse an elevated or SYSTEM token ---------------------------------------------------------------------------------------------------
 
-// W25's command halves are all LANDED now (the todo pins that lived here — each ending in assert.fail so it could not go green by accident — became
-// pointers as the commands got their wiring): on is on-elevated.test.mjs's, the daemon's is daemon.test.mjs's,
-// off / uninstall's is win32-kernel.test.mjs's.
-// W25's on half is LANDED: `on` asks parts.arch.refuseElevated at its entry — before turnOn (its only writer), before the
-// netenv probe and the adoption read — and refuses an elevated or SYSTEM token with the §12 record (where 'start') where a collector directory exists,
-// the receipt carrying it either way; a token that cannot be read is not a refusal (R11) — 已由 test/collector/arch/win32/on-elevated.test.mjs 覆盖
-// (the receipt, the one record, exit 1, the HOME otherwise byte for byte, turnOn never asked, and the unreadable case proceeding).
-// W25's daemon half is LANDED: runDaemon calls arch.refuseElevated before it claims its endpoint, and the win32 endpoint itself
-// (controlEndpoint's pipe + token) is wired beside it — 已由 test/collector/daemon.test.mjs::`W25 the win32 daemon refuses an elevated or SYSTEM token
-// before it claims its endpoint …` 覆盖 (the record, no socket, no control.json, the unreadable-not-a-refusal half, and the endpoint with its token).
-// W25's off/uninstall half is LANDED: src/off/orchestrate.mjs and src/cli/uninstall.mjs call refuseElevatedByWhoami at their entry
-// on win32 — 已由 test/off/win32-kernel.test.mjs::`W25: off and uninstall on win32 refuse an elevated token at the entry …` 覆盖 (both commands, the byte-identical
-// HOME, and the unreadable-whoami-not-a-refusal half).
-// W24's command half is LANDED: `runDaemonCli(['--supervise'])` hands the lone flag to arch.runSupervisor through
-// daemon.mjs's loadArch (the CLI never imports arch/ itself, layering rule 5) with its own script and the collector dir; any other argument is
-// still exit 2, root and a platform without the new collector are refused first, and an arch with no runSupervisor (linux's) is a usage error —
-// 已由 test/collector/cli.test.mjs::`cli: daemon --supervise (4.8 §7, W24) …` 覆盖。The supervisor itself is the tests above (the backoff, the
-// lock, the singleton, the signals — W24's own list).
-// W24's undoWin32-equality half is LANDED: src/off/win32.mjs carries its own taskState/undoScheduledTask/undoRunValue beside this
-// module's — 已由 test/off/win32-undo.test.mjs::`the names the undo touches are the arch module's own (the inlined pieces cannot drift)` 覆盖: TASK_NAME and
-// RUN_KEY equal this module's exports, the shape Linux's unit.mjs ↔ src/off/autostart.mjs test has; each side's call sequence is its own file's tests.
+// W24 / W25 command wiring is tested where it lives: on-elevated.test.mjs (on), daemon.test.mjs (daemon, before it claims its endpoint),
+// win32-kernel.test.mjs (off / uninstall), cli.test.mjs (--supervise, 4.8 §7; the CLI never imports arch/, layering rule 5), win32-undo.test.mjs
+// (the undo's names are this module's). Each refuses an elevated or SYSTEM token with the §12 record; a token or whoami that cannot be read is not a refusal.
 
 // whoami /groups lists the token's groups with their SIDs; the integrity level is the one `S-1-16-<rid>` (Mandatory Label), and SYSTEM is S-1-5-18. The SIDs are the same in every language, so the check reads SIDs, not names.
 const WHOAMI = (label, extra = '') => `"Everyone","Well-known group","S-1-1-0","Mandatory group, Enabled by default, Enabled group"\n"BUILTIN\\Users","Alias","S-1-5-32-545","Mandatory group, Enabled by default, Enabled group"\n${extra}"${label}","Label","S-1-16-${{ medium: 8192, high: 12288, system: 16384, low: 4096 }[label.split('\\')[1].split(' ')[0].toLowerCase()] ?? 8192}",""\n`

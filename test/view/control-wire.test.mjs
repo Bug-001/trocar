@@ -44,7 +44,7 @@ function assertMasked(out, { rec, reqPairs, respPairs }, keep = null) {
   assert.deepEqual(out.ctl.masked, [...CREDS].filter((n) => n !== keep).sort())
 }
 
-test('A1: every credential-class value is blank in headers and raw heads, named in ctl.masked; all else as stored', () => {
+test('every credential-class value is blank in headers and raw heads, named in ctl.masked; all else as stored', () => {
   for (const caseOf of CASES) for (const shapeOf of SHAPES) {
     const b = build(caseOf, shapeOf)
     const out = controlRecordWire(b.rec)
@@ -64,7 +64,7 @@ test('A1: every credential-class value is blank in headers and raw heads, named 
   assertMasked(bad, b)
 })
 
-test('A2: reveal returns that one value and keeps every other credential blank', () => {
+test('reveal returns that one value and keeps every other credential blank', () => {
   for (const caseOf of CASES) {
     const b = build(caseOf, SHAPES[0])
     const out = controlRecordWire(b.rec, { reveal: 'authorization' })
@@ -76,7 +76,7 @@ test('A2: reveal returns that one value and keeps every other credential blank',
 
 const WS = [(n) => n, (n) => ` ${n}`, (n) => `${n} `, (n) => `\t${n}\t`]
 
-test('A3: the board predicate and the server predicate agree on every name, case and surrounding whitespace (2.6 #13)', () => {
+test('the board predicate and the server predicate agree on every name, case and surrounding whitespace (2.6 #13)', () => {
   for (const base of [...CREDS, 'X-Foo-Api-Key', ...NOT_CREDS]) for (const caseOf of CASES) for (const ws of WS) {
     const n = ws(caseOf(base.toLowerCase()))
     assert.equal(isSecretHeader(n), isCredentialHeader(n), JSON.stringify(n))
@@ -98,7 +98,7 @@ const SIDES = [
   { start: 'HTTP/1.1 200 OK\r\n', raw: 'resp_head_raw', put: (rec, h) => ({ ...rec, resp: { ...rec.resp, headers: { 'content-type': 'application/json', ...h } } }) },
 ]
 
-test('A4: every credential name, raw shape (whitespace before the colon, obs-fold) and side is blanked; other lines byte-identical; reveal keeps that one', () => {
+test('every credential name, raw shape (whitespace before the colon, obs-fold) and side is blanked; other lines byte-identical; reveal keeps that one', () => {
   let i = 0
   for (const base of CREDS) for (const caseOf of CASES) for (const shape of RAW_SHAPES) for (const side of SIDES) {
     const secret = `cred-value-${i++}`, k = caseOf(base)
