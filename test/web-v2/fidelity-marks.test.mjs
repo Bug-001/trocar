@@ -3,8 +3,8 @@
 // its bytes behind a `ref`, or `ref: null` with the reason and the body in `inline`; it enters the desk through applyLane
 // (desk-world.mjs deskOf), as every definition does. The axes are generated: each `ff` value with and without a ref in each
 // section, an opened body's outcomes, reply parts on and off their resp.raw span, each fact of the call fidelity row. Structure
-// by class and data attribute, words only as the labels module has them. The real face (real-face.mjs) for the demo sample and a
-// Codex WebSocket session missing a record.
+// by class and data attribute, words only as the labels module has them. The real face (real-face.mjs) for the demo sample, a
+// Codex WebSocket session missing a record, and a v0 envelope.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -22,6 +22,7 @@ import { esc } from '../../src/web/v2/core/fmt.mjs'
 import { deskOf, deskFrom } from './desk-world.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { writeSegment } from '../query/raw-home.mjs'
 import { bigSession } from '../query/big-session.mjs'
 
 // 3.2's closed set of a block's faithfulness besides verbatim; a value outside it is one the board does not know
@@ -378,5 +379,29 @@ test('2.3 #8 · 1.4 #9 (real face): a Codex WebSocket call whose earlier record 
       assert.ok(headLit(s), `${why}: the step head's ◐`)
     })
     assert.ok(partial > 0, 'the call after the missing record is partial')
+  } finally { await face.close() }
+})
+
+test('2.3 #9 (real face): a v0 envelope draws the window line, ◐ on each header, no 以下逐字, no per-block 不能回源', async () => {
+  const [first] = fs.readFileSync(new URL('../../samples/demo-session.ndjson', import.meta.url), 'utf8').split('\n')
+  const { req_body: body, resp, req_headers: headers, capture: _d10, ...rest } = JSON.parse(first) // v0 had no req_body and no capture field
+  const userHome = tmpDir('trocar-board-'), home = path.join(userHome, '.trocar')
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  writeSegment(home, '20260719T090000Z', [JSON.stringify({ ...rest, request_headers: headers, request: JSON.parse(body), response: resp })])
+  const face = await serveBoard({ userHome, home })
+  try {
+    const desk = await deskOfFace(face)
+    let steps = 0
+    eachStep(desk, (s, call) => {
+      const st = stepOf(desk, call.rid)
+      if (!st.held || !st.flat.length) return
+      const h = ctxWindowHtml(s), why = call.rid
+      assert.ok(h.includes('<div class="cwwin"'), `${why}: the window line`)
+      for (const r of rowsOf(h)) assertMark(r, want(st.flat[r.bi]), `${why} row ${r.bi}`, { windowLine: true })
+      assertHeaders(h, st.flat, why, { windowLine: true })
+      for (const r of rowsOf(h.slice(h.indexOf('<div class="cwreply"')), { reply: true })) assert.notEqual(r.ff, 'verbatim', `${why}: a v0 reply is parsed`)
+      steps++
+    })
+    assert.ok(steps > 0)
   } finally { await face.close() }
 })

@@ -14,6 +14,9 @@ import { isSealedPath } from '../raw/discover.mjs';
 import { openSealed } from '../raw/reader.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
 
+// What a converted v0 record says it is: its req_body is rebuilt from the parsed request, so no span is cut from it (view/assemble.mjs spanBody).
+export const V0_CONVERTED = 'v0-converted';
+
 // True D10 record → passthrough. Demo v0 record → convert. Anything else → passthrough.
 export function normalizeRecord(raw) {
   if (typeof raw.req_body === 'string') return raw; // already D10
@@ -26,7 +29,7 @@ export function normalizeRecord(raw) {
     req_headers: request_headers || {},
     req_body,
     resp: response || { kind: 'error', status: null },
-    capture: raw.capture || 'v0-converted',
+    capture: raw.capture || V0_CONVERTED,
   };
 }
 
