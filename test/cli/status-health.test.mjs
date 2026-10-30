@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { captureHealth } from '../../src/health/read.mjs'
 import { failureBrief } from '../../src/cli/words.mjs'
+import { EXIT } from '../../src/cli/schema.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sandbox } from './fixtures/dispatch-ctx.mjs'
 
@@ -78,4 +79,17 @@ test('C.3 · a failure group whose newest record names its process carries proce
   assert.equal(failureBrief(plain).includes('pid'), false)
   const one = (t) => t.replace(/\s+/g, ' ') // a row folds inside 80 columns
   assert.ok(one((await s.run(['status', '--failures'], { deps })).io.stdoutText()).includes(one(failureBrief(g))), 'the --failures row carries the sentence that names the program')
+})
+
+test('4.6 F9: a capture health that cannot be read is no `health`, an `errors` entry with the reason, and exit 3 — never empty, never "0 failures"', async () => {
+  const h = tmpDir('trocar-health-'), c = path.join(h, 'collector')
+  fs.mkdirSync(c, { recursive: true })
+  fs.writeFileSync(path.join(c, 'install-manifest.json'), JSON.stringify({ version: 3, install: { state: 'complete' }, created_at: at(9999), entries: [], files: [] }))
+  fs.writeFileSync(path.join(c, 'flows'), 'x') // flows/ is not a directory: captureHealth throws
+  const r = await sandbox().run(['status', '--json'], { deps: { captureHealth: () => captureHealth({ home: h, now: NOW, alive: () => true, identity: () => ({}) }) } })
+  const doc = r.io.json()
+  assert.equal('health' in doc, false, 'no verdict is made up')
+  const e = doc.errors.find((x) => x.where === 'capture health')
+  assert.ok(e && typeof e.reason === 'string' && e.reason.length > 0, JSON.stringify(doc.errors))
+  assert.equal(r.exit, EXIT.unknown)
 })

@@ -218,6 +218,13 @@ test('V49 where the harness keeps its settings in a managed process its windows 
   assert.deepEqual(cc.map((x) => x.shell), ['gui'], 'a harness with no managed process: the step alone')
   const neg = steps(facts('codex', { listeners: [] }, { procs: [proc(5530, { name: 'codex app-server', negative: true })], negatives: [{ pid: 5530, host: 'chatgpt.com', reason: 'negative-cache' }] }), 'negative-cache')
   assert.ok(neg.some((x) => x.run === 'kill 5530'), 'a negative cache lasts as long as the process: ending it is the way out')
+  // 1.6 附录 B: only a refused trocar certificate is fixed by a restart; an upstream's certificate or handshake is not
+  const byCause = (cause) => findingsOf(facts('codex', { listeners: [] }, { procs: [proc(5530, { name: 'codex app-server', negative: true })], negatives: [{ pid: 5530, host: 'chatgpt.com', reason: 'negative-cache', cause }] }), ['codex']).find((x) => x.code === 'negative-cache')
+  for (const cause of ['upstream-cert', 'upstream-handshake']) {
+    const f = byCause(cause)
+    assert.ok(f.commands.length && !f.commands.some((x) => x.run === 'kill 5530' || x.run.startsWith('Quit every')), `${cause}: ${JSON.stringify(f.commands)}`)
+    assert.notEqual(f.what, byCause('client-rejected-leaf').what, cause)
+  }
 })
 
 test('V47 (a) / V49 proxy-changed in driver mode: the harness is still steered, so it is `expected` and the one command only looks (附录 B: 「重启后自己生效,不用改东西」); in proxy mode the same drift is a problem whose first command is `trocar on <h>`', () => {

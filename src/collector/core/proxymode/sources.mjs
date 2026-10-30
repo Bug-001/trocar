@@ -15,28 +15,14 @@
 import path from 'node:path'
 import { parseJsonText } from '../../../off/json-text.mjs'
 import { parseDotenv } from '../config-read.mjs'
+import { resolveLoc } from '../../../off/loc.mjs'
 
 const get = (env, k) => (env instanceof Map ? env.get(k) : env ? env[k] : undefined)
 const isSet = (v) => v !== undefined && v !== null && v !== ''
 const absent = (e) => e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')
 const why = (e) => `${(e && e.code) || 'error'}: ${(e && e.message) || e}`
-const pickOs = (x, ctx) => (x && x.perOs ? x.perOs[ctx.os] : x)
 
-/** The absolute paths a <loc> names on this machine: one without `glob`, the matching entries with it; [] when it names nothing here. */
-export function resolveLoc(loc, ctx) {
-  const l = pickOs(loc, ctx)
-  if (!l) return []
-  const join = ctx.join || path.join
-  const over = l.env ? get(ctx.env, l.env) : undefined
-  const tilde = (v) => (/^~([\\/]|$)/.test(v) ? join(ctx.home, v.slice(2)) : v)
-  const baseDir = { home: ctx.home, cwd: ctx.cwd, abs: '', appSupport: ctx.dirs && ctx.dirs.appSupport, localAppData: ctx.dirs && ctx.dirs.localAppData }[l.base]
-  if (baseDir == null) return []
-  const top = isSet(over) ? tilde(over) : l.dir ? join(baseDir, l.dir) : baseDir
-  const at = l.path ? (top === '' ? l.path : join(top, l.path)) : top
-  if (!l.glob) return [at]
-  const re = new RegExp(`^${l.glob.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`)
-  return ctx.readdir(at).filter((n) => re.test(n)).sort().map((n) => join(at, n))
-}
+export { resolveLoc } // the one resolver, shared with the marker undo (src/off/loc.mjs)
 
 /** Every value under a key path ('*' = any key or index): [{ keys, value }] for the set ones. */
 function walk(data, keys, at = []) {

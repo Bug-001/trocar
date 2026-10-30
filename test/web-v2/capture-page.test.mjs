@@ -10,6 +10,7 @@ import { captureVerdict } from '../../src/web/v2/core/capture-verdict.mjs'
 import { controlHtml, controlFor, wireHarnessControls } from '../../src/web/v2/core/harness-switch.mjs'
 import { ALIASES, harnessKey } from '../../src/web/v2/core/chips.mjs'
 import { COMMANDS, CHANGE_REMOVAL, RESTART_CODES, SWITCH_WORD, ERR_WHERE } from '../../src/web/v2/labels/capture.mjs'
+import { redactUrlCredentials } from '../../src/web/v2/core/sensitive.mjs'
 
 const SPEC = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
 const C3 = SPEC.slice(SPEC.indexOf('### C.3'))
@@ -132,6 +133,24 @@ test('#8 / D49: proxy credentials are ***@ in the page and its copied diagnostic
   for (const bad of ['alice:pw', 'PlantedVpnName', 'PlantedProductName']) assert.equal(html.includes(bad), false, bad)
 })
 
+// the userinfo a proxy URL can carry: [userinfo as written, the parts that must not show]
+const USERINFO = [['alice:pw-41f9', ['alice', 'pw-41f9']], ['alice', ['alice']], [':pw-41f9', ['pw-41f9']], ['alice:p@ss-41f9', ['alice', 'p@ss', 'ss-41f9']],
+  ['claude-code:settings:pw-41f9', ['claude-code', 'pw-41f9']], ['al%40ice:p%3Aw-41f9', ['al%40ice', 'p%3Aw-41f9']], ['alice:', ['alice']],
+  ["alice:it's!$&()*+,;=-41f9", ['alice', "it's", '-41f9']]]
+const AROUND = [(u) => u, (u) => `upstream ${u} (adopted)`, (u) => JSON.stringify({ url: u }), (u) => `${u}\n${u}`, (u) => `${u} ${u}`]
+
+test('#8: the page hides every userinfo form a proxy URL can carry and keeps the host; text that holds no userinfo passes as it is', () => {
+  for (const scheme of ['http', 'https', 'socks5', 'socks5h', 'HTTP']) for (const [ui, secret] of USERINFO) for (const tail of [':8080', ':8080/x', '']) for (const around of AROUND) {
+    const text = around(`${scheme}://${ui}@proxy.example${tail}`)
+    const out = redactUrlCredentials(text)
+    for (const s of secret) assert.equal(out.includes(s), false, `${text} → ${out}`)
+    assert.equal(out, around(`${scheme}://***@proxy.example${tail}`), text)
+  }
+  for (const plain of ['http://proxy.example:8080', 'http://proxy.example/a@b', 'http://proxy.example?x=a@b', 'http://proxy.example#a@b',
+    'http://proxy.example a@b', 'mailto:alice@example.com', 'mail alice@example.com', JSON.stringify({ a: 'http://proxy.example', b: 'x@y' }), 'http://***@proxy.example'])
+    assert.equal(redactUrlCredentials(plain), plain)
+})
+
 test('#9 / R14: the removal sentence is said once in an agent row\'s expansion and never in the machine-wide changes block', () => {
   const d = doc({ hs: { codex: {}, opencode: {} } })
   d.changed = [
@@ -227,4 +246,21 @@ test('1.9 表空: no empty-table line while the install manifest cannot be read'
   const d = doc({ hs: {} })
   d.errors = [{ where: ERR_WHERE.manifest, reason: 'x' }]
   assert.equal(/class="capfoot"/.test(page(d, CONTROL)), false)
+})
+
+// 1.9 §每个 agent 一行 第 3 条: a negative-cache condition is worded by its record's cause — on its agent's row and, with no agent, on the
+// service row — so an upstream's certificate is never said to be trocar's refused one
+test('1.9: a negative-cache condition is worded by its cause, on the agent row and on the service row', async () => {
+  const { agentVerdicts } = await import('../../src/web/v2/core/capture-verdict.mjs')
+  const { failureWord } = await import('../../src/cli/words.mjs')
+  const { esc } = await import('../../src/web/v2/core/fmt.mjs')
+  const word = (cause) => failureWord('engine', 'negative-cache', '', cause)
+  for (const [cause, other] of [['upstream-cert', 'client-rejected-leaf'], ['upstream-handshake', 'client-rejected-leaf'], ['client-rejected-leaf', 'upstream-cert']]) {
+    const k = { kind: 'negative-cache', where: 'engine', code: 'negative-cache', cause, pid: 4121, host: 'api.example.com', since: T }
+    const r = agentVerdicts(doc({ extra: { critical: [{ ...k, harness: 'codex' }] } })).find((x) => x.harness === harnessKey('codex'))
+    assert.ok(r.text.includes(word(cause)) && !r.text.includes(word(other)), `${cause}: ${r.text}`)
+    assert.equal(r.restart, false)
+    const html = page(doc({ extra: { critical: [k] } }), CONTROL)
+    assert.ok(html.includes(esc(word(cause))) && !html.includes(esc(word(other))), `${cause}: the service row`)
+  }
 })

@@ -1,4 +1,4 @@
-// src/paths.mjs — the ONE place default capture/serve paths are decided.
+// src/paths.mjs — the ONE place default capture and read paths are decided.
 //
 // Why this module exists (first-run dead end): the capture writers and the board
 // reader each computed their own default, inline, and they disagreed —
@@ -8,7 +8,7 @@
 // So the documented happy path (arrange capture, then serve) showed "No sessions captured yet" while
 // the user's capture sat on disk one directory away, with nothing in the UI to explain why. Every new
 // user hit it. Inline defaults cannot be checked against each other; centralised ones can, and
-// test/paths.test.mjs now pins the invariant: whatever a capture writer writes, the default board reads.
+// test/paths.test.mjs now pins the invariant: whatever a capture writer writes, the default reader (`trocar doctor`) reads.
 //
 // The default source is a DIRECTORY, not a file: the server supports directory sources, and that is
 // what lets Claude Code / Codex / OpenCode sessions appear side by side on one board. A single-file
@@ -58,7 +58,7 @@ export function caDir({ home = trocarHome(), legacyCa = path.join(os.homedir(), 
   return fresh;
 }
 
-// what `trocar serve` reads when the user gives no --source: the roots that EXIST. Listing an absent
+// what `trocar doctor` reads when the user gives no --source: the roots that EXIST. Listing an absent
 // root would make the loader throw "capture source unreadable" on a clean machine, turning "nothing
 // captured yet" into "something is broken", so absence is filtered here.
 // 2026-10-06 (4.4:129): the collector directory is the second root, filtered the same way — a machine

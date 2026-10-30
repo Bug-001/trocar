@@ -41,7 +41,7 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } =
     for (const h of shown) {
       const x = doc.harnesses[h]
       const pid = (x.processes || []).find((p) => p.captured === false) || null
-      rows.push([h, CAPTURED(x), x.captured === true ? notSeenYet(x) : x.captured === null ? ((x.why || []).length ? openText(x, h) : notSeenYet(x) || openText(x, h)) : noteText(x.reason, { harness: h, pid: pid && pid.pid })])
+      rows.push([h, CAPTURED(x), x.captured === true ? notSeenYet(x) : x.captured === null ? ((x.why || []).length ? openText(x, h) : notSeenYet(x) || openText(x, h)) : noteText(x.reason, { harness: h, pid: pid && pid.pid, cause: pid && pid.cause })])
     }
     lines.push(...columns(rows, { width: WIDTH - 2 }).map((l) => `  ${l}`))
   }

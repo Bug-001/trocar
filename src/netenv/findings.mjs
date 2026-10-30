@@ -93,6 +93,15 @@ function notRoutedOf(c) {
 }
 
 /** The catalogue (附录 B). `applies` is `diagnose`'s business; each entry says what it is. `cls` is the class, or a function of the context where it depends (`proxy-changed`). */
+// a negative-cache finding's words by the cause the engine recorded for this harness's process (any cause else: trocar's certificate refused)
+const negCause = (c) => { const n = ((c.hf && c.hf.negatives) || []).find((x) => c.pid == null || x.pid === c.pid); return n && Object.hasOwn(NEG, n.cause) ? n.cause : 'client-rejected-leaf' }
+const NEG = {
+  'client-rejected-leaf': { what: (c, hp) => `${hp} refused trocar's certificate; it is forwarded only.`, why: 'Certificates are read when a program starts.', commands: (c) => [...restartSteps(c), trocar(c, `trocar status ${c.h}`)] },
+  'upstream-cert': { what: (c, hp) => `${hp} does not trust a host's certificate; it is forwarded only.`, why: 'trocar checks the host with the program\'s own trust, and that check failed; a restart does not change it.',
+    commands: (c) => [gui(`If that host uses your own CA, add it to ${c.h}'s certificate settings`), trocar(c, 'trocar install'), trocar(c, `trocar status ${c.h}`)] },
+  'upstream-handshake': { what: (c, hp) => `The handshake between ${hp} and a host did not finish; it is forwarded only.`, why: 'The host, or a proxy on the way, closed or did not answer the handshake; a restart does not change it.',
+    commands: (c) => [trocar(c, 'trocar status --failures')] },
+}
 export const FINDINGS = {
   'desired-off': { cls: 'expected', trocarFirst: true, what: (c) => `Capture is off for ${c.h}.`, why: () => 'trocar is not on its path: it connects directly, or through your own proxy.', commands: (c) => [trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
   'daemon-not-running': { cls: 'problem', trocarFirst: true, what: () => 'trocar is not running in the background, so nothing is captured.', why: () => 'Without it there is no engine, and new connections go straight out.', commands: (c) => [trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
@@ -101,7 +110,8 @@ export const FINDINGS = {
   'link-missing': { cls: 'problem', trocarFirst: true, what: () => 'Capture is on, but trocar is not attached, so nothing is captured.', why: () => 'New connections go straight out.', commands: (c) => [trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
   'entry-missing': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s setting that points at trocar is gone.`, why: () => 'It was removed, or it was never written.', commands: (c) => installFix(c) || [trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
   'entry-changed': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s setting that points at trocar holds something else now.`, why: () => 'You, or another program, changed what trocar wrote.', commands: (c) => installFix(c) || [trocar(c, `trocar off ${c.h}`), trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
-  'negative-cache': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}${c.pid ? ` (pid ${c.pid})` : ''} refused trocar's certificate; it is forwarded only.`, why: () => 'Certificates are read when a program starts.', commands: (c) => [...restartSteps(c), trocar(c, `trocar status ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
+  // by the engine's cause (1.6 附录 B): only a refused trocar certificate is fixed by a restart
+  'negative-cache': { cls: 'problem', trocarFirst: true, what: (c) => NEG[negCause(c)].what(c, `${c.h}${c.pid ? ` (pid ${c.pid})` : ''}`), why: (c) => NEG[negCause(c)].why, commands: (c) => NEG[negCause(c)].commands(c), verify: (c) => `trocar status ${c.h}` },
   // 4.11 P11 status 4–5: the door has not seen this life and history cannot tell — a note with no restart step (1.6 附录 B, §2 判词)
   'not-seen': { cls: 'note', trocarFirst: false, what: (c) => `trocar has not seen ${c.pid ? `pid ${c.pid}` : c.h} use its proxy yet; its next connection is judged.`, why: () => 'It started before trocar kept a full record of when capture was on.', commands: () => [], verify: (c) => `trocar status ${c.h}` },
   'not-routed': { cls: 'problem', trocarFirst: false, what: (c) => `New connections from ${c.h} do not go through trocar.`, why: (c) => notRoutedOf(c).why, commands: (c) => notRoutedOf(c).commands, verify: (c) => `trocar status ${c.h}` },

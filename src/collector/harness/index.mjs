@@ -93,14 +93,14 @@ function proxyModeProblems(pm) {
     if (r.select !== undefined) { if (!obj(r.select)) say('shape', `${at}.select is not an object`); else loc(r.select.dir, `${at}.select.dir`, true) }
     if (r.kind === 'json-key' && r.file === undefined && r.select === undefined) say('shape', `${at} is json-key without file or select`)
     if (r.kind === 'dotenv-block' && r.file === undefined) say('shape', `${at} is dotenv-block without file`)
-    if (r.kind === 'plugin-file' && (r.dir === undefined || !nonEmpty(r.template))) say('shape', `${at} is plugin-file without dir and template`)
+    if (r.kind === 'plugin-file' && (r.dir === undefined || !nonEmpty(r.name) || !nonEmpty(r.template))) say('shape', `${at} is plugin-file without dir, name and template`)
     spellings(r.proxyKeys, `${at}.proxyKeys`)
     spellings(r.noProxyKeys, `${at}.noProxyKeys`)
   }
   for (const [id, c] of Object.entries(certs)) {
     const at = `certs.${id}`
     oneOf(c.kind, PM.cert, `${at}.kind`)
-    if (c.kind === 'config-key') { loc(c.file, `${at}.file`, true); oneOf(c.format, PM.format, `${at}.format`); oneOf(c.semantics, PM.semantics, `${at}.semantics`); cond(c.when, `${at}.when`) }
+    if (c.kind === 'config-key') { loc(c.file, `${at}.file`, true); oneOf(c.format, PM.format, `${at}.format`); oneOf(c.semantics, PM.semantics, `${at}.semantics`); cond(c.when, `${at}.when`); if (c.merges !== undefined) { if (c.semantics !== 'replace' || !Array.isArray(c.merges)) say('shape', `${at}.merges is a list, on a replace key only`); else c.merges.forEach((s, i) => src(s, `${at}.merges[${i}]`)) } }
     if (c.kind === 'wrapper') { loc(c.binDir, `${at}.binDir`, true); oneOf(c.layout, PM.layout, `${at}.layout`); if (!nonEmpty(c.command) || !nonEmpty(c.certVar)) say('shape', `${at} needs command and certVar`) }
     if (c.kind === 'plugin') { loc(c.dir, `${at}.dir`, true); if (!(Object.hasOwn(TEMPLATES, String(c.template)) && TEMPLATES[c.template].addsRoot)) say('shape', `${at}.template names no hook that adds the trocar root in process (P11 rule 4)`); if (c.loader !== undefined) { if (!obj(c.loader)) say('shape', `${at}.loader is not an object`); else { loc(c.loader.file, `${at}.loader.file`, true); if (c.loader.format !== 'yaml') say('kind', `${at}.loader.format is ${JSON.stringify(c.loader.format)}, not yaml (the one format with a row edit)`) } } }
   }

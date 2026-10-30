@@ -70,7 +70,11 @@ export const FAILURE_WORDS = Object.freeze({
   'engine-error': 'the engine failed',
   'flow-write-failed': 'a connection log line could not be written',
   'trust-store-error': "the engine's certificate store failed",
-  'negative-cache': "a program refused trocar's certificate, so its traffic to that host is passed on unread",
+  // a negative-cache record names its cause; a group folds every cause, so the bare code's word names none
+  'negative-cache': "a TLS failure made trocar stop decrypting a program's traffic to one host, so that traffic is passed on unread",
+  'negative-cache/client-rejected-leaf': "a program refused trocar's certificate, so its traffic to that host is passed on unread",
+  'negative-cache/upstream-cert': "a host's certificate did not verify with the program's own trust, so its traffic to that host is passed on unread",
+  'negative-cache/upstream-handshake': "the handshake with a host did not finish, so a program's traffic to that host is passed on unread",
   'trust-rejected': "a program refused trocar's certificate under TLS, so that host is not captured",
   'client-rejected-leaf': "a connection whose program refused trocar's certificate",
   'upstream-slow': 'the upstream was slow',
@@ -83,7 +87,7 @@ export const FAILURE_WORDS = Object.freeze({
   'upstream-header-ignored': 'a routing header from a program that should not send one was ignored',
   untrusted: 'a connection from a program that does not trust trocar yet; passed on unread',
   untracked: 'a connection from a program trocar does not follow; passed on unread',
-  'upstream-cert': "the upstream's certificate could not be read",
+  'upstream-cert': "the upstream's certificate did not verify with the program's own trust",
   'upstream-handshake': 'the handshake with the upstream did not finish',
   h2: 'an HTTP/2 connection could not be decrypted',
   'malformed-hello': "a program's handshake message could not be read",
@@ -160,10 +164,10 @@ export const FAILURE_WORDS = Object.freeze({
 })
 
 /** The sentence of a failure `code` (under `where`, when given), or null when neither this table nor statusReason knows it (an errno, an unknown code). */
-export function failureWord(where, code, harness = '') {
+export function failureWord(where, code, harness = '', cause = null) {
   if (!code) return null
   const k = (key) => (Object.hasOwn(FAILURE_WORDS, key) ? FAILURE_WORDS[key] : null)
-  const r = (where && k(`${where}/${code}`)) || k(code)
+  const r = (cause && k(`${code}/${cause}`)) || (where && k(`${where}/${code}`)) || k(code)
   if (r) return r
   const s = statusReason(code, { harness })
   return (s && s.text) || null
@@ -198,11 +202,11 @@ const HARNESS_OWN = new Set(['settings-ignored-managed-by-host', 'settings-ignor
 /** The reason an agent is not captured (RFC 1.6 §3.5 NOTE column, D38): the one catalog, a clause for every code of
  *  src/health/codes.mjs STATUS_REASONS. → { text, fix, command } — `text` what is wrong ('' for `desired-off`), `fix` what to do in
  *  words or null, `command` the trocar command that fixes it or null — or null for a code with no clause (the caller says the reason
- *  is unknown). `harness` and `pid` are filled in where the clause names them. `trocar status` prints statusNote (the three on one
+ *  is unknown). `harness` and `pid` are filled in where the clause names them; `cause` (a negative-cache process's) picks its clause. `trocar status` prints statusNote (the three on one
  *  line); the board says the text and the fix and puts the command in its technical details (1.9), so the two faces word one reason
  *  one way. */
-export function statusReason(code, { harness = '', pid = null } = {}) {
-  const h = harness || 'it', who = pid != null ? `pid ${pid}` : h
+export function statusReason(code, { harness = '', pid = null, cause = null } = {}) {
+  const h = harness || 'it', who = pid != null ? `pid ${pid}` : h, hp = `${h}${pid != null ? ` (pid ${pid})` : ''}`
   const M = {
     'desired-off': [''],
     'config-after-start': [`${who} started before capture was on`, `restart ${h}`],
@@ -211,7 +215,10 @@ export function statusReason(code, { harness = '', pid = null } = {}) {
     'no-marker': [`${who} started before capture was on`, `restart ${h}`],
     'kimi-not-via-shim': [`${h} did not start through the program trocar installed`],
     'not-seen': [`trocar has not seen ${who} use its proxy yet; its next connection is judged`], // no restart part (1.6 附录 B)
-    'negative-cache': [`${h}${pid != null ? ` (pid ${pid})` : ''} refused trocar's certificate`, 'restart it'],
+    // by the engine's cause (1.6 附录 B): a restart fixes only a refused trocar certificate, not an upstream's certificate or handshake
+    'negative-cache': cause === 'upstream-cert' ? [`${hp} does not trust a host's certificate, so trocar passes that traffic on unread`]
+      : cause === 'upstream-handshake' ? [`the handshake between ${hp} and a host did not finish, so trocar passes that traffic on unread`]
+        : [`${hp} refused trocar's certificate`, 'restart it'],
     'daemon-not-running': ['trocar is not running in the background'],
     'daemon-not-responding': ['trocar runs in the background but does not answer'],
     'helper-missing': ["trocar's capture helper is missing or is the wrong version"],

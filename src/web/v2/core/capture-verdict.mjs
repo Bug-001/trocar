@@ -8,7 +8,7 @@ import { fmtWhen, has } from './fmt.mjs'
 import { harnessKey, harnessName, HARNESS_ORDER } from './chips.mjs'
 import { RESTART_CODES, UNKNOWN_REASON } from '../labels/capture.mjs'
 import { HEALTH_WORDS, HEALTH_READ } from '../labels/common.mjs'
-import { failureBrief, statusReason } from '../../../cli/words.mjs'
+import { failureBrief, failureWord, statusReason } from '../../../cli/words.mjs'
 import { startPoll, INTERVAL } from './poll.mjs'
 
 export const CAPH_MS = INTERVAL.status // the poll period of the pages that show this card while visible (4.4 §live-poll: `status` is the costliest read)
@@ -141,7 +141,7 @@ export function agentVerdicts(doc, ov = null) {
       const mine = [...r.conditions].sort((a, b) => rank(a) - rank(b))
       const lead = mine[0], code = codeOf(lead)
       let text, restart = false, reason = null
-      if (lead.kind === 'negative-cache') text = `not capturing: one of its processes refused trocar's certificate`
+      if (lead.kind === 'negative-cache') text = `not capturing: ${failureWord(lead.where, 'negative-cache', '', lead.cause)}` // the record's cause: trocar's certificate refused, or the upstream's
       else if (RESTART_CODES.includes(code)) { text = `restart ${name} to capture it`; restart = true }
       if (lead.kind !== 'negative-cache') reason = reasonOf(code, { harness: r.harness, own: lead.text || lead.reason })
       if (!text) text = `not capturing: ${reason.why}`

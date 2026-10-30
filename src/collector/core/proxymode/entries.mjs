@@ -114,7 +114,7 @@ const KINDS = {
   'plugin-file': (ctx, door) => {
     const dir = resolveLoc(ctx.route.dir, ctx)[0]
     if (!dir) return notRouted('no-path')
-    return writeOwned(ctx, (ctx.join || path.join)(dir, ctx.route.name || 'trocar.js'), 'plugin', ctx.render(ctx.route.template, { door, harness: ctx.harness }))
+    return writeOwned(ctx, (ctx.join || path.join)(dir, ctx.route.name), 'plugin', ctx.render(ctx.route.template, { door, harness: ctx.harness }))
   },
   'switch-file': (ctx, door) => writeOwned(ctx, (ctx.join || path.join)(ctx.dir, 'switch', ctx.harness), 'switch', door),
 }
