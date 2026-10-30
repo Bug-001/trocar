@@ -6,7 +6,7 @@
 // Invariant 4: a body that has not arrived is never a blank <pre> (a blank reads as "the model saw nothing here").
 //
 // Fidelity follows the PROOF RULE (2.3 §保真标): a block is 逐字 only when the evidence says so — a `text_ref` plus a default /
-// `verbatim` faithfulness (tools blocks additionally need `verbatim:true`). Nothing is ever assumed verbatim without evidence.
+// `verbatim` faithfulness (`ff.faithfulness` on the wire, model.mjs boardDef), tools blocks too. Nothing is assumed verbatim without evidence.
 import { esc, kf } from '../core/fmt.mjs'
 import * as W from '../labels/replay.mjs'
 import { DISPLAY_CLIP, cellOf, cellBodyHtml, modeOf, bodyCache, hasInline, isAddressed, inlineText, loadBody, isRetryable } from './cell.mjs'

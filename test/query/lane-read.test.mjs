@@ -497,3 +497,24 @@ test('3.5 定义 name: every tool_use definition of a lane answer carries the na
     }
   }
 })
+
+// 2.3 §保真标 · 3.5 §会话读: a tool definition an older capture kept only as metadata (no description text, no schema) goes out with
+// ff.faithfulness 'metadata', so no board can prove it verbatim; a tool kept whole does not
+test('lane: an older capture\'s metadata-only tool definition says ff.faithfulness metadata on the wire', async () => {
+  const home = homeOf('trocar-lane-v0tools-'), h = SEVEN.find((x) => x.harness === 'cc'), sid = 'v0tools-4a1b-9c2d-000000000001'
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
+  const body = JSON.stringify({ model: 'mock-model', max_tokens: 64, tools: [{ name: 'OldTool', input_schema_props: ['command'], description_chars: 812 },
+    { name: 'NewTool', description: 'Runs one command', input_schema: { type: 'object', properties: { command: { type: 'string' } } } }],
+  messages: [{ role: 'user', content: 'hi' }] })
+  const resp = { id: 'msg_1', model: 'mock-model', stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 9, output_tokens: 2 } }
+  fs.writeFileSync(path.join(home, 'raw', '20261022T100000Z.ndjson'), JSON.stringify({ ts: '2026-10-22T10:00:00.000Z', endpoint: h.path.split('?')[0], method: 'POST',
+    req_headers: { host: h.host, ...h.headers(sid) }, req_body: body, resp: { status: 200, kind: 'json', body: resp }, id: 'req_1', ts_request: '2026-10-22T10:00:00.000Z',
+    is_llm_call: true, capture: 'transparent', host: h.host, traffic_class: 'llm', proc: { pid: 1, exe: `/x/${h.agent}`, agent: h.agent } }) + '\n')
+  const { sessions } = await q('sessions', home, {})
+  const id = sessions[0].session_id, { lanes } = await q('session', home, { id })
+  const tail = await q('lane', home, { id, lane: lanes[0].lane })
+  const tool = (n) => tail.defs.find((d) => d.sec === 'tools' && d.name === n)
+  assert.ok(tool('OldTool') && tool('NewTool'), JSON.stringify(tail.defs.map((d) => [d.sec, d.name])))
+  assert.equal(tool('OldTool').ff.faithfulness, 'metadata')
+  assert.notEqual(tool('NewTool').ff.faithfulness, 'metadata')
+})
