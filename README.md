@@ -234,7 +234,9 @@ holds the detail):
 Reading the records across sessions is `trocar query <name>` — the one core that reads data, of which
 the board is the HTTP shell (D59); there is no separate ETL step and no database to load. Both go through the
 daemon's query worker, which stays warm and keeps the segment index current as it captures, so a query about a
-session you are looking at answers in milliseconds; the board's answers come gzipped. The worker stays warm while
+session you are looking at answers in milliseconds; the board's answers come gzipped. The board's session list opens at once even when the worker is not running: the worker keeps its last answer for that list
+on disk, the daemon answers from it while the worker works out a fresh one, and the page says how old the list is and that it is
+being refreshed, then swaps in the fresh list without a reload. The worker stays warm while
 someone asks (an open board's look for new calls is answered from files and does not wake it) and leaves two minutes after the last query, newly captured model
 call or piece of background reading, giving its memory back; the next query starts a new one. So a first read longer
 than two minutes is finished, not cut off and started over, and a stop or crash in the middle of one loses at most its

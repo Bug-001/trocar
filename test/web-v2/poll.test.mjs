@@ -183,3 +183,19 @@ for (const base of new Set(Object.values(INTERVAL))) {
       }
   })
 }
+
+// 1.8 §数据与刷新 · 4.4 live-poll `sessions`: an answer that is the stored one (`pending`) brings the next timer read in at `soon`;
+// any other answer leaves the timer at `base`
+test('startPoll soon: after a pending answer the next timer read comes at soon; after a plain one, at base', async (t) => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'] }); t.after(() => mock.timers.reset())
+  const base = INTERVAL.sessions, soon = INTERVAL.session
+  for (const answers of [[{ pending: true }, {}, {}], [{}, { pending: true }, {}]]) {
+    const w = world((n) => answers[n - 1] || {})
+    const p = startPoll({ run: w.run, base, soon, doc: w.doc })
+    await w.settle()
+    while (w.reads.length < answers.length) { mock.timers.tick(50); await w.settle() }
+    for (let i = 1; i < answers.length; i++)
+      assert.equal(w.reads[i] - w.reads[i - 1], answers[i - 1].pending ? soon : base, `read ${i + 1} after ${JSON.stringify(answers[i - 1])}`)
+    p.stop()
+  }
+})

@@ -28,6 +28,8 @@ export const CAP_NOT_ALL_TIP = 'See Storage for each file'
 export const SESSION_LIST = 'The session list' // what a failed read could not read (1.5 K-29: + the cause class, never the reason)
 export const RETRY = 'Retry'
 export const capOldList = (t) => `Below is the list as read at ${t}`
+// the list on screen is the last stored answer while trocar makes a fresh one; `ago` is relTime's words
+export const capStored = (ago) => `Updated ${ago} · refreshing`
 
 // ── the table header ─────────────────────────────────────────────────────────────────────────────────────────────────
 export const COL_SESSION = 'Session'
@@ -60,7 +62,8 @@ export const PROBE_ONLY = 'token counts only'
 export const PROBE_ONLY_TIP = 'This session has only token count requests (no reply, no charge) and no model calls'
 
 // ── the states that stand in for the table (words here; the matrix's order is 1.5's) ────────────────────────────────
-export const LOADING = 'Loading…'
+// no list yet and none stored: the worker is building it from the index (first run, or the index was rebuilt)
+export const LOADING = 'Reading the session list from the capture index. The first read after the index changes can take a few seconds.'
 export const NO_SESSIONS = 'No sessions yet'
 export const CAPTURING_HINT = 'Capture is on. Run an agent once and its session shows up here'
 export const AS_OF = 'as of'

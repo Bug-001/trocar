@@ -51,17 +51,22 @@ const projectName = (s) => (s.project_path ? String(s.project_path).split('/').f
 export function flattenSessions(data) {
   return ((data && data.sessions) || []).map((s) => ({ ...s, project_name: s.project_slug === UNRESOLVED ? '' : projectName(s), project_dir: s.project_slug === UNRESOLVED ? '' : (s.project_path || '') }))
 }
-// every page of `sessions` (C.5: paged, `next` → `after` until null). → {ok:true, data:{sessions, errors, as_of}} or the first
-// failed read as it came. The pages are one list, so a session is never missing because it sat past page one.
+// every page of `sessions` (C.5: paged, `next` → `after` until null). → {ok:true, data:{sessions, errors, as_of, stored}} or the
+// first failed read as it came. The pages are one list, so a session is never missing because it sat past page one. A page
+// may be the daemon's stored answer (4.4 §存下的答案): the list is stored when any page is, as of the oldest `stored.at`; pages
+// answered at two moments may overlap at their boundary, so a session is kept once, as first seen (1.8 §数据与刷新).
 export async function loadSessions(api, { limit = 500 } = {}) {
-  const sessions = [], errors = []
-  let after = null, as_of = null
+  const sessions = [], errors = [], seen = new Set()
+  let after = null, as_of = null, stored = null
   for (;;) {
     const r = await api.get('sessions', { limit, after })
     if (!r || !r.ok) return r || { ok: false, error: 'no answer' }
     const d = r.data || {}
-    sessions.push(...(d.sessions || [])); errors.push(...(d.errors || [])); as_of = as_of || d.as_of || null
-    if (d.next == null || d.next === after) return { ok: true, data: { sessions, errors, as_of } }
+    for (const s of d.sessions || []) { const k = sessionKey(s); if (!seen.has(k)) { seen.add(k); sessions.push(s) } }
+    errors.push(...(d.errors || [])); as_of = as_of || d.as_of || null
+    const at = d.stored && d.stored.at
+    if (at && (stored == null || Date.parse(at) < Date.parse(stored))) stored = at
+    if (d.next == null || d.next === after) return { ok: true, data: { sessions, errors, as_of, stored } }
     after = d.next
   }
 }
@@ -140,10 +145,12 @@ export function projectOptions(list, selected) {
 }
 
 // ── the caption row and its 技术细节: the document's errors[] (1.8 §说明行: N = the entries whose level is not note — a
-// note only says a read was slow; every entry, notes too, is listed in 技术细节 as where · reason) ──
-export function captionFacts(errors) {
+// note only says a read was slow; every entry, notes too, is listed in 技术细节 as where · reason) and its `stored` (the list
+// is the stored answer while a fresh one is being made: 「更新于 … · 正在刷新」) ──
+export function captionFacts(errors, stored = null) {
   const es = (errors || []).filter(Boolean), n = es.filter((e) => e.level !== 'note').length
-  return { facts: n ? [{ kind: 'not-all', n }] : [], tech: es.map((e) => `${e.where ?? ''} · ${e.reason ?? ''}`) }
+  const facts = [...(n ? [{ kind: 'not-all', n }] : []), ...(stored ? [{ kind: 'stored', at: stored }] : [])]
+  return { facts, tech: es.map((e) => `${e.where ?? ''} · ${e.reason ?? ''}`) }
 }
 
 // ── the row ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -171,7 +178,7 @@ export function rowModel(s, now) {
 const ROW_FIELDS = ['project_slug', 'session_id', 'title', 'title_source', 'harnesses', 'logged', 'harness', 'harness_inferred', 'session_synthesized', 'entrypoint', 'project_name', 'project_dir', 'project_path', 'calls', 'probes', 'has_subagent', 'last_ts']
 export function listSignature(data, error) {
   const ss = flattenSessions(data).map((s) => ROW_FIELDS.map((k) => s[k]).join('|')).join(';')
-  return `${error || ''}#${ss}#${JSON.stringify((data && data.errors) || null)}`
+  return `${error || ''}#${ss}#${JSON.stringify((data && data.errors) || null)}#${(data && data.stored) || ''}`
 }
 // the list's scroll policy: what a new paint does. prevSig = the previous paint's filterSignature (null = a new list);
 // the decision follows the highlighted session's KEY, not its index — a poll that re-sorts the rows above the highlight
