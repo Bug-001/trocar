@@ -351,6 +351,7 @@ export const viewNameTip = (name) => `View the content of ${name}`
 export const jumpStepTip = (at) => `Jump to ${at}`
 // the capability's two tiers, by 2.3's proof rule
 export const CAP_VERBATIM = 'Tool definitions were captured verbatim; expand the tool block in the context window to see the full schema'
+export const TOOL_METADATA_ONLY = 'Metadata only: the full JSON schema (parameter types / required / enums / nesting) and the description text were not captured. The model received the full schema; this is a capture boundary, not a display clip.'
 export const CAP_METADATA = 'Metadata only: name, parameter count, description length; not the verbatim schema'
 export const CAP_MIXED = 'These tool definitions are not all proven to match the wire; each tool block in the context window carries its own mark'
 export const capToolRow = (name, chars) => `${name} · ${chars} characters`
