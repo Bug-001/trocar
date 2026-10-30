@@ -43,19 +43,19 @@ import { isModelOs } from '../collector/model-install.mjs' // macOS / Windows ru
  *  table) — never read as "nobody". */
 async function captureOnline(w, m, notes = []) {
   let st = null
-  try { st = readStateFile(w.stateF, { fs: w.fs, installed: harnessIdsOf(m, w.known), now: w.clock() }).state } catch { st = null }
+  try { st = readStateFile(w.stateF, { fs: w.fs, installed: harnessIdsOf(m), now: w.clock() }).state } catch { st = null }
   const on = [...new Set([...Object.entries((st && st.harnesses) || {}).filter(([, v]) => v && v.desired === 'on').map(([h]) => h),
-    ...[...((m && m.entries) || []), ...((m && m.files) || [])].filter((x) => x.phase === 'on').map((x) => x.harness)])].filter((h) => w.known.includes(h)).sort() // this copy's table only (4.11 §3 ㉓)
+    ...[...((m && m.entries) || []), ...((m && m.files) || [])].filter((x) => x.phase === 'on' && typeof x.harness === 'string').map((x) => x.harness)])].sort()
   let holders = null, unknown = null
   try {
     if (!w.socketPath) throw Object.assign(new Error('no endpoint'), { code: 'ENOENT' })
     const r = await w.request({ socketPath: w.socketPath, method: 'GET', path: '/holders', timeoutMs: 2000 })
-    if (r && Array.isArray(r.holders)) holders = r.holders.filter((x) => w.known.includes(x && x.harness)); else unknown = 'the daemon does not know its holders yet'
+    if (r && Array.isArray(r.holders)) holders = r.holders; else unknown = 'the daemon does not know its holders yet'
   } catch (e) {
     if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) { // the daemon is down: the CLI judges, by the same rule
       const ds = readDoorSeen({ dir: w.dir, fs: w.fs }) // the door's durable rows (P12); unreadable (rows null): every live process of h holds
       if (ds.rows == null) notes.push(`${ds.error}, so every running program of a harness that was on is counted as still connected`)
-      try { holders = holdersOf({ manifest: m, procs: await w.procs(), doorSeen: ds.rows, agentList: readAgentList({ home: w.home, fs: w.fs }) }).filter((x) => w.known.includes(x.harness)) } catch (t) { unknown = `the process table could not be read (${errText(t)})` }
+      try { holders = holdersOf({ manifest: m, procs: await w.procs(), doorSeen: ds.rows, agentList: readAgentList({ home: w.home, fs: w.fs }) }) } catch (t) { unknown = `the process table could not be read (${errText(t)})` }
     } else unknown = `a daemon holds the control endpoint but did not answer (${errText(e)})`
   }
   return on.length || unknown || (holders && holders.length) ? { on, holders: holders || [], unknown } : null
@@ -78,11 +78,10 @@ const errText = (e) => String((e && e.message) || e)
 /** What `uninstall --dry-run` would do (and what is printed when a yes is missing), read and written nowhere → the receipt fields. */
 function planUninstall(w, m, purgeData = false) {
   const usable = m && !m.unsupported
-  const ours = (x) => typeof x.harness !== 'string' || w.known.includes(x.harness) // another id's items are not reached (4.11 §3 ㉓)
-  const entries = usable ? m.entries.filter((e) => ours(e) && (e.kind === 'json-key' || e.kind === 'text')) : []
+  const entries = usable ? m.entries.filter((e) => e.kind === 'json-key' || e.kind === 'text') : []
   return {
     changed: entries.map((e) => ({ path: e.path, change: `${e.kind === 'text' ? "trocar's own lines" : (e.keys || []).join('.')} taken out`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
-    removed: [...(usable ? m.files.filter(ours).map((f) => f.path) : []), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)).filter((p) => w.fs.existsSync(p)), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m && !(usable && [...m.entries, ...m.files].some((x) => !ours(x))) ? [manifestPath(w.dir)] : [])],
+    removed: [...(usable ? m.files.map((f) => f.path) : []), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)).filter((p) => w.fs.existsSync(p)), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m ? [manifestPath(w.dir)] : [])],
     kept: purgeData ? [] : keptOf(w.home, w.fs),
     notes: usable || !m ? [] : [`the install manifest is version ${JSON.stringify(m.version)}, which this build does not read: no entry would be touched`],
     autostart: { planned: true },
@@ -108,7 +107,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   }
   const read = () => { try { return { m: readManifest(w.dir, fs), merr: null } } catch (e) { return { m: null, merr: e } } }
   let { m, merr } = read()
-  receipt.harnesses = harnessIdsOf(m, w.known)
+  receipt.harnesses = harnessIdsOf(m)
   // §1.4 / appendix C: the plan itself is a key of the JSON document — every file by its full path and what would happen to it
   const plannedItems = (p) => [...p.changed.map((c) => ({ path: c.path, change: c.change, harness: c.harness ?? null })), ...p.removed.map((x) => ({ path: x, change: 'removed' }))]
   const plan = () => { const p = planUninstall(w, m, purgeData); return Object.assign(receipt, { dry_run: true }, p, { planned: plannedItems(p) }) }
@@ -126,7 +125,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       return { receipt, exit: ok === null ? EXIT.usage : EXIT.incomplete }
     }
   }
-  const tryOff = () => { try { return { r: desiredOff(w, null, harnessIdsOf(m, w.known)), error: null } } catch (e) { return { r: null, error: e } } }
+  const tryOff = () => { try { return { r: desiredOff(w, null, harnessIdsOf(m)), error: null } } catch (e) { return { r: null, error: e } } }
   let early = null, lock = null
   if (fs.existsSync(w.dir)) {
     const model = isModelOs(w.platform)
@@ -141,7 +140,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   const rm = (p) => { sweepTemps(p, fs); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); receipt.removed.push(p) } }
   try {
     ;({ m, merr } = read()) // read AGAIN under the lock: an `on` that held it has written to the manifest since
-    receipt.harnesses = harnessIdsOf(m, w.known)
+    receipt.harnesses = harnessIdsOf(m)
     // CM24: on macOS / Windows uninstall never does off — capture online (a harness on, a holder, or not knowable) is named and nothing changes
     const online = isModelOs(w.platform) && m && !m.unsupported ? await captureOnline(w, m, receipt.notes) : null
     if (online) {
@@ -295,8 +294,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       put({ kind: 'result', outcome: failedRun ? 'failed' : left ? 'left' : 'uninstalled', counts: { entries: (u.results || []).length, left, still_trusting: u.still_trusting.length, notes: noted.length }, reason: failedRun ? `uninstall did not finish: ${receipt.problems[0]}` : left ? `uninstalled, except ${left} item(s) that could not be undone; the install manifest is kept` : `uninstalled: ${(u.results || []).length} trust entr${(u.results || []).length === 1 ? 'y' : 'ies'} undone, ${noted.length} note(s)` })
     }
     if (!blocked) {
-      const others = m && !m.unsupported ? [...m.entries, ...m.files].some((x) => typeof x.harness === 'string' && !w.known.includes(x.harness)) : false // items of ids outside this copy's table were not reached: the manifest stays for them (4.6, 4.11 §3 ㉓)
-      if (m && (left || receipt.kept_bundles.length || others)) { // keep exactly what is left; the next uninstall finds it (4.6: the manifest goes last)
+      if (m && (left || receipt.kept_bundles.length)) { // keep exactly what is left; the next uninstall finds it (4.6: the manifest goes last)
         const files = m.files.filter((f) => f.role !== 'ca-key' && f.role !== 'ca-cert' && (f !== unitFile || unitLeft))
         saveManifest(w.dir, { ...m, install: null, ...(left ? { uninstall_left: receipt.left.map((l) => ({ path: l.path, harness: l.harness ?? null, result: l.result })), uninstalled_at: w.clock().toISOString() } : {}), ...(receipt.kept_bundles.length ? { pending_bundles: true } : {}), planned: [], watched: [], files }, fs)
       } else {

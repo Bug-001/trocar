@@ -416,7 +416,7 @@ test('install / uninstall of plugin-style entries: plugins and the patch row in,
     assert.deepEqual(m.watched.map((w) => [w.harness, w.existed_before]), [['plug', false]])
     fs.mkdirSync(path.join(b.home, '.config', 'plug', 'node_modules', 'sdk'), { recursive: true }) // the agent's first run
     fs.appendFileSync(patch, '- insert: [{ name: mine }]\n') // and the user's own row
-    const r = await uninstallCollector({ home: b.home, env: {}, deps: { harnessIds: ['plug'] }, stop: stopNone })
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
     assert.deepEqual(r.entries.map((e) => [path.basename(e.path), e.result]), [['settings.json', 'restored'], ['patch.yml', 'reverted-not-identical']], 'config keys (step 1) before patch rows (step 4)')
     const order = r.removed.map((p) => path.basename(p))
     assert.ok(order.indexOf('trocar-ca.pem') < order.indexOf('index.js') && order.indexOf('index.js') < order.indexOf('trocar-ca.js'), `step 3 (CA file) before step 4 (row before the files it loads): ${order}`)
@@ -480,7 +480,7 @@ test('uninstall step 2: a combined bundle a live process may have loaded is kept
       { pid: 71, exe: '/bin/git', startedAt: installedAt + 2000, env: new Map([['SSL_CERT_FILE', bundle]]) },
       { pid: 72, exe: '/x/rep', startedAt: installedAt - 60000, env: new Map() },
     ]
-    const r = await uninstallCollector({ home: b.home, env: {}, deps: { harnessIds: ['rep'] }, stop: stopNone, scan: async () => procs, roots })
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => procs, roots })
     assert.deepEqual(r.kept_bundles, [{ path: bundle, harness: 'rep', pids: [70, 71] }], 'started after install, or inherited it; not the one from before')
     assert.deepEqual(fps(), [new X509Certificate(root.certPem).fingerprint256, new X509Certificate(corp.certPem).fingerprint256], 'the same bundle without the trocar CA')
     assert.equal(fs.readFileSync(path.join(b.home, '.rep', '.env'), 'utf8'), 'KEY=sk-secret\n', 'step 1 ran: the entry is out')
@@ -488,7 +488,7 @@ test('uninstall step 2: a combined bundle a live process may have loaded is kept
     assert.deepEqual(r.left, [], 'kept for a live process is not a failure')
     assert.ok(readManifest(b.dir).pending_bundles)
     await assert.rejects(installCollector(base(b, { harnesses: [repHarness(b.dir)], roots })), /kept combined bundles that running agents still use .*; run "trocar uninstall" again once they exit$/)
-    const again = await uninstallCollector({ home: b.home, env: {}, deps: { harnessIds: ['rep'] }, stop: stopNone, scan: async () => [], roots })
+    const again = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => [], roots })
     assert.deepEqual(again.kept_bundles, [])
     assert.ok(!fs.existsSync(path.join(b.dir, 'ca')) && readManifest(b.dir) == null, 'the bundle, the CA dir and the manifest are gone')
   } finally { b.done() }
@@ -513,7 +513,7 @@ test('uninstall step 2: a bundle a live process may hold that cannot be read is 
     const installedAt = Date.parse(readManifest(b.dir).entries[0].installed_at)
     const live = [{ pid: 70, exe: '/x/rep', startedAt: installedAt + 1000, env: new Map() }]
     fs.rmSync(bundle); fs.mkdirSync(bundle) // cannot be read
-    const r = await uninstallCollector({ home: b.home, env: {}, deps: { harnessIds: ['rep'] }, stop: stopNone, scan: async () => live, roots })
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => live, roots })
     assert.deepEqual(r.left, [{ path: bundle, harness: 'rep', result: 'error' }], 'an item that could not be undone')
     assert.deepEqual(r.kept_bundles, [{ path: bundle, harness: 'rep', pids: [70], holds_ca: true, error: 'EISDIR' }], 'kept — and says it still holds the trocar CA, and why')
     assert.ok(!r.notes.some((n) => /without the trocar CA/.test(n)), `no note claims it was rewritten: ${r.notes.join(' | ')}`)
@@ -526,7 +526,7 @@ test('uninstall step 2: a bundle a live process may hold that cannot be read is 
     assert.deepEqual(readManifest(b.dir).uninstall_left, [{ path: bundle, harness: 'rep', result: 'error' }], 'the manifest is kept with what is left')
     // the user fixes the file; the next uninstall rewrites it, nobody holds it any more, and everything goes
     fs.rmSync(bundle, { recursive: true }); fs.writeFileSync(bundle, original)
-    const again = await uninstallCollector({ home: b.home, env: {}, deps: { harnessIds: ['rep'] }, stop: stopNone, scan: async () => [], roots })
+    const again = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => [], roots })
     assert.deepEqual([again.left, again.kept_bundles], [[], []])
     assert.ok(!fs.existsSync(path.join(b.dir, 'ca')) && readManifest(b.dir) == null, 'the bundle, the CA dir and the manifest are gone')
   } finally { b.done() }
@@ -539,7 +539,7 @@ test('uninstall step 2: a bundle a live process may hold that cannot be read is 
     await installCollector(base(c, { harnesses: [repHarness(c.dir)], roots }))
     const bundle = path.join(c.dir, 'ca', 'combined-rep.pem')
     fs.rmSync(bundle); fs.mkdirSync(bundle)
-    const r = await uninstallCollector({ home: c.home, env: {}, deps: { harnessIds: ['rep'] }, stop: stopNone, scan: async () => [], roots })
+    const r = await uninstallCollector({ home: c.home, env: {}, stop: stopNone, scan: async () => [], roots })
     assert.deepEqual([r.left, r.kept_bundles, fs.existsSync(bundle), readManifest(c.dir)], [[], [], false, null])
   } finally { c.done() }
 })
@@ -551,7 +551,7 @@ test('uninstall step 2: a harness that re-reads its entry while running keeps th
     const h = repHarness(b.dir, { rereadsEntry: true, afterUninstall: 'next-connection' })
     await installCollector(base(b, { harnesses: [h], roots: { node: [], osText: '' } }))
     const old = [{ pid: 80, exe: '/x/rep', startedAt: 1, env: new Map() }]
-    const r = await uninstallCollector({ home: b.home, env: {}, deps: { harnessIds: ['rep'] }, stop: stopNone, scan: async () => old, roots: { node: [], osText: '' } })
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => old, roots: { node: [], osText: '' } })
     assert.deepEqual(r.kept_bundles.map((k) => k.pids), [[80]], 'it may have re-read the entry after install')
     assert.deepEqual(r.still_trusting, [{ pid: 80, agent: 'rep', until: 'next-connection' }])
   } finally { b.done() }
@@ -571,7 +571,7 @@ test('uninstall: a replace-semantics entry that cannot be undone keeps its bundl
     const holds = () => fs.readFileSync(bundle, 'utf8').split(/(?=-----BEGIN CERTIFICATE-----)/).some((c) => new X509Certificate(c).fingerprint256 === trocarFp)
     const installed = fs.readFileSync(env)
     fs.rmSync(env); fs.symlinkSync(path.join(b.home, 'elsewhere'), env); fs.writeFileSync(path.join(b.home, 'elsewhere'), 'X=1\n') // the entry became a link: left-link
-    const r = await uninstallCollector({ home: b.home, env: {}, deps: { harnessIds: ['rep'] }, stop: stopNone, scan: async () => [], roots })
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => [], roots })
     assert.deepEqual(r.left.map((l) => [path.basename(l.path), l.harness, l.result]), [['.env', 'rep', 'left-link'], ['combined-rep.pem', 'rep', 'error']], 'the entry, and the bundle that stays because of it')
     assert.deepEqual([fs.existsSync(bundle), holds()], [true, false], 'kept, without the trocar CA: an agent with no bundle has no network at its next start')
     assert.deepEqual(r.kept_bundles, [{ path: bundle, harness: 'rep', pids: [], entry_left: [env] }])
@@ -582,13 +582,13 @@ test('uninstall: a replace-semantics entry that cannot be undone keeps its bundl
     // the entry is fixed and a process that started after install holds the bundle: kept for it, twice
     fs.rmSync(env); fs.writeFileSync(env, installed)
     const live = [{ pid: 70, exe: '/x/rep', startedAt: Date.now() + 5000, env: new Map() }]
-    const first = await uninstallCollector({ home: b.home, env: {}, deps: { harnessIds: ['rep'] }, stop: stopNone, scan: async () => live, roots })
+    const first = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => live, roots })
     assert.deepEqual([first.left, first.kept_bundles], [[], [{ path: bundle, harness: 'rep', pids: [70] }]])
     assert.ok(!fs.existsSync(path.join(b.dir, 'ca', 'trocar-ca.pem')), 'the first uninstall removed the CA certificate')
-    const second = await uninstallCollector({ home: b.home, env: {}, deps: { harnessIds: ['rep'] }, stop: stopNone, scan: async () => live, roots })
+    const second = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => live, roots })
     assert.deepEqual([second.left, second.kept_bundles, holds()], [[], [{ path: bundle, harness: 'rep', pids: [70] }], false], 'the same answer: kept without the trocar CA, no holds_ca, nothing left, exit stays 0')
     assert.ok(second.notes.some((n) => /is kept, without the trocar CA, for running processes that may have loaded it \(pid 70\)/.test(n)))
-    const done = await uninstallCollector({ home: b.home, env: {}, deps: { harnessIds: ['rep'] }, stop: stopNone, scan: async () => [], roots })
+    const done = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => [], roots })
     assert.deepEqual([done.kept_bundles, fs.existsSync(path.join(b.dir, 'ca')), readManifest(b.dir)], [[], false, null])
   } finally { b.done() }
 })
@@ -740,7 +740,7 @@ test('uninstall step 5: only a process that may have read the entry is reported 
       { pid: 3, exe: '/x/picky', startedAt: Date.now() + 1000, env: new Map([['VIA', path.join(b.dir, 'ca', 'x.pem')]]) },
       { pid: 4, exe: '/x/picky', startedAt: Date.now() + 1000, env: new Map() }, // its descriptor: it never read the entry
     ]
-    const r = await uninstallCollector({ home: b.home, env: { HOME: b.home }, deps: { harnessIds: ['plug', 'picky'] }, stop: stopNone, scan: async () => procs, roots: { node: [], osText: '' } })
+    const r = await uninstallCollector({ home: b.home, env: { HOME: b.home }, stop: stopNone, scan: async () => procs, roots: { node: [], osText: '' } })
     assert.deepEqual(r.still_trusting, [{ pid: 2, agent: 'plug', until: 'restart' }, { pid: 3, agent: 'picky', until: 'next-connection' }])
     assert.deepEqual(readEvents(b.dir).filter((e) => e.code === 'still-trusting').map((e) => [e.event, e.harness, e.pid]), [['uninstall-note', 'plug', 2], ['uninstall-note', 'picky', 3]])
     assert.match(readEvents(b.dir).find((e) => e.pid === 3).reason, /until its next new connection/)
@@ -848,8 +848,7 @@ test('uninstall writes an uninstall-note for every result but a plain restore an
 test('the board\'s last install / uninstall is the newest run: a clean uninstall after one that left a note shows only its own result; a failed install says so (D1-5)', async () => {
   const b = box()
   const { captureHealth } = await import('../../src/health/read.mjs')
-  const { HARNESS_IDS } = await import('../../src/off/harness-names.mjs')
-  const last = () => captureHealth({ harnesses: HARNESS_IDS, home: path.join(b.home, '.trocar'), alive: () => false }).collector.install
+  const last = () => captureHealth({ home: path.join(b.home, '.trocar'), alive: () => false }).collector.install
   try {
     fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model":"x"}')
     await installCollector(base(b))

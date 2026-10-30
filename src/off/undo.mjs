@@ -18,8 +18,7 @@
 // Where the OS never shows another process's environment (macOS, Windows: the rows say `envRead: false`), a process of the harness, or one it
 // started, may hold an extra trust file: it is a holder, not "not known" (4.6 「判活快照」).
 //
-// `own`: the harness table the command walks (off / uninstall hand in this copy's, 4.11 §3 ㉓: another id's items are not reached; null = the
-// manifest's every id); `ids` null = every harness of it; otherwise only those harnesses' entries, bundle, extra files, plugin / shim / rc lines — never the CA (unless
+// `ids` null = every harness; otherwise only those harnesses' entries, bundle, extra files, plugin / shim / rc lines — never the CA (unless
 // `dropCa`), never an item of another harness (byte for byte), never a file with no harness. An undone entry leaves manifest.entries; backups: dropped
 // when the file is back at its pre_sha256, kept and listed in manifest.kept_backups when the user changed the file after trocar did (1.6 R2).
 // Imports only node:* and src/off.
@@ -100,10 +99,10 @@ const removeKernelCopy = (exe, fs) => {
   }
 }
 
-async function undoInto({ dir, home, manifest, ids = null, own = null, procs = async () => [], roots = null, now = new Date(), dropCa = false, phases = dropCa ? PHASES : ['on'], fs = nodeFs, exec = null, env = process.env }, out) {
+async function undoInto({ dir, home, manifest, ids = null, procs = async () => [], roots = null, now = new Date(), dropCa = false, phases = dropCa ? PHASES : ['on'], fs = nodeFs, exec = null, env = process.env }, out) {
   const spared = (x) => !phases.includes(x.phase) // what this run leaves: listed, never touched
   if (manifest.unsupported) throw new Error(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read; nothing was changed`)
-  const inScope = (h) => typeof h === 'string' && (own == null || own.includes(h)) && (ids == null || ids.includes(h)) // `own`: the command's table (off / uninstall pass this copy's, 4.11 §3 ㉓): another id's items are never reached
+  const inScope = (h) => typeof h === 'string' && (ids == null || ids.includes(h))
   const liveness = manifest.liveness && typeof manifest.liveness === 'object' ? manifest.liveness : (manifest.liveness = {})
   // judged by the manifest's records plus the names the user's agents.json holds NOW (one put there after `on` is a process of that harness too);
   // a list that cannot be read only adds nothing, and is said. `liveness` itself (what is saved) is not changed by it
@@ -195,7 +194,7 @@ async function undoInto({ dir, home, manifest, ids = null, own = null, procs = a
   // ledger kinds are known: the legacy undo takes them.
   for (const e of [...manifest.entries, ...manifest.files]) {
     const orphan = (e.kind === 'json-key' || e.kind === 'text') && typeof e.harness !== 'string'
-    if ((known(e) && !orphan) || !(typeof e.harness === 'string' ? inScope(e.harness) : ids == null)) continue
+    if ((known(e) && !orphan) || !(ids == null || (typeof e.harness === 'string' && ids.includes(e.harness)))) continue
     out.left.push({ path: e.path, harness: e.harness ?? null, result: 'unknown-kind', reason: orphan ? `${e.path} names no harness, so no harness's off takes it out; ${undoByHand(e)}` : `${e.path} is of kind ${JSON.stringify(e.kind ?? null)}, which this build does not undo; by hand: ${undoByHand(e)}` })
   }
 

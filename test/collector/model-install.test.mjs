@@ -279,7 +279,7 @@ test('CM37: a loaderless plugin cert → one owned plugin file in its folder, no
   const texts = mine.filter((e) => e.kind === 'text')
   assert.deepEqual(texts.filter((e) => e.path.startsWith(`${ext}${path.sep}`) || e.format === 'yaml-list'), [])
   const exec = recordingExec()
-  const { exit, receipt } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { harnessIds: [eighth.name], platform: 'darwin', exec: exec.run, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501 } })
+  const { exit, receipt } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: 'darwin', exec: exec.run, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501 } })
   assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
   assert.deepEqual(snapshot(ext), before)
 })

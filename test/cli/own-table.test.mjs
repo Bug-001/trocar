@@ -1,9 +1,12 @@
-// test/cli/own-table.test.mjs — CM39 (spec 4.11 §3 ㉓ · §5 CM39; 4.6 安装清单与卸载): every walk starts from this copy's own harness table. Two
-// identical worlds, A and B, are installed and turned on for every harness that has a form on the OS; B alone also carries records of ids its
-// table does not hold — X = `<h>-next`, written as a newer trocar would write them (manifest items whose files lie under HOME/.other, liveness,
-// install.harnesses, state.json, door-seen.json rows, ingress.json groups). Then the steps run in lockstep on both, and after each: B exits as A
-// does (I1); B's document never names an X (I2); it names the same table ids as A's (I3); X's records and files are as they were (I4); B
-// changes the same HOME paths as A (I5). Expectations come from world A and the seeded bytes. The steps are a list, run in order.
+// test/cli/own-table.test.mjs — CM39 (spec 4.11 §3 ㉓ · §5 CM39; 4.6 安装清单与卸载): every walk starts from this copy's own harness table,
+// and off / uninstall undo manifest items by kind, whatever their id. Two identical worlds, A and B, are installed and turned on for every
+// harness that has a form on the OS; B alone also carries records of ids its table does not hold — X = `<h>-next`, written as a newer trocar
+// would write them (manifest items whose files lie apart, AWAY; liveness, install.harnesses, state.json, door-seen.json rows,
+// ingress.json groups). Then the steps run in lockstep on both, and after each: B exits as A does (I1); B changes the same paths outside
+// AWAY as A (I5). The walking steps: B's document never names an X (I2); it names the same table ids as A's (I3); X's records and files
+// are as they were (I4). The undoing steps: uninstall while X is on names every X (I6); after off no item is phase on and no X is on in
+// state.json (I7); every file an X item names reads as the file of B's own harness it was copied from (I8). Expectations come from world A and the
+// seeded bytes. The steps are a list, run in order.
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -37,7 +40,7 @@ function readDeps(w) {
 const cli = async (fn, argv, w) => { const io = fakeIo(); const exit = await fn(argv, { io, home: w.home, env: w.env, platform: w.os, deps: readDeps(w) }); return { exit, doc: JSON.parse(io.stdoutText()) } }
 
 const STEPS = [
-  { name: 'install', carriers: 'all', run: async (w) => {
+  { name: 'install', run: async (w) => {
     const io = fakeIo()
     // what the world's ctx sees (HOME and the apps placed on its fake machine), so the CLI judges the same forms present as the world's install did
     const inside = (p) => String(p).startsWith(w.home + path.sep)
@@ -46,7 +49,7 @@ const STEPS = [
     const exit = await runInstallCli(['--json', '--yes'], { io, env: w.env, home: w.home, platform: w.os, deps })
     return { exit, doc: JSON.parse(io.stdoutText()) }
   } },
-  { name: 'on', carriers: 'all', run: async (w, xs) => {
+  { name: 'on', run: async (w, xs) => {
     // the X's door ports are held by the newer copy's engine: whatever `on` does, it must not move them
     const ing = readJson(path.join(w.dir, 'ingress.json')) || { groupPorts: {} }
     const theirs = new Set(Object.entries(ing.groupPorts).filter(([g]) => xs.some((x) => g === x || g.startsWith(`${x}:`))).map(([, p]) => p))
@@ -55,11 +58,13 @@ const STEPS = [
       return { exit: r.exit, doc: r }
     } catch (e) { return { exit: 70, doc: { error: String(e && e.message) } } }
   } },
-  { name: 'status', carriers: 'all', run: (w) => cli(runStatusCli, ['--json'], w) },
-  { name: 'doctor', carriers: 'all', run: (w) => cli(runDoctor, ['--json'], w) },
-  { name: 'board', carriers: 'all', run: async (w) => { const r = await VERBS.status(null, { home: path.join(w.home, '.trocar'), deps: readDeps(w) }); return { exit: r.status, doc: r.doc } } },
-  { name: 'off', carriers: 'all', run: async (w) => { const r = await w.cmd.off(['--json']); return { exit: r.exit, doc: JSON.parse(r.text) } } },
-  { name: 'uninstall', carriers: 'manifest', run: async (w) => { const r = await w.cmd.uninstall(); return { exit: r.exit, doc: r.receipt } } },
+  { name: 'status', run: (w) => cli(runStatusCli, ['--json'], w) },
+  { name: 'doctor', run: (w) => cli(runDoctor, ['--json'], w) },
+  { name: 'board', run: async (w) => { const r = await VERBS.status(null, { home: path.join(w.home, '.trocar'), deps: readDeps(w) }); return { exit: r.status, doc: r.doc } } },
+  // off and uninstall undo manifest items by kind, whatever the id (4.11 §3 ㉓): uninstall refuses while X is on and names it; off undoes X as it undoes h0
+  { name: 'uninstall', undo: 'refused', run: async (w) => { const r = await w.cmd.uninstall(); return { exit: r.exit, doc: r.receipt } } },
+  { name: 'off', undo: 'off', run: async (w) => { const r = await w.cmd.off(['--json']); return { exit: r.exit, doc: JSON.parse(r.text) } } },
+  { name: 'uninstall', undo: 'done', run: async (w) => { const r = await w.cmd.uninstall(); return { exit: r.exit, doc: r.receipt } } },
 ]
 
 const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return null } }
@@ -90,12 +95,18 @@ async function world(os) {
   return w
 }
 
-/** What a newer trocar wrote for X, cloned from `h0`'s records with every HOME path moved under HOME/.other. → the list of X ids. */
+// where X's copy of a HOME path lies: inside ~/.trocar it stays inside (off removes or rewrites only there), elsewhere it goes under HOME/.other
+const AWAY = [['.trocar', path.join('.trocar', 'next')], ['', '.other']]
+const moveOf = (home) => (v) => { if (typeof v !== 'string') return v; for (const [from, to] of AWAY) { const f = path.join(home, from); if (v === f || v.startsWith(f + path.sep)) return path.join(home, to, path.relative(f, v)) } return v }
+/** X's copy → the HOME-relative path of the file it was copied from; null when `p` is not a copy */
+const backOf = (home, p) => { for (const [from, to] of AWAY) { const t = path.join(home, to); if (p.startsWith(t + path.sep)) return path.join(from, path.relative(t, p)) } return null }
+const outside = (f) => Object.fromEntries(Object.entries(f).filter(([p]) => !AWAY.some(([, to]) => p.startsWith(to + path.sep))))
+
+/** What a newer trocar wrote for X, cloned from `h0`'s records with every HOME path moved AWAY. → the list of X ids. */
 function seedOthers(w) {
   const table = w.harnesses.map((h) => h.name)
   const mPath = path.join(w.dir, 'install-manifest.json'), m = readJson(mPath)
-  const other = path.join(w.home, '.other')
-  const move = (v) => typeof v === 'string' && (v === w.home || v.startsWith(w.home + path.sep)) ? path.join(other, path.relative(w.home, v)) : v
+  const move = moveOf(w.home)
   const clone = (v, x) => JSON.parse(JSON.stringify(v), (k, s) => (k === 'harness' && typeof s === 'string' ? x : move(s)))
   const st = readJson(path.join(w.dir, 'state.json')), ds = readJson(path.join(w.dir, 'door-seen.json')), ing = readJson(path.join(w.dir, 'ingress.json'))
   const used = new Set(Object.values(ing.groupPorts))
@@ -125,12 +136,11 @@ function seedOthers(w) {
   return xs
 }
 
-/** X's carriers as they are now: `all` (off) = every record kind; `manifest` (uninstall) = its manifest items and the bytes under HOME/.other. */
-function carriers(w, xs, which) {
+/** X's carriers as they are now: its manifest items, the bytes AWAY and every other record kind. */
+function carriers(w, xs) {
   const m = readJson(path.join(w.dir, 'install-manifest.json')) || { entries: [], files: [] }
   const mine = (x) => xs.includes(x.harness)
-  const out = { items: [...m.entries.filter(mine), ...m.files.filter(mine)], bytes: files(path.join(w.home, '.other')) }
-  if (which === 'manifest') return out
+  const out = { items: [...m.entries.filter(mine), ...m.files.filter(mine)], bytes: AWAY.map(([, to]) => files(path.join(w.home, to))) }
   const st = readJson(path.join(w.dir, 'state.json')), ds = readJson(path.join(w.dir, 'door-seen.json')), ing = readJson(path.join(w.dir, 'ingress.json'))
   return { ...out,
     liveness: xs.map((x) => (m.liveness || {})[x] ?? null),
@@ -144,23 +154,40 @@ function carriers(w, xs, which) {
 process.chdir(tmpDir('trocar-pipes-')) // a win32 control endpoint is a pipe name, served as a socket path relative to the cwd (eighth.test.mjs)
 describe('CM39: every command walks only its own harness table', { concurrency: 1 }, () => {
   for (const os of ['darwin', 'win32']) {
-    it(`${os}: a world carrying records of ids outside the table ends as the world without them, and those records stay`, async () => {
+    it(`${os}: a world carrying records of ids outside the table ends as the world without them; off and uninstall undo them as they undo their own`, async () => {
       const A = await world(os), B = await world(os)
       try {
         const table = B.harnesses.map((h) => h.name)
         const xs = seedOthers(B)
         assert.ok(xs.length > 0, 'no harness has manifest records to clone')
+        const bytes = (p) => (fs.existsSync(p) && fs.statSync(p).isFile() ? fs.readFileSync(p).toString('base64') : null)
         for (const step of STEPS) {
-          const fa0 = files(A.home), fb0 = files(B.home), x0 = carriers(B, xs, step.carriers)
+          const fa0 = files(A.home), fb0 = files(B.home), x0 = carriers(B, xs)
           const a = await step.run(A, []), b = await step.run(B, xs)
-          const label = `${os} ${step.name}`
+          const label = `${os} ${step.name}${step.undo ? ` (${step.undo})` : ''}`
           assert.equal(b.exit, a.exit, `${label} I1: ${JSON.stringify(b.doc.problems || b.doc.error)}`)
-          const text = JSON.stringify(b.doc)
-          assert.deepEqual(xs.filter((x) => text.includes(x)), [], `${label} I2`)
-          assert.deepEqual(idsIn(b.doc, table), idsIn(a.doc, table), `${label} I3`)
-          assert.deepEqual(carriers(B, xs, step.carriers), x0, `${label} I4`)
-          const fb = files(B.home)
-          assert.deepEqual(changed(fb0, fb), changed(fa0, files(A.home)), `${label} I5`)
+          const text = JSON.stringify(b.doc), fb = files(B.home)
+          assert.deepEqual(changed(outside(fb0), outside(fb)), changed(fa0, files(A.home)), `${label} I5`)
+          if (!step.undo) {
+            assert.deepEqual(xs.filter((x) => text.includes(x)), [], `${label} I2`)
+            assert.deepEqual(idsIn(b.doc, table), idsIn(a.doc, table), `${label} I3`)
+            assert.deepEqual(carriers(B, xs), x0, `${label} I4`)
+            continue
+          }
+          if (step.undo === 'refused') {
+            assert.notEqual(b.exit, 0, `${label}: uninstall goes ahead while X is on`)
+            assert.deepEqual(xs.filter((x) => !text.includes(x)), [], `${label} I6`)
+            assert.deepEqual(carriers(B, xs), x0, `${label}: nothing of X changed`)
+            continue
+          }
+          if (step.undo === 'off') {
+            const now = carriers(B, xs)
+            assert.deepEqual(now.items.filter((x) => x.phase === 'on'), [], `${label} I7: X's on items`)
+            assert.deepEqual(now.state.filter((v) => v && v.desired === 'on'), [], `${label} I7: X on in state.json`)
+          }
+          const named = [...new Set(x0.items.map((x) => x.path).filter((p) => typeof p === 'string' && backOf(B.home, p) != null))]
+          assert.ok(named.length > 0, `${label}: no X item names a file`)
+          for (const p of named) assert.equal(bytes(p), bytes(path.join(B.home, backOf(B.home, p))), `${label} I8: ${path.relative(B.home, p)}`)
         }
       } finally { A.daemon.close(); B.daemon.close() }
     })

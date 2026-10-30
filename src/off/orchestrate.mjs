@@ -41,7 +41,6 @@ import { describeEntry } from './journal.mjs'
 import { orphanBackups } from './backup.mjs'
 import { osRootsFor } from './os-roots.mjs'
 import { WHERE_OFF, EVENT_OFF_NOTE, CODE_OFF } from './names.mjs'
-import { HARNESS_IDS } from './harness-names.mjs'
 
 export const OFF_LOCK_WAIT_MS = 10_000 // 1.6 R12: the lock is waited for at most this long
 const OFF_ASK_MS = 5000 // a daemon that does not answer this fast is stuck (1.6 §1.4 第 2 步)
@@ -62,7 +61,6 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
     request: deps.request || (endpoint && endpoint.request) || controlRequest,
     clock: deps.now || (() => new Date()), ms: deps.ms || Date.now, sleep: deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
     alive: deps.alive || pidAlive, identity: deps.identity || identityFor({ platform, exec: deps.exec || null, env }), isHelper: deps.isHelper || isRedirectorHelper, kill: deps.kill,
-    known: deps.harnessIds || HARNESS_IDS, // this copy's own harness table: every walk starts from it, a record of another id is never reached (4.11 §3 ㉓)
     lockFile: path.join(dir, 'lock'), stateF: stateFile(home), deps, standalone: deps.standalone === true, // the single-file trocar-off passes `standalone`: it words what it cannot do as "run trocar off" (R3, V35)
     socketPath: deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.socketPath) || null,
   }
@@ -92,8 +90,8 @@ const unitIsUp = (w) => {
   return a.out === 'active' || a.out === 'activating' || a.out === 'reloading'
 }
 
-/** The harness ids of `known` (this copy's table, `w.known`) that a manifest names (entries and files). */
-export const harnessIdsOf = (m, known) => [...new Set([...((m && m.entries) || []), ...((m && m.files) || [])].map((x) => x.harness).filter((h) => known.includes(h)))]
+/** The harness ids a manifest names (entries and files). */
+export const harnessIdsOf = (m) => [...new Set([...((m && m.entries) || []), ...((m && m.files) || [])].map((x) => x.harness).filter((h) => typeof h === 'string'))]
 
 /** Step 2: `desired:'off'` for `ids` (null: every harness the state file or the manifest names). Writes only what is on; a file that cannot be read is replaced
  *  by one with everything off (the daemon reads such a file as all off already, 1.6 §1.5). → `{ wrote, ids, unreadable? }`; a failed write throws. */
@@ -105,7 +103,7 @@ export function desiredOff(w, ids, installed) {
     writeStateAtomic(w.stateF, setDesired(emptyState(), target, 'off', w.clock()), { fs: w.fs })
     return { wrote: true, ids: target, unreadable: errMessage(read.error) }
   }
-  const target = ids || [...new Set([...Object.keys(read.state.harnesses).filter((h) => w.known.includes(h)), ...installed])]
+  const target = ids || [...new Set([...Object.keys(read.state.harnesses), ...installed])]
   const flips = target.filter((id) => read.state.harnesses[id] && read.state.harnesses[id].desired === 'on')
   if (!flips.length) return { wrote: false, ids: target }
   writeStateAtomic(w.stateF, setDesired(read.state, flips, 'off', w.clock()), { fs: w.fs })
@@ -279,7 +277,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     let out, stopped = null
     try {
       const roots = w.deps.roots || (manifest.files.some((f) => f.role === 'bundle') ? () => rebuildRoots(w) : null)
-      out = await undoHarnesses({ dir: w.dir, home: w.home, manifest, ids, own: w.known, procs: w.procs, roots, now: at, dropCa, phases, fs: w.fs, exec: w.exec, env: w.env })
+      out = await undoHarnesses({ dir: w.dir, home: w.home, manifest, ids, procs: w.procs, roots, now: at, dropCa, phases, fs: w.fs, exec: w.exec, env: w.env })
     } catch (e) {
       if (!e || !e.partial) { // it stopped before one entry was touched
         u.stopped = true; u.problems.push(`undoing the entries stopped: ${errMessage(e)}`); u.failures.push({ code: 'entry-not-undone', reason: errMessage(e) })
@@ -469,11 +467,11 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   }
   const read = () => { try { return { manifest: readManifest(w.dir, w.fs), manifestError: null } } catch (e) { return { manifest: null, manifestError: e } } }
   let { manifest, manifestError } = read() // what the plan and the first desired-off go by; read AGAIN under the lock: an `on` that held it has written to the manifest since
-  let installed = harnessIdsOf(manifest, w.known)
+  let installed = harnessIdsOf(manifest)
   if (ids === null) receipt.harnesses = installed
   const hadAnything = w.fs.existsSync(w.dir) || w.unitManaged() || manifest != null || manifestError != null // no collector directory, no unit, no manifest: trocar was never installed here (or is uninstalled, and purged)
   if (dryRun) { // R6: the same receipt in the future tense, nothing written, nothing asked of the daemon, exit 0
-    const mine = (x) => x.phase === 'on' && (typeof x.harness === 'string' ? w.known.includes(x.harness) && (ids == null || ids.includes(x.harness)) : ids == null) // off spares what install wrote (D55①), so its plan does too
+    const mine = (x) => x.phase === 'on' && (ids == null || ids.includes(x.harness)) // off spares what install wrote (D55①), so its plan does too
     const items = manifest && !manifest.unsupported ? manifest : { entries: [], files: [] }
     const gone = items.files.filter((f) => mine(f) && ['plugin', 'shim', 'bundle', 'trust-file'].includes(f.role)).map((f) => f.path)
     const marks = manifest && !manifest.unsupported ? [] : planByMarker({ home, ids, fs: w.fs, env: w.env, platform: w.platform })
@@ -512,7 +510,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     }
   }
   try {
-    ({ manifest, manifestError } = read()); installed = harnessIdsOf(manifest, w.known)
+    ({ manifest, manifestError } = read()); installed = harnessIdsOf(manifest)
     if (refuseUnknownKinds(manifest, receipt, w.standalone)) return { receipt: shapeReceipt(receipt), exit: EXIT.incomplete } // read again under the lock: a newer trocar may have written since (the lock is released by finally)
     if (ids === null) receipt.harnesses = installed
     // 2 · the desired state

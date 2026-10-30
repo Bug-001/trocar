@@ -65,7 +65,7 @@ export async function contractWorld({ os, env = {} }) {
       return { exit: code, text: out.join('\n') }
     },
     uninstall: async () => {
-      const { receipt, exit } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { harnessIds: w.harnesses.map((d) => d.name), platform: os, exec: run, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501 } })
+      const { receipt, exit } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: os, exec: run, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501 } })
       return { exit, receipt }
     },
   }
