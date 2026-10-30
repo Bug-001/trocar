@@ -15,7 +15,7 @@ import { controlFor, controlHtml } from '../core/harness-switch.mjs'
 import { logRowsOf } from './capture-log.mjs'
 import { failureWord } from '../../../cli/words.mjs'
 import {
-  CONDITION_KIND, SWITCH_WORD, CODE, residueLead, ROUTING, CHANGE_REMOVAL, COMMANDS,
+  CONDITION_KIND, SWITCH_WORD, CODE, residueLead, ROUTING, CHANGE_REMOVAL, CHANGE_KIND, CHANGE_FORMAT, RELAYED, COMMANDS,
   UNKNOWN_REASON, ERR_WHERE, FIX_IN_DETAILS,
 } from '../labels/capture.mjs'
 
@@ -30,19 +30,23 @@ const gutOf = (cls, fine) => (cls === 'bad' ? lamp('bad') : cls === 'warn' ? lam
 
 // the leading state word carries the severity colour; the rest of the sentence stays ink (visual doc). The head is the
 // text up to the first ':' or ' ·' — the mark of a 采集服务 sentence, or 「没在采」/「可能连不上网」 of an agent's.
+// A row's sentence starts with a capital (the verdict's own text otherwise unchanged; the 总览 page uses it mid-line).
 const leadHtml = (text, cls) => {
-  if (cls !== 'bad' && cls !== 'warn') return esc(text)
-  const m = /^(.*?)(?::| · )/.exec(String(text))
-  const head = m ? m[1] : String(text)
-  return `<span class="sw">${esc(head)}</span>${esc(String(text).slice(head.length))}`
+  const s = String(text).replace(/\p{L}/u, (c) => c.toUpperCase())
+  if (cls !== 'bad' && cls !== 'warn') return esc(s)
+  const m = /^(.*?)(?::| · )/.exec(s)
+  const head = m ? m[1] : s
+  return `<span class="sw">${esc(head)}</span>${esc(s.slice(head.length))}`
 }
 
 // ── the commands (1.6's table) — only ever inside 技术细节 ─────────────────────────────────────────────────────────
-// per harness, spelt the way the document itself spells it (`harnesses` keys); a row the document does not name gets none.
+// per harness, spelt the way the document itself spells it (`harnesses` keys); a row the document does not name gets none. The
+// capture service row gets only the harness-less ones (status, doctor without <id>): a bare on / off would switch every harness.
 export function commandsFor(h, { row = null, service = false } = {}) {
   const out = [], cmds = COMMANDS
-  const fill = (s) => row && row.cliId ? s.replace('<id>', row.cliId) : s
-  if (service || (row && row.cliId)) {
+  if (service) out.push(['see the full status', cmds.status.replace(' <id>', '')], ['diagnose', cmds.doctor.replace(' <id>', '')])
+  else if (row && row.cliId) {
+    const fill = (s) => s.replace('<id>', row.cliId)
     out.push(['start capturing', fill(cmds.on)], ['stop capturing', fill(cmds.off)], ['see the full status', fill(cmds.status)], ['diagnose', fill(cmds.doctor)])
   }
   if (h && h.health && h.health.state === 'not-installed') out.push(['install', cmds.install])
@@ -51,12 +55,13 @@ export function commandsFor(h, { row = null, service = false } = {}) {
   return out
 }
 
-// 技术细节 for this page: a [key, value] grid where a value is a plain string (escaped) or {m} (a machine fact — id,
-// path, code, command — set in mono). The disclosure's copy button carries the PLAIN text of the pairs; the diagnostics
+// 技术细节 for this page: a [key, value] grid where a value is a RAW plain string (escaped here, once), {m} (a machine fact — id,
+// path, code, command — set in mono) or {h} (real markup, escaped inside once). The disclosure's copy button carries the PLAIN text of the pairs; the diagnostics
 // copy carries the fields the row used (metadata only, credentials redacted).
 const techPairGrid = (pairs) => `<div class="tech">${pairs.map(([k, v]) =>
   `<span class="k">${esc(k)}</span><span class="v">${v && v.m != null ? `<span class="mono">${esc(v.m)}</span>` : v && v.h != null ? v.h : esc(v)}</span>`).join('')}</div>`
-const plainOf = (v) => v && v.m != null ? v.m : v && v.h != null ? v.h.replace(/<[^>]*>/g, '') : v
+const unesc = (s) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+const plainOf = (v) => v && v.m != null ? v.m : v && v.h != null ? unesc(v.h.replace(/<[^>]*>/g, '')) : v
 const detailsHtml = (id, pairs) => disclosureHtml({
   id, title: 'Technical details', open: false,
   body: techPairGrid(pairs) + copyBtn(pairs.map(([k, v]) => `${k}: ${plainOf(v)}`).join('\n')),
@@ -110,16 +115,18 @@ export function serviceRowHtml(h, v, { open = false } = {}) {
     if (d.running === true && d.responding === true) failingLine = '<p>The capture service is running</p>'
     else if (!daemonDown) failingLine = '<p>The capture service state is unknown</p>'
   }
-  // the failure groups of the last 24 h → the log; zero groups draws nothing
-  const groups = logRowsOf(h).rows.length // the one count (R15): the log's own rows
-  const failLink = groups ? `<a href="#/capture/log">${groups} failure group${groups === 1 ? '' : 's'} in the last 24 hours · capture log ›</a>` : ''
+  // the log, linked once (1.9 R15): a failing sentence already carries the group count, so the sentence itself is the link;
+  // otherwise a plain link without a number; an empty log draws nothing
+  const logged = logRowsOf(h).rows.length > 0
+  const lead = v.state === 'failing' && logged ? `<a href="#/capture/log">${leadHtml(v.text, v.cls)}</a>` : leadHtml(v.text, v.cls)
+  const logLink = logged && v.state !== 'failing' ? '<a href="#/capture/log">capture log ›</a>' : ''
   const lingerStop = h && h.linger === false ? '<p>Capture stops at logout</p>' : ''
   return `<div class="crow" data-h="*service">` +
     `<div class="crow-t"><span class="gut">${gutOf(v.cls, v.state === 'ok')}</span>` +
     `<button type="button" class="nm cap-nm" data-caprow="cap-svc" aria-expanded="${open}" aria-controls="cap-svc-x"><span class="chev" aria-hidden="true">${open ? '▾' : '▸'}</span>Capture service</button>` +
     '<span class="des"></span>' +
-    `<span class="stt stt-${esc(v.cls)}"><p class="lead">${leadHtml(v.text, v.cls)}</p>${conds}${failingLine}</span>` +
-    `<span class="last">${failLink}${lingerStop}</span><span class="ctl"></span></div>` +
+    `<span class="stt stt-${esc(v.cls)}"><p class="lead">${lead}</p>${conds}${failingLine}</span>` +
+    `<span class="last">${logLink}${lingerStop}</span><span class="ctl"></span></div>` +
     `<div class="cexp" id="cap-svc-x"${open ? '' : ' hidden'}>${serviceTechHtml(h, v)}</div></div>`
 }
 
@@ -129,14 +136,20 @@ function serviceTechHtml(h, v) {
   const d = (h && h.daemon) || {}
   const rows = []
   if (d.pid != null) rows.push(['pid', M(d.pid)])
-  if (d.since) rows.push(['since', when(d.since)])
-  if (d.error) rows.push(['state could not be read', esc(d.error)])
+  if (d.since) rows.push(['since', fmtWhen(d.since)])
+  if (d.error) rows.push(['state could not be read', String(d.error)])
   if (v.raw != null) rows.push(['state', M(String(v.raw))])
-  if (v.reason && v.state !== 'unreadable') rows.push(['reason', esc(v.reason)])
-  if (h && h.linger == null && h.daemon) rows.push(['capture after logout', 'unknown'])
+  if (v.reason && v.state !== 'unreadable') rows.push(['reason', String(v.reason)])
+  // Linux only: the OS keeps the service after logout or not; a boolean is said in the row (false) or not at all (true)
+  if (h && h.linger === 'unknown') rows.push(['after logout', `not known${h.linger_reason ? ` · ${h.linger_reason}` : ''}`])
   for (const p of list(h && h.holders)) if (p) rows.push(['holder', M(`${p.harness ?? '?'} · pid ${p.pid ?? '?'}${p.name ? ` · ${p.name}` : ''}`)])
+  // the connections still relayed after an off: only the non-zero counts, in words
   const rel = h && h.relayed
-  if (rel && typeof rel === 'object') rows.push(['relayed', M(Object.entries(rel).map(([k, n]) => `${k} ${n}`).join(' · '))])
+  if (rel === 'unknown') rows.push(['still relayed', `not known${h.relayed_reason ? ` · ${h.relayed_reason}` : ''}`])
+  else if (rel && typeof rel === 'object') {
+    const parts = Object.entries(rel).filter(([, n]) => typeof n === 'number' && n > 0).map(([k, n]) => `${n} ${has(RELAYED, k) ? RELAYED[k] : k}`)
+    if (parts.length) rows.push(['still relayed', parts.join(' · ')])
+  }
   for (const e of list(h && h.errors)) if (e) rows.push(['could not be read', M(`${e.where ?? '?'}: ${redactUrlCredentials(String(e.reason ?? ''))}`)])
   rows.push(...commandsHtml(commandsFor(h, { service: true })))
   return detailsHtml('cap-svc-tech', rows) + `<div class="capcopy">${diagCopy({ health: h && h.health, daemon: d, critical: h && h.critical, errors: h && h.errors })}</div>`
@@ -154,7 +167,9 @@ export const rowOrder = (verdicts) => [...verdicts].sort((a, b) => a.tier - b.ti
 
 export function agentRowHtml(row, h, { open = false, ov = null, control = null, ui = null } = {}) {
   const name = harnessName(row.harness)
-  const desired = (row.desired === 'on' || row.desired === 'off') ? SWITCH_WORD[row.desired] : ''
+  // the desired state as text only where the row draws no control (a switch already says it; 1.9 期望态)
+  const ctl = controlFor({ control, status: h }, row.harness)
+  const desired = !ctl.kind && (row.desired === 'on' || row.desired === 'off') ? SWITCH_WORD[row.desired] : ''
   const last = row.lastCaptured
     ? `<a href="#/sessions?h=${esc(row.harness)}" title="${esc(fmtStamp(row.lastCaptured))}">captured ${esc(relCap(row.lastCaptured))} ›</a>`
     : ov ? '<span>not captured in the last 24 hours</span>' : '' // the `overview` document's harnesses[].last_ts (1.9); unread → nothing is claimed
@@ -167,7 +182,7 @@ export function agentRowHtml(row, h, { open = false, ov = null, control = null, 
     `<span class="des">${esc(desired)}</span>` +
     `<span class="stt stt-${esc(row.cls)}${row.tier === AGENT_TIER.off || row.wait ? ' dim' : ''}"><p class="lead">${leadHtml(row.text, row.cls)}</p></span>` +
     `<span class="last">${last}${fail}</span>` +
-    `<span class="ctl">${controlHtml(controlFor({ control, status: h }, row.harness), (ui && ui.get(row.harness)) || {})}</span></div>` +
+    `<span class="ctl">${controlHtml(ctl, (ui && ui.get(row.harness)) || {})}</span></div>` +
     `<div class="cexp" id="cap-${esc(row.harness)}-x"${open ? '' : ' hidden'}>${expandHtml(row, h, { problem })}</div></div>`
 }
 
@@ -214,9 +229,34 @@ function whyHtml(row) {
 function changesFor(row, h) {
   const items = list(h && h.changed).filter((e) => e && e.harness != null && harnessKey(e.harness) === row.harness)
   if (!items.length) return null
-  const lines = items.map((e) => `<p>${mono(e.path || '')} ${mono(e.what || '')}</p>`)
+  const lines = changeLines(items)
   lines.push(`<p class="fine">${esc(CHANGE_REMOVAL)}</p>`)
   return `<dt>Changed for it by trocar</dt><dd>${lines.join('')}</dd>`
+}
+
+// `changed[]` items grouped by file: the path once (mono), then what trocar wrote there — `what` is the manifest kind followed by the
+// key path or format (src/cli/status.mjs changedOf); a known format in words in place of its kind (CHANGE_FORMAT), a known kind in
+// words (CHANGE_KIND), an unknown one as it came; one kind's keys
+// joined. Shared by an agent row and the machine-wide block.
+function changeLines(items) {
+  const byPath = new Map()
+  for (const e of items) {
+    const p = String(e.path ?? ''), w = String(e.what ?? ''), i = w.indexOf(' ')
+    const kind = i < 0 ? w : w.slice(0, i), rest = i < 0 ? '' : w.slice(i + 1)
+    if (!byPath.has(p)) byPath.set(p, new Map())
+    const kinds = byPath.get(p)
+    if (!kinds.has(kind)) kinds.set(kind, [])
+    if (rest && !kinds.get(kind).includes(rest)) kinds.get(kind).push(rest)
+  }
+  const out = []
+  for (const [p, kinds] of byPath) {
+    const parts = [...kinds].flatMap(([k, all]) => {
+      const fm = all.filter((r) => has(CHANGE_FORMAT, r)), rs = all.filter((r) => !has(CHANGE_FORMAT, r))
+      return [...fm.map((r) => esc(CHANGE_FORMAT[r])), ...(rs.length || !fm.length ? [`${has(CHANGE_KIND, k) ? esc(CHANGE_KIND[k]) : mono(k)}${rs.length ? ` ${mono(rs.join(', '))}` : ''}`] : [])]
+    })
+    out.push(`<p>${mono(p)}</p><p>${parts.join(' · ')}</p>`)
+  }
+  return out
 }
 
 // an agent row's 技术细节: the condition codes / pids / hosts, the routing and branches (redacted), the running processes, the
@@ -233,20 +273,33 @@ function agentTechHtml(row, h) {
   if (t) {
     if (t.routing) rows.push(['routing', has(ROUTING, t.routing) ? ROUTING[t.routing] : t.routing])
     const name = new Map(list(t.nodes).filter((n) => n && n.id != null).map((n) => [n.id, n]))
+    // one row per distinct chain (adjacent repeats of one node said once), with the forms that take it
+    const chains = new Map()
     for (const b of list(t.branches)) {
       const nodes = list(b && b.path).map((id) => {
         const n = name.get(id)
-        return n && n.name != null ? `${redactUrlCredentials(String(n.name))}${n.inferred ? ' ' + mark('inf').replace(/<[^>]*>/g, '') : ''}` : `unknown${n && n.unknown && n.unknown.reason ? ` · ${n.unknown.reason}` : ''}`
-      })
-      if (nodes.length) rows.push(['path', nodes.join(' → ')])
+        return n && n.name != null ? `${redactUrlCredentials(String(n.name))}${n.inferred ? ' ' + unesc(mark('inf').replace(/<[^>]*>/g, '')) : ''}` : `unknown${n && n.unknown && n.unknown.reason ? ` · ${n.unknown.reason}` : ''}`
+      }).filter((x, i, a) => i === 0 || x !== a[i - 1])
+      if (!nodes.length) continue
+      const chain = nodes.join(' → ')
+      if (!chains.has(chain)) chains.set(chain, new Set())
+      const label = [b.form, b.name].filter((x) => x != null && x !== '').join(' ')
+      if (label) chains.get(chain).add(label)
     }
+    for (const [chain, labels] of chains) rows.push(['path', labels.size ? `${chain} · ${[...labels].join(', ')}` : chain])
     for (const p of list(t.running)) if (p && p.pid != null) rows.push(['process', M(`${p.pid}${p.note ? ` · ${p.note}` : ''}`)])
     for (const n of list(t.notes)) if (n != null) rows.push(['note', String(n)])
-    for (const f of list(t.findings)) if (f != null) rows.push(['finding code', M(String(f))])
+    for (const f of new Set(list(t.findings).filter((x) => x != null).map(String))) {
+      const x = reasonOf(f, { harness: row.harness })
+      rows.push(['finding', x.unknown ? M(f) : H(`${esc(x.why)} · ${mono(f)}`)])
+    }
     if (t.routing === 'proxy') rows.push(['VPN', `if your VPN routes by process, it sees trocar as the source, not ${harnessName(row.harness)}`])
   }
-  for (const e of list(h && h.changed)) if (e && e.harness != null && harnessKey(e.harness) === row.harness && e.undo) rows.push([`undo ${e.path || ''}`, M(e.undo)])
-  rows.push(...commandsHtml(commandsFor(h, { row })))
+  // each undo command once; one the row's commands already list is not said again
+  const cmds = commandsFor(h, { row })
+  const undos = new Set(list(h && h.changed).filter((e) => e && e.harness != null && harnessKey(e.harness) === row.harness && e.undo).map((e) => String(e.undo)))
+  for (const u of undos) if (!cmds.some(([, c]) => c === u)) rows.push(['undo', M(u)])
+  rows.push(...commandsHtml(cmds))
   const used = { harness: row.harness, verdict: { text: row.text, tier: row.tier, code: row.code, at: row.at }, conditions: row.conditions, topology: topoUsed(row.topology), last_failure: row.lastFailure }
   return detailsHtml(`cap-${row.harness}-tech`, rows) + `<div class="capcopy">${diagCopy(used)}</div>`
 }
@@ -258,7 +311,7 @@ export function changesHtml(h) {
   const pending = list(h && h.install && h.install.pending).filter((x) => x && typeof x === 'object')
   const manifest = list(h && h.errors).filter((e) => e && e.where === ERR_WHERE.manifest)
   if (!items.length && !pending.length && !manifest.length) return ''
-  const lines = items.map((e) => `<p>${mono(e.path || '')} ${mono(e.what || '')}</p>`)
+  const lines = changeLines(items)
   if (pending.length) {
     lines.push(`<p>${esc(residueLead(pending.some((x) => x.result === 'install did not finish') ? 'install did not finish' : ''))}</p>`)
     for (const x of pending) lines.push(`<p>${mono(x.path || '')}${x.harness != null ? ` ${harnessIcon(x.harness)}<span class="chipname">${esc(harnessName(harnessKey(x.harness)))}</span>` : ''} <span class="fine">${esc(failureWord(null, x.result) || (has(CODE, x.result) ? CODE[x.result] : String(x.result ?? '')))}</span></p>`)
@@ -283,11 +336,11 @@ export function pageHtml(h, v, { openByReader = null, ov = null, control = null,
   return `<section class="crows" aria-label="agent">${rows.join('')}${tableFootHtml(h, verdicts)}</section>` + changesHtml(h)
 }
 
-// ── the two table-foot lines of the honest empty cases (1.9 §Edge cases) ────────────────────────────────────────
+// ── the table foot of the honest empty case (1.9 §Edge cases 表空) ───────────────────────────────────────────────
+// not answered yet, or could not be read: whether any agent is set up is unknown; an unreadable install record is said by
+// the changes block, so the foot does not claim the empty table on top of it
 export function tableFootHtml(h, verdicts) {
-  if (h == null || h.unreadable != null) return '' // not answered yet, or could not be read: whether any agent was recorded is unknown
-  if (!verdicts.length) {
-    return '<p class="capfoot">The capture service recorded no agent in the last 24 hours</p>'
-  }
-  return ''
+  if (h == null || h.unreadable != null || verdicts.length) return ''
+  if (list(h.errors).some((e) => e && e.where === ERR_WHERE.manifest)) return ''
+  return '<p class="capfoot">No agent is set up for capture on this computer</p>'
 }

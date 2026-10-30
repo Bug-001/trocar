@@ -1,12 +1,12 @@
 // http.test.mjs — the board's one data entrance (4.4 §前置定义, 1.2 §不进产品的东西): api.get(<name>, params) over the named
 // queries, the per-user token in a header, conditional GET, failures folded (invariant 4), and no second fetch call site.
-import test from 'node:test'
+import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { api } from '../../src/web/v2/core/api.mjs'
-import { configure, bootToken, onForbidden, post } from '../../src/web/v2/core/http.mjs'
+import { api, scoped } from '../../src/web/v2/core/api.mjs'
+import { configure, bootToken, onForbidden, post, READ_DEADLINE_MS } from '../../src/web/v2/core/http.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { QUERY_NAMES } from '../../src/query/client.mjs'
@@ -51,6 +51,72 @@ test('4.4 conditional GET: a held ETag is sent back as If-None-Match and a 304 a
     assert.equal(second.ok, true); assert.deepEqual(second.data, doc)
     await api.get('sessions', { harness: 'cond-test-other' })
     assert.equal(headerOf(calls[2].init, 'if-none-match'), undefined)
+  })
+})
+
+// a fetch that answers only when told to, and rejects with an AbortError when its signal aborts (as real fetch does)
+const hanging = () => (url, init) => new Promise((resolve, reject) => {
+  const s = init.signal
+  const no = () => reject(new DOMException('aborted', 'AbortError'))
+  if (s && s.aborted) return no()
+  if (s) s.addEventListener('abort', no, { once: true })
+})
+
+test('1.5 K-29 read deadline: a read with no answer within READ_DEADLINE_MS fails with status 0 and its fetch is aborted', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    await withFetch(hanging(), async (calls) => {
+      const p = api.get('sessions', { harness: 'deadline-test' })
+      await Promise.resolve()
+      mock.timers.tick(READ_DEADLINE_MS)
+      const r = await p
+      assert.equal(r.ok, false); assert.equal(r.status, 0)
+      assert.equal(calls[0].init.signal.aborted, true)
+    })
+  } finally { mock.timers.reset() }
+})
+
+test('1.2 #22 a cancelled read fails with status 0 and holds no ETag for its URL', async () => {
+  const params = { harness: 'abort-test' }
+  await withFetch(hanging(), async () => {
+    const c = new AbortController()
+    const p = api.get('sessions', params, { signal: c.signal })
+    c.abort()
+    const r = await p
+    assert.equal(r.ok, false); assert.equal(r.status, 0)
+  })
+  await withFetch(() => json({ v: 1 }, 200, { etag: '"x"' }), async (calls) => {
+    assert.equal((await api.get('sessions', params)).ok, true)
+    assert.equal(headerOf(calls[0].init, 'if-none-match'), undefined)
+  })
+})
+
+test('1.2 #22 api.get hands the caller signal to the request', async () => {
+  await withFetch(hanging(), async (calls) => {
+    const c = new AbortController()
+    const p = api.get('sessions', { harness: 'signal-test' }, { signal: c.signal })
+    await Promise.resolve()
+    assert.equal(calls[0].init.signal.aborted, false)
+    c.abort()
+    assert.equal(calls[0].init.signal.aborted, true)
+    assert.equal((await p).ok, false)
+  })
+})
+
+test('1.2 #22 scoped(api, signal): its reads end when the scope or the caller signal aborts', async () => {
+  await withFetch(hanging(), async (calls) => {
+    const scope = new AbortController(), mine = new AbortController()
+    const a = scoped(api, scope.signal)
+    const p1 = a.get('sessions', { harness: 'scope-1' })
+    const p2 = a.controlStatus()
+    scope.abort()
+    for (const r of await Promise.all([p1, p2])) { assert.equal(r.ok, false); assert.equal(r.status, 0) }
+    const b = scoped(api, new AbortController().signal)
+    const p3 = b.get('sessions', { harness: 'scope-2' }, { signal: mine.signal })
+    mine.abort()
+    const r3 = await p3
+    assert.equal(r3.ok, false); assert.equal(r3.status, 0)
+    assert.equal(calls.length, 3)
   })
 })
 

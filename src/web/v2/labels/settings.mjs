@@ -12,7 +12,8 @@ export const DISK_TOTAL = 'Used by trocar', DISK_PER_DAY = 'Estimated growth per
 
 // 磁盘上的文件(技术细节)
 export const FILES_SEAL_RATIO = 'Sealed compression ratio', ESTIMATE = 'estimate', FILES_SEAL_NONE = 'No readable sealed files',
-  FILES_READ_PROBLEMS = 'Read problems'
+  FILES_READ_PROBLEMS = 'Read problems', FILES_READ_NOTES = 'Indexed while reading',
+  SLOW_NOTE = 'This page was slower because some capture files were indexed while it read them'
 
 // 保存什么卡(七行七个级别控件,D60③;改法也写在技术细节)
 export const CARD_CLASSES = 'What is stored', CLASSES_AS_OF = 'Counts as of',
@@ -21,7 +22,9 @@ export const CARD_CLASSES = 'What is stored', CLASSES_AS_OF = 'Counts as of',
   KEEP_NAME = Object.freeze({ full: 'Everything', log: 'Log only' }), NO_CLASS = 'No class recorded',
   CLASSES_FILE = 'Settings file', LEVEL_OF = (name) => `Level of ${name}`, CHANGING = 'Changing…',
   POP_STORED = (b) => `Stored ${b} (size before sealing)`, POP_TRAFFIC = 'See this traffic',
-  TECH_TERMINAL = 'In a terminal', TECH_PROBLEM = 'Problem', TECH_ANSWER = 'Server answer'
+  POP_LOG_ONLY = 'Log only keeps the metadata and the request and response headers; no bodies, only their sizes',
+  RULES_FALLBACK = 'Whatever the other classes do not match',
+  TECH_PROBLEM = 'Problem', TECH_ANSWER = 'Server answer'
 
 // 表注行(都在卡里)
 export const NOTE_LATER = 'Changes affect only calls that start later; stored data is not deleted',

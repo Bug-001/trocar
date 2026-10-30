@@ -130,6 +130,14 @@ export function priceMatch(table, model) {
   const key = Object.keys(table).filter((k) => k && isRow(table[k]) && id.includes(k)).sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0))[0]
   return key == null ? null : { row: table[key], key, exact: false }
 }
+// The server's `pricing` document { models: [{ model, input, output, cache_read, cache_write }], source } → { [model]: price row }.
+// The one converter the board uses (desk and overview). Not a models[] document → null (the caller names that as a read failure, not an empty table).
+export function priceTableOf(doc) {
+  if (!doc || !Array.isArray(doc.models)) return null
+  const t = {}
+  for (const m of doc.models) if (m && m.model) t[m.model] = [m.input, m.output, m.cache_write, m.cache_read]
+  return t
+}
 // NULL counters count as 0 only inside a priced row. A call with no usage at all has no cost (null), not $0.
 export function costOf(row, u) {
   if (!row || !u) return null

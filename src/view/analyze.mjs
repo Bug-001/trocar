@@ -25,6 +25,7 @@ import { compactionVerdict, hasCompactionPreamble } from '../identity/session-id
 // analyze.mjs too; the cycle is safe because respOf is only CALLED at runtime, after both modules
 // have finished evaluating. test/view/analyze-admission.test.mjs pins both module load orders.)
 import { respOf } from './assemble.mjs'
+import { HEAD, taskOf } from './blockmeta.mjs'
 export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
 
 const FILE_OPS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
@@ -166,18 +167,20 @@ function extractResources(messages, step, out) {
     }
   }
 }
+// A label or range is a match or split piece of a block's text or a Bash command (links, skills, read paths): kept as a copy of its
+// own, else it would keep the whole text alive for the life of the spine (3.5 §内存有界).
 function addRes(map, kind, label, step, via, range) {
   const key = kind + '::' + label
   let r = map.get(key)
   if (!r) {
-    r = { kind, label, via, segments: [{ enter: step, evict: null }], loads: [], hits: 1 }
-    map.set(key, r)
+    r = { kind, label: own(label), via, segments: [{ enter: step, evict: null }], loads: [], hits: 1 }
+    map.set(own(key), r)
   } else {
     r.hits++
     const last = r.segments[r.segments.length - 1]
     if (last.evict != null && step >= last.evict) r.segments.push({ enter: step, evict: null })
   }
-  if (range) r.loads.push({ step, range, via })
+  if (range) r.loads.push({ step, range: own(range), via })
 }
 
 // "Seen but never opened" filenames: path-like tokens the agent saw in tool RESULTS
@@ -216,6 +219,11 @@ function acceptPath(p) {
   }
   return true
 }
+// A string the fold keeps (a seen path, a byte context, a subagent's first text) in bytes of its own: a slice of a block's text, or
+// a cons string over one, would keep that whole text alive for as long as the fold lives (3.5 §内存有界).
+const own = (s) => (' ' + s).slice(1)
+// What a subagent lane keeps of its first user text to find the spawn that opened it (finish: the spawn's prompt opens that text).
+const FIRST_TEXT_CHARS = 4096
 function extractSeenPaths(text, step, seen, cap) {
   if (!text || typeof text !== 'string') return
   text = text.replace(/https?:\/\/[^\s"'`<>)\]]+/g, ' ') // drop URLs so remote asset paths aren't "seen files"
@@ -229,7 +237,7 @@ function extractSeenPaths(text, step, seen, cap) {
     if (p.length < 3 || p.endsWith('/') || !acceptPath(p)) continue
     const ex = seen.get(p)
     if (ex) ex.count++
-    else { seen.set(p, { path: p, firstStep: step, count: 1 }); n++ } // cap counts DISTINCT paths
+    else { const q = own(p); seen.set(q, { path: q, firstStep: step, count: 1 }); n++ } // cap counts DISTINCT paths
   }
 }
 function textOfResult(b) {
@@ -361,7 +369,7 @@ export function analyze(records) {
 // thread): when a record arrives before one already folded, no lane can be folded again alone — the session is folded from scratch.
 export class OrderBound extends Error {}
 
-// createAnalyzer() → { push(rec, gi) → step | null, laneOf(step), drop(lane), calls(), finish() → {streams, steps, stats, lanes} }: a
+// createAnalyzer() → { push(rec, gi) → step | null, laneOf(step), drop(lane), ask(lane, text), calls(), finish() → {streams, steps, stats, lanes} }: a
 // session folded ONE record at a time (3.5 §内存有界). push() segments the call into its lane and derives the lane's events and
 // resources from it right away, so the caller may let go of the record's body once push() returned (src/view/assemble.mjs keeps
 // only the call's meta). What the fold remembers between records is per lane and small: the message count and context size of the
@@ -381,8 +389,8 @@ export function createAnalyzer() {
   const steps = new Map() // the fold's own counter → its step (events and resources name a step by it until finish)
   const laneOfStep = new WeakMap() // step → its stream
   let n = 0, top = null, late = false, byOrder = false
-  const state = new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, tools }
-  const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', tools: new Map() })
+  const state = new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, ask, tools }
+  const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', ask: null, tools: new Map() })
   function mkStream(kind) {
     const s = { id: 's' + streams.length, kind, calls: [], events: [] }
     streams.push(s)
@@ -478,7 +486,8 @@ export function createAnalyzer() {
     const st = state.get(stream)
     if (stream.kind === 'subagent' && stream.calls.length === 1) {
       const firstUser = r.request.messages.find((m) => m.role === 'user')
-      st.firstText = firstUser ? textOfMessage(firstUser).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '') : ''
+      // its head only: a spawn's prompt opens it (finish), and the whole first message is a context's worth of text per lane
+      st.firstText = firstUser ? own(textOfMessage(firstUser).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').slice(0, FIRST_TEXT_CHARS)) : ''
     }
     const from = stream.events.length
     eventsOf(stream, st, step)
@@ -497,7 +506,7 @@ export function createAnalyzer() {
       const full = e.text
       delete e.text
       // its own 200 characters: a slice would keep the whole text alive for as long as the event lives (the fold keeps events)
-      e.preview = (' ' + full.replace(/\s+/g, ' ').trim().slice(0, 200)).slice(1)
+      e.preview = own(full.replace(/\s+/g, ' ').trim().slice(0, 200))
       e.chars = full.length
       e.text_omitted = 'derived event — full text is not shipped here; read it from this step\'s blocks'
     }
@@ -626,7 +635,9 @@ export function createAnalyzer() {
       const events = s.events.map((e) => ({ ...e, step: gi(e.step), streamId: id, ...(childOf.has(e) ? { childStreamId: childOf.get(e) } : null) }))
       const resources = EVENT_ONLY_KINDS.has(s.kind) ? [] : [...st.resMap.values()].map((r) => ({ ...r,
         segments: r.segments.map((g) => ({ enter: gi(g.enter), evict: gi(g.evict) })), loads: r.loads.map((l) => ({ ...l, step: gi(l.step) })) }))
-      const out = { id, kind: s.kind, calls: [...s.calls], events, resources, parent: b ? sid.get(b.streamId) : null, spawnArg: b ? b.arg : null }
+      const out = { id, kind: s.kind, calls: [...s.calls], events, resources, parent: b ? sid.get(b.streamId) : null, spawnArg: b ? b.arg : null,
+        // a spawned lane says its spawn's argument; the rest, their first prompt, said by tellApart once every wire's lanes are in (4.4 §看板 v2 需要的补充)
+        ...(b ? { task: b.arg || taskOf(st.ask) } : { task: null, [HEAD]: st.ask ?? null }) }
       if (!EVENT_ONLY_KINDS.has(s.kind)) {
         // "only seen" = matched paths minus anything actually opened. Dedupe absolute-vs-relative
         // spellings of the SAME opened file (path-boundary suffix), but keep distinct-directory
@@ -651,7 +662,7 @@ export function createAnalyzer() {
         const laneId = s.kind === 'subagent' ? s.id : s.kind
         return {
           id: laneId, streamId: s.id, kind: s.kind, icon: LANE_META[s.kind].icon,
-          label: s.kind === 'subagent' ? `subagent: ${s.spawnArg || 'task'}` : LANE_META[s.kind].label,
+          label: LANE_META[s.kind].label, task: s.task, ...(HEAD in s ? { [HEAD]: s[HEAD] } : null),
           ...(LANE_META[s.kind].note ? { note: LANE_META[s.kind].note } : null),
           calls: s.calls, events: s.events, resources: s.resources, seenFiles: s.seenFiles || [], giLocal,
           peakCtx: s.calls.reduce((m, c) => Math.max(m, c.ctx), 1),
@@ -673,7 +684,9 @@ export function createAnalyzer() {
     }
     return { streams: view, steps: stepList, stats, lanes }
   }
-  return { push, finish, drop, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()] }
+  // ask(lane, text): the lane's first prompt, said by the caller that holds the first call's blocks (src/view/blockmeta.mjs firstHuman)
+  const ask = (s, text) => { state.get(s).ask = text }
+  return { push, finish, drop, ask, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()] }
 }
 
 // ── the linear context: the exact tools → system → messages sequence the model assembles ──
@@ -716,11 +729,20 @@ const BLK_KEY_CAP = 4096
 // append-only conversation re-sends its whole context every turn, so one session asks for the key of the
 // SAME block text once per call — measured 17 594 block keys over 494 distinct contents. Hashing the 17 100
 // repeats was 89 ms of a 115-call session's 305 ms. Same text in, same key out; the map dies with the call.
+// A block OBJECT's hash is also kept by the object itself (a WeakMap: a stitched context hands the same parsed block to every call of
+// its chain, and the text would be built again for each); the per-lane text memo stays for the contents that arrive as new objects.
+// A memo's `null` is a miss, as `undefined` is: the fold's lane memo answers `null` for a lane with no baseline yet
+// (src/view/assemble.mjs: `keys.get(t) ?? (was && was.get(t))`), and a key must be the block's hash, whichever fold asked first.
+const keyOfBlock = new WeakMap()
 const blkKey = (prefix, b, memo) => {
-  const t = blkHashText(b, BLK_KEY_CAP)
-  if (!memo) return prefix + hash(t)
-  let h = memo.get(t)
-  if (h === undefined) memo.set(t, (h = hash(t)))
+  const obj = b && typeof b === 'object'
+  let h = obj ? keyOfBlock.get(b) : undefined
+  if (h === undefined) {
+    const t = blkHashText(b, BLK_KEY_CAP)
+    if (!memo) h = hash(t)
+    else if ((h = memo.get(t)) == null) memo.set(t, (h = hash(t)))
+    if (obj) keyOfBlock.set(b, h)
+  }
   return prefix + h
 }
 
@@ -740,6 +762,9 @@ function truncNote(text) {
   return m ? m[m.length - 1] : null
 }
 
+// A tools / system entry's parsed source item, the key of the per-block memos (blockBytes, flatBlockText). NON-enumerable: flat entries
+// ship inside page bodies, and the item must never serialize with them. A bare string has no identity to key by: it is left out.
+const withSrc = (d, src) => (src && typeof src === 'object' ? Object.defineProperty(d, 'src', { value: src }) : d)
 export function linearContext(request, keyMemo = null) {
   const flat = []
   // ── resource ↔ RESULT linking ────────────────────────────────────────
@@ -772,16 +797,16 @@ export function linearContext(request, keyMemo = null) {
       const verbatim = hasSchema || hasDesc
       const props = hasSchema ? (t.input_schema?.properties ? Object.keys(t.input_schema.properties) : []) : (t.input_schema_props || [])
       const descChars = hasDesc ? t.description.length : (t.description_chars || 0)
-      flat.push({
+      flat.push(withSrc({
         sec: 'tools', kind: 'tool', role: 'tool', ti: e.path.i, name: t.name || '', ttype: t.type || '',
         props, descChars, cc: t.cache_control || null, mcp,
         verbatim, desc: hasDesc ? t.description : undefined, schema: hasSchema ? t.input_schema : undefined,
         resKey: mcp ? 'mcp::' + (String(t.name).split('__')[1] || '') : '',
         key: 'T:' + (t.name || e.path.i) + ':' + descChars + ':' + props.length,
-      })
+      }, t))
     } else if (e.section === 'system') {
       const b = e.parsed, text = b?.text || ''
-      flat.push({ sec: 'system', kind: 'system', role: 'system', si: e.path.i, label: sysLabel(text), text, chars: text.length, volatile: e.volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }, keyMemo) })
+      flat.push(withSrc({ sec: 'system', kind: 'system', role: 'system', si: e.path.i, label: sysLabel(text), text, chars: text.length, volatile: e.volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }, keyMemo) }, b))
     } else {
       const b = e.parsed, type = typeof b === 'string' ? 'text' : (b?.type || 'text')
       const d = {
@@ -823,7 +848,16 @@ function canonJSON(v) {
 }
 // a flat block's canonical text — for byte-level divergence localization within the first diverging block,
 // and the verbatim byte source for the D17④ prefix SHA-256 (exported; used by the server-side assembler).
+// Memo by the parsed source object, as blockBytes (src/view/blockmeta.mjs): prefixChain asks it of every block of every call.
+const textOfSrc = new WeakMap()
 export function flatBlockText(b) {
+  const src = b.sec === 'tools' ? b.src : b.sec === 'system' ? null : b.block
+  if (!src || typeof src !== 'object') return flatBlockTextOf(b)
+  let t = textOfSrc.get(src)
+  if (t === undefined) textOfSrc.set(src, (t = flatBlockTextOf(b)))
+  return t
+}
+function flatBlockTextOf(b) {
   if (b.sec === 'tools') return 'T:' + (b.name || '') + '\u0001' + (b.desc != null ? b.desc : '') + '\u0001' + (b.schema !== undefined ? JSON.stringify(b.schema) : '')
   if (b.sec === 'system') return b.text || ''
   return blkHashText(b.block)
@@ -910,7 +944,7 @@ export function cacheBreak(prevFlat, curFlat, opts = {}) {
     // byte-level localization within the first diverging block (structural estimate)
     const prevText = flatBlockText(prev), curText = flatBlockText(cur)
     const off = firstDiffOffset(prevText, curText)
-    if (off >= 0) { out.byteOffset = off; out.byteContext = curText.slice(off, off + 48) }
+    if (off >= 0) { out.byteOffset = off; out.byteContext = own(curText.slice(off, off + 48)) }
     // analyze()'s drop-based compaction verdict is authoritative — a compaction that kept the first
     // user turn breaks mid-history; without the hint that reads as 'content-changed'.
     if (opts.compaction) out.cause = 'compaction'

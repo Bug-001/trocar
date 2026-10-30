@@ -22,7 +22,7 @@ import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
 // timing (tests): {firstByteTimeoutMs, upstreamSlowMs, preludeStallMs} — the engine's waits, 5 s each by default; rejectWindowMs — the leaf
 // rejection window (flow.mjs REJECT_WINDOW_MS, 10 s).
 // ingressToken: the install's ingress token (4.8 §3), required for listen({ingress}).
-export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, retention = null, describe = () => ({}), onError = () => {}, onFailure = null, timing = {}, drainTimeoutMs, ingressToken = null }) {
+export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, retention = null, describe = () => ({}), onError = () => {}, onFailure = null, onHeld = () => {}, timing = {}, drainTimeoutMs, ingressToken = null }) {
   const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0, notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }
   const servers = []
   const active = new Set()
@@ -36,18 +36,10 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   const neg = createNegativeCache()
   // neg_key: what the entry is keyed by — "<pid>", or "<route>.<group>" for a connection with no pid (4.8 §5.5)
   const negWritten = (made, key, o) => { if (made) { const e = neg.get(key); failure({ code: 'negative-cache', pid: e.pid ?? null, neg_key: e.negKey, agent: e.agent, host: e.host, cause: e.cause, reason: `${e.host} is no longer decrypted for ${e.pid != null ? `pid ${e.pid}` : e.negKey} (${e.cause}${e.rejections > 1 ? `, ${e.rejections} times in a row` : ''}); its connections there are passed through until ${e.pid != null ? 'it exits' : 'every process of that form has exited'}` }) } return made }
-  // trust-rejected (D51④, 4.6 §事件与码): a critical failure at most once per (pid, host) in the process's life, the negative cache's bound; the
-  // daemon's forgetPid ends it with the negative cache's entries (negative-cache-cleared, counted in `dropped` when it was not cached too)
-  const rejectedOnce = new Set()
-  const firstRejection = (key) => (rejectedOnce.has(key) ? false : (rejectedOnce.add(key), true))
-  const forgetWho = (who) => {
-    who = String(who)
-    const cached = new Set(neg.list().filter((e) => e.negKey === who).map((e) => e.key))
-    let only = 0
-    for (const k of [...rejectedOnce]) if (k.slice(0, k.indexOf('|')) === who) { rejectedOnce.delete(k); if (!cached.has(k)) only++ }
-    return neg.forgetKey(who) + only
-  }
-  const negCache = { ...neg, observe: (key, o) => negWritten(neg.observe(key, o), key, o), mark: (key, o) => negWritten(neg.mark(key, o), key, o) }
+  // onHeld(negKey): the cache now holds something under this key — a strike below the threshold or an entry — so whoever clears keys when their
+  // process or door is gone (the daemon's sweep, 4.8 §5.5) watches it from the first rejection, not only from the first record
+  const held = (o) => { try { onHeld(String(o.meta.negKey ?? o.meta.pid)) } catch (e) { onError(e) } }
+  const negCache = { ...neg, observe: (key, o) => { if (o.rejected) held(o); return negWritten(neg.observe(key, o), key, o) }, mark: (key, o) => { held(o); return negWritten(neg.mark(key, o), key, o) } }
   let flowSeq = 0
   const defaultConnect = (dst) => net.connect(dst.port, dst.address)
   // A capture failure is never silent (D38, 4.6 §记录): one shaped record {event:'failure', where:'engine', code,
@@ -116,7 +108,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     }
   }
   const flowCtx = (connect) => ({
-    ...timing, drainTimeoutMs, issuer, store, upstreamCa, upstreamTrust, policy, isRecording, retention, negCache, counters, failure, firstRejection,
+    ...timing, drainTimeoutMs, issuer, store, upstreamCa, upstreamTrust, policy, isRecording, retention, negCache, counters, failure,
     connectUpstream: connect,
     newFlowId: () => `flow_${String(++flowSeq).padStart(6, '0')}`,
   })
@@ -126,6 +118,8 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     const meta = withExtras(meta0)
     counters.active++
     const ctx = flowCtx(connect)
+    // every failure of this flow names its agent (4.6, V30): the engine copies the door's meta, it does not branch on a harness
+    if (meta.agent != null) ctx.failure = (rec) => failure(rec.agent === undefined ? { agent: meta.agent, ...rec } : rec)
     const entry = { agent: meta.agent ?? null, handle: null }
     flows.add(entry)
     ctx.register = (h) => { entry.handle = h }
@@ -141,7 +135,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       if (!rec || rec.not_captured === 'error' || (rec.error && rec.error.wait)) return
       if (rec.decision === 'decrypt') counters.decrypted++
       else if (rec.decision === 'splice') counters.spliced++
-    }).catch((e) => { failure({ code: 'engine-error', pid: meta.pid ?? null, dst: meta.dst, reason: `handling the connection failed: ${String((e && e.message) || e)}` }); onError(e) }).finally(() => { active.delete(done); counters.active--; gone() })
+    }).catch((e) => { ctx.failure({ code: 'engine-error', pid: meta.pid ?? null, dst: meta.dst, reason: `handling the connection failed: ${String((e && e.message) || e)}` }); onError(e) }).finally(() => { active.delete(done); counters.active--; gone() })
     active.add(done)
     if (duringLookup) socket.removeListener('error', duringLookup) // handleFlow's own listener has taken over
   }
@@ -283,5 +277,5 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
 
   // negatives() is for status only; forgetPid(pid) is called by the daemon when that process exits; forgetNegKey(k) when the last process of a
   // form with no pid to key by has (4.8 §5.5).
-  return { listen, closeGroups, close, stats, drain, relayed, drained, negatives: () => neg.list(), forgetPid: forgetWho, forgetNegKey: forgetWho }
+  return { listen, closeGroups, close, stats, drain, relayed, drained, negatives: () => neg.list(), forgetPid: neg.forgetKey, forgetNegKey: neg.forgetKey, holdsNegKey: neg.holds }
 }

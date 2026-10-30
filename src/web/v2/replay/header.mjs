@@ -38,7 +38,7 @@ function chipHtml(meta) {
 }
 
 // ── the head: ONLY the parts of 1.2's table — nothing statistical ever lands here ────────────────────────────────────
-export function sessionHeadHtml({ meta, lanes, follow, libraryHash }) {
+export function sessionHeadHtml({ meta, lanes, follow, libraryHash, stale }) {
   if (!meta) return '' // nothing loaded yet: the head stays empty rather than guessing
   const slugOk = meta.project_slug && meta.project_slug !== '_unresolved'
   const projName = slugOk ? (meta.project_path ? String(meta.project_path).split('/').filter(Boolean).pop() : meta.project_slug) : ''
@@ -47,7 +47,7 @@ export function sessionHeadHtml({ meta, lanes, follow, libraryHash }) {
     chipHtml(meta) +
     (slugOk ? `<span class="sh-proj" title="${esc(meta.project_path || '')}">${esc(W.PROJECT)} ${esc(projName)}</span>` : '') +
     `<span class="spacer"></span>` +
-    `<button type="button" class="sh-follow${follow ? ' on' : ''}" data-follow="1" aria-pressed="${follow ? 'true' : 'false'}">${W.FOLLOW}</button>` +
+    `<button type="button" class="sh-follow${follow ? ' on' : ''}" data-follow="1" aria-pressed="${follow ? 'true' : 'false'}"${stale ? ` data-state="paused" title="${esc(W.FOLLOW_PAUSED)}"` : ''}>${W.FOLLOW}</button>` +
     `<span class="sh-info">${infoButton({ label: W.SESSION_INFO_LABEL, title: W.SESSION_INFO_LABEL, body: '<div class="sipre">…</div>' })}</span>`
 }
 
@@ -86,10 +86,9 @@ export function fidelityFacts({ truncated, analyzed, logged, errors, gap, harnes
   }
   if (logged && Number(logged.count) > 0) facts.push({ html: `<a href="#/settings/storage${esc(h)}">${esc(W.loggedFact(logged.count))}</a>` })
   const errs = (errors || []).filter(Boolean)
-  if (errs.length) {
-    facts.push({ html: `<a href="#/settings/storage">${esc(W.filesFact(errs.length))}</a>` })
-    for (const e of errs) tech.push([String(e.where ?? ''), String(e.reason ?? '')])
-  }
+  const lost = errs.filter((e) => e.level !== 'note').length // a note (an index-cold slow read) is not a loss: tech pairs only
+  if (lost) facts.push({ html: `<a href="#/settings/storage">${esc(W.filesFact(lost))}</a>` })
+  for (const e of errs) tech.push([String(e.where ?? '') + (e.code ? ' · ' + e.code : ''), String(e.reason ?? '')])
   if (gap) facts.push({ html: `<a href="#/capture/log${esc(h)}">${esc(W.GAP_FACT)}</a>` })
   return { facts, tech }
 }
@@ -178,7 +177,7 @@ export function totalsOf(s) {
 
 export function renderSessionHead(el, s) {
   if (!el) return
-  const html = sessionHeadHtml({ meta: s.meta, lanes: s.lanes, follow: s.follow, libraryHash: s.ctx && s.ctx.store ? s.ctx.store.get().libraryHash : '' })
+  const html = sessionHeadHtml({ meta: s.meta, lanes: s.lanes, follow: s.follow, stale: !!s.staleErr, libraryHash: s.ctx && s.ctx.store ? s.ctx.store.get().libraryHash : '' })
   if (!html) { el.innerHTML = ''; return }
   s.totals = s.A ? totalsOf(s) : null
   // the popover body replaces the placeholder the builder had to leave (infoButton needs its layer's html up front)
@@ -188,10 +187,15 @@ export function renderSessionHead(el, s) {
 }
 
 // 1.5 K-29: a read failed after this session was drawn — the desk keeps the last good answer; one quiet line says since when it is
-// not refreshed, why, and offers to read again now (a reader's action: the back-off does not hold it)
+// not refreshed, the reason's first line (cut short), and offers to read again now (a reader's action: the back-off does not
+// hold it). The whole reason — a native stack, say — goes to the collapsed 技术细节, never the line.
 export function staleLineHtml(st) {
   if (!st) return ''
-  return `<div class="fidline fidstale">${esc(W.notRefreshed(fmtWhen(st.since), st.reason || ''))}<span class="fidsep">·</span><button type="button" class="linkbtn" data-retry="1">${esc(W.RETRY)}</button></div>`
+  const full = String(st.reason || '')
+  const first = full.split('\n')[0].trim()
+  const why = first.length > 80 ? first.slice(0, 79).trimEnd() + '…' : first
+  return `<div class="fidline fidstale">${esc(W.notRefreshed(fmtWhen(st.since), why))}<span class="fidsep">·</span><button type="button" class="linkbtn" data-retry="1">${esc(W.RETRY)}</button></div>` +
+    (full && full !== why ? techDetailsHtml([['reason', full]], { id: 'staletech' }) : '')
 }
 
 export function wireSessionHead(el, s) {
@@ -199,7 +203,7 @@ export function wireSessionHead(el, s) {
     const t = e.target
     if (t.closest('[data-retry]')) { if (s.poll) s.poll(); return }
     const fol = t.closest('[data-follow]')
-    if (fol) { s.follow = fol.getAttribute('aria-pressed') !== 'true'; renderSessionHead(el, s); if (s.follow && s.poll) s.poll(); return }
+    if (fol) { if (fol.getAttribute('aria-pressed') === 'true') { s.follow = false; renderSessionHead(el, s) } else s.followOn(); return } // on: re-aims the page at the followed step
     const jump = t.closest('[data-si]')
     if (!jump) return
     const tot = s.totals || totalsOf(s)

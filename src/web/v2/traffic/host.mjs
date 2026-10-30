@@ -10,6 +10,7 @@ import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { menuButton } from '../core/ui.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
 import { delegate } from '../core/dom.mjs'
+import { revealHeader } from '../core/sensitive.mjs'
 import { createVList } from '../core/vlist.mjs'
 import { formatHash } from '../core/router.mjs'
 import { requestDetailHtml, detailModel } from './request-view.mjs'
@@ -140,6 +141,7 @@ export function mount(el, ctx) {
   const listEl = () => el.querySelector('#hlist')
 
   function paint() {
+    if (dead) return // a late answer or a media change after unmount never paints over the next screen
     const savedScroll = listEl() ? listEl().scrollTop : 0
     const head = pageHeadHtml({ crumbs: crumbs(), scope: scope(), readAt })
     let body = ''
@@ -204,16 +206,18 @@ export function mount(el, ctx) {
   async function readDetail() {
     detail = null; detailErr = null
     paint()
-    const r = await api.get('calls', { ref })
-    if (dead) return
+    const at = ref
+    const r = await api.get('calls', { ref: at })
+    if (dead || ref !== at) return // a slower earlier answer never paints over the newer selection (invariant 4)
     const m = r.ok ? detailModel(r.data) : null
     if (m && m.rec) detail = m
     else detailErr = (m && m.error) || r.error || `HTTP ${r.status}` // an unknown ref is an errors[] entry, never an empty body
     paint()
   }
   async function readList() {
-    const r = await readPage(api, { harness, host, cls: q.cls, window: q.window })
-    if (dead) return
+    const asked = q
+    const r = await readPage(api, { harness, host, cls: asked.cls, window: asked.window })
+    if (dead || q !== asked) return
     if (r.ok) { readAt = api.now(); err = null; list = listModel(r.data) }
     else { err = r.error || `HTTP ${r.status}`; if (!list || list.state !== 'table') list = null }
     paint()
@@ -233,8 +237,17 @@ export function mount(el, ctx) {
     delegate(el, 'click', '[data-act="retry"]', () => { err = null; paint(); readList() }),
     delegate(el, 'click', '[data-act="retry-detail"]', () => readDetail()),
     delegate(el, 'click', '[data-act="close-detail"]', () => router.setParams({ ref: null })),
-    // one credential header value at a time, from the document already held (masking is display-only, 2.6 §C)
-    delegate(el, 'click', '[data-reveal]', (e, b) => { revealed = b.dataset.reveal; paint() }),
+    // one credential header value at a time: the server blanks them, so「Show」re-reads the record with that one value
+    // (2.6 §C); a failed or empty read keeps the detail as it is, the value still masked
+    delegate(el, 'click', '[data-reveal]', async (e, b) => {
+      const name = b.dataset.reveal, at = ref
+      const r = await revealHeader(api, at, name)
+      if (dead || ref !== at) return
+      const m = r.ok ? detailModel(r.data) : null
+      if (!m || !m.rec) return
+      detail = m; revealed = name
+      paint()
+    }),
     // a plain click selects the row here (a replace, not a new history entry); a modified click is the browser's
     delegate(el, 'click', 'a.hrow', (e, a) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button) return
@@ -248,7 +261,8 @@ export function mount(el, ctx) {
   if (mm) {
     mode = detailModeOf(mm)
     const mq = mm(`(min-width: ${DETAIL_BREAK}px)`)
-    if (mq && mq.addEventListener) mq.addEventListener('change', (e) => { mode = e.matches ? 'column' : 'drawer'; paint() })
+    const onMedia = (e) => { mode = e.matches ? 'column' : 'drawer'; paint() }
+    if (mq && mq.addEventListener) { mq.addEventListener('change', onMedia); offs.push(() => mq.removeEventListener('change', onMedia)) }
   }
   const inControl = (t) => !!(t && t.closest && t.closest('[data-menu],[data-pop],.pop,button,input,select,textarea,a.replay'))
   setScreenKeys((e) => {

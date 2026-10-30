@@ -140,6 +140,54 @@ for (const width of [1280, 1024]) {
   }
 }
 
+// 1.2 #22: leaving a screen aborts its reads still in flight, and the content area reads "Reading…" (never blank) while the next
+// screen's module loads. Overview's /api reads and the library module are held at the network, so both windows stay open to look at.
+test('a screen change aborts the old screen\'s reads and the content is never blank while the next one loads', { skip }, async () => {
+  let holdApi = true, releaseLib
+  const libHeld = new Promise((r) => { releaseLib = r })
+  const held = new Set()
+  const b = await withBoard({
+    bytes: 0, chromium: gate.chromium,
+    setup: async (page) => {
+      await page.route(/\/api\//, async (route) => {
+        if (!holdApi) return route.continue()
+        held.add(route.request())
+        await new Promise(() => {}) // never answered: only an abort from the page ends it
+      })
+      await page.route(/\/library\/library\.mjs/, async (route) => { await libHeld; route.continue().catch(() => {}) })
+    },
+  })
+  try {
+    const { page } = b
+    const aborted = new Set()
+    page.on('requestfailed', (r) => { if (/net::ERR_ABORTED/.test(r.failure()?.errorText || '')) aborted.add(r) })
+    await page.waitForSelector('#screen .page')
+    await page.waitForFunction(() => location.hash === '#/overview')
+    const overviewReads = [...held]
+    assert.ok(overviewReads.length > 0, 'overview sent no /api read to hold')
+    await page.evaluate(() => { // every mutation batch of #screen is checked before the frame paints
+      const el = document.querySelector('#screen')
+      globalThis.__blank = 0
+      new MutationObserver(() => { if (!el.children.length) globalThis.__blank++ }).observe(el, { childList: true, subtree: true })
+    })
+    holdApi = false
+    await page.evaluate(() => { location.hash = '#/sessions' })
+    await page.waitForSelector('#screen .screenwait') // the library module is still held
+    await expectAborted(page, aborted, overviewReads)
+    releaseLib()
+    await page.waitForFunction(() => !document.querySelector('#screen .screenwait') && document.querySelector('#screen').children.length > 0) // the library mounted
+    assert.equal(await page.evaluate(() => globalThis.__blank), 0, '#screen was blank between the two screens')
+    assert.deepEqual(b.errors, [])
+  } finally { releaseLib(); await b.stop() }
+})
+
+// a read held on the old screen ends as an abort from the page (net::ERR_ABORTED) within 5 s of the change (the sidebar's own reads
+// may be held too and are not the screen's, so one abort of the held set is the evidence)
+async function expectAborted(page, aborted, reads) {
+  for (let t = Date.now(); Date.now() - t < 5000 && !reads.some((r) => aborted.has(r)); ) await page.waitForTimeout(50)
+  assert.ok(reads.some((r) => aborted.has(r)), `none of the ${reads.length} held overview reads was aborted: ${reads.map((r) => new URL(r.url()).pathname).join(' ')}`)
+}
+
 test('K-30: with no token the page names `trocar board`, draws no navigation and sends nothing after the first 403', { skip }, async () => {
   const b = await withBoard({ bytes: 0, token: false, chromium: gate.chromium })
   try {

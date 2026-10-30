@@ -114,3 +114,38 @@ test('the reply\'s thinking renders (the server normalizer\'s own output for a r
   const h = draw(base({ norm }))
   assert.match(h, /weighing the options/); assert.match(h, /done/)
 })
+
+test('capture routing rides the raw panel\'s tech details (2.3 §调用保真行 → 2.6 §A)', () => {
+  const h = draw(base({ wire: { transport: 'http', labels: [{ id: 'capture-routing', label: 'route', text: 'ROUTE-TEXT-x' }] } }))
+  const open = techAt(h)
+  assert.ok(open > -1 && h.indexOf('ROUTE-TEXT-x') > open)
+})
+
+// A1 (2.6 §A params row): a key the server shipped a `value` for shows it as is; a key without one keeps its length. Which keys
+// carry a value is the server's call (nonBlockKeysOf, a scalar up to its threshold) — the panel never judges length itself.
+test('a request key shows the value the server shipped; without one, its length', () => {
+  const CH = 517 // under 1000, so the row prints it as is
+  const cases = [['s', 'v'.repeat(5)], ['empty', ''], ['num', 0.731], ['zero', 0], ['bool', false], ['obj', { a: 1 }], ['absent', undefined]]
+  for (const [key, value] of cases) {
+    const k = { key, chars: CH, ref: 'r9' }
+    if (value !== undefined) k.value = value
+    const h = draw(base({ nonBlockKeys: [k] }))
+    const row = h.slice(h.indexOf(`>${key}</code>`), h.indexOf('class="nbkbody"'))
+    const shown = ['string', 'number', 'boolean'].includes(typeof value)
+    assert.equal(row.includes('>' + String(value) + '<'), shown, `${key}: value shown`)
+    assert.equal(row.includes(String(CH)), !shown, `${key}: length shown`)
+  }
+})
+
+// A2 (2.6 §A): a failed call's raw reason is a tech detail; the visible reply line carries no server text
+test('a failed call\'s reason appears only inside the reply\'s tech details', () => {
+  const reason = 'ERR-zq81-upstream-boom'
+  for (const o of [{ error: reason }, { error: { message: reason } }, { status: 503, errMsg: reason }]) {
+    const h = draw(base({ norm: {}, ...o }))
+    assert.ok(h.includes(reason), 'the reason is kept')
+    for (let i = h.indexOf(reason); i > -1; i = h.indexOf(reason, i + 1)) {
+      const d = h.lastIndexOf('<div class="disc"', i)
+      assert.ok(d > -1 && !h.slice(d, i).includes('</div></div>'), 'occurrence outside a disclosure')
+    }
+  }
+})

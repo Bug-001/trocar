@@ -32,9 +32,9 @@ const NODE_MIN = '22.15'
 export function nodePreflight({ versions = process.versions } = {}) {
   const have = versions && versions.node
   const m = typeof have === 'string' && /^(\d+)\.(\d+)(\.|$)/.exec(have)
-  if (!m) return { ok: false, have: have ?? null, min: NODE_MIN, doctor: `读不到 Node 的版本(${JSON.stringify(have ?? null)}):trocar 在 macOS 上要 Node ≥ ${NODE_MIN}。确认 \`node --version\` 之后再 trocar on` }
+  if (!m) return { ok: false, have: have ?? null, min: NODE_MIN, doctor: `The Node version could not be read ${typeof have === 'string' && have ? ` (${JSON.stringify(have)})` : ''}; trocar on macOS needs Node ${NODE_MIN} or newer. Check node --version, then run trocar on again.` }
   const [maj, min] = NODE_MIN.split('.').map(Number)
-  if (Number(m[1]) < maj || (Number(m[1]) === maj && Number(m[2]) < min)) return { ok: false, have, min: NODE_MIN, doctor: `Node ${have} 太旧:trocar 在 macOS 上要 Node ≥ ${NODE_MIN}(守护进程每次登录都由 launchd 用这个 Node 拉起;更老的 Node 读不到钥匙串里另加的根)。升级 Node 之后再 trocar on` }
+  if (Number(m[1]) < maj || (Number(m[1]) === maj && Number(m[2]) < min)) return { ok: false, have, min: NODE_MIN, doctor: `Node ${have} is too old: trocar on macOS needs Node ${NODE_MIN} or newer. launchd starts the background process with this Node at every login, and an older Node cannot read the root added to your keychain. Update Node, then run trocar on again.` }
   return { ok: true, have, min: NODE_MIN }
 }
 
@@ -52,7 +52,7 @@ export async function refuseElevated({ getuid = processUid, geteuid = processUid
   if (uid !== 0 && euid !== 0) return null
   return {
     code: 'root-token',
-    reason: `用你自己的账号跑,不要用 sudo(R7:trocar 不以 root 运行;${euid === 0 && uid !== 0 ? 'euid 是 0' : 'uid 是 0'})`,
+    reason: `run trocar as your own user, not with sudo: trocar does not run as root (${euid === 0 && uid !== 0 ? 'the effective user id is 0' : 'the user id is 0'})`,
     token: { uid, euid },
   }
 }

@@ -9,7 +9,7 @@ import { attrSel } from '../core/dom.mjs'
 import { when } from './analysis.mjs'
 import { xOf, inWindow, nearestByX, nearestByTs, turnsReviewed } from './lanes.mjs'
 import { usageOf, priceMatch, costOf } from '../core/metrics.mjs'
-import { laneKind, laneWord, SUBAGENT_ROW, BG_ROW, TC_ROW, TC_SAMPLED_TIP, TC_NO_SIZE, FLAGGED_WORD, REVIEW_TIP, ONLY_MAIN } from '../labels/replay.mjs'
+import { laneKind, laneWord, SUBAGENT_ROW, BG_ROW, TC_ROW, laneTimes, callsWord, TC_SAMPLED_TIP, TC_NO_SIZE, FLAGGED_WORD, REVIEW_TIP, ONLY_MAIN } from '../labels/replay.mjs'
 import { L } from '../core/labels.mjs'
 
 const failOf = (c) => !!c.error || (c.status != null && c.status !== 200) // 2.2's predicate, first clause
@@ -67,10 +67,14 @@ function railHtml(l, s, { sub = false } = {}) {
       if (v == null) { if (u) from = true; continue }
       sum += v; if (m.exact === false) from = true
     }
-    name = `${esc(String(l.task != null && l.task !== '' ? l.task : l.label || ''))} · ${l.calls.length} calls` + (sum > 0 || from ? ` · ≈ ${from ? 'from ' : ''}${usd(sum)}` : '')
-  } else name = `${esc(laneWord(l.kind))} · ${l.calls.length} calls`
+    const task = String(l.task != null && l.task !== '' ? l.task : l.label || '')
+    name = `${task} · ${callsWord(l.calls.length)}` + (sum > 0 || from ? ` · ≈ ${from ? 'from ' : ''}${usd(sum)}` : '')
+  } else name = laneTimes(laneWord(l.kind), l.calls.length)
+  // the row name ellipsizes in the gutter; its hover carries the whole of it, the lane's own label and the kind's hint
+  const lab = String(l.label || '')
+  const tip = [name, lab && !name.includes(lab) ? lab : '', hint].filter(Boolean).join(' · ')
   return `<div class="rail k-${esc(l.kind)} tkrow">` +
-    `<div class="tgut railname ${col ? 'col' : ''}" data-toggle="${esc(l.id)}" title="${esc(hint)}"><span class="tw">${col ? '▸' : '▾'}</span> <span class="tn">${name}</span></div>` +
+    `<div class="tgut railname ${col ? 'col' : ''}" data-toggle="${esc(l.id)}" title="${esc(tip)}"><span class="tw">${col ? '▸' : '▾'}</span> <span class="tn">${esc(name)}</span></div>` +
     (col ? '<div class="tlane"></div>' : `<div class="tlane railbody" data-lane="${esc(l.id)}">${renderTicks(l, s)}</div>`) + `</div>`
 }
 

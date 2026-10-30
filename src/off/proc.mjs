@@ -65,7 +65,9 @@ export function readStatus(pid, { root = '/proc' } = {}) {
  *  clock through /proc/uptime read now (centiseconds, the same clock as file mtimes). /proc/stat btime is whole
  *  seconds and drifts from the wall clock on a virtual machine: on a test machine it put a `claude` started 0.4 s after
  *  `trocar collector install` BEFORE the settings write, so a trusted process looked "config-after-start" (Plan 3a). btime remains the fallback when /proc/uptime is unreadable. */
-export function readStartTime(pid, { root = '/proc', hz = 100, now = Date.now } = {}) {
+// The kernel counts a process's start in clock ticks of USER_HZ (100 on every Linux trocar runs on): a start read from /proc is known to 1000 / USER_HZ ms.
+export const USER_HZ = 100
+export function readStartTime(pid, { root = '/proc', hz = USER_HZ, now = Date.now } = {}) {
   let stat
   try { stat = nodeFs.readFileSync(path.join(root, String(pid), 'stat'), 'utf8') } catch { return null }
   const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/) // field 3 onward; comm may hold ')' or spaces
@@ -222,7 +224,7 @@ function procsOfLinux({ uid, root }) {
     const st = readStatus(pid, { root })
     if (!st || (uid != null && st.uid !== uid)) continue // gone since the listing, or another user's
     let env
-    out.push({ pid, ppid: st.ppid, uid: st.uid, startedAt: readStartTime(pid, { root }), exe: readExe(pid, { root }), argv: readArgv(pid, { root }), env: () => (env !== undefined ? env : (env = readEnviron(pid, { root }))) })
+    out.push({ pid, ppid: st.ppid, uid: st.uid, startedAt: readStartTime(pid, { root }), startGrain: 1000 / USER_HZ, exe: readExe(pid, { root }), argv: readArgv(pid, { root }), env: () => (env !== undefined ? env : (env = readEnviron(pid, { root }))) })
   }
   return out
 }
@@ -263,8 +265,12 @@ export function psArgv(cmdline, exe = null) {
   return k > 1 && normalizeName(head) === name ? [head, ...words.slice(k)] : words
 }
 
+// Both asks answer in the runner's own time (`then`): at once with spawnSync, as a promise with runAsync — the model daemon's, whose sweep and holder poll
+// read this table every few seconds while a negative key is held and must not stop its event loop for two `ps` (4.8 §5.5).
 function exesOfPs({ exec, env, rows }) {
-  const r = execTool('ps', ['-Axo', 'pid=,comm='], { run: exec, env: psEnv(env), maxBuffer: TABLE_MAX_BUFFER })
+  return then(execTool('ps', ['-Axo', 'pid=,comm='], { run: exec, env: psEnv(env), maxBuffer: TABLE_MAX_BUFFER }), (r) => exesOfAnswer(r, rows))
+}
+function exesOfAnswer(r, rows) {
   const how = r.code === null ? `did not finish (${r.err || 'no reason given'})` : `failed (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})`
   if (r.code !== 0) throw new Error(`the executables ask \`ps -Axo pid=,comm=\` ${how}, so the executables of the ${rows} process(es) the table listed are not known, nor which agents are alive`)
   const exes = new Map()
@@ -276,7 +282,9 @@ function exesOfPs({ exec, env, rows }) {
   return exes
 }
 function procsOfPs({ uid, exec, env }) {
-  const r = execTool('ps', ['-Axo', 'pid=,ppid=,uid=,lstart=,command='], { run: exec, env: psEnv(env), maxBuffer: TABLE_MAX_BUFFER })
+  return then(execTool('ps', ['-Axo', 'pid=,ppid=,uid=,lstart=,command='], { run: exec, env: psEnv(env), maxBuffer: TABLE_MAX_BUFFER }), (r) => procsOfAnswer(r, { uid, exec, env }))
+}
+function procsOfAnswer(r, { uid, exec, env }) {
   if (r.code !== 0) throw new Error(`ps failed (${r.code === null ? r.err : `exit ${r.code}: ${r.err}`}), so which agents are alive is not known`)
   const out = []
   let rows = 0, parsed = 0
@@ -290,16 +298,18 @@ function procsOfPs({ uid, exec, env }) {
     const cmdline = m[5].trim()
     const argv = psArgv(cmdline)
     const at = new Date(m[4].replace(/\s+/g, ' ')).getTime()
-    out.push({ pid: Number(m[1]), ppid: Number(m[2]), uid: Number(m[3]), startedAt: Number.isFinite(at) ? at : null, exe: argv[0], argv, argvSplit: true, cmdline, env: () => null, envRead: false })
+    out.push({ pid: Number(m[1]), ppid: Number(m[2]), uid: Number(m[3]), startedAt: Number.isFinite(at) ? at : null, startGrain: 1000, exe: argv[0], argv, argvSplit: true, cmdline, env: () => null, envRead: false })
   }
   if (rows > 0 && parsed === 0) throw new Error(`ps printed ${rows} line(s) and none could be read (the first: ${JSON.stringify(r.out.split('\n').find((l) => l.trim()).slice(0, 80))}), so which agents are alive is not known`)
   if (!out.length) return out // nobody of this user: nothing to name
-  const exes = exesOfPs({ exec, env, rows: out.length })
-  for (const p of out) if (exes.get(p.pid)) { p.exe = exes.get(p.pid); p.argv = psArgv(p.cmdline, p.exe) }
-  return out
+  return then(exesOfPs({ exec, env, rows: out.length }), (exes) => {
+    for (const p of out) if (exes.get(p.pid)) { p.exe = exes.get(p.pid); p.argv = psArgv(p.cmdline, p.exe) }
+    return out
+  })
 }
 
-/** The live processes of one user: `[{ pid, ppid, uid, startedAt: ms | null, exe, argv, env: () => Map | null }]` — `env` is read when asked for; macOS and
+/** The live processes of one user: `[{ pid, ppid, uid, startedAt: ms | null, startGrain, exe, argv, env: () => Map | null }]` — `startGrain` is how finely
+ *  the reader knows the start: the true start is in [startedAt, startedAt + startGrain) (macOS `lstart` 1000, Linux 1000 / USER_HZ, Windows 1); `env` is read when asked for; macOS and
  *  Windows rows add `cmdline` (the command line as it came, or null) and `envRead: false` (no other process's environment is readable there: `env` is null by the
  *  OS's rule, not because a read failed). `uid` null lists everyone's. Linux reads `root` (/proc); macOS runs two `ps` asks (the table, then the executables),
  *  Windows one
@@ -396,7 +406,7 @@ export async function primeProcQuestions({ platform = process.platform, dir, env
  *  same facts under different names. `argv` is the command line split by the one CommandLineToArgvW splitter the collector uses too (./winargv.mjs),
  *  `uid` is null (Windows has none) and another process's environment cannot be read at all (4.8 §10.1). */
 const winRow = ({ pid, ppid, name, exe, startedAt, cmdline, cmdlineState }) => ({
-  pid: Number(pid), ppid: Number.isFinite(ppid) ? Number(ppid) : null, uid: null, startedAt: Number.isFinite(startedAt) ? Number(startedAt) : null,
+  pid: Number(pid), ppid: Number.isFinite(ppid) ? Number(ppid) : null, uid: null, startedAt: Number.isFinite(startedAt) ? Number(startedAt) : null, startGrain: 1,
   exe: typeof exe === 'string' && exe !== '' ? exe : (typeof name === 'string' && name !== '' ? name : null),
   argv: splitCommandLine(typeof cmdline === 'string' && cmdline !== '' ? cmdline : null), cmdline: typeof cmdline === 'string' && cmdline !== '' ? cmdline : null,
   ...(cmdlineState ? { cmdlineState } : {}), env: () => null, envRead: false,

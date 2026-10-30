@@ -137,30 +137,36 @@ Cost is a local, editable estimate in `~/.trocar/pricing.json` (or the file `TRO
 `trocar query pricing` prints the table in effect and says where it came from); providers return
 usage, never dollars.
 
-What the board cannot vouch for, it labels on the call (raw panel and the top of the context window):
-- **不完整 · partial context**: what is shown is not the whole context the model saw (an earlier record is
-  missing, or the request body was stored incomplete — then the request's own label says exactly how).
-- **跨记录拼接 · stitched across records**: the context was reassembled from earlier records of the same
+What the board cannot vouch for, it labels on the call (the line at the top of the context window; the raw panel
+holds the detail):
+- **Context incomplete: earlier records are missing** (naming the record when it is known; **Context incomplete ·
+  cause unknown** when it is not): what is shown is not the whole context the model saw. When the request body itself
+  was stored incomplete, the request's own label says exactly how instead.
+- **reconstructed from earlier records**: the context was reassembled from earlier records of the same
   connection; every block is still verbatim.
-- **服务端删改 · server-edited context**: the response says the server edited the context it was sent.
-- **观测者效应 · capture changed client behaviour**: what trocar's trust injection changes in that agent
-  (e.g. request gzip off, a different TLS stack); legacy captures carry none.
-- **厂商缓存语义未知**: the upstream host is not a known vendor, so no cache labels are claimed for it.
-- **已截断 / 不完整 / 回复未解码 / 压缩请求体未解码**: which bytes of this record are missing or were not decoded.
-  A request the agent sent compressed is decoded by trocar when it reads it and shown with **请求体已解压 ·
-  request decompressed**; its blocks open as 「解码后逐字」 (the exact text after decompression, not the wire
-  bytes). 「压缩请求体未解码」 then means trocar could not decode it either (e.g. zstd on a Node without zstd).
-- **未识别 · unrecognized traffic** (a banner): records no dissector reads are counted and named, never
-  drawn as something else — also when only some records of a session are unrecognized. One session may
-  mix wire formats; each call is read by its own.
+- **the server edited the context; this is not everything the model received**: the response says so.
+- What trocar's trust injection changes in that agent (e.g. request gzip off, a different TLS stack) is one
+  line each in the raw panel; legacy captures carry none.
+- **What this provider's cache numbers mean is not certain**: the upstream host is not a known vendor, so no
+  cache claim is made for it.
+- **request: truncated at the capture limit** / **request: incomplete** / **reply: not decompressed** /
+  **Compressed request not decoded**: which bytes of this record are missing or were not decoded. A request the
+  agent sent compressed is decoded by trocar when it reads it and labelled **The request body was compressed on
+  the wire (gzip); this is the exact decompressed text** — its blocks are the text after decompression, not the
+  wire bytes. **Compressed request not decoded** then means trocar could not decode it either (e.g. zstd on a
+  Node without zstd).
+- **N records no parser can read; not drawn** (in the session's own fidelity line): records no dissector reads are
+  counted, never drawn as something else — also when only some records of a session are unrecognized. One
+  session may mix wire formats; each call is read by its own.
 - Request keys that are not context blocks are listed one by one, each opening its verbatim bytes.
   A token-count probe's request body is kept verbatim like any other (D40; `trocar classes` can turn that into a log
-  line), and its detail says which: kept, log only (**只记日志**), or captured before D40 and kept as a length
-  only (**本条采于 D40 之前,只存了长度**).
-- **保存什么 · what is kept** (the session picker's last group): the traffic classes on the board — per harness
-  and traffic class the level, the calls, the bytes on the wire and the bytes stored over 24 h / 7 d / all, so you
-  can see which class costs what before you change it. Each number says where it comes from (the records, the disk
-  total live, once-sealed sizes as an **估计**). The page shows the `trocar classes` command that changes a level.
+  line), and its detail says which: **(retention: full)**, **(retention: log only)**, or captured before D40 and
+  kept as a length only (**(retention: an older capture, length only)**).
+- **What is stored** (Settings → Storage): one row per traffic class with its level (**Everything** or
+  **Log only**), the calls and the bytes stored over 24 hours / 7 days / All, so you can see which class costs what
+  before you change it. A level is changed there (switching model calls or token counts to log only asks first) or with
+  `trocar classes`, and applies to calls that start later; the sealed compression ratio is marked **estimate**.
+  A call kept as log only says so on the call: **Logged only (your setting for** *harness* **·** *class***)**.
 - **The reply as captured** is listed in the raw panel with a locator per piece — the whole decoded
   stream of an HTTP call, each server message of a WebSocket call — each opening its verbatim bytes. A
   piece that cannot be opened says why (a JSON reply stored parsed only — one from before D40, or one that re-serializes to itself — a message kept as
@@ -168,8 +174,8 @@ What the board cannot vouch for, it labels on the call (raw panel and the top of
 - **Codex over WebSocket** (its default transport): each turn sends only its new input, so the board
   rebuilds the context the model saw from the earlier calls on the same connection, following
   `previous_response_id`. Every block still opens its verbatim bytes, also when they sit in an earlier
-  call's reply. Such a call is badged 跨记录拼接; if an earlier call it builds on was not captured, it is
-  badged 不完整 and says which one, and no cache claim is made over it. A warm-up (`generate:false`) sits
+  call's reply. Such a call is labelled **reconstructed from earlier records**; if an earlier call it builds
+  on was not captured, it is labelled **Context incomplete** and says which one, and no cache claim is made over it. A warm-up (`generate:false`) sits
   in the probe lane, not on the turn axis; messages the agent sent while a call was open (an interrupt)
   are listed on that call.
 - **Claude Code on Message Threads** (the server keeps the conversation): each call after the first
@@ -178,16 +184,23 @@ What the board cannot vouch for, it labels on the call (raw panel and the top of
   conversation and each subagent are their own threads and their own lanes. Request blocks open their
   verbatim bytes in the call that sent them; an earlier reply says it was rebuilt from that call's
   stream. If an earlier call of the thread was not captured or its reply did not fully arrive, the call and the
-  rest of the thread are badged 不完整 and say which call and why. Background calls (request class
+  rest of the thread are labelled **Context incomplete** and say which call and why. Background calls (request class
   `auxiliary`) go to the background lane.
 
 Reading the records across sessions is `trocar query <name>` — the one core that reads data, of which
 the board is the HTTP shell (D59); there is no separate ETL step and no database to load. Both go through the
 daemon's query worker, which stays warm and keeps the segment index current as it captures, so a query about a
-session you are looking at answers in milliseconds. The worker stays warm while someone asks (an open board asks every
-1.5 s) and leaves after two minutes with nothing asked, giving its memory back; the next query starts a new one. A
-session is read call by call, so a large one loads whole within a bounded amount of memory, and one answer carries
-the message bodies of one page of steps plus a short line for every step. It is not a prerequisite: with no daemon — or none that answers
+session you are looking at answers in milliseconds; the board's answers come gzipped. The worker stays warm while
+someone asks (an open board asks every 1.5 s) and leaves after two minutes with nothing asked, giving its memory back;
+the next query starts a new one. A session is read call by call, and one answer carries the message bodies of one
+page of steps plus a short line for every step. The worker's memory is bounded: a session too large for it shows its
+newest calls that fit and says so (**Showing only the latest N / M calls (file X MB)**); the cut moves by a tenth of
+the budget at a time, and between moves each refresh reads on with the new calls only. The worker also measures its
+heap while it reads: a session that costs more per call than estimated is cut shorter, never read until the worker
+runs out of memory. A session that cannot be read says so in one sentence with **Retry**; the reason is under
+**Technical details**. The first open of a very large
+session after the worker has left reads it from the start, which takes a while (about half a minute for a
+5.4k-call session). It is not a prerequisite: with no daemon — or none that answers
 yet — the command reads the records itself and gives the same document, only slower. Long results page with
 `--limit` and `--after <cursor>`, where the cursor is the `page.next` of the document before it.
 `trocar query traffic` is one line per agent and host, with requests and bytes sent and received (sums over
@@ -216,7 +229,7 @@ TLS intact (the CA is user-level only, with zero machine-wide trust).
 `cookie`, `proxy-authorization`) are stored **verbatim**, like the request bodies: a byte-faithful
 capture that blanked them would no longer be the wire. They sit in files only you can read (0600),
 and `trocar doctor` checks that: a capture file others can read is exit 1
-(采集文件可被他人读取). Your prompts, every file the agent read, all tool output, and any secret you
+(`x capture files others can read`). Your prompts, every file the agent read, all tool output, and any secret you
 pasted into a chat land on disk in the clear. Treat `~/.trocar/**` as sensitive; on a shared machine,
 `chmod -R go-rwx ~/.trocar`. The dashboard binds loopback and enforces a Host/Origin allowlist, so a
 website you visit cannot reach it.
@@ -266,7 +279,8 @@ agent group, loopback only, no TUN, never the system proxy, nothing written into
   and dsh's plugin read. The door connects onward through the proxy the agent would have used without trocar.
 - `off` removes those entries and switch files; your edits to unrelated keys during `on` stay, and a proxy key you
   changed yourself keeps your value. It kills and restarts nothing: a process started while capture was on keeps its
-  door, which now only forwards (no decryption, no record), and `trocar status` says how many are left. The daemon
+  door, which now only forwards (no decryption, no record), and `trocar status` says how many are left (its
+  Connections line counts every connection open through trocar, and how many of them are still closing). The daemon
   itself stays up with its doors closed — the same idle state as right after a login, so the next `on` is a door
   opening (about 0.2 s) and not a daemon start. On Linux `off` drains what it was relaying and the daemon exits.
 - *macOS*: the autostart unit is the LaunchAgent `com.trocar.collector` in `~/Library/LaunchAgents` (`RunAtLoad` +
@@ -341,8 +355,8 @@ problems), and per harness an `identity` with the names in effect, the ignored p
 
 When a process trocar decrypted refuses the collector's certificate anyway, trocar writes a critical
 `trust-rejected` record: the harness, the entry group, the process name and pid, the host, the client's alert
-and the trust entry trocar believed was in effect. It goes to the daemon's log too, and `trocar status` prints it first
-(「‼ 严重」, `critical` in `--json`).
+and the trust entry trocar believed was in effect. It goes to the daemon's log too, and `trocar status` names it on its own
+**Not captured** row (`critical` in `--json`).
 
 A relay or proxy with a private CA keeps working. On Linux `install` carries the CA you already gave Claude Code into
 `extra-cc.pem` (the other agents' CAs into their bundles), and the daemon verifies upstreams with Node's store plus
@@ -357,7 +371,7 @@ until you restart it.
 After `off`, connections the engine was still relaying end at the next response boundary (a WebSocket at its
 turn's end); `trocar off --now` cuts them at once. The one byte of its own that trocar ever adds is the
 `Connection: close` header line that ends such a connection, and a call that carries it is labelled
-「trocar 加的」 on the board.
+**trocar added Connection: close** on the board.
 
 Capture failures are never silent: a refused or failed install step, a file `off` could not undo, a
 helper or engine error, a failed heartbeat or attach, an envelope that could not be written, an agent
@@ -399,7 +413,8 @@ config library (creating a one-key entry when none is in effect; `off` removes i
 PAC is served by the daemon on loopback: loopback and your bypass list go direct, the rest goes through the door, and
 when the door does not answer, the way Desktop would go without trocar: your system proxy, or direct when none is set.
 The door itself also leaves through your system proxy, and follows it when you change it. A process trocar cannot
-confirm is yours still gets a PAC, with your system proxy and no door. It takes effect at the next start of the app;
+confirm is yours still gets a PAC, with your system proxy and no door; one that leaves before trocar could tell is
+only counted, never reported as refused. It takes effect at the next start of the app;
 no administrator rights. Desktop's own first-party hosts (sign-in, the updater, the Code tab's download) are forwarded,
 not decrypted.
 
@@ -415,13 +430,13 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
   rather than guessing.
 - **DeepSeek's cache semantics on its Anthropic endpoint are not settled.** `dsh` (that endpoint) and
   DeepSeek's Chat Completions API are read like any other wire, but calls to the Anthropic endpoint show
-  「厂商缓存语义未知」 until a real capture settles them (3.3 OPEN).
+  **What this provider's cache numbers mean is not certain** until a real capture settles them (3.3 OPEN).
 - **Some sessions are grouped by guess.** Hermes on a custom endpoint, and Kimi without a body key, send
   no session id at all; their calls are grouped by the system prompt and a 30-minute gap (never by process
-  or connection), and the chip says 「按推测归组」. The rule is provisional until checked on a real capture.
+  or connection), and the session is marked **session boundary inferred**. The rule is provisional until checked on a real capture.
 - **On captures without process identity the harness is a guess.** Sessions recorded by the MITM or
-  reverse proxy carry no `proc.agent`, so the board names their agent from the User-Agent and its chip
-  says so (「推断自 UA」). Sessions from the per-process collector are named by process, never by UA.
+  reverse proxy carry no `proc.agent`, so the board names their agent from the User-Agent and it is
+  marked **inferred** (from the request headers, not the process). Sessions from the per-process collector are named by process, never by UA.
 - **The read side is a fixed set of questions, not an analytics product.** `trocar query <name>` has
   the named queries the board asks (sessions, calls, blocks, classes, segments, pricing, status,
   doctor) and no query language. For anything else, read the segments: `trocar raw <segment>` prints
@@ -430,8 +445,9 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
   segment index under `~/.trocar/index/` is a deletable accelerator, rebuilt from them. SSE replies are faithful reconstructions of the streamed frames. Data imported
   from the v0 demo is badged `v0-converted` (re-serialized bodies, summarized tool schemas); fresh
   captures are byte-exact with full tool schemas. A request body the collector stored only in part is
-  badged on its call with the exact reason: 已截断 (cut at the 64 MiB capture cap) or 不完整 (the capture
-  did not get it whole, e.g. the upstream answered 413 before it was sent).
+  labelled on its call with the exact reason: **request: truncated at the capture limit** (cut at the 64 MiB
+  capture cap) or **request: incomplete** (the capture did not get it whole, e.g. the upstream answered 413 before
+  it was sent).
 - **No npm distribution, no LICENSE.** The package is `private`, so `npx trocar` does not exist. Clone
   it and treat it as source-available for personal research.
 - **Personal research instrument.** Single-user, loopback-only. Your traffic goes on as it was: the one

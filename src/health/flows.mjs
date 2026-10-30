@@ -225,7 +225,7 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     if (r.event === 'install-note' || r.event === 'uninstall-note') out.install[r.event === 'install-note' ? 'install' : 'uninstall'].push(pick(r))
     const t = Date.parse(r.ts)
     if (!(t >= cutoff)) continue
-    const agent = r.agent || (r.proc && r.proc.agent) || null
+    const agent = r.agent || r.harness || (r.proc && r.proc.agent) || null
     if (isFailure(r)) {
       const key = groupKey(r)
       const g = groups.get(key) || { key, count: 0, first_ts: r.ts, last_ts: r.ts, last: null }

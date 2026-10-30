@@ -27,8 +27,8 @@ export const NODE_MIN_MAJOR = 20
 export function nodePreflight({ versions = process.versions } = {}) {
   const have = versions && versions.node
   const major = typeof have === 'string' && /^\d+(\.|$)/.test(have) ? Number(have.split('.')[0]) : null
-  if (major === null) return { ok: false, have: have ?? null, min: NODE_MIN_MAJOR, doctor: `读不到 Node 的版本(${JSON.stringify(have ?? null)}):trocar 在 Windows 上要 Node ≥ ${NODE_MIN_MAJOR}。确认 \`node --version\` 之后再 trocar on` }
-  if (major < NODE_MIN_MAJOR) return { ok: false, have, min: NODE_MIN_MAJOR, doctor: `Node ${have} 太旧:trocar 在 Windows 上要 Node ≥ ${NODE_MIN_MAJOR}(守护进程每次登录都由这个 Node 拉起,更老的版本起不来)。升级 Node 之后再 trocar on` }
+  if (major === null) return { ok: false, have: have ?? null, min: NODE_MIN_MAJOR, doctor: `The Node version could not be read ${typeof have === 'string' && have ? ` (${JSON.stringify(have)})` : ''}; trocar on Windows needs Node ${NODE_MIN_MAJOR} or newer. Check node --version, then run trocar on again.` }
+  if (major < NODE_MIN_MAJOR) return { ok: false, have, min: NODE_MIN_MAJOR, doctor: `Node ${have} is too old: trocar on Windows needs Node ${NODE_MIN_MAJOR} or newer. The background process starts with this Node at every login, and an older one cannot run it. Update Node, then run trocar on again.` }
   return { ok: true, have, min: NODE_MIN_MAJOR }
 }
 

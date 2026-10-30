@@ -4,7 +4,7 @@
 // records it holds, what it takes in plaintext and sealed, its time range and what could not be read.
 // Only raw/ segments are listed (main-session decision, 2026-10-18): the older capture locations keep
 // their own record refs and show up in `query classes`'s disk totals, not as segments here.
-import { allSegments } from '../index-build.mjs';
+import { allSegments, problemEntry } from '../index-build.mjs';
 import { parseTime } from './index.mjs';
 
 export const params = Object.freeze(['since', 'until']);
@@ -20,7 +20,7 @@ export async function run({ home, fs, now, params: p, errors }) {
     const from = s.from ? Date.parse(s.from) : null, to = s.to ? Date.parse(s.to) : null;
     // A segment with no readable record has no time range: it is kept, so a problem is never hidden by a filter.
     if (from != null && to != null && ((since != null && to < since) || (until != null && from > until))) continue;
-    for (const pr of s.problems) errors.push({ where: `segments/${s.segment}`, reason: `${pr.code}: ${pr.reason}` });
+    for (const pr of s.problems) errors.push(problemEntry(`segments/${s.segment}`, pr));
     segments.push({ segment: s.segment, state: s.state, records: s.records, bytes: s.bytes, sealed_bytes: s.sealed_bytes,
       ratio: s.sealed_bytes != null && s.bytes > 0 ? s.sealed_bytes / s.bytes : null,
       from: s.from, to: s.to, problems: s.problems });

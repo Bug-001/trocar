@@ -127,7 +127,8 @@ export function createServer({ home, token, query, uid = process.getuid?.(), pla
       const writeHead = res.writeHead;
       res.writeHead = (status, headers) => writeHead.call(res, status, status === 200 ? { ...headers, etag } : headers);
     }
-    return query.relay({ name, params, res });
+    // A reader that takes gzip gets it, compressed by the worker: this loop only forwards bytes (4.4 §服务形状, D63 ①).
+    return query.relay({ name, params, res, gzip: /\bgzip\b/.test(req.headers['accept-encoding'] || '') });
   }
 
   function staticFile(req, res, url) {

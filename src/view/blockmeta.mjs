@@ -29,7 +29,18 @@ const enc = (s) => (s == null ? 0 : Buffer.byteLength(String(s), 'utf8'));
  * tax and the growth Δ are all denominated in. Ported verbatim from the browser's flatBytes(); the
  * numbers must not move, or every historical reading of a session silently changes meaning.
  */
+// Memo by the PARSED source object (the message block, or the tool / system item a flat entry was made from; linearContext gives it
+// as the non-enumerable `src`): a stitched context hands the same parsed items to every call of its chain, so a session's fold asked for
+// the same block's bytes once per call that carries it. Parsed bodies are read-only (src/dissect/request-body.mjs; test/view/frozen-fold).
+const bytesMemo = new WeakMap();
 function blockBytes(b) {
+  const src = b && (b.sec === 'tools' || b.sec === 'system' ? b.src : b.block);
+  if (!src || typeof src !== 'object') return blockBytesOf(b);
+  let n = bytesMemo.get(src);
+  if (n === undefined) bytesMemo.set(src, (n = blockBytesOf(b)));
+  return n;
+}
+function blockBytesOf(b) {
   if (!b) return 0;
   if (b.sec === 'tools') {
     // D15: a verbatim trace carries the real description + schema bytes; a v0 trace kept only a
@@ -83,14 +94,14 @@ const WS = /\s/;
 // never emitted (trim again).
 // The characters are collected and joined ONCE: `out += c` per character left a V8 cons-string tree of ~90 nodes behind
 // every preview (~2 KB of heap for 90 chars), which an assembled window of 60 large calls held as 167 MB (measured).
-const shorten = (s) => {
+const shorten = (s, max = PREVIEW_MAX) => {
   const t = String(s || '');
   const out = [];
   let pending = false;
-  for (let i = 0; i < t.length && out.length < PREVIEW_MAX; i++) {
+  for (let i = 0; i < t.length && out.length < max; i++) {
     const c = t[i];
     if (WS.test(c)) { if (out.length) pending = true; continue; }
-    if (pending) { out.push(' '); pending = false; if (out.length >= PREVIEW_MAX) break; }
+    if (pending) { out.push(' '); pending = false; if (out.length >= max) break; }
     out.push(c);
   }
   return out.join('');
@@ -197,10 +208,54 @@ function blockQuery(b) {
   return queryOf(b, bodyTextOf(b));
 }
 // …over a body text the caller already has (slimBlock builds it once for chars, preview and this).
-function queryOf(b, raw) {
-  if (!b || b.sec !== 'messages' || b.role !== 'user' || b.kind !== 'text') return null;
+const isUserText = (b) => !!b && b.sec === 'messages' && b.role === 'user' && b.kind === 'text';
+function queryOf(b, raw, max = PREVIEW_MAX) {
+  if (!isUserText(b)) return null;
   const human = String(raw || '').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
-  return human ? shorten(human) : null;
+  return human ? shorten(human, max) : null;
+}
+// How long a lane's task is (4.4 §看板 v2 需要的补充 `lanes[].task`; the session title is the main lane's), and how much of a lane's first
+// prompt is kept to tell sibling sub-agents apart (their prompts often share a long preamble: a workflow's own instructions).
+export const TASK_MAX = 80;
+export const TASK_HEAD = 16384;
+/** taskOf(text) → the text squashed (whitespace runs → one space, trimmed), ≤ TASK_MAX characters, or null. */
+export const taskOf = (text) => (text ? shorten(text, TASK_MAX) || null : null);
+/** firstHuman(flat) → the first human prompt of a context (blockQuery's rule: a user text block, <system-reminder> stripped, not empty),
+ *  trimmed, its first TASK_HEAD characters, as a string of its own (a slice would keep the block's whole text alive) — or null. */
+export function firstHuman(flat) {
+  for (const b of flat || []) {
+    if (!isUserText(b)) continue;
+    const human = String(bodyTextOf(b) || '').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+    if (human) return (' ' + human.slice(0, TASK_HEAD)).slice(1);
+  }
+  return null;
+}
+/** A lane's first prompt (firstHuman of its first call), kept on the lane under a symbol key: no document carries it. */
+export const HEAD = Symbol('first prompt');
+// Sub-agents a spawn does not name are told apart by their first prompts (4.4 §看板 v2 需要的补充 `lanes[].task`): a lane's task starts at the
+// line where its prompt departs from the sibling it shares the longest prefix with (an identical prompt is no sibling to depart from).
+// Sorted, that sibling is a neighbour: n lanes cost a sort, not n² comparisons. → Map<lane, offset> (0: from the start).
+function departures(heads) {
+  const list = heads.filter(([, h]) => h).sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+  const common = (a, b) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
+  const out = new Map();
+  for (let i = 0; i < list.length; i++) {
+    const [s, h] = list[i];
+    let d = 0;
+    for (let j = i - 1; j >= 0; j--) if (list[j][1] !== h) { d = Math.max(d, common(h, list[j][1])); break; }
+    for (let j = i + 1; j < list.length; j++) if (list[j][1] !== h) { d = Math.max(d, common(h, list[j][1])); break; }
+    out.set(s, d < h.length ? h.lastIndexOf('\n', d - 1) + 1 : 0);
+  }
+  return out;
+}
+/** tellApart(lanes) → lanes, each lane that carries its first prompt (`lane[HEAD]`: no spawn named it) given its `task` (4.4 §看板 v2
+ *  需要的补充): that prompt, a sub-agent's from the line it departs from its siblings — every such sub-agent lane of the session, whatever
+ *  wire it came on, so the rule is one (invariant 3). Run once, on the session's whole set of lanes. */
+export function tellApart(lanes) {
+  const open = lanes.filter((l) => HEAD in l);
+  const departs = departures(open.filter((l) => l.kind === 'subagent').map((l) => [l, l[HEAD]]));
+  for (const l of open) l.task = taskOf(l[HEAD] && l[HEAD].slice(departs.get(l) || 0));
+  return lanes;
 }
 
 // Fields that carry the block's CONTENT. These are what must not cross the wire; everything else on

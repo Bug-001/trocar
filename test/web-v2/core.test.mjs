@@ -134,3 +134,21 @@ test('keys: isTyping holds for form controls, editable content and a target insi
   }
   for (const target of typing) assert.equal(isTyping({ key: 'Escape', target }), false, 'Escape reaches the screen handler')
 })
+
+test('techDetailsHtml: every pair is exactly one key cell and one value cell, values escaped in text mode, copy lines never start with a bare separator', async () => {
+  const { techDetailsHtml } = await import('../../src/web/v2/core/ui.mjs')
+  const pairs = [['pid', 4242], ['', 'continuation'], [null, 'more'], ['body', '<b>x</b>'], ['path', '/a/'.repeat(4000)]]
+  const unesc = (s) => s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+  for (const html of [false, true]) {
+    const out = techDetailsHtml(pairs, { html })
+    const body = out.match(/<div class="tech">([\s\S]*?)<\/div>/)[1]
+    const cells = (body.match(/<span class="k"/g) || []).length + (body.match(/<span class="v"/g) || []).length
+    assert.equal(cells, 2 * pairs.length, `html:${html}`)
+    assert.equal(/<\/span>([^<]+)<span/.test(body), false, `html:${html} stray text between cells`)
+    if (!html) {
+      assert.equal(body.includes('<b>'), false)
+      const copy = unesc(out.match(/data-copy="([^"]*)"/)[1])
+      assert.equal(copy.split('\n').some((l) => l.startsWith(': ')), false)
+    }
+  }
+})

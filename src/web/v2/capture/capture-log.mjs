@@ -53,7 +53,7 @@ function logRowHtml({ g, s }, open) {
   const tech = [
     ...['level', 'where', 'code'].filter((k) => g[k] != null).map((k) => [k, { m: String(g[k]) }]),
     ...(g.reason != null ? [['reason', String(g.reason)]] : []), // 原样 — the server's own words
-    ['first', String(g.first_ts ?? '—')], ['latest', String(g.last_ts ?? '—')], ['count', String(g.count ?? '?')],
+    ['first', fmtWhen(g.first_ts)], ['latest', fmtWhen(g.last_ts)], ['count', String(g.count ?? '?')], // the row's own local time; the ISO stays in the copy
   ]
   return `<div class="lr" data-key="${esc(key)}"${s.unknown ? ' data-unknown="1"' : ''}>` +
     `<span class="t">${t}</span>` +
@@ -62,18 +62,21 @@ function logRowHtml({ g, s }, open) {
     `<span class="cnt">×${esc(String(g.count ?? '?'))}</span>` +
     `<button type="button" class="lgo" data-lrow="lx-${slug}" aria-expanded="${open}" aria-controls="lx-${slug}" title="Expand this row"><span class="chev" aria-hidden="true">${open ? '▾' : '▸'}</span></button>` +
     `<div class="lx" id="lx-${slug}"${open ? '' : ' hidden'}>` +
-    `<p class="fine">${esc(LOG.metadataOnly)}</p>` +
     disclosureHtml({ id: `lx-${slug}-tech`, title: 'Technical details', body: techGrid(tech) + copyBtn(redactUrlCredentials(JSON.stringify(g, null, 2)), 'Copy diagnostics') }) +
     `</div></div>`
 }
 
 // ── the page-bottom 技术细节 (1.9 last row): the `expected` groups (connections not recorded by design) and the read problems ──
+// The by-design groups sit under one heading, one line each; the heading is drawn once, and only when there is such a group.
+const expectedOf = (doc) => groupsOf(doc).filter((x) => x.level === 'expected')
 export function footHtml(doc) {
-  const rows = []
-  for (const g of groupsOf(doc).filter((x) => x.level === 'expected')) rows.push([LOG.expectedTitle, `${failureSentence(g).text} ×${g.count ?? '?'}`])
-  for (const e of list(doc && doc.errors)) if (e) rows.push([String(e.where ?? '?'), redactUrlCredentials(String(e.reason ?? ''))])
-  if (!rows.length) return ''
-  return disclosureHtml({ id: 'caplog-foot', title: 'Technical details', open: false, body: techGrid(rows) })
+  const exp = expectedOf(doc)
+  const errs = list(doc && doc.errors).filter(Boolean).map((e) => [String(e.where ?? '?'), redactUrlCredentials(String(e.reason ?? ''))])
+  if (!exp.length && !errs.length) return ''
+  const by = exp.length
+    ? `<h3 class="caplog-foot-h">${esc(LOG.expectedTitle)}</h3><ul class="caplog-foot-l">${exp.map((g) => `<li>${esc(`${failureSentence(g).text} ×${g.count ?? '?'}`)}</li>`).join('')}</ul>`
+    : ''
+  return disclosureHtml({ id: 'caplog-foot', title: 'Technical details', open: false, body: by + (errs.length ? techGrid(errs) : '') })
 }
 
 // ── the whole main in one string: the explanation line, the table, the manifest error, the foot. The 503 state says
@@ -84,7 +87,8 @@ export function pageLogHtml(doc, { filter = null, openByReader = null } = {}) {
   const { html, rows, filtered } = logRowsOf(doc, { filter, openByReader })
   const since = doc.failures && doc.failures.since
   const partial = errorsAt(doc, ERR_WHERE.health)
-  const bits = [...(since ? [LOG.window(fmtWhen(since))] : []), ...(filtered ? [LOG.filterRule] : []), ...(partial.length ? [LOG.truncated] : [])]
+  const bits = [...(since ? [LOG.window(fmtWhen(since))] : []), ...(filtered ? [LOG.filterRule] : []), ...(partial.length ? [LOG.truncated] : []),
+    ...(rows.length || expectedOf(doc).length ? [LOG.metadataOnly] : [])] // said once per page, not once per row
   const say = `<p class="caplog-say">${bits.map(esc).join('<span aria-hidden="true"> · </span>')}</p>` +
     (partial.length ? disclosureHtml({ id: 'caplog-read-err', title: 'Technical details', open: false, body: techGrid(partial.map((e) => [String(e.where), String(e.reason ?? '')])) }) : '')
   const table = rows.length
@@ -130,7 +134,7 @@ export function mount(el, ctx) {
   }
 
   // a row toggles through the expand memory, so the choice survives every re-read (1.9 #13, the log page's half)
-  el.addEventListener('click', (e) => {
+  const onRowClick = (e) => {
     if (!e.target.closest) return
     const rowEl = e.target.closest('.lr')
     if (!rowEl || !rowEl.classList || rowEl.classList.contains('h')) return
@@ -146,7 +150,8 @@ export function mount(el, ctx) {
     btn.setAttribute('aria-expanded', String(open))
     const chev = btn.querySelector('.chev'); if (chev) chev.textContent = open ? '▾' : '▸'
     if (open) exp.removeAttribute('hidden'); else exp.setAttribute('hidden', '')
-  })
+  }
+  el.addEventListener('click', onRowClick) // removed in unmount: the shell hands the next screen this same element
 
   paint()
   poll = pollCaptureHealth({ api, store, doc: el.ownerDocument, onAnswer: paint })
@@ -158,6 +163,7 @@ export function mount(el, ctx) {
     },
     unmount() {
       if (poll) poll.stop()
+      el.removeEventListener('click', onRowClick)
       el.replaceChildren()
     },
   }

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
 import { stepBarHtml } from '../../src/web/v2/replay/stepbar.mjs'
-import { ctxWindowHtml } from '../../src/web/v2/replay/ctxwin.mjs'
+import { ctxWindowHtml, landingTarget, callFidelityHtml } from '../../src/web/v2/replay/ctxwin.mjs'
 import { renderRawPanel } from '../../src/web/v2/replay/rawpanel.mjs'
 import { outlineHtml } from '../../src/web/v2/replay/outline.mjs'
 import { bytes } from '../../src/web/v2/core/fmt.mjs'
@@ -88,7 +88,6 @@ test('the window ends with the step\'s reply segment: after every section, carry
     const seg = replySeg(h)
     assert.ok(seg, `step ${i + 1} has a reply segment`)
     assert.ok(h.lastIndexOf('class="cwsec"') < h.lastIndexOf('<div class="cwreply">'), 'after the request sections')
-    assert.ok(!/class="cblk/.test(seg), 'no block card inside the reply segment')
     for (const t of call.norm.tools || []) { assert.ok(seg.includes(t.name), t.name); tools++ }
     if (call.norm.text) assert.ok(seg.includes(call.norm.text.slice(0, 40).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')))
   }
@@ -100,10 +99,112 @@ test('the reply segment\'s mark follows the proof rule: a resolvable respRef →
   for (const [respRefs, marked] of [[[{ label: 'body', ref: 'r:1', chars: 3 }], false], [[], true], [[{ label: 'body', ref: null, why: 'x' }], true]]) {
     const seg = replySeg(ctxWindowHtml(deskAt(i, { respRefs }).s))
     assert.equal(seg.includes(W.REPLY_PARSED), marked, JSON.stringify(respRefs))
+    assert.equal(count(seg, 'class="rpmark"'), marked ? 1 : 0, 'the mark is written once for the segment')
     assert.ok(!seg.includes(W.SECTION_VERBATIM) && !/data-ff="verbatim"/.test(seg))
   }
 })
 
+// 2.3 §这一步的回复 · acceptance #13: the reply's parts are block rows drawn by the request's row component, without what only a
+// request block carries; the segment's fidelity mark is written once; the first present kind (text → tool call → thinking) opens
+const replyRows = (seg) => [...seg.matchAll(/<div class="(cblk[^"]*)"([^>]*)>/g)].map((m) => ({ cls: m[1].split(/\s+/), attrs: m[2] }))
+const NORM = { thinking: 'weighing the options', text: 'Here is the answer.', tools: [{ id: 't1', name: 'Bash', input: { command: 'ls -la' } }, { id: 't2', name: 'Read', input: { n: 3 } }] }
+
+test('every reply part is one block row through the row component, without request-only attributes or marks', () => {
+  const n = anchorLane(buildLanes(doc.analyzed, doc.probes)).calls.length
+  let seen = 0
+  for (let i = 0; i < n; i++) {
+    for (const over of [{}, { norm: NORM }]) {
+      const { s, call } = deskAt(i, over)
+      if (call.paged_out || !call.rec || call.unparsed || call.error || (call.status != null && call.status !== 200)) continue
+      const h = ctxWindowHtml(s), seg = replySeg(h), nm = call.norm || {}
+      assert.equal(count(seg, '<div class="cblk'), (nm.thinking ? 1 : 0) + (nm.text ? 1 : 0) + (nm.tools || []).length, `step ${i + 1}`)
+      const heads = [...seg.matchAll(/<div class="cbh"[\s\S]*?<\/div>/g)].map((m) => m[0])
+      for (const t of nm.tools || []) assert.ok(heads.some((x) => x.includes(t.name)), t.name)
+      for (const x of ['data-bi=', 'data-rk=', 'data-ff=', 'newmark', 'bpbadge', 'volbadge', 'ffbadge']) assert.ok(!seg.includes(x), x)
+      assert.equal(count(h, 'data-bi="'), call.flat.length, 'the request rows alone carry a block index')
+      seen++
+    }
+  }
+  assert.ok(seen > 0)
+})
+
+test('the reply rows open the first present kind (text, then tool call, then thinking); the rest stay collapsed', () => {
+  const i = anchorLane(buildLanes(doc.analyzed, doc.probes)).calls.findIndex((c) => !c.paged_out && c.rec && !c.unparsed)
+  for (const [norm, openKind] of [[NORM, 'k-text'], [{ ...NORM, text: '' }, 'k-tool_use'], [{ thinking: NORM.thinking, text: '', tools: [] }, 'k-thinking']]) {
+    const rows = replyRows(replySeg(ctxWindowHtml(deskAt(i, { norm }).s)))
+    assert.ok(rows.length > 0)
+    for (const r of rows) assert.equal(r.cls.includes('collapsed'), !r.cls.includes(openKind), `${openKind}: ${r.cls.join(' ')}`)
+  }
+})
+
+test('a reader\'s flip of a reply row is kept in openBlocks as reply:<j>, against the default', () => {
+  const i = anchorLane(buildLanes(doc.analyzed, doc.probes)).calls.findIndex((c) => !c.paged_out && c.rec && !c.unparsed)
+  const base = replyRows(replySeg(ctxWindowHtml(deskAt(i, { norm: NORM }).s)))
+  assert.ok(base.length > 1)
+  base.forEach((r, j) => {
+    const { s } = deskAt(i, { norm: NORM })
+    s.openBlocks.add('reply:' + j)
+    const rows = replyRows(replySeg(ctxWindowHtml(s)))
+    rows.forEach((x, k) => assert.equal(x.cls.includes('collapsed'), k === j ? !base[k].cls.includes('collapsed') : base[k].cls.includes('collapsed'), `flip ${j}, row ${k}`))
+    assert.ok(rows[j].attrs.includes(`data-rp="${j}"`))
+  })
+})
+
+test('a failed step\'s reply segment has no block row; the server\'s reason is in the tech details', () => {
+  const i = anchorLane(buildLanes(doc.analyzed, doc.probes)).calls.findIndex((c) => !c.paged_out && c.rec && !c.unparsed)
+  const seg = replySeg(ctxWindowHtml(deskAt(i, { error: 'boom-reason', norm: NORM }).s))
+  assert.ok(!seg.includes('class="cblk'))
+  const t = seg.indexOf('id="cwfail')
+  assert.ok(t >= 0 && seg.indexOf('boom-reason') > t)
+})
+
 test('stand-in states (not on this page, unparsed, no request) draw no reply segment', () => {
   for (const over of [{ paged_out: true }, { unparsed: true, errMsg: 'x' }, { rec: null }]) assert.equal(replySeg(ctxWindowHtml(deskAt(0, over).s)), null, JSON.stringify(Object.keys(over)))
+})
+
+// 2.3 §未下发态: the load control says whether a read for this step is out (busy, not clickable) or answered without it (missed,
+// clickable again) — told by attributes, so the words stay the labels' business
+test('a paged-out step\'s load control: busy while its read is out, missed after an answer without it, plain otherwise', () => {
+  const i = anchorLane(buildLanes(doc.analyzed, doc.probes)).calls.findIndex((c) => c.rec && !c.unparsed)
+  const tagOf = (s) => (ctxWindowHtml(s).match(/<button[^>]*id="loadpage"[^>]*>/) || [null])[0]
+  for (const [extra, busy, missed] of [[(gi) => ({ pageLoading: gi }), true, false], [(gi) => ({ pageMissed: gi }), false, true], [() => ({}), false, false]]) {
+    const { s, call } = deskAt(i, { paged_out: true })
+    Object.assign(s, extra(call.gi))
+    const tag = tagOf(s)
+    assert.ok(tag, 'the load button is drawn')
+    assert.equal(/\sdisabled(\s|>|=)/.test(tag), busy, tag)
+    assert.equal(/aria-busy="true"/.test(tag), busy, tag)
+    assert.equal(/data-state="missed"/.test(ctxWindowHtml(s)), missed, tag)
+  }
+})
+
+// 1.4 §打开一步时落在哪: a step 跟随最新 brought in lands on ⑨ (the reply); a reader's own move keeps the change line
+test('landing: a step reached by following lands on the reply; a reader\'s move lands on the change line', () => {
+  const lanes = buildLanes(doc.analyzed, doc.probes)
+  const anchor = anchorLane(lanes)
+  const playhead = anchor.calls.length - 1
+  const call = anchor.calls[playhead]
+  call.cacheBreak = { ...call.cacheBreak, idx: call.flat.findIndex((b) => b.sec === 'messages'), firstCall: false, cause: CAUSE, attribution: 'harmful' }
+  const s = { meta: doc.meta, lanes, anchor, playhead, diffRef: null, curFlat: [], curRemoved: [], navOpen: new Set(), openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), viewPin: null, ctx: {} }
+  assert.ok(replySeg(ctxWindowHtml(s)), 'the reply is drawn on this step')
+  assert.deepEqual(landingTarget({ ...s, followLanding: true }), { reply: true })
+  assert.equal(landingTarget({ ...s, followLanding: false }).anchor, 'cachebrk')
+})
+
+// 2.3 §调用保真行 · 2.2 ◐: capture-routing is how the call got here, not a fidelity fact — never in the row, never lights ◐
+test('capture routing never makes the fidelity row or the step head\'s ◐; the other facts still do', () => {
+  const ROUTE = { id: 'capture-routing', label: 'ROUTE-LABEL-x', text: 'ROUTE-TEXT-x' }
+  const TRUNC = { id: 'resp-truncated', label: 'TRUNC-LABEL-x', text: 't' }
+  const i = anchorLane(buildLanes(doc.analyzed, doc.probes)).calls.findIndex((c) => !c.paged_out && c.rec && !c.unparsed)
+  for (const routing of [true, false]) {
+    for (const [extra, ctxState, hasFact] of [[[], 'complete', false], [[], 'reconstructed', true], [[TRUNC], 'complete', true]]) {
+      const base = deskAt(i).call
+      const labels = [...(routing ? [ROUTE] : []), ...extra]
+      const { s, call } = deskAt(i, { wire: { ...base.wire, labels, contextState: ctxState, reqEncoding: undefined }, reqIncomplete: null, wsIncomplete: null, respIncomplete: null })
+      const row = callFidelityHtml(call)
+      assert.equal(row !== '', hasFact, `routing=${routing} ${ctxState} ${extra.map((l) => l.id)}`)
+      assert.ok(!row.includes(ROUTE.label) && !row.includes(ROUTE.text), 'the routing label is not in the row')
+      assert.equal(stepBarHtml(s).includes('class="sb-fid"'), row !== '', '◐ iff the row has words')
+    }
+  }
 })

@@ -3,7 +3,8 @@
 // (off) or has to go (uninstall); a daemon that answers is asked to switch off through its control socket instead (orchestrate.mjs).
 //   daemonState   judges from the `lock` file (written at start, its mtime refreshed every second) and the control socket
 //   stopDaemon    `systemctl --user stop trocar-collector` when the autostart unit manages it (Linux), else SIGTERM, then SIGKILL after `termWaitMs`; on darwin the LaunchAgent is
-//                 booted out FIRST when the plist manages it (launchd's KeepAlive would pull a stopped daemon right back, 4.9 §4), then the signals; on win32 the supervisor
+//                 booted out FIRST when the plist manages it (launchd's KeepAlive would pull a stopped daemon right back, 4.9 §4); after either manager stop it waits
+//                 `termWaitMs` for the pid before its own signals (1.6 §3.4); on win32 the supervisor
 //                 parent first, then the daemon, through taskkill. The pid's identity (the lock's start_time and boot_id) is checked before EVERY signal, so a lock that names a
 //                 reused pid kills nothing; the helper (lock.helper_pid) goes with it when it is still there and is the helper; then `reset-failed` and `is-active` (Linux)
 //   helperGone    the link of this instance is the helper's (unpinned when it exits): "the helper is gone" is "no link"
@@ -241,6 +242,9 @@ export async function stopDaemon({ lockFile, socketPath = null, exec = null, kil
     execTool('systemctl', ['--user', 'stop', UNIT_FILE_NAME], { run: exec, env, timeoutMs: termWaitMs })
     signals.push('systemctl-stop'); how = 'systemctl'
   }
+  // the manager's stop already sent its SIGTERM (1.6 §3.4): wait for the pid first, so our own goes only to a daemon that outlived a whole stop wait —
+  // one sent at once lands on a daemon in the middle of stopping
+  if (signals.length) await waitGone(daemonUp, termWaitMs)
   if (daemonUp()) {
     if (same(lock.pid) === 'unknown') problems.push(`pid ${lock.pid} cannot be told from another process (the lock has no start time${platform === 'linux' ? ', or /proc cannot be read' : ''}), so it is not signalled`)
     else {

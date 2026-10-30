@@ -34,7 +34,7 @@ export const HARNESSES = Object.freeze([
     lane: [{ header: 'x-claude-code-request-class', equals: 'auxiliary', lane: 'aux' }, { header: 'x-claude-code-agent-id', lane: 'subagent', key: true }],
     compaction: [{ header: 'x-cc-compaction-request' }],
     observerEffects: [effect('cc-gzip-off', 'NODE_EXTRA_CA_CERTS in settings env',
-      'request-body gzip (flag-driven) is off because a custom CA is set')],
+      'Claude Code sends request bodies uncompressed while a custom CA is set')],
     // the endpoints measured on the live capture (2026-10-07): remote-session sync, telemetry, uploads,
     // account calls. The order matters: the upload before the broader /api/oauth/ account rule.
     traffic: [

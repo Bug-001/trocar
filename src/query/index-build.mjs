@@ -379,6 +379,10 @@ export function storeIndex(fs, file, lines, problems, at = null) {
   }
 }
 
+/** problemEntry(where, p) → one `errors` entry of a query document: the closed-set code, the level when there is one
+ *  (`note` = a fact about this read, not a loss — 3.5 读不全), and the reason in words. */
+export const problemEntry = (where, p) => ({ where, code: p.code, ...(p.level ? { level: p.level } : {}), reason: p.reason });
+
 /**
  * segmentIndex({home, segment, maxBytes, owner}) → { segment, source, records, problems, bytesRead, done }
  *   records: [{ id, ts, harness, class, host, path, status, stored_bytes, sent_bytes, received_bytes, session_key, is_llm }]
@@ -430,7 +434,10 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
   const said = [...prior, ...problems];
   // after the write, so it is never stored: this is about THIS read. A reader that had to index more than one of the
   // keeper's chunks did work the daemon should have done, and the seconds it cost are its own (D62 · D38).
-  if (!owner && got.bytesRead > KEEPER_CHUNK_BYTES) said.push({ code: 'index-cold', reason: `this query had to index ${Math.round(got.bytesRead / (1 << 20))} MB of ${segment} itself (${how === 'rebuild' ? 'the whole segment' : 'the part no index covered'}), which is what made it slow: the daemon keeps the index current while it captures, so this means no daemon wrote this segment, index/ was deleted, the index format changed, or the daemon was not running while these records arrived` });
+  if (!owner && got.bytesRead > KEEPER_CHUNK_BYTES) {
+    const mb = Math.round(got.bytesRead / (1 << 20));
+    said.push({ code: 'index-cold', level: 'note', reason: `This read indexed ${mb} MB of capture file ${segment} itself (${how === 'rebuild' ? 'all of it' : 'the part not indexed yet'}), which is why it was slow. Nothing is missing. trocar's background service normally does this while it captures; it was not running when these records arrived, the index was deleted, or trocar was updated.` });
+  }
   return { segment, source, records, problems: said, bytesRead: got.bytesRead, done: got.done };
 }
 
@@ -440,13 +447,22 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
 // file: a closed or sealed segment is read once per process, the live one again when it grew (never stale). It lives
 // in this file and not in the readers because `allSegments` is in this file: a warm wrapper in rows.mjs that
 // `allSegments` also called would be a cycle between the two modules.
-const segRows = warmCache({ cost: (v) => v.records.length * 320 }); // ~320 B per index row in memory (measured on the reference dataset)
+const segRows = warmCache({ cost: (v) => v.records.length * 320, steady: true }); // ~320 B per index row in memory (measured on the reference dataset)
 // Both files, so a plaintext that is sealed (or a sealed file rebuilt) is a new stamp: the plaintext wins while it exists (4.2:30).
 export const segStamp = (home, segment, fs) => `${statKey(path.join(rawDir(home), `${segment}.ndjson`), fs)}|${statKey(path.join(rawDir(home), `${segment}.sealed`), fs)}`;
 /** warmSegmentIndex({home, segment, fs}) → the same `segmentIndex()` answer, read from disk only when that segment's
- *  file moved. For READERS only: a pass of the daemon's keeper (`owner`) writes, so it is never served from memory. */
-export const warmSegmentIndex = ({ home = trocarHome(), segment, fs = nodeFs } = {}) =>
-  segRows.get(`${fsTag(fs)}\n${home}\n${segment}`, segStamp(home, segment, fs), () => segmentIndex({ home, segment, fs }));
+ *  file moved. For READERS only: a pass of the daemon's keeper (`owner`) writes, so it is never served from memory.
+ *  A note (`level`, e.g. `index-cold`) is about the read that RAN segmentIndex, so it is never kept: a later read
+ *  served from memory did none of that work, and an index write does not move the stamp (3.5 读不全 #17). */
+export const warmSegmentIndex = async ({ home = trocarHome(), segment, fs = nodeFs } = {}) => {
+  let notes = [];
+  const kept = await segRows.get(`${fsTag(fs)}\n${home}\n${segment}`, segStamp(home, segment, fs), async () => {
+    const got = await segmentIndex({ home, segment, fs });
+    notes = got.problems.filter((p) => p.level);
+    return notes.length ? { ...got, problems: got.problems.filter((p) => !p.level) } : got;
+  });
+  return notes.length ? { ...kept, problems: [...kept.problems, ...notes] } : kept;
+};
 
 // WHICH SEGMENT IS BEING WRITTEN (main-session decision, 2026-10-18): there is no `.closed` marker.
 // The running daemon records its current segment in its lock file (~/.trocar/collector/lock), and a
@@ -473,20 +489,11 @@ const defaultLockState = (home, fs) => readDaemonLock({ file: path.join(collecto
 // long-term copy is the sealed one while 128 MB of plaintext is still on disk (tested 2026-10-18).
 /** allSegments({home}) → [{ segment, state, path, records, bytes, sealed_bytes, from, to, problems }], oldest first. */
 export async function allSegments({ home = trocarHome(), fs = nodeFs, lockState = () => defaultLockState(home, fs) } = {}) {
-  let names;
-  try { names = fs.readdirSync(rawDir(home)); } catch { return []; }
-  const seen = new Map();
-  for (const n of names.sort()) {
-    const p = parseSegment(n);
-    if (!p) continue;
-    const at = seen.get(p.segment) || { sealed: false, plain: false };
-    at[p.sealed ? 'sealed' : 'plain'] = true;
-    seen.set(p.segment, at);
-  }
+  const seen = segmentFiles(home, fs);
   const L = lockState() || {};
   const current = L.state === 'running' && L.lock ? L.lock.segment || null : null;
   const out = [];
-  for (const [segment, at] of [...seen].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+  for (const [segment, at] of seen) {
     const { records, problems, source } = await warmSegmentIndex({ home, segment, fs });
     const sealedBytes = at.sealed ? sizeOf(fs, path.join(rawDir(home), `${segment}.sealed`)) : null;
     const bytes = at.plain ? sizeOf(fs, path.join(rawDir(home), `${segment}.ndjson`)) : records.reduce((n, r) => n + r.stored_bytes + 1, 0);
@@ -495,5 +502,19 @@ export async function allSegments({ home = trocarHome(), fs = nodeFs, lockState 
       records: records.length, bytes, sealed_bytes: sealedBytes, from: stamps[0] ?? null, to: stamps[stamps.length - 1] ?? null, problems });
   }
   return out;
+}
+/** segmentFiles(home, fs) → [[segment, {plain, sealed}]], oldest first: which segments raw/ holds, from the names alone. */
+export function segmentFiles(home = trocarHome(), fs = nodeFs) {
+  let names;
+  try { names = fs.readdirSync(rawDir(home)); } catch { return []; }
+  const seen = new Map();
+  for (const n of names) {
+    const p = parseSegment(n);
+    if (!p) continue;
+    const at = seen.get(p.segment) || { sealed: false, plain: false };
+    at[p.sealed ? 'sealed' : 'plain'] = true;
+    seen.set(p.segment, at);
+  }
+  return [...seen].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 }
 const sizeOf = (fs, f) => { try { return fs.statSync(f).size; } catch { return 0; } };

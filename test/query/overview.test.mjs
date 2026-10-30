@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { rawHome, writeSegment, envLine } from './raw-home.mjs'
 import { runQuery, OVERVIEW_USAGE_BYTES } from '../../src/query/named/index.mjs'
 import { segmentIndex } from '../../src/query/index-build.mjs'
+import { fillUsage } from '../../src/query/usage.mjs'
 
 const SEG = '20261018T100000Z'
 const T0 = Date.parse('2026-10-18T10:00:00.000Z')
@@ -43,7 +44,6 @@ test('3.5 除 usage 外只读段索引: a session past the byte budget is not re
   const f = { ...fs, openSync: count(fs.openSync), readFileSync: count(fs.readFileSync), createReadStream: count(fs.createReadStream),
     open: count(fs.open), readFile: count(fs.readFile), promises: { ...fs.promises, open: count(fs.promises.open), readFile: count(fs.promises.readFile) } }
   const doc = await runQuery('overview', {}, { home, fs: f })
-  assert.deepEqual(doc.usage.coverage, { sessions_read: 0, sessions_in_window: 2, capped_at: OVERVIEW_USAGE_BYTES, reason: 'byte-budget' })
   assert.deepEqual(doc.usage.rows, [])
   assert.equal(opened, 0)
   assert.equal(doc.sessions.total, 2)
@@ -56,8 +56,42 @@ test('3.5 除 usage 外只读段索引: a session past the byte budget is not re
 test('3.5 影响面: with budget enough, every in-window session is read and nothing is capped', async () => {
   const home = await homeWith([seed(0, { s: 1, session: 'a' }), seed(4, { s: 2, session: 'b' })])
   const { usage } = await runQuery('overview', {}, { home })
-  assert.deepEqual(usage.coverage, { sessions_read: 2, sessions_in_window: 2, capped_at: null, reason: null })
+  const c = usage.coverage
+  assert.equal(c.calls_in_window, 2, 'one model call per session')
+  assert.equal(c.calls_read, c.calls_in_window)
+  assert.equal(c.sessions_read, c.sessions_in_window)
+  assert.equal(c.capped_at, null)
+  assert.equal(c.reason, null)
 })
+
+// 3.5 §访问模式: a call already in a sidecar is always summed; calls with none are computed newest first until one does
+// not fit the byte budget. Axis: where the one call bigger than the budget sits among the newest session's missing calls.
+const OLD = '20261018T090000Z'
+const giant = (o) => seed(0, { ...o, req_body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'x'.repeat(OVERVIEW_USAGE_BYTES) }] }) })
+for (const [where, pos] of [['newest', 2], ['middle', 1], ['oldest', 0]]) {
+  test(`3.5 overview.usage sums the sidecar-covered calls of a capped session; the giant missing call is the ${where}`, async () => {
+    const home = rawHome()
+    // the older segment: a whole other session and the start of `big`, both in its sidecar
+    writeSegment(home, OLD, [seed(0, { s: 1, session: 'old' }), seed(1, { s: 2, session: 'big' }), seed(0, { s: 3, session: 'big' })])
+    const covered = 3
+    const missing = [0, 1, 2].map((i) => (i === pos ? giant : (o) => seed(0, o))({ s: 11 + i, session: 'big' }))
+    writeSegment(home, SEG, missing)
+    await segmentIndex({ home, segment: OLD, owner: true })
+    await segmentIndex({ home, segment: SEG, owner: true })
+    await fillUsage({ home, segments: [OLD] })
+    const doc = await runQuery('overview', {}, { home })
+    const c = doc.usage.coverage
+    assert.equal(c.calls_in_window, covered + missing.length)
+    assert.ok(c.calls_read < c.calls_in_window)
+    assert.equal(c.reason, 'byte-budget')
+    assert.equal(c.capped_at, OVERVIEW_USAGE_BYTES)
+    assert.ok(rowCalls(doc) >= covered, 'every sidecar-covered call is summed')
+    assert.equal(rowCalls(doc), c.calls_read)
+    // computing goes newest call first and stops at the first that does not fit: the newer small calls are all read
+    assert.equal(c.calls_read, covered + (missing.length - 1 - pos))
+    assert.ok(c.sessions_read < c.sessions_in_window)
+  })
+}
 
 test('1.7:145 usage.rows[].calls of a session equals that session\'s calls in `sessions`', async () => {
   const home = await homeWith([

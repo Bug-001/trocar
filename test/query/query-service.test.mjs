@@ -6,14 +6,18 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { fork, spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { once } from 'node:events'
-import { createQueryService, CRASH_COOLDOWN_MS } from '../../src/query/service.mjs'
+import { once, EventEmitter } from 'node:events'
+import { createQueryService, CRASH_COOLDOWN_MS, FAILURE_BACKOFF_MAX_MS } from '../../src/query/service.mjs'
 import { createServer } from '../../src/server.mjs'
 import { TOKEN, withToken } from '../server/face.mjs'
 import { isCode, isWhere } from '../../src/health/codes.mjs'
 import { rawHome } from './raw-home.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
+import fs from 'node:fs'
+import path from 'node:path'
+import { tmpDir } from '../helpers/tmp.mjs'
+import { bigSession } from './big-session.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 // A worker that answers one query (the warm-up's) and then dies on the next, which is how a caller WAITING for a
@@ -192,7 +196,7 @@ test('the worker leaves after idleMs with nothing asked, says no failure, and th
 // A fake worker for one request line: `script` runs on it. Spawned like the real one, so the service reads its stdout and stderr.
 const fake = (script) => () => spawn(process.execPath, ['-e', `process.stdin.on('data', (d) => { if (String(d).includes('\\n')) { ${script} } })`], { stdio: ['pipe', 'pipe', 'pipe'] })
 
-test('a crash says its FATAL line; the same request within the cool-down is answered 500 with it and forks nothing; one record per streak (3.5:42)', async () => {
+test('a crash says its FATAL line, to the caller and in the D38 record; within the cool-down the same request gets it and forks nothing (3.5:42)', async () => {
   const said = []
   let forks = 0, clock = 0
   // V8's out-of-memory shape: the FATAL ERROR line first, then kilobytes of native stack — the tail alone is not the reason.
@@ -203,16 +207,11 @@ test('a crash says its FATAL line; the same request within the cool-down is answ
     await assert.rejects(ask('segments'), /FATAL ERROR: Reached heap limit/, 'the caller is told why')
     assert.equal(said.length, 1)
     assert.match(said[0], /FATAL ERROR: Reached heap limit/, 'the D38 reason carries the fatal line, not only the stack tail')
+    assert.doesNotMatch(said[0], /node::Abort/, 'and none of the native stack')
     assert.equal(forks, 1)
     clock += CRASH_COOLDOWN_MS - 1
     await assert.rejects(ask('segments'), /FATAL ERROR: Reached heap limit/, 'within the cool-down: the same reason')
     assert.equal(forks, 1, 'and no fork into the same crash')
-    clock += 1
-    await assert.rejects(ask('segments'), /FATAL ERROR/)
-    assert.equal(forks, 2, 'after the cool-down the request is tried again')
-    assert.equal(said.length, 1, 'the same request crashing it again is the same streak: one record')
-    await assert.rejects(ask('classes'), /FATAL ERROR/)
-    assert.equal(said.length, 2, 'another request that crashes it is a new record')
   } finally {
     svc.stop()
   }
@@ -250,4 +249,182 @@ test('the deadline measures silence: a body waiting on a slow reader is not kill
   } finally {
     svc.stop()
   }
+})
+
+test('a reader that never drains does not hold the queue: it is abandoned after pauseMs, its connection destroyed, nothing recorded (4.4 §Plan ③)', async () => {
+  const said = []
+  const WANT = JSON.stringify({ a: 'x'.repeat(1000) })
+  // every request is answered in two writes, so a full response pauses the worker mid-frame
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), pauseMs: 100, failure: (w, e) => said.push(e.message),
+    fork: fake(`const b = ${JSON.stringify(WANT)}; process.stdout.write('200 ' + b.length + '\\n' + b.slice(0, 500)); setTimeout(() => process.stdout.write(b.slice(500)), 50)`) })
+  const stuck = Object.assign(new EventEmitter(), { destroyed: false, ended: false,
+    writeHead() {}, write: () => false, end() { stuck.ended = true }, destroy() { stuck.destroyed = true; stuck.emit('close') } })
+  try {
+    const held = svc.relay({ name: 'segments', params: {}, res: stuck })
+    const next = recorder()
+    await within(Promise.all([held, svc.relay({ name: 'classes', params: {}, res: next })]), 5000, 'the read behind a reader that never drains')
+    assert.equal(next.text(), WANT, 'the next reader gets its whole document')
+    assert.ok(stuck.destroyed && !stuck.ended, 'the stuck reader is cut off, never ended short')
+    assert.deepEqual(said, [], 'a reader that went away is not a query failure')
+  } finally {
+    svc.stop()
+  }
+})
+
+test('a crash after earlier requests\' stderr still names its cause (3.5:42)', async () => {
+  const said = []
+  const WANT = JSON.stringify({ segments: [] })
+  const worker = () => spawn(process.execPath, ['-e', `let n = 0
+process.stdin.on('data', (d) => { if (!String(d).includes('\\n')) return
+  if (++n === 1) { process.stderr.write('lowered priority, gc: scavenge 12 -> 9 MB\\n'.repeat(200), () => { const b = ${JSON.stringify(WANT)}; process.stdout.write('200 ' + b.length + '\\n' + b) }); return }
+  process.stderr.write('<--- Last few GCs --->\\n\\nFATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\\n' + ' 1: 0x1 node::Abort() [node]\\n'.repeat(300), () => process.kill(process.pid, 'SIGKILL'))
+})`], { stdio: ['pipe', 'pipe', 'pipe'] })
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), failure: (w, e) => said.push(e.message), fork: worker })
+  try {
+    const first = recorder()
+    await svc.relay({ name: 'segments', params: {}, res: first })
+    assert.equal(first.text(), WANT)
+    await new Promise((d) => setTimeout(d, 50))
+    await assert.rejects(svc.relay({ name: 'classes', params: {}, res: recorder() }))
+    assert.equal(said.length, 1)
+    assert.match(said[0], /FATAL ERROR: Reached heap limit/, 'the reason carries the cause line, not the earlier requests\' stderr')
+  } finally {
+    svc.stop()
+  }
+})
+
+// A worker on the real IPC channel (`fork`, as the service's own): `script` runs on the first request line.
+const ipcFake = (script) => () => spawn(process.execPath, ['-e', `process.stdin.on('data', (d) => { if (String(d).includes('\\n')) { ${script} } })`], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'] })
+
+for (const [what, script, answered] of [
+  // reports progress every 50 ms for 1 s (five deadlines), then answers
+  ['keeps reporting progress past the deadline is answered', `const t = setInterval(() => process.send({ progress: true }), 50); setTimeout(() => { clearInterval(t); const b = '{"ok":true}'; process.stdout.write('200 ' + b.length + '\\n' + b) }, 1000)`, true],
+  // reports progress for 400 ms, then stops: a worker that stopped making progress
+  ['stops reporting progress is still cut at the deadline', `const t = setInterval(() => process.send({ progress: true }), 50); setTimeout(() => clearInterval(t), 400)`, false],
+])
+test(`the deadline measures silence: a worker that ${what} (3.5:42)`, async () => {
+  const said = []
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), deadlineMs: 200, failure: (w, e) => said.push(e.message), fork: ipcFake(script) })
+  const res = recorder()
+  const t0 = Date.now()
+  try {
+    const r = await within(svc.relay({ name: 'segments', params: {}, res }).then(() => 'answered', (e) => e.message), 5000, 'the relay settles')
+    if (answered) {
+      assert.equal(r, 'answered')
+      assert.equal(res.status, 200)
+      assert.equal(res.text(), '{"ok":true}')
+      assert.deepEqual(said, [])
+    } else {
+      assert.equal(said.length, 1, 'the wedged worker is a D38 failure')
+      assert.ok(Date.now() - t0 >= 400 - 50 + 200, 'cut only after its last progress plus the deadline') // its last progress comes at most one 50 ms tick before it stops at 400
+    }
+  } finally { svc.stop() }
+})
+
+test('the real worker reports progress while it folds a session, and the fold is answered whole (3.5:42)', { timeout: 120_000 }, async () => {
+  const home = path.join(tmpDir('trocar-qsvc-prog-'), '.trocar')
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  const s = bigSession({ home, subLanes: 4, late: 3 })
+  s.growTo(16 << 20)
+  const ticks = []
+  const svc = createQueryService({ home, fork: (h) => { const c = workerFork(h); c.on('message', (m) => { if (m && m.progress === true) ticks.push(Date.now()) }); return c } })
+  try {
+    await within(svc.relay({ name: 'segments', params: {}, res: recorder() }), 60_000, 'the worker is up')
+    ticks.length = 0
+    const res = recorder()
+    await within(svc.relay({ name: 'session', params: { id: s.id }, res }), 60_000, 'the session is answered')
+    assert.equal(res.status, 200)
+    const doc = JSON.parse(res.text())
+    assert.equal(doc.command, 'session')
+    assert.ok(ticks.length >= 1, 'a fold of 16 MB said it was still working')
+  } finally { svc.stop() }
+})
+
+// Failure episodes (3.5 §读不全不静默, 验收 #20): a failure is kept per subject (name + parameters without WINDOW_PARAMS).
+// `script(n)` is what the n-th forked worker does with its request lines (see `fake`).
+const episodic = (scripts, deadlineMs = 100) => {
+  const said = [], st = { forks: 0, clock: 0 }
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), deadlineMs, now: () => st.clock, failure: (where, e) => said.push({ where, code: e.code, reason: e.message }),
+    fork: (h) => fake(scripts(++st.forks))(h) })
+  const ask = (params) => svc.relay({ name: 'session', params, res: recorder() })
+  return { svc, said, st, ask }
+}
+const SILENT = '', CRASH = 'process.exit(3)'
+const ANSWER = `const b = '{"ok":true}'; process.stdout.write('200 ' + b.length + '\\n' + b)`
+
+test('#20: a subject that keeps timing out while its window moves writes one query-failed; its cool-down forks nothing and doubles with each failure', async () => {
+  const { svc, said, st, ask } = episodic(() => SILENT)
+  try {
+    await assert.rejects(ask({ id: 'S', after: '0', limit: '10' }))
+    assert.equal(st.forks, 1)
+    assert.equal(said.length, 1)
+    assert.ok(said[0].where === 'daemon' && said[0].code === 'query-failed')
+    for (const [after, limit] of [['5', '10'], ['9', '40'], ['120', '3']]) {
+      await assert.rejects(ask({ id: 'S', after, limit }), (e) => e.message === said[0].reason, 'answered at once with the episode\'s reason')
+    }
+    st.clock = CRASH_COOLDOWN_MS - 1
+    await assert.rejects(ask({ id: 'S', after: '200' }))
+    assert.equal(st.forks, 1, 'no fork while the cool-down runs, whatever the window')
+    st.clock = CRASH_COOLDOWN_MS
+    await assert.rejects(ask({ id: 'S', after: '201' }))
+    assert.equal(st.forks, 2, 'after the cool-down the subject is tried once')
+    st.clock = CRASH_COOLDOWN_MS + 2 * CRASH_COOLDOWN_MS - 1
+    await assert.rejects(ask({ id: 'S' }))
+    assert.equal(st.forks, 2, 'the second failure doubled the cool-down')
+    st.clock += 1
+    await assert.rejects(ask({ id: 'S' }))
+    assert.equal(st.forks, 3)
+    for (let i = 0; i < 8; i++) { st.clock += FAILURE_BACKOFF_MAX_MS; await assert.rejects(ask({ id: 'S' })) }
+    assert.equal(st.forks, 11, 'the cool-down never grows past FAILURE_BACKOFF_MAX_MS')
+    assert.equal(said.length, 1, 'the whole episode is one record')
+  } finally { svc.stop() }
+})
+
+test('#20: a crash and then a timeout of the same subject are one episode, one record', async () => {
+  const { svc, said, st, ask } = episodic((n) => (n === 1 ? CRASH : SILENT))
+  try {
+    await assert.rejects(ask({ id: 'S', after: '0' }))
+    st.clock = CRASH_COOLDOWN_MS
+    await assert.rejects(ask({ id: 'S', after: '7' }))
+    assert.equal(st.forks, 2, 'the timeout was a real try')
+    assert.equal(said.length, 1)
+  } finally { svc.stop() }
+})
+
+test('#20: an answer ends the episode, so the next failure of that subject is a new record', async () => {
+  // the second worker answers its first request and dies on the next
+  const { svc, said, st, ask } = episodic((n) => (n === 1 ? CRASH : `if (globalThis.k = (globalThis.k || 0) + 1, globalThis.k > 1) process.exit(3); ${ANSWER}`))
+  try {
+    await assert.rejects(ask({ id: 'S' }))
+    st.clock = CRASH_COOLDOWN_MS
+    await ask({ id: 'S', after: '3' })
+    await assert.rejects(ask({ id: 'S', after: '4' }))
+    assert.equal(said.length, 2)
+    assert.equal(st.forks, 2, 'no cool-down was left over from the ended episode')
+  } finally { svc.stop() }
+})
+
+test('#20: another subject (another session) is not cooled down by one that failed', async () => {
+  const { svc, said, st, ask } = episodic(() => CRASH)
+  try {
+    await assert.rejects(ask({ id: 'A' }))
+    await assert.rejects(ask({ id: 'B' }))
+    assert.equal(st.forks, 2, 'B was tried')
+    assert.equal(said.length, 2, 'and its failure is its own record')
+    await assert.rejects(ask({ id: 'A' }))
+    assert.equal(st.forks, 2, 'A is still cooling')
+  } finally { svc.stop() }
+})
+
+test('#20: a control verb\'s subject includes its body: a failed click does not refuse a different one', async () => {
+  const { svc, said, st } = episodic(() => CRASH)
+  const click = (body) => svc.control({ verb: 'harness', body, res: recorder() })
+  try {
+    await assert.rejects(click({ harness: 'claude', on: true }))
+    for (const body of [{ harness: 'claude', on: false }, { harness: 'codex', on: true }]) await assert.rejects(click(body))
+    assert.equal(st.forks, 3, 'each different click was tried')
+    assert.equal(said.length, 3)
+    await assert.rejects(click({ on: true, harness: 'claude' }))
+    assert.equal(st.forks, 3, 'the same click is cooling')
+  } finally { svc.stop() }
 })

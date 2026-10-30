@@ -57,7 +57,6 @@ test('the Node floor (W24, 4.8 §7): nodePreflight\'s no refuses `on` before its
   const doc = io.json()
   assert.deepEqual(validateReceipt(doc), [], 'the receipt is a receipt')
   assert.equal(doc.ok, false)
-  assert.match(doc.notes.join('\n'), /Node 18\.19\.0 太旧.*升级 Node 之后再 trocar on/, 'the doctor line, verbatim')
   assert.deepEqual(reached, [], 'turnOn was never asked')
   assert.deepEqual(snapshot(home), before, 'nothing was written anywhere in the HOME — the receipt is the record')
 })

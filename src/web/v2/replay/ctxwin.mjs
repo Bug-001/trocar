@@ -3,62 +3,25 @@
 // #ctxwin; #ctxwin's children come ONLY from 1.4's whitelist ①–⑨, in order:
 //   ① 调用保真行  ② 窗口行  ③ the three sections (with the 变化线 ④ drawn before the first changed block)  ⑤ 未下发态
 //   ⑥ 解析不出态  ⑦ 没有请求态  ⑧ 载入中 — ⑤–⑧ stand in for ③④⑨  ⑨ this step's reply (2.3 §这一步的回复), set apart from the
-//   request: not a section, no block card, not in any count — the model's answer, not what it received.
+//   request: not a section, not in any count — the model's answer, not what it received; its parts are block rows drawn
+//   by the request's row component (blockRowHtml), without what only a request block carries.
 // No window head (step no / model / time / size live in the step bar), no cache states (the 缓存 button owns them), no
 // raw-JSON twin (the window IS the truth, AC-1).   renderContextWindow(el, s)  repaint + land   wireCtxWin(el, s)
 // listeners.   ctxWindowHtml(s)  the pure string the whitelist tests assert on.
 import { esc, bytes } from '../core/fmt.mjs'
 import { techDetailsHtml } from '../core/ui.mjs'
 import * as W from '../labels/replay.mjs'
-import { messageTurns, blocksOf, keyDiff, cacheRefOf, hasChangeLine } from './analysis.mjs'
+import { messageTurns, blocksOf, keyDiff, cacheRefOf, hasChangeLine, callFacts } from './analysis.mjs'
 import { contentRefOf, contentRefKOf } from './stepbar.mjs'
 import { setFold, saveFold, turnAnchorKey, turnIsOpen } from './fold.mjs'
-import { ctxBlockHtml, fillBody, faithOf, faithNow, ffBadgeHtml, tagWord } from './blocks.mjs'
-import { replyHtml } from './rawpanel.mjs' // one reply renderer, two hosts (2.3 §这一步的回复 · 2.6 §A)
+import { ctxBlockHtml, blockRowHtml, blockBodyHtml, rawContentText, fillBody, faithOf, faithNow, ffBadgeHtml, tagWord } from './blocks.mjs'
+import { replyOf, replyMarkHtml, loadStepHtml } from './rawpanel.mjs' // one reply rule, two drawings (2.3 §这一步的回复 · 2.6 §A)
 
 export { blockBodyHtml } from './blocks.mjs'
 
 // ── ① the 调用保真行: one call's fidelity facts, said once, visibly (2.3 §调用保真行; 必拒隐瞒) ─────────────────────
-// the flags of one *Incomplete object → its closed-set words, joined; an unknown flag set falls back to 「<请求/消息/回复>没采全」
-const flagWords = (obj, TABLE) => Object.entries(TABLE).filter(([k]) => obj && obj[k]).map(([, v]) => v).join(' · ')
 export function callFidelityHtml(call) {
-  const w = (call && call.wire) || {}
-  const facts = []
-  const tech = []
-  const add = (s) => s && facts.push(s)
-  // contextState: the facts are {partial, reconstructed, server_edited}; 'complete' (the server's "nothing wrong")
-  // and a missing value say nothing. A partial WITH contextMissing names the record and swallows wsIncomplete.partial
-  // (one thing said once); a value outside the set falls back and goes to 技术细节
-  if (w.contextState === 'partial') {
-    if (w.contextMissing) add(`${W.CTX_FACT.partial}(${w.contextMissing})`)
-    else if (!call.reqIncomplete && !(call.wsIncomplete && call.wsIncomplete.partial)) add(`${W.CTX_FACT.partialBare} · ${W.CTX_FACT.unknownWhy}`)
-  } else if (w.contextState === 'reconstructed') add(W.CTX_FACT.reconstructed)
-  else if (w.contextState === 'server_edited') add(W.CTX_FACT.server_edited)
-  else if (w.contextState && w.contextState !== 'complete') { add(W.CTX_FACT.fallback); tech.push(['contextState', w.contextState]) }
-  if (call.reqIncomplete) {
-    const f = flagWords(call.reqIncomplete, W.REQ_FACT)
-    add(`${W.INCOMPLETE_WORD.req}: ${f || 'incomplete'}`)
-    if (call.reqIncomplete.text) tech.push(['reqIncomplete', call.reqIncomplete.text])
-    if (!f) tech.push(['reqIncomplete', 'unknown flag'])
-  }
-  if (call.wsIncomplete) {
-    const skipPartial = w.contextState === 'partial' && w.contextMissing
-    const f = flagWords({ ...call.wsIncomplete, partial: skipPartial ? false : call.wsIncomplete.partial }, W.WS_FACT)
-    if (f) add(`${W.INCOMPLETE_WORD.ws}:${f}`)
-    else if (!skipPartial) add(`${W.INCOMPLETE_WORD.ws}: incomplete`)
-    if (call.wsIncomplete.text) tech.push(['wsIncomplete', call.wsIncomplete.text])
-    if (!f && !skipPartial) tech.push(['wsIncomplete', 'unknown flag'])
-  }
-  if (call.respIncomplete) {
-    const f = flagWords(call.respIncomplete, W.RESP_FACT)
-    add(`${W.INCOMPLETE_WORD.resp}: ${f || 'incomplete'}`)
-    if (call.respIncomplete.text) tech.push(['respIncomplete', call.respIncomplete.text])
-    if (!f) tech.push(['respIncomplete', 'unknown flag'])
-  }
-  // wire.labels: the server's own words, said unless the exact flag above already said the same thing
-  const said = new Set([call.respIncomplete && call.respIncomplete.truncated && 'resp-truncated', call.respIncomplete && call.respIncomplete.undecoded && 'resp-undecoded', call.wsIncomplete && call.wsIncomplete.truncated && 'ws-truncated'].filter(Boolean))
-  for (const l of (w.labels || [])) { if (!said.has(l.id)) { add(String(l.label || l.id)); if (l.text) tech.push([l.id, l.text]) } }
-  if (w.reqEncoding) add(W.reqEncodingFact(w.reqEncoding))
+  const { facts, tech } = callFacts(call)
   if (!facts.length) return ''
   return `<div class="cwfline"><span class="cwhalf" aria-hidden="true">${W.HALF_MARK}</span> <span class="cwffacts">${facts.map((f) => esc(f)).join(' · ')}</span>${tech.length ? techDetailsHtml(tech, { id: 'cwf-tech' }) : ''}</div>`
 }
@@ -116,8 +79,8 @@ export function removedSectionHtml(removed, refK, open) {
 // ── ⑤–⑧ the stand-in states ──────────────────────────────────────────────────────────────────────────────────────────
 export function pagedOutHtml(s, call) {
   const full = !(call && call.reqIncomplete)
-  return `<div class="pagedout"><div class="pohd">${esc(W.PAGED_TITLE)}</div><div class="pobody">${esc(full ? W.PAGED_FULL : W.PAGED_PARTIAL)} (not sent to this page ≠ lost)</div>` +
-    `<div class="poact"><button type="button" class="pobtn" id="loadpage">${esc(W.LOAD_THIS_STEP)}</button></div></div>`
+  return `<div class="pagedout"><div class="pohd">${esc(W.PAGED_TITLE)}</div><div class="pobody">${esc(full ? W.PAGED_FULL : W.PAGED_PARTIAL)}</div>` +
+    `<div class="poact">${loadStepHtml(s, call, 'id="loadpage"')}</div></div>`
 }
 const unparsedHtml = (call) => `<div class="cwunparsed"><div class="cwuhd">${esc(W.UNPARSED_TITLE)}</div><div class="cwub">${esc(W.UNPARSED_KEEP)}</div>` +
   (call.errMsg ? techDetailsHtml([['errMsg', call.errMsg]], { id: 'cwu-tech' }) : '') + `</div>`
@@ -145,7 +108,7 @@ export function ctxWindowHtml(s) {
   s.curRemoved = (line && diff && diff.removedBlocks.length) ? diff.removedBlocks : []
   const removed = s.curRemoved.length ? removedSectionHtml(s.curRemoved, refK, s.navOpen.has('cwremoved')) : ''
   const mark = (i) => (line && i === brk.idx ? line + removed : '')
-  const row = (b, i) => ctxBlockHtml(b, i, { prevKeys: refKeys, open: s.openBlocks.has(i), windowLine: !!winLine })
+  const row = (b, i) => ctxBlockHtml(b, i, { prevKeys: refKeys, open: s.openBlocks.has(i), windowLine: !!winLine, decoded: !!s.decodedView })
   // ③ the sections, in assembly order; the change line stands before the first changed block, inside its turn if folded
   let html = fid + winLine
   let lastSec = null
@@ -166,7 +129,39 @@ export function ctxWindowHtml(s) {
         `<div class="cwturnbody">${t.items.map((i) => mark(i) + row(flat[i], i)).join('')}</div></div>`
     })
   }
-  return html + `<div class="cwreply">${replyHtml(call)}</div>` // ⑨
+  return html + replySegmentHtml(s, call) // ⑨
+}
+
+// ── ⑨ this step's reply (2.3 §这一步的回复): one header (the word · the ONE fidelity mark · the stop reason), then one block
+// row per part (thinking → text → each tool call) through the request's row component. A reply row is not a request block:
+// no data-bi / data-rk / data-sec / data-ff, no 新 / cache / volatile / per-row fidelity marks. Default open = the rows of
+// the first present kind among text → tool call → thinking; 'reply:<j>' in s.openBlocks = the reader flipped row j.
+const REPLY_OPEN_ORDER = ['text', 'tool_use', 'thinking']
+const replyTag = (p) => (p.kind === 'tool_use' ? 'action · ' + (p.block.name || '') : p.kind === 'thinking' ? 'thinking' : 'say')
+// a tool call's preview is the first string among its arguments, else their JSON — never a branch on a parameter's name
+function replyPreview(p) {
+  const b = p.block
+  let t = p.kind === 'thinking' ? b.thinking : p.kind === 'text' ? b.text : null
+  if (t == null) { const v = Object.values(b.input && typeof b.input === 'object' ? b.input : {}).find((x) => typeof x === 'string'); t = v != null ? v : JSON.stringify(b.input ?? {}) }
+  return String(t).replace(/\s+/g, ' ').trim().slice(0, 90)
+}
+function replyRowsOpen(parts) {
+  const first = REPLY_OPEN_ORDER.find((k) => parts.some((p) => p.kind === k))
+  return parts.map((p) => p.kind === first)
+}
+export function replySegmentHtml(s, call) {
+  const r = replyOf(call)
+  if (r.failed) return `<div class="cwreply"><div class="cwrhd"><b>${esc(W.REPLY_WORD)}</b> · ${esc(W.FAILED_NO_REPLY)}${r.failed.reason ? techDetailsHtml([['reason', r.failed.reason]], { id: 'cwfail' }) : ''}</div></div>`
+  const head = `<div class="cwrhd"><b>${esc(W.REPLY_WORD)}</b>${replyMarkHtml(call)}${r.stop ? `<span>${W.stopReasonRow(`<span class="mono">${esc(r.stop)}</span>`)}</span>` : ''}</div>`
+  const dflt = replyRowsOpen(r.parts)
+  const rows = r.parts.map((p, j) => {
+    const open = dflt[j] !== s.openBlocks.has('reply:' + j)
+    const b = { sec: 'reply', block: p.block }
+    return blockRowHtml({ role: 'assistant', tag: replyTag(p), label: replyPreview(p) }, {
+      cls: `r-assistant k-${p.kind}`, attrs: ` data-rp="${j}"`, chars: rawContentText(p.block).length, open, body: open ? blockBodyHtml(null, b) : '',
+    })
+  }).join('')
+  return `<div class="cwreply">${head}${rows}</div>`
 }
 
 // the 缓存对比步 as a 1-based step number: S12's cacheBreak.refGi when the server names it, else the front-end rule
@@ -179,12 +174,13 @@ function changeRefK(s) {
   return i >= 0 ? i + 1 : null
 }
 
-// ── the landing rule (1.4 §打开一步时落在哪): the 变化线, else the first 「新」 block, else the top ───────────────────
+// ── the landing rule (1.4 §打开一步时落在哪): a step 跟随最新 brought in → the reply ⑨; else the 变化线, else the first 「新」 block, else the top ───────────────────
 // Pure: it names the target only. It never reorders blocks, and the turn it opens for the landing is NOT written to the
 // D12 fold memory (only the reader's own folds are).
 export function landingTarget(s) {
   const call = s.anchor && s.anchor.calls[s.playhead]
   if (!call || !call.rec || call.unparsed || call.paged_out) return null
+  if (s.followLanding) return { reply: true } // 跟随最新 brought this step in: the reader watches the model's newest answer (⑨, drawn with ③)
   const flat = call.flat || []
   const brk = call.cacheBreak
   if (hasChangeLine(call) && brk.idx < flat.length) return { anchor: 'cachebrk', idx: brk.idx }
@@ -208,7 +204,7 @@ export function renderContextWindow(el, s) {
 function hydrate(el, s) {
   for (const pre of el.querySelectorAll('.cblk:not(.collapsed) pre[data-ref]')) {
     const blk = pre.closest('.cblk'), b = s.curFlat[+blk.dataset.bi]
-    if (b) fillBody(s.ctx.api, blk.querySelector('.cbc'), b)
+    if (b) fillBody(s.ctx.api, blk.querySelector('.cbc'), b, { decoded: !!s.decodedView })
   }
 }
 // the landing runs ONCE per step — the first time its blocks are drawable (a paged-out step waits for its page); later
@@ -218,7 +214,7 @@ function land(el, s) {
   if (!call || !call.rec || call.unparsed || call.paged_out) return
   if (s.landedFor !== s.playhead) {
     const t = landingTarget(s)
-    if (t) {
+    if (t && !t.reply) {
       // a target inside a folded turn: open that turn for this display only — the D12 memory records the reader's own folds
       const flat = call.flat || []
       const fi = t.anchor ? (call.cacheBreak ? call.cacheBreak.idx : -1) : t.bi
@@ -229,7 +225,7 @@ function land(el, s) {
         el.innerHTML = ctxWindowHtml(s) // repaint with the turn open, then land
       }
     }
-    const node = t ? (t.anchor ? el.querySelector('#cachebrk') : el.querySelector(`.cblk[data-bi="${t.bi}"]`)) : null
+    const node = !t ? null : t.reply ? el.querySelector('.cwreply') : t.anchor ? el.querySelector('#cachebrk') : el.querySelector(`.cblk[data-bi="${t.bi}"]`)
     if (node && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'start' })
     s.landedFor = s.playhead
   }
@@ -240,10 +236,24 @@ export function toggleCtxBlock(s, blk) {
   if (!blk) return
   const i = +blk.dataset.bi, wasShut = blk.classList.contains('collapsed')
   blk.classList.toggle('collapsed')
+  setExpanded(blk, wasShut)
   if (!wasShut) { s.openBlocks.delete(i); return }
   s.openBlocks.add(i)
   const bc = blk.querySelector('.cbc'), b = s.curFlat[i]
-  if (bc && b && !bc.dataset.filled) fillBody(s.ctx.api, bc, b) // fillBody owns the flag: a failed fetch leaves it clear, so a reopen asks again
+  if (bc && b && !bc.dataset.filled) fillBody(s.ctx.api, bc, b, { decoded: !!s.decodedView }) // fillBody owns the flag: a failed fetch leaves it clear, so a reopen asks again
+}
+const setExpanded = (blk, open) => { const h = blk.querySelector(':scope > .cbh'); if (h) h.setAttribute('aria-expanded', String(open)) }
+// a reply row (⑨): its body was drawn with the row (inline), so a toggle only flips it and records the flip against the
+// default in s.openBlocks — it never reaches toggleCtxBlock (a reply row has no data-bi)
+function toggleReplyRow(s, blk) {
+  const key = 'reply:' + blk.dataset.rp, wasShut = blk.classList.contains('collapsed')
+  if (s.openBlocks.has(key)) s.openBlocks.delete(key); else s.openBlocks.add(key)
+  const call = s.anchor && s.anchor.calls[s.playhead]
+  const p = call && replyOf(call).parts[+blk.dataset.rp]
+  const bc = blk.querySelector(':scope > .cbc')
+  if (wasShut && bc && p && !bc.dataset.filled) { bc.innerHTML = blockBodyHtml(null, { sec: 'reply', block: p.block }); bc.dataset.filled = '1' }
+  blk.classList.toggle('collapsed')
+  setExpanded(blk, wasShut)
 }
 // a removed row: same lazy read, but its block belongs to the 内容对比步 (s.curRemoved), not this step's flat
 function toggleRemovedBlock(s, blk) {
@@ -252,7 +262,7 @@ function toggleRemovedBlock(s, blk) {
   blk.classList.toggle('collapsed')
   if (!wasShut) return
   const bc = blk.querySelector('.cbc'), b = s.curRemoved && s.curRemoved[j]
-  if (bc && b && !bc.dataset.filled) fillBody(s.ctx.api, bc, b)
+  if (bc && b && !bc.dataset.filled) fillBody(s.ctx.api, bc, b, { decoded: !!s.decodedView })
 }
 // a block inside a collapsed turn: open the turn first (returns whether the window had to be repainted). A jump is the
 // reader's own click (an outline row, a resource card — 2.5 §跳转联动), so the open goes into the D12 fold memory and
@@ -286,15 +296,25 @@ export function wireCtxWin(el, s) {
     const loadpage = t.closest('#loadpage')
     if (loadpage) { s.ensurePage(s.anchor.calls[s.playhead], true); return }
     if (t.closest('[data-navtoggle-rem]')) { if (s.navOpen.has('cwremoved')) s.navOpen.delete('cwremoved'); else s.navOpen.add('cwremoved'); renderContextWindow(el, s); return }
+    // the decoded view of JSON bodies is one desk-wide choice: it holds across steps and sessions until toggled back
+    if (t.closest('[data-decode]')) { s.decodedView = !s.decodedView; renderContextWindow(el, s); return }
     const fa = t.closest('.foldallbtn')
     if (fa) { foldAll(el, s, fa.dataset.foldall === 'open'); return }
     const th = t.closest('.cwturnhd')
     if (th) { const turn = th.closest('.cwturn'); setFold(s.turnFold, turn.dataset.anchor, turn.classList.contains('collapsed')); s.persistFold(); renderContextWindow(el, s); return }
     const rh = t.closest('.cblk.removed > .cbh')
     if (rh) { toggleRemovedBlock(s, rh.closest('.cblk')); return }
+    const rp = t.closest('.cblk[data-rp] > .cbh')
+    if (rp) { toggleReplyRow(s, rp.closest('.cblk')); return }
     const bh = t.closest('.cbh')
     if (bh) toggleCtxBlock(s, bh.closest('.cblk'))
   }
+  // a row head is a button (2.3 §block 卡): Enter / Space on the head itself opens and closes it like a click
+  const onKey = (e) => {
+    if ((e.key !== 'Enter' && e.key !== ' ') || !e.target.classList || !e.target.classList.contains('cbh')) return
+    e.preventDefault(); onClick(e)
+  }
   el.addEventListener('click', onClick)
-  return () => el.removeEventListener('click', onClick)
+  el.addEventListener('keydown', onKey)
+  return () => { el.removeEventListener('click', onClick); el.removeEventListener('keydown', onKey) }
 }

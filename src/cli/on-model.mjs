@@ -114,9 +114,9 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     if (up.up) r.notes.push(...up.notes.map((text) => ({ harness: null, text })))
     if (r.on.length && up.up) { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) }
     const b = setupBlocked(r)
-    return done(receiptOf(r, { planned: plan.planned, daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit, up.up ? r.on : [])
-  } catch (e) { // a throw under the lock is a failed run too: its result line, then the error goes on (what turned on before it is not known: none claimed)
-    put({ event: 'install-note', where: 'install', kind: 'result', outcome: 'failed', harnesses: [], refused: [], reason: `on did not finish: ${errText(e)}` })
+    return done(receiptOf(r, { planned: plan.planned, daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit, up.up ? (r.turnedOn || []) : [])
+  } catch (e) { // a throw under the lock is a failed run too: its result line names what turned on before the throw (turnOnModel attaches it; none when it is not known), then the error goes on
+    put({ event: 'install-note', where: 'install', kind: 'result', outcome: 'failed', harnesses: Array.isArray(e && e.turnedOn) ? e.turnedOn : [], refused: [], reason: `on did not finish: ${errText(e)}` })
     throw e
   } finally { lock.release() }
   } finally { closeProcs() }

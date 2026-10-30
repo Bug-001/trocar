@@ -10,7 +10,7 @@ import path from 'node:path';
 import { recordId } from '../collector/core/record/segments.mjs';
 import { normalizeRecord } from '../raw/ingest.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
-import { openSealed } from '../raw/reader.mjs';
+import { openSealed, createFrameCache, createLineCache } from '../raw/reader.mjs';
 import { R } from '../raw/format.mjs';
 import { segmentIndex, segmentSource } from './index-build.mjs';
 import { trocarHome } from '../paths.mjs';
@@ -138,10 +138,40 @@ function plainReader(file, fs) {
 }
 
 // A sealed segment knows where every record is: its own index names the line number of each frame.
-function sealedReader(file, fs) {
-  const sf = openSealed(file, { fs });
+// Every read of one sealed file within ONE synchronous stretch shares one open reader and one pair of decode caches: a cold
+// fold asks for a long session's records in chunks, and an open per chunk decoded the same frames and rebuilt the same delta
+// chains again (3.5 #21 — brotli was 3.8 s of a 25 s fold of a 5.9k-call session). The first open schedules one setImmediate
+// that closes every reader and empties both caches, so no fd and no decoded frame outlives the read: a sealed file may be
+// replaced or deleted (Windows refuses that while an fd is open), and the heap budget never pays for them.
+const SHARED_FRAMES = 12;              // a chunk's records reach back over a few frames; 12 measured 17.6 s against 8's re-decodes
+const SHARED_LINE_BYTES = 32 << 20;    // rebuilt delta predecessors of one chunk: 32 MiB kept the sibling chains of the fold resident
+const SHARED_FILES = 32;               // open fds of one stretch; past it the least recently opened one is closed
+const shared = { files: new Map(), frameCache: createFrameCache(SHARED_FRAMES), lineCache: createLineCache(SHARED_LINE_BYTES), armed: false };
+const dropReader = (e) => { try { e.sf.close(); } catch { /* already closed: nothing to release */ } };
+function releaseShared() {
+  for (const e of shared.files.values()) dropReader(e);
+  shared.files.clear(); shared.frameCache.clear(); shared.lineCache.clear(); shared.armed = false;
+}
+// the file's identity: a replaced file (rename, rewrite) is a different reader, even within one stretch
+const statKey = (st) => `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}`;
+
+function sharedSealed(file, fs) {
+  const key = statKey(fs.statSync(file));
+  let e = shared.files.get(file);
+  if (e && (e.key !== key || e.fs !== fs)) { dropReader(e); shared.files.delete(file); e = undefined; }
+  if (e) return e;
+  const sf = openSealed(file, { fs, frameCache: shared.frameCache, lineCache: shared.lineCache });
   const at = new Map();
   for (let i = 0; i < sf.count; i++) at.set(Number(sf.records[i][R.lineNo]) + 1, i);
+  if (shared.files.size >= SHARED_FILES) { const [f, old] = shared.files.entries().next().value; dropReader(old); shared.files.delete(f); }
+  e = { sf, at, key, fs };
+  shared.files.set(file, e);
+  if (!shared.armed) { shared.armed = true; setImmediate(releaseShared); }
+  return e;
+}
+
+function sealedReader(file, fs) {
+  const { sf, at } = sharedSealed(file, fs);
   const read = (r) => {
     const i = at.get(r.lineNo);
     if (i === undefined) throw new Error(`line ${r.lineNo} is not in ${path.basename(file)}`);
@@ -149,7 +179,7 @@ function sealedReader(file, fs) {
     if (b.length && b[b.length - 1] === NL) b = b.subarray(0, b.length - 1);
     return b.toString('utf8');
   };
-  read.close = () => sf.close();
+  read.close = () => {};   // a release: the shared reader is closed by releaseShared, at the end of this stretch
   return read;
 }
 

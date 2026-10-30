@@ -3,16 +3,14 @@
 // by the same table the capture used.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { bodyRetentionOf, retentionLabelOf, captureLabelsOf, isLogOnly, LEGACY_META_TEXT } from '../../src/dissect/capture-labels.mjs'
+import { bodyRetentionOf, retentionLabelOf, captureLabelsOf, isLogOnly } from '../../src/dissect/capture-labels.mjs'
 import { trafficClassOf } from '../../src/dissect/traffic.mjs'
 import { bodyOf } from '../../src/dissect/harnesses.mjs'
 import { preD40, full, logged, inference } from '../fixtures/d40-records.mjs'
 
-test('4.1 #9 — a pre-D40 {raw_chars} body is legacy-meta and says 「本条采于 D40 之前,只存了长度」; a D40 body is full and says nothing', () => {
+test('4.1 #9 — a pre-D40 {raw_chars} body is legacy-meta and is labelled; a D40 body is full and says nothing', () => {
   const old = preD40({ id: 'o' })
   assert.equal(bodyRetentionOf(old), 'legacy-meta')
-  assert.equal(retentionLabelOf(old).label, '本条采于 D40 之前,只存了长度')
-  assert.equal(LEGACY_META_TEXT, '本条采于 D40 之前,只存了长度')
   // a pre-D40 record also kept its JSON reply parsed and re-serialized (no body_wire_bytes, no resp.raw): that is said too (4.1 保真边界 ⑤)
   assert.deepEqual(captureLabelsOf(old).map((l) => l.id), ['retention-legacy-meta', 'resp-json-reserialized'])
   for (const rec of [full({ id: 'f' }), inference({ id: 'i' }), full({ id: 'b', reqBody: null, reqB64: 'AAEC' }), full({ id: 'e', reqBody: '' })]) {
@@ -39,13 +37,13 @@ test('a pre-D40 record that kept a length of 0 had no body: it is full, not lega
   assert.equal(bodyRetentionOf({ ...logged({ id: 'l', wire: [0, 3] }) }), 'log', 'a log record is told by body_retention first')
 })
 
-test('a log record says 「只记日志 · 用户设置 <harness> · <类别>」 with the harness the level was looked up under; an old-capture record is the cc row', () => {
+test('a log record is labelled with the harness the level was looked up under and the class; an old-capture record is the cc row', () => {
   const l = retentionLabelOf(logged({ id: 'l', endpoint: '/v1/code/sessions/s/worker/events', cls: 'session-sync' }))
-  assert.deepEqual([l.retention, l.harness, l.class, l.label], ['log', 'cc', 'session-sync', '只记日志 · 用户设置 cc · session-sync'])
+  assert.deepEqual([l.retention, l.harness, l.class], ['log', 'cc', 'session-sync'])
   const codex = retentionLabelOf(logged({ id: 'c', cls: 'telemetry', proc: { pid: 1, exe: '/x/codex', agent: 'codex' }, host: 'chatgpt.com' }))
-  assert.equal(codex.label, '只记日志 · 用户设置 codex · telemetry')
+  assert.deepEqual([codex.harness, codex.class], ['codex', 'telemetry'])
   const stranger = retentionLabelOf(logged({ id: 's', cls: 'other', proc: { pid: 1, exe: '/x/z', agent: 'mystery' } }))
-  assert.equal(stranger.label, '只记日志 · 用户设置 unknown · other')
+  assert.deepEqual([stranger.harness, stranger.class], ['unknown', 'other'])
   const oldCapture = retentionLabelOf(logged({ id: 'm', proc: null }))
   assert.equal(oldCapture.harness, 'cc', 'the old reverse proxy / MITM apply the cc row (4.6 §记录)')
   assert.match(l.text, /not an empty body/, 'and it says the missing body is not an empty one')

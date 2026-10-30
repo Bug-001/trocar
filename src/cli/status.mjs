@@ -211,7 +211,12 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   // how many connections are still relayed after an off (§1.3): the daemon says; with no daemon there is no engine, so none; with one that does not answer or does not say, not known
   const rc = reply && reply.relayed
   f.relayed = d_isCounts(rc) ? { closing: rc.closing, waiting: rc.waiting, cut: 0 } : f.daemon.state === 'not-running' ? { closing: 0, waiting: 0, cut: 0 } : 'unknown'
-  if (f.relayed === 'unknown') f.relayed_reason = f.daemon.state === 'running' ? 'the daemon\'s reply does not carry the connection counts' : f.daemon.state === 'not-responding' ? `the daemon does not answer (${f.daemon.reason})` : `whether a daemon runs is not known (${f.daemon.reason})`
+  const notKnown = (what) => (f.daemon.state === 'running' ? `the daemon's reply does not carry ${what}` : f.daemon.state === 'not-responding' ? `the daemon does not answer (${f.daemon.reason})` : `whether a daemon runs is not known (${f.daemon.reason})`)
+  if (f.relayed === 'unknown') f.relayed_reason = notKnown('the connection counts')
+  // how many connections are open through trocar now (§3.5, V37): the engine's count; no daemon, no engine, none; else not known
+  const active = reply && reply.engine && reply.engine.active
+  f.connections = Number.isInteger(active) && active >= 0 ? active : f.daemon.state === 'not-running' ? 0 : 'unknown'
+  if (f.connections === 'unknown') f.connections_reason = notKnown('the count of open connections')
   // logging out (§1.1, Linux): does the OS keep the daemon after the user's last logout? A file is looked at (`/var/lib/systemd/linger/<user>`), `loginctl` never runs (R8): trocar says how, it does not do it
   if (platform === 'linux') {
     let read
@@ -368,7 +373,7 @@ function failuresOf(f) {
     const l = g.last || {}
     // a failure event's where / code; a connection row is `flow` with its not_captured; the raw journal's op / outcome; else the event
     const w = where || l.where || (l.event == null ? ROW : l.event)
-    return { level: 'problem', where: w, code: (l.code ?? l.not_captured ?? l.outcome ?? l.event ?? l.reason) || g.key, count: g.count || 1, first_ts: g.first_ts, last_ts: g.last_ts, agent: l.agent, reason: reasonText(l.reason ?? (l.error && l.error.message)) }
+    return { level: 'problem', where: w, code: (l.code ?? l.not_captured ?? l.outcome ?? l.event ?? l.reason) || g.key, count: g.count || 1, first_ts: g.first_ts, last_ts: g.last_ts, agent: l.agent ?? l.harness, reason: reasonText(l.reason ?? (l.error && l.error.message)) }
   }
   const groups = [...(c.failures || []).map(problem(null)), ...((h.raw && h.raw.failures) || []).map(problem('raw'))]
   const expected = Object.values(c.expected || {}).reduce((n, x) => n + (Number(x) || 0), 0)
@@ -378,7 +383,7 @@ function failuresOf(f) {
     ...groups,
     ...Object.entries(c.expected_groups || {}).map(([code, g]) => ({ level: 'expected', where: ROW, code, ...g, reason: null })),
     // a condition holds since its record (`since`); one with neither a code nor a kind, or no time, is no group (no time is made up)
-    ...(c.conditions || []).filter((x) => (x.code || x.kind) && x.since).map((x) => ({ level: 'note', where: x.where || x.kind || null, code: x.code || x.kind, count: 1, first_ts: x.since, last_ts: x.since, agent: x.agent, reason: reasonText(x.reason) })),
+    ...(c.conditions || []).filter((x) => (x.code || x.kind) && x.since).map((x) => ({ level: 'note', where: x.where || x.kind || null, code: x.code || x.kind, count: 1, first_ts: x.since, last_ts: x.since, agent: x.agent ?? x.harness, reason: reasonText(x.reason) })),
   ]
   const by = new Map()
   for (const p of parts) {
@@ -471,6 +476,7 @@ export function statusDocOf(f) {
     ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}),
     board: boardOf(f),
     install: f.install, cert: f.cert, holders: f.holders, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}),
+    connections: f.connections, ...(f.connections === 'unknown' ? { connections_reason: f.connections_reason } : {}),
     ...(f.linger ? f.linger : {}), user: f.user, agent_list: f.agent_list, restart: restartOf(f), critical: criticalOf(f), failures, errors,
   }
   return doc

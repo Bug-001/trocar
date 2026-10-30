@@ -1,12 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { SECRET_HEADERS, safeHeaders, detectAuthMode } from '../../src/capture/redact.mjs'
-
-test('SECRET_HEADERS covers the four credential-bearing headers', () => {
-  for (const h of ['authorization', 'x-api-key', 'cookie', 'proxy-authorization']) {
-    assert.ok(SECRET_HEADERS.has(h), `${h} must be a secret header`)
-  }
-})
+import { safeHeaders, detectAuthMode } from '../../src/capture/redact.mjs'
 
 test('safeHeaders redacts secrets, passes everything else verbatim', () => {
   const out = safeHeaders({

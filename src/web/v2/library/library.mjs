@@ -14,14 +14,14 @@ import { formatHash } from '../core/router.mjs'
 import * as W from '../labels/library.mjs'
 import { parseFilters, filtersToParams, hasFilters, flattenSessions, applyFilters, listEntries, selectedKey, sessionKey, rowModel, listSignature, filterSignature, scrollDecision, agentMenuModel, agentMenuSignature, projectOptions, captionFacts, readFailWording, loadSessions, capShotMaker, emptyBoardState, filteredAgentLine, agentLabel, WINDOWS } from './logic.mjs'
 
-const ROW_H = 50, POLL_MS = 3000
+const ROW_H = 50, GROUP_H = 28, POLL_MS = 3000
 const hidden = () => typeof document !== 'undefined' && document.hidden
 
 // the screen's fixed DOM: page head, then the tool row, the caption row, the header, the list. No bare text node
 // sits between the head and the table (1.2 §页头), and the words live in labels — the shape is pinned by the tests.
 export const SKELETON =
   `<div class="page">` +
-  `<header class="pagehead" id="libhead"></header>` +
+  `<div id="libhead"></div>` + // pageHeadHtml brings the one <header>
   `<div class="lib">` +
   `<div class="libtools" role="search">` +
   `<input id="libq" type="search" placeholder="${esc(W.SEARCH_PLAIN)}" aria-label="Search sessions" autocomplete="off" spellcheck="false">` +
@@ -57,19 +57,23 @@ const sortItemsHtml = (sort) => Object.entries(W.SORTS).map(([k, v]) =>
 const lmark = (kind, inner, tip) => `<span class="lmark" data-mark="${kind}"${tip ? ` title="${esc(tip)}"` : ''}>${inner}</span>`
 export function rowHtml(s, sel, now) {
   const m = rowModel(s, now), on = m.key === sel
-  const marks = [
-    m.entry ? lmark('entry', esc(m.entry)) : '',
-    m.project ? lmark('project', esc(m.project.name), m.project.path || m.project.name) : '',
-    m.inferred ? lmark('inferred', mark('inf', W.INFERRED_TIP)) : '',
-    m.synthesized ? lmark('synthesized', esc(W.SYNTHESIZED), W.SYNTHESIZED_TIP) : '',
-    m.multi ? lmark('multi', esc(W.MULTI), W.multiTip(m.multiNames)) : '',
-    m.subagent ? lmark('subagent', esc(W.SUBAGENT), W.SUBAGENT_TIP) : '',
-    m.logged > 0 ? lmark('logged', esc(W.markLogged(m.logged)), W.loggedTip(m.logged)) : '',
-  ].filter(Boolean).join('')
+  const inf = m.inferred ? mark('inf', W.INFERRED_TIP) : ''
+  // [kind, inner html, hover, plain text]: the plain words also make the second line's own hover, since it may end in …
+  const ms = [
+    m.entry && ['entry', esc(m.entry), m.entryTip, m.entry],
+    m.project && ['project', esc(m.project.name), m.project.path || m.project.name, m.project.name],
+    inf && ['inferred', inf, '', inf.replace(/<[^>]*>/g, '')],
+    m.synthesized && ['synthesized', esc(W.SYNTHESIZED), W.SYNTHESIZED_TIP, W.SYNTHESIZED],
+    m.multi && ['multi', esc(W.MULTI), W.multiTip(m.multiNames), W.MULTI],
+    m.subagent && ['subagent', esc(W.SUBAGENT), W.SUBAGENT_TIP, W.SUBAGENT],
+    m.logged > 0 && ['logged', esc(W.markLogged(m.logged)), W.loggedTip(m.logged), W.markLogged(m.logged)],
+  ].filter(Boolean)
+  const marks = ms.map(([k, inner, tip]) => lmark(k, inner, tip)).join('')
+  const subTip = [m.harnessName, ...ms.map((x) => x[3])].join(' · ')
   return `<a class="lrow${on ? ' sel' : ''}${m.dim ? ' dim' : ''}" href="${esc(m.href)}" data-key="${esc(m.key)}"${on ? ' aria-current="true"' : ''}>` +
     `<span class="lmain">` +
     `<span class="lt" title="${esc(m.titleTip)}">${esc(m.titleText)}</span>` +
-    `<span class="lsub">${m.harnessIcon}<span class="lhn" title="${esc(m.harnessRaw ? `${m.harnessName} · ${m.harnessRaw}` : m.harnessName)}">${esc(m.harnessName)}</span>${marks ? marks : ''}</span>` +
+    `<span class="lsub" title="${esc(subTip)}">${m.harnessIcon}<span class="lhn" title="${esc(m.harnessRaw ? `${m.harnessName} · ${m.harnessRaw}` : m.harnessName)}">${esc(m.harnessName)}</span>${marks ? `<span class="lmarks">${marks}</span>` : ''}</span>` +
     `</span>` +
     `<span class="ln"${m.dim ? ' data-mark="probe-only"' : ''} title="${esc(m.dim ? W.PROBE_ONLY_TIP : W.COL_CALLS)}">${m.dim ? esc(W.PROBE_ONLY) : m.calls}</span>` +
     `<span class="lw" title="${esc(m.whenTip)}">${esc(m.when)}</span>` +
@@ -196,14 +200,14 @@ export function mount(el, ctx) {
     if (wantsShot && !shot) cap.read().then(() => { if (!dead) paintList() }) // fires once; the sentence shows when it lands
     if (!total) return message(emptyBoardHtml(shot)) // 还没有会话: the capture service's own sentence, read once, with 「截至」
     if (!rows.length) return message(filteredEmptyHtml(shot, f)) // filters emptied a non-empty board
-    // the table: group rows only in the 最近 order (local dates), interleaved as rows of the same fixed-height list
+    // the table: group rows only in the 最近 order (local dates), interleaved as shorter rows of the same list
     entries = listEntries(rows, f.sort, now)
     const render = (i) => 'g' in entries[i] ? `<div class="lgroup">${esc(W.GROUPS[entries[i].g])}</div>` : rowHtml(entries[i].s, sel, now)
     const hadFocus = listEl.contains(document.activeElement) // a repaint replaces the row elements: focus follows the highlight
-    if (!vl) vl = createVList(listEl, { rowHeight: ROW_H, count: entries.length, render })
+    if (!vl) vl = createVList(listEl, { rowHeight: (i) => ('g' in entries[i] ? GROUP_H : ROW_H), count: entries.length, render })
     else vl.update({ count: entries.length, render })
-    const fsig = filterSignature(f), selIndex = rows.findIndex((s) => sessionKey(s) === sel), d = scrollDecision({ prevSig: lastFilterSig, sig: fsig, selKey: sel, selIndex, prevSelKey })
-    lastFilterSig = fsig; prevSelKey = sel
+    const fsig = filterSignature(f), selIndex = entries.findIndex((e) => e.s && sessionKey(e.s) === sel), d = scrollDecision({ prevSig: lastFilterSig, sig: fsig, selKey: sel, selIndex, prevSelKey })
+    lastFilterSig = fsig; prevSelKey = sel // selIndex is the list's index (group rows count), as scrollToIndex wants
     if (d.kind === 'top') { listEl.scrollTop = 0; vl.update({}) }
     else if (d.kind === 'index') vl.scrollToIndex(d.index)
     if (hadFocus) { const a = listEl.querySelector('.lrow.sel'); if (a) a.focus({ preventScroll: true }) }

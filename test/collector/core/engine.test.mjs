@@ -213,3 +213,17 @@ test('engine: meta.upstreamTrust is the set an upstream is verified with — its
   assert.match(await run({ secureContext: tls.createSecureContext({ ca: [] }) }, upCa.certPem), /upstream test CA/, 'the union holds it, the agent\'s set does not: stepped aside')
   up.close()
 })
+
+// V102 (4.6 §记录, V30): a flow's failures name the agent the door said the connection is of; a flow of no agent names none (no made-up agent)
+test('engine: a failure of a flow carries the flow\'s agent when the door names one, and no agent when it does not (V102)', T, async () => {
+  for (const agent of ['codex', undefined]) {
+    const failures = []
+    const store = { envelope() {}, flow() { throw Object.assign(new Error('EIO: i/o error, write'), { code: 'EIO' }) } }
+    const up = net.createServer((sk) => sk.end()); await new Promise((r) => up.listen(0, '127.0.0.1', r))
+    const engine = createEngine({ redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 2, ...(agent ? { agent } : {}), decrypt: false }), issuer: createLeafIssuer(loadCa(createCa())), store, onFailure: (f) => failures.push(f) })
+    const { port } = await engine.listen({})
+    await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}); c.resume() })
+    await closeWithin(engine); up.close()
+    assert.deepEqual(failures.map((f) => [f.code, f.agent ?? null]), [['flow-write-failed', agent ?? null]], String(agent))
+  }
+})

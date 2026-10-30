@@ -113,7 +113,7 @@ test('stamping is stat-only: no file is opened or read for any name', () => {
   assert.ok(stats > 0, 'the stamps were taken through the given fs')
 })
 
-test('4.4:35 overview follows the usage sidecars; the other corpus names do not', async () => {
+test('4.4:36 overview and sessions follow the usage sidecars; the other corpus names do not', async () => {
   const home = world(), ctx = ctxOf(home)
   const before = stamps(['overview', 'sessions', 'traffic'], ctx)
   const { usageFile } = await import('../../src/query/usage.mjs')
@@ -121,6 +121,6 @@ test('4.4:35 overview follows the usage sidecars; the other corpus names do not'
   fs.writeFileSync(usageFile(home, SEG), '{"m":{},"v":1}\n')
   const after = stamps(['overview', 'sessions', 'traffic'], ctx)
   assert.notEqual(after.overview, before.overview)
-  assert.equal(after.sessions, before.sessions)
+  assert.notEqual(after.sessions, before.sessions)
   assert.equal(after.traffic, before.traffic)
 })

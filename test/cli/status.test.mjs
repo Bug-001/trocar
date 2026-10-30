@@ -396,11 +396,7 @@ test('the flip (4.9 §4, 1.6 §4): darwin status is the NEW status — no opt-in
 
 test('connections still relayed after an off: N closing and M waiting, in the text and in --json (cut is 0: only off --now cuts); none is said as none, with no daemon there is no engine', async () => {
   const s = await installedHome()
-  let r = await run(s, [], { request: asDaemon(reply({ relayed: { closing: 2, waiting: 1 } })) })
-  assert.match(r.text, /^ {2}Connections {2}3 open through trocar$/m)
   assert.deepEqual((await run(s, ['--json'], { request: asDaemon(reply({ relayed: { closing: 2, waiting: 1 } })) })).io.json().relayed, { closing: 2, waiting: 1, cut: 0 })
-  r = await run(s, [], { request: asDaemon(reply()) })
-  assert.match(r.text, /^ {2}Connections {2}0 open through trocar$/m, 'a known zero is said as a zero, never left out')
   const noresp = await run(s, [], { request: down('ETIMEDOUT') })
   assert.match(noresp.text.replace(/\s+/g, ' '), /Connections unknown \([^)]*ETIMEDOUT/, 'a daemon that does not answer cannot say: unknown with the reason, never 0 (R11)')
   assert.doesNotMatch(noresp.text, /Connections {2}\d/, 'and no count is invented')

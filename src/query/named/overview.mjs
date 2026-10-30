@@ -3,10 +3,11 @@
 // Everything but `usage` is ONE pass over the segment index rows: no record body is opened (3.5 MUST NOT). The window is
 // C.5's: a session whose LAST call falls in [since, until] counts whole; a session-less row counts by its own ts.
 // `usage` needs each call's token counters, which live in the replies: it takes them from the per-segment usage sidecars
-// (src/query/usage.mjs, 4.2 §用量旁注) and computes the calls they do not cover yet, newest session first, through the
-// same assembly, until the next session would push those computed bytes past OVERVIEW_USAGE_BYTES; a session wholly
-// in the sidecars still counts after that. `coverage` says how far it got and why it stopped (invariant 4). With
-// `later` (the query worker), the missing segments are filled after the answer is written.
+// (src/query/usage.mjs, 4.2 §用量旁注) — every call they cover is summed — and computes the calls they do not cover yet
+// through the same assembly, newest session first and newest call first, until the first one that would push those
+// computed bytes past OVERVIEW_USAGE_BYTES: from there nothing more is computed, in this session or a later one.
+// `coverage` says how many sessions and calls it read and why it stopped (invariant 4). With `later` (the query worker),
+// every missing segment is filled after the answer is written.
 import { recordsAt } from '../records.mjs';
 import { readUsage, fillUsage, callFacts, takeFillProblem } from '../usage.mjs';
 import { asOf, indexRows, isModelCall, sessionFactsOf, sessionGroups } from '../rows.mjs';
@@ -70,19 +71,24 @@ function usageOf({ home, fs, inWindow, errors, later }) {
     return notes.get(segment);
   };
   const rows = new Map(), toFill = new Set();
-  let spent = 0, read = 0, capped = false;
+  const newer = (a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : b.lineNo - a.lineNo);
+  let spent = 0, read = 0, callsIn = 0, callsRead = 0, capped = false;
   for (const [id, facts, own] of newest) {
     const need = own.filter(needed);
+    callsIn += need.length;
     const missing = need.filter((r) => { const n = note(r.segment); return !(n && r.lineNo <= n.lines); });
     for (const r of missing) toFill.add(r.segment);
-    let computed = null;
-    if (missing.length) {
-      const cost = rowsKey(missing).bytes;
-      if (capped || spent + cost > OVERVIEW_USAGE_BYTES) { capped = true; continue; }
+    const taken = new Set();
+    for (const r of [...missing].sort(newer)) {
+      if (capped) break;
+      const cost = rowsKey([r]).bytes;
+      if (spent + cost > OVERVIEW_USAGE_BYTES) { capped = true; break; }
       spent += cost;
-      computed = new Map(callFacts(recordsAt({ home, fs, rows: missing, errors })).map((f) => [f.id, f]));
+      taken.add(r);
     }
-    read++;
+    const computed = taken.size ? new Map(callFacts(recordsAt({ home, fs, rows: missing.filter((r) => taken.has(r)), errors, remember: false })).map((f) => [f.id, f])) : null;
+    callsRead += need.length - missing.length + taken.size;
+    if (taken.size === missing.length) read++;
     for (const r of need) {
       const n = note(r.segment);
       const f = (n && r.lineNo <= n.lines ? n.facts.get(r.lineNo) : computed && computed.get(r.id));
@@ -105,7 +111,8 @@ function usageOf({ home, fs, inWindow, errors, later }) {
   if (later && toFill.size) later(() => fillUsage({ home, fs, segments: [...toFill] }));
   const cmp = (a, b) => (a === b ? 0 : a == null ? 1 : b == null ? -1 : String(a) < String(b) ? -1 : 1);
   return {
-    coverage: { sessions_read: read, sessions_in_window: inWindow.length, capped_at: capped ? OVERVIEW_USAGE_BYTES : null, reason: capped ? 'byte-budget' : null },
+    coverage: { sessions_read: read, sessions_in_window: inWindow.length, calls_read: callsRead, calls_in_window: callsIn,
+      capped_at: capped ? OVERVIEW_USAGE_BYTES : null, reason: capped ? 'byte-budget' : null },
     rows: [...rows.values()].map((r) => ({ ...r, sessions: r.sessions.size }))
       .sort((a, b) => cmp(a.harness, b.harness) || cmp(a.model, b.model) || cmp(a.lane, b.lane)),
   };

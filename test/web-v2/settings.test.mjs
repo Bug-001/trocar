@@ -15,6 +15,8 @@ import { THEME_KEY } from '../../src/web/v2/core/ui.mjs'
 import { priceMatch } from '../../src/web/v2/core/metrics.mjs'
 import { COMMANDS } from '../../src/web/v2/labels/capture.mjs'
 import { SOURCE_WORD } from '../../src/web/v2/labels/settings.mjs'
+import { CLASS_IDS, CLASS_DESC, FALLBACK_CLASS } from '../../src/web/v2/core/classes.mjs'
+import { esc } from '../../src/web/v2/core/fmt.mjs'
 import { loadPricing } from '../../src/view/pricing.mjs'
 import { edit, readTable } from '../../src/classes/table.mjs'
 import { classesFile } from '../../src/paths.mjs'
@@ -448,4 +450,60 @@ test('#10 a 403 to the change: no receipt, and nothing more is sent (the K-30 pa
     assert.equal(w.log.length, n + 1, 'only the refused plan request')
     assert.equal(rows(m.html()).find((r) => r.cls === 'telemetry').receipt, null)
   })
+})
+
+// constructed C.5 documents for the pure storageHtml: seven classes, `other` without rules; a segment's problems are said in
+// segments[].problems[], in both documents' errors[] as `segments/<name>` (the shape src/query/named/{segments,classes}.mjs write)
+const SEG = '20260719T100000Z'
+const classesDoc = (counts, errors = []) => ({ disk: { trocar_bytes: 1e6 }, as_of: null, file: null, errors,
+  classes: CLASS_IDS.map((id, i) => ({ class: id, keep: 'full', builtin: true, rules: id === FALLBACK_CLASS ? [] : [{ host: `h${i}\\.example\\.test` }], counts: { h24: counts(id, i) } })) })
+const probDocs = (probs) => {
+  const errors = probs.map((p) => ({ where: `segments/${SEG}`, code: p.code, ...(p.level ? { level: p.level } : {}), reason: p.reason })) // problemEntry
+  return { segments: { segments: [{ segment: SEG, problems: probs }], errors }, classes: classesDoc((id, i) => ({ calls: i, bytes: i * 100 }), errors) }
+}
+
+test('#13 notes: problems that are all level:\'note\' are no read problem (no bad line, no partial note) but the slow line; mixed → the real one counts; no level counts as before', () => {
+  const note = (k) => ({ code: 'index-cold', reason: `built the index while reading ${k}`, level: 'note' })
+  const real = { code: 'record-unparseable', reason: 'line 3 is not JSON' }
+  const allNote = probDocs([note(1), note(2)])
+  assert.equal(storage.problemCount(allNote.segments), 0)
+  const h = storage.storageHtml(allNote, '24h')
+  assert.doesNotMatch(h, /class="dline bad"/)
+  assert.ok(!notes(h).includes('partial'))
+  assert.ok(notes(h).includes('slow'))
+  const mixed = probDocs([note(1), real])
+  assert.equal(storage.problemCount(mixed.segments), 1)
+  const hm = storage.storageHtml(mixed, '24h')
+  assert.match(hm, /class="dline bad"/)
+  assert.ok(notes(hm).includes('partial'))
+  const plain = probDocs([real, { ...real, reason: 'line 4 is not JSON' }])
+  assert.equal(storage.problemCount(plain.segments), 2)
+  assert.ok(!notes(storage.storageHtml(plain, '24h')).includes('slow'))
+})
+
+test('#13 every segment problem is listed once on the page (the 磁盘 card); the classes card\'s technical keys are unique', () => {
+  const probs = [{ code: 'index-cold', reason: 'built while reading', level: 'note' }, { code: 'record-unparseable', reason: 'line 3 is not JSON' }, { code: 'record-unparseable', reason: 'line 9 is not JSON' }]
+  const d = probDocs(probs)
+  const h = storage.storageHtml(d, '24h').replace(/ data-copy="[^"]*"/g, '') // the copy buffer is not shown
+  for (const p of probs) assert.equal(h.split(esc(`segments/${SEG} · ${p.code} · ${p.reason}`)).length - 1, 1, p.reason) // 1.11: 段名 · 原因码 · 原因原文
+  const tech = (/id="classtech"[\s\S]*$/.exec(h) || [''])[0]
+  const keys = [...tech.matchAll(/<span class="k">([^<]*)<\/span>/g)].map((m) => m[1]).filter(Boolean)
+  assert.ok(keys.length >= CLASS_IDS.length)
+  assert.equal(new Set(keys).size, keys.length, keys.join(' | '))
+})
+
+test('#27 each class row says what the class is (CLASS_DESC, one per D40 class); Stored carries its share of the window total; total 0 → no share; `other` without rules has words in its rules cell', () => {
+  assert.deepEqual(Object.keys(CLASS_DESC), CLASS_IDS)
+  const d = probDocs([])
+  const h = storage.storageHtml(d, '24h'), T = d.classes.classes.reduce((s, c) => s + c.counts.h24.bytes, 0)
+  for (const c of d.classes.classes) {
+    const r = rows(h).find((x) => x.cls === c.class)
+    assert.ok(r.inner.includes(esc(CLASS_DESC[c.class])), c.class)
+    const cell = (/data-n="bytes"[^>]*>([^<]*)</.exec(r.inner) || [])[1]
+    assert.ok(cell.includes(`${Math.round(c.counts.h24.bytes / T * 100)}%`), `${c.class}: ${cell}`)
+  }
+  const other = rows(h).find((x) => x.cls === FALLBACK_CLASS)
+  assert.ok(((/<td class="rules">([\s\S]*?)<\/td>/.exec(other.inner) || [])[1] || '').replace(/<[^>]*>/g, '').trim().length > 0)
+  const zero = classesDoc(() => ({ calls: 0, bytes: 0 }))
+  assert.doesNotMatch(storage.storageHtml({ classes: zero, segments: null }, '24h').replace(/<tfoot>[\s\S]*$/, '').replace(/^[\s\S]*<tbody>/, ''), /%/)
 })

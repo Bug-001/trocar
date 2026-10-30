@@ -22,8 +22,9 @@ export async function probe({ importer = () => import('playwright-core'), env = 
 
 /** The board on a fresh temp HOME in a fresh Chrome. `token`: true = the face's token, a string = that token, false = no fragment.
  *  `missing` lists every static file answered ≥ 400 (`<status> <path>`).
+ *  `setup(page)` runs before the first navigation (routes a case must hold from the first request on).
  *  `requests` logs every /api and /control response as {url, method, body (the request's post data, or null), status, start (ms epoch the request began), t (ms epoch it answered)}; `errors` collects pageerrors; `get(name, params)` reads the face directly (no page, no request log). Always `await stop()`. */
-export async function withBoard({ bytes, token = true, width = 1280, theme = 'light', chromium } = {}) {
+export async function withBoard({ bytes, token = true, width = 1280, height = 900, theme = 'light', chromium, setup } = {}) {
   chromium ||= (await import('playwright-core')).chromium
   const face = await serveBoard(boardHome({ bytes }))
   const requests = []
@@ -39,7 +40,7 @@ export async function withBoard({ bytes, token = true, width = 1280, theme = 'li
   }
   try {
     browser = await chromium.launch(CHANNEL)
-    context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme })
+    context = await browser.newContext({ viewport: { width, height }, colorScheme: theme })
     page = await context.newPage()
     page.on('pageerror', (e) => errors.push(String(e)))
     page.on('response', (r) => {
@@ -47,6 +48,7 @@ export async function withBoard({ bytes, token = true, width = 1280, theme = 'li
       if (!/^\/(api|control)\//.test(u.pathname) && r.status() >= 400) missing.push(`${r.status()} ${u.pathname}`) // a static file the page asked for and did not get (a /favicon.ico once)
       if (/^\/(api|control)\//.test(u.pathname)) requests.push({ url: u.pathname + u.search, method: r.request().method(), body: r.request().postData(), status: r.status(), start: r.request().timing().startTime, t: Date.now() })
     })
+    await setup?.(page)
     const t = token === true ? face.token : token
     await page.goto(`${face.base}/${t ? `#t=${encodeURIComponent(t)}` : ''}`, { waitUntil: 'load' })
   } catch (e) { await stop(); throw e }
