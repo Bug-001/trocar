@@ -47,7 +47,7 @@ export const QUERIES = Object.freeze({
  * The module is imported on use, so a read of captured data does not pull the whole CLI in.
  */
 async function verdict(name, { params, errors, userHome, env, platform, deps }) {
-  const { resolveHarnesses } = await import('../../cli/harness-names.mjs');
+  const { resolveHarnesses } = await import('../../off/harness-names.mjs');
   const named = resolveHarnesses(params.harness == null ? [] : [...listOf(params.harness)]);
   if (!named.ok) throw new QueryArgError(`trocar query ${name}: --harness: no agent called ${named.unknown.join(', ')} (known: ${named.known.join(', ')})`);
   const mod = await import(name === 'status' ? '../../cli/status.mjs' : '../../cli/doctor.mjs');

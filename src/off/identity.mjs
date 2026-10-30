@@ -14,14 +14,11 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { trocarHome } from './paths.mjs'
+import { HARNESS_IDS } from './harness-names.mjs'
 
 /** The interpreter / runtime names (a closed set, written only here): a name in it says nothing about the program, so a list item with such a
  *  name MUST carry an `args` pattern. Their version-suffixed spellings fold into these (python3.14t → python, node22 / nodejs → node). */
 export const WIDE = new Set(['node', 'nodejs', 'bun', 'deno', 'python', 'ruby', 'perl', 'java', 'sh', 'bash', 'zsh', 'dash', 'fish', 'env', 'electron', 'pwsh', 'powershell', 'cmd'])
-
-/** The seven v1 harness ids (D37). The single source inside src/off (which may import nothing outside itself); test/collector/identity-presets
- *  holds it equal to the names of loadHarnesses(). Nowhere else writes this list. */
-export const HARNESS_IDS = Object.freeze(['claude-code', 'codex', 'opencode', 'kimi-code', 'deepseek-dsh', 'hermes', 'z-code'])
 
 const IDENT_VERSION_NAME = /^v?\d+(\.\d+)+([-+][0-9a-z.]+)?$/ // a file or directory named by a version: 2.1.296, v22.20.0, 3.14.7+20260901
 const IDENT_FAMILY = /^([a-z]+?)(\d+(?:\.\d+)*)(t?)$/ // python3, python3.14, python3.14t, node22, ruby3.3 — not x264 (x is no interpreter)

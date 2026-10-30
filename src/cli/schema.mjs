@@ -1,7 +1,7 @@
 // schema.mjs — what `--json` prints (RFC 1.6 R5), and the check V9 runs over every command's output. The keys and the exit codes
 // are src/off/schema.mjs (the undo side prints receipts too and may import nothing outside src/off); this adds validateReceipt.
 import { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, UNDO_LINE, newReceipt } from '../off/schema.mjs'
-import { HARNESS_IDS } from './harness-names.mjs'
+import { HARNESS_IDS } from '../off/harness-names.mjs'
 import { STATUS_REASONS, NET_CODES } from '../health/codes.mjs'
 import { FINDING_CODES } from '../netenv/findings.mjs' // the finding codes' own closed list: the cross-platform catalogue's, the Windows table's (4.8 §10.4) and the trust reasons' — one list, one place
 

@@ -11,8 +11,7 @@ import { parseHash, formatHash } from '../../src/web/v2/core/router.mjs'
 import * as domMod from '../../src/web/v2/core/dom.mjs'
 import * as safeMountMod from '../../src/web/v2/shell/safemount.mjs'
 
-test('chips: the eight read-side ids (the legacy one last), each with its icon file, aliases folded onto them', () => {
-  assert.deepEqual(HARNESS_ORDER, ['cc', 'codex', 'opencode', 'kimi', 'dsh', 'hermes', 'zcode', 'deepseek-cli'])
+test('chips: each read-side id (test/web-v2/harness-seam.test.mjs holds them to the server table) has its icon file, aliases folded onto them', () => {
   for (const id of HARNESS_ORDER) { assert.ok(CHIP[id], `CHIP.${id}`); assert.match(CHIP[id].icon, /^[\w-]+\.svg$/) }
   assert.deepEqual(['claude-code', 'deepseek-dsh', 'kimi-code', 'z-code', 'codex', 'mystery'].map(harnessKey), ['cc', 'dsh', 'kimi', 'zcode', 'codex', 'mystery'])
   assert.equal(harnessName('deepseek-dsh'), harnessName('dsh')); assert.equal(harnessIcon('z-code'), harnessIcon('zcode'))

@@ -1,19 +1,18 @@
-// test/cli/harness-names.test.mjs — RFC 1.6 §3 (harness names): the CLI id is the code id (the descriptor's `name`), a few short
+// test/cli/harness-names.test.mjs — RFC 1.6 §1.6 (harness names): the CLI id is the code id (the descriptor's `name`), a few short
 // aliases are accepted on input, the output is always the code id, a wrong name is listed with the known ones (exit 2, nothing
-// touched — the exit is the dispatcher's, tests of Task 11).
+// touched — the exit is the dispatcher's). One table, src/off/harness-names.mjs, for the CLI and trocar-off alike.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { HARNESS_IDS, NAME_ALIASES, resolveHarnesses } from '../../src/cli/harness-names.mjs'
+import { HARNESS_IDS, NAME_ALIASES, resolveHarnesses } from '../../src/off/harness-names.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
-import { OFF_NAMES, resolveOffNames } from '../../src/off/main.mjs'
 
-test('harness names: CLI ids are the descriptor names (1.6 §3: CLI 名 = 代码 id)', async () => {
+test('harness names: the ids are the descriptor names — a harness added as a descriptor alone fails here until the table names it (1.6 §1.6: CLI 名 = 代码 id)', async () => {
   const names = (await loadHarnesses()).map((d) => d.name).sort()
   assert.deepEqual([...HARNESS_IDS].sort(), names)
   assert.equal(new Set(HARNESS_IDS).size, HARNESS_IDS.length, 'no id twice')
 })
 
-test('harness names: aliases are exactly the four of 1.6 §3 and each points at a code id', () => {
+test('harness names: aliases are exactly the four of 1.6 §1.6 and each points at a code id', () => {
   assert.deepEqual({ ...NAME_ALIASES }, { claude: 'claude-code', dsh: 'deepseek-dsh', kimi: 'kimi-code', zcode: 'z-code' })
   for (const [alias, id] of Object.entries(NAME_ALIASES)) {
     assert.ok(HARNESS_IDS.includes(id), `${alias} -> ${id}`)
@@ -57,10 +56,8 @@ test('harness names: what is not a string is unknown, not a crash', () => {
   assert.deepEqual(r.unknown, ['null', '7'])
 })
 
-test('harness names: src/off/main.mjs keeps its own copy of the §3 table (it may import nothing outside src/off) — the ids, the aliases and the resolution are the same as src/cli/harness-names.mjs', () => {
-  assert.deepEqual([...OFF_NAMES.ids], [...HARNESS_IDS])
-  assert.deepEqual({ ...OFF_NAMES.aliases }, { ...NAME_ALIASES })
-  for (const names of [[], ['claude'], ['claude-code', 'claude'], ['zcode', 'codex', 'dsh'], ['kimi', 'nope', 'nope', 'x'], ['constructor'], ['Claude'], ['__proto__']]) {
-    assert.deepEqual(resolveOffNames(names), resolveHarnesses(names), JSON.stringify(names))
-  }
+test('harness names: an id an install manifest names is a name too, after the table\'s (off of a harness this table does not know)', () => {
+  assert.deepEqual(resolveHarnesses(['acme', 'claude'], ['codex', 'acme']), { ok: true, ids: ['claude-code', 'acme'] })
+  assert.deepEqual(resolveHarnesses(['nope'], ['acme']).known, [...HARNESS_IDS, 'acme', ...Object.keys(NAME_ALIASES)])
+  assert.equal(resolveHarnesses(['acme']).ok, false, 'without a manifest naming it, it is unknown')
 })

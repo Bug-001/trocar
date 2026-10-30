@@ -3,7 +3,7 @@
 // There are no per-OS overlay files: macOS and Windows data is the base descriptor's `proxyMode`, with `perOs({ darwin, win32 })`
 // where a path differs (spec 4.11 §2.3).
 // The registry (core) validates them; this file never imports core/engine or arch/. It also checks the one export
-// every descriptor owes `trocar status` and `trocar doctor` (RFC 1.6 §9.7): `proxy`, how its agent reads a proxy.
+// every descriptor owes `trocar status` and `trocar doctor` (RFC 4.11 §2.3; status draws it per 1.6 附录 A): `proxy`, how its agent reads a proxy.
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { normalizeName } from '../../off/identity.mjs'
@@ -12,7 +12,7 @@ const SCHEME = ['http', 'https', 'socks4', 'socks5', 'socks5h']
 const MEASURED = ['lab', 'inferred']
 const nonEmpty = (s) => typeof s === 'string' && s !== ''
 
-/** Problems with a descriptor's `proxy` export against the shape of 1.6 §9.7 (`[]` = fine):
+/** Problems with a descriptor's `proxy` export against the shape of 4.11 §2.3 (`[]` = fine):
  *  `{ env: [names the agent reads, preferred first], files: [{ path: ({ home, env }) => file, format: 'json' | 'dotenv', keys: [key path | name, …] }], systemProxy: { http, ws } (true | false | 'unknown':
  *  does it follow the OS proxy setting, per transport), schemes: [the proxy URL schemes it takes], unsupported: { <scheme>: 'silent-direct' | 'fails' }, branches: ['all'] | ['http', 'ws'],
  *  measured: { win32, linux, darwin }: 'lab' | 'inferred', restart: { hint, processes, managed? } }` (`managed: true`: the settings live in a process the agent's windows do not end, which `doctor` then names by pid). A harness with more to say (proxy mode's per-form data, 4.8 §2.3) adds keys; these must be there. */
@@ -157,7 +157,7 @@ export async function loadHarnesses(dirUrl = new URL('./', import.meta.url)) {
   for (const n of names) {
     const d = (await import(new URL(n, dirUrl).href)).default
     const bad = proxyProblems(d && d.proxy)
-    if (bad.length) throw new Error(`harness ${n}: its proxy export is wrong (RFC 1.6 §9.7): ${bad.join('; ')}`)
+    if (bad.length) throw new Error(`harness ${n}: its proxy export is wrong (RFC 4.11 §2.3, the proxy block): ${bad.join('; ')}`)
     const pmBad = d.proxyMode === undefined ? ['shape: no proxyMode (every harness says how proxy mode reaches it, spec 4.11 §2.4)'] : proxyModeProblems(d.proxyMode)
     if (pmBad.length) throw new Error(`harness ${d.name || n} (${n}): its proxyMode is wrong (spec 4.11 §2.3): ${pmBad.join('; ')}`)
     out.push(d)

@@ -45,7 +45,7 @@ export const VERBS = Object.freeze({
    *  the receipt is the one `--json` prints, a refusal included. `source:'board'` marks every flows/ record the run writes. The plan is the dry-run
    *  receipt's `planned` — for an off with an install record that is [] (1.6 附录 C.2), so its plan_id binds nothing but the harness. */
   async harness({ harness, on, confirm }, { home, deps }) {
-    const [{ resolveHarnesses }, { newReceipt }] = await Promise.all([import('../cli/harness-names.mjs'), import('../cli/schema.mjs')])
+    const [{ resolveHarnesses }, { newReceipt }] = await Promise.all([import('../off/harness-names.mjs'), import('../cli/schema.mjs')])
     const named = typeof harness === 'string' ? resolveHarnesses([harness]) : { ok: false }
     if (!named.ok) return { status: 400, doc: { error: `harness must be one of the harness names, not ${JSON.stringify(harness)}` } }
     if (typeof on !== 'boolean') return { status: 400, doc: { error: 'on must be true or false' } }
@@ -67,7 +67,7 @@ export const VERBS = Object.freeze({
    *  carriers ([] when it has them all); the root and the login entry are install's steps, read back when in place, asked as install asks when not —
    *  a dialog nobody answered is a `pending` row carrying `trocar install`, the harness's carriers placed all the same (4.4 「Set up 的三件实话」). */
   async setup({ harness, confirm }, { home, deps }) {
-    const [{ resolveHarnesses }, { newReceipt }, { install }] = await Promise.all([import('../cli/harness-names.mjs'), import('../cli/schema.mjs'), import('../cli/install.mjs')])
+    const [{ resolveHarnesses }, { newReceipt }, { install }] = await Promise.all([import('../off/harness-names.mjs'), import('../cli/schema.mjs'), import('../cli/install.mjs')])
     const named = typeof harness === 'string' ? resolveHarnesses([harness]) : { ok: false }
     if (!named.ok || named.ids.length !== 1) return { status: 400, doc: { error: `harness must be one of the harness names, not ${JSON.stringify(harness)}` } }
     const out = [], err = []

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { HARNESS_IDS } from '../../src/cli/harness-names.mjs'
+import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { BUILTIN, readTable, classify, keepOf, edit, ClassArgError } from '../../src/classes/table.mjs'
 import { LLM_ENDPOINT_PATHS, TOKEN_COUNT_ENDPOINT_PATHS } from '../../src/capture/envelope.mjs'
 
