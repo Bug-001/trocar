@@ -549,7 +549,8 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
   the records byte for byte.
 - **Non-verbatim data is labelled in place.** The raw segments are the only source of truth; the
   segment index under `~/.trocar/index/` is a deletable accelerator, rebuilt from them. SSE replies are faithful reconstructions of the streamed frames. Data imported
-  from the v0 demo is badged `v0-converted` (re-serialized bodies, summarized tool schemas); fresh
+  from the v0 demo kept the request only as a parsed object: each of its steps says **This step's content cannot be
+  traced back to the raw bytes (it was parsed again)** and none of its blocks is called verbatim; fresh
   captures are byte-exact with full tool schemas. A request body the collector stored only in part is
   labelled on its call with the exact reason: **request: truncated at the capture limit** (cut at the 64 MiB
   capture cap) or **request: incomplete** (the capture did not get it whole, e.g. the upstream answered 413 before
