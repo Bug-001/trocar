@@ -218,6 +218,29 @@ test('V105: an npm copy whose collector and last install run it is exit 2 npm-pa
   }
 })
 
+// 附录 C.2 `update`: `from` · `to` · `harnesses` are what the plan does — in its --dry-run receipt as in the finish's own
+test('V105 · C.2: an npm copy\'s --dry-run receipt names the code it finishes from, this code and the agents switched on again; so does a finish waiting in update.json', async () => {
+  const s = sandbox({ on: ['codex'] })
+  const name = `x-pkg-${Math.random().toString(36).slice(2, 8)}`
+  const npmRoot = path.join(s.base, 'lib', 'node_modules', name)
+  fs.mkdirSync(npmRoot, { recursive: true })
+  fs.writeFileSync(path.join(npmRoot, 'package.json'), JSON.stringify({ name, version: '0.2.0' }) + '\n')
+  const cases = [
+    ['the collector runs other code', () => {}, () => '0.1.0', '0.1.0'],
+    ['install last ran on other code', () => installedBy(s, '0.0.9'), () => codeId(npmRoot), '0.0.9'],
+    ['a finish waiting in update.json', () => fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n'), () => codeId(npmRoot), '0.1.0+0000000'],
+  ]
+  for (const [label, seed, daemonCode, from] of cases) {
+    seed()
+    const t = ctx(s, { daemonCode, deps: { root: npmRoot } })
+    assert.equal(await runUpdateCli(['--dry-run', '--json'], t.c), EXIT.ok, `${label}: ${t.io.text()}`)
+    const doc = t.io.json()
+    assert.deepEqual(validateReceipt(doc), [], label)
+    assert.deepEqual([doc.from, doc.to, doc.harnesses], [from, codeId(npmRoot), ['codex']], label)
+    assert.deepEqual([t.calls.install, t.calls.on, t.calls.child], [[], [], []], `${label}: --dry-run ran no step`)
+  }
+})
+
 // ── V95 · the code changes and the new code takes over ──────────────────────────────────────────────────────────────────────────────
 test('V95: the harnesses that are on go off into the handover file, HEAD fast-forwards, and the new code is run in a process of its own', async () => {
   for (const json of [false, true]) {

@@ -98,7 +98,8 @@ async function update({ io, env, home, platform, deps, flags }) {
   const resume = async (waiting) => {
     if (waiting.dropped.length) r.notes.push(`${waiting.dropped.join(', ')}: this update's note names ${waiting.dropped.length > 1 ? 'agents' : 'an agent'} this trocar has no descriptor for, so capture is not switched on for ${waiting.dropped.length > 1 ? 'them' : 'it'}`)
     const to = codeId(root)
-    const g = await gate([['Code', `${waiting.from || r.from} -> ${to}`], ['Switched on again', waiting.on.join(', ') || 'nothing was being captured']],
+    r.from = waiting.from || r.from; r.to = to; r.harnesses = waiting.on // C.2: the receipt of the plan says what the finish does, --dry-run and a refused question included
+    const g = await gate([['Code', `${r.from} -> ${to}`], ['Switched on again', waiting.on.join(', ') || 'nothing was being captured']],
       [{ what: 'finish', detail: `an update to ${to} is waiting to be finished: the collector is replaced, install runs again${waiting.on.length ? `, and capture is switched on again for ${waiting.on.join(', ')}` : ''}`, harnesses: waiting.on }], CUT)
     if (g !== null) return g
     return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting })
@@ -114,16 +115,17 @@ async function update({ io, env, home, platform, deps, flags }) {
     if (waiting) return resume(waiting)
     const running = await daemonCode({ platform, dir, env, fs, deps })
     const installed = installedCode(home, fs)
-    r.to = r.from
-    const daemonOther = typeof running === 'string' && running !== r.from
-    if (!daemonOther && (installed === undefined || installed === r.from)) {
+    const to = r.to = r.from
+    const daemonOther = typeof running === 'string' && running !== to
+    if (!daemonOther && (installed === undefined || installed === to)) {
       return no('npm-package', `this trocar was installed with npm. Get the newest with npm i -g ${pkg}@latest, then run trocar update to restart the collector on it.`, EXIT.usage)
     }
     const from = daemonOther ? running : installed
-    const why = daemonOther ? `the collector runs ${running}, so it is replaced by ${r.from}, install runs again` : `install last ran on ${installed || 'code it does not name'}, so it runs again on ${r.from}`
+    const why = daemonOther ? `the collector runs ${running}, so it is replaced by ${to}, install runs again` : `install last ran on ${installed || 'code it does not name'}, so it runs again on ${to}`
     const on = harnessesOn({ home, fs })
     if (on.error) return no('state-unreadable', on.error)
-    const g = await gate([['Code', `${from || 'code it does not name'} -> ${r.from} (installed with npm)`], ['Switched on again', on.ids.join(', ') || 'nothing is being captured']],
+    r.from = from || r.from; r.harnesses = on.ids // C.2: the receipt of the plan says what the finish does, --dry-run and a refused question included
+    const g = await gate([['Code', `${from || 'code it does not name'} -> ${to} (installed with npm)`], ['Switched on again', on.ids.join(', ') || 'nothing is being captured']],
       [{ what: 'finish', detail: `${why}${on.ids.length ? `, and capture is switched on again for ${on.ids.join(', ')}` : ''}`, harnesses: on.ids }], CUT)
     if (g !== null) return g
     try { writeHandover(handover, { from, on: on.ids }, fs) } catch (e) { return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so nothing was changed`) }
@@ -231,7 +233,7 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
   }
   if (problems.length) { r.problems = problems; return no(daemonFailed ? 'daemon-not-replaced' : 'not-finished', problems[0]) } // the file stays: the next run goes on from here
   try { fs.rmSync(handover, { force: true }) } catch (e) { return no('handover-not-removed', `this update finished, but it could not be written off (${(e && e.message) || e})`) }
-  lines.push(`trocar is now ${r.to} (it was ${r.from}).`,
+  lines.push(`trocar is now ${r.to}${waiting.from && waiting.from !== r.to ? ` (it was ${waiting.from})` : ''}.`, // no record of the code before: no "was"
     ...pairs([['Collector', r.restarted ? 'running the new code' : 'already running this code'], ['Capturing again', waiting.on.join(', ') || 'nothing was being captured']]))
   return done(EXIT.ok)
 }
