@@ -4,7 +4,7 @@
 // way and may import nothing outside src/off (0.1 §2).
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { hideUserinfo } from './io.mjs'
+import { hideUserinfo } from './userinfo.mjs'
 
 /** Appends `{ts, ...rec}` to `<dir>/flows/<day>.ndjson` (0600, the directory 0700). `day` (YYYY-MM-DD): the file to write when the caller keeps a
  *  day that never goes back (the daemon's recorder); default the UTC day of `now`. Throws what the write throws. */

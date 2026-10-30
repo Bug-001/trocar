@@ -4,7 +4,7 @@
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { hideUserinfoIn as hidden } from '../off/io.mjs'
+import { hideUserinfoIn as hidden } from '../off/userinfo.mjs'
 
 // `on` starts the daemon (its autostart unit, D61's direct start) with the CLI's own script; in this worker process.argv[1] is the worker
 const SCRIPT = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))

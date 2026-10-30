@@ -11,7 +11,6 @@ import { controlHtml, controlFor, wireHarnessControls } from '../../src/web/v2/c
 import { ALIASES, harnessKey } from '../../src/web/v2/core/chips.mjs'
 import { COMMANDS, CHANGE_REMOVAL, RESTART_CODES, SWITCH_WORD, ERR_WHERE } from '../../src/web/v2/labels/capture.mjs'
 import { redactUrlCredentials } from '../../src/web/v2/core/sensitive.mjs'
-import { hideUserinfo } from '../../src/off/io.mjs'
 
 const SPEC = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
 const C3 = SPEC.slice(SPEC.indexOf('### C.3'))
@@ -136,18 +135,20 @@ test('#8 / D49: proxy credentials are ***@ in the page and its copied diagnostic
 
 // the userinfo a proxy URL can carry: [userinfo as written, the parts that must not show]
 const USERINFO = [['alice:pw-41f9', ['alice', 'pw-41f9']], ['alice', ['alice']], [':pw-41f9', ['pw-41f9']], ['alice:p@ss-41f9', ['alice', 'p@ss', 'ss-41f9']],
-  ['claude-code:settings:pw-41f9', ['claude-code', 'pw-41f9']], ['al%40ice:p%3Aw-41f9', ['al%40ice', 'p%3Aw-41f9']], ['alice:', ['alice']]]
-const AROUND = [(u) => u, (u) => `upstream ${u} (adopted)`, (u) => JSON.stringify({ url: u }), (u) => `${u}\n${u}`]
+  ['claude-code:settings:pw-41f9', ['claude-code', 'pw-41f9']], ['al%40ice:p%3Aw-41f9', ['al%40ice', 'p%3Aw-41f9']], ['alice:', ['alice']],
+  ["alice:it's!$&()*+,;=-41f9", ['alice', "it's", '-41f9']]]
+const AROUND = [(u) => u, (u) => `upstream ${u} (adopted)`, (u) => JSON.stringify({ url: u }), (u) => `${u}\n${u}`, (u) => `${u} ${u}`]
 
-test('#8: the page hides every userinfo form a proxy URL can carry, by the same rule as the CLI\'s receipts', () => {
-  for (const scheme of ['http', 'https', 'socks5h']) for (const [ui, secret] of USERINFO) for (const tail of [':8080', ':8080/x', '']) for (const around of AROUND) {
+test('#8: the page hides every userinfo form a proxy URL can carry and keeps the host; text that holds no userinfo passes as it is', () => {
+  for (const scheme of ['http', 'https', 'socks5', 'socks5h', 'HTTP']) for (const [ui, secret] of USERINFO) for (const tail of [':8080', ':8080/x', '']) for (const around of AROUND) {
     const text = around(`${scheme}://${ui}@proxy.example${tail}`)
     const out = redactUrlCredentials(text)
-    assert.equal(out, hideUserinfo(text), text)
     for (const s of secret) assert.equal(out.includes(s), false, `${text} → ${out}`)
-    assert.ok(out.includes(`${scheme}://***@proxy.example${tail}`), `${text} → ${out}`)
+    assert.equal(out, around(`${scheme}://***@proxy.example${tail}`), text)
   }
-  for (const plain of ['http://proxy.example:8080', 'see http://proxy.example/a@b', 'mail alice@example.com']) assert.equal(redactUrlCredentials(plain), plain)
+  for (const plain of ['http://proxy.example:8080', 'http://proxy.example/a@b', 'http://proxy.example?x=a@b', 'http://proxy.example#a@b',
+    'http://proxy.example a@b', 'mailto:alice@example.com', 'mail alice@example.com', JSON.stringify({ a: 'http://proxy.example', b: 'x@y' }), 'http://***@proxy.example'])
+    assert.equal(redactUrlCredentials(plain), plain)
 })
 
 test('#9 / R14: the removal sentence is said once in an agent row\'s expansion and never in the machine-wide changes block', () => {
