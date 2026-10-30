@@ -22,36 +22,54 @@ const SPENT = 1e-6 // a budget spent before any unit of work ends
 const STALL = 60_000
 
 // The worker's background slices in a process of their own (the query modules keep per-process state): extendSession at `ms` a
-// slice until it says nothing is left, a line per slice (1: more, 0: none) and a dot while a slice reads or folds; then the idle save.
+// slice until it says nothing is left, a line per slice (1: more, 0: none) then the head's `pending.done` (h<done>; h- when the head
+// has no pending; nothing while there is no head), and a dot while a slice reads or folds; then the idle save.
 // With `late` > 0 the process writes the session itself, CALLS − late calls first, and the rest in two halves (an `a` line each): the
 // first once the slices said nothing is left, the second after the next slice that wrote answer files only (the frontier at the last
-// member) — so it arrives while the files of the first half are being written. It prints an `f` for each slice that began with
+// member) — so it arrives while the files of the first half are being written. With `drips` > 0 the second half comes in that many
+// drips instead, each `gap` slices that wrote answer files only after the one before, or at once after a slice that said nothing is
+// left (an `r` line: the files reached the state while calls were still coming). It prints an `f` for each slice that began with
 // members past the frontier and did not move it.
 const DRIVER = `
 await import(${at('../../src/query/named/index.mjs')})
 const { extendSession, saveIndexes, version } = await import(${at('../../src/query/named/session.mjs')})
 const { bigSession } = await import(${at('./big-session.mjs')})
 const { indexRows, sessionGroups } = await import(${at('../../src/query/rows.mjs')})
-const [home, id, ms, late] = [process.argv[1], process.argv[2], Number(process.argv[3]), Number(process.argv[4])]
+const { headFile } = await import(${at('../../src/query/ctx-files.mjs')})
+const { gunzipSync } = await import('node:zlib')
+const fs = await import('node:fs')
+const [home, id, ms, late, drips, gap] = [process.argv[1], process.argv[2], ...process.argv.slice(3).map(Number)]
 const s = late > 0 ? bigSession({ home, wire: 'http', ...${JSON.stringify(SHAPE)} }) : null
 if (s) s.append(${CALLS} - late)
 const frontier = async () => JSON.parse((await version({ home, writer: true, params: { id } })).key)[1]
 const last = async () => String(sessionGroups(await indexRows({ home, errors: [] })).get(id).at(-1).id)
-let t = 0, added = 0
+const head = () => { try { return JSON.parse(gunzipSync(fs.readFileSync(headFile(home, id)))) } catch { return null } }
+let t = 0, added = 0, since = 0
 const progress = () => { const n = Date.now(); if (n - t > 200) { t = n; process.stdout.write('.\\n') } }
 for (let more = true; more;) {
   const was = s && await frontier(), left = s && was !== await last()
   more = await extendSession({ home, writer: true, progress }, id, ms)
   process.stdout.write(more ? '1\\n' : '0\\n')
+  const h = head()
+  if (h) process.stdout.write(h.pending ? \`h\${h.pending.done}\\n\` : 'h-\\n')
   if (left && await frontier() === was) process.stdout.write('f\\n')
-  if (s && added < late && (!more || (added > 0 && await frontier() === await last()))) { s.append(late / 2); added += late / 2; more = true; process.stdout.write('a\\n') }
+  if (!s || added >= late) continue
+  const atEnd = await frontier() === await last()
+  if (added > 0 && atEnd) since++
+  const due = added === 0 ? !more : drips > 0 ? !more || since >= gap : !more || atEnd
+  if (!due) continue
+  if (added > 0 && drips > 0 && !more) process.stdout.write('r\\n')
+  const n = added === 0 || drips === 0 ? late / 2 : late / 2 / drips
+  s.append(n); added += n; since = 0; more = true; process.stdout.write('a\\n')
 }
 saveIndexes()
 process.exit(0)`
-/** drive(home, id, ms, late) → {slices: the slices' answers in order (true: more is left), added: the halves appended, stood: the
- *  slices that left the frontier where it was with members past it (late > 0)}, once the process exits; fails after STALL ms with no line. */
-async function drive(home, id, ms, late = 0) {
-  const c = spawn(process.execPath, ['--require', NO_REAL_OS, '--input-type=module', '-e', DRIVER, home, id, String(ms), String(late)], { stdio: ['ignore', 'pipe', 'pipe'] })
+/** drive(home, id, ms, late, drips, gap) → {slices: the slices' answers in order (true: more is left), added: the arrivals appended,
+ *  stood: the slices that left the frontier where it was with members past it (late > 0), reached: the slices that said nothing is
+ *  left while drips were still due, done: the head's pending.done after each slice that left a head with pending}, once the process
+ *  exits; fails after STALL ms with no line. */
+async function drive(home, id, ms, late = 0, drips = 0, gap = 0) {
+  const c = spawn(process.execPath, ['--require', NO_REAL_OS, '--input-type=module', '-e', DRIVER, home, id, String(ms), String(late), String(drips), String(gap)], { stdio: ['ignore', 'pipe', 'pipe'] })
   let out = '', err = '', seen = Date.now()
   c.stdout.on('data', (b) => { out += b; seen = Date.now() })
   c.stderr.on('data', (b) => { err += b })
@@ -62,7 +80,8 @@ async function drive(home, id, ms, late = 0) {
   assert.equal(code, 0, `the fold process failed: ${err.split('\n').slice(0, 6).join(' / ')}`)
   const lines = out.split('\n')
   const count = (x) => lines.filter((l) => l === x).length
-  return { slices: lines.filter((l) => l === '0' || l === '1').map((l) => l === '1'), added: count('a'), stood: count('f') }
+  return { slices: lines.filter((l) => l === '0' || l === '1').map((l) => l === '1'), added: count('a'), stood: count('f'), reached: count('r'),
+    done: lines.filter((l) => /^h\d+$/.test(l)).map((l) => Number(l.slice(1))) }
 }
 
 const homeOf = () => { const home = path.join(tmpDir('trocar-budget-'), '.trocar'); fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 }); return home }
@@ -95,8 +114,11 @@ test('3.5 #39: answer files a slice cannot fit are written over several slices t
   // folded from nothing in spent slices: the fold moves on every slice, the files are written once it reaches the end
   const z = homeOf()
   assert.equal(sessionIn(z), id)
-  await drive(z, id, SPENT)
+  const zd = (await drive(z, id, SPENT)).done
   sameFiles(filesOf(z, id), want, 'folded and written in spent slices')
+  // no answer file is written while members are left, yet the head the board reads shows the fold's progress (3.5:42, 3.5 #31)
+  assert.ok(new Set(zd).size >= 2, `the head's pending.done grew before the fold ended (${[...new Set(zd)]})`)
+  zd.forEach((d, i) => assert.ok(i === 0 || d >= zd[i - 1], `pending.done never drops (${zd[i - 1]} → ${d})`))
 
   // calls that arrive while the files of a pack sealed by calls before them are being written move the frontier under them: the files
   // still end as the bytes of a run with no budget over the same calls
@@ -107,6 +129,16 @@ test('3.5 #39: answer files a slice cannot fit are written over several slices t
   const raw = (home) => fs.readdirSync(path.join(home, 'raw'), { recursive: true }).sort().map((f) => [f, String(fs.statSync(path.join(home, 'raw', f)).size)])
   assert.deepEqual(raw(w), raw(x), 'the same calls as the run with no budget')
   sameFiles(filesOf(w, id), want, 'written in spent slices with calls arriving meanwhile')
+
+  // calls that keep arriving, each fewer slices after the one before than sealing a pack takes, and none of them in that pack: the
+  // seal goes on where it stood, so the files reach the state while calls are still coming (they would never if each started it over)
+  const v = homeOf(), GAP = 150
+  const vs = await drive(v, id, SPENT, LATE, 5, GAP)
+  assert.equal(vs.added, 6, 'the first half and five drips arrived')
+  assert.equal(vs.stood, 0, 'every slice that began with members past the frontier moved it (3.5:42)')
+  assert.ok(vs.reached > 0, `the files reached the state between drips ${GAP} slices apart`)
+  assert.deepEqual(raw(v), raw(x), 'the same calls as the run with no budget')
+  sameFiles(filesOf(v, id), want, 'written in spent slices with calls arriving faster than a seal')
 })
 
 const rng = (seed) => () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32)

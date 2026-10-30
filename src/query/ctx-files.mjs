@@ -86,16 +86,16 @@ export function tier0Doc(id, members, errors) {
   });
 }
 
-/** stoppedHead(home, id, members, errors, stopped, fs) → the head of a session whose background fold stopped (3.5 §会话读「`session
- *  --head`」 pending.stopped): the head on disk, else the tier-0 head of `members`, with `pending: {done, total, stopped}` (`done` = the
- *  members at or below its mark). */
-export function stoppedHead(home, id, members, errors, stopped, fs = nodeFs) {
+/** pendingHead(home, id, members, errors, pending, fs) → the head on disk (else the tier-0 head of `members`) with `pending` put in,
+ *  the rest as it was written (3.5 §会话读「`session --head`」 pending): `pending(d, done)` → the pending of head `d`, `done` the
+ *  members at or below its mark. A stopped fold's (`stopped`) and the progress of a backlog no answer file is written in. */
+export function pendingHead(home, id, members, errors, pending, fs = nodeFs) {
   let d = null;
   try { d = JSON.parse(gunzipSync(fs.readFileSync(headFile(home, id))).toString('utf8')); } catch { /* none yet, or torn */ }
   if (!d || d.v !== CTX_V) d = tier0Doc(id, members, errors);
   const rid = d.mark == null ? null : String(d.mark).replace(/@.*$/, ''); // a cut's mark is `rid@cut` (named/session.mjs markOn)
   const done = d.pending ? d.pending.done : rid == null ? 0 : members.findIndex((r) => String(r.id) === rid) + 1;
-  return { ...d, pending: { done, total: members.length, stopped } };
+  return { ...d, pending: pending(d, done) };
 }
 
 /** writeHead(home, id, doc, fs) → whether the file changed: the gzip of the doc's compact JSON (putFile); nothing is written when the
@@ -350,7 +350,7 @@ function* writing(ctx, s) {
       const got = PARTS.map((p, i) => carried(s, fs, tailFile(home, id, p), N, p, c.size?.[i]));
       if (got.some(Boolean)) tails = Object.fromEntries(PARTS.map((p, i) => [p, got[i] || { size: NaN, defs: new Set() }])); // NaN: no size, a missing file's −1 neither, is it: afresh
     }
-    W = { ax, f, open: N, packs: [], tails, rec: tails ? c.rec : 0, files: null, memo: lru(memoBytes()), sp: [], c };
+    W = { ax, f, open: N, packs: [], tails, rec: tails ? c.rec : 0, files: null, memo: lru(memoBytes()), mn: N, sp: [], c };
     writers.set(log, W);
   }
   const c = W.c, d = dirtyOf(s, W.f, Math.min(W.open, N)), spans = spansOf(s, axisSteps(s, W.sp, first ? 0 : d.axis ?? W.sp.length));
@@ -358,21 +358,16 @@ function* writing(ctx, s) {
   for (let n = 0; n < N; n++) {
     const k = W.packs[n];
     if (k && !d.packs.has(n) && k.s0 === spans[n][0] && k.s1 === spans[n][1]) continue; // its rows and its doc head as written
-    const files = PARTS.map((p) => packFile(home, id, n, p));
-    // a pack sealed before this worker and unchanged since, its files written under this axis (a pack's main / rest split is the
-    // axis's): its files, when whole and their doc head ([s0, s1]) the one a render now writes
-    let texts = null;
-    if (c && c.ax === ax && !d.packs.has(n)) { texts = files.map((f, i) => { const t = readText(fs, f, true); return headed(t, docLine(s, n, PARTS[i], false, spans[n])) ? t : null; }); yield; }
-    if (!texts || texts.includes(null)) {
-      texts = [];
-      for (const p of PARTS) texts.push((yield* rendering(s, n, p, false, n >= W.open ? W.memo : null, spans)).buf);
-      for (let i = 0; i < PARTS.length; i++) {
-        const t = texts[i], due = k ? k.h[i] !== sha(t) : !same(readText(fs, files[i], true), t);
-        yield;
-        if (due) { putFile(fs, files[i], yield* gzipping(t)); yield; }
-      }
-    }
-    W.packs[n] = { n, s0: spans[n][0], s1: spans[n][1], tag: tagOf(texts[0], texts[1]), h: texts.map(sha) };
+    // a pack whose writing a moved frontier cut short goes on where it stood while no member folded since touched its rows or its doc
+    // head (3.5 后台抽取与归约): calls arriving faster than one seal do not start it over
+    let P = W.part;
+    if (!(P && P.n === n && P.s0 === spans[n][0] && P.s1 === spans[n][1] && (P.f === log.frontier || !dirtyOf(s, P.f, n + 1).packs.has(n))))
+      W.part = P = { n, s0: spans[n][0], s1: spans[n][1], it: sealing(s, { home, fs, ax, memo: n >= W.open ? W.memo : null }, n, spans, c && c.ax === ax && !d.packs.has(n), k) };
+    P.f = log.frontier;
+    let r;
+    while (!(r = P.it.next()).done) yield;
+    W.packs[n] = r.value;
+    W.part = null;
   }
   // a tail written afresh → its {size, defs}
   const fresh = function* (part) {
@@ -382,7 +377,7 @@ function* writing(ctx, s) {
     return { size: buf.length, defs: wrote };
   };
   const upTo = upToOf(s);
-  if (N !== W.open) W.memo = lru(memoBytes()); // the sealed span's steps let go
+  if (N !== W.mn) { W.memo = lru(memoBytes()); W.mn = N; } // the sealed span's steps let go, once a seal (not at each start over)
   // the tails are no checkpoint while they are written (W.tails null): a frontier that moves before they are done has them written
   // afresh, as has a worker that starts again from a save between the units
   const t = N !== W.open ? null : W.tails;
@@ -392,6 +387,24 @@ function* writing(ctx, s) {
   W.rec = upTo; W.open = N; W.f = log.frontier; W.c = null;
   W.files = { packs: W.packs.map(({ n, s0, s1, tag }) => ({ n, s0, s1, tag })), open: { n: N, s0: spans[N][0] } };
   return W.files;
+}
+// pack n's files brought to the state `s` (`kept`: its files may be taken as they are) → its W.packs entry
+function* sealing(s, { home, fs, ax, memo }, n, spans, kept, k) {
+  const files = PARTS.map((p) => packFile(home, s.id, n, p));
+  // a pack sealed before this worker and unchanged since, its files written under this axis (a pack's main / rest split is the
+  // axis's): its files, when whole and their doc head ([s0, s1]) the one a render now writes
+  let texts = null;
+  if (kept) { texts = files.map((f, i) => { const t = readText(fs, f, true); return headed(t, docLine(s, n, PARTS[i], false, spans[n])) ? t : null; }); yield; }
+  if (!texts || texts.includes(null)) {
+    texts = [];
+    for (const p of PARTS) texts.push((yield* rendering(s, n, p, false, memo, spans)).buf);
+    for (let i = 0; i < PARTS.length; i++) {
+      const t = texts[i], due = k ? k.h[i] !== sha(t) : !same(readText(fs, files[i], true), t);
+      yield;
+      if (due) { putFile(fs, files[i], yield* gzipping(t)); yield; }
+    }
+  }
+  return { n, s0: spans[n][0], s1: spans[n][1], tag: tagOf(texts[0], texts[1]), h: texts.map(sha) };
 }
 // The tails' appends: the lanes whose header changed, the changed steps of the span in step
 // order (each against the step of its lane before it in the span: they are all in the file; none within 64 steps → a keyframe), the

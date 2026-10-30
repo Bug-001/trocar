@@ -40,7 +40,7 @@ import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yi
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
-import { filesAt, filesParts, forget, headDoc, headFile, packsOf, stoppedHead, tier0Doc, writeFiles, writeHead, memoBytes } from '../ctx-files.mjs';
+import { filesAt, filesParts, forget, headDoc, headFile, packsOf, pendingHead, tier0Doc, writeFiles, writeHead, memoBytes, PACK_MEMBERS } from '../ctx-files.mjs';
 
 export const params = Object.freeze(['id', 'since', 'before', 'limit', 'head']);
 
@@ -517,15 +517,16 @@ async function advance(ctx, id, { budgetMs, request }) {
  *  folding (or a cold state's rebuild, when a member lies past its log's frontier): half of `budgetMs` each, the fold also what
  *  extraction left; once no member is left past the frontier, the answer files at the state in what is left of `budgetMs`, the
  *  rest in the next slices, and the head once they reach the state (files written while members are left past the frontier would be
- *  written again at the next one). */
+ *  written again at the next one); meanwhile only the head's `pending` (backlog). */
 export async function extendSession(ctx, id, budgetMs) {
   const end = performance.now() + budgetMs;
   let r;
   try { r = await again(ctx, id, () => advance(ctx, String(id), { budgetMs, request: false })); } catch (e) { await stopped(ctx, String(id), e); throw e; }
   if (!r) return false;
   const { st, plan, ex } = r;
-  if (ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n)) return true;
+  if (ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n)) { backlog(ctx, String(id), r); return true; }
   const s = stateAt(r, String(id));
+  shown.delete(s.id);
   if (!files(ctx, s, end)) return true;
   if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); // a stop is cleared at once
   releaseParts(); // folded to its frontier: between calls the worker holds no decoded part (3.5:40 ⑤)
@@ -563,8 +564,22 @@ async function stopped(ctx, id, e) {
   if (h && h.sig === sig && fs.existsSync(headFile(home, id))) return;
   try {
     const index = await indexed(ctx), members = sessionGroups(index.rows).get(id);
-    if (members) { writeHead(home, id, stoppedHead(home, id, members, index.errors, stop, fs), fs); heads.set(id, { sig, shape: null }); }
+    if (members) { writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ done, total: members.length, stopped: stop }), fs), fs); heads.set(id, { sig, shape: null }); }
   } catch { /* a head not written is written at the next stop or slice */ }
+}
+// A slice that leaves members past the frontier writes no answer file (3.5 §后台抽取与归约); the head's `pending` alone is brought to
+// the frontier (the rest of the head as written: pendingHead) on the first such slice, each time the frontier passes a multiple of
+// PACK_MEMBERS and when a stop is cleared, so the board sees pending.done grow and the stop go (D64, D69). O(1) per 512 members.
+const shown = new Map(); // session id → the pending.done this worker last put into its head while members were left
+function backlog(ctx, id, { st, plan, members, indexErrors }) {
+  if (ctx.writer !== true) return;
+  const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, mark = markOf(st.log), done = mark == null ? 0 : posOf(plan, mark) + 1;
+  const was = shown.get(id), cleared = stops.delete(id);
+  if (!cleared && was != null && Math.floor(was / PACK_MEMBERS) === Math.floor(done / PACK_MEMBERS) && fs.existsSync(headFile(home, id))) return;
+  try { writeHead(home, id, pendingHead(home, id, members, indexErrors, () => ({ done, total: members.length }), fs), fs); } catch { if (cleared) stops.add(id); return; } // tried again next slice
+  shown.set(id, done);
+  heads.set(id, { sig: JSON.stringify(['pending', done]), shape: null });
+  lagging.delete(id);
 }
 function headAt(ctx, s) {
   if (ctx.writer !== true) return;
