@@ -46,6 +46,9 @@ async function replaceStale({ platform, home, env, fs, deps, root, unit, problem
   const rep = await replaceDaemon({ by: 'install', env, home, platform, deps: { ...deps, unit }, dir: path.join(home, '.trocar', 'collector'), root, fs, problems })
   return { ...rep, replaced: rep.restarted && !rep.elsewhere && problems.length === before }
 }
+// the plan's line for a daemon on other code, and the receipt's line once it was replaced (both install paths)
+const staleItem = (stale, root) => stale ? [{ what: 'daemon', detail: `the collector runs ${stale}, so it is stopped and started again on ${codeId(root)}` }] : []
+const replacedRow = (rep, root) => rep && rep.replaced ? [['collector', `replaced: it ran ${rep.from}, it now runs ${codeId(root)}`]] : []
 // the receipt's `daemon` (附录 C.2): after a replacement that stopped the old one, what runs is whether the new one came up
 const daemonRow = (dmn, rep) => ({ state: (rep && rep.stopped ? rep.restarted : dmn.up) ? 'running' : 'not-running', started: dmn.started, replaced: !!(rep && rep.replaced) })
 
@@ -107,7 +110,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       // V85: trocar's own tree is ONE line (uninstall takes all of it back); every file of yours outside it is its own line, above
       ...(only ? [] : [{ what: 'trocar', detail: `${tilde(path.join(home, '.trocar'), home)}${platform === 'win32' ? '\\' : '/'}: trocar's own files (its root certificate and key, the install record, and ${tilde(standalonePath(home), home)}, the undo that works without this source tree)` }]),
       // D61 (1.6 §3.2 step 5, 4.11 §1 install 7): the login entry is a file of YOURS outside trocar's tree, so it is its own line (V85), and the plan says a daemon runs from now on
-      ...(stale ? [{ what: 'daemon', detail: `the collector runs ${stale}, so it is stopped and started again on ${codeId(root)}` }] : []),
+      ...staleItem(stale, root),
       ...(unit && !only ? [{ what: 'autostart', detail: `${platform === 'win32' ? 'the scheduled task \\trocar\\collector' : tilde(unit.path, home)}: a collector daemon starts at every login from now on, and is started now (trocar uninstall takes it out again)` }] : []),
     ]
     say(fit([`trocar install will change ${planned.length} thing${planned.length === 1 ? '' : 's'}:`,
@@ -164,7 +167,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     else io.out(fit([receipt.ok ? "Installed. trocar's root certificate is trusted by your user." : 'trocar install did not finish. What is missing is below.',
       ...pairs([['Fingerprint (SHA-256)', r.fp256 || 'unknown (no root was made)']]), // the hex is one unbroken word under its label: one block, and in a block of its own, so it does not widen the rows below
       // the login entry install registered, confirmed like every other row (a Windows test machine 2026-10-18: the receipt said nothing about it) — in the carriers' own pairs() call, so its label column lines up with theirs (a Windows test machine 2026-10-19)
-      ...pairs([...carrierRows, ...(rep && rep.replaced ? [['collector', `replaced: it ran ${rep.from}, it now runs ${codeId(root)}`]] : []), ...(receipt.autostart ? [['autostart', `${receipt.autostart.entry}: ${receipt.autostart.enabled ? 'enabled, and a collector starts at every login' : 'NOT enabled (see the problem below): no collector starts at login'}`]] : [])]),
+      ...pairs([...carrierRows, ...replacedRow(rep, root), ...(receipt.autostart ? [['autostart', `${receipt.autostart.entry}: ${receipt.autostart.enabled ? 'enabled, and a collector starts at every login' : 'NOT enabled (see the problem below): no collector starts at login'}`]] : [])]),
       ...r.pending.map((p) => `Not done yet: ${p.item} is ${p.state} (${p.reason}). Run again: trocar install`),
       ...receipt.notes.map((n) => `Note: ${n}`),
       ...r.problems.map((p) => `Problem: ${p}`),
@@ -200,7 +203,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   try { stdNew = fs.readFileSync(stdPath, 'utf8') !== buildStandalone({ version: OFF_VERSION, fs }) } catch { stdNew = true }
   const root = deps.root || packageRoot()
   const stale = unit ? await staleDaemon({ platform, home, env, fs, deps, root }) : null // 1.6 §3.2 step 5, as on macOS / Windows
-  const daemonItem = stale ? [{ what: 'daemon', detail: `the collector runs ${stale}, so it is stopped and started again on ${codeId(root)}` }] : []
+  const daemonItem = staleItem(stale, root)
   const planned = [...planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), ...daemonItem]
   say([formatPlan({ ...plan, adopted: [], standalone: stdNew ? stdPath : null }, { home, platform, command: 'install' }), ...pairs(daemonItem.map((p) => [p.what, p.detail])), ...wrap(COST), ...(stale ? wrap(CUT) : [])].join('\n'))
   if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, harnesses: plan.targets, changed: plan.changed, created: [...(stdNew ? [stdPath] : []), ...plan.created] }, null, 2)); return EXIT.ok }
@@ -232,7 +235,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   if (json) io.out(JSON.stringify(receipt, null, 2))
   else io.out(fit([problems.length ? 'trocar install did not finish. What is missing is below.' : r.already && ((r.entryBefore && r.entryBefore !== 'present') || dmn.started) ? 'Installed. The certificates were in place; the login entry and the collector are up again.' : r.already && !(rep && rep.replaced) ? 'Already installed. Nothing was changed.' : "Installed. trocar's certificates are in place.",
     ...(r.already ? [] : changeLines(receipt, { home })),
-    ...(rep && rep.replaced ? pairs([['collector', `replaced: it ran ${rep.from}, it now runs ${codeId(root)}`]]) : []),
+    ...pairs(replacedRow(rep, root)),
     ...receipt.notes.map((n) => `Note: ${n}`),
     ...(board ? [`Not done yet: the board's port is pending (${board.reason}). Run again: trocar install`] : []),
     ...problems.map((p) => `Problem: ${p}`),
