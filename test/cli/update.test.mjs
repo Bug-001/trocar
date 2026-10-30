@@ -179,7 +179,7 @@ test('V105: an npm copy whose collector and last install run it is exit 2 npm-pa
   const was0 = s.stateBytes()
   for (const [label, cameBackOn] of [['this copy', () => codeId(npmRoot)], ['another copy', () => '0.3.0']]) {
     let daemon = '0.1.0'
-    const unit = { path: '/login/entry', enable: () => { daemon = cameBackOn(); return { code: 0 } } }
+    const unit = { path: '/login/entry', enable: () => { daemon = cameBackOn(); return { code: 0 } }, registered: () => ({ state: 'present' }) }
     const stopped = []
     t = ctx(s, {
       daemonCode: () => daemon,
