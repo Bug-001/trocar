@@ -365,14 +365,25 @@ static int under(const char *p, const char *root)
 	size_t n = strlen(root);
 	return !strncmp(p, root, n) && (p[n] == 0 || p[n] == '/');
 }
-/* Does the tgid's cgroup lie under the hooks' attach point? In a private cgroup namespace /sys/fs/cgroup is only
- * that subtree, and a process outside it (shown as /..) never passes through the hooks (4.6 §pid 命名空间). */
+/* How many /.. a cgroup path starts with: how far above this cgroup namespace's root it begins. */
+static int ups(const char *p)
+{
+	int k = 0;
+	for (; under(p, "/.."); p += 3) k++;
+	return k;
+}
+/* Does the tgid's cgroup lie under the hooks' attach point? Both paths are as this cgroup namespace names them. In a
+ * private one /sys/fs/cgroup is only that subtree, and a process outside it (/..) never passes the hooks (4.6 §pid
+ * 命名空间). A mount root that is this namespace's root or above it (/, /.., /../..) holds every path that starts no
+ * higher than it. */
 static int proc_under_hooks(__u32 tgid)
 {
 	char who[16], p[600];
 	snprintf(who, sizeof(who), "%u", tgid);
 	if (!proc_line(who, "cgroup", "0::", p, sizeof(p))) return 0;
-	return strcmp(g_cg_root, "/") ? under(p, g_cg_root) : !under(p, "/..");
+	int k = ups(g_cg_root);
+	const char *rest = g_cg_root + 3 * k;
+	return (!*rest || !strcmp(rest, "/")) ? ups(p) <= k : under(p, g_cg_root);
 }
 
 /* The `drops` counters summed over the CPUs, as a JSON object by reason (trocar.h TROCAR_DROP_*), or null when they
@@ -570,7 +581,10 @@ static int check_namespaces(void)
 		fprintf(stderr, "trocar-redirector: /proc is not this pid namespace's own procfs, so the pids read there are not the ones the kernel side sees (kernel %u.%u)\n", maj, min);
 		return -1;
 	}
-	if (stat("/proc/self/ns/pid", &st) != 0) { perror("trocar-redirector: /proc/self/ns/pid"); return -1; }
+	if (stat("/proc/self/ns/pid", &st) != 0) {
+		fprintf(stderr, "trocar-redirector: /proc/self/ns/pid: %s (kernel %u.%u)\n", strerror(errno), maj, min);
+		return -1;
+	}
 	if (st.st_ino != PID_NS_INIT_INO) {
 		if (libbpf_probe_bpf_helper(BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_FUNC_get_current_task, NULL) != 1 ||
 		    libbpf_probe_bpf_helper(BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_FUNC_probe_read_kernel, NULL) != 1) {
@@ -580,10 +594,20 @@ static int check_namespaces(void)
 		g_pidns_ino = (__u32)st.st_ino;
 	}
 	FILE *f = fopen("/proc/self/mountinfo", "r"); /* the last mount on CGROUP_ROOT is the one open() reaches */
-	while (f && fgets(line, sizeof(line), f)) {
+	char *ml = NULL;
+	size_t cap = 0;
+	while (f && getline(&ml, &cap, f) > 0) {
 		char root[512], mnt[512];
-		if (sscanf(line, "%*s %*s %*s %511s %511s", root, mnt) == 2 && !strcmp(mnt, CGROUP_ROOT)) snprintf(g_cg_root, sizeof(g_cg_root), "%s", root);
+		if (sscanf(ml, "%*s %*s %*s %511s %511s", root, mnt) != 2 || strcmp(mnt, CGROUP_ROOT)) continue;
+		size_t o = 0; /* mountinfo writes space, tab, newline and backslash as \ooo; /proc/<pid>/cgroup does not */
+		for (const char *q = root; *q && o + 1 < sizeof(g_cg_root); o++) {
+			unsigned c;
+			if (q[0] == '\\' && sscanf(q + 1, "%3o", &c) == 1) { g_cg_root[o] = (char)c; q += 4; }
+			else g_cg_root[o] = *q++;
+		}
+		g_cg_root[o] = 0;
 	}
+	free(ml);
 	if (f) fclose(f);
 	return 0;
 }
@@ -601,13 +625,19 @@ static int self_check(void)
 		execl("/proc/self/exe", "trocar-redirector", (char *)NULL);
 		_exit(127);
 	}
-	int st;
+	int st = 0;
+	unsigned maj = 0, min = 0;
+	kernel_tier(&maj, &min);
 	while (waitpid(c, &st, 0) < 0 && errno == EINTR) {}
+	if (WIFEXITED(st) && WEXITSTATUS(st) == 127) { /* exec itself failed: nothing to judge the numbering by */
+		fprintf(stderr, "trocar-redirector: self-check: could not exec /proc/self/exe (kernel %u.%u)\n", maj, min);
+		return -1;
+	}
 	g_probe_tgid = (__u32)c; /* the exec tracepoint ran before the child exited: its event is in the ring now */
 	ring_buffer__consume(rb);
 	g_probe_tgid = 0;
 	if (g_probe_seen) return 0;
-	fprintf(stderr, "trocar-redirector: self-check: the kernel side did not report process %d under the pid it has here, so no pid would match\n", (int)c);
+	fprintf(stderr, "trocar-redirector: self-check: the kernel side did not report process %d under the pid it has here, so no pid would match (kernel %u.%u)\n", (int)c, maj, min);
 	return -1;
 }
 
