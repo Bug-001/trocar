@@ -31,6 +31,7 @@ import { agentOf, flowsOf, freePort, reqOf, through, win32Io } from '../helpers/
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { codeId } from '../../src/version.mjs'
+import { listenLocalhost } from '../helpers/localhost.mjs'
 
 const CHILD = fileURLToPath(new URL('../collector/fixtures/model-daemon-child.mjs', import.meta.url))
 const KEY = 'dGhlIHNhbXBsZSBub25jZQ=='
@@ -70,8 +71,7 @@ test(`${platform}: update replaces a daemon holding ${TITLE[kind]}`, { timeout: 
     s.on('error', () => {}); let b = ''
     s.on('data', (d) => { if (held.includes(s)) { turns.push(d); return } b += d.toString('latin1'); if (b.includes('\r\n\r\n')) { held.push(s); s.write(kind === 'ws' ? SWITCH : HEAD) } })
   })
-  await new Promise((r) => mock.listen(0, '127.0.0.1', r))
-  const target = `localhost:${mock.address().port}`
+  const target = `localhost:${await listenLocalhost(mock)}`
   const bundle = path.join(w.home, 'codex-ca.pem')
   const a = agentOf({ w, name: w.harnesses.find((h) => h.name === 'codex').processes.names[0].name, env: { SSL_CERT_FILE: bundle } })
   const agentFile = path.join(tmpDir('trocar-agent-'), 'agent.json')
