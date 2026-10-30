@@ -3,7 +3,11 @@
 #           -> trocar.skel.h (bpftool gen skeleton) -> trocar-redirector (cc + libbpf).
 # All four outputs are generated build artifacts and are .gitignore'd — never committed.
 
-BPFTOOL  ?= $(shell command -v bpftool 2>/dev/null || echo /usr/sbin/bpftool)
+# The first bpftool that runs (`bpftool version` succeeds) among PATH's, /usr/sbin's and a linux-tools build of any version: Ubuntu's
+# /usr/sbin/bpftool is a wrapper that refuses a kernel it has no linux-tools package for (cloud and container kernels), while the binary
+# under /usr/lib/linux-tools/<version>/ reads any kernel's BTF. BPFTOOL=<path> on the command line or in the environment wins.
+BPFTOOL_TRY ?= $(shell command -v bpftool 2>/dev/null) /usr/sbin/bpftool $(shell ls -d /usr/lib/linux-tools/*/bpftool 2>/dev/null | sort -r)
+BPFTOOL  ?= $(shell for b in $(BPFTOOL_TRY); do "$$b" version >/dev/null 2>&1 && { echo "$$b"; break; }; done)
 CLANG    ?= clang
 CC       ?= cc
 
@@ -26,10 +30,13 @@ LDLIBS   := -l:libbpf.a -lelf -lz
 BUILD_HASH := $(shell (cat $(RD_DIR)/redirector.c $(BPF_DIR)/trocar.bpf.c $(BPF_DIR)/trocar.h 2>/dev/null | sha256sum 2>/dev/null | cut -c1-12) || echo unknown)
 BUILD_HASH := $(if $(BUILD_HASH),$(BUILD_HASH),unknown)
 
+# a recipe that fails removes its half-written target (an empty vmlinux.h would look up to date to the next make)
+.DELETE_ON_ERROR:
 .PHONY: all clean selftest
 all: $(BIN)
 
 $(VMLINUX):
+	@test -n "$(BPFTOOL)" || { echo 'no bpftool that runs here: install bpftool (or linux-tools of any kernel version), or set BPFTOOL=<path>' >&2; exit 1; }
 	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 $(BPF_OBJ): $(BPF_DIR)/trocar.bpf.c $(BPF_DIR)/trocar.h $(VMLINUX)
