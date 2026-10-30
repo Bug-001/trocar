@@ -74,8 +74,9 @@ async function update({ io, env, home, platform, deps, flags }) {
   // §1.4: the plan, then `--dry-run` / `--yes` / the question — EVERY phase goes through this one gate, the finish and the daemon-only
   // step included: they stop a daemon and write to the agents' files too, and `--dry-run` writes nothing. → an exit code when nothing
   // is to be done, null to go on.
+  // `cost`: what running the plan costs, said under it — null when it costs nothing worth a line
   const gate = async (rows, planned, cost) => {
-    lines.push('Plan', ...pairs(rows), '', ...wrap(cost))
+    lines.push('Plan', ...pairs(rows), ...(cost ? ['', ...wrap(cost)] : []))
     if (!json) for (const l of lines.splice(0)) io.out(l) // the plan is read before the question, and before any refusal (§1.4)
     if (dry) return done(EXIT.ok, { planned })
     if (yes) return null // the answer is given on the command line
@@ -99,8 +100,9 @@ async function update({ io, env, home, platform, deps, flags }) {
     if (waiting.dropped.length) r.notes.push(`${waiting.dropped.join(', ')}: this update's note names ${waiting.dropped.length > 1 ? 'agents' : 'an agent'} this trocar has no descriptor for, so capture is not switched on for ${waiting.dropped.length > 1 ? 'them' : 'it'}`)
     const to = codeId(root)
     r.from = waiting.from || r.from; r.to = to; r.harnesses = waiting.on // C.2: the receipt of the plan says what the finish does, --dry-run and a refused question included
+    const replaced = (await daemonCode({ platform, dir, env, fs, deps })) !== to // as replaceDaemon judges it: a collector on this code is left running
     const g = await gate([['Code', `${r.from} -> ${to}`], ['Switched on again', waiting.on.join(', ') || 'nothing was being captured']],
-      [{ what: 'finish', detail: `an update to ${to} is waiting to be finished: the collector is replaced, install runs again${waiting.on.length ? `, and capture is switched on again for ${waiting.on.join(', ')}` : ''}`, harnesses: waiting.on }], CUT)
+      [{ what: 'finish', detail: `an update to ${to} is waiting to be finished: ${replaced ? 'the collector is replaced, ' : ''}install runs again${waiting.on.length ? `, and capture is switched on again for ${waiting.on.join(', ')}` : ''}`, harnesses: waiting.on }], replaced ? CUT : null)
     if (g !== null) return g
     return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting })
   }
@@ -126,7 +128,7 @@ async function update({ io, env, home, platform, deps, flags }) {
     if (on.error) return no('state-unreadable', on.error)
     r.from = from || r.from; r.harnesses = on.ids // C.2: the receipt of the plan says what the finish does, --dry-run and a refused question included
     const g = await gate([['Code', `${from || 'code it does not name'} -> ${to} (installed with npm)`], ['Switched on again', on.ids.join(', ') || 'nothing is being captured']],
-      [{ what: 'finish', detail: `${why}${on.ids.length ? `, and capture is switched on again for ${on.ids.join(', ')}` : ''}`, harnesses: on.ids }], CUT)
+      [{ what: 'finish', detail: `${why}${on.ids.length ? `, and capture is switched on again for ${on.ids.join(', ')}` : ''}`, harnesses: on.ids }], running !== to ? CUT : null) // replaceDaemon leaves a collector on this code running
     if (g !== null) return g
     try { writeHandover(handover, { from, on: on.ids }, fs) } catch (e) { return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so nothing was changed`) }
     return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from, on: on.ids } })
