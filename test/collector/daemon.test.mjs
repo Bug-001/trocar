@@ -471,6 +471,23 @@ test('daemon: a helper death is degraded and on reports why; a protocol mismatch
   } finally { await d2.stop(); p.done(); s.done() }
 })
 
+// R4 (1.6): 1 = the daemon could not start, and then it ends. A helper that exits at start (a namespace it refuses, a kernel below the floor)
+// used to leave the engine listening: the process never ended, held the port, and the next start was refused as engine-port-taken.
+test('daemon: a helper that exits at start leaves nothing listening; the next start takes the same engine port', async () => {
+  const s = sandbox(); const p = fakeProc()
+  const probe = net.createServer(); await new Promise((r) => probe.listen(0, '127.0.0.1', r))
+  const port = probe.address().port; await new Promise((r) => probe.close(r))
+  try {
+    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => port })
+    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p, {}, { args: ['-e', 'process.exit(6)'] }).arch, harnesses: [cc] }))
+    const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] })
+    try {
+      assert.equal(d.port, port)
+      assert.ok(!flowsOf(s).some((f) => f.where === 'engine' && f.code === 'EADDRINUSE'), 'its [::1] address was free too')
+    } finally { await d.stop() }
+  } finally { p.done(); s.done() }
+})
+
 test('daemon: the install-time engine port held by another process → start fails with the reason, no helper spawned, nothing steered (G3)', async () => {
   const s = sandbox(); const p = fakeProc()
   const squat = net.createServer(); await new Promise((r) => squat.listen(0, '127.0.0.1', r))
