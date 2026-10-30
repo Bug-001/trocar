@@ -9,6 +9,7 @@ import tls from 'node:tls'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
+import { codeId } from '../../src/version.mjs'
 import { certBlocks } from '../../src/off/pem.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { runUninstall } from '../../src/cli/uninstall.mjs'
@@ -103,6 +104,7 @@ test('D54 · CM1: install; install changes no byte, makes no second key, raises 
   assert.deepEqual(w.store.calls.slice(calls), ['has'], 'read back by fingerprint, no add, no prompt')
   assert.equal(r2.fp256, r1.fp256)
   assert.equal(readManifest(w.dir).install.state, 'complete')
+  assert.equal(readManifest(w.dir).install.code, codeId(), 'the record names the code that ran install (1.6 §5.5: what update compares)')
 })
 
 test('CM25 · CM26: no admin item, nothing root-owned under HOME, and no write to a login environment (rc / profile / environment.d) — a recording fs over every harness present', async () => {

@@ -71,6 +71,7 @@ const BUNDLE_BUSY_MS = 2000 // a bundle rebuild that found the op lock held (1.6
 const BUNDLE_BUSY_RETRIES = 30 // ... at most this many times; the daily round is the next chance after that
 const OFF_HINT = 'capture is switched off for this harness (its desired state is off); it is not judged, not watched and not counted as untrusted'
 const VERSION = (() => { try { return codeId() } catch { return null } })() // which code this daemon runs (D67⑤): `code` on the control channel, and the version of its daemon-start record. null: said as unknown in daemon-start
+// (startDaemon's `code` defaults to it; a test's stand-in login entry passes the code it stands for, since the daemon it starts runs in-process)
 // Every failure record carries a code (trocar's name from src/health/codes.mjs, or the errno): the fold key (D-3).
 const coded = (e, code) => Object.assign(new Error(errText(e)), { code: (e && e.code) || code })
 
@@ -293,7 +294,7 @@ function boardFor({ P, failure, query, tips, log = () => {} }) {
   }
 }
 
-async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, stopGraceMs = 2000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {}, fork, queryIdleMs }) {
+async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, code = VERSION, lockRefreshMs = 1000, stopGraceMs = 2000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {}, fork, queryIdleMs }) {
   const P = collectorPaths(dir)
   const netHome = home || env.HOME || os.homedir() // whose agents' settings the 5 s check looks at: the user the daemon runs as
   const failure = createFailureRecorder(P.dir, { log })
@@ -311,7 +312,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   const ep = A0 && typeof A0.controlEndpoint === 'function' && !socketPath ? A0.controlEndpoint({ dir: P.dir }) : null
   const sock = socketPath || (ep ? ep.path : controlSocketPath({ env }))
   // macOS / Windows run the collector model (4.11 §1, §3 ①): no CA of its own to gate on, doors from POST /on, the CLI writes every file
-  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env, exec: runAsync }) /* darwin = ps lstart + kern.boottime; async: the event loop stays free */, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork, queryIdleMs })
+  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env, exec: runAsync }) /* darwin = ps lstart + kern.boottime; async: the event loop stays free */, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork, queryIdleMs, code })
   identity = identity || procIdentity
   let manifest
   try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "trocar uninstall", then "trocar on"`), { code: 'manifest-unreadable' }) }
@@ -598,7 +599,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     lockTimer.unref()
     // lifecycle (D-24): readers fold conditions from the last daemon-start; upstream_ca = the daemon's own
     // NODE_EXTRA_CA_CERTS (W-4: relays with a private CA rely on it), linger = whether logout ends this daemon
-    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: VERSION, foreground: !!foreground,
+    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: code, foreground: !!foreground,
       upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: typeof redirector.linger === 'function' ? redirector.linger() : null })
     syncTracker() // before the first rescan: a harness that is off at start is never judged
     tracker.start()
@@ -669,7 +670,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       // processes of this user whose exe cannot be read and whose command line fits no harness: seen, not judged (4.6 exe-unreadable)
       const unjudged = (typeof redirector.unreadable === 'function' ? redirector.unreadable() : []).filter((u) => !registry.couldMatch({ os: A.os, exe: null, env: null, argv: u.argv, comm: u.comm }).length)
       return {
-        code: VERSION, // D67⑤: which code this daemon runs, as `trocar --version` says it — `trocar update` compares the two
+        code, // D67⑤: which code this daemon runs, as `trocar --version` says it — `trocar update` compares the two
         ...(await sw.report()),
         engine: { port, v6: v6Error ? null : port, v6_error: v6Error, ...engine.stats() },
         negatives: engine.negatives(), // (pid, host) pairs no longer decrypted until the process exits (D-12)
@@ -777,7 +778,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 // a door forward-only while its holders live after off (P12), and exits after `off {exit}` only when mayExit says so. `model`: test seams only —
 // { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone } — the endpoint, the control server and the
 // engine are always the real ones.
-async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork, queryIdleMs }) {
+async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork, queryIdleMs, code }) {
   const list = harnesses || (await loadHarnesses())
   const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
   let agents = (nextAgentList() || { entries: [] }).entries
@@ -820,7 +821,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     // off in THIS daemon's memory, not state.json's desired: an update's exit drain leaves the file saying on (1.6 §5.2), and the wait reads this;
     // `scope: 'memory'` says so, and only such a count may end that wait (an older daemon's status lacks it)
     const off = new Set(list.filter((x) => !collector.isOn(x.name)).map((x) => x.name))
-    return { code: VERSION, pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), agents: collector.verdicts(), negatives: engine.negatives(), relayed: { ...engine.relayed({ agents: off }), scope: 'memory' }, cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
+    return { code, pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), agents: collector.verdicts(), negatives: engine.negatives(), relayed: { ...engine.relayed({ agents: off }), scope: 'memory' }, cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
   // the daemon's own identity, as it writes it into its lock (below): the read route hands it back, and an answer on the token-checked channel is
@@ -882,7 +883,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     store.onSegmentChange(bumpLock) // before the new segment's file exists and before a closed one is sealed (D60, invariant 2); see runDaemon's copy
     const lockTimer = setInterval(bumpLock, lockRefreshMs); lockTimer.unref()
     const listTimer = setInterval(() => { const l = nextAgentList(); if (l) { agents = l.entries; registry.replaceAgentList(agents) } }, 5000); listTimer.unref()
-    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: VERSION, foreground: !!foreground, upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: null })
+    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: code, foreground: !!foreground, upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: null })
     let stopping = null, markExited
     const exited = new Promise((r) => { markExited = r })
     const doStop = async ({ signal = null, reason = null } = {}) => {

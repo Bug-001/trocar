@@ -22,7 +22,7 @@ export const plistPath = (home) => path.join(home, 'Library', 'LaunchAgents', PL
 
 /** The oldest Node `on` accepts on macOS (4.9 §7, MA5): 22.15 — below it a root the user added in the keychain is not in
  *  `tls.getCACertificates('system')`, and the doors would refuse an upstream the agent trusts. package.json `engines` stays the floor Linux and
- *  Windows keep (>=20). Older than this and the daemon would also be the one launchd starts at every login with an error nobody sees (4.8 §7). */
+ *  Windows keep. Older than this and the daemon would also be the one launchd starts at every login with an error nobody sees (4.8 §7). */
 const NODE_MIN = '22.15'
 
 /**
