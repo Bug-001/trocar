@@ -33,8 +33,11 @@ function otherCopy() {
   return root
 }
 
-for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: V107 — install from another copy replaces the collector on other code; routing is untouched; a second install leaves it`, { timeout: 60_000 }, async () => {
+// V107's failure cases run on the same two daemons: B's login entry starts nothing (the collector does not come back up), or B answers a third code
+// (the login entry starts yet another copy). Either is exit 1, ok false, problems, not replaced, and the receipt's state is what runs.
+const FAILS = { 'never-up': { state: 'not-running' }, elsewhere: { state: 'running' } }
+for (const platform of ['darwin', 'win32']) for (const fail of [null, ...Object.keys(FAILS)]) {
+  test(`${platform}: V107 — install from another copy ${fail ? `fails (${fail}) and says so` : 'replaces the collector on other code; routing is untouched; a second install leaves it'}`, { timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')
     const boxA = await liveUnit({ w, platform }) // answers this checkout's code
@@ -58,8 +61,9 @@ for (const platform of ['darwin', 'win32']) {
         if (platform === 'darwin') { fs.mkdirSync(path.dirname(plistFilePath(w.home)), { recursive: true }); fs.writeFileSync(plistFilePath(w.home), '<plist/>') }
 
         const rootB = otherCopy()
-        boxB = await liveUnit({ w, platform, daemon: { code: codeId(rootB) } }) // what the login entry starts once A is gone
-        const depsB = { ...deps, root: rootB, unit: boxB.unit }
+        boxB = await liveUnit({ w, platform, daemon: { code: fail === 'elsewhere' ? '9.9.9+fffffff' : codeId(rootB) } }) // what the login entry starts once A is gone
+        const nothing = () => ({ code: 0 })
+        const depsB = { ...deps, root: rootB, unit: fail === 'never-up' ? { ...boxB.unit, enable: nothing, start: nothing, startNow: nothing } : boxB.unit }
 
         const dry = fakeIo()
         assert.equal(await runInstallCli(['--dry-run', '--json'], { io: dry, env: w.env, home: w.home, platform, deps: depsB }), 0, dry.text())
@@ -67,7 +71,14 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal((await status()).code, codeId(), 'a dry run replaces nothing')
 
         const run = fakeIo()
-        assert.equal(await within(runInstallCli(['--yes', '--json'], { io: run, env: w.env, home: w.home, platform, deps: depsB }), 45_000, 'install from copy B'), 0, run.text())
+        const exit = await within(runInstallCli(['--yes', '--json'], { io: run, env: w.env, home: w.home, platform, deps: depsB }), 45_000, 'install from copy B')
+        if (fail) {
+          const r = run.json()
+          assert.deepEqual([exit, r.ok, r.problems.length > 0, r.daemon.replaced, r.daemon.state], [1, false, true, false, FAILS[fail].state], run.text())
+          assert.equal(await status().then((x) => x.code, () => null), fail === 'elsewhere' ? '9.9.9+fffffff' : null, 'the receipt state is what answers')
+          return
+        }
+        assert.equal(exit, 0, run.text())
         assert.equal(run.json().daemon.replaced, true, run.text())
         const s = await status()
         assert.equal(s.code, codeId(rootB), 'the collector now runs copy B')

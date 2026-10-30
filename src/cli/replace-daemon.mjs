@@ -1,5 +1,5 @@
 // replace-daemon.mjs — the one routine that puts the collector on this code (RFC 1.6 §5.5 step 4): `update` and `install` both call it.
-//   replaceDaemon({ by, env, home, platform, deps, dir, root, fs, problems }) → { restarted, notes, elsewhere?, from }
+//   replaceDaemon({ by, env, home, platform, deps, dir, root, fs, problems }) → { restarted, stopped?, notes, elsewhere?, from }
 //   daemonCode({ platform, dir, env, fs, deps }) → the code the collector names on its control channel, or null
 //   deps (0.1 §3): `daemonCode`, `unit`, `request`, `socketPath`, `sleep`, `stopDaemon` (through offWorld), `script`, `exec`, `drainMs`.
 import { codeId } from '../version.mjs'
@@ -11,7 +11,8 @@ export const CUT = 'Connections the collector still holds are cut when it is rep
  *  drain-then-stop path (`drainDaemon`: `POST /off {exit:true}`, then the wait, §5.2) and the same `stopDaemon` — and pulled up again
  *  through the login entry install registered (a stopped LaunchAgent is booted out, so this bootstraps it, 4.9 §4).
  *  `by` is the command that runs it ('update' | 'install'): the drain names it, and the remedy says to run it again.
- *  → `{ restarted, notes, elsewhere?, from }` (`from`: the code the old daemon answered, null when none); what went wrong is pushed on
+ *  → `{ restarted, stopped?, notes, elsewhere?, from }` (`from`: the code the old daemon answered, null when none; `stopped`: whether the old
+ *  daemon was stopped, absent when it already ran this code — so a caller knows a collector still runs after a failure); what went wrong is pushed on
  *  `problems`. The three modules of this step are the running code's: they are loaded here, in the process that finishes, never in one
  *  that merged. */
 export async function replaceDaemon({ by, env, home, platform, deps, dir, root, fs, problems }) {
@@ -25,18 +26,18 @@ export async function replaceDaemon({ by, env, home, platform, deps, dir, root, 
   notes.push(...routing.notes)
   const stopped = routing.stop || (routing.confirmed ? await w.stopDaemon({ unitManaged: w.unitManaged() }) : null)
   const pid = (stopped && Number.isInteger(stopped.pid) ? stopped.pid : null) ?? (Number.isInteger(routing.daemon.pid) ? routing.daemon.pid : null)
-  if (!stopped || (!stopped.stopped && stopped.pid != null)) { problems.push(`the collector${pid == null ? '' : ` (pid ${pid})`} could not be stopped${stopped && stopped.error ? ` (${stopped.error})` : routing.problems[0] ? ` (${routing.problems[0]})` : ''}, so it still runs ${running || 'code of its own'}. ${again}`); return { restarted: false, notes, from: running } }
+  if (!stopped || (!stopped.stopped && stopped.pid != null)) { problems.push(`the collector${pid == null ? '' : ` (pid ${pid})`} could not be stopped${stopped && stopped.error ? ` (${stopped.error})` : routing.problems[0] ? ` (${routing.problems[0]})` : ''}, so it still runs ${running || 'code of its own'}. ${again}`); return { restarted: false, stopped: false, notes, from: running } }
   const { ensureDaemonUp } = await import('../collector/install.mjs')
   const unit = deps.unit !== undefined ? deps.unit : await loginUnit({ home, env, platform, deps })
-  if (!unit) { problems.push('this platform has no login entry to start the collector through, so it was not replaced'); return { restarted: false, notes, from: running } }
+  if (!unit) { problems.push('this platform has no login entry to start the collector through, so it was not replaced'); return { restarted: false, stopped: true, notes, from: running } }
   const up = await ensureDaemonUp({ osName: platform, dir, env, fs, unit, register: true, put: (e) => { if (e && e.reason) notes.push(e.reason) }, ...(deps.request ? { request: deps.request } : {}), ...(deps.socketPath ? { socketPath: deps.socketPath } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) })
   notes.push(...up.notes)
-  if (!up.up) { problems.push(`the collector did not come back up (${up.problems[0] || 'it does not answer'}). ${again}`); return { restarted: false, notes, from: running } }
+  if (!up.up) { problems.push(`the collector did not come back up (${up.problems[0] || 'it does not answer'}). ${again}`); return { restarted: false, stopped: true, notes, from: running } }
   // a collector that answers is not yet one on THIS code: the login entry starts the copy install registered, and with npm another copy
   // (global, a project's, the npx cache) is common — what it runs is asked again, never assumed (§5.5)
   const now = await daemonCode({ platform, dir, env, fs, deps })
-  if (now !== codeId(root)) { problems.push(`the collector came back on ${now || 'code it does not name'}, not on ${codeId(root)}: the login entry starts another copy of trocar. Run trocar install from this copy, or run trocar update from the copy the login entry starts.`); return { restarted: true, notes, elsewhere: true, from: running } }
-  return { restarted: true, notes, from: running }
+  if (now !== codeId(root)) { problems.push(`the collector came back on ${now || 'code it does not name'}, not on ${codeId(root)}: the login entry starts another copy of trocar. Run trocar install from this copy, or run trocar update from the copy the login entry starts.`); return { restarted: true, stopped: true, notes, elsewhere: true, from: running } }
+  return { restarted: true, stopped: true, notes, from: running }
 }
 
 const loginUnit = async ({ home, env, platform, deps }) => {
