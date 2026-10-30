@@ -1670,18 +1670,21 @@ test('daemon: POST /off {exit:true, now:true} cuts the spliced connection and st
   })
 })
 
-test('daemon: POST /off {exit, now, by:\'update\'} — the update stopping the daemon — cuts the splice as cut-by-stop naming update, and daemon-stop says update (1.6 §5.2)', async () => {
-  await withSplice(async ({ s, d, raw, flows }) => {
-    const off = await req(s.sock, 'POST', '/off', { exit: true, now: true, by: 'update' })
-    assert.deepEqual(off.relayed, { closing: 0, waiting: 0, cut: 1 })
-    await d.exited
-    if (!raw.destroyed) await once(raw, 'close')
-    const row = flows().find((f) => f.decision === 'splice')
-    assert.equal(row.error.type, 'cut-by-stop')
-    assert.match(row.error.message, /\bupdate\b/)
-    assert.equal(flows().find((f) => f.event === 'daemon-stop').reason, 'update')
+// `update` today; `a-later-command` is a command this daemon's code does not know: a newer copy replacing it names itself all the same (1.6 §5.2)
+for (const by of ['update', 'a-later-command']) {
+  test(`daemon: POST /off {exit, now, by:'${by}'} — that command stopping the daemon — cuts the splice as cut-by-stop naming it, and daemon-stop says it (1.6 §5.2)`, async () => {
+    await withSplice(async ({ s, d, raw, flows }) => {
+      const off = await req(s.sock, 'POST', '/off', { exit: true, now: true, by })
+      assert.deepEqual(off.relayed, { closing: 0, waiting: 0, cut: 1 })
+      await d.exited
+      if (!raw.destroyed) await once(raw, 'close')
+      const row = flows().find((f) => f.decision === 'splice')
+      assert.equal(row.error.type, 'cut-by-stop')
+      assert.ok(row.error.message.includes(by), row.error.message)
+      assert.equal(flows().find((f) => f.event === 'daemon-stop').reason, by)
+    })
   })
-})
+}
 
 test('daemon: an update\'s exit that /on withdrew does not name update on a later stop\'s cut — /off {exit, by:\'update\'}, /on, then the daemon is stopped: the splice row says cut-by-stop without update (1.6 §5.2)', async () => {
   await withSplice(async ({ s, d, raw, flows }) => {
@@ -1695,9 +1698,9 @@ test('daemon: an update\'s exit that /on withdrew does not name update on a late
   })
 })
 
-test('daemon: /off takes boolean now and exit only, exit takes no harness names, and by (update / uninstall) goes with exit; a refusal is a 400 that changes nothing (1.6 §1.4)', async () => {
+test('daemon: /off takes boolean now and exit only, exit takes no harness names, and by (a command name, not off) goes with exit; a refusal is a 400 that changes nothing (1.6 §1.4, §5.2)', async () => {
   await withSplice(async ({ s, d }) => {
-    for (const body of [{ now: 'yes' }, { exit: 1 }, { exit: true, harnesses: ['claude-code'] }, { exit: true, by: 'off' }, { by: 'update' }]) {
+    for (const body of [{ now: 'yes' }, { exit: 1 }, { exit: true, harnesses: ['claude-code'] }, { exit: true, by: 'off' }, { exit: true, by: 7 }, { exit: true, by: 'Not a name' }, { by: 'update' }]) {
       await assert.rejects(req(s.sock, 'POST', '/off', body), (e) => e.status === 400, JSON.stringify(body))
     }
     assert.equal((await req(s.sock, 'GET', '/status')).desired, 'on', 'nothing was turned off')
