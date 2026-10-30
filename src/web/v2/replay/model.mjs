@@ -143,6 +143,9 @@ function cut(h, i) {
 }
 
 function merge(map, items, id) { for (const x of items || []) map.set(id(x), x) }
+// a definition as the board holds it: the wire sends its fidelity as `ff: {faithfulness?, unaddressable?}` (3.5 §会话读); the
+// proof rule (blocks.mjs faithOf) reads `faithfulness`. Every definition enters the desk through here (applyLane · packs.mjs)
+export const boardDef = (w) => ({ ...w, faithfulness: w.ff ? w.ff.faithfulness : undefined })
 
 /** A resource's identity: the server's `resKey` / `key`, else `kind::label` (3.5's ledger key). */
 export const resKeyOf = (r) => r.resKey || r.key || r.kind + '::' + r.label
@@ -162,7 +165,7 @@ function mergeLedger(h, a) {
  */
 export function applyLane(desk, a) {
   changed(desk)
-  merge(desk.defs, a.defs, (d) => d.bid)
+  merge(desk.defs, a.defs && a.defs.map(boardDef), (d) => d.bid)
   let h = desk.held.get(a.lane)
   const steps = a.steps.map((s) => ({ ...s, ts: desk.rows.get(s.rid)?.ts }))
   let reset = false
@@ -344,7 +347,7 @@ function materialStep(desk, rid) {
   const def = (b) => desk.defs.get(b) ?? { bid: b }
   const flat = m.ids.map((b, i) => {
     const d = def(b)
-    return { ...d, key: d.fh, text_ref: d.ref, faithfulness: d.ff, query: m.at[i]?.query, volatile: m.at[i]?.volatile }
+    return { ...d, key: d.fh, text_ref: d.ref, query: m.at[i]?.query, volatile: m.at[i]?.volatile }
   })
   return { row, lane, held: true, flat, reply: s.reply.map(def), attrs: m.at, detail: s.detail ?? null }
 }

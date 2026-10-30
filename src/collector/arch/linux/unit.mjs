@@ -31,7 +31,9 @@ export function unitText({ node, script, env = {}, logs = null }) {
     '[Service]', 'Type=simple', ...Object.entries(env).map(([k, v]) => `Environment="${esc(`${k}=${v}`)}"`),
     `ExecStart=${quoteExec(node)} ${quoteExec(script)} daemon`,
     ...(logs ? [`StandardOutput=append:${logs.out.replace(/%/g, '%%')}`, `StandardError=append:${logs.err.replace(/%/g, '%%')}`] : []),
-    'Restart=on-failure', 'RestartSec=2', '',
+    // KillMode=mixed: a stop sends SIGTERM to the daemon alone, which closes its helper (an orderly stop records no helper-down, 4.6 F3(h)); the
+    // default sends it to the helper too, which may exit first, unasked. What is still running when the daemon is gone gets SIGKILL.
+    'Restart=on-failure', 'RestartSec=2', 'KillMode=mixed', '',
     '[Install]', 'WantedBy=default.target', '',
   ].join('\n')
 }

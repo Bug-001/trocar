@@ -21,6 +21,7 @@ import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { PID, agentOf, win32Io, flowsOf, freePort, through } from '../helpers/model-io.mjs'
+import { listenLocalhost } from '../helpers/localhost.mjs'
 
 const CHILD = fileURLToPath(new URL('./fixtures/model-daemon-child.mjs', import.meta.url))
 const GRACE_MS = 2000 // the stop's grace (1.6 §5.2)
@@ -45,8 +46,7 @@ for (const platform of ['darwin', 'win32']) {
       s.on('error', () => {}); let b = ''
       s.on('data', (d) => { if (held.includes(s)) { turns.push(d); return } b += d.toString('latin1'); if (b.includes('\r\n\r\n')) { held.push(s); s.write(SWITCH) } })
     })
-    await new Promise((r) => mock.listen(0, '127.0.0.1', r))
-    const target = `localhost:${mock.address().port}`
+    const target = `localhost:${await listenLocalhost(mock)}`
     const bundle = path.join(w.home, 'codex-ca.pem')
     const desc = w.harnesses.find((h) => h.name === 'codex')
     const a = agentOf({ w, name: desc.processes.names[0].name, env: { SSL_CERT_FILE: bundle } })

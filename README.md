@@ -343,6 +343,11 @@ which one has been shown to capture verbatim on which platform is the table at t
 **Linux** is driver mode (RFC 4.6, D31): an eBPF helper steers only the connections of agent processes you run to a
 loopback engine, which decrypts only for agents that trust the collector CA. Everything else, including other users,
 goes direct. `install` writes the CA under `~/.trocar/collector/ca/` and each agent's trust entry (table below).
+trocar can also run in a pid namespace of its own, as it does inside a container. The helper then numbers processes in
+that namespace, on kernels whose cgroup programs can read a process's pid there (6.8 can). Inside a container the
+helper also needs `cap_bpf`, `cap_net_admin` and `cap_perfmon` in the container's bounding set, a seccomp profile that
+allows `bpf()`, and no user namespace of the container's own. Where the helper cannot number processes the way the daemon sees them, it
+refuses to start (helper exit `namespace`, with the reason) instead of capturing nothing.
 
 **macOS and Windows** run one model (RFC 4.11, D57). The proxy is the collector's own engine: one loopback door per
 agent group, loopback only, no TUN, never the system proxy, nothing written into your VPN.
