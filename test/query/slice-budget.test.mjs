@@ -1,4 +1,4 @@
-// test/query/slice-budget.test.mjs — 3.5 #38 (§后台抽取与归约 「每片 ≤ 50 ms CPU」): what comes after a background slice's fold —
+// test/query/slice-budget.test.mjs — 3.5 #39 (§后台抽取与归约 「每片 ≤ 50 ms CPU」): what comes after a background slice's fold —
 // the answer files a seal renders, compresses and writes, and the idle save's sealing of the line files' parts — is in the slice's
 // budget, in units that go on in the next slice. Driven with a budget no unit fits in, so every call does the least it can: the
 // work spreads over calls that each say more is left, and what is written at the end is the bytes of a run with no budget. No
@@ -57,7 +57,7 @@ function sameFiles(got, want, what) {
   for (const f of Object.keys(want)) assert.ok(got[f].equals(want[f]), `${what}: ${f} is the bytes of the run with no budget`)
 }
 
-test('3.5 #38: answer files a slice cannot fit are written over several slices that each say more is left; the files are the bytes of a run with no budget', { timeout: 900_000 }, async () => {
+test('3.5 #39: answer files a slice cannot fit are written over several slices that each say more is left; the files are the bytes of a run with no budget', { timeout: 900_000 }, async () => {
   const x = homeOf(), id = sessionIn(x)
   assert.deepEqual(await drive(x, id, 1e9), [false], 'with no budget: one slice does it all')
   const want = filesOf(x, id)
@@ -84,7 +84,7 @@ const rng = (seed) => () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 3
 const lineOf = (r) => `${'abcdefghij'.repeat(1 + Math.floor(r() * 400))}${Math.floor(r() * 1e9)}\n`
 const PARTS = /^x\.(\d+)-(\d+)\.br$/
 
-test('3.5 #38 / 4.3 §4 分片: a seal whose budget is spent goes on over calls; meanwhile every line reads back and lines append; the parts are a one-pass seal\'s bytes', () => {
+test('3.5 #39 / 4.3 §4 分片: a seal whose budget is spent goes on over calls; meanwhile every line reads back and lines append; the parts are a one-pass seal\'s bytes', () => {
   const r = rng(5), lines = Array.from({ length: 400 }, () => lineOf(r)), O = { partBytes: 120_000, frameBytes: 9_000 }
   const fill = (dir) => { const lf = lineFile({ fs, base: path.join(dir, 'x') }); return { lf, want: lines.map((t) => ({ off: lf.append(t), buf: Buffer.from(t) })) } }
   const parts = (dir) => fs.readdirSync(dir).filter((f) => PARTS.test(f)).sort()
