@@ -1,4 +1,4 @@
-// no-sysproxy-no-elevation.test.mjs — the D43 boundaries that had no source-level guard (phase-A audit F1; capture safety, 1.6 §8, 4.8 §2.4 「点名也不做」):
+// no-sysproxy-no-elevation.test.mjs — the D43 boundaries that had no source-level guard (capture safety, 1.6 §8, 4.8 §2.4 「点名也不做」):
 //   (a) no code writes the SYSTEM PROXY: the WinINET/WinHTTP write APIs never appear, and no exec call carries the system proxy's key, its values or `netsh`;
 //   (b) no code puts a PROXY variable into the LOGIN environment or a system-wide one (login profiles, HKCU\Environment, setx, launchctl setenv), on or off: the agent's own entry (a shim that sets
 //       HTTPS_PROXY for the process tree it launches, a block in the agent's own .env) is not this scan's business — it never reaches past the launched tree;

@@ -2,7 +2,7 @@
 //
 // The raw layer as it is on disk: one line per segment of ~/.trocar/raw/, with its state, how many
 // records it holds, what it takes in plaintext and sealed, its time range and what could not be read.
-// Only raw/ segments are listed (main-session decision, 2026-10-18): the older capture locations keep
+// Only raw/ segments are listed: the older capture locations keep
 // their own record refs and show up in `query classes`'s disk totals, not as segments here.
 import { allSegments, problemEntry } from '../index-build.mjs';
 import { parseTime } from './index.mjs';

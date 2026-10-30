@@ -391,7 +391,7 @@ test('D38: every line uninstall writes is in the closed sets, one run has one `r
   assert.deepEqual([last.event, last.kind, last.outcome], ['uninstall-note', 'result', 'uninstalled'])
 })
 
-test('uninstall: the arguments — a harness name, an unknown option, root and a platform without the new collector (freebsd now) hands over to the hook (R4, R7, 1.6 §4); win32 and darwin (the flips, plan 9(b) / 4.9 §4) run the NEW uninstall instead', async () => {
+test('uninstall: the arguments — a harness name, an unknown option, root and a platform without the new collector (freebsd now) hands over to the hook (R4, R7, 1.6 §4); win32 and darwin (the flips, 4.8 / 4.9 §4) run the NEW uninstall instead', async () => {
   const s = await installedHome({ names: ['claude-code'] }); const snap = snapshot(s.home)
   const name = await cli(s, ['claude-code'])
   assert.deepEqual([name.exit, snapshot(s.home)], [2, snap])

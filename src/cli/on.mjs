@@ -106,7 +106,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
       return ask({ ...io, prompt: io.stdout }, 'Proceed?')
     }
     const adoption = await prepareAdoption({ home, env, platform, deps, parts, now: deps.now ? () => deps.now().getTime() : Date.now }) // §9.5: the proxy each agent already uses, and the chain once trocar is on
-    const routing = deps.routing || (parts.arch && typeof parts.arch.routing === 'function' ? parts.arch.routing({ harnesses: parts.harnesses, home, env, fs: deps.fs }) : null) // §9.5's proxy-mode routing: the platform supplies it beside prepare (win32, Task 8(c)); a platform without one (Linux's driver mode) adopts nothing extra and every existing on is its guard
+    const routing = deps.routing || (parts.arch && typeof parts.arch.routing === 'function' ? parts.arch.routing({ harnesses: parts.harnesses, home, env, fs: deps.fs }) : null) // §9.5's proxy-mode routing: the platform supplies it beside prepare (win32); a platform without one (Linux's driver mode) adopts nothing extra and every existing on is its guard
     const planText = (raw) => {
       const adopted = adoption && !adoption.error ? Object.entries(adoption.chains(raw.targets)).filter(([h]) => raw.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })).filter((x) => /\s->\s/.test(x.chain) || false) : [] // D46: the degenerate one-hop chain says nothing and is not printed
       return formatPlan({ ...raw, adopted }, { home, platform, colors: c })

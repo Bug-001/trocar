@@ -14,6 +14,6 @@
   "screenshot": "test/web-v2/browser/shots/seq/I-url-replay-4.png",
   "status": "fixed",
   "detail": "a same-session hash change to step=-3 (after step=abc) leaves the URL's step= unclamped while another step is shown; 1.2:91 clamps",
-  "owner": "desk (lane D)",
+  "owner": "desk",
   "suspect": "src/web/v2/replay/replay.mjs:473"
 }

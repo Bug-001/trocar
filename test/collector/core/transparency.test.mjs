@@ -1,11 +1,8 @@
 // transparency.test.mjs — end-to-end byte-transparency regression (RFC 4.6 acceptance T1/T2/T4).
-// Drives the mock upstream (test/lab/mock-upstream/, from branch test/mock-upstream-tls) through
+// Drives the mock upstream (test/lab/mock-upstream/) through
 // the real engine with decrypt:true and asserts, per scenario, that the engine neither changed the
 // request bytes the upstream saw nor the response bytes the client received, emitted exactly one
 // envelope, flagged transport faults as errors, and reconstructed split multibyte text.
-//
-// NOTE: depends on the mock upstream branch (test/mock-upstream-tls) landing first; the mock files under
-// test/lab/mock-upstream/ are an untracked helper here (see .git/info/exclude), not committed.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import tls from 'node:tls'; import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'

@@ -247,10 +247,10 @@ export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire 
   }
 }
 
-/** live(scale) → bigSession options (and `calls`, how many to append) in the proportions of the user's live Claude Code session
+/** live(scale) → bigSession options (and `calls`, how many to append) in the proportions of a measured live Claude Code session
  *  (12.5k calls, ~36 calls a lane, ~149 KB a record, ~1 % of records over 1 MB in clusters, first prompts up
  *  to 16 KB of system-reminders, one system prompt and tool set across lanes). A regression seed, not an expectation: scale 1 is
- *  the user's size. */
+ *  that session's size. */
 export function live(scale = 1) {
   return { calls: Math.max(1, Math.round(12_500 * scale)), wire: 'http', growth: 2_500, subEvery: 2, subLanes: 12, subLen: 54, late: 6,
     compactAt: 110_000, cc: 16, shared: 12_000, paths: 4, prompt: 12_000, writes: 1_200, bigEvery: 400, bigBytes: 2_000_000, bigRun: 4 }
