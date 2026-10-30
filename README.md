@@ -78,8 +78,8 @@ the one step that needs root; build it as yourself:
 
 ```sh
 sudo apt-get install build-essential clang libbpf-dev libelf-dev zlib1g-dev linux-tools-generic  # Ubuntu; Debian: bpftool, not linux-tools-generic
-make -C src/collector/arch/linux     # trocar-redirector: needs clang, make, bpftool and the libbpf, libelf and zlib headers
-sudo node bin/trocar.mjs setup-helper
+make -C src/collector/arch/linux     # trocar-redirector: needs clang, make, bpftool, the libbpf, libelf and zlib headers, and a kernel with BTF
+sudo "$(command -v node)" bin/trocar.mjs setup-helper   # node by its path: sudo's PATH does not have an nvm node
 ```
 
 The same five commands on every OS, in this order: `trocar install` (once) → `trocar on` → `trocar off` →

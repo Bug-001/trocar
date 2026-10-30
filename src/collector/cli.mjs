@@ -3,6 +3,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { shellArg } from '../cli/text.mjs'
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -24,7 +25,7 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
     const binarySrc = i >= 0 ? argv[i + 1] : path.join(dir, 'trocar-redirector')
     if (!binarySrc || !fs.existsSync(binarySrc)) { // a fresh checkout: the helper is built from source first (README · Install)
       err(i >= 0 ? `trocar setup-helper: --binary ${binarySrc ? `${binarySrc} is not a file` : 'needs the path of a helper you built'}.`
-        : `trocar setup-helper: the helper is not built in this checkout yet.\nBuild it once as yourself, not as root (it needs clang, make, bpftool and\nthe libbpf, libelf and zlib development files):\n  make -C ${dir}\nThen run sudo trocar setup-helper again. To install a helper you built\nelsewhere, pass --binary and its path.`)
+        : `trocar setup-helper: the helper is not built yet. Build it as yourself first:\n  make -C ${shellArg(dir)}`)
       return 1
     }
     const r = A.install.setupHelper({ binarySrc })

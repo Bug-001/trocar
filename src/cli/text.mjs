@@ -59,6 +59,9 @@ export function tilde(p, home) {
   return p.startsWith(home + sep) ? `~${p.slice(home.length)}` : p
 }
 
+/** A value as one shell argument of a command the reader copies (§1.1③): as it is when it needs no quoting, else in single quotes. */
+export const shellArg = (s) => (/^[\w@%+=:,./-]+$/.test(String(s)) ? String(s) : `'${String(s).replace(/'/g, "'\\''")}'`)
+
 /** Bytes as `B` / `KB` / `MB` / `GB`, 1000 to the step (§1.1⑤); what is not a number is `unknown`. */
 export function size(bytes) {
   if (typeof bytes !== 'number' || !Number.isFinite(bytes)) return unknown()

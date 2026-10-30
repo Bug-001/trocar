@@ -266,16 +266,20 @@ test('cli: setup-helper installs or removes through arch; a failure is exit 1', 
 })
 
 test('cli: setup-helper on a checkout whose helper is not built says how to build it, once, and installs nothing (exit 1)', async () => {
-  const root = tmpDir('trocar-cli-unbuilt-'), called = []
+  const called = []
   const arch = { install: { DEFAULTS: { helperBin: '/usr/local/libexec/trocar/trocar-redirector' }, setupHelper: (o) => { called.push(o); return { bin: '/b', getcap: 'caps' } } } }
-  let t = io()
-  assert.equal(await runSetupHelper([], { arch, packageRoot: root, ...t }), 1)
-  const said = t.e.join('\n')
-  assert.equal(said.match(/trocar setup-helper:/g).length, 1, 'named by the command once')
-  assert.ok(said.includes(`make -C ${path.join(root, 'src', 'collector', 'arch', 'linux')}`), 'the build command for this checkout')
-  assert.match(said, /--binary/)
-  assertEnglish(said, 'the output', { width: false }) // the make line carries this checkout's path, however long (1.6 §1.1)
-  t = io()
+  for (const root of [tmpDir('trocar-cli-unbuilt-'), path.join(tmpDir('trocar-cli-unbuilt-'), "ada's trocar")]) {
+    const t = io()
+    assert.equal(await runSetupHelper([], { arch, packageRoot: root, ...t }), 1)
+    const said = t.e.join('\n'), dir = path.join(root, 'src', 'collector', 'arch', 'linux')
+    assert.equal(said.match(/trocar setup-helper:/g).length, 1, 'named by the command once')
+    // the build command for this checkout, one line a shell runs as it is (1.6 §1.1): the directory stays one argument
+    const line = said.split('\n').find((l) => /^\s*make -C /.test(l))
+    const argv = spawnSync('sh', ['-c', `printf '%s\\n' ${line.trim().slice('make -C '.length)}`], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean)
+    assert.deepEqual(argv, [dir])
+    assertEnglish(said, 'the output', { width: false }) // the make line carries this checkout's path, however long (1.6 §1.1⑥)
+  }
+  const t = io(), root = tmpDir('trocar-cli-unbuilt-')
   assert.equal(await runSetupHelper(['--binary', path.join(root, 'nope')], { arch, packageRoot: root, ...t }), 1)
   assert.ok(t.e.join('\n').includes(path.join(root, 'nope')), 'a --binary that is not there is named')
   assert.deepEqual(called, [], 'nothing was handed to the installer')
