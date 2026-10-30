@@ -82,7 +82,7 @@ const charsOf = (b) => (b && typeof b.chars === 'number' ? b.chars : flatBytes(b
 export function segTax(flat) {
   const turns = messageTurns(flat)
   const taskItems = turns.length ? new Set(turns[turns.length - 1].items) : new Set() // the last turn is the current task
-  const allVerbatim = flat.filter((b) => b.sec === 'tools').every((b) => b.verbatim !== false)
+  const allVerbatim = flat.filter((b) => b.sec === 'tools').every((b) => b.faithfulness !== 'metadata') // an older capture kept no schema text
   const seg = { tools: 0, system: 0, history: 0, task: 0 }
   const chars = { tools: 0, system: 0, history: 0, task: 0 }
   flat.forEach((b, i) => {
