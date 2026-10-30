@@ -24,7 +24,7 @@ import { readAgentList } from '../off/identity.mjs'
 import { unitedLiveness, daemonEnv } from './install.mjs'
 import { CODE, EVENT } from './core/codes.mjs'
 import { runEventWriter } from '../off/events.mjs'
-import { certsOf, composeBundle } from '../off/pem.mjs'
+import { certBlocks, certsOf, composeBundle } from '../off/pem.mjs'
 
 /** The OSes the collector model (4.11) runs on — the one list `install`, `on`, `uninstall` and the arch backends ask. */
 export const MODEL_OS = Object.freeze(['darwin', 'win32'])
@@ -203,10 +203,10 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     return { manifest: m, fp256: rootDer ? rootIdOf(rootDer).fp256 : null, items, carriers, pending, problems, notes, exit: pending.length || problems.length || skipped ? 1 : 0 }
   }
 
-  function owned(file, role, harness, data, mode) {
+  function owned(file, role, harness, data, mode, { sources = null, extra = {} } = {}) {
     const j = judgeOwned({ manifest: m, file, planned: sha256(Buffer.from(data)), fs })
     if (j.action === 'skip-intact') return said(role, 'intact', { path: file, harness })
-    writeOwnedFile({ dir, manifest: m, harness, role, phase: 'install', file, data, mode, now: now(), fs })
+    writeOwnedFile({ dir, manifest: m, harness, role, phase: 'install', file, data, mode, sources, extra, now: now(), fs })
     said(role, 'written', { path: file, harness })
   }
 
@@ -227,7 +227,11 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         if (inEnv) return { state: 'rule-u' }
         if (c.semantics === 'replace') { // CM9: Node's own roots, the user CAs the key makes ineffective, the trocar root; no system roots
           const bundle = path.join(dir, 'ca', `bundle-${desc.name}.pem`)
-          owned(bundle, 'bundle', desc.name, composeBundle({ nodeRoots, userCerts: (c.merges || []).flatMap((s) => userCertsOf(desc, s)), caPem: rootPem }).data, 0o644)
+          const merged = (c.merges || []).flatMap((s) => userCertsOf(desc, s))
+          const own = new Set(certBlocks(rootPem).map((x) => x.fp)) // a merged file may already hold trocar's block (rule U of another harness): not a user CA
+          const b = composeBundle({ nodeRoots, userCerts: merged.flatMap((x) => x.certs).filter((p) => !certBlocks(p).some((x) => own.has(x.fp))), caPem: rootPem })
+          // the files and fingerprints it merged, as the Linux bundles record them: a rebuild of a bundle gone while a process holds it reads them (4.6 撤销 第 2 步)
+          owned(bundle, 'bundle', desc.name, b.data, 0o644, { sources: [...new Set(merged.map((x) => x.file))], extra: { user_fps: b.user_fps, roots_fp: b.roots_fp } })
           jsonKey(desc, file, c.keys, bundle)
         } else jsonKey(desc, file, c.keys, ca.pem)
         return { state: 'placed' }
@@ -255,7 +259,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     } catch (e) { problems.push(`${desc.name}: ${errText(e)}`); return { state: 'skipped', code: e.code || 'install-error', why: errText(e) } }
   }
 
-  // the CERTIFICATE blocks of the files a `merges` source names (4.11 P4); what is not carried over is said, never silent (D38)
+  // the CERTIFICATE blocks of the files a `merges` source names, per file: [{ file, certs }] (4.11 P4); what is not carried over is said, never silent (D38)
   function userCertsOf(desc, src) {
     const r = readSrc(src, ctx)
     if (r.error) { notes.push(`${desc.name}: ${r.where}: ${r.error}; the CA it names is not in trocar's bundle`); return [] }
@@ -267,7 +271,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       try { buf = fs.readFileSync(file) } catch (e) { notes.push(`${desc.name}: ${file} (${where}) is unreadable (${e.code || errText(e)}); its certificates are not in trocar's bundle`); return [] }
       const got = certsOf(file, buf)
       for (const k of got.skipped) notes.push(`${desc.name}: ${file}: ${k.type ? `block ${k.index} (${k.type})` : 'the file'} is not carried into trocar's bundle: ${k.why}`)
-      return got.certs
+      return [{ file, certs: got.certs }]
     })
   }
 

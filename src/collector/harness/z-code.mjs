@@ -13,9 +13,11 @@
 // new or resumed session; a resident session keeps what it loaded: not live. The CLI loads the nearest .env (fill).
 // Not via the trust path: the CLI refreshes its built-in providers by plain fetch from the Z-Code origin (and the CDN
 // it names), so a CLI's origin host is passed through (an app-server does not refresh).
-// Injection (D37④): network.caCertFile in ~/.zcode/cli/config.json = combined-z-code.pem, which carries the user's CAs
-// it replaces or makes ineffective: the caCertFile it replaces, the desktop setting, NODE_EXTRA_CA_CERTS / a set
-// ZCODE_AGENT_CA_CERT of the install shell and running Z-Code (4.6 合并包).
+// Injection (D37④): network.caCertFile in ~/.zcode/cli/config.json = trocar's bundle-z-code.pem (written only while the key
+// is unset; a caCertFile the user set takes trocar's block at its end instead, rule U). The bundle carries the CAs named by
+// `merges` in the install shell and the desktop setting: NODE_EXTRA_CA_CERTS, which the key makes ineffective; ZCODE_AGENT_CA_CERT
+// and httpProxyCaCertPath, which override the key while set and are carried so the bundle stays whole once they are unset.
+// Running Z-Code processes' environments are not read (4.11 没覆盖的: re-run install).
 import path from 'node:path'
 import { parseJsonc, hostOf } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
@@ -154,7 +156,7 @@ const proxyMode = {
     'cli-config': { kind: 'json-key', file: CLI_CONFIG, format: 'jsonc', proxyKeys: [['network', 'httpProxy']], value: 'door-url', rereads: true, absent: 'create', takesEffect: 'takes effect for your next session; no restart needed' },
   },
   certs: {
-    // the CAs the key makes ineffective, carried into the bundle (lab: a private-CA host was unreachable, on and off, without them)
+    // the user CAs carried into the bundle (header); without them a private-CA host was unreachable: on (measured), off (inferred)
     bundle: { kind: 'config-key', ...CA_KEY, semantics: 'replace', merges: [{ env: 'NODE_EXTRA_CA_CERTS' }, { env: 'ZCODE_AGENT_CA_CERT' }, { file: DESKTOP, format: 'json', keys: ['httpProxyCaCertPath'] }] },
   },
   trusts: {

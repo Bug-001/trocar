@@ -48,8 +48,10 @@ test('CM9: Z-Code\'s caCertFile → a bundle of Node\'s own roots plus the troca
   assert.equal(r2.carriers.find((c) => c.harness === 'z-code' && c.carrier === 'pem-block').state, 'placed')
 })
 
-// CM9: a CA the user added where caCertFile makes it ineffective (the install shell's NODE_EXTRA_CA_CERTS, ZCODE_AGENT_CA_CERT, the desktop CA
-// setting) is in the bundle too: without it Z-Code — and the door, which verifies upstream with Z-Code's own trust — cannot reach a private-CA host
+// CM9: a CA the user added through a setting the descriptor merges (the install shell's NODE_EXTRA_CA_CERTS, which caCertFile makes ineffective;
+// ZCODE_AGENT_CA_CERT and the desktop CA setting, which override it while set) is in the bundle too: without it Z-Code — and the door, which
+// verifies upstream with Z-Code's own trust — cannot reach a private-CA host. The bundle's manifest item names the files and fingerprints it
+// merged, as the Linux bundles do: `off` / `uninstall` rebuild a bundle that is gone while a process holds it from those, or name what was lost (4.6)
 for (const via of ['NODE_EXTRA_CA_CERTS', 'ZCODE_AGENT_CA_CERT', 'desktop setting']) {
   test(`CM9: a private CA named by ${via} → its certificate is in Z-Code's bundle, beside Node's roots and the trocar root; a non-certificate block is not`, async () => {
     const other = await modelWorld(); await other.install() // another machine's root: a CA no Node root store holds
@@ -64,6 +66,9 @@ for (const via of ['NODE_EXTRA_CA_CERTS', 'ZCODE_AGENT_CA_CERT', 'desktop settin
     for (const fp of [...certBlocks(priv).map((b) => b.fp), r.fp256, ...certBlocks(tls.rootCertificates[0]).map((b) => b.fp)]) assert.ok(fps.includes(fp), fp)
     assert.equal(new Set(fps).size, fps.length, 'each certificate once')
     assert.ok(!text.includes('PRIVATE KEY'), 'only certificate blocks are carried over')
+    const item = readManifest(w.dir).files.find((f) => f.role === 'bundle' && f.harness === 'z-code')
+    assert.deepEqual(item.sources, [mine], 'the merged file is the rebuild\'s source')
+    assert.deepEqual(item.user_fps, certBlocks(priv).map((b) => b.fp), 'and its certificates are the user CAs a rebuild must keep')
   })
 }
 
