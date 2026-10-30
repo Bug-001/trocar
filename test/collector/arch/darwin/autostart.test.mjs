@@ -1,6 +1,6 @@
 // autostart.test.mjs — the darwin collector's way in and the way it is kept up: the control socket's path and token, the refusal of root, the Node preflight, the LaunchAgent plist and
 // its launchctl verbs, and the standalone undo of src/off/darwin.mjs (RFC 4.9 §4 · §7; the case list is 4.8 §7 W24 W25 W26, the off-order clause is MA2's, the equality test is the real,
-// passing version of the win32 side's W24 Task 9(b) todo). Nothing here needs macOS: every tool (launchctl) goes through an injected runner, the uid, the spawn and the random source are
+// passing version of the win32 side's W24 check). Nothing here needs macOS: every tool (launchctl) goes through an injected runner, the uid, the spawn and the random source are
 // fakes, and the control server listens on a unix socket in a temp directory — which is also what the real one does on darwin (4.9 §7).
 //
 // What the win32 file has and this one does not, and why (4.9): the supervisor parent and its lock (W24's superviseChild / runSupervisor / lockHolderAlive tests) — dropped, launchd's
@@ -458,7 +458,7 @@ test('the off order (4.9 §4, MA2\'s clause) is the undo\'s own sequence: print,
 })
 
 
-// ---- the standalone undo of src/off/darwin.mjs (the real version of the win32 side\'s W24 Task 9(b) todo) ---------------------------------------
+// ---- the standalone undo of src/off/darwin.mjs (equal to the win32 side's W24 check) ---------------------------------------
 
 test('src/off keeps its own copy of the agent label and the plist path, equal to arch/darwin/autostart.mjs — the linux shape (test/off/autostart.test.mjs holds unit.mjs equal the same way)', () => {
   assert.equal(offDarwin.AGENT_LABEL, AGENT_LABEL)

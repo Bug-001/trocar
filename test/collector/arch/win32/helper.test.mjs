@@ -124,7 +124,7 @@ test('W1 reg-read: only the allowed keys and their names go through, checked in 
     { hive: 'HKU', key: 'Environment', names: ['Path'] },
     { hive: 'HKCU', key: IS + '\\Connections', names: ['ProxyServer'] },
     { hive: 'HKCU', key: 'Environment\\..\\Software', names: ['Path'] },
-    { hive: 'HKCU', key: 'Software\\Policies\\Claude', names: ['egressProxyUrl'] }, // a policy key is not on the list: policy.mjs reads it through reg.exe (plan §E.7 ruling 4)
+    { hive: 'HKCU', key: 'Software\\Policies\\Claude', names: ['egressProxyUrl'] }, // a policy key is not on the list: policy.mjs reads it through reg.exe
     {}, null, undefined,
   ]
   for (const a of bad) await rejects(h.call('reg-read', a), 'helper-forbidden-key')
@@ -134,7 +134,7 @@ test('W1 reg-read: only the allowed keys and their names go through, checked in 
 
 const POLICY = { hive: 'HKCU', key: 'SOFTWARE\\Policies\\Claude', names: ['egressProxyUrl'] } // what Claude Desktop's harness file declares (win32/claude-code.mjs)
 
-test('W1 the helper is started with the fixed command line and no parameter; a policy key is not readable through it (plan §E.7 ruling 4: policy.mjs reads it through reg.exe)', async (t) => {
+test('W1 the helper is started with the fixed command line and no parameter; a policy key is not readable through it (policy.mjs reads it through reg.exe)', async (t) => {
   const spawned = []
   const h = started(t, { verbs: { 'reg-read': { data: { keyExists: true, values: {} } } } }, { spawn: (exe, args, opts) => { spawned.push(args); return fakeSpawn({})(exe, args, opts) } })
   await h.call('version')

@@ -175,7 +175,7 @@ const TABLE_MAX_BUFFER = 64 * 1024 * 1024
 /** The environment of every `ps` trocar runs on macOS (this one, and the collector's targeted asks in arch/darwin/procinfo.mjs) — one locale, two
  *  facts it fixes (measured on a macOS machine, macOS 27, 2026-10-21; spec 4.9 「持有者的进程表」):
  *  · the TIME category: `ps` prints dates in the user's language — under zh_CN.UTF-8 or ja_JP.UTF-8 the five words of `lstart` are no longer
- *    "Wed Oct  7 04:27:00 2026" and every row failed to parse, which `off` read as "nobody is alive" (audit rule-b 2). en_US's are C's words.
+ *    "Wed Oct  7 04:27:00 2026" and every row failed to parse, which `off` read as "nobody is alive". en_US's are C's words.
  *  · the CHARACTER TYPE: a C one makes `ps` print every byte >= 0x80 as vis(3) does, with no backslash — `测 试/claude` came back as
  *    `M-fM-5M^K M-hM-/M^U/claude`, a path that does not exist, so a process installed under a non-ASCII directory was named wrongly
  *    (and the daemon, a LaunchAgent, has no locale at all: C). A UTF-8 one prints the bytes as they are; APFS names are valid UTF-8.
@@ -205,7 +205,7 @@ function psIdentityAsk(pid, { exec = null, env = process.env } = {}) {
 
 /** The reader of a process's identity for a platform: /proc on Linux, `ps` on macOS, one Get-CimInstance question on Windows. Without one a
  *  lock can only say "its pid is alive", and a pid that another process has taken since (a crash, a reboot) then reads as a command still
- *  running — which blocked `trocar off`, the way out, for as long as that other process lived (audit rule-b 3). */
+ *  running — which blocked `trocar off`, the way out, for as long as that other process lived. */
 export function identityFor({ platform = process.platform, exec = null, env = process.env, root = '/proc', fs = nodeFs } = {}) {
   if (platform === 'win32') return (pid, o = {}) => winIdentity(pid, { run: exec, env, ...o })
   return platform === 'darwin' ? (pid) => psIdentity(pid, { exec, env }) : (pid) => procIdentity(pid, { root, fs, platform })

@@ -7,7 +7,7 @@ import { renderKind, jsonNodeHtml } from '../../src/web/v2/replay/kinds.mjs'
 import { layout } from '../../src/web/v2/replay/jsonlay.mjs'
 
 const ELEMENTS = new Set(['pre', 'code', 'span', 'div', 'dl', 'dt', 'dd', 'table', 'tr', 'td', 'th', 'details', 'summary', 'img', 'button'])
-// plan §2.2's attributes, plus `open`: the boolean state of the allowed <details>
+// the allowed cell attributes (RFC 2.3 §两种模式), plus `open`: the boolean state of the allowed <details>
 const ATTR = /^(?:class|data-[a-z0-9-]+|aria-[a-z]+|role|title|type|tabindex|width|height|alt|decoding|style|open)$/
 const TAG = /<(\/?)([a-z][a-z0-9]*)((?:\s+[a-z][a-z0-9-]*(?:="[^"<>]*")?)*)\s*>/y
 
@@ -64,7 +64,7 @@ function specs() {
   return out
 }
 
-test('C4: every kind over hostile content emits only allowed elements and attributes, never src or href', () => {
+test('every kind over hostile content emits only allowed elements and attributes, never src or href', () => {
   const vals = values()
   for (const r of specs()) {
     for (const [k, v] of vals.entries()) {
@@ -81,7 +81,7 @@ test('C4: every kind over hostile content emits only allowed elements and attrib
   }
 })
 
-test('C4: the Raw layout over hostile content emits only its own span', () => {
+test('the Raw layout over hostile content emits only its own span', () => {
   for (const [k, v] of values().entries()) {
     const text = typeof v === 'string' ? v : JSON.stringify(v, null, k % 2 ? 2 : 0)
     let at = 0, state = null

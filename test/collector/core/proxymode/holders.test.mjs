@@ -47,7 +47,7 @@ test('a table that cannot be read keeps the last answer (never "nobody holds")',
   poll.stop()
 })
 
-test('A9 (c) · P12 the door record is bounded: past DOOR_SEEN_MAX lives the file keeps the newest DOOR_SEEN_MAX rows, and a reload lists them', () => {
+test('P12 the door record is bounded: past DOOR_SEEN_MAX lives the file keeps the newest DOOR_SEEN_MAX rows, and a reload lists them', () => {
   const dir = tmpDir()
   let now = ON
   const seen = createDoorSeen({ dir, clock: () => ++now, timers: fakeTimers() })

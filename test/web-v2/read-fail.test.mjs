@@ -23,7 +23,7 @@ import { boardHome } from './real-face.mjs'
 let n = 0
 const tok = () => `tok-${++n}-q7`
 
-test('AC-1 readFailure: the visible line holds none of the reason; the reason is escaped in collapsed technical details', () => {
+test('readFailure: the visible line holds none of the reason; the reason is escaped in collapsed technical details', () => {
   for (const status of [0, 404, 500, 503, undefined, 'bare']) {
     for (const make of [0, 1, 2, 3]) {
       const t = tok(), reason = reasonsWith(t)[make]
@@ -45,7 +45,7 @@ test('AC-1 readFailure: the visible line holds none of the reason; the reason is
   assert.notEqual(readFailure('Stats', { status: 0 }).line, readFailure('Stats', { status: 500 }).line)
 })
 
-test('AC-3 overview cards: stats and recent read failures, the price line and a 503 capture card keep the reason out of the visible text', () => {
+test('overview cards: stats and recent read failures, the price line and a 503 capture card keep the reason out of the visible text', () => {
   const NOW = Date.parse('2026-10-20T12:00:00Z')
   const stats = { as_of: new Date(NOW - 3600e3).toISOString(), sessions: { total: 1 }, calls: { llm: 2 }, harnesses: [], usage: { rows: [], coverage: {} } }
   for (const status of [0, 500, 503]) {
@@ -79,7 +79,7 @@ const world = (async () => {
 })()
 test.after(async () => { (await world).w.close() })
 
-test('AC-2 a failed read on traffic, a host page (list and request detail), Settings › Prices and Settings › Storage shows the token only in hidden technical details, with a retry control', async () => {
+test('a failed read on traffic, a host page (list and request detail), Settings › Prices and Settings › Storage shows the token only in hidden technical details, with a retry control', async () => {
   const { w, host, ref } = await world
   const q = (url) => new URL(url, 'http://x')
   const sites = [
@@ -111,7 +111,7 @@ test('AC-2 a failed read on traffic, a host page (list and request detail), Sett
   }
 })
 
-test('AC-4 library, capture log and the shell keep a failed read\'s reason out of the visible text', async () => {
+test('library, capture log and the shell keep a failed read\'s reason out of the visible text', async () => {
   const NOW = Date.parse('2026-10-20T12:00:00Z')
   for (const status of [0, 500, 503]) {
     for (const make of [0, 1, 2, 3]) {

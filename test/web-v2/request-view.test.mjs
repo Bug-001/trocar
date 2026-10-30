@@ -90,7 +90,7 @@ const credentialed = async () => {
   return { w, ref, mount: () => w.mount(hostPage, hash) }
 }
 
-test('B1「Show」re-reads calls {ref, reveal} once: that value appears, every other credential stays masked', async () => {
+test('「Show」re-reads calls {ref, reveal} once: that value appears, every other credential stays masked', async () => {
   const { w, ref, mount } = await credentialed()
   const s = await mount()
   assert.ok(s.html().includes('data-reveal="authorization"') && !s.html().includes(SECRET) && !s.html().includes(OTHER))
@@ -105,7 +105,7 @@ test('B1「Show」re-reads calls {ref, reveal} once: that value appears, every o
   s.inst.unmount()
 })
 
-test('B2 a failed reveal read keeps the detail and the value masked', async () => {
+test('a failed reveal read keeps the detail and the value masked', async () => {
   const { w, mount } = await credentialed()
   w.tamper((url, d) => (new URL(url, 'http://x').searchParams.has('reveal') ? { status: 500, body: {} } : d))
   try {

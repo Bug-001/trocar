@@ -1,5 +1,5 @@
 // test/collector/core/identity-presets.test.mjs — the seven harnesses' preset name lists, through the registry the tracker judges by (RFC 4.6 R1,
-// 4.8 W3 the name half; D51; plan 2026-10-14-d51-name-allowlist §3). Every measured / specified process shape in test/helpers/proc-seeds.mjs, and
+// 4.8 W3 the name half; D51). Every measured / specified process shape in test/helpers/proc-seeds.mjs, and
 // every install variant of it (test/helpers/proc-variants.mjs), is the harness its seed says — the expectation comes from the seed's own source,
 // never from the lists under test (0.1 §3 约定 7: no count pinned, no list restated here). The counter-examples name each reason of 4.6's table.
 import test from 'node:test'
@@ -109,7 +109,7 @@ const HERMES_RERUN_CMD = String.raw`"C:\Users\u\AppData\Local\hermes\tools\pytho
 const ZCODE_NET_CMD = String.raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe" --type=utility --utility-sub-type=network.mojom.NetworkService`
 const ZCODE_CMD = String.raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe" C:\Users\u\AppData\Local\Programs\ZCode\resources\glm\zcode.cjs app-server --stdio`
 
-/** What the Windows procinfo gives, with the field Task 8(v) added: `envRead: false` says "this OS never reads another process's environment", so `env: null` is the rule here and not a failure to read. */
+/** What the Windows procinfo gives, with its `envRead` field: `envRead: false` says "this OS never reads another process's environment", so `env: null` is the rule here and not a failure to read. */
 const winFacts = (pid, exe, extra = {}) => ({ os: 'win32', pid, ppid: 1, name: exe.split('\\').pop(), exe, argv: splitCommandLine(extra.cmdline === undefined ? `"${exe}"` : extra.cmdline), cmdline: `"${exe}"`, env: null, envRead: false, cwd: null, startedAt: 1700000000000 + pid, cmdlineState: 'ok', ...extra })
 const one = (name) => ALL.find((d) => d.name === name)
 

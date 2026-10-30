@@ -1,6 +1,6 @@
 // test/cli/harness-names.test.mjs — RFC 1.6 §1.6 (harness names): the CLI id is the code id (the descriptor's `name`), a few short
 // aliases are accepted on input, the output is always the code id, a wrong name is listed with the known ones (exit 2, nothing
-// touched — the exit is the dispatcher's). One table, src/off/harness-names.mjs, for the CLI and trocar-off alike.
+// touched — the exit is the dispatcher's, tested there). One table, src/off/harness-names.mjs, for the CLI and trocar-off alike.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { HARNESS_IDS, NAME_ALIASES, resolveHarnesses } from '../../src/off/harness-names.mjs'

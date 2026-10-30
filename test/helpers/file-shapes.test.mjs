@@ -1,4 +1,4 @@
-// test/helpers/file-shapes.test.mjs — the shape generator's own proof that its axis labels are true (plan 2.10, spec 0.1 G2/G4).
+// test/helpers/file-shapes.test.mjs — the shape generator's own proof that its axis labels are true (spec 0.1 G2/G4).
 // Every expectation here comes from Node's own decoders (TextDecoder fatal + ignoreBOM, Buffer) or from the encoding table
 // in spec 4.6 「文件的编码」, never from the generator's decoder: a shape labelled determinable that Node cannot round-trip,
 // or one labelled undeterminable that a strict read accepts without NUL, is a red test naming the case id and seed.

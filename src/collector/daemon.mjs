@@ -500,7 +500,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         // the proxy ingress's own answer (4.8 §5.1): a door's CONNECT arrives with the group id as the user (D47) — the redirector's lookupIngress resolves it (a flow's meta, a health probe, or null = refused)
         ...(typeof redirector.lookupIngress === 'function' ? { lookupIngress: (q) => redirector.lookupIngress(q) } : {}),
       },
-      // FlowExtras (plan 3c §2): the harness's WebSocket terminators and this process's own proxies. A throw: the
+      // FlowExtras (4.6 §引擎 3): the harness's WebSocket terminators and this process's own proxies. A throw: the
       // connection goes on without them, the engine records it, and flows/ gets it under its code (4.6 §记录)
       describe: (meta) => {
         try { return tracker.extrasFor(meta && meta.pid) } catch (e) {

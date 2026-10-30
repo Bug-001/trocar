@@ -131,12 +131,9 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const kernelReason = (r) => (r.actual === 'unknown' ? `the daemon could not read the kernel state: ${r.error || 'it gave no reason'}${r.error_code && !String(r.error || '').includes(r.error_code) ? ` (${r.error_code})` : ''}` : `the daemon's reply does not say whether the kernel has this instance's link (actual: ${JSON.stringify(r.actual ?? null)})`)
   const attached = reply ? (reply.actual === 'on' ? true : reply.actual === 'off' ? false : null) : null
   f.link = reply ? { attached, helper: reply.helper && (reply.helper.down || reply.helper.ok === false) ? 'missing' : 'ok', helper_reason: reply.helper && reply.helper.down ? String(reply.helper.down) : reply.helper && reply.helper.ok === false ? `helper protocol ${reply.helper.proto} (this daemon expects ${reply.helper.expected_proto})` : null, reason: attached === null ? kernelReason(reply) : null } : { attached: null, helper: 'ok', helper_reason: null, reason: null }
-  // the processes: the daemon's rows when it answered, else the process table matched with the name list in effect now (below)
-  // The table is read whatever else is missing: the processes the user started themselves (`trocar serve`, a foreground `capture`) are found by their command line alone. Only the
-  // matching of a process to a harness needs the name list; with no daemon and no descriptors to build it from, that is what cannot be said (audit rule-b 6, R11)
   // the processes: the daemon's rows when it answered, else the process table read above, matched with the name list in effect now
   // The table is read whatever else is missing: the processes the user started themselves (`trocar serve`, a foreground `capture`) are found by their command line alone. Only the
-  // matching of a process to a harness needs the name list; with no daemon and no descriptors to build it from, that is what cannot be said (audit rule-b 6, R11)
+  // matching of a process to a harness needs the name list; with no daemon and no descriptors to build it from, that is what cannot be said
   if (tableError) { rethrowSandbox(tableError); tableError = errText(tableError) }
   f.userProcs = table ? { list: userProcessesOf(table) } : { error: tableError }
   const list = readAgentList({ home, fs }) // the name list (D51③⑤, 1.6 §9.7): read here, daemon or not

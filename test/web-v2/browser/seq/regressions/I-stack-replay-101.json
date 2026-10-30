@@ -14,6 +14,6 @@
   "screenshot": "test/web-v2/browser/shots/seq/I-stack-replay-101.png",
   "status": "fixed",
   "detail": "a session never drawn whose `session` read answers 500 shows the server's whole reason (a V8 native stack, FATAL ERROR) in the content area's failure line instead of under Technical details",
-  "owner": "desk (lane D)",
+  "owner": "desk",
   "suspect": "src/web/v2/replay/replay.mjs:300"
 }

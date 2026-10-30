@@ -1,4 +1,4 @@
-// test/collector/core/ingress-pac.test.mjs — CM19 / CM33 at the ingress (4.11 P10, plan §E.6 ruling 2): an origin-form GET is served only on an
+// test/collector/core/ingress-pac.test.mjs — CM19 / CM33 at the ingress (4.11 P10): an origin-form GET is served only on an
 // auth:false door, through the injected servePac; on a door that takes credentials (or with no server) it is closed and recorded ingress-unknown, and
 // no lookup is asked. The CONNECT's X-Trocar-Upstream reaches the lookup (4.11 P7 step 1) and nothing else.
 import test from 'node:test'

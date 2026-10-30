@@ -140,7 +140,7 @@ function plainReader(file, fs) {
 // A sealed segment knows where every record is: its own index names the line number of each frame.
 // A cold fold asks for a long session's records in chunks, one synchronous stretch at a time. A sealed file's reader (its index
 // tables and line map) is kept across stretches by the file's identity — reopening it re-read and re-hashed the index tail every
-// slice (579 MB on the user's live session, measured 2026-10-24). Its fd is not: the first read of a stretch schedules one
+// slice (579 MB over a long real captured session, measured 2026-10-24). Its fd is not: the first read of a stretch schedules one
 // setImmediate that closes every kept reader's fd, so no fd outlives the stretch (a sealed file may be replaced or deleted;
 // Windows refuses that while an fd is open). A reader reopens its fd at its next frame read and checks the identity again.
 // The decoded frames and the rebuilt lines outlive the stretch (3.5 §冷路径, D71 ②): the fold runs in slices, and a slice that ends
@@ -150,8 +150,8 @@ function plainReader(file, fs) {
 const SHARED_FRAME_BYTES = 48 << 20;
 const SHARED_LINE_BYTES = 16 << 20;
 const SHARED_FILES = 32;               // kept readers; past it the least recently used one is dropped
-// a kept reader's line maps (its index's record table and the line → record map): 15.75 MB for 32 readers over the user's
-// sealed segments (a heap diagnosis, 2026-10-22)
+// a kept reader's line maps (its index's record table and the line → record map): 15.75 MB for 32 readers over large real
+// sealed segments (measured 2026-10-22)
 const READER_HEAP = 512 << 10;
 /** What the kept sealed readers hold at most in the V8 heap: their tables and line maps, a fixed term of the heap a read
  *  reserves before it reads (src/query/named/session.mjs working()). The frames and lines are Buffers, external memory outside

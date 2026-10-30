@@ -1,5 +1,5 @@
 // test/off/door-seen.test.mjs — the door's durable record (4.11 P12 「门的持久记录」): a missing file is no row, an unreadable one is "not known"
-// (rows null, A9), the write is whole-file, 0600 and bounded to the newest rows, and a row is evidence only while its group's door value is unchanged.
+// (rows null), the write is whole-file, 0600 and bounded to the newest rows, and a row is evidence only while its group's door value is unchanged.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -10,7 +10,7 @@ import { readDoorSeen, writeDoorSeen, validRow, DOOR_SEEN_FILE, DOOR_SEEN_MAX } 
 const T = Date.parse('2026-10-22T10:00:00Z'), iso = (ms) => new Date(ms).toISOString()
 const row = (i, extra = {}) => ({ harness: 'agentx', group: 'agentx:cli', pid: 100 + i, start: T - 1000, kind: 'accept', at: iso(T + i * 1000), n: 1, decrypt: true, ...extra })
 
-test('A9 · no file → no row; a file that is not JSON, has no rows list, or cannot be read → rows null with a reason', () => {
+test('no file → no row; a file that is not JSON, has no rows list, or cannot be read → rows null with a reason', () => {
   const dir = tmpDir('door-seen-read')
   assert.deepEqual(readDoorSeen({ dir }), { rows: [], error: null })
   for (const body of ['{"version":1,"rows":[', '{"version":1}', 'null']) {

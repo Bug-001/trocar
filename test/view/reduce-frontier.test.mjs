@@ -3,7 +3,7 @@
 // rows for those members and m; and reducing the same store twice gives the same bytes.
 //   (b) reduce(store, members, {mark: m}) ≡ reduce over a store holding only the members ≤ m, for every m; `pending` iff members above m
 //   (c) two reductions of one store, and one of a store opened afresh over the same file (nothing cached), are byte-identical
-//   (d) a member that did not extract is in the document with its reason (§3.9, D38), not shown as a good call
+//   (d) a member that did not extract is in the document with its reason (4.3 §3, D38), not shown as a good call
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

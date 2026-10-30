@@ -391,7 +391,7 @@ test('D38: every line uninstall writes is in the closed sets, one run has one `r
   assert.deepEqual([last.event, last.kind, last.outcome], ['uninstall-note', 'result', 'uninstalled'])
 })
 
-test('uninstall: the arguments — a harness name, an unknown option, root and a platform without the new collector (freebsd now) hands over to the hook (R4, R7, 1.6 §4); win32 and darwin (the flips, plan 9(b) / 4.9 §4) run the NEW uninstall instead', async () => {
+test('uninstall: the arguments — a harness name, an unknown option, root and a platform without the new collector (freebsd now) hands over to the hook (R4, R7, 1.6 §4); win32 and darwin (the flips, 4.8 / 4.9 §4) run the NEW uninstall instead', async () => {
   const s = await installedHome({ names: ['claude-code'] }); const snap = snapshot(s.home)
   const name = await cli(s, ['claude-code'])
   assert.deepEqual([name.exit, snapshot(s.home)], [2, snap])
@@ -454,7 +454,7 @@ test('semantics 2: an install manifest of the wrong shape is treated as unreadab
   assert.deepEqual(t.userFiles(), snap, 'and wrote nothing')
 })
 
-// audit rule-b 8 (4.5 零残留): `~/.trocar/netenv.json` — what status / doctor / on last read of the VPN software, for the board — is trocar's own file and was never removed (mac and Linux);
+// (4.5 零残留): `~/.trocar/netenv.json` — what status / doctor / on last read of the VPN software, for the board — is trocar's own file and was never removed (mac and Linux);
 // with no daemon the receipt said 「守护进程(pid null)已停掉」 about a daemon that was not there.
 test('uninstall removes ~/.trocar/netenv.json with the rest of trocar\'s own files — the plan lists it, nothing but the kept captures is left in ~/.trocar — and with no daemon the receipt does not say one was stopped', async () => {
   const s = await installedHome({ names: ['claude-code'] }); keep(s)

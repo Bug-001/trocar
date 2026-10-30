@@ -15,8 +15,8 @@
 // turn of the session.) A wrong pid must never happen (4.8 W4): it would make the engine decrypt a process that does not trust trocar's CA and
 // break it, so no row (`no-row`), several pids on the row's end that persist across a few re-reads (a socket a child really inherited: `shared`),
 // or a table that cannot be read (`unreadable`) all give null, and the connection is judged untracked and spliced. Several holders on ONE read
-// are mostly a child between fork and exec (a CLOEXEC copy of its parent's socket, gone within ms; a macOS machine 2026-10-21: Claude Code's start-up
-// burst raced the children it spawns), so they are read again, bounded, and the one holder left is the answer. A table that cannot be read — the helper failed, or hung past `timeoutMs` and was killed — gives
+// are mostly a child between fork and exec (a CLOEXEC copy of its parent's socket, gone within ms; e.g. Claude Code's start-up
+// burst races the children it spawns), so they are read again, bounded, and the one holder left is the answer. A table that cannot be read — the helper failed, or hung past `timeoutMs` and was killed — gives
 // null and ONE `socktable-unavailable` record (4.8 §12) to `onFailure`, which the recorder folds. Imports nothing of trocar but native.mjs.
 import { NATIVE, nativePath } from './native.mjs'
 

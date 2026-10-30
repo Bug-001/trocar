@@ -129,7 +129,7 @@ test('R12: six real processes race for the real file: exactly one wins (O_EXCL),
   assert.equal(results.filter((r) => /^held:(\d+|null)$/.test(r)).length, 5, results.join(' '))
 })
 
-// audit rule-b 3: on macOS there is no /proc, so a lock recorded no start time and a stale lock whose pid is now ANOTHER live process counted as live: a lock dated 2026-07-01
+// on macOS there is no /proc, so a lock recorded no start time and a stale lock whose pid is now ANOTHER live process counted as live: a lock dated 2026-07-01
 // naming pid 1 made the real `trocar off` wait 10 s and exit 1 — the way out, blocked (R12: "陈旧锁按 pid 加启动时间判").
 test('R12: on macOS the lock carries the start time `ps` gives, and a lock whose pid is another process now (its start time differs) is taken over — a lock of the same process is not', async () => {
   const exec = (start) => (file, args) => (args[0] === '-o' ? { status: 0, stdout: `${start}\n`, stderr: '' } : { status: 1, stdout: '', stderr: '' })

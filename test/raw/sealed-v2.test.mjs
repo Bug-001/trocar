@@ -56,7 +56,7 @@ function generate(seed, n) {
   return recs;
 }
 
-// AC1 (4.2 验收: 写→读逐字节往返).
+// 4.2 验收: 写→读逐字节往返.
 test('generated shapes across interleaved groups read back byte-identical, with the record table they were added with', () => {
   const dir = tmpDir('trocar-v2-');
   for (let seed = 1; seed <= 10; seed++) {
@@ -106,7 +106,7 @@ const varints = (buf) => { const out = []; for (let p = 0; p < buf.length;) { le
 const leb = (xs) => { const o = []; for (let x of xs) { while (x >= 128) { o.push((x % 128) | 128); x = Math.floor(x / 128); } o.push(x); } return Buffer.from(o); };
 const zz = (x) => (x >= 0 ? 2 * x : -2 * x - 1), unzz = (z) => (z % 2 ? -(z + 1) / 2 : z / 2);
 
-// AC3 v2 (4.2 「读」: sha256 before handout).
+// v2 (4.2 「读」: sha256 before handout).
 test('an index that swaps two records\' splice lists fails their sha256 check; the rest still read', () => {
   const dir = tmpDir('trocar-v2-');
   const { file, recs } = small(dir);
@@ -161,7 +161,7 @@ test('a splice range past the end of its chunk frame refuses to read, never yiel
   } finally { sf.close(); }
 });
 
-// AC4: older readers refuse v2 — by the version they check, and by record kind 2 if they skip that check.
+// Older readers refuse v2 — by the version they check, and by record kind 2 if they skip that check.
 test('a v2 file is refused by a v1-only reader and an unknown version is refused by name', () => {
   const dir = tmpDir('trocar-v2-');
   const { file } = small(dir);
