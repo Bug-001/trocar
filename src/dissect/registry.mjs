@@ -49,13 +49,13 @@ export function wireFormatOf(rec) {
 // Board dissectors for the flat-lane wires (D25: dissector = adapter; the shared assembler only calls
 // them). The Anthropic wire is assembled by the multi-lane analyzer (src/view/analyze.mjs), so it has no
 // row here. Adding a wire = one dissector object + one row. The WebSocket row's object also carries the
-// cross-record hooks (prepare / contextOf / admits / laneOf / failed, src/dissect/openai-ws.mjs).
+// cross-record hooks (prepare → a planner with context(rec) / admits / laneOf / failed, src/dissect/openai-ws.mjs).
 const BOARD = { 'openai-responses': RESPONSES, 'openai-chat': CHAT, 'openai-responses-ws': RESPONSES_WS };
 export function boardDissectorFor(rec) {
   return BOARD[wireFormatOf(rec)] || null;
 }
 // The cross-record context hooks of the Anthropic wire (Message Threads, src/dissect/cc-threads.mjs), which the
-// multi-lane assembler calls the way the flat-lane one calls a board dissector's prepare / contextOf.
+// multi-lane assembler calls the way the flat-lane one calls a board dissector's prepare.
 export const MULTI_LANE_CONTEXT = CC_THREADS;
 
 // The lane of a call on a flat-lane wire (the OpenAI wires), ONE rule for the board and the ETL: the dissector's

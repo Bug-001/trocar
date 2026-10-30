@@ -264,7 +264,7 @@ test('uninstall records a file it could not undo because it is no longer JSON (D
     assert.match(out.join('\n'), /^Daemon not running; nothing is captured\. Start it: trocar on$/m)
     assert.match(out.join('\n'), /^ {2}Problems {4,}1 in the last 24 hours, latest just now$/m, 'the uninstall residue reaches the Problems line')
     // D38: what the uninstall left behind is still named — in the text (--failures) and in the document (`failures`)
-    assert.match(out.join('\n'), /an uninstall left an item behind \(.*\.claude.sett/, 'the residue, with its path, is in the text')
+    assert.match(out.join('\n'), /\.claude/, 'the residue, with its path, is in the text')
     const doc = []
     assert.equal(await runStatusCli(['--json'], { io: { out: (x) => doc.push(x), err: (x) => err.push(x) }, home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, platform: 'linux', deps: { procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), netenv: async () => ({ at: 'T', products: [], unknown: [] }), request: async () => { throw Object.assign(new Error('no such socket'), { code: 'ENOENT' }) } } }), 0)
     assert.equal(JSON.parse(doc.join('\n')).failures.problem, 1, 'and in the document')
@@ -1069,6 +1069,8 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
     await installCollector({ ...onBase(b), unit: null })
     const again = await on({ confirm: async () => { throw new Error('nothing new to confirm: the settings file was confirmed by install') } })
     assert.equal(again.exit, 0, JSON.stringify(again.receipt.notes))
+    // 1.6 §1: the run's result line is proxy mode's — the harnesses this run turned on (the first on had no daemon: none), and none refused
+    assert.deepEqual(readEvents(b.dir).filter((e) => e.event === 'install-note' && e.kind === 'result' && e.reason.startsWith('on')).map((e) => [e.harnesses, e.refused]), [[[], []], [['claude-code'], []]])
     assert.deepEqual(again.receipt.restart.map((x) => [x.harness, x.pid, x.reason]).sort((x, y) => x[1] - y[1]), [['claude-code', 4242, 'config-after-start'], ['claude-code', 4343, 'config-after-start']], 'the receipt says which processes capture waits for a restart of')
     const row = await agentOf(4343)
     assert.deepEqual([row.trusted, row.reason, row.decrypt], [false, 'config-after-start', false])

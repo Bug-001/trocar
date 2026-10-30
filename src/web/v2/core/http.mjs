@@ -27,10 +27,13 @@ function qs(params) {
   return s ? '?' + s : ''
 }
 
-// body text → { empty:true } | { json } (which may be a literal null) | { bad:true } (not JSON)
+// body text → { empty:true } | { json } (which may be a literal null) | { bad:true } (a complete body that is not JSON)
+// | { cut:true } (the body never fully arrived: the connection broke after the head — a transient failure, 1.5 K-29)
+export const CUT_OFF = 'the answer did not arrive in full'
+const CUT = Object.freeze({ ok: false, status: 0, error: CUT_OFF })
 async function readBody(r) {
   let t
-  try { t = await r.text() } catch { return { bad: true } }
+  try { t = await r.text() } catch { return { cut: true } }
   if (t.trim() === '') return { empty: true }
   try { return { json: JSON.parse(t) } } catch { return { bad: true } }
 }
@@ -52,6 +55,7 @@ export async function get(path, params) {
   try { r = await fetch(url, { cache: 'no-store', headers }) } catch (e) { return { ok: false, status: 0, error: String((e && e.message) || e) } }
   if (r.status === 304) return was ? { ok: true, data: was.data } : { ok: false, status: 304, error: 'HTTP 304' }
   const b = await readBody(r)
+  if (b.cut) return CUT
   const body = 'json' in b ? b.json : null
   latch(r.status)
   if (!r.ok) return { ok: false, status: r.status, error: (body && body.error) || 'HTTP ' + r.status }
@@ -73,6 +77,7 @@ export async function post(path, body) {
   let r
   try { r = await fetch(path, { method: 'POST', cache: 'no-store', headers, body: JSON.stringify(body) }) } catch (e) { return { ok: false, status: 0, data: null, error: String((e && e.message) || e) } }
   const b = await readBody(r)
+  if (b.cut) return { ...CUT, data: null }
   const data = 'json' in b ? b.json : null
   latch(r.status)
   const error = r.ok ? (b.bad ? 'not JSON' : null) : (data && data.error) || 'HTTP ' + r.status

@@ -92,22 +92,22 @@ export async function gatherWin32Facts(ctx, deps = {}) {
     const hostGroups = harnesses.map((d) => ({ harness: d.name, forms: ((d.proxyMode && d.proxyMode.forms) || []).filter((f) => (f.os || []).includes('win32')) }))
     const whose = whoseWithHosts(D.identify || createRegistry(harnesses, { agentList: readAgentList({ home, fs }).entries }).match, hostGroups)
     const harnessOf = new Map((psRows || []).map((r) => [r.pid, (whose({ os: 'win32', exe: r.exe ?? null, argv: r.cmdline ? splitCommandLine(r.cmdline) : null, cmdlineState: r.cmdlineState }) || {}).agent]))
-    // the processes of each harness, with the daemon's word on them where it answered
+    // the processes of each harness with status's verdict on each (its rows: the daemon's word on a live process life, else the door's rule —
+    // 4.11 P11 status), carried by pid and never judged again here; the daemon's own row only where status took it
     const reply = status.daemon && status.daemon.reply
     const agentsByPid = new Map((reply && Array.isArray(reply.agents) ? reply.agents : []).map((a) => [a.pid, a]))
-    const negatives = new Set((reply && Array.isArray(reply.negatives) ? reply.negatives : []).map((n) => n.pid))
-    const procFacts = (r) => {
-      const a = agentsByPid.get(r.pid) || null
+    const procFacts = (rowsOf) => (r) => {
+      const s = rowsOf.get(r.pid) || null, a = s && s.trusted != null ? agentsByPid.get(r.pid) || null : null
       const { elevated, inferred } = elevationOf(r)
       return {
         pid: r.pid, name: processName(r), exe: r.exe ?? null, version: versionOf(r.exe), startedAt: iso(r.startedAt ?? null),
         watched: a ? (a.decrypt === true ? 'decrypt' : a.off === true ? 'absent' : 'no-decrypt') : 'unknown',
-        trusted: a ? a.trusted === true : null, reason: a ? a.reason ?? null : null, negative: negatives.has(r.pid),
+        trusted: s ? s.trusted ?? null : null, reason: s ? s.reason ?? null : null, negative: !!(s && s.negative === true), start: s ? s.start : undefined,
         elevated, ...(elevated === true && inferred ? { elevatedInferred: true } : {}),
       }
     }
     const procs = {}
-    for (const h of status.harnesses || []) procs[h.id] = (psRows || []).filter((r) => harnessOf.get(r.pid) === h.id).map(procFacts)
+    for (const h of status.harnesses || []) procs[h.id] = (psRows || []).filter((r) => harnessOf.get(r.pid) === h.id).map(procFacts(new Map((h.procs || []).map((x) => [x.pid, x]))))
     const listeners = (listenRows || []).map((r) => ({ addr: r.localAddr, port: r.localPort, pid: r.pid, exe: (psByPid.get(r.pid) || {}).exe ?? null }))
     let chainSp = { ok: false }
     try { chainSp = sp && sp.ok ? chainSystemProxy(sp) : { ok: false } } catch { chainSp = { ok: false } }

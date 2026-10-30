@@ -6,10 +6,9 @@ import { detectDrift, isWrittenPlace } from './adopt.mjs'
 import { hopKey, firstHopAfterTrocar, firstHopOff } from './topology-text.mjs'
 import { parseProxyUrl } from './redact.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
-import { TRUST_REASONS, ROUTE_TRUST_REASONS } from '../health/codes.mjs'
+import { TRUST_REASONS, ROUTE_TRUST_REASONS, RESTART_REASONS } from '../health/codes.mjs'
 import { FINDINGS_WIN32 } from './findings-win32.mjs'
 
-const RESTART_REASONS = ['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim'] // what restarting the agent fixes (1.6 §1.1)
 const BY_CLASS = { problem: 0, expected: 1, note: 2 }
 const nodeOf = (t, id) => t.nodes.find((n) => n.id === id)
 

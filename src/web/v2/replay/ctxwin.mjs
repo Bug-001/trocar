@@ -1,8 +1,9 @@
 // replay/ctxwin.mjs — the context window (1.4 中央看板 · 2.3 忠实上下文回放): exactly what the model received this
 // call, in assembly order tools → system → messages. The middle column holds the step bar (2.2, above this element) and
-// #ctxwin; #ctxwin's children come ONLY from 1.4's whitelist ①–⑧, in order:
+// #ctxwin; #ctxwin's children come ONLY from 1.4's whitelist ①–⑨, in order:
 //   ① 调用保真行  ② 窗口行  ③ the three sections (with the 变化线 ④ drawn before the first changed block)  ⑤ 未下发态
-//   ⑥ 解析不出态  ⑦ 没有请求态  ⑧ 载入中 — ⑤–⑧ stand in for ③④.
+//   ⑥ 解析不出态  ⑦ 没有请求态  ⑧ 载入中 — ⑤–⑧ stand in for ③④⑨  ⑨ this step's reply (2.3 §这一步的回复), set apart from the
+//   request: not a section, no block card, not in any count — the model's answer, not what it received.
 // No window head (step no / model / time / size live in the step bar), no cache states (the 缓存 button owns them), no
 // raw-JSON twin (the window IS the truth, AC-1).   renderContextWindow(el, s)  repaint + land   wireCtxWin(el, s)
 // listeners.   ctxWindowHtml(s)  the pure string the whitelist tests assert on.
@@ -13,6 +14,7 @@ import { messageTurns, blocksOf, keyDiff, cacheRefOf, hasChangeLine } from './an
 import { contentRefOf, contentRefKOf } from './stepbar.mjs'
 import { setFold, saveFold, turnAnchorKey, turnIsOpen } from './fold.mjs'
 import { ctxBlockHtml, fillBody, faithOf, faithNow, ffBadgeHtml, tagWord } from './blocks.mjs'
+import { replyHtml } from './rawpanel.mjs' // one reply renderer, two hosts (2.3 §这一步的回复 · 2.6 §A)
 
 export { blockBodyHtml } from './blocks.mjs'
 
@@ -164,7 +166,7 @@ export function ctxWindowHtml(s) {
         `<div class="cwturnbody">${t.items.map((i) => mark(i) + row(flat[i], i)).join('')}</div></div>`
     })
   }
-  return html
+  return html + `<div class="cwreply">${replyHtml(call)}</div>` // ⑨
 }
 
 // the 缓存对比步 as a 1-based step number: S12's cacheBreak.refGi when the server names it, else the front-end rule

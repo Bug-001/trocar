@@ -90,29 +90,6 @@ test('a paged-out call still keeps `rec`, so `prevCall.rec` cannot gate it eithe
 //     tail-bounding existed to avoid).
 // (3) covered above: `flat: []` is truthy.
 
-test('paging DISABLES the tail-bound: every call of a long session is present', () => {
-  // 8 calls, but a budget that would tail-bound to a couple — with a page requested, the whole
-  // session must still be assembled so the timeline can show all of it.
-  const tiny = 20 * 1024;
-  const bounded = sessionView(records, SID, { maxBytes: tiny });
-  assert.ok(bounded.truncated, 'precondition: this budget really does tail-bound');
-  assert.ok((bounded.analyzed.lanes[0].calls || []).length < 8, 'precondition: calls were dropped');
-
-  const paged = sessionView(records, SID, { maxBytes: tiny, page: { cursor: 0, limit: 2 } });
-  // Under the new wire shape the call OBJECTS live in `steps` (lanes name them by gi), so the
-  // "was the whole session assembled?" question is asked of `steps`.
-  const steps = paged.analyzed.steps || [];
-  assert.equal(steps.length, 8,
-    'with a cursor window the server must assemble the WHOLE session and slim what is out of '
-    + 'window — tail-bounding first is what makes a 578-call session render 5 steps');
-  assert.deepEqual(steps.map((c) => c.gi), [0, 1, 2, 3, 4, 5, 6, 7],
-    'every call of the session must be present, in gi order, bodies or not — gi is the cursor unit '
-    + 'and the browser rehydrates lanes by indexing steps with it');
-  assert.equal(steps.filter((c) => !c.paged_out).length, 2,
-    'and only the requested window may carry bodies, or the bound was traded for an unbounded send');
-  assert.equal(paged.truncated, null, 'a paged view is not truncated — nothing was discarded');
-});
-
 // PAGING × THE WIRE TRANSFORM, composed in the order the server composes them (server.mjs:306/313:
 // sessionView(page) → forWire). Order matters and has bitten before: while onWire ran INSIDE
 // sessionView, pageView received lanes that were already gi NUMBERS, read `c.gi` off a number

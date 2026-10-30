@@ -206,7 +206,7 @@ test('a decrypted row counts envelopes the store did not write; a non-WebSocket 
 
 // Review finding (stage A): with the first-byte valve gone, a client that gives up (FIN) while the engine
 // waits on a silent upstream's TLS handshake must still end the flow — a paused socket never reports 'end'.
-test('a client that gives up while the upstream never answers our TLS handshake ends the flow: one error row, nothing hangs', async () => {
+test('a client that gives up while the upstream never answers our TLS handshake ends the flow: one row, nothing hangs', async () => {
   const hello = await new Promise((resolve) => {
     const srv = net.createServer((s) => s.once('data', (d) => { resolve(d); s.destroy(); srv.close() }))
     srv.listen(0, '127.0.0.1', () => tls.connect({ port: srv.address().port, host: '127.0.0.1', servername: 'upstream.test', ALPNProtocols: ['http/1.1'] }).on('error', () => {}))
@@ -220,8 +220,31 @@ test('a client that gives up while the upstream never answers our TLS handshake 
     for (let i = 0; h.flows.length === 0; i++) { if (i > 300) throw new Error('the flow never finished: the client FIN went unseen'); await sleep(10) }
   } finally { c.destroy() }
   await h.close()
-  assert.deepEqual([h.flows.length, h.flows[0].decision, h.flows[0].not_captured, h.flows[0].error.type, h.flows[0].error.side], [1, 'error', 'error', 'closed_before_decision', 'client'])
+  // the decision was made (decrypt) and the engine was waiting on the upstream's TLS handshake: the row keeps the decision and says who left during which wait
+  const [r] = h.flows
+  assert.deepEqual([h.flows.length, r.decision, r.not_captured, r.error.type, r.error.side, r.error.wait?.phase], [1, 'decrypt', 'error', 'closed_before_handshake', 'client', 'tls'])
+  assert.ok(Number.isInteger(r.error.wait.ms) && r.error.wait.ms >= 0 && r.error.wait.ms <= r.duration_ms, JSON.stringify(r))
 })
+
+// RFC 4.6 §记录 连接行怎么落码: a connection that ends before forwarding says which side went and what the engine was
+// waiting on. Field case: the user's proxy FINed ~3 s after the engine's ClientHello and the row read as an agent reset (Node's own
+// ECONNRESET, no syscall). Only a reset the OS reported is ECONNRESET.
+for (const [how, end, type] of [['closes (FIN)', (s) => s.end(), 'closed_before_handshake'], ['resets (RST)', (s) => s.resetAndDestroy(), 'ECONNRESET']]) {
+  test(`an upstream that ${how} after reading the engine's ClientHello: decision decrypt kept, the upstream named, the TLS wait measured`, async () => {
+    const DELAY = 150
+    const h = await rig(net.createServer((s) => { s.on('error', () => {}); s.once('data', () => setTimeout(() => end(s), DELAY)) }))
+    const agent = await new Promise((resolve) => {
+      const c = tls.connect({ port: h.port, host: '127.0.0.1', servername: 'upstream.test', ca: trocarCa.certPem, ALPNProtocols: ['http/1.1'] }, () => resolve('handshake'))
+      c.on('error', () => resolve('closed')); c.on('close', () => resolve('closed'))
+    })
+    await h.close()
+    assert.equal(agent, 'closed', 'the agent gets the upstream\'s fate')
+    const [r] = h.flows
+    assert.deepEqual([h.flows.length, r.decision, r.not_captured, r.error.type, r.error.side, r.error.wait?.phase], [1, 'decrypt', 'error', type, 'upstream', 'tls'])
+    assert.ok(r.error.wait.ms >= DELAY - 10 && r.error.wait.ms <= r.duration_ms, JSON.stringify(r))
+    assertCriterion(h.flows)
+  })
+}
 
 test('a decrypted row whose response could not be framed says framer_error (the rest is not recorded) (D38 review A)', async () => {
   const bad = 'HTTP/1.1 200 OK\r\nContent-Length: abc\r\n\r\nxyz'

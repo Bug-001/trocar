@@ -358,6 +358,8 @@
 /* the raw panel's own rows (2.6 §A) */
 .rpsub{color:var(--ink-3);font-size:var(--fs-cap);}
 .rpreply{margin-top:4px;}
+/* 2.3 §这一步的回复: the window's closing segment — the reply, set apart from the request blocks above it */
+.cwreply{margin-top:12px;padding:8px 10px;border-top:1px dashed var(--border);}
 .rpbody .rawpre{color:var(--ink-2);max-height:280px;}
 .rptech{font-family:var(--mono);font-size:9px;color:var(--dimmer);margin-top:2px;}
 .rpobs{color:var(--amber);font-size:var(--fs-cap);}

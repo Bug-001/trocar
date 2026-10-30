@@ -59,6 +59,9 @@ export const TRUST_REASONS = Object.freeze([
   'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override',
 ])
 
+/** The reasons a restart of the agent fixes (「重启后才会被采集」, 1.6 §1.1): `on`'s restart list, `status`'s, and doctor's expected class read this one list. */
+export const RESTART_REASONS = Object.freeze(['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim'])
+
 /** Codes trocar names itself, by part (the grouping is documentation; the set is flat). */
 export const CODES_BY_PART = Object.freeze({
   daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'start-failed', 'control-endpoint-held', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error',
@@ -75,7 +78,7 @@ export const CODES_BY_PART = Object.freeze({
   note: ['ok'], // the code of an agent-trusted line
   helper: ['helper-error', 'heartbeat-failed', 'heartbeat-gap', 'loader-down', 'loader-timeout'],
   engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response', 'prior-proxy-unknown',
-    'trust-rejected', 'pac-peer-refused', 'upstream-header-ignored', 'holders-unreadable'], // the last two (4.11 P7 · P12): X-Trocar-Upstream from a form whose hook does not send it (ignored, its value never recorded); the holder poll could not read the process table (the kept doors stay) // pac-peer-refused: the PAC door (no credentials) refused a peer not of this user (4.11 P10) // a decrypted connection whose client refused trocar's leaf: level 'critical', one per (pid, host) (D51④)
+    'trust-rejected', 'pac-peer-refused', 'pac-owner-unread', 'upstream-header-ignored', 'holders-unreadable'], // the last two (4.11 P7 · P12): X-Trocar-Upstream from a form whose hook does not send it (ignored, its value never recorded); the holder poll could not read the process table (the kept doors stay) // pac-peer-refused: the PAC door (no credentials) refused a peer not of this user (4.11 P10) // a decrypted connection whose client refused trocar's leaf: level 'critical', one per (pid, host) (D51④)
   ws: ['write-failed', 'decode-failed', 'broken', 'recorder-error', 'pattern-invalid'],
   // retention.json cannot be read / parsed / holds a cell that is neither full nor log (the call is kept in full), or the
   // classifier threw; a traffic pattern that does not compile is `pattern-invalid` (above), also under where 'retention'; a hand edit whose line in
@@ -163,18 +166,29 @@ export const isCode = (c) => sets.code.has(c) || ERRNO.test(String(c))
 export const isEvent = (e) => sets.event.has(e) // the sets checkRecord() judges by, for the static scans (test/health/codes.test.mjs): one rule, not two
 export const isWhere = (w) => sets.where.has(w)
 
-/** 'failure' | 'expected' | null — the class of a connection row's not_captured. */
-export function notCapturedClass(nc) {
+/** The `reason`s that make an `untracked` / `untrusted` row expected: the connection is forwarded by design, not lost (4.6 §记录「连接行」;
+ *  4.6 §连接行怎么落码 and 4.8 §5.2 for the door's untracked reasons, 1.6 附录 for `not-verified`). Every other reason, and none, stays a failure. */
+export const NOT_CAPTURED_BY_DESIGN = Object.freeze({
+  untracked: Object.freeze(['not-an-agent', 'agent-helper', 'harness-off', 'group-off', 'outside-host-set', 'other-user']),
+  untrusted: Object.freeze(['not-verified', 'outside-host-set']),
+})
+const byDesign = Object.fromEntries(Object.entries(NOT_CAPTURED_BY_DESIGN).map(([k, v]) => [k, new Set(v)]))
+
+/** 'failure' | 'expected' | null — the class of a connection row's not_captured; for `untracked` / `untrusted` its `reason` decides. */
+export function notCapturedClass(nc, reason = null) {
   if (nc == null) return null
+  if (byDesign[nc] && byDesign[nc].has(reason)) return 'expected'
   return sets.ncFail.has(nc) ? 'failure' : sets.nc.has(nc) ? 'expected' : null
 }
+/** The key a row's expected count is kept under: the reason when the reason decided the class, else the not_captured code. */
+export const expectedKey = (r) => (byDesign[r.not_captured] && byDesign[r.not_captured].has(r.reason) ? r.reason : r.not_captured)
 
 /** A record that turns the indicator ⚠: a failure event, or a connection row the capture failed on. A row whose
  *  leaf the client refused says so in `reason` too (until every writer also sets not_captured). */
 export function isFailure(r) {
   if (!r || typeof r !== 'object') return false
   if (r.event != null) return sets.fail.has(r.event)
-  return notCapturedClass(r.not_captured) === 'failure' || r.reason === 'client-rejected-leaf'
+  return notCapturedClass(r.not_captured, r.reason) === 'failure' || r.reason === 'client-rejected-leaf'
 }
 
 /** Problems with one record against the closed sets ([] = fine). Tests run it over every line a writer produced. */

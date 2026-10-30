@@ -18,6 +18,7 @@
 // a driver-mode fact (Linux), and the door's per-process answer is the daemon's.
 // Imports no harness: the descriptors arrive in `ctx.harnesses` (their `proxy.env` names the keys of a process's environment that count) and their data in `settings` and in `status`.
 import { execTool } from '../../../off/exec.mjs'
+import { psEnv } from '../../../off/proc.mjs'
 import { readSystemProxy, chainSystemProxy } from './upstream.mjs'
 import { parseSockTable } from './socktable.mjs'
 import { NATIVE, nativePath } from './native.mjs'
@@ -59,7 +60,7 @@ export async function darwinNetFacts(ctx, deps = {}) {
   const euidOf = (p, agent) => {
     if (p) return p.uid != null ? p.uid : null // the table's row is the answer (darwin's ps table writes it); a row without one says not-known
     if (!agent) return null // nobody named the process: not known
-    if (!uidAsks.has(agent.pid)) { const r = run('ps', ['-o', 'uid=', '-p', String(agent.pid)]); uidAsks.set(agent.pid, r.code === 0 && /^\d+$/.test(r.out) ? Number(r.out) : null) }
+    if (!uidAsks.has(agent.pid)) { const r = execTool('ps', ['-o', 'uid=', '-p', String(agent.pid)], { run: exec, env: psEnv(env) }); uidAsks.set(agent.pid, r.code === 0 && /^\d+$/.test(r.out) ? Number(r.out) : null) }
     return uidAsks.get(agent.pid)
   }
   const procs = {}
@@ -74,6 +75,7 @@ export async function darwinNetFacts(ctx, deps = {}) {
         pid: row.pid, name: processName(p && p.argv, exe, h.id), exe, version: versionOf(exe), startedAt,
         watched: !rows ? 'unknown' : agent ? (agent.off === true ? 'absent' : agent.decrypt === true ? 'decrypt' : 'no-decrypt') : 'absent',
         trusted: row.trusted === undefined ? null : row.trusted, reason: row.reason ?? null, negative: row.negative === true,
+        start: row.start, // status's door-rule verdict for a process the daemon has not judged (4.11 P11 status): carried, never judged again
         elevated: uid != null ? uid === 0 : null, // elevation = euid/root (4.9 §10's h row): a process of another user is not in the table, so its uid is asked of ps when the daemon listed it
       }
     })

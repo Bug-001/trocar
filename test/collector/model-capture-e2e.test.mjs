@@ -27,6 +27,10 @@ import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
+import { statusRun } from '../../src/cli/status.mjs'
+import { controlEndpointFor } from '../../src/off/control-client.mjs'
+import { darwinNetFacts } from '../../src/collector/arch/darwin/netfacts.mjs'
+import { gatherWin32Facts } from '../../src/collector/arch/win32/netfacts.mjs'
 import { segmentIndex } from '../../src/query/index-build.mjs'
 
 const FAKE_HELPER = fileURLToPath(new URL('./arch/win32/fixtures/fake-helper.mjs', import.meta.url))
@@ -79,6 +83,7 @@ function win32Io(a) {
   return { io: { exec, helper: { exe: process.execPath, args: [FAKE_HELPER, fx], spawn: (exe, args, o) => spawn(exe, args, { ...o, env: { ...o.env, TROCAR_FAKE_HELPER: '1' } }) } }, write }
 }
 
+const flowsOf = (dir) => { const d = path.join(dir, 'flows'); return (fs.existsSync(d) ? fs.readdirSync(d) : []).flatMap((n) => fs.readFileSync(path.join(d, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) }
 const freePort = async () => { const s = net.createServer(); await new Promise((r) => s.listen(0, '127.0.0.1', r)); const p = s.address().port; await new Promise((r) => s.close(r)); return p }
 
 /** One agent connection: from a known local port, CONNECT through the door with its credentials, TLS trusting `ca` only, the request, the whole reply. */
@@ -143,6 +148,24 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(got.length, 1); assert.equal(got[0].toString('latin1'), REQ, 'the mock received the request bytes verbatim')
         await one.end()
 
+        // 4.6 §开关: the daemon records from its in-memory switch, not from state.json read per request — with the file unreadable after on, the next
+        // exchange is still decrypted and recorded (a silent off on a read error is what this guards against)
+        const stateF = path.join(w.dir, 'state.json'), stateWas = fs.readFileSync(stateF)
+        fs.writeFileSync(stateF, '{"version":3')
+        a.ports.add(await freePort()); win?.write()
+        const kept = await through({ door, auth, target, localPort: [...a.ports].at(-1), ca: [rootPem], req: REQ, open })
+        assert.equal(kept.reply, REPLY)
+        assert.ok(X(kept.peer.issuerCertificate).checkIssued(root), 'state.json unreadable: still decrypted under the trocar root')
+        await kept.end()
+        fs.writeFileSync(stateF, stateWas)
+
+        // D51④ / 4.8 §5.5: a client of this process that refuses the leaf → trust-rejected keyed by the process life "<pid>@<start>"; the key is
+        // cleared (negative-cache-cleared, same neg_key) once the process leaves the table — below, after off
+        a.ports.add(await freePort()); win?.write()
+        await assert.rejects(through({ door, auth, target, localPort: [...a.ports].at(-1), ca: [upCa.certPem], req: REQ, open }))
+        const rejected = await within((async () => { for (;;) { const f = flowsOf(w.dir).find((l) => l.event === 'failure' && l.code === 'trust-rejected'); if (f) return f; await new Promise((r) => setTimeout(r, 25)) } })(), 5000, 'a trust-rejected line')
+        assert.match(rejected.neg_key, new RegExp(`^${PID}@\\d+$`), 'keyed by the process life, not the bare pid')
+
         // D60: the record went into the raw layer's current segment, and the live daemon names that segment in its lock —
         // which is how the sealer and `raw seal` know the one segment they must leave alone.
         const rawDir = path.join(path.dirname(w.dir), 'raw')
@@ -156,7 +179,7 @@ for (const platform of ['darwin', 'win32']) {
         const two = await through({ door, auth, target, localPort: [...a.ports].at(-1), ca: [upCa.certPem], req: REQ, open })
         assert.equal(two.reply, REPLY)
         assert.ok(X(two.peer).checkIssued(new crypto.X509Certificate(upCa.certPem)), 'after off the TLS peer is the mock\'s own certificate: forwarded, not decrypted')
-        assert.equal(got.length, 2); assert.equal(got[1].toString('latin1'), REQ)
+        assert.equal(got.length, 3); assert.equal(got[2].toString('latin1'), REQ)
         await two.end()
 
         // with no connection open, the holder alone keeps the daemon and its door up past the exit tick (CM23)
@@ -168,25 +191,106 @@ for (const platform of ['darwin', 'win32']) {
         // the holder leaves the process table: the door closes, and the daemon goes on idling (CM23 under D62 ⑥ — proxy mode never asks it to exit)
         a.alive = false; win?.write()
         await within((async () => { for (;;) { if (!(await doorOpen(door))) return true; await new Promise((r) => setTimeout(r, 100)) } })(), 20_000, 'the door closed once its holder was gone')
+        const cleared = await within((async () => { for (;;) { const f = flowsOf(w.dir).find((l) => l.event === 'negative-cache-cleared'); if (f) return f; await new Promise((r) => setTimeout(r, 100)) } })(), 25_000, 'the rejected key cleared once its process was gone')
+        assert.deepEqual([cleared.neg_key, cleared.pid], [rejected.neg_key, PID])
         assert.equal(await Promise.race([box.daemon.exited.then(() => 'exited'), new Promise((r) => setTimeout(() => r('up'), 500))]), 'up', 'and the daemon is still running, with no door open (D62 ⑥)')
 
         // D40: one record — the on window's exchange, its bytes exactly; nothing for the forwarded one
         const recs = fs.readdirSync(rawDir).flatMap((n) => fs.readFileSync(path.join(rawDir, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
-        assert.equal(recs.length, 1, `one record, the decrypted exchange only: ${recs.map((r) => r.endpoint).join(', ')}`)
+        assert.equal(recs.length, 2, `two records, the decrypted exchanges only: ${recs.map((r) => r.endpoint).join(', ')}`)
+        for (const r of recs) {
+          assert.equal(Buffer.concat([Buffer.from(r.req_head_raw, 'latin1'), Buffer.from(r.req_body, 'utf8')]).toString('latin1'), REQ, 'the recorded request bytes are the bytes the mock received')
+          assert.equal(r.resp_head_raw + r.resp.raw, REPLY, 'the recorded response bytes are the bytes the mock sent')
+          assert.deepEqual([r.proc.pid, r.proc.agent], [PID, 'codex'])
+        }
         const r = recs[0]
-        assert.equal(Buffer.concat([Buffer.from(r.req_head_raw, 'latin1'), Buffer.from(r.req_body, 'utf8')]).toString('latin1'), REQ, 'the recorded request bytes are the bytes the mock received')
-        assert.equal(r.resp_head_raw + r.resp.raw, REPLY, 'the recorded response bytes are the bytes the mock sent')
-        assert.deepEqual([r.proc.pid, r.proc.agent], [PID, 'codex'])
         // D62: the daemon indexed what it wrote. Before any query ran, the index of that segment is there and covers
         // the record — so the first query answers from it instead of building it (3.9 s on 1 GB before this).
         // The document is append-only NDJSON (4.2 §段索引): entry lines and one mark line per pass.
         const lines = fs.readFileSync(path.join(path.dirname(w.dir), 'index', `${lock.segment}.json`), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
         const idx = { records: lines.filter((o) => !o.m && !o.p), mark: lines.filter((o) => o.m).pop().m }
-        assert.deepEqual(idx.records.map((x) => x.id), [`${lock.segment}:1`], 'the index covers the captured record')
+        assert.deepEqual(idx.records.map((x) => x.id), [`${lock.segment}:1`, `${lock.segment}:2`], 'the index covers the captured records')
         assert.deepEqual([idx.records[0].host, idx.records[0].harness], [r.host, 'codex'])
         assert.equal(idx.mark.size, fs.statSync(path.join(rawDir, `${lock.segment}.ndjson`)).size, 'to the last byte the daemon wrote')
         const read = await segmentIndex({ home: path.dirname(w.dir), segment: lock.segment })
         assert.deepEqual([read.bytesRead, read.problems], [0, []], 'a query reads no segment bytes and reports no cold build')
+      } finally {
+        for (const s of open) s.destroy()
+        await box.stop()
+        await new Promise((r) => mock.close(r))
+      }
+    })
+  })
+}
+
+// 4.11 P11 status · P12 `windows` · V16: an off → on (what `trocar update` does, D67) keeps a decrypted process captured, and `status` says so —
+// the daemon's own verdict for the process it judged; for one it never saw, the door's rule over the on windows: started inside an earlier window
+// of the same door → routed; started while the harness was off (it read no entry, D31①) → config-after-start.
+for (const platform of ['darwin', 'win32']) {
+  test(`${platform}: after off → on, status takes the door's verdict for a decrypted process and judges the unseen ones by the on windows`, { timeout: 60_000 }, async () => {
+    const w = await modelWorld({ os: platform, commands: ['codex'] })
+    assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+    fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')
+    const rootPem = fs.readFileSync(path.join(w.dir, 'ca', 'trocar-ca.pem'), 'utf8')
+    const mockCa = createCa({ commonName: 'e2e upstream CA' }), mockIssuer = createLeafIssuer(loadCa(mockCa))
+    const mock = tls.createServer({ SNICallback: (s, cb) => cb(null, mockIssuer.secureContextFor(s)) }, (s) => { s.on('error', () => {}); let b = ''; s.on('data', (d) => { b += d; if (b.includes(BODY)) s.write(REPLY) }) })
+    await new Promise((r) => mock.listen(0, '127.0.0.1', r))
+    const target = `localhost:${mock.address().port}`
+    const bundle = path.join(w.home, 'codex-ca.pem')
+    fs.writeFileSync(bundle, rootPem + mockCa.certPem)
+    const desc = w.harnesses.find((h) => h.name === 'codex')
+    const a = agentOf({ w, name: desc.processes.names[0].name, env: { SSL_CERT_FILE: bundle } })
+    // it starts after its carrier (the install, what the door checks) and BEFORE the first `on`: it read no entry by status's own rule, so only the
+    // daemon's verdict can say captured — the wiring this test pins
+    a.start = Math.ceil(Date.now() / 1000) * 1000
+    while (Date.now() <= a.start + 20) await new Promise((r) => setTimeout(r, 25))
+    const win = platform === 'win32' ? win32Io(a) : null
+    const box = await liveUnit({ w, platform, io: win ? win.io : { exec: darwinExec(a) } })
+    const open = []
+    await withScratchCwd(platform, async () => {
+      try {
+        const io = { out: () => {}, err: () => {}, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
+        const onDeps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+        const offDeps = { getuid: () => 501, procs: async () => [], alive: () => false, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), sleep: async () => {}, exec: () => ({ status: 0, stdout: '', stderr: '' }) }
+        const pause = () => new Promise((r) => setTimeout(r, 30))
+        assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform, deps: onDeps }), 0)
+        const u = new URL(/^HTTPS_PROXY=(\S+)$/m.exec(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'))[1].replace(/^["']|["']$/g, ''))
+        const door = Number(u.port), auth = Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64')
+        a.ports.add(await freePort()); win?.write()
+        const one = await through({ door, auth, target, localPort: [...a.ports].at(-1), ca: [rootPem], req: reqOf(target), open })
+        assert.ok(new crypto.X509Certificate(one.peer.issuerCertificate.raw).checkIssued(new crypto.X509Certificate(rootPem)), 'decrypted under the trocar root')
+        await one.end()
+        await pause()
+        assert.equal(await runOffCli([], { io, home: w.home, env: w.env, platform, deps: offDeps }), 0)
+        await pause()
+        assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform, deps: onDeps }), 0)
+        const l = JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8')).liveness.codex
+        assert.equal(l.windows.length, 1, 'the closed window is kept: the door\'s port and token did not change')
+        const [earlier] = l.windows, msOf = (t) => Date.parse(t)
+        // the decrypted one, one started in the earlier window that never connected, one started while codex was off
+        const exe = a.exe, inWin = { pid: PID + 1, startedAt: msOf(earlier.on_at) + 1 }, offStart = { pid: PID + 2, startedAt: msOf(earlier.off_at) + 1 }
+        assert.ok(offStart.startedAt < msOf(l.on_at), 'the off-start process started before the second on')
+        const three = [a, inWin, offStart].map((p) => ({ pid: p.pid, startedAt: p.startedAt ?? p.start }))
+        // the real GET /status of the model daemon lists the door's verdict for the process life it judged
+        const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env })
+        const reply = await ep.request({ socketPath: ep.socketPath })
+        assert.deepEqual((reply.agents || []).filter((r) => r.pid === PID).map((r) => [r.agent, r.trusted, r.decrypt, new Date(r.start).getTime()]), [['codex', true, true, a.start]], JSON.stringify(reply.agents))
+        // the platform's own network facts under the topology, its OS reads faked: the form's verdict is status's, never judged again
+        const archFacts = (live) => platform === 'win32'
+          ? (ctx) => gatherWin32Facts(ctx, { helper: { call: async (verb) => (verb === 'ps' ? { sessionId: 1, procs: three.filter((p) => live.includes(p.pid)).map((p) => ({ ...p, ppid: 1, name: a.name, exe, cmdline: exe, cmdlineState: 'ok', sessionId: 1, sameUser: true, integrity: 'medium', tokenDenied: false })) } : verb === 'tcp-table' ? { rows: [] } : Promise.reject(Object.assign(new Error('not faked'), { code: 'not-faked' }))) }, readSystemProxy: async () => ({ ok: false, reason: 'absent' }) })
+          : (ctx) => darwinNetFacts(ctx, { exec: () => ({ status: 1, stdout: '', stderr: 'not faked' }) })
+        const status = async (live) => {
+          const sio = { t: '', out(s) { this.t += s }, err(s) { this.t += s }, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
+          const procs = async () => three.filter((p) => live.includes(p.pid)).map((p) => ({ ...p, ppid: 1, uid: process.getuid(), exe, argv: [exe], env: () => null, envRead: false }))
+          await statusRun(['--json'], { io: sio, env: w.env, home: w.home, platform, deps: { platform, procs, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: archFacts(live) }), rootStore: w.store } })
+          return JSON.parse(sio.t.slice(sio.t.indexOf('{')))
+        }
+        const doc = await status([PID, inWin.pid, offStart.pid])
+        const rows = Object.fromEntries(doc.harnesses.codex.processes.map((r) => [r.pid, [r.captured, r.reason]]))
+        assert.deepEqual(rows, { [PID]: [true, null], [inWin.pid]: [true, null], [offStart.pid]: [false, 'config-after-start'] }, JSON.stringify(doc.harnesses.codex))
+        // the topology (and the doctor's findings on it) carries the same verdicts: without the off-start process nothing there needs a restart
+        const t = (await status([PID, inWin.pid])).topology.codex
+        assert.deepEqual([t.captured, t.reason, t.branches.map((b) => b.captured), t.findings.includes('config-after-start')], [true, null, t.branches.map(() => true), false], JSON.stringify(t))
       } finally {
         for (const s of open) s.destroy()
         await box.stop()

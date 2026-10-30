@@ -48,7 +48,7 @@ test('an OS that refuses to lower this process says so and goes on at its parent
 test('a real forked child runs at the nice it asked for', async (t) => {
   const home = path.join(tmpDir('trocar-nice-'), '.trocar')
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
-  const child = fork(src('query/worker.mjs'), [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], env: { ...process.env, TROCAR_QUERY_IDLE_MS: '4000' } })
+  const child = fork(src('query/worker.mjs'), [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'] })
   t.after(() => { try { child.kill() } catch { /* already gone */ } })
   // it is at its nice before it answers anything: the first line of the child asks, and this read waits for the
   // child to have loaded (its first reply is proof it is past that line)

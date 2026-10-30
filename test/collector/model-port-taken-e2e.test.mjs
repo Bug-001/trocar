@@ -56,6 +56,7 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(await canConnect(moved), true, 'the new door listens')
         assert.match(fs.readFileSync(envFile, 'utf8'), new RegExp(`127\\.0\\.0\\.1:${moved}(?!\\d)`), 'the entry follows the door')
         assert.equal(JSON.parse(fs.readFileSync(path.join(w.dir, 'ingress.json'), 'utf8')).groupPorts[g], moved, 'ingress.json records the new port')
+        assert.equal(JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8')).liveness.codex.windows, undefined, 'P12: the earlier on window led to the old port, so it is not kept')
         const taken = events(w).filter((e) => e.code === 'engine-port-taken')
         assert.equal(taken.length, 1, JSON.stringify(taken))
         assert.deepEqual(checkRecord(taken[0]), [], 'a record of the closed sets')

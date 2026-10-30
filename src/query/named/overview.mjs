@@ -6,7 +6,7 @@
 // (src/query/usage.mjs, 4.2 §用量旁注) and computes the calls they do not cover yet, newest session first, through the
 // same assembly, until the next session would push those computed bytes past OVERVIEW_USAGE_BYTES; a session wholly
 // in the sidecars still counts after that. `coverage` says how far it got and why it stopped (invariant 4). With
-// `warm` (the query worker), the missing segments are filled after the answer.
+// `later` (the query worker), the missing segments are filled after the answer is written.
 import { recordsAt } from '../records.mjs';
 import { readUsage, fillUsage, callFacts, takeFillProblem } from '../usage.mjs';
 import { asOf, indexRows, isModelCall, sessionFactsOf, sessionGroups } from '../rows.mjs';
@@ -17,7 +17,7 @@ export const params = Object.freeze(['since', 'until']);
 
 const add = (sum, v) => (v == null ? sum : (sum ?? 0) + v);
 
-export async function run({ home, fs, now, params: p, errors, warm = false }) {
+export async function run({ home, fs, now, params: p, errors, later = null }) {
   const keep = tsFilter(p, now);
   const all = await indexRows({ home, fs, errors });
   const counted = []; // [harness, rows] — one entry per in-window session, and one per in-window session-less row
@@ -52,10 +52,10 @@ export async function run({ home, fs, now, params: p, errors, warm = false }) {
   }
   const harnesses = [...by.values()].sort((a, b) => String(a.harness ?? '\uffff').localeCompare(String(b.harness ?? '\uffff')));
 
-  return { as_of: asOf(all), calls, bytes, sessions: { total: inWindow.length }, harnesses, usage: usageOf({ home, fs, inWindow, errors, warm }) };
+  return { as_of: asOf(all), calls, bytes, sessions: { total: inWindow.length }, harnesses, usage: usageOf({ home, fs, inWindow, errors, later }) };
 }
 
-function usageOf({ home, fs, inWindow, errors, warm }) {
+function usageOf({ home, fs, inWindow, errors, later }) {
   const newest = [...inWindow].sort((a, b) => (a[1].last_ts < b[1].last_ts ? 1 : a[1].last_ts > b[1].last_ts ? -1 : 0));
   const needed = isModelCall;
   const fill = takeFillProblem({ home, fs }); // what the fill after an earlier answer could not do, said once (D38)
@@ -101,8 +101,8 @@ function usageOf({ home, fs, inWindow, errors, warm }) {
       row.cache_write = add(row.cache_write, u[3]);
     }
   }
-  // After the answer, and only where there is a next query (the worker's `warm`): the one-shot CLI never writes one.
-  if (warm && toFill.size) setImmediate(() => { fillUsage({ home, fs, segments: [...toFill] }).catch(() => {}); });
+  // After the answer is written, and only where there is a next query (the worker's `later`): the one-shot CLI never writes one.
+  if (later && toFill.size) later(() => fillUsage({ home, fs, segments: [...toFill] }));
   const cmp = (a, b) => (a === b ? 0 : a == null ? 1 : b == null ? -1 : String(a) < String(b) ? -1 : 1);
   return {
     coverage: { sessions_read: read, sessions_in_window: inWindow.length, capped_at: capped ? OVERVIEW_USAGE_BYTES : null, reason: capped ? 'byte-budget' : null },

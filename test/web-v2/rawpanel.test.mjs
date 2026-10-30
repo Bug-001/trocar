@@ -5,6 +5,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { renderRawPanel, renderResourceView, wireRawPanel } from '../../src/web/v2/replay/rawpanel.mjs'
+import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
+import { normResp } from '../../src/view/analyze.mjs'
+import { boardHome, serveBoard } from './real-face.mjs'
 
 const ts = (i) => new Date(Date.UTC(2026, 9, 7, 0, 0, i * 5)).toISOString()
 const el = () => ({ _h: '', set innerHTML(v) { this._h = v }, get innerHTML() { return this._h }, querySelector: () => null })
@@ -86,4 +89,28 @@ test('the reply row states its character count once (one fact, one place — 1.4
     assert.ok(row, `${transport}: the raw reply row exists`)
     assert.equal(row.match(/\b937\b/g).length, 1, `${transport}: the count appears once`)
   }
+})
+
+// 2.6 §A / :236: the reply's tool calls come from the server's own answer (a real face over the demo session, whose replies
+// carry tool_use blocks), never a hand-made shape — so the server and the board cannot disagree on the field's name
+test('a real server answer: every in-page step\'s reply tool names render in the panel', async () => {
+  const face = await serveBoard(boardHome())
+  try {
+    const id = (await face.get('sessions')).doc.sessions[0].session_id
+    const doc = (await face.get('session', { id })).doc
+    const anchor = anchorLane(buildLanes(doc.analyzed, doc.probes))
+    let seen = 0
+    anchor.calls.forEach((c, i) => {
+      if (c.paged_out || !c.rec) return
+      const e = el(); renderRawPanel(e, { ...stateOf(c), anchor, playhead: i })
+      for (const t of c.norm.tools) { assert.ok(e.innerHTML.includes(t.name), `step ${i + 1}: ${t.name}`); seen++ }
+    })
+    assert.ok(seen > 0, 'the answer carries reply tool calls')
+  } finally { await face.close() }
+})
+
+test('the reply\'s thinking renders (the server normalizer\'s own output for a reply with a thinking block)', () => {
+  const norm = normResp({ resp: { status: 200, kind: 'json', body: { content: [{ type: 'thinking', thinking: 'weighing the options' }, { type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: {} } } })
+  const h = draw(base({ norm }))
+  assert.match(h, /weighing the options/); assert.match(h, /done/)
 })

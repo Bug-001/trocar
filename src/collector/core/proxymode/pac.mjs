@@ -79,15 +79,16 @@ export function pacHandler({ state }) {
   }
 }
 
-/** Is the peer at the PAC door's accept this user's process (P10)? `peer`: the facts D51 identity reads (mac: `uid`; win: `sid`, or the helper's
- *  `sameUser`); `self`: { uid } / { sid }. Anything else — another user, or a peer not told — is refused and recorded through `record`. */
-export function peerAllowed(peer, self, { record = () => {} } = {}) {
+/** Is the peer at the PAC door's accept this user's process (P10)? `peer`: the facts D51 identity reads (mac: `uid`, or the socket table's
+ *  `sameUser` when no single pid could be named; win: `sid`, or the helper's `sameUser`); `self`: { uid } / { sid }. Anything else — another user,
+ *  or a peer not shown to be this user's — is refused: `{ ok:false, code, detail }`. It records nothing: the caller writes the one record of the
+ *  connection (the ingress for a CONNECT, servePac for a GET). */
+export function peerAllowed(peer, self) {
   const p = peer || {}, me = self || {}
   const ok = p.uid != null && me.uid != null ? p.uid === me.uid
     : p.sid && me.sid ? String(p.sid).toUpperCase() === String(me.sid).toUpperCase()
     : p.sameUser === true
   if (ok) return { ok: true }
-  const detail = p.uid != null || p.sid || p.sameUser === false ? `pid ${p.pid ?? '?'} belongs to another user` : `pid ${p.pid ?? '?'}: whose process it is could not be told`
-  record({ event: 'failure', where: 'ingress', code: CODE.pacPeerRefused, reason: `the PAC door refused a connection: ${detail} (the PAC door takes no credentials, so it forwards only this user's processes)` })
+  const detail = p.uid != null || p.sid || p.sameUser === false ? `pid ${p.pid ?? '?'} belongs to another user` : `pid ${p.pid ?? '?'}: not shown to be this user's process`
   return { ok: false, code: CODE.pacPeerRefused, detail }
 }

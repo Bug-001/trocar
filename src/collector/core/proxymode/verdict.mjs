@@ -11,8 +11,11 @@
 import path from 'node:path'
 import { readSrc } from './sources.mjs'
 import { certBlocks } from '../../../off/pem.mjs'
+import { itemsOfPhase } from '../../../off/manifest.mjs'
 
 const fwd = (code, detail, extra) => ({ decrypt: false, code, detail, ...extra })
+// a verdict from evidence that could not be read (the process env or cwd, a file): `unread`, so the door judges again on a later connection (4.11 P11, D38)
+const notRead = (r) => fwd(r.code, why(r), { unread: true })
 const hex = (fp) => String(fp || '').replace(/:/g, '').toLowerCase()
 const ms = (t) => (t == null ? NaN : typeof t === 'number' ? t : new Date(t).getTime())
 const absent = (e) => e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')
@@ -35,24 +38,49 @@ function trustVerdict(t, ctx, facts, record) {
   if (!t || !t.sources || !t.sources.length) return null
   if (t.when) {
     const r = read(t.when.src, ctx, facts)
-    if (r.error) return fwd(r.code, why(r))
+    if (r.error) return notRead(r)
     if (!r.set || ('equals' in t.when && r.value !== t.when.equals)) return null // the trust does not apply: the root, installed by `install`
   }
   let hit = null
-  for (const s of t.sources) { const r = read(s.from, ctx, facts); if (r.error) return fwd(r.code, why(r)); if (r.set) { hit = r; break } }
+  for (const s of t.sources) { const r = read(s.from, ctx, facts); if (r.error) return notRead(r); if (r.set) { hit = r; break } }
   if (!hit) {
     // Node's own roots never hold trocar's root, nor does a process whose required source is unset
     return t.base === 'node' || t.sources.some((s) => s.required) ? fwd('var-missing', `none of ${t.sources.length} trust source(s) is set for this process`) : null
   }
   const value = String(hit.value)
-  if (!isAbs(value) && facts.cwd == null) return fwd('config-unreadable', `${hit.where} names a relative path and the process working directory is not known`)
+  if (!isAbs(value) && facts.cwd == null) return fwd('config-unreadable', `${hit.where} names a relative path and the process working directory is not known`, { unread: true })
   const file = isAbs(value) ? value : (ctx.join || path.join)(facts.cwd, value)
   let text
   try { text = ctx.readFile(file) } catch (e) {
     if (absent(e)) return fwd('ca-not-in-file', `${hit.where} names ${file}, which does not exist`)
-    return fwd('file-unreadable', `${hit.where} names ${file}: ${(e && e.code) || e}`)
+    return fwd('file-unreadable', `${hit.where} names ${file}: ${(e && e.code) || e}`, { unread: true })
   }
   return certBlocks(text).some((b) => hex(b.fp) === hex(record.rootFp256)) ? null : fwd('ca-not-in-file', `${hit.where} names ${file}, which does not hold the trocar root`)
+}
+
+/** The forms a process of `desc` may be on `os` (on a door of route `routeId`, or any): of its forms here, the verified ones when any is — D51 names
+ *  a harness, not a form, so an unmeasured sibling must not veto the verified ones. The door judges every one of them; `status` asks the same. */
+export function judgedForms(desc, os, routeId = null) {
+  const all = desc.proxyMode.forms.filter((f) => f.os.includes(os) && (routeId == null || f.route === routeId))
+  const ok = all.filter((f) => f.verified && f.verified[os] === true)
+  return ok.length ? ok : all
+}
+
+/** The carrier time of a form (rule 3): the latest install item of its harness, or the root in the user's store for a root-trust form. Unknown → null. */
+export function carrierAt(manifest, desc, f) {
+  const items = itemsOfPhase(manifest, 'install')
+  const own = f.cert !== 'root' && (desc.proxyMode.certs || {})[f.cert] ? items.filter((i) => i.harness === desc.name) : []
+  const t = (own.length ? own : items.filter((i) => i.kind === 'system-root')).map((i) => ms(i.installed_at)).filter(Number.isFinite)
+  return t.length ? Math.max(...t) : null
+}
+
+/** Rule 3 alone: null when a process started at `startedAt` is late enough for a carrier installed at `installedAt`, else the code. The door and
+ *  `status` (for a process the door has not judged) both ask this one. */
+export function startVerdict(startedAt, installedAt) {
+  const started = ms(startedAt), installed = ms(installedAt)
+  if (Number.isNaN(installed)) return 'not-routed'
+  if (Number.isNaN(started)) return 'start-time-unknown'
+  return started <= installed ? 'config-after-start' : null
 }
 
 /** → { decrypt: true } | { decrypt: false, code, detail, at? }. */
@@ -64,19 +92,19 @@ export function verdictOf({ desc, form, facts = {}, record = {}, issuer, host, h
   if (v !== true) return fwd('not-verified', `${form.id} is not verified on ${ctx.os}${v && v.reason ? `: ${v.reason}` : ''}`)
   if ((form.forwardOnlyHosts || []).some((x) => x.toLowerCase() === h)) return fwd('not-verified', `${host} is forward-only for ${form.id} until it is verified there`)
   if (form.hostTree && !(hostSet || desc.hosts || []).some((x) => x.toLowerCase() === h)) return fwd('outside-host-set', `${host} is outside ${form.id}'s host set; the host program's other connections are forwarded`)
-  const started = ms(facts.startedAt), installed = ms(record.carrierInstalledAt)
-  if (Number.isNaN(installed)) return fwd('not-routed', `${form.id} has no carrier installed`)
-  if (Number.isNaN(started)) return fwd('start-time-unknown', `the start time of pid ${facts.pid} could not be read`)
-  if (started <= installed) return fwd('config-after-start', `pid ${facts.pid} started before trocar's settings for ${form.id} were in place (its proxy entry and the certificate it needs); restart it once`)
+  const sv = startVerdict(facts.startedAt, record.carrierInstalledAt)
+  if (sv === 'not-routed') return fwd(sv, `${form.id} has no carrier installed`)
+  if (sv === 'start-time-unknown') return fwd(sv, `the start time of pid ${facts.pid} could not be read`, { unread: true })
+  if (sv) return fwd(sv, `pid ${facts.pid} started before trocar's settings for ${form.id} were in place (its proxy entry and the certificate it needs); restart it once`)
   const pctx = { ...ctx, env: facts.env || {}, cwd: facts.cwd ?? undefined } // the process's env and cwd, never the daemon's
   const t = trustVerdict(form.trust !== 'root' && pm.trusts && pm.trusts[form.trust], pctx, facts, record)
   if (t) return t
   if (!issuer || (issuer.state && issuer.state() !== 'ready')) return issuer && issuer.state() === 'key-missing' ? fwd('cert-key-missing', 'the root key is not in its custody: nothing signs leaves') : fwd('cert-intermediate-unavailable', 'no intermediate certificate to sign leaves with')
   for (const b of pm.blockers || []) {
     if (b.forms && !b.forms.includes(form.id)) continue
-    if (b.when) { const w = read(b.when.src, pctx, facts); if (w.error) return fwd(w.code, why(w)); if (!w.set || ('equals' in b.when && w.value !== b.when.equals)) continue }
+    if (b.when) { const w = read(b.when.src, pctx, facts); if (w.error) return notRead(w); if (!w.set || ('equals' in b.when && w.value !== b.when.equals)) continue }
     const r = read(b.at, pctx, facts)
-    if (r.error) return fwd(r.code, why(r))
+    if (r.error) return notRead(r)
     if (r.set) return fwd('not-routed', `a user setting keeps ${form.id} from being routed: ${r.where}`, { at: r.where })
   }
   return { decrypt: true }

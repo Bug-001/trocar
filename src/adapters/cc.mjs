@@ -4,11 +4,12 @@
 // surface downstream (invariant 3).
 //
 // IMPORTS the already-built primitives — this file does NOT reimplement them:
-//   • content-hash.mjs  → contentHash / scanJson / hashSpan / spanOf  (D19 byte-exact hashing)
+//   • content-hash.mjs  → contentHash / hashSpan / spanOf  (D19 byte-exact hashing); scanJson from src/dissect/json-scan.mjs
 //   • session-identity.mjs (3.4) → nativeId / classOf / controlKindFor / controlKind /
 //                                  lane / entrypoint / parseSessionCC  (session/lane/control logic)
 //   • model/schema.mjs (3.2) → mapUsage('cc', rawUsage)  (canonical usage mapping)
-import { contentHash, scanJson, hashSpan, spanOf } from './content-hash.mjs';
+import { contentHash, hashSpan, spanOf } from './content-hash.mjs';
+import { scanJson } from '../dissect/json-scan.mjs';
 import { collectExtra } from './contract.mjs';
 import { ENVELOPE_CONSUMED, v0RequestOf } from './envelope.mjs';
 import { wireFormatOf, contextStateOf } from '../dissect/registry.mjs';

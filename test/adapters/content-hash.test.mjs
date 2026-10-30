@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { contentHash, scanJson, hashSpan, spanOf } from '../../src/adapters/content-hash.mjs';
+import { contentHash, hashSpan, spanOf } from '../../src/adapters/content-hash.mjs';
+import { scanJson } from '../../src/dissect/json-scan.mjs';
 
 test('contentHash is a stable sha-256 hex of the UTF-8 bytes', () => {
   const h = contentHash('{"k":"v"}');

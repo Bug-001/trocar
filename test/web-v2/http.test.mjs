@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { api } from '../../src/web/v2/core/api.mjs'
-import { configure, bootToken, onForbidden } from '../../src/web/v2/core/http.mjs'
+import { configure, bootToken, onForbidden, post } from '../../src/web/v2/core/http.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { QUERY_NAMES } from '../../src/query/client.mjs'
@@ -100,6 +100,28 @@ test('one fetch call site: only core/http.mjs calls fetch(', () => {
 })
 
 // K-30 (1.5): one 403 latches the board — no further request leaves the page, and the page is told once
+// 1.5 K-29: a body that never fully arrives (the worker died after the frame head) is a transient failure, status 0 — not a
+// malformed answer. A complete body that does not parse stays "not JSON".
+const cutOff = (status) => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{"sessions":[')); c.error(new Error('socket closed')) } }), { status, headers: { 'content-type': 'application/json' } })
+test('K-29: a 2xx whose body is cut off is {ok:false, status:0}, never "not JSON"; a complete non-JSON 2xx is "not JSON"', async () => {
+  for (const status of [200, 201]) {
+    await withFetch(() => cutOff(status), async () => {
+      const r = await api.get('session', { id: 'x' })
+      assert.equal(r.ok, false); assert.equal(r.status, 0); assert.ok(r.error && r.error !== 'not JSON')
+    })
+  }
+  await withFetch(() => new Response('{"a":', { status: 200 }), async () => {
+    const r = await api.get('session', { id: 'x' })
+    assert.deepEqual([r.ok, r.status, r.error], [false, 200, 'not JSON'])
+  })
+})
+test('K-29: a control answer whose body is cut off is status 0 with no data', async () => {
+  await withFetch(() => cutOff(200), async () => {
+    const r = await post('/control/harness', {})
+    assert.deepEqual([r.ok, r.status, r.data], [false, 0, null]); assert.notEqual(r.error, 'not JSON')
+  })
+})
+
 test('K-30: after a 403 no request is sent, every read is {ok:false, status:403}, onForbidden fires once', async () => {
   let fired = 0
   onForbidden(() => fired++)
@@ -122,3 +144,4 @@ test('real face: status answers on the empty machine and sessions lists the demo
     assert.equal(ss.status, 200); assert.ok(ss.doc.sessions.length >= 1)
   } finally { await b.close() }
 })
+

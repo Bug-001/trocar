@@ -8,7 +8,8 @@
 //   1. read the opener — CONNECT or SOCKS5; anything else (an absolute-URI GET included) is closed,
 //      `ingress-unknown`;
 //   2. check the token, in constant time — 407 / SOCKS auth failure and `ingress-auth-failed`, zero upstream connections;
-//   3. lookupIngress({peer, user, target}) → the flow's meta, or {health:true, group}, or null (an unknown user: also an auth failure);
+//   3. lookupIngress({peer, user, target}) → the flow's meta, or {health:true, group}, or {refuse:{code, reason}} (the door refused this process:
+//      one record, closed unanswered), or null (an unknown user: also an auth failure);
 //   4. a health probe (the target is the group's re-entry point itself): 200, then 204 to every `HEAD`/`GET /trocar-health/<g>`
 //      on the kept-alive tunnel; no upstream, no flows/ row, no envelope. It never leaves the machine (invariant 1);
 //   5. dial the upstream — direct, or the proxy prelude trocar writes (http / socks5; the user's proxy credentials ride only here) —
@@ -20,6 +21,7 @@ import crypto from 'node:crypto'
 import net from 'node:net'
 import { STATUS_CODES } from 'node:http'
 import { parseHead } from './sniff.mjs'
+import { wentBy } from './flow.mjs'
 import { socks5Greeting, socks5Request } from './socks.mjs'
 import { HOOK_HEADER as UPSTREAM_HEADER } from '../proxymode/chain.mjs'
 
@@ -163,13 +165,14 @@ async function viaHttp(sock, up, target, deadline) {
 }
 async function viaSocks5(sock, up, target, deadline) {
   const r = reader(sock)
-  const fail = (m, what) => ({ ok: false, kind: 'unreachable', error: { type: m.timeout ? 'proxy_timeout' : 'proxy_closed', message: `the SOCKS5 proxy ${m.timeout ? 'did not answer' : 'closed the connection'} during ${what}` } })
+  // before the CONNECT request no target has been named: a failure there is the proxy's own, for every agent of the door (4.8 W73 `proxy: true`)
+  const fail = (m, what, proxy = true) => ({ ok: false, kind: 'unreachable', proxy, error: { type: m.timeout ? 'proxy_timeout' : 'proxy_closed', message: `the SOCKS5 proxy ${m.timeout ? 'did not answer' : 'closed the connection'} during ${what}` } })
   const bad = (what, reason) => ({ ok: false, kind: 'refused', reason, reply: null, what })
   try {
     sock.write(up.auth ? Buffer.from([5, 2, 0, 2]) : Buffer.from([5, 1, 0]))
     const m = await r.take((b) => (b.length < 2 ? null : b[0] !== 5 ? { invalid: 'not a SOCKS5 method reply' } : { length: 2, method: b[1] }), deadline)
     if (m.gone || m.timeout) return fail(m, 'the method exchange')
-    if (m.invalid) return { ok: false, kind: 'unreachable', error: { type: 'bad_proxy_reply', message: m.invalid } }
+    if (m.invalid) return { ok: false, kind: 'unreachable', proxy: true, error: { type: 'bad_proxy_reply', message: m.invalid } }
     if (m.method === 0xff) return bad('method', 'socks5-no-acceptable-method')
     if (m.method === 2 && up.auth) {
       const u = Buffer.from(up.auth.username), p = Buffer.from(up.auth.password)
@@ -185,7 +188,7 @@ async function viaSocks5(sock, up, target, deadline) {
         : Buffer.concat([Buffer.from([3, host.length]), host])
     sock.write(Buffer.concat([Buffer.from([5, 1, 0]), addr, Buffer.from([target.port >> 8, target.port & 255])]))
     const q = await r.take(socks5Request, deadline)
-    if (q.gone || q.timeout) return fail(q, 'the CONNECT')
+    if (q.gone || q.timeout) return fail(q, 'the CONNECT', false)
     if (q.invalid) return { ok: false, kind: 'unreachable', error: { type: 'bad_proxy_reply', message: q.invalid } }
     const rest = r.detach()
     if (q.cmd === 0) return { ok: true, sock, reply: 0, rest }
@@ -196,7 +199,7 @@ async function viaSocks5(sock, up, target, deadline) {
 /**
  * createIngress({ token, lookupIngress, handleFlow, connectUpstream, failure, timing, refuse }) → { attach(server), handle(socket), stats(), closeIdle() }
  *   token            the install's ingress token (4.8 §3); a connection that does not present it gets 407 / auth failure
- *   lookupIngress    async ({peer, user, target:{address, port, family?}}) → IngressMeta | {health:true, group} | null (an unknown user)
+ *   lookupIngress    async ({peer, user, target:{address, port, family?}}) → IngressMeta | {health:true, group} | {refuse:{code, reason}} | null (an unknown user)
  *   handleFlow       (socket, meta, {upstream, redial}) — the engine's flow starter; `redial` re-dials through the same upstream when the
  *                    upstream carries no credentials (4.6 让路), else undefined
  *   connectUpstream  ({address, port}) → a connecting net.Socket (the engine's; tests inject)
@@ -315,6 +318,9 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       r.detach(); return o.badGateway('lookup')
     }
     if (!meta) { authFailed(o.user, 'unknown user'); r.detach(); return o.denied() }
+    // a door that refused this process (the PAC door, 4.11 P10): one record of its own code, and the connection closed unanswered — a 407 would ask
+    // for credentials the door never takes (and Chromium does not fall over to the PAC's next entry on one)
+    if (meta.refuse) { failure({ where: 'ingress', code: meta.refuse.code, peer, reason: meta.refuse.reason }); r.detach(); return socket.destroy() }
     // the client left while the lookup ran: nobody is waiting for a dial, and the user's proxy must not get its credentials for one (§5.1, §5.2)
     if (r.isGone()) return void r.detach()
 
@@ -328,19 +334,30 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     let current = null
     r.whenGone(() => { if (current) current.destroy() })
     const dial = () => dialUpstream(up, o.target, (s) => { current = s })
-    const d = await dial()
-    current = null
-    if (r.isGone()) { if (d.ok) d.sock.destroy(); r.detach(); return } // the client left while the upstream was dialled: no flow existed, nothing was lost
     const shown = { kind: up.kind || 'direct', ...(up.host ? { host: up.host } : {}), ...(up.port != null ? { port: up.port } : {}) }
     // The negative cache's key is part of the lookup's contract (§5.5); one that comes without it is keyed here the way the contract says, so a lookup that
     // forgets it cannot make every connection without a pid share the key "null" and poison one another's hosts.
     const base = { ...meta, dst: meta.dst ?? dst, ingress: meta.ingress ?? { route, group }, negKey: meta.negKey ?? (meta.pid != null ? String(meta.pid) : who) }
+    const waited = { phase: shown.kind === 'direct' ? 'connect' : 'proxy-reply', t0: Date.now() }
+    const d = await dial()
+    current = null
+    // the client left while the upstream was dialled: no flow existed and nothing more is dialled or sent, but the give-up is a row (RFC 4.6 §记录
+    // 经代理入口的连接行); a socket the ingress cut itself (it ended or errored on neither side: onTooMuch) has its own record
+    if (r.isGone()) {
+      if (d.ok) d.sock.destroy()
+      r.detach()
+      if (!socket.readableEnded && !socket.errored) return
+      const error = wentBy('client', socket.errored, waited)
+      return void refuse({ ...base, upstream: shown }, { decision: 'error', not_captured: 'error', error, duration_ms: error.wait?.ms ?? 0 })
+    }
     if (!d.ok) {
       r.detach()
       if (d.kind === 'refused') { counters.refused++; refuse({ ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}) } }, { decision: 'tunnel', not_captured: 'proxy-refused', reason: d.reason }); return o.refusedBy(d) }
       counters.unreachable++
       const at = now(), last = lastUnreachable.get(group)
-      if (last === undefined || at - last >= 60_000) { lastUnreachable.set(group, at); failure({ where: 'netenv', code: 'upstream-unreachable', group, upstream: shown, reason: `the upstream of ${group || 'this door'} cannot be dialled (${d.error.type}: ${d.error.message}); its agents get 502 until it is back (one event per 60 s)` }) }
+      // only a failure of the door's upstream proxy itself blames the door (4.8 W73): a dead target host — dialled direct, or dropped by a proxy that took
+      // the TCP connection — is that connection's row alone, and must not use up the 60 s window a real proxy outage needs
+      if (d.proxy && (last === undefined || at - last >= 60_000)) { lastUnreachable.set(group, at); failure({ where: 'netenv', code: 'upstream-unreachable', group, upstream: shown, reason: `the upstream of ${group || 'this door'} cannot be dialled (${d.error.type}: ${d.error.message}); its agents get 502 until it is back (one event per 60 s)` }) }
       refuse({ ...base, upstream: shown }, { decision: 'error', not_captured: 'error', error: { type: d.error.type, message: d.error.message, side: 'upstream' } })
       return o.badGateway(d.error.type)
     }
@@ -353,32 +370,36 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     const credentialed = !!up.auth
     // a direct upstream is redialled as the transparent door does it (a connecting socket, at once); a proxy needs its prelude again (a Promise)
     const redial = credentialed ? undefined : (up.kind || 'direct') === 'direct' ? () => connectUpstream({ address: o.target.host, port: o.target.port }) : async () => {
-      const x = await dialUpstream(up, o.target, () => {})
-      if (!x.ok) throw Object.assign(new Error(x.kind === 'refused' ? `the upstream refused the second connection (${x.reason})` : x.error.message), { code: x.kind === 'refused' ? 'proxy-refused' : x.error.type })
+      const x = await dialUpstream(up, o.target, () => {}, { slow: false }) // the flow's own wait (flow.mjs waitFor) records a slow second prelude, once
+      // the OS's `syscall` goes along: wentBy tells a reset off the wire (kept as ECONNRESET) from Node's invented one (a close) by it
+      if (!x.ok) throw Object.assign(new Error(x.kind === 'refused' ? `the upstream refused the second connection (${x.reason})` : x.error.message), { code: x.kind === 'refused' ? 'proxy-refused' : x.error.type, ...(x.syscall ? { syscall: x.syscall } : {}) })
       if (x.rest.length) x.sock.unshift(x.rest)
       return x.sock
     }
     handleFlow(socket, { ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}), credentialed }, wire: { up: w.up, down: w.down } }, { upstream: d.sock, redial })
   }
 
-  async function dialUpstream(up, target, track) {
+  async function dialUpstream(up, target, track, { slow: watchSlow = true } = {}) {
     const kind = up.kind || 'direct'
-    if (!['direct', 'http', 'socks5'].includes(kind)) return { ok: false, kind: 'unreachable', error: { type: 'unsupported_upstream', message: `the upstream kind ${JSON.stringify(printable(kind))} is not one the ingress dials (direct, http, socks5)` } }
+    // `proxy: true` marks a failure of the door's upstream itself (every connection of the door fails the same way), as opposed to one target (4.8 W73)
+    if (!['direct', 'http', 'socks5'].includes(kind)) return { ok: false, kind: 'unreachable', proxy: true, error: { type: 'unsupported_upstream', message: `the upstream kind ${JSON.stringify(printable(kind))} is not one the ingress dials (direct, http, socks5)` } }
     const to = kind === 'direct' ? { address: target.host, port: target.port } : { address: up.host, port: up.port }
     // Waiting on the user's proxy has no time limit (D31: cutting the agent because a proxy is slow would break it), but it is not silent either (D38):
     // once, past upstreamSlowMs, the same upstream-slow event the flow raises for the waits it owns (flow.mjs waitFor). No flow exists yet, so no flow_id.
     let slow = null
-    if (kind !== 'direct') {
+    if (kind !== 'direct' && watchSlow) {
       const ms = timing.upstreamSlowMs ?? 5000, t0 = Date.now()
       slow = setTimeout(() => { slow = null; const waited = Math.max(ms, Date.now() - t0); failure({ code: 'upstream-slow', host: target.host, phase: 'proxy-reply', waited_ms: waited, reason: `${target.host} has not answered the proxy request for ${waited} ms; still waiting` }) }, ms) // a timer can fire a ms early
       if (slow.unref) slow.unref()
     }
     try {
       let sock
-      try { sock = connectUpstream(to) } catch (e) { return { ok: false, kind: 'unreachable', error: { type: e.code || 'upstream_error', message: msgOf(e) } } }
+      const viaProxy = kind !== 'direct' // a direct dial reaches the target itself: its failure is that one host's, not the door's upstream
+      const failed = (e) => ({ ok: false, kind: 'unreachable', proxy: viaProxy, ...(e && e.syscall ? { syscall: e.syscall } : {}), error: { type: e.code || 'upstream_error', message: msgOf(e) } })
+      try { sock = connectUpstream(to) } catch (e) { return failed(e) }
       track(sock)
       sock.on('error', () => {}) // the handshake owns the outcome; a late error must not be uncaught
-      try { await whenConnected(sock) } catch (e) { sock.destroy(); return { ok: false, kind: 'unreachable', error: { type: e.code || 'upstream_error', message: msgOf(e) } } }
+      try { await whenConnected(sock) } catch (e) { sock.destroy(); return failed(e) }
       if (kind === 'direct') return { ok: true, sock, reply: null, rest: Buffer.alloc(0) }
       const deadline = timing.ingressDialMs ? Date.now() + timing.ingressDialMs : Infinity
       const d = kind === 'socks5' ? await viaSocks5(sock, up, target, deadline) : await viaHttp(sock, up, target, deadline)

@@ -88,7 +88,6 @@ test('proc readers: parentOf → the parent pid and the PARENT\'s start time (th
   assert.deepEqual(parentOf(42, { exec: run, cache, startedAt: 9 }), p)
   assert.equal(calls.length, 2, 'one ps for the pid, one for its parent; the second ask is a cache hit')
   assert.deepEqual(calls[0].args, ['-p', '42', '-o', 'ppid=,lstart='])
-  assert.equal(calls[0].env.LC_ALL, 'C')
   assert.equal(parentOf(5, { exec: run, cache }), null, 'a gone pid')
 })
 

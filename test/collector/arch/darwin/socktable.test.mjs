@@ -25,12 +25,31 @@ test('one read of the helper: the row whose LOCAL end is the peer answers its pi
 })
 
 test('W4 (the wrong-pid-never rule): two pids on the peer\'s end (a socket a child inherited) is nobody; no row is nobody; a port that only shares a prefix, or another address on the same port, is not the peer', async () => {
-  const two = await ownerOfSocket({ exec: async () => table(row(`127.0.0.1:${PEER.port}`, '1.2.3.4:443', 11), row(`127.0.0.1:${PEER.port}`, '1.2.3.4:443', 12)), peer: PEER })
-  assert.deepEqual([two.pid, two.source], [null, null], 'two holders: null, not a pick')
+  let asked = 0
+  const two = await ownerOfSocket({ exec: async () => { asked++; return table(row(`127.0.0.1:${PEER.port}`, '1.2.3.4:443', 11), row(`127.0.0.1:${PEER.port}`, '1.2.3.4:443', 12)) }, peer: PEER })
+  assert.deepEqual([two.pid, two.source, two.why, two.sameUser], [null, null, 'shared', true], 'holders that persist across the re-reads: null, not a pick; the rows prove the end is this user\'s')
+  assert.ok(asked <= 5, `the re-reads are bounded (${asked} reads)`)
   const none = await ownerOfSocket({ exec: async () => table(row('127.0.0.1:52311', '1.2.3.4:443', 11), row(`127.0.0.1:${PEER.port}1`, '1.2.3.4:443', 12), row(`10.0.0.2:${PEER.port}`, '1.2.3.4:443', 13)), peer: PEER })
-  assert.deepEqual([none.pid, none.source], [null, null], 'no row of this end: null')
+  assert.deepEqual([none.pid, none.source, none.why], [null, null, 'no-row'], 'no row of this end: null')
+  assert.notEqual(none.sameUser, true, 'no row proves nothing about the user')
   const garbled = await ownerOfSocket({ exec: async () => table('not a row', `x ESTABLISHED 127.0.0.1 ${PEER.port} 127.0.0.1 18112`, row(`127.0.0.1:${PEER.port}`, '127.0.0.1:18112', 77)), peer: PEER })
   assert.equal(garbled.pid, 77, 'a line not of the helper\'s shape is no holder')
+})
+
+test('a fork-window co-holder (a child between fork and exec holds its parent\'s socket for a few ms) is read again: the one holder left is the answer, at any read within the bound', async () => {
+  for (const transient of [1, 2, 4]) {
+    let n = 0
+    const exec = async () => (++n <= transient ? table(row(`127.0.0.1:${PEER.port}`, '1.2.3.4:443', 501), row(`127.0.0.1:${PEER.port}`, '1.2.3.4:443', 502)) : table(row(`127.0.0.1:${PEER.port}`, '1.2.3.4:443', 501)))
+    const r = await ownerOfSocket({ exec, peer: PEER })
+    assert.deepEqual([r.pid, r.source], [501, 'socket-table'], `co-held on ${transient} read(s)`)
+    assert.equal(n, transient + 1, 'no read past the one that answered')
+  }
+  let one = 0
+  await ownerOfSocket({ exec: async () => { one++; return table(row(`127.0.0.1:${PEER.port}`, '1.2.3.4:443', 7)) }, peer: PEER })
+  assert.equal(one, 1, 'one holder at once: one read, the re-read cost is paid only on the ambiguous path')
+  let gone = 0
+  const left = await ownerOfSocket({ exec: async () => (++gone === 1 ? table(row(`127.0.0.1:${PEER.port}`, '1.2.3.4:443', 8), row(`127.0.0.1:${PEER.port}`, '1.2.3.4:443', 9)) : table()), peer: PEER })
+  assert.deepEqual([left.pid, left.why], [null, 'no-row'], 'every holder gone on the re-read: nobody, never the earlier pick')
 })
 
 test('a slow table is waited for, not judged: an answer at 400 ms is the pid (a macOS machine 2026-10-17: 274 ms under a 250 ms budget spliced a 292 s OpenCode connection)', async () => {
@@ -59,7 +78,7 @@ test('a table that cannot be read — the helper failed, or hung past its guard 
   for (const [exec, why] of cases) {
     const failures = []
     const r = await ownerOfSocket({ exec, peer: PEER, onFailure: (rec) => failures.push(rec) })
-    assert.deepEqual([r.pid, r.source], [null, null])
+    assert.deepEqual([r.pid, r.source, r.why], [null, null, 'unreadable'])
     assert.equal(failures.length, 1)
     assert.equal(failures[0].code, 'socktable-unavailable')
     assert.match(failures[0].reason, why)

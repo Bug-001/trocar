@@ -271,15 +271,50 @@ test('W13 an upstream that cannot be reached is a 502, never a 200 first; the ro
   const [row] = L.flows
   assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side, row.pid, row.ingress], ['error', 'error', 'ECONNREFUSED', 'upstream', 4242, { route: 'of', group: 'spike' }])
   assert.equal(L.envelopes.length, 0)
-  assert.deepEqual(L.failures.map((f) => [f.where, f.code, f.group]), [['netenv', 'upstream-unreachable', 'spike']], 'the row, and one upstream-unreachable event (1.6 §9.7)')
+  assert.deepEqual(L.failures.filter((f) => f.code === 'upstream-unreachable'), [], 'a direct upstream dials the target itself: one dead host is that connection\'s row, not the door\'s upstream being down (4.8 W73)')
   assert.equal(L.engine.stats().ingress.unreachable, 1)
+})
+
+test('W73 upstream-unreachable blames the door\'s upstream only when the upstream proxy itself fails before a target is named (dial, SOCKS5 method / auth stage) or its kind cannot be dialled; a dead target host, direct or after the proxy got the request naming it, stays on its row', T, async (t) => {
+  const deadPort = () => new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)) }) })
+  const listen = async (onConn) => { const s = net.createServer((c) => { c.on('error', () => {}); onConn(c) }); await new Promise((r) => s.listen(0, '127.0.0.1', r)); t.after(() => s.close()); return s.address().port }
+  // takes the TCP connection, then drops the first message: for HTTP that is the CONNECT naming the target; for SOCKS5 it is the greeting, before any target
+  const closer = await listen((c) => c.once('data', () => c.destroy()))
+  // takes the connection and answers in something that is not SOCKS5: the method reply already shows the proxy is broken
+  const garbage = await listen((c) => c.once('data', () => c.end('HTTP/1.1 400 Bad Request\r\n\r\n')))
+  // a SOCKS5 proxy that accepts no-auth, then drops the CONNECT request that names the target
+  const socksDrop = await listen((c) => { let n = 0; c.on('data', () => { if (n++ === 0) c.write(Buffer.from([5, 0])); else c.destroy() }) })
+  // a SOCKS5 proxy that asks for user/pass, then drops the authentication
+  const authDrop = await listen((c) => { let n = 0; c.on('data', () => { if (n++ === 0) c.write(Buffer.from([5, 2])); else c.destroy() }) })
+  const auth = { username: 'u', password: 'p' }
+  const dead = await deadPort()
+  const cases = [ // [upstream, target, does the door's upstream get the blame]
+    [{ kind: 'direct' }, `127.0.0.1:${dead}`, false],
+    [{ kind: 'http', host: '127.0.0.1', port: dead }, 'api.example:443', true],
+    [{ kind: 'socks5', host: '127.0.0.1', port: dead }, 'api.example:443', true],
+    [{ kind: 'http', host: '127.0.0.1', port: closer }, 'api.example:443', false],
+    [{ kind: 'socks5', host: '127.0.0.1', port: closer }, 'api.example:443', true],
+    [{ kind: 'socks5', host: '127.0.0.1', port: garbage }, 'api.example:443', true],
+    [{ kind: 'socks5', host: '127.0.0.1', port: authDrop, auth }, 'api.example:443', true],
+    [{ kind: 'socks5', host: '127.0.0.1', port: socksDrop }, 'api.example:443', false],
+    [{ kind: 'quic', host: '127.0.0.1', port: dead }, 'api.example:443', true],
+  ]
+  for (const [upstream, target, blamed] of cases) {
+    const L = await lab(t, { meta: { upstream } })
+    const c = L.client(); c.write(connectHead(target))
+    assert.match(await c.head(), /^HTTP\/1\.1 502 /, `${upstream.kind}: 502`); await c.closed()
+    await L.settled(1)
+    assert.deepEqual([L.flows[0].decision, L.flows[0].error.side], ['error', 'upstream'], `${upstream.kind}: the row says the upstream side failed`)
+    const ev = L.failures.filter((f) => f.code === 'upstream-unreachable')
+    assert.deepEqual(ev.map((f) => [f.where, f.group]), blamed ? [['netenv', 'spike']] : [], `${upstream.kind} → ${target}: ${blamed ? 'the door\'s upstream is down' : 'one target, not the door'}`)
+  }
 })
 
 test('upstream-unreachable is written at most once per form (door group) per 60 s (1.6 §9.7), whatever the number of connections', T, async (t) => {
   let now = 1_000_000
-  const L = await lab(t, { timing: { now: () => now } })
   const dead = await new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)) }) })
-  const once = async () => { const c = L.client(); c.write(connectHead(`127.0.0.1:${dead}`)); await c.head(); await c.closed() }
+  const L = await lab(t, { timing: { now: () => now }, meta: { upstream: { kind: 'http', host: '127.0.0.1', port: dead } } }) // the door's upstream proxy is down
+  const once = async () => { const c = L.client(); c.write(connectHead('api.example:443')); await c.head(); await c.closed() }
   for (let i = 0; i < 3; i++) await once()
   now += 59_999; await once()
   now += 1; await once()
@@ -423,6 +458,19 @@ test('W15 a direct upstream, decrypted: one dial for the whole flow (the wrapper
   assert.deepEqual(L.envelopes.map((e) => [e.host, e.proc.pid, e.proc.agent, e.scheme]), [['upstream.test', 4242, 'claude-code', 'https']])
   assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured ?? null, L.flows[0].upstream, 'prelude' in L.flows[0]], ['decrypt', null, { kind: 'direct' }, false])
   assert.deepEqual(L.failures, [])
+})
+
+// `trocar status` prints stats().decrypted / spliced as outcomes: a row that keeps its planned decision while nothing was forwarded (RFC 4.6
+// §记录 连接行怎么落码) counts in neither. Field case: the upstream FINs after reading the engine's ClientHello.
+test('W15 a connection whose upstream hangs up during the engine\'s TLS handshake is not counted as decrypted; a decrypted one is', T, async (t) => {
+  const o = await origin(t)
+  const fin = net.createServer((s) => { s.on('error', () => {}); s.once('data', () => setTimeout(() => s.end(), 50)) }); await listen(fin); t.after(() => fin.close())
+  const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true } })
+  assert.equal(await talk((await tunnel(L.ingressPort, `127.0.0.1:${fin.address().port}`)).sock, trocarCa.certPem), 'closed'); await L.settled(1)
+  assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured], ['decrypt', 'error'], 'the row keeps the plan')
+  assert.equal((await talk((await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)).sock, trocarCa.certPem)).got, RESP); await L.settled(2)
+  await until(() => L.engine.stats().active === 0, 'both flows to finish')
+  assert.deepEqual([L.engine.stats().decrypted, L.engine.stats().spliced], [1, 0])
 })
 
 test('W15 an IP-literal target with an IP-SAN certificate is decrypted: no SNI exists for an IP (RFC 6066), so the upstream is verified against the address — not against Node\'s own \'localhost\' default (the macOS smoke run\'s live find, 2026-10-09)', T, async (t) => {
@@ -637,20 +685,21 @@ async function twoStepProxy(t, originPort, second) {
   return { port: srv.address().port, conns }
 }
 
-test('W15 step-aside whose second proxy prelude is refused: the agent\'s connection is closed, the row is decision error with the proxy\'s refusal, and no connection to the proxy is left open', T, async (t) => {
+test('W15 step-aside whose second proxy prelude is refused: the agent\'s connection is closed, the row keeps the planned splice with the proxy\'s refusal, and no connection to the proxy is left open', T, async (t) => {
   const o = await origin(t), proxy = await twoStepProxy(t, o.port, 'refuse')
   const L = await lab(t, { meta: { decrypt: true, upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port } } }) // no upstreamCa: the origin's CA is not trusted, so the engine steps aside
   const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
   assert.equal(await talk(sock, privCa.certPem), 'closed', 'the agent\'s connection is closed: there is nothing left to splice it to'); await L.settled(1)
   assert.equal(proxy.conns.length, 2, 'the first prelude, and the second that was refused')
   const [row] = L.flows
-  assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side], ['error', 'upstream-cert', 'proxy-refused', 'upstream'])
+  assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side, row.error.wait?.phase], ['splice', 'upstream-cert', 'proxy-refused', 'upstream', 'proxy-reply'])
   assert.match(row.error.message, /refused the second connection \(proxy-status-403\)/); assert.deepEqual(checkRecord(row), [])
+  await until(() => L.engine.stats().active === 0, 'the flow to finish'); assert.equal(L.engine.stats().spliced, 0, 'nothing was spliced: not counted as passed through')
   await within(Promise.all(proxy.conns.map((c) => c.closed)), 3000, 'every connection to the proxy to be closed'); await o.closed()
   assert.equal(L.envelopes.length, 0)
 })
 
-test('W15 step-aside whose client is gone when the proxy answers the second prelude: the new upstream is destroyed, nothing is spliced, and the row says the client closed first', T, async (t) => {
+test('W15 step-aside whose client is gone when the proxy answers the second prelude: the new upstream is destroyed, nothing is spliced, and the row says the client left during the wait', T, async (t) => {
   const o = await origin(t), proxy = await twoStepProxy(t, o.port, 'hold')
   const L = await lab(t, { meta: { decrypt: true, upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port } } })
   const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
@@ -659,8 +708,39 @@ test('W15 step-aside whose client is gone when the proxy answers the second prel
   sock.destroy(); assert.equal(await agent, 'closed')
   await sleep(100); proxy.conns[1].release() // the proxy says yes, to nobody
   await within(proxy.conns[1].closed, 3000, 'the connection the redial opened to be destroyed'); await L.settled(1)
-  assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured, L.flows[0].error.type, L.flows[0].error.side], ['error', 'upstream-cert', 'closed_before_decision', 'client'])
+  // the plan (splice) stays on the row; the error says the client left while the engine waited on the proxy's answer to the second prelude (RFC 4.6 §记录)
+  assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured, L.flows[0].error.type, L.flows[0].error.side, L.flows[0].error.wait?.phase], ['splice', 'upstream-cert', 'closed_before_reply', 'client', 'proxy-reply'])
   await o.closed(); assert.equal(o.conns.length, 1, 'the origin saw only the engine\'s dropped handshake: no ClientHello of the agent\'s went anywhere'); assert.equal(L.envelopes.length, 0)
+  await until(() => L.engine.stats().active === 0, 'the flow to finish'); assert.equal(L.engine.stats().spliced, 0, 'nothing was spliced: not counted as passed through')
+})
+
+// The second prelude of a step-aside is one wait: a slow one is one upstream-slow event (4.8 §5.2), the flow's, with its flow_id
+test('W15 step-aside whose second proxy prelude is slow: one upstream-slow event, carrying the flow', T, async (t) => {
+  const o = await origin(t), proxy = await twoStepProxy(t, o.port, 'hold')
+  const L = await lab(t, { meta: { decrypt: true, upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port } }, timing: { upstreamSlowMs: 60 } })
+  const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
+  const agent = talk(sock, privCa.certPem)
+  await until(() => proxy.conns.length === 2 && proxy.conns[1].release, 'the second prelude to reach the proxy', 4000)
+  await sleep(300)
+  sock.destroy(); await agent; proxy.conns[1].release(); await L.settled(1)
+  const slow = L.failures.filter((f) => f.code === 'upstream-slow')
+  assert.deepEqual(slow.map((f) => [f.phase, f.flow_id]), [['proxy-reply', L.flows[0].flow_id]], JSON.stringify(slow))
+})
+
+// A reset off the wire on the second dial is the OS's ECONNRESET on the row, not a close (wentBy reads a reset without `syscall` as Node's invented one)
+test('W15 step-aside whose second dial to the proxy is reset by the OS: the row keeps ECONNRESET on the upstream side', T, async (t) => {
+  const o = await origin(t), proxy = await twoStepProxy(t, o.port, 'hold')
+  let toProxy = 0
+  const connectUpstream = (d) => {
+    const s = net.connect(d.port, d.address)
+    if (d.port === proxy.port && ++toProxy === 2) process.nextTick(() => s.destroy(Object.assign(new Error('connect ECONNRESET'), { code: 'ECONNRESET', syscall: 'connect' })))
+    return s
+  }
+  const L = await lab(t, { meta: { decrypt: true, upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port } }, connectUpstream })
+  const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
+  assert.equal(await talk(sock, privCa.certPem), 'closed'); await L.settled(1)
+  assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured, L.flows[0].error.type, L.flows[0].error.side], ['splice', 'upstream-cert', 'ECONNRESET', 'upstream'])
+  assert.deepEqual(checkRecord(L.flows[0]), [])
 })
 
 test('W15 step-aside over an upstream that carries the user\'s credentials: the flow is closed, no second credentialed connection is opened', T, async (t) => {
@@ -783,7 +863,7 @@ test('W13 a client that resets after the ingress has answered, or while it looks
   assert.equal(L.engine.stats().ingress.flows, 0)
 })
 
-test('W13 a client that leaves while the upstream is being dialled takes the dial down: the upstream is destroyed, no connection row is written, nothing is counted', T, async (t) => {
+test('W13 a client that leaves while the upstream is being dialled takes the dial down: the upstream is destroyed, nothing is counted, and one row says the client left during the dial (RFC 4.6 §记录)', T, async (t) => {
   const hung = []
   const L = await lab(t, { connectUpstream: (d) => (d.port === 1 ? (hung.push(hungSocket()), hung.at(-1)) : net.connect(d.port, d.address)) })
   const a = L.client(); a.write(connectHead('127.0.0.1:1')) // a direct upstream whose connect never completes
@@ -795,7 +875,15 @@ test('W13 a client that leaves while the upstream is being dialled takes the dia
   await until(() => proxy.socks.length && proxy.socks[0].got.length, 'the proxy to get the prelude'); b.sock.destroy()
   await within(proxy.socks[0].closed, 1500, 'the connection to the proxy to be destroyed')
   await sleep(100)
-  for (const X of [L, P]) { assert.equal(X.flows.length, 0, 'the client left before the upstream was up: no flow existed, so no row'); assert.deepEqual(X.failures, []); assert.deepEqual(X.engine.stats().ingress, IDLE) }
+  // no flow existed, but the give-up is on record: who left, during which wait, for how long (the one signal that would show trocar delaying agents)
+  for (const [X, phase] of [[L, 'connect'], [P, 'proxy-reply']]) {
+    assert.equal(X.flows.length, 1, phase)
+    const [row] = X.flows
+    assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side, row.error.wait?.phase], ['error', 'error', 'closed_before_reply', 'client', phase])
+    assert.ok(row.error.wait.ms >= 0 && row.duration_ms === row.error.wait.ms, JSON.stringify(row)); assert.deepEqual(checkRecord(row), [])
+    assert.deepEqual(X.failures, []); assert.deepEqual(X.engine.stats().ingress, IDLE)
+  }
+  assert.equal(proxy.socks.length, 1, 'nothing dialled again')
 })
 
 test('W13 a client that leaves while lookupIngress is still running never gets a dial: the user\'s proxy sees no connection and no Proxy-Authorization for a connection nobody waits on', T, async (t) => {
@@ -859,3 +947,4 @@ test('W15 drain: `off` lands after an ingress flow\'s request went out and befor
   await within(L.engine.drained({ agents: null }), 4000, 'drained()')
   assert.deepEqual(L.failures, [])
 })
+

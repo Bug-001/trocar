@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import { sandbox } from './fixtures/dispatch-ctx.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
+import { appendEvent } from '../../src/collector/core/events.mjs'
 
 // every command that prints to a person and runs without changing the machine, plus the four state-changing ones as a plan (R6: the plan is the
 // receipt of the real run, in the future tense, so it carries the same words)
@@ -46,4 +47,17 @@ test('V73 · every string in every harness descriptor is English and ASCII (a re
     }
     walk(d, '')
   }
+})
+
+// the problem rows and the Expected section carry the records' own reasons, cut to a head: with long reasons and by-design rows on disk the same
+// rule holds (the mac and win VM terminals 2026-10-21 showed rows of 200 columns broken mid-word and a non-ASCII cut mark)
+test('V73 · trocar status --failures over long failure reasons and by-design rows: English, ASCII, inside 80 columns', async () => {
+  const s = await sandbox()
+  const long = 'the owner of 127.0.0.1:50211 could not be read (owner unreadable); the app keeps its own way until it fetches the PAC again, and so on '.repeat(3)
+  const at = new Date().toISOString()
+  appendEvent(s.dir, { ts: at, event: 'failure', where: 'ingress', code: 'pac-owner-unread', peer: '127.0.0.1:50211', reason: long })
+  appendEvent(s.dir, { ts: at, event: 'failure', where: 'engine', code: 'no-such-code-of-trocar', reason: long })
+  for (const reason of ['not-an-agent', 'group-off', 'outside-host-set']) appendEvent(s.dir, { ts: at, flow_id: reason, pid: 4242, host: 'api.example', decision: 'splice', not_captured: 'untracked', reason })
+  const { io } = await s.run(['status', '--failures'])
+  assertEnglish(io.text(), 'trocar status --failures')
 })

@@ -52,7 +52,7 @@ export function callFacts(records) {
 }
 
 // WARM like the index rows (D63 ①): kept against the segment's files and the sidecar's own, so never stale.
-const read = warmCache({ maxBytes: 32 * 1024 * 1024, bytes: (v) => (v ? v.facts.size * 160 : 0) });
+const read = warmCache({ cost: (v) => (v ? v.facts.size * 160 : 0) });
 /** readUsage({home, segment}) → { lines, facts: Map<lineNo, {lane, model, failed, cache_known, usage}>, problems } | null
  *  `lines`: the calls of lines 1..lines are all in `facts` (Infinity: a sealed segment, whole). null: no usable sidecar. */
 export const readUsage = ({ home = trocarHome(), segment, fs = nodeFs } = {}) =>

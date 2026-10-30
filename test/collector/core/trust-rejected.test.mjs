@@ -15,6 +15,7 @@ import { LEVELS, UNFOLDED_CODES, CODES } from '../../../src/health/codes.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { closeWithin } from '../../helpers/bounded.mjs'
 import { sandbox } from '../../cli/fixtures/dispatch-ctx.mjs'
+import { failureWord } from '../../../src/cli/words.mjs'
 
 const T = { timeout: 20_000 }
 const TRUST = { var: 'NODE_EXTRA_CA_CERTS', via: 'environ', file: '/home/u/.trocar/ca/extra-dsh.pem' }
@@ -76,7 +77,74 @@ test('4.6 R9: a client that refuses trocar\'s leaf → one critical trust-reject
   assert.deepEqual(doc.critical.map((c) => [c.kind, c.level, c.harness, c.pid, c.host]), [['trust-rejected', 'critical', 'deepseek-dsh', 5, 'api.deepseek.com'], ['trust-rejected', 'critical', 'deepseek-dsh', 5, 'chat.deepseek.com']])
   const text = (await s.run(['status', '--failures'], { deps: { captureHealth: () => health } })).io.stdoutText()
   // the critical kind first, in English (the summary's own layout is §3.5's, guarded by test/cli/status-doctor-en.test.mjs; this sandbox has nothing installed, so the summary says so)
-  const rows = text.split('\n').filter((l) => /^ {2}\S/.test(l))
-  assert.match(rows[0], /refused trocar's certificate under TLS, so that host is not captured/, text)
+  // a row is its first line and the lines folded under it (§1.1⑥); the sentence is the catalog's (words.mjs)
+  const rows = text.split('\n').reduce((acc, l) => { if (/^ {2}\S/.test(l)) acc.push(l); else if (/^ {3,}\S/.test(l) && acc.length) acc[acc.length - 1] += ` ${l.trim()}`; return acc }, []).map((r) => r.replace(/\s+/g, ' '))
+  assert.ok(rows[0].includes(failureWord(null, 'trust-rejected')), text)
   assert.ok(rows.length > 1, `the other condition is listed too:\n${text}`)
+})
+
+// ── RFC 4.6 §引擎 5 (D37) rejection criterion: a client refuses our leaf in the handshake or at once after it; a trusting client's
+// connection kept past the window and closed unused (a pooled socket timing out) is no rejection, and acceptance
+// counts the moment it is seen. Real engine, real TLS; the window is shortened through the engine's timing seam.
+const W = 300
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+async function windowRig() {
+  const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
+  const up = tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)) }, (s) => { s.on('error', () => {}); s.on('data', () => s.write('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok')) })
+  await new Promise((r) => up.listen(0, '127.0.0.1', r))
+  const trocarCa = createCa()
+  const meta = { dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 7, agent: 'claude-code', decrypt: true, door: 'g', negKey: '7', exe: '/x/claude', argv: ['claude'] }
+  const fails = [], flows = []
+  const engine = createEngine({ redirector: createStaticRedirector(meta), issuer: createLeafIssuer(loadCa(trocarCa)), upstreamCa: upCa.certPem, systemCa: { certs: [], sources: ['test'], errors: [] },
+    store: { envelope() {}, flow: (f) => flows.push(f) }, onFailure: (f) => fails.push(f), timing: { rejectWindowMs: W } })
+  const { port } = await engine.listen({})
+  const settled = (n) => new Promise((r) => { const t = setInterval(() => { if (flows.length >= n) { clearInterval(t); r() } }, 5) })
+  const connect = (ca, maxVersion) => new Promise((resolve) => { const c = tls.connect({ port, host: '127.0.0.1', servername: 'h.test', ca, maxVersion }, () => resolve(c)); c.on('error', () => resolve(null)) })
+  const unused = async (idleMs) => { const c = await connect(trocarCa.certPem); await sleep(idleMs); c.end(); await new Promise((r) => c.once('close', r)) }
+  const rejecting = (maxVersion = 'TLSv1.3') => connect(upCa.certPem, maxVersion) // Node: handshake, check, destroy — no alert
+  const used = async () => { const c = await connect(trocarCa.certPem); c.write('GET / HTTP/1.1\r\nHost: h.test\r\n\r\n'); await new Promise((r) => c.once('data', r)); return c }
+  const rejections = () => fails.filter((f) => f.code === 'trust-rejected' || f.code === 'negative-cache')
+  return { engine, fails, flows, settled, unused, rejecting, used, rejections, close: async () => { await closeWithin(engine); up.close() } }
+}
+
+test('4.6 §引擎 5: a trusting client\'s connection kept past the window and closed unused is no rejection — no critical, no strike, no not_captured', T, async () => {
+  const s = await windowRig()
+  await s.unused(2 * W); await s.settled(1); await s.unused(2 * W); await s.settled(2)
+  assert.deepEqual(s.flows.map((f) => [f.decision, f.not_captured ?? null, f.reason ?? null, f.error ?? null]), [['decrypt', null, null, null], ['decrypt', null, null, null]])
+  assert.deepEqual(s.rejections(), [])
+  assert.deepEqual(s.engine.negatives(), [])
+  await s.close()
+})
+
+for (const v of ['TLSv1.2', 'TLSv1.3']) {
+  test(`4.6 §引擎 5: a Node client that refuses the leaf (${v}, no alert) is judged at once under the window — critical on the first, negative on the second`, T, async () => {
+    const s = await windowRig()
+    await s.rejecting(v); await s.settled(1); await s.rejecting(v); await s.settled(2)
+    assert.deepEqual(s.flows.map((f) => [f.decision, f.not_captured]), [['decrypt', 'client-rejected-leaf'], ['decrypt', 'client-rejected-leaf']])
+    assert.equal(s.fails.filter((f) => f.code === 'trust-rejected').length, 1)
+    assert.deepEqual(s.engine.negatives().map((e) => [e.host, e.cause, e.rejections]), [['h.test', 'client-rejected-leaf', 2]])
+    await s.close()
+  })
+}
+
+test('4.6 §引擎 5: acceptance counts when it is seen — rejected, data on a connection still open, rejected → not negative', T, async () => {
+  const s = await windowRig()
+  await s.rejecting(); await s.settled(1)
+  const open = await s.used()
+  await s.rejecting(); await s.settled(2)
+  assert.deepEqual(s.engine.negatives(), [], 'the open connection that carried data reset the count before the second rejection')
+  open.end(); await s.settled(3)
+  await s.close()
+})
+
+test('4.6 §引擎 5: a connection still open when the window elapses counts as acceptance at that moment', T, async () => {
+  const s = await windowRig()
+  await s.rejecting(); await s.settled(1)
+  const pending = s.unused(10 * W) // accepted at W, closes at 10 W
+  await sleep(2 * W)
+  await s.rejecting(); await s.settled(2)
+  assert.deepEqual(s.engine.negatives(), [])
+  await pending; await s.settled(3)
+  assert.equal(s.flows[2].not_captured, undefined, 'the unused connection that closed after the window is no failure')
+  await s.close()
 })

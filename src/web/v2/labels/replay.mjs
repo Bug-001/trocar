@@ -228,6 +228,7 @@ export const PAGED_FULL = 'The full raw record is on disk'
 export const PAGED_PARTIAL = 'The captured part is on disk'
 export const LOAD_THIS_STEP = 'Load this step'
 export const RETRY = 'Retry'
+export const notRefreshed = (t, why) => `Not refreshed since ${t} · ${why}`
 export const UNPARSED_TITLE = 'This step\'s request could not be parsed; there is no context to show'
 export const UNPARSED_KEEP = 'The raw record is on disk, unchanged'
 export const NO_REQUEST = 'No request was captured for this step'
@@ -344,6 +345,7 @@ export const RES_NOT_LOADED = 'The body of this step has not loaded yet; it show
 export const RAW_WORD = 'Raw'
 export const RAW_HEAD = (n) => `Raw · step ${n}`
 export const REPLY_WORD = 'Reply'
+export const THINKING_ROW = 'Thinking'
 export const toolCallRow = (name) => `Tool call ${name}`
 export const stopReasonRow = (v) => `Stop reason ${v}`
 export const REPLY_PARSED = 'parsed reply'

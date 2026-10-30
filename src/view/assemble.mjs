@@ -5,11 +5,11 @@
 // provider parsing in the browser → invariant 3 / AC-3 intact (adding a provider = a new
 // server-side analyzer, frontend unchanged).
 import { createHash } from 'node:crypto';
-import { analyze, linearContext, cacheBreak, normResp, flatBlockText, unparsedErrMsg, compactionMeta } from './analyze.mjs';
+import { createAnalyzer, admitted, stepOrder, linearContext, cacheBreak, normResp, flatBlockText, unparsedErrMsg, compactionMeta } from './analyze.mjs';
 import { compactionVerdict } from '../identity/session-identity.mjs';
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf, captureLabelsOf } from '../dissect/capture-labels.mjs'; // #21 request-body labels, D38 WebSocket labels, response labels; captureLabelsOf: the per-call wire.labels (4.6 §记录)
 import { blockSpans } from '../adapters/cc.mjs';
-import { scanJson, spanAt } from '../adapters/content-hash.mjs';
+import { scanJson, spanAt } from '../dissect/json-scan.mjs';
 import { slimBlock, compBuckets } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../raw/refs.mjs';
 import { fieldTextOf, TEXT_REF_FIELD } from '../dissect/record-fields.mjs';
@@ -134,13 +134,15 @@ export function recordsForSession(records, sessionId) {
 // so a human can see WHAT arrived without us pretending to have understood it.
 // The evidence block for records no dissector claims. `partial` = they sit inside a session whose other
 // records ARE rendered (a mixed session); otherwise the whole session is unrecognized.
+// What the evidence block keeps of one such record (the fold lets the record go): endpoint, user-agent, model.
+function unknownFacts(r) {
+  let b = r && r.request && typeof r.request === 'object' ? r.request : null;
+  if (!b && r && typeof r.req_body === 'string') { try { b = JSON.parse(r.req_body); } catch { b = null; } }
+  return { endpoint: String((r && r.endpoint) || '').split('?')[0], ua: (headersOf(r) || {})['user-agent'], model: b && typeof b.model === 'string' ? b.model : null };
+}
 function unknownSummary(recs, partial) {
   const uniq = (xs) => [...new Set(xs.filter(Boolean))];
-  const models = uniq(recs.map((r) => {
-    let b = r && r.request && typeof r.request === 'object' ? r.request : null;
-    if (!b && r && typeof r.req_body === 'string') { try { b = JSON.parse(r.req_body); } catch { b = null; } }
-    return b && typeof b.model === 'string' ? b.model : null;
-  }));
+  const models = uniq(recs.map((r) => r.model));
   return {
     partial,
     reason: partial
@@ -151,8 +153,8 @@ function unknownSummary(recs, partial) {
         + 'records of a known wire that are no call (e.g. messages the server pushed with no call open). They are NOT '
         + 'parsed and NOT rendered — showing them under another wire\'s vocabulary would be a fabrication.',
     records: recs.length,
-    endpoints: uniq(recs.map((r) => String((r && r.endpoint) || '').split('?')[0])),
-    userAgents: uniq(recs.map((r) => (headersOf(r) || {})['user-agent'])),
+    endpoints: uniq(recs.map((r) => r.endpoint)),
+    userAgents: uniq(recs.map((r) => r.ua)),
     models,
   };
 }
@@ -180,59 +182,67 @@ const FLAT_LANES = {
   probe: { kind: 'probe', icon: '👁', label: 'warm-up / probe requests',
     note: 'A request the harness itself marks as a warm-up or probe (a request-kind hint, or a request that asks for no output): it primes the cache and is not a conversation turn. Its body is kept verbatim like any call, and a later call may build on it.' },
 };
-// analyze()'s step order (ts_request, then id), exactly: every assembler uses it, so a session's global
-// step index is one sort whichever wires it mixes.
-const stepOrder = (a, b) => String(a.ts_request).localeCompare(String(b.ts_request)) || String(a.id).localeCompare(String(b.id));
-function assembleFlatLane(records, d, opts = {}) {
-  // Admit every record the registry hands to THIS dissector and the dissector reads as a call (shape in, shape
-  // out: the dissector dispatches, the shared layer does not branch; assembleSession counts the rest).
-  const admits = (r) => !d.admits || d.admits(r);
-  const llm = (records || []).filter((r) => r && r.is_llm_call && boardDissectorFor(r) === d && admits(r)).sort(stepOrder);
-  // A wire whose context spans records (D37 ②) plans it over every record of the session — including the ones a
-  // tail bound leaves out (opts.chainRecords) — so no call looks partial only because the view is bounded.
-  const plans = d.prepare ? d.prepare(opts.chainRecords || records || []) : null;
-  const scans = new Map(); // record → field → scanned JSON root, shared by every call's locators (linear, not N²)
-  const calls = [];
-  const prevFlatOf = new Map(); // lane kind → the last call that established a cache prefix in that lane
+// A flat-lane wire's request as its dissector reads it: the stitched context (ctx), else the body parsed, else the demo v0
+// shape. `unparsed`: a body that is there but does not parse is unrenderable, with its reason (R4-3). A req_body that is
+// null (a WebSocket call whose request message is undecoded, or a server push: 4.6 §传输) is no body at all: such a call
+// has no request, and its labels say why (wsIncomplete); it must not take /api/session down either.
+// Side effect, as the board's callComp / cost need it: `r.request` is the parsed request, with the dissector's counts.
+function flatRequest(d, r, ctx) {
+  let req = ctx ? ctx.req : null, unparsed = false;
+  if (!ctx) {
+    try { req = JSON.parse(r.req_body); } catch { req = null; }
+    if (!req || typeof req !== 'object') {
+      if (r.request && typeof r.request === 'object') req = r.request; // demo v0 shape
+      else { req = {}; if (r.req_body != null) unparsed = true; }
+    }
+  }
+  r.request = req;
+  Object.assign(req, d.reqCounts(req)); // derived counts the board header + raw card read (parallel to hydrateForBoard)
+  req.context_chars = (r.req_body || '').length; // verbatim wire byte count
+  return { req, unparsed };
+}
+// The fold of one flat-lane wire (`d` = its dissector object): push(rec, gi) one call at a time in step order → the call
+// with the call in its META form (no blocks, `paged_out`); bodyOf() gives an in-window call its blocks back from its record.
+function flatLaneFold(d, read) {
+  const plans = d.prepare ? d.prepare(read) : null; // a wire whose context spans records (D37 ②) plans it as the calls arrive
+  // A lane of the fold is one agent's calls (3.5 §缓存): a subagent named by the harness's agent id, or by the wire's own (a
+  // WebSocket connection), is its own; the rest by lane kind. The board shows the kinds (finish()).
+  const byLane = new Map(); // lane → its calls, in step order
+  const prevFlatOf = new Map(); // lane → the last call that established a cache prefix in that lane
   const prevChainOf = new Map(); // and its resumable prefix-hash chain (prefixChain)
-  const prevInfoOf = new Map(); // lane kind → { msgCount, marker } of the last parsed call: the compaction verdict's predecessor
-  let local = 0;
-  for (const r of llm) {
-    const ctx = plans && d.contextOf ? d.contextOf(r, plans) : null; // { req, contextState, missing, locate }
+  const prevInfoOf = new Map(); // lane → { msgCount, marker } of the last parsed call: the compaction verdict's predecessor
+  const laneOfCall = new WeakMap();
+  const laneOf = (kind, h, r) => {
+    const agent = kind === 'subagent' ? h.laneKey ?? (d.agentOf ? d.agentOf(r) : null) : null;
+    return agent == null ? kind : `${kind}\n${agent}`;
+  };
+  function push(r) {
+    const call = take(r);
+    if (!call) return null;
+    const lane = laneOfCall.get(call), cs = byLane.get(lane);
+    if (cs.length < 2 || byOrder(cs[cs.length - 2], call) < 0) return call;
+    const ids = cs.slice(0, -1).map((c) => c.id);
+    for (const m of [byLane, prevFlatOf, prevChainOf, prevInfoOf]) m.delete(lane);
+    return relane(ids, r, read, take);
+  }
+  function take(r) {
+    if (!r.is_llm_call) return null;
+    const ctx = plans ? plans.context(r) : null; // { req, contextState, missing, locate }
     // the dissector's own lane (a warm-up, 3.1:37) first, else the harness table's hint (3.4: e.g. a subagent
     // header) — the rule the ETL uses too (registry.flatLaneOf); labels are server-side (invariant 3)
     const laneKind = flatLaneOf(d, r);
-    const prevFlat = prevFlatOf.get(laneKind) || null;
-    const prevChain = prevChainOf.get(laneKind) || null; // set together with prevFlat: both or neither
-    const gi = opts.giOf ? opts.giOf(r) : local;
-    local++;
-    let req;
-    let unparsed = false; // a request body that does not parse has no context to show: say so (invariant 4, D38)
+    const h = hintsOf(r);
+    const lane = laneOf(laneKind, h, r);
+    const prevFlat = prevFlatOf.get(lane) || null;
+    const prevChain = prevChainOf.get(lane) || null; // set together with prevFlat: both or neither
     // a call the dissector knows ran but whose request was not stored (ctx.unrenderable says why): no context to
     // show either, but no failure — its reply and usage are real
     const unstored = ctx && ctx.unrenderable ? String(ctx.unrenderable) : null;
+    const { req, unparsed } = flatRequest(d, r, ctx);
     // 3.4: a call whose context is unknown (no stored request, a body that did not parse, a partial context — the ETL's
     // context_state, a continuation with no predecessor in the capture included) has no observed message count: it
     // gets no compaction verdict and is not the lane's baseline for the next call
     const noContext = () => unparsed || !!unstored || wire.contextState === 'partial';
-    if (ctx) req = ctx.req;
-    else {
-      try { req = JSON.parse(r.req_body); } catch { req = null; }
-      if (!req || typeof req !== 'object') {
-        if (r.request && typeof r.request === 'object') req = r.request; // demo v0 shape
-        else {
-          req = {};
-          // a body that is there but does not parse is unrenderable, with its reason (R4-3). A req_body that is null (a
-          // WebSocket call whose request message is undecoded, or a server push: 4.6 §传输) is no body at all: such a call
-          // has no request, and its labels say why (wsIncomplete); it must not take /api/session down either
-          if (r.req_body != null) unparsed = true;
-        }
-      }
-    }
-    r.request = req; // so the board's callComp / cost read the parsed request
-    // derived counts the board header + raw card read (parallel to hydrateForBoard on the multi-lane path)
-    Object.assign(req, d.reqCounts(req));
-    req.context_chars = (r.req_body || '').length; // verbatim wire byte count
     const flat = d.boardFlat(req, r);
     const norm = d.normResp(r);
     const usage = norm.canonUsage;
@@ -242,11 +252,10 @@ function assembleFlatLane(records, d, opts = {}) {
     // 3.4 compaction, the ETL's verdict (compactionVerdict, the one shared rule): a harness hint (Codex
     // request_kind=compaction, a compact header), a text marker on its rising edge (Hermes), then a big drop.
     // The count is the dissector's own (the ETL's), so compaction_from / _to match DuckDB.
-    const h = hintsOf(r);
     const msgN = d.messageCount ? d.messageCount(req) : (req.message_count || 0);
-    const comp = noContext() ? { compaction: false } : compactionMeta(compactionVerdict(prevInfoOf.get(laneKind) || null,
+    const comp = noContext() ? { compaction: false } : compactionMeta(compactionVerdict(prevInfoOf.get(lane) || null,
       { hint: h.compaction === true, marker: h.compactionMarker === true, msgCount: msgN }));
-    if (!noContext()) prevInfoOf.set(laneKind, { msgCount: msgN, marker: h.compactionMarker === true });
+    if (!noContext()) prevInfoOf.set(lane, { msgCount: msgN, marker: h.compactionMarker === true });
     const brk = cacheBreak(prevFlat, flat, { compaction: comp.compaction });
     // 3.2:124 on the board too: what is shown of a partial / server-edited context is not what the model saw,
     // so no byte-identity claim and no ground truth is made over it
@@ -259,9 +268,8 @@ function assembleFlatLane(records, d, opts = {}) {
     brk.prefixByteIdentical = prefixByteIdentical;
     brk.gt = realGroundTruth(prefixByteIdentical, usage.read, usage.create);
     brk.gtReal = true;
-    const kept = !opts.keepFlat || opts.keepFlat(gi); // see assembleSession: retention window
-    calls.push({
-      gi, id: r.id, streamId: laneKind, rec: kept ? slimRec(r) : { id: r.id, request: { model: req.model } }, norm, wireFormat: d.id,
+    const call = {
+      gi: null, id: r.id, streamId: laneKind, rec: slimRec(r), norm: { usage: norm.usage }, wireFormat: d.id,
       ctx: d.ctxTokens(norm),
       msgCount: req.message_count || 0,
       tools: Array.isArray(req.tools) ? req.tools.length : 0,
@@ -269,36 +277,53 @@ function assembleFlatLane(records, d, opts = {}) {
       ...comp, error: !!r.error || failed, reqIncomplete: reqIncompleteOf(r), wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
       // the same sentinel the multi-lane path makes of a body that did not parse: the page shows why, not an empty window
       ...(unparsed ? { unparsed: true, errMsg: unparsedErrMsg(reqIncompleteOf(r)) } : unstored ? { unparsed: true, errMsg: `unrenderable: ${unstored}` } : null),
-      wire, nonBlockKeys: kept ? nonBlockKeysOf(r, d.id) : [], ...extraMessagesOf(r), respRefs: respRefsOf(r),
-      // shipped as metadata + a text_ref per block, never the body (4.2:55); a cross-record context locates each
-      // block in the record and field its bytes came from; out of the window: no blocks
-      flat: kept ? (ctx ? withLocatedRefs(flat, ctx.locate, scans) : withPathRefs(flat, r)) : [], ...(kept ? null : { paged_out: true }),
-      // Tier A, same as the multi-lane path: computed from `flat` BEFORE the retention window drops it.
+      // blocks ride only on a call a page ships with its body (bodyOf); a call in its meta form says so (invariant 4)
+      wire, nonBlockKeys: [], ...extraMessagesOf(r), respRefs: respRefsOf(r), flat: [], paged_out: true,
+      // Tier A, same as the multi-lane path: computed from `flat` before it is let go.
       comp: compBuckets(flat),
       usage, cacheBreak: brk, gt: brk.gt, prefixSha256: curPfx,
-    });
+    };
+    placed(call, r, self);
+    laneOfCall.set(call, lane);
+    if (!byLane.has(lane)) byLane.set(lane, []);
+    byLane.get(lane).push(call);
     // A call that failed never established a cache prefix, so it MUST NOT become the next baseline. A call whose request
     // was not stored does (with no blocks, as in the ETL): the next call then has no known prefix to compare with.
-    if (!(r.error || failed || (st != null && st !== 200))) { prevFlatOf.set(laneKind, flat); prevChainOf.set(laneKind, chain); }
+    if (!(r.error || failed || (st != null && st !== 200))) { prevFlatOf.set(lane, flat); prevChainOf.set(lane, chain); }
+    return call;
   }
-  const kinds = Object.keys(FLAT_LANES).filter((k) => calls.some((c) => c.streamId === k));
-  const lanes = kinds.map((k) => {
-    const lc = calls.filter((c) => c.streamId === k);
-    // the compaction events the board's outline lists, carrying the step's inference marker with them (invariant 4)
-    const events = lc.filter((c) => c.compaction).map((c) => ({ type: 'compaction', step: c.gi, streamId: k, from: c.evictedFrom, to: c.evictedTo,
-      inferred: c.compactionInferred, confidence: c.compactionConfidence, basis: c.compactionBasis }));
-    return { id: k, streamId: k, ...FLAT_LANES[k], calls: lc, events, resources: [], seenFiles: [],
-      giLocal: new Map(lc.map((c, i) => [c.gi, i])), peakCtx: lc.reduce((m, c) => Math.max(m, c.ctx), 1),
-      spawnStep: null, parent: null, flagged: 0 };
-  });
-  const stats = {
-    calls: calls.length, streams: lanes.length, subagents: lanes.filter((l) => l.kind === 'subagent').length, monitors: 0,
-    compactions: calls.filter((c) => c.compaction).length,
-    totalIn: calls.reduce((a, c) => a + ((c.norm.usage || {}).input_tokens || 0), 0),
-    totalOut: calls.reduce((a, c) => a + ((c.norm.usage || {}).output_tokens || 0), 0),
-    peakCtx: calls.reduce((a, c) => Math.max(a, c.ctx), 0),
-  };
-  return { provider: d.provider, streams: lanes.map((l) => ({ id: l.id, kind: l.kind, calls: l.calls })), steps: calls, stats, lanes };
+  // shipped as metadata + a text_ref per block, never the body (4.2:55); a cross-record context locates each block in the
+  // record and field its bytes came from
+  function bodyOf(call, r) {
+    const ctx = plans ? plans.context(r) : null;
+    const { req } = flatRequest(d, r, ctx);
+    const flat = d.boardFlat(req, r);
+    return { rec: slimRec(r), norm: d.normResp(r), nonBlockKeys: nonBlockKeysOf(r, d.id), flat: ctx ? withLocatedRefs(flat, ctx.locate, new Map()) : withPathRefs(flat, r) };
+  }
+  const all = () => [...byLane.values()].flat();
+  function finish() {
+    const calls = all().sort((a, b) => a.gi - b.gi);
+    const kinds = Object.keys(FLAT_LANES).filter((k) => calls.some((c) => c.streamId === k));
+    const lanes = kinds.map((k) => {
+      const lc = calls.filter((c) => c.streamId === k);
+      // the compaction events the board's outline lists, carrying the step's inference marker with them (invariant 4)
+      const events = lc.filter((c) => c.compaction).map((c) => ({ type: 'compaction', step: c.gi, streamId: k, from: c.evictedFrom, to: c.evictedTo,
+        inferred: c.compactionInferred, confidence: c.compactionConfidence, basis: c.compactionBasis }));
+      return { id: k, streamId: k, ...FLAT_LANES[k], calls: lc, events, resources: [], seenFiles: [],
+        giLocal: new Map(lc.map((c, i) => [c.gi, i])), peakCtx: lc.reduce((m, c) => Math.max(m, c.ctx), 1),
+        spawnStep: null, parent: null, flagged: 0 };
+    });
+    const stats = {
+      calls: calls.length, streams: lanes.length, subagents: lanes.filter((l) => l.kind === 'subagent').length, monitors: 0,
+      compactions: calls.filter((c) => c.compaction).length,
+      totalIn: calls.reduce((a, c) => a + ((c.norm.usage || {}).input_tokens || 0), 0),
+      totalOut: calls.reduce((a, c) => a + ((c.norm.usage || {}).output_tokens || 0), 0),
+      peakCtx: calls.reduce((a, c) => Math.max(a, c.ctx), 0),
+    };
+    return { provider: d.provider, streams: lanes.map((l) => ({ id: l.id, kind: l.kind, calls: l.calls })), steps: calls, stats, lanes };
+  }
+  const self = { push, bodyOf, finish, calls: all };
+  return self;
 }
 
 // records = ONE session's raw (v0/demo-shape) records. Returns analyze() output with each
@@ -396,11 +421,13 @@ function extraMessagesOf(rec) {
     return { key: `req_extra_messages[${k}]`, chars: null, ref: null, note: `stored ${fieldTextOf(rec, field).missing.replace(/^stores \S+ as /, 'as ')}` };
   }) };
 }
-// Locators for a context assembled across records: each block's bytes live in the record and field its segment
-// came from (D37 ②), addressed by a field-qualified text_ref (4.2:40). `scans` caches each (record, field)'s
-// scanned JSON once per session. A block that cannot be addressed is shipped inline and labelled unaddressable
-// by slimBlock with the reason it could not be (invariant 4) — a field outside the 4.2:40 grammar included, so a
-// dissector's mistake labels one block instead of failing the whole session. Exported for its own test.
+// Locators for a context assembled across records: each block's bytes live in the record and field its segment came from
+// (D37 ②), addressed by a field-qualified text_ref (4.2:40). A locator is either { rec, field, path } — the record in hand, its
+// field scanned here (`scans` caches each (record, field) once) — or { src, field, node, sub } — a segment of an earlier record
+// that the dissector keeps by locator (src/dissect/chain.mjs): its source's id and stream, and the scan of its item. A block that
+// cannot be addressed is shipped inline and labelled unaddressable by slimBlock with the reason it could not be (invariant 4) —
+// a field outside the 4.2:40 grammar included, so a dissector's mistake labels one block instead of failing the whole session.
+// Exported for its own test.
 export function withLocatedRefs(flat, locateFn, scans = new Map()) {
   const rootOf = (rec, field) => {
     let m = scans.get(rec);
@@ -415,17 +442,18 @@ export function withLocatedRefs(flat, locateFn, scans = new Map()) {
   };
   return flat.map((b) => {
     const loc = locateFn(b);
-    const rec = loc && loc.rec;
-    if (!rec) return slimBlock(b, null, 'the dissector placed this block in no source record');
+    const at = loc && (loc.rec || loc.src);
+    if (!at) return slimBlock(b, null, 'the dissector placed this block in no source record');
     if (loc.why) return slimBlock(b, null, String(loc.why)); // e.g. a reply rebuilt from a stream: no single byte span
-    const base = rawRefOf(rec);
-    const of = `record ${rec.id ?? '(no id)'}`;
+    const base = loc.rec ? rawRefOf(loc.rec) : (at.id != null && at.stream ? mintRawRef(at.sid, at.stream, String(at.id)) : null);
+    const of = `record ${at.id ?? '(no id)'}`;
     if (!base) return slimBlock(b, null, `its source ${of} carries no id or stream to address`);
     if (loc.field !== 'req_body' && !TEXT_REF_FIELD.test(String(loc.field))) return slimBlock(b, null, `field "${loc.field}" of ${of} is no text_ref field segment (4.2:40)`);
-    const root = rootOf(rec, loc.field);
+    const root = loc.rec ? rootOf(loc.rec, loc.field) : loc.node;
     if (!root) return slimBlock(b, null, `field ${loc.field} of ${of} holds no JSON text`);
-    const span = spanAt(root, loc.path);
-    if (!span) return slimBlock(b, null, `path ${JSON.stringify(loc.path)} is not in field ${loc.field} of ${of}`);
+    const path = loc.rec ? loc.path : loc.sub;
+    const span = spanAt(root, path);
+    if (!span) return slimBlock(b, null, `path ${JSON.stringify(path)} is not in field ${loc.field} of ${of}`);
     return slimBlock(b, composeTextRef(base, span, loc.field));
   });
 }
@@ -471,41 +499,84 @@ function nonBlockKeysOf(rec, format) {
   return out;
 }
 
-// `opts.keepFlat(gi)` — RETENTION WINDOW. The cache-break chain is inherently sequential: call N's
-// diff needs call N-1's flat blocks, so every call must be assembled. But only the calls the browser
-// is actually about to render need to KEEP their blocks. When a window is supplied, an out-of-window
-// call is assembled, used as the next call's baseline, and then has its blocks dropped — so peak cost
-// is two flats plus N cheap metas instead of N flats. That is what lets a 578-call session be
-// assembled whole (all 578 bars on the timeline, correct diffs) without the assembled view growing
-// past what can be serialized. Omitted → keep everything (unchanged full-send behaviour).
+// ONE SESSION, FOLDED (3.5 §内存有界). createAssembler() → { push(rec), finish(), bodyOf(call, rec) }: the session's records go in
+// ONE AT A TIME. push() assembles the call — its lane, the cache-break and prefix chain against its lane's previous call, its
+// composition, wire facts and usage — and keeps it in its META form: no blocks, `paged_out`, `rec` and `norm` reduced to what the
+// timeline reads. The record's body is let go when push() returns; what the fold holds is the calls' meta, each lane's previous
+// call (its blocks are the next call's baseline) and the locators a cross-record context (D37 ②) is stitched by. bodyOf() gives
+// one call its blocks back — `flat` (metadata + a text_ref per block), `nonBlockKeys`, the reply (`norm`), `rec` — from its own
+// record, with the same functions push() used, so a page can ship the calls it shows with their bodies without the session ever
+// being held whole. finish() builds the `analyzed` document without changing what the fold derived, so it can go on afterwards.
 //
-// ONE SESSION, SEVERAL WIRES (D37 ①: the wire format is per call — an auxiliary model, a provider template
-// or a per-model protocol choice can mix them). Each record goes to the assembler of its own wire; when more
-// than one wire is present the calls carry the session's GLOBAL step index (one sort, analyze()'s order),
-// lanes of the same id merge, and `steps[gi]` is the call with that gi (the browser rehydrates by it).
-// Records no dissector claims are counted in `analyzed.unknown` and never rendered (3.1:58).
-export function assembleSession(records, opts = {}) {
-  const recs = records || [];
-  const groups = new Map(); // dissector object | 'analyzed' → records
-  const unknown = [];
-  for (const r of recs) {
+// LANE BY LANE. A record is written when its call ends, so the calls of lanes running side by side (subagents, a long main call)
+// arrive out of step order. Everything a call is assembled against is its own lane's (analyze.mjs createAnalyzer), so a record goes
+// on its lane whatever the other lanes hold; what orders the lanes against each other — the global step index `gi`, the stream
+// ids — is given at finish(), by step order (analyze.mjs stepOrder). A record that sorts before its lane's last call folds that
+// lane again (relane: its records read back by id, `read(ids)` yielding them in the order asked), never the session. So the
+// document is the one a fold in step order gives, whatever order the records came in.
+//
+// SEVERAL WIRES (D37 ①: the wire format is per call — an auxiliary model, a provider template or a per-model protocol choice can
+// mix them). Each record goes to the fold of its own wire; every call carries the session's GLOBAL step index, lanes of the same
+// id merge, and `steps[gi]` is the call with that gi (the browser rehydrates by it). Records no dissector claims are counted in
+// `analyzed.unknown` and never rendered (3.1:58).
+export function createAssembler({ read = null } = {}) {
+  const folds = new Map(); // dissector object | 'analyzed' → its fold
+  const unknown = [], other = []; // { at, facts }: what unknownSummary reads of records no fold takes (LLM calls / the rest)
+  const foldKey = (r) => {
     let d = boardDissectorFor(r);
     if (d && d.admits && !d.admits(r)) d = null; // a record of a known wire that is no call (e.g. a server push): counted
-    const key = d || (wireFormatOf(r) === 'anthropic' ? 'analyzed' : null);
-    if (!key) { if (r && r.is_llm_call) unknown.push(r); continue; }
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(r);
+    return d || (wireFormatOf(r) === 'anthropic' ? 'analyzed' : null);
+  };
+  const facts = (xs) => [...xs].sort((a, b) => stepOrder(a.at, b.at)).map((x) => x.facts);
+  let done = null; // the document of what has gone in so far, until the next push
+  function finish() {
+    if (!folds.size) return assembleUnknown(facts(unknown.length ? unknown : other)); // labelled, never faked
+    [...folds.values()].flatMap((f) => f.calls()).sort(byOrder).forEach((c, i) => { c.gi = i; });
+    const first = (v) => (v.steps.length ? v.steps[0].gi : Infinity);
+    const views = [...folds.values()].map((f) => f.finish()).sort((a, b) => first(a) - first(b));
+    const A = views.length === 1 ? views[0] : mergeViews(views);
+    if (unknown.length) A.unknown = unknownSummary(facts(unknown), true);
+    return A;
   }
-  if (!groups.size) return assembleUnknown(unknown.length ? unknown : recs); // labelled, never faked
-  let sub = opts;
-  if (groups.size > 1) {
-    const order = [...groups.values()].flat().filter((r) => r && r.is_llm_call).sort(stepOrder);
-    const giByRec = new Map(order.map((r, i) => [r, i])); // by record identity: ids repeat across files
-    sub = { ...opts, giOf: (r) => giByRec.get(r) };
+  return {
+    push(r) {
+      if (!r) return null;
+      done = null;
+      const key = foldKey(r);
+      if (!key) { (r.is_llm_call ? unknown : other).push({ at: orderOf(r), facts: unknownFacts(r) }); return null; }
+      let f = folds.get(key);
+      if (!f) folds.set(key, (f = key === 'analyzed' ? multiLaneFold(read) : flatLaneFold(key, read)));
+      return f.push(r);
+    },
+    bodyOf: (call, r) => PLACE.get(call).fold.bodyOf(call, r),
+    finish: () => (done = done || finish()), // the same object until the next push: nothing downstream changes it
+  };
+}
+// A call's place in step order (its record's ts_request and id; the global index is given by it at finish()) and the fold that
+// assembled it (which gives its body back), kept beside it.
+const PLACE = new WeakMap();
+const orderOf = (r) => ({ ts_request: r.ts_request, id: r.id });
+const placed = (call, r, fold) => { PLACE.set(call, { ...orderOf(r), fold }); return call; };
+const byOrder = (a, b) => stepOrder(PLACE.get(a), PLACE.get(b));
+// A record that sorts before its lane's last call: the lane — forgotten by the caller — goes in again, its records `ids` read back
+// in step order with `r` in its place. → r's call.
+function relane(ids, r, read, take) {
+  if (!read) throw new Error(`record ${r.id} sorts before calls already folded in its lane, and no reader can give that lane's records again`);
+  let mine = null, pending = true;
+  for (const x of read(ids)) {
+    if (pending && stepOrder(r, x) < 0) { mine = take(r); pending = false; }
+    take(x);
   }
-  const views = [...groups].map(([k, rs]) => (k === 'analyzed' ? assembleAnalyzed(rs, sub) : assembleFlatLane(rs, k, sub)));
-  const A = views.length === 1 ? views[0] : mergeViews(views);
-  if (unknown.length) A.unknown = unknownSummary(unknown, true);
+  return pending ? take(r) : mine;
+}
+
+// The batch form: `records` (one session's, any order) folded whole, every call with its body.
+export function assembleSession(records) {
+  const a = createAssembler();
+  const pushed = [];
+  for (const r of [...(records || [])].sort(stepOrder)) { const c = a.push(r); if (c) pushed.push([c, r]); }
+  const A = a.finish();
+  for (const [c, r] of pushed) { Object.assign(c, a.bodyOf(c, r)); delete c.paged_out; }
   return A;
 }
 
@@ -530,98 +601,99 @@ function mergeViews(views) {
       peakCtx: Math.max(0, ...views.map((v) => (v.stats || {}).peakCtx || 0)) } };
 }
 
-// The multi-lane path (the Anthropic wire): analyze() segments lanes, then each call is baked.
-function assembleAnalyzed(records, opts = {}) {
-  // Dissect each record to the shape the board's block extractor reads (v0 in-place; D10 req_body→request).
-  // A global step index (mixed session) is looked up on the original record, not the hydrated copy.
-  // A call that continues a server-held thread carries only its delta: the dissector stitches its context over every
-  // record of the session (opts.chainRecords, so a bounded view does not make calls partial), as on the flat-lane path.
-  const plans = MULTI_LANE_CONTEXT.prepare(opts.chainRecords || records);
-  const hydrated = records.map((r) => hydrateForBoard(r, MULTI_LANE_CONTEXT.contextOf(r, plans)));
-  const giOfHydrated = opts.giOf ? new Map(hydrated.map((h, i) => [h, opts.giOf(records[i])])) : null;
-  const A = analyze(hydrated, giOfHydrated ? { giOf: (h) => giOfHydrated.get(h) } : {});
-  // Every parsed body is reachable from its call's `rec` from here on, and an out-of-window call drops
-  // that reference below. Letting go of these two is what makes the drop actually free the body: a
-  // 115-call session holds ~0.8 MB of parsed request per call, which is the peak RSS (1.6 §3.1 ≤ 200 MB).
-  hydrated.length = 0;
-  if (giOfHydrated) giOfHydrated.clear();
-  // Block keys of one session: the same context is re-sent every turn, so the per-text hash is asked for
-  // once per call. One map per assembly, dropped with it (see analyze.mjs::blkKey).
-  const keyMemo = new Map();
-  const scans = new Map(); // record → field → scanned JSON root, shared by the stitched calls' locators
-  for (const lane of A.lanes || []) {
-    let prevFlat = null, prevChain = null;
-    for (const call of lane.calls || []) {
-      if (!call.rec || !call.rec.request) { call.flat = []; call.cacheBreak = null; call.gt = null; call.wire = null; continue; }
-      const ctx = call.rec._ctx || null;
-      call.wire = wireOf(call.rec, 'anthropic', ctx); // cheap meta: rides on out-of-window calls too
-      call.respRefs = respRefsOf(call.rec); // locators only (a few dozen bytes each), never the reply body
-      const flat = linearContext(call.rec.request, keyMemo);
-      // Tag per-block faithfulness SERVER-SIDE (reads provider block shape here, not in the browser →
-      // invariant 3). opaque = encrypted/redacted reasoning replayed as signature-only, no plaintext on
-      // the wire (thinking/redacted_thinking with a signature but empty text). The board renders a badge
-      // off b.faithfulness so nobody mistakes ciphertext for verbatim content (invariant 4). (1.4:52)
-      for (const b of flat) {
-        const bl = b.block || {};
-        if ((b.kind === 'thinking' || b.kind === 'redacted_thinking') && bl.signature && !(bl.thinking || bl.text)) b.faithfulness = 'opaque';
-      }
-      call.flat = flat;
-      call.norm = call.norm || normResp(call.rec);
-      const u = call.norm.usage || {};
-      // Bake NEUTRAL canonical usage (D18a Q1 / D24): the board frontend reads call.usage.{read,
-      // create,fresh,out} — ZERO provider-native usage field names in the browser. Provider→canonical
-      // mapping happens HERE (server-side normResp), so adding a harness never touches the frontend (AC-3).
-      // Names track the 3.2 usage columns (cache_read / cache_write / input_uncached / output).
-      call.usage = {
-        read: u.cache_read_input_tokens || 0,
-        create: u.cache_creation_input_tokens || 0,
-        fresh: u.input_tokens || 0,
-        out: u.output_tokens || 0,
-      };
-      // cacheBreak with prevFlat=null on the first call — matches the demo render's own call site.
-      const brk = cacheBreak(prevFlat, flat, { compaction: !!call.compaction });
-      // D17④: REAL prefix SHA-256 over verbatim bytes (not the demo's 32-bit structural proxy). Two calls'
-      // prefixes are byte-identical iff their full SHA-256 over [0,idx) match → independent byte truth.
-      const read = u.cache_read_input_tokens || 0, create = u.cache_creation_input_tokens || 0;
-      // 3.2:124, as on the flat-lane path: what is shown of a partial / server-edited context is not what the model
-      // saw, so no byte-identity claim and no ground truth is made over it (the ETL writes NULL / NULL too)
-      const blind = call.wire.contextState === 'partial' || call.wire.contextState === 'server_edited';
-      const chain = prefixChain(flat, prevChain);
-      const curPfx = blind ? null : chain.digestAt(brk.idx);
-      const prevPfx = prevFlat ? prevChain.digestAt(brk.idx) : null;
-      const prefixByteIdentical = brk.idx > 0 && curPfx != null && curPfx === prevPfx;
-      brk.prefixSha256 = curPfx;                       // 逐字字节事实(可独立复算)
-      brk.prefixByteIdentical = prefixByteIdentical;
-      brk.gt = realGroundTruth(prefixByteIdentical, read, create); // byte-truth-backed, not structural proxy
-      brk.gtReal = true;                               // marker MAY drop the "结构估计" caveat for the gt claim
-      call.cacheBreak = brk;
-      call.gt = brk.gt;
-      call.prefixSha256 = curPfx;
-      // Advance the cache-prefix baseline ONLY for calls that actually established one. A call that
-      // 4xx'd/5xx'd never got far enough for the provider to write a KV-cache prefix, so chaining
-      // through it makes the NEXT successful call diff against context that was never cached — the
-      // board then reports a cache break that did not happen, with a cause and a fix hint. analyze()
-      // marks this as `chainsPrefix`; undefined (older shapes) means "assume it chained".
-      if (call.chainsPrefix !== false) { prevFlat = flat; prevChain = chain; }
-      // COMPOSITION IS TIER A — computed HERE, while the blocks are still in hand, because the very
-      // next line throws them away for out-of-window calls. Nine integers, 125 bytes: it rides on
-      // every call whether or not its body does, so the timeline draws the WHOLE session rather than
-      // hatching everything outside the current page as "composition unknown".
-      call.comp = compBuckets(flat);
-      // Blocks kept only inside the retention window; `prevFlat` above still holds the real array, so
-      // the NEXT call's diff is computed against the true baseline, not against an emptied one. `rec` is
-      // slimmed here too: the page ships a paged-out call's rec as `{id, request:{model}}` either way
-      // (board.mjs::slimCall), so holding the whole parsed body until then only raises peak RSS.
-      if (opts.keepFlat && !opts.keepFlat(call.gi)) { call.flat = []; call.nonBlockKeys = []; call.paged_out = true; call.rec = slimRec(call.rec); continue; }
-      // SHIP METADATA + A LOCATOR, NEVER THE BODY (RFC 4.2:55 「看全文=回源」 · 1.4:35 「点开惰性填正文」).
-      // Everything above this line needed the real text — the diff chain, the prefix sha-256, the
-      // byte weights — and all of it has now been computed. What leaves the process is the collapsed
-      // row plus a text_ref, and the body is fetched from the raw capture when a row is opened.
-      call.flat = ctx ? withLocatedRefs(flat, ctx.locate, scans) : withRefs(flat, call.rec);
-      call.nonBlockKeys = nonBlockKeysOf(call.rec, 'anthropic');
-      call.rec = slimRec(call.rec);
-    }
+// The blocks of an Anthropic-wire request, tagged with their faithfulness SERVER-SIDE (reads provider block shape here, not in
+// the browser → invariant 3). opaque = encrypted/redacted reasoning replayed as signature-only, no plaintext on the wire
+// (thinking/redacted_thinking with a signature but empty text). The board renders a badge off b.faithfulness so nobody
+// mistakes ciphertext for verbatim content (invariant 4). (1.4:52)
+function anthropicFlat(request, keyMemo) {
+  const flat = linearContext(request, keyMemo);
+  for (const b of flat) {
+    const bl = b.block || {};
+    if ((b.kind === 'thinking' || b.kind === 'redacted_thinking') && bl.signature && !(bl.thinking || bl.text)) b.faithfulness = 'opaque';
   }
-  A.provider = 'cc';
-  return A;
+  return flat;
+}
+// The multi-lane fold (the Anthropic wire): each record is dissected to the shape the board's block extractor reads (v0 in
+// place; D10 req_body→request), analyze()'s fold puts it in its lane, then the call is baked against its lane's previous one.
+// A call that continues a server-held thread carries only its delta: the dissector stitches its context as the calls arrive.
+function multiLaneFold(read) {
+  const an = createAnalyzer();
+  const plans = MULTI_LANE_CONTEXT.prepare(read);
+  // Block keys: a lane re-sends its context every turn, so a block's per-text hash is asked once per lane call, not once per block
+  // of every call. A lane remembers the keys of its last call only (a key text is a slice that keeps its whole text alive), so the
+  // memo holds what each lane's baseline (`prev`) holds anyway, never the session's content.
+  const keysOf = new Map(); // lane (the analyzer's stream) → text → key, for the blocks of its last call
+  const prev = new Map(); // lane → { flat, chain } of the call that established the lane's cache baseline
+  function push(r) {
+    const call = take(r);
+    if (!call) return null;
+    const lane = an.laneOf(call), cs = lane.calls;
+    if (cs.length < 2 || byOrder(cs[cs.length - 2], call) < 0) return call;
+    const ids = cs.slice(0, -1).map((c) => c.id);
+    an.drop(lane); keysOf.delete(lane); prev.delete(lane);
+    return relane(ids, r, read, take);
+  }
+  function take(r) {
+    const ctx = plans.context(r);
+    const call = an.push(hydrateForBoard(r, ctx));
+    if (!call) return null;
+    placed(call, r, self);
+    const lane = an.laneOf(call);
+    call.wire = wireOf(call.rec, 'anthropic', ctx); // cheap meta: rides on out-of-window calls too
+    call.respRefs = respRefsOf(call.rec); // locators only (a few dozen bytes each), never the reply body
+    const was = keysOf.get(lane), keys = new Map();
+    const flat = anthropicFlat(call.rec.request, { get: (t) => { const k = keys.get(t) ?? (was && was.get(t)); if (k !== undefined) keys.set(t, k); return k; }, set: (t, k) => keys.set(t, k) });
+    keysOf.set(lane, keys);
+    const u = call.norm.usage || {};
+    // Bake NEUTRAL canonical usage (D18a Q1 / D24): the board frontend reads call.usage.{read,
+    // create,fresh,out} — ZERO provider-native usage field names in the browser. Provider→canonical
+    // mapping happens HERE (server-side normResp), so adding a harness never touches the frontend (AC-3).
+    // Names track the 3.2 usage columns (cache_read / cache_write / input_uncached / output).
+    call.usage = { read: u.cache_read_input_tokens || 0, create: u.cache_creation_input_tokens || 0, fresh: u.input_tokens || 0, out: u.output_tokens || 0 };
+    const p = prev.get(lane) || null;
+    // cacheBreak with prevFlat=null on the first call — matches the demo render's own call site.
+    const brk = cacheBreak(p && p.flat, flat, { compaction: !!call.compaction });
+    // D17④: REAL prefix SHA-256 over verbatim bytes (not the demo's 32-bit structural proxy). Two calls'
+    // prefixes are byte-identical iff their full SHA-256 over [0,idx) match → independent byte truth.
+    // 3.2:124, as on the flat-lane path: what is shown of a partial / server-edited context is not what the model
+    // saw, so no byte-identity claim and no ground truth is made over it (the ETL writes NULL / NULL too)
+    const blind = call.wire.contextState === 'partial' || call.wire.contextState === 'server_edited';
+    const chain = prefixChain(flat, p && p.chain);
+    const curPfx = blind ? null : chain.digestAt(brk.idx);
+    const prevPfx = p ? p.chain.digestAt(brk.idx) : null;
+    const prefixByteIdentical = brk.idx > 0 && curPfx != null && curPfx === prevPfx;
+    brk.prefixSha256 = curPfx;                       // 逐字字节事实(可独立复算)
+    brk.prefixByteIdentical = prefixByteIdentical;
+    brk.gt = realGroundTruth(prefixByteIdentical, call.usage.read, call.usage.create); // byte-truth-backed, not structural proxy
+    brk.gtReal = true;                               // marker MAY drop the "结构估计" caveat for the gt claim
+    call.cacheBreak = brk;
+    call.gt = brk.gt;
+    call.prefixSha256 = curPfx;
+    // Advance the cache-prefix baseline ONLY for calls that actually established one. A call that
+    // 4xx'd/5xx'd never got far enough for the provider to write a KV-cache prefix, so chaining
+    // through it makes the NEXT successful call diff against context that was never cached — the
+    // board then reports a cache break that did not happen, with a cause and a fix hint. analyze()
+    // marks this as `chainsPrefix`; undefined (older shapes) means "assume it chained".
+    if (call.chainsPrefix !== false) prev.set(lane, { flat, chain });
+    // COMPOSITION IS TIER A — computed HERE, while the blocks are still in hand: nine integers that ride on every call
+    // whether or not its body does, so the timeline draws the WHOLE session rather than hatching everything outside the
+    // current page as "composition unknown".
+    call.comp = compBuckets(flat);
+    // The META form: the blocks, the parsed body and the reply text are let go here (bodyOf gives them back from the record).
+    // `prev` above still holds this call's real blocks, so the NEXT call's diff is against the true baseline.
+    call.flat = []; call.nonBlockKeys = []; call.paged_out = true;
+    call.rec = slimRec(call.rec);
+    call.norm = { usage: call.norm.usage };
+    return call;
+  }
+  // SHIP METADATA + A LOCATOR, NEVER THE BODY (RFC 4.2:55 「看全文=回源」 · 1.4:35 「点开惰性填正文」): the collapsed row plus a
+  // text_ref; the body is fetched from the raw capture when a row is opened.
+  function bodyOf(call, r) {
+    const ctx = plans.context(r);
+    const h = admitted(hydrateForBoard(r, ctx));
+    const flat = anthropicFlat(h.request, new Map());
+    return { flat: ctx ? withLocatedRefs(flat, ctx.locate, new Map()) : withRefs(flat, h), nonBlockKeys: nonBlockKeysOf(h, 'anthropic'), rec: slimRec(h), norm: normResp(h) };
+  }
+  const self = { push, bodyOf, calls: an.calls, finish() { const A = an.finish(); A.provider = 'cc'; return A; } };
+  return self;
 }

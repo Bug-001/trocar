@@ -19,6 +19,7 @@ import { readAgentList } from '../off/identity.mjs'
 import { patternsOf } from '../off/signature.mjs'
 import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
 import { EVENT, CODE } from './core/codes.mjs'
+import { RESTART_REASONS } from '../health/codes.mjs'
 import { controlRequest, controlEndpointFor } from './core/control.mjs'
 import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
@@ -69,14 +70,14 @@ function refuseRoot(verb, getuid = processUid) {
 // `run` (this run's start time) is on every line one install or uninstall writes, and each run ends with one
 // `kind:'result'` note — a failed one too — so the board's "last install / uninstall" is the newest run's lines,
 // never an older run's warnings after a clean run (4.6 安装 / 卸载不静默, review D1-5).
-async function recorded(dir, where, fn) {
+async function recorded(dir, where, fn, result = {}) { // result: what the failed result line carries besides (on's: the harnesses it turned on, none)
   const run = new Date().toISOString()
   try { return await fn(run) } catch (e) {
     const reason = String((e && e.message) || e)
     try {
       if (fs.existsSync(dir)) {
         appendEvent(dir, { event: 'failure', where, code: (e && e.code) || `${where}-error`, reason, run })
-        appendEvent(dir, { event: `${where}-note`, kind: 'result', outcome: 'failed', run, reason: `${where} failed: ${reason}` })
+        appendEvent(dir, { event: `${where}-note`, kind: 'result', outcome: 'failed', ...result, run, reason: `${where} failed: ${reason}` })
       }
     } catch (w) {
       if (e && typeof e === 'object') e.message += ` (and recording this failure failed: ${String((w && w.message) || w)})` // never mask the original
@@ -114,7 +115,6 @@ const nodeFs = fs
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const act = (a) => a !== 'skip-intact' && a !== 'skip-user-changed'
 const shortLine = (l) => String(l).split(' # ')[0].trim()
-const RESTART_REASONS = new Set(['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim']) // 「重启后才会被采集」(1.6 §1.1)
 const DAEMON_CMD = 'trocar daemon' // 1.6 §2: the autostart unit's ExecStart is this command (units written before the rename run its alias `collector start`)
 /** The login entry in the platform's own words (a Windows user told to run `systemctl` has been handed nothing; tested on Windows 2026-10-11 and macOS 2026-10-18). */
 const entryWords = (osName, unit) => (osName === 'win32' ? 'the scheduled task \\trocar\\collector' : osName === 'darwin' ? `the LaunchAgent ${(unit && unit.name) || 'com.trocar.collector'}` : 'the systemd user unit trocar-collector.service')
@@ -508,10 +508,12 @@ export async function turnOn(opts = {}) {
       created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...(standalone.written ? [standalone.path] : []), ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned] : [])],
       unchanged: written ? written.intact : [],
     }
-    const finish = (outcome, reason) => {
+    // the result line is the one proxy mode writes (1.6 §1): `harnesses` = the ones this run turned on (the daemon up and the run not halted), `refused` = none
+    // (driver mode refuses no single harness)
+    const finish = (outcome, reason, on = []) => {
       receipt.ok = !problems.length && !named && !(written && written.userChanged.length) // an entry the user changed is left, and not in effect: not "done"
       const counts = { entries: m.entries.length, changed: receipt.changed.length, notes: notes.length + problems.length }
-      put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome, counts, reason }) // before the notes are taken: a result line that cannot be written adds its own "not recorded" (R11)
+      put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome, harnesses: on, refused: [], counts, reason }) // before the notes are taken: a result line that cannot be written adds its own "not recorded" (R11)
       receipt.notes = [...notes, ...problems]
       receipt.problems = problems // the renderer labels exactly these 问题: — a failed run's SUCCESS notes (the kernel's "downloaded and both digests
       // verified") must not wear the problem label, which is what a whole-receipt ok===false test did (seen on a macOS test machine, 2026-10-11)
@@ -536,7 +538,7 @@ export async function turnOn(opts = {}) {
         problems.push(why); put({ event: EVENT.failure, where: 'control', code: 'control-error', reason: why })
       }
       if (status) {
-        receipt.restart = (status.agents || []).filter((a) => a && !a.trusted && !a.off && RESTART_REASONS.has(a.reason) && plan.targets.includes(a.agent)).map((a) => ({ harness: a.agent, pid: a.pid, reason: a.reason }))
+        receipt.restart = (status.agents || []).filter((a) => a && !a.trusted && !a.off && RESTART_REASONS.includes(a.reason) && plan.targets.includes(a.agent)).map((a) => ({ harness: a.agent, pid: a.pid, reason: a.reason }))
         receipt.capture = { desired: status.desired ?? null, actual: status.actual ?? null }
         if (status.actual !== 'on') {
           const why = status.helper && status.helper.ok === false ? `the capability helper speaks protocol ${status.helper.proto}, this daemon expects ${status.helper.expected_proto}; run: sudo trocar setup-helper`
@@ -547,9 +549,9 @@ export async function turnOn(opts = {}) {
       }
     }
     const wrote = written.entries.length || written.files.length || written.owned.length || written.unit
-    return finish(wrote ? 'installed' : 'on', problems.length ? `on did not finish: ${problems[0]}` : `on: ${plan.targets.join(', ')}`)
+    return finish(wrote ? 'installed' : 'on', problems.length ? `on did not finish: ${problems[0]}` : `on: ${plan.targets.join(', ')}`, up && !halt ? plan.targets : [])
     } finally { lock.release() }
-  })
+  }, { harnesses: [], refused: [] })
 }
 
 const UNIT_NAME_HINT = 'trocar-collector.service'

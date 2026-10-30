@@ -75,7 +75,8 @@ export const FAILURE_WORDS = Object.freeze({
   'framer-error': 'a request could not be parsed',
   'unpaired-response': 'a response arrived with no request to pair it with',
   'prior-proxy-unknown': 'the proxy in use before trocar could not be told',
-  'pac-peer-refused': "trocar's proxy auto-config refused a program of another user",
+  'pac-peer-refused': "trocar's proxy auto-config door refused a program not shown to be yours",
+  'pac-owner-unread': "trocar's proxy auto-config door could not tell whose program asked, so it answered without routing through trocar",
   'upstream-header-ignored': 'a routing header from a program that should not send one was ignored',
   untrusted: 'a connection from a program that does not trust trocar yet; passed on unread',
   untracked: 'a connection from a program trocar does not follow; passed on unread',
@@ -87,6 +88,22 @@ export const FAILURE_WORDS = Object.freeze({
   'ingress-unknown': 'a program spoke something other than a proxy request to trocar',
   'engine-port-taken': "trocar's port is taken",
   'upstream-unavailable': 'the upstream could not be dialled',
+  // a connection row forwarded by design (4.6 §记录「连接行」的预期类; `where` is the row's 'flow'): the reason when the reason decided the class, else not_captured
+  'flow/not-an-agent': 'connections of programs that are not agents, passed on unread',
+  'flow/agent-helper': "connections of an agent's helper programs, passed on unread",
+  'flow/harness-off': 'connections of agents that are turned off, passed on unread',
+  'flow/group-off': 'connections of agents still running after off, passed on unread',
+  'flow/outside-host-set': 'connections of agents to hosts trocar does not read for them, passed on unread',
+  'flow/other-user': "connections of another user's programs, passed on unread",
+  'flow/not-verified': 'connections of agent forms or hosts not verified for capture yet, passed on unread',
+  'flow/policy': 'connections to hosts trocar does not read, passed on unread',
+  'flow/not-trust-path': "connections an agent makes without reading trocar's certificate, passed on unread",
+  'flow/https-proxy': "connections through a proxy the agent did not set itself, passed on unread",
+  'flow/proxy-refused': "connections the agent's proxy refused, its answer passed back",
+  'flow/upstream-first': 'connections where the server spoke first, passed on unread',
+  'flow/unknown-protocol': 'connections in a protocol trocar does not read, passed on unread',
+  'flow/upgrade-not-followed': 'connections switched to a protocol trocar does not follow, passed on from there',
+  'flow/error': 'connections that ended before anything was forwarded',
   // WebSocket recording
   'write-failed': 'a WebSocket message could not be written',
   'decode-failed': 'a WebSocket message could not be decoded',
@@ -152,8 +169,8 @@ export function failureWord(where, code, harness = '') {
 /** One line out of many: newlines and runs of whitespace become one space (a launchctl stderr with line breaks must not break the digest's alignment). */
 export const squashed = (s) => String(s ?? '').replace(/\s+/g, ' ').trim()
 
-/** The whole reason, or its head: the digest shows ~100 columns of it — the whole wall is one `--failures` away (R11: relocated, not dropped). */
-export const briefText = (s, max = 100) => { const t = squashed(s); return t.length > max ? `${t.slice(0, max - 1)}…` : t }
+/** The whole reason, or its head (cut with ASCII dots: 1.6 §1.1 ⑦, the old Windows console prints no other symbol): the digest shows ~100 columns of it — the whole wall is one `--failures` away (R11: relocated, not dropped). */
+export const briefText = (s, max = 100) => { const t = squashed(s); return t.length > max ? `${t.slice(0, max - 3)}...` : t }
 
 /** One failure group (C.3 `failures.groups[]`: { where, code, reason, harness? }) in one sentence, for `status --failures`, the board's capture log and
  *  the overview alike: the catalog's sentence when it knows the code — the code and the raw reason are then the technical details' (the CLI prints the
