@@ -10,17 +10,26 @@ import net from 'node:net'
 const listen = (s, port, host) => new Promise((res, rej) => { const no = (e) => rej(e); s.once('error', no); s.listen(port, host, () => { s.off('error', no); res() }) })
 const closed = (s) => new Promise((r) => (s.listening ? s.close(() => r()) : r()))
 
+// an address this host does not have (::1 with IPv6 turned off, say): nothing can listen there, so nothing can take it either
+const NOT_HERE = new Set(['EADDRNOTAVAIL', 'EAFNOSUPPORT'])
+
 /** Listen `server` (a net, tls or http server) on every address `localhost` resolves to, all on one port the OS picks; → the port.
- *  The first address is `server`'s own listen; each other one is a plain listener that hands its connections to `server`, and closing
- *  `server` closes those too. A port taken on one of the addresses is given up and another tried. */
-export async function listenLocalhost(server, { tries = 20 } = {}) {
-  const addrs = [...new Set((await dns.lookup('localhost', { all: true })).map((a) => a.address))]
+ *  The first address this host can bind is `server`'s own listen; each other one is a plain listener that hands its connections
+ *  to `server`, and closing `server` closes those too. An address the host cannot bind is skipped; a port taken on one of the
+ *  addresses is given up and another tried. `lookup` resolves localhost (a test gives its own). */
+export async function listenLocalhost(server, { tries = 20, lookup = () => dns.lookup('localhost', { all: true }) } = {}) {
+  const addrs = [...new Set((await lookup()).map((a) => a.address))]
   for (let i = 1; ; i++) {
     const more = []
+    let port = null, absent = null
     try {
-      await listen(server, 0, addrs[0])
-      const { port } = server.address()
-      for (const a of addrs.slice(1)) { const s = net.createServer((c) => server.emit('connection', c)); more.push(s); await listen(s, port, a) }
+      for (const a of addrs) {
+        const s = port == null ? server : net.createServer((c) => server.emit('connection', c))
+        try { await listen(s, port ?? 0, a) } catch (e) { if (!NOT_HERE.has(e.code)) throw e; absent = e; continue }
+        if (port == null) port = server.address().port
+        else more.push(s)
+      }
+      if (port == null) throw absent // not one of them is an address of this host
       server.once('close', () => { for (const s of more) s.close() })
       return port
     } catch (e) {
