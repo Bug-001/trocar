@@ -50,7 +50,7 @@ async function replaceStale({ platform, home, env, fs, deps, root, unit, problem
 const staleItem = (stale, root) => stale ? [{ what: 'daemon', detail: `the collector runs ${stale}, so it is stopped and started again on ${codeId(root)}` }] : []
 const replacedRow = (rep, root) => rep && rep.replaced ? [['collector', `replaced: it ran ${rep.from}, it now runs ${codeId(root)}`]] : []
 // the receipt's `daemon` (附录 C.2): after a replacement that stopped the old one, what runs is whether the new one came up
-const daemonRow = (dmn, rep) => ({ state: (rep && rep.stopped ? rep.restarted : dmn.up) ? 'running' : 'not-running', started: dmn.started, replaced: !!(rep && rep.replaced) })
+const daemonRow = (dmn, rep) => ({ state: rep && rep.stopped ? (rep.restarted ? 'running' : 'not-running') : dmn.state, started: dmn.started, replaced: !!(rep && rep.replaced) })
 
 export async function runInstallCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const flags = new Set()
@@ -174,7 +174,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       // the residual risk (RISK) is the last line of the plan printed just above in this same run (§3.2 prints it there, and the
       // receipt sample does not carry it); printing it again put the paragraph on the screen twice (a macOS test machine 2026-10-18).
       // `--json` keeps it as `residual_risk`, because a document has no plan above it.
-      'Next: trocar on',
+      ...(r.problems.length ? [] : ['Next: trocar on']), // on refuses without the login entry (1.6 §3.3): it is no next step until install has finished
       `If trocar itself breaks: ${tilde(standalonePath(home), home)}`]).join('\n'))
     return r.exit
   }
@@ -226,12 +226,13 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   if (done.failed) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, notes: [done.failed] }, null, 2)); else io.err(`trocar install: ${done.failed}`); return EXIT.incomplete }
   const { stdl, r, board, written } = done
   // D61 (1.6 §3.2 step 5): the login entry is an item of the install like any other — one that could not be registered is a problem and exit 1, never only a note
-  const dmn = r.daemon || { up: false, started: false, problems: [], unitFailed: null }
+  const dmn = r.daemon || { up: false, state: 'not-running', started: false, problems: [], unitFailed: null }
   const problems = dmn.problems
   const rep = r.daemon && dmn.up ? await replaceStale({ platform, home, env, fs, deps, root, unit: args.unit, problems }) : null
   const receipt = { ...newReceipt('install'), ok: !board && !problems.length, ...(problems.length ? { problems } : {}), ...(board ? { pending: [board] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...new Set([...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created), ...(written ? [ingressPath] : [])])], standalone: standalonePath(home), planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes: [...(r.plan ? r.plan.notes : []), ...(rep ? rep.notes : [])],
-    // `enabled` is the entry asked again after the run (1.6 §3.3: no claim without evidence), not "nothing failed": a run that halted on a stuck daemon never enabled anything
-    ...(r.daemon ? { daemon: daemonRow(dmn, rep), autostart: { entry: args.unit.path, enabled: !dmn.unitFailed && (typeof args.unit.registered !== 'function' || args.unit.registered().state === 'present') } } : {}) }
+    // `enabled` is the entry asked again after the run (1.6 §3.3: no claim without evidence), not "nothing failed": ensureDaemonUp asks it at the end of every
+    // registering run and makes any answer but present its unitFailed, so a run that halted on a stuck daemon (and enabled nothing) says false here too
+    ...(r.daemon ? { daemon: daemonRow(dmn, rep), autostart: { entry: args.unit.path, enabled: !dmn.unitFailed } } : {}) }
   if (json) io.out(JSON.stringify(receipt, null, 2))
   else io.out(fit([problems.length ? 'trocar install did not finish. What is missing is below.' : r.already && ((r.entryBefore && r.entryBefore !== 'present') || dmn.started) ? 'Installed. The certificates were in place; the login entry and the collector are up again.' : r.already && !(rep && rep.replaced) ? 'Already installed. Nothing was changed.' : "Installed. trocar's certificates are in place.",
     ...(r.already ? [] : changeLines(receipt, { home })),

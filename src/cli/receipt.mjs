@@ -185,7 +185,8 @@ export function formatUninstallReceipt(r, { home = null, tense = r.dry_run ? 'fu
     : r.ok === false ? 'trocar uninstall did not finish. What is left is below.'
       : "Uninstalled. trocar is no longer on your agents' path, and its root certificate is gone from your trust settings."]
   if (r.nothing_installed) lines.push('Nothing of trocar is installed for your user, so there was nothing to take out.')
-  if (removed.length) lines.push(past ? 'Removed' : 'Will remove', ...removed.map((x) => `  ${x}`))
+  // a file is said once, as `off` says it: several entries of one file (json keys) with the same change are one row
+  if (removed.length) lines.push(past ? 'Removed' : 'Will remove', ...[...new Set(removed)].map((x) => `  ${x}`))
   if (kept.length) lines.push('Kept', ...kept.map((x) => `  ${x}`))
   const d = r.daemon || {}
   if (d.state === 'stopped') lines.push(`The collector${d.pid ? ` (pid ${d.pid})` : ''} was stopped.`)

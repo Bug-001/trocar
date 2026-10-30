@@ -37,7 +37,7 @@ const sideDesk = (blocks, reply = [], row = {}) => deskOf([{ kind: 'main', rows:
 const drawSide = (desk) => { const lanes = buildLanes(desk), lane = lanes.find((l) => l.kind === 'aux'); return detailHtml({ ...stateOf(), desk, lanes }, lane, 0) }
 
 test('the input: a row per block of the held lane, each carrying its own size from the input', () => {
-  const input = [blk({}), blk({ chars: 900 }), blk({ chars: null, bytes: 700, ff: 'summarized' })]
+  const input = [blk({}), blk({ chars: 900 }), blk({ chars: null, bytes: 700, ff: { faithfulness: 'summarized' } })]
   const rows = drawSide(sideDesk(input)).body.split('class="dblk').slice(1)
   assert.equal(rows.length, input.length)
   assert.match(rows[1], /\b900\b/); assert.match(rows[2], /\b700\b/)
