@@ -115,16 +115,15 @@ export function releaseParts() { decoded.clear(); decodedBytes = 0; }
  *  the first line end at or past it, so a line lies in one frame and reading it decodes that frame only. */
 export const FRAME_BYTES = 256 << 10;
 const MAGIC = 0x31465254; // "TRF1"
-/** framed(raw, frameBytes) → a sealed part's bytes: the brotli of each frame of `raw` (cut at the first line end at or past
- *  frameBytes from its start), then the frame table (per frame: compressed length, plain length; u32 LE), the frame count, MAGIC. */
-function framed(raw, frameBytes = FRAME_BYTES) {
-  const out = [], table = [];
-  for (let a = 0; a < raw.length;) {
-    let z = raw.indexOf(10, a + frameBytes - 1) + 1;
-    if (z <= 0) z = raw.length;
-    const x = raw.subarray(a, z), y = zlib.brotliCompressSync(x, { params: brotliOf(x.length) });
-    out.push(y); table.push(y.length, x.length); a = z;
-  }
+// A sealed part's bytes are the brotli of each frame of its plain bytes `raw` (a frame cut at the first line end at or past frameBytes
+// from its start), then the frame table (per frame: compressed length, plain length; u32 LE), the frame count, MAGIC.
+// frameAt(raw, at, frameBytes) → [the brotli of the frame from `at`, its plain end]: one frame, the seal's unit. framed(out, table): the file.
+function frameAt(raw, at, frameBytes) {
+  let z = raw.indexOf(10, at + frameBytes - 1) + 1;
+  if (z <= 0) z = raw.length;
+  return [zlib.brotliCompressSync(raw.subarray(at, z), { params: brotliOf(z - at) }), z];
+}
+function framed(out, table) {
   const t = Buffer.alloc(4 * table.length + 8);
   table.forEach((v, i) => t.writeUInt32LE(v, 4 * i));
   t.writeUInt32LE(table.length / 2, 4 * table.length); t.writeUInt32LE(MAGIC, 4 * table.length + 4);
@@ -197,6 +196,7 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
   let starts = [], bufs = [], arena = 0; // the arena: each append's text, by the offset of its first byte
   let failing = false, fd = null;
   let covers = Infinity; // the bytes the sidecar on disk covers, once this handle loaded or saved it; unknown: all
+  let job = null; // a seal across calls (seal): {lim: the bytes due at its first call, cur: the part being compressed {b, raw, out, table, at}, made}
 
   const found = files(), ps = found.filter((f) => !f.tmp && f.b !== undefined).sort((x, y) => x.a - y.a);
   for (const p of ps) { if (p.a !== C || !(p.b > p.a)) { unreadable = `${path.basename(p.path)} does not follow the parts before it`; break; } C = p.b; }
@@ -312,34 +312,49 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
     if (carry) yield { off: at, len: carry.length, text: carry.toString('utf8'), nl: false };
   }
 
-  /** seal({partBytes, frameBytes}) → whether it sealed: while the settled tail holds partBytes or more, the next part (to the first
-   *  line end at or past partBytes, framed by frameBytes) is written, then the tail from the last part's end, then the old tail
-   *  removed (4.3 §4 分片: killed at any point, the next open reads the same lines). */
-  function seal({ partBytes = PART_BYTES, frameBytes = FRAME_BYTES } = {}) {
-    if (!write || arena || trunc || junk || end - T < partBytes) return false;
-    close();
-    const old = tailOf(T), f = fs.openSync(old, 'r');
-    let a = T, made = false;
+  /** seal({partBytes, frameBytes, deadline}) → whether it sealed: while the settled tail holds partBytes or more, the next part (to
+   *  the first line end at or past partBytes, framed by frameBytes) is written, then the tail from the last part's end, then the old
+   *  tail removed (4.3 §4 分片: killed at any point, the next open reads the same lines). The parts are those of the bytes due at the
+   *  first call, compressed a frame at a time: once `deadline` (a performance.now() time) passed, the call returns null and the next
+   *  goes on (3.5 后台抽取与归约); a part is written once whole, the old tail holding its bytes until the new one is written, which
+   *  reads as it opens after a kill there. The writes and the files are those of one call with no deadline. A cut drops the work. */
+  function seal({ partBytes = PART_BYTES, frameBytes = FRAME_BYTES, deadline = Infinity } = {}) {
+    if (!write || arena || trunc || junk) { job = null; return false; }
+    if (!job) { if (end - C < partBytes && C === T) return false; job = { lim: end, cur: null, made: false }; }
     try {
-      while (end - a >= partBytes) {
-        let b = 0;
-        for (let pos = a + partBytes - 1; !b && pos < end; pos += 1 << 16) { const c = readAt(fs, f, pos - T, Math.min(1 << 16, end - pos)), i = c.indexOf(10); if (i >= 0) b = pos + i + 1; }
-        if (!b) break; // no line ends there (none of a settled tail)
-        const raw = readAt(fs, f, a - T, b - a);
-        durable(fs, partOf(a, b), framed(raw, frameBytes));
-        parts.push(partAt({ path: partOf(a, b), a, b })); C = a = b; made = true;
+      for (;;) {
+        if (!job.cur) {
+          const f = fs.openSync(tailOf(T), 'r');
+          let b = 0, raw = null;
+          try {
+            for (let pos = C + partBytes - 1; !b && pos < job.lim; pos += 1 << 16) { const c = readAt(fs, f, pos - T, Math.min(1 << 16, job.lim - pos)), i = c.indexOf(10); if (i >= 0) b = pos + i + 1; }
+            if (b) raw = readAt(fs, f, C - T, b - C);
+          } finally { fs.closeSync(f); }
+          if (!b) break; // no line ends there (none of a settled tail)
+          job.cur = { b, raw, out: [], table: [], at: 0 };
+        }
+        const c = job.cur, [y, z] = frameAt(c.raw, c.at, frameBytes);
+        c.out.push(y); c.table.push(y.length, z - c.at); c.at = z;
+        if (z >= c.raw.length) { durable(fs, partOf(C, c.b), framed(c.out, c.table)); parts.push(partAt({ path: partOf(C, c.b), a: C, b: c.b })); C = c.b; job.cur = null; job.made = true; }
+        if (performance.now() >= deadline) return null;
       }
-      durable(fs, tailOf(a), end > a ? readAt(fs, f, a - T, end - a) : Buffer.alloc(0));
-    } finally { fs.closeSync(f); }
-    T = a;
-    fs.rmSync(old, { force: true });
-    syncDir(fs, dir);
+    } catch (e) { job = null; throw e; }
+    const made = job.made;
+    job = null;
+    if (C > T) {
+      close();
+      const old = tailOf(T), f = fs.openSync(old, 'r');
+      try { durable(fs, tailOf(C), end > C ? readAt(fs, f, C - T, end - C) : Buffer.alloc(0)); } finally { fs.closeSync(f); }
+      T = C;
+      fs.rmSync(old, { force: true });
+      syncDir(fs, dir);
+    }
     return made;
   }
 
   function cut(len) {
     if (len >= end) return;
-    starts = []; bufs = []; arena = 0; end = len; trunc = write;
+    starts = []; bufs = []; arena = 0; end = len; trunc = write; job = null;
   }
   /** remove(): no lines; a writer deletes every file of this line file now (a rebuild). */
   function remove() {

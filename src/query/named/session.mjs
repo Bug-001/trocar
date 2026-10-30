@@ -40,7 +40,7 @@ import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yi
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
-import { filesAt, filesParts, forget, headDoc, headFile, packsOf, stoppedHead, tier0Doc, writeFiles, writeHead, memoBytes } from '../ctx-files.mjs';
+import { filesAt, filesParts, forget, headDoc, headFile, owed, packsOf, settle, stoppedHead, tier0Doc, writeFiles, writeHead, memoBytes } from '../ctx-files.mjs';
 
 export const params = Object.freeze(['id', 'since', 'before', 'limit', 'head']);
 
@@ -247,17 +247,32 @@ const reductionOf = (s, log, from = null) => {
 function closeState(s) { if (fileLogs.get(s.store) === s) fileLogs.delete(s.store); s.log.close(); if (s.T) s.T.close(); }
 // store → the state that holds its fold log file open (the worker's)
 const fileLogs = new WeakMap();
-/** saveIndexes(): the sidecars (4.3 §4 旁索引) of every open store and its fold log whose file grew since its last save (sidecars()),
- *  then the heads a slice left behind (headAt). The worker calls it once an idle period; the local path's are never written (opened write:false). The decoded frames and lines of
+/** saveIndexes(deadline = Infinity) → whether parts are left to seal (sealParts): the sidecars (4.3 §4 旁索引) of every open store
+ *  and its fold log whose file grew since its last save (sidecars()), then the heads a slice left behind (headAt), then the parts.
+ *  The worker calls it once an idle period; the local path's are never written (opened write:false). The decoded frames and lines of
  *  the sealed segments are let go too: an idle worker does not hold them (3.5 §冷路径). */
-export function saveIndexes() {
+export function saveIndexes(deadline = Infinity) {
   releaseDecoded();
   releaseTails();
-  for (const s of stores.values()) { sidecars(s); try { s.seal(); fileLogs.get(s)?.log.seal(); } catch { /* the next idle period */ } }
+  for (const s of stores.values()) sidecars(s);
   // then the heads behind their session's state (headAt): the checkpoint first; one that failed is written by the next slice
   for (const { s, home, fs } of lagging.values()) putHead({ home, fs }, s);
   lagging.clear();
+  return sealParts(deadline);
+}
+/** sealParts(deadline = Infinity) → whether parts are left to seal at `deadline` (a performance.now() time): every open projection's
+ *  and fold log's settled tail sealed into parts (4.3 §4 分片), a frame a unit; the worker goes on in its next idle slice (3.5
+ *  后台抽取与归约). A seal that fails is tried at the next idle period. */
+export function sealParts(deadline = Infinity) {
+  for (const s of stores.values()) {
+    for (const lf of [s, fileLogs.get(s)?.log]) {
+      let r = false;
+      try { r = lf ? lf.seal({ deadline }) : false; } catch { /* the next idle period */ }
+      if (r === null || (r && performance.now() >= deadline)) return true;
+    }
+  }
   releaseParts();
+  return false;
 }
 // The store's sidecar first (the log's names the projection's bytes); then, when it covers every line of the store (none while the
 // store holds `t` rows: an open cuts them off, and the state's rows with them), the fold log's: the state's step-order columns synced to
@@ -406,9 +421,13 @@ function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress
   st.resolve = resolve;
   st.hook = (rid) => { progress(); bounded(meter, ++meter.n, (plan.byId.get(rid) || {}).stored_bytes || 0); };
   const now = st.target == null || (!(ctx.writer === true && request) && pastOf(plan, st.target, F));
+  // the answer files a background slice left short of this state (ctx-files.mjs writeFiles): a request writes them first, then folds;
+  // a background slice does not fold until they reach it (folded on, what they hold would be written again: 3.5 后台抽取与归约)
+  const wait = ctx.writer === true && owed(st.log);
+  if (wait && request) settle(st.log);
   try {
     if (foldMs > 0 && now && ctx.handOff && ctx.writer !== true && (st.target != null || unfolded(st, plan, F))) throw new HandOff(id);
-    if (foldMs > 0 && now) fold(st, plan, F, foldMs);
+    if (foldMs > 0 && now && !(wait && !request)) fold(st, plan, F, foldMs);
   } catch (e) { closeState(st); throw e; }
   errors.push(...st.sink.splice(0));
   if (st.meter.held == null) st.meter.held = liveHeap() - st.base; // a state just made: what it holds, measured once
@@ -497,18 +516,20 @@ async function advance(ctx, id, { budgetMs, request }) {
   }
 }
 
-/** extendSession(ctx, id, budgetMs) → whether the session still has members to extract or fold (3.5 后台抽取与归约): one background
- *  slice of the query worker (`ctx.writer`), the index read included: extraction in write order, then folding (or a cold state's
- *  rebuild, when a member lies past its log's frontier): half of `budgetMs` each, the fold also what extraction left. */
+/** extendSession(ctx, id, budgetMs) → whether the session still has members to extract or fold, or answer files to write (3.5
+ *  后台抽取与归约): one background slice of the query worker (`ctx.writer`), the index read included: extraction in write order, then
+ *  folding (or a cold state's rebuild, when a member lies past its log's frontier): half of `budgetMs` each, the fold also what
+ *  extraction left; then the answer files at the new state in what is left of `budgetMs`, the rest in the next slices (the fold waits
+ *  for them), and the head once they reach the state. */
 export async function extendSession(ctx, id, budgetMs) {
+  const end = performance.now() + budgetMs;
   let r;
   try { r = await again(ctx, id, () => advance(ctx, String(id), { budgetMs, request: false })); } catch (e) { await stopped(ctx, String(id), e); throw e; }
   if (!r) return false;
   const { st, plan, ex } = r;
-  const more = ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n);
-  const s = stateAt(r, String(id));
-  files(ctx, s);
-  if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); // a stop is cleared at once
+  const s = stateAt(r, String(id)), written = files(ctx, s, end);
+  const more = !written || ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n);
+  if (written) { if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); } // a stop is cleared at once
   if (!more) releaseParts(); // folded to its frontier: between calls the worker holds no decoded part (3.5:40 ⑤)
   return more;
 }
@@ -553,11 +574,13 @@ function headAt(ctx, s) {
   if (!h || h.shape !== shapeOf(s) || !fs.existsSync(headFile(home, s.id))) putHead(ctx, s);
   else lagging.set(s.id, { s, home, fs });
 }
-/** files(ctx, s) → the session's pack and tail files brought to the state `s` (the worker only: ctx-files.mjs writeFiles), their
- *  `packs` / `open` kept on `s` for its head; a write that failed is done afresh at the next slice. */
-export function files(ctx, s) {
-  if (ctx.writer !== true || s.mark == null) return;
-  try { s.files = writeFiles({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs }, s); } catch { forget(s.V.log); }
+/** files(ctx, s, deadline) → false while the session's pack and tail files are short of the state `s` at `deadline` (the next slice
+ *  goes on: ctx-files.mjs writeFiles), else true: brought to it (the worker only), their `packs` / `open` kept on `s` for its head; a
+ *  write that failed is done afresh at the next slice. */
+export function files(ctx, s, deadline = Infinity) {
+  if (ctx.writer !== true || s.mark == null) return true;
+  try { s.files = writeFiles({ home: ctx.home ?? trocarHome(), fs: ctx.fs || nodeFs }, s, deadline); } catch { forget(s.V.log); return true; }
+  return s.files != null;
 }
 /** headOf(s) → the session's `session --head` document: tier 1 at its mark, tier 0 while it has none (ctx-files.mjs). */
 const headOf = (s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors)
