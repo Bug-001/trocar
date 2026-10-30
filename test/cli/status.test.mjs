@@ -219,8 +219,8 @@ test('the daemon answers: each agent is captured or says why, and the exit code 
   assert.deepEqual(neg.harnesses['claude-code'].processes.map((p) => [p.pid, p.reason, p.cause]), [[4121, 'negative-cache', 'client-rejected-leaf']], 'the engine\'s cause rides on the process (1.6 附录 C.3)')
 })
 
-// 1.6 V106: a process with refused hosts lists every one of them with its cause and when trocar tries it again (the ms the engine gives, as ISO)
-test('V106 status --json: a process the engine holds two hosts of lists both, each with its cause and retry time', async () => {
+// 1.6 V107: a process with refused hosts lists every one of them with its cause and when trocar tries it again (the ms the engine gives, as ISO)
+test('V107 status --json: a process the engine holds two hosts of lists both, each with its cause and retry time', async () => {
   const s = await installedHome()
   const t1 = Date.parse('2026-10-30T12:10:00.000Z'), t2 = Date.parse('2026-10-30T13:00:00.000Z')
   const negatives = [

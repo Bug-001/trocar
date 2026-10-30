@@ -10,7 +10,7 @@
 //               what a command runs (a test's spy: what was dispatched, not what it does)
 //   The command gets `(argv, ctx)`; `ctx.args` is the parsed form of argv ({ positionals, flags }) and `ctx.json` whether `--json` was asked.
 import os from 'node:os'
-import { makeIo } from '../off/io.mjs'
+import { makeIo, hidingIo } from '../off/io.mjs'
 import { commandNamed, helpText, usageLine } from './commands.mjs'
 import { parseArgs } from './args.mjs'
 import { wrap, WIDTH } from './text.mjs'
@@ -40,16 +40,19 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   if (cmd.needsRoot && uid !== 0) return refuse(cmd.name, 'usage', `trocar ${cmd.name}: run it with sudo: sudo trocar ${cmd.name}`)
   // `mutates` may be a function of the parsed args: `classes set` and `raw seal` change state, `classes` shown and `raw cat` do not. Parsing reads and writes nothing, so it comes first.
   const args = parseArgs(cmd, rest)
-  if ((typeof cmd.mutates === 'function' ? cmd.mutates(args) : cmd.mutates) && uid === 0) return refuse(cmd.name, 'usage', `trocar ${cmd.name}: run this as your own user, not as root.`)
+  const mutates = typeof cmd.mutates === 'function' ? cmd.mutates(args) : cmd.mutates
+  // §1.2 不印凭据: a command that changes state prints no URL's userinfo (a door's password among them); one that reads data prints its bytes as they are
+  const cio = mutates ? hidingIo(io) : io
+  if (mutates && uid === 0) return refuse(cmd.name, 'usage', `trocar ${cmd.name}: run this as your own user, not as root.`)
   if (args.error) return refuse(cmd.name, args.error.code, args.error.message, { usage: args.error.usage })
   const run = (deps.commands && deps.commands[cmd.name]) || cmd.run
   try {
-    return await run(rest, { io, env, home, platform, uid, json, args, deps: { getuid: () => uid, ...deps } })
+    return await run(rest, { io: cio, env, home, platform, uid, json, args, deps: { getuid: () => uid, ...deps } })
   } catch (e) {
     // §1.3: 70 is trocar's own fault. The message is one line; the stack belongs in `--json` and in a report, never on a person's screen.
     const message = `trocar: internal error: ${(e && e.message) || e}`
-    if (json) { printJson(io, errorDoc(cmd.name, 'internal', message, (e && e.stack) || String(e))); return EXIT.crash }
-    io.err(message); io.err(REPORT)
+    if (json) { printJson(cio, errorDoc(cmd.name, 'internal', message, (e && e.stack) || String(e))); return EXIT.crash }
+    cio.err(message); cio.err(REPORT)
     return EXIT.crash
   }
 }

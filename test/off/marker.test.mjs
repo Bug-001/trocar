@@ -1,6 +1,7 @@
 // test/off/marker.test.mjs — src/off/marker.mjs (RFC 1.6 R3 「按标记撤销」, 4.6 §安装清单与卸载): undoing trocar's changes with no manifest, by trocar's own
 // marks — sentinel blocks and lines, JSON values that point under ~/.trocar, the plugins and shims trocar wrote — at the places each harness keeps its entry.
-// Every case installs all seven harnesses through the real installCollector into a sandbox HOME, then deletes the manifest and works from the HOME alone.
+// The Linux cases install all seven harnesses through the real installCollector into a sandbox HOME, then delete the manifest and work from the HOME alone;
+// the macOS / Windows cases write each routing plugin through `on`'s own route writer.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -15,6 +16,10 @@ import { backupsOf, writeBackup } from '../../src/off/backup.mjs'
 import { manifestPath } from '../../src/off/manifest.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sevenHomes } from './fixtures/seven-homes.mjs'
+import { world, door } from '../collector/core/proxymode/fixtures/entries-ctx.mjs'
+import { routeEntry, noProxyNames } from '../../src/collector/core/proxymode/entries.mjs'
+import { renderHook } from '../../src/collector/harness/templates/index.mjs'
+import { resolveLoc, dirsFor } from '../../src/off/loc.mjs'
 
 const roots = { node: [createCa({ commonName: 'marker root' }).certPem], osText: '' }
 const read = (f) => fs.readFileSync(f, 'utf8')
@@ -135,3 +140,37 @@ test('D48② with no manifest: a key the user set while on keeps the user\'s val
   assert.equal(r.restored, 2, 'the lines that came back are counted, line 1 after the mark among them')
   assert.deepEqual(r.prior_left, [{ key: 'SSL_CERT_FILE', line: 3 }], 'the old line left out of effect is reported by line, as the journal path reports it')
 })
+
+// macOS / Windows: `on` writes class-1 routes whose bytes carry trocar's sentinel (4.11 P5): a routing plugin (plugin-file) and a proxy block in a
+// dotenv file (dotenv-block). With the manifest lost, the marker undo finds each where `on` put it — the place the descriptor's route names, through the
+// same resolver and the same per-user folders (appSupport / localAppData), the route's own variable (XDG_CONFIG_HOME, CODEX_HOME, …) included — and
+// takes it out: the plugin goes, the user's bytes of a dotenv file come back exactly. (A json-key route's value carries no sentinel; not covered here.)
+const MARKED = ['plugin-file', 'dotenv-block']
+const USER_DOTENV = 'USER_KEY=kept\n'
+for (const { h, id, r } of (await loadHarnesses()).flatMap((d) => Object.entries((d.proxyMode && d.proxyMode.routes) || {}).map(([id, r]) => ({ h: d, id, r }))).filter((x) => MARKED.includes(x.r.kind))) {
+  for (const os of ['darwin', 'win32']) {
+    const at = r.dir || r.file, l = at.perOs ? at.perOs[os] : at
+    if (!l) continue
+    for (const over of l.env ? [false, true] : [false]) {
+      test(`${h.name} · ${id} (${r.kind}) · ${os}${over ? ` · ${l.env} set` : ''}: what \`on\` wrote is found and undone by its mark when the manifest is gone`, async () => {
+        const w = world({ os })
+        // Windows always names its per-user folders in the environment; set under the sandbox, so a win32 case run on another host stays in it
+        if (os === 'win32') Object.assign(w.ctx.env, { APPDATA: path.join(w.root, 'roaming'), LOCALAPPDATA: path.join(w.root, 'local') })
+        if (over) w.ctx.env[l.env] = path.join(w.root, 'elsewhere')
+        w.ctx.dirs = dirsFor(os, w.home, w.ctx.env)
+        const p = (h.proxy || {}).env || []
+        const ctx = { ...w.ctx, harness: h.name, routeId: id, route: r, render: (tpl, v) => renderHook(tpl, { DOOR: v.door, PROXY_ENV: p, PROXY_NAMES: p, NO_PROXY_ENV: noProxyNames(h) }).text }
+        if (r.kind === 'dotenv-block') { const f = resolveLoc(r.file, ctx)[0]; fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, USER_DOTENV) }
+        const res = routeEntry(r.kind).write(ctx, door())
+        assert.ok(res.ok, JSON.stringify(res))
+        const file = res.records[0].path
+        assert.ok(path.isAbsolute(file) && file.startsWith(w.root) && fs.existsSync(file), file)
+        const plan = planByMarker({ home: w.home, env: w.ctx.env, platform: os, ids: [h.name] })
+        assert.deepEqual(plan.map((x) => [x.harness, x.path]), [[h.name, file]])
+        assert.deepEqual(undoByMarker(plan, { home: w.home }).map((x) => x.result), ['undone-by-marker'])
+        if (r.kind === 'plugin-file') assert.ok(!fs.existsSync(file))
+        else assert.equal(read(file), USER_DOTENV, 'the user\'s bytes come back exactly')
+      })
+    }
+  }
+}

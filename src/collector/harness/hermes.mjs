@@ -22,6 +22,7 @@ import path from 'node:path'
 import { hostOf, expandHome, parseDotenv } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
 import { envProxies, argAfter, dotenvLayer, perOs } from './_common.mjs'
+import { ROUTE_PLACES } from '../../off/marker.mjs'
 
 const MANAGED = { linux: '/etc/hermes' }
 const FALSEY = /^(false|0|no|off)$/i
@@ -144,7 +145,8 @@ const proxy = {
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (the .env block routes every form; the root
 // alone trusts; trocar writes no SSL_CERT_FILE and no ssl_ca_cert). The block is written only into a Hermes home that exists.
-const HOME = (path) => perOs({ darwin: { base: 'home', dir: '.hermes', env: 'HERMES_HOME', path }, win32: { base: 'localAppData', dir: 'hermes', env: 'HERMES_HOME', path } })
+// The Hermes home per OS comes from the place `on` writes the proxy block (src/off/marker.mjs ROUTE_PLACES), the place the marker undo looks too.
+const HOME = (path) => perOs(Object.fromEntries(Object.entries(ROUTE_PLACES.hermes.file.perOs).map(([os, l]) => [os, { ...l, path }])))
 const form = (id, present, verified = { darwin: true, win32: true }) => ({ id, os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'root', present: [...present, HOME()], verified })
 const proxyMode = {
   forms: [

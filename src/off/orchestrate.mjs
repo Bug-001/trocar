@@ -373,7 +373,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
   }
   // no manifest (or one that cannot be read): trocar's own marks, listed first and undone only after a yes (R3)
   if (manifestError) u.notes.push(`the install manifest cannot be read (${errMessage(manifestError)}); trocar's own marks are used instead`)
-  const plan = planByMarker({ home: w.home, ids, fs: w.fs })
+  const plan = planByMarker({ home: w.home, ids, fs: w.fs, env: w.env, platform: w.platform })
   u.orphan_backups = orphanBackups({ home: w.home, manifest: null, fs: w.fs })
   if (!plan.length) { u.mode = manifestError ? 'marker' : 'none'; return u }
   u.mode = 'marker'
@@ -474,7 +474,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     const mine = (x) => x.phase === 'on' && (ids == null || ids.includes(x.harness)) // off spares what install wrote (D55①), so its plan does too
     const items = manifest && !manifest.unsupported ? manifest : { entries: [], files: [] }
     const gone = items.files.filter((f) => mine(f) && ['plugin', 'shim', 'bundle', 'trust-file'].includes(f.role)).map((f) => f.path)
-    const marks = manifest && !manifest.unsupported ? [] : planByMarker({ home, ids, fs: w.fs })
+    const marks = manifest && !manifest.unsupported ? [] : planByMarker({ home, ids, fs: w.fs, env: w.env, platform: w.platform })
     receipt.dry_run = true
     receipt.changed = [...items.entries.filter((e) => mine(e) && (e.kind === 'json-key' || e.kind === 'text')).map((e) => ({ path: e.path, change: offChangeText(e), backup: e.backup ?? null, ...withHarness(e.harness) })), ...marks.filter((p) => p.how !== 'owned-file').map((p) => ({ path: p.path, change: MARKER_TEXT[p.how], backup: null, ...withHarness(p.harness) }))]
     receipt.removed = [...gone, ...marks.filter((p) => p.how === 'owned-file').map((p) => p.path)]

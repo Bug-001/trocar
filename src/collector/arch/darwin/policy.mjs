@@ -8,6 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execTool } from '../../../off/exec.mjs'
 import { pathKey } from '../../../off/fsutil.mjs'
+import { dirsFor } from '../../../off/loc.mjs'
 
 const MANAGED = '/Library/Managed Preferences'
 
@@ -38,4 +39,4 @@ export const platformFacts = Object.freeze({
 })
 
 /** sources.mjs's ctx.dirs on macOS: `appSupport` is Electron's appData (~/Library/Application Support); no localAppData. */
-export const dirsOf = (home) => ({ appSupport: path.join(home, 'Library', 'Application Support') })
+export const dirsOf = (home) => dirsFor('darwin', home)
