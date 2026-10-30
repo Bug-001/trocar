@@ -9,6 +9,7 @@ import { renderTemplate } from '../../core/proxymode/hooks/render.mjs'
 export const TEMPLATES = Object.freeze({
   'opencode-plugin': Object.freeze({ file: 'opencode-plugin.js.tmpl', phase: 'on' }),
   'cordis-plugin': Object.freeze({ file: 'cordis-plugin.mjs.tmpl', phase: 'install', sendsUpstreamHeader: true, addsRoot: true }),
+  'pi-extension': Object.freeze({ file: 'pi-extension.js.tmpl', phase: 'install', addsRoot: true }),
 })
 
 export const templateUrl = (id) => new URL(`./${TEMPLATES[id].file}`, import.meta.url)

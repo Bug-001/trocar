@@ -1,5 +1,5 @@
-// test/collector/harness/plugins.test.mjs — acceptance T13 (RFC 4.6 §身份与信任「进程内插件:有界例外」, D37④): the dsh
-// and OpenCode trust plugins only append the trocar CA. Two halves: a static check of each source (imports, the
+// test/collector/harness/plugins.test.mjs — acceptance T13 (RFC 4.6 §身份与信任「进程内插件:有界例外」, D37④): the dsh,
+// OpenCode and pi trust plugins only append the trocar CA. Two halves: a static check of each source (imports, the
 // calls it may make, words it may never contain), and a stub runtime that loads the rendered plugin with recording
 // fs / tls / fetch and asserts every call it made.
 import test from 'node:test'
@@ -14,8 +14,12 @@ import { CA } from './_ctx.mjs'
 
 // the plugin needs tls.setDefaultCACertificates (Node >= 22.19) and the probe tls.getCACertificates (>= 22.15); an older Node (the CI matrix has 20) skips the real-Node test, so every Node counts the same tests
 const NODE_TLS_ROOTS = typeof tls.setDefaultCACertificates === 'function' && typeof tls.getCACertificates === 'function'
-const SRC = { dsh: 'dsh/index.js', opencode: 'opencode/trocar-ca.js' }
-const read = (rel) => fs.readFileSync(new URL(rel, PLUGIN_SOURCES), 'utf8')
+// dsh and pi share the root-only body and differ only in the exports their host looks for
+const SRC = { dsh: ['node-roots.js', 'dsh/exports.js'], opencode: 'opencode/trocar-ca.js', pi: ['node-roots.js', 'pi/exports.js'] }
+// the plugins that only add the root (no fetch wrapper), and the exports each host loads
+const ROOT_ONLY = ['dsh', 'pi']
+const EXPORTS = { dsh: ['apply', 'name'], opencode: ['TrocarCaPlugin'], pi: ['default'] }
+const read = (rel) => [rel].flat().map((r) => fs.readFileSync(new URL(r, PLUGIN_SOURCES), 'utf8')).join('')
 const code = (src) => src.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s\/\/ .*$/gm, '')
 
 test('T13 static: each plugin imports only node:fs and node:tls, calls only the allowed fs functions, never names a network API, a body or rejectUnauthorized', () => {
@@ -29,15 +33,15 @@ test('T13 static: each plugin imports only node:fs and node:tls, calls only the 
     assert.deepEqual([...c.matchAll(/fs\.readFileSync\(([^,)]+)/g)].map((m) => m[1]).sort(), ["'/proc/self/stat'", 'CA_FILE'], `${h}: the only files read`)
     for (const m of c.matchAll(/fs\.(writeFileSync|renameSync)\(([^)]*)\)/g)) assert.match(m[2], /^tmp\b/, `${h}: writes go to the marker temp file and its rename only`)
     assert.ok(/const tmp = `\$\{MARKER_DIR\}\/\.\$\{process\.pid\}\.tmp`/.test(c) && /`\$\{MARKER_DIR\}\/\$\{process\.pid\}`/.test(c), `${h}: the marker is <dir>/<pid>`)
-    assert.deepEqual([...new Set([...c.matchAll(/\btls\.(\w+)/g)].map((m) => m[1]))].sort(), h === 'dsh' ? ['getCACertificates', 'setDefaultCACertificates'] : ['getCACertificates'], `${h}: tls calls`)
+    assert.deepEqual([...new Set([...c.matchAll(/\btls\.(\w+)/g)].map((m) => m[1]))].sort(), ROOT_ONLY.includes(h) ? ['getCACertificates', 'setDefaultCACertificates'] : ['getCACertificates'], `${h}: tls calls`)
     for (const bad of [/rejectUnauthorized/, /\b(http|https|net|dgram|http2|child_process|worker_threads)\b/, /\bWebSocket\b|\bXMLHttpRequest\b|\bBun\./, /\.(body|headers|text|json|arrayBuffer|blob|formData|clone|bytes)\b/, /\bspawn\w*\(|(?<!\.)\bexec(File|Sync)?\(/, /\bconsole\.|process\.(stdout|stderr)/]) {
       assert.ok(!bad.test(c), `${h}: never ${bad}`)
     }
-    assert.deepEqual([...c.matchAll(/process\.(\w+)(?:\.(\w+))?/g)].map((m) => m[0]).filter((x, i, a) => a.indexOf(x) === i).sort(), h === 'dsh' ? ['process.env.NODE_OPTIONS', 'process.execArgv', 'process.pid'] : ['process.pid'], `${h}: the only process facts read`)
+    assert.deepEqual([...c.matchAll(/process\.(\w+)(?:\.(\w+))?/g)].map((m) => m[0]).filter((x, i, a) => a.indexOf(x) === i).sort(), ROOT_ONLY.includes(h) ? ['process.env.NODE_OPTIONS', 'process.execArgv', 'process.pid'] : ['process.pid'], `${h}: the only process facts read`)
   }
   const oc = code(read(SRC.opencode))
   assert.deepEqual([...oc.matchAll(/\b(inner|fetch)\s*(\.call)?\(/g)].map((m) => m[0]), ['inner.call('], 'OpenCode: the only fetch made is the caller\'s own, passed on')
-  assert.equal([...code(read(SRC.dsh)).matchAll(/\bfetch\b/g)].length, 0, 'dsh never touches fetch')
+  for (const h of ROOT_ONLY) assert.equal([...code(read(SRC[h])).matchAll(/\bfetch\b/g)].length, 0, `${h} never touches fetch`)
 })
 
 // ── stub runtime ──
@@ -67,7 +71,7 @@ async function load(rel, { caText = CA.certPem, tlsApi = {}, fetch = null } = {}
   const src = rendered.replace("import fs from 'node:fs'", 'const fs = globalThis.__trocarT13.fs').replace("import tls from 'node:tls'", 'const tls = globalThis.__trocarT13.tls')
   assert.ok(!/^import /m.test(src), 'every import replaced by its stub')
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-t13-'))
-  const file = path.join(dir, path.basename(rel).replace(/\.js$/, '.mjs'))
+  const file = path.join(dir, path.basename([rel].flat()[0]).replace(/\.js$/, '.mjs'))
   fs.writeFileSync(file, src)
   const realFetch = globalThis.fetch
   globalThis.__trocarT13 = { fs: fsStub, tls: tlsStub }
@@ -86,30 +90,39 @@ const markerCalls = [
   ['fs.renameSync', `${MARKERS}/.${process.pid}.tmp`, `${MARKERS}/${process.pid}`],
 ]
 
-test('T13 stub runtime, dsh: the one trust change is setDefaultCACertificates(default roots + trocar CA), then the marker; nothing else is called', async () => {
-  const { mod, calls } = await load(SRC.dsh)
-  assert.deepEqual(calls, [
-    ['fs.readFileSync', CA_FILE, 'utf8'],
-    ['tls.getCACertificates', 'default'],
-    ['tls.setDefaultCACertificates', [...ROOTS, CA.certPem.trim()]],
-    ['fs.readFileSync', '/proc/self/stat', 'utf8'],
-    ...markerCalls,
-  ])
-  assert.deepEqual([mod.name, typeof mod.apply], ['trocar-ca', 'function'], 'a cordis plugin shape dsh loads')
-})
+for (const h of ROOT_ONLY) {
+  test(`T13 stub runtime, ${h}: the one trust change is setDefaultCACertificates(default roots + trocar CA), then the marker; nothing else is called`, async () => {
+    const { mod, calls } = await load(SRC[h])
+    assert.deepEqual(calls, [
+      ['fs.readFileSync', CA_FILE, 'utf8'],
+      ['tls.getCACertificates', 'default'],
+      ['tls.setDefaultCACertificates', [...ROOTS, CA.certPem.trim()]],
+      ['fs.readFileSync', '/proc/self/stat', 'utf8'],
+      ...markerCalls,
+    ])
+    assert.deepEqual(Object.keys(mod).sort(), EXPORTS[h], 'the shape its host loads')
+  })
 
-test('T13 stub runtime, dsh: no setDefaultCACertificates, --use-openssl-ca, a missing / non-PEM CA file, a failing call → nothing added, no marker, no throw', async () => {
-  const noApi = await load(SRC.dsh, { tlsApi: { setDefaultCACertificates: undefined } })
-  assert.deepEqual(noApi.calls, [], 'Node < 22.19: nothing is even read')
-  const before = process.env.NODE_OPTIONS
-  process.env.NODE_OPTIONS = '--max-old-space-size=4096 --use-openssl-ca'
-  try { assert.deepEqual((await load(SRC.dsh)).calls, [], 'under --use-openssl-ca the call would replace the roots') } finally { if (before == null) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = before }
-  for (const caText of [Object.assign(new Error('ENOENT'), { code: 'ENOENT' }), 'not a certificate']) {
-    assert.deepEqual((await load(SRC.dsh, { caText })).calls, [['fs.readFileSync', CA_FILE, 'utf8']], `CA file ${caText}`)
-  }
-  const failing = await load(SRC.dsh, { tlsApi: { setDefaultCACertificates: () => { throw new Error('bad PEM') } } })
-  assert.ok(!failing.calls.some((c) => c[0].startsWith('fs.write') || c[0] === 'fs.renameSync'), 'the CA did not go in: no marker')
-})
+  test(`T13 stub runtime, ${h}: a second import in the same process (pi's /reload) finds the CA already in the default roots, adds nothing and writes the same marker`, async () => {
+    const already = [...ROOTS, `${CA.certPem.trim()}\n`] // the same certificate; how the default store spells it may differ in white space
+    const { calls } = await load(SRC[h], { tlsApi: { getCACertificates: () => [...already] } })
+    assert.ok(!calls.some((c) => c[0] === 'tls.setDefaultCACertificates'), 'the roots are left as they are')
+    assert.deepEqual(calls.slice(-2), markerCalls)
+  })
+
+  test(`T13 stub runtime, ${h}: no setDefaultCACertificates, --use-openssl-ca, a missing / non-PEM CA file, a failing call → nothing added, no marker, no throw`, async () => {
+    const noApi = await load(SRC[h], { tlsApi: { setDefaultCACertificates: undefined } })
+    assert.deepEqual(noApi.calls, [], 'Node < 22.19: nothing is even read')
+    const before = process.env.NODE_OPTIONS
+    process.env.NODE_OPTIONS = '--max-old-space-size=4096 --use-openssl-ca'
+    try { assert.deepEqual((await load(SRC[h])).calls, [], 'under --use-openssl-ca the call would replace the roots') } finally { if (before == null) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = before }
+    for (const caText of [Object.assign(new Error('ENOENT'), { code: 'ENOENT' }), 'not a certificate']) {
+      assert.deepEqual((await load(SRC[h], { caText })).calls, [['fs.readFileSync', CA_FILE, 'utf8']], `CA file ${caText}`)
+    }
+    const failing = await load(SRC[h], { tlsApi: { setDefaultCACertificates: () => { throw new Error('bad PEM') } } })
+    assert.ok(!failing.calls.some((c) => c[0].startsWith('fs.write') || c[0] === 'fs.renameSync'), 'the CA did not go in: no marker')
+  })
+}
 
 test('T13 stub runtime, OpenCode: the fetch wrapper appends the trocar CA after the caller\'s ca (or the default roots); request and response pass as the same objects, unread', async () => {
   const seen = []
@@ -168,13 +181,13 @@ test('renderPlugin fills in this user\'s CA file and marker dir as string litera
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('T13 real Node (Linux): the rendered dsh plugin puts the trocar CA into the default roots and writes the marker with this process\'s start time', { skip: (process.platform !== 'linux' && 'needs /proc') || (!NODE_TLS_ROOTS && 'needs Node >= 22.19 (tls.setDefaultCACertificates)') }, async () => {
+for (const h of ROOT_ONLY) test(`T13 real Node (Linux): the rendered ${h} plugin puts the trocar CA into the default roots and writes the marker with this process's start time`, { skip: (process.platform !== 'linux' && 'needs /proc') || (!NODE_TLS_ROOTS && 'needs Node >= 22.19 (tls.setDefaultCACertificates)') }, async () => {
   const { spawnSync } = await import('node:child_process')
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-t13r-'))
   try {
     const caFile = path.join(dir, 'trocar-ca.pem'); fs.writeFileSync(caFile, CA.certPem)
     const markers = path.join(dir, 'trust'); fs.mkdirSync(markers)
-    const plugin = path.join(dir, 'index.mjs'); fs.writeFileSync(plugin, renderPlugin(SRC.dsh, { caFile, markerDir: markers }))
+    const plugin = path.join(dir, 'index.mjs'); fs.writeFileSync(plugin, renderPlugin(SRC[h], { caFile, markerDir: markers }))
     const probe = `import(${JSON.stringify(pathToFileURL(plugin).href)}).then(() => { const tls = require('node:tls'); const st = require('node:fs').readFileSync('/proc/self/stat', 'utf8'); console.log(JSON.stringify({ pid: process.pid, ticks: st.slice(st.lastIndexOf(')') + 2).split(' ')[19], has: tls.getCACertificates('default').map((c) => c.trim()).includes(${JSON.stringify(CA.certPem.trim())}), n: tls.getCACertificates('default').length, bundled: tls.getCACertificates('bundled').length })) })`
     const r = spawnSync(process.execPath, ['-e', probe], { encoding: 'utf8', env: { PATH: process.env.PATH } })
     assert.equal(r.status, 0, r.stderr)

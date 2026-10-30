@@ -81,6 +81,21 @@ export const HARNESSES = Object.freeze([
     lane: [{ header: 'x-zcode-session-type', equals: 'subagent', lane: 'subagent' }], // values not yet seen live
     observerEffects: [effect('zcode-node-https', 'network.caCertFile in ~/.zcode/cli/config.json',
       'HTTP client switched from undici to node:https: a new Agent per request, no ALPN (inferred, lab check pending)')] },
+  { ...ROW, id: 'pi', agents: ['pi'],
+    // measured (pi 1.4.0, default configuration): openai-responses sends header session_id, Codex (WebSocket upgrade and SSE) header
+    // session-id, both with body prompt_cache_key, all three = pi's session id; anthropic-messages (API key or OAuth) and chat-completions
+    // send none → synthesized (src/dissect/synth-key.mjs, gate G11)
+    sessionKeys: [H('session_id'), H('session-id'), B(['prompt_cache_key'])],
+    synth: true,
+    // the summary request (same endpoint, no tools, one user message) starts its system prompt with this sentence; a JSON string's start
+    compaction: [{ marker: /(?<!\\)"You are a context summarization assistant\./ }],
+    observerEffects: [
+      effect('pi-extension', 'trocar trust extension', 'trocar code runs inside the agent process and pi lists it on its startup screen', LINUX),
+      effect('pi-route-extension', 'trocar extension placed by install',
+        'trocar code runs inside the agent process and pi lists it on its startup screen; while capture is on, the proxy variables it sets are inherited by the commands pi\'s tools run', DOOR)],
+    // pi.dev: the install report (its version check is other, kept in full); github.com and its release assets: the fd / rg downloads of
+    // pi's first interactive start (none in print or rpc mode)
+    traffic: [T('pi.dev', 'telemetry', '^/api/report-install'), T('github.com', 'files'), T('release-assets.githubusercontent.com', 'files')] },
 ]);
 
 // Ordered union of every header session key the table declares, then the legacy ones. Only for raw lines that
@@ -104,7 +119,7 @@ export const LEGACY_PROVIDER = Object.freeze({ cc: 'anthropic', codex: 'openai',
 export function wireProviderOfEndpoint(endpoint) {
   const ep = String(endpoint || '').split('?')[0];
   if (/(^|\/)(responses|chat\/completions)$/.test(ep)) return 'openai';
-  if (/(^|\/)messages$/.test(ep)) return 'anthropic';
+  if (/(^|\/)v1\/messages$/.test(ep)) return 'anthropic'; // D3: a bare /messages (a gateway's own route) is no wire
   return null;
 }
 

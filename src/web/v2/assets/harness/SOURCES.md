@@ -14,6 +14,7 @@
 | `dsh.svg` | DeepSeek dsh | 一头鲸加喷出的水气 | trocar 自绘 |
 | `hermes.svg` | Hermes | 一架纸飞机 | trocar 自绘 |
 | `zcode.svg` | Z-Code | 一道写成 Z 字的折线 | trocar 自绘 |
+| `pi.svg` | pi | 希腊字母 π:一道彩色横梁下两条腿,右腿收尾上勾 | trocar 自绘 |
 | `deepseek-cli.svg` | DeepSeek CLI | 终端窗格与提示符(旧采集认出的) | trocar 自绘 |
 
 「未识别的 agent」的虚线方框图形不是文件,常驻在 `core/chips.mjs` 里(`UNKNOWN_ICON`),任何 harness 都不用它。

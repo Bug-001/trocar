@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  HARNESSES, harnessOf, sessionKeyOf, hintsOf, observerEffectsOf, headerOf,
+  HARNESSES, harnessOf, sessionKeyOf, hintsOf, observerEffectsOf, headerOf, wireProviderOfEndpoint,
 } from '../../src/dissect/harnesses.mjs';
 
 const proc = (agent, pid = 4242) => ({ pid, exe: '/x/' + agent, agent });
@@ -132,4 +132,44 @@ test('observer effects by capture mode: a proxy-mode call carries no Linux-only 
 test('headerOf is case-insensitive over both envelope header keys', () => {
   assert.equal(headerOf({ req_headers: { 'Session-Id': 'a' } }, 'session-id'), 'a');
   assert.equal(headerOf({ request_headers: { 'session-id': 'b' } }, 'Session-Id'), 'b');
+});
+
+// 3.4 pi row, from the requests pi 1.4.0 sent on a test machine (default configuration; only the keys that matter copied, values made up):
+// openai-responses → header session_id + body prompt_cache_key; Codex over SSE and over the WebSocket upgrade → header session-id (+ the
+// same body key in each response.create); anthropic-messages and chat-completions → neither.
+const PI_SID = '0a1b2c3d-0000-7000-8000-000000000001';
+const piRec = (endpoint, headers, body) => ({ ...rec({ agent: 'pi', headers: { 'user-agent': 'pi/1.4.0 (darwin; node/v22.23.3; arm64)', ...headers }, body }), endpoint });
+test('pi: the measured responses and Codex requests key the session by pi\'s session id', () => {
+  const resp = piRec('/v1/responses', { session_id: PI_SID, 'x-client-request-id': PI_SID }, { model: 'm', prompt_cache_key: PI_SID, input: [] });
+  const sse = piRec('/backend-api/codex/responses', { 'session-id': PI_SID, 'x-client-request-id': PI_SID, originator: 'pi' }, { model: 'm', prompt_cache_key: PI_SID, input: [] });
+  const wsUpgrade = { ...piRec('/backend-api/codex/responses', { 'session-id': PI_SID, 'x-client-request-id': PI_SID, originator: 'pi' }), req_body: '' };
+  for (const [name, r] of [['openai-responses', resp], ['Codex SSE', sse], ['Codex WebSocket upgrade', wsUpgrade]]) assert.equal(sessionKeyOf(r).key, PI_SID, name);
+  // the body key alone (a call whose headers a relay dropped) still keys it
+  assert.equal(sessionKeyOf(piRec('/v1/responses', {}, { model: 'm', prompt_cache_key: PI_SID, input: [] })).key, PI_SID);
+});
+
+test('pi: the measured anthropic-messages and chat-completions requests carry no key, and its row synthesizes one', () => {
+  const anth = piRec('/v1/messages?beta=true', { 'anthropic-version': '2023-06-01' }, { model: 'm', system: [{ type: 'text', text: 'You are an expert coding assistant' }], messages: [], tools: [{ name: 'read' }] });
+  const chat = piRec('/v1/chat/completions', {}, { model: 'm', messages: [{ role: 'system', content: 'x' }], tools: [{ type: 'function' }] });
+  for (const r of [anth, chat]) assert.equal(sessionKeyOf(r).key, null, r.endpoint);
+  assert.equal(harnessOf(anth).row.synth, true);
+});
+
+test('pi: the summary request of a compaction carries the marker; a turn that quotes the sentence mid-text does not', () => {
+  const summary = piRec('/v1/messages?beta=true', {}, { model: 'm', max_tokens: 1024, system: [{ type: 'text', text: 'You are a context summarization assistant. Your task is to read a conversation' }], messages: [{ role: 'user', content: '# Conversation' }] });
+  assert.equal(hintsOf(summary).compactionMarker, true);
+  const turn = piRec('/v1/messages?beta=true', {}, { model: 'm', system: [{ type: 'text', text: 'You are an expert coding assistant' }], messages: [{ role: 'user', content: 'what does "You are a context summarization assistant." mean?' }], tools: [{ name: 'read' }] });
+  assert.equal(hintsOf(turn).compactionMarker, false);
+});
+
+test('pi: the trust extension is its Linux effect, the install-time extension its door effect (3.1)', () => {
+  const ids = (capture) => (observerEffectsOf(rec({ agent: 'pi', capture })) || []).map((e) => e.id);
+  assert.deepEqual(ids('transparent'), ['pi-extension']);
+  assert.deepEqual(ids('proxy'), ['pi-route-extension']);
+});
+
+// D3 / 0.2: only an endpoint ending /v1/messages (relay prefixes and a querystring allowed) is the Anthropic wire.
+test('wireProviderOfEndpoint: /v1/messages is anthropic, a bare /messages is no wire, responses / chat completions are openai', () => {
+  for (const [ep, want] of [['/v1/messages', 'anthropic'], ['/anthropic/v1/messages?beta=true', 'anthropic'], ['/messages', null],
+    ['/v1/responses', 'openai'], ['/v1/chat/completions', 'openai']]) assert.equal(wireProviderOfEndpoint(ep), want, ep);
 });

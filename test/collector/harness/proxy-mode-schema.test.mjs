@@ -156,3 +156,20 @@ for (const d of subjects.filter((x) => Object.values(x.proxyMode.certs || {}).so
     })
   }
 }
+
+// CM37: a plugin cert's loader is optional (the host finds the hook in its folder); a declared one names the one format with a row edit primitive
+for (const d of subjects.filter((x) => Object.values(x.proxyMode.certs || {}).some((c) => c.kind === 'plugin'))) {
+  test(`CM37 · ${d.name}: plugin certs without a loader load; a loader whose format is not yaml is refused under kind, at its path`, async () => {
+    const bare = structuredClone(d.proxyMode)
+    for (const c of Object.values(bare.certs)) if (c.kind === 'plugin') delete c.loader
+    assert.equal((await loadOne({ ...d, proxyMode: bare })).length, 1)
+    const pm = structuredClone(d.proxyMode)
+    const [id, c] = Object.entries(pm.certs).find(([, x]) => x.kind === 'plugin')
+    c.loader = { file: { base: 'home', path: '.plugins.json' }, format: 'json', keys: ['plugins'] }
+    await assert.rejects(loadOne({ ...d, proxyMode: pm }), (e) => {
+      assert.match(e.message, new RegExp(`harness ${d.name} `))
+      assert.match(e.message, new RegExp(`\\bkind: certs\\.${id}\\.loader\\.format\\b`), e.message)
+      return true
+    })
+  })
+}

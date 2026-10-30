@@ -87,6 +87,7 @@ test('V25: the undo of codex alone (both phases) takes ~/.codex/.env and its bun
   const s = await sevenInstalled()
   const everything = () => snapshot(s.home, ['.trocar/collector/install-manifest.json', '.trocar/collector/flows']) // the manifest is rewritten by design
   const before = everything()
+  const installedBefore = [...new Set(readManifest(s.dir).entries.map((e) => e.harness))]
   const r = await s.run({ ids: ['codex'] })
   assert.deepEqual(r.results.map((x) => [x.harness, path.relative(s.home, x.path), x.result]), [['codex', '.codex/.env', 'restored']])
   assert.equal(fs.readFileSync(s.sh.files.codex[0], 'utf8'), 'OPENAI_API_KEY=sk-test\n')
@@ -94,7 +95,7 @@ test('V25: the undo of codex alone (both phases) takes ~/.codex/.env and its bun
   const changed = Object.keys({ ...before, ...after }).filter((k) => before[k] !== after[k])
   assert.deepEqual(changed.map((k) => k.replace(/^\.trocar\/backup\/.*$/, '.trocar/backup/<codex .env>')).sort(), ['.codex/.env', '.trocar/backup/<codex .env>', '.trocar/collector/ca/combined-codex.pem'], 'its .env, its bundle and the backup of its .env — trocar-ca.pem, the key, the other bundles and the other six harnesses\' files are byte for byte')
   assert.deepEqual(changed.filter((k) => after[k] === undefined).length, 2, 'the bundle and the backup are gone, not changed')
-  assert.deepEqual([...new Set(readManifest(s.dir).entries.map((e) => e.harness))].sort(), HARNESS_IDS.filter((h) => h !== 'codex' && h !== 'opencode').sort(), 'the other harnesses are still installed (opencode has no entry, only a plugin file)')
+  assert.deepEqual([...new Set(readManifest(s.dir).entries.map((e) => e.harness))].sort(), installedBefore.filter((h) => h !== 'codex').sort(), 'the other harnesses are still installed')
   // with a live codex: the bundle stays, without the CA, and the other bundles still do not move
   const t = await sevenInstalled()
   const others = (n) => fs.readFileSync(t.ca(n), 'utf8')
