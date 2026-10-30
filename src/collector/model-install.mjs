@@ -12,6 +12,7 @@ import { caPaths } from './core/tls/ca-store.mjs'
 import { ROOT, checkProfile, certPem, pemToDer } from './core/tls/cert.mjs'
 import { rootIdOf } from '../off/root-store.mjs'
 import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, judgeOwned, sha256 } from './core/trust/journal.mjs'
+import { codeId } from '../version.mjs'
 import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
 import { writeStandalone } from '../off/standalone.mjs'
 import { missingDirs } from '../off/fsutil.mjs'
@@ -195,7 +196,8 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     const state = pending.length || problems.length || !rootDer ? 'partial' : 'complete'
     // what install placed for each harness, by kind and path: precondition ⑪ refuses a harness one of these has gone from, even when its record went with it
     const placed = Object.fromEntries(names.map((h) => [h, itemsOfPhase(m, 'install').filter((x) => x.harness === h).map((x) => ({ kind: x.kind, path: x.path }))]))
-    const next = { state, at: installComplete(m) && state === 'complete' ? m.install.at : now().toISOString(), pending, harnesses: names, items: placed }
+    // `code`: the code that ran install (1.6 §5.5: an npm copy's update finishes until it is this code)
+    const next = { state, at: installComplete(m) && state === 'complete' ? m.install.at : now().toISOString(), pending, harnesses: names, items: placed, code: codeId() }
     if (JSON.stringify(next) !== JSON.stringify(m.install)) m.install = next
     if (JSON.stringify(m) !== before) save()
     const skipped = carriers.filter((x) => x.state === 'skipped').length + items.filter((x) => x.state === 'skipped').length

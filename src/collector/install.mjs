@@ -30,6 +30,7 @@ import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/
 import { newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { OFF_VERSION, installComplete } from '../off/manifest.mjs'
 import { writeStandalone, checkStandalone } from '../off/standalone.mjs'
+import { codeId } from '../version.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const listDir = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
@@ -350,9 +351,11 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
       if (!(m.files || []).some((x) => x.path === lf.path)) { writeOwnedFile({ dir, manifest: m, role: 'daemon-log', phase: 'install', file: lf.path, data: '', mode: 0o600, now: now(), fs }); written.files.push(lf.path) }
     }
   }
-  // D55: install's own record (before P10 the `on` that writes the certificates sets it): kept as it is once complete, so a second `on` saves nothing (D54)
+  // D55: install's own record (before P10 the `on` that writes the certificates sets it): kept as it is once complete, so a second `on` saves nothing (D54).
+  // `code` is the code that ran install (1.6 §5.5: an npm copy's update finishes until it is this code): install (certs) writes it, `on` keeps install's
   const names = [...new Set([...((m.install && m.install.harnesses) || []), ...descs.map((d) => d.name)])].sort()
-  if (!installComplete(m) || JSON.stringify(names) !== JSON.stringify(m.install.harnesses)) m.install = { state: 'complete', at: installComplete(m) ? m.install.at : now().toISOString(), pending: [], harnesses: names }
+  const ran = certs ? codeId() : installComplete(m) ? m.install.code : undefined
+  if (!installComplete(m) || JSON.stringify(names) !== JSON.stringify(m.install.harnesses) || ran !== m.install.code) m.install = { state: 'complete', at: installComplete(m) ? m.install.at : now().toISOString(), pending: [], harnesses: names, ...(ran ? { code: ran } : {}) }
   if (confirmed) m.confirmed_paths = [...new Set([...(m.confirmed_paths || []), ...final.paths, ...(unit ? [unit.path] : [])])] // what the operator was shown and said yes to (1.6 §1.6)
   save()
   return { manifest: m, final, written }
@@ -390,6 +393,8 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
       const dmn = await register(put, false)
       // a run that put the entry back or started the daemon changed something: its result is on record like any install's (1.6 §1.2)
       if (dmn && (dmn.started || (entryBefore && entryBefore !== 'present'))) put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: dmn.problems.length ? 'partial' : 'installed', reason: `the certificates were in place; the login entry was ${entryBefore}${dmn.started ? ' and the collector was started' : ''}${dmn.problems.length ? `; not done: ${dmn.problems.join('; ')}` : ''}` })
+      // nothing to write but the record of which code ran install, when that is another code (1.6 §5.5): an npm copy's update finishes until it says this one
+      if (plan._.prior.install.code !== codeId()) { plan._.prior.install = { ...plan._.prior.install, code: codeId() }; saveManifest(dir, plan._.prior, fs) }
       return { already: true, entryBefore, manifest: plan._.prior, plan: null, daemon: dmn }
     }
     const onPlan = opts.onPlan || (() => {})

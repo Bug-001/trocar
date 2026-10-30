@@ -5,7 +5,7 @@
 // undoes it) and pulls; then it starts a NEW process on the new code, which finishes (the daemon, `install`, `on`). The handover is one
 // public command, one file that holds nothing but harness names (`~/.trocar/collector/update.json`), and the daemon's `code`.
 // After the merge this process loads nothing: everything it may need is imported above, and all it does is spawn the child and wait.
-//   runUpdateCli(argv, { io, env, home, platform, deps }) → exit (0 updated or already up to date · 1 not updated / not finished · 2 usage, an npm copy with no collector to restart, no git checkout, root, nobody to confirm)
+//   runUpdateCli(argv, { io, env, home, platform, deps }) → exit (0 updated or already up to date · 1 not updated / not finished · 2 usage, an npm copy with nothing to finish, no git checkout, root, nobody to confirm)
 //   deps (0.1 §3): `exec` (the spawnSync-shaped runner of git / npm), `child` (what runs the new code's `trocar update`), `off` / `on` /
 //   `install` (the three commands this one runs), `daemonCode` (what the daemon answers on its control channel), `unit`, `fs`, `root`.
 import nodeOs from 'node:os'
@@ -16,6 +16,7 @@ import { codeId, codeIdOf, packageRoot, gitDir } from '../version.mjs'
 import { execTool, runAsync } from '../off/exec.mjs'
 import { collectorDir, stateFile } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
+import { readManifest } from '../off/manifest.mjs'
 import { controlEndpointFor } from '../off/control-client.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
 import { commandNamed, usageLine } from './commands.mjs'
@@ -104,24 +105,29 @@ async function update({ io, env, home, platform, deps, flags }) {
   }
 
   // §5.5 · D67②: an npm copy is updated with npm; the code npm put here is the new code, so this run is step 4 — the collector, install
-  // and `on` of the harnesses being captured, the same finish a git update ends with. The handover file is written first, so a finish that
-  // does not get through is taken up by the next run like any other.
+  // and `on` of the harnesses being captured, the same finish a git update ends with — while the collector or the last install ran other
+  // code. The install record counts as much as the collector: a collector that came back on this copy by itself (a reboot, a login) has not
+  // run install or `on` on it. The handover file is written first, so a finish that does not get through is taken up by the next run.
   const pkg = npmCopy(root, fs)
   if (pkg) {
     const waiting = await pending()
     if (waiting) return resume(waiting)
     const running = await daemonCode({ platform, dir, env, fs, deps })
+    const installed = installedCode(home, fs)
     r.to = r.from
-    if (typeof running !== 'string' || running === r.from) {
+    const daemonOther = typeof running === 'string' && running !== r.from
+    if (!daemonOther && (installed === undefined || installed === r.from)) {
       return no('npm-package', `this trocar was installed with npm. Get the newest with npm i -g ${pkg}@latest, then run trocar update to restart the collector on it.`, EXIT.usage)
     }
+    const from = daemonOther ? running : installed
+    const why = daemonOther ? `the collector runs ${running}, so it is replaced by ${r.from}, install runs again` : `install last ran on ${installed || 'code it does not name'}, so it runs again on ${r.from}`
     const on = harnessesOn({ home, fs })
     if (on.error) return no('state-unreadable', on.error)
-    const g = await gate([['Code', `${running} -> ${r.from} (installed with npm)`], ['Switched on again', on.ids.join(', ') || 'nothing is being captured']],
-      [{ what: 'finish', detail: `the collector runs ${running}, so it is replaced by ${r.from}, install runs again${on.ids.length ? `, and capture is switched on again for ${on.ids.join(', ')}` : ''}`, harnesses: on.ids }], CUT)
+    const g = await gate([['Code', `${from || 'code it does not name'} -> ${r.from} (installed with npm)`], ['Switched on again', on.ids.join(', ') || 'nothing is being captured']],
+      [{ what: 'finish', detail: `${why}${on.ids.length ? `, and capture is switched on again for ${on.ids.join(', ')}` : ''}`, harnesses: on.ids }], CUT)
     if (g !== null) return g
-    try { writeHandover(handover, { from: running, on: on.ids }, fs) } catch (e) { return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so nothing was changed`) }
-    return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from: running, on: on.ids } })
+    try { writeHandover(handover, { from, on: on.ids }, fs) } catch (e) { return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so nothing was changed`) }
+    return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from, on: on.ids } })
   }
   // a git checkout is the other way (D67②); anything else is told how it was installed, and nothing is touched
   if (!gitDir(root)) return no('not-a-checkout', NOT_GIT, EXIT.usage)
@@ -271,6 +277,17 @@ function npmCopy(root, fs) {
   let name
   try { name = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).name } catch { return null }
   return typeof name === 'string' && name && root.split(path.sep).join('/').endsWith(`/node_modules/${name}`) ? name : null
+}
+
+/** The code that last ran `install` here, as its record in the install manifest names it (§5.5): undefined when install never ran; null
+ *  when the record names none (a build before the field) or the manifest cannot be read — not this code either way, and `install` says
+ *  what is wrong with a manifest it cannot use. */
+function installedCode(home, fs) {
+  let m
+  try { m = readManifest(collectorDir(home), fs) } catch { return null }
+  if (m && m.unsupported) return null
+  if (!m || !m.install || typeof m.install !== 'object') return undefined
+  return typeof m.install.code === 'string' && m.install.code ? m.install.code : null
 }
 
 /** Which code the collector runs, as it says on its control channel (D67⑤): null when none answers or it names none. The endpoint is

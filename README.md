@@ -110,7 +110,8 @@ behind: run `trocar update` again and it goes on from where it stopped.
 
 A copy installed with npm updates through npm: `npm i -g trocar-cli@latest`, then `trocar update` finishes the
 way a git update does: the collector on the new code, `install` again, and the agents that were being captured
-switched on again. Run it from the copy the login entry starts (the one you ran `trocar install` from); from
+switched on again. It finishes also when the collector already came back on the new code by itself (a reboot or a new
+login in between): `install` records which code ran it, and until that is the new code there is something to finish. Run it from the copy the login entry starts (the one you ran `trocar install` from); from
 another copy the collector comes back on the copy the entry starts, and `update` says so and exits 1.
 
 A machine that ran the build from before the rename moves over once, by hand: that build's own `uninstall`, then
