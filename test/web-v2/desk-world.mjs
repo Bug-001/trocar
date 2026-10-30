@@ -1,6 +1,6 @@
 // test/web-v2/desk-world.mjs — a generated session world and a reference server over it (RFC 3.5 §会话读), exports only.
 //
-// world(seed[, {calls, cut, page, spage, files, talk, compact}]): 2-5 lanes (main + sub-agents), calls written in arrival order whose ts sometimes sorts before rows already
+// world(seed[, {calls, cut, page, spage, files, talk, compact, heads}]): 2-5 lanes (main + sub-agents), calls written in arrival order whose ts sometimes sorts before rows already
 // written (late rows), relanes and gone rows carried by later members, and per-step bid lists drawn by appends, mid-list
 // inserts, replacements and compactions. Each call draws lane events (user · tool · compaction on a compacted list ·
 // summarize), opened resources and raw `seen` paths (opened ones, their absolute spelling, the same name in another dir).
@@ -15,6 +15,9 @@
 // are the main lane's (the last one always); its lists start from `pre` system/tools blocks and grow by appends only, evenly, to
 // `len` blocks at its last step (no compaction, no late rows, no relane or gone); a human prompt (attr `query`) opens a turn every
 // `every` message blocks, and the last `tail` message blocks are one turn. The other lanes are drawn as without it.
+// `heads` (opt-in; without it every head is `text`, labelled `text`): each block's head drawn from a stream of its own (the world is
+// otherwise the same) — a tag of the closed set, no, a short or a long label (its preview too), a declared cache mark on some and a
+// fidelity that is not verbatim on some, so rows carry marks or none and labels of any length.
 // deskFrom(get, id) reads `session`, every lane's tail and then its older pages, then the lane's ledger chain.
 import { createHash } from 'node:crypto'
 import { createDesk, applySession, applyLane, readLedger } from '../../src/web/v2/replay/model.mjs'
@@ -52,8 +55,8 @@ function encode(P, C) {
   return ops
 }
 
-export function world(seed, { calls: count, cut: cuts = false, page: pageSize, spage, files: fileCount = 5, talk = null, compact = 0.15 } = {}) {
-  const r = rng(seed), int = (a, b) => a + Math.floor(r() * (b - a + 1))
+export function world(seed, { calls: count, cut: cuts = false, page: pageSize, spage, files: fileCount = 5, talk = null, compact = 0.15, heads = false } = {}) {
+  const r = rng(seed), int = (a, b) => a + Math.floor(r() * (b - a + 1)), hr = heads && rng(~seed), hpick = (xs) => xs[Math.floor(hr() * xs.length)]
   const nLanes = int(2, 5), n = count ?? int(18, 40), page = pageSize ?? int(3, 7), room = page + int(0, 3), lroom = pageSize ?? int(1, 3)
   const files = Array.from({ length: fileCount }, (_, j) => `src/f${j}.mjs`), pick = (xs) => xs[int(0, xs.length - 1)]
   // a seen path: an opened file as written, its absolute spelling, the same name in another dir, or a name never opened
@@ -67,6 +70,11 @@ export function world(seed, { calls: count, cut: cuts = false, page: pageSize, s
     const fh = createHash('sha256').update(`fh:${b}`).digest('base64url').slice(0, 22)
     defs.set(b, { bid: b, fh, ref: `s/x#b${bn}::0-10`, sec, role, kind: 'text', ff: { faithfulness: 'verbatim' }, head: { role, tag: 'text', label: 'text' },
       preview: b.slice(0, 8), chars: 8, bytes: 10, r: { as: 'markdown' } })
+    if (hr) {
+      const label = hpick(['', 'a short label', `a long label ${'that runs on '.repeat(40)}`])
+      Object.assign(defs.get(b), { head: { role, tag: hpick(['text', 'thinking', 'action · Read', 'observation · error']), label }, preview: label },
+        hr() < 0.3 ? { cc: { type: 'ephemeral' } } : {}, hr() < 0.3 ? { ff: { faithfulness: hpick(['metadata', 'truncated']) } } : {})
+    }
     const x = r()
     if (x < 0.15) attrsOf.set(b, { query: true }); else if (x < 0.25) attrsOf.set(b, { volatile: true })
     return b
