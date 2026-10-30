@@ -110,6 +110,7 @@ export const SEEDS = [
   d(MNODE, [`${U}/.npm-global/bin/pi`, '-p', 'hi'], 'pi', `${PIM} (npm's install before the retitle: argv names the invoked link, not cli.js)`, 'node'),
   d(MNODE, ['dist/cli.js', '--mode', 'rpc'], 'pi', `${PIM} (pi's RpcClient with its default cliPath, before the retitle: cli.js relative to the package as cwd)`, 'node'),
   d(MNODE, [`${U}/proj/node_modules/@earendil-works/pi-coding-agent/dist/cli.js`, '--mode', 'rpc'], 'pi', "pi 1.4.0 source (an RpcClient caller passes the package's cli.js as an absolute cliPath; the shape before the retitle)", 'node'),
+  d(MNODE, [`${U}/work/other-tool/dist/cli.js`, '--mode', 'rpc'], null, "another package's absolute dist/cli.js in rpc mode is not pi: only the relative entry with the rpc flag is", 'node'),
   d('/bin/bash', ['-c', 'echo hi'], null, `${PIM} (a tool's bash under pi never connects to a model)`),
   w(NODE, [`${PI_HOME}\\install\\releases\\1.4.0\\node_modules\\${PI_CLI}`, '-p', 'hi'], 'pi', `${PIW} (the managed install: the launcher's child node holds the connection)`),
   w(NODE, [`${PI_HOME}\\install\\releases\\1.4.0\\node_modules\\${PI_CLI}`, '--mode', 'rpc'], 'pi', `${PIW} (the managed install in rpc mode)`),

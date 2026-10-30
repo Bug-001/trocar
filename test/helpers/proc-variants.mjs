@@ -92,8 +92,8 @@ export function variantsOf(seed) {
     const sep = os === 'win32' ? '\\' : '/'
     const home = os === 'win32' ? String.raw`C:\Users\u` : os === 'darwin' ? '/Users/u' : '/home/u'
     const script = seed.argv[at].replace(/^[A-Za-z]:/, '').replace(/[\\/]/g, sep)
-    const lead = script.startsWith(sep) ? '' : sep // a relative entry (resolved against the cwd) gets its own separator
-    add('entry-space-cjk', seed.exe, seed.argv.map((x, i) => (i === at ? `${home}${sep}My Tools${sep}我的 工具${lead}${script}` : x)))
+    // only an absolute entry moves under such a directory: a relative one means what it does from the cwd, so a prefix makes another program
+    if (script.startsWith(sep)) add('entry-space-cjk', seed.exe, seed.argv.map((x, i) => (i === at ? `${home}${sep}My Tools${sep}我的 工具${script}` : x)))
     const FLAGS = ['--no-warnings', '--max-old-space-size=512', '--enable-source-maps']
     for (let n = 0; n <= FLAGS.length; n++) add(`flags:${n}`, seed.exe, [...seed.argv.slice(0, at), ...FLAGS.slice(0, n), ...seed.argv.slice(at)])
   }

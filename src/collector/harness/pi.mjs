@@ -100,7 +100,7 @@ export default {
     names: [
       { name: 'pi' }, { name: 'pi-rpc' },
       { name: 'node', entry: '((^|/)pi|/+@earendil-works/+pi-coding-agent/+dist/+(bundle/+)?(cli|rpc-entry)\\.js)$' },
-      { name: 'node', entry: '(^|/)dist/+cli\\.js$', args: '(^| )--mode( |=)rpc( |$)' },
+      { name: 'node', entry: '^(\\./+)?dist/+cli\\.js$', args: '(^| )--mode( |=)rpc( |$)' },
     ],
     // no longLived: it only turns a var-missing verdict into env-frozen, and pi's refine reads every missing trust as no-marker
     exclude: [{ name: 'node', args: 'pi-launcher\\.js' }],
