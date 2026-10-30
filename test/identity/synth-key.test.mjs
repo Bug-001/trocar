@@ -101,13 +101,28 @@ const SUMMARY_PROMPT = 'You are a context summarization assistant. Your task is 
 const SEG1 = '20261018T100000Z', SEG2 = '20261018T110000Z'
 let nextId = 0
 const rid = () => `req_${String(++nextId).padStart(5, '0')}`
-const piCall = (body, ms, headers = {}) => ({ ...call({ agent: 'pi', host: 'api.openai.com', path: '/v1/responses', ms, headers: { ...PI_UA, ...headers }, body }), id: rid() })
-const keyed = (sid, users, ms) => piCall({ model: 'gpt-5', prompt_cache_key: sid,
-  tools: [{ type: 'function', name: 'read', parameters: { type: 'object', properties: { path: { type: 'string' } } } }],
-  input: [{ role: 'developer', content: PI_PROMPT }, ...users.flatMap((u, i) => [{ role: 'user', content: [{ type: 'input_text', text: u }] },
-    { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `Done with step ${i}.` }] }])] }, ms, { session_id: sid })
-const summary = (users, ms) => piCall({ model: 'gpt-5', input: [{ role: 'developer', content: SUMMARY_PROMPT }, { role: 'user', content: [{ type: 'input_text',
-  text: '<conversation>\n' + users.map((u, i) => `[User]: ${u}\n\n[Assistant]: Done with step ${i}.`).join('\n\n') + '\n</conversation>' }] }] }, ms)
+const piCall = (body, ms, headers = {}, wire = 'keyed') => ({ ...call({ agent: 'pi', ms, headers: { ...PI_UA, ...headers }, body,
+  ...(wire === 'keyed' ? { host: 'api.openai.com', path: '/v1/responses' } : { host: 'api.anthropic.com', path: '/v1/messages' }) }), id: rid() })
+// the wire axis: openai-responses carries the session key; anthropic-messages carries none, so its session is synthesized (3.4)
+const WIRES = ['keyed', 'keyless']
+const turns = (users) => users.flatMap((u, i) => [{ role: 'user', content: [{ type: 'input_text', text: u }] },
+  { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `Done with step ${i}.` }] }])
+const msgs = (users) => users.flatMap((u, i) => [{ role: 'user', content: [{ type: 'text', text: u }] },
+  ...(i < users.length - 1 ? [{ role: 'assistant', content: [{ type: 'text', text: `Done with step ${i}.` }] }] : [])])
+// a keyless pi session's system prompt names its working directory, so two keyless sessions are two synthesized groups
+const promptOf = (s) => `${PI_PROMPT}\nCurrent working directory: /work/project-${s}`
+const main = (wire, s, sid, users, ms) => wire === 'keyed'
+  ? piCall({ model: 'gpt-5', prompt_cache_key: sid,
+    tools: [{ type: 'function', name: 'read', parameters: { type: 'object', properties: { path: { type: 'string' } } } }],
+    input: [{ role: 'developer', content: PI_PROMPT }, ...turns(users)] }, ms, { session_id: sid })
+  : piCall({ model: 'claude-sonnet-4-5', max_tokens: 4096, system: promptOf(s), messages: msgs(users),
+    tools: [{ name: 'read', input_schema: { type: 'object', properties: { path: { type: 'string' } } } }] }, ms, {}, wire)
+const summary = (users, ms, wire = 'keyed') => {
+  const text = '<conversation>\n' + users.map((u, i) => `[User]: ${u}\n\n[Assistant]: Done with step ${i}.`).join('\n\n') + '\n</conversation>'
+  return wire === 'keyed'
+    ? piCall({ model: 'gpt-5', input: [{ role: 'developer', content: SUMMARY_PROMPT }, { role: 'user', content: [{ type: 'input_text', text }] }] }, ms)
+    : piCall({ model: 'claude-sonnet-4-5', max_tokens: 4096, system: SUMMARY_PROMPT, messages: [{ role: 'user', content: [{ type: 'text', text }] }] }, ms, {}, wire)
+}
 
 // user text along the language axis, from a seeded generator: English words, CJK with no spaces, or both mixed
 const prng = (seed) => () => ((seed = (Math.imul(seed ^ (seed >>> 15), 2246822507) + 0x9e3779b9) >>> 0) / 2 ** 32)
@@ -120,15 +135,16 @@ const userText = (lang, seed) => {
 const LANGS = ['en', 'cjk', 'mixed']
 const SID = (s) => `0199c0de-${String(s).padStart(4, '0')}-7000-8000-00000000abcd`
 
-/** n interleaved pi sessions: three keyed turns each, then each one's summary request, then a keyed call after compaction. */
-function piSessions(lang, n, seed, { gapAfter = 60_000 } = {}) {
+/** n interleaved pi sessions on one wire: three turns each, then each one's summary request, then a call after compaction.
+ *  Each summary carries `main`, a call of the session it belongs to. */
+function piSessions(lang, n, seed, { gapAfter = 60_000, wire = 'keyed' } = {}) {
   const users = Array.from({ length: n }, (_, s) => [0, 1, 2].map((t) => userText(lang, seed * 100 + s * 10 + t)))
   const keyedRecs = [], summaries = [], after = []
   let ms = T0
-  for (let t = 0; t < 3; t++) for (let s = 0; s < n; s++) keyedRecs.push(keyed(SID(s), users[s].slice(0, t + 1), (ms += 5_000)))
+  for (let t = 0; t < 3; t++) for (let s = 0; s < n; s++) keyedRecs.push(main(wire, s, SID(s), users[s].slice(0, t + 1), (ms += 5_000)))
   ms += gapAfter
-  for (let s = 0; s < n; s++) summaries.push({ sid: SID(s), rec: summary(users[s], (ms += 5_000)) })
-  for (let s = 0; s < n; s++) after.push(keyed(SID(s), [`Summary of the work so far ${s}.`], (ms += 5_000)))
+  for (let s = 0; s < n; s++) summaries.push({ main: keyedRecs[s], rec: summary(users[s], (ms += 5_000), wire) })
+  for (let s = 0; s < n; s++) after.push(main(wire, s, SID(s), [`Summary of the work so far ${s}.`], (ms += 5_000)))
   return { keyedRecs, summaries, after }
 }
 const lines = (recs) => recs.map((r) => JSON.stringify(r))
@@ -154,12 +170,13 @@ const membership = async (home) => {
 const fresh = (recs) => recs.map((r) => JSON.parse(JSON.stringify(r))) // the board stamps the objects it reads: give it its own
 
 // one summary request: its session on both readers, that session's synthesized mark, and whether the call is a compaction there
-async function placeOf(home, recs, rec) {
+async function placeOf(home, recs, rec, main) {
   await fillUsage({ home, segments: fs.readdirSync(path.join(home, 'raw')).map((f) => f.replace(/\.ndjson$/, '')) })
   const list = await runQuery('sessions', { limit: '500' }, { home })
   assert.deepEqual(list.errors, [])
   const id = ridOf(home, rec)
-  const q = (await membership(home)).get(id)[0]
+  const m = await membership(home)
+  const q = m.get(id)[0]
   const item = list.sessions.find((s) => s.session_id === q)
   assert.ok(item, `${q} is listed`)
   const doc = await runQuery('session', { id: q }, { home })
@@ -167,78 +184,97 @@ async function placeOf(home, recs, rec) {
   const row = doc.calls.find((c) => c.rid === id)
   const board = fresh(recs)
   const groups = groupSessions(board)
-  const b = [...groups].find(([, rs]) => rs.some((r) => r.id === rec.id))[0]
+  const boardOf = (x) => [...groups].find(([, rs]) => rs.some((r) => r.id === x.id))[0]
+  const b = boardOf(rec)
   const view = sessionView(board, b)
   const step = view.analyzed.steps.find((c) => c.rec && c.rec.id === rec.id)
   return { query: q, board: b, synthesized: item.session_synthesized, boardSynthesized: view.meta.session_synthesized,
-    compaction: !!(row && row.compaction), boardCompaction: !!(step && step.compaction), ids: list.sessions.map((s) => s.session_id) }
+    compaction: !!(row && row.compaction), boardCompaction: !!(step && step.compaction), ids: list.sessions.map((s) => s.session_id),
+    mainQuery: m.get(ridOf(home, main))[0], mainBoard: boardOf(main) }
 }
 
-test('kinship: a keyless summary request joins the keyed session whose user text it carries, marked compaction; query and board agree', async () => {
-  for (const lang of LANGS) {
-    for (const split of ['same', 'next']) {
-      const { keyedRecs, summaries, after } = piSessions(lang, 1, 1)
-      const recs = [...keyedRecs, summaries[0].rec, ...after]
-      const home = homeOf(split === 'same' ? [[SEG1, recs]] : [[SEG1, keyedRecs], [SEG2, [summaries[0].rec, ...after]]])
-      const p = await placeOf(home, recs, summaries[0].rec)
-      const at = `${lang}/${split}`
-      assert.equal(p.query, SID(0), `${at}: the summary call is in its session (query)`)
-      assert.equal(p.board, SID(0), `${at}: the summary call is in its session (board)`)
-      assert.ok(!p.ids.some((id) => id.startsWith('synth-pi-')), `${at}: no synthesized pi session`)
-      assert.equal(p.synthesized, false, `${at}: the session is not inferred (query)`)
-      assert.equal(p.boardSynthesized, false, `${at}: the session is not inferred (board)`)
-      assert.ok(p.compaction, `${at}: a compaction in the session document`)
-      assert.ok(p.boardCompaction, `${at}: a compaction on the board`)
-    }
-  }
-})
-
-test('kinship: two concurrent sessions each take back their own summary request', async () => {
-  for (const lang of LANGS) {
-    for (const n of [2, 3]) {
-      const { keyedRecs, summaries, after } = piSessions(lang, n, 2 + n)
-      const recs = [...keyedRecs, ...summaries.map((s) => s.rec), ...after]
-      const home = homeOf([[SEG1, recs]])
-      for (const s of summaries) {
-        const p = await placeOf(home, recs, s.rec)
-        assert.equal(p.query, s.sid, `${lang}/${n}: query`)
-        assert.equal(p.board, s.sid, `${lang}/${n}: board`)
+test('kinship: a keyless summary request joins the session whose user text it carries, marked compaction; query and board agree', async () => {
+  for (const wire of WIRES) {
+    for (const lang of LANGS) {
+      for (const split of ['same', 'next']) {
+        const { keyedRecs, summaries, after } = piSessions(lang, 1, 1, { wire })
+        const recs = [...keyedRecs, summaries[0].rec, ...after]
+        const home = homeOf(split === 'same' ? [[SEG1, recs]] : [[SEG1, keyedRecs], [SEG2, [summaries[0].rec, ...after]]])
+        const p = await placeOf(home, recs, summaries[0].rec, summaries[0].main)
+        const at = `${wire}/${lang}/${split}`
+        if (wire === 'keyed') assert.equal(p.mainQuery, SID(0), `${at}: the keyed session`)
+        assert.equal(p.query, p.mainQuery, `${at}: the summary call is in its session (query)`)
+        assert.equal(p.board, p.mainBoard, `${at}: the summary call is in its session (board)`)
+        assert.equal(p.board, p.query, `${at}: both readers name it the same`)
+        assert.equal(p.ids.filter((id) => id.startsWith('synth-pi-')).length, wire === 'keyed' ? 0 : 1, `${at}: no session of its own`)
+        // a keyed session stays uninferred; a keyless one was inferred from its other calls
+        assert.equal(p.synthesized, wire === 'keyless', `${at}: inferred only when keyless (query)`)
+        assert.equal(p.boardSynthesized, wire === 'keyless', `${at}: inferred only when keyless (board)`)
+        assert.ok(p.compaction, `${at}: a compaction in the session document`)
+        assert.ok(p.boardCompaction, `${at}: a compaction on the board`)
       }
     }
   }
 })
 
-test('kinship: a summary request that shares no fragment with any session, or comes after the window, keeps a synthesized key', async () => {
-  for (const lang of LANGS) {
-    for (const why of ['no-fragment', 'after-window']) {
-      const { keyedRecs, summaries } = piSessions(lang, 1, 7, why === 'after-window' ? { gapAfter: SYNTH_GAP_MS + 60_000 } : {})
-      const rec = why === 'no-fragment' ? summary([userText(lang, 99_001), userText(lang, 99_002)], Date.parse(summaries[0].rec.ts_request)) : summaries[0].rec
-      const recs = [...keyedRecs, rec]
-      const p = await placeOf(homeOf([[SEG1, recs]]), recs, rec)
-      const at = `${lang}/${why}`
-      assert.match(p.query, /^synth-pi-/, `${at}: query`)
-      assert.equal(p.board, p.query, `${at}: the board names it the same`)
-      assert.equal(p.synthesized, true, `${at}: inferred (query)`)
-      assert.equal(p.boardSynthesized, true, `${at}: inferred (board)`)
+test('kinship: concurrent sessions each take back their own summary request, and two summaries never merge', async () => {
+  for (const wire of WIRES) {
+    for (const lang of LANGS) {
+      for (const n of [2, 3]) {
+        const { keyedRecs, summaries, after } = piSessions(lang, n, 2 + n, { wire })
+        const recs = [...keyedRecs, ...summaries.map((s) => s.rec), ...after]
+        const home = homeOf([[SEG1, recs]])
+        const got = new Set()
+        for (const s of summaries) {
+          const p = await placeOf(home, recs, s.rec, s.main)
+          assert.equal(p.query, p.mainQuery, `${wire}/${lang}/${n}: query`)
+          assert.equal(p.board, p.mainBoard, `${wire}/${lang}/${n}: board`)
+          got.add(p.query)
+        }
+        assert.equal(got.size, n, `${wire}/${lang}/${n}: one session per summary`)
+      }
+    }
+  }
+})
+
+test('kinship: a summary request that shares no fragment with any session, or comes after the window, keeps a synthesized key of its own', async () => {
+  for (const wire of WIRES) {
+    for (const lang of LANGS) {
+      for (const why of ['no-fragment', 'after-window']) {
+        const { keyedRecs, summaries } = piSessions(lang, 1, 7, { wire, ...(why === 'after-window' ? { gapAfter: SYNTH_GAP_MS + 60_000 } : {}) })
+        const rec = why === 'no-fragment' ? summary([userText(lang, 99_001), userText(lang, 99_002)], Date.parse(summaries[0].rec.ts_request), wire) : summaries[0].rec
+        const recs = [...keyedRecs, rec]
+        const p = await placeOf(homeOf([[SEG1, recs]]), recs, rec, summaries[0].main)
+        const at = `${wire}/${lang}/${why}`
+        assert.match(p.query, /^synth-pi-/, `${at}: query`)
+        assert.notEqual(p.query, p.mainQuery, `${at}: not the session it shares nothing with`)
+        assert.equal(p.board, p.query, `${at}: the board names it the same`)
+        assert.equal(p.synthesized, true, `${at}: inferred (query)`)
+        assert.equal(p.boardSynthesized, true, `${at}: inferred (board)`)
+      }
     }
   }
 })
 
 test('kinship: the same membership across segments, after the index is deleted and rebuilt, and as the live segment grows', async () => {
-  for (const lang of LANGS) {
-    const { keyedRecs, summaries, after } = piSessions(lang, 2, 11)
-    const tail = [...summaries.map((s) => s.rec), ...after]
-    const whole = await membership(homeOf([[SEG1, keyedRecs], [SEG2, tail]]))
-    for (const s of summaries) assert.equal(whole.get(`${SEG2}:${tail.indexOf(s.rec) + 1}`)[0], s.sid, `${lang}: across segments`)
-    // the index deleted and rebuilt
-    const home = homeOf([[SEG1, keyedRecs], [SEG2, tail]])
-    await membership(home)
-    fs.rmSync(path.join(home, 'index'), { recursive: true, force: true })
-    assert.deepEqual(await membership(home), whole, `${lang}: rebuilt`)
-    // the live segment grows: read it, append the summary requests and what follows, read again (the resumed rule)
-    const grown = homeOf([[SEG1, keyedRecs], [SEG2, tail.slice(0, 1)]])
-    await membership(grown)
-    writeSegment(grown, SEG2, lines(tail.slice(1)))
-    assert.deepEqual(await membership(grown), whole, `${lang}: grown`)
+  for (const wire of WIRES) {
+    for (const lang of LANGS) {
+      const { keyedRecs, summaries, after } = piSessions(lang, 2, 11, { wire })
+      const tail = [...summaries.map((s) => s.rec), ...after]
+      const whole = await membership(homeOf([[SEG1, keyedRecs], [SEG2, tail]]))
+      for (const s of summaries) {
+        assert.equal(whole.get(`${SEG2}:${tail.indexOf(s.rec) + 1}`)[0], whole.get(`${SEG1}:${keyedRecs.indexOf(s.main) + 1}`)[0], `${wire}/${lang}: across segments`)
+      }
+      // the index deleted and rebuilt
+      const home = homeOf([[SEG1, keyedRecs], [SEG2, tail]])
+      await membership(home)
+      fs.rmSync(path.join(home, 'index'), { recursive: true, force: true })
+      assert.deepEqual(await membership(home), whole, `${wire}/${lang}: rebuilt`)
+      // the live segment grows: read it, append the summary requests and what follows, read again (the resumed rule)
+      const grown = homeOf([[SEG1, keyedRecs], [SEG2, tail.slice(0, 1)]])
+      await membership(grown)
+      writeSegment(grown, SEG2, lines(tail.slice(1)))
+      assert.deepEqual(await membership(grown), whole, `${wire}/${lang}: grown`)
+    }
   }
 })
