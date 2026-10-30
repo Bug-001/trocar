@@ -18,12 +18,14 @@ import * as W from '../labels/replay.mjs'
 // step's reply definitions (thinking · text · tool calls, each with its `ref`), `detail` = the lane step's detail. The mark:
 // the bytes only partially stored → 'partial' (「◐ 回复没采全」); every part resolving to its span of the streamed reply
 // (`…::resp.raw::a-b`) → null; anything else → 'parsed' (「◐ 解析后的回复」). 逐字 is never written without that span.
+// partMark(d) is the same rule for ONE part, as the window's rows mark it (the partial fact is the call line's, 2.3)
 const RESP_SPAN = /::resp\.raw::\d+-\d+$/
+export const partMark = (d) => (RESP_SPAN.test(String(d.ref || '')) ? null : 'parsed')
 const PARTIAL_LABELS = new Set(['resp-truncated', 'resp-partial', 'resp-undecoded'])
 export function replyOf({ row, reply, detail } = {}) {
   const c = row || {}, parts = reply || [], norm = (detail && detail.norm) || {}
   const partial = !!(c.respIncomplete || ((c.wire && c.wire.labels) || []).some((l) => PARTIAL_LABELS.has(l.id)))
-  const mark = partial ? 'partial' : parts.every((d) => RESP_SPAN.test(String(d.ref || ''))) ? null : 'parsed'
+  const mark = partial ? 'partial' : parts.some(partMark) ? 'parsed' : null
   // an unparsed step is a REQUEST-body fact; where the response itself parsed, the reply still renders (2.6 §A)
   let failed = null
   if (!(c.unparsed && parts.length) && (c.error || (c.status != null && c.status !== 200))) {
@@ -31,7 +33,7 @@ export function replyOf({ row, reply, detail } = {}) {
   }
   return { failed, mark, stop: norm.stop_reason || null, parts }
 }
-// the reply's ONE fidelity mark as HTML (a replyOf result). Shared with the call drawer and the window's reply head: one rule.
+// the reply's ONE fidelity mark as HTML (a replyOf result). Shared with the call drawer: one rule.
 export function replyMarkHtml(r) {
   const m = r && r.mark
   if (!m) return ''

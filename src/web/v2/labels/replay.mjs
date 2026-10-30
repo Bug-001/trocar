@@ -173,7 +173,7 @@ export const reqEncodingFact = (enc) => `The request body was compressed on the 
 export const FF_WORD = Object.freeze({
   metadata: 'metadata only', opaque: 'encrypted; no plaintext', summarized: 'a client summary, not the original', omitted: 'omitted by the source',
   truncated: 'truncated at the source', unaddressable: 'not addressable', unknown: 'fidelity unknown', notfetched: 'bytes could not be fetched',
-  reserialized: 'reserialized, not the wire bytes', verbatim: 'verbatim',
+  reserialized: 'reserialized, not the wire bytes', verbatim: 'verbatim', parsed: 'parsed reply',
 })
 export const FF_TIP = Object.freeze({
   metadata: 'Metadata only: the full JSON schema was not captured (an older capture); the model received the full schema',
@@ -362,7 +362,7 @@ export const REPLY_WORD = 'Reply'
 export const THINKING_ROW = 'Thinking'
 export const toolCallRow = (name) => `Tool call ${name}`
 export const stopReasonRow = (v) => `Stop reason ${v}`
-export const REPLY_PARSED = 'parsed reply'
+export const REPLY_PARSED = FF_WORD.parsed
 export const REPLY_PARTIAL = 'reply incomplete'
 export const RAW_REPLY = 'Raw reply'
 export const rawReplyRow = (chars) => `Raw reply · ${chars} characters ›`
@@ -377,6 +377,8 @@ export const TRANSPORT_WS = 'Transport WebSocket'
 export const VENDOR_WORD = 'Vendor'
 export const BACK_TO_RAW = 'Back to raw'
 export const FAILED_NO_REPLY = 'This call failed; there is no reply'
+export const EMPTY_REPLY = 'The reply has no content'
+export const UNREAD_REPLY = 'No part of the reply could be read'
 export const TECH_DETAILS = 'Technical details'
 
 // ── the call drawer (2.6 §B) ────────────────────────────────────────────────────────────────────────────────────────
