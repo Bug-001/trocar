@@ -377,20 +377,19 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
    *  worker runs the CLI's own function (src/control/board.mjs). The caller checked the verb and parsed the small request body. */
   const control = ({ verb, body = {}, res }) => answer(JSON.stringify({ control: verb, body }) + '\n', res, controlDeadlineMs, `control/${verb}`, subjectOf(`control/${verb}`, body))
 
-  /** The daemon is about to hand out the stored answer of (name, params) (4.4 §存下的答案「刷新」): true when there is no worker or a
-   *  refresh of `name` is queued or running, and then a refresh of exactly these params is queued unless one still is (dedup); false
-   *  when stopped, when the subject is cooling (the relay answers 500 with its reason, D38), or when a warm worker is idle (the relay
-   *  answers fresh). No worker: run() forks one. */
-  const refreshing = new Set() // keyOf(name, params) of the refreshes queued or running
+  /** The daemon is about to hand out the stored answer of (name, params) (4.4 §存下的答案「刷新」): true while a refresh of `name` is
+   *  queued or running (nothing more is queued), or when there is no worker (one refresh of these params is queued; run() forks
+   *  the worker); false when stopped, when the subject is cooling (the relay answers 500 with its reason, D38), or when the worker is
+   *  warm with no refresh of `name` pending (the relay answers fresh). One refresh per name, not per page: per page, a many-page list
+   *  polled every 1.5 s always had some page pending again and never went fresh. */
+  const refreshing = new Set() // names with a refresh queued or running
   const refresh = ({ name, params = {} }) => {
     const subject = subjectOf(name, params)
     if (stopped || cooling(subject)) return false
-    if (child && ![...refreshing].some((k) => k.startsWith(`${name} `))) return false
-    const key = keyOf(name, params)
-    if (!refreshing.has(key)) {
-      refreshing.add(key)
-      enqueue(name, () => run(lineOf(name, params), SINK, deadlineMs, name, subject)).catch(() => {}).finally(() => refreshing.delete(key))
-    }
+    if (refreshing.has(name)) return true
+    if (child) return false
+    refreshing.add(name)
+    enqueue(name, () => run(lineOf(name, params), SINK, deadlineMs, name, subject)).catch(() => {}).finally(() => refreshing.delete(name))
     return true
   }
 
