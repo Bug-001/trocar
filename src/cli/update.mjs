@@ -37,7 +37,7 @@ const COST = `While it runs those agents are not captured; connections they make
 export async function runUpdateCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const flags = new Set()
   for (const a of argv) {
-    if (!FLAGS.has(a)) { io.err(`trocar update: ${a.startsWith('-') ? `unknown option '${a.split('=')[0]}'` : 'takes no agent name: the harnesses it switches off and on again are the ones that are on'}\n${USAGE}`); return EXIT.usage }
+    if (!FLAGS.has(a)) { io.err([...wrap(`trocar update: ${a.startsWith('-') ? `unknown option '${a.split('=')[0]}'` : 'takes no agent name: the harnesses it switches off and on again are the ones that are on'}`), USAGE].join('\n')); return EXIT.usage }
     flags.add(a)
   }
   return update({ io, env, home, platform, deps, flags })
@@ -66,8 +66,10 @@ async function update({ io, env, home, platform, deps, flags }) {
   const no = (code, why, exit = EXIT.incomplete, under = null) => {
     r.error = { code, message: why }
     r.notes.push(why)
-    if (!json) for (const l of wrap(`trocar update: ${why}`)) io.err(l) // §1.1⑥: folded at 80 columns, never broken mid-word by the terminal
-    if (!json && under) for (const l of wrap(under)) io.err(l)
+    // §1.1⑥: folded at 80 columns, never broken mid-word by the terminal; a reason's own lines (git's stderr) stay lines
+    const fold = (text) => String(text).split('\n').flatMap((l) => wrap(l))
+    if (!json) for (const l of fold(`trocar update: ${why}`)) io.err(l)
+    if (!json && under) for (const l of fold(under)) io.err(l)
     r.ok = false
     if (json) io.out(JSON.stringify(r, null, 2))
     return exit

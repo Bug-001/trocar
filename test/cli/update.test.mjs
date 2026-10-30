@@ -235,6 +235,9 @@ test('§1.1⑥: a reason update stops on is folded inside 80 columns, for an npm
     assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.usage, t.io.text())
     assertEnglish(t.io.text(), `trocar update from ${path.basename(root)}`)
   }
+  const t = ctx(s, { deps: { root: npmRoot } }) // the usage error: an agent name, which update does not take
+  assert.equal(await runUpdateCli(['codex'], t.c), EXIT.usage, t.io.text())
+  assertEnglish(t.io.text(), 'trocar update codex', { placeholders: true })
 })
 test('V105 · C.2: an npm copy\'s --dry-run receipt names the code it finishes from, this code and the agents switched on again; so does a finish waiting in update.json', async () => {
   const s = sandbox({ on: ['codex'] })
