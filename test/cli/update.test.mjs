@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { runUpdateCli } from '../../src/cli/update.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
-import { validateReceipt } from '../../src/cli/schema.mjs'
+import { validateReceipt, newReceipt } from '../../src/cli/schema.mjs'
 import { codeId, codeIdOf } from '../../src/version.mjs'
 import { writeStateAtomic, setDesired, emptyState } from '../../src/off/state.mjs'
 import { newManifest, saveManifest } from '../../src/off/manifest.mjs'
@@ -336,6 +336,27 @@ test('V96: a step that writes to stderr as well as its document is read from std
   const t = ctx(s, { deps: { on: async (argv, c) => { c.io.err('a line of its own on stderr'); c.io.out(JSON.stringify(doc)); return EXIT.ok } } })
   assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
   assert.deepEqual(t.io.json().on, doc, 'the step\'s receipt came through: stderr was held apart, never parsed with it')
+})
+
+// D38: a step that did not finish says why in its own receipt; without --json that reason is printed too, not only its exit code
+test('V96: an install or on that fails in the finish has its own reason printed; with --json it is in the receipt and stderr stays empty', async () => {
+  const failing = {
+    install: (why) => ({ install: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('install'), ok: false, error: { code: 'x', message: why }, problems: [], notes: [] })); return EXIT.incomplete } }),
+    on: (why) => ({ on: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('on'), ok: false, problems: [why], notes: [] })); return EXIT.incomplete } }),
+  }
+  for (const [step, deps] of Object.entries(failing)) {
+    for (const json of [false, true]) {
+      const s = sandbox()
+      fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+      const why = `reason-${step}-${Math.random().toString(36).slice(2, 8)}`
+      const t = ctx(s, { deps: deps(why) })
+      assert.equal(await runUpdateCli(['--yes', ...(json ? ['--json'] : [])], t.c), EXIT.incomplete, t.io.text())
+      if (json) {
+        assert.equal(t.io.stderrText(), '', `${step}: --json keeps stderr empty`)
+        assert.ok(JSON.stringify(t.io.json()[step]).includes(why), `${step}: the step's receipt is in update's`)
+      } else assert.ok(t.io.stderrText().includes(why), `${step}: its own reason is printed: ${t.io.text()}`)
+    }
+  }
 })
 
 // D38: the note names only harnesses, and one this code has no descriptor for would fail the whole `on` — dropped, and said

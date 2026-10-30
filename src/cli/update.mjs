@@ -61,11 +61,13 @@ async function update({ io, env, home, platform, deps, flags }) {
     else for (const l of lines) io.out(l)
     return exit
   }
-  /** A reason nothing was done: `trocar update: <why>`, exit 1 (the receipt carries it as its error). */
-  const no = (code, why, exit = EXIT.incomplete) => {
+  /** A reason nothing was done: `trocar update: <why>`, exit 1 (the receipt carries it as its error). `under`: a line printed below it without
+   *  --json (with it, the receipt carries what that line says). */
+  const no = (code, why, exit = EXIT.incomplete, under = null) => {
     r.error = { code, message: why }
     r.notes.push(why)
     if (!json) io.err(`trocar update: ${why}`)
+    if (!json && under) io.err(under)
     r.ok = false
     if (json) io.out(JSON.stringify(r, null, 2))
     return exit
@@ -227,13 +229,18 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
   }
   const installed = await step(deps.install || runInstallCli, ['--yes', '--json'], { io, env, home, platform, deps })
   r.install = installed.doc
-  if (installed.exit !== EXIT.ok) problems.push(`the new code could not finish installing itself (trocar install exit ${installed.exit}). ${AGAIN}`)
+  let failed = null // the step that did not finish: its own reason is printed under the problem (with --json, r.install / r.on carry it)
+  if (installed.exit !== EXIT.ok) { problems.push(`the new code could not finish installing itself (trocar install exit ${installed.exit}). ${AGAIN}`); failed = { command: 'install', doc: installed.doc } }
   if (!problems.length && waiting.on.length) {
     const back = await step(deps.on || runOnCli, [...waiting.on, '--yes', '--json'], { io, env, home, platform, deps })
     r.on = back.doc
-    if (back.exit !== EXIT.ok) problems.push(`${waiting.on.join(', ')}: capture could not be switched on again (trocar on exit ${back.exit}). ${AGAIN}`)
+    if (back.exit !== EXIT.ok) { problems.push(`${waiting.on.join(', ')}: capture could not be switched on again (trocar on exit ${back.exit}). ${AGAIN}`); failed = { command: 'on', doc: back.doc } }
   }
-  if (problems.length) { r.problems = problems; return no(daemonFailed ? 'daemon-not-replaced' : 'not-finished', problems[0]) } // the file stays: the next run goes on from here
+  if (problems.length) { // the file stays: the next run goes on from here
+    r.problems = problems
+    const why = !daemonFailed && failed && reasonOf(failed.doc) // problems[0] is that step's line unless the collector's came first
+    return no(daemonFailed ? 'daemon-not-replaced' : 'not-finished', problems[0], EXIT.incomplete, why ? `trocar ${failed.command}: ${why}` : null)
+  }
   try { fs.rmSync(handover, { force: true }) } catch (e) { return no('handover-not-removed', `this update finished, but it could not be written off (${(e && e.message) || e})`) }
   lines.push(`trocar is now ${r.to}${waiting.from && waiting.from !== r.to ? ` (it was ${waiting.from})` : ''}.`, // no record of the code before: no "was"
     ...pairs([['Collector', r.restarted ? 'running the new code' : 'already running this code'], ['Capturing again', waiting.on.join(', ') || 'nothing was being captured']]))
@@ -348,6 +355,16 @@ async function step(run, argv, { io, env, home, platform, deps }) {
   let doc = null
   try { doc = JSON.parse(out.join('\n')) } catch { /* a command that printed no document says so by its exit code */ }
   return { exit, doc }
+}
+
+/** Why a step's receipt says it did not finish (附录 C.1): its error, else the first of its problems, pending items, skipped carriers or items,
+ *  notes; null when it says nothing. */
+function reasonOf(doc) {
+  if (!doc || typeof doc !== 'object') return null
+  const rows = (k) => (Array.isArray(doc[k]) ? doc[k] : [])
+  const text = (x) => (typeof x === 'string' ? x : x && typeof x === 'object' && (x.reason || x.why) ? `${x.harness ? `${x.harness}: ` : ''}${x.reason || x.why}` : null)
+  const skipped = [...rows('carriers'), ...rows('items')].filter((x) => x && x.state === 'skipped')
+  return (doc.error && typeof doc.error.message === 'string' && doc.error.message) || [...rows('problems'), ...rows('pending'), ...skipped, ...rows('notes')].map(text).find((x) => typeof x === 'string' && x) || null
 }
 
 /** Step 1 undone with the code that wrote it (§5.5): the harnesses it switched off are switched on again. */
