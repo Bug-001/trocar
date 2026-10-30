@@ -103,8 +103,11 @@ let nextId = 0
 const rid = () => `req_${String(++nextId).padStart(5, '0')}`
 const piCall = (body, ms, headers = {}, wire = 'keyed') => ({ ...call({ agent: 'pi', ms, headers: { ...PI_UA, ...headers }, body,
   ...(wire === 'keyed' ? { host: 'api.openai.com', path: '/v1/responses' } : { host: 'api.anthropic.com', path: '/v1/messages' }) }), id: rid() })
-// the wire axis: openai-responses carries the session key; anthropic-messages carries none, so its session is synthesized (3.4)
-const WIRES = ['keyed', 'keyless']
+// the wire axis: openai-responses carries the session key; anthropic-messages carries none, so its session is synthesized (3.4); on
+// the Anthropic OAuth wire pi's system prompt is the second system block, after Claude Code's identity block
+const WIRES = ['keyed', 'keyless', 'oauth']
+const CC_ID = "You are Claude Code, Anthropic's official CLI for Claude."
+const systemOf = (wire, text) => (wire === 'oauth' ? [{ type: 'text', text: CC_ID }, { type: 'text', text }] : text)
 const turns = (users) => users.flatMap((u, i) => [{ role: 'user', content: [{ type: 'input_text', text: u }] },
   { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `Done with step ${i}.` }] }])
 const msgs = (users) => users.flatMap((u, i) => [{ role: 'user', content: [{ type: 'text', text: u }] },
@@ -115,13 +118,13 @@ const main = (wire, s, sid, users, ms) => wire === 'keyed'
   ? piCall({ model: 'gpt-5', prompt_cache_key: sid,
     tools: [{ type: 'function', name: 'read', parameters: { type: 'object', properties: { path: { type: 'string' } } } }],
     input: [{ role: 'developer', content: PI_PROMPT }, ...turns(users)] }, ms, { session_id: sid })
-  : piCall({ model: 'claude-sonnet-4-5', max_tokens: 4096, system: promptOf(s), messages: msgs(users),
+  : piCall({ model: 'claude-sonnet-4-5', max_tokens: 4096, system: systemOf(wire, promptOf(s)), messages: msgs(users),
     tools: [{ name: 'read', input_schema: { type: 'object', properties: { path: { type: 'string' } } } }] }, ms, {}, wire)
 const summary = (users, ms, wire = 'keyed') => {
   const text = '<conversation>\n' + users.map((u, i) => `[User]: ${u}\n\n[Assistant]: Done with step ${i}.`).join('\n\n') + '\n</conversation>'
   return wire === 'keyed'
     ? piCall({ model: 'gpt-5', input: [{ role: 'developer', content: SUMMARY_PROMPT }, { role: 'user', content: [{ type: 'input_text', text }] }] }, ms)
-    : piCall({ model: 'claude-sonnet-4-5', max_tokens: 4096, system: SUMMARY_PROMPT, messages: [{ role: 'user', content: [{ type: 'text', text }] }] }, ms, {}, wire)
+    : piCall({ model: 'claude-sonnet-4-5', max_tokens: 4096, system: systemOf(wire, SUMMARY_PROMPT), messages: [{ role: 'user', content: [{ type: 'text', text }] }] }, ms, {}, wire)
 }
 
 // user text along the language axis, from a seeded generator: English words, CJK with no spaces, or both mixed
@@ -208,8 +211,8 @@ test('kinship: a keyless summary request joins the session whose user text it ca
         assert.equal(p.board, p.query, `${at}: both readers name it the same`)
         assert.equal(p.ids.filter((id) => id.startsWith('synth-pi-')).length, wire === 'keyed' ? 0 : 1, `${at}: no session of its own`)
         // a keyed session stays uninferred; a keyless one was inferred from its other calls
-        assert.equal(p.synthesized, wire === 'keyless', `${at}: inferred only when keyless (query)`)
-        assert.equal(p.boardSynthesized, wire === 'keyless', `${at}: inferred only when keyless (board)`)
+        assert.equal(p.synthesized, wire !== 'keyed', `${at}: inferred only when keyless (query)`)
+        assert.equal(p.boardSynthesized, wire !== 'keyed', `${at}: inferred only when keyless (board)`)
         assert.ok(p.compaction, `${at}: a compaction in the session document`)
         assert.ok(p.boardCompaction, `${at}: a compaction on the board`)
       }

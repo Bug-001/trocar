@@ -12,21 +12,24 @@ import { harnessOf, sessionKeyOf, bodyOf, hintsOf } from './harnesses.mjs';
 export const SYNTH_GAP_MS = 30 * 60 * 1000;
 export const SYNTH_RULE = 'sha256(first system text) + a 30-minute gap (3.4 合成键, gate G11)';
 
-const textOf = (c) => (typeof c === 'string' ? c
-  : Array.isArray(c) ? c.map((p) => (p && typeof p === 'object' ? (typeof p.text === 'string' ? p.text : '') : String(p ?? ''))).join('') : '');
+const partsOf = (c) => (typeof c === 'string' ? [c]
+  : Array.isArray(c) ? c.map((p) => (p && typeof p === 'object' ? (typeof p.text === 'string' ? p.text : '') : String(p ?? ''))) : []);
+const textOf = (c) => partsOf(c).join('');
 // The task anchor: the first system text of whichever wire the call used (Anthropic `system`, Responses
 // `instructions`, else the first system / developer item of its `input`; Chat's leading system / developer
-// message). '' when there is none: still an anchor.
-export function systemTextOf(body) {
+// message), block by block ([] when there is none).
+function systemPartsOf(body) {
   const b = body || {};
-  if (b.system != null) return textOf(b.system);
-  if (typeof b.instructions === 'string') return b.instructions;
+  if (b.system != null) return partsOf(b.system);
+  if (typeof b.instructions === 'string') return [b.instructions];
   const item = Array.isArray(b.input) ? b.input.find((x) => x && (x.role === 'system' || x.role === 'developer')) : null;
-  if (item) return textOf(item.content);
+  if (item) return partsOf(item.content);
   const first = Array.isArray(b.messages) ? b.messages[0] : null;
-  if (first && (first.role === 'system' || first.role === 'developer')) return textOf(first.content);
-  return '';
+  if (first && (first.role === 'system' || first.role === 'developer')) return partsOf(first.content);
+  return [];
 }
+/** The anchor as one text: its blocks joined. '' when there is none: still an anchor. */
+export const systemTextOf = (body) => systemPartsOf(body).join('');
 
 // 2026-10-06T00:00:00.000Z → 20261006T000000Z: no '/', '#' or ':', so the key is safe inside a raw_ref.
 const stampOf = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
@@ -93,15 +96,16 @@ function factsOf(rec) {
   return { harness: h.id, ms, hash: createHash('sha256').update(systemTextOf(bodyOf(rec)), 'utf8').digest('hex'), fp, probe };
 }
 
-// The call that is the compaction request: a header / request-kind hint, or its harness's text marker in its own system text
-// (pi's summary request), read as a JSON string so a marker anchored on a string's start holds. A marker in the history (Hermes
+// The call that is the compaction request: a header / request-kind hint, or its harness's text marker in one block of its own system
+// text (pi's summary request; on the Anthropic OAuth wire pi's prompt is the second block, after Claude Code's identity block), each
+// block read as a JSON string so a marker anchored on a string's start holds. A marker in the history (Hermes
 // keeps one in every later call) marks a turn of the session it is in, not a call looking for one (3.4 按内容认亲).
 function compactionRequest(rec, row) {
   const hint = hintsOf(rec);
   if (hint.compaction === true) return true;
   if (!hint.compactionMarker) return false;
-  const sys = JSON.stringify(systemTextOf(bodyOf(rec)));
-  return row.compaction.some((c) => c.marker && c.marker.test(sys));
+  const blocks = systemPartsOf(bodyOf(rec)).map((t) => JSON.stringify(t));
+  return row.compaction.some((c) => c.marker && blocks.some((b) => c.marker.test(b)));
 }
 
 /** The rule itself (gate G11), over those facts in the order the calls were captured → {key, kin} | null. Every call adds its
