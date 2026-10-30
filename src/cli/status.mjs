@@ -133,7 +133,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const attached = reply ? (reply.actual === 'on' ? true : reply.actual === 'off' ? false : null) : null
   f.link = reply ? { attached, helper: reply.helper && (reply.helper.down || reply.helper.ok === false) ? 'missing' : 'ok', helper_reason: reply.helper && reply.helper.down ? String(reply.helper.down) : reply.helper && reply.helper.ok === false ? `helper protocol ${reply.helper.proto} (this daemon expects ${reply.helper.expected_proto})` : null, reason: attached === null ? kernelReason(reply) : null } : { attached: null, helper: 'ok', helper_reason: null, reason: null }
   // the processes: the daemon's rows when it answered, else the process table read above, matched with the name list in effect now
-  // The table is read whatever else is missing: the processes the user started themselves (`trocar serve`, a foreground `capture`) are found by their command line alone. Only the
+  // The table is read whatever else is missing: the processes the user started themselves with an older trocar (`trocar serve`, a foreground `capture`) are found by their command line alone. Only the
   // matching of a process to a harness needs the name list; with no daemon and no descriptors to build it from, that is what cannot be said
   if (tableError) { rethrowSandbox(tableError); tableError = errText(tableError) }
   f.userProcs = table ? { list: userProcessesOf(table) } : { error: tableError }

@@ -1,4 +1,4 @@
-// src/paths.mjs — the ONE place default capture/serve paths are decided.
+// src/paths.mjs — the ONE place default capture and read paths are decided.
 //
 // Why this module exists (first-run dead end): the capture writers and the board
 // reader each computed their own default, inline, and they disagreed —
@@ -58,7 +58,7 @@ export function caDir({ home = trocarHome(), legacyCa = path.join(os.homedir(), 
   return fresh;
 }
 
-// what `trocar serve` reads when the user gives no --source: the roots that EXIST. Listing an absent
+// what `trocar doctor` reads when the user gives no --source: the roots that EXIST. Listing an absent
 // root would make the loader throw "capture source unreadable" on a clean machine, turning "nothing
 // captured yet" into "something is broken", so absence is filtered here.
 // 2026-10-06 (4.4:129): the collector directory is the second root, filtered the same way — a machine

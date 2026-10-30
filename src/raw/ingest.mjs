@@ -50,7 +50,7 @@ const EXCERPT = 160;
 // The streams are append-only, so "what is new" is exactly `size - lastOffset`. Without this the
 // board re-read and re-parsed every capture file on every refresh: measured on a real 6.88 GB
 // capture, 286 MB parses in 2,931 ms against a 70 ms read, i.e. ~70 s of pure JSON.parse per refresh
-// with every record resident at once — which is why `trocar serve` could not open it at all.
+// with every record resident at once — which is why the board could not open it at all.
 //
 // The caller owns the watermark and MUST reset it to 0 when the file shrinks or is replaced
 // (rotation, restore, a new capture reusing the name); see src/server.mjs::makeRecordLoader. This
