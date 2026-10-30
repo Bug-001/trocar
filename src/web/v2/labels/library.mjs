@@ -63,7 +63,7 @@ export const PROBE_ONLY_TIP = 'This session has only token count requests (no re
 
 // ── the states that stand in for the table (words here; the matrix's order is 1.5's) ────────────────────────────────
 // no list yet and none stored: the worker is building it from the index (first run, or the index was rebuilt)
-export const LOADING = 'Reading the session list from the capture index. The first read after the index changes can take a few seconds.'
+export const LOADING = 'Reading the session list from the capture index. This usually takes a few seconds; on a large capture it can take a few minutes while the index is rebuilt.'
 export const NO_SESSIONS = 'No sessions yet'
 export const CAPTURING_HINT = 'Capture is on. Run an agent once and its session shows up here'
 export const AS_OF = 'as of'

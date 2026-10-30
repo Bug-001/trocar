@@ -6,11 +6,12 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { putFile } from './ctx-files.mjs';
+import { indexDir } from './index-build.mjs';
 
 /** How many stored answers the directory keeps: every `after` value leaves one, this bounds them. */
 export const STORED_MAX = 64;
 
-const dirOf = (home) => path.join(home, 'index', 'stored');
+const dirOf = (home) => path.join(indexDir(home), 'stored');
 const canonical = (params) => Object.keys(params).sort().map((k) => [k, Array.isArray(params[k]) ? params[k].map(String) : String(params[k])]);
 
 /** storedFile(home, name, params) → `<home>/index/stored/<name>.<first 16 hex of sha1 of the canonical params>.json.gz`. */
