@@ -6,6 +6,7 @@ import { statusSummary, statusDetail, failuresBlock, noteText } from '../../src/
 import { statusExit } from '../../src/cli/status.mjs'
 import { FINDING_CODES, findingFor, renderFindings } from '../../src/netenv/findings.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
+import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { STATUS_REASONS } from '../../src/health/codes.mjs'
 
 const NOW = Date.parse('2026-10-18T12:24:00Z')
@@ -112,6 +113,16 @@ test('§3.5 `status <harness>`: the verdict, Why / Fix / Check from the one cata
   assert.ok(lines.some((l) => /^ {4}without trocar\s+codex \(pid 5530\) -> internet$/.test(l)))
   assert.ok(lines.includes('  If your VPN or proxy routes by process, it sees trocar, not codex.'))
   assert.ok(lines.some((l) => l.startsWith('  To change the proxy: edit codex')))
+})
+
+test('§3.5 `status <harness>`: each form note prints once after Forms, its paths beside it; every descriptor note keeps D58 (4.11 CM38)', async () => {
+  const said = (await loadHarnesses()).flatMap((d) => (d.proxyMode.notes || []).map((n) => ({ code: 'harness-note', text: n.text })))
+  const notes = [...said, { code: 'harness-note', text: 'the first run installs a package in the config folder; off deletes nothing', paths: ['/home/alice/.agent/node_modules'] }]
+  const form = (id) => ({ form: id, certificate: { in_effect: true, carrier: 'plugin' }, proxy: { connected: true, written: 'http://127.0.0.1:17995', prior: null }, notes })
+  const lines = statusDetail(doc({ harnesses: { agent: harness({ forms: [form('agent.cli'), form('agent.npm')] }) } }), 'agent', { now: NOW })
+  clean(lines, 'status agent')
+  const flat = lines.slice(lines.indexOf('  Forms')).join(' ').replace(/\s+/g, ' ') // after Forms
+  for (const n of notes) { const s = `${n.text}${n.paths ? ` (${n.paths.join(', ')})` : ''}`; assert.equal(flat.split(s).length - 1, 1, `said once: ${s}`) }
 })
 
 test('§3.5 `--failures`: one line per kind of problem, then Expected — and a health that could not be read says so', () => {
