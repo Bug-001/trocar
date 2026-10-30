@@ -94,19 +94,19 @@ test('W22c negative cache: an upstream-cert mark expires and renews the same way
   }
 })
 
-test('W22d negative cache: application data after a renewal clears the history and marks the who as trusting; forgetKey drops both', () => {
+test('W22d negative cache: application data after a renewal clears the history and marks the key as trusting; forgetKey drops both', () => {
   const now = clock(), n = createNegativeCache({ now })
   reject(n); reject(n); now.set(n.get(k).retry_at); reject(n)
   assert.equal(n.get(k).renewals, 1)
   now.set(n.get(k).retry_at); assert.equal(n.has(k), false)
-  assert.equal(n.trusts(meta), false)
+  assert.equal(n.trusts(k), false)
   n.observe(k, { rejected: false, used: true, meta, host })
-  assert.equal(n.trusts(meta), true); assert.equal(n.trusts({ pid: 10 }), false)
+  assert.equal(n.trusts(k), true); assert.equal(n.trusts(negKey(meta, 'other.test')), false); assert.equal(n.trusts(negKey({ pid: 10 }, host)), false)
   reject(n); assert.equal(reject(n), true, 'the strikes were cleared: two rejections again')
   const e = n.get(k)
   assert.equal(e.renewals, 0); assert.equal(e.retry_at - e.at, NEG_RETRY_MS)
   n.forgetKey(meta.pid)
-  assert.equal(n.trusts(meta), false); assert.equal(n.holds(meta.pid), false)
+  assert.equal(n.trusts(k), false); assert.equal(n.holds(meta.pid), false)
 })
 
 test('W22e negative cache: holds(who) is true while only the renewal history remains', () => {

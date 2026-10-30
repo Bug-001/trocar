@@ -1,6 +1,6 @@
 // test/collector/core/leaf-verdict.test.mjs — RFC 4.6 §引擎 5 and acceptance 19–22: what a zero-data close or a client alert on our leaf
-// means. A slow engine is not a rejection (both doors), a certificate alert is an answer at once, a process that has sent data on our leaf
-// is not judged again by a zero-data close, and a negative entry expires at retry_at and is renewed with a doubled backoff. A real engine
+// means. Under a slow engine a close before the handshake completes counts but never writes trust-rejected (both doors), a certificate
+// alert is an answer at once, a (pid, host) that has sent data on our leaf is not judged again by a zero-data close there, and a negative entry expires at retry_at and is renewed with a doubled backoff. A real engine
 // and real TLS (the pattern of trust-rejected.test.mjs); a raw TLS 1.2 client sends the alerts.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -51,33 +51,39 @@ async function rig(t, { delayMs = 0, timing = {} } = {}) {
     const socket = await open(door)
     return new Promise((resolve) => { const c = tls.connect({ socket, servername, ca }, () => resolve(c)); c.on('error', () => resolve(null)) })
   }
-  const trustingDestroy = async (door) => { const c = await hello(door, { ca: trocarCa.certPem }); assert.ok(c, 'the client trusts the engine CA'); c.destroy() }
-  const rejecting = async (door = 'transparent') => { const c = await hello(door, { ca: upCa.certPem }); if (c) c.destroy() }
+  const rejecting = async (door = 'transparent', servername = 'h.test') => { const c = await hello(door, { ca: upCa.certPem, servername }); if (c) c.destroy() }
   const used = async (door = 'transparent') => {
     const c = await hello(door, { ca: trocarCa.certPem }); c.write('GET / HTTP/1.1\r\nHost: h.test\r\n\r\n')
     await new Promise((r) => c.once('data', r)); c.end(); await new Promise((r) => c.once('close', r))
   }
-  // a raw TLS 1.2 client: a real ClientHello, then a plaintext alert record on the engine's first flight
-  const alert = async (code, servername = 'api.test') => {
+  // a raw TLS 1.2 client: a real ClientHello, then on the engine's first flight a plaintext alert record (code), or a hang-up
+  // with no alert and no Finished (code null: a client that gave up waiting, the handshake never completes)
+  const alert = async (code, servername = 'api.test', door = 'transparent') => {
     const hold = net.createServer(); await new Promise((r) => hold.listen(0, '127.0.0.1', r))
     const got = new Promise((r) => hold.once('connection', (s) => s.once('data', (d) => { r(d); s.destroy() })))
     const c = tls.connect({ port: hold.address().port, host: '127.0.0.1', servername, maxVersion: 'TLSv1.2' }); c.on('error', () => {})
     const ch = await got; hold.close()
-    const s = await open('transparent')
-    s.once('data', () => { s.write(Buffer.from([0x15, 0x03, 0x03, 0x00, 0x02, 0x02, code])); s.end() })
+    const s = await open(door)
+    s.once('data', () => { if (code === null) return s.destroy(); s.write(Buffer.from([0x15, 0x03, 0x03, 0x00, 0x02, 0x02, code])); s.end() }); s.resume()
     s.write(ch)
     await new Promise((r) => s.once('close', r))
   }
   const critical = () => fails.filter((f) => f.code === 'trust-rejected')
-  return { engine, fails, flows, settled, trustingDestroy, rejecting, used, alert, critical }
+  return { engine, fails, flows, settled, rejecting, used, alert, critical }
 }
 
-for (const door of ['transparent', 'ingress']) {
-  test(`4.6 W19 (${door}): the engine slower than slowEngineMs before its TLS server → a trusting client's zero-data closes are client-closed-no-data/engine-slow, never a strike`, T, async (t) => {
+// a give-up (the raw client hangs up on our first flight) and a Node refusal (it destroys its socket before its Finished leaves) look the
+// same to the engine; under a slow engine both count toward the entry (D31 fail-open) and neither writes trust-rejected (D38)
+const giveUp = (s, door) => s.alert(null, 'h.test', door)
+const refuse = (s, door) => s.rejecting(door)
+for (const door of ['transparent', 'ingress']) for (const [kind, close] of [['a client that hangs up on our first flight', giveUp], ['a Node client that refuses the leaf', refuse]]) {
+  test(`4.6 W19 (${door}): the engine slower than slowEngineMs, ${kind} → client-closed-no-data/engine-slow, negative after two, never trust-rejected`, T, async (t) => {
     const s = await rig(t, { delayMs: 300, timing: { slowEngineMs: 100 } })
-    for (let i = 1; i <= 3; i++) { await s.trustingDestroy(door); await s.settled(i) }
-    assert.deepEqual(s.flows.map((f) => [f.not_captured, f.reason]), Array(3).fill(['client-closed-no-data', 'engine-slow']))
+    await close(s, door); await s.settled(1)
     assert.deepEqual(s.engine.negatives(), [])
+    await close(s, door); await s.settled(2)
+    assert.deepEqual(s.flows.map((f) => [f.not_captured, f.reason]), Array(2).fill(['client-closed-no-data', 'engine-slow']))
+    assert.deepEqual(s.engine.negatives().map((e) => [e.host, e.cause]), [['h.test', 'client-rejected-leaf']])
     assert.deepEqual(s.critical(), [])
   })
 }
@@ -102,7 +108,7 @@ test('4.6 W20: a non-certificate alert (internal_error) is a suspicion only — 
   assert.deepEqual(s.engine.negatives().map((e) => [e.host, e.cause]), [['api.test', 'client-rejected-leaf']])
 })
 
-test('4.6 W21: a process that sent data on our leaf → its later zero-data closes are client-closed-no-data/trusted-before; a certificate alert on another host is still negative at once', T, async (t) => {
+test('4.6 W21: a (pid, host) that sent data on our leaf → its later zero-data closes there are client-closed-no-data/trusted-before; the same pid refusing the leaf on another host is negative after two, a certificate alert at once', T, async (t) => {
   const s = await rig(t)
   await s.used(); await s.settled(1)
   await s.rejecting(); await s.settled(2)
@@ -110,8 +116,11 @@ test('4.6 W21: a process that sent data on our leaf → its later zero-data clos
   assert.deepEqual(s.flows.slice(1).map((f) => [f.not_captured, f.reason]), Array(2).fill(['client-closed-no-data', 'trusted-before']))
   assert.deepEqual(s.engine.negatives(), [])
   assert.deepEqual(s.critical(), [])
-  await s.alert(48, 'other.test'); await s.settled(4)
-  assert.deepEqual(s.engine.negatives().map((e) => [e.host, e.cause]), [['other.test', 'client-rejected-leaf']])
+  await s.rejecting('transparent', 'pinned.test'); await s.settled(4)
+  await s.rejecting('transparent', 'pinned.test'); await s.settled(5)
+  assert.deepEqual(s.flows.slice(3).map((f) => f.not_captured), ['client-rejected-leaf', 'client-rejected-leaf'])
+  await s.alert(48, 'other.test'); await s.settled(6)
+  assert.deepEqual(s.engine.negatives().map((e) => [e.host, e.cause]).sort(), [['other.test', 'client-rejected-leaf'], ['pinned.test', 'client-rejected-leaf']])
 })
 
 const clock = () => { const c = { t: 1_000_000_000, now: () => c.t }; return c }

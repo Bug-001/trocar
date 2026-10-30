@@ -19,7 +19,9 @@ const msgOf = (e) => String((e && e.message) || e)
 // Tests shorten it through the engine's timing.rejectWindowMs.
 export const REJECT_WINDOW_MS = 10_000
 // From accepting the client's connection to starting our TLS server on its ClientHello: past this the engine was the slow side, so a
-// zero-data close is the client giving up, not an answer to our leaf (RFC 4.6 §引擎 5). Tests shorten it through timing.slowEngineMs.
+// zero-data close before our side of the handshake completes may be the client giving up. It may as well be a refusal (a Node client
+// destroys its socket before its Finished leaves), so it still counts toward the negative entry (D31 fail-open) but never writes
+// trust-rejected (D38) (RFC 4.6 §引擎 5). Tests shorten it through timing.slowEngineMs.
 export const SLOW_ENGINE_MS = 2_000
 // host of a CONNECT authority or a SOCKS target: "[::1]:443" → "::1", "a.test:443" → "a.test". An IPv6 literal is
 // written compressed whatever form the client sent ("[0:0:0:0:0:0:0:1]:443" → "::1"), as SOCKS5 targets are (RFC 4.6
@@ -510,10 +512,10 @@ export function handleFlow(client, meta, ctx) {
       // open when the window elapses; a zero-data close after that is an unused pooled socket timing out, no rejection and no failure.
       // The rule is about the CLIENT going: an idle connection the upstream closed first (a preconnect timing out), or one the engine
       // tore down, says nothing about our leaf.
-      let accepted = false, judged = false, notClient = false, window = null
+      let accepted = false, judged = false, notClient = false, window = null, secured = false
       const accept = (used) => { if (accepted || judged) return; accepted = true; clearTimeout(window); ctx.negCache.observe(key, { rejected: false, meta, host, used }) }
       clientTls.once('data', () => accept(true))
-      clientTls.once('secure', () => { window = setTimeout(() => accept(false), ctx.rejectWindowMs ?? REJECT_WINDOW_MS); if (window.unref) window.unref() })
+      clientTls.once('secure', () => { secured = true; window = setTimeout(() => accept(false), ctx.rejectWindowMs ?? REJECT_WINDOW_MS); if (window.unref) window.unref() })
       const otherSide = () => { if (!judged) notClient = true }
       upTls.on('end', otherSide); upTls.on('error', otherSide); upTls.on('close', otherSide)
       const judge = (e) => {
@@ -526,13 +528,16 @@ export function handleFlow(client, meta, ctx) {
         // certificate-check code never reaches us.
         const how = !synthetic(e) ? { type: e.code || 'error', message: msgOf(e), side: 'client' }
           : { type: 'closed_without_app_data', message: 'the client closed after the TLS handshake without sending application data', side: 'client' }
-        // A zero-data close is a rejection only when the engine was not the slow side and the process has never sent data on our leaf;
-        // a certificate alert is an answer whoever sends it (§引擎 5)
-        const alert = certAlert(e)
-        if (!alert && (slow || ctx.negCache.trusts(meta))) { notCaptured('client-closed-no-data', slow ? 'engine-slow' : 'trusted-before'); if (!rec.error) rec.error = how; return }
-        notCaptured('client-rejected-leaf', 'client-rejected-leaf')
+        // A certificate alert is an answer whoever sends it. A zero-data close by a (who, host) that has sent data on our leaf is no rejection.
+        // One that came while the engine was the slow side and before our handshake completed may be a give-up or a Node refusal (whose
+        // Finished never leaves): it is recorded as such and counts toward the entry, but never writes trust-rejected (§引擎 5)
+        const alert = certAlert(e), gaveUp = !alert && slow && !secured
+        if (!alert && !gaveUp && ctx.negCache.trusts(key)) { notCaptured('client-closed-no-data', 'trusted-before'); if (!rec.error) rec.error = how; return }
+        if (gaveUp) notCaptured('client-closed-no-data', 'engine-slow')
+        else notCaptured('client-rejected-leaf', 'client-rejected-leaf')
         if (!rec.error) rec.error = how
         const made = alert ? ctx.negCache.mark(key, { cause: 'client-rejected-leaf', meta, host, alert: e.code }) : ctx.negCache.observe(key, { rejected: true, meta, host })
+        if (gaveUp) return
         // D51④: the process was judged trusting trocar and is not — a critical failure when this rejection makes the (pid, host) negative
         // for the first time in its life (4.6 §事件与码 #9): a renewal after retry_at is the same answer again, so once per (pid, host)
         // until the process exits or sends data there. Names and the trust entry trocar relied on; never the client's bytes or certificates.

@@ -11,8 +11,8 @@
 // Lifetime: entries live in memory only. Each carries retry_at = at + min(retryMs · 2^renewals, retryMaxMs); renewals = how
 // many times this key was made negative before. Expiry is lazy (has / get / list drop an entry at retry_at; no timer) and
 // leaves the key on probation: its strikes stand at threshold − 1, so one rejection renews it with the doubled backoff.
-// Application data on the key clears its history (the next entry starts at retryMs again) and records its who as a process
-// that has accepted our leaf (trusts). forgetPid drops a process's entries, counts, history and trusted mark when it exits
+// Application data on the key clears its history (the next entry starts at retryMs again) and records the key as one whose
+// client has accepted our leaf (trusts). forgetPid drops a process's entries, counts, history and trusted marks when it exits
 // (the daemon calls engine.forgetPid on the exit event), so a reused pid inherits nothing.
 // The key is (who, host). Who is the pid; a connection that came through the proxy ingress and whose pid could not be found says
 // "<route>.<group>" itself, in meta.negKey (4.8 §5.5, W17): two forms with no pid never poison each other's hosts, and forgetKey drops
@@ -26,7 +26,7 @@ export function createNegativeCache({ threshold = 2, now = () => Date.now(), ret
   const strikes = new Map()   // key → {negKey, n}: consecutive rejections so far
   const negative = new Map()  // key → entry (see add)
   const history = new Map()   // key → {negKey, n}: how many times the key was made negative; outlives expiry
-  const trusted = new Map()   // who → true, insertion order, at most trustedMax
+  const trusted = new Map()   // key → who, insertion order, at most trustedMax
   const live = (key) => {
     const e = negative.get(key)
     if (!e || now() < e.retry_at) return e ?? null
@@ -45,7 +45,7 @@ export function createNegativeCache({ threshold = 2, now = () => Date.now(), ret
     let dropped = 0
     for (const [k, e] of negative) if (e.negKey === who) { negative.delete(k); dropped++ }
     for (const m of [strikes, history]) for (const [k, st] of m) if (st.negKey === who) m.delete(k)
-    trusted.delete(who)
+    for (const [k, w] of trusted) if (w === who) trusted.delete(k)
     return dropped
   }
   return {
@@ -57,8 +57,7 @@ export function createNegativeCache({ threshold = 2, now = () => Date.now(), ret
         strikes.delete(key)
         if (used) {
           history.delete(key)
-          const who = whoOf(meta)
-          trusted.delete(who); trusted.set(who, true)
+          trusted.delete(key); trusted.set(key, whoOf(meta))
           if (trusted.size > trustedMax) trusted.delete(trusted.keys().next().value)
         }
         return false
@@ -73,9 +72,9 @@ export function createNegativeCache({ threshold = 2, now = () => Date.now(), ret
       if (live(key)) return false
       return add(key, cause, meta, host, 1, alert)
     },
-    /** trusts(meta) → has this who sent application data on a decrypted connection (it accepted our leaf). */
-    trusts: (meta) => trusted.has(whoOf(meta)),
-    /** forgetKey(who) → how many negative entries were dropped (that who's half-way counts, history and trusted mark go too). `who` is "<pid>" or "<route>.<group>". */
+    /** trusts(key) → has this (who, host) sent application data on a decrypted connection (it accepted our leaf there). */
+    trusts: (key) => trusted.has(key),
+    /** forgetKey(who) → how many negative entries were dropped (that who's half-way counts, history and trusted marks go too). `who` is "<pid>" or "<route>.<group>". */
     forgetKey,
     /** holds(who) → does the cache keep anything under `who`: an entry, a strike below the threshold or renewal history (the daemon's sweep watches only such keys, 4.8 §5.5). */
     holds: (who) => { who = String(who); for (const m of [negative, strikes, history]) for (const e of m.values()) if (e.negKey === who) return true; return false },
