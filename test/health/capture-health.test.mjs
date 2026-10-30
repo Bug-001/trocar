@@ -92,7 +92,7 @@ test('the daemon by its lock alone: not running (clean stop · SIGHUP), not runn
   } finally { b.done() }
 })
 
-test('an unreadable flows/ or collector directory throws (503); an unparsable manifest is "unknown", listed', () => {
+test('an unreadable flows/ or collector directory throws (status: no health, an errors entry); an unparsable manifest is "unknown", listed', () => {
   const b = home()
   try {
     installed(b)

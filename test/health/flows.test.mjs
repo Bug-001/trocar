@@ -20,7 +20,7 @@ function box() {
 }
 const ids = (r) => r.records.map((x) => x.id)
 
-test('readFlows: no flows/ is "nothing yet"; an unreadable flows/ throws (503), never "no failures"', () => {
+test('readFlows: no flows/ is "nothing yet"; an unreadable flows/ throws (status: no health, an errors entry), never "no failures"', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-flows-'))
   try {
     assert.deepEqual([readFlows({ dir, now: NOW }).missing, readFlows({ dir, now: NOW }).records.length], [true, 0])
