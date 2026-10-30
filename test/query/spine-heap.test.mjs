@@ -192,14 +192,18 @@ test('the plan of a cut session keeps at most PLAN_PER_MEMBER a member', async (
 // it holding twice the budget) and the cut's step (a tenth of the rows that fit, a power of two: 128 calls at 112 MB, 256 at 160 MB,
 // measured 2026-10-31), so a smaller reader is a smaller session past the same bound. Not below: the --since reader holds whole pages
 // of 16 KB tool names beside its reads, and at 80 MB it ran out of heap.
+// A pending answer is asked again until it carries none; it ticks only when its done or work moved (as the CLI counts progress,
+// src/query/client.mjs), so an answer stuck pending stops ticking and the wait on the reader fails after STALL.
+const MOVED = `const moved = (d, at) => { const now = d.pending ? JSON.stringify([d.pending.done, d.pending.work]) : null; if (now !== null && now !== at) tick(); return now }`
 const PAST = { heapMb: 112, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12, names: 16_000 } }
 const GROWING = `${TICK}
+${MOVED}
 const { runQuery } = await import(${JSON.stringify(QUERY)})
 const [home, id] = process.argv.slice(1)
 for await (const _ of (await import('node:readline')).createInterface({ input: process.stdin })) {
   // as the worker reads it (it writes the projection), until no member is above the extraction frontier
-  let doc
-  do { doc = await runQuery('session', { id, limit: '20' }, { home, writer: true, progress: tick }); tick() } while (doc.pending)
+  let doc, at = null
+  do { doc = await runQuery('session', { id, limit: '20' }, { home, writer: true, progress: tick }); at = moved(doc, at) } while (doc.pending)
   console.log(JSON.stringify(doc.truncated && doc.truncated.shown))
 }`
 test('a session past the heap bound that keeps growing keeps its cut between steps, so it is folded on, not from scratch', async () => {
@@ -221,13 +225,19 @@ test('a session past the heap bound that keeps growing keeps its cut between ste
 // record once the pages are walked back) and the delta applied to the previous document is now's; across a moved cut the answer is
 // full (`base: null`), whatever the cut moved to.
 const FOLLOW = `${TICK}
+${MOVED}
 const { runQuery } = await import(${JSON.stringify(QUERY)})
 const [home, id] = process.argv.slice(1)
-const q = async (name, p) => { let d; do { d = await runQuery(name, { id, ...p }, { home, writer: true, progress: tick }); tick() } while (d.pending); return d }
+const q = async (name, p) => { let d, at = null; do { d = await runQuery(name, { id, ...p }, { home, writer: true, progress: tick }); at = moved(d, at) } while (d.pending); return d }
 for await (const line of (await import('node:readline')).createInterface({ input: process.stdin })) {
   const { since } = JSON.parse(line), now = await q('session', {})
+  // walked back a page at a time: each page starts at a call no page before it started at, else the walk is stuck
   let first = now
-  while (first.more) first = await q('session', { before: first.calls[0].rid })
+  for (const seen = new Set(); first.more; tick()) {
+    const at = first.calls[0].rid
+    if (seen.has(at)) throw new Error(\`the page walk came back to \${at}\`)
+    seen.add(at); first = await q('session', { before: at })
+  }
   const lane = await q('lane', { lane: now.lanes[now.lanes.length - 1].lane })
   console.log(JSON.stringify({ now, cut: first.records[0].id, lane: lane.mark, d: since == null ? null : await q('session', { since }) }))
 }`

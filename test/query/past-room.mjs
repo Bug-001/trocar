@@ -32,6 +32,7 @@ export async function growPast(s, { home, budget, names, tick = () => {} }) {
     for (let calls = 0; calls * names <= 2 * budget;) {
       s.append(500); tick()
       const members = sessionGroups(await indexRows({ home, errors: [] })).get(s.id)
+      if (!(members && members.length > calls)) throw new Error(`growPast: 500 calls appended and the session's members did not grow (${calls})`)
       calls = members.length
       tick()
       extractMembers({ store, members, sessionId: s.id, recordsAt: (rs) => { tick(); return recordsAt({ home, rows: rs.filter(Boolean), errors: [], remember: false }) } })
