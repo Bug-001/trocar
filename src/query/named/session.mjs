@@ -40,7 +40,7 @@ import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yi
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
-import { filesAt, filesParts, forget, headDoc, headFile, owed, packsOf, settle, stoppedHead, tier0Doc, writeFiles, writeHead, memoBytes } from '../ctx-files.mjs';
+import { filesAt, filesParts, forget, headDoc, headFile, packsOf, stoppedHead, tier0Doc, writeFiles, writeHead, memoBytes } from '../ctx-files.mjs';
 
 export const params = Object.freeze(['id', 'since', 'before', 'limit', 'head']);
 
@@ -421,13 +421,9 @@ function grow(box, { ctx, id, store, plan, F, foldMs, request, resolve, progress
   st.resolve = resolve;
   st.hook = (rid) => { progress(); bounded(meter, ++meter.n, (plan.byId.get(rid) || {}).stored_bytes || 0); };
   const now = st.target == null || (!(ctx.writer === true && request) && pastOf(plan, st.target, F));
-  // the answer files a background slice left short of this state (ctx-files.mjs writeFiles): a request writes them first, then folds;
-  // a background slice does not fold until they reach it (folded on, what they hold would be written again: 3.5 后台抽取与归约)
-  const wait = ctx.writer === true && owed(st.log);
-  if (wait && request) settle(st.log);
   try {
     if (foldMs > 0 && now && ctx.handOff && ctx.writer !== true && (st.target != null || unfolded(st, plan, F))) throw new HandOff(id);
-    if (foldMs > 0 && now && !(wait && !request)) fold(st, plan, F, foldMs);
+    if (foldMs > 0 && now) fold(st, plan, F, foldMs);
   } catch (e) { closeState(st); throw e; }
   errors.push(...st.sink.splice(0));
   if (st.meter.held == null) st.meter.held = liveHeap() - st.base; // a state just made: what it holds, measured once
@@ -519,19 +515,21 @@ async function advance(ctx, id, { budgetMs, request }) {
 /** extendSession(ctx, id, budgetMs) → whether the session still has members to extract or fold, or answer files to write (3.5
  *  后台抽取与归约): one background slice of the query worker (`ctx.writer`), the index read included: extraction in write order, then
  *  folding (or a cold state's rebuild, when a member lies past its log's frontier): half of `budgetMs` each, the fold also what
- *  extraction left; then the answer files at the new state in what is left of `budgetMs`, the rest in the next slices (the fold waits
- *  for them), and the head once they reach the state. */
+ *  extraction left; once no member is left past the frontier, the answer files at the state in what is left of `budgetMs`, the
+ *  rest in the next slices, and the head once they reach the state (files written while members are left past the frontier would be
+ *  written again at the next one). */
 export async function extendSession(ctx, id, budgetMs) {
   const end = performance.now() + budgetMs;
   let r;
   try { r = await again(ctx, id, () => advance(ctx, String(id), { budgetMs, request: false })); } catch (e) { await stopped(ctx, String(id), e); throw e; }
   if (!r) return false;
   const { st, plan, ex } = r;
-  const s = stateAt(r, String(id)), written = files(ctx, s, end);
-  const more = !written || ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n);
-  if (written) { if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); } // a stop is cleared at once
-  if (!more) releaseParts(); // folded to its frontier: between calls the worker holds no decoded part (3.5:40 ⑤)
-  return more;
+  if (ex.done < ex.total || (st.target != null ? pastOf(plan, st.target, ex.done) : st.fp !== plan || st.fc < plan.n)) return true;
+  const s = stateAt(r, String(id));
+  if (!files(ctx, s, end)) return true;
+  if (stops.delete(s.id)) putHead(ctx, s); else headAt(ctx, s); // a stop is cleared at once
+  releaseParts(); // folded to its frontier: between calls the worker holds no decoded part (3.5:40 ⑤)
+  return false;
 }
 
 // The head file (3.5 §谁执行它「答案文件」): the worker writes it at the end of a request or background slice of the session when the

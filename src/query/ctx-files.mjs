@@ -235,14 +235,6 @@ export function filesParts(log) {
 export const forget = (log) => { writers.delete(log); jobs.delete(log); };
 // fold log → {f, ax, it}: the writer's work toward the state at frontier `f` that a slice's budget did not cover (writeFiles)
 const jobs = new WeakMap();
-/** owed(log) → whether a slice left the answer files short of the fold log's state: a background slice does not fold it further
- *  until they reach it (named/session.mjs; 3.5 后台抽取与归约). settle(log): that work done to its end (a request, before it folds). */
-export const owed = (log) => jobs.has(log);
-export function settle(log) {
-  const j = jobs.get(log);
-  if (!j) return;
-  try { drain(j.it); jobs.delete(log); } catch { forget(log); }
-}
 // The gzip of a file's text ~1 MiB at a time (one piece a unit): each piece deflated with the 32 KiB before it as its dictionary and
 // flushed to a byte boundary, the last one finished, so the pieces make one deflate stream; they are cut by offset only, so the
 // bytes do not depend on how the work was sliced (3.5 后台抽取与归约). One gzip member: the header, the stream, CRC-32, the length.
@@ -321,7 +313,7 @@ function dirtyOf(s, off, open) {
 /** writeFiles(ctx, s, deadline = Infinity) → {packs, open} of the head: brings the session's pack and tail files to the state `s`
  *  (the worker's, after a slice); null when `deadline` (a performance.now() time) passed first: what is left goes on at the next call
  *  at the same state, a unit at a time (a call's render, a piece of a gzip, a file: 3.5 后台抽取与归约); a call at another state
- *  writes the files afresh. The first slice of a session in this worker (or of a fold log opened again) re-renders the packs with fold-log lines past
+ *  goes on from the packs the last one finished. The first slice of a session in this worker (or of a fold log opened again) re-renders the packs with fold-log lines past
  *  the offset its sidecar says the files stood at, takes the others from their files when whole and written under the axis it has
  *  (its checkpoint's; else renders them), and carries
  *  on the tails its sidecar's checkpoint vouches for (carried), writing the others afresh; later slices seal the spans the mark passed
@@ -331,7 +323,8 @@ export function writeFiles(ctx, s, deadline = Infinity) {
   if (s.mark == null) return { packs: [], open: null };
   const log = s.V.log, ax = axisOf(s.V);
   let j = jobs.get(log);
-  if (j && (j.f !== log.frontier || j.ax !== ax)) { forget(log); j = null; }
+  // the frontier moved under it: the packs it finished stay (W), the rest is written at the new state (3.5 后台抽取与归约)
+  if (j && (j.f !== log.frontier || j.ax !== ax)) { jobs.delete(log); j = null; }
   if (!j) {
     const W = writers.get(log);
     if (W && W.ax === ax && W.f === log.frontier) return W.files;
@@ -347,8 +340,8 @@ function* writing(ctx, s) {
   const home = ctx.home, fs = ctx.fs || nodeFs, id = s.id, log = s.V.log, N = sealedOf(s), ax = axisOf(s.V);
   let W = writers.get(log);
   const first = !W || W.ax !== ax;
-  let c = null; // the checkpoint of the worker before this one: the axis its files were written under (else unknown: none is kept)
   if (first) {
+    let c = null; // the checkpoint of the worker before this one: the axis its files were written under (else unknown: none is kept)
     const parts = (log.saved && log.saved.parts) || {}, w = parts['w.f'], f = w && w.length ? w[0] : -1;
     // a worker that starts again: the tails the last one wrote, carried on where whole and as its checkpoint says (D71②③)
     let tails = null;
@@ -357,10 +350,10 @@ function* writing(ctx, s) {
       const got = PARTS.map((p, i) => carried(s, fs, tailFile(home, id, p), N, p, c.size?.[i]));
       if (got.some(Boolean)) tails = Object.fromEntries(PARTS.map((p, i) => [p, got[i] || { size: NaN, defs: new Set() }])); // NaN: no size, a missing file's −1 neither, is it: afresh
     }
-    W = { ax, f, open: N, packs: [], tails, rec: tails ? c.rec : 0, files: null, memo: lru(memoBytes()), sp: [] };
+    W = { ax, f, open: N, packs: [], tails, rec: tails ? c.rec : 0, files: null, memo: lru(memoBytes()), sp: [], c };
     writers.set(log, W);
   }
-  const d = dirtyOf(s, W.f, Math.min(W.open, N)), spans = spansOf(s, axisSteps(s, W.sp, first ? 0 : d.axis ?? W.sp.length));
+  const c = W.c, d = dirtyOf(s, W.f, Math.min(W.open, N)), spans = spansOf(s, axisSteps(s, W.sp, first ? 0 : d.axis ?? W.sp.length));
   W.packs.length = Math.min(W.packs.length, N);
   for (let n = 0; n < N; n++) {
     const k = W.packs[n];
@@ -381,7 +374,7 @@ function* writing(ctx, s) {
     }
     W.packs[n] = { n, s0: spans[n][0], s1: spans[n][1], tag: tagOf(texts[0], texts[1]), h: texts.map(sha) };
   }
-  // a tail written afresh → its {size, defs}; W.tails is set once both are (a save between the units reads the last whole one)
+  // a tail written afresh → its {size, defs}
   const fresh = function* (part) {
     const { buf, wrote } = yield* rendering(s, N, part, true, W.memo, spans), file = tailFile(home, id, part);
     if (!same(readText(fs, file, false), buf)) putFile(fs, file, buf);
@@ -390,9 +383,13 @@ function* writing(ctx, s) {
   };
   const upTo = upToOf(s);
   if (N !== W.open) W.memo = lru(memoBytes()); // the sealed span's steps let go
-  if (N !== W.open || !W.tails) { const t = {}; for (const p of PARTS) t[p] = yield* fresh(p); W.tails = t; }
-  else yield* appendTails(s, W, d, N, upTo, fs, (part) => tailFile(home, id, part), fresh);
-  W.rec = upTo; W.open = N; W.f = log.frontier;
+  // the tails are no checkpoint while they are written (W.tails null): a frontier that moves before they are done has them written
+  // afresh, as has a worker that starts again from a save between the units
+  const t = N !== W.open ? null : W.tails;
+  W.tails = null;
+  if (!t) { const t = {}; for (const p of PARTS) t[p] = yield* fresh(p); W.tails = t; }
+  else { yield* appendTails(s, { ...W, tails: t }, d, N, upTo, fs, (part) => tailFile(home, id, part), fresh); W.tails = t; }
+  W.rec = upTo; W.open = N; W.f = log.frontier; W.c = null;
   W.files = { packs: W.packs.map(({ n, s0, s1, tag }) => ({ n, s0, s1, tag })), open: { n: N, s0: spans[N][0] } };
   return W.files;
 }
