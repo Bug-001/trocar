@@ -73,6 +73,15 @@ node bin/trocar.mjs install     # once: the certificates (or: npx --no-install t
 node bin/trocar.mjs on          # then start capture
 ```
 
+On Linux, build the capability helper from source and install it once per machine before `install`. It is
+the one step that needs root; build it as yourself:
+
+```sh
+sudo apt-get install build-essential clang libbpf-dev libelf-dev zlib1g-dev linux-tools-generic  # Ubuntu; Debian: bpftool, not linux-tools-generic
+make -C src/collector/arch/linux     # trocar-redirector: needs clang, make, bpftool, the libbpf, libelf and zlib headers, and a kernel with BTF
+sudo "$(command -v node)" bin/trocar.mjs setup-helper   # node by its path: sudo's PATH does not have an nvm node
+```
+
 The same five commands on every OS, in this order: `trocar install` (once) → `trocar on` → `trocar off` →
 `trocar status` (any time) → `trocar uninstall`. `install` lists every file it will touch and writes them after you
 confirm; until it has run, `trocar on` refuses (`error.code` `cert-not-installed`). `on` starts capture, `status` shows state,
@@ -357,7 +366,7 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 | captures | `~/.trocar/raw/<segment>.ndjson` and its `<segment>.sealed` (0600); `~/.trocar/index/` is a deletable accelerator; `flows/` holds connection metadata and failure records | kept unless `trocar uninstall --purge-data` (which deletes `flows/` too, then records there anything it could not undo) |
 
 ```sh
-sudo trocar setup-helper      # Linux, once per machine
+make -C src/collector/arch/linux && sudo trocar setup-helper   # Linux, once per machine: build the helper, then install it
 trocar install                # once, per user: the certificates; lists every file it will change and asks (not in a terminal: add --yes)
 trocar on                     # refuses until install has run; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
 trocar status                 # each agent and why it is (not) captured, its proxy chain, the certificates, the recent failures
@@ -435,7 +444,7 @@ the daemon from its lock: not running, or stuck). One exception: an install refu
 anything (nothing installed yet, or run as root) has no collector directory to write into, so the
 command's output is its only report. An `off` or `uninstall` that cannot undo something exits 1 and
 keeps the install manifest for the next run. The Linux helper is a root-owned copy of the build, so after upgrading
-run `sudo trocar setup-helper` again to replace it.
+build it again (`make -C src/collector/arch/linux`) and run `sudo trocar setup-helper` to replace it.
 
 ## Shrinking the raw logs — sealed segments (D35, D60)
 
