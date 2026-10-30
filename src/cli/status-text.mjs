@@ -43,7 +43,7 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } =
       const pid = (x.processes || []).find((p) => p.captured === false) || null
       rows.push([h, CAPTURED(x), x.captured === true ? notSeenYet(x) : x.captured === null ? ((x.why || []).length ? openText(x, h) : notSeenYet(x) || openText(x, h)) : noteText(x.reason, { harness: h, pid: pid && pid.pid })])
     }
-    lines.push(...columns(rows).map((l) => `  ${l}`))
+    lines.push(...columns(rows, { width: WIDTH - 2 }).map((l) => `  ${l}`))
   }
   const missing = names.filter((h) => !shown.includes(h))
   if (missing.length) lines.push(`  not installed: ${missing.sort().join(', ')}`)

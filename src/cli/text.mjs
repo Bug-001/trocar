@@ -25,11 +25,18 @@ export const colors = (io, env = process.env) => (useColor(io, env)
 /** The styles that style nothing — for `--json` and for renderers called with no io. */
 export const noColor = () => IDENTITY
 
-/** `rows` (lists of cells) → lines, each column padded to its widest cell, `gap` spaces between, no trailing blanks. */
-export function columns(rows, { gap = 2 } = {}) {
-  const width = []
-  for (const row of rows) row.forEach((cell, i) => { width[i] = Math.max(width[i] || 0, String(cell ?? '').length) })
-  return rows.map((row) => row.map((cell, i) => (i === row.length - 1 ? String(cell ?? '') : String(cell ?? '').padEnd(width[i]))).join(' '.repeat(gap)).trimEnd())
+/** `rows` (lists of cells) → lines, each column padded to its widest cell, `gap` spaces between, no trailing blanks. With `width`, a last cell that
+ *  would run past it is folded on spaces under its own column, so the row still reads as one row and the terminal never folds it to column 0 (§1.1⑥,
+ *  as `pairs` folds a value); a word longer than the room keeps its own line, unbroken. Without it, one line per row. */
+export function columns(rows, { gap = 2, width = Infinity } = {}) {
+  const w = []
+  for (const row of rows) row.forEach((cell, i) => { w[i] = Math.max(w[i] || 0, String(cell ?? '').length) })
+  return rows.flatMap((row) => {
+    const head = row.slice(0, -1).map((cell, i) => String(cell ?? '').padEnd(w[i]) + ' '.repeat(gap)).join('')
+    const last = String(row.at(-1) ?? '')
+    if (head.length + last.length <= width) return [`${head}${last}`.trimEnd()]
+    return wrap(last, width - head.length).map((t, i) => (i ? ' '.repeat(head.length) : head) + t)
+  })
 }
 
 /** `[[label, value], …]` → an indented two-column block; a value too long for `width` is folded under its own column, so the row still reads as one
