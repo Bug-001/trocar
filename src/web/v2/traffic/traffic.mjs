@@ -11,7 +11,7 @@ import { menuButton, infoButton, mark, readFailure } from '../core/ui.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
 import { delegate } from '../core/dom.mjs'
 import { formatHash, parseHash } from '../core/router.mjs'
-import { loadSessions } from '../library/logic.mjs'
+import { freshSessions } from '../library/logic.mjs'
 import * as W from '../labels/traffic.mjs'
 
 const PATTERN_ONLY = ['session-sync', 'files', 'account'] // the three classes only a pattern can name (D40⑥)
@@ -278,8 +278,8 @@ export function mount(el, ctx) {
       if (model && model.state === 'table') { model = remodel(model.answer); paint() }
     }, () => {})
   }
-  // when `sessions` cannot be read the coverage note simply does not appear
-  loadSessions(api).then((r) => {
+  // when `sessions` cannot be read the coverage note simply does not appear; a stored answer makes no note (1.10 覆盖)
+  freshSessions(api, { alive: () => !dead }).then((r) => {
     if (dead || !r.ok) return
     agentsInSessions = new Set(r.data.sessions.map((s) => harnessKey(s.harness)).filter(Boolean))
     paint()

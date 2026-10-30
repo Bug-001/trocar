@@ -10,6 +10,7 @@ import {
 } from '../../src/web/v2/overview/overview.mjs'
 import { capHealthPatch } from '../../src/web/v2/core/capture-verdict.mjs'
 import { backoffMs, INTERVAL } from '../../src/web/v2/core/poll.mjs'
+import { within } from '../helpers/bounded.mjs'
 import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, UNKNOWN_ICON, harnessKey, harnessName } from '../../src/web/v2/core/chips.mjs'
 import { TITLE_FROM_WIRE } from '../../src/web/v2/labels/replay.mjs'
 import { TITLE_FROM_AGENT, FILES_NOT_READ } from '../../src/web/v2/labels/overview.mjs'
@@ -197,6 +198,22 @@ function fakeMount({ status = quiet(), sessions = { sessions: [session(1)], erro
   return { inst, log, zones, on }
 }
 const settle = () => new Promise((r) => setTimeout(r, 60))
+
+// 4.4 §存下的答案: only the Sessions page shows a stored answer; the overview reads the list again until it is fresh
+test('a stored sessions answer is not shown: the overview reads the list again and shows the fresh one', async () => {
+  let reads = 0
+  const fresh = { sessions: [session(7, { title: 'fresh-title' })], errors: [], next: null }
+  const old = { sessions: [session(9, { title: 'stored-title' })], errors: [], next: null, stored: { at: iso(0) } }
+  const { inst, zones } = fakeMount({ hold: (name) => (name === 'sessions' ? Promise.resolve({ ok: true, status: 200, data: ++reads === 1 ? old : fresh }) : null) })
+  const html = () => Object.values(zones).map((z) => z.innerHTML).join('')
+  try {
+    await settle()
+    assert.ok(!html().includes('stored-title'), 'the stored list is not shown')
+    await within((async () => { while (!html().includes('fresh-title')) await new Promise((d) => setTimeout(d, 50)) })(), 10_000, 'the fresh list')
+    assert.ok(!html().includes('stored-title'))
+    assert.ok(reads >= 2, `read again (${reads})`)
+  } finally { inst.unmount() }
+})
 
 test('#4 the window only moves the stats: items are identical across 24h / 7d / all; the overview read carries since=24h / 7d / none', async () => {
   const s = quiet(); s.failures.groups = [group({ harness: A })]

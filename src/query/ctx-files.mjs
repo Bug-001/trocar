@@ -111,7 +111,7 @@ export function writeHead(home, id, doc, fs = nodeFs) {
 export const skipFile = (home, id) => path.join(sessionDir(home, id), 'upgrade.skip');
 export const writeSkip = (home, id, rid, fs = nodeFs) => putFile(fs, skipFile(home, id), Buffer.from(rid, 'utf8'));
 // A whole file written to a temporary file and renamed over (EPERM / EBUSY, a reader holding it on Windows: tried 3 times).
-function putFile(fs, file, bytes) {
+export function putFile(fs, file, bytes) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.tmp`;
   fs.writeFileSync(tmp, bytes, { mode: 0o600 });

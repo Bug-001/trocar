@@ -836,3 +836,60 @@ test('relay: a request reading a cold segment index sends progress on the IPC ch
     assert.ok(reports >= 1, `${name}: progress while it read (${reports})`)
   }
 })
+
+// 4.4 §存下的答案「刷新」: refresh({name, params}) is true while a refresh of that name is queued or running (queueing nothing more),
+// or when there is no worker (queueing one refresh of these params); false when the worker is warm with no refresh of the name
+// pending, or the subject is cooling (the relay then answers 500 with its reason, D38). The stub records every line written to it and answers each
+// `hold` ms after it arrives.
+const refreshWorld = ({ hold = 0, script } = {}) => {
+  const lines = []
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), now: () => 0, failure: () => {}, fork: () => {
+    const c = spawn(process.execPath, ['-e', script ?? `process.stdin.on('data', (d) => { for (const l of String(d).split('\\n').filter(Boolean)) setTimeout(() => process.stdout.write('200 2\\n{}'), ${hold}) })`], { stdio: ['pipe', 'pipe', 'pipe'] })
+    const w = c.stdin.write.bind(c.stdin)
+    c.stdin.write = (l, ...a) => (lines.push(JSON.parse(l)), w(l, ...a))
+    return c
+  } })
+  return { svc, lines }
+}
+
+test('refresh: with no worker it is true, and a second refresh of the same params while the first is pending queues nothing', async () => {
+  const { svc, lines } = refreshWorld({ hold: 60_000 })
+  try {
+    assert.equal(svc.refresh({ name: 'sessions', params: { limit: '500' } }), true)
+    assert.equal(svc.refresh({ name: 'sessions', params: { limit: 500 } }), true, 'still pending: answered from the stored file')
+    await new Promise((d) => setTimeout(d, 50))
+    assert.deepEqual(lines.map((l) => [l.name, l.params]), [['sessions', { limit: '500' }]], 'one refresh reached the worker')
+  } finally { svc.stop() }
+})
+
+test('refresh: a warm, idle worker is false (the relay answers fresh), and it queues nothing', async () => {
+  const { svc, lines } = refreshWorld()
+  try {
+    await svc.relay({ name: 'segments', params: {}, res: recorder() })
+    assert.equal(svc.refresh({ name: 'sessions', params: {} }), false)
+    await new Promise((d) => setTimeout(d, 50))
+    assert.deepEqual(lines.map((l) => l.name), ['segments'])
+  } finally { svc.stop() }
+})
+
+test('refresh: a cooling subject is false, so its failure is never hidden behind a stored answer (D38)', async () => {
+  const { svc } = refreshWorld({ script: 'process.stdin.on("data", () => process.exit(3))' })
+  try {
+    await assert.rejects(svc.relay({ name: 'sessions', params: {}, res: recorder() }))
+    assert.equal(svc.refresh({ name: 'sessions', params: {} }), false)
+  } finally { svc.stop() }
+})
+
+test('refresh: one refresh per name while it is pending, so a many-page list polled again and again reaches the worker once and then goes fresh', async () => {
+  const { svc, lines } = refreshWorld({ hold: 400 })
+  try {
+    svc.warm({ name: 'sessions', params: {} })
+    const pages = [{ limit: '500' }, { limit: '500', after: 'a' }, { limit: '500', after: 'b' }, { limit: '500', after: 'c' }]
+    for (let poll = 0; poll < 5; poll++) {
+      for (const params of pages) assert.equal(svc.refresh({ name: 'sessions', params }), true, 'a refresh of the name is pending: answered from the stored file')
+      await new Promise((d) => setTimeout(d, 20))
+    }
+    await within((async () => { while (pages.some((params) => svc.refresh({ name: 'sessions', params }))) await new Promise((d) => setTimeout(d, 20)) })(), 10_000, 'every page goes fresh once the refresh lands')
+    assert.deepEqual(lines.map((l) => [l.name, l.params]), [['sessions', {}]], 'exactly one line reached the worker')
+  } finally { svc.stop() }
+})
