@@ -1,5 +1,5 @@
 // test/cli/install-replace-e2e.test.mjs — `trocar install` from another copy of trocar replaces a collector that names other code (RFC 1.6 §3.2
-// step 5, V107: the success parts on macOS and Windows). Two REAL daemons in one temp HOME (test/helpers/model-daemon.mjs): A answers this
+// step 5, V107 on macOS and Windows). Two REAL daemons in one temp HOME (test/helpers/model-daemon.mjs): A answers this
 // checkout's code; B is what the login entry starts once A is gone, and answers the other copy's. The drain and the stop are the real ones and
 // find A at its real control endpoint (no request, no socket path, no daemonCode injected). Only what cannot run in a test stands in: launchctl /
 // the process-table query (exec), the lock identity both daemons wrote with their own stub, and process.kill (never the test process).
@@ -33,9 +33,10 @@ function otherCopy() {
   return root
 }
 
-// V107's failure cases run on the same two daemons: B's login entry starts nothing (the collector does not come back up), or B answers a third code
-// (the login entry starts yet another copy). Either is exit 1, ok false, problems, not replaced, and the receipt's state is what runs.
-const FAILS = { 'never-up': { state: 'not-running' }, elsewhere: { state: 'running' } }
+// V107's failure cases run on the same two daemons: the old collector cannot be stopped, B's login entry starts nothing (the collector does not come
+// back up), or B answers a third code (the login entry starts yet another copy). Each is exit 1, ok false, problems, not replaced, routing untouched,
+// and (where the receipt can know it) the state is what runs.
+const FAILS = { unstoppable: {}, 'never-up': { state: 'not-running' }, elsewhere: { state: 'running' } }
 for (const platform of ['darwin', 'win32']) for (const fail of [null, ...Object.keys(FAILS)]) {
   test(`${platform}: V107 — install from another copy ${fail ? `fails (${fail}) and says so` : 'replaces the collector on other code; routing is untouched; a second install leaves it'}`, { timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
@@ -63,7 +64,8 @@ for (const platform of ['darwin', 'win32']) for (const fail of [null, ...Object.
         const rootB = otherCopy()
         boxB = await liveUnit({ w, platform, daemon: { code: fail === 'elsewhere' ? '9.9.9+fffffff' : codeId(rootB) } }) // what the login entry starts once A is gone
         const nothing = () => ({ code: 0 })
-        const depsB = { ...deps, root: rootB, unit: fail === 'never-up' ? { ...boxB.unit, enable: nothing, start: nothing, startNow: nothing } : boxB.unit }
+        const depsB = { ...deps, root: rootB, unit: fail === 'never-up' ? { ...boxB.unit, enable: nothing, start: nothing, startNow: nothing } : boxB.unit,
+          ...(fail === 'unstoppable' ? { stopDaemon: async () => ({ stopped: false, pid: 4242, signals: [], error: 'test' }) } : {}) }
 
         const dry = fakeIo()
         assert.equal(await runInstallCli(['--dry-run', '--json'], { io: dry, env: w.env, home: w.home, platform, deps: depsB }), 0, dry.text())
@@ -74,8 +76,12 @@ for (const platform of ['darwin', 'win32']) for (const fail of [null, ...Object.
         const exit = await within(runInstallCli(['--yes', '--json'], { io: run, env: w.env, home: w.home, platform, deps: depsB }), 45_000, 'install from copy B')
         if (fail) {
           const r = run.json()
-          assert.deepEqual([exit, r.ok, r.problems.length > 0, r.daemon.replaced, r.daemon.state], [1, false, true, false, FAILS[fail].state], run.text())
-          assert.equal(await status().then((x) => x.code, () => null), fail === 'elsewhere' ? '9.9.9+fffffff' : null, 'the receipt state is what answers')
+          assert.deepEqual([exit, r.ok, r.problems.length > 0, r.daemon.replaced], [1, false, true, false], run.text())
+          assert.ok(fs.readFileSync(path.join(w.home, '.codex', '.env')).equals(entry), "codex's entry file is byte for byte the same")
+          if (FAILS[fail].state) {
+            assert.equal(r.daemon.state, FAILS[fail].state, run.text())
+            assert.equal(await status().then((x) => x.code, () => null), fail === 'elsewhere' ? '9.9.9+fffffff' : null, 'the receipt state is what answers')
+          }
           return
         }
         assert.equal(exit, 0, run.text())

@@ -38,6 +38,17 @@ async function staleDaemon({ platform, home, env, fs, deps, root }) {
   return typeof running === 'string' && running !== codeId(root) ? running : null
 }
 
+// 1.6 §3.2 step 5, after the login entry is up: a daemon that answers another copy's code is replaced through the routine update uses; routing is
+// not touched (D61②). → null when it was left, else replaceDaemon's answer plus `replaced`; what went wrong is pushed on `problems` (exit 1, D38)
+async function replaceStale({ platform, home, env, fs, deps, root, unit, problems }) {
+  if (!(await staleDaemon({ platform, home, env, fs, deps, root }))) return null
+  const before = problems.length
+  const rep = await replaceDaemon({ by: 'install', env, home, platform, deps: { ...deps, unit }, dir: path.join(home, '.trocar', 'collector'), root, fs, problems })
+  return { ...rep, replaced: rep.restarted && !rep.elsewhere && problems.length === before }
+}
+// the receipt's `daemon` (附录 C.2): after a replacement that stopped the old one, what runs is whether the new one came up
+const daemonRow = (dmn, rep) => ({ state: (rep && rep.stopped ? rep.restarted : dmn.up) ? 'running' : 'not-running', started: dmn.started, replaced: !!(rep && rep.replaced) })
+
 export async function runInstallCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const flags = new Set()
   for (const a of argv) { if (!FLAGS.has(a)) { io.err(`trocar install: ${a.startsWith('-') ? `unknown option '${a.split('=')[0]}'` : 'takes no agent name: it installs for every agent found on this machine'}\n${USAGE}`); return EXIT.usage } flags.add(a) }
@@ -124,17 +135,11 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     if (dmn.problems.length) r.exit = 1
     const dir = path.join(home, '.trocar', 'collector')
     // 1.6 §3.2 step 5: the daemon that answers runs another copy's code → replaced through the routine update uses; routing is not touched (D61②)
-    let rep = null
-    if (unit && !only && dmn.up && (await staleDaemon({ platform, home, env, fs, deps, root }))) {
-      const before = r.problems.length
-      rep = await replaceDaemon({ by: 'install', env, home, platform, deps: { ...deps, unit }, dir, root, fs, problems: r.problems })
-      dmnNotes.push(...rep.notes)
-      rep.replaced = rep.restarted && !rep.elsewhere && r.problems.length === before
-      if (r.problems.length > before) r.exit = 1
-    }
+    const rep = unit && !only && dmn.up ? await replaceStale({ platform, home, env, fs, deps, root, unit, problems: r.problems }) : null
+    if (rep) { dmnNotes.push(...rep.notes); if (!rep.replaced) r.exit = 1 }
     // a refusal carries `error: {code, message}` (附录 C.1): the first pending item that named a code is why install could not go on
     const refusal = r.pending.find((p) => p.code)
-    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: { state: (rep && rep.stopped ? rep.restarted : dmn.up) ? 'running' : 'not-running', started: dmn.started, replaced: !!(rep && rep.replaced) }, ...(unit && !only ? { autostart: { entry: platform === 'win32' ? '\\trocar\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
+    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: daemonRow(dmn, rep), ...(unit && !only ? { autostart: { entry: platform === 'win32' ? '\\trocar\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
       ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : {}),
       planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'] }
     try { appendEvent(dir, { event: EVENT.installNote, where: 'install', kind: 'result', outcome: receipt.ok ? 'installed' : 'partial', reason: `install: root ${r.fp256 || 'not made'}; ${r.carriers.length} carrier row(s); ${r.pending.length} pending` }) } catch (e) { r.problems.push(`the install-note could not be written (${e.message})`) }
@@ -193,10 +198,14 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const stdPath = standalonePath(home)
   let stdNew = true
   try { stdNew = fs.readFileSync(stdPath, 'utf8') !== buildStandalone({ version: OFF_VERSION, fs }) } catch { stdNew = true }
-  say([formatPlan({ ...plan, adopted: [], standalone: stdNew ? stdPath : null }, { home, platform, command: 'install' }), ...wrap(COST)].join('\n'))
-  if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned: planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), harnesses: plan.targets, changed: plan.changed, created: [...(stdNew ? [stdPath] : []), ...plan.created] }, null, 2)); return EXIT.ok }
-  if ((plan.writing || stdNew) && !flags.has('--yes')) {
-    if (json || !isInteractive(io)) return needsYes(io, json, planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }))
+  const root = deps.root || packageRoot()
+  const stale = unit ? await staleDaemon({ platform, home, env, fs, deps, root }) : null // 1.6 §3.2 step 5, as on macOS / Windows
+  const daemonItem = stale ? [{ what: 'daemon', detail: `the collector runs ${stale}, so it is stopped and started again on ${codeId(root)}` }] : []
+  const planned = [...planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), ...daemonItem]
+  say([formatPlan({ ...plan, adopted: [], standalone: stdNew ? stdPath : null }, { home, platform, command: 'install' }), ...pairs(daemonItem.map((p) => [p.what, p.detail])), ...wrap(COST), ...(stale ? wrap(CUT) : [])].join('\n'))
+  if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, harnesses: plan.targets, changed: plan.changed, created: [...(stdNew ? [stdPath] : []), ...plan.created] }, null, 2)); return EXIT.ok }
+  if ((plan.writing || stdNew || stale) && !flags.has('--yes')) {
+    if (json || !isInteractive(io)) return needsYes(io, json, planned)
     if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
   }
   // the undo that needs no source tree comes before the first thing it undoes (R3): a copy that cannot be written stops the install here, with a failure line (R11)
@@ -216,12 +225,14 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   // D61 (1.6 §3.2 step 5): the login entry is an item of the install like any other — one that could not be registered is a problem and exit 1, never only a note
   const dmn = r.daemon || { up: false, started: false, problems: [], unitFailed: null }
   const problems = dmn.problems
-  const receipt = { ...newReceipt('install'), ok: !board && !problems.length, ...(problems.length ? { problems } : {}), ...(board ? { pending: [board] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...new Set([...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created), ...(written ? [ingressPath] : [])])], standalone: standalonePath(home), planned: planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes: r.plan ? r.plan.notes : [],
+  const rep = r.daemon && dmn.up ? await replaceStale({ platform, home, env, fs, deps, root, unit: args.unit, problems }) : null
+  const receipt = { ...newReceipt('install'), ok: !board && !problems.length, ...(problems.length ? { problems } : {}), ...(board ? { pending: [board] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...new Set([...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created), ...(written ? [ingressPath] : [])])], standalone: standalonePath(home), planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes: [...(r.plan ? r.plan.notes : []), ...(rep ? rep.notes : [])],
     // `enabled` is the entry asked again after the run (1.6 §3.3: no claim without evidence), not "nothing failed": a run that halted on a stuck daemon never enabled anything
-    ...(r.daemon ? { daemon: { state: dmn.up ? 'running' : 'not-running', started: dmn.started }, autostart: { entry: args.unit.path, enabled: !dmn.unitFailed && (typeof args.unit.registered !== 'function' || args.unit.registered().state === 'present') } } : {}) }
+    ...(r.daemon ? { daemon: daemonRow(dmn, rep), autostart: { entry: args.unit.path, enabled: !dmn.unitFailed && (typeof args.unit.registered !== 'function' || args.unit.registered().state === 'present') } } : {}) }
   if (json) io.out(JSON.stringify(receipt, null, 2))
-  else io.out(fit([problems.length ? 'trocar install did not finish. What is missing is below.' : r.already && ((r.entryBefore && r.entryBefore !== 'present') || dmn.started) ? 'Installed. The certificates were in place; the login entry and the collector are up again.' : r.already ? 'Already installed. Nothing was changed.' : "Installed. trocar's certificates are in place.",
+  else io.out(fit([problems.length ? 'trocar install did not finish. What is missing is below.' : r.already && ((r.entryBefore && r.entryBefore !== 'present') || dmn.started) ? 'Installed. The certificates were in place; the login entry and the collector are up again.' : r.already && !(rep && rep.replaced) ? 'Already installed. Nothing was changed.' : "Installed. trocar's certificates are in place.",
     ...(r.already ? [] : changeLines(receipt, { home })),
+    ...(rep && rep.replaced ? pairs([['collector', `replaced: it ran ${rep.from}, it now runs ${codeId(root)}`]]) : []),
     ...receipt.notes.map((n) => `Note: ${n}`),
     ...(board ? [`Not done yet: the board's port is pending (${board.reason}). Run again: trocar install`] : []),
     ...problems.map((p) => `Problem: ${p}`),
