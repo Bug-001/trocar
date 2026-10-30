@@ -283,19 +283,19 @@ test('3.5 #4: a block the reduction cannot read back fails its member with a clo
   }
 })
 
-test('3.5:42 background: extraction and the fold each get half of a slice, so the frontier moves on every slice from the first', async () => {
+// Once the fold has reached the last member, the slices left only write the answer files: the frontier cannot move on those.
+test('3.5:42 background: extraction and the fold each get half of a slice, so the frontier moves on every slice from the first while members remain past it', async () => {
   const home = homeOf('trocar-sread-half-')
   const s = bigSession({ home, growth: 2_000, subEvery: 3, compactAt: 20_000, subLanes: 2, late: 2 })
   s.append(120)
   const ctx = { home, fs, writer: true }
   const frontier = async () => JSON.parse((await version({ ...ctx, params: { id: s.id } })).key)[1]
-  let before = await frontier(), slices = 0
-  while (await extendSession({ ...ctx }, s.id, 10)) {
-    const now = await frontier()
-    assert.ok(now != null && now !== before, `slice ${slices}: the frontier moved (${before} → ${now})`)
-    before = now; slices++
-  }
-  assert.ok(slices > 2, `more than one slice (${slices})`)
+  const seen = [await frontier()]
+  while (await extendSession({ ...ctx }, s.id, 10)) seen.push(await frontier())
+  seen.push(await frontier())
+  const end = seen.at(-1), folding = seen.findIndex((f) => f === end)
+  assert.ok(end != null && folding > 2, `the fold took more than two slices (${folding})`)
+  for (let i = 1; i <= folding; i++) assert.notEqual(seen[i], seen[i - 1], `slice ${i - 1}: the frontier moved (${seen[i - 1]} → ${seen[i]})`)
 })
 
 test('3.5:42 local: over a fold log the worker finished, the local path answers the worker\'s bytes and leaves the log\'s bytes as they were', async () => {

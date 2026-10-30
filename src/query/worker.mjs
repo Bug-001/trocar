@@ -25,7 +25,7 @@
 // slices of ≤ SLICE_MS — the members of the session last answered (session / lane) extracted until none is left, then those of the
 // sessions of the model calls the daemon kicked (`{kick: ids}` on IPC: their record ids, just indexed), then, after IDLE_SLICE_MS with no request, those
 // of the session of the newest index row (a request's, never a kick's), then, IDLE_SLICE_MS after the last request or kick, once the
-// sidecars and a projection GC (gcProjections) — yielding
+// sidecars (and the parts the save seals, a slice at a time until a request or kick) and a projection GC (gcProjections) — yielding
 // with setImmediate between slices, so a request line that arrives is read before the next one. Slices are not requests, but their work is
 // reported as it is done (`{progress: true}`, throttled like a query's: each slice, and each batch of members a slice reads or member it folds; a target's last
 // slice and the idle save at once): the daemon's idle clock
@@ -42,7 +42,7 @@ import { pathToFileURL } from 'node:url'
 import { LOCAL_ENV } from './client.mjs'
 import { answer } from './answers.mjs'
 import { lowerPriority } from '../low-priority.mjs'
-import { extendSession, indexed, saveIndexes } from './named/session.mjs'
+import { extendSession, indexed, saveIndexes, sealParts } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
 import { gcProjections, posCmp, sessionDir } from './projection.mjs'
 import { headFile, skipFile, tier0Doc, writeHead, writeSkip } from './ctx-files.mjs'
@@ -115,6 +115,8 @@ const SLICE_MS = 50, IDLE_SLICE_MS = 2000
 const say = (e) => process.stderr.write(`trocar query worker: background work failed: ${(e && e.stack) || e}\n`) // the daemon keeps stderr (D38)
 // newestDone starts true: only a request opens the newest-session scan, never a kick (a worker forked for a kick has none to follow).
 let busy = 0, lastAt = Date.now(), target = null, newestDone = true, gcDone = false, queued = false, timer = null, once = {}
+// the idle save's parts still to seal (session.mjs sealParts): a slice at a time; a request or kick stops it, the next idle period goes on
+let sealing = false
 // The sweep (3.5 §谁执行它「答案文件」): at the first idle period of this worker's life, and again on the daemon's `{sweep: true}`, a
 // tier-0 head (ctx-files.mjs, from the segment index only) for every session whose head file is absent. One pass over the sessions.
 let sweepDue = true
@@ -200,9 +202,11 @@ async function background() {
     up = upgrade.shift(); target = up[0]
     return kick()
   }
-  if (gcDone || busy || notIdle()) return // once per idle period, IDLE_SLICE_MS after the last request or kick: not after every burst
-  gcDone = true
-  saveIndexes() // the sidecars of what this busy period grew, before the GC counts them
+  if (sealing ? busy : gcDone || busy || notIdle()) return // once per idle period, IDLE_SLICE_MS after the last request or kick: not after every burst
+  const end = performance.now() + SLICE_MS
+  if (sealing) sealing = sealParts(end)
+  else { gcDone = true; sealing = saveIndexes(end) } // the sidecars of what this busy period grew, before the GC counts them
+  if (sealing) { progress(); return kick() }
   gcProjections({ home, liveKeys: [...sessionGroups(await indexRows({ home, errors: [], progress })).keys()], keepKeys: answered })
   worked()
 }
@@ -215,7 +219,7 @@ process.stdin.on('data', (d) => {
     const line = buf.slice(0, nl)
     buf = buf.slice(nl + 1)
     if (!line) continue
-    busy++; once = {}; newestDone = false; gcDone = false; clearTimeout(timer) // a new idle period begins after this one is answered
+    busy++; once = {}; newestDone = false; gcDone = false; sealing = false; clearTimeout(timer) // a new idle period begins after this one is answered
     chain = chain.then(() => serve(line)).then((asked) => {
       const id = asked && (asked.name === 'session' || asked.name === 'lane') && asked.params && asked.params.id
       if (id != null && id !== '') { if (target != null && target !== String(id)) follow.add(target); target = String(id); answered.add(String(id)) } // a followed session keeps its turn
@@ -228,7 +232,7 @@ process.on('message', (m) => {
   if (m && m.sweep === true) { sweepDue = true; kick(); return }
   if (!m || !Array.isArray(m.kick)) return
   for (const id of m.kick) kicked.add(String(id))
-  once = {}; gcDone = false; lastAt = Date.now()
+  once = {}; gcDone = false; sealing = false; lastAt = Date.now()
   kick()
 })
 kick() // the first idle period: the sweep
