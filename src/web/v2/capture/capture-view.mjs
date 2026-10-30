@@ -71,7 +71,7 @@ const H = (h) => ({ h })
 const diagCopy = (obj) => copyBtn(redactUrlCredentials(JSON.stringify(obj, null, 2)), 'Copy diagnostics')
 const commandsHtml = (pairs) => pairs.map(([k, v]) => [k, M(v)])
 // a condition's words: the CLI's failure table when the condition is a (where, code) failure (negative-cache), else the kind's own
-const kindWord = (k) => failureWord(k && k.where, k && (k.code ?? k.kind)) || (k && has(CONDITION_KIND, k.kind) ? CONDITION_KIND[k.kind] : null)
+const kindWord = (k) => failureWord(k && k.where, k && (k.code ?? k.kind), '', k && k.cause) || (k && has(CONDITION_KIND, k.kind) ? CONDITION_KIND[k.kind] : null)
 // the topology fields this page shows (1.9 §技术细节) — the copy carries these and nothing else (an unknown field never leaks, D49)
 const TOPO_KEYS = ['at', 'captured', 'reason', 'routing', 'findings', 'notes', 'running']
 const topoUsed = (t) => {

@@ -65,3 +65,11 @@ test('no board label table keys a code the CLI\'s catalog words', async () => {
   }
   assert.deepEqual(hits, [])
 })
+
+// a negative-cache record carries its cause (the engine's: trocar's certificate refused, the upstream's certificate unverified, the upstream
+// handshake unfinished): the cause chooses the sentence, so one cause is never worded as another, nor as the bare code a group of mixed causes gets
+test('a negative-cache cause chooses its own sentence', () => {
+  const causes = ['client-rejected-leaf', 'upstream-cert', 'upstream-handshake']
+  const words = causes.map((c) => failureWord('engine', 'negative-cache', '', c))
+  assert.equal(new Set([...words, failureWord('engine', 'negative-cache')]).size, causes.length + 1, JSON.stringify(words))
+})

@@ -70,7 +70,11 @@ export const FAILURE_WORDS = Object.freeze({
   'engine-error': 'the engine failed',
   'flow-write-failed': 'a connection log line could not be written',
   'trust-store-error': "the engine's certificate store failed",
-  'negative-cache': "a program refused trocar's certificate, so its traffic to that host is passed on unread",
+  // a negative-cache record names its cause; a group folds every cause, so the bare code's word names none
+  'negative-cache': "a TLS failure made trocar stop decrypting a program's traffic to one host, so that traffic is passed on unread",
+  'negative-cache/client-rejected-leaf': "a program refused trocar's certificate, so its traffic to that host is passed on unread",
+  'negative-cache/upstream-cert': "a host's certificate did not verify with the program's own trust, so its traffic to that host is passed on unread",
+  'negative-cache/upstream-handshake': "the handshake with a host did not finish, so a program's traffic to that host is passed on unread",
   'trust-rejected': "a program refused trocar's certificate under TLS, so that host is not captured",
   'client-rejected-leaf': "a connection whose program refused trocar's certificate",
   'upstream-slow': 'the upstream was slow',
@@ -83,7 +87,7 @@ export const FAILURE_WORDS = Object.freeze({
   'upstream-header-ignored': 'a routing header from a program that should not send one was ignored',
   untrusted: 'a connection from a program that does not trust trocar yet; passed on unread',
   untracked: 'a connection from a program trocar does not follow; passed on unread',
-  'upstream-cert': "the upstream's certificate could not be read",
+  'upstream-cert': "the upstream's certificate did not verify with the program's own trust",
   'upstream-handshake': 'the handshake with the upstream did not finish',
   h2: 'an HTTP/2 connection could not be decrypted',
   'malformed-hello': "a program's handshake message could not be read",
@@ -160,10 +164,10 @@ export const FAILURE_WORDS = Object.freeze({
 })
 
 /** The sentence of a failure `code` (under `where`, when given), or null when neither this table nor statusReason knows it (an errno, an unknown code). */
-export function failureWord(where, code, harness = '') {
+export function failureWord(where, code, harness = '', cause = null) {
   if (!code) return null
   const k = (key) => (Object.hasOwn(FAILURE_WORDS, key) ? FAILURE_WORDS[key] : null)
-  const r = (where && k(`${where}/${code}`)) || k(code)
+  const r = (cause && k(`${code}/${cause}`)) || (where && k(`${where}/${code}`)) || k(code)
   if (r) return r
   const s = statusReason(code, { harness })
   return (s && s.text) || null
