@@ -10,8 +10,52 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { contractWorld, daemonFor, placesOf } from '../helpers/contract-world.mjs'
+import { turnOnModel } from '../../src/collector/model-on.mjs'
+import { renderHook } from '../../src/collector/harness/templates/index.mjs'
+import { renderWrapper as darwinWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
+import { renderWrapper as win32Wrapper } from '../../src/collector/arch/win32/wrapper.mjs'
+import { runInstallCli } from '../../src/cli/install.mjs'
+import { runStatusCli } from '../../src/cli/status.mjs'
+import { runDoctor } from '../../src/cli/doctor.mjs'
+import { VERBS } from '../../src/control/board.mjs'
+import { fakeIo } from './fixtures/on-ctx.mjs'
+import { SOCK } from './fixtures/status-ctx.mjs'
+import { absentSpawn } from '../helpers/no-real-os.mjs'
+
+const PE = Buffer.from('MZ\x90\x00 a native program', 'latin1') // the contract world's own native-program bytes, so a second install writes what the first did
+const kitOf = (os) => (os === 'win32' ? { renderWrapper: win32Wrapper, compile: (src) => Buffer.concat([PE, Buffer.from(String(src.length))]) } : { renderWrapper: darwinWrapper })
+const statePorts = (w) => Object.keys((readJson(path.join(w.dir, 'state.json')) || { harnesses: {} }).harnesses)
+/** The deps status, doctor and the board read with: the world's daemon answers GET /status for every id state.json holds (B's reply carries the X),
+ *  the process table is empty, and nothing outside HOME is seen (status-forms-absent.test.mjs). */
+function readDeps(w) {
+  const r = { pid: 99, doors: {}, harnesses: Object.fromEntries(statePorts(w).map((h) => [h, { desired: 'on', attached: true }])), holders: null, agents: [], negatives: [], cert: { key: 'present', intermediate: 'ready', expires: '2026-12-22T09:00:02Z' }, engine: {} }
+  const fsx = { ...fs, existsSync: (p) => String(p).startsWith(w.home + path.sep) && fs.existsSync(p) }
+  return { platform: w.os, env: w.env, request: async (q) => (q.path === '/status' ? r : assert.fail(q.path)), socketPath: SOCK, procs: async () => [], spawn: absentSpawn, exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }), rootStore: w.store, user: 'alice', fs: fsx }
+}
+const cli = async (fn, argv, w) => { const io = fakeIo(); const exit = await fn(argv, { io, home: w.home, env: w.env, platform: w.os, deps: readDeps(w) }); return { exit, doc: JSON.parse(io.stdoutText()) } }
 
 const STEPS = [
+  { name: 'install', carriers: 'all', run: async (w) => {
+    const io = fakeIo()
+    // what the world's ctx sees (HOME and the apps placed on its fake machine), so the CLI judges the same forms present as the world's install did
+    const inside = (p) => String(p).startsWith(w.home + path.sep)
+    const fsx = { ...fs, existsSync: (p) => w.ctx.exists(p), readdirSync: (p, ...a) => (inside(p) ? fs.readdirSync(p, ...a) : w.ctx.readdir(p)) }
+    const deps = { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: kitOf(w.os), dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, fs: fsx }
+    const exit = await runInstallCli(['--json', '--yes'], { io, env: w.env, home: w.home, platform: w.os, deps })
+    return { exit, doc: JSON.parse(io.stdoutText()) }
+  } },
+  { name: 'on', carriers: 'all', run: async (w, xs) => {
+    // the X's door ports are held by the newer copy's engine: whatever `on` does, it must not move them
+    const ing = readJson(path.join(w.dir, 'ingress.json')) || { groupPorts: {} }
+    const theirs = new Set(Object.entries(ing.groupPorts).filter(([g]) => xs.some((x) => g === x || g.startsWith(`${x}:`))).map(([, p]) => p))
+    try {
+      const r = await turnOnModel({ os: w.os, home: w.home, env: w.env, ids: null, harnesses: w.harnesses, ctx: w.ctx, isFree: async (p) => !theirs.has(p), renderHook })
+      return { exit: r.exit, doc: r }
+    } catch (e) { return { exit: 70, doc: { error: String(e && e.message) } } }
+  } },
+  { name: 'status', carriers: 'all', run: (w) => cli(runStatusCli, ['--json'], w) },
+  { name: 'doctor', carriers: 'all', run: (w) => cli(runDoctor, ['--json'], w) },
+  { name: 'board', carriers: 'all', run: async (w) => { const r = await VERBS.status(null, { home: path.join(w.home, '.trocar'), deps: readDeps(w) }); return { exit: r.status, doc: r.doc } } },
   { name: 'off', carriers: 'all', run: async (w) => { const r = await w.cmd.off(['--json']); return { exit: r.exit, doc: JSON.parse(r.text) } } },
   { name: 'uninstall', carriers: 'manifest', run: async (w) => { const r = await w.cmd.uninstall(); return { exit: r.exit, doc: r.receipt } } },
 ]
@@ -96,7 +140,7 @@ function carriers(w, xs, which) {
 }
 
 process.chdir(tmpDir('trocar-pipes-')) // a win32 control endpoint is a pipe name, served as a socket path relative to the cwd (eighth.test.mjs)
-describe('CM39: off and uninstall walk only their own harness table', { concurrency: 1 }, () => {
+describe('CM39: every command walks only its own harness table', { concurrency: 1 }, () => {
   for (const os of ['darwin', 'win32']) {
     it(`${os}: a world carrying records of ids outside the table ends as the world without them, and those records stay`, async () => {
       const A = await world(os), B = await world(os)
@@ -106,7 +150,7 @@ describe('CM39: off and uninstall walk only their own harness table', { concurre
         assert.ok(xs.length > 0, 'no harness has manifest records to clone')
         for (const step of STEPS) {
           const fa0 = files(A.home), fb0 = files(B.home), x0 = carriers(B, xs, step.carriers)
-          const a = await step.run(A), b = await step.run(B)
+          const a = await step.run(A, []), b = await step.run(B, xs)
           const label = `${os} ${step.name}`
           assert.equal(b.exit, a.exit, `${label} I1: ${JSON.stringify(b.doc.problems || b.doc.error)}`)
           const text = JSON.stringify(b.doc)
