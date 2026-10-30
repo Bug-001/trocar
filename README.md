@@ -313,8 +313,8 @@ agent group, loopback only, no TUN, never the system proxy, nothing written into
   by trocar's signing helper; Windows: a non-exportable CNG key, in the TPM when there is one), and adds it as a
   **user-level** root — the one OS prompt (macOS asks for your login password, Windows asks yes / no). That alone covers
   Claude Code (Desktop included), Codex, Hermes, OpenCode and Kimi's VS Code extension. Where the root does not reach,
-  the certificate goes into what the agent itself reads: Z-Code's `network.caCertFile` (a bundle of Node's roots plus
-  trocar's), a wrapper in Kimi's install directory, DeepSeek `dsh`'s plugin, pi's extension, and Claude Code's settings
+  the certificate goes into what the agent itself reads: Z-Code's `network.caCertFile` (a bundle of Node's roots, the
+  CAs you added through `NODE_EXTRA_CA_CERTS`, `ZCODE_AGENT_CA_CERT` or the desktop CA setting, and trocar's), a wrapper in Kimi's install directory, DeepSeek `dsh`'s plugin, pi's extension, and Claude Code's settings
   only if you set `CLAUDE_CODE_CERT_STORE=bundled`. When you already point a setting at a certificate file of your own, trocar appends a
   marked block to that file and leaves the setting alone. Nothing goes into your login environment, nothing needs
   administrator rights, no launcher is added and your `PATH` is not changed. Each harness's carrier is in its
