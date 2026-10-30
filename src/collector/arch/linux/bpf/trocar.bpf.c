@@ -13,6 +13,10 @@
 //                 to each other even though the cgroup programs multi-attach at the shared root.
 //   engine_tgid = the engine process's tgid (the loader's getppid(), checked against --parent-pid).
 //                 Its own upstream dials are never steered, so there is no self-loop.
+//   pidns_ino   = 0 in the initial pid namespace, else the inode of the loader's (= the engine's) own.
+//
+// Every tgid on this side -- watch_map keys, engine_tgid, orig_dst.pid, event pids -- is numbered in
+// the engine's pid namespace, the way its /proc numbers them (spec 4.6 §pid 命名空间): cur_tgid().
 //
 //   connect4 / connect6 : for an owner, non-engine, watched, decrypt-eligible TCP connection,
 //                         rewrite the connect destination to the local engine, stashing the
@@ -51,6 +55,9 @@ char LICENSE[] SEC("license") = "Dual MIT/GPL";
  * const volatile -> a .rodata global the verifier treats as a known constant per load. */
 const volatile __u32 owner_uid = 0;
 const volatile __u32 engine_tgid = 0;
+const volatile __u32 pidns_ino = 0;
+
+#define TROCAR_PIDNS_LEVELS 32 /* MAX_PID_NS_LEVEL: pid namespaces nest at most this deep */
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -98,6 +105,28 @@ static __always_inline void count_drop(__u32 why)
 	__u64 *n = bpf_map_lookup_elem(&drops, &why);
 	if (n)
 		*n += 1; /* per-CPU slot: no other CPU writes it */
+}
+
+/* The current process's tgid as the engine's /proc numbers it, or 0 for a process outside the engine's pid
+ * namespace. In the initial namespace that is the kernel's own number. In a namespace of its own (a container)
+ * it is the number at that namespace's level of the leader's struct pid, the level found by the namespace's
+ * inode, so a process in a sandbox nested below it gets the number the engine sees too. With pidns_ino 0 the
+ * verifier drops the walk as dead code, so a kernel whose cgroup programs lack these helpers still loads. */
+static __always_inline __u32 cur_tgid(void)
+{
+	if (!pidns_ino)
+		return bpf_get_current_pid_tgid() >> 32;
+	struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+	struct pid *pid = BPF_CORE_READ(task, group_leader, thread_pid);
+	unsigned int level = BPF_CORE_READ(pid, level);
+	for (unsigned int i = 0; i < TROCAR_PIDNS_LEVELS && i <= level; i++) {
+		struct upid up;
+		if (bpf_core_read(&up, sizeof(up), &pid->numbers[i]))
+			return 0;
+		if (BPF_CORE_READ(up.ns, ns.inum) == pidns_ino)
+			return up.nr;
+	}
+	return 0;
 }
 
 static __always_inline struct trocar_config *get_config(void)
@@ -188,9 +217,9 @@ int trocar_connect4(struct bpf_sock_addr *ctx)
 	__u32 uid = bpf_get_current_uid_gid() & 0xffffffff;
 	if (uid != owner_uid)
 		return 1; /* another user's connection -> never touched (multi-user isolation) */
-	__u32 tgid = bpf_get_current_pid_tgid() >> 32;
-	if (tgid == engine_tgid)
-		return 1; /* the engine's own upstream dials -> never steered (no self-loop) */
+	__u32 tgid = cur_tgid();
+	if (!tgid || tgid == engine_tgid)
+		return 1; /* outside the engine's pid namespace, or the engine's own upstream dials -> never steered (no self-loop) */
 	struct trocar_verdict *v = bpf_map_lookup_elem(&watch_map, &tgid);
 	if (!v)
 		return 1; /* not an agent */
@@ -237,8 +266,8 @@ int trocar_connect6(struct bpf_sock_addr *ctx)
 	__u32 uid = bpf_get_current_uid_gid() & 0xffffffff;
 	if (uid != owner_uid)
 		return 1;
-	__u32 tgid = bpf_get_current_pid_tgid() >> 32;
-	if (tgid == engine_tgid)
+	__u32 tgid = cur_tgid();
+	if (!tgid || tgid == engine_tgid)
 		return 1;
 	struct trocar_verdict *v = bpf_map_lookup_elem(&watch_map, &tgid);
 	if (!v)
@@ -307,7 +336,9 @@ int trocar_sockops(struct bpf_sock_ops *skops)
 SEC("tp_btf/sched_process_exec")
 int BPF_PROG(trocar_exec, struct task_struct *p, pid_t old_pid, struct linux_binprm *bprm)
 {
-	__u32 tgid = bpf_get_current_pid_tgid() >> 32;
+	__u32 tgid = cur_tgid();
+	if (!tgid)
+		return 0; /* outside the engine's pid namespace: it has no number there */
 	bpf_map_delete_elem(&watch_map, &tgid); /* a reused tgid starts untrusted (owner-independent) */
 
 	if ((bpf_get_current_uid_gid() & 0xffffffff) != owner_uid)
@@ -334,10 +365,11 @@ SEC("tp_btf/sched_process_exit")
 int BPF_PROG(trocar_exit, struct task_struct *p)
 {
 	__u64 pt = bpf_get_current_pid_tgid();
-	__u32 tgid = pt >> 32;
-	__u32 pid = (__u32)pt;
-	if (pid != tgid)
-		return 0; /* only the thread-group leader's exit means the process is gone */
+	if ((__u32)pt != pt >> 32)
+		return 0; /* only the thread-group leader's exit means the process is gone (in any namespace's numbers) */
+	__u32 tgid = cur_tgid();
+	if (!tgid)
+		return 0;
 	bpf_map_delete_elem(&watch_map, &tgid);
 
 	if ((bpf_get_current_uid_gid() & 0xffffffff) != owner_uid)

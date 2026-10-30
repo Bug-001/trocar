@@ -22,7 +22,7 @@ import { codeId } from '../../src/version.mjs'
 const CODE = codeId() // D67⑤: the daemon records which code it runs, the one place that says it
 const osBundleRoots = osRootsFor('linux') // the Linux reader, through the one table
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
-import { createRedirectorClient } from '../../src/collector/arch/linux/redirector-client.mjs'
+import { createRedirectorClient, REDIRECTOR_PROTO } from '../../src/collector/arch/linux/redirector-client.mjs'
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
@@ -461,13 +461,13 @@ test('daemon: a helper death is degraded and on reports why; a protocol mismatch
     const failures = statusFailures(await req(s.sock, 'GET', '/status')).map((f) => f.event)
     assert.ok(failures.includes('helper-down') && failures.includes('attach-failed'), `status reports both (D38): ${failures}`)
   } finally { await d.stop() }
-  const mis = fakeArch(p, { TROCAR_FAKE_PROTO: '3' })
+  const mis = fakeArch(p, { TROCAR_FAKE_PROTO: String(REDIRECTOR_PROTO + 1) })
   const d2 = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: mis.arch, harnesses: [cc] })
   try {
     const on = await req(s.sock, 'POST', '/on', {})
     assert.deepEqual([on.actual, on.helper.ok], ['off', false])
-    assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && /protocol 3/.test(f.reason)), 'every failure record carries reason (D38)')
-    assert.ok(flowsOf(s).some((f) => f.event === 'helper-version-mismatch' && /speaks protocol 3, this daemon expects 2; run "sudo trocar setup-helper"/.test(f.reason)))
+    assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && f.reason), 'every failure record carries reason (D38)')
+    assert.ok(flowsOf(s).some((f) => f.event === 'helper-version-mismatch' && f.got === REDIRECTOR_PROTO + 1 && f.expected === REDIRECTOR_PROTO && f.reason))
   } finally { await d2.stop(); p.done(); s.done() }
 })
 
