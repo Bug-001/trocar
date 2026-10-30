@@ -11,6 +11,7 @@ test('unit: absolute quoted ExecStart, restart on failure, no capability-strippi
   const t = unitText({ node: '/usr/bin/node', script: '/opt/my "trocar"/bin/trocar.mjs' })
   assert.match(t, /^ExecStart="\/usr\/bin\/node" "\/opt\/my \\"trocar\\"\/bin\/trocar\.mjs" daemon$/m)
   assert.match(t, /^Restart=on-failure$/m)
+  assert.match(t, /^KillMode=mixed$/m, 'a stop signals the daemon alone; it closes its helper itself (4.6 F3(h))')
   assert.match(t, /^WantedBy=default\.target$/m)
   assert.doesNotMatch(t, /NoNewPrivileges|CapabilityBoundingSet/)
   assert.doesNotMatch(t, /^Environment=/m, 'nothing to carry, no Environment line')
