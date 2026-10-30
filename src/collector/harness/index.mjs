@@ -100,7 +100,7 @@ function proxyModeProblems(pm) {
   for (const [id, c] of Object.entries(certs)) {
     const at = `certs.${id}`
     oneOf(c.kind, PM.cert, `${at}.kind`)
-    if (c.kind === 'config-key') { loc(c.file, `${at}.file`, true); oneOf(c.format, PM.format, `${at}.format`); oneOf(c.semantics, PM.semantics, `${at}.semantics`); cond(c.when, `${at}.when`) }
+    if (c.kind === 'config-key') { loc(c.file, `${at}.file`, true); oneOf(c.format, PM.format, `${at}.format`); oneOf(c.semantics, PM.semantics, `${at}.semantics`); cond(c.when, `${at}.when`); if (c.merges !== undefined) { if (c.semantics !== 'replace' || !Array.isArray(c.merges)) say('shape', `${at}.merges is a list, on a replace key only`); else c.merges.forEach((s, i) => src(s, `${at}.merges[${i}]`)) } }
     if (c.kind === 'wrapper') { loc(c.binDir, `${at}.binDir`, true); oneOf(c.layout, PM.layout, `${at}.layout`); if (!nonEmpty(c.command) || !nonEmpty(c.certVar)) say('shape', `${at} needs command and certVar`) }
     if (c.kind === 'plugin') { loc(c.dir, `${at}.dir`, true); if (!(Object.hasOwn(TEMPLATES, String(c.template)) && TEMPLATES[c.template].addsRoot)) say('shape', `${at}.template names no hook that adds the trocar root in process (P11 rule 4)`); if (c.loader !== undefined) { if (!obj(c.loader)) say('shape', `${at}.loader is not an object`); else { loc(c.loader.file, `${at}.loader.file`, true); if (c.loader.format !== 'yaml') say('kind', `${at}.loader.format is ${JSON.stringify(c.loader.format)}, not yaml (the one format with a row edit)`) } } }
   }

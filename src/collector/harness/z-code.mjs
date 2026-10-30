@@ -140,6 +140,7 @@ const proxy = {
 // `zcode` + zcode.cjs name above). Blockers (ruling ⑩): a user proxy in the desktop's v2 setting.json, ZCODE_HTTP_PROXY, ZCODE_AGENT_CA_CERT.
 const CLI_CONFIG = { base: 'home', path: '.zcode/cli/config.json' }
 const CA_KEY = { file: CLI_CONFIG, format: 'jsonc', keys: ['network', 'caCertFile'] }
+const DESKTOP = { base: 'home', env: 'ZCODE_DESKTOP_HOME_DIR', path: '.zcode/v2/setting.json' }
 const APP = perOs({ darwin: { base: 'abs', path: '/Applications/ZCode.app' }, win32: { base: 'localAppData', path: 'Programs/ZCode' } })
 const form = (id, present, verified = { darwin: true, win32: true }) => ({ id, os: ['darwin', 'win32'], route: 'cli-config', cert: 'bundle', trust: 'node', present, verified })
 const proxyMode = {
@@ -153,14 +154,15 @@ const proxyMode = {
     'cli-config': { kind: 'json-key', file: CLI_CONFIG, format: 'jsonc', proxyKeys: [['network', 'httpProxy']], value: 'door-url', rereads: true, absent: 'create', takesEffect: 'takes effect for your next session; no restart needed' },
   },
   certs: {
-    bundle: { kind: 'config-key', ...CA_KEY, semantics: 'replace' },
+    // the CAs the key makes ineffective, carried into the bundle (lab: a private-CA host was unreachable, on and off, without them)
+    bundle: { kind: 'config-key', ...CA_KEY, semantics: 'replace', merges: [{ env: 'NODE_EXTRA_CA_CERTS' }, { env: 'ZCODE_AGENT_CA_CERT' }, { file: DESKTOP, format: 'json', keys: ['httpProxyCaCertPath'] }] },
   },
   trusts: {
     node: { base: 'node', sources: [{ from: CA_KEY, semantics: 'replace', required: true }] },
   },
   userCertFiles: [CA_KEY],
   blockers: [
-    { at: { file: { base: 'home', env: 'ZCODE_DESKTOP_HOME_DIR', path: '.zcode/v2/setting.json' }, format: 'json', keys: ['httpProxy'] }, forms: ['z-code.desktop'] },
+    { at: { file: DESKTOP, format: 'json', keys: ['httpProxy'] }, forms: ['z-code.desktop'] },
     { at: { env: 'ZCODE_HTTP_PROXY' } },
     { at: { env: 'ZCODE_AGENT_CA_CERT' } },
   ],

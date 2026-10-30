@@ -24,6 +24,7 @@ import { readAgentList } from '../off/identity.mjs'
 import { unitedLiveness, daemonEnv } from './install.mjs'
 import { CODE, EVENT } from './core/codes.mjs'
 import { runEventWriter } from '../off/events.mjs'
+import { certsOf, composeBundle } from '../off/pem.mjs'
 
 /** The OSes the collector model (4.11) runs on — the one list `install`, `on`, `uninstall` and the arch backends ask. */
 export const MODEL_OS = Object.freeze(['darwin', 'win32'])
@@ -224,9 +225,9 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         const file = resolveLoc(c.file, ctx)[0]
         if (at.set && !(m.entries.some((e) => e.kind === 'json-key' && e.phase === 'install' && e.path === file && JSON.stringify(e.keys) === JSON.stringify(c.keys)))) return { state: 'rule-u' }
         if (inEnv) return { state: 'rule-u' }
-        if (c.semantics === 'replace') { // CM9: Node's own roots plus the trocar root, no system roots
+        if (c.semantics === 'replace') { // CM9: Node's own roots, the user CAs the key makes ineffective, the trocar root; no system roots
           const bundle = path.join(dir, 'ca', `bundle-${desc.name}.pem`)
-          owned(bundle, 'bundle', desc.name, `${[...nodeRoots, rootPem].map((p) => p.trim()).join('\n')}\n`, 0o644)
+          owned(bundle, 'bundle', desc.name, composeBundle({ nodeRoots, userCerts: (c.merges || []).flatMap((s) => userCertsOf(desc, s)), caPem: rootPem }).data, 0o644)
           jsonKey(desc, file, c.keys, bundle)
         } else jsonKey(desc, file, c.keys, ca.pem)
         return { state: 'placed' }
@@ -252,6 +253,22 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       }
       return { state: 'skipped', code: 'not-routed', why: `no carrier kind ${c.kind}` }
     } catch (e) { problems.push(`${desc.name}: ${errText(e)}`); return { state: 'skipped', code: e.code || 'install-error', why: errText(e) } }
+  }
+
+  // the CERTIFICATE blocks of the files a `merges` source names (4.11 P4); what is not carried over is said, never silent (D38)
+  function userCertsOf(desc, src) {
+    const r = readSrc(src, ctx)
+    if (r.error) { notes.push(`${desc.name}: ${r.where}: ${r.error}; the CA it names is not in trocar's bundle`); return [] }
+    return (r.set ? r.all : []).flatMap(({ value, where }) => {
+      const file = typeof value === 'string' ? value.trim() : ''
+      if (!path.isAbsolute(file)) { notes.push(`${desc.name}: ${where} (${file || typeof value}) is not an absolute path; its certificates are not in trocar's bundle`); return [] }
+      if (file.startsWith(dir + path.sep)) return []
+      let buf
+      try { buf = fs.readFileSync(file) } catch (e) { notes.push(`${desc.name}: ${file} (${where}) is unreadable (${e.code || errText(e)}); its certificates are not in trocar's bundle`); return [] }
+      const got = certsOf(file, buf)
+      for (const k of got.skipped) notes.push(`${desc.name}: ${file}: ${k.type ? `block ${k.index} (${k.type})` : 'the file'} is not carried into trocar's bundle: ${k.why}`)
+      return got.certs
+    })
   }
 
   // rule U: a setting that already names a certificate file → a marked block at its end, only in the user's own file
