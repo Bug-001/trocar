@@ -21,6 +21,7 @@ import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
+import { runQuery } from '../../src/query/named/index.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
 import { lineFile, loadSidecar } from '../../src/query/line-file.mjs'
 import { REDUCE_V } from '../../src/view/reduce.mjs'
@@ -726,4 +727,112 @@ test('a worker SIGKILLed after several checkpoint intervals of a fold leaves a r
   assert.equal(killedAt, 'mid-fold', 'the worker was killed before its fold ended')
   const st = stateOf(log)
   assert.ok(st && st.bytes > 0, 'the fold log\'s sidecar holds a reduction state the next worker resumes from')
+})
+
+// A segment of other traffic (no model call, no session) holding `per` records: the bulk of a cold corpus.
+const filler = (home, g, per = 10_000) => {
+  const lines = []
+  for (let i = 0; i < per; i++) lines.push(JSON.stringify({ ts: '2026-10-24T09:00:00.000Z', endpoint: `/v1/other/${i}`, method: 'GET', req_headers: { accept: '*/*' }, req_body: null,
+    resp: { status: 200, kind: 'json', body: { ok: true } }, id: `o_${g}_${i}`, ts_request: '2026-10-24T09:00:00.000Z', is_llm_call: false, capture: 'transparent',
+    host: 'other.example.test', traffic_class: 'other', proc: { pid: 9, exe: '/x/kimi', agent: 'kimi' } }))
+  writeSegmentLines(home, `20261024T09${String(Math.floor(g / 60)).padStart(2, '0')}${String(g % 60).padStart(2, '0')}Z`, lines)
+}
+
+// 3.5 §后台抽取与归约 · #32: the segment index read before the first slice is background work too. A worker forked by a kick reads the
+// whole index to find the kicked call's session; on a cold corpus (no index yet: the read scans every raw line of every segment) that
+// read outlasts idleMs, and the worker reports it per segment and chunk, so the idle clock does not end it before the fold. Fork and
+// module load report nothing, so idleMs outlasts them, and the worker's own idle period (worker.mjs IDLE_SLICE_MS) as QUERY_IDLE_MS
+// does. Axis: the read's length, against idleMs. The corpus is sized on this machine: the read of a few filler segments, timed in
+// process on a throwaway home, sets how many segments make the read last READS times idleMs. No fixed window: the wait lasts while the
+// worker reports and fails after STALL ms without.
+test('kick: a segment index read longer than idleMs before the first slice is reported, and the kicked session is folded to its frontier (3.5 #32)', { timeout: 600_000 }, async (t) => {
+  const { recordId } = await import('../../src/collector/core/record/segments.mjs')
+  const IDLE = 3_000, STALL = 30_000, READS = 2
+  // calibration: a first read pays the one-off costs, then the read of CAL more segments is the cost per segment
+  const cal = rawHome('trocar-qsvc-cal-'), CAL = 3
+  filler(cal, 0)
+  await indexRows({ home: cal, errors: [] })
+  for (let g = 1; g <= CAL; g++) filler(cal, g)
+  const c0 = performance.now()
+  await indexRows({ home: cal, errors: [] })
+  const perSegment = (performance.now() - c0) / CAL, FILLER = Math.max(2, Math.ceil(READS * IDLE / perSegment))
+  const home = rawHome('trocar-qsvc-')
+  // the corpus: FILLER cold filler segments, then one segment with the kicked session's two calls
+  for (let g = 0; g < FILLER; g++) filler(home, g)
+  const segment = '20261024T110000Z'
+  const line = (n) => JSON.stringify({ ts: `2026-10-24T11:00:0${n}.000Z`, endpoint: '/v1/chat/completions', method: 'POST',
+    req_headers: { 'content-type': 'application/json' }, req_body: JSON.stringify({ model: 'm', prompt_cache_key: 'read-kicked-1', messages: [{ role: 'user', content: `ask ${n}` }] }),
+    resp: { status: 200, kind: 'json', body: { choices: [{ message: { role: 'assistant', content: `answer ${n}` } }] } },
+    id: `req_${n}`, ts_request: `2026-10-24T11:00:0${n}.000Z`, is_llm_call: true, capture: 'transparent', host: 'api.example.test', traffic_class: 'llm',
+    proc: { pid: 9, exe: '/x/kimi', agent: 'kimi' } })
+  writeSegmentLines(home, segment, [line(1), line(2)])
+  const last = recordId(segment, 2), log = foldLogFile(home, 'read-kicked-1'), kids = [], said = []
+  let reports = 0
+  const svc = createQueryService({ home, idleMs: IDLE, failure: (w, e) => said.push(e.code),
+    fork: (h) => { const c = workerFork(h); c.on('message', (m) => { if (m && m.progress === true) reports++ }); kids.push(c); return c } })
+  const gone = (c) => c.exitCode !== null || c.signalCode !== null
+  try {
+    const k0 = Date.now()
+    let firstFold = null, seen = reports, at = Date.now()
+    svc.kick([last])
+    while (!(kids.length && kids.every(gone))) {
+      if (firstFold == null && fs.existsSync(log)) firstFold = Date.now() - k0
+      if (reports !== seen) { seen = reports; at = Date.now() } else if (Date.now() - at > STALL) throw new Error(`the kicked worker: no progress for ${STALL} ms`)
+      await new Promise((d) => setTimeout(d, 20))
+    }
+    t.diagnostic(JSON.stringify({ idleMs: IDLE, perSegment: Math.round(perSegment), segments: FILLER, firstFold, reports, workers: kids.length }))
+    assert.equal(kids.length, 1, 'one worker read the index and folded the session')
+    assert.equal(lastFrontier(log)?.f, last, 'the worker left with the kicked session folded to its frontier')
+    assert.deepEqual(said, [], 'an idle exit is not a query-failed')
+    assert.ok(firstFold != null && firstFold > IDLE, `the read before the first slice outlasted idleMs (${firstFold} ms > ${IDLE} ms): else the calibration under-sized the corpus and this case shows nothing`)
+  } finally { svc.stop() }
+})
+
+// 3.5 §后台抽取与归约: a request's own segment index read is reported as the read before the first slice is, after every segment and
+// every chunk a cold segment's scan reads; the daemon cuts only a SILENT worker, so a long read (a cold index: the first read after an
+// index format change scans every segment again) is answered, not cut as wedged. Axis: every name whose answer reads the whole index.
+// No timing: the reports are counted, not timed.
+const WHOLE_INDEX = ['segments', 'classes', 'sessions', 'overview', 'calls', 'traffic']
+test('every name that reads the segment index on a request reports its read, at least once per segment (block: per ref) (3.5 #32)', async () => {
+  const S = 3, home = rawHome('trocar-qsvc-')
+  for (let g = 0; g < S; g++) filler(home, g, 50)
+  for (const name of WHOLE_INDEX) {
+    let n = 0
+    const doc = await runQuery(name, {}, { home, progress: () => n++ })
+    assert.deepEqual(doc.errors, [], name)
+    assert.ok(n >= S, `${name}: ${n} reports for ${S} segments`)
+  }
+  // block reads the segment of each ref: one ref into each segment, read on a cold index
+  fs.rmSync(path.join(home, 'index'), { recursive: true, force: true })
+  let n = 0
+  const refs = Array.from({ length: S }, (_, g) => `20261024T0900${String(g).padStart(2, '0')}Z:1`)
+  await runQuery('block', { ref: refs }, { home, progress: () => n++ })
+  assert.ok(n >= S, `block: ${n} reports for ${S} refs`)
+})
+
+// The same reports reach the daemon from a real worker (the IPC seam): a request that reads a cold index sends progress while it reads.
+// The worker is stopped as soon as it answers (before its first idle period, so no background work of its own reports), and the
+// messages are counted until its channels close: the IPC channel and stdout are two pipes, so arrival order says nothing.
+test('relay: a request reading a cold segment index sends progress on the IPC channel (3.5 #32)', async () => {
+  const home = rawHome('trocar-qsvc-')
+  for (let g = 0; g < 3; g++) filler(home, g, 50)
+  for (const name of WHOLE_INDEX) {
+    fs.rmSync(path.join(home, 'index'), { recursive: true, force: true })
+    // Counted at emit, not by a listener: stop() strips every listener off the child, and a progress message read after the
+    // response (two pipes, either may be read first) must still count.
+    let reports = 0, closed = false, kid = null
+    const svc = createQueryService({ home, fork: (h) => {
+      kid = workerFork(h)
+      const emit = kid.emit.bind(kid)
+      kid.emit = (ev, ...a) => { if (ev === 'message' && a[0] && a[0].progress === true) reports++; if (ev === 'close') closed = true; return emit(ev, ...a) }
+      return kid
+    } })
+    const res = recorder()
+    try {
+      await within(svc.relay({ name, params: {}, res }), 60_000, `${name}: the relay settles`)
+    } finally { svc.stop() }
+    if (!closed) await within(once(kid, 'close'), 30_000, `${name}: the worker closes`)
+    assert.equal(res.status, 200, name)
+    assert.ok(reports >= 1, `${name}: progress while it read (${reports})`)
+  }
 })

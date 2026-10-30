@@ -209,12 +209,12 @@ function sealedReader(file, fs) {
 }
 
 /**
- * readRecord({home, segment, lineNo}) → the raw envelope of that record (decoded bodies, nothing else
+ * readRecord({home, segment, lineNo, progress}) → the raw envelope of that record (decoded bodies, nothing else
  * derived), or null when the segment holds no such line. The segment index says where the record is, so
- * neither the segment nor its index is scanned for it.
+ * neither the segment nor its index is scanned for it. `progress` goes to that index read (a cold scan reports per chunk).
  */
-export async function readRecord({ home = trocarHome(), fs = nodeFs, segment, lineNo } = {}) {
-  const { records } = await segmentIndex({ home, segment, fs });
+export async function readRecord({ home = trocarHome(), fs = nodeFs, segment, lineNo, progress = null } = {}) {
+  const { records } = await segmentIndex({ home, segment, fs, progress });
   const row = records.find((r) => r.id === recordId(segment, lineNo));
   if (!row) return null;
   const file = segmentFile({ home, fs, segment });

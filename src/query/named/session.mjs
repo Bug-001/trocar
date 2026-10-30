@@ -179,9 +179,9 @@ const keyOf = ({ fs, home, writer }, id) => `${fsTag(fs)}\n${home}\n${id}\n${wri
 
 // The segment index of THIS request, read once whether version() asked first (src/query/answers.mjs) or not; the worker's
 // background reads it through here too, once per kick (src/query/worker.mjs kickedSessions).
-export async function indexed({ home, fs, once }) {
+export async function indexed({ home, fs, once, progress }) {
   if (once && once.index) return once.index;
-  const errors = [], got = { rows: await indexRows({ home, fs, errors }), errors };
+  const errors = [], got = { rows: await indexRows({ home, fs, errors, progress }), errors };
   if (once) once.index = got;
   return got;
 }
