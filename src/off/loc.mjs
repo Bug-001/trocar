@@ -19,3 +19,12 @@ export function resolveLoc(loc, ctx) {
   const re = new RegExp(`^${l.glob.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`)
   return ctx.readdir(at).filter((n) => re.test(n)).sort().map((n) => join(at, n))
 }
+
+/** resolveLoc's ctx.dirs on this OS: `appSupport` is the per-user roaming app-data folder (Electron's appData: ~/Library/Application Support,
+ *  %APPDATA%), `localAppData` the local one (%LOCALAPPDATA%, none on macOS); each Windows one falls back to its default place under the home. One copy,
+ *  read by the collector's policies and by the marker undo. */
+export function dirsFor(os, home, env = process.env) {
+  if (os === 'darwin') return { appSupport: path.posix.join(home, 'Library', 'Application Support') }
+  if (os === 'win32') return { appSupport: env.APPDATA || path.win32.join(home, 'AppData', 'Roaming'), localAppData: env.LOCALAPPDATA || path.win32.join(home, 'AppData', 'Local') }
+  return {}
+}

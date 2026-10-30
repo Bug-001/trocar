@@ -9,7 +9,8 @@
 //   owned-file   a plugin or shim trocar wrote (its sentinel in it, or exactly trocar's own plugin manifest)
 // Nothing else is touched, and no byte of a file outside those marks changes. The result says `undone-by-marker` (the code `off` records and the
 // receipt shows, 1.6 R3). Not done here, said in the docs: a combined bundle (no manifest, so nobody can say who holds it — `uninstall` removes it with the
-// CA), and a harness at a home the default places do not name (CODEX_HOME …) — a `route` place follows its variable (XDG_CONFIG_HOME), as `on` did. Imports only node:* and src/off.
+// CA), and an install-phase entry at a home the default places do not name. A `route` place (what `on` writes on macOS / Windows) is resolved as `on`
+// resolved it: its variable (XDG_CONFIG_HOME, CODEX_HOME, HERMES_HOME) and the per-user folders (loc.mjs dirsFor) followed. Imports only node:* and src/off.
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { SENTINEL, restoreOffLines } from './text-edit.mjs'
@@ -20,24 +21,28 @@ import { backupsOf } from './backup.mjs'
 import { trocarHome } from './paths.mjs'
 import { CODE_OFF } from './names.mjs'
 import { decodeText, encodeText, CHARSETS, WHY_TEXT } from './text-codec.mjs'
-import { resolveLoc } from './loc.mjs'
+import { resolveLoc, dirsFor } from './loc.mjs'
 
 const RC_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin'] // where the Kimi installer's PATH line, and so trocar's, can be
 const PLUGIN_MANIFEST = '{"type":"module"}\n' // the anonymous package.json of trocar's dsh plugin directory (collector/harness/_plugins.mjs: ANONYMOUS_MODULE_MANIFEST)
 
-/** The routing plugins `on` writes on macOS / Windows (4.11 P5 plugin-file routes): the folder (a <loc>, loc.mjs) and the file name. The descriptor's route takes
- *  both from here, so the marker undo looks where `on` wrote — one copy of the place, and the copy trocar-off needs no collector tree to know it. */
-export const ROUTE_PLUGINS = Object.freeze({
+/** The class-1 routes `on` writes on macOS / Windows whose bytes carry trocar's sentinel (4.11 P5): a plugin-file route's folder (`dir`, a <loc>, loc.mjs)
+ *  and file `name`, a dotenv-block route's `file` (a <loc>). The descriptor's route takes its place from here, so the marker undo looks where `on`
+ *  wrote — one copy of the place, and the copy trocar-off needs no collector tree to know it. */
+const HERMES_ENV = { perOs: { darwin: { base: 'home', dir: '.hermes', env: 'HERMES_HOME', path: '.env' }, win32: { base: 'localAppData', dir: 'hermes', env: 'HERMES_HOME', path: '.env' } } }
+export const ROUTE_PLACES = Object.freeze({
   opencode: Object.freeze({ dir: Object.freeze({ base: 'home', dir: '.config', env: 'XDG_CONFIG_HOME', path: 'opencode/plugins' }), name: 'trocar.js' }),
+  codex: Object.freeze({ file: Object.freeze({ base: 'home', dir: '.codex', env: 'CODEX_HOME', path: '.env' }) }),
+  hermes: Object.freeze({ file: Object.freeze(HERMES_ENV) }),
 })
 
-/** Where each harness's entries are, relative to HOME (`route`: a ROUTE_PLUGINS place, resolved against the environment off runs in). `how` says what trocar's mark looks like there (see the header); `eachDir` + `file`: the file in
+/** Where each harness's entries are, relative to HOME (`route`: a ROUTE_PLACES place, resolved against the environment and per-user folders off runs in). `how` says what trocar's mark looks like there (see the header); `eachDir` + `file`: the file in
  *  every subdirectory of a directory (Hermes profiles). The plan of 1.6 / 4.6 §身份与信任 is the authority; a harness not listed here has no marker undo. */
 export const MARKER_PATHS = Object.freeze({
   'claude-code': [{ how: 'json-value', file: '.claude/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'] }],
-  codex: [{ how: 'block', file: '.codex/.env' }],
-  hermes: [{ how: 'block', file: '.hermes/.env' }, { how: 'block', eachDir: '.hermes/profiles', file: '.env' }],
-  opencode: [{ how: 'owned-file', file: '.config/opencode/plugins/trocar-ca.js' }, { how: 'owned-file', route: ROUTE_PLUGINS.opencode }],
+  codex: [{ how: 'block', file: '.codex/.env' }, { how: 'block', route: ROUTE_PLACES.codex }],
+  hermes: [{ how: 'block', file: '.hermes/.env' }, { how: 'block', route: ROUTE_PLACES.hermes }, { how: 'block', eachDir: '.hermes/profiles', file: '.env' }],
+  opencode: [{ how: 'owned-file', file: '.config/opencode/plugins/trocar-ca.js' }, { how: 'owned-file', route: ROUTE_PLACES.opencode }],
   'deepseek-dsh': [{ how: 'line', file: '.dsh/cordis.patch.yml', yaml: true }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/index.js' }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/package.json', exact: PLUGIN_MANIFEST }],
   'kimi-code': [...RC_FILES.map((f) => ({ how: 'line', file: f })), { how: 'owned-file', file: '.trocar/collector/bin/kimi' }],
   'z-code': [{ how: 'json-value', file: '.zcode/cli/config.json', keys: ['network', 'caCertFile'] }],
@@ -58,31 +63,37 @@ const markedIn = (b) => CHARSETS.some((cs) => b.includes(encodeText(SENTINEL, cs
 // the lines of `t` with their offsets: [{ at, line, next }] (next = the offset after the line's own newline)
 function linesOf(t) { const out = []; for (let at = markLen(t); at < t.length;) { const e = t.indexOf('\n', at); const end = e < 0 ? t.length : e; out.push({ at, line: t.slice(at, end), next: e < 0 ? t.length : e + 1 }); at = e < 0 ? t.length : e + 1 } return out }
 
-// trocar's block in a dotenv text: from its open line to its close line; a block whose close line the user deleted ends at the last variable line under
-// trocar's home that follows the open line directly. → [{ from, to }] offsets
+// trocar's block in a dotenv text: from its open line over its variable lines to its close line (whatever the values: a CA path under trocar's home, the
+// door's URL); a block whose close line the user deleted ends at the last variable line under trocar's home that follows the open line directly.
+// → [{ from, to }] offsets
+const isVar = (l) => /^[A-Za-z_]\w*=/.test(l)
+const isClose = (l) => l.trimEnd() === BLOCK_CLOSE // trimEnd: a CRLF file's lines end in \r
 function blocksIn(t, root) {
   const ls = linesOf(t), out = []
   for (let i = 0; i < ls.length; i++) {
     if (!ls[i].line.startsWith(BLOCK_OPEN)) continue
     let j = i + 1
-    while (j < ls.length && ls[j].line.trimEnd() !== BLOCK_CLOSE && /^[A-Za-z_]\w*=/.test(ls[j].line) && under(ls[j].line.slice(ls[j].line.indexOf('=') + 1).trimEnd(), root)) j++ // trimEnd: a CRLF file's lines end in \r
-    out.push({ from: ls[i].at, to: j < ls.length && ls[j].line.trimEnd() === BLOCK_CLOSE ? ls[j].next : (ls[j - 1] || ls[i]).next })
+    while (j < ls.length && !isClose(ls[j].line) && isVar(ls[j].line)) j++
+    if (j >= ls.length || !isClose(ls[j].line)) { j = i + 1; while (j < ls.length && isVar(ls[j].line) && under(ls[j].line.slice(ls[j].line.indexOf('=') + 1).trimEnd(), root)) j++ }
+    out.push({ from: ls[i].at, to: j < ls.length && isClose(ls[j].line) ? ls[j].next : (ls[j - 1] || ls[i]).next })
     i = j
   }
   return out
 }
 const lineHits = (t, root) => linesOf(t).filter((l) => l.line.includes(LINE_MARK) && l.line.includes(root + path.sep))
 
-// the candidate files of a spec for this home: [{ file, spec }]
+// the candidate files of a spec for this home, each file once (a route place and a fixed path can name the same one): [{ file, spec }]
 function candidates(home, harness, fs, env, platform) {
-  const out = []
+  const out = [], seen = new Set()
+  const ctx = { os: platform, home, env, dirs: dirsFor(platform, home, env) }
+  const push = (file, spec) => { if (!seen.has(file)) { seen.add(file); out.push({ file, spec }) } }
   for (const spec of MARKER_PATHS[harness]) {
-    if (spec.route) for (const d of resolveLoc(spec.route.dir, { os: platform, home, env })) out.push({ file: path.join(d, spec.route.name), spec })
+    if (spec.route) for (const at of spec.route.dir ? resolveLoc(spec.route.dir, ctx).map((d) => path.join(d, spec.route.name)) : resolveLoc(spec.route.file, ctx)) push(at, spec)
     else if (spec.eachDir) {
       let names = []
       try { names = fs.readdirSync(path.join(home, spec.eachDir)).sort() } catch { /* no such directory */ }
-      for (const n of names) out.push({ file: path.join(home, spec.eachDir, n, spec.file), spec })
-    } else out.push({ file: path.join(home, spec.file), spec })
+      for (const n of names) push(path.join(home, spec.eachDir, n, spec.file), spec)
+    } else push(path.join(home, spec.file), spec)
   }
   return out
 }
@@ -103,7 +114,7 @@ export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env,
       if (read.why) { if (markedIn(b)) add({ unreadable: read.why }); continue }
       const t = read.text
       if (spec.how === 'block') {
-        const off = restoreOffLines(t, null, foldsEnvNames(process.platform)) // the user's lines trocar put out of effect, read as the undo reads them
+        const off = restoreOffLines(t, null, foldsEnvNames(platform)) // the user's lines trocar put out of effect, read as the undo reads them
         const commented = off.restored + off.prior_left.length
         const blocks = blocksIn(t, root)
         if (blocks.length || commented) add({ blocks: blocks.length, commented })
