@@ -24,6 +24,7 @@ import { runOffCli } from '../../src/off/main.mjs'
 import { runUninstallCli } from '../../src/cli/uninstall.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { PID, BODY, reqOf, REPLY, agentOf, darwinExec, win32Io, freePort, through, statusDoc } from '../helpers/model-io.mjs'
+import { listenLocalhost } from '../helpers/localhost.mjs'
 
 // the plain segments' record lines (a restart's start seals the earlier segment: a sealed file holds no line that is new)
 const recordsOf = (raw) => (fs.existsSync(raw) ? fs.readdirSync(raw) : []).filter((n) => n.endsWith('.ndjson')).flatMap((n) => fs.readFileSync(path.join(raw, n), 'utf8').split('\n').filter(Boolean))
@@ -36,8 +37,7 @@ for (const platform of ['darwin', 'win32']) {
     const rootPem = fs.readFileSync(path.join(w.dir, 'ca', 'trocar-ca.pem'), 'utf8')
     const mockCa = createCa({ commonName: 'e2e upstream CA' }), mockIssuer = createLeafIssuer(loadCa(mockCa))
     const mock = tls.createServer({ SNICallback: (s, cb) => cb(null, mockIssuer.secureContextFor(s)) }, (s) => { s.on('error', () => {}); let b = ''; s.on('data', (d) => { b += d; if (b.includes(BODY)) s.write(REPLY) }) })
-    await new Promise((r) => mock.listen(0, '127.0.0.1', r))
-    const target = `localhost:${mock.address().port}`
+    const target = `localhost:${await listenLocalhost(mock)}`
     const bundle = path.join(w.home, 'codex-ca.pem')
     fs.writeFileSync(bundle, rootPem + mockCa.certPem)
     const a = agentOf({ w, name: w.harnesses.find((h) => h.name === 'codex').processes.names[0].name, env: { SSL_CERT_FILE: bundle } })

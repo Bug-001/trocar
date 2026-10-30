@@ -35,7 +35,9 @@
 #include <linux/capability.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
+#include <sys/stat.h>
 #include <sys/statfs.h>
+#include <sys/wait.h>
 #include <sys/utsname.h>
 #include <arpa/inet.h>
 #include <bpf/libbpf.h>
@@ -51,8 +53,10 @@
  * warns) on a mismatch, so an old client talking to a new loader never wedges. Bump on any
  * wire-visible change (fields, op semantics).
  * 2 (D38): status carries `drops`; config / heartbeat / watch / unwatch answer ok:false with the errno when the map
- * write fails; attach failed carries the errno. */
-#define TROCAR_PROTO 2
+ * write fails; attach failed carries the errno.
+ * 3: every pid on the wire is numbered in the engine's pid namespace (4.6 §pid 命名空间); watch refuses a tgid outside the
+ * hooks' cgroup subtree. */
+#define TROCAR_PROTO 3
 
 /* Overridden by the Makefile (-DTROCAR_BUILD_HASH=...) so `ready` can report the exact build. */
 #ifndef TROCAR_BUILD_HASH
@@ -62,6 +66,10 @@
 #ifndef CAP_BPF
 #define CAP_BPF 39
 #endif
+
+/* The initial namespaces' inodes (PROC_PID_INIT_INO / PROC_USER_INIT_INO, include/linux/proc_ns.h): fixed kernel ABI. */
+#define PID_NS_INIT_INO 0xEFFFFFFCU
+#define USER_NS_INIT_INO 0xEFFFFFFDU
 
 /* Minimum kernel the loader will run on. Compile-time (no runtime surface); the test rig overrides it
  * with -DTROCAR_MIN_KMAJOR (above the running major) to prove the floor refusal on a kernel it
@@ -80,6 +88,10 @@ static struct bpf_link *cg_links[3]; /* connect4, connect6, sockops */
 static const char *cg_names[3] = { "connect4", "connect6", "sockops" };
 static struct trocar_config cur_cfg; /* userspace-authoritative mirror of config_map[0] */
 static __u32 g_parent_pid;           /* --parent-pid value (0 in --selftest) */
+static __u32 g_pidns_ino;            /* 0 in the initial pid namespace, else this one's inode (BPF rodata pidns_ino) */
+static char g_cg_root[512] = "/";    /* the root of the cgroup2 mount the hooks attach at, as /proc/<pid>/cgroup names it */
+static __u32 g_probe_tgid;           /* while self_check() drains the ring buffer: its child, whose exec it waits for */
+static int g_probe_seen;
 
 static void on_signal(int sig) { (void)sig; stop = 1; }
 
@@ -215,6 +227,10 @@ static int on_event(void *ctx, void *data, size_t sz)
 {
 	(void)ctx; (void)sz;
 	struct trocar_event *e = data;
+	if (g_probe_tgid) { /* before ready: nothing goes out, the daemon rescans /proc at every `on` */
+		if (e->type == TROCAR_EV_EXEC && e->tgid == g_probe_tgid) g_probe_seen = 1;
+		return 0;
+	}
 	if (e->type == TROCAR_EV_EXEC) {
 		char comm[64], fn[256], cesc[160], fesc[600];
 		snprintf(comm, sizeof(comm), "%.*s", TROCAR_COMM_LEN, e->comm);
@@ -314,25 +330,60 @@ static int kernel_tier(unsigned *maj_out, unsigned *min_out)
 	return 0;
 }
 
-/* The real uid of a tgid, read from /proc/<tgid>/status (the first field of the Uid: line), or
- * (uid_t)-1 if it can't be read. */
-static uid_t proc_real_uid(__u32 tgid)
+/* The line of /proc/<who>/<file> that starts with `key`, past the key, into out; 0 when there is none. */
+static int proc_line(const char *who, const char *file, const char *key, char *out, size_t n)
 {
 	char path[64];
-	snprintf(path, sizeof(path), "/proc/%u/status", tgid);
+	snprintf(path, sizeof(path), "/proc/%s/%s", who, file);
 	FILE *f = fopen(path, "r");
-	if (!f) return (uid_t)-1;
-	char line[256];
-	uid_t ruid = (uid_t)-1;
-	while (fgets(line, sizeof(line), f)) {
-		if (strncmp(line, "Uid:", 4) == 0) {
-			unsigned long r = 0;
-			if (sscanf(line + 4, "%lu", &r) == 1) ruid = (uid_t)r;
-			break;
-		}
+	if (!f) return 0;
+	int found = 0;
+	size_t k = strlen(key);
+	while (!found && fgets(out, (int)n, f)) {
+		if (strncmp(out, key, k)) continue;
+		memmove(out, out + k, strlen(out + k) + 1);
+		out[strcspn(out, "\n")] = 0;
+		found = 1;
 	}
 	fclose(f);
-	return ruid;
+	return found;
+}
+
+/* The real uid of a tgid (the first field of its status Uid: line), or (uid_t)-1 if it can't be read. */
+static uid_t proc_real_uid(__u32 tgid)
+{
+	char who[16], line[256];
+	unsigned long r = 0;
+	snprintf(who, sizeof(who), "%u", tgid);
+	if (!proc_line(who, "status", "Uid:", line, sizeof(line)) || sscanf(line, "%lu", &r) != 1) return (uid_t)-1;
+	return (uid_t)r;
+}
+
+/* Is p the cgroup path `root` or below it? */
+static int under(const char *p, const char *root)
+{
+	size_t n = strlen(root);
+	return !strncmp(p, root, n) && (p[n] == 0 || p[n] == '/');
+}
+/* How many /.. a cgroup path starts with: how far above this cgroup namespace's root it begins. */
+static int ups(const char *p)
+{
+	int k = 0;
+	for (; under(p, "/.."); p += 3) k++;
+	return k;
+}
+/* Does the tgid's cgroup lie under the hooks' attach point? Both paths are as this cgroup namespace names them. In a
+ * private one /sys/fs/cgroup is only that subtree, and a process outside it (/..) never passes the hooks (4.6 §pid
+ * 命名空间). A mount root that is this namespace's root or above it (/, /.., /../..) holds every path that starts no
+ * higher than it. */
+static int proc_under_hooks(__u32 tgid)
+{
+	char who[16], p[600];
+	snprintf(who, sizeof(who), "%u", tgid);
+	if (!proc_line(who, "cgroup", "0::", p, sizeof(p))) return 0;
+	int k = ups(g_cg_root);
+	const char *rest = g_cg_root + 3 * k;
+	return (!*rest || !strcmp(rest, "/")) ? ups(p) <= k : under(p, g_cg_root);
 }
 
 /* The `drops` counters summed over the CPUs, as a JSON object by reason (trocar.h TROCAR_DROP_*), or null when they
@@ -437,6 +488,7 @@ static void dispatch(const char *line)
 		 * owner_uid filter (D36). */
 		uid_t ruid = proc_real_uid(tgid);
 		if (ruid != getuid()) { emitf("{\"id\":%lld,\"ok\":false,\"error\":\"tgid not owned by this user\"}", id); return; }
+		if (!proc_under_hooks(tgid)) { emitf("{\"id\":%lld,\"ok\":false,\"error\":\"tgid runs outside the cgroup tree the hooks are attached to (%s): its connections never pass them\"}", id, CGROUP_ROOT); return; }
 		long long d = 0; json_num(line, "decrypt", &d);
 		struct trocar_verdict ver = { .decrypt = d ? 1 : 0 };
 		reply_rc(id, bpf_map__update_elem(skel->maps.watch_map, &tgid, sizeof(tgid), &ver, sizeof(ver), BPF_ANY), "watch map update");
@@ -469,6 +521,7 @@ static int load_and_prepare(void)
 	if (!skel) return -1;
 	skel->rodata->owner_uid = getuid();     /* only this uid is ever steered/reported */
 	skel->rodata->engine_tgid = g_parent_pid; /* the engine's own dials are never steered */
+	skel->rodata->pidns_ino = g_pidns_ino;    /* every tgid in the engine's numbers */
 	if (trocar__load(skel)) { trocar__destroy(skel); skel = NULL; return -1; }
 	/* tracepoints stay attached across on/off (spec §开关语义: exec/exit 跟踪不摘) */
 	if (!bpf_program__attach(skel->progs.trocar_exec)) return -1;
@@ -510,6 +563,82 @@ static int check_environment(void)
 		return -1;
 	}
 	return 0;
+}
+
+/* 4.6 §命名空间前提: the kernel side can number processes the way the engine's /proc does. 0, or -1 having said why on
+ * stderr. Sets g_pidns_ino and g_cg_root. */
+static int check_namespaces(void)
+{
+	struct stat st;
+	char line[1024];
+	unsigned maj = 0, min = 0;
+	kernel_tier(&maj, &min);
+	if (stat("/proc/self/ns/user", &st) != 0 || st.st_ino != USER_NS_INIT_INO) {
+		fprintf(stderr, "trocar-redirector: runs in a user namespace other than the initial one, whose uids are not the ones the kernel side sees (kernel %u.%u)\n", maj, min);
+		return -1;
+	}
+	if (!proc_line("self", "status", "NSpid:", line, sizeof(line)) || strchr(line + strspn(line, " \t"), '\t')) {
+		fprintf(stderr, "trocar-redirector: /proc is not this pid namespace's own procfs, so the pids read there are not the ones the kernel side sees (kernel %u.%u)\n", maj, min);
+		return -1;
+	}
+	if (stat("/proc/self/ns/pid", &st) != 0) {
+		fprintf(stderr, "trocar-redirector: /proc/self/ns/pid: %s (kernel %u.%u)\n", strerror(errno), maj, min);
+		return -1;
+	}
+	if (st.st_ino != PID_NS_INIT_INO) {
+		if (libbpf_probe_bpf_helper(BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_FUNC_get_current_task, NULL) != 1 ||
+		    libbpf_probe_bpf_helper(BPF_PROG_TYPE_CGROUP_SOCK_ADDR, BPF_FUNC_probe_read_kernel, NULL) != 1) {
+			fprintf(stderr, "trocar-redirector: runs in a pid namespace of its own, and the cgroup programs of kernel %u.%u cannot read a process's pid there (bpf_get_current_task, bpf_probe_read_kernel)\n", maj, min);
+			return -1;
+		}
+		g_pidns_ino = (__u32)st.st_ino;
+	}
+	FILE *f = fopen("/proc/self/mountinfo", "r"); /* the last mount on CGROUP_ROOT is the one open() reaches */
+	char *ml = NULL;
+	size_t cap = 0;
+	while (f && getline(&ml, &cap, f) > 0) {
+		char root[512], mnt[512];
+		if (sscanf(ml, "%*s %*s %*s %511s %511s", root, mnt) != 2 || strcmp(mnt, CGROUP_ROOT)) continue;
+		size_t o = 0; /* mountinfo writes space, tab, newline and backslash as \ooo; /proc/<pid>/cgroup does not */
+		for (const char *q = root; *q && o + 1 < sizeof(g_cg_root); o++) {
+			unsigned c;
+			if (q[0] == '\\' && sscanf(q + 1, "%3o", &c) == 1) { g_cg_root[o] = (char)c; q += 4; }
+			else g_cg_root[o] = *q++;
+		}
+		g_cg_root[o] = 0;
+	}
+	free(ml);
+	if (f) fclose(f);
+	return 0;
+}
+
+/* 4.6 §命名空间前提: a child of this helper execs, and the exec event must carry the pid fork() gave it here. Otherwise the
+ * kernel side and the engine disagree about every pid and capture would be silently empty (D38). Before ready, so the
+ * events drained here go nowhere. 0, or -1 having said why. */
+static int self_check(void)
+{
+	pid_t c = fork();
+	if (c < 0) { perror("trocar-redirector: self-check fork"); return -1; }
+	if (c == 0) { /* itself, with no arguments: it exits at once on the usage check, quietly */
+		int nul = open("/dev/null", O_RDWR);
+		if (nul >= 0) { dup2(nul, STDOUT_FILENO); dup2(nul, STDERR_FILENO); }
+		execl("/proc/self/exe", "trocar-redirector", (char *)NULL);
+		_exit(127);
+	}
+	int st = 0;
+	unsigned maj = 0, min = 0;
+	kernel_tier(&maj, &min);
+	while (waitpid(c, &st, 0) < 0 && errno == EINTR) {}
+	if (WIFEXITED(st) && WEXITSTATUS(st) == 127) { /* exec itself failed: nothing to judge the numbering by */
+		fprintf(stderr, "trocar-redirector: self-check: could not exec /proc/self/exe (kernel %u.%u)\n", maj, min);
+		return -1;
+	}
+	g_probe_tgid = (__u32)c; /* the exec tracepoint ran before the child exited: its event is in the ring now */
+	ring_buffer__consume(rb);
+	g_probe_tgid = 0;
+	if (g_probe_seen) return 0;
+	fprintf(stderr, "trocar-redirector: self-check: the kernel side did not report process %d under the pid it has here, so no pid would match (kernel %u.%u)\n", (int)c, maj, min);
+	return -1;
 }
 
 static void cleanup(void)
@@ -567,10 +696,13 @@ int main(int argc, char **argv)
 	}
 
 	if (check_environment() != 0) return 4;
+	if (check_namespaces() != 0) return 6;
 
 	if (load_and_prepare()) { fprintf(stderr, "trocar-redirector: load failed\n"); cleanup(); return 1; }
 
 	if (lock_down() != 0) { fprintf(stderr, "trocar-redirector: privilege lock-down failed\n"); cleanup(); return 5; }
+
+	if (self_check() != 0) { cleanup(); return 6; }
 
 	if (selftest) {
 		cur_cfg.engine_port = 18999;

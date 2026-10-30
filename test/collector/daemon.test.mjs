@@ -22,7 +22,7 @@ import { codeId } from '../../src/version.mjs'
 const CODE = codeId() // D67⑤: the daemon records which code it runs, the one place that says it
 const osBundleRoots = osRootsFor('linux') // the Linux reader, through the one table
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
-import { createRedirectorClient } from '../../src/collector/arch/linux/redirector-client.mjs'
+import { createRedirectorClient, REDIRECTOR_PROTO } from '../../src/collector/arch/linux/redirector-client.mjs'
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
@@ -461,14 +461,31 @@ test('daemon: a helper death is degraded and on reports why; a protocol mismatch
     const failures = statusFailures(await req(s.sock, 'GET', '/status')).map((f) => f.event)
     assert.ok(failures.includes('helper-down') && failures.includes('attach-failed'), `status reports both (D38): ${failures}`)
   } finally { await d.stop() }
-  const mis = fakeArch(p, { TROCAR_FAKE_PROTO: '3' })
+  const mis = fakeArch(p, { TROCAR_FAKE_PROTO: String(REDIRECTOR_PROTO + 1) })
   const d2 = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: mis.arch, harnesses: [cc] })
   try {
     const on = await req(s.sock, 'POST', '/on', {})
     assert.deepEqual([on.actual, on.helper.ok], ['off', false])
-    assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && /protocol 3/.test(f.reason)), 'every failure record carries reason (D38)')
-    assert.ok(flowsOf(s).some((f) => f.event === 'helper-version-mismatch' && /speaks protocol 3, this daemon expects 2; run "sudo trocar setup-helper"/.test(f.reason)))
+    assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && f.reason), 'every failure record carries reason (D38)')
+    assert.ok(flowsOf(s).some((f) => f.event === 'helper-version-mismatch' && f.got === REDIRECTOR_PROTO + 1 && f.expected === REDIRECTOR_PROTO && f.reason))
   } finally { await d2.stop(); p.done(); s.done() }
+})
+
+// R4 (1.6): 1 = the daemon could not start, and then it ends. A helper that exits at start (a namespace it refuses, a kernel below the floor)
+// used to leave the engine listening: the process never ended, held the port, and the next start was refused as engine-port-taken.
+test('daemon: a helper that exits at start leaves nothing listening; the next start takes the same engine port', async () => {
+  const s = sandbox(); const p = fakeProc()
+  const probe = net.createServer(); await new Promise((r) => probe.listen(0, '127.0.0.1', r))
+  const port = probe.address().port; await new Promise((r) => probe.close(r))
+  try {
+    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => port })
+    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p, {}, { args: ['-e', 'process.exit(6)'] }).arch, harnesses: [cc] }))
+    const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] })
+    try {
+      assert.equal(d.port, port)
+      assert.ok(!flowsOf(s).some((f) => f.where === 'engine' && f.code === 'EADDRINUSE'), 'its [::1] address was free too')
+    } finally { await d.stop() }
+  } finally { p.done(); s.done() }
 })
 
 test('daemon: the install-time engine port held by another process → start fails with the reason, no helper spawned, nothing steered (G3)', async () => {
