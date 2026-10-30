@@ -135,7 +135,8 @@ export function laneStepper(st, key, uses = lru(DEF_BYTES)) {
     const d = defOf(bid);
     let w = null;
     if (d) {
-      const ff = d.ff || {};
+      // a tool definition an older capture kept only as metadata (the projection's `verbatim: false`, analyze.mjs) says so on the wire
+      const ff = d.verbatim === false && !(d.ff && d.ff.faithfulness) ? { ...d.ff, faithfulness: 'metadata' } : d.ff || {};
       w = { bid, fh: fhWire(d.fh), ref: d.ref ?? null, sec: d.sec, role: d.role, kind: d.kind, ...pick(d, OPTIONAL), ...(d.toolName ? { name: d.toolName } : null), ff, head: d.head,
         preview: d.preview, chars: d.chars, bytes: d.bytes, ...(d.resKey ? { resKey: d.resKey } : null), r: pick(renderIn(d, list), ['as', 'tone', 'title', 'f']) };
       if (ff.unaddressable) Object.assign(w, { ref: null, unaddressable: ff.unaddressable, inline: pick(d, BODY) });

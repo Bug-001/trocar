@@ -3,7 +3,7 @@
 // whose fetch failed is not "filled" — collapsing and reopening it asks again. No DOM: the elements are minimal fakes.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { bodyCache, loadBody, fillBody, isRetryable } from '../../src/web/v2/replay/blocks.mjs'
+import { bodyCache, loadBody, fillBody, isRetryable, noteBodyFidelity } from '../../src/web/v2/replay/blocks.mjs'
 import { toggleCtxBlock } from '../../src/web/v2/replay/ctxwin.mjs'
 
 const REF = 'sess-a/main#rec1::0-40'
@@ -99,3 +99,14 @@ test('the drawer: a row whose fetch failed asks again when it is reopened', asyn
   fresh(); api = fakeApi(FAIL(404)); await run(api); assert.equal(api.calls, 1)
 })
 
+
+// 2.3 §保真标: a proven row's opened body that comes back unproven gets its visible mark on the spot, and the row stops telling a
+// screen reader "verbatim". The row as fillBody / showBody touch it: a head holding its spans as markup
+test('noteBodyFidelity: an unproven body upgrades the row and takes back its screen-reader verbatim', () => {
+  const head = { html: '<span class="cbrole">user</span><span class="sr-only">,verbatim</span>',
+    insertAdjacentHTML(_, h) { this.html += h },
+    querySelector(sel) { return /sr-only/.test(sel) && this.html.includes('sr-only') ? { remove: () => { this.html = this.html.replace(/<span class="sr-only">[^<]*<\/span>/, '') } } : null } }
+  const blk = { classList: {}, isConnected: true, dataset: { ff: 'verbatim' }, querySelector: (sel) => (/cbh/.test(sel) ? head : null), closest: () => null }
+  noteBodyFidelity(blk, { status: 'absent' })
+  assert.equal(blk.dataset.ff, 'notfetched'); assert.ok(head.html.includes('ffbadge')); assert.ok(!head.html.includes('sr-only'))
+})
