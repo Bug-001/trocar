@@ -77,9 +77,6 @@
 .tone-error{border:1px solid var(--bad);background:var(--err-bg);color:var(--bad);border-radius:var(--r-1);padding:var(--s2);}
 .tone-quiet{color:var(--ink-2);}
 
-/* a closed row costs nothing to lay out; browser find still sees its head */
-.cblk.collapsed{content-visibility:auto;contain-intrinsic-size:auto var(--cblk-ih);}
-
 @media (max-width: 480px){
   .kd-kv{grid-template-columns:minmax(0,1fr);}
   .kd-kv dd{padding-left:var(--s3);margin-bottom:var(--s1);}
