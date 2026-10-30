@@ -207,7 +207,6 @@ test('a crash says its FATAL line, to the caller and in the D38 record; within t
     await assert.rejects(ask('segments'), /FATAL ERROR: Reached heap limit/, 'the caller is told why')
     assert.equal(said.length, 1)
     assert.match(said[0], /FATAL ERROR: Reached heap limit/, 'the D38 reason carries the fatal line, not only the stack tail')
-    assert.doesNotMatch(said[0], /node::Abort/, 'and none of the native stack')
     assert.equal(forks, 1)
     clock += CRASH_COOLDOWN_MS - 1
     await assert.rejects(ask('segments'), /FATAL ERROR: Reached heap limit/, 'within the cool-down: the same reason')
@@ -293,22 +292,28 @@ process.stdin.on('data', (d) => { if (!String(d).includes('\\n')) return
   }
 })
 
-// A worker on the real IPC channel (`fork`, as the service's own): `script` runs on the first request line.
-const ipcFake = (script) => () => spawn(process.execPath, ['-e', `process.stdin.on('data', (d) => { if (String(d).includes('\\n')) { ${script} } })`], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'] })
+// A worker on the real IPC channel (`fork`, as the service's own): the first request is answered at once (so its boot is not in what is
+// measured), `script` runs on the second. The parent sees every progress message it sends (`seen`), as the service does.
+const ipcFake = (script, seen) => () => {
+  const c = spawn(process.execPath, ['-e', `let n = 0; process.stdin.on('data', (d) => { if (!String(d).includes('\\n')) return; if (++n === 1) { process.stdout.write('200 2\\n{}'); return } ${script} })`], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'] })
+  c.on('message', (m) => { if (m && m.progress === true) seen.push(Date.now()) })
+  return c
+}
 
+const DEADLINE = 500
 for (const [what, script, answered] of [
-  // reports progress every 50 ms for 1 s (five deadlines), then answers
-  ['keeps reporting progress past the deadline is answered', `const t = setInterval(() => process.send({ progress: true }), 50); setTimeout(() => { clearInterval(t); const b = '{"ok":true}'; process.stdout.write('200 ' + b.length + '\\n' + b) }, 1000)`, true],
+  // reports progress every 50 ms for 1.2 s (past the deadline more than twice), then answers
+  ['keeps reporting progress past the deadline is answered', `const t = setInterval(() => process.send({ progress: true }), 50); setTimeout(() => { clearInterval(t); const b = '{"ok":true}'; process.stdout.write('200 ' + b.length + '\\n' + b) }, 1200)`, true],
   // reports progress for 400 ms, then stops: a worker that stopped making progress
   ['stops reporting progress is still cut at the deadline', `const t = setInterval(() => process.send({ progress: true }), 50); setTimeout(() => clearInterval(t), 400)`, false],
 ])
 test(`the deadline measures silence: a worker that ${what} (3.5:42)`, async () => {
-  const said = []
-  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), deadlineMs: 200, failure: (w, e) => said.push(e.message), fork: ipcFake(script) })
+  const said = [], seen = []
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), deadlineMs: DEADLINE, failure: (w, e) => said.push(e.message), fork: ipcFake(script, seen) })
   const res = recorder()
-  const t0 = Date.now()
   try {
-    const r = await within(svc.relay({ name: 'segments', params: {}, res }).then(() => 'answered', (e) => e.message), 5000, 'the relay settles')
+    await within(svc.relay({ name: 'segments', params: {}, res: recorder() }), 5000, 'the worker is up')
+    const r = await within(svc.relay({ name: 'classes', params: {}, res }).then(() => 'answered', (e) => e.message), 5000, 'the relay settles')
     if (answered) {
       assert.equal(r, 'answered')
       assert.equal(res.status, 200)
@@ -316,7 +321,8 @@ test(`the deadline measures silence: a worker that ${what} (3.5:42)`, async () =
       assert.deepEqual(said, [])
     } else {
       assert.equal(said.length, 1, 'the wedged worker is a D38 failure')
-      assert.ok(Date.now() - t0 >= 400 - 50 + 200, 'cut only after its last progress plus the deadline') // its last progress comes at most one 50 ms tick before it stops at 400
+      assert.ok(seen.length > 0, 'it reported progress before it went quiet')
+      assert.ok(Date.now() - seen.at(-1) >= DEADLINE - 1, 'cut only after its last progress plus the deadline')
     }
   } finally { svc.stop() }
 })

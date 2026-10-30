@@ -1,0 +1,19 @@
+{
+  "name": "I-stack-settings-109",
+  "invariant": "I-stack",
+  "sig": "I-stack:settings",
+  "fp": "Could not read the price table: FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory at foldSession (/x/src/query/worker.mjs:#:#) a",
+  "seed": 109,
+  "big": false,
+  "viewport": 390,
+  "theme": "light",
+  "steps": [
+    {"a":"fault","p":{"kind":"e500","name":"pricing","n":2,"ms":6569}},
+    {"a":"screen","p":{"hash":"#/settings/prices"}}
+  ],
+  "screenshot": "test/web-v2/browser/shots/seq/I-stack-settings-109.png",
+  "status": "open",
+  "detail": "a 500 `pricing` read on Settings › Prices prints the server's whole reason (a V8 native stack, FATAL ERROR) in the visible error line, not under Technical details; storage.mjs:205 draws `classes` failures the same way",
+  "owner": "shell/overview/library/capture/settings/traffic (main fix lane)",
+  "suspect": "src/web/v2/settings/prices.mjs:81"
+}

@@ -1,0 +1,202 @@
+{
+  "session_full": {
+    "schema": 2,
+    "command": "session",
+    "ok": true,
+    "errors": [],
+    "base": null,
+    "mark": "20261021T101500Z:17",
+    "truncated": null,
+    "more": false,
+    "meta": {"session_id": "s1", "harness": "claude-code", "title": "Fix the failing test"},
+    "stats": {"calls": 6, "lanes": 2},
+    "logged": 0,
+    "probes": 0,
+    "lanes": [
+      {"lane": "20261021T101500Z:12", "kind": "main", "icon": "main", "label": "Main", "task": "", "count": 5, "first": "20261021T101500Z:12", "last": "20261021T101500Z:17", "peakCtx": 2800, "spawnRid": null, "parent": null, "flagged": false},
+      {"lane": "20261021T101500Z:15", "kind": "subagent", "icon": "agent", "label": "Explore", "task": "Find the config loader", "count": 1, "first": "20261021T101500Z:15", "last": "20261021T101500Z:15", "peakCtx": 1100, "spawnRid": "20261021T101500Z:13", "parent": "20261021T101500Z:12", "flagged": false}
+    ],
+    "calls": [
+      {"rid": "20261021T101500Z:12", "lane": "20261021T101500Z:12", "ts": "2026-10-21T10:15:12.000Z", "ctx": 1600, "comp": {"system": 250, "user": 1200, "tools": 150}, "usage": {"input": 1600, "output": 80, "cache_read": 1400, "cache_write": 200}, "tools": 0, "status": 200, "rec": {"id": "20261021T101500Z:12", "request": {"model": "claude-x"}}, "wire": {"cacheSemanticsKnown": true, "contextState": "complete", "contextMissing": 0, "reqEncoding": "identity", "labels": []}, "cacheBreak": {"cause": "first", "attribution": "none", "idx": 0, "refRid": null, "gt": null, "firstCall": true}},
+      {"rid": "20261021T101500Z:13", "lane": "20261021T101500Z:12", "ts": "2026-10-21T10:15:13.000Z", "ctx": 2400, "comp": {"system": 250, "user": 2000, "tools": 150}, "usage": {"input": 2400, "output": 80, "cache_read": 2200, "cache_write": 200}, "tools": 0, "status": 200, "rec": {"id": "20261021T101500Z:13", "request": {"model": "claude-x"}}, "wire": {"cacheSemanticsKnown": true, "contextState": "complete", "contextMissing": 0, "reqEncoding": "identity", "labels": []}},
+      {"rid": "20261021T101500Z:14", "lane": "20261021T101500Z:12", "ts": "2026-10-21T10:15:14.000Z", "ctx": 2600, "comp": {"system": 250, "user": 2200, "tools": 150}, "usage": null, "tools": 0, "status": 529, "rec": {"id": "20261021T101500Z:14", "request": {"model": "claude-x"}}, "wire": {"cacheSemanticsKnown": true, "contextState": "complete", "contextMissing": 0, "reqEncoding": "identity", "labels": []}, "error": "overloaded_error", "errMsg": "Overloaded"},
+      {"rid": "20261021T101500Z:15", "lane": "20261021T101500Z:15", "ts": "2026-10-21T10:15:15.000Z", "ctx": 1100, "comp": {"system": 250, "user": 700, "tools": 150}, "usage": {"input": 1100, "output": 80, "cache_read": 900, "cache_write": 200}, "tools": 0, "status": 200, "rec": {"id": "20261021T101500Z:15", "request": {"model": "claude-x"}}, "wire": {"cacheSemanticsKnown": true, "contextState": "complete", "contextMissing": 0, "reqEncoding": "identity", "labels": []}},
+      {"rid": "20261021T101500Z:16", "lane": "20261021T101500Z:12", "ts": "2026-10-21T10:15:16.000Z", "ctx": 2600, "comp": {"system": 250, "user": 2200, "tools": 150}, "usage": {"input": 2600, "output": 80, "cache_read": 2400, "cache_write": 200}, "tools": 0, "status": 200, "rec": {"id": "20261021T101500Z:16", "request": {"model": "claude-x"}}, "wire": {"cacheSemanticsKnown": true, "contextState": "complete", "contextMissing": 0, "reqEncoding": "identity", "labels": []}, "cacheBreak": {"cause": "ttl", "attribution": "time", "idx": 2, "refRid": "20261021T101500Z:13", "gt": true, "firstCall": false}},
+      {"rid": "20261021T101500Z:17", "lane": "20261021T101500Z:12", "ts": "2026-10-21T10:15:17.000Z", "ctx": 2800, "comp": {"system": 250, "user": 2400, "tools": 150}, "usage": {"input": 2800, "output": 80, "cache_read": 2600, "cache_write": 200}, "tools": 0, "status": 200, "rec": {"id": "20261021T101500Z:17", "request": {"model": "claude-x"}}, "wire": {"cacheSemanticsKnown": true, "contextState": "complete", "contextMissing": 0, "reqEncoding": "identity", "labels": []}}
+    ],
+    "events": [
+      {"type": "user", "rid": "20261021T101500Z:12", "lane": "20261021T101500Z:12"},
+      {"type": "user", "rid": "20261021T101500Z:14", "lane": "20261021T101500Z:12"},
+      {"type": "user", "rid": "20261021T101500Z:15", "lane": "20261021T101500Z:15"}
+    ],
+    "records": [
+      {"id": "20261021T101500Z:12", "ts_request": "2026-10-21T10:15:12.000Z", "is_llm_call": true, "response": {"status": 200}},
+      {"id": "20261021T101500Z:13", "ts_request": "2026-10-21T10:15:13.000Z", "is_llm_call": true, "response": {"status": 200}},
+      {"id": "20261021T101500Z:14", "ts_request": "2026-10-21T10:15:14.000Z", "is_llm_call": true, "response": {"status": 529}},
+      {"id": "20261021T101500Z:15", "ts_request": "2026-10-21T10:15:15.000Z", "is_llm_call": true, "response": {"status": 200}},
+      {"id": "20261021T101500Z:16", "ts_request": "2026-10-21T10:15:16.000Z", "is_llm_call": true, "response": {"status": 200}},
+      {"id": "20261021T101500Z:17", "ts_request": "2026-10-21T10:15:17.000Z", "is_llm_call": true, "response": {"status": 200}}
+    ]
+  },
+  "session_since": {
+    "schema": 2,
+    "command": "session",
+    "ok": true,
+    "errors": [],
+    "base": "20261021T101500Z:17",
+    "mark": "20261021T101500Z:19",
+    "truncated": null,
+    "meta": {"session_id": "s1", "harness": "claude-code", "title": "Fix the failing test"},
+    "stats": {"calls": 8, "lanes": 2},
+    "logged": 0,
+    "probes": 0,
+    "calls": [
+      {"rid": "20261021T101500Z:18", "lane": "20261021T101500Z:15", "ts": "2026-10-21T10:15:18.000Z", "ctx": 1500, "comp": {"system": 250, "user": 1100, "tools": 150}, "usage": {"input": 1500, "output": 80, "cache_read": 1300, "cache_write": 200}, "tools": 0, "status": 200, "rec": {"id": "20261021T101500Z:18", "request": {"model": "claude-x"}}, "wire": {"cacheSemanticsKnown": true, "contextState": "complete", "contextMissing": 0, "reqEncoding": "identity", "labels": []}},
+      {"rid": "20261021T101500Z:19", "lane": "20261021T101500Z:15", "ts": "2026-10-21T10:15:19.000Z", "ctx": 2900, "comp": {"system": 250, "user": 2500, "tools": 150}, "usage": {"input": 2900, "output": 80, "cache_read": 2700, "cache_write": 200}, "tools": 0, "status": 200, "rec": {"id": "20261021T101500Z:19", "request": {"model": "claude-x"}}, "wire": {"cacheSemanticsKnown": true, "contextState": "complete", "contextMissing": 0, "reqEncoding": "identity", "labels": []}}
+    ],
+    "gone": [],
+    "lanes": [
+      {"lane": "20261021T101500Z:15", "kind": "subagent", "icon": "agent", "label": "Explore", "task": "Find the config loader", "count": 3, "first": "20261021T101500Z:15", "last": "20261021T101500Z:19", "peakCtx": 2900, "spawnRid": "20261021T101500Z:13", "parent": "20261021T101500Z:12", "flagged": false}
+    ],
+    "lanes_gone": [],
+    "events": [
+      {"type": "tool", "rid": "20261021T101500Z:18", "lane": "20261021T101500Z:15"},
+      {"type": "tool", "rid": "20261021T101500Z:19", "lane": "20261021T101500Z:15"}
+    ],
+    "records": [
+      {"id": "20261021T101500Z:18", "ts_request": "2026-10-21T10:15:18.000Z", "is_llm_call": true, "response": {"status": 200}},
+      {"id": "20261021T101500Z:19", "ts_request": "2026-10-21T10:15:19.000Z", "is_llm_call": true, "response": {"status": 200}}
+    ]
+  },
+  "session_pending": {
+    "schema": 2,
+    "command": "session",
+    "ok": true,
+    "errors": [],
+    "base": null,
+    "mark": "20261021T101500Z:13",
+    "pending": {"done": 2, "total": 8},
+    "truncated": null,
+    "more": false,
+    "meta": {"session_id": "s1", "harness": "claude-code", "title": "Fix the failing test"},
+    "stats": {"calls": 2, "lanes": 1},
+    "logged": 0,
+    "probes": 0,
+    "lanes": [
+      {"lane": "20261021T101500Z:12", "kind": "main", "icon": "main", "label": "Main", "task": "", "count": 2, "first": "20261021T101500Z:12", "last": "20261021T101500Z:13", "peakCtx": 2400, "spawnRid": null, "parent": null, "flagged": false}
+    ],
+    "calls": [
+      {"rid": "20261021T101500Z:12", "lane": "20261021T101500Z:12", "ts": "2026-10-21T10:15:12.000Z", "ctx": 1600, "comp": {"system": 250, "user": 1200, "tools": 150}, "usage": {"input": 1600, "output": 80, "cache_read": 1400, "cache_write": 200}, "tools": 0, "status": 200, "rec": {"id": "20261021T101500Z:12", "request": {"model": "claude-x"}}, "wire": {"cacheSemanticsKnown": true, "contextState": "complete", "contextMissing": 0, "reqEncoding": "identity", "labels": []}, "cacheBreak": {"cause": "first", "attribution": "none", "idx": 0, "refRid": null, "gt": null, "firstCall": true}},
+      {"rid": "20261021T101500Z:13", "lane": "20261021T101500Z:12", "ts": "2026-10-21T10:15:13.000Z", "ctx": 2400, "comp": {"system": 250, "user": 2000, "tools": 150}, "usage": {"input": 2400, "output": 80, "cache_read": 2200, "cache_write": 200}, "tools": 0, "status": 200, "rec": {"id": "20261021T101500Z:13", "request": {"model": "claude-x"}}, "wire": {"cacheSemanticsKnown": true, "contextState": "complete", "contextMissing": 0, "reqEncoding": "identity", "labels": []}}
+    ],
+    "events": [{"type": "user", "rid": "20261021T101500Z:12", "lane": "20261021T101500Z:12"}],
+    "records": [
+      {"id": "20261021T101500Z:12", "ts_request": "2026-10-21T10:15:12.000Z", "is_llm_call": true, "response": {"status": 200}},
+      {"id": "20261021T101500Z:13", "ts_request": "2026-10-21T10:15:13.000Z", "is_llm_call": true, "response": {"status": 200}}
+    ]
+  },
+  "lane_keyframe": {
+    "schema": 2,
+    "command": "lane",
+    "ok": true,
+    "errors": [],
+    "lane": "20261021T101500Z:12",
+    "base": null,
+    "mark": "20261021T101500Z:14",
+    "steps": [
+      {"rid": "20261021T101500Z:12", "parent": null, "ops": [[1, "UYtn5lJTHF_n4l1rLDtO9g", "u4IDDbwryroyqQvy4geoSg"]], "reply": ["gvPpxpXca40bEYGNVwGRng"], "attrs": {"1": {"query": true}}, "detail": {"norm": {"stop_reason": "tool_use", "usage": {"input": 1320, "output": 80, "cache_read": 1000, "cache_write": 100}}, "respRefs": ["s1/main#20261021T101500Z:12::resp.raw::300-800"], "nonBlockKeys": {"model": "s1/x#20261021T101500Z:12::10-38"}, "extraMessages": [], "wire": {"reqEncoding": "identity"}}},
+      {"rid": "20261021T101500Z:13", "parent": "20261021T101500Z:12", "ops": [[0, 0, 2], [1, "9V_xb2b0M2Ama5Xbb4_sAQ", "YotJ2W3N6XpDDdT1l3BYmQ"]], "reply": ["23f9Aa-VciGkmJtks3cKgw"], "attrs": {}, "detail": {"norm": {"stop_reason": "end_turn", "usage": {"input": 1330, "output": 80, "cache_read": 1000, "cache_write": 100}}, "respRefs": ["s1/main#20261021T101500Z:13::resp.raw::300-900"], "nonBlockKeys": {"model": "s1/x#20261021T101500Z:13::10-38"}, "extraMessages": [], "wire": {"reqEncoding": "identity"}}},
+      {"rid": "20261021T101500Z:14", "parent": "20261021T101500Z:13", "ops": [[0, 0, 4], [1, "LDpCSddwcAWGSdvYItyveQ", "bKICyI5Unf9owJv6-_xgsg"]], "reply": [], "attrs": {"5": {"query": true}}, "detail": {"norm": {"stop_reason": null, "usage": null}, "respRefs": [], "nonBlockKeys": {"model": "s1/x#20261021T101500Z:14::10-38"}, "extraMessages": [], "wire": {"reqEncoding": "identity"}}}
+    ],
+    "defs": [
+      {"bid": "UYtn5lJTHF_n4l1rLDtO9g", "fh": "PcnlXQfMWxeSVm6aVeQFGw", "ref": "s1/main#20261021T101500Z:12::1200-1450", "sec": "system", "role": "system", "kind": "text", "ff": "text", "head": {"role": "system", "tag": "text", "label": "text"}, "preview": "You are a coding agent.", "chars": 23, "bytes": 250, "r": {"as": "markdown"}},
+      {"bid": "u4IDDbwryroyqQvy4geoSg", "fh": "yQTv1uGxhW2sG1KA89QSxg", "ref": "s1/main#20261021T101500Z:12::1450-1600", "sec": "messages", "role": "user", "kind": "text", "ff": "text", "head": {"role": "user", "tag": "text", "label": "text"}, "preview": "Fix the failing test", "chars": 20, "bytes": 150, "r": {"as": "markdown"}},
+      {"bid": "gvPpxpXca40bEYGNVwGRng", "fh": "Zj07CO9C5LUKxPBkuzMLgA", "ref": "s1/main#20261021T101500Z:12::resp.raw::300-800", "sec": "reply", "role": "assistant", "kind": "tool_use", "name": "Read", "ff": "json", "head": {"role": "assistant", "tag": "tool_use", "label": "Read"}, "preview": "Read test/app.test.mjs", "chars": 22, "bytes": 500, "r": {"as": "json"}},
+      {"bid": "9V_xb2b0M2Ama5Xbb4_sAQ", "fh": "zW6m_6XJJJuvJhSGoDb0nA", "ref": "s1/main#20261021T101500Z:13::1600-1720", "sec": "messages", "role": "assistant", "kind": "tool_use", "name": "Read", "ff": "json", "head": {"role": "assistant", "tag": "tool_use", "label": "Read"}, "preview": "Read test/app.test.mjs", "chars": 22, "bytes": 120, "r": {"as": "json"}},
+      {"bid": "YotJ2W3N6XpDDdT1l3BYmQ", "fh": "fAhnUzMaIZ4wF_QIhbBKqA", "ref": "s1/main#20261021T101500Z:13::1720-2400", "sec": "messages", "role": "user", "kind": "tool_result", "resKey": "file:test/app.test.mjs", "ff": "json", "head": {"role": "user", "tag": "tool_result", "label": "tool_result"}, "preview": "import { test } from ...", "chars": 24, "bytes": 680, "r": {"as": "code", "title": "test/app.test.mjs"}},
+      {"bid": "23f9Aa-VciGkmJtks3cKgw", "fh": "1opF3q3gb6GBlNq_OPI8tw", "ref": "s1/main#20261021T101500Z:13::resp.raw::300-900", "sec": "reply", "role": "assistant", "kind": "text", "ff": "text", "head": {"role": "assistant", "tag": "text", "label": "text"}, "preview": "The assertion compares strings.", "chars": 31, "bytes": 600, "r": {"as": "markdown"}},
+      {"bid": "LDpCSddwcAWGSdvYItyveQ", "fh": "S70WPLlTZIhV7Ski5JU-Pw", "ref": "s1/main#20261021T101500Z:14::2400-2520", "sec": "messages", "role": "assistant", "kind": "text", "ff": "text", "head": {"role": "assistant", "tag": "text", "label": "text"}, "preview": "The assertion compares strings.", "chars": 31, "bytes": 120, "r": {"as": "markdown"}},
+      {"bid": "bKICyI5Unf9owJv6-_xgsg", "fh": "fR2iai9qAXAWHV4Rc8tqQg", "ref": "s1/main#20261021T101500Z:14::2520-2600", "sec": "messages", "role": "user", "kind": "text", "cc": {"type": "ephemeral"}, "ff": "text", "head": {"role": "user", "tag": "text", "label": "text"}, "preview": "Go ahead", "chars": 8, "bytes": 80, "r": {"as": "markdown"}}
+    ],
+    "resources": [
+      {"key": "file:test/app.test.mjs", "segments": [{"enter": "20261021T101500Z:13", "evict": null}], "loads": [{"rid": "20261021T101500Z:13", "range": null, "via": "Read"}]}
+    ],
+    "seen": [{"path": "test/app.test.mjs", "firstRid": "20261021T101500Z:13", "count": 1}],
+    "events": [
+      {"type": "user", "rid": "20261021T101500Z:12", "lane": "20261021T101500Z:12"},
+      {"type": "user", "rid": "20261021T101500Z:14", "lane": "20261021T101500Z:12"}
+    ],
+    "prev": null,
+    "next": null
+  },
+  "lane_ops": {
+    "schema": 2,
+    "command": "lane",
+    "ok": true,
+    "errors": [],
+    "lane": "20261021T101500Z:12",
+    "base": "20261021T101500Z:14",
+    "mark": "20261021T101500Z:17",
+    "steps": [
+      {"rid": "20261021T101500Z:16", "parent": "20261021T101500Z:14", "ops": [[0, 0, 6]], "reply": ["ouyK2sf9JLS3qO3YnQaZBQ"], "attrs": {}, "detail": {"norm": {"stop_reason": "tool_use", "usage": {"input": 1360, "output": 80, "cache_read": 1000, "cache_write": 100}}, "respRefs": ["s1/main#20261021T101500Z:16::resp.raw::300-700"], "nonBlockKeys": {"model": "s1/x#20261021T101500Z:16::10-38"}, "extraMessages": [], "wire": {"reqEncoding": "identity"}}},
+      {"rid": "20261021T101500Z:17", "parent": "20261021T101500Z:16", "ops": [[0, 0, 5], [1, "kM3pZ7cWq1vTn8xRb2sLdA", "RTnktIiQecKgCv6uC_wUOQ", "ovGmijz3urFCRbo05qNItg"]], "reply": ["XrJCrraFUoYpE9YCz_Nt6w"], "attrs": {}, "detail": {"norm": {"stop_reason": "end_turn", "usage": {"input": 1370, "output": 80, "cache_read": 1000, "cache_write": 100}}, "respRefs": ["s1/main#20261021T101500Z:17::resp.raw::300-620"], "nonBlockKeys": {"model": "s1/x#20261021T101500Z:17::10-38"}, "extraMessages": [], "wire": {"reqEncoding": "identity"}}}
+    ],
+    "defs": [
+      {"bid": "ouyK2sf9JLS3qO3YnQaZBQ", "fh": "TXgy38zBbO15VFcXKURlDg", "ref": "s1/main#20261021T101500Z:16::resp.raw::300-700", "sec": "reply", "role": "assistant", "kind": "tool_use", "name": "Edit", "ff": "json", "head": {"role": "assistant", "tag": "tool_use", "label": "Edit"}, "preview": "Edit src/app.mjs", "chars": 16, "bytes": 400, "r": {"as": "json"}},
+      {"bid": "kM3pZ7cWq1vTn8xRb2sLdA", "fh": "fR2iai9qAXAWHV4Rc8tqQg", "ref": "s1/main#20261021T101500Z:17::2520-2570", "sec": "messages", "role": "user", "kind": "text", "ff": "text", "head": {"role": "user", "tag": "text", "label": "text"}, "preview": "Go ahead", "chars": 8, "bytes": 50, "r": {"as": "markdown"}},
+      {"bid": "RTnktIiQecKgCv6uC_wUOQ", "fh": "Yjil87PY6Mr2mIQWUlVRNQ", "ref": "s1/main#20261021T101500Z:17::2600-2720", "sec": "messages", "role": "assistant", "kind": "tool_use", "name": "Edit", "ff": "json", "head": {"role": "assistant", "tag": "tool_use", "label": "Edit"}, "preview": "Edit src/app.mjs", "chars": 16, "bytes": 120, "r": {"as": "json"}},
+      {"bid": "ovGmijz3urFCRbo05qNItg", "fh": "K9g41BuiYe922s-QPWtUdA", "ref": "s1/main#20261021T101500Z:17::2720-2800", "sec": "messages", "role": "user", "kind": "tool_result", "cc": {"type": "ephemeral"}, "ff": "json", "head": {"role": "user", "tag": "tool_result", "label": "tool_result"}, "preview": "ok", "chars": 2, "bytes": 80, "r": {"as": "text", "tone": "ok"}},
+      {"bid": "XrJCrraFUoYpE9YCz_Nt6w", "fh": "aX-BPtQYR5QCcAcnTEMnKQ", "ref": "s1/main#20261021T101500Z:17::resp.raw::300-620", "sec": "reply", "role": "assistant", "kind": "text", "ff": "text", "head": {"role": "assistant", "tag": "text", "label": "text"}, "preview": "Done.", "chars": 5, "bytes": 320, "r": {"as": "markdown"}}
+    ],
+    "resources": [],
+    "seen": [{"path": "test/app.test.mjs", "firstRid": "20261021T101500Z:13", "count": 1}],
+    "events": [],
+    "prev": null,
+    "next": null
+  },
+  "lane_reset": {
+    "schema": 2,
+    "command": "lane",
+    "ok": true,
+    "errors": [],
+    "lane": "20261021T101500Z:15",
+    "base": null,
+    "mark": "20261021T101500Z:19",
+    "steps": [
+      {"rid": "20261021T101500Z:15", "parent": null, "ops": [[1, "iFPmTRBg3ay6DTug7CrLbQ"]], "reply": ["Cyo2h7h2Et7jRHW008hXuQ"], "attrs": {"0": {"query": true}}, "detail": {"norm": {"stop_reason": "tool_use", "usage": {"input": 1350, "output": 80, "cache_read": 1000, "cache_write": 100}}, "respRefs": ["s1/sub#20261021T101500Z:15::resp.raw::300-640"], "nonBlockKeys": {"model": "s1/x#20261021T101500Z:15::10-38"}, "extraMessages": [], "wire": {"reqEncoding": "identity"}}},
+      {"rid": "20261021T101500Z:18", "parent": "20261021T101500Z:15", "ops": [[0, 0, 1], [1, "tWdS4pAEwpktUvodBK3_hg", "aPHAB-YXjTRXpbPX9GmWhg"]], "reply": ["ZI-NVLbpetZcJVaE0paxIQ"], "attrs": {}, "detail": {"norm": {"stop_reason": "tool_use", "usage": {"input": 1380, "output": 80, "cache_read": 1000, "cache_write": 100}}, "respRefs": ["s1/sub#20261021T101500Z:18::resp.raw::300-560"], "nonBlockKeys": {"model": "s1/x#20261021T101500Z:18::10-38"}, "extraMessages": [], "wire": {"reqEncoding": "identity"}}},
+      {"rid": "20261021T101500Z:19", "parent": "20261021T101500Z:18", "ops": [[0, 0, 3], [1, "0MJIzlpQcbJMKvY7r67XAw", "Ymc6YE0kDYyjl468Ut2XQw"]], "reply": ["kyBHjWI5SajbkoQu-VT7vQ"], "attrs": {}, "detail": {"norm": {"stop_reason": "end_turn", "usage": {"input": 1390, "output": 80, "cache_read": 1000, "cache_write": 100}}, "respRefs": ["s1/sub#20261021T101500Z:19::resp.raw::300-700"], "nonBlockKeys": {"model": "s1/x#20261021T101500Z:19::10-38"}, "extraMessages": [], "wire": {"reqEncoding": "identity"}}}
+    ],
+    "defs": [
+      {"bid": "iFPmTRBg3ay6DTug7CrLbQ", "fh": "TZgS4h3AVoqhhFe7D3u0Yg", "ref": "s1/sub#20261021T101500Z:15::900-1100", "sec": "messages", "role": "user", "kind": "text", "ff": "text", "head": {"role": "user", "tag": "text", "label": "text"}, "preview": "Find the config loader", "chars": 22, "bytes": 200, "r": {"as": "markdown"}},
+      {"bid": "Cyo2h7h2Et7jRHW008hXuQ", "fh": "0umjg_pzxlfMWA5d7OWlPQ", "ref": "s1/sub#20261021T101500Z:15::resp.raw::300-640", "sec": "reply", "role": "assistant", "kind": "tool_use", "name": "Grep", "ff": "json", "head": {"role": "assistant", "tag": "tool_use", "label": "Grep"}, "preview": "Grep loadConfig", "chars": 15, "bytes": 340, "r": {"as": "json"}},
+      {"bid": "tWdS4pAEwpktUvodBK3_hg", "fh": "FB-hB9uCzscX1oQdTSkBLw", "ref": "s1/sub#20261021T101500Z:18::1100-1210", "sec": "messages", "role": "assistant", "kind": "tool_use", "name": "Grep", "ff": "json", "head": {"role": "assistant", "tag": "tool_use", "label": "Grep"}, "preview": "Grep loadConfig", "chars": 15, "bytes": 110, "r": {"as": "json"}},
+      {"bid": "aPHAB-YXjTRXpbPX9GmWhg", "fh": "r1rGxSAG6oc7FzDCqa8nLw", "ref": "s1/sub#20261021T101500Z:18::1210-1500", "sec": "messages", "role": "user", "kind": "tool_result", "ff": "json", "head": {"role": "user", "tag": "tool_result", "label": "tool_result"}, "preview": "src/config.mjs:12", "chars": 17, "bytes": 290, "r": {"as": "text"}},
+      {"bid": "ZI-NVLbpetZcJVaE0paxIQ", "fh": "xfT52qBgbWIdeIQr3aks1g", "ref": "s1/sub#20261021T101500Z:18::resp.raw::300-560", "sec": "reply", "role": "assistant", "kind": "tool_use", "name": "Read", "ff": "json", "head": {"role": "assistant", "tag": "tool_use", "label": "Read"}, "preview": "Read src/config.mjs", "chars": 19, "bytes": 260, "r": {"as": "json"}},
+      {"bid": "0MJIzlpQcbJMKvY7r67XAw", "fh": "Ro9LzKcl7r2L1x75HkKd9g", "ref": "s1/sub#20261021T101500Z:19::1500-1610", "sec": "messages", "role": "assistant", "kind": "tool_use", "name": "Read", "ff": "json", "head": {"role": "assistant", "tag": "tool_use", "label": "Read"}, "preview": "Read src/config.mjs", "chars": 19, "bytes": 110, "r": {"as": "json"}},
+      {"bid": "Ymc6YE0kDYyjl468Ut2XQw", "fh": "49NOxAtEAR-ErSdMy1GBuA", "ref": "s1/sub#20261021T101500Z:19::1610-2900", "sec": "messages", "role": "user", "kind": "tool_result", "resKey": "file:src/config.mjs", "ff": "json", "head": {"role": "user", "tag": "tool_result", "label": "tool_result"}, "preview": "export function loadConfig", "chars": 26, "bytes": 1290, "r": {"as": "code", "title": "src/config.mjs"}},
+      {"bid": "kyBHjWI5SajbkoQu-VT7vQ", "fh": "qYEX7YCFbBqquAOdjIiVUA", "ref": "s1/sub#20261021T101500Z:19::resp.raw::300-700", "sec": "reply", "role": "assistant", "kind": "text", "ff": "text", "head": {"role": "assistant", "tag": "text", "label": "text"}, "preview": "It is src/config.mjs.", "chars": 21, "bytes": 400, "r": {"as": "markdown"}}
+    ],
+    "resources": [
+      {"key": "file:src/config.mjs", "segments": [{"enter": "20261021T101500Z:19", "evict": null}], "loads": [{"rid": "20261021T101500Z:19", "range": [1, 40], "via": "Read"}]}
+    ],
+    "seen": [{"path": "src/config.mjs", "firstRid": "20261021T101500Z:19", "count": 1}],
+    "events": [
+      {"type": "user", "rid": "20261021T101500Z:15", "lane": "20261021T101500Z:15"},
+      {"type": "tool", "rid": "20261021T101500Z:18", "lane": "20261021T101500Z:15"},
+      {"type": "tool", "rid": "20261021T101500Z:19", "lane": "20261021T101500Z:15"}
+    ],
+    "prev": null,
+    "next": null
+  },
+  "block_multi": {
+    "schema": 2,
+    "command": "block",
+    "ok": true,
+    "errors": [{"where": "s1/main#20261021T101500Z:99::0-40", "code": "record-missing", "reason": "No record at this id"}],
+    "blocks": [
+      {"ref": "s1/main#20261021T101500Z:13::1720-2400", "bytes": "{\"type\":\"tool_result\",\"content\":\"import { test } from ...\"}", "encoding": "utf8", "fidelity": "verbatim", "truncated": false},
+      {"ref": "s1/main#20261021T101500Z:99::0-40", "bytes": null, "encoding": null, "fidelity": null, "truncated": false}
+    ]
+  }
+}

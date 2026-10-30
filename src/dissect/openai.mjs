@@ -23,6 +23,7 @@ export const OPENAI_SECTIONS = [
 ];
 
 import { parsedRequestBody } from './request-body.mjs';
+import { streamParts } from './sse-spans.mjs';
 
 // ── detection ───────────────────────────────────────────────────────────────────────────────
 // D25 · detect on WIRE SHAPE, not the User-Agent. The old UA test (/codex|openai/) was unreliable in
@@ -138,7 +139,7 @@ function summaryText(item) {
 export function itemToBlocks(item) {
   if (!item || typeof item !== 'object') return [{ role: 'user', block: { type: 'text', text: String(item ?? '') }, sub: [] }];
   const t = item.type;
-  if (t === 'message' || item.content) {
+  if (t === 'message' || (item.content && !/_call(_output)?$/.test(t || ''))) {
     const role = item.role || 'user';
     const arr = Array.isArray(item.content);
     const content = arr ? item.content : [{ type: 'input_text', text: String(item.content ?? '') }];
@@ -151,15 +152,22 @@ export function itemToBlocks(item) {
       return { role, block: { type: 'text', text: JSON.stringify(c) }, sub };
     });
   }
-  if (t === 'function_call') return [{ role: 'assistant', block: { type: 'tool_use', name: item.name || '', id: item.call_id || item.id || '', input: safeJson(item.arguments) }, sub: [] }];
-  if (t === 'function_call_output') {
+  if (t === 'reasoning') return [{ role: 'assistant', block: { type: 'thinking', thinking: summaryText(item), signature: item.encrypted_content ? 'encrypted' : '' }, sub: [] }];
+  // tools, by the wire's own naming (no tool names): `*_call_output` is a call's result; `*_call` with a call_id is a call the
+  // client runs, without one a call the server ran. Anything else is shown as the JSON it is, never as assistant text.
+  const ty = typeof t === 'string' ? t : '';
+  if (ty.endsWith('_call_output')) {
     const out = item.output;
     const content = typeof out === 'string' ? out : (out && out.content) || JSON.stringify(out ?? '');
     return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: item.call_id || '', content }, sub: [] }];
   }
-  if (t === 'reasoning') return [{ role: 'assistant', block: { type: 'thinking', thinking: summaryText(item), signature: item.encrypted_content ? 'encrypted' : '' }, sub: [] }];
-  // fallback (item_reference / unknown): render verbatim JSON, marked non-standard.
-  return [{ role: (item.role || 'assistant'), block: { type: 'text', text: JSON.stringify(item) }, sub: [] }];
+  if (ty.endsWith('_call')) {
+    const { type: _t, id: _i, status: _s, ...rest } = item;
+    if (item.call_id == null) return [{ role: 'assistant', block: { type: 'server_tool_use', id: item.id || '', name: ty, input: rest }, sub: [] }];
+    const input = item.arguments !== undefined ? safeJson(item.arguments) : item.input !== undefined ? item.input : rest;
+    return [{ role: 'assistant', block: { type: 'tool_use', name: item.name ?? ty, id: item.call_id, input }, sub: [] }];
+  }
+  return [{ role: (item.role || 'assistant'), block: { type: 'json', value: item }, sub: [] }];
 }
 
 // ── board projection: raw Responses request → flat block descriptors (same vocab as CC linearContext).
@@ -193,7 +201,7 @@ export function boardFlat(req) {
     let bi = 0;
     for (const { role, block, sub } of itemToBlocks(item)) {
       const type = block.type;
-      const d = { sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['input', mi, ...sub] };
+      const d = { sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' || type === 'server_tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['input', mi, ...sub] };
       if (type === 'thinking') d.faithfulness = faithfulness(block);
       flat.push(d);
       bi++;
@@ -281,7 +289,7 @@ export function boardFlatChat(req) {
     let bi = 0;
     for (const { role, block, sub } of chatMessageToBlocks(msgs[i])) {
       const type = block.type;
-      flat.push({ sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['messages', i, ...sub] });
+      flat.push({ sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' || type === 'server_tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['messages', i, ...sub] });
       bi++;
     }
     mi++;
@@ -386,8 +394,9 @@ export function normEvents(events) {
   let text = '';
   const toolCalls = [];
   for (const o of output) {
-    if (o.type === 'message' && Array.isArray(o.content)) for (const c of o.content) if (c && (c.type === 'output_text' || c.type === 'text')) text += c.text || '';
-    if (o.type === 'function_call') toolCalls.push({ id: o.call_id, name: o.name, input: safeJson(o.arguments) });
+    if (o && o.type === 'message') {
+      if (Array.isArray(o.content)) for (const c of o.content) if (c && (c.type === 'output_text' || c.type === 'text')) text += c.text || '';
+    } else for (const { block: b } of itemToBlocks(o)) if (b.type === 'tool_use' || b.type === 'server_tool_use') toolCalls.push({ id: b.id, name: b.name, input: b.input });
   }
   // fallback: if no response.completed (interrupted), stitch text from output_text.delta events
   if (!completed) for (const e of events || []) if (e && e.type === 'response.output_text.delta') text += e.delta || '';
@@ -413,6 +422,47 @@ export function ctxTokens(norm) {
 // are the request's top-level keys that become context blocks (everything else is a non-block key).
 // `consumedBody` — the request keys this dissector maps to blocks (the rest are unmapped, 3.1:44); `messageCount` — the
 // message count compaction compares (3.4); `faithfulnessOf` — a flat block's 3.2 faithfulness.
+// ── reply parts (sse-spans.mjs): each reply block addressed as a span of resp.raw. Responses keys an event by its
+// `output_index` and takes the item the wire closes it with (output_item.done, else the terminal's output); Chat keys
+// a chunk by choice index and what its delta carries (reasoning, text, or tool call `index`).
+const replyBlocksOf = (items) => items.flatMap((it) => itemToBlocks(it)).map((x) => x.block);
+const RESPONSES_REPLY = {
+  keysOf: (e) => (Number.isInteger(e.output_index) ? [String(e.output_index)] : []),
+  build: (k, evts, all) => {
+    const done = evts.find((e) => e.type === 'response.output_item.done' && e.item);
+    const term = all.find((e) => e && /^response\.(completed|incomplete|failed)$/.test(e.type) && e.response);
+    const item = done ? done.item : term && Array.isArray(term.response.output) ? term.response.output[Number(k)] : null;
+    return item ? replyBlocksOf([item]) : 'this output item did not finish before the stream ended';
+  },
+  jsonBlocks: (body) => replyBlocksOf(Array.isArray(body.output) ? body.output : []),
+};
+const chatDeltas = (e) => (Array.isArray(e.choices) ? e.choices : []).map((c, i) => [c && c.index !== undefined ? c.index : i, (c && (c.delta || c.message)) || {}]);
+const CHAT_REPLY = {
+  keysOf: (e) => chatDeltas(e).flatMap(([ci, d]) => [
+    ...(typeof d.reasoning_content === 'string' && d.reasoning_content ? [`${ci}:thinking`] : []),
+    ...(typeof d.content === 'string' && d.content ? [`${ci}:text`] : []),
+    ...(Array.isArray(d.tool_calls) ? d.tool_calls.map((tc, n) => `${ci}:tool:${tc && tc.index !== undefined ? tc.index : n}`) : []),
+  ]),
+  build: (k, evts) => {
+    const [ci, kind, ti] = k.split(':');
+    let text = '', id = '', name = '', args = '';
+    for (const e of evts) for (const [c, d] of chatDeltas(e)) {
+      if (String(c) !== ci) continue;
+      if (kind === 'thinking' && typeof d.reasoning_content === 'string') text += d.reasoning_content;
+      if (kind === 'text' && typeof d.content === 'string') text += d.content;
+      if (kind === 'tool') (Array.isArray(d.tool_calls) ? d.tool_calls : []).forEach((tc, n) => {
+        if (String(tc && tc.index !== undefined ? tc.index : n) !== ti) return;
+        const f = tc.function || {};
+        if (tc.id) id = tc.id;
+        if (f.name) name += f.name;
+        if (typeof f.arguments === 'string') args += f.arguments;
+      });
+    }
+    return [kind === 'tool' ? { type: 'tool_use', id, name, input: safeJson(args) } : kind === 'thinking' ? { type: 'thinking', thinking: text } : { type: 'text', text }];
+  },
+  jsonBlocks: (body) => (Array.isArray(body.choices) ? body.choices : []).flatMap((c) => (c && c.message ? chatMessageToBlocks(c.message).map((x) => x.block) : [])),
+};
+
 const blockFaithfulness = (b) => faithfulness(b && b.block); // tools / system descriptors carry no .block → verbatim
 export const RESPONSES = Object.freeze({
   id: 'openai-responses', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
@@ -421,6 +471,7 @@ export const RESPONSES = Object.freeze({
   // the stream's terminal says the response failed, or an `error` event arrived with no terminal (normEvents)
   failed: (norm) => norm.stop_reason === 'failed' || norm.stop_reason === 'error',
   consumedBody: ['model', 'stream', 'instructions', 'tools', 'input'],
+  replyParts: (rec) => streamParts(rec, RESPONSES_REPLY),
   messageCount: (req) => (Array.isArray(req && req.input) ? req.input.length : typeof (req && req.input) === 'string' ? 1 : 0),
   faithfulnessOf: blockFaithfulness,
 });
@@ -429,6 +480,7 @@ export const CHAT = Object.freeze({
   boardFlat: (req) => boardFlatChat(req), normResp: (rec) => normRespChat(rec),
   reqCounts: (req) => reqCountsFor('chat', req), ctxTokens,
   consumedBody: ['model', 'stream', 'messages', 'tools'],
+  replyParts: (rec) => streamParts(rec, CHAT_REPLY),
   messageCount: (req) => (Array.isArray(req && req.messages) ? req.messages.length : 0),
   faithfulnessOf: blockFaithfulness,
 });

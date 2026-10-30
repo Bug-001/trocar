@@ -54,6 +54,8 @@ const BOARD = { 'openai-responses': RESPONSES, 'openai-chat': CHAT, 'openai-resp
 export function boardDissectorFor(rec) {
   return BOARD[wireFormatOf(rec)] || null;
 }
+// The board dissector of a wire format by its id (a call row names its wire by the id: src/view/reduce.mjs).
+export const boardDissectorOf = (format) => BOARD[format] || null;
 // The cross-record context hooks of the Anthropic wire (Message Threads, src/dissect/cc-threads.mjs), which the
 // multi-lane assembler calls the way the flat-lane one calls a board dissector's prepare.
 export const MULTI_LANE_CONTEXT = CC_THREADS;

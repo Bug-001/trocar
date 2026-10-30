@@ -33,6 +33,8 @@ const enc = (s) => (s == null ? 0 : Buffer.byteLength(String(s), 'utf8'));
 // as the non-enumerable `src`): a stitched context hands the same parsed items to every call of its chain, so a session's fold asked for
 // the same block's bytes once per call that carries it. Parsed bodies are read-only (src/dissect/request-body.mjs; test/view/frozen-fold).
 const bytesMemo = new WeakMap();
+// tool_result and any `*_tool_result` kind (a server-run tool's result, named by the wire): read and bucketed alike.
+const isResult = (k) => typeof k === 'string' && (k === 'tool_result' || k.endsWith('_tool_result'));
 function blockBytes(b) {
   const src = b && (b.sec === 'tools' || b.sec === 'system' ? b.src : b.block);
   if (!src || typeof src !== 'object') return blockBytesOf(b);
@@ -56,7 +58,8 @@ function blockBytesOf(b) {
   if (bl.type === 'text') return enc(bl.text);
   if (bl.type === 'thinking' || bl.type === 'redacted_thinking') return enc(bl.thinking || '');
   if (bl.type === 'tool_use' || bl.type === 'server_tool_use') return enc(bl.name) + enc(JSON.stringify(bl.input || {}));
-  if (bl.type === 'tool_result') { const c = bl.content; return enc(typeof c === 'string' ? c : JSON.stringify(c ?? '')); }
+  if (isResult(bl.type)) { const c = bl.content; return enc(typeof c === 'string' ? c : JSON.stringify(c ?? '')); }
+  if (bl.type === 'json') return enc(JSON.stringify(bl.value));
   if (bl.type === 'image') return 800;   // no bytes on the wire to count; a nominal weight, as before
   return enc(JSON.stringify(bl));
 }
@@ -74,11 +77,12 @@ function bodyTextOf(b) {
   if (bl.type === 'thinking') return bl.thinking || '';
   if (bl.type === 'redacted_thinking') return '[redacted_thinking]';
   if (bl.type === 'tool_use' || bl.type === 'server_tool_use') return `${bl.name}(${JSON.stringify(bl.input ?? {})})`;
-  if (bl.type === 'tool_result') {
+  if (isResult(bl.type)) {
     const c = bl.content;
     return typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text || `[${x.type}]`).join('\n') : JSON.stringify(c ?? '');
   }
   if (bl.type === 'image') return `[image ${(bl.source && (bl.source.media_type || bl.source.type)) || ''}]`;
+  if (bl.type === 'json') return JSON.stringify(bl.value);
   if (bl.type === 'document') return `[document ${(bl.source && (bl.source.media_type || bl.source.type)) || bl.title || ''}]`;
   return JSON.stringify(bl);
 }
@@ -130,13 +134,14 @@ function blockHead(b) {
   const r = b.role, k = b.kind, bl = b.block;
   if (k === 'thinking' || k === 'redacted_thinking') return { role: 'assistant', tag: 'thinking', label: '' };
   if (k === 'tool_use' || k === 'server_tool_use') return { role: 'assistant', tag: 'action · ' + (b.toolName || ''), label: shorten(argPreview(bl)) };
-  if (k === 'tool_result') return { role: r, tag: 'observation' + (bl && bl.is_error ? ' · error' : ''), label: '' };
+  if (isResult(k)) return { role: r, tag: 'observation' + (bl && bl.is_error ? ' · error' : ''), label: '' };
   if (k === 'image') return { role: r, tag: 'image', label: '' };
   if (k === 'tool_addition' || k === 'tool_removal') { // a tool definition added / removed mid-conversation
     const t = bl && bl.tool, def = (t && (t.definition || t)) || {};
     return { role: r, tag: k === 'tool_addition' ? 'def · added' : 'def · removed', label: String(def.name || (t && t.name) || '') };
   }
   if (k === 'document') return { role: r, tag: 'document', label: '' };
+  if (k === 'json') { const v = bl && bl.value; return { role: r, tag: String((v && v.type) || 'json'), label: shorten(JSON.stringify(v)) }; } // an unmapped item: its own type, its JSON
   const tag = r === 'user' ? 'user' : r === 'assistant' ? 'say' : r === 'system' ? 'system-reminder' : 'text';
   const txt = typeof bl === 'string' ? bl : (bl && typeof bl.text === 'string') ? bl.text : '';
   return { role: r, tag, label: shorten(txt) };
@@ -165,11 +170,11 @@ const COMP_KIND = { tool_addition: 'tools', tool_removal: 'tools', thinking: 'th
 const COMP_ROLE = { assistant: 'assistant', user: 'user', system: 'system', developer: 'system', tool: 'tool_result' };
 export const COMP_KEYS = ['tools', 'system', 'user', 'assistant', 'thinking', 'tool_use', 'tool_result', 'image', 'other'];
 
-function compBucket(b) {
+export function compBucket(b) {
   if (!b) return 'other';
   if (b.sec === 'tools') return 'tools';
   if (b.sec === 'system') return 'system';
-  const k = COMP_KIND[b.kind];
+  const k = isResult(b.kind) ? 'tool_result' : COMP_KIND[b.kind];
   if (k) return k;
   return COMP_ROLE[b.role] || 'other';
 }
