@@ -2,8 +2,9 @@
 // four HTTP-generic names, or a name ending in a whole `api-key` word. The server blanks the same class in every query document
 // and names it in ctl.masked (src/capture/redact.mjs : isSecretHeader — a test compares the two predicates); this one is the
 // front end's floor for an answer that carries no ctl.masked. No provider knowledge. 1.9's proxy-address redaction
-// (redactUrlCredentials) also lives in this file.
+// (redactUrlCredentials, by the CLI's rule in src/off/userinfo.mjs) also lives in this file.
 import { esc } from './fmt.mjs'
+import { hideUserinfo } from '../../../off/userinfo.mjs'
 const CREDENTIAL_NAMES = new Set(['authorization', 'proxy-authorization', 'cookie', 'set-cookie'])
 
 // is a header name credential-class? Case-insensitive, whitespace-tolerant.
@@ -17,11 +18,8 @@ export const isCredentialHeader = (name) => {
  * {ok, status, data, error}; the record (data.records[0]) carries that one value, every other credential still blanked. */
 export const revealHeader = (api, ref, name, opts) => api.get('calls', { ref, reveal: String(name).trim().toLowerCase() }, opts)
 
-/** Any URL credentials in a text → `***@` (1.9 §保真边界: 代理地址里的用户名与密码一律显示成 `***@`)。
- * Covers scheme://user:pass@host in any position; an already-redacted `***@` passes through unchanged. Pure, no DOM. */
-export function redactUrlCredentials(text) {
-  return String(text ?? '').replace(/([a-zA-Z][\w+.-]*:\/\/)([^\s/@:]+):([^\s/@]*)@/g, '$1***@')
-}
+/** Any URL userinfo in a text → `***@` (1.9 §保真边界: 代理地址里的用户名与密码一律显示成 `***@`): the CLI's own rule (src/off/userinfo.mjs, served
+ * from the shared-module allowlist, 4.4 静态面), so the page and the receipts hide the same. Pure, no DOM. */
+export const redactUrlCredentials = (text) => hideUserinfo(text ?? '')
 
-/** The same, escaped for HTML — the form every renderer here actually interpolates. */
 export const redactUrlCredentialsHtml = (text) => esc(redactUrlCredentials(text))

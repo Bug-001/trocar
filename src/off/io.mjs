@@ -1,11 +1,12 @@
 // io.mjs — the terminal as `trocar on | off | uninstall` and the standalone `trocar-off` see it (RFC 1.6 R6): is there a person to ask, ask
 // them one question, and the pair of print functions a command writes through. Kept in src/off/ because the undo side asks too (按标记撤销
-// and `uninstall --purge-data` need a yes, R6) and may import nothing outside this directory (0.1 §2). Imports only node:* (nothing here).
+// and `uninstall --purge-data` need a yes, R6) and may import nothing outside this directory (0.1 §2). Imports only ./userinfo.mjs.
 //
 //   io = { out(s), err(s), stdin, stdout, stderr? }   `out` / `err` print a line (a newline is added); `stdin` / `stdout` are the streams the
 //                                                      question is asked on and the TTY checks read. A test hands in fakes (PassThrough
 //                                                      streams with `isTTY` set); no function here touches process.* itself.
 // R6: not in a terminal (stdin OR stdout is not a TTY) a command never prompts: it prints its plan and stops (exit 2), or runs on `--yes`.
+import { hideUserinfo } from './userinfo.mjs'
 
 /** A person to ask: both streams are a terminal. (`trocar on --json | jq` has no one at stdout, and an agent that runs `trocar on` has neither.) */
 export const isInteractive = (io) => !!(io && io.stdin && io.stdout && io.stdin.isTTY && io.stdout.isTTY)
@@ -40,14 +41,5 @@ export function makeIo({ stdin, stdout, stderr = stdout }) {
   return { stdin, stdout, stderr, out: (s) => { stdout.write(`${s}\n`) }, err: (s) => { stderr.write(`${s}\n`) } }
 }
 
-// RFC 1.6 §1.2「不印凭据」: a URL's `user:password@` in what trocar prints or logs is `***@`. The userinfo runs to the LAST `@` before the authority
-// ends (a password may hold an `@` it did not escape, as a URL parser reads it) and never past a character a URL cannot hold raw — white space,
-// `/ ? #`, `"`, a backtick, `< >` or a backslash — so it never runs out of a JSON string either. The sub-delims RFC 3986 lets a password carry raw
-// (`!$&'()*+,;=`) are inside it. Idempotent; text without a URL passes as it is.
-const USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#"`<>\\@]*(?:@[^\s/?#"`<>\\@]*)*@/gi
-export const hideUserinfo = (s) => String(s).replace(USERINFO, '$1***@')
-/** The same over a JSON value (a receipt, a key's value): every string in it, as JSON; hideUserinfo never runs out of a JSON string. */
-export const hideUserinfoIn = (v) => (v === undefined ? v : JSON.parse(hideUserinfo(JSON.stringify(v))))
-
-/** The same io, every line it prints through `out` / `err` passed through hideUserinfo: how a command that changes state prints (main.mjs, the standalone trocar-off). */
+/** The same io, every line it prints through `out` / `err` passed through hideUserinfo (userinfo.mjs, RFC 1.6 §1.2「不印凭据」): how a command that changes state prints (main.mjs, the standalone trocar-off). */
 export const hidingIo = (io) => ({ ...io, out: (s) => io.out(hideUserinfo(s)), err: (s) => io.err(hideUserinfo(s)) })
