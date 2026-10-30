@@ -812,13 +812,20 @@ test('relay: a request reading a cold segment index sends progress on the IPC ch
   for (let g = 0; g < 3; g++) filler(home, g, 50)
   for (const name of WHOLE_INDEX) {
     fs.rmSync(path.join(home, 'index'), { recursive: true, force: true })
-    let reports = 0, kid = null
-    const svc = createQueryService({ home, fork: (h) => { kid = workerFork(h); kid.on('message', (m) => { if (m && m.progress === true) reports++ }); return kid } })
+    // Counted at emit, not by a listener: stop() strips every listener off the child, and a progress message read after the
+    // response (two pipes, either may be read first) must still count.
+    let reports = 0, closed = false, kid = null
+    const svc = createQueryService({ home, fork: (h) => {
+      kid = workerFork(h)
+      const emit = kid.emit.bind(kid)
+      kid.emit = (ev, ...a) => { if (ev === 'message' && a[0] && a[0].progress === true) reports++; if (ev === 'close') closed = true; return emit(ev, ...a) }
+      return kid
+    } })
     const res = recorder()
     try {
       await within(svc.relay({ name, params: {}, res }), 60_000, `${name}: the relay settles`)
     } finally { svc.stop() }
-    if (kid.exitCode === null && kid.signalCode === null) await within(once(kid, 'close'), 30_000, `${name}: the worker closes`)
+    if (!closed) await within(once(kid, 'close'), 30_000, `${name}: the worker closes`)
     assert.equal(res.status, 200, name)
     assert.ok(reports >= 1, `${name}: progress while it read (${reports})`)
   }
