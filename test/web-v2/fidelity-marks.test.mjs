@@ -51,7 +51,8 @@ const want = (d) => {
 const OPEN_TURNS = { has: () => true, get: () => true } // a fold memory that holds every turn open: every row is drawn
 const stateOf = (desk, playhead = 0, extra = {}) => {
   const lanes = buildLanes(desk)
-  return { desk, lanes, anchor: anchorLane(lanes), playhead, diffRef: null, navOpen: new Set(), openBlocks: new Set(), turnFold: OPEN_TURNS, turnLanded: new Set(), ctx: {}, ...extra }
+  return { desk, lanes, anchor: anchorLane(lanes), playhead, diffRef: null, navOpen: new Set(), openBlocks: new Set(), turnFold: OPEN_TURNS, turnLanded: new Set(), ctx: {},
+    curFlat: [], viewPin: null, meta: {}, ...extra }
 }
 const deskOfSteps = (steps, { rows = steps.map(() => ({})), replies, details } = {}) => deskOf([{ kind: 'main', rows, blocks: steps, replies, details }])
 
@@ -382,12 +383,18 @@ test('2.3 #8 · 1.4 #9 (real face): a Codex WebSocket call whose earlier record 
   } finally { await face.close() }
 })
 
+// a demo record as a v0 envelope: the request stored as a parsed object, no req_body; with or without a capture field (judged
+// by the fact, not the label: 2.3 §窗口行)
+const v0Of = (line, keepCapture) => {
+  const { req_body: body, resp, req_headers: headers, capture, ...rest } = JSON.parse(line)
+  return JSON.stringify({ ...rest, ...(keepCapture ? { capture } : null), request_headers: headers, request: JSON.parse(body), response: resp })
+}
+
 test('2.3 #9 (real face): a v0 envelope draws the window line, ◐ on each header, no 以下逐字, no per-block 不能回源', async () => {
-  const [first] = fs.readFileSync(new URL('../../samples/demo-session.ndjson', import.meta.url), 'utf8').split('\n')
-  const { req_body: body, resp, req_headers: headers, capture: _d10, ...rest } = JSON.parse(first) // v0 had no req_body and no capture field
+  const demo = fs.readFileSync(new URL('../../samples/demo-session.ndjson', import.meta.url), 'utf8').split('\n').filter(Boolean)
   const userHome = tmpDir('trocar-board-'), home = path.join(userHome, '.trocar')
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
-  writeSegment(home, '20260719T090000Z', [JSON.stringify({ ...rest, request_headers: headers, request: JSON.parse(body), response: resp })])
+  writeSegment(home, '20260719T090000Z', demo.map((l, i) => v0Of(l, i % 2 === 1))) // the whole session: a later call's context runs through the earlier ones
   const face = await serveBoard({ userHome, home })
   try {
     const desk = await deskOfFace(face)
@@ -400,8 +407,13 @@ test('2.3 #9 (real face): a v0 envelope draws the window line, ◐ on each heade
       for (const r of rowsOf(h)) assertMark(r, want(st.flat[r.bi]), `${why} row ${r.bi}`, { windowLine: true })
       assertHeaders(h, st.flat, why, { windowLine: true })
       for (const r of rowsOf(h.slice(h.indexOf('<div class="cwreply"')), { reply: true })) assert.notEqual(r.ff, 'verbatim', `${why}: a v0 reply is parsed`)
+      // 2.6 §A v0 记录: no request key to read back, and the reply's one mark says it was parsed
+      assert.deepEqual(st.detail.nonBlockKeys, [], `${why}: no non-block keys`)
+      const panel = serialize(rawPanelUnits(s))
+      assert.ok(visible(panel).includes(w(W.NO_PARAMS)), `${why}: the panel says there are no request keys`)
+      if (st.reply.length) assert.ok(count(panel, 'class="rpmark"') === 1 && visible(panel).includes(w(W.REPLY_PARSED)), `${why}: the panel's reply is parsed`)
       steps++
     })
-    assert.ok(steps > 0)
+    assert.ok(steps > 1, 'every step of the session')
   } finally { await face.close() }
 })

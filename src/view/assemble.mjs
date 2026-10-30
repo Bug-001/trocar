@@ -374,7 +374,7 @@ export const rawRefOf = (rec) => (rec && rec.id != null && rec._stream ? mintRaw
 function withRefs(flat, rec) {
   let spans = null;
   try { spans = blockSpans(rec); } catch { spans = null; }
-  const base = rawRefOf(rec);
+  const base = spanBody(rec) != null ? rawRefOf(rec) : null;
   return flat.map((b, i) => {
     const span = spans && spans[i];
     return slimBlock(b, base && span ? composeTextRef(base, span) : null);
@@ -387,7 +387,7 @@ function withRefs(flat, rec) {
 // unaddressable by slimBlock (invariant 4).
 function withPathRefs(flat, rec) {
   const root = scannedRequestBody(rec);
-  const base = rawRefOf(rec);
+  const base = spanBody(rec) != null ? rawRefOf(rec) : null;
   return flat.map((b) => {
     const span = base && root && Array.isArray(b.path) ? spanAt(root, b.path) : null;
     return slimBlock(b, span ? composeTextRef(base, span) : null);
