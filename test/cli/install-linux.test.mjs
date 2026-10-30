@@ -153,7 +153,7 @@ test('Linux install with no systemd --user: exit 1, the entry not enabled and sa
   assert.equal(await runOnCli(['--yes'], onCtx(home, on, { exec: { run }, daemon: sys.daemon })), 0, on.text())
 })
 
-// V107 (1.6 §3.2 step 5): Linux replaces a collector that runs another copy's code through the same routine as macOS / Windows — the old one is
+// V108 (1.6 §3.2 step 5): Linux replaces a collector that runs another copy's code through the same routine as macOS / Windows — the old one is
 // drained and stopped, the unit brings the new one up, and it is asked again which code it runs.
 test('Linux install replaces a collector that answers another code: the receipt says daemon.replaced', async () => {
   const home = tmpDir('trocar-install-replace-')

@@ -1,5 +1,5 @@
 // test/cli/install-replace-e2e.test.mjs — `trocar install` from another copy of trocar replaces a collector that names other code (RFC 1.6 §3.2
-// step 5, V107 on macOS and Windows). Two REAL daemons in one temp HOME (test/helpers/model-daemon.mjs): A answers this
+// step 5, V108 on macOS and Windows). Two REAL daemons in one temp HOME (test/helpers/model-daemon.mjs): A answers this
 // checkout's code; B is what the login entry starts once A is gone, and answers the other copy's. The drain and the stop are the real ones and
 // find A at its real control endpoint (no request, no socket path, no daemonCode injected). Only what cannot run in a test stands in: launchctl /
 // the process-table query (exec), the lock identity both daemons wrote with their own stub, and process.kill (never the test process).
@@ -33,12 +33,12 @@ function otherCopy() {
   return root
 }
 
-// V107's failure cases run on the same two daemons: the old collector cannot be stopped, B's login entry starts nothing (the collector does not come
+// V108's failure cases run on the same two daemons: the old collector cannot be stopped, B's login entry starts nothing (the collector does not come
 // back up), or B answers a third code (the login entry starts yet another copy). Each is exit 1, ok false, problems, not replaced, routing untouched,
 // and (where the receipt can know it) the state is what runs.
 const FAILS = { unstoppable: {}, 'never-up': { state: 'not-running' }, elsewhere: { state: 'running' } }
 for (const platform of ['darwin', 'win32']) for (const fail of [null, ...Object.keys(FAILS)]) {
-  test(`${platform}: V107 — install from another copy ${fail ? `fails (${fail}) and says so` : 'replaces the collector on other code; routing is untouched; a second install leaves it'}`, { timeout: 60_000 }, async () => {
+  test(`${platform}: V108 — install from another copy ${fail ? `fails (${fail}) and says so` : 'replaces the collector on other code; routing is untouched; a second install leaves it'}`, { timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')
     const boxA = await liveUnit({ w, platform }) // answers this checkout's code
