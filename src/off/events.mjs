@@ -4,13 +4,14 @@
 // way and may import nothing outside src/off (0.1 §2).
 import nodeFs from 'node:fs'
 import path from 'node:path'
+import { hideUserinfo } from './io.mjs'
 
 /** Appends `{ts, ...rec}` to `<dir>/flows/<day>.ndjson` (0600, the directory 0700). `day` (YYYY-MM-DD): the file to write when the caller keeps a
  *  day that never goes back (the daemon's recorder); default the UTC day of `now`. Throws what the write throws. */
 export function appendFlowEvent(dir, rec, { now = new Date(), day = null, fs = nodeFs } = {}) {
   const file = path.join(dir, 'flows', `${day || now.toISOString().slice(0, 10)}.ndjson`)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  fs.appendFileSync(file, JSON.stringify({ ts: now.toISOString(), ...rec }) + '\n', { mode: 0o600 })
+  fs.appendFileSync(file, hideUserinfo(JSON.stringify({ ts: now.toISOString(), ...rec })) + '\n', { mode: 0o600 }) // a line names a URL without its userinfo (1.6 §1.2)
 }
 
 const eventErr = (e) => String((e && e.message) || e)
