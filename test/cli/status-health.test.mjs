@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { captureHealth } from '../../src/health/read.mjs'
+import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { failureBrief } from '../../src/cli/words.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -21,7 +22,7 @@ function healthOver(recs) {
   fs.writeFileSync(path.join(c, 'install-manifest.json'), JSON.stringify({ version: 3, install: { state: 'complete' }, created_at: at(9999), entries: [], files: [] }))
   fs.writeFileSync(path.join(c, 'lock'), JSON.stringify({ pid: 4242, start_time: '900', boot_id: 'b1' }))
   fs.writeFileSync(path.join(c, 'flows', `${at(0).slice(0, 10)}.ndjson`), [{ ts: at(600), event: 'daemon-start', pid: 4242 }, ...recs].map((r) => JSON.stringify(r) + '\n').join(''))
-  return captureHealth({ home: h, now: NOW, alive: () => true, identity: () => ({ start_time: '900', boot_id: 'b1' }) })
+  return captureHealth({ harnesses: HARNESS_IDS, home: h, now: NOW, alive: () => true, identity: () => ({ start_time: '900', boot_id: 'b1' }) })
 }
 
 test('C.3 `health`: status --json carries captureHealth\'s verdict, its state in the closed set, only keys that have a value', async () => {
@@ -86,7 +87,7 @@ test('4.6 F9: a capture health that cannot be read is no `health`, an `errors` e
   fs.mkdirSync(c, { recursive: true })
   fs.writeFileSync(path.join(c, 'install-manifest.json'), JSON.stringify({ version: 3, install: { state: 'complete' }, created_at: at(9999), entries: [], files: [] }))
   fs.writeFileSync(path.join(c, 'flows'), 'x') // flows/ is not a directory: captureHealth throws
-  const r = await sandbox().run(['status', '--json'], { deps: { captureHealth: () => captureHealth({ home: h, now: NOW, alive: () => true, identity: () => ({}) }) } })
+  const r = await sandbox().run(['status', '--json'], { deps: { captureHealth: () => captureHealth({ harnesses: HARNESS_IDS, home: h, now: NOW, alive: () => true, identity: () => ({}) }) } })
   const doc = r.io.json()
   assert.equal('health' in doc, false, 'no verdict is made up')
   const e = doc.errors.find((x) => x.where === 'capture health')

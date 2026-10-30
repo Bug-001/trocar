@@ -584,6 +584,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
     // (haiku). A tiny haiku call (≤2 msgs) is background util REGARDLESS of tool count — otherwise
     // a burst of failed haiku retries (tools≥1) during a network drop pollutes the conversation lane.
     const small = f.small
+    const compacts = hints.compaction === true || hints.compactionMarker === true
     let stream
     if (f.unparsed) {
       // An unparsed sentinel has no system text / message count to classify on. Every lane guess
@@ -596,8 +597,9 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
       stream = probeStream || (probeStream = mkStream('probe'))
     } else if (f.monitor) {
       stream = monitorStream || (monitorStream = mkStream('monitor'))
-    } else if (hint === 'aux' || (msgCount <= 2 && !sub && (tools === 0 || small) && !f.continued)) {
-      // (a call that continues a server-held thread is a turn of that thread, however small its own delta)
+    } else if (hint === 'aux' || (msgCount <= 2 && !sub && (tools === 0 || small) && !f.continued && !compacts)) {
+      // (a call that continues a server-held thread is a turn of that thread, however small its own delta; a call carrying its
+      // harness's compaction hint is a turn of the conversation it compacts, however small — pi's summary request, 3.4)
       const sk = f.aux
       stream = auxStreams.get(sk) || auxStreams.set(sk, mkStream(sk)).get(sk)
     } else if (sub && (hints.laneKey || f.lineage)) {

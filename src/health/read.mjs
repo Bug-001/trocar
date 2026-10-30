@@ -108,19 +108,21 @@ function notesOf(dir, fold, m, fs, read) {
 // The switch as state.json says it (RFC 1.6 §1.5, src/off/state.mjs): version 2 is per harness — `desired` is 'on' when every harness is on,
 // 'off' when none is, 'mixed' otherwise (no harness recorded: off); `since` is the newest per-harness `updated_at` ("capture off since T").
 // Version 1 (before D39, or a file with no version) is one `desired` for everything. A version this build does not know is an error, never "off".
+// Only `harnesses`, the caller's own table, is read (4.11 §3 ㉓): an id outside it is neither reported nor counted.
 // Read here and not through src/off/state.mjs: src/health depends on node built-ins, src/paths.mjs and src/raw/ only (0.1 §2).
-function switchOf(v) {
+function switchOf(v, harnesses) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return { error: 'is not a JSON object' }
   if (v.version === 2) {
-    const hs = Object.entries(v.harnesses && typeof v.harnesses === 'object' ? v.harnesses : {}).map(([id, h]) => [id, { desired: h && h.desired === 'on' ? 'on' : 'off', updated_at: h && typeof h.updated_at === 'string' ? h.updated_at : null }])
-    const on = hs.filter(([, h]) => h.desired === 'on').length
-    return { desired: hs.length && on === hs.length ? 'on' : on ? 'mixed' : 'off', since: latest(...hs.map(([, h]) => h.updated_at)) || (typeof v.updated_at === 'string' ? v.updated_at : null), harnesses: Object.fromEntries(hs) }
+    const rec = v.harnesses && typeof v.harnesses === 'object' ? v.harnesses : {}
+    const hs = harnesses.filter((id) => Object.hasOwn(rec, id)).map((id) => { const h = rec[id]; return [id, { desired: h && h.desired === 'on' ? 'on' : 'off', updated_at: h && typeof h.updated_at === 'string' ? h.updated_at : null }] })
+    const n = hs.filter(([, h]) => h.desired === 'on').length
+    return { desired: hs.length && n === hs.length ? 'on' : n ? 'mixed' : 'off', since: latest(...hs.map(([, h]) => h.updated_at)) || (typeof v.updated_at === 'string' ? v.updated_at : null), harnesses: Object.fromEntries(hs) }
   }
   if (v.version !== undefined && v.version !== 1) return { error: `is version ${JSON.stringify(v.version)}; this build reads versions 1 and 2` }
   return { desired: v.desired === 'on' ? 'on' : 'off', since: v.updated_at || null }
 }
 
-function collectorHealth({ dir, now, fs, alive, identity, maxBytes, read }) {
+function collectorHealth({ dir, harnesses, now, fs, alive, identity, maxBytes, read }) {
   try { fs.statSync(dir) } catch (e) {
     if (e.code === 'ENOENT') return { present: false, installed: false, residue: [], summary: { state: 'not-installed' } }
     throw new HealthUnreadable(`${dir}: ${errText(e)}`)
@@ -140,7 +142,7 @@ function collectorHealth({ dir, now, fs, alive, identity, maxBytes, read }) {
     unclean: ls.state === 'stale',
   }
   let flows
-  // an unreadable flows/ throws (the endpoint's 503); what could be read rides along for `collector status`
+  // an unreadable flows/ throws (`status` then has no `health` and names it in `errors`, 1.6 C.3); what could be read rides along for `collector status`
   try { flows = readFlows({ dir, now, fs, maxBytes }) } catch (e) { e.collector = { present: true, installed, residue, daemon }; throw e }
   read.files.push(...flows.files); read.errors.push(...flows.errors); read.unparsable += flows.unparsable
   if (flows.truncated) read.truncated = true
@@ -148,7 +150,7 @@ function collectorHealth({ dir, now, fs, alive, identity, maxBytes, read }) {
   Object.assign(daemon, { last_record_at: fold.last_ts, last_start: fold.last_start, last_stop: fold.last_stop })
   const stateFile = path.join(dir, 'state.json')
   const st = readJson(stateFile, fs)
-  const sw0 = st.value ? switchOf(st.value) : st.missing ? { desired: 'off', since: null, harnesses: {} } : { error: st.error }
+  const sw0 = st.value ? switchOf(st.value, harnesses) : st.missing ? { desired: 'off', since: null, harnesses: {} } : { error: st.error }
   const swError = sw0.error ? (st.error || `${stateFile} ${sw0.error}`) : null
   if (swError) read.errors.push({ file: stateFile, error: swError })
   const sw = swError ? { desired: null, since: null, error: swError } : sw0
@@ -207,14 +209,14 @@ function netenvOf({ home, fs }) {
 }
 
 /**
- * captureHealth({home}) → the capture-health reading (4.6 §记录「看得到」): `installed`,
+ * captureHealth({home, harnesses}) → the capture-health reading (`harnesses`: the caller's own table of ids, 4.11 §3 ㉓) (4.6 §记录「看得到」): `installed`,
  * `summary` (the verdict over the collector and the raw layer: C.3's `health`), `collector`, `raw`,
  * `netenv` (trocar's own netenv.json: the adopted records and the topology, 1.6 §6), `read` (files read, files that could not be, truncated). Throws HealthUnreadable when flows/ (or the collector
  * directory) cannot be read at all — never an empty answer.
  */
-export function captureHealth({ home = trocarHome(), now = Date.now(), fs = nodeFs, alive = pidAlive, identity = procIdentity, maxBytes } = {}) {
+export function captureHealth({ home = trocarHome(), harnesses, now = Date.now(), fs = nodeFs, alive = pidAlive, identity = procIdentity, maxBytes } = {}) {
   const read = { files: [], errors: [], truncated: false, unparsable: 0, window_hours: WINDOW_MS / 3600e3 }
-  const collector = collectorHealth({ dir: path.join(home, 'collector'), now, fs, alive, identity, maxBytes, read })
+  const collector = collectorHealth({ dir: path.join(home, 'collector'), harnesses, now, fs, alive, identity, maxBytes, read })
   const raw = rawHealth({ home, now, fs, read })
   let summary = collector.summary
   // the raw layer's failures count whatever else is installed

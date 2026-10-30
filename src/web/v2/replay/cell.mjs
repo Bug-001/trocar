@@ -105,10 +105,12 @@ export function rawContentText(bl) {
 // the text of a block that carries its body inline
 export function inlineText(b) {
   const x = ownBody(b)
-  if (b.sec === 'tools') { // by what the definition carries: the wire sends no `verbatim`; an older capture kept neither text
-    return b.verbatim !== false && (x.desc !== undefined || x.schema !== undefined)
+  // a tools definition: the metadata-only body only where its fidelity says an older capture kept no schema (ff.faithfulness, via
+  // boardDef; `verbatim: false` on a block built in the browser); any other draws what it carries, a tool with neither text too
+  if (b.sec === 'tools') {
+    return b.faithfulness !== 'metadata' && b.verbatim !== false
       ? `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\n\ndescription:\n${x.desc || '—'}${x.schema !== undefined ? `\n\nschema:\n${JSON.stringify(x.schema, null, 2)}` : ''}`
-      : `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\nparams (names only): ${(b.props || []).join(', ') || '—'}\ndescription: ${kf(b.descChars)} chars captured — ${W.SCHEMA_NOT_KEPT}\n\n${W.METADATA_BODY}`
+      : `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\nparams (names only): ${(b.props || []).join(', ') || '—'}\ndescription: ${kf(b.descChars)} chars captured — ${W.SCHEMA_NOT_KEPT}\n\n${W.TOOL_METADATA_ONLY}`
   }
   if (b.sec === 'system') return x.text
   if (b.faithfulness === 'opaque') return String(rawContentText(x.block) || '') || '[Encrypted / redacted reasoning: the wire carries only a signature or ciphertext, no plaintext. There is nothing to restore verbatim.]'

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
 import { ctxWindowHtml, ctxWindowUnits, landingTarget, renderContextWindow } from '../../src/web/v2/replay/ctxwin.mjs'
 import { QUIET_CAUSES } from '../../src/web/v2/replay/analysis.mjs'
-import { stepOf } from '../../src/web/v2/replay/model.mjs'
+import { stepOf, boardDef } from '../../src/web/v2/replay/model.mjs'
 import * as W from '../../src/web/v2/labels/replay.mjs'
 import { esc } from '../../src/web/v2/core/fmt.mjs'
 import { bodyFor, bodyCache } from '../../src/web/v2/replay/blocks.mjs'
@@ -331,4 +331,14 @@ test('the real face: each request row carries the fidelity its definition sends,
     }
     assert.ok(seen > 0)
   } finally { await face.close() }
+})
+
+// the metadata-only body is said only where the definition says metadata (an older capture); a tool that simply has no
+// description and no schema on the wire (a server tool such as web search) is drawn as what it is
+test('an unaddressable tools definition draws the metadata-only body only when its fidelity says metadata', () => {
+  const tool = (name, ff) => boardDef({ bid: name, fh: name, sec: 'tools', role: 'system', kind: 'text', name, head: { role: 'system', tag: 'def', label: name }, preview: name,
+    chars: 20, bytes: 20, r: { as: 'text' }, ref: null, unaddressable: 'inline', ff: { unaddressable: 'inline', ...ff }, inline: {} })
+  const body = (d) => bodyFor({ ...d, text_ref: d.ref })
+  assert.ok(!body(tool('web_search', {})).includes(esc(W.TOOL_METADATA_ONLY)), 'no claim that a schema was dropped')
+  assert.ok(body(tool('OldTool', { faithfulness: 'metadata' })).includes(esc(W.TOOL_METADATA_ONLY)))
 })

@@ -191,7 +191,6 @@ export const FF_TIP = Object.freeze({
 export const INLINE_NOTE = 'This text came inline with the block; it is not cut verbatim from the raw capture'
 // the body of a tool definition an older capture kept as metadata only (2.3 逐值 metadata)
 export const SCHEMA_NOT_KEPT = 'schema text not retained (length only)'
-export const METADATA_BODY = 'Metadata only: the full JSON schema (parameter types / required / enums / nesting) and the description text were not captured. The model received the full schema; this is a capture boundary, not a display clip.'
 export const NO_BODY = 'This block has no body and no source location'
 export const clipNote = (n) => `…(${n} characters in total; only the first 20000 are shown)`
 // the raw panel's reply / the drawer's reply: the display clip said once, in 2.6 §A's own words (the context window's
@@ -355,6 +354,7 @@ export const viewNameTip = (name) => `View the content of ${name}`
 export const jumpStepTip = (at) => `Jump to ${at}`
 // the capability's two tiers, by 2.3's proof rule
 export const CAP_VERBATIM = 'Tool definitions were captured verbatim; expand the tool block in the context window to see the full schema'
+export const TOOL_METADATA_ONLY = 'Metadata only: the full JSON schema (parameter types / required / enums / nesting) and the description text were not captured. The model received the full schema; this is a capture boundary, not a display clip.'
 export const CAP_METADATA = 'Metadata only: name, parameter count, description length; not the verbatim schema'
 export const CAP_MIXED = 'These tool definitions are not all proven to match the wire; each tool block in the context window carries its own mark'
 export const capToolRow = (name, chars) => `${name} · ${chars} characters`

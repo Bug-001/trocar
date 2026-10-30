@@ -323,12 +323,12 @@ export function changesHtml(h) {
 }
 
 // the whole page in one string: the table (采集服务 row + one row per agent, in row order) and the blocks under it.
-// `v` is captureVerdict of the same answer; `openByReader` is the expand memory (a Map the mount owns). The 503 state
-// (v.state 'unreadable') draws the service row alone — there is no data for agent rows.
+// `v` is captureVerdict of the same answer; `openByReader` is the expand memory (a Map the mount owns). A capture health the server could not read
+// (v.state 'unreadable') is the service row's sentence; the agent rows are drawn from the rest of the document as when `health` is absent (K-28).
 // `ov` = the `overview` document of the last 24 h (its harnesses[].last_ts is the 最近采到 column), null while unread.
 // `control` = api.controlStatus()'s answer (null before it), `ui` = the Map read-side id → {busy, receipt} of the row controls.
 export function pageHtml(h, v, { openByReader = null, ov = null, control = null, ui = null } = {}) {
-  const verdicts = v.state === 'unreadable' ? [] : agentVerdicts(h, ov)
+  const verdicts = agentVerdicts(h, ov)
   const ordered = rowOrder(verdicts)
   const open = openStates(ordered, openByReader)
   const rows = [serviceRowHtml(h, v, { open: open.get('*service') })]

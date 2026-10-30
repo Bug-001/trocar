@@ -103,6 +103,10 @@ for (const platform of ['darwin', 'win32']) {
         const ask = (method, p, body) => { const e = controlEndpointFor({ platform, dir: w.dir, env: w.env }); return e.request({ socketPath: e.socketPath, method, path: p, ...(body ? { body } : {}) }) }
         const onBody = { harnesses: ['codex'], groups: { [g]: port } }
         await ask('POST', '/on', onBody)
+        // 4.11 §3 ㉓ (CM39): an id outside this copy's table, on in state.json before the daemon starts, is not in its GET /status
+        const stFile = path.join(w.dir, 'state.json')
+        const st0 = JSON.parse(fs.readFileSync(stFile, 'utf8'))
+        fs.writeFileSync(stFile, JSON.stringify({ ...st0, harnesses: { ...st0.harnesses, 'later-agent': { desired: 'on', policy: 'all', extra_hosts: [], updated_at: st0.updated_at } } }))
         let release, entered
         const held = new Promise((res) => { release = res }), inRestore = new Promise((res) => { entered = res })
         const restarted = box.restart({ custody: { ...w.custody, issueIntermediate: async (a) => { entered(); await held; return w.custody.issueIntermediate(a) } } })
@@ -115,6 +119,8 @@ for (const platform of ['darwin', 'win32']) {
         await restarted
         assert.deepEqual(Object.keys((await onReply).doors || {}), [g])
         assert.deepEqual((await ask('GET', '/status')).doors, { [g]: port }, 'one door, on its recorded port')
+        assert.equal(Object.keys((await ask('GET', '/status')).harnesses).includes('later-agent'), false)
+        { const s = JSON.parse(fs.readFileSync(stFile, 'utf8')); delete s.harnesses['later-agent']; fs.writeFileSync(stFile, JSON.stringify(s)) } // the rest of this case runs in the world without it
         assert.equal((await ask('GET', '/status')).code, codeId(), 'D67⑤: the model daemon says which code it runs — what `trocar update` compares against')
         // §1.3 (macOS test machine, 2026-10-18): the model daemon reports the connection counts, so `status` never has to say they are not known
         assert.deepEqual((await ask('GET', '/status')).relayed, { closing: 0, waiting: 0, scope: 'memory' }, 'the reply carries the counts of what is still relayed, counted in memory')

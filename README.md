@@ -88,9 +88,11 @@ sudo "$(command -v node)" "$(command -v trocar)" setup-helper   # root's PATH ma
 The same five commands on every OS, in this order: `trocar install` (once) → `trocar on` → `trocar off` →
 `trocar status` (any time) → `trocar uninstall`. `install` lists every file it will touch and writes them after you
 confirm; until it has run, `trocar on` refuses (`error.code` `cert-not-installed`). `on` starts capture, `status` shows state,
-`off` takes every trace of trocar off your agents' path, and the certificates stay until `trocar uninstall`.
+`off` takes every trace of trocar off your agents' path, and the certificates stay until `trocar uninstall`. Running
+`trocar install` from another copy of trocar restarts the collector on that copy's code: the agents being captured
+stay captured, and connections open at that moment are cut and retried by the agent.
 
-From source: there is no global `trocar` on your PATH, so run it through the repo.
+From source (Node ≥ 22): there is no global `trocar` on your PATH, so run it through the repo.
 
 ```sh
 git clone https://github.com/Bug-001/trocar && cd trocar && npm install
@@ -540,6 +542,9 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
 - **Some sessions are grouped by guess.** Hermes on a custom endpoint, and Kimi without a body key, send
   no session id at all; their calls are grouped by the system prompt and a 30-minute gap (never by process
   or connection), and the session is marked **session boundary inferred**. The rule is provisional until checked on a real capture.
+  A keyless summary request (pi's, for one) is not grouped this way when it shares the user's text with a session
+  of the same agent that was active in the last 30 minutes: it joins that session as a compaction. A session with an id
+  stays unmarked; a session that was itself grouped by guess stays marked inferred.
 - **On captures without process identity the harness is a guess.** Sessions recorded by the MITM or
   reverse proxy carry no `proc.agent`, so the board names their agent from the User-Agent and it is
   marked **inferred** (from the request headers, not the process). Sessions from the per-process collector are named by process, never by UA.

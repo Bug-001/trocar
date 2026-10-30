@@ -19,7 +19,7 @@ test('记录 id 从 1 起,读取侧不把明文段的索引落盘(那份文件�
   assert.deepEqual(records[1], { id: `${SEG}:2`, ts: '2026-10-18T10:00:01.000Z', harness: 'claude-code', class: 'telemetry', host: 'api.anthropic.com', path: '/v1/messages', status: 204, stored_bytes: records[1].stored_bytes, sent_bytes: 10, received_bytes: 20, session_key: null, is_llm: false,
     // the session facts, so `sessions` never reads a record back (1.6 §4.1 ≤ 1 s): the harness the board decides,
     // where the record's bytes are, and the kind of call it is
-    harness_id: 'cc', has_proc: true, has_headers: true, harness_inferred: false, entrypoint: null, log_only: false, subagent: false, synth_hash: null, offset: records[1].offset })
+    harness_id: 'cc', has_proc: true, has_headers: true, harness_inferred: false, entrypoint: null, log_only: false, subagent: false, synth_hash: null, kin_fp: null, kin_probe: null, offset: records[1].offset })
   assert.equal(records[0].offset, 0)
   assert.equal(records[1].offset, records[0].stored_bytes + 1) // the byte the line starts at, newline included
   // D62 谁写哪一笔: a plaintext segment's index belongs to the daemon's keeper, and a reader never writes one — it

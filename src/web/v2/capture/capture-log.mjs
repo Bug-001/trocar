@@ -80,11 +80,11 @@ export function footHtml(doc) {
   return disclosureHtml({ id: 'caplog-foot', title: 'Technical details', open: false, body: by + (errs.length ? techGrid(errs) : '') })
 }
 
-// ── the whole main in one string: the explanation line, the table, the manifest error, the foot. The 503 state says
-// 读不到采集状态 and draws no table — never an empty one.
+// ── the whole main in one string: the explanation line, the table, the manifest error, the foot. A capture health the server could not
+// read says 读不到采集状态 and draws no table — never an empty one.
 export function pageLogHtml(doc, { filter = null, openByReader = null } = {}) {
   if (doc == null) return '<p class="caplog-none">Reading</p>' // no answer yet — never an invented empty table
-  if (doc.unreadable != null) // the verdict's 503 sentence; the server's reason only in the collapsed details (K-29)
+  if (doc.unreadable != null) // the verdict's unreadable sentence; the server's reason only in the collapsed details (K-29)
     return `<p class="caplog-none">${esc(HEALTH_READ.unreadable)}</p>` + techDetailsHtml([['reason', String(doc.unreadable)]], { id: 'caplog-unreadable' })
   const { html, rows, filtered } = logRowsOf(doc, { filter, openByReader })
   const since = doc.failures && doc.failures.since
