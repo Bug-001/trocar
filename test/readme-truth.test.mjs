@@ -7,7 +7,7 @@ import { COMMANDS } from '../src/cli/commands.mjs';
 
 // The stated bar for this README is that it must not TRAP a user: every command it tells someone to
 // run has to exist, and every file it points at has to be there. That is not a style question — the
-// audit found the README promising `npx trocar` (the package is private and the npm name is taken),
+// audit found the README promising `npx trocar` (a package name that was never this one),
 // documenting 5 of 11 CLI verbs, and drifting between `trocar on` and `trocar monitor on`. A reader
 // who types what they are told and gets "command not found" has been trapped by the docs.
 //
@@ -23,7 +23,7 @@ const implementedVerbs = new Set(COMMANDS.map((c) => c.name));
 
 // Only text the reader would actually TYPE counts as an instruction: fenced code blocks and inline
 // `code` spans. Prose like "trocar sits on the wire" is not a command, and the README's own
-// disclaimer that `npx trocar` does not exist must not read as a promise that it does.
+// prose about a command must not read as an instruction to type it.
 const fenced = [...readme.matchAll(/```[a-z]*\n([\s\S]*?)```/g)].map((m) => m[1]).join('\n');
 const inlineCode = [...readme.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]).join('\n');
 const commandText = fenced + '\n' + inlineCode;
@@ -77,14 +77,21 @@ test('every repo file the README links to exists', () => {
   }
 });
 
-test('the README does not promise a distribution channel that does not exist', () => {
-  // package.json is private with no LICENSE, so `npx trocar` cannot work for anyone
-  if (pkg.private === true || !existsSync(path.join(ROOT, 'LICENSE'))) {
-    // fenced blocks only: a disclaimer in prose is honest, an instruction in a code block is a trap
-    assert.doesNotMatch(fenced, /npx\s+trocar/,
-      'the package is private and/or unlicensed, so `npx trocar` would fail for every reader — '
-      + 'either ship the package and a LICENSE, or do not promise it');
+test('every package the README tells you to install with npm or npx is this package (4.5)', () => {
+  // the first non-flag token after `npx`, or after `npm i` / `npm install` with -g / --global; a path or the Release's
+  // .tgz is not a package name. A version or dist-tag suffix is stripped, a scope's leading '@' kept.
+  const named = [];
+  for (const line of fenced.split('\n')) {
+    for (const m of line.matchAll(/\bnpx((?:[ \t]+\S+)+)/g)) named.push(m[1].trim().split(/\s+/).find((t) => !t.startsWith('-')));
+    for (const m of line.matchAll(/\bnpm[ \t]+(?:i|install)((?:[ \t]+[^\s#&|;]+)*)/g)) {
+      const args = m[1].trim().split(/\s+/).filter(Boolean);
+      if (args.includes('-g') || args.includes('--global')) named.push(args.find((t) => !t.startsWith('-')));
+    }
   }
+  const names = named.filter((t) => t && !t.includes('/') && !t.startsWith('.') && !t.endsWith('.tgz'))
+    .map((t) => t.replace(/(.)@.*$/, '$1'));
+  assert.ok(names.length > 0, 'sanity: the README tells the reader to install or run trocar with npm or npx');
+  assert.deepEqual(names.filter((n) => n !== pkg.name), [], `a package the README installs or runs that is not ${pkg.name}`);
 });
 
 // the two facts the README states that a reader acts on are the harnesses and the command lines. Both are read from

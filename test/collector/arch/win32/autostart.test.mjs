@@ -203,8 +203,9 @@ test('W25 on and the daemon ask the same `whoami /groups` as off and uninstall (
 test('W24 `on` refuses a Node below the minimum with a doctor line that says what was found and what is needed; the minimum is the one package.json promises', () => {
   const engines = JSON.parse(fs.readFileSync(new URL('../../../../package.json', import.meta.url), 'utf8')).engines.node
   assert.equal(`>=${NODE_MIN_MAJOR}`, engines, 'the preflight and the engines field are one number')
-  for (const v of ['20.0.0', '20.19.5', '22.23.1', '24.1.0']) assert.deepEqual(nodePreflight({ versions: { node: v } }), { ok: true, have: v, min: NODE_MIN_MAJOR }, v)
-  for (const v of ['18.20.4', '19.9.0', '16.0.0']) {
+  const M = NODE_MIN_MAJOR // the versions around the floor, from the floor: the test holds the rule, not today's number
+  for (const v of [`${M}.0.0`, `${M}.19.5`, `${M + 1}.0.0`, `${M + 2}.1.0`]) assert.deepEqual(nodePreflight({ versions: { node: v } }), { ok: true, have: v, min: NODE_MIN_MAJOR }, v)
+  for (const v of [`${M - 1}.9.0`, `${M - 2}.20.4`, '16.0.0']) {
     const r = nodePreflight({ versions: { node: v } })
     assert.equal(r.ok, false, v)
     assert.equal(r.have, v)
