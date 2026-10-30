@@ -1,0 +1,68 @@
+name: Bug report
+description: Something trocar does is wrong or broken.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: trocar version
+      description: Output of `trocar --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      placeholder: e.g. macOS 15.4, Windows 11 24H2, Ubuntu 24.04
+  - type: input
+    id: harness
+    attributes:
+      label: Harness and form
+      description: Which agent, and which form of it (CLI, desktop app, IDE extension), with its version if you know it.
+      placeholder: e.g. Codex CLI 0.50
+    validations:
+      required: true
+  - type: textarea
+    id: ran
+    attributes:
+      label: What you ran
+      description: The trocar commands and agent actions, in order.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: What happened instead, with any error output.
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: trocar status --json
+      description: Output of `trocar status --json`. Remove any token or secret before pasting.
+      render: json
+  - type: checkboxes
+    id: not-security
+    attributes:
+      label: Not a security issue
+      options:
+        - label: This is not a security vulnerability. Security issues go through the Security tab's "Report a vulnerability", see SECURITY.md.
+          required: true

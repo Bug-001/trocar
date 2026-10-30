@@ -91,7 +91,7 @@ export const COMMANDS = Object.freeze([
     usage: 'trocar update [--yes] [--dry-run] [--json]',
     summary: 'Takes this trocar to the newest code and leaves the machine as it was: installed, and capturing whatever it was capturing. The agents it captures are switched off while the code changes and switched on again after it.',
     options: [YES, DRY, JSON_OPT],
-    exits: [[0, 'it is up to date'], [1, 'it was not updated, or not finished; it says why'], [2, 'nothing ran: a usage error, this trocar is not a git checkout, root, or a confirmation nobody could give']] },
+    exits: [[0, 'it is up to date'], [1, 'it was not updated, or not finished; it says why'], [2, 'nothing ran: a usage error, an npm copy with nothing to finish, this trocar is not a git checkout, root, or a confirmation nobody could give']] },
   { name: 'raw',
     group: 'Maintenance', mutates: false, run: via('./raw.mjs', 'run'),
     usage: 'trocar raw <segment>[:<from>[-<to>]]',
