@@ -331,7 +331,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   const board = boardFor({ P, failure, query: query.svc, tips: query.tips.of, log })
   const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: board.routes({ 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off'), ...query.routes }) }) // throws if another daemon answers
 
-  let redirector = null
+  let redirector = null, engine = null, seal = null // what a failed start closes again (below)
   try {
     // First the previous run (4.6 §事件与码): an unclean stop is the first line of this start; readers take this start's
     // lines from here on as this run's, up to and past daemon-start — the CA check below included.
@@ -366,11 +366,13 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     }, caCheckMs)
     caTimer.unref()
     const retention = classesHook({ home: path.dirname(P.dir), failure }) // D60③, engine-data.mjs
-    const { store, seal } = storeWithSealing({ P, failure, query })
+    const sealing = storeWithSealing({ P, failure, query })
+    const { store } = sealing
+    seal = sealing.seal
     seal.start() // after noteUncleanStop above: the gate (the control server) has claimed the collector
     // switch / helper events: their own descriptor (events.mjs, a lost line becomes a log-gap), and every failure
     // among them carries `reason`
-    let engine = null // created after the tracker; the tracker's onGone reaches it at call time
+    // engine: created after the tracker; the tracker's onGone reaches it at call time
     const event = (e) => failure.write({ ...e, ...(e.error != null && e.reason == null ? { reason: String(e.error) } : {}) })
 
     const nextAgentList = agentListWatch({ home: netHome, write: (rec) => failure.write(rec) }) // at start here, then on every 5 s check
@@ -767,6 +769,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     failure.flush()
     await control.close()
     if (redirector) await redirector.close().catch((w) => failure('helper', w)) // the start failure itself is recorded by startDaemon
+    if (seal) seal.stop()
+    if (engine) await engine.close({ graceMs: 0 }).catch((w) => failure('engine', w)) // nothing left listening: the process ends, and the port is free for the next start
     board.stop(); query.stop()
     throw e
   }
