@@ -46,6 +46,10 @@ function expected(c, d, f, w) {
   // A source, or the file it names, that cannot be read forwards uncached even for a plugin carrier: ⑭ still verifies with it (D38)."
   const t = f.trust !== 'root' && d.proxyMode.trusts[f.trust]
   const pluginCarrier = (d.proxyMode.certs || {})[f.cert]?.kind === 'plugin'
+  // ... "a plugin carrier's process whose env holds TROCAR_HOOK_PID other than its own pid inherited the door and never ran the hook: hook-inherited"
+  // ... "a plugin carrier's process whose env cannot be read: environ-unreadable, uncached (whether it ran the hook is not known, D38)"
+  if (pluginCarrier && c.envNull) return 'environ-unreadable'
+  if (pluginCarrier && c.hookPid === 'other' && !c.envNull) return 'hook-inherited'
   if (t) {
     const w8 = t.when && firstOf(w, t.when.src)
     if (w8 && w8.error) return w8.error
@@ -110,6 +114,7 @@ for (const { d, f, os } of CASES) {
     run(d, f, os, { start: 'unknown' })
     run(d, f, os, { issuer: false }) // CM6, verdict side
     run(d, f, os, { envNull: true })
+    for (const hookPid of ['own', 'other']) run(d, f, os, { hookPid }) // a plugin carrier's process that ran the hook itself, or inherited the door
     run(d, f, os, { cwdNull: true })
     d.proxyMode.blockers.forEach((b, i) => {
       const got = run(d, f, os, { blocker: i })
@@ -163,5 +168,17 @@ test('CM22 · dsh plugin carrier: source unset or lacking the root → decrypt; 
     const got = run(d, f, os, over)
     assert.equal(got.decrypt, want === null, `${os} · ${JSON.stringify(over)}`)
     if (want) assert.equal(got.code, want)
+  }
+})
+
+// Rule 4 when nothing else reads the env: a plugin carrier with trust `root` and no blockers. TROCAR_HOOK_PID is then the only thing the verdict
+// reads from the env, so an env that cannot be read must forward uncached, never decrypt a process that may have inherited the door (D38).
+test('CM22 · plugin carrier, trust root, no blockers: env unreadable → environ-unreadable, uncached; a parent\'s hook pid → hook-inherited', () => {
+  const d = { ...eighth, proxyMode: { ...eighth.proxyMode, blockers: [] } }, f = d.proxyMode.forms.find((x) => x.id === 'eighth.plugin')
+  for (const os of f.os) {
+    const unread = run(d, f, os, { envNull: true })
+    assert.deepEqual([unread.decrypt, unread.code, unread.unread], [false, 'environ-unreadable', true], os)
+    assert.equal(run(d, f, os, { hookPid: 'other' }).code, 'hook-inherited', os)
+    assert.equal(run(d, f, os, { hookPid: 'own' }).decrypt, true, os)
   }
 })

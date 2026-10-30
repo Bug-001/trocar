@@ -9,6 +9,8 @@
 //
 //   desc          the harness descriptor (its `proxy.env`, `proxy.systemProxy`) · form the identified process's form (the caller judges headerAllowed by it)
 //   facts         { pid, start, env, parentOf } of the identified process, or null when identity failed: then only steps 2, 4 and 5 run (decision #12).
+//                 `{ pid, start, env, hookOnly: true }`: a process the door cannot identify that presented its credentials (a tool subprocess that
+//                 inherited an in-process hook's env): step 1 reads its env, step 3 never runs; its env unread with no recorded prior is `unknown` (D38).
 //                 `env` is an object or a Map (null / undefined = could not be read); `parentOf()` → the parent's facts, or null when it is gone.
 //   recordedPrior the `prior_value` recorded by `on` for this form's entry (null: the user had none)
 //   systemProxy   null (none, or off) · { url, bypass, wpad? } · { pac: true, wpad? } (a PAC, or WPAD alone: reported, never executed) · { ok: false }
@@ -29,6 +31,7 @@
 import { CODE } from '../codes.mjs'
 
 export const HOOK_ENV = 'TROCAR_PRIOR_PROXY'
+export const HOOK_PID_ENV = 'TROCAR_HOOK_PID' // an in-process plugin hook's own pid, written once it added the root and pointed the env at the door (P11 rule 4)
 export const HOOK_HEADER = 'x-trocar-upstream'
 export const SOURCES = Object.freeze(['hook', 'config-prior', 'process-env', 'system-proxy', 'direct', 'unknown'])
 const NONE = 'none'
@@ -101,9 +104,10 @@ export async function upstreamFor({ desc, form = null, facts = null, recordedPri
   // 2. config-prior
   const prior = textOf(recordedPrior)
   if (prior !== null) { const r = take('config-prior', prior); if (r) return r }
+  if (facts && facts.hookOnly && facts.env == null) return unknown() // the hook value of an unidentified process could not be read
 
   // 3. process-env: the first name the agent reads that has a value once its own files are applied; a door in the environment walks up to the process that started it
-  if (facts) {
+  if (facts && !facts.hookOnly) {
     let p = facts
     for (let depth = 0; ; depth++) {
       if (!p || p.env == null) return unknown()

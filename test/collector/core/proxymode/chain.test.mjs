@@ -170,6 +170,31 @@ test('CM20 identity failed: the hook (env or header) and the process env are not
   await assert.rejects(upstreamFor({ desc: {} }), TypeError)
 })
 
+// P7 step 1 / ⑥ for a process the door cannot identify (an agent's tool subprocess that inherited an in-process hook's environment): its own hook value
+// comes first, then 2, 4, 5 — step 3 never runs for it; its environment unread (or no pid) is unknown, never a silent direct (D38, invariant 6).
+test('CM20 unidentified process at a door: its own hook value first, then 2, 4, 5; its environment unread is unknown', async () => {
+  const hookOnly = (env) => ({ pid: 100, start: 1, env, hookOnly: true })
+  for (const d of descs) for (const prior of [null, PARENT]) for (const sp of [null, VERGE]) {
+    const at = (env) => upstreamFor({ desc: d, facts: hookOnly(env), recordedPrior: prior, systemProxy: sp, isTrocarDoor: isDoor })
+    const noId = await upstreamFor({ desc: d, facts: null, recordedPrior: prior, systemProxy: sp, isTrocarDoor: isDoor })
+    const label = `${d.name} prior=${prior} sp=${!!sp}`
+    const hooked = await at({ [HOOK_ENV]: CORP, [d.proxy.env[0]]: DOOR })
+    assert.deepEqual([hooked.source, hooked.url], ['hook', CORP], `${label}: the inherited hook value is the upstream`)
+    assert.deepEqual([(await at({ [HOOK_ENV]: 'none' })).source, (await at({ [HOOK_ENV]: 'none' })).url], ['hook', null], `${label}: none is no proxy`)
+    for (const env of [{}, { [HOOK_ENV]: DOOR }, { [d.proxy.env[0]]: HOOKED }]) {
+      const r = await at(env)
+      assert.deepEqual([r.source, r.url, r.code], [noId.source, noId.url, noId.code], `${label} env=${JSON.stringify(env)}: no hook value → steps 2, 4, 5 (never step 3)`)
+    }
+    const unread = await at(null)
+    if (prior) assert.deepEqual([unread.source, unread.url], ['config-prior', PARENT], `${label}: a recorded prior still answers (a route on recorded has no in-process hook)`)
+    else {
+      assert.equal(unread.source, 'unknown', `${label}: unread is unknown, not direct`)
+      assert.equal(unread.code, CODE.priorProxyUnknown)
+      assert.equal(unread.url, sp ? VERGE.url : null, `${label}: the system proxy when there is one`)
+    }
+  }
+})
+
 // P7 step 3 with the agent's own proxy files: name by name in the agent's order, an `override` file's value, else the environment's, else a `fill` file's
 // (the agent applies them at start, in process, where a launch-environment reader cannot see it). Generated over every descriptor that reads a proxy file,
 // under both semantics: {no name, each name} set in the env × {no name, each name} set by the file, as a value, a door, a door then a later value, or

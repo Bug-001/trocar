@@ -12,6 +12,7 @@ import path from 'node:path'
 import { readSrc } from './sources.mjs'
 import { certBlocks } from '../../../off/pem.mjs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
+import { HOOK_PID_ENV } from './chain.mjs'
 
 const fwd = (code, detail, extra) => ({ decrypt: false, code, detail, ...extra })
 // a verdict from evidence that could not be read (the process env or cwd, a file): `unread`, so the door judges again on a later connection (4.11 P11, D38)
@@ -100,6 +101,9 @@ export function verdictOf({ desc, form, facts = {}, record = {}, issuer, host, h
   if (sv) return fwd(sv, `pid ${facts.pid} started before trocar's settings for ${form.id} were in place (its proxy entry and the certificate it needs); restart it once`)
   const pctx = { ...ctx, env: facts.env || {}, cwd: facts.cwd ?? undefined } // the process's env and cwd, never the daemon's
   const inProcess = (pm.certs || {})[form.cert]?.kind === 'plugin' // rule 4: a plugin carrier adds the root in process; its trust sources serve ⑭ only
+  if (inProcess && facts.env == null) return fwd('environ-unreadable', 'the process environment could not be read, so whether this process ran the hook itself is not known', { unread: true }) // D38
+  const hookPid = inProcess ? String(facts.env[HOOK_PID_ENV] ?? '').trim() : '' // ... unless the hook that wrote the env was a parent's
+  if (hookPid !== '' && hookPid !== String(facts.pid)) return fwd('hook-inherited', `pid ${facts.pid} inherited the door from its parent (pid ${hookPid}) and did not run the hook itself, so it holds no trocar root`)
   const t = trustVerdict(form.trust !== 'root' && pm.trusts && pm.trusts[form.trust], pctx, facts, record, inProcess)
   if (t) return t
   if (!issuer || (issuer.state && issuer.state() !== 'ready')) return issuer && issuer.state() === 'key-missing' ? fwd('cert-key-missing', 'the root key is not in its custody: nothing signs leaves') : fwd('cert-intermediate-unavailable', 'no intermediate certificate to sign leaves with')
