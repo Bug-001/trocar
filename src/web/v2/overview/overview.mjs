@@ -52,7 +52,7 @@ const ORDER = ['O1', 'O1p', 'O2', 'O3', 'O4', 'O5', 'O6', 'O9']
 const QUIET = ['ok', 'off', 'not-installed'] // the capture states that need no item (1.7 §事项目录 MUST)
 export function overviewItems(s, now) {
   const all = []
-  const H = s.caph && s.caph.data && !s.caph.data.unreadable ? s.caph.data : null
+  const H = s.caph && s.caph.data ? s.caph.data : null
   const push = (cls, key, o) => all.push({ cls, key, ...o })
 
   // ── O1 · an agent with a problem, worded as its 采集 page row (agentVerdicts); the net-blocked ones lead the table ──
@@ -67,7 +67,7 @@ export function overviewItems(s, now) {
   }
 
   // ── O2 · the capture service is stopped or not answering (the server's health, never re-folded here, 1.5), its state
-  // cannot be said (daemon.error, with its reason), or `status` could not be read (503) ─────────────────────────────
+  // cannot be said (daemon.error, with its reason), or the capture health in `status` could not be read ─────────────────────────────
   const cv = captureVerdict(s.caph && s.caph.data, { now })
   if (['unreadable', 'not-running', 'not-responding'].includes(cv.state)) push('O2', 'collector', { text: cv.text, href: '#/capture' })
   else if (H && H.daemon && H.daemon.error) push('O2', 'collector', { text: W.UNKNOWN_ITEM(String(H.daemon.error)), href: '#/capture' })
@@ -389,7 +389,7 @@ export function firstUse(s) {
 // 各 agent 一行 (1.7 §首次使用 · 1.9 §开关): the capture page's rows (agentVerdicts) and, for the same documents, its one control.
 // s.control = GET /control/status's answer (null before it), s.ui = Map read-side id → {busy, receipt} (kept across repaints).
 function agentRowsHtml(s) {
-  const H = s.caph && s.caph.data && !s.caph.data.unreadable ? s.caph.data : null
+  const H = s.caph && s.caph.data ? s.caph.data : null
   const rows = H ? agentVerdicts(H, null) : []
   if (!rows.length) return ''
   const ui = s.ui || new Map()

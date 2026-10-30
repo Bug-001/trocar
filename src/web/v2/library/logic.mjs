@@ -216,7 +216,7 @@ export function capShotMaker(fetchHealth, now = Date.now) {
     if (!p) p = (async () => {
       let r
       try { r = await fetchHealth() } catch (e) { r = { ok: false, status: 0, error: String((e && e.message) || e) } }
-      const p = capHealthPatch(r, now()) // the same reading of one answer as every capture-health card (a 503 is {unreadable})
+      const p = capHealthPatch(r, now()) // the same reading of one answer as every capture-health card (an unreadable capture health is {unreadable})
       // a failure keeps the failed answer itself ({status, error}), so the line can say the cause class (K-29)
       done = p.capH ? { h: p.capH, asOf: p.capHOkAt } : { fail: r && !r.ok ? r : { error: p.capHErr } }
       return done
@@ -232,7 +232,7 @@ export function capShotMaker(fetchHealth, now = Date.now) {
 export const SERVICE_DOWN = new Set(['not-running', 'not-responding', 'not-installed', 'off'])
 // the 空态's second line: the capture service's own sentence for its state — 采集在进行 says the inviting hint
 // instead — plus the time that answer was read (「截至」). A shot that never arrived says nothing yet. The verdict is taken
-// at that time: the shot is read once, so judging it against a later clock would call it stale. A failed read or a 503
+// at that time: the shot is read once, so judging it against a later clock would call it stale. A failed read or an unreadable capture health
 // keeps its reason only in `tech`, the collapsed technical details (K-29).
 export function emptyBoardState(shot) {
   if (!shot) return { line: '', tech: '' }
