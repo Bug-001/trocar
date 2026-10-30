@@ -43,7 +43,7 @@ test('V92: two failures sharing a code under two `where`s are two groups, each w
   const doc = (await s.run(['status', '--json'], { deps })).io.json()
   const mine = doc.failures.groups.filter((g) => g.code === 'start-failed')
   assert.deepEqual(mine.map((g) => [g.level, g.where, g.count, g.reason]).sort(), [['problem', 'daemon', 2, 'newest of daemon'], ['problem', 'start', 1, 'of start']])
-  for (const g of doc.failures.groups) assert.deepEqual(Object.keys(g).filter((k) => !['level', 'where', 'code', 'count', 'first_ts', 'last_ts', 'harness', 'reason'].includes(k)), [])
+  for (const g of doc.failures.groups) assert.deepEqual(Object.keys(g).filter((k) => !['level', 'where', 'code', 'count', 'first_ts', 'last_ts', 'harness', 'process', 'pid', 'reason'].includes(k)), [])
   const text = (await s.run(['status', '--failures'], { deps })).io.stdoutText()
   const problems = doc.failures.groups.filter((g) => g.level === 'problem')
   for (const g of problems) assert.equal(text.split('\n').filter((l) => l.includes(failureBrief(g))).length, 1, failureBrief(g))
@@ -60,4 +60,22 @@ test('V102: a failure names its harness whether the record says `agent` or `harn
   const mine = doc.failures.groups.filter((g) => ['trust-rejected', 'leaf-error'].includes(g.code))
   assert.ok(mine.some((g) => g.code === 'trust-rejected') && mine.some((g) => g.code === 'leaf-error'))
   for (const g of mine) assert.equal(g.harness, 'codex', `${g.level} ${g.code}`)
+})
+
+test('C.3 · a failure group whose newest record names its process carries process + pid, and --failures and failureBrief name that program; a group whose newest does not carries neither', async () => {
+  const health = healthOver([
+    { ts: at(300), event: 'failure', where: 'ingress', code: 'ingress-unknown', peer: { address: '127.0.0.1', port: 50001 }, pid: 11, process: 'older-tool', reason: 'an HTTP request that is not CONNECT (HEAD)' },
+    { ts: at(200), event: 'failure', where: 'ingress', code: 'ingress-unknown', peer: { address: '127.0.0.1', port: 50002 }, pid: 4321, process: 'codex', method: 'HEAD', host: 'probe.example', reason: 'an HTTP request that is not CONNECT (HEAD)' },
+    { ts: at(100), event: 'failure', where: 'engine', code: 'leaf-error', reason: 'r' },
+  ])
+  const s = sandbox(), deps = { captureHealth: () => health }
+  const doc = (await s.run(['status', '--json'], { deps })).io.json()
+  const g = doc.failures.groups.find((x) => x.code === 'ingress-unknown')
+  assert.deepEqual([g.count, g.process, g.pid], [2, 'codex', 4321])
+  const plain = doc.failures.groups.find((x) => x.code === 'leaf-error')
+  assert.equal('process' in plain || 'pid' in plain, false)
+  assert.ok(failureBrief(g).includes('codex') && failureBrief(g).includes('4321'), failureBrief(g))
+  assert.equal(failureBrief(plain).includes('pid'), false)
+  const one = (t) => t.replace(/\s+/g, ' ') // a row folds inside 80 columns
+  assert.ok(one((await s.run(['status', '--failures'], { deps })).io.stdoutText()).includes(one(failureBrief(g))), 'the --failures row carries the sentence that names the program')
 })
