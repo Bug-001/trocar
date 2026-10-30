@@ -107,8 +107,8 @@ export function createSwitch({ redirector, stateFile, known, installed = () => [
     const fresh = readState(stateFile, (e) => { dirty = true; unreadable(e) }, { installed: installed() })
     const turnedOff = onIds().filter((id) => !(fresh.harnesses[id] && fresh.harnesses[id].desired === 'on'))
     const was = state
-    // a harness the file says on is kept off here until an `on` request: the file never attaches
-    state = { ...fresh, harnesses: Object.fromEntries(Object.entries(fresh.harnesses).map(([id, h]) => [id, { ...h, desired: h.desired === 'on' && was.harnesses[id] && was.harnesses[id].desired === 'on' ? 'on' : 'off' }])) }
+    // a table harness the file says on is kept off here until an `on` request: the file never attaches; an id outside the table is carried as the file holds it (㉓)
+    state = { ...fresh, harnesses: Object.fromEntries(Object.entries(fresh.harnesses).map(([id, h]) => [id, known.includes(id) ? { ...h, desired: h.desired === 'on' && was.harnesses[id] && was.harnesses[id].desired === 'on' ? 'on' : 'off' } : h])) }
     for (const id of turnedOff) if (!state.harnesses[id]) state.harnesses[id] = { ...was.harnesses[id], desired: 'off' }
     for (const id of turnedOff) recording.delete(id) // first: nothing begun after this is recorded
     if (turnedOff.length) {

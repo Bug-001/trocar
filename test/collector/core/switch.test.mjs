@@ -285,3 +285,18 @@ test('CM39: an off with no names leaves an id outside the table byte for byte, a
   assert.deepEqual(Object.keys(r.harnesses).filter((id) => !IN().includes(id)), [])
   assert.equal(r.desired, 'off')
 })
+
+test('CM39: an id outside the table that the file turns on after start is written back as the file holds it, by a named and a bare off', async () => {
+  for (const names of [['codex'], undefined]) {
+    const f = tmpState(); fs.mkdirSync(path.dirname(f), { recursive: true })
+    fs.writeFileSync(f, JSON.stringify({ version: 2, updated_at: 'T0', harnesses: { codex: { desired: 'on', policy: 'all', extra_hosts: [], updated_at: 'T0' } } }))
+    const sw = mk(fakeRedirector(), f)
+    await sw.restore()
+    const outside = { desired: 'on', policy: 'auto', extra_hosts: ['x.example'], updated_at: 'T5' }
+    rewrite(f, (s) => { s.harnesses['later-agent'] = outside })
+    await sw.off(names ? { harnesses: names } : {})
+    const back = JSON.parse(fs.readFileSync(f, 'utf8')).harnesses
+    assert.deepEqual(back['later-agent'], outside, String(names))
+    assert.equal(back.codex.desired, 'off')
+  }
+})
