@@ -15,6 +15,7 @@ import { parseJsonc } from '../core/config-read.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
 import { envProxies, urlHostsDeep, truthy, perOs } from './_common.mjs'
 import { renderPlugin } from './_plugins.mjs'
+import { ROUTE_PLACES } from '../../off/marker.mjs'
 
 const MANAGED = { linux: '/etc/opencode/opencode.json', darwin: '/Library/Application Support/opencode/opencode.json' }
 const globalDir = (env, home) => path.join(env.get('XDG_CONFIG_HOME') || path.join(home, '.config'), 'opencode')
@@ -72,7 +73,8 @@ const proxy = {
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (a plugin in OpenCode's plugin folder routes
 // every form; the root alone trusts). Ruling ⑳: OpenCode 1.x installs @opencode-ai/plugin into the config dir for any plugin, which outlives `off`.
-const CONFIG = (path) => ({ base: 'home', dir: '.config', env: 'XDG_CONFIG_HOME', path: `opencode/${path}` })
+const PLUGIN = ROUTE_PLACES.opencode // where `on` writes the routing plugin, the place the marker undo looks too
+const CONFIG = (p) => ({ ...PLUGIN.dir, path: `opencode/${p}` })
 const form = (id, present) => ({ id, os: ['darwin', 'win32'], route: 'plugin', cert: 'root', trust: 'root', present, verified: { darwin: true, win32: true } })
 const proxyMode = {
   forms: [
@@ -83,7 +85,7 @@ const proxyMode = {
     form('opencode.acp', [{ command: 'opencode' }]),
   ],
   routes: {
-    plugin: { kind: 'plugin-file', dir: CONFIG('plugins'), template: 'opencode-plugin', value: 'door-url', rereads: true, absent: 'create', takesEffect: 'takes effect for the next OpenCode you start; a running v2 server reads it on its next run' },
+    plugin: { kind: 'plugin-file', dir: PLUGIN.dir, name: PLUGIN.name, template: 'opencode-plugin', value: 'door-url', rereads: true, absent: 'create', takesEffect: 'takes effect for the next OpenCode you start; a running v2 server reads it on its next run' },
   },
   certs: {},
   trusts: {},
