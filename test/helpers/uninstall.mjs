@@ -5,8 +5,6 @@
 // `still_trusting`, `kept_captures`, `notes`, `left`, `dropped_backups`) built from the receipt. What the new uninstall does differently (a manifest it cannot read, a lock
 // it cannot read: exit 1 with the reasons, not a throw) has its own tests in test/cli/uninstall.test.mjs. Exports only.
 import tls from 'node:tls'
-import path from 'node:path'
-import { readManifest } from '../../src/off/manifest.mjs'
 import { runUninstall } from '../../src/cli/uninstall.mjs'
 import { recordingExec } from '../cli/fixtures/on-ctx.mjs'
 
@@ -14,12 +12,8 @@ import { recordingExec } from '../cli/fixtures/on-ctx.mjs'
 export async function uninstallCollector({ home, env = {}, purgeData = false, scan = async () => [], stop = null, roots = null, deps = {}, yes = true } = {}) {
   const exec = deps.exec ? { run: deps.exec } : recordingExec()
   let how = 'none'
-  // the world's own harness table: the ids its install recorded (the tests serve descriptors of their own, 4.11 §3 ㉓)
-  let m = null
-  try { m = readManifest(path.join(home, '.trocar', 'collector')) } catch { /* unreadable: the product's table */ }
-  const table = m && !m.unsupported ? [...new Set([...((m.install && m.install.harnesses) || []), ...[...m.entries, ...m.files].map((x) => x.harness)].filter((h) => typeof h === 'string'))] : null
   const d = {
-    ...(table ? { harnessIds: table } : {}), exec: exec.run, platform: 'linux', procs: scan, roots: roots || { node: [...tls.rootCertificates], osText: '' }, sleep: async () => {}, drainMs: 0,
+    exec: exec.run, platform: 'linux', procs: scan, roots: roots || { node: [...tls.rootCertificates], osText: '' }, sleep: async () => {}, drainMs: 0,
     ...(stop ? { daemonState: async () => ({ state: 'none', lock: null }), stopDaemon: async () => { how = await stop(); return { stopped: true, how: how === 'stopped' ? 'signal' : 'none', pid: null, signals: how === 'stopped' ? ['SIGTERM'] : [], helper_pid: null } } } : {}),
     ...deps,
   }
