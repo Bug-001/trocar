@@ -4,9 +4,10 @@
 // session of the same harness and the same system-prompt hash when it starts within SYNTH_GAP_MS of that
 // session's latest call; otherwise it opens a new one. pid and connection are NOT inputs (3.4 关键区分: one
 // Hermes gateway serves many tasks). Callers feed records in file order; the board and the ETL both read the
-// capture files in sorted order, so they assign the same keys. Leaf module.
+// capture files in sorted order, so they assign the same keys. A keyless call carrying its harness's compaction hint is first
+// matched to a keyed session of the same harness by the user text both carry (3.4 按内容认亲; pi's summary request). Leaf module.
 import { createHash } from 'node:crypto';
-import { harnessOf, sessionKeyOf, bodyOf } from './harnesses.mjs';
+import { harnessOf, sessionKeyOf, bodyOf, hintsOf } from './harnesses.mjs';
 
 export const SYNTH_GAP_MS = 30 * 60 * 1000;
 export const SYNTH_RULE = 'sha256(first system text) + a 30-minute gap (3.4 合成键, gate G11)';
@@ -30,54 +31,127 @@ export function systemTextOf(body) {
 // 2026-10-06T00:00:00.000Z → 20261006T000000Z: no '/', '#' or ':', so the key is safe inside a raw_ref.
 const stampOf = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
 
-// The board re-stamps the whole corpus on every request (each poll): hash a record's system text once.
-const HASHES = new WeakMap();
-const hashOf = (rec) => {
-  let h = HASHES.get(rec);
-  if (h === undefined) { h = createHash('sha256').update(systemTextOf(bodyOf(rec)), 'utf8').digest('hex'); HASHES.set(rec, h); }
-  return h;
+// The board re-stamps the whole corpus on every request (each poll): a record's facts are derived once.
+const FACTS = new WeakMap();
+
+// ── kinship (3.4 合成键 · 按内容认亲) ─────────────────────────────────────────────────────────────────────────────────────
+// A keyless call carrying its harness's compaction hint is looked for in the KEYED sessions of that harness first, by the
+// user text both carry. Fingerprints: every WIN-character window of the whitespace-collapsed text, hashed, kept when the hash
+// falls on the sample (h % SAMPLE === 0) — the same rule on both sides, so a long enough shared fragment always yields shared
+// fingerprints. Character windows, not words: CJK has no spaces. A fingerprint is stored as h / SAMPLE (a small integer).
+const WIN = 32, SAMPLE = 8, KEYED_CAP = 64, PROBE_CAP = 1024, STATE_CAP = 4096, MIN_SHARED = 2;
+const userTextsOf = (body) => {
+  const b = body || {};
+  if (typeof b.input === 'string') return [b.input];
+  const items = [...(Array.isArray(b.messages) ? b.messages : []), ...(Array.isArray(b.input) ? b.input : [])];
+  return items.filter((x) => x && x.role === 'user').map((x) => textOf(x.content));
 };
+// polynomial rolling hash over UTF-16 units, mod 2^32
+const BASE = 0x01000193, TOP = (() => { let p = 1; for (let i = 1; i < WIN; i++) p = Math.imul(p, BASE); return p; })();
+function fingerprints(texts, cap) {
+  const out = new Set();
+  for (const raw of texts) {
+    const t = raw.replace(/\s+/g, ' ').trim();
+    let h = 0;
+    for (let i = 0; i < t.length && out.size < cap; i++) {
+      if (i >= WIN) h = (h - Math.imul(t.charCodeAt(i - WIN), TOP)) | 0;
+      h = (Math.imul(h, BASE) + t.charCodeAt(i)) | 0;
+      if (i >= WIN - 1 && (h >>> 0) % SAMPLE === 0) out.add((h >>> 0) / SAMPLE);
+    }
+    if (out.size >= cap) break;
+  }
+  return [...out];
+}
 
 export function createSynthKeys({ gapMs = SYNTH_GAP_MS } = {}) {
   const assign = createSynthAssigner({ gapMs });
-  return { keyOf: (rec) => assign(synthFactsOf(rec)) };
+  return { keyOf: (rec) => { const got = assign(synthFactsOf(rec)); return got ? got.key : null; } };
 }
 
-/** The three facts a keyless call brings to the rule, or null when it gets no synthesized key at all.
- *  A reader that cannot afford the body later (the segment index, 1.6 §4.1) stores `hash` and asks the
- *  assigner below with the harness and time it already has. */
+/** What a call brings to the rule, or null when it takes no part in it. Keyless → {harness, ms, hash, probe}: `probe` is its
+ *  fingerprints when it carries the harness's compaction hint, else null. Keyed (a `synth: true` harness only) → {harness, ms,
+ *  key, fp}, with NO hash: a keyed call never opens or moves a synthesized group. A reader that cannot afford the body later (the
+ *  segment index, 1.6 §4.1) stores these and asks the assigner below with them. */
 export function synthFactsOf(rec) {
+  if (!rec || typeof rec !== 'object') return null;
+  if (FACTS.has(rec)) return FACTS.get(rec);
+  const f = factsOf(rec);
+  FACTS.set(rec, f);
+  return f;
+}
+function factsOf(rec) {
   // a call kept as a log line only (D40) has no system text to anchor a task by: it stays keyless, and is shown as such
-  if (!rec || rec.is_llm_call !== true || rec.body_retention === 'log' || sessionKeyOf(rec).key) return null;
+  if (rec.is_llm_call !== true || rec.body_retention === 'log') return null;
   const h = harnessOf(rec);
   if (!h.row || h.row.synth !== true) return null;
   const ms = Date.parse(rec.ts_request || rec.ts || '');
   if (!Number.isFinite(ms)) return null; // no time, no window: the call stays keyless (and is shown as such)
-  return { harness: h.id, hash: hashOf(rec), ms };
+  const key = sessionKeyOf(rec).key;
+  if (key) return { harness: h.id, ms, key, fp: fingerprints(userTextsOf(bodyOf(rec)).reverse(), KEYED_CAP) };
+  const hint = hintsOf(rec);
+  const probe = hint.compaction === true || hint.compactionMarker ? fingerprints(userTextsOf(bodyOf(rec)), PROBE_CAP) : null;
+  return { harness: h.id, ms, hash: createHash('sha256').update(systemTextOf(bodyOf(rec)), 'utf8').digest('hex'), probe };
 }
 
-/** The rule itself (gate G11), over those facts in the order the calls were captured: same harness + same
- *  system-prompt hash within `gapMs` of the open session's latest call → that session; else a new one. */
+/** The rule itself (gate G11), over those facts in the order the calls were captured → {key, kin} | null. A keyed call only
+ *  records its session's fingerprints (null). A keyless call with a probe joins the keyed session of its harness, last seen
+ *  within `gapMs`, that shares the most fingerprints with it (at least MIN_SHARED; a tie → the later last call) — kin: true.
+ *  Otherwise: same harness + same system-prompt hash within `gapMs` of the open session's latest call → that session; else a
+ *  new one. */
 export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } = {}) {
-  // `${harness}\0${hash}` → { key, lastMs }; a caller that resumes the rule part-way (src/query/rows.mjs) hands in the state it saved
+  // `${harness}\0${hash}` → { key, lastMs }; `\u0001${harness}\0${key}` → { key, lastMs, fp } (fp: a Set, replaced, never
+  // mutated, so a shallow copy of an entry is a snapshot). A caller that resumes the rule part-way (src/query/rows.mjs) hands
+  // in the state it saved.
+  const prune = (harness, ms) => {
+    const pre = '\u0001' + harness + '\0';
+    for (const [g, e] of open) if (g.startsWith(pre) && ms - e.lastMs > 2 * gapMs) open.delete(g);
+  };
   return (facts) => {
-    if (!facts || !facts.harness || facts.hash == null || !Number.isFinite(facts.ms)) return null;
-    const { harness, hash, ms } = facts;
-    const g = harness + '\0' + hash;
+    if (!facts || !facts.harness || !Number.isFinite(facts.ms)) return null;
+    const { harness, ms } = facts;
+    if (facts.key != null) {
+      const g = '\u0001' + harness + '\0' + facts.key;
+      const cur = open.get(g);
+      if (!cur) prune(harness, ms);
+      const fp = cur ? cur.fp : new Set();
+      let next = fp;
+      for (const x of facts.fp || []) if (!fp.has(x)) { if (next === fp) next = new Set(fp); next.add(x); }
+      if (next.size > STATE_CAP) next = new Set([...next].slice(next.size - STATE_CAP)); // FIFO: the oldest go first
+      open.set(g, { key: facts.key, lastMs: Math.max(cur ? cur.lastMs : ms, ms), fp: next });
+      return null;
+    }
+    if (facts.hash == null) return null;
+    if (facts.probe && facts.probe.length) {
+      prune(harness, ms);
+      const pre = '\u0001' + harness + '\0';
+      let best = null, bestN = 0;
+      for (const [g, e] of open) {
+        if (!g.startsWith(pre) || Math.abs(ms - e.lastMs) > gapMs) continue;
+        let n = 0;
+        for (const x of facts.probe) if (e.fp.has(x)) n++;
+        if (n >= MIN_SHARED && (n > bestN || (n === bestN && e.lastMs > best.lastMs))) { best = e; bestN = n; }
+      }
+      if (best) { best.lastMs = Math.max(best.lastMs, ms); return { key: best.key, kin: true }; }
+    }
+    const g = harness + '\0' + facts.hash;
     const cur = open.get(g);
-    if (cur && Math.abs(ms - cur.lastMs) <= gapMs) { cur.lastMs = Math.max(cur.lastMs, ms); return cur.key; }
-    const key = `synth-${harness}-${hash.slice(0, 12)}-${stampOf(ms)}`;
+    if (cur && Math.abs(ms - cur.lastMs) <= gapMs) { cur.lastMs = Math.max(cur.lastMs, ms); return { key: cur.key, kin: false }; }
+    const key = `synth-${harness}-${facts.hash.slice(0, 12)}-${stampOf(ms)}`;
     open.set(g, { key, lastMs: ms });
-    return key;
+    return { key, kin: false };
   };
 }
 
-// The board's whole-corpus form: stamp every record, in array order, with a non-enumerable `_synthKey` (null when
-// it gets none), so a record serializes exactly as captured (invariant 2).
-export function stampSynthKeys(records, opts) {
-  const k = createSynthKeys(opts);
+// The board's whole-corpus form: stamp every record, in array order, with a non-enumerable `_synthKey` (null when it gets
+// none) and, when it was joined to a keyed session by content, a non-enumerable `_kin: true`, so a record serializes exactly
+// as captured (invariant 2).
+export function stampSynthKeys(records, { gapMs = SYNTH_GAP_MS } = {}) {
+  const assign = createSynthAssigner({ gapMs });
   for (const r of records || []) {
-    if (r && typeof r === 'object') Object.defineProperty(r, '_synthKey', { value: k.keyOf(r), enumerable: false, configurable: true, writable: true });
+    if (!r || typeof r !== 'object') continue;
+    const got = assign(synthFactsOf(r));
+    Object.defineProperty(r, '_synthKey', { value: got ? got.key : null, enumerable: false, configurable: true, writable: true });
+    Object.defineProperty(r, '_kin', { value: !!(got && got.kin), enumerable: false, configurable: true, writable: true });
   }
   return records;
 }

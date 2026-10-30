@@ -111,7 +111,11 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null 
     entrypoint: entrypointOf(e),
     log_only: isLogOnly(e),
     subagent: !!String(headerOf(e, 'x-claude-code-agent-id') || '').trim(),
-    synth_hash: synth ? synth.hash : null,
+    synth_hash: synth && synth.hash != null ? synth.hash : null,
+    // kinship (3.4 按内容认亲): a keyed call of a `synth: true` harness → its user-text fingerprints; a keyless call with its
+    // harness's compaction hint → the fingerprints it is matched by. Space-joined strings ('' when none), so a row stays scalar.
+    kin_fp: synth && synth.key != null ? synth.fp.join(' ') : null,
+    kin_probe: synth && synth.probe ? synth.probe.join(' ') : null,
     offset,  // where this line starts in the plaintext segment, so one record is read by seek (null: sealed)
   };
 }
