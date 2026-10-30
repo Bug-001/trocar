@@ -1,4 +1,4 @@
-// ingress-config.test.mjs — the core copy of the ports and secrets of proxy mode (spec 4.11 §3 ①, plan decision #16): chosen once, kept, taken back by
+// ingress-config.test.mjs — the core copy of the ports and secrets of proxy mode (spec 4.11 §3 ①): chosen once, kept, taken back by
 // uninstall, and a group port another socket took is rebound by `on`. Seeds ported from test/collector/arch/{darwin,win32}/ingress-config.test.mjs.
 import test from 'node:test'
 import assert from 'node:assert/strict'

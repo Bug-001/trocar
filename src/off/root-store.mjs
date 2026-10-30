@@ -1,4 +1,4 @@
-// root-store.mjs (src/off) — the user's OS root store, P3 of RFC 4.11 (plan §E.5 #3): the one place that knows its argv on both
+// root-store.mjs (src/off) — the user's OS root store, P3 of RFC 4.11: the one place that knows its argv on both
 // OSes; the collector's install and the standalone uninstall import it (node:* and src/off only). Always the user's store: the
 // login keychain on macOS, CurrentUser\Root on Windows — a machine store is never written. The OS prompt is the consent.
 //   darwin  add     security add-trusted-cert -r trustRoot -k <login keychain> <file>   (no -p: unrestricted, M7 / M8)

@@ -64,7 +64,7 @@ export function loadBodies(api, refs, { signal } = {}) {
         return out
       }
       const d = r.data || {}, errs = d.errors || []
-      // until lane Q's block route lands (D8): the one-ref answer is the item itself
+      // until the block route lands (D8): the one-ref answer is the item itself
       const items = Array.isArray(d.blocks) ? d.blocks : want.length === 1 ? [{ ...d, ref: want[0] }] : []
       const byRef = new Map(items.map((x) => [x.ref, x]))
       for (const ref of want) {

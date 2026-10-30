@@ -1,4 +1,4 @@
-// test/off/win32-undo.test.mjs — the Windows collector's manifest kinds and their undo (plan Task 9(b), audit F3; RFC 4.8 §4.2, 1.6 R3 / V35):
+// test/off/win32-undo.test.mjs — the Windows collector's manifest kinds and their undo (RFC 4.8 §4.2, 1.6 R3 / V35):
 // KNOWN_KINDS carries proxy-entry · trust-entry · forwarder-binary · scheduled-task · run-key, OFF_VERSION is bumped, and `off` undoes each
 // kind by its own rule — so the flip never writes a kind that undo skips. reg and schtasks are recording fakes (0.1 §3); the file kinds
 // undo real files in a sandbox HOME.
@@ -132,7 +132,7 @@ test('a forwarder-binary entry: an off keeps it (draining) and the entry STAYS f
   assert.ok(out.results[0].reason.includes('EBUSY') || out.results[0].reason.includes('trocar off --now'), 'a kernel Windows holds is said, with the way out')
 })
 
-test('the round trip (audit F3): an off over a manifest of every collector kind returns each file to its pre_sha256, takes the Run value and the task out, keeps only the draining kernel copy, and exits 0', async () => {
+test('the round trip: an off over a manifest of every collector kind returns each file to its pre_sha256, takes the Run value and the task out, keeps only the draining kernel copy, and exits 0', async () => {
   const home = tmpDir('trocar-w32-round-')
   const dir = path.join(home, '.trocar', 'collector')
   fs.mkdirSync(dir, { recursive: true })

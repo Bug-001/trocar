@@ -13,7 +13,7 @@ export function landPlayhead({ N, playhead, follow, initialStep }) {
 }
 
 // Where a page sits around call `gi`: `{after, limit}` with it at the middle. The desk no longer pages (D69); this stays only
-// while test/query/worker-memory.test.mjs (lane Q, which drops it) imports it — D8 deletes it with that merge.
+// while test/query/worker-memory.test.mjs imports it — D8 deletes it with that merge.
 export const pagePlace = (gi, limit) => {
   const h = Math.floor(limit / 2), g = Math.max(0, gi | 0)
   return g >= h ? { after: g - h, limit } : { after: 0, limit: 2 * g + 1 }

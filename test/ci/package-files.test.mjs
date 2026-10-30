@@ -6,7 +6,7 @@ import path from 'node:path'
 import { productFiles, REPO } from '../helpers/package-files.mjs'
 import { NATIVE } from '../../src/collector/arch/darwin/native.mjs'
 
-test('CM34: the package carries the prebuilt macOS native binaries and builds nothing at pack time (plan decision #10)', () => {
+test('CM34: the package carries the prebuilt macOS native binaries and builds nothing at pack time', () => {
   const product = new Set(productFiles())
   for (const f of [...Object.values(NATIVE), 'pins.json']) assert.ok(product.has(`src/collector/arch/darwin/native/${f}`), `${f} is packed`)
   const scripts = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')).scripts || {}

@@ -1,6 +1,6 @@
 // codes.mjs — the D38 closed sets (RFC 4.6 §记录「失败不静默」): every name a collector record may carry in
 // `event`, `where`, `code` and `not_captured`, and which of them are failures. Writers (src/collector/**) and
-// readers (`trocar collector status`; later GET /api/capture-health) take the names from here and nowhere else.
+// readers (`trocar status`, the board's `status` query, the daemon's GET /status) take the names from here and nowhere else.
 // Leaf module (0.1 §2): it imports nothing.
 //   A failure turns the board's indicator ⚠; an expected `not_captured` (not captured by design) is counted and
 // listed, never ⚠. A Node errno (ENOSPC, EACCES, ERR_SSL_…) goes into `code` unchanged; free text only in `reason`.

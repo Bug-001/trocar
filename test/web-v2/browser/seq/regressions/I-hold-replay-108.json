@@ -93,6 +93,6 @@
   "screenshot": "test/web-v2/browser/shots/seq/I-hold-replay-108.png",
   "status": "fixed",
   "detail": "not following, on step 1 after a deep link to step 0 and Home: the settled window showed 0 request rows, and the next growth drew 2 at the same step (the cheap signature skips every read until calls/last_ts change, so an empty draw stays until the session grows). Did not reproduce on its one re-run: timing-dependent, full 81-step list kept",
-  "owner": "desk (lane D)",
+  "owner": "desk",
   "suspect": "src/web/v2/replay/replay.mjs:341"
 }

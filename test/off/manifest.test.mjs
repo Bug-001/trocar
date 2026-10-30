@@ -201,5 +201,5 @@ test('D55 / 4.11 P13 the new kinds: known, each with a sentence of undo by hand;
   for (const role of ['switch', 'config-entry']) assert.equal(undoByHand({ kind: 'owned-file', role, path: '/h/x y' }), "rm '/h/x y'")
 })
 
-// T11 (plan §E.5 #1): the undo knows the collector model's kinds (root-key, wrapper / switch / config-entry, pem-block, a real json-array-item undo) and refuses a
+// T11: the undo knows the collector model's kinds (root-key, wrapper / switch / config-entry, pem-block, a real json-array-item undo) and refuses a
 // v2 manifest and an unknown kind before it changes anything; a copy written by 12 lists those kinds as unknown and would undo a v2 manifest it no longer reads right.

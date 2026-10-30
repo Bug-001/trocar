@@ -333,7 +333,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
 
 export const SUPERVISOR_LOCK = 'supervisor.lock'
 export const SUPERVISE_CAP_MS = 60_000 // the longest wait between two starts of the daemon (4.8 §7: 1, 2, 4 … 60 s)
-export const SUPERVISE_STABLE_MS = 60_000 // a daemon that ran this long before it died starts the backoff over: it was not crash-looping (4.8 §7, Task 9(a))
+export const SUPERVISE_STABLE_MS = 60_000 // a daemon that ran this long before it died starts the backoff over: it was not crash-looping (4.8 §7)
 /** The wait before the restart after `attempt` failures in a row (0 = the first): 1, 2, 4, 8, 16, 32, then 60 s. */
 export const supervisorBackoff = (attempt) => Math.min(SUPERVISE_CAP_MS, 1000 * 2 ** attempt)
 

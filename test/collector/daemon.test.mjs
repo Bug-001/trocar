@@ -909,10 +909,10 @@ test('daemon: the bundle rebuild runs under the op lock (1.6 R12) — while anot
   } finally { await d.stop(); p.done(); s.done() }
 })
 
-// The daemon hands the engine each process's harness data (plan 3c §2 describe): Codex's WebSocket terminators reach the
+// The daemon hands the engine each process's harness data (describe, 4.6 §引擎 3): Codex's WebSocket terminators reach the
 // recorder, so a call is cut at response.completed and is on disk while the connection stays open (W10 through the
 // product path); without them it waits for the next message or the close. The same FlowExtras carry its own proxies.
-test('daemon: describe hands the engine the harness WebSocket terminators and the process\'s own proxies — a Codex WebSocket call is on disk at response.completed (plan 3c §2, W10)', { timeout: 20000 }, async () => {
+test('daemon: describe hands the engine the harness WebSocket terminators and the process\'s own proxies — a Codex WebSocket call is on disk at response.completed (W10)', { timeout: 20000 }, async () => {
   const s = sandbox(); const p = fakeProc()
   const labCa = makeLabCa(path.join(s.root, 'lab-ca'))
   const mock = await startMockUpstream({ tls: { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) } })
@@ -1037,7 +1037,7 @@ test('daemon: started where trocar is not installed, or where the manifest canno
   } finally { s.done() }
 })
 
-// 4.11 ⑰: a v2 manifest is not read by this build — complete or not, the daemon is not-installed; the trocar that wrote it undoes it (plan decision #11).
+// 4.11 ⑰: a v2 manifest is not read by this build — complete or not, the daemon is not-installed; the trocar that wrote it undoes it.
 test('daemon: on a v2 manifest, complete or not, it is not-installed (4.11 ⑰)', async () => {
   const s = sandbox(); const p = fakeProc()
   await install(s)
@@ -1464,7 +1464,7 @@ test('daemon: an unwatch the helper cannot do is a tracker failure and /off says
   } finally { await d.stop(); p.done(); s.done() }
 })
 
-// ── the table must be clean before the beat resumes; a dead helper has nothing to unwatch; the route checks its names (review of Task 2) ──
+// ── the table must be clean before the beat resumes; a dead helper has nothing to unwatch; the route checks its names ──────────────────
 // two agents, one per harness, both on and in the kernel's table
 async function twoAgents(s, p, clients) {
   await req(s.sock, 'POST', '/on', {})

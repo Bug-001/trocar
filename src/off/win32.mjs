@@ -1,5 +1,5 @@
 // win32.mjs (src/off) — what `trocar off` and `trocar uninstall` do on Windows that no other OS needs (RFC 4.8 §4.2, §7; 1.6 R3, R7). It imports Node's own modules and files of src/off and nothing else: the standalone `trocar-off`
-// is made of the files of this directory alone, so it cannot reach the helper, the collector or the source tree (0.1 §2). Today this file holds the elevation check; the Windows undo (`undoWin32`, plan Task 9(b)) joins it.
+// is made of the files of this directory alone, so it cannot reach the helper, the collector or the source tree (0.1 §2). Today this file holds the elevation check; the Windows undo (`undoWin32`) joins it.
 //
 // R7 on Windows (4.8 §7): trocar never runs with an elevated token or as SYSTEM, so `on`, `daemon`, `off` and `uninstall` refuse to. All four ask `whoami /groups` through execTool (`on` and `daemon`
 // by arch/win32/autostart.mjs `refuseElevated`, which calls elevationByWhoami): a helper started for the question cost on 1.2 s (2026-10-17), and off has to work when trocar is broken. The SIDs are the same in every language of Windows, so the check reads
@@ -46,7 +46,7 @@ export function refuseElevatedByWhoami(opts = {}) {
 /** The refusal of an elevated (`system` false) or SYSTEM token, the same words for every command (R7). */
 export const elevatedRefusal = (system) => ({ code: 'elevated-token', reason: `run this as your own user, not as ${system ? 'SYSTEM' : 'an administrator'}` })
 
-// ── the collector's undo pieces (plan Task 9(b); RFC 4.8 §4.2, §7) ───────────────────────────────────────────────────────────
+// ── the collector's undo pieces (RFC 4.8 §4.2, §7) ──────────────────────────────────────────────────────────────────────────
 // src/off cannot import arch/, so the task and Run-value undo are inlined here with the SAME fixed questions, the SAME verbs and the
 // SAME "never on a guess" rules as arch/win32/autostart.mjs's own (test/off/win32.test.mjs holds the two equal, the way Linux's
 // unit.mjs and src/off/autostart.mjs are held). The names and paths are written here too; the equality test holds them.
