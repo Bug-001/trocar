@@ -61,11 +61,11 @@ export async function contractWorld({ os, env = {} }) {
     off: async (ids = []) => {
       const out = []
       const io = { out: (s) => out.push(s), err: (s) => out.push(s), stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
-      const code = await runOffCli(ids, { io, home: w.home, env: w.env, platform: os, deps: { getuid: () => 501, procs: async () => [], alive: () => false, identity: () => ({ start_time: '1', boot_id: 'b' }), sleep: async () => {}, exec: run } })
+      const code = await runOffCli(ids, { io, home: w.home, env: w.env, platform: os, deps: { harnessIds: w.harnesses.map((d) => d.name), getuid: () => 501, procs: async () => [], alive: () => false, identity: () => ({ start_time: '1', boot_id: 'b' }), sleep: async () => {}, exec: run } })
       return { exit: code, text: out.join('\n') }
     },
     uninstall: async () => {
-      const { receipt, exit } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: os, exec: run, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501 } })
+      const { receipt, exit } = await runUninstall({ home: w.home, env: w.env, yes: true, deps: { harnessIds: w.harnesses.map((d) => d.name), platform: os, exec: run, custody: w.custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501 } })
       return { exit, receipt }
     },
   }
