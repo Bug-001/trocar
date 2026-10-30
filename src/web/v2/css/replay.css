@@ -262,6 +262,7 @@
   /* rows of an open card in groups (2.3 §读与画「长对话的窗口」): a drawn group is transparent to layout; a placeholder holds K
      closed rows' off-screen height (.cblk's intrinsic size + 2 px border + 4 px margin), no text, no control */
   :root{--cblk-ih:28px;} /* a closed row's size while off screen: .cblk's contain-intrinsic-size and the placeholder's pitch */
+  .cblk.cwreal,.cblk.collapsed.cwreal,.cwturn.cwreal{content-visibility:visible;} /* real sizes around the landing's target (ctxwin.mjs realBand) */
   .cwgroup{display:contents;} .cwgroup[aria-busy]{display:block;height:calc(var(--n) * (var(--cblk-ih) + 6px));}
   /* D12 全展/全折 便捷键 */
   .cwfoldall{display:flex;gap:6px;justify-content:flex-end;margin:-2px 0 5px;}

@@ -372,7 +372,38 @@ function landingDue(s) {
 function land(el, s, { t }) {
   s.landedFor = s.anchor.calls[s.playhead].rid
   const node = !t || !el.querySelector ? null : t.reply ? el.querySelector('.cwreply') : t.anchor ? el.querySelector('#cachebrk') : el.querySelector(`.cblk[data-bi="${t.bi}"]`)
-  if (node && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'start' })
+  if (!node || typeof node.scrollIntoView !== 'function') return
+  unreal(s)
+  const real = typeof node.getBoundingClientRect === 'function' && el.querySelectorAll ? realBand(el, node) : []
+  node.scrollIntoView({ block: 'start' })
+  // real through one painted frame, so each remembers its real size (contain-intrinsic-size: auto) once off screen again
+  s.landReal = real
+  const raf = globalThis.requestAnimationFrame, done = () => { if (s.landReal === real) unreal(s) }
+  raf ? raf(() => raf(done)) : done()
+}
+const unreal = (s) => { for (const x of s.landReal || []) x.classList.remove('cwreal'); s.landReal = null }
+// A row or card off screen is laid out at its preset size (content-visibility: auto) until it comes on screen, and an open one is far
+// taller: scrolled against the preset sizes, the rows the landing passes grow after it and move the target. Those that can share the
+// screen with the target are made real (.cwreal) first: within one window height of its top, which holds as each is never shorter than
+// its preset. Card by card from the outside in (a card's rows count once the card is real), reading the rects of one level per layout.
+function realBand(el, node) {
+  const H = el.clientHeight, kids = new Map(), real = []
+  for (const x of el.querySelectorAll('.cblk, .cwturn')) {
+    const up = x.parentElement.closest('.cwturn'), k = up && el.contains(up) ? up : null
+    kids.has(k) ? kids.get(k).push(x) : kids.set(k, [x])
+  }
+  let level = kids.get(null) || []
+  while (level.length) {
+    const y = node.getBoundingClientRect().top, lo = y - H, hi = y + H, box = (i) => level[i].getBoundingClientRect()
+    let a = 0, b = level.length // in document order the rects go down: the first one whose bottom reaches the band
+    while (a < b) { const m = (a + b) >> 1; if (box(m).bottom < lo) a = m + 1; else b = m }
+    const hit = []
+    for (let i = a; i < level.length && box(i).top <= hi; i++) hit.push(level[i])
+    for (const x of hit) x.classList.add('cwreal')
+    real.push(...hit)
+    level = hit.flatMap((x) => x.classList.contains('collapsed') ? [] : kids.get(x) || [])
+  }
+  return real
 }
 // the list position of the row at the window's top (a drawn row, or the first row of a placeholder), from the window drawn now
 function topRow(el, s) {
