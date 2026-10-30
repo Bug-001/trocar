@@ -19,7 +19,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { spawnSync } from 'node:child_process'
 import { execTool } from '../../../off/exec.mjs'
 import { DEFAULT_REDIRECTOR_BIN } from './redirector-client.mjs'
 
@@ -29,10 +28,8 @@ export const DEFAULTS = {
   caps: 'cap_bpf,cap_net_admin,cap_perfmon+ep',
 }
 
-function run(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', ...opts })
-  return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
-}
+// the shared runner: a tool that cannot start (setcap not installed, or not on root's PATH) keeps its reason in err
+const run = (cmd, args) => execTool(cmd, args)
 function exists(p) { try { fs.statSync(p); return true } catch { return false } }
 function sha(p) { try { return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex') } catch { return null } }
 function uid() { return typeof process.getuid === 'function' ? process.getuid() : -1 }
@@ -113,7 +110,8 @@ export function setupHelper(opts = {}) {
     // Copy-integrity check: the installed bytes equal the source bytes (NOT a build-provenance check).
     if (sha(tmp) !== srcSha) throw new Error('copy integrity check failed (installed bytes != source)')
     const setcap = run('setcap', [cfg.caps, tmp])
-    if (setcap.code !== 0) throw new Error('setcap failed: ' + (setcap.err || setcap.out))
+    // code null: it never ran (not installed, not on root's PATH, or killed by the timeout) — its reason is the spawn error
+    if (setcap.code !== 0) throw new Error(setcap.code === null ? `setcap could not run (${setcap.err}); is it installed and on root's PATH?` : `setcap failed: ${setcap.err || setcap.out}`)
     // getcap prints the path then the caps in capability-NUMBER order (cap_net_admin=12,
     // cap_perfmon=38, cap_bpf=39) at a flag suffix. Require EXACTLY these three caps at =ep
     // (effective+permitted) and nothing else — no extra cap, and no inheritable ('i') bit.
