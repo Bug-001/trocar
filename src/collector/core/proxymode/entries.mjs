@@ -177,7 +177,8 @@ export function routeEntry(kind) {
   }
 }
 
-/** Which routes `on` writes for a harness (spec 4.11 §3, CM31): only routes a present form uses; a form a blocker matches gets none.
+/** Which routes `on` writes for a harness (spec 4.11 §3, CM31): only routes a present form uses; a form a blocker matches gets none. With a route
+ *  to write, the descriptor's `effects` (CM32) and `notes` (CM38) come back as harness-notes.
  *  → { routes: [{ id, route, forms }], notRouted: [{ form, code, reason, at }], notes: [harness-note] } */
 export function planRoutes(desc, ctx) {
   const pm = desc.proxyMode, routes = new Map(), blocked = [], notes = []
@@ -193,6 +194,7 @@ export function planRoutes(desc, ctx) {
     if (f.hostTree) notes.push({ code: CODE.harnessNote, form: f.id, text: HOST_TREE_NOTE })
   }
   if (routes.size) for (const e of pm.effects || []) notes.push({ code: CODE.harnessNote, id: e.id, paths: e.paths.flatMap((p) => resolveLoc(p, ctx)), text: e.when })
+  if (routes.size) for (const n of pm.notes || []) notes.push({ code: CODE.harnessNote, id: n.id, text: n.text }) // CM38: a launch that skips the hook
   return { routes: [...routes.values()], notRouted: blocked, notes }
 }
 

@@ -115,6 +115,9 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
       lines.push(`  ${' '.repeat(w)}  proxy        ${p.written ? `points at trocar ${portOf(p.written)}` : p.connected ? 'connected' : 'not connected'}`)
       if (p.prior !== undefined) lines.push(`  ${' '.repeat(w)}               (was: ${p.prior || 'none'})`)
     }
+    // the forms' harness-notes (4.11 CM31 · CM32 · CM38), one a few forms share said once
+    const said = new Set(forms.flatMap((f) => (f.notes || []).map((n) => `${n.text}${n.paths && n.paths.length ? ` (${n.paths.join(', ')})` : ''}`)))
+    for (const s of said) lines.push(...wrap(`Note: ${s}`, WIDTH - 2, '      ').map((t) => `  ${t}`))
     lines.push('')
   }
   const t = doc.topology && doc.topology[h]
