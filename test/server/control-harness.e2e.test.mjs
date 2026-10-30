@@ -10,13 +10,13 @@ import path from 'node:path'
 import net from 'node:net'
 import { once } from 'node:events'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, boardPortOf } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { depsFile } from '../helpers/board-world.mjs'
 import { request } from './face.mjs'
 import { snapshot } from '../query/raw-home.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
-import { loadIngressConfig, ensureBoardPort, freeOnLoopback, BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
+import { loadIngressConfig } from '../../src/collector/core/ingress-config.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { createServer } from '../../src/server.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
@@ -29,8 +29,7 @@ const flows = (dir) => { const d = path.join(dir, 'flows'); return fs.existsSync
 async function withBoard(platform, run) {
   const w = await modelWorld({ os: platform, commands: ['codex'] })
   assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
-  const from = BOARD_RANGE[0] + Math.floor(Math.random() * 80)
-  const port = (await ensureBoardPort({ dir: w.dir, isFree: async (p) => p >= from && freeOnLoopback(p) })).port
+  const port = await boardPortOf(w.dir)
   const deps = depsFile(w, platform)
   await withScratchCwd(platform, async () => {
     const box = await liveUnit({ w, platform, parts: { helper: HELPER }, daemon: { fork: (h) => workerFork(h, deps) } })

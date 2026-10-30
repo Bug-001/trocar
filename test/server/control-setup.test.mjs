@@ -7,16 +7,14 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import net from 'node:net'
 import { once } from 'node:events'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, boardPortOf } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { depsFile, sharedTrust, standInUnit } from '../helpers/board-world.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { request } from './face.mjs'
 import { snapshot } from '../query/raw-home.mjs'
-import { ensureBoardPort } from '../../src/collector/core/ingress-config.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { readManifest, saveManifest, itemsOfPhase } from '../../src/off/manifest.mjs'
 import { setupOf } from '../../src/collector/core/proxymode/status-facts.mjs'
@@ -36,12 +34,7 @@ async function withBoard(platform, run) {
   const state = tmpDir('trocar-trust-')
   const trust = sharedTrust(state)
   assert.equal((await w.install({ custody: trust.custody, rootStore: trust.rootStore, unit: standInUnit(w.home) })).exit, 0)
-  // the board's port as install records it, then moved to a port the OS hands out: tests running side by side never meet on one board (a 403)
-  await ensureBoardPort({ dir: w.dir, isFree: async () => true })
-  const probe = net.createServer().listen(0, '127.0.0.1'); await once(probe, 'listening')
-  const port = probe.address().port; probe.close()
-  const ingress = path.join(w.dir, 'ingress.json')
-  fs.writeFileSync(ingress, JSON.stringify({ ...JSON.parse(fs.readFileSync(ingress, 'utf8')), boardPort: port }))
+  const port = await boardPortOf(w.dir) // tests running side by side never meet on one board (a 403)
   const deps = depsFile(w, platform, state)
   await withScratchCwd(platform, async () => {
     const box = await liveUnit({ w: { ...w, custody: trust.custody }, platform, parts: { helper: HELPER }, daemon: { fork: (h) => workerFork(h, deps) } })

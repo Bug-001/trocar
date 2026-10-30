@@ -16,7 +16,7 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import net from 'node:net'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit } from '../helpers/model-daemon.mjs'
+import { liveUnit, boardPortOf } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -29,7 +29,6 @@ import { EXIT } from '../../src/cli/schema.mjs'
 import { queryDocument, QUERY_PATH } from '../../src/query/client.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { bigSession } from './big-session.mjs'
-import { ensureBoardPort, freeOnLoopback, BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 
@@ -66,11 +65,7 @@ async function seam({ seed, queryIdleMs, board = false, big = 0 }) {
   const pristine = tmpDir('trocar-gen-')
   fs.cpSync(path.join(trocar, 'raw'), pristine, { recursive: true })
   let port = null
-  if (board) {
-    const from = BOARD_RANGE[0] + Math.floor(Math.random() * 80)
-    port = (await ensureBoardPort({ dir: w.dir, isFree: async (p) => p >= from && freeOnLoopback(p) })).port
-    assert.ok(port, 'the board has a port')
-  }
+  if (board) port = await boardPortOf(w.dir)
   const forks = []
   const box = await liveUnit({ w, platform: 'darwin', daemon: { queryIdleMs, fork: (...a) => { const c = workerFork(...a); forks.push(c); return c } } })
   box.unit.start()
