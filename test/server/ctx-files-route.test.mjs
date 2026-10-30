@@ -20,7 +20,7 @@ import { generate } from '../../scripts/gen-dataset.mjs'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { liveUnit } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
-import { within } from '../helpers/bounded.mjs'
+import { within, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from '../query/big-session.mjs'
 import { TOKEN, withToken, serveFace, request } from './face.mjs'
@@ -35,19 +35,6 @@ import { BODY, REPLY, agentOf, darwinExec, freePort, through } from '../helpers/
 const CALLS = 1_100 // ≥ 2 sealed packs of 512 (3.5 PACK_MEMBERS)
 const pause = (ms) => new Promise((d) => setTimeout(d, ms))
 const until = async (ok, ms, what) => within((async () => { while (!(await ok())) await pause(50) })(), ms, what)
-// A wait on the worker is bounded by what it reports, not by a fixed window: it lasts while `moving()` keeps changing (a slice reported
-// on the IPC channel, 3.5:42; the head's pending.done) and fails after STALL ms with no change. → its duration in ms.
-const STALL = 30_000
-const whileMoving = async (ok, moving, what) => {
-  const t0 = Date.now()
-  let seen = moving(), at = t0
-  while (!(await ok())) {
-    const now = moving()
-    if (now !== seen) { seen = now; at = Date.now() } else if (Date.now() - at > STALL) throw new Error(`${what}: no progress for ${STALL} ms`)
-    await pause(50)
-  }
-  return Date.now() - t0
-}
 const gz = { 'accept-encoding': 'gzip' }
 
 const get = (port, p, headers = {}) => new Promise((resolve, reject) => {
@@ -65,10 +52,10 @@ async function open(calls) {
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
   const s = bigSession({ home, wire: 'http', growth: 300, subEvery: 4, subLanes: 2, late: 3 })
   if (calls) s.append(calls)
-  const forks = [], reported = { n: 0 }
+  const reported = reporting(workerFork), forks = reported.kids
   // the service's own idle clock: the worker runs niced (worker.mjs lowerPriority), so on a busy machine its slices land further apart
   // than a test idleMs of a few seconds, and by the rule it then leaves mid-fold with nothing here to fork it again
-  const svc = createQueryService({ home, fork: (...a) => { const c = workerFork(...a); c.on('message', () => { reported.n++ }); forks.push(c); return c } })
+  const svc = createQueryService({ home, fork: reported.fork })
   const tips = tipTable()
   const { server } = createServer({ home, token: TOKEN, query: svc, tips: tips.of })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')

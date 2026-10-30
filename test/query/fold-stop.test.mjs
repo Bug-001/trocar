@@ -26,7 +26,7 @@ import { runQuery } from '../../src/query/named/index.mjs' // first: the named q
 import { PLAN_PER_MEMBER } from '../../src/query/named/session.mjs'
 import { FOLD_STOPS } from '../../src/health/codes.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
-import { within } from '../helpers/bounded.mjs'
+import { whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { readerBudget } from './past-room.mjs'
@@ -37,11 +37,14 @@ const HEAP_MB = 64
 const small = (h, ...argv) => fork(WORKER, [h, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: ['--require', NO_REAL_OS, ...heapFlags(HEAP_MB)], env: workerEnv() })
 
 const headOf = (home, id) => { try { return JSON.parse(gunzipSync(fs.readFileSync(headFile(home, id))).toString('utf8')) } catch { return null } }
-async function until(home, id, ok, what) {
-  return within((async () => { for (;;) { const h = headOf(home, id); if (h && ok(h)) return h; await new Promise((d) => setTimeout(d, 50)) } })(), 120_000, what)
+// The worker runs niced (worker.mjs lowerPriority): a wait on it lasts while it reports and fails after a stall with none.
+async function until(home, id, r, ok, what) {
+  let h = null
+  await whileMoving(() => { h = headOf(home, id); return h != null && ok(h) }, () => r.n, what)
+  return h
 }
 
-test('3.5 #37: a kicked fold the heap holds no room for writes pending.stopped into the head; a fold that then succeeds clears it', { timeout: 240_000 }, async () => {
+test('3.5 #37: a kicked fold the heap holds no room for writes pending.stopped into the head; a fold that then succeeds clears it', async () => {
   const home = path.join(tmpDir('trocar-foldstop-'), '.trocar'), segment = '20261020T164737Z'
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
   const calls = Math.ceil(readerBudget(HEAP_MB) / PLAN_PER_MEMBER / 3)
@@ -49,20 +52,22 @@ test('3.5 #37: a kicked fold the heap holds no room for writes pending.stopped i
   const [session] = (await runQuery('sessions', {}, { home })).sessions
   const id = session.session_id
   const died = []
-  let svc = createQueryService({ home, fork: small, idleMs: 20_000, failure: (w, e) => died.push(`${e.code}: ${e.message}`) })
+  let r = reporting(small)
+  let svc = createQueryService({ home, fork: r.fork, idleMs: 20_000, failure: (w, e) => died.push(`${e.code}: ${e.message}`) })
   try {
     svc.kick([recordId(segment, calls)])
-    const h = await until(home, id, (d) => d.pending && d.pending.stopped, 'the stopped fold wrote its head')
+    const h = await until(home, id, r, (d) => d.pending && d.pending.stopped, 'the stopped fold wrote its head')
     assert.equal(h.pending.stopped.code, 'heap-no-room')
     assert.ok(FOLD_STOPS.includes(h.pending.stopped.code), 'a FOLD_STOPS code')
     assert.equal(typeof h.pending.stopped.reason, 'string')
     assert.ok(h.pending.stopped.reason.length > 0 && !h.pending.stopped.reason.includes('\n'), 'the reason is one line')
     assert.deepEqual(died, [], 'the worker did not die: the fold stopped')
   } finally { svc.stop() }
-  svc = createQueryService({ home, fork: workerFork, idleMs: 20_000 })
+  r = reporting(workerFork)
+  svc = createQueryService({ home, fork: r.fork, idleMs: 20_000 })
   try {
     svc.kick([recordId(segment, calls)])
-    const h = await until(home, id, (d) => d.tier === 1 && d.pending === null, 'the fold that fits wrote a head at its frontier')
+    const h = await until(home, id, r, (d) => d.tier === 1 && d.pending === null, 'the fold that fits wrote a head at its frontier')
     assert.equal(h.pending, null, 'no stop is left in the head')
   } finally { svc.stop() }
 })

@@ -7,7 +7,7 @@ import path from 'node:path'
 import { createQueryService } from '../../src/query/service.mjs'
 import { projectionFile, PROJ_V, sessionDir } from '../../src/query/projection.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
-import { within } from '../helpers/bounded.mjs'
+import { within, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import zlib from 'node:zlib'
 import { bigSession } from './big-session.mjs'
@@ -22,24 +22,6 @@ const ask = async (svc, name, params) => {
   assert.equal(res.status, 200, `${name} answers 200`)
   return JSON.parse(res.text())
 }
-// The workers a service forks, and when they last reported on the IPC channel (a background slice, a query's progress: 3.5:42).
-const reporting = () => {
-  const r = { kids: [], at: Date.now() }
-  r.fork = (h) => { const c = workerFork(h); c.on('message', () => { r.at = Date.now() }); r.kids.push(c); return c }
-  return r
-}
-// A wait on the real worker lasts while it reports and fails after STALL ms with none: it runs niced behind everything else
-// (worker.mjs lowerPriority), so a fixed window, or a short idleMs, measures the machine's load and not the worker.
-const STALL = 30_000
-const whileReporting = (r, ok, what) => {
-  const t0 = Date.now()
-  let t
-  return new Promise((d, fail) => {
-    t = setInterval(() => {
-      if (ok()) { clearInterval(t); d() } else if (Date.now() - Math.max(t0, r.at) > STALL) { clearInterval(t); fail(new Error(`${what}: no report from the worker for ${STALL} ms`)) }
-    }, 10)
-  })
-}
 const headOf = (home, id) => { try { return JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(sessionDir(home, id), 'head.json.gz')))) } catch { return null } }
 const homeOf = () => { const home = path.join(tmpDir('trocar-slices-'), '.trocar'); fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 }); return home }
 const sizeOf = (f) => { try { return fs.statSync(f).size } catch { return 0 } }
@@ -49,7 +31,7 @@ test('a never-projected session answers with pending, extraction goes on with no
   const home = homeOf()
   const s = bigSession({ home, subLanes: 4, late: 3 })
   s.growTo(128 << 20) // far more than one 50 ms slice extracts
-  const said = [], r = reporting(), kids = r.kids
+  const said = [], r = reporting(workerFork), kids = r.kids
   const svc = createQueryService({ home, failure: (w, e) => said.push(e.code), fork: r.fork })
   try {
     // (a) the first answer stops at the frontier; another name is answered meanwhile; the session is still being extracted
@@ -61,11 +43,11 @@ test('a never-projected session answers with pending, extraction goes on with no
     assert.ok(again.pending, 'a later answer still carries pending')
     // (b) with no request, the projection grows: extraction runs with nobody asking
     const file = projectionFile(home, s.id), size0 = sizeOf(file)
-    await whileReporting(r, () => sizeOf(file) > size0, 'the projection grew with nobody asking')
+    await whileMoving(() => sizeOf(file) > size0, () => r.n, 'the projection grew with nobody asking')
     // (c) with no request, the session is extracted and folded to its end: the head the worker's idle period writes has nothing pending
-    await whileReporting(r, () => { const h = headOf(home, s.id); return h != null && h.tier === 1 && h.pending === null }, 'the session extracted and folded with nobody asking')
+    await whileMoving(() => { const h = headOf(home, s.id); return h != null && h.tier === 1 && h.pending === null }, () => r.n, 'the session extracted and folded with nobody asking')
     svc.stop() // the worker ends here, so the next answer is a new worker's, from what this one left on disk
-    await whileReporting(r, () => kids[0].exitCode !== null || kids[0].signalCode !== null, 'the worker left')
+    await whileMoving(() => kids[0].exitCode !== null || kids[0].signalCode !== null, () => r.n, 'the worker left')
     assert.deepEqual(said, [], 'no failure')
     const next = await ask(svc, 'session', { id: s.id })
     assert.equal(kids.length, 2, 'the next query forked a new worker')
@@ -80,10 +62,10 @@ test('after an idle period the worker collects the projection of a session the i
   const stray = projectionFile(home, 'gone-0000-4a1b-9c2d-000000000009')
   fs.mkdirSync(path.dirname(stray), { recursive: true, mode: 0o700 })
   fs.writeFileSync(stray, '{"v":0}\n', { mode: 0o600 })
-  const r = reporting(), svc = createQueryService({ home, fork: r.fork })
+  const r = reporting(workerFork), svc = createQueryService({ home, fork: r.fork })
   try {
     await ask(svc, 'session', { id: s.id })
-    await whileReporting(r, () => !fs.existsSync(stray), 'the stray projection was collected')
+    await whileMoving(() => !fs.existsSync(stray), () => r.n, 'the stray projection was collected')
     assert.ok(fs.existsSync(projectionFile(home, s.id)), 'the answered session keeps its projection')
   } finally { svc.stop() }
 })
@@ -95,12 +77,12 @@ test('a projection rebuilt when a background slice opened it is said on the next
   const file = projectionFile(home, s.id)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   fs.writeFileSync(file, `${JSON.stringify({ v: PROJ_V + 1 })}\n`, { mode: 0o600 }) // a version this build does not read
-  const r = reporting(), svc = createQueryService({ home, fork: r.fork })
+  const r = reporting(workerFork), svc = createQueryService({ home, fork: r.fork })
   const rebuilt = (doc) => doc.errors.filter((e) => e.code === 'projection-rebuilt').length
   try {
     await ask(svc, 'sessions', {}) // no session answered: after the idle wait the slice takes the newest index row's session
     const head = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8').split('\n')[0]).v } catch { return null } }
-    await whileReporting(r, () => head() === PROJ_V, 'a background slice rebuilt and wrote the projection')
+    await whileMoving(() => head() === PROJ_V, () => r.n, 'a background slice rebuilt and wrote the projection')
     assert.equal(rebuilt(await ask(svc, 'session', { id: s.id })), 1, 'the next answer says the rebuild')
     assert.equal(rebuilt(await ask(svc, 'session', { id: s.id })), 0, 'once')
   } finally { svc.stop() }
