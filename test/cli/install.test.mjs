@@ -96,6 +96,19 @@ test('install --yes --json: the receipt (fingerprint, carriers, residual risk, c
 })
 const tmpHomeOf = () => tmpDir('trocar-model-2-') // a second HOME, made where the leak guard sweeps
 
+// 1.6 §3.3 / 附录 C.2: `autostart.enabled` is the login entry asked again after the run, not "no error was seen". A daemon that holds the control
+// socket and does not answer stops the run before anything is registered; launchd then has no such job, and the receipt must not say it starts at login.
+test('install: a daemon that does not answer stops the run before the login entry is registered, and the receipt says it is not enabled', async () => {
+  let loaded = false
+  const launchctl = { calls: [], run: (file, args) => { launchctl.calls.push([file, ...args].join(' ')); if (args[0] === 'bootstrap') loaded = true; return args[0] === 'print' && !loaded ? { status: 113, stdout: '', stderr: 'Could not find service' } : { status: 0, stdout: '', stderr: '' } } }
+  const { io, exit } = await cli(['--yes', '--json'], { over: { launchctl, exec: launchctl.run, request: async () => { throw Object.assign(new Error('timed out after 2000 ms'), { code: 'ETIMEDOUT' }) } } })
+  assert.equal(exit, 1, io.text())
+  const r = io.json()
+  assert.deepEqual([r.ok, r.autostart.enabled, r.daemon.state], [false, false, 'not-responding'])
+  assert.equal(launchctl.calls.some((c) => / bootstrap /.test(c)), false, 'nothing was registered')
+  assert.deepEqual(validateReceipt(r), [])
+})
+
 // the documented order — install, then on — through the CLI: install writes the root, its carriers and
 // the inert autostart unit; on enables the unit, which starts the REAL daemon (test/helpers/model-daemon.mjs), asks it for the doors and writes the entries.
 for (const platform of ['darwin', 'win32']) {

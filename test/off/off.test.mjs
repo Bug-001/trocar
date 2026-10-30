@@ -438,16 +438,12 @@ test('V27: over on, off and a daemon that has to be stopped, nothing restarts an
     { pid: 7003, ppid: 1, uid: 1000, startedAt: 1, exe: '/usr/bin/node', argv: ['node', '/repo/bin/trocar.mjs', 'etl'], env: () => new Map() },
   ]
   const procs = async () => agents
-  const calls = s.sys.exec.calls.length
-  // the `on` leg (installedHome has run it): the OS tools of the whole fixture are install's `enable --now` and the registration READ every `on` makes
-  // first (1.6 §3.3) — no restart, no stop, no signal, nothing started again (the daemon install brought up already answers)
-  assert.deepEqual(s.sys.exec.calls.slice(0, calls), ['systemctl --user enable --now trocar-collector.service', 'systemctl --user is-enabled trocar-collector.service'], 'on starts nothing (a start is not a restart) and touches no agent')
   // install probes before it enables and once after (拉起不是重启, R8), then `on` asks the status once and attaches the harnesses: nothing else
   assert.deepEqual(s.sys.daemon.calls.map((c) => c.split(' {')[0]), ['GET /status', 'GET /status', 'GET /status', 'POST /on'], 'no daemon is started a second time and nothing else is asked of it')
   const r = await s.off({ deps: { procs, request: hangsOnStatus(s), alive: (pid) => t.alive(pid) || agents.some((a) => a.pid === pid), identity: t.identity, kill: t.kill, isHelper: t.isHelper, ...fakeClock() } })
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
   assert.ok(t.sent.every(([pid]) => pid === 4242 || pid === 4243), `signals went to the daemon and its helper only: ${JSON.stringify(t.sent)}`)
-  assert.ok(execFrom(s, calls).every((c) => !/restart/.test(c)), 'no systemctl restart')
+  assert.ok(s.sys.exec.calls.every((c) => !/restart/.test(c)), 'no systemctl restart, over install, on and off')
   assert.deepEqual(r.receipt.still_trusting, [], 'off took no certificate item, so it has no one to report as still trusting what it took (D55①: trust stays until uninstall)')
   assert.deepEqual(r.receipt.restart, [], 'and off never lists anything to restart as a to-do of its own')
   assert.deepEqual(r.receipt.user_processes, [{ pid: 7001, command: 'trocar serve', note: 'a read-only dashboard, not on any agent path' }, { pid: 7002, command: 'trocar capture', note: 'capturing in the foreground, it may be relaying agent traffic' }], 'what the user started themselves is listed, never killed')

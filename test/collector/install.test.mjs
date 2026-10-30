@@ -600,7 +600,7 @@ test('install / uninstall: the autostart unit is listed with its env and link, w
     const unitFile = path.join(b.home, '.config', 'systemd', 'user', 'trocar-collector.service')
     const link = path.join(b.home, '.config', 'systemd', 'user', 'default.target.wants', 'trocar-collector.service')
     const enable = () => { calls.push(`enable, manifest complete: ${readManifest(b.dir).install?.state === 'complete'}`); return { code: 0 } }
-    const unit = { path: unitFile, links: [link], text: (env) => `[Service]\n${JSON.stringify(env)}\n`, enable, disable: () => { calls.push('disable'); return { code: 0 } }, stop: () => calls.push('stop'), removeWants: () => { calls.push('wants'); return [] } }
+    const unit = { path: unitFile, links: [link], text: (env) => `[Service]\n${JSON.stringify(env)}\n`, registered: () => ({ state: 'present' }), enable, disable: () => { calls.push('disable'); return { code: 0 } }, stop: () => calls.push('stop'), removeWants: () => { calls.push('wants'); return [] } }
     let listed = null
     const env = { HOME: b.home, NODE_EXTRA_CA_CERTS: '/corp/relay-ca.pem' }
     await installCollector(base(b, { unit, env, onPlan: (p) => { listed = p } }))
@@ -711,7 +711,7 @@ test('daemonEnv: the install shell\'s NODE_EXTRA_CA_CERTS goes to the unit when 
   assert.deepEqual(daemonEnv({ NODE_EXTRA_CA_CERTS: '/h/.trocarful/ca.pem' }, dir).env, { NODE_EXTRA_CA_CERTS: '/h/.trocarful/ca.pem' }, 'a sibling whose name only starts the same is not trocar\'s')
   const b = box()
   try {
-    const unit = { path: path.join(b.home, '.config', 'systemd', 'user', 'trocar-collector.service'), links: [], text: (env) => JSON.stringify(env), enable: () => ({ code: 0 }), disable: () => ({ code: 0 }), stop: () => {}, removeWants: () => [] }
+    const unit = { path: path.join(b.home, '.config', 'systemd', 'user', 'trocar-collector.service'), links: [], text: (env) => JSON.stringify(env), registered: () => ({ state: 'present' }), enable: () => ({ code: 0 }), disable: () => ({ code: 0 }), stop: () => {}, removeWants: () => [] }
     let listed = null
     const r = await installCollector(base(b, { unit, env: { HOME: b.home, NODE_EXTRA_CA_CERTS: 'rel/ca.pem' }, onPlan: (p) => { listed = p } }))
     assert.ok(listed.notes.some((n) => /\(rel\/ca\.pem\) is not given to the daemon trocar starts/.test(n)), 'said in the list printed before anything is written')
@@ -754,7 +754,7 @@ test('install: an autostart unit file already there is refused before anything i
     const unitFile = path.join(unitDir, 'trocar-collector.service')
     fs.mkdirSync(path.dirname(unitFile), { recursive: true }); fs.writeFileSync(unitFile, '[Service]\nExecStart=/usr/bin/false\n')
     let listed = false
-    const unit = { path: unitFile, links: [], text: () => '[Unit]\n', enable: () => ({ code: 0 }), disable: () => ({ code: 0 }), stop: () => {}, removeWants: () => [] }
+    const unit = { path: unitFile, links: [], text: () => '[Unit]\n', registered: () => ({ state: 'present' }), enable: () => ({ code: 0 }), disable: () => ({ code: 0 }), stop: () => {}, removeWants: () => [] }
     await assert.rejects(installCollector(base(b, { unit, onPlan: () => { listed = true } })), /trocar-collector\.service already exists/)
     assert.deepEqual([listed, fs.existsSync(b.dir)], [false, false], 'refused before the plan is printed and before the CA or the manifest exist')
     fs.rmSync(unitFile)
