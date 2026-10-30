@@ -4,17 +4,20 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import path from 'node:path'
 import { loadSessions, rowModel } from '../../src/web/v2/library/logic.mjs'
-import { buildLanes, stepsOf } from '../../src/web/v2/replay/lanes.mjs'
-import { captureGap } from '../../src/web/v2/replay/header.mjs'
+import { captureGap, fidelityFacts } from '../../src/web/v2/replay/header.mjs'
 import { bodyCache, loadBody } from '../../src/web/v2/replay/blocks.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
+import { deskFrom } from './desk-world.mjs'
 
 // the board's api.get over the real face: {ok, status, data}; a null / empty param is not sent (as core/http.mjs)
 const apiOf = (face) => ({ get: async (name, params) => {
   const r = await face.get(name, Object.fromEntries(Object.entries(params || {}).filter(([, v]) => v != null && v !== '')))
   return { ok: r.status === 200, status: r.status, data: r.doc }
 } })
+// deskFrom's get over the real face: the answer document
+const getOf = (face) => async (name, params) => (await face.get(name, params)).doc
 
 test('(1)(2) the library reads every page of `sessions`; a row\'s title fields are title / title_source, null → untitled', async () => {
   const face = await serveBoard(boardHome({ bytes: 200000 }))
@@ -33,24 +36,6 @@ test('(1)(2) the library reads every page of `sessions`; a row\'s title fields a
         assert.equal(v.title, title); assert.equal(v.titleSource, title_source); assert.equal(v.untitled, title == null)
       }
     }
-  } finally { await face.close() }
-})
-
-test('(3) the replay\'s steps are the main lane\'s calls; following page.next ends with has_more:false', async () => {
-  const face = await serveBoard(boardHome())
-  try {
-    const id = (await face.get('sessions')).doc.sessions[0].session_id
-    let after = null, pages = 0, doc
-    do {
-      doc = (await face.get('session', { id, limit: 2, ...(after != null ? { after } : {}) })).doc
-      const main = doc.analyzed.lanes.find((l) => l.kind === 'main') || doc.analyzed.lanes[0]
-      assert.deepEqual(stepsOf(buildLanes(doc.analyzed, doc.probes)).map((c) => c.id), main.calls.map((c) => c.id))
-      after = doc.page.next; pages++
-      assert.ok(pages <= doc.page.total + 1, 'paging terminates')
-    } while (doc.page.has_more)
-    assert.equal(doc.page.has_more, false)
-    assert.equal(doc.page.next, null)
-    assert.ok(pages > 1)
   } finally { await face.close() }
 })
 
@@ -81,19 +66,50 @@ test('(4) the capture gap: only a same-harness group inside the session time, wi
   assert.equal(captureGap(null, range, H, now), null)
 })
 
-test('(5) the block loader: a real block?ref= → its verbatim flag is the document\'s fidelity.verbatim', async () => {
+test('(5) the block loader: a real block?ref= → its verbatim flag is the `block` answer item\'s fidelity.verbatim', async () => {
   const face = await serveBoard(boardHome())
   try {
     const id = (await face.get('sessions')).doc.sessions[0].session_id
-    const sdoc = (await face.get('session', { id })).doc
-    const refs = [...new Set([...JSON.stringify(sdoc).matchAll(/"text_ref":"([^"]+)"/g)].map((m) => m[1]))].slice(0, 5)
+    const desk = await deskFrom(getOf(face), id)
+    const refs = [...new Set([...desk.defs.values()].map((d) => d.ref).filter((r) => r != null))].slice(0, 5)
     assert.ok(refs.length)
     for (const ref of refs) {
       bodyCache.clear()
-      const doc = (await face.get('block', { ref })).doc
+      const [item] = (await face.get('block', { ref })).doc.blocks
       const got = await loadBody(apiOf(face), ref)
-      assert.equal(got.verbatim, doc.fidelity.verbatim)
-      assert.equal(got.text, doc.bytes)
+      assert.equal(got.verbatim, item.fidelity.verbatim)
+      assert.equal(got.text, item.bytes)
     }
   } finally { await face.close() }
+})
+
+// 1.2 §会话保真行 K-20 (1.5 K-20; 3.5 §会话读 `unknown`): a record no dissector reads as a call — an LLM POST to an endpoint
+// no wire knows, written into the demo session the way the collector writes records — is counted in the `session` answer's
+// `unknown` and is a fact of the session head; without it, no `unknown` and no such fact.
+test('A36 · K-20: a record no dissector reads → `unknown.records` ≥ 1 and the head\'s fact carries its endpoint; none → neither', async () => {
+  const ENDPOINT = '/v1/no-such-wire'
+  for (const odd of [false, true]) {
+    const { userHome, home } = boardHome()
+    const seg = path.join(home, 'raw', '20260719T090000Z.ndjson')
+    const first = JSON.parse(fs.readFileSync(seg, 'utf8').split('\n')[0])
+    if (odd) {
+      const ts = new Date(Date.parse(first.ts_request) + 1).toISOString()
+      // the session's own id header and agent; no header of a known wire (anthropic-version, x-app) and an endpoint none reads
+      const req_headers = { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': first.req_headers['user-agent'], 'x-claude-code-session-id': first.req_headers['x-claude-code-session-id'] }
+      fs.appendFileSync(seg, JSON.stringify({ ...first, req_headers, ts, ts_request: ts, id: 'req_no_wire', is_llm_call: true, endpoint: ENDPOINT, method: 'POST',
+        req_body: JSON.stringify({ input: 'x' }), resp: { status: 200, kind: 'json', body: { ok: true } } }) + '\n')
+    }
+    const face = await serveBoard({ userHome, home })
+    try {
+      const id = (await face.get('sessions')).doc.sessions[0].session_id // the demo session, the home's only one
+      const desk = await deskFrom(getOf(face), id)
+      const { tech } = fidelityFacts(desk)
+      const endpoints = tech.find(([k]) => k === 'endpoints')
+      if (!odd) { assert.equal(desk.unknown, null, 'no `unknown`'); assert.equal(endpoints, undefined, 'no K-20 fact'); continue }
+      assert.ok(desk.unknown.records >= 1, '`unknown.records` ≥ 1')
+      assert.ok(desk.unknown.endpoints.includes(ENDPOINT), 'the record\'s endpoint in `unknown.endpoints`')
+      assert.ok(endpoints && endpoints[1].includes(ENDPOINT), 'the K-20 fact carries the endpoints into the technical details')
+      assert.ok(tech.some(([k]) => k === 'reason'), 'and the server\'s reason')
+    } finally { await face.close() }
+  }
 })

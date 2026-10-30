@@ -17,8 +17,12 @@ const failOf = (c) => !!c.error || (c.status != null && c.status !== 200) // 2.2
 export const reviewing = (lane) => lane.kind === 'monitor' || lane.kind === 'token-count'
 
 // ── ticks ──────────────────────────────────────────────────────────────────────────────────────────────────────────
-// ticks outside the brush window are culled, not piled at the edges; data-i stays the GLOBAL index inside the lane.
-// A failed call draws ×; since S13 a monitor verdict flagged true carries the mark.
+// a call a monitor verdict flagged: the verdict lives in its held lane's `events` (type monitor, 3.5 §会话读); a lane that is
+// not held says nothing per call (its header's `flagged` marks the row name)
+const flaggedOf = (s, lane, c) => { const h = s.desk && s.desk.held.get(lane.id), e = h && (h.events.get(c.rid) || []).find((x) => x.type === 'monitor'); return !!(e && e.flagged === true) }
+
+// ticks outside the brush window are culled, not piled at the edges; data-i stays the index inside the lane.
+// A failed call draws ×; a monitor verdict flagged true carries the mark.
 export function renderTicks(lane, s) {
   const win = lane.calls.map((c, i) => ({ c, i })).filter((o) => inWindow(s.anchorTs, s.view, o.c.ts))
   const x = (c) => (xOf(s.anchorTs, s.view, c.ts) * 100).toFixed(2)
@@ -35,14 +39,14 @@ export function renderTicks(lane, s) {
     }).join('')
   }
   return win.map(({ c, i }) =>
-    `<span class="tick ${c.flagged === true ? 'flag' : ''} ${failOf(c) ? 'errtick' : ''}" data-lane="${esc(lane.id)}" data-i="${i}" style="left:${x(c)}%" title="${esc(tip(c, i))}"></span>`).join('')
+    `<span class="tick ${flaggedOf(s, lane, c) ? 'flag' : ''} ${failOf(c) ? 'errtick' : ''}" data-lane="${esc(lane.id)}" data-i="${i}" style="left:${x(c)}%" title="${esc(tip(c, i))}"></span>`).join('')
 }
 
-// the marks a collapsed group still draws: the failed × of every member lane, and (S13) its flagged monitor calls —
+// the marks a collapsed group still draws: the failed × of every member lane, and its flagged monitor calls —
 // each one clickable, opening that call in the drawer
 function collapsedMarks(lanes, s) {
   const x = (c) => (xOf(s.anchorTs, s.view, c.ts) * 100).toFixed(2)
-  return lanes.flatMap((l) => l.calls.map((c, i) => ({ c, i, l })).filter((o) => inWindow(s.anchorTs, s.view, o.c.ts) && (failOf(o.c) || o.c.flagged === true)))
+  return lanes.flatMap((l) => l.calls.map((c, i) => ({ c, i, l })).filter((o) => inWindow(s.anchorTs, s.view, o.c.ts) && (failOf(o.c) || flaggedOf(s, o.l, o.c))))
     .map(({ c, i, l }) => {
       const head = `${laneWord(l.kind)} · call ${i + 1} · ${when(c.ts)}`
       return failOf(c)
@@ -72,7 +76,7 @@ function railHtml(l, s, { sub = false } = {}) {
   } else name = laneTimes(laneWord(l.kind), l.calls.length)
   // the row name ellipsizes in the gutter; its hover carries the whole of it, the lane's own label and the kind's hint
   const lab = String(l.label || '')
-  const tip = [name, lab && !name.includes(lab) ? lab : '', hint].filter(Boolean).join(' · ')
+  const tip = [name, lab && !name.includes(lab) ? lab : '', l.flagged === true ? FLAGGED_WORD : '', hint].filter(Boolean).join(' · ')
   return `<div class="rail k-${esc(l.kind)} tkrow">` +
     `<div class="tgut railname ${col ? 'col' : ''}" data-toggle="${esc(l.id)}" title="${esc(tip)}"><span class="tw">${col ? '▸' : '▾'}</span> <span class="tn">${esc(name)}</span></div>` +
     (col ? '<div class="tlane"></div>' : `<div class="tlane railbody" data-lane="${esc(l.id)}">${renderTicks(l, s)}</div>`) + `</div>`
@@ -147,8 +151,7 @@ export function selectTick(s, lane, i) {
   if (reviewing(lane)) highlightRange(s, lane, i); else clearRange(s)
   const c = lane.calls[i]
   if (c && s.anchor.calls.length) { s.follow = false; s.setPlayhead(nearestByTs(s.anchor, c.ts, s.playhead), false) } // the conversation jumps to the same moment
-  s.openDetail(lane, i)
-  s.ensurePage(c, false, s.anchor.calls[s.playhead]) // a lane call outside the loaded window: fetch a page that holds it (and the playhead); the drawer repaints when it arrives
+  s.openDetail(lane, i) // its lane not held yet: the drawer draws the row first and fills in when the lane lands (2.3 §读与画)
 }
 
 export function wireRails(el, s) {

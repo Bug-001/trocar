@@ -33,8 +33,8 @@ for (const wire of ['http', 'chat', 'threads', 'ws']) {
 
     const recs = fs.readFileSync(s.file, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
     const one = await runQuery('session', { id: s.id, limit: 500 }, ctx)
-    const main = one.analyzed.lanes.find((l) => l.kind === 'main')
-    const want = firstAskOf(recs[Number(String(main.calls[0].id).split(':').pop()) - 1], recs)
+    const main = one.lanes.find((l) => l.kind === 'main')
+    const want = firstAskOf(recs[Number(String(main.first).split(':').pop()) - 1], recs)
     assert.ok(want, 'the generator wrote a prompt')
     assert.equal(main.task, want)
     assert.deepEqual(titles(await runQuery('sessions', {}, ctx)), [[s.id, want, 'wire']])

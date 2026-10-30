@@ -228,8 +228,8 @@ export function lockKeeper({ file, fields, segmentOf = () => null }) {
  *  request to a query worker this daemon forks on demand and streams its bytes back. This event loop forwards agent traffic, so it
  *  never computes an answer; the worker exits by itself when nobody queries. `stop()` belongs in the stop, before the control server
  *  closes, so a worker a stop cuts off is not left behind. */
-function queryRouteFor({ P, failure, fork }) {
-  const svc = createQueryService({ home: path.dirname(P.dir), failure, fork })
+function queryRouteFor({ P, failure, fork, queryIdleMs }) {
+  const svc = createQueryService({ home: path.dirname(P.dir), failure, fork, idleMs: queryIdleMs })
   return { routes: { 'GET /query': svc.route }, stop: svc.stop, svc }
 }
 
@@ -280,7 +280,7 @@ function boardFor({ P, failure, query, log = () => {} }) {
   }
 }
 
-async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, stopGraceMs = 2000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {}, fork }) {
+async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, stopGraceMs = 2000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {}, fork, queryIdleMs }) {
   const P = collectorPaths(dir)
   const netHome = home || env.HOME || os.homedir() // whose agents' settings the 5 s check looks at: the user the daemon runs as
   const failure = createFailureRecorder(P.dir, { log })
@@ -298,7 +298,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   const ep = A0 && typeof A0.controlEndpoint === 'function' && !socketPath ? A0.controlEndpoint({ dir: P.dir }) : null
   const sock = socketPath || (ep ? ep.path : controlSocketPath({ env }))
   // macOS / Windows run the collector model (4.11 §1, §3 ①): no CA of its own to gate on, doors from POST /on, the CLI writes every file
-  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env, exec: runAsync }) /* darwin = ps lstart + kern.boottime; async: the event loop stays free */, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork })
+  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env, exec: runAsync }) /* darwin = ps lstart + kern.boottime; async: the event loop stays free */, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork, queryIdleMs })
   identity = identity || procIdentity
   let manifest
   try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "trocar uninstall", then "trocar on"`), { code: 'manifest-unreadable' }) }
@@ -314,7 +314,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       throw e
     }
   }
-  const query = queryRouteFor({ P, failure, fork })
+  const query = queryRouteFor({ P, failure, fork, queryIdleMs })
   const board = boardFor({ P, failure, query: query.svc, log })
   const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: board.routes({ 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off'), ...query.routes }) }) // throws if another daemon answers
 
@@ -762,7 +762,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 // a door forward-only while its holders live after off (P12), and exits after `off {exit}` only when mayExit says so. `model`: test seams only —
 // { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone } — the endpoint, the control server and the
 // engine are always the real ones.
-async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork }) {
+async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork, queryIdleMs }) {
   const list = harnesses || (await loadHarnesses())
   const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
   let agents = (nextAgentList() || { entries: [] }).entries
@@ -813,7 +813,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   // (launchd / the task bringing the daemon back while the user runs on) never binds a group's port a second time
   const ready = new Promise((r) => { markReady = r })
   const gate = (fn) => async (q) => { await ready; return fn(q) }
-  const query = queryRouteFor({ P, failure, fork })
+  const query = queryRouteFor({ P, failure, fork, queryIdleMs })
   const board = boardFor({ P, failure, query: query.svc, log })
   const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: board.routes({
     'GET /status': gate(status),

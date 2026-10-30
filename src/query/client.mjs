@@ -16,10 +16,24 @@ export const LOCAL_ONLY = Object.freeze(['status', 'doctor'])
 /** Every query name there is (src/query/named/index.mjs QUERIES, which this list is checked against by
  *  test/query/docs.test.mjs — the query core is most of a CLI's load time, so the daemon must be able to refuse an
  *  unknown name without importing it, and before forking a worker for it). */
-export const QUERY_NAMES = Object.freeze(['status', 'doctor', 'sessions', 'session', 'calls', 'traffic', 'overview', 'block', 'classes', 'segments', 'pricing'])
-/** The paging / delta parameters: they change which part of a document is shipped, never what it costs to compute, so a
- *  failure is remembered per query WITHOUT them (service.mjs, 3.5 §读不全不静默): a board whose window moved asks the same thing. */
-export const WINDOW_PARAMS = Object.freeze(['after', 'limit', 'base', 'have'])
+export const QUERY_NAMES = Object.freeze(['status', 'doctor', 'sessions', 'session', 'lane', 'calls', 'traffic', 'overview', 'block', 'classes', 'segments', 'pricing'])
+/** The window parameters: they move which part of a document is shipped, never what is asked, so a failure is
+ *  remembered per query WITHOUT them (service.mjs, 3.5 §读不全不静默): a board whose window moved asks the same thing. */
+export const WINDOW_PARAMS = Object.freeze(['since', 'before', 'limit', 'from', 'to', 'ledger'])
+/** A query string → query parameters, one rule on every path (1.6 §4.1 参数): a parameter given more than once is the
+ *  list of its values, in order; once, its value. `skip` = the route's own keys. Whether a list is taken is the query
+ *  core's call (named/index.mjs checked()). */
+export const paramsOf = (search, skip = []) => {
+  const out = new Map()
+  for (const [k, v] of search) if (!skip.includes(k)) out.set(k, out.has(k) ? [].concat(out.get(k), v) : v)
+  return Object.fromEntries(out)
+}
+/** Query parameters → a query string: a list is the parameter repeated, once per value, in order (paramsOf's inverse). */
+const searchOf = (params) => {
+  const q = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) for (const x of [].concat(v)) q.append(k, String(x))
+  return q
+}
 /** Environment variables that change what the query core answers. Set in the caller's environment → the caller
  *  answers locally, and the worker runs as if none were set (worker.mjs deletes them): one list, one place, so the
  *  two paths cannot disagree about a document. */
@@ -27,6 +41,8 @@ export const LOCAL_ENV = Object.freeze(['TROCAR_PRICING'])
 /** How long a daemon has to say something. Inactivity, not a total: the worker streams, so this bites a wedged
  *  daemon, never a big document. */
 export const DEADLINE_MS = 5000
+/** How long the CLI waits before it asks again for an answer that still carries `pending` (3.5 §归约前沿). */
+const PENDING_WAIT_MS = 200
 
 /** Which path a name and an environment take, without asking anything: `true` = this process must answer it.
  *  A caller that injects its own `fs` or `now` reads its own files on its own clock, which the daemon's worker
@@ -38,15 +54,32 @@ export const localOnly = (name, env = {}) => LOCAL_ONLY.includes(name) || LOCAL_
  * ready to be written as it stands; `via` is 'daemon' or 'local'. `ctx` is the query core's context plus `dir`
  * (the collector directory, where this platform's daemon says how to reach it) — `home` = ~/.trocar, `userHome` =
  * the user's home. Throws what the query core throws (QueryArgError for an unknown name or parameter) on either path.
+ * An answer from the daemon that carries `pending` (its worker has not folded every member yet) is asked again after
+ * PENDING_WAIT_MS until it carries none (3.5 §归约前沿: the terminal prints a whole answer) — a `session` as `{id, since: <the
+ * newest answer's mark>}` (its own parameters while that mark is null), then once more with its own parameters, which is what is
+ * printed; one whose `pending.done` does not grow within `deadlineMs` is answered here instead, where the local path folds
+ * everything and never has `pending`.
  */
 export async function queryDocument(name, params = {}, { home, userHome, dir, platform, env, deps, fs, now, indent = 0, deadlineMs = DEADLINE_MS } = {}) {
   if (!localOnly(name, env || {}) && !fs && !now) {
     const ep = controlEndpointFor({ platform, dir, env: env || {} })
     if (ep.socketPath) {
       try {
-        const q = new URLSearchParams({ ...params, name, indent: String(indent) })
-        const bytes = await ep.request({ socketPath: ep.socketPath, path: `${QUERY_PATH}?${q}`, timeoutMs: deadlineMs, raw: true })
-        return { text: bytes.toString('utf8'), via: 'daemon' }
+        const ask = (ps) => { const q = searchOf(ps); q.set('name', name); q.set('indent', String(indent)); return `${QUERY_PATH}?${q}` }
+        // `whole` = this ask carries the caller's own parameters: only its answer may be printed
+        for (let done = -1, grew = Date.now(), at = ask(params), whole = true; ;) {
+          const text = (await ep.request({ socketPath: ep.socketPath, path: at, timeoutMs: deadlineMs, raw: true })).toString('utf8')
+          const d = text.includes('"pending"') ? JSON.parse(text) : null, p = d && d.pending
+          if (!p && whole) return { text, via: 'daemon' }
+          // a `session` that is still folding is followed by its delta from the newest mark (3.5 §归约前沿): the
+          // poll costs the newly folded members, not the whole document; once none is pending, the caller's own ask
+          const mark = p && name === 'session' ? d.mark : null
+          whole = mark == null; at = whole ? ask(params) : ask({ id: params.id, since: mark })
+          if (!p) continue
+          if (p.done > done) { done = p.done; grew = Date.now() }
+          else if (Date.now() - grew >= deadlineMs) break // the fold stopped making progress: this process folds it all
+          await new Promise((d) => setTimeout(d, PENDING_WAIT_MS))
+        }
       } catch (e) {
         // 400 is the query core's own verdict on these very arguments, so this process must raise the same error
         // instead of computing it again. EVERYTHING else is answered locally: no daemon, a refused socket, a wrong

@@ -12,7 +12,7 @@
     {"a":"deeplink","p":{"kind":"step","f":0.326,"step":0,"junk":"x67fwod"}}
   ],
   "screenshot": "test/web-v2/browser/shots/seq/I-url-replay-6.png",
-  "status": "open",
+  "status": "fixed",
   "detail": "a same-session hash change to step=0 (out of range below) leaves the URL step= unclamped while another step is shown; 1.2:91 clamps. Same root as I-url-replay-4 (its fp keeps the minus sign)",
   "owner": "desk (lane D)",
   "suspect": "src/web/v2/replay/replay.mjs:84 stepOf (null for step < 1) and :477"

@@ -22,6 +22,17 @@ const SETTLED_ONLY = new Set(['I-url', 'I-leak', 'I-mem', 'I-follow', 'I-hold'])
 /** A violation's (or a regression's) identity: its `<id>:<screen>` sig and its fingerprint (invariants.mjs). */
 export const keyOf = (v) => `${v.sig} ${v.fp}`
 
+/** The default run (`npm run test:browser` with no SEQ_* knob): these seeds, this many steps each. */
+export const DEFAULT_SEEDS = Object.freeze([1, 2, 3, 4, 5, 6]), DEFAULT_STEPS = 60
+
+/** A saved regression `open` (a triaged product bug) or `flaky` is a node:test `todo`: reported, never red. → the todo text, or false */
+export const replayTodo = (reg) => (reg.status === 'open' || reg.status === 'flaky')
+  && `${reg.status}${reg.owner ? ` · owner ${reg.owner}` : ''}${reg.suspect ? ` · suspect ${reg.suspect}` : ''}`
+
+/** How replay `r` of saved regression `reg` fails: any violation, named as its own key recurring or another one met. → text, or null */
+export const replayFailure = (reg, r) => !r.violation ? null
+  : `${reg.name} [${reg.status}]: ${keyOf(r.violation) === keyOf(reg) ? 'still reproduces' : `stopped at ${keyOf(r.violation)}`} at step ${r.violation.step} — ${r.violation.detail} (screenshot ${r.violation.screenshot})`
+
 /** The steps of sequence `seed`: a pure function of (seed, steps, real). → [{a, p}] (plain JSON) */
 export function generate(seed, steps, world, { real = false } = {}) {
   const r = rng(seed * 7919 + 17)

@@ -50,7 +50,7 @@ test('4.2:53-55 format: one call line per model call, the 3.2 mapping, ask on th
   assert.deepEqual(calls.map((c) => c.line).sort(), [1, 2, 3], 'the LLM lines that are not log-only')
   const KEYS = ['line', 'lane', 'model', 'failed', 'cache_known', 'usage']
   for (const c of calls) assert.deepEqual(Object.keys(c), c.lane === 'main' ? [...KEYS, 'ask'] : KEYS, 'ask on main-lane calls only')
-  const main = (await runQuery('session', { id: 'a', limit: 500 }, { home })).analyzed.lanes.find((l) => l.kind === 'main')
+  const main = (await runQuery('session', { id: 'a' }, { home })).lanes.find((l) => l.kind === 'main')
   for (const c of calls.filter((x) => x.lane === 'main')) assert.equal(c.ask, main.task, 'ask = the main lane\'s task')
   const by = new Map(calls.map((c) => [c.line, c]))
   assert.equal(by.get(3).failed, true)
@@ -175,15 +175,16 @@ test('3.5:93 #10 through the real worker: after it fills, coverage is whole and 
     const doc = await until(ask, complete)
     assert.equal(doc.usage.coverage.sessions_in_window, 3)
 
-    const want = { input: 0, output: 0, cache_read: 0, cache_write: null, calls: 0 }
+    // a row's usage counts a write the vendor does not report as 0 (3.5 §会话读 行): the sidecar's null write sum is 0 there
+    const want = { input: 0, output: 0, cache_read: 0, cache_write: 0, calls: 0 }
     for (const id of ['A', 'B', 'C']) {
-      const s = await runQuery('session', { id, limit: 500 }, { home })
+      const s = await runQuery('session', { id }, { home })
       want.calls += s.meta.calls
-      for (const lane of s.analyzed.lanes) for (const c of lane.calls) {
+      for (const c of s.calls) {
         if (!(c.status < 400)) continue
-        const u = (c.norm && c.norm.usage) || {}
-        want.input += u.input_tokens ?? 0; want.output += u.output_tokens ?? 0; want.cache_read += u.cache_read_input_tokens ?? 0
-        if (u.cache_creation_input_tokens != null) want.cache_write = (want.cache_write ?? 0) + u.cache_creation_input_tokens
+        const u = c.usage || {}
+        want.input += u.fresh ?? 0; want.output += u.out ?? 0; want.cache_read += u.read ?? 0
+        want.cache_write += u.create ?? 0
       }
     }
     const got = { input: 0, output: 0, cache_read: 0, cache_write: null, calls: 0 }
@@ -191,7 +192,7 @@ test('3.5:93 #10 through the real worker: after it fills, coverage is whole and 
       got.input += r.input; got.output += r.output; got.cache_read += r.cache_read; got.calls += r.calls
       if (r.cache_write != null) got.cache_write = (got.cache_write ?? 0) + r.cache_write
     }
-    assert.deepEqual(got, want)
+    assert.deepEqual({ ...got, cache_write: got.cache_write ?? 0 }, want)
     assert.ok(want.input > 0, 'the seeds carry usage')
   } finally {
     child.kill('SIGKILL')

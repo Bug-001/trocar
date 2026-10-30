@@ -4,7 +4,7 @@
 // null when no usage came back at all — neither is ever turned into a zero here.
 import { preview, fmtTime } from '../core/fmt.mjs'
 import * as W from '../labels/replay.mjs'
-import { QUIET_CAUSES as QUIET } from '../core/metrics.mjs' // for hasChangeLine below (the export above re-exports the same set)
+import { QUIET_CAUSES as QUIET, refOf } from '../core/metrics.mjs' // for hasChangeLine below (the export above re-exports the same set)
 // The cache and cost numbers moved to core/metrics.mjs (the one home of the cache predicate, plan P2.4–P2.5); the old names stay here
 // so the replay modules keep importing them from where they always did.
 export { hitRatio, hitPct, hitTier, QUIET_CAUSES, breakSteps, priceRow, priceMatch, costOf, sessionCost } from '../core/metrics.mjs'
@@ -21,8 +21,8 @@ export function compBucket(b) {
   if (b.sec === 'system') return 'system'
   return COMP_KIND[b.kind] || COMP_ROLE[b.role] || 'other'
 }
-// the server's answer for a call wins (it is computed while the blocks are in hand, so it also exists for a call whose body
-// is outside the page window); the local sum is for a call that carries its blocks. Null = not computable (hatched bar).
+// the skeleton row's `comp` wins (the server computes it while the blocks are in hand, so it exists for a step whose lane is
+// not held); the local sum is for a call that carries its blocks. Null = not computable (hatched bar).
 export function callComp(s) {
   if (s && s.comp) return s.comp
   if (!s || !s.flat || !s.flat.length) return null
@@ -33,9 +33,8 @@ export function callComp(s) {
 // bytes of one block: the server bakes `bytes` on every block (slim or inline); a block without it counts as unknown (0)
 export const flatBytes = (b) => (b && typeof b.bytes === 'number' ? b.bytes : 0)
 
-// a call whose body was not shipped on this page carries `flat: []` — empty, NOT an empty context. `paged_out` is what tells
-// the two apart, so a diff baseline is only ever fetched through here: null means "no comparison possible".
-export const blocksOf = (c) => (c && !c.paged_out && c.flat && c.flat.length ? c.flat : null)
+// a step's blocks, or null when there are none to compare against (its lane is not held: `stepOf(desk, rid).flat` is null)
+export const blocksOf = (c) => (c && c.flat && c.flat.length ? c.flat : null)
 
 // ── turns ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // a human query is the server's `query` on a message block (the human text with the harness's injections removed, absent
@@ -100,15 +99,22 @@ export function segTax(flat) {
 
 // ── cache reuse ──────────────────────────────────────────────────────────────────────────────────────────────────────
 // hit ratio, the quiet-cause list and the break predicate live in core/metrics.mjs (re-exported above).
-// The 缓存对比步 rule under its 2.3 name: until the server names it (S12 cacheBreak.refGi — landed), the front end
-// applies the same walk — the nearest earlier call of the lane that did not fail.
+// The 缓存对比步 rule under its 2.3 name: the server names it (`cacheBreak.refRid`); a row without it gets the same walk —
+// the nearest earlier call of the lane that did not fail.
 export { refOf as cacheRefOf } from '../core/metrics.mjs'
+// the 缓存对比步 of lane.calls[i]: the row the server named by rid when it is loaded, else the walk
+export function refRowOf(lane, i) {
+  const c = lane && lane.calls[i], rid = c && c.cacheBreak && c.cacheBreak.refRid
+  const k = rid != null && lane.ridLocal ? lane.ridLocal.get(rid) : null
+  return k != null ? lane.calls[k] : refOf(lane ? lane.calls : [], i)
+}
 // does THIS step's window draw the 变化线? ONE predicate for the step bar's 「跳到变化处」 and the window: the prefix
-// actually changed (cause outside QUIET_CAUSES) and there is a block to stand before.
-export function hasChangeLine(call) {
+// actually changed (cause outside QUIET_CAUSES) and there is a block to stand before in the step's blocks (`flat`, null
+// while its lane is not held).
+export function hasChangeLine(call, flat = call && call.flat) {
   const b = call && call.cacheBreak
-  return !!(b && !b.firstCall && b.cause && !QUIET.has(b.cause) && !call.paged_out && !call.unparsed
-    && call.rec && Array.isArray(call.flat) && b.idx < call.flat.length)
+  return !!(b && !b.firstCall && b.cause && !QUIET.has(b.cause) && !call.unparsed
+    && call.rec && Array.isArray(flat) && b.idx < flat.length)
 }
 
 // the flags of one *Incomplete object → its closed-set words, joined; an unknown flag set falls back to 「<请求/消息/回复>没采全」

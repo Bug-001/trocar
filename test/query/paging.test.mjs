@@ -35,16 +35,6 @@ test('--limit 默认 50、上限 500;next 就是下一页的 --after,has_more �
   assert.equal((await runQuery('sessions', { limit: 2, after: LIMIT_DEFAULT + 2 }, { home })).has_more, false)
 })
 
-test('session 的 page 也照分页写:cursor / limit / next / has_more', async () => {
-  const home = rawHome()
-  // one session, three calls
-  writeSegment(home, SEG, [0, 1, 2].map((i) => ({ ts: at(i), sessionKey: 's-1', harness: 'opencode' })))
-  const p1 = await runQuery('session', { id: 's-1', limit: 2 }, { home })
-  assert.deepEqual([p1.page.cursor, p1.page.limit, p1.page.total, p1.page.next, p1.page.has_more], [0, 2, 3, '2', true])
-  const p2 = await runQuery('session', { id: 's-1', after: p1.page.next, limit: 2 }, { home })
-  assert.deepEqual([p2.page.cursor, p2.page.next, p2.page.has_more], [2, null, false])
-})
-
 test('calls 两种形状:不带 --class 给 classes:[{class,count}],带 --class 给 records', async () => {
   const home = homeWith(2, [
     { ts: at(5), class: 'telemetry', is_llm: false, host: 'o11y.example' },

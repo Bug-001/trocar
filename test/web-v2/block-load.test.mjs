@@ -99,13 +99,3 @@ test('the drawer: a row whose fetch failed asks again when it is reopened', asyn
   fresh(); api = fakeApi(FAIL(404)); await run(api); assert.equal(api.calls, 1)
 })
 
-test('a cached body is drawn by its ref (its byte key is r:<ref>, so evicting the bytes reaches its blob); an uncached answer rides inline', async () => {
-  const { blockBodyHtml } = await import('../../src/web/v2/replay/blocks.mjs')
-  for (const [i, text] of ['x', 'y'.repeat(5000), '{"a":1}'].entries()) {
-    const ref = `${REF}:${i}`, got = { status: 'ok', text }
-    bodyCache.set(ref, got)
-    assert.match(blockBodyHtml(got, { ...blockB, text_ref: ref }), new RegExp(`data-ck="r:${ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`))
-    bodyCache.delete(ref)
-    assert.doesNotMatch(blockBodyHtml(got, { ...blockB, text_ref: ref }), /data-ck="r:/)
-  }
-})

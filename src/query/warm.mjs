@@ -40,10 +40,22 @@ export function rowsKey(rows) {
   return { id: `${rows.length}:${rows.length ? `${rows[0].id}:${rows[rows.length - 1].id}` : ''}:${bytes}`, bytes }
 }
 
-/** The query worker's heap (its `--max-old-space-size`, src/query/service.mjs forks it with this). It lives here because the read
+/** The query worker's heap, both generations (heapFlags: src/query/service.mjs forks it with them). It lives here because the read
  *  side's budget is derived from it: every process that answers a query cuts at the same place, so the worker and the local path
  *  give the same document (3.5 §内存有界). */
 export const WORKER_MEMORY_MB = 384
+/** The flags that give a process a heap of `mb` MB: V8's `--max-heap-size`, the young generation inside it, so V8's heap_size_limit
+ *  is `mb` and the used heap (both generations) is measured against the heap it can use. `--max-old-space-size` adds the young
+ *  generation on top (3 × its semi-space, 48 MB at V8's default): a process started with it reckons its budget and ceiling past its
+ *  old space and dies of the heap instead of cutting (measured 2026-10-22: --max-old-space-size=128 reports a 176 MB limit). */
+export const heapFlags = (mb = WORKER_MEMORY_MB) => [`--max-heap-size=${mb}`]
+/** The environment to fork the query worker in: `env` without any key whose upper-case form is NODE_OPTIONS (Windows keys are
+ *  case-insensitive). The worker is trocar's own process, so nothing in a user's NODE_OPTIONS is meant for it, and 3.5's heap bound
+ *  needs its heap to be exactly heapFlags(): V8 lets an inherited --max-old-space-size (or -percentage) override --max-heap-size, and
+ *  the Windows login task carries the user's NODE_OPTIONS into the daemon (measured 2026-10-22, node 22: 8192 → an 8195 MB limit). */
+export function workerEnv(env = process.env) {
+  return Object.fromEntries(Object.entries(env).filter(([k]) => k.toUpperCase() !== 'NODE_OPTIONS'))
+}
 /** What one stored byte of a record costs in the heap once read back and parsed (measured: 0.97x on generated Claude Code
  *  sessions, 1.62-1.69x on the user's real one, 2026-10-21). */
 export const HEAP_PER_STORED = 2

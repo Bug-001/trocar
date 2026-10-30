@@ -10,8 +10,8 @@
 // depends on the block's place in a call (a turn boundary, a volatile block, the links between a file's tool_use and its result) is
 // the row's `attrs`, by list position.
 import { createHash } from 'node:crypto';
-import { admitted, flatBlockText, blockFacts, callFacts, replyPartsAnthropic, linearContext } from './analyze.mjs';
-import { hydrateForBoard, anthropicFlat, flatRequest, rawRefOf, wireOf, respRefsOf, extraMessagesOf, unknownFacts, respOf, slimRec } from './assemble.mjs';
+import { admitted, flatBlockText, blockFacts, callFacts, normResp, replyPartsAnthropic, linearContext } from './analyze.mjs';
+import { hydrateForBoard, anthropicFlat, flatRequest, rawRefOf, wireOf, respRefsOf, extraMessagesOf, unknownFacts, respOf, slimRec, nonBlockKeysOf } from './assemble.mjs';
 import { slimBlock, compBucket, firstHuman } from './blockmeta.mjs';
 import { renderOf } from './render-kind.mjs';
 import { blockSpans } from '../adapters/cc.mjs';
@@ -26,7 +26,7 @@ import { CC_THREADS, replyIdOf, patchSystem } from '../dissect/cc-threads.mjs';
 import { hasCompactionPreamble } from '../identity/session-identity.mjs';
 import { sessionKeyOf } from '../dissect/harnesses.mjs';
 import { posCmp } from '../query/projection.mjs';
-import { bodyRetentionOf, retentionLabelOf, reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs';
+import { bodyRetentionOf, retentionLabelOf, reqIncompleteOf, wsIncompleteOf, respIncompleteOf, isLogOnly } from '../dissect/capture-labels.mjs';
 
 const SEP = '\x1F';
 const b64 = (s) => createHash('sha256').update(s, 'utf8').digest().subarray(0, 16).toString('base64url');
@@ -101,7 +101,7 @@ export function definition(b, ref, exact, why = null) {
 // ── what a record's own bytes hold ──────────────────────────────────────────────────────────────────────────────────────────────
 // The wire a call is read on: a flat-lane dissector, the Anthropic wire, or null (no call: counted, never guessed at).
 export function callWireOf(r) {
-  if (!r || !r.is_llm_call) return null;
+  if (!r || !r.is_llm_call || isLogOnly(r)) return null; // D40: a call kept as a log line is no step (the session's `logged`)
   let d = boardDissectorFor(r);
   if (d && d.admits && !d.admits(r)) d = null;
   if (d) return { d, format: d.id };
@@ -159,14 +159,17 @@ export function replyBlocks(rec, { d, format }) {
   return out;
 }
 
-/** blockAt(rec, ref) → the flat entry of the block `ref` names in `rec` (a request or a reply block), as extraction built it, or null. */
+/** blockAt(rec, ref) → the flat entry of the block `ref` names in `rec` (a request or a reply block), as extraction built it, or null.
+ *  Within its record a block is named by its field and byte range (4.2 text_ref = record id + range): the stream half of the ref
+ *  says which file the record was read from, which a seal renames. */
+const spanOf = (ref) => { const i = ref.indexOf('::'); return i < 0 ? ref : ref.slice(i); };
 export function blockAt(rec, ref) {
   const wire = callWireOf(rec);
   if (!wire || ref == null) return null;
-  const { flat, at } = requestBlocks(rec, wire);
-  const i = at.findIndex((a) => a.ref === ref);
+  const { flat, at } = requestBlocks(rec, wire), want = spanOf(ref), same = (r) => r != null && spanOf(r) === want;
+  const i = at.findIndex((a) => same(a.ref));
   if (i >= 0) return flat[i];
-  const p = replyBlocks(rec, wire).find((x) => x.ref === ref);
+  const p = replyBlocks(rec, wire).find((x) => same(x.ref));
   return p ? p.b : null;
 }
 
@@ -278,7 +281,7 @@ const counts = (x) => x.facts || x; // where a call's msgCount is (the Anthropic
  */
 export function extract(rec, ctx) {
   const rid = String(rec.id), pos = rid, wire = callWireOf(rec);
-  if (!wire) return { defs: [], row: { rid, pos, x: { item: itemFacts(rec), unknown: jsonClean(unknownFacts(rec)) } } };
+  if (!wire) return { defs: [], row: { rid, pos, x: { item: itemFacts(rec), ...(isLogOnly(rec) ? null : { unknown: jsonClean(unknownFacts(rec)) }) } } };
   const defs = [], local = new Set(), take = (b, at) => {
     const { bid, def, query } = definition(b, at.ref, at.exact, at.why);
     if (!ctx.store.hasDef(bid) && !local.has(bid)) { local.add(bid); defs.push(def); }
@@ -381,16 +384,18 @@ function stitchedFacts(x, { rec, st, predX, state, tools, ownMsgs }) {
   x.lane = f.sub ? 'subagent' : f.monitor ? 'monitor' : hintsOf(rec).lane || 'main';
 }
 
-// x: the per-call facts (design §3.2 "x"), all from this record.
+// x: the per-call facts (design §3.2 "x"), all from this record. `nonBlockKeys`: the request's top-level keys that are no block
+// (refs into the body and short scalars, never a body: assemble.mjs nonBlockKeysOf), what a lane answer's step detail ships (3.5 §会话读).
 function callX(rec, { d, format }, { h, req, unparsed }) {
   const st = (respOf(rec) || {}).status ?? null;
-  const common = { item: itemFacts(rec), format, respRefs: respRefsOf(rec), ...(extraMessagesOf(rec) || {}), ts: rec.ts_request || rec.ts || '', status: st };
+  const common = { item: itemFacts(rec), format, respRefs: respRefsOf(rec), ...(extraMessagesOf(rec) || {}), ts: rec.ts_request || rec.ts || '', status: st,
+    nonBlockKeys: nonBlockKeysOf(rec, format) };
   if (format === 'anthropic') {
     const facts = callFacts(h), u = facts.usage || {};
     const lane = facts.sub ? 'subagent' : facts.monitor ? 'monitor' : hintsOf(rec).lane || 'main';
     return jsonClean({ ...common, facts, lane, wire: wireOf(h, format, null), rq: slimRec(h).request,
       usage: { read: u.cache_read_input_tokens || 0, create: u.cache_creation_input_tokens || 0, fresh: u.input_tokens || 0, out: u.output_tokens || 0 },
-      error: !!rec.error || !!facts.failed, replyId: replyIdOf(rec) });
+      error: !!rec.error || !!facts.failed, replyId: replyIdOf(rec), stop_reason: normResp(h).stop_reason ?? null });
   }
   const norm = d.normResp(rec);
   // `agent`: the wire's own agent (a WebSocket connection), what a subagent's lane is folded by when the harness names none
@@ -402,47 +407,61 @@ function callX(rec, { d, format }, { h, req, unparsed }) {
 }
 
 // ── the build driver ────────────────────────────────────────────────────────────────────────────────────────────────────────────
-const CHUNK = 16; // records asked of recordsAt at a time
+/** What extraction reads at once, in stored bytes: consecutive members whose `stored_bytes` sum to at most this (at least one), so
+ *  the records it holds at a time are a reservation the reading side makes before it reads (src/query/named/session.mjs working()). */
+export const CHUNK_STORED = 8 * 1048576;
+// and at most this many: a row lists its whole context however few bytes its record stores (a thread's continuation stores its
+// delta), so the rows a chunk holds until it is appended are bounded by count (by bytes alone, 800 rows of a lane that never
+// compacts, each a context of megabytes, passed the worker's heap: 2026-10-22)
+const CHUNK = 16;
 const contexts = new WeakMap(); // store → its extraction context (slices of one session go on with the same one)
 
 /**
- * extractMembers({store, members, recordsAt, sessionId, budgetMs, clock, errors}) → { frontier, done, total } (design §3.4
- * "Extraction frontier"). `members`: the session's index rows; `recordsAt(rows)` → their records (one that does not read back is
- * left out). Extracts the members the store has no row for, in write order (posCmp), until `budgetMs` of `clock` is spent, appending
+ * extractMembers({store, members, recordsAt, sessionId, budgetMs, clock, errors, from}) → { frontier, done, total } (design §3.4
+ * "Extraction frontier"). `members`: the session's index rows in write order (src/query/rows.mjs: segments in segmentCmp order,
+ * lines in order); `from`: a cursor, the place of a member such that every member before it has a row (0, or the `done` of a call
+ * over a list this one extends). `recordsAt(rows)` → their records (one that does not read back is left out). Extracts the members
+ * from the cursor on that the store has no row for, in write order, until `budgetMs` of `clock` is spent, appending
  * each chunk's definitions and rows; `errors`: the answering request's (where a store note goes). A member that fails to extract gets
  * a row { x: { unparsed: reason } } appended as held (a `t` line the next open cuts off), so the next open tries it again (§3.9); so
  * are the rows extracted after it (one that continues it, or is written against it, would otherwise be stored without it), so what
  * a later open reads is the rows of one pass over a prefix. What extraction holds is a chunk of records, the store's indexes and the
  * context's per-lane / per-link ids: not the rows (4.3 §4). frontier: the largest rid such that every member up to it has a row;
- * done / total: members with a row, members. A keyless record gets the session's synthesized key (3.4 合成键), as the query does.
+ * done: the members up to it (the cursor the next call goes on from); total: the members. A keyless record gets the session's
+ * synthesized key (3.4 合成键), as the query does. The work is by the members from the cursor on, never by the members before it.
  */
-export function extractMembers({ store, members, recordsAt, sessionId = null, budgetMs = Infinity, clock = () => performance.now(), errors = undefined }) {
-  const order = members.map((m) => String(m.id)).sort(posCmp);
-  const t0 = clock(), spent = () => clock() - t0 >= budgetMs;
-  const todo = order.filter((rid) => !store.rows.has(rid));
-  if (todo.length && !contexts.has(store)) contexts.set(store, createExtractContext(store));
-  const ctx = contexts.get(store), byId = todo.length ? new Map(members.map((m) => [String(m.id), m])) : null;
-  for (let i = 0; i < todo.length && !spent();) {
-    const part = todo.slice(i, i + CHUNK), got = new Map();
-    for (const r of recordsAt(part.map((rid) => byId.get(rid))) || []) if (r) got.set(String(r.id), r);
+export function extractMembers({ store, members, recordsAt, sessionId = null, budgetMs = Infinity, clock = () => performance.now(), errors = undefined, from = 0 }) {
+  const t0 = clock(), spent = () => clock() - t0 >= budgetMs, idOf = (i) => String(members[i].id), has = (i) => store.rows.has(idOf(i));
+  let at = from;
+  const settle = () => { while (at < members.length && has(at)) at++; };
+  settle();
+  for (let i = at; i < members.length && !spent();) {
+    const part = []; // the next members with no row: at most CHUNK, their stored bytes at most CHUNK_STORED (the first whatever its size)
+    for (let sum = 0; i < members.length && part.length < CHUNK; i++) {
+      if (has(i)) continue;
+      const b = members[i].stored_bytes || 0;
+      if (part.length && sum + b > CHUNK_STORED) break;
+      sum += b; part.push(i);
+    }
+    if (!part.length) break;
+    if (!contexts.has(store)) contexts.set(store, createExtractContext(store));
+    const ctx = contexts.get(store), got = new Map();
+    for (const r of recordsAt(part.map((k) => members[k])) || []) if (r) got.set(String(r.id), r);
     const defs = [], rows = [], held = [];
-    for (const rid of part) {
-      if (spent() && (rows.length || held.length)) break;
-      i++;
-      const rec = got.get(rid);
+    for (const k of part) {
+      if (spent() && (rows.length || held.length)) { i = k; break; }
+      const rid = idOf(k), rec = got.get(rid);
       if (rec && sessionId != null && sessionKeyOf(rec).key == null) Object.defineProperty(rec, '_synthKey', { value: sessionId, enumerable: false, configurable: true, writable: true });
       let out = null, why = rec ? null : 'the record did not read back';
       if (rec) try { out = extract(rec, ctx); } catch (e) { why = `extraction failed: ${e && e.message ? e.message : e}`; }
       if (!out) ctx.held = true;
       if (out) defs.push(...out.defs);
-      (ctx.held ? held : rows).push(out ? out.row : { rid, pos: rid, x: { unparsed: why } });
+      (ctx.held ? held : rows).push(out ? out.row : { rid, pos: rid, x: { unparsed: why, code: rec ? 'record-unparseable' : 'record-unreadable' } });
     }
     store.append({ defs, rows }, { errors });
     if (held.length) store.append({ rows: held }, { held: true, errors });
     ctx.flushed();
   }
-  let frontier = null, done = 0;
-  for (const rid of order) if (store.rows.has(rid)) done++;
-  for (const rid of order) { if (!store.rows.has(rid)) break; frontier = rid; }
-  return { frontier, done, total: order.length };
+  settle();
+  return { frontier: at ? idOf(at - 1) : null, done: at, total: members.length };
 }

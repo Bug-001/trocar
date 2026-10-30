@@ -128,7 +128,7 @@ test('sessionTotals reports the first failed call of any lane as {lane, i}, toke
   const lane = (kind, calls) => ({ kind, calls })
   const m = lane('main', [step('append', U(1, 1, 1)), step('append', U(1, 1, 1), { error: true })])
   const sub = lane('subagent', [step('append', U(1, 1, 1), { error: true })])
-  const ruler = lane('probe', [{ gi: 0, ts: '2026-10-07T10:00:00.000Z', probe: true, usage: null, error: true }]) // the front end's token-count lane
+  const ruler = lane('probe', [{ rid: 'token-count:0', ts: '2026-10-07T10:00:00.000Z', probe: true, usage: null, error: true }]) // the front end's token-count lane
   const t = sessionTotals([m, sub, ruler], () => null)
   assert.equal(t.failed, 2, 'both model calls, not the ruler')
   assert.equal(t.firstFailed.lane, m); assert.equal(t.firstFailed.i, 1, 'the FIRST one, main lane index')

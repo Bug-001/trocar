@@ -2,28 +2,32 @@
 // session, and where each of it stands at the playhead (not yet · live · evicted) — one lifecycle sentence per row, in
 // words. Six groups keyed by the resource kind (a render-time projection, never a schema enum); the first two are open by
 // default, the rest live behind one 「其他 N 项」 row.
-//   resources === null  → this agent's records carry no resource ledger (its own sentence), NOT "no resources"
-//   resources === []    → the ledger exists and tracked none (its own sentence)
-// The key of a resource is the server's `resKey`, else kind::label. `el` is #resexp; `s` is the replay desk's state.
+// The ledger is the anchor lane's `lane` answer (resources, seen, events; 3.5 §会话读) as the desk holds it: nothing is said
+// until that lane is held; an empty ledger has its own sentence (this agent may not provide one — never "no resources").
+// The key of a resource is the server's `resKey` / `key`, else kind::label. `el` is #resexp; `s` is the replay desk's state.
 import { esc, kf } from '../core/fmt.mjs'
 import { resState } from './lanes.mjs'
 import { relPath, midClip } from './analysis.mjs'
 import { navGroupHtml, jumpToStepAndBlock } from './outline.mjs'
 import * as W from '../labels/replay.mjs'
+import { resKeyOf, laneEvents, seenFiles, ledgerDone } from './model.mjs'
 
-export const resKeyOf = (r) => r.resKey || r.kind + '::' + r.label
 const SEEN_CAP = 40
 // a resource is datable (has a lifecycle to speak of) only with a usable segment list; the six display groups and the
 // < 1200 px fold line's N count the same set (1.2 §窄屏). An UNKNOWN kind is never dropped (2.4 Edge cases): it renders
 // in 「其他资源」, undated when it has no usable segments. A known kind without usable segments joins no counted group.
 const hasSeg = (r) => !!(r && r.segments && r.segments.length)
 
-// 「第 N 步」 on the main lane, 「第 k 次调用」 when the session has no main lane (1.2 §编号)
+// 「第 N 步」 on the main lane, 「第 k 次调用」 when the session has no main lane (1.2 §编号); N counts the lane's rows not loaded yet
 const stepWordOf = (s) => {
-  const isMain = s.anchor && s.anchor.kind === 'main'
-  const N = s.anchor ? s.anchor.calls.length : 1
-  const L = (gi) => { const v = s.anchor.giLocal.get(gi); return v == null ? N : v }
-  return (localIdx) => (isMain ? `step ${localIdx + 1}` : `call ${localIdx + 1}`)
+  const isMain = s.anchor && s.anchor.kind === 'main', base = (s.anchor && s.anchor.base) || 0
+  return (localIdx) => (isMain ? `step ${base + localIdx + 1}` : `call ${base + localIdx + 1}`)
+}
+// the anchor lane's ledger as the desk holds it; null while that lane is not held. `seen` is 2.4's 只见到名字 (seenFiles:
+// the opened files taken out); `done` = its ledger_next chain is read to the end, so the ledger's counts are exact (2.4:67)
+function ledgerOf(s) {
+  const h = s.desk && s.anchor && s.desk.held.get(s.anchor.id)
+  return h ? { res: [...h.resources.values()], seen: seenFiles(s.desk, s.anchor.id), events: laneEvents(s.desk, s.anchor.id), done: ledgerDone(s.desk, s.anchor.id) } : null
 }
 
 // a read file's visible name is cut in the middle past this many characters; the hover keeps the full path (2.4)
@@ -35,48 +39,51 @@ export function resourcesHtml(s) {
   const at = stepWordOf(s)
   const cwd = s.meta && s.meta.project_path
   const rp = (p) => esc(midClip(relPath(cwd, p), NAME_MAX))
-  const res = a.resources || [], seen = a.seenFiles || []
+  const ledger = ledgerOf(s)
+  if (!ledger) return '<div class="navsub busy" aria-busy="true"></div>' // the lane is on its way: a sized empty row, no words
+  const { res, seen, events, done } = ledger
+  // a count the ledger gives is not known until its chain is read: an empty busy box, never a digit (2.4:67, invariant 4)
+  const ct = (n) => (done ? n : null)
+  const N = a.calls.length
+  const L = (rid) => { const v = a.ridLocal.get(rid); return v == null ? N : v }
   const withSeg = res.filter(hasSeg)
   const of = (k) => withSeg.filter((r) => r.kind === k)
   const view = (r, enter) => `data-view="${esc(resKeyOf(r))}" data-viewstep="${enter}" data-viewlabel="${esc(r.label)}"`
   // the lifecycle sentence's state at the playhead + the enter/evict locals (N from the FIRST segment, M from the LAST)
   const life = (r) => {
-    const giLocal = a.giLocal, N = a.calls.length
-    const L = (gi) => { const v = giLocal.get(gi); return v == null ? N : v }
     // bad data (2.4 验收 #10): segments missing or empty → degrade with a placeholder, never throw — no step numbers,
     // no enter positioning; the row still renders (unknown kinds are never dropped) with the kind on hover
     if (!hasSeg(r)) return { enter: null, word: '', cls: '' }
     const enter = L(r.segments[0].enter), last = r.segments[r.segments.length - 1]
-    const st = resState(s.playhead, r.segments, giLocal, N)
+    const st = resState(s.playhead, r.segments, a.ridLocal, N)
     const evAt = last.evict == null ? null : L(last.evict)
     let word
     if (st === 'pend') word = W.lifeIn(at(enter))
     else if (st === 'live') word = `${W.lifeIn(at(enter))} · ${W.LIFE_IN_CTX}`
     else word = evAt != null ? `${W.lifeIn(at(enter))} · ${W.lifeEvicted(at(evAt))}` : W.lifeIn(at(enter))
     // the evicting compaction was itself inferred → the eviction step is a guess too
-    if (st === 'evicted' && evAt != null) { const ev = (a.events || []).find((x) => x.type === 'compaction' && x.step === last.evict); if (ev && ev.inferred) word += ` · ${W.GUESS}` }
+    if (st === 'evicted' && evAt != null) { const ev = events.find((x) => x.type === 'compaction' && x.rid === last.evict); if (ev && ev.inferred) word += ` · ${W.GUESS}` }
     return { enter, word, cls: st === 'pend' ? 'pend' : st === 'evicted' ? 'dead' : '' }
   }
   let h = ''
   // the ledger statement sits at the TOP of the list (2.4 element table) and is about the LEDGER, not a fallback for
   // "nothing rendered": an existing-but-empty ledger (or no key) with nothing tracked says so even while the compaction
   // group draws below — compaction events are not resources (#7: 两种情况都照样画).
-  if (a.resources === null) h += `<div class="navwhy"${a.resources_note && a.resources_note !== 'no-ledger' ? ` title="${esc(a.resources_note)}"` : ''}>${esc(W.NO_LEDGER)}</div>`
-  else if (!res.length && !seen.length) h += `<div class="navsub empty">${esc(W.NO_RESOURCES)}</div>`
+  if (done && !res.length && !seen.length) h += `<div class="navsub empty">${esc(W.NO_RESOURCES)}</div>`
 
   const fileRow = (r) => { const l = life(r)
     return `<div class="navsub ${l.cls}" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}">` +
       `<button type="button" class="nsl viewname" ${view(r, l.enter)} title="${esc(r.label)}" aria-label="${esc(W.viewNameTip(relPath(cwd, r.label)))}">${rp(r.label)}</button>` +
       `<button type="button" class="navlife" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}" aria-label="${esc(W.jumpStepTip(at(l.enter)))}">${esc(l.word)}</button></div>` }
   const files = of('file')
-  if (files.length) h += navGroupHtml(s, 'life-file', W.RES_GRP.file, files.length, files.map(fileRow).join(''))
+  if (files.length) h += navGroupHtml(s, 'life-file', W.RES_GRP.file, ct(files.length), files.map(fileRow).join(''))
 
   const loadRow = (r) => { const l = life(r)
     return `<div class="navsub ${l.cls}" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}">` +
       `<button type="button" class="nsl viewname" ${view(r, l.enter)} title="${esc(r.label)}" aria-label="${esc(W.viewNameTip(r.label))}">${esc(r.label)}</button>` +
       `<button type="button" class="navlife" data-navstep="${l.enter}" data-navres="${esc(resKeyOf(r))}" aria-label="${esc(W.jumpStepTip(at(l.enter)))}">${esc(`${W.lifeLoaded(at(l.enter))}`)}</button></div>` }
   const loads = of('scaffold')
-  if (loads.length) h += navGroupHtml(s, 'life-load', W.RES_GRP.load, loads.length, loads.map(loadRow).join(''))
+  if (loads.length) h += navGroupHtml(s, 'life-load', W.RES_GRP.load, ct(loads.length), loads.map(loadRow).join(''))
 
   // the four quiet groups live behind one 「其他 N 项」 row; N counts their rows, and the row disappears when they are empty
   const capRow = (r) => { const l = life(r)
@@ -90,14 +97,12 @@ export function resourcesHtml(s) {
     return `<div class="navsub" data-navstep="${l.enter}"><span class="nsl" title="${esc(r.label)}">${esc(r.kind === 'dir' ? W.DIR_WORD : W.LINK_WORD)} ${rp(r.label)}</span><button type="button" class="navlife" data-navstep="${l.enter}" aria-label="${esc(W.jumpStepTip(at(l.enter)))}">${esc(W.lifeSeen(at(l.enter)))}</button></div>` }
   const dl = [...of('dir'), ...of('link')]
   const compRow = (e) => {
-    const giLocal = a.giLocal, N = a.calls.length
-    const at2 = (gi) => { const v = giLocal.get(gi); return v == null ? N : v }
-    const atStep = at2(e.step)
+    const atStep = L(e.rid)
     const word = e.type === 'compaction'
       ? W.compactRow(at(atStep), e.from != null ? String(e.from) : '—', e.to != null ? String(e.to) : '—') + (e.inferred ? ` · ${W.GUESS}` : '')
       : W.summarizeRow(at(atStep), e.out != null ? kf(e.out) : '—')
     return `<div class="navsub" data-navstep="${atStep}"><span class="nsl" title="${esc(word)}">${esc(word)}</span></div>` }
-  const comps = (a.events || []).filter((e) => e && (e.type === 'compaction' || e.type === 'summarize'))
+  const comps = events.filter((e) => e && (e.type === 'compaction' || e.type === 'summarize'))
   const others = res.filter((r) => !['file', 'scaffold', 'skill', 'capability', 'dir', 'link'].includes(r.kind))
   // others keeps EVERY unknown kind (even one without segments — 2.4 Edge cases: 不丢); an undated row shows no step
   // number and carries no data-navstep (there is no enter to locate)
@@ -105,23 +110,25 @@ export function resourcesHtml(s) {
     return `<div class="navsub ${l.cls}"${l.enter != null ? ` data-navstep="${l.enter}"` : ''} title="${esc(r.kind)}"><span class="nsl" title="${esc(r.label)}">${esc(r.label)}</span>${l.enter != null ? `<button type="button" class="navlife" data-navstep="${l.enter}">${esc(W.lifeSeen(at(l.enter)))}</button>` : ''}</div>` }
   const seenBlock = seen.length ? (() => {
     const shown = s.navSeenExpanded ? seen : seen.slice(0, SEEN_CAP)
-    const chips = shown.map((x) => { const giLocal = a.giLocal, N = a.calls.length; const v = giLocal.get(x.firstStep); const fl = v == null ? N : v
+    const chips = shown.map((x) => { const fl = L(x.firstRid)
       return `<span class="navchip ${fl > s.playhead ? 'future' : ''}" data-navstep="${fl}" role="button" tabindex="0" title="${esc(relPath(cwd, x.path) + ' · ' + W.seenTip(x.count, at(fl)))}">${rp(x.path)}</span>` }).join('')
     const more = seen.length > SEEN_CAP ? `<div class="navmore" data-navmore="1" role="button" tabindex="0">${s.navSeenExpanded ? esc(W.HIDE_ALL) : esc(W.SHOW_ALL(seen.length))}</div>` : ''
-    return navGroupHtml(s, 'life-seen', `${W.RES_GRP.seen} · ${W.GUESS}`, seen.length, `<div class="navseen">${chips}</div>${more}`, { hint: W.SEEN_GROUP_TIP })
+    return navGroupHtml(s, 'life-seen', `${W.RES_GRP.seen} · ${W.GUESS}`, ct(seen.length), `<div class="navseen">${chips}</div>${more}`, { hint: W.SEEN_GROUP_TIP })
   })() : ''
   const inner =
     (seen.length ? seenBlock : '') +
-    (skills.length || caps.length ? navGroupHtml(s, 'life-cap', W.RES_GRP.cap, skills.length + caps.length, [...skills, ...caps].map(capRow).join('')) : '') +
-    (dl.length ? navGroupHtml(s, 'life-dl', W.RES_GRP.dl, dl.length, dl.map(dlRow).join('')) : '') +
+    (skills.length || caps.length ? navGroupHtml(s, 'life-cap', W.RES_GRP.cap, ct(skills.length + caps.length), [...skills, ...caps].map(capRow).join('')) : '') +
+    (dl.length ? navGroupHtml(s, 'life-dl', W.RES_GRP.dl, ct(dl.length), dl.map(dlRow).join('')) : '') +
     (comps.length ? navGroupHtml(s, 'life-comp', W.RES_GRP.comp, comps.length, comps.map(compRow).join('')) : '') +
-    (others.length ? navGroupHtml(s, 'life-other', W.RES_GRP.other, others.length, others.map(otherRow).join('')) : '')
+    (others.length ? navGroupHtml(s, 'life-other', W.RES_GRP.other, ct(others.length), others.map(otherRow).join('')) : '')
   if (inner) {
     const nOthers = seen.length + skills.length + caps.length + dl.length + comps.length + others.length
-    // a session with nothing above: the groups stand on their own — a lone 「N more」 row would hide the only content
-    h += h ? navGroupHtml(s, 'life-others', W.OTHERS_ROW(nOthers), '', inner) : inner
+    // a session with nothing above: the groups stand on their own — a lone 「N more」 row would hide the only content.
+    // N holds ledger counts: while the chain is unread the row says 「more」 with the busy box in the count's place
+    h += h ? (done ? navGroupHtml(s, 'life-others', W.OTHERS_ROW(nOthers), '', inner) : navGroupHtml(s, 'life-others', W.OTHERS_ROW('').trim(), null, inner)) : inner
   }
-  if (!h) h = `<div class="navsub empty">${esc(W.NO_RESOURCES)}</div>` // entries exist but none renderable: never a blank page
+  // entries exist but none renderable: never a blank page; a ledger still on its way is a sized empty row, not "none"
+  if (!h) h = done ? `<div class="navsub empty">${esc(W.NO_RESOURCES)}</div>` : '<div class="navsub busy" aria-busy="true"></div>'
   return h
 }
 
@@ -134,8 +141,8 @@ export function renderResources(el, s) {
   // records (invariant 4) — an empty ledger says so in the page itself, the fold line has nothing to name.
   const bar = s.root && s.root.querySelector && s.root.querySelector('#rpbar')
   if (bar) {
-    const res = s.anchor.resources
-    const n = Array.isArray(res) ? res.filter((r) => r && r.kind === 'file' && hasSeg(r)).length : 0
+    const h = s.desk && s.desk.held.get(s.anchor.id)
+    const n = h && ledgerDone(s.desk, s.anchor.id) ? [...h.resources.values()].filter((r) => r && r.kind === 'file' && hasSeg(r)).length : 0
     bar.textContent = n > 0 ? `${W.RES_GRP.file} ${n} · ${W.RAW_WORD}` : W.RAW_WORD // the ▸ / ▾ is the bar's own ::after (open state)
   }
 }

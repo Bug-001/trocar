@@ -16,6 +16,12 @@ export const RAW_JOURNAL_FAILURES = Object.freeze(['refused', 'failed'])
 export const SEGMENT_PROBLEMS = Object.freeze(['record-unparseable', 'record-unreadable', 'segment-unreadable', 'index-unwritable'])
 /** The notes the context projection puts into a read's errors (src/query/projection.mjs; level 'note', RFC 4.3 §4): it was rebuilt, or could not be written. */
 export const PROJECTION_NOTES = Object.freeze(['projection-rebuilt', 'projection-write-failed'])
+/** The codes of an unreadable ref in a `block` read's errors (src/query/named/block.mjs; 3.5 §会话读, 1.6 C.5). */
+export const BLOCK_PROBLEMS = Object.freeze(['record-missing', 'record-unreadable', 'field-missing'])
+
+/** The codes of a `session` read's own errors (src/query/named/session.mjs; 3.5 §会话读): no such session, a member that did not read back or extract. */
+export const SESSION_PROBLEMS = Object.freeze(['session-unknown', 'record-unreadable', 'record-unparseable',
+  'record-missing', 'field-missing']) // a member whose block the reduction could not read back (3.5 §读不全不静默)
 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])
@@ -67,8 +73,9 @@ export const RESTART_REASONS = Object.freeze(['config-after-start', 'env-frozen'
 /** Codes trocar names itself, by part (the grouping is documentation; the set is flat). */
 export const CODES_BY_PART = Object.freeze({
   daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'start-failed', 'control-endpoint-held', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error',
-    'query-failed'], // control-endpoint-held: the control socket / pipe accepts a connection but answers nothing, so this daemon cannot serve and did not start (D62 ⑥, D38)
+    'query-failed', 'projection-write-failed'], // control-endpoint-held: the control socket / pipe accepts a connection but answers nothing, so this daemon cannot serve and did not start (D62 ⑥, D38)
     // query-failed — D63 (4.6 §事件与码): the query worker crashed, exited non-zero or did not answer in time; that query is still answered (a re-fork, or the caller's local path)
+    // projection-write-failed — 4.3 §4 盘满: the query worker could not write a context projection; answers are unchanged, one record per episode
   record: ['record-error', 'file-replaced', 'late-write'], // late-write: a write that reached the record store after the stop made it final (1.6 §5.2); not written, said once per kind
   raw: ['seal-failed', 'index-failed'], // index-failed: the daemon could not keep a segment's index current (D62); the records are on disk and the next query indexes them itself, and says so (`index-cold`)
   tracker: ['judge-error', 'unwatch-error', 'ambiguous', 'exe-unreadable', 'watch-failed', 'config-error', 'settings-unparsable', 'settings-unreadable', 'environ-unreadable'],

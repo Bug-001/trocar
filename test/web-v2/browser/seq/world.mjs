@@ -16,10 +16,12 @@ const TOOLS = ['Read', 'Edit', 'Bash'].map((name) => ({ name, description: `${na
 const idOf = (seed, k) => `5e9${String(seed).padStart(5, '0').slice(-5)}-0000-4a1b-9c2d-${String(k + 1).padStart(12, '0')}`
 
 /**
- * makeWorld({seed, big}) → { userHome, home, sessions:[{id, wire}], live:[id], hugeBytes, grow(k) }.
+ * makeWorld({seed, big}) → { userHome, home, sessions:[{id, wire}], live:[id], hugeBytes, grow(k), late(k), fresh(n) }.
  * Tens of calls per session by default (a cold fold stays fast); `big` grows the http session to hundreds of calls / several MB.
  * grow(k) appends the next k calls of every live session → { calls, main, by: {id: {calls, main}} }, `main` = the main-lane calls among
- * them, counted by the generator.
+ * them, counted by the generator. late(k) grows only the sessions whose subagent calls end late, by k calls past their late bound,
+ * so the lines held back land before the tip (late rows, relanes). fresh(n) starts one more session (never read yet) in the live
+ * segment with n calls → its id; grow() grows it from then on.
  */
 export function makeWorld({ seed = 1, big = false } = {}) {
   const { userHome, home } = boardHome()
@@ -30,38 +32,50 @@ export function makeWorld({ seed = 1, big = false } = {}) {
     { wire: 'ws', subEvery: 4, compactAt: 25_000, n: 24 },
     { wire: 'chat', subEvery: 4, failEvery: 9, n: 24 },
   ]
-  const writers = specs.map(({ n, ...o }, k) => {
+  const start = ({ n, ...o }, k) => {
     const w = bigSession({ ...base, ...o, id: idOf(seed, k), seed: seed * 101 + k * 7 })
     w.append(n)
-    return w
-  })
+    return Object.assign(w, { late: o.late || 0 })
+  }
+  const writers = specs.map(start)
   const sessions = writers.map((w, k) => ({ id: w.id, wire: specs[k].wire }))
+  const live = sessions.map((s) => s.id)
+  const growOf = (list, k) => {
+    const by = {}
+    let calls = 0, main = 0
+    for (const w of list) {
+      const c0 = w.calls, m0 = w.mains
+      w.append(k)
+      by[w.id] = { calls: w.calls - c0, main: w.mains - m0 }
+      calls += by[w.id].calls; main += by[w.id].main
+    }
+    return { calls, main, by }
+  }
   return {
-    userHome, home, sessions, live: sessions.map((s) => s.id), hugeBytes: HUGE,
-    grow(k = 1) {
-      const by = {}
-      let calls = 0, main = 0
-      for (const w of writers) {
-        const c0 = w.calls, m0 = w.mains
-        w.append(k)
-        by[w.id] = { calls: w.calls - c0, main: w.mains - m0 }
-        calls += by[w.id].calls; main += by[w.id].main
-      }
-      return { calls, main, by }
+    userHome, home, sessions, live, hugeBytes: HUGE,
+    grow: (k = 1) => growOf(writers, k),
+    late: (k = 1) => growOf(writers.filter((w) => w.late), k + Math.max(...writers.map((w) => w.late))),
+    fresh(n = 12) {
+      const w = start({ ...specs[0], n }, writers.length)
+      writers.push(w); sessions.push({ id: w.id, wire: specs[0].wire }); live.push(w.id)
+      return w.id
     },
   }
 }
 
-/** The main lane's call count of session `id`, read page by page off the `session` document (page.next until has_more is false). */
-export async function mainCount(get, id) {
-  const seen = new Set()
-  let after = null, guard = 0
-  for (;;) {
-    const { status, doc } = await get('session', { id, ...(after != null ? { after } : {}) })
-    if (status !== 200 || !doc?.analyzed) throw new Error(`session ${id}: ${status} ${String(doc?.error ?? "").slice(0, 400)}`)
-    const main = doc.analyzed.lanes.find((l) => l.kind === 'main') || doc.analyzed.lanes[0]
-    for (const c of main?.calls || []) seen.add(c.id)
-    if (!doc.page?.has_more || ++guard > 10_000) return seen.size
-    after = doc.page.next
+/** The `session` answer of `id` once the reduction has caught up (no `pending`, 3.5 §会话读 #25); throws past `ms`. */
+export async function settled(get, id, ms = 20_000) {
+  for (const t0 = Date.now(); ;) {
+    const { status, doc } = await get('session', { id })
+    if (status !== 200 || !Array.isArray(doc?.lanes)) throw new Error(`session ${id}: ${status} ${String(doc?.error ?? "").slice(0, 400)}`)
+    if (!doc.pending) return doc
+    if (Date.now() - t0 > ms) throw new Error(`session ${id}: still pending ${JSON.stringify(doc.pending)} after ${ms} ms`)
+    await new Promise((r) => setTimeout(r, 100))
   }
+}
+
+/** The main lane's call count of session `id`: its lane header's `count` in a settled `session` answer (3.5 §会话读 车道头). */
+export async function mainCount(get, id) {
+  const doc = await settled(get, id)
+  return (doc.lanes.find((l) => l.kind === 'main') || doc.lanes[0])?.count ?? 0
 }
