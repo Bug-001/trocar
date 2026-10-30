@@ -2,7 +2,7 @@
 // §记录「看得到」). Shared by `trocar status`, the board's `status` query and the daemon's GET /status (src/health/read.mjs).
 //   readFlows: day files <UTC date>.ndjson newest first — until the lines read
 // reach back past the last daemon-start AND cover the 24 h window, or until `maxBytes` (then `truncated`). A missing
-// flows/ is "nothing recorded yet"; an unreadable one throws (the endpoint answers 503, never "no failures"); one
+// flows/ is "nothing recorded yet"; an unreadable one throws (`status` then has no `health` and names it in `errors`, never "no failures"); one
 // unreadable file is listed in `errors` and the rest is still read.
 //   foldFlows: in file and line order (never by ts: a clock that jumped must not reorder them) — the conditions that
 // still hold since the last daemon-start, the failure groups and expected counts of the last 24 h, each agent's last
