@@ -77,6 +77,7 @@ export const FAILURE_WORDS = Object.freeze({
   'negative-cache/upstream-handshake': "the handshake with a host did not finish, so a program's traffic to that host is passed on unread",
   'trust-rejected': "a program refused trocar's certificate under TLS, so that host is not captured",
   'client-rejected-leaf': "a connection whose program refused trocar's certificate",
+  'client-closed-no-data': 'a connection its program closed before sending anything, while trocar was slow or after the program had already accepted its certificate',
   'upstream-slow': 'the upstream was slow',
   'leaf-error': 'a certificate could not be issued',
   'framer-error': 'a request could not be parsed',

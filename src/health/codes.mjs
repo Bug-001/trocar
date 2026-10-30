@@ -6,7 +6,7 @@
 // listed, never ⚠. A Node errno (ENOSPC, EACCES, ERR_SSL_…) goes into `code` unchanged; free text only in `reason`.
 
 /** not_captured on a connection row — capture went wrong. */
-export const NOT_CAPTURED_FAILURE = Object.freeze(['untrusted', 'untracked', 'client-rejected-leaf', 'negative-cache', 'upstream-cert', 'upstream-handshake', 'leaf-error', 'h2', 'malformed-hello'])
+export const NOT_CAPTURED_FAILURE = Object.freeze(['untrusted', 'untracked', 'client-rejected-leaf', 'client-closed-no-data', 'negative-cache', 'upstream-cert', 'upstream-handshake', 'leaf-error', 'h2', 'malformed-hello'])
 /** not_captured on a connection row — not captured by design. */
 export const NOT_CAPTURED_EXPECTED = Object.freeze(['policy', 'not-trust-path', 'https-proxy', 'proxy-refused', 'upstream-first', 'unknown-protocol', 'upgrade-not-followed', 'error'])
 
