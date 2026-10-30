@@ -18,7 +18,7 @@ export const RUN_KEY = Object.freeze({ hive: 'HKCU', key: 'Software\\Microsoft\\
 const RUN_PATH = `${RUN_KEY.hive}\\${RUN_KEY.key}`
 
 /** The oldest Node `on` accepts (package.json `engines`; a test holds the two equal). Older than that and the daemon would exit at every login with an error nobody sees (4.8 §7). */
-export const NODE_MIN_MAJOR = 20
+export const NODE_MIN_MAJOR = 22
 
 /**
  * The Node preflight of `on` (4.8 §7): → `{ ok: true, have, min }` or `{ ok: false, have, min, doctor }`. `doctor` is the line to print: what was found and what is needed. A version that cannot be read is not a pass (it names

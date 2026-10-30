@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
 // trocar Linux per-process redirector — eBPF side (spec 4.6 §Linux 机制, D36 per-user model).
 //
 // Three cgroup programs attached at the ROOT cgroup via bpf_link (the loader uses

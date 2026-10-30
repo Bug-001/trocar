@@ -23,7 +23,7 @@
 // Load it with the CLI flag `--require`, never NODE_OPTIONS: the tests spawn node processes of their own, and those would inherit
 // it. `--require` runs in the runner's process and in every test file's process; `--import` runs only in the latter (the runner's
 // own process loads only `--require` preloads), so it would leave the runner's exit as it was.
-// Guard: test/helpers/flush-exit.test.mjs; CI also compares the Node 20 and Node 22 test counts (.github/workflows/ci.yml).
+// Guard: test/helpers/flush-exit.test.mjs.
 
 'use strict'
 

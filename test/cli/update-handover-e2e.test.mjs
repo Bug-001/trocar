@@ -2,9 +2,10 @@
 // REAL old daemon: a child process (../collector/fixtures/model-daemon-child.mjs) that holds a decrypted WebSocket open through its real door.
 // The update's own drain (drainDaemon) and stop (stopDaemon) are the real ones and find the daemon at its real control endpoint (no request,
 // no socket path injected). Only what cannot run in a test stands in: launchd (its `print` answers loaded, its `bootout` sends the daemon
-// SIGTERM, which is what launchd does; win32's `taskkill /F` sends SIGKILL, which is what /F is), the login entry's start (a NEW real daemon
-// in the same HOME), and the lock identity the child wrote with its own stub. Then: the new start writes no `unclean-stop`, the cut
-// WebSocket's row precedes the old daemon's `daemon-stop`, and the old process exited 0 by itself — the stop never had to reach it.
+// SIGTERM, which is what launchd does; win32's `taskkill /F` sends SIGKILL, which is what /F is), the login entry's start (a NEW real daemon in
+// the same HOME, saying it runs the checkout's code), and the lock identity the child wrote with its own stub. Then: the new start writes no
+// `unclean-stop`, the cut WebSocket's row precedes the old daemon's `daemon-stop`, and the old process exited 0 by itself — the stop never had to
+// reach it.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
@@ -29,6 +30,7 @@ import { EXIT } from '../../src/cli/schema.mjs'
 import { agentOf, flowsOf, freePort, reqOf, through, win32Io } from '../helpers/model-io.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
+import { codeId } from '../../src/version.mjs'
 
 const CHILD = fileURLToPath(new URL('../collector/fixtures/model-daemon-child.mjs', import.meta.url))
 const KEY = 'dGhlIHNhbXBsZSBub25jZQ=='
@@ -103,7 +105,8 @@ test(`${platform}: update replaces a daemon holding ${TITLE[kind]}`, { timeout: 
 
     // the update: the old daemon is under a loaded LaunchAgent (the plist install wrote); launchd and the login entry stand in
     fs.mkdirSync(path.dirname(plistFilePath(w.home)), { recursive: true }); fs.writeFileSync(plistFilePath(w.home), '<plist/>')
-    box = await liveUnit({ w, platform })
+    const root = checkout() // the new code: what the login entry starts once the old daemon is gone, so the new daemon says it runs this
+    box = await liveUnit({ w, platform, daemon: { code: codeId(root) } })
     const signalled = [], reached = [] // what stopDaemon sent, and which manager stops found the old daemon still running
     const childUp = () => child.exitCode === null && child.signalCode === null
     const manager = (what, signal) => { if (childUp()) { reached.push(what); child.kill(signal) } return { status: 0, stdout: '', stderr: '' } }
@@ -115,7 +118,7 @@ test(`${platform}: update replaces a daemon holding ${TITLE[kind]}`, { timeout: 
       return win ? win.io.exec(file, args, opts) : { status: 1, stdout: '', stderr: `not faked: ${file}` }
     }
     const deps = {
-      root: checkout(), exec, getuid: () => 501, unit: box.unit, drainMs: kind === 'ws' ? 1000 : 20_000, // http: a wait that cannot see the end would run 20 s, then cut
+      root, exec, getuid: () => 501, unit: box.unit, drainMs: kind === 'ws' ? 1000 : 20_000, // http: a wait that cannot see the end would run 20 s, then cut
       identity: (pid) => ((pid === child.pid && childUp()) || pid === process.pid ? { start_time: '111', boot_id: 'boot-1' } : null), // what the daemons' lock stub wrote
       kill: (pid, signal) => { signalled.push(signal); if (pid !== child.pid) throw Object.assign(new Error('not the old daemon'), { code: 'ESRCH' }); process.kill(pid, signal) },
     }

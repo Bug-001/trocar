@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/count-tests.mjs — CI's check that every Node version ran every test.
+// scripts/count-tests.mjs — reads a test run's summary counts and checks that every Node version ran every test.
 //
 //   node scripts/count-tests.mjs read <test-output> <os> <node>   → one JSON line {os, node, tests, pass, fail, ...} on stdout
 //   node scripts/count-tests.mjs compare <dir>                    → reads every *.json `read` wrote, exits 1 unless each OS agrees
@@ -8,8 +8,7 @@
 //
 // Why: a run that drops test results does not fail — `--test-force-exit` on Node 20 reported 1903 to 1924 of 1936 tests, all
 // "0 fail" (see test/helpers/flush-exit.cjs). The same suite on the same OS runs the same tests on Node 20 and 22, so a count
-// that differs between the two is a run that lost some. (.github/workflows/ci.yml: each matrix job writes its count, the
-// `counts-agree` job compares them.)
+// that differs between the two is a run that lost some: `read` each run's output, then `compare` the runs of each OS.
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'

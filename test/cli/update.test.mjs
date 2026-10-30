@@ -11,11 +11,13 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { runUpdateCli } from '../../src/cli/update.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
-import { validateReceipt } from '../../src/cli/schema.mjs'
+import { validateReceipt, newReceipt } from '../../src/cli/schema.mjs'
 import { codeId, codeIdOf } from '../../src/version.mjs'
 import { writeStateAtomic, setDesired, emptyState } from '../../src/off/state.mjs'
+import { newManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
+import { assertEnglish } from '../helpers/english.mjs'
 
 const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
 const IDENTITY = ['-c', 'user.email=test@trocar.invalid', '-c', 'user.name=trocar test', '-c', 'commit.gpgsign=false']
@@ -132,6 +134,133 @@ test('V94: HEAD = upstream and the collector on this code is exit 0 and writes n
   assert.deepEqual([receipt.from, receipt.to], [codeId(s.root), codeId(s.root)])
 })
 
+// ── V105 · a copy installed with npm ────────────────────────────────────────────────────────────────────────────────────────────────
+/** An install record in the sandbox's manifest, naming the code that ran install (`code`; none = a record from a build before the field). */
+const installedBy = (s, code) => {
+  const m = newManifest()
+  m.install = { state: 'complete', at: new Date().toISOString(), pending: [], harnesses: ['codex'], ...(code === undefined ? {} : { code }) }
+  saveManifest(s.dir, m)
+}
+
+test('V105: an npm copy whose collector and last install run it is exit 2 npm-package naming <name>@latest; one whose collector or last install ran another code finishes', async () => {
+  const s = sandbox({ on: ['codex'] })
+  const name = `x-pkg-${Math.random().toString(36).slice(2, 8)}`
+  const npmRoot = path.join(s.base, 'lib', 'node_modules', name)
+  fs.mkdirSync(npmRoot, { recursive: true })
+  fs.writeFileSync(path.join(npmRoot, 'package.json'), JSON.stringify({ name, version: '0.2.0' }) + '\n')
+
+  // (a) the collector already runs this copy, and install never ran or last ran on this copy: nothing changes, and the name to install
+  // comes from the copy's own package.json (D67②)
+  const was = s.stateBytes()
+  let t
+  for (const [label, seed] of [['never installed', () => {}], ['installed by this copy', () => installedBy(s, codeId(npmRoot))]]) {
+    seed()
+    t = ctx(s, { deps: { root: npmRoot }, daemonCode: () => codeId(npmRoot) })
+    assert.equal(await runUpdateCli(['--json', '--yes'], t.c), EXIT.usage, `${label}: ${t.io.text()}`)
+    const doc = t.io.json()
+    assert.equal(doc.error.code, 'npm-package', label)
+    assert.ok(doc.error.message.includes(`${name}@latest`), label)
+    assert.deepEqual([s.handover(), s.stateBytes()], [null, was], label)
+    assert.deepEqual([t.calls.off, t.calls.install, t.calls.on, t.calls.child], [[], [], [], []], label)
+  }
+
+  // a plain directory with no .git, not under node_modules, is still not-a-checkout
+  const plainRoot = path.join(s.base, 'plain')
+  fs.mkdirSync(plainRoot)
+  fs.writeFileSync(path.join(plainRoot, 'package.json'), JSON.stringify({ name, version: '0.2.0' }) + '\n')
+  t = ctx(s, { deps: { root: plainRoot } })
+  assert.equal(await runUpdateCli(['--json', '--yes'], t.c), EXIT.usage, t.io.text())
+  assert.equal(t.io.json().error.code, 'not-a-checkout')
+
+  // (b) the user already installed a newer copy and the collector runs another code: the same finish a git update ends with — the
+  // collector comes back on this copy, install runs again and what was being captured is switched on again (D67②: after the code is
+  // obtained, everything is the same). (c) the login entry starts ANOTHER copy (global vs project vs npx cache): the collector comes back
+  // on that one, so nothing of this copy's is installed, the update stays written down, and it is exit 1 daemon-not-replaced.
+  const was0 = s.stateBytes()
+  for (const [label, cameBackOn] of [['this copy', () => codeId(npmRoot)], ['another copy', () => '0.3.0']]) {
+    let daemon = '0.1.0'
+    const unit = { path: '/login/entry', enable: () => { daemon = cameBackOn(); return { code: 0 } } }
+    const stopped = []
+    t = ctx(s, {
+      daemonCode: () => daemon,
+      deps: { root: npmRoot, unit, socketPath: path.join(s.base, 'control.sock'), request: async ({ method }) => (method === 'POST' ? { actual: 'off', confirmed: true, pid: 4242, relayed: { closing: 0, waiting: 0, cut: 0 } } : { code: daemon }), stopDaemon: async (o) => { stopped.push(o); return { stopped: true, pid: 4242, signals: ['SIGTERM'] } } },
+    })
+    const exit = await runUpdateCli(['--yes', '--json'], t.c)
+    const receipt = t.io.json()
+    assert.deepEqual(validateReceipt(receipt), [], label)
+    assert.deepEqual([stopped.length > 0, receipt.from, s.stateBytes()], [true, '0.1.0', was0], label)
+    if (label === 'this copy') {
+      assert.equal(exit, EXIT.ok, t.io.text())
+      assert.deepEqual([t.calls.install.length, t.calls.on.map((a) => a.filter((x) => !x.startsWith('--')))], [1, [['codex']]], label)
+      assert.equal(s.handover(), null, label)
+    } else {
+      assert.equal(exit, EXIT.incomplete, t.io.text())
+      assert.equal(receipt.error.code, 'daemon-not-replaced', label)
+      assert.deepEqual([t.calls.install, t.calls.on], [[], []], label)
+      assert.deepEqual(s.handover(), { from: '0.1.0', on: ['codex'] }, `${label}: the update stays written down for the copy the entry starts`)
+      fs.rmSync(path.join(s.dir, 'update.json'))
+    }
+  }
+
+  // (d) the collector came back on this copy by itself (a reboot or a login after npm i -g) while install last ran on another code, or
+  // on a build whose record names no code: the update is not done until install and `on` ran on this copy, so it is the same finish —
+  // the collector already on this copy is left running — and never the npm-package answer again, which would ask for an npm i -g that
+  // changes nothing (§5.5)
+  for (const [label, ran] of [['another code', '0.1.0'], ['a record naming no code', undefined]]) {
+    installedBy(s, ran)
+    const stopped = []
+    t = ctx(s, { daemonCode: () => codeId(npmRoot), deps: { root: npmRoot, stopDaemon: async (o) => { stopped.push(o); return { stopped: true, pid: 4242 } } } })
+    assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, `${label}: ${t.io.text()}`)
+    const receipt = t.io.json()
+    assert.deepEqual(validateReceipt(receipt), [], label)
+    assert.deepEqual([stopped, receipt.restarted, receipt.to], [[], false, codeId(npmRoot)], `${label}: the collector on this copy is not replaced`)
+    assert.deepEqual([t.calls.install.length, t.calls.on.map((a) => a.filter((x) => !x.startsWith('--')))], [1, [['codex']]], label)
+    assert.deepEqual([s.handover(), s.stateBytes()], [null, was0], label)
+  }
+})
+
+// 附录 C.2 `update`: `from` · `to` · `harnesses` are what the plan does — in its --dry-run receipt as in the finish's own
+
+test('§1.1⑥: a reason update stops on is folded inside 80 columns, for an npm copy and for a copy that is not a checkout', async () => {
+  const s = sandbox({ on: ['codex'] })
+  const name = `x-pkg-${Math.random().toString(36).slice(2, 8)}`
+  const npmRoot = path.join(s.base, 'lib', 'node_modules', name)
+  const plainRoot = path.join(s.base, 'plain')
+  for (const root of [npmRoot, plainRoot]) {
+    fs.mkdirSync(root, { recursive: true })
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name, version: '0.2.0' }) + '\n')
+  }
+  for (const root of [npmRoot, plainRoot]) {
+    const t = ctx(s, { deps: { root }, daemonCode: () => codeId(root) })
+    assert.equal(await runUpdateCli(['--yes'], t.c), EXIT.usage, t.io.text())
+    assertEnglish(t.io.text(), `trocar update from ${path.basename(root)}`)
+  }
+  const t = ctx(s, { deps: { root: npmRoot } }) // the usage error: an agent name, which update does not take
+  assert.equal(await runUpdateCli(['codex'], t.c), EXIT.usage, t.io.text())
+  assertEnglish(t.io.text(), 'trocar update codex', { placeholders: true })
+})
+test('V105 · C.2: an npm copy\'s --dry-run receipt names the code it finishes from, this code and the agents switched on again; so does a finish waiting in update.json', async () => {
+  const s = sandbox({ on: ['codex'] })
+  const name = `x-pkg-${Math.random().toString(36).slice(2, 8)}`
+  const npmRoot = path.join(s.base, 'lib', 'node_modules', name)
+  fs.mkdirSync(npmRoot, { recursive: true })
+  fs.writeFileSync(path.join(npmRoot, 'package.json'), JSON.stringify({ name, version: '0.2.0' }) + '\n')
+  const cases = [
+    ['the collector runs other code', () => {}, () => '0.1.0', '0.1.0'],
+    ['install last ran on other code', () => installedBy(s, '0.0.9'), () => codeId(npmRoot), '0.0.9'],
+    ['a finish waiting in update.json', () => fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n'), () => codeId(npmRoot), '0.1.0+0000000'],
+  ]
+  for (const [label, seed, daemonCode, from] of cases) {
+    seed()
+    const t = ctx(s, { daemonCode, deps: { root: npmRoot } })
+    assert.equal(await runUpdateCli(['--dry-run', '--json'], t.c), EXIT.ok, `${label}: ${t.io.text()}`)
+    const doc = t.io.json()
+    assert.deepEqual(validateReceipt(doc), [], label)
+    assert.deepEqual([doc.from, doc.to, doc.harnesses], [from, codeId(npmRoot), ['codex']], label)
+    assert.deepEqual([t.calls.install, t.calls.on, t.calls.child], [[], [], []], `${label}: --dry-run ran no step`)
+  }
+})
+
 // ── V95 · the code changes and the new code takes over ──────────────────────────────────────────────────────────────────────────────
 test('V95: the harnesses that are on go off into the handover file, HEAD fast-forwards, and the new code is run in a process of its own', async () => {
   for (const json of [false, true]) {
@@ -227,6 +356,27 @@ test('V96: a step that writes to stderr as well as its document is read from std
   const t = ctx(s, { deps: { on: async (argv, c) => { c.io.err('a line of its own on stderr'); c.io.out(JSON.stringify(doc)); return EXIT.ok } } })
   assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
   assert.deepEqual(t.io.json().on, doc, 'the step\'s receipt came through: stderr was held apart, never parsed with it')
+})
+
+// D38: a step that did not finish says why in its own receipt; without --json that reason is printed too, not only its exit code
+test('V96: an install or on that fails in the finish has its own reason printed; with --json it is in the receipt and stderr stays empty', async () => {
+  const failing = {
+    install: (why) => ({ install: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('install'), ok: false, error: { code: 'x', message: why }, problems: [], notes: [] })); return EXIT.incomplete } }),
+    on: (why) => ({ on: async (argv, c) => { c.io.out(JSON.stringify({ ...newReceipt('on'), ok: false, problems: [why], notes: [] })); return EXIT.incomplete } }),
+  }
+  for (const [step, deps] of Object.entries(failing)) {
+    for (const json of [false, true]) {
+      const s = sandbox()
+      fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+      const why = `reason-${step}-${Math.random().toString(36).slice(2, 8)}`
+      const t = ctx(s, { deps: deps(why) })
+      assert.equal(await runUpdateCli(['--yes', ...(json ? ['--json'] : [])], t.c), EXIT.incomplete, t.io.text())
+      if (json) {
+        assert.equal(t.io.stderrText(), '', `${step}: --json keeps stderr empty`)
+        assert.ok(JSON.stringify(t.io.json()[step]).includes(why), `${step}: the step's receipt is in update's`)
+      } else assert.ok(t.io.stderrText().includes(why), `${step}: its own reason is printed: ${t.io.text()}`)
+    }
+  }
 })
 
 // D38: the note names only harnesses, and one this code has no descriptor for would fail the whole `on` — dropped, and said

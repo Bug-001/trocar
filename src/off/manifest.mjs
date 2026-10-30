@@ -9,7 +9,7 @@
 //   confirmed_paths  the files the operator has confirmed `on` may change (1.6 R6).
 //   kept_backups     [{path, backup, reason, at}] — backups `off` kept because the user changed the file after trocar did (1.6 R2).
 //   liveness         what `off` needs to judge whether a running agent may have loaded trocar's entry (4.6 撤销顺序).
-//   install          null until `install` ran; then { state: 'complete' | 'partial', at, pending: [], harnesses: [] } (D55; replaces v2's `complete`).
+//   install          null until `install` ran; then { state: 'complete' | 'partial', at, pending: [], harnesses: [], code } (D55; replaces v2's `complete`); `code` = the codeId() that ran it (1.6 §5.5; a board Set up keeps it).
 //   ca               null, or { fp256, created_at } of the collector CA `install` minted (D55).
 // Every entry and file carries `phase`: 'install' | 'on', the command that wrote it (D55①): `off` undoes phase 'on', `uninstall` the rest.
 // A version 1 or 2 manifest (before the collector model) is not read: every writing command refuses it before any write (refuseOldManifest, 4.11 ⑰).
