@@ -44,7 +44,7 @@ import { rowTable, isRowTable, heapOf } from './row-table.mjs';
 
 const rawDir = (home = trocarHome()) => path.join(home, 'raw');
 export const indexDir = (home = trocarHome()) => path.join(home, 'index');
-const INDEX_V = 5;
+const INDEX_V = 6;
 const CHUNK = 1 << 20;
 // How many appended bytes one catch-up of the daemon's keeper takes (src/collector/index-keeper.mjs imports it): the
 // unit of "a chunk of index work". A READER that had to read more than this from a segment is the honest definition of
@@ -111,7 +111,11 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null 
     entrypoint: entrypointOf(e),
     log_only: isLogOnly(e),
     subagent: !!String(headerOf(e, 'x-claude-code-agent-id') || '').trim(),
-    synth_hash: synth ? synth.hash : null,
+    synth_hash: synth && synth.hash != null ? synth.hash : null,
+    // kinship (3.4 按内容认亲): any call of a `synth: true` harness → the user-text fingerprints its session is recognized by; a
+    // keyless call that is its harness's compaction request → the ones it looks with. Space-joined strings ('' when none): a scalar row.
+    kin_fp: synth && synth.fp ? synth.fp.join(' ') : null,
+    kin_probe: synth && synth.probe ? synth.probe.join(' ') : null,
     offset,  // where this line starts in the plaintext segment, so one record is read by seek (null: sealed)
   };
 }
@@ -184,9 +188,9 @@ function scanSealed(fs, file, segment, problems) {
   } finally { sf.close(); }
 }
 
-// ── the index document: append-only NDJSON (INDEX_V 5; 4.2 §段索引) ────────
+// ── the index document: append-only NDJSON (INDEX_V 6; 4.2 §段索引) ────────
 // One file per segment, one line per fact: an entry (a record, bare), a problem (`{"p":…}`), or a mark
-// (`{"m":…,"v":5}` = "the index covers this segment up to m.end"). A pass APPENDS its new entries and problems and
+// (`{"m":…,"v":6}` = "the index covers this segment up to m.end"). A pass APPENDS its new entries and problems and
 // then one mark; a reader takes everything up to the LAST complete mark and ignores what follows it (a torn batch).
 // That is what makes keeping the index current cost the NEW records, never the whole segment: the whole-document
 // format this replaces (v3) rewrote ≈ e·N²/2 bytes per segment, and real traffic gives nearly every record a pass of

@@ -542,6 +542,9 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
 - **Some sessions are grouped by guess.** Hermes on a custom endpoint, and Kimi without a body key, send
   no session id at all; their calls are grouped by the system prompt and a 30-minute gap (never by process
   or connection), and the session is marked **session boundary inferred**. The rule is provisional until checked on a real capture.
+  A keyless summary request (pi's, for one) is not grouped this way when it shares the user's text with a session
+  of the same agent that was active in the last 30 minutes: it joins that session as a compaction. A session with an id
+  stays unmarked; a session that was itself grouped by guess stays marked inferred.
 - **On captures without process identity the harness is a guess.** Sessions recorded by the MITM or
   reverse proxy carry no `proc.agent`, so the board names their agent from the User-Agent and it is
   marked **inferred** (from the request headers, not the process). Sessions from the per-process collector are named by process, never by UA.
