@@ -16,7 +16,8 @@ export function configure({ token: t = null } = {}) { token = t }
 
 let forbidden = false
 const onForbid = []
-export function onForbidden(fn) { onForbid.push(fn) }
+// a callback registered after the latch closed runs at once (a boot read — core/first.mjs — can be answered 403 before main.mjs registers)
+export function onForbidden(fn) { onForbid.push(fn); if (forbidden) try { fn() } catch (e) { console.error('onForbidden failed', e) } }
 const FORBIDDEN = Object.freeze({ ok: false, status: 403, error: 'HTTP 403' })
 
 const held = new Map() // full URL → {etag, data} from a 200 that carried an ETag
@@ -36,7 +37,7 @@ function qs(params) {
   return s ? '?' + s : ''
 }
 
-// body text → { empty:true } | { json } (which may be a literal null) | { bad:true } (a complete body that is not JSON)
+// body → { empty:true, len } | { json, len } (len = the body's UTF-8 bytes, the session cache's measure) (which may be a literal null) | { bad:true } (a complete body that is not JSON)
 // | { cut:true } (the body never fully arrived: the connection broke after the head — a transient failure, 1.5 K-29)
 export const CUT_OFF = 'the answer did not arrive in full'
 const CUT = Object.freeze({ ok: false, status: 0, error: CUT_OFF })
@@ -46,10 +47,11 @@ export const READ_DEADLINE_MS = 60_000
 export const TIMED_OUT = `no answer within ${READ_DEADLINE_MS / 1000} s`
 export const ABORTED = 'cancelled'
 async function readBody(r) {
-  let t
-  try { t = await r.text() } catch { return { cut: true } }
-  if (t.trim() === '') return { empty: true }
-  try { return { json: JSON.parse(t) } } catch { return { bad: true } }
+  let b
+  try { b = await r.arrayBuffer() } catch { return { cut: true } }
+  const t = new TextDecoder().decode(b)
+  if (t.trim() === '') return { empty: true, len: b.byteLength }
+  try { return { json: JSON.parse(t), len: b.byteLength } } catch { return { bad: true } }
 }
 
 function latch(status) {
@@ -58,11 +60,22 @@ function latch(status) {
   for (const fn of onForbid) try { fn() } catch (e) { console.error('onForbidden failed', e) }
 }
 
+// early(path, params): a read sent before the screen that wants it exists (core/first.mjs, 1.2 #24). Its answer is kept by full URL and
+// handed, once, to the first get() of that URL; it went through get(), so the ETag is recorded once and a 403 latches as any other.
+const earlyReads = new Map()
+export function early(path, params) { earlyReads.set(path + qs(params), get(path, params)) }
+
 // `hold:false` keeps only the ETag of the URL, and a 304 answers {ok:true, status:304, data:null}: the caller has the document
 export async function get(path, params, { signal, hold = true } = {}) {
   if (forbidden) return FORBIDDEN
   if (signal && signal.aborted) return { ok: false, status: 0, error: ABORTED }
   const url = path + qs(params)
+  const pre = earlyReads.get(url)
+  if (pre) { // not abortable: a caller that cancels while it is on its way gets ABORTED, never the answer
+    earlyReads.delete(url)
+    const r = await pre
+    return signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : r
+  }
   const headers = {}
   if (token) headers[CONTROL_TOKEN_HEADER] = token
   const was = hold ? held.get(url) : tags.has(url) ? { etag: tags.get(url) } : undefined
@@ -89,7 +102,7 @@ export async function get(path, params, { signal, hold = true } = {}) {
   if (b.bad) return { ok: false, status: r.status, error: 'not JSON' }
   const etag = r.headers.get('etag')
   if (etag) { if (hold) remember(held, url, { etag, data: body }); else remember(tags, url, etag) }
-  return { ok: true, data: body } // an empty 2xx is a success carrying null
+  return { ok: true, data: body, bytes: b.len } // an empty 2xx is a success carrying null; `bytes` = the body's UTF-8 bytes (the session cache's measure, 0.2 §5, D71③)
 }
 
 // → {ok, status, data, error}: data is the parsed JSON answer (null when there is none), whatever the status; a network error is status 0

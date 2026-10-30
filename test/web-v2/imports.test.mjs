@@ -49,3 +49,23 @@ test('every relative specifier in test/web-v2 resolves to an existing file', () 
   const dir = path.dirname(fileURLToPath(import.meta.url))
   assert.deepEqual(mjsUnder(dir).flatMap((f) => unresolved(f, fs.readFileSync(f, 'utf8'), null)), [])
 })
+
+// 1.2 #24: index.html preloads, in one go, the static import closure of the boot (main.mjs) and of the replay desk, each module at the
+// URL the page asks for it by (a shared module the static face serves sits outside the board's folder: /off/…)
+test('index.html modulepreloads exactly the static import closure of main.mjs and replay/replay.mjs', () => {
+  const page = 'http://board/', seen = new Map() // page URL → file
+  const walk = (url, file) => {
+    if (seen.has(url)) return
+    seen.set(url, file)
+    for (const m of fs.readFileSync(file, 'utf8').matchAll(SPEC)) {
+      if (/\bimport\s*\(\s*['"`]$/.test(m[0].slice(0, -(m[2].length + 1)))) continue // import() loads on demand: not in the closure
+      walk(new URL(m[2], url).href, path.resolve(path.dirname(file), m[2]))
+    }
+  }
+  for (const entry of ['main.mjs', 'replay/replay.mjs']) walk(new URL(entry, page).href, path.join(V2, entry))
+  assert.ok(seen.size > 2 && [...seen.keys()].some((u) => !u.startsWith(page + 'core/') && u.includes('/off/')), 'the walk reaches the graph and the shared module')
+  const html = fs.readFileSync(path.join(V2, 'index.html'), 'utf8')
+  const preload = [...html.matchAll(/<link\s+rel="modulepreload"\s+href="([^"]+)"/g)].map((m) => new URL(m[1], page).href)
+  assert.deepEqual(preload.slice().sort(), [...seen.keys()].sort())
+  assert.equal(new Set(preload).size, preload.length, 'each module once')
+})

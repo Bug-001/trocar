@@ -88,27 +88,19 @@ function bodyTextOf(b) {
 }
 
 const PREVIEW_MAX = 90;
-// JS's own `\s` class — and exactly what String.trim removes, so ONE definition drives the scan below.
-const WS = /\s/;
-// `String(s).replace(/\s+/g, ' ').trim().slice(0, PREVIEW_MAX)`, BOUNDED: the regex form built a whole
-// second copy of every block body — a 200 KB tool_result collapsed in full to keep 90 chars of it, 243 ms
-// of a 115-call session plus the garbage behind its peak RSS. This scans the source once and stops at
-// PREVIEW_MAX, which on normal text means reading ~90 chars instead of 200 000. Same string out: leading
-// whitespace is skipped (trim), each whitespace RUN becomes one space, and a run with nothing after it is
-// never emitted (trim again).
-// The characters are collected and joined ONCE: `out += c` per character left a V8 cons-string tree of ~90 nodes behind
-// every preview (~2 KB of heap for 90 chars), which an assembled window of 60 large calls held as 167 MB (measured).
-const shorten = (s, max = PREVIEW_MAX) => {
+// `String(s).replace(/\s+/g, ' ').trim().slice(0, PREVIEW_MAX)`, BOUNDED: the regex form over the whole text built a second
+// copy of every block body — a 200 KB tool_result collapsed in full to keep 90 chars of it. Squashing a prefix gives a prefix of
+// the whole squash (a run cut at the prefix's end is still one space), so once the squashed, left-trimmed prefix is longer than
+// `max` its first `max` characters are the answer (the right trim can only drop the whole squash's last character); a prefix too
+// short to tell is read again four times longer. The answer is copied out (`' ' + x`, sliced) so it holds no larger string.
+// (`\s` is exactly what String.trim removes)
+const WS_RUN = /\s+/g;
+export const shorten = (s, max = PREVIEW_MAX) => {
   const t = String(s || '');
-  const out = [];
-  let pending = false;
-  for (let i = 0; i < t.length && out.length < max; i++) {
-    const c = t[i];
-    if (WS.test(c)) { if (out.length) pending = true; continue; }
-    if (pending) { out.push(' '); pending = false; if (out.length >= max) break; }
-    out.push(c);
+  for (let n = 2 * max + 64; ; n *= 4) {
+    const all = n >= t.length, q = (all ? t : t.slice(0, n)).replace(WS_RUN, ' ').trimStart();
+    if (all || q.length > max) return (' ' + (all ? q.trimEnd() : q).slice(0, max)).slice(1);
   }
-  return out.join('');
 };
 
 // Short arg preview for a tool_use header: the ONE field that says what the call is doing.
@@ -209,8 +201,8 @@ export function compBuckets(flat) {
  * presents as a research finding. It also belongs here on principle (invariant 3): `<system-reminder>`
  * is Claude-Code-shaped knowledge, and the browser must not branch on a harness's wire shape.
  */
-function blockQuery(b) {
-  return queryOf(b, bodyTextOf(b));
+export function blockQuery(b) {
+  return isUserText(b) ? queryOf(b, bodyTextOf(b)) : null; // only a user text has one: no body text built for the rest
 }
 // …over a body text the caller already has (slimBlock builds it once for chars, preview and this).
 const isUserText = (b) => !!b && b.sec === 'messages' && b.role === 'user' && b.kind === 'text';
@@ -239,27 +231,32 @@ export function firstHuman(flat) {
 export const HEAD = Symbol('first prompt');
 // Sub-agents a spawn does not name are told apart by their first prompts (4.4 §看板 v2 需要的补充 `lanes[].task`): a lane's task starts at the
 // line where its prompt departs from the sibling it shares the longest prefix with (an identical prompt is no sibling to depart from).
-// Sorted, that sibling is a neighbour: n lanes cost a sort, not n² comparisons. → Map<lane, offset> (0: from the start).
-function departures(heads) {
-  const list = heads.filter(([, h]) => h).sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
-  const common = (a, b) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
-  const out = new Map();
-  for (let i = 0; i < list.length; i++) {
-    const [s, h] = list[i];
-    let d = 0;
-    for (let j = i - 1; j >= 0; j--) if (list[j][1] !== h) { d = Math.max(d, common(h, list[j][1])); break; }
-    for (let j = i + 1; j < list.length; j++) if (list[j][1] !== h) { d = Math.max(d, common(h, list[j][1])); break; }
-    out.set(s, d < h.length ? h.lastIndexOf('\n', d - 1) + 1 : 0);
-  }
-  return out;
+// Sorted, that sibling is a neighbour of its distinct prompts: n lanes cost a sort, not n² comparisons, and a prompt that comes or
+// goes moves the offsets of its two neighbours only (departer).
+const common = (a, b) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
+const departOf = (h, p, n) => { const d = Math.max(p == null ? 0 : common(h, p), n == null ? 0 : common(h, n)); return d > 0 && d < h.length ? h.lastIndexOf('\n', d - 1) + 1 : 0; };
+/** departer(heads?) → the offsets of a set of first prompts that changes a prompt at a time: add(h) / remove(h) (equal prompts
+ *  counted, one entry) → the prompts whose offset changed; offset(h) → where h departs from its siblings (0: from the start). */
+export function departer(heads = []) {
+  const U = [...new Set(heads)].sort(), cnt = new Map(), off = new Map();
+  for (const h of heads) cnt.set(h, (cnt.get(h) || 0) + 1);
+  U.forEach((h, i) => off.set(h, departOf(h, U[i - 1], U[i + 1])));
+  const find = (h) => { let lo = 0, hi = U.length; while (lo < hi) { const m = (lo + hi) >> 1; if (U[m] < h) lo = m + 1; else hi = m; } return lo; };
+  const redo = (out, ...is) => { for (const i of is) if (i >= 0 && i < U.length) { const h = U[i], o = departOf(h, U[i - 1], U[i + 1]); if (off.get(h) !== o) { off.set(h, o); out.push(h); } } return out; };
+  return {
+    add(h) { const c = cnt.get(h) || 0; cnt.set(h, c + 1); if (c) return []; const i = find(h); U.splice(i, 0, h); return redo([], i - 1, i, i + 1); },
+    remove(h) { const c = cnt.get(h) || 0; if (c > 1) { cnt.set(h, c - 1); return []; } if (!c) return []; cnt.delete(h); off.delete(h); const i = find(h); U.splice(i, 1); return redo([], i - 1, i); },
+    offset: (h) => off.get(h) || 0,
+  };
 }
+/** departs(lane) → whether a lane's first prompt is told apart from its siblings': a sub-agent's that no spawn named. */
+export const departs = (l) => l.kind === 'subagent' && !!l[HEAD];
 /** tellApart(lanes) → lanes, each lane that carries its first prompt (`lane[HEAD]`: no spawn named it) given its `task` (4.4 §看板 v2
  *  需要的补充): that prompt, a sub-agent's from the line it departs from its siblings — every such sub-agent lane of the session, whatever
  *  wire it came on, so the rule is one (invariant 3). Run once, on the session's whole set of lanes. */
 export function tellApart(lanes) {
-  const open = lanes.filter((l) => HEAD in l);
-  const departs = departures(open.filter((l) => l.kind === 'subagent').map((l) => [l, l[HEAD]]));
-  for (const l of open) l.task = taskOf(l[HEAD] && l[HEAD].slice(departs.get(l) || 0));
+  const open = lanes.filter((l) => HEAD in l), heads = departer(open.filter(departs).map((l) => l[HEAD]));
+  for (const l of open) l.task = taskOf(l[HEAD] && l[HEAD].slice(departs(l) ? heads.offset(l[HEAD]) : 0));
   return lanes;
 }
 

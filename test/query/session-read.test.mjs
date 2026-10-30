@@ -313,6 +313,27 @@ test('3.5:42 local: over a fold log the worker finished, the local path answers 
   assert.ok(fs.readFileSync(file).equals(bytes), 'the fold log is as the worker left it')
 })
 
+// A member that failed to extract holds the rows from it on (written as held lines, which the next open cuts off and extracts again,
+// 4.3 §4): those members are not on disk, so a hand-off read over them hands off too.
+test('3.5 #30 local hand-off: over what the worker wrote, the hand-off read answers at its mark; a member it lacks, or holds, makes it hand off', async () => {
+  for (const failed of [false, true]) {
+    const home = homeOf('trocar-sread-hand-')
+    const s = bigSession({ home, growth: 2_000, subEvery: 3, compactAt: 20_000, subLanes: 2, late: 2 })
+    s.append(40)
+    const members = sessionGroups(await indexRows({ home, fs, errors: [] })).get(s.id)
+    const worker = { fs: failed ? failingAt(members[Math.floor(members.length / 2)]) : { ...fs }, writer: true }
+    await session(home, { id: s.id }, worker)
+    while (await extendSession({ home, ...worker }, s.id, Infinity));
+    const w = await session(home, { id: s.id }, worker)
+    assert.equal(w.pending, undefined)
+    const handOff = () => session(home, { id: s.id }, { fs: { ...fs }, handOff: true })
+    if (failed) { await assert.rejects(handOff(), (e) => e.code === 'hand-off', 'held rows are not on disk'); continue }
+    assert.equal((await handOff()).mark, w.mark, 'the hand-off read answers at the worker\'s mark')
+    s.append(1)
+    await assert.rejects(handOff(), (e) => e.code === 'hand-off', 'a member with no row is not on disk')
+  }
+})
+
 // 3.3:75: the byte-identity of a reusable prefix compares each block's verbatim slice with its cache_control member cut out.
 function twoCalls(home, id, second) {
   const sys = [{ type: 'text', text: 'You are a coding assistant.' }]

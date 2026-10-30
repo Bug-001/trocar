@@ -13,9 +13,10 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs, not the other way round
 import { SPINE_PER_ROW, SPINE_PER_BLOCK, PLAN_PER_MEMBER, extendSession } from '../../src/query/named/session.mjs'
-import { STORE_HEAP } from '../../src/query/projection.mjs'
+import { STORE_HEAP, projectionFile } from '../../src/query/projection.mjs'
 import { REDUCE_HEAP } from '../../src/view/reduce.mjs'
-import { LOG_BYTES } from '../../src/query/fold-log.mjs'
+import { LOG_BYTES, foldLogFile } from '../../src/query/fold-log.mjs'
+import { sidecarOf } from '../../src/query/line-file.mjs'
 import { heapFlags } from '../../src/query/warm.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession, live } from './big-session.mjs'
@@ -75,8 +76,10 @@ const read = (opts, calls) => {
 // call); by 2N the LRU is full and what the shared-value cache still fills up to 4N (~300 B a call) stays inside the slope, and 2N → 4N
 // doubles every per-call and per-block table once, as a step of the session's growth does. The session is extracted and folded between
 // the reads as the worker does in the background, so each read is the cold open of a projected session (a worker that went idle and
-// was forked again) with one call past its log's frontier; READ then drives the rebuild, so the call term measures the rebuilt
-// state and the step-order columns.
+// was forked again) with one call past its log's frontier and no sidecars (4.3 §4 旁索引: deleting them costs one scan), so READ
+// rebuilds the state from scratch — the most a read holds: one resumed from the fold log's sidecar holds less, and fills the fixed
+// caches less, so its call term would carry what they fill between the sizes — and the call term measures the rebuilt state and the
+// step-order columns.
 // What a distinct block of this shape keeps in the heap measured (heapUsed: the store's bid index and block columns, not their typed
 // arrays' backing stores), measured 2026-10-22 single-threaded at live(0.12) with 2 against 12 tools a call (15,003 → 29,993 blocks,
 // one table doubling, the same calls).
@@ -88,7 +91,8 @@ test('what a session read keeps grows by at most SPINE_PER_ROW a call', { timeou
   // one call past the fold log's frontier before the cold read, so the read rebuilds the state (an unchanged session is answered
   // from its log, not refolded: 3.5:42); the read extracts it, so each round grows on a store of its own (a fresh fs object: the
   // projection opened again), as a worker forked again does
-  const grown = async () => { const own = { ...fs }; await grow(own); await grow(own); s.append(1); return cold(home, s.id) }
+  const bare = () => { for (const f of [projectionFile(home, s.id), foldLogFile(home, s.id)]) fs.rmSync(sidecarOf(f), { force: true }) }
+  const grown = async () => { const own = { ...fs }; await grow(own); await grow(own); bare(); s.append(1); return cold(home, s.id) }
   try {
     const two = await grown(), four = await grown()
     for (const [r, n] of [[two, 2 * N], [four, 4 * N]]) {

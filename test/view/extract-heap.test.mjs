@@ -47,11 +47,11 @@ const base = process.memoryUsage().heapUsed
 let peak = 0, n = 0
 const sample = () => { global.gc(); peak = Math.max(peak, process.memoryUsage().heapUsed - base) }
 const read = (rows) => { const got = recordsAt({ home, rows, errors, remember: false }); if (n++ % Number(every) === 0) sample(); return got }
-const t0 = performance.now()
+const t0 = performance.now(), c0 = process.cpuUsage()
 const r = extractMembers({ store: openProjection({ home, key: id, write: medium === 'file' }), members, recordsAt: read, sessionId: id })
-const ms = performance.now() - t0
+const ms = performance.now() - t0, c = process.cpuUsage(c0), cpu = (c.user + c.system) / 1000
 sample()
-console.log(JSON.stringify({ done: r.done, total: r.total, peak, ms, working: working(members) }))`
+console.log(JSON.stringify({ done: r.done, total: r.total, peak, ms, cpu, working: working(members) }))`
 
 const LANES = { wire: 'threads', growth: 8_000, subEvery: 2, subLanes: 30, subLen: 12, compactAt: 400_000 }
 // the user's live session's axes (test/query/big-session.mjs live()) on the lanes above: paths named, prompts with their reminders, writes
@@ -106,6 +106,8 @@ test(`calls that bring new tool definitions grow the peak by at most SLACK_PER_D
 
 test(`a lane that compacts: four times the calls extract in at most SLOWER times as long`, () => {
   const shape = { wire: 'threads', growth: 4_000, subEvery: 0, compactAt: 800_000 }
-  const one = run(400, shape).ms, four = run(1_600, shape).ms
-  assert.ok(four <= SLOWER * one, `400 calls in ${Math.round(one)} ms, 1600 in ${Math.round(four)} ms: ${(four / one).toFixed(1)}×`)
+  // the child's own CPU time with no forced collection inside the run (a forced GC costs with the heap, and wall time with the machine's load)
+  const timed = (n) => run(n, shape, { every: Number.MAX_SAFE_INTEGER }).cpu
+  const one = timed(400), four = timed(1_600)
+  assert.ok(four <= SLOWER * one, `400 calls in ${Math.round(one)} ms of CPU, 1600 in ${Math.round(four)} ms: ${(four / one).toFixed(1)}×`)
 })

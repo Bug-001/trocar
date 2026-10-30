@@ -12,12 +12,13 @@
 import { createHash } from 'node:crypto';
 import { admitted, flatBlockText, blockFacts, callFacts, normResp, replyPartsAnthropic, linearContext } from './analyze.mjs';
 import { hydrateForBoard, anthropicFlat, flatRequest, rawRefOf, wireOf, respRefsOf, extraMessagesOf, unknownFacts, respOf, slimRec, nonBlockKeysOf } from './assemble.mjs';
-import { slimBlock, compBucket, firstHuman } from './blockmeta.mjs';
+import { slimBlock, compBucket, firstHuman, blockQuery } from './blockmeta.mjs';
 import { renderOf } from './render-kind.mjs';
 import { blockSpans } from '../adapters/cc.mjs';
 import { resourceRef as ccResourceRef } from '../dissect/cc.mjs';
 import { resourceRef as oaResourceRef, faithfulness as oaFaithfulness } from '../dissect/openai.mjs';
 import { scanJson, spanAt } from '../dissect/json-scan.mjs';
+import { scannedRequestBody, sharesBody } from '../dissect/request-body.mjs';
 import { fieldTextOf } from '../dissect/record-fields.mjs';
 import { composeTextRef } from '../raw/refs.mjs';
 import { boardDissectorFor, wireFormatOf, flatLaneOf } from '../dissect/registry.mjs';
@@ -25,7 +26,7 @@ import { hintsOf } from '../dissect/harnesses.mjs';
 import { CC_THREADS, replyIdOf, patchSystem } from '../dissect/cc-threads.mjs';
 import { hasCompactionPreamble } from '../identity/session-identity.mjs';
 import { sessionKeyOf } from '../dissect/harnesses.mjs';
-import { posCmp } from '../query/projection.mjs';
+import { posCmp, num52, numTable } from '../query/projection.mjs';
 import { bodyRetentionOf, retentionLabelOf, reqIncompleteOf, wsIncompleteOf, respIncompleteOf, isLogOnly } from '../dissect/capture-labels.mjs';
 
 const SEP = '\x1F';
@@ -81,9 +82,11 @@ function factsOf(b) {
   return { ...blockFacts(bl), bucket: compBucket(b), human: firstHuman([b]) ?? undefined };
 }
 
-/** definition(b, ref, exact, why) → { bid, def }: `exact` the text the ref names (null: no span, `why` says why). */
-export function definition(b, ref, exact, why = null) {
-  const bid = ref != null && exact != null ? bidOf(b.sec, b.role, exact) : unaddressableBid(b.sec, b.role, contentOf(b));
+/** definition(b, ref, exact, why, bid) → { bid, def }: `exact` the text the ref names (null: no span, `why` says why); `bid` the
+ *  block's id when the caller already hashed it (4.3 §3: a block is hashed once). */
+// a block's id: its verbatim slice's when it has a span, its content's otherwise (3.5 §会话读)
+const bidFor = (b, ref, exact) => (ref != null && exact != null ? bidOf(b.sec, b.role, exact) : unaddressableBid(b.sec, b.role, contentOf(b)));
+export function definition(b, ref, exact, why = null, bid = bidFor(b, ref, exact)) {
   const s = slimBlock(b, ref != null && exact != null ? ref : null, why);
   // vh: only of a verbatim slice. A block with no span has none, nor one whose faithfulness says its bytes are not the wire's
   // (metadata, summarized, omitted, truncated). An opaque block (signature-only reasoning) is unreadable, not unproven: its span
@@ -113,7 +116,7 @@ const NO_STREAM = 'the record carries no id or stream to address';
 // The call read once: the Anthropic wire's hydrated record (`h`), or a flat-lane wire's parsed request (`req`, `unparsed`).
 function readCall(rec, { d, format }) {
   if (format === 'anthropic') return { h: admitted(hydrateForBoard(rec, null)) };
-  const copy = { ...rec }; // flatRequest sets `request` on the record it is given: the caller's record stays as it was
+  const copy = sharesBody({ ...rec }, rec); // flatRequest sets `request` on the record it is given: the caller's record stays as it was
   return { h: copy, ...flatRequest(d, copy, null) };
 }
 /** requestBlocks(rec, wire, read?) → { flat, at: [{ref, exact, why}] } — the request's blocks, each with the exact text its ref names. */
@@ -126,14 +129,13 @@ export function requestBlocks(rec, wire, read = readCall(rec, wire)) {
     return { flat, at: flat.map((_, i) => locate(base, body, spans && spans[i])) };
   }
   const flat = wire.d.boardFlat(read.req, read.h);
-  let root = null;
-  if (body != null) try { root = scanJson(body); } catch { root = null; }
+  const root = body != null ? scannedRequestBody(rec) : null;
   return { flat, at: flat.map((b) => locate(base, body, root && Array.isArray(b.path) ? spanAt(root, b.path) : null)) };
 }
 const locate = (base, text, span, field = null) => {
   if (!span || text == null) return { ref: null, exact: null, why: null };
   if (!base) return { ref: null, exact: null, why: NO_STREAM };
-  return { ref: composeTextRef(base, span, field), exact: text.slice(span[0], span[1]), why: null };
+  return { ref: composeTextRef(base, span, field), exact: text.slice(span[0], span[1]), why: null, span };
 };
 
 // a reply part as a flat entry of the same vocabulary (section messages, role assistant)
@@ -163,14 +165,26 @@ export function replyBlocks(rec, { d, format }) {
  *  Within its record a block is named by its field and byte range (4.2 text_ref = record id + range): the stream half of the ref
  *  says which file the record was read from, which a seal renames. */
 const spanOf = (ref) => { const i = ref.indexOf('::'); return i < 0 ? ref : ref.slice(i); };
+// A record's block tables, built once per record object (a cache-break detail reads two blocks of one record, the next break of the
+// lane one more): the request's span → flat entry, the reply's built when a ref is not the request's.
+const tables = new WeakMap();
 export function blockAt(rec, ref) {
-  const wire = callWireOf(rec);
-  if (!wire || ref == null) return null;
-  const { flat, at } = requestBlocks(rec, wire), want = spanOf(ref), same = (r) => r != null && spanOf(r) === want;
-  const i = at.findIndex((a) => same(a.ref));
-  if (i >= 0) return flat[i];
-  const p = replyBlocks(rec, wire).find((x) => same(x.ref));
-  return p ? p.b : null;
+  if (ref == null) return null;
+  let t = tables.get(rec);
+  if (!t) {
+    const wire = callWireOf(rec);
+    if (!wire) return null;
+    const { flat, at } = requestBlocks(rec, wire), req = new Map();
+    at.forEach((a, i) => { if (a.ref != null && !req.has(spanOf(a.ref))) req.set(spanOf(a.ref), flat[i]); });
+    tables.set(rec, (t = { wire, req, reply: null }));
+  }
+  const want = spanOf(ref);
+  if (t.req.has(want)) return t.req.get(want);
+  if (!t.reply) {
+    t.reply = new Map();
+    for (const x of replyBlocks(rec, t.wire)) if (x.ref != null && !t.reply.has(spanOf(x.ref))) t.reply.set(spanOf(x.ref), x.b);
+  }
+  return t.reply.get(want) ?? null;
 }
 
 // ── the call row ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -189,6 +203,23 @@ export function materialize(baseList, { k, patch, add }) {
   const out = (baseList || []).slice(0, k);
   for (const [i, v] of patch || []) out[i] = v;
   return out.concat(add || []);
+}
+/** materializeAttrs(baseAttrs, {k, attrs}) → a row's attributes by position: its base's before `k`, then its own (a null deletes). */
+export function materializeAttrs(baseAttrs, { k = 0, attrs }) {
+  const out = {};
+  if (baseAttrs) for (const i in baseAttrs) { if (+i >= k) break; out[i] = baseAttrs[i]; }
+  for (const i in attrs) if (attrs[i] == null) delete out[i]; else out[i] = attrs[i];
+  return out;
+}
+// A call's attributes (by position) against its base's: the positions its delta brings (at or after k, patched) and those before k
+// whose attribute is not the base's (a null deletes one); a keyframe keeps them all
+function attrDelta(was, { k, patch }, now) {
+  if (!was) return now;
+  const out = {};
+  for (const [i] of patch) out[i] = now[i] || null;
+  for (const i in was) if (+i < k && !(i in out) && !(i in now)) out[i] = null;
+  for (const i in now) if (+i >= k || (!(i in out) && JSON.stringify(now[i]) !== JSON.stringify(was[i]))) out[i] = now[i];
+  return out;
 }
 /** A call's base is the last call extracted with the same lane hint; a chain of more than KEYFRAME links starts over (null base). */
 const KEYFRAME = 128;
@@ -212,22 +243,59 @@ const MEMO = 64; // materialised lists kept (lane tips and predecessors are aske
  * definitions exist (`store.hasDef`, plus those extracted since the last `flushed()`), the rows (`store.rows`, plus those extracted
  * since), each lane hint's last call (the next call of that hint is written against it), each linkable call by the id a successor
  * names it by, and the last MEMO lists materialised. Seeded from the store's rows, so a context opened over a stored projection goes
- * on exactly where one pass would. With a store, what it keeps does not grow with the session's rows (4.3 §4): rows and definitions
- * are the store's once appended (the driver calls `flushed()`), and only a lane's last rid and a link's rid are held per lane / link.
+ * on exactly where one pass would: from `seed` (a `seed()` of a context over the same store instance, by part name, as the
+ * projection's sidecar hands it back: store.saved) for the rows it covers, then from each row after them; without one (or one of
+ * another instance, or covering more rows than the store holds) from every row. With a store, what it keeps does not grow with the
+ * session's rows (4.3 §4): rows and definitions are the store's once appended (the driver calls `flushed()`), a lane's last rid is
+ * held per lane, and a link's row slot in a table of numbers (typed arrays, off the heap: the lineIndex way, src/query/projection.mjs).
  */
-export function createExtractContext(store = null) {
-  const fresh = new Set(), mine = new Map(), lanes = new Map(), links = new Map(), memo = new Map();
-  const rowOf = (rid) => mine.get(rid) || (store && store.rows ? store.rows.get(rid) : undefined) || null;
-  // a lane's last call (the latest in write order), a link's first
-  const note = (row) => {
+export function createExtractContext(store = null, seed = null) {
+  const fresh = new Set(), mine = new Map(), lanes = new Map(), memo = new Map();
+  const rows = store && store.rows;
+  const rowOf = (rid) => mine.get(rid) || (rows ? rows.get(rid) : undefined) || null;
+  // links: scope\nlink → the slot of the first stored row of it (num52 → slot, and a key whose number another took first in `spill`);
+  // `pend`: those of rows not stored yet (extracted since the last flushed(), or every row when there is no store)
+  let tab = numTable();
+  const spill = new Map(), pend = new Map();
+  const linkOf = (row) => (callRow(row) && row.x.link != null ? `${row.x.scope ?? ''}\n${row.x.link}` : null);
+  const stored = (k) => {
+    const s = tab.get(num52(k));
+    return s === undefined ? undefined : linkOf(rows.get(rows.keyAt(s))) === k ? s : spill.get(k);
+  };
+  const keep = (k, slot) => {
+    const h = num52(k), s = tab.get(h), at = stored(k);
+    if (at !== undefined && posCmp(rows.keyAt(at), rows.keyAt(slot)) <= 0) return;
+    if (s === undefined || (at !== undefined && at === s)) tab.set(h, slot); else spill.set(k, slot);
+  };
+  // a lane's last call (the latest in write order), a link's first; `slot`: the row's in the store when it is stored
+  const note = (row, slot) => {
     if (!callRow(row)) return;
-    const h = row.x.hint, k = row.x.link != null ? `${row.x.scope ?? ''}\n${row.x.link}` : null;
+    const h = row.x.hint, k = linkOf(row);
     if (h != null && !(lanes.has(h) && posCmp(lanes.get(h), row.rid) > 0)) lanes.set(h, row.rid);
-    if (k != null && !(links.has(k) && posCmp(links.get(k), row.rid) <= 0)) links.set(k, row.rid);
+    if (k == null) return;
+    if (slot !== undefined) keep(k, slot);
+    else if (!(pend.has(k) && posCmp(pend.get(k), row.rid) <= 0)) pend.set(k, row.rid);
   };
   const remember = (e) => { memo.delete(e.rid); memo.set(e.rid, e); if (memo.size > MEMO) memo.delete(memo.keys().next().value); return e; };
-  if (store && store.rows) for (const row of store.rows.values()) note(row);
-  // a call row's { rid, list, mb, depth } through its base chain (iteratively: a chain is up to KEYFRAME links)
+  let from = 0;
+  if (rows && seed && loadSeed(seed)) from = seed['e.n'][0];
+  if (rows) for (let i = from; i < rows.size; i++) note(rows.get(rows.keyAt(i)), i);
+  // a seed of this store instance covering at most its rows (slots are the order the store took rows in: the sidecar's, then its
+  // scan's, then appends'; a cut tail drops rows from the end); anything else, or one that does not read, is not used
+  function loadSeed(p) {
+    try {
+      const n = p['e.n'][0], hs = p['e.lh'], ls = p['e.ll'], sk = p['e.sk'], ss = p['e.ss'];
+      if (p['e.id'][0] !== store.id || !(n <= rows.size) || hs.length !== ls.length || sk.length !== ss.length) return false;
+      tab.load([p['e.tk'], p['e.tv']]);
+      hs.forEach((h, i) => lanes.set(JSON.parse(h), rows.keyAt(ls[i])));
+      sk.forEach((k, i) => spill.set(JSON.parse(k), ss[i]));
+      return true;
+    } catch {
+      lanes.clear(); spill.clear(); tab = numTable();
+      return false;
+    }
+  }
+  // a call row's { rid, list, mb, attrs, depth } through its base chain (iteratively: a chain is up to KEYFRAME links)
   function listsOf(rid) {
     if (memo.has(rid)) return remember(memo.get(rid));
     const path = [];
@@ -238,9 +306,11 @@ export function createExtractContext(store = null) {
     }
     for (let i = path.length - 1; i >= 0; i--) {
       const r = path[i];
-      at = remember({ rid: r.rid, list: materialize(at && at.list, r), mb: materialize(at && at.mb, r.mb), depth: at && r.base != null ? at.depth + 1 : 0 });
+      at = { rid: r.rid, list: materialize(at && at.list, r), mb: materialize(at && at.mb, r.mb), attrs: materializeAttrs(at && at.attrs, r), depth: at && r.base != null ? at.depth + 1 : 0 };
     }
-    return at;
+    // only the list asked for is kept, not the chain's lists on the way to it: a lane's tip is what is asked again (its next call's
+    // base, a continuation's predecessor), and the memo's places are its lanes', not one walk's (MEMO)
+    return at && remember(at);
   }
   return {
     held: false, // a member before the ones being extracted has no row on disk (it failed): what follows is kept in memory only
@@ -248,10 +318,28 @@ export function createExtractContext(store = null) {
     defined: (bid) => fresh.add(bid),
     rowOf,
     listsOf,
-    linked: (scope, id) => { const rid = id == null ? null : links.get(`${scope}\n${id}`); return rid == null ? null : rowOf(rid); },
+    linked(scope, id) {
+      if (id == null) return null;
+      const k = `${scope}\n${id}`, s = rows ? stored(k) : undefined, a = s === undefined ? undefined : rows.keyAt(s), b = pend.get(k);
+      const rid = a === undefined ? b : b === undefined || posCmp(a, b) <= 0 ? a : b;
+      return rid == null ? null : rowOf(rid);
+    },
     prevOf: (hint) => (lanes.has(hint) ? listsOf(lanes.get(hint)) : null),
     took: (row, lists) => { mine.set(row.rid, row); note(row); remember({ rid: row.rid, ...lists }); },
-    flushed: () => { fresh.clear(); mine.clear(); }, // what was extracted is the store's now
+    flushed() { // what was extracted is the store's now
+      fresh.clear(); mine.clear();
+      if (rows) for (const [k, rid] of pend) { const s = rows.slotOf(rid); if (s !== undefined) { keep(k, s); pend.delete(k); } }
+    },
+    /** seed() → what a context opened over this store instance later starts from (createExtractContext's `seed`), by part name; null
+     *  while it holds rows the store does not (extracted since the last flushed(), or after a member that failed). */
+    seed() {
+      if (!rows || this.held || mine.size || pend.size) return null;
+      const lh = [], ll = [];
+      for (const [h, rid] of lanes) { lh.push(JSON.stringify(h)); ll.push(rows.slotOf(rid)); }
+      const [tk, tv] = tab.dump();
+      return { 'e.id': [store.id], 'e.n': Uint32Array.of(rows.size), 'e.lh': lh, 'e.ll': Int32Array.from(ll), 'e.tk': tk, 'e.tv': tv,
+        'e.sk': [...spill.keys()].map((k) => JSON.stringify(k)), 'e.ss': Int32Array.from(spill.values()) };
+    },
   };
 }
 const laneHintOf = (rec, format, lane) => { const h = hintsOf(rec); return h.laneKey != null ? `agent\n${h.laneKey}` : `${format}\n${lane}`; };
@@ -262,13 +350,36 @@ const attrsOf = (b, query) => {
   if (query) a.query = query;
   return Object.keys(a).length ? a : null;
 };
-const toMap = (attrs) => { const o = {}; attrs.forEach((a, i) => { if (a) o[i] = a; }); return o; };
 // The resource key of a file a tool_use reads or writes (src/dissect/cc.mjs resourceRef): the only kind linkStubs carries across
 // records, as linearContext links only file results to their tool_use.
 const FILE_KEY = 'file::';
 // A pending file tool_use of an earlier record, as a block linearContext links a result to: the same id, the same file.
 const linkStub = (id, key) => ({ type: 'tool_use', id, name: '', input: { file_path: key.slice(FILE_KEY.length) } });
 const counts = (x) => x.facts || x; // where a call's msgCount is (the Anthropic wire's facts, a flat lane's x)
+/** TAIL_HEAP: the byte cap of the lane tails (K, 3.5 §内存有界): per store and lane hint, the previous request's body and, for each of
+ *  its request blocks that has a span, [sec, role, from, to, bid]. A request block at the same place, of the same section and role,
+ *  byte-identical to that slice, inherits its bid unhashed (4.3 §3: the same input, the same hash). Least recently kept go first;
+ *  a body bigger than the cap is not kept. Bytes = 2 × the body's characters + TAIL_PER_BLOCK a block. */
+export const TAIL_HEAP = 4 << 20;
+const TAIL_PER_BLOCK = 128;
+const tails = new Map(), storeIds = new WeakMap();
+let tailBytes = 0, storeSeq = 0;
+const tailKey = (store, hint) => { if (!storeIds.has(store)) storeIds.set(store, ++storeSeq); return `${storeIds.get(store)}\n${hint}`; };
+const dropTail = (k) => { const t = tails.get(k); if (t) { tails.delete(k); tailBytes -= t.bytes; } };
+function keepTail(k, body, blocks) {
+  dropTail(k);
+  const bytes = 2 * body.length + TAIL_PER_BLOCK * blocks.length;
+  if (bytes > TAIL_HEAP) return;
+  for (const [o] of tails) { if (tailBytes + bytes <= TAIL_HEAP) break; dropTail(o); }
+  tails.set(k, { body, blocks, bytes }); tailBytes += bytes;
+}
+/** releaseTails(): lets the lane tails go (the idle worker's saveIndexes, src/query/named/session.mjs). */
+export function releaseTails() { tails.clear(); tailBytes = 0; }
+// the bid of request block b at place i when the lane's previous request has the same bytes there (null: hash it)
+const inherited = (tail, i, b, at) => {
+  const t = tail && at.ref != null && at.exact != null ? tail.blocks[i] : null;
+  return t && t[0] === b.sec && t[1] === b.role && t[3] - t[2] === at.exact.length && at.exact === tail.body.slice(t[2], t[3]) ? t[4] : null;
+};
 
 /**
  * extract(record, ctx) → { defs, row }. defs: the definitions of the record's blocks that `ctx` has not seen. row: a call's
@@ -282,9 +393,12 @@ const counts = (x) => x.facts || x; // where a call's msgCount is (the Anthropic
 export function extract(rec, ctx) {
   const rid = String(rec.id), pos = rid, wire = callWireOf(rec);
   if (!wire) return { defs: [], row: { rid, pos, x: { item: itemFacts(rec), ...(isLogOnly(rec) ? null : { unknown: jsonClean(unknownFacts(rec)) }) } } };
-  const defs = [], local = new Set(), take = (b, at) => {
-    const { bid, def, query } = definition(b, at.ref, at.exact, at.why);
-    if (!ctx.store.hasDef(bid) && !local.has(bid)) { local.add(bid); defs.push(def); }
+  // identity before definition (4.3 §3): a block the session has a definition for costs its bid and its place's query, nothing more
+  const defs = [], local = new Set(), take = (b, at, known = null) => {
+    const bid = known ?? bidFor(b, at.ref, at.exact);
+    if (ctx.store.hasDef(bid) || local.has(bid)) return { bid, query: blockQuery(b) };
+    const { def, query } = definition(b, at.ref, at.exact, at.why, bid);
+    local.add(bid); defs.push(def);
     return { bid, query };
   };
   const rules = WIRE_RULES[wire.format === 'anthropic' ? 'anthropic' : 'openai'];
@@ -295,24 +409,28 @@ export function extract(rec, ctx) {
   const st = linker && linker.stitchOf ? linker.stitchOf(rec) : null;
   // the call's own blocks, by section
   const { flat, at } = requestBlocks(rec, wire, read);
-  const own = { tools: [], system: [], messages: [] }, ownFlat = [];
+  const body = reqText(rec), tstore = ctx.store || ctx, tail = body != null ? tails.get(tailKey(tstore, laneHintOf(rec, wire.format, x.lane))) : null;
+  const own = { tools: [], system: [], messages: [] }, ownFlat = [], tailBlocks = [];
   flat.forEach((b, i) => {
-    const { bid, query } = take(b, at[i]);
+    const { bid, query } = take(b, at[i], inherited(tail, i, b, at[i]));
+    tailBlocks.push(at[i].ref != null && at[i].exact != null ? [b.sec, b.role, at[i].span[0], at[i].span[1], bid] : null);
     own[b.sec === 'tools' || b.sec === 'system' ? b.sec : 'messages'].push({ bid, a: attrsOf(b, query), mi: b.mi, b });
     if (b.sec === 'messages') ownFlat.push(b);
   });
   const pred = st && st.cont ? ctx.linked(st.scope, st.prev) : null;
-  let tools = own.tools, system = own.system, inherited = [], predX = null, base = null, state = null;
+  // what a continuation inherits of its predecessor's messages and reply, as they stand there: block ids, attributes and message
+  // starts by position from the first message (no object a position)
+  let tools = own.tools, system = own.system, inh = { bids: [], attrs: {}, starts: [] }, predX = null, base = null, state = null;
   if (pred) {
     predX = pred.x;
-    const P = ctx.listsOf(pred.rid), [pt, ps] = predX.secs;
-    const ent = (lo, hi) => P.list.slice(lo, hi).map((bid, k) => ({ bid, a: pred.attrs[lo + k] || null }));
+    const P = ctx.listsOf(pred.rid), [pt, ps] = predX.secs, lo = pt + ps;
+    const ent = (from, to) => P.list.slice(from, to).map((bid, k) => ({ bid, a: P.attrs[from + k] || null }));
     if (st.inherit.tools !== 'own') tools = ent(0, pt);
-    if (st.inherit.system === 'inherit') system = ent(pt, pt + ps);
-    else if (st.inherit.system === 'patch') system = patchSystem(ent(pt, pt + ps), own.system, (e) => !!(e.a && e.a.volatile));
-    const pmb = P.mb.filter((i) => i >= pt + ps).map((i) => i - pt - ps), pm = ent(pt + ps);
-    inherited = pm.map((e, k) => ({ ...e, start: pmb.includes(k) }))
-      .concat(pred.reply.map((bid, j) => ({ bid, a: null, start: (predX.rmb || []).includes(j) })));
+    if (st.inherit.system === 'inherit') system = ent(pt, lo);
+    else if (st.inherit.system === 'patch') system = patchSystem(ent(pt, lo), own.system, (e) => !!(e.a && e.a.volatile));
+    inh = { bids: P.list.slice(lo).concat(pred.reply), attrs: {}, starts: P.mb.filter((i) => i >= lo).map((i) => i - lo) };
+    for (const i in P.attrs) if (+i >= lo) inh.attrs[i - lo] = P.attrs[i];
+    for (const j of predX.rmb || []) inh.starts.push(P.list.length - lo + j);
     base = P.depth < KEYFRAME ? P : null;
     const s = predX.wire.contextState, m = predX.wire.contextMissing ?? null;
     state = s === 'partial' || s === 'server_edited' ? { contextState: s, missing: m } : { contextState: 'reconstructed', missing: null };
@@ -329,26 +447,27 @@ export function extract(rec, ctx) {
     const stubs = linked.filter((b) => b.mi === 0), lmsg = linked.filter((b) => b.mi !== 0);
     mine = mine.map((e, k) => ({ ...e, a: attrsOf(lmsg[k] || e.b, e.a && e.a.query) }));
     open = open.map(([id, [rel, key]], k) => [id, [rel, key], !stubs[k] || stubs[k].resPending]);
-    inherited = inherited.map((e) => ({ ...e }));
-    for (const [, [rel], pending] of open) if (inherited[rel]) {
-      const a = { ...(inherited[rel].a || {}), resRole: 'request' };
+    for (const [, [rel], pending] of open) if (rel < inh.bids.length) {
+      const a = { ...(inh.attrs[rel] || {}), resRole: 'request' };
       if (pending) a.resPending = true; else delete a.resPending;
-      inherited[rel].a = a;
+      inh.attrs[rel] = a;
     }
     open = open.filter((o) => o[2]).map(([id, v]) => [id, v]);
   }
-  const msgs = inherited.concat(mine), head = tools.concat(system), all = head.concat(msgs);
-  const list = all.map((e) => e.bid), attrs = all.map((e) => e.a), mb = [];
-  msgs.forEach((e, k) => { if (e.start) mb.push(head.length + k); });
+  const head = tools.concat(system), H = head.length, I = inh.bids.length;
+  const list = head.map((e) => e.bid).concat(inh.bids, mine.map((e) => e.bid)), attrs = {}, mb = inh.starts.map((i) => H + i);
+  head.forEach((e, i) => { if (e.a) attrs[i] = e.a; });
+  for (const i in inh.attrs) attrs[H + +i] = inh.attrs[i];
+  mine.forEach((e, k) => { if (e.a) attrs[H + I + k] = e.a; if (e.start) mb.push(H + I + k); });
   if (st && st.unstored != null) x.unstored = st.unstored; // a call whose request was not stored: no context, its reply real
   if (st) {
     // what a successor stitches from this row: where it is found, its reply's message starts, its pending file tool_uses
     Object.assign(x, { link: st.link, scope: st.scope, gap: st.gap, continued: st.cont, rmb,
       lineage: !st.cont ? st.link || rid : predX ? predX.lineage : st.prev || rid });
     if (rules.links) {
-      const off = inherited.length;
+      const off = I;
       mine.forEach((e, k) => { if (e.a && e.a.resRole === 'request' && e.a.resPending) open.push([e.b.block.id, [off + k, e.b.resKey]]); });
-      rp.forEach((p, j) => { if (p.b.kind === 'tool_use' && String(p.b.resKey).startsWith(FILE_KEY)) open.push([p.b.block.id, [msgs.length + j, p.b.resKey]]); });
+      rp.forEach((p, j) => { if (p.b.kind === 'tool_use' && String(p.b.resKey).startsWith(FILE_KEY)) open.push([p.b.block.id, [I + mine.length + j, p.b.resKey]]); });
       x.open = Object.fromEntries(open);
       x.toolAdj = (predX ? predX.toolAdj || 0 : 0) + ownFlat.reduce((n, b) => n + (b.kind === 'tool_addition') - (b.kind === 'tool_removal'), 0);
     }
@@ -357,9 +476,11 @@ export function extract(rec, ctx) {
   x.secs = [tools.length, system.length];
   x.hint = laneHintOf(rec, wire.format, x.lane);
   if (!pred) { const prev = ctx.prevOf(x.hint); base = prev && prev.depth < KEYFRAME ? prev : null; }
-  const row = jsonClean({ rid, pos, base: base ? base.rid : null, ...delta(base && base.list, list), reply, mb: delta(base && base.mb, mb), attrs: toMap(attrs), x });
-  for (const d of defs) ctx.defined(d.bid); // only once the record extracted whole: a record that throws leaves no trace
-  ctx.took(row, { list, mb, depth: base ? base.depth + 1 : 0 });
+  const d = delta(base && base.list, list);
+  const row = jsonClean({ rid, pos, base: base ? base.rid : null, ...d, reply, mb: delta(base && base.mb, mb), attrs: attrDelta(base && base.attrs, d, attrs), x });
+  for (const def of defs) ctx.defined(def.bid); // only once the record extracted whole: a record that throws leaves no trace
+  ctx.took(row, { list, mb, attrs, depth: base ? base.depth + 1 : 0 });
+  if (body != null) keepTail(tailKey(tstore, x.hint), body, tailBlocks);
   return { defs, row };
 }
 
@@ -416,6 +537,14 @@ export const CHUNK_STORED = 8 * 1048576;
 // compacts, each a context of megabytes, passed the worker's heap: 2026-10-22)
 const CHUNK = 16;
 const contexts = new WeakMap(); // store → its extraction context (slices of one session go on with the same one)
+/** extractSeed(store) → the parts ([[name, array]]) of the extraction context of `store` for its sidecar (store.saveIndex), [] when
+ *  it holds rows the store does not; an open that loads that sidecar hands them back as `store.saved` (4.3 §4 旁索引). A store that
+ *  extracted nothing yet gets its context here, seeded from what it was opened with, so a sidecar written after a fold alone keeps it. */
+export function extractSeed(store) {
+  if (!contexts.has(store)) contexts.set(store, createExtractContext(store, store.saved));
+  const seed = contexts.get(store).seed();
+  return seed ? Object.entries(seed) : [];
+}
 
 /**
  * extractMembers({store, members, recordsAt, sessionId, budgetMs, clock, errors, from}) → { frontier, done, total } (design §3.4
@@ -445,7 +574,7 @@ export function extractMembers({ store, members, recordsAt, sessionId = null, bu
       sum += b; part.push(i);
     }
     if (!part.length) break;
-    if (!contexts.has(store)) contexts.set(store, createExtractContext(store));
+    if (!contexts.has(store)) contexts.set(store, createExtractContext(store, store.saved));
     // each member's record is read just before it is extracted, so a slice that runs out leaves no read record behind (the next
     // slice would read it again); within one slice the reads share one stretch's caches
     const ctx = contexts.get(store);

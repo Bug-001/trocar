@@ -20,7 +20,8 @@ export const pagePlace = (gi, limit) => {
 }
 
 // ── a step's own reads (2.3 §读与画 快速拖动; 4.4 live-poll, C3) ───────────────────────────────────────────────────────────
-// createStepReads({get, setTimer, clearTimer, need, onLane, onBodies, restMs}) → {target(rid), prefetch(key), laneSlot(fn)}. Injected, no DOM.
+// createStepReads({get, setTimer, clearTimer, need, onLane, onBodies, restMs, loader}) → {target(rid), prefetch(key), laneSlot(fn)}. Injected, no DOM.
+//   · with a `loader` (loader.mjs) every read goes through it: a `block` read at pri 0, a `lane` read at pri 1
 //   · target(rid): the playhead's call. Once it has rested `restMs` with no newer target, need(rid) → {lane: {lane, from?, to?} |
 //     null, refs: string[]} says what that step still lacks; at most one `lane` and one `block` read are in flight at a time
 //   · a newer target aborts at once the reads asked for any other step (a prefetch too); an aborted read is not a failure and
@@ -31,9 +32,11 @@ export const pagePlace = (gi, limit) => {
 //   · prefetch(key) reads lane `key` only when nothing is in flight and no target is resting
 //   · laneSlot(fn) runs the caller's own lane reads (the poll's) in the one `lane` slot: it waits for the step's lane read in
 //     flight, and the step's next lane read waits for it
-export function createStepReads({ get, setTimer = setTimeout, clearTimer = clearTimeout, need, onLane, onBodies, restMs = 100 }) {
+export function createStepReads({ get: get0, setTimer = setTimeout, clearTimer = clearTimeout, need, onLane, onBodies, restMs = 100, loader = null }) {
   let want = null, timer = null, lastLane = null, slot = null, waited = false
   const out = { lane: null, block: null } // the read in flight of each kind: {rid, ac, p}
+  const join = (a, b) => (a && b ? AbortSignal.any([a, b]) : a || b)
+  const get = (name, p, o = {}) => (loader ? loader.run(name === 'block' ? 0 : 1, (sig) => get0(name, p, { ...o, signal: join(o.signal, sig) })) : get0(name, p, o))
   const api = { get }
   function start(kind, rid, what) {
     const ac = new AbortController(), f = { rid, ac }

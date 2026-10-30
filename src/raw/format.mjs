@@ -1,15 +1,18 @@
-// src/raw/format.mjs — the D35 sealed-file container (RFC 4.2 §原始层封存 「文件布局」).
+// src/raw/format.mjs — the D35 sealed-file container (RFC 4.2 §封存格式 「文件布局」「版本分派」).
 //
 //   header (16 B)  : magic "ASGTSEAL" · u16 LE format version · u16 flags (0) · 4 reserved zero bytes
 //   frames         : independent brotli streams, back to back
 //   index tail     : tables (UTF-8 JSON) · checksum = sha256(header ‖ tables), 32 raw bytes
 //   trailer (24 B) : u64 LE index-tail offset · u64 LE index-tail length · magic "ASGTSEND"
 //
-// A reader starts from the fixed trailer at the end of the file. The tables are JSON on purpose: the
-// index is ~0.05 % of the raw bytes, and a format a human can inspect with `tail -c` is worth more
-// here than a few bytes saved. Rows are positional arrays (column order below) to keep it compact.
+// The sealer writes version 2; readers read 1 and 2 and refuse anything else (4.2 版本分派). A reader starts from the
+// fixed trailer at the end of the file. The tables are JSON on purpose: a format a human can inspect with `tail -c` is
+// worth more here than a few bytes saved. Rows are positional arrays (column order below) to keep it compact.
 //
-//   frames  : [fileOffset, compressedLength, decodedLength]
+//   frames  : v1 [fileOffset, compressedLength, decodedLength], back to back in frame order
+//             v2 [fileOffset, compressedLength, decodedLength, kind] — kind 0 = chunk frame (unique chunk bytes),
+//             1 = splice frame (records' splice lists); numbered when their buffer opens, so file order may differ,
+//             but sorted by offset they tile [HEADER_LEN, index tail) exactly
 //   shards  : { name, sha256 (hex), length, lines, path, dev, ino, mtimeMs }
 //             name + sha256 + length = the source-shard id (4.2). `path` (relative to the sealed file's
 //             directory, at seal time) and dev/ino/mtimeMs only let a reader recognise the very same
@@ -17,31 +20,39 @@
 //   streams : original stream names (record rows point into this list)
 //   records : [id, stream, frame, offset, encLength, lineLength, kind, back, sha256(b64), flags, shard, lineNo]
 //             id      : String(JSON.parse(line).id), or null (no id, or the line is not JSON)
-//             kind    : 0 keyframe (the line bytes) · 1 delta (ops against record `back`)
+//             kind    : v1 0 keyframe (the line bytes) · 1 delta (ops against record `back`)
+//                       v2 2 splice: frame/offset/encLength name its splice list in a splice frame; back = -1
 //             flags   : bit 0 = line ends in "\n" · bit 1 = the line did not parse as JSON
 //             lineNo  : the line's 0-based number in its source shard (opaque lines count)
+//
+// v2 splice list: LEB128 varint triples zigzag(frame − prevFrame) · zigzag(offset − prevEnd) · length ≥ 1, with
+// prevFrame = prevEnd = 0 at the start of each record and (frame, offset + length) after each triple; the line is the
+// ranges' bytes in order.
 import { createHash } from 'node:crypto';
 
 export const MAGIC = Buffer.from('ASGTSEAL');
 export const END_MAGIC = Buffer.from('ASGTSEND');
-export const VERSION = 1;
+export const VERSION = 2;          // the version the sealer writes
+export const VERSIONS = [1, 2];    // the versions a reader accepts
 export const HEADER_LEN = 16;
 export const TRAILER_LEN = 24;
 export const FLAG_NL = 1;
 export const FLAG_UNPARSEABLE = 2;
 export const R = { id: 0, stream: 1, frame: 2, off: 3, enc: 4, len: 5, kind: 6, back: 7, sha: 8, flags: 9, shard: 10, lineNo: 11 };
 
-export function headerBytes() {
+export const KIND_CHUNK = 0, KIND_SPLICE = 1, REC_SPLICE = 2;
+
+export function headerBytes(version = VERSION) {
   const b = Buffer.alloc(HEADER_LEN);
   MAGIC.copy(b, 0);
-  b.writeUInt16LE(VERSION, 8);
+  b.writeUInt16LE(version, 8);
   return b;
 }
 
-// tables → the index-tail bytes (JSON ‖ checksum).
-export function indexTailBytes(tables) {
+// tables → the index-tail bytes (JSON ‖ checksum over that version's header).
+export function indexTailBytes(tables, version = VERSION) {
   const json = Buffer.from(JSON.stringify(tables), 'utf8');
-  const sum = createHash('sha256').update(headerBytes()).update(json).digest();
+  const sum = createHash('sha256').update(headerBytes(version)).update(json).digest();
   return Buffer.concat([json, sum]);
 }
 
@@ -71,7 +82,7 @@ export function readIndex(fs, fd, size, name = 'sealed file') {
   const hd = readAt(fs, fd, 0, HEADER_LEN);
   if (!hd.subarray(0, 8).equals(MAGIC)) throw new Error(`${name}: not a sealed file (header magic)`);
   const version = hd.readUInt16LE(8);
-  if (version !== VERSION) throw new Error(`${name}: sealed format version ${version} is not supported (this build reads ${VERSION})`);
+  if (!VERSIONS.includes(version)) throw new Error(`${name}: sealed format version ${version} is not supported (this build reads ${VERSIONS.join(' and ')})`);
   const indexOffset = Number(tr.readBigUInt64LE(0)), indexLength = Number(tr.readBigUInt64LE(8));
   if (indexOffset < HEADER_LEN || indexLength < 32 || indexOffset + indexLength !== size - TRAILER_LEN) {
     throw new Error(`${name}: index tail out of range (${indexOffset}+${indexLength} in ${size})`);
@@ -82,3 +93,17 @@ export function readIndex(fs, fd, size, name = 'sealed file') {
   if (!sum.equals(tail.subarray(indexLength - 32))) throw new Error(`${name}: index checksum mismatch — the file is damaged`);
   return { tables: JSON.parse(json.toString('utf8')), indexOffset, indexLength, version };
 }
+
+// Unsigned LEB128 (numbers up to 2^53), shared by the v1 delta ops and the v2 splice lists. zigzag maps a signed step
+// onto it: x ≥ 0 → 2x, x < 0 → −2x − 1.
+export function pushVarint(out, x) { while (x >= 128) { out.push((x % 128) | 128); x = Math.floor(x / 128); } out.push(x); }
+export function readVarint(buf, pos) {
+  let x = 0, mul = 1, b;
+  do {
+    if (pos >= buf.length) throw new Error('corrupt: truncated varint');
+    b = buf[pos++]; x += (b & 127) * mul; mul *= 128;
+  } while (b & 128);
+  return [x, pos];
+}
+export const zigzag = (x) => (x >= 0 ? 2 * x : -2 * x - 1);
+export const unzigzag = (z) => (z % 2 ? -(z + 1) / 2 : z / 2);

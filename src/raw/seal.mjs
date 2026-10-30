@@ -15,8 +15,9 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { createSealWriter, FRAME_BYTES } from './writer.mjs';
-import { openSealed, createFrameCache } from './reader.mjs';
+import { openSealed } from './reader.mjs';
 import { appendJournal } from './journal.mjs';
+import { VERSION } from './format.mjs';
 import { parseSegment } from '../collector/core/record/segments.mjs';
 import { fsyncDir } from '../off/fsutil.mjs';
 
@@ -44,10 +45,10 @@ export async function sealSegment(file, { lockFile, journal = path.join(path.dir
     const res = await sealOne(file, { lockFile, fs, frameBytes, onPhase });
     // `segment` and `took_ms` are what 附录 D.2 自动封存 asks of every sealed segment (how long each took); the
     // journal is the only place it is recorded, so a report that leaves them out has nothing to read (mac run P2).
-    if (!res.gone) appendJournal({ op: 'seal', outcome: 'ok', file, segment: seg && seg.segment, took_ms: Date.now() - t0, records: res.records, bytes: res.bytes, sha256: res.sha256, sealed: res.sealed, sealedBytes: res.sealedBytes }, { journal, fs });
+    if (!res.gone) appendJournal({ op: 'seal', outcome: 'ok', format: VERSION, file, segment: seg && seg.segment, took_ms: Date.now() - t0, records: res.records, bytes: res.bytes, sha256: res.sha256, sealed: res.sealed, sealedBytes: res.sealedBytes }, { journal, fs });
     return res;
   } catch (e) {
-    appendJournal({ op: 'seal', outcome: e instanceof SealRefused ? 'refused' : 'failed', file, segment: seg && seg.segment, took_ms: Date.now() - t0, reason: e.message,
+    appendJournal({ op: 'seal', outcome: e instanceof SealRefused ? 'refused' : 'failed', format: VERSION, file, segment: seg && seg.segment, took_ms: Date.now() - t0, reason: e.message,
       originalKept: fs.existsSync(file) }, { journal, fs });
     throw e;
   }
@@ -74,10 +75,16 @@ async function sealOne(file, { lockFile, fs, frameBytes, onPhase }) {
       for (const line of readLines(fs, src)) {
         whole.update(line); length += line.length;
         const nl = line.length && line[line.length - 1] === 0x0a;
-        let id = null, unparseable = false;
-        try { const v = JSON.parse(line.toString('utf8', 0, line.length - (nl ? 1 : 0))).id; id = v == null ? null : String(v); }
-        catch { unparseable = true; }
-        writer.add(line, { id, stream: name, shard: 0, lineNo: lines, unparseable });
+        // The same parse names the record's stream group: trocar's own envelope host + endpoint path (query cut off),
+        // so lines of one conversation share chunk buffers (4.2 §封存格式). No host or endpoint → no group.
+        let id = null, group = null, unparseable = false;
+        try {
+          const o = JSON.parse(line.toString('utf8', 0, line.length - (nl ? 1 : 0)));
+          id = o.id == null ? null : String(o.id);
+          const h = typeof o.host === 'string' ? o.host : '', ep = typeof o.endpoint === 'string' ? o.endpoint.split('?')[0] : '';
+          if (typeof o.host === 'string' || typeof o.endpoint === 'string') group = `${h}\n${ep}`;
+        } catch { unparseable = true; }
+        writer.add(line, { id, stream: name, shard: 0, lineNo: lines, unparseable, group });
         lines++;
       }
     } finally { fs.closeSync(src); }
@@ -134,7 +141,7 @@ function* readLines(fs, fd) {
 // line), then rebuild the whole segment in line order and compare its length and sha256 with what was read. Any gap,
 // duplicate or mismatch throws.
 export function verifySealed(fs, sealed, { name, sum, length, lines }) {
-  const f = openSealed(sealed, { fs, frameCache: createFrameCache(8) });
+  const f = openSealed(sealed, { fs });
   try {
     const whole = createHash('sha256');
     let total = 0, want = 0;

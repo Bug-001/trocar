@@ -7,8 +7,9 @@
 //
 // In memory only: the source line is never rewritten (invariant 2); provenance is a non-enumerable stamp, so the
 // record still serializes as captured. The board loader, the ETL loader and the resolver all call this one
-// function, so a text_ref's offsets mean the same decoded text everywhere. Leaf module (node: built-ins only).
+// function, so a text_ref's offsets mean the same decoded text everywhere. Imports node: built-ins and the leaf scanner only.
 import zlib from 'node:zlib';
+import { scanJson } from './json-scan.mjs';
 
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 // A body that decompresses past this is not expanded (a bomb, or not a request): it is labelled, not loaded.
@@ -28,17 +29,33 @@ export const decodeLimitOf = (rec) => (rec && rec.is_llm_call === true ? MAX_DEC
 // parsed again — never a cache keyed by a record id, which could outlive or mis-name the bytes.
 // READ-ONLY by contract: callers treat the parsed body as source truth and copy before changing anything (the v0
 // `request` object was already shared this way).
-const parsedBodies = new WeakMap();
+// A copy of a record (the board's hydrated record, a flat lane's working copy) carries its source's `req_body`: sharesBody(copy, src)
+// says so, and the copy's parse and scan are its source's. Keyed by object, like the memos; a copy whose req_body is no longer its
+// source's string is its own source.
+const parsedBodies = new WeakMap(), scans = new WeakMap(), sources = new WeakMap();
+export function sharesBody(copy, src) {
+  if (copy && src && copy !== src) sources.set(copy, sources.get(src) || src);
+  return copy;
+}
+const originOf = (rec) => { const o = sources.get(rec); return o && o.req_body === rec.req_body ? o : rec; };
+const memo = (map, rec, f) => {
+  const o = originOf(rec);
+  if (map.has(o)) return map.get(o);
+  let v = null;
+  const text = o.req_body;                       // read once: the stored body can be megabytes
+  if (typeof text === 'string') { try { v = f(text); } catch { v = null; } }
+  map.set(o, v);   // a body that did not parse is remembered as null: it will not parse next time either
+  return v;
+};
 export function parsedRequestBody(rec) {
   if (!rec || typeof rec !== 'object') return null;
   if (rec.request && typeof rec.request === 'object') return rec.request;   // v0 shape / already hydrated
-  if (parsedBodies.has(rec)) return parsedBodies.get(rec);
-  let body = null;
-  const text = rec.req_body;                     // read once: the stored body can be megabytes
-  if (typeof text === 'string') { try { body = JSON.parse(text); } catch { body = null; } }
-  parsedBodies.set(rec, body);   // a body that did not parse is remembered as null: it will not parse next time either
-  return body;
+  return memo(parsedBodies, rec, JSON.parse);
 }
+/** storedRequestBody(rec) → the stored req_body parsed (never a hydrated `.request`), or null: the same object parsedRequestBody gave
+ *  its source. scannedRequestBody(rec) → scanJson of the stored req_body (byte spans), or null. One of each per record, READ-ONLY. */
+export const storedRequestBody = (rec) => (rec && typeof rec === 'object' ? memo(parsedBodies, rec, JSON.parse) : null);
+export const scannedRequestBody = (rec) => (rec && typeof rec === 'object' ? memo(scans, rec, scanJson) : null);
 
 // The wire content-encoding of the request body, or null (no encoding, or `identity`).
 export function requestEncodingOf(rec) {

@@ -73,9 +73,9 @@ test('(13) keys: ↑/↓ move the highlight, / focuses search, nothing fires whi
   try {
     await go(page, '#/sessions', '.lrow')
     await page.click('#content .pagehead'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown')
-    await page.waitForFunction(() => /sel=/.test(location.hash))
+    // the URL follows the highlight within the writer's gap (1.2 §路由: the last value lands), not in the same task
+    await page.waitForFunction(() => { const r = document.querySelector('.lrow.sel'); return !!r && new URLSearchParams(location.hash.split('?')[1] || '').get('sel') === r.dataset.key })
     const moved = await sel()
-    assert.equal(await page.getAttribute('.lrow.sel', 'data-key'), moved)
     await page.keyboard.press('/')
     assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), 'libq')
     await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter')

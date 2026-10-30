@@ -88,15 +88,15 @@ const viewOf = (page) => page.evaluate((sel) => {
 
 // the tail's follow-up reads (4.4:52): one `lane` read per touched held lane per `session` delta, one `block` read per followed delta
 const DELTA_PACED = new Set(['lane', 'block'])
-// what I-rate paces: a name, and for `lane` each lane of each session apart (an older page, `to`, apart from the tail); null =
-// not paced: a lane's ledger chain (`ledger=`) and the later pages of one `sessions` read (`after=`, C.5) read one cursor after
-// another by design (3.5 §手里车道的页)
+// what I-rate paces: a name, and for `lane` each lane of each session apart; null = not paced: the desk's history chains — a lane's
+// ledger (`ledger=`) and older pages (`to=`), the skeleton's older pages (`session` `before=`), 2.3 加载器 · 3.5 §手里车道的页 — and
+// the later pages of one `sessions` read (`after=`, C.5) read one cursor after another by design
 const rateKey = (url) => {
   const name = nameOf(url), q = new URLSearchParams(url.split('?')[1] || '')
-  if (name === 'sessions' && q.has('after')) return null
+  if ((name === 'sessions' && q.has('after')) || (name === 'session' && q.has('before'))) return null
   if (name !== 'lane') return name
-  if (q.has('ledger')) return null
-  return `lane ${q.get('id')} ${q.get('lane')}${q.has('to') ? ' to' : ''}`
+  if (q.has('ledger') || q.has('to')) return null
+  return `lane ${q.get('id')} ${q.get('lane')}`
 }
 
 /** I-rate over the probe's fetch log (see LIMITS for every bound; the session rule is 4.4:52 as decided in C2). → [detail] */

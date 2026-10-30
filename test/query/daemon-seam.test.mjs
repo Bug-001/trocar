@@ -27,6 +27,7 @@ import { commandNamed } from '../../src/cli/commands.mjs'
 import { parseArgs } from '../../src/cli/args.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
 import { queryDocument, QUERY_PATH } from '../../src/query/client.mjs'
+import { runQuery } from '../../src/query/named/index.mjs'
 import { bigSession } from './big-session.mjs'
 import { ensureBoardPort, freeOnLoopback, BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
@@ -37,12 +38,12 @@ const QUERY = commandNamed('query')
 /** `trocar query <argv>` as the command line runs it → { out, exit }: the flags are what the real parser makes of argv (a repeated
  *  option reaches the command as the list of its values), one document on stdout, nothing injected. */
 async function cli(argv, { home, env, platform }) {
-  const out = []
-  const io = { out: (s) => out.push(s), err: (s) => out.push(s), stdout: { isTTY: false }, stderr: {}, stdin: { isTTY: false } }
+  const out = [], err = []
+  const io = { out: (s) => out.push(s), err: (s) => { out.push(s); err.push(s) }, stdout: { isTTY: false }, stderr: {}, stdin: { isTTY: false } }
   const args = parseArgs(QUERY, argv)
   assert.equal(args.error, null, `${argv.join(' ')} parses`)
   const exit = await runQueryCli(argv, { io, json: !!args.flags.json, args, home, env, platform, deps: {} })
-  return { out: out.join('\n'), exit }
+  return { out: out.join('\n'), err: err.join('\n'), exit }
 }
 
 /** The id of the session with the most records in a generated corpus. */
@@ -237,6 +238,7 @@ test('darwin · 3.5 #7 · #25: a never-projected session through the daemon — 
     // the terminal asks on until the worker has folded every member, and prints that whole answer
     const r = await within(s.cli(['session', '--id', id, '--json']), 120_000, 'session through the daemon')
     assert.equal(r.exit, 0, r.out)
+    assert.equal(r.err, '', '--json: nothing on stderr while it waits on the worker (1.6 §1.2)')
     const doc = JSON.parse(r.out)
     assert.equal(doc.pending, undefined, 'the terminal prints a whole answer: no pending')
     assert.equal(doc.base, null)
@@ -316,6 +318,26 @@ test('darwin · 4.4 #9 on the daemon\'s board: an unchanged session is 304, anot
     assert.notEqual(grown.etag, first.etag)
     const viaCli = await s.daemon(['session', '--id', id, '--json'])
     assert.equal(grown.body === viaCli.out, true, `the board's body and the CLI print the same bytes:\n  board ${grown.body.length} B\n  cli   ${viaCli.out.length} B`)
+  } finally { await s.box.stop() }
+})
+
+test('darwin · 3.5 #30: a cold read of a session the worker must build waits on that worker instead of folding it here, and says so', { timeout: 180_000 }, async () => {
+  const s = await seam({ seed: 7, big: 16 << 20, queryIdleMs: 1500 })
+  try {
+    const first = s.forks.at(-1)
+    await within((async () => { while (first.exitCode === null && first.signalCode === null) await pause(100) })(), 15_000, 'the idle worker exited')
+    const id = s.big, lines = []
+    const one = await within(queryDocument('session', { id }, { ...s.ctx, say: (l) => lines.push(l) }), 120_000, 'the cold session read')
+    assert.equal(one.via, 'daemon', 'the cold read was answered by the worker it waited on, not folded here')
+    const doc = JSON.parse(one.text)
+    assert.equal(doc.pending, undefined, 'a whole answer')
+    assert.ok(lines.length >= 1, 'the wait is not silent')
+    // what the worker built is on disk: a local read now builds nothing, so it answers at once, at the worker's mark
+    const here = await runQuery('session', { id }, { home: s.trocar, userHome: s.w.home, platform: 'darwin', env: s.w.env, handOff: true })
+    assert.equal(here.mark, doc.mark, 'the projection and fold log on disk cover every member')
+    const two = await within(queryDocument('session', { id }, s.ctx), 30_000, 'the second session read')
+    assert.equal(two.via, 'daemon')
+    assert.equal(JSON.parse(two.text).pending, undefined)
   } finally { await s.box.stop() }
 })
 

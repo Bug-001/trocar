@@ -26,7 +26,7 @@ import { compactionVerdict, hasCompactionPreamble } from '../identity/session-id
 // analyze.mjs too; the cycle is safe because respOf is only CALLED at runtime, after both modules
 // have finished evaluating. test/view/analyze-admission.test.mjs pins both module load orders.)
 import { respOf } from './assemble.mjs'
-import { HEAD, taskOf } from './blockmeta.mjs'
+import { HEAD, taskOf, shorten } from './blockmeta.mjs'
 import { streamParts } from '../dissect/sse-spans.mjs'
 import { num52, numTable } from '../query/projection.mjs'
 export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
@@ -41,8 +41,8 @@ function hash(s) {
   return (h >>> 0).toString(16).padStart(8, '0')
 }
 const sysText = (r) => (r.request?.system || []).map((b) => b.text || '').join('\n')
-const isSub = (r) => /cc_is_subagent=true/.test(sysText(r))
-const isMonitor = (r) => /you are a security monitor/i.test(sysText(r))
+const isSub = (sys) => /cc_is_subagent=true/.test(sys)
+const isMonitor = (sys) => /you are a security monitor/i.test(sys)
 const userTextOf = (r) => (r.request?.messages || [])
   .map((m) => Array.isArray(m.content) ? m.content.map((b) => (b.type === 'text' ? b.text || '' : '')).join('') : String(m.content || ''))
   .join(' ')
@@ -241,7 +241,8 @@ const FIRST_TEXT_CHARS = 4096
 
 // A text as an event shows it: whitespace runs squashed, trimmed, its first 200 characters, and its length.
 const PREVIEW_CHARS = 200
-const evText = (s) => ({ preview: own(s.replace(/\s+/g, ' ').trim().slice(0, PREVIEW_CHARS)), chars: s.length })
+// (shorten: the same squash, read only as far as the preview needs; a tool result's whole text is never copied for 200 chars of it)
+const evText = (s) => ({ preview: own(shorten(s, PREVIEW_CHARS)), chars: s.length })
 
 // SEEN PATHS. A block's path-like tokens (the lane's "seen but never opened" files), in text order as runs [i, n] over its distinct
 // paths `p`: the lane replays them against its own ledger with its per-block cap of NEW paths (seeIn), which is where the scan of
@@ -290,7 +291,7 @@ const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g
 const R_OPEN = '<system-reminder>', R_CLOSE = '</system-reminder>'
 function piece(s) {
   const t = s.trim()
-  return { len: s.length, lead: s.length - s.trimStart().length, trail: t ? s.length - s.trimEnd().length : s.length, head: own(t.replace(/\s+/g, ' ').slice(0, PREVIEW_CHARS)) }
+  return { len: s.length, lead: s.length - s.trimStart().length, trail: t ? s.length - s.trimEnd().length : s.length, head: own(shorten(t, PREVIEW_CHARS)) }
 }
 // s without its reminders as a piece `m`, and, when a reminder in it never closes, `o`: the piece up to that reminder (what is left of
 // s when a later block closes it)
@@ -373,7 +374,7 @@ export function callFacts(r) {
   const req = r.request, rs = respOf(r) || {}, nr = normResp(r), h = hintsOf(r)
   const status = rs.status ?? null
   const reqIncomplete = reqIncompleteOf(r)
-  const sub = h.lane === 'subagent' || isSub(r), monitor = isMonitor(r)
+  const sys = sysText(r), sub = h.lane === 'subagent' || isSub(sys), monitor = isMonitor(sys)
   const u = nr.usage, text = nr.text || ''
   const firstUser = sub ? req.messages.find((m) => m.role === 'user') : null
   return defined({
@@ -510,30 +511,42 @@ export class OrderBound extends Error {}
 // `streamId`), so a fold can go on (push more) after it.
 // keep: false (src/view/reduce.mjs, which writes each call out as it is folded): no call, step or event is kept: pushView's step
 // carries its events (`step.ev`) and its ledger delta (`step.ld`, replayLedger below), a spawn event its prompt's head (`head`, 60
-// characters, for linking) instead of the tool's input; finish() is not on that path.
-export function createAnalyzer({ keep = true } = {}) {
-  const streams = []
-  let mainStream = null, curSub = null, monitorStream = null, probeStream = null, prevKind = null
-  const auxStreams = new Map()
-  const subByKey = new Map() // one subagent stream per agent the harness names (3.4 agent-id), else per server-held thread
+// characters, for linking) instead of the tool's input, and what its push did to the lane's tool names (`step.undo`); finish() is
+// not on that path. A lane goes back to an earlier state (rewind: what save() gave right after a push, the undo of every push after
+// it): what a fold of the lane's calls up to that push from the start would have left.
+// from (keep: false): what snapshot() gave, through v8.serialize and back (src/view/reduce.mjs REDUCE_V): the fold goes on from it.
+export function createAnalyzer({ keep = true, from = null } = {}) {
+  if (from && keep) throw new Error('only a fold that keeps nothing resumes from a snapshot')
+  const o = from || {}
+  const streams = o.streams || []
+  let mainStream = o.mainStream ?? null, curSub = o.curSub ?? null, monitorStream = o.monitorStream ?? null, probeStream = o.probeStream ?? null, prevKind = o.prevKind ?? null
+  const auxStreams = o.auxStreams || new Map()
+  const subByKey = o.subByKey || new Map() // one subagent stream per agent the harness names (3.4 agent-id), else per server-held thread
+  // (keep: false needs neither across pushes: no step is kept, and the reducer asks laneOf right after pushView)
   const steps = new Map() // the fold's own counter → its step (events and resources name a step by it until finish)
   const laneOfStep = new WeakMap() // step → its stream
   const usageOf = new WeakMap() // step → its call's usage (callFacts)
-  let n = 0, top = null, late = false, byOrder = false
-  const state = new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, ask, tools }
+  let n = o.n ?? 0, top = o.top ?? null, late = o.late ?? false, byOrder = o.byOrder ?? false
+  const state = o.state || new Map() // stream → { resMap, seenMap, prevCount, prevCtx, prevInfo, firstText, ask, tools }
   // a fold that keeps nothing keeps a lane's tool names (tool use id → name) in one table of numbers for all its lanes, keyed by the
-  // lane state's generation and the id (num52: two ids of one number would share a name, odds about n² / 2⁵³), a name as an index
-  let toolT = null, toolGen = 0
-  const toolNames = [], toolIx = new Map()
-  function toolsOf() {
-    if (keep) return new Map()
+  // lane state's generation `g` and the id (num52: two ids of one number would share a name, odds about n² / 2⁵³), a name as an index
+  let toolT = null, toolGen = o.toolGen ?? 0
+  if (o.toolT) { toolT = numTable(); toolT.load(o.toolT) }
+  const toolNames = o.toolNames || [], toolIx = o.toolIx || new Map()
+  const toolsOf = () => (keep ? new Map() : { g: toolGen++ + ':' })
+  const setTool = (t, id, name) => {
+    if (keep) { t.set(id, name); return }
+    let i = toolIx.get(name)
+    if (i === undefined) { i = toolNames.length; toolNames.push(name); toolIx.set(name, i) }
     if (!toolT) toolT = numTable()
-    const g = toolGen++ + ':'
-    return {
-      set(id, name) { let i = toolIx.get(name); if (i === undefined) { i = toolNames.length; toolNames.push(name); toolIx.set(name, i) } toolT.set(num52(g + id), i) },
-      get(id) { const i = toolT.get(num52(g + id)); return i === undefined ? undefined : toolNames[i] },
-    }
+    const key = num52(t.g + id)
+    if (undo) undo.push(key, toolT.get(key))
+    toolT.set(key, i)
   }
+  let undo = null // the tool names the push being folded set: [key, the index it had (undefined: none)], …
+  // an index whose name is none: a tool name a rewind takes back
+  const none = () => { let i = toolIx.get(undefined); if (i === undefined) { i = toolNames.length; toolNames.push(undefined); toolIx.set(undefined, i) } return i }
+  const getTool = (t, id) => { if (keep) return t.get(id); const i = toolT ? toolT.get(num52(t.g + id)) : undefined; return i === undefined ? undefined : toolNames[i] }
   const fresh = () => ({ resMap: new Map(), seenMap: new Map(), prevCount: 0, prevCtx: 0, prevInfo: null, firstText: '', ask: null, tools: toolsOf() })
   function mkStream(kind) {
     const s = { id: 's' + streams.length, kind, calls: [], events: [], n: 0 }
@@ -640,8 +653,9 @@ export function createAnalyzer({ keep = true } = {}) {
     // what the collapsed row shows anyway, and `text_omitted` states in place that the full text lives on this step's blocks (an
     // event is derived from them and owns no byte span of its own, so there is no honest locator to mint here).
     const E = keep ? stream.events : []
-    if (!keep) { Object.defineProperty(step, 'ev', { value: E }); Object.defineProperty(step, 'ld', { value: [] }) }
+    if (!keep) { Object.defineProperty(step, 'ev', { value: E }); Object.defineProperty(step, 'ld', { value: [] }); Object.defineProperty(step, 'undo', { value: (undo = []) }) }
     eventsOf(stream, st, step, view, E)
+    undo = null
     return step
   }
   const shown = (m) => ({ preview: own(m.preview), chars: m.chars, text_omitted: TEXT_OMITTED })
@@ -717,8 +731,8 @@ export function createAnalyzer({ keep = true } = {}) {
       newMsgs = msgs.slice(st.prevCount)
     }
     // tool uses from the messages new to the lane (the rest were new once: a lane's state is O(new), not O(context)), then the reply's
-    for (const m of newMsgs) for (const [id, name] of m.uses) st.tools.set(id, name)
-    for (const c of reply.tools) st.tools.set(c.id, c.name)
+    for (const m of newMsgs) for (const [id, name] of m.uses) setTool(st.tools, id, name)
+    for (const c of reply.tools) setTool(st.tools, c.id, c.name)
     if (step.compaction)
       E.push({ type: 'compaction', step: step.at, streamId: s.id, from: step.evictedFrom, to: step.evictedTo,
         // the event travels to the UI on its own — it MUST carry the inference marker with it,
@@ -741,7 +755,7 @@ export function createAnalyzer({ keep = true } = {}) {
       if (m.role !== 'user') continue
       for (const b of m.blocks) {
         if (b.type !== 'tool_result') continue
-        E.push({ type: 'observation', step: step.at, streamId: s.id, source: st.tools.get(b.tool_use_id) || 'tool', tool_use_id: b.tool_use_id,
+        E.push({ type: 'observation', step: step.at, streamId: s.id, source: getTool(st.tools, b.tool_use_id) || 'tool', tool_use_id: b.tool_use_id,
           ...(b.obs ? shown(b.obs) : { text: undefined }) })
       }
     }
@@ -837,7 +851,22 @@ export function createAnalyzer({ keep = true } = {}) {
   }
   // ask(lane, text): the lane's first prompt, said by the caller that holds the first call's blocks (src/view/blockmeta.mjs firstHuman)
   const ask = (s, text) => { state.get(s).ask = text }
-  return { push, pushView, finish, drop, ask, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()], firstText: (s) => state.get(s).firstText }
+  // snapshot() (keep: false) → the fold's state as plain data, its streams shared by identity (the caller's lanes name them): to be
+  // serialised before the next push
+  const snapshot = () => {
+    if (keep) throw new Error('only a fold that keeps nothing snapshots')
+    return { streams, mainStream, curSub, monitorStream, probeStream, prevKind, auxStreams, subByKey, n, top, late, byOrder, state,
+      toolT: toolT && toolT.dump(), toolGen, toolNames, toolIx }
+  }
+  // save(lane) → the lane's state as a push left it (its first text is set by its first push and stays: a rewind keeps that push);
+  // rewind(lane, saved, undos): back to it, `undos` the steps' `undo` of every push of the lane after it, oldest first
+  const save = (s) => { const st = state.get(s); return { n: s.n, last: s._lastMsg, prevInfo: st.prevInfo, prevCount: st.prevCount, prevCtx: st.prevCtx } }
+  function rewind(s, saved, undos) {
+    for (let u = undos.length - 1; u >= 0; u--) for (let i = undos[u].length - 2; i >= 0; i -= 2) toolT.set(undos[u][i], undos[u][i + 1] ?? none())
+    const { n, last, ...st } = saved
+    s.n = n; s._lastMsg = last; Object.assign(state.get(s), st)
+  }
+  return { push, pushView, finish, drop, ask, snapshot, save, rewind, laneOf: (step) => laneOfStep.get(step), calls: () => [...steps.values()], firstText: (s) => state.get(s).firstText }
 }
 
 /** laneMeta(kind) → {icon, label, note?} of an analyzer lane's kind; eventOnly(kind): no ReAct events, resources or seen paths. */

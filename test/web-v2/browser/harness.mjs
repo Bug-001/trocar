@@ -100,21 +100,31 @@ export async function timed(page, cond, arg, act) {
 /** The board's `session` and `lane` reads answered from desk-world `w` (desk-world.mjs, 3.5 §会话读's reference server) at the mark
  *  w.marks[k], k starting at `from` (default the last). `grow` > 0: a session still being read for the first time (3.5 §归约前沿) — each
  *  `since` read moves k on by `grow` members, and every answer before the last mark carries `pending: {done, total}`.
- *  → { left() }: the members not reached yet. */
-export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0 } = {}) {
+ *  `latency`: every answer waits that many ms first. → { left() }: the members not reached yet. */
+export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0, latency = 0 } = {}) {
   const last = w.marks.length - 1
   let k = Math.min(from, last)
   const json = (route, doc) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(doc) })
   const session = (doc) => (k < last ? { ...doc, pending: { done: k + 1, total: last + 1 } } : doc)
-  await page.route('**/api/session?**', (route) => {
+  const wait = () => new Promise((r) => setTimeout(r, latency))
+  await page.route('**/api/session?**', async (route) => {
+    await wait()
     const q = new URL(route.request().url()).searchParams
-    if (!q.has('since')) return json(route, session(w.full(w.marks[k])))
+    if (!q.has('since')) return json(route, session(w.full(w.marks[k], { before: q.get('before') })))
     k = Math.min(last, k + grow)
     json(route, session(w.since(q.get('since'), w.marks[k])))
   })
-  await page.route('**/api/lane?**', (route) => { const q = new URL(route.request().url()).searchParams; json(route, w.lane(q.get('lane'), { from: q.get('from') ?? undefined, to: q.get('to') ?? undefined, ledger: q.get('ledger') ?? undefined }, w.marks[k])) })
+  await page.route('**/api/lane?**', async (route) => { await wait(); const q = new URL(route.request().url()).searchParams; json(route, w.lane(q.get('lane'), { from: q.get('from') ?? undefined, to: q.get('to') ?? undefined, ledger: q.get('ledger') ?? undefined }, w.marks[k])) })
+  // 3.5 §会话读 `block`: one item per asked ref, its bytes made from the ref (the shape of session-read-contract.json `block_multi`)
+  await page.route('**/api/block?**', async (route) => {
+    await wait()
+    const refs = new URL(route.request().url()).searchParams.getAll('ref')
+    json(route, { schema: 2, command: 'block', ok: true, errors: [], blocks: refs.map((ref) => ({ ref, bytes: blockBytes(ref), encoding: 'utf8', fidelity: 'verbatim', truncated: false })) })
+  })
   return { left: () => last - k }
 }
+/** The bytes serveWorld answers for a `block` ref. */
+export const blockBytes = (ref) => `body of ${ref}`
 
 /** Nearest-rank p50 / p95 of a list of ms. */
 export function stats(samples) {

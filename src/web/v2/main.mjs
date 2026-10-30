@@ -61,13 +61,13 @@ watchHarnessIcons(document.body) // every agent icon box any screen, menu or dra
   link.href = 'data:image/svg+xml,' + encodeURIComponent(new XMLSerializer().serializeToString(svg))
 })()
 
-let cur = null // { screen, inst, ac } — the mounted screen; ac aborts its reads once it is gone (1.2 #22)
+let cur = null // { screen, inst, ac } — the mounted screen (inst null while its mount() runs); ac aborts its reads once it is gone (1.2 #22)
 let shut = false // K-30 latched: no screen mounts again
 let seq = 0 // a screen loads asynchronously; a newer route cancels an older load
 
 function unmountCurrent() {
   if (!cur) return
-  try { cur.inst.unmount() } catch (e) { console.error('unmount failed', e) }
+  try { if (cur.inst) cur.inst.unmount() } catch (e) { console.error('unmount failed', e) }
   cur.ac.abort() // after unmount(): the screen's pollers are stopped, so an aborted answer writes nothing
   cur = null
   setScreenKeys(null)
@@ -85,7 +85,7 @@ async function show(route) {
   // exactly what was on screen; set() is silent when nothing changed
   if (route.screen === 'library') store.set({ libraryHash: router.formatHash(route) })
   if (cur && cur.screen === route.screen) {
-    try { cur.inst.update(route) } catch (e) { console.error('update failed', e) }
+    try { if (cur.inst) cur.inst.update(route) } catch (e) { console.error('update failed', e) } // during mount(): its own URL write, which it already shows
     return
   }
   unmountCurrent()
@@ -98,10 +98,13 @@ async function show(route) {
   }
   if (mine !== seq) return // a newer route took over while this screen was loading
   // a mount() that throws leaves no residue (no key handler, an emptied screen) and the screen says why
-  const ac = new AbortController()
+  // `cur` is set before mount() runs: a URL the screen writes while it mounts (the desk naming the step it shows) reaches update(), never a second mount
+  const ac = new AbortController(), box = { screen: route.screen, inst: null, ac }
+  cur = box
   const inst = safeMount(mod, screenEl, { ...ctx, signal: ac.signal, api: scoped(api, ac.signal) }, { clearKeys: () => setScreenKeys(null) })
-  if (inst) cur = { screen: route.screen, inst, ac }
-  else ac.abort()
+  if (cur !== box) { if (inst) { try { inst.unmount() } catch (e) { console.error('unmount failed', e) } } ac.abort() } // another screen took over while it mounted
+  else if (inst) box.inst = inst
+  else { cur = null; ac.abort() }
 }
 
 // the first route: write the canonical hash quietly (an empty hash becomes #/overview), then mount. An unknown route is handled by show().

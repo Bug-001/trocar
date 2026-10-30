@@ -22,11 +22,17 @@
 //
 // THE WRITER (4.3 §4 写者): this process alone writes the context projections (`writer: true` on every answer's ctx). BACKGROUND
 // WORK (3.5 后台抽取), one scheduler: while no request line is waiting or being answered (the last frame written whole), it runs
-// slices of ≤ SLICE_MS — the members of the session last answered (session / lane) extracted until none is left, then, after
-// IDLE_SLICE_MS with no request, those of the session of the newest index row, then once a projection GC (gcProjections) — yielding
-// with setImmediate between slices, so a request line that arrives is read before the next one. Slices are not requests: the daemon's
-// idle clock never sees them, so it ends this process with work left all the same (the next one goes on from the frontier); its kill
-// may cut a slice, which leaves at most a torn last line that the next open cuts off (4.3 §上下文投影).
+// slices of ≤ SLICE_MS — the members of the session last answered (session / lane) extracted until none is left, then those of the
+// sessions of the model calls the daemon kicked (`{kick: ids}` on IPC: their record ids, just indexed), then, after IDLE_SLICE_MS with no request, those
+// of the session of the newest index row (a request's, never a kick's), then, IDLE_SLICE_MS after the last request or kick, once the
+// sidecars and a projection GC (gcProjections) — yielding
+// with setImmediate between slices, so a request line that arrives is read before the next one. Slices are not requests, but each is
+// reported (`{progress: true}`, throttled like a query's; a target's last slice and the idle save at once): the daemon's idle clock
+// starts again from it, so this process leaves QUERY_IDLE_MS after its last request, kick or slice, never in the middle of a fold
+// (3.5 后台抽取与归约). The work is bounded — each target is dropped at its frontier, the newest session once per request, the
+// sidecars once per idle period — so the slices stop when nothing new comes, and a slice that never ends reports nothing. A kill
+// (a stop, an update, a crash) may cut a slice, which leaves at most a torn last line that the next open cuts off (4.3 §上下文投影),
+// and loses at most the fold since the last checkpoint (session.mjs CHECKPOINT_MS).
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -35,7 +41,7 @@ import { pathToFileURL } from 'node:url'
 import { LOCAL_ENV } from './client.mjs'
 import { answer } from './answers.mjs'
 import { lowerPriority } from '../low-priority.mjs'
-import { extendSession, saveIndexes } from './named/session.mjs'
+import { extendSession, indexed, saveIndexes } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
 import { gcProjections, posCmp } from './projection.mjs'
 
@@ -60,6 +66,8 @@ const progress = () => {
   said = t
   process.send({ progress: true })
 }
+/** The end of a run of background work, said at once: the daemon's idle clock counts from it (3.5 后台抽取与归约). */
+const worked = () => { said = 0; progress() }
 const write = (status, body, enc, cpu, tag) => new Promise((done) => {
   process.stdout.write(`${status} ${body.length} ${enc} ${cpu} ${tag}\n`, () => { if (body.length) process.stdout.write(body, done); else done() })
 })
@@ -103,30 +111,55 @@ async function serve(line) {
 
 const SLICE_MS = 50, IDLE_SLICE_MS = 2000
 const say = (e) => process.stderr.write(`trocar query worker: background work failed: ${(e && e.stack) || e}\n`) // the daemon keeps stderr (D38)
-let busy = 0, lastAt = Date.now(), target = null, newestDone = false, gcDone = false, queued = false, timer = null, once = {}
+// newestDone starts true: only a request opens the newest-session scan, never a kick (a worker forked for a kick has none to follow).
+let busy = 0, lastAt = Date.now(), target = null, newestDone = true, gcDone = false, queued = false, timer = null, once = {}
 const answered = new Set() // the sessions this worker answered: never collected under it
+const follow = new Set() // the sessions the daemon kicked (3.5 §后台抽取与归约): folded in turn from their checkpoints
+const kicked = new Set() // the record ids of the kicked model calls, not yet looked up: their sessions go to `follow`
+/** The sessions of the kicked records, by the one session rule (sessionGroups: a synthesized key too). The kicked calls are the
+ *  newest rows, so each session's members are looked at from its last back to the oldest kicked id only. */
+async function kickedSessions(ctx) {
+  const ids = [...kicked]
+  kicked.clear()
+  let oldest = ids[0]
+  for (const id of ids) if (posCmp(id, oldest) < 0) oldest = id
+  const want = new Set(ids)
+  for (const [sid, ms] of sessionGroups((await indexed(ctx)).rows)) { // the slice below reads the same index (`once`)
+    for (let i = ms.length - 1; i >= 0 && posCmp(String(ms[i].id), oldest) >= 0; i--) if (want.has(String(ms[i].id))) { follow.add(sid); break }
+  }
+}
 const kick = () => { if (!queued && !busy) { queued = true; setImmediate(() => { queued = false; background().catch(say) }) } }
+/** Wait until IDLE_SLICE_MS after the last request or kick: true when the scheduler must come back later (its one timer is armed). */
+const notIdle = () => {
+  const wait = IDLE_SLICE_MS - (Date.now() - lastAt)
+  if (wait <= 0) return false
+  clearTimeout(timer); timer = setTimeout(kick, wait)
+  return true
+}
 async function background() {
   if (busy) return
   const ctx = { home, fs: nodeFs, writer: true, persist, once }
+  if (target == null && !follow.size && kicked.size) await kickedSessions(ctx)
+  if (target == null && follow.size) { const [k] = follow; follow.delete(k); target = k }
   if (target == null && !newestDone) {
-    const wait = IDLE_SLICE_MS - (Date.now() - lastAt)
-    if (wait > 0) { clearTimeout(timer); timer = setTimeout(kick, wait); return }
+    if (notIdle()) return
     newestDone = true
     let best = null
-    for (const [id, ms] of sessionGroups(await indexRows({ home, errors: [] }))) for (const r of ms) if (best == null || posCmp(String(r.id), best[1]) > 0) best = [id, String(r.id)]
+    for (const [id, ms] of sessionGroups((await indexed(ctx)).rows)) for (const r of ms) if (best == null || posCmp(String(r.id), best[1]) > 0) best = [id, String(r.id)]
     target = best && best[0]
   }
   if (target != null) {
     let more = false
     try { more = await extendSession(ctx, target, SLICE_MS) } catch (e) { say(e) }
     if (!more) target = null
+    if (more) progress(); else worked() // a slice done: the daemon's idle clock starts again
     return kick()
   }
-  if (gcDone || busy) return
+  if (gcDone || busy || notIdle()) return // once per idle period, IDLE_SLICE_MS after the last request or kick: not after every burst
   gcDone = true
   saveIndexes() // the sidecars of what this busy period grew, before the GC counts them
   gcProjections({ home, liveKeys: [...sessionGroups(await indexRows({ home, errors: [] })).keys()], keepKeys: answered })
+  worked()
 }
 
 let buf = '', chain = Promise.resolve() // one at a time: a request is answered before the next is read
@@ -140,9 +173,17 @@ process.stdin.on('data', (d) => {
     busy++; once = {}; newestDone = false; gcDone = false; clearTimeout(timer) // a new idle period begins after this one is answered
     chain = chain.then(() => serve(line)).then((asked) => {
       const id = asked && (asked.name === 'session' || asked.name === 'lane') && asked.params && asked.params.id
-      if (id != null && id !== '') { target = String(id); answered.add(String(id)) }
+      if (id != null && id !== '') { if (target != null && target !== String(id)) follow.add(target); target = String(id); answered.add(String(id)) } // a followed session keeps its turn
     }, say).finally(() => { busy--; lastAt = Date.now(); kick() })
   }
+})
+// The daemon's kick (service.mjs kick): the record ids of model calls just indexed. `once` is dropped so the next slice reads the
+// index again and sees the new members and their sessions; the idle period starts again, so the sidecars and the GC wait for the burst to end.
+process.on('message', (m) => {
+  if (!m || !Array.isArray(m.kick)) return
+  for (const id of m.kick) kicked.add(String(id))
+  once = {}; gcDone = false; lastAt = Date.now()
+  kick()
 })
 process.stdin.on('end', () => process.exit(0))
 process.on('disconnect', () => process.exit(0)) // the daemon is gone: so is the reason to be here

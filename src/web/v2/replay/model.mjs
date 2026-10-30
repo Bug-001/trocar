@@ -294,10 +294,11 @@ export const ledgerDone = (desk, key) => !!desk.held.get(key) && desk.held.get(k
 
 /**
  * Read lane `key`'s ledger chain to the end with `read(name, params)` (envelope {ok, data, error}). A failed read stops and
- * leaves its cursor pending. → {ok: true} | {ok: false, error}; null when `stale()` turned true.
+ * leaves its cursor pending. → {ok: true} | {ok: false, error}; null when `stale()` turned true, or `more()` turned false before a read (that cursor stays pending).
  */
-export async function readLedger(desk, key, read, stale = () => false) {
+export async function readLedger(desk, key, read, stale = () => false, more = () => true) {
   for (let q = ledgerAsk(desk, key); q; q = ledgerAsk(desk, key)) {
+    if (!more()) return null // paused (a detached desk): the cursor stays pending for the next chain
     const r = await read('lane', q)
     if (stale()) return null
     if (!r || !r.ok || !r.data) return { ok: false, status: r && r.status, error: (r && r.error) || 'cause not known' }

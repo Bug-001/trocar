@@ -23,11 +23,14 @@ import { bigSession } from './big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { heapFlags, workerEnv } from '../../src/query/warm.mjs'
+import { CACHES, working } from '../../src/query/named/session.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
-const HEAP_MB = 128 // a third of the production worker's: the session below outgrows it several times over
 const MB = 1 << 20
+// A small heap: its budget (two thirds, 3.5 §内存有界) holds the read's fixed reserve (the caches K and the work W) and 5 MiB for the
+// session's spine, about a third of the production worker's; the session below outgrows it several times over
+const HEAP_MB = Math.ceil((1.5 * (CACHES + working([]) + 5 * MB)) / MB)
 
 // a note (`level`) is about the read that made it (3.5 读不全): a cold fold indexed the segment, a warm one did not
 const sansNotes = (d) => { const errors = d.errors.filter((e) => !e.level); return JSON.stringify({ ...d, ok: errors.length === 0, errors }) }

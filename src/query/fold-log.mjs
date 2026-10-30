@@ -19,7 +19,8 @@
 // fails keep them in the off-heap arena at the offsets they will have; `projection-write-failed` once per episode.
 //   Its sidecar (4.3 §4 旁索引, `<hash>.fold.idx`, saveIndex) holds the indexes and frontiers up to the end of a frontier line: an
 // open whose header names the projection loads it when it is of this FOLD_V and its frontier's `pb` ≤ the projection's bytes, and
-// scans only past it.
+// scans only past it. `upTo` (the end of a frontier line): what lies past it is cut as a torn tail is, so a sidecar that covers
+// exactly it stays the log's (session.mjs resumes a reduction whose state that sidecar holds).
 import nodeFs from 'node:fs';
 import { trocarHome } from '../paths.mjs';
 import { lineFile, saveSidecar, loadSidecar } from './line-file.mjs';
@@ -73,7 +74,7 @@ function kindOf(o) {
 /** openFoldLog({home, fs, key, write, projection: {id, bytes}, errors}) → the session's fold log (see the head of this file).
  *  Locations are `[offset, length]` (latest, lane, versionAt) or an offset (frontier, frontierAt); read(off, len?) parses the line
  *  there (shared with the cache: read-only). */
-export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = true, projection, errors = [] } = {}) {
+export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = true, projection, errors = [], upTo = Infinity } = {}) {
   const file = foldLogFile(home, key);
   let sink = errors; // the errors of the request whose append is running
   const lines = lineFile({ fs, file, write, onFail: (e) => sink.push({ where: 'fold-log', code: 'projection-write-failed', level: 'note',
@@ -97,7 +98,7 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
   // the sidecar of this projection, FOLD_V and a frontier the projection still holds, or nothing of it
   function loaded() {
     const sc = loadSidecar({ fs, file }), h = sc && sc.head;
-    if (!h || h.pid !== projection.id || h.fold !== FOLD_V || !(h.pb <= projection.bytes) || !Number.isFinite(h.last)) return false;
+    if (!h || h.pid !== projection.id || h.fold !== FOLD_V || !(h.pb <= projection.bytes) || !(h.bytes <= upTo) || !Number.isFinite(h.last)) return false;
     try {
       const p = sc.parts;
       for (const [n, idx] of OWN) idx.load([p[`${n}.k`], p[`${n}.o`], p[`${n}.l`]]);
@@ -115,6 +116,7 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
   function scan(from) {
     for (const l of linesOf(fs, file, from)) {
       if (bad) { rebuild(bad); return false; } // a bad line that was not the last
+      if (l.off >= upTo) return false;
       const o = parse(l.text);
       if (head) {
         if (!l.nl || !o) { bad = 'The stored fold log has no readable header; it is folded again.'; continue; }

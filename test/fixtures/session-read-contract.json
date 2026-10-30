@@ -76,7 +76,7 @@
     "errors": [],
     "base": null,
     "mark": "20261021T101500Z:13",
-    "pending": {"done": 2, "total": 8},
+    "pending": {"done": 2, "total": 8, "work": 5},
     "truncated": null,
     "more": false,
     "meta": {"session_id": "s1", "harness": "claude-code", "title": "Fix the failing test"},
