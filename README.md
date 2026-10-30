@@ -90,7 +90,7 @@ The same five commands on every OS, in this order: `trocar install` (once) → `
 confirm; until it has run, `trocar on` refuses (`error.code` `cert-not-installed`). `on` starts capture, `status` shows state,
 `off` takes every trace of trocar off your agents' path, and the certificates stay until `trocar uninstall`.
 
-From source: there is no global `trocar` on your PATH, so run it through the repo.
+From source (Node ≥ 22): there is no global `trocar` on your PATH, so run it through the repo.
 
 ```sh
 git clone https://github.com/Bug-001/trocar && cd trocar && npm install
