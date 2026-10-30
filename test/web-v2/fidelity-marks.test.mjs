@@ -32,13 +32,13 @@ const SECS = { tools: { role: 'system', kind: 'tool', tag: 'def' }, system: { ro
 const WHY = 'WHY-q no span to cut'
 let n = 0
 // one request definition as the lane wire sends it (src/query/named/lane.mjs wireDef): with a ref; or ref null, the reason at the
-// top and in ff, and the body inline
+// top and in ff, and the body inline — none for a tool an older capture kept as metadata only (2.3 逐值 metadata: no schema text)
 function def(sec, ff, addressed, o = {}) {
   const k = n++, s = SECS[sec], text = `BODY-${k}-q`
   const d = { bid: `B${k}`, sec, role: s.role, kind: s.kind, head: { role: s.role, tag: s.tag, label: `L${k}` }, preview: text, chars: text.length, bytes: text.length,
     r: { as: 'text' }, ...(sec === 'tools' ? { name: `T${k}` } : null), ...o }
   if (addressed) return { ...d, ref: `S/m.ndjson#R:1::${k}-${k + 9}`, ...(ff ? { ff } : null) }
-  const inline = o.inline ?? (sec === 'tools' ? { desc: text } : sec === 'system' ? { text } : { block: { type: 'text', text } })
+  const inline = o.inline ?? (sec === 'tools' ? (ff && ff.faithfulness === 'metadata' ? {} : { desc: text }) : sec === 'system' ? { text } : { block: { type: 'text', text } })
   return { ...d, ref: null, unaddressable: WHY, ff: { ...ff, unaddressable: WHY }, inline }
 }
 // the proof rule (2.3 §保真标), as the mark the row must carry: proven, a known value, unknown, or no source location
@@ -153,7 +153,8 @@ test('2.3 #2 · 1.4 #4: each ff value with and without a ref, in each section, g
         if (d.ref) assert.ok(r.body.includes(esc(`BYTES of ${d.ref}`)), `${why} row ${r.bi}: the opened body is the bytes`)
         else { // 2.3 §没有 def.ref: the body the definition brings, under the line saying it came inline
           assert.ok(visible(r.body).includes(w(W.INLINE_NOTE)), `${why} row ${r.bi}: the inline note`)
-          assert.ok(r.body.includes(`BODY-${d.bid.slice(1)}-q`), `${why} row ${r.bi}: the inline body`)
+          if (d.sec === 'tools' && want(d) === 'metadata') assert.ok(visible(r.body).includes(w(W.TOOL_METADATA_ONLY)) && r.body.includes(d.name), `${why} row ${r.bi}: the metadata-only body`)
+          else assert.ok(r.body.includes(`BODY-${d.bid.slice(1)}-q`), `${why} row ${r.bi}: the inline body`)
         }
       }
     }
