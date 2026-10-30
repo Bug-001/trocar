@@ -101,6 +101,7 @@ function assertHeaders(h, flat, why, { windowLine = false } = {}) {
     assert.equal(hd.claims, claims, `${why}: ${hd.sec} claims 以下逐字 iff every block is proven`)
     assert.equal(count(visible(hd.html), w(W.SECTION_VERBATIM)), claims ? 1 : 0, `${why}: ${hd.sec} says it once or not at all`)
     if (windowLine) assert.ok(hd.html.includes(W.HALF_MARK), `${why}: ${hd.sec} carries ◐`)
+    if (hd.sec === 'tools') assert.equal(hd.html.includes(w(W.SECTION_SIZE_EST_TIP)), blocks.some((b) => want(b) === 'metadata'), `${why}: an estimated size iff a definition is metadata only`)
   }
   assert.equal(count(visible(h), w(W.SECTION_VERBATIM)), hs.filter((x) => x.claims).length, `${why}: 以下逐字 only on a claiming header`)
 }
@@ -172,6 +173,7 @@ test('2.3 #2 · 1.4 #4: an opened body that comes back unproven marks its row an
       for (const r of rowsOf(h)) assertMark(r, flat[r.bi] === target ? o.code : 'verbatim', `${why} row ${r.bi}`)
       for (const hd of headersOf(h)) assert.equal(hd.claims, hd.sec !== sec || o.code === 'verbatim', `${why}: the ${hd.sec} header`)
       assert.equal(h.includes(w(W.reqEncodingFact('gzip'))), !!o.row, `${why}: the call row says the decoding once, not the block`)
+      assert.ok(!h.includes(w(W.SECTION_SIZE_EST_TIP)), `${why}: an unproven body is no metadata-only size`)
     }
   }
   bodyCache.clear()
@@ -185,7 +187,7 @@ test('2.3 #2: the withdrawal happens on the spot: the row gets its mark, the sec
     const d = def('messages', undefined, true), b = { ...d, text_ref: d.ref }
     const [got] = await loadBodies(blockApi(o.item), [b.ref])
     const hd = { cls: new Set(['cwsecff', 'v']), textContent: W.SECTION_VERBATIM, title: '', classList: { remove(c) { hd.cls.delete(c) } } }
-    const root = { querySelector: (sel) => (sel.startsWith('#sec-messages ') && sel.endsWith('.cwsecff.v') && hd.cls.has('v') ? hd : null) }
+    const root = { querySelector: (sel) => (sel.includes('sec-messages') && sel.includes('cwsecff') && hd.cls.has('v') ? hd : null) }
     const head = { html: `<span class="cbrole">user</span><span class="sr-only">,${W.FF_WORD.verbatim}</span>`,
       insertAdjacentHTML(_, x) { this.html += x },
       querySelector(sel) { return /sr-only/.test(sel) && this.html.includes('sr-only') ? { remove: () => { this.html = this.html.replace(/<span class="sr-only">[^<]*<\/span>/, '') } } : null } }
@@ -229,12 +231,14 @@ test('2.3 #2: an opaque block opens on a placeholder, never on empty text', () =
 })
 
 test('2.3 #9: no block with a ref draws the window line, ◐ on each header, 不能回源 not repeated; one ref draws none', () => {
-  const none = Object.keys(SECS).flatMap((sec) => FFS.map((ff) => def(sec, ff, false)))
+  const WHYS = ['WHY-q one', 'WHY-q two'] // two reasons, each on several blocks
+  const none = Object.keys(SECS).flatMap((sec) => FFS.map((ff) => def(sec, ff, false))).map((d, i) => ({ ...d, unaddressable: WHYS[i % 2], ff: { ...d.ff, unaddressable: WHYS[i % 2] } }))
   const mixed = [def('tools', undefined, true), def('system', undefined, false), def('messages', undefined, false)]
   const desk = deskOfSteps([none, mixed])
   const h = ctxWindowHtml(stateOf(desk, 0))
   assert.ok(h.includes('<div class="cwwin"') && visible(h).includes(w(W.WINDOW_LINE)), 'the window line')
-  assert.ok(h.includes(esc(WHY)), 'the server\'s reason is in its technical details')
+  const line = visible(h.slice(h.indexOf('<div class="cwwin"'), h.indexOf('<div class="cwsec"')))
+  for (const x of WHYS) assert.equal(count(line, esc(x)), 1, `${x}: each reason once in the line's technical details`)
   for (const r of rowsOf(h)) assertMark(r, want(none[r.bi]), `row ${r.bi}`, { windowLine: true })
   assertHeaders(h, none, 'window line', { windowLine: true })
   const m = ctxWindowHtml(stateOf(desk, 1))
@@ -262,7 +266,7 @@ test('2.3 #2 · 2.6 #3: a reply part is proven only on its resp.raw span, else p
   const facts = [{}, { respIncomplete: { truncated: true } }, ...['resp-truncated', 'resp-undecoded'].map((id) => ({ wire: { labels: [{ id, label: 'RESP-LABEL-q' }] } }))]
   const steps = replies.flatMap((parts) => facts.map((row) => ({ parts, row })))
   const desk = deskOfSteps(steps.map(() => [def('system', undefined, true)]), { rows: steps.map((x) => x.row), replies: steps.map((x) => x.parts), details: steps.map(() => ({ norm: { stop_reason: 'end' } })) })
-  const s = stateOf(desk, 0, { curFlat: [], viewPin: null, meta: {} })
+  const s = stateOf(desk)
   steps.forEach(({ parts, row }, p) => {
     s.playhead = p
     const h = ctxWindowHtml(s), rows = rowsOf(h.slice(h.indexOf('<div class="cwreply"')), { reply: true }), why = `reply ${p} ${JSON.stringify(row)}`
@@ -271,30 +275,35 @@ test('2.3 #2 · 2.6 #3: a reply part is proven only on its resp.raw span, else p
       assert.equal(count(r.attrs, 'data-ff="'), 1, `${why} part ${i}: one fidelity value`)
       assertMark(r, expect(parts[i]), `${why} part ${i} ${JSON.stringify(parts[i].ff)} ${parts[i].ref}`)
     })
-    // the raw panel's one mark: none only when every part resolves to its span and the reply was stored whole
-    const panel = serialize(rawPanelUnits(s)), partial = Object.keys(row).length > 0
-    const marked = partial || !parts.every((d) => SPAN.test(d.ref || ''))
-    assert.equal(count(panel, 'class="rpmark"'), marked ? 1 : 0, `${why}: the panel's one mark`)
-    if (marked) assert.ok(visible(panel).includes(w(partial ? W.REPLY_PARTIAL : W.REPLY_PARSED)), `${why}: its word`)
+    // the raw panel's one mark, by the proof rule over the parts: not stored whole → 回复没采全; a part off its span → 解析后的回复
+    // (never 逐字 without the spans); every part proven → none
+    const panel = serialize(rawPanelUnits(s)), marks = count(panel, 'class="rpmark"'), partial = Object.keys(row).length > 0
+    assert.ok(marks <= 1, `${why}: one mark at most`)
+    if (partial) assert.ok(marks === 1 && visible(panel).includes(w(W.REPLY_PARTIAL)), `${why}: reply incomplete`)
+    else if (!parts.every((d) => SPAN.test(d.ref || ''))) assert.ok(marks === 1 && visible(panel).includes(w(W.REPLY_PARSED)), `${why}: parsed`)
+    else if (parts.every((d) => expect(d) === 'verbatim')) assert.equal(marks, 0, `${why}: proven, no mark`)
   })
 })
 
 // ── the call fidelity row (2.3 #8 · 1.4 #9; 必拒隐瞒) ─────────────────────────────────────────────────────────────────────
-const flags = (field, names, table) => names.map((f) => [`${field}.${f}`, { [field]: { [f]: true, text: `TEXT-${f}-q` } }, [table[f]], [`TEXT-${f}-q`]])
-// each fact of 2.3 §调用保真行 → the words the row must say, and the server's own text its technical details hold (the flag sets
-// are 2.3's table)
+const FIELDS = [['reqIncomplete', 'req', ['truncated', 'partial'], W.REQ_FACT], ['wsIncomplete', 'ws', ['partial', 'truncated', 'undecoded', 'nonVerbatim'], W.WS_FACT],
+  ['respIncomplete', 'resp', ['undecoded', 'binary', 'notJson', 'empty', 'unparsed', 'truncated'], W.RESP_FACT]] // 2.3's table
+// each fact of 2.3 §调用保真行 → the words the row says once, the server's own text its technical details hold, words it must not say
 const FACTS = [
-  ['partial + contextMissing', { wire: { contextState: 'partial', contextMissing: 'MISSING-q' } }, [W.CTX_FACT.partial, 'MISSING-q']],
-  ['partial, cause unknown', { wire: { contextState: 'partial' } }, [W.CTX_FACT.partialBare, W.CTX_FACT.unknownWhy]],
-  ['reconstructed', { wire: { contextState: 'reconstructed' } }, [W.CTX_FACT.reconstructed]],
-  ['server_edited', { wire: { contextState: 'server_edited' } }, [W.CTX_FACT.server_edited]],
-  ...flags('reqIncomplete', ['truncated', 'partial'], W.REQ_FACT),
-  ...flags('wsIncomplete', ['partial', 'truncated', 'undecoded', 'nonVerbatim'], W.WS_FACT),
-  ...flags('respIncomplete', ['undecoded', 'binary', 'notJson', 'empty', 'unparsed', 'truncated'], W.RESP_FACT),
-  ['a capture label', { wire: { labels: [{ id: 'label-q', label: 'LABEL-q says so', text: 'LABEL-TEXT-q' }] } }, ['LABEL-q says so'], ['LABEL-TEXT-q']],
-  ['reqEncoding', { wire: { reqEncoding: 'gzip' } }, [W.reqEncodingFact('gzip')]],
+  { why: 'partial + contextMissing', row: { wire: { contextState: 'partial', contextMissing: 'MISSING-q' } }, words: [W.CTX_FACT.partial, 'MISSING-q'] },
+  { why: 'partial, cause unknown', row: { wire: { contextState: 'partial' } }, words: [W.CTX_FACT.partialBare, W.CTX_FACT.unknownWhy] },
+  // a partial context without contextMissing is said by the request's or the messages' fact, not as cause unknown
+  ...[['reqIncomplete', W.REQ_FACT], ['wsIncomplete', W.WS_FACT]].map(([field, table]) => ({ why: `partial, said by ${field}`,
+    row: { wire: { contextState: 'partial' }, [field]: { partial: true } }, words: [table.partial], absent: [W.CTX_FACT.partialBare, W.CTX_FACT.unknownWhy] })),
+  { why: 'reconstructed', row: { wire: { contextState: 'reconstructed' } }, words: [W.CTX_FACT.reconstructed] },
+  { why: 'server_edited', row: { wire: { contextState: 'server_edited' } }, words: [W.CTX_FACT.server_edited] },
+  ...FIELDS.flatMap(([field, , flags, table]) => flags.map((f) => ({ why: `${field}.${f}`, row: { [field]: { [f]: true, text: `TEXT-${f}-q` } }, words: [table[f]], tech: [`TEXT-${f}-q`] }))),
+  // a flag outside the closed set: 「<请求/消息/回复>没采全」, the flag's name in the technical details
+  ...FIELDS.map(([field, word]) => ({ why: `${field} unknown flag`, row: { [field]: { newFlag_q: true, bodyBytes: 7 } }, words: [W.INCOMPLETE_WORD[word], W.INCOMPLETE_UNKNOWN], tech: ['newFlag_q'] })),
+  { why: 'a capture label', row: { wire: { labels: [{ id: 'label-q', label: 'LABEL-q says so' }] } }, words: ['LABEL-q says so'] },
+  { why: 'reqEncoding', row: { wire: { reqEncoding: 'gzip' } }, words: [W.reqEncodingFact('gzip')] },
 ]
-const ROUTING = { id: 'capture-routing', label: 'ROUTE-q', text: 'ROUTE-TEXT-q' }
+const ROUTING = { id: 'capture-routing', label: 'ROUTE-q' }
 const factsOf = (h) => { const m = /<div class="cwfline">[\s\S]*?<span class="cwffacts">([^<]*)<\/span>/.exec(h); return m ? m[1] : null }
 // the row with its technical details: up to the window's first section
 const lineOf = (h) => h.slice(h.indexOf('<div class="cwfline">'), h.indexOf('<div class="cwsec"'))
@@ -302,28 +311,28 @@ const headLit = (s) => stepBarHtml(s).includes('class="sb-fid"')
 
 test('2.3 #8 · 1.4 #9: each call fidelity fact is said once in the row, with the step head\'s ◐; no fact (capture routing included), no row', () => {
   const cases = [...FACTS,
-    ['no fact', {}, null], ['complete', { wire: { contextState: 'complete' } }, null],
+    { why: 'no fact', row: {} }, { why: 'complete', row: { wire: { contextState: 'complete' } } },
     // capture routing is how the call reached trocar, not a fidelity fact (2.3 §调用保真行): never the row, never ◐
-    ['routing only', { wire: { labels: [ROUTING] } }, null],
-    ['routing beside a fact', { wire: { contextState: 'reconstructed', labels: [ROUTING] } }, [W.CTX_FACT.reconstructed]],
+    { why: 'routing only', row: { wire: { labels: [ROUTING] } } },
+    { why: 'routing beside a fact', row: { wire: { contextState: 'reconstructed', labels: [ROUTING] } }, words: [W.CTX_FACT.reconstructed], absent: ['ROUTE-q'] },
     // one thing said once: a partial context naming the missing record swallows the connection's partial messages; a label the
     // reply's or the messages' flag already says is not said again
-    ['partial swallows ws partial', { wire: { contextState: 'partial', contextMissing: 'MISSING-q' }, wsIncomplete: { partial: true } }, [W.CTX_FACT.partial]],
+    { why: 'partial swallows ws partial', row: { wire: { contextState: 'partial', contextMissing: 'MISSING-q' }, wsIncomplete: { partial: true } }, words: [W.CTX_FACT.partial], absent: [W.WS_FACT.partial] },
+    { why: '…and not the others', row: { wire: { contextState: 'partial', contextMissing: 'MISSING-q' }, wsIncomplete: { partial: true, truncated: true } }, words: [W.CTX_FACT.partial, W.WS_FACT.truncated], absent: [W.WS_FACT.partial] },
     ...[['resp-truncated', 'respIncomplete', 'truncated', W.RESP_FACT], ['resp-undecoded', 'respIncomplete', 'undecoded', W.RESP_FACT], ['ws-truncated', 'wsIncomplete', 'truncated', W.WS_FACT]]
-      .map(([id, field, flag, table]) => [`${id} said by the flag`, { [field]: { [flag]: true }, wire: { labels: [{ id, label: 'DUP-q' }] } }, [table[flag]]]),
+      .map(([id, field, flag, table]) => ({ why: `${id} said by the flag`, row: { [field]: { [flag]: true }, wire: { labels: [{ id, label: 'DUP-q' }] } }, words: [table[flag]], absent: ['DUP-q'] })),
   ]
-  const desk = deskOfSteps(cases.map(() => [def('system', undefined, true)]), { rows: cases.map(([, row]) => row) })
+  const desk = deskOfSteps(cases.map(() => [def('system', undefined, true)]), { rows: cases.map((c) => c.row) })
   const s = stateOf(desk)
-  cases.forEach(([why, row, words, tech = []], p) => {
+  cases.forEach(({ why, words, tech = [], absent = [] }, p) => {
     s.playhead = p
     const h = ctxWindowHtml(s), facts = factsOf(h)
-    assert.equal(facts != null, words != null, `${why}: the row exists iff there is a fact`)
-    assert.equal(headLit(s), words != null, `${why}: the step head's ◐ iff the row`)
+    assert.equal(facts != null, !!words, `${why}: the row exists iff there is a fact`)
+    assert.equal(headLit(s), !!words, `${why}: the step head's ◐ iff the row`)
     if (!words) return
     assert.ok(h.indexOf('<div class="cwfline">') < h.indexOf('<div class="cwsec"'), `${why}: at the top of the window`)
     for (const x of words) assert.equal(count(facts, w(x)), 1, `${why}: says ${JSON.stringify(x)} once`)
-    for (const x of ['ROUTE-q', 'DUP-q']) assert.ok(!facts.includes(x), `${why}: not ${x}`)
-    if (why === 'partial swallows ws partial') assert.ok(!facts.includes(w(W.WS_FACT.partial)), why)
+    for (const x of absent) assert.ok(!facts.includes(w(x)), `${why}: not ${JSON.stringify(x)}`)
     for (const t of tech) assert.ok(lineOf(h).includes(t) && !facts.includes(t), `${why}: ${t} in the technical details, not the row's words`)
   })
 })

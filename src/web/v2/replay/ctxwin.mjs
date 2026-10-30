@@ -42,7 +42,7 @@ export function sectionHeaderHtml(sec, blocks, { windowLine = false } = {}) {
   const name = W.SECTION_NAME[sec] || sec // an unknown section's name is data: escaped where it is printed
   const n = (blocks || []).length
   const size = (blocks || []).reduce((a, b) => a + (typeof b.bytes === 'number' ? b.bytes : 0), 0)
-  const est = sec === 'tools' && (blocks || []).some((b) => faithNow(b) !== 'verbatim')
+  const est = sec === 'tools' && (blocks || []).some((b) => faithOf(b) === 'metadata') // the size of a metadata-only definition is an estimate
   const ff = windowLine ? `<span class="cwsecff" title="${esc(W.WINDOW_LINE)}">${W.HALF_MARK}</span>`
     : (blocks || []).length && (blocks || []).every((b) => faithNow(b) === 'verbatim') ? `<span class="cwsecff v">${esc(W.SECTION_VERBATIM)}</span>` : ''
   return `<div class="cwsec" id="sec-${esc(sec)}"><b>${esc(name)}</b><span class="cwsecn">${esc(String(n))} blocks</span>` +

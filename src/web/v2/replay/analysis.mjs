@@ -119,6 +119,14 @@ export function hasChangeLine(call, flat = call && call.flat) {
 
 // the flags of one *Incomplete object → its closed-set words, joined; an unknown flag set falls back to 「<请求/消息/回复>没采全」
 const flagWords = (obj, TABLE) => Object.entries(TABLE).filter(([k]) => obj && obj[k]).map(([, v]) => v).join(' · ')
+// one *Incomplete object as the row says it (2.3 §调用保真行): its closed-set words, else 「<请求/消息/回复>没采全」 with the names
+// of the flags it does not know (a flag is a key set to true) in 技术细节; the server's `text` in 技术细节
+function incompleteFact(add, tech, key, obj, TABLE, word) {
+  const f = flagWords(obj, TABLE)
+  add(`${word}: ${f || W.INCOMPLETE_UNKNOWN}`)
+  if (obj.text) tech.push([key, obj.text])
+  if (!f) tech.push([key, Object.keys(obj).filter((k) => obj[k] === true && !(k in TABLE)).join(', ') || 'no flag set'])
+}
 // ROUTING_LABELS: how the call reached trocar (2.3 §调用保真行): not a fidelity fact — the raw panel's tech details say it (2.6 §A)
 export const ROUTING_LABELS = new Set(['capture-routing'])
 // one call's fidelity facts (2.3 §调用保真行) → {facts: the row's words, tech: [code, text] pairs}; the row and the step head's ◐
@@ -137,26 +145,14 @@ export function callFacts(call) {
   } else if (w.contextState === 'reconstructed') add(W.CTX_FACT.reconstructed)
   else if (w.contextState === 'server_edited') add(W.CTX_FACT.server_edited)
   else if (w.contextState && w.contextState !== 'complete') { add(W.CTX_FACT.fallback); tech.push(['contextState', w.contextState]) }
-  if (call.reqIncomplete) {
-    const f = flagWords(call.reqIncomplete, W.REQ_FACT)
-    add(`${W.INCOMPLETE_WORD.req}: ${f || 'incomplete'}`)
-    if (call.reqIncomplete.text) tech.push(['reqIncomplete', call.reqIncomplete.text])
-    if (!f) tech.push(['reqIncomplete', 'unknown flag'])
-  }
+  if (call.reqIncomplete) incompleteFact(add, tech, 'reqIncomplete', call.reqIncomplete, W.REQ_FACT, W.INCOMPLETE_WORD.req)
   if (call.wsIncomplete) {
-    const skipPartial = w.contextState === 'partial' && w.contextMissing
-    const f = flagWords({ ...call.wsIncomplete, partial: skipPartial ? false : call.wsIncomplete.partial }, W.WS_FACT)
-    if (f) add(`${W.INCOMPLETE_WORD.ws}:${f}`)
-    else if (!skipPartial) add(`${W.INCOMPLETE_WORD.ws}: incomplete`)
-    if (call.wsIncomplete.text) tech.push(['wsIncomplete', call.wsIncomplete.text])
-    if (!f && !skipPartial) tech.push(['wsIncomplete', 'unknown flag'])
+    // a partial context naming the missing record has said the connection's earlier messages are missing
+    const said = w.contextState === 'partial' && w.contextMissing, ws = said ? { ...call.wsIncomplete, partial: false } : call.wsIncomplete
+    if (!said || Object.keys(ws).some((k) => ws[k] === true)) incompleteFact(add, tech, 'wsIncomplete', ws, W.WS_FACT, W.INCOMPLETE_WORD.ws)
+    else if (ws.text) tech.push(['wsIncomplete', ws.text])
   }
-  if (call.respIncomplete) {
-    const f = flagWords(call.respIncomplete, W.RESP_FACT)
-    add(`${W.INCOMPLETE_WORD.resp}: ${f || 'incomplete'}`)
-    if (call.respIncomplete.text) tech.push(['respIncomplete', call.respIncomplete.text])
-    if (!f) tech.push(['respIncomplete', 'unknown flag'])
-  }
+  if (call.respIncomplete) incompleteFact(add, tech, 'respIncomplete', call.respIncomplete, W.RESP_FACT, W.INCOMPLETE_WORD.resp)
   // wire.labels: the server's own words, said unless the exact flag above already said the same thing
   const said = new Set([call.respIncomplete && call.respIncomplete.truncated && 'resp-truncated', call.respIncomplete && call.respIncomplete.undecoded && 'resp-undecoded', call.wsIncomplete && call.wsIncomplete.truncated && 'ws-truncated'].filter(Boolean))
   for (const l of (w.labels || [])) { if (!said.has(l.id) && !ROUTING_LABELS.has(l.id)) { add(String(l.label || l.id)); if (l.text) tech.push([l.id, l.text]) } }

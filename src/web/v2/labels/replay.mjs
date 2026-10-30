@@ -166,6 +166,7 @@ export const REQ_FACT = Object.freeze({ truncated: 'truncated at the capture lim
 export const WS_FACT = Object.freeze({ partial: 'earlier messages on this connection are missing', truncated: 'some messages were over the limit; length only', undecoded: 'some messages were not decompressed', nonVerbatim: 'some messages are length only' })
 export const RESP_FACT = Object.freeze({ undecoded: 'not decompressed', binary: 'not text', notJson: 'not JSON', empty: 'no response body', unparsed: 'some events could not be parsed; the reply may be incomplete', truncated: 'truncated at the capture limit' })
 export const INCOMPLETE_WORD = Object.freeze({ req: 'request', ws: 'messages', resp: 'reply' })
+export const INCOMPLETE_UNKNOWN = 'incomplete' // a flag set outside the closed set: 「<请求/消息/回复>没采全」
 export const reqEncodingFact = (enc) => `The request body was compressed on the wire (${enc}); this is the exact decompressed text`
 
 // block-level marks (2.3 §保真标): one visible word per unproven block; the codes are the 3.2 closed set plus
@@ -190,6 +191,7 @@ export const FF_TIP = Object.freeze({
 export const INLINE_NOTE = 'This text came inline with the block; it is not cut verbatim from the raw capture'
 // the body of a tool definition an older capture kept as metadata only (2.3 逐值 metadata)
 export const SCHEMA_NOT_KEPT = 'schema text not retained (length only)'
+export const METADATA_BODY = 'Metadata only: the full JSON schema (parameter types / required / enums / nesting) and the description text were not captured. The model received the full schema; this is a capture boundary, not a display clip.'
 export const NO_BODY = 'This block has no body and no source location'
 export const clipNote = (n) => `…(${n} characters in total; only the first 20000 are shown)`
 // the raw panel's reply / the drawer's reply: the display clip said once, in 2.6 §A's own words (the context window's
