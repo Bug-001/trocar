@@ -8,7 +8,7 @@ import nodeOs from 'node:os'
 import { runOff } from './orchestrate.mjs'
 import { formatOffReceipt } from './receipt.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
-import { isInteractive, makeIo } from './io.mjs'
+import { isInteractive, makeIo, hidingIo } from './io.mjs'
 import { readManifest } from './manifest.mjs'
 import { collectorDir } from './paths.mjs'
 import { NAME_ALIASES, resolveHarnesses } from './harness-names.mjs'
@@ -28,6 +28,7 @@ function installedIds(home) {
  *  standalone `trocar-off` calls it). `standalone`: this is the single-file copy (src/off/standalone.mjs ends in a call with it): the only difference is the words of what it
  *  cannot undo — a manifest or an item of a kind it does not know is left alone and the person is sent to `trocar off` (R3, V35); the receipt is otherwise the same one. */
 export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }), env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {}, standalone = false } = {}) {
+  if (standalone) io = hidingIo(io) // the copy is not run through runCli, which does this for every command that changes state (1.6 §1.2)
   const flags = new Set(), names = []
   for (const a of argv) {
     if (a.startsWith('-')) {

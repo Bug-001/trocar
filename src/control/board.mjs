@@ -4,6 +4,7 @@
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import { hideUserinfoIn as hidden } from '../off/io.mjs'
 
 // `on` starts the daemon (its autostart unit, D61's direct start) with the CLI's own script; in this worker process.argv[1] is the worker
 const SCRIPT = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
@@ -12,14 +13,15 @@ const SCRIPT = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
  * planThenConfirm({ dryRun, run, confirm }) → {status, doc} — 4.4 「先计划后确认」, shared by every verb that changes something. `dryRun()` is the
  * command's own dry-run receipt; its `planned` bytes ARE the plan, and `plan_id` is their sha256. No `confirm`, or one that is not the plan of now
  * (the machine changed between the two requests) → 409 with the plan of now and nothing written; the same → `run()`'s receipt. A dry run that
- * already failed (ok:false) is the answer: there is nothing to confirm.
+ * already failed (ok:false) is the answer: there is nothing to confirm. Both answers are what the command prints with --json, so a URL's password
+ * is `***@` in them (1.6 §1.2「不印凭据」); the plan_id is over the plan as shown.
  */
 export async function planThenConfirm({ dryRun, run, confirm }) {
-  const receipt = await dryRun()
+  const receipt = hidden(await dryRun())
   if (receipt.ok === false) return { status: 200, doc: receipt }
   const plan_id = crypto.createHash('sha256').update(JSON.stringify(receipt.planned)).digest('hex')
   if (confirm !== plan_id) return { status: 409, doc: { need: 'confirm', plan: receipt.planned, receipt, plan_id } }
-  return { status: 200, doc: await run() }
+  return { status: 200, doc: hidden(await run()) }
 }
 
 // Every verb runs with the daemon's environment (deps.env || process.env): the login job's, not a shell's. A variable exported only in some shell
