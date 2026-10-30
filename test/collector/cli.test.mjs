@@ -250,17 +250,43 @@ test('cli: install / on go to the one `trocar on` (src/cli/on.mjs) with the desc
 test('cli: setup-helper installs or removes through arch; a failure is exit 1', async () => {
   const done = []
   const arch = { install: { DEFAULTS: { helperBin: '/usr/local/libexec/trocar/trocar-redirector' }, setupHelper: (o) => { done.push(o.binarySrc); return { bin: '/b', getcap: 'caps' } }, uninstallHelper: () => ({ warnings: [] }) } }
-  let t = io(); assert.equal(await runSetupHelper(['--binary', '/tmp/h'], { arch, ...t }), 0)
+  const root = tmpDir('trocar-cli-built-'), dir = path.join(root, 'src', 'collector', 'arch', 'linux'), built = path.join(dir, 'trocar-redirector')
+  fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(built, '')
+  let t = io(); assert.equal(await runSetupHelper(['--binary', built], { arch, ...t }), 0)
   t = io(); assert.equal(await runSetupHelper(['--remove'], { arch, ...t }), 0)
-  assert.deepEqual(done, ['/tmp/h'])
-  t = io(); assert.equal(await runSetupHelper([], { arch: { install: { setupHelper: () => { throw new Error('must run as root') } } }, ...t }), 1)
+  assert.deepEqual(done, [built])
+  t = io(); assert.equal(await runSetupHelper([], { arch: { install: { setupHelper: () => { throw new Error('must run as root') } } }, packageRoot: root, ...t }), 1)
   assert.deepEqual(t.e, ['trocar setup-helper: must run as root'], 'the failure is said once, named by the command')
   // a staged copy an interrupted setup-helper left is removed and said, by both directions (D38)
   const swept = { install: { DEFAULTS: arch.install.DEFAULTS, setupHelper: () => ({ bin: '/b', getcap: 'caps', swept: ['.trocar-redirector.new.67915'] }), uninstallHelper: () => ({ warnings: ['removed 1 copy(ies) an interrupted setup-helper had staged: .trocar-redirector.new.67915'] }) } }
-  t = io(); await runSetupHelper([], { arch: swept, ...t })
+  t = io(); await runSetupHelper([], { arch: swept, packageRoot: root, ...t })
   assert.match(t.o.join('\n'), /removed 1 copy\(ies\) an interrupted setup-helper had staged: \.trocar-redirector\.new\.67915/)
   t = io(); await runSetupHelper(['--remove'], { arch: swept, ...t })
   assert.match(t.o.join('\n'), /Warning: removed 1 copy\(ies\)/)
+})
+
+test('cli: setup-helper on a checkout whose helper is not built says how to build it, once, and installs nothing (exit 1)', async () => {
+  const root = tmpDir('trocar-cli-unbuilt-'), called = []
+  const arch = { install: { DEFAULTS: { helperBin: '/usr/local/libexec/trocar/trocar-redirector' }, setupHelper: (o) => { called.push(o); return { bin: '/b', getcap: 'caps' } } } }
+  let t = io()
+  assert.equal(await runSetupHelper([], { arch, packageRoot: root, ...t }), 1)
+  const said = t.e.join('\n')
+  assert.equal(said.match(/trocar setup-helper:/g).length, 1, 'named by the command once')
+  assert.ok(said.includes(`make -C ${path.join(root, 'src', 'collector', 'arch', 'linux')}`), 'the build command for this checkout')
+  assert.match(said, /--binary/)
+  assertEnglish(said, 'the output', { width: false }) // the make line carries this checkout's path, however long (1.6 §1.1)
+  t = io()
+  assert.equal(await runSetupHelper(['--binary', path.join(root, 'nope')], { arch, packageRoot: root, ...t }), 1)
+  assert.ok(t.e.join('\n').includes(path.join(root, 'nope')), 'a --binary that is not there is named')
+  assert.deepEqual(called, [], 'nothing was handed to the installer')
+})
+
+test('cli: the Linux installer\'s own refusals leave the command name to the command (said once)', async () => {
+  const { setupHelper } = await import('../../src/collector/arch/linux/install.mjs')
+  let message = null
+  try { setupHelper({ binarySrc: path.join(tmpDir('trocar-cli-unbuilt-'), 'nope') }) } catch (e) { message = e.message }
+  assert.ok(message, 'refused (not root, or not Linux, or no binary)')
+  assert.doesNotMatch(message, /^trocar setup-helper:/)
 })
 
 test('cli: the real bin runs `status` without a runtime dir on a HOME with nothing installed (→ 0: nothing is wrong, and nothing was written)', () => {

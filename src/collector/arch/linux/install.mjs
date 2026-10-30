@@ -37,8 +37,8 @@ function exists(p) { try { fs.statSync(p); return true } catch { return false } 
 function sha(p) { try { return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex') } catch { return null } }
 function uid() { return typeof process.getuid === 'function' ? process.getuid() : -1 }
 function requireRoot() {
-  if (process.platform !== 'linux') throw new Error('trocar setup-helper: Linux only')
-  if (uid() !== 0) throw new Error('trocar setup-helper: must run as root (sudo)')
+  if (process.platform !== 'linux') throw new Error('Linux only')
+  if (uid() !== 0) throw new Error('must run as root (sudo)')
 }
 
 // Mount options for the filesystem that contains `p`, from /proc/self/mountinfo (longest match).
@@ -88,12 +88,12 @@ export function setupHelper(opts = {}) {
   requireRoot()
   const cfg = { ...DEFAULTS, ...opts }
   const src = opts.binarySrc
-  if (!src || !exists(src)) throw new Error('trocar setup-helper: built binarySrc not found: ' + src)
+  if (!src || !exists(src)) throw new Error(`no helper at ${src}`)
 
   // Refuse a nosuid/noexec mount: file caps are ineffective there (and exec may be blocked).
   const mopts = mountOptions(cfg.helperDir) || mountOptions(path.dirname(cfg.helperDir))
   if (mopts && /(^|,)(nosuid|noexec)(,|$)/.test(mopts)) {
-    throw new Error(`trocar setup-helper: ${cfg.helperDir} is on a ${mopts.includes('noexec') ? 'noexec' : 'nosuid'} mount`)
+    throw new Error(`${cfg.helperDir} is on a ${mopts.includes('noexec') ? 'noexec' : 'nosuid'} mount`)
   }
 
   fs.mkdirSync(cfg.helperDir, { recursive: true, mode: 0o755 })
@@ -111,9 +111,9 @@ export function setupHelper(opts = {}) {
     fs.chmodSync(tmp, 0o755)
     try { fs.chownSync(tmp, 0, 0) } catch {}
     // Copy-integrity check: the installed bytes equal the source bytes (NOT a build-provenance check).
-    if (sha(tmp) !== srcSha) throw new Error('trocar setup-helper: copy integrity check failed (installed bytes != source)')
+    if (sha(tmp) !== srcSha) throw new Error('copy integrity check failed (installed bytes != source)')
     const setcap = run('setcap', [cfg.caps, tmp])
-    if (setcap.code !== 0) throw new Error('trocar setup-helper: setcap failed: ' + (setcap.err || setcap.out))
+    if (setcap.code !== 0) throw new Error('setcap failed: ' + (setcap.err || setcap.out))
     // getcap prints the path then the caps in capability-NUMBER order (cap_net_admin=12,
     // cap_perfmon=38, cap_bpf=39) at a flag suffix. Require EXACTLY these three caps at =ep
     // (effective+permitted) and nothing else — no extra cap, and no inheritable ('i') bit.
@@ -123,7 +123,7 @@ export function setupHelper(opts = {}) {
     const gotFlags = m ? m[2].split('').sort().join('') : ''
     const wantCaps = ['cap_bpf', 'cap_net_admin', 'cap_perfmon'].sort()
     if (JSON.stringify(gotCaps) !== JSON.stringify(wantCaps) || gotFlags !== 'ep') {
-      throw new Error(`trocar setup-helper: unexpected caps ${JSON.stringify(capPart)} (want exactly cap_bpf,cap_net_admin,cap_perfmon=ep)`)
+      throw new Error(`unexpected caps ${JSON.stringify(capPart)} (want exactly cap_bpf,cap_net_admin,cap_perfmon=ep)`)
     }
     fs.renameSync(tmp, cfg.helperBin) // atomic swap over any running loader
   } catch (e) {
