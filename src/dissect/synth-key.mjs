@@ -37,8 +37,8 @@ const FACTS = new WeakMap();
 // ── kinship (3.4 合成键 · 按内容认亲) ─────────────────────────────────────────────────────────────────────────────────────
 // A keyless call carrying its harness's compaction hint is looked for in the open sessions of that harness first, by the
 // user text both carry. Fingerprints: every WIN-character window of the whitespace-collapsed text, hashed, kept when the hash
-// falls on the sample (h % SAMPLE === 0) — the same rule on both sides, so a long enough shared fragment always yields shared
-// fingerprints. Character windows, not words: CJK has no spaces. A fingerprint is stored as h / SAMPLE (a small integer).
+// falls on the sample (h % SAMPLE === 0) — the same rule on both sides, so a long enough shared fragment yields shared fingerprints
+// when it falls within what both sides keep (the caps below; else the call falls back to its synthesized key). Character windows, not words: CJK has no spaces. A fingerprint is stored as h / SAMPLE (a small integer).
 const WIN = 32, SAMPLE = 8, FP_CAP = 64, PROBE_CAP = 1024, STATE_CAP = 4096, MIN_SHARED = 2;
 const userTextsOf = (body) => {
   const b = body || {};
