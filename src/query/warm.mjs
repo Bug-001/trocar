@@ -59,7 +59,7 @@ export function workerEnv(env = process.env) {
   return { ...Object.fromEntries(Object.entries(env).filter(([k]) => k.toUpperCase() !== 'NODE_OPTIONS')), MallocLargeCache: '0' }
 }
 /** What one stored byte of a record costs in the heap once read back and parsed (measured: 0.97x on generated Claude Code
- *  sessions, 1.62-1.69x on the user's real one, 2026-10-21). */
+ *  sessions, 1.62-1.69x on a real captured Claude Code session, 2026-10-21). */
 export const HEAP_PER_STORED = 2
 
 // ONE ledger for every cache of this process (3.5 §内存有界): the heap is shared, so is the budget. `lru` holds every kept entry in

@@ -178,7 +178,7 @@ function put(list, cmp, was, fact) {
   if (was) list.splice(at(was), 1);
   list.splice(at(fact), 0, fact);
 }
-// the records no dissector read as a call (3.5 §会话读 `unknown`, C1): with rows, the LLM ones; with none, those or else all
+// the records no dissector read as a call (3.5 §会话读 `unknown`): with rows, the LLM ones; with none, those or else all
 function unknownOf(lines, hasRows) {
   const llm = (o) => !!(o.it && o.it.is_llm_call);
   const a = lines.filter((o) => o.u && llm(o)).map((o) => o.u), b = lines.filter((o) => o.u && !llm(o)).map((o) => o.u);

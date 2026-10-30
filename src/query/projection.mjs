@@ -40,7 +40,7 @@ const SHARE_DEPTH = 3, SHARE_MIN = 48;
 const ROW_HEAP = 2 << 20, SHARED_HEAP = 2 << 20, SEEN = 1 << 14;
 // what a row or shared value read back costs in the heap per byte of its line: 2.6 measured (after a forced GC) on rows read back
 // with their shared values put back unshared, from test/query/big-session.mjs live(0.08) and live(0.2) (a row parsed alone 1.9, a
-// shared value 1.95), 3.5-7 on the user's live session (a heap diagnosis); 2026-10-22
+// shared value 1.95), 3.5-7 on a long real captured session; 2026-10-22
 export const HEAP_PER_LINE_BYTE = 4;
 // the share keys of the values last written at each slot path (encode): at most MEMO_SLOTS paths and MEMO_CHARS characters of their
 // JSON text, the least recently used dropped first; a text costs at most 2 bytes a character in the heap
