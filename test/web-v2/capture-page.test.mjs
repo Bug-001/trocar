@@ -148,7 +148,7 @@ test('#9 / R14: the removal sentence is said once in an agent row\'s expansion a
   assert.equal(block.includes(CHANGE_REMOVAL), false)
 })
 
-test('P1 / 1.9 采集服务行: the service row links to the log once — the failing sentence itself when it carries the group count, else one link without a number', () => {
+test('1.9 采集服务行: the service row links to the log once — the failing sentence itself when it carries the group count, else one link without a number', () => {
   const grp = (level, i) => ({ level, where: 'engine', code: `c${i}`, count: 1, first_ts: T, last_ts: T, reason: 'r' })
   for (const n of [0, 1, 3]) {
     const d = doc({ state: 'failing' })
@@ -212,7 +212,7 @@ test('1.5: the why section says each sentence once, though the reason also comes
 })
 
 // 1.9 期望态: the desired state is text only where the row draws no control; a switch already says it
-test('P2 / 1.9 期望态: the desired-state text is drawn only on a row without a control', () => {
+test('1.9 期望态: the desired-state text is drawn only on a row without a control', () => {
   for (const desired of ['on', 'off']) {
     const d = doc({ hs: { codex: { desired } } })
     const des = (control) => /<span class="des">(.*?)<\/span>/.exec(rowsOf(page(d, control)).get(harnessKey('codex')))[1]
@@ -223,7 +223,7 @@ test('P2 / 1.9 期望态: the desired-state text is drawn only on a row without 
 
 // 1.9 Edge cases 表空: the empty-table line (drawn for a document naming no agent — wires-capture.test.mjs (6)) is not drawn when the
 // install record cannot be read: the changes block already says so
-test('P3 / 1.9 表空: no empty-table line while the install manifest cannot be read', () => {
+test('1.9 表空: no empty-table line while the install manifest cannot be read', () => {
   const d = doc({ hs: {} })
   d.errors = [{ where: ERR_WHERE.manifest, reason: 'x' }]
   assert.equal(/class="capfoot"/.test(page(d, CONTROL)), false)

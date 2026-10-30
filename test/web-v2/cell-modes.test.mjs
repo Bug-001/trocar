@@ -9,7 +9,7 @@ import { cellKey, keyAction } from '../../src/web/v2/replay/keymap.mjs'
 const CELL = new URL('../../src/web/v2/replay/cell.mjs', import.meta.url).href
 const memStorage = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)) } }
 
-test('C6a: an override follows the block across steps that re-send it, whatever its byte locator', () => {
+test('an override follows the block across steps that re-send it, whatever its byte locator', () => {
   // one block re-sent at two steps: the same content key, two records
   const def1 = { sec: 'messages', role: 'user', kind: 'text', key: 'K:1', text_ref: 's/main#r1::10-20', chars: 6, preview: 'abc' }
   const def2 = { ...def1, text_ref: 's/main#r9::10-20' }
@@ -35,7 +35,7 @@ test('2.3 §逐格覆盖 · D71③: an override belongs to the session desk it w
   overrideScope('')
 })
 
-test('C6b: the desk default survives a reload through storage', async () => {
+test('the desk default survives a reload through storage', async () => {
   const storage = memStorage()
   const a = await import(CELL + '?fresh=b1')
   a.setDeskMode('read', { storage })
@@ -43,14 +43,14 @@ test('C6b: the desk default survives a reload through storage', async () => {
   assert.equal(b.deskMode({ storage }), 'read')
 })
 
-test('C6c: a storage that throws leaves the desk default at Raw and never throws', async () => {
+test('a storage that throws leaves the desk default at Raw and never throws', async () => {
   const bad = { getItem() { throw new Error('denied') }, setItem() { throw new Error('denied') } }
   const m = await import(CELL + '?fresh=c1')
   assert.equal(m.deskMode({ storage: bad }), 'raw')
   assert.doesNotThrow(() => m.setDeskMode('read', { storage: bad }))
 })
 
-test('C7: the cell keys are a pure function of the key event, and the desk keys ignore them', () => {
+test('the cell keys are a pure function of the key event, and the desk keys ignore them', () => {
   const cases = [
     [{ key: 'v' }, { flip: true }], [{ key: 'V', shiftKey: true }, { flipDesk: true }], [{ key: 'v', shiftKey: true }, { flipDesk: true }],
     [{ key: 'V' }, { flipDesk: true }], [{ key: 'c' }, { copy: true }], [{ key: 'x' }, null],

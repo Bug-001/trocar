@@ -1,4 +1,4 @@
-// test/web-v2/browser/chapter-jump.test.mjs — 1.3 §章 (D71④), acceptance 18 · lane A3 on the real face: a generated session with
+// test/web-v2/browser/chapter-jump.test.mjs — 1.3 §章 (D71④), acceptance 18, on the real face: a generated session with
 // ≥ 4 compactions folded by the face's own worker, opened in a new browser context; ‹ / › clicked and [ / ] pressed, each timed from
 // the input event to the moment the new chapter's label and bars are in the page — p95 ≤ BOARD_LINES.chapterJump. Once more with
 // every pack outside the last chapter held back by a route: the bars and the label still come within the line (from the head's
@@ -90,7 +90,7 @@ async function jump(c, chs, g, dir, act) {
   return { ms, to }
 }
 
-test('1.3 §章 · 18 · A3: ‹ › clicked and [ ] pressed paint the next / previous chapter within BOARD_LINES.chapterJump (p95)', { skip, timeout: 600_000 }, async () => {
+test('1.3 §章 · 18: ‹ › clicked and [ ] pressed paint the next / previous chapter within BOARD_LINES.chapterJump (p95)', { skip, timeout: 600_000 }, async () => {
   const w = await folded(), chs = w.head.chapters, last = chs.length - 1
   const c = await fresh(w)
   try {
@@ -119,7 +119,7 @@ test('1.3 §章 · 18 · A3: ‹ › clicked and [ ] pressed paint the next / pr
   } finally { await c.context.close() }
 })
 
-test('1.3 §章 · 18 · A3: a jump into a chapter whose packs are not here paints from the head within the line; its rows fill, bar for bar, when they land', { skip, timeout: 300_000 }, async () => {
+test('1.3 §章 · 18: a jump into a chapter whose packs are not here paints from the head within the line; its rows fill, bar for bar, when they land', { skip, timeout: 300_000 }, async () => {
   const w = await folded(), chs = w.head.chapters, [p0, p1] = w.head.packs
   // chapter A ends past the first pack, its next chapter B starts inside the second: open on A's first step with only the first pack
   // let through, then › to B, whose rows are held back

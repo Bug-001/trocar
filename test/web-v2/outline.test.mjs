@@ -184,7 +184,7 @@ test('jump-source identity: every data-jumpfi names a block the window actually 
 })
 
 
-// A4 (1.5 motion): a jump scrolls instantly under prefers-reduced-motion, smoothly otherwise
+// 1.5 motion: a jump scrolls instantly under prefers-reduced-motion, smoothly otherwise
 test('an outline jump honours prefers-reduced-motion', () => {
   const had = Object.prototype.hasOwnProperty.call(globalThis, 'matchMedia'), prev = globalThis.matchMedia
   try {
@@ -200,7 +200,7 @@ test('an outline jump honours prefers-reduced-motion', () => {
 })
 
 // ── 2.5 #2 (lane-wait half): a jump to a step whose lane is not held waits for the lane, runs once, and a reader move drops it
-test('A25 jump waits for the target lane: not held → wait; held → run once; a reader move in between → dropped', async () => {
+test('jump waits for the target lane: not held → wait; held → run once; a reader move in between → dropped', async () => {
   for (const seed of [3, 11, 29]) {
     const w = world(seed), get = w.get(), desk = createDesk()
     applySession(desk, await get('session', { id: 'S' })) // the skeleton only: no lane held
@@ -228,7 +228,7 @@ test('A25 jump waits for the target lane: not held → wait; held → run once; 
 })
 
 // ── 2.5 #9: the outline on a step whose lane is not held, and the same step once held ──────────────────────────────────
-test('A26 an unheld step: the tool count is the row\'s, the other groups are busy rows (no words, no 0, no control); held → its blocks', () => {
+test('an unheld step: the tool count is the row\'s, the other groups are busy rows (no words, no 0, no control); held → its blocks', () => {
   const ALL = new Set(['tools', 'sys', 'msg'])
   for (let tools = 1; tools <= 4; tools++) {
     const flat = [...Array.from({ length: tools }, (_, i) => tool({ name: `t${i}` })), sys(), blk({ query: 'q' + tools })]

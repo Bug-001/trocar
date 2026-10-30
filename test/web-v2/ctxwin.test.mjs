@@ -135,7 +135,7 @@ test('2.3 #6: 「新」 = fh not in the reference list; the removed list = the r
   assert.deepEqual(newKeys(u), []); assert.equal(removedN(u), 0)
 })
 
-test('A13 (2.3 #6): two steps differing only in where cache_control sits (bid differs, fh equal): no 「新」, no removed list', () => {
+test('2.3 #6: two steps differing only in where cache_control sits (bid differs, fh equal): no 「新」, no removed list', () => {
   const a = [sys({ key: 's' }), blk({ key: 'm', cc: { type: 'ephemeral' } }), blk({ key: 'n' })]
   const b = [sys({ key: 's' }), blk({ key: 'm' }), blk({ key: 'n', cc: { type: 'ephemeral' } })]
   const desk = pair(a, b, 'content-changed', 1)
@@ -169,13 +169,13 @@ test('1.4 #10: landing — follow → ⑨; a reader\'s step → the change line,
   assert.ok(!/class="cwturn collapsed"[^>]*data-anchor/.test(el.innerHTML.split('id="cachebrk"')[0].slice(-400)), 'the turn holding the line is open')
 })
 
-// ── ⑨ the reply (2.3 #13 · A14) ───────────────────────────────────────────────────────────────────────────────────────
+// ── ⑨ the reply (2.3 #13) ───────────────────────────────────────────────────────────────────────────────────────
 const replyDesk = (replies, rows) => desk1(replies.map(() => [sys({ key: 's' }), blk({ key: 'q', query: true })]), rows || replies.map(() => ({})),
   { replies, details: replies.map(() => ({ norm: { stop_reason: 'tool_use' } })) })
 const seg = (h) => h.slice(h.lastIndexOf('<div class="cwreply">'))
 const rows = (h) => [...seg(h).matchAll(/<div class="cblk([^"]*)"([^>]*)>/g)].map((m) => ({ cls: m[1], attrs: m[2] }))
 
-test('A14 (2.3 #13): one row per reply def through the row component, no request attributes; data-bi only on request rows; one mark at most', () => {
+test('2.3 #13: one row per reply def through the row component, no request attributes; data-bi only on request rows; one mark at most', () => {
   const desk = replyDesk([[rp('thinking'), rp('text'), rp('tool_use'), rp('tool_use', { name: 'Read' })]])
   const h = ctxWindowHtml(stateOf(desk)), rs = rows(h)
   assert.equal(rs.length, 4)
@@ -191,7 +191,7 @@ test('A14 (2.3 #13): one row per reply def through the row component, no request
   assert.equal((seg(part).match(/class="rpmark"/g) || []).length, 1)
 })
 
-test('A14 (2.3:195): default open text → tool call → thinking; a flip stays across re-renders of the step, not across a step change', () => {
+test('2.3:195: default open text → tool call → thinking; a flip stays across re-renders of the step, not across a step change', () => {
   for (const [parts, open] of [[['thinking', 'text', 'tool_use'], 'k-text'], [['thinking', 'tool_use'], 'k-tool_use'], [['thinking'], 'k-thinking']]) {
     for (const r of rows(ctxWindowHtml(stateOf(replyDesk([parts.map((k) => rp(k))]))))) assert.equal(r.cls.includes('collapsed'), !r.cls.includes(open), `${parts}: ${r.cls}`)
   }

@@ -1,7 +1,7 @@
 // invariants.test.mjs — every invariant of the sequence harness can go red on the real board: one board on makeWorld() with the probe
 // installed and the Claude Code session open; V0 a settled, followed, grown desk breaks none; each V-<id> plants exactly that fault
-// (through page.evaluate, a route, an unrecorded keydown, or growth with the session reads aborted) and check() names it; A17 a tiny
-// static page the harness serves (not the board) proves the probe sees a long task; A18 / A19 static pages break I-chapter and I-pack.
+// (through page.evaluate, a route, an unrecorded keydown, or growth with the session reads aborted) and check() names it; a tiny
+// static page the harness serves (not the board) proves the probe sees a long task; two more static pages break I-chapter and I-pack.
 // Runs only under `npm run test:browser`.
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
@@ -124,7 +124,7 @@ test('V-rate ten timer-less reads of status in a row', { skip }, async () => {
   assert.ok(ids(await check(ctx())).includes('I-rate'))
 })
 
-// A33 · E7: a lane's ledger chain (`ledger=`) is one read after another by design (3.5 §手里车道的页), not paced; the same chain
+// a lane's ledger chain (`ledger=`) is one read after another by design (3.5 §手里车道的页), not paced; the same chain
 // as `from=` reads with no session delta between them is
 test('V-rate a ledger chain is not paced; the same chain of from= reads is', { skip }, async () => {
   const chain = (param) => b.page.evaluate(async ([sid, p]) => {
@@ -228,7 +228,7 @@ test('V-loadstep a control inside an aria-busy frame of the desk', { skip }, asy
 const planted = (loop) => `<!doctype html><meta charset="utf-8"><title>planted</title><p>planted</p><script>setTimeout(() => {
   ${loop ? 'const t = performance.now(); while (performance.now() - t < 120);' : ''} window.__planted = true }, 50)</script>`
 
-test('A17 a planted 120 ms busy loop is a long task ≥ 100 ms and an I-longtask violation; the page without it is neither', { skip }, async () => {
+test('a planted 120 ms busy loop is a long task ≥ 100 ms and an I-longtask violation; the page without it is neither', { skip }, async () => {
   for (const loop of [true, false]) {
     const pg = await b.page.context().newPage()
     try {
@@ -261,7 +261,7 @@ async function plantedPage(html, hash, api = () => ({ body: '{}' })) {
 const chapterPage = (n, a, z) => `<div id="stepbar"><b class="sb-no" data-n="${n}">x</b></div><div id="chapnav"><span class="chaplabel" data-s0="10" data-s1="20"></span></div>
   <span id="sawstart">step ${a}</span><span id="sawend">step ${z}</span><script>window.__planted = true</script>`
 
-test('A18 I-chapter: a playhead or a drawn window outside the label\'s chapter is a violation; both inside it is none', { skip }, async () => {
+test('I-chapter: a playhead or a drawn window outside the label\'s chapter is a violation; both inside it is none', { skip }, async () => {
   for (const [n, a, z, red] of [[15, 11, 20, false], [25, 11, 20, true], [15, 11, 21, true], [11, 10, 20, true]]) {
     const pg = await plantedPage(chapterPage(n, a, z), '#/replay/p/x')
     try { assert.equal(ids(await check({ page: pg })).includes('I-chapter'), red, `step ${n}, window ${a}-${z}`) } finally { await pg.close() }
@@ -275,7 +275,7 @@ const packPage = (reads) => `<script>(async () => {
   await Promise.all(${JSON.stringify(reads)}.map((r) => (Array.isArray(r) ? r.reduce((q, p) => q.then(() => one(p)), Promise.resolve()) : one(r))))
   window.__planted = true })()</script>`
 
-test('A19 I-pack: a pack read twice at one head tag, or four loader reads at once, is a violation; one read each and three at once are none', { skip }, async () => {
+test('I-pack: a pack read twice at one head tag, or four loader reads at once, is a violation; one read each and three at once are none', { skip }, async () => {
   const api = (u) => (u.pathname === '/api/d/head' ? { body: JSON.stringify({ packs: [{ n: 0, tag: 'a' }, { n: 1, tag: 'b' }] }) } : { body: '', ms: 300 })
   const P = (f) => `/api/d/${f}?id=x`
   for (const [reads, red] of [

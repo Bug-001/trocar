@@ -120,7 +120,7 @@ test('capture routing rides the raw panel\'s tech details (2.3 §调用保真行
   assert.ok(open > -1 && h.indexOf('ROUTE-TEXT-x') > open)
 })
 
-// A1 (2.6 §A params row): a key the server shipped a `value` for shows it as is; a key without one keeps its length
+// 2.6 §A params row: a key the server shipped a `value` for shows it as is; a key without one keeps its length
 test('a request key shows the value the server shipped; without one, its length', () => {
   const CH = 517
   const cases = [['s', 'v'.repeat(5)], ['empty', ''], ['num', 0.731], ['zero', 0], ['bool', false], ['obj', { a: 1 }], ['absent', undefined]]
@@ -135,7 +135,7 @@ test('a request key shows the value the server shipped; without one, its length'
   }
 })
 
-// A2 (2.6 §A): a failed call's raw reason is a tech detail; the visible reply line carries no server text
+// 2.6 §A: a failed call's raw reason is a tech detail; the visible reply line carries no server text
 test('a failed call\'s reason appears only inside the reply\'s tech details', () => {
   const reason = 'ERR-zq81-upstream-boom'
   for (const o of [{ error: reason }, { error: { message: reason } }, { status: 503, errMsg: reason }]) {

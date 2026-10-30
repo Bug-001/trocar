@@ -25,5 +25,5 @@
     {"a":"history","p":{"go":"back"}}
   ],
   "status": "fixed",
-  "detail": "hand-written (S1-Q): leave the replay desk for another screen or session and come back to the same session by Back / Forward, parked and following, with growth while away (1.2:100 离开再回来, D71③); every invariant holds on each return"
+  "detail": "hand-written: leave the replay desk for another screen or session and come back to the same session by Back / Forward, parked and following, with growth while away (1.2:100 离开再回来, D71③); every invariant holds on each return"
 }

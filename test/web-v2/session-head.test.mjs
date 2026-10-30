@@ -1,7 +1,7 @@
 // test/web-v2/session-head.test.mjs — the session head and the step navigation over the desk model: one previous / one next
 // control on the whole desk, the step position in one element, 1.2 #16's numbering (stepRef on rids), the head built only from
 // 1.2 §会话头's parts, the read-state line (pending), and the 会话保真行's facts. String level: the desk's skeleton +
-// sessionHeadHtml + stepBarHtml over generated desks (desk-world.mjs) and, once the block routes are merged, the real face.
+// sessionHeadHtml + stepBarHtml over generated desks (desk-world.mjs) and over the real face.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -149,9 +149,9 @@ test('K-29: a stale session draws a Retry outside the head that reads again; no 
   assert.equal(staleLineHtml(null), '')
 })
 
-// A21 · 1.5 K-29: the stale line's visible words are the board's own (readFailure); the failed answer's reason (any status, a
+// 1.5 K-29: the stale line's visible words are the board's own (readFailure); the failed answer's reason (any status, a
 // native stack, markup) stays escaped in the collapsed technical details; Retry is there
-test('A21: a stale line keeps every reason out of its visible text, escaped in collapsed details, with a Retry', () => {
+test('a stale line keeps every reason out of its visible text, escaped in collapsed details, with a Retry', () => {
   let n = 0
   for (const status of [0, 404, 500, undefined]) {
     for (const reason of reasonsWith('TOKEN')) {
@@ -167,8 +167,8 @@ test('A21: a stale line keeps every reason out of its visible text, escaped in c
   }
 })
 
-// V05: while the desk is stale the follow chip says it is paused; its pressed state is the reader's choice and does not change
-test('V05: a stale desk marks the follow chip paused, pressed state unchanged', () => {
+// while the desk is stale the follow chip says it is paused; its pressed state is the reader's choice and does not change
+test('a stale desk marks the follow chip paused, pressed state unchanged', () => {
   const meta = { session_id: 's1', harness: 'cc' }
   const chip = (html) => html.match(/<button[^>]*data-follow[^>]*>/)[0]
   const on = chip(sessionHeadHtml({ meta, lanes: [], follow: true, stale: true }))
@@ -176,9 +176,9 @@ test('V05: a stale desk marks the follow chip paused, pressed state unchanged', 
   assert.ok(!/data-state=/.test(chip(sessionHeadHtml({ meta, lanes: [], follow: true, stale: false }))))
 })
 
-// V11: a slow read (an index-cold note) is not a loss — the 'files not read in full' fact counts only non-note errors;
+// a slow read (an index-cold note) is not a loss — the 'files not read in full' fact counts only non-note errors;
 // every entry, notes included, still lands in the tech pairs
-test('V11: only non-note read errors make the files fact; all of them reach the tech pairs', () => {
+test('only non-note read errors make the files fact; all of them reach the tech pairs', () => {
   for (let k1 = 0; k1 <= 3; k1++) for (let k2 = 0; k2 <= 3; k2++) {
     const errors = [
       ...Array.from({ length: k1 }, (_, i) => ({ where: `f${i}.ndjson`, code: 'index-cold', level: 'note', reason: 'slow' })),
