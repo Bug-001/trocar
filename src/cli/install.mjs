@@ -111,7 +111,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     if (dmn.problems.length) r.exit = 1
     // a refusal carries `error: {code, message}` (附录 C.1): the first pending item that named a code is why install could not go on
     const refusal = r.pending.find((p) => p.code)
-    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: { state: dmn.up ? 'running' : 'not-running', started: dmn.started }, ...(unit && !only ? { autostart: { entry: platform === 'win32' ? '\\trocar\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
+    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: { state: dmn.state, started: dmn.started }, ...(unit && !only ? { autostart: { entry: platform === 'win32' ? '\\trocar\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
       ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : {}),
       planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'] }
     const dir = path.join(home, '.trocar', 'collector')
@@ -192,12 +192,12 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   if (done.failed) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, notes: [done.failed] }, null, 2)); else io.err(`trocar install: ${done.failed}`); return EXIT.incomplete }
   const { stdl, r, board, written } = done
   // D61 (1.6 §3.2 step 5): the login entry is an item of the install like any other — one that could not be registered is a problem and exit 1, never only a note
-  const dmn = r.daemon || { up: false, started: false, problems: [], unitFailed: null }
+  const dmn = r.daemon || { up: false, state: 'not-running', started: false, problems: [], unitFailed: null }
   const problems = dmn.problems
   const receipt = { ...newReceipt('install'), ok: !board && !problems.length, ...(problems.length ? { problems } : {}), ...(board ? { pending: [board] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...new Set([...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created), ...(written ? [ingressPath] : [])])], standalone: standalonePath(home), planned: planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes: r.plan ? r.plan.notes : [],
     // `enabled` is the entry asked again after the run (1.6 §3.3: no claim without evidence), not "nothing failed": ensureDaemonUp asks it at the end of every
     // registering run and makes any answer but present its unitFailed, so a run that halted on a stuck daemon (and enabled nothing) says false here too
-    ...(r.daemon ? { daemon: { state: dmn.up ? 'running' : 'not-running', started: dmn.started }, autostart: { entry: args.unit.path, enabled: !dmn.unitFailed } } : {}) }
+    ...(r.daemon ? { daemon: { state: dmn.state, started: dmn.started }, autostart: { entry: args.unit.path, enabled: !dmn.unitFailed } } : {}) }
   if (json) io.out(JSON.stringify(receipt, null, 2))
   else io.out(fit([problems.length ? 'trocar install did not finish. What is missing is below.' : r.already && ((r.entryBefore && r.entryBefore !== 'present') || dmn.started) ? 'Installed. The certificates were in place; the login entry and the collector are up again.' : r.already ? 'Already installed. Nothing was changed.' : "Installed. trocar's certificates are in place.",
     ...(r.already ? [] : changeLines(receipt, { home })),

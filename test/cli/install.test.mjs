@@ -104,7 +104,7 @@ test('install: a daemon that does not answer stops the run before the login entr
   const { io, exit } = await cli(['--yes', '--json'], { over: { launchctl, exec: launchctl.run, request: async () => { throw Object.assign(new Error('timed out after 2000 ms'), { code: 'ETIMEDOUT' }) } } })
   assert.equal(exit, 1, io.text())
   const r = io.json()
-  assert.deepEqual([r.ok, r.autostart.enabled, r.daemon.state], [false, false, 'not-running'])
+  assert.deepEqual([r.ok, r.autostart.enabled, r.daemon.state], [false, false, 'not-responding'])
   assert.equal(launchctl.calls.some((c) => / bootstrap /.test(c)), false, 'nothing was registered')
   assert.deepEqual(validateReceipt(r), [])
 })

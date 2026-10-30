@@ -545,7 +545,7 @@ export async function turnOn(opts = {}) {
     const up = d.up
     notes.push(...d.notes); problems.push(...d.problems); if (d.halt) halt = true
     const pid = readLockPid(dir, fs)
-    receipt.daemon = { state: up ? 'running' : 'not-running', started, ...(pid ? { pid } : {}) }
+    receipt.daemon = { state: d.state, started, ...(pid ? { pid } : {}) }
     // the links last: the daemon attaches on this request, and answers with the state it reached
     if (up && !halt) checked(() => guard())
     let reached = false // V104: the result line lists the targets only when the daemon took the request and reached on
@@ -585,7 +585,7 @@ const GONE_PIPE = /EPIPE|ECONNRESET|socket hang up|ECONNABORTED/i
 // Second seam of the same incident (caught on a macOS test machine, 2026-10-11): on darwin / win32 control.json is written by the daemon AT ITS
 // FIRST START, so a FIRST install has no endpoint to resolve before the unit runs — resolving once up here kept sock null through the whole
 // poll and every first `on` ended "no daemon answers on null", exit 1, while the daemon was up and healthy. The probe re-resolves while
-// → { up, started, sock, ask, unitFailed, notes, problems, halt }: `halted()` is asked before the daemon is touched and after each poll (R12: an `off` that
+// → { up, state, started, sock, ask, unitFailed, notes, problems, halt }: `halted()` is asked before the daemon is touched and after each poll (R12: an `off` that
 // lands meanwhile stops the run); `put` records each failure. `register` (D61) is `install`'s arm: the login registration is made and the daemon started
 // (`unit.enable`, with `--now` only when nothing answers — 拉起不是重启, R8). Without it (`on`'s arm) the registration is NEVER touched: the daemon is
 // started through the OS mechanism install registered (`unit.startNow()`), and directly when that refuses (no systemd --user bus, a job that is not loaded).
@@ -672,12 +672,14 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
     const q = unit.registered()
     if (q.state !== 'present') {
       // a daemon that answered before the run was not started by the entry, and install starts no second one beside it (拉起不是重启, R8)
-      unitFailed = `${entryState(osName, unit, q)} after this install, so trocar on will refuse until it is: ${was.up ? 'a collector the login entry did not start is answering, and install does not start a second one; stop that collector, then run trocar install again' : 'run trocar install again'}`
+      unitFailed = `${entryState(osName, unit, q)} after this install, so trocar on will refuse until it is: ${was.up ? 'a collector the login entry did not start is answering, and install does not start a second one; stop that collector, then run trocar install again' : was.stuck ? 'the collector that does not answer (the problem above) has to stop first: run trocar off, then trocar install again' : 'run trocar install again'}`
       put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed })
       notes.push(unitFailed); problems.push(unitFailed)
     }
   }
-  return { up, started: started && up, sock, ask, unitFailed, notes, problems, halt }
+  // the receipts' `daemon.state` (1.6 C.2), said here once for install, update and on: a daemon that holds the socket and does not answer is
+  // not-responding, as `trocar status` says it (C.3), never not-running
+  return { up, state: up ? 'running' : was.stuck ? 'not-responding' : 'not-running', started: started && up, sock, ask, unitFailed, notes, problems, halt }
 }
 function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'lock'), 'utf8')).pid ?? null } catch { return null } }
 
