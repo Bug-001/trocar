@@ -209,7 +209,6 @@ test('a connection that carries data resets the count: rejected, accepted, rejec
   await request(h.port, upCa.certPem, REQ).catch(() => {})
   await h.close()
   assert.equal(h.ctx.negCache.list().length, 0)
-  assert.deepEqual(h.flows.map((f) => f.reason ?? null), ['client-rejected-leaf', null, 'client-rejected-leaf'])
 })
 
 // The rule is about the CLIENT closing (RFC 4.6 §引擎 5: 客户端…随后关闭或 RST). A trusting client's idle

@@ -160,7 +160,12 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const matched = table && whose ? table.map((p) => ({ p, h: (whose(p) || {}).agent ?? null })) : [] // which harness each process of the table is
   const harnessOf = new Map(matched.map((x) => [x.p.pid, x.h]))
   f.matched = matched // read again by the network facts (src/netenv/facts.mjs): the processes of a harness and their start-time environment
-  const negatives = new Map((reply && Array.isArray(reply.negatives) ? reply.negatives : []).map((n) => [n.pid, n.cause ?? null])) // pid → the engine's cause
+  // pid → the engine's entries for it: every host it is not decrypted for, its cause and when trocar tries it again (V107)
+  const negatives = new Map()
+  for (const n of reply && Array.isArray(reply.negatives) ? reply.negatives : []) {
+    if (!negatives.has(n.pid)) negatives.set(n.pid, [])
+    negatives.get(n.pid).push({ host: n.host ?? null, cause: n.cause ?? null, retry_at: Number.isFinite(n.retry_at) ? new Date(n.retry_at).toISOString() : null })
+  }
   const tableOf = new Map((table || []).map((p) => [p.pid, p]))
   // proxy mode: which forms of each harness are on this machine (4.11 `present`); null = it could not be read. A harness with none is not captured (4.11 P5)
   let here = null, hereError = null, programs = null
@@ -210,7 +215,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     if (reply) {
       // a row that names a process life (`start`: the proxy-mode daemon's, answered from its memory of the door's verdicts) counts while that life is in the table — a reused pid is another process
       const rows = (Array.isArray(reply.agents) ? reply.agents : []).filter((a) => !table || !('start' in a) || (tableOf.has(a.pid) && (a.start == null || sameStart(tableOf.get(a.pid).startedAt, a.start))))
-      procs = rows.filter((a) => a.agent === id).map((a) => ({ pid: a.pid, trusted: a.trusted === true, reason: a.reason ?? null, hint: a.hint || null, negative: negatives.has(a.pid), cause: negatives.get(a.pid) ?? null, off: a.off === true }))
+      procs = rows.filter((a) => a.agent === id).map((a) => ({ pid: a.pid, trusted: a.trusted === true, reason: a.reason ?? null, hint: a.hint || null, negative: negatives.has(a.pid), cause: negatives.has(a.pid) ? negatives.get(a.pid)[0].cause : null, negatives: negatives.get(a.pid), off: a.off === true }))
       // a process of this harness the daemon has not listed (it started since the daemon last looked): not judged by it, so the entry and when it started decide (V32, 4.6 确认信任)
       const listed = new Set(rows.map((a) => a.pid))
       for (const x of matched) if (x.h === id && !listed.has(x.p.pid)) procs.push({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null, ...startOf(x.p) })
@@ -495,7 +500,7 @@ export function statusDocOf(f) {
     daemon: { running: d.state === 'running' ? true : d.state === 'not-running' ? false : null, pid: d.state === 'running' ? d.pid : null, responding: d.state === 'running' ? true : d.state === 'not-responding' ? false : null, since: (d.reply && d.reply.since) || (d.lock && d.lock.started_at) || null, error: d.reason || null },
     harnesses: Object.fromEntries(f.harnesses.map((h) => [h.id, {
       desired: h.desired ?? null, captured: h.judged.captured, reason: reasonOf(h.judged), why: h.why,
-      setup: setupDocOf(f, h.id), forms: forms[h.id] || [], processes: h.judged.rows.filter((r) => r.pid != null).map((r) => ({ pid: r.pid, name: r.name ?? null, captured: r.captured, reason: r.reason ?? null, ...(r.cause ? { cause: r.cause } : {}) })),
+      setup: setupDocOf(f, h.id), forms: forms[h.id] || [], processes: h.judged.rows.filter((r) => r.pid != null).map((r) => ({ pid: r.pid, name: r.name ?? null, captured: r.captured, reason: r.reason ?? null, ...(r.cause ? { cause: r.cause } : {}), ...(r.negatives ? { negatives: r.negatives } : {}) })),
       ...(f.identity && f.identity[h.id] ? { identity: f.identity[h.id] } : {}),
     }])),
     ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}),
