@@ -25,12 +25,14 @@ import { absentSpawn } from '../helpers/no-real-os.mjs'
 const PE = Buffer.from('MZ\x90\x00 a native program', 'latin1') // the contract world's own native-program bytes, so a second install writes what the first did
 const kitOf = (os) => (os === 'win32' ? { renderWrapper: win32Wrapper, compile: (src) => Buffer.concat([PE, Buffer.from(String(src.length))]) } : { renderWrapper: darwinWrapper })
 const statePorts = (w) => Object.keys((readJson(path.join(w.dir, 'state.json')) || { harnesses: {} }).harnesses)
-/** The deps status, doctor and the board read with: the world's daemon answers GET /status for every id state.json holds (B's reply carries the X),
- *  the process table is empty, and nothing outside HOME is seen (status-forms-absent.test.mjs). */
+/** The deps status, doctor and the board read with: the world's daemon answers GET /status for every id state.json holds (B's reply carries the X)
+ *  and GET /holders with one holder per such id (so the holder walk sees the X too), the process table is empty, and nothing outside HOME is seen
+ *  (status-forms-absent.test.mjs). */
 function readDeps(w) {
-  const r = { pid: 99, doors: {}, harnesses: Object.fromEntries(statePorts(w).map((h) => [h, { desired: 'on', attached: true }])), holders: null, agents: [], negatives: [], cert: { key: 'present', intermediate: 'ready', expires: '2026-12-22T09:00:02Z' }, engine: {} }
+  const ids = statePorts(w)
+  const r = { pid: 99, doors: {}, harnesses: Object.fromEntries(ids.map((h) => [h, { desired: 'on', attached: true }])), holders: ids.length, agents: [], negatives: [], cert: { key: 'present', intermediate: 'ready', expires: '2026-12-22T09:00:02Z' }, engine: {} }
   const fsx = { ...fs, existsSync: (p) => String(p).startsWith(w.home + path.sep) && fs.existsSync(p) }
-  return { platform: w.os, env: w.env, request: async (q) => (q.path === '/status' ? r : assert.fail(q.path)), socketPath: SOCK, procs: async () => [], spawn: absentSpawn, exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }), rootStore: w.store, user: 'alice', fs: fsx }
+  return { platform: w.os, env: w.env, request: async (q) => (q.path === '/status' ? r : q.path === '/holders' ? { holders: ids.map((h, i) => ({ harness: h, pid: 500 + i })) } : assert.fail(q.path)), socketPath: SOCK, procs: async () => [], spawn: absentSpawn, exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }), rootStore: w.store, user: 'alice', fs: fsx }
 }
 const cli = async (fn, argv, w) => { const io = fakeIo(); const exit = await fn(argv, { io, home: w.home, env: w.env, platform: w.os, deps: readDeps(w) }); return { exit, doc: JSON.parse(io.stdoutText()) } }
 
