@@ -31,10 +31,13 @@ export const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(
 // What a list holds in the V8 heap beside its column stores (heapOf), each measured with liveHeap() on generated homes (forced GC
 // before and after, divided by the count; 2026-10-23, node 22) × 1.25: a segment's part 350 B; an open synthesized key copied at a
 // part's end 83 B; a session in the index 208 B (its Map entry and positions array); a position 8.8 B on average, charged at the
-// 12 B a slot holds right after its array grew (1.5× its length).
-const PART_HEAP = 450, OPEN_HEAP = 105, SESSION_HEAP = 260, POSITION_HEAP = 12;
+// 12 B a slot holds right after its array grew (1.5× its length); a kinship fingerprint in an open keyed session's set 22.5 B
+// (2026-10-30, node 22; charged once per part that holds the set, even when parts share it).
+const PART_HEAP = 450, OPEN_HEAP = 105, SESSION_HEAP = 260, POSITION_HEAP = 12, FP_HEAP = 28;
 const lists = warmCache({ max: 4, cost: (v) => v.heap, steady: true });
-const copyOpen = (open) => new Map([...open].map(([k, v]) => [k, { ...v }])); // the rule moves `lastMs` in place
+const copyOpen = (open) => new Map([...open].map(([k, v]) => [k, { ...v }])); // the rule moves `lastMs` in place (and replaces `fp`)
+// the index keeps a call's kinship fingerprints as one space-joined string (index-build.mjs `kin_fp` / `kin_probe`)
+const fpOf = (s) => (s == null ? null : s ? s.split(' ').map(Number) : []);
 const lineOf = (id) => Number(String(id).split(':').pop());
 
 /**
@@ -42,12 +45,14 @@ const lineOf = (id) => Number(String(id).split(':').pop());
  * {…index row, segment, lineNo, session_id, synthesized}, oldest segment first, capture order inside a segment — the order the
  * synthesized keys (3.4 合成键) are assigned in, the same order the board stamps them in, so both name a session the same. It is
  * shared by every reader until a segment moves. What a segment could not say goes into `errors` (D38), never silently missing — on
- * every call.
+ * every call. `progress` is called after every segment and every chunk of raw bytes a cold segment's scan reads: the query worker
+ * reports that work, so the daemon's idle clock does not end it in the middle of a long read (3.5 后台抽取与归约).
  */
-export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [] } = {}) {
+export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [], progress = null } = {}) {
   const segs = [];
   for (const [segment, at] of segmentFiles(home, fs)) {
-    const { records, problems } = await warmSegmentIndex({ home, segment, fs, at });
+    const { records, problems } = await warmSegmentIndex({ home, segment, fs, at, progress });
+    if (progress) progress();
     for (const pr of problems) errors.push(problemEntry(`segments/${segment}`, pr));
     segs.push({ segment, records, entry: recordsId(records) });
   }
@@ -80,9 +85,10 @@ function rowList(segs, old) {
     const derived = [];
     for (let k = k0; k < view.length; k++) {
       const r = view.at(k);
-      const synth = r.synth_hash ? assign({ harness: r.harness_id, hash: r.synth_hash, ms: Date.parse(r.ts || '') }) : null;
-      const sid = r.session_key ?? synth ?? null;
-      derived.push({ session_id: sid, synthesized: !!synth });
+      const got = r.synth_hash != null || r.kin_fp != null ? assign({ harness: r.harness_id, ms: Date.parse(r.ts || ''), key: r.session_key,
+        hash: r.synth_hash, fp: fpOf(r.kin_fp), probe: fpOf(r.kin_probe) }) : null;
+      const sid = r.session_key ?? (got && got.key) ?? null;
+      derived.push({ session_id: sid, synthesized: !!got && !got.kin });
       if (sid) place(sid, start + k); // a row with no session id is in no group (sessionGroups)
     }
     parts.push({ segment, entry, view, d: was ? was.d.concat(derived) : rowTable(derived), start, end: start + view.length, open });
@@ -90,7 +96,7 @@ function rowList(segs, old) {
   const n = parts.length ? parts[parts.length - 1].end : 0;
   const rows = new RowList(parts, n, index);
   let heap = heapOf(...parts.map((p) => p.d)) + SESSION_HEAP * index.size + POSITION_HEAP * slots;
-  for (const p of parts) heap += PART_HEAP + OPEN_HEAP * p.open.size;
+  for (const p of parts) { heap += PART_HEAP + OPEN_HEAP * p.open.size; for (const v of p.open.values()) if (v.fp) heap += FP_HEAP * v.fp.size; }
   // the member arrays of the list before, while something holds them: a session that got no rows keeps its array (3.5:45), a grown
   // one is that array and its new members (sessionGroups below)
   const was = extend && built.get(old.rows);

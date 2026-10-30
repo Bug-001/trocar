@@ -2,10 +2,10 @@
 // face, or constructed session objects in the C.5 shape. Marks are asserted by kind (data-mark), never by their words.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseFilters, filtersToParams, applyFilters, listEntries, captionFacts, listSignature, capShotMaker, emptyBoardState, filteredAgentLine, agentMenuModel, flattenSessions } from '../../src/web/v2/library/logic.mjs'
+import { parseFilters, filtersToParams, applyFilters, listEntries, captionFacts, listSignature, capShotMaker, emptyBoardState, filteredAgentLine, agentMenuModel, flattenSessions, loadSessions, freshSessions } from '../../src/web/v2/library/logic.mjs'
 import { rowHtml, captionHtml, readFailHtml, filteredEmptyHtml, SKELETON } from '../../src/web/v2/library/library.mjs'
 import { harnessKey, harnessName, isKnownHarness } from '../../src/web/v2/core/chips.mjs'
-import { captureVerdict } from '../../src/web/v2/core/capture-verdict.mjs'
+import { captureVerdict, capHealthPatch } from '../../src/web/v2/core/capture-verdict.mjs'
 import { esc } from '../../src/web/v2/core/fmt.mjs'
 import * as W from '../../src/web/v2/labels/library.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
@@ -120,14 +120,14 @@ test('(10) empty state: the line is the capture verdict of the status read once;
     stopped: { status: 200, data: { health: { state: 'not-running', since: new Date(NOW - 3 * 3600e3).toISOString() } } },
     failing: { status: 200, data: { health: { state: 'failing', n: 1 }, harnesses: { codex: { captured: false } } } },
     ok: { status: 200, data: { health: { state: 'ok' } } },
-    503: { status: 503, error: 'health file unreadable', data: { error: 'health file unreadable' } },
+    unreadable: { status: 200, data: { errors: [{ where: 'capture health', reason: 'health file unreadable' }] } },
   }
   for (const [name, r] of Object.entries(docs)) {
     let reads = 0
     const shot = capShotMaker(async () => { reads++; return { ok: r.status === 200, ...r } }, () => NOW)
     await Promise.all([shot.read(), shot.read()]); await shot.read(); await shot.read()
     assert.equal(reads, 1, name)
-    const want = r.status === 503 ? captureVerdict({ unreadable: r.error }, { okAt: NOW, now: NOW }).text : name === 'ok' ? W.CAPTURING_HINT : captureVerdict(r.data, { okAt: NOW, now: NOW }).text
+    const want = name === 'ok' ? W.CAPTURING_HINT : captureVerdict(capHealthPatch({ ok: true, ...r }, NOW).capH, { okAt: NOW, now: NOW }).text
     assert.equal(emptyBoardState(shot.settled).line, want, name)
   }
 })
@@ -170,4 +170,51 @@ test('caption: a note is not counted as an unread file, yet it stays in technica
 
 test('the library skeleton holds no <header> landmark of its own', () => {
   assert.ok(!SKELETON.includes('<header'))
+})
+
+// 1.8 §说明行 「在刷新」 · §数据与刷新 · assertion 17 (unit part): the fact is an element, asserted by its hook, never its words
+test('(17) caption: the refreshing fact is there exactly when the list carries `stored`', () => {
+  const at = new Date(NOW - 90e3).toISOString()
+  for (const errors of [[], [{ where: 'a', reason: 'r' }]]) {
+    assert.match(captionHtml(errors, null, null, { stored: at, now: NOW }), /data-stored/)
+    assert.doesNotMatch(captionHtml(errors, null, null, { stored: null, now: NOW }), /data-stored/)
+  }
+})
+
+test('(17) the repaint signature moves when `stored` comes or goes', () => {
+  const doc = { sessions: [S()], errors: [] }
+  const at = new Date(NOW - 90e3).toISOString()
+  assert.notEqual(listSignature({ ...doc, stored: at }, null), listSignature({ ...doc, stored: null }, null))
+  assert.notEqual(listSignature({ ...doc, stored: at }, null), listSignature(doc, null))
+})
+
+// 4.4 §存下的答案: a screen that draws a conclusion from the list (not the Sessions page) waits for a fresh answer
+test('(17) freshSessions: an answer that carries stored is read again 1.5 s later until fresh; a screen gone stops it', async () => {
+  const fresh = { sessions: [S({ session_id: 'b' })], errors: [], next: null }
+  const old = { sessions: [S({ session_id: 'a' })], errors: [], next: null, stored: { at: new Date(NOW - 60e3).toISOString() } }
+  let reads = 0
+  const api = { get: async () => ({ ok: true, status: 200, data: ++reads === 1 ? old : fresh }) }
+  const r = await freshSessions(api)
+  assert.deepEqual(r.data.sessions.map((s) => s.session_id), ['b'])
+  assert.equal(r.data.stored, null)
+  assert.equal(reads, 2)
+  reads = 0
+  const gone = await freshSessions(api, { alive: () => false })
+  assert.equal(reads, 1, 'no read after the screen is gone')
+  assert.equal(gone.data.stored, old.stored.at)
+})
+
+test('(17) loadSessions: a list with a stored page carries the oldest stored at; a session on two pages is listed once', async () => {
+  const t1 = new Date(NOW - 120e3).toISOString(), t2 = new Date(NOW - 60e3).toISOString()
+  const a = S({ session_id: 'a' }), b = S({ session_id: 'b' }), c = S({ session_id: 'c' })
+  const run = async (pages) => {
+    const api = { get: async (name, { after }) => ({ ok: true, status: 200, data: pages[after == null ? 0 : Number(after)] }) }
+    return (await loadSessions(api, { limit: 2 })).data
+  }
+  const p1 = (o) => ({ sessions: [a, b], errors: [], next: '1', ...o }), p2 = (o) => ({ sessions: [b, c], errors: [], next: null, ...o })
+  for (const [pages, want] of [[[p1({}), p2({})], null], [[p1({ stored: { at: t2 } }), p2({})], t2], [[p1({}), p2({ stored: { at: t1 } })], t1], [[p1({ stored: { at: t2 } }), p2({ stored: { at: t1 } })], t1], [[p1({ stored: { at: t1 } }), p2({ stored: { at: t2 } })], t1]]) {
+    const d = await run(pages)
+    assert.equal(d.stored, want)
+    assert.deepEqual(d.sessions.map((s) => s.session_id).sort(), ['a', 'b', 'c'])
+  }
 })

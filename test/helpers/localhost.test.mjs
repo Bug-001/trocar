@@ -33,3 +33,16 @@ test('listenLocalhost: closing the server closes it on every address', async () 
   const addrs = (await dns.lookup('localhost', { all: true })).map((a) => a.address)
   await within((async () => { for (;;) { const open = await Promise.all(addrs.map((a) => dial(a, port))); if (!open.some(Boolean)) return; await new Promise((r) => setTimeout(r, 20)) } })(), 5000, 'every address closed')
 })
+
+test('listenLocalhost: an address localhost resolves to that this host cannot bind (IPv6 turned off, say) is skipped, first or not; nothing else can listen there either', async () => {
+  const NOT_HERE = '192.0.2.1' // TEST-NET-1 (RFC 5737): never an address of this host, so binding it fails as an absent ::1 does
+  for (const order of [[NOT_HERE, '127.0.0.1'], ['127.0.0.1', NOT_HERE]]) {
+    let got = 0
+    const server = net.createServer((c) => { got++; c.destroy() })
+    const port = await listenLocalhost(server, { lookup: async () => order.map((address) => ({ address })) })
+    try {
+      assert.equal(await dial('127.0.0.1', port), true, order.join(' then '))
+      await within((async () => { while (!got) await new Promise((r) => setTimeout(r, 10)) })(), 5000, 'accepted')
+    } finally { await new Promise((r) => server.close(r)) }
+  }
+})

@@ -127,13 +127,14 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
   const proxyOf = (text) => { const p = up.parseProxyText(text); return p && p.ok ? { kind: p.kind, host: p.host, port: p.port, ...(p.credentialed ? { auth: up.proxyAuthOf(text) } : {}) } : null }
   let parts, watch, winHelper = null, runner = null
   if (os === 'darwin') {
-    const [{ ownerOfSocket }, procinfo, { execTool, runAsync }] = await Promise.all([import('./darwin/socktable.mjs'), import('./darwin/procinfo.mjs'), import('../../off/exec.mjs')])
+    const [{ ownerOfSocket, createTableReader }, procinfo, { execTool, runAsync }] = await Promise.all([import('./darwin/socktable.mjs'), import('./darwin/procinfo.mjs'), import('../../off/exec.mjs')])
     // every lsof / ps of the accept path runs through execFile (runAsync), never spawnSync — the daemon keeps serving its
     // other doors while one table read runs (nor may it hold the lock refresh off reads)
     runner = io.exec || runAsync // the process table's two `ps` too (below): the sweep and the holder poll read it every few seconds (4.8 §5.5)
     const execOf = (file, args, o = {}) => Promise.resolve(execTool(file, args, { ...o, run: runner })) // socktable races it: always a promise
     const run = { exec: runner }
-    parts = { ownerOf: (q) => ownerOfSocket({ exec: execOf, ...q, onFailure: event }), factsOf: (pid, o) => procinfo.factsOfPid(pid, { ...run, ...(o || {}) }), proc: { envOf: (p, n, o) => procinfo.envOf(p, n, { ...o, ...run }), cwdOf: (p, o) => procinfo.cwdOf(p, { ...o, ...run }), parentOf: (p, o) => procinfo.parentOf(p, { ...o, ...run }) }, close: () => {} }
+    const tableOf = createTableReader(execOf) // owner questions asked at once share one socktable read (4.9 MA13)
+    parts = { ownerOf: (q) => ownerOfSocket({ exec: tableOf, ...q, onFailure: event }), factsOf: (pid, o) => procinfo.factsOfPid(pid, { ...run, ...(o || {}) }), proc: { envOf: (p, n, o) => procinfo.envOf(p, n, { ...o, ...run }), cwdOf: (p, o) => procinfo.cwdOf(p, { ...o, ...run }), parentOf: (p, o) => procinfo.parentOf(p, { ...o, ...run }) }, close: () => {} }
     watch = await systemProxyWatch({ up, read: up.readSystemProxy, io: io.exec ? { exec: io.exec } : {}, changes: io.exec ? null : (o) => up.scutilChanges({ ...o, env }), failure: (e) => failure('netenv', e), event }) // the OS's own change notice, unless a test injects the OS
   } else {
     // no declared registry keys: the model reads a policy value through policy.mjs (reg.exe), not this helper

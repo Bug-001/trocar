@@ -17,8 +17,28 @@
 // or a table that cannot be read (`unreadable`) all give null, and the connection is judged untracked and spliced. Several holders on ONE read
 // are mostly a child between fork and exec (a CLOEXEC copy of its parent's socket, gone within ms; e.g. Claude Code's start-up
 // burst races the children it spawns), so they are read again, bounded, and the one holder left is the answer. A table that cannot be read — the helper failed, or hung past `timeoutMs` and was killed — gives
-// null and ONE `socktable-unavailable` record (4.8 §12) to `onFailure`, which the recorder folds. Imports nothing of trocar but native.mjs.
+// null and ONE `socktable-unavailable` record (4.8 §12) to `onFailure`, which the recorder folds. Questions asked at once share reads
+// (`createTableReader`, 4.9 MA13): one exec per connection, unbounded, took 5-18 s per question under a burst on a loaded macOS machine and agents
+// timed out. Imports nothing of trocar but native.mjs.
 import { NATIVE, nativePath } from './native.mjs'
+
+/** createTableReader(exec) → exec's shape `(file, args, opts) → Promise<{ code, out, err }>`, with at most one read running at a time. A call while
+ *  none runs starts one at once; calls while one runs all share the NEXT read, started when the running one settles — never the running one, which
+ *  may have started before their socket existed. A rejection or a code≠0 answer reaches every sharer as is; nothing outlives its read. */
+export function createTableReader(exec) {
+  let running = null, next = null
+  const start = (args) => {
+    running = (async () => exec(...args))()
+    const settled = () => { running = null; const q = next; next = null; if (q) start(q.args).then(q.resolve, q.reject) }
+    running.then(settled, settled)
+    return running
+  }
+  return (...args) => {
+    if (!running) return start(args)
+    if (!next) { next = { args }; next.promise = new Promise((resolve, reject) => Object.assign(next, { resolve, reject })) }
+    return next.promise
+  }
+}
 
 /** How long a hung helper may hold the connection before it is killed and the table counts as unreadable: a hang guard, never a verdict. */
 const TABLE_HANG_MS = 10_000

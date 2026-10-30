@@ -11,9 +11,9 @@ export const params = Object.freeze(['since', 'until', 'limit', 'after']);
 
 const add = (sum, v) => (v == null ? sum : (sum ?? 0) + v);
 
-export async function run({ home, fs, now, params: p, errors }) {
+export async function run({ home, fs, now, params: p, errors, progress = null }) {
   const keep = tsFilter(p, now);
-  const all = await indexRows({ home, fs, errors });
+  const all = await indexRows({ home, fs, errors, progress });
   const first = new Map(), since = {}, groups = new Map();
   const totals = { requests: 0, sent_bytes: null, received_bytes: null, is_floor: true };
   for (const r of all) {

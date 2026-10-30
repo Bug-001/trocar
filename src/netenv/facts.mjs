@@ -23,19 +23,18 @@ const errText = (e) => String((e && (e.code || e.message)) || e)
 const iso = (t) => (typeof t === 'number' && Number.isFinite(t) ? new Date(t).toISOString() : typeof t === 'string' ? t : null)
 
 /**
- * NetFacts for the harnesses `status` knows. `status` = gatherStatus's facts, `harnesses` = the descriptors.
+ * NetFacts for the harnesses of this build that `status` knows. `status` = gatherStatus's facts, `harnesses` = the descriptors.
  * `adopted` is what `~/.trocar/netenv.json` holds (`readNetenv`): the settings `on` found and the drift is measured against.
  */
 export async function gatherNetFacts({ platform = process.platform, home, env = process.env, harnesses, status, archFacts = null, adopted = null, now = Date.now, fs = nodeFs, deps = {} }) {
   const unknowns = []
+  // 4.11 §3 ㉓: only the harnesses this build has a descriptor for, in the order of `status`'s rows
   const byName = new Map(harnesses.map((d) => [d.name, d]))
+  const rows = status.harnesses.filter((h) => byName.has(h.id)).map((h) => [byName.get(h.id), h])
   const settings = {}, fileSettings = {} // `settings`: what a new process of the harness reads in THIS shell; `fileSettings`: the files alone, where `on` read them (what a change of the user's own is measured on)
-  for (const h of status.harnesses) {
-    const d = byName.get(h.id)
-    if (d) {
-      settings[h.id] = readProxySetting(d, { home, env, fs })
-      fileSettings[h.id] = readProxySetting(d, { home, env, fs, vars: false, paths: (adopted && adopted[h.id] && adopted[h.id].file_paths) || null })
-    }
+  for (const [d, h] of rows) {
+    settings[h.id] = readProxySetting(d, { home, env, fs })
+    fileSettings[h.id] = readProxySetting(d, { home, env, fs, vars: false, paths: (adopted && adopted[h.id] && adopted[h.id].file_paths) || null })
   }
   let part = { routing: 'unknown', unknowns: [] }
   if (archFacts) {
@@ -47,7 +46,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
   const reply = status.daemon.reply
   const f = {
     at: new Date(now()).toISOString(), platform, routing: part.routing,
-    desired: Object.fromEntries(status.harnesses.map((h) => [h.id, h.desired === 'on' ? 'on' : h.desired === 'off' ? 'off' : null])),
+    desired: Object.fromEntries(rows.map(([, h]) => [h.id, h.desired === 'on' ? 'on' : h.desired === 'off' ? 'off' : null])),
     daemon: { state: status.daemon.state, pid: status.daemon.pid ?? null, enginePort: (reply && reply.engine && reply.engine.port) ?? (status.daemon.lock && status.daemon.lock.engine_port) ?? null },
     link: { attached: status.link.attached, helper: status.link.helper, ids: reply && Array.isArray(reply.links) ? reply.links.map((l) => l.id).filter((x) => Number.isInteger(x)) : [] },
     listeners: part.listeners || [], forwarder: part.forwarder || null, harnesses: {}, unknowns: [...(part.unknowns || [])],
@@ -56,9 +55,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
     agentList: status.agent_list || null, // agents.json itself (status's `agent_list`): the doctor's agent-list-invalid, and the path process-unknown's line names
     cert: reply && reply.cert && typeof reply.cert === 'object' ? reply.cert : null, // the daemon's issuer (proxy mode, 4.11 P2): { key, intermediate } — doctor's cert-key-missing / cert-intermediate-unavailable
   }
-  for (const h of status.harnesses) {
-    const d = byName.get(h.id)
-    if (!d) { f.unknowns.push({ fact: h.id, reason: 'absent', detail: `${h.id} has no harness descriptor in this build` }); continue }
+  for (const [d, h] of rows) {
     const pr = d.proxy, setting = settings[h.id]
     const procs = (part.procs && part.procs[h.id]) || []
     f.harnesses[h.id] = {
@@ -70,7 +67,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
       systemProxy: part.systemProxy && (pr.systemProxy.http !== false || pr.systemProxy.ws !== false) ? part.systemProxy : null,
       behaviour: { env: [...pr.env], follows: { ...pr.systemProxy }, schemes: [...pr.schemes], unsupported: { ...pr.unsupported }, branches: [...pr.branches], measured: pr.measured[platform] || 'inferred', restart: { ...pr.restart }, files: proxyFilesOf(d, { home, env }),
         fileKeys: pr.files.map((x) => ({ path: x.path({ home, env }), format: x.format, key: x.format === 'json' ? x.keys[0].join('.') : x.keys[0] })) },
-      procs, negatives: reply && Array.isArray(reply.negatives) ? reply.negatives.filter((n) => procs.some((p) => p.pid === n.pid)).map((n) => ({ pid: n.pid, host: n.host, reason: 'negative-cache', ...(n.cause ? { cause: n.cause } : {}) })) : [], // `cause`: the engine's, it picks the finding's words
+      procs, negatives: reply && Array.isArray(reply.negatives) ? reply.negatives.filter((n) => procs.some((p) => p.pid === n.pid)).map((n) => ({ pid: n.pid, host: n.host, reason: 'negative-cache', ...(n.cause ? { cause: n.cause } : {}), ...(Number.isFinite(n.retry_at) ? { retry_at: new Date(n.retry_at).toISOString() } : {}) })) : [], // `cause`: the engine's, it picks the finding's words; `retry_at`: when trocar tries the host again
       apiHosts: [...(d.hosts || [])], noProxy: noProxyNames(env.NO_PROXY || env.no_proxy, d.hosts || []), fakeIp: part.fakeIp && part.fakeIp[h.id] === true ? true : null, adopted: adopted && adopted[h.id] ? adopted[h.id] : null, forms: (part.forms && part.forms[h.id]) || null,
       ...(part.setup && part.setup[h.id] ? { setup: part.setup[h.id] } : {}),
       ...(part.legacy && part.legacy[h.id] ? { legacy: part.legacy[h.id] } : {}),

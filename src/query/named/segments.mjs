@@ -9,10 +9,10 @@ import { parseTime } from './index.mjs';
 
 export const params = Object.freeze(['since', 'until']);
 
-export async function run({ home, fs, now, params: p, errors }) {
+export async function run({ home, fs, now, params: p, errors, progress = null }) {
   const since = p.since == null ? null : parseTime(p.since, { name: 'since', now: now() });
   const until = p.until == null ? null : parseTime(p.until, { name: 'until', now: now() });
-  const all = await allSegments({ home, fs });
+  const all = await allSegments({ home, fs, progress });
   const segments = [];
   // 附录 C.5 as_of: the newest call time over ALL segments, whatever the time filter keeps
   const as_of = all.reduce((m, s) => (s.to && (m == null || s.to > m) ? s.to : m), null);

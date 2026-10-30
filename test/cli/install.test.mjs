@@ -204,3 +204,18 @@ test('4.4 §Plan 「端口」 · V67: install records the board\'s port in ingre
   assert.equal(await runInstallCli(['--yes'], { io: io2, env: w.env, home: w.home, platform: 'darwin', deps: { getuid: () => 501, unit: null, backends: { custody: w.custody, rootStore: w.store, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns } }), 0, io2.text())
   assert.deepEqual([fs.readFileSync(file), fs.statSync(file).mtimeMs], [bytes, mtime])
 })
+
+// V108, the third failure: a collector on other code that cannot be stopped (it refuses the drain) is left running — exit 1, ok false, problems,
+// not replaced, and the receipt says it still runs. A real daemon always obeys the drain (test/cli/install-replace-e2e.test.mjs), so the
+// refusal is the control channel's answer here. A 400 naming `by` (an earlier build that does not know install) is asked once more as update, never
+// again: a collector that refuses that too is left the same way; any other refusal is not asked again (1.6 §3.2 step 5).
+for (const [why, status, asks] of [['refuses the drain', 409, ['install']], ['refuses by:install and by:update', 400, ['install', 'update']]]) {
+  test(`V108: install leaves a collector on other code that ${why}, and says so`, async () => {
+    const posted = []
+    const refuse = async ({ method, body }) => { if (method === 'POST') { posted.push(body.by); throw Object.assign(new Error(`${status}: "by" is not one this collector knows`), { status }) } return {} }
+    const { io, exit } = await cli(['--yes', '--json'], { over: { daemonCode: async () => '0.1.0+0000000', request: refuse, daemonState: async () => ({ state: 'running', socket: 'control.sock', lock: { pid: 4242 } }), drainMs: 0 } })
+    const r = io.json()
+    assert.deepEqual([exit, r.ok, r.problems.length > 0, r.daemon.replaced, r.daemon.state], [1, false, true, false, 'running'], io.text())
+    assert.deepEqual(posted, asks, 'the exit requests the collector was sent')
+  })
+}

@@ -10,6 +10,7 @@ import {
 } from '../../src/web/v2/overview/overview.mjs'
 import { capHealthPatch } from '../../src/web/v2/core/capture-verdict.mjs'
 import { backoffMs, INTERVAL } from '../../src/web/v2/core/poll.mjs'
+import { within } from '../helpers/bounded.mjs'
 import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, UNKNOWN_ICON, harnessKey, harnessName } from '../../src/web/v2/core/chips.mjs'
 import { TITLE_FROM_WIRE } from '../../src/web/v2/labels/replay.mjs'
 import { TITLE_FROM_AGENT, FILES_NOT_READ } from '../../src/web/v2/labels/overview.mjs'
@@ -57,15 +58,15 @@ const norm = (h) => h.replace(/po-\d+/g, "po")
 const sayOf = (html) => (/<p class="ovsay[^"]*">([^<]*)</.exec(html) || [])[1]
 const group = (o) => ({ level: 'problem', where: 'engine', code: 'trust-rejected', count: 2, first_ts: iso(2 * H), last_ts: iso(H), reason: 'r', ...o })
 
-test('#1 the capture card says a sentence for every capture state, a 503, a stale read and an unknown state — never blank (D38②)', () => {
+test('#1 the capture card says a sentence for every capture state, an unreadable capture health, a stale read and an unknown state — never blank (D38②)', () => {
   assert.ok(HEALTH_STATES.length >= 8, String(HEALTH_STATES))
   const cases = []
   for (const state of HEALTH_STATES) cases.push([state, { data: { ...quiet(), health: { state, since: iso(H), n: 2 } }, okAt: NOW }])
   cases.push(['not-running + signal', { data: { ...quiet(), health: { state: 'not-running', since: iso(H), signal: 'SIGKILL' } }, okAt: NOW }])
   cases.push(['unknown without reason', { data: { ...quiet(), health: { state: 'unknown' } }, okAt: NOW }])
   cases.push(['unknown with reason', { data: { ...quiet(), health: { state: 'unknown', reason: 'lock unreadable' } }, okAt: NOW }])
-  const p = capHealthPatch({ ok: false, status: 503, error: 'health unreadable' }, NOW)
-  cases.push(['503', { data: p.capH, okAt: p.capHOkAt }])
+  const p = capHealthPatch({ ok: true, status: 200, data: { errors: [{ where: 'capture health', reason: 'health unreadable' }] } }, NOW)
+  cases.push(['unreadable', { data: p.capH, okAt: p.capHOkAt }])
   cases.push(['stale', { data: quiet(), okAt: NOW - 2 * INTERVAL.status - 1 }])
   cases.push(['never read, failed', { data: null, okAt: null, err: 'ECONNREFUSED' }])
   cases.push(['unrecognized state', { data: { ...quiet(), health: { state: 'zz-new' } }, okAt: NOW }])
@@ -93,7 +94,7 @@ const CASES = [
   ['O2 · stopped', (s) => { s.caph.data.health = { state: 'not-running', since: iso(H) }; Object.assign(s.caph.data.daemon, { running: false }) }, { O2: ['#/capture'] }],
   ['O2 · not responding', (s) => { s.caph.data.health = { state: 'not-responding', since: iso(H) }; Object.assign(s.caph.data.daemon, { responding: false }) }, { O2: ['#/capture'] }],
   ['O2 · daemon.error', (s) => { s.caph.data.health = { state: 'unknown', reason: 'lock unreadable' }; s.caph.data.daemon.error = 'lock unreadable' }, { O2: ['#/capture'] }],
-  ['O2 · 503', (s) => { s.caph.data = capHealthPatch({ ok: false, status: 503, error: 'e' }, NOW).capH }, { O2: ['#/capture'] }],
+  ['O2 · unreadable', (s) => { s.caph.data = capHealthPatch({ ok: true, status: 200, data: { errors: [{ where: 'capture health', reason: 'e' }] } }, NOW).capH }, { O2: ['#/capture'] }],
   ['O3 · groups with and without an agent; expected-level groups are not items', (s) => {
     s.caph.data.failures.groups = [group({ harness: B }), group({ where: 'daemon', code: 'start-failed' }), group({ level: 'expected', harness: A })]
   }, { O3: [`#/capture?h=${harnessKey(B)}`, '#/capture/log'] }],
@@ -165,8 +166,8 @@ test('#3 no false 「nothing to handle」: a failed source draws the partial not
       assert.ok(items.rows.length >= 1, `${JSON.stringify(health)} has an item`)
     }
   }
-  const items = overviewItems(stateOf(capHealthPatch({ ok: false, status: 503, error: 'e' }, NOW).capH), NOW)
-  assert.ok(items.rows.length >= 1, '503 has an item')
+  const items = overviewItems(stateOf(capHealthPatch({ ok: true, status: 200, data: { errors: [{ where: 'capture health', reason: 'e' }] } }, NOW).capH), NOW)
+  assert.ok(items.rows.length >= 1, 'an unreadable capture health has an item')
 })
 
 // a mounted overview on a fake element and a fake api that logs every call
@@ -197,6 +198,22 @@ function fakeMount({ status = quiet(), sessions = { sessions: [session(1)], erro
   return { inst, log, zones, on }
 }
 const settle = () => new Promise((r) => setTimeout(r, 60))
+
+// 4.4 §存下的答案: only the Sessions page shows a stored answer; the overview reads the list again until it is fresh
+test('a stored sessions answer is not shown: the overview reads the list again and shows the fresh one', async () => {
+  let reads = 0
+  const fresh = { sessions: [session(7, { title: 'fresh-title' })], errors: [], next: null }
+  const old = { sessions: [session(9, { title: 'stored-title' })], errors: [], next: null, stored: { at: iso(0) } }
+  const { inst, zones } = fakeMount({ hold: (name) => (name === 'sessions' ? Promise.resolve({ ok: true, status: 200, data: ++reads === 1 ? old : fresh }) : null) })
+  const html = () => Object.values(zones).map((z) => z.innerHTML).join('')
+  try {
+    await settle()
+    assert.ok(!html().includes('stored-title'), 'the stored list is not shown')
+    await within((async () => { while (!html().includes('fresh-title')) await new Promise((d) => setTimeout(d, 50)) })(), 10_000, 'the fresh list')
+    assert.ok(!html().includes('stored-title'))
+    assert.ok(reads >= 2, `read again (${reads})`)
+  } finally { inst.unmount() }
+})
 
 test('#4 the window only moves the stats: items are identical across 24h / 7d / all; the overview read carries since=24h / 7d / none', async () => {
   const s = quiet(); s.failures.groups = [group({ harness: A })]

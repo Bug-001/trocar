@@ -9,16 +9,18 @@
 // The TITLE is the main lane's first prompt (4.4 §人类标题的来源), which lives in a request body the index does not parse (D20):
 // it comes from the usage sidecar (4.2 §用量旁注 `ask`) — the earliest main call of the session it covers — and is null until one
 // does. With `later` (the query worker), a page's segments without a sidecar are filled after the answer, as `overview` does.
+// `stored`: the unwindowed list (only `limit` / `after`) is the answer the worker keeps on disk (3.5 §谁执行它「存下的答案」).
 import { sessionMetaOfFacts } from '../../view/board.mjs';
 import { readUsage, fillUsage } from '../usage.mjs';
 import { asOf, indexRows, isModelCall, sessionGroups, sessionFactsOf } from '../rows.mjs';
 import { listOf, paginate, tsFilter } from './index.mjs';
 
 export const params = Object.freeze(['harness', 'since', 'until', 'limit', 'after']);
+export const stored = (p) => Object.keys(p).every((k) => k === 'limit' || k === 'after');
 
-export async function run({ home, fs, now, params: p, errors, later = null }) {
+export async function run({ home, fs, now, params: p, errors, later = null, progress = null }) {
   const keep = tsFilter(p, now), harness = listOf(p.harness);
-  const index = await indexRows({ home, fs, errors });
+  const index = await indexRows({ home, fs, errors, progress });
   const rows = p.since == null && p.until == null ? index : index.filter((r) => keep(r.ts)); // no window: the list and its session index
   const rowsOf = new Map();
   const all = [...sessionGroups(rows)]

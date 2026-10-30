@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { CONTROL_TOKEN_HEADER } from './off/token-header.mjs';
 import { LOCAL_ENV, QUERY_NAMES, paramsOf } from './query/client.mjs';
 import { ctxKey } from './query/ctx-key.mjs';
+import { storedFile } from './query/stored.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 // The one board (1.2 §托管与打开): src/web/v2/ is the static plane, served at `/`. Named as new URL('./web/v2/', import.meta.url)
@@ -179,6 +180,23 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
     } finally { io.closeSync(fd); }
   }
 
+  /** 4.4 §存下的答案: the stored answer of (name, params), handed out while the worker refreshes it → true; false (no file, or the
+   *  service says relay: a warm idle worker, a cooling subject) → the caller relays. One open, fstat, read and close, as answerFile:
+   *  the bytes of one file even while the worker renames a new one in. No parse, no encode (D63 ①), and no ETag (§条件 GET). */
+  function storedAnswer(res, name, params) {
+    const io = fs || nodeFs;
+    let fd;
+    try { fd = io.openSync(storedFile(home, name, params), 'r'); } catch (e) { if (e && e.code === 'ENOENT') return false; throw e; }
+    try {
+      if (!query.refresh({ name, params })) return false;
+      const buf = Buffer.alloc(io.fstatSync(fd).size);
+      for (let at = 0; at < buf.length;) { const k = io.readSync(fd, buf, at, buf.length - at, at); if (!k) break; at += k; }
+      res.writeHead(200, { ...JSON_HEAD, 'cache-control': 'no-store', 'content-encoding': 'gzip', vary: 'accept-encoding', 'content-length': buf.length });
+      res.end(buf);
+      return true;
+    } finally { io.closeSync(fd); }
+  }
+
   async function api(req, res, url) {
     if (url.pathname.startsWith('/api/d/')) return answerFile(req, res, url);
     const m = /^\/api\/([^/]+)$/.exec(url.pathname);
@@ -194,14 +212,17 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
     let stamp;
     try { stamp = named.stampOf(name, params, { home, fs, now, env: workerEnv }); }
     catch (e) { if (e instanceof named.QueryArgError) return sendJson(res, 400, { error: e.message }); throw e; }
+    // A name with a version (`session`, `lane`) is tagged "<stamp>:<version>" (4.4 §条件 GET): this loop compares the stamp part
+    // alone; a stamp that moved is relayed with the caller's version part, and the worker answers 304 while that version holds.
+    const versioned = !!named.QUERIES[name].version;
+    const tags = tagsOf(req.headers['if-none-match']);
+    const same = stamp != null ? tags.find((t) => t.split(':')[0] === stamp) : null;
+    if (same != null) { res.writeHead(304, { etag: `"${same}"`, 'cache-control': 'no-store' }); return res.end(); }
+    const gzip = /\bgzip\b/.test(req.headers['accept-encoding'] || '');
+    // before the ETag below: a stored answer is of `stored.at`, the stamp of now (§存下的答案)
+    if (gzip && named.QUERIES[name].stored?.(params) && storedAnswer(res, name, params)) return undefined;
     let held = null; // the version part of the caller's tag, for the worker to compare (a name with a version)
     if (stamp != null) {
-      // A name with a version (`session`, `lane`) is tagged "<stamp>:<version>" (4.4 §条件 GET): this loop compares the stamp part
-      // alone; a stamp that moved is relayed with the caller's version part, and the worker answers 304 while that version holds.
-      const versioned = !!named.QUERIES[name].version;
-      const tags = tagsOf(req.headers['if-none-match']);
-      const same = tags.find((t) => t.split(':')[0] === stamp);
-      if (same != null) { res.writeHead(304, { etag: `"${same}"`, 'cache-control': 'no-store' }); return res.end(); }
       if (versioned) held = tags.map((t) => t.split(':')[1]).find(Boolean) ?? null;
       // The worker writes the head of its frame itself, with its version tag as `etag` when the answer has one; the ETag goes only
       // on a 200 or a 304 (an error is not a version), and on a versioned name only with the worker's tag (one still folding has none).
@@ -212,7 +233,7 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
       };
     }
     // A reader that takes gzip gets it, compressed by the worker: this loop only forwards bytes (4.4 §服务形状, D63 ①).
-    return query.relay({ name, params, res, etag: held, gzip: /\bgzip\b/.test(req.headers['accept-encoding'] || '') });
+    return query.relay({ name, params, res, etag: held, gzip });
   }
 
   function staticFile(req, res, url) {

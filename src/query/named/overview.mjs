@@ -18,9 +18,9 @@ export const params = Object.freeze(['since', 'until']);
 
 const add = (sum, v) => (v == null ? sum : (sum ?? 0) + v);
 
-export async function run({ home, fs, now, params: p, errors, later = null }) {
+export async function run({ home, fs, now, params: p, errors, later = null, progress = null }) {
   const keep = tsFilter(p, now);
-  const all = await indexRows({ home, fs, errors });
+  const all = await indexRows({ home, fs, errors, progress });
   const counted = []; // [harness, rows] — one entry per in-window session, and one per in-window session-less row
   const inWindow = []; // [id, facts, rows] of the sessions
   for (const [id, rows] of sessionGroups(all)) {
