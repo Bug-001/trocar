@@ -103,7 +103,8 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   if (changed.length) {
     lines.push('')
     const width = Math.max(...changed.map((c) => String(c.harness || 'trocar').length))
-    for (const c of changed) lines.push(...rowLines(c, t, past, width))
+    // a file is said once, as a removed one is below: several entries of one file (json keys) that ended the same way are one row
+    for (const row of new Set(changed.map((c) => rowLines(c, t, past, width).join('\n')))) lines.push(...row.split('\n'))
   } else lines.push(past ? 'No file of yours was changed.' : 'No file of yours would be changed.')
   // a file is said once: several entries of one file (json keys) are one removal
   for (const p of [...new Set(removed.map((x) => t(typeof x === 'string' ? x : x.path)))]) lines.push(...fit(`  ${past ? 'Deleted' : 'Will delete'}, trocar created it: ${p}`, '    '))
