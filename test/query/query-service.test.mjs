@@ -15,6 +15,7 @@ import { rawHome } from './raw-home.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
 import fs from 'node:fs'
+import { PassThrough, Writable } from 'node:stream'
 import zlib from 'node:zlib'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -219,6 +220,16 @@ test('the worker leaves after idleMs with nothing asked, says no failure, and th
 })
 
 // A fake worker for one request line: `script` runs on it. Spawned like the real one, so the service reads its stdout and stderr.
+// The same seam in this process (stdin / stdout / stderr, IPC `send` and 'message', `kill`), for the cases whose subject is one of
+// the service's own clocks: its timers and the worker's writes then share one event loop, so a busy machine delays both alike
+// instead of racing a short clock against another process's start. `onLine(line, child)` answers a request line.
+const inProcess = (onLine = () => {}) => () => {
+  const c = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), connected: true, sent: [], killedAt: null })
+  c.stdin = new Writable({ write: (b, _e, done) => { for (const l of String(b).split('\n').filter(Boolean)) onLine(l, c); done() } })
+  c.send = (m, cb) => { c.sent.push(m); if (cb) cb(null) }
+  c.kill = () => { c.killedAt ??= Date.now(); c.connected = false; return true }
+  return c
+}
 const fake = (script) => () => spawn(process.execPath, ['-e', `process.stdin.on('data', (d) => { if (String(d).includes('\\n')) { ${script} } })`], { stdio: ['pipe', 'pipe', 'pipe'] })
 
 test('a crash says its FATAL line, to the caller and in the D38 record; within the cool-down the same request gets it and forks nothing (3.5:42)', async () => {
@@ -260,7 +271,7 @@ test('the deadline measures silence: a body waiting on a slow reader is not kill
   const WANT = JSON.stringify({ a: 'x'.repeat(1000) })
   // the frame comes in two writes; the response is full after the first and says so with 'drain' only well past the deadline
   const svc = createQueryService({ home: rawHome('trocar-qsvc-'), deadlineMs: 200, failure: (w, e) => said.push(e.message),
-    fork: fake(`const b = ${JSON.stringify(WANT)}; process.stdout.write('200 ' + b.length + '\\n' + b.slice(0, 500)); setTimeout(() => process.stdout.write(b.slice(500)), 50)`) })
+    fork: inProcess((_l, c) => { c.stdout.write(`200 ${WANT.length}\n${WANT.slice(0, 500)}`); setTimeout(() => c.stdout.write(WANT.slice(500)), 50) }) })
   const res = recorder()
   let drain = null
   Object.assign(res, { write: (b) => { res.chunks.push(b); return false }, once: (ev, fn) => { if (ev === 'drain') drain = fn } })
@@ -372,8 +383,10 @@ test('the real worker reports progress while it folds a session, and the fold is
 })
 
 // Failure episodes (3.5 §读不全不静默, 验收 #20): a failure is kept per subject (name + parameters without WINDOW_PARAMS).
-// `script(n)` is what the n-th forked worker does with its request lines (see `fake`).
-const episodic = (scripts, deadlineMs = 100) => {
+// `script(n)` is what the n-th forked worker does with its request lines (see `fake`). `deadlineMs`: only where silence is the case
+// (a SILENT worker, which no load makes answer); elsewhere the service's own, so a worker that is slow to start under load is not
+// a timeout the case did not mean (a deadline armed with the request covers the fork).
+const episodic = (scripts, deadlineMs) => {
   const said = [], st = { forks: 0, clock: 0 }
   const svc = createQueryService({ home: rawHome('trocar-qsvc-'), deadlineMs, now: () => st.clock, failure: (where, e) => said.push({ where, code: e.code, reason: e.message }),
     fork: (h) => fake(scripts(++st.forks))(h) })
@@ -384,7 +397,7 @@ const SILENT = '', CRASH = 'process.exit(3)'
 const ANSWER = `const b = '{"ok":true}'; process.stdout.write('200 ' + b.length + '\\n' + b)`
 
 test('#20: a subject that keeps timing out while its window moves writes one query-failed; its cool-down forks nothing and doubles with each failure', async () => {
-  const { svc, said, st, ask } = episodic(() => SILENT)
+  const { svc, said, st, ask } = episodic(() => SILENT, 100)
   try {
     await assert.rejects(ask({ id: 'S', since: '0', limit: '10' }))
     assert.equal(st.forks, 1)
@@ -425,7 +438,7 @@ test('#12 · #20: with no worker, the cold route answers a cooling subject 500 w
 })
 
 test('#20: a crash and then a timeout of the same subject are one episode, one record', async () => {
-  const { svc, said, st, ask } = episodic((n) => (n === 1 ? CRASH : SILENT))
+  const { svc, said, st, ask } = episodic((n) => (n === 1 ? CRASH : SILENT), 100)
   try {
     await assert.rejects(ask({ id: 'S', before: '0' }))
     st.clock = CRASH_COOLDOWN_MS
@@ -617,6 +630,27 @@ const writeSegmentLines = (home, segment, lines) => fs.appendFileSync(path.join(
 // 3.5 §后台抽取与归约 · #32: the daemon's idle clock counts from the worker's last background slice as well as from its last request
 // or kick. A kicked cold fold several times longer than idleMs is folded to its frontier before the worker leaves, and the checkpoint
 // it leaves (the fold log's sidecar with the reduction state at that frontier, 4.3 §4 旁索引) is what a fresh worker resumes from.
+// Each half where it is deterministic: the clock rule over the service's seam in this process, and the real worker's fold of a kicked
+// session with the service's own idle clock. The real worker runs niced behind everything else (worker.mjs lowerPriority), so how far
+// apart its slices land is the machine's load: a test idleMs of a few seconds raced it and lost on a busy machine, and by the rule a
+// worker whose slices land further apart than idleMs leaves (the next kick resumes it from its checkpoint).
+test('kick: every slice the worker reports starts the idle clock again: slices several idle periods long never end it, and it leaves idleMs after the last (3.5 #32)', async () => {
+  const IDLE = 200, said = []
+  let c = null
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), idleMs: IDLE, failure: (w, e) => said.push(e.code), fork: (h) => (c = inProcess()(h)) })
+  try {
+    svc.kick(['seg:1'])
+    assert.deepEqual(c.sent, [{ kick: ['seg:1'] }], 'the kick forked a worker and handed it the ids')
+    // a slice every IDLE / 4 for four idle periods: in one event loop each report falls due before the idle clock it starts again
+    let n = 0, last = 0, cut = null
+    await new Promise((d) => { const t = setInterval(() => { cut ??= c.killedAt; last = Date.now(); c.emit('message', { progress: true }); if (++n === 16) { clearInterval(t); d() } }, IDLE / 4) })
+    assert.equal(cut, null, 'the worker was ended while it still reported slices')
+    await within(new Promise((d) => { const t = setInterval(() => c.killedAt != null && (clearInterval(t), d()), 10) }), 60_000, 'the worker left on its idle clock')
+    assert.ok(c.killedAt - last >= IDLE - 1, `it left ${c.killedAt - last} ms after its last slice, not idleMs`)
+    assert.deepEqual(said, [], 'an idle exit is no failure')
+  } finally { svc.stop() }
+})
+
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
 // the fold log's text: its sealed parts, then its plain tail, read through the line file (4.3 §4 分片)
 const foldBytes = (file) => {
@@ -625,65 +659,68 @@ const foldBytes = (file) => {
 }
 const lastFrontier = (file) => { try { const f = foldBytes(file).toString('utf8').split('\n').filter((l) => l.startsWith('{"f"')).at(-1); return f ? JSON.parse(f) : null } catch { return null } }
 const stateOf = (file) => { const sc = loadSidecar({ file, endsLine: (n) => foldBytes(file)[n - 1] === 10 }), m = sc && sc.parts['r.m']; return sc && sc.parts['r.s'] && m && JSON.parse(m[0]).rv === REDUCE_V ? sc.head : null }
-// `runs` are the workers the kicks forked
-async function kickedFold({ calls, wire, idleMs, env = {}, killWhen = null, kicked = (members) => members.map((r) => String(r.id)) }) {
+const headOf = (log) => { try { return JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(path.dirname(log), 'head.json.gz')))) } catch { return null } }
+// A wait on the real worker lasts while it reports slices on the IPC channel, and fails after STALL ms with none.
+const STALL = 30_000
+// `runs` are the workers the kicks forked. Ends when the worker leaves (`killWhen` kills it) or when `done({log, last})` holds; then
+// the service is stopped, which ends a worker still there. No idleMs: the service's own.
+async function kickedFold({ calls, wire, env = {}, killWhen = null, done = null, kicked = (members) => members.map((r) => String(r.id)) }) {
   const home = path.join(tmpDir('trocar-qsvc-fold-'), '.trocar')
   const s = bigSession({ home, wire, subEvery: 4, subLanes: 3, late: 2 })
   s.append(calls)
   const members = sessionGroups(await indexRows({ home, errors: [] })).get(s.id)
-  const log = foldLogFile(home, s.id)
-  let child = null, exit = null
+  const log = foldLogFile(home, s.id), last = String(members.at(-1).id)
+  let child = null, exit = null, said = Date.now()
   const runs = []
-  const svc = createQueryService({ home, idleMs, fork: (h) => {
+  const svc = createQueryService({ home, fork: (h) => {
     child = fork(WORKER, [h], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: ['--require', NO_REAL_OS, ...heapFlags()], env: { ...workerEnv(), ...env } })
+    child.on('message', () => { said = Date.now() })
     const pid = child.pid // the service drops its listeners when it ends a worker: its exit is seen by its pid
     exit = new Promise((d) => { const t = setInterval(() => { try { process.kill(pid, 0) } catch { clearInterval(t); d(Date.now()) } }, 10) })
     runs.push(pid)
     return child
   } })
+  let poll = null
   try {
-    const t0 = Date.now()
     svc.kick(kicked(members))
     let first = null
-    const poll = setInterval(() => {
-      const f = lastFrontier(log)
-      if (f && first == null) first = Date.now()
-      if (killWhen && first != null && killWhen({ since: Date.now() - first, f, last: String(members.at(-1).id) })) child.kill('SIGKILL')
-    }, 10)
-    try {
-      const at = await within(exit, 150_000, 'the worker left')
-      return { home, id: s.id, members, log, runs, took: at - t0 }
-    } finally { clearInterval(poll) }
-  } finally { svc.stop(); if (exit) await exit }
+    const met = new Promise((resolve, reject) => {
+      poll = setInterval(() => {
+        const f = lastFrontier(log)
+        if (f && first == null) first = Date.now()
+        if (killWhen && first != null && killWhen({ since: Date.now() - first, f, last })) child.kill('SIGKILL')
+        if (done && done({ log, last, f })) resolve()
+        else if (Date.now() - said > STALL) reject(new Error(`the worker reported no slice for ${STALL} ms`))
+      }, 10)
+    })
+    await Promise.race([exit, met])
+    return { home, id: s.id, members, log, runs }
+  } finally { clearInterval(poll); svc.stop(); if (exit) await exit }
 }
 
-test('kick: a kicked fold several times longer than idleMs is folded to its frontier before the worker leaves, with a checkpoint at that frontier (3.5 #32)', { timeout: 600_000 }, async (t) => {
-  // above the worker's own idle period (worker.mjs IDLE_SLICE_MS), as the daemon's QUERY_IDLE_MS is: the worker's idle save runs
-  const IDLE = 4_000
-  const { members, log, took, runs } = await kickedFold({ calls: 6_000, wire: 'threads', idleMs: IDLE })
-  const f = lastFrontier(log)
-  t.diagnostic(JSON.stringify({ took, members: members.length, workers: runs.length }))
-  assert.equal(runs.length, 1, 'one worker folded the whole session: the idle clock never stopped it mid-fold')
-  assert.equal(f && f.f, String(members.at(-1).id), 'the worker left with the session folded to its frontier')
+test('kick: a kicked cold fold is folded to its frontier by the one worker it forked, with a checkpoint at that frontier (3.5 #32)', { timeout: 600_000 }, async () => {
+  const { members, log, runs } = await kickedFold({ calls: 6_000, wire: 'threads', done: ({ log, last, f }) => f?.f === last && stateOf(log)?.bytes === foldBytes(log).length })
+  assert.equal(runs.length, 1, 'one worker folded the whole session')
+  assert.equal(lastFrontier(log)?.f, String(members.at(-1).id), 'the session is folded to its frontier')
   const st = stateOf(log)
   assert.ok(st && st.bytes === foldBytes(log).length, 'the fold log\'s sidecar holds the reduction state at that frontier')
-  assert.ok(took > 3 * IDLE, `the fold took several idle periods (${took} ms): else this case shows nothing`)
 })
 
 // 3.5 §后台抽取与归约 kick (D71①②): the keeper kicks the record ids of the new calls only, so a session never folded before is folded
 // from its start by a kick of its last record id alone, with no read: its head is tier 1 at its last member, nothing pending. The
-// daemon's idle clock outlasts the worker's idle period (worker.mjs IDLE_SLICE_MS), whose save writes a head the last slice left behind.
+// worker's idle period (worker.mjs IDLE_SLICE_MS) writes the head the last slice left behind.
 test('kick: a never-folded session kicked by its last record id alone is folded to its end with no read (head tier 1, pending null)', { timeout: 180_000 }, async () => {
-  const { home, id, members, log } = await kickedFold({ calls: 600, wire: 'http', idleMs: 4_000, kicked: (ms) => [String(ms.at(-1).id)] })
+  const atEnd = (head, last) => head != null && head.tier === 1 && head.pending === null && head.mark === last
+  const { members, log } = await kickedFold({ calls: 600, wire: 'http', kicked: (ms) => [String(ms.at(-1).id)], done: ({ log, last }) => atEnd(headOf(log), last) })
   assert.equal(lastFrontier(log)?.f, String(members.at(-1).id), 'the fold log stands at the last member')
-  const head = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(path.dirname(log), 'head.json.gz'))))
-  assert.deepEqual([head.tier, head.pending, head.mark], [1, null, String(members.at(-1).id)], 'the head: tier 1 at the last member, nothing pending')
+  const head = headOf(log)
+  assert.deepEqual([head?.tier, head?.pending, head?.mark], [1, null, String(members.at(-1).id)], 'the head: tier 1 at the last member, nothing pending')
 })
 
 test('a worker SIGKILLed after several checkpoint intervals of a fold leaves a reduction state to resume from (3.5 §后台抽取与归约, 4.3 §4 旁索引)', { timeout: 120_000 }, async () => {
   const EVERY = 50
   let killedAt = null
-  const { members, log } = await kickedFold({ calls: 250, wire: 'http', idleMs: 60_000, env: { TROCAR_CHECKPOINT_MS: String(EVERY) },
+  const { members, log } = await kickedFold({ calls: 250, wire: 'http', env: { TROCAR_CHECKPOINT_MS: String(EVERY) },
     killWhen: ({ since, f, last }) => { if (killedAt == null && since >= 4 * EVERY) killedAt = f.f === last ? 'after the end' : 'mid-fold'; return killedAt != null } })
   assert.ok(members.length < 256, 'fewer members than the count rule saves at: only the time rule can have saved')
   assert.equal(killedAt, 'mid-fold', 'the worker was killed before its fold ended')
