@@ -43,7 +43,7 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } =
       const pid = (x.processes || []).find((p) => p.captured === false) || null
       rows.push([h, CAPTURED(x), x.captured === true ? notSeenYet(x) : x.captured === null ? ((x.why || []).length ? openText(x, h) : notSeenYet(x) || openText(x, h)) : noteText(x.reason, { harness: h, pid: pid && pid.pid })])
     }
-    lines.push(...columns(rows).map((l) => `  ${l}`))
+    lines.push(...columns(rows, { width: WIDTH - 2 }).map((l) => `  ${l}`))
   }
   const missing = names.filter((h) => !shown.includes(h))
   if (missing.length) lines.push(`  not installed: ${missing.sort().join(', ')}`)
@@ -111,9 +111,10 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
     const w = Math.max(...forms.map((f) => String(f.form).length))
     for (const f of forms) {
       const k = f.certificate || {}, p = f.proxy || {}
-      lines.push(`  ${String(f.form).padEnd(w)}  certificate  ${k.in_effect ? `in effect (${k.carrier || 'unknown carrier'})` : noteText(k.code, { harness: h }) || unknown('your trust store could not be read')}`)
-      lines.push(`  ${' '.repeat(w)}  proxy        ${p.written ? `points at trocar ${portOf(p.written)}` : p.connected ? 'connected' : 'not connected'}`)
-      if (p.prior !== undefined) lines.push(`  ${' '.repeat(w)}               (was: ${p.prior || 'none'})`)
+      const rows = [[String(f.form).padEnd(w), 'certificate', k.in_effect ? `in effect (${k.carrier || 'unknown carrier'})` : noteText(k.code, { harness: h }) || unknown('your trust store could not be read')],
+        ['', 'proxy', p.written ? `points at trocar ${portOf(p.written)}` : p.connected ? 'connected' : 'not connected']]
+      if (p.prior !== undefined) rows.push(['', '', `(was: ${p.prior || 'none'})`])
+      lines.push(...columns(rows, { width: WIDTH - 2 }).map((l) => `  ${l}`))
     }
     lines.push('')
   }
