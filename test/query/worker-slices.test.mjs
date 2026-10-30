@@ -27,7 +27,7 @@ const homeOf = () => { const home = path.join(tmpDir('trocar-slices-'), '.trocar
 const sizeOf = (f) => { try { return fs.statSync(f).size } catch { return 0 } }
 
 // The daemon's idle clock that restarts at every reported slice is query-service.test.mjs's case; here the service's own clock.
-test('a never-projected session answers with pending, extraction goes on with nobody asking until the session is done, and the next worker answers it whole (3.5 #24, #32)', { timeout: 300_000 }, async () => {
+test('a never-projected session answers with pending, extraction goes on with nobody asking until the session is done, and the next worker answers it whole (3.5 #24, #32)', async () => {
   const home = homeOf()
   const s = bigSession({ home, subLanes: 4, late: 3 })
   s.growTo(128 << 20) // far more than one 50 ms slice extracts
@@ -55,7 +55,7 @@ test('a never-projected session answers with pending, extraction goes on with no
   } finally { svc.stop() }
 })
 
-test('after an idle period the worker collects the projection of a session the index no longer has (4.3 §4 回收)', { timeout: 120_000 }, async () => {
+test('after an idle period the worker collects the projection of a session the index no longer has (4.3 §4 回收)', async () => {
   const home = homeOf()
   const s = bigSession({ home })
   s.growTo(1 << 20)
@@ -70,7 +70,7 @@ test('after an idle period the worker collects the projection of a session the i
   } finally { svc.stop() }
 })
 
-test('a projection rebuilt when a background slice opened it is said on the next answer of that session, once (4.3 #7, D38)', { timeout: 120_000 }, async () => {
+test('a projection rebuilt when a background slice opened it is said on the next answer of that session, once (4.3 #7, D38)', async () => {
   const home = homeOf()
   const s = bigSession({ home })
   s.growTo(1 << 20)
