@@ -636,8 +636,8 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       // until launchd spawned the job, and launchd spawns one at most once every ThrottleInterval seconds (10 s, launchd's default: trocar writes no
       // ThrottleInterval, D62 ⑥ and darwin/autostart.mjs). An `off` no longer asks the daemon to exit, so `on` normally finds it already up and never
       // gets here; this note is what says so when it does. No "run trocar install" in it: on darwin `install` rewrites the plist and calls
-      // enable({now: false}), which does not reload an already loaded job, so the rewrite takes effect at the next login (D61,
-      // darwin/autostart.mjs enable) — only enable({now: true}) boots the job out and bootstraps it again.
+      // enable({now: false}), which does not reload an already loaded job (darwin/autostart.mjs enable); a running daemon on another copy's
+      // code is what install replaces (drain, stop, enable({now: true}), 1.6 §3.2 step 5, src/cli/replace-daemon.mjs).
       const startMs = ms() - startAt
       if (startMs >= SLOW_START_MS) notes.push(`${entryWords(osName, unit)} held the collector's start for ${startMs} ms; trocar waited on the OS, not on work of its own${osName === 'darwin' ? ' (launchd spawns a job at most once every ThrottleInterval seconds, 10 s by default)' : ''}`)
       if (rr && rr.code === 0 && rr.warn) notes.push(rr.warn) // the arch's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say) — the Run-value it could not take out, the daemon it started directly because /Run's SUCCESS was a lie

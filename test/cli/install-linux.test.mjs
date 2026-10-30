@@ -152,3 +152,23 @@ test('Linux install with no systemd --user: exit 1, the entry not enabled and sa
   const on = fakeIo()
   assert.equal(await runOnCli(['--yes'], onCtx(home, on, { exec: { run }, daemon: sys.daemon })), 0, on.text())
 })
+
+// V108 (1.6 §3.2 step 5): Linux replaces a collector that runs another copy's code through the same routine as macOS / Windows — the old one is
+// drained and stopped, the unit brings the new one up, and it is asked again which code it runs.
+test('Linux install replaces a collector that answers another code: the receipt says daemon.replaced', async () => {
+  const home = tmpDir('trocar-install-replace-')
+  seedClaude(home)
+  const sys = fakeSystem({ up: true })
+  let stopped = false // the old collector, until the stop; the unit starts this copy after it
+  const deps = {
+    daemonCode: async () => (!sys.daemon.state.up ? null : stopped ? codeId() : '0.0.0+0000000'),
+    stopDaemon: async () => { sys.daemon.state.up = false; stopped = true; return { stopped: true, pid: 4242, signals: ['SIGTERM'] } },
+  }
+  const dry = fakeIo()
+  assert.equal(await runInstallCli(['--dry-run', '--json'], { ...onCtx(home, dry, { exec: sys.exec, daemon: sys.daemon, deps }), platform: 'linux' }), 0, dry.text())
+  assert.ok(dry.json().planned.some((p) => p.what === 'daemon'), 'the plan names the replacement')
+  const io = fakeIo()
+  assert.equal(await runInstallCli(['--yes', '--json'], { ...onCtx(home, io, { exec: sys.exec, daemon: sys.daemon, deps }), platform: 'linux' }), 0, io.text())
+  assert.deepEqual([io.json().daemon.replaced, io.json().daemon.state], [true, 'running'], io.text())
+  assert.equal(sys.daemon.state.up, true, 'the unit brought the collector up again')
+})

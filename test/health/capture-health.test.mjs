@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { captureHealth, HealthUnreadable, LOCK_FRESH_MS } from '../../src/health/read.mjs'
+import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 
 const NOW = Date.parse('2026-10-06T12:00:00Z')
 const H = 3600e3
@@ -20,7 +21,7 @@ function home() {
   const manifest = (m) => { fs.mkdirSync(c, { recursive: true }); fs.writeFileSync(path.join(c, 'install-manifest.json'), typeof m === 'string' ? m : JSON.stringify(m)) }
   const lock = (agoMs = 0) => { fs.writeFileSync(path.join(c, 'lock'), JSON.stringify({ pid: 4242, ...ME })); const t = new Date(NOW - agoMs); fs.utimesSync(path.join(c, 'lock'), t, t) }
   const state = (desired, ts) => fs.writeFileSync(path.join(c, 'state.json'), JSON.stringify({ desired, updated_at: ts }))
-  const health = (o = {}) => captureHealth({ home: h, now: NOW, alive: () => true, identity: () => ME, ...o })
+  const health = (o = {}) => captureHealth({ harnesses: HARNESS_IDS, home: h, now: NOW, alive: () => true, identity: () => ME, ...o })
   return { h, c, flows, manifest, lock, state, health, done: () => fs.rmSync(h, { recursive: true, force: true }) }
 }
 const installed = (b) => { b.manifest({ version: 3, install: { state: 'complete' }, created_at: at(100 * H), entries: [], files: [] }); b.flows([{ ts: at(2 * H), event: 'daemon-start', pid: 4242 }]) }
@@ -35,6 +36,21 @@ test('not installed anywhere → installed:false and "not-installed", never "0 f
     const res = b.health()
     assert.deepEqual([res.installed, res.summary.state, res.summary.n, res.collector.residue.map((x) => x.result)], [false, 'residue', 2, ['left-link', 'left-unparsable']])
   } finally { b.done() }
+})
+
+test('a leftover old capture events file is not read (4.6 F8): the reading is the same with or without it, and alone it is "not-installed"', () => {
+  for (const withCollector of [false, true]) {
+    const a = home(), b = home()
+    try {
+      if (withCollector) { installed(a); installed(b) }
+      fs.mkdirSync(path.join(b.h, 'logs'), { recursive: true })
+      fs.writeFileSync(path.join(b.h, 'logs', 'mitm-events.ndjson'), [{ ts: at(H), event: 'failure', where: 'mitm', code: 'tls-handshake', reason: 'r' }, { ts: at(H), event: 'daemon-start', pid: 1 }].map((r) => JSON.stringify(r)).join('\n') + '\n{not json\n')
+      const same = (r, h) => JSON.parse(JSON.stringify(r).replaceAll(h, '<home>'))
+      const r = b.health()
+      assert.deepEqual(same(r, b.h), same(a.health(), a.h), withCollector ? 'installed' : 'nothing installed')
+      if (!withCollector) assert.deepEqual([r.installed, r.summary], [false, { state: 'not-installed' }])
+    } finally { a.done(); b.done() }
+  }
 })
 
 test('running: ✓ since the later of the daemon-start and switching on; off → "off since T"; a failure → failing N', () => {
@@ -77,7 +93,7 @@ test('the daemon by its lock alone: not running (clean stop · SIGHUP), not runn
   } finally { b.done() }
 })
 
-test('an unreadable flows/ or collector directory throws (503); an unparsable manifest is "unknown", listed', () => {
+test('an unreadable flows/ or collector directory throws (status: no health, an errors entry); an unparsable manifest is "unknown", listed', () => {
   const b = home()
   try {
     installed(b)

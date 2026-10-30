@@ -71,3 +71,23 @@ test('3.5 #37: a kicked fold the heap holds no room for writes pending.stopped i
     assert.equal(h.pending, null, 'no stop is left in the head')
   } finally { svc.stop() }
 })
+
+// The stop is gone from the head on the session's next slice that does not throw, while the fold still has members past its frontier
+// (3.5 §会话读「`session --head`」 pending.stopped: 「下一个不抛错的切片去掉它并当即写 head」), not only once the fold reaches the end.
+// In-process: one background slice whose read of the session's projection fails throws (fold-failed); the next ones read it.
+test('3.5 #37: the first background slice that does not throw clears pending.stopped at once, with members still past the frontier', async () => {
+  const { extendSession } = await import('../../src/query/named/session.mjs')
+  const home = path.join(tmpDir('trocar-foldstop-clear-'), '.trocar'), segment = '20261020T164737Z'
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  const s = bigSession({ home, segment, growth: 2_000, subEvery: 3, compactAt: 20_000 })
+  s.append(120)
+  let fail = true
+  const failing = { ...fs, openSync: (f, ...a) => { if (fail && String(f).includes(`${path.sep}ctx${path.sep}`)) { fail = false; throw new Error('injected: the projection could not be read') } return fs.openSync(f, ...a) } }
+  await assert.rejects(extendSession({ home, fs: failing, writer: true }, s.id, 10))
+  const stoppedAt = headOf(home, s.id)
+  assert.equal(stoppedAt && stoppedAt.pending && stoppedAt.pending.stopped && stoppedAt.pending.stopped.code, 'fold-failed', 'the slice that threw wrote the stop')
+  assert.equal(await extendSession({ home, fs, writer: true }, s.id, 10), true, 'the next slice leaves members past the frontier')
+  const h = headOf(home, s.id)
+  assert.ok(h.pending && h.pending.done < h.pending.total, 'members are left past the frontier')
+  assert.equal(h.pending.stopped, undefined, 'the stop is gone from the head')
+})

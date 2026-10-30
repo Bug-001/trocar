@@ -13,11 +13,15 @@
 // parameters and the version, on an answer that would be kept and carries no `pending` (an answer still folding is not a
 // version anyone may hold: the fold goes on with no file the stamp sees changing); `-` otherwise. A request carrying `etag`
 // equal to the tag its version has now → 304, no bytes, no fold.
+//
+// THE STORED ANSWER (3.5 §谁执行它「存下的答案」): a 200 document of a name whose QUERIES `stored(params)` is true is written, through
+// `later` (the worker only, after the frame), as `{...doc, stored: {at}}` (src/query/stored.mjs); the answer's own bytes do not change.
 import { createHash } from 'node:crypto'
 import nodeFs from 'node:fs'
 import { promisify } from 'node:util'
 import { gzip as gzipCb } from 'node:zlib'
-import { runQuery, versionOf, QueryArgError } from './named/index.mjs'
+import { runQuery, versionOf, QueryArgError, QUERIES } from './named/index.mjs'
+import { writeStored } from './stored.mjs'
 import { trocarHome } from '../paths.mjs'
 import { fsTag } from './warm.mjs'
 
@@ -37,6 +41,7 @@ export async function answer({ name, params = {}, indent = 0, gzip: zip = false,
   const { home = trocarHome(), fs = nodeFs } = ctx
   const key = JSON.stringify([fsTag(fs), home, name, params, Number(indent) || 0, zip === true])
   let status = 200, text, version = null, tag = '-'
+  const at = new Date((ctx.now || Date.now)()).toISOString() // when this answer started: a stored answer's `stored.at`
   try {
     const c = { ...ctx, home, fs, once: {} } // one read of the segment index for the version and the run (session.mjs indexed)
     const v = await versionOf(name, params, c)
@@ -51,6 +56,7 @@ export async function answer({ name, params = {}, indent = 0, gzip: zip = false,
     if (!(w && w.key === v.key && JSON.stringify(doc.errors) === JSON.stringify(v.errors))) version = null
     if (version != null && !doc.pending) tag = tagOf(name, params, version)
     text = typeof doc.$text === 'string' ? doc.$text : JSON.stringify(doc, null, Number(indent) || 0) // a text answer: its bytes, never re-stringified
+    if (typeof doc.$text !== 'string' && QUERIES[name]?.stored?.(params) && typeof ctx.later === 'function') ctx.later(() => writeStored(home, name, params, { ...doc, stored: { at } }, fs))
   } catch (e) {
     status = e instanceof QueryArgError ? 400 : 500
     text = JSON.stringify({ error: String((e && e.message) || e) })

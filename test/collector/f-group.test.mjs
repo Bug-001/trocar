@@ -37,11 +37,12 @@ import { createWsRecorder } from '../../src/collector/core/ws/recorder.mjs'
 import { createFailureRecorder } from '../../src/collector/core/events.mjs'
 import { writeStateAtomic, setDesired, emptyState } from '../../src/off/state.mjs'
 import { encodeFrame } from '../lab/ws-client.mjs'
-import { createRedirectorClient } from '../../src/collector/arch/linux/redirector-client.mjs'
+import { createRedirectorClient, REDIRECTOR_PROTO } from '../../src/collector/arch/linux/redirector-client.mjs'
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
 import { captureHealth, HealthUnreadable } from '../../src/health/read.mjs'
+import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { sealSegment } from '../../src/raw/seal.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
@@ -81,7 +82,7 @@ const flowsOf = (s) => {
 // cannot read throws, which the command states; here that is reported as the same 503 shape the HTTP
 // route used to answer, so every assertion below still reads one way.
 async function endpoint(s) {
-  try { return { status: 200, ...captureHealth({ home: s.trocar }) } }
+  try { return { status: 200, ...captureHealth({ harnesses: HARNESS_IDS, home: s.trocar }) } }
   catch (e) { if (e instanceof HealthUnreadable) return { status: 503, error: `capture health could not be read: ${e.message}` }; throw e }
 }
 // (iii): `trocar collector status` with no daemon answering — it reads the disk
@@ -316,7 +317,7 @@ test('F3 parts: off, a helper death (degraded), a SIGHUP stop and its clean rest
   assert.ok(stop, '(iii) the offline document lists the helper death')
   assert.equal(stop.reason, flowsOf(s).filter((r) => r.event === 'helper-down').at(-1).reason, '(iii) the condition as of the stop, verbatim (C.3)')
   // (d) a helper speaking another protocol: never attaches; no "unclean stop" after a SIGHUP (h)
-  d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p, { TROCAR_FAKE_PROTO: '3' }).arch, harnesses: [cc] })
+  d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p, { TROCAR_FAKE_PROTO: String(REDIRECTOR_PROTO + 1) }).arch, harnesses: [cc] })
   try {
     await req(s.sock, 'POST', '/on', {})
     h = await endpoint(s)
@@ -670,8 +671,7 @@ test('F5 WebSocket labels and capture health, by D38 class: a call cut at the ca
 //       capture health ⚠ (by D38 class) is the F5 WebSocket test above.
 //   F4 (the capture file itself unwritable on the daemon's path): test/collector/daemon.test.mjs "an envelope that cannot be
 //       written is a durable failure record" — record/EISDIR in flows/, and the agent still gets its reply.
-//   F8: the old capture's own failure events went with it (D39⑥ executed 2026-10-11); the reader half still is
-//       test/health/capture-health.test.mjs "the old capture: …" ("old MITM only is not 「未安装」").
+//   F8: test/health/capture-health.test.mjs "a leftover old capture events file …" (not read; alone it is not installed).
 //   F9: test/health/capture-health.test.mjs and test/health/flows.test.mjs (an unreadable flows/ throws, installed:false,
 //       metadata only), test/cli/status-health.test.mjs (status: errors and exit 3), test/server/gate.test.mjs (Host /
 //       Origin), test/web-v2/caphealth-poll.test.mjs (stale after two missed periods).

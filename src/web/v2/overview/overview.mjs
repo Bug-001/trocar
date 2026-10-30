@@ -17,7 +17,7 @@ import { SCREEN_NAME } from '../labels/shell.mjs'
 import { harnessKey, harnessName, harnessIcon, UNIDENTIFIED } from '../core/chips.mjs'
 import { captureVerdict, capHealthPatch, agentVerdicts, failureSentence, AGENT_TIER } from '../core/capture-verdict.mjs'
 import { priceMatch, costOf, hitRatio, priceTableOf } from '../core/metrics.mjs'
-import { loadSessions } from '../library/logic.mjs'
+import { freshSessions } from '../library/logic.mjs'
 import { startPoll, INTERVAL } from '../core/poll.mjs'
 import { unpricedModels } from '../settings/prices.mjs'
 import { failureBrief, failureWord } from '../../../cli/words.mjs'
@@ -52,7 +52,7 @@ const ORDER = ['O1', 'O1p', 'O2', 'O3', 'O4', 'O5', 'O6', 'O9']
 const QUIET = ['ok', 'off', 'not-installed'] // the capture states that need no item (1.7 §事项目录 MUST)
 export function overviewItems(s, now) {
   const all = []
-  const H = s.caph && s.caph.data && !s.caph.data.unreadable ? s.caph.data : null
+  const H = s.caph && s.caph.data ? s.caph.data : null
   const push = (cls, key, o) => all.push({ cls, key, ...o })
 
   // ── O1 · an agent with a problem, worded as its 采集 page row (agentVerdicts); the net-blocked ones lead the table ──
@@ -67,7 +67,7 @@ export function overviewItems(s, now) {
   }
 
   // ── O2 · the capture service is stopped or not answering (the server's health, never re-folded here, 1.5), its state
-  // cannot be said (daemon.error, with its reason), or `status` could not be read (503) ─────────────────────────────
+  // cannot be said (daemon.error, with its reason), or the capture health in `status` could not be read ─────────────────────────────
   const cv = captureVerdict(s.caph && s.caph.data, { now })
   if (['unreadable', 'not-running', 'not-responding'].includes(cv.state)) push('O2', 'collector', { text: cv.text, href: '#/capture' })
   else if (H && H.daemon && H.daemon.error) push('O2', 'collector', { text: W.UNKNOWN_ITEM(String(H.daemon.error)), href: '#/capture' })
@@ -389,7 +389,7 @@ export function firstUse(s) {
 // 各 agent 一行 (1.7 §首次使用 · 1.9 §开关): the capture page's rows (agentVerdicts) and, for the same documents, its one control.
 // s.control = GET /control/status's answer (null before it), s.ui = Map read-side id → {busy, receipt} (kept across repaints).
 function agentRowsHtml(s) {
-  const H = s.caph && s.caph.data && !s.caph.data.unreadable ? s.caph.data : null
+  const H = s.caph && s.caph.data ? s.caph.data : null
   const rows = H ? agentVerdicts(H, null) : []
   if (!rows.length) return ''
   const ui = s.ui || new Map()
@@ -475,7 +475,7 @@ export function mount(el, ctx) {
     return { ok: s.caph.ok }
   }
   const readControl = () => api.controlStatus().then((r) => { s.control = r }, (e) => { s.control = { ok: false, error: String(e) } }).finally(render)
-  const readSessions = async () => fold('sessions', await loadSessions(api))
+  const readSessions = async () => fold('sessions', await freshSessions(api, { alive: () => !dead })) // a stored answer is not shown (4.4 §存下的答案)
   // the five slow reads share two sockets (1.7 §读取与刷新: the browser's six per origin keep room for status and sessions), the
   // window's own stats read included; an aborted read gives its socket back at once, as the browser does
   let free = 2

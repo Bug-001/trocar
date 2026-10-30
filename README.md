@@ -88,9 +88,11 @@ sudo "$(command -v node)" "$(command -v trocar)" setup-helper   # root's PATH ma
 The same five commands on every OS, in this order: `trocar install` (once) → `trocar on` → `trocar off` →
 `trocar status` (any time) → `trocar uninstall`. `install` lists every file it will touch and writes them after you
 confirm; until it has run, `trocar on` refuses (`error.code` `cert-not-installed`). `on` starts capture, `status` shows state,
-`off` takes every trace of trocar off your agents' path, and the certificates stay until `trocar uninstall`.
+`off` takes every trace of trocar off your agents' path, and the certificates stay until `trocar uninstall`. Running
+`trocar install` from another copy of trocar restarts the collector on that copy's code: the agents being captured
+stay captured, and connections open at that moment are cut and retried by the agent.
 
-From source: there is no global `trocar` on your PATH, so run it through the repo.
+From source (Node ≥ 22): there is no global `trocar` on your PATH, so run it through the repo.
 
 ```sh
 git clone https://github.com/Bug-001/trocar && cd trocar && npm install
@@ -234,7 +236,9 @@ holds the detail):
 Reading the records across sessions is `trocar query <name>` — the one core that reads data, of which
 the board is the HTTP shell (D59); there is no separate ETL step and no database to load. Both go through the
 daemon's query worker, which stays warm and keeps the segment index current as it captures, so a query about a
-session you are looking at answers in milliseconds; the board's answers come gzipped. The worker stays warm while
+session you are looking at answers in milliseconds; the board's answers come gzipped. The board's session list opens at once even when the worker is not running: the worker keeps its last answer for that list
+on disk, the daemon answers from it while the worker works out a fresh one, and the page says how old the list is and that it is
+being refreshed, then swaps in the fresh list without a reload. The worker stays warm while
 someone asks (an open board's look for new calls is answered from files and does not wake it) and leaves two minutes after the last query, newly captured model
 call or piece of background reading, giving its memory back; the next query starts a new one. So a first read longer
 than two minutes is finished, not cut off and started over, and a stop or crash in the middle of one loses at most its
@@ -343,6 +347,11 @@ which one has been shown to capture verbatim on which platform is the table at t
 **Linux** is driver mode (RFC 4.6, D31): an eBPF helper steers only the connections of agent processes you run to a
 loopback engine, which decrypts only for agents that trust the collector CA. Everything else, including other users,
 goes direct. `install` writes the CA under `~/.trocar/collector/ca/` and each agent's trust entry (table below).
+trocar can also run in a pid namespace of its own, as it does inside a container. The helper then numbers processes in
+that namespace, on kernels whose cgroup programs can read a process's pid there (6.8 can). Inside a container the
+helper also needs `cap_bpf`, `cap_net_admin` and `cap_perfmon` in the container's bounding set, a seccomp profile that
+allows `bpf()`, and no user namespace of the container's own. Where the helper cannot number processes the way the daemon sees them, it
+refuses to start (helper exit `namespace`, with the reason) instead of capturing nothing.
 
 **macOS and Windows** run one model (RFC 4.11, D57). The proxy is the collector's own engine: one loopback door per
 agent group, loopback only, no TUN, never the system proxy, nothing written into your VPN.
@@ -535,6 +544,9 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
 - **Some sessions are grouped by guess.** Hermes on a custom endpoint, and Kimi without a body key, send
   no session id at all; their calls are grouped by the system prompt and a 30-minute gap (never by process
   or connection), and the session is marked **session boundary inferred**. The rule is provisional until checked on a real capture.
+  A keyless summary request (pi's, for one) is not grouped this way when it shares the user's text with a session
+  of the same agent that was active in the last 30 minutes: it joins that session as a compaction. A session with an id
+  stays unmarked; a session that was itself grouped by guess stays marked inferred.
 - **On captures without process identity the harness is a guess.** Sessions recorded by the MITM or
   reverse proxy carry no `proc.agent`, so the board names their agent from the User-Agent and it is
   marked **inferred** (from the request headers, not the process). Sessions from the per-process collector are named by process, never by UA.

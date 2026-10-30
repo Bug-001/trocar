@@ -5,13 +5,14 @@
 // Node client's protocol handling is exercised end-to-end with a real spawned process,
 // no root and no eBPF. Test-only ops are prefixed `__`; the real loader rejects them.
 import readline from 'node:readline'
+import { REDIRECTOR_PROTO } from '../../../../../src/collector/arch/linux/redirector-client.mjs'
 
 // node --test discovers every file under test/ as a test file and runs it; this fixture is
 // not a test and would otherwise hang the runner on stdin. Exit immediately unless spawned by
 // its driver (redirector-client.test.mjs sets TROCAR_FAKE_LOADER=1).
 if (process.env.TROCAR_FAKE_LOADER !== '1') process.exit(0)
 
-const PROTO = process.env.TROCAR_FAKE_PROTO ? Number(process.env.TROCAR_FAKE_PROTO) : 2 // = REDIRECTOR_PROTO
+const PROTO = process.env.TROCAR_FAKE_PROTO ? Number(process.env.TROCAR_FAKE_PROTO) : REDIRECTOR_PROTO
 const state = {
   attached: false,
   enginePort: 0,

@@ -12,18 +12,19 @@ export const params = Object.freeze([]);
 const WINDOWS = Object.freeze([['h24', 24 * 3600e3], ['d7', 7 * 86400e3], ['all', null]]);
 const zero = () => Object.fromEntries(WINDOWS.map(([k]) => [k, { calls: 0, bytes: 0 }]));
 
-export async function run({ home, fs, now, errors }) {
+export async function run({ home, fs, now, errors, progress = null }) {
   const table = readTable({ home, fs });
   for (const pr of table.problems) errors.push({ where: 'classes.json', code: pr.code, reason: pr.reason, ...(pr.fatal ? { fatal: true } : {}) });
 
   const counts = new Map(table.classes.map((c) => [c.class, zero()]));
   const t = now();
-  const segs = await allSegments({ home, fs });
+  const segs = await allSegments({ home, fs, progress });
   let as_of = null; // 附录 C.5: the newest call time in the whole index
 
   for (const s of segs) {
     for (const pr of s.problems) errors.push(problemEntry(`segments/${s.segment}`, pr));
-    const { records } = await segmentIndex({ home, segment: s.segment, fs });
+    const { records } = await segmentIndex({ home, segment: s.segment, fs, progress });
+    if (progress) progress();
     for (const r of records) {
       // A class on disk that the table does not name (an edited table, a record from before an edit) is
       // counted under its own line rather than dropped (invariant 4), and said to be no longer in the table.

@@ -47,13 +47,13 @@ import net from 'node:net'
 /** Line-protocol version. Must equal TROCAR_PROTO in redirector.c. */
 // trocar.h TROCAR_HEARTBEAT_STALE_NS: past this age the kernel stops rewriting connects.
 export const HEARTBEAT_STALE_MS = 2000
-export const REDIRECTOR_PROTO = 2 // 2 (D38): status `drops`; config / heartbeat / watch / unwatch say when the map write failed
+export const REDIRECTOR_PROTO = 3 // 3 (4.6 §pid 命名空间): pids in the engine's pid namespace; watch refuses a tgid outside the hooks' cgroup tree
 
 /** Where `sudo trocar setup-helper` installs the capped loader; override with TROCAR_REDIRECTOR_BIN. */
 export const DEFAULT_REDIRECTOR_BIN = '/usr/local/libexec/trocar/trocar-redirector'
 
 /** The helper's exit codes (redirector.c main) by name, for helper-down (D38 D-14). */
-export const HELPER_EXIT = { 1: 'load-failed', 2: 'usage', 3: 'parent-mismatch', 4: 'environment', 5: 'lockdown-failed' }
+export const HELPER_EXIT = { 1: 'load-failed', 2: 'usage', 3: 'parent-mismatch', 4: 'environment', 5: 'lockdown-failed', 6: 'namespace' }
 const STDERR_TAIL = 20
 
 export function createRedirectorClient({

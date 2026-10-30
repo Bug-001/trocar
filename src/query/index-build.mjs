@@ -44,7 +44,7 @@ import { rowTable, isRowTable, heapOf } from './row-table.mjs';
 
 const rawDir = (home = trocarHome()) => path.join(home, 'raw');
 export const indexDir = (home = trocarHome()) => path.join(home, 'index');
-const INDEX_V = 5;
+const INDEX_V = 6;
 const CHUNK = 1 << 20;
 // How many appended bytes one catch-up of the daemon's keeper takes (src/collector/index-keeper.mjs imports it): the
 // unit of "a chunk of index work". A READER that had to read more than this from a segment is the honest definition of
@@ -111,7 +111,11 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null 
     entrypoint: entrypointOf(e),
     log_only: isLogOnly(e),
     subagent: !!String(headerOf(e, 'x-claude-code-agent-id') || '').trim(),
-    synth_hash: synth ? synth.hash : null,
+    synth_hash: synth && synth.hash != null ? synth.hash : null,
+    // kinship (3.4 按内容认亲): any call of a `synth: true` harness → the user-text fingerprints its session is recognized by; a
+    // keyless call that is its harness's compaction request → the ones it looks with. Space-joined strings ('' when none): a scalar row.
+    kin_fp: synth && synth.fp ? synth.fp.join(' ') : null,
+    kin_probe: synth && synth.probe ? synth.probe.join(' ') : null,
     offset,  // where this line starts in the plaintext segment, so one record is read by seek (null: sealed)
   };
 }
@@ -120,7 +124,8 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null 
 // → { records, mark, bytesRead, done }: mark.end = just past the last newline (where the next read resumes).
 // `maxBytes` stops the scan at the first line boundary past that many bytes (`done: false`); it always takes at least
 // one whole line, so a caller that loops until `done` always makes progress, however long a single line is.
-function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Infinity) {
+// `progress` is called after every chunk read: a scan of a cold segment is background work the query worker reports (3.5 后台抽取与归约).
+function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Infinity, progress = null) {
   const fd = fs.openSync(file, 'r');
   try {
     const st = fs.fstatSync(fd);
@@ -147,6 +152,7 @@ function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Inf
       }
       if (seg < n) pending = Buffer.concat([pending, buf.subarray(seg, n)]);
       pos += n;
+      if (progress) progress();
     }
     const end = lineStart;
     const done = pos >= st.size;
@@ -184,9 +190,9 @@ function scanSealed(fs, file, segment, problems) {
   } finally { sf.close(); }
 }
 
-// ── the index document: append-only NDJSON (INDEX_V 5; 4.2 §段索引) ────────
+// ── the index document: append-only NDJSON (INDEX_V 6; 4.2 §段索引) ────────
 // One file per segment, one line per fact: an entry (a record, bare), a problem (`{"p":…}`), or a mark
-// (`{"m":…,"v":5}` = "the index covers this segment up to m.end"). A pass APPENDS its new entries and problems and
+// (`{"m":…,"v":6}` = "the index covers this segment up to m.end"). A pass APPENDS its new entries and problems and
 // then one mark; a reader takes everything up to the LAST complete mark and ignores what follows it (a torn batch).
 // That is what makes keeping the index current cost the NEW records, never the whole segment: the whole-document
 // format this replaces (v3) rewrote ≈ e·N²/2 bytes per segment, and real traffic gives nearly every record a pass of
@@ -463,9 +469,10 @@ export const problemEntry = (where, p) => ({ where, code: p.code, ...(p.level ? 
  *   entries: what the daemon's keeper already knows about the lines it just wrote ([{lineNo, offset, storedBytes,
  *     entry}], in line order; see fromEntries). Taken ONLY when they account for the segment exactly from the stored
  *     mark to its current size, so the answer is the scan's answer; anything else falls back to the scan.
+ *   progress: called after every chunk the scan reads (a reader's; scanNdjson).
  * Never throws for a segment it cannot read: the reason is in `problems` and the caller lists it in `errors`.
  */
-export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null, past = null } = {}) {
+export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null, past = null, progress = null } = {}) {
   const problems = [];
   const source = segmentSource(home, segment, fs);
   const sealed = /\.sealed$/.test(source);
@@ -486,7 +493,7 @@ export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, 
     got = sealed
       ? scanSealed(fs, source, segment, problems)
       : (owner && fromEntries(fs, source, stored, how, entries))
-        || scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes);
+        || scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes, progress);
   } catch (e) {
     problems.push({ code: 'segment-unreadable', reason: `${path.basename(source)}: ${String((e && e.message) || e)}` });
     return { segment, source, records: stored && how === 'resume' ? stored.records || [] : [], problems: [...prior, ...problems], bytesRead: 0, done: true, stored: kept, grown: false };
@@ -540,12 +547,12 @@ export const segStamp = (home, segment, fs, at = null) => {
  *  file moved. For READERS only: a pass of the daemon's keeper (`owner`) writes, so it is never served from memory.
  *  A note (`level`, e.g. `index-cold`) is about the read that RAN segmentIndex, so it is never kept: a later read
  *  served from memory did none of that work, and an index write does not move the stamp (3.5 读不全 #17). */
-export const warmSegmentIndex = async ({ home = trocarHome(), segment, fs = nodeFs, at = null } = {}) => {
+export const warmSegmentIndex = async ({ home = trocarHome(), segment, fs = nodeFs, at = null, progress = null } = {}) => {
   let notes = [];
   const kept = await segRows.get(`${fsTag(fs)}\n${home}\n${segment}`, segStamp(home, segment, fs, at), async (old) => {
     // the answer this segment had: its index read goes on from where that one stopped (4.2:49)
     const prev = old ? await Promise.resolve(old).catch(() => null) : null; // kept as the promise it was computed as
-    const got = columnar(await segmentIndex({ home, segment, fs, past: prev && prev.stored }), segment);
+    const got = columnar(await segmentIndex({ home, segment, fs, past: prev && prev.stored, progress }), segment);
     if (got.grown && got.records !== prev.records && got.records.length >= prev.records.length) grew.set(got.records, recordsId(prev.records));
     notes = got.problems.filter((p) => p.level);
     return notes.length ? { ...got, problems: got.problems.filter((p) => !p.level) } : got;
@@ -591,14 +598,16 @@ const defaultLockState = (home, fs) => readDaemonLock({ file: path.join(collecto
 // A segment that has BOTH files was interrupted after the rename and before the plaintext was deleted: the plaintext
 // wins (4.2:30), so it is the source, it gives the bytes, and the state is `closed` — not `sealed`, which would say the
 // long-term copy is the sealed one while 128 MB of plaintext is still on disk (tested 2026-10-18).
-/** allSegments({home}) → [{ segment, state, path, records, bytes, sealed_bytes, from, to, problems }], oldest first. */
-export async function allSegments({ home = trocarHome(), fs = nodeFs, lockState = () => defaultLockState(home, fs) } = {}) {
+/** allSegments({home}) → [{ segment, state, path, records, bytes, sealed_bytes, from, to, problems }], oldest first. `progress`: called
+ *  after every segment and every chunk a cold segment's scan reads (as indexRows). */
+export async function allSegments({ home = trocarHome(), fs = nodeFs, lockState = () => defaultLockState(home, fs), progress = null } = {}) {
   const seen = segmentFiles(home, fs);
   const L = lockState() || {};
   const current = L.state === 'running' && L.lock ? L.lock.segment || null : null;
   const out = [];
   for (const [segment, at] of seen) {
-    const { records, problems, source } = await warmSegmentIndex({ home, segment, fs, at });
+    const { records, problems, source } = await warmSegmentIndex({ home, segment, fs, at, progress });
+    if (progress) progress();
     const sealedBytes = at.sealed ? sizeOf(fs, path.join(rawDir(home), `${segment}.sealed`)) : null;
     // one pass through the accessor: the summed stored bytes (a sealed segment), and the first and last call time as strings sort
     let stored = 0, from = null, to = null;

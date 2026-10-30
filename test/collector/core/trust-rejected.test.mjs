@@ -11,6 +11,7 @@ import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { appendEvent, createFailureRecorder } from '../../../src/collector/core/events.mjs'
 import { captureHealth } from '../../../src/health/read.mjs'
+import { HARNESS_IDS } from '../../../src/off/harness-names.mjs'
 import { LEVELS, UNFOLDED_CODES, CODES } from '../../../src/health/codes.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { closeWithin } from '../../helpers/bounded.mjs'
@@ -59,7 +60,7 @@ test('4.6 R9: a client that refuses trocar\'s leaf → one critical trust-reject
   recorder.flush()
 
   // capture health: the critical conditions first, with `level`
-  const health = captureHealth({ home })
+  const health = captureHealth({ harnesses: HARNESS_IDS, home })
   const conds = health.collector.conditions
   assert.deepEqual(conds.slice(0, 2).map((c) => [c.kind, c.level, c.host]), [['trust-rejected', 'critical', 'api.deepseek.com'], ['trust-rejected', 'critical', 'chat.deepseek.com']])
   assert.ok(conds.some((c) => c.kind === 'negative-cache'), 'the negative cache\'s own condition is still there, after them')

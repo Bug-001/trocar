@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { captureHealth } from '../../src/health/read.mjs'
+import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { foldFlows } from '../../src/health/flows.mjs'
 import { checkRecord, isFailure } from '../../src/health/codes.mjs'
 
@@ -50,7 +51,7 @@ test('captureHealth over a real collector dir: the condition shows, the state is
     fs.writeFileSync(path.join(c, 'lock'), JSON.stringify({ pid: 4242, start_time: '900', boot_id: 'b1' })); const t = new Date(NOW); fs.utimesSync(path.join(c, 'lock'), t, t)
     const day = at(0).slice(0, 10), flow = path.join(c, 'flows', `${day}.ndjson`)
     const write = (...recs) => fs.appendFileSync(flow, recs.map((r) => JSON.stringify(r) + '\n').join(''))
-    const health = () => captureHealth({ home: h, now: NOW, alive: () => true, identity: () => ({ start_time: '900', boot_id: 'b1' }) })
+    const health = () => captureHealth({ harnesses: HARNESS_IDS, home: h, now: NOW, alive: () => true, identity: () => ({ start_time: '900', boot_id: 'b1' }) })
     write(start, { ts: at(200), event: 'failure', where: 'retention', code: 'retention-unparsable', reason: 'torn' })
     const bad = health()
     assert.deepEqual(bad.collector.conditions.map((x) => x.kind), ['retention']); assert.equal(bad.summary.state, 'failing')

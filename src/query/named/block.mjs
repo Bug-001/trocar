@@ -25,12 +25,15 @@ const NOTE = {
   reserialized: 'the capture stored the request as parsed JSON: these bytes were re-serialized from it, not taken off the wire',
 };
 
-export async function run({ home, fs, params: p, errors }) {
+export async function run({ home, fs, params: p, errors, progress = null }) {
   const refs = (Array.isArray(p.ref) ? p.ref : [p.ref]).filter((r) => r != null && r !== '').map(String);
   if (!refs.length) throw new QueryArgError('trocar query block: --ref is required (a block\'s ref, as `trocar query lane` gives it)');
   const parsed = refs.map(parsed1);
   const blocks = [];
-  for (const [i, ref] of refs.entries()) blocks.push(await one({ home, fs, errors }, ref, parsed[i]));
+  for (const [i, ref] of refs.entries()) {
+    blocks.push(await one({ home, fs, errors, progress }, ref, parsed[i]));
+    if (progress) progress();
+  }
   return { blocks };
 }
 
@@ -43,10 +46,10 @@ function parsed1(ref) {
 }
 
 // One ref's item; what it cannot read is `bytes: null` and an errors entry with a BLOCK_PROBLEMS code (3.5 §会话读 `block`).
-async function one({ home, fs, errors }, ref, { recordId, field, start, end, at }) {
+async function one({ home, fs, errors, progress }, ref, { recordId, field, start, end, at }) {
   const miss = (code, reason) => { errors.push({ where: ref, code, reason }); return { ref, bytes: null, encoding: null, fidelity: null, truncated: null }; };
   let raw;
-  try { raw = await readRecord({ home, fs, ...at }); } catch (e) { return miss('record-unreadable', `record ${recordId} could not be read back: ${String((e && e.message) || e)}`); }
+  try { raw = await readRecord({ home, fs, ...at, progress }); } catch (e) { return miss('record-unreadable', `record ${recordId} could not be read back: ${String((e && e.message) || e)}`); }
   if (!raw) return miss('record-missing', `no record ${recordId} in this home's raw segments`);
 
   // A field of a record is the stored decoded text itself (4.6 §记录), so it is verbatim as it stands.

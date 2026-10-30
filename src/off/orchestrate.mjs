@@ -156,7 +156,8 @@ export async function drainDaemon(w, { drainMs = DRAIN_MS, by } = {}) {
 }
 
 /** Step 3: take the routing off and confirm it (see the header). `exit`: the whole daemon is to go once drained (no names). → `{ confirmed, unstoppable, state,
- *  how, socket (the control socket a daemon was found on, or the one that was to be asked), daemon: {pid, state}, relayed, relayed_reason?, stop?, problems: [],
+ *  how, socket (the control socket a daemon was found on, or the one that was to be asked), daemon: {pid, state}, relayed, relayed_reason?, stop?, refused? ({status, message}:
+ *  the daemon answered the request with an error status and changed nothing), problems: [],
  *  notes: [], failures: [{code, reason}], events: [{kind, reason, …}] }`. */
 export async function switchRoutingOff(w, { ids = null, now = false, exit = false, by = null } = {}) {
   const r = { confirmed: false, unstoppable: false, state: null, how: null, socket: null, daemon: { pid: null, state: 'none' }, relayed: 'unknown', problems: [], notes: [], failures: [], events: [] }
@@ -187,7 +188,7 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
       r.how = 'daemon-reply'
       if (!r.confirmed) fail('state-mismatch', `the daemon did not confirm that ${isProxyMode(w.platform) ? `its doors are shut${exit ? ' and it is exiting' : ''}` : `the kernel's watch table${exit ? ' and links' : ''} are off`} (actual: ${reply && reply.actual}, confirmed: ${reply && reply.confirmed}); the entries are left as they are. ${wayOut(w, r.daemon.pid)}`)
     } catch (e) {
-      if (e && e.status) fail('control-error', `the daemon refused the off request (${errMessage(e)}); the entries are left as they are. ${wayOut(w, lock && lock.pid)}`)
+      if (e && e.status) { r.refused = { status: e.status, message: errMessage(e) }; fail('control-error', `the daemon refused the off request (${errMessage(e)}); the entries are left as they are. ${wayOut(w, lock && lock.pid)}`) }
       else await stopIt(`did not answer the off request (${errMessage(e)})`)
     }
   } else if (st.state === 'unresponsive' || st.state === 'starting') await stopIt(st.reason || 'does not answer')

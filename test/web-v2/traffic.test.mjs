@@ -14,6 +14,7 @@ import { parseHash } from '../../src/web/v2/core/router.mjs'
 import { bytes } from '../../src/web/v2/core/fmt.mjs'
 import * as W from '../../src/web/v2/labels/traffic.mjs'
 import { trafficWorld } from './traffic-world.mjs'
+import { within } from '../helpers/bounded.mjs'
 
 const world = (async () => {
   const w = await trafficWorld()
@@ -108,7 +109,7 @@ test('#7 the caption row carries as_of and names the agents `sessions` has that 
   const alias = Object.keys(ALIASES).find((k) => ALIASES[k] === keep) || keep
   w.tamper((url, doc) => {
     if (url.startsWith('/api/traffic')) return { ...doc, hosts: doc.hosts.filter((r) => r.harness !== drop) }
-    if (url.startsWith('/api/sessions')) return { ...doc, sessions: [{ ...doc.sessions[0], harness: alias }, { ...doc.sessions[0], harness: drop }] }
+    if (url.startsWith('/api/sessions')) return { ...doc, sessions: [{ ...doc.sessions[0], harness: alias }, { ...doc.sessions[0], session_id: `${doc.sessions[0].session_id}-2`, harness: drop }] }
     return doc
   })
   try {
@@ -120,6 +121,31 @@ test('#7 the caption row carries as_of and names the agents `sessions` has that 
     const t = await w.mount(traffic, '#/traffic')
     assert.ok(!t.html().includes('class="cap-agent"'), 'unreadable sessions: no coverage note')
     t.inst.unmount()
+  } finally { w.tamper(null) }
+})
+
+// 4.4 §存下的答案: a sessions answer that carries `stored` is the worker's last, older list; the note is not built from it, and the list
+// is read again until a fresh answer comes (1.10 覆盖)
+test('#7 a stored sessions answer does not make the coverage note; the fresh one read after it does', async () => {
+  const { w, T } = await world
+  const drop = T.hosts[T.hosts.length - 1].harness
+  let reads = 0
+  w.tamper((url, doc) => {
+    if (url.startsWith('/api/traffic')) return { ...doc, hosts: doc.hosts.filter((r) => r.harness !== drop) }
+    if (url.startsWith('/api/sessions')) {
+      const one = { ...doc, sessions: [{ ...doc.sessions[0], harness: drop }] }
+      return ++reads === 1 ? { ...one, stored: { at: new Date(Date.parse(T.as_of) - 60e3).toISOString() } } : one
+    }
+    return doc
+  })
+  try {
+    const s = await w.mount(traffic, '#/traffic?window=all')
+    const notes = () => [...s.html().matchAll(/class="cap-agent" data-h="([^"]*)"/g)].map((m) => m[1])
+    assert.deepEqual(notes(), [], 'no note from the stored answer')
+    await within((async () => { while (!notes().length) await new Promise((d) => setTimeout(d, 50)) })(), 10_000, 'the note after a fresh read')
+    assert.deepEqual(notes(), [harnessKey(drop)])
+    assert.ok(reads >= 2, `the list was read again (${reads})`)
+    s.inst.unmount()
   } finally { w.tamper(null) }
 })
 

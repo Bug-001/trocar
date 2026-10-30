@@ -44,13 +44,19 @@ export function createPoller({ run, now = Date.now, base, alive = () => true, id
   return { poll }
 }
 
-// startPoll({run, base, now, doc}) → {poll(byReader), stop()}: a createPoller driven by a timer every `base` ms, idle while `doc` is
+// startPoll({run, base, soon, now, doc}) → {poll(byReader), stop()}: a createPoller driven by a timer every `base` ms, idle while `doc` is
 // hidden, one read at once on start (when visible) and the moment `doc` is visible again. A reader's read and a visible-again read
 // restart the timer, so no timer read comes less than `base` after them (4.4: never faster than the table). A read that throws
-// counts as a failure. After stop() nothing reads and the listener is gone.
-export function startPoll({ run, base, now = () => Date.now(), doc = globalThis.document }) {
+// counts as a failure. After stop() nothing reads and the listener is gone. With `soon`, a read that answered `pending` brings the
+// next timer read in `soon` ms after it instead of `base` (4.4 live-poll: a stored answer is followed by the fresh one).
+export function startPoll({ run, base, soon, now = () => Date.now(), doc = globalThis.document }) {
   let stopped = false, timer = 0
-  const safe = async () => { try { return await run() } catch { return { ok: false } } }
+  const safe = async () => {
+    let r
+    try { r = await run() } catch { r = { ok: false } }
+    if (soon && r && r.pending && !stopped) { clearTimeout(timer); timer = setTimeout(tick, soon) }
+    return r
+  }
   const p = createPoller({ run: safe, base, now, alive: () => !stopped, idle: () => !!(doc && doc.hidden) })
   const tick = () => { if (stopped) return; timer = setTimeout(tick, base); p.poll(false) }
   const byReader = () => { if (stopped) return; clearTimeout(timer); timer = setTimeout(tick, base); return p.poll(true) }

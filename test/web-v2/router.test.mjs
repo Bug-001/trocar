@@ -203,3 +203,22 @@ test('router: a replaceState / pushState that throws (a rate-limited Safari) nev
     off()
   } finally { mock.timers.reset() }
 })
+
+// 4.4 §存下的答案: #/session/<id> finds the session's project in the list; a stored (older) list that lacks a newer session is not
+// "not listed": the list is read again until it is fresh
+test('#/session/<id> resolves a session newer than a stored list: no "not listed" from the stored answer', async () => {
+  const { mount } = await import('../../src/web/v2/replay/session-link.mjs')
+  const row = (id) => ({ session_id: id, project_slug: `p-${id}`, harness: 'codex', title: null, last_ts: '2026-10-18T10:00:00.000Z' })
+  let reads = 0, went = null
+  const api = { get: async () => ({ ok: true, status: 200, data: ++reads === 1
+    ? { sessions: [row('old')], errors: [], next: null, stored: { at: '2026-10-18T09:00:00.000Z' } }
+    : { sessions: [row('old'), row('new')], errors: [], next: null } }) }
+  const el = { innerHTML: '', replaceChildren() {} }
+  const inst = mount(el, { api, router: { current: () => ({ id: 'new', params: {} }), go: (r) => { went = r } } })
+  try {
+    const end = Date.now() + 10_000
+    while (!went && !el.innerHTML.includes('notlisted') && Date.now() < end) await new Promise((d) => setTimeout(d, 50))
+    assert.ok(!el.innerHTML.includes('notlisted'), 'not said to be missing')
+    assert.equal(went && went.project, 'p-new')
+  } finally { inst.unmount() }
+})
