@@ -296,7 +296,8 @@ start history is incomplete, is `not-seen`: never a reason to call the agent not
 its key is still in custody and the daemon could make its intermediate (`cert-not-installed`, `cert-key-missing`,
 `cert-intermediate-unavailable`), and which certificate files trocar did not append to because they are not yours
 (`not-users-file`). `trocar status <harness>` prints these per form (a `certificate:` and a `proxy:` line, then trocar's value beside
-yours); `status --json` has them under `forms`. trocar only reads your proxy settings and never writes anything into a VPN.
+yours), then each note a harness carries, such as a way of starting the agent that skips trocar's hook and so is not
+captured; `status --json` has them under `forms`. trocar only reads your proxy settings and never writes anything into a VPN.
 
 The collector has descriptors for eight harnesses (D37) — `claude-code`, `codex` (its WebSocket transport is recorded
 call by call), `opencode`, `deepseek-dsh`, `kimi-code`, `hermes`, `z-code` and `pi` — on all three platforms. Which form of
