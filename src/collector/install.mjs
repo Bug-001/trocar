@@ -119,6 +119,8 @@ const shortLine = (l) => String(l).split(' # ')[0].trim()
 const DAEMON_CMD = 'trocar daemon' // 1.6 §2: the autostart unit's ExecStart is this command (units written before the rename run its alias `collector start`)
 /** The login entry in the platform's own words (a Windows user told to run `systemctl` has been handed nothing; tested on Windows 2026-10-11 and macOS 2026-10-18). */
 const entryWords = (osName, unit) => (osName === 'win32' ? 'the scheduled task \\trocar\\collector' : osName === 'darwin' ? `the LaunchAgent ${(unit && unit.name) || 'com.trocar.collector'}` : 'the systemd user unit trocar-collector.service')
+/** `registered()`'s answer in one phrase: the refusal below and install's read-back of the entry it registered (ensureDaemonUp) say it the same way. */
+const entryState = (osName, unit, q) => `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : q.state === 'disabled' ? 'is registered but switched off' : `could not be read (${q.err || 'no reason given'})`}`
 
 /** 附录 C.1: the code of the refusal below (one place, mirrored by src/cli/json.mjs's ERROR_CODES). */
 export const AUTOSTART_MISSING = 'autostart-missing'
@@ -133,7 +135,7 @@ export function autostartBlock({ unit, osName }) {
   if (q.state === 'present') return null
   // what the next login would undo, in the mode's own terms: the proxy mode points the agents at doors; the driver mode (Linux) writes no agent file, so its agents go direct, uncaptured
   const after = isModelOs(osName) ? 'and the agents trocar points at its doors would all fail to connect' : 'and capture would stop then while trocar still says it is on'
-  return `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : q.state === 'disabled' ? 'is registered but switched off' : `could not be read (${q.err || 'no reason given'})`}: the collector would not start at the next login, ${after}. Nothing was changed. Run: trocar install`
+  return `${entryState(osName, unit, q)}: the collector would not start at the next login, ${after}. Nothing was changed. Run: trocar install`
 }
 
 /** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
@@ -664,6 +666,16 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       }
     }
   } else if (!up) notes.push(`no login entry and no collector running: start it with ${DAEMON_CMD} (it follows what is turned on)${was.why ? `; ${was.why}` : ''}`)
+  // 1.6 §3.3 / 附录 C.2: what install says about the login entry is the entry asked again (the question `on` asks before it writes), never
+  // "no error was seen": a run the stuck daemon above halted registered nothing
+  if (register && unit && !unitFailed) {
+    const q = unit.registered()
+    if (q.state !== 'present') {
+      unitFailed = `${entryState(osName, unit, q)} after this install, so trocar on will refuse until it is: run trocar install again`
+      put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed })
+      notes.push(unitFailed); problems.push(unitFailed)
+    }
+  }
   return { up, started: started && up, sock, ask, unitFailed, notes, problems, halt }
 }
 function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'lock'), 'utf8')).pid ?? null } catch { return null } }

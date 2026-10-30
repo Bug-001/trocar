@@ -120,7 +120,7 @@ test('V94: HEAD = upstream and the collector on this code is exit 0 and writes n
   // the collector runs another code: it is stopped and pulled up again through the login entry, and then runs this one
   const s = sandbox()
   let daemon = '0.1.0+0000000'
-  const unit = { path: '/login/entry', enable: () => { daemon = codeId(s.root); return { code: 0 } } }
+  const unit = { path: '/login/entry', registered: () => ({ state: 'present' }), enable: () => { daemon = codeId(s.root); return { code: 0 } } }
   const stopped = []
   t = ctx(s, {
     daemonCode: () => daemon,
@@ -336,14 +336,14 @@ test('V96: --dry-run with a handover file writes nothing, and the daemon-only st
   fs.writeFileSync(file, bytes)
   const stopped = []
   const stopDaemon = async (o) => { stopped.push(o); return { stopped: true, pid: 4242, signals: [] } }
-  let t = ctx(s, { daemonCode: () => '0.1.0+0000000', deps: { stopDaemon, unit: { path: '/login/entry', enable: () => ({ code: 0 }) } } })
+  let t = ctx(s, { daemonCode: () => '0.1.0+0000000', deps: { stopDaemon, unit: { path: '/login/entry', registered: () => ({ state: 'present' }), enable: () => ({ code: 0 }) } } })
   assert.equal(await runUpdateCli(['--dry-run'], t.c), EXIT.ok, t.io.text())
   assert.equal(fs.readFileSync(file, 'utf8'), bytes, '--dry-run wrote nothing: the handover file is as it was')
   assert.deepEqual([t.calls.install, t.calls.on, t.calls.child, stopped], [[], [], [], []], 'no step ran and no daemon was stopped')
 
   // HEAD is the newest and the collector runs another code: without --yes, and with nobody to ask, nothing is replaced
   fs.rmSync(file)
-  t = ctx(s, { daemonCode: () => '0.1.0+0000000', deps: { stopDaemon, unit: { path: '/login/entry', enable: () => ({ code: 0 }) } } })
+  t = ctx(s, { daemonCode: () => '0.1.0+0000000', deps: { stopDaemon, unit: { path: '/login/entry', registered: () => ({ state: 'present' }), enable: () => ({ code: 0 }) } } })
   assert.equal(await runUpdateCli([], t.c), EXIT.usage, t.io.text())
   assert.deepEqual([stopped, t.calls.install], [[], []], 'the collector was not stopped')
 })
@@ -404,7 +404,7 @@ test('V96: the collector on another code is asked to drain and exit before it is
       daemonState: async () => ({ state: 'running', socket: sock, lock: { pid: 4242 } }),
       request: async ({ method, path: p, body }) => { asked.push([method, p, body]); return { actual: 'off', confirmed: true, pid: 4242, relayed: { closing: 0, waiting: 0, cut: 0 } } },
       stopDaemon: async (o) => { stopped.push(o); return { stopped: true, pid: 4242, signals: ['SIGTERM'] } },
-      unit: { path: '/login/entry', enable: () => { daemon = codeId(s.root); return { code: 0 } } },
+      unit: { path: '/login/entry', registered: () => ({ state: 'present' }), enable: () => { daemon = codeId(s.root); return { code: 0 } } },
       socketPath: sock, drainMs: 0,
     },
   })
