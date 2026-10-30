@@ -24,6 +24,7 @@ import { controlRequest, controlEndpointFor } from './core/control.mjs'
 import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
 import { runEventWriter } from '../off/events.mjs'
+import { hideUserinfoIn } from '../off/io.mjs'
 import { backupDir, opLockFile, standalonePath } from '../off/paths.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
@@ -220,7 +221,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const writing = steps.some((s) => act(s.action))
   const touched = new Set(steps.filter((s) => act(s.action) && s.harness).map((s) => s.harness))
   const restart = facts.map((f) => ({ f, agent: match(f).agent })).filter((x) => x.agent && touched.has(x.agent)).map((x) => ({ harness: x.agent, pid: x.f.pid })) // what is running now was started before its entry
-  const entryRow = (e, i) => ({ harness: e.harness, path: e.path, ...(preview[i] && preview[i].real_path ? { real_path: preview[i].real_path } : entryJ[i].entry && entryJ[i].entry.real_path ? { real_path: entryJ[i].entry.real_path } : {}), ...(e.kind === 'text' ? { what: describeEntry(e) } : { keys: e.keys, value: e.value }) })
+  const entryRow = (e, i) => ({ harness: e.harness, path: e.path, ...(preview[i] && preview[i].real_path ? { real_path: preview[i].real_path } : entryJ[i].entry && entryJ[i].entry.real_path ? { real_path: entryJ[i].entry.real_path } : {}), ...(e.kind === 'text' ? { what: describeEntry(e) } : { keys: e.keys, value: hideUserinfoIn(e.value) }) }) // a row is shown, never a URL's password (1.6 §1.2); the entry written keeps the value
   const day = now().toISOString().slice(0, 10)
   const caNew = !(fs.existsSync(ca.key) && fs.existsSync(ca.pem))
   const runDir = path.join(dir, 'run', 'trust')

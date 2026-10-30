@@ -45,6 +45,8 @@ export function makeIo({ stdin, stdout, stderr = stdout }) {
 // `/ ? #`, a quote or a backslash — so it never runs out of a JSON string either. Idempotent; text without a URL passes as it is.
 const USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#"'`<>\\@]*(?:@[^\s/?#"'`<>\\@]*)*@/gi
 export const hideUserinfo = (s) => String(s).replace(USERINFO, '$1***@')
+/** The same over a JSON value (a receipt, a key's value): every string in it, as JSON; hideUserinfo never runs out of a JSON string. */
+export const hideUserinfoIn = (v) => (v === undefined ? v : JSON.parse(hideUserinfo(JSON.stringify(v))))
 
 /** The same io, every line it prints through `out` / `err` passed through hideUserinfo: how a command that changes state prints (main.mjs, the standalone trocar-off). */
 export const hidingIo = (io) => ({ ...io, out: (s) => io.out(hideUserinfo(s)), err: (s) => io.err(hideUserinfo(s)) })

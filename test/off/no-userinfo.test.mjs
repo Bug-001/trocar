@@ -13,6 +13,7 @@ import { lineComment } from '../../src/off/text-edit.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
 import { runCli } from '../../src/cli/main.mjs'
 import { installedHome, flowEvents } from './fixtures/off-ctx.mjs'
+import { VERBS } from '../../src/control/board.mjs'
 
 const PW = 'pw-not-a-real-secret-41f9'
 // the door's own form, a password holding an unescaped `@` and `:`, a socks scheme, a user name alone as the token
@@ -65,6 +66,9 @@ for (const [i, url] of URLS.entries()) {
       assert.ok(lines.length > 0, 'off wrote its lines')
       assert.ok(!JSON.stringify(lines).includes(PW), `the flows lines carry no password: ${JSON.stringify(lines)}`)
       assert.ok(!json.lines.join('\n').includes(PW), `--json carries no password: ${json.lines.join('\n')}`)
+      // the kept backups' reasons are text for a person, kept in the manifest for every later off: no password there either
+      const kept = readManifest(s.dir).kept_backups || []
+      assert.ok(kept.length > 0 && !JSON.stringify(kept).includes(PW), `the manifest's kept backups carry no password: ${JSON.stringify(kept)}`)
 
       // the same off as text, over a second home in the same state
       const t = await installedHome({ names: ['claude-code'] })
@@ -77,4 +81,24 @@ for (const [i, url] of URLS.entries()) {
       assert.ok(!text.lines.join('\n').includes(PW), `the text receipt carries no password: ${text.lines.join('\n')}`)
     })
   }
+}
+
+// the board's off (POST /control/harness, on:false) answers with the receipt `--json` prints: planned, confirmed, and no password in either answer
+for (const [i, url] of URLS.entries()) {
+  test(`the board's off with ${url.split('://')[0]} form #${i}: neither the plan nor the receipt carries the password`, async () => {
+    const s = await installedHome({ names: ['claude-code'] })
+    const m = readManifest(s.dir), settings = path.join(s.home, '.claude', 'settings.json')
+    applyJsonKey({ dir: s.dir, manifest: m, harness: 'claude-code', phase: 'on', home: s.home, file: settings, keys: ['env', 'https_proxy'], value: url })
+    saveManifest(s.dir, m)
+    const doc = JSON.parse(fs.readFileSync(settings, 'utf8')); doc.mine = true; fs.writeFileSync(settings, JSON.stringify(doc) + '\n')
+    const ctx = { home: path.join(s.home, '.trocar'), deps: { ...s.offDeps(), env: s.sh.env } }
+    const plan = await VERBS.harness({ harness: 'claude-code', on: false }, ctx)
+    assert.equal(plan.status, 409, JSON.stringify(plan.doc))
+    assert.ok(!JSON.stringify(plan.doc).includes(PW), `the plan carries no password: ${JSON.stringify(plan.doc)}`)
+    const done = await VERBS.harness({ harness: 'claude-code', on: false, confirm: plan.doc.plan_id }, ctx)
+    assert.equal(done.status, 200, JSON.stringify(done.doc))
+    assert.ok(done.doc.ok !== false && done.doc.kept_backups.length > 0, JSON.stringify(done.doc))
+    assert.ok(!JSON.stringify(done.doc).includes(PW), `the receipt carries no password: ${JSON.stringify(done.doc)}`)
+    assert.ok(!fs.readFileSync(settings, 'utf8').includes('https_proxy'), "trocar's entry is out")
+  })
 }
