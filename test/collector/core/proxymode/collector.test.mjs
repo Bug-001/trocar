@@ -729,3 +729,30 @@ test('4.6 §开关 · isOn follows on / off; a state.json that cannot be read at
   assert.equal(r.c.isOn(d.name), false)
   r.c.close()
 })
+
+// P7 step 3's files at the door (the wiring): the door reads the harness's own proxy file through ctx, at the path the process's own env gives (the
+// variable that moves it is fetched from the process), once per process life; an `override` file wins over the env, a `fill` file only fills; an unread
+// file is said with its errno. Every descriptor with a proxy file and a macOS form, its directory left in place and moved.
+test('CM20 · the door applies the harness\'s own proxy file (ctx, the process\'s env, its directory moved), once per process life', async () => {
+  const FILE = 'http://file.corp:4', ENV = 'http://env.corp:1'
+  for (const d of descs.filter((x) => x.proxy.files.length && x.proxyMode.forms.some((f) => f.os.includes('darwin')))) {
+    const f = d.proxyMode.forms.find((x) => x.os.includes('darwin')), g = `${d.name}:${f.route}`, f0 = d.proxy.files[0]
+    const text = f0.format === 'json' ? JSON.stringify(f0.keys[0].reduceRight((v, k) => ({ [k]: v }), FILE)) : `${f0.keys[0]}=${FILE}\n`
+    for (const moved of f0.env ? [{}, { [f0.env]: '/moved' }] : [{}]) for (const set of [false, true]) for (const unread of [false, true]) {
+      const env = { ...moved, ...(set ? { [d.proxy.env[0]]: ENV } : {}) }, file = f0.path({ home: '/h', env })
+      const base = ctxOf(newWorld('darwin')), reads = []
+      const readFile = (p) => { reads.push(p); if (p !== file) return base.readFile(p); if (unread) throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); return text }
+      const { c, records } = await rig({ desc: d, w: { pid: ++pid, facts: { agent: d.name, startedAt: INSTALLED + 1 }, env, ctx: { ...base, readFile } } })
+      await c.on({ harnesses: [d.name], groups: { [g]: 18101 } })
+      const label = `${d.name} ${f0.applies} env=${JSON.stringify(env)} unread=${unread}`
+      const ask = () => c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+      const meta = await ask()
+      if (unread && (f0.applies === 'override' || !set)) {
+        assert.equal(meta.upstream.kind, 'direct', label)
+        assert.ok(records.some((r) => r.event === 'failure' && r.code === 'prior-proxy-unknown' && r.reason.includes('EACCES') && r.reason.includes(file)), `${label}: the record names the file and the errno (D38)`)
+      } else assert.equal(meta.upstream.host, set && f0.applies === 'fill' ? 'env.corp' : 'file.corp', label)
+      if (!unread) { const before = reads.filter((p) => p === file).length; await ask(); assert.equal(reads.filter((p) => p === file).length, before, `${label}: read once per process life`) }
+      c.close()
+    }
+  }
+})

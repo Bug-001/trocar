@@ -133,7 +133,7 @@ const REPLACE = (vars) => vars.map((v) => ({ var: v, semantic: 'replace' }))
 // How Hermes reads a proxy (RFC 1.6 §9.7): the proxy variables from its environment and from the active home's .env (HERMES_HOME names it; ~/.hermes by default); it follows the OS proxy and takes SOCKS.
 const proxy = {
   env: ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy'],
-  files: [{ path: ({ home, env }) => path.join(env.HERMES_HOME || path.join(home, '.hermes'), '.env'), format: 'dotenv', keys: ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy'] }],
+  files: [{ path: ({ home, env }) => path.join(env.HERMES_HOME || path.join(home, '.hermes'), '.env'), env: 'HERMES_HOME', format: 'dotenv', keys: ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy'], applies: 'override' }],
   systemProxy: { http: true, ws: true },
   schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'],
   unsupported: {},
