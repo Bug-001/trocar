@@ -61,7 +61,7 @@ function usersFileWhy(file, { fs = nodeFs, owns }) {
 }
 
 /** runInstall({ os, home, env, harnesses, custody, rootStore, ctx, owns, … }) → { manifest, fp256, items, carriers, pending, problems, exit }. See the header. */
-export async function runInstall({ os, home, env = process.env, harnesses, custody, rootStore, ctx, owns, installHelper = null, interactive = false, wrapperKit = null, renderHook = null, facts = {}, unit = null, only = null, nodeRoots = tls.rootCertificates, fs = nodeFs, now = () => new Date() }) {
+export async function runInstall({ os, home, env = process.env, harnesses, custody, rootStore, ctx, owns, installHelper = null, interactive = false, wrapperKit = null, renderHook = null, facts = {}, unit = null, only = null, code: ran = codeId(), nodeRoots = tls.rootCertificates, fs = nodeFs, now = () => new Date() }) {
   const dir = collectorHome(path.join(home, '.trocar'))
   const ca = caPaths(path.join(dir, 'ca'))
   const m = readManifest(dir, fs) || newManifest(now())
@@ -199,7 +199,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     const placed = Object.fromEntries(names.map((h) => [h, itemsOfPhase(m, 'install').filter((x) => x.harness === h).map((x) => ({ kind: x.kind, path: x.path }))]))
     // `code`: the code that ran install (1.6 §5.5: an npm copy's update finishes until it is this code). A Set up (only) is not an install: it keeps
     // the code the last install wrote, so an update after `npm i -g` still runs install and `on` on the new code (4.6 清单)
-    const code = only ? (m.install && typeof m.install.code === 'string' ? m.install.code : null) : codeId()
+    const code = only ? (m.install && typeof m.install.code === 'string' ? m.install.code : null) : ran
     const next = { state, at: installComplete(m) && state === 'complete' ? m.install.at : now().toISOString(), pending, harnesses: names, items: placed, ...(code ? { code } : {}) }
     if (JSON.stringify(next) !== JSON.stringify(m.install)) m.install = next
     if (JSON.stringify(m) !== before) save()

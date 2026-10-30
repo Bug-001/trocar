@@ -187,9 +187,9 @@ function storeWithSealing({ P, failure, query }) {
  *  store becomes final, the index settles, daemon-stop is written with `relayed` (absent when the engine step failed: it is in `failed`), the failure
  *  recorder becomes final (later lines → stderr only), and the lock's one owner removes it last: a lock still there at the next start means this
  *  stop never finished. Every step runs; one that fails is recorded with its reason, never thrown past the rest (D38). → {failed: [where…]} */
-// Who asked the whole daemon to stop (1.6 §5.2): `update` and `uninstall` name themselves on their exit requests, so the rows the stop cuts say
+// Who asked the whole daemon to stop (1.6 §5.2): `update`, `install` (replacing a daemon on other code, §3.2 step 5) and `uninstall` name themselves on their exit requests, so the rows the stop cuts say
 // cut-by-stop and that command, and daemon-stop's reason is it; an exit request with no `by` is the operator's own off (cut-by-off, reason off).
-const STOP_BY = Object.freeze(['update', 'uninstall'])
+const STOP_BY = Object.freeze(['update', 'install', 'uninstall'])
 function stopByOf(b) {
   if (b.by === undefined) return null
   if (!STOP_BY.includes(b.by)) throw Object.assign(new Error(`"by" names the command stopping the daemon: one of ${STOP_BY.join(', ')}`), { status: 400 })
