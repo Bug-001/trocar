@@ -528,11 +528,12 @@ export function handleFlow(client, meta, ctx) {
         // certificate-check code never reaches us.
         const how = !synthetic(e) ? { type: e.code || 'error', message: msgOf(e), side: 'client' }
           : { type: 'closed_without_app_data', message: 'the client closed after the TLS handshake without sending application data', side: 'client' }
-        // A certificate alert is an answer whoever sends it. A zero-data close by a (who, host) that has sent data on our leaf is no rejection.
-        // One that came while the engine was the slow side and before our handshake completed may be a give-up or a Node refusal (whose
-        // Finished never leaves): it is recorded as such and counts toward the entry, but never writes trust-rejected (§引擎 5)
+        // A certificate alert is an answer whoever sends it. A zero-data close while the engine was the slow side and before our handshake
+        // completed may be a give-up or a Node refusal (whose Finished never leaves): by a (who, host) that has sent data on our leaf it is a
+        // give-up and counts for nothing; otherwise it counts toward the entry but never writes trust-rejected. A close on a fast engine is
+        // judged as a rejection, trusted before or not: another client of the same process may refuse our leaf there (§引擎 5)
         const alert = certAlert(e), gaveUp = !alert && slow && !secured
-        if (!alert && !gaveUp && ctx.negCache.trusts(key)) { notCaptured('client-closed-no-data', 'trusted-before'); if (!rec.error) rec.error = how; return }
+        if (gaveUp && ctx.negCache.trusts(key)) { notCaptured('client-closed-no-data', 'trusted-before'); if (!rec.error) rec.error = how; return }
         if (gaveUp) notCaptured('client-closed-no-data', 'engine-slow')
         else notCaptured('client-rejected-leaf', 'client-rejected-leaf')
         if (!rec.error) rec.error = how
