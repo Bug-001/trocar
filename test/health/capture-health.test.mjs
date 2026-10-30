@@ -37,6 +37,21 @@ test('not installed anywhere → installed:false and "not-installed", never "0 f
   } finally { b.done() }
 })
 
+test('a leftover old capture events file is not read (4.6 F8): the reading is the same with or without it, and alone it is "not-installed"', () => {
+  for (const withCollector of [false, true]) {
+    const a = home(), b = home()
+    try {
+      if (withCollector) { installed(a); installed(b) }
+      fs.mkdirSync(path.join(b.h, 'logs'), { recursive: true })
+      fs.writeFileSync(path.join(b.h, 'logs', 'mitm-events.ndjson'), [{ ts: at(H), event: 'failure', where: 'mitm', code: 'tls-handshake', reason: 'r' }, { ts: at(H), event: 'daemon-start', pid: 1 }].map((r) => JSON.stringify(r)).join('\n') + '\n{not json\n')
+      const same = (r, h) => JSON.parse(JSON.stringify(r).replaceAll(h, '<home>'))
+      const r = b.health()
+      assert.deepEqual(same(r, b.h), same(a.health(), a.h), withCollector ? 'installed' : 'nothing installed')
+      if (!withCollector) assert.deepEqual([r.installed, r.summary], [false, { state: 'not-installed' }])
+    } finally { a.done(); b.done() }
+  }
+})
+
 test('running: ✓ since the later of the daemon-start and switching on; off → "off since T"; a failure → failing N', () => {
   const b = home()
   try {
@@ -77,7 +92,7 @@ test('the daemon by its lock alone: not running (clean stop · SIGHUP), not runn
   } finally { b.done() }
 })
 
-test('an unreadable flows/ or collector directory throws (503); an unparsable manifest is "unknown", listed', () => {
+test('an unreadable flows/ or collector directory throws (status: no health, an errors entry); an unparsable manifest is "unknown", listed', () => {
   const b = home()
   try {
     installed(b)

@@ -9,6 +9,7 @@ import { captureVerdict, capHealthPatch, agentVerdicts, AGENT_TIER } from '../..
 import { harnessKey } from '../../src/web/v2/core/chips.mjs'
 import { logRowsOf } from '../../src/web/v2/capture/capture-log.mjs'
 import { pageHtml } from '../../src/web/v2/capture/capture-view.mjs'
+import { overviewItems } from '../../src/web/v2/overview/overview.mjs'
 import { failureWord } from '../../src/cli/words.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
@@ -120,4 +121,32 @@ test('(7) 最近采到 and rule 5 read the overview document\'s harnesses[].last
   const html = pageHtml(s, captureVerdict(s), { ov: seen })
   for (const id of ids) assert.ok(html.includes(`href="#/sessions?h=${id}"`), `the 最近采到 link of ${id}`)
   assert.equal(/#\/sessions\?h=/.test(pageHtml(s, captureVerdict(s), { ov: null })), false, 'overview unread: no link')
+})
+
+test('(8) a capture health the server cannot read (4.6 F9): the real document has no health and names it in errors; the board says it could not read it, with that reason — never a bare "not known"', async () => {
+  const b = boardHome()
+  fs.mkdirSync(path.join(b.home, 'collector'), { recursive: true })
+  fs.writeFileSync(path.join(b.home, 'collector', 'flows'), 'x') // flows/ is not a directory: captureHealth() throws
+  const face = await serveBoard(b)
+  try {
+    const { status, doc } = await face.get('status')
+    assert.equal(status, 200)
+    const cut = (doc.errors || []).find((e) => e.where === 'capture health')
+    assert.ok(!doc.health && cut && cut.reason, JSON.stringify({ health: doc.health, errors: doc.errors }))
+    const p = capHealthPatch({ ok: true, status, data: doc }, 1)
+    const v = captureVerdict(p.capH, { okAt: 1, now: 1 })
+    assert.deepEqual([p.capHErr, v.state, v.reason], [null, 'unreadable', cut.reason])
+  } finally { await face.close() }
+})
+
+test('(9) an unreadable capture health hides nothing else the document says (K-28): the agent rows and the overview items still come from the readable fields', () => {
+  const doc = { harnesses: { 'claude-code': { desired: 'on' } }, errors: [{ where: 'capture health', reason: 'flows/ is not a directory' }, { where: 'the install record', reason: 'manifest is not JSON' }] }
+  const h = capHealthPatch({ ok: true, status: 200, data: doc }, 1).capH
+  const v = captureVerdict(h, { okAt: 1, now: 1 })
+  assert.equal(v.state, 'unreadable')
+  assert.match(pageHtml(h, v), new RegExp(`data-h="${harnessKey('claude-code')}"`), 'the agent row of a harness the document names')
+  const s = { caph: { data: h, okAt: 1, err: null, ok: true } }
+  for (const k of ['sessions', 'classes', 'pricing', 'stats', 'traffic', 'segments']) s[k] = { data: null, ok: null, err: null }
+  const cls = overviewItems(s, 1).rows.map((r) => r.cls)
+  assert.ok(cls.includes('O2') && cls.includes('O4'), JSON.stringify(cls)) // could not read capture health · the install record cannot be read
 })

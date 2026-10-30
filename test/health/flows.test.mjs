@@ -20,7 +20,7 @@ function box() {
 }
 const ids = (r) => r.records.map((x) => x.id)
 
-test('readFlows: no flows/ is "nothing yet"; an unreadable flows/ throws (503), never "no failures"', () => {
+test('readFlows: no flows/ is "nothing yet"; an unreadable flows/ throws (status: no health, an errors entry), never "no failures"', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-flows-'))
   try {
     assert.deepEqual([readFlows({ dir, now: NOW }).missing, readFlows({ dir, now: NOW }).records.length], [true, 0])
@@ -136,6 +136,19 @@ test('foldFlows: negative-cache entries are keyed by (neg_key ?? pid, host): two
   const exit = keys([...recs, { ts: at(5 * H), event: 'agent-exit', pid: 12 }])
   assert.deepEqual(exit, ['13|h.test', 'of.claude-code.cli|h.test', 'of.codex.cli|h.test'], 'a process exiting clears its own pid\'s entry and no form\'s')
   assert.equal(foldFlows(recs, { now: NOW }).conditions.find((c) => c.neg_key === 'of.codex.cli').pid, null, 'neg_key survives the metadata whitelist')
+})
+
+// RFC 4.6 W22 (the board's half): a negative-cache entry ends at its retry time, so a record whose retry_at is past is no condition; a refused
+// leaf seen by the door (trust-rejected, critical) of the same pair stays either way
+test('W22 foldFlows: a negative-cache record past its retry_at is no condition; a trust-rejected record of the same pair stays critical', () => {
+  const rec = (code, extra) => ({ ts: at(2 * H), event: 'failure', where: 'engine', code, pid: 31, neg_key: '31', agent: 'claude-code', host: 'h.test', reason: 'r', ...extra })
+  const kinds = (retryAt) => foldFlows([
+    { ts: at(3 * H), event: 'daemon-start', pid: 2 },
+    rec('negative-cache', { cause: 'client-rejected-leaf', retry_at: retryAt }),
+    rec('trust-rejected', { level: 'critical' }),
+  ], { now: NOW }).conditions.filter((c) => c.host === 'h.test').map((c) => c.kind).sort()
+  assert.deepEqual(kinds(at(H)), ['trust-rejected'], 'retry time passed: no negative-cache condition')
+  assert.deepEqual(kinds(new Date(NOW + H).toISOString()), ['negative-cache', 'trust-rejected'], 'retry time ahead: the condition stands')
 })
 
 test('foldFlows: 24 h failure groups (folded counts included), expected counts, per-agent last capture and failure', () => {
