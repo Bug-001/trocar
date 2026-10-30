@@ -137,5 +137,5 @@
 2. 失败句只出自一张表:看板读 `src/cli/words.mjs : FAILURE_WORDS`,不翻 `labels/capture.mjs` 里的中文副本;未知 `(where, code)` 与 CLI 同样回退。
 3. 保真词从不弱化:estimate 不变成 about,inferred 不消失,not captured 不写成空白。
 4. harness 名与类别 id 是数据,从不翻译。
-5. 用户文字里没有内部标签、节号、决策号、trocar 自身的源文件路径(D58②;守卫 `english.test.mjs`)。
+5. 用户文字里没有机读码、节号、决策号、trocar 自身的源文件路径(D58②;守卫 `english.test.mjs`)。
 
