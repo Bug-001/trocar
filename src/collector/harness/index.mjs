@@ -93,7 +93,7 @@ function proxyModeProblems(pm) {
     if (r.select !== undefined) { if (!obj(r.select)) say('shape', `${at}.select is not an object`); else loc(r.select.dir, `${at}.select.dir`, true) }
     if (r.kind === 'json-key' && r.file === undefined && r.select === undefined) say('shape', `${at} is json-key without file or select`)
     if (r.kind === 'dotenv-block' && r.file === undefined) say('shape', `${at} is dotenv-block without file`)
-    if (r.kind === 'plugin-file' && (r.dir === undefined || !nonEmpty(r.template))) say('shape', `${at} is plugin-file without dir and template`)
+    if (r.kind === 'plugin-file' && (r.dir === undefined || !nonEmpty(r.name) || !nonEmpty(r.template))) say('shape', `${at} is plugin-file without dir, name and template`)
     spellings(r.proxyKeys, `${at}.proxyKeys`)
     spellings(r.noProxyKeys, `${at}.noProxyKeys`)
   }

@@ -9,7 +9,7 @@
 //   owned-file   a plugin or shim trocar wrote (its sentinel in it, or exactly trocar's own plugin manifest)
 // Nothing else is touched, and no byte of a file outside those marks changes. The result says `undone-by-marker` (the code `off` records and the
 // receipt shows, 1.6 R3). Not done here, said in the docs: a combined bundle (no manifest, so nobody can say who holds it — `uninstall` removes it with the
-// CA), and a harness at a home the default places do not name (CODEX_HOME, XDG_CONFIG_HOME …). Imports only node:* and src/off.
+// CA), and a harness at a home the default places do not name (CODEX_HOME …) — a `route` place follows its variable (XDG_CONFIG_HOME), as `on` did. Imports only node:* and src/off.
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { SENTINEL, restoreOffLines } from './text-edit.mjs'
@@ -20,17 +20,24 @@ import { backupsOf } from './backup.mjs'
 import { trocarHome } from './paths.mjs'
 import { CODE_OFF } from './names.mjs'
 import { decodeText, encodeText, CHARSETS, WHY_TEXT } from './text-codec.mjs'
+import { resolveLoc } from './loc.mjs'
 
 const RC_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin'] // where the Kimi installer's PATH line, and so trocar's, can be
 const PLUGIN_MANIFEST = '{"type":"module"}\n' // the anonymous package.json of trocar's dsh plugin directory (collector/harness/_plugins.mjs: ANONYMOUS_MODULE_MANIFEST)
 
-/** Where each harness's entries are, relative to HOME. `how` says what trocar's mark looks like there (see the header); `eachDir` + `file`: the file in
+/** The routing plugins `on` writes on macOS / Windows (4.11 P5 plugin-file routes): the folder (a <loc>, loc.mjs) and the file name. The descriptor's route takes
+ *  both from here, so the marker undo looks where `on` wrote — one copy of the place, and the copy trocar-off needs no collector tree to know it. */
+export const ROUTE_PLUGINS = Object.freeze({
+  opencode: Object.freeze({ dir: Object.freeze({ base: 'home', dir: '.config', env: 'XDG_CONFIG_HOME', path: 'opencode/plugins' }), name: 'trocar.js' }),
+})
+
+/** Where each harness's entries are, relative to HOME (`route`: a ROUTE_PLUGINS place, resolved against the environment off runs in). `how` says what trocar's mark looks like there (see the header); `eachDir` + `file`: the file in
  *  every subdirectory of a directory (Hermes profiles). The plan of 1.6 / 4.6 §身份与信任 is the authority; a harness not listed here has no marker undo. */
 export const MARKER_PATHS = Object.freeze({
   'claude-code': [{ how: 'json-value', file: '.claude/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'] }],
   codex: [{ how: 'block', file: '.codex/.env' }],
   hermes: [{ how: 'block', file: '.hermes/.env' }, { how: 'block', eachDir: '.hermes/profiles', file: '.env' }],
-  opencode: [{ how: 'owned-file', file: '.config/opencode/plugins/trocar-ca.js' }],
+  opencode: [{ how: 'owned-file', file: '.config/opencode/plugins/trocar-ca.js' }, { how: 'owned-file', route: ROUTE_PLUGINS.opencode }],
   'deepseek-dsh': [{ how: 'line', file: '.dsh/cordis.patch.yml', yaml: true }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/index.js' }, { how: 'owned-file', file: '.trocar/collector/plugins/dsh/package.json', exact: PLUGIN_MANIFEST }],
   'kimi-code': [...RC_FILES.map((f) => ({ how: 'line', file: f })), { how: 'owned-file', file: '.trocar/collector/bin/kimi' }],
   'z-code': [{ how: 'json-value', file: '.zcode/cli/config.json', keys: ['network', 'caCertFile'] }],
@@ -67,10 +74,11 @@ function blocksIn(t, root) {
 const lineHits = (t, root) => linesOf(t).filter((l) => l.line.includes(LINE_MARK) && l.line.includes(root + path.sep))
 
 // the candidate files of a spec for this home: [{ file, spec }]
-function candidates(home, harness, fs) {
+function candidates(home, harness, fs, env, platform) {
   const out = []
   for (const spec of MARKER_PATHS[harness]) {
-    if (spec.eachDir) {
+    if (spec.route) for (const d of resolveLoc(spec.route.dir, { os: platform, home, env })) out.push({ file: path.join(d, spec.route.name), spec })
+    else if (spec.eachDir) {
       let names = []
       try { names = fs.readdirSync(path.join(home, spec.eachDir)).sort() } catch { /* no such directory */ }
       for (const n of names) out.push({ file: path.join(home, spec.eachDir, n, spec.file), spec })
@@ -81,12 +89,12 @@ function candidates(home, harness, fs) {
 
 /** What trocar's own marks say it changed for these harnesses (`ids` null: all), without a manifest: `[{ harness, path, how, detail }]`, in the order to
  *  undo them (values and blocks, then lines, then plugins and shims). Reads only; a file it cannot read or parse is planned only if a mark is in it. */
-export function planByMarker({ home, ids = null, fs = nodeFs }) {
+export function planByMarker({ home, ids = null, fs = nodeFs, env = process.env, platform = process.platform }) {
   const root = trocarHome(home)
   const plan = []
   for (const harness of Object.keys(MARKER_PATHS)) {
     if (ids && !ids.includes(harness)) continue
-    for (const { file, spec } of candidates(home, harness, fs)) {
+    for (const { file, spec } of candidates(home, harness, fs, env, platform)) {
       let b
       try { b = readOrNull(fs, file) } catch { continue }
       if (b == null) continue

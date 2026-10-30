@@ -1,6 +1,7 @@
 // test/off/marker.test.mjs — src/off/marker.mjs (RFC 1.6 R3 「按标记撤销」, 4.6 §安装清单与卸载): undoing trocar's changes with no manifest, by trocar's own
 // marks — sentinel blocks and lines, JSON values that point under ~/.trocar, the plugins and shims trocar wrote — at the places each harness keeps its entry.
-// Every case installs all seven harnesses through the real installCollector into a sandbox HOME, then deletes the manifest and works from the HOME alone.
+// The Linux cases install all seven harnesses through the real installCollector into a sandbox HOME, then delete the manifest and work from the HOME alone;
+// the macOS / Windows cases write each routing plugin through `on`'s own route writer.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -15,6 +16,9 @@ import { backupsOf, writeBackup } from '../../src/off/backup.mjs'
 import { manifestPath } from '../../src/off/manifest.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sevenHomes } from './fixtures/seven-homes.mjs'
+import { world, door } from '../collector/core/proxymode/fixtures/entries-ctx.mjs'
+import { routeEntry, noProxyNames } from '../../src/collector/core/proxymode/entries.mjs'
+import { renderHook } from '../../src/collector/harness/templates/index.mjs'
 
 const roots = { node: [createCa({ commonName: 'marker root' }).certPem], osText: '' }
 const read = (f) => fs.readFileSync(f, 'utf8')
@@ -135,3 +139,22 @@ test('D48② with no manifest: a key the user set while on keeps the user\'s val
   assert.equal(r.restored, 2, 'the lines that came back are counted, line 1 after the mark among them')
   assert.deepEqual(r.prior_left, [{ key: 'SSL_CERT_FILE', line: 3 }], 'the old line left out of effect is reported by line, as the journal path reports it')
 })
+
+// macOS / Windows: `on` writes a routing plugin (a plugin-file route, 4.11 P5). With the manifest lost, the marker undo finds it where `on` put it —
+// the place the descriptor's route names, through the same resolver, XDG_CONFIG_HOME and the like included — and removes it.
+for (const { h, r } of (await loadHarnesses()).flatMap((d) => Object.values((d.proxyMode && d.proxyMode.routes) || {}).map((r) => ({ h: d, r }))).filter((x) => x.r.kind === 'plugin-file')) {
+  for (const os of ['darwin', 'win32']) for (const over of [false, true]) {
+    test(`${h.name} · ${os}${over ? ` · ${r.dir.env} set` : ''}: the routing plugin \`on\` wrote is found and removed by its mark when the manifest is gone`, async () => {
+      const w = world({ os })
+      if (over) w.ctx.env[r.dir.env] = path.join(w.root, 'elsewhere')
+      const p = (h.proxy || {}).env || []
+      const ctx = { ...w.ctx, harness: h.name, route: r, render: (tpl, v) => renderHook(tpl, { DOOR: v.door, PROXY_ENV: p, PROXY_NAMES: p, NO_PROXY_ENV: noProxyNames(h) }).text }
+      const [rec] = routeEntry(r.kind).write(ctx, door()).records
+      assert.ok(fs.existsSync(rec.path))
+      const plan = planByMarker({ home: w.home, env: w.ctx.env, platform: os, ids: [h.name] })
+      assert.deepEqual(plan.map((x) => [x.harness, x.path, x.how]), [[h.name, rec.path, 'owned-file']])
+      assert.deepEqual(undoByMarker(plan, { home: w.home }).map((x) => x.result), ['undone-by-marker'])
+      assert.ok(!fs.existsSync(rec.path))
+    })
+  }
+}
