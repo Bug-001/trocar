@@ -182,7 +182,7 @@ function validateForms(forms) {
   return bad
 }
 
-// ── the network topology (RFC 1.6 §9.4: `status --json` key `topology`, the board's `/api/capture-health` `netenv.topology`) ──────────────────────────────────────────────────────────────────────────
+// ── the network topology (RFC 1.6 §9.4: `status --json` key `topology`, the board's `status` query, the same document) ──────────────────────────────────────────────────────────────────────────
 // The closed sets are written here once, so the Windows branch (4.8 §10) adds none: its proxy-mode values (`routing: 'proxy'`, `trocar-forwarder`, `forward`, `branches[].form`, the edge's `trocar` /
 // `entry`, `env-unreadable`) are already members.
 /** How the platform steers an agent's connections to trocar (D43: one mode per platform; there is no `mixed`). */
