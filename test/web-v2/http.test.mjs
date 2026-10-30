@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { api, scoped } from '../../src/web/v2/core/api.mjs'
-import { configure, bootToken, onForbidden, post, READ_DEADLINE_MS } from '../../src/web/v2/core/http.mjs'
+import { configure, bootToken, onForbidden, post, getText, READ_DEADLINE_MS } from '../../src/web/v2/core/http.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { QUERY_NAMES } from '../../src/query/client.mjs'
@@ -214,6 +214,18 @@ test('A9 (4.4 two-part ETag): hold:false sends the ETag back and a 304 is {ok:tr
   })
 })
 
+test('4.4 §答案文件 代标签: a Range read with a held tag sends it as If-Range; every answer hands its ETag back', async () => {
+  await withFetch((url, init) => new Response(headerOf(init, 'range') ? 'x\n' : 'a\nx\n', { status: headerOf(init, 'range') ? 206 : 200, headers: { etag: '"g1"', 'content-range': headerOf(init, 'range') ? 'bytes 2-3/4' : '' } }), async (calls) => {
+    const whole = await getText('/api/d/open.main', { id: 'S' })
+    assert.equal(whole.etag, '"g1"')
+    assert.equal(headerOf(calls[0].init, 'if-range'), undefined, 'no Range, no If-Range')
+    const part = await getText('/api/d/open.main', { id: 'S' }, { range: 2, tag: whole.etag })
+    assert.equal(headerOf(calls[1].init, 'range'), 'bytes=2-')
+    assert.equal(headerOf(calls[1].init, 'if-range'), '"g1"')
+    assert.equal(part.etag, '"g1"')
+  })
+})
+
 test('K-30: after a 403 no request is sent, every read is {ok:false, status:403}, onForbidden fires once', async () => {
   let fired = 0
   onForbidden(() => fired++)
@@ -236,4 +248,3 @@ test('real face: status answers on the empty machine and sessions lists the demo
     assert.equal(ss.status, 200); assert.ok(ss.doc.sessions.length >= 1)
   } finally { await b.close() }
 })
-

@@ -63,10 +63,12 @@ function latch(status) {
 // early(path, params): a read sent before the screen that wants it exists (core/first.mjs, 1.2 #24). Its answer is kept by full URL and
 // handed, once, to the first get() of that URL; it went through get(), so the ETag is recorded once and a 403 latches as any other.
 const earlyReads = new Map()
-export function early(path, params) { earlyReads.set(path + qs(params), get(path, params)) }
+export function early(path, params, opts) { earlyReads.set(path + qs(params), get(path, params, opts)) }
 
-// `hold:false` keeps only the ETag of the URL, and a 304 answers {ok:true, status:304, data:null}: the caller has the document
-export async function get(path, params, { signal, hold = true } = {}) {
+// `hold:false` keeps only the ETag of the URL, and a 304 answers {ok:true, status:304, data:null}: the caller has the document;
+// `cond:false` asks without If-None-Match (a caller that holds no document of that URL yet)
+const tipOf = (r) => { const t = r.headers.get('x-trocar-tip'); return t ? { tip: t } : {} }
+export async function get(path, params, { signal, hold = true, cond = true } = {}) {
   if (forbidden) return FORBIDDEN
   if (signal && signal.aborted) return { ok: false, status: 0, error: ABORTED }
   const url = path + qs(params)
@@ -78,7 +80,7 @@ export async function get(path, params, { signal, hold = true } = {}) {
   }
   const headers = {}
   if (token) headers[CONTROL_TOKEN_HEADER] = token
-  const was = hold ? held.get(url) : tags.has(url) ? { etag: tags.get(url) } : undefined
+  const was = hold ? held.get(url) : cond && tags.has(url) ? { etag: tags.get(url) } : undefined
   if (was) headers['if-none-match'] = was.etag
   const ac = new AbortController()
   let timedOut = false
@@ -89,7 +91,7 @@ export async function get(path, params, { signal, hold = true } = {}) {
   let r, b
   try {
     try { r = await fetch(url, { cache: 'no-store', headers, signal: ac.signal }) } catch (e) { return ended({ ok: false, status: 0, error: String((e && e.message) || e) }) }
-    if (r.status === 304) return !was ? { ok: false, status: 304, error: 'HTTP 304' } : hold ? { ok: true, data: was.data } : { ok: true, status: 304, data: null }
+    if (r.status === 304) return !was ? { ok: false, status: 304, error: 'HTTP 304' } : hold ? { ok: true, data: was.data } : { ok: true, status: 304, data: null, ...tipOf(r) }
     b = await readBody(r) // inside the deadline: a body that stalls is aborted and lands in readBody's catch
   } finally {
     clearTimeout(timer)
@@ -102,7 +104,39 @@ export async function get(path, params, { signal, hold = true } = {}) {
   if (b.bad) return { ok: false, status: r.status, error: 'not JSON' }
   const etag = r.headers.get('etag')
   if (etag) { if (hold) remember(held, url, { etag, data: body }); else remember(tags, url, etag) }
-  return { ok: true, data: body, bytes: b.len } // an empty 2xx is a success carrying null; `bytes` = the body's UTF-8 bytes (the session cache's measure, 0.2 §5, D71③)
+  return { ok: true, data: body, bytes: b.len, ...tipOf(r) } // `tip`: x-trocar-tip when the answer carries it (4.4 §答案文件); an empty 2xx is a success carrying null; `bytes` = the body's UTF-8 bytes (the session cache's measure, 0.2 §5, D71③)
+}
+
+// getText(path, params, {range, tag, signal}): a text read of an answer file (4.4 §答案文件) — `range` (a byte offset) asks `Range: bytes=<range>-`,
+// with `If-Range: <tag>` when a tag is given (the tail's generation: another one answers 200, the whole file).
+// → {ok, status, text, range, etag, tip} | {ok:false, status, error}: `range` = the Content-Range header, `tip` = x-trocar-tip; a 206, a 200 and a
+// 416 (the file is shorter than the offset: `range` names its size) are all answers. The browser decompresses a gzip file itself.
+export async function getText(path, params, { range = null, tag = null, signal } = {}) {
+  if (forbidden) return FORBIDDEN
+  if (signal && signal.aborted) return { ok: false, status: 0, error: ABORTED }
+  const headers = {}
+  if (token) headers[CONTROL_TOKEN_HEADER] = token
+  if (range != null) { headers.range = `bytes=${range}-`; if (tag) headers['if-range'] = tag }
+  const ac = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => { timedOut = true; ac.abort() }, READ_DEADLINE_MS)
+  const cancel = () => ac.abort()
+  if (signal) signal.addEventListener('abort', cancel, { once: true })
+  const ended = (fallback) => (timedOut ? { ok: false, status: 0, error: TIMED_OUT } : signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : fallback)
+  let r, text
+  try {
+    try { r = await fetch(path + qs(params), { cache: 'no-store', headers, signal: ac.signal }) } catch (e) { return ended({ ok: false, status: 0, error: String((e && e.message) || e) }) }
+    try { text = await r.text() } catch { return ended(CUT) }
+  } finally {
+    clearTimeout(timer)
+    if (signal) signal.removeEventListener('abort', cancel)
+  }
+  latch(r.status)
+  const out = { status: r.status, range: r.headers.get('content-range'), etag: r.headers.get('etag'), tip: r.headers.get('x-trocar-tip') }
+  if (r.ok || r.status === 416) return { ok: true, text, ...out }
+  let error = 'HTTP ' + r.status
+  try { error = JSON.parse(text).error || error } catch { /* not JSON: the status says it */ }
+  return { ok: false, error, ...out }
 }
 
 // → {ok, status, data, error}: data is the parsed JSON answer (null when there is none), whatever the status; a network error is status 0

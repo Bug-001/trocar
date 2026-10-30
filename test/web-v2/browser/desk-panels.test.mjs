@@ -18,7 +18,8 @@ test('2.3 #31: a step adds, removes or changes at most 64 nodes in the resource 
   const b = await withBoard({ bytes: 1e5, width: 1440, chromium: gate.chromium })
   try {
     const { page } = b
-    await serveWorld(page, w)
+    await serveWorld(page, w, { pack: 256 })
+    const files = 2 * w.files(w.now, 256).head.packs.length // the whole history in hand before the steps are counted
     const drawn = (n) => page.waitForFunction((n) => {
       const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
       const res = document.querySelector('#resexp')
@@ -26,6 +27,8 @@ test('2.3 #31: a step adds, removes or changes at most 64 nodes in the resource 
     }, n, { timeout: 30000, polling: 'raf' }).then(() => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))))
     await page.evaluate((m) => { location.hash = `#/replay/p/S?step=${m}` }, mid)
     await drawn(mid)
+    for (const t0 = Date.now(); new Set(b.requests.filter((r) => /^\/api\/d\/p\d/.test(r.url) && r.status === 200).map((r) => r.url)).size < files && Date.now() - t0 < 30000;) await page.waitForTimeout(100)
+    await page.waitForTimeout(300)
     for (const g of ['life-others', 'life-seen']) {
       const head = page.locator(`#resexp [data-navtoggle="${g}"]`)
       if (await head.count()) await head.first().click()

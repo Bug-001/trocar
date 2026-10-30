@@ -43,7 +43,8 @@ import { answer } from './answers.mjs'
 import { lowerPriority } from '../low-priority.mjs'
 import { extendSession, indexed, saveIndexes } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
-import { gcProjections, posCmp } from './projection.mjs'
+import { gcProjections, posCmp, sessionDir } from './projection.mjs'
+import { headFile, skipFile, tier0Doc, writeHead, writeSkip } from './ctx-files.mjs'
 
 const home = process.argv[2]
 // The board's control verbs (`{control, body}`, 4.4 §控制面) run the CLI's own functions, which take `deps` for what they ask of the machine.
@@ -113,6 +114,26 @@ const SLICE_MS = 50, IDLE_SLICE_MS = 2000
 const say = (e) => process.stderr.write(`trocar query worker: background work failed: ${(e && e.stack) || e}\n`) // the daemon keeps stderr (D38)
 // newestDone starts true: only a request opens the newest-session scan, never a kick (a worker forked for a kick has none to follow).
 let busy = 0, lastAt = Date.now(), target = null, newestDone = true, gcDone = false, queued = false, timer = null, once = {}
+// The sweep (3.5 §谁执行它「答案文件」): at the first idle period of this worker's life, and again on the daemon's `{sweep: true}`, a
+// tier-0 head (ctx-files.mjs, from the segment index only) for every session whose head file is absent. One pass over the sessions.
+let sweepDue = true
+// The upgrade queue (3.5 §谁执行它「答案文件」): after the sweep, the sessions with a fold log and no tail file (folded before the answer
+// files existed, the flat layout's moved in) are folded in idle slices, each to its end, which writes its head, packs and tails: the
+// answered and followed first, then the most recently active. Made once per sweep, each session taken once, so it ends. One that ends
+// (folded to its end, or stopped) with no tail file is marked with its last member (upgrade.skip) and not queued again until that changes.
+let upgrade = null, up = null
+async function upgradeQueue(ctx) {
+  const list = []
+  for (const [id, ms] of sessionGroups((await indexed(ctx)).rows)) {
+    let names = []
+    try { names = nodeFs.readdirSync(sessionDir(home, id)) } catch { /* no directory: the flat layout's fold log still counts */ }
+    const flat = nodeFs.existsSync(`${sessionDir(home, id)}.fold.ndjson`) // moved in when the fold opens it (4.3 §4 迁移)
+    const last = String(ms[ms.length - 1].id)
+    if (names.includes('upgrade.skip')) { try { if (nodeFs.readFileSync(skipFile(home, id), 'utf8') === last) continue } catch { /* gone: queued */ } }
+    if (!names.includes('open.main.ndjson') && (flat || names.some((f) => f.startsWith('fold.')))) list.push([answered.has(id) || follow.has(id), last, id])
+  }
+  return list.sort((a, b) => (b[0] - a[0]) || posCmp(b[1], a[1])).map((x) => [x[2], x[1]])
+}
 const answered = new Set() // the sessions this worker answered: never collected under it
 const follow = new Set() // the sessions the daemon kicked (3.5 §后台抽取与归约): folded in turn from their checkpoints
 const kicked = new Set() // the record ids of the kicked model calls, not yet looked up: their sessions go to `follow`
@@ -151,8 +172,30 @@ async function background() {
   if (target != null) {
     let more = false
     try { more = await extendSession(ctx, target, SLICE_MS) } catch (e) { say(e) }
-    if (!more) target = null
+    if (!more && up && up[0] === target && !answered.has(target) && !follow.has(target) && !nodeFs.existsSync(path.join(sessionDir(home, target), 'open.main.ndjson'))) {
+      try { writeSkip(home, target, up[1]) } catch { /* the next worker tries again */ }
+    }
+    if (!more) { target = null; up = null }
     if (more) progress(); else worked() // a slice done: the daemon's idle clock starts again
+    return kick()
+  }
+  if (sweepDue) {
+    if (busy || notIdle()) return
+    sweepDue = false
+    const index = await indexed(ctx)
+    let wrote = 0
+    for (const [id, ms] of sessionGroups(index.rows)) {
+      if (nodeFs.existsSync(headFile(home, id))) continue
+      try { if (writeHead(home, id, tier0Doc(id, ms, index.errors))) wrote++ } catch (e) { say(e) }
+    }
+    if (wrote) worked()
+    upgrade = null
+    return kick()
+  }
+  if (upgrade == null) upgrade = await upgradeQueue(ctx)
+  if (upgrade.length) {
+    if (busy || notIdle()) return
+    up = upgrade.shift(); target = up[0]
     return kick()
   }
   if (gcDone || busy || notIdle()) return // once per idle period, IDLE_SLICE_MS after the last request or kick: not after every burst
@@ -180,10 +223,12 @@ process.stdin.on('data', (d) => {
 // The daemon's kick (service.mjs kick): the record ids of model calls just indexed. `once` is dropped so the next slice reads the
 // index again and sees the new members and their sessions; the idle period starts again, so the sidecars and the GC wait for the burst to end.
 process.on('message', (m) => {
+  if (m && m.sweep === true) { sweepDue = true; kick(); return }
   if (!m || !Array.isArray(m.kick)) return
   for (const id of m.kick) kicked.add(String(id))
   once = {}; gcDone = false; lastAt = Date.now()
   kick()
 })
+kick() // the first idle period: the sweep
 process.stdin.on('end', () => process.exit(0))
 process.on('disconnect', () => process.exit(0)) // the daemon is gone: so is the reason to be here

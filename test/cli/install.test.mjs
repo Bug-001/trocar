@@ -105,10 +105,10 @@ for (const platform of ['darwin', 'win32']) {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     const box = await liveUnit({ w, platform })
     const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: box.unit }
-    const io = fakeIo()
-    assert.equal(await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform, deps }), 0, io.text())
-    await withScratchCwd(platform, async () => {
+    await withScratchCwd(platform, async () => { // install already starts the daemon (enable --now), so it runs in the scratch cwd too
       try {
+        const io = fakeIo()
+        assert.equal(await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform, deps }), 0, io.text())
         const io2 = fakeIo()
         // `on` asks the OS for the process table once (D62: the op lock's identity question comes out of it) — injected here, this platform being
         // simulated: an empty table (boot time, no rows) is what a machine with nothing on it would print.

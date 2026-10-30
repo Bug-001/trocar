@@ -1,17 +1,19 @@
-// test/web-v2/browser/desk-load.test.mjs — 2.3 #29, #30 and #32 on the mounted desk, in the real Chrome, the session reads answered from a
-// generated long session (desk-world.mjs, 3.5 §会话读's reference server) whose skeleton and anchor lane each come in ≥ 6 pages and
-// whose every answer waits L ms: the loader keeps ≤ 3 reads out (rows the reader opens meanwhile included), each history chain sends its next read as soon as the last one ended,
-// and the whole history is in within the two chains' back-to-back time (#29); a named step older than the held part lands directly,
-// no step in between is ever drawn (#30). Runs only under `npm run test:browser`.
+// test/web-v2/browser/desk-load.test.mjs — 2.3 #29, #30 and #32 on the mounted desk, in the real Chrome, the answer files served from a
+// generated long session (desk-world.mjs, 3.5 §会话读's reference server) in ≥ 6 sealed packs, every answer waiting L ms: the loader
+// keeps ≤ 3 reads out (rows the reader opens meanwhile included), sends the next pack read as soon as one ends, asks for the packs in
+// 2.3 加载器's order, has every pack in hand within its back-to-back time and reads no held pack again (#29); a named step in another
+// pack is that pack's first read and lands directly, no step in between ever drawn (#30). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, serveWorld, blockBytes } from './harness.mjs'
 import { world } from '../desk-world.mjs'
+import { packOrder } from '../../../src/web/v2/replay/follow.mjs'
+import { INTERVAL } from '../../../src/web/v2/core/poll.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
-const SPAGE = 16
-const longSession = () => world(5, { calls: 160, page: 16, spage: SPAGE, talk: { pre: 3, len: 60, every: 6, tail: 4 } })
+const P = 8 // members a pack: the long session is 20 sealed packs
+const longSession = () => world(5, { calls: 160, page: 16, talk: { pre: 3, len: 60, every: 6, tail: 4 } })
 
 // the step numbers #stepbar .sb-no shows, sampled every frame from now on: window.__steps = [{n, t (ms epoch)}] on each change
 const sampleSteps = (page) => page.evaluate(() => {
@@ -32,70 +34,63 @@ async function until(page, what, ms = 15000) {
   return true
 }
 
-test('2.3 #29: the loader keeps ≤ 3 reads out, each history chain reads back to back, the whole history is in within the chains\' time', { skip }, async (t) => {
-  const L = 150, w = longSession()
-  const main = w.full().lanes.find((h) => h.kind === 'main').lane
+test('2.3 #29: the loader keeps ≤ 3 reads out, reads the packs back to back in its order, has them all within their back-to-back time, reads none again', { skip }, async (t) => {
+  const L = 150, w = longSession(), head = w.files(w.now, P).head
   const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
   try {
     const { page } = b
-    // every loader read (lane, block, session --before) with when it started and ended (ms epoch); the chains' ends from the answers
+    // every loader read (a pack file, lane, block) with when it started and ended (ms epoch)
     const log = []
-    const kind = (u) => { const p = u.pathname.slice(5); return p === 'lane' || p === 'block' || (p === 'session' && u.searchParams.has('before')) ? p : null }
-    page.on('request', (r) => { const u = new URL(r.url()), k = kind(u); if (k) log.push({ r, k, q: u.searchParams, start: Date.now(), end: null, doc: null }) })
-    page.on('requestfinished', async (r) => {
-      const x = log.find((e) => e.r === r)
-      if (!x) return
-      x.end = Date.now()
-      if (x.k !== 'block') x.doc = await (await r.response())?.json().catch(() => null)
-    })
+    const kind = (u) => (/^\/api\/d\/p\d/.test(u.pathname) ? 'pack' : u.pathname === '/api/lane' || u.pathname === '/api/block' ? u.pathname.slice(5) : null)
+    page.on('request', (r) => { const u = new URL(r.url()), k = kind(u); if (k) log.push({ r, k, path: u.pathname, start: Date.now(), end: null }) })
+    page.on('requestfinished', (r) => { const x = log.find((e) => e.r === r); if (x) x.end = Date.now() })
     page.on('requestfailed', (r) => { const x = log.find((e) => e.r === r); if (x) x.end = Date.now() })
-    await serveWorld(page, w, { latency: L })
+    await serveWorld(page, w, { latency: L, pack: P })
     await sampleSteps(page)
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     assert.ok(await until(page, async () => (await steps(page)).length > 0), 'the desk drew a step')
     const painted = (await steps(page))[0].t
-    // the reader opens rows while the chains run: their bodies' reads go through the same loader (≤ 3 out still holds)
+    // the reader opens rows while the packs come: their bodies' reads go through the same loader (≤ 3 out still holds)
     const opened = await page.evaluate(() => { const hs = [...document.querySelectorAll('#ctxwin .cblk.collapsed:not(.removed):not([data-rp]) > .cbh')].slice(0, 4); for (const h of hs) h.click(); return hs.length })
     assert.ok(opened > 1, `the drawn step has rows to open (${opened})`)
-    const skel = () => log.filter((e) => e.k === 'session'), anchor = () => log.filter((e) => e.k === 'lane' && e.q.get('lane') === main && (e.q.has('to') || e.q.has('ledger')))
-    const ended = (xs, last) => xs.some((e) => e.doc && last(e.doc))
-    assert.ok(await until(page, async () => ended(skel(), (d) => d.more === false) && ended(anchor().filter((e) => e.q.has('to')), (d) => d.prev === null), 20000),
-      `both chains reached their ends (skeleton ${skel().length} pages, anchor lane ${anchor().length})`)
-    await page.waitForTimeout(300)
-    const S = skel(), A = anchor()
-    assert.ok(S.length >= 6 && A.filter((e) => e.q.has('to')).length >= 5, `the session is long: ${S.length} skeleton pages, ${A.length} anchor lane chain reads`)
+    const files = 2 * head.packs.length, packs = () => log.filter((e) => e.k === 'pack')
+    assert.ok(head.packs.length >= 6, `the session is long: ${head.packs.length} sealed packs`)
+    assert.ok(await until(page, async () => new Set(packs().filter((e) => e.end).map((e) => e.path)).size === files, 20000), `every pack file came (${packs().length} of ${files})`)
+    const done = Math.max(...packs().map((e) => e.end))
+    // (5) a poll round later no held pack is read again
+    await page.waitForTimeout(2 * INTERVAL.session + 300)
+    assert.equal(packs().length, files, 'no pack read twice')
     // (1) at no moment more than 3 loader reads out
     const edges = log.flatMap((e) => [[e.start, 1], [e.end ?? Infinity, -1]]).sort((x, y) => x[0] - y[0] || x[1] - y[1])
     let out = 0, most = 0
     for (const [, d] of edges) { out += d; most = Math.max(most, out) }
     assert.ok(most <= 3, `${most} loader reads were out at once`)
-    // (2) on each chain the next read goes out ≤ 50 ms after the last one ended, or waits only while the loader is full (the reader's
-    // reads go first): no poll beat in between
-    const outAt = (t) => log.filter((e) => e.start <= t && (e.end ?? Infinity) > t).length
-    for (const [name, xs] of [['skeleton', S], ['anchor lane', A]]) {
-      const gaps = xs.slice(1).map((e, i) => e.start - xs[i].end)
-      assert.ok(gaps.every((g, i) => g <= 50 || outAt(xs[i].end + 50) === 3), `${name} chain gaps (ms): ${gaps}`)
-    }
-    // (3) the whole history is in within the longer chain's back-to-back time
-    const done = Math.max(...[...S, ...A].map((e) => e.end)), pages = Math.max(S.length, A.length)
-    t.diagnostic(`history in ${done - painted} ms after the first paint; ${S.length} skeleton pages, ${A.length} anchor lane chain reads; ${most} reads out at most`)
-    assert.ok(done - painted <= (pages + 2) * (L + 50), `history in ${done - painted} ms after the first paint (${pages} pages, bound ${(pages + 2) * (L + 50)} ms)`)
+    // (2) each pack read but the first three goes out ≤ 50 ms after another loader read ended, or waits only while the loader is full: no poll beat
+    const P_ = packs(), outAt = (x) => log.filter((e) => e.start <= x && (e.end ?? Infinity) > x).length
+    const late = P_.slice(3).filter((e) => !log.some((o) => o.end != null && o.end <= e.start && e.start - o.end <= 50) && outAt(e.start - 51) < 3)
+    assert.deepEqual(late.map((e) => e.path), [], 'pack reads that waited with the loader not full')
+    // (3) the packs in 2.3 加载器's order for a desk that follows (main before rest of each)
+    const firsts = [...new Set(P_.map((e) => +/p(\d+)/.exec(e.path)[1]))]
+    assert.deepEqual(firsts, packOrder(head, null).map((x) => x.n), 'pack order')
+    // (4) every pack file in hand within the files' back-to-back time
+    t.diagnostic(`packs in ${done - painted} ms after the first paint; ${files} files; ${most} reads out at most`)
+    assert.ok(done - painted <= (files / 3 + 2) * (L + 50), `packs in ${done - painted} ms after the first paint (${files} files, bound ${(files / 3 + 2) * (L + 50)} ms)`)
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })
 
-test('2.3 #30: a step named older than the held part lands directly within 1 s, no other step drawn; Home waits on the drawn step', { skip }, async (t) => {
-  const w = longSession()
-  const all = w.full(w.now, { limit: 0 }).calls, main = w.full().lanes.find((h) => h.kind === 'main').lane
-  const mainRids = all.filter((r) => r.lane === main).map((r) => r.rid)
-  // the newest main step at least 4 skeleton pages before the newest page
-  const at = all.slice(0, all.length - 5 * SPAGE).findLast((r) => r.lane === main), k = mainRids.indexOf(at.rid) + 1
-  assert.ok(k > 1, 'the world has a main step that far back')
+test('2.3 #30: a step named in another pack is that pack\'s first read and lands directly within 1 s, no other step drawn; Home waits on the drawn step', { skip }, async (t) => {
+  const w = longSession(), head = w.files(w.now, P).head
+  // a main step in a pack well before the newest: the middle of the third sealed pack
+  const pk = head.packs[2], k = Math.floor((pk.s0 + pk.s1) / 2) + 1
+  assert.ok(pk.s1 > pk.s0 && head.packs.length > 4, 'the world has a main step that far back')
   {
     const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
     try {
       const { page } = b
-      await serveWorld(page, w, { latency: 40 })
+      const pr = [] // the pack reads in the order they went out
+      page.on('request', (r) => { const u = new URL(r.url()); if (/^\/api\/d\/p\d/.test(u.pathname)) pr.push(u.pathname) })
+      await serveWorld(page, w, { latency: 40, pack: P })
       await sampleSteps(page)
       const t0 = await page.evaluate((k) => { location.hash = `#/replay/p/S?step=${k}`; return Date.now() }, k)
       assert.ok(await until(page, async () => (await steps(page)).length > 0), `step ${k} was drawn`)
@@ -105,6 +100,7 @@ test('2.3 #30: a step named older than the held part lands directly within 1 s, 
       t.diagnostic(`step ${k} drawn ${seen[0].t - t0} ms after the navigation`)
       assert.ok(seen[0].t - t0 <= 1000, `step ${k} drawn ${seen[0].t - t0} ms after the navigation`)
       assert.match(await page.evaluate(() => location.hash), new RegExp(`[?&]step=${k}(&|$)`))
+      assert.equal(pr[0], `/api/d/p${pk.n}.main`, 'the first pack read is the one holding the named step')
       assert.deepEqual(b.errors, [])
     } finally { await b.stop() }
   }
@@ -112,7 +108,7 @@ test('2.3 #30: a step named older than the held part lands directly within 1 s, 
     const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
     try {
       const { page } = b
-      await serveWorld(page, w, { latency: 150 })
+      await serveWorld(page, w, { latency: 150, pack: P })
       await page.evaluate(() => { location.hash = '#/replay/p/S' })
       await page.waitForSelector('#stepbar .sb-no')
       await sampleSteps(page)
@@ -127,7 +123,7 @@ test('2.3 #30: a step named older than the held part lands directly within 1 s, 
 })
 
 test('2.3 #32: a rest of 100 ms reads the reply bodies of the anchor lane\'s ±8 held steps in one block read; stepping there draws them at once', { skip }, async () => {
-  const w = world(5, { calls: 60, page: 100, spage: 100, talk: { pre: 3, len: 30, every: 6, tail: 4 } }), R = 8
+  const w = world(5, { calls: 60, page: 100, talk: { pre: 3, len: 30, every: 6, tail: 4 } }), R = 8
   const main = w.full().lanes.find((h) => h.kind === 'main').lane
   // every main step's reply refs, from the lane's pages
   const replyRefs = new Map()

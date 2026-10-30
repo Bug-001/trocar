@@ -10,9 +10,9 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { saveIndexes, extendSession } from '../../src/query/named/session.mjs'
-import { openProjection, projectionFile, gcProjections, FIRST_CHUNK } from '../../src/query/projection.mjs'
+import { openProjection, projectionFile, gcProjections, sessionDir } from '../../src/query/projection.mjs'
 import { openFoldLog, foldLogFile } from '../../src/query/fold-log.mjs'
-import { loadSidecar } from '../../src/query/line-file.mjs'
+import { loadSidecar, saveSidecar, FIRST_CHUNK, lineFile } from '../../src/query/line-file.mjs'
 
 const SEG = '20261020T164737Z'
 const FIRST = 8, MORE = 6
@@ -20,7 +20,7 @@ const WIRES = ['http', 'threads', 'ws', 'chat']
 const ARRIVALS = [{ late: 0, subLanes: 1 }, { late: 3, subLanes: 1 }, { late: 0, subLanes: 4 }, { late: 3, subLanes: 4 }]
 const homeOf = (p) => path.join(tmpDir(p), '.trocar')
 const ctxDir = (home) => path.join(home, 'index', 'ctx')
-const sidecars = (home) => { try { return fs.readdirSync(ctxDir(home)).filter((n) => n.endsWith('.idx')) } catch (e) { if (e.code === 'ENOENT') return []; throw e } }
+const sidecars = (home) => { try { return fs.readdirSync(ctxDir(home), { recursive: true }).filter((n) => n.endsWith('.idx')) } catch (e) { if (e.code === 'ENOENT') return []; throw e } }
 const q = (name, home, params, ctx = {}) => runQuery(name, params, { home, fs, ...ctx })
 
 // The worker's background slices until nothing is left, then its answer.
@@ -38,8 +38,8 @@ async function written(wire, arrival) {
   s.append(FIRST)
   await settled(home, s.id)
   saveIndexes()
-  assert.deepEqual(sidecars(home).sort(), [path.basename(projectionFile(home, s.id)).replace(/\.ndjson$/, '.idx'),
-    path.basename(foldLogFile(home, s.id)).replace(/\.ndjson$/, '.idx')].sort(), 'the worker wrote both sidecars')
+  assert.deepEqual(sidecars(home).sort(), ['extract.idx', 'fold.idx'].map((n) => path.relative(ctxDir(home), path.join(sessionDir(home, s.id), n))),
+    'the worker wrote both sidecars')
   s.append(MORE)
   await settled(home, s.id)
   return { home, id: s.id }
@@ -147,7 +147,7 @@ const DAMAGE = {
 test('4.3 #7: a sidecar that is stale or foreign is never used: the answers are the scan\'s, with no error', { timeout: 600_000 }, async () => {
   for (const wire of WIRES) {
     const arrival = ARRIVALS[3], { home, id } = await written(wire, arrival)
-    const pb = sideHead(foldLogFile(home, id).replace(/\.ndjson$/, '.idx')).pb
+    const pb = sideHead(path.join(sessionDir(home, id), 'fold.idx')).pb
     for (const [name, f] of Object.entries(DAMAGE)) {
       const tag = `${wire} ${name}`, a = copy(home), b = copy(home, false)
       await f(a, id, true, pb); await f(b, id, false, pb)
@@ -166,14 +166,15 @@ test('4.3 #7: the GC deletes a sidecar with its pair and counts its bytes', () =
     assert.ok(p.saveIndex() && log.saveIndex(), `${key}: the sidecars are written`)
     p.close(); log.close()
   }
-  const files = (key) => [projectionFile(home, key), foldLogFile(home, key)].flatMap((f) => [f, f.replace(/\.ndjson$/, '.idx')])
+  const files = (key) => ['extract.0.ndjson', 'extract.idx', 'fold.0.ndjson', 'fold.idx'].map((n) => path.join(sessionDir(home, key), n))
   for (const [i, key] of keys.entries()) for (const f of files(key)) { assert.ok(fs.existsSync(f), f); fs.utimesSync(f, 1_000 + i, 1_000 + i) }
   const all = keys.flatMap(files).reduce((a, f) => a + fs.statSync(f).size, 0)
   // a cap one byte under the total: met only when the sidecars are counted, by deleting the least recently opened pair whole
   const { deleted } = gcProjections({ home, fs, liveKeys: keys, capBytes: all - 1 })
-  assert.deepEqual(deleted.sort(), files('old').sort())
+  assert.deepEqual(deleted, [sessionDir(home, 'old')])
   assert.ok(files('new').every((f) => fs.existsSync(f)) && files('old').every((f) => !fs.existsSync(f)), 'on disk')
-  assert.deepEqual(gcProjections({ home, fs, liveKeys: [] }).deleted.sort(), files('new').sort(), 'a session gone takes its sidecars')
+  assert.deepEqual(gcProjections({ home, fs, liveKeys: [] }).deleted, [sessionDir(home, 'new')], 'a session gone takes its sidecars')
+  assert.ok(files('new').every((f) => !fs.existsSync(f)))
 })
 
 test('4.3 #7: the local path writes no sidecar', async () => {
@@ -235,4 +236,42 @@ test('4.3 §4 旁索引: a cold open seeded from the step-order columns in the f
     assert.equal(JSON.stringify(a), JSON.stringify(b), wire)
   }
   assert.ok(nonCalls > 0, 'a member that is no call was written')
+})
+
+// 3.5:42 (a restarted worker carries on from the checkpoint): a resume cuts what lies past the lines it keeps, then appends. The
+// sidecar covers [0, its bytes); a cut at or past them keeps that prefix byte for byte, so the next append keeps the sidecar; a cut
+// below them drops bytes it covers, so the append removes it. Over every line end as the sidecar's bytes and every line end (with
+// and without a torn tail) as the cut.
+test('3.5:42: a cut that keeps what the sidecar covers keeps the sidecar through the next append; a cut below it removes it', () => {
+  const lines = ['a\n', 'bé\n', 'ccc\n', '中中\n', 'e\n'], ends = lines.map((_, i) => Buffer.byteLength(lines.slice(0, i + 1).join('')))
+  for (const covers of ends) for (const at of ends) for (const torn of [false, true]) {
+    const dir = tmpDir('trocar-side-cut-'), base = path.join(dir, 'x')
+    let lf = lineFile({ fs, base })
+    for (const l of lines) lf.append(l)
+    if (torn) lf.append('half')
+    lf.saveSidecar({ head: { bytes: covers }, parts: [['k', ['s']]] })
+    lf.close()
+    lf = lineFile({ fs, base })
+    assert.equal(lf.loadSidecar()?.head.bytes, covers)
+    lf.cut(at)
+    lf.append('f\n')
+    lf.close()
+    const kept = loadSidecar({ fs, file: `${base}.ndjson`, endsLine: () => true })
+    assert.equal(kept?.head.bytes, at >= covers ? covers : undefined, `sidecar at ${covers}, cut at ${at}${torn ? ' past a torn tail' : ''}`)
+  }
+})
+
+test('4.3 §4 旁索引: a sidecar loads back every part it was saved with, str parts of any length and script included', () => {
+  const dir = tmpDir('trocar-sidecar-'), file = path.join(dir, 'x.ndjson')
+  fs.writeFileSync(file, 'a\n')
+  for (const n of [0, 1, 4095, 4096, 4097, 9000]) {
+    const strs = Array.from({ length: n }, (_, i) => (i % 7 === 3 ? '' : i % 5 === 0 ? `键${i}·é😀` : `k${i}`))
+    const parts = [['s', strs], ['f', Float64Array.from({ length: n }, (_, i) => i / 3)], ['t', ['only']]]
+    saveSidecar({ file, head: { bytes: 2 }, parts })
+    const got = loadSidecar({ file })
+    assert.ok(got, `n=${n}: loads`)
+    assert.deepEqual(got.parts.s, strs, `n=${n}: the str part`)
+    assert.deepEqual([...got.parts.f], [...parts[1][1]], `n=${n}: the f64 part`)
+    assert.deepEqual(got.parts.t, ['only'])
+  }
 })

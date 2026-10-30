@@ -50,7 +50,7 @@ export async function answer({ name, params = {}, indent = 0, gzip: zip = false,
     const w = v && (await versionOf(name, params, c))
     if (!(w && w.key === v.key && JSON.stringify(doc.errors) === JSON.stringify(v.errors))) version = null
     if (version != null && !doc.pending) tag = tagOf(name, params, version)
-    text = JSON.stringify(doc, null, Number(indent) || 0)
+    text = typeof doc.$text === 'string' ? doc.$text : JSON.stringify(doc, null, Number(indent) || 0) // a text answer: its bytes, never re-stringified
   } catch (e) {
     status = e instanceof QueryArgError ? 400 : 500
     text = JSON.stringify({ error: String((e && e.message) || e) })

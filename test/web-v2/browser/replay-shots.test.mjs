@@ -34,6 +34,17 @@ const editAnswers = (b, path, edit) => b.page.route((u) => new URL(u).pathname =
   await r.fulfill({ response: res, json: j })
 })
 
+// the desk's pack and tail files (4.4 §答案文件) passed line by line through `edit(line)`; a tail is asked whole (its Range dropped):
+// the edited bytes are not the server's, so no offset into them is ever asked
+const editFiles = (b, edit) => b.page.route((u) => /^\/api\/d\/(p\d+|open)\./.test(new URL(u).pathname), async (r) => {
+  const { range, ...headers } = r.request().headers()
+  const res = await r.fetch({ headers })
+  if (res.status() !== 200) return r.fulfill({ response: res })
+  const lines = (await res.text()).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l))
+  for (const line of lines) edit(line)
+  await r.fulfill({ status: 200, contentType: 'application/x-ndjson', body: lines.map((l) => JSON.stringify(l) + '\n').join('') })
+})
+
 // every measured fact in one page pass
 const layout = (page) => page.evaluate(() => {
   const q = (s) => document.querySelector(s)
@@ -178,12 +189,13 @@ test('a reply row has the request row\'s head frame and opens by keyboard', { sk
 test('Files read: a long path and a long life sentence are never cut — the life wraps, the name has its full text on hover', { skip, timeout: 120_000 }, async () => {
   const b = await withBoard({ bytes: BYTES, width: 1440, chromium: gate.chromium })
   try {
-    // the anchor lane's tail page (no from / to / ledger) gives the ledger six long files, read at its first step and evicted at
-    // the one before its last (3.5 §会话读 `resources`: segments by rid); the playhead opens on the last step, so each is gone
-    const main = await mainOf(b, (await byCalls(b))[0])
+    // the page that opens the anchor lane's ledger (`--to` its first step) gives it six long files, read at the tail page's first
+    // step and evicted at the one before its last (3.5 §会话读 `resources`: segments by rid); the playhead opens on the last step, so each is gone
+    const row = (await byCalls(b))[0], main = await mainOf(b, row)
+    const rids = (await b.get('lane', { id: row.session_id, lane: main })).doc.steps.map((st) => st.rid)
+    assert.ok(rids.length >= 3, 'the anchor lane has steps to read and evict at')
     await editAnswers(b, '/api/lane', (j, q) => {
-      if (q.get('lane') !== main || q.has('from') || q.has('to') || q.has('ledger') || !(j.steps && j.steps.length >= 3)) return
-      const rids = j.steps.map((st) => st.rid)
+      if (q.get('lane') !== main || !q.has('to')) return
       j.resources = [...(j.resources || []), ...Array.from({ length: 6 }, (_, i) => ({ kind: 'file', label: `/private/tmp/a/rather/long/working/directory/for/the/project/src/web/module-${i}/server-side-file-${i}.mjs`, segments: [{ enter: rids[0], evict: rids[rids.length - 2] }], loads: [] }))]
     })
     await openBusiest(b)
@@ -200,16 +212,16 @@ test('Files read: a long path and a long life sentence are never cut — the lif
 test('System prompt: the "changes every call" pill stays inside the left panel', { skip, timeout: 120_000 }, async () => {
   const b = await withBoard({ bytes: BYTES, width: 1440, chromium: gate.chromium })
   try {
-    // every `lane` answer marks the system blocks its add ops bring in volatile (3.5 §会话读: the position `attrs` of add ops;
-    // copies carry theirs), as the board is told of a block that changes every call
+    // every pack and tail file marks the system blocks its steps' add ops bring in volatile (3.5 §会话读: the position `attrs` of add
+    // ops; copies carry theirs), as the board is told of a block that changes every call
     // the busiest session whose main lane's tail page holds a system block (some generated sessions send none)
     let row = null
     for (const r of await byCalls(b)) if ((await b.get('lane', { id: r.session_id, lane: await mainOf(b, r) })).doc.defs.some((d) => d.sec === 'system')) { row = r; break }
     assert.ok(row, 'a session with a system block')
-    const sec = new Map() // bid → sec, over every answer so far (a def is sent once per lane)
-    await editAnswers(b, '/api/lane', (j) => {
-      for (const d of j.defs || []) sec.set(d.bid, d.sec)
-      for (const st of j.steps || []) {
+    const sec = new Map() // bid → sec, over every file so far (a def comes before the first step that uses it)
+    await editFiles(b, (line) => {
+      if (line.d) sec.set(line.d.bid, line.d.sec)
+      for (const st of line.s ? [line.s] : []) {
         let pos = 0
         for (const op of st.ops || []) {
           if (op[0] === 0) { pos += op[2]; continue }
@@ -239,7 +251,7 @@ test('a session whose first read failed: one sentence and Retry; the reason only
   try {
     const reason = 'the query worker exited (signal SIGABRT): FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory · 1: 0x10446 node::OOMErrorHandler(char const*) [/bin/node]'
     let reads = 0
-    await b.page.route((u) => new URL(u).pathname === '/api/session', (r) => { reads++; return r.fulfill({ status: 500, json: { error: reason } }) })
+    await b.page.route((u) => new URL(u).pathname === '/api/d/head', (r) => { reads++; return r.fulfill({ status: 500, json: { error: reason } }) })
     const rows = (await b.get('sessions')).doc.sessions.filter((x) => x.calls > 0)
     await b.page.evaluate((h) => { location.hash = h }, `#/replay/${encodeURIComponent(rows[0].project_slug)}/${encodeURIComponent(rows[0].session_id)}`)
     await b.page.waitForSelector('#ctxwin .empty [data-retry]')
@@ -249,8 +261,8 @@ test('a session whose first read failed: one sentence and Retry; the reason only
     assert.ok(hidden.includes('FATAL ERROR: Reached heap limit'), 'the reason is in the collapsed technical details')
     await shoot(b.page, 'replay-read-failed', { width: 1280, theme: 'light' })
     const before = reads
-    await Promise.all([b.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/session'), b.page.click('#ctxwin [data-retry]')])
-    assert.ok(reads > before, 'Retry reads the session again')
+    await Promise.all([b.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/d/head'), b.page.click('#ctxwin [data-retry]')])
+    assert.ok(reads > before, 'Retry reads the session\'s head again')
     assert.deepEqual(b.errors, [])
   } finally { await b.stop() }
 })

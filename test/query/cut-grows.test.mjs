@@ -1,52 +1,49 @@
-// test/query/cut-grows.test.mjs — a cut session that keeps growing never shows fewer than half of the calls that fit, nor more than
-// fit (RFC 3.5 §内存有界: the segment index rows, the distinct blocks, the plan's members and K, never cut, count at their bytes; the
-// cut only moves forward and stays while it shows the fit less two steps; no room for one row is a non-2xx error, never a sliver).
+// test/query/cut-grows.test.mjs — a session is cut only by what a fold of it measured, and a cut session that keeps growing never shows
+// fewer than half of the calls that fit, nor more (RFC 3.5 §内存有界「截断只是兜底,按实测的堆截」: no cut and no refusal by the
+// estimate; the cut on a grid of a tenth of the rows that fit, only forward, staying while it shows the fit less two steps).
 //
-// The blocks and the members grow with every call, so the room for the cut's rows shrinks as the session grows. Charged in whole
-// steps of a tenth of the budget, the blocks crossing a step took a step (8.9 MB in a 128 MB reader) out of a room of ~3 MB and the
-// session showed 1 call of 12,429 while 14,290 fit (2026-10-23). The cut is the plan's (planOf, src/query/named/session.mjs): what
-// a read shows is the plan's `bound`, and a fold of rows that cost what the plan reckons does not cut further (cut-fits.test.mjs
-// case 1), so the plan is grown here without records: members as index rows, the store's distinct blocks as its count. The blocks
-// take all but a few MB of this process's budget, so the room is a cut session's room in a small reader; each growth adds calls
-// and blocks until no row fits, and each plan is held against the fit the spec's formula gives at that moment.
+// The cut is the plan's (planOf, src/query/named/session.mjs): what a read shows is the plan's `bound`. So the plan is grown here
+// without records: members as index rows, the store's distinct blocks as its count, the rows that fit as a fold would have measured.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs
-import { planOf, working, SPINE_PER_ROW, SPINE_PER_BLOCK, PLAN_PER_MEMBER, CACHES } from '../../src/query/named/session.mjs'
-import { heapBudget, steadyBytes } from '../../src/query/warm.mjs'
+import { planOf } from '../../src/query/named/session.mjs'
 
-const MB = 1048576
 const T0 = Date.parse('2026-10-20T16:47:37Z')
 const call = (i) => ({ id: `20261020T164737Z:${i + 1}`, ts: new Date(T0 + i * 1000).toISOString(), is_llm: true, stored_bytes: 2_000 + (i % 7) * 900, path: '/v1/messages' })
+const ID = 'big-0000-4a1b-9c2d-000000000001'
+const grown = (n) => Array.from({ length: n }, (_, i) => call(i))
 
-test('3.5 §内存有界: a growing cut session never shows fewer than half of the calls that fit, nor more', () => {
-  const store = { plan: null, defCount: 0 }, step = heapBudget() / 10
-  let members = Array.from({ length: 8_000 }, (_, i) => call(i))
-  // the fit at this moment: (budget − work − index rows − blocks × SPINE_PER_BLOCK − members × PLAN_PER_MEMBER − K) / SPINE_PER_ROW
-  const fit = () => Math.floor((heapBudget() - working(members) - steadyBytes() - store.defCount * SPINE_PER_BLOCK - members.length * PLAN_PER_MEMBER - CACHES) / SPINE_PER_ROW)
-  // blocks enough to leave a room of 5 MB: 6,600 calls fit of 8,000
-  store.defCount = Math.floor((heapBudget() - working(members) - steadyBytes() - members.length * PLAN_PER_MEMBER - CACHES - 5 * MB) / SPINE_PER_BLOCK)
-  const starts = new Set(), seen = []
-  // 100 calls and 80 blocks a growth (~49 KB of room), 120 growths: from 6,600 calls that fit to none
+test('3.5 §内存有界: a session no fold measured is read whole, however many members and blocks it has', () => {
+  const store = { plan: null, defCount: 0 }
+  let members = grown(1_000)
+  for (let g = 0; g < 6; g++) {
+    const p = planOf(members, 'cut-grows-whole', store, ID)
+    assert.equal(p.bound, null, `${members.length} members, ${store.defCount} blocks: cut by no measurement`)
+    assert.equal(p.read.length, members.length)
+    members = members.concat(grown(4 * members.length).slice(members.length)) // 1,000 → 1,024,000 members
+    store.defCount = 3 * members.length
+  }
+})
+
+test('3.5 §内存有界: a growing measured cut never shows fewer than half of the calls that fit, nor more, and only moves forward', () => {
+  const store = { plan: null, defCount: 0 }, FIT = 6_600
+  let members = grown(8_000)
+  const starts = []
+  // 100 calls a growth, 120 growths: from 8,000 members to 20,000 with 6,600 that fit
   for (let g = 0; g < 120; g++) {
-    const f = fit()
-    let p = null, error = null
-    try { p = planOf(members, 'cut-grows', store, 'big-0000-4a1b-9c2d-000000000001') } catch (e) { error = e }
-    if (error) assert.ok(f < 1, `growth ${g}: "${error.message}" while ${f} calls fit`)
-    else {
-      const shown = p.bound ? p.bound.shown : members.length
-      assert.ok(f >= 1, `growth ${g}: ${shown} calls shown where none fit (no room is an error)`)
-      assert.ok(shown >= Math.min(members.length, Math.floor(f / 2)), `growth ${g}: ${shown} / ${members.length} calls shown, fewer than half of the ${f} that fit`)
-      assert.ok(shown <= f, `growth ${g}: ${shown} calls shown, each at ${SPINE_PER_ROW} B, past the ${f} that fit`)
-      if (p.bound) starts.add(p.read[0].id)
-    }
-    seen.push({ f, error: !!error })
+    const p = planOf(members, 'cut-grows', store, ID, FIT)
+    const shown = p.bound ? p.bound.shown : members.length
+    assert.ok(shown <= FIT, `growth ${g}: ${shown} calls shown, past the ${FIT} that fit`)
+    assert.ok(shown >= Math.min(members.length, FIT / 2), `growth ${g}: ${shown} / ${members.length} calls shown, fewer than half of the ${FIT} that fit`)
+    assert.ok(p.bound, `growth ${g}: ${members.length} members, ${FIT} fit, not cut`)
+    const first = Number(p.read[0].id.split(':')[1])
+    if (starts.length) assert.ok(first >= starts.at(-1), `growth ${g}: the cut moved back from call ${starts.at(-1)} to ${first}`)
+    if (first !== starts.at(-1)) starts.push(first)
     const n = members.length
     members = members.concat(Array.from({ length: 100 }, (_, i) => call(n + i)))
     store.defCount += 80
   }
-  // else this test proves nothing: cut on every read with room, the cut moved more than once, and reads with no room at the end
-  assert.ok(starts.size > 2, `the cut moved ${starts.size - 1} times`)
-  assert.ok(seen.some((r) => r.error) && seen.some((r) => !r.error), `${seen.filter((r) => r.error).length} of ${seen.length} reads had no room`)
-  assert.ok(step > 5 * MB, 'the room is under one step of the budget (the whole-step rounding took it all)')
+  // else this test proves nothing: the cut moved more than once, and stayed between moves
+  assert.ok(starts.length > 2 && starts.length < 120, `the cut moved ${starts.length - 1} times in 120 growths`)
 })

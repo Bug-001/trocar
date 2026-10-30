@@ -190,6 +190,7 @@ test('(f) write:false leaves the home byte-identical', () => {
   const home = tmpDir('trocar-proj-')
   filled(home)
   fs.appendFileSync(projectionFile(home, KEY), '{"c":{"rid":"20261021T054349Z:9"') // a torn tail it must not truncate
+  fs.mkdirSync(path.dirname(projectionFile(home, 'bad')), { recursive: true })
   fs.writeFileSync(projectionFile(home, 'bad'), '{"v":-1}\n') // a mismatch it must not delete
   const before = snapshot(home)
   for (const key of [KEY, 'bad', 'fresh']) {

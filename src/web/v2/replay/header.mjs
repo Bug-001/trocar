@@ -9,6 +9,7 @@ import { chipFor, harnessKey } from '../core/chips.mjs'
 import { infoButton, techDetailsHtml, readFailure } from '../core/ui.mjs'
 import { sessionTotals, priceMatch } from '../core/metrics.mjs'
 import { stepsOf } from './lanes.mjs'
+import { placeOf, after } from './packs.mjs'
 import * as W from '../labels/replay.mjs'
 
 // the main lane's first and last step times: its header names them by rid (`first` / `last`, 3.5 §会话读) and the skeleton rows
@@ -188,12 +189,26 @@ export function totalsOf(s) {
 
 // 1.2 §会话头 读取状态: while the server is still extracting this session (`pending{done, total}` on the session answer) one quiet
 // line says how far — the first read as a share, later the calls still to catch up. Words only: no control (D69).
+// 1.5 K-32: a head behind the capture names how many calls came after it (`behind`, behindOf).
+// 1.5 K-31: a head whose background fold stopped (`pending.stopped`) says so instead.
 export function readStateHtml(desk) {
-  const p = desk && desk.pending
-  if (!p) return ''
+  const p = desk && desk.pending, b = desk && desk.behind
+  if (!p) return b ? `<div class="fidline readstate" data-read-state="behind" data-behind="${b.n}">${esc(W.behindBy(b.n, b.more))}</div>` : ''
+  const stop = p.stopped // 1.5 K-31: the background fold stopped; its code and reason only in the technical details
+  if (stop) return `<div class="fidline readstate" data-read-state="stopped">${esc(W.FOLD_STOPPED[stop.code] || W.FOLD_STOPPED['fold-failed'])}</div>` +
+    techDetailsHtml([[String(stop.code ?? ''), String(stop.reason ?? '')]], { id: 'readtech' })
   const done = Number(p.done) || 0, total = Number(p.total) || 0
   const words = desk.firstPending ? W.readingFirst(total > 0 ? Math.floor((done / total) * 100) : 0) : W.catchingUp(Math.max(0, total - done))
-  return `<div class="fidline readstate" data-read-state>${esc(words)}</div>`
+  return `<div class="fidline readstate" data-read-state="${desk.firstPending ? 'reading' : 'catching-up'}">${esc(words)}</div>`
+}
+// behindOf(tip, mark) → {n, more} | null (1.5 K-32): of the tip ids (`x-trocar-tip`, the newest model calls, oldest first) the ones that
+// come after `mark` (the newest member the desk holds: packs.mjs desk.newest) in record order; `more` when none of them is at or before
+// it — more may lie beyond the list. null when there is no tip or nothing after the mark.
+export function behindOf(tip, mark) {
+  const ids = String(tip || '').split(' ').filter(Boolean)
+  if (!ids.length || mark == null) return null
+  const m = placeOf(mark), n = ids.filter((id) => after(placeOf(id), m)).length
+  return n ? { n, more: n === ids.length } : null
 }
 
 export function renderSessionHead(el, s) {

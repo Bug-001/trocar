@@ -3,7 +3,8 @@
 // The daemon's event loop forwards agent traffic, so this face only does four cheap things and never computes a
 // document: ① serve the static plane from memory; ② answer 304 from a stat-only stamp (src/query/named stampOf) without
 // waking the worker; ③ relay `GET /api/<name>` to the query worker, bytes as they come (query.relay, the same frame
-// path as the CLI's `GET /query`); ④ route the control plane's paths through a table (filled by the control endpoints, 4.4 §控制面).
+// path as the CLI's `GET /query`); ④ route the control plane's paths through a table (filled by the control endpoints, 4.4 §控制面);
+// ⑤ hand out the answer files the worker wrote, `GET /api/d/<f>?id=` (4.4 §答案文件): stat, read, bytes as stored — no parse, no encode.
 // Gate order on every request (4.4 §门的次序): Host / Origin → token (on the data and control planes) → name → method → params;
 // nothing is read before the first two pass.
 import http from 'node:http';
@@ -14,6 +15,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { CONTROL_TOKEN_HEADER } from './off/token-header.mjs';
 import { LOCAL_ENV, QUERY_NAMES, paramsOf } from './query/client.mjs';
+import { ctxKey } from './query/ctx-key.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 // The one board (1.2 §托管与打开): src/web/v2/ is the static plane, served at `/`. Named as new URL('./web/v2/', import.meta.url)
@@ -21,7 +23,7 @@ const SRC = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.resolve(fileURLToPath(new URL('./web/v2/', import.meta.url)));
 /** The shared-module allowlist (4.4 静态面): pure, import-closed modules the page and the CLI must agree on, served at
  *  `/<entry>` from `src/<entry>`. Data, not routes: add a line here. */
-export const SHARED = Object.freeze(['cli/words.mjs', 'off/token-header.mjs', 'view/step-order.mjs']);
+export const SHARED = Object.freeze(['cli/words.mjs', 'off/token-header.mjs', 'view/step-order.mjs', 'view/head-cols.mjs']);
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -80,9 +82,32 @@ const jsonBody = (req) => new Promise((resolve) => {
   });
 });
 
+/** The answer files a session directory holds (4.4 §答案文件), by `f`: the closed set, so nothing outside ctx/<k>/ is ever named. */
+const D_FILE = /^\/api\/d\/(?:(head)|p(\d{1,6})\.(main|rest)|open\.(main|rest))$/;
+const NDJSON = 'application/x-ndjson';
+const TIP_IDS = 64, TIP_KEYS = 256; // per session the newest model calls; the sessions remembered, least recently tipped dropped first
+
+/** The board's tip table (4.4 §答案文件 `x-trocar-tip`): `add(pairs)` takes the index keeper's [session_key, id] of each pass,
+ *  `of(id)` → the ≤ TIP_IDS newest ids of that session, oldest first, space separated, or null. The daemon owns one. */
+export function tipTable() {
+  const m = new Map();
+  return {
+    add(pairs) {
+      for (const [key, id] of pairs) {
+        const k = String(key), ids = m.get(k) || [];
+        m.delete(k); m.set(k, ids); // most recently tipped last
+        ids.push(String(id));
+        if (ids.length > TIP_IDS) ids.splice(0, ids.length - TIP_IDS);
+      }
+      while (m.size > TIP_KEYS) m.delete(m.keys().next().value);
+    },
+    of: (id) => { const ids = m.get(String(id)); return ids && ids.length ? ids.join(' ') : null; },
+  };
+}
+
 let named = null; // the query core, imported on the first /api request (it is most of a cold start)
 
-export function createServer({ home, token, query, uid = process.getuid?.(), platform = process.platform, fs, now, env } = {}) {
+export function createServer({ home, token, query, tips, uid = process.getuid?.(), platform = process.platform, fs, now, env } = {}) {
   const files = loadStatic();
   const want = Buffer.from(String(token ?? ''));
   const tokenOk = (got) => {
@@ -106,7 +131,56 @@ export function createServer({ home, token, query, uid = process.getuid?.(), pla
       ...(platform === 'darwin' || platform === 'win32' ? { 'POST setup': post('setup') } : {}),
     };
 
+  /** ⑤ GET /api/d/<f>?id= (4.4 §答案文件). One open, fstat, read and close: the bytes and the tag are of one file even while the worker
+   *  renames a new one in. A file that is not there (or a reader that takes no gzip of a gzip file) is the equivalent named query. */
+  function answerFile(req, res, url) {
+    const m = D_FILE.exec(url.pathname);
+    if (!m) return sendJson(res, 404, { error: 'unknown endpoint' });
+    if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed — the board is read-only' });
+    const id = url.searchParams.get('id');
+    if (!id) return sendJson(res, 400, { error: 'id is required' });
+    const [, head, n, packPart, tailPart] = m;
+    const tip = tips && tips(id);
+    if (tip) res.setHeader('x-trocar-tip', tip);
+    const gzip = /\bgzip\b/.test(req.headers['accept-encoding'] || '');
+    const relay = () => query.relay(head ? { name: 'session', params: { id, head: '' }, res, gzip }
+      : { name: 'lane', params: n != null ? { id, pack: `${n}.${packPart}` } : { id, tail: tailPart }, res, gzip });
+    const stored = !tailPart; // head and packs are kept gzipped, the open tails plain
+    if (stored && !gzip) return relay();
+    const io = fs || nodeFs;
+    const file = path.join(home, 'index', 'ctx', ctxKey(id), head ? 'head.json.gz' : n != null ? `p${n}.${packPart}.ndjson.gz` : `open.${tailPart}.ndjson`);
+    let fd;
+    try { fd = io.openSync(file, 'r'); } catch (e) { if (e && e.code === 'ENOENT') return relay(); throw e; }
+    try {
+      const st = io.fstatSync(fd), size = st.size;
+      const base = { 'content-type': head ? JSON_HEAD['content-type'] : NDJSON, 'cache-control': 'no-store' };
+      let from = 0, status = 200;
+      if (stored) {
+        const etag = `"${size}-${st.mtimeMs}"`;
+        if (tagsOf(req.headers['if-none-match']).includes(etag.slice(1, -1))) { res.writeHead(304, { etag, 'cache-control': 'no-store' }); return res.end(); }
+        Object.assign(base, { etag, 'content-encoding': 'gzip', vary: 'accept-encoding' });
+      } else {
+        // the tail's generation (§答案文件 代标签): the same while the worker appends, another once it renames a new file in; a Range
+        // read whose If-Range names another one is the whole file (RFC 9110 §13.1.5). bigint: a win32 file id passes 2^53
+        const g = io.fstatSync(fd, { bigint: true });
+        base.etag = `"${g.ino}-${g.birthtimeNs}"`;
+        const ifRange = req.headers['if-range'];
+        const r = ifRange == null || ifRange === base.etag ? /^bytes=(\d+)-$/.exec(String(req.headers.range || '')) : null;
+        if (r) {
+          from = Number(r[1]);
+          if (from >= size) { res.writeHead(416, { ...base, 'content-range': `bytes */${size}`, 'content-length': 0 }); return res.end(); }
+          status = 206; base['content-range'] = `bytes ${from}-${size - 1}/${size}`;
+        }
+      }
+      const buf = Buffer.alloc(size - from);
+      for (let at = 0; at < buf.length;) { const k = io.readSync(fd, buf, at, buf.length - at, from + at); if (!k) break; at += k; }
+      res.writeHead(status, { ...base, 'content-length': buf.length });
+      return res.end(buf);
+    } finally { io.closeSync(fd); }
+  }
+
   async function api(req, res, url) {
+    if (url.pathname.startsWith('/api/d/')) return answerFile(req, res, url);
     const m = /^\/api\/([^/]+)$/.exec(url.pathname);
     if (!m) return sendJson(res, 404, { error: 'unknown endpoint' });
     const name = m[1];

@@ -11,15 +11,18 @@
 // the kept ledgers, LEDGER_BYTES): an answer reads the lines of the steps it covers and of the steps the replay goes over. The ledger
 // entries an answer owes go in key order into the room its page leaves; the rest are named by `ledger_next`, a cursor `--ledger`
 // goes on from (3.5 `resources` 与 `seen`).
-import { sessionState, markOn, version as sessionVersion } from './session.mjs';
+import { sessionState, markOn, files, version as sessionVersion } from './session.mjs';
 import { listOf, laneLedger, ledgerWeight, LEDGER_BYTES } from '../../view/reduce.mjs';
 import { lru } from '../projection.mjs';
 import { inheritedRender } from '../../view/render-kind.mjs';
 import { PAGE_BYTES, laneOf, placeIn } from '../session-doc.mjs';
 import { compareStep } from '../../view/step-order.mjs';
 import { QueryArgError } from './index.mjs';
+import nodeFs from 'node:fs';
+import { renderSpan, sealedOf, tailFile } from '../ctx-files.mjs';
+import { trocarHome } from '../../paths.mjs';
 
-export const params = Object.freeze(['id', 'lane', 'from', 'to', 'ledger']);
+export const params = Object.freeze(['id', 'lane', 'from', 'to', 'ledger', 'pack', 'tail']);
 
 const one = (v) => (v == null || v === '' ? null : String(v));
 const pick = (o, keys) => { const out = {}; if (o) for (const k of keys) if (o[k] !== undefined) out[k] = o[k]; return out; };
@@ -65,6 +68,8 @@ function opsOf(P, C) {
 // The kept lane ledgers of a session's fold log (its state's): lane key → {maps, step, rid, off} = laneLedger's maps at the lane's
 // step `step` (rid `rid`), as the log stood at byte `off` (its frontier then). Weighed by ledgerWeight, LEDGER_BYTES in all.
 const ledgers = new WeakMap();
+// the definitions a lane stepper keeps read (bytes, about)
+const DEF_BYTES = 8 << 20;
 // a kept ledger still good for the lane `lane` now: its step holds the same rid and no row of the lane at or before it changed since
 // (one that moved in or out of the lane before it moves its step's rid)
 function keptOf(cols, log, lane, e) {
@@ -77,49 +82,52 @@ function keptOf(cols, log, lane, e) {
   return e;
 }
 
-export async function run(ctx) {
-  const { params: p, errors } = ctx;
-  const id = one(p.id), key = one(p.lane), from = one(p.from), to = one(p.to), ledger = one(p.ledger);
-  if (id == null) throw new QueryArgError('trocar query lane: --id is required (a session id; `trocar query sessions` lists them)');
-  if (key == null) throw new QueryArgError('trocar query lane: --lane is required (a lane key; `trocar query session` lists the lanes)');
-  if ([from, to, ledger].filter((x) => x != null).length > 1) throw new QueryArgError('trocar query lane: give at most one of --from, --to and --ledger');
-  const after = ledger == null ? null : cursorOf(ledger);
-  const st = await sessionState(ctx, id);
-  const empty = (mark) => ({ lane: key, base: null, mark, steps: [], defs: [], resources: [], seen: [], events: [], prev: null, next: null, ledger_next: null });
-  if (!st) {
-    errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
-    return empty(null);
-  }
-  errors.push(...st.errors);
-  // a lane the session does not have (it can vanish between polls: `lanes_gone`) is an empty lane
-  const { cols, log } = st.V;
-  if (!cols.lanes.has(key)) return empty(markOn(st.plan, st.mark));
-  const { store } = st, L = laneOf(cols, key), { rids, slots } = L, n = rids.length;
+/** weigh(v) → what a kept step or definition holds in the heap, about: its JSON's bytes (every field) and the entry. */
+export const weigh = (v) => 96 + (v ? 2 * JSON.stringify(v).length : 0);
+/** laneStepper(st, key, uses) → the steps of the lane `key` of a session state (sessionState): {L, n, rids, lines, lineAt(i), eventsAt(i),
+ *  listAt(i), replyAt(i), step(i, prev), defOf(bid, list), release(keep)}. step(i, prev) = step i with its ops against step `prev`'s list (−1: a
+ *  keyframe, every position added), parent = step `prev`'s rid (null for −1); defOf = a definition on the wire, its render joined with
+ *  the tool_use of the list `list` (a listAt(i); the first it is asked with: cached by bid). Lists, lines and definitions are read once each; `uses`
+ *  (an lru by bid: a block's tool_use id and the render a tool_result inherits from it, 0 for a block that is no tool_use; a function
+ *  of its bid) may be one kept across steppers (ctx-files.mjs, the writer's memo), so a list's blocks are not read again at every
+ *  slice, and what it keeps is these few fields, never the definitions. */
+export function laneStepper(st, key, uses = lru(DEF_BYTES)) {
+  const { store } = st, { cols, log } = st.V, L = laneOf(cols, key), { rids, slots } = L;
   const lines = new Map(), lineAt = (i) => { if (!lines.has(i)) lines.set(i, log.read(...log.latest(rids[i]))); return lines.get(i); };
-  // the `user` events before step i (3.5: every `user` event's `k` is its place among the lane's, 1-based)
-  const before = [0];
-  for (const k of slots) before.push(before.at(-1) + cols.uc[k]);
-  const CS = (e) => e.type === 'compaction' || e.type === 'summarize';
-  const eventsAt = (i) => { let j = before[i]; return lineAt(i).e.map((e) => (e.type === 'user' ? { ...e, k: ++j } : e)); };
-  const flagged = [];
-  for (let i = 0; i < n; i++) if (cols.cs[slots[i]]) flagged.push(i);
-  const lists = new Map(), defs = new Map(), wires = new Map();
+  // the `user` events before step i (3.5: every `user` event's `k` is its place among the lane's, 1-based), walked from the last place
+  // asked: a stepper made for a slice's few steps does not sum the whole lane up front
+  let bi = 0, bs = 0;
+  const before = (i) => { for (; bi < i; bi++) bs += cols.uc[slots[bi]]; for (; bi > i; bi--) bs -= cols.uc[slots[bi - 1]]; return bs; };
+  const eventsAt = (i) => { let j = before(i); return lineAt(i).e.map((e) => (e.type === 'user' ? { ...e, k: ++j } : e)); };
+  // the definitions read, by bytes about (their strings: a tool's name can be tens of KB), the least recently used out
+  const lists = new Map(), defs = lru(DEF_BYTES), wires = new Map();
   const rowOf = (i) => store.rows.get(rids[i]);
   const listAt = (i) => {
     if (!lists.has(i)) {
       const l = listOf(store, rids[i]) || { bids: [], attrs: {} };
-      lists.set(i, { bids: l.bids, attrs: l.attrs, toks: l.bids.map((b, k) => { const a = attrOf(l.attrs[k]); return a ? `${b}\u001f${JSON.stringify(a)}` : b; }) });
+      lists.set(i, { bids: l.bids, attrs: l.attrs, m0: l.mb && l.mb.length ? l.mb[0] : 0, toks: l.bids.map((b, k) => { const a = attrOf(l.attrs[k]); return a ? `${b}\u001f${JSON.stringify(a)}` : b; }) });
     }
     return lists.get(i);
   };
   const replyAt = (i) => rowOf(i).reply || [];
-  const defOf = (bid) => { if (!defs.has(bid)) defs.set(bid, store.readDef(bid) || null); return defs.get(bid); };
+  const defOf = (bid) => {
+    if (defs.has(bid)) return defs.get(bid);
+    const d = store.readDef(bid) || null;
+    defs.set(bid, d, 128 + (d ? 2 * ((d.preview || '').length + (d.toolName || '').length + (d.label || '').length + (d.ref || '').length) : 0));
+    return d;
+  };
   // a tool_result whose own sniff is plain text takes its render from its tool_use's (render-kind.mjs inheritedRender): the tool_use
-  // of the same id in the list it is first seen in
+  // of the same id in the list it is first seen in (`list` a listAt(i): a tool_use is a block of the messages, from its first start m0)
+  function useOf(b) {
+    if (uses.has(b)) return uses.get(b);
+    const u = defOf(b), v = u && u.f && u.f.type === 'tool_use' ? [u.f.id, inheritedRender(u.r) || null] : 0;
+    uses.set(b, v, weigh(v));
+    return v;
+  }
   function renderIn(d, list) {
     const own = d.r || { as: 'text' }, useId = d.f && d.f.tool_use_id;
     if (own.as !== 'text' || useId == null) return own;
-    for (const b of list) { const u = defOf(b); if (u && u.f && u.f.type === 'tool_use' && u.f.id === useId) return inheritedRender(u.r) || own; }
+    for (let j = list.m0; j < list.bids.length; j++) { const u = useOf(list.bids[j]); if (u && u[0] === useId) return u[1] || own; }
     return own;
   }
   function wireDef(bid, list) {
@@ -135,17 +143,44 @@ export async function run(ctx) {
     wires.set(bid, w);
     return w;
   }
-  // step i with ops against step i-1 (a keyframe when `key`): {step, bids it references}
-  function stepAt(i, keyframe) {
+  function step(i, prev) {
     const C = listAt(i), row = rowOf(i), x = row.x || {};
-    const ops = keyframe || i === 0 ? [[1, ...C.toks.map((_, k) => k)]] : opsOf(listAt(i - 1).toks, C.toks);
+    const ops = prev < 0 ? [[1, ...C.toks.map((_, k) => k)]] : opsOf(listAt(prev).toks, C.toks);
     const attrs = {};
     for (const op of ops) if (op[0] === 1) for (let k = 1; k < op.length; k++) { const a = attrOf(C.attrs[op[k]]); if (a) attrs[op[k]] = a; op[k] = C.bids[op[k]]; }
-    const step = { rid: rids[i], parent: i > 0 ? rids[i - 1] : null, ops, reply: replyAt(i), attrs,
+    return { rid: rids[i], parent: prev < 0 ? null : rids[prev], ops, reply: replyAt(i), attrs,
       detail: { norm: { stop_reason: x.stop_reason ?? null, usage: (x.facts ? x.facts.usage : x.nu) ?? null }, respRefs: x.respRefs || [],
         nonBlockKeys: x.nonBlockKeys || [], extraMessages: x.extraMessages || [], wire: x.wire ?? null } };
-    return step;
   }
+  // release(keep): let go of every list but step `keep`'s, of the lines read and of the wire definitions (a render walks a span)
+  const release = (keep) => { for (const k of lists.keys()) if (k !== keep) lists.delete(k); lines.clear(); wires.clear(); };
+  return { L, n: rids.length, rids, lines, lineAt, eventsAt, listAt, replyAt, step, defOf: wireDef, release };
+}
+
+export async function run(ctx) {
+  const { params: p, errors } = ctx;
+  const id = one(p.id), key = one(p.lane), from = one(p.from), to = one(p.to), ledger = one(p.ledger);
+  if (id == null) throw new QueryArgError('trocar query lane: --id is required (a session id; `trocar query sessions` lists them)');
+  if (p.pack != null || p.tail != null) return fileAnswer(ctx, id, key != null || from != null || to != null || ledger != null);
+  if (key == null) throw new QueryArgError('trocar query lane: --lane is required (a lane key; `trocar query session` lists the lanes)');
+  if ([from, to, ledger].filter((x) => x != null).length > 1) throw new QueryArgError('trocar query lane: give at most one of --from, --to and --ledger');
+  const after = ledger == null ? null : cursorOf(ledger);
+  const st = await sessionState(ctx, id);
+  const empty = (mark) => ({ lane: key, base: null, mark, steps: [], defs: [], resources: [], seen: [], events: [], prev: null, next: null, ledger_next: null });
+  if (!st) {
+    errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' });
+    return empty(null);
+  }
+  errors.push(...st.errors);
+  // a lane the session does not have (it can vanish between polls: `lanes_gone`) is an empty lane
+  const { cols, log } = st.V;
+  if (!cols.lanes.has(key)) return empty(markOn(st.plan, st.mark));
+  const S = laneStepper(st, key), { L, rids, lines, listAt, replyAt, eventsAt } = S, n = rids.length, wireDef = S.defOf;
+  const CS = (e) => e.type === 'compaction' || e.type === 'summarize';
+  const flagged = [];
+  for (let i = 0; i < n; i++) if (cols.cs[L.slots[i]]) flagged.push(i);
+  // step i with ops against step i-1 (a keyframe when `keyframe`); its parent is step i-1 either way (the page's base names it)
+  const stepAt = (i, keyframe) => { const s = S.step(i, keyframe || i === 0 ? -1 : i - 1); s.parent = i > 0 ? rids[i - 1] : null; return s; };
   const bytesOf = (v) => Buffer.byteLength(JSON.stringify(v));
   const evBytes = (i, keep = () => true) => eventsAt(i).reduce((a, e) => a + (keep(e) ? bytesOf(e) : 0), 0);
 
@@ -158,7 +193,7 @@ export async function run(ctx) {
     const added = [];
     for (const b of [...listAt(i).bids, ...replyAt(i)]) if (!held.has(b) && !fresh.has(b)) { fresh.set(b, i); added.push(b); }
     let bytes = 0;
-    for (const b of added) { const w = wireDef(b, listAt(i).bids); if (w) bytes += bytesOf(w); }
+    for (const b of added) { const w = wireDef(b, listAt(i)); if (w) bytes += bytesOf(w); }
     return { added, bytes };
   }
   const drop = (added) => { for (const b of added) fresh.delete(b); };
@@ -206,7 +241,7 @@ export async function run(ctx) {
     const w = ledgerWeight(kept);
     if (w <= LEDGER_BYTES) cache.set(key, { ...kept, rid: rids[kept.step], off: log.frontier }, w);
   }
-  const wireDefs = [...fresh.keys()].map((b) => wireDef(b, listAt(fresh.get(b)).bids)).filter(Boolean);
+  const wireDefs = [...fresh.keys()].map((b) => wireDef(b, listAt(fresh.get(b)))).filter(Boolean);
   // the entries owed (at --ledger: those after its cursor) in key order, into the room the page leaves (a --ledger answer takes one
   // at least); `ledger_next` names the last one shipped when some are left
   const owed = [resources, seen].flatMap((list, j) => list.map((e) => [j, keyOf[j](e), e]))
@@ -227,9 +262,28 @@ export async function run(ctx) {
   };
 }
 
+// `--pack <n>.<part>` / `--tail <part>` (3.5 §会话读): the NDJSON text of a sealed pack or of the open tail, as `{$text}` (named/index.mjs
+// runQuery hands it on as the answer's bytes). Both render from the state (ctx-files.mjs renderSpan); the worker's tail is its file.
+async function fileAnswer(ctx, id, others) {
+  const { pack, tail } = ctx.params;
+  if (others || (pack != null && tail != null)) throw new QueryArgError('trocar query lane: --pack and --tail go with --id only, one of them at a time');
+  const m = pack != null ? /^(0|[1-9]\d{0,8})\.(main|rest)$/.exec(String(pack)) : /^()(main|rest)$/.exec(String(tail));
+  if (!m) throw new QueryArgError(pack != null ? 'trocar query lane: --pack takes <n>.<part>: a pack number, a dot, and main or rest' : 'trocar query lane: --tail takes main or rest');
+  const st = await sessionState(ctx, id);
+  if (!st) { ctx.errors.push({ where: `session/${id}`, code: 'session-unknown', reason: 'no session with this id among the captured records' }); return {}; }
+  const sealed = sealedOf(st), part = m[2];
+  files(ctx, st); // the worker's files at this state
+  if (pack == null) {
+    if (ctx.writer === true && st.files) try { return { $text: (ctx.fs || nodeFs).readFileSync(tailFile(ctx.home ?? trocarHome(), id, part), 'utf8') }; } catch { /* rendered */ }
+    return { $text: renderSpan(st, sealed, part, true) };
+  }
+  if (Number(m[1]) >= sealed) throw new QueryArgError(`trocar query lane: pack ${m[1]} is not sealed yet; its calls are in the tail`);
+  return { $text: renderSpan(st, Number(m[1]), part) };
+}
+
 /** version(ctx) → the session's version (session.mjs: its member rows, frontier and cut) and the lane's parameters. */
 export async function version(ctx) {
   const v = await sessionVersion(ctx);
   const p = ctx.params;
-  return v && { key: JSON.stringify([v.key, one(p.lane), one(p.from), one(p.to), one(p.ledger)]), errors: v.errors };
+  return v && { key: JSON.stringify([v.key, one(p.lane), one(p.from), one(p.to), one(p.ledger), one(p.pack), one(p.tail)]), errors: v.errors };
 }

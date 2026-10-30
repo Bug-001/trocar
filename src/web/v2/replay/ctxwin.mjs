@@ -7,7 +7,7 @@
 // The window is a list of keyed units (2.3 §读与画 · 窗口按 bid 打补丁): a request row's key is `bid#occurrence`, a reply row's
 // `rp:` + bid, a turn's its anchor; a unit's `html` carries no position (positions ride `set`, written on placement), so a
 // step change patches the window and an open row whose bid survives keeps its DOM.
-//   ctxWindowUnits(s) → units   fillGroup(units, s, key) → [units, ops]   ctxWindowHtml(s) = serialize(units)   (units, their patch and the DOM applier: core/units.mjs)
+//   ctxWindowUnits(s) → units   swapGroup(units, s, key[, draw]) → [units, ops]   ctxWindowHtml(s) = serialize(units)   (units, their patch and the DOM applier: core/units.mjs)
 //   renderContextWindow(el, s[, {busy}]) patch + land   wireCtxWin(el, s) listeners
 import { esc, bytes } from '../core/fmt.mjs'
 import { KIDS, serialize, patchInto } from '../core/units.mjs'
@@ -83,8 +83,8 @@ export function removedSectionHtml(removed, refK, open) {
 const unparsedHtml = (call) => `<div class="cwunparsed"><div class="cwuhd">${esc(W.UNPARSED_TITLE)}</div><div class="cwub">${esc(W.UNPARSED_KEEP)}</div>` +
   (call.errMsg ? techDetailsHtml([['errMsg', call.errMsg]], { id: 'cwu-tech' }) : '') + `</div>`
 const noRequestHtml = () => `<div class="cwnoreq">${esc(W.NO_REQUEST)}</div>`
-// ⑧: no text, no control — an empty frame the skeleton replaces (1.4 ⑧)
-export const emptyFrameHtml = () => '<div class="cwbusy" aria-busy="true"></div>'
+// ⑧: no text, no control — an empty frame the skeleton replaces (1.4 ⑧); `n` > 0 sizes it for that many rows (2.3 §大致页面: head.last.n)
+export const emptyFrameHtml = (n = 0) => `<div class="cwbusy" aria-busy="true"${n > 0 ? ` style="--n:${n}"` : ''}></div>`
 // the section frames of a step whose lane is not held (2.3 §车道未到手): one per section the row's composition names, sized
 // from its bytes (a row ≈ 28 px), no text, aria-busy; the lane's arrival replaces them
 const FRAME_SECS = [['tools', ['tools']], ['system', ['system']], ['messages', null]]
@@ -143,7 +143,7 @@ const GROUP_HTML = `<div class="cwgroup" data-kids>${KIDS}</div>`
 const holderHtml = (n) => `<div class="cwgroup" aria-busy="true" style="--n:${n}"></div>`
 
 /** The window as keyed units (pure but for the desk's scratch: s.curFlat / s.curKeys / s.curReply / s.curRemoved / s.drawn,
- * and s.later: each placeholder's rows, built, by group key — what fillGroup draws in its place).
+ * and s.later: each placeholder's rows, built, by group key — what swapGroup draws in its place).
  * `all`: every group drawn (the full draw). Otherwise the groups drawn are s.drawn's, those holding an open row or the change
  * line, and — given `focus` (a list position) — the focus's group and its nearest neighbours up to ROW_BUDGET rows. */
 export function ctxWindowUnits(s, { all = false, focus = null } = {}) {
@@ -154,9 +154,6 @@ export function ctxWindowUnits(s, { all = false, focus = null } = {}) {
   if (!call.rec) return [...out, { key: 'noreq', html: noRequestHtml() }] // ⑦
   if (call.unparsed) return [...out, { key: 'unparsed', html: unparsedHtml(call) }] // ⑥
   const st = s.desk ? stepOf(s.desk, call.rid) : null
-  // its lane's read failed: the K-29 sentence, Retry, the reason in the technical details — never empty frames (2.3 §读失败)
-  const why = st && !st.held && s.laneErr ? s.laneErr.get(st.lane) : null
-  if (why) return [...out, { key: 'lanefail', html: `<div class="empty" data-fail="lane">${esc(W.STEP_READ_FAILED)}<div class="emptywhy"><button type="button" class="linkbtn" data-retry="1">${esc(W.RETRY)}</button>${techDetailsHtml([['reason', why]], { id: 'lanetech' })}</div></div>` }]
   if (!st || !st.held) return [...out, { key: 'frames', html: busyFramesHtml(s, call) }]
   const flat = st.flat, keys = rowKeys(flat)
   s.curFlat = flat; s.curKeys = keys
@@ -265,50 +262,57 @@ export function renderContextWindow(el, s, { busy = false, focus = null } = {}) 
   paint(el, units)
   hydrate(el, s)
   if (t) land(el, s, t)
-  fillLater(el, s)
+  settle(el, s)
 }
 const isGroup = (u) => u.html.startsWith('<div class="cwgroup"')
-const holders = (units) => units.some((u) => (isGroup(u) ? !u.kids : !!u.kids && holders(u.kids)))
 const ridNow = (s) => { const c = s.anchor && s.anchor.calls[s.playhead]; return c ? c.rid : null }
 const yieldNow = () => (globalThis.scheduler && typeof globalThis.scheduler.yield === 'function' ? globalThis.scheduler.yield()
   : typeof MessageChannel === 'function' ? new Promise((r) => { const c = new MessageChannel(); c.port1.onmessage = () => { c.port1.close(); r() }; c.port2.postMessage(0) })
     : new Promise((r) => setTimeout(r, 0)))
-// the groups not drawn yet, one per task, next to the ones drawn first; a newer repaint (el.__gen) ends this run
-function fillLater(el, s) {
-  if (typeof document === 'undefined' || !holders(el.__units || [])) return
-  const gen = el.__gen, rid = ridNow(s)
-  yieldNow().then(() => {
+// inside open cards only the groups within one window height above and below the visible box are rows (2.3 §窗口按 bid 打补丁 ·
+// rule 4): one group per task, a placeholder near it drawn, then a drawn group far from it put back to its placeholder — never one
+// holding an open row, the change line, the focus or the selection. A newer repaint (el.__gen) ends this run; scrolling starts one.
+function settle(el, s) {
+  if (typeof document === 'undefined' || !el.getBoundingClientRect || el.__settling === el.__gen) return
+  const gen = el.__settling = el.__gen, rid = ridNow(s)
+  const run = () => yieldNow().then(() => {
     if (el.__gen !== gen || !el.isConnected || ridNow(s) !== rid) return
-    const next = nextHolder(el.__units)
-    if (!next) return
-    const [units, ops] = fillGroup(el.__units, s, next)
-    paint(el, units, ops)
-    fillLater(el, s)
+    const job = nextJob(el, s)
+    if (!job) { el.__settling = null; return }
+    paint(el, ...swapGroup(el.__units, s, ...job))
+    run()
   })
+  run()
 }
-/** One placeholder drawn (2.3 §读与画「长对话的窗口」 rule 4: one group per task): the units with group `key` holding the
- * rows s.later set aside for it, and the ops that make that change alone — the whole step is not rebuilt. */
-export function fillGroup(units, s, key) {
-  const g = { key, html: GROUP_HTML, kids: s.later.get(key) }
-  s.later.delete(key); s.drawn.add(key)
+// [key, draw?] of the group to change next: the first placeholder near the visible box, else the first drawn group far from it
+function nextJob(el, s) {
+  const box = el.getBoundingClientRect(), h = el.clientHeight || box.height, sel = document.getSelection && document.getSelection()
+  let drop = null
+  for (const g of el.querySelectorAll('.cwgroup')) {
+    const busy = g.hasAttribute('aria-busy'), a = busy ? g : g.firstElementChild, b = busy ? g : g.lastElementChild
+    if (!a) continue
+    const near = b.getBoundingClientRect().bottom >= box.top - h && a.getBoundingClientRect().top <= box.bottom + h
+    if (busy && near) return [g.__k, true]
+    if (!busy && !near && !drop && !g.querySelector('.cblk:not(.collapsed), #cachebrk') && !g.contains(document.activeElement) && !(sel && sel.anchorNode && g.contains(sel.anchorNode))) drop = [g.__k, false]
+  }
+  return drop
+}
+/** Group `key` drawn (`draw`: its rows from s.later) or put back to its sized placeholder (its rows into s.later): the units and the
+ * ops that make that change alone — the whole step is not rebuilt (2.3 §读与画「长对话的窗口」 rule 4). */
+export function swapGroup(units, s, key, draw = true) {
   const swap = (us) => {
     for (let i = 0; i < us.length; i++) {
       const u = us[i]
-      if (u.key === key) { const arr = us.slice(); arr[i] = g; return [arr, [['del', key], ['put', key, g, i ? us[i - 1].key : null]]] }
+      if (u.key === key) {
+        const g = draw ? { key, html: GROUP_HTML, kids: s.later.get(key) } : { key, html: holderHtml(u.kids.length) }
+        if (draw) { s.later.delete(key); s.drawn.add(key) } else { s.later.set(key, u.kids); s.drawn.delete(key) }
+        const arr = us.slice(); arr[i] = g; return [arr, [['del', key], ['put', key, g, i ? us[i - 1].key : null]]]
+      }
       if (u.kids && !isGroup(u)) { const r = swap(u.kids); if (r) { const arr = us.slice(); arr[i] = { ...u, kids: r[0] }; return [arr, [['kids', u.key, r[1]]]] } }
     }
     return null
   }
   return swap(units)
-}
-// the placeholder next to a drawn group (after it, else before it), else the first one
-function nextHolder(units) {
-  const gs = []
-  const walk = (us) => { for (const u of us) { if (isGroup(u)) gs.push(u); else if (u.kids) walk(u.kids) } }
-  walk(units)
-  const i = gs.findIndex((g, j) => !g.kids && ((gs[j - 1] && gs[j - 1].kids) || (gs[j + 1] && gs[j + 1].kids)))
-  const g = gs[i >= 0 ? i : gs.findIndex((x) => !x.kids)]
-  return g ? g.key : null
 }
 // patch only a window this module drew last (anyone who wrote el.innerHTML since gets a fresh paint)
 const paint = patchInto
@@ -447,7 +451,9 @@ export function wireCtxWin(el, s) {
     if ((e.key !== 'Enter' && e.key !== ' ') || !e.target.classList || !e.target.classList.contains('cbh')) return
     e.preventDefault(); onClick(e)
   }
+  const onScroll = () => settle(el, s)
   el.addEventListener('click', onClick)
   el.addEventListener('keydown', onKey)
-  return () => { el.removeEventListener('click', onClick); el.removeEventListener('keydown', onKey) }
+  el.addEventListener('scroll', onScroll, { passive: true })
+  return () => { el.removeEventListener('click', onClick); el.removeEventListener('keydown', onKey); el.removeEventListener('scroll', onScroll) }
 }
