@@ -43,8 +43,8 @@ function headOf(fs, file, n = 4) {
   try { const b = Buffer.alloc(n); const got = fs.readSync(fd, b, 0, n, 0); return b.subarray(0, got) } finally { fs.closeSync(fd) }
 }
 
-/** Where the wrapper goes: <binDir>/<command><exeSuffix>, or null when binDir does not resolve. */
-function targetOf(ctx, cert) {
+/** Where the wrapper goes: <binDir>/<command><exeSuffix> (`file`; the real program moved aside: `real`), or null when binDir does not resolve. */
+export function targetOf(ctx, cert) {
   const dir = resolveLoc(cert.binDir, ctx)[0]
   if (!dir) return null
   const join = ctx.join || path.join

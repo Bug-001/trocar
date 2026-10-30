@@ -261,7 +261,7 @@ export function statusReason(code, { harness = '', pid = null } = {}) {
     'settings-ignored-setting-sources': [`${h} was started with settings sources that leave out trocar's certificate setting`],
     'dsh-use-openssl-ca': [`${h} runs with --use-openssl-ca, under which trocar cannot add its certificate`, 'start it without that flag'],
     'dsh-node-too-old': [`${h} runs on a Node too old to add a certificate while running`, 'run it on a newer Node'],
-    'kimi-npm-no-shim': [`this is the npm build of ${h}; trocar sets up only the installed one`],
+    'kimi-npm-no-shim': [`this is the npm build of ${h}; trocar sets up only the build from its own installer`],
     'desktop-ca-override': [`the desktop certificate setting of ${h} overrides the one trocar wrote`],
     'smart-app-control': [`Smart App Control is on, so trocar could not set up the install folder of ${h}`],
     // the rest of doctor's findings (1.6 附录 B, src/netenv/findings.mjs FINDING_CODES): the catalogue's "what" sentence, without the values a clause is not given

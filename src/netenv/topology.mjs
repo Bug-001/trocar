@@ -101,7 +101,7 @@ const steeredOf = (p) => (p.watched === 'decrypt' ? true : p.watched === 'unknow
 function judged(F, h, hf) {
   const j = judgeHarness({
     desired: F.desired[h] ?? null, entryIntact: entryIntact(hf), entryWhy: hf.entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: F.link.attached, helper: F.link.helper || 'ok', daemon: F.daemon.state,
-    procs: hf.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative, start: p.start })), installedAt: hf.installedAt,
+    procs: hf.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative, start: p.start })), installedAt: hf.installedAt, formsHere: hf.formsHere ?? true,
   })
   return { captured: j.captured, reason: (j.rows.find((r) => r.reason) || {}).reason ?? null, rows: j.rows }
 }
@@ -191,7 +191,10 @@ function upstreamTail(g, F, hf, fm, fwf) {
 
 function proxyTopology(F, h, hf) {
   const g = graph(), branches = [], notes = []
-  for (const fm of hf.forms || []) {
+  // a process on none of the harness's forms here (status's `start` not-routed, 4.11 P5: another install of it): it goes its own way, so it is no form's
+  const strays = hf.procs.filter((p) => p.start === 'not-routed'), stray = new Set(strays.map((p) => p.pid))
+  for (const f0 of hf.forms || []) {
+    const fm = { ...f0, procs: f0.procs.filter((p) => !stray.has(p.pid)) }
     const fwf = F.forwarder && F.forwarder.forms ? F.forwarder.forms[fm.id] : null
     const vd = formVerdict(F, h, hf, fm, fwf)
     const main = fm.procs.find((p) => p.elevated === true) || fm.procs[0] || null
@@ -236,6 +239,12 @@ function proxyTopology(F, h, hf) {
       }
       branches.push({ name, form: fm.id, path, off_path: [a, ...off.ids], on_path: vd.on, captured: vd.captured, reason: vd.reason })
     }
+  }
+  // each such process, and with none of its forms on this machine the harness itself: a direct path, trocar on none of it (`form: null`)
+  for (const p of strays.length ? strays : !branches.length && hf.formsHere === false ? [hf.procs[0] || null] : []) {
+    const a = agentOf(g, h, p), off = tail(g, F, hf, hf.setting || { value: null, source: [] }, followsOf(hf, 'http'))
+    g.edge(a, off.ids[0], off.first.via, { evidence: off.first.evidence, inferred: off.first.inferred })
+    branches.push({ name: 'all', form: null, path: [a, ...off.ids], off_path: [a, ...off.ids], on_path: false, captured: false, reason: F.desired[h] === 'off' ? 'desired-off' : 'not-routed' })
   }
   if (!branches.length) throw new Error('the harness has no form to draw')
   // the drift of a field trocar owns (4.8 §10.3): the user changed the entry's key, trocar is bypassed — the line names the one command that re-adopts it. Driver mode's proxy-changed is
