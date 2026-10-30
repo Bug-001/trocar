@@ -23,7 +23,7 @@ const SRC = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.resolve(fileURLToPath(new URL('./web/v2/', import.meta.url)));
 /** The shared-module allowlist (4.4 静态面): pure, import-closed modules the page and the CLI must agree on, served at
  *  `/<entry>` from `src/<entry>`. Data, not routes: add a line here. */
-export const SHARED = Object.freeze(['cli/words.mjs', 'off/token-header.mjs', 'view/step-order.mjs', 'view/head-cols.mjs']);
+export const SHARED = Object.freeze(['cli/words.mjs', 'off/token-header.mjs', 'off/userinfo.mjs', 'view/step-order.mjs', 'view/head-cols.mjs']);
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',

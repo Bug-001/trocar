@@ -19,6 +19,7 @@ import path from 'node:path'
 import { parseTomlLite, parseDotenv, hostOf, dig, expandHome } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
 import { envProxies, argAfter, dotenvLayer, isOwnPath, perOs } from './_common.mjs'
+import { ROUTE_PLACES } from '../../off/marker.mjs'
 
 const ETC_CONFIG = '/etc/codex/config.toml'
 const SYSTEM_CONFIG = { linux: ETC_CONFIG, darwin: ETC_CONFIG }
@@ -84,7 +85,7 @@ const proxy = {
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (every form reads $CODEX_HOME/.env, the app's
 // embedded codex included; NO_PROXY is required on win, R3-W5). Trust is the root installed by `install` (D57): trocar writes no SSL_CERT_FILE.
-const ENV_FILE = { base: 'home', dir: '.codex', env: 'CODEX_HOME', path: '.env' }
+const ENV_FILE = ROUTE_PLACES.codex.file // where `on` writes the proxy block, the place the marker undo looks too
 const proxyMode = {
   forms: [
     { id: 'codex.cli', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'codex' }], verified: { darwin: true, win32: true } },

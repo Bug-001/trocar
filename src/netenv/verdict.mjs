@@ -13,7 +13,7 @@ const NOT_SEEN = 'not-seen' // 4.11 P11 status 4–5: the door has not seen this
  *                recorded for it listens (a missing door with the daemon running is forwarder-down). `helper` 'missing' says the capability helper is absent or the wrong version
  *   daemon       'running' | 'not-running' | 'not-responding' | 'unknown'
  *   deadDoor     proxy mode (macOS, Windows): the agents' proxy entries name trocar's door, which lives in the daemon — a daemon that is not running, or a door it does not hold, is a dead door (forwarder-down)
- *   procs        [{ pid, startedAt (ms or ISO), trusted: true | false | null, reason, negative }] — the harness's processes that send requests. `trusted` is the daemon's verdict when it answered;
+ *   procs        [{ pid, startedAt (ms or ISO), trusted: true | false | null, reason, negative, cause }] — the harness's processes that send requests. `trusted` is the daemon's verdict when it answered;
  *                null = not judged: then the entry, then the certificate, then the start time against the entry's `installedAt` decides (a process older than its entry never read it: config-after-start, 4.6 §确认信任);
  *                in proxy mode the caller gives `start` instead — the door's own start-time rule over the carrier and the on windows (4.11 P11 status): null = passes, `not-seen` = not known, else its code
  *   formsHere    true | false | null — proxy mode: some form of the harness on this OS is on the machine (descriptor `present`, 4.11 P5); false = none is, so no route or
@@ -48,7 +48,7 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
     const row = (v) => ({ pid: p.pid, ...v })
     if (world) return row(world)
     if (p.trusted === false) return row(verdict(false, p.reason === 'off' ? 'desired-off' : p.reason ?? null))
-    if (p.trusted === true) return row(p.negative ? verdict(false, 'negative-cache') : verdict(true))
+    if (p.trusted === true) return row(p.negative ? { ...verdict(false, 'negative-cache'), ...(p.cause ? { cause: p.cause } : {}) } : verdict(true)) // the engine's cause picks the words (1.6 附录 B)
     if (absent) return row(absent)
     if (entry) return row(entry)
     if (certificate) return row(certificate)

@@ -34,7 +34,7 @@ export default {
       editor: { kind: 'json-key', file: { base: 'appSupport', path: 'Code/User/settings.json' }, format: 'jsonc', proxyKeys: [['http.proxy']], arrayItems: [{ keys: ['settingsSync.ignoredSettings'], value: 'http.proxy' }], value: 'door-url', absent: 'create', takesEffect: '重新加载编辑器窗口后生效' },
       dotenv: { kind: 'dotenv-block', file: { base: 'home', dir: '.eighth', env: 'EIGHTH_HOME', path: '.env' }, proxyKeys: ['HTTPS_PROXY', 'https_proxy'], noProxyKeys: ['NO_PROXY', 'no_proxy'], value: 'door-url', absent: 'not-routed', takesEffect: '重新启动 eighth 后生效' },
       switch: { kind: 'switch-file', absent: 'create', takesEffect: '下一个请求生效' },
-      folder: { kind: 'plugin-file', dir: { base: 'appSupport', path: 'eighth-host/plugins' }, template: 'opencode-plugin', rereads: true, absent: 'create', takesEffect: '下一个实例生效' },
+      folder: { kind: 'plugin-file', dir: { base: 'appSupport', path: 'eighth-host/plugins' }, name: 'trocar.js', template: 'opencode-plugin', rereads: true, absent: 'create', takesEffect: '下一个实例生效' },
     },
     certs: {
       bundle: { kind: 'config-key', file: { base: 'home', dir: '.eighth', env: 'EIGHTH_HOME', path: 'settings.json' }, format: 'json', keys: ['env', 'EXTRA_CA'], semantics: 'add', when: { src: [{ file: { base: 'cwd', path: '.eighth/settings.json' }, format: 'json', keys: ['env', 'CERT_STORE'] }, { env: 'CERT_STORE' }], equals: 'bundled' } },
