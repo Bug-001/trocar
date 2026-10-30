@@ -1,4 +1,4 @@
-// chromium.mjs — which Chromium process an Electron host's process is (RFC 4.6 D51④; plan 2026-10-14-d51-name-allowlist §2.5). A name-list hit
+// chromium.mjs (src/off) — which Chromium process an Electron host's process is (RFC 4.6 D51④). A name-list hit
 // only makes a process a candidate: a desktop app's processes share one name, and only its network service owns the model sockets and reads the
 // desktop's trust door. The role is told by Chromium's own switches, which arrive whole on every OS (darwin's argv is ps split on white space, and
 // `--type=…` holds none). No harness name and no OS branch here (4.6 §结构): the harnesses read the role and pick their layers.

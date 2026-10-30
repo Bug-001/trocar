@@ -90,7 +90,7 @@ test('segments: the lock names a new segment before that segment\'s file exists,
   const lock = path.join(home, 'lock')
   let clock = '2026-10-18T07:08:09.000Z'
   const s = store(home, { now: () => new Date(clock), segmentBytes: 1 })
-  const refreshLock = lockKeeper({ file: lock, fields: { pid: 7 }, segmentOf: () => s.currentSegment })
+  const refreshLock = lockKeeper({ file: lock, fields: { pid: 7 }, segmentOf: () => s.currentSegment }).refresh
   s.onSegmentChange(refreshLock) // the daemon's wiring
   const seen = [] // what a sealer would have read at the instant the file was about to appear
   s.onSegmentChange((seg) => { if (seg) seen.push({ seg, named: JSON.parse(fs.readFileSync(lock, 'utf8')).segment, onDisk: fs.existsSync(path.join(raw(home), `${seg}.ndjson`)) }) })
@@ -162,4 +162,47 @@ test('segments: a failed write says so and never throws into the forwarding path
   assert.equal(errs.length, 1)
   assert.ok(s.lastError, 'the reason is kept for the caller\'s failure record')
   s.close()
+})
+
+// B3 (1.6 §5.2 / V99: the stop is a barrier): once closed the store is final — nothing written, no file created, the lock told nothing more; a
+// late write is said once per kind (late-write), and a second close is nothing.
+test('store: after close() a write of any kind is refused, creates no file, never tells the segment hook, and is said once per kind', () => {
+  const home = tmpDir('trocar-seg-')
+  const root = path.join(home, 'collector')
+  const errs = [], changes = []
+  const s = createRecordStore({ root, raw: raw(home), now: () => new Date('2026-10-22T01:00:00.000Z'), onError: (e) => errs.push(e.code) })
+  s.onSegmentChange((seg) => changes.push(seg))
+  s.envelope({ id: 'a' }); s.flow({ flow_id: 'f1' })
+  s.close()
+  const before = { raw: names(home), dirs: fs.readdirSync(root).sort(), changes: changes.length }
+  for (let i = 0; i < 2; i++) {
+    assert.deepEqual(s.envelope({ id: `late${i}` }), { ok: false })
+    assert.equal(s.flow({ flow_id: `late${i}` }), false)
+    s.audit({ event: 'late' }); s.replay({ id: 'late' })
+  }
+  s.close()
+  assert.deepEqual({ raw: names(home), dirs: fs.readdirSync(root).sort(), changes: changes.length }, before, 'no segment, no day file, no segment-hook call')
+  assert.deepEqual(errs.sort(), ['late-write', 'late-write', 'late-write', 'late-write'], 'one late-write per kind (envelope, flow, audit, replay)')
+})
+
+// B4 (1.6 §5.2: the lock has one owner): after release() the lock file is gone and stays gone — a timer refresh and the store's rollover hook
+// after it write nothing back.
+test('lock: after release() the lock is gone and no later refresh — the timer\'s or a rollover\'s — writes it back', () => {
+  const home = tmpDir('trocar-seg-')
+  const lock = path.join(home, 'lock')
+  let clock = '2026-10-22T01:00:00.000Z'
+  const s = store(home, { now: () => new Date(clock), segmentBytes: 1 })
+  const k = lockKeeper({ file: lock, fields: { pid: 7 }, segmentOf: () => s.currentSegment })
+  s.onSegmentChange(k.refresh)
+  k.refresh()
+  s.envelope({ id: 'a' })
+  assert.equal(fs.existsSync(lock), true)
+  k.release()
+  assert.equal(fs.existsSync(lock), false)
+  k.refresh(); k.refresh()
+  clock = '2026-10-22T01:00:01.000Z'
+  s.envelope({ id: 'b' }) // past segmentBytes: a new segment opens and closes, both told to the hook
+  assert.equal(fs.existsSync(lock), false, 'still gone after refreshes and a rollover')
+  s.close()
+  assert.equal(fs.existsSync(lock), false)
 })

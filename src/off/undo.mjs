@@ -11,7 +11,7 @@
 //      file keeps it; and, only for `uninstall` (`dropCa`), trocar-ca.pem — `off` never removes the CA, the next `on` uses it again
 //   4  rc lines and patch rows (each loading line before the file it loads), then the plugins and the shim
 //   5  the live processes that may still trust trocar (reported, never restarted)
-// Liveness is judged from the manifest — `manifest.liveness.<harness>` (identity, rereads, until, until_environ), plus the names agents.json holds now — and the `installed_at` of
+// Liveness is judged from the manifest — `manifest.liveness.<harness>` (identity, trust_rereads — rereads in an older record —, until, until_environ), plus the names agents.json holds now — and the `installed_at` of
 // the harness's items — plus the process table `procs()` reads, never from the daemon (stopped by now) or the entries (undone by now), so `trocar
 // off` and `trocar-off` give the same answer (1.6 R3). A process table that cannot be read is not "nobody is alive": what depends on it is kept and
 // reported unjudged — and so is a harness whose snapshot has no signature (none recorded, or null: the trocar that wrote it had none for its OS).
@@ -30,9 +30,10 @@ import { undoRunKey, undoScheduledTask } from './win32.mjs'
 import { dropBackup } from './backup.mjs'
 import { backupDir, trocarHome } from './paths.mjs'
 import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside } from './fsutil.mjs'
-import { harnessesOf, hasIdentity, withAgentList, mayHaveRead } from './signature.mjs'
+import { harnessesOf, hasIdentity, withAgentList, mayHaveRead, trustRereads } from './signature.mjs'
 import { readAgentList } from './identity.mjs'
 import { holdersOf } from './holders.mjs'
+import { readDoorSeen } from './door-seen.mjs'
 import { certBlocks, stripCert, composeBundle, certsOf } from './pem.mjs'
 import { offLines } from './text-edit.mjs'
 import { decodeText } from './text-codec.mjs'
@@ -64,7 +65,7 @@ const without = (list, item) => { const i = list.indexOf(item); if (i >= 0) list
 // A harness whose snapshot has no signature (no record: an older trocar; null: none for its OS) cannot tell its processes from the others, so any live
 // process that may have read its entry may be one of them (a record that is missing says nothing of re-reading either: alive is enough). → their pids;
 // none means nobody can hold what trocar wrote for it, signature or not (4.6 「判活快照」).
-const unsignedOf = (liveness, list, h, since) => (hasIdentity(liveness[h]) ? [] : list.filter((p) => mayHaveRead(p, liveness[h] || { rereads: true }, since)).map((p) => p.pid))
+const unsignedOf = (liveness, list, h, since) => (hasIdentity(liveness[h]) ? [] : list.filter((p) => mayHaveRead(p, liveness[h] ? trustRereads(liveness[h]) : true, since)).map((p) => p.pid))
 // why such a harness cannot be judged, said the same way for its files (step 2 / 3) and for who still trusts trocar (step 5)
 const unsignedWhy = (liveness, h) => (liveness[h]
   ? `the install manifest has no process identity for ${h} (the trocar that wrote it had none for this OS; "trocar on" records it, then run this again)`
@@ -116,6 +117,8 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     if (inScope(it.harness) && Number.isFinite(t)) since.set(it.harness, Math.min(since.get(it.harness) ?? Infinity, t))
   }
   const touched = new Set([...manifest.entries, ...manifest.files].filter((x) => !spared(x)).map((x) => x.harness).filter(inScope)) // the harnesses this run takes something from
+  // the harnesses whose certificate side this run takes (an install item): only they may leave a process still trusting trocar (step 5) — off takes none
+  const trustTouched = new Set([...manifest.entries, ...manifest.files].filter((x) => !spared(x) && x.phase === 'install').map((x) => x.harness).filter(inScope))
   const table = async () => { try { return { list: await procs(), error: null } } catch (e) { return { list: [], error: errText(e) } } }
   const leftEntries = [] // the entries step 1 could not undo: they stay in the manifest and still name what they named
   const rm = (p) => { sweepTemps(p, fs); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); out.removed.push(p) } }
@@ -226,7 +229,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       if (unsigned(f.harness).length) return { why: unsignedWhy(judged, f.harness) }
       const pids = t.list.filter((p) => {
         const env = processEnv(p)
-        return (byHarness && harnessesOf(judged, p).includes(f.harness) && mayHaveRead(p, judged[f.harness], since.get(f.harness))) || (!!env && [...env.values()].some((v) => typeof v === 'string' && v.includes(f.path)))
+        return (byHarness && harnessesOf(judged, p).includes(f.harness) && mayHaveRead(p, trustRereads(judged[f.harness]), since.get(f.harness))) || (!!env && [...env.values()].some((v) => typeof v === 'string' && v.includes(f.path)))
       }).map((p) => p.pid)
       if (!byHarness) pids.push(...hiddenEnv(f.harness).filter((pid) => !pids.includes(pid)))
       const unknown = byHarness || pids.length ? [] : unknownEnv(f.harness)
@@ -332,13 +335,13 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   }
 
   // ── 5: who may still trust trocar (never restarted) ───────────────────────────────────────────────────────────────────────────────
-  if (touched.size) {
+  if (trustTouched.size) {
     const t = await table()
     out.procs_error = t.error
-    if (!t.error) out.trust_unknown = [...touched].filter((h) => unsignedOf(judged, t.list, h, since.get(h)).length).map((h) => ({ harness: h, why: unsignedWhy(judged, h) })) // nothing tells its processes apart: not "none of them"
+    if (!t.error) out.trust_unknown = [...trustTouched].filter((h) => unsignedOf(judged, t.list, h, since.get(h)).length).map((h) => ({ harness: h, why: unsignedWhy(judged, h) })) // nothing tells its processes apart: not "none of them"
     for (const p of t.list) for (const h of harnessesOf(judged, p)) { // a process two harnesses claim may trust each one's file (D50: one more, never one less)
-      const l = touched.has(h) ? judged[h] : null
-      if (!l || !mayHaveRead(p, l, since.get(h))) continue
+      const l = trustTouched.has(h) ? judged[h] : null
+      if (!l || !mayHaveRead(p, trustRereads(l), since.get(h))) continue
       // it never read trocar's file — told by its environment, where the OS shows one (on macOS and Windows a process that may have read it is listed)
       if (l.until_environ && p.envRead !== false) { const v = (processEnv(p) || new Map()).get(l.until_environ); if (!(typeof v === 'string' && v.startsWith(dir + path.sep))) continue }
       out.still_trusting.push({ pid: p.pid, harness: h, until: UNTIL_VALUES.includes(l.until) ? l.until : 'restart' })
@@ -354,7 +357,9 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   }
   if (windowed.length) {
     const t = await table()
-    out.holders = t.error ? null : holdersOf({ manifest, procs: t.list, agentList: home ? readAgentList({ home, fs }) : null }).filter((x) => inScope(x.harness))
+    const ds = readDoorSeen({ dir, fs }) // the door's durable rows (P12); unreadable = door evidence not known: the judge keeps the safe direction
+    if (ds.rows == null) out.notes.push(`${ds.error}, so every running program of a harness that was on is counted as still connected`)
+    out.holders = t.error ? null : holdersOf({ manifest, procs: t.list, doorSeen: ds.rows, agentList: home ? readAgentList({ home, fs }) : null }).filter((x) => inScope(x.harness))
     if (t.error) out.notes.push(`the process table could not be read (${t.error}), so which programs may still be connected through trocar is not known`)
   }
 

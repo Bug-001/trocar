@@ -76,3 +76,14 @@ test('data colours reach 3:1 on the chart surfaces, in both themes', () => {
   for (const theme of ['light', 'dark']) for (const d of DATA) for (const s of CHART)
     assert.ok(ratio(C(theme, d), C(theme, s)) >= 3, `${theme}: ${d} on ${s} = ${ratio(C(theme, d), C(theme, s)).toFixed(2)}`)
 })
+// 1.5 §审美 #7 for the block cells (RFC 2.3 §两种模式): the diff hunk and JSON-tree text colours on every surface a cell sits on;
+// the ink colours on the diff and error tints; the error text on its own tint
+test('cell text tokens and cell tints keep 4.5:1, in both themes', () => {
+  const pairs = [
+    ...['--diff-hunk', '--j-key', '--j-str', '--j-num', '--j-lit'].flatMap((t) => ['--raised', '--sunk', '--paper'].map((s) => [t, s])),
+    ...['--ink', '--ink-2'].flatMap((t) => ['--diff-add-bg', '--diff-del-bg', '--err-bg'].map((s) => [t, s])),
+    ['--bad', '--err-bg'],
+  ]
+  for (const theme of ['light', 'dark']) for (const [t, s] of pairs)
+    assert.ok(ratio(C(theme, t), C(theme, s)) >= 4.5, `${theme}: ${t} on ${s} = ${ratio(C(theme, t), C(theme, s)).toFixed(2)}`)
+})

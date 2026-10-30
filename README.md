@@ -87,7 +87,9 @@ One command takes this checkout to the newest code and leaves the machine the wa
 capture on again for the agents that had it on. It prints the plan — which commit to which commit,
 and which agents go off and on again — and asks first; `--yes` answers, `--dry-run` only prints.
 While it runs those agents are not captured (their connections still work), and the collector is
-replaced the way `uninstall` stops it: connections it still holds get up to 30 s to finish. An update that stops half way leaves a note
+replaced the way `uninstall` stops it: connections it still holds get up to 30 s to finish, then the old collector cuts
+the rest (a call left open, such as a WebSocket) and stops itself cleanly, so the new one does not report that the previous
+one ended without a clean stop. An update that stops half way leaves a note
 behind: run `trocar update` again and it goes on from where it stopped.
 
 A machine that ran the build from before the rename moves over once, by hand: that build's own `uninstall`, then
@@ -198,7 +200,8 @@ newest calls that fit and says so (**Showing only the latest N / M calls (file X
 the budget at a time, and between moves each refresh reads on with the new calls only. The worker also measures its
 heap while it reads: a session that costs more per call than estimated is cut shorter, never read until the worker
 runs out of memory. A session that cannot be read says so in one sentence with **Retry**; the reason is under
-**Technical details**. The first open of a very large
+**Technical details**. Every other board screen that cannot read something (overview, traffic, settings,
+session list, capture log) does the same. The first open of a very large
 session after the worker has left reads it from the start, which takes a while (about half a minute for a
 5.4k-call session). It is not a prerequisite: with no daemon — or none that answers
 yet — the command reads the records itself and gives the same document, only slower. Long results page with
@@ -246,7 +249,9 @@ that need a restart are listed. Name an agent (`trocar off claude-code`) to swit
 
 `trocar status` and `trocar doctor` show, per agent, whether it is captured and why not, and where trocar forwards its
 connections — agent → door → upstream, and where the upstream comes from: the agent's own proxy, the system proxy, or a
-direct connection, with the value trocar wrote beside your own. A certificate block says whether the root is installed,
+direct connection, with the value trocar wrote beside your own. A process trocar has not seen use its door, and whose
+start history is incomplete, is `not-seen`: never a reason to call the agent not captured, and no restart is asked
+(`yes` with "N not seen yet" beside captured ones, `unknown` when it is all there is). A certificate block says whether the root is installed,
 its key is still in custody and the daemon could make its intermediate (`cert-not-installed`, `cert-key-missing`,
 `cert-intermediate-unavailable`), and which certificate files trocar did not append to because they are not yours
 (`not-users-file`). `trocar status <harness>` prints these per form (a `certificate:` and a `proxy:` line, then trocar's value beside
@@ -367,6 +372,11 @@ trocar does not count on a Claude Code process that was already
 running at install picking up the new trust entry (not verified for every mode), so `status` reports it
 untrusted (`config-after-start`, with a hint to restart it) and its connections go direct, unrecorded,
 until you restart it.
+
+After `off`, the programs listed as still connected are those started while it was on, those seen going through trocar,
+and, for a program that re-reads its trocar setting while running (OpenCode, Z-Code), any copy still running at `off`.
+`off` lists no program as still trusting the certificate (that is `uninstall`'s report). A machine installed by an older
+trocar gets this rule from its next `trocar update` or `trocar install`.
 
 After `off`, connections the engine was still relaying end at the next response boundary (a WebSocket at its
 turn's end); `trocar off --now` cuts them at once. The one byte of its own that trocar ever adds is the

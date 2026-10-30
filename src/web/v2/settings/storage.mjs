@@ -5,7 +5,7 @@
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
 import { esc, bytes, fmtStamp, relTime } from '../core/fmt.mjs'
-import { techDetailsHtml, popover, confirmDialog } from '../core/ui.mjs'
+import { techDetailsHtml, popover, confirmDialog, readFailure } from '../core/ui.mjs'
 import { delegate } from '../core/dom.mjs'
 import { CLASS_NAME, CLASS_DESC, FALLBACK_CLASS } from '../core/classes.mjs'
 import { planConfirm } from '../core/control.mjs'
@@ -157,8 +157,9 @@ function classesCardHtml(classes, window, { control = null, ui = new Map(), hl =
     last + techDetailsHtml(tech, { id: 'classtech' }) + `</div>`
 }
 
-// storageHtml({classes, segments}, window, opts) — the page body: the 磁盘 card, then the 保存什么 card
-export function storageHtml({ classes, segments }, window, opts = {}) {
+// storageHtml({classes, segments, segmentsFail}, window, opts) — the page body: the 磁盘 card, then the 保存什么 card. A failed
+// `segments` read is said in the disk card (K-29), never read as zero problems (D38).
+export function storageHtml({ classes, segments, segmentsFail = null }, window, opts = {}) {
   const fig = diskFigures(classes), all = fileProblems(segments, classes), bad = problemCount(segments)
   const d = (classes && classes.disk) || {}, ratio = sealRatio(d)
   const files = [[W.FILES_SEAL_RATIO, ratio != null ? `${ratio.toFixed(3)} · ${W.ESTIMATE}` : W.FILES_SEAL_NONE]]
@@ -169,12 +170,13 @@ export function storageHtml({ classes, segments }, window, opts = {}) {
     (fig.total != null ? `<p class="dline"><b>${W.DISK_TOTAL}</b> <span class="num">${esc(bytes(fig.total))}</span></p>` : '') +
     `<p class="dline"><b>${W.DISK_PER_DAY}</b> <span class="num">${fig.perDay != null ? `≈ ${esc(bytes(fig.perDay))}` : '—'}</span>` +
     (fig.asOf ? `<span class="cap">${W.AS_OF} ${esc(fmtStamp(fig.asOf))}</span>` : '') + `</p>` +
-    (bad > 0 ? `<p class="dline bad"><a class="jumpfiles" href="#">${esc(W.BAD_FILES(bad))} · ${esc(W.BAD_FILES_SHOW)} ▸</a></p>` : '') +
+    (segmentsFail ? segFailHtml(segmentsFail) : bad > 0 ? `<p class="dline bad"><a class="jumpfiles" href="#">${esc(W.BAD_FILES(bad))} · ${esc(W.BAD_FILES_SHOW)} ▸</a></p>` : '') +
     (anyNote(segments, classes) ? `<p class="cap" data-note="slow">${esc(W.SLOW_NOTE)}</p>` : '') +
     `<p class="dline"><a href="${W.CAPTURE_PAGE_HREF}">${W.CAPTURE_PAGE_LINE} ›</a></p>` +
     techDetailsHtml(files, { id: 'diskfiles' }) + `</div>`
   return disk + classesCardHtml(classes, window, opts)
 }
+const segFailHtml = (r) => { const f = readFailure(W.FILES_CHECK, r, { id: 'segtech-fail' }); return `<p class="dline bad">${esc(f.line)} · <a href="#/settings/storage">${W.RETRY}</a></p>${f.tech}` }
 
 export function mount(el, ctx) {
   const { api, router } = ctx
@@ -194,7 +196,7 @@ export function mount(el, ctx) {
     const [c, s] = await Promise.all([api.get('classes'), api.get('segments')])
     if (dead) return
     readFail = c.ok ? null : c
-    if (c.ok) { docs = { classes: c.data, segments: s.ok ? s.data : null }; readAt = api.now() }
+    if (c.ok) { docs = { classes: c.data, segments: s.ok ? s.data : null, segmentsFail: s.ok ? null : s }; readAt = api.now() }
     if (!keepReceipts) for (const [k, v] of ui) if (!v.busy) ui.delete(k)
     paint(); paintHead()
   }
@@ -202,7 +204,8 @@ export function mount(el, ctx) {
 
   function paint() {
     if (readFail) {
-      $('#smain').innerHTML = `<div class="scard"><p class="err">${esc(W.READ_FAIL)} · ${esc(readFail.error || 'HTTP ' + readFail.status)} · <a href="#/settings/storage">${W.RETRY}</a></p></div>`
+      const f = readFailure(W.THIS_PAGE, readFail, { id: 'stech-fail' })
+      $('#smain').innerHTML = `<div class="scard"><p class="err">${esc(f.line)} · <a href="#/settings/storage">${W.RETRY}</a></p>${f.tech}</div>`
       return
     }
     if (!docs) return

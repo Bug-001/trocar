@@ -25,8 +25,7 @@ export const activeProjectChip = (name) => `project: ${name}`
 // ── the caption row: only what changes how far the list can be trusted (D38); bookkeeping goes to 技术细节 ───────────
 export const capNotAllRead = (n) => `◐ ${n} capture ${n === 1 ? 'file was' : 'files were'} not read in full; the list may be incomplete`
 export const CAP_NOT_ALL_TIP = 'See Storage for each file'
-export const capReadFail = (code) => `Could not read the session list: the capture service returned ${code}`
-export const CAP_CONN_FAIL = 'Cannot reach the trocar capture service'
+export const SESSION_LIST = 'The session list' // what a failed read could not read (1.5 K-29: + the cause class, never the reason)
 export const RETRY = 'Retry'
 export const capOldList = (t) => `Below is the list as read at ${t}`
 
@@ -68,4 +67,4 @@ export const AS_OF = 'as of'
 export const GO_CAPTURE = 'Go to capture'
 export const FILTERED_EMPTY = 'No sessions match the filters'
 export const agentNotCaptured = (name) => `${name} is not capturing`
-export const readCapFail = (why) => `Could not read capture health: ${why}`
+export const CAPTURE_HEALTH = 'Capture health' // the 空态's second line when the health read failed (K-29)

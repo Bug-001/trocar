@@ -6,6 +6,7 @@ import { esc, relTime, fmtStamp } from '../core/fmt.mjs'
 import { HARNESS_ORDER, harnessKey, harnessName, harnessIcon, harnessRaw } from '../core/chips.mjs'
 import { formatHash } from '../core/router.mjs'
 import { captureVerdict, capHealthPatch } from '../core/capture-verdict.mjs'
+import { readFailure, techDetailsHtml } from '../core/ui.mjs'
 import * as W from '../labels/library.mjs'
 
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k)
@@ -145,13 +146,6 @@ export function captionFacts(errors) {
   return { facts: n ? [{ kind: 'not-all', n }] : [], tech: es.map((e) => `${e.where ?? ''} · ${e.reason ?? ''}`) }
 }
 
-// ── what the read failed with: a dead server is not an HTTP error ────────────────────────────────────────────────────
-export function readFailWording(r) {
-  if (r && r.status === 0) return { line: W.CAP_CONN_FAIL, code: null }
-  const code = r && r.status != null ? r.status : null
-  return { line: W.capReadFail(code != null ? code : 'unknown reason'), code }
-}
-
 // ── the row ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 export function rowModel(s, now) {
   const multi = Array.isArray(s.harnesses) && s.harnesses.length > 1 // S14: field presence — before it, never drawn
@@ -221,9 +215,10 @@ export function capShotMaker(fetchHealth, now = Date.now) {
   const read = () => {
     if (!p) p = (async () => {
       let r
-      try { r = await fetchHealth() } catch (e) { r = { ok: false, error: String((e && e.message) || e) } }
+      try { r = await fetchHealth() } catch (e) { r = { ok: false, status: 0, error: String((e && e.message) || e) } }
       const p = capHealthPatch(r, now()) // the same reading of one answer as every capture-health card (a 503 is {unreadable})
-      done = p.capH ? { h: p.capH, asOf: p.capHOkAt } : { fail: p.capHErr }
+      // a failure keeps the failed answer itself ({status, error}), so the line can say the cause class (K-29)
+      done = p.capH ? { h: p.capH, asOf: p.capHOkAt } : { fail: r && !r.ok ? r : { error: p.capHErr } }
       return done
     })()
     return p
@@ -237,12 +232,14 @@ export function capShotMaker(fetchHealth, now = Date.now) {
 export const SERVICE_DOWN = new Set(['not-running', 'not-responding', 'not-installed', 'off'])
 // the 空态's second line: the capture service's own sentence for its state — 采集在进行 says the inviting hint
 // instead — plus the time that answer was read (「截至」). A shot that never arrived says nothing yet. The verdict is taken
-// at that time: the shot is read once, so judging it against a later clock would call it stale.
+// at that time: the shot is read once, so judging it against a later clock would call it stale. A failed read or a 503
+// keeps its reason only in `tech`, the collapsed technical details (K-29).
 export function emptyBoardState(shot) {
-  if (!shot) return { line: '' }
-  if (shot.fail) return { line: W.readCapFail(shot.fail), asOf: null }
+  if (!shot) return { line: '', tech: '' }
+  if (shot.fail) { const f = readFailure(W.CAPTURE_HEALTH, shot.fail, { id: 'lib-cap-fail' }); return { line: f.line, tech: f.tech, asOf: null } }
   const v = captureVerdict(shot.h, { okAt: shot.asOf, now: shot.asOf })
-  return { line: v.state === 'ok' ? W.CAPTURING_HINT : v.text, asOf: shot.asOf, verdict: v }
+  const tech = v.state === 'unreadable' ? techDetailsHtml([['reason', String(v.reason)]], { id: 'lib-cap-tech' }) : ''
+  return { line: v.state === 'ok' ? W.CAPTURING_HINT : v.text, tech, asOf: shot.asOf, verdict: v }
 }
 // the filtered agent's line, when exactly one agent was picked and nothing matched (1.8 空态表): is it even being
 // captured? → null (nothing to add) | {service:true,…} (the whole service's sentence) | {line, href} (this agent's)

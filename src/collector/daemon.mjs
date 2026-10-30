@@ -178,21 +178,49 @@ function storeWithSealing({ P, failure }) {
   return { store, seal, keeper }
 }
 
+/** The stop's tail, the ONE copy both entries run (1.6 §5.2, the stop is a barrier). `before(step)` / `after(step)` are the
+ *  entry's own steps around the engine (Linux closes its helper before the engine, the model after). The engine closes the barrier way —
+ *  every connection ends at a boundary within `graceMs` or is cut (`cut-by-stop`), and only then does close() resolve, its rows written; then the
+ *  store becomes final, the index settles, daemon-stop is written with `relayed` (absent when the engine step failed: it is in `failed`), the failure
+ *  recorder becomes final (later lines → stderr only), and the lock's one owner removes it last: a lock still there at the next start means this
+ *  stop never finished. Every step runs; one that fails is recorded with its reason, never thrown past the rest (D38). → {failed: [where…]} */
+async function stopTail({ engine, graceMs, store, seal, failure, lock, signal, reason, before = async () => {}, after = async () => {} }) {
+  const failed = []
+  const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
+  await before(step)
+  let relayed = null
+  await step('engine', async () => { relayed = await engine.close({ graceMs }) })
+  await after(step)
+  await step('record', () => store.close())
+  await step('raw', () => seal.settle()) // the index of what this daemon wrote, including the segment just closed (D62)
+  failure.flush()
+  failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(relayed ? { relayed } : {}), ...(failed.length ? { failed } : {}) })
+  failure.final()
+  lock.release()
+  return { failed }
+}
+
 /** The lock a live daemon holds (4.6 §控制面, D-25): `fields` (pid, start time, boot id …) plus `segment`, the raw-layer
- *  segment it is appending to right now (D60: readers and the sealer leave that one alone, and may take every other). The
- *  returned refresh is called on a timer, and by the record store right before it creates a new segment file (so the lock
+ *  segment it is appending to right now (D60: readers and the sealer leave that one alone, and may take every other).
+ *  `refresh` is called on a timer, and by the record store right before it creates a new segment file (so the lock
  *  names the live segment no later than its first byte) and right after it closes one, before the seal queue hears of
  *  it (so the sealer it forks at once never finds the closed segment still named here); the file is rewritten only when the segment changed (a rollover,
- *  a stop) — a reader never sees a segment named here that is already closed. */
+ *  a stop) — a reader never sees a segment named here that is already closed.
+ *  `release` is the stop's last step and the lock's one remover (1.6 §5.2): it deletes the file and latches, so a refresh that comes later — the
+ *  timer, the store's segment hook — writes nothing back. */
 export function lockKeeper({ file, fields, segmentOf = () => null }) {
-  let written = false, segment = null
-  return () => {
-    const seg = segmentOf()
-    if (written && seg === segment) { const t = new Date(); fs.utimesSync(file, t, t); return }
-    const tmp = `${file}.tmp-${process.pid}`
-    fs.writeFileSync(tmp, JSON.stringify({ ...fields, segment: seg }) + '\n', { mode: 0o600 })
-    fs.renameSync(tmp, file) // atomic: a reader sees the whole old lock or the whole new one
-    segment = seg; written = true // only now: a failed write must be retried, not remembered as done
+  let written = false, segment = null, released = false
+  return {
+    refresh() {
+      if (released) return
+      const seg = segmentOf()
+      if (written && seg === segment) { const t = new Date(); fs.utimesSync(file, t, t); return }
+      const tmp = `${file}.tmp-${process.pid}`
+      fs.writeFileSync(tmp, JSON.stringify({ ...fields, segment: seg }) + '\n', { mode: 0o600 })
+      fs.renameSync(tmp, file) // atomic: a reader sees the whole old lock or the whole new one
+      segment = seg; written = true // only now: a failed write must be retried, not remembered as done
+    },
+    release() { released = true; fs.rmSync(file, { force: true }) },
   }
 }
 
@@ -252,7 +280,7 @@ function boardFor({ P, failure, query, log = () => {} }) {
   }
 }
 
-async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {}, fork }) {
+async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, stopGraceMs = 2000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {}, fork }) {
   const P = collectorPaths(dir)
   const netHome = home || env.HOME || os.homedir() // whose agents' settings the 5 s check looks at: the user the daemon runs as
   const failure = createFailureRecorder(P.dir, { log })
@@ -270,7 +298,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   const ep = A0 && typeof A0.controlEndpoint === 'function' && !socketPath ? A0.controlEndpoint({ dir: P.dir }) : null
   const sock = socketPath || (ep ? ep.path : controlSocketPath({ env }))
   // macOS / Windows run the collector model (4.11 §1, §3 ①): no CA of its own to gate on, doors from POST /on, the CLI writes every file
-  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env, exec: runAsync }) /* darwin = ps lstart + kern.boottime; async: the event loop stays free */, lockRefreshMs, foreground, upstreamCa, model, fork })
+  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env, exec: runAsync }) /* darwin = ps lstart + kern.boottime; async: the event loop stays free */, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork })
   identity = identity || procIdentity
   let manifest
   try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "trocar uninstall", then "trocar on"`), { code: 'manifest-unreadable' }) }
@@ -544,7 +572,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // the lock (4.6 §控制面, D-25): pid + start time + boot id, so a reused pid or a reboot is never "running"; its
     // mtime is refreshed every second, so a stuck daemon shows as unresponsive within 5 s — read from disk alone
     const me = identity(process.pid)
-    const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, helper_pid: redirector.helperInfo().pid, engine_port: port, socket: sock }, segmentOf: () => store.currentSegment })
+    const lock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, helper_pid: redirector.helperInfo().pid, engine_port: port, socket: sock }, segmentOf: () => store.currentSegment })
+    const refreshLock = lock.refresh
     refreshLock()
     // the lock must name the live segment before that segment's first byte (D60, invariant 2): the store calls this
     // synchronously right before it creates the file, so a sealer never takes the segment the daemon is appending to;
@@ -710,20 +739,13 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       if (!helperDown) { try { const s = await redirector.status(); if (s && s.drops) lastDrops = s.drops } catch { /* the helper is going: what was last read is written */ } }
       noteDrops({ force: true }) // drops not yet reported are written, not lost
       failure.flush() // folded counts are written, not lost
-      const failed = []
-      // every step runs; one that fails is recorded with its reason, never thrown past the rest (D38)
-      const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
-      await step('control', () => control.close())
-      clearInterval(bundleTimer)
-      tracker.stop()
-      await step('helper', () => redirector.close()) // the helper exits; its unpinned links vanish; new connections go direct
-      await step('engine', () => Promise.race([engine.close(), new Promise((r) => setTimeout(r, 2000).unref())]))
-      await step('record', () => store.close())
-      await step('raw', () => seal.settle()) // the index of what this daemon wrote, including the segment just closed (D62)
-      failure.flush()
-      failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(failed.length ? { failed } : {}) })
-      fs.rmSync(P.lock, { force: true }) // last: a lock still there at the next start means this stop never finished
-      return { failed }
+      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason,
+        before: async (step) => {
+          await step('control', () => control.close())
+          clearInterval(bundleTimer)
+          tracker.stop()
+          await step('helper', () => redirector.close()) // the helper exits; its unpinned links vanish; new connections go direct
+        } })
     }
     return { port, socketPath: sock, paths: P, stop, exited, status, tracker, engine, redirector, switch: sw }
   } catch (e) {
@@ -740,7 +762,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 // a door forward-only while its holders live after off (P12), and exits after `off {exit}` only when mayExit says so. `model`: test seams only —
 // { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone } — the endpoint, the control server and the
 // engine are always the real ones.
-async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model, fork }) {
+async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork }) {
   const list = harnesses || (await loadHarnesses())
   const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
   let agents = (nextAgentList() || { entries: [] }).entries
@@ -765,7 +787,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   collector = createModelCollector({ harnesses: list, dir: P.dir, identify: registry.match, ownerOf: parts.ownerOf, factsOf: parts.factsOf, proc: parts.proc,
     ctx: sourcesCtx({ os: A.os, home, env, dirs: b.dirs, policy: b.policy }), systemProxy: parts.systemProxy, custody: b.custody || 'unavailable', rootPem, procTable: parts.procTable,
     record: event, event, proxyOf: parts.proxyOf, templates: TEMPLATES, agentList: () => ({ entries: agents }), ownSid: parts.ownSid || null, openConns: () => engine.stats().active,
-    drain: ({ harnesses: hs, now }) => engine.drain({ agents: new Set(hs), now }),
+    drain: ({ harnesses: hs, now }) => engine.drain({ agents: hs ? new Set(hs) : null, now }), // null: every connection (an off that stops the daemon)
     upstreamRoots: upstreamRootsOf({ A, env, upstreamCa, event }),
     // the process of a negative-cache key exited, or its door closed: its entries go, as runDaemon's onGone does (4.8 §5.5; the fold clears by neg_key)
     holds: (who) => engine.holdsNegKey(who),
@@ -811,9 +833,17 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       try { return { ok: true, data: await parts.helper.call(verb, args && typeof args === 'object' ? args : {}, { timeoutMs: verb === 'ps' ? 10000 : 2000 }), ...(self ? { self } : {}) } } catch (e) { return no(`${verb}: ${String((e && (e.code || e.message)) || e)}`) }
     }),
     'POST /on': gate(async (q) => { exitAsked++; clearInterval(exitTimer); return collector.on(body(q)) }),
+    // `exit` stops the daemon once it may (no harness on, no holder, no connection); with `now` its connections were just cut and it stops at
+    // once, as runDaemon's exitWhenDrained does: whatever the engine still holds after half a second goes through the stop barrier
     'POST /off': gate(async (q) => {
-      const r = await collector.off(body(q))
-      if (body(q).exit === true) { const mine = ++exitAsked; clearInterval(exitTimer); exitTimer = setInterval(() => { if (mine === exitAsked && collector.mayExit()) { clearInterval(exitTimer); stop({ reason: 'off' }) } }, 250) }
+      const b = body(q)
+      const r = await collector.off(b)
+      if (b.exit === true) {
+        const mine = ++exitAsked; clearInterval(exitTimer)
+        const go = () => { if (mine === exitAsked) { clearInterval(exitTimer); stop({ reason: 'off' }) } }
+        if (b.now === true) Promise.race([engine.drained({ agents: null }), new Promise((res) => setTimeout(res, 500))]).then(() => new Promise((res) => setTimeout(res, 50))).then(go)
+        else exitTimer = setInterval(() => { if (collector.mayExit()) go() }, 250)
+      }
       return r
     }),
   }) })
@@ -826,7 +856,8 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     board.start() // never fails the start: a board that cannot listen is a state and a record
     const me = await identity(process.pid) // an async reader here (runDaemon's model branch): the requests markReady released go on meanwhile
     selfId = me
-    const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }, segmentOf: () => store.currentSegment })
+    const lock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }, segmentOf: () => store.currentSegment })
+    const refreshLock = lock.refresh
     refreshLock()
     const bumpLock = () => { try { refreshLock() } catch (e) { failure('daemon', coded(e, 'record-error')) } }
     store.onSegmentChange(bumpLock) // before the new segment's file exists and before a closed one is sealed (D60, invariant 2); see runDaemon's copy
@@ -839,17 +870,9 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       seal.stop() // as in runDaemon: the last segment is left to the next start's scan
       board.stop(); query.stop()
       clearInterval(lockTimer); clearInterval(listTimer); clearInterval(exitTimer)
-      const failed = []
-      const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
-      await step('control', () => control.close())
-      await step('engine', () => Promise.race([engine.close(), new Promise((r) => setTimeout(r, 2000).unref())]))
-      collector.close(); await step('helper', () => parts.close && parts.close())
-      await step('record', () => store.close())
-      await step('raw', () => seal.settle()) // as in runDaemon: the index covers everything this daemon wrote (D62)
-      failure.flush()
-      failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(failed.length ? { failed } : {}) })
-      fs.rmSync(P.lock, { force: true })
-      return { failed }
+      return stopTail({ engine, graceMs: stopGraceMs, store, seal, failure, lock, signal, reason,
+        before: (step) => step('control', () => control.close()),
+        after: async (step) => { collector.close(); await step('helper', () => parts.close && parts.close()) } })
     }
     stop = (o) => { if (!stopping) { stopping = doStop(o); stopping.then(markExited, () => markExited({ failed: ['stop'] })) } return stopping }
     return { port: null, socketPath: sock, paths: P, stop, exited, status, engine, collector }

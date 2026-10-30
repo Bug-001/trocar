@@ -8,7 +8,7 @@
 // `Connection: close` goes in before the head's closing blank line, so the client does not reuse the connection and
 // meet a reset. It is recorded (tee.markAdded → the envelope's and the flows/ row's `trocar_added`), never silent.
 // Closing is `end()` after the last write (a FIN, never an RST); `destroy()` only after `timeoutMs`, and not while the
-// client's bytes are still unread. `now` (trocar off --now) destroys at once. Any throw in here is fail-open: the held
+// client's bytes are still unread. `now` (trocar off --now) destroys at once, even when the gate fails on that very ask. Any throw in here is fail-open: the held
 // bytes go on unchanged — what this chunk had already composed first, then what is still held — the throw is recorded
 // (engine-error), and the connection is no longer gated. The same holds when the flow stops recording this connection
 // (loseTee): what the gate holds goes to the client as it came, and nothing is added any more — an addition nobody
@@ -78,7 +78,8 @@ export function createDrain({ flowId, tee: teeIn = null, client, upstream, timeo
 
   const blind = (b) => !tee || !!(b && b.blind)
   function start({ now = false } = {}) {
-    if (phase === 'closed' || phase === 'cut') return phase
+    if (phase === 'cut') return phase
+    if (phase === 'closed') { if (now) { if (timer) { clearTimeout(timer); timer = null } hard() } return phase } // closed at a boundary, its FIN out: `now` does not wait for the peers
     try {
       const b = tee ? tee.boundary() : null
       if (b && !b.blind && b.idle && phase !== 'broken') return closeNow() // nothing in flight: closed now, whether or not `now`
@@ -87,7 +88,7 @@ export function createDrain({ flowId, tee: teeIn = null, client, upstream, timeo
       if (blind(b)) { phase = 'waiting'; return 'waiting' } // spliced, or a connection the tee cannot follow: no boundary to see
       if (phase === 'open') { phase = 'closing'; mode = b.headPending ? 'hold' : 'stream'; seq = b.seq }
       return 'closing'
-    } catch (e) { failOpen(e); return 'waiting' }
+    } catch (e) { failOpen(e); return now ? cut() : 'waiting' } // `now` cuts even a gate that just failed: nothing of its own may outlive it
   }
 
   // Upstream bytes on their way to the client. Before the tee sees them (so an envelope that ends in this very chunk

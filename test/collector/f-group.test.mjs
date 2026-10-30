@@ -639,7 +639,7 @@ test('F5 WebSocket labels and the top bar, by D38 class: a call cut at the cap i
     const d = rec()
     d.fromClient(cli(1, ev('response.create'))); d.fromUpstream(srv(1, 'abc', { rsv1: true })); d.fromUpstream(srv(1, ev('response.completed'))); d.end(null)
     assert.deepEqual(out.map((e) => [e.partial_reasons, e.resp.messages.some((m) => m && m.decode_error)]), [[['decode-failed'], true]], 'the call is labelled (不完整 / 未解码) and its undecodable message keeps its bytes')
-    assert.deepEqual(await wsKeys(), ['ws/write-failed', 'ws/decode-failed'])
+    assert.deepEqual((await wsKeys()).sort(), ['ws/decode-failed', 'ws/write-failed'])
     out.length = 0
 
     // (4) data lost because a direction stopped being followed (a reserved opcode): the same ws_truncated label as a cap, the other class

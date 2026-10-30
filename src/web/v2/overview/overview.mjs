@@ -20,13 +20,14 @@ import { priceMatch, costOf, hitRatio, priceTableOf } from '../core/metrics.mjs'
 import { loadSessions } from '../library/logic.mjs'
 import { unpricedModels } from '../settings/prices.mjs'
 import { failureBrief, failureWord } from '../../../cli/words.mjs'
-import { infoButton, techDetailsHtml, confirmDialog } from '../core/ui.mjs'
+import { infoButton, techDetailsHtml, confirmDialog, readFailure } from '../core/ui.mjs'
 import { controlFor, controlHtml, wireHarnessControls } from '../core/harness-switch.mjs'
 import * as W from '../labels/overview.mjs'
 import { WINDOW_LABEL, UNTITLED, READING } from '../labels/common.mjs'
 
 const DAY = 24 * 3600e3
 export const POLL = Object.freeze({ health: CAPH_MS, sessions: 3000, slow: 30000 })
+const NO_ANSWER = Object.freeze({ status: null, error: null }) // a read that handed back nothing: no cause class known
 
 // the route's window param, or 24h when it is not one of the three (1.7 §页头)
 export const parseWindow = (p) => (p === '7d' || p === 'all') ? p : '24h'
@@ -245,6 +246,7 @@ export function capCardHtml(s, now) {
     (v.readErrors > 0 ? `<p class="ovsub">${esc(W.READ_FILES_FAIL(v.readErrors))}</p>` : '') +
     (hs && hs.length ? `<p class="ovsub">${esc(W.AGENTS_ON(on, hs.length))}</p>` : '') +
     `<p class="ovgo"><a href="#/capture">${esc(W.GO_CAPTURE)}</a></p>` +
+    (v.state === 'unreadable' ? techDetailsHtml([['reason', v.reason]], { id: 'ov-cap-tech' }) : '') +
     `</section>`
 }
 
@@ -279,6 +281,9 @@ const costTip = (c, priceFail) => [W.EST_TIP, floorShown(c, priceFail)
   ? W.FLOOR_TIP([c.why.noUsage > 0 && W.FLOOR_WHY.noUsage(c.why.noUsage), c.why.unpriced && W.FLOOR_WHY.unpriced, c.why.partial && W.FLOOR_WHY.partial].filter(Boolean))
   : null].filter(Boolean).join(' · ')
 
+// the price table's read failed: the stats stay, the line says so (K-29: the reason only in the technical details)
+const priceFailHtml = (r) => { const f = readFailure(W.PRICE_TABLE, r, { id: 'ov-price-fail' }); return `<p class="ovsub warn">${esc(f.line)}</p>${f.tech}` }
+
 export function statsCardHtml(s, now) {
   const st = s.stats
   if (st == null || (st.ok == null && st.data == null)) return readingHtml('stats', W.CARD.stats)
@@ -297,7 +302,7 @@ export function statsCardHtml(s, now) {
     (other ? `<p class="ovsub">${esc(READING)}</p>` : '') +
     `<p class="ovsub">${esc(W.AS_OF(D.as_of ? fmtWhen(parseTs(D.as_of), now) : '—', POLL.slow / 1000))} · ${esc(W.SCOPE_LINE)}</p>` +
     (missing ? `<p class="ovsub warn">${esc(missing)}</p>` : '') + cov +
-    (priceFail ? `<p class="ovsub warn">${esc(W.PRICE_FAIL(priceFail))}</p>` : '')
+    (priceFail ? priceFailHtml(priceFail) : '')
   const foot = (disk != null ? `<p class="ovsub">${esc(W.DISK_USE(bytes(disk)))} · <a href="#/settings/storage">${esc(W.SEE_STORAGE)}</a></p>` : '') + `</section>`
   if (!m.sessions && !list(D.usage && D.usage.rows).length) return head + `<p class="ovsay">${esc(W.EMPTY_WINDOW)}</p>` + foot
   const hit = { hit: m.hit, uncertain: m.hitUncertain, main: m.main }
@@ -377,10 +382,12 @@ export function firstUseHtml(s) {
 const readingHtml = (cls, title) =>
   `<section class="ovcard ${cls} reading" aria-label="${esc(title)}" aria-busy="true"><h2 class="ovh">${esc(title)}</h2><p class="ovsay">${esc(READING)}</p></section>`
 
-const readFailHtml = (what, why, group) =>
-  `<section class="ovcard"><h2 class="ovh">${esc(what)}</h2>` +
-  `<p class="ovsay warn">${esc(W.READ_FAIL(what, why || 'reason unknown'))} · ` +
-  `<button type="button" class="ghostbtn" data-act="retry" data-g="${esc(group)}">${esc(W.RETRY)}</button></p></section>`
+const readFailHtml = (what, r, group) => {
+  const f = readFailure(what, r, { id: `ov-fail-${group}` })
+  return `<section class="ovcard"><h2 class="ovh">${esc(what)}</h2>` +
+    `<p class="ovsay warn">${esc(f.line)} · ` +
+    `<button type="button" class="ghostbtn" data-act="retry" data-g="${esc(group)}">${esc(W.RETRY)}</button></p>${f.tech}</section>`
+}
 
 // the first-use page: the sessions document has no session, whatever the capture state (1.7 §首次使用)
 export function firstUse(s) {
@@ -447,7 +454,7 @@ export function mount(el, ctx) {
   // fold one read into its slot: a failure keeps the last good data and marks the source failed this round
   const fold = (slot, r) => {
     if (r && r.ok) { s[slot] = { data: r.data, ok: true, err: null }; s.readAt = Date.now() }
-    else s[slot] = { data: s[slot].data, ok: false, err: (r && (r.error || `HTTP ${r.status}`)) || 'reason unknown' }
+    else s[slot] = { data: s[slot].data, ok: false, err: r || NO_ANSWER }
   }
 
   // a repaint never takes the reader's place (1.7 §读取与刷新): a zone holding a text selection waits for the next render (its
@@ -504,7 +511,7 @@ export function mount(el, ctx) {
     const p = statsP = slowGet('overview', { since: asked === 'all' ? null : asked }, { signal: ctl.signal }).then((r) => {
       if (ctl.signal.aborted || asked !== s.w) return
       const kept = s.stats.w === asked ? s.stats.data : null
-      s.stats = r && r.ok ? { data: r.data, ok: true, err: null, w: asked } : { data: kept, ok: false, err: (r && (r.error || `HTTP ${r.status}`)) || 'reason unknown', w: kept ? asked : null }
+      s.stats = r && r.ok ? { data: r.data, ok: true, err: null, w: asked } : { data: kept, ok: false, err: r || NO_ANSWER, w: kept ? asked : null }
       if (r && r.ok) s.readAt = Date.now()
     }).finally(() => { if (statsCtl === ctl) statsCtl = null })
     return p

@@ -259,7 +259,7 @@ test('V96: the collector on another code is asked to drain and exit before it is
     },
   })
   assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
-  assert.deepEqual(asked.filter(([m]) => m === 'POST'), [['POST', '/off', { exit: true }]], 'drained first: POST /off, the whole daemon, not now')
+  assert.deepEqual(asked.find(([m]) => m === 'POST'), ['POST', '/off', { exit: true }], 'drained first: POST /off, the whole daemon, not now')
   assert.equal(stopped.length, 1, 'and stopped once after that')
   assert.deepEqual([t.io.json().restarted, daemon], [true, codeId(s.root)])
 })

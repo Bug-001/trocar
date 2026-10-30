@@ -14,13 +14,13 @@ import { collectorDir, stateFile, trocarHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
 import { readManifest, itemsOfPhase, daemonMayStart } from '../off/manifest.mjs'
 import { readIngressConfig } from '../collector/core/ingress-config.mjs'
-import { holdersOf } from '../off/holders.mjs'
+import { holdersOf, judgeLife } from '../off/holders.mjs'
+import { readDoorSeen, validRow } from '../off/door-seen.mjs'
 import { daemonState } from '../off/daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
 import { listProcs, identityFor, pidAlive, memoProcQuestions, procAskNotes, daemonProcReader } from '../off/proc.mjs'
 import { createRegistry } from '../collector/core/registry.mjs'
 import { judgedForms, carrierAt, startVerdict } from '../collector/core/proxymode/verdict.mjs'
-import { sawEntry } from '../off/holders.mjs'
 import { readAgentList, mergeAgentList, processNames } from '../off/identity.mjs'
 import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
@@ -142,8 +142,10 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const list = readAgentList({ home, fs }) // the name list (D51③⑤, 1.6 §9.7): read here, daemon or not
   f.agent_list = { path: list.path, state: list.state, problems: list.problems } // the file is one for the machine: said once, whatever harnesses there are
   // P12: who may still use a door after off (「还剩 N 个」), [{harness, pid}]: the proxy-mode daemon's own poll (GET /holders) when it answers, else the judge off and the daemon use, over the disk
+  // the door's durable record (4.11 P12): rows null = it could not be read — the holders take the safe direction; a verdict never reads "no row" into it
+  const doorSeen = readDoorSeen({ dir, fs }).rows
   if (holdersP) f.holders = await holdersP
-  else f.holders = m && table ? holdersOf({ manifest: m, procs: table, agentList: list }) : null
+  else f.holders = m && table ? holdersOf({ manifest: m, procs: table, agentList: list, doorSeen }) : null
   // the name list in effect NOW — the descriptors' presets with the user's agents.json merged in, its `ignore` applied — built by the daemon's own primitive
   // (createRegistry, the registry the doors and the tracker judge by), so `status` names the same harness for a process with a daemon and without (1.6 V65).
   // Not the manifest's liveness: that is `off`'s holder snapshot, a union that never drops a name and never applies `ignore` (the safe direction for `off` only).
@@ -158,6 +160,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   }
   const matchError = !reply && !whose ? (f.identity_error || 'there is no name list to match the processes with') : tableError
   const matched = table && whose ? table.map((p) => ({ p, h: (whose(p) || {}).agent ?? null })) : [] // which harness each process of the table is
+  const harnessOf = new Map(matched.map((x) => [x.p.pid, x.h]))
   f.matched = matched // read again by the network facts (src/netenv/facts.mjs): the processes of a harness and their start-time environment
   const negatives = new Set((reply && Array.isArray(reply.negatives) ? reply.negatives : []).map((n) => n.pid))
   const tableOf = new Map((table || []).map((p) => [p.pid, p]))
@@ -183,7 +186,16 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const dsc = isProxyMode(platform) && m && desc.value ? desc.value.find((d) => d.name === id) : null
     const forms = dsc ? judgedForms(dsc, platform) : []
     const carriers = forms.map((x) => carrierAt(m, dsc, x))
-    const startOf = (p) => (forms.length ? { start: startVerdict(p.startedAt, carriers.includes(null) ? null : Math.max(...carriers)) ?? (sawEntry(p, (m.liveness || {})[id]) ? null : 'config-after-start') } : {})
+    const startOf = (p) => {
+      if (!forms.length) return {}
+      // 4.11 P11 status, in its order: the door's own word on this life (its durable row; a Chromium host's network service) · rule 3 · known history · else not-seen
+      const carrier = carriers.includes(null) ? null : Math.max(...carriers)
+      const j = judgeLife({ p, l: (m.liveness || {})[id], table: table || [], rows: doorSeen == null ? null : doorSeen.filter((r) => r && r.harness === id && validRow(r, m.liveness)) /* null = the door's evidence not known (P12): never config-after-start from it */, carrierAt: carrier, isMine: (x) => harnessOf.get(x.pid) === id })
+      if (j.state === 'door') return j.row.kind === 'accept' && 'decrypt' in j.row ? { trusted: j.row.decrypt === true, reason: j.row.decrypt === true ? null : j.row.reason ?? null } : { start: null }
+      const certain = startVerdict(p.startedAt, carrier)
+      if (certain) return { start: certain }
+      return { start: { door: null, read: null, maybe: 'not-seen', 'not-read': 'config-after-start', 'start-unknown': 'start-time-unknown' }[j.state] }
+    }
     if (reply) {
       // a row that names a process life (`start`: the proxy-mode daemon's, answered from its memory of the door's verdicts) counts while that life is in the table — a reused pid is another process
       const rows = (Array.isArray(reply.agents) ? reply.agents : []).filter((a) => !table || !('start' in a) || (tableOf.has(a.pid) && (a.start == null || sameStart(tableOf.get(a.pid).startedAt, a.start))))

@@ -15,7 +15,7 @@ import { installCollector } from '../../../src/collector/install.mjs'
 import { uninstallCollector } from '../../helpers/uninstall.mjs'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { sandbox, ctxFor, facts, judge, matchOf, CA, OTHER } from './_ctx.mjs'
-import { NETWORK_SERVICE_ARG } from '../../../src/collector/core/trust/chromium.mjs'
+import { NETWORK_SERVICE_ARG } from '../../../src/off/chromium.mjs'
 
 const EXE = '/opt/ZCode/zcode'
 const CJS = '/opt/ZCode/resources/glm/zcode.cjs'
