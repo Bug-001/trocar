@@ -14,6 +14,7 @@ const URLS = [
   `http://door:${PW}@x@127.0.0.1:47011/`,
   `socks5h://u:${PW}@[::1]:1080`,
   `https://${PW}@proxy.example:8443`,
+  `http://u:it's!$&()*+,;=-${PW}@proxy.example:8080`,
 ]
 const CARRIERS = [
   (u) => `env.https_proxy = ${u}`, // a JSON key, as a receipt names it
