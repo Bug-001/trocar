@@ -16,7 +16,7 @@ import { readManifest, saveManifest, manifestPath, refuseOldManifest } from '../
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
-import { standalonePath, backupDir, opLockFile, trocarHome } from '../off/paths.mjs'
+import { standalonePath, backupDir, opLockFile, trocarHome, COLLECTOR_STATE_FILES } from '../off/paths.mjs'
 import { rawHome, indexHome, classesLog } from '../paths.mjs' // D60: the records are segments under ~/.trocar/raw, the index trocar builds from them under ~/.trocar/index
 import { netenvFile } from '../netenv/index.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
@@ -81,7 +81,7 @@ function planUninstall(w, m, purgeData = false) {
   const entries = usable ? m.entries.filter((e) => e.kind === 'json-key' || e.kind === 'text') : []
   return {
     changed: entries.map((e) => ({ path: e.path, change: `${e.kind === 'text' ? "trocar's own lines" : (e.keys || []).join('.')} taken out`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
-    removed: [...(usable ? m.files.map((f) => f.path) : []), path.join(w.dir, 'state.json'), path.join(w.dir, 'control.json'), path.join(w.dir, 'board.token'), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), ...(w.fs.existsSync(path.join(w.dir, 'update.json')) ? [path.join(w.dir, 'update.json')] : []), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m ? [manifestPath(w.dir)] : [])],
+    removed: [...(usable ? m.files.map((f) => f.path) : []), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)).filter((p) => w.fs.existsSync(p)), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m ? [manifestPath(w.dir)] : [])],
     kept: purgeData ? [] : keptOf(w.home, w.fs),
     notes: usable || !m ? [] : [`the install manifest is version ${JSON.stringify(m.version)}, which this build does not read: no entry would be touched`],
     autostart: { planned: true },
@@ -249,21 +249,21 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       }
       // the CA, the runtime state (with the plugins' trust markers), the lock files, the single-file undo program
       for (const f of m && !m.unsupported ? m.files.filter((x) => x.role === 'ca-key') : []) {
-        if (!strictlyInside(trocarHome(home), f.path, fs)) { // a manifest that names the CA key somewhere else is damaged or edited: that file is not trocar's (audit semantics 6)
+        if (!strictlyInside(trocarHome(home), f.path, fs)) { // a manifest that names the CA key somewhere else is damaged or edited: that file is not trocar's
           const reason = `${f.path}, named as the CA key, is not inside ${trocarHome(home)}, so it is not trocar's to remove; correct that item in ${manifestPath(w.dir)} by hand`
           receipt.left.push({ path: f.path, result: 'error', reason }); failed.push({ code: 'entry-not-undone', path: f.path, reason })
         } else rm(f.path)
       }
       if (!m) rm(path.join(w.dir, 'ca'))
       const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'trocar') : null
-      // `netenv.json` is the adopted records and the topology, for the board: trocar's own file, written outside collector/, so zero residue is not met without it (audit rule-b 8)
+      // `netenv.json` is the adopted records and the topology, for the board: trocar's own file, written outside collector/, so zero residue is not met without it
       // `logs/` is the daemon's own console (D46, 0.2:130): trocar's own, removed whole now that the daemon has stopped — its manifest entries (role 'daemon-log', Linux)
       // first so the receipt names the files, then the directory, which on macOS no entry names (launchd writes the LaunchAgent's StandardOutPath / StandardErrorPath itself)
       for (const f of m && !m.unsupported ? m.files.filter((x) => x.role === 'daemon-log') : []) rm(f.path)
       rm(daemonLogPaths(home).dir)
       // the darwin key custody's signing helper (install put it there, 4.11 P1): it goes once no root key is left for it to remove — after undoRootKeys, which needs it
       const helper = w.platform === 'darwin' && !(m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key')) ? signHelperPath(home, NATIVE.signHelper) : null
-      for (const p of [path.join(w.dir, 'run'), path.join(w.dir, 'control.json'), path.join(w.dir, 'board.token'), path.join(w.dir, 'update.json'), w.lockFile, w.stateF, runtime, standalonePath(home), netenvFile(home), helper]) if (p) rm(p) // update.json: an update that never finished is trocar's own note, and goes with the rest of its state (§5.5)
+      for (const p of [path.join(w.dir, 'run'), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)), w.lockFile, runtime, standalonePath(home), netenvFile(home), helper]) if (p) rm(p) // update.json: an update that never finished is trocar's own note, and goes with the rest of its state (§5.5); door-seen.json: the holder check above has read it
       removeEmptyDirs([path.dirname(standalonePath(home))], fs)
       // the door ports and their tokens (decision #16): the next install and on choose them again
       const ing = removeIngressConfig({ dir: w.dir, fs })
@@ -272,7 +272,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     for (const n of noted) if (!receipt.notes.includes(n.reason)) receipt.notes.push(n.reason) // the command prints every one of them
     // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind. `--purge-data` is "nothing of the captures stays", so the
     // collector's own machine goes with it: the kernel's copy (kernel/) and its verified-archive cache (kernel-archive/), the kernel's config and home with the controller
-    // secret and tokens (forwarder/), and the endpoint file control.json (the daemon's control endpoint; ingress.json went above, with every uninstall) — a plain uninstall
+    // secret and tokens (forwarder/) — the endpoint files control.json and ingress.json went above, with every uninstall — a plain uninstall
     // keeps them (a kernel may still be draining; the next on reuses the cache), the purge leaves the collector directory empty of everything trocar can rebuild nothing of.
     // Only when every step above succeeded (invariant 2; 1.6 §1.1): a run that leaves an item, has a problem or a failure keeps every capture
     // and says so — the captures are what nothing brings back, and the next uninstall can still purge them.

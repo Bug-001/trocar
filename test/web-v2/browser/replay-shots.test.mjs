@@ -101,7 +101,7 @@ for (const width of [1280, 1024, 800]) {
   }
 }
 
-// 1.2 §上下文窗的高度 at the short 1280 × 800 viewport (the audit's): the step bar stays one row (2.2 §步头放不下: at 1280 the
+// 1.2 §上下文窗的高度 at a short 1280 × 800 viewport: the step bar stays one row (2.2 §步头放不下: at 1280 the
 // model name shrinks, nothing wraps) and #ctxwin keeps half the available height. 1.3 §窗内步少时收窄: in the session with the
 // fewest steps every detail lane is at most (bars in the window) × the bar cap wide; the whole-session strip keeps the full width.
 test('at 1280 × 800 the step bar is one row, the window holds half the height, and a few-step session narrows its lanes', { skip, timeout: 120_000 }, async () => {

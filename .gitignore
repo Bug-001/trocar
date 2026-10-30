@@ -15,3 +15,6 @@ node_modules
 
 # the board browser suite's screenshots (npm run test:browser; D64⑤)
 test/web-v2/browser/shots/
+
+# release tarballs and SHA256SUMS (npm run release:pack)
+dist/

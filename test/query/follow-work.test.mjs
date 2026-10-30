@@ -7,8 +7,8 @@
 // which member rows had a property read, and over an fs that counts the bytes read from index/ctx/*.ndjson (the projection and the
 // fold log). At 4N a case touches at most the rows it touches at N plus the new members, and reads at most the bytes it reads at N
 // plus the new members' own lines (what the slices appended to those files): neither grows with the members. Two ledgers: a small
-// one, and one past a page (PAGE_BYTES) at both sizes, its seen paths drawn from a pool once it is named (the main lane of the
-// Q23 #6 generated session holds 13,738 seen paths and 3,040 resources), followed by `lane --ledger` as well.
+// one, and one past a page (PAGE_BYTES) at both sizes, its seen paths drawn from a pool once it is named (a generated
+// session's main lane can hold 13,738 seen paths and 3,040 resources), followed by `lane --ledger` as well.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'

@@ -62,7 +62,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
     const pr = d.proxy, setting = settings[h.id]
     const procs = (part.procs && part.procs[h.id]) || []
     f.harnesses[h.id] = {
-      installed: h.installed, entry: { state: h.entry.state }, installedAt: iso(h.installedAt), setting, fileSetting: fileSettings[h.id],
+      installed: h.installed, formsHere: h.formsHere ?? true, entry: { state: h.entry.state }, installedAt: iso(h.installedAt), setting, fileSetting: fileSettings[h.id],
       // every place it holds a proxy address now (not only the one that wins): the places a finding names for the user to remove by hand (1.6 附录 B)
       proxyPlaces: proxyPlaces(d, { home, env, fs }),
       // the places trocar itself wrote for it (its on-phase manifest items): a finding never asks the user to edit one of them (1.6 附录 B)

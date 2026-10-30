@@ -1,4 +1,4 @@
-// custody.test.mjs — the Windows CNG custody over a STUB powershell (CM3 stub side; the real custody.ps1 runs in acceptance L4, plan §E.3,
+// custody.test.mjs — the Windows CNG custody over a STUB powershell (CM3 stub side; the real custody.ps1 runs in acceptance L4,
 // because a Mac cannot drive CNG), and the CurrentUser\Root binding (CM7 argv). The stub runner answers custody.ps1's verbs, exit
 // codes and JSON from test/helpers/custody-stub.mjs, which keeps its key in memory and builds what it signs itself.
 import test from 'node:test'

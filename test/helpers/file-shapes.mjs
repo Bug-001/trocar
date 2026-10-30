@@ -1,4 +1,4 @@
-// test/helpers/file-shapes.mjs — a seeded generator of user config-file shapes, plus independent readers (plan 2.10).
+// test/helpers/file-shapes.mjs — a seeded generator of user config-file shapes, plus independent readers.
 // Shapes vary along the domain's axes (spec 0.1 G2): encoding and BOM, line endings, content, JSON style, HOME with
 // non-ASCII and spaces. Determinable shapes are the self-proving forms of spec 4.6 「文件的编码」 (a BOM'd Unicode form, or
 // strict UTF-8). Undeterminable shapes are built from what they are NOT, one per `why` of that rule's closed set. There is

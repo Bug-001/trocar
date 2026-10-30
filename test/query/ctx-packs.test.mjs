@@ -127,7 +127,7 @@ function applied(text) {
   return { rows: of(rows), steps: of(steps), defs: of([...defs].filter(([bid]) => used.has(bid))), heads: of(heads), recs: of(recs), fails: of(fails) }
 }
 
-test('3.5 #33 A7: per sealed span gunzip(file) = the worker\'s `lane --pack` = the local path\'s; the worker\'s `lane --tail` = the tail file, the local one apply-equal to it', { timeout: 600_000 }, async () => {
+test('3.5 #33: per sealed span gunzip(file) = the worker\'s `lane --pack` = the local path\'s; the worker\'s `lane --tail` = the tail file, the local one apply-equal to it', { timeout: 600_000 }, async () => {
   const x = await folded('http'), head = headOf(x)
   assert.ok(head.packs.length >= 3, 'at least three sealed packs')
   const svc = createQueryService({ home: x.home, fork: workerFork })
@@ -152,7 +152,7 @@ test('3.5 #33 A7: per sealed span gunzip(file) = the worker\'s `lane --pack` = t
 })
 
 for (const wire of ['http', 'threads', 'ws']) {
-  test(`3.5 #34 A8 (${wire}): folded in one slice or in random slices with kills and a resume, the head and every pack file are the same bytes`, { timeout: 600_000 }, async () => {
+  test(`3.5 #34 (${wire}): folded in one slice or in random slices with kills and a resume, the head and every pack file are the same bytes`, { timeout: 600_000 }, async () => {
     const [x, y] = await Promise.all([folded(wire), incremental(wire)])
     const names = packNames(x)
     assert.ok(names.length >= 6, 'at least three sealed packs')
@@ -163,7 +163,7 @@ for (const wire of ['http', 'threads', 'ws']) {
   })
 }
 
-test('3.5 #35 A10: a missing head, a truncated pack, a pack of another v and a torn tail are each rewritten alone, to the bytes of the untouched home', { timeout: 600_000 }, async () => {
+test('3.5 #35, damaged files: a missing head, a truncated pack, a pack of another v and a torn tail are each rewritten alone, to the bytes of the untouched home', { timeout: 600_000 }, async () => {
   const x = await folded('http')
   const z = { home: path.join(tmpDir('trocar-packs-z-'), '.trocar'), id: x.id }
   fs.cpSync(x.home, z.home, { recursive: true })
@@ -187,7 +187,7 @@ test('3.5 #35 A10: a missing head, a truncated pack, a pack of another v and a t
 // the layout the fold log is in when the worker starts: the session's directory, or the flat layout (4.3 §4 迁移), which the start-up
 // sweep's tier-0 head finds with a directory holding that head only
 const FLAT = { 'extract.0.ndjson': '.ndjson', 'extract.idx': '.idx', 'fold.0.ndjson': '.fold.ndjson', 'fold.idx': '.fold.idx' }
-test('3.5 #35 A9: a session folded before the answer files (fold log, no head, no packs) gets a tier-1 head and its packs from the worker\'s idle slices, the bytes of a fresh fold', { timeout: 600_000 }, async () => {
+test('3.5 #35, files missing: a session folded before the answer files (fold log, no head, no packs) gets a tier-1 head and its packs from the worker\'s idle slices, the bytes of a fresh fold', { timeout: 600_000 }, async () => {
   const x = await folded('http')
   for (const layout of ['dir', 'flat']) {
     const m = { home: path.join(tmpDir(`trocar-packs-m-${layout}-`), '.trocar'), id: x.id }

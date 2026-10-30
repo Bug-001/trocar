@@ -4,8 +4,8 @@
 //   lock = {pid, start_time, boot_id, helper_pid, engine_port, socket}: start_time is /proc/<pid>/stat field 22
 // (clock ticks since boot), boot_id /proc/sys/kernel/random/boot_id; the daemon refreshes the file's mtime every
 // 1 s. A pid is reused and a lock survives a reboot, so "running" needs all three to match and a fresh mtime.
-//   captureHealth() is what GET /api/capture-health answers and `trocar collector status` prints when no daemon
-// answers (RFC 4.4, 4.6 §记录「看得到」): from disk only — flows/ (src/health/flows.mjs), the lock, the install manifest,
+//   captureHealth() is what `trocar status` and the board's `status` query read (1.6 C.3), and what the
+// daemon's GET /status carries as `health` (4.6 §记录「看得到」): from disk only — flows/ (src/health/flows.mjs), the lock, the install manifest,
 // state.json and the raw journal — never through the daemon's socket.
 // Node built-ins, src/paths.mjs, src/raw/ and src/off/proc.mjs (a process's identity and liveness: the one reader `off` uses too) only (0.1 §2).
 import nodeFs from 'node:fs'
@@ -207,7 +207,7 @@ function netenvOf({ home, fs }) {
 }
 
 /**
- * captureHealth({home}) → the /api/capture-health payload (RFC 4.4): `installed`,
+ * captureHealth({home}) → the capture-health reading (4.6 §记录「看得到」): `installed`,
  * `summary` (the verdict over the collector and the raw layer: C.3's `health`), `collector`, `raw`,
  * `netenv` (trocar's own netenv.json: the adopted records and the topology, 1.6 §6), `read` (files read, files that could not be, truncated). Throws HealthUnreadable when flows/ (or the collector
  * directory) cannot be read at all — never an empty answer.

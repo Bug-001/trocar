@@ -79,11 +79,11 @@ async function open(calls) {
   const left = (what) => whileMoving(gone, () => reported.n, what)
   return { home, id: s.id, svc, tips, server, port, forks, reported, dir, file, d, gone, left, waits: {}, api: (p, h = {}) => get(port, p, withToken(h)) }
 }
-/** The home A7 and A14 share: CALLS members. */
+/** The home the #15 and #16 cases share: CALLS members. */
 let world = null
 const theWorld = () => (world ||= open(CALLS))
 /** The world once the worker folded the whole session (its head has no `pending`, its tails are written) and left on its idle clock.
- *  A7 and A14 have no fixed timeout: the worker runs at low priority (worker.mjs lowerPriority), so under the full suite's load its
+ *  The #15 and #16 cases have no fixed timeout: the worker runs at low priority (worker.mjs lowerPriority), so under the full suite's load its
  *  fold takes as long as it is given CPU; every wait on it lasts while it reports progress and fails after STALL ms without. */
 let foldedWorld = null
 function folded() {
@@ -104,7 +104,7 @@ function folded() {
 }
 test.after(async () => { if (world) { const w = await world; w.server.close(); w.svc.stop() } })
 
-test('4.4 #15 A7: /api/d/head, every pack and both tails are the files\' bytes, and the worker\'s own answers of the same queries', async (t) => {
+test('4.4 #15: /api/d/head, every pack and both tails are the files\' bytes, and the worker\'s own answers of the same queries', async (t) => {
   const w = await folded()
   t.diagnostic(JSON.stringify(w.waits))
   const head = JSON.parse(unzip(fs.readFileSync(w.file('head.json.gz'))))
@@ -133,7 +133,7 @@ test('4.4 #15 A7: /api/d/head, every pack and both tails are the files\' bytes, 
   }
 })
 
-test('4.4 #16 A14: with the files there a read forks nothing; with the head gone one read forks the worker, which writes the file it answers', async (t) => {
+test('4.4 #16: with the files there a read forks nothing; with the head gone one read forks the worker, which writes the file it answers', async (t) => {
   const w = await folded()
   t.diagnostic(JSON.stringify({ ...w.waits, again: await w.left('no worker is running') }))
   const n0 = w.forks.length
@@ -197,8 +197,8 @@ test('4.4 #15: the HTTP contract — 304 on the tag, Range in and past the tail,
   assert.deepEqual(touched, [], 'no file was opened for a name outside the set')
 })
 
-test('4.4 #17 A15: the keeper\'s new model calls of a keyed session ride on x-trocar-tip, the newest 64 oldest first; a synthesized-key session has none', { timeout: 120_000 }, async () => {
-  const w = await open(0) // its own home and service: what A7 and A14 left in theirs is not this case's
+test('4.4 #17 tips: the keeper\'s new model calls of a keyed session ride on x-trocar-tip, the newest 64 oldest first; a synthesized-key session has none', { timeout: 120_000 }, async () => {
+  const w = await open(0) // its own home and service: what the #15 and #16 cases left in theirs is not this case's
   const store = createRecordStore({ root: path.join(w.home, 'collector') })
   const keeper = createIndexKeeper({ home: w.home, kick: w.svc.kick, tips: w.tips.add, debounceMs: 5 })
   store.onRecord((seg, facts) => keeper.wrote(seg, facts))
@@ -235,7 +235,7 @@ test('4.4 #17 A15: the keeper\'s new model calls of a keyed session ride on x-tr
   } finally { await keeper.stop(); store.close(); w.server.close(); w.svc.stop() }
 })
 
-test('4.4 #17 A9: a daemon started on a home without heads writes a tier-0 head for every session, with no query made', { timeout: 120_000 }, async () => {
+test('4.4 #17 tier-0 heads: a daemon started on a home without heads writes a tier-0 head for every session, with no query made', { timeout: 120_000 }, async () => {
   const w = await modelWorld({ os: 'darwin' })
   const trocar = path.join(w.home, '.trocar')
   generate({ home: trocar, seed: 5, bytes: 1_500_000, segmentBytes: 1 << 20 })
@@ -254,7 +254,7 @@ test('4.4 #17 A9: a daemon started on a home without heads writes a tier-0 head 
   } finally { await box.stop() }
 })
 
-test('4.4 #17 A15 · daemon: a keyed call captured through the real door → the daemon\'s board serves /api/d/head as the worker\'s head file, with x-trocar-tip naming that call', { timeout: 120_000 }, async () => {
+test('4.4 #17 tips · daemon: a keyed call captured through the real door → the daemon\'s board serves /api/d/head as the worker\'s head file, with x-trocar-tip naming that call', { timeout: 120_000 }, async () => {
   const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
   const from = BOARD_RANGE[0] + Math.floor(Math.random() * 80) // as test/server/daemon-board.e2e.test.mjs: parallel files do not race for one port
   assert.ok((await ensureBoardPort({ dir: w.dir, isFree: async (p) => p >= from && freeOnLoopback(p) })).port)

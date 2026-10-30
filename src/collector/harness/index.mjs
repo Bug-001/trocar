@@ -146,10 +146,13 @@ function proxyModeProblems(pm) {
     cond(b.when, `blockers[${i}].when`)
     for (const id of b.forms || []) if (!ids.has(id)) say('resolve', `blockers[${i}].forms names ${JSON.stringify(id)}, no form`)
   })
-  for (const [i, e] of (pm.effects || []).entries()) {
+  for (const [i, e] of (pm.effects === undefined || Array.isArray(pm.effects) ? pm.effects || [] : (say('shape', 'effects is not a list'), [])).entries()) {
     if (!obj(e) || !nonEmpty(e.id) || !nonEmpty(e.when) || !Array.isArray(e.paths) || !e.paths.length) { say('shape', `effects[${i}] is not { id, paths, when }`); continue }
     e.paths.forEach((p, k) => loc(p, `effects[${i}].paths[${k}]`, false))
   }
+  ;(pm.notes === undefined || Array.isArray(pm.notes) ? pm.notes || [] : (say('shape', 'notes is not a list'), [])).forEach((n, i) => {
+    if (!obj(n) || !nonEmpty(n.id) || !nonEmpty(n.text)) say('shape', `notes[${i}] is not { id, text }`)
+  })
   return bad
 }
 

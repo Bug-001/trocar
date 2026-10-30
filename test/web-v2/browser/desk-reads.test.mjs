@@ -2,7 +2,7 @@
 // faked and the answer files served from a generated world (desk-world.mjs, the reference server of 3.5 §会话读): a scrub at one
 // key per frame sends no `block` read before the playhead has rested 100 ms, at most one is ever in flight, and the read of a step the
 // playhead left is aborted; a following desk shows a call that lands, read by Range on the open tail (4.4 live-poll); a failed poll round
-// keeps the drawn window (2.3 §读失败); the anchor lane's ledger chain (A32). Runs only under `npm run test:browser`.
+// keeps the drawn window (2.3 §读失败); the anchor lane's ledger chain (3.5 §手里车道的页). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, serveWorld } from './harness.mjs'
@@ -98,7 +98,7 @@ test('4.4 live-poll: a following desk shows each new call after it lands, read b
     const tails = b.requests.filter((r) => r.url.startsWith('/api/d/open.main?'))
     assert.ok(tails.filter((r) => r.status === 206).length > 0, 'new lines came by Range (206)')
     assert.ok(tails.slice(1).every((r) => r.range != null), 'after the first read every tail read is a Range read')
-    // 2.3 加载器 · A32: the anchor lane grew, so its ledger moves on by `lane --from <the tip it stood at>` (its steps came from the tail);
+    // 2.3 加载器: the anchor lane grew, so its ledger moves on by `lane --from <the tip it stood at>` (its steps came from the tail);
     // each such read starts from a different tip, and there are no more of them than head answers that brought the lane new steps
     const froms = b.requests.filter((r) => r.url.startsWith('/api/lane?')).map((r) => new URLSearchParams(r.url.split('?')[1]))
       .filter((q) => q.get('lane') === main && q.get('from') != null).map((q) => q.get('from'))
@@ -176,10 +176,10 @@ test('2.3 §读失败: a poll round whose tail reads fail keeps the drawn window
   } finally { await b.stop() }
 })
 
-// A32 · 3.5 §手里车道的页 (E4): once the anchor lane is in hand its ledger is read — a `lane --to <its first step>` page (no step, the
+// 3.5 §手里车道的页: once the anchor lane is in hand its ledger is read — a `lane --to <its first step>` page (no step, the
 // ledger at mark in its room), then along its `ledger_next` chain; each read names the previous answer's cursor, none is read twice, and
 // once the counts are exact no 2.4 count goes back to the busy box
-test('A32: the anchor lane reads its ledger chain to the end, one lane read in flight, no cursor twice', { skip }, async () => {
+test('3.5 §手里车道的页: the anchor lane reads its ledger chain to the end, one lane read in flight, no cursor twice', { skip }, async () => {
   const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
   try {
     const { page } = b, w = world(7, { calls: 60 })

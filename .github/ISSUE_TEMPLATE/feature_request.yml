@@ -1,0 +1,29 @@
+name: Feature request
+description: Something trocar does not do yet, or should do differently.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you want to see or do
+      description: The question about your agent you are trying to answer, or the step that is missing. What you do today instead.
+    validations:
+      required: true
+  - type: input
+    id: harness
+    attributes:
+      label: Harness and form
+      description: Which agent and form (CLI, desktop app, IDE extension) this is about, if any.
+      placeholder: e.g. Claude Code CLI
+  - type: textarea
+    id: idea
+    attributes:
+      label: How it could work
+      description: Optional. A command, a view on the board, or a field in `trocar query`.
+  - type: checkboxes
+    id: not-security
+    attributes:
+      label: Not a security issue
+      options:
+        - label: This is not a security vulnerability. Security issues go through the Security tab's "Report a vulnerability", see SECURITY.md.
+          required: true

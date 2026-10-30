@@ -1,4 +1,4 @@
-// test/web-v2/no-load-control.test.mjs — A15 (2.3 #10 #21 #24 · 1.4 ⑧): no state of the replay desk has a load control. Over
+// test/web-v2/no-load-control.test.mjs — 2.3 #10 #21 #24 · 1.4 ⑧: no state of the replay desk has a load control. Over
 // generated session worlds (desk-world.mjs) × {held, unheld at 0 ms / 200 ms, lane landed} × {pending first, pending later, none}
 // × {truncated or not} × {reply body in flight, failed, read}, the window, the step bar, the session head and the raw panel are
 // rendered as the desk renders them: no [data-load-step]; nothing a reader can press inside an aria-busy frame or the read-state
@@ -55,7 +55,7 @@ async function variants(seed) {
   return { held, unheld, landed, key }
 }
 
-test('A15 (2.3 #10 #21 #24 · 1.4 ⑧): no load control in any desk state; unheld keeps 150 ms, then row + empty busy frames; in-flight bodies are sized boxes; read-state iff pending', async () => {
+test('2.3 #10 #21 #24 · 1.4 ⑧: no load control in any desk state; unheld keeps 150 ms, then row + empty busy frames; in-flight bodies are sized boxes; read-state iff pending', async () => {
   let unheldSeen = 0, boxes = 0
   for (const seed of SEEDS) {
     const v = await variants(seed)

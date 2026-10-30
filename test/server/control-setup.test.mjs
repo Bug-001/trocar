@@ -18,7 +18,7 @@ import { request } from './face.mjs'
 import { snapshot } from '../query/raw-home.mjs'
 import { ensureBoardPort } from '../../src/collector/core/ingress-config.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
-import { readManifest, itemsOfPhase } from '../../src/off/manifest.mjs'
+import { readManifest, saveManifest, itemsOfPhase } from '../../src/off/manifest.mjs'
 import { setupOf } from '../../src/collector/core/proxymode/status-facts.mjs'
 import { createServer } from '../../src/server.mjs'
 import { createQueryService } from '../../src/query/service.mjs'
@@ -72,6 +72,8 @@ for (const platform of ['darwin', 'win32']) {
       assert.notEqual(p2.json.plan_id, p1.json.plan_id)
       assert.deepEqual(snapshot(w.home), home0, 'a stale confirm wrote nothing')
       fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
+      // the last install ran on other code (npm put a newer copy here since): a Set up places one harness's carriers and is not that install
+      const m0 = readManifest(w.dir); m0.install.code = '0.0.1'; saveManifest(w.dir, m0)
       const p3 = await post({ harness: B })
       const before = snapshot(w.home), held = items(w), calls0 = trust.calls().length
       const ok = await post({ harness: B, confirm: p3.json.plan_id })
@@ -87,6 +89,7 @@ for (const platform of ['darwin', 'win32']) {
       for (const f of Object.keys(before).filter((k) => !k.startsWith('.trocar/'))) if (!mine.some((i) => rel(i.path) === f)) assert.equal(after[f], before[f], f)
       assert.deepEqual([after['trocar-unit'], after['trocar-unit.enabled']], [before['trocar-unit'], before['trocar-unit.enabled']], 'the login entry neither rewritten nor registered (its stand-in\'s text is per process)')
       assert.ok(!('autostart' in ok.json), 'Set up does not report on a login entry it did not touch')
+      assert.equal(readManifest(w.dir).install.code, '0.0.1', 'the record still names the code that last ran install (1.6 §5.5: what update finishes against)')
       assert.deepEqual(trust.calls().slice(calls0).filter((c) => !['exists', 'has'].includes(c)), [], 'the root was read back, nothing asked')
       // status --json's harnesses[B].setup is this judgement (4.11 P4b; the board's test world has no OS network facts to draw the rest)
       assert.equal(setupOf(w.harnesses.find((d) => d.name === B), { os: platform, manifest: readManifest(w.dir), ctx: w.ctx }).state, 'ready')

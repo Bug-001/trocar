@@ -22,14 +22,14 @@
 // when the channel closes, and a full run in report-only mode (2026-10-22) found nothing else: of 8 children alive at their file's end, 6
 // were zombies and 2 were seal workers. The fix for a blamed child is to end it in a `finally` and await its 'exit' event.
 //
-// Leftovers of killed runs: a runner that is killed (SIGKILL, an agent's turn ending, a crash) never gets to 'exit', and its directory
+// Leftovers of killed runs: a runner that is killed (SIGKILL, a parent process ending, a crash) never gets to 'exit', and its directory
 // stays — with whole fresh HOMEs inside, 2.4 GB from twelve runs found on 2026-10-24. So a runner, at start, records its pid and its
 // start time in `.runner` inside its directory, and removes every sibling `trocar-run-*` whose recorded runner is no longer running
 // (same pid and same start time, so a reused pid is no owner). Another `npm test` running at the same time keeps its directory; one
 // without the record (left by an older guard, or just made) is removed only once it is a day old.
 //
 // The cwd: `npm test` runs in the repo root, and a test that writes or binds a RELATIVE path leaves it there (2026-10-29: win32 pipe names
-// `\\.\pipe\trocar-<hex>`, served as unix sockets on a Mac, piled up by the dozen in three worktrees' roots). The runner lists its cwd when it
+// `\\.\pipe\trocar-<hex>`, served as unix sockets on a Mac, piled up in the repo root). The runner lists its cwd when it
 // starts and again after every test file has ended; a name in the second listing and not in the first fails the run and is named. Only the
 // runner compares, and only the end state counts, so a file's temp entry that another file sees while files run in parallel, made and removed
 // before the end, is no leak; an entry that was there before the run is never blamed. Nothing found there is removed: the cwd is a working

@@ -91,6 +91,20 @@ function sniffOpener(buf) {
   const m = /^([A-Z]{3,7}) /.exec(buf.toString('latin1', 0, 12))
   return { invalid: m ? `an HTTP request that is not CONNECT (${m[1]}): the ingress takes CONNECT and SOCKS5 only` : `first byte 0x${buf.subarray(0, 1).toString('hex')}: neither CONNECT nor SOCKS5` }
 }
+/** A plain-HTTP opener's method and target host (the absolute URI's host name, else the Host header's; no user info, no port, lower case), from
+ *  what the client sent: {} when the bytes are no HTTP request line. Never its path, query or any other header (4.8 §5.1). */
+function httpOf(buf) {
+  if (!buf || !buf.length) return {}
+  const s = buf.toString('latin1', 0, HEAD_MAX)
+  const line = /^([A-Z]{3,7}) (\S*)/.exec(s)
+  if (!line) return {}
+  const abs = /^[a-z][a-z0-9+.-]*:\/\/([^/?#\s]*)/i.exec(line[2])
+  const hdr = /\r?\nhost:[ \t]*([^\r\n]*)/i.exec(s.slice(0, s.search(/\r?\n\r?\n|$/)))
+  const auth = abs ? abs[1] : hdr ? hdr[1].trim() : ''
+  const hp = auth.slice(auth.lastIndexOf('@') + 1)
+  const host = (hp.startsWith('[') ? hp.slice(0, hp.indexOf(']') + 1) : hp.replace(/:\d*$/, '')).toLowerCase()
+  return { method: line[1], ...(/^[a-z0-9.\-_[\]:]{1,253}$/.test(host) ? { host } : {}) }
+}
 function headOf(buf) {
   const h = parseHead(buf)
   if (!h) return buf.length > HEAD_MAX ? { invalid: 'a head longer than 16 KiB' } : null
@@ -198,7 +212,7 @@ async function viaSocks5(sock, up, target, deadline) {
 }
 
 /**
- * createIngress({ token, lookupIngress, handleFlow, connectUpstream, failure, timing, refuse }) → { attach(server), handle(socket), stats(), closeIdle() }
+ * createIngress({ token, lookupIngress, handleFlow, connectUpstream, failure, timing, refuse, ownerOfPeer }) → { attach(server), handle(socket), stats(), closeIdle() }
  *   token            the install's ingress token (4.8 §3); a connection that does not present it gets 407 / auth failure
  *   lookupIngress    async ({peer, user, target:{address, port, family?}}) → IngressMeta | {health:true, group} | {refuse:{code, reason, unread?}} | null (an unknown user)
  *   handleFlow       (socket, meta, {upstream, redial}) — the engine's flow starter; `redial` re-dials through the same upstream when the
@@ -206,13 +220,15 @@ async function viaSocks5(sock, up, target, deadline) {
  *   connectUpstream  ({address, port}) → a connecting net.Socket (the engine's; tests inject)
  *   failure          (rec) the engine's failure sink; the ingress writes where:'ingress' records through it
  *   refuse           (meta, info) — the flows/ row of a connection the upstream refused or could not be reached (no flow started)
+ *   ownerOfPeer      optional async (peer) → { pid, process?, why? }: who holds the client's end (the door's own owner question); an `ingress-unknown`
+ *                    record names that process, or says why it could not be told (`owner_unread`)
  *   timing           {ingressOpenerMs = 10000, ingressHealthIdleMs = 30000, ingressDialMs = 0 (no limit), upstreamSlowMs = 5000 (one upstream-slow event while a proxy has not answered)}
  * The connection handlers take an optional DOOR (D47, 4.9 §3): `null` = the engine's own ingress (the global token, the client's own user),
  * `{ user, token, open }` = one of the engine's per-group doors — `user` is the group id the lookup is asked with (whoever the client did or did
  * not authenticate as), `token` that door's password (the listener token), `open:true` a door that takes no credentials at all (the desktop
  * launcher's `auth:false` group: a CONNECT with no Proxy-Authorization is accepted; SOCKS5 keeps requiring its handshake, so an open door serves CONNECT).
  */
-export function createIngress({ token, lookupIngress, handleFlow, connectUpstream, failure, timing = {}, refuse = () => {}, servePac = null }) {
+export function createIngress({ token, lookupIngress, handleFlow, connectUpstream, failure, timing = {}, refuse = () => {}, servePac = null, ownerOfPeer = null }) {
   if (typeof token !== 'string' || token.length < 16) throw new TypeError('the ingress needs the install\'s token (a string of at least 16 characters)')
   for (const [n, f] of Object.entries({ lookupIngress, handleFlow, connectUpstream, failure })) if (typeof f !== 'function') throw new TypeError(`createIngress: ${n} is required`)
   const tokenHash = sha(token)
@@ -237,9 +253,18 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     idle.add(socket); socket.once('close', () => idle.delete(socket))
     socket.on('error', () => {}) // ours from accept: a reset while we answer is this connection's end, never an uncaught exception (handleFlow adds its own once it owns the socket)
     const peer = { address: socket.remoteAddress, port: socket.remotePort }
-    const unknown = (reason) => { counters.unknown++; failure({ where: 'ingress', code: 'ingress-unknown', peer, reason }) }
+    // the opener's sender, asked while its end is still open (the answer, a close, waits for it: nothing else does), and of a plain-HTTP opener its
+    // method and host from the bytes held (`held`): never a path, a query or another header (4.8 §5.1)
+    const unknown = async (reason, held = null) => {
+      counters.unknown++
+      let who = {}
+      if (ownerOfPeer) {
+        try { const o = await ownerOfPeer(peer); who = o && o.pid != null ? { pid: o.pid, ...(o.process ? { process: printable(o.process) } : {}), ...(o.why ? { owner_unread: printable(o.why) } : {}) } : { owner_unread: printable((o && o.why) || 'unanswered') } } catch (e) { who = { owner_unread: printable(msgOf(e), 200) } }
+      }
+      failure({ where: 'ingress', code: 'ingress-unknown', peer, ...httpOf(held), ...who, reason })
+    }
     const authFailed = (user, reason) => { counters.authFailed++; failure({ where: 'ingress', code: 'ingress-auth-failed', peer, user: shownUser(user), reason }) }
-    const r = reader(socket, { onTooMuch: () => { unknown('the client sent more than 256 KiB before the tunnel was open'); socket.destroy() } })
+    const r = reader(socket, { onTooMuch: () => { unknown('the client sent more than 256 KiB before the tunnel was open').catch(() => {}); socket.destroy() } }) // cut at once; its record follows
     const w = { up: 0, down: 0 } // the opener's bytes in, and trocar's answers out: not the agent's (§5.6)
     const say = (b) => { w.down += b.length; if (!socket.destroyed) socket.write(b) }
     try { await serve(socket, r, peer, w, say, unknown, authFailed, door) } catch (e) {
@@ -251,20 +276,21 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
   async function serve(socket, r, peer, w, say, unknown, authFailed, door = null) {
     const doorHash = door && typeof door.token === 'string' && door.token.length > 0 ? sha(door.token) : null
     const deadline = Date.now() + openerMs
+    const shut = async (why, end = 'destroy') => { const held = r.detach(); await unknown(why, held); socket[end]() } // read no more, record, then close
     const first = await r.take(sniffOpener, deadline)
     if (first.gone) return void r.detach()
-    if (first.timeout || first.invalid) { unknown(first.invalid || `no opener within ${openerMs} ms`); r.detach(); return socket.destroy() }
+    if (first.timeout || first.invalid) return shut(first.invalid || `no opener within ${openerMs} ms`)
     if (first.kind === 'get') return servePacGet(socket, r, peer, say, unknown, door, deadline)
     // what the client asked, in its own dialect: who, for where, and how each answer is spoken
     let o
     if (first.kind === 'connect') {
       const m = await r.take(headOf, deadline)
       if (m.gone) return void r.detach()
-      if (m.timeout || m.invalid) { unknown(m.invalid || `no complete CONNECT within ${openerMs} ms`); r.detach(); return socket.destroy() }
+      if (m.timeout || m.invalid) return shut(m.invalid || `no complete CONNECT within ${openerMs} ms`)
       w.up += m.length
       const line = /^CONNECT (\S+) HTTP\/1\.[01]$/.exec(m.head.startLine)
       const target = line && parseAuthority(line[1])
-      if (!target) { unknown('a CONNECT whose target is not host:port'); r.detach(); return socket.destroy() }
+      if (!target) return shut('a CONNECT whose target is not host:port')
       const c = basicOf(m.head.headers)
       const hh = m.head.headers.find(([k]) => k.toLowerCase() === UPSTREAM_HEADER) // the hook's prior proxy (4.11 P7 step 1): handed to the lookup, never forwarded (the ingress writes its own prelude) nor recorded
       o = {
@@ -277,22 +303,22 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     } else {
       const g = await r.take(socks5Greeting, deadline)
       if (g.gone) return void r.detach()
-      if (g.timeout || g.invalid) { unknown(g.invalid || `no complete SOCKS5 greeting within ${openerMs} ms`); r.detach(); return socket.destroy() }
+      if (g.timeout || g.invalid) return shut(g.invalid || `no complete SOCKS5 greeting within ${openerMs} ms`)
       w.up += g.length
       if (!g.methods.includes(2)) { say(Buffer.from([5, 0xff])); authFailed('', 'no username/password method offered'); r.detach(); return socket.end() }
       say(Buffer.from([5, 2]))
       const a = await r.take(userPass, deadline)
       if (a.gone) return void r.detach()
-      if (a.timeout || a.invalid) { unknown(a.invalid || `no complete SOCKS5 credentials within ${openerMs} ms`); r.detach(); return socket.destroy() }
+      if (a.timeout || a.invalid) return shut(a.invalid || `no complete SOCKS5 credentials within ${openerMs} ms`)
       w.up += a.length
       if (!tokenOk(a.pass, doorHash ?? tokenHash)) { say(Buffer.from([1, 1])); authFailed(a.user, 'token mismatch'); r.detach(); return socket.end() }
       say(Buffer.from([1, 0]))
       const q = await r.take(socks5Request, deadline)
       if (q.gone) return void r.detach()
-      if (q.timeout || q.invalid) { unknown(q.invalid || `no complete SOCKS5 request within ${openerMs} ms`); r.detach(); return socket.destroy() }
+      if (q.timeout || q.invalid) return shut(q.invalid || `no complete SOCKS5 request within ${openerMs} ms`)
       w.up += q.length
-      if (q.cmd !== 1) { say(socksReply(7)); unknown(`SOCKS5 command ${q.cmd} is not CONNECT`); r.detach(); return socket.end() }
-      if (!/^[\x21-\x7e]+$/.test(q.host) || q.port < 1) { say(socksReply(8)); unknown('a SOCKS5 target that is not a host name or an address'); r.detach(); return socket.end() } // the name goes into the proxy prelude: no control bytes
+      if (q.cmd !== 1) { say(socksReply(7)); return shut(`SOCKS5 command ${q.cmd} is not CONNECT`, 'end') }
+      if (!/^[\x21-\x7e]+$/.test(q.host) || q.port < 1) { say(socksReply(8)); return shut('a SOCKS5 target that is not a host name or an address', 'end') } // the name goes into the proxy prelude: no control bytes
       o = {
         target: { host: q.host, port: q.port }, user: a.user, pass: a.pass, authed: true,
         ok: () => say(SOCKS_OK),
@@ -423,7 +449,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
   // an origin-form GET (4.11 P10): only on an auth:false door, answered by `servePac({ peer, user, path, left })` → { status, headers, body } | null (not the
   // PAC: closed); `left()` → Promise<boolean>: whether the requester left while it was judged (then counted `left`). On any other door, or with no server, it is closed and `ingress-unknown`, as every opener that is not CONNECT or SOCKS5 is.
   async function servePacGet(socket, r, peer, say, unknown, door, deadline) {
-    const bad = (why) => { unknown(why); r.detach(); socket.destroy() }
+    const bad = async (why) => { const held = r.detach(); await unknown(why, held); socket.destroy() }
     if (!(door && door.open) || typeof servePac !== 'function') return bad('an HTTP request that is not CONNECT (GET): the ingress takes CONNECT and SOCKS5 only; a GET is served only on the PAC door')
     const m = await r.take(headOf, deadline)
     if (m.gone) return void r.detach()
@@ -449,8 +475,8 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       if (m.timeout) { r.detach(); return socket.destroy() }
       const line = !m.invalid && /^(HEAD|GET) (\S+) HTTP\/1\.[01]$/.exec(m.head.startLine)
       if (!line || line[2].split('?')[0] !== `/trocar-health/${group}`) {
-        unknown(`a request that is not the health probe inside the health tunnel (${m.invalid || printable(m.head.startLine.split(' ').slice(0, 2).join(' '))})`)
-        r.detach(); return socket.destroy()
+        r.detach(); await unknown(`a request that is not the health probe inside the health tunnel (${m.invalid || printable(m.head.startLine.split(' ').slice(0, 2).join(' '))})`)
+        return socket.destroy()
       }
       socket.write('HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n')
     }

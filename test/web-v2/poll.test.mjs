@@ -76,7 +76,7 @@ test('poller: a tick during a slow read does not chain a read before the 3x gap'
   assert.equal(reads, 1)
 })
 
-// ── C2 (4.4 live-poll): the 3x wait follows only a success without `pending` that did not end a back-off ──────────────
+// ── 4.4 live-poll: the 3x wait follows only a success without `pending` that did not end a back-off ──────────────
 // a poller over scripted answers, each read taking `took` ms of the fake clock
 function timed(script, base = 1500) {
   let t = 0, reads = 0
@@ -84,7 +84,7 @@ function timed(script, base = 1500) {
   return { p, reads: () => reads, at: (ms) => { t = ms }, now: () => t }
 }
 
-test('A7 (C2): after a pending answer the next timer tick reads at the interval, however long the read took', async () => {
+test('4.4 live-poll: after a pending answer the next timer tick reads at the interval, however long the read took', async () => {
   const base = 1500
   for (const took of [base / 3 + 1, base, 10 * base]) {
     const r = timed([[{ pending: { done: 1, total: 9 } }, took]], base)
@@ -93,7 +93,7 @@ test('A7 (C2): after a pending answer the next timer tick reads at the interval,
   }
 })
 
-test('A7 (C2): after k failures and then a slow success the next timer tick reads at the interval', async () => {
+test('4.4 live-poll: after k failures and then a slow success the next timer tick reads at the interval', async () => {
   const base = 1500
   for (const k of [1, 2, 5]) {
     const r = timed([...Array.from({ length: k }, () => [{ ok: false }, 10]), [{}, 22000]], base)
@@ -103,7 +103,7 @@ test('A7 (C2): after k failures and then a slow success the next timer tick read
   }
 })
 
-test('A7 (C2): after a slow success without pending no timer read comes before 3x its duration', async () => {
+test('4.4 live-poll: after a slow success without pending no timer read comes before 3x its duration', async () => {
   const base = 1500
   for (const D of [base / 3 + 1, base, 7 * base]) {
     const r = timed([[{}, D]], base)

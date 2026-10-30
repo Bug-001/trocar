@@ -1,4 +1,4 @@
-// custody.mjs — the macOS key custody (RFC 4.11 P1 `keychain`, plan decision #10): the P1 interface over the native signing
+// custody.mjs — the macOS key custody (RFC 4.11 P1 `keychain`): the P1 interface over the native signing
 // helper (native/sign-helper.swift), plus installing that helper where the daemon runs it. The root key never enters Node: every
 // root signature is one helper run, and the helper builds what it signs itself (CM3) — the argv carries only the intermediate's
 // public key, serial and notBefore.

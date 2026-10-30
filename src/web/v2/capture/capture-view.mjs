@@ -115,7 +115,7 @@ export function serviceRowHtml(h, v, { open = false } = {}) {
     if (d.running === true && d.responding === true) failingLine = '<p>The capture service is running</p>'
     else if (!daemonDown) failingLine = '<p>The capture service state is unknown</p>'
   }
-  // the log, linked once (1.9 R15): a failing sentence already carries the group count, so the sentence itself is the link;
+  // the log, linked once (1.9): a failing sentence already carries the group count, so the sentence itself is the link;
   // otherwise a plain link without a number; an empty log draws nothing
   const logged = logRowsOf(h).rows.length > 0
   const lead = v.state === 'failing' && logged ? `<a href="#/capture/log">${leadHtml(v.text, v.cls)}</a>` : leadHtml(v.text, v.cls)

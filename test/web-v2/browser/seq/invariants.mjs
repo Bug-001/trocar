@@ -1,5 +1,5 @@
-// test/web-v2/browser/seq/invariants.mjs — the closed set of invariants a sequence run is held to (plan
-// for frontend sequence runs): check(ctx) turns one moment's evidence (the page, the probe's snapshot,
+// test/web-v2/browser/seq/invariants.mjs — the closed set of invariants a sequence run is held to:
+// check(ctx) turns one moment's evidence (the page, the probe's snapshot,
 // the request log, the reader's actions, armed fault windows) into violations. Every bound lives in LIMITS with its spec pointer;
 // PENDING ids are measured and reported, never failed. Selectors are the board's ids / classes / data attributes, never wording.
 // Exports only; nothing runs at import.
@@ -14,19 +14,19 @@ export const PENDING = new Map([
 ])
 
 export const LIMITS = Object.freeze({
-  consoleGraceMs: 2000, // an armed fault window's console.error tail (plan §Invariants I-console)
+  consoleGraceMs: 2000, // an armed fault window's console.error tail (invariant I-console)
   // the desk's poll round (4.4 live-poll): the head and a Range read of each open tail, 1.5 s
   interval: Object.freeze({ status: 5000, sessions: 15000, session: 1500, 'd/head': 1500, 'd/open.main': 1500, 'd/open.rest': 1500 }), // spec/01-trocar-rfc/4.4-server.md:45-52
   intervalOther: 30000, // 4.4:52 「其余 … 每 30 s」
   backoffCapMs: 30000, // 1.5 K-29 (spec/01-trocar-rfc/1.5-states-aesthetics.md:76): doubling, capped at 30 s
   sessionDurFactor: 3, // 4.4:51 the timer's next read waits ≥ 3 × the last read's duration
-  rateSlack: 0.8, // timer jitter: a gap of 0.8 × the expected interval still passes (plan §Invariants I-rate)
+  rateSlack: 0.8, // timer jitter: a gap of 0.8 × the expected interval still passes (invariant I-rate)
   actionWindowMs: Object.freeze([-200, 500]), // a read within this of a reader action is the reader's read (4.4:51)
   returnReadMs: 2000, // the one read on becoming visible again (4.4:49-51)
   openReadMs: 10000, // a screen's opening reads after a route change, chained behind its first answers (4.4 「打开时」)
   leakSlack: 2, // a one-time lazy global wiring (core/dom.mjs wireKeys on the first dialog) is no leak; a per-visit one passes it by the 4th visit
   settleMs: 3000, // how long check waits for in-flight fetches to settle before I-leak counts them
-  memRatio: 1.5, memSlackBytes: 10 * 2 ** 20, // plan §Invariants I-mem
+  memRatio: 1.5, memSlackBytes: 10 * 2 ** 20, // invariant I-mem
   memCapBytes: 80 * 2 ** 20, // pending: no spec line sets this cap yet
   followMs: 15000, // spec/01-trocar-rfc/1.4-central-board.md:71-73 · 4.4:51
   longtaskMs: 50, // D64 ②: no task of the page's own over 50 ms
@@ -109,7 +109,7 @@ const rateKey = (url) => {
   return `lane ${q.get('id')} ${q.get('lane')}`
 }
 
-/** I-rate over the probe's fetch log (see LIMITS for every bound; the session rule is 4.4:52 as decided in C2). → [detail] */
+/** I-rate over the probe's fetch log (see LIMITS for every bound; the session rule is 4.4:52, live-poll). → [detail] */
 function rateFaults(log, { actions = [], hidden = [] } = {}) {
   const out = []
   const [lo, hi] = LIMITS.actionWindowMs
@@ -140,7 +140,7 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
       if (since <= p.start) out.push(`${key}: read again with no session delta in between`)
       continue
     }
-    // after k failures in a row: interval × 2^(k-1), ≤ 30 s; after a success: the interval, and for `session` (C2) 3 × that read's
+    // after k failures in a row: interval × 2^(k-1), ≤ 30 s; after a success: the interval, and for `session` (4.4 live-poll) 3 × that read's
     // duration unless it answered `pending` or ended a back-off
     let want = p.fails ? Math.min(base * 2 ** (p.fails - 1), LIMITS.backoffCapMs) : base
     if ((name === 'session' || name === 'd/head') && !p.fails && !p.pending && !p.recovered) want = Math.max(want, LIMITS.sessionDurFactor * p.dur)

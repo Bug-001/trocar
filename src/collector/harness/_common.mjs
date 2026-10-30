@@ -4,7 +4,7 @@ import { hostOf, parseDotenv } from '../core/config-read.mjs'
 
 export const envValues = (env, keys) => keys.map((k) => env.get(k)).filter((v) => typeof v === 'string' && v !== '')
 export const envHosts = (env, keys) => envValues(env, keys).map(hostOf).filter(Boolean)
-// Proxy settings as { url, source }; the tracker turns them into the engine's ProxyEntry (plan 3c `describe`).
+// Proxy settings as { url, source }; the tracker turns them into the engine's ProxyEntry (4.6 §引擎 3, `describe`).
 export const envProxies = (env, keys) => keys.filter((k) => (env.get(k) || '') !== '').map((k) => ({ url: env.get(k), source: `env:${k}` }))
 
 // Whether a CA path in an agent's config or environment is one trocar wrote: a path under the collector directory. A descriptor skips it when it collects the user's CA files (the

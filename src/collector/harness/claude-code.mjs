@@ -36,7 +36,7 @@ function envBlock(ctx, file) {
   return { vars }
 }
 
-// The layers by Chromium role (D51④, plan §2.5): Claude Desktop's network service owns the model sockets and reads no settings env (4.9 §6.4's
+// The layers by Chromium role (D51④): Claude Desktop's network service owns the model sockets and reads no settings env (4.9 §6.4's
 // measured verdict; win F9), so no settings layer is its door and the tracker gives it none: proxy mode judges it by the root (4.11 P11, core/proxymode/verdict.mjs).
 // Another Chromium child is never trusted (core/trust/confirm.mjs: chromium-child). A process with no --type= — the CLI, the Desktop-bundled CC (mac F1),
 // Desktop's own main process — keeps the settings layers.

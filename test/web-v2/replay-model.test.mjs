@@ -11,7 +11,7 @@ import { world, readLane, deskFrom } from './desk-world.mjs'
 const fx = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))
 const SEEDS = Array.from({ length: 40 }, (_, i) => i + 1)
 
-test('A1 (2.3 #22): lane pages materialise to lists whose every bid is defined and whose copies stay in the parent', async () => {
+test('2.3 #22: lane pages materialise to lists whose every bid is defined and whose copies stay in the parent', async () => {
   const desk = createDesk()
   applySession(desk, fx.session_full)
   for (const page of [fx.lane_keyframe, fx.lane_ops, fx.lane_reset]) applyLane(desk, page)
@@ -46,7 +46,7 @@ test('A1 (2.3 #22): lane pages materialise to lists whose every bid is defined a
 
 const VIEW = (d) => ({ rows: d.rows, order: d.order, lanes: d.lanes, laneRids: d.laneRids, events: d.events, unknown: d.unknown })
 
-test('A2: full(M0) plus the since deltas equals full(now); an unknown mark (base:null) replaces everything', () => {
+test('full(M0) plus the since deltas equals full(now); an unknown mark (base:null) replaces everything', () => {
   const seen = { late: 0, gone: 0, relane: 0, lanesGone: 0 }
   for (const seed of SEEDS) {
     const w = world(seed), m = w.marks
@@ -94,8 +94,6 @@ test('A2: full(M0) plus the since deltas equals full(now); an unknown mark (base
   assert.ok(crossed > 0 && after > 0, `a cut moved (${crossed}) and deltas went on under it (${after})`)
 })
 
-// 2.3 §读与画: a big answer (a full one, or a delta while a session is read for the first time) is applied in slices that yield between
-// them; applied in order they leave the desk, and the held lanes' touched steps, as the answer applied whole does
 test('the world answers with the fixture\'s key sets, both ways', async () => {
   const keys = (o) => Object.keys(o).sort()
   const closed = (name, fxItems, items) => {
@@ -151,7 +149,7 @@ function eventsMatch(w, desk, at) {
   return null
 }
 
-test('A27 (3.5 events): over tail and --to reads each held rid\'s events are the world\'s; compaction / summarize arrive with the tail', async () => {
+test('3.5 events: over tail and --to reads each held rid\'s events are the world\'s; compaction / summarize arrive with the tail', async () => {
   let older = 0
   for (const seed of SEEDS) {
     const w = world(seed), m = w.marks
@@ -174,7 +172,7 @@ test('A27 (3.5 events): over tail and --to reads each held rid\'s events are the
   assert.ok(older > 0, 'some tail page carries compaction / summarize of steps before it')
 })
 
-test('A28 (2.2 K, E1): askOrdinal is the world\'s k where the held pages reach the last user event, null where they do not', async () => {
+test('2.2 K: askOrdinal is the world\'s k where the held pages reach the last user event, null where they do not', async () => {
   let midKnown = 0, unknowable = 0
   for (const seed of SEEDS) {
     const w = world(seed, { calls: 60 }), desk = createDesk(), lanes = w.laneRidsAt()
@@ -201,7 +199,7 @@ test('A28 (2.2 K, E1): askOrdinal is the world\'s k where the held pages reach t
 
 const sameFile = (a, b) => a === b || a.endsWith('/' + b) || b.endsWith('/' + a)
 
-test('A29 (2.4 #1 #9): seenFiles = the lane\'s seen minus the files it opened (any spelling), in step order of firstRid then count', async () => {
+test('2.4 #1 #9: seenFiles = the lane\'s seen minus the files it opened (any spelling), in step order of firstRid then count', async () => {
   // fixture: test/app.test.mjs is opened and seen → absent; src/app.mjs only seen → present
   const fd = createDesk()
   applySession(fd, fx.session_full)
@@ -220,7 +218,7 @@ test('A29 (2.4 #1 #9): seenFiles = the lane\'s seen minus the files it opened (a
       assert.deepEqual([...got].sort((a, b) => (a.path < b.path ? -1 : 1)), want, `seed ${seed} lane ${key}`)
       for (let i = 1; i < got.length; i++) {
         const a = rids.indexOf(got[i - 1].firstRid), b = rids.indexOf(got[i].firstRid)
-        assert.ok(a < b || (a === b && got[i - 1].count >= got[i].count), `seed ${seed}: E6 order at ${i}`)
+        assert.ok(a < b || (a === b && got[i - 1].count >= got[i].count), `seed ${seed}: order at ${i}`)
       }
       saw.dropped += seen.some((x) => x.path.startsWith('/') && opened.some((p) => sameFile(p, x.path)))
       saw.kept += got.some((x) => opened.some((p) => p.split('/').pop() === x.path.split('/').pop()))
@@ -229,7 +227,7 @@ test('A29 (2.4 #1 #9): seenFiles = the lane\'s seen minus the files it opened (a
   assert.ok(saw.dropped > 0 && saw.kept > 0, `absolute spellings dropped ${saw.dropped}, same name elsewhere kept ${saw.kept}`)
 })
 
-test('A30 (3.5 ledger_next): the chain gives the whole ledger at mark, ledgerDone turns true only at its end, a ledger page touches no step', async () => {
+test('3.5 ledger_next: the chain gives the whole ledger at mark, ledgerDone turns true only at its end, a ledger page touches no step', async () => {
   let chains = 0, older = 0
   for (const seed of SEEDS) {
     const w = world(seed), desk = createDesk()
@@ -266,7 +264,7 @@ test('A30 (3.5 ledger_next): the chain gives the whole ledger at mark, ledgerDon
   assert.equal(ledgerDone(desk, fx.lane_keyframe.lane), false, 'its own ledger_next is pending')
 })
 
-test('A31 (3.5 tail page): a reset holds the tail page only, prev pages restore every list, defs one per bid', async () => {
+test('3.5 tail page: a reset holds the tail page only, prev pages restore every list, defs one per bid', async () => {
   let resent = 0
   for (const seed of SEEDS) {
     const w = world(seed, { calls: 60 }), desk = await deskFrom(w.get(), 'S'), lanes = w.laneRidsAt()

@@ -1,4 +1,4 @@
-// test/collector/core/proxymode/chain.test.mjs — CM20 (spec 4.11 P7, plan decision #12): the upstream chain, generated over every loaded descriptor's
+// test/collector/core/proxymode/chain.test.mjs — CM20 (spec 4.11 P7): the upstream chain, generated over every loaded descriptor's
 // proxyMode forms plus the eighth fixture, along the axes of the chain (hook env, header allowed or not, recorded prior, process env per spelling in the
 // agent's order, a door value with a parent, a parent gone, system proxy follower or not, PAC, identity failed). Measured values are seeds only:
 // Verge's 127.0.0.1:7897 with `localhost;<local>`, a corporate proxy, and the steer value an older trocar left.

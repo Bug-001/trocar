@@ -1,8 +1,8 @@
-// worker-killed-write.test.mjs — a query handed to a worker the OS just killed (SIGKILL, the heap OOM of 2026-10-21) fails that
+// worker-killed-write.test.mjs — a query handed to a worker the OS just killed (SIGKILL, as a heap OOM does) fails that
 // query with a recorded reason; it never takes the server process down. Found by the sequence soak (seed 101, a worker kill at step
 // 23): service.mjs run() writes the query line to the dead worker's stdin before its 'close' arrives, and start() puts no 'error'
 // listener on c.stdin, so the EPIPE is an uncaught exception in the board server. The scenario runs in a child process, so an
-// uncaught exception there is its exit code, not a crash of this test file. Still open in the query service.
+// uncaught exception there is its exit code, not a crash of this test file.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'

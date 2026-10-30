@@ -38,12 +38,31 @@ export function sourcesCtx({ os, home, env = process.env, cwd = process.cwd(), d
   }
 }
 
-/** The harnesses with a form of this OS present on this machine (4.11 `present`, over the sources ctx with the platform's dirs): with no names,
- *  `status` lists them beside the ones trocar's own records know (1.6 §3.5). Reads only. */
-export async function presentHarnesses({ os, home, env = process.env, harnesses, fs = nodeFs }) {
+/** The forms of this OS present on this machine (4.11 `present`, over the sources ctx with the platform's dirs), per harness that has forms here:
+ *  { <harness>: [form id] } — an empty list = none of them is installed. With no names `status` lists the harnesses with one beside the ones trocar's
+ *  own records know (1.6 §3.5); a harness with none is not captured (4.11 P5). Reads only. */
+export async function presentForms({ os, home, env = process.env, harnesses, fs = nodeFs }) {
   const [{ dirsOf }, { isPresent }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../core/proxymode/sources.mjs')])
   const ctx = sourcesCtx({ os, home, env, dirs: dirsOf(home, env), fs })
-  return harnesses.filter((d) => d.proxyMode && d.proxyMode.forms.some((f) => f.os.includes(os) && isPresent(f, ctx))).map((d) => d.name)
+  const here = (d) => d.proxyMode.forms.filter((f) => f.os.includes(os))
+  return Object.fromEntries(harnesses.filter((d) => d.proxyMode && here(d).length).map((d) => [d.name, here(d).filter((f) => isPresent(f, ctx)).map((f) => f.id)]))
+}
+
+/** The program files a process of a form runs, for each form of this OS whose certificate carrier is the install-folder wrapper (4.11 P8: one native
+ *  program by name): { <form id>: [its place, the real program moved aside] }. A process of the harness running anything else (another install of
+ *  it) is on none of those forms (4.11 P5). Paths only, nothing is read. */
+export async function formPrograms({ os, home, env = process.env, harnesses }) {
+  const [{ dirsOf, platformFacts }, { targetOf }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../core/proxymode/hooks/wrapper.mjs')])
+  const ctx = { ...sourcesCtx({ os, home, env, dirs: dirsOf(home, env) }), facts: typeof platformFacts === 'function' ? platformFacts({ env }) : platformFacts }
+  const out = {}
+  for (const d of harnesses) {
+    for (const f of (d.proxyMode && d.proxyMode.forms) || []) {
+      const cert = f.os.includes(os) && (d.proxyMode.certs || {})[f.cert]
+      const t = cert && cert.kind === 'wrapper' ? targetOf(ctx, cert) : null
+      if (t) out[f.id] = [t.file, t.real]
+    }
+  }
+  return out
 }
 
 /** backendsFor({ os, home, run, env, fs }) → { custody, rootStore, installHelper, wrapperKit, facts, dirs, policy } for macOS / Windows. */
@@ -117,7 +136,7 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
     parts = { ownerOf: (q) => ownerOfSocket({ exec: execOf, ...q, onFailure: event }), factsOf: (pid, o) => procinfo.factsOfPid(pid, { ...run, ...(o || {}) }), proc: { envOf: (p, n, o) => procinfo.envOf(p, n, { ...o, ...run }), cwdOf: (p, o) => procinfo.cwdOf(p, { ...o, ...run }), parentOf: (p, o) => procinfo.parentOf(p, { ...o, ...run }) }, close: () => {} }
     watch = await systemProxyWatch({ up, read: up.readSystemProxy, io: io.exec ? { exec: io.exec } : {}, changes: io.exec ? null : (o) => up.scutilChanges({ ...o, env }), failure: (e) => failure('netenv', e), event }) // the OS's own change notice, unless a test injects the OS
   } else {
-    // no declared registry keys (plan §E.7 ruling 4): the model reads a policy value through policy.mjs (reg.exe), not this helper
+    // no declared registry keys: the model reads a policy value through policy.mjs (reg.exe), not this helper
     const [{ ownerOfSocket }, procinfo, { startHelper, regReadAllowed }] = await Promise.all([import('./win32/socktable.mjs'), import('./win32/procinfo.mjs'), import('./win32/helper.mjs')])
     const helper = startHelper({ env, onFailure: event, ...(io.helper || {}) })
     winHelper = helper

@@ -6,6 +6,8 @@ import { statusSummary, statusDetail, failuresBlock, noteText } from '../../src/
 import { statusExit } from '../../src/cli/status.mjs'
 import { FINDING_CODES, findingFor, renderFindings } from '../../src/netenv/findings.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
+import { loadHarnesses } from '../../src/collector/harness/index.mjs'
+import { STATUS_REASONS } from '../../src/health/codes.mjs'
 
 const NOW = Date.parse('2026-10-18T12:24:00Z')
 const BAD = [[/[\u3000-\u9fff\uff00-\uffef]/, 'CJK'], [/\bundefined\b/, 'undefined'], [/\bnull\b/, 'null'], [/\bNaN\b/, 'NaN'], [/§/, 'a section sign'], [/\bD\d+\b/, 'a decision number'], [/<[a-z_]+>/, 'an unfilled placeholder'], [/[^\x20-\x7e]/, 'a non-ASCII character']]
@@ -46,6 +48,41 @@ test('§3.5 the summary: conclusion first, one row per harness, the three facts 
   assert.ok(fresh.includes('Next: trocar install'))
 })
 
+test('§1.1 · §3.5 a long NOTE folds under its own column: every line of the summary inside 80 columns, for every reason and harness name', () => {
+  const names = ['pi', 'opencode', 'a-harness-of-twenty'] // the HARNESS column's width moves where NOTE starts; each name is also in its own note
+  for (const code of STATUS_REASONS) {
+    const harnesses = Object.fromEntries(names.map((h, i) => [h, harness({ captured: false, reason: code, processes: [{ pid: 40000 + i, captured: false, reason: code }] })]))
+    const lines = statusSummary(doc({ harnesses, install: { state: 'complete', harnesses: [], pending: [] } }), { now: NOW })
+    clean(lines, `status (${code})`)
+    const at = lines.findIndex((l) => /^ {2}HARNESS\s/.test(l)), note = lines[at].indexOf('NOTE')
+    const table = lines.slice(at + 1, lines.indexOf('', at))
+    table.forEach((l, i) => {
+      if (names.some((h) => l.startsWith(`  ${h} `))) return
+      assert.equal(l.search(/\S/), note, `${code}: a folded line starts under NOTE: ${JSON.stringify(l)}`)
+      assert.ok(table[i - 1].length + 1 + l.trim().split(' ')[0].length > 80, `${code}: folded only where the next word does not fit: ${JSON.stringify(table[i - 1])}`)
+    })
+  }
+})
+
+test('§1.1 · D38 a row that could not be read says why, whole, folded under NOTE: only a word longer than the room (a path) passes 80 columns', () => {
+  const why = '/var/folders/b1/_1pdzqc97_39d45tv31x1mjw0000gn/T/trocar-run-fyS8zy/.trocar/collector/state.json: EACCES (permission denied while it was read)'
+  const lines = statusSummary(doc({ harnesses: { 'claude-code': harness({ captured: null, why: [why] }) }, install: { state: 'complete', harnesses: [], pending: [] } }), { now: NOW })
+  const at = lines.findIndex((l) => /^ {2}HARNESS\s/.test(l)), note = lines[at].indexOf('NOTE'), row = lines.slice(at + 1, lines.indexOf('', at))
+  assert.ok(row.join(' ').replace(/\s+/g, ' ').includes(why), `the reason is said whole: ${JSON.stringify(row)}`)
+  for (const l of row.slice(1)) assert.equal(l.search(/\S/), note, `a folded line starts under NOTE: ${JSON.stringify(l)}`)
+  for (const l of row) assert.ok(l.length <= 80 || !/\s/.test(l.trim()), `over 80 columns only as one unbroken word: ${JSON.stringify(l)}`)
+})
+
+test('§1.1 · §3.5 the Forms block of `status <harness>`: a long certificate sentence folds under its own column, inside 80 columns, for every reason', () => {
+  for (const code of STATUS_REASONS) {
+    const forms = [{ form: 'a-harness-of-twenty.cli', certificate: { in_effect: false, code }, proxy: { written: 'http://127.0.0.1:17992', prior: 'http://127.0.0.1:7897' } }]
+    const lines = statusDetail(doc({ harnesses: { 'a-harness-of-twenty': harness({ captured: false, reason: code, forms }) } }), 'a-harness-of-twenty', { now: NOW })
+    clean(lines, `status <harness> (${code})`)
+    const at = lines.findIndex((l) => l.includes(' certificate  ')), col = lines[at].indexOf(' certificate  ') + 14
+    for (const l of lines.slice(at + 1, lines.findIndex((l) => l.includes(' proxy  ')))) assert.equal(l.search(/\S/), col, `${code}: a folded line starts under its sentence: ${JSON.stringify(l)}`)
+  }
+})
+
 test('§3.5 a read that failed is `unknown` with its reason, never 0 and never a stale pid as the present state', () => {
   const lines = statusSummary(doc({
     daemon: { running: null, pid: 4012, responding: null, since: null, error: 'the lock could not be read (EACCES)' },
@@ -76,6 +113,16 @@ test('§3.5 `status <harness>`: the verdict, Why / Fix / Check from the one cata
   assert.ok(lines.some((l) => /^ {4}without trocar\s+codex \(pid 5530\) -> internet$/.test(l)))
   assert.ok(lines.includes('  If your VPN or proxy routes by process, it sees trocar, not codex.'))
   assert.ok(lines.some((l) => l.startsWith('  To change the proxy: edit codex')))
+})
+
+test('§3.5 `status <harness>`: each form note prints once after Forms, its paths beside it; every descriptor note keeps D58 (4.11 CM38)', async () => {
+  const said = (await loadHarnesses()).flatMap((d) => (d.proxyMode.notes || []).map((n) => ({ code: 'harness-note', text: n.text })))
+  const notes = [...said, { code: 'harness-note', text: 'the first run installs a package in the config folder; off deletes nothing', paths: ['/home/alice/.agent/node_modules'] }]
+  const form = (id) => ({ form: id, certificate: { in_effect: true, carrier: 'plugin' }, proxy: { connected: true, written: 'http://127.0.0.1:17995', prior: null }, notes })
+  const lines = statusDetail(doc({ harnesses: { agent: harness({ forms: [form('agent.cli'), form('agent.npm')] }) } }), 'agent', { now: NOW })
+  clean(lines, 'status agent')
+  const flat = lines.slice(lines.indexOf('  Forms')).join(' ').replace(/\s+/g, ' ') // after Forms
+  for (const n of notes) { const s = `${n.text}${n.paths ? ` (${n.paths.join(', ')})` : ''}`; assert.equal(flat.split(s).length - 1, 1, `said once: ${s}`) }
 })
 
 test('§3.5 `--failures`: one line per kind of problem, then Expected — and a health that could not be read says so', () => {

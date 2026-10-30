@@ -40,7 +40,7 @@ test('loader: an answer that is ok but not a table is a failure, not an empty ta
   assert.equal(await L.load(), false); assert.equal(calls, 0); assert.equal(L.table(), TABLE)
 })
 
-test('loader (V01): the server\'s models[] document becomes a table that prices a call; a loaded table is not fetched again', async () => {
+test('loader: the server\'s models[] document becomes a table that prices a call; a loaded table is not fetched again', async () => {
   const doc = await pricingDoc({ home: tmpDir(), env: {} }); let calls = 0
   const L = createPricingLoader(async () => { calls++; return { ok: true, status: 200, data: doc } })
   await L.load()
@@ -51,7 +51,7 @@ test('loader (V01): the server\'s models[] document becomes a table that prices 
   await L.load(); assert.equal(calls, 1)
 })
 
-test('A8 (4.4 其余 · K-29): a failed price read is retried on the back-off schedule, not on each session poll; a table ends the reads', async () => {
+test('4.4 其余 · K-29: a failed price read is retried on the back-off schedule, not on each session poll; a table ends the reads', async () => {
   const fails = [async () => ({ ok: false, status: 500, error: 'HTTP 500' }), async () => { throw new Error('socket hang up') }, async () => ({ ok: true, data: { source: 'x' } })]
   for (const fail of fails) {
     let t = 0, ok = false

@@ -44,15 +44,16 @@ for (const os of OSES) {
       const out = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors: {} }, root: ROOT_OK, systemProxy: null, ctx: ctxOf(os, home) })
       for (const x of out[desc.name]) assert.deepEqual([x.proxy.upstream.source, x.proxy.door_up, x.proxy.connected], ['direct', false, false])
     })
-    test(`CM31 / CM32 ${os} ${desc.name}: only present forms are listed; hostTree forms and descriptor effects carry their harness-note`, async () => {
+    test(`CM31 / CM32 ${os} ${desc.name}: only present forms are listed; hostTree forms, descriptor effects and notes carry their harness-note`, async () => {
       const { home, m, doors } = world(desc)
       const none = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors }, root: ROOT_OK, ctx: ctxOf(os, home, false) })
       assert.deepEqual(none[desc.name], [], 'no form installed: nothing listed, no note')
       const out = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors }, root: ROOT_OK, ctx: ctxOf(os, home) })
       for (const x of out[desc.name]) {
         const f = forms.find((y) => y.id === x.id)
-        assert.equal(x.notes.some((n) => n.code === 'harness-note' && /every extension in this host/.test(n.text)), !!f.hostTree, `${x.id}: the host-tree note`)
+        assert.equal(x.notes.length, (desc.proxyMode.effects || []).length + (desc.proxyMode.notes || []).length + (f.hostTree ? 1 : 0), `${x.id}: its hostTree note, the effects and the notes, nothing else`)
         for (const e of desc.proxyMode.effects || []) assert.ok(x.notes.some((n) => n.code === 'harness-note' && n.text === e.when && n.paths.length > 0), `${x.id}: effect ${e.id}`)
+        for (const n of desc.proxyMode.notes || []) assert.ok(x.notes.some((y) => y.code === 'harness-note' && y.text === n.text), `${x.id}: note ${n.id}`)
       }
     })
     test(`1.6 §9.4 ${os} ${desc.name}: the certificate per form — its carrier, in effect, or the code and command the user acts on`, async () => {

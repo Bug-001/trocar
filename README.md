@@ -64,13 +64,25 @@ thinking / tool_use / tool_result), so you see *which* part grew and when.
 
 ## Install
 
-From source (Node ≥ 20). The package is not on npm, so there is no global `trocar` on your PATH: run
-it through the repo (or `npx --no-install trocar …`).
+From npm (Node ≥ 22). The package is `trocar-cli`; the command it installs is `trocar`.
 
 ```sh
-git clone https://github.com/Bug-001/trocar && cd trocar && npm install
-node bin/trocar.mjs install     # once: the certificates (or: npx --no-install trocar install)
-node bin/trocar.mjs on          # then start capture
+npm i -g trocar-cli
+trocar install                  # once: the certificates
+trocar on                       # then start capture
+```
+
+`npx trocar-cli <command>` runs one command without installing, but run `trocar install` from a global install:
+it registers a login item that runs that copy, and npm may clear the `npx` cache.
+
+On Linux, build the capability helper and install it once per machine, before `trocar install`. The package carries
+its source, not a build: the build needs clang, make, bpftool, the libbpf, libelf and zlib headers, and a kernel
+with BTF. Build as yourself; only the `sudo` lines need root:
+
+```sh
+sudo apt-get install build-essential clang libbpf-dev libelf-dev zlib1g-dev linux-tools-generic  # Ubuntu; Debian: bpftool, not linux-tools-generic
+make -C "$(npm root -g)/trocar-cli/src/collector/arch/linux"
+sudo "$(command -v node)" "$(command -v trocar)" setup-helper   # root's PATH may lack node or trocar (an nvm node), so both go by their paths
 ```
 
 The same five commands on every OS, in this order: `trocar install` (once) → `trocar on` → `trocar off` →
@@ -78,7 +90,25 @@ The same five commands on every OS, in this order: `trocar install` (once) → `
 confirm; until it has run, `trocar on` refuses (`error.code` `cert-not-installed`). `on` starts capture, `status` shows state,
 `off` takes every trace of trocar off your agents' path, and the certificates stay until `trocar uninstall`.
 
-From a Release: not supported — `trocar update` needs a git checkout.
+From source: there is no global `trocar` on your PATH, so run it through the repo.
+
+```sh
+git clone https://github.com/Bug-001/trocar && cd trocar && npm install
+make -C src/collector/arch/linux && sudo "$(command -v node)" bin/trocar.mjs setup-helper   # Linux only, once per machine
+node bin/trocar.mjs install     # once: the certificates
+node bin/trocar.mjs on          # then start capture
+```
+
+From a GitHub Release: each Release carries the same tarball as npm and its `SHA256SUMS`. Download both into one
+folder, check the sum there, then `npm i -g` the `.tgz` file; it installs like the registry copy.
+
+```sh
+shasum -a 256 -c SHA256SUMS     # macOS; on Linux: sha256sum -c SHA256SUMS; each prints OK
+npm i -g ./trocar-cli-<version>.tgz
+```
+
+On Windows, in PowerShell, `(Get-FileHash .\trocar-cli-<version>.tgz -Algorithm SHA256).Hash -eq (Get-Content SHA256SUMS).Split(' ')[0]`
+prints `True` when the sum matches.
 
 ## Staying up to date
 
@@ -97,6 +127,12 @@ new one does not report that the previous one ended without a clean stop. The ro
 say that `update` (or `uninstall`) stopped it. An update that stops half way leaves a note
 behind: run `trocar update` again and it goes on from where it stopped.
 
+A copy installed with npm updates through npm: `npm i -g trocar-cli@latest`, then `trocar update` finishes the
+way a git update does: the collector on the new code, `install` again, and the agents that were being captured
+switched on again. It finishes also when the collector already came back on the new code by itself (a reboot or a new
+login in between): `install` records which code ran it, and until that is the new code there is something to finish. Run it from the copy the login entry starts (the one you ran `trocar install` from); from
+another copy the collector comes back on the copy the entry starts, and `update` says so and exits 1.
+
 A machine that ran the build from before the rename moves over once, by hand: that build's own `uninstall`, then
 a clone of this repo and `trocar install`. Nothing the old name left is read or kept.
 
@@ -106,6 +142,7 @@ a clone of this repo and `trocar install`. Nothing the old name left is read or 
 trocar off                     # first: uninstall refuses while capture is on
 trocar uninstall               # removes all of trocar's changes; keeps your records (~/.trocar/raw)
 trocar uninstall --purge-data  # also deletes the records and their index (asks first)
+sudo "$(command -v node)" "$(command -v trocar)" setup-helper --remove   # Linux, last: the machine's capability helper
 ```
 
 `uninstall` always prints its plan and asks first; without a terminal and without `--yes` it changes
@@ -296,7 +333,8 @@ start history is incomplete, is `not-seen`: never a reason to call the agent not
 its key is still in custody and the daemon could make its intermediate (`cert-not-installed`, `cert-key-missing`,
 `cert-intermediate-unavailable`), and which certificate files trocar did not append to because they are not yours
 (`not-users-file`). `trocar status <harness>` prints these per form (a `certificate:` and a `proxy:` line, then trocar's value beside
-yours); `status --json` has them under `forms`. trocar only reads your proxy settings and never writes anything into a VPN.
+yours), then each note a harness carries, such as a way of starting the agent that skips trocar's hook and so is not
+captured; `status --json` has them under `forms`. trocar only reads your proxy settings and never writes anything into a VPN.
 
 The collector has descriptors for eight harnesses (D37) — `claude-code`, `codex` (its WebSocket transport is recorded
 call by call), `opencode`, `deepseek-dsh`, `kimi-code`, `hermes`, `z-code` and `pi` — on all three platforms. Which form of
@@ -345,18 +383,18 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 
 | what | where | undo |
 |---|---|---|
-| capability helper (Linux, once per machine, `sudo`) | `/usr/local/libexec/trocar/trocar-redirector`, root 0755, file caps `cap_bpf,cap_net_admin,cap_perfmon` — no setuid, no account, no system unit | `sudo trocar setup-helper --remove` |
+| capability helper (Linux, once per machine, `sudo`) | `/usr/local/libexec/trocar/trocar-redirector`, root 0755, file caps `cap_bpf,cap_net_admin,cap_perfmon` — no setuid, no account, no system unit | `sudo "$(command -v node)" "$(command -v trocar)" setup-helper --remove` |
 | root / CA (per user) | Linux: `~/.trocar/collector/ca/` (key 0600), in **no** trust store · macOS: login keychain key + user trust · Windows: CNG key + `CurrentUser\Root`; `~/.trocar/collector/ca/trocar-ca.pem` is the public certificate | `trocar uninstall` |
 | certificate carriers (`install`) | Linux: each agent's trust entry, written by `install` (Claude Code `env.NODE_EXTRA_CA_CERTS`, OpenCode / dsh plugins, pi's extension, Codex / Hermes `.env` blocks, Z-Code `network.caCertFile`, combined bundles `combined-<agent>.pem`) · macOS / Windows: the carriers above | `trocar uninstall` |
 | proxy entries (`on`) | macOS / Windows: the proxy keys and switch files above; Linux: none (the helper steers) | `trocar off` |
-| autostart unit (per user) | Linux: `~/.config/systemd/user/trocar-collector.service` · macOS: `~/Library/LaunchAgents/com.trocar.collector.plist` · Windows: the scheduled task `\trocar\collector`; each runs `trocar daemon` | registered and enabled by `trocar install`; `on` and `off` never touch it (D61), `trocar uninstall` removes it |
+| autostart unit (per user) | Linux: `~/.config/systemd/user/trocar-collector.service` · macOS: `~/Library/LaunchAgents/com.trocar.collector.plist` · Windows: the scheduled task `\trocar\collector`; each runs `trocar daemon` | registered and enabled by `trocar install` (it exits 1 when it cannot, e.g. with no systemd --user on Linux, and `on` then refuses); `on` and `off` never touch it (D61), `trocar uninstall` removes it |
 | install manifest | `~/.trocar/collector/install-manifest.json` — every file and key it changed, never a copy of your file | removed last by `trocar uninstall` |
 | backups of your files | `~/.trocar/backup/` (0700, files 0600): the file as it was before trocar changed it — API keys included | `off` leaves them; `uninstall` deletes them all |
 | the standalone undo | `~/.trocar/bin/trocar-off`, written by `install`; `trocar doctor` checks it is current | `trocar uninstall` |
 | captures | `~/.trocar/raw/<segment>.ndjson` and its `<segment>.sealed` (0600); `~/.trocar/index/` is a deletable accelerator; `flows/` holds connection metadata and failure records | kept unless `trocar uninstall --purge-data` (which deletes `flows/` too, then records there anything it could not undo) |
 
 ```sh
-sudo trocar setup-helper      # Linux, once per machine
+make -C "$(npm root -g)/trocar-cli/src/collector/arch/linux" && sudo "$(command -v node)" "$(command -v trocar)" setup-helper   # Linux, once per machine: build the helper, then install it
 trocar install                # once, per user: the certificates; lists every file it will change and asks (not in a terminal: add --yes)
 trocar on                     # refuses until install has run; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
 trocar status                 # each agent and why it is (not) captured, its proxy chain, the certificates, the recent failures
@@ -434,7 +472,7 @@ the daemon from its lock: not running, or stuck). One exception: an install refu
 anything (nothing installed yet, or run as root) has no collector directory to write into, so the
 command's output is its only report. An `off` or `uninstall` that cannot undo something exits 1 and
 keeps the install manifest for the next run. The Linux helper is a root-owned copy of the build, so after upgrading
-run `sudo trocar setup-helper` again to replace it.
+build it again and install it again (the two lines under Install) to replace it.
 
 ## Shrinking the raw logs — sealed segments (D35, D60)
 
@@ -511,8 +549,6 @@ Whether Desktop's own model calls come out decrypted verbatim is not claimed her
   labelled on its call with the exact reason: **request: truncated at the capture limit** (cut at the 64 MiB
   capture cap) or **request: incomplete** (the capture did not get it whole, e.g. the upstream answered 413 before
   it was sent).
-- **No npm distribution, no LICENSE.** The package is `private`, so `npx trocar` does not exist. Clone
-  it and treat it as source-available for personal research.
 - **Personal research instrument.** Single-user, loopback-only. Your traffic goes on as it was: the one
   byte of its own trocar adds is the `Connection: close` line after `off` (labelled on the call), and a
   request is only ever changed or re-sent by you, on purpose (D30; not built yet). No cloud, no alerting.
@@ -554,3 +590,15 @@ Exit codes: 0 done · 1 not done, or a problem was found · 2 a usage error (not
 
 Design authority: [`spec/01-trocar-rfc/`](spec/01-trocar-rfc/) (entry `0.0-overview.md`). This README is
 the operator's quickstart, not the spec. `npm test` runs the test suite.
+
+## License
+
+trocar is licensed under the [Functional Source License, version 1.1, with Apache-2.0 as the future license](LICENSE)
+(FSL-1.1-ALv2). It is source-available: you may use, copy, modify and redistribute it for any purpose except making
+it available to others in a commercial product or service that competes with it. Each released version becomes
+Apache-2.0 two years after its release. One part is licensed differently: the kernel-side eBPF program in
+`src/collector/arch/linux/bpf/` is GPL-2.0-only OR MIT, as its license string declares, because the Linux kernel lets
+only a program under a GPL-compatible license use the kernel helpers it needs. Every other file is FSL-1.1-ALv2.
+
+Report a vulnerability privately as [SECURITY.md](SECURITY.md) says. How to contribute is in
+[CONTRIBUTING.md](CONTRIBUTING.md); what changed in each release is in [CHANGELOG.md](CHANGELOG.md).

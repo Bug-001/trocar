@@ -1,4 +1,4 @@
-// chain.mjs — P7, the upstream chain (spec 4.11 §1 「门只在代理链里插一环」 and P7; plan decision #12): the proxy a door dials for one connection is
+// chain.mjs — P7, the upstream chain (spec 4.11 §1 「门只在代理链里插一环」 and P7): the proxy a door dials for one connection is
 // the one its agent would have used without trocar. One function for every harness; it names no OS and no harness (the descriptor's `proxy` says
 // which variables the agent reads, in its order, and whether it follows the system proxy). Readers are injected: the process facts and the parent walk
 // come from the OS backend (cached there by pid + start), the system proxy from the OS reader, already in the shape below. Nothing here does I/O.

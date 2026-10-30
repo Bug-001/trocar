@@ -13,8 +13,8 @@ export async function loadArch(platform = process.platform) {
   if (platform === 'win32') {
     // 4.9 §1 (D47's twin, carried): no machine-wide helper (install: null — the per-user one is a PowerShell process, not a root service); no kernel to download, verify or
     // place either — the ENGINE is the only local proxy (its per-group doors), so `on` has no prepare / ensureKernel arms at all (the darwin twin's own rule; the pin, the
-    // download and the forwarder went with the kernel). The autostart unit is the scheduled-task module (Task 9(a)); the OS roots are read (windowsRoots through osRootsFor, 4.8 §6.2);
-    // netFacts is this platform's part of the network facts (1.6 §9.7, 4.8 §10.1, Task 10): status / doctor / on's adopt reach it through
+    // download and the forwarder went with the kernel). The autostart unit is the scheduled-task module; the OS roots are read (windowsRoots through osRootsFor, 4.8 §6.2);
+    // netFacts is this platform's part of the network facts (1.6 §9.7, 4.8 §10.1): status / doctor / on's adopt reach it through
     // src/netenv/facts.mjs, and it reads the resident helper — no second daemon API. No createRedirector: the daemon runs the collector model on win32
     // (runModelDaemon, doorPartsFor in model-backends.mjs), as on darwin.
     // No opt-in half: the collector model (4.11) has no item the user names and none that needs an administrator (D57, CM25).

@@ -79,7 +79,7 @@ test('D38 the scan fails on a name outside the set (planted tree)', () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-// 4.6 §记录「连接行」(2026-10-21): an untracked / untrusted row's class is its reason's — forwarded by design is expected, every other reason
+// 4.6 §记录「连接行」: an untracked / untrusted row's class is its reason's — forwarded by design is expected, every other reason
 // and none is a failure. The by-design lists are the spec's words, written out here (W38): a reason added to either set must be added in both.
 test('4.6 连接行: untracked / untrusted rows forwarded by design are expected; pid-unresolved, a trust reason and no reason stay failures', () => {
   const SPEC = { untracked: ['not-an-agent', 'agent-helper', 'harness-off', 'group-off', 'outside-host-set', 'other-user'], untrusted: ['not-verified', 'outside-host-set'] }

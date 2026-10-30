@@ -18,7 +18,7 @@ export const RUN_KEY = Object.freeze({ hive: 'HKCU', key: 'Software\\Microsoft\\
 const RUN_PATH = `${RUN_KEY.hive}\\${RUN_KEY.key}`
 
 /** The oldest Node `on` accepts (package.json `engines`; a test holds the two equal). Older than that and the daemon would exit at every login with an error nobody sees (4.8 §7). */
-export const NODE_MIN_MAJOR = 20
+export const NODE_MIN_MAJOR = 22
 
 /**
  * The Node preflight of `on` (4.8 §7): → `{ ok: true, have, min }` or `{ ok: false, have, min, doctor }`. `doctor` is the line to print: what was found and what is needed. A version that cannot be read is not a pass (it names
@@ -333,7 +333,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
 
 export const SUPERVISOR_LOCK = 'supervisor.lock'
 export const SUPERVISE_CAP_MS = 60_000 // the longest wait between two starts of the daemon (4.8 §7: 1, 2, 4 … 60 s)
-export const SUPERVISE_STABLE_MS = 60_000 // a daemon that ran this long before it died starts the backoff over: it was not crash-looping (4.8 §7, Task 9(a))
+export const SUPERVISE_STABLE_MS = 60_000 // a daemon that ran this long before it died starts the backoff over: it was not crash-looping (4.8 §7)
 /** The wait before the restart after `attempt` failures in a row (0 = the first): 1, 2, 4, 8, 16, 32, then 60 s. */
 export const supervisorBackoff = (attempt) => Math.min(SUPERVISE_CAP_MS, 1000 * 2 ** attempt)
 

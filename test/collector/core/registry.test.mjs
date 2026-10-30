@@ -1,4 +1,4 @@
-// test/collector/core/registry.test.mjs — the registry judges a process by the D51 name list (RFC 4.6 「按名单认」, plan 2026-10-14 §2.3): one row
+// test/collector/core/registry.test.mjs — the registry judges a process by the D51 name list (RFC 4.6 「按名单认」): one row
 // per reason of the table (match · excluded · pending · args-mismatch · no-match · ambiguous), the user's list merged and swapped in place,
 // couldMatch on the readable facts, longLived, the lazy env, the descriptor checks, and the liveness snapshot. Descriptors here are made up: the
 // seven presets are test/collector/core/identity-presets.test.mjs's.

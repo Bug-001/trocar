@@ -10,7 +10,7 @@
 // their own `<div class="kd-… tone-…">`. One draw spends at most `budget` characters of string (B.c): a string past what is left
 // is cut, and the rest of it opens from a `j-more` disclosure, a slice at a time (jsonNodeHtml); a nested diff or sections
 // string past it is drawn as text.
-// Security: every byte of input goes through esc(); only the elements and attributes of plan §2.2 are emitted.
+// Security: every byte of input goes through esc(); only the allowed cell elements and attributes (RFC 2.3 §两种模式) are emitted.
 import { esc, has, enc, bytes } from '../core/fmt.mjs'
 import { failAs, opaqueLine, mediaAlt, moreChars, BEFORE, AFTER, SAVE } from '../labels/cells.mjs'
 

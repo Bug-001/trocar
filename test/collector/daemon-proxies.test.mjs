@@ -1,5 +1,5 @@
-// test/collector/daemon-proxies.test.mjs — the daemon hands the engine each process's own proxies (plan 3c §2
-// describe → tracker.extrasFor; RFC 4.6 §引擎 3, §记录 https:// 代理, acceptance W8): a trusted agent whose
+// test/collector/daemon-proxies.test.mjs — the daemon hands the engine each process's own proxies (describe
+// → tracker.extrasFor; RFC 4.6 §引擎 3, §记录 https:// 代理, acceptance W8): a trusted agent whose
 // HTTPS_PROXY names an https:// proxy has that proxy's outer TLS terminated, the CONNECT inside it relayed and
 // recorded, and the call in the tunnel decrypted and recorded — through the product path (the daemon over the fake
 // helper and a synthetic /proc), not only an engine given the table by hand.

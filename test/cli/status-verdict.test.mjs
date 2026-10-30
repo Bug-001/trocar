@@ -1,7 +1,7 @@
 // test/cli/status-verdict.test.mjs — 4.11 P11 `status`: a process the daemon has not listed is judged by the door's evidence first (its durable
 // door-seen.json row, a Chromium host's network service), then rule 3, then only inside known history; what history cannot tell is `not-seen`
 // (captured null, no restart), and `not-seen` never makes a harness `no` (1.6 §2 判词, A.2 rows 32–33). Generated axes: the start of a process
-// against the carrier and the on windows × `since` × a routed ancestor; the 2026-10-20 main-Mac capture is the regression seed. Every OS fact is
+// against the carrier and the on windows × `since` × a routed ancestor; a recorded macOS capture (2026-10-20) is the regression seed. Every OS fact is
 // injected (a temp HOME, a fake process table, a daemon stub); nothing here reads the machine (0.1 §3).
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -93,7 +93,7 @@ function cellWorld(c, { start, since, anc }) {
   return { child, table: parent ? [parent, child] : [child], rows: parent ? [accept(c, parent)] : [], l }
 }
 
-test('A2 4.11 P11 status: start × since × a routed ancestor → the process row; the 2026-10-20 seed (no since, starts after the carrier and before the earliest window) is not-seen', async () => {
+test('4.11 P11 status: start × since × a routed ancestor → the process row; the 2026-10-20 seed (no since, starts after the carrier and before the earliest window) is not-seen', async () => {
   const c = await codexOn()
   for (const cell of CELLS) {
     const x = cellWorld(c, cell)
@@ -110,7 +110,7 @@ test('A2 4.11 P11 status: start × since × a routed ancestor → the process ro
 
 test('P12 status: an unreadable door record, or one still carrying unknown_before (any value), never makes a process config-after-start', async () => {
   const c = await codexOn()
-  const child = proc(c, 7302, START.gap) // a known gap with no ancestor: config-after-start when the record is known and empty (A2)
+  const child = proc(c, 7302, START.gap) // a known gap with no ancestor: config-after-start when the record is known and empty
   const file = path.join(c.w.dir, DOOR_SEEN_FILE)
   for (const write of [() => fs.writeFileSync(file, '{not json'), () => writeDoorSeen({ dir: c.w.dir, rows: [], unknownBefore: Date.now() }),
     () => fs.writeFileSync(file, JSON.stringify({ version: 1, rows: [], unknown_before: 'x' }))]) {
@@ -121,7 +121,7 @@ test('P12 status: an unreadable door record, or one still carrying unknown_befor
   }
 })
 
-test('A3 P11 status and P12 holders are one judge: a process with no door row, started after every carrier, is config-after-start while on ⇔ the holders after off do not list it', async () => {
+test('P11 status and P12 holders are one judge: a process with no door row, started after every carrier, is config-after-start while on ⇔ the holders after off do not list it', async () => {
   const c = await codexOn()
   for (const cell of CELLS.filter((x) => x.start !== 'before-carrier')) {
     const x = cellWorld(c, cell)
@@ -133,10 +133,10 @@ test('A3 P11 status and P12 holders are one judge: a process with no door row, s
   }
 })
 
-// A3 · one validity judge: a door row whose group belongs to another harness (row.harness ≠ the group's) is valid or stale by THAT group's
+// one validity judge: a door row whose group belongs to another harness (row.harness ≠ the group's) is valid or stale by THAT group's
 // door_since on both sides — status's verdict and the holders after off agree over (the group moved or not) × (the row before or after the move)
 for (const moved of [false, true]) for (const atRel of [-MIN, MIN]) {
-  test(`A3 · a codex row at a door group of another harness (${moved ? 'moved' : 'never moved'}, the row ${atRel < 0 ? 'before' : 'after'} the move): status and the holders agree`, async () => {
+  test(`a codex row at a door group of another harness (${moved ? 'moved' : 'never moved'}, the row ${atRel < 0 ? 'before' : 'after'} the move): status and the holders agree`, async () => {
     const c = await codexOn()
     const child = proc(c, 7202, START.gap), group = 'zz:api'
     const rows = [{ ...accept(c, child), group, at: ON_AT + atRel }]
@@ -152,7 +152,7 @@ for (const moved of [false, true]) for (const atRel of [-MIN, MIN]) {
   })
 }
 
-test('A5 status half: a Chromium host (no --type) shows its network service\'s door verdict; a same-name CLI child\'s row never folds up into its parent', async () => {
+test('status half: a Chromium host (no --type) shows its network service\'s door verdict; a same-name CLI child\'s row never folds up into its parent', async () => {
   const c = await codexOn()
   const NS = ['codex', '--type=utility', '--utility-sub-type=network.mojom.NetworkService']
   const host = proc(c, 63411, START.gap), ns = proc(c, 63420, START.gap + 1000, { ppid: 63411, argv: NS })
@@ -170,7 +170,7 @@ test('A5 status half: a Chromium host (no --type) shows its network service\'s d
   assert.deepEqual(said((await run(c, [host, ns])).j, host.pid), [false, 'config-after-start'], 'without the network service\'s row the host started in a known gap')
 })
 
-test('A8 1.6 §2 判词: captured + not-seen → the harness is captured (exit 0); only not-seen → unknown (exit 3); doctor gives no config-after-start for not-seen rows', async () => {
+test('1.6 §2 判词: captured + not-seen → the harness is captured (exit 0); only not-seen → unknown (exit 3); doctor gives no config-after-start for not-seen rows', async () => {
   const c = await codexOn()
   setWorld(c, liveness(c, { since: false }), [])
   const inWindow = proc(c, 9001, ON_AT + MIN), unseen = proc(c, 9002, START['before-window'])

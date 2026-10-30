@@ -185,7 +185,7 @@ test('foldFlows: expected_groups — each expected not_captured code of the wind
   assert.deepEqual(f.expected_groups, { policy: { count: 2, first_ts: at(3 * H), last_ts: at(H) }, 'https-proxy': { count: 1, first_ts: at(2 * H), last_ts: at(2 * H) } })
 })
 
-// 4.6 §记录「连接行」(2026-10-21): rows a door forwards by design fold into `expected` under their reason (status names them), never into a failure group
+// 4.6 §记录「连接行」: rows a door forwards by design fold into `expected` under their reason (status names them), never into a failure group
 test('foldFlows: by-design untracked / untrusted rows count as expected under their reason; a real untracked reason is a failure group', () => {
   const row = (nc, reason) => ({ ts: at(1000), flow_id: `f-${nc}-${reason}`, decision: 'splice', agent: 'claude-code', not_captured: nc, reason })
   const f = foldFlows([row('untracked', 'not-an-agent'), row('untracked', 'not-an-agent'), row('untracked', 'group-off'), row('untrusted', 'not-verified'), row('untracked', 'pid-unresolved')], { now: NOW })

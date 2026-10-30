@@ -137,27 +137,9 @@ test('W26 a second server on a live endpoint is refused, and the first one is no
 
 // ---- W25: refuse an elevated or SYSTEM token ---------------------------------------------------------------------------------------------------
 
-// W25's command halves are all LANDED now (the todo pins that lived here — each ending in assert.fail so it could not go green by accident — became
-// pointers as the commands got their wiring): on is on-elevated.test.mjs's (2026-10-10, Task 8(c) 收尾), the daemon's is daemon.test.mjs's (Task 8(c)),
-// off / uninstall's is win32-kernel.test.mjs's (Task 9(b), lane B).
-// W25's on half is LANDED (Task 8(c) 收尾, 2026-10-10): `on` asks parts.arch.refuseElevated at its entry — before turnOn (its only writer), before the
-// netenv probe and the adoption read — and refuses an elevated or SYSTEM token with the §12 record (where 'start') where a collector directory exists,
-// the receipt carrying it either way; a token that cannot be read is not a refusal (R11) — 已由 test/collector/arch/win32/on-elevated.test.mjs 覆盖
-// (the receipt, the one record, exit 1, the HOME otherwise byte for byte, turnOn never asked, and the unreadable case proceeding).
-// W25's daemon half is LANDED (Task 8(c)): runDaemon calls arch.refuseElevated before it claims its endpoint, and the win32 endpoint itself
-// (controlEndpoint's pipe + token) is wired beside it — 已由 test/collector/daemon.test.mjs::`W25 the win32 daemon refuses an elevated or SYSTEM token
-// before it claims its endpoint …` 覆盖 (the record, no socket, no control.json, the unreadable-not-a-refusal half, and the endpoint with its token).
-// W25's off/uninstall half is LANDED (Task 9(b), lane B): src/off/orchestrate.mjs and src/cli/uninstall.mjs call refuseElevatedByWhoami at their entry
-// on win32 — 已由 test/off/win32-kernel.test.mjs::`W25: off and uninstall on win32 refuse an elevated token at the entry …` 覆盖 (both commands, the byte-identical
-// HOME, and the unreadable-whoami-not-a-refusal half).
-// W24's command half is LANDED (Task 8(c) / CLI rebase): `runDaemonCli(['--supervise'])` hands the lone flag to arch.runSupervisor through
-// daemon.mjs's loadArch (the CLI never imports arch/ itself, layering rule 5) with its own script and the collector dir; any other argument is
-// still exit 2, root and a platform without the new collector are refused first, and an arch with no runSupervisor (linux's) is a usage error —
-// 已由 test/collector/cli.test.mjs::`cli: daemon --supervise (4.8 §7, W24) …` 覆盖。The supervisor itself is the tests above (the backoff, the
-// lock, the singleton, the signals — W24's own list).
-// W24's undoWin32-equality half is LANDED (Task 9(b), lane B): src/off/win32.mjs carries its own taskState/undoScheduledTask/undoRunValue beside this
-// module's — 已由 test/off/win32-undo.test.mjs::`the names the undo touches are the arch module's own (the inlined pieces cannot drift)` 覆盖: TASK_NAME and
-// RUN_KEY equal this module's exports, the shape Linux's unit.mjs ↔ src/off/autostart.mjs test has; each side's call sequence is its own file's tests.
+// W24 / W25 command wiring is tested where it lives: on-elevated.test.mjs (on), daemon.test.mjs (daemon, before it claims its endpoint),
+// win32-kernel.test.mjs (off / uninstall), cli.test.mjs (--supervise, 4.8 §7; the CLI never imports arch/, layering rule 5), win32-undo.test.mjs
+// (the undo's names are this module's). Each refuses an elevated or SYSTEM token with the §12 record; a token or whoami that cannot be read is not a refusal.
 
 // whoami /groups lists the token's groups with their SIDs; the integrity level is the one `S-1-16-<rid>` (Mandatory Label), and SYSTEM is S-1-5-18. The SIDs are the same in every language, so the check reads SIDs, not names.
 const WHOAMI = (label, extra = '') => `"Everyone","Well-known group","S-1-1-0","Mandatory group, Enabled by default, Enabled group"\n"BUILTIN\\Users","Alias","S-1-5-32-545","Mandatory group, Enabled by default, Enabled group"\n${extra}"${label}","Label","S-1-16-${{ medium: 8192, high: 12288, system: 16384, low: 4096 }[label.split('\\')[1].split(' ')[0].toLowerCase()] ?? 8192}",""\n`
@@ -221,8 +203,9 @@ test('W25 on and the daemon ask the same `whoami /groups` as off and uninstall (
 test('W24 `on` refuses a Node below the minimum with a doctor line that says what was found and what is needed; the minimum is the one package.json promises', () => {
   const engines = JSON.parse(fs.readFileSync(new URL('../../../../package.json', import.meta.url), 'utf8')).engines.node
   assert.equal(`>=${NODE_MIN_MAJOR}`, engines, 'the preflight and the engines field are one number')
-  for (const v of ['20.0.0', '20.19.5', '22.23.1', '24.1.0']) assert.deepEqual(nodePreflight({ versions: { node: v } }), { ok: true, have: v, min: NODE_MIN_MAJOR }, v)
-  for (const v of ['18.20.4', '19.9.0', '16.0.0']) {
+  const M = NODE_MIN_MAJOR // the versions around the floor, from the floor: the test holds the rule, not today's number
+  for (const v of [`${M}.0.0`, `${M}.19.5`, `${M + 1}.0.0`, `${M + 2}.1.0`]) assert.deepEqual(nodePreflight({ versions: { node: v } }), { ok: true, have: v, min: NODE_MIN_MAJOR }, v)
+  for (const v of [`${M - 1}.9.0`, `${M - 2}.20.4`, '16.0.0']) {
     const r = nodePreflight({ versions: { node: v } })
     assert.equal(r.ok, false, v)
     assert.equal(r.have, v)

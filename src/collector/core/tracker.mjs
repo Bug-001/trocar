@@ -26,7 +26,7 @@ import { unreachableTransports } from './transports.mjs'
 
 const PROXY_SCHEMES = { 'http:': ['http', 80], 'https:': ['https', 443], 'socks:': ['socks5', 1080], 'socks4:': ['socks4', 1080], 'socks4a:': ['socks4a', 1080], 'socks5:': ['socks5', 1080], 'socks5h:': ['socks5h', 1080] }
 
-// A proxy setting of this process → the engine's ProxyEntry (plan 3c §2). Scheme-less "host:port" is http (curl's
+// A proxy setting of this process → the engine's ProxyEntry (4.6 §引擎 3). Scheme-less "host:port" is http (curl's
 // reading); unknown schemes are dropped; credentials never leave the URL. Every entry the daemon hands over comes from
 // the process's own env or the config its harness file names, so own:true (4.6 §引擎 3).
 export function toProxyEntry({ url, source }) {
@@ -163,7 +163,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     }
     const live = { ...ctx, env: effectiveEnv(environ, layers.filter((l) => !l.ignored)).env }
     // its own proxies go to the engine as FlowExtras, never into the host policy: whether to end an https:// proxy's
-    // outer TLS is the engine's proxy path to decide from them (own:true, host and port; 4.6 §引擎 3, plan 3c-7) — as a
+    // outer TLS is the engine's proxy path to decide from them (own:true, host and port; 4.6 §引擎 3) — as a
     // plain decrypt host the CONNECT inside would be recorded and the call in it spliced unlabelled (review 5 #1)
     const proxies = call(d.proxies, live, row).map((p) => toProxyEntry(typeof p === 'string' ? { url: p, source: 'harness' } : p || {})).filter(Boolean)
     const hosts = [...new Set([...d.hosts, ...call(d.configHosts, live, row)].filter(Boolean).map((h) => String(h).toLowerCase()))]
@@ -303,7 +303,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     agents: () => [...table.values()].sort((a, b) => a.pid - b.pid).map((r) => ({ ...r, hosts: [...r.hosts], bypass: r.bypass.map((b) => ({ ...b })), unreachable: (r.unreachable || []).map((u) => ({ ...u })), proxies: r.proxies.map((p) => ({ ...p })), readErrors: [...r.readErrors], parseErrors: [...r.parseErrors] })),
     unmatched: () => [...ambiguous.values()].sort((a, b) => a.pid - b.pid),
     describe: (pid) => (table.has(pid) ? { ...table.get(pid) } : null),
-    // FlowExtras for the engine's describe (plan 3c §2): the harness's WebSocket terminators and this process's own proxies
+    // FlowExtras for the engine's describe (4.6 §引擎 3): the harness's WebSocket terminators and this process's own proxies
     extrasFor(pid) { const r = pid == null ? null : table.get(pid); return r ? { wsTerminal: r.wsTerminal, proxies: r.proxies.map((p) => ({ ...p })), trust: { var: r.trustVar, via: r.trustVia, file: r.trustFile ?? null } } : {} }, // trust: the entry the verdict relied on (trust-rejected, D51④)
     metaFor(pid) { const r = table.get(pid); return r ? { agent: r.agent, exe: r.exe, parentPid: r.ppid, parentAgent: r.parentAgent } : null },
     // setPolicy({mode, extraHosts}) is the default every harness uses; byHarness = {<id>: {mode, extraHosts}} gives one its own (1.6 §1.5)

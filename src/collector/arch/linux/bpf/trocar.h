@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only OR MIT */
 /* trocar Linux redirector — structs shared between the BPF program and the C loader.
  * Spec: spec/01-trocar-rfc/4.6-process-collector.md §Linux 机制. No kernel-only types here,
  * so the userspace loader can include it directly. */
