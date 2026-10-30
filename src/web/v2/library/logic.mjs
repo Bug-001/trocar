@@ -8,6 +8,7 @@ import { formatHash } from '../core/router.mjs'
 import { captureVerdict, capHealthPatch } from '../core/capture-verdict.mjs'
 import { readFailure, techDetailsHtml } from '../core/ui.mjs'
 import * as W from '../labels/library.mjs'
+import { INTERVAL } from '../core/poll.mjs'
 
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k)
 
@@ -69,6 +70,18 @@ export async function loadSessions(api, { limit = 500 } = {}) {
     if (d.next == null || d.next === after) return { ok: true, data: { sessions, errors, as_of, stored } }
     after = d.next
   }
+}
+/** freshSessions(api, {alive}) → a `sessions` answer without `stored`: loadSessions, read again INTERVAL.session after every answer that
+ *  carries `stored` (the worker's last, older list, 4.4 §存下的答案) while `alive()`. For a screen that draws a conclusion from the
+ *  list (the traffic page's coverage note, the overview, #/session/<id>); the Sessions page shows the stored list itself (1.8). */
+export async function freshSessions(api, { alive = () => true } = {}) {
+  let r = await loadSessions(api)
+  while (r && r.ok && r.data.stored && alive()) {
+    await new Promise((d) => setTimeout(d, INTERVAL.session))
+    if (!alive()) break
+    r = await loadSessions(api)
+  }
+  return r
 }
 const lastMs = (s) => { const t = Date.parse(s.last_ts); return Number.isNaN(t) ? null : t }
 

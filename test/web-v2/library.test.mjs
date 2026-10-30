@@ -2,7 +2,7 @@
 // face, or constructed session objects in the C.5 shape. Marks are asserted by kind (data-mark), never by their words.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseFilters, filtersToParams, applyFilters, listEntries, captionFacts, listSignature, capShotMaker, emptyBoardState, filteredAgentLine, agentMenuModel, flattenSessions, loadSessions } from '../../src/web/v2/library/logic.mjs'
+import { parseFilters, filtersToParams, applyFilters, listEntries, captionFacts, listSignature, capShotMaker, emptyBoardState, filteredAgentLine, agentMenuModel, flattenSessions, loadSessions, freshSessions } from '../../src/web/v2/library/logic.mjs'
 import { rowHtml, captionHtml, readFailHtml, filteredEmptyHtml, SKELETON } from '../../src/web/v2/library/library.mjs'
 import { harnessKey, harnessName, isKnownHarness } from '../../src/web/v2/core/chips.mjs'
 import { captureVerdict } from '../../src/web/v2/core/capture-verdict.mjs'
@@ -186,6 +186,22 @@ test('(17) the repaint signature moves when `stored` comes or goes', () => {
   const at = new Date(NOW - 90e3).toISOString()
   assert.notEqual(listSignature({ ...doc, stored: at }, null), listSignature({ ...doc, stored: null }, null))
   assert.notEqual(listSignature({ ...doc, stored: at }, null), listSignature(doc, null))
+})
+
+// 4.4 §存下的答案: a screen that draws a conclusion from the list (not the Sessions page) waits for a fresh answer
+test('(17) freshSessions: an answer that carries stored is read again 1.5 s later until fresh; a screen gone stops it', async () => {
+  const fresh = { sessions: [S({ session_id: 'b' })], errors: [], next: null }
+  const old = { sessions: [S({ session_id: 'a' })], errors: [], next: null, stored: { at: new Date(NOW - 60e3).toISOString() } }
+  let reads = 0
+  const api = { get: async () => ({ ok: true, status: 200, data: ++reads === 1 ? old : fresh }) }
+  const r = await freshSessions(api)
+  assert.deepEqual(r.data.sessions.map((s) => s.session_id), ['b'])
+  assert.equal(r.data.stored, null)
+  assert.equal(reads, 2)
+  reads = 0
+  const gone = await freshSessions(api, { alive: () => false })
+  assert.equal(reads, 1, 'no read after the screen is gone')
+  assert.equal(gone.data.stored, old.stored.at)
 })
 
 test('(17) loadSessions: a list with a stored page carries the oldest stored at; a session on two pages is listed once', async () => {
