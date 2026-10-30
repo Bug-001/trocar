@@ -1,5 +1,5 @@
-// collector.mjs (core/proxymode) — the collector model's daemon half (RFC 4.11 §1 on / off, §3 ① ② ③ ⑥, P2, P7, P10, P11, P12; 4.6 §代理模式的门;
-// plan §E.6 ruling 1): one OS-neutral collector the darwin / win32 daemon runs. It opens a door per entry group from `POST /on`'s
+// collector.mjs (core/proxymode) — the collector model's daemon half (RFC 4.11 §1 on / off, §3 ① ② ③ ⑥, P2, P7, P10, P11, P12; 4.6 §代理模式的门):
+// one OS-neutral collector the darwin / win32 daemon runs. It opens a door per entry group from `POST /on`'s
 // `{ harnesses, groups: { '<h>:<route>': port } }`, judges each connection at the door — identity (door-identity.mjs, D51), the upstream per connection
 // (chain.mjs P7; an unidentified process uses its own hook value, then steps 2, 4, 5, ⑥; an auth:false door dials its PAC's own leg, pac.mjs pacLeg, P10), decrypt by verdict.mjs P11 keyed by pid + start — serves the PAC on the
 // auth:false door (P10), keeps doors forward-only while holders live after `off` (P12), and signs leaves through the issuer over the key custody (P2).

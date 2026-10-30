@@ -1,4 +1,4 @@
-// test/netenv/no-product-names.test.mjs — the backlog (D43 · D49, invariant 6): trocar does not recognise or show a VPN / proxy product, so the
+// test/netenv/no-product-names.test.mjs — D43 · D49, invariant 6: trocar does not recognise or show a VPN / proxy product, so the
 // code of src/ names none — not in a message, a path, a kind, a constant. Comments may (a reason can cite the product it is about). Static half; the names are the
 // products of the D43 / D49 decisions and of write-scan.mjs's PRODUCT_DIR_NAMES (the data directories N15 watches), as whole words, any case.
 import test from 'node:test'

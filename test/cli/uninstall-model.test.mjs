@@ -14,6 +14,7 @@ import { formatUninstallReceipt } from '../../src/cli/receipt.mjs'
 import { startControlServer } from '../../src/collector/core/control.mjs'
 import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { recordingExec } from './fixtures/on-ctx.mjs'
+import { DOOR_SEEN_FILE } from '../../src/off/door-seen.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 1, 2, 3, 4])
 const USER_PEM = `${tls.rootCertificates[2].trim()}\n`
@@ -92,7 +93,7 @@ for (const doorFile of ['none', 'row', 'unreadable']) {
     const onAt = Date.now() - 60_000, offAt = onAt + 30_000, start = offAt + 5_000
     m.liveness.codex = { ...m.liveness.codex, since: new Date(onAt).toISOString(), on_at: new Date(onAt).toISOString(), off_at: new Date(offAt).toISOString() }
     saveManifest(w.dir, m)
-    const f = path.join(w.dir, 'door-seen.json')
+    const f = path.join(w.dir, DOOR_SEEN_FILE)
     if (doorFile === 'row') fs.writeFileSync(f, JSON.stringify({ version: 1, rows: [{ harness: 'codex', group: 'codex:cli', pid: 778, start, kind: 'accept', at: new Date(start + 1000).toISOString(), n: 1, decrypt: true }] }))
     if (doorFile === 'unreadable') fs.mkdirSync(f)
     const before = tree(w.home)
@@ -103,6 +104,27 @@ for (const doorFile of ['none', 'row', 'unreadable']) {
     assert.match(receipt.problems.join('\n'), /codex \(pid 778\)/)
     assert.equal(receipt.notes.length > 0, doorFile === 'unreadable')
     assert.deepEqual(tree(w.home), before)
+  })
+}
+
+// invariant 5 · 0.2 (uninstall removes what is trocar's, the captures stay unless --purge-data): the door record is the daemon's own state, not a capture.
+// Once its rows hold no live holder, uninstall takes it with state.json; the plan names it; --purge-data then leaves no ~/.trocar at all (seen on a
+// macOS and a Windows test machine: ~/.trocar/collector/door-seen.json was the one file left).
+const withDoorRecord = (w) => { const f = path.join(w.dir, DOOR_SEEN_FILE); fs.writeFileSync(f, JSON.stringify({ version: 1, rows: [{ harness: 'codex', group: 'codex:cli', pid: 779, start: Date.now() - 5000, kind: 'accept', at: new Date().toISOString(), n: 1, decrypt: true }] })); return f }
+for (const purgeData of [false, true]) {
+  test(`invariant 5 · uninstall${purgeData ? ' --purge-data' : ''} takes the door record of no live holder: the plan names it, ${purgeData ? 'no ~/.trocar is left' : 'the captures stay'}`, async () => {
+    const w = await installed()
+    withCaptures(w)
+    const f = withDoorRecord(w)
+    const plan = await uninstall(w, {}, { purgeData, dryRun: true })
+    assert.ok(plan.receipt.planned.some((p) => p.path === f && p.change === 'removed'), JSON.stringify(plan.receipt.planned))
+    assert.ok(fs.existsSync(f), 'a dry run removes nothing')
+    const { receipt, exit } = await uninstall(w, {}, { purgeData })
+    assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+    assert.equal(fs.existsSync(f), false)
+    assert.ok(receipt.removed.includes(f))
+    if (purgeData) assert.equal(fs.existsSync(path.join(w.home, '.trocar')), false, `left: ${leftUnder(w.home).join(', ')}`)
+    else for (const p of CAPTURES) assert.equal(fs.readFileSync(path.join(w.dir, p), 'utf8'), `${p}\n`, `${p} stays`)
   })
 }
 

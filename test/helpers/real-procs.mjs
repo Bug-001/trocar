@@ -1,4 +1,4 @@
-// test/helpers/real-procs.mjs — the one table the real-OS identity contracts run (0.1 §3 约定 2 / 3, G3; plan 2026-10-14-d51-name-allowlist §5, §7):
+// test/helpers/real-procs.mjs — the one table the real-OS identity contracts run (0.1 §3 约定 2 / 3):
 // install shapes of Claude Code made REAL — the system's `sleep` copied to each path under a tmpDir() and started — so the process facts the OS
 // gives for them (darwin: `ps` + `lsof`; linux: /proc) go through the same name list the daemon and `off` judge by. No agent is started, nothing
 // outside the temp dir is touched. Used by test/collector/arch/{darwin,linux}/identity-real.test.mjs.

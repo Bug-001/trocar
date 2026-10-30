@@ -50,7 +50,7 @@ test('V73 · every string in every harness descriptor is English and ASCII (a re
 })
 
 // the problem rows and the Expected section carry the records' own reasons, cut to a head: with long reasons and by-design rows on disk the same
-// rule holds (the mac and win VM terminals 2026-10-21 showed rows of 200 columns broken mid-word and a non-ASCII cut mark)
+// rule holds (real mac and win terminals showed rows of 200 columns broken mid-word and a non-ASCII cut mark)
 test('V73 · trocar status --failures over long failure reasons and by-design rows: English, ASCII, inside 80 columns', async () => {
   const s = await sandbox()
   const long = 'the owner of 127.0.0.1:50211 could not be read (owner unreadable); the app keeps its own way until it fetches the PAC again, and so on '.repeat(3)

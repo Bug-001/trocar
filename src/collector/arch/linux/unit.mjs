@@ -67,9 +67,17 @@ export function userUnit({ home, node, script, run = null, env = process.env, sp
     // without a systemd --user bus answers non-zero, and ensureDaemonUp falls back to `start()` with the reason said.
     startNow: () => sc(['start', UNIT_NAME]),
     // D61 / 1.6 §3.3: is the login entry registered and enabled? The question `on` asks BEFORE it writes anything (an `on` with no
-    // entry opens doors that nobody opens after the next login). `is-enabled` answers 0 for enabled; a systemctl that did not run at
-    // all (code null) is not "not enabled": nothing was asked, so the answer is unknown and `on` does not go on a guess.
-    registered: () => { const r = sc(['is-enabled', UNIT_NAME]); return r.code === 0 ? { state: 'present' } : r.code === null ? { state: 'unknown', err: `systemctl --user is-enabled did not run (${r.err || 'no reason given'})` } : { state: 'absent' } },
+    // entry opens doors that nobody opens after the next login). `is-enabled` answers 0 for enabled, and prints the unit's state when it
+    // could ask the manager (`not-found`; `disabled`, `masked`, `linked`: the file is there, the entry is off; `enabled-runtime` exits 0
+    // but lives in /run and is gone at the next boot, so it is not the login entry either). A systemctl that did not run, or ran and printed
+    // no state (no systemd --user to ask: "Failed to connect to bus", exit 1, tested on Ubuntu 24.04 2026-10-30), is not "not registered":
+    // nothing was asked, so the answer is unknown, with systemctl's own reason, and `on` does not go on a guess.
+    registered: () => {
+      const r = sc(['is-enabled', UNIT_NAME])
+      if (r.code === 0 && r.out !== 'enabled-runtime') return { state: 'present' }
+      if (r.code === null || !r.out) return { state: 'unknown', err: `${r.code === null ? 'systemctl did not run' : 'no systemd --user answered'}: ${r.err || 'no reason given'}` }
+      return { state: r.out === 'not-found' ? 'absent' : 'disabled' }
+    },
     start: (carry = null) => startDirect(carry),
     reload: () => sc(['daemon-reload']),
     stop: () => sc(['stop', UNIT_NAME]),

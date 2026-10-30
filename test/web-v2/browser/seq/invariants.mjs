@@ -14,19 +14,19 @@ export const PENDING = new Map([
 ])
 
 export const LIMITS = Object.freeze({
-  consoleGraceMs: 2000, // an armed fault window's console.error tail (plan §Invariants I-console)
+  consoleGraceMs: 2000, // an armed fault window's console.error tail (invariant I-console)
   // the desk's poll round (4.4 live-poll): the head and a Range read of each open tail, 1.5 s
   interval: Object.freeze({ status: 5000, sessions: 15000, session: 1500, 'd/head': 1500, 'd/open.main': 1500, 'd/open.rest': 1500 }), // spec/01-trocar-rfc/4.4-server.md:45-52
   intervalOther: 30000, // 4.4:52 「其余 … 每 30 s」
   backoffCapMs: 30000, // 1.5 K-29 (spec/01-trocar-rfc/1.5-states-aesthetics.md:76): doubling, capped at 30 s
   sessionDurFactor: 3, // 4.4:51 the timer's next read waits ≥ 3 × the last read's duration
-  rateSlack: 0.8, // timer jitter: a gap of 0.8 × the expected interval still passes (plan §Invariants I-rate)
+  rateSlack: 0.8, // timer jitter: a gap of 0.8 × the expected interval still passes (invariant I-rate)
   actionWindowMs: Object.freeze([-200, 500]), // a read within this of a reader action is the reader's read (4.4:51)
   returnReadMs: 2000, // the one read on becoming visible again (4.4:49-51)
   openReadMs: 10000, // a screen's opening reads after a route change, chained behind its first answers (4.4 「打开时」)
   leakSlack: 2, // a one-time lazy global wiring (core/dom.mjs wireKeys on the first dialog) is no leak; a per-visit one passes it by the 4th visit
   settleMs: 3000, // how long check waits for in-flight fetches to settle before I-leak counts them
-  memRatio: 1.5, memSlackBytes: 10 * 2 ** 20, // plan §Invariants I-mem
+  memRatio: 1.5, memSlackBytes: 10 * 2 ** 20, // invariant I-mem
   memCapBytes: 80 * 2 ** 20, // pending: no spec line sets this cap yet
   followMs: 15000, // spec/01-trocar-rfc/1.4-central-board.md:71-73 · 4.4:51
   longtaskMs: 50, // D64 ②: no task of the page's own over 50 ms

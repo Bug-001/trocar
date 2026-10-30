@@ -1,4 +1,4 @@
-// test/netenv/no-route-reads.test.mjs — the backlog (D49, 4.7): trocar reads no routing table and no interface list — the readings that would let it
+// test/netenv/no-route-reads.test.mjs — D49, 4.7: trocar reads no routing table and no interface list — the readings that would let it
 // recognise a TUN-mode VPN. The exec lists of the code status and doctor run (src/cli/{doctor,status}.mjs, src/netenv/**, and the per-OS fact sources
 // status hands them, src/collector/arch/*/netfacts.mjs) contain no route / ifconfig / ip route / Get-NetRoute. A command shown to the user is not an exec.
 import test from 'node:test'

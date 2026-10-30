@@ -32,7 +32,7 @@ export const mediaAlt = (type, w, h, size) => ['image', type && String(type).toU
 export const BEFORE = 'Before'
 export const AFTER = 'After'
 export const SAVE = 'Save'
-// the cell keys for the `?` sheet (lane D adds the rows)
+// the cell keys for the `?` sheet (the desk adds the rows)
 export const CELL_KEYS = Object.freeze([
   ['v', 'Switch this block between Raw and Readable'],
   ['Shift + V', 'Switch the default view of every block'],

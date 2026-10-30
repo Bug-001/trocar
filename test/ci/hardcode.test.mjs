@@ -50,7 +50,7 @@ test('1 · the fact scanner sees each kind and skips comments, IPs and OIDs (it 
 
 const ARCH = /aarch64|arm64|x86_64|amd64|\bx64\b|\bia32\b/i
 export const overfit = (p) => /\d+\\?\.\d+/.test(p) || ARCH.test(p)
-const TWIN_FORM_KEYS = new Set(['id', 'g', 'supported', 'hosts']) // a form is an entry group's, an opt-in item's and a matrix row's unit, never an identity (plan §2.9)
+const TWIN_FORM_KEYS = new Set(['id', 'g', 'supported', 'hosts']) // a form is an entry group's, an opt-in item's and a matrix row's unit, never an identity
 const TWIN_BANNED = ['processes', 'match', 'image', 'path']
 
 /** What guard 2 finds wrong in descriptors, one line each, led by `harness.path` (G8: the failure names where to fix it). */

@@ -1,7 +1,7 @@
 // test/web-v2/session-head.test.mjs — the session head and the step navigation over the desk model: one previous / one next
 // control on the whole desk, the step position in one element, 1.2 #16's numbering (stepRef on rids), the head built only from
 // 1.2 §会话头's parts, the read-state line (pending), and the 会话保真行's facts. String level: the desk's skeleton +
-// sessionHeadHtml + stepBarHtml over generated desks (desk-world.mjs) and, once lane Q's routes are merged, the real face.
+// sessionHeadHtml + stepBarHtml over generated desks (desk-world.mjs) and, once the block routes are merged, the real face.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'

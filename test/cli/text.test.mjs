@@ -32,6 +32,12 @@ test('columns: every column as wide as its widest cell, one space-padded gap, no
   assert.deepEqual(columns([['a', 'b'], ['c']]), ['a  b', 'c'], 'a short row is not padded to the missing cells')
 })
 
+test('columns with a width: a last cell past it folds on spaces under its own column; a word longer than the room is never broken', () => {
+  assert.deepEqual(columns([['ab', 'a b c d e'], ['c', 'f']], { width: 8 }), ['ab  a b', '    c d', '    e', 'c   f'])
+  assert.deepEqual(columns([['ab', 'a-word-past-the-room end']], { width: 12 }), ['ab  a-word-past-the-room', '    end'])
+  assert.deepEqual(columns([['a-head-past-the-width', ''], ['b', 'x']], { width: 10 }), ['a-head-past-the-width', 'b                      x'], 'a blank last cell keeps its row')
+})
+
 test('pairs: a label/value block aligned on the label, indented; a value longer than the line gets its own line, unbroken', () => {
   assert.deepEqual(pairs([['state', 'on'], ['daemon', 'running']]), ['  state   on', '  daemon  running'])
   assert.deepEqual(pairs([['a', 'b']], { indent: 0 }), ['a  b'])

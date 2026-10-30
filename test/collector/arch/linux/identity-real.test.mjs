@@ -1,6 +1,6 @@
 // test/collector/arch/linux/identity-real.test.mjs — who a process is, from the REAL /proc of this Linux machine: the twin of
 // test/collector/arch/darwin/identity-real.test.mjs over the same table (test/helpers/real-procs.mjs; 0.1 §3 约定 2 / 3, G3; RFC 4.6 「认进程」; D51;
-// plan 2026-10-14-d51-name-allowlist §5, §7). The system's `sleep`, copied under a tmpDir() into each install shape and started, goes both ways a
+// 0.1 §3 约定 2 / 3). The system's `sleep`, copied under a tmpDir() into each install shape and started, goes both ways a
 // process is judged: the collector's facts (/proc exe, cmdline, environ → registry.match) and `off`'s table (listProcs → harnessesOf, as one answer, over the
 // liveness snapshot). /proc has no tool output to record: the fake side of this contract is the synthetic /proc trees the other linux tests build.
 import test, { after } from 'node:test'

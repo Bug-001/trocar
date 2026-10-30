@@ -139,7 +139,7 @@ test('an INJECTED helper (the daemon\'s warm one) that fails does not end the di
 })
 
 
-test('plan §E.7 ruling 2: the win32 facts are darwin\'s shape (routing proxy, the processes by the name list, the listeners, the OS proxy); the per-form half is the model\'s, so with nothing installed there is no form to draw and the topology says so', async () => {
+test('the win32 facts are darwin\'s shape (routing proxy, the processes by the name list, the listeners, the OS proxy); the per-form half is the model\'s, so with nothing installed there is no form to draw and the topology says so', async () => {
   const home = tmpDir('trocar-wf-shape-')
   const helper = { close: async () => {}, call: async (verb) => {
     if (verb === 'ps') return { procs: [{ pid: 4242, name: 'claude.exe', exe: 'C:\\Users\\u\\.local\\bin\\claude.exe', cmdline: 'claude', cmdlineState: 'ok' },

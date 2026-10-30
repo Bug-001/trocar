@@ -1,4 +1,4 @@
-// holders.mjs (core/proxymode) — the daemon's side of P12 (RFC 4.11 P12; plan decision #4): after `off` the daemon stays up while a holder lives.
+// holders.mjs (core/proxymode) — the daemon's side of P12 (RFC 4.11 P12): after `off` the daemon stays up while a holder lives.
 // The judge is src/off/holders.mjs holdersOf (standalone-safe), so the CLI with the daemon down computes the same table; here are
 // what only the daemon has: the door record it keeps on disk (door-seen.json: the lives met at accept and PAC serve), the poll of the process table (every 10 s while draining, never a
 // connection count — an idle holder still counts), and the exit rule. These are registered on the daemon.

@@ -1,4 +1,4 @@
-// test/off/identity.test.mjs — the name half of D51 (RFC 4.6 §身份与信任 R1 / R6; plan 2026-10-14-d51-name-allowlist §2.1–2.2): the
+// test/off/identity.test.mjs — the name half of D51 (RFC 4.6 §身份与信任 R1 / R6): the
 // normalizer, the derived facts names / name0 / rest, the user's ~/.trocar/agents.json (every problem code with its item and an actionable
 // detail, G5), the merge with the presets, the compiler's refusals, and a compiled list surviving the manifest's JSON round trip (G8).
 import test from 'node:test'

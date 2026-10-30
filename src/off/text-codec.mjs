@@ -1,4 +1,4 @@
-// text-codec.mjs — the bytes of a user's config file to text and back (RFC 4.6 §安装清单与卸载「文件的编码」, plan 2026-10-13 file-fidelity §2.1).
+// text-codec.mjs — the bytes of a user's config file to text and back (RFC 4.6 §安装清单与卸载「文件的编码」).
 // One table of the forms a file can prove by its own bytes, no branch per language or code page, no fallback: a byte-order mark names a
 // Unicode form (UTF-8, UTF-16LE, UTF-16BE; UTF-32 is known but not edited), no mark means strict UTF-8. Two more gates after that: the text
 // holds no U+0000 (a mark-less UTF-16 file or a binary one is valid UTF-8 byte for byte), and encoding the text again gives the same bytes.
