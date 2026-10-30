@@ -5,7 +5,7 @@
 // undoes it) and pulls; then it starts a NEW process on the new code, which finishes (the daemon, `install`, `on`). The handover is one
 // public command, one file that holds nothing but harness names (`~/.trocar/collector/update.json`), and the daemon's `code`.
 // After the merge this process loads nothing: everything it may need is imported above, and all it does is spawn the child and wait.
-//   runUpdateCli(argv, { io, env, home, platform, deps }) → exit (0 updated or already up to date · 1 not updated / not finished · 2 usage, no git checkout, root, nobody to confirm)
+//   runUpdateCli(argv, { io, env, home, platform, deps }) → exit (0 updated or already up to date · 1 not updated / not finished · 2 usage, an npm copy with nothing to finish, no git checkout, root, nobody to confirm)
 //   deps (0.1 §3): `exec` (the spawnSync-shaped runner of git / npm), `child` (what runs the new code's `trocar update`), `off` / `on` /
 //   `install` (the three commands this one runs), `daemonCode` (what the daemon answers on its control channel), `unit`, `fs`, `root`.
 import nodeOs from 'node:os'
@@ -16,6 +16,7 @@ import { codeId, codeIdOf, packageRoot, gitDir } from '../version.mjs'
 import { execTool, runAsync } from '../off/exec.mjs'
 import { collectorDir, stateFile } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
+import { readManifest } from '../off/manifest.mjs'
 import { controlEndpointFor } from '../off/control-client.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
 import { commandNamed, usageLine } from './commands.mjs'
@@ -36,7 +37,7 @@ const COST = `While it runs those agents are not captured; connections they make
 export async function runUpdateCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const flags = new Set()
   for (const a of argv) {
-    if (!FLAGS.has(a)) { io.err(`trocar update: ${a.startsWith('-') ? `unknown option '${a.split('=')[0]}'` : 'takes no agent name: the harnesses it switches off and on again are the ones that are on'}\n${USAGE}`); return EXIT.usage }
+    if (!FLAGS.has(a)) { io.err([...wrap(`trocar update: ${a.startsWith('-') ? `unknown option '${a.split('=')[0]}'` : 'takes no agent name: the harnesses it switches off and on again are the ones that are on'}`), USAGE].join('\n')); return EXIT.usage }
     flags.add(a)
   }
   return update({ io, env, home, platform, deps, flags })
@@ -60,17 +61,83 @@ async function update({ io, env, home, platform, deps, flags }) {
     else for (const l of lines) io.out(l)
     return exit
   }
-  /** A reason nothing was done: `trocar update: <why>`, exit 1 (the receipt carries it as its error). */
-  const no = (code, why, exit = EXIT.incomplete) => {
+  /** A reason nothing was done: `trocar update: <why>`, exit 1 (the receipt carries it as its error). `under`: a line printed below it without
+   *  --json (with it, the receipt carries what that line says). */
+  const no = (code, why, exit = EXIT.incomplete, under = null) => {
     r.error = { code, message: why }
     r.notes.push(why)
-    if (!json) io.err(`trocar update: ${why}`)
+    // §1.1⑥: folded at 80 columns, never broken mid-word by the terminal; a reason's own lines (git's stderr) stay lines
+    const fold = (text) => String(text).split('\n').flatMap((l) => wrap(l))
+    if (!json) for (const l of fold(`trocar update: ${why}`)) io.err(l)
+    if (!json && under) for (const l of fold(under)) io.err(l)
     r.ok = false
     if (json) io.out(JSON.stringify(r, null, 2))
     return exit
   }
 
-  // §5.5: a checkout is the only way trocar is installed today (D67②). Anything else is told how it was installed, and nothing is touched.
+  // §1.4: the plan, then `--dry-run` / `--yes` / the question — EVERY phase goes through this one gate, the finish and the daemon-only
+  // step included: they stop a daemon and write to the agents' files too, and `--dry-run` writes nothing. → an exit code when nothing
+  // is to be done, null to go on.
+  // `cost`: what running the plan costs, said under it — null when it costs nothing worth a line
+  const gate = async (rows, planned, cost) => {
+    lines.push('Plan', ...pairs(rows), ...(cost ? ['', ...wrap(cost)] : []))
+    if (!json) for (const l of lines.splice(0)) io.out(l) // the plan is read before the question, and before any refusal (§1.4)
+    if (dry) return done(EXIT.ok, { planned })
+    if (yes) return null // the answer is given on the command line
+    if (json || !isInteractive(io)) { if (!json) io.err(NEEDS_YES); return done(EXIT.usage, { planned, blocked: [NEEDS_YES] }) }
+    if (!(await confirm(io, 'Proceed? [y/N] '))) { io.out('Nothing was changed.'); return done(EXIT.usage, { planned, blocked: ['you answered no'] }) }
+    return null
+  }
+
+  /** The code is the newest and the daemon runs another one (or says none): only the one step that replaces it (§5.5). */
+  const daemonOnly = async (running) => {
+    const runs = running || 'code it does not name'
+    const g = await gate([['Code', `${r.from} (already the newest)`], ['Collector', `runs ${runs}, so it is replaced by ${r.from}`]],
+      [{ what: 'daemon', detail: `the collector runs ${runs}, so it is stopped and started again on ${r.from}` }], CUT)
+    if (g !== null) return g
+    return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from: r.from, on: [] }, only: 'daemon' })
+  }
+
+  /** The handover file (D67①) = an update of a moment ago that did not finish: this run is its step 4, whatever the code says. */
+  const pending = async () => readHandover(handover, fs, deps.harnessIds || (await (await import('../collector/harness/index.mjs')).loadHarnesses()).map((h) => h.name))
+  const resume = async (waiting) => {
+    if (waiting.dropped.length) r.notes.push(`${waiting.dropped.join(', ')}: this update's note names ${waiting.dropped.length > 1 ? 'agents' : 'an agent'} this trocar has no descriptor for, so capture is not switched on for ${waiting.dropped.length > 1 ? 'them' : 'it'}`)
+    const to = codeId(root)
+    r.from = waiting.from || r.from; r.to = to; r.harnesses = waiting.on // C.2: the receipt of the plan says what the finish does, --dry-run and a refused question included
+    const replaced = (await daemonCode({ platform, dir, env, fs, deps })) !== to // as replaceDaemon judges it: a collector on this code is left running
+    const g = await gate([['Code', `${r.from} -> ${to}`], ['Switched on again', waiting.on.join(', ') || 'nothing was being captured']],
+      [{ what: 'finish', detail: `an update to ${to} is waiting to be finished: ${replaced ? 'the collector is replaced, ' : ''}install runs again${waiting.on.length ? `, and capture is switched on again for ${waiting.on.join(', ')}` : ''}`, harnesses: waiting.on }], replaced ? CUT : null)
+    if (g !== null) return g
+    return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting })
+  }
+
+  // §5.5 · D67②: an npm copy is updated with npm; the code npm put here is the new code, so this run is step 4 — the collector, install
+  // and `on` of the harnesses being captured, the same finish a git update ends with — while the collector or the last install ran other
+  // code. The install record counts as much as the collector: a collector that came back on this copy by itself (a reboot, a login) has not
+  // run install or `on` on it. The handover file is written first, so a finish that does not get through is taken up by the next run.
+  const pkg = npmCopy(root, fs)
+  if (pkg) {
+    const waiting = await pending()
+    if (waiting) return resume(waiting)
+    const running = await daemonCode({ platform, dir, env, fs, deps })
+    const installed = installedCode(home, fs)
+    const to = r.to = r.from
+    const daemonOther = typeof running === 'string' && running !== to
+    if (!daemonOther && (installed === undefined || installed === to)) {
+      return no('npm-package', `this trocar was installed with npm. Get the newest with npm i -g ${pkg}@latest, then run trocar update to restart the collector on it.`, EXIT.usage)
+    }
+    const from = daemonOther ? running : installed
+    const why = daemonOther ? `the collector runs ${running}, so it is replaced by ${to}, install runs again` : `install last ran on ${installed || 'code it does not name'}, so it runs again on ${to}`
+    const on = harnessesOn({ home, fs })
+    if (on.error) return no('state-unreadable', on.error)
+    r.from = from || r.from; r.harnesses = on.ids // C.2: the receipt of the plan says what the finish does, --dry-run and a refused question included
+    const g = await gate([['Code', `${from || 'code it does not name'} -> ${to} (installed with npm)`], ['Switched on again', on.ids.join(', ') || 'nothing is being captured']],
+      [{ what: 'finish', detail: `${why}${on.ids.length ? `, and capture is switched on again for ${on.ids.join(', ')}` : ''}`, harnesses: on.ids }], running !== to ? CUT : null) // replaceDaemon leaves a collector on this code running
+    if (g !== null) return g
+    try { writeHandover(handover, { from, on: on.ids }, fs) } catch (e) { return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so nothing was changed`) }
+    return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from, on: on.ids } })
+  }
+  // a git checkout is the other way (D67②); anything else is told how it was installed, and nothing is touched
   if (!gitDir(root)) return no('not-a-checkout', NOT_GIT, EXIT.usage)
 
   const git = (...args) => execTool('git', ['-C', root, ...args], { run: deps.exec || null, env })
@@ -88,40 +155,14 @@ async function update({ io, env, home, platform, deps, flags }) {
     return no('not-fast-forward', `this checkout has commits ${upstream.out} does not have, so it cannot be fast-forwarded. Push or put them aside, then run trocar update again`)
   }
 
-  // §1.4: the plan, then `--dry-run` / `--yes` / the question — EVERY phase goes through this one gate, the finish and the daemon-only
-  // step included: they stop a daemon and write to the agents' files too, and `--dry-run` writes nothing. → an exit code when nothing
-  // is to be done, null to go on.
-  const gate = async (rows, planned, cost) => {
-    lines.push('Plan', ...pairs(rows), '', ...wrap(cost))
-    if (!json) for (const l of lines.splice(0)) io.out(l) // the plan is read before the question, and before any refusal (§1.4)
-    if (dry) return done(EXIT.ok, { planned })
-    if (yes) return null // the answer is given on the command line
-    if (json || !isInteractive(io)) { if (!json) io.err(NEEDS_YES); return done(EXIT.usage, { planned, blocked: [NEEDS_YES] }) }
-    if (!(await confirm(io, 'Proceed? [y/N] '))) { io.out('Nothing was changed.'); return done(EXIT.usage, { planned, blocked: ['you answered no'] }) }
-    return null
-  }
-
-  // the handover file (D67①) = an update of a moment ago that did not finish: this run is its step 4, whatever the commits say
-  const waiting = readHandover(handover, fs, deps.harnessIds || (await (await import('../collector/harness/index.mjs')).loadHarnesses()).map((h) => h.name))
-  if (waiting) {
-    if (waiting.dropped.length) r.notes.push(`${waiting.dropped.join(', ')}: this update's note names ${waiting.dropped.length > 1 ? 'agents' : 'an agent'} this trocar has no descriptor for, so capture is not switched on for ${waiting.dropped.length > 1 ? 'them' : 'it'}`)
-    const to = codeId(root)
-    const g = await gate([['Code', `${waiting.from || r.from} -> ${to}`], ['Switched on again', waiting.on.join(', ') || 'nothing was being captured']],
-      [{ what: 'finish', detail: `an update to ${to} is waiting to be finished: the collector is replaced, install runs again${waiting.on.length ? `, and capture is switched on again for ${waiting.on.join(', ')}` : ''}`, harnesses: waiting.on }], CUT)
-    if (g !== null) return g
-    return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting })
-  }
+  const waiting = await pending()
+  if (waiting) return resume(waiting)
 
   if (head === target) {
     const running = await daemonCode({ platform, dir, env, fs, deps })
     r.to = r.from
     if (running === r.from) { lines.push(`trocar update: already up to date (${r.from}).`); return done(EXIT.ok) }
-    // the code is the newest, the daemon runs another one (or says none): only the one step that replaces it (§5.5)
-    const runs = running || 'code it does not name'
-    const g = await gate([['Code', `${r.from} (already the newest)`], ['Collector', `runs ${runs}, so it is replaced by ${r.from}`]],
-      [{ what: 'daemon', detail: `the collector runs ${runs}, so it is stopped and started again on ${r.from}` }], CUT)
-    if (g !== null) return g
-    return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from: r.from, on: [] }, only: 'daemon' })
+    return daemonOnly(running)
   }
 
   // §1.4: the plan — from which commit to which, and which harnesses go off and on again
@@ -181,22 +222,29 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
   const replaced = await replaceDaemon({ env, home, platform, deps, dir, root, fs, problems })
   r.restarted = replaced.restarted
   if (replaced.notes.length) r.notes.push(...replaced.notes)
-  if (only === 'daemon') {
-    if (problems.length) return no('daemon-not-replaced', problems[0])
+  const daemonFailed = problems.length > 0
+  // the login entry runs another copy: install here would quietly point it at this one — which copy it runs is the operator's to say
+  if (only === 'daemon' || replaced.elsewhere) {
+    if (daemonFailed) { r.problems = problems; return no('daemon-not-replaced', problems[0]) }
     lines.push(`trocar is now running ${r.to}.`)
     return done(EXIT.ok)
   }
   const installed = await step(deps.install || runInstallCli, ['--yes', '--json'], { io, env, home, platform, deps })
   r.install = installed.doc
-  if (installed.exit !== EXIT.ok) problems.push(`the new code could not finish installing itself (trocar install exit ${installed.exit}). ${AGAIN}`)
+  let failed = null // the step that did not finish: its own reason is printed under the problem (with --json, r.install / r.on carry it)
+  if (installed.exit !== EXIT.ok) { problems.push(`the new code could not finish installing itself (trocar install exit ${installed.exit}). ${AGAIN}`); failed = { command: 'install', doc: installed.doc } }
   if (!problems.length && waiting.on.length) {
     const back = await step(deps.on || runOnCli, [...waiting.on, '--yes', '--json'], { io, env, home, platform, deps })
     r.on = back.doc
-    if (back.exit !== EXIT.ok) problems.push(`${waiting.on.join(', ')}: capture could not be switched on again (trocar on exit ${back.exit}). ${AGAIN}`)
+    if (back.exit !== EXIT.ok) { problems.push(`${waiting.on.join(', ')}: capture could not be switched on again (trocar on exit ${back.exit}). ${AGAIN}`); failed = { command: 'on', doc: back.doc } }
   }
-  if (problems.length) { r.problems = problems; return no('not-finished', problems[0]) } // the file stays: the next run goes on from here
+  if (problems.length) { // the file stays: the next run goes on from here
+    r.problems = problems
+    const why = !daemonFailed && failed && reasonOf(failed.doc) // problems[0] is that step's line unless the collector's came first
+    return no(daemonFailed ? 'daemon-not-replaced' : 'not-finished', problems[0], EXIT.incomplete, why ? `trocar ${failed.command}: ${why}` : null)
+  }
   try { fs.rmSync(handover, { force: true }) } catch (e) { return no('handover-not-removed', `this update finished, but it could not be written off (${(e && e.message) || e})`) }
-  lines.push(`trocar is now ${r.to} (it was ${r.from}).`,
+  lines.push(`trocar is now ${r.to}${waiting.from && waiting.from !== r.to ? ` (it was ${waiting.from})` : ''}.`, // no record of the code before: no "was"
     ...pairs([['Collector', r.restarted ? 'running the new code' : 'already running this code'], ['Capturing again', waiting.on.join(', ') || 'nothing was being captured']]))
   return done(EXIT.ok)
 }
@@ -223,6 +271,10 @@ async function replaceDaemon({ env, home, platform, deps, dir, root, fs, problem
   const up = await ensureDaemonUp({ osName: platform, dir, env, fs, unit, register: true, put: (e) => { if (e && e.reason) notes.push(e.reason) }, ...(deps.request ? { request: deps.request } : {}), ...(deps.socketPath ? { socketPath: deps.socketPath } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) })
   notes.push(...up.notes)
   if (!up.up) { problems.push(`the collector did not come back up (${up.problems[0] || 'it does not answer'}). ${AGAIN}`); return { restarted: false, notes } }
+  // a collector that answers is not yet one on THIS code: the login entry starts the copy install registered, and with npm another copy
+  // (global, a project's, the npx cache) is common — what it runs is asked again, never assumed (§5.5)
+  const now = await daemonCode({ platform, dir, env, fs, deps })
+  if (now !== codeId(root)) { problems.push(`the collector came back on ${now || 'code it does not name'}, not on ${codeId(root)}: the login entry starts another copy of trocar. Run trocar install from this copy, or run trocar update from the copy the login entry starts.`); return { restarted: true, notes, elsewhere: true } }
   return { restarted: true, notes }
 }
 
@@ -230,6 +282,25 @@ const loginUnit = async ({ home, env, platform, deps }) => {
   const arch = await (await import('../collector/daemon.mjs')).loadArch(platform)
   if (!arch || !arch.unit || !arch.unit.userUnit) return null
   return arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env })
+}
+
+/** The package name when the code at `root` is an npm copy — its path ends in `node_modules/<its own package.json name>` (a global or project
+ *  install, the npx cache, a tarball installed with npm) — else null (§5.5, D67②). */
+function npmCopy(root, fs) {
+  let name
+  try { name = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).name } catch { return null }
+  return typeof name === 'string' && name && root.split(path.sep).join('/').endsWith(`/node_modules/${name}`) ? name : null
+}
+
+/** The code that last ran `install` here, as its record in the install manifest names it (§5.5): undefined when install never ran; null
+ *  when the record names none (a build before the field) or the manifest cannot be read — not this code either way, and `install` says
+ *  what is wrong with a manifest it cannot use. */
+function installedCode(home, fs) {
+  let m
+  try { m = readManifest(collectorDir(home), fs) } catch { return null }
+  if (m && m.unsupported) return null
+  if (!m || !m.install || typeof m.install !== 'object') return undefined
+  return typeof m.install.code === 'string' && m.install.code ? m.install.code : null
 }
 
 /** Which code the collector runs, as it says on its control channel (D67⑤): null when none answers or it names none. The endpoint is
@@ -286,6 +357,16 @@ async function step(run, argv, { io, env, home, platform, deps }) {
   let doc = null
   try { doc = JSON.parse(out.join('\n')) } catch { /* a command that printed no document says so by its exit code */ }
   return { exit, doc }
+}
+
+/** Why a step's receipt says it did not finish (附录 C.1): its error, else the first of its problems, pending items, skipped carriers or items,
+ *  notes; null when it says nothing. */
+function reasonOf(doc) {
+  if (!doc || typeof doc !== 'object') return null
+  const rows = (k) => (Array.isArray(doc[k]) ? doc[k] : [])
+  const text = (x) => (typeof x === 'string' ? x : x && typeof x === 'object' && (x.reason || x.why) ? `${x.harness ? `${x.harness}: ` : ''}${x.reason || x.why}` : null)
+  const skipped = [...rows('carriers'), ...rows('items')].filter((x) => x && x.state === 'skipped')
+  return (doc.error && typeof doc.error.message === 'string' && doc.error.message) || [...rows('problems'), ...rows('pending'), ...skipped, ...rows('notes')].map(text).find((x) => typeof x === 'string' && x) || null
 }
 
 /** Step 1 undone with the code that wrote it (§5.5): the harnesses it switched off are switched on again. */

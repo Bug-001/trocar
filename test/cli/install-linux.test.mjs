@@ -8,7 +8,8 @@ import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { runInstallCli } from '../../src/cli/install.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
-import { readManifest } from '../../src/off/manifest.mjs'
+import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
+import { codeId } from '../../src/version.mjs'
 import { fakeIo, fakeSystem, onCtx, seedClaude, snapshot, changedFiles } from './fixtures/on-ctx.mjs'
 import { unitPath, UNIT_NAME } from '../../src/collector/arch/linux/unit.mjs'
 
@@ -28,6 +29,7 @@ test('Linux install: CA + trust entries (phase install) + trocar-off, no unit, n
   const dir = path.join(home, '.trocar', 'collector')
   const m = readManifest(dir)
   assert.equal(m.install.state, 'complete')
+  assert.equal(m.install.code, codeId(), 'the record names the code that ran install (1.6 §5.5: what update compares)')
   assert.ok(m.files.some((f) => f.role === 'ca-key') && m.entries.length > 0)
   assert.deepEqual([...m.entries, ...m.files].filter((x) => x.phase !== 'install'), [], 'every item is phase install')
   assert.equal(fs.existsSync(path.join(dir, 'state.json')), false, 'no state: that is on\'s')
@@ -36,9 +38,17 @@ test('Linux install: CA + trust entries (phase install) + trocar-off, no unit, n
   const again = fakeIo()
   assert.equal(await runInstallCli(['--yes'], ctx(again)), 0)
   assert.match(again.text(), /^Already installed\. Nothing was changed\.$/m); assertEnglish(again.text(), 'the second install')
+  // an install with nothing else to write, on other code than the last one: the record says this code ran it (an npm copy's update
+  // finishes until it does, 1.6 §5.5); `on` never says it: what it names is install's
+  const older = readManifest(dir); older.install.code = '0.0.1'; saveManifest(dir, older)
+  assert.equal(await runInstallCli(['--yes'], ctx(fakeIo())), 0)
+  assert.equal(readManifest(dir).install.code, codeId(), 'an install on other code with nothing to write names this code')
+  assert.deepEqual(certBytes(home), certs, 'and changed no certificate byte')
+  const later = readManifest(dir); later.install.code = '0.0.1'; saveManifest(dir, later)
   const onIo = fakeIo()
   assert.equal(await runOnCli(['--yes'], onCtx(home, onIo)), 0, onIo.text())
   assert.deepEqual(certBytes(home), certs, 'on wrote no certificate byte')
+  assert.equal(readManifest(dir).install.code, '0.0.1', 'on leaves the code that ran install as install wrote it')
 })
 
 // D61 (4.6 「用户级自启单元」, 1.6 §3.2 步骤 5): registering the login entry and pulling the daemon up is install's, not on's — through the
