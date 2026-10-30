@@ -38,11 +38,21 @@ function otherCopy() {
 // drain ends A, and a stop reporting it alive would be a state no platform produces. Each is exit 1, ok false, problems, not replaced, routing untouched,
 // and (where the receipt can know it) the state is what runs.
 const FAILS = { 'never-up': { state: 'not-running' }, elsewhere: { state: 'running' } }
-for (const platform of ['darwin', 'win32']) for (const fail of [null, ...Object.keys(FAILS)]) {
-  test(`${platform}: V108 — install from another copy ${fail ? `fails (${fail}) and says so` : 'replaces the collector on other code; routing is untouched; a second install leaves it'}`, { timeout: 60_000 }, async () => {
+// An earlier build: its /off knows `by` only as update and uninstall and refuses any other value with a 400, changing nothing (the handler as it
+// was before install could replace a collector). Every user upgrading from such a build meets it.
+const OLD_BY = ['update', 'uninstall']
+const olderOff = (routes) => ({ ...routes, 'POST /off': async (q) => {
+  const by = q && q.body && q.body.by
+  if (by !== undefined && !OLD_BY.includes(by)) throw Object.assign(new Error(`"by" names the command stopping the daemon: one of ${OLD_BY.join(', ')}`), { status: 400 })
+  return routes['POST /off'](q)
+} })
+for (const platform of ['darwin', 'win32']) for (const kase of [null, 'older', ...Object.keys(FAILS)]) {
+  const fail = FAILS[kase] ? kase : null
+  const older = kase === 'older'
+  test(`${platform}: V108 — install from another copy ${fail ? `fails (${fail}) and says so` : `replaces the collector on other code${older ? ' (an earlier build whose /off accepts only update and uninstall)' : ''}; routing is untouched; a second install leaves it`}`, { timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')
-    const boxA = await liveUnit({ w, platform }) // answers this checkout's code
+    const boxA = await liveUnit({ w, platform, ...(older ? { routes: olderOff } : {}) }) // answers this checkout's code
     let boxB = null
     const exec = (file, args) => ({ status: 0, stdout: /ForEach-Object/.test([file, ...args].join(' ')) ? 'boot 1740000000000\n' : '', stderr: '' })
     const deps = {
@@ -91,7 +101,8 @@ for (const platform of ['darwin', 'win32']) for (const fail of [null, ...Object.
         assert.ok(fs.readFileSync(path.join(w.home, '.codex', '.env')).equals(entry), "codex's entry file is byte for byte the same")
         const flows = flowsOf(w.dir)
         assert.deepEqual(flows.flatMap((x) => checkRecord(x)), [], 'every flows/ line is in the closed sets')
-        assert.ok(flows.some((x) => x.event === 'daemon-stop' && x.reason === 'install'), 'the old daemon-stop names install')
+        // the earlier build was asked again with the one value it knows that names a replacement of its code: update
+        assert.ok(flows.some((x) => x.event === 'daemon-stop' && x.reason === (older ? 'update' : 'install')), 'the old daemon-stop names the command')
         assert.equal(JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8')).install.code, codeId(rootB))
 
         // both model daemons share the test's pid, so the daemon lifecycle lines say the pid did not change: none is added by the second install

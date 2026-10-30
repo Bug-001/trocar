@@ -780,8 +780,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 // The collector model's daemon (4.11 §1 on / off, §3 ① ②): macOS and Windows. It writes no agent file and no ingress.json — `trocar on`
 // writes them after POST /on opened the doors and read them back; the daemon opens doors, judges at the door, signs leaves through the custody, keeps
 // a door forward-only while its holders live after off (P12), and exits after `off {exit}` only when mayExit says so. `model`: test seams only —
-// { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone } — the endpoint, the control server and the
-// engine are always the real ones.
+// { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone, routes: (routes) => routes, a test's stand-in
+// for an earlier build's handler of a route } — the endpoint, the control server and the engine are always the real ones.
 async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, stopGraceMs, foreground, upstreamCa, model, fork, queryIdleMs, code }) {
   const list = harnesses || (await loadHarnesses())
   const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
@@ -837,7 +837,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   const ready = new Promise((r) => { markReady = r })
   const gate = (fn) => async (q) => { await ready; return fn(q) }
   const board = boardFor({ P, failure, query: query.svc, tips: query.tips.of, log })
-  const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: board.routes({
+  const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: board.routes((model.routes || ((r) => r))({
     'GET /status': gate(status),
     'GET /holders': gate(() => collector.holders()),
     ...query.routes,
@@ -869,7 +869,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       }
       return r
     }),
-  }) })
+  })) })
   // only now: the control server refuses a start while another daemon answers, so a lock read before it may be a live daemon's (runDaemon's order)
   noteUncleanStop(P.lock, failure)
   seal.start() // only now (the gate claimed the collector): the lock read before this could have been a live daemon's

@@ -22,7 +22,12 @@ export async function replaceDaemon({ by, env, home, platform, deps, dir, root, 
   if (running === codeId(root)) return { restarted: false, notes, from: running }
   const { offWorld, drainDaemon } = await import('../off/orchestrate.mjs')
   const w = offWorld({ home, env, deps: { ...deps, platform } })
-  const { routing } = await drainDaemon(w, { drainMs: deps.drainMs, by })
+  let { routing } = await drainDaemon(w, { drainMs: deps.drainMs, by })
+  // a collector of an earlier build knows `by` only as the commands of its day (update and uninstall: a daemon from before install replaced
+  // collectors) and refuses another value with a 400 naming `by`, changing nothing. It is asked once more as update — a value every build that
+  // takes `by` accepts (one older still ignores the field), and the true one of those: the collector goes so that it runs another copy's code,
+  // where an exit request without `by` would be written as the operator's own off. Any other refusal stays the failure it is (D38).
+  if (by !== 'update' && routing.refused && routing.refused.status === 400 && /"by"/.test(routing.refused.message)) ({ routing } = await drainDaemon(w, { drainMs: deps.drainMs, by: 'update' }))
   notes.push(...routing.notes)
   const stopped = routing.stop || (routing.confirmed ? await w.stopDaemon({ unitManaged: w.unitManaged() }) : null)
   const pid = (stopped && Number.isInteger(stopped.pid) ? stopped.pid : null) ?? (Number.isInteger(routing.daemon.pid) ? routing.daemon.pid : null)
