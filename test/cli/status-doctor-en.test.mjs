@@ -85,7 +85,7 @@ test('§3.5 `status <harness>`: each form note prints once after Forms, its path
   const form = (id) => ({ form: id, certificate: { in_effect: true, carrier: 'plugin' }, proxy: { connected: true, written: 'http://127.0.0.1:17995', prior: null }, notes })
   const lines = statusDetail(doc({ harnesses: { agent: harness({ forms: [form('agent.cli'), form('agent.npm')] }) } }), 'agent', { now: NOW })
   clean(lines, 'status agent')
-  const flat = lines.join(' ').replace(/\s+/g, ' ')
+  const flat = lines.slice(lines.indexOf('  Forms')).join(' ').replace(/\s+/g, ' ') // after Forms
   for (const n of notes) { const s = `${n.text}${n.paths ? ` (${n.paths.join(', ')})` : ''}`; assert.equal(flat.split(s).length - 1, 1, `said once: ${s}`) }
 })
 

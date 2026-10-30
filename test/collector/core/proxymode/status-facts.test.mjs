@@ -51,7 +51,7 @@ for (const os of OSES) {
       const out = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors }, root: ROOT_OK, ctx: ctxOf(os, home) })
       for (const x of out[desc.name]) {
         const f = forms.find((y) => y.id === x.id)
-        assert.equal(x.notes.some((n) => n.code === 'harness-note' && /every extension in this host/.test(n.text)), !!f.hostTree, `${x.id}: the host-tree note`)
+        assert.equal(x.notes.length, (desc.proxyMode.effects || []).length + (desc.proxyMode.notes || []).length + (f.hostTree ? 1 : 0), `${x.id}: its hostTree note, the effects and the notes, nothing else`)
         for (const e of desc.proxyMode.effects || []) assert.ok(x.notes.some((n) => n.code === 'harness-note' && n.text === e.when && n.paths.length > 0), `${x.id}: effect ${e.id}`)
         for (const n of desc.proxyMode.notes || []) assert.ok(x.notes.some((y) => y.code === 'harness-note' && y.text === n.text), `${x.id}: note ${n.id}`)
       }

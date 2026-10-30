@@ -52,6 +52,7 @@ for (const h of harnesses) for (const os of OSES) {
       assert.ok(out.notRouted.every((x) => x.code === 'not-routed' && x.reason === 'blocker' && typeof x.at === 'string' && x.at.length > 0))
       const free = new Set(forms.filter((f) => !covered.includes(f.id)).map((f) => f.route))
       assert.deepEqual(out.results.map((x) => x.route).sort(), [...free].sort(), 'a route only blocked forms use is not written')
+      if (!free.size) assert.deepEqual(out.notes, [], 'every present form blocked: no route, so no effect and no note (CM32, CM38)')
     })
   }
 }

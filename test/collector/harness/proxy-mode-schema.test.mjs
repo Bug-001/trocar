@@ -35,6 +35,7 @@ const MUTATIONS = {
   'write-target (cwd)': (pm) => { pm.routes[firstRoute(pm)].file = { base: 'cwd', path: '.agent/settings.json' } },
   'shape (notes)': (pm) => { pm.notes = [{ id: 'launch-flag' }] },
   'shape (notes list)': (pm) => { pm.notes = 'a launch flag skips the hook' },
+  'shape (effects list)': (pm) => { pm.effects = { id: 'residue' } },
 }
 
 // The real loader over a directory of one generated module per descriptor; the module hands back an object built here (functions and all).
