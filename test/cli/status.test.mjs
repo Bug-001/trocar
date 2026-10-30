@@ -218,7 +218,7 @@ test('the daemon answers: each agent is captured or says why, and the exit code 
   assert.match(r.text, /^ {2}claude-code {2}no {8}trocar's capture helper is missing or is the wrong version$/m)
   assert.deepEqual(reasonsOf(await docOf([], { request: asDaemon(reply({ actual: 'off', mismatch: true, ...helperDown })) })), { 'claude-code': 'helper-missing', codex: 'helper-missing' }, 'a dead helper leaves the kernel with no link: the reason is the helper, not the link')
   const neg = await docOf(['claude-code'], { request: asDaemon(reply({ agents: [{ pid: 4121, agent: 'claude-code', trusted: true }], negatives: [{ pid: 4121, host: 'api.anthropic.com', cause: 'client-rejected-leaf' }] })) })
-  assert.deepEqual(neg.harnesses['claude-code'].processes.map((p) => [p.pid, p.reason]), [[4121, 'negative-cache']])
+  assert.deepEqual(neg.harnesses['claude-code'].processes.map((p) => [p.pid, p.reason, p.cause]), [[4121, 'negative-cache', 'client-rejected-leaf']], 'the engine\'s cause rides on the process (1.6 附录 C.3)')
 })
 
 test('the entry on disk decides when no process does: intact when the value is there (the file may have been rewritten), entry-missing when it is gone, entry-changed when it is something else', async () => {
