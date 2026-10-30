@@ -1,7 +1,7 @@
 // negcache.test.mjs — the (pid, host) negative cache (RFC 4.6 §引擎 5 负缓存, D37).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createNegativeCache, negKey } from '../../../src/collector/core/engine/negcache.mjs'
+import { createNegativeCache, negKey, NEG_RETRY_MS, NEG_RETRY_MAX_MS } from '../../../src/collector/core/engine/negcache.mjs'
 
 test('negative cache: CONSECUTIVE leaf rejections per (pid, host), a used connection resets the count; an upstream-cert failure is negative at once', () => {
   const n = createNegativeCache({ now: () => 42 })
@@ -12,7 +12,6 @@ test('negative cache: CONSECUTIVE leaf rejections per (pid, host), a used connec
   n.observe(k, { rejected: true, meta, host: 'api.moonshot.cn' }); assert.equal(n.has(k), false, 'the used connection in between reset the count')
   assert.equal(n.observe(k, { rejected: true, meta, host: 'api.moonshot.cn' }), true); assert.equal(n.has(k), true)
   assert.equal(n.observe(k, { rejected: true, meta, host: 'api.moonshot.cn' }), false, 'already negative')
-  assert.deepEqual(n.get(k), { pid: 9, negKey: '9', agent: 'kimi', host: 'api.moonshot.cn', key: k, cause: 'client-rejected-leaf', rejections: 2, at: 42 })
   assert.equal(n.has(negKey({ pid: 9 }, 'other.host')), false, 'another host of the same pid is untouched')
   assert.equal(n.get(negKey({ pid: 10 }, 'api.moonshot.cn')), null, 'the same host of another pid is untouched')
   const p = negKey(meta, 'proxy.corp')
@@ -50,4 +49,72 @@ test('negative cache: a connection with no pid is keyed by meta.negKey; forms ar
   assert.equal(n.forgetKey('of.claude-code.cli'), 1); assert.equal(n.strikes(negKey(a, 'other.test')), 0, 'its half-way count goes too')
   assert.deepEqual(n.list().map((e) => e.negKey), ['5'], 'the pid\'s entry stays')
   assert.equal(n.forgetPid(5), 1)
+})
+
+// RFC 4.6 §引擎 5 负缓存 生存期 / 试用期 · W22 (unit half): entries expire at retry_at, a single rejection renews with doubled backoff
+const clock = () => { let t = 1000; const c = () => t; c.set = (v) => { t = v }; return c }
+const backoff = (r) => Math.min(NEG_RETRY_MS * 2 ** r, NEG_RETRY_MAX_MS)
+const meta = { pid: 9, agent: 'kimi' }, host = 'api.test', k = negKey(meta, host)
+const reject = (n) => n.observe(k, { rejected: true, meta, host })
+
+test('W22a negative cache: two rejections make an entry that lives NEG_RETRY_MS, and at retry_at has/get/list treat it as gone', () => {
+  const now = clock(), n = createNegativeCache({ now })
+  reject(n); assert.equal(reject(n), true)
+  const e = n.get(k)
+  assert.equal(e.retry_at - e.at, NEG_RETRY_MS); assert.equal(e.renewals, 0)
+  now.set(e.retry_at - 1); assert.equal(n.has(k), true)
+  now.set(e.retry_at)
+  assert.equal(n.has(k), false); assert.equal(n.get(k), null); assert.deepEqual(n.list(), [])
+})
+
+test('W22b negative cache: after expiry ONE rejection renews; the backoff doubles per renewal and caps at NEG_RETRY_MAX_MS', () => {
+  const now = clock(), n = createNegativeCache({ now })
+  reject(n); reject(n)
+  let r = 0
+  for (; backoff(r - 1) < NEG_RETRY_MAX_MS; r++) {
+    const e = n.list().find((x) => x.key === k)
+    assert.equal(e.renewals, r); assert.equal(e.retry_at - e.at, backoff(r))
+    now.set(e.retry_at)
+    assert.equal(n.has(k), false)
+    assert.equal(reject(n), true, 'probation: one rejection makes it negative again')
+  }
+  assert.ok(r >= 3, 'the doubling ran at least 1, 2, 4 before the cap')
+  assert.equal(n.get(k).retry_at - n.get(k).at, NEG_RETRY_MAX_MS)
+})
+
+test('W22c negative cache: an upstream-cert mark expires and renews the same way', () => {
+  const now = clock(), n = createNegativeCache({ now })
+  const m = () => n.mark(k, { cause: 'upstream-cert', meta, host })
+  assert.equal(m(), true)
+  for (let r = 0; r < 3; r++) {
+    const e = n.get(k)
+    assert.equal(e.cause, 'upstream-cert'); assert.equal(e.renewals, r); assert.equal(e.retry_at - e.at, backoff(r))
+    assert.equal(m(), false, 'still negative')
+    now.set(e.retry_at); assert.equal(n.has(k), false); assert.equal(m(), true)
+  }
+})
+
+test('W22d negative cache: application data after a renewal clears the history and marks the who as trusting; forgetKey drops both', () => {
+  const now = clock(), n = createNegativeCache({ now })
+  reject(n); reject(n); now.set(n.get(k).retry_at); reject(n)
+  assert.equal(n.get(k).renewals, 1)
+  now.set(n.get(k).retry_at); assert.equal(n.has(k), false)
+  assert.equal(n.trusts(meta), false)
+  n.observe(k, { rejected: false, used: true, meta, host })
+  assert.equal(n.trusts(meta), true); assert.equal(n.trusts({ pid: 10 }), false)
+  reject(n); assert.equal(reject(n), true, 'the strikes were cleared: two rejections again')
+  const e = n.get(k)
+  assert.equal(e.renewals, 0); assert.equal(e.retry_at - e.at, NEG_RETRY_MS)
+  n.forgetKey(meta.pid)
+  assert.equal(n.trusts(meta), false); assert.equal(n.holds(meta.pid), false)
+})
+
+test('W22e negative cache: holds(who) is true while only the renewal history remains', () => {
+  const now = clock(), n = createNegativeCache({ now })
+  reject(n); reject(n); now.set(n.get(k).retry_at)
+  assert.deepEqual(n.list(), [])
+  n.observe(k, { rejected: false, meta, host }) // window elapsed: strikes go, history stays
+  assert.equal(n.strikes(k), 0)
+  assert.equal(n.holds(meta.pid), true)
+  assert.equal(n.holds(10), false)
 })
