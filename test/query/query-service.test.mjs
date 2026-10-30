@@ -732,19 +732,31 @@ test('a worker SIGKILLed after several checkpoint intervals of a fold leaves a r
 // whole index to find the kicked call's session; on a cold corpus (no index yet: the read scans every raw line of every segment) that
 // read outlasts idleMs, and the worker reports it per segment and chunk, so the idle clock does not end it before the fold. Fork and
 // module load report nothing, so idleMs outlasts them, and the worker's own idle period (worker.mjs IDLE_SLICE_MS) as QUERY_IDLE_MS
-// does. Axis: the read's length, against idleMs. No fixed window: the wait lasts while the worker reports and fails after STALL ms without.
+// does. Axis: the read's length, against idleMs. The corpus is sized on this machine: the read of a few filler segments, timed in
+// process on a throwaway home, sets how many segments make the read last READS times idleMs. No fixed window: the wait lasts while the
+// worker reports and fails after STALL ms without.
 test('kick: a segment index read longer than idleMs before the first slice is reported, and the kicked session is folded to its frontier (3.5 #32)', { timeout: 600_000 }, async (t) => {
   const { recordId } = await import('../../src/collector/core/record/segments.mjs')
-  const IDLE = 4_000, STALL = 30_000, FILLER = 8, PER = 50_000
-  const home = rawHome('trocar-qsvc-')
-  // the corpus: other traffic (no model call, no session) in FILLER cold segments, then one segment with the kicked session's two calls
-  for (let g = 0; g < FILLER; g++) {
+  const IDLE = 3_000, STALL = 30_000, PER = 10_000, READS = 2
+  // other traffic (no model call, no session): one cold segment of PER records
+  const filler = (home, g) => {
     const lines = []
     for (let i = 0; i < PER; i++) lines.push(JSON.stringify({ ts: '2026-10-24T09:00:00.000Z', endpoint: `/v1/other/${i}`, method: 'GET', req_headers: { accept: '*/*' }, req_body: null,
       resp: { status: 200, kind: 'json', body: { ok: true } }, id: `o_${g}_${i}`, ts_request: '2026-10-24T09:00:00.000Z', is_llm_call: false, capture: 'transparent',
       host: 'other.example.test', traffic_class: 'other', proc: { pid: 9, exe: '/x/kimi', agent: 'kimi' } }))
-    writeSegmentLines(home, `20261024T0900${String(g).padStart(2, '0')}Z`, lines)
+    writeSegmentLines(home, `20261024T09${String(Math.floor(g / 60)).padStart(2, '0')}${String(g % 60).padStart(2, '0')}Z`, lines)
   }
+  // calibration: a first read pays the one-off costs, then the read of CAL more segments is the cost per segment
+  const cal = rawHome('trocar-qsvc-cal-'), CAL = 3
+  filler(cal, 0)
+  await indexRows({ home: cal, errors: [] })
+  for (let g = 1; g <= CAL; g++) filler(cal, g)
+  const c0 = performance.now()
+  await indexRows({ home: cal, errors: [] })
+  const perSegment = (performance.now() - c0) / CAL, FILLER = Math.max(2, Math.ceil(READS * IDLE / perSegment))
+  const home = rawHome('trocar-qsvc-')
+  // the corpus: FILLER cold filler segments, then one segment with the kicked session's two calls
+  for (let g = 0; g < FILLER; g++) filler(home, g)
   const segment = '20261024T110000Z'
   const line = (n) => JSON.stringify({ ts: `2026-10-24T11:00:0${n}.000Z`, endpoint: '/v1/chat/completions', method: 'POST',
     req_headers: { 'content-type': 'application/json' }, req_body: JSON.stringify({ model: 'm', prompt_cache_key: 'read-kicked-1', messages: [{ role: 'user', content: `ask ${n}` }] }),
@@ -766,10 +778,10 @@ test('kick: a segment index read longer than idleMs before the first slice is re
       if (reports !== seen) { seen = reports; at = Date.now() } else if (Date.now() - at > STALL) throw new Error(`the kicked worker: no progress for ${STALL} ms`)
       await new Promise((d) => setTimeout(d, 20))
     }
-    t.diagnostic(JSON.stringify({ idleMs: IDLE, firstFold, reports, workers: kids.length }))
+    t.diagnostic(JSON.stringify({ idleMs: IDLE, perSegment: Math.round(perSegment), segments: FILLER, firstFold, reports, workers: kids.length }))
     assert.equal(kids.length, 1, 'one worker read the index and folded the session')
     assert.equal(lastFrontier(log)?.f, last, 'the worker left with the kicked session folded to its frontier')
     assert.deepEqual(said, [], 'an idle exit is not a query-failed')
-    assert.ok(firstFold != null && firstFold > IDLE, `the read before the first slice outlasted idleMs (${firstFold} ms > ${IDLE} ms): else this case shows nothing`)
+    assert.ok(firstFold != null && firstFold > IDLE, `the read before the first slice outlasted idleMs (${firstFold} ms > ${IDLE} ms): else the calibration under-sized the corpus and this case shows nothing`)
   } finally { svc.stop() }
 })
