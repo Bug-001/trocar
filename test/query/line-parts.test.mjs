@@ -246,3 +246,53 @@ test('4.3 #8: a line read by its index that is another generation\'s bytes: rere
     }
   }
 })
+
+// stderr lines said while f() runs (in this process: the line file says its faults here)
+function stderrOf(f) {
+  const said = [], write = process.stderr.write
+  process.stderr.write = (c, ...r) => { said.push(String(c)); return typeof r[r.length - 1] === 'function' ? (r[r.length - 1](), true) : true }
+  try { f() } finally { process.stderr.write = write }
+  return said.join('').split('\n').filter(Boolean)
+}
+const linesOf = (r, n) => Array.from({ length: n }, () => lineOf(r)).filter((l) => Buffer.byteLength(l) < 40_000)
+
+// 4.3 §4 分片 「写者只在它的索引所说的末尾写」: a handle whose files were changed by someone else (its directory removed as the GC
+// does, or the tail cut back and written again by another handle) writes nothing: append, seal and saveSidecar throw ELINEPART, and
+// no file of its line file holds its lines afterwards.
+test('4.3 #8: a writer whose tail on disk is not the length it knows writes nothing: ELINEPART', () => {
+  for (const [seed, how, sealed] of [[1, 'removed', false], [2, 'removed', true], [3, 'rewritten', false], [4, 'rewritten', true]]) {
+    const r = rng(seed), dir = path.join(tmpDir('trocar-mine-'), 'ctx', 'k'), base = path.join(dir, 'x'), tag = `${how}${sealed ? ' after a seal' : ''}`
+    const a = lineFile({ fs, base })
+    for (const l of linesOf(r, 40)) a.append(l)
+    if (sealed) a.seal({ partBytes: 4 << 10, frameBytes: 1 << 10 })
+    const mark = `{"mine":"${'q'.repeat(64)}"}\n`
+    if (how === 'removed') fs.rmSync(dir, { recursive: true, force: true })
+    else { const b = lineFile({ fs, base }); b.cut(Math.floor(b.bytes / 2)); b.append('{"other":1}\n'); b.close() }
+    const before = fs.existsSync(dir) ? fs.readdirSync(dir).sort().map((n) => [n, fs.readFileSync(path.join(dir, n))]) : null
+    assert.throws(() => a.append(mark), { code: 'ELINEPART' }, `${tag}: append`)
+    assert.throws(() => a.saveSidecar({ head: { bytes: a.bytes }, parts: [] }), { code: 'ELINEPART' }, `${tag}: saveSidecar`)
+    try { a.seal({ partBytes: 1, frameBytes: 1 }) } catch (e) { assert.equal(e.code, 'ELINEPART', `${tag}: seal`) }
+    const after = fs.existsSync(dir) ? fs.readdirSync(dir).sort().map((n) => [n, fs.readFileSync(path.join(dir, n))]) : null
+    assert.deepEqual(after, before, `${tag}: the files are as the other writer left them`)
+    a.close()
+  }
+})
+
+// 4.3 §4 分片: a part that does not decode at its first read after the open says the same one stderr line per base as a line that is
+// no whole line: `trocar query: <dir>: …`, once.
+test('4.3 #8: a part gone under an open handle: the read throws ELINEPART and stderr says one line for that directory', () => {
+  const r = rng(5), dir = path.join(tmpDir('trocar-said-'), 'ctx', 'k'), base = path.join(dir, 'x')
+  const w = lineFile({ fs, base }), want = []
+  for (const l of linesOf(r, 60)) want.push({ off: w.append(l), len: Buffer.byteLength(l) - 1 })
+  w.seal({ partBytes: 4 << 10, frameBytes: 1 << 10 }); w.close()
+  releaseParts()
+  const a = lineFile({ fs, base, write: false })
+  const part = fs.readdirSync(dir).find((n) => n.endsWith('.br')), [p0, p1] = part.match(/(\d+)-(\d+)/).slice(1).map(Number)
+  fs.rmSync(path.join(dir, part))
+  const inPart = want.filter((l) => l.off >= p0 && l.off + l.len < p1)
+  assert.ok(inPart.length > 1, 'lines in the part')
+  const said = stderrOf(() => { for (const l of inPart.slice(0, 2)) assert.throws(() => a.json(l.off, l.len), { code: 'ELINEPART' }) })
+  assert.equal(said.length, 1, `one line: ${said}`)
+  assert.ok(said[0].startsWith(`trocar query: ${dir}`), said[0])
+  a.close()
+})
