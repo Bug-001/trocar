@@ -248,18 +248,19 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
 
   // A writer writes only at the end its index knows (4.3 §4 分片): its plain tail on disk holds exactly the bytes it wrote there (no
   // file: none). Else someone else changed its files (its directory removed, the tail cut back and written again by another handle):
-  // this handle writes nothing and throws ELINEPART, which the owner rereads on.
-  function mine() {
+  // this handle writes nothing and throws ELINEPART, which the owner rereads on. Before a settle (`atLeast`) the tail may also hold
+  // this handle's own torn bytes past `end`, never fewer bytes than it knows: fewer is another generation, which the settle would pad.
+  function mine(atLeast = false) {
     let n = 0;
     try { n = fs.statSync(tailOf(T)).size; } catch (e) { if (e.code !== 'ENOENT') throw e; }
-    if (n !== end - T) throw said(Object.assign(new Error(`${name}: its plain tail holds ${n} B, not the ${end - T} B this handle knows: the file is not its generation`), { code: 'ELINEPART' }));
+    if (atLeast ? n < end - T : n !== end - T) throw said(Object.assign(new Error(`${name}: its plain tail holds ${n} B, not the ${end - T} B this handle knows: the file is not its generation`), { code: 'ELINEPART' }));
   }
 
   function append(text) {
     const at = end + arena, buf = Buffer.from(text, 'utf8');
     if (write) {
       try {
-        if (trunc) settle();
+        if (trunc) { if (!junk && end >= C) mine(true); settle(); }
         mine();
         fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); // a line file that holds nothing yet, or whose tail is empty
         if (!end || (trunc && covers > end)) fs.rmSync(sidecarOf(side), { force: true }); // what it covers is no longer there
@@ -356,8 +357,10 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
    *  reads as it opens after a kill there. The writes and the files are those of one call with no deadline. A cut drops the work. */
   function seal({ partBytes = PART_BYTES, frameBytes = FRAME_BYTES, deadline = Infinity } = {}) {
     if (!write || arena || trunc || junk) { job = null; return false; }
-    if (!job) { if (end - C < partBytes && C === T) return false; mine(); job = { lim: end, cur: null, made: false }; }
+    if (!job && end - C < partBytes && C === T) return false;
     try {
+      mine(); // at every call: a job that spans calls rereads the tail by name
+      job ??= { lim: end, cur: null, made: false };
       for (;;) {
         if (!job.cur) {
           const f = fs.openSync(tailOf(T), 'r');

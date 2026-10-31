@@ -260,18 +260,19 @@ const linesOf = (r, n) => Array.from({ length: n }, () => lineOf(r)).filter((l) 
 // does, or the tail cut back and written again by another handle) writes nothing: append, seal and saveSidecar throw ELINEPART, and
 // no file of its line file holds its lines afterwards.
 test('4.3 #8: a writer whose tail on disk is not the length it knows writes nothing: ELINEPART', () => {
-  for (const [seed, how, sealed] of [[1, 'removed', false], [2, 'removed', true], [3, 'rewritten', false], [4, 'rewritten', true]]) {
-    const r = rng(seed), dir = path.join(tmpDir('trocar-mine-'), 'ctx', 'k'), base = path.join(dir, 'x'), tag = `${how}${sealed ? ' after a seal' : ''}`
+  for (const [seed, how, sealed, torn] of [[1, 'removed', false], [2, 'removed', true], [3, 'rewritten', false], [4, 'rewritten', true], [6, 'rewritten', false, true], [7, 'rewritten', true, true]]) {
+    const r = rng(seed), dir = path.join(tmpDir('trocar-mine-'), 'ctx', 'k'), base = path.join(dir, 'x'), tag = `${how}${sealed ? ' after a seal' : ''}${torn ? ' after its own cut' : ''}`
     const a = lineFile({ fs, base })
     for (const l of linesOf(r, 40)) a.append(l)
     if (sealed) a.seal({ partBytes: 4 << 10, frameBytes: 1 << 10 })
+    if (torn) a.cut(a.bytes - 10) // as an open's cut of a torn last line: the next append settles first
     const mark = `{"mine":"${'q'.repeat(64)}"}\n`
     if (how === 'removed') fs.rmSync(dir, { recursive: true, force: true })
     else { const b = lineFile({ fs, base }); b.cut(Math.floor(b.bytes / 2)); b.append('{"other":1}\n'); b.close() }
     const before = fs.existsSync(dir) ? fs.readdirSync(dir).sort().map((n) => [n, fs.readFileSync(path.join(dir, n))]) : null
     assert.throws(() => a.append(mark), { code: 'ELINEPART' }, `${tag}: append`)
     assert.throws(() => a.saveSidecar({ head: { bytes: a.bytes }, parts: [] }), { code: 'ELINEPART' }, `${tag}: saveSidecar`)
-    try { a.seal({ partBytes: 1, frameBytes: 1 }) } catch (e) { assert.equal(e.code, 'ELINEPART', `${tag}: seal`) }
+    if (!torn) assert.throws(() => a.seal({ partBytes: 1, frameBytes: 1 }), { code: 'ELINEPART' }, `${tag}: seal`) // a cut handle seals nothing
     const after = fs.existsSync(dir) ? fs.readdirSync(dir).sort().map((n) => [n, fs.readFileSync(path.join(dir, n))]) : null
     assert.deepEqual(after, before, `${tag}: the files are as the other writer left them`)
     a.close()
