@@ -42,7 +42,7 @@ export function sectionHeaderHtml(sec, blocks, { windowLine = false } = {}) {
   const name = W.SECTION_NAME[sec] || sec // an unknown section's name is data: escaped where it is printed
   const n = (blocks || []).length
   const size = (blocks || []).reduce((a, b) => a + (typeof b.bytes === 'number' ? b.bytes : 0), 0)
-  const est = sec === 'tools' && (blocks || []).some((b) => faithNow(b) !== 'verbatim')
+  const est = sec === 'tools' && (blocks || []).some((b) => faithOf(b) === 'metadata') // the size of a metadata-only definition is an estimate
   const ff = windowLine ? `<span class="cwsecff" title="${esc(W.WINDOW_LINE)}">${W.HALF_MARK}</span>`
     : (blocks || []).length && (blocks || []).every((b) => faithNow(b) === 'verbatim') ? `<span class="cwsecff v">${esc(W.SECTION_VERBATIM)}</span>` : ''
   return `<div class="cwsec" id="sec-${esc(sec)}"><b>${esc(name)}</b><span class="cwsecn">${esc(String(n))} blocks</span>` +
@@ -172,7 +172,8 @@ export function ctxWindowUnits(s, { all = false, focus = null } = {}) {
   // ③ the sections, in list order: a header where the section changes, message blocks grouped into turns (a run of messages
   // is grouped on its own, so a block of another section between messages is drawn in its place, never dropped)
   const T = turnsOf(flat), tk = new Map(), hk = new Map(), bySec = new Map(), groups = []
-  for (const b of flat) { if (!bySec.has(b.sec)) bySec.set(b.sec, []); bySec.get(b.sec).push(b) }
+  // a header reads its rows as drawn: an open row's body that came back unproven takes back 以下逐字 on every repaint (2.3 §保真标)
+  flat.forEach((b, i) => { if (!bySec.has(b.sec)) bySec.set(b.sec, []); bySec.get(b.sec).push(s.openBlocks.has(keys[i]) ? { ...b, _open: true } : b) })
   const head = (sec) => { const n = hk.get(sec) || 0; hk.set(sec, n + 1); out.push({ key: `sec:${sec}#${n}`, html: sectionHeaderHtml(sec, bySec.get(sec), { windowLine: !!winLine }) }) }
   let lastSec = null
   flat.forEach((b, i) => {

@@ -162,9 +162,10 @@ export function ctxBlockHtml(b, { prevKeys, open, windowLine = false } = {}) {
   const vol = b.volatile ? `<span class="volbadge" title="${esc(W.VOLATILE_MARK_TIP)}">${esc(W.VOLATILE_MARK)}</span>` : ''
   const nw = isNew ? `<span class="newmark" title="${esc(W.NEW_MARK_TIP)}">${esc(W.NEW_MARK)}</span>` : ''
   const tech = f === 'unknown' ? String(b.faithfulness) : f === 'unaddressable' ? (b.unaddressable || '') : ''
-  // the window line already said "nothing here resolves": the per-block 不能回源 is not repeated (2.3 §窗口行)
-  const badge = f === 'unaddressable' && windowLine ? '' : ffBadgeHtml(f, { tech })
-  const sr = f === 'verbatim' ? `<span class="sr-only">,${esc(W.FF_WORD.verbatim)}</span>` : ''
+  // the window line already said "nothing here resolves": the per-block 不能回源 is not repeated, its screen-reader word is (2.3 §窗口行)
+  const quiet = f === 'unaddressable' && windowLine
+  const badge = quiet ? '' : ffBadgeHtml(f, { tech })
+  const sr = f === 'verbatim' || quiet ? `<span class="sr-only">,${esc(W.FF_WORD[f])}</span>` : ''
   const rk = b.resKey ? ` data-rk="${esc(b.resKey)}"` : ''
   return blockRowHtml({ role: h.role, tag: h.tag, label: h.label || b.preview || '' }, {
     cls: `${isNew ? 'is-new' : ''} s-${esc(b.sec)} r-${esc(b.role)} k-${esc(b.kind)}`,

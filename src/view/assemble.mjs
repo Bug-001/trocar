@@ -12,6 +12,7 @@ import { blockSpans } from '../adapters/cc.mjs';
 import { scanJson, spanAt } from '../dissect/json-scan.mjs';
 import { slimBlock, compBuckets, firstHuman, HEAD, tellApart } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../raw/refs.mjs';
+import { V0_CONVERTED } from '../raw/ingest.mjs';
 import { fieldTextOf, TEXT_REF_FIELD } from '../dissect/record-fields.mjs';
 import { sessionKeyOf, observerEffectsOf, hintsOf } from '../dissect/harnesses.mjs';
 import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf, flatLaneOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
@@ -353,6 +354,9 @@ export function slimRec(rec) {
   return { id: rec.id, request };
 }
 
+// The request text spans are cut from: the captured string. A converted v0 record's is re-serialized, not the wire's, so nothing is
+// addressed into it: its blocks ship inline and say why, and it has no non-block keys (2.3 §窗口行 · 2.6 §A v0 记录).
+export const spanBody = (rec) => (rec && typeof rec.req_body === 'string' && rec.capture !== V0_CONVERTED ? rec.req_body : null);
 // A record's raw_ref (4.2:40), or null when it cannot be addressed: no id, or no stream it was read from.
 export const rawRefOf = (rec) => (rec && rec.id != null && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, String(rec.id)) : null);
 
@@ -370,7 +374,7 @@ export const rawRefOf = (rec) => (rec && rec.id != null && rec._stream ? mintRaw
 function withRefs(flat, rec) {
   let spans = null;
   try { spans = blockSpans(rec); } catch { spans = null; }
-  const base = rawRefOf(rec);
+  const base = spanBody(rec) != null ? rawRefOf(rec) : null;
   return flat.map((b, i) => {
     const span = spans && spans[i];
     return slimBlock(b, base && span ? composeTextRef(base, span) : null);
@@ -383,7 +387,7 @@ function withRefs(flat, rec) {
 // unaddressable by slimBlock (invariant 4).
 function withPathRefs(flat, rec) {
   const root = scannedRequestBody(rec);
-  const base = rawRefOf(rec);
+  const base = spanBody(rec) != null ? rawRefOf(rec) : null;
   return flat.map((b) => {
     const span = base && root && Array.isArray(b.path) ? spanAt(root, b.path) : null;
     return slimBlock(b, span ? composeTextRef(base, span) : null);
@@ -497,7 +501,7 @@ function scalarOf(text, node) {
   return typeof v === 'number' || typeof v === 'boolean' || (typeof v === 'string' && v.length <= SHORT_STRING) ? v : undefined;
 }
 export function nonBlockKeysOf(rec, format) {
-  if (!rec || typeof rec.req_body !== 'string') return [];
+  if (spanBody(rec) == null) return [];
   const root = scannedRequestBody(rec);   // the record's one scan (src/dissect/request-body.mjs)
   if (!root || root.kind !== 'object') return [];
   const keep = blockKeysOf(format);

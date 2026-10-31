@@ -110,7 +110,7 @@ export function inlineText(b) {
   if (b.sec === 'tools') {
     return b.faithfulness !== 'metadata' && b.verbatim !== false
       ? `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\n\ndescription:\n${x.desc || '—'}${x.schema !== undefined ? `\n\nschema:\n${JSON.stringify(x.schema, null, 2)}` : ''}`
-      : `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\nparams (names only): ${(b.props || []).join(', ') || '—'}\ndescription: ${kf(b.descChars)} chars captured — schema text not retained (length only)\n\n${W.TOOL_METADATA_ONLY}`
+      : `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\nparams (names only): ${(b.props || []).join(', ') || '—'}\ndescription: ${kf(b.descChars)} chars captured — ${W.SCHEMA_NOT_KEPT}\n\n${W.TOOL_METADATA_ONLY}`
   }
   if (b.sec === 'system') return x.text
   if (b.faithfulness === 'opaque') return String(rawContentText(x.block) || '') || '[Encrypted / redacted reasoning: the wire carries only a signature or ciphertext, no plaintext. There is nothing to restore verbatim.]'

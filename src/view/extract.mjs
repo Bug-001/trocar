@@ -11,7 +11,7 @@
 // the row's `attrs`, by list position.
 import { createHash } from 'node:crypto';
 import { admitted, flatBlockText, blockFacts, callFacts, normResp, replyPartsAnthropic, linearContext } from './analyze.mjs';
-import { hydrateForBoard, anthropicFlat, flatRequest, rawRefOf, wireOf, respRefsOf, extraMessagesOf, unknownFacts, respOf, slimRec, nonBlockKeysOf } from './assemble.mjs';
+import { hydrateForBoard, anthropicFlat, flatRequest, spanBody, rawRefOf, wireOf, respRefsOf, extraMessagesOf, unknownFacts, respOf, slimRec, nonBlockKeysOf } from './assemble.mjs';
 import { slimBlock, compBucket, firstHuman, blockQuery } from './blockmeta.mjs';
 import { renderOf } from './render-kind.mjs';
 import { blockSpans } from '../adapters/cc.mjs';
@@ -110,7 +110,6 @@ export function callWireOf(r) {
   if (d) return { d, format: d.id };
   return wireFormatOf(r) === 'anthropic' ? { d: null, format: 'anthropic' } : null;
 }
-const reqText = (rec) => (rec && typeof rec.req_body === 'string' ? rec.req_body : null);
 const NO_STREAM = 'the record carries no id or stream to address';
 
 // The call read once: the Anthropic wire's hydrated record (`h`), or a flat-lane wire's parsed request (`req`, `unparsed`).
@@ -121,7 +120,7 @@ function readCall(rec, { d, format }) {
 }
 /** requestBlocks(rec, wire, read?) → { flat, at: [{ref, exact, why}] } — the request's blocks, each with the exact text its ref names. */
 export function requestBlocks(rec, wire, read = readCall(rec, wire)) {
-  const base = rawRefOf(rec), body = reqText(rec);
+  const base = rawRefOf(rec), body = spanBody(rec);
   if (wire.format === 'anthropic') {
     const flat = anthropicFlat(read.h.request, null);
     let spans = null;
@@ -409,7 +408,7 @@ export function extract(rec, ctx) {
   const st = linker && linker.stitchOf ? linker.stitchOf(rec) : null;
   // the call's own blocks, by section
   const { flat, at } = requestBlocks(rec, wire, read);
-  const body = reqText(rec), tstore = ctx.store || ctx, tail = body != null ? tails.get(tailKey(tstore, laneHintOf(rec, wire.format, x.lane))) : null;
+  const body = spanBody(rec), tstore = ctx.store || ctx, tail = body != null ? tails.get(tailKey(tstore, laneHintOf(rec, wire.format, x.lane))) : null;
   const own = { tools: [], system: [], messages: [] }, ownFlat = [], tailBlocks = [];
   flat.forEach((b, i) => {
     const { bid, query } = take(b, at[i], inherited(tail, i, b, at[i]));

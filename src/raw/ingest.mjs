@@ -2,17 +2,20 @@
 // BOTH the product's D10 shape (req_body = verbatim STRING) and the demo v0 shape
 // (request/request_headers/response, parsed objects). The v0→D10 bridge is SHARED by the
 // ETL CLI and the server's text resolver so both derive byte-identical req_body strings
-// (JSON.stringify is deterministic for the same JSON.parse'd object → spans stay aligned).
+// (JSON.stringify is deterministic for the same JSON.parse'd object).
 //
-// FIDELITY (invariant 4): v0-converted records carry capture:'v0-converted' — req_body is
-// RE-SERIALIZED, not the original wire bytes (demo stored parsed JSON), so AC-1 holds
-// against this converted source, NOT against the lost original wire. UI/README MUST label it.
+// FIDELITY (invariant 4): a record whose request was a parsed object carries capture:'v0-converted' —
+// its req_body is RE-SERIALIZED, not the original wire bytes, so no block is addressed into it
+// (view/assemble.mjs spanBody): its blocks ship inline and say so, and the board draws the window line.
 import { createReadStream, statSync } from 'node:fs';
 import { basename } from 'node:path';
 import { createInterface } from 'node:readline';
 import { isSealedPath } from '../raw/discover.mjs';
 import { openSealed } from '../raw/reader.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
+
+// What a record whose req_body was rebuilt from a parsed request says it is, whatever capture it carried (view/assemble.mjs spanBody).
+export const V0_CONVERTED = 'v0-converted';
 
 // True D10 record → passthrough. Demo v0 record → convert. Anything else → passthrough.
 export function normalizeRecord(raw) {
@@ -26,7 +29,7 @@ export function normalizeRecord(raw) {
     req_headers: request_headers || {},
     req_body,
     resp: response || { kind: 'error', status: null },
-    capture: raw.capture || 'v0-converted',
+    capture: request && typeof request === 'object' ? V0_CONVERTED : raw.capture || V0_CONVERTED,
   };
 }
 
