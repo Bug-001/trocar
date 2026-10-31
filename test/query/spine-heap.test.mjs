@@ -3,32 +3,32 @@
 // the fold log's), whatever the contexts' sizes and however many lanes run side by side (RFC 3.5 §内存有界; the bound `fitting()` and
 // `working()` reserve with, src/query/named/session.mjs). Each read is one cold query in a process of its own, as the worker reads
 // (it writes the projection and the fold log), in a heap of the worker's size, forced GC before and after: what it still holds once
-// the document is let go.
+// the document is let go. No wait has a fixed window: each child is waited for while it reports progress (test/helpers/ticking.mjs),
+// so a loaded machine slows the reads and never cancels them.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { execFileSync, spawn } from 'node:child_process'
-import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs, not the other way round
-import { SPINE_PER_ROW, SPINE_PER_BLOCK, PLAN_PER_MEMBER, extendSession } from '../../src/query/named/session.mjs'
-import { STORE_HEAP, projectionFile } from '../../src/query/projection.mjs'
+import { SPINE_PER_ROW, SPINE_PER_BLOCK, PLAN_PER_MEMBER } from '../../src/query/named/session.mjs'
+import { STORE_HEAP } from '../../src/query/projection.mjs'
 import { REDUCE_HEAP } from '../../src/view/reduce.mjs'
-import { LOG_BYTES, foldLogFile } from '../../src/query/fold-log.mjs'
-import { sidecarOf } from '../../src/query/line-file.mjs'
+import { LOG_BYTES } from '../../src/query/fold-log.mjs'
 import { heapFlags } from '../../src/query/warm.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { TICK, child, once } from '../helpers/ticking.mjs'
 import { bigSession, live } from './big-session.mjs'
 import { grower, readerFlags } from './past-room.mjs'
 import { apply, canon, byStep } from '../helpers/session-apply.mjs'
 
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
 const QUERY = new URL('../../src/query/named/index.mjs', import.meta.url).href
+const at = (p) => JSON.stringify(new URL(p, import.meta.url).href)
 const K = STORE_HEAP + REDUCE_HEAP + 2 * LOG_BYTES
 // one cold read as the worker reads, until no member is above the reduction frontier and its background is done → {calls, truncated,
 // retained, blocks}
-const READ = `
+const READ = `${TICK}
 const fs = await import('node:fs')
 const { runQuery } = await import(${JSON.stringify(QUERY)})
 const { extendSession } = await import(${JSON.stringify(new URL('../../src/query/named/session.mjs', import.meta.url).href)})
@@ -38,15 +38,16 @@ const defs = (b) => { let n = 0; for (let i = b.indexOf('\\n{"d":'); i >= 0; i =
 const { indexRows } = await import(${JSON.stringify(new URL('../../src/query/rows.mjs', import.meta.url).href)})
 const [home, id] = process.argv.slice(1)
 await indexRows({ home, errors: [] }) // the segment index's rows: the bound's \`steady\`, not the session's spine
+tick()
 global.gc(); global.gc()
 const before = process.memoryUsage().heapUsed
 // asked once (a forked worker's first answer), the worker's background driven until it has nothing left (a cold state's rebuild
 // included, when a member lies past the fold log's frontier), then asked once more: what is measured is the rebuilt state and the
 // step-order columns. In a function of its own, so the top-level frame's registers keep no answer.
 const ask = async () => {
-  let doc = await runQuery('session', { id, limit: '20' }, { home, writer: true })
-  while (await extendSession({ home, writer: true }, id, Infinity));
-  doc = await runQuery('session', { id, limit: '20' }, { home, writer: true })
+  let doc = await runQuery('session', { id, limit: '20' }, { home, writer: true, progress: tick })
+  while (await extendSession({ home, writer: true, progress: tick }, id, Infinity));
+  doc = await runQuery('session', { id, limit: '20' }, { home, writer: true, progress: tick })
   return { calls: doc.lanes.reduce((n, l) => n + l.count, 0), truncated: doc.truncated }
 }
 const { calls, truncated } = await ask()
@@ -56,13 +57,12 @@ const blocks = defs(fs.readFileSync(projectionFile(home, id)))
 console.log(JSON.stringify({ calls, truncated, retained, blocks }))`
 // single-threaded: a concurrent compile job still in flight holds a closure and its context across the read's last GCs (+1.33 MB on
 // one read in about two at live(0.12)), a V8 artefact that is not what the read keeps
-const cold = (home, id) => JSON.parse(execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', '--single-threaded', ...heapFlags(), '--input-type=module', '-e', READ, home, id],
-  { encoding: 'utf8', maxBuffer: 1 << 20 }))
-const read = (opts, calls) => {
+const cold = (home, id) => once(['--require', NO_REAL_OS, '--expose-gc', '--single-threaded', ...heapFlags(), '--input-type=module', '-e', READ, home, id], 'a cold read')
+const read = async (opts, calls) => {
   const home = path.join(tmpDir('trocar-spine-'), '.trocar'), s = bigSession({ home, ...opts })
   s.append(calls)
-  const out = cold(home, s.id)
-  fs.rmSync(path.dirname(home), { recursive: true, force: true }) // a live-shaped session is hundreds of MB on disk
+  let out
+  try { out = await cold(home, s.id) } finally { fs.rmSync(path.dirname(home), { recursive: true, force: true }) } // a live-shaped session is hundreds of MB on disk
   assert.ok(out.calls > 0.99 * calls, `${out.calls} of ${calls} calls read`)
   assert.equal(out.truncated, null)
   return out
@@ -84,16 +84,39 @@ const read = (opts, calls) => {
 // arrays' backing stores), measured 2026-10-22 single-threaded at live(0.12) with 2 against 12 tools a call (15,003 → 29,993 blocks,
 // one table doubling, the same calls).
 const BLOCK_COLUMNS = 77
-test('what a session read keeps grows by at most SPINE_PER_ROW a call', { timeout: 240_000 }, async () => {
+// The session is grown, extracted and folded in a process of its own, a round (two growths of N calls) for each line it is sent.
+// One call past the fold log's frontier before the cold read, so the read rebuilds the state (an unchanged session is answered
+// from its log, not refolded: 3.5:42); the read extracts it, so each round grows on a store of its own (a fresh fs object: the
+// projection opened again), as a worker forked again does.
+const GROWN = `${TICK}
+const fs = await import('node:fs')
+await import(${JSON.stringify(QUERY)})
+const { extendSession } = await import(${at('../../src/query/named/session.mjs')})
+const { projectionFile } = await import(${at('../../src/query/projection.mjs')})
+const { foldLogFile } = await import(${at('../../src/query/fold-log.mjs')})
+const { sidecarOf } = await import(${at('../../src/query/line-file.mjs')})
+const { bigSession } = await import(${at('./big-session.mjs')})
+const [home, opts, N] = [process.argv[1], JSON.parse(process.argv[2]), Number(process.argv[3])]
+const s = bigSession({ home, ...opts })
+const grow = async (own) => {
+  for (let n = 0; n < N; n += 100) { s.append(Math.min(100, N - n)); tick() }
+  while (await extendSession({ home, fs: own, writer: true, progress: tick }, s.id, Infinity));
+}
+console.log(JSON.stringify(s.id))
+for await (const _ of (await import('node:readline')).createInterface({ input: process.stdin })) {
+  const own = { ...fs }
+  await grow(own); await grow(own)
+  for (const f of [projectionFile(home, s.id), foldLogFile(home, s.id)]) fs.rmSync(sidecarOf(f), { force: true })
+  s.append(1)
+  console.log('{}')
+}`
+test('what a session read keeps grows by at most SPINE_PER_ROW a call', async () => {
   const { calls: N, ...opts } = live(0.12)
-  const home = path.join(tmpDir('trocar-spine-'), '.trocar'), s = bigSession({ home, ...opts })
-  const grow = async (own) => { s.append(N); while (await extendSession({ home, fs: own, writer: true }, s.id, Infinity)); }
-  // one call past the fold log's frontier before the cold read, so the read rebuilds the state (an unchanged session is answered
-  // from its log, not refolded: 3.5:42); the read extracts it, so each round grows on a store of its own (a fresh fs object: the
-  // projection opened again), as a worker forked again does
-  const bare = () => { for (const f of [projectionFile(home, s.id), foldLogFile(home, s.id)]) fs.rmSync(sidecarOf(f), { force: true }) }
-  const grown = async () => { const own = { ...fs }; await grow(own); await grow(own); bare(); s.append(1); return cold(home, s.id) }
+  const home = path.join(tmpDir('trocar-spine-'), '.trocar')
+  const g = child(['--require', NO_REAL_OS, '--input-type=module', '-e', GROWN, home, JSON.stringify(opts), String(N)], 'the session grown')
   try {
+    const id = await g.next()
+    const grown = async () => { g.send(''); await g.next(); return cold(home, id) }
     const two = await grown(), four = await grown()
     for (const [r, n] of [[two, 2 * N], [four, 4 * N]]) {
       assert.ok(r.calls > 0.99 * n && r.truncated === null, `${r.calls} of ${n} calls read, truncated ${JSON.stringify(r.truncated)}`)
@@ -103,16 +126,16 @@ test('what a session read keeps grows by at most SPINE_PER_ROW a call', { timeou
     const per = (four.retained - two.retained - (four.blocks - two.blocks) * BLOCK_COLUMNS) / (four.calls - two.calls)
     assert.ok(SPINE_PER_ROW <= 1024, `SPINE_PER_ROW ${SPINE_PER_ROW} B: past 3.5's 1 KiB a call`)
     assert.ok(per <= SPINE_PER_ROW, `${Math.round(per)} B a call (${two.retained} → ${four.retained} B, ${two.blocks} → ${four.blocks} blocks, ${two.calls} → ${four.calls} calls), SPINE_PER_ROW ${SPINE_PER_ROW}`)
-  } finally { fs.rmSync(path.dirname(home), { recursive: true, force: true }) } // a live-shaped session is hundreds of MB on disk
+  } finally { await g.stop(); fs.rmSync(path.dirname(home), { recursive: true, force: true }) } // a live-shaped session is hundreds of MB on disk
 })
 
 // Long contexts and lanes side by side: on two axes, the wire (a whole context per request, Message Threads, Codex over WebSocket,
 // Chat Completions) and how many subagents run side by side, every call a subagent's with a context of hundreds of KB, so the lanes'
 // last contexts together are far past calls × SPINE_PER_ROW: the read holds the spine and its fixed caches, never every lane's last context.
 for (const wire of ['http', 'chat', 'threads', 'ws']) for (const subLanes of [1, 40]) {
-  test(`a ${wire} session with ${subLanes} subagent lane(s) of long contexts keeps the spine beside fixed caches, not the lanes' contexts`, () => {
+  test(`a ${wire} session with ${subLanes} subagent lane(s) of long contexts keeps the spine beside fixed caches, not the lanes' contexts`, async () => {
     // ~400 KB of fresh text a turn, a new subagent after two turns: ~120 lanes whose last contexts sum to ~60 MB
-    const out = read({ wire, growth: 1_600_000, subEvery: 1, subLanes, subLen: 5 }, 240)
+    const out = await read({ wire, growth: 1_600_000, subEvery: 1, subLanes, subLen: 5 }, 240)
     const room = out.calls * SPINE_PER_ROW + out.blocks * SPINE_PER_BLOCK + K
     assert.ok(out.retained <= room, `${Math.round(out.retained / 1024)} KiB retained for ${out.calls} calls and ${out.blocks} blocks (≤ ${Math.round(room / 1024)} KiB)`)
   })
@@ -122,8 +145,9 @@ for (const wire of ['http', 'chat', 'threads', 'ws']) for (const subLanes of [1,
 // texts either way, one table doubling): what the read still holds grows by at most SPINE_PER_BLOCK a distinct block (the
 // projection's `d` lines). Both reads are past what fills K's byte-capped caches (the writer memo's 4 MiB of tool_use facts, the
 // chain tails' request bodies: 0 against 1,500 tools put that fill, ~70 B a block, on the block term). The median of three pairs.
-test('what a session read keeps grows by at most SPINE_PER_BLOCK a distinct block', { timeout: 240_000 }, () => {
-  const pairs = [0, 1, 2].map(() => [read({ freshTools: 750 }, 40), read({ freshTools: 1_500 }, 40)])
+test('what a session read keeps grows by at most SPINE_PER_BLOCK a distinct block', async () => {
+  const pairs = []
+  for (let i = 0; i < 3; i++) pairs.push([await read({ freshTools: 750 }, 40), await read({ freshTools: 1_500 }, 40)])
   const pers = pairs.map(([few, many]) => (many.retained - few.retained) / (many.blocks - few.blocks)).sort((a, b) => a - b)
   assert.ok(pers[1] <= SPINE_PER_BLOCK, `${pers.map(Math.round)} B retained a distinct block (${JSON.stringify(pairs)}), SPINE_PER_BLOCK ${SPINE_PER_BLOCK}`)
 })
@@ -132,12 +156,13 @@ test('what a session read keeps grows by at most SPINE_PER_BLOCK a distinct bloc
 // (its member array's flyweight rows, each with the cell the step-order sort decoded last, and the by-id map), never cut. A session
 // of 20,000 members' plan, cut to 1,000 rows as a fold that measured them to fit would cut it, in a heap of the worker's size: what
 // the plan holds once made, a member at most PLAN_PER_MEMBER.
-const PLAN = `
+const PLAN = `${TICK}
 await import(${JSON.stringify(QUERY)}) // first: the registry imports session.mjs
 const { planOf } = await import(${JSON.stringify(new URL('../../src/query/named/session.mjs', import.meta.url).href)})
 const { indexRows, sessionGroups } = await import(${JSON.stringify(new URL('../../src/query/rows.mjs', import.meta.url).href)})
 const [home, id] = process.argv.slice(1)
 const rows = await indexRows({ home, errors: [] })
+tick()
 // a turn between collections: a member array is held by a WeakRef (rows.mjs sessionGroups), kept until the job that made it ends
 const live = async () => { await new Promise((r) => setTimeout(r, 0)); global.gc(); global.gc(); return process.memoryUsage().heapUsed }
 const n = sessionGroups(rows).get(id).length
@@ -146,12 +171,11 @@ const before = await live()
 const make = () => { const store = { plan: null, defCount: 0 }; planOf(sessionGroups(rows).get(id), 'plan', store, id, 1_000); keep.push(store); return store.plan }
 const { bound } = make()
 console.log(JSON.stringify({ members: n, shown: bound && bound.shown, retained: (await live()) - before }))`
-test('the plan of a cut session keeps at most PLAN_PER_MEMBER a member', { timeout: 60_000 }, () => {
+test('the plan of a cut session keeps at most PLAN_PER_MEMBER a member', async () => {
   const home = path.join(tmpDir('trocar-spine-'), '.trocar'), s = bigSession({ home, wire: 'threads', growth: 40, subEvery: 4, subLanes: 3, subLen: 12, compactAt: 3_000 })
   s.append(20_000)
   try {
-    const out = JSON.parse(execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', '--single-threaded', ...heapFlags(), '--input-type=module', '-e', PLAN, home, s.id],
-      { encoding: 'utf8', maxBuffer: 1 << 20 }))
+    const out = await once(['--require', NO_REAL_OS, '--expose-gc', '--single-threaded', ...heapFlags(), '--input-type=module', '-e', PLAN, home, s.id], 'the plan')
     assert.ok(out.shown && out.shown < out.members / 10, `${out.shown} of ${out.members} members shown (else this test proves nothing)`)
     const per = out.retained / out.members
     assert.ok(per <= PLAN_PER_MEMBER, `${Math.round(per)} B a member (${out.retained} B for ${out.members} members), PLAN_PER_MEMBER ${PLAN_PER_MEMBER}`)
@@ -164,29 +188,35 @@ test('the plan of a cut session keeps at most PLAN_PER_MEMBER a member', { timeo
 // the shown calls grow with the session between steps, and the cut moves at most once.
 // The session is grown and extracted in a process of its own (grower: growing it is not what is measured); the reader, one process
 // with a small heap kept across the reads (readerFlags), reads it on each line it is sent and answers with what it showed.
-const GROWING = `
+// Message Threads, subagents side by side, past the room of a 112 MB reader: the reader's heap sets how big the session is (a fold of
+// it holding twice the budget) and the cut's step (a tenth of the rows that fit, a power of two: 128 calls at 112 MB, 256 at 160 MB,
+// measured 2026-10-31), so a smaller reader is a smaller session past the same bound. Not below: the --since reader holds whole pages
+// of 16 KB tool names beside its reads, and at 80 MB it ran out of heap.
+// A pending answer is asked again until it carries none; it ticks only when its done or work moved (as the CLI counts progress,
+// src/query/client.mjs), so an answer stuck pending stops ticking and the wait on the reader fails after STALL.
+const MOVED = `const moved = (d, at) => { const now = d.pending ? JSON.stringify([d.pending.done, d.pending.work]) : null; if (now !== null && now !== at) tick(); return now }`
+const PAST = { heapMb: 112, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12, names: 16_000 } }
+const GROWING = `${TICK}
+${MOVED}
 const { runQuery } = await import(${JSON.stringify(QUERY)})
 const [home, id] = process.argv.slice(1)
 for await (const _ of (await import('node:readline')).createInterface({ input: process.stdin })) {
   // as the worker reads it (it writes the projection), until no member is above the extraction frontier
-  let doc
-  do doc = await runQuery('session', { id, limit: '20' }, { home, writer: true }); while (doc.pending)
+  let doc, at = null
+  do { doc = await runQuery('session', { id, limit: '20' }, { home, writer: true, progress: tick }); at = moved(doc, at) } while (doc.pending)
   console.log(JSON.stringify(doc.truncated && doc.truncated.shown))
 }`
-test('a session past the heap bound that keeps growing keeps its cut between steps, so it is folded on, not from scratch', { timeout: 300_000 }, async () => {
+test('a session past the heap bound that keeps growing keeps its cut between steps, so it is folded on, not from scratch', async () => {
   const home = path.join(tmpDir('trocar-spine-'), '.trocar')
-  // Message Threads, subagents side by side
-  const s = await grower({ home, heapMb: 160, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12, names: 16_000 } })
-  const reader = spawn(process.execPath, [...readerFlags(160), '--input-type=module', '-e', GROWING, home, s.id], { stdio: ['pipe', 'pipe', 'inherit'] })
-  const lines = createInterface({ input: reader.stdout })[Symbol.asyncIterator]()
-  const answer = async () => { const { value, done } = await lines.next(); assert.ok(!done, 'the reader ended'); return JSON.parse(value) }
+  const s = await grower({ home, ...PAST })
+  const reader = child([...readerFlags(PAST.heapMb), '--input-type=module', '-e', GROWING, home, s.id], 'the growing session read')
   try {
     const shown = []
-    for (let i = 0; i < 20; i++) { reader.stdin.write('read\n'); shown.push(await answer()); await s.more() }
+    for (let i = 0; i < 20; i++) { reader.send('read'); shown.push(await reader.next()); await s.more() }
     assert.ok(shown.every((x) => x > 0), `cut every time: ${shown}`)
     const moves = shown.slice(1).filter((x, i) => x !== shown[i] + 1).length
     assert.ok(moves <= 1, `the cut moved ${moves} times in 20 one-call growths: ${shown}`)
-  } finally { reader.stdin.end(); reader.kill(); s.stop(); fs.rmSync(path.dirname(home), { recursive: true, force: true }) }
+  } finally { await reader.stop(); await s.stop(); fs.rmSync(path.dirname(home), { recursive: true, force: true }) }
 })
 
 // The same session followed with `--since` (3.5 §会话读: a mark names its cut; a --since M under another cut answers the full
@@ -194,23 +224,29 @@ test('a session past the heap bound that keeps growing keeps its cut between ste
 // (its answer carries the session's mark), until the cut moves. Under one cut the mark is `<rid>@<the cut's first rid>` (the first
 // record once the pages are walked back) and the delta applied to the previous document is now's; across a moved cut the answer is
 // full (`base: null`), whatever the cut moved to.
-const FOLLOW = `
+const FOLLOW = `${TICK}
+${MOVED}
 const { runQuery } = await import(${JSON.stringify(QUERY)})
 const [home, id] = process.argv.slice(1)
-const q = async (name, p) => { let d; do d = await runQuery(name, { id, ...p }, { home, writer: true }); while (d.pending); return d }
+const q = async (name, p) => { let d, at = null; do { d = await runQuery(name, { id, ...p }, { home, writer: true, progress: tick }); at = moved(d, at) } while (d.pending); return d }
 for await (const line of (await import('node:readline')).createInterface({ input: process.stdin })) {
   const { since } = JSON.parse(line), now = await q('session', {})
+  // walked back a page at a time: each page starts at a call no page before it started at, else the walk is stuck
   let first = now
-  while (first.more) first = await q('session', { before: first.calls[0].rid })
+  for (const seen = new Set(); first.more; tick()) {
+    const at = first.calls[0].rid
+    if (seen.has(at)) throw new Error(\`the page walk came back to \${at}\`)
+    seen.add(at); first = await q('session', { before: at })
+  }
   const lane = await q('lane', { lane: now.lanes[now.lanes.length - 1].lane })
   console.log(JSON.stringify({ now, cut: first.records[0].id, lane: lane.mark, d: since == null ? null : await q('session', { since }) }))
 }`
-test('a session past the heap bound followed with --since: a mark names its cut, a delta under it is the document, a moved cut answers in full', { timeout: 300_000 }, async () => {
-  const home = path.join(tmpDir('trocar-spine-'), '.trocar'), CHUNK = 60
-  const s = await grower({ home, heapMb: 160, shape: { wire: 'threads', growth: 150, compactAt: 3_000, subEvery: 4, subLanes: 3, subLen: 12, names: 16_000 } })
-  const reader = spawn(process.execPath, [...readerFlags(160), '--input-type=module', '-e', FOLLOW, home, s.id], { stdio: ['pipe', 'pipe', 'inherit'] })
-  const lines = createInterface({ input: reader.stdout, crlfDelay: Infinity })[Symbol.asyncIterator]()
-  const ask = async (since) => { reader.stdin.write(JSON.stringify({ since }) + '\n'); const { value, done } = await lines.next(); assert.ok(!done, 'the reader ended'); return JSON.parse(value) }
+test('a session past the heap bound followed with --since: a mark names its cut, a delta under it is the document, a moved cut answers in full', async () => {
+  // a chunk under a quarter of the cut's step (PAST): a step under one cut grows the shown calls by CHUNK, a moved cut changes them by more
+  const home = path.join(tmpDir('trocar-spine-'), '.trocar'), CHUNK = 30
+  const s = await grower({ home, ...PAST })
+  const reader = child([...readerFlags(PAST.heapMb), '--input-type=module', '-e', FOLLOW, home, s.id], 'the followed session read')
+  const ask = (since) => { reader.send(JSON.stringify({ since })); return reader.next() }
   const byLane = (ls) => JSON.stringify([...ls].sort((a, b) => (a.lane < b.lane ? -1 : 1)))
   try {
     let prev = null, steps = 0
@@ -235,13 +271,13 @@ test('a session past the heap bound followed with --since: a mark names its cut,
       for (let i = 0; i < CHUNK; i++) await s.more()
     }
     assert.ok(steps > 0, 'a delta under one cut was checked before the cut moved')
-  } finally { reader.stdin.end(); reader.kill(); s.stop(); fs.rmSync(path.dirname(home), { recursive: true, force: true }) }
+  } finally { await reader.stop(); await s.stop(); fs.rmSync(path.dirname(home), { recursive: true, force: true }) }
 })
 
 // A reduction from scratch (subagents told apart by order alone, and a record that ends late among them: the session is reduced
 // again, 3.5 §缓存按依赖失效) lets the state it replaces go first: sampled with a forced collection as it folds, the live heap
 // never holds more than one state and the work (working()), never two states (paths in every tool result keep the state past the work).
-const AGAIN = `
+const AGAIN = `${TICK}
 const fs = await import('node:fs')
 const { runQuery } = await import(${JSON.stringify(QUERY)})
 const { working } = await import(${JSON.stringify(new URL('../../src/query/named/session.mjs', import.meta.url).href)})
@@ -256,21 +292,21 @@ const legacy = () => fs.writeFileSync(s.file, fs.readFileSync(s.file, 'utf8').tr
 }).join('\\n') + '\\n')
 // as many calls as keep the state past the work, then on until a subagent's call that ended late is still to be written: the next
 // growth writes it among calls already folded
-s.append(12_000); while (!s.held) s.append(1)
-legacy()
+for (let n = 0; n < 12_000; n += 100) { s.append(100); tick() }
+while (!s.held) s.append(1)
+legacy(); tick()
 const live = () => { global.gc(); global.gc(); return process.memoryUsage().heapUsed }
 const before = live()
-await runQuery('session', { id: s.id, limit: '20' }, { home })
+await runQuery('session', { id: s.id, limit: '20' }, { home, progress: tick })
 const state = live() - before
-s.append(7); legacy()
+s.append(7); legacy(); tick()
 let peak = 0, folded = 0
-await runQuery('session', { id: s.id, limit: '20' }, { home, progress: () => { if (++folded % 200 === 0) peak = Math.max(peak, live() - before) } })
+await runQuery('session', { id: s.id, limit: '20' }, { home, progress: () => { tick(); if (++folded % 200 === 0) peak = Math.max(peak, live() - before) } })
 const rows = sessionGroups(await indexRows({ home, errors: [] })).get(s.id)
 console.log(JSON.stringify({ state, peak, folded, rows: rows.length, working: working(rows) }))`
-test('a reduction from scratch never holds two states', { timeout: 300_000 }, () => {
+test('a reduction from scratch never holds two states', async () => {
   const home = path.join(tmpDir('trocar-spine-'), '.trocar')
-  const out = JSON.parse(execFileSync(process.execPath, ['--require', NO_REAL_OS, '--expose-gc', '--input-type=module', '-e', AGAIN, home],
-    { encoding: 'utf8', maxBuffer: 1 << 20 }))
+  const out = await once(['--require', NO_REAL_OS, '--expose-gc', '--input-type=module', '-e', AGAIN, home], 'the reduction from scratch')
   assert.ok(out.state > out.working, `a state of ${out.state} B is past the work's ${out.working} B (else this test proves nothing)`)
   assert.ok(out.folded >= out.rows, 'the second read reduced the session from scratch')
   assert.ok(out.peak <= out.state + out.working, `peak ${out.peak} B: more than one state (${out.state} B) and the work (${out.working} B)`)
