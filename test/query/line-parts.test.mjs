@@ -194,3 +194,55 @@ test('4.3 #8: a part deleted or not decoding, found at the open or at its first 
     }
   }
 })
+
+// A handle whose index predates another handle's cut-back (settle truncates the tail in place, then appends) reads that handle's
+// lines at its own offsets: lines of other lengths (k bytes longer or shorter) put no whole line there (4.3 §4 分片).
+test('4.3 #8: a line read by its index after the tail was cut back and written again is no whole line: ELINEPART, never other bytes', () => {
+  const PROJ = { id: 'proj-gen', bytes: 1e9 }, pad = (n) => 'x'.repeat(n)
+  for (const k of [1, 2, 3, 4, 5, 6, 7, 40, -3]) {
+    const home = path.join(tmpDir('trocar-gen-'), '.trocar'), open = (o = {}) => openFoldLog({ home, fs, key: 'gen', projection: PROJ, errors: [], ...o })
+    const later = (d) => [{ c: 'r2', s: pad(20 + d) }, { c: 'r1', s: pad(30 + d) }, { l: 'lane', s: pad(5 + d) }, { f: 'r2', n: 2, pb: 1 }]
+    const w = open()
+    w.append([{ c: 'r1', s: pad(10) }, { f: 'r1', n: 1, pb: 1 }])
+    const upTo = w.bytes, f1 = w.frontierAt('r1')
+    w.append(later(0)); w.close()
+    const a = open() // F1 and F2 indexed, no line read yet
+    const b = open({ upTo }) // cut back to F1, then written again with lines of other lengths
+    b.append(later(k))
+    for (const [what, at] of [['r2', a.latest('r2')], ['r1', a.latest('r1')], ['lane', a.lane('lane')]]) {
+      assert.ok(at[0] >= upTo, `k=${k} ${what}: indexed past F1`)
+      assert.throws(() => a.read(...at), { code: 'ELINEPART' }, `k=${k} ${what}: read`)
+      assert.throws(() => a.peek(...at), { code: 'ELINEPART' }, `k=${k} ${what}: peek`)
+      if (what !== 'lane') assert.throws(() => a.versionAt(what, f1), { code: 'ELINEPART' }, `k=${k} ${what}: versionAt`)
+    }
+    a.close(); b.close()
+  }
+})
+
+// The same at the session: the first line read from a tail (`fold.<T>.ndjson`, `extract.<T>.ndjson`) reads k bytes on, as a handle
+// would that outlived another's cut-back. The read that meets it lets the session go and rereads once in the same request.
+test('4.3 #8: a line read by its index that is another generation\'s bytes: reread in the same request, the same answers, no error', { timeout: 300_000 }, async () => {
+  const base = path.join(tmpDir('trocar-gen-home-'), '.trocar'), s = bigSession({ home: base, wire: 'http', growth: 200, subEvery: 3 })
+  s.append(12)
+  await drain({ home: base, fs, writer: true }, s.id)
+  saveIndexes()
+  const copy = () => { const h = path.join(tmpDir('trocar-gen-case-'), '.trocar'); fs.cpSync(base, h, { recursive: true }); return h }
+  for (const writer of [true, false]) {
+    const want = (await answers({ home: copy(), fs: { ...fs }, writer }, s.id)).text
+    for (const name of ['fold', 'extract']) {
+      for (const k of [1, 4, 40]) {
+        const tag = `${writer ? 'worker' : 'local'} · ${name} · ${k} B on`, tail = new RegExp(`^${name}\\.\\d+\\.ndjson$`), fds = new Set()
+        let shifted = 0
+        const fsx = { ...fs,
+          openSync: (p, ...r) => { const fd = fs.openSync(p, ...r); if (tail.test(path.basename(String(p)))) fds.add(fd); return fd },
+          closeSync: (fd) => { fds.delete(fd); return fs.closeSync(fd) },
+          // a line read (its exact length, not a scan's chunk or a one-byte line-end check), once
+          readSync: (fd, buf, o, n, pos) => { if (!shifted && fds.has(fd) && n > 1 && buf.length === n) { shifted++; pos += k } return fs.readSync(fd, buf, o, n, pos) } }
+        const got = await answers({ home: copy(), fs: fsx, writer }, s.id)
+        assert.equal(shifted, 1, `${tag}: a line was read from the tail`)
+        assert.deepEqual(got.errors, [], `${tag}: no error`)
+        assert.equal(got.text, want, `${tag}: the answers`)
+      }
+    }
+  }
+})

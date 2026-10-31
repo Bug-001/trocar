@@ -171,7 +171,9 @@ function readAt(fs, fd, pos, n) {
   return b;
 }
 
-/** lineFile({fs, base, write, onFail}) → {append(text) → the offset of its first byte, read(off, len) → Buffer, scan(from), bytes,
+const told = new Set(); // the files whose index named no whole line, said once (fault)
+/** lineFile({fs, base, write, onFail}) → {append(text) → the offset of its first byte, read(off, len) → Buffer, json(off, len) → the whole line there parsed (else
+ *  throws fault(off, len): ELINEPART), scan(from), bytes,
  *  settled, unreadable, cut(len), remove(), seal({partBytes}), touch(), loadSidecar(), saveSidecar({head, parts}), close()}.
  *  `base` = `<dir>/<name>`: the lines' global bytes [0, end) are the sealed parts `<name>.<a>-<b>.br` (exactly [a, b) framed,
  *  cut at a line end, chaining from 0 to C) then the plain tail `<name>.<C>.ndjson`; the sidecar is `<name>.idx`. Content
@@ -285,6 +287,25 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
     return b;
   }
 
+  // the line an index names at (off, len), parsed. A handle whose index predates another handle's cut-back (settle truncates the
+  // tail in place, append writes there again) reads bytes of that other generation there, so they must be a whole line of the file
+  // (a line end before and after them) that parses to an object; else the read throws ELINEPART as an undecodable part does (4.3 §4
+  // 分片). Only the plain tail can hold another generation (a sealed part is never rewritten in place), so the line end before `off`
+  // is checked there only, and no frame is decoded for it.
+  function json(off, len) {
+    try {
+      const b = read(off, len + 1);
+      if (b[len] === 10 && (off <= Math.max(C, T) || read(off - 1, 1)[0] === 10)) { const o = JSON.parse(b.toString('utf8', 0, len)); if (o && typeof o === 'object') return o; }
+    } catch (e) { if (!(e instanceof RangeError || e instanceof SyntaxError || e.code === 'ENOENT')) throw e; }
+    throw fault(off, len);
+  }
+  // the fault, said on stderr the first time per file (the daemon keeps it, D38)
+  function fault(off, len) {
+    const e = Object.assign(new Error(`${name}: no whole line at byte ${off} (${len} B): the file is not the generation its index was built from`), { code: 'ELINEPART' });
+    if (!told.has(base)) { told.add(base); process.stderr.write(`trocar query: ${dir}: ${e.message}\n`); }
+    return e;
+  }
+
   // the disk's bytes from `from`, chunk by chunk (a chunk is overwritten by the next)
   function* chunks(from) {
     for (let i = partIndex(from); from < C && i < parts.length; i++) {
@@ -370,7 +391,7 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
   }
 
   const self = {
-    append, read, scan, cut, remove, seal, close,
+    append, read, json, fault, scan, cut, remove, seal, close,
     touch() { if (write && end) try { const t = new Date(); fs.utimesSync(tailOf(T), t, t); } catch { /* the GC order only */ } },
     loadSidecar() { const r = loadSidecar({ fs, file: side, endsLine: (n) => n <= end && read(n - 1, 1)[0] === 10 }); covers = r ? r.head.bytes : Infinity; return r; },
     saveSidecar({ head, parts: ps2 }) { covers = Infinity; saveSidecar({ fs, file: side, head, parts: ps2 }); covers = head.bytes; },

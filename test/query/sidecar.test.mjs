@@ -74,7 +74,8 @@ function stores(home, id) {
 }
 // What a cold open reads of the projection and the fold log (4.3 §4: the header line, then only the lines past what the sidecar
 // covers), against that bound: the header line in the scan's first read (FIRST_CHUNK), the newline that ends what a sidecar covers,
-// and the lines of the breaks (`b`) a projection's sidecar names by offset
+// and the lines of the breaks (`b`) a projection's sidecar names by offset, each with the line ends around it (4.3 §4 分片: a line
+// read by its index is a whole line of the file)
 function openRead(home, id) {
   const fds = new Set(), files = [projectionFile(home, id), foldLogFile(home, id)]
   let read = 0
@@ -89,7 +90,7 @@ function openRead(home, id) {
   p.close(); log.close()
   const bound = files.reduce((a, f) => {
     const b = fs.readFileSync(f), sc = loadSidecar({ fs, file: f })
-    return a + b.length - sc.head.bytes + Math.max(FIRST_CHUNK, b.indexOf(10) + 1) + 1 + (sc.parts['b.l'] || []).reduce((x, y) => x + y, 0)
+    return a + b.length - sc.head.bytes + Math.max(FIRST_CHUNK, b.indexOf(10) + 1) + 1 + (sc.parts['b.l'] || []).reduce((x, y) => x + y + 2, 0)
   }, 0)
   return { read, bound }
 }
