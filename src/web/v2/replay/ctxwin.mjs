@@ -74,7 +74,7 @@ export function removedSectionHtml(removed, refK, open) {
   const rows = removed.map((b, j) => {
     const h = b.head || { role: b.role || '', tag: b.kind || '', label: '' }
     const label = h.label || b.preview || ''
-    return `<div class="cblk removed collapsed" data-rm="${j}" data-sec="${esc(b.sec)}"><div class="cbh"><span class="cbrole">${esc(h.role)}</span><span class="cbtag">${esc(tagWord(h.tag) || h.tag)}</span>${label ? `<span class="cblabel" title="${esc(label)}">${esc(label)}</span>` : ''}${ffBadgeHtml(faithOf(b), { tech: b.unaddressable })}<span class="remnote" title="The full text is read back from its location in step ${esc(String(refK ?? '?'))}">removed</span></div><div class="cbc"></div></div>`
+    return `<div class="cblk removed collapsed" data-rm="${j}" data-sec="${esc(b.sec)}"><div class="cbh"><span class="cbrole">${esc(h.role)}</span><span class="cbtag" title="${esc(tagWord(h.tag) || h.tag)}">${esc(tagWord(h.tag) || h.tag)}</span>${label ? `<span class="cblabel" title="${esc(label)}">${esc(label)}</span>` : ''}${ffBadgeHtml(faithOf(b), { tech: b.unaddressable })}<span class="remnote" title="The full text is read back from its location in step ${esc(String(refK ?? '?'))}">removed</span></div><div class="cbc"></div></div>`
   }).join('')
   return `<div class="cwremoved ${open ? 'open' : ''}"><div class="cwremhd" data-navtoggle-rem="1" role="button" tabindex="0">${esc(W.removedList(removed.length, refK ?? '?'))} ▸</div>${open ? `<div class="cwrembody">${rows}</div>` : ''}</div>`
 }
@@ -86,7 +86,7 @@ const noRequestHtml = () => `<div class="cwnoreq">${esc(W.NO_REQUEST)}</div>`
 // ⑧: no text, no control — an empty frame the skeleton replaces (1.4 ⑧); `n` > 0 sizes it for that many rows (2.3 §大致页面: head.last.n)
 export const emptyFrameHtml = (n = 0) => `<div class="cwbusy" aria-busy="true"${n > 0 ? ` style="--n:${n}"` : ''}></div>`
 // the section frames of a step whose lane is not held (2.3 §车道未到手): one per section the row's composition names, sized
-// from its bytes (a row ≈ 28 px), no text, aria-busy; the lane's arrival replaces them
+// from its bytes (a unit of --cblk-pitch per 2,000), no text, aria-busy; the lane's arrival replaces them
 const FRAME_SECS = [['tools', ['tools']], ['system', ['system']], ['messages', null]]
 export function busyFramesHtml(s, row) {
   const comp = (row && row.comp) || {}, named = new Set(FRAME_SECS.flatMap(([, ks]) => ks || []))

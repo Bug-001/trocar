@@ -3,7 +3,7 @@
 // hash is the single source of truth, the tool row writes it, update(route) repaints from it. No statistic lives
 // here (D24: this is the source-data list; cross-session numbers are the 总览 page's named SQL).
 // Contract: mount(el, ctx) → {update(route), unmount()}; ctx = {api, store, router, toast}.
-import { esc, fmtTime } from '../core/fmt.mjs'
+import { esc, fmtTime, fmtStamp, relTime } from '../core/fmt.mjs'
 import { createVList } from '../core/vlist.mjs'
 import { delegate } from '../core/dom.mjs'
 import { harnessName, harnessIcon, harnessRaw } from '../core/chips.mjs'
@@ -83,11 +83,13 @@ export function rowHtml(s, sel, now) {
 // ── the caption row's html (pure — the wording is testable without a DOM): only what changes how far the list can
 // be trusted, joined by ·; bookkeeping rides in 技术细节. A failed read WITH an older list on screen says so here,
 // without one the failure replaces the table (readFailHtml below).
-export function captionHtml(errors, errR, readAt) {
+// `stored` = the list's stored-answer time (null for a fresh list); its age is measured against `now`.
+export function captionHtml(errors, errR, readAt, { stored = null, now = Date.now() } = {}) {
   if (errR && readAt == null) return '' // the failure replaces the table (readFailHtml) — its details are not drawn twice
-  const cf = captionFacts(errors)
-  const parts = cf.facts.map((x) =>
-    `<a href="${esc(formatHash({ area: 'settings', screen: 'settings-storage' }))}" title="${esc(W.CAP_NOT_ALL_TIP)}">${esc(W.capNotAllRead(x.n))} ›</a>`)
+  const cf = captionFacts(errors, stored)
+  const parts = cf.facts.map((x) => x.kind === 'stored'
+    ? `<span data-stored="${esc(x.at)}" title="${esc(fmtStamp(x.at))}">${esc(W.capStored(relTime(x.at, now)))}</span>`
+    : `<a href="${esc(formatHash({ area: 'settings', screen: 'settings-storage' }))}" title="${esc(W.CAP_NOT_ALL_TIP)}">${esc(W.capNotAllRead(x.n))} ›</a>`)
   if (errR && readAt != null) parts.push(`${esc(readFailure(W.SESSION_LIST, errR).line)} · <button type="button" class="linkbtn" data-act="retry">${esc(W.RETRY)}</button> · ${esc(W.capOldList(fmtTime(readAt)))}`)
   const tech = cf.tech.slice()
   if (errR) tech.push(String((errR.error || '') || 'HTTP ' + errR.status))
@@ -122,7 +124,7 @@ export function mount(el, ctx) {
   const { api, store, router, toast } = ctx
   let data = null, errR = null, sig = null, loaded = false, dead = false, vl = null, poller = null
   let rows = [], entries = [], total = 0, lastFilterSig = null, prevSelKey = null
-  let agentSig = null, projSig = null, sortSig = null, headHtml = '', readAt = null
+  let agentSig = null, projSig = null, sortSig = null, headHtml = '', readAt = null, listAt = null // readAt: the last fresh answer (页头); listAt: the last list read at all
   const cap = capShotMaker(() => api.get('status'), () => api.now()) // the one-shot capture-health read (空态 · the filtered agent)
   let f = parseFilters(router.current().params)
   // a one-time line another screen may have left (1.8: it is a toast, never a banner): take it, so it shows once
@@ -179,7 +181,7 @@ export function mount(el, ctx) {
 
   // ── the caption row and the standing-in states all render through the pure builders above ──────────────────────────
   function paintCaption() {
-    const html = captionHtml(data && data.errors, errR, errR ? readAt : null)
+    const html = captionHtml(data && data.errors, errR, errR ? listAt : null, { stored: (data && data.stored) || null, now: api.now() })
     if (capEl.innerHTML !== html) capEl.innerHTML = html
     capEl.style.display = html ? '' : 'none'
   }
@@ -226,11 +228,14 @@ export function mount(el, ctx) {
     const nextErr = r.ok ? null : r, next = r.ok ? r.data : data
     const s = listSignature(next, nextErr)
     const first = !loaded; loaded = true
-    if (r.ok) readAt = api.now()
-    if (s === sig && !first) { paintHead(); return r } // nothing the list shows changed: no repaint (the head's 数据读于 still moves)
+    if (r.ok) listAt = api.now()
+    if (r.ok && !r.data.stored) readAt = listAt // 数据读于 = the last fresh answer; a stored one is older than the read
+    // the stored answer is followed by the fresh one sooner (startPoll's `soon`); its caption age moves on every poll
+    const out = r.ok && r.data.stored ? { ...r, pending: true } : r
+    if (s === sig && !first) { paintHead(); if (out.pending) paintCaption(); return out } // nothing the list shows changed: no repaint
     sig = s; data = next; errR = nextErr
     paintHead(); refresh()
-    return r
+    return out
   }
 
   // ── opening a row and moving the highlight ─────────────────────────────────────────────────────────────────────────
@@ -277,7 +282,7 @@ export function mount(el, ctx) {
   clearEl.addEventListener('click', () => set({ q: null, h: null, project: null, window: null }))
   qEl.value = f.q
   paintHead(); paintTools(); paintList()
-  poller = startPoll({ run: poll, base: INTERVAL.sessions })
+  poller = startPoll({ run: poll, base: INTERVAL.sessions, soon: INTERVAL.session })
   return {
     update(route) { f = parseFilters(route.params); if (loaded) refresh(); else paintTools(); paintHead() },
     unmount() {

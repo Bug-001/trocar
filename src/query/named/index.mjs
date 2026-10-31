@@ -30,7 +30,7 @@ export const QUERIES = Object.freeze({
   // (src/cli/status.mjs statusDoc / doctor.mjs doctorDoc), so the two can never disagree.
   status: { params: Object.freeze(['harness']), run: (c) => verdict('status', c), stamp: () => null },
   doctor: { params: Object.freeze(['harness']), run: (c) => verdict('doctor', c), stamp: () => null },
-  sessions: { params: sessions.params, run: sessions.run, stamp: src.usage, times: TIMES }, // its titles come from the usage sidecars (4.4 §人类标题的来源)
+  sessions: { params: sessions.params, run: sessions.run, stored: sessions.stored, stamp: src.usage, times: TIMES }, // its titles come from the usage sidecars (4.4 §人类标题的来源)
   session: { params: session.params, run: session.run, version: session.version, stamp: src.corpus },
   lane: { params: lane.params, run: lane.run, version: lane.version, stamp: src.corpus },
   calls: { params: calls.params, run: calls.run, stamp: src.corpus, times: TIMES },

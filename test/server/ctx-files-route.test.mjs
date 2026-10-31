@@ -20,7 +20,7 @@ import { generate } from '../../scripts/gen-dataset.mjs'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { liveUnit } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
-import { within } from '../helpers/bounded.mjs'
+import { within, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from '../query/big-session.mjs'
 import { TOKEN, withToken, serveFace, request } from './face.mjs'
@@ -36,19 +36,6 @@ import { listenLocalhost } from '../helpers/localhost.mjs'
 const CALLS = 1_100 // ≥ 2 sealed packs of 512 (3.5 PACK_MEMBERS)
 const pause = (ms) => new Promise((d) => setTimeout(d, ms))
 const until = async (ok, ms, what) => within((async () => { while (!(await ok())) await pause(50) })(), ms, what)
-// A wait on the worker is bounded by what it reports, not by a fixed window: it lasts while `moving()` keeps changing (a slice reported
-// on the IPC channel, 3.5:42; the head's pending.done) and fails after STALL ms with no change. → its duration in ms.
-const STALL = 30_000
-const whileMoving = async (ok, moving, what) => {
-  const t0 = Date.now()
-  let seen = moving(), at = t0
-  while (!(await ok())) {
-    const now = moving()
-    if (now !== seen) { seen = now; at = Date.now() } else if (Date.now() - at > STALL) throw new Error(`${what}: no progress for ${STALL} ms`)
-    await pause(50)
-  }
-  return Date.now() - t0
-}
 const gz = { 'accept-encoding': 'gzip' }
 
 const get = (port, p, headers = {}) => new Promise((resolve, reject) => {
@@ -66,9 +53,10 @@ async function open(calls) {
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
   const s = bigSession({ home, wire: 'http', growth: 300, subEvery: 4, subLanes: 2, late: 3 })
   if (calls) s.append(calls)
-  const forks = [], reported = { n: 0 }
-  // idleMs outlasts the worker's idle period (worker.mjs IDLE_SLICE_MS): its save writes the head the last slice left behind (3.5 答案文件)
-  const svc = createQueryService({ home, idleMs: 4000, fork: (...a) => { const c = workerFork(...a); c.on('message', () => { reported.n++ }); forks.push(c); return c } })
+  const reported = reporting(workerFork), forks = reported.kids
+  // the service's own idle clock: the worker runs niced (worker.mjs lowerPriority), so on a busy machine its slices land further apart
+  // than a test idleMs of a few seconds, and by the rule it then leaves mid-fold with nothing here to fork it again
+  const svc = createQueryService({ home, fork: reported.fork })
   const tips = tipTable()
   const { server } = createServer({ home, token: TOKEN, query: svc, tips: tips.of })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
@@ -76,14 +64,14 @@ async function open(calls) {
   const dir = sessionDir(home, s.id), file = (f) => path.join(dir, f)
   const d = (f, h = {}, id = s.id) => get(port, `/api/d/${f}?id=${encodeURIComponent(id)}`, withToken(h))
   const gone = () => forks.every((c) => c.exitCode !== null || c.signalCode !== null)
-  // the worker leaves on its idle clock, which each reported slice starts again: waited for as long as it still reports
-  const left = (what) => whileMoving(gone, () => reported.n, what)
+  // the worker ended as the daemon's stop ends it (how it leaves on its idle clock is query-service.test.mjs's case)
+  const left = async (what) => { svc.stop(); return whileMoving(gone, () => reported.n, what) }
   return { home, id: s.id, svc, tips, server, port, forks, reported, dir, file, d, gone, left, waits: {}, api: (p, h = {}) => get(port, p, withToken(h)) }
 }
 /** The home the #15 and #16 cases share: CALLS members. */
 let world = null
 const theWorld = () => (world ||= open(CALLS))
-/** The world once the worker folded the whole session (its head has no `pending`, its tails are written) and left on its idle clock.
+/** The world once the worker folded the whole session (its head has no `pending`, its tails are written) and is gone.
  *  The #15 and #16 cases have no fixed timeout: the worker runs at low priority (worker.mjs lowerPriority), so under the full suite's load its
  *  fold takes as long as it is given CPU; every wait on it lasts while it reports progress and fails after STALL ms without. */
 let foldedWorld = null
@@ -98,7 +86,7 @@ function folded() {
       done = head?.pending?.done ?? done
       return head != null && head.pending == null && fs.existsSync(w.file('open.rest.ndjson'))
     }, () => `${w.reported.n} ${done}`, 'the worker folded the session and wrote its files')
-    w.waits.left = await w.left('the worker left on its idle clock')
+    w.waits.left = await w.left('the worker is gone')
     return w
   })()
   return foldedWorld

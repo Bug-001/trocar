@@ -146,15 +146,16 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
     let lo = 0, hi = lines.bytes - off; // `lo` bytes read with no newline; nothing past `hi`
     for (let n = Math.min(1024, hi); ;) {
       const b = tryRead(off, n);
-      if (b) { const i = b.indexOf(10); if (i !== -1) return [JSON.parse(b.toString('utf8', 0, i)), i]; lo = n; } else hi = n - 1;
-      if (lo >= hi) throw new RangeError(`no line at byte ${off} of the fold log`);
+      if (b) { const i = b.indexOf(10); if (i !== -1) return [lines.json(off, i), i]; lo = n; } else hi = n - 1;
+      if (lo >= hi) throw lines.fault(off, lo);
       n = b ? Math.min(2 * n, hi) : (lo + hi + 1) >> 1;
     }
   }
   function entry(off, len) {
     let e = cache.get(off);
     if (e) return e;
-    e = len == null ? lineAt(off) : [JSON.parse(lines.read(off, len).toString('utf8')), len];
+    e = len == null ? lineAt(off) : [lines.json(off, len), len];
+    if (!kindOf(e[0])) throw lines.fault(off, e[1]); // a whole line there, but no fold log line: another generation
     cache.set(off, e, e[1] * HEAP_PER_LINE_BYTE);
     return e;
   }
@@ -223,7 +224,7 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
     failures: keyed(fails),
     read: (off, len) => entry(off, len)[0],
     /** read() that leaves the cache as it is: a scan of every line (session-doc.mjs sync) parses each once and lets it go young. */
-    peek: (off, len) => { const e = cache.get(off); return e ? e[0] : JSON.parse(lines.read(off, len).toString('utf8')); },
+    peek: (off, len) => { const e = cache.get(off); return e ? e[0] : lines.json(off, len); },
     /** The latest line of `rid` at or before byte `off`: walks `p` back from its latest line. */
     versionAt,
     /** The rids and lane keys whose latest line lies past byte `off` (newest first): O(how many). */

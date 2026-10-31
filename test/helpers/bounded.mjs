@@ -38,3 +38,31 @@ export function onceWithin(emitter, name, ms = 5000) {
 export function closeWithin(closable, ms = 5000, what = 'engine.close() (a flow or a client socket is still open)') {
   return within(Promise.resolve().then(() => closable.close()), ms, what)
 }
+
+/** A wait on the real query worker has no fixed window: it runs niced behind everything else (src/query/worker.mjs lowerPriority), so
+ *  a window measures the machine's load and not the worker. It lasts while the worker reports (3.5:42) and fails after STALL ms with none. */
+export const STALL = 30_000
+
+/**
+ * whileMoving(ok, moving, what, stall = STALL) → how long it waited, in ms, once `ok()` (sync or async) holds; polled every 50 ms. It
+ * lasts while `moving()` keeps changing (a count of the worker's reports, a head's pending.done) and rejects
+ * `${what}: no progress for ${stall} ms` once `moving()` stayed the same for `stall` ms.
+ */
+export async function whileMoving(ok, moving, what, stall = STALL) {
+  const t0 = Date.now()
+  let seen = moving(), at = t0
+  while (!(await ok())) {
+    const now = moving()
+    if (now !== seen) { seen = now; at = Date.now() } else if (Date.now() - at > stall) throw new Error(`${what}: no progress for ${stall} ms`)
+    await new Promise((d) => setTimeout(d, 50))
+  }
+  return Date.now() - t0
+}
+
+/** reporting(fork) → `{ fork, kids, n }`: `fork` is `fork` for createQueryService that keeps the workers it starts in `kids`, in
+ *  order, and counts in `n` every message they send on the IPC channel (a query's progress, a background slice: 3.5:42). */
+export function reporting(fork) {
+  const r = { kids: [], n: 0 }
+  r.fork = (...a) => { const c = fork(...a); c.on('message', () => { r.n++ }); r.kids.push(c); return c }
+  return r
+}

@@ -17,7 +17,7 @@ import { SCREEN_NAME } from '../labels/shell.mjs'
 import { harnessKey, harnessName, harnessIcon, UNIDENTIFIED } from '../core/chips.mjs'
 import { captureVerdict, capHealthPatch, agentVerdicts, failureSentence, AGENT_TIER } from '../core/capture-verdict.mjs'
 import { priceMatch, costOf, hitRatio, priceTableOf } from '../core/metrics.mjs'
-import { loadSessions } from '../library/logic.mjs'
+import { freshSessions } from '../library/logic.mjs'
 import { startPoll, INTERVAL } from '../core/poll.mjs'
 import { unpricedModels } from '../settings/prices.mjs'
 import { failureBrief, failureWord } from '../../../cli/words.mjs'
@@ -475,7 +475,7 @@ export function mount(el, ctx) {
     return { ok: s.caph.ok }
   }
   const readControl = () => api.controlStatus().then((r) => { s.control = r }, (e) => { s.control = { ok: false, error: String(e) } }).finally(render)
-  const readSessions = async () => fold('sessions', await loadSessions(api))
+  const readSessions = async () => fold('sessions', await freshSessions(api, { alive: () => !dead })) // a stored answer is not shown (4.4 §存下的答案)
   // the five slow reads share two sockets (1.7 §读取与刷新: the browser's six per origin keep room for status and sessions), the
   // window's own stats read included; an aborted read gives its socket back at once, as the browser does
   let free = 2

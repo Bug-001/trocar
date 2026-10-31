@@ -2,7 +2,7 @@
 // #/replay/<project>/<id>, carrying the link's step and call; a session the list does not have says so, with a way back to 会话.
 // Contract: mount(el, ctx) → {update(route), unmount()}.
 import { esc } from '../core/fmt.mjs'
-import { loadSessions } from '../library/logic.mjs'
+import { freshSessions } from '../library/logic.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { SCREEN_NAME, SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
 
@@ -18,7 +18,7 @@ export function mount(el, ctx) {
   let dead = false
   const say = (html) => { el.innerHTML = `<div class="page">${pageHeadHtml({ name: SCREEN_NAME['session-link'] })}${html}</div>` }
   say('')
-  loadSessions(api).then((r) => {
+  freshSessions(api, { alive: () => !dead }).then((r) => { // a stored (older) list may lack a newer session: only a fresh one says so
     if (dead) return
     if (!r.ok) return say(`<p class="note bad" role="alert">Could not read the session list: ${esc(r.error || 'cause not known')}</p>`)
     const hit = findSession(r.data, link.id)

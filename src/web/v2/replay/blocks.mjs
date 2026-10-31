@@ -53,7 +53,7 @@ export const ffWord = (f) => W.FF_WORD[f] || W.FF_WORD.unknown
 // screen-reader word only (the section header says 以下逐字 once for a fully proven section).
 export function ffBadgeHtml(f, { tech = '' } = {}) {
   if (f == null || f === 'verbatim') return ''
-  return `<span class="ffbadge ff-${esc(f)}" data-ff="${esc(f)}"${tech ? ` title="${esc(tech)}"` : ''}>${esc(W.HALF_MARK + ' ' + ffWord(f))}</span>`
+  return `<span class="ffbadge ff-${esc(f)}" data-ff="${esc(f)}" title="${esc(tech || ffWord(f))}">${esc(W.HALF_MARK + ' ' + ffWord(f))}</span>`
 }
 // kept for the drawer's folded-row label (detail.mjs); the emoji forms are gone (2.3 砍掉的)
 export const FF = Object.freeze(Object.fromEntries(Object.entries(W.FF_WORD).map(([k, text]) => [k, { text }])))
@@ -150,7 +150,7 @@ export function blockRowHtml(head, { cls = '', attrs = '', badges = '', chars = 
   const tag = tagWord(head.tag), label = head.label || ''
   const n = typeof chars === 'number' ? `<span class="cbchars">${esc(kf(chars))} ${esc(W.CHARS_WORD)}</span>` : ''
   return `<div class="cblk ${open ? '' : 'collapsed'} ${cls}"${attrs}>` +
-    `<div class="cbh" role="button" tabindex="0" aria-expanded="${open}"><span class="cbrole">${esc(head.role)}</span><span class="cbtag"${tag ? '' : ` title="${esc(String(head.tag || ''))}"`}>${esc(tag || W.TAG_UNKNOWN)}</span>${label ? `<span class="cblabel" title="${esc(label)}">${esc(label)}</span>` : ''}${badges}${n}` +
+    `<div class="cbh" role="button" tabindex="0" aria-expanded="${open}"><span class="cbrole">${esc(head.role)}</span><span class="cbtag" title="${esc(tag || String(head.tag || ''))}">${esc(tag || W.TAG_UNKNOWN)}</span>${label ? `<span class="cblabel" title="${esc(label)}">${esc(label)}</span>` : ''}${badges}${n}` +
     `</div><div class="cbc"${open ? ' data-filled="1"' : ''}>${open ? body : ''}</div></div>`
 }
 // a request row as its unit html: no position on it (the window writes data-bi on placement, 2.3 §读与画)

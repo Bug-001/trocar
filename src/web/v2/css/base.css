@@ -48,6 +48,7 @@
   /* type */
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", system-ui, sans-serif;
   --mono: "SF Mono", ui-monospace, Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", monospace;
+  --lh: 20px;         /* the body's line */
   --fs-chart: 11px;   /* inside charts only, digits / axis labels */
   --fs-cap: 12px;     /* second lines, captions, marks */
   --fs-body: 13px;    /* tables, body, mono verbatim */
@@ -120,7 +121,7 @@
 }
 
 *{box-sizing:border-box;}
-body{margin:0;background:var(--paper);color:var(--ink);font:400 var(--fs-body)/20px var(--sans);font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;height:100vh;overflow:hidden;}
+body{margin:0;background:var(--paper);color:var(--ink);font:400 var(--fs-body)/var(--lh) var(--sans);font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;height:100vh;overflow:hidden;}
 a{color:var(--action);text-decoration:none;}
 a:hover{text-decoration:underline;text-underline-offset:3px;}
 :focus-visible{outline:2px solid var(--action);outline-offset:2px;border-radius:var(--r-1);}
