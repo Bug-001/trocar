@@ -42,7 +42,7 @@ import { pathToFileURL } from 'node:url'
 import { LOCAL_ENV } from './client.mjs'
 import { answer } from './answers.mjs'
 import { lowerPriority } from '../low-priority.mjs'
-import { extendSession, indexed, saveIndexes, sealParts } from './named/session.mjs'
+import { extendSession, indexed, openSessions, saveIndexes, sealParts } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
 import { gcProjections, posCmp, sessionDir } from './projection.mjs'
 import { headFile, skipFile, tier0Doc, writeHead, writeSkip } from './ctx-files.mjs'
@@ -207,7 +207,11 @@ async function background() {
   if (sealing) sealing = sealParts(end)
   else { gcDone = true; sealing = saveIndexes(end) } // the sidecars of what this busy period grew, before the GC counts them
   if (sealing) { progress(); return kick() }
-  gcProjections({ home, liveKeys: [...sessionGroups(await indexRows({ home, errors: [], progress })).keys()], keepKeys: answered })
+  // never the sessions open here (a kick's, the newest's, the upgrade queue's as much as an answered one's); none at all when raw/ could
+  // not be listed: who still lives is not known (4.3 §4 回收), which is a D38 record
+  const errors = [], live = sessionGroups(await indexRows({ home, errors, progress })), unlisted = errors.find((e) => e.where === 'raw')
+  if (unlisted) persist(unlisted)
+  else gcProjections({ home, liveKeys: [...live.keys()], keepKeys: [...answered, ...openSessions()] })
   worked()
 }
 

@@ -187,6 +187,9 @@ export async function indexed({ home, fs, once, progress }) {
 }
 // A hand-off lets the read-only store go: the worker writes the members it lacks, which a store opened before cannot see.
 function letGo(k, e) { closeStore(k); return e; }
+/** openSessions() → the ids of the sessions whose projection store is open here (and with it any fold log of theirs): the GC never
+ *  deletes their directories (4.3 §4 回收), whoever opened them. */
+export const openSessions = () => [...stores.values()].map((s) => s.session);
 // Every store closes here (a hand-off, the eviction past STORES): its reduction state with it, and its `work` stays with the worker.
 function closeStore(k) { const s = stores.get(k), st = states.take(k); if (st) closeState(st); stores.delete(k); frontiers.delete(k); if (s) { works.set(k, s.work); s.close(); } }
 /** again(ctx, id, f) → f(), and f() once more when it threw ELINEPART (line-file.mjs: a part first decoded after the open, which
@@ -212,7 +215,7 @@ function storeOf(ctx, id, k) {
   if (s) { stores.delete(k); stores.set(k, s); return s; }
   const opened = [];
   s = openProjection({ home: ctx.home, fs: ctx.fs, key: id, write: ctx.writer === true, errors: opened });
-  s.opened = opened;
+  s.opened = opened; s.session = id;
   s.work = works.get(k) || 0; // `pending.work`, counted on the open store and kept by closeStore
   stores.set(k, s);
   for (const kk of stores.keys()) { if (stores.size <= STORES) break; closeStore(kk); }

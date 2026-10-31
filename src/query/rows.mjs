@@ -50,7 +50,7 @@ const lineOf = (id) => Number(String(id).split(':').pop());
  */
 export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [], progress = null } = {}) {
   const segs = [];
-  for (const [segment, at] of segmentFiles(home, fs)) {
+  for (const [segment, at] of segmentFiles(home, fs, errors)) {
     const { records, problems } = await warmSegmentIndex({ home, segment, fs, at, progress });
     if (progress) progress();
     for (const pr of problems) errors.push(problemEntry(`segments/${segment}`, pr));

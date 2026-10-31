@@ -631,10 +631,14 @@ export function segmentCmp(a, b) {
   const [sa, na = 1] = String(a).split('-'), [sb, nb = 1] = String(b).split('-');
   return sa < sb ? -1 : sa > sb ? 1 : Number(na) - Number(nb);
 }
-/** segmentFiles(home, fs) → [[segment, {plain, sealed}]], oldest first (segmentCmp): which segments raw/ holds, from the names alone. */
-export function segmentFiles(home = trocarHome(), fs = nodeFs) {
+/** segmentFiles(home, fs, errors) → [[segment, {plain, sealed}]], oldest first (segmentCmp): which segments raw/ holds, from the names
+ *  alone. No raw/ holds none; a raw/ that cannot be listed holds none either, and says so in `errors` (`where: 'raw'`, D38). */
+export function segmentFiles(home = trocarHome(), fs = nodeFs, errors = []) {
   let names;
-  try { names = fs.readdirSync(rawDir(home)); } catch { return []; }
+  try { names = fs.readdirSync(rawDir(home)); } catch (e) {
+    if (e.code !== 'ENOENT') errors.push(problemEntry('raw', { code: 'segment-unreadable', reason: `The capture folder could not be listed (${e.code || e.message}), so no capture file is read.` }));
+    return [];
+  }
   const seen = new Map();
   for (const n of names) {
     const p = parseSegment(n);
