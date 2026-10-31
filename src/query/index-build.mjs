@@ -599,9 +599,9 @@ const defaultLockState = (home, fs) => readDaemonLock({ file: path.join(collecto
 // wins (4.2:30), so it is the source, it gives the bytes, and the state is `closed` — not `sealed`, which would say the
 // long-term copy is the sealed one while 128 MB of plaintext is still on disk (tested 2026-10-18).
 /** allSegments({home}) → [{ segment, state, path, records, bytes, sealed_bytes, from, to, problems }], oldest first. `progress`: called
- *  after every segment and every chunk a cold segment's scan reads (as indexRows). */
-export async function allSegments({ home = trocarHome(), fs = nodeFs, lockState = () => defaultLockState(home, fs), progress = null } = {}) {
-  const seen = segmentFiles(home, fs);
+ *  after every segment and every chunk a cold segment's scan reads (as indexRows). `errors`: a raw/ that cannot be listed (segmentFiles). */
+export async function allSegments({ home = trocarHome(), fs = nodeFs, errors = [], lockState = () => defaultLockState(home, fs), progress = null } = {}) {
+  const seen = segmentFiles(home, fs, errors);
   const L = lockState() || {};
   const current = L.state === 'running' && L.lock ? L.lock.segment || null : null;
   const out = [];

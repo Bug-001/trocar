@@ -18,7 +18,7 @@ export async function run({ home, fs, now, errors, progress = null }) {
 
   const counts = new Map(table.classes.map((c) => [c.class, zero()]));
   const t = now();
-  const segs = await allSegments({ home, fs, progress });
+  const segs = await allSegments({ home, fs, progress, errors });
   let as_of = null; // 附录 C.5: the newest call time in the whole index
 
   for (const s of segs) {

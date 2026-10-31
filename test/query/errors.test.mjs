@@ -50,6 +50,22 @@ test('一个段读不出:文档照出,errors 说哪个段', async () => {
   assert.ok(docs.classes.errors.some((e) => e.where === 'segments/20261017T090000Z'))
 })
 
+// 4.3 §4 回收: a raw/ that cannot be listed (here a file in its place) is said in the read's `errors` as `where:'raw'`
+// `segment-unreadable`; a raw/ that is not there is no segments, not an error.
+test('raw/ 列不出:读的 errors 有 where raw 的 segment-unreadable;raw/ 不在时没有', async () => {
+  const home = rawHome()
+  fs.rmSync(path.join(home, 'raw'), { recursive: true })
+  const lists = ['segments', 'sessions', 'classes'] // the reads that list raw/
+  for (const name of lists) assert.equal((await runQuery(name, {}, { home })).errors.filter((e) => e.where === 'raw').length, 0, name)
+  fs.writeFileSync(path.join(home, 'raw'), 'not a folder')
+  for (const name of lists) {
+    const doc = await runQuery(name, {}, { home })
+    assert.deepEqual(validateQueryDoc(doc, name), [])
+    assert.equal(doc.ok, false, name)
+    assert.deepEqual(doc.errors.filter((e) => e.where === 'raw').map((e) => e.code), ['segment-unreadable'], name)
+  }
+})
+
 test('一份索引坏了:下一次读把它重建,答案与好索引时逐字段相等', async () => {
   const home = rawHome()
   writeSegment(home, SEG, [{ id: 'a', sessionKey: 's-1' }, { id: 'b', class: 'account' }])
