@@ -74,7 +74,7 @@ export const measure = (page, name, startMark) => page.evaluate(([n, s]) => perf
 
 /** ms from the input `act` makes (its first pointerdown / keydown, marked by a listener armed and awaited before it, so the input can
  *  never outrun it) until `cond` holds and that frame has painted: 'replay' (a session's window drawn), 'step' (the step head no longer
- *  reads `arg` and the window is drawn), 'sel' (selector `arg` matches). Rejects after 10 s. */
+ *  reads `arg` and the window is drawn), 'n' (the step head's number, data-n, is no longer `arg` and the window is drawn), 'sel' (selector `arg` matches). Rejects after 10 s. */
 export async function timed(page, cond, arg, act) {
   await page.evaluate(() => {
     performance.clearMarks('in')
@@ -87,6 +87,7 @@ export async function timed(page, cond, arg, act) {
     const holds = {
       replay: () => location.hash.startsWith('#/replay/') && !!q('#stepbar .sb-no') && !!q('#ctxwin') && !q('#ctxwin .cwload'),
       step: () => !!q('#stepbar .sb-no') && q('#stepbar .sb-no').textContent !== a && !q('#ctxwin .cwload'),
+      n: () => !!q('#stepbar .sb-no') && +q('#stepbar .sb-no').dataset.n !== a && !q('#ctxwin .cwload'),
       sel: () => !!q(a),
     }[cond]
     const t0 = performance.now()
