@@ -104,10 +104,12 @@ export async function timed(page, cond, arg, act) {
  *  /api/d/open.<part> (append-only: each read appends the lines of the open span that changed since the last one, `g` for a rid that
  *  left it; one generation tag per n; `Range: bytes=N-` → 206 or 416, an If-Range of another tag → 200, as 4.4 §答案文件), and `lane` (the ledger) and `block`. `grow` > 0: a session still being read
  *  for the first time (3.5 §归约前沿) — each head read moves k on by `grow` members, and every head before the last mark carries
- *  `pending: {done, total}`. `latency`: every answer waits that many ms first. → { left() }: the members not reached yet. */
-export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0, latency = 0, pack = 32 } = {}) {
+ *  `pending: {done, total}`. `paced`: a head read moves k on only while a move granted by more(n) is left, so the growth follows
+ *  the test's steps rather than the board's poll timer. `latency`: every answer waits that many ms first. → { left(), more(n) }: the
+ *  members not reached yet; grant n more moves. */
+export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0, latency = 0, pack = 32, paced = false } = {}) {
   const last = w.marks.length - 1
-  let k = Math.min(from, last), at = null, f = null
+  let k = Math.min(from, last), at = null, f = null, granted = paced ? 0 : Infinity
   const json = (route, doc) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(doc) })
   const wait = () => new Promise((r) => setTimeout(r, latency))
   const now = () => { if (at !== k) { at = k; f = w.files(w.marks[k], pack); if (k < last) f.head = { ...f.head, pending: { done: k + 1, total: last + 1 } } } return f }
@@ -129,7 +131,7 @@ export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0,
     await wait()
     const req = route.request(), u = new URL(req.url()), name = u.pathname.slice('/api/d/'.length)
     if (name === 'head') {
-      k = Math.min(last, k + (at == null ? 0 : grow))
+      if (at != null && granted > 0) { granted--; k = Math.min(last, k + grow) }
       const body = JSON.stringify(now().head), etag = `"${createHash('sha1').update(body).digest('hex').slice(0, 16)}"`
       if (req.headers()['if-none-match'] === etag) return route.fulfill({ status: 304, headers: { etag } })
       return route.fulfill({ status: 200, contentType: 'application/json', headers: { etag }, body })
@@ -151,7 +153,7 @@ export async function serveWorld(page, w, { from = w.marks.length - 1, grow = 0,
     const refs = new URL(route.request().url()).searchParams.getAll('ref')
     json(route, { schema: 2, command: 'block', ok: true, errors: [], blocks: refs.map((ref) => ({ ref, bytes: blockBytes(ref), encoding: 'utf8', fidelity: 'verbatim', truncated: false })) })
   })
-  return { left: () => last - k }
+  return { left: () => last - k, more: (n = 1) => { granted += n } }
 }
 /** The bytes serveWorld answers for a `block` ref. */
 export const blockBytes = (ref) => `body of ${ref}`

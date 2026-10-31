@@ -1,8 +1,9 @@
 // test/web-v2/browser/desk-pending.test.mjs — 2.3 §读与画 (归约前沿) · D64② · D69 on the mounted desk while a big session is read for the
 // first time: its session reads are answered from a generated world of 30,000 calls on three lanes (desk-world.mjs) whose mark moves on
-// by 1,000 members at each head read and carries `pending` until the last one, so every poll brings hundreds of rows, relanes and
-// events. While it grows the reader follows, scrubs 60 steps by ←/→ and jumps by the overlay rows' ticks: no task of the page's own
-// runs over I-longtask's line, and a step change's p95 is within BOARD_LINES.stepClick. Runs only under `npm run test:browser`.
+// by 1,000 members at each answer and carries `pending` until the last one, so every answer brings hundreds of rows, relanes and
+// events. The answers are paced by the case's own steps, not by the poll timer, so a slow machine sees the same growth. While it grows
+// the reader follows, scrubs 60 steps by ←/→ and jumps by the overlay rows' ticks: no task of the page's own runs over I-longtask's
+// line, and a step change's p95 is within BOARD_LINES.stepClick. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, serveWorld, timed, stats } from './harness.mjs'
@@ -24,14 +25,24 @@ test('2.3 归约前沿 · D64②: a session growing by 1,000 members a poll — 
   const b = await withBoard({ bytes: 1e5, width: 1440, chromium: gate.chromium, setup: (page) => page.addInitScript(observeLongTasks) })
   try {
     const { page } = b
-    const growth = await serveWorld(page, w, { from: 4000, grow: 1000, pack: 512 })
+    const from = 4000, growth = await serveWorld(page, w, { from, grow: 1000, pack: 512, paced: true })
+    let asked = 0
     await page.route('**/api/block?**', (route) => route.fulfill({ status: 200, contentType: 'application/json',
       body: JSON.stringify({ blocks: new URL(route.request().url()).searchParams.getAll('ref').map((ref) => ({ ref, bytes: 'x', encoding: 'utf8', fidelity: 'verbatim', truncated: false })), errors: [] }) }))
     const longTasks = () => page.evaluate(() => window.__lt.splice(0))
     const step = () => page.textContent('#stepbar .sb-no')
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     await page.waitForSelector('#stepbar .sb-no')
-    const answers = async (n) => { const to = growth.left() - n * 1000; while (growth.left() > to) await page.waitForTimeout(100) }
+    // the step head's number and count (Step n / m), and a wait until pred(n, m, a) holds in a drawn frame
+    const at = () => page.evaluate(() => { const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || ''); return x ? [+x[1], +x[2]] : null })
+    const landed = (pred, arg) => page.waitForFunction(([src, a]) => { const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || ''); return !!x && new Function('n', 'm', 'a', src)(+x[1], +x[2], a) }, [pred, arg], { timeout: 30000, polling: 'raf' })
+    // n more answers, each drawn: the step head counts the main lane's steps at the mark the server is at (1.2 §会话头)
+    const answers = async (n) => {
+      const to = growth.left() - n * 1000
+      growth.more(n); asked += n
+      while (growth.left() > to) await page.waitForTimeout(100)
+      await landed('return m === a', w.files(w.marks[w.marks.length - 1 - growth.left()], 512).head.steps)
+    }
     await answers(1)
     await longTasks() // the open is D64①'s, not this case's
     const seen = { follow: [], scrub: [], lanes: [] }, samples = []
@@ -43,24 +54,39 @@ test('2.3 归约前沿 · D64②: a session growing by 1,000 members a poll — 
     assert.notEqual(await step(), first, 'the followed step moved with the growth')
 
     // scrubbing: 30 steps back, 30 forward
-    for (let i = 0; i < 60; i++) samples.push(await timed(page, 'step', await step(), () => page.keyboard.press(i < 30 ? 'ArrowLeft' : 'ArrowRight')))
+    for (let i = 0; i < 60; i++) {
+      if (i === 30) await answers(1) // one answer lands mid-scrub
+      samples.push(await timed(page, 'step', await step(), () => page.keyboard.press(i < 30 ? 'ArrowLeft' : 'ArrowRight')))
+    }
     seen.scrub = await longTasks()
 
-    // lane jumps: from the newest step, a tick of the overlay rows in the older half of the window; a last chapter too short to hold
-    // one is left by [ to the chapter before it (1.3 §章: the window is the playhead's chapter)
-    const ticks = page.locator('#rails .tick[data-lane]')
-    const older = () => page.evaluate(() => [...document.querySelectorAll('#rails .tick[data-lane]')].flatMap((t, i) => (parseFloat(t.style.left) < 50 ? [i] : [])))
+    // lane jumps: from the newest step, a tick of the overlay rows more than a bar left of the playhead, so the click moves the step;
+    // a last chapter too short to hold one is left by [ to the chapter before it (1.3 §章: the window is the playhead's chapter).
+    // The rows are redrawn by every answer, so the point is aimed and hit-checked in one task (as seq/actions.mjs clickIn) and clicked
+    // as a point: a node or index read in one task and clicked in another can name another tick or a detached one
+    const older = (j) => page.evaluate((j) => {
+      const cur = document.querySelector('#sawrow .bar.cur'), r0 = cur && cur.getBoundingClientRect()
+      if (!r0) return null
+      const mid = (e) => { const r = e.getBoundingClientRect(); return r.left + r.width / 2 }
+      const ts = [...document.querySelectorAll('#rails .tick[data-lane]')].filter((t) => mid(t) < r0.left - r0.width), t = ts[j % Math.max(1, ts.length)]
+      if (!t) return null
+      const r = t.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2
+      return document.elementFromPoint(x, y) === t ? { x, y } : null
+    }, j)
     for (let j = 0; j < 10; j++) {
+      if (j === 5) await answers(1) // one answer lands mid-jumps
       await page.keyboard.press('End')
-      let idx = await older()
-      for (let k = 0; k < 20 && !idx.length; k++) { if (k % 4 === 0) await page.keyboard.press('['); await page.waitForTimeout(50); idx = await older() }
-      assert.ok(idx.length, 'the overlay rows draw ticks in the older half of the window')
-      samples.push(await timed(page, 'step', await step(), () => ticks.nth(idx[j % idx.length]).click({ force: true })))
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r()))) // End is painted in the next frame (replay.mjs paintKey): after it
+      let pt = await older(j)
+      for (let k = 0; k < 5 && !pt; k++) { const n0 = (await at())[0]; await page.keyboard.press('['); await landed('return n !== a', n0); pt = await older(j) }
+      assert.ok(pt, 'the overlay rows draw ticks in the older half of the window')
+      samples.push(await timed(page, 'step', await step(), () => page.mouse.click(pt.x, pt.y)))
     }
     seen.lanes = await longTasks()
 
     const { p50, p95 } = stats(samples)
     console.log(`# pending growth: ${growth.left()} members still to come; long tasks follow [${seen.follow.map(Math.round)}] scrub [${seen.scrub.map(Math.round)}] lanes [${seen.lanes.map(Math.round)}]; step n=${samples.length} p50=${p50.toFixed(1)} ms p95=${p95.toFixed(1)} ms line=${BOARD_LINES.stepClick} ms`)
+    assert.equal(growth.left(), w.marks.length - 1 - from - asked * 1000, 'the growth moved by the answers asked, no more')
     assert.ok(growth.left() > 0, 'the session was still pending through every phase')
     for (const [phase, ms] of Object.entries(seen)) assert.ok(Math.max(0, ...ms) <= LIMITS.longtaskMs, `${phase}: a long task of ${Math.round(Math.max(...ms))} ms`)
     assert.ok(p95 <= BOARD_LINES.stepClick, `step change p95 ${p95.toFixed(1)} ms over the ${BOARD_LINES.stepClick} ms line`)
