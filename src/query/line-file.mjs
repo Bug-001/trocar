@@ -7,7 +7,8 @@
 // holds it, once, into a cache of decoded frames capped by bytes, off the V8 heap (releaseParts() drops it). The lines past the
 // disk's end live in an off-heap ARENA (Buffers: external memory, not the V8 heap): `write: false` (the local path, which writes
 // nothing) appends every line there; `write: true` appends to the tail, and a write that fails keeps
-// the text in the arena (`onFail(error)` once per episode of failures) and writes it with the next append that works. The arena
+// the text in the arena (`onFail(error)` once per episode of failures) and writes it with the next append that works; a writer
+// whose plain tail on disk is not the length it knows writes nothing and throws ELINEPART (someone else changed its files). The arena
 // starts at the disk's end, so an offset handed out never changes. One descriptor for reads of the tail, closed by close(), by
 // seal(), or, failing that, when the line file is collected.
 //   A SIDECAR (4.3 §4 旁索引) beside it, `<name>.idx`, holds what a scan of the first `bytes` would have put in the heap: the
@@ -228,7 +229,7 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
     if (write) try { fs.rmSync(p.path, { force: true }); } catch { /* the next open */ }
   }
   const partIndex = (off) => { let lo = 0, hi = parts.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (parts[mid].a <= off) lo = mid; else hi = mid - 1; } return lo; };
-  function frame(p, rel) { try { return frameOf(fs, p, rel); } catch (e) { broken(p, e); throw Object.assign(new Error(unreadable), { code: 'ELINEPART' }); } }
+  function frame(p, rel) { try { return frameOf(fs, p, rel); } catch (e) { broken(p, e); throw said(Object.assign(new Error(unreadable), { code: 'ELINEPART' })); } }
   // part p's plain bytes [0, n): its frames from the first
   const prefix = (p, n) => { const bs = []; for (let at = 0; at < n;) { const f = frame(p, at); bs.push(f.buf); at = f.at + f.buf.length; } return Buffer.concat(bs).subarray(0, n); };
 
@@ -245,19 +246,30 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
     parts = keep; C = T = nc; junk = false;
   }
 
+  // A writer writes only at the end its index knows (4.3 §4 分片): its plain tail on disk holds exactly the bytes it wrote there (no
+  // file: none). Else someone else changed its files (its directory removed, the tail cut back and written again by another handle):
+  // this handle writes nothing and throws ELINEPART, which the owner rereads on.
+  function mine() {
+    let n = 0;
+    try { n = fs.statSync(tailOf(T)).size; } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    if (n !== end - T) throw said(Object.assign(new Error(`${name}: its plain tail holds ${n} B, not the ${end - T} B this handle knows: the file is not its generation`), { code: 'ELINEPART' }));
+  }
+
   function append(text) {
     const at = end + arena, buf = Buffer.from(text, 'utf8');
     if (write) {
       try {
-        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-        if (!end || (trunc && covers > end)) fs.rmSync(sidecarOf(side), { force: true }); // what it covers is no longer there
         if (trunc) settle();
+        mine();
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); // a line file that holds nothing yet, or whose tail is empty
+        if (!end || (trunc && covers > end)) fs.rmSync(sidecarOf(side), { force: true }); // what it covers is no longer there
         trunc = true; // until the append is known whole
         const out = arena ? Buffer.concat([...bufs, buf]) : buf;
         fs.appendFileSync(tailOf(T), out, { mode: 0o600 });
         trunc = false; failing = false; end += out.length; starts = []; bufs = []; arena = 0;
         return at;
       } catch (e) {
+        if (e.code === 'ELINEPART') throw e;
         if (!failing) onFail(e);
         failing = true;
       }
@@ -299,9 +311,12 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
     } catch (e) { if (!(e instanceof RangeError || e instanceof SyntaxError || e.code === 'ENOENT')) throw e; }
     throw fault(off, len);
   }
-  // the fault, said on stderr the first time per file (the daemon keeps it, D38)
   function fault(off, len) {
-    const e = Object.assign(new Error(`${name}: no whole line at byte ${off} (${len} B): the file is not the generation its index was built from`), { code: 'ELINEPART' });
+    return said(Object.assign(new Error(`${name}: no whole line at byte ${off} (${len} B): the file is not the generation its index was built from`), { code: 'ELINEPART' }));
+  }
+  // an ELINEPART (a part that does not decode, a line that is not there, a tail that is not this handle's), said on stderr the first
+  // time per file (the daemon keeps it, D38)
+  function said(e) {
     if (!told.has(base)) { told.add(base); process.stderr.write(`trocar query: ${dir}: ${e.message}\n`); }
     return e;
   }
@@ -341,7 +356,7 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
    *  reads as it opens after a kill there. The writes and the files are those of one call with no deadline. A cut drops the work. */
   function seal({ partBytes = PART_BYTES, frameBytes = FRAME_BYTES, deadline = Infinity } = {}) {
     if (!write || arena || trunc || junk) { job = null; return false; }
-    if (!job) { if (end - C < partBytes && C === T) return false; job = { lim: end, cur: null, made: false }; }
+    if (!job) { if (end - C < partBytes && C === T) return false; mine(); job = { lim: end, cur: null, made: false }; }
     try {
       for (;;) {
         if (!job.cur) {
@@ -394,7 +409,7 @@ export function lineFile({ fs = nodeFs, base, write = true, onFail = () => {} } 
     append, read, json, fault, scan, cut, remove, seal, close,
     touch() { if (write && end) try { const t = new Date(); fs.utimesSync(tailOf(T), t, t); } catch { /* the GC order only */ } },
     loadSidecar() { const r = loadSidecar({ fs, file: side, endsLine: (n) => n <= end && read(n - 1, 1)[0] === 10 }); covers = r ? r.head.bytes : Infinity; return r; },
-    saveSidecar({ head, parts: ps2 }) { covers = Infinity; saveSidecar({ fs, file: side, head, parts: ps2 }); covers = head.bytes; },
+    saveSidecar({ head, parts: ps2 }) { mine(); covers = Infinity; saveSidecar({ fs, file: side, head, parts: ps2 }); covers = head.bytes; },
     get bytes() { return end + arena; }, get settled() { return write && !arena && !trunc; }, get unreadable() { return unreadable; },
   };
   return self;
