@@ -1,5 +1,5 @@
 // test/server/daemon-board.e2e.test.mjs — 4.4 #12 (D66): the board comes up with the daemon. A REAL startDaemon (the model collector, its real
-// control endpoint found through controlEndpointFor; test/helpers/model-daemon.mjs) on a tmp HOME where install's ensureBoardPort recorded the
+// control endpoint found through controlEndpointFor; test/helpers/model-daemon.mjs) on a tmp HOME whose ingress.json has the board's
 // port; only the query worker's fork is the test one (no-real-os preloaded). Nothing is injected into either endpoint.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -10,9 +10,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { once } from 'node:events'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, boardPortOf } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
-import { ensureBoardPort, freeOnLoopback, BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 
@@ -24,13 +23,10 @@ const get = (port, p, headers = {}) => new Promise((resolve, reject) => {
 })
 const keys = (v) => (v && typeof v === 'object' ? Object.entries(v).flatMap(([k, x]) => [k, ...keys(x)]) : [])
 
-/** A world whose ingress.json has the board's port, as install leaves it (from a random point of the range, so parallel files do not race for 9800). */
+/** A world whose ingress.json has the board's port, as install leaves it (one the OS hands out: boardPortOf). */
 async function boardWorld(platform) {
   const w = await modelWorld({ os: platform })
-  const from = BOARD_RANGE[0] + Math.floor(Math.random() * 80)
-  const b = await ensureBoardPort({ dir: w.dir, isFree: async (p) => p >= from && freeOnLoopback(p) })
-  assert.ok(b.port, JSON.stringify(b))
-  return { w, port: b.port }
+  return { w, port: await boardPortOf(w.dir) }
 }
 async function daemonOf(w, platform) {
   const box = await liveUnit({ w, platform, daemon: { fork: workerFork } })

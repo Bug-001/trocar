@@ -4,8 +4,12 @@
 // the door's OS readers (no process is anybody's: identity answers null), the process table (box.procs, empty unless a test puts a holder there), the lock identity. restart({ custody }):
 // the daemon stopped and started again (launchd / the task bringing it back), optionally over another custody. A win32 pipe name is served on this host as a relative socket path, so the caller
 // runs inside a scratch cwd (withScratchCwd) for platform win32 — every step that may start the daemon, install's enable --now included.
+import fs from 'node:fs'
+import net from 'node:net'
 import path from 'node:path'
+import { once } from 'node:events'
 import { startDaemon } from '../../src/collector/daemon.mjs'
+import { loadIngressConfig, INGRESS_FILE } from '../../src/collector/core/ingress-config.mjs'
 import { tmpDir } from './tmp.mjs'
 
 const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, systemProxy: () => null, procTable: async () => [], close: () => {} }
@@ -33,6 +37,19 @@ export async function liveUnit({ w, platform, io = null, parts = null, daemon = 
   box.stop = async () => { const d = box.daemon || (box.starting && (await box.starting.catch(() => null))); if (d) await d.stop({ reason: 'test' }) }
   box.restart = async ({ custody } = {}) => { await box.stop(); box.daemon = null; box.starting = null; start(custody); return box.starting }
   return box
+}
+
+/** The board's port in the world's ingress.json, where the daemon reads it (4.4 §Plan 「端口」) → the port. It is one the OS hands out, never one of
+ *  BOARD_RANGE: install's pick there (ensureBoardPort) is free when it is probed, not when the daemon binds it later, and every test file running side by
+ *  side picks in that same range — one file's probe or board then holds another's port, a `port-taken` made by the test run, not by what is tested. The range pick is
+ *  install's own test (test/collector/core/ingress-config.test.mjs, test/cli/install.test.mjs). */
+export async function boardPortOf(dir) {
+  await loadIngressConfig({ dir }) // the file as install leaves it (the engine's port, the secrets), when the world has none yet
+  const probe = net.createServer().listen(0, '127.0.0.1'); await once(probe, 'listening')
+  const { port } = probe.address(); await new Promise((r) => probe.close(r))
+  const file = path.join(dir, INGRESS_FILE)
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), boardPort: port }))
+  return port
 }
 
 /** Runs fn inside a scratch cwd when the platform's endpoint is a pipe name (served here as a relative unix socket), restoring the cwd after. */

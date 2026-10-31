@@ -16,12 +16,11 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, boardPortOf } from '../helpers/model-daemon.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
-import { ensureBoardPort } from '../../src/collector/core/ingress-config.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 
 /** The floor spec 1.6 §3.1 states for the idle path: the 1 s `lock` refresh (4.6 控制面) is the shortest periodic timer there is. */
@@ -55,7 +54,7 @@ for (const platform of ['darwin', 'win32']) {
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const envFile = path.join(w.home, '.codex', '.env')
     fs.mkdirSync(path.dirname(envFile), { recursive: true }); fs.writeFileSync(envFile, 'OPENAI_BASE_URL=https://relay.example\n')
-    assert.ok((await ensureBoardPort({ dir: w.dir })).port, 'install records the board port, so the board listens while idle')
+    await boardPortOf(w.dir) // the port install records, so the board listens while idle
     let box = null
     const periods = await intervalsDuring(async () => {
       box = await liveUnit({ w, platform, io: ioFor(platform), daemon: { fork: workerFork } })

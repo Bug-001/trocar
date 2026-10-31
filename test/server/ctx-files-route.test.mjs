@@ -18,7 +18,7 @@ import { sessionDir } from '../../src/query/projection.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { generate } from '../../scripts/gen-dataset.mjs'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit } from '../helpers/model-daemon.mjs'
+import { liveUnit, boardPortOf } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -27,7 +27,7 @@ import { TOKEN, withToken, serveFace, request } from './face.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
-import { ensureBoardPort, freeOnLoopback, BOARD_RANGE, readIngressConfig } from '../../src/collector/core/ingress-config.mjs'
+import { readIngressConfig } from '../../src/collector/core/ingress-config.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { BODY, REPLY, agentOf, darwinExec, freePort, through } from '../helpers/model-io.mjs'
@@ -245,8 +245,7 @@ test('4.4 #17 tier-0 heads: a daemon started on a home without heads writes a ti
 
 test('4.4 #17 tips · daemon: a keyed call captured through the real door → the daemon\'s board serves /api/d/head as the worker\'s head file, with x-trocar-tip naming that call', { timeout: 120_000 }, async () => {
   const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
-  const from = BOARD_RANGE[0] + Math.floor(Math.random() * 80) // as test/server/daemon-board.e2e.test.mjs: parallel files do not race for one port
-  assert.ok((await ensureBoardPort({ dir: w.dir, isFree: async (p) => p >= from && freeOnLoopback(p) })).port)
+  await boardPortOf(w.dir)
   assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
   const trocar = path.dirname(w.dir)
   fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')

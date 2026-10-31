@@ -8,21 +8,18 @@ import net from 'node:net'
 import path from 'node:path'
 import { once } from 'node:events'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, boardPortOf } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo, snapshot } from './fixtures/on-ctx.mjs'
-import { ensureBoardPort, freeOnLoopback, readIngressConfig, BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
+import { readIngressConfig } from '../../src/collector/core/ingress-config.mjs'
 import { run as board } from '../../src/cli/board.mjs'
 
 const NO_ARGS = { positionals: [], flags: {} }
 async function installed(platform) {
   const w = await modelWorld({ os: platform })
   await w.install()
-  const from = BOARD_RANGE[0] + Math.floor(Math.random() * 80)
-  const b = await ensureBoardPort({ dir: w.dir, isFree: async (p) => p >= from && freeOnLoopback(p) })
-  assert.ok(b.port, JSON.stringify(b))
-  return { w, port: b.port, box: await liveUnit({ w, platform, daemon: { fork: workerFork } }) }
+  return { w, port: await boardPortOf(w.dir), box: await liveUnit({ w, platform, daemon: { fork: workerFork } }) }
 }
 const recorder = (fail = false) => { const calls = []; return { calls, open: async (file, args) => { calls.push([file, ...args].join(' ')); if (fail) throw new Error('no display') } } }
 const runBoard = (w, platform, box, opener, argv = []) => { const io = fakeIo(); return board(argv, { io, env: w.env, home: w.home, platform, args: NO_ARGS, deps: { unit: box.unit, open: opener.open } }).then((exit) => ({ exit, io })) }
