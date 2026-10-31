@@ -42,7 +42,7 @@ import { pathToFileURL } from 'node:url'
 import { LOCAL_ENV } from './client.mjs'
 import { answer } from './answers.mjs'
 import { lowerPriority } from '../low-priority.mjs'
-import { extendSession, indexed, saveIndexes, sealParts } from './named/session.mjs'
+import { extendSession, indexed, openSessions, saveIndexes, sealParts } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
 import { gcProjections, posCmp, sessionDir } from './projection.mjs'
 import { headFile, skipFile, tier0Doc, writeHead, writeSkip } from './ctx-files.mjs'
@@ -117,6 +117,7 @@ const say = (e) => process.stderr.write(`trocar query worker: background work fa
 let busy = 0, lastAt = Date.now(), target = null, newestDone = true, gcDone = false, queued = false, timer = null, once = {}
 // the idle save's parts still to seal (session.mjs sealParts): a slice at a time; a request or kick stops it, the next idle period goes on
 let sealing = false
+let rawUnlisted = false // raw/ could not be listed at the last GC: its D38 record is sent
 // The sweep (3.5 §谁执行它「答案文件」): at the first idle period of this worker's life, and again on the daemon's `{sweep: true}`, a
 // tier-0 head (ctx-files.mjs, from the segment index only) for every session whose head file is absent. One pass over the sessions.
 let sweepDue = true
@@ -207,7 +208,15 @@ async function background() {
   if (sealing) sealing = sealParts(end)
   else { gcDone = true; sealing = saveIndexes(end) } // the sidecars of what this busy period grew, before the GC counts them
   if (sealing) { progress(); return kick() }
-  gcProjections({ home, liveKeys: [...sessionGroups(await indexRows({ home, errors: [], progress })).keys()], keepKeys: answered })
+  // never the sessions open here (a kick's, the newest's, the upgrade queue's as much as an answered one's); none at all when raw/ could
+  // not be listed, which is a D38 record once per episode; only past the cap when a segment could not be read: who still lives is not
+  // known (4.3 §4 回收)
+  const errors = [], live = sessionGroups(await indexRows({ home, errors, progress })), unlisted = errors.find((e) => e.where === 'raw')
+  if (unlisted) { if (!rawUnlisted) persist(unlisted); rawUnlisted = true }
+  else {
+    rawUnlisted = false
+    gcProjections({ home, liveKeys: [...live.keys()], keepKeys: [...answered, ...openSessions()], capOnly: errors.some((e) => e.code === 'segment-unreadable') })
+  }
   worked()
 }
 

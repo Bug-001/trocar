@@ -207,13 +207,19 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
   const seen = lru(2 * SEEN); // content keys of the values at share positions written last
 
   const refsHeld = (row) => { let ok = true; eachSlot(row, 0, (h, k) => { const v = h[k]; if (!isRef(v)) return isObj(v); if (!sharedAt.has(v.$s)) ok = false; return false; }); return ok; };
-  const lineAt = ([o, l]) => lines.json(o, l);
+  // the line an index names, read back by its key: that key's line of one of `kinds` (`field` names the key), else the file is another
+  // generation's at that offset (4.3 §4 分片): ELINEPART, as a line that is no whole line
+  function lineAt([o, l], kinds, field, key) {
+    const line = lines.json(o, l), v = kinds.map((k) => line[k]).find(isObj);
+    if (!v || (field && String(v[field]) !== String(key))) throw lines.fault(o, l);
+    return v;
+  }
   function sharedOf(k) {
     let v = sharedCache.get(k);
     if (v !== undefined) return v;
     const p = sharedAt.get(k);
     if (!p) return undefined;
-    v = lineAt(p).s.v;
+    v = lineAt(p, ['s'], 'k', k).v;
     sharedCache.set(k, v, p[1] * HEAP_PER_LINE_BYTE);
     return v;
   }
@@ -299,7 +305,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
     try {
       const p = sc.parts;
       for (const [n, idx] of [['d', at], ['r', rowAt], ['s', sharedAt]]) idx.load([p[`${n}.k`], p[`${n}.o`], p[`${n}.l`]]);
-      for (let i = 0; i < p['b.o'].length; i++) take({ b: lineAt([p['b.o'][i], p['b.l'][i]]).b }, p['b.o'][i], p['b.l'][i]);
+      for (let i = 0; i < p['b.o'].length; i++) take({ b: lineAt([p['b.o'][i], p['b.l'][i]], ['b']) }, p['b.o'][i], p['b.l'][i]);
       saved = Object.fromEntries(Object.entries(p).filter(([n]) => !/^([drs]\.[kol]|b\.[ol])$/.test(n)));
     } catch {
       for (const m of [at, rowAt, sharedAt, brks]) m.clear();
@@ -362,7 +368,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
       if (hit !== undefined) return hit;
       const p = rowAt.get(rid);
       if (!p) return undefined;
-      const o = lineAt(p), row = expand(o.c || o.t);
+      const row = expand(lineAt(p, ['c', 't'], 'rid', rid));
       rowCache.set(rid, row, p[1] * HEAP_PER_LINE_BYTE);
       return row;
     },
@@ -377,7 +383,7 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
 
   return {
     hasDef: (bid) => at.has(bid),
-    readDef: (bid) => { const p = at.get(bid); return p ? lineAt(p).d : undefined; },
+    readDef: (bid) => { const p = at.get(bid); return p ? lineAt(p, ['d'], 'bid', bid) : undefined; },
     /** A definition's slot: 0, 1, … in the order the store took them in, fixed while it is open (src/view/reduce.mjs keys its block
      *  columns by it); defBid(slot) names it back; defCount: how many distinct blocks the store holds. */
     defSlot: (bid) => at.slotOf(bid),
@@ -412,12 +418,12 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
   };
 }
 
-/** gcProjections({home, fs, liveKeys, keepKeys, capBytes}) → {deleted: [path]}: by session directory (4.3 §4 回收; its size = the
- *  sum of its files): drops the directories of sessions not in `liveKeys`, then the least recently opened (the newest mtime of its
+/** gcProjections({home, fs, liveKeys, keepKeys, capBytes, capOnly}) → {deleted: [path]}: by session directory (4.3 §4 回收; its size = the
+ *  sum of its files): drops the directories of sessions not in `liveKeys` (not when `capOnly`: `liveKeys` may miss some), then the least recently opened (the newest mtime of its
  *  files: opening touches the projection) until the total is within `capBytes` (512 MiB), and the flat layout's files of sessions
  *  not live. Never one of `keepKeys` (the sessions open or followed: evicting one would cost its whole extraction on the next
  *  read). `liveKeys` is required: no list is not "no session lives". Only names of the session hash, only under index/ctx/. */
-export function gcProjections({ home = trocarHome(), fs = nodeFs, liveKeys, keepKeys = [], capBytes = CAP_BYTES } = {}) {
+export function gcProjections({ home = trocarHome(), fs = nodeFs, liveKeys, keepKeys = [], capBytes = CAP_BYTES, capOnly = false } = {}) {
   if (!liveKeys || typeof liveKeys[Symbol.iterator] !== 'function') throw new TypeError('gcProjections needs liveKeys, the sessions that still have members');
   const dir = ctxDir(home);
   let names;
@@ -429,8 +435,8 @@ export function gcProjections({ home = trocarHome(), fs = nodeFs, liveKeys, keep
   for (const n of names) {
     const p = path.join(dir, n), m = FLAT.exec(n), h = m ? m[1] : DIR.test(n) ? n : null;
     if (!h || keep.has(h)) continue;
-    if (m) { if (!live.has(h)) drop(p); continue; }
-    if (!live.has(h)) { drop(p, { recursive: true }); continue; }
+    if (m) { if (!live.has(h) && !capOnly) drop(p); continue; }
+    if (!live.has(h) && !capOnly) { drop(p, { recursive: true }); continue; }
     const u = { p, size: 0, t: 0 };
     try { for (const f of fs.readdirSync(p)) { const st = fs.statSync(path.join(p, f)); u.size += st.size; u.t = Math.max(u.t, st.mtimeMs); } } catch { /* gone meanwhile */ }
     total += u.size; kept.push(u);

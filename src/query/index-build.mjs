@@ -599,9 +599,9 @@ const defaultLockState = (home, fs) => readDaemonLock({ file: path.join(collecto
 // wins (4.2:30), so it is the source, it gives the bytes, and the state is `closed` — not `sealed`, which would say the
 // long-term copy is the sealed one while 128 MB of plaintext is still on disk (tested 2026-10-18).
 /** allSegments({home}) → [{ segment, state, path, records, bytes, sealed_bytes, from, to, problems }], oldest first. `progress`: called
- *  after every segment and every chunk a cold segment's scan reads (as indexRows). */
-export async function allSegments({ home = trocarHome(), fs = nodeFs, lockState = () => defaultLockState(home, fs), progress = null } = {}) {
-  const seen = segmentFiles(home, fs);
+ *  after every segment and every chunk a cold segment's scan reads (as indexRows). `errors`: a raw/ that cannot be listed (segmentFiles). */
+export async function allSegments({ home = trocarHome(), fs = nodeFs, errors = [], lockState = () => defaultLockState(home, fs), progress = null } = {}) {
+  const seen = segmentFiles(home, fs, errors);
   const L = lockState() || {};
   const current = L.state === 'running' && L.lock ? L.lock.segment || null : null;
   const out = [];
@@ -631,10 +631,14 @@ export function segmentCmp(a, b) {
   const [sa, na = 1] = String(a).split('-'), [sb, nb = 1] = String(b).split('-');
   return sa < sb ? -1 : sa > sb ? 1 : Number(na) - Number(nb);
 }
-/** segmentFiles(home, fs) → [[segment, {plain, sealed}]], oldest first (segmentCmp): which segments raw/ holds, from the names alone. */
-export function segmentFiles(home = trocarHome(), fs = nodeFs) {
+/** segmentFiles(home, fs, errors) → [[segment, {plain, sealed}]], oldest first (segmentCmp): which segments raw/ holds, from the names
+ *  alone. No raw/ holds none; a raw/ that cannot be listed holds none either, and says so in `errors` (`where: 'raw'`, D38). */
+export function segmentFiles(home = trocarHome(), fs = nodeFs, errors = []) {
   let names;
-  try { names = fs.readdirSync(rawDir(home)); } catch { return []; }
+  try { names = fs.readdirSync(rawDir(home)); } catch (e) {
+    if (e.code !== 'ENOENT') errors.push(problemEntry('raw', { code: 'segment-unreadable', reason: `The capture folder could not be listed (${e.code || e.message}), so no capture file is read.` }));
+    return [];
+  }
   const seen = new Map();
   for (const n of names) {
     const p = parseSegment(n);
