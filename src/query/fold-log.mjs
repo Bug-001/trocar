@@ -188,7 +188,9 @@ export function openFoldLog({ home = trocarHome(), fs = nodeFs, key, write = tru
   function versionAt(rid, off) {
     let at = calls.get(rid);
     while (at && at[0] > off) {
-      const p = entry(at[0], at[1])[0].p;
+      const [o, len] = entry(at[0], at[1]), k = kindOf(o);
+      if (CHAIN[k] !== 'rid' || o[k] !== rid) throw lines.fault(at[0], len); // a whole line there, of another rid: another generation
+      const p = o.p;
       at = p == null ? undefined : [p, entry(p)[1]];
     }
     return at;

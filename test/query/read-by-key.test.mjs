@@ -25,20 +25,21 @@ function swap(file, a, b) {
   y.copy(buf, a.off); x.copy(buf, b.off)
   fs.writeFileSync(file, buf)
 }
-const pad = (o, n) => { const j = JSON.stringify(o); return j.slice(0, -2) + `,"z":"${'z'.repeat(n - j.length - 6)}"}}` }
+// `o` (an object of one key holding an object) as a line of exactly n bytes
+const pad = (o, n) => { const j = JSON.stringify(o); return j.slice(0, -2) + `,"z":"${'z'.repeat(n - j.length - 7)}"}}` }
 
 test('4.3 #8: a projection line read by its key that is another key\'s whole line: ELINEPART, never the other line or a TypeError', () => {
   for (const what of ['def of another bid', 'row of another rid', 'def where a row was']) {
     const home = path.join(tmpDir('trocar-key-'), '.trocar')
     const w = openProjection({ home, fs, key: KEY, errors: [] })
-    w.append({ defs: [{ bid: 'b1', text: 'one' }, { bid: 'b2', text: 'two' }], rows: [{ rid: 'r1', n: 1 }, { rid: 'r2', n: 2 }] })
+    w.append({ defs: [{ bid: 'b1', text: 'one' }, { bid: 'b2', text: 'two' }], rows: [{ rid: 'r1', n: 1, note: 'abcdefghij' }, { rid: 'r2', n: 2, note: 'klmnopqrst' }] })
     w.close()
     const a = openProjection({ home, fs, key: KEY, errors: [] }) // every line indexed, none read yet
     const { file, lines } = tailOf(home, 'extract'), find = (re) => lines.find((l) => re.test(l.text))
     const d1 = find(/"bid":"b1"/), d2 = find(/"bid":"b2"/), c1 = find(/"rid":"r1"/), c2 = find(/"rid":"r2"/)
     if (what === 'def of another bid') swap(file, d1, d2)
     else if (what === 'row of another rid') swap(file, c1, c2)
-    else { const buf = fs.readFileSync(file); Buffer.from(pad({ d: { bid: 'b1', text: 'one' } }, c1.text.length)).copy(buf, c1.off); fs.writeFileSync(file, buf) }
+    else { const buf = fs.readFileSync(file); Buffer.from(pad({ d: { bid: 'b1' } }, c1.text.length)).copy(buf, c1.off); fs.writeFileSync(file, buf) }
     const read = what === 'def of another bid' ? () => a.readDef('b1') : () => a.rows.get('r1')
     assert.throws(read, { code: 'ELINEPART' }, what)
     a.close()
