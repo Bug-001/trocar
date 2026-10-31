@@ -161,6 +161,21 @@ test('(e) GC never evicts a session that is open or followed, and needs to be to
   assert.ok(fs.existsSync(projectionFile(home, 'a')), 'no list of live sessions deletes nothing')
 })
 
+// 4.3 §4 回收: when a segment could not be read, who still lives is not known: no session is dropped for not being live, the cap
+// still holds (least recently opened first)
+test('(e) GC with capOnly drops no session for not being live, and still holds the cap', () => {
+  for (const cap of [1e9, 2.5]) {
+    const home = tmpDir('trocar-proj-')
+    for (const k of ['old', 'mid', 'new', 'dead']) filled(home, k)
+    const t0 = Date.now() / 1000
+    for (const [k, age] of [['old', 300], ['mid', 200], ['new', 100], ['dead', 0]]) fs.utimesSync(projectionFile(home, k), t0 - age, t0 - age)
+    const size = fs.statSync(projectionFile(home, 'mid')).size
+    gcProjections({ home, fs, liveKeys: ['old', 'mid', 'new'], capBytes: size * cap, capOnly: true })
+    const left = ['old', 'mid', 'new', 'dead'].filter((k) => fs.existsSync(projectionFile(home, k)))
+    assert.deepEqual(left, cap > 4 ? ['old', 'mid', 'new', 'dead'] : ['new', 'dead'], `cap ${cap}`)
+  }
+})
+
 test('(g) a value that recurs across rows is written once and read back as one shared object', () => {
   const big = { text: 'a lane\'s first prompt '.repeat(40) }
   const rowsOf = (n) => Array.from({ length: n }, (_, i) => ({ rid: `20261021T054349Z:${i + 1}`, x: { facts: { first: big, own: `call ${i}` }, wire: { state: 'complete', vendor: 'v'.repeat(60) } },

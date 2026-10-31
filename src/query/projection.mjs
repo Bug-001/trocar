@@ -418,12 +418,12 @@ export function openProjection({ home = trocarHome(), fs = nodeFs, key, write = 
   };
 }
 
-/** gcProjections({home, fs, liveKeys, keepKeys, capBytes}) → {deleted: [path]}: by session directory (4.3 §4 回收; its size = the
- *  sum of its files): drops the directories of sessions not in `liveKeys`, then the least recently opened (the newest mtime of its
+/** gcProjections({home, fs, liveKeys, keepKeys, capBytes, capOnly}) → {deleted: [path]}: by session directory (4.3 §4 回收; its size = the
+ *  sum of its files): drops the directories of sessions not in `liveKeys` (not when `capOnly`: `liveKeys` may miss some), then the least recently opened (the newest mtime of its
  *  files: opening touches the projection) until the total is within `capBytes` (512 MiB), and the flat layout's files of sessions
  *  not live. Never one of `keepKeys` (the sessions open or followed: evicting one would cost its whole extraction on the next
  *  read). `liveKeys` is required: no list is not "no session lives". Only names of the session hash, only under index/ctx/. */
-export function gcProjections({ home = trocarHome(), fs = nodeFs, liveKeys, keepKeys = [], capBytes = CAP_BYTES } = {}) {
+export function gcProjections({ home = trocarHome(), fs = nodeFs, liveKeys, keepKeys = [], capBytes = CAP_BYTES, capOnly = false } = {}) {
   if (!liveKeys || typeof liveKeys[Symbol.iterator] !== 'function') throw new TypeError('gcProjections needs liveKeys, the sessions that still have members');
   const dir = ctxDir(home);
   let names;
@@ -435,8 +435,8 @@ export function gcProjections({ home = trocarHome(), fs = nodeFs, liveKeys, keep
   for (const n of names) {
     const p = path.join(dir, n), m = FLAT.exec(n), h = m ? m[1] : DIR.test(n) ? n : null;
     if (!h || keep.has(h)) continue;
-    if (m) { if (!live.has(h)) drop(p); continue; }
-    if (!live.has(h)) { drop(p, { recursive: true }); continue; }
+    if (m) { if (!live.has(h) && !capOnly) drop(p); continue; }
+    if (!live.has(h) && !capOnly) { drop(p, { recursive: true }); continue; }
     const u = { p, size: 0, t: 0 };
     try { for (const f of fs.readdirSync(p)) { const st = fs.statSync(path.join(p, f)); u.size += st.size; u.t = Math.max(u.t, st.mtimeMs); } } catch { /* gone meanwhile */ }
     total += u.size; kept.push(u);

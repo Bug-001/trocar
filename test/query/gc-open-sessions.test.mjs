@@ -16,7 +16,30 @@ import { foldLogFile } from '../../src/query/fold-log.mjs'
 import { headFile } from '../../src/query/ctx-files.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
-import { driveWorker, until } from './worker-drive.mjs'
+import { createQueryService } from '../../src/query/service.mjs'
+import { workerFork } from '../helpers/worker-fork.mjs'
+
+// the real worker behind the daemon's query service: answers, kicks, the D38 records the daemon writes, the stderr lines of its line files
+function driveWorker(home) {
+  let err = ''
+  const failures = []
+  const svc = createQueryService({ home, fork: (...a) => { const c = workerFork(...a); c.stderr.on('data', (d) => { err += d }); return c }, failure: (where, e) => failures.push({ where, code: e.code, reason: e.message }) })
+  const recorder = () => { const r = { status: null, chunks: [] }; return Object.assign(r, { writeHead: (st) => { r.status = st }, write: (b) => { r.chunks.push(b); return true }, end: () => {}, once: () => {} }) }
+  return {
+    failures,
+    get said() { return err.split('\n').filter((l) => l.startsWith('trocar query: ')) }, // line-file.mjs: one per base
+    async ask(name, params) { const r = recorder(); await svc.relay({ name, params, res: r }); return { status: r.status, text: Buffer.concat(r.chunks).toString('utf8') } },
+    kick: svc.kick,
+    stop: svc.stop,
+  }
+}
+const until = async (f, ms, what) => {
+  for (const t0 = Date.now(); !(await f());) {
+    if (Date.now() - t0 > ms) throw new Error(`timed out after ${ms} ms: ${what}`)
+    await new Promise((d) => setTimeout(d, 50))
+  }
+}
+const statOf = (f) => { try { const st = fs.statSync(f); return `${st.size}/${st.mtimeMs}` } catch { return null } }
 
 const X = 'big-0000-4a1b-9c2d-0000000000a1', F = 'big-0000-4a1b-9c2d-0000000000f1'
 
@@ -57,8 +80,9 @@ for (const [seed, wire, first, more, via] of [[7, 'http', 30, 12, 'ask'], [11, '
       assert.notDeepEqual(extractOf(home), [], 'the open session\'s projection is still on disk')
       x.append(more) // the agent goes on
       if (via === 'kick') {
+        const open = path.join(sessionDir(home, X), 'open.main.ndjson'), was = statOf(open)
         w.kick((await membersOf(home)).slice(-more))
-        await until(() => fs.existsSync(path.join(sessionDir(home, X), 'open.main.ndjson')) || w.said.length, 30_000, 'the kicked slices ran')
+        await until(() => statOf(open) !== was || w.said.length, 30_000, 'the kicked slices wrote the open lane')
       }
       await same(w, home)
       assert.deepEqual(w.said, [], 'no handle met files of another generation')
@@ -66,17 +90,28 @@ for (const [seed, wire, first, more, via] of [[7, 'http', 30, 12, 'ask'], [11, '
   })
 }
 
-test('4.3 #7: raw/ that cannot be listed: the GC deletes no directory, and the worker hands the daemon a D38 record', { timeout: 30_000 }, async () => {
+test('4.3 #7: raw/ that cannot be listed: the GC deletes no directory, and the daemon writes one D38 record per episode', { timeout: 60_000 }, async () => {
   const home = path.join(tmpDir('trocar-gc-raw-'), '.trocar')
   fs.mkdirSync(sessionDir(home, X), { recursive: true, mode: 0o700 })
   fs.writeFileSync(path.join(sessionDir(home, X), 'extract.0.ndjson'), '', { mode: 0o600 })
-  fs.writeFileSync(path.join(home, 'raw'), '') // listing it fails (ENOTDIR), as EACCES or EMFILE would
+  const raw = path.join(home, 'raw')
+  fs.writeFileSync(raw, '') // listing it fails (ENOTDIR), as EACCES or EMFILE would
   const w = driveWorker(home)
   try {
+    w.kick(['20261020T170000Z:1']) // the worker starts; its idle GC follows
     await until(() => w.failures.length || !fs.existsSync(sessionDir(home, X)), 20_000, 'the idle GC ran')
     assert.ok(fs.existsSync(path.join(sessionDir(home, X), 'extract.0.ndjson')), 'the directory is kept')
     assert.equal(w.failures.length, 1, JSON.stringify(w.failures))
     const [f] = w.failures
-    assert.deepEqual(checkRecord({ event: 'failure', where: 'daemon', code: f.code, reason: f.reason }), [], 'a record of the closed set, with a reason')
+    assert.deepEqual(checkRecord({ event: 'failure', where: f.where, code: f.code, reason: f.reason }), [], 'a record of the closed set, with a reason')
+    assert.equal((await w.ask('pricing', {})).status, 200) // a new idle period, raw/ still unlisted: the same episode
+    await new Promise((d) => setTimeout(d, 6_000)) // three idle slices (worker.mjs IDLE_SLICE_MS): its GC ran
+    assert.equal(w.failures.length, 1, 'one record for the episode')
+    fs.rmSync(raw); fs.mkdirSync(raw, { mode: 0o700 }) // listed again: X has no members, so the next GC drops it
+    assert.equal((await w.ask('pricing', {})).status, 200)
+    await until(() => !fs.existsSync(sessionDir(home, X)), 20_000, 'the GC ran with raw/ listed')
+    fs.rmSync(raw, { recursive: true }); fs.writeFileSync(raw, '') // a new episode
+    assert.equal((await w.ask('pricing', {})).status, 200)
+    await until(() => w.failures.length === 2, 20_000, 'the new episode has its record')
   } finally { w.stop() }
 })
