@@ -4,7 +4,8 @@
 // The line D67① draws is「pulling the code」: the OLD code runs the checks, switches off the harnesses that are on (who wrote an entry
 // undoes it) and pulls; then it starts a NEW process on the new code, which finishes (the daemon, `install`, `on`). The handover is one
 // public command, one file that holds nothing but harness names (`~/.trocar/collector/update.json`), and the daemon's `code`.
-// The collector is replaced by replace-daemon.mjs, the routine `install` runs too.
+// The collector is replaced by replace-daemon.mjs, the routine `install` runs too. A copy the install script placed (D74) is brought to the
+// new version by the installer it carries (`--stage`), then `place`, and the new code is started through the launcher ~/.trocar/bin/trocar.
 // After the merge this process loads nothing: everything it may need is imported above, and all it does is spawn the child and wait.
 //   runUpdateCli(argv, { io, env, home, platform, deps }) → exit (0 updated or already up to date · 1 not updated / not finished · 2 usage, an npm copy with nothing to finish, no git checkout, root, nobody to confirm)
 //   deps (0.1 §3): `exec` (the spawnSync-shaped runner of git / npm), `child` (what runs the new code's `trocar update`), `off` / `on` /
@@ -13,9 +14,9 @@ import nodeOs from 'node:os'
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { EXIT, newReceipt } from './schema.mjs'
-import { codeId, codeIdOf, packageRoot, gitDir } from '../version.mjs'
+import { codeId, codeIdOf, packageRoot, channelOf, packageName } from '../version.mjs'
 import { execTool, runAsync } from '../off/exec.mjs'
-import { collectorDir, stateFile } from '../off/paths.mjs'
+import { collectorDir, stateFile, launcherPath } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
 import { readManifest } from '../off/manifest.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
@@ -25,6 +26,8 @@ import { runOffCli } from '../off/main.mjs'
 import { runOnCli } from './on.mjs'
 import { runInstallCli } from './install.mjs'
 import { replaceDaemon, daemonCode, CUT } from './replace-daemon.mjs'
+import { runPlaceCli } from './place.mjs'
+import { PS_FILE_ARGS } from '../collector/arch/win32/custody.mjs'
 
 const USAGE = usageLine(commandNamed('update'))
 const FLAGS = new Set(['--yes', '--dry-run', '--json'])
@@ -111,12 +114,64 @@ async function update({ io, env, home, platform, deps, flags }) {
     return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting })
   }
 
+  /** §5.5 · D74⑧: placed by the install script and nothing to finish. The installer this code carries downloads, checks and places the newest
+   *  version BEFORE anything is switched off (it writes only inside ~/.trocar/app); then off, the handover file, `place`, and the new code
+   *  finishes, started through the launcher. `--dry-run` asks the installer for the latest version only. */
+  async function scripted() {
+    const win = platform === 'win32'
+    const installer = path.join(root, 'install', win ? 'install.ps1' : 'install.sh')
+    if (!fs.existsSync(installer)) return no('installer-missing', `this trocar has no ${path.basename(installer)} to download the newest version with. Run the install command again to update it.`)
+    if (!json) io.err(dry ? 'Asking for the newest version of trocar...' : 'Downloading the newest version of trocar...')
+    const mode = dry ? (win ? '-Check' : '--check') : (win ? '-Stage' : '--stage')
+    const ran = await runAsync(win ? 'powershell.exe' : 'sh', win ? [...PS_FILE_ARGS, installer, mode] : [installer, mode], { env })
+    const said = (x) => String(x || '').trim().split('\n').map((l) => l.trim()).filter(Boolean).at(-1) || ''
+    const got = /^trocar-installer: (latest|staged|up-to-date) (\S+)(?: (.+))?$/.exec(said(ran.stdout))
+    if (ran.status !== 0 || !got) return no('installer-failed', `the download failed: ${said(ran.stderr) || (ran.error && ran.error.message) || `the installer exited ${ran.status}`}. Nothing changed.`)
+    const [, kind, v, staged] = got
+    r.to = v
+    if (kind === 'up-to-date' || v === r.from) { lines.push(`trocar update: already up to date (${r.from}).`); return done(EXIT.ok) }
+    const on = harnessesOn({ home, fs })
+    if (on.error) return no('state-unreadable', on.error)
+    r.harnesses = on.ids
+    const g = await gate([['Code', `${r.from} -> ${v} (installed with the install script)`], ['Off and on again', on.ids.join(', ') || 'nothing is being captured']],
+      [{ what: 'code', detail: `the code of this machine's trocar goes from ${r.from} to ${v}` },
+        { what: 'harnesses', detail: on.ids.length ? `${on.ids.join(', ')}: switched off before the code changes and on again after it` : 'no agent is being captured, so none is switched off', harness: null, harnesses: on.ids }], COST)
+    if (g !== null) return g
+    const offExit = on.ids.length ? await step(deps.off || runOffCli, [...on.ids, '--yes', '--json'], { io, env, home, platform, deps }) : { exit: EXIT.ok }
+    if (offExit.exit !== EXIT.ok) return no('off-failed', `the agents being captured could not be switched off (trocar off exit ${offExit.exit}), so the code was left as it is`)
+    try { writeHandover(handover, { from: r.from, on: on.ids }, fs) } catch (e) {
+      await reOn(on.ids, { io, env, home, platform, deps })
+      return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so the code was left as it is`)
+    }
+    const why = []
+    if ((await runPlaceCli([staged], { io: { out: () => {}, err: (x) => why.push(String(x)) }, home, platform, deps })) !== EXIT.ok) {
+      await reOn(on.ids, { io, env, home, platform, deps })
+      try { fs.rmSync(handover, { force: true }) } catch { /* the reason below is what matters */ }
+      return no('place-failed', `trocar ${v} is downloaded but could not be switched to (${why.join(' ') || 'trocar place failed'}); the agents that were being captured are being captured again`)
+    }
+    // the new code finishes (step 4), started the way the user starts it: the launcher, which now names the new version
+    const launcher = launcherPath(home, platform)
+    const argv = ['update', '--yes', ...(json ? ['--json'] : [])]
+    return spawnNew(win ? (env.ComSpec || env.COMSPEC || 'cmd.exe') : launcher, win ? ['/d', '/s', '/c', `""${launcher}" ${argv.join(' ')}"`] : argv, { windowsVerbatimArguments: win }, v)
+  }
+
+  /** Step 3: the new code's `trocar update --yes` in a process of its own; this one only waits for it and copies its exit code. */
+  async function spawnNew(file, args, opts, to) {
+    // a process killed by a signal has no exit code to copy: `child` answers `{signal}` for that, and anything else is its exit code
+    const child = deps.child || ((f, a) => runAsync(f, a, { quiet: true, inherit: true, env, ...opts }).then((x) => (x.status === null ? { signal: x.signal } : x.status)))
+    const ended = await child(file, args)
+    if (!Number.isInteger(ended)) {
+      return no('child-crashed', `the code is now ${to}, but the process that was to finish this update was killed${ended && ended.signal ? ` by ${ended.signal}` : ''} before it could. This update is written down, so run trocar update again to finish it`)
+    }
+    return ended
+  }
+
   // §5.5 · D67②: an npm copy is updated with npm; the code npm put here is the new code, so this run is step 4 — the collector, install
   // and `on` of the harnesses being captured, the same finish a git update ends with — while the collector or the last install ran other
   // code. The install record counts as much as the collector: a collector that came back on this copy by itself (a reboot, a login) has not
   // run install or `on` on it. The handover file is written first, so a finish that does not get through is taken up by the next run.
-  const pkg = npmCopy(root, fs)
-  if (pkg) {
+  const channel = channelOf(root, { home, fs })
+  if (channel === 'npm' || channel === 'script') {
     const waiting = await pending()
     if (waiting) return resume(waiting)
     const running = await daemonCode({ platform, dir, env, fs, deps })
@@ -124,21 +179,22 @@ async function update({ io, env, home, platform, deps, flags }) {
     const to = r.to = r.from
     const daemonOther = typeof running === 'string' && running !== to
     if (!daemonOther && (installed === undefined || installed === to)) {
-      return no('npm-package', `this trocar was installed with npm. Get the newest with npm i -g ${pkg}@latest, then run trocar update to restart the collector on it.`, EXIT.usage)
+      if (channel === 'script') return scripted()
+      return no('npm-package', `this trocar was installed with npm. Get the newest with npm i -g ${packageName(root, { fs })}@latest, then run trocar update to restart the collector on it.`, EXIT.usage)
     }
     const from = daemonOther ? running : installed
     const why = daemonOther ? `the collector runs ${running}, so it is replaced by ${to}, install runs again` : `install last ran on ${installed || 'code it does not name'}, so it runs again on ${to}`
     const on = harnessesOn({ home, fs })
     if (on.error) return no('state-unreadable', on.error)
     r.from = from || r.from; r.harnesses = on.ids // C.2: the receipt of the plan says what the finish does, --dry-run and a refused question included
-    const g = await gate([['Code', `${from || 'code it does not name'} -> ${to} (installed with npm)`], ['Switched on again', on.ids.join(', ') || 'nothing is being captured']],
+    const g = await gate([['Code', `${from || 'code it does not name'} -> ${to} (installed with ${channel === 'npm' ? 'npm' : 'the install script'})`], ['Switched on again', on.ids.join(', ') || 'nothing is being captured']],
       [{ what: 'finish', detail: `${why}${on.ids.length ? `, and capture is switched on again for ${on.ids.join(', ')}` : ''}`, harnesses: on.ids }], running !== to ? CUT : null) // replaceDaemon leaves a collector on this code running
     if (g !== null) return g
     try { writeHandover(handover, { from, on: on.ids }, fs) } catch (e) { return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so nothing was changed`) }
     return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from, on: on.ids } })
   }
   // a git checkout is the other way (D67②); anything else is told how it was installed, and nothing is touched
-  if (!gitDir(root)) return no('not-a-checkout', NOT_GIT, EXIT.usage)
+  if (channel !== 'git') return no('not-a-checkout', NOT_GIT, EXIT.usage)
 
   const git = (...args) => execTool('git', ['-C', root, ...args], { run: deps.exec || null, env })
   // 先查,查不过什么都不改 (§5.5): your own changes first — a merge would carry them, and trocar does not touch what you wrote.
@@ -202,14 +258,7 @@ async function update({ io, env, home, platform, deps, flags }) {
   }
 
   // 3 · the new code finishes, in a process of its own. No harness name in its arguments (D67①): the file holds them.
-  const argv = ['update', '--yes', ...(json ? ['--json'] : [])]
-  // a process killed by a signal has no exit code to copy: `child` answers `{signal}` for that, and anything else is its exit code
-  const child = deps.child || ((file, args) => runAsync(file, args, { quiet: true, inherit: true, env }).then((x) => (x.status === null ? { signal: x.signal } : x.status)))
-  const ended = await child(process.execPath, [path.join(root, 'bin', 'trocar.mjs'), ...argv])
-  if (!Number.isInteger(ended)) {
-    return no('child-crashed', `the code is now ${r.to}, but the process that was to finish this update was killed${ended && ended.signal ? ` by ${ended.signal}` : ''} before it could. This update is written down, so run trocar update again to finish it`)
-  }
-  return ended
+  return spawnNew(process.execPath, [path.join(root, 'bin', 'trocar.mjs'), 'update', '--yes', ...(json ? ['--json'] : [])], {}, r.to)
 }
 
 /** 4 · (the new code) the daemon, `install` and `on`, and the handover file gone when all three are done (§5.5). `only: 'daemon'`: the
@@ -247,14 +296,6 @@ async function finish({ io, env, home, platform, deps, dir, handover, root, fs, 
   lines.push(`trocar is now ${r.to}${waiting.from && waiting.from !== r.to ? ` (it was ${waiting.from})` : ''}.`, // no record of the code before: no "was"
     ...pairs([['Collector', r.restarted ? 'running the new code' : 'already running this code'], ['Capturing again', waiting.on.join(', ') || 'nothing was being captured']]))
   return done(EXIT.ok)
-}
-
-/** The package name when the code at `root` is an npm copy — its path ends in `node_modules/<its own package.json name>` (a global or project
- *  install, the npx cache, a tarball installed with npm) — else null (§5.5, D67②). */
-function npmCopy(root, fs) {
-  let name
-  try { name = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).name } catch { return null }
-  return typeof name === 'string' && name && root.split(path.sep).join('/').endsWith(`/node_modules/${name}`) ? name : null
 }
 
 /** The code that last ran `install` here, as its record in the install manifest names it (§5.5): undefined when install never ran; null
