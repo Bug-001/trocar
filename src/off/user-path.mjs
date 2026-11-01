@@ -3,11 +3,9 @@
 // one answer whoever asks (1.6 V91). Before anything has recorded it (trocar not installed yet) the asker's own env is all there is.
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { collectorDir } from './paths.mjs'
+import { collectorDir, USER_PATH_FILE } from './paths.mjs'
 import { writeDurable } from './fsutil.mjs'
 import { manifestPath } from './manifest.mjs'
-
-export const USER_PATH_FILE = 'user-path.json'
 
 /** { PATH, PATHEXT } as recorded, else `env` itself. */
 export function userPathEnv({ home, env = process.env, fs = nodeFs }) {

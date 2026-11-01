@@ -17,7 +17,7 @@ import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { runCli } from '../../src/cli/main.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
-import { USER_PATH_FILE } from '../../src/off/user-path.mjs'
+import { USER_PATH_FILE } from '../../src/off/paths.mjs'
 
 const HELPER = { close: async () => {}, call: async (verb) => { if (verb === 'ps') return { procs: [] }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } }
 const view = (doc) => { const h = doc.harnesses.codex; return { desired: h.desired, forms: (h.forms || []).map((f) => f.form), captured: h.captured, reason: h.reason } }
