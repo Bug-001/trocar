@@ -19,7 +19,7 @@ const gate = await probe()
 const skip = gate.ok ? false : gate.reason
 const SHAPE = { subLanes: 3, late: 4, subEvery: 4, compactAt: 20_000, growth: 1_000 }
 const CALLS = 1_700
-const TIP = 'trocar.token' // core/http.mjs: the tab's token slot (4.4)
+const TIP = 'trocar.token' // core/http.mjs: the board's token slot (4.4 §每用户口令)
 
 let world = null
 async function folded() {
@@ -67,7 +67,7 @@ function watch() {
 
 async function fresh(w, route) {
   const context = await w.b.page.context().browser().newContext({ viewport: { width: 1280, height: 900 } })
-  await context.addInitScript(([k, t]) => { try { sessionStorage.setItem(k, t) } catch { /* the test's own page: storage works */ } }, [TIP, w.b.face.token])
+  await context.addInitScript(([k, t]) => { try { localStorage.setItem(k, t) } catch { /* the test's own page: storage works */ } }, [TIP, w.b.face.token])
   await context.addInitScript(watch)
   if (route) await context.route('**/api/d/p*', route)
   const page = await context.newPage(), errors = [], packs = { asked: 0, done: 0 }
