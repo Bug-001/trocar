@@ -3,10 +3,12 @@
 // Any class of call, not only inference (D40). Without `--class` / `--host` / `--ref` it is the class table. With
 // one of them it is the calls themselves: filtered, counted and paged on the SEGMENT INDEX alone, and only the
 // page's records are read back, one seek each (3.5 §访问模式, D62②) — in the detail panel's shape
-// (src/view/control-wire.mjs, the one reshaping rule), the newest few with their bodies, under the index facts C.5 names.
+// (src/view/control-wire.mjs, the one reshaping rule), newest first by ts (C.5), a page's first few with their bodies, under the index
+// facts C.5 names.
 import { parseRecordId } from '../../collector/core/record/segments.mjs';
 import { controlRecordWire, CONTROL_DETAIL_RECORDS } from '../../view/control-wire.mjs';
 import { recordsAt } from '../records.mjs';
+import { posCmp } from '../projection.mjs';
 import { asOf, indexRows } from '../rows.mjs';
 import { QueryArgError, listOf, paginate, tsFilter } from './index.mjs';
 
@@ -32,16 +34,18 @@ export async function run({ home, fs, now, params: p, errors, progress = null })
     return { as_of, classes: [...counts].map(([c, count]) => ({ class: c, count })) };
   }
 
+  // newest first by ts; one ts: the later record first; no ts: last (C.5)
+  const at = new Map(rows.map((r) => { const t = Date.parse(r.ts); return [r, Number.isNaN(t) ? -Infinity : t]; }));
+  rows.sort((a, b) => (at.get(b) - at.get(a)) || posCmp(String(b.id), String(a.id)));
   if (ref && !rows.length) errors.push({ where: String(p.ref), reason: `no record ${p.ref} in this home's segment index` });
   const { items, next, has_more } = paginate(rows, p, { bytes: (r) => r.stored_bytes || 0 }); // the page's records are read back: bounded by bytes too
   const byId = new Map(items.map((r) => [r.id, r]));
   const recs = recordsAt({ home, fs, rows: items, errors });
-  const slimBefore = Math.max(0, recs.length - CONTROL_DETAIL_RECORDS);
   return {
     as_of, ...(p.class != null ? { class: p.class } : {}), total: rows.length, detail_limit: CONTROL_DETAIL_RECORDS,
     records: recs.map((rec, i) => {
       const r = byId.get(rec.id);
-      return { ...controlRecordWire(rec, { detail: i >= slimBefore, reveal }),
+      return { ...controlRecordWire(rec, { detail: i < CONTROL_DETAIL_RECORDS, reveal }),
         id: r.id, ts: r.ts, harness: r.harness_id, class: r.class, host: r.host, endpoint: r.path, status: r.status,
         sent_bytes: r.sent_bytes, received_bytes: r.received_bytes, retention: r.log_only ? 'log' : 'full', ref: r.id };
     }),

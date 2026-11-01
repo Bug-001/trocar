@@ -37,22 +37,24 @@ test('--limit 默认 50、上限 500;next 就是下一页的 --after,has_more �
 
 test('calls 两种形状:不带 --class 给 classes:[{class,count}],带 --class 给 records', async () => {
   const home = homeWith(2, [
-    { ts: at(5), class: 'telemetry', is_llm: false, host: 'o11y.example' },
     { ts: at(6), class: 'telemetry', is_llm: false, host: 'o11y.example' },
+    { ts: at(5), class: 'telemetry', is_llm: false, host: 'o11y.example' },
+    { ts: at(7), class: 'telemetry', is_llm: false, host: 'o11y.example' },
   ])
   const table = await runQuery('calls', {}, { home })
   assert.deepEqual(Object.keys(table).sort(), ['as_of', 'classes', 'command', 'errors', 'ok', 'schema'])
-  assert.deepEqual(table.classes.map((c) => [c.class, c.count]).sort(), [['llm', 2], ['telemetry', 2]])
+  assert.deepEqual(table.classes.map((c) => [c.class, c.count]).sort(), [['llm', 2], ['telemetry', 3]])
 
   const one = await runQuery('calls', { class: 'telemetry' }, { home })
   assert.deepEqual(Object.keys(one).sort(), ['as_of', 'class', 'command', 'detail_limit', 'errors', 'has_more', 'next', 'ok', 'records', 'schema', 'total'])
-  assert.deepEqual([one.class, one.total, one.records.length], ['telemetry', 2, 2])
-  assert.deepEqual(one.records.map((r) => r.id), [`${SEG}:3`, `${SEG}:4`])
+  assert.deepEqual([one.class, one.total, one.records.length], ['telemetry', 3, 3])
+  // newest first by ts, which is not the write order (C.5)
+  assert.deepEqual(one.records.map((r) => r.id), [`${SEG}:5`, `${SEG}:3`, `${SEG}:4`])
   // 分页与过滤是同一组参数
   const page = await runQuery('calls', { class: 'telemetry', limit: 1 }, { home })
-  assert.deepEqual([page.records.length, page.total, page.next, page.has_more], [1, 2, '1', true])
+  assert.deepEqual([page.records.length, page.total, page.next, page.has_more], [1, 3, '1', true])
   const since = await runQuery('calls', { class: 'telemetry', since: at(6) }, { home })
-  assert.deepEqual([since.total, since.records[0].id], [1, `${SEG}:4`])
+  assert.deepEqual([since.total, since.records[0].id], [2, `${SEG}:5`])
   assert.deepEqual((await runQuery('calls', { harness: 'codex' }, { home })).classes, [])
 })
 

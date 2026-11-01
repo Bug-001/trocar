@@ -54,7 +54,7 @@ test('3.5 / D62②: on every filter axis, calls reads back at most --limit recor
 test('C.5 --ref: that one record, total 1, the same record as on its --class page; malformed → arg error; unknown → [] + errors', async () => {
   const home = await homeWithIndex()
   const page = await runQuery('calls', { class: 'llm', limit: '500' }, { home })
-  const want = page.records[page.records.length - 1] // inside the detail window, as a single record is
+  const want = page.records[0] // inside the detail window, as a single record is
   const one = await runQuery('calls', { ref: want.id }, { home })
   assert.equal(one.records.length, 1)
   assert.equal(one.total, 1)
