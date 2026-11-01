@@ -40,7 +40,7 @@ import { warmCache, fsTag, heapBudget, heapCeiling, hold, liveHeap, usedHeap, yi
 import { parseTextRef } from '../../raw/refs.mjs';
 import { QueryArgError } from './index.mjs';
 import { columns, dumpColumns, loadColumns, sync, viewOf, pageOf, deltaOf, limitOf, markOf } from '../session-doc.mjs';
-import { filesAt, filesParts, forget, headDoc, headFile, packsOf, pendingHead, tier0Doc, writeFiles, writeHead, memoBytes, PACK_MEMBERS } from '../ctx-files.mjs';
+import { filesAt, filesParts, forget, hasHead, headDoc, packsOf, pendingHead, tier0Doc, writeFiles, writeHead, memoBytes, PACK_MEMBERS } from '../ctx-files.mjs';
 
 export const params = Object.freeze(['id', 'since', 'before', 'limit', 'head']);
 
@@ -564,7 +564,7 @@ async function stopped(ctx, id, e) {
   const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, sig = JSON.stringify(['stopped', stop]), h = heads.get(id);
   stops.add(id);
   lagging.delete(id);
-  if (h && h.sig === sig && fs.existsSync(headFile(home, id))) return;
+  if (h && h.sig === sig && hasHead(home, id, fs)) return;
   try {
     const index = await indexed(ctx), members = sessionGroups(index.rows).get(id);
     if (members) { writeHead(home, id, pendingHead(home, id, members, index.errors, (d, done) => ({ done, total: members.length, stopped: stop }), fs), fs); heads.set(id, { sig, shape: null }); }
@@ -578,7 +578,7 @@ function backlog(ctx, id, { st, plan, members, indexErrors }) {
   if (ctx.writer !== true) return;
   const home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs, mark = markOf(st.log), done = mark == null ? 0 : posOf(plan, mark) + 1;
   const was = shown.get(id), cleared = stops.delete(id);
-  if (!cleared && was != null && Math.floor(was / PACK_MEMBERS) === Math.floor(done / PACK_MEMBERS) && fs.existsSync(headFile(home, id))) return;
+  if (!cleared && was != null && Math.floor(was / PACK_MEMBERS) === Math.floor(done / PACK_MEMBERS) && hasHead(home, id, fs)) return;
   try { writeHead(home, id, pendingHead(home, id, members, indexErrors, () => ({ done, total: members.length }), fs), fs); } catch { if (cleared) stops.add(id); return; } // tried again next slice
   shown.set(id, done);
   heads.set(id, { sig: JSON.stringify(['pending', done]), shape: null });
@@ -587,7 +587,7 @@ function backlog(ctx, id, { st, plan, members, indexErrors }) {
 function headAt(ctx, s) {
   if (ctx.writer !== true) return;
   const h = heads.get(s.id), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
-  if (!h || h.shape !== shapeOf(s) || !fs.existsSync(headFile(home, s.id))) putHead(ctx, s);
+  if (!h || h.shape !== shapeOf(s) || !hasHead(home, s.id, fs)) putHead(ctx, s);
   else lagging.set(s.id, { s, home, fs });
 }
 /** files(ctx, s, deadline) → false while the session's pack and tail files are short of the state `s` at `deadline` (the next slice
@@ -603,7 +603,7 @@ const headOf = (s) => (s.mark == null ? tier0Doc(s.id, s.rows, s.indexErrors)
   : headDoc({ ...s, ...(s.files || packsOf(s)), mark: markOn(s.plan, s.mark), markTs: s.plan.byId.get(s.mark)?.ts ?? null }));
 function putHead(ctx, s, doc = null) {
   const h = heads.get(s.id), sig = sigOf(s), home = ctx.home ?? trocarHome(), fs = ctx.fs || nodeFs;
-  if (!(h && h.sig === sig && fs.existsSync(headFile(home, s.id)))) {
+  if (!(h && h.sig === sig && hasHead(home, s.id, fs))) {
     try { writeHead(home, s.id, doc || headOf(s), fs); } catch { return; } // a head not written is written at the next slice
     heads.set(s.id, { sig, shape: shapeOf(s) });
   }

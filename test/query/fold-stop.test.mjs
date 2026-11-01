@@ -17,10 +17,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { gunzipSync } from 'node:zlib'
 import { createQueryService } from '../../src/query/service.mjs'
 import { heapFlags, workerEnv } from '../../src/query/warm.mjs'
-import { headFile } from '../../src/query/ctx-files.mjs'
+import { readHead } from '../../src/query/ctx-files.mjs'
 import { recordId } from '../../src/collector/core/record/segments.mjs'
 import { runQuery } from '../../src/query/named/index.mjs' // first: the named queries' registry imports session.mjs
 import { PLAN_PER_MEMBER } from '../../src/query/named/session.mjs'
@@ -36,7 +35,7 @@ const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.met
 const HEAP_MB = 64
 const small = (h, ...argv) => fork(WORKER, [h, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: ['--require', NO_REAL_OS, ...heapFlags(HEAP_MB)], env: workerEnv() })
 
-const headOf = (home, id) => { try { return JSON.parse(gunzipSync(fs.readFileSync(headFile(home, id))).toString('utf8')) } catch { return null } }
+const headOf = (home, id) => readHead(home, id)
 // The worker runs niced (worker.mjs lowerPriority): a wait on it lasts while it reports and fails after a stall with none.
 async function until(home, id, r, ok, what) {
   let h = null

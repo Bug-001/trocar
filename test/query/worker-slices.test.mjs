@@ -5,11 +5,11 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createQueryService } from '../../src/query/service.mjs'
-import { projectionFile, PROJ_V, sessionDir } from '../../src/query/projection.mjs'
+import { projectionFile, PROJ_V } from '../../src/query/projection.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
-import zlib from 'node:zlib'
+import { readHead } from '../../src/query/ctx-files.mjs'
 import { bigSession } from './big-session.mjs'
 
 const recorder = () => {
@@ -22,7 +22,7 @@ const ask = async (svc, name, params) => {
   assert.equal(res.status, 200, `${name} answers 200`)
   return JSON.parse(res.text())
 }
-const headOf = (home, id) => { try { return JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(sessionDir(home, id), 'head.json.gz')))) } catch { return null } }
+const headOf = (home, id) => readHead(home, id)
 const homeOf = () => { const home = path.join(tmpDir('trocar-slices-'), '.trocar'); fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 }); return home }
 const sizeOf = (f) => { try { return fs.statSync(f).size } catch { return 0 } }
 

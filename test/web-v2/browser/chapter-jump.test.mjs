@@ -7,11 +7,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import zlib from 'node:zlib'
 import { probe, withBoard, stats } from './harness.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { chapterAt, chapterJump } from '../../../src/web/v2/replay/timeline.mjs'
-import { headFile } from '../../../src/query/ctx-files.mjs'
+import { readHead } from '../../../src/query/ctx-files.mjs'
 import { bigSession } from '../../query/big-session.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 
@@ -32,7 +31,7 @@ async function folded() {
   let head = null
   for (;;) {
     const r = await b.get('session', { id: s.id, head: '1' })
-    const file = fs.existsSync(headFile(home, s.id)) ? JSON.parse(zlib.gunzipSync(fs.readFileSync(headFile(home, s.id)))) : null
+    const file = readHead(home, s.id)
     if (file && file.tier === 1 && !file.pending && file.packs.length >= 3 && file.mark === r.doc.mark) { head = file; break }
     assert.ok(Date.now() < until, 'the session was folded with its files in 240 s')
     await new Promise((ok) => setTimeout(ok, 500))

@@ -2,8 +2,9 @@
 //
 // The traffic-class table (src/classes/table.mjs — the ONE place the table is read), each class's calls
 // and bytes over 24 h / 7 d / all time, and what ~/.trocar takes on disk. The counts come from the
-// segment index and nothing else (1.6 §4.1 「`classes` 的条数与大小就是从这里算的」).
-import { allSegments, segmentIndex, problemEntry } from '../index-build.mjs';
+// segment index and nothing else (1.6 §4.1 「`classes` 的条数与大小就是从这里算的」), read through the ONE warm reading of it
+// (src/query/rows.mjs) that `calls`, `sessions` and `traffic` ask too.
+import { asOf, indexRows } from '../rows.mjs';
 import { readTable } from '../../classes/table.mjs';
 import { diskUsage } from '../disk.mjs';
 
@@ -18,24 +19,17 @@ export async function run({ home, fs, now, errors, progress = null }) {
 
   const counts = new Map(table.classes.map((c) => [c.class, zero()]));
   const t = now();
-  const segs = await allSegments({ home, fs, progress, errors });
-  let as_of = null; // 附录 C.5: the newest call time in the whole index
-
-  for (const s of segs) {
-    for (const pr of s.problems) errors.push(problemEntry(`segments/${s.segment}`, pr));
-    const { records } = await segmentIndex({ home, segment: s.segment, fs, progress });
-    if (progress) progress();
-    for (const r of records) {
-      // A class on disk that the table does not name (an edited table, a record from before an edit) is
-      // counted under its own line rather than dropped (invariant 4), and said to be no longer in the table.
-      if (r.ts && (as_of == null || String(r.ts) > as_of)) as_of = String(r.ts);
-      let c = counts.get(r.class);
-      if (!c) { c = zero(); counts.set(r.class, c); }
-      const at = r.ts ? Date.parse(r.ts) : null;
-      for (const [k, span] of WINDOWS) {
-        if (span != null && !(at != null && t - at <= span)) continue;
-        c[k].calls++; c[k].bytes += r.stored_bytes;
-      }
+  const rows = await indexRows({ home, fs, errors, progress }); // a segment's problems are its `segments/<seg>` errors
+  const as_of = asOf(rows); // 附录 C.5: the newest call time in the whole index
+  for (const r of rows) {
+    // A class on disk that the table does not name (an edited table, a record from before an edit) is
+    // counted under its own line rather than dropped (invariant 4), and said to be no longer in the table.
+    let c = counts.get(r.class);
+    if (!c) { c = zero(); counts.set(r.class, c); }
+    const at = r.ts ? Date.parse(r.ts) : null;
+    for (const [k, span] of WINDOWS) {
+      if (span != null && !(at != null && t - at <= span)) continue;
+      c[k].calls++; c[k].bytes += r.stored_bytes;
     }
   }
 

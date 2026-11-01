@@ -15,6 +15,7 @@ import { createQueryService } from '../../src/query/service.mjs'
 import { createIndexKeeper } from '../../src/collector/index-keeper.mjs'
 import { createRecordStore } from '../../src/collector/core/record/store.mjs'
 import { sessionDir } from '../../src/query/projection.mjs'
+import { readHead } from '../../src/query/ctx-files.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { generate } from '../../scripts/gen-dataset.mjs'
 import { modelWorld } from '../helpers/model-world.mjs'
@@ -140,6 +141,31 @@ test('4.4 #16: with the files there a read forks nothing; with the head gone one
   assert.equal(unzip(r.body), unzip(fs.readFileSync(w.file('head.json.gz'))), 'the answer is the head file the worker then wrote')
 })
 
+// 3.5 §谁执行它「答案文件」: a session never folded has only its tier-0 head, which is still folding; the board opening it (a poll of
+// d/head with the tag it holds, as replay.mjs reads it) makes the worker follow it, with no named query and no new record
+test('4.4 #16 folding head: polling a never-folded session\'s head, and nothing else, folds it to a settled head, also from the old name', async (t) => {
+  const w = await open(300)
+  try {
+    w.svc.sweep() // the daemon's start: a tier-0 head for the session, no fold
+    const tier0 = () => { try { return JSON.parse(unzip(fs.readFileSync(w.file('head.pending.json.gz')))) } catch { return null } }
+    await until(() => tier0()?.tier === 0, 60_000, 'the sweep wrote the tier-0 head under the folding name')
+    // a home whose heads were written before the names: the folding head under the settled name, which the next sweep renames
+    fs.renameSync(w.file('head.pending.json.gz'), w.file('head.json.gz'))
+    w.svc.sweep()
+    let tag = null, done = null
+    const waited = await whileMoving(async () => {
+      await pause(200)
+      const r = await w.d('head', { ...gz, ...(tag ? { 'if-none-match': tag } : {}) })
+      if (r.status !== 200) return false
+      tag = r.headers.etag
+      const head = JSON.parse(unzip(r.body))
+      done = head.pending?.done ?? done
+      return head.pending == null && fs.existsSync(w.file('head.json.gz')) && !fs.existsSync(w.file('head.pending.json.gz'))
+    }, () => `${w.reported.n} ${done}`, 'the polled head reached the end of the fold')
+    t.diagnostic(JSON.stringify({ waited }))
+  } finally { await w.left('the worker is gone'); w.server.close() }
+})
+
 // the contract is of the route over whatever files are there: a home of its own with a written head and tail, no session folded
 test('4.4 #15: the HTTP contract — 304 on the tag, Range in and past the tail, the closed name set, the token', { timeout: 60_000 }, async () => {
   const home = path.join(tmpDir('trocar-dcontract-'), '.trocar'), id = 'S-contract', dir = sessionDir(home, id), file = (f) => path.join(dir, f)
@@ -237,7 +263,7 @@ test('4.4 #17 tier-0 heads: a daemon started on a home without heads writes a ti
   box.unit.start()
   try {
     await within(box.starting, 20_000, 'the real daemon started')
-    const headOf = (id) => { try { return JSON.parse(unzip(fs.readFileSync(path.join(sessionDir(trocar, id), 'head.json.gz')))) } catch { return null } }
+    const headOf = (id) => readHead(trocar, id)
     await until(() => ids.every((id) => headOf(id)), 60_000, 'a head for every session')
     for (const id of ids) assert.equal(headOf(id).tier, 0, `${id}: a tier-0 head`)
   } finally { await box.stop() }

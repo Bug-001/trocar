@@ -325,6 +325,8 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   /** The daemon's start (4.4 §答案文件): the worker writes a tier-0 head for every session that has none, at its first idle period
    *  (3.5 §谁执行它「答案文件」). Forked like a kick, under the same cool-down and stop rules. */
   const sweep = () => tell({ sweep: true })
+  /** A head still folding was handed out (4.4 §答案文件): the worker follows that session (3.5 §后台抽取与归约 follow). Forked like a kick. */
+  const follow = (id) => tell({ follow: String(id) })
 
   /** Hand `line` to the worker (forked if there is none: run() starts it) and let its frame flow into `res`. */
   const answer = (line, res, ms, name, subject) => {
@@ -396,5 +398,5 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   /** The board's page load (4.4, D64①): a refresh of the list, so a cold worker is forked and warming before the page asks. */
   const warm = (a) => { refresh(a) }
 
-  return { route, relay, control, warm, refresh, kick, sweep, path: QUERY_PATH, stop: () => { stopped = true; clearInterval(statsTimer); statsTimer = null; drop('the daemon is stopping') } }
+  return { route, relay, control, warm, refresh, kick, sweep, follow, path: QUERY_PATH, stop: () => { stopped = true; clearInterval(statsTimer); statsTimer = null; drop('the daemon is stopping') } }
 }

@@ -15,7 +15,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { CONTROL_TOKEN_HEADER } from './off/token-header.mjs';
 import { LOCAL_ENV, QUERY_NAMES, paramsOf } from './query/client.mjs';
-import { ctxKey } from './query/ctx-key.mjs';
+import { HEAD_FILES, ctxKey } from './query/ctx-key.mjs';
 import { storedFile } from './query/stored.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
@@ -149,9 +149,13 @@ export function createServer({ home, token, query, tips, uid = process.getuid?.(
     const stored = !tailPart; // head and packs are kept gzipped, the open tails plain
     if (stored && !gzip) return relay();
     const io = fs || nodeFs;
-    const file = path.join(home, 'index', 'ctx', ctxKey(id), head ? 'head.json.gz' : n != null ? `p${n}.${packPart}.ndjson.gz` : `open.${tailPart}.ndjson`);
-    let fd;
-    try { fd = io.openSync(file, 'r'); } catch (e) { if (e && e.code === 'ENOENT') return relay(); throw e; }
+    const dir = path.join(home, 'index', 'ctx', ctxKey(id));
+    // the head under either name (3.5 §会话读「`session --head`」); the folding one, once answered, makes the worker follow its session
+    const names = head ? [HEAD_FILES.rest, HEAD_FILES.folding] : [n != null ? `p${n}.${packPart}.ndjson.gz` : `open.${tailPart}.ndjson`];
+    let fd, name;
+    for (const f of names) { try { fd = io.openSync(path.join(dir, f), 'r'); name = f; break; } catch (e) { if (!(e && e.code === 'ENOENT')) throw e; } }
+    if (name == null) return relay();
+    if (name === HEAD_FILES.folding) res.once('finish', () => query.follow?.(id));
     try {
       const st = io.fstatSync(fd), size = st.size;
       const base = { 'content-type': head ? JSON_HEAD['content-type'] : NDJSON, 'cache-control': 'no-store' };

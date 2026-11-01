@@ -35,15 +35,13 @@ await import(${at('../../src/query/named/index.mjs')})
 const { extendSession, saveIndexes, version } = await import(${at('../../src/query/named/session.mjs')})
 const { bigSession } = await import(${at('./big-session.mjs')})
 const { indexRows, sessionGroups } = await import(${at('../../src/query/rows.mjs')})
-const { headFile } = await import(${at('../../src/query/ctx-files.mjs')})
-const { gunzipSync } = await import('node:zlib')
-const fs = await import('node:fs')
+const { readHead } = await import(${at('../../src/query/ctx-files.mjs')})
 const [home, id, ms, late, drips, gap] = [process.argv[1], process.argv[2], ...process.argv.slice(3).map(Number)]
 const s = late > 0 ? bigSession({ home, wire: 'http', ...${JSON.stringify(SHAPE)} }) : null
 if (s) s.append(${CALLS} - late)
 const frontier = async () => JSON.parse((await version({ home, writer: true, params: { id } })).key)[1]
 const last = async () => String(sessionGroups(await indexRows({ home, errors: [] })).get(id).at(-1).id)
-const head = () => { try { return JSON.parse(gunzipSync(fs.readFileSync(headFile(home, id)))) } catch { return null } }
+const head = () => readHead(home, id)
 let t = 0, added = 0, since = 0
 const progress = () => { const n = Date.now(); if (n - t > 200) { t = n; process.stdout.write('.\\n') } }
 for (let more = true; more;) {
@@ -86,8 +84,8 @@ async function drive(home, id, ms, late = 0, drips = 0, gap = 0) {
 
 const homeOf = () => { const home = path.join(tmpDir('trocar-budget-'), '.trocar'); fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 }); return home }
 const sessionIn = (home) => { const s = bigSession({ home, wire: 'http', ...SHAPE }); s.append(CALLS); return s.id }
-const ANSWER = /^(head\.json\.gz|p\d+\.(main|rest)\.ndjson\.gz|open\.(main|rest)\.ndjson)$/
-const SEALED = /^(head\.json\.gz|p\d+\.(main|rest)\.ndjson\.gz)$/
+const ANSWER = /^(head(\.pending)?\.json\.gz|p\d+\.(main|rest)\.ndjson\.gz|open\.(main|rest)\.ndjson)$/
+const SEALED = /^(head(\.pending)?\.json\.gz|p\d+\.(main|rest)\.ndjson\.gz)$/
 /** the head and pack files of a session (3.5 #34 compares these; a tail is apply-equal, not byte-equal, across runs), name → bytes */
 const filesOf = (home, id) => Object.fromEntries(fs.readdirSync(sessionDir(home, id)).filter((f) => SEALED.test(f)).sort().map((f) => [f, fs.readFileSync(path.join(sessionDir(home, id), f))]))
 function sameFiles(got, want, what) {

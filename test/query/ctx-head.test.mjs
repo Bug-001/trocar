@@ -8,6 +8,7 @@ import { gunzipSync } from 'node:zlib'
 import { createQueryService } from '../../src/query/service.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { sessionDir } from '../../src/query/projection.mjs'
+import { headFile } from '../../src/query/ctx-files.mjs'
 import { indexRows, sessionGroups, isModelCall } from '../../src/query/rows.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within } from '../helpers/bounded.mjs'
@@ -106,9 +107,9 @@ test('3.5 #35: a session the worker never folded has a tier-0 head after its fir
   const { home, b } = twoSessions()
   const w = workerFork(home)
   try {
-    await until(() => fs.existsSync(headFileOf(home, b)), 30_000, 'a tier-0 head was written')
+    await until(() => fs.existsSync(headFile(home, b, true)), 30_000, 'a tier-0 head was written')
   } finally { w.kill() }
-  const doc = JSON.parse(readHead(home, b))
+  const doc = JSON.parse(gunzipSync(fs.readFileSync(headFile(home, b, true))).toString('utf8'))
   for (const k of Object.keys(doc)) assert.ok([...CLOSED, 'buckets'].includes(k), `${k} is in the closed set`)
   for (const k of Object.keys(FIXTURE.session_head_tier0)) assert.ok(Object.hasOwn(doc, k), `${k} is present`)
   assert.equal(doc.tier, 0)
@@ -126,11 +127,11 @@ test('3.5 §谁执行它: the first idle sweep writes a head for every session w
   fs.writeFileSync(headFileOf(home, a), kept)
   const w = workerFork(home)
   try {
-    await until(() => fs.existsSync(headFileOf(home, b)), 30_000, 'the sweep wrote b\'s head')
+    await until(() => fs.existsSync(headFile(home, b, true)), 30_000, 'the sweep wrote b\'s head')
     assert.deepEqual(fs.readFileSync(headFileOf(home, a)), kept, 'a\'s head keeps its bytes')
-    fs.unlinkSync(headFileOf(home, b))
+    fs.unlinkSync(headFile(home, b, true))
     w.send({ sweep: true })
-    await until(() => fs.existsSync(headFileOf(home, b)), 30_000, '{sweep} wrote b\'s head again')
+    await until(() => fs.existsSync(headFile(home, b, true)), 30_000, '{sweep} wrote b\'s head again')
     assert.deepEqual(fs.readFileSync(headFileOf(home, a)), kept)
   } finally { w.kill() }
 })
