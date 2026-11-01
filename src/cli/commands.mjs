@@ -9,6 +9,7 @@
 //     exits       [[code, 'what it means']], out of the five codes of §1.3.
 //     mutates     changes the user's own state, so it refuses root (§1.5): true, or a function of the parsed args when only some subcommands do
 //                 (`classes set|add|rm|reset` refuse root; `classes` shown does not). needsRoot: setup-helper, the one command that must be root.
+//     hidden      not in help or the README: `place`, which only the install scripts and `trocar update` run (§2).
 //     run         gets the argv after the name and the context of runCli: { io, env, home, platform, uid, args: { positionals, flags }, deps }.
 //   helpText    the help, made from the table: the three sections, or one command when named.
 import { optionsOf } from './args.mjs'
@@ -110,6 +111,13 @@ export const COMMANDS = Object.freeze([
     summary: 'Installs the kernel helper trocar needs on Linux, once per machine. This is the only command that needs root, and it is not needed on macOS or Windows.',
     options: [['--remove', 'remove the helper instead of installing it'], ['--binary <path>', 'install this helper binary, one you built yourself']],
     exits: [[0, 'the helper is in place, or gone'], [1, 'it could not be installed, and it says why'], [2, 'nothing ran: a usage error, not root, or not Linux']] },
+  // not in help (§2): only the install scripts and `trocar update` run it
+  { name: 'place', hidden: true,
+    group: null, mutates: true, run: via('./place.mjs', 'runPlaceCli'),
+    usage: 'trocar place <dir>',
+    summary: 'Switches this machine to a version the install script has put in ~/.trocar/app. Old versions nothing can still run are removed.',
+    options: [],
+    exits: [[0, 'that version is the one the trocar command runs'], [1, 'it could not be switched to, and it says why'], [2, 'a usage error or root']] },
   // `help` is the trailer of the first screen, not an entry of a section (§2).
   { name: 'help',
     group: null, mutates: false, run: help,

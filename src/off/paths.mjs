@@ -19,6 +19,10 @@ export const collectorIn = (home) => path.join(home, 'collector')
 export const backupDir = (home = os.homedir()) => path.join(trocarHome(home), 'backup')
 /** ~/.trocar/bin/trocar-off: the single-file copy of src/off that runs without the repo (1.6 R3). */
 export const standalonePath = (home = os.homedir()) => path.join(trocarHome(home), 'bin', 'trocar-off')
+/** ~/.trocar/app: what the install script places (4.5 §A, D74): `<version>/`, `node/<id>/`, the pointer `current`. The one resolver of it. */
+export const appDir = (home = os.homedir()) => path.join(trocarHome(home), 'app')
+/** ~/.trocar/bin/trocar (Windows trocar.cmd): the launcher that reads `app/current` and runs the version it names. */
+export const launcherPath = (home = os.homedir(), platform = process.platform) => path.join(trocarHome(home), 'bin', platform === 'win32' ? 'trocar.cmd' : 'trocar')
 /** The command that runs that copy, the one place it is worded: Windows ignores the shebang, so there it is `node "<path>"`; elsewhere the path runs itself. */
 export const standaloneCommand = (p, platform = process.platform) => (platform === 'win32' ? `node "${p}"` : p)
 /** ~/.trocar/legacy-manifest.json: the ledger of what `on` changed through the old capture. */

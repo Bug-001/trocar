@@ -42,7 +42,7 @@ test('the README\'s Commands section lists every command of the table, in code t
   const section = readme.slice(readme.indexOf('\n## Commands'), readme.indexOf('Design authority:'));
   assert.ok(section.length > 100, 'sanity: found the Commands section');
   const listed = new Set([...section.matchAll(/\btrocar[ \t]+([a-z-]+)/g)].map((m) => m[1]));
-  assert.deepEqual(COMMANDS.map((c) => c.name).filter((n) => !listed.has(n)), [], 'a command of the table the README does not list');
+  assert.deepEqual(COMMANDS.filter((c) => !c.hidden).map((c) => c.name).filter((n) => !listed.has(n)), [], 'a command of the table the README does not list');
 });
 
 test('the README teaches no command that is gone (`collector …`, `etl`, `shard`, `keep`, `verify`), and not `trocar test`', () => {
@@ -109,6 +109,6 @@ test('the README\'s Commands block is the usage lines of src/cli/commands.mjs, f
   const block = /```sh\n([\s\S]*?)```/.exec(section);
   assert.ok(block, 'sanity: the Commands section holds a ```sh block');
   const shown = block[1].split('\n').map((l) => l.replace(/\s+#\s.*$/, '').trim()).filter((l) => l && !l.startsWith('#'));
-  const table = COMMANDS.flatMap((c) => [c.usage, ...(c.also || []).map((a) => a.usage)]).flatMap((u) => u.split('\n'));
+  const table = COMMANDS.filter((c) => !c.hidden).flatMap((c) => [c.usage, ...(c.also || []).map((a) => a.usage)]).flatMap((u) => u.split('\n'));
   assert.deepEqual([...shown].sort(), [...table].sort(), 'each usage line of the table, exactly once, and nothing else');
 });
