@@ -36,7 +36,6 @@
   "test/helpers/leak-guard.cjs",
   "test/paths.test.mjs",
   "test/query/multi-root-resolver.test.mjs",
-  "test/query/resolver-shard.test.mjs",
   "test/query/source-field.test.mjs",
   "test/query/source-symlink.test.mjs",
   "test/view/block-never-orphaned.test.mjs"
