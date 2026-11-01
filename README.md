@@ -88,7 +88,9 @@ sudo "$(command -v node)" "$(command -v trocar)" setup-helper   # root's PATH ma
 The same five commands on every OS, in this order: `trocar install` (once) → `trocar on` → `trocar off` →
 `trocar status` (any time) → `trocar uninstall`. `install` lists every file it will touch and writes them after you
 confirm; until it has run, `trocar on` refuses (`error.code` `cert-not-installed`). `on` starts capture, `status` shows state,
-`off` takes every trace of trocar off your agents' path, and the certificates stay until `trocar uninstall`. Running
+`off` takes every trace of trocar off your agents' path, and the certificates stay until `trocar uninstall`. When a TLS failure with a host (a
+sign-in page that intercepts TLS, for instance) made trocar pass that host's traffic on unread, `trocar on <agent>` again
+makes trocar try decrypting it now; otherwise trocar tries again by itself later. Running
 `trocar install` from another copy of trocar restarts the collector on that copy's code: the agents being captured
 stay captured, and connections open at that moment are cut and retried by the agent.
 
