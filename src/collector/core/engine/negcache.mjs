@@ -8,21 +8,22 @@
 //     still be closed inside the window (Go drops an extra dial at once when its idle pool is full), so only `threshold`
 //     consecutive rejections (default 2) make the key negative; an acceptance resets the count.
 //   mark — a single decisive answer (the upstream's certificate did not verify, a certificate alert): negative at once.
-// Lifetime: entries live in memory only. Each carries retry_at = at + min(retryMs · 2^renewals, retryMaxMs); renewals = how
-// many times this key was made negative before. Expiry is lazy (has / get / list drop an entry at retry_at; no timer) and
+// Lifetime: entries live in memory only. Each carries retry_at = at + min(base · 2^renewals, max); renewals = how many times this
+// key was made negative before. base / max are NEG_BACKOFF's row for what a retry costs (4.6 §引擎 5): `free` when trocar steps aside
+// onto a fresh connection (the agent only waits one extra upstream handshake), `costly` when the retry fails one agent connection
+// (observe is always costly; mark says `free`). Expiry is lazy (has / get / list drop an entry at retry_at; no timer) and
 // leaves the key on probation: its strikes stand at threshold − 1, so one rejection renews it with the doubled backoff.
-// Application data on the key clears its history (the next entry starts at retryMs again) and records the key as one whose
+// Application data on the key clears its history (the next entry starts at its row's base again) and records the key as one whose
 // client has accepted our leaf (trusts). forgetPid drops a process's entries, counts, history and trusted marks when it exits
 // (the daemon calls engine.forgetPid on the exit event), so a reused pid inherits nothing.
 // The key is (who, host). Who is the pid; a connection that came through the proxy ingress and whose pid could not be found says
 // "<route>.<group>" itself, in meta.negKey (4.8 §5.5, W17): two forms with no pid never poison each other's hosts, and forgetKey drops
-// one form's entries when the last process of it has gone.
+// one form's entries when the last process of it has gone. forgetAgent drops every key of one harness at once (`trocar on` naming it, D54②).
 const whoOf = (meta) => String(meta.negKey ?? meta.pid)
 export const negKey = (meta, host) => `${whoOf(meta)}|${host}`
-export const NEG_RETRY_MS = 600_000
-export const NEG_RETRY_MAX_MS = 3_600_000
+export const NEG_BACKOFF = Object.freeze({ free: Object.freeze({ base: 30_000, max: 300_000 }), costly: Object.freeze({ base: 600_000, max: 3_600_000 }) })
 
-export function createNegativeCache({ threshold = 2, now = () => Date.now(), retryMs = NEG_RETRY_MS, retryMaxMs = NEG_RETRY_MAX_MS, trustedMax = 4096 } = {}) {
+export function createNegativeCache({ threshold = 2, now = () => Date.now(), backoff = NEG_BACKOFF, trustedMax = 4096 } = {}) {
   const strikes = new Map()   // key → {negKey, n}: consecutive rejections so far
   const negative = new Map()  // key → entry (see add)
   const history = new Map()   // key → {negKey, n}: how many times the key was made negative; outlives expiry
@@ -33,11 +34,11 @@ export function createNegativeCache({ threshold = 2, now = () => Date.now(), ret
     negative.delete(key); strikes.set(key, { negKey: e.negKey, n: threshold - 1 })
     return null
   }
-  const add = (key, cause, meta, host, rejections, alert = null) => {
-    const who = whoOf(meta), renewals = history.get(key)?.n || 0, at = now()
+  const add = (key, cause, meta, host, rejections, alert = null, free = false) => {
+    const who = whoOf(meta), renewals = history.get(key)?.n || 0, at = now(), b = free ? backoff.free : backoff.costly
     history.set(key, { negKey: who, n: renewals + 1 })
     negative.set(key, { pid: meta.pid, negKey: who, agent: meta.agent ?? null, host, key, cause, rejections, at,
-      retry_at: at + Math.min(retryMs * 2 ** renewals, retryMaxMs), renewals, ...(alert ? { alert } : {}) })
+      retry_at: at + Math.min(b.base * 2 ** renewals, b.max), renewals, ...(alert ? { alert } : {}) })
     return true
   }
   function forgetKey(who) {
@@ -67,10 +68,10 @@ export function createNegativeCache({ threshold = 2, now = () => Date.now(), ret
       strikes.set(key, { negKey: whoOf(meta), n })
       return n >= threshold && add(key, 'client-rejected-leaf', meta, host, n)
     },
-    /** mark(key, {cause, meta, host, alert}) → true when the key was not negative before. */
-    mark(key, { cause, meta, host, alert = null }) {
+    /** mark(key, {cause, meta, host, alert, free}) → true when the key was not negative before. free = a retry costs the agent nothing. */
+    mark(key, { cause, meta, host, alert = null, free = false }) {
       if (live(key)) return false
-      return add(key, cause, meta, host, 1, alert)
+      return add(key, cause, meta, host, 1, alert, free)
     },
     /** trusts(key) → has this (who, host) sent application data on a decrypted connection (it accepted our leaf there). */
     trusts: (key) => trusted.has(key),
@@ -81,6 +82,16 @@ export function createNegativeCache({ threshold = 2, now = () => Date.now(), ret
     /** forgetPid(pid) → how many negative entries were dropped (that pid's half-way counts go too). */
     forgetPid: (pid) => forgetKey(pid),
     list: () => [...negative.keys()].map(live).filter(Boolean),
+    /** forgetAgent(agent) → [{neg_key, pid, agent, hosts, dropped}], one per key of that harness's live entries, each forgotten whole (forgetKey); null = every harness. */
+    forgetAgent(agent) {
+      const by = new Map()
+      for (const e of [...negative.keys()].map(live).filter(Boolean)) {
+        if (agent != null && e.agent !== agent) continue
+        const g = by.get(e.negKey) || { neg_key: e.negKey, pid: e.pid ?? null, agent: e.agent, hosts: [] }
+        g.hosts.push(e.host); by.set(e.negKey, g)
+      }
+      return [...by.values()].map((g) => ({ ...g, dropped: forgetKey(g.neg_key) }))
+    },
     strikes: (key) => strikes.get(key)?.n || 0,
   }
 }

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import net from 'node:net'
 import tls from 'node:tls'
 import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
-import { NEG_RETRY_MS } from '../../../src/collector/core/engine/negcache.mjs'
+import { NEG_BACKOFF } from '../../../src/collector/core/engine/negcache.mjs'
 import { createStaticRedirector } from '../../../src/collector/core/redirector.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
@@ -136,15 +136,15 @@ test('4.6 W21(b): a fast engine — a client of a trusted (pid, host) that refus
 
 const clock = () => { const c = { t: 1_000_000_000, now: () => c.t }; return c }
 
-test('4.6 W22: an entry carries retry_at = now + NEG_RETRY_MS; before it the key is spliced, after it a trusting client is decrypted again', T, async (t) => {
+test('4.6 W22: an entry carries retry_at = now + NEG_BACKOFF.costly.base; before it the key is spliced, after it a trusting client is decrypted again', T, async (t) => {
   const c = clock()
   const s = await rig(t, { timing: { now: c.now } })
   await s.rejecting(); await s.settled(1)
   await s.rejecting(); await s.settled(2)
-  assert.deepEqual(s.engine.negatives().map((e) => e.retry_at), [c.t + NEG_RETRY_MS])
+  assert.deepEqual(s.engine.negatives().map((e) => e.retry_at), [c.t + NEG_BACKOFF.costly.base])
   await s.rejecting(); await s.settled(3)
   assert.equal(s.flows[2].not_captured, 'negative-cache')
-  c.t += NEG_RETRY_MS
+  c.t += NEG_BACKOFF.costly.base
   await s.used(); await s.settled(4)
   assert.deepEqual([s.flows[3].decision, s.flows[3].not_captured], ['decrypt', undefined])
 })
@@ -155,10 +155,10 @@ test('4.6 W22: after retry_at one rejection renews the entry with a doubled back
   await s.rejecting(); await s.settled(1)
   await s.rejecting(); await s.settled(2)
   assert.equal(s.critical().length, 1)
-  c.t += NEG_RETRY_MS
+  c.t += NEG_BACKOFF.costly.base
   await s.rejecting(); await s.settled(3)
   const neg = s.fails.filter((f) => f.code === 'negative-cache')
   assert.equal(neg.length, 2)
-  assert.equal(neg[1].retry_at, new Date(c.t + 2 * NEG_RETRY_MS).toISOString())
+  assert.equal(neg[1].retry_at, new Date(c.t + 2 * NEG_BACKOFF.costly.base).toISOString())
   assert.equal(s.critical().length, 1)
 })
