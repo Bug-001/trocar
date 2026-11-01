@@ -10,7 +10,7 @@ import { harnessName } from '../core/chips.mjs'
 import { captureVerdict, pollCaptureHealth } from '../core/capture-verdict.mjs'
 import { pageHtml } from './capture-view.mjs'
 import { wireHarnessControls } from '../core/harness-switch.mjs'
-import { confirmDialog } from '../core/ui.mjs'
+import { confirmDialog, repaint } from '../core/ui.mjs'
 
 export function mount(el, ctx) {
   const { api, store, router, toast } = ctx
@@ -36,12 +36,13 @@ export function mount(el, ctx) {
 
   // ── painting ────────────────────────────────────────────────────────────────────────────────────────────────────
   // one string per paint (capture-view pageHtml): the expand state is baked into the row strings — the reader's choice
-  // first, then the default (a problem row opens) — so a re-read never disturbs an open row
-  function paint() {
+  // first, then the default (a problem row opens) — so a re-read never disturbs an open row; a poll's paint waits while the reader
+  // holds a selection in the rows, a paint the reader caused (`reader`) draws at once (1.2 §点击与选中文字 ③)
+  function paint({ reader = false } = {}) {
     const { capH, capHOkAt, capHErr } = store.get()
     const v = captureVerdict(capH, { okAt: capHOkAt, err: capHErr })
     headEl.innerHTML = pageHeadHtml({ name: SCREEN_NAME.capture, readAt: capHOkAt })
-    mainEl.innerHTML = pageHtml(capH, v, { openByReader, ov, control, ui: ctlState })
+    repaint(mainEl, pageHtml(capH, v, { openByReader, ov, control, ui: ctlState }), { hold: !reader })
   }
 
   // ── ?h= : land on that row, opened (1.9 §从别处进来); an agent with no row is a toast, never head-zone text ───────
@@ -60,14 +61,14 @@ export function mount(el, ctx) {
     // the arrival opens the row through the same memory the reader's own clicks use, and repaints: the row string
     // itself then carries aria-expanded="true" (no second DOM-mutation path to keep in step)
     openByReader.set(h, true)
-    paint()
+    paint({ reader: true })
     const again = q(`.crow[data-h="${h.replace(/["\\]/g, '')}"]`)
     try { if (again && again.scrollIntoView) again.scrollIntoView({ block: 'center' }) } catch { /* no options */ }
   }
 
   // ── wiring ──────────────────────────────────────────────────────────────────────────────────────────────────────
-  // the row head (the name button) toggles; a click anywhere else on the row — outside a link, a button, a disclosure
-  // or a popover — toggles too
+  // the row's top line toggles (the name button, or a click on the line outside a link, a button, a disclosure or a popover);
+  // a click in the expansion never does (1.2 §点击与选中文字 ②)
   const onRowClick = (e) => {
     if (!e.target.closest) return
     const rowEl = e.target.closest('.crow')
@@ -75,9 +76,9 @@ export function mount(el, ctx) {
     if (!e.target.closest('[data-caprow]') && e.target.closest('a, button, [data-disc], [data-pop], [data-menu]')) return
     const target = e.target.closest('[data-caprow]') || rowEl.querySelector('[data-caprow]')
     if (!target) return
-    e.preventDefault()
     const exp = el.querySelector('#' + target.getAttribute('aria-controls'))
-    if (!exp) return
+    if (!exp || exp.contains(e.target)) return
+    e.preventDefault()
     const open = exp.hasAttribute('hidden')
     openByReader.set(rowEl.dataset.h, open)
     target.setAttribute('aria-expanded', String(open))
@@ -88,7 +89,7 @@ export function mount(el, ctx) {
 
   const offCtl = wireHarnessControls(el, {
     api, state: ctlState, ask: (opts) => confirmDialog(opts, el.ownerDocument),
-    onDone: (out) => { if (out && out.status === 405) readControl(); paint(); if (poll) poll.refresh() },
+    onDone: (out) => { if (out && out.status === 405) readControl(); paint({ reader: true }); if (poll) poll.refresh() },
   })
   paint()
   readControl()

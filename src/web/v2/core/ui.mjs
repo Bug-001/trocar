@@ -140,6 +140,18 @@ export function confirmDialog(opts, doc = typeof document === 'undefined' ? null
 // room, clamped 8px inside the viewport. A menu ([data-menu]) never opens on hover.
 export function installUi(doc = typeof document === 'undefined' ? null : document) {
   if (!doc) return null
+  // 1.2 §点击与选中文字 ①: a press that made or changed a selection is not a click. Every toggle on the board listens in the bubble
+  // phase, so this one capture-phase listener keeps the click that ends a drag-select (or a double / triple / Shift click) from all of
+  // them, and from <summary> / links. A selection already there at pointerdown does not count (a button keeps it in Chrome); a
+  // keyboard click (detail 0) is never stopped.
+  const selNow = () => { const s = typeof doc.getSelection === 'function' ? doc.getSelection() : null; return s && !s.isCollapsed ? [s.anchorNode, s.anchorOffset, s.focusNode, s.focusOffset] : null }
+  let atDown = null
+  doc.addEventListener('pointerdown', () => { atDown = selNow() }, true)
+  doc.addEventListener('click', (e) => {
+    const now = selNow()
+    if (!now || !e.detail || (atDown && now.every((v, i) => v === atDown[i]))) return
+    e.preventDefault(); e.stopImmediatePropagation()
+  }, true)
   let open = null // { btn, layer, pinned, hover } — one popover at a time
   let backTo = null // the button Esc just returned the focus to: its focusin is the close finishing, not an open
   const layerOf = (btn) => { const id = btn.dataset.pop || btn.dataset.menu; return id && doc.getElementById(id) }
@@ -210,11 +222,40 @@ export function installUi(doc = typeof document === 'undefined' ? null : documen
     const t = e.target && e.target.closest ? e.target.closest('[data-disc]') : null
     if (!t) return
     const body = doc.getElementById(t.dataset.disc)
-    if (!body) return
-    const now = body.hasAttribute('hidden')
-    if (now) body.removeAttribute('hidden'); else body.setAttribute('hidden', '')
-    t.setAttribute('aria-expanded', String(now))
-    const chev = t.querySelector('.chev'); if (chev) chev.textContent = now ? '▾' : '▸'
+    if (body) setDisc(doc, t, body.hasAttribute('hidden'))
   })
   return { close: () => close(false) }
+}
+
+// a disclosure head `t` ([data-disc]) and its body to `open`
+function setDisc(doc, t, open) {
+  const body = doc.getElementById(t.dataset.disc)
+  if (!body) return
+  if (open) body.removeAttribute('hidden'); else body.setAttribute('hidden', '')
+  t.setAttribute('aria-expanded', String(open))
+  const chev = t.querySelector('.chev'); if (chev) chev.textContent = open ? '▾' : '▸'
+}
+
+// 1.2 §点击与选中文字 ③: draw `html` into zone `z` unless it is what z last showed, or (`hold`, a poll's draw) the reader's selection
+// lies in z — then the zone waits for the next draw. After a draw the disclosures the reader set keep their state and focus returns
+// to the element of the same kind and the same href / data-h / data-key. A draw the reader caused passes hold:false. → drawn?
+const drawn = new WeakMap()
+const FOCUS_KEYS = ['href', 'data-h', 'data-key']
+export function repaint(z, html, { hold = true } = {}) {
+  if (!z || drawn.get(z) === html) return false
+  const doc = z.ownerDocument
+  const sel = doc && typeof doc.getSelection === 'function' ? doc.getSelection() : null
+  if (hold && sel && !sel.isCollapsed && [sel.anchorNode, sel.focusNode].some((n) => n && z.contains(n))) return false
+  const all = (q) => (z.querySelectorAll ? [...z.querySelectorAll(q)] : [])
+  const discs = new Map(all('[data-disc]').map((t) => [t.dataset.disc, t.getAttribute('aria-expanded')]))
+  const act = doc && doc.activeElement, at = act && z.contains && z.contains(act) && act.closest ? act.closest(FOCUS_KEYS.map((a) => `[${a}]`).join(',')) : null
+  const key = at ? FOCUS_KEYS.find((a) => at.hasAttribute(a)) : null, val = key ? at.getAttribute(key) : null
+  z.innerHTML = html
+  drawn.set(z, html)
+  for (const t of all('[data-disc]')) {
+    const was = discs.get(t.dataset.disc)
+    if (was != null && was !== t.getAttribute('aria-expanded')) setDisc(doc, t, was === 'true')
+  }
+  if (key) { const b = all(`[${key}]`).find((n) => n.tagName === at.tagName && n.getAttribute(key) === val); if (b) b.focus() }
+  return true
 }

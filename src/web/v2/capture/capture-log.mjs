@@ -8,7 +8,7 @@ import { esc, fmtTime, fmtWhen } from '../core/fmt.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
 import { READ_AT } from '../shell/pagehead.mjs'
 import { harnessIcon, harnessName, harnessKey, HARNESS_ORDER } from '../core/chips.mjs'
-import { menuButton, disclosureHtml, techDetailsHtml } from '../core/ui.mjs'
+import { menuButton, disclosureHtml, techDetailsHtml, repaint } from '../core/ui.mjs'
 import { HEALTH_READ } from '../labels/common.mjs'
 import { copyBtn } from '../core/dom.mjs'
 import { redactUrlCredentials } from '../core/sensitive.mjs'
@@ -112,7 +112,8 @@ export function mount(el, ctx) {
   el.innerHTML = `<div class="page capage"><div id="cloghead"></div><div class="cap-main" id="clogmain"></div></div>`
   const headEl = el.querySelector('#cloghead'), mainEl = el.querySelector('#clogmain')
 
-  function paint() {
+  // a poll's paint waits while the reader holds a selection in the rows; a filter change (`reader`) draws at once (1.2 §点击与选中文字 ③)
+  function paint({ reader = false } = {}) {
     const { capH, capHOkAt } = store.get()
     const agents = agentsOf(capH)
     // the head is rebuilt only when its content really changes (the filter, the agent set the menu offers); a rebuild
@@ -132,10 +133,11 @@ export function mount(el, ctx) {
       const at = headEl.querySelector ? headEl.querySelector('.readat') : null
       if (at) at.textContent = stamp
     }
-    mainEl.innerHTML = pageLogHtml(capH, { filter, openByReader })
+    repaint(mainEl, pageLogHtml(capH, { filter, openByReader }), { hold: !reader })
   }
 
-  // a row toggles through the expand memory, so the choice survives every re-read (1.9 #13, the log page's half)
+  // a row toggles through the expand memory, so the choice survives every re-read (1.9 #13, the log page's half); a click in the
+  // expansion never toggles (1.2 §点击与选中文字 ②)
   const onRowClick = (e) => {
     if (!e.target.closest) return
     const rowEl = e.target.closest('.lr')
@@ -143,9 +145,9 @@ export function mount(el, ctx) {
     if (e.target.closest('a, button, [data-disc], [data-pop], [data-menu]') && !e.target.closest('[data-lrow]')) return
     const btn = e.target.closest('[data-lrow]') || (rowEl.querySelector ? rowEl.querySelector('[data-lrow]') : null)
     if (!btn) return
-    e.preventDefault()
     const exp = el.querySelector('#' + btn.getAttribute('aria-controls'))
-    if (!exp) return
+    if (!exp || exp.contains(e.target)) return
+    e.preventDefault()
     const open = exp.hasAttribute('hidden')
     const key = rowEl.dataset.key
     if (open) openByReader.set(key, true); else openByReader.delete(key)
@@ -156,12 +158,12 @@ export function mount(el, ctx) {
   el.addEventListener('click', onRowClick) // removed in unmount: the shell hands the next screen this same element
 
   paint()
-  poll = pollCaptureHealth({ api, store, doc: el.ownerDocument, onAnswer: paint })
+  poll = pollCaptureHealth({ api, store, doc: el.ownerDocument, onAnswer: () => paint() })
 
   return {
     update(route) {
       const h = route.params.h || null
-      if (h !== filter) { filter = h; openByReader.clear(); paint() }
+      if (h !== filter) { filter = h; openByReader.clear(); paint({ reader: true }) }
     },
     unmount() {
       if (poll) poll.stop()
