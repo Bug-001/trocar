@@ -1,7 +1,7 @@
 // paths.mjs (src/off) — where trocar keeps what `off` has to find, for one HOME. src/off may import nothing outside itself (0.1 §2: the
 // standalone `~/.trocar/bin/trocar-off` is made of this directory alone), so these few paths are written here instead of imported from
 // src/paths.mjs; test/paths.test.mjs makes the two one fact (and oldCaDir the same answer as caDir() in every shape, D27).
-// Every function takes the user's HOME (default: the process's) so a test points it at a sandbox; none touches the disk but oldCaDir.
+// Every function takes the user's HOME (default: the process's) so a test points it at a sandbox; none touches the disk but oldCaDir and standaloneCommand.
 import nodeFs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -23,8 +23,16 @@ export const standalonePath = (home = os.homedir()) => path.join(trocarHome(home
 export const appDir = (home = os.homedir()) => path.join(trocarHome(home), 'app')
 /** ~/.trocar/bin/trocar (Windows trocar.cmd): the launcher that reads `app/current` and runs the version it names. */
 export const launcherPath = (home = os.homedir(), platform = process.platform) => path.join(trocarHome(home), 'bin', platform === 'win32' ? 'trocar.cmd' : 'trocar')
-/** The command that runs that copy, the one place it is worded: Windows ignores the shebang, so there it is `node "<path>"`; elsewhere the path runs itself. */
-export const standaloneCommand = (p, platform = process.platform) => (platform === 'win32' ? `node "${p}"` : p)
+/** The command that runs that copy, the one place it is worded: elsewhere the path runs itself (its sh prologue finds a Node); Windows ignores the
+ *  shebang, so there it is `<node> "<path>"` — the script channel's own node.exe that `app\\current` beside the copy's bin\\ names (that machine may have
+ *  no node on PATH, D74), else `node`. Reads that one pointer, nothing else. */
+export function standaloneCommand(p, platform = process.platform, fs = nodeFs) {
+  if (platform !== 'win32') return p
+  const app = path.win32.join(path.win32.dirname(path.win32.dirname(p)), 'app')
+  let exe = null
+  try { const id = fs.readFileSync(path.win32.join(app, 'current'), 'utf8').split(/\r?\n/)[0].split(' ')[1]; if (id) exe = path.win32.join(app, 'node', id, 'node.exe') } catch { /* not the script channel */ }
+  return `${exe && fs.existsSync(exe) ? `"${exe}"` : 'node'} "${p}"`
+}
 /** ~/.trocar/legacy-manifest.json: the ledger of what `on` changed through the old capture. */
 export const legacyManifestPath = (home = os.homedir()) => path.join(trocarHome(home), 'legacy-manifest.json')
 /** ~/.trocar/legacy-op.lock: the lock of the one `on` / `off` / `uninstall` that changes the old capture at a time (1.6 R12; the old capture has no ~/.trocar/collector/). */

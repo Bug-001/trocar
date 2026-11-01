@@ -224,6 +224,13 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     let unitLeft = false
     if (!blocked) {
       if (!m && u.mode === 'none') receipt.notes.push('nothing is installed for this user')
+      // D74⑤: the script channel's PATH item (install recorded it in `path_item`); one that cannot be taken out is left, with the manifest that names it
+      // and the backup it names (before the sweep below: a taken-out item no longer names its backup, so the sweep drops it)
+      if (m && m.path_item) {
+        const p = removePathItem(m.path_item, { env, fs, run: w.exec })
+        if (p.ok) { receipt.changed.push({ path: p.path, change: 'the PATH item taken out' }); delete m.path_item }
+        else { receipt.left.push({ path: p.path, result: p.result, reason: p.reason }); failed.push({ code: 'entry-not-undone', path: p.path, reason: p.reason }) }
+      }
       if (m) {
         // every backup goes (zero residue, 1.6 R2): the ones undo dropped, the ones it kept because the user edited the file since — each listed — and any no entry names;
         // the backup of an entry that could not be undone stays with it, for the next run
@@ -272,12 +279,6 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       // the door ports and their tokens (decision #16): the next install and on choose them again
       const ing = removeIngressConfig({ dir: w.dir, fs })
       if (!ing.removed) noted.push({ kind: 'residue-not-removed', code: 'residue-not-removed', path: path.join(w.dir, 'ingress.json'), reason: `${path.join(w.dir, 'ingress.json')} could not be removed (${ing.reason}); remove it by hand` })
-      // D74⑤: the script channel's PATH item (install recorded it in `path_item`); one that cannot be taken out is left, with the manifest that names it
-      if (m && m.path_item) {
-        const p = removePathItem(m.path_item, { env, fs, run: w.exec })
-        if (p.ok) { receipt.changed.push({ path: p.path, change: 'the PATH item taken out' }); delete m.path_item }
-        else { receipt.left.push({ path: p.path, result: p.result, reason: p.reason }); failed.push({ code: 'entry-not-undone', path: p.path, reason: p.reason }) }
-      }
     }
     for (const n of noted) if (!receipt.notes.includes(n.reason)) receipt.notes.push(n.reason) // the command prints every one of them
     // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind. `--purge-data` is "nothing of the captures stays", so the
@@ -335,7 +336,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
 
 /** 1.6 §3.6 「脚本渠道的最后一步」 (D74⑧): a copy the install script placed goes last — the launcher and ~/.trocar/app (the code and its private Node), also
  *  with no manifest. Only after a clean run: one that left anything needs this code to run again. POSIX unlinks the running files; Windows cannot, so a
- *  detached hidden PowerShell waits for this process and its parent (the cmd reading trocar.cmd) and deletes them then. A Linux capability helper still
+ *  detached hidden PowerShell waits for this process and deletes them then. Either way the directories left empty go with them. A Linux capability helper still
  *  installed needs this code to be removed, so the code stays and the command that removes the helper is printed. */
 function scriptCopyLast(w, { home, env, receipt, root }) {
   if (channelOf(root, { home, fs: w.fs }) !== 'script') return
@@ -344,13 +345,21 @@ function scriptCopyLast(w, { home, env, receipt, root }) {
     receipt.problems.push(`trocar's own code stays in ${app}: the capability helper is still installed, and removing it needs this code. Run: sudo ${selfCommand(['setup-helper', '--remove'], { root })}, then run trocar uninstall again`)
     return
   }
+  const dirs = [trocarHome(home), path.dirname(launcher), w.dir] // the run's own removeEmptyDirs came before the code went: these were not empty then
   if (w.platform !== 'win32') {
     for (const p of [launcher, app]) { try { if (w.fs.existsSync(p)) { w.fs.rmSync(p, { recursive: true, force: true }); receipt.removed.push(p) } } catch (e) { receipt.problems.push(`${p} could not be removed (${errText(e)}); remove it by hand`) } }
+    removeEmptyDirs(dirs, w.fs)
     return
   }
+  // The launcher's last line runs node and exits in one parsed line, so cmd never reads the file again: only this process holds the files. The
+  // removal runs only while app\current still says what it says now, so an install run again in the meantime is never removed.
   const q = (p) => `'${p.replace(/'/g, "''")}'`
+  let pointer = ''
+  try { pointer = w.fs.readFileSync(path.join(app, 'current'), 'utf8').split(/\r?\n/)[0] } catch { /* none: the guard below then needs it still absent */ }
+  const same = `((Get-Content -LiteralPath ${q(path.join(app, 'current'))} -TotalCount 1 -ErrorAction SilentlyContinue) -ceq ${pointer ? q(pointer) : '$null'})`
+  const rmEmpty = [...dirs].reverse().map((d) => `if (-not (Get-ChildItem -LiteralPath ${q(d)} -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath ${q(d)} -Force -ErrorAction SilentlyContinue }`).join('; ')
   try {
-    spawnDetached('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `Wait-Process -Id ${process.pid},${process.ppid} -ErrorAction SilentlyContinue; Remove-Item -LiteralPath ${q(app)},${q(launcher)} -Recurse -Force -ErrorAction SilentlyContinue`], { env })
+    spawnDetached('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `Wait-Process -Id ${process.pid} -ErrorAction SilentlyContinue; if (${same}) { Remove-Item -LiteralPath ${q(app)},${q(launcher)} -Recurse -Force -ErrorAction SilentlyContinue; ${rmEmpty} }`], { env })
     receipt.removed.push(app, launcher)
     receipt.notes.push(`${app} and ${launcher} are removed as soon as this command exits`)
   } catch (e) { receipt.problems.push(`${app} could not be scheduled for removal (${errText(e)}); remove it and ${launcher} by hand once this command has exited`) }

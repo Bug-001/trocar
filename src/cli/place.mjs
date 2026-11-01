@@ -39,7 +39,8 @@ export function launcherText(app, platform = process.platform) {
     return ['@echo off', 'setlocal', 'set "D=%~dp0..\\app"', 'set "V=" & set "N="',
       'for /f "usebackq tokens=1,2" %%a in ("%D%\\current") do set "V=%%a" & set "N=%%b"',
       'if not defined N (echo trocar: %D%\\current names no version. Run the install command again. 1>&2 & exit /b 1)',
-      '"%D%\\node\\%N%\\node.exe" "%D%\\%V%\\bin\\trocar.mjs" %*', 'exit /b %ERRORLEVEL%', ''].join('\r\n')
+      // one line, parsed before node runs: cmd never reads the file again, so uninstall may delete it while this runs (`exit /b` keeps node's code)
+      '"%D%\\node\\%N%\\node.exe" "%D%\\%V%\\bin\\trocar.mjs" %* & exit /b', ''].join('\r\n')
   }
   const q = `'${app.replace(/'/g, `'\\''`)}'`
   return ['#!/bin/sh', `d=${q}`, 'read -r v n <"$d/current" && [ -n "$n" ] || { echo "trocar: $d/current names no version. Run the install command again." >&2; exit 1; }',

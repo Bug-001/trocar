@@ -398,6 +398,8 @@ test('the standalone trocar-off is printed as a runnable command: node "<path>" 
   const { standaloneCommand } = await import('../../src/off/paths.mjs')
   const win = 'C:\\Users\\a\\.trocar\\bin\\trocar-off', posix = '/home/a/.trocar/bin/trocar-off'
   assert.equal(standaloneCommand(win, 'win32'), `node "${win}"`)
+  const scriptFs = { readFileSync: () => '9.9.9 n1\r\n', existsSync: () => true } // D74: a script-channel machine may have no node on PATH
+  assert.equal(standaloneCommand(win, 'win32', scriptFs), `"C:\\Users\\a\\.trocar\\app\\node\\n1\\node.exe" "${win}"`)
   for (const p of ['darwin', 'linux']) assert.equal(standaloneCommand(posix, p), posix)
   const r = { ...newReceipt('on'), ok: true, standalone: win }
   assert.ok(formatOnReceipt(r, { platform: 'win32' }).includes(`node "${win}"`), 'the receipt line runs on Windows')

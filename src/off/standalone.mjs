@@ -142,7 +142,7 @@ function readModule(name, text) {
 }
 
 /** The text of the single file for `srcDir` (default: this directory), which carries `version` on its second line. Throws what the header lists, naming the file and the name. */
-export function buildStandalone({ srcDir = SOURCE_DIR, version, node = process.execPath, fs = nodeFs } = {}) {
+export function buildStandalone({ srcDir = SOURCE_DIR, version, fs = nodeFs } = {}) {
   if (version === undefined || version === null || String(version) === '') throw new Error('buildStandalone: a version is required (it is on the first lines of the file, and `doctor` compares it)')
   const mods = new Map(), order = [], onPath = []
   const visit = (name, from) => {
@@ -202,10 +202,11 @@ export function buildStandalone({ srcDir = SOURCE_DIR, version, node = process.e
   }
   const tidy = (s) => s.replace(/^\n+/, '').replace(/\s+$/, '')
   return [
-    // a sh / JS polyglot (D74: a script-channel machine may have no node on PATH): sh runs line 2 — the Node of the install that wrote the copy, else
-    // the one on PATH; Node skips the #! line and reads line 2 as a string and a comment
+    // a sh / JS polyglot (D74: a script-channel machine may have no node on PATH): sh runs line 2 — the Node that ../app/current next to this file
+    // names, as the launcher finds it, else the one on PATH; nothing of the writer's own Node is in the bytes. Node skips the #! line and reads line 2
+    // as a string and a comment
     '#!/bin/sh',
-    `':' //; n='${String(node).replace(/'/g, "'\\''")}'; [ -x "$n" ] || n=node; exec "$n" "$0" "$@"`,
+    `':' //; d="\${0%/*}/../app"; n=; read -r v i <"$d/current" 2>/dev/null && n="$d/node/$i/bin/node"; [ -x "$n" ] || n=node; exec "$n" "$0" "$@"`,
     `// trocar-off ${version} — generated from src/off by trocar on; do not edit`,
     '// `trocar off` without the repository, node_modules or the daemon (RFC 1.6 R3): the undo side of trocar in one file, which brings in `node:*` and nothing else.',
     '// It has no ES module syntax, so the Node that runs it need not guess what kind of file a file with no extension is.',

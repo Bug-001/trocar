@@ -11,6 +11,7 @@ import { runUninstallCli } from '../../src/cli/uninstall.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import { pathItemTarget } from '../../src/off/path-item.mjs'
 import { appDir, launcherPath } from '../../src/off/paths.mjs'
+import { orphanBackups } from '../../src/off/backup.mjs'
 import { fakeIo, onCtx, seedClaude } from '../cli/fixtures/on-ctx.mjs'
 
 test('V112: the start file is the one the (system, shell, ZDOTDIR) row names', () => {
@@ -48,9 +49,10 @@ test('V112 V113: a script-channel install adds the PATH item once; uninstall tak
   assert.ok(placed.startsWith(mine) && placed.includes('.trocar/bin'), 'appended after the user\'s lines')
   assert.equal(await runInstallCli(['--yes'], ctx(fakeIo())), 0)
   assert.equal(fs.readFileSync(rc, 'utf8'), placed, 'a second install changes no byte')
+  if (item.backup) assert.ok(!orphanBackups({ home, manifest: readManifest(path.join(home, '.trocar', 'collector')) }).includes(item.backup), 'the PATH item names its backup: no orphan')
 
   const un = fakeIo()
   assert.equal(await runUninstallCli(['--yes', '--json'], ctx(un)), 0, un.text())
   assert.equal(fs.readFileSync(rc, 'utf8'), mine, 'the file is as it was')
-  assert.deepEqual([fs.existsSync(appDir(home)), fs.existsSync(launcherPath(home, 'linux')), fs.readFileSync(raw, 'utf8')], [false, false, '{"keep":1}\n'])
+  assert.deepEqual([fs.existsSync(appDir(home)), fs.existsSync(path.dirname(launcherPath(home, 'linux'))), fs.readFileSync(raw, 'utf8')], [false, false, '{"keep":1}\n'], 'app/, the launcher and the bin/ they leave empty are gone; the records stay')
 })

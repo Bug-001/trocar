@@ -405,9 +405,11 @@ test('a copy that cannot be written stops the install before one file of the age
 // legacyOffCli — it is the NEW off only, on every platform, and what the old capture left on a machine is cleaned by hand (README).
 // The copy's own behavior (the new off, no repository needed) is the cells above and below.
 
-test('D74: the copy runs with no node on PATH: sh starts the Node of the install that wrote it', { skip: process.platform === 'win32' && 'the copy is run as node "<path>" on Windows' }, () => {
+test('D74: the copy runs with no node on PATH: sh starts the Node that ../app/current names', { skip: process.platform === 'win32' && 'the copy is run as "<node>" "<path>" on Windows' }, () => {
   const text = buildStandalone({ version: 'test' }).replace(STANDALONE_ENTRY, "(process.stdout.write('ran ' + process.argv.slice(2).join(' ')), 0)")
-  const file = path.join(tmpDir('trocar-polyglot-'), 'trocar-off')
+  const t = tmpDir('trocar-polyglot-'), file = path.join(t, 'bin', 'trocar-off'), node = path.join(t, 'app', 'node', 'n1', 'bin', 'node')
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.mkdirSync(path.dirname(node), { recursive: true })
+  fs.writeFileSync(path.join(t, 'app', 'current'), '9.9.9 n1\n'); fs.symlinkSync(process.execPath, node)
   fs.writeFileSync(file, text, { mode: 0o700 })
   const r = spawnSync('/bin/sh', [file, 'a b', 'c'], { encoding: 'utf8', env: { PATH: path.join(path.dirname(file), 'no-such-dir') } })
   assert.equal(r.status, 0, r.stderr)
