@@ -1,5 +1,5 @@
 // path-item.test.mjs — the script channel's PATH item and uninstall's last step (RFC 1.6 §3.2 「脚本渠道多一项 PATH」, §3.6 「脚本渠道的最后一步」, V112, V113, D74⑤⑧).
-// The Windows registry half runs only on the Windows VM (powershell.exe is a guarded tool here).
+// The Windows registry half is not run here: powershell.exe is a guarded tool under npm test.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -7,6 +7,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { runInstallCli } from '../../src/cli/install.mjs'
+import { runUninstallCli } from '../../src/cli/uninstall.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import { pathItemTarget } from '../../src/off/path-item.mjs'
 import { appDir, launcherPath } from '../../src/off/paths.mjs'
@@ -27,7 +28,7 @@ test('the line puts ~/.trocar/bin last on PATH once, however often the file is r
   assert.equal(r.stdout, `/usr/bin:/bin:${home}/.trocar/bin`, r.stderr)
 })
 
-test('V112: a script-channel install adds the PATH item once and records it', async () => {
+test('V112 V113: a script-channel install adds the PATH item once; uninstall takes it out byte for byte and removes the launcher and ~/.trocar/app, keeping the records', async () => {
   const home = tmpDir('trocar-path-item-')
   seedClaude(home)
   const root = path.join(appDir(home), '9.9.9')
@@ -47,4 +48,9 @@ test('V112: a script-channel install adds the PATH item once and records it', as
   assert.ok(placed.startsWith(mine) && placed.includes('.trocar/bin'), 'appended after the user\'s lines')
   assert.equal(await runInstallCli(['--yes'], ctx(fakeIo())), 0)
   assert.equal(fs.readFileSync(rc, 'utf8'), placed, 'a second install changes no byte')
+
+  const un = fakeIo()
+  assert.equal(await runUninstallCli(['--yes', '--json'], ctx(un)), 0, un.text())
+  assert.equal(fs.readFileSync(rc, 'utf8'), mine, 'the file is as it was')
+  assert.deepEqual([fs.existsSync(appDir(home)), fs.existsSync(launcherPath(home, 'linux')), fs.readFileSync(raw, 'utf8')], [false, false, '{"keep":1}\n'])
 })

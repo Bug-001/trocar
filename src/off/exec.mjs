@@ -59,6 +59,15 @@ export function spawnTool(file, args, { env = process.env } = {}) {
   return spawn(file, args, { env, stdio: ['pipe', 'pipe', 'ignore'] })
 }
 
+/** Starts `file args…` detached, hidden and unwatched, to outlive this process (uninstall's deferred delete on Windows, 1.6 §3.6). Refuses a real
+ *  tool under npm test as execTool does. → the child's pid, or throws what spawn throws. */
+export function spawnDetached(file, args, { env = process.env } = {}) {
+  if (process.env.TROCAR_TEST_SANDBOX === '1' || env.TROCAR_TEST_SANDBOX === '1') refuseRealTool(file, args, env)
+  const c = spawn(file, args, { env, detached: true, windowsHide: true, stdio: 'ignore' })
+  c.unref()
+  return c.pid
+}
+
 /** spawnSync's runner shape without blocking the event loop (a daemon that serves doors must not stop for an `lsof`): `execFile`, the
  *  same options execTool passes, resolving `{ status, stdout, stderr, error? }` — status null when it was killed (the timeout) or never started.
  *  `quiet` asks for no output and settles on the child's exit (`inherit`: the child writes on this process's own streams instead — a child

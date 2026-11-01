@@ -155,7 +155,7 @@ test('V2: a daemon that answers is told to switch off by the copy, over the cont
 
 test('V11: what is generated imports node:* and nothing else — no import or export statement, no require, no dynamic import; every built-in comes in through the one loader, by a literal name', () => {
   const text = buildStandalone({ version: 'test' })
-  assert.match(text, /^#!\/usr\/bin\/env node\n\/\/ trocar-off test — generated from src\/off by trocar on; do not edit\n/, 'the shebang and the version line, first')
+  assert.match(text.split('\n', 3).join('\n'), /^\/\/ trocar-off test — generated from src\/off by trocar on; do not edit$/m, 'the version line is in the first three lines')
   assert.equal(buildStandalone({ version: 'test' }), text, 'the same text every time: `on` compares it with what is on disk')
   const calls = [...text.matchAll(/__trocarLoad\(/g)].length
   const specs = [...text.matchAll(/__trocarLoad\(\s*(['"])([^'"]+)\1\s*\)/g)].map((m) => m[2])
@@ -404,3 +404,12 @@ test('a copy that cannot be written stops the install before one file of the age
 // The pre-D39⑥ shape went with the old capture (executed 2026-10-11): the standalone copy no longer carries undoLegacy /
 // legacyOffCli — it is the NEW off only, on every platform, and what the old capture left on a machine is cleaned by hand (README).
 // The copy's own behavior (the new off, no repository needed) is the cells above and below.
+
+test('D74: the copy runs with no node on PATH: sh starts the Node of the install that wrote it', { skip: process.platform === 'win32' && 'the copy is run as node "<path>" on Windows' }, () => {
+  const text = buildStandalone({ version: 'test' }).replace(STANDALONE_ENTRY, "(process.stdout.write('ran ' + process.argv.slice(2).join(' ')), 0)")
+  const file = path.join(tmpDir('trocar-polyglot-'), 'trocar-off')
+  fs.writeFileSync(file, text, { mode: 0o700 })
+  const r = spawnSync('/bin/sh', [file, 'a b', 'c'], { encoding: 'utf8', env: { PATH: path.join(path.dirname(file), 'no-such-dir') } })
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(r.stdout, 'ran a b c')
+})

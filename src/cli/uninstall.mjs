@@ -16,13 +16,16 @@ import { readManifest, saveManifest, manifestPath, refuseOldManifest } from '../
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
-import { standalonePath, backupDir, opLockFile, trocarHome, COLLECTOR_STATE_FILES } from '../off/paths.mjs'
+import { standalonePath, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES } from '../off/paths.mjs'
 import { rawHome, indexHome, classesLog } from '../paths.mjs' // D60: the records are segments under ~/.trocar/raw, the index trocar builds from them under ~/.trocar/index
 import { netenvFile } from '../netenv/index.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
 import { removeOwnedFile } from '../off/journal.mjs'
 import { removeEmptyDirs, sweepTemps, strictlyInside } from '../off/fsutil.mjs'
-import { execTool } from '../off/exec.mjs'
+import { execTool, spawnDetached } from '../off/exec.mjs'
+import { removePathItem } from '../off/path-item.mjs'
+import { channelOf, packageRoot, selfCommand } from '../version.mjs'
+import { DEFAULT_REDIRECTOR_BIN } from '../collector/arch/linux/redirector-client.mjs'
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
 import { formatUninstallReceipt } from './receipt.mjs'
@@ -76,12 +79,13 @@ const processUid = () => (typeof process.getuid === 'function' ? process.getuid(
 const errText = (e) => String((e && e.message) || e)
 
 /** What `uninstall --dry-run` would do (and what is printed when a yes is missing), read and written nowhere → the receipt fields. */
-function planUninstall(w, m, purgeData = false) {
+function planUninstall(w, m, purgeData = false, root = packageRoot()) {
   const usable = m && !m.unsupported
   const entries = usable ? m.entries.filter((e) => e.kind === 'json-key' || e.kind === 'text') : []
   return {
-    changed: entries.map((e) => ({ path: e.path, change: `${e.kind === 'text' ? "trocar's own lines" : (e.keys || []).join('.')} taken out`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
-    removed: [...(usable ? m.files.map((f) => f.path) : []), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)).filter((p) => w.fs.existsSync(p)), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m ? [manifestPath(w.dir)] : [])],
+    changed: [...entries.map((e) => ({ path: e.path, change: `${e.kind === 'text' ? "trocar's own lines" : (e.keys || []).join('.')} taken out`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
+      ...(usable && m.path_item ? [{ path: m.path_item.path, change: 'the PATH item taken out', backup: m.path_item.backup ?? null }] : [])],
+    removed: [...(usable ? m.files.map((f) => f.path) : []), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)).filter((p) => w.fs.existsSync(p)), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m ? [manifestPath(w.dir)] : []), ...(channelOf(root, { home: w.home, fs: w.fs }) === 'script' ? [launcherPath(w.home, w.platform), appDir(w.home)] : [])],
     kept: purgeData ? [] : keptOf(w.home, w.fs),
     notes: usable || !m ? [] : [`the install manifest is version ${JSON.stringify(m.version)}, which this build does not read: no entry would be touched`],
     autostart: { planned: true },
@@ -110,12 +114,12 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   receipt.harnesses = harnessIdsOf(m)
   // §1.4 / appendix C: the plan itself is a key of the JSON document — every file by its full path and what would happen to it
   const plannedItems = (p) => [...p.changed.map((c) => ({ path: c.path, change: c.change, harness: c.harness ?? null })), ...p.removed.map((x) => ({ path: x, change: 'removed' }))]
-  const plan = () => { const p = planUninstall(w, m, purgeData); return Object.assign(receipt, { dry_run: true }, p, { planned: plannedItems(p) }) }
+  const plan = () => { const p = planUninstall(w, m, purgeData, deps.root); return Object.assign(receipt, { dry_run: true }, p, { planned: plannedItems(p) }) }
   if (dryRun) { plan(); return { receipt, exit: EXIT.ok } }
   // §3.6: uninstall always prints its plan and asks — it takes certificates out of your trust settings and removes files of yours. Not a terminal
   // and no --yes: the plan only, nothing changed, exit 2 (§1.4).
   if (!yes) {
-    if (say) say(formatUninstallReceipt({ ...receipt, ...planUninstall(w, m, purgeData), notes: [] }, { home, tense: 'future' }))
+    if (say) say(formatUninstallReceipt({ ...receipt, ...planUninstall(w, m, purgeData, deps.root), notes: [] }, { home, tense: 'future' }))
     const ok = interactive && io ? await confirm(io, purgeData ? 'This also deletes every captured record, for good. Proceed?' : 'Proceed?') : null
     if (ok !== true) {
       plan()
@@ -268,6 +272,12 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       // the door ports and their tokens (decision #16): the next install and on choose them again
       const ing = removeIngressConfig({ dir: w.dir, fs })
       if (!ing.removed) noted.push({ kind: 'residue-not-removed', code: 'residue-not-removed', path: path.join(w.dir, 'ingress.json'), reason: `${path.join(w.dir, 'ingress.json')} could not be removed (${ing.reason}); remove it by hand` })
+      // D74⑤: the script channel's PATH item (install recorded it in `path_item`); one that cannot be taken out is left, with the manifest that names it
+      if (m && m.path_item) {
+        const p = removePathItem(m.path_item, { env, fs, run: w.exec })
+        if (p.ok) { receipt.changed.push({ path: p.path, change: 'the PATH item taken out' }); delete m.path_item }
+        else { receipt.left.push({ path: p.path, result: p.result, reason: p.reason }); failed.push({ code: 'entry-not-undone', path: p.path, reason: p.reason }) }
+      }
     }
     for (const n of noted) if (!receipt.notes.includes(n.reason)) receipt.notes.push(n.reason) // the command prints every one of them
     // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind. `--purge-data` is "nothing of the captures stays", so the
@@ -313,6 +323,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     try { list = await w.procs() } catch (e) { receipt.notes.push(`the process table could not be read (${errText(e)}), so the trocar processes you started yourself are not listed`) }
     receipt.user_processes = userProcessesOf(list)
     receipt.kept = keptOf(home, fs) // what is still there now this run is done: after a purge, nothing
+    if (!blocked && !left && !receipt.problems.length) scriptCopyLast(w, { home, env, receipt, root: deps.root || packageRoot() })
     receipt.ok = receipt.problems.length === 0 && left === 0
     if (!receipt.ok && !receipt.problems.length) receipt.problems.push(`${left} item(s) could not be undone; the install manifest is kept. Fix them, then run trocar uninstall again`)
     return { receipt, exit: receipt.ok ? EXIT.ok : EXIT.incomplete }
@@ -320,6 +331,29 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     try { if (fs.existsSync(w.dir)) { put({ event: 'failure', code: (e && e.code) || 'uninstall-error', reason: errText(e) }); put({ kind: 'result', outcome: 'failed', reason: `uninstall failed: ${errText(e)}` }) } } catch { /* the original error is the one that matters */ }
     throw e
   } finally { if (lock) lock.release() }
+}
+
+/** 1.6 §3.6 「脚本渠道的最后一步」 (D74⑧): a copy the install script placed goes last — the launcher and ~/.trocar/app (the code and its private Node), also
+ *  with no manifest. Only after a clean run: one that left anything needs this code to run again. POSIX unlinks the running files; Windows cannot, so a
+ *  detached hidden PowerShell waits for this process and its parent (the cmd reading trocar.cmd) and deletes them then. A Linux capability helper still
+ *  installed needs this code to be removed, so the code stays and the command that removes the helper is printed. */
+function scriptCopyLast(w, { home, env, receipt, root }) {
+  if (channelOf(root, { home, fs: w.fs }) !== 'script') return
+  const app = appDir(home), launcher = launcherPath(home, w.platform)
+  if (w.platform === 'linux' && w.fs.existsSync(DEFAULT_REDIRECTOR_BIN)) {
+    receipt.problems.push(`trocar's own code stays in ${app}: the capability helper is still installed, and removing it needs this code. Run: sudo ${selfCommand(['setup-helper', '--remove'], { root })}, then run trocar uninstall again`)
+    return
+  }
+  if (w.platform !== 'win32') {
+    for (const p of [launcher, app]) { try { if (w.fs.existsSync(p)) { w.fs.rmSync(p, { recursive: true, force: true }); receipt.removed.push(p) } } catch (e) { receipt.problems.push(`${p} could not be removed (${errText(e)}); remove it by hand`) } }
+    return
+  }
+  const q = (p) => `'${p.replace(/'/g, "''")}'`
+  try {
+    spawnDetached('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `Wait-Process -Id ${process.pid},${process.ppid} -ErrorAction SilentlyContinue; Remove-Item -LiteralPath ${q(app)},${q(launcher)} -Recurse -Force -ErrorAction SilentlyContinue`], { env })
+    receipt.removed.push(app, launcher)
+    receipt.notes.push(`${app} and ${launcher} are removed as soon as this command exits`)
+  } catch (e) { receipt.problems.push(`${app} could not be scheduled for removal (${errText(e)}); remove it and ${launcher} by hand once this command has exited`) }
 }
 
 const USAGE = 'usage: trocar uninstall [--purge-data] [--dry-run] [--yes] [--json]'
