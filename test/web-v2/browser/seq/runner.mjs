@@ -114,9 +114,10 @@ export async function runSequence({ steps, seed = 1, big = false, viewport = 128
       // every input the page saw (a compound step clicks after its own waits) opens a reader window for I-rate
       for (const [at, e] of await b.page.evaluate(() => (window.__seqInput || []).splice(0)).catch(() => [])) ctx.actions.push({ t: at, a: e })
       const c = { page: b.page, requests: b.requests, errors: b.errors, actions: ctx.actions, faults: faults.log, hidden: ctx.hidden, follow: ctx.follow,
-        grownAt: ctx.grownAt, truth, real, prev, baseline }
+        grownAt: ctx.grownAt, truth, real, prev, baseline, drag: ctx.lastDrag }
       const had = new Set(baseline.keys())
       const res = await check(c).catch(async () => { await b.page.waitForTimeout(500); return check(c) })
+      ctx.lastDrag = null
       // a first visit drawn under a fault (a failed read draws a short error) is no baseline for I-leak / I-mem: the next visit is
       if (faults.log.some((f) => f.to == null || f.to >= t - 2000)) for (const k of baseline.keys()) if (!had.has(k)) baseline.delete(k)
       prev = res.view
