@@ -228,12 +228,14 @@ test('V49 where the harness keeps its settings in a managed process its windows 
   }
 })
 
-// 1.6 附录 B / D54②: whatever paused decrypting a host, the way to try it again now is `trocar on <harness>`, in the finding and in status's NOTE
-test('negative-cache: every cause\'s Fix runs trocar on <harness>, and status\'s reason for an upstream cause commands it', () => {
+// 1.6 附录 B / D54②: an upstream cause is tried again now by `trocar on <harness>`, in the finding's Fix and in status's NOTE; a refused leaf's Fix
+// is the restart (`trocar on` only in its why). Every cause says when trocar tries again as people read time, never the ISO instant (§1.1⑤)
+test('negative-cache: an upstream cause\'s Fix runs trocar on <harness>, and status\'s reason for it commands it; no cause prints an ISO time', () => {
   assert.ok(NEG_CAUSES.length >= 3)
   for (const cause of NEG_CAUSES) {
-    const f = findingsOf(facts('codex', { listeners: [] }, { procs: [proc(5530, { name: 'codex app-server', negative: true })], negatives: [{ pid: 5530, host: 'chatgpt.com', reason: 'negative-cache', cause }] }), ['codex']).find((x) => x.code === 'negative-cache')
-    assert.ok(f.commands.some((x) => x.run === 'trocar on codex' && x.shell === 'sh'), `${cause}: ${JSON.stringify(f.commands)}`)
+    const f = findingsOf(facts('codex', { listeners: [] }, { procs: [proc(5530, { name: 'codex app-server', negative: true })], negatives: [{ pid: 5530, host: 'chatgpt.com', reason: 'negative-cache', cause, retry_at: '2026-10-07T10:19:30.000Z' }] }), ['codex']).find((x) => x.code === 'negative-cache')
+    if (cause.startsWith('upstream-')) assert.ok(f.commands.some((x) => x.run === 'trocar on codex' && x.shell === 'sh'), `${cause}: ${JSON.stringify(f.commands)}`)
+    assert.doesNotMatch(`${f.what} ${f.why}`, /\d{4}-\d\d-\d\dT\d\d:\d\d/, cause)
     assert.deepEqual(validateFinding(f), [], cause)
   }
   for (const cause of NEG_CAUSES.filter((x) => x.startsWith('upstream-'))) assert.equal(statusReason('negative-cache', { harness: 'codex', pid: 5530, cause }).command, 'trocar on codex', cause)

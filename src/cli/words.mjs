@@ -71,7 +71,7 @@ export const FAILURE_WORDS = Object.freeze({
   'flow-write-failed': 'a connection log line could not be written',
   'trust-store-error': "the engine's certificate store failed",
   // a negative-cache record names its cause; a group folds every cause, so the bare code's word names none
-  'negative-cache': "trocar passed a connection on unread because an earlier TLS failure with that host paused decrypting it; trocar tries again by itself, and trocar on tries now",
+  'negative-cache': "trocar passed a connection on unread because an earlier TLS failure with that host paused decrypting it until trocar tries again",
   'negative-cache/client-rejected-leaf': "a program refused trocar's certificate, so its traffic to that host is passed on unread",
   'negative-cache/upstream-cert': "a host's certificate did not verify (often a network that intercepts TLS, such as a sign-in page), so trocar passes the program's traffic to it on unread and the program checks the real certificate itself",
   'negative-cache/upstream-handshake': "a host refused trocar's handshake (it likely wants a client certificate), so trocar passes the program's traffic to it on unread",
@@ -88,7 +88,7 @@ export const FAILURE_WORDS = Object.freeze({
   'upstream-header-ignored': 'a routing header from a program that should not send one was ignored',
   untrusted: 'a connection from a program that does not trust trocar yet; passed on unread',
   untracked: 'a connection from a program trocar does not follow; passed on unread',
-  'upstream-cert': "a host's certificate did not verify, so trocar did not decrypt the connection: it passed it on for the program to check the real certificate itself, or, inside a tunnel or through a proxy with credentials, closed that one connection",
+  'upstream-cert': "a host's certificate did not verify, so trocar did not decrypt the connection; it passed it on for the program to check, or closed it when it came through a tunnel or a proxy that needs a login",
   'upstream-handshake': "a host refused trocar's handshake (it likely wants a client certificate)",
   h2: 'an HTTP/2 connection could not be decrypted',
   'malformed-hello': "a program's handshake message could not be read",
@@ -201,7 +201,7 @@ const HARNESS_OWN = new Set(['settings-ignored-managed-by-host', 'settings-ignor
   'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override'])
 
 /** `trocar on`'s note for a harness whose paused hosts it made trocar try again (POST /on's `retried`, 4.11 §1 on/off, D54②). */
-export const retriedNote = (h, hosts) => `trocar decrypts ${hosts.join(', ')} again from ${h}'s next connection; it had passed that traffic on unread after a TLS failure`
+export const retriedNote = (h, hosts) => `trocar decrypts ${hosts.join(', ')} again from ${h}'s next connection; that traffic had been passed on unread after a TLS failure`
 
 /** The reason an agent is not captured (RFC 1.6 §3.5 NOTE column, D38): the one catalog, a clause for every code of
  *  src/health/codes.mjs STATUS_REASONS. → { text, fix, command } — `text` what is wrong ('' for `desired-off`), `fix` what to do in
@@ -219,10 +219,10 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
     'no-marker': [`${who} started before capture was on`, `restart ${h}`],
     'kimi-not-via-shim': [`${h} did not start through the program trocar installed`],
     'not-seen': [`trocar has not seen ${who} use its proxy yet; its next connection is judged`], // no restart part (1.6 附录 B)
-    // by the engine's cause (1.6 附录 B): every entry is tried again at its retry time, and at once by `trocar on <harness>` (D54②); a restart captures sooner only a refused trocar certificate
-    'negative-cache': cause === 'upstream-cert' ? [`a host's certificate did not verify for ${hp}, so trocar passes that traffic on unread and ${h} checks it itself`, 'trocar tries again by itself', `trocar on ${h}`]
-      : cause === 'upstream-handshake' ? [`a host refused trocar's handshake for ${hp}, likely wanting a client certificate, so trocar passes that traffic on unread`, 'trocar tries again by itself', `trocar on ${h}`]
-        : [`${hp} refused trocar's certificate`, 'trocar tries again by itself; a restart captures it now'],
+    // by the engine's cause (1.6 附录 B `<when>` bullet): every entry is tried again at its retry time, and at once by `trocar on <harness>` (D54②); a restart captures sooner only a refused trocar certificate
+    'negative-cache': cause === 'upstream-cert' ? [`a host's certificate did not verify for ${hp}; its traffic is passed on unread until trocar tries again`, null, `trocar on ${h}`]
+      : cause === 'upstream-handshake' ? [`a host refused trocar's handshake for ${hp}; its traffic is passed on unread until trocar tries again`, null, `trocar on ${h}`]
+        : [`${hp} refused trocar's certificate for a host; its traffic is passed on unread until trocar tries again`, `to capture it now, restart ${h}`],
     'daemon-not-running': ['trocar is not running in the background'],
     'daemon-not-responding': ['trocar runs in the background but does not answer'],
     'helper-missing': ["trocar's capture helper is missing or is the wrong version"],

@@ -8,6 +8,7 @@ import { parseProxyUrl } from './redact.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
 import { TRUST_REASONS, ROUTE_TRUST_REASONS, RESTART_REASONS } from '../health/codes.mjs'
 import { FINDINGS_WIN32 } from './findings-win32.mjs'
+import { ago } from '../cli/text.mjs'
 
 const BY_CLASS = { problem: 0, expected: 1, note: 2 }
 const nodeOf = (t, id) => t.nodes.find((n) => n.id === id)
@@ -94,7 +95,9 @@ function notRoutedOf(c) {
 
 /** The catalogue (附录 B). `applies` is `diagnose`'s business; each entry says what it is. `cls` is the class, or a function of the context where it depends (`proxy-changed`). */
 // a negative-cache finding's words by the cause the engine recorded for this harness's processes (any cause else: trocar's certificate refused). The
-// sentence names every pid and host of that cause in this harness's entries (hf.negatives), and when trocar tries them again (the latest retry_at)
+// sentence names every pid and host of that cause in this harness's entries (hf.negatives), and when trocar tries them again (the latest retry_at),
+// once, as relative time from when the facts were read (1.6 §1.1⑤, 附录 B `<when>`). A retry is always ahead, so `ago`'s 'just now' is 'within a minute' here
+const whenOf = (at, F) => { const now = Date.parse(F && F.at); if (!at || !Number.isFinite(now)) return ''; const w = ago(at, now); return ` ${w === 'just now' ? 'within a minute' : w}` }
 const negCause = (c) => { const n = ((c.hf && c.hf.negatives) || [])[0]; return n && Object.hasOwn(NEG, n.cause) ? n.cause : 'client-rejected-leaf' }
 const negOf = (c) => {
   const cause = negCause(c), all = (c.hf && c.hf.negatives) || []
@@ -102,20 +105,20 @@ const negOf = (c) => {
   const pids = [...new Set(mine.map((n) => n.pid).filter((x) => x != null))], hosts = [...new Set(mine.map((n) => n.host).filter(Boolean))]
   const times = mine.map((n) => n.retry_at).filter((t) => t && Number.isFinite(Date.parse(t))).sort()
   const hp = `${c.h}${pids.length ? ` (pid ${pids.join(', ')})` : c.pid ? ` (pid ${c.pid})` : ''}`
-  const at = times.length ? times[times.length - 1] : null
-  return { cause, h: c.h, hp, hosts: hosts.length ? hosts.join(', ') : 'a host', at, until: at ? ` until ${at}` : '' }
+  return { cause, h: c.h, hp, hosts: hosts.length ? hosts.join(', ') : 'a host', when: whenOf(times[times.length - 1], c.F) }
 }
-// Every cause's Fix starts with (or, for a refused leaf, offers) `trocar on <harness>`: on naming a harness that is on makes trocar try its paused
-// hosts again now (D54②, 4.6 §引擎 5). The upstream causes are about the HOST (its certificate, its handshake), never about the program distrusting trocar.
+// The upstream causes are about the HOST (its certificate, its handshake), never about the program distrusting trocar: their Fix starts with
+// `trocar on <harness>`, which makes trocar try a harness's paused hosts again now (D54②, 4.6 §引擎 5). A refused leaf is fixed by a restart (a
+// program reads certificates when it starts); `trocar on` is the parenthetical other way its why names, not a second step (1.6 附录 B).
 const NEG = {
-  'client-rejected-leaf': { what: (n) => `${n.hp} refused trocar's certificate for ${n.hosts}; it is forwarded only${n.until}.`,
-    why: (n) => `trocar tries it again by itself${n.at ? ` at ${n.at}` : ''}, and trocar on ${n.h} tries now; a restart captures it, because a program reads certificates when it starts.`,
-    commands: (c) => [...restartSteps(c), trocar(c, `trocar on ${c.h}`)] },
-  'upstream-cert': { what: (n) => `The certificate ${n.hosts} presented to ${n.hp} did not verify, so trocar passes that traffic on unread${n.until}; ${n.h} checks the real certificate itself.`,
-    why: (n) => `Usually the network intercepts TLS for a while (a sign-in page or captive portal); trocar tries again by itself${n.at ? ` at ${n.at}` : ''}. If that host uses your own CA, it stays so until ${n.h} trusts that CA.`,
-    commands: (c) => [trocar(c, `trocar on ${c.h}`), gui(`If that host uses your own CA, add it to ${c.h}'s certificate settings`), trocar(c, 'trocar install')] },
-  'upstream-handshake': { what: (n) => `${n.hosts} refused trocar's handshake for ${n.hp}, most likely because it wants a client certificate, so trocar passes that traffic on unread${n.until}; ${n.h} answers the host with its own certificate.`,
-    why: (n) => `trocar tries again by itself${n.at ? ` at ${n.at}` : ''}; a host that wants a client certificate refuses again.`,
+  'client-rejected-leaf': { what: (n) => `${n.hp} refused trocar's certificate for ${n.hosts}, so that traffic is passed on unread until trocar tries again${n.when}.`,
+    why: (n) => `To capture it now, restart ${n.h} (or run: trocar on ${n.h}); a program reads certificates when it starts.`,
+    commands: (c) => restartSteps(c) },
+  'upstream-cert': { what: (n) => `The certificate ${n.hosts} presented to ${n.hp} did not verify, so that traffic is passed on unread until trocar tries again${n.when}; ${n.h} checks the real certificate itself.`,
+    why: () => 'Usually the network intercepts TLS for a while (a sign-in page or captive portal), or the host uses your own CA.',
+    commands: (c) => [trocar(c, `trocar on ${c.h}`), gui(`If that host uses your own CA, add it to ${c.h}'s certificate settings, then run: trocar install`)] },
+  'upstream-handshake': { what: (n) => `${n.hosts} refused trocar's handshake for ${n.hp}, most likely because it wants a client certificate, so that traffic is passed on unread until trocar tries again${n.when}; ${n.h} answers the host with its own certificate.`,
+    why: () => 'If the host does want a client certificate, it refuses again and its traffic stays unread.',
     commands: (c) => [trocar(c, `trocar on ${c.h}`), trocar(c, 'trocar status --failures')] },
 }
 /** The negative-cache causes the catalogue words (the engine's `cause`; any other reads as client-rejected-leaf). */
