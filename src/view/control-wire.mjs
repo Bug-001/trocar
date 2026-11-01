@@ -21,7 +21,6 @@
 // Envelope fields only — no provider knowledge, no host or endpoint literal (invariant 3). Pure over the record.
 import { captureLabelsOf, bodyRetentionOf, reqIncompleteOf, isLogOnly } from '../dissect/capture-labels.mjs';
 import { requestEncodingOf } from '../dissect/request-body.mjs';
-import { trafficClassOf } from '../dissect/traffic.mjs';
 import { headerOf } from '../dissect/harnesses.mjs';
 import { isSecretHeader } from '../capture/redact.mjs';
 
@@ -189,7 +188,7 @@ export function controlRecordWire(input, { detail = true, reveal = null } = {}) 
     const inc = reqIncompleteOf(rec); // the request-body labels live in reqIncompleteOf (capture-labels.mjs), not in captureLabelsOf
     if (inc) labels.push({ id: 'req-incomplete', label: inc.truncated ? 'Request cut at the capture cap' : 'Request never finished', text: inc.text });
     const ctl = {
-      retention: bodyRetentionOf(rec), traffic_class: trafficClassOf(rec), labels,
+      retention: bodyRetentionOf(rec), traffic_class: rec.traffic_class ?? null, labels,
       host: typeof rec.host === 'string' ? rec.host : null, hostHeader,
       // a reverse-proxy record's `host` is the upstream and its Host header the client's address to the proxy: they differ by construction (4.1), not as a signal
       hostDiffers: !!(rec.capture !== 'reverse-proxy' && typeof rec.host === 'string' && hostHeader && norm(rec.host) !== norm(hostHeader)),

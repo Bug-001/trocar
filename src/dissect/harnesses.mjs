@@ -13,13 +13,14 @@ const B = (path, confidence = 'medium') => ({ from: 'body', name: path.join('.')
 
 // The headers the board grouped by before D37. They remain the key for records whose harness is not
 // identified by proc (legacy captures, unknown agents), so upgrading never regroups an old capture.
-export const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-id', 'medium'), H('session-id', 'medium'), H('thread-id', 'medium')];
+const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-id', 'medium'), H('session-id', 'medium'), H('thread-id', 'medium')];
 
 // `traffic` (D40, RFC 4.6 §记录「保存级别」): which of the non-model traffic classes (session-sync · telemetry · files ·
 // account) a call is, told by host + path — DATA, not code (D20, 0.1 §5: the capture core parses no provider). Each entry
 // {host, path?, class}: `host` exact or `*.suffix`, any case; `path` a regex source tested on the path without its
-// querystring; the first entry that matches wins. Nothing matches → the shared third-party table (src/dissect/traffic.mjs),
-// then `other`. A harness with no entries is not a loss: its calls are `other`, kept in full (4.1 Edge cases).
+// querystring; the first entry that matches wins. Nothing matches → the shared third-party hosts (src/dissect/traffic.mjs),
+// then `other`. The class table (src/classes/table.mjs) compiles these entries; the collector applies it when it writes a
+// record. A harness with no entries is not a loss: its calls are `other`, kept in full (4.1 Edge cases).
 const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [] };
 const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
 // 4.8 §5.6: injected trust changes the agent the same way in both modes; a legacy MITM / reverse-proxy capture still never carries one. `captures` scopes an
@@ -98,16 +99,9 @@ export const HARNESSES = Object.freeze([
     traffic: [T('pi.dev', 'telemetry', '^/api/report-install'), T('github.com', 'files'), T('release-assets.githubusercontent.com', 'files')] },
 ]);
 
-// Ordered union of every header session key the table declares, then the legacy ones. Only for raw lines that
-// do not parse, where the harness is unknown: the per-row lookup is always preferred.
-export const HEADER_SESSION_KEYS = Object.freeze([...new Set([
-  ...HARNESSES.flatMap((h) => h.sessionKeys.filter((k) => k.from === 'header').map((k) => k.name.toLowerCase())),
-  ...LEGACY_SESSION_KEYS.map((k) => k.name.toLowerCase()),
-])]);
-
 // Legacy-only row: the pre-D37 DeepSeek CLI. Reachable by UA inference only, never by proc.agent.
 const LEGACY_DEEPSEEK_CLI = { id: 'deepseek-cli', ua: /deepseek/, legacy: true };
-// the ids harnessOf can return that are in no table row: a retention row must exist for each (src/dissect/traffic.mjs::retentionHarnessIds)
+// the ids harnessOf can return that are in no table row: the board's chip table names each (test/web-v2/harness-seam.test.mjs)
 export const LEGACY_HARNESS_IDS = Object.freeze([LEGACY_DEEPSEEK_CLI.id]);
 const byId = (id) => HARNESSES.find((h) => h.id === id);
 const UA_ORDER = [byId('cc'), byId('opencode'), byId('codex'), LEGACY_DEEPSEEK_CLI]; // opencode before codex, as before D37
@@ -138,7 +132,7 @@ export function headerOf(rec, name) {
 // the D40 boundary (a Hermes `session_id` in a telemetry body would key it), and the header-only sharder would disagree with the ETL (3.4:21).
 // A non-inference record is identified by its headers alone, as it always was. One rule for every reader (this function, the ETL, the envelope
 // adapter).
-export const parseableBody = (rec, text) => !!rec && typeof text === 'string' && rec.is_llm_call === true;
+const parseableBody = (rec, text) => !!rec && typeof text === 'string' && rec.is_llm_call === true;
 
 const PARSED = new WeakMap();
 export function bodyOf(rec) {
