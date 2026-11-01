@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readRecords } from '../../src/raw/ingest.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sessionView } from '../../src/view/board.mjs';
+import { sessionView } from '../helpers/session-view.mjs';
 
 // WHAT /api/session IS ALLOWED TO WEIGH.
 //

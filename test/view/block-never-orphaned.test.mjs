@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { readRecords } from '../../src/raw/ingest.mjs';
-import { sessionView } from '../../src/view/board.mjs';
+import { sessionView } from '../helpers/session-view.mjs';
 
 // A BLOCK MUST NEVER BE BOTH BODYLESS AND UNADDRESSABLE.
 //

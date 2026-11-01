@@ -2,7 +2,7 @@
 // ships with the call (call.respRefs), or says why it is not (invariant 4).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sessionView } from '../../src/view/board.mjs';
+import { sessionView } from '../helpers/session-view.mjs';
 import { assembleSession } from '../../src/view/assemble.mjs';
 
 const stream = (r) => (Object.defineProperty(r, '_stream', { value: 'capture-2026-10-06.ndjson', enumerable: false }), r);

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { groupSessions, sessionView } from '../src/view/board.mjs';
+import { groupSessions } from '../src/view/board.mjs';
+import { sessionView } from './helpers/session-view.mjs';
 
 // The shipped demo capture is the FIRST THING a new user sees (`npm run demo`), and the only way a
 // GitHub visitor can evaluate the tool without first MITM-ing their own agent — trocar's real test

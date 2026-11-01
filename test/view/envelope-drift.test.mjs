@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sessionView } from '../../src/view/board.mjs';
+import { sessionView } from '../helpers/session-view.mjs';
 
 // R1 · ENVELOPE DRIFT — the D10 capture writes `resp` / `req_headers`
 // (src/capture/envelope.mjs:52), but the board still read the v0 names `response` /

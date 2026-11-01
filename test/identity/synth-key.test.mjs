@@ -9,7 +9,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { indexRows } from '../../src/query/rows.mjs'
 import { fillUsage } from '../../src/query/usage.mjs'
-import { groupSessions, sessionView } from '../../src/view/board.mjs'
+import { groupSessions } from '../../src/view/board.mjs'
+import { sessionView } from '../helpers/session-view.mjs'
 
 const T0 = Date.parse('2026-10-18T10:00:00.000Z')
 const sha12 = (s) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 12)
