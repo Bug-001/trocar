@@ -18,13 +18,14 @@ const NOT_SEEN = 'not-seen' // 4.11 P11 status 4–5: the door has not seen this
  *                in proxy mode the caller gives `start` instead — the door's own start-time rule over the carrier and the on windows (4.11 P11 status): null = passes, `not-seen` = not known, else its code
  *   formsHere    true | false | null — proxy mode: some form of the harness on this OS is on the machine (descriptor `present`, 4.11 P5); false = none is, so no route or
  *                certificate carrier of its can apply and what runs under its name does not go through trocar (`not-routed`, before the entry: an entry is written only for a form that is there)
+ *   localUpstream  proxy mode: every API host the agent's own config names is on this machine (4.11 P6): loopback never reaches the door, so not captured (`local-upstream`)
  *   cert         true | null | a code — the certificate the harness's agents check trocar's leaves with is in effect (true; also where nothing says otherwise, Linux), not known (null), or not
  *                in effect and why (the 1.6 附录 B `cert-*` code of the form's `certificate`, certOfForms below). Like the entry, it decides only a process the daemon has not judged, and the harness's own row
  * → { captured: true | false | null, rows: [{ pid?, captured, reason }] }; `reason` is one of STATUS_REASONS, null when captured or not known. With no process the one row has no pid and is
  * the harness's own: 「link 已挂、入口完好且证书生效」(§1.5, V32). The order of the reasons: desired off · the daemon · the helper · the link · (for a process, its own verdict first) · no form here · the entry · the certificate · (a process) its start time.
  * The harness is not captured when any row is not; captured when every row is, or some are and every other is `not-seen`; else not known.
  */
-export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-missing', attached = null, helper = 'ok', daemon = 'unknown', procs = [], installedAt = null, deadDoor = false, formsHere = true, cert = true }) {
+export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-missing', attached = null, helper = 'ok', daemon = 'unknown', procs = [], installedAt = null, deadDoor = false, formsHere = true, cert = true, localUpstream = false }) {
   const world = (() => {
     if (desired === 'off') return verdict(false, 'desired-off')
     if (desired !== 'on') return verdict(null)
@@ -34,6 +35,7 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
     if (helper === 'missing') return verdict(false, 'helper-missing')
     if (attached === false) return verdict(false, deadDoor ? 'forwarder-down' : 'link-missing')
     if (attached !== true) return verdict(null)
+    if (localUpstream) return verdict(false, 'local-upstream')
     return null // nothing in the way
   })()
   const absent = formsHere === true ? null : verdict(formsHere === null ? null : false, formsHere === null ? null : 'not-routed')
