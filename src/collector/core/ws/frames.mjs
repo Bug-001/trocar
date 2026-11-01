@@ -2,6 +2,7 @@
 // D37). It reads the chunks the engine forwards (the tee sees each one just before it is written): it
 // never re-frames and never changes a byte; payloads are unmasked into copies. A protocol violation
 // stops this direction and is reported, never thrown: the peers fail the connection themselves.
+import { MAX_BODY_BYTES } from '../../../capture/envelope.mjs'
 
 export const OP = { CONT: 0, TEXT: 1, BINARY: 2, CLOSE: 8, PING: 9, PONG: 10 }
 
@@ -16,7 +17,7 @@ export const OP = { CONT: 0, TEXT: 1, BINARY: 2, CLOSE: 8, PING: 9, PONG: 10 }
  * Chunks are kept as a list until a whole frame is there, so a large frame arriving in small TCP
  * chunks costs one copy, not one per chunk: this runs on the relay's event loop (§引擎 6).
  */
-export function createFrameParser({ maxPayload = 64 << 20 } = {}) {
+export function createFrameParser({ maxPayload = MAX_BODY_BYTES } = {}) {
   let parts = [], size = 0, need = 2 // pending chunks; bytes needed before the next frame can be cut
   let skip = 0, msg = 0               // payload bytes still to drop; declared bytes of the current message
   let error = null

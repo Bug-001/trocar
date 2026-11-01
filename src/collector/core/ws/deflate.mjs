@@ -8,6 +8,7 @@
 // A message that fails to inflate clears the window: a later reference into it then fails too, instead
 // of silently decoding against stale history (invariants 2 / 4).
 import zlib from 'node:zlib'
+import { MAX_BODY_BYTES } from '../../../capture/envelope.mjs'
 
 const TAIL = Buffer.from([0x00, 0x00, 0xff, 0xff]) // RFC 7692 §7.2.2: re-append the stripped sync-flush tail
 const WINDOW = 32768
@@ -38,7 +39,7 @@ export function parseExtensions(header) {
 }
 
 /** createInflater({noContextTakeover, maxOutput}) → { inflate(payload) → Buffer, skip() } (inflate throws on corrupt data or past maxOutput). */
-export function createInflater({ noContextTakeover = false, maxOutput = 64 << 20 } = {}) {
+export function createInflater({ noContextTakeover = false, maxOutput = MAX_BODY_BYTES } = {}) {
   let dict = Buffer.alloc(0)
   return {
     inflate(payload) {

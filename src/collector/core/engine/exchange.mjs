@@ -11,7 +11,7 @@ import { randomBytes } from 'node:crypto'
 import { createFramer, asksUpgrade } from '../http1/framer.mjs'
 import { buildTransparentEnvelope } from '../record/envelope.mjs'
 import { createWsRecorder } from '../ws/recorder.mjs'
-import { endpointClass } from '../../../capture/envelope.mjs'
+import { endpointClass, MAX_BODY_BYTES } from '../../../capture/envelope.mjs'
 
 const defaultRunTag = () => Date.now().toString(36).slice(-4) + randomBytes(2).toString('hex')
 
@@ -45,7 +45,7 @@ const errOf = (e) => (e ? { type: e.code || e.type || 'error', message: String(e
  * At `log` the bodies are not buffered, only counted; either way the full wire length of each body is counted past the cap
  * (body_wire_bytes). No callback: every call is `full`, its class told by the endpoint alone. */
 export const noFailureSink = (r) => { throw Object.assign(new Error(`capture failure with nowhere to be recorded: ${r.code}: ${r.reason}`), { code: r.code }) } // a wiring fault: loud, never dropped
-export function createExchangeTee({ flow, recordStore, isRecording = () => true, maxBodyBytes = 64 << 20, newId, wsTerminal = null, retention = null, onFailure = noFailureSink, onTurnEnd = () => {} }) {
+export function createExchangeTee({ flow, recordStore, isRecording = () => true, maxBodyBytes = MAX_BODY_BYTES, newId, wsTerminal = null, retention = null, onFailure = noFailureSink, onTurnEnd = () => {} }) {
   // the retention callback, sampled once per call: a throw or a nonsense answer is `full`, its class told by the
   // endpoint alone (never throws into the framer: a bad flow object is trocar's own bug, reported where the envelope
   // is built, not here). Class names are the operator's table's, so any non-empty name is taken as it is (D60③).
