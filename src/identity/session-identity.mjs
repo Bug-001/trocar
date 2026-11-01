@@ -264,7 +264,7 @@ export function markCompaction(prevMsgCount, curMsgCount, cur = {}) {
 }
 
 // Claude Code's own summary preamble in the first messages of a compacted context ("This session is being continued
-// from a previous conversation …"). One test for the ETL (adapters/cc.mjs) and the board (view/analyze.mjs).
+// from a previous conversation …"). One test, read by the board (view/analyze.mjs).
 export function hasCompactionPreamble(messages) {
   const textOf = (m) => (typeof (m && m.content) === 'string' ? m.content
     : Array.isArray(m && m.content) ? m.content.map((b) => (b && b.type === 'text' ? b.text : '')).join('\n') : '')

@@ -42,7 +42,7 @@ export function normalizeRecord(raw) {
 //
 // The return value deliberately stays a plain Array — every caller consumes it as one
 // (bin/trocar.mjs:171 `.length`, src/server.mjs:140 re-pushes into its own array,
-// plus the capture/adapters/query/view suites). Changing the shape to {records, scan} would break
+// plus the capture/query/view suites). Changing the shape to {records, scan} would break
 // all of them, so the report rides ALONGSIDE as a NON-ENUMERABLE `.scan` property: invisible to
 // spread / JSON.stringify / for…in, readable by anyone who asks. Callers that concatenate several
 // files' arrays lose that property by construction, so `onSkip` gives them a push-based channel.
