@@ -85,12 +85,12 @@ Do the steps in order. If a step before step 6 fails, fix the cause on a branch,
 
 ## Bumping the pinned Node
 
-The installers always place the official Node build that `install/node.sha256` names; that file is the only place the Node version and its hashes are written. The pin is the Node that the step-2 test runs and the lab runs last passed on. To move it to a new patch:
+The installers always place the official Node build that `install/node.sha256` names; that file is the only place the Node version and its hashes are written. The pin is the Node that the full test run of step 2 and the installer smoke runs of step 3 last passed on. To move it to a new patch:
 
 1. Pick the version from `https://nodejs.org/dist/index.json` (for the current line, the newest `v22.x`).
 2. Rewrite `install/node.sha256` with that version's lines from `https://nodejs.org/dist/v<version>/SHASUMS256.txt`, copied verbatim, one per build in the `node-pin` row above, for example:
    `curl -fsSL https://nodejs.org/dist/v<version>/SHASUMS256.txt | grep -E -- '-(darwin-(arm64|x64)\.tar\.xz|linux-(x64|arm64)\.tar\.(xz|gz)|win-(x64|arm64)\.zip)$' > install/node.sha256`
-3. On that Node, run the full fresh-HOME `npm test` on all three OSes and the lab runs, then commit the new pin on a branch. `npm run release:check` then checks the lines against nodejs.org again.
+3. On that Node, run the full fresh-HOME `npm test` on all three OSes and the installer smoke runs of step 3, then commit the new pin on a branch. `npm run release:check` then checks the lines against nodejs.org again.
 
 A version that is already placed keeps the Node it was placed with; a new version of trocar names its own Node directory, so a pin change takes effect with the next release.
 
