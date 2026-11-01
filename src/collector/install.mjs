@@ -4,6 +4,7 @@
 // harness or an OS: the descriptors declare their entries (`inject`), the caller passes `scan` / `match` (the
 // process table) from daemon.mjs. Install lists every file before touching one. The way back — `trocar off` and
 // `trocar uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
+import { retriedNote } from '../cli/words.mjs'
 import { isModelOs } from './model-install.mjs' // macOS / Windows: their on is turnOnModel (src/cli/on-model.mjs); this turnOn is Linux's
 import fs from 'node:fs'
 import net from 'node:net'
@@ -557,6 +558,7 @@ export async function turnOn(opts = {}) {
         problems.push(why); put({ event: EVENT.failure, where: 'control', code: 'control-error', reason: why })
       }
       if (status) {
+        for (const x of Array.isArray(status.retried) ? status.retried : []) notes.push(`${x.harness}: ${retriedNote(x.harness, x.hosts)}`) // the paused hosts trocar tries again now (D54②)
         receipt.restart = (status.agents || []).filter((a) => a && !a.trusted && !a.off && RESTART_REASONS.includes(a.reason) && plan.targets.includes(a.agent)).map((a) => ({ harness: a.agent, pid: a.pid, reason: a.reason }))
         receipt.capture = { desired: status.desired ?? null, actual: status.actual ?? null }
         reached = status.actual === 'on'
