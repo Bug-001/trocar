@@ -94,6 +94,16 @@ test('every package the README tells you to install with npm or npx is this pack
   assert.deepEqual(names.filter((n) => n !== pkg.name), [], `a package the README installs or runs that is not ${pkg.name}`);
 });
 
+test('every install-script URL the README shows names a file under install/, on this repo\'s Release or this package (4.5 #5)', () => {
+  const urls = [...commandText.matchAll(/https?:\/\/[^\s"'`)]+\/install\.(?:sh|ps1)\b/g)].map((m) => m[0]);
+  assert.ok(urls.length > 0, 'sanity: the README shows the install line');
+  const home = new URL(pkg.repository.url.replace(/^git\+/, '').replace(/\.git$/, '')).pathname; // /<owner>/<repo>
+  for (const u of urls) {
+    assert.ok(existsSync(path.join(ROOT, 'install', path.posix.basename(u))), `${u} names no file under install/`);
+    assert.ok(u.includes(`${home}/releases/latest/download/`) || u.includes(`/${pkg.name}/install/`), `${u} is neither this repo's Release nor this package`);
+  }
+});
+
 // the two facts the README states that a reader acts on are the harnesses and the command lines. Both are read from
 // their one home (the descriptors, the table of src/cli/commands.mjs) so neither is a second copy that can drift.
 test('the README names every harness the collector has a descriptor for, by its id (D37)', async () => {
