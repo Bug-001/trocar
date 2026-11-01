@@ -32,6 +32,8 @@ const viaProxy = (value = 'http://127.0.0.1:7890') => ({ setting: proxyOf(value)
 const LIST = '/home/alice/.trocar/agents.json'
 function idOf(h, { unknown = [] } = {}) { return { [h]: { names: [{ name: 'claude', source: 'preset' }], ignored: [], unknown } } }
 
+const localRelay = () => { const F = pfacts('opencode', form('opencode.cli'), fwForm(17996)); Object.assign(F.harnesses.opencode, { apiHosts: ['127.0.0.1'], localUpstream: true }); return F }
+
 // one injected fact set per code: { codes: exactly what it must give, h, facts }. The rows of §9.3 serve for the codes they illustrate; the others are built here.
 const SETS = {
   'config-after-start': { h: 'claude-code', facts: row(5).facts, codes: row(5).findings },
@@ -65,6 +67,7 @@ const SETS = {
   'cert-key-missing': { h: null, facts: facts('claude-code', { cert: { key: 'missing', intermediate: 'key-missing' } }), codes: ['cert-key-missing'] },
   'cert-intermediate-unavailable': { h: null, facts: facts('claude-code', { cert: { key: 'unknown', intermediate: 'unavailable' } }), codes: ['cert-intermediate-unavailable'] },
   'not-users-file': { h: 'codex', facts: pfacts('codex', form('codex.cli', { procs: [proc(5530, { name: 'codex app-server', trusted: false, reason: 'not-users-file' })] }), fwForm(17992)), codes: ['not-users-file'] },
+  'local-upstream': { h: 'opencode', facts: localRelay(), codes: ['local-upstream'] }, // 4.11 P6: its config names only hosts on this machine (a local relay)
   'not-verified': { h: 'codex', facts: pfacts('codex', form('codex.cli', { procs: [proc(5530, { name: 'codex app-server', trusted: false, reason: 'not-verified' })] }), fwForm(17992)), codes: ['not-verified'] },
   'prior-proxy-unknown': { h: 'codex', facts: pfacts('codex', form('codex.cli', { procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992, { source: 'unknown' })), codes: ['prior-proxy-unknown'] },
   'agent-list-invalid': { h: null, facts: facts('claude-code', { agentList: { path: LIST, state: 'ok', problems: [{ index: 1, code: 'wide-name-needs-args', detail: 'agents[1]: node is an interpreter name; add "args"' }] } }), codes: ['agent-list-invalid'] },
@@ -73,7 +76,7 @@ const SETS = {
 const IDENTITY_CODES = ['process-unknown', 'agent-list-invalid']
 const CERT_CODES = ['cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file'] // 1.6 §9.7's cert group, as findings
 const REFUSAL_CODES = ['collectors-online'] // a command's refusal (uninstall), rendered by findingFor, not by diagnose
-const STATUS_REASONS_IN_CATALOGUE = ['config-after-start', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'link-missing', 'entry-missing', 'entry-changed', 'desired-off', 'negative-cache', 'not-seen']
+const STATUS_REASONS_IN_CATALOGUE = ['config-after-start', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'link-missing', 'entry-missing', 'entry-changed', 'desired-off', 'negative-cache', 'not-seen', 'local-upstream']
 
 for (const [code, set] of Object.entries(SETS)) {
   test(`V49 ${code}: its facts call for exactly ${JSON.stringify([...set.codes].sort())}`, () => {
