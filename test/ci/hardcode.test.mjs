@@ -103,7 +103,6 @@ test('2 · the guard goes red on each kind of bad descriptor, naming harness.pat
 
 // The test files that still pin counts, with how many: this list may only shrink (fix a file → lower or delete its row).
 const COUNT_PINS = {
-  'test/cache/cache-events.test.mjs': 1,
   'test/collector/arch/win32/helper.test.mjs': 1,
   'test/collector/core/socks.test.mjs': 1,
   'test/collector/core/tls-ca.test.mjs': 1,
