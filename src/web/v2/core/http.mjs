@@ -8,10 +8,11 @@
 // K-30 (1.5): the first /api or /control answer with status 403 (no token, or a wrong one) latches the board shut — every later get() or post()
 // answers {ok:false, status:403} without a request, and the onForbidden callbacks run once. Keyed on the status, never the body.
 import { CONTROL_TOKEN_HEADER } from '../../../off/token-header.mjs' // a shared module the static face serves (4.4)
-const TOKEN_KEY = 'trocar.token' // the sessionStorage slot of the per-user token (4.4: read from #t=, kept for the tab)
+const TOKEN_KEY = 'trocar.token' // the localStorage slot of the per-user token (4.4 §每用户口令: read from #t=, kept for the board's origin)
 const HELD_MAX = 100 // conditional-GET entries kept, oldest dropped first
 
 let token = null
+let kept = null // the storage bootToken() read the token from, so a 403 can drop that copy
 export function configure({ token: t = null } = {}) { token = t }
 
 let forbidden = false
@@ -57,6 +58,8 @@ async function readBody(r) {
 function latch(status) {
   if (status !== 403 || forbidden) return
   forbidden = true
+  // the token this page sent is wrong: drop the kept copy, unless another tab has since kept a newer one (4.4 §每用户口令)
+  try { if (token != null && kept && kept.getItem(TOKEN_KEY) === token) kept.removeItem(TOKEN_KEY) } catch { /* storage blocked: nothing kept */ }
   for (const fn of onForbid) try { fn() } catch (e) { console.error('onForbidden failed', e) }
 }
 
@@ -159,15 +162,18 @@ export function asset(path) {
   return fetch(path).then((r) => (r.ok ? r.text() : null)).catch(() => null)
 }
 
-// The token arrives once in the URL fragment (#t=<token>, never sent to any server or log); keep it in sessionStorage and wipe it
-// from the address. Run before the router reads the hash. → the token for this tab, or null.
-export function bootToken({ location = globalThis.location, history = globalThis.history, sessionStorage = globalThis.sessionStorage } = {}) {
+// The token arrives in the URL fragment (#t=<token>, never sent to any server or log); keep it in the board origin's localStorage and
+// wipe it from the address, so a later load without the fragment (history, a bookmark, a new tab) reads it (4.4 §每用户口令, D66①).
+// Run before the router reads the hash. → the token for this page, or null.
+const pageStorage = () => { try { return globalThis.localStorage } catch { return null } } // reading it throws where storage is blocked
+export function bootToken({ location = globalThis.location, history = globalThis.history, localStorage = pageStorage() } = {}) {
+  kept = localStorage || null
   const hash = (location && location.hash) || ''
   if (hash.startsWith('#t=')) {
     const t = decodeURIComponent(hash.slice(3).split('&')[0])
-    try { sessionStorage.setItem(TOKEN_KEY, t) } catch { /* storage blocked: the token still serves this load */ }
+    try { localStorage.setItem(TOKEN_KEY, t) } catch { /* storage blocked: the token still serves this load */ }
     try { history.replaceState(null, '', location.pathname + location.search + '#/') } catch { /* the address keeps the fragment */ }
     return t
   }
-  try { return sessionStorage.getItem(TOKEN_KEY) } catch { return null }
+  try { return localStorage.getItem(TOKEN_KEY) } catch { return null }
 }

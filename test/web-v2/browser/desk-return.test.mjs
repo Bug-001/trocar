@@ -205,7 +205,7 @@ test('1.2 #24 a cold open of a replay route sends its head read before any statu
   try {
     const { page } = b
     const href = await firstRow(page)
-    // a new document on the replay route with the token already in this tab's sessionStorage (the #t= boot put it there)
+    // a new document on the replay route with the token already kept in localStorage (the #t= boot put it there)
     await page.evaluate((h) => history.replaceState(null, '', h), href)
     await page.reload({ waitUntil: 'commit' })
     await until(page, () => !!document.querySelector('#stepbar .sb-no'))
