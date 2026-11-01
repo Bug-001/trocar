@@ -78,7 +78,7 @@ test('D43 planted counter-example: each half is red where it belongs, and the re
     ['a login profile', "execTool('sh', ['-c', 'echo \\'export HTTPS_PROXY=…\\' >> ~/.zprofile'])"],
     ['launchctl setenv', "execTool('launchctl', ['setenv', 'HTTPS_PROXY', 'x'])", 'proxy variable into an environment store'],
   ]) assert.match(violations('src/collector/x.mjs', `import { spawnSync, execTool } from 'node:child_process'\nexport function a() { ${call} }\n`).join(), new RegExp(word || why.split(' ')[0], 'i'), why)
-  assert.match(violations('src/capture/desktop-steer.mjs', sys).join(), /netsh/, 'no directory of src/ is exempt')
+  assert.match(violations('src/capture/x.mjs', sys).join(), /netsh/, 'no directory of src/ is exempt')
   assert.match(violations('src/collector/arch/win32/elevate.mjs', "import { spawnSync, execTool } from 'node:child_process'\nexport function uac() { spawnSync('powershell', ['-Command', 'Start-Process -Verb RunAs -FilePath x']) }\n").join(), /runas/i, 'no file may launch UAC, not even one named for it (CM25)')
   assert.deepEqual(violations('src/collector/arch/win32/upstream.mjs', "// the reader names the registry values it asks the helper to read\nexport const NAMES = ['ProxyEnable', 'ProxyServer', 'AutoConfigURL', 'ProxyOverride']\nexport const KEY = 'Internet Settings'\n"), [], 'the reading side is data it hands the helper, not an exec call: no allowlist needed for it')
   assert.deepEqual(violations('src/netenv/findings.mjs', "export const cmd = 'Get-ItemProperty HKCU:/…/Internet Settings -Name AutoConfigURL' // doctor's text for the user"), [], 'doctor printing a command for the user is text, not a call')

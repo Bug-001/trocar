@@ -94,7 +94,7 @@ const NETENV_WRITER = [
 ].join('\n')
 
 test('N15 (a) the writers are known: `writeNetenv` is the one named helper of src/netenv, it opens no door elsewhere, and no directory of src/ is exempt', () => {
-  for (const f of ['src/capture/desktop-steer.mjs', 'src/capture/deep/x.mjs', 'src/off/win32.mjs']) assert.equal(violations(f, VERGE_UNDO).length, 3, `${f}: a module that names Verge's directory and writes is three writes`)
+  for (const f of ['src/capture/x.mjs', 'src/capture/deep/x.mjs', 'src/off/win32.mjs']) assert.equal(violations(f, VERGE_UNDO).length, 3, `${f}: a module that names Verge's directory and writes is three writes`)
   assert.equal(violations('src/collector/arch/win32/redirector.mjs', VERGE_UNDO).length, 3)
   assert.deepEqual(violations('src/netenv/index.mjs', NETENV_WRITER), [], 'the CLI\'s writer of ~/.trocar/netenv.json is `writeNetenv` (4.7 N15 names it)')
   assert.equal(violations('src/netenv/index.mjs', NETENV_WRITER.replace('writeNetenv', 'persist')).length, 5, 'any other name is five writes in src/netenv')

@@ -14,7 +14,6 @@ const PRODUCTS = ['clash', 'verge', 'mihomo', 'flclash', 'sing-box', 'singbox', 
 const PRODUCT = new RegExp(`(?<![a-z0-9])(${PRODUCTS.join('|')})(?![a-z0-9])`, 'gi')
 /** Exemptions, by file (and, inside a file, by the exact text matched), each with its reason. A row that excuses nothing is a finding. */
 const EXEMPT = [
-  { file: 'src/off/clash.mjs', reason: 'the old capture\'s Clash undo; goes with src/capture/, and its exemption with it' },
   { file: 'src/off/manifest.mjs', text: 'clash', reason: '`legacy-clash-block` is a manifest kind an old install wrote; off must still parse it to list it as left (D57)' },
   { file: 'src/off/undo.mjs', text: 'mihomo', reason: 'the kernel-era uninstall removes the license files it shipped beside its copy (it is kept)' },
 ]
