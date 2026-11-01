@@ -40,6 +40,55 @@ async function clickIn(page, sel, f, fx = 0.5) {
   await page.mouse.click(at.x, at.y)
 }
 
+// 1.2 §点击与选中文字: where a reader drags to select text — inside an open row's body, or over a head's own text
+const SELECT_IN = {
+  body: '#screen .cexp:not([hidden]), #screen .lx:not([hidden]), #screen .disc-b:not([hidden]), #ctxwin .cblk:not(.collapsed) > .cbc, #detail .dblk.open .dbbody, #screen details[open]',
+  head: '#ctxwin .cbh, #ctxwin .cwturnhd, #screen summary, #screen [data-navtoggle], #detail .dbh',
+}
+// the open / closed state of everything that opens and closes, as one string per element
+const FOLDS = '[aria-expanded], details, .cblk, .cwturn, .dblk, .navrow.head, .cwremoved'
+/** A real mouse drag across the visible text run at fraction f of `where`'s runs (never in a control or a DENY element), `span` of
+ *  its width. Sets ctx.lastDrag = {made: the drag made a new selection, changed: the folds whose state the drag changed}. */
+async function selectDrag(ctx, p) {
+  const { page } = ctx
+  const at = await page.evaluate(([sel, folds, f, span, deny]) => {
+    const runs = []
+    for (const root of document.querySelectorAll(sel)) {
+      const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+      for (let n = w.nextNode(); n; n = w.nextNode()) {
+        if (n.data.trim().length < 4 || n.parentElement.closest(`a, button, input, textarea, select, [contenteditable], ${deny}`)) continue
+        const r = document.createRange(); r.selectNodeContents(n)
+        const b = r.getBoundingClientRect()
+        if (b.width >= 20 && b.height > 0) runs.push([n, b])
+      }
+    }
+    const pickd = runs[Math.min(runs.length - 1, Math.floor(f * runs.length))]
+    if (!pickd) return null
+    pickd[0].parentElement.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    const r = document.createRange(); r.selectNodeContents(pickd[0])
+    const b = r.getBoundingClientRect(), y = b.top + b.height / 2
+    const hit = document.elementFromPoint(b.left + 1, y)
+    if (!hit || !hit.contains(pickd[0].parentElement) && !pickd[0].parentElement.contains(hit)) return null
+    const state = (e) => [e.getAttribute('aria-expanded'), e.open, e.classList.contains('collapsed'), e.classList.contains('open')].join()
+    const s = document.getSelection()
+    window.__seqFolds = new Map([...document.querySelectorAll(folds)].map((e) => [e, state(e)]))
+    window.__seqSelKey = s.isCollapsed ? '' : [s.anchorOffset, s.focusOffset, String(s)].join()
+    window.__seqFoldState = state
+    return { x0: b.left + 1, x1: b.left + Math.max(8, span * (b.width - 2)), y }
+  }, [SELECT_IN[p.where], FOLDS, p.f, p.span, DENY])
+  if (!at) return SKIP
+  await page.mouse.move(at.x0, at.y)
+  await page.mouse.down()
+  await page.mouse.move(at.x1, at.y, { steps: 5 })
+  await page.mouse.up()
+  ctx.lastDrag = await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => {
+    const s = document.getSelection(), key = s.isCollapsed ? '' : [s.anchorOffset, s.focusOffset, String(s)].join()
+    const changed = [...window.__seqFolds].filter(([e, was]) => e.isConnected && window.__seqFoldState(e) !== was)
+      .map(([e, was]) => `${e.tagName.toLowerCase()}.${[...e.classList].join('.')} ${was} → ${window.__seqFoldState(e)}`)
+    done({ made: !s.isCollapsed && key !== window.__seqSelKey, changed })
+  }))))
+}
+
 /** Press keys with no write control focused (Space / Enter never; arrows on a segmented control would move its choice). */
 async function press(page, key) {
   await page.evaluate((deny) => { const a = document.activeElement; if (a && a.closest && a.closest(deny)) a.blur() }, DENY)
@@ -121,6 +170,7 @@ export const ACTIONS = [
   reader('follow', 5, (r) => ({ via: pick(r, ['key', 'chip']) }), (ctx, p) =>
     p.via === 'key' ? press(ctx.page, 'f') : clickIn(ctx.page, '[data-follow]', 0)),
   reader('toggle', 11, (r) => ({ what: pick(r, Object.keys(TOGGLES)), f: frac(r) }), (ctx, p) => clickIn(ctx.page, TOGGLES[p.what], p.f)),
+  reader('select', 6, (r) => ({ where: pick(r, ['body', 'head']), f: frac(r), span: frac(r) }), selectDrag),
   reader('key', 6, (r) => ({ key: pick(r, MISC_KEYS) }), (ctx, p) => press(ctx.page, p.key)),
   reader('deeplink', 5, (r) => {
     const kind = pick(r, ['step', 'step', 'session', 'route'])
