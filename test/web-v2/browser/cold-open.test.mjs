@@ -18,7 +18,7 @@ const skip = gate.ok ? false : gate.reason
 const RUNS = 20
 const SHAPE = { subLanes: 3, late: 4, subEvery: 4, compactAt: 20_000, growth: 1_000 }
 const CALLS = 1_700
-const TIP = 'trocar.token' // core/http.mjs: the tab's token slot (4.4)
+const TIP = 'trocar.token' // core/http.mjs: the board's token slot (4.4 §每用户口令)
 
 // what the page holds the moment it marks 'desk-rough' (taken inside performance.mark, before anything after it runs)
 function atMark() {
@@ -60,11 +60,11 @@ async function folded() {
 }
 const idle = async (b) => { const until = Date.now() + 30_000; while (b.face.workers().length) { assert.ok(Date.now() < until, 'the query worker idles out'); await new Promise((ok) => setTimeout(ok, 100)) } }
 
-// a new context on the world's face: the tab's token in sessionStorage (as a #t= boot leaves it), the mark watcher, its /api requests
+// a new context on the world's face: the board's token in localStorage (as a #t= boot leaves it), the mark watcher, its /api requests
 async function fresh(w, { route } = {}) {
   const browser = w.b.page.context().browser()
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
-  await context.addInitScript(([k, t]) => { try { sessionStorage.setItem(k, t) } catch { /* the test's own page: storage works */ } }, [TIP, w.b.face.token])
+  await context.addInitScript(([k, t]) => { try { localStorage.setItem(k, t) } catch { /* the test's own page: storage works */ } }, [TIP, w.b.face.token])
   await context.addInitScript(atMark)
   if (route) await context.route('**/api/d/head?**', route)
   const page = await context.newPage(), requests = [], errors = []
