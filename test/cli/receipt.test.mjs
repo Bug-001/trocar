@@ -22,6 +22,7 @@ import { fakeIo, onCtx, snapshot, changedFiles, seedClaude, fakeSystem, fakeDaem
 import { assertEnglish } from '../helpers/english.mjs'
 import { installedHome, flowEvents } from '../off/fixtures/off-ctx.mjs'
 import { runStatus, down, reply, asDaemon } from './fixtures/status-ctx.mjs'
+import { selfCommand } from '../../src/version.mjs'
 
 const settingsOf = (home) => path.join(home, '.claude', 'settings.json')
 
@@ -156,7 +157,7 @@ test('on: refused as root (R7), with the helper missing it writes nothing and sa
   let io = fakeIo(); assert.equal(await runOnCli(['--yes'], onCtx(home, io, { deps: { getuid: () => 0 } })), 2, 'root: §1.4 — nothing read or written, exit 2')
   assert.match(io.text(), /^trocar on: run this as your own user, not as root\.$/m)
   io = fakeIo(); assert.equal(await runOnCli(['--yes'], onCtx(home, io, { deps: { helperState: () => ({ ok: false, reason: 'no helper at /usr/local/libexec/trocar/trocar-redirector' }) } })), 1)
-  assert.match(io.text(), /sudo trocar setup-helper/)
+  assert.ok(io.text().replace(/\s+/g, ' ').includes(`sudo ${selfCommand(['setup-helper'])}`), io.text())
   assert.deepEqual(snapshot(home), before, 'nothing written, not even the manifest')
   // D39⑥ executed 2026-10-11: the legacy-on hook went with the old capture — every platform runs the NEW on: its plan (a dry run touches nothing)
   for (const platform of ['win32', 'darwin', 'freebsd']) {
