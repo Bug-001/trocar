@@ -16,8 +16,8 @@
 //   5. dial the upstream — direct, or the proxy prelude trocar writes (http / socks5; the user's proxy credentials ride only here) —
 //      and say 200 only once it is up: a failure is `502`, or the proxy's own refusal, never a success first;
 //   6. handleFlow(socket, meta, {upstream, redial}); the row carries ingress / pid_source / pid_ms / upstream, no `prelude`
-//      (the opener and the proxy prelude are trocar's bytes, not the agent's: invariant 4, §5.6). Absolute-form plain http instead goes to
-//      forwardHttp (forward.mjs): blind, one row per authority, steps 3–5 (admit) again for each new authority; it is no flow (closeIdle cuts it).
+//      (the opener and the proxy prelude are trocar's bytes, not the agent's: invariant 4, §5.6). Absolute-form plain http goes through
+//      forwardHttp (forward.mjs): steps 3–6 for each authority the client names, each a flow of its requests less the door's credential.
 // The ingress never records an envelope itself and never forwards a byte it has not been asked to.
 import crypto from 'node:crypto'
 import net from 'node:net'
@@ -353,33 +353,40 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     // answers it with the process the socket belongs to, not with anything the credentials claim
     const who = door && typeof door.user === 'string' && door.user !== '' ? door.user : o.user
     if (o.forward) {
-      const open = async (target) => {
+      let first = true
+      const start = async (target, sock) => {
+        const at = first ? acceptedAt : Date.now(); first = false
+        if (!socket.destroyed) idle.add(socket) // while it is judged and dialled, closeIdle cuts it; a flow then finishes on its own
         const a = await admit({ ...o, target })
-        if (!a) return null
-        if (a.d.rest.length) a.d.sock.unshift(a.d.rest)
-        return { sock: a.d.sock, row: (info) => refuse({ ...a.base, upstream: a.shown }, { decision: 'splice', not_captured: 'unknown-protocol', reason: 'absolute-form', ...info }) }
+        if (!a) return false
+        idle.delete(socket)
+        flow(sock, target, a, at, { up: 0, down: 0 }) // the stand-in counts the forwarded requests and the answers only
+        return true
       }
-      return forwardHttp({ socket, r, head: o.forward.head, next: () => r.take(headOf), open, shut: (why, raw) => shut(why, 'destroy', raw) })
+      return forwardHttp({ socket, r, head: o.forward.head, next: () => r.take(headOf), start, shut: (why, raw) => shut(why, 'destroy', raw) })
     }
     const a = await admit(o)
     if (!a) return
-    const { base, shown, d, up } = a
     o.ok()
     // 6. an agent's flow from here on. The credentials stay in this closure; the flow only knows whether the upstream has some.
     const rest = r.detach(); idle.delete(socket)
     if (rest.length) socket.unshift(rest)
-    if (d.rest.length) d.sock.unshift(d.rest)
-    counters.flows++
-    const credentialed = !!up.auth
-    // a direct upstream is redialled as the transparent door does it (a connecting socket, at once); a proxy needs its prelude again (a Promise)
-    const redial = credentialed ? undefined : (up.kind || 'direct') === 'direct' ? () => connectUpstream({ address: o.target.host, port: o.target.port }) : async () => {
-      const x = await dialUpstream(up, o.target, () => {}, { slow: false }) // the flow's own wait (flow.mjs waitFor) records a slow second prelude, once
-      // the OS's `syscall` goes along: wentBy tells a reset off the wire (kept as ECONNRESET) from Node's invented one (a close) by it
-      if (!x.ok) throw Object.assign(new Error(x.kind === 'refused' ? `the upstream refused the second connection (${x.reason})` : x.error.message), { code: x.kind === 'refused' ? 'proxy-refused' : x.error.type, ...(x.syscall ? { syscall: x.syscall } : {}) })
-      if (x.rest.length) x.sock.unshift(x.rest)
-      return x.sock
+    flow(socket, o.target, a, acceptedAt, { up: w.up, down: w.down })
+
+    function flow(sock, target, { base, shown, d, up }, at, wire) {
+      if (d.rest.length) d.sock.unshift(d.rest)
+      counters.flows++
+      const credentialed = !!up.auth
+      // a direct upstream is redialled as the transparent door does it (a connecting socket, at once); a proxy needs its prelude again (a Promise)
+      const redial = credentialed ? undefined : (up.kind || 'direct') === 'direct' ? () => connectUpstream({ address: target.host, port: target.port }) : async () => {
+        const x = await dialUpstream(up, target, () => {}, { slow: false }) // the flow's own wait (flow.mjs waitFor) records a slow second prelude, once
+        // the OS's `syscall` goes along: wentBy tells a reset off the wire (kept as ECONNRESET) from Node's invented one (a close) by it
+        if (!x.ok) throw Object.assign(new Error(x.kind === 'refused' ? `the upstream refused the second connection (${x.reason})` : x.error.message), { code: x.kind === 'refused' ? 'proxy-refused' : x.error.type, ...(x.syscall ? { syscall: x.syscall } : {}) })
+        if (x.rest.length) x.sock.unshift(x.rest)
+        return x.sock
+      }
+      handleFlow(sock, { ...base, acceptedAt: at, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}), credentialed }, wire }, { upstream: d.sock, redial })
     }
-    handleFlow(socket, { ...base, acceptedAt, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}), credentialed }, wire: { up: w.up, down: w.down } }, { upstream: d.sock, redial })
 
     // steps 3–5 for one target: the lookup, its refusals, the health probe, the upstream dial and its refusal rows. → {base, shown, d} with the upstream
     // up, or undefined (the client has been answered and the connection ended). CONNECT, SOCKS5 and every forwarded authority come through here.

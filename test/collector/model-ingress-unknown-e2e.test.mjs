@@ -2,9 +2,10 @@
 // rule): `trocar on` through the CLI → a REAL daemon whose door parts are doorPartsFor's own (only the OS readers under them are fakes, model-io).
 // (1) An opener the door cannot take (an origin-form HEAD from the agent's socket): nothing is said back, the connection closes, and its
 // `ingress-unknown` record names the process that holds the client's end and the opener's method and host; `status --json` carries the program.
-// (2) Absolute-form plain http from a process the door does not know (a child that inherited the agent's proxy env): forwarded blind to each origin
-// on one kept-alive connection, every Proxy-Authorization line removed and nothing else changed, the answers back byte-equal, one flows/ row per
-// authority and no token anywhere. No lookupIngress, ownerOfPeer, engine, request or socket path is injected. 4.8 §5.1 (W13), 1.6 C.3.
+// (2) Absolute-form plain http from a process the door does not know (a child that inherited the agent's proxy env): relayed to each origin on one
+// kept-alive connection, every Proxy-Authorization line removed and nothing else changed, the answers back byte-equal, one flows/ row per authority
+// with the bytes forwarded each way, and no token anywhere. (3) The agent's own absolute-form request is recorded, less the door's credential (D40).
+// No lookupIngress, ownerOfPeer, engine, request or socket path is injected. 4.8 §5.1 (W13), 1.6 C.3.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -15,17 +16,20 @@ import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
 import { within, onceWithin } from '../helpers/bounded.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
+import { listenLocalhost } from '../helpers/localhost.mjs'
 import { PID, agentOf, darwinExec, win32Io, flowsOf, freePort, statusDoc } from '../helpers/model-io.mjs'
 
 const HOST = 'probe.example'
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: the real door closes an opener it cannot take and names its sender, and forwards absolute-form plain http blind`, { timeout: 60_000 }, async () => {
+  test(`${platform}: the real door closes an opener it cannot take and names its sender, relays a stranger's absolute-form plain http and records the agent's`, { timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')
     const name = w.harnesses.find((h) => h.name === 'codex').processes.names[0].name
-    const a = agentOf({ w, name, env: {} })
+    const bundle = path.join(w.home, 'codex-ca.pem') // what this codex trusts: the trocar root (CM22), so the door captures it
+    fs.writeFileSync(bundle, fs.readFileSync(path.join(w.dir, 'ca', 'trocar-ca.pem'), 'utf8'))
+    const a = agentOf({ w, name, env: { SSL_CERT_FILE: bundle } })
     const win = platform === 'win32' ? win32Io(a) : null
     const box = await liveUnit({ w, platform, io: win ? win.io : { exec: darwinExec(a) } })
     const open = []
@@ -81,8 +85,27 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(B.got.toString('latin1'), `${reqB}\r\n${bodyB}`, 'origin B gets its request and chunked body minus the door\'s credential')
         assert.equal(got, replyA + replyB, 'the answers come back byte-equal')
         c.destroy()
-        const rows = await within((async () => { for (;;) { const f = flowsOf(w.dir).filter((l) => l.not_captured === 'unknown-protocol' && [A.port, B.port].includes(l.dst && l.dst.port)); if (f.length === 2) return f; await new Promise((r) => setTimeout(r, 25)) } })(), 10_000, 'a flows/ row per origin')
-        assert.deepEqual(rows.map((l) => l.dst.port).sort(), [A.port, B.port].sort())
+        const rows = await within((async () => { for (;;) { const f = flowsOf(w.dir).filter((l) => l.decision && [A.port, B.port].includes(l.dst && l.dst.port)); if (f.length === 2) return f; await new Promise((r) => setTimeout(r, 25)) } })(), 10_000, 'a flows/ row per origin')
+        const sent = { [A.port]: [`${reqA}\r\n`, replyA], [B.port]: [`${reqB}\r\n${bodyB}`, replyB] }
+        for (const l of rows) assert.deepEqual([l.bytes_up, l.bytes_down, !!l.not_captured], [sent[l.dst.port][0].length, sent[l.dst.port][1].length, true], JSON.stringify(l))
+
+        // (3) the agent's own (its socket is in the tables): recorded verbatim, less the door's credential
+        const C = await origin(replyA); C.srv.close(); C.port = await listenLocalhost(C.srv)
+        const reqC = `GET http://localhost:${C.port}/z HTTP/1.1\r\nHost: localhost:${C.port}\r\n`
+        const agentPort = await freePort(); a.ports.add(agentPort); win?.write()
+        const ac = net.connect({ port: door, host: '127.0.0.1', localAddress: '127.0.0.1', localPort: agentPort }); open.push(ac)
+        await onceWithin(ac, 'connect')
+        let gotC = ''
+        ac.on('data', (d) => { gotC += d.toString('latin1') }); ac.on('error', () => {})
+        ac.write(`${reqC}${auth}\r\n`)
+        await within((async () => { while (gotC !== replyA) await new Promise((r) => setTimeout(r, 10)) })(), 10_000, 'the agent\'s reply')
+        assert.equal(C.got.toString('latin1'), `${reqC}\r\n`)
+        ac.destroy()
+        const rawDir = path.join(path.dirname(w.dir), 'raw')
+        const recs = () => (fs.existsSync(rawDir) ? fs.readdirSync(rawDir) : []).flatMap((n) => fs.readFileSync(path.join(rawDir, n), 'utf8').split('\n').filter(Boolean))
+        const recC = await within((async () => { for (;;) { const f = recs().map((l) => JSON.parse(l)).find((x) => x.req_head_raw && x.req_head_raw.includes(`:${C.port}/z`)); if (f) return f; await new Promise((r) => setTimeout(r, 25)) } })(), 10_000, 'the agent\'s record')
+        assert.deepEqual([recC.req_head_raw, recC.resp_head_raw + recC.resp.raw, recC.proc.pid], [`${reqC}\r\n`, replyA, PID])
+        assert.ok(!recs().some((l) => l.includes(decodeURIComponent(u.password))), 'the door\'s token is in no record')
         assert.equal(flowsOf(w.dir).filter((l) => l.code === 'ingress-unknown').length, before, 'forwarding is no ingress-unknown')
         assert.ok(!flowsOf(w.dir).some((l) => JSON.stringify(l).includes(decodeURIComponent(u.password))), 'the door\'s token is in no flows/ line')
       } finally {

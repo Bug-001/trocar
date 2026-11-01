@@ -35,8 +35,7 @@ for (const bypass of BYPASS) for (const [legName, ownLeg, legWord] of LEGS) for 
     const want = door ? `PROXY ${door}; ${legWord}` : legWord
     // a bypass-list host still goes through the door, which dials it direct (bypassHit): a DIRECT there was a turn never seen (mac Claude Desktop, 2026-10-17)
     for (const h of [...HOSTS, ...NEAR]) assert.equal(run(text, h), bypassHit(bypass, h) ? (door ? `PROXY ${door}; DIRECT` : 'DIRECT') : want, `${h}: the PAC says what the door's own matcher (bypassHit) says`)
-    // plain http takes the app's own way, on and after off: through a proxy Chromium sends it absolute-form (GET http://…), the door takes CONNECT and
-    // SOCKS5 only, and once the door accepted the connection the `; DIRECT` after it never applies (an intranet http host on the bypass list broke)
+    // plain http takes the app's own way, on and after off (P10: the PAC does not hand plain http to the door)
     for (const h of [...HOSTS, ...NEAR]) assert.equal(run(text, h, 'http'), bypassHit(bypass, h) ? 'DIRECT' : legWord, `http://${h}: the app's own way`)
     for (const h of LOOP) assert.equal(run(text, h, 'HTTP'), 'DIRECT')
     if (!bypassHit(bypass, 'api.anthropic.com')) for (const scheme of ['wss', 'ws']) assert.equal(run(text, 'api.anthropic.com', scheme), want, `${scheme}: a WebSocket is CONNECTed, so it goes to the door`)
