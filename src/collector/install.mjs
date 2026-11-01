@@ -32,7 +32,7 @@ import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/
 import { newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { OFF_VERSION, installComplete } from '../off/manifest.mjs'
 import { writeStandalone, checkStandalone } from '../off/standalone.mjs'
-import { codeId } from '../version.mjs'
+import { codeId, selfCommand } from '../version.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const listDir = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
@@ -438,7 +438,7 @@ export async function turnOn(opts = {}) {
   let helperBlock = null
   if (helperState) {
     const h = await helperState()
-    if (h && h.ok === false) helperBlock = `the capability helper is missing or not the right version (${h.reason || 'not usable'}); nothing was changed. Run: sudo trocar setup-helper`
+    if (h && h.ok === false) helperBlock = `the capability helper is missing or not the right version (${h.reason || 'not usable'}); nothing was changed. Run: sudo ${selfCommand(['setup-helper'])}`
   }
   if (helperBlock && !dryRun) return { receipt: unwritten({ ...fresh(), ok: false, notes: [helperBlock] }), manifest: null, plan: null, exit: 1 }
   // D61 / 1.6 §3.3: the login entry is `install`'s, so an `on` with none would open doors that nobody opens after the next login

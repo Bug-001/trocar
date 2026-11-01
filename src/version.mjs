@@ -69,3 +69,8 @@ export function channelOf(root = packageRoot(), { home = os.homedir(), fs: f = f
   try { if (f.realpathSync(path.dirname(root)) === f.realpathSync(appDir(home))) return 'script' } catch { /* no app directory: not placed by the script */ }
   return null
 }
+
+const shellWord = (s) => (/^[\w@%+=:,./-]+$/.test(String(s)) ? String(s) : `'${String(s).replace(/'/g, "'\\''")}'`)
+/** The command line that runs THIS copy by absolute paths, `<node> <root>/bin/trocar.mjs <args…>`: what trocar prints for `sudo`, whose PATH has
+ *  neither the user's node nor `trocar` (1.6 §3.2 「Linux 的能力助手命令」), the same on every channel. */
+export const selfCommand = (args, { root = packageRoot(), node = process.execPath } = {}) => [node, path.join(root, 'bin', 'trocar.mjs'), ...args].map(shellWord).join(' ')

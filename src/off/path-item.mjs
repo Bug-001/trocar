@@ -1,0 +1,100 @@
+// path-item.mjs — the script channel's PATH item (RFC 1.6 §3.2 「脚本渠道多一项 PATH」 and §3.6, D74⑤): `~/.trocar/bin` appended, lowest precedence,
+// so `trocar` is a command in the next shell. Data, not branches: the shell start file comes from one table keyed by (system, the name of $SHELL), and
+// the edit is the generic sentinel line of text-edit.mjs, with the backup, the file's own encoding and the journal's undo (undoEntry: a file the user
+// edited since keeps their edits, only trocar's line goes). Windows appends one element to HKCU\Environment `Path`, read unexpanded and kept
+// REG_EXPAND_SZ, then broadcasts the change by setting and clearing a user variable through .NET (never setx). The record lives in the install
+// manifest's own `path_item`, not in `entries`: it names no harness, so neither `off` nor the copy without the source tree ever reads it.
+import nodeFs from 'node:fs'
+import path from 'node:path'
+import { insertLine, lineComment } from './text-edit.mjs'
+import { decodeText, encodeText, WHY_TEXT } from './text-codec.mjs'
+import { writeBackup } from './backup.mjs'
+import { writeDurable, sha256, missingDirs, editTarget, readOrNull } from './fsutil.mjs'
+import { undoEntry } from './journal.mjs'
+import { undoByHand } from './manifest.mjs'
+import { execTool } from './exec.mjs'
+
+const MARK = lineComment('puts trocar on your PATH')
+const POSIX = `case ":$PATH:" in *":$HOME/.trocar/bin:"*) ;; *) export PATH="$PATH:$HOME/.trocar/bin" ;; esac ${MARK}`
+const FISH = `contains -- $HOME/.trocar/bin $PATH; or set -gx PATH $PATH $HOME/.trocar/bin ${MARK}`
+// first match wins; `os` absent = any system, `shell` absent = any shell
+const RC = Object.freeze([
+  { shell: 'zsh', file: ({ env, home }) => path.join(env.ZDOTDIR || home, '.zshrc') },
+  { shell: 'bash', os: 'darwin', file: ({ home }) => path.join(home, '.bash_profile') },
+  { shell: 'bash', file: ({ home }) => path.join(home, '.bashrc') },
+  { shell: 'fish', file: ({ home }) => path.join(home, '.config', 'fish', 'conf.d', 'trocar.fish'), line: FISH }, // a file of trocar's own: undo removes it
+  { file: ({ home }) => path.join(home, '.profile') },
+])
+export const WIN_ELEMENT = '%USERPROFILE%\\.trocar\\bin'
+const WIN_WHERE = 'HKCU\\Environment\\Path'
+
+/** Where the item goes on this machine → { file, line } (macOS / Linux) or { where, element } (Windows). */
+export function pathItemTarget({ platform = process.platform, env = process.env, home }) {
+  if (platform === 'win32') return { where: WIN_WHERE, element: WIN_ELEMENT }
+  const shell = path.basename(String(env.SHELL || ''))
+  const row = RC.find((r) => (!r.shell || r.shell === shell) && (!r.os || r.os === platform))
+  return { file: row.file({ env, home }), line: row.line || POSIX }
+}
+
+// One fixed PowerShell script per verb; the element is a constant, so nothing of the caller's reaches the text. RegistryKey keeps the unexpanded
+// spelling and the value's kind; an absent value is created REG_EXPAND_SZ. The answer is one JSON line {result}.
+const psScript = (op) => [
+  "$ErrorActionPreference = 'Stop'",
+  `$el = '${WIN_ELEMENT}'`,
+  "$k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')",
+  "$v = $k.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)",
+  "$parts = @(if ($v) { $v -split ';' })",
+  "$mine = { param($p) $p.TrimEnd('\\') -ieq $el }",
+  op === 'add'
+    ? "if (@($parts | Where-Object { & $mine $_ }).Count) { $r = 'present' } else { $new = if (-not $v) { $el } elseif ($v.EndsWith(';')) { $v + $el } else { $v + ';' + $el }; $k.SetValue('Path', $new, [Microsoft.Win32.RegistryValueKind]::ExpandString); $r = 'added' }"
+    : "$rest = @($parts | Where-Object { -not (& $mine $_) }); if ($rest.Count -eq $parts.Count) { $r = 'absent' } else { $kind = $k.GetValueKind('Path'); if (($rest -join '') -eq '') { $k.DeleteValue('Path') } else { $k.SetValue('Path', ($rest -join ';'), $kind) }; $r = 'removed' }",
+  "$k.Close()",
+  "if ($r -ne 'present' -and $r -ne 'absent') { [Environment]::SetEnvironmentVariable('TROCAR_PATH_NOTICE', '1', 'User'); [Environment]::SetEnvironmentVariable('TROCAR_PATH_NOTICE', $null, 'User') }",
+  "[Console]::Out.WriteLine('{\"result\":\"' + $r + '\"}')",
+].join('\n')
+function winPath(op, { run, env }) {
+  const r = execTool('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(psScript(op), 'utf16le').toString('base64')], { run, env, timeoutMs: 30_000 })
+  let result = null
+  try { result = JSON.parse(r.out.split(/\r?\n/).at(-1)).result } catch { /* no answer: said below */ }
+  if (r.code !== 0 || !result) throw new Error(`${WIN_WHERE} could not be changed (${r.err || `powershell exit ${r.code}`})`)
+  return result
+}
+
+/**
+ * Puts the item in place → the record to keep in the manifest's `path_item`, or null when it is already there (nothing written). Throws with the
+ * reason when the file cannot be edited (its encoding unproven, a dangling link, no backup) — nothing of the user's is changed then.
+ */
+export function placePathItem({ platform = process.platform, env = process.env, home, now = new Date(), fs = nodeFs, run = null }) {
+  const t = pathItemTarget({ platform, env, home })
+  if (t.element) {
+    const result = winPath('add', { run, env })
+    const rec = { kind: 'user-path', path: t.where, element: t.element, installed_at: now.toISOString() }
+    return result === 'added' ? { ...rec, undo_by_hand: `remove ${t.element} from your user Path (Settings > System > About > Advanced system settings > Environment Variables)` } : null
+  }
+  const real = editTarget(t.file, fs)
+  const before = readOrNull(fs, real)
+  const d = before == null ? { ok: true, text: null, charset: 'utf8' } : decodeText(before)
+  if (!d.ok) throw new Error(`${t.file} was not changed: trocar cannot tell how it is encoded — ${WHY_TEXT[d.why]}`)
+  if (d.text != null && d.text.includes(t.line)) return null
+  const res = insertLine(d.text, { line: t.line })
+  const backup = before == null ? null : writeBackup({ home, file: t.file, data: before, now, fs })
+  const created = missingDirs(path.dirname(real), fs)
+  fs.mkdirSync(path.dirname(real), { recursive: true, mode: 0o700 })
+  const mode = before == null ? 0o644 : fs.statSync(real).mode & 0o777
+  const bytes = encodeText(res.text, d.charset)
+  writeDurable(real, bytes, mode, fs)
+  const rec = { kind: 'text', format: 'line', path: t.file, ...(real !== t.file ? { real_path: real } : {}), line: t.line, ops: res.ops, existed_before: before != null, mode,
+    pre_sha256: sha256(before), post_sha256: sha256(bytes), backup, created_dirs: created, ...(d.charset !== 'utf8' ? { charset: d.charset } : {}), installed_at: now.toISOString() }
+  return { ...rec, undo_by_hand: undoByHand(rec) }
+}
+
+const LEFT = new Set(['left-unparsable', 'left-unreadable', 'left-link', 'left-text', 'error'])
+/** Takes the item out again → { ok, path, result, reason? }. A file the user edited since keeps their edits (only trocar's line goes); a value they
+ *  changed keeps theirs, without the one element. */
+export function removePathItem(rec, { env = process.env, fs = nodeFs, run = null } = {}) {
+  if (rec.kind === 'user-path') {
+    try { return { ok: true, path: rec.path, result: winPath('remove', { run, env }) } } catch (e) { return { ok: false, path: rec.path, result: 'error', reason: `${e.message}; by hand: ${rec.undo_by_hand}` } }
+  }
+  const r = undoEntry(rec, { fs })
+  return LEFT.has(r.result) ? { ok: false, path: rec.path, result: r.result, reason: `${r.reason || r.result}; by hand: ${rec.undo_by_hand}` } : { ok: true, path: rec.path, result: r.result }
+}
