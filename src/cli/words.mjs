@@ -88,7 +88,7 @@ export const FAILURE_WORDS = Object.freeze({
   'upstream-header-ignored': 'a routing header from a program that should not send one was ignored',
   untrusted: 'a connection from a program that does not trust trocar yet; passed on unread',
   untracked: 'a connection from a program trocar does not follow; passed on unread',
-  'upstream-cert': "a host's certificate did not verify, so trocar passed the connection on for the program to check the real certificate itself",
+  'upstream-cert': "a host's certificate did not verify, so trocar did not decrypt the connection: it passed it on for the program to check the real certificate itself, or, inside a tunnel or through a proxy with credentials, closed that one connection",
   'upstream-handshake': "a host refused trocar's handshake (it likely wants a client certificate)",
   h2: 'an HTTP/2 connection could not be decrypted',
   'malformed-hello': "a program's handshake message could not be read",
