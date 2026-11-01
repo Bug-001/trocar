@@ -115,3 +115,16 @@ test('CM21 / V70 status --json `forms`: per form the certificate and the proxy a
     }
   }
 })
+
+// a process sits on the forms status found it can be on (its `forms`), whether or not the door ever answered for it (started before `on`, after a daemon restart):
+// it is drawn there and its branch reason stands; 4.11 P6: a config naming only loopback hosts takes trocar off every path
+test('a process the door never answered stays on its form and gives its reason; local-upstream draws no trocar hop', async () => {
+  const desc = MODEL.find((d) => d.name === 'codex'), [first, ...rest] = desc.proxyMode.forms.filter((f) => f.os.includes('darwin')).map((f) => f.id)
+  const p = { pid: 6001, name: 'codex', exe: '/usr/local/bin/codex', startedAt: '2026-10-15T08:00:00.000Z', elevated: true, forms: [first], trusted: null }
+  const { t } = await draw({ os: 'darwin', desc, procs: [p] })
+  const reason = (id) => t.branches.find((b) => b.form === id).reason
+  assert.deepEqual([reason(first), ...rest.map(reason)], ['elevated-agent', ...rest.map(() => null)])
+  const local = (await draw({ os: 'darwin', desc, row: { hosts: ['127.0.0.1'], localUpstream: true } })).t
+  assert.ok(!kinds(local).flat().some((k) => k.startsWith('trocar')), 'no trocar hop on a path that never reaches the door')
+  assert.deepEqual(verdicts(local), Array(local.branches.length).fill([false, false, 'local-upstream']))
+})

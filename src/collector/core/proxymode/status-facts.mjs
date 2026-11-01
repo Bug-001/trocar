@@ -161,9 +161,13 @@ export function netFormsOf({ model, status, procs = {}, systemProxy = null, sett
   for (const [h, list] of Object.entries(model)) {
     const row = (status.harnesses || []).find((x) => x.id === h) || {}
     const clients = (status.holders || []).filter((x) => x.harness === h).map((x) => x.pid)
-    // a form's processes are the ones its door group saw (`upstreams['<h>:<route>']`): observed, never another form's process drawn on this form's path
+    // a form's processes: the forms status found each can be on (`p.forms`, its one predicate over the form's programs and host processes; absent = not told, every form), and
+    // where that leaves more than one, the ones whose door group saw it (`upstreams['<h>:<route>']`) — the door's memory only breaks a tie: a process it never answered
+    // (started before `on`, not connected yet, after a daemon restart) is still on its form
     const seen = (x) => new Set((((reply && reply.upstreams) || {})[`${h}:${x.route}`] || []).map((a) => a.pid))
-    forms[h] = list.map((x) => ({ id: x.id, setting: x.setting || settings[h] || { value: null, scheme: null, host: null, port: null, source: [], sha256: null }, systemProxy, procs: (procs[h] || []).filter((p) => seen(x).has(p.pid)),
+    const can = (p) => list.filter((x) => !Array.isArray(p.forms) || p.forms.includes(x.id))
+    const on = (p) => { const c = can(p), saw = c.filter((x) => seen(x).has(p.pid)); return saw.length ? saw : c }
+    forms[h] = list.map((x) => ({ id: x.id, setting: x.setting || settings[h] || { value: null, scheme: null, host: null, port: null, source: [], sha256: null }, systemProxy, procs: (procs[h] || []).filter((p) => on(p).includes(x)),
       entry: x.entry, route: x.plan, hook: x.hook, certificate: x.certificate, proxy: x.proxy, notes: x.notes, restart: x.restart, paths: x.paths, follows: x.follows }))
     for (const x of list) {
       const written = x.proxy.written ? parseProxyUrl(x.proxy.written) : null

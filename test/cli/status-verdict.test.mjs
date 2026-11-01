@@ -185,9 +185,9 @@ test('1.6 §2 判词: captured + not-seen → the harness is captured (exit 0); 
   }
 })
 
-// 4.11 P6: loopback never reaches the door, so an agent whose every configured API host is on this machine is not captured, whatever its processes
-test('4.11 P6: every configured host loopback → not captured, local-upstream', () => {
+// 4.11 P6: loopback never reaches the door — so with no process the config decides (local-upstream), but a process the door observed decrypted stays captured
+test('4.11 P6: config naming only loopback hosts → local-upstream; a process the door judged keeps the door\'s word', () => {
   const on = { desired: 'on', entryIntact: true, attached: true, daemon: 'running', deadDoor: true, localUpstream: true }
   assert.deepEqual(judgeHarness(on).rows, [{ captured: false, reason: 'local-upstream' }])
-  assert.equal(judgeHarness({ ...on, procs: [{ pid: 9, trusted: true }] }).captured, false)
+  assert.deepEqual(judgeHarness({ ...on, procs: [{ pid: 9, trusted: true }] }), { captured: true, rows: [{ pid: 9, captured: true, reason: null }] })
 })

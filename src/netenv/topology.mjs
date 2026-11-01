@@ -175,8 +175,10 @@ function formVerdict(F, h, hf, fm, fwf) {
   if (main) return none(true, false, 'elevated-agent')
   if (F.daemon.state === 'not-running' || F.daemon.state === 'not-responding') return none(true, false, `daemon-${F.daemon.state}`)
   if (fwf.upstream_error) return { on: true, captured: false, reason: 'upstream-unreachable', engine: true } // the engine could not dial the upstream (the platform's last 60 s of it)
-  const j = judgeHarness({ desired: 'on', entryIntact: entryIntact(hf), entryWhy: 'entry-missing', attached: fwf.state === 'on', helper: 'ok', daemon: F.daemon.state, procs: fm.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative, start: p.start })), installedAt: hf.installedAt, cert: certOfForms([fm]) })
-  return { on: true, captured: j.captured, reason: (j.rows.find((r) => r.reason) || {}).reason ?? null, engine: true }
+  const j = judgeHarness({ localUpstream: hf.localUpstream === true, desired: 'on', entryIntact: entryIntact(hf), entryWhy: 'entry-missing', attached: fwf.state === 'on', helper: 'ok', daemon: F.daemon.state, procs: fm.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative, start: p.start })), installedAt: hf.installedAt, cert: certOfForms([fm]) })
+  const reason = (j.rows.find((r) => r.reason) || {}).reason ?? null
+  if (reason === 'local-upstream' && j.captured !== true) return none(false, false, reason) // its config names only hosts on this machine: loopback never reaches the door (4.11 P6), trocar is off its path
+  return { on: true, captured: j.captured, reason, engine: true }
 }
 
 /** The hops after the kernel: what it dials as its upstream (4.8 §2.2). */
@@ -201,7 +203,7 @@ function proxyTopology(F, h, hf) {
     // file is the user's own again — the agent's live connection to the group's port (row k). In the drain the edge names no entry: the file no longer points here; the agent holds the address it
     // read at startup, and the note says what restart ends it.
     const wired = !!(fwf
-      && (F.desired[h] === 'off' ? (fwf.clients || []).length > 0 : !fm.hook && fm.entry && fm.entry.intact === true))
+      && (F.desired[h] === 'off' ? (fwf.clients || []).length > 0 : !fm.hook && fm.entry && fm.entry.intact === true && vd.reason !== 'local-upstream'))
     const hfSys = { ...hf, systemProxy: fm.systemProxy }
     const split = (hf.behaviour.branches || []).join() === 'http,ws' && fm.systemProxy
     if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`${fwf.clients.length} process(es) are still connected through trocar, forwarded only; trocar exits once they do`)
