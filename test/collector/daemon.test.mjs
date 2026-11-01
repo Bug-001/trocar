@@ -1158,6 +1158,26 @@ test('daemon: agent-trusted, agent-exit (also found by a rescan) and negative-ca
   } finally { await d2.stop(); p.done(); s.done() }
 })
 
+// 4.6 §引擎 5 / D54②: `on` naming a harness that is on makes the engine try decrypting again now — its negative-cache keys go, each clearing is
+// recorded (by:'on'), and POST /on answers what was retried. The real control socket; the engine's answer stands in for keys made by flows.
+test('daemon: POST /on forgets the named harness\'s negative-cache keys, records each clearing with by:on and answers retried (V109, Linux)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    const asked = []; const realForget = d.engine.forgetAgent
+    d.engine.forgetAgent = (h) => { asked.push(h); realForget(h); return h === 'claude-code' ? [{ neg_key: '6262', pid: 6262, agent: 'claude-code', hosts: ['api.anthropic.com'], dropped: 1 }] : [] }
+    const r = await req(s.sock, 'POST', '/on', { harnesses: ['claude-code'] })
+    assert.deepEqual(asked, ['claude-code'])
+    assert.deepEqual(r.retried, [{ harness: 'claude-code', neg_key: '6262', pid: 6262, hosts: ['api.anthropic.com'] }])
+    const cleared = flowsOf(s).filter((f) => f.event === 'negative-cache-cleared')
+    assert.deepEqual(cleared.map((f) => [f.neg_key, f.pid, f.dropped, f.harness, f.by]), [['6262', 6262, 1, 'claude-code', 'on']])
+    for (const f of cleared) assert.deepEqual(checkRecord(f), [])
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
 // D-10: any [::1] failure, not only EADDRINUSE, is recorded and makes status say IPv6 is not listening.
 test('daemon: [::1] that cannot be bound for another reason (no IPv6) is recorded with its errno, and status never reports it listening (D-10)', async () => {
   const s = sandbox(); const p = fakeProc()

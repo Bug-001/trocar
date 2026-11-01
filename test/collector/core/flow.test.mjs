@@ -4,7 +4,7 @@ import net from 'node:net'; import tls from 'node:tls'; import { X509Certificate
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { handleFlow } from '../../../src/collector/core/engine/flow.mjs'
-import { createNegativeCache } from '../../../src/collector/core/engine/negcache.mjs'
+import { createNegativeCache, NEG_BACKOFF } from '../../../src/collector/core/engine/negcache.mjs'
 
 const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
 const trocarCa = createCa(); const issuer = createLeafIssuer(loadCa(trocarCa))
@@ -277,7 +277,7 @@ test('upstream certificate does not verify: fresh connection, ClientHello replay
   assert.ok(tail.length === 0 || tail.length === 5 + tail.readUInt16BE(3), 'nothing missing but the closing record')
   assert.equal(h.envelopes.length, 0)
   assert.deepEqual([h.flows[0].decision, h.flows[0].not_captured], ['splice', 'upstream-cert']); assert.match(h.flows[0].reason, /CERT|SIGNATURE|ISSUER/)
-  assert.deepEqual(h.ctx.negCache.list().map((e) => [e.host, e.cause]), [['upstream.test', 'upstream-cert']])
+  assert.deepEqual(h.ctx.negCache.list().map((e) => [e.host, e.cause, e.retry_at - e.at]), [['upstream.test', 'upstream-cert', NEG_BACKOFF.free.base]], 'stepping aside again costs the agent nothing: the free row (4.6 §引擎 5)')
   assert.deepEqual(h.failures, [], 'the upstream-cert step-aside writes no failure of its own here: the engine\'s negCache wrapper does (engine.test / tls-roots)')
   // the next flow to that host splices at once: one upstream connection, no handshake of ours
   const r2 = await talk(frontPort, privCa.certPem)
@@ -332,6 +332,7 @@ test('inside a CONNECT tunnel an unverifiable upstream closes that one flow (no 
   assert.equal(proxied, 2, 'the engine never re-sent a CONNECT prelude (with the agent\'s proxy credentials)')
   assert.deepEqual(h.flows.map((f) => [f.decision, f.not_captured]), [['tunnel', 'upstream-cert'], ['tunnel', 'negative-cache']])
   assert.equal(h.flows[0].error.type, 'upstream_cert')
+  assert.deepEqual(h.ctx.negCache.list().map((e) => e.retry_at - e.at), [NEG_BACKOFF.costly.base], 'a retry in a tunnel closes one flow: the costly row (4.6 §引擎 5)')
 })
 
 test('client abort mid-flight tears down the upstream socket (acceptance T3)', async () => {

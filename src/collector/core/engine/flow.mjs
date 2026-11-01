@@ -425,13 +425,15 @@ export function handleFlow(client, meta, ctx) {
   function stepAside(upTls, buf, cSock, host, isTunnel, key, cause, why) {
     handedOff = true                                    // the original upstream closes under us; we own teardown
     try { upTls.destroy() } catch { /* ignore */ }
-    if (cause === 'upstream-handshake') ctx.negCache.mark(key, { cause, meta, host })
-    else if (cause === 'upstream-cert') { ctx.negCache.mark(key, { cause, meta, host }); ctx.counters.notCaptured.upstreamCert++ }
+    // a retry is free when trocar can step aside onto a fresh connection again; a tunnel or a credentialed upstream closes this flow (below), so its retry costs one
+    const closes = isTunnel || !!meta.upstream?.credentialed
+    if (cause === 'upstream-handshake') ctx.negCache.mark(key, { cause, meta, host, free: !closes })
+    else if (cause === 'upstream-cert') { ctx.negCache.mark(key, { cause, meta, host, free: !closes }); ctx.counters.notCaptured.upstreamCert++ }
     else { ctx.counters.notCaptured.leafError++; ctx.failure({ code: 'leaf-error', flow_id: rec.flow_id, host, reason: why }) }
     rec.not_captured = cause; rec.reason = why
     // A credentialed upstream (the user's own proxy, reached through the ingress) is dialled once, for this agent connection: a second
     // dial would send the user's credentials again on trocar's own initiative (invariant 1, 4.8 §5.2), so this flow is closed like a tunnel's.
-    if (isTunnel || meta.upstream?.credentialed) {
+    if (closes) {
       try { cSock.destroy() } catch { /* ignore */ }
       return finish(isTunnel ? 'tunnel' : 'error', { host, error: { type: cause.replace('-', '_'), message: why, side: cause === 'leaf-error' ? 'engine' : 'upstream' } })
     }

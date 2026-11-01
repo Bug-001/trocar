@@ -199,6 +199,13 @@ function stopByOf(b) {
   return b.by
 }
 const drainBy = (by) => (by ? { by: 'stop', who: by } : {}) // engine.drain's: the stop's own label, with the command that asked
+// `trocar on` naming harnesses that are already on is also "decrypt again now" (4.6 §引擎 5, D54②): the engine forgets every negative-cache key of
+// those harnesses (null = every harness), each clearing is recorded as process exits are (4.8 §5.5), and POST /on answers what was retried.
+function retryNow(engine, failure, names) {
+  const gone = (names ?? [null]).flatMap((h) => (engine ? engine.forgetAgent(h) : []))
+  for (const g of gone) failure.write({ event: 'negative-cache-cleared', pid: g.pid, neg_key: g.neg_key, dropped: g.dropped, harness: g.agent, by: 'on' })
+  return gone.map((g) => ({ harness: g.agent, neg_key: g.neg_key, pid: g.pid, hosts: g.hosts }))
+}
 
 async function stopTail({ engine, graceMs, store, seal, failure, lock, signal, reason, who = null, before = async () => {}, after = async () => {} }) {
   const failed = []
@@ -710,7 +717,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       // capture on again cancels a pending `off {exit}` (exitWhenDrained): the daemon that was going away is the one now serving it
       // The manifest is read again first (1.6 §1.1, R9): `trocar on` writes the entries, and their `installed_at`, before it asks, so a harness turned on
       // again after `off` is judged against when trocar wrote the entry NOW — a process that started while it was off is config-after-start, and says so
-      on: async ({ body }) => { reloadManifest(); const r = await sw.on({ ...(body && typeof body === 'object' ? body : {}), harnesses: namesOf(body) }); exitAsked++; syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}) } },
+      on: async ({ body }) => { reloadManifest(); const r = await sw.on({ ...(body && typeof body === 'object' ? body : {}), harnesses: namesOf(body) }); exitAsked++; syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}), retried: retryNow(engine, failure, namesOf(body)) } },
       // → {…status, unwatched: [pid], confirmed, relayed: {closing, waiting, cut}, pid}: the pids taken out of the kernel watch table, and whether the kernel
       // confirms the state asked for (every unwatch answered; with no harness left on, the links gone). With the helper dead its table is gone with it: every pid
       // counts as taken out and `confirmed` does not wait on an unwatch nobody can answer. After the switch the engine closes the connections of those harnesses
@@ -857,7 +864,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       if (verb === 'reg-read' && !(typeof parts.regReadAllowed === 'function' && parts.regReadAllowed(args && typeof args === 'object' ? args : {}))) return no(`reg-read outside the allow-list: ${JSON.stringify(args ?? null)}`)
       try { return { ok: true, data: await parts.helper.call(verb, args && typeof args === 'object' ? args : {}, { timeoutMs: verb === 'ps' ? 10000 : 2000 }), ...(self ? { self } : {}) } } catch (e) { return no(`${verb}: ${String((e && (e.code || e.message)) || e)}`) }
     }),
-    'POST /on': gate(async (q) => { exitAsked++; clearInterval(exitTimer); return collector.on(body(q)) }),
+    'POST /on': gate(async (q) => { exitAsked++; clearInterval(exitTimer); const b = body(q); return { ...(await collector.on(b)), retried: retryNow(engine, failure, Array.isArray(b.harnesses) ? b.harnesses : []) } }),
     // `exit` stops the daemon once it may (no harness on, no holder, no connection); with `now` its connections were just cut and it stops at
     // once, as runDaemon's exitWhenDrained does: whatever the engine still holds after half a second goes through the stop barrier
     'POST /off': gate(async (q) => {

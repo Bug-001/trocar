@@ -3,7 +3,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildTopology } from '../../src/netenv/topology.mjs'
-import { diagnose, FINDINGS, FINDING_CODES, renderFindings } from '../../src/netenv/findings.mjs'
+import { diagnose, FINDINGS, FINDING_CODES, NEG_CAUSES, renderFindings } from '../../src/netenv/findings.mjs'
+import { statusReason } from '../../src/cli/words.mjs'
 import { validateFinding, validateTopology } from '../../src/cli/schema.mjs'
 import { NET_CODES, ROUTE_CODES, ROUTE_TRUST_REASONS, STATUS_REASONS, TRUST_REASONS } from '../../src/health/codes.mjs'
 import { FINDINGS_WIN32 } from '../../src/netenv/findings-win32.mjs'
@@ -225,6 +226,19 @@ test('V49 where the harness keeps its settings in a managed process its windows 
     assert.ok(f.commands.length && !f.commands.some((x) => x.run === 'kill 5530' || x.run.startsWith('Quit every')), `${cause}: ${JSON.stringify(f.commands)}`)
     assert.notEqual(f.what, byCause('client-rejected-leaf').what, cause)
   }
+})
+
+// 1.6 附录 B / D54②: an upstream cause is tried again now by `trocar on <harness>`, in the finding's Fix and in status's NOTE; a refused leaf's Fix
+// is the restart (`trocar on` only in its why). Every cause says when trocar tries again as people read time, never the ISO instant (§1.1⑤)
+test('negative-cache: an upstream cause\'s Fix runs trocar on <harness>, and status\'s reason for it commands it; no cause prints an ISO time', () => {
+  assert.ok(NEG_CAUSES.length >= 3)
+  for (const cause of NEG_CAUSES) {
+    const f = findingsOf(facts('codex', { listeners: [] }, { procs: [proc(5530, { name: 'codex app-server', negative: true })], negatives: [{ pid: 5530, host: 'chatgpt.com', reason: 'negative-cache', cause, retry_at: '2026-10-07T10:19:30.000Z' }] }), ['codex']).find((x) => x.code === 'negative-cache')
+    if (cause.startsWith('upstream-')) assert.ok(f.commands.some((x) => x.run === 'trocar on codex' && x.shell === 'sh'), `${cause}: ${JSON.stringify(f.commands)}`)
+    assert.doesNotMatch(`${f.what} ${f.why}`, /\d{4}-\d\d-\d\dT\d\d:\d\d/, cause)
+    assert.deepEqual(validateFinding(f), [], cause)
+  }
+  for (const cause of NEG_CAUSES.filter((x) => x.startsWith('upstream-'))) assert.equal(statusReason('negative-cache', { harness: 'codex', pid: 5530, cause }).command, 'trocar on codex', cause)
 })
 
 test('V47 (a) / V49 proxy-changed in driver mode: the harness is still steered, so it is `expected` and the one command only looks (附录 B: 「重启后自己生效,不用改东西」); in proxy mode the same drift is a problem whose first command is `trocar on <h>`', () => {

@@ -19,6 +19,7 @@ import { loadIngressConfig, rebindTaken, freeOnLoopback } from './core/ingress-c
 import { controlEndpointFor } from './core/control.mjs'
 import { CODE } from './core/codes.mjs'
 import { appendEvent } from './core/events.mjs'
+import { retriedNote } from '../cli/words.mjs'
 
 const INSTALL_HINT = 'trocar install'
 // 1.6 §1.1: what a `setup.missing[].what` means, in words (the code stays in the JSON)
@@ -118,6 +119,8 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
     try {
       const r = await ask({ socketPath: ep.socketPath, method: 'POST', path: '/on', body: { harnesses: on, groups: Object.fromEntries(groups.map((g) => [g, cfg.config.groupPorts[g]])) } })
       doors = (r && r.doors) || {}
+      // an on harness whose hosts the negative cache paused: the daemon dropped those keys, so trocar decrypts them again from now (D54②)
+      for (const x of (r && Array.isArray(r.retried) ? r.retried : [])) out.notes.push({ harness: x.harness, text: retriedNote(x.harness, x.hosts) })
     } catch (e) { out.problems.push(`the daemon did not take the on request (${errText(e)})`) }
   }
   out.doors = doors || {}

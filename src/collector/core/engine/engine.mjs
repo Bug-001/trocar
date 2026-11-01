@@ -33,7 +33,8 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   // (pid, host) pairs the engine no longer tries to decrypt (RFC 4.6 §引擎 5). A hit is spliced and
   // labelled in flows/; the redirector is never told (the kernel can only stop a whole process).
   // Every write into it is a failure event (D-12, 4.6 §记录 负缓存写入): from then on this (pid, host) is spliced, not
-  // captured, until its retry_at (negcache.mjs), or until the process exits (the daemon calls forgetPid and records the clearing).
+  // captured, until its retry_at (negcache.mjs), until the process exits (the daemon calls forgetPid and records the clearing), or until
+  // `trocar on` names its harness (forgetAgent, recorded the same way).
   const neg = createNegativeCache({ now: timing.now })
   // neg_key: what the entry is keyed by — "<pid>", or "<route>.<group>" for a connection with no pid (4.8 §5.5)
   const negWritten = (made, key, o) => { if (made) { const e = neg.get(key); failure({ code: 'negative-cache', pid: e.pid ?? null, neg_key: e.negKey, agent: e.agent, host: e.host, cause: e.cause, retry_at: new Date(e.retry_at).toISOString(), reason: `${e.host} is no longer decrypted for ${e.pid != null ? `pid ${e.pid}` : e.negKey} (${e.cause}${e.rejections > 1 ? `, ${e.rejections} times in a row` : ''}); its connections there are passed through until ${new Date(e.retry_at).toISOString()}, then decrypted again` }) } return made }
@@ -305,6 +306,6 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   }
 
   // negatives() is for status only; forgetPid(pid) is called by the daemon when that process exits; forgetNegKey(k) when the last process of a
-  // form with no pid to key by has (4.8 §5.5).
-  return { listen, closeGroups, close, stats, drain, relayed, drained, negatives: () => neg.list(), forgetPid: neg.forgetKey, forgetNegKey: neg.forgetKey, holdsNegKey: neg.holds }
+  // form with no pid to key by has (4.8 §5.5); forgetAgent(h) when `trocar on` names h (D54②).
+  return { listen, closeGroups, close, stats, drain, relayed, drained, negatives: () => neg.list(), forgetPid: neg.forgetKey, forgetNegKey: neg.forgetKey, forgetAgent: neg.forgetAgent, holdsNegKey: neg.holds }
 }

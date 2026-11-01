@@ -1,7 +1,7 @@
 // negcache.test.mjs — the (pid, host) negative cache (RFC 4.6 §引擎 5 负缓存, D37).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createNegativeCache, negKey, NEG_RETRY_MS, NEG_RETRY_MAX_MS } from '../../../src/collector/core/engine/negcache.mjs'
+import { createNegativeCache, negKey, NEG_BACKOFF } from '../../../src/collector/core/engine/negcache.mjs'
 
 test('negative cache: CONSECUTIVE leaf rejections per (pid, host), a used connection resets the count; an upstream-cert failure is negative at once', () => {
   const n = createNegativeCache({ now: () => 42 })
@@ -53,45 +53,48 @@ test('negative cache: a connection with no pid is keyed by meta.negKey; forms ar
 
 // RFC 4.6 §引擎 5 负缓存 生存期 / 试用期 · W22 (unit half): entries expire at retry_at, a single rejection renews with doubled backoff
 const clock = () => { let t = 1000; const c = () => t; c.set = (v) => { t = v }; return c }
-const backoff = (r) => Math.min(NEG_RETRY_MS * 2 ** r, NEG_RETRY_MAX_MS)
+const backoff = (row, r) => Math.min(row.base * 2 ** r, row.max)
 const meta = { pid: 9, agent: 'kimi' }, host = 'api.test', k = negKey(meta, host)
 const reject = (n) => n.observe(k, { rejected: true, meta, host })
+// the ways a key is made negative, by the backoff row each one takes (4.6 §引擎 5: a retry's cost decides, not the cause)
+const WAYS = [
+  { row: 'costly', how: 'two rejections', first: (n) => { reject(n); return reject(n) }, again: reject },
+  { row: 'costly', how: 'a certificate alert', first: (n) => n.mark(k, { cause: 'client-rejected-leaf', meta, host, alert: 'x' }), again: (n) => n.mark(k, { cause: 'client-rejected-leaf', meta, host, alert: 'x' }) },
+  ...['upstream-cert', 'upstream-handshake'].flatMap((cause) => [true, false].map((free) => ({ row: free ? 'free' : 'costly', how: `${cause} free=${free}`, first: (n) => n.mark(k, { cause, meta, host, free }), again: (n) => n.mark(k, { cause, meta, host, free }) }))),
+]
 
-test('W22a negative cache: two rejections make an entry that lives NEG_RETRY_MS, and at retry_at has/get/list treat it as gone', () => {
-  const now = clock(), n = createNegativeCache({ now })
-  reject(n); assert.equal(reject(n), true)
-  const e = n.get(k)
-  assert.equal(e.retry_at - e.at, NEG_RETRY_MS); assert.equal(e.renewals, 0)
-  now.set(e.retry_at - 1); assert.equal(n.has(k), true)
-  now.set(e.retry_at)
-  assert.equal(n.has(k), false); assert.equal(n.get(k), null); assert.deepEqual(n.list(), [])
+test('W22a/b negative cache: every way in lives its row\'s base, expires at retry_at, renews on the first new answer, doubling to the row\'s max', () => {
+  assert.ok(NEG_BACKOFF.free.base < NEG_BACKOFF.costly.base && NEG_BACKOFF.free.max < NEG_BACKOFF.costly.max, 'a free retry comes back sooner')
+  for (const w of WAYS) {
+    const row = NEG_BACKOFF[w.row], now = clock(), n = createNegativeCache({ now })
+    assert.equal(w.first(n), true, w.how)
+    let r = 0
+    for (; backoff(row, r - 1) < row.max; r++) {
+      const e = n.get(k)
+      assert.equal(e.renewals, r, w.how); assert.equal(e.retry_at - e.at, backoff(row, r), w.how)
+      now.set(e.retry_at - 1); assert.equal(n.has(k), true, w.how)
+      now.set(e.retry_at); assert.equal(n.has(k), false, w.how); assert.deepEqual(n.list(), [], w.how)
+      assert.equal(w.again(n), true, `${w.how}: one answer after expiry renews`)
+    }
+    assert.ok(r >= 3, `${w.how}: the doubling ran before the cap`)
+    assert.equal(n.get(k).retry_at - n.get(k).at, row.max, w.how)
+  }
 })
 
-test('W22b negative cache: after expiry ONE rejection renews; the backoff doubles per renewal and caps at NEG_RETRY_MAX_MS', () => {
-  const now = clock(), n = createNegativeCache({ now })
-  reject(n); reject(n)
-  let r = 0
-  for (; backoff(r - 1) < NEG_RETRY_MAX_MS; r++) {
-    const e = n.list().find((x) => x.key === k)
-    assert.equal(e.renewals, r); assert.equal(e.retry_at - e.at, backoff(r))
-    now.set(e.retry_at)
-    assert.equal(n.has(k), false)
-    assert.equal(reject(n), true, 'probation: one rejection makes it negative again')
-  }
-  assert.ok(r >= 3, 'the doubling ran at least 1, 2, 4 before the cap')
-  assert.equal(n.get(k).retry_at - n.get(k).at, NEG_RETRY_MAX_MS)
-})
-
-test('W22c negative cache: an upstream-cert mark expires and renews the same way', () => {
-  const now = clock(), n = createNegativeCache({ now })
-  const m = () => n.mark(k, { cause: 'upstream-cert', meta, host })
-  assert.equal(m(), true)
-  for (let r = 0; r < 3; r++) {
-    const e = n.get(k)
-    assert.equal(e.cause, 'upstream-cert'); assert.equal(e.renewals, r); assert.equal(e.retry_at - e.at, backoff(r))
-    assert.equal(m(), false, 'still negative')
-    now.set(e.retry_at); assert.equal(n.has(k), false); assert.equal(m(), true)
-  }
+test('negative cache: forgetAgent drops the named harness\'s keys whole, keeps the others, and null drops every key', () => {
+  const n = createNegativeCache()
+  const a = { pid: 1, agent: 'codex' }, a2 = { negKey: 'cli.codex', agent: 'codex' }, b = { pid: 2, agent: 'kimi' }
+  n.mark(negKey(a, 'h1'), { cause: 'upstream-cert', meta: a, host: 'h1', free: true }); n.mark(negKey(a, 'h2'), { cause: 'upstream-cert', meta: a, host: 'h2' })
+  n.mark(negKey(a2, 'h1'), { cause: 'upstream-handshake', meta: a2, host: 'h1' }); n.mark(negKey(b, 'h1'), { cause: 'upstream-cert', meta: b, host: 'h1' })
+  n.observe(negKey(a, 'h3'), { rejected: true, meta: a, host: 'h3' })
+  n.observe(negKey(a, 'h4'), { rejected: false, used: true, meta: a, host: 'h4' })
+  const got = n.forgetAgent('codex')
+  assert.deepEqual(got.map((g) => [g.neg_key, g.agent, g.hosts.sort(), g.dropped]), [['1', 'codex', ['h1', 'h2'], 2], ['cli.codex', 'codex', ['h1'], 1]])
+  assert.equal(n.strikes(negKey(a, 'h3')), 0, 'the key is forgotten whole'); assert.equal(n.holds(1), false)
+  assert.equal(n.trusts(negKey(a, 'h4')), true, 'the process still trusts the leaf where it sent application data')
+  assert.deepEqual(n.list().map((e) => e.agent), ['kimi'])
+  assert.deepEqual(n.forgetAgent('codex'), [])
+  assert.deepEqual(n.forgetAgent(null).map((g) => g.neg_key), ['2']); assert.deepEqual(n.list(), [])
 })
 
 test('W22d negative cache: application data after a renewal clears the history and marks the key as trusting; forgetKey drops both', () => {
@@ -104,7 +107,7 @@ test('W22d negative cache: application data after a renewal clears the history a
   assert.equal(n.trusts(k), true); assert.equal(n.trusts(negKey(meta, 'other.test')), false); assert.equal(n.trusts(negKey({ pid: 10 }, host)), false)
   reject(n); assert.equal(reject(n), true, 'the strikes were cleared: two rejections again')
   const e = n.get(k)
-  assert.equal(e.renewals, 0); assert.equal(e.retry_at - e.at, NEG_RETRY_MS)
+  assert.equal(e.renewals, 0); assert.equal(e.retry_at - e.at, NEG_BACKOFF.costly.base)
   n.forgetKey(meta.pid)
   assert.equal(n.trusts(k), false); assert.equal(n.holds(meta.pid), false)
 })
