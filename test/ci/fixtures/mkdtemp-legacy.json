@@ -41,6 +41,5 @@
   "test/query/source-field.test.mjs",
   "test/query/source-refresh.test.mjs",
   "test/query/source-symlink.test.mjs",
-  "test/view/block-never-orphaned.test.mjs",
-  "test/view/reply-refs.test.mjs"
+  "test/view/block-never-orphaned.test.mjs"
 ]

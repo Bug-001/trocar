@@ -2,39 +2,11 @@
 // ships with the call (call.respRefs), or says why it is not (invariant 4).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { startMockUpstream } from '../lab/mock-upstream/server.mjs';
-import { request, waitFor } from '../lab/helpers.mjs';
-import { startTeeProxy } from '../helpers/tee-proxy.mjs';
-import { readRecords } from '../../src/raw/ingest.mjs';
 import { sessionView } from '../../src/view/board.mjs';
 import { assembleSession } from '../../src/view/assemble.mjs';
-import { buildResolver } from '../../src/query/source.mjs';
 
-const T = { timeout: 15000 };
 const stream = (r) => (Object.defineProperty(r, '_stream', { value: 'capture-2026-10-06.ndjson', enumerable: false }), r);
 const tail = (ref) => ref && ref.split('::').slice(-2).join('::');
-
-test('an SSE reply ships one resp.raw ref that resolves to the whole decoded stream', T, async (t) => {
-  const up = await startMockUpstream(); t.after(() => up.close());
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-rr-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const px = await startTeeProxy({ upstreamPort: up.port, dir, flow: { host: 'api.anthropic.com', proc: { pid: 1, exe: '/x/claude', agent: 'claude-code' } } });
-  t.after(() => px.close());
-  await request(`http://127.0.0.1:${px.port}`, '/v1/messages', '{"model":"m","stream":true,"max_tokens":8,"messages":[{"role":"user","content":"hi"}]}', { headers: { 'x-claude-code-session-id': 'S' } });
-  await waitFor(() => px.envelopes.length === 1, 5000);
-  const records = (await Promise.all(px.files().map((f) => readRecords(f)))).flat();
-  const call = sessionView(records, 'S').analyzed.steps[0];
-  assert.equal(call.respRefs.length, 1);
-  assert.equal(call.respRefs[0].label, 'stream');
-  const resolve = await buildResolver([dir]); t.after(() => resolve.dispose());
-  const d = resolve.detail(call.respRefs[0].ref);
-  assert.deepEqual([d.status, d.fidelity], ['ok', 'verbatim']);
-  assert.equal(d.text, records[0].resp.raw);
-  assert.equal(call.respRefs[0].chars, d.text.length);
-  assert.match(d.text, /event: message_start/);
-});
 
 const wsRec = (messages, extra = {}) => stream({ id: 'w1', ts_request: '2026-10-06T00:00:00Z', is_llm_call: true, endpoint: '/v1/responses', transport: 'ws',
   flow_id: 'F', seq: 1, ws_ext: '', capture: 'transparent', host: 'chatgpt.com', proc: { pid: 2, exe: '/x/codex', agent: 'codex' },

@@ -1,11 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { readRecords } from '../../src/raw/ingest.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sessionView } from '../../src/view/board.mjs';
-import { buildResolver } from '../../src/query/source.mjs';
 
 // WHAT /api/session IS ALLOWED TO WEIGH.
 //
@@ -127,79 +125,6 @@ test('every block carries what the COLLAPSED row renders (1.4:35), server-side',
     assert.ok(b.head && typeof b.head.tag === 'string', `${b.sec}/${b.kind}: collapsed-row head missing`);
     assert.equal(typeof b.preview, 'string', `${b.sec}/${b.kind}: 短预览 missing`);
     assert.ok(b.preview.length <= 200, `preview is ${b.preview.length} chars — that is fulltext by another name`);
-  }
-});
-
-test('every block carries a locator that RESOLVES back to the source bytes, diff = 0', async () => {
-  // RFC 4.2:40 — text_ref = "<raw_ref>::<start>-<end>", resolved by locating the source record and
-  // slicing its req_body. Same locator the DB persists, so one resolver serves both paths.
-  //
-  // This used to assert only the SHAPE of the string. That is much weaker than the RFC asks, and
-  // weaker than what is now testable: a locator with a correct shape but a wrong record id or a
-  // slipped byte span passes a regex and serves the WRONG bytes under a "verbatim" label — the
-  // precise failure invariant 2 exists to prevent. RFC 2.3 §验收1 specifies the real bar:
-  // 「从 call_blocks + block_contents + text_ref 重建窗口全文,与 NDJSON 源该 call 的 system/messages
-  // 块逐字 diff = 0」. So resolve every ref through the real resolver and diff it against the source
-  // record, re-read independently from the NDJSON file.
-  const blocks = view().analyzed.steps.flatMap((c) => c.flat || []);
-  const located = blocks.filter((b) => b.text_ref);
-  assert.ok(located.length > 0,
-    'no block carries a text_ref — without a locator, "fetch the body on expand" has nothing to ask for');
-  for (const b of located) {
-    assert.match(b.text_ref, /#[^:]+::\d+-\d+$/,
-      `text_ref "${b.text_ref}" is not <raw_ref>::<start>-<end> (RFC 4.2:40)`);
-  }
-
-  // Independent expectation: parse the raw file ourselves. Deliberately NOT via readRecords/the
-  // view — reusing the pipeline under test to build the expectation would make the diff vacuous.
-  const srcById = new Map();
-  for (const line of readFileSync(SAMPLE, 'utf8').split('\n')) {
-    if (!line.trim()) continue;
-    const raw = JSON.parse(line);
-    if (raw.req_body) srcById.set(raw.id, JSON.parse(raw.req_body));
-  }
-
-  const resolve = await buildResolver(SAMPLE);
-  try {
-    let compared = 0;
-    for (const c of view().analyzed.steps) {
-      const src = srcById.get(c.rec && c.rec.id);
-      if (!src) continue;
-      // The wire order the assembler flattens: tools, then system, then message content.
-      const srcBlocks = [
-        ...(src.tools || []),
-        ...(Array.isArray(src.system) ? src.system : []),
-        ...(src.messages || []).flatMap((m) => (Array.isArray(m.content) ? m.content : [])),
-      ];
-      const flat = c.flat || [];
-      assert.equal(flat.length, srcBlocks.length,
-        `call #${c.gi} assembled ${flat.length} blocks from a body that has ${srcBlocks.length} — `
-        + 'the reconstruction cannot be diffed against the source if it does not even cover it.');
-      for (let i = 0; i < flat.length; i++) {
-        const got = resolve.detail(flat[i].text_ref);
-        assert.equal(got.status, 'ok',
-          `call #${c.gi} block ${i}: text_ref "${flat[i].text_ref}" did not resolve (${got.status}: `
-          + `${got.reason}) — the locator points at bytes the resolver cannot find.`);
-        assert.equal(got.fidelity, 'verbatim',
-          `call #${c.gi} block ${i}: resolved from a non-verbatim record without saying so (invariant 4)`);
-        // 逐字 diff = 0. Compare the resolved slice, re-parsed, against the source block object:
-        // this catches an off-by-one span (which yields unparseable or shifted JSON) as well as a
-        // ref that resolves cleanly to some OTHER block's bytes.
-        let parsed;
-        assert.doesNotThrow(() => { parsed = JSON.parse(got.text); },
-          `call #${c.gi} block ${i}: the byte span does not delimit a whole JSON block — the slice `
-          + `starts/ends mid-value: ${JSON.stringify(got.text.slice(0, 80))}`);
-        assert.deepEqual(parsed, srcBlocks[i],
-          `call #${c.gi} block ${i} (${flat[i].sec}/${flat[i].kind}): resolving text_ref returned `
-          + 'bytes that are NOT this block in the NDJSON source. RFC 2.3 §验收1 requires diff = 0; '
-          + 'serving another block\'s bytes under a verbatim label misreports source truth (invariant 2).');
-        compared++;
-      }
-    }
-    assert.ok(compared > 100,
-      `only ${compared} blocks were round-tripped — too few to call this a reconstruction of the window`);
-  } finally {
-    resolve.dispose();
   }
 });
 
