@@ -49,13 +49,11 @@ test('CM33 · a GET on a door that takes credentials is closed, recorded ingress
   assert.equal(d.failures.length, 1); assert.equal(d.failures[0].code, 'ingress-unknown'); assert.match(d.failures[0].reason, /GET/)
 })
 
-test('CM33 · an open door with no PAC server, or an absolute-URI GET, is closed and recorded; a refused peer (servePac null) gets nothing', T, async (t) => {
+test('CM33 · an open door with no PAC server is closed and recorded; a refused peer (servePac null) gets nothing', T, async (t) => {
   const none = await door(t, { open: true })
   assert.equal(await none.send('GET /trocar.pac HTTP/1.1\r\n\r\n'), '')
   assert.equal(none.failures[0].code, 'ingress-unknown')
   const d = await door(t, { open: true, servePac: async () => null })
-  assert.equal(await d.send('GET http://x/trocar.pac HTTP/1.1\r\n\r\n'), '')
-  assert.equal(d.failures[0].code, 'ingress-unknown')
   assert.equal(await d.send('GET /trocar.pac HTTP/1.1\r\n\r\n'), '', 'servePac said no (another user): the socket is closed with no answer')
 })
 

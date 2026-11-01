@@ -228,16 +228,15 @@ test('W13 a request inside the health tunnel that is not the probe closes it and
   assert.equal(L.failures.length, 2)
 })
 
-test('W13 an absolute-URI GET, a TLS hello and other bytes that are not CONNECT or SOCKS5 are closed with ingress-unknown; no upstream is dialled', T, async (t) => {
+test('W13 a TLS hello, other bytes and an origin-form request (none CONNECT, SOCKS5 or absolute-form http) are closed with ingress-unknown; no upstream is dialled', T, async (t) => {
   const L = await lab(t)
-  for (const bytes of ['GET http://trocar-health.invalid/spike HTTP/1.1\r\nHost: trocar-health.invalid\r\n\r\n', Buffer.from([0x16, 0x03, 0x01, 0x00, 0x05, 1, 2, 3, 4, 5]), 'hello there, this is not a proxy request\r\n\r\n', 'POST /x HTTP/1.1\r\n\r\n']) {
+  for (const bytes of [Buffer.from([0x16, 0x03, 0x01, 0x00, 0x05, 1, 2, 3, 4, 5]), 'hello there, this is not a proxy request\r\n\r\n', 'POST /x HTTP/1.1\r\n\r\n']) {
     const c = L.client(); c.write(bytes); await c.closed()
   }
   assert.equal(L.upConns.length, 0)
-  assert.deepEqual(L.failures.map((f) => [f.where, f.code]), Array(4).fill(['ingress', 'ingress-unknown']))
-  assert.match(L.failures[0].reason, /GET/); assert.match(L.failures[1].reason, /0x16/)
-  assert.equal(JSON.stringify(L.failures).includes('/spike'), false, 'the record names the method and host, never the path the client put in the URL')
-  assert.equal(L.engine.stats().ingress.unknown, 4)
+  assert.deepEqual(L.failures.map((f) => [f.where, f.code]), Array(3).fill(['ingress', 'ingress-unknown']))
+  assert.match(L.failures[0].reason, /0x16/)
+  assert.equal(L.engine.stats().ingress.unknown, 3)
 })
 
 test('W13 a SOCKS5 target that is not a name or an address (control bytes would go into a proxy prelude) is refused, and an upstream kind the ingress does not dial is a 502 with a row', T, async (t) => {
