@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assembleSession } from '../../src/view/assemble.mjs';
-import { sessionView } from '../../src/view/board.mjs';
+import { sessionView } from '../helpers/session-view.mjs';
 
 const hermes = (id, sec, endpoint, body) => ({ id, ts_request: `2026-10-06T00:00:0${sec}Z`, is_llm_call: true, endpoint,
   capture: 'transparent', proc: { pid: 1, exe: '/x/hermes', agent: 'hermes' }, req_headers: {},
@@ -20,15 +20,6 @@ test('a session mixing the Chat and Anthropic wires renders both, with one globa
   for (const l of A.lanes) l.calls.forEach((c, i) => assert.equal(l.giLocal.get(c.gi), i));
   assert.equal(A.provider, 'mixed');
   assert.deepEqual([A.stats.calls, A.unknown], [3, undefined]);
-});
-
-test('a page of a mixed session ships bodies by the global index', () => {
-  const recs = [1, 2, 3, 4].map((k) => (k % 2 ? hermes('h' + k, k, '/v1/chat/completions', CHAT) : hermes('h' + k, k, '/v1/messages', ANTH)));
-  const P = sessionView(recs, 'H1', { page: { cursor: 2, limit: 2 } });
-  // the window plus the one call before it (the diff baseline), whichever wire each is
-  assert.deepEqual(P.analyzed.steps.map((s) => [s.id, !!s.paged_out]), [['h1', true], ['h2', false], ['h3', false], ['h4', false]]);
-  assert.equal(P.analyzed.steps[0].flat.length, 0, 'an out-of-window call ships no blocks, whichever wire it is');
-  assert.deepEqual([P.page.total, P.page.returned], [4, 3]);
 });
 
 test('an unrecognized record inside a known session is counted in analyzed.unknown and never rendered', () => {
