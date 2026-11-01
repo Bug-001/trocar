@@ -21,7 +21,7 @@ import { freshSessions } from '../library/logic.mjs'
 import { startPoll, INTERVAL } from '../core/poll.mjs'
 import { unpricedModels } from '../settings/prices.mjs'
 import { failureBrief, failureWord } from '../../../cli/words.mjs'
-import { infoButton, techDetailsHtml, confirmDialog, readFailure } from '../core/ui.mjs'
+import { infoButton, techDetailsHtml, confirmDialog, readFailure, repaint } from '../core/ui.mjs'
 import { controlFor, controlHtml, wireHarnessControls } from '../core/harness-switch.mjs'
 import * as W from '../labels/overview.mjs'
 import { WINDOW_LABEL, UNTITLED, READING } from '../labels/common.mjs'
@@ -429,13 +429,12 @@ export function mount(el, ctx) {
   const { api, router } = ctx
   let dead = false
   const s = { w: parseWindow(router.current().params.window), readAt: null, caph: { data: null, okAt: null, err: null, ok: null }, control: null, ui: new Map() }
-  let ctlAsked = false
+  let ctlAsked = false, shownAt = null
   for (const k of SLOTS) s[k] = { data: null, ok: null, err: null }
 
   el.innerHTML = SKELETON
   const zone = (id) => el.querySelector('#' + id)
   const zones = { head: zone('ovhead'), cap: zone('ovcap'), items: zone('ovitems'), agents: zone('ovagents'), stats: zone('ovstats'), recent: zone('ovrecent') }
-  let sigs = {}
 
   // fold one read into its slot: a failure keeps the last good data and marks the source failed this round. → {ok} for the poller
   const fold = (slot, r) => {
@@ -444,26 +443,17 @@ export function mount(el, ctx) {
     return { ok: !!(r && r.ok) }
   }
 
-  // a repaint never takes the reader's place (1.7 §读取与刷新): a zone holding a text selection waits for the next render (its
-  // signature stays old), and focus inside a zone returns to the element of the same kind and the same href / data-h / data-key
-  const KEYS = ['href', 'data-h', 'data-key']
-  const paint = (z, html) => {
-    const doc = el.ownerDocument
-    const sel = doc && doc.getSelection ? doc.getSelection() : null
-    if (sel && !sel.isCollapsed && sel.anchorNode && z.contains(sel.anchorNode)) return false
-    const act = doc && doc.activeElement, at = act && z.contains && z.contains(act) && act.closest ? act.closest(KEYS.map((a) => `[${a}]`).join(',')) : null
-    const key = at ? KEYS.find((a) => at.hasAttribute(a)) : null, val = key ? at.getAttribute(key) : null
-    z.innerHTML = html
-    if (key) { const b = [...z.querySelectorAll(`[${key}]`)].find((n) => n.tagName === at.tagName && n.getAttribute(key) === val); if (b) b.focus() }
-    return true
-  }
-  const render = () => {
+  // a repaint never takes the reader's place (1.2 §点击与选中文字 ③, core/ui.mjs repaint): a zone holding a text selection waits for
+  // the next render, focus returns; a render the reader caused (`reader`: the switch's result, a window change) draws at once
+  const render = (reader = false) => {
     if (dead) return
     const now = api.now()
     const body = renderBody(s, now)
-    const next = { head: headHtml(s), ...body }
     if (body.first && !ctlAsked) { ctlAsked = true; readControl() }
-    for (const k of Object.keys(zones)) if (sigs[k] !== next[k] && paint(zones[k], next[k])) sigs[k] = next[k]
+    // the head's read stamp is the time of the data on screen: while a selection holds any card it stays at that card's last draw
+    const held = Object.keys(body).filter((k) => zones[k]).map((k) => repaint(zones[k], body[k], { hold: !reader })).includes(null)
+    if (!held) shownAt = s.readAt
+    repaint(zones.head, headHtml({ ...s, readAt: shownAt }), { hold: !reader })
     el.querySelector('#ovgrid').classList.toggle('first', body.first)
   }
 
@@ -527,7 +517,7 @@ export function mount(el, ctx) {
   el.addEventListener('click', onClick)
   const offCtl = wireHarnessControls(el, {
     api, state: s.ui, ask: (opts) => confirmDialog(opts, el.ownerDocument),
-    onDone: (out) => { if (out && out.status === 405) readControl(); render(); polls.status.poll() },
+    onDone: (out) => { if (out && out.status === 405) readControl(); render(true); polls.status.poll() },
   })
   render() // drawn at once: every card says 读取中 until its first answer (1.5 覆盖)
 
@@ -535,8 +525,8 @@ export function mount(el, ctx) {
     update(route) {
       const nw = parseWindow(route && route.params && route.params.window)
       if (nw === s.w) return render()
-      s.w = nw; render() // the tab moves before any answer
-      readStats().catch(() => {}).finally(render)
+      s.w = nw; render(true) // the tab moves before any answer; a window change is the reader's draw (1.2 ③)
+      readStats().catch(() => {}).finally(() => render(true))
     },
     unmount() {
       dead = true

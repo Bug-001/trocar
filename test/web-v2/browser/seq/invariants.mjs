@@ -7,7 +7,7 @@ import { snap as probeSnap } from './probe.mjs'
 import { WRITE_GAP_MS } from '../../../../src/web/v2/core/router.mjs'
 
 export const IDS = Object.freeze(['I-pageerror', 'I-console', 'I-blank', 'I-keep', 'I-stack', 'I-hscroll', 'I-rate', 'I-write', 'I-leak',
-  'I-mem', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap'])
+  'I-mem', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select'])
 
 export const PENDING = new Map([
   ['I-memcap', 'the page heap stays under memCapBytes (80 MB)'],
@@ -180,10 +180,10 @@ function packFaults(log) {
  * check(ctx) → { violations:[{id, sig, fp, detail}], pending:[{id, value, pointer}], view }.
  * ctx: { page, requests, errors, actions:[{t,a}], faults:[{name, kind, from, to}], hidden:[{from,to}], follow, grownAt (ms of the last
  * growth, or null), truth() → the main-lane count, real, prev (the `view` of the previous check), baseline (Map, optional: per-route
- * first-visit counts; default one per page) }. Call it when the page has settled.
+ * first-visit counts; default one per page), drag ({made, changed} of a select step just run, else null) }. Call it when the page has settled.
  */
 export async function check(ctx) {
-  const { page, requests = [], errors = [], actions = [], faults = [], hidden = [], follow = false, grownAt = null, truth, real = false, prev = null } = ctx
+  const { page, requests = [], errors = [], actions = [], faults = [], hidden = [], follow = false, grownAt = null, truth, real = false, prev = null, drag = null } = ctx
   const base = ctx.baseline || baselines.get(page) || (baselines.set(page, new Map()), baselines.get(page))
   let s = await probeSnap(page)
   const v = await viewOf(page)
@@ -191,6 +191,8 @@ export async function check(ctx) {
   const violations = [], pending = []
   const bad = (id, detail) => violations.push({ id, sig: `${id}:${screen}`, fp: fingerprint(detail), detail })
 
+  // 1.2 §点击与选中文字: a drag that selected text opened or closed nothing
+  if (drag?.made && drag.changed.length) bad('I-select', drag.changed.slice(0, 3).join(' | '))
   if (errors.length) bad('I-pageerror', errors.slice(0, 3).join(' | '))
   const armed = (t) => faults.some((f) => t >= f.from && t <= (f.to ?? Infinity) + LIMITS.consoleGraceMs)
   const loose = s.consoleErrors.filter((c) => !armed(c.t))

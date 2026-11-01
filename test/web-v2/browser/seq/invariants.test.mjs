@@ -9,6 +9,7 @@ import { probe, withBoard } from '../harness.mjs'
 import { makeWorld, mainCount } from './world.mjs'
 import { installProbe, snap } from './probe.mjs'
 import { check } from './invariants.mjs'
+import { ACTIONS } from './actions.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -287,4 +288,19 @@ test('I-pack: a pack read twice at one head tag, or four loader reads at once, i
     const pg = await plantedPage(packPage(reads), '#/replay/p/x', api)
     try { assert.equal(ids(await check({ page: pg })).includes('I-pack'), red, JSON.stringify(reads)) } finally { await pg.close() }
   }
+})
+
+// I-select (1.2 §点击与选中文字): a toggle that still answers the click ending a drag-select. The planted listener sits on window in the
+// capture phase, ahead of the board's own guard, and folds the first desk block on every click; the reader's select step over a block
+// head then changes a fold while it made a selection.
+test('V-select a click that ends a drag-select folds a block', { skip }, async () => {
+  await fresh(); await following()
+  await b.page.evaluate(() => { window.__plantFold = () => document.querySelector('#ctxwin .cblk')?.classList.toggle('collapsed'); window.addEventListener('click', window.__plantFold, true) })
+  try {
+    const sel = ACTIONS.find((x) => x.a === 'select'), c = { page: b.page }
+    const r = await sel.run(c, { where: 'head', f: 0, span: 0.5 })
+    assert.notEqual(r?.skipped, true, 'a block head with text to select')
+    act('select'); await quiet()
+    assert.ok(ids(await check(ctx({ drag: c.lastDrag }))).includes('I-select'))
+  } finally { await b.page.evaluate(() => window.removeEventListener('click', window.__plantFold, true)) }
 })
