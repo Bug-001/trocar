@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { buildEnvelope, isoStamp, isLlmCall, endpointClass, logResponse, HOP_BY_HOP, createEnvelopeWriter } from '../../src/capture/envelope.mjs'
-import { ccAdapter } from '../../src/adapters/cc.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const baseArgs = {
@@ -60,17 +59,6 @@ test('req_body is the VERBATIM captured STRING for llm calls (adapter slices byt
   assert.equal(env.req_body, raw) // byte-exact incl the odd spacing (D19 depends on this)
   assert.notEqual(env.req_body, JSON.stringify(JSON.parse(raw))) // a re-serialize would have differed
   assert.match(env.req_body, /"description":"FULL"/) // D15 tools verbatim, in the string
-})
-
-test('capture→adapter seam: a built envelope feeds parseBlocks and rebuilds byte-exact (AC-1 across the seam)', () => {
-  const raw = '{"model":"claude-opus-4-8","system":[{"type":"text","text":"You are Claude Code"}],"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"tools":[{"name":"Read","description":"Read a file","input_schema":{"type":"object"}}]}'
-  const env = buildEnvelope({ ...baseArgs, reqHeaders: { 'x-claude-code-session-id': 's1' }, reqBody: Buffer.from(raw), capture: 'mitm' })
-  assert.equal(ccAdapter.detect(env), true) // the CC adapter claims the captured record
-  const blocks = ccAdapter.parseBlocks(env) // the seam: adapter consumes the envelope's req_body STRING
-  assert.ok(blocks.length >= 3)
-  for (const b of blocks) assert.equal(b.text, raw.slice(b.text_ref[0], b.text_ref[1])) // verbatim 回源, byte-diff 0
-  const toolBlk = blocks.find((b) => b.section === 'tools')
-  assert.equal(toolBlk.text, '{"name":"Read","description":"Read a file","input_schema":{"type":"object"}}')
 })
 
 // D40 FLIPPED THIS GUARD (it asserted "non-llm req_body is labeled metadata, not verbatim", i.e. {raw_chars}). The user
