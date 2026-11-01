@@ -87,7 +87,7 @@ for (const platform of ['darwin', 'win32']) {
         c.destroy()
         const rows = await within((async () => { for (;;) { const f = flowsOf(w.dir).filter((l) => l.decision && [A.port, B.port].includes(l.dst && l.dst.port)); if (f.length === 2) return f; await new Promise((r) => setTimeout(r, 25)) } })(), 10_000, 'a flows/ row per origin')
         const sent = { [A.port]: [`${reqA}\r\n`, replyA], [B.port]: [`${reqB}\r\n${bodyB}`, replyB] }
-        for (const l of rows) assert.deepEqual([l.bytes_up, l.bytes_down, !!l.not_captured], [sent[l.dst.port][0].length, sent[l.dst.port][1].length, true], JSON.stringify(l))
+        for (const l of rows) assert.deepEqual([l.bytes_up, l.bytes_down, !!l.not_captured, l.trocar_removed], [sent[l.dst.port][0].length, sent[l.dst.port][1].length, true, [{ header: 'proxy-authorization', lines: 1, bytes: auth.length }]], JSON.stringify(l))
 
         // (3) the agent's own (its socket is in the tables): recorded verbatim, less the door's credential
         const C = await origin(replyA); C.srv.close(); C.port = await listenLocalhost(C.srv)
