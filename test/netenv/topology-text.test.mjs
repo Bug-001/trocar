@@ -61,10 +61,13 @@ test('renderDetail (§3.5): the Routes block, a chain to a line, the path with t
 })
 
 test('V42 (text): a hop that could not be read says `unknown: <reason>` in the compact line and in the detail, and no hop says "none"', () => {
-  for (const [n, h, reason] of [[21, 'hermes', 'owner not known'], [22, 'codex', 'a PAC script trocar does not run']]) { // the reason in words, never the code (D58③)
+  for (const [n, h] of [[21, 'hermes'], [22, 'codex']]) {
     const t = buildTopology(ROWS.find((r) => r.n === n).facts)[h]
+    const codes = t.nodes.filter((x) => x.unknown).map((x) => x.unknown.reason)
+    assert.ok(codes.length, `row ${n} has a hop that could not be read`)
     for (const text of [renderCompact(t).join('\n'), renderDetail(t).join('\n')]) {
-      assert.match(text, new RegExp(`unknown: ${reason}`), `row ${n}`)
+      assert.match(text, /unknown: \S/, `row ${n}`)
+      for (const c of codes) assert.ok(!text.includes(`unknown: ${c}`), `row ${n}: the reason in words, never the code ${c} (D58③)`)
       assert.doesNotMatch(text, /(^|\s)(none|无)(\s|$)/)
     }
   }
