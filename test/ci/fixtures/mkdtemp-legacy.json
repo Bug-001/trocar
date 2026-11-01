@@ -1,5 +1,4 @@
 [
-  "test/capture/desktop-steer.test.mjs",
   "test/capture/selftest.test.mjs",
   "test/capture/verbatim-headers.test.mjs",
   "test/ci/count-tests.test.mjs",
