@@ -7,7 +7,7 @@
 //
 // Per record it holds exactly what the list queries print (1.6 §4.1 「段索引每条记录存什么」): id, time,
 // harness, class, host, path, status, stored and wire bytes, session key, and whether it is a model call.
-// No body, no headers — those are read back from the segment itself (src/query/source.mjs).
+// No body, no headers — those are read back from the segment itself (src/query/records.mjs readRecord).
 //
 // INVALIDATION is the identity rule of src/query/source.mjs (size, mtime, ctime + the first and last 4 KB
 // before the last indexed line), not a rule of its own: a segment that only GREW is resumed from the
