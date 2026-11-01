@@ -78,9 +78,9 @@ wget -qO- https://github.com/Bug-001/trocar/releases/latest/download/install.sh 
 powershell -NoProfile -ExecutionPolicy Bypass -c "irm https://github.com/Bug-001/trocar/releases/latest/download/install.ps1 | iex"
 ```
 
-The Windows line works in cmd, PowerShell and Win+R. In China, use the same lines with
-`https://cdn.jsdelivr.net/npm/trocar-cli/install/install.sh` (or `.../install/install.ps1`); the downloads then come
-from npmmirror. When security software blocks `irm | iex`, save the script first and run it as a file (cmd):
+The Windows line works in cmd, PowerShell and Win+R. In China, the scripts are also at
+`https://cdn.jsdelivr.net/npm/trocar-cli/install/install.sh` (or `.../install/install.ps1`); each download tries npm
+and nodejs.org first and moves to npmmirror when that source fails or is too slow. When security software blocks `irm | iex`, save the script first and run it as a file (cmd):
 
 ```bat
 curl.exe -fsSLo "%TEMP%\trocar-install.ps1" https://github.com/Bug-001/trocar/releases/latest/download/install.ps1 && powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\trocar-install.ps1" & del "%TEMP%\trocar-install.ps1"
