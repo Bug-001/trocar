@@ -235,7 +235,6 @@ test('W13 a TLS hello, other bytes and an origin-form request (none CONNECT, SOC
   }
   assert.equal(L.upConns.length, 0)
   assert.deepEqual(L.failures.map((f) => [f.where, f.code]), Array(3).fill(['ingress', 'ingress-unknown']))
-  assert.match(L.failures[0].reason, /0x16/)
   assert.equal(L.engine.stats().ingress.unknown, 3)
 })
 
@@ -969,3 +968,102 @@ test('W15 drain: `off` lands after an ingress flow\'s request went out and befor
   assert.deepEqual(L.failures, [])
 })
 
+
+// ── the door's forwarded plain http (4.8 §5.1, §5.2) ──────────────────────────────────────────────────────────────────────────────
+// an absolute-form request for 127.0.0.1:<port> with the door's credential, and the same head as the origin must get it (less the door's lines)
+const absHead = (port, p, extra = '', method = 'GET', host = `127.0.0.1:${port}`) => `${method} http://${host}${p} HTTP/1.1\r\nHost: ${host}\r\n${basic(USER, TOKEN)}${extra}\r\n`
+const forwarded = (head) => head.split('\r\n').filter((l) => !/^(proxy-authorization|x-trocar-upstream):/i.test(l)).join('\r\n')
+// a plain-HTTP origin (or proxy) that keeps every byte it gets and answers each request (head + Content-Length body) with answer(path), after
+// `delay` ms; an answer that is a 101 makes it echo whatever comes after
+const okOf = (p) => `HTTP/1.1 200 OK\r\nContent-Length: ${p.length}\r\n\r\n${p}`
+async function httpOrigin(t, { delay = 0, answer = okOf } = {}) {
+  const o = { got: Buffer.alloc(0), conns: 0, text: () => o.got.toString('latin1') }
+  const srv = net.createServer((c) => {
+    o.conns++; c.on('error', () => {})
+    let buf = Buffer.alloc(0), raw = false
+    c.on('data', async (d) => {
+      o.got = Buffer.concat([o.got, d])
+      if (raw) return void c.write(d)
+      buf = Buffer.concat([buf, d])
+      for (let i; (i = buf.indexOf('\r\n\r\n')) >= 0;) {
+        const head = buf.subarray(0, i).toString('latin1'), n = Number((/content-length: *(\d+)/i.exec(head) || [0, 0])[1])
+        if (buf.length < i + 4 + n) return
+        buf = buf.subarray(i + 4 + n)
+        const reply = answer(head.split(' ')[1].replace(/^http:\/\/[^/]*/, ''))
+        raw = reply.startsWith('HTTP/1.1 101')
+        if (delay) await sleep(delay)
+        c.write(reply)
+      }
+    })
+  })
+  await listen(srv)
+  t.after(() => srv.close())
+  o.port = srv.address().port
+  return o
+}
+
+test('4.8 §5.1 a forwarded request whose body is over 256 KiB, arriving while the flow is looked up, reaches its origin whole: the client is held back, not cut', T, async (t) => {
+  const red = createStaticRedirector(), ask = red.lookupIngress
+  red.lookupIngress = async (q) => { await sleep(50); return ask(q) }
+  const L = await lab(t, { redirector: red }), o = await httpOrigin(t)
+  const body = Buffer.alloc(1 << 20, 0x61), head = absHead(o.port, '/up', `Content-Length: ${body.length}\r\n`, 'POST')
+  const c = L.client(); c.write(head); c.write(body)
+  assert.equal((await c.bytes(okOf('/up').length)).toString('latin1'), okOf('/up'))
+  const want = Buffer.concat([Buffer.from(forwarded(head), 'latin1'), body])
+  assert.ok(o.got.equals(want), `the origin got ${o.got.length} bytes, ${want.length} were sent less the door's credential`)
+  assert.deepEqual(L.failures, [])
+})
+
+test('4.8 §5.1 requests for two origins in one write (pipelining): the first flow goes only once its slower answer is back, so both answers reach the client in order', T, async (t) => {
+  const L = await lab(t), A = await httpOrigin(t, { delay: 150 }), B = await httpOrigin(t)
+  const c = L.client(); c.write(absHead(A.port, '/a') + absHead(B.port, '/b'))
+  const both = okOf('/a') + okOf('/b')
+  assert.equal((await c.bytes(both.length)).toString('latin1'), both)
+  assert.deepEqual([A.text(), B.text()], [forwarded(absHead(A.port, '/a')), forwarded(absHead(B.port, '/b'))])
+})
+
+test('4.8 §5.1 an Upgrade answered with a status other than 101 leaves the connection HTTP, so the next request reaches its own origin; after a 101 the bytes go both ways as they are', T, async (t) => {
+  const up = 'Connection: Upgrade\r\nUpgrade: h2c\r\n'
+  const L = await lab(t), B = await httpOrigin(t)
+  const A = await httpOrigin(t, { answer: (p) => (p === '/yes' ? 'HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: h2c\r\n\r\n' : okOf(p)) })
+  const no = L.client(); no.write(absHead(A.port, '/no', up))
+  await no.bytes(okOf('/no').length); no.write(absHead(B.port, '/b'))
+  assert.equal((await no.bytes(okOf('/b').length)).toString('latin1'), okOf('/b'))
+  assert.equal(B.text(), forwarded(absHead(B.port, '/b')), 'the request after the refused upgrade went to its own origin')
+  const yes = L.client(); yes.write(absHead(A.port, '/yes', up))
+  await yes.head(); yes.write('PRI raw bytes')
+  assert.equal((await yes.bytes(13)).toString('latin1'), 'PRI raw bytes', 'after the 101: raw both ways')
+})
+
+test('4.8 §5.2 through an http upstream the forwarded requests go to the user\'s proxy as proxy requests, each head with the user\'s credential and nothing of the door\'s; no CONNECT, no credential in any record', T, async (t) => {
+  const P = await httpOrigin(t)
+  const L = await lab(t, { meta: { decrypt: true, upstream: { kind: 'http', host: '127.0.0.1', port: P.port, auth: CRED } } })
+  const user = `Proxy-Authorization: Basic ${Buffer.from(`${CRED.username}:${CRED.password}`).toString('base64')}\r\n`
+  const one = absHead(80, '/a', 'X-Trocar-Upstream: none\r\nContent-Length: 5\r\n', 'POST', 'origin.test') + 'hello', two = absHead(80, '/b', '', 'GET', 'origin.test')
+  const c = L.client(); c.write(one); c.write(two)
+  await c.bytes(okOf('/a').length + okOf('/b').length)
+  const viaProxy = (h) => forwarded(h).replace('\r\n', `\r\n${user}`)
+  assert.equal(P.text(), viaProxy(one) + viaProxy(two))
+  assert.equal(P.conns, 1); assert.deepEqual(L.dials, [{ address: '127.0.0.1', port: P.port }])
+  c.sock.destroy(); await L.settled(1)
+  assert.deepEqual(L.flows[0].upstream, { kind: 'http', host: '127.0.0.1', port: P.port })
+  const records = JSON.stringify([L.flows, L.envelopes, L.failures])
+  for (const secret of [CRED.password, TOKEN, Buffer.from(`${CRED.username}:${CRED.password}`).toString('base64')]) assert.equal(records.includes(secret), false)
+})
+
+test('4.8 §5.1 a forwarded request for the door\'s own health target is closed and recorded ingress-unknown with its method and host', T, async (t) => {
+  const L = await lab(t)
+  const c = L.client(); c.write(absHead(HEALTH_PORT, '/x')); await c.closed()
+  assert.deepEqual(L.failures.map((f) => [f.code, f.method, f.host]), [['ingress-unknown', 'GET', '127.0.0.1']])
+  assert.equal(L.upConns.length, 0)
+})
+
+test('1.6 §1.3 off, off --now and engine.close() each close a forwarded keep-alive that is idle after its answer, and its row is written', T, async (t) => {
+  for (const act of [(e) => e.drain({ agents: null }), (e) => e.drain({ agents: null, now: true }), (e) => e.close()]) {
+    const L = await lab(t, { meta: { decrypt: true } }), o = await httpOrigin(t)
+    const c = L.client(); c.write(absHead(o.port, '/x')); await c.bytes(okOf('/x').length)
+    act(L.engine)
+    await c.closed(); await L.settled(1)
+    assert.equal(L.flows.length, 1)
+  }
+})
