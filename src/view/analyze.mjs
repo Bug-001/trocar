@@ -575,7 +575,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
     // ── segment into streams/lanes by lineage + role marker ─────────────────────
     const msgCount = f.msgCount
     const tools = f.tools
-    // 3.4 lane precedence probe > monitor > aux > subagent > main, the ETL's (session-identity.mjs::lane): inside each
+    // 3.4 lane precedence probe > monitor > aux > subagent > main: inside each
     // tier the harness table's hint decides first (Z-Code x-zcode-session-type, dsh origin, CC x-claude-code-agent-id,
     // a request-kind warm-up), then Claude Code's own markers
     const hints = f.hints, hint = hints.lane
