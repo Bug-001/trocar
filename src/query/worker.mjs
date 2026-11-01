@@ -23,7 +23,8 @@
 // THE WRITER (4.3 §4 写者): this process alone writes the context projections (`writer: true` on every answer's ctx). BACKGROUND
 // WORK (3.5 后台抽取), one scheduler: while no request line is waiting or being answered (the last frame written whole), it runs
 // slices of ≤ SLICE_MS — the members of the session last answered (session / lane) extracted until none is left, then those of the
-// sessions of the model calls the daemon kicked (`{kick: ids}` on IPC: their record ids, just indexed), then, after IDLE_SLICE_MS with no request, those
+// sessions of the model calls the daemon kicked (`{kick: ids}` on IPC: their record ids, just indexed) and of the heads it handed out
+// still folding (`{follow: id}`: the board opened a session never folded, 3.5 §谁执行它「答案文件」), then, after IDLE_SLICE_MS with no request, those
 // of the session of the newest index row (a request's, never a kick's), then, IDLE_SLICE_MS after the last request or kick, once the
 // sidecars (and the parts the save seals, a slice at a time until a request or kick) and a projection GC (gcProjections) — yielding
 // with setImmediate between slices, so a request line that arrives is read before the next one. Slices are not requests, but their work is
@@ -45,7 +46,7 @@ import { lowerPriority } from '../low-priority.mjs'
 import { extendSession, indexed, openSessions, saveIndexes, sealParts } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
 import { gcProjections, posCmp, sessionDir } from './projection.mjs'
-import { headFile, skipFile, tier0Doc, writeHead, writeSkip } from './ctx-files.mjs'
+import { hasHead, skipFile, tier0Doc, writeHead, writeSkip } from './ctx-files.mjs'
 
 const home = process.argv[2]
 // The board's control verbs (`{control, body}`, 4.4 §控制面) run the CLI's own functions, which take `deps` for what they ask of the machine.
@@ -139,7 +140,7 @@ async function upgradeQueue(ctx) {
   return list.sort((a, b) => (b[0] - a[0]) || posCmp(b[1], a[1])).map((x) => [x[2], x[1]])
 }
 const answered = new Set() // the sessions this worker answered: never collected under it
-const follow = new Set() // the sessions the daemon kicked (3.5 §后台抽取与归约): folded in turn from their checkpoints
+const follow = new Set() // the sessions the daemon kicked or followed (3.5 §后台抽取与归约): folded in turn from their checkpoints
 const kicked = new Set() // the record ids of the kicked model calls, not yet looked up: their sessions go to `follow`
 /** The sessions of the kicked records, by the one session rule (sessionGroups: a synthesized key too). The kicked calls are the
  *  newest rows, so each session's members are looked at from its last back to the oldest kicked id only. */
@@ -190,7 +191,7 @@ async function background() {
     const index = await indexed(ctx)
     let wrote = 0
     for (const [id, ms] of sessionGroups(index.rows)) {
-      if (nodeFs.existsSync(headFile(home, id))) continue
+      if (hasHead(home, id)) continue
       try { if (writeHead(home, id, tier0Doc(id, ms, index.errors))) wrote++ } catch (e) { say(e) }
     }
     if (wrote) worked()
@@ -237,8 +238,11 @@ process.stdin.on('data', (d) => {
 })
 // The daemon's kick (service.mjs kick): the record ids of model calls just indexed. `once` is dropped so the next slice reads the
 // index again and sees the new members and their sessions; the idle period starts again, so the sidecars and the GC wait for the burst to end.
+// `{follow: id}`: a head still folding was read; the session joins the followed ones, and the idle period runs on (a board's poll
+// must not hold off the idle save and the GC).
 process.on('message', (m) => {
   if (m && m.sweep === true) { sweepDue = true; kick(); return }
+  if (m && typeof m.follow === 'string') { if (target !== m.follow) follow.add(m.follow); kick(); return }
   if (!m || !Array.isArray(m.kick)) return
   for (const id of m.kick) kicked.add(String(id))
   once = {}; gcDone = false; sealing = false; lastAt = Date.now()

@@ -23,6 +23,7 @@ import { bigSession } from './big-session.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
+import { HEAD_FILES } from '../../src/query/ctx-key.mjs'
 import { lineFile, loadSidecar } from '../../src/query/line-file.mjs'
 import { REDUCE_V } from '../../src/view/reduce.mjs'
 import { heapFlags, workerEnv } from '../../src/query/warm.mjs'
@@ -660,7 +661,7 @@ const foldBytes = (file) => {
 }
 const lastFrontier = (file) => { try { const f = foldBytes(file).toString('utf8').split('\n').filter((l) => l.startsWith('{"f"')).at(-1); return f ? JSON.parse(f) : null } catch { return null } }
 const stateOf = (file) => { const sc = loadSidecar({ file, endsLine: (n) => foldBytes(file)[n - 1] === 10 }), m = sc && sc.parts['r.m']; return sc && sc.parts['r.s'] && m && JSON.parse(m[0]).rv === REDUCE_V ? sc.head : null }
-const headOf = (log) => { try { return JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(path.dirname(log), 'head.json.gz')))) } catch { return null } }
+const headOf = (log) => { for (const f of Object.values(HEAD_FILES)) { try { return JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(path.dirname(log), f)))) } catch { /* the other name */ } } return null }
 // A wait on the real worker lasts while it reports slices on the IPC channel, and fails after STALL ms with none.
 const STALL = 30_000
 // `runs` are the workers the kicks forked. Ends when the worker leaves (`killWhen` kills it) or when `done({log, last})` holds; then

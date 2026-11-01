@@ -13,7 +13,7 @@ import { bigSession } from './big-session.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 import { sessionDir } from '../../src/query/projection.mjs'
 import { foldLogFile } from '../../src/query/fold-log.mjs'
-import { headFile } from '../../src/query/ctx-files.mjs'
+import { hasHead } from '../../src/query/ctx-files.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { createQueryService } from '../../src/query/service.mjs'
@@ -75,7 +75,7 @@ for (const [seed, wire, first, more, via] of [[7, 'http', 30, 12, 'ask'], [11, '
     const w = driveWorker(home)
     try {
       w.kick(ids)
-      await until(() => fs.existsSync(foldLogFile(home, X)) && fs.existsSync(headFile(home, X)), 30_000, 'the kicked session folded')
+      await until(() => fs.existsSync(foldLogFile(home, X)) && hasHead(home, X), 30_000, 'the kicked session folded')
       await until(() => dropped(home), 30_000, 'the idle GC dropped the other session past the cap')
       assert.notDeepEqual(extractOf(home), [], 'the open session\'s projection is still on disk')
       x.append(more) // the agent goes on

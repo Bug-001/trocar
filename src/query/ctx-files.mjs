@@ -1,5 +1,6 @@
 // src/query/ctx-files.mjs — the answer files of a session's directory (RFC 3.5 §会话读 `session --head`, §谁执行它「答案文件」; 4.3 §4 目录):
-// `head.json.gz` = the gzip of the compact JSON of `trocar query session --id S --head`, the board's first screen in one file (D71①).
+// `head.json.gz` (`head.pending.json.gz` while it folds: HEAD_FILES) = the gzip of the compact JSON of `trocar query session --id S --head`,
+// the board's first screen in one file (D71①).
 // The head is a function of the disk and the mark only (D69③): no wall clock, every list in step order or sorted, so the worker's
 // file, the worker's answer and the local path's answer at one mark are the same bytes. Only the query worker writes (writeHead).
 import nodeFs from 'node:fs';
@@ -10,6 +11,7 @@ import { SCHEMA_VERSION } from '../cli/schema.mjs';
 import { sessionMetaOfFacts } from '../view/board.mjs';
 import { listOf } from '../view/reduce.mjs';
 import { compareStep } from '../view/step-order.mjs';
+import { HEAD_FILES } from './ctx-key.mjs';
 import { lru, sessionDir } from './projection.mjs';
 import { isModelCall, sessionFactsOf } from './rows.mjs';
 import { laneOf, placeIn, recOf, FLAG } from './session-doc.mjs';
@@ -25,8 +27,15 @@ const CELLS = 32_768, FAILED_SHOWN = 64, BUCKETS = 240;
 /** The members a pack holds: pack n = the plan's members at write positions [PACK_MEMBERS·n, PACK_MEMBERS·(n+1)) (3.5, SHOULD 512). */
 export const PACK_MEMBERS = 512;
 
-/** headFile(home, id) → the session's head file. */
-export const headFile = (home, id) => path.join(sessionDir(home, id), 'head.json.gz');
+/** headFile(home, id, folding) → the session's head file under one of its two names (HEAD_FILES). */
+export const headFile = (home, id, folding = false) => path.join(sessionDir(home, id), folding ? HEAD_FILES.folding : HEAD_FILES.rest);
+/** hasHead(home, id, fs) → whether the session has a head file, under either name. */
+export const hasHead = (home, id, fs = nodeFs) => fs.existsSync(headFile(home, id)) || fs.existsSync(headFile(home, id, true));
+/** readHead(home, id, fs) → the parsed head under whichever name exists, else null (none, or torn). */
+export function readHead(home, id, fs = nodeFs) {
+  for (const folding of [false, true]) { try { return JSON.parse(gunzipSync(fs.readFileSync(headFile(home, id, folding))).toString('utf8')); } catch { /* the other name */ } }
+  return null;
+}
 
 const docOf = (errors, body, command = 'session') => ({ schema: SCHEMA_VERSION, command, ok: !errors.some((e) => !e.level), errors, v: CTX_V, ...body });
 // the index's problems (a note, `level`, is about the read that made it, never the disk's: index-build.mjs) and the first failed members
@@ -90,19 +99,19 @@ export function tier0Doc(id, members, errors) {
  *  the rest as it was written (3.5 §会话读「`session --head`」 pending): `pending(d, done)` → the pending of head `d`, `done` the
  *  members at or below its mark. A stopped fold's (`stopped`) and the progress of a backlog no answer file is written in. */
 export function pendingHead(home, id, members, errors, pending, fs = nodeFs) {
-  let d = null;
-  try { d = JSON.parse(gunzipSync(fs.readFileSync(headFile(home, id))).toString('utf8')); } catch { /* none yet, or torn */ }
+  let d = readHead(home, id, fs);
   if (!d || d.v !== CTX_V) d = tier0Doc(id, members, errors);
   const rid = d.mark == null ? null : String(d.mark).replace(/@.*$/, ''); // a cut's mark is `rid@cut` (named/session.mjs markOn)
   const done = d.pending ? d.pending.done : rid == null ? 0 : members.findIndex((r) => String(r.id) === rid) + 1;
   return { ...d, pending: pending(d, done) };
 }
 
-/** writeHead(home, id, doc, fs) → whether the file changed: the gzip of the doc's compact JSON (putFile); nothing is written when the
- *  bytes are the file's. */
+/** writeHead(home, id, doc, fs) → whether the file changed: the gzip of the doc's compact JSON (putFile) under the name its `pending`
+ *  says (HEAD_FILES), the other name removed first, so at most one exists; nothing is written when the bytes are the file's. */
 export function writeHead(home, id, doc, fs = nodeFs) {
-  const file = headFile(home, id), bytes = gzipSync(Buffer.from(JSON.stringify(doc), 'utf8'));
+  const folding = !!doc.pending && !doc.pending.stopped, file = headFile(home, id, folding), bytes = gzipSync(Buffer.from(JSON.stringify(doc), 'utf8'));
   try { if (fs.readFileSync(file).equals(bytes)) return false; } catch { /* none yet */ }
+  try { fs.unlinkSync(headFile(home, id, !folding)); } catch (e) { if (e.code !== 'ENOENT') throw e; }
   putFile(fs, file, bytes);
   return true;
 }
