@@ -14,7 +14,7 @@ import { admitted, flatBlockText, blockFacts, callFacts, normResp, replyPartsAnt
 import { hydrateForBoard, anthropicFlat, flatRequest, spanBody, rawRefOf, wireOf, respRefsOf, extraMessagesOf, unknownFacts, respOf, slimRec, nonBlockKeysOf } from './assemble.mjs';
 import { slimBlock, compBucket, firstHuman, blockQuery } from './blockmeta.mjs';
 import { renderOf } from './render-kind.mjs';
-import { blockSpans } from '../adapters/cc.mjs';
+import { blockSpans } from '../dissect/cc-spans.mjs';
 import { resourceRef as ccResourceRef } from '../dissect/cc.mjs';
 import { resourceRef as oaResourceRef, faithfulness as oaFaithfulness } from '../dissect/openai.mjs';
 import { scanJson, spanAt } from '../dissect/json-scan.mjs';

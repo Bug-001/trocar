@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { createAnalyzer, admitted, stepOrder, linearContext, cacheBreak, normResp, flatBlockText, unparsedErrMsg, compactionMeta } from './analyze.mjs';
 import { compactionVerdict } from '../identity/session-identity.mjs';
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf, captureLabelsOf } from '../dissect/capture-labels.mjs'; // #21 request-body labels, D38 WebSocket labels, response labels; captureLabelsOf: the per-call wire.labels (4.6 §记录)
-import { blockSpans } from '../adapters/cc.mjs';
+import { blockSpans } from '../dissect/cc-spans.mjs';
 import { scanJson, spanAt } from '../dissect/json-scan.mjs';
 import { slimBlock, compBuckets, firstHuman, HEAD, tellApart } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../raw/refs.mjs';
@@ -18,7 +18,6 @@ import { sessionKeyOf, observerEffectsOf, hintsOf } from '../dissect/harnesses.m
 import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf, flatLaneOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
 import { parsedRequestBody, scannedRequestBody, sharesBody } from '../dissect/request-body.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
-import { cacheSemanticsKnown } from '../cache/cache-events.mjs';
 import { requestEncodingOf } from '../dissect/request-body.mjs';
 
 // D17④ 地面真相(RFC 3.3:65 · 独立字节护城河). The demo proxied prefix identity with the 32-bit
@@ -394,8 +393,20 @@ function withPathRefs(flat, rec) {
   });
 }
 
+// RFC 3.3:89 (D37): cache semantics are known per VENDOR (the upstream host), and a vendor row vouches only
+// for the wire it was established on. DeepSeek's comes from its Chat Completions API; DeepSeek through its
+// Anthropic endpoint (dsh) is still OPEN, so it reads unknown until a real capture settles it (then the
+// VERIFIED_WIRES entry goes). An unknown vendor is unknown, never another vendor's semantics.
+const CACHE_VENDORS = new Set(['anthropic', 'openai', 'deepseek', 'bedrock']);
+const VERIFIED_WIRES = { deepseek: ['openai-chat'] };
+function cacheSemanticsKnown(vendor, wireFormat) {
+  if (!CACHE_VENDORS.has(vendor)) return false;
+  const only = VERIFIED_WIRES[vendor];
+  return !(only && wireFormat != null && !only.includes(wireFormat));
+}
+
 // Canonical wire facts per call (3.2:131-133), baked HERE so the page only reads them (invariant 3):
-// format, vendor, whether that vendor's cache semantics are known on this wire (3.3:89: the DB's rule — false for
+// format, vendor, whether that vendor's cache semantics are known on this wire (3.3:89: false for
 // an unknown host, for a vendor with no cache row, and for DeepSeek over the Anthropic wire), transport, context
 // state, observer effects and the
 // incompleteness labels (4.6 §记录 「不完整的标注」 — shown on the call, never dropped). Cheap: no body parse.
