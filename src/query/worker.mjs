@@ -46,7 +46,7 @@ import { lowerPriority } from '../low-priority.mjs'
 import { extendSession, indexed, openSessions, saveIndexes, sealParts } from './named/session.mjs'
 import { indexRows, sessionGroups } from './rows.mjs'
 import { gcProjections, posCmp, sessionDir } from './projection.mjs'
-import { hasHead, skipFile, tier0Doc, writeHead, writeSkip } from './ctx-files.mjs'
+import { hasHead, headFile, readHead, skipFile, tier0Doc, writeHead, writeSkip } from './ctx-files.mjs'
 
 const home = process.argv[2]
 // The board's control verbs (`{control, body}`, 4.4 §控制面) run the CLI's own functions, which take `deps` for what they ask of the machine.
@@ -120,7 +120,8 @@ let busy = 0, lastAt = Date.now(), target = null, newestDone = true, gcDone = fa
 let sealing = false
 let rawUnlisted = false // raw/ could not be listed at the last GC: its D38 record is sent
 // The sweep (3.5 §谁执行它「答案文件」): at the first idle period of this worker's life, and again on the daemon's `{sweep: true}`, a
-// tier-0 head (ctx-files.mjs, from the segment index only) for every session whose head file is absent. One pass over the sessions.
+// tier-0 head (ctx-files.mjs, from the segment index only) for every session whose head file is absent, and a head whose name
+// disagrees with its pending moved to the right name. One pass over the sessions.
 let sweepDue = true
 // The upgrade queue (3.5 §谁执行它「答案文件」): after the sweep, the sessions with a fold log and no tail file (folded before the answer
 // files existed, the flat layout's moved in) are folded in idle slices, each to its end, which writes its head, packs and tails: the
@@ -191,8 +192,12 @@ async function background() {
     const index = await indexed(ctx)
     let wrote = 0
     for (const [id, ms] of sessionGroups(index.rows)) {
-      if (hasHead(home, id)) continue
-      try { if (writeHead(home, id, tier0Doc(id, ms, index.errors))) wrote++ } catch (e) { say(e) }
+      try {
+        // a head under the name its pending does not say (one written before the names did) is put under the right one: the daemon
+        // tells a folding head by its name only, so a misnamed one would never be followed (3.5 §谁执行它「答案文件」)
+        const named = nodeFs.existsSync(headFile(home, id)) ? readHead(home, id) : null
+        if (named && named.pending && !named.pending.stopped) { if (writeHead(home, id, named)) wrote++ } else if (!hasHead(home, id) && writeHead(home, id, tier0Doc(id, ms, index.errors))) wrote++
+      } catch (e) { say(e) }
     }
     if (wrote) worked()
     upgrade = null

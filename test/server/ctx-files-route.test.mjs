@@ -143,12 +143,15 @@ test('4.4 #16: with the files there a read forks nothing; with the head gone one
 
 // 3.5 §谁执行它「答案文件」: a session never folded has only its tier-0 head, which is still folding; the board opening it (a poll of
 // d/head with the tag it holds, as replay.mjs reads it) makes the worker follow it, with no named query and no new record
-test('4.4 #16 folding head: polling a never-folded session\'s head, and nothing else, folds it to a settled head', async (t) => {
+test('4.4 #16 folding head: polling a never-folded session\'s head, and nothing else, folds it to a settled head, also from the old name', async (t) => {
   const w = await open(300)
   try {
     w.svc.sweep() // the daemon's start: a tier-0 head for the session, no fold
     const tier0 = () => { try { return JSON.parse(unzip(fs.readFileSync(w.file('head.pending.json.gz')))) } catch { return null } }
     await until(() => tier0()?.tier === 0, 60_000, 'the sweep wrote the tier-0 head under the folding name')
+    // a home whose heads were written before the names: the folding head under the settled name, which the next sweep renames
+    fs.renameSync(w.file('head.pending.json.gz'), w.file('head.json.gz'))
+    w.svc.sweep()
     let tag = null, done = null
     const waited = await whileMoving(async () => {
       await pause(200)
