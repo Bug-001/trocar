@@ -1,6 +1,6 @@
 # Releasing trocar
 
-trocar ships as the npm package `trocar-cli` (command `trocar`), licensed FSL-1.1-ALv2. Releases are made locally by the maintainer: there is no GitHub Actions pipeline, and the tarball that goes to npm and to the GitHub Release is the very one that passed the local checks. The design behind this procedure is in [spec 4.5 §B](../spec/01-trocar-rfc/4.5-distribution.md).
+trocar ships as the npm package `trocar-cli` (command `trocar`), licensed FSL-1.1-ALv2, and through two installer scripts, `install/install.sh` (macOS, Linux) and `install/install.ps1` (Windows), which place that same tarball and a pinned official Node without npm. Releases are made locally by the maintainer: there is no GitHub Actions pipeline, and the tarball that goes to npm and to the GitHub Release is the very one that passed the local checks. The design behind this procedure is in [spec 4.5 §B](../spec/01-trocar-rfc/4.5-distribution.md).
 
 Below, `<x>` is the version being released (for example `0.2.0`), and `dist/trocar-cli-<x>.tgz` is the tarball `npm run release:pack` writes.
 
@@ -39,6 +39,10 @@ Do the steps in order. If a step before step 6 fails, fix the cause on a branch,
    9. Linux only: `sudo "$(command -v node)" "$(command -v trocar)" setup-helper --remove`
    10. `npm rm -g trocar-cli`
 
+   Then run each installer once against a loopback registry. Serve, from `127.0.0.1`, `trocar-cli/latest` (a package record whose `dist.tarball` points at the tarball and whose `dist.integrity` is its sha512) plus the tarball, and the Node archives that the tarball's `install/node.sha256` names under `v<node version>/` (copy them from nodejs.org once). Then, in a fresh HOME (on Windows a fresh `USERPROFILE`):
+   - macOS / Linux: `TROCAR_REGISTRY=http://127.0.0.1:<port> TROCAR_NODE_MIRROR=http://127.0.0.1:<port> sh install/install.sh --stage` prints `trocar-installer: staged <x> <dir>` as its last line;
+   - Windows: the same two variables, then `powershell -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -Stage`.
+
 4. **Release check.** On the machine that packed in step 3, on `main` at the release commit with a clean tree:
    - `npm run release:check` exits 0. Each failed check prints one line `release: <id>: <reason>` and the command exits 1. The checks:
 
@@ -56,6 +60,9 @@ Do the steps in order. If a step before step 6 fails, fix the cause on a branch,
      | `native` | every prebuilt macOS helper is packed, under `src/collector/arch/darwin/native/`, and executable |
      | `pins` | every prebuilt helper's sha256 on disk equals its pinned value |
      | `notes` | `CHANGELOG.md` has a `## [<x>]` section linking at least one release note, and every linked note exists |
+     | `installer` | `install/install.sh` and `install/install.ps1` are in the pack list and pure ASCII; the `.sh` has no CR and passes `sh -n`; the data lines of their SOURCES blocks are equal, line for line, and name this package |
+     | `node-pin` | `install/node.sha256` has exactly one line for each Node build (darwin-arm64 and darwin-x64 `.tar.xz`; linux-x64 and linux-arm64 `.tar.xz` and `.tar.gz`; win-x64 and win-arm64 `.zip`), all of one version that `engines` allows, and each line appears verbatim in `https://nodejs.org/dist/v<version>/SHASUMS256.txt` (needs the network, like `unpublished`) |
+     | `pathlen` | the longest packed path, placed under `C:\Users\<32 characters>\.trocar\app\.staging-99999\<x>\`, is at most 259 characters |
 
    - `git rev-parse HEAD` is the commit written down in step 3, and `(cd dist && shasum -a 256 -c SHA256SUMS)` prints `OK` (`SHA256SUMS` names the tarball without a directory): the tarball that goes out is the one smoke-tested in step 3. Do not pack again here. If `main` moved since step 3, go back to step 3.
 
@@ -66,14 +73,26 @@ Do the steps in order. If a step before step 6 fails, fix the cause on a branch,
 
 7. **Push the tag.** `git push origin v<x>`.
 
-8. **GitHub Release.** `gh release create v<x> dist/trocar-cli-<x>.tgz dist/SHA256SUMS --verify-tag --title v<x> --notes-file <the notes>`, where the notes are this version's `CHANGELOG.md` section plus the skips from step 2. Add `--prerelease` for a `next` release.
+8. **GitHub Release.** `gh release create v<x> dist/trocar-cli-<x>.tgz dist/SHA256SUMS install/install.sh install/install.ps1 --verify-tag --title v<x> --notes-file <the notes>`, where the notes are this version's `CHANGELOG.md` section plus the skips from step 2. Add `--prerelease` for a `next` release. The two scripts are attached from the clean release commit, so they are the bytes inside the tarball; the README's one-line install fetches them through `releases/latest/download/`, and `SHA256SUMS` still names only the tarball.
 
 9. **Verify from the registry on a clean machine.**
    - `npm i -g trocar-cli@<x>`
    - `trocar --version` prints `trocar <x>`
+   - On the clean macOS and Windows test machines, run the one-line install exactly as the README shows it; it ends in `trocar install`'s plan.
    - `npm view trocar-cli@<x> dist.integrity` equals the integrity of the local tarball: `sha512-` followed by `openssl dgst -sha512 -binary dist/trocar-cli-<x>.tgz | openssl base64 -A`
 
 10. **A bad release.** Run `npm deprecate trocar-cli@<x> '<why; use <x+1>>'` and ship a patch release through this same procedure. Never `npm unpublish`: an unpublished version number can never be reused, and people who already installed it get no explanation.
+
+## Bumping the pinned Node
+
+The installers always place the official Node build that `install/node.sha256` names; that file is the only place the Node version and its hashes are written. The pin is the Node that the step-2 test runs and the lab runs last passed on. To move it to a new patch:
+
+1. Pick the version from `https://nodejs.org/dist/index.json` (for the current line, the newest `v22.x`).
+2. Rewrite `install/node.sha256` with that version's lines from `https://nodejs.org/dist/v<version>/SHASUMS256.txt`, copied verbatim, one per build in the `node-pin` row above, for example:
+   `curl -fsSL https://nodejs.org/dist/v<version>/SHASUMS256.txt | grep -E -- '-(darwin-(arm64|x64)\.tar\.xz|linux-(x64|arm64)\.tar\.(xz|gz)|win-(x64|arm64)\.zip)$' > install/node.sha256`
+3. On that Node, run the full fresh-HOME `npm test` on all three OSes and the lab runs, then commit the new pin on a branch. `npm run release:check` then checks the lines against nodejs.org again.
+
+A version that is already placed keeps the Node it was placed with; a new version of trocar names its own Node directory, so a pin change takes effect with the next release.
 
 ## Known limits
 
