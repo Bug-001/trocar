@@ -230,7 +230,9 @@ main() {
   cur_v= cur_n=
   if [ -f "$APP/current" ]; then read -r cur_v cur_n <"$APP/current" || :; fi
   if [ "$cur_v" = "$v" ] && [ -x "$APP/node/$cur_n/bin/node" ]; then
-    if [ "$mode" = stage ]; then result "up-to-date $v"; else say "trocar $v is already installed: $HOME/.trocar/bin/trocar"; fi
+    if [ "$mode" = stage ]; then result "up-to-date $v"; return 0; fi
+    say "trocar $v is already installed: $HOME/.trocar/bin/trocar"
+    handoff update # a first run whose `trocar install` was cancelled leaves the pointer: the re-run still says what comes next
     return 0
   fi
   if [ -n "$cur_v" ] && older "$v" "$cur_v"; then

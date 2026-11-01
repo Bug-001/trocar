@@ -89,6 +89,7 @@ test('a staged install verifies, gates and places one version; a re-run asks for
     const done = await install([], { home: r.home, shell })
     assert.equal(done.code, 0, done.err)
     assert.ok(metaOnly(done.asked))
+    assert.ok(done.err.includes(`${path.join(r.home, '.trocar', 'bin', 'trocar')} update`), 'an up-to-date re-run still names the next command')
     assert.equal(last((await install(['--stage'], { home: r.home, shell })).out), `trocar-installer: up-to-date ${V}`)
   }
 })

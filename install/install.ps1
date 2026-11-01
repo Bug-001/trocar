@@ -4,6 +4,7 @@
 # anything runs, then hands over to `trocar install` (first time) or `trocar update`. Machine state is never touched here.
 # The body is one script block: a truncated download does not parse and runs nothing. Under iex it never calls exit;
 # with -File it sets the exit code (0 done, 1 failed, 2 refused). Options: -Check, -Stage (as install.sh's --check, --stage).
+# Outside FullLanguage (Constrained Language Mode) it refuses first: `trocar install` needs FullLanguage too.
 # Pure ASCII with no BOM, so Windows PowerShell 5.1 reads it the same in every code page.
 & {
 # >>> SOURCES (the data lines equal install.sh's, line for line: release check `installer`)
@@ -95,7 +96,20 @@ function Gate([string]$exe, [string[]]$a, [string]$want, [string]$what) {
   if ($got -ne $want) { Fail "$what does not run here: $got" }
 }
 
+function Handoff([string]$root, [string]$verb) { # `trocar install` / `update` on a terminal, else the command to run
+  $bin = Join-Path $root 'bin'
+  $other = Get-Command trocar -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($other -and $other.Source -ne "$bin\trocar.cmd") { Say "Another trocar is on your PATH: $($other.Source). It is found before $bin\trocar.cmd until you remove it." }
+  $tty = $false
+  try { $tty = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected } catch { }
+  if (-not $tty) { Say "Next: $bin\trocar.cmd $verb"; return }
+  $env:Path = "$env:Path;$bin" # this session only; `trocar install` adds it for good
+  & "$bin\trocar.cmd" $verb
+  $st.code = $LASTEXITCODE; if ($st.code) { throw "trocar $verb exited with $($st.code)." }
+}
+
 function Main([string[]]$argv) {
+  if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') { Refuse "PowerShell runs in $($ExecutionContext.SessionState.LanguageMode) here (an application control policy): trocar needs FullLanguage. Nothing changed." }
   $mode = 'install'
   foreach ($a in $argv) {
     switch ($a) { '-Check' { $mode = 'check' } '-Stage' { $mode = 'stage' } default { Refuse "Unknown option: $a. Usage: install.ps1 [-Check | -Stage]" } }
@@ -134,7 +148,9 @@ function Main([string[]]$argv) {
   $cur = $null, $null
   if (Test-Path -LiteralPath "$app\current") { $cur = @(((Get-Content -LiteralPath "$app\current" -TotalCount 1) -split ' ') + $null)[0, 1] }
   if ($cur[0] -eq $v -and $cur[1] -and (Test-Path -LiteralPath "$app\node\$($cur[1])\node.exe")) {
-    if ($mode -eq 'stage') { "trocar-installer: up-to-date $v" } else { Say "trocar $v is already installed: $root\bin\trocar.cmd" }
+    if ($mode -eq 'stage') { "trocar-installer: up-to-date $v"; return }
+    Say "trocar $v is already installed: $root\bin\trocar.cmd"
+    Handoff $root 'update' # a first run whose `trocar install` was cancelled leaves the pointer: the re-run still says what comes next
     return
   }
   if ($cur[0] -and (Older $v $cur[0])) {
@@ -190,18 +206,10 @@ function Main([string[]]$argv) {
   $verb = if ($cur[0]) { 'update' } else { 'install' }
   & "$app\node\$nid\node.exe" "$app\$v\bin\trocar.mjs" place "$app\$v"
   if ($LASTEXITCODE -ne 0) { Fail "Could not switch to trocar $v (trocar place failed). The version that was active stays active." }
-  $bin = Join-Path $root 'bin'
-  $other = Get-Command trocar -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($other -and $other.Source -ne "$bin\trocar.cmd") { Say "Another trocar is on your PATH: $($other.Source). It is found before $bin\trocar.cmd until you remove it." }
-  $tty = $false
-  try { $tty = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected } catch { }
-  if (-not $tty) { Say "Next: $bin\trocar.cmd $verb"; return }
-  $env:Path = "$env:Path;$bin" # this session only; `trocar install` adds it for good
-  & "$bin\trocar.cmd" $verb
-  $st.code = $LASTEXITCODE; if ($st.code) { throw "trocar $verb exited with $($st.code)." }
+  Handoff $root $verb
 }
 
 $rc = 0
 try { Main $args } catch { Say "$($_.Exception.Message)"; $rc = $st.code }
-if ($PSCommandPath) { exit $rc }
+if ({}.File) { exit $rc } # the file this block was parsed from: the .ps1 under -File, none under iex (at a prompt or inside a caller's .ps1)
 } @args
