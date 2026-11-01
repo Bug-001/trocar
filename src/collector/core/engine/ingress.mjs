@@ -5,8 +5,8 @@
 // and only then says yes; the bytes after that are an agent's, and go to handleFlow exactly as a transparent flow's do.
 //
 // Order per connection (§5.1):
-//   1. read the opener — CONNECT or SOCKS5; anything else (an absolute-URI GET included) is closed,
-//      `ingress-unknown`;
+//   1. read the opener — CONNECT, SOCKS5, or an absolute-form `http://` request (a program that inherited an agent's proxy env); an origin-form
+//      GET is the PAC's on an open door; anything else is closed, `ingress-unknown`;
 //   2. check the token, in constant time — 407 / SOCKS auth failure and `ingress-auth-failed`, zero upstream connections;
 //   3. lookupIngress({peer, user, target}) → the flow's meta, or {health:true, group}, or {refuse:{code, reason, unread?}} (the door refused this process:
 //      one record, closed unanswered — unless its owner could not be read (`unread`) and the client had already left, which refused nothing: counted `left`, no record), or null (an unknown
@@ -16,7 +16,8 @@
 //   5. dial the upstream — direct, or the proxy prelude trocar writes (http / socks5; the user's proxy credentials ride only here) —
 //      and say 200 only once it is up: a failure is `502`, or the proxy's own refusal, never a success first;
 //   6. handleFlow(socket, meta, {upstream, redial}); the row carries ingress / pid_source / pid_ms / upstream, no `prelude`
-//      (the opener and the proxy prelude are trocar's bytes, not the agent's: invariant 4, §5.6).
+//      (the opener and the proxy prelude are trocar's bytes, not the agent's: invariant 4, §5.6). Absolute-form plain http goes through
+//      forwardHttp (forward.mjs): steps 3–6 for each authority the client names, each a flow of its requests less the door's own lines.
 // The ingress never records an envelope itself and never forwards a byte it has not been asked to.
 import crypto from 'node:crypto'
 import net from 'node:net'
@@ -25,6 +26,7 @@ import { parseHead } from './sniff.mjs'
 import { wentBy } from './flow.mjs'
 import { socks5Greeting, socks5Request } from './socks.mjs'
 import { HOOK_HEADER as UPSTREAM_HEADER } from '../proxymode/chain.mjs'
+import { absTarget, forwardHttp, withCredential } from './forward.mjs'
 
 const HEAD_MAX = 16 * 1024        // no opener or proxy reply head is longer
 const HOLD_MAX = 256 * 1024       // what a client may send while the upstream is being dialled
@@ -40,12 +42,18 @@ const socksRepOf = (code) => (code === 'ECONNREFUSED' ? 5 : code === 'ENETUNREAC
 // ── the byte reader the handshakes use ─────────────────────────────────────────────────────────────────────────
 // take(parser, deadline): parser(buf) → null (need more) | {invalid} | {length, …}; resolves with the message (and its `raw`), `{invalid}`,
 // `{gone}` (the peer closed, ended or errored first) or `{timeout}`. detach() returns the bytes held beyond the last message and lets go
-// of the socket, which goes on flowing for whoever attaches next, synchronously (handleFlow does).
+// of the socket, which goes on flowing for whoever attaches next, synchronously (handleFlow does). More than holdMax bytes not yet taken:
+// onTooMuch(), or after holdBack() the client is paused until they are taken (TCP backpressure, forwarded plain http, 4.8 §5.1).
 function reader(sock, { onTooMuch = null, holdMax = HOLD_MAX } = {}) {
-  let buf = Buffer.alloc(0), wake = null, gone = null
+  let buf = Buffer.alloc(0), wake = null, gone = null, cut = onTooMuch, held = false
   let watchers = []
   const poke = () => { const w = wake; wake = null; if (w) w() }
-  const onData = (d) => { buf = Buffer.concat([buf, d]); if (onTooMuch && buf.length > holdMax) { onTooMuch(); return } poke() }
+  const onData = (d) => {
+    buf = Buffer.concat([buf, d])
+    if (buf.length > holdMax) { if (cut) return void cut(); if (!held) { held = true; sock.pause() } }
+    poke()
+  }
+  const unhold = () => { if (held) { held = false; if (!sock.destroyed) sock.resume() } }
   const goneBy = (why) => (e) => {
     if (!gone) gone = { why, error: e instanceof Error ? e : null }
     for (const f of watchers.splice(0)) f()
@@ -60,7 +68,7 @@ function reader(sock, { onTooMuch = null, holdMax = HOLD_MAX } = {}) {
     async take(parser, deadline = Infinity) {
       for (;;) {
         const m = parser(buf)
-        if (m) { if (m.invalid) return m; const raw = buf.subarray(0, m.length); buf = buf.subarray(m.length); return { ...m, raw } }
+        if (m) { if (m.invalid) return m; const raw = buf.subarray(0, m.length); buf = buf.subarray(m.length); if (buf.length <= holdMax) unhold(); return { ...m, raw } }
         if (gone) return { gone: gone.why }
         const left = deadline - Date.now()
         if (left <= 0) return { timeout: true }
@@ -71,25 +79,29 @@ function reader(sock, { onTooMuch = null, holdMax = HOLD_MAX } = {}) {
         })
       }
     },
+    /** from now on a client that sends more than holdMax ahead of what is taken is paused, not cut */
+    holdBack() { cut = null },
+    /** the client's bytes may flow again (a stand-in wants more), unless this reader is full */
+    resume() { if (!held && !sock.destroyed) sock.resume() },
     detach() {
       sock.removeListener('data', onData); sock.removeListener('end', onEnd); sock.removeListener('close', onClose); sock.removeListener('error', onError)
       watchers = []
+      unhold()
       const b = buf; buf = Buffer.alloc(0); return b
     },
   }
 }
 
 // ── parsers ─────────────────────────────────────────────────────────────────────────────────────────────────────
-// the first bytes: CONNECT, or SOCKS5. `length: 0`: nothing is consumed, the next parser reads from the start.
+// the first bytes: CONNECT, SOCKS5, or another HTTP request line. `length: 0`: nothing is consumed, the next parser reads from the start.
 function sniffOpener(buf) {
   if (!buf.length) return null
   if (buf[0] === 0x05) return { kind: 'socks5', length: 0 }
   const s = buf.toString('latin1', 0, 8)
   if (s.startsWith('CONNECT ')) return { kind: 'connect', length: 0 }
-  if (s.startsWith('GET ')) return { kind: 'get', length: 0 } // served only on an auth:false door (the PAC, below); closed anywhere else
-  if (buf.length < 8 && ('CONNECT '.startsWith(s) || 'GET '.startsWith(s))) return null
-  const m = /^([A-Z]{3,7}) /.exec(buf.toString('latin1', 0, 12))
-  return { invalid: m ? `an HTTP request that is not CONNECT (${m[1]}): the ingress takes CONNECT and SOCKS5 only` : `first byte 0x${buf.subarray(0, 1).toString('hex')}: neither CONNECT nor SOCKS5` }
+  if (/^[A-Z]{3,7} /.test(s)) return { kind: 'http', length: 0 } // absolute-form http is forwarded, an origin-form GET is the PAC's (serve)
+  if (/^[A-Z]{1,7}$/.test(s)) return null // a method so far: need more
+  return { invalid: `first byte 0x${buf.subarray(0, 1).toString('hex')}: neither CONNECT, SOCKS5 nor an HTTP request` }
 }
 /** A plain-HTTP opener's method and target host (the absolute URI's host name, else the Host header's; no user info, no port, lower case), from
  *  what the client sent: {} when the bytes are no HTTP request line. Never its path, query or any other header (4.8 §5.1). */
@@ -163,9 +175,10 @@ function whenConnected(s) {
 
 // The proxy prelude trocar writes for an agent's connection, and what comes back. Never for a health probe; the credentials (up.auth) are
 // the user's own proxy's, used for this one agent connection and nowhere else (§5.2, D30).
+const credentialOf = (auth) => (auth ? `Proxy-Authorization: Basic ${Buffer.from(`${auth.username}:${auth.password}`).toString('base64')}\r\n` : '')
 async function viaHttp(sock, up, target, deadline) {
   const au = authority(target)
-  const cred = up.auth ? `Proxy-Authorization: Basic ${Buffer.from(`${up.auth.username}:${up.auth.password}`).toString('base64')}\r\n` : ''
+  const cred = credentialOf(up.auth)
   const r = reader(sock)
   sock.write(`CONNECT ${au} HTTP/1.1\r\nHost: ${au}\r\n${cred}\r\n`)
   const m = await r.take(headOf, deadline)
@@ -277,14 +290,30 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
   async function serve(socket, r, peer, w, say, unknown, authFailed, door = null, acceptedAt = Date.now()) {
     const doorHash = door && typeof door.token === 'string' && door.token.length > 0 ? sha(door.token) : null
     const deadline = Date.now() + openerMs
-    const shut = async (why, end = 'destroy') => { const held = r.detach(); await unknown(why, held); socket[end]() } // read no more, record, then close
+    const shut = async (why, end = 'destroy', before = null) => { const held = r.detach(); await unknown(why, before ? Buffer.concat([before, held]) : held); socket[end]() } // read no more, record, then close
     const first = await r.take(sniffOpener, deadline)
     if (first.gone) return void r.detach()
     if (first.timeout || first.invalid) return shut(first.invalid || `no opener within ${openerMs} ms`)
-    if (first.kind === 'get') return servePacGet(socket, r, peer, say, unknown, door, deadline)
     // what the client asked, in its own dialect: who, for where, and how each answer is spoken
+    const httpSays = {
+      denied: () => { say('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="trocar"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); socket.end() },
+      badGateway: () => { say('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); socket.end() },
+      refusedBy: (d) => { if (d.raw) { say(d.raw); socket.end() } else httpSays.badGateway() },
+    }
     let o
-    if (first.kind === 'connect') {
+    if (first.kind === 'http') {
+      const m = await r.take(headOf, deadline)
+      if (m.gone) return void r.detach()
+      if (m.timeout || m.invalid) return shut(m.invalid || `no complete request head within ${openerMs} ms`)
+      const target = absTarget(m.head.startLine)
+      if (!target) {
+        if (door && door.open && typeof servePac === 'function' && m.head.startLine.startsWith('GET ')) return servePacGet(socket, r, peer, say, unknown, door, m)
+        return shut(`a plain HTTP request that is not an http:// absolute-form request (${printable(m.head.startLine.split(' ')[0], 10)}): the door takes CONNECT, SOCKS5 and those`, 'destroy', m.raw)
+      }
+      r.holdBack() // a request body may be large and arrive while the flow is looked up: the client waits, it is not cut (§5.1)
+      const c = basicOf(m.head.headers)
+      o = { target, user: c ? c.user : '', pass: c ? c.pass : null, authed: false, forward: { head: m }, ok: () => {}, ...httpSays }
+    } else if (first.kind === 'connect') {
       const m = await r.take(headOf, deadline)
       if (m.gone) return void r.detach()
       if (m.timeout || m.invalid) return shut(m.invalid || `no complete CONNECT within ${openerMs} ms`)
@@ -296,10 +325,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       const hh = m.head.headers.find(([k]) => k.toLowerCase() === UPSTREAM_HEADER) // the hook's prior proxy (4.11 P7 step 1): handed to the lookup, never forwarded (the ingress writes its own prelude) nor recorded
       o = {
         target, user: c ? c.user : '', pass: c ? c.pass : null, authed: false, ...(hh ? { header: hh[1] } : {}),
-        ok: () => say('HTTP/1.1 200 Connection established\r\n\r\n'),
-        denied: () => { say('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="trocar"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); socket.end() },
-        badGateway: () => { say('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); socket.end() },
-        refusedBy: (d) => { if (d.raw) { say(d.raw); socket.end() } else o.badGateway() },
+        ok: () => say('HTTP/1.1 200 Connection established\r\n\r\n'), ...httpSays,
       }
     } else {
       const g = await r.take(socks5Greeting, deadline)
@@ -339,85 +365,115 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     // who this connection is for: a door names its group (the client's own user is only the engine's own ingress's to say), and the lookup
     // answers it with the process the socket belongs to, not with anything the credentials claim
     const who = door && typeof door.user === 'string' && door.user !== '' ? door.user : o.user
-    // 3. who is this
-    const dst = { address: o.target.host, port: o.target.port, ...(net.isIP(o.target.host) ? { family: net.isIP(o.target.host) } : {}) }
-    let meta
-    try { meta = await lookupIngress({ peer, user: who, target: dst, ...(o.header !== undefined ? { header: o.header } : {}) }) } catch (e) {
-      if (e && e.code === 'upstream-unavailable') { // the redirector would not hand over a connection it cannot dial (no login for the upstream, none to dial): trocar's own code and the ingress's own part, not a lookup that failed (4.8 §12)
-        failure({ where: 'ingress', code: 'upstream-unavailable', peer, ...(typeof e.why === 'string' ? { why: e.why } : {}), reason: `the upstream of the connection of ${shownUser(o.user)} to ${o.target.host}:${o.target.port} cannot be dialled (${msgOf(e)}); it was refused with a 502` })
-      } else {
-        const code = e && e.code === 'loader-timeout' ? 'loader-timeout' : 'loader-down'
-        failure({ code, peer, reason: `looking up the ingress connection of ${shownUser(o.user)} for ${o.target.host}:${o.target.port} failed (${msgOf(e)}); it was refused with a 502` })
+    if (o.forward) {
+      let first = true
+      // a flow for `target`, from the head `m` that names it: its X-Trocar-Upstream goes to the lookup as a CONNECT's does (4.11 P7 step 1)
+      const start = async (target, side, m) => {
+        const at = first ? acceptedAt : Date.now(); first = false
+        if (!socket.destroyed) idle.add(socket) // while it is judged and dialled, closeIdle cuts it; a flow then finishes on its own
+        const hh = m.head.headers.find(([k]) => k.toLowerCase() === UPSTREAM_HEADER)
+        const a = await admit({ ...o, target, raw: m.raw, ...(hh ? { header: hh[1] } : {}) }, side)
+        if (!a) return false
+        idle.delete(socket)
+        flow(side.sock, target, a, at, { up: 0, down: 0 }, side) // the stand-in counts the forwarded requests and the answers only
+        return true
       }
-      r.detach(); return o.badGateway('lookup')
+      return forwardHttp({ socket, r, head: o.forward.head, next: () => r.take(headOf), start, shut: (why, raw) => shut(why, 'destroy', raw) })
     }
-    if (!meta) { authFailed(o.user, 'unknown user'); r.detach(); return o.denied() }
-    // a door that refused this process (the PAC door, 4.11 P10): one record of its own code, and the connection closed unanswered — a 407 would ask
-    // for credentials the door never takes (and Chromium does not fall over to the PAC's next entry on one). A refusal for an owner that could not be
-    // read (`unread`) of a client that had left is no refusal: a client that closed has no holder, hence the unread owner; it is counted `left`
-    if (meta.refuse) {
-      if (!(meta.refuse.unread && await leftWhileJudged(r))) failure({ where: 'ingress', code: meta.refuse.code, peer, reason: meta.refuse.reason })
-      r.detach(); return socket.destroy()
-    }
-    // the client left while the lookup ran: nobody is waiting for a dial, and the user's proxy must not get its credentials for one (§5.1, §5.2)
-    if (r.isGone()) { counters.left++; return void r.detach() }
-
-    // 4. a health probe: answered here, nothing leaves the machine
-    if (meta.health) return healthTunnel(socket, r, o, meta.group, unknown)
-
-    // 5. the upstream
-    const i = who.indexOf('.')
-    const route = i < 0 ? who : who.slice(0, i), group = i < 0 ? '' : who.slice(i + 1)
-    const up = meta.upstream || { kind: 'direct' }
-    let current = null
-    r.whenGone(() => { if (current) current.destroy() })
-    const dial = () => dialUpstream(up, o.target, (s) => { current = s })
-    const shown = { kind: up.kind || 'direct', ...(up.host ? { host: up.host } : {}), ...(up.port != null ? { port: up.port } : {}) }
-    // The negative cache's key is part of the lookup's contract (§5.5); one that comes without it is keyed here the way the contract says, so a lookup that
-    // forgets it cannot make every connection without a pid share the key "null" and poison one another's hosts.
-    const base = { ...meta, dst: meta.dst ?? dst, ingress: meta.ingress ?? { route, group }, negKey: meta.negKey ?? (meta.pid != null ? String(meta.pid) : who) }
-    const waited = { phase: shown.kind === 'direct' ? 'connect' : 'proxy-reply', t0: Date.now() }
-    const d = await dial()
-    current = null
-    // the client left while the upstream was dialled: no flow existed and nothing more is dialled or sent, but the give-up is a row (RFC 4.6 §记录
-    // 经代理入口的连接行); a socket the ingress cut itself (it ended or errored on neither side: onTooMuch) has its own record
-    if (r.isGone()) {
-      if (d.ok) d.sock.destroy()
-      r.detach()
-      if (!socket.readableEnded && !socket.errored) return
-      const error = wentBy('client', socket.errored, waited)
-      return void refuse({ ...base, upstream: shown }, { decision: 'error', not_captured: 'error', error, duration_ms: error.wait?.ms ?? 0 })
-    }
-    if (!d.ok) {
-      r.detach()
-      if (d.kind === 'refused') { counters.refused++; refuse({ ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}) } }, { decision: 'tunnel', not_captured: 'proxy-refused', reason: d.reason }); return o.refusedBy(d) }
-      counters.unreachable++
-      const at = now(), last = lastUnreachable.get(group)
-      // only a failure of the door's upstream proxy itself blames the door (4.8 W73): a dead target host — dialled direct, or dropped by a proxy that took
-      // the TCP connection — is that connection's row alone, and must not use up the 60 s window a real proxy outage needs
-      if (d.proxy && (last === undefined || at - last >= 60_000)) { lastUnreachable.set(group, at); failure({ where: 'netenv', code: 'upstream-unreachable', group, upstream: shown, reason: `the upstream of ${group || 'this door'} cannot be dialled (${d.error.type}: ${d.error.message}); its agents get 502 until it is back (one event per 60 s)` }) }
-      refuse({ ...base, upstream: shown }, { decision: 'error', not_captured: 'error', error: { type: d.error.type, message: d.error.message, side: 'upstream' } })
-      return o.badGateway(d.error.type)
-    }
+    const a = await admit(o)
+    if (!a) return
     o.ok()
     // 6. an agent's flow from here on. The credentials stay in this closure; the flow only knows whether the upstream has some.
     const rest = r.detach(); idle.delete(socket)
     if (rest.length) socket.unshift(rest)
-    if (d.rest.length) d.sock.unshift(d.rest)
-    counters.flows++
-    const credentialed = !!up.auth
-    // a direct upstream is redialled as the transparent door does it (a connecting socket, at once); a proxy needs its prelude again (a Promise)
-    const redial = credentialed ? undefined : (up.kind || 'direct') === 'direct' ? () => connectUpstream({ address: o.target.host, port: o.target.port }) : async () => {
-      const x = await dialUpstream(up, o.target, () => {}, { slow: false }) // the flow's own wait (flow.mjs waitFor) records a slow second prelude, once
-      // the OS's `syscall` goes along: wentBy tells a reset off the wire (kept as ECONNRESET) from Node's invented one (a close) by it
-      if (!x.ok) throw Object.assign(new Error(x.kind === 'refused' ? `the upstream refused the second connection (${x.reason})` : x.error.message), { code: x.kind === 'refused' ? 'proxy-refused' : x.error.type, ...(x.syscall ? { syscall: x.syscall } : {}) })
-      if (x.rest.length) x.sock.unshift(x.rest)
-      return x.sock
+    flow(socket, o.target, a, acceptedAt, { up: w.up, down: w.down })
+
+    // `side`: a forwarded flow's stand-in (forward.mjs), whose tally of the door's lines removed is the row's trocar_removed (4.6 §记录)
+    function flow(sock, target, { base, shown, d, up }, at, wire, side = null) {
+      if (d.rest.length) d.sock.unshift(d.rest)
+      counters.flows++
+      const credentialed = !!up.auth
+      // a direct upstream is redialled as the transparent door does it (a connecting socket, at once); a proxy needs its prelude again (a Promise)
+      const redial = credentialed ? undefined : (up.kind || 'direct') === 'direct' ? () => connectUpstream({ address: target.host, port: target.port }) : async () => {
+        const x = await dialUpstream(up, target, () => {}, { slow: false, forward: side }) // the flow's own wait (flow.mjs waitFor) records a slow second prelude, once
+        // the OS's `syscall` goes along: wentBy tells a reset off the wire (kept as ECONNRESET) from Node's invented one (a close) by it
+        if (!x.ok) throw Object.assign(new Error(x.kind === 'refused' ? `the upstream refused the second connection (${x.reason})` : x.error.message), { code: x.kind === 'refused' ? 'proxy-refused' : x.error.type, ...(x.syscall ? { syscall: x.syscall } : {}) })
+        if (x.rest.length) x.sock.unshift(x.rest)
+        return x.sock
+      }
+      handleFlow(sock, { ...base, acceptedAt: at, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}), credentialed }, wire, ...(side ? { trocarRemoved: side.removed } : {}) }, { upstream: d.sock, redial })
     }
-    handleFlow(socket, { ...base, acceptedAt, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}), credentialed }, wire: { up: w.up, down: w.down } }, { upstream: d.sock, redial })
+
+    // steps 3–5 for one target: the lookup, its refusals, the health probe, the upstream dial and its refusal rows. → {base, shown, d} with the upstream
+    // up, or undefined (the client has been answered and the connection ended). CONNECT, SOCKS5 and every forwarded authority (`side`, its stand-in) come through here.
+    async function admit(o, side = null) {
+      // 3. who is this
+      const dst = { address: o.target.host, port: o.target.port, ...(net.isIP(o.target.host) ? { family: net.isIP(o.target.host) } : {}) }
+      let meta
+      try { meta = await lookupIngress({ peer, user: who, target: dst, ...(o.header !== undefined ? { header: o.header } : {}) }) } catch (e) {
+        if (e && e.code === 'upstream-unavailable') { // the redirector would not hand over a connection it cannot dial (no login for the upstream, none to dial): trocar's own code and the ingress's own part, not a lookup that failed (4.8 §12)
+          failure({ where: 'ingress', code: 'upstream-unavailable', peer, ...(typeof e.why === 'string' ? { why: e.why } : {}), reason: `the upstream of the connection of ${shownUser(o.user)} to ${o.target.host}:${o.target.port} cannot be dialled (${msgOf(e)}); it was refused with a 502` })
+        } else {
+          const code = e && e.code === 'loader-timeout' ? 'loader-timeout' : 'loader-down'
+          failure({ code, peer, reason: `looking up the ingress connection of ${shownUser(o.user)} for ${o.target.host}:${o.target.port} failed (${msgOf(e)}); it was refused with a 502` })
+        }
+        r.detach(); return o.badGateway('lookup')
+      }
+      if (!meta) { authFailed(o.user, 'unknown user'); r.detach(); return o.denied() }
+      // a door that refused this process (the PAC door, 4.11 P10): one record of its own code, and the connection closed unanswered — a 407 would ask
+      // for credentials the door never takes (and Chromium does not fall over to the PAC's next entry on one). A refusal for an owner that could not be
+      // read (`unread`) of a client that had left is no refusal: a client that closed has no holder, hence the unread owner; it is counted `left`
+      if (meta.refuse) {
+        if (!(meta.refuse.unread && await leftWhileJudged(r))) failure({ where: 'ingress', code: meta.refuse.code, peer, reason: meta.refuse.reason })
+        r.detach(); return void socket.destroy()
+      }
+      // the client left while the lookup ran: nobody is waiting for a dial, and the user's proxy must not get its credentials for one (§5.1, §5.2)
+      if (r.isGone()) { counters.left++; return void r.detach() }
+
+      // 4. a health probe: answered here, nothing leaves the machine
+      if (meta.health) { await (o.forward ? shut('a plain HTTP request for the door\'s own health target', 'destroy', o.raw) : healthTunnel(socket, r, o, meta.group, unknown)); return }
+
+      // 5. the upstream
+      const i = who.indexOf('.')
+      const route = i < 0 ? who : who.slice(0, i), group = i < 0 ? '' : who.slice(i + 1)
+      const up = meta.upstream || { kind: 'direct' }
+      let current = null
+      r.whenGone(() => { if (current) current.destroy() })
+      const dial = () => dialUpstream(up, o.target, (s) => { current = s }, { forward: side })
+      const shown = { kind: up.kind || 'direct', ...(up.host ? { host: up.host } : {}), ...(up.port != null ? { port: up.port } : {}) }
+      // The negative cache's key is part of the lookup's contract (§5.5); one that comes without it is keyed here the way the contract says, so a lookup that
+      // forgets it cannot make every connection without a pid share the key "null" and poison one another's hosts.
+      const base = { ...meta, dst: meta.dst ?? dst, ingress: meta.ingress ?? { route, group }, negKey: meta.negKey ?? (meta.pid != null ? String(meta.pid) : who) }
+      const waited = { phase: shown.kind === 'direct' ? 'connect' : 'proxy-reply', t0: Date.now() }
+      const d = await dial()
+      current = null
+      // the client left while the upstream was dialled: no flow existed and nothing more is dialled or sent, but the give-up is a row (RFC 4.6 §记录
+      // 经代理入口的连接行); a socket the ingress cut itself (it ended or errored on neither side: onTooMuch) has its own record
+      if (r.isGone()) {
+        if (d.ok) d.sock.destroy()
+        r.detach()
+        if (!socket.readableEnded && !socket.errored) return
+        const error = wentBy('client', socket.errored, waited)
+        return void refuse({ ...base, upstream: shown }, { decision: 'error', not_captured: 'error', error, duration_ms: error.wait?.ms ?? 0 })
+      }
+      if (!d.ok) {
+        r.detach()
+        if (d.kind === 'refused') { counters.refused++; refuse({ ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}) } }, { decision: 'tunnel', not_captured: 'proxy-refused', reason: d.reason }); return o.refusedBy(d) }
+        counters.unreachable++
+        const at = now(), last = lastUnreachable.get(group)
+        // only a failure of the door's upstream proxy itself blames the door (4.8 W73): a dead target host — dialled direct, or dropped by a proxy that took
+        // the TCP connection — is that connection's row alone, and must not use up the 60 s window a real proxy outage needs
+        if (d.proxy && (last === undefined || at - last >= 60_000)) { lastUnreachable.set(group, at); failure({ where: 'netenv', code: 'upstream-unreachable', group, upstream: shown, reason: `the upstream of ${group || 'this door'} cannot be dialled (${d.error.type}: ${d.error.message}); its agents get 502 until it is back (one event per 60 s)` }) }
+        refuse({ ...base, upstream: shown }, { decision: 'error', not_captured: 'error', error: { type: d.error.type, message: d.error.message, side: 'upstream' } })
+        return o.badGateway(d.error.type)
+      }
+      return { base, shown, d, up }
+    }
   }
 
-  async function dialUpstream(up, target, track, { slow: watchSlow = true } = {}) {
+  // `forward`: a forwarded plain-http flow's stand-in. Through an http proxy it is no CONNECT: its requests go to the proxy as they are, each head
+  // with the user's credential when there is one (withCredential, at the stand-in's marks), 4.8 §5.2.
+  async function dialUpstream(up, target, track, { slow: watchSlow = true, forward = null } = {}) {
     const kind = up.kind || 'direct'
     // `proxy: true` marks a failure of the door's upstream itself (every connection of the door fails the same way), as opposed to one target (4.8 W73)
     if (!['direct', 'http', 'socks5'].includes(kind)) return { ok: false, kind: 'unreachable', proxy: true, error: { type: 'unsupported_upstream', message: `the upstream kind ${JSON.stringify(printable(kind))} is not one the ingress dials (direct, http, socks5)` } }
@@ -439,6 +495,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       sock.on('error', () => {}) // the handshake owns the outcome; a late error must not be uncaught
       try { await whenConnected(sock) } catch (e) { sock.destroy(); return failed(e) }
       if (kind === 'direct') return { ok: true, sock, reply: null, rest: Buffer.alloc(0) }
+      if (kind === 'http' && forward) return { ok: true, sock: up.auth ? withCredential(sock, Buffer.from(credentialOf(up.auth), 'latin1'), (forward.marks = [])) : sock, reply: null, rest: Buffer.alloc(0) }
       const deadline = timing.ingressDialMs ? Date.now() + timing.ingressDialMs : Infinity
       const d = kind === 'socks5' ? await viaSocks5(sock, up, target, deadline) : await viaHttp(sock, up, target, deadline)
       if (!d.ok) sock.destroy()
@@ -446,15 +503,11 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     } finally { if (slow) clearTimeout(slow) }
   }
 
-  // a health probe tunnel (4.8 §5.1): the group's own re-entry point, answered with what an http / socks5 proxy client's health check looks for
-  // an origin-form GET (4.11 P10): only on an auth:false door, answered by `servePac({ peer, user, path, left })` → { status, headers, body } | null (not the
-  // PAC: closed); `left()` → Promise<boolean>: whether the requester left while it was judged (then counted `left`). On any other door, or with no server, it is closed and `ingress-unknown`, as every opener that is not CONNECT or SOCKS5 is.
-  async function servePacGet(socket, r, peer, say, unknown, door, deadline) {
-    const bad = async (why) => { const held = r.detach(); await unknown(why, held); socket.destroy() }
-    if (!(door && door.open) || typeof servePac !== 'function') return bad('an HTTP request that is not CONNECT (GET): the ingress takes CONNECT and SOCKS5 only; a GET is served only on the PAC door')
-    const m = await r.take(headOf, deadline)
-    if (m.gone) return void r.detach()
-    if (m.timeout || m.invalid) return bad(m.invalid || `no complete GET within ${openerMs} ms`)
+  // an origin-form GET (4.11 P10) on an auth:false door with a PAC server (serve routes only those here; on any other door it is closed and
+  // `ingress-unknown`), its head `m` already read: answered by `servePac({ peer, user, path, left })` → { status, headers, body } | null (not the
+  // PAC: closed); `left()` → Promise<boolean>: whether the requester left while it was judged (then counted `left`).
+  async function servePacGet(socket, r, peer, say, unknown, door, m) {
+    const bad = async (why) => { const held = r.detach(); await unknown(why, Buffer.concat([m.raw, held])); socket.destroy() }
     const line = /^GET (\/\S*) HTTP\/1\.[01]$/.exec(m.head.startLine)
     if (!line) return bad('a GET that is not origin-form')
     let res
@@ -467,6 +520,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     socket.end()
   }
 
+  // a health probe tunnel (4.8 §5.1): the group's own re-entry point, answered with what an http / socks5 proxy client's health check looks for
   async function healthTunnel(socket, r, o, group, unknown) {
     counters.health++
     o.ok()

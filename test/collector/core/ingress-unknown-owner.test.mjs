@@ -32,7 +32,7 @@ async function door(t, ownerOfPeer) {
 }
 
 const OPENERS = [ // the varying axis: the shapes of a non-proxy opener; host is what the record may carry, never the path or query
-  { bytes: 'HEAD http://user:secret@probe.example:8080/a/path?q=1 HTTP/1.1\r\nHost: probe.example:8080\r\nX-Api-Key: fake\r\n\r\n', method: 'HEAD', host: 'probe.example' },
+  { bytes: 'HEAD https://user:secret@probe.example:8080/a/path?q=1 HTTP/1.1\r\nHost: probe.example:8080\r\nX-Api-Key: fake\r\n\r\n', method: 'HEAD', host: 'probe.example' },
   { bytes: 'HEAD / HTTP/1.1\r\nhost: Other.Example\r\nAuthorization: fake\r\n\r\n', method: 'HEAD', host: 'other.example' },
   { bytes: 'POST /x?y=z HTTP/1.1\r\n\r\n', method: 'POST', host: undefined },
   { bytes: Buffer.from([0x16, 0x03, 0x01, 0x00, 0x05, 1, 2, 3, 4, 5]), method: undefined, host: undefined },

@@ -46,24 +46,23 @@ test('CM33 · a GET on a door that takes credentials is closed, recorded ingress
   const d = await door(t, { open: false, servePac: async () => { asked++; return { status: 200, body: 'x' } } })
   assert.equal(await d.send('GET /trocar.pac HTTP/1.1\r\nHost: x\r\n\r\n'), '')
   assert.equal(asked, 0)
-  assert.equal(d.failures.length, 1); assert.equal(d.failures[0].code, 'ingress-unknown'); assert.match(d.failures[0].reason, /GET/)
+  assert.deepEqual(d.failures.map((f) => [f.code, f.method]), [['ingress-unknown', 'GET']])
 })
 
-test('CM33 · an open door with no PAC server, or an absolute-URI GET, is closed and recorded; a refused peer (servePac null) gets nothing', T, async (t) => {
+test('CM33 · an open door with no PAC server is closed and recorded; a refused peer (servePac null) gets nothing', T, async (t) => {
   const none = await door(t, { open: true })
   assert.equal(await none.send('GET /trocar.pac HTTP/1.1\r\n\r\n'), '')
   assert.equal(none.failures[0].code, 'ingress-unknown')
   const d = await door(t, { open: true, servePac: async () => null })
-  assert.equal(await d.send('GET http://x/trocar.pac HTTP/1.1\r\n\r\n'), '')
-  assert.equal(d.failures[0].code, 'ingress-unknown')
   assert.equal(await d.send('GET /trocar.pac HTTP/1.1\r\n\r\n'), '', 'servePac said no (another user): the socket is closed with no answer')
 })
 
-test('CM20 · the CONNECT\'s X-Trocar-Upstream reaches the lookup as `header`; a CONNECT without it carries none', T, async (t) => {
+test('CM20 · the X-Trocar-Upstream of a CONNECT, or of a forwarded absolute-form request, reaches the lookup as `header`; a CONNECT without it carries none', T, async (t) => {
   const d = await door(t, { open: true })
   await d.send('CONNECT api.example:443 HTTP/1.1\r\nX-Trocar-Upstream: http://corp:3128\r\n\r\n')
   await d.send('CONNECT api.example:443 HTTP/1.1\r\n\r\n')
-  assert.equal(d.asked[0].header, 'http://corp:3128')
+  await d.send('GET http://api.example/x HTTP/1.1\r\nX-Trocar-Upstream: none\r\n\r\n')
+  assert.deepEqual(d.asked.map((q) => q.header), ['http://corp:3128', undefined, 'none'])
   assert.equal('header' in d.asked[1], false)
 })
 

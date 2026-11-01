@@ -16,6 +16,9 @@ import { endpointClass } from '../../../capture/envelope.mjs'
 const defaultRunTag = () => Date.now().toString(36).slice(-4) + randomBytes(2).toString('hex')
 
 const tokens = (pairs, name) => (pairs || []).filter(([k]) => k.toLowerCase() === name).flatMap(([, v]) => v.split(',').map((t) => t.trim().toLowerCase()))
+// an absolute-form request target (plain http through a proxy, RFC 9112 §3.2.2) → its path and query, the value the same request has without a proxy:
+// the endpoint and the retention rules read paths (4.1 §统一原始信封); the whole line stays in req_head_raw. Any other target as it is.
+const pathOf = (target) => { const m = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i.exec(target || ''); if (!m) return target; const rest = target.slice(m[0].length); return rest.startsWith('/') ? rest : `/${rest}` }
 const isWsUpgrade = (req, resp) => resp.head.status === 101 && tokens(req.head.headers, 'upgrade').includes('websocket') && tokens(resp.head.headers, 'upgrade').includes('websocket')
 // a socket error as the ws recorder records it; 'end' / 'close' (no Error) are a clean end
 const errOf = (e) => (e ? { type: e.code || e.type || 'error', message: String(e.message || e) } : null)
@@ -95,13 +98,14 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
 
   const reqFramer = createFramer('request', {
     onHead(h) {
-      const rt = sample(h.method, h.target)
+      const target = pathOf(h.target)
+      const rt = sample(h.method, target)
       const ex = {
         seq: stats.exchanges++,
         id: genId(),
         record: isRecording(),             // sampled at request start (RFC 4.6 §开关)
         rt,                                // so is the retention level and class (D40)
-        req: { head: { raw: h.raw, startLine: h.startLine, headers: h.headers, method: h.method, target: h.target }, chunks: [], bytes: 0, wire: 0, keep: rt.level !== 'log', truncated: false, tsStart: new Date().toISOString() },
+        req: { head: { raw: h.raw, startLine: h.startLine, headers: h.headers, method: h.method, target }, chunks: [], bytes: 0, wire: 0, keep: rt.level !== 'log', truncated: false, tsStart: new Date().toISOString() },
         emitted: false,
         upgradeReq: asksUpgrade(h.headers), // the request framer holds what follows it (release / takeRest)
       }

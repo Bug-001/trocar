@@ -2,8 +2,8 @@
 // (auth:false) at GET /trocar.pac. Loopback (chain.mjs isLoopbackHost: localhost, *.localhost, 127.0.0.0/8, ::1) goes DIRECT; the user's bypass list `PROXY <door>; DIRECT` (the door dials it direct: bypassHit, as for
 // the env routes — 2026-10-17 a bypass-list host went DIRECT and Claude Desktop's turns were never seen); everything else `PROXY <door>; <own leg>`,
 // the own leg being the app's way without trocar (the user's fixed system proxy, else DIRECT). A plain `http:` URL, and every URL after `off` (door
-// null), gets only the app's own way: the door takes CONNECT and SOCKS5, a proxied plain-http request is absolute-form, and once the door accepted
-// the connection the `; …` after it never applies (P10: plain http on the PAC route is not captured). The PAC door takes no
+// null), gets only the app's own way: the PAC does not hand plain http to the door (P10: plain http on the PAC route is not captured), and once
+// the door accepted a connection the `; …` after it never applies. The PAC door takes no
 // credentials, so at accept it forwards only a peer of this user (peerAllowed). When a PAC route is not written at all (the four not-routed
 // conditions of ruling ③) is entries.mjs's pacGate, not this file's. The handler is registered on the door.
 import { PAC_PATH } from './entries.mjs'

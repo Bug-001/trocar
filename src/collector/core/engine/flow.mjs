@@ -181,6 +181,7 @@ export function handleFlow(client, meta, ctx) {
     if (notes.writeFailed) rec.write_failed = notes.writeFailed
     if (notes.framerError) rec.framer_error = notes.framerError
     if (notes.trocarAdded) rec.trocar_added = notes.trocarAdded // what the drain gate put into the bytes the client got (1.6 §1.3), recorded or not
+    if (meta.trocarRemoved && meta.trocarRemoved.length) rec.trocar_removed = meta.trocarRemoved.map((x) => ({ ...x })) // the door's lines taken out of a forwarded request (4.6 §记录)
     if (notes.notFollowed && !rec.not_captured) notCaptured('upgrade-not-followed', notes.notFollowed)
     // bytes_up / bytes_down = the agent's own connection's wire bytes (RFC 4.6 §记录): read off the
     // accepted socket once it has closed, so proxy preludes, TLS records (and the closing alerts after
