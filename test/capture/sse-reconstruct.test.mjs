@@ -1,7 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import zlib from 'node:zlib'
-import { makeSseReconstructor, decodeBody } from '../../src/capture/sse-reconstruct.mjs'
+import { makeSseReconstructor } from '../../src/capture/sse-reconstruct.mjs'
 
 const SSE = [
   'event: message_start',
@@ -62,12 +61,4 @@ test('keepRaw retains the raw event log', () => {
   const out = r.finish()
   assert.ok(Array.isArray(out.raw_sse))
   assert.equal(out.raw_sse[0].type, 'message_start')
-})
-
-test('decodeBody transparently decompresses gzip/deflate/br and passes through plain', () => {
-  const plain = Buffer.from('{"ok":true}')
-  assert.equal(decodeBody(zlib.gzipSync(plain), 'gzip').toString(), '{"ok":true}')
-  assert.equal(decodeBody(zlib.deflateSync(plain), 'deflate').toString(), '{"ok":true}')
-  assert.equal(decodeBody(zlib.brotliCompressSync(plain), 'br').toString(), '{"ok":true}')
-  assert.equal(decodeBody(plain, '').toString(), '{"ok":true}') // not actually compressed
 })

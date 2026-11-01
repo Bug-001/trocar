@@ -2,8 +2,6 @@
 // Fidelity boundary: the resp is a RECONSTRUCTION, not the original frames (RFC 4.1 line 37);
 // pass keepRaw=true to also retain raw_sse. Ported verbatim from the v0 prototype;
 // the keepRaw flag replaces the demo's module-level KEEP_RAW_SSE global.
-import zlib from 'node:zlib'
-
 export function makeSseReconstructor(keepRaw = false) {
   const blocks = []
   const raw = []
@@ -89,14 +87,4 @@ export function makeSseReconstructor(keepRaw = false) {
       }
     },
   }
-}
-
-// Decompress a buffer per content-encoding (best-effort; returns input on failure).
-export function decodeBody(buf, enc = '') {
-  try {
-    if (enc.includes('br')) return zlib.brotliDecompressSync(buf)
-    if (enc.includes('gzip')) return zlib.gunzipSync(buf)
-    if (enc.includes('deflate')) return zlib.inflateSync(buf)
-  } catch { /* not actually compressed */ }
-  return buf
 }

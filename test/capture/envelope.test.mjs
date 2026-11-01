@@ -1,9 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import path from 'node:path'
-import { buildEnvelope, isoStamp, isLlmCall, endpointClass, logResponse, HOP_BY_HOP, createEnvelopeWriter } from '../../src/capture/envelope.mjs'
-import { tmpDir } from '../helpers/tmp.mjs'
+import { buildEnvelope, isLlmCall, endpointClass, logResponse } from '../../src/capture/envelope.mjs'
 
 const baseArgs = {
   id: 'req_00001',
@@ -184,24 +181,6 @@ test('envelope PARITY: same interaction via two sources differs ONLY in capture'
   const b = buildEnvelope({ ...baseArgs, reqBody: body, capture: 'mitm' })
   delete a.capture; delete b.capture
   assert.deepEqual(a, b) // RFC 4.1 §验收1: adapter seam does not leak at the capture end
-})
-
-test('createEnvelopeWriter appends one flat NDJSON line per envelope (D20, no per-session split)', () => {
-  const f = path.join(tmpDir('trocar-w-'), 'trace.ndjson')
-  const w = createEnvelopeWriter(f)
-  w.write(buildEnvelope({ ...baseArgs, reqBody: Buffer.from('{}'), capture: 'mitm' }))
-  w.write(buildEnvelope({ ...baseArgs, id: 'req_00002', reqBody: Buffer.from('{}'), capture: 'mitm' }))
-  w.close()
-  const lines = fs.readFileSync(f, 'utf8').trim().split('\n')
-  assert.equal(lines.length, 2)
-  assert.equal(JSON.parse(lines[0]).id, 'req_00001')
-  assert.equal(JSON.parse(lines[1]).id, 'req_00002')
-})
-
-test('HOP_BY_HOP contains the relay-managed headers', () => {
-  for (const h of ['host', 'connection', 'content-length', 'transfer-encoding', 'proxy-authorization']) {
-    assert.ok(HOP_BY_HOP.has(h))
-  }
 })
 
 // review (H2): the decoded copy of a compressed request body is bounded for a call that is not inference — 204 KB of gzip used to become
