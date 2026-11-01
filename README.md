@@ -159,7 +159,8 @@ certificate and the command to remove it by hand, and the next `trocar uninstall
 
 No ETL, no database, no build step — the board reads the raw segments directly. The collector daemon
 serves it from `install` on (D66); `trocar board` prints its address with your key
-(http://127.0.0.1:9800/#t=…) and opens it in your browser. It is the HTTP shell of `trocar query`
+(http://127.0.0.1:9800/#t=…) and opens it in your browser. The browser keeps the key for that address, so
+the board opens again from history or a bookmark. It is the HTTP shell of `trocar query`
 over `GET /api/<name>` (D59), and `trocar status` shows its address (never the key) on its `Board` line. It
 reads `~/.trocar/raw/`, so **the sessions of every captured harness appear side by side on one
 board** (the collector's `flows/`, `audit/` and `replays/` are not envelopes and are not shown).

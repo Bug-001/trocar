@@ -139,26 +139,59 @@ test('invariant 4: a failed read is never an empty success', async () => {
   for (const [i, [answer, check]] of cases.entries()) await withFetch(answer, async () => check(await api.get('calls', { ref: 'fail-' + i })))
 })
 
-test('4.4 token boot: #t=<token> lands in sessionStorage and leaves the URL; any other hash changes nothing', () => {
-  const stubs = (hash) => {
-    const store = new Map(), replaced = []
-    return {
-      env: {
-        location: { hash, pathname: '/', search: '' },
-        history: { replaceState: (s, t, url) => replaced.push(String(url)) },
-        sessionStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) },
-      },
-      store, replaced,
-    }
-  }
-  const a = stubs('#t=abc')
-  assert.equal(bootToken(a.env), 'abc')
-  assert.deepEqual([...a.store.values()], ['abc'])
+// 4.4 §每用户口令: the page keeps the token in the board origin's localStorage, so a load without the fragment (history, bookmark,
+// a new tab) still reads; blocked storage still serves the fragment load; a 403 drops the stored copy when it is the one sent
+const storeOf = () => {
+  const m = new Map()
+  return { m, getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) }
+}
+const blocked = { getItem() { throw new Error('denied') }, setItem() { throw new Error('denied') }, removeItem() { throw new Error('denied') } }
+const loadAt = (hash, localStorage) => {
+  const replaced = []
+  return { replaced, env: { location: { hash, pathname: '/', search: '' }, history: { replaceState: (s, t, url) => replaced.push(String(url)) }, localStorage } }
+}
+let fresh = 0
+const freshHttp = () => import(`../../src/web/v2/core/http.mjs?k=${++fresh}`) // its own K-30 latch
+
+test('4.4 token boot: #t=<token> is kept and leaves the address; a later load with no fragment reads the kept token', async () => {
+  const http = await freshHttp(), store = storeOf()
+  const a = loadAt('#t=abc', store)
+  assert.equal(http.bootToken(a.env), 'abc')
   assert.equal(a.replaced.length, 1)
   assert.equal(new URL(a.replaced[0], 'http://127.0.0.1').hash.includes('abc'), false)
-  const b = stubs('#/overview')
-  assert.equal(bootToken(b.env), null)
-  assert.equal(b.store.size, 0); assert.equal(b.replaced.length, 0)
+  for (const hash of ['', '#/overview', '#/replay/p/s1']) {
+    const b = loadAt(hash, store)
+    assert.equal(http.bootToken(b.env), 'abc', hash)
+    assert.equal(b.replaced.length, 0)
+  }
+  assert.equal(http.bootToken(loadAt('#/overview', storeOf()).env), null) // a browser that never booted has no token
+})
+
+test('4.4 token boot: blocked storage still serves the fragment load and throws nothing', async () => {
+  const http = await freshHttp()
+  const a = loadAt('#t=abc', blocked)
+  assert.equal(http.bootToken(a.env), 'abc')
+  assert.equal(a.replaced.length, 1)
+  assert.equal(http.bootToken(loadAt('#/overview', blocked).env), null)
+})
+
+test('4.4 token boot: a 403 removes the kept token when it is the one sent, and leaves a newer one another tab kept', async () => {
+  for (const boot of ['#t=abc', '#/overview']) { // the token from this load's fragment, or the stored one
+    const http = await freshHttp(), store = storeOf()
+    store.setItem('trocar.token', 'abc')
+    http.configure({ token: http.bootToken(loadAt(boot, store).env) })
+    await withFetch(() => json({ error: 'x' }, 403), async () => assert.equal((await http.get('/api/sessions')).status, 403))
+    assert.equal(http.bootToken(loadAt('#/overview', store).env), null, boot)
+  }
+  const http = await freshHttp(), store = storeOf()
+  store.setItem('trocar.token', 'old')
+  http.configure({ token: http.bootToken(loadAt('#/overview', store).env) })
+  store.setItem('trocar.token', 'new') // another tab booted with a fresh link meanwhile
+  await withFetch(() => json({ error: 'x' }, 403), async () => assert.equal((await http.post('/control/on', {})).status, 403))
+  assert.equal(http.bootToken(loadAt('#/overview', store).env), 'new')
+  const b = await freshHttp() // blocked storage: the latch still closes, nothing thrown
+  b.configure({ token: b.bootToken(loadAt('#t=abc', blocked).env) })
+  await withFetch(() => json({ error: 'x' }, 403), async () => assert.equal((await b.get('/api/sessions')).status, 403))
 })
 
 // 1.2: core/api.mjs has no method for an endpoint the server does not have — every name a screen asks for is a named query

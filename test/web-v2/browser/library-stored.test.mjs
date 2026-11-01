@@ -12,7 +12,7 @@ import fs from 'node:fs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
-const TIP = 'trocar.token' // core/http.mjs: the tab's token slot (4.4)
+const TIP = 'trocar.token' // core/http.mjs: the board's token slot (4.4 §每用户口令)
 const NEW_ID = 'later-session'
 const until = async (what, f, ms = 30_000) => {
   const end = Date.now() + ms
@@ -51,7 +51,7 @@ test('1.8 (17): the stored list paints at once with the refreshing fact; the fre
     // a new context (empty caches) opens the list
     const context = await b.page.context().browser().newContext({ viewport: { width: 1280, height: 900 } })
     try {
-      await context.addInitScript(([k, t]) => { try { sessionStorage.setItem(k, t) } catch { /* the test's own page */ } }, [TIP, b.face.token])
+      await context.addInitScript(([k, t]) => { try { localStorage.setItem(k, t) } catch { /* the test's own page */ } }, [TIP, b.face.token])
       await context.addInitScript(watch)
       const page = await context.newPage(), errors = []
       page.on('pageerror', (e) => errors.push(String(e)))
