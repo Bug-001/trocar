@@ -107,7 +107,7 @@ export function pageLogHtml(doc, { filter = null, openByReader = null } = {}) {
 export function mount(el, ctx) {
   const { api, store, router } = ctx
   const openByReader = new Map()
-  let filter = router.current().params.h || null, poll = null, headSig = null
+  let filter = router.current().params.h || null, poll = null, headSig = null, shownAt = null
 
   el.innerHTML = `<div class="page capage"><div id="cloghead"></div><div class="cap-main" id="clogmain"></div></div>`
   const headEl = el.querySelector('#cloghead'), mainEl = el.querySelector('#clogmain')
@@ -119,8 +119,10 @@ export function mount(el, ctx) {
     // the head is rebuilt only when its content really changes (the filter, the agent set the menu offers); a rebuild
     // every poll would destroy an open filter menu mid-read — a re-read must not disturb the reader (1.9 #13's
     // spirit). The read stamp alone moves every poll, so it is the one element updated in place.
+    // the stamp is the time of the rows on screen: it stays put while a selection holds them (1.2 ③)
+    if (repaint(mainEl, pageLogHtml(capH, { filter, openByReader }), { hold: !reader }) !== null) shownAt = capHOkAt
     const sig = `${filter || ''}|${agents.join(',')}`
-    const stamp = capHOkAt == null ? '' : `${READ_AT} ${esc(fmtTime(capHOkAt))}`
+    const stamp = shownAt == null ? '' : `${READ_AT} ${esc(fmtTime(shownAt))}`
     if (sig !== headSig) {
       headSig = sig
       const menu = menuButton({
@@ -133,7 +135,6 @@ export function mount(el, ctx) {
       const at = headEl.querySelector ? headEl.querySelector('.readat') : null
       if (at) at.textContent = stamp
     }
-    repaint(mainEl, pageLogHtml(capH, { filter, openByReader }), { hold: !reader })
   }
 
   // a row toggles through the expand memory, so the choice survives every re-read (1.9 #13, the log page's half); a click in the

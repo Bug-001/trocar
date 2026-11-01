@@ -37,12 +37,14 @@ export function mount(el, ctx) {
   // ── painting ────────────────────────────────────────────────────────────────────────────────────────────────────
   // one string per paint (capture-view pageHtml): the expand state is baked into the row strings — the reader's choice
   // first, then the default (a problem row opens) — so a re-read never disturbs an open row; a poll's paint waits while the reader
-  // holds a selection in the rows, a paint the reader caused (`reader`) draws at once (1.2 §点击与选中文字 ③)
+  // holds a selection in the rows, a paint the reader caused (`reader`) draws at once (1.2 §点击与选中文字 ③); the head's read
+  // stamp is the time of the rows on screen, so it stays put while the rows are held
+  let shownAt = null
   function paint({ reader = false } = {}) {
     const { capH, capHOkAt, capHErr } = store.get()
     const v = captureVerdict(capH, { okAt: capHOkAt, err: capHErr })
-    headEl.innerHTML = pageHeadHtml({ name: SCREEN_NAME.capture, readAt: capHOkAt })
-    repaint(mainEl, pageHtml(capH, v, { openByReader, ov, control, ui: ctlState }), { hold: !reader })
+    if (repaint(mainEl, pageHtml(capH, v, { openByReader, ov, control, ui: ctlState }), { hold: !reader }) !== null) shownAt = capHOkAt
+    headEl.innerHTML = pageHeadHtml({ name: SCREEN_NAME.capture, readAt: shownAt })
   }
 
   // ── ?h= : land on that row, opened (1.9 §从别处进来); an agent with no row is a toast, never head-zone text ───────

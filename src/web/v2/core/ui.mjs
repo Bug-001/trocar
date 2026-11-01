@@ -237,19 +237,27 @@ function setDisc(doc, t, open) {
 }
 
 // 1.2 §点击与选中文字 ③: draw `html` into zone `z` unless it is what z last showed, or (`hold`, a poll's draw) the reader's selection
-// lies in z — then the zone waits for the next draw. After a draw the disclosures the reader set keep their state and focus returns
-// to the element of the same kind and the same href / data-h / data-key. A draw the reader caused passes hold:false. → drawn?
+// lies in z — then z stays as drawn until a draw after the selection has left it. After a draw the disclosures the reader set keep
+// their state and focus returns to the element of the same tag and the same FOCUS_KEYS value, read on the focused element itself
+// (an ancestor only when the element has none and the ancestor takes focus). A draw the reader caused passes hold:false.
+// → true drawn · false unchanged (z already shows html) · null held (z shows older data than html)
 const drawn = new WeakMap()
-const FOCUS_KEYS = ['href', 'data-h', 'data-key']
+const FOCUS_KEYS = ['id', 'aria-controls', 'href', 'data-copy', 'data-h', 'data-key']
+const keyOf = (n) => FOCUS_KEYS.find((a) => n.hasAttribute(a))
 export function repaint(z, html, { hold = true } = {}) {
   if (!z || drawn.get(z) === html) return false
   const doc = z.ownerDocument
   const sel = doc && typeof doc.getSelection === 'function' ? doc.getSelection() : null
-  if (hold && sel && !sel.isCollapsed && [sel.anchorNode, sel.focusNode].some((n) => n && z.contains(n))) return false
+  if (hold && sel && !sel.isCollapsed && [sel.anchorNode, sel.focusNode].some((n) => n && z.contains(n))) return null
   const all = (q) => (z.querySelectorAll ? [...z.querySelectorAll(q)] : [])
   const discs = new Map(all('[data-disc]').map((t) => [t.dataset.disc, t.getAttribute('aria-expanded')]))
-  const act = doc && doc.activeElement, at = act && z.contains && z.contains(act) && act.closest ? act.closest(FOCUS_KEYS.map((a) => `[${a}]`).join(',')) : null
-  const key = at ? FOCUS_KEYS.find((a) => at.hasAttribute(a)) : null, val = key ? at.getAttribute(key) : null
+  const act = doc && doc.activeElement
+  let at = act && act !== z && z.contains && z.contains(act) && act.hasAttribute ? act : null
+  if (at && !keyOf(at)) {
+    const up = at.parentElement && at.parentElement.closest ? at.parentElement.closest(FOCUS_KEYS.map((a) => `[${a}]`).join(',')) : null
+    at = up && z.contains(up) && up.tabIndex >= 0 ? up : null
+  }
+  const key = at ? keyOf(at) : null, val = key ? at.getAttribute(key) : null
   z.innerHTML = html
   drawn.set(z, html)
   for (const t of all('[data-disc]')) {

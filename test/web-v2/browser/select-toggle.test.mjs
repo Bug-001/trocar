@@ -101,9 +101,12 @@ test('selecting text inside an expanded row, or clicking there, leaves it open; 
     assert.deepEqual(await rowState(page, lhead), { exp: 'true', hidden: false }, 'log: a drag-select keeps the row open')
     assert.equal(await discOpen(page, ldisc), true, 'log: a drag-select keeps Technical details open')
     await page.evaluate(() => { window.__held = document.querySelector('.lx:not([hidden]) .tech') })
+    const stamp = () => page.evaluate(() => document.querySelector('.pagehead .readat').textContent)
+    const st0 = await stamp()
     await polls(b, 2)
     assert.equal(await page.evaluate(() => window.__held.isConnected), true, 'log: the poll does not redraw the selected text away')
     assert.equal(await selText(page), picked, 'log: the selection survives the poll')
+    assert.equal(await stamp(), st0, 'log: while the rows are held the read stamp keeps the time of the rows on screen')
     const cnt = () => page.evaluate(() => [...document.querySelectorAll('.lr:not(.h) .cnt')].map((n) => n.textContent).join('|'))
     const before = await cnt()
     await page.evaluate(() => document.getSelection().removeAllRanges())
@@ -113,6 +116,14 @@ test('selecting text inside an expanded row, or clicking there, leaves it open; 
     assert.equal(await discOpen(page, ldisc), true, 'log: the redraw keeps Technical details open')
     await page.mouse.click(lat.x, lat.y)
     assert.deepEqual(await rowState(page, lhead), { exp: 'true', hidden: false }, 'log: a plain click in the expansion keeps the row open')
+    // a focused row head is still the focused element after a poll whose answer differs
+    await page.evaluate(() => document.getSelection().removeAllRanges())
+    await page.locator(lhead).first().focus()
+    const fid = await page.evaluate(() => document.activeElement.getAttribute('aria-controls'))
+    const c1 = await cnt()
+    await polls(b, 1)
+    assert.notEqual(await cnt(), c1, 'log: the poll redrew the rows')
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-controls')), fid, 'log: focus returns to the same row head')
 
     // C · a replay-desk block head: a short drag over its label selects, a plain click on its role toggles
     await page.evaluate(() => { location.hash = '#/sessions' })

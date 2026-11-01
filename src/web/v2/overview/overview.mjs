@@ -429,7 +429,7 @@ export function mount(el, ctx) {
   const { api, router } = ctx
   let dead = false
   const s = { w: parseWindow(router.current().params.window), readAt: null, caph: { data: null, okAt: null, err: null, ok: null }, control: null, ui: new Map() }
-  let ctlAsked = false
+  let ctlAsked = false, shownAt = null
   for (const k of SLOTS) s[k] = { data: null, ok: null, err: null }
 
   el.innerHTML = SKELETON
@@ -444,14 +444,16 @@ export function mount(el, ctx) {
   }
 
   // a repaint never takes the reader's place (1.2 §点击与选中文字 ③, core/ui.mjs repaint): a zone holding a text selection waits for
-  // the next render, focus returns; a render the reader caused (`reader`, the switch's result) draws at once
+  // the next render, focus returns; a render the reader caused (`reader`: the switch's result, a window change) draws at once
   const render = (reader = false) => {
     if (dead) return
     const now = api.now()
     const body = renderBody(s, now)
-    const next = { head: headHtml(s), ...body }
     if (body.first && !ctlAsked) { ctlAsked = true; readControl() }
-    for (const k of Object.keys(zones)) repaint(zones[k], next[k], { hold: !reader })
+    // the head's read stamp is the time of the data on screen: while a selection holds any card it stays at that card's last draw
+    const held = Object.keys(body).filter((k) => zones[k]).map((k) => repaint(zones[k], body[k], { hold: !reader })).includes(null)
+    if (!held) shownAt = s.readAt
+    repaint(zones.head, headHtml({ ...s, readAt: shownAt }), { hold: !reader })
     el.querySelector('#ovgrid').classList.toggle('first', body.first)
   }
 
@@ -523,8 +525,8 @@ export function mount(el, ctx) {
     update(route) {
       const nw = parseWindow(route && route.params && route.params.window)
       if (nw === s.w) return render()
-      s.w = nw; render() // the tab moves before any answer
-      readStats().catch(() => {}).finally(render)
+      s.w = nw; render(true) // the tab moves before any answer; a window change is the reader's draw (1.2 ③)
+      readStats().catch(() => {}).finally(() => render(true))
     },
     unmount() {
       dead = true
