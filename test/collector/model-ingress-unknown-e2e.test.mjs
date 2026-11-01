@@ -104,7 +104,7 @@ for (const platform of ['darwin', 'win32']) {
         const rawDir = path.join(path.dirname(w.dir), 'raw')
         const recs = () => (fs.existsSync(rawDir) ? fs.readdirSync(rawDir) : []).flatMap((n) => fs.readFileSync(path.join(rawDir, n), 'utf8').split('\n').filter(Boolean))
         const recC = await within((async () => { for (;;) { const f = recs().map((l) => JSON.parse(l)).find((x) => x.req_head_raw && x.req_head_raw.includes(`:${C.port}/z`)); if (f) return f; await new Promise((r) => setTimeout(r, 25)) } })(), 10_000, 'the agent\'s record')
-        assert.deepEqual([recC.req_head_raw, recC.resp_head_raw + recC.resp.raw, recC.proc.pid], [`${reqC}\r\n`, replyA, PID])
+        assert.deepEqual([recC.req_head_raw, recC.endpoint, recC.resp_head_raw + recC.resp.raw, recC.proc.pid], [`${reqC}\r\n`, '/z', replyA, PID])
         assert.ok(!recs().some((l) => l.includes(decodeURIComponent(u.password))), 'the door\'s token is in no record')
         assert.equal(flowsOf(w.dir).filter((l) => l.code === 'ingress-unknown').length, before, 'forwarding is no ingress-unknown')
         assert.ok(!flowsOf(w.dir).some((l) => JSON.stringify(l).includes(decodeURIComponent(u.password))), 'the door\'s token is in no flows/ line')
