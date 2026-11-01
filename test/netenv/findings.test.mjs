@@ -108,7 +108,7 @@ test('V49 both directions, the Windows half: FINDINGS_WIN32 defines no code outs
 test('V49 the proxy mode\'s own trust reasons are findings and status reasons the schema accepts (smart-app-control, 4.11 ⑯)', () => {
   const F = pfacts('kimi-code', form('kimi-code.cli', { procs: [proc(8121, { trusted: false, reason: 'smart-app-control', hint: 'Smart App Control is on, so install placed no wrapper' })] }), fwForm(17993))
   const t = buildTopology(F)['kimi-code']
-  assert.equal(t.reason, 'smart-app-control', 'the branch carries the verdict (judgeHarness passes an untrusted proc\'s reason through)')
+  assert.equal(t.branches[0].reason, 'smart-app-control', 'the branch carries the verdict (judgeHarness passes an untrusted proc\'s reason through)')
   assert.deepEqual(validateTopology({ 'kimi-code': t }), [], 'and the schema knows it as a status reason')
   const found = diagnose({ facts: F, topology: { 'kimi-code': t }, harnesses: ['kimi-code'], user: 'u' }).find((f) => f.code === 'smart-app-control')
   assert.ok(found, 'the finding exists (the trust entry renders it)')

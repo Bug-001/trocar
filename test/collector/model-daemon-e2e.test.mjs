@@ -88,7 +88,7 @@ for (const platform of ['darwin', 'win32']) {
         const io5 = fakeIo()
         await statusRun(['codex'], { io: io5, env: w.env, home: w.home, platform, deps: { platform, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: archOf(platform) }), rootStore: w.store } })
         const esc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        assert.match(io5.text(), new RegExp(`proxy\\s+points at trocar ${esc(cf[0].proxy.written)}\\n\\s+\\(was: ${esc(cf[0].proxy.prior ?? 'none')}\\)`), `status codex prints what trocar wrote (masked) and what was there before (V70): ${io5.text()}`)
+        assert.match(io5.text(), new RegExp(`proxy\\s+points at trocar :${port}${cf[0].proxy.prior ? `\\n\\s+\\(was: ${esc(cf[0].proxy.prior)}\\)` : '(?!\\n\\s+\\(was:)'}`), `status codex prints the door trocar wrote, as its port, and what was there before (V70): ${io5.text()}`)
         assert.match(io5.text(), new RegExp(`  ${esc(cf[0].form)}\\s+certificate  [^\\n]+\\n\\s+proxy        `), 'the two axes, one line each (V32)')
         // the model daemon runs no driftCheck, so the entry the CLI wrote is never read back as the user's change
         const log = fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join('') : ''

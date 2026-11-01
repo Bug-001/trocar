@@ -50,11 +50,8 @@ function proxyNode(g, F, host, port) {
   return g.node({ kind: 'proxy', name, addr: host, port, ...(gone ? { unknown: { reason: gone.reason, detail: gone.detail } } : { down: true }) })
 }
 
-/** What follows the proxy: where the connection comes out; unknown when the proxy was. */
-function egressOf(g, p) {
-  const n = g.nodes.find((x) => x.id === p)
-  return g.node({ kind: 'egress', name: 'internet', ...(n.unknown ? { unknown: n.unknown } : {}) })
-}
+/** What follows the proxy: the internet. A proxy hop that could not be read says so itself; the hop after it is the internet all the same (1.6 A.1). */
+const egressOf = (g) => g.node({ kind: 'egress', name: 'internet' })
 
 const sourceKey = (s) => (s.kind === 'env' ? `env:${s.where}` : s.kind === 'file' ? `file:${s.where}${s.key ? `#${s.key}` : ''}` : s.kind)
 
@@ -79,9 +76,11 @@ function tail(g, F, hf, setting, follow) {
       if (u) { const p = proxyNode(g, F, u.host, u.port), x = g.edge(p, egressOf(g, p), 'egress'); return { ids: [p, x], first: { via: 'system-proxy', evidence } } }
     }
   }
-  const host = (hf.apiHosts || [])[0] || 'api'
-  const u = g.node({ kind: 'upstream', name: `${host}:443`, addr: host, port: 443 })
-  const first = ignored ? { via: 'direct', evidence: [`unsupported-scheme:${setting.scheme}`], ...(hf.behaviour.measured === 'lab' ? {} : { inferred: true }) } : { via: 'direct', evidence: [] } // not measured on this OS: said, not claimed
+  // the direct hop names only what was read from the agent's own config (1.6 A.1); a list of hosts it may use is not where it goes
+  const hosts = (hf.apiHosts || []).filter(Boolean)
+  const u = g.node(hosts.length === 1 ? { kind: 'upstream', name: hosts[0], addr: hosts[0] }
+    : hosts.length ? { kind: 'upstream', name: `${hosts.slice(0, 3).join(', ')}${hosts.length > 3 ? ` and ${hosts.length - 3} more` : ''}` } : { kind: 'upstream', name: 'the API host it uses' })
+  const first = ignored ? { via: 'direct', evidence: [`unsupported-scheme:${setting.scheme}`], ...(hf.behaviour.measured === 'lab' ? {} : { inferred: true }) } : { via: 'direct', evidence: hosts.length ? ['config'] : [] } // not measured on this OS: said, not claimed
   return { ids: [u], first }
 }
 
@@ -251,8 +250,9 @@ function proxyTopology(F, h, hf) {
   // expected (the kernel steers whatever the setting says; 1.6 附录 B gives it no command), so the note is this drawing's, said once per harness however many forms share the group.
   if (branches.some((x) => x.reason === 'proxy-changed')) notes.push(`To put trocar back on its path: trocar on ${h}`)
   for (const u of F.unknowns.filter((x) => x.reason === 'kernel-filter-invisible')) notes.push('A kernel filter such as WFP is not visible to your user.')
-  const b = branches[0]
-  return { harness: h, at: F.at, routing: F.routing, desired: F.desired[h] ?? null, on_path: b.on_path, captured: b.captured, reason: b.reason, nodes: g.nodes, edges: g.edges, branches, running: [], notes: [...new Set(notes)], findings: [] }
+  // the harness's own captured / reason are its verdict, which status fills in (statusDocOf); on_path is every branch's
+  const on = branches.map((x) => x.on_path), onPath = on.every((v) => v === true) ? true : on.every((v) => v === false) ? false : null
+  return { harness: h, at: F.at, routing: F.routing, desired: F.desired[h] ?? null, on_path: onPath, captured: null, reason: null, nodes: g.nodes, edges: g.edges, branches, running: [], notes: [...new Set(notes)], findings: [] }
 }
 
 // ── the macOS old capture: the system proxy → the VPN's script block → trocar's old MITM → the VPN again ──────────────────────────────────────────────────────────────────────────────────────────────────────

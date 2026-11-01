@@ -48,7 +48,7 @@ test('renderDetail (§3.5): the Routes block, a chain to a line, the path with t
   const row = ROWS.find((r) => r.n === 2)
   const lines = renderDetail(buildTopology(row.facts)['claude-code'])
   assert.equal(lines[0], '  Routes')
-  assert.ok(lines.some((l) => /^ +new processes/.test(l)), lines.join('\n'))
+  assert.ok(lines.some((l) => /^ +pid 4121/.test(l)), lines.join('\n')) // its branch is drawn from that process (1.6 A.1)
   assert.ok(lines.join('\n').includes('claude (pid 4121) -> trocar :47123 -> mihomo :7890 (pid 777) -> internet'))
   assert.ok(lines.some((l) => /^ +without trocar +claude \(pid 4121\) -> mihomo :7890 \(pid 777\) -> internet$/.test(l)), lines.join('\n'))
   assert.match(lines.at(-1), /^ {2}To change the proxy: edit claude-code's own settings/)
@@ -61,7 +61,7 @@ test('renderDetail (§3.5): the Routes block, a chain to a line, the path with t
 })
 
 test('V42 (text): a hop that could not be read says `unknown: <reason>` in the compact line and in the detail, and no hop says "none"', () => {
-  for (const [n, h, reason] of [[21, 'hermes', 'owner-unreadable'], [22, 'codex', 'pac']]) {
+  for (const [n, h, reason] of [[21, 'hermes', 'owner not known'], [22, 'codex', 'a PAC script trocar does not run']]) { // the reason in words, never the code (D58③)
     const t = buildTopology(ROWS.find((r) => r.n === n).facts)[h]
     for (const text of [renderCompact(t).join('\n'), renderDetail(t).join('\n')]) {
       assert.match(text, new RegExp(`unknown: ${reason}`), `row ${n}`)
@@ -86,8 +86,9 @@ test('V43 (text): every hop of the compact line is a node of the object it was d
     assert.equal(renderCompact(t).length, ways.length, `row ${row.n}: one line for each way`)
     ways.forEach((b, i) => {
       const hops = renderCompact(t)[i].replace(/^(HTTP|WebSocket) /, '').split(' -> ').map((x) => x.replace(/^\[[^\]]*\] /, ''))
-      assert.equal(hops.length, b.path.length, `row ${row.n}: one hop for each node`)
-      hops.forEach((hop, k) => { const n = t.nodes.find((x) => x.id === b.path[k]); assert.ok(n.unknown && n.kind === 'egress' ? hop === 'unknown' : hop.includes(n.kind === 'egress' ? 'internet' : n.name), `row ${row.n}: ${hop} ~ ${n.name}`) })
+      const path = b.path.filter((id, k) => !(k && t.nodes.find((x) => x.id === id).trocar && t.nodes.find((x) => x.id === b.path[k - 1]).trocar)) // trocar's door and engine are one hop (D47)
+      assert.equal(hops.length, path.length, `row ${row.n}: one hop for each node`)
+      hops.forEach((hop, k) => { const n = t.nodes.find((x) => x.id === path[k]); assert.ok(n.unknown && n.kind === 'egress' ? hop === 'unknown' : hop.includes(n.kind === 'egress' ? 'internet' : n.name), `row ${row.n}: ${hop} ~ ${n.name}`) })
     })
   }
 })
@@ -96,8 +97,8 @@ test('renderDetail in proxy mode: the way out says HTTP and WebSocket apart when
   const t = buildTopology(ROWS.find((r) => r.n === 9).facts).codex
   const lines = renderDetail(t)
   assert.equal(lines[0], '  Routes')
-  assert.equal(lines.filter((l) => /^ +new processes/.test(l)).length, 1, 'HTTP and WebSocket take the same path with trocar: one row')
-  assert.ok(lines.join('\n').includes('codex app-server (pid 5530) -> trocar :17992 -> trocar :17990 -> verge-mihomo.exe :7897 (pid 11800) -> internet'))
+  assert.equal(lines.filter((l) => /^ +pid 5530/.test(l)).length, 1, 'HTTP and WebSocket take the same path with trocar: one row')
+  assert.ok(lines.join('\n').includes('codex app-server (pid 5530) -> trocar :17992 -> verge-mihomo.exe :7897 (pid 11800) -> internet'))
   assert.ok(lines.some((l) => /^ +without trocar \(HTTP\)/.test(l)), 'the way out differs per branch: HTTP is said apart')
   assert.ok(lines.join('\n').includes('codex app-server (pid 5530) -> verge-mihomo.exe :7897 (pid 11800) -> internet'))
   assert.equal(lines.filter((l) => /it sees trocar/.test(l)).length, 1)

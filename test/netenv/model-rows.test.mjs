@@ -26,7 +26,7 @@ async function draw(args) {
 
 for (const os of OSES) {
   for (const desc of MODEL) {
-    const forms = desc.proxyMode.forms.filter((f) => f.os.includes(os)).map((f) => f.id)
+    const forms = desc.proxyMode.forms.filter((f) => f.os.includes(os) && !(f.verified && f.verified[os] && f.verified[os].reason === 'out-of-scope')).map((f) => f.id) // out of scope (D56⑥): not drawn
     if (!forms.length) continue
     const n = (t) => t.branches.length
     test(`V41 ${os} ${desc.name} rows 8 / 9 / 10: one branch per present form, door → engine → the upstream of the door's own rule; captured`, async () => {
