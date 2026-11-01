@@ -41,12 +41,12 @@ export function createNegativeCache({ threshold = 2, now = () => Date.now(), bac
       retry_at: at + Math.min(b.base * 2 ** renewals, b.max), renewals, ...(alert ? { alert } : {}) })
     return true
   }
-  function forgetKey(who) {
+  function forgetKey(who, { keepTrusted = false } = {}) {
     who = String(who)
     let dropped = 0
     for (const [k, e] of negative) if (e.negKey === who) { negative.delete(k); dropped++ }
     for (const m of [strikes, history]) for (const [k, st] of m) if (st.negKey === who) m.delete(k)
-    for (const [k, w] of trusted) if (w === who) trusted.delete(k)
+    if (!keepTrusted) for (const [k, w] of trusted) if (w === who) trusted.delete(k)
     return dropped
   }
   return {
@@ -82,7 +82,7 @@ export function createNegativeCache({ threshold = 2, now = () => Date.now(), bac
     /** forgetPid(pid) → how many negative entries were dropped (that pid's half-way counts go too). */
     forgetPid: (pid) => forgetKey(pid),
     list: () => [...negative.keys()].map(live).filter(Boolean),
-    /** forgetAgent(agent) → [{neg_key, pid, agent, hosts, dropped}], one per key of that harness's live entries, each forgotten whole (forgetKey); null = every harness. */
+    /** forgetAgent(agent) → [{neg_key, pid, agent, hosts, dropped}], one per key of that harness's live entries, its entries, strikes and history forgotten (forgetKey); its trusted marks stay: the process still trusts our leaf (4.6 §5); null = every harness. */
     forgetAgent(agent) {
       const by = new Map()
       for (const e of [...negative.keys()].map(live).filter(Boolean)) {
@@ -90,7 +90,7 @@ export function createNegativeCache({ threshold = 2, now = () => Date.now(), bac
         const g = by.get(e.negKey) || { neg_key: e.negKey, pid: e.pid ?? null, agent: e.agent, hosts: [] }
         g.hosts.push(e.host); by.set(e.negKey, g)
       }
-      return [...by.values()].map((g) => ({ ...g, dropped: forgetKey(g.neg_key) }))
+      return [...by.values()].map((g) => ({ ...g, dropped: forgetKey(g.neg_key, { keepTrusted: true }) }))
     },
     strikes: (key) => strikes.get(key)?.n || 0,
   }
