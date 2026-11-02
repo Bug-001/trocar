@@ -8,6 +8,7 @@ import { harnessName } from '../../../legacy/core/chips.mjs'
 import { SCREEN_NAME } from '../../../legacy/labels/shell.mjs'
 import { READING } from '../../../legacy/labels/common.mjs'
 import { LOG } from '../../../legacy/labels/capture.mjs'
+import { captureVerdict as verdictJs } from '../../../legacy/core/capture-verdict.mjs'
 import { useStatusQuery } from '../../ui/poll'
 import { useSelectionHold } from '../../ui/useSelectionHold'
 import { PageHead } from '../../ui/PageHead'
@@ -24,6 +25,7 @@ type Model = { state: 'reading' | 'unreadable' | 'ready', say: string[], partial
   manifest: Pair[], foot: { expected: string[], errors: Pair[] } | null }
 const logModel = logModelJs as (doc: unknown, o: { filter: string | null }) => Model
 const agentsOf = agentsOfJs as (doc: unknown) => string[]
+const captureVerdict = verdictJs as (doc: unknown, o: { okAt: number | null, err: string | null }) => { state: string, text: string }
 
 const valueText = (v: Pair['v']) => ('parts' in v ? v.parts.map((p) => ('mono' in p ? p.mono : p.text)).join('') : 'mono' in v ? v.mono : v.text)
 const pairsText = (pairs: Pair[]) => pairs.map(({ k, v }) => `${k}: ${valueText(v)}`).join('\n')
@@ -84,9 +86,11 @@ function Foot({ foot }: { foot: NonNullable<Model['foot']> }) {
 export default function CaptureLogScreen({ route }: ScreenProps) {
   const filter = (route.params as { h?: string }).h || null
   const status = useStatusQuery()
-  const latest = useMemo(() => ({ doc: status.doc, okAt: status.okAt }), [status.doc, status.okAt])
+  const latest = useMemo(() => ({ doc: status.doc, okAt: status.okAt, err: status.err, errAt: status.errAt }), [status.doc, status.okAt, status.err, status.errAt])
   const { shown, ref, release } = useSelectionHold(latest)
   const model = useMemo(() => logModel(shown.doc, { filter }), [shown.doc, filter])
+  // two missed reads → 「? not refreshed · as of T」 leads the say line (the capture page's rule, taken again at every answer)
+  const stale = useMemo(() => { const v = captureVerdict(shown.doc, { okAt: shown.okAt, err: shown.err }); return v.state === 'stale' ? v.text : null }, [shown])
   const agents = useMemo(() => agentsOf(shown.doc), [shown.doc])
 
   // open state: the reader's choice per group key; a filter change starts over and shows the latest answer at once
@@ -95,12 +99,12 @@ export default function CaptureLogScreen({ route }: ScreenProps) {
   if (shownFilter !== filter) { setShownFilter(filter); setChoice(new Map()); release() }
   const setOpen = useCallback((key: string, open: boolean) => setChoice((m) => new Map(m).set(key, open)), [])
 
-  const say = model.say.map((s, i) => <Fragment key={i}>{i ? <span aria-hidden="true"> · </span> : null}{s}</Fragment>)
+  const say = (stale ? [stale, ...model.say] : model.say).map((s, i) => <Fragment key={i}>{i ? <span aria-hidden="true"> · </span> : null}{s}</Fragment>)
   return (
     <div className="page capage">
       <div id="cloghead"><PageHead name={SCREEN_NAME['capture-log']} readAt={shown.okAt} tools={<FilterMenu filter={filter} agents={agents} />} /></div>
       <div className="cap-main" id="clogmain" ref={ref}>
-        {model.state === 'reading' ? <p className="caplog-none">{READING}</p> : null}
+        {model.state === 'reading' ? <p className="caplog-none">{stale ?? READING}</p> : null}
         {model.state === 'unreadable' ? <><p className="caplog-none">{say}</p>{model.foot ? <Foot foot={model.foot} /> : null}</> : null}
         {model.state === 'ready' ? <>
           <div className="caplog-bar">

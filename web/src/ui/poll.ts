@@ -24,7 +24,9 @@ export function pollOptions(name: PollName) {
 }
 
 // the status document. Each answer also goes into the app store through capHealthPatch, so the screens not yet ported read the same
-// answer; a failure keeps the last good document (doc) and says why (err). An aborted read writes nothing.
+// answer; a failure keeps the last good document (doc) and says why (err). An aborted read writes nothing. errAt is when the last
+// failure came: it moves with every failed read, also when the reason stays the same, so a screen that keys its verdict on it
+// re-judges 「? not refreshed」 at each answer (1.9 §页面结构).
 export function useStatusQuery() {
   const q = useQuery({
     queryKey: ['status'],
@@ -41,5 +43,5 @@ export function useStatusQuery() {
     initialDataUpdatedAt: () => store.get().capHOkAt ?? undefined,
     ...pollOptions('status'),
   })
-  return { doc: q.data ?? null, okAt: q.dataUpdatedAt || null, err: q.error ? q.error.message : null, refetch: q.refetch }
+  return { doc: q.data ?? null, okAt: q.dataUpdatedAt || null, err: q.error ? q.error.message : null, errAt: q.errorUpdatedAt || null, refetch: q.refetch }
 }
