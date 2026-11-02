@@ -48,6 +48,8 @@
     "test:browser": "node scripts/test-browser.mjs",
     "test:build": "node scripts/test-build.mjs",
     "test:web": "vitest run --config web/vitest.config.mjs",
+    "typecheck": "tsc -p web",
+    "lint": "eslint --config web/eslint.config.mjs web/src",
     "release:check": "node scripts/release.mjs check",
     "release:pack": "node scripts/release.mjs pack",
     "build:board": "vite build --configLoader native --config web/vite.config.mjs"
