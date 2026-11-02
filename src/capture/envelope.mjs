@@ -4,47 +4,15 @@
 // req_body / resp + observ-meta) — the demo's request_headers/request/response names are renamed.
 import { detectAuthMode } from './redact.mjs'
 import { shapeRequestBody } from './request-body.mjs'
+import { isLlmCall, endpointClass } from '../dissect/endpoints.mjs'
 
 function isoStamp(d = new Date()) { return d.toISOString() }
 
-// is_llm_call = the derived "是否真推理" tag (RFC 4.1:34) — provider-agnostic: whether this endpoint
-// is a real model-inference call (→ req_body stored VERBATIM), not control-plane / token-count traffic.
-// Recognizes the v1 harnesses' inference endpoints: Anthropic Messages, OpenAI Responses (Codex, e.g.
-// /codex/responses through the capture tee), OpenAI/DeepSeek Chat Completions. Capture stays a thin tee
-// — this is endpoint recognition, NOT provider parsing (that lives in the 3.1 adapter / D25 dissector).
-// Suffix-based so relay/中转站 prefixes count too (RFC 4.6 §记录: `/anthropic/v1/messages` is still
-// an inference request). The endpoints are DATA — path regex sources matched on the path without its query, from the
-// path's start — because the class table (src/classes/table.mjs, D60③) ships them as its `llm` / `token-count` rules
-// and the two must not drift (一个外部事实只写一处). The v1 harnesses' inference endpoints: Anthropic Messages
-// (count_tokens excluded by the token-count list), OpenAI Responses (Codex), OpenAI/DeepSeek Chat Completions, and
-// Gemini's :generateContent / :streamGenerateContent.
-export const TOKEN_COUNT_ENDPOINT_PATHS = Object.freeze(['.*count_tokens.*'])
-export const LLM_ENDPOINT_PATHS = Object.freeze([
-  '.*/v1/messages$',          // Anthropic Messages (incl. relay prefixes)
-  '.*/responses$',            // OpenAI Responses (Codex)
-  '.*/chat/completions$',     // OpenAI / DeepSeek Chat Completions
-  '.*:streamGenerateContent.*', '.*:generateContent.*', // Gemini
-])
-const pathMatchers = (sources) => sources.map((s) => new RegExp(`^(?:${s})`))
-const TOKEN_COUNT_RE = pathMatchers(TOKEN_COUNT_ENDPOINT_PATHS), LLM_RE = pathMatchers(LLM_ENDPOINT_PATHS)
-export function isLlmCall(endpoint) {
-  const e = String(endpoint || '').split('?')[0]
-  if (TOKEN_COUNT_RE.some((re) => re.test(e))) return false
-  return LLM_RE.some((re) => re.test(e))
-}
-
-// The two retention levels (RFC 4.6 §记录「保存级别」, D40). Only `llm` and `token-count` are told by the ENDPOINT alone
-// (here); every other class comes from the class table (src/classes/table.mjs) — capture code names no harness and holds
-// no host pattern (D20, 0.1 §5).
+// is_llm_call and the endpoint-told class (`llm` / `token-count`) come from ONE table, src/dissect/endpoints.mjs (RFC 4.1:34),
+// which the class table and the read side read too. Every other class comes from the class table (src/classes/table.mjs) —
+// capture code names no harness and holds no host pattern (D20, 0.1 §5).
+// The two retention levels (RFC 4.6 §记录「保存级别」, D40).
 export const RETENTION_LEVELS = Object.freeze(['full', 'log'])
-// The most of one body (either direction) an envelope stores — the collector's engine and both old capture paths. What is
-// past it is counted (body_wire_bytes) but not kept, and the envelope says so (req_truncated / resp.truncated).
-export const MAX_BODY_BYTES = 64 << 20
-/** 'llm' | 'token-count' | null — what the endpoint says by itself. */
-export function endpointClass(endpoint) {
-  if (isLlmCall(endpoint)) return 'llm'
-  return TOKEN_COUNT_RE.some((re) => re.test(String(endpoint || '').split('?')[0])) ? 'token-count' : null
-}
 
 // What a response keeps at the `log` level (RFC 4.1 D40 行): the metadata and the headers, never the body. `kind` is told
 // from the content type (the body is not read), raw_chars is the wire byte count (de-chunked, before content decoding).

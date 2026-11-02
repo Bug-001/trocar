@@ -13,25 +13,24 @@
 //   cut at the cap / never finished      NOT decoded, no req_encoding_error (that field means "the bytes are complete, only
 //                                        not decoded"): the stored prefix is req_body when it is whole UTF-8 text, else
 //                                        req_body null + req_body_b64; req_truncated / req_partial say why (invariant 4)
-// Leaf module: node built-ins only.
+// Imports node built-ins and the reader's decode limits only.
 import zlib from 'node:zlib'
 
-// A body that decompresses past this is not expanded: it is kept as wire bytes and labelled (a decompression bomb, or an
-// upload that is not text). The reader has the same limit (dissect/request-body.mjs).
-export const MAX_DECODED_BYTES = 256 * 1024 * 1024
-// A call that is not inference is decoded only up to this much (D40: any host of any agent can send a compressed body; the board
-// shows no more than 1 MiB of one). 204 KB of gzip became a 200 MiB req_body, and escape-heavy content pushed the NDJSON line past
-// V8's string limit — the whole call was then not captured. Over it the wire bytes are kept (req_body_b64) and the call says so
-// (req_encoding_error), the way a body that does not decode does. The reader has the same number.
-export const NON_INFERENCE_MAX_DECODED_BYTES = 1024 * 1024
+// The two decode limits are the reader's (src/dissect/request-body.mjs owns them): a body that decompresses past
+// MAX_DECODED_BYTES is not expanded (a decompression bomb, or an upload that is not text); a call that is not inference is
+// decoded only up to NON_INFERENCE_MAX_DECODED_BYTES (D40: any host of any agent can send a compressed body; 204 KB of gzip once
+// became a 200 MiB req_body and pushed the NDJSON line past V8's string limit). Over a limit the wire bytes are kept
+// (req_body_b64) and the call says so (req_encoding_error), the way a body that does not decode does.
+import { MAX_DECODED_BYTES, NON_INFERENCE_MAX_DECODED_BYTES } from '../dissect/request-body.mjs'
+// The most of one body (either direction) an envelope stores — the collector's engine, its WebSocket frames and both old
+// capture paths. What is past it is counted (body_wire_bytes) but not kept, and the envelope says so (req_truncated /
+// resp.truncated).
+export const MAX_BODY_BYTES = 64 << 20
 // A RESPONSE is decoded under the same two-limit rule (review 2026-10-07: a 713 KB gzip reply that expands to 700 MiB left no envelope
-// at all, stalled the daemon's one event loop for 510 ms and cost 732 MiB of RSS, and the wire cap alone bounds nothing: 64 MiB of
-// gzip can be 64 GiB). A call that is not inference is decoded up to 1 MiB; inference up to 64 MiB, which is the cap on one stored
-// body (MAX_BODY_BYTES in envelope.mjs) — a real model reply is a few MB at most, and "inference" is told by path, so any host can
-// claim it. Over the limit the wire bytes are kept (raw_b64) and the reply says so (encoding_error), the way a body that does not
-// decode does.
-export const MAX_DECODED_RESPONSE_BYTES = 64 * 1024 * 1024
-export const responseDecodeLimit = (llm) => (llm ? MAX_DECODED_RESPONSE_BYTES : NON_INFERENCE_MAX_DECODED_BYTES)
+// at all, and the wire cap alone bounds nothing: 64 MiB of gzip can be 64 GiB). A call that is not inference is decoded up to 1 MiB;
+// inference up to MAX_BODY_BYTES, the cap on one stored body — "inference" is told by path, so any host can claim it. Over the limit
+// the wire bytes are kept (raw_b64) and the reply says so (encoding_error).
+export const responseDecodeLimit = (llm) => (llm ? MAX_BODY_BYTES : NON_INFERENCE_MAX_DECODED_BYTES)
 /**
  * A JSON reply as an envelope stores it (RFC 4.1 保真边界 ⑤, D40 audit): `body` = the parsed value, which is what readers use, and `raw` = the
  * wire text whenever writing `body` back out would not give that text — whitespace, a trailing newline, the order of integer-like keys, a number

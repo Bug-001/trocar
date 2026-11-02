@@ -3,7 +3,8 @@
 // fields (host/scheme/dst/proc/flow_id/seq/req_head_raw/resp_head_raw, plus req_truncated/
 // req_body_bytes/req_partial only when the request body is incomplete) are appended AFTER req_body,
 // and raw request/response heads are preserved latin1-verbatim for byte-exact resend (invariant 2).
-import { buildEnvelope, logResponse, isLlmCall } from '../../../capture/envelope.mjs'
+import { buildEnvelope, logResponse } from '../../../capture/envelope.mjs'
+import { isLlmCall } from '../../../dissect/endpoints.mjs'
 import { shapeResponse } from './body.mjs'
 
 // Lowercase header names and join repeats with ', ' — the same shape Node's http gives.

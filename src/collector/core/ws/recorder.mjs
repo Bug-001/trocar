@@ -29,7 +29,8 @@ import { createFrameParser, createMessageAssembler, OP } from './frames.mjs'
 import { parseExtensions, createInflater } from './deflate.mjs'
 import { messageBytes } from './raw.mjs'
 import { buildWsEnvelope } from '../record/envelope.mjs'
-import { endpointClass, MAX_BODY_BYTES } from '../../../capture/envelope.mjs'
+import { endpointClass } from '../../../dissect/endpoints.mjs'
+import { MAX_BODY_BYTES } from '../../../capture/request-body.mjs'
 
 const noFailureSink = (r) => { throw Object.assign(new Error(`capture failure with nowhere to be recorded: ${r.code}: ${r.reason}`), { code: r.code }) } // a wiring fault: loud, never dropped
 

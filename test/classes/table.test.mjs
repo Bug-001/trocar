@@ -7,7 +7,7 @@ import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { HARNESS_IDS } from '../../src/off/harness-names.mjs'
 import { BUILTIN, readTable, classify, keepOf, edit, ClassArgError } from '../../src/classes/table.mjs'
-import { LLM_ENDPOINT_PATHS, TOKEN_COUNT_ENDPOINT_PATHS } from '../../src/capture/envelope.mjs'
+import { LLM_ENDPOINT_PATHS, TOKEN_COUNT_ENDPOINT_PATHS } from '../../src/dissect/endpoints.mjs'
 
 const home = () => tmpDir('trocar-classes-')
 const classesFile = (h) => path.join(h, 'classes.json')

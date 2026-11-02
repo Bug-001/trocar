@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildEnvelope, isLlmCall, endpointClass, logResponse } from '../../src/capture/envelope.mjs'
+import { buildEnvelope, logResponse } from '../../src/capture/envelope.mjs'
+import { isLlmCall, endpointClass } from '../../src/dissect/endpoints.mjs'
 
 const baseArgs = {
   id: 'req_00001',
@@ -22,7 +23,7 @@ test('isLlmCall: /v1/messages is llm, count_tokens/telemetry are not', () => {
 })
 
 test('isLlmCall: relay-prefixed and Gemini inference paths count, count_tokens does not', async () => {
-  const { isLlmCall } = await import('../../src/capture/envelope.mjs')
+  const { isLlmCall } = await import('../../src/dissect/endpoints.mjs')
   for (const p of ['/anthropic/v1/messages', '/api/anthropic/v1/messages?beta=true', '/api/paas/v4/chat/completions', '/codex/responses', '/v1beta/models/gemini-x:streamGenerateContent?alt=sse'])
     assert.equal(isLlmCall(p), true, p)
   for (const p of ['/v1/messages/count_tokens', '/v1/models', '/api/event_logging/v2/batch']) assert.equal(isLlmCall(p), false, p)
@@ -188,7 +189,7 @@ test('envelope PARITY: same interaction via two sources differs ONLY in capture'
 // bytes are the verbatim record either way; over the limit they stay as stored and the call says so.
 test('a compressed body that decodes past 1 MiB on a call that is not inference keeps its wire bytes and says so; inference keeps its higher limit', async () => {
   const zlib = (await import('node:zlib')).default
-  const { NON_INFERENCE_MAX_DECODED_BYTES } = await import('../../src/capture/request-body.mjs')
+  const { NON_INFERENCE_MAX_DECODED_BYTES } = await import('../../src/dissect/request-body.mjs')
   const bomb = zlib.gzipSync(Buffer.alloc(3 * 1024 * 1024, 0x61)) // 3 MiB of 'a' in ~3 KB
   assert.ok(bomb.length < 10 * 1024, 'a small body on the wire')
   const nonLlm = buildEnvelope({ ...baseArgs, endpoint: '/api/event_logging/v2/batch', reqHeaders: { 'content-encoding': 'gzip' }, reqBody: bomb, capture: 'mitm' })
