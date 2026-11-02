@@ -139,7 +139,7 @@ test('roles: a non-create client message and a server message with no call open 
 
 test('normRespWs reads the terminal message: text, usage, stop; an error terminal and a cut call say so', () => {
   const r = normRespWs(ws({ input: [user('q')], id: 'r9', output: [out('done')] }));
-  assert.deepEqual([r.text, r.id, r.canonUsage.read, r.canonUsage.fresh, r.stop_reason], ['done', 'r9', 4, 6, 'completed']);
+  assert.deepEqual([r.text, r.id, r.stop_reason], ['done', 'r9', 'completed']);
   assert.equal(normRespWs(ws({ input: [user('q')], terminal: 'error' })).stop_reason, 'error');
   assert.equal(normRespWs(ws({ input: [user('q')], terminal: 'response.failed', id: 'rf' })).stop_reason, 'failed');
   const cut = normRespWs(ws({ input: [user('q')], terminal: null, error: { type: 'ECONNRESET', message: 'cut' }, id: 'rc' }));

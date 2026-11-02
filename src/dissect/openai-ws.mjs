@@ -13,7 +13,7 @@
 // bytes carry its whole input (3.1:60). The bytes are untouched: every stitched block is located in the record
 // and field it came from (locate), so it resolves verbatim through a field-qualified text_ref (4.2:40, gate G1).
 // Leaf module.
-import { boardFlat, reqCountsFor, ctxTokens, normEvents, faithfulness, itemToBlocks } from './openai.mjs';
+import { boardFlat, reqCountsFor, ctxTokens, normEvents, itemToBlocks } from './openai.mjs';
 import { scanJson, spanAt } from './json-scan.mjs';
 import { storedReply, noSpanWhy, replyPart, partsOfUnit } from './sse-spans.mjs';
 import { isWsHandshake } from './ws-handshake.mjs'; // not ./registry.mjs: the registry imports THIS module
@@ -219,8 +219,6 @@ function stitchOf(rec) {
 export const RESPONSES_WS = Object.freeze({
   id: 'openai-responses-ws', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
   roleOf,
-  consumedBody: ['type', 'model', 'stream', 'instructions', 'tools', 'input', 'previous_response_id', 'generate'],
-  faithfulnessOf: (b) => faithfulness(b && b.block),
   // one record at a time, in step order: a connection's calls are sequential, so step order is its seq order
   prepare: (read) => createChain(read),
   stitchOf, // the id-level stitch's view of one record (as CC_THREADS.stitchOf; instructions and tools are always the call's own)

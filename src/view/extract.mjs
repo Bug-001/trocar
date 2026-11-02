@@ -23,6 +23,8 @@ import { fieldTextOf } from '../dissect/record-fields.mjs';
 import { composeTextRef } from '../raw/refs.mjs';
 import { boardDissectorFor, wireFormatOf, flatLaneOf } from '../dissect/registry.mjs';
 import { hintsOf } from '../dissect/harnesses.mjs';
+import { vendorOf } from '../dissect/vendors.mjs';
+import { mapUsage, boardUsage } from '../model/schema.mjs';
 import { CC_THREADS, replyIdOf, patchSystem } from '../dissect/cc-threads.mjs';
 import { hasCompactionPreamble } from '../identity/session-identity.mjs';
 import { sessionKeyOf } from '../dissect/harnesses.mjs';
@@ -511,10 +513,10 @@ function callX(rec, { d, format }, { h, req, unparsed }) {
   const common = { item: itemFacts(rec), format, respRefs: respRefsOf(rec), ...(extraMessagesOf(rec) || {}), ts: rec.ts_request || rec.ts || '', status: st,
     nonBlockKeys: nonBlockKeysOf(rec, format) };
   if (format === 'anthropic') {
-    const facts = callFacts(h), u = facts.usage || {};
+    const facts = callFacts(h);
     const lane = facts.sub ? 'subagent' : facts.monitor ? 'monitor' : hintsOf(rec).lane || 'main';
     return jsonClean({ ...common, facts, lane, wire: wireOf(h, format, null), rq: slimRec(h).request,
-      usage: { read: u.cache_read_input_tokens || 0, create: u.cache_creation_input_tokens || 0, fresh: u.input_tokens || 0, out: u.output_tokens || 0 },
+      usage: boardUsage(mapUsage(format, facts.usage || {}, { vendor: vendorOf(h) })),
       error: !!rec.error || !!facts.failed, replyId: replyIdOf(rec), stop_reason: normResp(h).stop_reason ?? null });
   }
   const norm = d.normResp(rec);
@@ -522,7 +524,7 @@ function callX(rec, { d, format }, { h, req, unparsed }) {
   return jsonClean({ ...common, lane: flatLaneOf(d, rec), hints: hintsOf(rec), msgCount: d.messageCount ? d.messageCount(req) : (req.message_count || 0),
     agent: d.agentOf ? d.agentOf(rec) ?? undefined : undefined, rq: slimRec(h).request, ctx: d.ctxTokens(norm), nu: norm.usage,
     reqIncomplete: reqIncompleteOf(rec), wsIncomplete: wsIncompleteOf(rec), respIncomplete: respIncompleteOf(rec),
-    model: req.model, unparsed, wire: wireOf(rec, d.id, null, norm), usage: norm.canonUsage,
+    model: req.model, unparsed, wire: wireOf(rec, d.id, null, norm), usage: boardUsage(mapUsage(format, norm.usage || {}, { vendor: vendorOf(rec) })),
     stop_reason: norm.stop_reason, error: !!rec.error || unparsed || !!(d.failed && d.failed(norm, rec)), replyId: norm.id ?? null });
 }
 

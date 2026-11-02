@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { boardFlat, canonUsage, normResp, detect, itemToBlocks, OPENAI_SECTIONS } from '../../src/dissect/openai.mjs';
+import { boardFlat, normResp, detect, itemToBlocks, OPENAI_SECTIONS } from '../../src/dissect/openai.mjs';
 import { assembleSession, sessionIdOf } from '../../src/view/assemble.mjs';
 
 // D25 · Phase 4 — the OpenAI/Codex dissector maps the Responses API into the ONE cross-provider block
@@ -57,11 +57,6 @@ test('encrypted reasoning → opaque (invariant 4); file tool_use → resource r
   assert.equal(result.block.content, 'ok, wrote 1 file');
 });
 
-test('canonUsage maps OpenAI usage → neutral {read,create,fresh,out}', () => {
-  const u = canonUsage({ input_tokens: 13959, input_tokens_details: { cached_tokens: 9088, cache_write_tokens: 0 }, output_tokens: 9 });
-  assert.deepEqual(u, { read: 9088, create: 0, fresh: 4871, out: 9 }); // fresh = input - cached
-});
-
 test('normResp reconstructs text + usage from raw_sse response.completed', () => {
   const rec = { resp: { kind: 'sse', status: 200, raw_sse: [
     { type: 'response.output_text.delta', delta: 'hel' },
@@ -73,7 +68,6 @@ test('normResp reconstructs text + usage from raw_sse response.completed', () =>
   const n = normResp(rec);
   assert.equal(n.text, 'hello');
   assert.equal(n.model, 'gpt-5.5');
-  assert.deepEqual(n.canonUsage, { read: 40, create: 0, fresh: 60, out: 2 });
 });
 
 // UPDATED 2026-07-19 (audit) — this test ENCODED THE BUG. Its middle assertion required

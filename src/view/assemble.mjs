@@ -18,6 +18,7 @@ import { sessionKeyOf, observerEffectsOf, hintsOf } from '../dissect/harnesses.m
 import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf, flatLaneOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
 import { parsedRequestBody, scannedRequestBody, sharesBody } from '../dissect/request-body.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
+import { mapUsage, boardUsage } from '../model/schema.mjs';
 import { requestEncodingOf } from '../dissect/request-body.mjs';
 
 // D17④ 地面真相(RFC 3.3:65 · 独立字节护城河). The demo proxied prefix identity with the 32-bit
@@ -244,7 +245,7 @@ function flatLaneFold(d) {
     // gets no compaction verdict and is not the lane's baseline for the next call
     const noContext = () => unparsed || !!unstored || wire.contextState === 'partial';
     const flat = d.boardFlat(req, r);
-    const usage = norm.canonUsage;
+    const usage = boardUsage(mapUsage(d.id, norm.usage || {}, { vendor: wire.vendor }));
     const st = (respOf(r) || {}).status;
     const failed = unparsed || !!(d.failed && d.failed(norm, r));
     // 3.4 compaction, the ETL's verdict (compactionVerdict, the one shared rule): a harness hint (Codex
@@ -659,11 +660,9 @@ function multiLaneFold() {
     const flat = anthropicFlat(call.rec.request, { get: (t) => { const k = keys.get(t) ?? (was && was.get(t)); if (k !== undefined) keys.set(t, k); return k; }, set: (t, k) => keys.set(t, k) });
     if (lane.calls[0] === call) an.ask(lane, firstHuman(flat)); // the lane's task (4.4 §看板 v2 需要的补充; finish)
     const u = call.norm.usage || {};
-    // Bake NEUTRAL canonical usage (D18a Q1 / D24): the board frontend reads call.usage.{read,
-    // create,fresh,out} — ZERO provider-native usage field names in the browser. Provider→canonical
-    // mapping happens HERE (server-side normResp), so adding a harness never touches the frontend (AC-3).
-    // Names track the 3.2 usage columns (cache_read / cache_write / input_uncached / output).
-    call.usage = { read: u.cache_read_input_tokens || 0, create: u.cache_creation_input_tokens || 0, fresh: u.input_tokens || 0, out: u.output_tokens || 0 };
+    // NEUTRAL usage (D18a Q1 / D24): the browser reads call.usage.{read, create, fresh, out}, never a provider's field name;
+    // the one mapping is mapUsage (3.2), the board's names its projection.
+    call.usage = boardUsage(mapUsage('anthropic', u, { vendor: call.wire.vendor }));
     // cacheBreak with prevFlat=null on the first call — matches the demo render's own call site.
     const brk = cacheBreak(p && p.flat, flat, { compaction: !!call.compaction });
     // D17④: REAL prefix SHA-256 over verbatim bytes (not the demo's 32-bit structural proxy). Two calls'

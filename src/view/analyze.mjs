@@ -29,6 +29,7 @@ import { respOf } from './assemble.mjs'
 import { HEAD, taskOf, shorten } from './blockmeta.mjs'
 import { streamParts } from '../dissect/sse-spans.mjs'
 import { num52, numTable } from '../query/projection.mjs'
+import { mapUsage } from '../model/schema.mjs'
 export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
 
 const FILE_OPS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
@@ -390,7 +391,7 @@ export function callFacts(r) {
     reqIncomplete, wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
     errMsg: r._unparsed ? unparsedErrMsg(reqIncomplete)
       : (rs.error?.message || (status != null && status !== 200 ? `HTTP ${status}` : (r.error ? String(r.error.message || r.error) : null))),
-    ctx: (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0),
+    ctx: mapUsage('anthropic', u || {}).total_input,
     usage: u,
     preamble: hasCompactionPreamble(req.messages),
     mcp: (req.tools || []).filter((t) => /^mcp__/.test(t.name || '')).map((t) => 'MCP: ' + (String(t.name).split('__')[1] || t.name)),

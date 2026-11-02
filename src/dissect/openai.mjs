@@ -298,19 +298,6 @@ export function boardFlatChat(req) {
   }
   return flat;
 }
-// Chat usage → the SAME neutral canonical names. prompt_tokens is TOTAL input (incl cached); the chat
-// wire has no cache-write counter, so `create` is 0 — reported as 0 because it is absent, not guessed.
-// DeepSeek reports the exact split (prompt_cache_hit/miss_tokens) and wins; OpenAI nests cached_tokens; Kimi
-// may put cached_tokens at the top level. Same precedence as the ETL's mapUsage('openai-chat').
-export function canonUsageChat(usage = {}) {
-  const u = usage || {};
-  const d = u.prompt_tokens_details || {};
-  const input = u.prompt_tokens || 0;
-  // `??`, not `||`: a reported 0 is a fact (the same reading as mapChat)
-  const read = u.prompt_cache_hit_tokens != null ? u.prompt_cache_hit_tokens : (d.cached_tokens ?? u.cached_tokens ?? 0);
-  const fresh = u.prompt_cache_miss_tokens != null ? u.prompt_cache_miss_tokens : Math.max(0, input - read);
-  return { read, create: 0, fresh, out: u.completion_tokens || 0 };
-}
 // SSE chunks (or a non-streaming JSON body) → { model, usage, text, tools, stop_reason } (`tools`: the neutral name, 2.6 §A).
 export function normRespChat(rec) {
   const resp = (rec && rec.resp) || (rec && rec.response) || {};
@@ -344,7 +331,7 @@ export function normRespChat(rec) {
     }
   }
   const tools = [...acc.values()].map((t) => ({ id: t.id, name: t.name, input: safeJson(t.args) }));
-  return { model, id, stop_reason: stop, usage, canonUsage: canonUsageChat(usage), text, thinking: thinking || undefined, tools };
+  return { model, id, stop_reason: stop, usage, text, thinking: thinking || undefined, tools };
 }
 
 // ── shape-dispatched entry points (the shared view layer calls THESE, never a per-shape branch) ────
@@ -367,18 +354,6 @@ export function reqCountsFor(shape, req) {
   };
 }
 
-// ── usage: OpenAI Responses usage → the board's NEUTRAL canonical {read, create, fresh, out} ─────
-// OpenAI input_tokens is TOTAL input (incl cached); cached_tokens is the portion served from cache. `fresh` is what is
-// neither read nor written: total − read − write, the ETL's input_uncached (3.2 table, F3) and the
-// Anthropic meaning (uncached + read + write = total). Same clamp at 0 as src/model/schema.mjs::mapResponses.
-export function canonUsage(usage = {}) {
-  const u = usage || {};
-  const d = u.input_tokens_details || {};
-  const read = d.cached_tokens || 0;
-  const create = d.cache_write_tokens || 0;
-  const input = u.input_tokens || 0;
-  return { read, create, fresh: Math.max(0, input - read - create), out: u.output_tokens || 0 };
-}
 
 // ── normalize the SSE response → { model, usage, text, tools, stop_reason } from resp.raw_sse.
 // The reverse-proxy's reconstruction is Anthropic-shaped (empty for OpenAI), so we read raw_sse (kept
@@ -404,7 +379,7 @@ export function normEvents(events) {
   if (!completed) for (const e of events || []) if (e && e.type === 'response.output_text.delta') text += e.delta || '';
   const errored = !completed && (events || []).some((e) => e && e.type === 'error');
   return { model: (completed && completed.model) || null, id: (completed && completed.id) || null,
-    stop_reason: (completed && completed.status) || (errored ? 'error' : null), usage, canonUsage: canonUsage(usage), text, thinking: undefined, tools: toolCalls };
+    stop_reason: (completed && completed.status) || (errored ? 'error' : null), usage, text, thinking: undefined, tools: toolCalls };
 }
 export function normResp(rec) {
   const resp = (rec && rec.resp) || (rec && rec.response) || {};
@@ -422,8 +397,7 @@ export function ctxTokens(norm) {
 // branches on a wire. Registered by wire format in src/dissect/registry.mjs (`boardDissectorFor`).
 // `provider` is the pre-D37 board label (analyzed.provider), kept for readers of old payloads; `blockKeys`
 // are the request's top-level keys that become context blocks (everything else is a non-block key).
-// `consumedBody` — the request keys this dissector maps to blocks (the rest are unmapped, 3.1:44); `messageCount` — the
-// message count compaction compares (3.4); `faithfulnessOf` — a flat block's 3.2 faithfulness.
+// `messageCount` — the message count compaction compares (3.4).
 // ── reply parts (sse-spans.mjs): each reply block addressed as a span of resp.raw. Responses keys an event by its
 // `output_index` and takes the item the wire closes it with (output_item.done, else the terminal's output); Chat keys
 // a chunk by choice index and what its delta carries (reasoning, text, or tool call `index`).
@@ -465,24 +439,19 @@ const CHAT_REPLY = {
   jsonBlocks: (body) => (Array.isArray(body.choices) ? body.choices : []).flatMap((c) => (c && c.message ? chatMessageToBlocks(c.message).map((x) => x.block) : [])),
 };
 
-const blockFaithfulness = (b) => faithfulness(b && b.block); // tools / system descriptors carry no .block → verbatim
 export const RESPONSES = Object.freeze({
   id: 'openai-responses', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
   boardFlat: (req) => boardFlat(req), normResp: (rec) => normResp(rec),
   reqCounts: (req) => reqCountsFor('responses', req), ctxTokens,
   // the stream's terminal says the response failed, or an `error` event arrived with no terminal (normEvents)
   failed: (norm) => norm.stop_reason === 'failed' || norm.stop_reason === 'error',
-  consumedBody: ['model', 'stream', 'instructions', 'tools', 'input'],
   replyParts: (rec) => streamParts(rec, RESPONSES_REPLY),
   messageCount: (req) => (Array.isArray(req && req.input) ? req.input.length : typeof (req && req.input) === 'string' ? 1 : 0),
-  faithfulnessOf: blockFaithfulness,
 });
 export const CHAT = Object.freeze({
   id: 'openai-chat', provider: 'openai', blockKeys: ['tools', 'messages'],
   boardFlat: (req) => boardFlatChat(req), normResp: (rec) => normRespChat(rec),
   reqCounts: (req) => reqCountsFor('chat', req), ctxTokens,
-  consumedBody: ['model', 'stream', 'messages', 'tools'],
   replyParts: (rec) => streamParts(rec, CHAT_REPLY),
   messageCount: (req) => (Array.isArray(req && req.messages) ? req.messages.length : 0),
-  faithfulnessOf: blockFaithfulness,
 });
