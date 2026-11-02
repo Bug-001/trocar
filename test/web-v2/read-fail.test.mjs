@@ -11,7 +11,8 @@ import * as prices from '../../web/legacy/settings/prices.mjs'
 import * as storage from '../../web/legacy/settings/storage.mjs'
 import { readFailHtml, captionHtml, emptyBoardHtml } from '../../web/legacy/library/library.mjs'
 import { capShotMaker } from '../../web/legacy/library/logic.mjs'
-import { pageLogHtml } from '../../web/legacy/capture/capture-log.mjs'
+import { logModel } from '../../web/src/screens/capture/log-model.mjs'
+import { HEALTH_READ } from '../../web/legacy/labels/common.mjs'
 import { captureVerdict } from '../../web/legacy/core/capture-verdict.mjs'
 import { screenErrorHtml } from '../../web/legacy/shell/safemount.mjs'
 import { hidesReason, reasonsWith, visibleOf, outsideCollapsed } from './visible.mjs'
@@ -136,7 +137,10 @@ test('library, capture log and the shell keep a failed read\'s reason out of the
         if (!(st === 503 && given)) assert.ok(outsideCollapsed(eb).includes(esc(readFailure(LW.CAPTURE_HEALTH, { status: st }).line)), where(`empty board ${how} cause`))
       }
       if (!given) continue // the rest take a bare reason; an empty one is no failure there
-      hidesReason(pageLogHtml({ unreadable: reason }), t, true, where('capture log'))
+      const log = logModel({ unreadable: reason }) // the visible words are the board's; the reason only in the technical pairs
+      assert.ok(log.say.includes(HEALTH_READ.unreadable), where('capture log'))
+      assert.ok(!JSON.stringify([log.say, log.none, log.rows, log.manifest]).includes(t), where('capture log'))
+      assert.ok(log.foot.errors.some((p) => p.v.text.includes(t)), where('capture log details'))
       assert.ok(!visibleOf(captureVerdict({ unreadable: reason }, { okAt: NOW, now: NOW }).text).includes(t), where('verdict'))
       hidesReason(screenErrorHtml(reason), t, true, where('screen error'))
     }
