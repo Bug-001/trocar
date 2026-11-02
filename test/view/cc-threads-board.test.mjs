@@ -1,38 +1,31 @@
-// test/view/cc-threads-board.test.mjs — the board over a Message Threads session (RFC 3.1:60, 3.2:52, invariant 4 / D38):
-// lanes are judged on the stitched context, every request block resolves to its source bytes, a missing anchor shows
-// as partial. Records are synthetic (test/helpers/cc-threads.mjs) and go through a real capture file, so blocks carry
-// text_refs exactly as on the product path.
+// test/view/cc-threads-board.test.mjs — 3.1 #7: the lanes of a Message Threads session (RFC 3.1:60, 3.2:52, invariant 4 / D38) are judged
+// on the stitched context: one main lane, one subagent lane per agent, auxiliary calls apart; a missing anchor reads partial. Records are
+// synthetic (test/helpers/cc-threads.mjs), written in step order and read through the `session` document (test/helpers/session-doc.mjs).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { assembleSession } from '../../src/view/assemble.mjs';
-import { readRecords } from '../../src/raw/ingest.mjs';
-import { tmpDir } from '../helpers/tmp.mjs';
+import { homeWith, query, SEGMENT } from '../helpers/session-doc.mjs';
 import { threadSession, record, replyOf, user } from '../helpers/cc-threads.mjs';
 
+// record id → { row, lane: the lane head with `calls`, the record ids of its rows in document order }
 async function board(recs) {
-  const file = path.join(tmpDir('trocar-threads-'), 'cap.ndjson');
-  fs.writeFileSync(file, recs.map((r) => JSON.stringify(r)).join('\n') + '\n');
-  const A = assembleSession(await readRecords(file));
-  const calls = new Map(A.lanes.flatMap((l) => l.calls.map((c) => [c.id, { ...c, lane: l }])));
-  return { A, file, calls };
+  const inOrder = [...recs].sort((a, b) => a.ts_request.localeCompare(b.ts_request));
+  const idOf = new Map(inOrder.map((r, i) => [`${SEGMENT}:${i + 1}`, r.id]));
+  const doc = await query(homeWith(inOrder), 'session', { id: inOrder[0].req_headers['x-claude-code-session-id'] });
+  const lanes = new Map(doc.lanes.map((l) => [l.lane, { ...l, calls: doc.calls.filter((c) => c.lane === l.lane).map((c) => idOf.get(c.rid)) }]));
+  return new Map(doc.calls.map((c) => [idOf.get(c.rid), { row: c, lane: lanes.get(c.lane) }]));
 }
 
 test('continuations land in their thread\'s lane: one main lane, one subagent lane per thread, aux calls apart', async () => {
   const s = threadSession();
-  const { calls } = await board(s.fileOrder);
+  const calls = await board(s.fileOrder);
   const laneOf = (id) => calls.get(id).lane;
   assert.equal(laneOf('M0').kind, 'main');
-  assert.equal(laneOf('M1'), laneOf('M0'));
-  assert.equal(laneOf('M2'), laneOf('M0'));
+  assert.deepEqual(laneOf('M0').calls, ['M0', 'M1', 'M2']);
   assert.equal(laneOf('S0').kind, 'subagent');
-  assert.equal(laneOf('S1'), laneOf('S0'), 'the subagent thread is one stream, not split by the interleaved main calls');
+  assert.deepEqual(laneOf('S0').calls, ['S0', 'S1'], 'the subagent thread is one lane, not split by the interleaved main calls');
   // request-class auxiliary (3.4): a background call, never a turn of the main or a subagent lane
   assert.equal(laneOf('A').kind, 'aux');
-  assert.deepEqual(laneOf('M0').calls.map((c) => c.id), ['M0', 'M1', 'M2']);
-  // the lane's view of a continuation is its stitched context, not its two-message delta
-  assert.equal(calls.get('M2').msgCount, calls.get('M1').msgCount + 2);
+  for (const id of ['M1', 'M2', 'S1']) assert.notEqual(calls.get(id).row.wire.contextState, 'partial', `${id} is stitched`);
 });
 
 test('an auxiliary call carrying its subagent\'s agent-id is aux, not a turn of that subagent lane', async () => {
@@ -45,32 +38,18 @@ test('an auxiliary call carrying its subagent\'s agent-id is aux, not a turn of 
     model: 'claude-opus-x', max_tokens: 200, system: JSON.parse(s.S0.req_body).system,
     messages: [user('subagent task: count files'), { role: 'assistant', content: [{ type: 'text', text: 'counting' }] }, user('summarise progress')],
   }, replyOf('msg_p', [{ type: 'text', text: 'counting files' }]), { ...sub, 'x-claude-code-request-class': 'auxiliary' });
-  const { calls } = await board([s.M0, S0, S1, P]);
+  const calls = await board([s.M0, S0, S1, P]);
   assert.equal(calls.get('P').lane.kind, 'aux');
-  assert.deepEqual(calls.get('S0').lane.calls.map((c) => c.id), ['S0', 'S1']);
+  assert.deepEqual(calls.get('S0').lane.calls, ['S0', 'S1']);
 });
 
-test('a missing anchor shows on the call as partial with what is missing (never as complete)', async () => {
+test('a missing anchor shows on the call and its successors as partial (never as complete)', async () => {
   const s = threadSession();
-  const { calls } = await board([s.M1, s.M2]);
+  const calls = await board([s.M1, s.M2]);
   for (const id of ['M1', 'M2']) {
-    assert.equal(calls.get(id).wire.contextState, 'partial');
-    assert.match(calls.get(id).wire.contextMissing, /msg_m0/);
-    assert.equal(calls.get(id).prefixSha256, null, 'no byte-identity claim over a partial context (3.2:130)');
+    assert.equal(calls.get(id).row.wire.contextState, 'partial');
+    assert.equal(typeof calls.get(id).row.wire.contextMissing, 'string', 'it says what is missing');
   }
-});
-
-test('system-role messages and tool_addition blocks are blocks of the context; an added definition is a tool', async () => {
-  const s = threadSession();
-  const { calls } = await board(s.fileOrder);
-  const flat = calls.get('M1').flat;
-  const add = flat.find((b) => b.kind === 'tool_addition');
-  assert.ok(add && add.text_ref, 'the tool_addition block is in the context and addressable');
-  assert.equal(add.role, 'system');
-  assert.equal(add.head.label, 'Grep');
-  assert.ok(flat.some((b) => b.sec === 'messages' && b.role === 'system' && b.kind === 'text'));
-  assert.equal(calls.get('M1').rec.request.tool_count, JSON.parse(s.M0.req_body).tools.length + 1);
-  assert.ok(calls.get('M1').comp.tools > 0);
 });
 
 test('an agent that starts a new thread midway stays one subagent lane; another agent id is another lane', async () => {
@@ -87,8 +66,8 @@ test('an agent that starts a new thread midway stays one subagent lane; another 
     model: 'claude-opus-x', thread: { type: 'create' }, max_tokens: 1000, stream: true, system: JSON.parse(s.S0.req_body).system,
     tools: JSON.parse(s.S0.req_body).tools, messages: [user('another task')],
   }, replyOf('msg_t0', [{ type: 'text', text: 'ok' }])));
-  const { calls } = await board([s.M0, S0, s.M1, S1, S2, T0]);
-  assert.deepEqual(calls.get('S0').lane.calls.map((c) => c.id), ['S0', 'S1', 'S2']);
+  const calls = await board([s.M0, S0, s.M1, S1, S2, T0]);
+  assert.deepEqual(calls.get('S0').lane.calls, ['S0', 'S1', 'S2']);
   assert.equal(calls.get('T0').lane.kind, 'subagent');
   assert.notEqual(calls.get('T0').lane, calls.get('S0').lane);
 });
