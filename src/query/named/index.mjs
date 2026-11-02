@@ -60,8 +60,9 @@ async function verdict(name, { params, errors, userHome, env, platform, deps }) 
 // ── parameters every list query shares (§4.1 参数) ────────────────────────────
 export const LIMIT_DEFAULT = 50, LIMIT_MAX = 500;
 /** What `overview` may compute for its `usage` beyond the usage sidecars (3.5 §访问模式: bounded by a byte budget, never
- *  O(corpus)): stored bytes of the in-window model calls no sidecar covers yet, newest session first. */
-export const OVERVIEW_USAGE_BYTES = 16 * 1024 * 1024;
+ *  O(corpus)): stored bytes of the in-window model calls no sidecar covers yet, newest session first. Sized by wall time, not
+ *  bytes: the facts are the session's extraction and reduction, which cost about 1.6x the old META fold per byte (3.5 依据). */
+export const OVERVIEW_USAGE_BYTES = 10 * 1024 * 1024;
 const whole = (v, name, dflt) => {
   if (v == null || v === '') return dflt;
   const n = Number(v);
