@@ -22,8 +22,8 @@ const HEALTH_STATES = (() => {
   const seg = row.slice(row.indexOf('`state` ∈'), row.indexOf('另带'))
   return [...seg.matchAll(/`([a-z-]+)`/g)].map((m) => m[1]).filter((s) => s !== 'state')
 })()
-const NOT_KNOWN = 'unknown'
-const keyOf = (g) => `${g.level ?? ''}/${g.where ?? ''}/${g.code ?? ''}` // a log row's key: the fold's own (C.3) // K-28: health absent → 不知道 = the closed set's `unknown`
+const NOT_KNOWN = 'unknown' // K-28: health absent → 不知道 = the closed set's `unknown`
+const keyOf = (g) => `${g.level ?? ''}/${g.where ?? ''}/${g.code ?? ''}` // a log row's key: the fold's own (C.3)
 
 test('(1) the real status document carries health (the verdict) and failure groups with where (the log\'s words)', async () => {
   const b = boardHome(), now = new Date()
