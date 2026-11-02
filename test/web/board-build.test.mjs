@@ -22,7 +22,8 @@ test('a rebuild of web/ equals the committed src/web/board/, file by file and by
   const vite = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js')
   assert.ok(fs.existsSync(vite), 'vite is installed (npm ci)')
   const r = spawnSync(process.execPath, [vite, 'build', '--configLoader', 'native', '--config', 'web/vite.config.mjs', '--outDir', out, '--emptyOutDir', '--logLevel', 'warn'],
-    { cwd: ROOT, encoding: 'utf8' })
+    // vite's bin turns on Node's compile cache, which writes into the shared temp dir; a test leaves nothing there
+    { cwd: ROOT, encoding: 'utf8', env: { ...process.env, NODE_DISABLE_COMPILE_CACHE: '1' } })
   assert.equal(r.status, 0, r.stderr || r.stdout)
   const files = tree(BUILT)
   assert.deepEqual(tree(out), files, 'the same files')
