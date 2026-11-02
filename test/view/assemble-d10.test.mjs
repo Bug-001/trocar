@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { assembleSession } from '../../src/view/assemble.mjs';
 import { readRecords } from '../../src/raw/ingest.mjs';
-import { buildResolver } from '../../src/query/source.mjs';
 import { tmpDir } from '../helpers/tmp.mjs';
 
 // RFC 3.1 dissector · D18a (2026-07-16 amendment): the board must render the PRODUCT capture format (D10:
@@ -65,8 +64,6 @@ async function assembleFromCapture(record = d10Record()) {
   return { A, file, record, call: lane && lane.calls[0] };
 }
 
-const enc = (s) => Buffer.byteLength(String(s), 'utf8');
-
 test('board renders a D10 capture (req_body string) — not empty', async () => {
   const { call } = await assembleFromCapture();
   assert.ok(call, 'D10 record produced a main-lane call');
@@ -82,70 +79,6 @@ test('board renders a D10 capture (req_body string) — not empty', async () => 
     assert.ok(b.bytes > 0, `${b.sec} row carries its wire byte weight`);
     assert.ok(b.text_ref, `${b.sec} row carries a text_ref (body is fetched from the capture)`);
   }
-});
-
-test('D10 tools render VERBATIM (full input_schema), not metadata — faithful original context', async () => {
-  const { call, file, record } = await assembleFromCapture();
-  const tool = (call.flat || []).find((b) => b.sec === 'tools');
-  assert.ok(tool, 'a tools block is present');
-  assert.equal(tool.verbatim, true, 'tool is verbatim (input_schema present in the wire req_body)');
-  assert.equal(tool.name, 'Read');
-  // The schema no longer rides on the block (RFC 4.2:55) — it is FETCHED from the capture. That the
-  // FULL schema (not just param names) is carried is now pinned where it actually lives: resolve the
-  // locator and parse the tool definition back out of the source bytes.
-  assert.equal(tool.schema, undefined, 'the heavy schema is NOT on the wire — it is addressed');
-  assert.equal(tool.desc, undefined, 'the heavy description is NOT on the wire either');
-  const resolve = await buildResolver(file);
-  const got = resolve.detail(tool.text_ref);
-  assert.equal(got.status, 'ok', got.reason || '');
-  assert.equal(got.fidelity, 'verbatim', 'D10 bytes are the captured wire string, not a re-serialization');
-  const def = JSON.parse(got.text);
-  assert.equal(def.name, 'Read');
-  assert.equal(def.description, 'Read a file from the local filesystem.');
-  assert.ok(def.input_schema && def.input_schema.properties, 'the full input_schema is carried, not just param names');
-  assert.deepEqual(Object.keys(def.input_schema.properties).sort(), ['file_path', 'limit']);
-  assert.deepEqual(def.input_schema.required, ['file_path']);
-  const src = JSON.parse(record.req_body).tools[0];
-  assert.deepEqual(def, src, 'the resolved tool definition IS the wire one, byte-span for byte-span');
-  // And the row's own weight must be computed off those verbatim bytes (blockBytes' verbatim branch:
-  // name + description + serialized schema), NOT off the v0 metadata-only `descChars` fallback — that
-  // difference is the whole D15 fidelity boundary.
-  assert.equal(tool.bytes, enc(src.name) + enc(src.description) + enc(JSON.stringify(src.input_schema)));
-  resolve.dispose && resolve.dispose();
-});
-
-test('D10 blocks round-trip: text_ref resolves to the wire req_body bytes, diff = 0 (AC-1 for D10)', async () => {
-  // RFC 2.3 §验收1: rebuild the window from the blocks' text_refs and diff it against the NDJSON
-  // source's system/messages bytes. This is the round-trip the old `b.text === body.system[0].text`
-  // check only approximated — it compared a shipped COPY, which could drift from the capture; this
-  // compares what the board will actually display, produced by 「定位源记录 → slice(start,end)」.
-  const { call, file, record } = await assembleFromCapture();
-  const flat = call.flat || [];
-  const resolve = await buildResolver(file);
-  const body = JSON.parse(record.req_body);
-
-  for (const b of flat) {
-    // The contract's hard half: bodyless on the wire, addressable instead. Never neither.
-    assert.ok(b.text_ref, `${b.sec} block is addressable`);
-    assert.equal(b.text, undefined, `${b.sec} block ships no inlined text`);
-    assert.equal(b.block, undefined, `${b.sec} block ships no inlined block body`);
-    assert.equal(b.unaddressable, undefined, `${b.sec} block is resolved from the capture, not inlined`);
-    // 逐字 diff = 0 against the raw capture line: the span must slice EXACTLY these bytes out of the
-    // verbatim req_body string that the record carries.
-    const [, spanStr] = b.text_ref.split('::');
-    const [start, end] = spanStr.split('-').map(Number);
-    const got = resolve.detail(b.text_ref);
-    assert.equal(got.status, 'ok', `${b.sec}: ${got.reason || ''}`);
-    assert.equal(got.text, record.req_body.slice(start, end), `${b.sec} block bytes === req_body[${start},${end})`);
-  }
-
-  const sys = flat.find((b) => b.sec === 'system');
-  assert.deepEqual(JSON.parse(resolve.detail(sys.text_ref).text), body.system[0],
-    'system block resolves to the verbatim wire system block');
-  const msgs = flat.filter((b) => b.sec === 'messages').map((b) => JSON.parse(resolve.detail(b.text_ref).text));
-  assert.ok(msgs.some((m) => (typeof m === 'string' ? m : m && m.text || '').includes('read config.json please')),
-    'user text is verbatim in the window, resolved back from the capture');
-  resolve.dispose && resolve.dispose();
 });
 
 test('D10 usage bakes into neutral canonical roles + response is bridged (resp→response)', async () => {

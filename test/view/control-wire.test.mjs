@@ -121,3 +121,13 @@ test('every credential name, raw shape (whitespace before the colon, obs-fold) a
     assert.equal(shown.ctl?.masked?.includes(base) ?? false, false)
   }
 })
+
+// D-9 / 3.2 traffic_class: the class shown is the one the call was recorded under (the collector writes it, D60 ③), also a class the
+// operator added; a record without one shows none, never a re-derived one
+test('ctl.traffic_class is the record\'s own traffic_class, or null when it has none', () => {
+  const { traffic_class: _drop, ...bare } = SEED
+  for (const cls of ['my-sync', 'telemetry']) {
+    assert.equal(controlRecordWire({ ...bare, traffic_class: cls, is_llm_call: false, endpoint: '/api/event_logging/v2/batch' }).ctl.traffic_class, cls)
+  }
+  assert.equal(controlRecordWire(bare).ctl.traffic_class, null)
+})

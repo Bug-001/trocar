@@ -1,5 +1,5 @@
 // src/dissect/json-scan.mjs — where each value sits in a JSON text, by byte offset: what a text_ref (4.2:40) points at and what
-// content_hash (src/adapters/content-hash.mjs) hashes. Leaf module.
+// blockSpans (src/dissect/cc-spans.mjs) reads. Leaf module.
 
 // Minimal span-tracking JSON scanner. Parses `text` and returns a node tree where
 // every value carries { start, end } string offsets into the ORIGINAL text, so a

@@ -2,17 +2,10 @@
 // capture sources (reverse-proxy / mitm / relay-tee) emit this via buildEnvelope, so the adapter
 // seam does not leak at the capture end (invariant 3). Field names are canonical (req_headers /
 // req_body / resp + observ-meta) — the demo's request_headers/request/response names are renamed.
-import fs from 'node:fs'
 import { detectAuthMode } from './redact.mjs'
 import { shapeRequestBody } from './request-body.mjs'
 
-export function isoStamp(d = new Date()) { return d.toISOString() }
-
-// Hop-by-hop headers a relay must manage; content-length is recomputed by the outbound client.
-export const HOP_BY_HOP = new Set([
-  'host', 'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
-  'te', 'trailer', 'transfer-encoding', 'upgrade', 'content-length',
-])
+function isoStamp(d = new Date()) { return d.toISOString() }
 
 // is_llm_call = the derived "是否真推理" tag (RFC 4.1:34) — provider-agnostic: whether this endpoint
 // is a real model-inference call (→ req_body stored VERBATIM), not control-plane / token-count traffic.
@@ -40,10 +33,9 @@ export function isLlmCall(endpoint) {
   return LLM_RE.some((re) => re.test(e))
 }
 
-// The seven traffic classes (RFC 4.6 §记录「保存级别」, D40) and the two retention levels. `llm` and `token-count` are
-// told by the ENDPOINT alone (here); the rest by the read-side harness table (src/dissect/traffic.mjs), which the
-// wiring injects — capture code names no harness and holds no host pattern (D20, 0.1 §5).
-export const TRAFFIC_CLASSES = Object.freeze(['llm', 'token-count', 'session-sync', 'telemetry', 'files', 'account', 'other'])
+// The two retention levels (RFC 4.6 §记录「保存级别」, D40). Only `llm` and `token-count` are told by the ENDPOINT alone
+// (here); every other class comes from the class table (src/classes/table.mjs) — capture code names no harness and holds
+// no host pattern (D20, 0.1 §5).
 export const RETENTION_LEVELS = Object.freeze(['full', 'log'])
 // The most of one body (either direction) an envelope stores — the collector's engine and both old capture paths. What is
 // past it is counted (body_wire_bytes) but not kept, and the envelope says so (req_truncated / resp.truncated).
@@ -91,12 +83,9 @@ export function buildEnvelope({
   return {
     // core
     ts: tsRequest, endpoint, method,
-    // VERBATIM (2026-07-20). This used to be `safeHeaders(reqHeaders)`, which rewrote
-    // Authorization / x-api-key / Cookie / Proxy-Authorization to `<redacted>`. trocar exists to show
-    // what really went over the wire, and that rewrite made the capture non-verbatim at exactly the
-    // layer whose thesis is byte-fidelity. The risk did not disappear, it MOVED: the file now holds
-    // live credentials, so it is created 0600 and `trocar doctor` hard-fails if it is readable by
-    // anyone else (src/capture/selftest.mjs::qFilePerms). See spec 4.1 §采集安全.
+    // VERBATIM, credential headers included (Authorization / x-api-key / Cookie / Proxy-Authorization are kept as sent):
+    // trocar shows what really went over the wire. The record file therefore holds live credentials, so it is owner-only
+    // and `trocar doctor` hard-fails if anyone else can read it (src/capture/selftest.mjs::qFilePerms). See spec 4.1 §采集安全.
     req_headers: { ...reqHeaders },
     req_body, resp,
     // observ-meta
@@ -113,24 +102,5 @@ export function buildEnvelope({
     ...(logged ? { body_retention: 'log' } : {}),
     ...(reqTruncated ? { req_truncated: true, req_body_bytes: reqBody ? reqBody.length : 0 } : {}),
     ...(reqPartial ? { req_partial: reqPartial } : {}),
-  }
-}
-
-// Append-only writer for ONE flat envelope stream — no per-session split (D20; per-session
-// grouping/lineage is 4.2 ETL). SYNCHRONOUS durable append: each envelope is fsync-visible on
-// disk the instant write() returns (an open fd + writeSync, not a buffered WriteStream), so a
-// crash never loses a captured turn (invariant 2: raw NDJSON is the source of truth). Frequency
-// is one write per completed LLM call, so the blocking cost is negligible.
-export function createEnvelopeWriter(filePath) {
-  // 0600 — OWNER ONLY. Since 2026-07-20 the envelope stores request headers VERBATIM, so these bytes
-  // contain live API credentials. The mode argument only applies when open() CREATES the file, so an
-  // existing capture is chmod'd too: the real ~/.trocar files were 0644 when this landed, i.e. every
-  // account on the machine could read them. `trocar doctor` ④b hard-fails on anything looser.
-  const fd = fs.openSync(filePath, 'a', 0o600)
-  try { fs.fchmodSync(fd, 0o600) } catch { /* best effort: some filesystems refuse chmod */ }
-  let open = true
-  return {
-    write(env) { fs.writeSync(fd, JSON.stringify(env) + '\n') },
-    close() { if (open) { open = false; fs.closeSync(fd) } },
   }
 }

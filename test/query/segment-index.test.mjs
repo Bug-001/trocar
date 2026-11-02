@@ -218,37 +218,6 @@ test('段的状态:守护进程的当前段在写,其余关闭,带 .sealed 的�
   assert.deepEqual(wedged.map((s) => s.state), ['sealed', 'closed', 'closed'])
 })
 
-test('封存后记录 id 与索引字段不变,封存件里每条记录按 id 回源仍是同一批字节(V88 读取侧)', async (t) => {
-  const { sealSegment } = await import('../../src/raw/seal.mjs')
-  const { buildResolver } = await import('../../src/query/source.mjs')
-  const home = rawHome()
-  const f = writeSegment(home, SEG, [{ id: 'a', sessionKey: 's-1', harness: 'opencode' }, { id: 'b', class: 'files', is_llm: false, status: 404 }])
-  const before = await segmentIndex({ home, segment: SEG, owner: true })
-  const refs = ['a', 'b'].map((id) => `_/${SEG}.ndjson#${id}`) // raw_ref (4.2 §回源指针); the stream name does not change when the segment is sealed
-  const plain = await buildResolver(path.join(home, 'raw'))
-  const wasBytes = refs.map((r) => plain(r))
-  plain.dispose()
-  assert.deepEqual(wasBytes, ['{"model":"m"}', '{"model":"m"}'], 'the plaintext read first, so the comparison means something')
-  await sealSegment(f, { lockFile: path.join(home, 'collector', 'lock'), journal: null })
-  assert.equal(fs.existsSync(f), false, 'the plaintext is gone: only the sealed file is left to read')
-  fs.rmSync(indexDir(home), { recursive: true })
-  const after = await segmentIndex({ home, segment: SEG })
-  // every field of the record is what it was; `offset` is not a field OF the record but where its bytes are in
-  // the file the row was built from, and a sealed segment addresses them by line number instead (null)
-  const noOffset = (rs) => rs.map(({ offset, ...r }) => r)
-  assert.deepEqual(noOffset(after.records), noOffset(before.records))
-  assert.deepEqual(after.records.map((r) => r.offset), [null, null])
-  assert.deepEqual(after.problems, [])
-  // the read side end to end: every record is found by its id in the SEALED file, byte for byte
-  const sealedResolve = await buildResolver(path.join(home, 'raw'))
-  t.after(() => sealedResolve.dispose())
-  assert.deepEqual(refs.map((r) => sealedResolve(r)), wasBytes)
-  const [seg] = await allSegments({ home, lockState: () => ({ state: 'none' }) })
-  assert.equal(seg.state, 'sealed')
-  assert.equal(seg.sealed_bytes, fs.statSync(path.join(home, 'raw', `${SEG}.sealed`)).size)
-  assert.equal(seg.bytes, before.records.reduce((n, r) => n + r.stored_bytes + 1, 0)) // the plaintext bytes, from the sealed index
-})
-
 // 4.2:30 崩溃残留:明文与封存件并存 = 上次封存断在 rename 之后、删明文之前。明文为准 —— 读取侧每一条路都得这么说,
 // 不然 128 MB 明文还在盘上,状态却报 `sealed`(2026-10-18 Windows run P1)。
 test('明文与封存件并存时:状态不是 sealed,读的是明文的字节', async () => {

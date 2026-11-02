@@ -117,17 +117,6 @@ function sessionMetaFor(id, recs, title) {
 /** One session meta from facts counted elsewhere (the segment index; `title` from the usage sidecar), in the one document shape. */
 export const sessionMetaOfFacts = (facts) => sessionDoc(facts);
 
-// ── session ──────────────────────────────────────────────────────────────
-// analyze() sees LLM calls only (count_tokens probes are passed separately, as the demo did);
-// `records` is SLIMMED to what the browser still needs locally (errStats status + change-sig) —
-// the heavy request bodies ride inside `analyzed.…calls[].rec`, never duplicated.
-//
-// PAGING (4.4:88② · 3.5 游标契约 · D25 轻路):`page = {cursor, limit}` returns only the view page.
-// Cursor unit = the GLOBAL call index `gi` (analyze's step order = timeline order). Every call still
-// carries its CHEAP meta (ctx/usage/cacheBreak/gi — the overview strip + brush need the whole strip);
-// the HEAVY payload (flat block list / norm.text / nonBlockKeys) rides ONLY on calls of the window
-// [cursor, cursor+limit) that fit the page's body budget (pageView). The others are marked `paged_out`
-// (invariant 4 — the body was not shipped on THIS page, not silently dropped).
 // D40: the calls of a session that were kept as a log line only — how many, which setting did it, and the newest few with what is still
 // known of them (time, endpoint, status, the wire sizes). null when there are none. Nothing here is a body: there is none to show.
 const LOGGED_SHOWN = 50;
@@ -172,7 +161,7 @@ function itemOf(r) {
  * (its id, or the record itself when ids may repeat). view(keys) is the session document over the records `keys` names, in that
  * order, with every call in its META form; it does not change the fold, so more records can be pushed after it. bodyOf(call, rec)
  * is that call's body built from its record — it never changes for that call object (a lane folded again makes new ones), so it
- * may be kept; filled(call, body) is the call with that body put back (a new object), for the calls a page ships (pageView's `fill`).
+ * may be kept; filled(call, body) is the call with that body put back (a new object), for the calls a reader ships with their bodies.
  */
 export function sessionFold(sessionId) {
   const asm = createAssembler();
@@ -201,163 +190,20 @@ export function sessionFold(sessionId) {
     filled: withBody,
   };
 }
-// The batch form over records in memory (the usage sidecar's fill, tests). No `page` → every call ships its body.
-export function sessionView(records, sessionId, { page } = {}) {
-  const recs = groupSessions(records).get(sessionId);
-  if (!recs) return null;
-  const f = sessionFold(sessionId);
-  const recOf = new Map();
-  for (const r of [...recs].sort(stepOrder)) { const c = f.push(r); if (c) recOf.set(c, r); }
-  const fill = (calls) => new Map(calls.map((c) => [c, f.filled(c, f.bodyOf(c, recOf.get(c)))]));
-  const view = f.view(recs);
-  return page ? pageView(view, page, { fill }) : bodied(view, (c) => fill([c]).get(c));
-}
 // A call in its meta form with its body put back (a NEW object: the fold's own call is left as it is).
 const withBody = (c, body) => { const { paged_out, ...rest } = c; return { ...rest, ...body }; };
-// The view with every call object mapped once through `to` — `steps`, `lanes[].calls` and `streams[].calls` hold the SAME
-// objects (analyze() shares them), so the three arrays are rewritten through one map and stay the same objects as before.
-function bodied(view, to) {
-  const A = view.analyzed;
-  if (!A) return view;
-  const done = new Map();
-  const m = (c) => { if (!done.has(c)) done.set(c, to(c)); return done.get(c); };
-  const lanes = (A.lanes || []).map((l) => ({ ...l, calls: (l.calls || []).map(m) }));
-  const steps = (A.steps || []).map(m);
-  // …and `streams`, the THIRD array holding the same objects. Missing it shipped every body anyway, and a deep window then 500'd
-  // with "Invalid string length" — which the board shows as its empty state, reporting a many-hundred-call session as having none.
-  const streams = (A.streams || []).map((st) => ({ ...st, calls: (st.calls || []).map(m) }));
-  return { ...view, analyzed: { ...A, lanes, steps, streams } };
-}
-
-// What a paged-out call ships (3.5 §分页): a CLOSED field set — exactly what the board reads from a call whose body is not on the
-// page, and nothing else. Everything else (respRefs, extraMessages, a label's long `text`, the raw `norm`, the rest of `cacheBreak`)
-// rides only on calls with their bodies. Who reads what (src/web/v2):
-//   gi id ts streamId       cursor unit, lane index (giLocal), tech id, 时间轴 (timeline / stepbar / replay playheadSig)
-//   ctx comp usage tools    bar height, composition, cache cell / cost (core/metrics usageOf · costOf), the tool-definition count (outline)
-//   status error errMsg     failed predicate + its reason (core/metrics isFailed · timeline · detail · ctxwin · stepbar)
-//   unparsed rec            the load control's reachability and the model (jump · rawpanel · stepbar/timeline modelOf); rec = {id, request:{model}}
-//   compaction compactionInferred gt probe   compaction mark, ground-truth verdict, cost buckets (timeline · header · metrics)
-//   reqIncomplete wsIncomplete respIncomplete   the 调用保真行 and ◐ (analysis callFacts)
-//   paged_out flat nonBlockKeys   invariant 4 + the meta form (flat / nonBlockKeys empty), shared with assemble.mjs
+// What a session row ships of a call's `wire` and of each of its labels (3.5 §分页): a CLOSED field set, what the board reads.
+// Who reads what (src/web/v2):
 //   wire        cacheSemanticsKnown (cache cell, popover) · contextState contextMissing reqEncoding labels (callFacts, replyMark)
 //   wire.labels[]  id label (callFacts words); the long `text` is a tech detail of a loaded step
-//   cacheBreak  cause attribution idx refGi gt firstCall (core/metrics cacheState · stepbar popover · ctxwin · outline · timeline refCallOf)
-export const PAGED_META = Object.freeze({
-  call: Object.freeze(['gi', 'id', 'ts', 'streamId', 'ctx', 'comp', 'usage', 'tools', 'status', 'error', 'errMsg', 'unparsed', 'rec',
-    'compaction', 'compactionInferred', 'gt', 'probe', 'reqIncomplete', 'wsIncomplete', 'respIncomplete', 'paged_out', 'flat', 'nonBlockKeys',
-    'wire', 'cacheBreak']),
+const PAGED_META = Object.freeze({
   wire: Object.freeze(['cacheSemanticsKnown', 'contextState', 'contextMissing', 'reqEncoding', 'labels']),
   label: Object.freeze(['id', 'label']),
-  cacheBreak: Object.freeze(['cause', 'attribution', 'idx', 'refGi', 'gt', 'firstCall']),
 });
 const pick = (o, keys) => { const out = {}; for (const k of keys) if (o[k] !== undefined) out[k] = o[k]; return out; };
 // a raw usage the wire did not fill (absent or {}) — the board reads it as "no usage" (core/metrics usageOf); said as usage:null
 const noRawUsage = (norm) => !!norm && typeof norm === 'object' && 'usage' in norm
   && (norm.usage == null || (typeof norm.usage === 'object' && !Object.keys(norm.usage).length));
-// Slim a call to its PAGED_META form. Non-mutating: returns a NEW object, leaves the source call intact.
-function slimCall(c) {
-  const out = pick(c, PAGED_META.call);
-  out.paged_out = true; // invariant 4: this call's body was not shipped on this page
-  // a key list with byte refs into the request body is the body's shape, which this page does not ship — and a slimmed call MUST
-  // read as a call the fold kept in its meta form (src/view/assemble.mjs), whichever this is
-  out.flat = [];
-  if (c.nonBlockKeys) out.nonBlockKeys = [];
-  if (noRawUsage(c.norm)) out.usage = null;
-  if (c.rec) out.rec = { id: c.rec.id, request: { model: c.rec.request && c.rec.request.model } };
-  if (c.wire) {
-    out.wire = pick(c.wire, PAGED_META.wire);
-    if (Array.isArray(c.wire.labels)) out.wire.labels = c.wire.labels.map((l) => (l && typeof l === 'object' ? pick(l, PAGED_META.label) : l));
-  }
-  if (c.cacheBreak) out.cacheBreak = pick(c.cacheBreak, PAGED_META.cacheBreak);
-  return out;
-}
-// A lane event ships whole when its step is on the page or its kind is read session-wide (the 提问刻度 / 第 K 次提问 read `user`, the
-// resource lifecycle reads `compaction` / `summarize`); any other one ships as {type, step, streamId} (3.5 §分页).
-export const SESSION_WIDE_EVENTS = Object.freeze(new Set(['user', 'compaction', 'summarize']));
-const slimEvent = (e) => (e && typeof e === 'object' ? pick(e, ['type', 'step', 'streamId']) : e);
-
-// A page ships ONE CALL MORE than it displays: the call just before the window. That call is the
-// diff baseline for the first call ON the window, and without it the very first step of every page
-// can only report "Δ 无法计算" — a hole in the answer at a boundary the user did not choose and cannot
-// see. One extra body per page buys an exact ◆new / ⊖removed at every boundary, so scrolling a long
-// session reads the same as scrolling a short one.
-const inPage = (gi, { lo, hi }) => gi >= lo - 1 && gi < hi;
-
-function windowOf({ cursor = 0, limit = Infinity } = {}) {
-  const lo = Math.max(0, cursor | 0);
-  const lim = limit == null ? Infinity : limit;
-  return { lo, hi: lim === Infinity ? Infinity : lo + Math.max(0, lim | 0), limit: lim };
-}
-// What a call's body costs a page: the bytes of the context it ships, block by block — its composition (`comp`, on every call), so a
-// context stitched across records (D37 ②) is charged whole, not its record's delta.
-const bodyBytes = (c) => Object.values(c.comp || {}).reduce((n, v) => n + v, 0);
-// the call failed: it carries an error, or the wire answered with a status that is not 200 (the board's own predicate, core/metrics isFailed)
-const failed = (c) => !!c.error || (c.status != null && c.status !== 200);
-// The 缓存对比步 of `c` (2.3): the call `cacheBreak.refGi` names, else the nearest earlier call of its lane that did not fail; null when none.
-// The front end's twin is src/web/v2/core/metrics.mjs refOf.
-function comparisonOf(c, lanes, byGi) {
-  const named = c.cacheBreak && c.cacheBreak.refGi;
-  if (named != null && byGi.has(named)) return byGi.get(named);
-  const lane = lanes.find((l) => (l.calls || []).includes(c));
-  const cs = lane ? lane.calls : [];
-  for (let k = cs.indexOf(c) - 1; k >= 0; k--) if (!failed(cs[k])) return cs[k];
-  return null;
-}
-/** The calls that ride WITH their bodies (3.5 §分页 正文预算): the in-window call nearest the window's middle (the board puts the step it
- *  shows there) and its cache comparison call — wherever that one lies, so the step always has its diff baseline — then the other
- *  in-window calls nearest the middle first, while their contexts sum to at most `budget` bytes. */
-function bodiesFor(calls, inWin, { lo, limit }, budget, lanes) {
-  if (limit === Infinity || budget === Infinity) return new Set(inWin);
-  const mid = lo + Math.floor(limit / 2);
-  const near = [...inWin].sort((a, b) => Math.abs(a.gi - mid) - Math.abs(b.gi - mid) || a.gi - b.gi);
-  const keep = new Set();
-  if (!near.length) return keep;
-  const ref = comparisonOf(near[0], lanes, new Map(calls.map((c) => [c.gi, c])));
-  let sum = 0;
-  for (const c of [near[0], ref]) if (c && !keep.has(c)) { keep.add(c); sum += bodyBytes(c); }
-  for (const c of near) {
-    if (keep.has(c)) continue;
-    if (sum + bodyBytes(c) > budget) break;
-    keep.add(c); sum += bodyBytes(c);
-  }
-  return keep;
-}
-
-/**
- * pageView(view, spec, {fill, budget}) — the cursor/limit window over a session view, WITHOUT mutating it (the lane/call spine is
- * cloned). Every call keeps its cheap meta (PAGED_META); the middle call's comparison call and the calls of the window (plus its
- * baseline) whose bodies fit `budget` (bodiesFor) ride with them — `fill(calls)` → Map(call → that call with its body) puts them back
- * when the view holds calls in their meta form (sessionFold) — and every other call is slimmed and marked `paged_out`. A lane event
- * off the page ships slim unless its kind is SESSION_WIDE_EVENTS. `page.returned` = how many rode with their bodies.
- */
-export function pageView(view, spec = {}, { fill = null, budget = Infinity } = {}) {
-  const { lo, hi, limit } = windowOf(spec);
-  const A = view.analyzed || {};
-  // Count over the UNION of both arrays, deduped by object identity: `steps` and `lanes[].calls` hold
-  // the same call objects in real assembler output, but a view may legitimately carry one and not the
-  // other, and counting the wrong array reports a session length that does not exist.
-  const calls = new Set([...(A.steps || []), ...(A.lanes || []).flatMap((l) => l.calls || [])]);
-  const total = calls.size;
-  const all = [...calls];
-  const keep = bodiesFor(all, all.filter((c) => inPage(c.gi, { lo, hi })), { lo, limit }, budget, A.lanes || []);
-  const filled = fill ? fill([...keep]) : null;
-  // a call whose body could not be put back (its record did not read: said in `errors`) is shipped like any other paged-out call
-  const out = bodied(view, (c) => (!keep.has(c) ? slimCall(c) : filled ? (filled.get(c) || slimCall(c)) : c));
-  // bodied() cloned the lanes, so their events are re-mapped here without touching the view's own
-  if (hi !== Infinity) {
-    const whole = (e) => !e || typeof e !== 'object' || SESSION_WIDE_EVENTS.has(e.type) || (e.step != null && inPage(e.step, { lo, hi }));
-    for (const l of out.analyzed.lanes) if (Array.isArray(l.events)) l.events = l.events.map((e) => (whole(e) ? e : slimEvent(e)));
-  }
-  let returned = 0;
-  for (const c of new Set([...out.analyzed.steps, ...out.analyzed.lanes.flatMap((l) => l.calls)])) if (!c.paged_out) returned++;
-  const nextCursor = hi !== Infinity && hi < total ? hi : null;
-  // `returned` counts every call shipped WITH its body: at most the window plus `baseline` — the one call before it, sent so
-  // the first step of the page can still be diffed (see inPage) — plus the middle call's comparison call when it lies further
-  // back. `baseline` is named on the wire rather than left as an unexplained off-by-one.
-  const baseline = lo > 0 && lo <= total ? lo - 1 : null;
-  const page = { cursor: lo, limit: limit === Infinity ? null : (limit | 0), total, returned, baseline, nextCursor, hasMore: nextCursor != null };
-  return { ...out, page };
-}
 
 // ── the reduced document mapped to 3.5 §会话读 (RFC 4.3 §3; src/view/reduce.mjs) ───────────────────────────────────────────────────────
 // A lane is named by its key (the record id of its first call), a step by its rid; nothing names a gi or a stream id. Rows are the

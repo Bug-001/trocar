@@ -1,13 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dissectBlocks, resourceRef, isVolatile, blockKind, faithfulness, sysLabel, parseBashReads, CC_SECTIONS } from '../../src/dissect/cc.mjs';
-import { linearContext } from '../../src/view/analyze.mjs';
-import { parseBlocks } from '../../src/adapters/cc.mjs';
 
-// D25 — the single CC dissector. These lock the "one block model, two projections that never drift"
-// guarantee: the board (analyze.linearContext) and the ETL (cc.parseBlocks) MUST agree block-for-block,
-// because both now project the SAME dissectBlocks() spine. If a future edit re-forks the walk, the
-// cross-projection test below fails.
+// D25 — the single CC dissector: one block model (dissectBlocks), read by the board through
+// analyze.linearContext and src/dissect/cc-spans.mjs blockSpans.
 
 // a request exercising every section + block kind (assembly order tools → system → messages)
 const REQ = {
@@ -75,18 +71,4 @@ test('parseBashReads pulls read-targets, skips writes/flags/globs', () => {
   assert.deepEqual(parseBashReads('cat src/app.js'), [{ path: 'src/app.js', range: 'full file' }]);
   assert.deepEqual(parseBashReads('echo hi > out.txt'), []); // write, not read
   assert.deepEqual(parseBashReads('head -n 20 a.txt').map((r) => r.range), ['L1–20']);
-});
-
-// ── the D25 guarantee: board & ETL are two projections of ONE spine ─────────────────────────────
-test('board (linearContext) and ETL (parseBlocks) agree block-for-block (no double-parser drift)', () => {
-  const record = { is_llm_call: true, req_body: JSON.stringify(REQ), request: REQ, response: { status: 200 } };
-  const board = linearContext(REQ); // board reads the parsed request object
-  const etl = parseBlocks(record); // ETL reads the verbatim req_body string
-  assert.equal(board.length, etl.length, 'same block count');
-  assert.deepEqual(board.map((b) => b.sec), etl.map((b) => b.section), 'same section sequence');
-  // the opaque thinking block lands at the same ordinal in both projections
-  const bThink = board.findIndex((b) => b.kind === 'thinking');
-  const eThink = etl.findIndex((b) => b.kind === 'thinking');
-  assert.equal(bThink, eThink, 'thinking block at the same position');
-  assert.equal(etl[eThink].faithfulness, 'opaque', 'ETL marks the signature-only thinking opaque');
 });

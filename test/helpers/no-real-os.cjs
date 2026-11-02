@@ -25,8 +25,6 @@ const cp = require('node:child_process')
 const { syncBuiltinESMExports } = require('node:module')
 
 process.env.TROCAR_TEST_SANDBOX = '1'
-// the old capture's mihomo control socket, pinned to a place nothing listens (0.1 §3 「Clash 用 TROCAR_MIHOMO_SOCK」): src/capture/desktop-steer.mjs reads it before anything else, and a test that wants a core sets the variable itself.
-process.env.TROCAR_MIHOMO_SOCK = path.join(fs.realpathSync(os.tmpdir()), 'trocar-test-no-mihomo.sock')
 
 // + the macOS native pieces trocar ships (T13): the signing helper writes the login keychain, procenv reads another process's
 // memory, plutil reads managed preferences — a test injects a runner or a stub, never the committed binary or the real tool

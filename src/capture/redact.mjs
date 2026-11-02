@@ -8,14 +8,6 @@ export function isSecretHeader(name) {
   return SECRET_HEADERS.has(n) || /(^|-)api-key$/.test(n)
 }
 
-export function safeHeaders(headers) {
-  const out = {}
-  for (const [k, v] of Object.entries(headers)) {
-    out[k] = isSecretHeader(k) ? '<redacted>' : v
-  }
-  return out
-}
-
 // Label the credential MODE only — never the credential itself.
 export function detectAuthMode(headers) {
   if (headers['x-api-key']) return 'api-key'

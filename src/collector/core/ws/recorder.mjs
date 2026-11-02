@@ -29,14 +29,14 @@ import { createFrameParser, createMessageAssembler, OP } from './frames.mjs'
 import { parseExtensions, createInflater } from './deflate.mjs'
 import { messageBytes } from './raw.mjs'
 import { buildWsEnvelope } from '../record/envelope.mjs'
-import { endpointClass } from '../../../capture/envelope.mjs'
+import { endpointClass, MAX_BODY_BYTES } from '../../../capture/envelope.mjs'
 
 const noFailureSink = (r) => { throw Object.assign(new Error(`capture failure with nowhere to be recorded: ${r.code}: ${r.reason}`), { code: r.code }) } // a wiring fault: loud, never dropped
 
 const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }) // a BOM stays: bytes, not text
 const CLOSED = { type: 'ws_closed', message: 'connection closed before the terminal message' }
 const REASONS = ['off-window', 'write-failed', 'decode-failed']
-export const MAX_CALL_BYTES = 64 << 20 // per call, like the HTTP body cap (RFC 4.6 §传输与帧级记录 大小上限)
+export const MAX_CALL_BYTES = MAX_BODY_BYTES // per call, like the HTTP body cap (RFC 4.6 §传输与帧级记录 大小上限)
 
 /** compileTerminal(spec, target) → null | (bytes) => boolean
  *  spec = [{pathSuffix?, patterns:[RegExp source], headBytes = 256}]: the first entry whose pathSuffix

@@ -5,8 +5,6 @@
 //       (the probe, the product table, the Verge adapter and the controller client are gone), so there is no read path left to run over the recorder: the recorder is held by planted counter-examples.
 // The allowlist is by the NAME of one helper per legitimate writer (4.7 N15): `writeNetenv` writes ~/.trocar/netenv.json (it is the CLI's, src/netenv/index.mjs). The helpers of arch/win32 that write
 // trocar's own directory are registered by name in OWN_WRITERS ONLY if that module names a product directory or sits in src/netenv/: this scan watches nothing else.
-// The OLD capture is exempt as a whole (OLD_CAPTURE: src/capture/): the Clash steer in src/capture/desktop-steer.mjs writes Verge's Script.js and merge file by design until those files
-// are swept (4.7 N15). The exemption is a pinned list, not a switch.
 // Planted counter-examples turn each scan red.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -26,15 +24,10 @@ function walk(dir) {
 }
 const SOURCES = walk(path.join(ROOT, 'src'))
 
-// The old capture is exempt as a WHOLE, by file (the shared pinned list is fixtures/old-capture.mjs, so the D43 scan of no-sysproxy-no-elevation.test.mjs exempts the same files and nothing else).
-export { OLD_CAPTURE, isOldCapture } from './fixtures/old-capture.mjs'
-import { OLD_CAPTURE, isOldCapture } from './fixtures/old-capture.mjs'
-
 /** The legitimate writers, by the name of one helper each (4.7 N15). */
 const OWN_WRITERS = Object.freeze(['writeNetenv'])
-/** The writes of one module that the rule forbids: it names a product directory or sits in src/netenv/, it is not the old capture's, and the write is not in an allowlisted helper. */
+/** The writes of one module that the rule forbids: it names a product directory or sits in src/netenv/, and the write is not in an allowlisted helper. */
 export function violations(file, src) {
-  if (isOldCapture(file)) return []
   const watched = file.startsWith('src/netenv/') || PRODUCT_DIR_NAMES.test(src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, ''))
   if (!watched) return []
   return writesOf(src).filter((w) => !OWN_WRITERS.includes(w.helper)).map((w) => `${file}:${w.line} ${w.call}() in ${w.helper || 'the top level'}`)
@@ -69,12 +62,10 @@ test('N15 (a) a module that names a product data directory, or sits in src/neten
   const found = SOURCES.flatMap((f) => violations(rel(f), fs.readFileSync(f, 'utf8')))
   assert.deepEqual(found, [])
   assert.ok(OWN_WRITERS.length >= 1, 'the allowlist is never empty: the legitimate writers are named')
-  assert.ok(SOURCES.filter((f) => !isOldCapture(rel(f))).length > 50, 'and the exemption is the old capture\'s, not the tree\'s: the scan still sees the rest of src/')
 })
 
-// What the old capture's undo looks like (a module that names Verge's data directory and writes: the shape the exemption must cover in src/capture/) and what the one writer of
-// ~/.trocar/netenv.json looks like (src/netenv/index.mjs).
-const OLD_UNDO = [
+// What an undo that names Verge's data directory and writes looks like, and what the one writer of ~/.trocar/netenv.json looks like (src/netenv/index.mjs).
+const VERGE_UNDO = [
   "import nodeFs from 'node:fs'",
   'export function legacyPaths({ home }) {',
   "  const verge = path.join(home, 'Library', 'Application Support', 'io.github.clash-verge-rev.clash-verge-rev')",
@@ -102,19 +93,11 @@ const NETENV_WRITER = [
   '}',
 ].join('\n')
 
-test('N15 (a) the writers are known: the old capture\'s files are exempt as files of the old capture, `writeNetenv` is the one named helper of src/netenv, and neither opens a door elsewhere', () => {
-  assert.deepEqual(violations('src/capture/desktop-steer.mjs', OLD_UNDO), [], 'src/capture/desktop-steer.mjs names Verge\'s directory and writes: the old capture\'s own (D43, 4.7 §4)')
-  assert.equal(violations('src/off/win32.mjs', OLD_UNDO).length, 3, 'the same text in a new module is three writes')
-  assert.equal(violations('src/collector/arch/win32/redirector.mjs', OLD_UNDO).length, 3)
+test('N15 (a) the writers are known: `writeNetenv` is the one named helper of src/netenv, it opens no door elsewhere, and no directory of src/ is exempt', () => {
+  for (const f of ['src/capture/x.mjs', 'src/capture/deep/x.mjs', 'src/off/win32.mjs']) assert.equal(violations(f, VERGE_UNDO).length, 3, `${f}: a module that names Verge's directory and writes is three writes`)
+  assert.equal(violations('src/collector/arch/win32/redirector.mjs', VERGE_UNDO).length, 3)
   assert.deepEqual(violations('src/netenv/index.mjs', NETENV_WRITER), [], 'the CLI\'s writer of ~/.trocar/netenv.json is `writeNetenv` (4.7 N15 names it)')
   assert.equal(violations('src/netenv/index.mjs', NETENV_WRITER.replace('writeNetenv', 'persist')).length, 5, 'any other name is five writes in src/netenv')
-})
-
-test('N15 (a) the old-capture exemption is a pinned list of one — src/capture/ — and nothing that only looks like it', () => {
-  assert.equal(OLD_CAPTURE.length, 1, 'one more entry is a decision, taken here and in 4.7 N15, not a drive-by')
-  for (const f of ['src/capture/desktop-steer.mjs', 'src/capture/deep/x.mjs']) assert.ok(isOldCapture(f), f)
-  for (const f of ['src/off/clash.mjs', 'src/off/win32.mjs', 'src/off/win32-optin.mjs', 'src/off/legacy.mjs', 'src/off/legacy-cli.mjs', 'src/off/legacy/x.mjs', 'src/off/legacy.mjs.bak', 'src/off/xlegacy.mjs', 'src/netenv/legacy.mjs', 'src/netenv/index.mjs',
-    'src/capturer/x.mjs', 'src/collector/capture/x.mjs', 'src/collector/arch/win32/redirector.mjs', 'test/off/legacy.mjs']) assert.ok(!isOldCapture(f), `${f}: a file of that name is scanned, not exempted by a glob`)
 })
 
 test('N15 (a) planted counter-example: a module that writes a Verge path is red; so is a write in any other helper of src/netenv, and the same code in an allowlisted helper is not', () => {

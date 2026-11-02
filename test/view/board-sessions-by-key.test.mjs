@@ -1,7 +1,8 @@
 // 3.4 关键区分 / 4.6 R3 (read half): board sessions by the harness's session key, never by pid.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { groupSessions, sessionView } from '../../src/view/board.mjs';
+import { groupSessions } from '../../src/view/board.mjs';
+import { sessionView } from '../helpers/session-view.mjs';
 import { buildTransparentEnvelope } from '../../src/collector/core/record/envelope.mjs';
 
 const codex = (id, sid, pid) => ({

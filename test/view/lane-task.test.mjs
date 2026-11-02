@@ -7,7 +7,7 @@ import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession, firstAskOf, rng } from '../query/big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
-import { sessionView } from '../../src/view/board.mjs'
+import { sessionView } from '../helpers/session-view.mjs'
 import { departer } from '../../src/view/blockmeta.mjs'
 
 for (const wire of ['http', 'chat', 'threads', 'ws']) {

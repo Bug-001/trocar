@@ -22,7 +22,6 @@ const stub = (dir, name, body) => fs.writeFileSync(path.join(dir, name), `#!/bin
 
 test('no-real-os: the preload is on and the guard names the tools of 0.1 §3, the macOS native pieces and the Windows ones (reg, powershell.exe, csc.exe)', () => {
   assert.equal(process.env.TROCAR_TEST_SANDBOX, '1')
-  assert.ok(process.env.TROCAR_MIHOMO_SOCK.startsWith(fs.realpathSync(os.tmpdir()) + path.sep), 'the VPN core\'s socket is pinned inside the temp dir: a child `trocar status` never asks the developer\'s own mihomo')
   assert.deepEqual([...REAL_TOOLS].sort(), [...TOOLS].sort())
   assert.deepEqual(takeRefusals(), [])
 })

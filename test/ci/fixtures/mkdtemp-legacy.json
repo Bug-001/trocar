@@ -1,5 +1,4 @@
 [
-  "test/capture/desktop-steer.test.mjs",
   "test/capture/selftest.test.mjs",
   "test/capture/verbatim-headers.test.mjs",
   "test/ci/count-tests.test.mjs",
@@ -33,15 +32,8 @@
   "test/health/flows.test.mjs",
   "test/health/read.test.mjs",
   "test/health/retention-health.test.mjs",
-  "test/helpers/ctime.test.mjs",
   "test/helpers/flush-exit.test.mjs",
   "test/helpers/leak-guard.cjs",
   "test/paths.test.mjs",
-  "test/query/multi-root-resolver.test.mjs",
-  "test/query/resolver-shard.test.mjs",
-  "test/query/source-field.test.mjs",
-  "test/query/source-refresh.test.mjs",
-  "test/query/source-symlink.test.mjs",
-  "test/view/block-never-orphaned.test.mjs",
-  "test/view/reply-refs.test.mjs"
+  "test/view/block-never-orphaned.test.mjs"
 ]

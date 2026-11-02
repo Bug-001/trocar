@@ -10,7 +10,6 @@
 // Envelope fields only, no wire knowledge, so the board and the ETL can both use it. Leaf module.
 import { requestEncodingOf, parsedRequestBody } from './request-body.mjs';
 import { harnessOf } from './harnesses.mjs';
-import { trafficClassOf } from './traffic.mjs';
 const PARTIAL = {
   'early-response': 'never finished uploading: the upstream answered (e.g. 413 / 401) before it was fully sent',
   aborted: 'never finished uploading: the connection was aborted mid-body',
@@ -198,8 +197,8 @@ export function retentionLabelOf(rec) {
   }
   if (retention === 'log') {
     const harness = harnessOf(rec).id || 'unknown'; // proc.agent, or — an old capture has none — the UA, as the old capture itself told them apart
-    const cls = trafficClassOf(rec);
-    const label = `Logged only (your setting for ${harness} · ${cls})`;
+    const cls = rec.traffic_class || null; // the class the collector recorded the call under (D60 ③), named only when there is one
+    const label = `Logged only (your setting for ${harness}${cls ? ` · ${cls}` : ''})`;
     return { retention, harness, class: cls, label, text: `${label}: the headers and sizes are kept, the request and reply bodies are not (they were not stored, so none is shown — this is not an empty body)` };
   }
   return null;

@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { captureLabelsOf, reqIncompleteOf, wsIncompleteOf, respIncompleteOf, retentionLabelOf } from '../../src/dissect/capture-labels.mjs'
 import { HARNESSES } from '../../src/dissect/harnesses.mjs'
-import { sessionView } from '../../src/view/board.mjs'
+import { sessionView } from '../helpers/session-view.mjs'
 import { controlRecordWire } from '../../src/view/control-wire.mjs'
 
 const CJK = /[　-〿㐀-鿿＀-￯]/

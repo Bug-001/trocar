@@ -8,7 +8,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { assembleSession } from '../../src/view/assemble.mjs';
 import { readRecords } from '../../src/raw/ingest.mjs';
-import { buildResolver } from '../../src/query/source.mjs';
 import { tmpDir } from '../helpers/tmp.mjs';
 import { threadSession, record, replyOf, user } from '../helpers/cc-threads.mjs';
 
@@ -49,28 +48,6 @@ test('an auxiliary call carrying its subagent\'s agent-id is aux, not a turn of 
   const { calls } = await board([s.M0, S0, S1, P]);
   assert.equal(calls.get('P').lane.kind, 'aux');
   assert.deepEqual(calls.get('S0').lane.calls.map((c) => c.id), ['S0', 'S1']);
-});
-
-test('a reconstructed continuation: state on the call, every request block resolves verbatim to the record it came from', async () => {
-  const s = threadSession();
-  const { calls, file } = await board(s.fileOrder);
-  const call = calls.get('M2');
-  assert.equal(call.wire.contextState, 'reconstructed');
-  const resolve = await buildResolver(file);
-  const srcOf = new Map([s.M0, s.M1, s.M2].map((r) => [r.id, r.req_body]));
-  let located = 0;
-  for (const b of call.flat) {
-    if (!b.text_ref) { assert.ok(b.unaddressable, `${b.sec} block without a locator says why`); assert.equal(b.role, 'assistant'); continue; }
-    const got = resolve.detail(b.text_ref);
-    assert.equal(got.status, 'ok', got.reason || '');
-    const recId = b.text_ref.split('::')[0].split('#').pop();
-    const [st, en] = b.text_ref.split('::').pop().split('-').map(Number);
-    assert.equal(got.text, srcOf.get(recId).slice(st, en));
-    located++;
-  }
-  assert.ok(located > 0);
-  assert.deepEqual([...new Set(call.flat.filter((b) => b.text_ref).map((b) => b.text_ref.split('::')[0].split('#').pop()))].sort(), ['M0', 'M1', 'M2']);
-  resolve.dispose && resolve.dispose();
 });
 
 test('a missing anchor shows on the call as partial with what is missing (never as complete)', async () => {

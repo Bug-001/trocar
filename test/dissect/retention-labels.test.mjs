@@ -1,10 +1,8 @@
 // test/dissect/retention-labels.test.mjs — what was kept of a call's bodies, told from the record alone (RFC 4.1 #9, 2.6 §保真边界 1,
-// 3.2 §D40): `full` / `log` / `legacy-meta`, the label each non-full state carries, and the class a record from before D40 is given
-// by the same table the capture used.
+// 3.2 §D40): `full` / `log` / `legacy-meta` and the label each non-full state carries.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { bodyRetentionOf, retentionLabelOf, captureLabelsOf, isLogOnly } from '../../src/dissect/capture-labels.mjs'
-import { trafficClassOf } from '../../src/dissect/traffic.mjs'
 import { bodyOf } from '../../src/dissect/harnesses.mjs'
 import { preD40, full, logged, inference } from '../fixtures/d40-records.mjs'
 
@@ -47,23 +45,6 @@ test('a log record is labelled with the harness the level was looked up under an
   const oldCapture = retentionLabelOf(logged({ id: 'm', proc: null }))
   assert.equal(oldCapture.harness, 'cc', 'the old reverse proxy / MITM apply the cc row (4.6 §记录)')
   assert.match(l.text, /not an empty body/, 'and it says the missing body is not an empty one')
-})
-
-test('a record from before D40 is given the class the capture would give it: the same table, UA-inferred harness, the Host header', () => {
-  const cases = [
-    [preD40({ id: '1', endpoint: '/api/event_logging/v2/batch' }), 'telemetry'],
-    [preD40({ id: '2', endpoint: '/v1/code/sessions/cse_1/worker/events' }), 'session-sync'],
-    [preD40({ id: '3', endpoint: '/api/oauth/file_upload' }), 'files'],
-    [preD40({ id: '4', endpoint: '/api/web/domain_info?domain=x.test' }), 'account'],
-    [preD40({ id: '5', endpoint: '/v1/messages/count_tokens' }), 'token-count'],
-    [preD40({ id: '6', endpoint: '/something/new' }), 'other'],
-    [{ ...preD40({ id: '7' }), is_llm_call: true, endpoint: '/v1/messages' }, 'llm'],
-    [{ endpoint: '/x', req_headers: { host: 'o1.ingest.sentry.io', 'user-agent': 'x' } }, 'telemetry'],
-  ]
-  for (const [rec, want] of cases) assert.equal(trafficClassOf(rec), want, `${rec.id || rec.endpoint}`)
-  assert.equal(trafficClassOf({ endpoint: '/x', traffic_class: 'files' }), 'files', 'an envelope\'s own class wins')
-  assert.equal(trafficClassOf({ endpoint: '/x', traffic_class: 'nonsense' }), 'other', 'a value outside the closed set is not taken')
-  assert.equal(trafficClassOf(null), 'other')
 })
 
 test('a non-inference body is never parsed for identity or hints (D40: it may be a 64 MiB upload, and before D40 it gave no key); an inference body of any size is', () => {

@@ -4,7 +4,7 @@
 //       HTTPS_PROXY for the process tree it launches, a block in the agent's own .env) is not this scan's business — it never reaches past the launched tree;
 //   (c) no code elevates ITSELF or feeds a password to an elevator: no exec call runs sudo / runas / pkexec / gksudo — no exception (CM25: no admin step on
 //       macOS / Windows; Linux's setup-helper is run BY the user under sudo, trocar never calls it).
-// The old capture is exempt by the shared pinned list (fixtures/old-capture.mjs). The reading side needs no allowlist for the exec scan — reads go
+// The reading side needs no allowlist for the exec scan — reads go
 // through the helper's read verbs (`reg-read`) and doctor's TEXT (findings.mjs), neither of which is an exec call; upstream.mjs's mentions of the registry names are data it hands the helper, not
 // args of a tool. Planted counter-examples turn each half red.
 import test from 'node:test'
@@ -13,7 +13,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { views, callArgs } from './fixtures/write-scan.mjs'
-import { isOldCapture } from './fixtures/old-capture.mjs'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/')
@@ -34,9 +33,8 @@ const ENV_STORE = /environment|launchctl/i
 const PROXY_VAR = /(?:https?|all)_proxy|\bno_proxy\b/i
 const RUN_CALLS = ['execTool', 'spawnSync', 'execFile', 'exec', 'spawn']
 
-/** The D43 violations of one module: the raw API words, and the exec calls whose arguments carry a forbidden word (or an env store together with a proxy variable). The old capture is exempt as a whole. */
+/** The D43 violations of one module: the raw API words, and the exec calls whose arguments carry a forbidden word (or an env store together with a proxy variable). */
 export function violations(file, src) {
-  if (isOldCapture(file)) return []
   const { nc } = views(src)
   const out = []
   const api = SYS_PROXY_APIS.exec(nc)
@@ -66,7 +64,7 @@ test('D43 nothing in src/ writes the system proxy, puts a proxy variable into a 
   assert.deepEqual(found, [])
 })
 
-test('D43 planted counter-example: each half is red where it belongs, and the exemptions hold', () => {
+test('D43 planted counter-example: each half is red where it belongs, and the reading side is not', () => {
   const sys = "import { spawnSync, execTool } from 'node:child_process'\nexport function hold() { spawnSync('netsh', ['winhttp', 'set-proxy', 'proxy=a:80']) }\n"
   assert.match(violations('src/collector/arch/win32/forwarder.mjs', sys).join(), /netsh/)
   assert.match(violations('src/collector/core/x.mjs', "import { spawnSync, execTool } from 'node:child_process'\nexport function p() { execTool('reg', ['add', 'HKCU\\\\...\\\\Internet Settings', '/v', 'ProxyEnable', '/d', 1]) }\n").join(), /internet settings/i)
@@ -80,7 +78,7 @@ test('D43 planted counter-example: each half is red where it belongs, and the ex
     ['a login profile', "execTool('sh', ['-c', 'echo \\'export HTTPS_PROXY=…\\' >> ~/.zprofile'])"],
     ['launchctl setenv', "execTool('launchctl', ['setenv', 'HTTPS_PROXY', 'x'])", 'proxy variable into an environment store'],
   ]) assert.match(violations('src/collector/x.mjs', `import { spawnSync, execTool } from 'node:child_process'\nexport function a() { ${call} }\n`).join(), new RegExp(word || why.split(' ')[0], 'i'), why)
-  assert.deepEqual(violations('src/capture/desktop-steer.mjs', sys), [], 'the old capture is exempt as a whole (the shared pinned list)')
+  assert.match(violations('src/capture/x.mjs', sys).join(), /netsh/, 'no directory of src/ is exempt')
   assert.match(violations('src/collector/arch/win32/elevate.mjs', "import { spawnSync, execTool } from 'node:child_process'\nexport function uac() { spawnSync('powershell', ['-Command', 'Start-Process -Verb RunAs -FilePath x']) }\n").join(), /runas/i, 'no file may launch UAC, not even one named for it (CM25)')
   assert.deepEqual(violations('src/collector/arch/win32/upstream.mjs', "// the reader names the registry values it asks the helper to read\nexport const NAMES = ['ProxyEnable', 'ProxyServer', 'AutoConfigURL', 'ProxyOverride']\nexport const KEY = 'Internet Settings'\n"), [], 'the reading side is data it hands the helper, not an exec call: no allowlist needed for it')
   assert.deepEqual(violations('src/netenv/findings.mjs', "export const cmd = 'Get-ItemProperty HKCU:/…/Internet Settings -Name AutoConfigURL' // doctor's text for the user"), [], 'doctor printing a command for the user is text, not a call')

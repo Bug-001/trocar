@@ -1,8 +1,8 @@
 // src/dissect/record-fields.mjs — the addressable FIELDS of a captured record (RFC 4.2:40 text_ref 字段段,
 // gate G1): which envelope fields a text_ref may name, and the verbatim text each one holds. Envelope
 // fields only (D10 resp.raw · 4.6 resp.messages / req_extra_messages), no wire knowledge. One definition for
-// every reader — the resolver (src/query/source.mjs), /api/block, the board's locators and the ETL adapters —
-// kept in this leaf so the adapters can use it without importing the read side's exporters (0.1 §2).
+// every reader — the block query (src/query/named/block.mjs), the board's locators and the dissectors —
+// kept in this leaf so the dissectors can use it without importing the read side (0.1 §2).
 // Leaf module.
 // req_body is the default and never written out, so every ref minted before the segment is unchanged.
 export const TEXT_REF_FIELD = /^(resp\.raw|resp\.messages\.\d+|req_extra_messages\.\d+)$/;

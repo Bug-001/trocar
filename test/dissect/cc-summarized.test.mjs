@@ -12,7 +12,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { faithfulness, dissectBlocks } from '../../src/dissect/cc.mjs';
-import { parseBlocks } from '../../src/adapters/cc.mjs';
 
 // variant A — the "summary below covers the earlier portion" wording (fixture, 10620 chars)
 const SUMMARY_A =
@@ -47,25 +46,4 @@ test('faithfulness: the pre-existing opaque/verbatim contract is unchanged', () 
   assert.equal(faithfulness({ type: 'redacted_thinking', data: 'x' }), 'opaque');
   assert.equal(faithfulness({ type: 'thinking', thinking: 'real reasoning', signature: 's' }), 'verbatim');
   assert.equal(faithfulness({ type: 'text', text: 'hi' }), 'verbatim');
-});
-
-// the ETL projection must carry the same verdict — it is what lands in block_contents.faithfulness
-test('ETL (parseBlocks) marks the compaction-summary block `summarized` in block_contents', () => {
-  const REQ = {
-    tools: [{ name: 'Read', description: 'read a file', input_schema: { type: 'object', properties: {} } }],
-    system: [{ type: 'text', text: 'You are Claude Code, an agent' }],
-    messages: [
-      { role: 'user', content: [{ type: 'text', text: SUMMARY_A }] },
-      { role: 'assistant', content: [{ type: 'text', text: 'continuing from the summary' }] },
-    ],
-  };
-  const record = { is_llm_call: true, req_body: JSON.stringify(REQ), request: REQ, response: { status: 200 } };
-  const etl = parseBlocks(record);
-  const sum = etl.find((b) => b.section === 'messages' && b.role === 'user');
-  assert.equal(sum.faithfulness, 'summarized', 'ETL must not store the client summary as verbatim');
-  // and the block right after it is untouched
-  assert.equal(etl.find((b) => b.role === 'assistant').faithfulness, 'verbatim');
-  // D25 parity: the board projection sees the same block at the same ordinal
-  const spine = dissectBlocks(REQ);
-  assert.equal(spine.length, etl.length, 'spine and ETL stay block-for-block aligned');
 });
