@@ -18,7 +18,7 @@ trocar has no runtime dependencies; `npm install` only fetches the development t
 
 The board's source is in `web/`: the React shell in `web/src/`, the screens not yet ported in `web/legacy/`. Users never build it. The daemon serves the built board from `src/web/board/`, which is committed, so every way of installing trocar gets the same bytes.
 
-After editing anything under `web/`, run `npm run build:board` and commit `src/web/board/` in its own commit, the last one of the pull request. If `src/web/board/` conflicts in a rebase or merge, do not merge it by hand: take either side, rebuild, and commit the result.
+After editing anything under `web/`, run `npm run build:board` and commit `src/web/board/` in its own commit, after the last commit that changes `web/`. If `src/web/board/` conflicts in a rebase or merge, do not merge it by hand: take either side, rebuild, and commit the result.
 
 ## Tests
 
