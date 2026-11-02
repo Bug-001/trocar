@@ -7,13 +7,13 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { world, deskFrom } from './desk-world.mjs'
-import { buildLanes, anchorLane, stepRef } from '../../src/web/v2/replay/lanes.mjs'
-import { createDesk, applySession } from '../../src/web/v2/replay/model.mjs'
-import { sessionHeadHtml, readStateHtml } from '../../src/web/v2/replay/header.mjs'
+import { buildLanes, anchorLane, stepRef } from '../../web/legacy/replay/lanes.mjs'
+import { createDesk, applySession } from '../../web/legacy/replay/model.mjs'
+import { sessionHeadHtml, readStateHtml } from '../../web/legacy/replay/header.mjs'
 import { FOLD_STOPS } from '../../src/health/codes.mjs'
-import { stepBarHtml } from '../../src/web/v2/replay/stepbar.mjs'
-import { SKELETON } from '../../src/web/v2/replay/replay.mjs'
-import * as W from '../../src/web/v2/labels/replay.mjs'
+import { stepBarHtml } from '../../web/legacy/replay/stepbar.mjs'
+import { SKELETON } from '../../web/legacy/replay/replay.mjs'
+import * as W from '../../web/legacy/labels/replay.mjs'
 
 const SEEDS = [1, 7, 19, 42]
 const worldDesk = (seed) => { const w = world(seed); return deskFrom(w.get(), 'S').then((desk) => ({ w, desk })) }
@@ -131,7 +131,7 @@ test('a stopped fold: the read-state line is the stopped one, its code in the te
 
 // 1.5 K-29: after a failed read of a drawn session, one quiet stale line sits under the head with a Retry that reads at once
 // (s.poll — the reader's path, not the timer's); a good answer drops it
-import { renderSessionHead, wireSessionHead, staleLineHtml, fidelityFacts } from '../../src/web/v2/replay/header.mjs'
+import { renderSessionHead, wireSessionHead, staleLineHtml, fidelityFacts } from '../../web/legacy/replay/header.mjs'
 import { hidesReason, reasonsWith, visibleOf, outsideCollapsed } from './visible.mjs'
 test('K-29: a stale session draws a Retry outside the head that reads again; no stale state, no line', () => {
   const meta = { session_id: 's1', harness: 'cc', project_slug: 'p', project_path: '/w/p' }
@@ -193,7 +193,7 @@ test('only non-note read errors make the files fact; all of them reach the tech 
 
 // 1.5 K-20 / 1.2 §会话保真行: the fact is there iff `unknown.records > 0`; the reason and the endpoints only in 技术细节
 test('K-20: the unreadable-records fact appears iff unknown.records > 0; reason and endpoints only in the tech details', async () => {
-  const { fidelityLineHtml } = await import('../../src/web/v2/replay/header.mjs')
+  const { fidelityLineHtml } = await import('../../web/legacy/replay/header.mjs')
   const reason = 'REASON_' + Math.random().toString(36).slice(2), ep = 'EP_' + Math.random().toString(36).slice(2)
   for (const unknown of [null, undefined, { records: 0 }, { records: 0, reason, endpoints: [ep] }, { records: 1, reason, endpoints: [ep] }, { records: 37, reason, endpoints: [ep, ep + 'b'] }, { records: 2 }]) {
     const on = !!unknown && unknown.records > 0

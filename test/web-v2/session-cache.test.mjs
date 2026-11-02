@@ -3,7 +3,7 @@
 // attached desk is never disposed, an evicted desk is disposed exactly once, and the one that leaves is the least recently attached.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createSessionCache } from '../../src/web/v2/replay/session-cache.mjs'
+import { createSessionCache } from '../../web/legacy/replay/session-cache.mjs'
 
 function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6d2b79f5) >>> 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 2 ** 32 } } // mulberry32
 

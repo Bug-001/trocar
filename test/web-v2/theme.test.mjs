@@ -7,9 +7,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { applyThemePref, THEME_KEY } from '../../src/web/v2/core/ui.mjs'
+import { applyThemePref, THEME_KEY } from '../../web/legacy/core/ui.mjs'
 
-const BASE = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'web', 'v2', 'css', 'base.css'), 'utf8')
+const BASE = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'legacy', 'css', 'base.css'), 'utf8')
 
 const css = BASE.replace(/\/\*[\s\S]*?\*\//g, '')
 // the dark @media block (balanced braces), so the block inside it is read with its media context; the pin blocks
@@ -85,14 +85,14 @@ test('applyThemePref: a storage that throws, or no storage at all, means follow 
   assert.doesNotThrow(() => applyThemePref(fakeDoc()))
 })
 test('applyThemePref only moves the attribute: its source names no screen and no render function', () => {
-  const src = fs.readFileSync(new URL('../../src/web/v2/core/ui.mjs', import.meta.url), 'utf8')
+  const src = fs.readFileSync(new URL('../../web/legacy/core/ui.mjs', import.meta.url), 'utf8')
   const at = src.indexOf('export function applyThemePref')
   const body = src.slice(at, src.indexOf('\nexport ', at + 10)) // just this function
   assert.ok(!/import|render|show\(|mount\(/.test(body))
   assert.equal(THEME_KEY, 'trocar.v2.theme')
 })
 test('the page applies the preference before the first paint, from the same key, without throwing', () => {
-  const html = fs.readFileSync(new URL('../../src/web/v2/index.html', import.meta.url), 'utf8')
+  const html = fs.readFileSync(new URL('../../web/legacy/index.html', import.meta.url), 'utf8')
   const head = html.slice(0, html.indexOf('</head>'))
   const m = head.match(/<script>([\s\S]*?)<\/script>/)
   assert.ok(m && m.index < head.indexOf('<link'), 'the boot script runs before the stylesheets')

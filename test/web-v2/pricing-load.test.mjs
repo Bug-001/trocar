@@ -4,11 +4,11 @@
 // The cost cell moved to replay/stepbar.mjs (2.2: the estimate is shown in ONE place, the ≈ $ button); its words are the RFC's.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createPricingLoader, PRICING_MS } from '../../src/web/v2/replay/pricing.mjs'
-import { backoffMs } from '../../src/web/v2/core/poll.mjs'
-import { costCellHtml, priceStateNote } from '../../src/web/v2/replay/stepbar.mjs'
-import { costRowHtml } from '../../src/web/v2/replay/detail.mjs'
-import { costOf, priceMatch } from '../../src/web/v2/core/metrics.mjs'
+import { createPricingLoader, PRICING_MS } from '../../web/legacy/replay/pricing.mjs'
+import { backoffMs } from '../../web/legacy/core/poll.mjs'
+import { costCellHtml, priceStateNote } from '../../web/legacy/replay/stepbar.mjs'
+import { costRowHtml } from '../../web/legacy/replay/detail.mjs'
+import { costOf, priceMatch } from '../../web/legacy/core/metrics.mjs'
 import { run as pricingDoc } from '../../src/query/named/pricing.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 

@@ -3,7 +3,7 @@
 // `traffic`, the recent list from `sessions`. The documents come from the real face (real server, real query worker).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { overviewStats, overviewItems, recentRows, renderBody, diskBytes } from '../../src/web/v2/overview/overview.mjs'
+import { overviewStats, overviewItems, recentRows, renderBody, diskBytes } from '../../web/legacy/overview/overview.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
 const docs = (async () => {

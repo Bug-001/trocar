@@ -1,5 +1,5 @@
 // test/web/branding.test.mjs — the product is trocar; `atrace` (the v0 prototype's name) is a forbidden
-// string in everything the board serves (R14). The board is src/web/v2/, served at `/` (1.2 §托管与打开); the check reads
+// string in everything the board serves (R14). The board is web/legacy/, served at `/` (1.2 §托管与打开); the check reads
 // every text file under src/web, so a new screen or label file is covered without touching this test.
 import test from 'node:test'
 import assert from 'node:assert/strict'

@@ -7,15 +7,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const V2 = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'web', 'v2')
+const V2 = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'legacy')
 const sources = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
   const p = path.join(dir, d.name)
   if (d.isDirectory()) return sources(p)
   return /\.(mjs|html)$/.test(d.name) ? [p] : []
 })
 
-test('the in-browser mock is gone: no src/web/v2/mock/, and nothing imports it', () => {
-  assert.equal(fs.existsSync(path.join(V2, 'mock')), false, 'src/web/v2/mock/ exists again')
+test('the in-browser mock is gone: no web/legacy/mock/, and nothing imports it', () => {
+  assert.equal(fs.existsSync(path.join(V2, 'mock')), false, 'web/legacy/mock/ exists again')
   const offenders = []
   for (const f of sources(V2)) {
     const src = fs.readFileSync(f, 'utf8'), rel = path.relative(V2, f)

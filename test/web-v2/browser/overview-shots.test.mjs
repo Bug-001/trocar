@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { probe, withBoard, shoot } from './harness.mjs'
-import { ALIASES } from '../../../src/web/v2/core/chips.mjs'
+import { ALIASES } from '../../../web/legacy/core/chips.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
