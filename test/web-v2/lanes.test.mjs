@@ -4,7 +4,7 @@
 // lies in [lo, hi).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { stepPos, windowCalls } from '../../src/web/v2/replay/lanes.mjs'
+import { stepPos, windowCalls } from '../../web/legacy/replay/lanes.mjs'
 
 function rng(seed) {
   let a = seed >>> 0 || 1

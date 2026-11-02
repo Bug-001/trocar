@@ -3,13 +3,13 @@
 // over the board's own api with fetch logged (traffic-world.mjs). Contract only: links, routes, requests, marks, placement.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import * as hostPage from '../../src/web/v2/traffic/host.mjs'
-import { rowHtml } from '../../src/web/v2/traffic/host.mjs'
-import { harnessKey } from '../../src/web/v2/core/chips.mjs'
-import { CLASS_IDS } from '../../src/web/v2/core/classes.mjs'
-import { parseHash, documentTitle } from '../../src/web/v2/core/router.mjs'
-import { bytes } from '../../src/web/v2/core/fmt.mjs'
-import * as W from '../../src/web/v2/labels/traffic.mjs'
+import * as hostPage from '../../web/legacy/traffic/host.mjs'
+import { rowHtml } from '../../web/legacy/traffic/host.mjs'
+import { harnessKey } from '../../web/legacy/core/chips.mjs'
+import { CLASS_IDS } from '../../web/legacy/core/classes.mjs'
+import { parseHash, documentTitle } from '../../web/legacy/core/router.mjs'
+import { bytes } from '../../web/legacy/core/fmt.mjs'
+import * as W from '../../web/legacy/labels/traffic.mjs'
 import { trafficWorld } from './traffic-world.mjs'
 
 const world = (async () => {

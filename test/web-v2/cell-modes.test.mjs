@@ -3,10 +3,10 @@
 // degrades to Raw when storage fails, and the cell keys are a pure function of the key event. No DOM; storage is a fake.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { cellOf, cellBodyHtml, modeOf, setMode, bodyCache, overrideScope, clearOverrides } from '../../src/web/v2/replay/cell.mjs'
-import { cellKey, keyAction } from '../../src/web/v2/replay/keymap.mjs'
+import { cellOf, cellBodyHtml, modeOf, setMode, bodyCache, overrideScope, clearOverrides } from '../../web/legacy/replay/cell.mjs'
+import { cellKey, keyAction } from '../../web/legacy/replay/keymap.mjs'
 
-const CELL = new URL('../../src/web/v2/replay/cell.mjs', import.meta.url).href
+const CELL = new URL('../../web/legacy/replay/cell.mjs', import.meta.url).href
 const memStorage = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)) } }
 
 test('an override follows the block across steps that re-send it, whatever its byte locator', () => {
@@ -61,7 +61,7 @@ test('the cell keys are a pure function of the key event, and the desk keys igno
 })
 
 test('Readable names the kind it drew: the toolbar word and the body class agree, whatever r asked for (§2.3 fallbacks)', async () => {
-  const { KIND_WORD } = await import('../../src/web/v2/labels/cells.mjs')
+  const { KIND_WORD } = await import('../../web/legacy/labels/cells.mjs')
   const KD = { md: 'markdown', sec: 'sections' } // the two classes that are not kd-<as> (RFC 2.3 §两种模式)
   const values = ['plain', '"a json string"', '{"k":1,"v":[true,null,"x"]}', '[1,2,{"z":"q"}]', '42', 'null', '{"broken"', '<s>x</s>t', '@@ -1 +1 @@\n-a\n+b']
   const specs = [undefined, { as: 'nope' }, ...Object.keys(KIND_WORD).flatMap((as) => [{ as }, { as, f: { body: ['missing'] } }, { as, tone: 'error' }])]

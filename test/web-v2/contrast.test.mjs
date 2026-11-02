@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const css = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'web', 'v2', 'css', 'base.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+const css = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'legacy', 'css', 'base.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
 
 // the light values are the defaults of :root; the dark ones sit inside the OS media query (balanced braces)
 function declsOf(text) {

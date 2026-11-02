@@ -3,8 +3,8 @@
 // (1.2 §路由), and an unknown session links back to the list.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { playheadSig, notListedHtml, stepParam } from '../../src/web/v2/replay/replay.mjs'
-import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
+import { playheadSig, notListedHtml, stepParam } from '../../web/legacy/replay/replay.mjs'
+import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { deskOf } from './desk-world.mjs'
 
 const blk = (k) => ({ sec: 'messages', role: 'user', kind: 'text', key: 'k' + k, ref: 'r' + k, chars: 4 })
