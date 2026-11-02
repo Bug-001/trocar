@@ -12,6 +12,7 @@ import type { Route } from './LegacyScreen'
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 const route = { area: 'capture', screen: 'capture', params: {} } as Route
+const router = {} as ScreenProps['router']
 const Drawn = ({ route: r }: ScreenProps) => <p className="drawn">{r.screen}</p>
 const held = () => { let release!: () => void; return { at: new Promise<void>((r) => { release = r }), release: () => release() } }
 
@@ -25,7 +26,7 @@ test('a screen reads 「Reading…」 while its module loads, and is drawn as so
   const el = document.body.appendChild(document.createElement('div')), root = createRoot(el)
   const tick = (ms: number) => new Promise((r) => setTimeout(r, ms))
   try {
-    root.render(<ScreenOutlet screen={s} name="capture" route={route} />)
+    root.render(<ScreenOutlet screen={s} name="capture" route={route} router={router} />)
     await tick(50)
     expect(el.textContent).toBe(READING)
     h.release()
@@ -38,7 +39,7 @@ test('a screen reads 「Reading…」 while its module loads, and is drawn as so
 test('a screen the preload has loaded is drawn in the render that asks for it', async () => {
   const s = lazyScreen(async () => ({ default: Drawn }))
   await s.load() // the idle preload
-  const r = render(<ScreenOutlet screen={s} name="capture" route={route} />) // committed synchronously, as the shell's route change
+  const r = render(<ScreenOutlet screen={s} name="capture" route={route} router={router} />) // committed synchronously, as the shell's route change
   expect(r.container.querySelector('.drawn')?.textContent).toBe('capture')
   expect(r.container.textContent).not.toContain(READING)
 })
@@ -47,7 +48,7 @@ test('a screen whose module fails to load says why, never a blank area', async (
   vi.spyOn(console, 'error').mockImplementation(() => {})
   const s = lazyScreen(async () => { throw new Error('chunk gone') })
   let r!: RenderResult
-  await act(async () => { r = render(<ScreenOutlet screen={s} name="capture" route={route} />) })
+  await act(async () => { r = render(<ScreenOutlet screen={s} name="capture" route={route} router={router} />) })
   await act(async () => { await s.load().catch(() => {}) })
   expect(r.container.querySelector('.screenerr[role="alert"]')?.textContent).toContain('chunk gone')
 })

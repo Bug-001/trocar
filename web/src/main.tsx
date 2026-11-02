@@ -109,7 +109,7 @@ function Shell() {
     <aside id="sidebar"><Sidebar route={route} router={router} store={store} /></aside>
     <div id="content"><div id="screen">
       <div className="screenhost" ref={screenEl} style={{ display: 'contents' }} />
-      {isReact(route) ? <ScreenOutlet screen={REACT_SCREENS[route.screen]} name={route.screen} route={route} /> : null}
+      {isReact(route) ? <ScreenOutlet screen={REACT_SCREENS[route.screen]} name={route.screen} route={route} router={router} /> : null}
     </div></div>
     <LegacyScreen el={screenEl} router={router} ctx={ctx} screens={SCREENS} preloads={PRELOADS} />
   </>

@@ -5,8 +5,10 @@ import { Component, useEffect, useState, type ComponentType, type ErrorInfo, typ
 import { screenErrorHtml } from '../legacy/shell/safemount.mjs'
 import { READING } from '../legacy/labels/common.mjs'
 import type { Route } from './LegacyScreen'
+import type { createBoardRouter } from './router'
 
-export type ScreenProps = { route: Route }
+// router: the board's facade (setParams replaces the hash, go navigates); a screen writes its state through it, never location
+export type ScreenProps = { route: Route, router: ReturnType<typeof createBoardRouter>['legacy'] }
 export type LazyScreen = { load(): Promise<unknown>, Screen: ComponentType<ScreenProps> }
 
 // lazyScreen(importer) → { load, Screen }: the module is loaded once, by the idle preload or the first render, whichever comes first.
@@ -36,6 +38,6 @@ class ScreenBoundary extends Component<{ children: ReactNode }, { error: string 
   }
 }
 
-export function ScreenOutlet({ screen: { Screen }, name, route }: { screen: LazyScreen, name: string, route: Route }) {
-  return <ScreenBoundary key={name}><Screen route={route} /></ScreenBoundary>
+export function ScreenOutlet({ screen: { Screen }, name, route, router }: { screen: LazyScreen, name: string } & ScreenProps) {
+  return <ScreenBoundary key={name}><Screen route={route} router={router} /></ScreenBoundary>
 }
