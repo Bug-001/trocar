@@ -6,7 +6,8 @@
 //   · replace writes go through createUrlWriter (WRITE_GAP_MS); the same value is not written; a push first lands the pending replace
 //     on the entry it leaves; Back / Forward drops the pending value (it belongs to the entry the reader left); pagehide /
 //     beforeunload write it now.
-//   · subscribers are told synchronously on go / setParams, and on a POP; one change is delivered once (by href).
+//   · subscribers are told synchronously on go / setParams, and on a POP; one change is delivered once (by href); a route moved while
+//     subscribers are being told is the last one any of them hears.
 //   · router.navigate is async, but for this loader-less route it reaches no await: the history write is done when it returns, so a
 //     lone replace is in the URL in the same task (before a reload can start).
 //   · a history call that throws (WebKit's 100 calls in 30 s) never throws out of go: the route has changed, only the URL lags.
@@ -33,7 +34,13 @@ export function createBoardRouter(element: ReactNode) {
   }
   const writer = createUrlWriter({ write: (h: string) => navigate(h, true) })
   const current = (): Route => parseHash(hash)
-  const emit = () => { const r = current(); for (const fn of [...subs]) fn(r) }
+  // a subscriber that moves the route while it is told (a screen naming its step as it mounts) announces the newer route to every
+  // subscriber itself; the older announcement stops there, so nobody is told a stale route after a newer one
+  let told = 0
+  const emit = () => {
+    const mine = ++told, r = current()
+    for (const fn of [...subs]) { if (mine !== told) return; fn(r) }
+  }
 
   const unsubscribe = router.subscribe((state) => {
     if (state.historyAction !== 'POP' || location.href === lastHref) return

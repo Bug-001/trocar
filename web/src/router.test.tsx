@@ -92,3 +92,13 @@ test('router: a replaceState / pushState that throws (a rate-limited Safari) nev
   expect(location.hash).toBe('#/traffic') // the URL still follows (the fallback assigns the hash)
   expect(router.current().screen).toBe('traffic')
 })
+
+test('router: a subscriber that moves the route while it is told leaves every subscriber on the newer route, none told the older one after it', () => {
+  const router = open(), later: (string | undefined)[] = []
+  const desk = { area: 'replay', screen: 'replay', project: 'p', id: 'i', params: {} }
+  router.onRoute((r) => { if (r.params.step == null) router.setParams({ step: '3' }) }) // a screen naming the step it shows as it is told
+  router.onRoute((r) => later.push(r.params.step))
+  router.go(desk)
+  expect(router.current().params.step).toBe('3')
+  expect(later).toEqual(['3'])
+})

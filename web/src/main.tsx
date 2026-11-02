@@ -93,7 +93,7 @@ function Shell() {
   return <>
     <aside id="sidebar"><Sidebar route={route} router={router} store={store} /></aside>
     <div id="content"><div id="screen" ref={screenEl} /></div>
-    <LegacyScreen el={screenEl} route={route} ctx={ctx} screens={SCREENS} />
+    <LegacyScreen el={screenEl} router={router} ctx={ctx} screens={SCREENS} />
   </>
 }
 

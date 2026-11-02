@@ -3,7 +3,7 @@
 // state from ctx.router.current(). update(route) is called when the route changes WITHIN the mounted screen (new params, another
 // session, the screen's own URL writes); a different screen is a fresh mount. `el` is a stable element React renders with no children:
 // only this host writes into it.
-import { useLayoutEffect, useRef, type RefObject } from 'react'
+import { useLayoutEffect, type RefObject } from 'react'
 import { api, scoped } from '../legacy/core/api.mjs'
 import { setScreenKeys } from '../legacy/core/keys.mjs'
 import { esc } from '../legacy/core/fmt.mjs'
@@ -70,17 +70,18 @@ export function createScreenHost(el: HTMLElement, ctx: object, screens: Screens)
   return { show, dispose }
 }
 
-// The component form: the host lives as long as the element; every route that is not `unknown` is shown (the shell turns an unknown
-// one into 总览 first).
-export function LegacyScreen({ el, route, ctx, screens }: { el: RefObject<HTMLDivElement | null>, route: Route, ctx: object, screens: Screens }) {
-  const host = useRef<ReturnType<typeof createScreenHost> | null>(null)
-  useLayoutEffect(() => { // before the show effect below: React runs one component's effects in order
-    const h = createScreenHost(el.current!, ctx, screens)
-    host.current = h
-    return () => { h.dispose(); host.current = null }
-  }, [el, ctx, screens])
+// The component form: the host lives as long as the element. It takes every route the facade announces at once, inside the call that
+// announced it, as the legacy boot did: a screen's own URL write comes back through update() before that write returns, and a route
+// is never handed over late, after a newer one is already current (a deferred, stale route turns a desk's follow back on). An
+// unknown route is skipped: the shell turns it into 总览 first.
+type Facade = { current(): Route, onRoute(fn: (r: Route) => void): () => void }
+export function LegacyScreen({ el, router, ctx, screens }: { el: RefObject<HTMLDivElement | null>, router: Facade, ctx: object, screens: Screens }) {
   useLayoutEffect(() => {
-    if (!route.unknown) host.current?.show(route)
-  }, [route])
+    const h = createScreenHost(el.current!, ctx, screens)
+    const show = (r: Route) => { if (!r.unknown) h.show(r) }
+    const off = router.onRoute(show)
+    show(router.current())
+    return () => { off(); h.dispose() }
+  }, [el, router, ctx, screens])
   return null
 }
