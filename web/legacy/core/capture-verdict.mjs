@@ -8,7 +8,7 @@ import { fmtWhen, has } from './fmt.mjs'
 import { harnessKey, harnessName, HARNESS_ORDER } from './chips.mjs'
 import { RESTART_CODES, UNKNOWN_REASON } from '../labels/capture.mjs'
 import { HEALTH_WORDS, HEALTH_READ } from '../labels/common.mjs'
-import { failureBrief, failureWord, statusReason } from '../../../cli/words.mjs'
+import { failureBrief, failureWord, statusReason } from '../../../src/cli/words.mjs'
 import { startPoll, INTERVAL } from './poll.mjs'
 
 export const CAPH_MS = INTERVAL.status // the poll period of the pages that show this card while visible (4.4 §live-poll: `status` is the costliest read)

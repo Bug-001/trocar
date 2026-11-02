@@ -4,7 +4,7 @@
 // front end's floor for an answer that carries no ctl.masked. No provider knowledge. 1.9's proxy-address redaction
 // (redactUrlCredentials, by the CLI's rule in src/off/userinfo.mjs) also lives in this file.
 import { esc } from './fmt.mjs'
-import { hideUserinfo } from '../../../off/userinfo.mjs'
+import { hideUserinfo } from '../../../src/off/userinfo.mjs'
 const CREDENTIAL_NAMES = new Set(['authorization', 'proxy-authorization', 'cookie', 'set-cookie'])
 
 // is a header name credential-class? Case-insensitive, whitespace-tolerant.

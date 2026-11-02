@@ -546,7 +546,7 @@ const lagging = new Map(); // session id → {s, home, fs}: the state whose head
 const sigOf = (s) => JSON.stringify([s.mark, s.pending && s.pending.done, s.truncated]);
 // the parts only the head carries, in O(packs): tier, axis, the packs (with their tags) and the open span, the compactions (a new
 // chapter on the axis; one on another lane too), the cut, pending's presence, the failures and the index's codes, and the meta the
-// board takes from the head alone (src/web/v2/replay/header.mjs) — never a count that grows with each call
+// board takes from the head alone (web/legacy/replay/header.mjs) — never a count that grows with each call
 const META = ['title', 'title_source', 'session_id', 'harness', 'harnesses', 'project_slug', 'project_path'];
 function shapeOf(s) {
   if (s.mark == null) return JSON.stringify([0, s.indexErrors.map((e) => e.code)]);
