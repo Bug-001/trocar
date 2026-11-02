@@ -1,7 +1,7 @@
 // web/src/main.tsx — boot (1.2 §路由, D75①②): the token leaves the address, the first hash becomes canonical, the page-wide handlers are
 // installed once, then React renders the shell: the sidebar and #screen, which holds one screen at a time: a legacy screen (LegacyScreen
 // mounts it into its host element) or a React screen (ScreenOutlet). Screens are loaded on demand. There is no site-wide banner: a screen says what is wrong with itself.
-import { createContext, lazy, useContext, useLayoutEffect, useRef, useState, type ComponentType } from 'react'
+import { createContext, useContext, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -20,7 +20,7 @@ import { UNKNOWN_ROUTE, FORBIDDEN } from '../legacy/labels/shell.mjs'
 import { COMMANDS } from '../legacy/labels/capture.mjs'
 import { createBoardRouter } from './router'
 import { LegacyScreen, type Route } from './LegacyScreen'
-import { ScreenOutlet, type LazyScreen, type ScreenProps } from './ScreenOutlet'
+import { ScreenOutlet, lazyScreen, type LazyScreen } from './ScreenOutlet'
 import { Sidebar } from './shell/Sidebar'
 import { ConfirmProvider } from './ui/Confirm'
 
@@ -36,13 +36,12 @@ const SCREENS = {
   'settings-prices': () => import('../legacy/settings/prices.mjs'),
   'settings-appearance': () => import('../legacy/settings/appearance.mjs'),
 }
-const REACT_SCREENS: Record<string, () => Promise<{ default: ComponentType<ScreenProps> }>> = {
-  capture: () => import('./screens/capture/CaptureScreen'),
-  'capture-log': () => import('./screens/capture/CaptureLogScreen'),
+const REACT_SCREENS: Record<string, LazyScreen> = {
+  capture: lazyScreen(() => import('./screens/capture/CaptureScreen')),
+  'capture-log': lazyScreen(() => import('./screens/capture/CaptureLogScreen')),
 }
-const LAZY: Record<string, LazyScreen> = Object.fromEntries(Object.entries(REACT_SCREENS).map(([k, load]) => [k, lazy(load)]))
-const PRELOADS = [...Object.values(SCREENS), ...Object.values(REACT_SCREENS)] // the idle preload fetches both kinds
-const isReact = (r: Route) => !r.unknown && Object.hasOwn(LAZY, r.screen)
+const PRELOADS = [...Object.values(SCREENS), ...Object.values(REACT_SCREENS).map((s) => s.load)] // the idle preload loads both kinds
+const isReact = (r: Route) => !r.unknown && Object.hasOwn(REACT_SCREENS, r.screen)
 
 // the token leaves the address (#t=…) before the router reads the hash (4.4 §每用户口令)
 configure({ token: bootToken() })
@@ -110,7 +109,7 @@ function Shell() {
     <aside id="sidebar"><Sidebar route={route} router={router} store={store} /></aside>
     <div id="content"><div id="screen">
       <div className="screenhost" ref={screenEl} style={{ display: 'contents' }} />
-      {isReact(route) ? <ScreenOutlet screen={LAZY[route.screen]} name={route.screen} route={route} /> : null}
+      {isReact(route) ? <ScreenOutlet screen={REACT_SCREENS[route.screen]} name={route.screen} route={route} /> : null}
     </div></div>
     <LegacyScreen el={screenEl} router={router} ctx={ctx} screens={SCREENS} preloads={PRELOADS} />
   </>
