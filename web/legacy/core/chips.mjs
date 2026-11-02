@@ -80,7 +80,7 @@ function loadIcon(k) {
   }).catch(() => null)
 }
 
-// the one place the boxes get filled: every [data-hicon] box drawn anywhere under `root` (main.mjs: the body) is filled once it is in
+// the one place the boxes get filled: every [data-hicon] box drawn anywhere under `root` (web/src/main.tsx: the body) is filled once it is in
 // the document — a screen that repaints after a late read never leaves an empty box (the traffic table once did), and no screen calls
 // the loader itself. Mutations are batched to one pass per microtask.
 export function watchHarnessIcons(root) {
