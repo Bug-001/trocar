@@ -11,7 +11,6 @@
 // the row's `attrs`, by list position.
 import { createHash } from 'node:crypto';
 import { admitted, flatBlockText, blockFacts, callFacts, normResp, replyPartsAnthropic, linearContext } from './analyze.mjs';
-import { wireOf, respRefsOf, extraMessagesOf, nonBlockKeysOf } from './assemble.mjs';
 import { slimBlock, compBucket, firstHuman, blockQuery } from './blockmeta.mjs';
 import { renderOf } from './render-kind.mjs';
 import { blockSpans } from '../dissect/cc-spans.mjs';
@@ -508,7 +507,7 @@ function stitchedFacts(x, { rec, st, predX, state, tools, ownMsgs }) {
 }
 
 // x: the per-call facts (3.5 §会话读), all from this record. `nonBlockKeys`: the request's top-level keys that are no block
-// (refs into the body and short scalars, never a body: assemble.mjs nonBlockKeysOf), what a lane answer's step detail ships (3.5 §会话读).
+// (refs into the body and short scalars, never a body: nonBlockKeysOf below), what a lane answer's step detail ships (3.5 §会话读).
 function callX(rec, { d, format }, { h, req, unparsed }) {
   const st = (respOf(rec) || {}).status ?? null;
   const common = { item: itemFacts(rec), format, respRefs: respRefsOf(rec), ...(extraMessagesOf(rec) || {}), ts: rec.ts_request || rec.ts || '', status: st,
@@ -692,6 +691,104 @@ export function slimRec(rec) {
 export const spanBody = (rec) => (rec && typeof rec.req_body === 'string' && rec.capture !== V0_CONVERTED ? rec.req_body : null);
 // A record's raw_ref (4.2:40), or null when it cannot be addressed: no id, or no stream it was read from.
 export const rawRefOf = (rec) => (rec && rec.id != null && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, String(rec.id)) : null);
+
+// RFC 3.3:89 (D37): cache semantics are known per VENDOR (the upstream host), and a vendor row vouches only
+// for the wire it was established on. DeepSeek's comes from its Chat Completions API; DeepSeek through its
+// Anthropic endpoint (dsh) is still OPEN, so it reads unknown until a real capture settles it (then the
+// VERIFIED_WIRES entry goes). An unknown vendor is unknown, never another vendor's semantics.
+const CACHE_VENDORS = new Set(['anthropic', 'openai', 'deepseek', 'bedrock']);
+const VERIFIED_WIRES = { deepseek: ['openai-chat'] };
+function cacheSemanticsKnown(vendor, wireFormat) {
+  if (!CACHE_VENDORS.has(vendor)) return false;
+  const only = VERIFIED_WIRES[vendor];
+  return !(only && wireFormat != null && !only.includes(wireFormat));
+}
+
+// Canonical wire facts per call (3.2:131-133), baked HERE so the page only reads them (invariant 3):
+// format, vendor, whether that vendor's cache semantics are known on this wire (3.3:89: false for
+// an unknown host, for a vendor with no cache row, and for DeepSeek over the Anthropic wire), transport, context
+// state, observer effects and the
+// incompleteness labels (4.6 §记录 「不完整的标注」 — shown on the call, never dropped). Cheap: no body parse.
+// A cross-record context (ctx, from the dissector) brings its own state and, when partial, what is missing;
+// `norm.unread` counts reply messages the dissector could not read (D38: never skipped without a trace).
+export function wireOf(rec, format, ctx = null, norm = null) {
+  const labels = captureLabelsOf(rec);
+  const unread = norm && norm.unread;
+  if (unread) labels.push({ id: 'reply-unread', label: `${unread} reply message${unread > 1 ? 's' : ''} not read`,
+    text: `${unread} server message${unread > 1 ? 's' : ''} of this call are not JSON text (binary, past the size cap, or not decodable); the reply shown is read from the others` });
+  // a request sent compressed and shown decompressed says so (4.6 §记录, invariant 4): exact text, not the wire bytes
+  const enc = rec && typeof rec.req_body === 'string' ? requestEncodingOf(rec) : null;
+  const vendor = vendorOf(rec);
+  return { format, vendor, cacheSemanticsKnown: cacheSemanticsKnown(vendor, format), transport: rec && rec.transport === 'ws' ? 'ws' : 'http',
+    contextState: ctx && ctx.contextState ? ctx.contextState : contextStateOf(rec), ...(ctx && ctx.contextState === 'partial' && ctx.missing ? { contextMissing: ctx.missing } : {}),
+    observerEffect: observerEffectsOf(rec), labels, ...(enc ? { reqEncoding: enc } : {}) };
+}
+// 3.1:37: client messages that arrived while the call was open (req_extra_messages, e.g. an interrupt) belong to
+// the call and MUST be visible — listed one by one with a locator to their verbatim text (4.2:40 字段段), or with
+// what is stored instead. Cheap meta: no parse.
+export function extraMessagesOf(rec) {
+  const xs = rec && Array.isArray(rec.req_extra_messages) ? rec.req_extra_messages : [];
+  if (!xs.length) return null;
+  const base = rawRefOf(rec);
+  return { extraMessages: xs.map((v, k) => {
+    const field = `req_extra_messages.${k}`;
+    if (typeof v === 'string') return { key: `req_extra_messages[${k}]`, chars: v.length, ref: base ? composeTextRef(base, [0, v.length], field) : null };
+    return { key: `req_extra_messages[${k}]`, chars: null, ref: null, note: `stored ${fieldTextOf(rec, field).missing.replace(/^stores \S+ as /, 'as ')}` };
+  }) };
+}
+
+// 4.6 R2 「回复 == mock 发出的 SSE 事件 / WebSocket 消息」 · gate G1: where the verbatim reply sits in the
+// raw record, as field-qualified refs (4.2:40), in reply order — resp.raw for an HTTP reply (the decoded SSE / text the
+// collector stored; on an error envelope, what arrived before the failure), one resp.messages.<j> per WebSocket server
+// message. Joining an HTTP call's resolved pieces gives the whole decoded reply. A piece that cannot be addressed is
+// listed with why (invariant 4), never dropped. Envelope fields only (record-fields.mjs): no wire knowledge.
+// → [{ label, ref: string|null, chars: number|null, why? }]
+export function respRefsOf(rec) {
+  const r = respOf(rec);
+  if (!r) return [{ label: 'reply', ref: null, chars: null, why: 'no response is recorded for this call' }];
+  const part = r.kind === 'error' && r.partial && typeof r.partial === 'object' ? r.partial : r;
+  const cut = part !== r ? ' (what arrived before the exchange failed)' : '';
+  const base = rawRefOf(rec);
+  const one = (label, field) => {
+    const f = fieldTextOf(rec, field);
+    if (f.text == null) return { label, ref: null, chars: null, why: f.missing.replace(/^stores \S+ as /, 'stored as ') };
+    return base ? { label, ref: composeTextRef(base, [0, f.text.length], field), chars: f.text.length }
+      : { label, ref: null, chars: f.text.length, why: 'the record carries no id or stream to address' };
+  };
+  if (part.kind === 'ws' && Array.isArray(part.messages)) return part.messages.map((_, j) => one(`message ${j + 1}${cut}`, `resp.messages.${j}`));
+  if (typeof part.raw === 'string') return [one((part.kind === 'sse' ? 'stream' : 'body') + cut, 'resp.raw')];
+  if (part.body !== undefined) return [{ label: 'body', ref: null, chars: null, why: 'a JSON reply that re-serializes to itself, or one captured before D40, is stored parsed only, so it has no byte-verbatim text to point at (gate G16)' }];
+  if (typeof part.raw_b64 === 'string') {
+    return [{ label: 'body', ref: null, chars: null, why: part.encoding_error ? `could not be decoded (${part.encoding_error}); kept as base64 in the record` : 'not UTF-8 text; kept as base64 in the record' }];
+  }
+  if (part.kind === 'empty') return [{ label: 'body', ref: null, chars: 0, why: 'the reply had no body' }];
+  return [{ label: 'reply', ref: null, chars: null, why: r.kind === 'error' ? 'no reply bytes arrived before the exchange failed' : 'no reply text is stored in this record' }];
+}
+
+// 4.6 R2 「不成块的顶层键逐个列出」: every top-level request key that is not a block section, each with a
+// locator to its verbatim value (null when the record cannot be addressed). 2.6 §A 请求参数: a short scalar — a number, a
+// boolean, a string of at most SHORT_STRING characters — also ships as `value` (only its own byte slice is parsed).
+const SHORT_STRING = 40;
+function scalarOf(text, node) {
+  if (node.kind !== 'literal' && !(node.kind === 'string' && node.end - node.start <= SHORT_STRING * 6 + 2)) return undefined;
+  let v;
+  try { v = JSON.parse(text.slice(node.start, node.end)); } catch { return undefined; }
+  return typeof v === 'number' || typeof v === 'boolean' || (typeof v === 'string' && v.length <= SHORT_STRING) ? v : undefined;
+}
+export function nonBlockKeysOf(rec, format) {
+  if (spanBody(rec) == null) return [];
+  const root = scannedRequestBody(rec);   // the record's one scan (src/dissect/request-body.mjs)
+  if (!root || root.kind !== 'object') return [];
+  const keep = blockKeysOf(format);
+  const base = rawRefOf(rec);
+  const out = [];
+  for (const [key, node] of root.props) {
+    if (keep.includes(key)) continue;
+    const value = scalarOf(rec.req_body, node);
+    out.push({ key, chars: node.end - node.start, ref: base ? composeTextRef(base, [node.start, node.end]) : null, ...(value !== undefined ? { value } : {}) });
+  }
+  return out;
+}
 
 // The blocks of an Anthropic-wire request, tagged with their faithfulness SERVER-SIDE (reads provider block shape here, not in
 // the browser → invariant 3). opaque = encrypted/redacted reasoning replayed as signature-only, no plaintext on the wire
