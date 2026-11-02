@@ -3,19 +3,21 @@
 // nothing asks again afterwards. The wired cell runs in a jsdom document; the api is a counting double.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { JSDOM } from 'jsdom'
-
-const dom = new JSDOM('<!doctype html><body></body>')
-const { window } = dom
-globalThis.document = window.document
-globalThis.NodeFilter = window.NodeFilter
-globalThis.MutationObserver = window.MutationObserver
-globalThis.getComputedStyle = (el) => window.getComputedStyle(el)
-globalThis.IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} }
+// jsdom is a devDependency and plain `npm test` needs none (D75③, 0.1 §3): without it the test skips and says why
+const jsdom = await import('jsdom').catch(() => null)
+const skip = jsdom ? false : 'jsdom is not installed (a devDependency: npm ci installs it)'
+const window = jsdom ? new jsdom.JSDOM('<!doctype html><body></body>').window : null
 let copied = null
-Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: { writeText: async (t) => { copied = t } } } })
-
-const { cellOf, cellBodyHtml, bodyCache, loadBody, wireCells } = await import('../../web/legacy/replay/cell.mjs')
+let cellOf, cellBodyHtml, bodyCache, loadBody, wireCells
+if (window) {
+  globalThis.document = window.document
+  globalThis.NodeFilter = window.NodeFilter
+  globalThis.MutationObserver = window.MutationObserver
+  globalThis.getComputedStyle = (el) => window.getComputedStyle(el)
+  globalThis.IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} }
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: { writeText: async (t) => { copied = t } } } })
+  ;({ cellOf, cellBodyHtml, bodyCache, loadBody, wireCells } = await import('../../web/legacy/replay/cell.mjs'))
+}
 
 const REF = 's/main#r7::0-64'
 const BYTES = '{"role":"user","content":"line one\\nline two \\u00e9 <b>&amp;</b>"}\r\n  trailing'
@@ -24,7 +26,7 @@ const api = { asks: 0, get: async (name, q) => { assert.equal(name, 'block'); ap
 const until = async (fn, what) => { for (let i = 0; i < 200; i++) { if (fn()) return; await new Promise((r) => setTimeout(r, 10)) } assert.fail(`timed out waiting for ${what}`) }
 const settle = () => new Promise((r) => setTimeout(r, 60))
 
-test('an open cell whose bytes left the cache asks once per need and gives the stored bytes again', async (t) => {
+test('an open cell whose bytes left the cache asks once per need and gives the stored bytes again', { skip }, async (t) => {
   t.after(() => window.close())
   const cell = cellOf({ sec: 'messages', role: 'user', kind: 'text', text_ref: REF, chars: BYTES.length, preview: '' })
   await loadBody(api, REF)
