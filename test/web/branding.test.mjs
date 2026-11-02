@@ -8,7 +8,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const WEB = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'web', 'board')
-const files = fs.readdirSync(WEB, { recursive: true }).map((f) => path.join(WEB, f)).filter((f) => fs.statSync(f).isFile() && /\.(html|mjs|css|svg|md)$/.test(f))
+const files = fs.readdirSync(WEB, { recursive: true }).map((f) => path.join(WEB, f)).filter((f) => fs.statSync(f).isFile() && /\.(html|m?js|css|svg|md)$/.test(f))
 
 test('the board\'s page title names the product', () => {
   const pages = files.filter((f) => f.endsWith('.html'))
