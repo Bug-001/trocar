@@ -55,7 +55,7 @@ export const columns = (slotOf) => ({ at: -1, slotOf, ts: [], ln: new Int32Array
   keys: new Map(), order: [], by: [], lanes: new Set(), heads: new Map(), its: null, sorted: null });
 const tsOf = (cols, rid) => cols.ts[cols.slotOf(rid)];
 // The flag bits of a step: one definition with the board (src/view/head-cols.mjs). A cache break counts when its cause is outside the quiet
-// ones (src/web/v2/core/metrics.mjs QUIET_CAUSES).
+// ones (web/legacy/core/metrics.mjs QUIET_CAUSES).
 export { FLAG };
 const QUIET = new Set(['append', 'first-call', 'volatile-nonce-only']);
 const EVENT_FLAG = { user: FLAG.user, summarize: FLAG.summarize, spawn: FLAG.spawn };

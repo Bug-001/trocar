@@ -1,4 +1,4 @@
-// src/web/v2/replay/model.mjs — the replay desk's data model over the three session reads (RFC 3.5 §会话读; 2.3 #22).
+// web/legacy/replay/model.mjs — the replay desk's data model over the three session reads (RFC 3.5 §会话读; 2.3 #22).
 //
 // Pure: no DOM, fetch or timers; the only module state is the per-desk memo of materialised steps (a cache: dropped by every
 // apply*, so a read never sees a stale step). The desk holds the session's skeleton rows by rid in step order, the lane
@@ -15,7 +15,7 @@
 //   seenFiles(desk, key) → [{path, firstRid, count}] | null   seen minus the lane's opened files (2.4:148)
 // A whole-lane read answers the tail page only; older steps come back by `prev` (`to`) pages.
 
-import { compareStep } from '../../../view/step-order.mjs'
+import { compareStep } from '../../../src/view/step-order.mjs'
 
 const KF_EVERY = 32
 // stepOf's memo (2.3 §读与画「长对话的窗口」 rule 1): a step is materialised once per desk change; the newest few are kept

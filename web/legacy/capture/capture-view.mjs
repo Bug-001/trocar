@@ -13,7 +13,7 @@ import { redactUrlCredentials } from '../core/sensitive.mjs'
 import { agentVerdicts, reasonOf, AGENT_TIER } from '../core/capture-verdict.mjs'
 import { controlFor, controlHtml } from '../core/harness-switch.mjs'
 import { logRowsOf } from './capture-log.mjs'
-import { failureWord } from '../../../cli/words.mjs'
+import { failureWord } from '../../../src/cli/words.mjs'
 import {
   CONDITION_KIND, SWITCH_WORD, CODE, residueLead, ROUTING, CHANGE_REMOVAL, CHANGE_KIND, CHANGE_FORMAT, RELAYED, COMMANDS,
   UNKNOWN_REASON, ERR_WHERE, FIX_IN_DETAILS,

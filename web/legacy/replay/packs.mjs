@@ -1,4 +1,4 @@
-// src/web/v2/replay/packs.mjs — the replay desk fed by pack and tail files (RFC 3.5 §会话读 `lane --pack` / `lane --tail`).
+// web/legacy/replay/packs.mjs — the replay desk fed by pack and tail files (RFC 3.5 §会话读 `lane --pack` / `lane --tail`).
 //
 // Pure: no DOM, fetch or timers. A file is NDJSON whose first line is the doc head; every other line has one top-level key:
 // c (a skeleton row) · s (a step: `i` its index in its lane, `parent` the previous step of its lane in the same file, null = a
