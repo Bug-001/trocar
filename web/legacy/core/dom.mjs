@@ -23,7 +23,11 @@ export function copyBtn(text, label = 'Copy') {
   return `<button class="copybtn" data-copy="${esc(text)}">${esc(label)}</button>`
 }
 
-async function writeClipboard(text) {
+// what a copy button says for a moment after a press, and for how long
+export const COPY_FLASH = Object.freeze({ ok: 'Copied', failed: 'Copy failed', ms: 1200 })
+
+// writeClipboard(text) → Promise<boolean>: the clipboard API, else the textarea route (web/src/ui/CopyButton.tsx uses it too)
+export async function writeClipboard(text) {
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); return true }
   } catch { /* fall through to the textarea route */ }
@@ -40,15 +44,16 @@ async function writeClipboard(text) {
   } catch { return false }
 }
 
-// delegated click on any .copybtn under `root`; the button flashes '已复制' (or '复制失败') for a moment
+// delegated click on any .copybtn[data-copy] under `root` (a React CopyButton carries no data-copy and copies itself); the button
+// flashes 'Copied' (or 'Copy failed') for a moment
 export function installCopy(root) {
-  return delegate(root, 'click', '.copybtn', async (e, el) => {
+  return delegate(root, 'click', '.copybtn[data-copy]', async (e, el) => {
     const was = el.dataset.label || el.textContent
     el.dataset.label = was
     const ok = await writeClipboard(el.dataset.copy || '')
-    el.textContent = ok ? 'Copied' : 'Copy failed'
+    el.textContent = ok ? COPY_FLASH.ok : COPY_FLASH.failed
     clearTimeout(el._flash)
-    el._flash = setTimeout(() => { el.textContent = was }, 1200)
+    el._flash = setTimeout(() => { el.textContent = was }, COPY_FLASH.ms)
   })
 }
 
