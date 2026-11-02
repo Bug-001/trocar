@@ -8,11 +8,10 @@ import { esc, kf, usd } from '../core/fmt.mjs'
 import { attrSel } from '../core/dom.mjs'
 import { when } from './analysis.mjs'
 import { xOf, windowCalls, nearestByX, nearestByTs, turnsReviewed } from './lanes.mjs'
-import { usageOf, priceMatch, costOf } from '../core/metrics.mjs'
+import { usageOf, priceMatch, costOf, isFailed as failOf } from '../core/metrics.mjs'
 import { laneKind, laneWord, SUBAGENT_ROW, BG_ROW, TC_ROW, laneTimes, callsWord, TC_SAMPLED_TIP, TC_NO_SIZE, FLAGGED_WORD, REVIEW_TIP, ONLY_MAIN } from '../labels/replay.mjs'
 import { L } from '../core/labels.mjs'
 
-const failOf = (c) => !!c.error || (c.status != null && c.status !== 200) // 2.2's predicate, first clause
 // only the lanes that read the conversation get the review bracket (2.1 ⑤)
 export const reviewing = (lane) => lane.kind === 'monitor' || lane.kind === 'token-count'
 

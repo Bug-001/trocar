@@ -33,7 +33,7 @@ export function replyOf({ row, reply, detail } = {}) {
   const mark = partial ? 'partial' : parts.every(onSpan) ? null : 'parsed'
   // an unparsed step is a REQUEST-body fact; where the response itself parsed, the reply still renders (2.6 §A)
   let failed = null
-  if (!(c.unparsed && parts.length) && (c.error || (c.status != null && c.status !== 200))) {
+  if (!(c.unparsed && parts.length) && c.error) {
     failed = { reason: c.unparsed ? '' : (typeof c.error === 'string' ? c.error : (c.errMsg || (c.error && c.error.message) || (c.status != null ? `status ${c.status}` : ''))) }
   }
   return { failed, mark, stop: norm.stop_reason || null, parts }

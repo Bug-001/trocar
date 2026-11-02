@@ -1,19 +1,17 @@
 // src/view/reduce.mjs — reduction (RFC 4.3 §3, RFC 2.3 §读与画): a session's document from its context projection
 // (src/query/projection.mjs) alone. Each call row's list of block ids is materialised from its base chain; the analyzer
-// (createAnalyzer, the same fold the record path runs) is fed call views built from the row's facts `x` and its definitions' facts
+// (createAnalyzer) is fed call views built from the row's facts `x` and its definitions' facts
 // `f`; the cache break of each lane is taken against the lane's last call that chained a prefix, over the definitions' frame hashes;
 // the composition is the lane's previous one minus the removed blocks plus the added ones. No record is read, except once per pair
 // of diverging blocks whose break detail (key reorder, byte offset) needs both texts: that detail is kept as a `brk` line of the
 // projection, so the next reduction reads it from there.
 //
-// The document is what createAssembler(...).finish() gives for the same records (src/view/assemble.mjs), every call in its meta
-// form, plus `lanes[].key` (the id of the lane's first call) and `items` (record id → the facts the session document reads of it).
-// It carries no `prefixSha256` (the board only ever compared digests): `prefixByteIdentical` compares each block's verbatim slice
-// with its cache_control cut out (the definition's `vh`), never the frame text, so it can be false where the record fold says true.
-// One place it is more exact: the record fold keys a block by its first 4,096 characters (analyze.mjs BLK_KEY_CAP), so two blocks
-// that differ only past that are the same to it; here a block is its whole frame (real captures carry blocks that differ only past 4,096 characters).
+// The document is the session's lanes and their calls, every call in its meta form (no blocks: a page reads them through the
+// `lane` document), plus `lanes[].key` (the id of the lane's first call) and `items` (record id → the facts the session document reads of
+// it). It carries no prefix digest: `prefixByteIdentical` compares each block's verbatim slice with its cache_control cut out (the
+// definition's `vh`), never the frame text. A block is its whole frame, never a capped head of it (real captures carry blocks that
+// differ only past their first 4,096 characters).
 import { createAnalyzer, stepOrder, OrderBound, breakOf, blockDiff, compactionMeta, unparsedErrMsg, laneMeta, replayLedger } from './analyze.mjs';
-import { realGroundTruth, unknownSummary, FLAT_LANES } from './assemble.mjs';
 import { callRow, itemsView } from './board.mjs';
 import { compareStep } from './step-order.mjs';
 import { compactionVerdict } from '../identity/session-identity.mjs';
@@ -22,6 +20,50 @@ import { COMP_KEYS, departer, departs, taskOf, HEAD } from './blockmeta.mjs';
 import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
 import { materializeAttrs } from './extract.mjs';
 import { openFoldLog } from '../query/fold-log.mjs';
+
+// Ground-truth from PROVEN byte-identity (not the structural proxy). Strict wording per 3.3:73 — the
+// claim is only "MY outbound prefix is byte-identical", never "the provider is wrong".
+export function realGroundTruth(prefixByteIdentical, read, create) {
+  if (!prefixByteIdentical) return null;             // no proven byte-identical reusable prefix
+  if (read > 0) return null;                          // genuinely reused → normal
+  return create > 0 ? 'ttl-rebuild' : 'provider-contradiction';
+}
+
+// No dissector claimed these bytes. Report that IN PLACE (invariant 4) and COUNT them (3.1:44 — an
+// unclaimed record MUST land in a labelled "unrecognized" state, MUST NOT be silently dropped).
+// We deliberately emit ZERO calls/lanes/blocks: any number we printed here would be a number we did
+// not parse. The evidence below (endpoints, user-agents, models) is copied verbatim from the envelope
+// so a human can see WHAT arrived without us pretending to have understood it.
+// The evidence block for records no dissector claims. `partial` = they sit inside a session whose other
+// records ARE rendered (a mixed session); otherwise the whole session is unrecognized.
+export function unknownSummary(recs, partial) {
+  const uniq = (xs) => [...new Set(xs.filter(Boolean))];
+  const models = uniq(recs.map((r) => r.model));
+  return {
+    partial,
+    reason: partial
+      ? 'Some records in this session are read as a call by no registered dissector (src/dissect/registry.mjs): '
+        + 'an unknown wire, or a record of a known wire that is no call (e.g. a message the server pushed with no '
+        + 'call open). They are counted here and NOT rendered; the rest of the session is.'
+      : 'No registered dissector reads these records as a call (src/dissect/registry.mjs): an unknown wire, or '
+        + 'records of a known wire that are no call (e.g. messages the server pushed with no call open). They are NOT '
+        + 'parsed and NOT rendered — showing them under another wire\'s vocabulary would be a fabrication.',
+    records: recs.length,
+    endpoints: uniq(recs.map((r) => r.endpoint)),
+    userAgents: uniq(recs.map((r) => r.ua)),
+    models,
+  };
+}
+
+// Lanes a flat-lane wire can be split into by the harness table's hints (3.4). Labels are server-side
+// (invariant 3); the board renders them as it renders analyze()'s lanes.
+export const FLAT_LANES = {
+  main: { kind: 'main', icon: '💬', label: 'conversation' },
+  subagent: { kind: 'subagent', icon: '🧬', label: 'subagent' },
+  aux: { kind: 'aux', icon: '⚙', label: 'other util' },
+  probe: { kind: 'probe', icon: '👁', label: 'warm-up / probe requests',
+    note: 'A request the harness itself marks as a warm-up or probe (a request-kind hint, or a request that asks for no output): it primes the cache and is not a conversation turn. Its body is kept verbatim like any call, and a later call may build on it.' },
+};
 
 const CPS = 256; // the lane states a reduction keeps of its last takes, for a late call to go back to (pushOf)
 const KEYFRAME = 32; // a materialised list kept every KEYFRAME links of a base chain
@@ -171,7 +213,8 @@ export function listOf(store, rid) {
 const ridOf = (m) => String(m && typeof m === 'object' ? m.id : m);
 const isCall = (row) => !!(row && row.x && Array.isArray(row.x.secs));
 const enoent = () => { throw Object.assign(new Error('no file: the fold log is held in memory'), { code: 'ENOENT' }); };
-const NO_FILE = { statSync: enoent, readdirSync: enoent, openSync: enoent, closeSync() {}, readSync: () => 0 };
+/** An fs with no files: what an in-memory store or fold log is opened over (it reads nothing back and writes nothing). */
+export const NO_FILE = { statSync: enoent, readdirSync: enoent, openSync: enoent, closeSync() {}, readSync: () => 0 };
 /** A block a cache-break detail needs whose text did not read back (3.5 §读不全不静默): `code` one of BLOCK_PROBLEMS
  *  (src/health/codes.mjs), `rid` the member whose take needed it. A resolver throws it to say why; null from it is `record-missing`. */
 export class BlockUnread extends Error {
@@ -501,7 +544,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     }
     newItems = []; newFailed = []; I.all = false; I.dirty.clear();
   }
-  // spawns linked to sub-agent lanes (the record fold's rule, analyze.mjs finish): a sub-agent lane is spawned by the last spawn, in
+  // spawns linked to sub-agent lanes (analyze.mjs finish's rule): a sub-agent lane is spawned by the last spawn, in
   // the order of lanes by their first call and then of the lane's steps, whose prompt's head opens the lane's first user text.
   // → whether the links were made again (no new spawn, no new lane and none dropped: they stand)
   function link() {
@@ -580,7 +623,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     }
     return out;
   }
-  // the session's stats (the record fold's: analyze.mjs finish, assemble.mjs flatLaneView, mergeViews)
+  // the session's stats
   // (over every lane when F.inc.all or a lane went back (pushOf); else as emit() kept them: `F.inc.st`)
   function stats() {
     const I = F.inc;
@@ -752,9 +795,9 @@ function anthropicFold({ at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, i
     snapshot: () => ({ an: an.snapshot() }) };
 }
 
-// A flat-lane wire's fold (assemble.mjs flatLaneFold over rows): a lane per agent (a subagent named by the harness's agent id or the
+// A flat-lane wire's fold over rows: a lane per agent (a subagent named by the harness's agent id or the
 // wire's own, the rest by lane kind), each call's compaction verdict on the dissector's message count, its cache break against its
-// lane's last call that did not fail; the document names lanes by kind (flatLaneView): one doc lane per kind.
+// lane's last call that did not fail; the document names lanes by kind: one doc lane per kind.
 function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int }, F, from) {
   const lanes = from ? from.lanes : new Map();
   function take(rid, row) {
@@ -781,8 +824,8 @@ function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int
       comp: compOf(lastOf(S), list, B), usage: x.usage, cacheBreak: brk, gt: brk.gt,
     };
     S.last = k; S.comp = call.comp;
-    // a call that failed never established a cache prefix; one whose request was not stored does (with no blocks)
-    if (!(x.error || (x.status != null && x.status !== 200))) S.base = k;
+    // a call that failed (x.error: the one verdict, extract.mjs callX) never established a cache prefix; one whose request was not stored does (with no blocks)
+    if (!x.error) S.base = k;
     // the compaction events the board's outline lists, carrying the step's inference marker with them (invariant 4)
     const ev = call.compaction ? [{ type: 'compaction', step: null, streamId: kind, from: call.evictedFrom, to: call.evictedTo,
       inferred: call.compactionInferred, confidence: call.compactionConfidence, basis: call.compactionBasis }] : [];
@@ -807,7 +850,7 @@ function compOf(last, list, B) {
   for (let i = p; i < list.length; i++) c[B.bucket(list[i])] += B.bytes(list[i]);
   return c;
 }
-// What the timeline reads of the request (assemble.mjs slimRec): the record's own, with what a stitched context changes — its message
+// What the timeline reads of the request (extract.mjs slimRec): the record's own, with what a stitched context changes — its message
 // and tool counts and its system's characters — from the stitched list.
 function requestOf(x, list, B) {
   const rq = { ...(x.rq || {}) };

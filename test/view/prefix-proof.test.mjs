@@ -45,7 +45,7 @@ function breakOfK(opts) {
 }
 
 // The row ships the flag through its `gt` (3.5 §会话读 row closed set): with usage that reads nothing from the cache and creates nothing, a
-// byte-identical reusable prefix is a provider contradiction (assemble.mjs realGroundTruth), and no gt is claimed without the proof.
+// byte-identical reusable prefix is a provider contradiction (reduce.mjs realGroundTruth), and no gt is claimed without the proof.
 const usage = { input_tokens: 4000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 const proven = (opts = {}) => breakOfK({ usage, ...opts }).cacheBreak.gt === 'provider-contradiction'
 

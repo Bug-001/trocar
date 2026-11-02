@@ -7,7 +7,7 @@
 //
 // FIDELITY (invariant 4): a record whose request was a parsed object carries capture:'v0-converted' —
 // its req_body is RE-SERIALIZED, not the original wire bytes, so no block is addressed into it
-// (view/assemble.mjs spanBody): its blocks ship inline and say so, and the board draws the window line.
+// (view/extract.mjs spanBody): its blocks ship inline and say so, and the board draws the window line.
 import { createReadStream } from 'node:fs';
 import { basename } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -15,7 +15,7 @@ import { isSealedPath } from '../raw/discover.mjs';
 import { openSealed } from '../raw/reader.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
 
-// What a record whose req_body was rebuilt from a parsed request says it is, whatever capture it carried (view/assemble.mjs spanBody).
+// What a record whose req_body was rebuilt from a parsed request says it is, whatever capture it carried (view/extract.mjs spanBody).
 export const V0_CONVERTED = 'v0-converted';
 
 // True D10 record → passthrough. Demo v0 record → convert. Anything else → passthrough.
@@ -45,7 +45,7 @@ export function normalizeRecord(raw) {
 // property: invisible to spread / JSON.stringify / for…in, readable by anyone who asks.
 const EXCERPT = 160;
 
-export async function readRecords(filePath, { normalize = true, limit = Infinity } = {}) {
+export async function readRecords(filePath, { limit = Infinity } = {}) {
   const out = [];
   // skipped: one entry per line that carried a record we could NOT recover. blankLines are tracked
   // separately and are NOT a loss (whitespace carries no record) — conflating them would cry wolf.
@@ -71,7 +71,7 @@ export async function readRecords(filePath, { normalize = true, limit = Infinity
     }
     scan.parsedLines++;
     // a request body the collector left compressed is decoded here, once, for every reader (4.6 §记录, 3.2:132)
-    const rec = normalize ? normalizeRecord(expandRequestBody(raw)) : expandRequestBody(raw);
+    const rec = normalizeRecord(expandRequestBody(raw));
     // Which FILE these bytes came from. A text_ref is `<session>/<stream>#<id>::<start>-<end>`
     // (RFC 4.2:40) and the stream basename is the half that disambiguates: record ids are only
     // unique within a capture file. The record itself never carries it — only the reader knows —

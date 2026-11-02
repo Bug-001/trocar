@@ -7,7 +7,7 @@
 // byte for byte. Request bodies are told apart from the other JSON the fold parses (record lines, replies, stream events) by their
 // shape: a `model` with a `messages` or `input` beside it, and no record timestamp. Records and replies stay unfrozen, because the
 // fold legitimately copies-and-changes envelopes (hydration, slimming), which is not what this contract is about. So does the body's
-// own top-level object: the flat-lane fold writes the dissector's counts onto it (src/view/assemble.mjs flatRequest), and no memo is
+// own top-level object: the flat-lane fold writes the dissector's counts onto it (src/view/extract.mjs flatRequest), and no memo is
 // keyed by it. What is frozen is everything under it: the messages, input items, tools, system and their blocks, the memo's keys.
 import test from 'node:test'
 import assert from 'node:assert/strict'

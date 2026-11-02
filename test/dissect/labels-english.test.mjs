@@ -1,12 +1,12 @@
 // test/dissect/labels-english.test.mjs — 2.6 (D58): every capture label the board receives is plain English. Each envelope flag the
 // label producers read is one axis; every axis alone and all of them together go through the producers AND through the two board
-// paths (the replay's sessionView, the request detail's controlRecordWire), and no `label` / `text` that comes out holds CJK.
+// paths (the `session` document's rows, the request detail's controlRecordWire), and no `label` / `text` that comes out holds CJK.
 // The wording itself is not a contract (the board keys on ids), so only the script is asserted.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { captureLabelsOf, reqIncompleteOf, wsIncompleteOf, respIncompleteOf, retentionLabelOf } from '../../src/dissect/capture-labels.mjs'
 import { HARNESSES } from '../../src/dissect/harnesses.mjs'
-import { sessionView } from '../helpers/session-view.mjs'
+import { sessionDoc } from '../helpers/session-doc.mjs'
 import { controlRecordWire } from '../../src/view/control-wire.mjs'
 
 const CJK = /[　-〿㐀-鿿＀-￯]/
@@ -67,7 +67,7 @@ const fromStep = (where, s) => {
   for (const e of (s.wire && s.wire.observerEffect) || []) { collect(`${where} effect`, e.what); collect(`${where} effect`, e.cause) }
 }
 
-test('2.6 / D58 — no capture label, label text or observer effect the board receives holds CJK', () => {
+test('2.6 / D58 — no capture label, label text or observer effect the board receives holds CJK', async () => {
   for (const [name, rec] of [...variants(http, HTTP_AXES), ...variants(ws, WS_AXES)]) {
     const where = `${rec.transport || 'http'}:${name}`
     fromLabels(`${where} captureLabelsOf`, captureLabelsOf(rec))
@@ -77,8 +77,7 @@ test('2.6 / D58 — no capture label, label text or observer effect the board re
     }
     const ctl = controlRecordWire(stream({ ...rec }))
     fromLabels(`${where} controlRecordWire`, ctl && ctl.ctl && ctl.ctl.labels)
-    const view = sessionView([stream({ ...rec })], 'S')
-    for (const s of (view && view.analyzed && view.analyzed.steps) || []) fromStep(`${where} sessionView`, s)
+    for (const s of (await sessionDoc([{ ...rec }], 'S')).calls || []) fromStep(`${where} session`, s)
   }
   for (const h of HARNESSES) for (const e of h.observerEffects || []) { collect(`${h.id} effect`, e.what); collect(`${h.id} effect`, e.cause) }
   // the table reaches every producer: a label from each id the board can receive

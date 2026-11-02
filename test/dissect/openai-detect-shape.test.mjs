@@ -21,7 +21,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { detect, wireShape } from '../../src/dissect/openai.mjs';
-import { assembleSession } from '../../src/view/assemble.mjs';
 
 // ── real shapes, transcribed from the on-disk captures ────────────────────────────────────────
 const opencodeRec = {
@@ -139,36 +138,9 @@ test('an ANTHROPIC body posted to a /chat/completions path is not claimed (bytes
   };
   assert.equal(wireShape(rec), null, 'an Anthropic body MUST NOT be claimed as OpenAI chat');
   assert.equal(detect(rec), false);
-  // and it must still reach the CC dissector, fully rendered — not the unknown banner
-  const A = assembleSession([rec]);
-  assert.equal(A.provider, 'cc');
-  assert.ok((A.steps[0].flat || []).some((b) => b.kind === 'tool_use'), 'CC renders its tool_use blocks');
 });
 
 test('Chat Completions traffic is recognized as the chat wire shape', () => {
   assert.equal(wireShape(chatRec), 'chat');
   assert.equal(detect(chatRec), true);
-});
-
-// ── the combination D25 explicitly warns about: claimed by detect(), dropped by the assembler ──
-test('Chat Completions traffic is ASSEMBLED, not silently dropped into a blank board', () => {
-  const A = assembleSession([chatRec]);
-  assert.equal(A.provider, 'openai');
-  assert.equal((A.steps || []).length, 1, 'a claimed chat call MUST produce a step, not a blank board');
-  const step = A.steps[0];
-  assert.ok((step.flat || []).length > 0, 'chat blocks MUST be extracted');
-  // tools → system → messages, in the same cross-provider vocabulary as Responses/CC
-  const bySec = step.flat.reduce((a, b) => ((a[b.sec] = (a[b.sec] || 0) + 1), a), {});
-  assert.equal(bySec.tools, 1, 'the function tool is a tool block');
-  assert.equal(bySec.system, 1, 'the system message becomes the system section');
-  assert.equal(bySec.messages, 4, 'user + tool_use + tool_result + assistant text');
-  assert.deepEqual(step.flat.filter((b) => b.sec === 'messages').map((b) => b.kind),
-    ['text', 'tool_use', 'tool_result', 'text']);
-  // verbatim tool schema (AC-1) — unwrapped from the chat `function` envelope
-  const tool = step.flat.find((b) => b.sec === 'tools');
-  assert.equal(tool.name, 'read_file');
-  assert.ok(tool.schema.properties.path, 'tool schema is verbatim, not metadata');
-  // usage mapped into the NEUTRAL canonical names (zero provider-native names reach the board)
-  assert.deepEqual(step.usage, { read: 1024, create: 0, fresh: 176, out: 8 });
-  assert.equal(step.norm.text, 'done', 'assistant text rebuilt from the SSE deltas');
 });

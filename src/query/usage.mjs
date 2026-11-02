@@ -3,7 +3,7 @@
 // `overview.usage` needs every call's token counters, and they live in the reply bodies: reading every in-window record
 // per query is O(corpus), and the daemon's write path does not parse provider bodies (D20). So the query worker writes,
 // after it has answered, one small file per segment, `index/<segment>.usage.json`: a line per model call with the
-// facts `overview` sums, derived by the same assembly `session` uses. It is a projection like the index (invariant 2):
+// facts `overview` sums, derived by the same extraction and reduction `session` uses. It is a projection like the index (invariant 2):
 // delete it and `overview` falls back to its byte budget until the worker fills it again, field for field the same.
 //
 // IDENTITY is the segment index's own rule, through its own primitives (index-build.mjs usability / tailMark /
@@ -11,47 +11,51 @@
 // (storeIndex `at`); anything else is rewritten whole (temp + rename); a sealed segment's file is written whole once.
 import nodeFs from 'node:fs';
 import path from 'node:path';
-import { groupSessions, sessionFold } from '../view/board.mjs';
-import { stepOrder } from '../view/analyze.mjs';
+import { extractMembers, blockAt } from '../view/extract.mjs';
+import { parseTextRef } from '../raw/refs.mjs';
+import { reduce, NO_FILE } from '../view/reduce.mjs';
+import { openProjection } from './projection.mjs';
 import { mapUsage } from '../model/schema.mjs';
 import { recordsAt } from './records.mjs';
-import { isModelCall } from './rows.mjs';
-import { indexDir, readIndex, tailMark, usability, storeIndex, segmentSource, plainMark, sealedMark, segStamp, warmSegmentIndex } from './index-build.mjs';
+import { isModelCall, sessionGroups, indexRows } from './rows.mjs';
+import { indexDir, readIndex, tailMark, usability, storeIndex, segmentSource, plainMark, sealedMark, segStamp } from './index-build.mjs';
 import { warmCache, fsTag, statKey } from './warm.mjs';
 import { trocarHome } from '../paths.mjs';
 
-const USAGE_V = 2; // 2: a main-lane call carries `ask` (the session title, 4.4 §人类标题的来源)
+const USAGE_V = 3; // 3: the facts are the session's extraction and reduction (lane = its lane header's kind)
 export const USAGE_CHUNK_BYTES = 4 << 20; // stored bytes of model calls read back per chunk (4.2 §用量旁注 ④)
 
 export const usageFile = (home, segment) => path.join(indexDir(home), `${segment}.usage.json`);
 
-// The 3.2 canonical usage of one call, by the wire it arrived in and the vendor that answered (the NULL-write rule is
-// schema.mjs's, per vendor); null when the reply reported none, or in a wire format no mapping exists for.
-function canonical(c) {
-  const raw = c.norm && c.norm.usage;
-  if (!raw || typeof raw !== 'object' || !Object.keys(raw).length || !c.wire) return null;
-  try { return mapUsage(c.wire.format, raw, { vendor: c.wire.vendor }); } catch { return null; }
+// The provider usage a call row carries (x.facts.usage on the anthropic wire, x.nu on a flat one), in 3.2's canonical form by the
+// wire it arrived in and the vendor that answered; null when the reply reported none, or in a wire format no mapping exists for.
+function usageOf(x) {
+  const raw = x.format === 'anthropic' ? x.facts && x.facts.usage : x.nu;
+  if (!raw || typeof raw !== 'object' || !Object.keys(raw).length || !x.wire) return null;
+  try { return mapUsage(x.format, raw, { vendor: x.wire.vendor }); } catch { return null; }
 }
 
-/** callFacts(records) → [{id, lane, model, failed, cache_known, usage, ask?}] — one per call `session` assembles from these
- *  records. The session keys are THESE records' own: a synthesized key depends on the first record it is stamped over. */
-export function callFacts(records) {
+/** usageFacts({rows, records}) → [{id, lane, model, failed, cache_known, usage, ask?}] — one per call `session` reduces from these
+ *  records (`rows`: their index rows), by the same extraction (view/extract.mjs) and reduction (view/reduce.mjs). A session is the
+ *  segment index's `session_id`; its store is held in memory for this call only. Items and failed members give no line. */
+export function usageFacts({ rows, records }) {
+  const byId = new Map(records.map((r) => [String(r.id), r]));
   const out = [];
-  for (const [key, recs] of groupSessions(records)) {
-    // the fold's own META form (norm.usage, wire, status, rec.request.model), no body assembled — not a page: a page's paged-out
-    // calls carry only what the board reads (3.5 §分页 PAGED_META), and the raw usage is not among it
-    const f = sessionFold(key);
-    for (const r of [...recs].sort(stepOrder)) f.push(r);
-    const view = f.view(recs);
-    if (!view.analyzed) continue;
-    for (const lane of view.analyzed.lanes || []) for (const c of lane.calls || []) {
-      const failed = c.status == null || c.status >= 400;
-      const u = failed ? null : canonical(c);
-      out.push({ id: c.rec && c.rec.id, lane: lane.kind, model: (c.rec && c.rec.request && c.rec.request.model) ?? null, failed,
-        cache_known: !!(c.wire && c.wire.cacheSemanticsKnown), usage: u ? [u.input_uncached, u.output, u.cache_read, u.cache_write] : null,
-        // the main lane's task rides on its calls: `sessions` takes the earliest one's as the title (4.2 §用量旁注 `ask`)
-        ...(lane.kind === 'main' ? { ask: lane.task ?? null } : null) });
-    }
+  for (const [sid, own] of sessionGroups(rows.filter((r) => byId.has(String(r.id))))) {
+    const store = openProjection({ home: '/', fs: NO_FILE, key: sid, write: false, errors: [] });
+    try {
+      extractMembers({ store, members: own, sessionId: sid, recordsAt: (rs) => rs.map((r) => byId.get(String(r.id))).filter(Boolean) });
+      // a cache-break detail's block text, from these records (the members' own; one that is not among them: BlockUnread, a failed member)
+      const resolve = (ref) => { const rec = byId.get(parseTextRef(ref).recordId); return rec ? blockAt(rec, ref) : null; };
+      const doc = reduce(store, own, { resolve }), kinds = new Map(doc.lanes.map((h) => [h.lane, h]));
+      for (const row of doc.rows) {
+        const x = store.rows.get(row.rid).x, h = kinds.get(row.lane) || {}, failed = !!row.error, u = failed ? null : usageOf(x);
+        out.push({ id: row.rid, lane: h.kind, model: (row.rec && row.rec.request && row.rec.request.model) ?? null, failed,
+          cache_known: !!(row.wire && row.wire.cacheSemanticsKnown), usage: u ? [u.input_uncached, u.output, u.cache_read, u.cache_write] : null,
+          // the main lane's task rides on its calls: `sessions` takes the earliest one's as the title (4.2 §用量旁注 `ask`)
+          ...(h.kind === 'main' ? { ask: h.task ?? null } : null) });
+      }
+    } finally { store.close(); }
   }
   return out;
 }
@@ -81,7 +85,7 @@ const lineOf = (id) => Number(String(id).split(':').pop());
 // segment, so a failed read is never remembered (3.5 §访问模式 acceptance #8, like recordsAt's warm cache).
 function chunkLines({ home, fs, rows }) {
   const errs = [];
-  const facts = callFacts(recordsAt({ home, fs, rows, errors: errs, remember: false }));
+  const facts = usageFacts({ rows, records: recordsAt({ home, fs, rows, errors: errs, remember: false }) });
   const lines = facts.map((f) => ({ ...f, line: lineOf(f.id) })).sort((a, b) => a.line - b.line).map(callLine);
   return { io: errs.some((e) => e.io), lines: [...lines, ...errs.filter((e) => !e.io).map(({ where, reason }) => problemLine({ where, reason }))] };
 }
@@ -114,7 +118,8 @@ export function takeFillProblem({ home = trocarHome(), fs = nodeFs } = {}) {
 
 async function fillOne({ home, fs, segment }) {
   await tick();
-  const rows = (await warmSegmentIndex({ home, segment, fs })).records.map((r) => ({ ...r.toJSON(), segment, lineNo: lineOf(r.id) }));
+  // the segment's rows of the shared row list: its session_id is the one `session` groups by (3.4 合成键 included)
+  const rows = (await indexRows({ home, fs })).filter((r) => r.segment === segment);
   const needed = isModelCall;
   const source = segmentSource(home, segment, fs);
   const file = usageFile(home, segment);

@@ -13,20 +13,16 @@
 // bytes carry its whole input (3.1:60). The bytes are untouched: every stitched block is located in the record
 // and field it came from (locate), so it resolves verbatim through a field-qualified text_ref (4.2:40, gate G1).
 // Leaf module.
-import { boardFlat, reqCountsFor, ctxTokens, normEvents, faithfulness, itemToBlocks } from './openai.mjs';
+import { boardFlat, reqCountsFor, ctxTokens, normEvents, itemToBlocks } from './openai.mjs';
 import { scanJson, spanAt } from './json-scan.mjs';
+import { storedRequestBody } from './request-body.mjs';
 import { storedReply, noSpanWhy, replyPart, partsOfUnit } from './sse-spans.mjs';
 import { isWsHandshake } from './ws-handshake.mjs'; // not ./registry.mjs: the registry imports THIS module
 import { headerOf } from './harnesses.mjs';
 import { extendChain, linked, segmentsIn, createLinks, withUnread } from './chain.mjs';
 
 const parse = (s) => { if (typeof s !== 'string') return null; try { const v = JSON.parse(s); return v && typeof v === 'object' ? v : null; } catch { return null; } };
-const PARSED = new WeakMap();
-const bodyOf = (rec) => {
-  if (!rec || typeof rec !== 'object') return null;
-  if (!PARSED.has(rec)) PARSED.set(rec, parse(rec.req_body));
-  return PARSED.get(rec);
-};
+const bodyOf = (rec) => { const v = storedRequestBody(rec); return v && typeof v === 'object' ? v : null; }; // the record's one parse of its first client message
 // The server messages of a call, in order; an error envelope keeps them under resp.partial (same numbering as
 // ws_raw's m slices and as the text_ref field resp.messages.<j>).
 export function serverMessages(rec) {
@@ -219,8 +215,6 @@ function stitchOf(rec) {
 export const RESPONSES_WS = Object.freeze({
   id: 'openai-responses-ws', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
   roleOf,
-  consumedBody: ['type', 'model', 'stream', 'instructions', 'tools', 'input', 'previous_response_id', 'generate'],
-  faithfulnessOf: (b) => faithfulness(b && b.block),
   // one record at a time, in step order: a connection's calls are sequential, so step order is its seq order
   prepare: (read) => createChain(read),
   stitchOf, // the id-level stitch's view of one record (as CC_THREADS.stitchOf; instructions and tools are always the call's own)

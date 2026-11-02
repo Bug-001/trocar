@@ -1,5 +1,5 @@
 // src/dissect/registry.mjs — which WIRE FORMAT a record speaks (D37 ①: from the endpoint and the body,
-// recorded per call; never from the UA or the harness). The board (src/view/assemble.mjs) and the ETL
+// recorded per call; never from the UA or the harness). The board (src/view/extract.mjs) and the ETL
 // adapters both dispatch through this, so the two readers cannot disagree about what a record is.
 // Leaf module.
 import { detect as anthropicShape, serverEdited, CC_SECTIONS } from './cc.mjs';
@@ -9,35 +9,32 @@ import { isWsHandshake } from './ws-handshake.mjs';
 import { hintsOf } from './harnesses.mjs';
 import { RESPONSES_WS } from './openai-ws.mjs';
 import { CC_THREADS, isContinuation } from './cc-threads.mjs';
+import { endpointOf, pathOf } from './endpoints.mjs';
 
 export { isWsHandshake };
-const epPath = (rec) => String((rec && rec.endpoint) || '').split('?')[0];
 
 // D37 ⑥: no dissector in v1 — stored as captured, read as 「未识别」 and labelled. Vertex first: its
-// Gemini models also end in :generateContent.
+// Gemini models also end in :generateContent. Gemini itself is the endpoint table's `unsupported` row (./endpoints.mjs).
 const UNSUPPORTED = [
   ['vertex', /\/projects\/[^/]+\/locations\/[^/]+\/publishers\/[^/]+\/models\/[^/:]+:[A-Za-z]+$/],
   ['bedrock', /\/model\/[^/]+\/(invoke|invoke-with-response-stream|converse|converse-stream)$/],
-  ['gemini', /:(stream)?[gG]enerateContent$/],
 ];
-export function unsupportedOf(rec) {
-  const ep = epPath(rec);
+function unsupportedOf(rec) {
+  const ep = pathOf(rec && rec.endpoint);
   for (const [name, re] of UNSUPPORTED) if (re.test(ep)) return name;
-  return null;
+  return endpointOf(ep)?.unsupported ?? null;
 }
-
-// count_tokens: a ruler, not inference (3.2:134). Path rule; the querystring is ignored.
-export const isProbeEndpoint = (rec) => epPath(rec).includes('count_tokens');
 
 // → 'anthropic' | 'openai-responses' | 'openai-chat' | 'openai-responses-ws' | 'ws-handshake' | null.
 // null = no registered wire claims these bytes (they are counted and labelled, never guessed at).
 export function wireFormatOf(rec) {
   if (!rec) return null;
-  const ep = epPath(rec);
-  if (rec.transport === 'ws') return /(^|\/)responses$/.test(ep) ? 'openai-responses-ws' : null;
+  // the path's own row of the endpoint table (./endpoints.mjs); a token count (count_tokens) is a ruler, not inference (3.2)
+  const row = endpointOf(rec.endpoint), wire = row && row.wire;
+  if (rec.transport === 'ws') return wire === 'openai-responses' ? 'openai-responses-ws' : null;
   if (isWsHandshake(rec)) return 'ws-handshake';
-  if (unsupportedOf(rec) || isProbeEndpoint(rec)) return null;
-  if (/(^|\/)v1\/messages$/.test(ep)) return 'anthropic';
+  if (unsupportedOf(rec) || (row && row.class === 'token-count')) return null;
+  if (wire === 'anthropic') return 'anthropic';
   // The OpenAI dissector reads its endpoints AND refuses Anthropic bytes on them ("bytes beat path": a
   // gateway that posts an Anthropic body to /chat/completions is still the Anthropic wire). With no
   // recognizable endpoint (v0 fixtures, odd relays) the body shape alone decides.
@@ -63,7 +60,7 @@ export const MULTI_LANE_CONTEXT = CC_THREADS;
 // The lane of a call on a flat-lane wire (the OpenAI wires), ONE rule for the board and the ETL: the dissector's
 // own lane (a warm-up, 3.1:37), else the harness table's hint (3.4), else main (gate G15). Claude Code's
 // heuristics (haiku aux, security monitor, cc_is_subagent) read Anthropic-wire fields and do not apply here.
-export const FLAT_LANE_KINDS = Object.freeze(['main', 'subagent', 'aux', 'probe']);
+const FLAT_LANE_KINDS = Object.freeze(['main', 'subagent', 'aux', 'probe']);
 export function flatLaneOf(d, rec) {
   const hint = (d && d.laneOf && d.laneOf(rec)) || hintsOf(rec).lane;
   return FLAT_LANE_KINDS.includes(hint) ? hint : 'main';

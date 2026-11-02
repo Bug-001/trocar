@@ -157,17 +157,3 @@ export function createSynthAssigner({ gapMs = SYNTH_GAP_MS, open = new Map() } =
     return { key, kin: false };
   };
 }
-
-// The board's whole-corpus form: stamp every record, in array order, with a non-enumerable `_synthKey` (null when it gets
-// none) and, when it was joined to its session by content, a non-enumerable `_kin: true`, so a record serializes exactly
-// as captured (invariant 2).
-export function stampSynthKeys(records, { gapMs = SYNTH_GAP_MS } = {}) {
-  const assign = createSynthAssigner({ gapMs });
-  for (const r of records || []) {
-    if (!r || typeof r !== 'object') continue;
-    const got = assign(synthFactsOf(r));
-    Object.defineProperty(r, '_synthKey', { value: got ? got.key : null, enumerable: false, configurable: true, writable: true });
-    Object.defineProperty(r, '_kin', { value: !!(got && got.kin), enumerable: false, configurable: true, writable: true });
-  }
-  return records;
-}

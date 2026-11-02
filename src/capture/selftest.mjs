@@ -4,7 +4,7 @@
 // 全为纯函数(probe / records / trust 皆注入)→ 离线可单测,不碰真实信任库/网络。
 import fsMod from 'node:fs';
 import { isSecretHeader } from './redact.mjs';
-import { isLlmCall } from './envelope.mjs';
+import { isLlmCall } from '../dissect/endpoints.mjs';
 
 // 依赖探测(4.5:41,77):openssl(全平台,生成 CA/叶证)+ certutil(仅 Linux,装用户 NSS 库)。
 // 缺则给「装它的一行提示」而非静默失败。has=(bin)->bool 注入(CLI 用 which/where 实测)。

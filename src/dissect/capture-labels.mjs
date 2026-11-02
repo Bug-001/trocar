@@ -8,7 +8,7 @@
 //     on disk is what arrived before that.
 // These are NOT the top-level `partial` (a connection's earlier messages are missing — context, not bytes).
 // Envelope fields only, no wire knowledge, so the board and the ETL can both use it. Leaf module.
-import { requestEncodingOf, parsedRequestBody } from './request-body.mjs';
+import { requestEncodingOf, storedRequestBody } from './request-body.mjs';
 import { harnessOf } from './harnesses.mjs';
 const PARTIAL = {
   'early-response': 'never finished uploading: the upstream answered (e.g. 413 / 401) before it was fully sent',
@@ -118,16 +118,13 @@ export function contextStateOfRequest(rec) {
 // A request body that is stored as text and does not parse to an object (a legacy capture or a corrupt one: with no
 // req_truncated / req_partial label, truncation and corruption cannot be told apart) has no context to read, so no
 // message count either (3.4: no compaction verdict from an unobserved count). The same test as the board's own
-// "unparsed" (assemble.mjs, analyze.mjs::isUnparsed) so the two sides cannot disagree. null / absent body: no body
+// "unparsed" (analyze.mjs::isUnparsed) so the two sides cannot disagree. null / absent body: no body
 // at all (a WebSocket call whose request was not stored, a v0 envelope), not this case.
 export function bodyUnparsedOf(rec) {
   const b = rec && rec.req_body;
   if (typeof b !== 'string') return false;
-  // The reader that already parsed this body says so (a non-enumerable stamp, like `_stream`: never
-  // stored, never shipped). Parsing a 0.8 MB request a second time only to learn that it parses cost
-  // 46 ms per open of a 115-call session — the same JSON.parse the board had just done (1.6 §3.1).
-  if (typeof rec._reqParsed === 'boolean') return !rec._reqParsed;
-  const v = parsedRequestBody(rec);   // the one parse every reader of this record shares (a body that does not parse is null)
+  // The body as stored, never a stub a reader stood on the record: the one parse every reader shares (a body that does not parse is null)
+  const v = storedRequestBody(rec);
   return !(v && typeof v === 'object');
 }
 

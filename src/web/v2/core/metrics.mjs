@@ -38,8 +38,8 @@ export const QUIET_CAUSES = new Set(['append', 'first-call', 'volatile-nonce-onl
 export const CACHE_STATES = Object.freeze(['failed', 'no-usage', 'first', 'ttl-rebuild', 'provider-contradiction', 'changed', 'low-hit', 'reused', 'unjudged'])
 const BREAK_STATES = new Set(['ttl-rebuild', 'provider-contradiction', 'changed', 'low-hit'])
 
-// the call failed: it carries an error, or the wire answered with a status that is not 200
-export const isFailed = (c) => !!c && (!!c.error || (c.status != null && c.status !== 200))
+// the call failed: the row's `error` is the call-row failed verdict (3.5 §访问模式 ②, failedOf)
+export const isFailed = (c) => !!c && !!c.error
 const gtOf = (c) => (c.gt !== undefined ? c.gt : (c.cacheBreak && c.cacheBreak.gt) || null)
 
 // The 缓存对比步 of calls[i]: the nearest earlier call of the same list that did not fail (a failed call never established a cache

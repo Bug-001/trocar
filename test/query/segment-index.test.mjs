@@ -16,7 +16,7 @@ test('记录 id 从 1 起,读取侧不把明文段的索引落盘(那份文件�
   writeSegment(home, SEG, [{ ts: '2026-10-18T10:00:00.000Z' }, { ts: '2026-10-18T10:00:01.000Z', class: 'telemetry', is_llm: false, status: 204 }])
   const { records } = await segmentIndex({ home, segment: SEG })
   assert.deepEqual(records.map((r) => r.id), [`${SEG}:1`, `${SEG}:2`])
-  assert.deepEqual(records[1], { id: `${SEG}:2`, ts: '2026-10-18T10:00:01.000Z', harness: 'claude-code', class: 'telemetry', host: 'api.anthropic.com', path: '/v1/messages', status: 204, stored_bytes: records[1].stored_bytes, sent_bytes: 10, received_bytes: 20, session_key: null, is_llm: false,
+  assert.deepEqual(records[1], { id: `${SEG}:2`, ts: '2026-10-18T10:00:01.000Z', harness: 'claude-code', class: 'telemetry', host: 'api.anthropic.com', path: '/v1/messages', status: 204, stored_bytes: records[1].stored_bytes, sent_bytes: 10, received_bytes: 20, session_key: null, is_llm: false, ws: false,
     // the session facts, so `sessions` never reads a record back (1.6 §4.1 ≤ 1 s): the harness the board decides,
     // where the record's bytes are, and the kind of call it is
     harness_id: 'cc', has_proc: true, has_headers: true, harness_inferred: false, entrypoint: null, log_only: false, subagent: false, synth_hash: null, kin_fp: null, kin_probe: null, offset: records[1].offset })

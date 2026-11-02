@@ -1,24 +1,11 @@
+// test/view/prefix-chain.test.mjs — 3.3 #6 / 3.5 #6: a cache break is diffed against the last SUCCESSFUL call of its lane. A call that
+// failed (401, 502) never got far enough for the provider to write a KV-cache prefix, so it is never the baseline of the next one;
+// the failed call itself stays a row, marked failed. Read through the `session` document (test/helpers/session-doc.mjs).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assembleSession } from '../../src/view/assemble.mjs';
+import { sessionDoc } from '../helpers/session-doc.mjs';
 
-// Follow-up to the analyze() admission fix. Admitting non-200 calls into the
-// timeline was correct — but it exposed a second defect one layer up: `assembleSession` advanced
-// `prevFlat` after EVERY call (assemble.mjs:187), so a FAILED call became the cache-prefix baseline
-// for the next one.
-//
-// That is wrong on the wire: a call that 401'd or 502'd never got far enough for the provider to
-// write a KV-cache prefix. Chaining through it makes the NEXT successful call diff against context
-// that was never cached, so the board reports a cache break that did not happen — and, worse,
-// attributes a cause and a fix hint for it. For an instrument whose headline feature is telling you
-// WHY your cache broke, inventing a break is the most damaging possible bug.
-//
-// analyze() marks each step `chainsPrefix` (false when the call failed). This pins that the
-// assembler actually HONORS it.
-
-// A real agent loop ALTERNATES user/assistant — each call re-sends the prior reply and appends the
-// next turn. An all-user fixture makes the stream splitter (correctly) see a new conversation each
-// time, which would make these assertions meaningless.
+// a real agent loop alternates user / assistant: each call re-sends the prior reply and appends the next turn
 const turns = (n) => {
   const m = [];
   for (let k = 1; k <= n; k++) {
@@ -28,81 +15,56 @@ const turns = (n) => {
   return m;
 };
 const call = (i, { status = 200, sys = 'SYS', messages }) => ({
-  id: `req_0000${i}`, ts_request: `2026-07-19T00:00:0${i}.000Z`,
-  is_llm_call: true, endpoint: '/v1/messages',
+  id: `req_0000${i}`, ts_request: `2026-07-19T00:00:0${i}.000Z`, endpoint: '/v1/messages', host: 'api.anthropic.com',
   req_headers: { 'x-claude-code-session-id': 'S', 'user-agent': 'claude-cli/2.0.0' },
-  req_body: JSON.stringify({
-    model: 'claude-opus-4-8', system: [{ type: 'text', text: sys }], tools: [], messages,
-  }),
+  req_body: JSON.stringify({ model: 'claude-opus-4-8', system: [{ type: 'text', text: sys }], tools: [], messages }),
   resp: { status, kind: 'json', body: { usage: { input_tokens: 10, output_tokens: 1 } } },
 });
-
-test('a FAILED call does not become the cache-prefix baseline for the next call', () => {
-  // All three stay in ONE stream (same conversation, steady growth) — that matters: if the failed
-  // call were routed to its own stream the assertion would pass regardless of the chain guard, and
-  // the test would prove nothing.
-  // #2 fails carrying a MUTATED system prompt. #3 succeeds back on the ORIGINAL system.
-  // Chained through #2, #3 diffs against a system block that never reached the cache and is reported
-  // as content-changed/review — a cache break that did not happen, complete with a fix hint.
-  const { steps } = assembleSession([
-    call(1, { messages: turns(3) }),
-    call(2, { status: 502, sys: 'SYS-MUTATED', messages: turns(4) }),
-    call(3, { messages: turns(4) }),
-  ]);
-  const third = steps[steps.length - 1];
-  assert.equal(third.id, 'req_00003', 'sanity: last step is the third call');
-  assert.equal(third.streamId, steps[0].streamId, 'sanity: all three share one stream');
-  assert.notEqual(third.cacheBreak.cause, 'content-changed',
-    `#3 must diff against the last SUCCESSFUL call (#1), not the failed #2. cause=`
-    + `"${third.cacheBreak.cause}" means the chain ran through a call that never cached anything.`);
-  assert.equal(third.cacheBreak.attribution, 'harmless',
-    'inventing a reviewable cache break is the most damaging possible bug for a cache-truth tool');
-});
-
-test('the failed call itself still appears, marked, in the timeline', () => {
-  const { steps } = assembleSession([
-    call(1, { messages: turns(3) }),
-    call(2, { status: 401, messages: turns(4) }),
-  ]);
-  assert.equal(steps.length, 2, 'the failed call must not be dropped');
-  const failed = steps.find((s) => s.id === 'req_00002');
-  assert.equal(failed.status, 401);
-  assert.equal(failed.chainsPrefix, false, 'a failed call establishes no cache prefix');
-});
-
-test('consecutive successes still chain normally (no regression)', () => {
-  const { steps } = assembleSession([
-    call(1, { messages: turns(3) }),
-    call(2, { messages: turns(4) }),
-    call(3, { messages: turns(5) }),
-  ]);
-  assert.equal(steps[1].cacheBreak.cause, 'append');
-  assert.equal(steps[2].cacheBreak.cause, 'append');
-});
-
-// Found while fixing the CC path: assembleOpenai (the Codex/OpenCode assembler) had the SAME
-// unconditional `prevFlat = flat`. Same defect, different harness — and it would have stayed
-// invisible because the CC test above cannot reach this code path at all.
 const oaCall = (i, { status = 200, instructions = 'SYS', n }) => ({
-  id: `oa_0000${i}`, ts_request: `2026-07-19T00:00:0${i}.000Z`,
-  is_llm_call: true, endpoint: '/models-proxy/responses',
-  req_headers: { 'session-id': 'OA', 'user-agent': 'opencode/1.17.12' },
-  req_body: JSON.stringify({
-    model: 'gpt-5.5', instructions, tools: [],
-    input: Array.from({ length: n }, (_, k) => ({ role: k % 2 ? 'assistant' : 'user', content: `T${k}` })),
-  }),
+  id: `oa_0000${i}`, ts_request: `2026-07-19T00:00:0${i}.000Z`, endpoint: '/models-proxy/responses', host: 'api.openai.com',
+  req_headers: { 'x-claude-code-session-id': 'OA', 'user-agent': 'opencode/1.17.12' },
+  req_body: JSON.stringify({ model: 'gpt-5.5', instructions, tools: [],
+    input: Array.from({ length: n }, (_, k) => ({ role: k % 2 ? 'assistant' : 'user', content: `T${k}` })) }),
   resp: { status, kind: 'json', body: {} },
 });
 
-test('OpenAI path: a FAILED call does not become the cache-prefix baseline either', () => {
-  const { steps } = assembleSession([
-    oaCall(1, { n: 4 }),
-    oaCall(2, { status: 502, instructions: 'SYS-MUTATED', n: 6 }),
-    oaCall(3, { n: 6 }),
-  ]);
-  const third = steps[steps.length - 1];
-  assert.equal(third.id, 'oa_00003');
-  assert.equal(third.cacheBreak.attribution, 'harmless',
-    `chained through the failed #2: cause="${third.cacheBreak.cause}" — the OpenAI assembler must `
-    + 'honour the same rule as the CC one');
+// #2 fails carrying a mutated system prompt, #3 succeeds back on the original: diffed through #2 it would read as content-changed
+const WIRES = {
+  anthropic: { id: 'S', recs: [call(1, { messages: turns(3) }), call(2, { status: 502, sys: 'SYS-MUTATED', messages: turns(4) }), call(3, { messages: turns(4) })] },
+  responses: { id: 'OA', recs: [oaCall(1, { n: 4 }), oaCall(2, { status: 502, instructions: 'SYS-MUTATED', n: 6 }), oaCall(3, { n: 6 })] },
+};
+
+for (const [wire, { id, recs }] of Object.entries(WIRES)) {
+  test(`${wire}: a failed call stays a row, marked failed, and is never the cache-prefix baseline of the next call`, async () => {
+    const { calls } = await sessionDoc(recs, id);
+    assert.equal(calls.length, 3, 'the failed call is not dropped');
+    const [first, failed, third] = calls;
+    assert.equal(failed.status, 502);
+    assert.equal(failed.error, true);
+    assert.equal(third.lane, first.lane, 'all three share one lane');
+    assert.equal(third.cacheBreak.refRid, first.rid, '#3 is diffed against the last successful call');
+    assert.notEqual(third.cacheBreak.cause, 'content-changed');
+    assert.equal(third.cacheBreak.attribution, 'harmless');
+  });
+}
+
+test('consecutive successes still chain normally (no regression)', async () => {
+  const { calls } = await sessionDoc([call(1, { messages: turns(3) }), call(2, { messages: turns(4) }), call(3, { messages: turns(5) })], 'S');
+  assert.equal(calls[1].cacheBreak.cause, 'append');
+  assert.equal(calls[2].cacheBreak.cause, 'append');
+});
+
+test('a Responses stream that ends in response.failed, or in an error event, fails its call (status 200 or not) and is no baseline', async () => {
+  const rec = (i, input, raw_sse) => ({ id: `h${i}`, ts_request: `2026-10-06T00:00:0${i}Z`, endpoint: '/v1/responses', host: 'api.openai.com',
+    req_headers: { 'x-claude-code-session-id': 'R' }, req_body: JSON.stringify({ model: 'm', input }), resp: { status: 200, kind: 'sse', raw_sse } });
+  const user = (t) => ({ type: 'message', role: 'user', content: [{ type: 'input_text', text: t }] });
+  const a1 = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'a1' }] };
+  const done = { type: 'response.completed', response: { id: 'ra', status: 'completed', output: [a1], usage: { input_tokens: 5, output_tokens: 1 } } };
+  for (const end of [{ type: 'response.failed', response: { id: 'rb', status: 'failed', error: { code: 'server_error' } } }, { type: 'error', code: 'server_error', message: 'boom' }]) {
+    const { calls } = await sessionDoc([rec(1, [user('q1')], [done]), rec(2, [user('q1'), a1, user('q2')], [{ type: 'response.created', response: { id: 'rb' } }, end]),
+      rec(3, [user('q1'), a1, user('q3')], [done])], 'R');
+    assert.deepEqual(calls.map((c) => c.error), [false, true, false], end.type);
+    assert.equal(calls[2].cacheBreak.refRid, calls[0].rid, `${end.type}: the failed call never became the baseline`);
+    assert.equal(calls[2].cacheBreak.cause, 'append', end.type);
+  }
 });

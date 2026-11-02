@@ -2,15 +2,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { createSynthKeys, stampSynthKeys, SYNTH_GAP_MS } from '../../src/dissect/synth-key.mjs'
+import { createSynthKeys, SYNTH_GAP_MS } from '../../src/dissect/synth-key.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { rawHome, writeSegment } from '../query/raw-home.mjs'
 import fs from 'node:fs'
 import path from 'node:path'
 import { indexRows } from '../../src/query/rows.mjs'
 import { fillUsage } from '../../src/query/usage.mjs'
-import { groupSessions } from '../../src/view/board.mjs'
-import { sessionView } from '../helpers/session-view.mjs'
 
 const T0 = Date.parse('2026-10-18T10:00:00.000Z')
 const sha12 = (s) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 12)
@@ -35,8 +33,8 @@ test('systemTextOf: the first system / developer item of a Responses input is th
   for (const role of ['developer', 'system']) {
     for (const [shape, content] of Object.entries(shapes)) {
       const recs = prompts.map((p) => piResp({ role, content: content(p) }))
-      stampSynthKeys(recs)
-      const keys = recs.map((r) => r._synthKey)
+      const { keyOf } = createSynthKeys()
+      const keys = recs.map(keyOf)
       assert.notEqual(keys[0], keys[1], `${role}/${shape}: two prompts, two sessions`)
       keys.forEach((k, i) => {
         const m = KEY.exec(k || '')
@@ -171,10 +169,9 @@ const membership = async (home) => {
   assert.deepEqual(errors, [])
   return new Map([...rows].map((r) => [r.id, [r.session_id, r.synthesized]]))
 }
-const fresh = (recs) => recs.map((r) => JSON.parse(JSON.stringify(r))) // the board stamps the objects it reads: give it its own
 
-// one summary request: its session on both readers, that session's synthesized mark, and whether the call is a compaction there
-async function placeOf(home, recs, rec, main) {
+// one summary request: its session, that session's synthesized mark, and whether the call is a compaction there
+async function placeOf(home, rec, main) {
   await fillUsage({ home, segments: fs.readdirSync(path.join(home, 'raw')).map((f) => f.replace(/\.ndjson$/, '')) })
   const list = await runQuery('sessions', { limit: '500' }, { home })
   assert.deepEqual(list.errors, [])
@@ -186,36 +183,25 @@ async function placeOf(home, recs, rec, main) {
   const doc = await runQuery('session', { id: q }, { home })
   assert.deepEqual(item, doc.meta, 'the list item is the session document meta')
   const row = doc.calls.find((c) => c.rid === id)
-  const board = fresh(recs)
-  const groups = groupSessions(board)
-  const boardOf = (x) => [...groups].find(([, rs]) => rs.some((r) => r.id === x.id))[0]
-  const b = boardOf(rec)
-  const view = sessionView(board, b)
-  const step = view.analyzed.steps.find((c) => c.rec && c.rec.id === rec.id)
-  return { query: q, board: b, synthesized: item.session_synthesized, boardSynthesized: view.meta.session_synthesized,
-    compaction: !!(row && row.compaction), boardCompaction: !!(step && step.compaction), ids: list.sessions.map((s) => s.session_id),
-    mainQuery: m.get(ridOf(home, main))[0], mainBoard: boardOf(main) }
+  return { query: q, synthesized: item.session_synthesized, compaction: !!(row && row.compaction), ids: list.sessions.map((s) => s.session_id),
+    mainQuery: m.get(ridOf(home, main))[0] }
 }
 
-test('kinship: a keyless summary request joins the session whose user text it carries, marked compaction; query and board agree', async () => {
+test('kinship: a keyless summary request joins the session whose user text it carries, marked compaction', async () => {
   for (const wire of WIRES) {
     for (const lang of LANGS) {
       for (const split of ['same', 'next']) {
         const { keyedRecs, summaries, after } = piSessions(lang, 1, 1, { wire })
         const recs = [...keyedRecs, summaries[0].rec, ...after]
         const home = homeOf(split === 'same' ? [[SEG1, recs]] : [[SEG1, keyedRecs], [SEG2, [summaries[0].rec, ...after]]])
-        const p = await placeOf(home, recs, summaries[0].rec, summaries[0].main)
+        const p = await placeOf(home, summaries[0].rec, summaries[0].main)
         const at = `${wire}/${lang}/${split}`
         if (wire === 'keyed') assert.equal(p.mainQuery, SID(0), `${at}: the keyed session`)
         assert.equal(p.query, p.mainQuery, `${at}: the summary call is in its session (query)`)
-        assert.equal(p.board, p.mainBoard, `${at}: the summary call is in its session (board)`)
-        assert.equal(p.board, p.query, `${at}: both readers name it the same`)
         assert.equal(p.ids.filter((id) => id.startsWith('synth-pi-')).length, wire === 'keyed' ? 0 : 1, `${at}: no session of its own`)
         // a keyed session stays uninferred; a keyless one was inferred from its other calls
         assert.equal(p.synthesized, wire !== 'keyed', `${at}: inferred only when keyless (query)`)
-        assert.equal(p.boardSynthesized, wire !== 'keyed', `${at}: inferred only when keyless (board)`)
         assert.ok(p.compaction, `${at}: a compaction in the session document`)
-        assert.ok(p.boardCompaction, `${at}: a compaction on the board`)
       }
     }
   }
@@ -230,9 +216,8 @@ test('kinship: concurrent sessions each take back their own summary request, and
         const home = homeOf([[SEG1, recs]])
         const got = new Set()
         for (const s of summaries) {
-          const p = await placeOf(home, recs, s.rec, s.main)
+          const p = await placeOf(home, s.rec, s.main)
           assert.equal(p.query, p.mainQuery, `${wire}/${lang}/${n}: query`)
-          assert.equal(p.board, p.mainBoard, `${wire}/${lang}/${n}: board`)
           got.add(p.query)
         }
         assert.equal(got.size, n, `${wire}/${lang}/${n}: one session per summary`)
@@ -248,13 +233,11 @@ test('kinship: a summary request that shares no fragment with any session, or co
         const { keyedRecs, summaries } = piSessions(lang, 1, 7, { wire, ...(why === 'after-window' ? { gapAfter: SYNTH_GAP_MS + 60_000 } : {}) })
         const rec = why === 'no-fragment' ? summary([userText(lang, 99_001), userText(lang, 99_002)], Date.parse(summaries[0].rec.ts_request), wire) : summaries[0].rec
         const recs = [...keyedRecs, rec]
-        const p = await placeOf(homeOf([[SEG1, recs]]), recs, rec, summaries[0].main)
+        const p = await placeOf(homeOf([[SEG1, recs]]), rec, summaries[0].main)
         const at = `${wire}/${lang}/${why}`
         assert.match(p.query, /^synth-pi-/, `${at}: query`)
         assert.notEqual(p.query, p.mainQuery, `${at}: not the session it shares nothing with`)
-        assert.equal(p.board, p.query, `${at}: the board names it the same`)
         assert.equal(p.synthesized, true, `${at}: inferred (query)`)
-        assert.equal(p.boardSynthesized, true, `${at}: inferred (board)`)
       }
     }
   }
@@ -308,17 +291,12 @@ test('kinship: a Hermes call after a compaction stays in its own session; two se
       const recs = plan.map(([s, shape], t) => ({ s, rec: hermesCall(s, shape(t), (ms += 20_000), escaped) }))
       const home = homeOf([[SEG1, recs.map((x) => x.rec)]])
       const m = await membership(home)
-      const board = groupSessions(fresh(recs.map((x) => x.rec)))
-      const boardOf = (rec) => [...board].find(([, rs]) => rs.some((r) => r.id === rec.id))[0]
       const at = `${lang}/${escaped ? 'escaped' : 'literal'}`
-      for (const reader of ['query', 'board']) {
-        const keyOf = (x) => (reader === 'query' ? m.get(`${SEG1}:${recs.indexOf(x) + 1}`)[0] : boardOf(x.rec))
-        const by = { a: new Set(), b: new Set() }
-        for (const x of recs) by[x.s].add(keyOf(x))
-        assert.equal(by.a.size, 1, `${at}: A is one session (${reader})`)
-        assert.equal(by.b.size, 1, `${at}: B is one session (${reader})`)
-        assert.notEqual([...by.a][0], [...by.b][0], `${at}: A and B stay apart (${reader})`)
-      }
+      const by = { a: new Set(), b: new Set() }
+      for (const x of recs) by[x.s].add(m.get(`${SEG1}:${recs.indexOf(x) + 1}`)[0])
+      assert.equal(by.a.size, 1, `${at}: A is one session`)
+      assert.equal(by.b.size, 1, `${at}: B is one session`)
+      assert.notEqual([...by.a][0], [...by.b][0], `${at}: A and B stay apart`)
     }
   }
 })

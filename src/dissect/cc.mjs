@@ -1,13 +1,14 @@
 // src/dissect/cc.mjs — the single CC (Anthropic / Claude Code) dissector (D25 · "Wireshark for
 // agents"). ONE source for the CC block model, consumed by BOTH the board (analyze.linearContext)
 // and the ETL (cc.parseBlocks) — retiring the twin parsers that had drifted (each re-derived the
-// assembly order, the volatile rule, resource linking, block kind & faithfulness). A dissector
+// assembly order, the volatile rule, resource linking). A dissector
 // DECLARES its block categories + layout and WALKS a raw request into canonical blocks in assembly
 // order; provider-specifics live HERE, never in the shared schema or the frontend (invariant 3).
 // Onboarding Codex/DeepSeek (Phase 4) = one more dissector module mirroring this shape — the board /
 // ETL projections stay put. "唯有 block 是统一的" — block is the only cross-provider unit (D25).
 
 import { parsedRequestBody } from './request-body.mjs';
+import { endpointOf } from './endpoints.mjs';
 
 // ── declarative block categories + layout ───────────────────────────────────────────────────
 // Assembly order = what the model reads top-to-bottom = the Anthropic prompt-cache prefix order:
@@ -60,41 +61,6 @@ export function isVolatile(section, block) {
   if (section !== 'system') return false;
   const text = typeof block === 'string' ? block : (block && block.text) || '';
   return /^x-anthropic-billing-header/.test(text);
-}
-
-// Normalized block kind for the canonical schema (redacted_thinking folds into thinking). The BOARD
-// keeps the raw type (it distinguishes redacted_thinking for its opaque badge) so it does NOT use this.
-export function blockKind(block) {
-  if (!block || typeof block !== 'object') return 'text';
-  const t = block.type || 'text';
-  return t === 'redacted_thinking' ? 'thinking' : t;
-}
-
-// After a compaction, Claude Code drops the earlier turns and injects a CLIENT-GENERATED summary as
-// an ordinary user text block. Anchored at the START of the block: a user who merely QUOTES this
-// sentence mid-message is sending real context and MUST stay verbatim. Both wordings below are real
-// (fixture cc-session-real.ndjson + live capture); the stable part is the leading sentence, so the
-// trailing "summary below…" / "conversation is summarized below" variants are matched loosely.
-const COMPACTION_SUMMARY = /^\s*This session is being continued from a previous conversation/;
-
-// Faithfulness (invariant 4): opaque = CC replays only a signature / ciphertext, not
-// the reasoning plaintext. summarized = the bytes ARE verbatim, but what they CONTAIN is a client-side
-// summary standing in for the original turns, not the original context (spec 2.3:45, enum 3.2:63) —
-// unbadged it is indistinguishable from the real earlier conversation. Everything else on the wire is
-// verbatim (tools D15, system, text, tool_use, tool_result, image, thinking-with-text).
-//
-// NOT produced here (honest gap, not an oversight): `truncated`. Per spec 2.3:46 显示剪裁 ≠ 源截断 —
-// truncated means the SOURCE was not captured whole, and the CC capture path stores the whole
-// req_body; a truncated/corrupt body fails to parse and surfaces at CALL level as the `_unparsed`
-// sentinel (analyze.mjs), which yields no blocks at all. The board's ~20,000-char expand clip is
-// DISPLAY clipping with the full text still recoverable from the NDJSON source, and 2.3:46 forbids
-// conflating the two. `metadata` / `omitted` likewise have no CC producer (see the report).
-export function faithfulness(block) {
-  if (!block || typeof block !== 'object') return 'verbatim';
-  if (block.type === 'redacted_thinking') return 'opaque'; // encrypted reasoning, no plaintext on the wire
-  if (block.type === 'thinking' && !(block.thinking && String(block.thinking).length) && block.signature) return 'opaque';
-  if (block.type === 'text' && typeof block.text === 'string' && COMPACTION_SUMMARY.test(block.text)) return 'summarized';
-  return 'verbatim';
 }
 
 // Link a message block to a resource-ledger id (file / skill / mcp / scaffold), or '' when none.
@@ -196,17 +162,16 @@ export function serverEdited(rec) {
 }
 
 // D37 ① / 3.1:23 — the Anthropic Messages WIRE, read from the endpoint, the wire-protocol headers and the
-// body shape. Never from the UA or a harness session header: those name a harness, not a wire. (Moved
-// from src/view/assemble.mjs `looksCC`, which used both and so claimed any Claude-UA traffic.)
+// body shape. Never from the UA or a harness session header: those name a harness, not a wire (a UA test
+// would claim any Claude-UA traffic).
 // `max_tokens` is deliberately NOT a signal: Chat Completions carries it too. An Anthropic body on an OpenAI
 // path is still claimed (bytes beat path); openai.mjs `wireShape` refuses exactly these markers, so the two
 // detectors stay disjoint.
-const epPath = (rec) => String((rec && rec.endpoint) || '').split('?')[0];
 export function detect(rec) {
   if (!rec) return false;
-  const ep = epPath(rec);
-  if (ep.includes('count_tokens')) return false; // a probe, not an inference call (3.2:134)
-  if (/(^|\/)v1\/messages$/.test(ep)) return true; // incl. relay prefixes (/anthropic, /coding, /api/anthropic)
+  const row = endpointOf(rec.endpoint); // the endpoint table (./endpoints.mjs)
+  if (row && row.class === 'token-count') return false; // a probe, not an inference call (3.2:134)
+  if (row && row.wire === 'anthropic') return true; // incl. relay prefixes (/anthropic, /coding, /api/anthropic)
   const h = (rec.req_headers || rec.request_headers) || {};
   if (h['anthropic-version'] || h['anthropic-beta']) return true;
   let body = parsedRequestBody(rec);   // parsed once per record, for every reader (./request-body.mjs)

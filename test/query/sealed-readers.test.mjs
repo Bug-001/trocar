@@ -74,7 +74,7 @@ test('(c) a read that fails is reported in errors, and the next read of the same
 })
 
 test('4.2 #3 封存往返: the source pointer a record read back mints is the same before and after its segment is sealed', async () => {
-  const { rawRefOf } = await import('../../src/view/assemble.mjs')
+  const { rawRefOf } = await import('../../src/view/extract.mjs')
   const home = rawHome()
   writeSegment(home, SEG, lines('r', 3))
   const before = recordsAt({ home, rows: rowsOf(3), remember: false }).map(rawRefOf)

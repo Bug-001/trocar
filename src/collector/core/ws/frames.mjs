@@ -2,7 +2,7 @@
 // D37). It reads the chunks the engine forwards (the tee sees each one just before it is written): it
 // never re-frames and never changes a byte; payloads are unmasked into copies. A protocol violation
 // stops this direction and is reported, never thrown: the peers fail the connection themselves.
-import { MAX_BODY_BYTES } from '../../../capture/envelope.mjs'
+import { MAX_BODY_BYTES } from '../../../capture/request-body.mjs'
 
 export const OP = { CONT: 0, TEXT: 1, BINARY: 2, CLOSE: 8, PING: 9, PONG: 10 }
 

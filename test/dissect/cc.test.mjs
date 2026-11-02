@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dissectBlocks, resourceRef, isVolatile, blockKind, faithfulness, sysLabel, parseBashReads, CC_SECTIONS } from '../../src/dissect/cc.mjs';
+import { dissectBlocks, resourceRef, isVolatile, sysLabel, parseBashReads, CC_SECTIONS } from '../../src/dissect/cc.mjs';
 
 // D25 — the single CC dissector: one block model (dissectBlocks), read by the board through
 // analyze.linearContext and src/dissect/cc-spans.mjs blockSpans.
@@ -43,19 +43,6 @@ test('isVolatile flags ONLY the billing-header system block', () => {
   assert.equal(vol.length, 1);
   assert.match(vol[0].parsed.text, /billing-header/);
   assert.equal(isVolatile('tools', { text: 'x-anthropic-billing-header' }), false); // section-gated
-});
-
-test('faithfulness: signature-only thinking + redacted_thinking → opaque; everything else verbatim', () => {
-  assert.equal(faithfulness({ type: 'thinking', thinking: '', signature: 's' }), 'opaque');
-  assert.equal(faithfulness({ type: 'redacted_thinking', data: 'x' }), 'opaque');
-  assert.equal(faithfulness({ type: 'thinking', thinking: 'real reasoning', signature: 's' }), 'verbatim');
-  assert.equal(faithfulness({ type: 'text', text: 'hi' }), 'verbatim');
-});
-
-test('blockKind folds redacted_thinking into thinking (canonical schema kind)', () => {
-  assert.equal(blockKind({ type: 'redacted_thinking' }), 'thinking');
-  assert.equal(blockKind({ type: 'tool_use' }), 'tool_use');
-  assert.equal(blockKind('bare string'), 'text');
 });
 
 test('resourceRef links file / skill / mcp / scaffold; sysLabel names system blocks', () => {

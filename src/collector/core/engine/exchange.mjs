@@ -11,7 +11,8 @@ import { randomBytes } from 'node:crypto'
 import { createFramer, asksUpgrade } from '../http1/framer.mjs'
 import { buildTransparentEnvelope } from '../record/envelope.mjs'
 import { createWsRecorder } from '../ws/recorder.mjs'
-import { endpointClass, MAX_BODY_BYTES } from '../../../capture/envelope.mjs'
+import { endpointClass } from '../../../dissect/endpoints.mjs'
+import { MAX_BODY_BYTES } from '../../../capture/request-body.mjs'
 
 const defaultRunTag = () => Date.now().toString(36).slice(-4) + randomBytes(2).toString('hex')
 

@@ -18,7 +18,7 @@
 // same file at the same time: seal-queue.mjs awaits this flush before it queues the segment for sealing, and one pass
 // runs at a time here (the chain below). A query never writes that file at all (4.2 §段索引 谁写哪一笔).
 //
-// WHAT A PASS COSTS: the index document is append-only NDJSON (INDEX_V 6), so a pass writes its new entries plus one
+// WHAT A PASS COSTS: the index document is append-only NDJSON (INDEX_V 7), so a pass writes its new entries plus one
 // mark line and reads only the file's last mark — both proportional to the NEW records, not to the segment. The
 // whole-document format this replaces made a pass cost the segment's record count in both, which with sparse real
 // traffic (a pass per record) came to ≈ e·N²/2 index bytes per segment.

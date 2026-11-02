@@ -23,6 +23,7 @@ export const OPENAI_SECTIONS = [
 ];
 
 import { parsedRequestBody } from './request-body.mjs';
+import { endpointOf } from './endpoints.mjs';
 import { streamParts } from './sse-spans.mjs';
 
 // ── detection ───────────────────────────────────────────────────────────────────────────────
@@ -38,7 +39,8 @@ import { streamParts } from './sse-spans.mjs';
 // Requiring `instructions` would drop 100% of real OpenCode traffic. `input[]` alone is the
 // discriminator (Anthropic has no top-level `input[]`); `instructions` is optional corroboration.
 const headersOf = (rec) => (rec && (rec.request_headers || rec.req_headers)) || {};
-const epPath = (rec) => String((rec && rec.endpoint) || '').split('?')[0];
+// the wire the endpoint names by itself (the endpoint table, ./endpoints.mjs), or null
+const pathWire = (rec) => { const row = endpointOf(rec && rec.endpoint); return (row && row.wire) || null; };
 // the parsed request body, from either the D10 verbatim `req_body` string or a v0 `request` object — parsed once
 // per record for every reader (src/dissect/request-body.mjs).
 const bodyOf = (rec) => parsedRequestBody(rec);
@@ -48,7 +50,7 @@ const bodyOf = (rec) => parsedRequestBody(rec);
 function looksAnthropic(rec, body) {
   const h = headersOf(rec);
   if (h['anthropic-version'] || h['anthropic-beta']) return true;
-  if (/(^|\/)v1\/messages$/.test(epPath(rec))) return true;
+  if (pathWire(rec) === 'anthropic') return true;
   if (!body || typeof body !== 'object') return false;
   if (body.system !== undefined) return true;                       // Anthropic: top-level system (OpenAI puts it in messages[])
   const tools = Array.isArray(body.tools) ? body.tools : [];
@@ -62,7 +64,7 @@ function looksAnthropic(rec, body) {
 // Anthropic cannot produce (system/tool/developer roles, tool_calls, or the `function` tool envelope).
 function looksChat(rec, body) {
   if (!body || !Array.isArray(body.messages)) return false;
-  if (/(^|\/)chat\/completions$/.test(epPath(rec))) return true;
+  if (pathWire(rec) === 'openai-chat') return true;
   const msgs = body.messages;
   if (msgs.some((m) => m && (m.role === 'system' || m.role === 'tool' || m.role === 'developer'))) return true;
   if (msgs.some((m) => m && (Array.isArray(m.tool_calls) || m.tool_call_id !== undefined))) return true;
@@ -78,10 +80,10 @@ export function wireShape(rec) {
   const body = bodyOf(rec);
   if (looksAnthropic(rec, body)) return null;                 // never claim Anthropic wire
   if (Array.isArray(body && body.input)) return 'responses';  // shape first
-  if (/(^|\/)responses$/.test(epPath(rec))) return 'responses'; // corroboration (also covers an unparseable body)
+  if (pathWire(rec) === 'openai-responses') return 'responses'; // corroboration (also covers an unparseable body)
   // an unparseable body on the Chat path (e.g. a request the collector stored cut, #21): the path is all there
   // is, and the call must still be shown with its reason rather than as unrecognized traffic
-  if (body == null && /(^|\/)chat\/completions$/.test(epPath(rec))) return 'chat';
+  if (body == null && pathWire(rec) === 'openai-chat') return 'chat';
   if (looksChat(rec, body)) return 'chat';
   return null;
 }
@@ -296,19 +298,6 @@ export function boardFlatChat(req) {
   }
   return flat;
 }
-// Chat usage → the SAME neutral canonical names. prompt_tokens is TOTAL input (incl cached); the chat
-// wire has no cache-write counter, so `create` is 0 — reported as 0 because it is absent, not guessed.
-// DeepSeek reports the exact split (prompt_cache_hit/miss_tokens) and wins; OpenAI nests cached_tokens; Kimi
-// may put cached_tokens at the top level. Same precedence as the ETL's mapUsage('openai-chat').
-export function canonUsageChat(usage = {}) {
-  const u = usage || {};
-  const d = u.prompt_tokens_details || {};
-  const input = u.prompt_tokens || 0;
-  // `??`, not `||`: a reported 0 is a fact (the same reading as mapChat)
-  const read = u.prompt_cache_hit_tokens != null ? u.prompt_cache_hit_tokens : (d.cached_tokens ?? u.cached_tokens ?? 0);
-  const fresh = u.prompt_cache_miss_tokens != null ? u.prompt_cache_miss_tokens : Math.max(0, input - read);
-  return { read, create: 0, fresh, out: u.completion_tokens || 0 };
-}
 // SSE chunks (or a non-streaming JSON body) → { model, usage, text, tools, stop_reason } (`tools`: the neutral name, 2.6 §A).
 export function normRespChat(rec) {
   const resp = (rec && rec.resp) || (rec && rec.response) || {};
@@ -342,7 +331,7 @@ export function normRespChat(rec) {
     }
   }
   const tools = [...acc.values()].map((t) => ({ id: t.id, name: t.name, input: safeJson(t.args) }));
-  return { model, id, stop_reason: stop, usage, canonUsage: canonUsageChat(usage), text, thinking: thinking || undefined, tools };
+  return { model, id, stop_reason: stop, usage, text, thinking: thinking || undefined, tools };
 }
 
 // ── shape-dispatched entry points (the shared view layer calls THESE, never a per-shape branch) ────
@@ -365,18 +354,6 @@ export function reqCountsFor(shape, req) {
   };
 }
 
-// ── usage: OpenAI Responses usage → the board's NEUTRAL canonical {read, create, fresh, out} ─────
-// OpenAI input_tokens is TOTAL input (incl cached); cached_tokens is the portion served from cache. `fresh` is what is
-// neither read nor written: total − read − write, the ETL's input_uncached (3.2 table, F3) and the
-// Anthropic meaning (uncached + read + write = total). Same clamp at 0 as src/model/schema.mjs::mapResponses.
-export function canonUsage(usage = {}) {
-  const u = usage || {};
-  const d = u.input_tokens_details || {};
-  const read = d.cached_tokens || 0;
-  const create = d.cache_write_tokens || 0;
-  const input = u.input_tokens || 0;
-  return { read, create, fresh: Math.max(0, input - read - create), out: u.output_tokens || 0 };
-}
 
 // ── normalize the SSE response → { model, usage, text, tools, stop_reason } from resp.raw_sse.
 // The reverse-proxy's reconstruction is Anthropic-shaped (empty for OpenAI), so we read raw_sse (kept
@@ -402,7 +379,7 @@ export function normEvents(events) {
   if (!completed) for (const e of events || []) if (e && e.type === 'response.output_text.delta') text += e.delta || '';
   const errored = !completed && (events || []).some((e) => e && e.type === 'error');
   return { model: (completed && completed.model) || null, id: (completed && completed.id) || null,
-    stop_reason: (completed && completed.status) || (errored ? 'error' : null), usage, canonUsage: canonUsage(usage), text, thinking: undefined, tools: toolCalls };
+    stop_reason: (completed && completed.status) || (errored ? 'error' : null), usage, text, thinking: undefined, tools: toolCalls };
 }
 export function normResp(rec) {
   const resp = (rec && rec.resp) || (rec && rec.response) || {};
@@ -416,12 +393,11 @@ export function ctxTokens(norm) {
   return u.input_tokens || u.prompt_tokens || 0;
 }
 
-// ── D25 dissector objects: what the shared board assembler (src/view/assemble.mjs) calls, so it never
+// ── D25 dissector objects: what the board's extraction and reduction (src/view/extract.mjs, src/view/reduce.mjs) call, so they never
 // branches on a wire. Registered by wire format in src/dissect/registry.mjs (`boardDissectorFor`).
 // `provider` is the pre-D37 board label (analyzed.provider), kept for readers of old payloads; `blockKeys`
 // are the request's top-level keys that become context blocks (everything else is a non-block key).
-// `consumedBody` — the request keys this dissector maps to blocks (the rest are unmapped, 3.1:44); `messageCount` — the
-// message count compaction compares (3.4); `faithfulnessOf` — a flat block's 3.2 faithfulness.
+// `messageCount` — the message count compaction compares (3.4).
 // ── reply parts (sse-spans.mjs): each reply block addressed as a span of resp.raw. Responses keys an event by its
 // `output_index` and takes the item the wire closes it with (output_item.done, else the terminal's output); Chat keys
 // a chunk by choice index and what its delta carries (reasoning, text, or tool call `index`).
@@ -463,24 +439,19 @@ const CHAT_REPLY = {
   jsonBlocks: (body) => (Array.isArray(body.choices) ? body.choices : []).flatMap((c) => (c && c.message ? chatMessageToBlocks(c.message).map((x) => x.block) : [])),
 };
 
-const blockFaithfulness = (b) => faithfulness(b && b.block); // tools / system descriptors carry no .block → verbatim
 export const RESPONSES = Object.freeze({
   id: 'openai-responses', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
   boardFlat: (req) => boardFlat(req), normResp: (rec) => normResp(rec),
   reqCounts: (req) => reqCountsFor('responses', req), ctxTokens,
   // the stream's terminal says the response failed, or an `error` event arrived with no terminal (normEvents)
   failed: (norm) => norm.stop_reason === 'failed' || norm.stop_reason === 'error',
-  consumedBody: ['model', 'stream', 'instructions', 'tools', 'input'],
   replyParts: (rec) => streamParts(rec, RESPONSES_REPLY),
   messageCount: (req) => (Array.isArray(req && req.input) ? req.input.length : typeof (req && req.input) === 'string' ? 1 : 0),
-  faithfulnessOf: blockFaithfulness,
 });
 export const CHAT = Object.freeze({
   id: 'openai-chat', provider: 'openai', blockKeys: ['tools', 'messages'],
   boardFlat: (req) => boardFlatChat(req), normResp: (rec) => normRespChat(rec),
   reqCounts: (req) => reqCountsFor('chat', req), ctxTokens,
-  consumedBody: ['model', 'stream', 'messages', 'tools'],
   replyParts: (rec) => streamParts(rec, CHAT_REPLY),
   messageCount: (req) => (Array.isArray(req && req.messages) ? req.messages.length : 0),
-  faithfulnessOf: blockFaithfulness,
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sessionView } from '../helpers/session-view.mjs';
+import { sessionDoc } from '../helpers/session-doc.mjs';
 
 // R1 · ENVELOPE DRIFT — the D10 capture writes `resp` / `req_headers`
 // (src/capture/envelope.mjs:52), but the board still read the v0 names `response` /
@@ -9,7 +9,7 @@ import { sessionView } from '../helpers/session-view.mjs';
 // on the pre-D10 fixture: the probe rail rendered empty while the picker advertised its count, and
 // no HTTP status could ever reach the board (so a 401/502 could never render).
 //
-// These tests pin the D10 shape specifically. The v0 shape is pinned alongside, because the board
+// These tests pin the D10 shape specifically, read through the `session` document (test/helpers/session-doc.mjs). The v0 shape is pinned alongside, because the board
 // must keep reading BOTH — old captures on disk are still the user's data (invariant 2).
 
 const d10Probe = (i, tokens) => ({
@@ -35,31 +35,29 @@ const v0Probe = (i, tokens) => ({
   response: { status: 200, body: { input_tokens: tokens } }, // v0 shape
 });
 
-test('D10: the probe series is populated from `resp` (not silently empty)', () => {
-  const v = sessionView([d10Probe(1, 1200), d10Probe(2, 3400), d10Call(1, 200)], 'S');
+test('D10: the probe series is populated from `resp` (not silently empty)', async () => {
+  const v = await sessionDoc([d10Probe(1, 1200), d10Probe(2, 3400), d10Call(1, 200)], 'S');
   assert.equal(v.probes.count, 2, 'both probes counted');
-  assert.deepEqual(v.probes.series.map((p) => p.tokens), [1200, 3400],
-    'D10 probe token counts MUST reach the board — an empty series is the bug that made the probe rail dead');
+  assert.deepEqual(v.probes.series.map((p) => p.tokens), [1200, 3400], 'D10 probe token counts reach the board');
 });
 
-test('D10: HTTP status reaches the slim records (so an error call can render)', () => {
-  const v = sessionView([d10Call(1, 200), d10Call(2, 401), d10Call(3, 502)], 'S');
-  const statuses = v.records.map((r) => r.response.status);
-  assert.deepEqual(statuses, [200, 401, 502],
-    'status MUST survive into the slim view — null here is why the board could never report an HTTP error');
+test('D10: HTTP status reaches the rows and the records (so an error call can render)', async () => {
+  const v = await sessionDoc([d10Call(1, 200), d10Call(2, 401), d10Call(3, 502)], 'S');
+  assert.deepEqual(v.calls.map((c) => c.status), [200, 401, 502]);
+  assert.deepEqual(v.records.map((r) => r.response.status), [200, 401, 502]);
 });
 
-test('v0 captures keep working (invariant 2: old data on disk is still the user data)', () => {
-  const v = sessionView([v0Probe(1, 999)], 'S');
+test('v0 captures keep working (invariant 2: old data on disk is still the user data)', async () => {
+  const v = await sessionDoc([v0Probe(1, 999)], 'S');
   assert.equal(v.probes.count, 1);
   assert.deepEqual(v.probes.series.map((p) => p.tokens), [999]);
 });
 
-test('a record with neither shape yields null, not a crash', () => {
+test('a record with no response yields a null status, not a crash', async () => {
   const bare = {
-    id: 'x', ts_request: '2026-07-19T00:03:00.000Z', endpoint: '/v1/messages', is_llm_call: true,
+    id: 'x', ts_request: '2026-07-19T00:03:00.000Z', endpoint: '/v1/messages',
     req_headers: { 'x-claude-code-session-id': 'S' }, req_body: '{}',
   };
-  const v = sessionView([bare], 'S');
+  const v = await sessionDoc([bare], 'S');
   assert.equal(v.records[0].response.status, null);
 });

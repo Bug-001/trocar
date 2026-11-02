@@ -5,7 +5,7 @@
 // Kept per call: its row's ts by its slot in the projection and its place in the step-order column and its lane's; per member that
 // is no call, the facts of its item or failed line (itemsOf). An answer reads only the lines that changed since the last.
 import { sessionMetaOfFacts, itemsView } from '../view/board.mjs';
-import { unknownSummary } from '../view/assemble.mjs';
+import { unknownSummary } from '../view/reduce.mjs';
 import { compareStep } from '../view/step-order.mjs';
 import { COMP_KEYS } from '../view/blockmeta.mjs';
 import { FLAG } from '../view/head-cols.mjs';
@@ -62,7 +62,7 @@ const EVENT_FLAG = { user: FLAG.user, summarize: FLAG.summarize, spawn: FLAG.spa
 function flagsOf(r, events) {
   let f = 0;
   for (const e of events) f |= e.type === 'compaction' ? FLAG.compaction | (e.inferred ? FLAG.inferred : 0) : EVENT_FLAG[e.type] || 0;
-  const b = r.cacheBreak, failed = !!r.error || (r.status != null && r.status !== 200);
+  const b = r.cacheBreak, failed = !!r.error;
   if (b && b.cause && !b.firstCall && !QUIET.has(b.cause)) f |= FLAG.cacheBreak;
   if (failed) f |= FLAG.failed; else if (r.usage == null) f |= FLAG.noUsage;
   return f;

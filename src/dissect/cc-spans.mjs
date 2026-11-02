@@ -1,5 +1,5 @@
 // src/dissect/cc-spans.mjs — the D19 verbatim byte span of every block of an Anthropic-wire request.
-// Read by the board (src/view/assemble.mjs, src/view/extract.mjs) to mint each block's text_ref locator
+// Read by the board (src/view/extract.mjs) to mint each block's text_ref locator
 // instead of shipping its body. The block walk itself is the CC dissector's (./cc.mjs dissectBlocks), so
 // span[i] belongs to the same block as linearContext()[i]. Leaf module (0.1: src/dissect imports no other src).
 import { scanJson } from './json-scan.mjs';
@@ -36,10 +36,10 @@ export function blockSpans(record) {
   if (typeof record?.req_body === 'string') { // the record's one parse and one scan of its stored body (src/dissect/request-body.mjs)
     req = storedRequestBody(record) ?? {};
     root = scannedRequestBody(record);
-  } else {
-    const src = reqSource(record);
-    try { req = JSON.parse(src) } catch { req = {} }
-    try { root = scanJson(src) } catch { root = null }
+  } else { // not a stored string (null, or an object that slipped in): no memo covers it; the object is its own parse
+    const b = record?.req_body;
+    req = b && typeof b === 'object' ? b : {};
+    try { root = scanJson(reqSource(record)) } catch { root = null }
   }
   const props = root && root.kind === 'object' ? root.props : new Map();
   const toolsNode = props.get('tools');

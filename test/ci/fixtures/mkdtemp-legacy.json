@@ -34,6 +34,5 @@
   "test/health/retention-health.test.mjs",
   "test/helpers/flush-exit.test.mjs",
   "test/helpers/leak-guard.cjs",
-  "test/paths.test.mjs",
-  "test/view/block-never-orphaned.test.mjs"
+  "test/paths.test.mjs"
 ]

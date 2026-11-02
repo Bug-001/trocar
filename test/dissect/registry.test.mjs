@@ -2,7 +2,7 @@
 // from the UA. The board and the ETL both dispatch through this registry.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { wireFormatOf, unsupportedOf, isWsHandshake, isProbeEndpoint } from '../../src/dissect/registry.mjs';
+import { wireFormatOf, isWsHandshake } from '../../src/dissect/registry.mjs';
 import { detect as ccDetect } from '../../src/dissect/cc.mjs';
 import { wireShape } from '../../src/dissect/openai.mjs';
 
@@ -49,11 +49,10 @@ test('wire formats are disjoint: no record is two formats', () => {
 });
 
 test('count_tokens is a probe, not inference; Gemini/Bedrock/Vertex are unsupported', () => {
-  assert.equal(isProbeEndpoint(R('/v1/messages/count_tokens?beta=true', null)), true);
   assert.equal(wireFormatOf(R('/v1/messages/count_tokens', ANTH)), null);
-  assert.equal(unsupportedOf(R('/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse', {})), 'gemini');
-  assert.equal(unsupportedOf(R('/model/anthropic.claude-3/invoke-with-response-stream', ANTH)), 'bedrock');
-  assert.equal(unsupportedOf(R('/v1/projects/p/locations/us/publishers/anthropic/models/claude:streamRawPredict', ANTH)), 'vertex');
+  assert.equal(wireFormatOf(R('/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse', {})), null);
+  assert.equal(wireFormatOf(R('/model/anthropic.claude-3/invoke-with-response-stream', ANTH)), null);
+  assert.equal(wireFormatOf(R('/v1/projects/p/locations/us/publishers/anthropic/models/claude:streamRawPredict', ANTH)), null);
   assert.equal(wireFormatOf(R('/model/anthropic.claude-3/invoke', ANTH)), null, 'an unsupported wire is never claimed as Anthropic');
 });
 

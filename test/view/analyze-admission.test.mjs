@@ -96,15 +96,19 @@ test('BUG1: admitting failures does not corrupt derived token stats', fixtureGat
   assert.equal(stats.totalOut, sumOut, 'totalOut must equal the sum over successful calls');
 });
 
-// analyze.mjs imports respOf from assemble.mjs, which imports analyze.mjs back. The cycle is safe
-// ONLY because respOf is called at runtime, never during module evaluation. Pin both entry orders
-// so a future refactor that hoists a respOf call to module scope fails here instead of in the board.
-test('BUG1: the analyze↔assemble import cycle resolves from either entry module', async () => {
-  const one = await import('../../src/view/analyze.mjs');
-  const two = await import('../../src/view/assemble.mjs');
-  assert.equal(typeof one.analyze, 'function');
-  assert.equal(typeof two.respOf, 'function');
-  // normResp must read the D10 `resp` envelope through respOf (not a raw `.response` read)
-  assert.equal(one.normResp({ resp: { status: 429, usage: { input_tokens: 5 } } }).status, 429);
-  assert.equal(one.normResp({ response: { status: 200, usage: { input_tokens: 7 } } }).usage.input_tokens, 7);
+// One failed rule (3.5 §访问模式 ②, failedOf): along the status × transport axes, a step is failed exactly when failedOf says so,
+// and it carries an errMsg exactly when it failed — a 2xx/3xx other than 200 is neither failed nor explained as one.
+test('failed and errMsg follow failedOf along status × transport', async () => {
+  const { failedOf } = await import('../../src/dissect/endpoints.mjs');
+  const base = { id: 'r1', is_llm_call: true, ts_request: '2026-07-19T00:00:00Z',
+    request: { model: 'claude-opus-4-8', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] },
+    response: { status: 200, body: { usage: { input_tokens: 10, output_tokens: 5 }, content: [{ type: 'text', text: 'ok' }] } } };
+  for (const status of [undefined, 200, 201, 204, 302, 399, 400, 401, 429, 500, 529]) for (const transport of [undefined, 'ws']) {
+    const rec = structuredClone(base);
+    if (status === undefined) delete rec.response.status; else rec.response.status = status;
+    if (transport) rec.transport = transport;
+    const [s] = analyze([rec]).steps, want = failedOf({ status, ws: transport === 'ws' });
+    assert.equal(!!s.error, want, `status ${status} ${transport || 'http'}: failed`);
+    assert.equal(!!s.errMsg, want, `status ${status} ${transport || 'http'}: errMsg present iff failed (${s.errMsg})`);
+  }
 });

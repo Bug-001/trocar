@@ -44,7 +44,7 @@ import { rowTable, isRowTable, heapOf } from './row-table.mjs';
 
 const rawDir = (home = trocarHome()) => path.join(home, 'raw');
 export const indexDir = (home = trocarHome()) => path.join(home, 'index');
-const INDEX_V = 6;
+const INDEX_V = 7;
 const CHUNK = 1 << 20;
 // How many appended bytes one catch-up of the daemon's keeper takes (src/collector/index-keeper.mjs imports it): the
 // unit of "a chunk of index work". A READER that had to read more than this from a segment is the honest definition of
@@ -103,6 +103,7 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null 
     received_bytes: finite(wire.resp),
     session_key: sessionKeyOf(e).key ?? null,
     is_llm: !!e.is_llm_call,
+    ws: e.transport === 'ws',  // a WebSocket logical call: no HTTP status, so the index row's failed rule never counts it (failedOf)
     // the session facts: harness_id is the harness the BOARD decides (proc, else the UA — and it says which)
     harness_id: h.id,
     has_proc: !!(e.proc && typeof e.proc === 'object'),
@@ -190,9 +191,9 @@ function scanSealed(fs, file, segment, problems) {
   } finally { sf.close(); }
 }
 
-// ── the index document: append-only NDJSON (INDEX_V 6; 4.2 §段索引) ────────
+// ── the index document: append-only NDJSON (INDEX_V 7; 4.2 §段索引) ────────
 // One file per segment, one line per fact: an entry (a record, bare), a problem (`{"p":…}`), or a mark
-// (`{"m":…,"v":6}` = "the index covers this segment up to m.end"). A pass APPENDS its new entries and problems and
+// (`{"m":…,"v":7}` = "the index covers this segment up to m.end"). A pass APPENDS its new entries and problems and
 // then one mark; a reader takes everything up to the LAST complete mark and ignores what follows it (a torn batch).
 // That is what makes keeping the index current cost the NEW records, never the whole segment: the whole-document
 // format this replaces (v3) rewrote ≈ e·N²/2 bytes per segment, and real traffic gives nearly every record a pass of

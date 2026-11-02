@@ -9,6 +9,7 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import { createSynthAssigner } from '../dissect/synth-key.mjs';
 import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
+import { endpointClass } from '../dissect/endpoints.mjs';
 import { segmentFiles, warmSegmentIndex, problemEntry, recordsId, grownFrom } from './index-build.mjs';
 import { trocarHome } from '../paths.mjs';
 import { warmCache, fsTag } from './warm.mjs';
@@ -237,14 +238,13 @@ function addGroups(g, rows) {
   return g;
 }
 
-const isProbe = (r) => /count_tokens/.test(r.path || '');
+const isProbe = (r) => endpointClass(r.path) === 'token-count';
 
 /** Which index rows are a MODEL CALL: the one rule every reader counts calls with (sessionFactsOf below,
  *  `overview`'s usage and the usage sidecar's fill), never a second copy of it. */
 export const isModelCall = (r) => r.is_llm && !r.log_only;
 
-/** sessionFacts(id) → {add(row), facts()}: one session's facts over the rows added so far, in member order, the way
- *  src/view/board.mjs derives them from the records themselves (sessionMetaFor): the harness of the first row that had `proc`, else
+/** sessionFacts(id) → {add(row), facts()}: one session's facts over the rows added so far, in member order: the harness of the first row that had `proc`, else
  *  of the first that had headers; the entrypoint of the first row that had headers; calls / logged / probes / other complementary,
  *  so they sum to the session. A growing session adds its new members only (src/query/named/session.mjs). */
 export function sessionFacts(id) {

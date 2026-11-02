@@ -8,7 +8,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import zlib from 'node:zlib'
 import { shapeResponse } from '../../../src/collector/core/record/body.mjs'
-import { NON_INFERENCE_MAX_DECODED_BYTES, MAX_DECODED_RESPONSE_BYTES } from '../../../src/capture/request-body.mjs'
+import { MAX_BODY_BYTES } from '../../../src/capture/request-body.mjs'
+import { NON_INFERENCE_MAX_DECODED_BYTES } from '../../../src/dissect/request-body.mjs'
 import { engineExchange } from '../../helpers/engine-exchange.mjs'
 
 const T = { timeout: 30_000 }
@@ -36,7 +37,7 @@ test('an inference reply is expanded to 64 MiB at most: a bomb past it is the sa
   const wire = gzipZeros(70)                      // 70 MiB decoded, past the 64 MiB limit
   const r = await exchange({ path: '/v1/messages', ctype: 'application/json', wire })
   assert.equal(r.envelopes.length, 1); assert.deepEqual(r.failures, [])
-  assert.match(r.env.resp.encoding_error, new RegExp(`decoded size over ${MAX_DECODED_RESPONSE_BYTES} bytes`)); assert.ok(!/not inference/.test(r.env.resp.encoding_error))
+  assert.match(r.env.resp.encoding_error, new RegExp(`decoded size over ${MAX_BODY_BYTES} bytes`)); assert.ok(!/not inference/.test(r.env.resp.encoding_error))
   assert.equal(r.env.resp.kind, 'json'); assert.ok(Buffer.from(r.env.resp.raw_b64, 'base64').equals(wire))
   assert.equal(r.env.is_llm_call, true)
 })
