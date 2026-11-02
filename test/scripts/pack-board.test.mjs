@@ -16,7 +16,7 @@ const skip = npm && /\.[cm]?js$/.test(npm) ? false : 'asks the npm that runs it 
 
 test('4.5 #6: the package has every built board file and no board source', { skip, timeout: 60_000 }, () => {
   const r = spawnSync(process.execPath, [npm, 'pack', '--dry-run', '--json', '--ignore-scripts'],
-    { cwd: ROOT, encoding: 'utf8', env: { ...process.env, npm_config_cache: tmpDir('trocar-npmcache-') } })
+    { cwd: ROOT, encoding: 'utf8', env: { ...process.env, npm_config_cache: tmpDir('trocar-npmcache-'), NODE_DISABLE_COMPILE_CACHE: '1' } }) // npm's cli turns on Node's compile cache in the temp dir
   assert.equal(r.status, 0, r.stderr)
   const packed = new Set(JSON.parse(r.stdout)[0].files.map((f) => f.path))
   const built = fs.readdirSync(BUILT, { recursive: true, withFileTypes: true }).filter((e) => e.isFile())
