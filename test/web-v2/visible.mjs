@@ -2,7 +2,7 @@
 // (`<div class="disc-b" … hidden>`, the technical details) cut out, and the reasons a failed read may carry. Exports only.
 
 import assert from 'node:assert/strict'
-import { esc } from '../../src/web/v2/core/fmt.mjs'
+import { esc } from '../../web/legacy/core/fmt.mjs'
 
 // the markup outside every collapsed disclosure body, cut by counting <div> depth (a body holds nested divs)
 export function outsideCollapsed(html) {

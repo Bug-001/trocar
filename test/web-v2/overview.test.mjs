@@ -7,16 +7,16 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import {
   overviewItems, capCardHtml, itemsCardHtml, statsCardHtml, renderBody, recentRows, recentCardHtml, mount, SKELETON, headHtml,
-} from '../../src/web/v2/overview/overview.mjs'
-import { capHealthPatch } from '../../src/web/v2/core/capture-verdict.mjs'
-import { backoffMs, INTERVAL } from '../../src/web/v2/core/poll.mjs'
+} from '../../web/legacy/overview/overview.mjs'
+import { capHealthPatch } from '../../web/legacy/core/capture-verdict.mjs'
+import { backoffMs, INTERVAL } from '../../web/legacy/core/poll.mjs'
 import { within } from '../helpers/bounded.mjs'
-import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, UNKNOWN_ICON, harnessKey, harnessName } from '../../src/web/v2/core/chips.mjs'
-import { TITLE_FROM_WIRE } from '../../src/web/v2/labels/replay.mjs'
-import { TITLE_FROM_AGENT, FILES_NOT_READ } from '../../src/web/v2/labels/overview.mjs'
-import * as W from '../../src/web/v2/labels/overview.mjs'
-import { ERR_WHERE, SWITCH_WORD } from '../../src/web/v2/labels/capture.mjs'
-import { esc, fmtWhen } from '../../src/web/v2/core/fmt.mjs'
+import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, UNKNOWN_ICON, harnessKey, harnessName } from '../../web/legacy/core/chips.mjs'
+import { TITLE_FROM_WIRE } from '../../web/legacy/labels/replay.mjs'
+import { TITLE_FROM_AGENT, FILES_NOT_READ } from '../../web/legacy/labels/overview.mjs'
+import * as W from '../../web/legacy/labels/overview.mjs'
+import { ERR_WHERE, SWITCH_WORD } from '../../web/legacy/labels/capture.mjs'
+import { esc, fmtWhen } from '../../web/legacy/core/fmt.mjs'
 
 const SPEC = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
 const C3 = SPEC.slice(SPEC.indexOf('### C.3'))
@@ -122,7 +122,7 @@ test('#2 each item class appears iff its trigger holds, and links to the page of
 // 1.7 §事项目录 · 1.5 一件事只说一处: the chip is the item's subject — the sentence after it never starts with the agent's name again; an
 // O1 item's sentence is the capture page row's own (agentVerdicts), word for word
 test('an item with an agent chip does not name the agent again: O1 is the capture row\'s sentence itself, O9 starts with the host', async () => {
-  const { agentVerdicts } = await import('../../src/web/v2/core/capture-verdict.mjs')
+  const { agentVerdicts } = await import('../../web/legacy/core/capture-verdict.mjs')
   const s = stateOf(quiet())
   const [id] = Object.keys(s.caph.data.harnesses)
   Object.assign(s.caph.data.harnesses[id], { captured: false, reason: 'config-after-start' })

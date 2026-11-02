@@ -3,9 +3,9 @@
 // face (real server, real query worker); unrecorded bytes stay null (invariant 4), and what C.5 has no field for is not drawn.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { tableModel, classWord } from '../../src/web/v2/traffic/traffic.mjs'
-import { listModel, appendPage, readPage, replayLinkOf, detailLeadHtml } from '../../src/web/v2/traffic/host.mjs'
-import { detailModel, requestDetailHtml } from '../../src/web/v2/traffic/request-view.mjs'
+import { tableModel, classWord } from '../../web/legacy/traffic/traffic.mjs'
+import { listModel, appendPage, readPage, replayLinkOf, detailLeadHtml } from '../../web/legacy/traffic/host.mjs'
+import { detailModel, requestDetailHtml } from '../../web/legacy/traffic/request-view.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
 const face = (async () => {

@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { probe, withBoard, serveWorld, stats } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
-import { INTERVAL } from '../../../src/web/v2/core/poll.mjs'
+import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
 
 const gate = await probe()
 // what a return reads is counted until just before the desk's own timer could poll (it restarts on the return)

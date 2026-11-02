@@ -4,7 +4,7 @@
 // PENDING ids are measured and reported, never failed. Selectors are the board's ids / classes / data attributes, never wording.
 // Exports only; nothing runs at import.
 import { snap as probeSnap } from './probe.mjs'
-import { WRITE_GAP_MS } from '../../../../src/web/v2/core/router.mjs'
+import { WRITE_GAP_MS } from '../../../../web/legacy/core/router.mjs'
 
 export const IDS = Object.freeze(['I-pageerror', 'I-console', 'I-blank', 'I-keep', 'I-stack', 'I-hscroll', 'I-rate', 'I-write', 'I-leak',
   'I-mem', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select'])

@@ -6,17 +6,17 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import * as storage from '../../src/web/v2/settings/storage.mjs'
-import * as prices from '../../src/web/v2/settings/prices.mjs'
-import * as appearance from '../../src/web/v2/settings/appearance.mjs'
-import { templateText, unpricedModels } from '../../src/web/v2/settings/prices.mjs'
-import { setTheme } from '../../src/web/v2/settings/appearance.mjs'
-import { THEME_KEY } from '../../src/web/v2/core/ui.mjs'
-import { priceMatch } from '../../src/web/v2/core/metrics.mjs'
-import { COMMANDS } from '../../src/web/v2/labels/capture.mjs'
-import { SOURCE_WORD } from '../../src/web/v2/labels/settings.mjs'
-import { CLASS_IDS, CLASS_DESC, FALLBACK_CLASS } from '../../src/web/v2/core/classes.mjs'
-import { esc } from '../../src/web/v2/core/fmt.mjs'
+import * as storage from '../../web/legacy/settings/storage.mjs'
+import * as prices from '../../web/legacy/settings/prices.mjs'
+import * as appearance from '../../web/legacy/settings/appearance.mjs'
+import { templateText, unpricedModels } from '../../web/legacy/settings/prices.mjs'
+import { setTheme } from '../../web/legacy/settings/appearance.mjs'
+import { THEME_KEY } from '../../web/legacy/core/ui.mjs'
+import { priceMatch } from '../../web/legacy/core/metrics.mjs'
+import { COMMANDS } from '../../web/legacy/labels/capture.mjs'
+import { SOURCE_WORD } from '../../web/legacy/labels/settings.mjs'
+import { CLASS_IDS, CLASS_DESC, FALLBACK_CLASS } from '../../web/legacy/core/classes.mjs'
+import { esc } from '../../web/legacy/core/fmt.mjs'
 import { loadPricing } from '../../src/view/pricing.mjs'
 import { edit, readTable } from '../../src/classes/table.mjs'
 import { classesFile } from '../../src/paths.mjs'
@@ -392,7 +392,7 @@ test('#17 unpriced models: priceMatch null with usable calls; at least N = the m
     w.tamper((url, d) => (url.startsWith('/api/overview') ? { status: 404, body: { error: 'no' } } : d))
     const m = await w.mount(prices, '#/settings/prices')
     assert.doesNotMatch(m.html(), /class="umodel"|data-unpriced/)
-    assert.ok(!m.html().includes((await import('../../src/web/v2/labels/settings.mjs')).CARD_UNPRICED))
+    assert.ok(!m.html().includes((await import('../../web/legacy/labels/settings.mjs')).CARD_UNPRICED))
   })
 })
 
