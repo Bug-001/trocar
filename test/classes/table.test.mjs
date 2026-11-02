@@ -47,6 +47,31 @@ test('归类:首个匹配、host 整串、path 从开头、harness 限定,都不
   assert.equal(keepOf({ classes: BUILTIN }, 'nope'), 'full')
 })
 
+test('K1 (4.6 §验收 K1): the built-in table classes each row the spec names; pi\'s rows are regression seeds', () => {
+  const of = classify({ classes: BUILTIN })
+  const AN = 'api.anthropic.com'
+  const rows = [
+    // from 4.6 K1
+    ['claude-code', AN, '/v1/messages', 'llm'],
+    ['claude-code', AN, '/v1/messages/count_tokens', 'token-count'],
+    ['claude-code', AN, '/v1/code/sessions/cse_abc/worker/events', 'session-sync'],
+    ['claude-code', AN, '/v1/code/sessions?limit=1', 'session-sync'],
+    ['claude-code', AN, '/api/event_logging/v2/batch', 'telemetry'],
+    ['claude-code', AN, '/api/oauth/file_upload', 'files'],
+    ['claude-code', AN, '/api/web/domain_info?domain=x.test', 'account'],
+    ['claude-code', 'o123.ingest.sentry.io', '/api/456/envelope/', 'telemetry'],
+    ['codex', 'o123.ingest.sentry.io', '/x', 'telemetry'],
+    [null, 'o123.ingest.sentry.io', '/x', 'telemetry'],
+    ['claude-code', 'cdn.example.test', '/x', 'other'],
+    // regression seeds from real pi captures
+    ['pi', 'pi.dev', '/api/report-install?version=1.0.0', 'telemetry'],
+    ['pi', 'github.com', '/org/tool/releases/download/v1/tool.tar.gz', 'files'],
+    ['pi', 'release-assets.githubusercontent.com', '/github-production-release-asset/1', 'files'],
+    ['codex', 'github.com', '/x', 'other'],
+  ]
+  for (const [harness, host, p, want] of rows) assert.equal(of({ host, path: p, harness }), want, `${harness} ${host}${p}`)
+})
+
 test('第一次修改整份写出 0600,新类别排在内置之前,修改追一行旧值+新值+时间', () => {
   const h = home()
   const r = edit({ kind: 'add', class: 'catalog', host: 'models\\.opencode\\.ai', path: '/api\\.json' }, { home: h, fs, now })
