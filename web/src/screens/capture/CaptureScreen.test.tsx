@@ -1,7 +1,9 @@
 // web/src/screens/capture/CaptureScreen.test.tsx — the capture page's re-read contracts (1.9 §页面结构 · §开关, 1.2 §点击与选中文字,
 // D75④): a status answer that changes on every poll never disturbs the reader. Open state per stable row id, the focused control and a
 // text selection survive a poll, the keyboard toggles a row, the switch plans before it writes (invariant 1), ?h= lands once, and the
-// page carries no alert / live region / badge (D38⑦). Documents are spec 1.6's C.3 sample; polls are fake timers of INTERVAL.status.
+// page carries no alert / live region / badge (D38⑦), and two missed reads say 「? not refreshed」 at each answer. The capture log
+// (CaptureLogScreen) is held to the same keyboard, no-alert and stale contracts. Documents are spec 1.6's C.3 sample; polls are fake
+// timers of INTERVAL.status.
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -10,7 +12,9 @@ import { INTERVAL } from '../../../legacy/core/poll.mjs'
 import { parseHash } from '../../../legacy/core/router.mjs'
 import { store } from '../../../legacy/core/store.mjs'
 import { ConfirmProvider } from '../../ui/Confirm'
+import { HEALTH_READ } from '../../../legacy/labels/common.mjs'
 import CaptureScreen from './CaptureScreen'
+import CaptureLogScreen from './CaptureLogScreen'
 
 const nodeFs = 'node:fs' // the web tsconfig carries no node types; the test reads the spec through a plain dynamic import
 const { readFileSync } = (await import(/* @vite-ignore */ nodeFs)) as { readFileSync: (p: string, enc: string) => string }
@@ -33,6 +37,7 @@ function doc(hs: Record<string, H>, n: number) {
   d.topology = Object.fromEntries(Object.keys(hs).map((id) => [id, { at: T, running: [{ pid: pid(n) }] }]))
   d.critical = []; d.changed = []; d.errors = []; d.install = { state: 'installed', pending: [] }
   d.failures = { since: T, groups: Array.from({ length: n }, () => ({ level: 'note', where: 'engine', code: 'x', count: 1, first_ts: T, last_ts: T })) }
+  patch(d)
   return d
 }
 const pid = (n: number) => 7000 + n
@@ -40,14 +45,16 @@ const pid = (n: number) => 7000 + n
 type Answer = { ok: boolean, status: number, data: unknown, error: string | null }
 let answers: Array<Record<string, H>> = [] // the harnesses of answer n (the last one repeats)
 let served = 0
+let patch: (d: Record<string, unknown>) => void = () => {} // a test's own fields on every answer
+let failFrom = Infinity // answers from this one on are failed reads, all with the same reason
 let controlAnswer: (verb: string, body: Record<string, unknown>) => Answer = () => ({ ok: true, status: 200, data: { ok: true }, error: null })
 
 beforeEach(() => {
   vi.useFakeTimers()
   store.set({ capH: null, capHOkAt: null, capHErr: null })
-  served = 0
+  served = 0; patch = () => {}; failFrom = Infinity
   vi.spyOn(api, 'get').mockImplementation(async (name: string) => {
-    if (name === 'status') { const n = served++; return { ok: true, status: 200, data: doc(answers[Math.min(n, answers.length - 1)], n) } }
+    if (name === 'status') { const n = served++; if (n >= failFrom) return { ok: false, status: 502, data: null, error: 'HTTP 502' }; return { ok: true, status: 200, data: doc(answers[Math.min(n, answers.length - 1)], n) } }
     if (name === 'overview') return { ok: true, status: 200, data: { harnesses: [] } }
     return { ok: false, status: 404, error: 'HTTP 404' }
   })
@@ -67,13 +74,13 @@ const tick = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms))
 const settle = async () => { for (let i = 0; i < 3; i++) await tick(1) }
 const poll = async () => { await tick(INTERVAL.status); await settle() }
 
-async function mount(hash = '#/capture') {
+async function mount(hash = '#/capture', Screen = CaptureScreen) {
   const toasts = document.createElement('div'); toasts.id = 'toasts'; document.body.append(toasts)
   let made = 0
   new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if ((n as Element).classList?.contains('toast')) made++ }).observe(toasts, { childList: true })
   const client = new QueryClient()
   const { container } = render(
-    <QueryClientProvider client={client}><ConfirmProvider><CaptureScreen route={parseHash(hash)} /></ConfirmProvider></QueryClientProvider>,
+    <QueryClientProvider client={client}><ConfirmProvider><Screen route={parseHash(hash)} /></ConfirmProvider></QueryClientProvider>,
   )
   await settle()
   const row = (id: string) => container.querySelector<HTMLElement>(`.crow[data-h="${id}"]`)!
@@ -82,7 +89,8 @@ async function mount(hash = '#/capture') {
   const techT = (id: string) => row(id).querySelector<HTMLButtonElement>('.disc .disc-t')!
   const open = (t: Element) => t.getAttribute('aria-expanded') === 'true' && !panelOf(t).hasAttribute('hidden')
   const shut = (t: Element) => t.getAttribute('aria-expanded') === 'false' && panelOf(t).hasAttribute('hidden')
-  return { container, row, trigger, techT, panelOf, open, shut, toasts: () => made }
+  const expanded = (t: Element) => t.getAttribute('aria-expanded')
+  return { container, row, trigger, techT, panelOf, open, shut, expanded, toasts: () => made }
 }
 
 test('C1: a row the reader opened and its technical details stay open across polls, also when a row above it leaves', async () => {
@@ -152,15 +160,49 @@ test('C4: the focused Copy button of an open row\'s technical details and the ro
   }
 })
 
-test('C5: Enter and Space on a row\'s name each toggle it', async () => {
+// the capture page's machine-wide changes and the log's groups (one by design, one an agent's problem) on every answer
+const LOGGED = (d: Record<string, unknown>) => {
+  d.changed = [{ path: '/etc/x.json', what: 'json-key proxy' }]
+  d.errors = [{ where: 'other', reason: 'r' }]
+  d.failures = { since: T, groups: [{ level: 'problem', where: 'engine', code: 'x', harness: 'codex', count: 2, first_ts: T, last_ts: T },
+    { level: 'expected', where: 'engine', code: 'y', count: 1, first_ts: T, last_ts: T }] }
+}
+
+test('C5: every trigger on both pages (row name, log row ▸, changes block, technical details) toggles on Enter and Space; clicks elsewhere on a head line or inside the panel do not', async () => {
   answers = [{ opencode: FINE }]
-  const p = await mount()
-  const t = p.trigger('opencode')
-  for (const key of ['Enter', ' ']) {
-    const was = p.open(t)
-    fireEvent.keyDown(t, { key }); fireEvent.keyUp(t, { key })
-    expect(p.open(t), key).toBe(!was)
-    expect(p.shut(t), key).toBe(was)
+  patch = LOGGED
+  const cap = await mount()
+  fireEvent.click(cap.trigger('opencode'))
+  const capTriggers = [cap.trigger('opencode'), cap.techT('opencode'), cap.container.querySelector<HTMLElement>('.cblock .disc-t')!]
+  const keys = async (t: HTMLElement, label: string) => {
+    for (const key of ['Enter', ' ']) {
+      const was = cap.expanded(t)
+      expect(was, label).toMatch(/^(true|false)$/)
+      fireEvent.keyDown(t, { key }); fireEvent.keyUp(t, { key }); await settle()
+      expect(t.getAttribute('aria-expanded'), `${label} ${key}`).toBe(was === 'true' ? 'false' : 'true')
+    }
+  }
+  for (const [i, t] of capTriggers.entries()) await keys(t, `capture trigger ${i}`)
+  // the rest of the head line and the open panel are text, not triggers
+  const t = cap.trigger('opencode')
+  const was = cap.expanded(t)
+  for (const el of [...cap.row('opencode').querySelectorAll<HTMLElement>('.crow-t > :not(button)'), cap.panelOf(t)]) {
+    fireEvent.click(el); await settle()
+    expect(cap.expanded(t), el.className).toBe(was)
+  }
+  cleanup(); document.body.replaceChildren()
+
+  const log = await mount('#/capture/log', CaptureLogScreen)
+  const lgo = log.container.querySelector<HTMLElement>('.lr .lgo')!
+  await keys(lgo, 'log row')
+  const lr = lgo.closest('.lr')!
+  const logTriggers = [lr.querySelector<HTMLElement>('.disc-t')!, ...log.container.querySelectorAll<HTMLElement>('#clogmain > .disc > .disc-t')]
+  expect(logTriggers.length).toBe(2)
+  for (const [i, x] of logTriggers.entries()) await keys(x, `log trigger ${i}`)
+  const lwas = log.expanded(lgo)
+  for (const el of [...lr.querySelectorAll<HTMLElement>(':scope > span'), log.panelOf(lgo)]) {
+    fireEvent.click(el); await settle()
+    expect(log.expanded(lgo), el.className).toBe(lwas)
   }
 })
 
@@ -210,13 +252,43 @@ test('C7: ?h= opens that row after the first answer; ?h= with no row says so onc
   expect(miss.container.querySelector('#caphead h1')!.textContent).toBe(head)
 })
 
-test('C8: the page carries no alert, no live region and nothing that reads as a badge, an unread mark or a dismiss control', async () => {
+test('C8: neither the capture page nor the capture log carries an alert, a live region or anything that reads as a badge, an unread mark or a dismiss control', async () => {
   answers = [{ codex: PROBLEM, opencode: FINE, kimi: SETUP }]
-  const p = await mount()
-  await poll()
-  const c = p.container
-  expect(c.querySelectorAll('[role="alert"], [aria-live]').length).toBe(0)
-  const said = /badge|unread|dismiss/i
-  for (const el of c.querySelectorAll('*')) expect(said.test(String(el.getAttribute('class') ?? '')), el.outerHTML.slice(0, 80)).toBe(false)
-  expect(said.test(c.textContent ?? '')).toBe(false)
+  patch = LOGGED
+  for (const [hash, Screen] of [['#/capture', CaptureScreen], ['#/capture/log', CaptureLogScreen]] as const) {
+    const p = await mount(hash, Screen)
+    await poll()
+    for (const t of p.container.querySelectorAll('[aria-expanded="false"]')) fireEvent.click(t) // the open panels too
+    await settle()
+    const c = p.container
+    expect(c.querySelectorAll('[role="alert"], [aria-live]').length, hash).toBe(0)
+    const said = /badge|unread|dismiss/i
+    for (const el of c.querySelectorAll('*')) expect(said.test(String(el.getAttribute('class') ?? '')), el.outerHTML.slice(0, 80)).toBe(false)
+    expect(said.test(c.textContent ?? ''), hash).toBe(false)
+    cleanup(); document.body.replaceChildren()
+  }
+})
+
+test('C9: failed reads with one unchanging reason say 「? not refreshed」 on both pages once two polls are missed, not before', async () => {
+  answers = [{ opencode: FINE }]
+  const STALE = HEALTH_READ.stale('').toLowerCase() // the label up to its time (the page capitalises a sentence's first letter)
+  for (const [hash, Screen, where] of [['#/capture', CaptureScreen, '.crow[data-h] .stt'], ['#/capture/log', CaptureLogScreen, '.caplog-say']] as const) {
+    failFrom = Infinity; served = 0
+    store.set({ capH: null, capHOkAt: null, capHErr: null })
+    const p = await mount(hash, Screen)
+    const said = () => (p.container.querySelector(where)?.textContent ?? '').toLowerCase()
+    expect(said().includes(STALE), hash).toBe(false)
+    failFrom = served
+    const okAt = Date.now()
+    await poll()
+    expect(served, hash).toBe(failFrom + 1) // one failed read, inside two periods: still the last answer, no stale mark
+    expect(said().includes(STALE), hash).toBe(false)
+    while (Date.now() - okAt <= 2 * INTERVAL.status) await tick(INTERVAL.status / 5)
+    const out = served
+    for (let i = 0; i < 20 && served === out; i++) await tick(INTERVAL.status / 5) // the next failed read, same reason, after the cut
+    await settle()
+    expect(served, hash).toBeGreaterThan(out)
+    expect(said().includes(STALE), hash).toBe(true)
+    cleanup(); document.body.replaceChildren()
+  }
 })

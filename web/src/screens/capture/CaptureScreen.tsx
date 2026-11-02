@@ -38,7 +38,9 @@ export default function CaptureScreen({ route }: ScreenProps) {
   const control = useQuery({ queryKey: ['control-status'], queryFn: ({ signal }) => api.controlStatus({ signal }) as Promise<Answer>, staleTime: Infinity, retry: false })
   const ov = ovq.data && ovq.data.ok ? ovq.data.data ?? null : null
   const ctl = useMemo(() => control.data ?? (control.error ? { ok: false, error: String(control.error.message) } : null), [control.data, control.error])
-  const latest = useMemo(() => ({ doc: status.doc, okAt: status.okAt, err: status.err, ov, control: ctl }), [status.doc, status.okAt, status.err, ov, ctl])
+  // errAt: every failed read is an answer, so the verdict (and its clock) is taken again even when the reason repeats
+  const latest = useMemo(() => ({ doc: status.doc, okAt: status.okAt, err: status.err, errAt: status.errAt, ov, control: ctl }),
+    [status.doc, status.okAt, status.err, status.errAt, ov, ctl])
   const { shown, ref, release } = useSelectionHold(latest)
 
   const model = useMemo(() => {
