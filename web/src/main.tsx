@@ -20,6 +20,7 @@ import { COMMANDS } from '../legacy/labels/capture.mjs'
 import { createBoardRouter } from './router'
 import { LegacyScreen, type Route } from './LegacyScreen'
 import { Sidebar } from './shell/Sidebar'
+import { ConfirmProvider } from './ui/Confirm'
 
 // every screen of every route (core/router.mjs)
 const SCREENS = {
@@ -102,7 +103,9 @@ const root = createRoot(document.getElementById('app')!)
 // no StrictMode: a legacy mount() is not idempotent
 root.render(
   <QueryClientProvider client={new QueryClient()}>
-    <FacadeContext.Provider value={board.legacy}><RouterProvider router={board.router} /></FacadeContext.Provider>
+    <ConfirmProvider>
+      <FacadeContext.Provider value={board.legacy}><RouterProvider router={board.router} /></FacadeContext.Provider>
+    </ConfirmProvider>
   </QueryClientProvider>,
 )
 
