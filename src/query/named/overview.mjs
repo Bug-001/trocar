@@ -10,7 +10,7 @@
 // every missing segment is filled after the answer is written.
 import { failedOf } from '../../dissect/endpoints.mjs';
 import { recordsAt } from '../records.mjs';
-import { readUsage, fillUsage, callFacts, takeFillProblem } from '../usage.mjs';
+import { readUsage, fillUsage, usageFacts, takeFillProblem } from '../usage.mjs';
 import { asOf, indexRows, isModelCall, sessionFactsOf, sessionGroups } from '../rows.mjs';
 import { rowsKey } from '../warm.mjs';
 import { OVERVIEW_USAGE_BYTES, tsFilter } from './index.mjs';
@@ -87,7 +87,8 @@ function usageOf({ home, fs, inWindow, errors, later }) {
       spent += cost;
       taken.add(r);
     }
-    const computed = taken.size ? new Map(callFacts(recordsAt({ home, fs, rows: missing.filter((r) => taken.has(r)), errors, remember: false })).map((f) => [f.id, f])) : null;
+    const took = missing.filter((r) => taken.has(r));
+    const computed = taken.size ? new Map(usageFacts({ rows: took, records: recordsAt({ home, fs, rows: took, errors, remember: false }) }).map((f) => [f.id, f])) : null;
     callsRead += need.length - missing.length + taken.size;
     if (taken.size === missing.length) read++;
     for (const r of need) {

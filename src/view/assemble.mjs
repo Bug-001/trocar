@@ -525,7 +525,7 @@ export function nonBlockKeysOf(rec, format) {
 // block), `nonBlockKeys`, the reply (`norm`), `rec` — from its own record, with the same functions push() used, so a page can ship
 // the calls it shows with their bodies without the session ever being held whole. finish() builds the `analyzed` document without changing what the fold derived, so it can go on afterwards.
 //
-// IN STEP ORDER. The batch forms (assembleSession, board.mjs sessionFold, the usage sidecar's callFacts) push a
+// IN STEP ORDER. The batch forms (assembleSession, board.mjs sessionFold) push a
 // session's records sorted by step order; what orders the lanes against each other — the global step index `gi`, the stream ids —
 // is given at finish(), by step order (analyze.mjs stepOrder). A record that sorts before its lane's last call throws (inOrder).
 //
