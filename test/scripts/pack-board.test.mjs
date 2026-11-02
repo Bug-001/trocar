@@ -1,6 +1,6 @@
 // test/scripts/pack-board.test.mjs — 4.5 #6 (D75②③): the npm package carries the board's build and not its sources. Asks npm itself
 // (`npm pack --dry-run --json`, the npm that runs `npm test`) what it would pack: every file under src/web/board/ is in it, nothing
-// under web/ or node_modules/ is.
+// under web/, node_modules/ or test/ is.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -23,5 +23,5 @@ test('4.5 #6: the package has every built board file and no board source', { ski
     .map((e) => path.relative(ROOT, path.join(e.parentPath, e.name)).split(path.sep).join('/'))
   assert.ok(built.includes('src/web/board/index.html'), 'the build is committed')
   for (const f of built) assert.ok(packed.has(f), `${f} is packed`)
-  assert.deepEqual([...packed].filter((p) => /^(web|node_modules)\//.test(p)), [], 'no board source and no dependency is packed')
+  assert.deepEqual([...packed].filter((p) => /^(web|node_modules|test)\//.test(p)), [], 'no board source, no dependency and no test is packed')
 })

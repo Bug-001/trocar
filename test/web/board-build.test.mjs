@@ -17,6 +17,8 @@ const tree = (dir) => fs.readdirSync(dir, { recursive: true, withFileTypes: true
 
 test('a rebuild of web/ equals the committed src/web/board/, file by file and byte by byte', { skip, timeout: 300_000 }, () => {
   const out = tmpDir('trocar-board-')
+  const web = path.join(ROOT, 'web')
+  const sources = tree(web)
   const vite = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js')
   assert.ok(fs.existsSync(vite), 'vite is installed (npm ci)')
   const r = spawnSync(process.execPath, [vite, 'build', '--configLoader', 'native', '--config', 'web/vite.config.mjs', '--outDir', out, '--emptyOutDir', '--logLevel', 'warn'],
@@ -25,4 +27,7 @@ test('a rebuild of web/ equals the committed src/web/board/, file by file and by
   const files = tree(BUILT)
   assert.deepEqual(tree(out), files, 'the same files')
   for (const f of files) assert.ok(fs.readFileSync(path.join(out, f)).equals(fs.readFileSync(path.join(BUILT, f))), `${f}: the same bytes`)
+  const here = Buffer.from(ROOT.replace(/[\\/]+$/, ''))
+  for (const f of files) assert.equal(fs.readFileSync(path.join(out, f)).includes(here), false, `${f} names the checkout's path`)
+  assert.deepEqual(tree(web), sources, 'the build leaves nothing beside its config')
 })
