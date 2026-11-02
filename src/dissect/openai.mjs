@@ -23,6 +23,7 @@ export const OPENAI_SECTIONS = [
 ];
 
 import { parsedRequestBody } from './request-body.mjs';
+import { endpointOf } from './endpoints.mjs';
 import { streamParts } from './sse-spans.mjs';
 
 // ── detection ───────────────────────────────────────────────────────────────────────────────
@@ -38,7 +39,8 @@ import { streamParts } from './sse-spans.mjs';
 // Requiring `instructions` would drop 100% of real OpenCode traffic. `input[]` alone is the
 // discriminator (Anthropic has no top-level `input[]`); `instructions` is optional corroboration.
 const headersOf = (rec) => (rec && (rec.request_headers || rec.req_headers)) || {};
-const epPath = (rec) => String((rec && rec.endpoint) || '').split('?')[0];
+// the wire the endpoint names by itself (the endpoint table, ./endpoints.mjs), or null
+const pathWire = (rec) => { const row = endpointOf(rec && rec.endpoint); return (row && row.wire) || null; };
 // the parsed request body, from either the D10 verbatim `req_body` string or a v0 `request` object — parsed once
 // per record for every reader (src/dissect/request-body.mjs).
 const bodyOf = (rec) => parsedRequestBody(rec);
@@ -48,7 +50,7 @@ const bodyOf = (rec) => parsedRequestBody(rec);
 function looksAnthropic(rec, body) {
   const h = headersOf(rec);
   if (h['anthropic-version'] || h['anthropic-beta']) return true;
-  if (/(^|\/)v1\/messages$/.test(epPath(rec))) return true;
+  if (pathWire(rec) === 'anthropic') return true;
   if (!body || typeof body !== 'object') return false;
   if (body.system !== undefined) return true;                       // Anthropic: top-level system (OpenAI puts it in messages[])
   const tools = Array.isArray(body.tools) ? body.tools : [];
@@ -62,7 +64,7 @@ function looksAnthropic(rec, body) {
 // Anthropic cannot produce (system/tool/developer roles, tool_calls, or the `function` tool envelope).
 function looksChat(rec, body) {
   if (!body || !Array.isArray(body.messages)) return false;
-  if (/(^|\/)chat\/completions$/.test(epPath(rec))) return true;
+  if (pathWire(rec) === 'openai-chat') return true;
   const msgs = body.messages;
   if (msgs.some((m) => m && (m.role === 'system' || m.role === 'tool' || m.role === 'developer'))) return true;
   if (msgs.some((m) => m && (Array.isArray(m.tool_calls) || m.tool_call_id !== undefined))) return true;
@@ -78,10 +80,10 @@ export function wireShape(rec) {
   const body = bodyOf(rec);
   if (looksAnthropic(rec, body)) return null;                 // never claim Anthropic wire
   if (Array.isArray(body && body.input)) return 'responses';  // shape first
-  if (/(^|\/)responses$/.test(epPath(rec))) return 'responses'; // corroboration (also covers an unparseable body)
+  if (pathWire(rec) === 'openai-responses') return 'responses'; // corroboration (also covers an unparseable body)
   // an unparseable body on the Chat path (e.g. a request the collector stored cut, #21): the path is all there
   // is, and the call must still be shown with its reason rather than as unrecognized traffic
-  if (body == null && /(^|\/)chat\/completions$/.test(epPath(rec))) return 'chat';
+  if (body == null && pathWire(rec) === 'openai-chat') return 'chat';
   if (looksChat(rec, body)) return 'chat';
   return null;
 }

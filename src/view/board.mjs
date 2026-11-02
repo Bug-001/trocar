@@ -6,13 +6,14 @@
 import { createAssembler, sessionIdOf, headersOf, respOf } from './assemble.mjs';
 import { stepOrder } from './analyze.mjs';
 import { harnessOf as harnessOfRecord, LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
+import { endpointClass } from '../dissect/endpoints.mjs';
 import { stampSynthKeys } from '../dissect/synth-key.mjs';
 import { isLogOnly, bodyRetentionOf, retentionLabelOf } from '../dissect/capture-labels.mjs';
 
 // tolerate both envelope shapes: demo v0 `request_headers` + product D10 `req_headers` (Codex).
 const anyHeaders = (recs) => headersOf(recs.find((r) => r.request_headers || r.req_headers));
 
-const isProbe = (r) => /count_tokens/.test(r.endpoint || '');
+const isProbe = (r) => endpointClass(r.endpoint) === 'token-count';
 // A session record that is neither real inference nor a count_tokens probe — the sharder's `other`
 // stream. Kept exactly complementary to is_llm_call/isProbe so calls+probes+other = the session total.
 const isOther = (r) => !r.is_llm_call && !isProbe(r);

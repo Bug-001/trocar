@@ -9,6 +9,7 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import { createSynthAssigner } from '../dissect/synth-key.mjs';
 import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
+import { endpointClass } from '../dissect/endpoints.mjs';
 import { segmentFiles, warmSegmentIndex, problemEntry, recordsId, grownFrom } from './index-build.mjs';
 import { trocarHome } from '../paths.mjs';
 import { warmCache, fsTag } from './warm.mjs';
@@ -237,7 +238,7 @@ function addGroups(g, rows) {
   return g;
 }
 
-const isProbe = (r) => /count_tokens/.test(r.path || '');
+const isProbe = (r) => endpointClass(r.path) === 'token-count';
 
 /** Which index rows are a MODEL CALL: the one rule every reader counts calls with (sessionFactsOf below,
  *  `overview`'s usage and the usage sidecar's fill), never a second copy of it. */

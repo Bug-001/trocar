@@ -6,7 +6,8 @@
 //     agent is unknown (id null). Only legacy records without proc use the UA, flagged inferred:true.
 //   • never splits or joins a session by pid or connection (3.4 关键区分): proc.pid / flow_id / dst unread.
 //   • proc.agent spellings: the 3.2 ids and Plan 3a's descriptor names are both accepted (gate G2).
-// Leaf module (0.1 §2): imports nothing.
+// Leaf module (0.1 §2): imports only the endpoint table.
+import { endpointOf } from './endpoints.mjs';
 
 const H = (name, confidence = 'high') => ({ from: 'header', name, confidence });
 const B = (path, confidence = 'medium') => ({ from: 'body', name: path.join('.'), path, confidence });
@@ -111,10 +112,9 @@ const BY_AGENT = new Map(HARNESSES.flatMap((h) => h.agents.map((a) => [a, h])));
 // otherwise the wire dialect actually observed, or null. Never inferred from a harness name.
 export const LEGACY_PROVIDER = Object.freeze({ cc: 'anthropic', codex: 'openai', 'deepseek-cli': 'deepseek' });
 export function wireProviderOfEndpoint(endpoint) {
-  const ep = String(endpoint || '').split('?')[0];
-  if (/(^|\/)(responses|chat\/completions)$/.test(ep)) return 'openai';
-  if (/(^|\/)v1\/messages$/.test(ep)) return 'anthropic'; // D3: a bare /messages (a gateway's own route) is no wire
-  return null;
+  const row = endpointOf(endpoint); // the endpoint table (./endpoints.mjs); D3: a bare /messages (a gateway's own route) is no wire
+  const wire = (row && row.wire) || '';
+  return wire === 'anthropic' ? 'anthropic' : wire.startsWith('openai-') ? 'openai' : null;
 }
 
 export function headerOf(rec, name) {
