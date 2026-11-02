@@ -139,7 +139,7 @@ test('a request key shows the value the server shipped; without one, its length'
 // 2.6 §A: a failed call's raw reason is a tech detail; the visible reply line carries no server text
 test('a failed call\'s reason appears only inside the reply\'s tech details', () => {
   const reason = 'ERR-zq81-upstream-boom'
-  for (const o of [{ error: reason }, { error: { message: reason } }, { status: 503, errMsg: reason }]) {
+  for (const o of [{ error: reason }, { error: { message: reason } }, { status: 503, error: true, errMsg: reason }]) {
     const h = draw({ row: o })
     assert.ok(h.includes(reason), 'the reason is kept')
     for (let i = h.indexOf(reason); i > -1; i = h.indexOf(reason, i + 1)) {

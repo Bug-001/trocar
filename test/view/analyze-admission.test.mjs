@@ -95,3 +95,20 @@ test('BUG1: admitting failures does not corrupt derived token stats', fixtureGat
   assert.equal(stats.totalIn, sumIn, 'totalIn must equal the sum over successful calls');
   assert.equal(stats.totalOut, sumOut, 'totalOut must equal the sum over successful calls');
 });
+
+// One failed rule (3.5 §访问模式 ②, failedOf): along the status × transport axes, a step is failed exactly when failedOf says so,
+// and it carries an errMsg exactly when it failed — a 2xx/3xx other than 200 is neither failed nor explained as one.
+test('failed and errMsg follow failedOf along status × transport', async () => {
+  const { failedOf } = await import('../../src/dissect/endpoints.mjs');
+  const base = { id: 'r1', is_llm_call: true, ts_request: '2026-07-19T00:00:00Z',
+    request: { model: 'claude-opus-4-8', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] },
+    response: { status: 200, body: { usage: { input_tokens: 10, output_tokens: 5 }, content: [{ type: 'text', text: 'ok' }] } } };
+  for (const status of [undefined, 200, 201, 204, 302, 399, 400, 401, 429, 500, 529]) for (const transport of [undefined, 'ws']) {
+    const rec = structuredClone(base);
+    if (status === undefined) delete rec.response.status; else rec.response.status = status;
+    if (transport) rec.transport = transport;
+    const [s] = analyze([rec]).steps, want = failedOf({ status, ws: transport === 'ws' });
+    assert.equal(!!s.error, want, `status ${status} ${transport || 'http'}: failed`);
+    assert.equal(!!s.errMsg, want, `status ${status} ${transport || 'http'}: errMsg present iff failed (${s.errMsg})`);
+  }
+});

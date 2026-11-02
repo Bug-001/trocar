@@ -390,7 +390,8 @@ export function callFacts(r) {
     status, failed: failedCall(r),
     reqIncomplete, wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
     errMsg: r._unparsed ? unparsedErrMsg(reqIncomplete)
-      : (rs.error?.message || (status != null && status !== 200 ? `HTTP ${status}` : (r.error ? String(r.error.message || r.error) : null))),
+      : (rs.error?.message || (r.error ? String(r.error.message || r.error) : null)
+        || (!failedCall(r) ? null : status == null ? 'no HTTP status' : status >= 400 ? `HTTP ${status}` : null)),
     ctx: mapUsage('anthropic', u || {}).total_input,
     usage: u,
     preamble: hasCompactionPreamble(req.messages),
@@ -464,8 +465,8 @@ export const unparsedErrMsg = (reqIncomplete) => (reqIncomplete
   ? `unrenderable: req_body could not be parsed — ${reqIncomplete.text}`
   : 'unrenderable: req_body could not be parsed (truncated / corrupt capture)')
 // The call-row failed rule (3.5 §访问模式 ②, endpoints.mjs failedOf): an error key, an unparsed sentinel (`_unparsed` = already
-// stubbed by admission), or an HTTP status that is absent or ≥ 400.
-const failedCall = (r) => failedOf({ status: respOf(r)?.status, error: !!r.error || !!r._unparsed || isUnparsed(r) })
+// stubbed by admission), or an HTTP status that is absent or ≥ 400 on a call that is not a WebSocket logical call.
+const failedCall = (r) => failedOf({ status: respOf(r)?.status, ws: r.transport === 'ws', error: !!r.error || !!r._unparsed || isUnparsed(r) })
 
 // analyze()'s step order (ts_request, then id): every assembler folds a session in it, so a session's global step index is one sort
 // whichever wires it mixes.

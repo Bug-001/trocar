@@ -14,7 +14,7 @@ const ROW = [3, 15, 3.75, 0.3] // [input, output, cache-write, cache-read] $ / M
 test('every state of the predicate, on constructed steps', () => {
   const cases = [
     ['failed', step('append', null, { error: true })],
-    ['failed', step('append', U(0, 0, 0), { status: 529 })],
+    ['failed', step('append', U(0, 0, 0), { status: 529, error: true })],
     ['no-usage', step('append', null)],
     ['no-usage', step('append', {}, { norm: { usage: {} } })], // before S2: the server sent zeros and an empty raw usage
     ['first', step('first-call', U(0, 100, 0))],
@@ -43,7 +43,7 @@ test('isBreak is exactly the four break states; failed, no-usage, first, reused 
 test('the order of the rules: the first match wins', () => {
   // failed beats everything, including a ground-truth claim and a changed prefix
   assert.equal(cacheState(step('content-changed', U(0, 0, 0), { gt: 'provider-contradiction', error: true })).state, 'failed')
-  assert.equal(cacheState(step('append', U(0, 0, 0), { gt: 'provider-contradiction', status: 500 })).state, 'failed')
+  assert.equal(cacheState(step('append', U(0, 0, 0), { gt: 'provider-contradiction', status: 500, error: true })).state, 'failed')
   // no usage beats first, ground truth and a changed cause
   assert.equal(cacheState(step('first-call', null)).state, 'no-usage'); assert.equal(cacheState(step('content-changed', null, { gt: 'ttl-rebuild' })).state, 'no-usage')
   // first beats low hit (a first call has nothing to reuse: its cold start is not a finding)
@@ -75,7 +75,7 @@ test('usageOf: usage:null and an empty raw usage are none; create:null stays nul
 
 // ── the 缓存对比步 ──────────────────────────────────────────────────────────────────────────────────────────────────────
 test('refOf: the nearest earlier call that did not fail; null when there is none', () => {
-  const ok = step('append'), bad = step('append', null, { error: true }), http = step('append', null, { status: 429 })
+  const ok = step('append'), bad = step('append', null, { error: true }), http = step('append', null, { status: 429, error: true })
   const calls = [ok, bad, http, step('content-changed')]
   assert.equal(refOf(calls, 3), ok, 'failed calls never established a prefix'); assert.equal(refOf(calls, 1), ok); assert.equal(refOf(calls, 0), null)
   assert.equal(refOf([bad, ok], 1), null)
@@ -136,8 +136,9 @@ test('sessionTotals reports the first failed call of any lane as {lane, i}, toke
   assert.equal(t2.failed, 1); assert.equal(t2.firstFailed.i, 1)
 })
 
-test('isFailed: an error, or a status that is not 200; no status is not a failure', () => {
-  assert.equal(isFailed({ error: true }), true); assert.equal(isFailed({ status: 500 }), true); assert.equal(isFailed({ status: 200 }), false)
-  assert.equal(isFailed({ status: null, error: false }), false); assert.equal(isFailed(null), false)
+// the row's `error` is already the call-row failed verdict (failedOf); the board never re-derives it from the status
+test('isFailed: exactly the row error, whatever the status', () => {
+  for (const status of [null, 200, 201, 304, 429, 500]) for (const error of [false, true]) assert.equal(isFailed({ status, error }), error, `status ${status} error ${error}`)
+  assert.equal(isFailed(null), false)
 })
 
