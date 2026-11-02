@@ -41,15 +41,15 @@ test('every harness the collector loads has a read-side row naming it in `agents
   assert.deepEqual(missing, [])
 })
 
-// every '…' "…" `…` literal (and an unquoted { key: }) under web/legacy, outside the two homes of harness ids
+// every '…' "…" `…` literal (and an unquoted { key: }) under web/legacy and web/src, outside the two homes of harness ids
 const files = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
   const p = path.join(dir, d.name)
   if (d.isDirectory()) return files(p)
-  return /\.(mjs|html|css)$/.test(d.name) ? [p] : []
+  return /(?<!\.test)\.(mjs|ts|tsx|html|css)$/.test(d.name) ? [p] : [] // code, not component tests
 })
 test('no string literal outside core/chips.mjs and assets/harness/ equals a harness id', () => {
   const bad = []
-  for (const f of [...files(V2), path.join(V2, '..', 'index.html')]) {
+  for (const f of [...files(V2), ...files(path.join(V2, '..', 'src')), path.join(V2, '..', 'index.html')]) { // the legacy tree and the React shell
     const rel = path.relative(V2, f)
     if (rel === path.join('core', 'chips.mjs')) continue
     const src = fs.readFileSync(f, 'utf8')
