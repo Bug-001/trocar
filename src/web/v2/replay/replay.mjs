@@ -393,7 +393,7 @@ function openDesk(ctx, route0) {
   // 跟随最新 turned on (f, the chip): the playhead goes to the newest call and its window lands on the reply; the poll reads now
   function followOn() {
     const N = s.anchor ? s.anchor.calls.length : 0
-    if (N) setPlayhead(N - 1, true, true); else { s.follow = true; s.followLanding = true }
+    if (N) setPlayhead(N - 1, true, true); else { s.follow = true; s.followLanding = true; s.initialStep = null } // a named step still on its way no longer lands
     s.follow = true
     renderHeader()
     poll(true)
@@ -802,7 +802,8 @@ function openDesk(ctx, route0) {
   function update(route) {
     if (host && !root.isConnected) host.replaceChildren(root) // something wrote over the screen: hang the desk back
     if (!hasStep(route)) { if (route.params.call == null && !s.follow) followOn(); return }
-    if (!s.anchor) { s.initialStep = stepParam(route.params.step).step; return }
+    // no lane yet (a first open, a session still being extracted): the step waits to land, and follow is off from now (1.2:91)
+    if (!s.anchor) { s.initialStep = stepParam(route.params.step).step; if (s.follow) { s.follow = false; renderHeader() } return }
     // a named step pins it with follow off; the move is not the reader's, so landing on the newest call does not turn follow on
     const p = stepParam(route.params.step, s.anchor.count ?? s.anchor.calls.length)
     if (s.playRid != null && p.step === shownStep() && !p.rewrite && !s.follow) return
