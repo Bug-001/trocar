@@ -37,7 +37,7 @@ test('CJK scanner: a planted CJK string literal is caught, a CJK comment is not'
 })
 
 test('no CJK in the board\'s code, html or css content (D58①)', () => {
-  const files = [...walk(V2, '.mjs'), path.join(V2, 'index.html'), ...walk(V2, '.css')]
+  const files = [...walk(V2, '.mjs'), path.join(REPO, 'web', 'index.html'), ...walk(V2, '.css')]
   const hits = files.flatMap((f) => cjkIn(f, fs.readFileSync(f, 'utf8')))
   assert.equal(hits.length, 0, `CJK in user text:\n${report(hits)}`)
 })

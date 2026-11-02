@@ -44,12 +44,12 @@ test('every harness the collector loads has a read-side row naming it in `agents
 // every '…' "…" `…` literal (and an unquoted { key: }) under web/legacy, outside the two homes of harness ids
 const files = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
   const p = path.join(dir, d.name)
-  if (d.isDirectory()) return (dir.endsWith(path.join('web', 'legacy')) && d.name === 'assets') ? [] : files(p)
+  if (d.isDirectory()) return files(p)
   return /\.(mjs|html|css)$/.test(d.name) ? [p] : []
 })
 test('no string literal outside core/chips.mjs and assets/harness/ equals a harness id', () => {
   const bad = []
-  for (const f of files(V2)) {
+  for (const f of [...files(V2), path.join(V2, '..', 'index.html')]) {
     const rel = path.relative(V2, f)
     if (rel === path.join('core', 'chips.mjs')) continue
     const src = fs.readFileSync(f, 'utf8')
@@ -60,7 +60,7 @@ test('no string literal outside core/chips.mjs and assets/harness/ equals a harn
 })
 
 test('every chip row has its icon file', () => {
-  for (const id of HARNESS_ORDER) assert.ok(fs.existsSync(path.join(V2, 'assets', 'harness', CHIP[id].icon)), `${id}: ${CHIP[id].icon}`)
+  for (const id of HARNESS_ORDER) assert.ok(fs.existsSync(path.join(V2, '..', 'public', 'assets', 'harness', CHIP[id].icon)), `${id}: ${CHIP[id].icon}`)
 })
 
 test('labels/ and core/classes.mjs key no harness-defined code (their words arrive with the data, S15)', () => {

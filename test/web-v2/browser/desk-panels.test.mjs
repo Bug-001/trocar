@@ -6,6 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, serveWorld } from './harness.mjs'
 import { world } from '../desk-world.mjs'
+import { serialize } from '../../../web/legacy/core/units.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -42,12 +43,12 @@ test('2.3 #31: a step adds, removes or changes at most 64 nodes in the resource 
       new MutationObserver((rs) => { for (const r of rs) if (r.type === 'childList') { for (const n of [...r.addedNodes, ...r.removedNodes]) window.__mut += size(n) } else window.__mut += 1 })
         .observe(document.querySelector('#resexp'), { childList: true, subtree: true, attributes: true, characterData: true })
     })
-    const direct = () => page.evaluate(async () => {
-      const el = document.querySelector('#resexp'), { serialize } = await import(new URL('./core/units.mjs', document.baseURI).href)
-      const off = document.createElement('div')
-      off.innerHTML = serialize(el.__units)
+    // the panel's units are plain data: serialized here by the same module, then parsed by the page beside what it drew
+    const direct = async () => page.evaluate((html) => {
+      const el = document.querySelector('#resexp'), off = document.createElement('div')
+      off.innerHTML = html
       return off.innerHTML === el.innerHTML
-    })
+    }, serialize(await page.evaluate(() => document.querySelector('#resexp').__units)))
     let at = mid, worst = 0
     for (const [key, d] of [['ArrowLeft', -1], ['ArrowRight', 1]]) {
       for (let i = 0; i < 20; i++) {
