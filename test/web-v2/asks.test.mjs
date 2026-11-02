@@ -4,11 +4,11 @@
 // the outline's 「第 N 步起」 pairs with held lane events only (2.5:16). Held pages here start mid-lane (`prev` set).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { stepBarHtml } from '../../src/web/v2/replay/stepbar.mjs'
-import { renderSaw } from '../../src/web/v2/replay/timeline.mjs'
-import { outlineHtml } from '../../src/web/v2/replay/outline.mjs'
-import { applyLane } from '../../src/web/v2/replay/model.mjs'
-import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
+import { stepBarHtml } from '../../web/legacy/replay/stepbar.mjs'
+import { renderSaw } from '../../web/legacy/replay/timeline.mjs'
+import { outlineHtml } from '../../web/legacy/replay/outline.mjs'
+import { applyLane } from '../../web/legacy/replay/model.mjs'
+import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { deskOf } from './desk-world.mjs'
 
 const R = (i) => `R0-${i}`

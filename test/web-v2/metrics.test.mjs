@@ -2,8 +2,8 @@
 // Constructed steps for every rule; the buckets, the session totals and the server's own steps are in metrics-totals.test.mjs.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { cacheState, isBreak, isFailed, refOf, breakSteps, breakCost, usageOf, hitRatio, sessionTotals, CACHE_STATES, QUIET_CAUSES, priceMatch } from '../../src/web/v2/core/metrics.mjs'
-import * as analysis from '../../src/web/v2/replay/analysis.mjs'
+import { cacheState, isBreak, isFailed, refOf, breakSteps, breakCost, usageOf, hitRatio, sessionTotals, CACHE_STATES, QUIET_CAUSES, priceMatch } from '../../web/legacy/core/metrics.mjs'
+import * as analysis from '../../web/legacy/replay/analysis.mjs'
 
 const U = (read, create, fresh, out = 1) => ({ read, create, fresh, out })
 // a step: cause, usage, and overrides (gt, error, status, usage:null …)

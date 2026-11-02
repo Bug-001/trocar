@@ -4,9 +4,9 @@
 // the same window as a desk read whole.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
-import { ctxWindowUnits, swapGroup } from '../../src/web/v2/replay/ctxwin.mjs'
-import { patchUnits, applyOps } from '../../src/web/v2/core/units.mjs'
+import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
+import { ctxWindowUnits, swapGroup } from '../../web/legacy/replay/ctxwin.mjs'
+import { patchUnits, applyOps } from '../../web/legacy/core/units.mjs'
 import { world, deskFrom } from './desk-world.mjs'
 
 const SEEDS = Array.from({ length: 24 }, (_, i) => i + 1)

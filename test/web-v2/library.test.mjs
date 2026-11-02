@@ -2,12 +2,12 @@
 // face, or constructed session objects in the C.5 shape. Marks are asserted by kind (data-mark), never by their words.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseFilters, filtersToParams, applyFilters, listEntries, captionFacts, listSignature, capShotMaker, emptyBoardState, filteredAgentLine, agentMenuModel, flattenSessions, loadSessions, freshSessions } from '../../src/web/v2/library/logic.mjs'
-import { rowHtml, captionHtml, readFailHtml, filteredEmptyHtml, SKELETON } from '../../src/web/v2/library/library.mjs'
-import { harnessKey, harnessName, isKnownHarness } from '../../src/web/v2/core/chips.mjs'
-import { captureVerdict, capHealthPatch } from '../../src/web/v2/core/capture-verdict.mjs'
-import { esc } from '../../src/web/v2/core/fmt.mjs'
-import * as W from '../../src/web/v2/labels/library.mjs'
+import { parseFilters, filtersToParams, applyFilters, listEntries, captionFacts, listSignature, capShotMaker, emptyBoardState, filteredAgentLine, agentMenuModel, flattenSessions, loadSessions, freshSessions } from '../../web/legacy/library/logic.mjs'
+import { rowHtml, captionHtml, readFailHtml, filteredEmptyHtml, SKELETON } from '../../web/legacy/library/library.mjs'
+import { harnessKey, harnessName, isKnownHarness } from '../../web/legacy/core/chips.mjs'
+import { captureVerdict, capHealthPatch } from '../../web/legacy/core/capture-verdict.mjs'
+import { esc } from '../../web/legacy/core/fmt.mjs'
+import * as W from '../../web/legacy/labels/library.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
 const NOW = new Date(2026, 9, 20, 12, 0, 0).getTime()

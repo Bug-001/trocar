@@ -3,7 +3,7 @@
 // Its own file: the latch is module state, and the K-30 test in http.test.mjs closes it for that process.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { early, get, onForbidden } from '../../src/web/v2/core/http.mjs'
+import { early, get, onForbidden } from '../../web/legacy/core/http.mjs'
 
 async function withFetch(answer, fn) {
   const real = globalThis.fetch, calls = []

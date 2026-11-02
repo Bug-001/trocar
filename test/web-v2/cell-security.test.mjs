@@ -3,8 +3,8 @@
 // href, `style` only as `--cl:<digits>`, and no attribute value or text run that leaves its quotes or its tag.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { renderKind, jsonNodeHtml } from '../../src/web/v2/replay/kinds.mjs'
-import { layout } from '../../src/web/v2/replay/jsonlay.mjs'
+import { renderKind, jsonNodeHtml } from '../../web/legacy/replay/kinds.mjs'
+import { layout } from '../../web/legacy/replay/jsonlay.mjs'
 
 const ELEMENTS = new Set(['pre', 'code', 'span', 'div', 'dl', 'dt', 'dd', 'table', 'tr', 'td', 'th', 'details', 'summary', 'img', 'button'])
 // the allowed cell attributes (RFC 2.3 §两种模式), plus `open`: the boolean state of the allowed <details>

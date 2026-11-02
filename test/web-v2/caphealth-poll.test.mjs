@@ -3,7 +3,7 @@
 import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { pollCaptureHealth, captureVerdict, CAPH_MS } from '../../src/web/v2/core/capture-verdict.mjs'
+import { pollCaptureHealth, captureVerdict, CAPH_MS } from '../../web/legacy/core/capture-verdict.mjs'
 
 // the period, read off 4.4's live-poll table (one fact, one place)
 const PERIOD = (() => {
