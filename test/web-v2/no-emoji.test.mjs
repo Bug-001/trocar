@@ -8,7 +8,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const V2 = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'legacy')
-const FILES = fs.readdirSync(V2, { recursive: true }).filter((p) => /\.(mjs|css|html)$/.test(p)).map((p) => path.join(V2, p)).concat(path.join(V2, '..', 'index.html'))
+const WEB = path.join(V2, '..') // all of web/: the legacy tree, the React shell (web/src) and index.html
+const FILES = fs.readdirSync(WEB, { recursive: true }).filter((p) => /(?<!\.test)\.(mjs|ts|tsx|css|html)$/.test(p)).map((p) => path.join(WEB, p))
 const PICTOGRAPHIC = /\p{Extended_Pictographic}/u
 
 function emojiViolations(rel, text) {
@@ -25,7 +26,7 @@ test('the scanner is not vacuous: it catches a planted emoji, in a string and in
 })
 
 test('no .mjs / .css / .html under web/legacy carries an emoji character', () => {
-  assert.ok(FILES.some((f) => f.endsWith('main.mjs')), 'the walk reaches the tree')
+  assert.ok(FILES.some((f) => f.endsWith('main.tsx')), 'the walk reaches the tree')
   const bad = FILES.flatMap((f) => emojiViolations(path.relative(V2, f).split(path.sep).join('/'), fs.readFileSync(f, 'utf8')))
   assert.deepEqual(bad, [])
 })
