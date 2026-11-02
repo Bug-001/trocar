@@ -8,6 +8,7 @@
 // computed bytes past OVERVIEW_USAGE_BYTES: from there nothing more is computed, in this session or a later one.
 // `coverage` says how many sessions and calls it read and why it stopped (invariant 4). With `later` (the query worker),
 // every missing segment is filled after the answer is written.
+import { failedOf } from '../../dissect/endpoints.mjs';
 import { recordsAt } from '../records.mjs';
 import { readUsage, fillUsage, callFacts, takeFillProblem } from '../usage.mjs';
 import { asOf, indexRows, isModelCall, sessionFactsOf, sessionGroups } from '../rows.mjs';
@@ -38,7 +39,7 @@ export async function run({ home, fs, now, params: p, errors, later = null, prog
     let wire = null;
     for (const r of rows) {
       calls.total++;
-      if (r.is_llm && (r.status == null || r.status >= 400)) calls.failed++;
+      if (r.is_llm && failedOf({ status: r.status, ws: r.ws })) calls.failed++;
       wire = add(add(wire, r.sent_bytes), r.received_bytes);
       bytes.stored += r.stored_bytes || 0;
     }

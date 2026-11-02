@@ -781,8 +781,8 @@ function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int
       comp: compOf(lastOf(S), list, B), usage: x.usage, cacheBreak: brk, gt: brk.gt,
     };
     S.last = k; S.comp = call.comp;
-    // a call that failed never established a cache prefix; one whose request was not stored does (with no blocks)
-    if (!(x.error || (x.status != null && x.status !== 200))) S.base = k;
+    // a call that failed (x.error: the one verdict, extract.mjs callX) never established a cache prefix; one whose request was not stored does (with no blocks)
+    if (!x.error) S.base = k;
     // the compaction events the board's outline lists, carrying the step's inference marker with them (invariant 4)
     const ev = call.compaction ? [{ type: 'compaction', step: null, streamId: kind, from: call.evictedFrom, to: call.evictedTo,
       inferred: call.compactionInferred, confidence: call.compactionConfidence, basis: call.compactionBasis }] : [];

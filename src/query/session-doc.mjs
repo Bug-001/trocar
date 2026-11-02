@@ -62,7 +62,7 @@ const EVENT_FLAG = { user: FLAG.user, summarize: FLAG.summarize, spawn: FLAG.spa
 function flagsOf(r, events) {
   let f = 0;
   for (const e of events) f |= e.type === 'compaction' ? FLAG.compaction | (e.inferred ? FLAG.inferred : 0) : EVENT_FLAG[e.type] || 0;
-  const b = r.cacheBreak, failed = !!r.error || (r.status != null && r.status !== 200);
+  const b = r.cacheBreak, failed = !!r.error;
   if (b && b.cause && !b.firstCall && !QUIET.has(b.cause)) f |= FLAG.cacheBreak;
   if (failed) f |= FLAG.failed; else if (r.usage == null) f |= FLAG.noUsage;
   return f;

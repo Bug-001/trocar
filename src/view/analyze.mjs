@@ -19,6 +19,7 @@ import { dissectBlocks, sysLabel, parseBashReads } from '../dissect/cc.mjs'
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'
 import { hintsOf } from '../dissect/harnesses.mjs'
 import { sharesBody } from '../dissect/request-body.mjs'
+import { failedOf } from '../dissect/endpoints.mjs'
 import { compareStep } from './step-order.mjs'
 import { compactionVerdict, hasCompactionPreamble } from '../identity/session-identity.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
@@ -464,14 +465,9 @@ const isUnparsed = (r) => !(r.request && Array.isArray(r.request.messages))
 export const unparsedErrMsg = (reqIncomplete) => (reqIncomplete
   ? `unrenderable: req_body could not be parsed — ${reqIncomplete.text}`
   : 'unrenderable: req_body could not be parsed (truncated / corrupt capture)')
-// A call is "failed" if it carries an error key, a non-200 status, or is an unparsed sentinel.
-// (Status-less records — an in-flight capture with no response yet — are NOT failures.)
-function failedCall(r) {
-  if (r.error) return true
-  if (r._unparsed || isUnparsed(r)) return true // `_unparsed` = already stubbed by admission
-  const st = respOf(r)?.status
-  return st != null && st !== 200
-}
+// The call-row failed rule (3.5 §访问模式 ②, endpoints.mjs failedOf): an error key, an unparsed sentinel (`_unparsed` = already
+// stubbed by admission), or an HTTP status that is absent or ≥ 400.
+const failedCall = (r) => failedOf({ status: respOf(r)?.status, error: !!r.error || !!r._unparsed || isUnparsed(r) })
 
 // analyze()'s step order (ts_request, then id): every assembler folds a session in it, so a session's global step index is one sort
 // whichever wires it mixes.

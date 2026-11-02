@@ -34,3 +34,10 @@ export const isLlmCall = (endpoint) => endpointClass(endpoint) === 'llm'
 const pathsOf = (cls) => Object.freeze(ENDPOINTS.filter((r) => r.class === cls).map((r) => r.path))
 export const LLM_ENDPOINT_PATHS = pathsOf('llm')
 export const TOKEN_COUNT_ENDPOINT_PATHS = pathsOf('token-count')
+
+/**
+ * THE failed rule (3.5 §访问模式, both rules): a call failed when it errored, or — unless it is a WebSocket logical call, which
+ * has no HTTP status and fails inside its reply — when its HTTP status is absent or ≥ 400. The index row passes only
+ * {status, ws}; the call row adds `error` = the record's error, an unparsed request, or the dissector's failed(norm, rec).
+ */
+export const failedOf = ({ status, ws = false, error = false }) => !!error || (!ws && (status == null || status >= 400))
