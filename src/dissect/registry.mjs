@@ -1,5 +1,5 @@
 // src/dissect/registry.mjs — which WIRE FORMAT a record speaks (D37 ①: from the endpoint and the body,
-// recorded per call; never from the UA or the harness). The board (src/view/assemble.mjs) and the ETL
+// recorded per call; never from the UA or the harness). The board (src/view/extract.mjs) and the ETL
 // adapters both dispatch through this, so the two readers cannot disagree about what a record is.
 // Leaf module.
 import { detect as anthropicShape, serverEdited, CC_SECTIONS } from './cc.mjs';

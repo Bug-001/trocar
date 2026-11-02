@@ -393,7 +393,7 @@ export function ctxTokens(norm) {
   return u.input_tokens || u.prompt_tokens || 0;
 }
 
-// ── D25 dissector objects: what the shared board assembler (src/view/assemble.mjs) calls, so it never
+// ── D25 dissector objects: what the board's extraction and reduction (src/view/extract.mjs, src/view/reduce.mjs) call, so they never
 // branches on a wire. Registered by wire format in src/dissect/registry.mjs (`boardDissectorFor`).
 // `provider` is the pre-D37 board label (analyzed.provider), kept for readers of old payloads; `blockKeys`
 // are the request's top-level keys that become context blocks (everything else is a non-block key).

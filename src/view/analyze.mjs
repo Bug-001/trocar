@@ -494,8 +494,7 @@ export class OrderBound extends Error {}
 
 // createAnalyzer() → { push(rec, gi) → step | null, laneOf(step), drop(lane), ask(lane, text), calls(), finish() → {streams, steps, stats, lanes} }: a
 // session folded ONE record at a time (3.5 §内存有界). push() segments the call into its lane and derives the lane's events and
-// resources from it right away, so the caller may let go of the record's body once push() returned (src/view/assemble.mjs keeps
-// only the call's meta). What the fold remembers between records is per lane and small: the message count and context size of the
+// resources from it right away, so the caller may let go of the record's body once push() returned. What the fold remembers between records is per lane and small: the message count and context size of the
 // lane's last call, its resource and seen-file ledgers, its tool names by id, and a subagent's first user text (for spawn linking).
 // Records go in in step order WITHIN EACH LANE; lanes may interleave in any order (a call is written when it ends, so a subagent's
 // call that ended late arrives after calls that started after it). Nothing a lane derives reads another lane, and what names the
@@ -798,7 +797,7 @@ export function createAnalyzer({ keep = true, from = null } = {}) {
       const resources = EVENT_ONLY_KINDS.has(s.kind) ? [] : [...st.resMap.values()].map((r) => ({ ...r,
         segments: r.segments.map((g) => ({ enter: gi(g.enter), evict: gi(g.evict) })), loads: r.loads.map((l) => ({ ...l, step: gi(l.step) })) }))
       const out = { id, kind: s.kind, calls: [...s.calls], events, resources, parent: b ? sid.get(b.streamId) : null, spawnArg: b ? b.arg : null,
-        // a spawned lane says its spawn's argument; the rest, their first prompt, said by tellApart once every wire's lanes are in (4.4 §看板 v2 需要的补充)
+        // a spawned lane says its spawn's argument; the rest, their first prompt, said by the reduction (src/view/reduce.mjs, blockmeta.mjs departer) once every wire's lanes are in (4.4 §看板 v2 需要的补充)
         ...(b ? { task: b.arg || taskOf(st.ask) } : { task: null, [HEAD]: st.ask ?? null }) }
       if (!EVENT_ONLY_KINDS.has(s.kind)) {
         // "only seen" = matched paths minus anything actually opened. Dedupe absolute-vs-relative
@@ -947,7 +946,7 @@ const BLK_KEY_CAP = 4096
 // A block OBJECT's hash is also kept by the object itself (a WeakMap: a stitched context hands the same parsed block to every call of
 // its chain, and the text would be built again for each); the per-lane text memo stays for the contents that arrive as new objects.
 // A memo's `null` is a miss, as `undefined` is: the fold's lane memo answers `null` for a lane with no baseline yet
-// (src/view/assemble.mjs: `keys.get(t) ?? (was && was.get(t))`), and a key must be the block's hash, whichever fold asked first.
+// (`keys.get(t) ?? (was && was.get(t))`), and a key must be the block's hash, whichever fold asked first.
 const keyOfBlock = new WeakMap()
 const blkKey = (prefix, b, memo) => {
   const obj = b && typeof b === 'object'
@@ -1062,8 +1061,8 @@ function canonJSON(v) {
   return v
 }
 // a flat block's canonical text — for byte-level divergence localization within the first diverging block,
-// and the verbatim byte source for the D17④ prefix SHA-256 (exported; used by the server-side assembler).
-// Memo by the parsed source object, as blockBytes (src/view/blockmeta.mjs): prefixChain asks it of every block of every call.
+// and the verbatim byte source for the D17④ prefix SHA-256 (exported; src/view/extract.mjs fhOf hashes it).
+// Memo by the parsed source object, as blockBytes (src/view/blockmeta.mjs): fhOf asks it of every block of every call.
 const textOfSrc = new WeakMap()
 export function flatBlockText(b) {
   const src = b.sec === 'tools' ? b.src : b.sec === 'system' ? null : b.block

@@ -1,5 +1,5 @@
 // src/dissect/cc-spans.mjs — the D19 verbatim byte span of every block of an Anthropic-wire request.
-// Read by the board (src/view/assemble.mjs, src/view/extract.mjs) to mint each block's text_ref locator
+// Read by the board (src/view/extract.mjs) to mint each block's text_ref locator
 // instead of shipping its body. The block walk itself is the CC dissector's (./cc.mjs dissectBlocks), so
 // span[i] belongs to the same block as linearContext()[i]. Leaf module (0.1: src/dissect imports no other src).
 import { scanJson } from './json-scan.mjs';

@@ -40,7 +40,7 @@ const canonicalJson = (v) => JSON.stringify(v, (k, x) => (x && typeof x === 'obj
   ? Object.fromEntries(Object.keys(x).sort().map((key) => [key, x[key]])) : x));
 /** The id of a block with no span: 'u' 0x1F sec 0x1F role 0x1F its canonical JSON. */
 export const unaddressableBid = (sec, role, value) => b64('u' + SEP + sec + SEP + role + SEP + (canonicalJson(value) ?? 'null'));
-/** fh: sha256 hex of the block's length-prefixed frame (the frame prefixChain hashes; cache_control is not in it). */
+/** fh: sha256 hex of the block's length-prefixed frame (cache_control is not in it). */
 export const fhOf = (b) => { const t = flatBlockText(b); return createHash('sha256').update(String(t.length) + ':' + t, 'utf8').digest('hex'); };
 const CC = '"cache_control"';
 /**
@@ -635,7 +635,7 @@ export function hydrateForBoard(r, ctx = null) {
 }
 
 // Session key per harness (RFC 3.4 table, D37): read from the ONE table the ETL and sharder also use; else the
-// synthesized key board.groupSessions stamped on a keyless Hermes / Kimi call (3.4 合成键, gate G11).
+// synthesized key extractMembers stamped on a keyless Hermes / Kimi call (3.4 合成键, gate G11).
 export function sessionIdOf(rec) {
   return sessionKeyOf(rec).key ?? (rec && rec._synthKey) ?? null;
 }

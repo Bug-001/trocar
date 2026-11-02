@@ -162,8 +162,8 @@ export function serverEdited(rec) {
 }
 
 // D37 ① / 3.1:23 — the Anthropic Messages WIRE, read from the endpoint, the wire-protocol headers and the
-// body shape. Never from the UA or a harness session header: those name a harness, not a wire. (Moved
-// from src/view/assemble.mjs `looksCC`, which used both and so claimed any Claude-UA traffic.)
+// body shape. Never from the UA or a harness session header: those name a harness, not a wire (a UA test
+// would claim any Claude-UA traffic).
 // `max_tokens` is deliberately NOT a signal: Chat Completions carries it too. An Anthropic body on an OpenAI
 // path is still claimed (bytes beat path); openai.mjs `wireShape` refuses exactly these markers, so the two
 // detectors stay disjoint.

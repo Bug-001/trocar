@@ -23,7 +23,7 @@ export const decodeLimitOf = (rec) => (rec && rec.is_llm_call === true ? MAX_DEC
 
 // ONE parse per record, however many readers ask (D62 A2). A session's cold answer ran JSON.parse over the SAME
 // request-body string three times — src/dissect/cc.mjs `detect`, src/dissect/openai.mjs `bodyOf` and
-// src/view/assemble.mjs `hydrateForBoard` each parsed it — which on the reference dataset's 112-call session
+// src/view/extract.mjs `hydrateForBoard` each parsed it — which on the reference dataset's 112-call session
 // (42 MB of bodies) was 213 of the 434 ms the query cost locally. The cache is a WeakMap on the record OBJECT, so it
 // lives exactly as long as the record the answer is being built from, and a record read back again (a new object) is
 // parsed again — never a cache keyed by a record id, which could outlive or mis-name the bytes.

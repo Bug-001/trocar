@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { homeWith, query } from '../helpers/session-doc.mjs';
 import { parseTextRef } from '../../src/raw/refs.mjs';
-import { compBuckets, COMP_KEYS, slimBlock } from '../../src/view/blockmeta.mjs';
+import { compBucket, slimBlock } from '../../src/view/blockmeta.mjs';
 
 const mk = (body) => ({ id: 'r1', ts_request: '2026-10-21T00:00:00Z', endpoint: '/v1/responses', host: 'api.openai.com',
   req_headers: { 'x-claude-code-session-id': 'S' }, req_body: body, resp: { status: 200, kind: 'sse', raw_sse: [] } });
@@ -44,9 +44,6 @@ test('Responses items: kind / role by the type suffix and call_id, each block a 
 
 test('a *_tool_result block is in the tool_result bucket and heads as an observation', () => {
   const b = { sec: 'messages', kind: 'x_tool_result', role: 'user', block: { type: 'x_tool_result', tool_use_id: 't', content: 'abc' } };
-  const c = compBuckets([b]);
-  assert.deepEqual(Object.keys(c), COMP_KEYS);
-  assert.ok(c.tool_result > 0);
-  for (const k of COMP_KEYS) if (k !== 'tool_result') assert.equal(c[k], 0, k);
+  assert.equal(compBucket(b), 'tool_result');
   assert.ok(slimBlock(b, null).head.tag.startsWith('observation'));
 });

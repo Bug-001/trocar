@@ -244,8 +244,7 @@ const isProbe = (r) => endpointClass(r.path) === 'token-count';
  *  `overview`'s usage and the usage sidecar's fill), never a second copy of it. */
 export const isModelCall = (r) => r.is_llm && !r.log_only;
 
-/** sessionFacts(id) → {add(row), facts()}: one session's facts over the rows added so far, in member order, the way
- *  src/view/board.mjs derives them from the records themselves (sessionMetaFor): the harness of the first row that had `proc`, else
+/** sessionFacts(id) → {add(row), facts()}: one session's facts over the rows added so far, in member order: the harness of the first row that had `proc`, else
  *  of the first that had headers; the entrypoint of the first row that had headers; calls / logged / probes / other complementary,
  *  so they sum to the session. A growing session adds its new members only (src/query/named/session.mjs). */
 export function sessionFacts(id) {

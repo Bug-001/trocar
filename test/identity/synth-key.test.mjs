@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { createSynthKeys, stampSynthKeys, SYNTH_GAP_MS } from '../../src/dissect/synth-key.mjs'
+import { createSynthKeys, SYNTH_GAP_MS } from '../../src/dissect/synth-key.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { rawHome, writeSegment } from '../query/raw-home.mjs'
 import fs from 'node:fs'
@@ -33,8 +33,8 @@ test('systemTextOf: the first system / developer item of a Responses input is th
   for (const role of ['developer', 'system']) {
     for (const [shape, content] of Object.entries(shapes)) {
       const recs = prompts.map((p) => piResp({ role, content: content(p) }))
-      stampSynthKeys(recs)
-      const keys = recs.map((r) => r._synthKey)
+      const { keyOf } = createSynthKeys()
+      const keys = recs.map(keyOf)
       assert.notEqual(keys[0], keys[1], `${role}/${shape}: two prompts, two sessions`)
       keys.forEach((k, i) => {
         const m = KEY.exec(k || '')

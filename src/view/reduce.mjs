@@ -1,17 +1,16 @@
 // src/view/reduce.mjs — reduction (RFC 4.3 §3, RFC 2.3 §读与画): a session's document from its context projection
 // (src/query/projection.mjs) alone. Each call row's list of block ids is materialised from its base chain; the analyzer
-// (createAnalyzer, the same fold the record path runs) is fed call views built from the row's facts `x` and its definitions' facts
+// (createAnalyzer) is fed call views built from the row's facts `x` and its definitions' facts
 // `f`; the cache break of each lane is taken against the lane's last call that chained a prefix, over the definitions' frame hashes;
 // the composition is the lane's previous one minus the removed blocks plus the added ones. No record is read, except once per pair
 // of diverging blocks whose break detail (key reorder, byte offset) needs both texts: that detail is kept as a `brk` line of the
 // projection, so the next reduction reads it from there.
 //
-// The document is what createAssembler(...).finish() gives for the same records (src/view/assemble.mjs), every call in its meta
-// form, plus `lanes[].key` (the id of the lane's first call) and `items` (record id → the facts the session document reads of it).
-// It carries no `prefixSha256` (the board only ever compared digests): `prefixByteIdentical` compares each block's verbatim slice
-// with its cache_control cut out (the definition's `vh`), never the frame text, so it can be false where the record fold says true.
-// One place it is more exact: the record fold keys a block by its first 4,096 characters (analyze.mjs BLK_KEY_CAP), so two blocks
-// that differ only past that are the same to it; here a block is its whole frame (real captures carry blocks that differ only past 4,096 characters).
+// The document is the session's lanes and their calls, every call in its meta form (no blocks: a page reads them through the
+// `lane` document), plus `lanes[].key` (the id of the lane's first call) and `items` (record id → the facts the session document reads of
+// it). It carries no prefix digest: `prefixByteIdentical` compares each block's verbatim slice with its cache_control cut out (the
+// definition's `vh`), never the frame text. A block is its whole frame, never a capped head of it (real captures carry blocks that
+// differ only past their first 4,096 characters).
 import { createAnalyzer, stepOrder, OrderBound, breakOf, blockDiff, compactionMeta, unparsedErrMsg, laneMeta, replayLedger } from './analyze.mjs';
 import { callRow, itemsView } from './board.mjs';
 import { compareStep } from './step-order.mjs';
@@ -545,7 +544,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     }
     newItems = []; newFailed = []; I.all = false; I.dirty.clear();
   }
-  // spawns linked to sub-agent lanes (the record fold's rule, analyze.mjs finish): a sub-agent lane is spawned by the last spawn, in
+  // spawns linked to sub-agent lanes (analyze.mjs finish's rule): a sub-agent lane is spawned by the last spawn, in
   // the order of lanes by their first call and then of the lane's steps, whose prompt's head opens the lane's first user text.
   // → whether the links were made again (no new spawn, no new lane and none dropped: they stand)
   function link() {
@@ -624,7 +623,7 @@ export function reduction(store, { log, resolve = null, errors = undefined, prog
     }
     return out;
   }
-  // the session's stats (the record fold's: analyze.mjs finish, assemble.mjs flatLaneView, mergeViews)
+  // the session's stats
   // (over every lane when F.inc.all or a lane went back (pushOf); else as emit() kept them: `F.inc.st`)
   function stats() {
     const I = F.inc;
@@ -796,9 +795,9 @@ function anthropicFold({ at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, i
     snapshot: () => ({ an: an.snapshot() }) };
 }
 
-// A flat-lane wire's fold (assemble.mjs flatLaneFold over rows): a lane per agent (a subagent named by the harness's agent id or the
+// A flat-lane wire's fold over rows: a lane per agent (a subagent named by the harness's agent id or the
 // wire's own, the rest by lane kind), each call's compaction verdict on the dissector's message count, its cache break against its
-// lane's last call that did not fail; the document names lanes by kind (flatLaneView): one doc lane per kind.
+// lane's last call that did not fail; the document names lanes by kind: one doc lane per kind.
 function flatFold(d, { at, B, cacheOf, pushOf, emit, newSub, baseOf, lastOf, int }, F, from) {
   const lanes = from ? from.lanes : new Map();
   function take(rid, row) {

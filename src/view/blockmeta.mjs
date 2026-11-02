@@ -172,21 +172,6 @@ export function compBucket(b) {
 }
 
 /**
- * The call's composition, in UTF-8 bytes per bucket. All nine keys are always present — a missing
- * key and a zero bucket are different claims, and the renderer must be able to tell them apart.
- *
- * MUST be called while the blocks are still in hand. assembleSession drops out-of-window `flat` for
- * the retention window, so computing this afterwards yields nine zeros: a bar that draws blank while
- * asserting the composition is known, which is strictly worse than the hatching it replaced.
- */
-export function compBuckets(flat) {
-  const c = {};
-  for (const k of COMP_KEYS) c[k] = 0;
-  for (const b of flat || []) c[compBucket(b)] += blockBytes(b);
-  return c;
-}
-
-/**
  * Is this block a HUMAN QUERY — the thing that opens a turn?
  *
  * The context window groups messages into turns: a turn opens at a user text message the human
@@ -251,14 +236,6 @@ export function departer(heads = []) {
 }
 /** departs(lane) → whether a lane's first prompt is told apart from its siblings': a sub-agent's that no spawn named. */
 export const departs = (l) => l.kind === 'subagent' && !!l[HEAD];
-/** tellApart(lanes) → lanes, each lane that carries its first prompt (`lane[HEAD]`: no spawn named it) given its `task` (4.4 §看板 v2
- *  需要的补充): that prompt, a sub-agent's from the line it departs from its siblings — every such sub-agent lane of the session, whatever
- *  wire it came on, so the rule is one (invariant 3). Run once, on the session's whole set of lanes. */
-export function tellApart(lanes) {
-  const open = lanes.filter((l) => HEAD in l), heads = departer(open.filter(departs).map((l) => l[HEAD]));
-  for (const l of open) l.task = taskOf(l[HEAD] && l[HEAD].slice(departs(l) ? heads.offset(l[HEAD]) : 0));
-  return lanes;
-}
 
 // Fields that carry the block's CONTENT. These are what must not cross the wire; everything else on
 // a block is metadata the collapsed row, the diff and the timeline need on every call.
@@ -304,7 +281,7 @@ export function slimBlock(b, textRef, why = null) {
   }
   // NOT addressable → keep the body exactly as it was, so the row renders as it always did, and say
   // why it was inlined. Stripping HEAVY here is what produced an unreadable, unfetchable row.
-  // `why`: the caller's specific reason, when it knows one (e.g. a cross-record context, src/view/assemble.mjs).
+  // `why`: the caller's specific reason, when it knows one (e.g. a block rebuilt from a streamed reply).
   out.unaddressable = `${why || 'no verbatim byte span for this block (re-serialized / v0-converted source)'} — `
     + 'body inlined as-is, NOT resolved from the raw capture';
   return out;

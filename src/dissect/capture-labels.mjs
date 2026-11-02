@@ -118,7 +118,7 @@ export function contextStateOfRequest(rec) {
 // A request body that is stored as text and does not parse to an object (a legacy capture or a corrupt one: with no
 // req_truncated / req_partial label, truncation and corruption cannot be told apart) has no context to read, so no
 // message count either (3.4: no compaction verdict from an unobserved count). The same test as the board's own
-// "unparsed" (assemble.mjs, analyze.mjs::isUnparsed) so the two sides cannot disagree. null / absent body: no body
+// "unparsed" (analyze.mjs::isUnparsed) so the two sides cannot disagree. null / absent body: no body
 // at all (a WebSocket call whose request was not stored, a v0 envelope), not this case.
 export function bodyUnparsedOf(rec) {
   const b = rec && rec.req_body;

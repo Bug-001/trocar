@@ -1,6 +1,6 @@
 // src/identity/session-identity.mjs
 // The compaction verdict (RFC 3.4 「骤降」): PURE functions, no I/O. One rule shared by `trocar query` and the board
-// (src/view/{analyze,assemble,extract,reduce}.mjs read it); the harness hints and markers it weighs come from the one
+// (src/view/{analyze,extract,reduce}.mjs read it); the harness hints and markers it weighs come from the one
 // harness table (src/dissect/harnesses.mjs) through those readers. Compaction is not a fork (3.4 关键区分).
 
 // Compaction = a *shrink* of the messages array between consecutive same-session calls (换血),
