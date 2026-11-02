@@ -5,8 +5,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import * as metrics from '../../src/web/v2/core/metrics.mjs'
-import { segTax, messageTurns, humanTurns, compBucket, breakSteps, sessionCost, hitTier, hitPct, keyDiff, priceRow, priceMatch, breakTarget, relPath, when, CT_ORDER, TAX_ORDER, QUIET_CAUSES } from '../../src/web/v2/replay/analysis.mjs'
+import * as metrics from '../../web/legacy/core/metrics.mjs'
+import { segTax, messageTurns, humanTurns, compBucket, breakSteps, sessionCost, hitTier, hitPct, keyDiff, priceRow, priceMatch, breakTarget, relPath, when, CT_ORDER, TAX_ORDER, QUIET_CAUSES } from '../../web/legacy/replay/analysis.mjs'
 
 const B = (o) => ({ bytes: 10, ...o })
 const flat = [B({ sec: 'tools', kind: 'tool' }), B({ sec: 'system', kind: 'system' }),
@@ -110,7 +110,7 @@ test('when: an unknown or invalid time is a dash, never blank', () => {
 })
 
 // ── one definition each (review: the quiet-cause list and the selector escape were each written twice) ───────────────────
-const REPLAY = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'web', 'v2', 'replay')
+const REPLAY = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'legacy', 'replay')
 const replaySources = () => fs.readdirSync(REPLAY).filter((f) => f.endsWith('.mjs')).map((f) => [f, fs.readFileSync(path.join(REPLAY, f), 'utf8')])
 test('the quiet-cause list has one home: core/metrics.mjs exports it, analysis.mjs re-exports that same set, and no replay module spells it out', () => {
   assert.deepEqual([...QUIET_CAUSES].sort(), ['append', 'first-call', 'volatile-nonce-only'])

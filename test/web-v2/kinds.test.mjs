@@ -3,7 +3,7 @@
 // The wrapper below is the caller's (cell.mjs): renderKind gives the inner html and the wrapper's classes in `cls`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { renderKind, valueOf, jsonNodeHtml } from '../../src/web/v2/replay/kinds.mjs'
+import { renderKind, valueOf, jsonNodeHtml } from '../../web/legacy/replay/kinds.mjs'
 
 const wrap = ({ html, cls }) => `<div class="cellread ${cls}">${html}</div>`
 const ENT = { lt: '<', gt: '>', quot: '"', '#39': "'", '#13': '\r', amp: '&' }
@@ -152,7 +152,7 @@ test('sections: each top-level tag pair gets a sec-tag label; text outside the t
 })
 
 test('opaque and parts: the signature byte length; each part drawn by its own spec', async () => {
-  const { opaqueLine } = await import('../../src/web/v2/labels/cells.mjs')
+  const { opaqueLine } = await import('../../web/legacy/labels/cells.mjs')
   for (let i = 0; i < 50; i++) {
     const sig = str(60), v = { signature: sig, thinking: '' }
     const out = renderKind({ as: 'opaque', f: { sig: ['signature'] } }, v)

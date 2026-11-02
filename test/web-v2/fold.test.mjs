@@ -2,7 +2,7 @@
 // anchor block key. A fake storage object stands in for localStorage.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { loadFold, saveFold, setFold, turnAnchorKey, turnIsOpen, FOLD_KEY, FOLD_CAP } from '../../src/web/v2/replay/fold.mjs'
+import { loadFold, saveFold, setFold, turnAnchorKey, turnIsOpen, FOLD_KEY, FOLD_CAP } from '../../web/legacy/replay/fold.mjs'
 
 const fake = (init = {}) => { const m = new Map(Object.entries(init)); return { m, getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)) } } }
 

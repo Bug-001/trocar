@@ -1,5 +1,5 @@
 // test/web-v2/english.test.mjs — the board speaks English (D58①), carries no internal label (D58②) and uses one word per
-// concept (1.5 §看板词表 "一个概念只用一个词"; the glossary of record lives beside the label code, src/web/v2/labels/glossary.md).
+// concept (1.5 §看板词表 "一个概念只用一个词"; the glossary of record lives beside the label code, web/legacy/labels/glossary.md).
 // Offenders are reported grouped by file: the translators work from that list.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -10,7 +10,7 @@ import { stripComments } from '../helpers/code-text.mjs'
 import { views } from '../netenv/fixtures/write-scan.mjs'
 
 const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
-const V2 = path.join(REPO, 'src', 'web', 'v2')
+const V2 = path.join(REPO, 'web', 'legacy')
 const GLOSSARY = path.join(V2, 'labels', 'glossary.md')
 
 const walk = (dir, ext) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {

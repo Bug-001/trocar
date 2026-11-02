@@ -5,14 +5,14 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { api, scoped } from '../../src/web/v2/core/api.mjs'
-import { configure, bootToken, onForbidden, post, getText, READ_DEADLINE_MS } from '../../src/web/v2/core/http.mjs'
+import { api, scoped } from '../../web/legacy/core/api.mjs'
+import { configure, bootToken, onForbidden, post, getText, READ_DEADLINE_MS } from '../../web/legacy/core/http.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { QUERY_NAMES } from '../../src/query/client.mjs'
 import { stripComments } from '../helpers/code-text.mjs'
 
-const V2 = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'web', 'v2')
+const V2 = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'legacy')
 const sources = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
   const p = path.join(dir, d.name)
   return d.isDirectory() ? sources(p) : /\.mjs$/.test(d.name) ? [p] : []
@@ -151,7 +151,7 @@ const loadAt = (hash, localStorage) => {
   return { replaced, env: { location: { hash, pathname: '/', search: '' }, history: { replaceState: (s, t, url) => replaced.push(String(url)) }, localStorage } }
 }
 let fresh = 0
-const freshHttp = () => import(`../../src/web/v2/core/http.mjs?k=${++fresh}`) // its own K-30 latch
+const freshHttp = () => import(`../../web/legacy/core/http.mjs?k=${++fresh}`) // its own K-30 latch
 
 test('4.4 token boot: #t=<token> is kept and leaves the address; a later load with no fragment reads the kept token', async () => {
   const http = await freshHttp(), store = storeOf()

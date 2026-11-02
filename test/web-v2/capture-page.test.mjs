@@ -4,13 +4,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { pageHtml } from '../../src/web/v2/capture/capture-view.mjs'
-import { pageLogHtml } from '../../src/web/v2/capture/capture-log.mjs'
-import { captureVerdict } from '../../src/web/v2/core/capture-verdict.mjs'
-import { controlHtml, controlFor, wireHarnessControls } from '../../src/web/v2/core/harness-switch.mjs'
-import { ALIASES, harnessKey } from '../../src/web/v2/core/chips.mjs'
-import { COMMANDS, CHANGE_REMOVAL, RESTART_CODES, SWITCH_WORD, ERR_WHERE } from '../../src/web/v2/labels/capture.mjs'
-import { redactUrlCredentials } from '../../src/web/v2/core/sensitive.mjs'
+import { pageHtml } from '../../web/legacy/capture/capture-view.mjs'
+import { pageLogHtml } from '../../web/legacy/capture/capture-log.mjs'
+import { captureVerdict } from '../../web/legacy/core/capture-verdict.mjs'
+import { controlHtml, controlFor, wireHarnessControls } from '../../web/legacy/core/harness-switch.mjs'
+import { ALIASES, harnessKey } from '../../web/legacy/core/chips.mjs'
+import { COMMANDS, CHANGE_REMOVAL, RESTART_CODES, SWITCH_WORD, ERR_WHERE } from '../../web/legacy/labels/capture.mjs'
+import { redactUrlCredentials } from '../../web/legacy/core/sensitive.mjs'
 
 const SPEC = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
 const C3 = SPEC.slice(SPEC.indexOf('### C.3'))
@@ -203,8 +203,8 @@ test('#13: two paints with the same expand memory give the same aria-expanded se
 test('D38: every status reason gives the row a sentence and a why — none empty, none unknown — through the verdict and through a condition', async () => {
   const { STATUS_REASONS } = await import('../../src/health/codes.mjs')
   const { statusReason } = await import('../../src/cli/words.mjs')
-  const { agentVerdicts } = await import('../../src/web/v2/core/capture-verdict.mjs')
-  const { UNKNOWN_REASON } = await import('../../src/web/v2/labels/capture.mjs')
+  const { agentVerdicts } = await import('../../web/legacy/core/capture-verdict.mjs')
+  const { UNKNOWN_REASON } = await import('../../web/legacy/labels/capture.mjs')
   const bad = []
   for (const code of STATUS_REASONS.filter((c) => c !== 'desired-off')) {
     if (!statusReason(code)) bad.push(`${code}: no clause in the shared catalog`)
@@ -251,9 +251,9 @@ test('1.9 表空: no empty-table line while the install manifest cannot be read'
 // 1.9 §每个 agent 一行 第 3 条: a negative-cache condition is worded by its record's cause — on its agent's row and, with no agent, on the
 // service row — so an upstream's certificate is never said to be trocar's refused one
 test('1.9: a negative-cache condition is worded by its cause, on the agent row and on the service row', async () => {
-  const { agentVerdicts } = await import('../../src/web/v2/core/capture-verdict.mjs')
+  const { agentVerdicts } = await import('../../web/legacy/core/capture-verdict.mjs')
   const { failureWord } = await import('../../src/cli/words.mjs')
-  const { esc } = await import('../../src/web/v2/core/fmt.mjs')
+  const { esc } = await import('../../web/legacy/core/fmt.mjs')
   const word = (cause) => failureWord('engine', 'negative-cache', '', cause)
   for (const [cause, other] of [['upstream-cert', 'client-rejected-leaf'], ['upstream-handshake', 'client-rejected-leaf'], ['client-rejected-leaf', 'upstream-cert']]) {
     const k = { kind: 'negative-cache', where: 'engine', code: 'negative-cache', cause, pid: 4121, host: 'api.example.com', since: T }

@@ -3,7 +3,7 @@
 // Generated axes; the strip / tracker helpers below are the test's own reading of the contract.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { layout } from '../../src/web/v2/replay/jsonlay.mjs'
+import { layout } from '../../web/legacy/replay/jsonlay.mjs'
 
 const LAY = /<span class="lay" aria-hidden="true">([^<]*)<\/span>/g
 const ENT = { lt: '<', gt: '>', quot: '"', '#39': "'", '#13': '\r', amp: '&' }

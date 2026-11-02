@@ -11,10 +11,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HARNESSES, LEGACY_HARNESS_IDS } from '../../src/dissect/harnesses.mjs'
-import { CHIP, HARNESS_ORDER, ALIASES, harnessKey } from '../../src/web/v2/core/chips.mjs'
+import { CHIP, HARNESS_ORDER, ALIASES, harnessKey } from '../../web/legacy/core/chips.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 
-const V2 = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'web', 'v2')
+const V2 = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'legacy')
 
 // the full id vocabulary the read side can hand the front end: row ids, every proc.agent spelling, the legacy row, the CLI aliases
 const IDS = new Set([
@@ -41,10 +41,10 @@ test('every harness the collector loads has a read-side row naming it in `agents
   assert.deepEqual(missing, [])
 })
 
-// every '…' "…" `…` literal (and an unquoted { key: }) under src/web/v2, outside the two homes of harness ids
+// every '…' "…" `…` literal (and an unquoted { key: }) under web/legacy, outside the two homes of harness ids
 const files = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
   const p = path.join(dir, d.name)
-  if (d.isDirectory()) return (dir.endsWith(path.join('src', 'web', 'v2')) && d.name === 'assets') ? [] : files(p)
+  if (d.isDirectory()) return (dir.endsWith(path.join('web', 'legacy')) && d.name === 'assets') ? [] : files(p)
   return /\.(mjs|html|css)$/.test(d.name) ? [p] : []
 })
 test('no string literal outside core/chips.mjs and assets/harness/ equals a harness id', () => {
