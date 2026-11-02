@@ -153,17 +153,18 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
 // the desk's loader reads (2.3 加载器): the sealed packs, a lane's ledger chain (`ledger=` / `to=`), block bodies
 const loaderRead = (url) => { const name = nameOf(url), q = new URLSearchParams(url.split('?')[1] || ''); return /^d\/p\d/.test(name) || name === 'block' || (name === 'lane' && (q.has('ledger') || q.has('to'))) }
 
-/** I-pack over the probe's fetch log: within one visit of a route (the desk is mounted once per route), a pack file is read again at
+/** I-pack over the probe's fetch log: within one desk (a desk taken back from the session cache is the same desk; one built after its
+ *  session left the cache, 1.2 §路由, is a new one and reads its packs again), a pack file is read again at
  *  the same head tag only after a read of that pack failed; at most LIMITS.loaderMax loader reads are on their way at once. → [detail] */
 function packFaults(log) {
   const out = [], sorted = log.filter((x) => x.method === 'GET').sort((a, b) => a.start - b.start)
   const heads = sorted.filter((e) => e.tags && e.end != null).sort((a, b) => a.end - b.end)
   const tagAt = (id, n, t) => { let tag; for (const h of heads) if (h.end <= t && new URLSearchParams(h.url.split('?')[1]).get('id') === id) tag = h.tags[n]; return tag }
-  const held = new Map() // `<route> <id> <n> <part>` → the tag it was read at
+  const held = new Map() // `<desk> <id> <n> <part>` → the tag it was read at
   for (const e of sorted) {
     const m = /^d\/p(\d+)\.(\w+)$/.exec(nameOf(e.url))
     if (m) {
-      const id = new URLSearchParams(e.url.split('?')[1]).get('id'), pack = `${e.route} ${id} ${m[1]}`, key = `${pack} ${m[2]}`, tag = tagAt(id, m[1], e.start)
+      const id = new URLSearchParams(e.url.split('?')[1]).get('id'), pack = `${e.desk ?? e.route} ${id} ${m[1]}`, key = `${pack} ${m[2]}`, tag = tagAt(id, m[1], e.start)
       if (failedRead(e) || e.aborted || (e.end != null && e.status !== 200)) { for (const k of [...held.keys()]) if (k.startsWith(`${pack} `)) held.delete(k); continue }
       if (held.has(key) && held.get(key) === tag) out.push(`${nameOf(e.url)} read again at tag ${tag}`)
       if (e.end != null) held.set(key, tag)
@@ -218,7 +219,11 @@ export async function check(ctx) {
   // drawn yet: no baseline (a later clean visit is)
   let visit = visits.get(page)
   if (!visit || visit.route !== route) visits.set(page, visit = { route, t: prev?.t ?? 0 })
+  // a desk whose session the server is still extracting (its head answered `pending`, 3.5 §抽取前沿) or whose head has not answered
+  // yet has drawn only part of the session: the packs come once the head lists them, so it is not a baseline either
+  const head = s.fetchLog.findLast((e) => e.route === `#${route}` && e.url.startsWith('/api/d/head') && e.end != null && e.status !== 304)
   const clean = s.inflight === 0 && !hidden.some((h) => (h.to ?? Infinity) >= visit.t) && !s.fetchLog.some((e) => e.start >= visit.t && failedRead(e) && !e.aborted) // and nothing still on its way
+    && (screen !== 'replay' || (!!head && !head.pending))
   if (!first) { if (clean) base.set(route, now) }
   else if (!prev || routeOf(prev.hash) !== route) { // a revisit (the route was just entered again); within one visit an open overlay may hold more
     const more = ['window', 'document', 'intervals', 'inflight'].filter((k) => now[k] > first[k] + LIMITS.leakSlack)

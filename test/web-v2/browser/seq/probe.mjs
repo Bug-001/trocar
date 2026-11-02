@@ -60,10 +60,13 @@ function pageProbe() {
   // ── fetch: in flight, and the log of board reads (a body that never fully arrives is a cut answer, 1.5 K-29) ────────────────
   const of = window.fetch
   const byResponse = new WeakMap()
+  // the desk on screen when a read starts (I-pack): a desk only reads while it is attached, and keeps its root when it comes back from the cache
+  const desks = new WeakMap(); let nDesk = 0
+  const deskNo = () => { const d = document.querySelector('#screen .desk'); if (!d) return null; if (!desks.has(d)) desks.set(d, ++nDesk); return desks.get(d) }
   window.fetch = function (input, init) {
     const url = new URL(typeof input === 'string' ? input : input.url || String(input), location.href)
     const board = /^\/(api|control)\//.test(url.pathname)
-    const e = board ? { url: url.pathname + url.search, method: ((init && init.method) || (input && input.method) || 'GET').toUpperCase(), start: now(), end: null, status: null, failed: false, aborted: false, cut: false, pending: false, route: location.hash.split('?')[0], tags: null } : null
+    const e = board ? { url: url.pathname + url.search, method: ((init && init.method) || (input && input.method) || 'GET').toUpperCase(), start: now(), end: null, status: null, failed: false, aborted: false, cut: false, pending: false, route: location.hash.split('?')[0], desk: deskNo(), tags: null } : null
     if (e) push(S.fetchLog, e)
     S.inflight++
     let p
