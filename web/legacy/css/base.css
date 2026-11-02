@@ -180,7 +180,7 @@ kbd{font-family:var(--mono);background:var(--sunk);border:1px solid var(--rule-2
 /* ── new in v2 ───────────────────────────────────────────────────────────────────────────────────────────────── */
 /* the screen host: a screen fills it and scrolls (or splits) inside */
 #screen{flex:1;min-height:0;display:flex;}
-#screen > *{min-width:0;}
+#screen > *, #screen > .screenhost > *{min-width:0;}
 
 /* a screen's own banner: what is wrong (or worth knowing) about what it shows, with the reason — never a silent empty state */
 .banner{padding:6px 16px;font-size:var(--fs-cap);border-bottom:1px solid var(--rule);color:var(--ink);}
