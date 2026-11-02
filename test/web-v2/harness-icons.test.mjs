@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { CHIP, HARNESS_ORDER, sanitizeHarnessSvg, UNKNOWN_ICON } from '../../web/legacy/core/chips.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
-const ICONS = path.join(HERE, '..', '..', 'web', 'legacy', 'assets', 'harness')
+const ICONS = path.join(HERE, '..', '..', 'web', 'public', 'assets', 'harness')
 const fileOf = (id) => path.join(ICONS, CHIP[id].icon)
 
 test('every chip row has its icon file, a 16×16 view box, and a title naming the harness', () => {

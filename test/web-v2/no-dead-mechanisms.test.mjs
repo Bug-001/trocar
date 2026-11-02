@@ -38,7 +38,7 @@ test('the scanner is not vacuous: a dead name in code is reported, the same name
 })
 
 test('no code or string in web/legacy names a removed mechanism', () => {
-  const files = fs.readdirSync(V2, { recursive: true }).filter((p) => /\.(mjs|html)$/.test(p)).map((p) => path.join(V2, p))
+  const files = fs.readdirSync(V2, { recursive: true }).filter((p) => /\.(mjs|html)$/.test(p)).map((p) => path.join(V2, p)).concat(path.join(V2, '..', 'index.html'))
   assert.ok(files.length > 10)
   assert.deepEqual(files.flatMap((f) => scan(f, fs.readFileSync(f, 'utf8'))), [])
 })

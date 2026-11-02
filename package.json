@@ -47,7 +47,8 @@
     "test:real": "node --test --test-force-exit --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs test/query/real-session.test.mjs",
     "test:browser": "node scripts/test-browser.mjs",
     "release:check": "node scripts/release.mjs check",
-    "release:pack": "node scripts/release.mjs pack"
+    "release:pack": "node scripts/release.mjs pack",
+    "build:board": "vite build --configLoader native --config web/vite.config.mjs"
   },
   "devDependencies": {
     "@tanstack/react-query": "5.105.1",

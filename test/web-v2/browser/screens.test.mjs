@@ -126,7 +126,7 @@ test('a screen change aborts the old screen\'s reads and the content is never bl
         held.add(route.request())
         await new Promise(() => {}) // never answered: only an abort from the page ends it
       })
-      await page.route(/\/library\/library\.mjs/, async (route) => { await libHeld; route.continue().catch(() => {}) })
+      await page.route(/\/assets\/library\.js$/, async (route) => { await libHeld; route.continue().catch(() => {}) })
     },
   })
   try {

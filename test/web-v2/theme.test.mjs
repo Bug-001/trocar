@@ -92,7 +92,7 @@ test('applyThemePref only moves the attribute: its source names no screen and no
   assert.equal(THEME_KEY, 'trocar.v2.theme')
 })
 test('the page applies the preference before the first paint, from the same key, without throwing', () => {
-  const html = fs.readFileSync(new URL('../../web/legacy/index.html', import.meta.url), 'utf8')
+  const html = fs.readFileSync(new URL('../../web/index.html', import.meta.url), 'utf8')
   const head = html.slice(0, html.indexOf('</head>'))
   const m = head.match(/<script>([\s\S]*?)<\/script>/)
   assert.ok(m && m.index < head.indexOf('<link'), 'the boot script runs before the stylesheets')
