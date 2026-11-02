@@ -193,7 +193,7 @@ export function sessionFold(sessionId) {
 // A call in its meta form with its body put back (a NEW object: the fold's own call is left as it is).
 const withBody = (c, body) => { const { paged_out, ...rest } = c; return { ...rest, ...body }; };
 // What a session row ships of a call's `wire` and of each of its labels (3.5 §分页): a CLOSED field set, what the board reads.
-// Who reads what (src/web/v2):
+// Who reads what (web/legacy):
 //   wire        cacheSemanticsKnown (cache cell, popover) · contextState contextMissing reqEncoding labels (callFacts, replyMark)
 //   wire.labels[]  id label (callFacts words); the long `text` is a tech detail of a loaded step
 const PAGED_META = Object.freeze({
