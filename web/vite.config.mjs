@@ -20,17 +20,33 @@ const firstAhead = {
   },
 }
 
+// The bundled packages' license notices ship whole, except the contact addresses beside a holder's name: a published file
+// carries no one's email, and the holder, the year and the license text are the notice. The note says where the addresses are.
+const LICENSES = 'assets/licenses.md'
+const noticesNoEmail = {
+  name: 'trocar-notices-no-email',
+  generateBundle: {
+    order: 'post',
+    handler(_, bundle) {
+      const a = bundle[LICENSES]
+      if (!a) throw new Error(`${LICENSES}: not in the bundle`)
+      a.source = String(a.source).replace(/ ?<[^<>\s@]+@[^<>\s]+>/g, '')
+        .replace(/\n\n/, '\n\nContact addresses are left out of the notices below; each package\'s own license file has them.\n\n')
+    },
+  },
+}
+
 export default {
   root: fileURLToPath(new URL('.', import.meta.url)),
   base: './',
   publicDir: 'public',
-  plugins: [react(), firstAhead],
+  plugins: [react(), firstAhead, noticesNoEmail],
   build: {
     outDir: fileURLToPath(new URL('../src/web/board/', import.meta.url)),
     emptyOutDir: true,
     sourcemap: false,
     cssMinify: false,
-    license: { fileName: 'assets/licenses.md' },
+    license: { fileName: LICENSES },
     rolldownOptions: {
       input: {
         index: fileURLToPath(new URL('./index.html', import.meta.url)),
