@@ -30,7 +30,6 @@ const SCREENS = {
   library: () => import('../legacy/library/library.mjs'),
   replay: () => import('../legacy/replay/replay.mjs'),
   'session-link': () => import('../legacy/replay/session-link.mjs'),
-  'capture-log': () => import('../legacy/capture/capture-log.mjs'),
   traffic: () => import('../legacy/traffic/traffic.mjs'),
   'traffic-host': () => import('../legacy/traffic/host.mjs'),
   'settings-storage': () => import('../legacy/settings/storage.mjs'),
@@ -39,6 +38,7 @@ const SCREENS = {
 }
 const REACT_SCREENS: Record<string, () => Promise<{ default: ComponentType<ScreenProps> }>> = {
   capture: () => import('./screens/capture/CaptureScreen'),
+  'capture-log': () => import('./screens/capture/CaptureLogScreen'),
 }
 const LAZY: Record<string, LazyScreen> = Object.fromEntries(Object.entries(REACT_SCREENS).map(([k, load]) => [k, lazy(load)]))
 const PRELOADS = [...Object.values(SCREENS), ...Object.values(REACT_SCREENS)] // the idle preload fetches both kinds

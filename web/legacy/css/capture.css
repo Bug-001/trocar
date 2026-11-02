@@ -88,6 +88,7 @@
 .lr .lgo{justify-self:end;border:0;background:none;color:var(--ink-3);font-size:var(--fs-body);cursor:pointer;padding:0 2px;border-radius:var(--r-1);}
 .lr .lgo:hover,.lr .lgo:focus-visible{color:var(--ink);}
 .lr .lx{grid-column:3 / 6;}
+.lr .lx[hidden]{display:none;}
 .lr .lx p{font-size:var(--fs-body);margin:0 0 3px;}
 .lr .lx .fine{color:var(--ink-2);font-size:var(--fs-cap);}
 .lr .lx .disc{margin-top:4px;}
