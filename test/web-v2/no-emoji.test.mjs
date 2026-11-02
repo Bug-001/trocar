@@ -8,7 +8,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const V2 = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'legacy')
-const FILES = fs.readdirSync(V2, { recursive: true }).filter((p) => /\.(mjs|css|html)$/.test(p)).map((p) => path.join(V2, p))
+const FILES = fs.readdirSync(V2, { recursive: true }).filter((p) => /\.(mjs|css|html)$/.test(p)).map((p) => path.join(V2, p)).concat(path.join(V2, '..', 'index.html'))
 const PICTOGRAPHIC = /\p{Extended_Pictographic}/u
 
 function emojiViolations(rel, text) {

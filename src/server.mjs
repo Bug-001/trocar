@@ -18,18 +18,14 @@ import { LOCAL_ENV, QUERY_NAMES, paramsOf } from './query/client.mjs';
 import { HEAD_FILES, ctxKey } from './query/ctx-key.mjs';
 import { storedFile } from './query/stored.mjs';
 
-const SRC = path.dirname(fileURLToPath(import.meta.url));
-// The one board (1.2 §托管与打开): web/legacy/ is the static plane, served at `/`. Named as new URL('../web/legacy/', import.meta.url)
-// so test/ci/reachable.test.mjs follows it into every board module.
-const WEB_DIR = path.resolve(fileURLToPath(new URL('../web/legacy/', import.meta.url)));
-/** The shared modules the page imports from src/ (pure and import-closed; the page and the CLI must agree on them),
- *  served at `/src/<entry>` because that is where the page's `../../../src/<entry>` lands in the browser. */
-export const SHARED = Object.freeze(['cli/words.mjs', 'off/token-header.mjs', 'off/userinfo.mjs', 'view/step-order.mjs', 'view/head-cols.mjs']);
+// The one board (1.2 §托管与打开): the build in src/web/board/ (web/ through Vite, committed, D75③) is the static plane, served at `/`.
+// Named as new URL('./web/board/', import.meta.url) so test/ci/reachable.test.mjs follows it into the built board.
+const WEB_DIR = path.resolve(fileURLToPath(new URL('./web/board/', import.meta.url)));
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
-  '.woff2': 'font/woff2', '.map': 'application/json; charset=utf-8',
+  '.woff2': 'font/woff2', '.map': 'application/json; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
 };
 const JSON_HEAD = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
 
@@ -52,7 +48,7 @@ export function guard(req) {
   try { return LOOPBACK.has(new URL(o).hostname) ? null : 'forbidden: cross-origin request'; } catch { return 'forbidden: cross-origin request'; }
 }
 
-/** Every file of the static plane, read once: `/<path under web/legacy>` and `/src/<SHARED entry>`. A lookup in this map is
+/** Every file of the static plane, read once: `/<path under src/web/board>`. A lookup in this map is
  *  the whole path-safety story: `..`, encoded or not, names nothing in it. */
 function loadStatic() {
   const files = new Map();
@@ -64,7 +60,6 @@ function loadStatic() {
     }
   };
   walk(WEB_DIR, '/');
-  for (const s of SHARED) files.set(`/src/${s}`, nodeFs.readFileSync(path.join(SRC, s)));
   return files;
 }
 

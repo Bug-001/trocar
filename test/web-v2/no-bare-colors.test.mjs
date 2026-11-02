@@ -88,7 +88,7 @@ test('the scanner catches planted violations and spares the token blocks (it is 
 })
 
 test('web/legacy has no bare colour outside the :root tokens of css/base.css', () => {
-  const files = walk(ROOT)
+  const files = [...walk(ROOT), path.join(ROOT, '..', 'index.html')]
   assert.ok(files.length >= 15, `expected the v2 front end to exist, found ${files.length} files`)
   assert.ok(files.some((f) => f.endsWith(path.join('css', 'base.css'))))
   const bad = files.flatMap((f) => colorViolations(path.relative(ROOT, f).split(path.sep).join('/'), fs.readFileSync(f, 'utf8')))

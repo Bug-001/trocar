@@ -19,7 +19,7 @@ export const isCredentialHeader = (name) => {
 export const revealHeader = (api, ref, name, opts) => api.get('calls', { ref, reveal: String(name).trim().toLowerCase() }, opts)
 
 /** Any URL userinfo in a text → `***@` (1.9 §保真边界: 代理地址里的用户名与密码一律显示成 `***@`): the CLI's own rule (src/off/userinfo.mjs, served
- * from the shared-module allowlist, 4.4 静态面), so the page and the receipts hide the same. Pure, no DOM. */
+ * bundled into the build, 4.4 静态面), so the page and the receipts hide the same. Pure, no DOM. */
 export const redactUrlCredentials = (text) => hideUserinfo(text ?? '')
 
 export const redactUrlCredentialsHtml = (text) => esc(redactUrlCredentials(text))
