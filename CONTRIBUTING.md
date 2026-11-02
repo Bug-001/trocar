@@ -12,7 +12,13 @@ cd trocar
 npm install
 ```
 
-trocar has no runtime dependencies; `npm install` only fetches the development tools.
+trocar has no runtime dependencies; `npm install` only fetches the development tools (the board's build tools and the test runners).
+
+## The board
+
+The board's source is in `web/`: the React shell in `web/src/`, the screens not yet ported in `web/legacy/`. Users never build it. The daemon serves the built board from `src/web/board/`, which is committed, so every way of installing trocar gets the same bytes.
+
+After editing anything under `web/`, run `npm run build:board` and commit `src/web/board/` in its own commit, the last one of the pull request. If `src/web/board/` conflicts in a rebase or merge, do not merge it by hand: take either side, rebuild, and commit the result.
 
 ## Tests
 
@@ -24,6 +30,13 @@ trocar has no runtime dependencies; `npm install` only fetches the development t
   The preloads are part of the test command. Never drop them, and never move them into `NODE_OPTIONS`.
 - `npm test -- <files>` runs a few files while you iterate. Always go through `npm test` so the preloads apply.
 - `HOME=$(mktemp -d) npm test` is the full run from a fresh HOME. Run it before opening a pull request and put the counts (pass / fail / skip) and the skips in the description.
+- Before a pull request also run, and report:
+  - `npm run test:web`: the board's component tests (Vitest, under the same leak and no-real-OS guards);
+  - `npm run typecheck` and `npm run lint`: the board's TypeScript and its React hooks rules;
+  - `npm run test:build`: rebuilds `web/` in a temporary directory and fails if any file differs from the committed `src/web/board/`;
+  - `npm run test:browser`: the board in a real browser, served by a real daemon.
+
+  These need the development tools; plain `npm test` does not, and says so when it skips the build check.
 - Tests get temporary directories from `tmpDir()` in `test/helpers/tmp.mjs`, never a hand-made `mkdtemp`.
 
 ### What a test may assert
