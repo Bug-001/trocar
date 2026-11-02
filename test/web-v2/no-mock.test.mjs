@@ -11,13 +11,13 @@ const V2 = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '
 const sources = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
   const p = path.join(dir, d.name)
   if (d.isDirectory()) return sources(p)
-  return /\.(mjs|html)$/.test(d.name) ? [p] : []
+  return /(?<!\.test)\.(mjs|ts|tsx|html)$/.test(d.name) ? [p] : []
 })
 
 test('the in-browser mock is gone: no web/legacy/mock/, and nothing imports it', () => {
   assert.equal(fs.existsSync(path.join(V2, 'mock')), false, 'web/legacy/mock/ exists again')
   const offenders = []
-  for (const f of sources(V2)) {
+  for (const f of sources(path.join(V2, '..'))) {
     const src = fs.readFileSync(f, 'utf8'), rel = path.relative(V2, f)
     // a static import / re-export, or a dynamic import(), whose target walks into mock/
     for (const m of src.matchAll(/^\s*(?:import\b(?:[^'"`;]*?\bfrom\s*|\s*)|export\b[^'"`;]*?\bfrom\s*)['"]([^'"]+)['"]/gm)) if (/(^|\/)mock(\/|$)/.test(m[1])) offenders.push(`${rel}: import ${m[1]}`)
@@ -36,7 +36,7 @@ const BANNED = [
 
 test(`no shipped string literal carries a mock control or placeholder wording (${BANNED.join(' ')})`, () => {
   const offenders = []
-  for (const f of sources(V2)) {
+  for (const f of sources(path.join(V2, '..'))) {
     const src = fs.readFileSync(f, 'utf8'), rel = path.relative(V2, f)
     for (const m of src.matchAll(STRINGS)) for (const bad of BANNED) if (m[2].includes(bad)) offenders.push(`${rel}: "${bad}" in ${m[0].slice(0, 60)}`)
   }

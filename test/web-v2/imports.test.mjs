@@ -1,6 +1,6 @@
 // test/web-v2/imports.test.mjs — the board's import rule (0.1 §2, 4.4 §静态面): every relative specifier in web/**/*.{mjs,ts,tsx}
 // resolves to a file inside web/, or to a src/ module whose whole import closure stays in src/ and imports no `node:*` (it is bundled
-// into the build); a bare specifier in web/ names a devDependency, and web/legacy/ has none (so core/first.mjs, the cold open's early
+// into the build); a bare specifier in web/ names a devDependency (`node:*` only in the Node-side configs at the top of web/), and web/legacy/ has none (so core/first.mjs, the cold open's early
 // read, has no framework in its closure, 1.2 #24); src/ never imports web/; every relative specifier in test/web-v2 resolves.
 // The scanner is proven not vacuous on a planted tree with one violation of each kind.
 import test from 'node:test'
@@ -42,7 +42,7 @@ function violations(root) {
   for (const f of codeUnder(web, (p) => p.startsWith('public/') || p.includes('node_modules/'))) {
     for (const s of specsOf(f)) {
       if (!s.startsWith('.')) {
-        if (inside(legacy, f) || !(s.startsWith('node:') ? f === path.join(web, 'vite.config.mjs') : dev.has(pkgOf(s)))) say(f, s)
+        if (inside(legacy, f) || !(s.startsWith('node:') ? path.dirname(f) === web : dev.has(pkgOf(s)))) say(f, s)
         continue
       }
       const t = fileAt(path.resolve(path.dirname(f), s.split(/[?#]/)[0]))

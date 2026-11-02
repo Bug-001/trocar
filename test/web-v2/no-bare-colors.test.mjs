@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'legacy')
 const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
   const p = path.join(dir, d.name)
-  return d.isDirectory() ? walk(p) : /\.(mjs|css|html)$/.test(d.name) ? [p] : []
+  return d.isDirectory() ? walk(p) : /(?<!\.test)\.(mjs|ts|tsx|css|html)$/.test(d.name) ? [p] : []
 })
 // 3, 4, 6 and 8 digits (#rgb #rgba #rrggbb #rrggbbaa), not the tail of a longer word, an entity (&#39;), a fragment (…/#x) or an id (a#b).
 const HEX = /(?<![&\w#/])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})(?![\w-])/g
@@ -88,7 +88,7 @@ test('the scanner catches planted violations and spares the token blocks (it is 
 })
 
 test('web/legacy has no bare colour outside the :root tokens of css/base.css', () => {
-  const files = [...walk(ROOT), path.join(ROOT, '..', 'index.html')]
+  const files = walk(path.join(ROOT, '..')) // all of web/: the legacy tree, the React shell (web/src) and index.html
   assert.ok(files.length >= 15, `expected the v2 front end to exist, found ${files.length} files`)
   assert.ok(files.some((f) => f.endsWith(path.join('css', 'base.css'))))
   const bad = files.flatMap((f) => colorViolations(path.relative(ROOT, f).split(path.sep).join('/'), fs.readFileSync(f, 'utf8')))
