@@ -50,7 +50,7 @@ export function dialogFor({ kind, on, name, plan, stale }) {
 }
 
 // the outcome of planConfirm → the receipt this row shows (null for a cancel: nothing happened)
-function receiptOf(kind, on, out) {
+export function receiptOf(kind, on, out) {
   if (out.outcome === 'cancelled') return null
   if (out.outcome === 'refused') {
     const e = out.receipt && out.receipt.error
