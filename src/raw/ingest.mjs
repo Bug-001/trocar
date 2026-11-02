@@ -7,7 +7,7 @@
 //
 // FIDELITY (invariant 4): a record whose request was a parsed object carries capture:'v0-converted' —
 // its req_body is RE-SERIALIZED, not the original wire bytes, so no block is addressed into it
-// (view/assemble.mjs spanBody): its blocks ship inline and say so, and the board draws the window line.
+// (view/extract.mjs spanBody): its blocks ship inline and say so, and the board draws the window line.
 import { createReadStream } from 'node:fs';
 import { basename } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -15,7 +15,7 @@ import { isSealedPath } from '../raw/discover.mjs';
 import { openSealed } from '../raw/reader.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
 
-// What a record whose req_body was rebuilt from a parsed request says it is, whatever capture it carried (view/assemble.mjs spanBody).
+// What a record whose req_body was rebuilt from a parsed request says it is, whatever capture it carried (view/extract.mjs spanBody).
 export const V0_CONVERTED = 'v0-converted';
 
 // True D10 record → passthrough. Demo v0 record → convert. Anything else → passthrough.

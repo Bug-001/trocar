@@ -851,7 +851,7 @@ function compOf(last, list, B) {
   for (let i = p; i < list.length; i++) c[B.bucket(list[i])] += B.bytes(list[i]);
   return c;
 }
-// What the timeline reads of the request (assemble.mjs slimRec): the record's own, with what a stitched context changes — its message
+// What the timeline reads of the request (extract.mjs slimRec): the record's own, with what a stitched context changes — its message
 // and tool counts and its system's characters — from the stitched list.
 function requestOf(x, list, B) {
   const rq = { ...(x.rq || {}) };

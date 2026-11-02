@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { boardFlat, normResp, detect, itemToBlocks, OPENAI_SECTIONS } from '../../src/dissect/openai.mjs';
-import { assembleSession, sessionIdOf } from '../../src/view/assemble.mjs';
+import { assembleSession } from '../../src/view/assemble.mjs';
+import { sessionIdOf } from '../../src/view/extract.mjs';
 
 // D25 · Phase 4 — the OpenAI/Codex dissector maps the Responses API into the ONE cross-provider block
 // vocabulary (tools/system/messages + text/tool_use/tool_result/thinking) so the board renders Codex

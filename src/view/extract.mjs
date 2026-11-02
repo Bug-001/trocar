@@ -11,26 +11,26 @@
 // the row's `attrs`, by list position.
 import { createHash } from 'node:crypto';
 import { admitted, flatBlockText, blockFacts, callFacts, normResp, replyPartsAnthropic, linearContext } from './analyze.mjs';
-import { hydrateForBoard, anthropicFlat, flatRequest, spanBody, rawRefOf, wireOf, respRefsOf, extraMessagesOf, unknownFacts, slimRec, nonBlockKeysOf } from './assemble.mjs';
+import { wireOf, respRefsOf, extraMessagesOf, nonBlockKeysOf } from './assemble.mjs';
 import { slimBlock, compBucket, firstHuman, blockQuery } from './blockmeta.mjs';
 import { renderOf } from './render-kind.mjs';
 import { blockSpans } from '../dissect/cc-spans.mjs';
 import { resourceRef as ccResourceRef } from '../dissect/cc.mjs';
 import { resourceRef as oaResourceRef, faithfulness as oaFaithfulness } from '../dissect/openai.mjs';
 import { scanJson, spanAt } from '../dissect/json-scan.mjs';
-import { scannedRequestBody, sharesBody } from '../dissect/request-body.mjs';
-import { fieldTextOf, respOf } from '../dissect/record-fields.mjs';
-import { composeTextRef } from '../raw/refs.mjs';
-import { boardDissectorFor, wireFormatOf, flatLaneOf } from '../dissect/registry.mjs';
-import { hintsOf } from '../dissect/harnesses.mjs';
+import { scannedRequestBody, sharesBody, parsedRequestBody, storedRequestBody, requestEncodingOf } from '../dissect/request-body.mjs';
+import { fieldTextOf, respOf, headersOf } from '../dissect/record-fields.mjs';
+import { composeTextRef, mintRawRef } from '../raw/refs.mjs';
+import { V0_CONVERTED } from '../raw/ingest.mjs';
+import { boardDissectorFor, wireFormatOf, flatLaneOf, contextStateOf, blockKeysOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
+import { hintsOf, sessionKeyOf, observerEffectsOf } from '../dissect/harnesses.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
 import { failedOf } from '../dissect/endpoints.mjs';
 import { mapUsage, boardUsage } from '../model/schema.mjs';
 import { CC_THREADS, replyIdOf, patchSystem } from '../dissect/cc-threads.mjs';
 import { hasCompactionPreamble } from '../identity/session-identity.mjs';
-import { sessionKeyOf } from '../dissect/harnesses.mjs';
 import { posCmp, num52, numTable } from '../query/projection.mjs';
-import { bodyRetentionOf, retentionLabelOf, reqIncompleteOf, wsIncompleteOf, respIncompleteOf, isLogOnly } from '../dissect/capture-labels.mjs';
+import { bodyRetentionOf, retentionLabelOf, reqIncompleteOf, wsIncompleteOf, respIncompleteOf, isLogOnly, captureLabelsOf } from '../dissect/capture-labels.mjs';
 
 const SEP = '\x1F';
 const b64 = (s) => createHash('sha256').update(s, 'utf8').digest().subarray(0, 16).toString('base64url');
@@ -597,4 +597,111 @@ export function extractMembers({ store, members, recordsAt, sessionId = null, bu
   }
   settle();
   return { frontier: at ? idOf(at - 1) : null, done: at, total: members.length };
+}
+
+// ── one record, read for the board: its parsed request, its wire facts and the locators of its reply, parameters and later messages
+// CC dissector · board intake (RFC 3.1 dissector · D18a). The board's block extractor (linearContext /
+// analyze) reads a PARSED v0-shape record: `.request` (object) + `.response`. The PRODUCT capture (D10,
+// see 4.1/3.1:12) stores the request as a VERBATIM `req_body` STRING and the response under `resp`. So a
+// D10 record renders EMPTY on the board unless we dissect it first. hydrateForBoard parses req_body →
+// request (carrying the FULL verbatim tool `input_schema` → analyze marks tools verbatim, not metadata)
+// and aliases resp→response. This is the source truth (不变式 2): blocks are sliced from the verbatim
+// wire req_body, so AC-1 holds MORE directly for D10 than v0. No-op for records already in v0 shape.
+// A context the dissector stitched across records (ctx, D37 ②) stands in for the call's own body, and rides on the
+// copy as the non-enumerable `_ctx` (state, lineage) for the lane segmentation in analyze().
+export function hydrateForBoard(r, ctx = null) {
+  if (!r || r.request !== undefined || typeof r.req_body !== 'string') return r; // already v0 / not a D10 body
+  const body = ctx ? ctx.req : parsedRequestBody(r); // parsed once per record (src/dissect/request-body.mjs)
+  if (!body || typeof body !== 'object') return r; // unparseable → leave (analyze filters it)
+  const system = Array.isArray(body.system) ? body.system
+    : (typeof body.system === 'string' ? [{ type: 'text', text: body.system }] : []);
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  const request = {
+    ...body, system, messages, tools,
+    // derived counts the v0 capture used to bake (the raw wire body doesn't carry them)
+    message_count: messages.length,
+    tool_count: MULTI_LANE_CONTEXT.toolCountOf({ tools, messages }),
+    system_chars: system.reduce((a, b) => a + String((b && b.text) || '').length, 0),
+    context_chars: r.req_body.length,
+  };
+  // Carry the source-stream stamp across the copy. `{...r}` takes only ENUMERABLE properties, and
+  // `_stream` is deliberately non-enumerable (so it never appears in stored or shipped JSON) — which
+  // means a spread silently drops it, and every block downstream loses the half of its text_ref that
+  // says WHICH capture file its bytes are in. Silent, because the result is simply a missing locator.
+  const out = sharesBody({ ...r, request, response: r.response || r.resp || {} }, r); // the copy's stored body parses and scans as r's
+  if (r._stream) Object.defineProperty(out, '_stream', { value: r._stream, enumerable: false, configurable: true });
+  if (ctx) Object.defineProperty(out, '_ctx', { value: ctx, enumerable: false, configurable: true });
+  return out;
+}
+
+// Session key per harness (RFC 3.4 table, D37): read from the ONE table the ETL and sharder also use; else the
+// synthesized key board.groupSessions stamped on a keyless Hermes / Kimi call (3.4 合成键, gate G11).
+export function sessionIdOf(rec) {
+  return sessionKeyOf(rec).key ?? (rec && rec._synthKey) ?? null;
+}
+
+// What the evidence block for records no dissector claims (reduce.mjs unknownSummary) keeps of one such record (the fold lets the record go): endpoint, user-agent, model.
+export function unknownFacts(r) {
+  const b = parsedRequestBody(r);
+  return { endpoint: String((r && r.endpoint) || '').split('?')[0], ua: (headersOf(r) || {})['user-agent'], model: b && typeof b.model === 'string' ? b.model : null };
+}
+
+// A flat-lane wire's request as its dissector reads it: the stitched context (ctx), else the body parsed, else the demo v0
+// shape. `unparsed`: a body that is there but does not parse is unrenderable, with its reason (R4-3). A req_body that is
+// null (a WebSocket call whose request message is undecoded, or a server push: 4.6 §传输) is no body at all: such a call
+// has no request, and its labels say why (wsIncomplete); it must not take /api/session down either.
+// Side effect, as the board's callComp / cost need it: `r.request` is the parsed request, with the dissector's counts.
+export function flatRequest(d, r, ctx) {
+  let req = ctx ? ctx.req : null, unparsed = false;
+  if (!ctx) {
+    const v = storedRequestBody(r); // the record's one parse, READ-ONLY: the counts below go on a copy
+    if (v && typeof v === 'object') req = { ...v };
+    else if (r.request && typeof r.request === 'object') req = r.request; // demo v0 shape
+    else { req = {}; if (r.req_body != null) unparsed = true; } // the labels still read the body as stored (G17 'partial')
+  }
+  r.request = req;
+  Object.assign(req, d.reqCounts(req)); // derived counts the board header + raw card read (parallel to hydrateForBoard)
+  req.context_chars = (r.req_body || '').length; // verbatim wire byte count
+  return { req, unparsed };
+}
+
+// The per-call record, reduced to what the board renders FROM it.
+//
+// /api/session used to ship `rec.request` whole — the entire wire body — to a browser that had just
+// been sent every block of that same body, assembled. On a real 115-call session that was ~120 MB of
+// a 142.8 MB response. The frontend was checked line by line against this: it reads `rq.model`,
+// `rq.context_chars`, `rq.message_count`, `rq.tool_count`, `rq.system_chars` and nothing else. Every
+// computation that genuinely needs the body — composition buckets, section tax, diff keys,
+// cache-break — already runs server-side over the blocks (invariant 3 requires that anyway: the
+// browser must never branch on a provider's wire shape).
+//
+// The body is not lost, it is where it always was: in the raw NDJSON, addressed by the same ref its
+// blocks carry.
+const REQ_KEEP = ['model', 'context_chars', 'message_count', 'tool_count', 'system_chars'];
+export function slimRec(rec) {
+  if (!rec) return rec;
+  const rq = rec.request || {};
+  const request = {};
+  for (const k of REQ_KEEP) if (rq[k] !== undefined) request[k] = rq[k];
+  return { id: rec.id, request };
+}
+
+// The request text spans are cut from: the captured string. A converted v0 record's is re-serialized, not the wire's, so nothing is
+// addressed into it: its blocks ship inline and say why, and it has no non-block keys (2.3 §窗口行 · 2.6 §A v0 记录).
+export const spanBody = (rec) => (rec && typeof rec.req_body === 'string' && rec.capture !== V0_CONVERTED ? rec.req_body : null);
+// A record's raw_ref (4.2:40), or null when it cannot be addressed: no id, or no stream it was read from.
+export const rawRefOf = (rec) => (rec && rec.id != null && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, String(rec.id)) : null);
+
+// The blocks of an Anthropic-wire request, tagged with their faithfulness SERVER-SIDE (reads provider block shape here, not in
+// the browser → invariant 3). opaque = encrypted/redacted reasoning replayed as signature-only, no plaintext on the wire
+// (thinking/redacted_thinking with a signature but empty text). The board renders a badge off b.faithfulness so nobody
+// mistakes ciphertext for verbatim content (invariant 4). (1.4:52)
+export function anthropicFlat(request, keyMemo) {
+  const flat = linearContext(request, keyMemo);
+  for (const b of flat) {
+    const bl = b.block || {};
+    if ((b.kind === 'thinking' || b.kind === 'redacted_thinking') && bl.signature && !(bl.thinking || bl.text)) b.faithfulness = 'opaque';
+  }
+  return flat;
 }

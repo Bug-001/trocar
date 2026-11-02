@@ -15,6 +15,7 @@ import { mintRawRef, composeTextRef } from '../raw/refs.mjs';
 import { V0_CONVERTED } from '../raw/ingest.mjs';
 import { fieldTextOf, TEXT_REF_FIELD, headersOf, respOf } from '../dissect/record-fields.mjs';
 import { realGroundTruth, unknownSummary, FLAT_LANES } from './reduce.mjs';
+import { hydrateForBoard, anthropicFlat, flatRequest, spanBody, rawRefOf, unknownFacts, slimRec } from './extract.mjs';
 import { sessionKeyOf, observerEffectsOf, hintsOf } from '../dissect/harnesses.mjs';
 import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf, flatLaneOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
 import { parsedRequestBody, storedRequestBody, scannedRequestBody, sharesBody } from '../dissect/request-body.mjs';
@@ -60,57 +61,13 @@ function prefixChain(flat, prev) {
   return { texts, states, digestAt: (idx) => (idx > 0 && idx <= n ? states[idx].copy().digest('hex') : null) };
 }
 
-// CC dissector · board intake (RFC 3.1 dissector · D18a). The board's block extractor (linearContext /
-// analyze) reads a PARSED v0-shape record: `.request` (object) + `.response`. The PRODUCT capture (D10,
-// see 4.1/3.1:12) stores the request as a VERBATIM `req_body` STRING and the response under `resp`. So a
-// D10 record renders EMPTY on the board unless we dissect it first. hydrateForBoard parses req_body →
-// request (carrying the FULL verbatim tool `input_schema` → analyze marks tools verbatim, not metadata)
-// and aliases resp→response. This is the source truth (不变式 2): blocks are sliced from the verbatim
-// wire req_body, so AC-1 holds MORE directly for D10 than v0. No-op for records already in v0 shape.
-// A context the dissector stitched across records (ctx, D37 ②) stands in for the call's own body, and rides on the
-// copy as the non-enumerable `_ctx` (state, lineage) for the lane segmentation in analyze().
-export function hydrateForBoard(r, ctx = null) {
-  if (!r || r.request !== undefined || typeof r.req_body !== 'string') return r; // already v0 / not a D10 body
-  const body = ctx ? ctx.req : parsedRequestBody(r); // parsed once per record (src/dissect/request-body.mjs)
-  if (!body || typeof body !== 'object') return r; // unparseable → leave (analyze filters it)
-  const system = Array.isArray(body.system) ? body.system
-    : (typeof body.system === 'string' ? [{ type: 'text', text: body.system }] : []);
-  const messages = Array.isArray(body.messages) ? body.messages : [];
-  const tools = Array.isArray(body.tools) ? body.tools : [];
-  const request = {
-    ...body, system, messages, tools,
-    // derived counts the v0 capture used to bake (the raw wire body doesn't carry them)
-    message_count: messages.length,
-    tool_count: MULTI_LANE_CONTEXT.toolCountOf({ tools, messages }),
-    system_chars: system.reduce((a, b) => a + String((b && b.text) || '').length, 0),
-    context_chars: r.req_body.length,
-  };
-  // Carry the source-stream stamp across the copy. `{...r}` takes only ENUMERABLE properties, and
-  // `_stream` is deliberately non-enumerable (so it never appears in stored or shipped JSON) — which
-  // means a spread silently drops it, and every block downstream loses the half of its text_ref that
-  // says WHICH capture file its bytes are in. Silent, because the result is simply a missing locator.
-  const out = sharesBody({ ...r, request, response: r.response || r.resp || {} }, r); // the copy's stored body parses and scans as r's
-  if (r._stream) Object.defineProperty(out, '_stream', { value: r._stream, enumerable: false, configurable: true });
-  if (ctx) Object.defineProperty(out, '_ctx', { value: ctx, enumerable: false, configurable: true });
-  return out;
-}
 
-// Session key per harness (RFC 3.4 table, D37): read from the ONE table the ETL and sharder also use; else the
-// synthesized key board.groupSessions stamped on a keyless Hermes / Kimi call (3.4 合成键, gate G11).
-export function sessionIdOf(rec) {
-  return sessionKeyOf(rec).key ?? (rec && rec._synthKey) ?? null;
-}
 
 // ── wire dispatch (D25 · one dissector per WIRE FORMAT, D37 ①) ──────────────────────────────────
 // Which dissector reads a record is the shared registry's answer (src/dissect/registry.mjs): the flat-lane
 // wires have a board dissector object there; the Anthropic wire is assembled by the multi-lane analyzer
 // (src/view/analyze.mjs). This module names no wire and imports no wire dissector.
 
-// What the evidence block keeps of one such record (the fold lets the record go): endpoint, user-agent, model.
-export function unknownFacts(r) {
-  const b = parsedRequestBody(r);
-  return { endpoint: String((r && r.endpoint) || '').split('?')[0], ua: (headersOf(r) || {})['user-agent'], model: b && typeof b.model === 'string' ? b.model : null };
-}
 function assembleUnknown(records) {
   return {
     provider: 'unknown',
@@ -126,24 +83,6 @@ function assembleUnknown(records) {
 // `boardDissectorFor`). The cache-break + ground-truth machinery (cacheBreak / prefixSha256 / realGroundTruth)
 // is wire-agnostic over the flat block vocabulary, so it is REUSED verbatim. Lanes beyond `main` and the
 // resource ledger are not extracted on this path (fidelity: not-yet-extracted, not misreported).
-// A flat-lane wire's request as its dissector reads it: the stitched context (ctx), else the body parsed, else the demo v0
-// shape. `unparsed`: a body that is there but does not parse is unrenderable, with its reason (R4-3). A req_body that is
-// null (a WebSocket call whose request message is undecoded, or a server push: 4.6 §传输) is no body at all: such a call
-// has no request, and its labels say why (wsIncomplete); it must not take /api/session down either.
-// Side effect, as the board's callComp / cost need it: `r.request` is the parsed request, with the dissector's counts.
-export function flatRequest(d, r, ctx) {
-  let req = ctx ? ctx.req : null, unparsed = false;
-  if (!ctx) {
-    const v = storedRequestBody(r); // the record's one parse, READ-ONLY: the counts below go on a copy
-    if (v && typeof v === 'object') req = { ...v };
-    else if (r.request && typeof r.request === 'object') req = r.request; // demo v0 shape
-    else { req = {}; if (r.req_body != null) unparsed = true; } // the labels still read the body as stored (G17 'partial')
-  }
-  r.request = req;
-  Object.assign(req, d.reqCounts(req)); // derived counts the board header + raw card read (parallel to hydrateForBoard)
-  req.context_chars = (r.req_body || '').length; // verbatim wire byte count
-  return { req, unparsed };
-}
 // The fold of one flat-lane wire (`d` = its dissector object): push(rec, gi) one call at a time in step order → the call
 // with the call in its META form (no blocks, `paged_out`); bodyOf() gives an in-window call its blocks back from its record.
 function flatLaneFold(d) {
@@ -274,32 +213,7 @@ export function flatLaneView(d, all, askOf) {
 // call augmented: .flat (linearContext), .cacheBreak (vs prev in lane), .gt (groundTruth).
 
 
-// The per-call record, reduced to what the board renders FROM it.
-//
-// /api/session used to ship `rec.request` whole — the entire wire body — to a browser that had just
-// been sent every block of that same body, assembled. On a real 115-call session that was ~120 MB of
-// a 142.8 MB response. The frontend was checked line by line against this: it reads `rq.model`,
-// `rq.context_chars`, `rq.message_count`, `rq.tool_count`, `rq.system_chars` and nothing else. Every
-// computation that genuinely needs the body — composition buckets, section tax, diff keys,
-// cache-break — already runs server-side over the blocks (invariant 3 requires that anyway: the
-// browser must never branch on a provider's wire shape).
-//
-// The body is not lost, it is where it always was: in the raw NDJSON, addressed by the same ref its
-// blocks carry.
-const REQ_KEEP = ['model', 'context_chars', 'message_count', 'tool_count', 'system_chars'];
-export function slimRec(rec) {
-  if (!rec) return rec;
-  const rq = rec.request || {};
-  const request = {};
-  for (const k of REQ_KEEP) if (rq[k] !== undefined) request[k] = rq[k];
-  return { id: rec.id, request };
-}
 
-// The request text spans are cut from: the captured string. A converted v0 record's is re-serialized, not the wire's, so nothing is
-// addressed into it: its blocks ship inline and say why, and it has no non-block keys (2.3 §窗口行 · 2.6 §A v0 记录).
-export const spanBody = (rec) => (rec && typeof rec.req_body === 'string' && rec.capture !== V0_CONVERTED ? rec.req_body : null);
-// A record's raw_ref (4.2:40), or null when it cannot be addressed: no id, or no stream it was read from.
-export const rawRefOf = (rec) => (rec && rec.id != null && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, String(rec.id)) : null);
 
 // Turn a call's assembled blocks into their WIRE shape: metadata + a text_ref locator, no body.
 //
@@ -563,18 +477,6 @@ export function mergeViews(views) {
       peakCtx: Math.max(0, ...views.map((v) => (v.stats || {}).peakCtx || 0)) } };
 }
 
-// The blocks of an Anthropic-wire request, tagged with their faithfulness SERVER-SIDE (reads provider block shape here, not in
-// the browser → invariant 3). opaque = encrypted/redacted reasoning replayed as signature-only, no plaintext on the wire
-// (thinking/redacted_thinking with a signature but empty text). The board renders a badge off b.faithfulness so nobody
-// mistakes ciphertext for verbatim content (invariant 4). (1.4:52)
-export function anthropicFlat(request, keyMemo) {
-  const flat = linearContext(request, keyMemo);
-  for (const b of flat) {
-    const bl = b.block || {};
-    if ((b.kind === 'thinking' || b.kind === 'redacted_thinking') && bl.signature && !(bl.thinking || bl.text)) b.faithfulness = 'opaque';
-  }
-  return flat;
-}
 // The multi-lane fold (the Anthropic wire): each record is dissected to the shape the board's block extractor reads (v0 in
 // place; D10 req_body→request), analyze()'s fold puts it in its lane, then the call is baked against its lane's previous one.
 // A call that continues a server-held thread carries only its delta: the dissector stitches its context as the calls arrive.
