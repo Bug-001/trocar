@@ -5,7 +5,7 @@
 // Kept per call: its row's ts by its slot in the projection and its place in the step-order column and its lane's; per member that
 // is no call, the facts of its item or failed line (itemsOf). An answer reads only the lines that changed since the last.
 import { sessionMetaOfFacts, itemsView } from '../view/board.mjs';
-import { unknownSummary } from '../view/assemble.mjs';
+import { unknownSummary } from '../view/reduce.mjs';
 import { compareStep } from '../view/step-order.mjs';
 import { COMP_KEYS } from '../view/blockmeta.mjs';
 import { FLAG } from '../view/head-cols.mjs';

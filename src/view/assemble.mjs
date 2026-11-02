@@ -14,6 +14,7 @@ import { slimBlock, compBuckets, firstHuman, HEAD, tellApart } from './blockmeta
 import { mintRawRef, composeTextRef } from '../raw/refs.mjs';
 import { V0_CONVERTED } from '../raw/ingest.mjs';
 import { fieldTextOf, TEXT_REF_FIELD, headersOf, respOf } from '../dissect/record-fields.mjs';
+import { realGroundTruth, unknownSummary, FLAT_LANES } from './reduce.mjs';
 import { sessionKeyOf, observerEffectsOf, hintsOf } from '../dissect/harnesses.mjs';
 import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf, flatLaneOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
 import { parsedRequestBody, storedRequestBody, scannedRequestBody, sharesBody } from '../dissect/request-body.mjs';
@@ -57,13 +58,6 @@ function prefixChain(flat, prev) {
   }
   // idx <= 0 → no reusable prefix, as before
   return { texts, states, digestAt: (idx) => (idx > 0 && idx <= n ? states[idx].copy().digest('hex') : null) };
-}
-// Ground-truth from PROVEN byte-identity (not the structural proxy). Strict wording per 3.3:73 — the
-// claim is only "MY outbound prefix is byte-identical", never "the provider is wrong".
-export function realGroundTruth(prefixByteIdentical, read, create) {
-  if (!prefixByteIdentical) return null;             // no proven byte-identical reusable prefix
-  if (read > 0) return null;                          // genuinely reused → normal
-  return create > 0 ? 'ttl-rebuild' : 'provider-contradiction';
 }
 
 // CC dissector · board intake (RFC 3.1 dissector · D18a). The board's block extractor (linearContext /
@@ -112,35 +106,10 @@ export function sessionIdOf(rec) {
 // wires have a board dissector object there; the Anthropic wire is assembled by the multi-lane analyzer
 // (src/view/analyze.mjs). This module names no wire and imports no wire dissector.
 
-// No dissector claimed these bytes. Report that IN PLACE (invariant 4) and COUNT them (3.1:44 — an
-// unclaimed record MUST land in a labelled "unrecognized" state, MUST NOT be silently dropped).
-// We deliberately emit ZERO calls/lanes/blocks: any number we printed here would be a number we did
-// not parse. The evidence below (endpoints, user-agents, models) is copied verbatim from the envelope
-// so a human can see WHAT arrived without us pretending to have understood it.
-// The evidence block for records no dissector claims. `partial` = they sit inside a session whose other
-// records ARE rendered (a mixed session); otherwise the whole session is unrecognized.
 // What the evidence block keeps of one such record (the fold lets the record go): endpoint, user-agent, model.
 export function unknownFacts(r) {
   const b = parsedRequestBody(r);
   return { endpoint: String((r && r.endpoint) || '').split('?')[0], ua: (headersOf(r) || {})['user-agent'], model: b && typeof b.model === 'string' ? b.model : null };
-}
-export function unknownSummary(recs, partial) {
-  const uniq = (xs) => [...new Set(xs.filter(Boolean))];
-  const models = uniq(recs.map((r) => r.model));
-  return {
-    partial,
-    reason: partial
-      ? 'Some records in this session are read as a call by no registered dissector (src/dissect/registry.mjs): '
-        + 'an unknown wire, or a record of a known wire that is no call (e.g. a message the server pushed with no '
-        + 'call open). They are counted here and NOT rendered; the rest of the session is.'
-      : 'No registered dissector reads these records as a call (src/dissect/registry.mjs): an unknown wire, or '
-        + 'records of a known wire that are no call (e.g. messages the server pushed with no call open). They are NOT '
-        + 'parsed and NOT rendered — showing them under another wire\'s vocabulary would be a fabrication.',
-    records: recs.length,
-    endpoints: uniq(recs.map((r) => r.endpoint)),
-    userAgents: uniq(recs.map((r) => r.ua)),
-    models,
-  };
 }
 function assembleUnknown(records) {
   return {
@@ -157,15 +126,6 @@ function assembleUnknown(records) {
 // `boardDissectorFor`). The cache-break + ground-truth machinery (cacheBreak / prefixSha256 / realGroundTruth)
 // is wire-agnostic over the flat block vocabulary, so it is REUSED verbatim. Lanes beyond `main` and the
 // resource ledger are not extracted on this path (fidelity: not-yet-extracted, not misreported).
-// Lanes a flat-lane wire can be split into by the harness table's hints (3.4). Labels are server-side
-// (invariant 3); the board renders them as it renders analyze()'s lanes.
-export const FLAT_LANES = {
-  main: { kind: 'main', icon: '💬', label: 'conversation' },
-  subagent: { kind: 'subagent', icon: '🧬', label: 'subagent' },
-  aux: { kind: 'aux', icon: '⚙', label: 'other util' },
-  probe: { kind: 'probe', icon: '👁', label: 'warm-up / probe requests',
-    note: 'A request the harness itself marks as a warm-up or probe (a request-kind hint, or a request that asks for no output): it primes the cache and is not a conversation turn. Its body is kept verbatim like any call, and a later call may build on it.' },
-};
 // A flat-lane wire's request as its dissector reads it: the stitched context (ctx), else the body parsed, else the demo v0
 // shape. `unparsed`: a body that is there but does not parse is unrenderable, with its reason (R4-3). A req_body that is
 // null (a WebSocket call whose request message is undecoded, or a server push: 4.6 §传输) is no body at all: such a call

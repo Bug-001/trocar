@@ -13,7 +13,6 @@
 // One place it is more exact: the record fold keys a block by its first 4,096 characters (analyze.mjs BLK_KEY_CAP), so two blocks
 // that differ only past that are the same to it; here a block is its whole frame (real captures carry blocks that differ only past 4,096 characters).
 import { createAnalyzer, stepOrder, OrderBound, breakOf, blockDiff, compactionMeta, unparsedErrMsg, laneMeta, replayLedger } from './analyze.mjs';
-import { realGroundTruth, unknownSummary, FLAT_LANES } from './assemble.mjs';
 import { callRow, itemsView } from './board.mjs';
 import { compareStep } from './step-order.mjs';
 import { compactionVerdict } from '../identity/session-identity.mjs';
@@ -22,6 +21,50 @@ import { COMP_KEYS, departer, departs, taskOf, HEAD } from './blockmeta.mjs';
 import { posCmp, lru, num52, numTable } from '../query/projection.mjs';
 import { materializeAttrs } from './extract.mjs';
 import { openFoldLog } from '../query/fold-log.mjs';
+
+// Ground-truth from PROVEN byte-identity (not the structural proxy). Strict wording per 3.3:73 — the
+// claim is only "MY outbound prefix is byte-identical", never "the provider is wrong".
+export function realGroundTruth(prefixByteIdentical, read, create) {
+  if (!prefixByteIdentical) return null;             // no proven byte-identical reusable prefix
+  if (read > 0) return null;                          // genuinely reused → normal
+  return create > 0 ? 'ttl-rebuild' : 'provider-contradiction';
+}
+
+// No dissector claimed these bytes. Report that IN PLACE (invariant 4) and COUNT them (3.1:44 — an
+// unclaimed record MUST land in a labelled "unrecognized" state, MUST NOT be silently dropped).
+// We deliberately emit ZERO calls/lanes/blocks: any number we printed here would be a number we did
+// not parse. The evidence below (endpoints, user-agents, models) is copied verbatim from the envelope
+// so a human can see WHAT arrived without us pretending to have understood it.
+// The evidence block for records no dissector claims. `partial` = they sit inside a session whose other
+// records ARE rendered (a mixed session); otherwise the whole session is unrecognized.
+export function unknownSummary(recs, partial) {
+  const uniq = (xs) => [...new Set(xs.filter(Boolean))];
+  const models = uniq(recs.map((r) => r.model));
+  return {
+    partial,
+    reason: partial
+      ? 'Some records in this session are read as a call by no registered dissector (src/dissect/registry.mjs): '
+        + 'an unknown wire, or a record of a known wire that is no call (e.g. a message the server pushed with no '
+        + 'call open). They are counted here and NOT rendered; the rest of the session is.'
+      : 'No registered dissector reads these records as a call (src/dissect/registry.mjs): an unknown wire, or '
+        + 'records of a known wire that are no call (e.g. messages the server pushed with no call open). They are NOT '
+        + 'parsed and NOT rendered — showing them under another wire\'s vocabulary would be a fabrication.',
+    records: recs.length,
+    endpoints: uniq(recs.map((r) => r.endpoint)),
+    userAgents: uniq(recs.map((r) => r.ua)),
+    models,
+  };
+}
+
+// Lanes a flat-lane wire can be split into by the harness table's hints (3.4). Labels are server-side
+// (invariant 3); the board renders them as it renders analyze()'s lanes.
+export const FLAT_LANES = {
+  main: { kind: 'main', icon: '💬', label: 'conversation' },
+  subagent: { kind: 'subagent', icon: '🧬', label: 'subagent' },
+  aux: { kind: 'aux', icon: '⚙', label: 'other util' },
+  probe: { kind: 'probe', icon: '👁', label: 'warm-up / probe requests',
+    note: 'A request the harness itself marks as a warm-up or probe (a request-kind hint, or a request that asks for no output): it primes the cache and is not a conversation turn. Its body is kept verbatim like any call, and a later call may build on it.' },
+};
 
 const CPS = 256; // the lane states a reduction keeps of its last takes, for a late call to go back to (pushOf)
 const KEYFRAME = 32; // a materialised list kept every KEYFRAME links of a base chain
