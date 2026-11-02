@@ -29,7 +29,7 @@ OS and its calls came out verbatim; `not yet` = that has not been shown there. W
 ## See it in 30 seconds, with no capture and no setup
 
 ```sh
-git clone https://github.com/Bug-001/trocar && cd trocar && npm install
+git clone https://github.com/Bug-001/trocar && cd trocar && npm install --omit=dev
 ```
 
 A small **synthetic** sample session ships in `samples/demo-session.ndjson` (fabricated, no real
@@ -97,7 +97,7 @@ stay captured, and connections open at that moment are cut and retried by the ag
 From source (Node ≥ 22): there is no global `trocar` on your PATH, so run it through the repo.
 
 ```sh
-git clone https://github.com/Bug-001/trocar && cd trocar && npm install
+git clone https://github.com/Bug-001/trocar && cd trocar && npm install --omit=dev
 make -C src/collector/arch/linux && sudo "$(command -v node)" bin/trocar.mjs setup-helper   # Linux only, once per machine
 node bin/trocar.mjs install     # once: the certificates
 node bin/trocar.mjs on          # then start capture
@@ -121,7 +121,7 @@ trocar update            # the newest code, and the machine as it was
 ```
 
 One command takes this checkout to the newest code and leaves the machine the way it was: it refuses to touch a checkout with changes of your own, fast-forwards (never merges), runs
-`npm install` when what trocar needs changed, replaces the collector, runs `install`, and switches
+`npm install --omit=dev` (no development tools) when what trocar needs changed, replaces the collector, runs `install`, and switches
 capture on again for the agents that had it on. It prints the plan — which commit to which commit,
 and which agents go off and on again — and asks first; `--yes` answers, `--dry-run` only prints.
 While it runs those agents are not captured (their connections still work), and the collector is
