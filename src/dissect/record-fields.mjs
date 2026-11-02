@@ -32,3 +32,12 @@ export function fieldTextOf(rec, field) {
   if (typeof v === 'string') return { text: v };
   return { missing: v === undefined ? `has no ${field}` : `stores ${field} as ${STORED_AS(v)}, not as text` };
 }
+// headersOf tolerates BOTH the demo v0 `request_headers` and the product D10 `req_headers` envelope key.
+export const headersOf = (rec) => (rec && (rec.request_headers || rec.req_headers)) || {};
+// Envelope drift guard (R1). The product D10 envelope stores the response under
+// `resp` (src/capture/envelope.mjs); demo v0 used `response`. Readers MUST go through this helper —
+// reading `.response` directly is what silently killed the probe rail, every HTTP status and the
+// whole control-plane view on real captures (`.response` was present on 0 of 25,817 live records)
+// while the pre-D10 test fixture kept them green. Mirrors headersOf: tolerate BOTH shapes forever,
+// because old captures on disk are still the user's data (invariant 2).
+export const respOf = (rec) => (rec && (rec.resp || rec.response)) || null;

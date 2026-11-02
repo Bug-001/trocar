@@ -13,7 +13,7 @@ import { scanJson, spanAt } from '../dissect/json-scan.mjs';
 import { slimBlock, compBuckets, firstHuman, HEAD, tellApart } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../raw/refs.mjs';
 import { V0_CONVERTED } from '../raw/ingest.mjs';
-import { fieldTextOf, TEXT_REF_FIELD } from '../dissect/record-fields.mjs';
+import { fieldTextOf, TEXT_REF_FIELD, headersOf, respOf } from '../dissect/record-fields.mjs';
 import { sessionKeyOf, observerEffectsOf, hintsOf } from '../dissect/harnesses.mjs';
 import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf, flatLaneOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
 import { parsedRequestBody, storedRequestBody, scannedRequestBody, sharesBody } from '../dissect/request-body.mjs';
@@ -101,15 +101,6 @@ export function hydrateForBoard(r, ctx = null) {
   return out;
 }
 
-// headersOf tolerates BOTH the demo v0 `request_headers` and the product D10 `req_headers` envelope key.
-export const headersOf = (rec) => (rec && (rec.request_headers || rec.req_headers)) || {};
-// Envelope drift guard (R1). The product D10 envelope stores the response under
-// `resp` (src/capture/envelope.mjs); demo v0 used `response`. Readers MUST go through this helper —
-// reading `.response` directly is what silently killed the probe rail, every HTTP status and the
-// whole control-plane view on real captures (`.response` was present on 0 of 25,817 live records)
-// while the pre-D10 test fixture kept them green. Mirrors headersOf: tolerate BOTH shapes forever,
-// because old captures on disk are still the user's data (invariant 2).
-export const respOf = (rec) => (rec && (rec.resp || rec.response)) || null;
 // Session key per harness (RFC 3.4 table, D37): read from the ONE table the ETL and sharder also use; else the
 // synthesized key board.groupSessions stamped on a keyless Hermes / Kimi call (3.4 合成键, gate G11).
 export function sessionIdOf(rec) {

@@ -11,7 +11,7 @@
 // the row's `attrs`, by list position.
 import { createHash } from 'node:crypto';
 import { admitted, flatBlockText, blockFacts, callFacts, normResp, replyPartsAnthropic, linearContext } from './analyze.mjs';
-import { hydrateForBoard, anthropicFlat, flatRequest, spanBody, rawRefOf, wireOf, respRefsOf, extraMessagesOf, unknownFacts, respOf, slimRec, nonBlockKeysOf } from './assemble.mjs';
+import { hydrateForBoard, anthropicFlat, flatRequest, spanBody, rawRefOf, wireOf, respRefsOf, extraMessagesOf, unknownFacts, slimRec, nonBlockKeysOf } from './assemble.mjs';
 import { slimBlock, compBucket, firstHuman, blockQuery } from './blockmeta.mjs';
 import { renderOf } from './render-kind.mjs';
 import { blockSpans } from '../dissect/cc-spans.mjs';
@@ -19,7 +19,7 @@ import { resourceRef as ccResourceRef } from '../dissect/cc.mjs';
 import { resourceRef as oaResourceRef, faithfulness as oaFaithfulness } from '../dissect/openai.mjs';
 import { scanJson, spanAt } from '../dissect/json-scan.mjs';
 import { scannedRequestBody, sharesBody } from '../dissect/request-body.mjs';
-import { fieldTextOf } from '../dissect/record-fields.mjs';
+import { fieldTextOf, respOf } from '../dissect/record-fields.mjs';
 import { composeTextRef } from '../raw/refs.mjs';
 import { boardDissectorFor, wireFormatOf, flatLaneOf } from '../dissect/registry.mjs';
 import { hintsOf } from '../dissect/harnesses.mjs';

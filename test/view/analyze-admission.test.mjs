@@ -95,16 +95,3 @@ test('BUG1: admitting failures does not corrupt derived token stats', fixtureGat
   assert.equal(stats.totalIn, sumIn, 'totalIn must equal the sum over successful calls');
   assert.equal(stats.totalOut, sumOut, 'totalOut must equal the sum over successful calls');
 });
-
-// analyze.mjs imports respOf from assemble.mjs, which imports analyze.mjs back. The cycle is safe
-// ONLY because respOf is called at runtime, never during module evaluation. Pin both entry orders
-// so a future refactor that hoists a respOf call to module scope fails here instead of in the board.
-test('BUG1: the analyze↔assemble import cycle resolves from either entry module', async () => {
-  const one = await import('../../src/view/analyze.mjs');
-  const two = await import('../../src/view/assemble.mjs');
-  assert.equal(typeof one.analyze, 'function');
-  assert.equal(typeof two.respOf, 'function');
-  // normResp must read the D10 `resp` envelope through respOf (not a raw `.response` read)
-  assert.equal(one.normResp({ resp: { status: 429, usage: { input_tokens: 5 } } }).status, 429);
-  assert.equal(one.normResp({ response: { status: 200, usage: { input_tokens: 7 } } }).usage.input_tokens, 7);
-});

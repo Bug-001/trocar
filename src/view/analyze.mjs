@@ -24,10 +24,8 @@ import { compareStep } from './step-order.mjs'
 import { compactionVerdict, hasCompactionPreamble } from '../identity/session-identity.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
 // `response`. Reading `.response` directly is the bug class that silently killed every HTTP status
-// on real captures — so go through the shared helper, never the raw key. (assemble.mjs imports
-// analyze.mjs too; the cycle is safe because respOf is only CALLED at runtime, after both modules
-// have finished evaluating. test/view/analyze-admission.test.mjs pins both module load orders.)
-import { respOf } from './assemble.mjs'
+// on real captures — so go through the shared helper, never the raw key.
+import { respOf } from '../dissect/record-fields.mjs'
 import { HEAD, taskOf, shorten } from './blockmeta.mjs'
 import { streamParts } from '../dissect/sse-spans.mjs'
 import { num52, numTable } from '../query/projection.mjs'

@@ -3,7 +3,8 @@
 //   session → { records(slim), analyzed, probes, meta, truncated }
 // All provider parsing happens in the assembler (src/view/assemble.mjs) HERE, server-side — the browser
 // receives only canonical `analyzed` (invariant 3 / AC-3). Pure over its `records` input;
-import { createAssembler, sessionIdOf, headersOf, respOf } from './assemble.mjs';
+import { createAssembler, sessionIdOf } from './assemble.mjs';
+import { headersOf, respOf } from '../dissect/record-fields.mjs';
 import { stepOrder } from './analyze.mjs';
 import { harnessOf as harnessOfRecord, LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
 import { endpointClass } from '../dissect/endpoints.mjs';
