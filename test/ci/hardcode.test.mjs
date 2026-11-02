@@ -17,7 +17,9 @@ import { WIDE } from '../../src/off/identity.mjs'
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const walk = (d) => fs.readdirSync(path.join(ROOT, d), { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : /\.(mjs|cjs|js)$/.test(e.name) ? [path.join(d, e.name)] : [])
-const SRC = walk('src'), TESTS = walk('test').filter((f) => !f.includes(`${path.sep}fixtures${path.sep}`))
+// src/web/board/ is the built board (npm run build:board): its literals are the bundled dependencies' and web/'s, not facts src/ writes
+const BUILT = path.join('src', 'web', 'board') + path.sep
+const SRC = walk('src').filter((f) => !f.startsWith(BUILT)), TESTS = walk('test').filter((f) => !f.includes(`${path.sep}fixtures${path.sep}`))
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8')
 /** Code without comments (a comment may quote a fact; only code must not repeat it). */
 export const code = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map((l) => l.replace(/(^|[^:'"`\\])\/\/.*$/, '$1')).join('\n')

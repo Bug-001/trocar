@@ -15,7 +15,7 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..',
 export const files = (dir, root = dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
   const p = path.join(dir, d.name)
   if (d.isDirectory()) return dir === root && d.name === 'assets' ? [] : files(p, root)
-  return /\.(mjs|html|css)$/.test(d.name) ? [p] : []
+  return /(?<!\.test)\.(mjs|ts|tsx|html|css)$/.test(d.name) ? [p] : []
 })
 const WIRE = ['x-claude-code', 'x-codex-', 'x-opencode-', 'x-deepseek-harness-', 'x-zcode-', 'anthropic-version',
   'cache_read_input_tokens', 'cache_creation_input_tokens', 'cached_tokens', 'input_tokens_details', 'prompt_tokens',
@@ -155,7 +155,7 @@ test('files() skips only the top-level assets/ directory', () => {
 })
 
 test('web/legacy carries no provider, tool, harness-id or host literal', () => {
-  const list = files(ROOT)
+  const list = files(path.join(ROOT, '..')) // all of web/: the legacy tree, the React shell (web/src) and index.html
   assert.ok(list.length >= 10, `expected the v2 front end to exist, found ${list.length} files`)
   const bad = list.flatMap((f) => violations(path.relative(ROOT, f), fs.readFileSync(f, 'utf8')))
   assert.deepEqual(bad, [])
