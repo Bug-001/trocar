@@ -16,10 +16,12 @@ import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { WIDE } from '../../src/off/identity.mjs'
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url))
-const walk = (d) => fs.readdirSync(path.join(ROOT, d), { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : /\.(mjs|cjs|js)$/.test(e.name) ? [path.join(d, e.name)] : [])
-// src/web/board/ is the built board (npm run build:board): its literals are the bundled dependencies' and web/'s, not facts src/ writes
-const BUILT = path.join('src', 'web', 'board') + path.sep
-const SRC = walk('src').filter((f) => !f.startsWith(BUILT)), TESTS = walk('test').filter((f) => !f.includes(`${path.sep}fixtures${path.sep}`))
+const walk = (d) => fs.readdirSync(path.join(ROOT, d), { withFileTypes: true }).flatMap((e) => e.isDirectory() ? (e.name === 'node_modules' ? [] : walk(path.join(d, e.name))) : /\.(mjs|cjs|js|ts|tsx)$/.test(e.name) ? [path.join(d, e.name)] : [])
+// The board's source is web/ (its Vitest tests count as tests); src/web/board/ is its build (npm run build:board), whose literals are the
+// bundled dependencies' and web/'s, not facts written again
+const BUILT = path.join('src', 'web', 'board') + path.sep, isTest = (f) => /\.test\.[cm]?[jt]sx?$/.test(f)
+const SRC = [...walk('src').filter((f) => !f.startsWith(BUILT)), ...walk('web').filter((f) => !isTest(f))]
+const TESTS = [...walk('test').filter((f) => !f.includes(`${path.sep}fixtures${path.sep}`)), ...walk('web').filter(isTest)]
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8')
 /** Code without comments (a comment may quote a fact; only code must not repeat it). */
 export const code = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map((l) => l.replace(/(^|[^:'"`\\])\/\/.*$/, '$1')).join('\n')
