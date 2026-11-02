@@ -52,7 +52,7 @@ test('the switch: plan dialog with focus on Cancel; Esc sends no confirm and HOM
   await withDaemonBoard(async (ctx) => {
     const b = await open(gate.chromium, ctx)
     try {
-      const sw = '.crow[data-h="codex"] [data-hctl="switch"]'
+      const sw = '.crow[data-h="codex"] [data-hctl="switch"]', busy = '.crow[data-h="codex"] .hctl'
       await b.page.waitForSelector(sw, { timeout: 15000 })
       const home0 = snapshot(ctx.w.home)
       await b.page.click(sw)
@@ -62,14 +62,14 @@ test('the switch: plan dialog with focus on Cancel; Esc sends no confirm and HOM
       assert.ok(dlg.lines.some((l) => l.includes(ctx.w.home)), JSON.stringify(dlg.lines)) // the plan's paths, under the world's HOME
       await b.page.keyboard.press('Escape')
       await b.page.waitForSelector('[data-confirm-back]', { state: 'detached' })
-      await b.page.waitForFunction((s) => !document.querySelector(s).hasAttribute('aria-busy'), sw)
+      await b.page.waitForFunction((s) => !document.querySelector(s).hasAttribute('aria-busy'), busy)
       assert.equal(confirms(b.posts).length, 0)
       assert.deepEqual(snapshot(ctx.w.home), home0, 'a cancel writes nothing')
 
       await b.page.evaluate((s) => {
         window.__busySeen = false
         new MutationObserver(() => { const e = document.querySelector(s); if (e && e.getAttribute('aria-busy') === 'true') window.__busySeen = true }).observe(document.body, { subtree: true, attributes: true, childList: true })
-      }, sw)
+      }, busy)
       await b.page.click(sw)
       await b.page.waitForSelector('[data-confirm="ok"]', { timeout: 30000 })
       const answered = b.page.waitForResponse((r) => r.request().method() === 'POST' && r.request().postData() && 'confirm' in JSON.parse(r.request().postData()), { timeout: 120000 })
