@@ -45,7 +45,7 @@ export function normalizeRecord(raw) {
 // property: invisible to spread / JSON.stringify / for…in, readable by anyone who asks.
 const EXCERPT = 160;
 
-export async function readRecords(filePath, { normalize = true, limit = Infinity } = {}) {
+export async function readRecords(filePath, { limit = Infinity } = {}) {
   const out = [];
   // skipped: one entry per line that carried a record we could NOT recover. blankLines are tracked
   // separately and are NOT a loss (whitespace carries no record) — conflating them would cry wolf.
@@ -71,7 +71,7 @@ export async function readRecords(filePath, { normalize = true, limit = Infinity
     }
     scan.parsedLines++;
     // a request body the collector left compressed is decoded here, once, for every reader (4.6 §记录, 3.2:132)
-    const rec = normalize ? normalizeRecord(expandRequestBody(raw)) : expandRequestBody(raw);
+    const rec = normalizeRecord(expandRequestBody(raw));
     // Which FILE these bytes came from. A text_ref is `<session>/<stream>#<id>::<start>-<end>`
     // (RFC 4.2:40) and the stream basename is the half that disambiguates: record ids are only
     // unique within a capture file. The record itself never carries it — only the reader knows —
