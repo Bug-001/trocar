@@ -18,6 +18,7 @@
 import { dissectBlocks, sysLabel, parseBashReads } from '../dissect/cc.mjs'
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'
 import { hintsOf } from '../dissect/harnesses.mjs'
+import { sharesBody } from '../dissect/request-body.mjs'
 import { compareStep } from './step-order.mjs'
 import { compactionVerdict, hasCompactionPreamble } from '../identity/session-identity.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
@@ -482,9 +483,8 @@ export function admitted(r) {
   if (!isUnparsed(r)) return r
   const out = { ...r, request: { messages: [], tools: [], system: [], message_count: 0, tool_count: 0 }, _unparsed: true }
   if (r._stream) Object.defineProperty(out, '_stream', { value: r._stream, enumerable: false, configurable: true })
-  // the stub is not the stored body: the labels (bodyUnparsedOf → context 'partial', G17) read the body as stored
-  if (typeof r.req_body === 'string') Object.defineProperty(out, '_reqParsed', { value: false, enumerable: false, configurable: true })
-  return out
+  // the stub is not the stored body: the labels (bodyUnparsedOf → context 'partial', G17) read the body as stored, through r's parse
+  return sharesBody(out, r)
 }
 
 // The batch form: every LLM record (non-LLM records stay out: they carry only a response body by design — 保真边界,

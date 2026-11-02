@@ -16,7 +16,7 @@ import { V0_CONVERTED } from '../raw/ingest.mjs';
 import { fieldTextOf, TEXT_REF_FIELD } from '../dissect/record-fields.mjs';
 import { sessionKeyOf, observerEffectsOf, hintsOf } from '../dissect/harnesses.mjs';
 import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf, flatLaneOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
-import { parsedRequestBody, scannedRequestBody, sharesBody } from '../dissect/request-body.mjs';
+import { parsedRequestBody, storedRequestBody, scannedRequestBody, sharesBody } from '../dissect/request-body.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
 import { mapUsage, boardUsage } from '../model/schema.mjs';
 import { requestEncodingOf } from '../dissect/request-body.mjs';
@@ -98,10 +98,6 @@ export function hydrateForBoard(r, ctx = null) {
   const out = sharesBody({ ...r, request, response: r.response || r.resp || {} }, r); // the copy's stored body parses and scans as r's
   if (r._stream) Object.defineProperty(out, '_stream', { value: r._stream, enumerable: false, configurable: true });
   if (ctx) Object.defineProperty(out, '_ctx', { value: ctx, enumerable: false, configurable: true });
-  // The body parsed, and we hold the result: say so, so the label side (capture-labels.bodyUnparsedOf,
-  // reached through contextStateOf below) does not JSON.parse the same 0.8 MB a second time. Same
-  // non-enumerable discipline as `_stream`: never stored, never shipped.
-  Object.defineProperty(out, '_reqParsed', { value: true, enumerable: false, configurable: true });
   return out;
 }
 
@@ -134,8 +130,7 @@ export function sessionIdOf(rec) {
 // records ARE rendered (a mixed session); otherwise the whole session is unrecognized.
 // What the evidence block keeps of one such record (the fold lets the record go): endpoint, user-agent, model.
 export function unknownFacts(r) {
-  let b = r && r.request && typeof r.request === 'object' ? r.request : null;
-  if (!b && r && typeof r.req_body === 'string') { try { b = JSON.parse(r.req_body); } catch { b = null; } }
+  const b = parsedRequestBody(r);
   return { endpoint: String((r && r.endpoint) || '').split('?')[0], ua: (headersOf(r) || {})['user-agent'], model: b && typeof b.model === 'string' ? b.model : null };
 }
 export function unknownSummary(recs, partial) {
@@ -188,15 +183,10 @@ export const FLAT_LANES = {
 export function flatRequest(d, r, ctx) {
   let req = ctx ? ctx.req : null, unparsed = false;
   if (!ctx) {
-    try { req = JSON.parse(r.req_body); } catch { req = null; }
-    if (!req || typeof req !== 'object') {
-      if (r.request && typeof r.request === 'object') req = r.request; // demo v0 shape
-      else {
-        req = {}; if (r.req_body != null) unparsed = true;
-        // the stub stands where the body is: the labels still read the body as stored (G17 'partial')
-        if (typeof r.req_body === 'string') Object.defineProperty(r, '_reqParsed', { value: false, enumerable: false, configurable: true });
-      }
-    }
+    const v = storedRequestBody(r); // the record's one parse, READ-ONLY: the counts below go on a copy
+    if (v && typeof v === 'object') req = { ...v };
+    else if (r.request && typeof r.request === 'object') req = r.request; // demo v0 shape
+    else { req = {}; if (r.req_body != null) unparsed = true; } // the labels still read the body as stored (G17 'partial')
   }
   r.request = req;
   Object.assign(req, d.reqCounts(req)); // derived counts the board header + raw card read (parallel to hydrateForBoard)

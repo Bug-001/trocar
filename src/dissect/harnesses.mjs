@@ -8,6 +8,7 @@
 //   • proc.agent spellings: the 3.2 ids and Plan 3a's descriptor names are both accepted (gate G2).
 // Leaf module (0.1 §2): imports only the endpoint table.
 import { endpointOf } from './endpoints.mjs';
+import { storedRequestBody } from './request-body.mjs';
 
 const H = (name, confidence = 'high') => ({ from: 'header', name, confidence });
 const B = (path, confidence = 'medium') => ({ from: 'body', name: path.join('.'), path, confidence });
@@ -134,19 +135,14 @@ export function headerOf(rec, name) {
 // adapter).
 const parseableBody = (rec, text) => !!rec && typeof text === 'string' && rec.is_llm_call === true;
 
-const PARSED = new WeakMap();
 export function bodyOf(rec) {
   if (!rec || typeof rec !== 'object') return null;
   if (rec.request && typeof rec.request === 'object') return rec.request; // demo v0 shape
   const b = rec.req_body;
   if (b && typeof b === 'object') return b.verbatim === false ? null : b; // {raw_chars, verbatim:false} has no body
   if (typeof b !== 'string' || !b || !parseableBody(rec, b)) return null;
-  if (!PARSED.has(rec)) {
-    let v = null;
-    try { v = JSON.parse(b); } catch { v = null; }
-    PARSED.set(rec, v && typeof v === 'object' ? v : null);
-  }
-  return PARSED.get(rec);
+  const v = storedRequestBody(rec); // the record's one parse (src/dissect/request-body.mjs)
+  return v && typeof v === 'object' ? v : null;
 }
 const at = (obj, path) => path.reduce((o, k) => (o && typeof o === 'object' ? o[k] : undefined), obj);
 function valueOf(rec, key) {

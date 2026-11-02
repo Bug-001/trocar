@@ -36,10 +36,10 @@ export function blockSpans(record) {
   if (typeof record?.req_body === 'string') { // the record's one parse and one scan of its stored body (src/dissect/request-body.mjs)
     req = storedRequestBody(record) ?? {};
     root = scannedRequestBody(record);
-  } else {
-    const src = reqSource(record);
-    try { req = JSON.parse(src) } catch { req = {} }
-    try { root = scanJson(src) } catch { root = null }
+  } else { // not a stored string (null, or an object that slipped in): no memo covers it; the object is its own parse
+    const b = record?.req_body;
+    req = b && typeof b === 'object' ? b : {};
+    try { root = scanJson(reqSource(record)) } catch { root = null }
   }
   const props = root && root.kind === 'object' ? root.props : new Map();
   const toolsNode = props.get('tools');

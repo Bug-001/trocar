@@ -15,18 +15,14 @@
 // Leaf module.
 import { boardFlat, reqCountsFor, ctxTokens, normEvents, itemToBlocks } from './openai.mjs';
 import { scanJson, spanAt } from './json-scan.mjs';
+import { storedRequestBody } from './request-body.mjs';
 import { storedReply, noSpanWhy, replyPart, partsOfUnit } from './sse-spans.mjs';
 import { isWsHandshake } from './ws-handshake.mjs'; // not ./registry.mjs: the registry imports THIS module
 import { headerOf } from './harnesses.mjs';
 import { extendChain, linked, segmentsIn, createLinks, withUnread } from './chain.mjs';
 
 const parse = (s) => { if (typeof s !== 'string') return null; try { const v = JSON.parse(s); return v && typeof v === 'object' ? v : null; } catch { return null; } };
-const PARSED = new WeakMap();
-const bodyOf = (rec) => {
-  if (!rec || typeof rec !== 'object') return null;
-  if (!PARSED.has(rec)) PARSED.set(rec, parse(rec.req_body));
-  return PARSED.get(rec);
-};
+const bodyOf = (rec) => { const v = storedRequestBody(rec); return v && typeof v === 'object' ? v : null; }; // the record's one parse of its first client message
 // The server messages of a call, in order; an error envelope keeps them under resp.partial (same numbering as
 // ws_raw's m slices and as the text_ref field resp.messages.<j>).
 export function serverMessages(rec) {
