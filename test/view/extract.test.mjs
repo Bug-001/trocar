@@ -4,14 +4,12 @@
 //   (a) every definition checks out: its ref resolved against the record's field and hashed with its section and role gives its bid;
 //       one with no span hashes its canonical JSON under the 'u' tag
 //   (b) a definition depends only on its bytes, section and role: the same bytes at another position, call or lane, one axis at a time
-//   (c) each call's list (base chain + patch + add) is the old fold's context, block for block, and its message boundaries too
 //   (d) rows and definitions are JSON documents, and no credential header value is in them
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { extract, createExtractContext, materialize, materializeAttrs } from '../../src/view/extract.mjs';
-import { assembleSession } from '../../src/view/assemble.mjs';
 import { parseTextRef } from '../../src/raw/refs.mjs';
 import { fieldTextOf } from '../../src/dissect/record-fields.mjs';
 import { shapeResponse } from '../../src/collector/core/record/body.mjs';
@@ -124,33 +122,6 @@ test('(b) the same bytes at another position, call, lane or beside another sibli
   }
 });
 
-test('(c) each call\'s list, through its base chain, is the old fold\'s context; its message boundaries too', () => {
-  for (const [name, recs] of Object.entries(SESSIONS())) {
-    const byId = new Map(recs.map((r) => [String(r.id), r]));
-    const { rows } = run(recs);
-    const memo = new Map();
-    const listOf = (rid, key) => {
-      if (memo.has(rid + key)) return memo.get(rid + key);
-      const row = rows.get(rid), enc = key === 'list' ? row : row.mb;
-      const v = materialize(row.base == null ? null : listOf(row.base, key), enc);
-      memo.set(rid + key, v);
-      return v;
-    };
-    const steps = assembleSession(recs).steps;
-    assert.ok(steps.length, name);
-    for (const s of steps) {
-      const want = s.flat.map((b) => (b.text_ref ? b64(`${b.sec}\x1F${b.role}\x1F${resolve(byId.get(parseTextRef(b.text_ref).recordId), b.text_ref)}`)
-        : b64(`u\x1F${b.sec}\x1F${b.role}\x1F${canon(b.sec === 'system' ? b.text : b.block)}`)));
-      assert.deepEqual(listOf(String(s.id), 'list'), want, `${name} ${s.id}`);
-      const mb = [];
-      s.flat.forEach((b, i) => { if (b.sec === 'messages' && (i === 0 || s.flat[i - 1].sec !== 'messages' || s.flat[i - 1].mi !== b.mi)) mb.push(i); });
-      assert.deepEqual(listOf(String(s.id), 'mb'), mb, `${name} ${s.id} boundaries`);
-    }
-    // a chain of calls is written against its base, not as a keyframe each time
-    assert.ok([...rows.values()].some((r) => r.base != null), name);
-  }
-});
-
 test('(d) rows and definitions survive a JSON round trip, and carry no credential header value', () => {
   for (const [name, recs] of Object.entries(SESSIONS())) {
     for (const r of recs) if (name === 'http') r.req_headers.authorization = `Bearer ${SECRET}`;
@@ -166,12 +137,9 @@ test('(d) rows and definitions survive a JSON round trip, and carry no credentia
 
 // ── part 2: the calls whose context is stitched across records, and the build driver ───────────────────────────────────────────────────
 //   (a) every definition reachable from a stitched call's list checks out (as part 1's (a))
-//   (b) id-level == item-level: each stitched list is the old planner's flat, block for block — a request block by its bid, a
-//       reply block (now addressed in the reply) by its frame — with the same boundaries, attributes and state
 //   (c) a restart (rows 0..k stored, the store reopened from disk) goes on to the rows one pass gives
 //   (d) the frontier: the largest rid with every member up to it extracted
 import { extractMembers } from '../../src/view/extract.mjs';
-import { flatBlockText } from '../../src/view/analyze.mjs';
 import { openProjection } from '../../src/query/projection.mjs';
 import { threadSession, record } from '../helpers/cc-threads.mjs';
 
@@ -215,10 +183,6 @@ const listsOf = (rows) => {
   };
   return of;
 };
-const fh = (b) => { const t = flatBlockText(b); return createHash('sha256').update(String(t.length) + ':' + t, 'utf8').digest('hex'); };
-const fromRequest = (ref) => { const f = parseTextRef(ref).field; return !f || f === 'req_body'; };
-const ATTRS = ['volatile', 'resRole', 'resPending', 'resError', 'resTruncNote'];
-const attrsWant = (b) => { const a = {}; for (const k of ATTRS) if (b[k]) a[k] = b[k]; if (b.resRole === 'result') a.resKey = b.resKey; return a; };
 const stitchedIds = (recs) => recs.filter((r) => { try { const b = JSON.parse(r.req_body); return (b.thread && b.thread.type === 'continue') || b.type === 'response.create'; } catch { return false; } }).map((r) => r.id);
 
 test('(a) part 2: every definition a stitched call\'s list reaches checks out against the bytes its bid hashes', () => {
@@ -231,36 +195,6 @@ test('(a) part 2: every definition a stitched call\'s list reaches checks out ag
       const d = defs.get(bid);
       assert.ok(d, `${name} ${rid}: ${bid} is defined`);
       assert.equal(d.bid, expectedBid(byId, d), `${name} ${rid} ${d.sec}/${d.role}/${d.kind}`);
-    }
-  }
-});
-
-test('(b) id-level == item-level: each stitched list is the planner-stitched flat, with its boundaries, attributes and state', () => {
-  for (const [name, recs] of Object.entries(stitchedSessions())) {
-    const byId = new Map(recs.map((r) => [String(r.id), r]));
-    const { defs, rows } = run(recs), of = listsOf(rows);
-    const steps = assembleSession(recs).steps;
-    // the same fold over unstamped copies: no record to point into, so every block keeps its whole body (the frame fh hashes)
-    const whole = new Map(assembleSession(recs.map((r) => ({ ...r }))).steps.map((s) => [String(s.id), s.flat]));
-    const ids = new Set(stitchedIds(recs));
-    assert.ok(steps.some((s) => ids.has(String(s.id))), name);
-    for (const s of steps) {
-      const rid = String(s.id), row = rows.get(rid), list = of(rid, 'list'), attrs = of(rid, 'attrs'), at = `${name} ${rid}`;
-      assert.equal(list.length, s.flat.length, `${at} length`);
-      s.flat.forEach((b, i) => {
-        const d = defs.get(list[i]);
-        if (b.text_ref && fromRequest(b.text_ref)) assert.equal(list[i], b64(`${b.sec}\x1F${b.role}\x1F${resolve(byId.get(parseTextRef(b.text_ref).recordId), b.text_ref)}`), `${at} #${i}`);
-        else {
-          assert.deepEqual([d.sec, d.role, d.kind, d.fh], [b.sec, b.role, b.kind, fh(whole.get(rid)[i])], `${at} #${i} reply block`);
-          assert.ok(d.ref == null || !fromRequest(d.ref), `${at} #${i} is a reply definition`);
-        }
-        const { query, ...a } = attrs[i] || {};
-        assert.deepEqual(a, attrsWant(b), `${at} #${i} attrs`);
-      });
-      const mb = [];
-      s.flat.forEach((b, i) => { if (b.sec === 'messages' && (i === 0 || s.flat[i - 1].sec !== 'messages' || s.flat[i - 1].mi !== b.mi)) mb.push(i); });
-      assert.deepEqual(of(rid, 'mb'), mb, `${at} boundaries`);
-      assert.deepEqual([row.x.wire.contextState, row.x.wire.contextMissing], [s.wire.contextState, s.wire.contextMissing], `${at} state`);
     }
   }
 });

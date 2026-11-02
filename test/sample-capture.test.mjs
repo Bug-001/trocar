@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { groupSessions } from '../src/view/board.mjs';
-import { sessionView } from './helpers/session-view.mjs';
+import { homeWith, query } from './helpers/session-doc.mjs';
 
 // The shipped demo capture is the FIRST THING a new user sees (`npm run demo`), and the only way a
 // GitHub visitor can evaluate the tool without first MITM-ing their own agent — trocar's real test
@@ -19,37 +18,28 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLE = path.join(HERE, '..', 'samples', 'demo-session.ndjson');
 const records = readFileSync(SAMPLE, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
 
-const [id] = groupSessions(records).keys();
+// the demo session read as every path reads it: its `session` document and its main lane's definitions (test/helpers/session-doc.mjs)
+async function demo() {
+  const home = homeWith(records), { sessions: [{ session_id: id }] } = await query(home, 'sessions');
+  const doc = await query(home, 'session', { id });
+  const main = doc.lanes.find((l) => l.kind === 'main');
+  return { doc, lane: await query(home, 'lane', { id, lane: main.lane }) };
+}
 
-test('every panel the demo is supposed to show has real data behind it', () => {
-  const v = sessionView(records, id);
-  const steps = v.analyzed.steps;
-
-  assert.ok(steps.length >= 6, 'timeline has bars');
-  assert.equal(v.truncated, null, 'the demo must never be truncated — it exists to show the full view');
-
-  const last = steps[steps.length - 1];
-  assert.ok(last.flat.length > 10, 'context window has blocks');
-  assert.ok(last.flat.some((b) => b.sec === 'tools'), 'tool schemas render (the verbatim-schema story)');
-  assert.ok(last.flat.some((b) => b.sec === 'system'), 'system prompt renders');
-  assert.ok(last.flat.some((b) => b.sec === 'messages'), 'conversation renders');
-  assert.ok(last.usage.read > 0, 'cache overlay has a real cache_read to draw');
+test('every panel the demo is supposed to show has real data behind it', async () => {
+  const { doc, lane } = await demo();
+  assert.ok(doc.calls.length >= 6, 'timeline has bars');
+  assert.equal(doc.more, false, 'the demo is one page: it exists to show the full view');
+  const secs = new Set(Object.values(lane.defs).map((d) => d.sec));
+  for (const sec of ['tools', 'system', 'messages']) assert.ok(secs.has(sec), `${sec} renders`);
+  assert.ok(doc.calls.at(-1).usage.read > 0, 'cache overlay has a real cache_read to draw');
 });
 
-test('the sample exercises the error path (a red bar exists to be seen)', () => {
-  const { analyzed } = sessionView(records, id);
-  const statuses = new Set(analyzed.steps.map((s) => s.status));
-  assert.ok(statuses.has(429),
-    'the demo should show a failed call — error rendering was unreachable for months precisely '
-    + 'because no fixture contained one');
-});
-
-test('a failed call does not corrupt the cache-break chain in the shipped demo', () => {
-  const { analyzed } = sessionView(records, id);
-  const bad = analyzed.steps.filter((s) => s.cacheBreak.attribution !== 'harmless');
-  assert.equal(bad.length, 0,
-    `the demo session is a clean append-only conversation; any non-harmless break means the chain ran `
-    + `through the 429. Got: ${bad.map((s) => s.id + ':' + s.cacheBreak.cause).join(', ')}`);
+test('the sample exercises the error path, and the failed call does not corrupt the cache-break chain', async () => {
+  const { doc } = await demo();
+  assert.ok(doc.calls.some((c) => c.status === 429), 'the demo shows a failed call');
+  const bad = doc.calls.filter((c) => c.cacheBreak && c.cacheBreak.attribution && c.cacheBreak.attribution !== 'harmless');
+  assert.deepEqual(bad.map((c) => c.rid), [], 'a clean append-only conversation: no break runs through the 429');
 });
 
 test('the sample contains no real credentials', () => {

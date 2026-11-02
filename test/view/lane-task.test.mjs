@@ -7,7 +7,7 @@ import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession, firstAskOf, rng } from '../query/big-session.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
-import { sessionView } from '../helpers/session-view.mjs'
+import { sessionDoc } from '../helpers/session-doc.mjs'
 import { departer } from '../../src/view/blockmeta.mjs'
 
 for (const wire of ['http', 'chat', 'threads', 'ws']) {
@@ -41,16 +41,16 @@ const rec = (i, messages, agent = null) => ({
 })
 const R = (t) => `<system-reminder>${t}</system-reminder>`
 
-test('a prompt that is only wrapped reminders is skipped for the next text; a lane with none has task null', () => {
+test('a prompt that is only wrapped reminders is skipped for the next text; a lane with none has task null', async () => {
   const recs = [
     rec(1, [{ role: 'user', content: [{ type: 'text', text: R('skills: a, b') }, { type: 'text', text: `  Fix the\n\n  retry   queue ${R('date')}` }] }]),
     rec(2, [{ role: 'user', content: [{ type: 'text', text: `${R('only')}\n${R('reminders')}` }] }], 'agent-1'),
   ]
-  const lanes = sessionView(recs, 'S').analyzed.lanes
+  const { lanes } = await sessionDoc(recs, 'S')
   assert.deepEqual(lanes.map((l) => [l.kind, l.task]), [['main', 'Fix the retry queue'], ['subagent', null]])
 })
 
-test('sub-agents whose first prompts share a long preamble are told apart by the first line where each departs from the others', () => {
+test('sub-agents whose first prompts share a long preamble are told apart by the first line where each departs from the others', async () => {
   const preamble = Array.from({ length: 120 }, (_, i) => `[harness] shared instruction line ${i}: work in the given worktree and report back.`).join('\n')
   const ask = (line) => [{ role: 'user', content: [{ type: 'text', text: `${preamble}\n${line}\nmore   text that follows\n` }] }]
   const recs = [
@@ -59,7 +59,7 @@ test('sub-agents whose first prompts share a long preamble are told apart by the
     rec(3, ask('## Your task: review the branch'), 'agent-b'),
     rec(4, ask('## Your task: review the branch'), 'agent-c'), // the same prompt twice: still told apart from agent-a
   ]
-  const lanes = sessionView(recs, 'S').analyzed.lanes
+  const { lanes } = await sessionDoc(recs, 'S')
   const from = (line) => `${line}\nmore   text that follows`.replace(/\s+/g, ' ').trim().slice(0, 80) // that line on, squashed, ≤ 80
   assert.deepEqual(lanes.map((l) => l.task), ['Run the plan', from('## Your task: implement   the retry queue in src/queue.mjs and its tests'),
     from('## Your task: review the branch'), from('## Your task: review the branch')])

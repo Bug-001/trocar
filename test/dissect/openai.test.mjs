@@ -1,13 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { boardFlat, normResp, detect, itemToBlocks, OPENAI_SECTIONS } from '../../src/dissect/openai.mjs';
-import { assembleSession } from '../../src/view/assemble.mjs';
-import { sessionIdOf } from '../../src/view/extract.mjs';
 
 // D25 · Phase 4 — the OpenAI/Codex dissector maps the Responses API into the ONE cross-provider block
 // vocabulary (tools/system/messages + text/tool_use/tool_result/thinking) so the board renders Codex
-// with zero board changes. First group: synthetic request exercising every block kind. Second group:
-// the REAL captured /codex/responses envelope (AC-1 — the board shows the verbatim captured context).
+// with zero board changes: a synthetic request exercising every block kind. Codex through the served board (AC-1) is
+// test/web-v2/ac1-real-server.test.mjs.
 
 const REQ = {
   model: 'gpt-5.5',
@@ -90,38 +88,4 @@ test('detect: claims by wire shape, not by a header alone; CC → not', () => {
     req_body: JSON.stringify({ model: 'gpt-5.5', input: [{ type: 'message', role: 'user', content: [] }] }),
   }), true);
   assert.equal(detect({ req_headers: { 'user-agent': 'claude-cli/1.2' }, endpoint: '/v1/messages' }), false);
-});
-
-// ── board path against a D10 envelope (the shape `trocar capture --raw-sse` writes for Codex) ───────
-// Verbatim capture data is gitignored (**/*.ndjson); this builds the same envelope shape synthetically
-// so the test is self-contained while still exercising detect → assembleOpenai → boardFlat + the
-// byte-preservation of the captured context (AC-1: the system block equals the wire instructions).
-function d10Envelope(req, { sessionId = 'sess-abc', usage } = {}) {
-  return {
-    id: 'req_1', ts_request: '2026-07-16T00:00:00Z', is_llm_call: true,
-    endpoint: '/codex/responses', method: 'POST',
-    req_headers: { 'user-agent': 'codex_exec/0.144.0', 'session-id': sessionId, 'thread-id': sessionId },
-    req_body: JSON.stringify(req),
-    resp: { status: 200, kind: 'sse', raw_sse: [
-      { type: 'response.completed', response: { id: 'resp_1', model: 'gpt-5.5', status: 'completed',
-        usage: usage || { input_tokens: 200, input_tokens_details: { cached_tokens: 120 }, output_tokens: 4 },
-        output: [{ type: 'message', content: [{ type: 'output_text', text: 'done' }] }] } },
-    ] },
-  };
-}
-
-test('assembleSession detects Codex and renders a main lane with verbatim context (AC-1)', () => {
-  const rec = d10Envelope(REQ);
-  assert.equal(sessionIdOf(rec), 'sess-abc', 'codex record groups by its session-id header');
-  const A = assembleSession([rec]);
-  assert.equal(A.lanes.length, 1);
-  assert.equal(A.lanes[0].kind, 'main');
-  const call = A.lanes[0].calls[0];
-  // AC-1: the system (instructions) block is byte-identical to the captured wire bytes
-  const sys = call.flat.find((b) => b.sec === 'system');
-  assert.equal(sys.text, REQ.instructions, 'system block equals the captured instructions verbatim');
-  // usage mapped to NEUTRAL canonical names (no OpenAI-native names surface on the call)
-  assert.deepEqual(call.usage, { read: 120, create: 0, fresh: 80, out: 4 });
-  assert.equal(call.ctx, 200, 'ctx = real input tokens from usage');
-  assert.equal(call.tools, REQ.tools.length);
 });

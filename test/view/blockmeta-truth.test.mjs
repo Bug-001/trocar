@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readRecords } from '../../src/raw/ingest.mjs';
-import { sessionView } from '../helpers/session-view.mjs';
+import { extract, createExtractContext, materialize } from '../../src/view/extract.mjs';
 
 // THE NUMBERS ON THE COLLAPSED ROW MUST BE THE SOURCE'S NUMBERS.
 //
@@ -41,7 +41,6 @@ import { sessionView } from '../helpers/session-view.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
 const SAMPLE = path.join(ROOT, 'samples', 'demo-session.ndjson');
-const SID = 'demo-0000-4a1b-9c2d-000000000001';
 
 const utf8 = (s) => Buffer.byteLength(String(s ?? ''), 'utf8');
 
@@ -103,22 +102,25 @@ function expectedRoleTag({ sec, role, src }) {
   return { role, tag: role === 'user' ? 'user' : role === 'assistant' ? 'say' : role === 'system' ? 'system-reminder' : 'text' };
 }
 
-const records = await readRecords(SAMPLE, { normalize: false });
-const view = sessionView(records, SID);
-const steps = view.analyzed.steps || [];
+// The demo session extracted in record order as the reduction's driver does (src/view/extract.mjs): each call's list of definitions,
+// through its base chain, is the context window the board draws, and each definition carries the row's scalars.
+const records = await readRecords(SAMPLE);
+const ctx = createExtractContext(), defs = new Map(), rows = new Map(), lists = new Map();
+for (const r of records) { const o = extract(r, ctx); for (const d of o.defs) defs.set(d.bid, d); rows.set(o.row.rid, o.row); }
+const listOf = (rid) => {
+  if (!lists.has(rid)) { const row = rows.get(rid); lists.set(rid, materialize(row.base == null ? null : listOf(row.base), row)); }
+  return lists.get(rid);
+};
 
 // Pair every shipped block with the source block it claims to describe. Zipping by POSITION is the
 // point: it only works if the assembly order is right, so a reordering shows up as a wall of value
 // mismatches rather than passing silently.
 function pairs() {
   const out = [];
-  for (const c of steps) {
-    const body = c.rec && c.rec.req_body;
-    const raw = typeof body === 'string' ? body : (records.find((r) => String(r.id) === String(c.rec && c.rec.id)) || {}).req_body;
-    if (typeof raw !== 'string') continue;
-    const src = sourceBlocks(raw);
-    const got = c.flat || [];
-    out.push({ gi: c.gi, src, got });
+  for (const r of records) {
+    const row = rows.get(String(r.id));
+    if (typeof r.req_body !== 'string' || !row || !('base' in row)) continue;
+    out.push({ gi: row.rid, src: sourceBlocks(r.req_body), got: listOf(row.rid).map((bid) => defs.get(bid)) });
   }
   return out;
 }
