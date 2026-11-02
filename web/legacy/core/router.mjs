@@ -1,5 +1,5 @@
-// core/router.mjs — URL-hash routing. parseHash / formatHash / documentTitle are pure; the window wrapper below touches `window` and
-// `history` only when called, never at import time (so Node tests import this file).
+// core/router.mjs — URL-hash routing. parseHash / formatHash / documentTitle are pure; history and navigation belong to
+// web/src/router.ts (React Router), which takes createUrlWriter from here.
 //
 // Route = { area, screen, params, project?, id?, harness?, host?, unknown? }
 //   area    which sidebar area the route belongs to: overview | sessions | replay | capture | traffic | settings
@@ -10,13 +10,13 @@
 //   #/overview                          总览 (also '' and '#/')              window=24h|7d|all
 //   #/sessions                          the session library                  h=<harness> (repeatable) project window q
 //   #/replay/<project>/<id>             the replay desk                      step=N (1-based) call=<record id>
-//   #/session/<id>                      a link that does not know the project: main.mjs resolves it and replaces it with the line above
+//   #/session/<id>                      a link that does not know the project: the session-link screen resolves it and replaces it with the line above
 //   #/capture · #/capture/log           采集 (agents) · 采集记录              h=<harness>
 //   #/traffic                           流量                                 window=1h|24h|7d|all h class
 //   #/traffic/host/<harness>/<host>     one host                             window class ref=<raw_ref>
 //   #/settings/storage|prices|appearance  (#/settings alone is storage)      storage: h class
 //   #/system/capture|traffic|retention  the prototype's routes, mapped onto the ones above (w → window)
-// Anything else is `unknown`: the route is 总览 and carries `unknown:true`, so main.mjs can say so in a toast. Every harness id in a route
+// Anything else is `unknown`: the route is 总览 and carries `unknown:true`, so the shell can say so in a toast. Every harness id in a route
 // (the path segment, and each value of `h`) is the read-side id after harnessKey().
 import { harnessKey } from './chips.mjs'
 import { SCREEN_NAME, TITLE_SUFFIX } from '../labels/shell.mjs'
@@ -132,81 +132,4 @@ export function createUrlWriter({ write, gap = WRITE_GAP_MS, now = () => perform
     cancel() { stop(); has = false },
     pending() { return has ? { value } : null },
   }
-}
-
-// ── thin window wrapper ───────────────────────────────────────────────────────────────────────────────────────────
-const subs = new Set()
-let wired = false
-let lastHref = null
-let warned = false
-// the hash the app is on while a replace-write is still waiting: current() and the next setParams() must read THIS, not a stale location.hash
-let effective = null
-
-// a rate-limited or blocked history API must never throw out of a navigation: the app's own route is already right, only the URL lags
-function historyWrite(kind, h) {
-  try { history[kind](null, '', h); return true } catch (e) {
-    if (!warned) { warned = true; console.warn('history.' + kind + ' failed — the address bar may lag behind the board', e) }
-    return false
-  }
-}
-const writer = createUrlWriter({
-  write(h) { effective = null; historyWrite('replaceState', h); lastHref = location.href },
-})
-
-function emit() {
-  const r = current()
-  for (const fn of [...subs]) fn(r)
-}
-// a back / forward step across two hashes fires both popstate and hashchange; the href check delivers it once. A replace that was still
-// waiting belongs to the entry the reader just left: writing it now would overwrite the entry they landed on.
-function onWindowChange() {
-  if (location.href === lastHref) return
-  writer.cancel(); effective = null
-  lastHref = location.href
-  emit()
-}
-function wire() {
-  if (wired || typeof window === 'undefined') return
-  wired = true
-  lastHref = location.href
-  window.addEventListener('hashchange', onWindowChange)
-  window.addEventListener('popstate', onWindowChange)
-  // the last value always lands: a reload, a close or a navigation away must not lose the step the reader was on
-  window.addEventListener('pagehide', () => writer.flush())
-  window.addEventListener('beforeunload', () => writer.flush())
-}
-
-export function current() { return parseHash(effective != null ? effective : location.hash) }
-
-// push (or replace) the route in history, then tell subscribers. pushState does not fire hashchange, so we dispatch.
-// A replace is rate-bounded (see above); a push first lands the pending replace on the entry it leaves, so the way back is exact.
-export function go(route, { replace = false } = {}) {
-  wire()
-  const h = formatHash(route)
-  const same = (effective != null ? effective : location.hash) === h
-  if (replace || same) { if (!same) { effective = h; writer.set(h) } } // the same value is not written: every write counts toward WebKit's limit
-  else {
-    writer.flush(); effective = null
-    if (!historyWrite('pushState', h)) location.hash = h // blocked: a plain hash change still makes the entry and the URL
-    lastHref = location.href
-  }
-  emit()
-}
-
-// merge `patch` into the current route's params; null or '' deletes a key. Replaces history by default (scrubbing,
-// typing in a filter box: not a navigation).
-export function setParams(patch, { replace = true } = {}) {
-  const r = current()
-  const params = { ...r.params }
-  for (const [k, v] of Object.entries(patch || {})) {
-    if (v == null || v === '') delete params[k]
-    else params[k] = String(v)
-  }
-  go({ ...r, params }, { replace })
-}
-
-export function onRoute(fn) {
-  wire()
-  subs.add(fn)
-  return () => { subs.delete(fn) }
 }

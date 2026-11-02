@@ -53,6 +53,6 @@ export const HEALTH_READ = Object.freeze({
 // status 0 = no full answer (cannot connect, cut, timed out); a number = the code the service answered; none = no class known
 export const READ_FAIL = (what, status) => `${what} could not be read${status === 0 ? ': cannot reach the trocar service'
   : typeof status === 'number' ? `: the trocar service returned ${status}` : ''}`
-export const READING = 'Reading…' // the content area while a screen module loads (1.2 main.mjs)
+export const READING = 'Reading…' // the content area while a screen module loads (web/src/LegacyScreen.tsx)
 export const WINDOW_LABEL = Object.freeze({ '24h': '24 hours', '7d': '7 days', all: 'All' })
 export const UNTITLED = 'Untitled session'

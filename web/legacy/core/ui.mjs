@@ -1,6 +1,6 @@
 // core/ui.mjs — the shared chrome kit: the popover contract (1.2 §弹出层), the fidelity marks (1.5 §标记), disclosures,
 // 技术细节, the confirm dialog, the segmented control and the toast. Builders are pure strings (Node tests import them);
-// installUi(doc) is the one wiring pass, installed once by main.mjs. Nothing touches `document` at import time.
+// installUi(doc) is the one wiring pass, installed once by web/src/main.tsx. Nothing touches `document` at import time.
 
 import { esc } from './fmt.mjs'
 import { MARK_TIP, READ_FAIL } from '../labels/common.mjs'
@@ -134,7 +134,7 @@ export function confirmDialog(opts, doc = typeof document === 'undefined' ? null
   })
 }
 
-// ── the wiring (one pass, installed once by main.mjs) ────────────────────────────────────────────────────────────────
+// ── the wiring (one pass, installed once by web/src/main.tsx) ────────────────────────────────────────────────────────────────
 // hover opens after TIP_MS, focus at once, click/Enter/Space opens and pins; Esc (focus back to the button), an outside
 // click, another popover or the pointer leaving both closes; the layer sits under the button, above it when there is no
 // room, clamped 8px inside the viewport. A menu ([data-menu]) never opens on hover.

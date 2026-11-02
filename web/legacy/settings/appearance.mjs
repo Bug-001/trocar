@@ -1,12 +1,12 @@
 // settings/appearance.mjs — 设置 · 外观 (1.11 §外观): the page that switches the theme. The switching itself is
 // ONE attribute move on <html> plus one localStorage key — never a re-render (1.5 「主题切换瞬时」; readTheme() is
-// what main.mjs calls before mounting the shell so the first frame is already right). This page only wires the
+// what the boot calls before mounting the shell so the first frame is already right). This page only wires the
 // three-way choice; a storage that throws means the choice still applies to this page and is said to be unstorable.
 import { SCREEN_NAME } from '../labels/shell.mjs'
 import { applyThemePref, themeStore, THEME_KEY } from '../core/ui.mjs'
 import * as W from '../labels/settings.mjs'
 
-// the current choice: 'light' | 'dark' | null (= 跟随系统). Applies it to `doc` and returns it — main.mjs's boot call.
+// the current choice: 'light' | 'dark' | null (= 跟随系统). Applies it to `doc` and returns it — the boot's call.
 export function readTheme(doc = typeof document === 'undefined' ? null : document) {
   return applyThemePref(doc) // null is the system choice, not an error
 }

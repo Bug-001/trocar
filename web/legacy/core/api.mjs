@@ -12,7 +12,7 @@ export const api = {
   now: () => Date.now(), // "now" for relative times; the board runs on the viewer's clock
 }
 
-// the same api with every read tied to `signal` as well as any signal the caller passes (main.mjs: one per mounted screen)
+// the same api with every read tied to `signal` as well as any signal the caller passes (web/src/LegacyScreen.tsx: one per mounted screen)
 const join = (a, b) => (a && b ? AbortSignal.any([a, b]) : a || b)
 export function scoped(base, signal) {
   return {
