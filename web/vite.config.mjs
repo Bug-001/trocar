@@ -2,6 +2,7 @@
 // Fixed names, no hashes: the build is committed and a rebuild of unchanged sources is byte-identical. CSS is not minified, so the
 // cascade the hand-written sheets define is the one the page gets.
 import { fileURLToPath } from 'node:url'
+import react from '@vitejs/plugin-react'
 
 const FIRST = './assets/first.js'
 
@@ -23,7 +24,7 @@ export default {
   root: fileURLToPath(new URL('.', import.meta.url)),
   base: './',
   publicDir: 'public',
-  plugins: [firstAhead],
+  plugins: [react(), firstAhead],
   build: {
     outDir: fileURLToPath(new URL('../src/web/board/', import.meta.url)),
     emptyOutDir: true,

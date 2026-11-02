@@ -13,11 +13,12 @@ const HELD_MAX = 100 // conditional-GET entries kept, oldest dropped first
 
 let token = null
 let kept = null // the storage bootToken() read the token from, so a 403 can drop that copy
+/** @param {{ token?: string | null }} [o] */
 export function configure({ token: t = null } = {}) { token = t }
 
 let forbidden = false
 const onForbid = []
-// a callback registered after the latch closed runs at once (a boot read — core/first.mjs — can be answered 403 before main.mjs registers)
+// a callback registered after the latch closed runs at once (a boot read — core/first.mjs — can be answered 403 before web/src/main.tsx registers)
 export function onForbidden(fn) { onForbid.push(fn); if (forbidden) try { fn() } catch (e) { console.error('onForbidden failed', e) } }
 const FORBIDDEN = Object.freeze({ ok: false, status: 403, error: 'HTTP 403' })
 
@@ -43,7 +44,7 @@ function qs(params) {
 export const CUT_OFF = 'the answer did not arrive in full'
 const CUT = Object.freeze({ ok: false, status: 0, error: CUT_OFF })
 // K-29 (1.5): a read not fully answered (head and body) within the deadline is a failure like a cut answer; a read the caller
-// cancels (a screen change, main.mjs) ends as ABORTED, which no screen shows or retries
+// cancels (a screen change, web/src/LegacyScreen.tsx) ends as ABORTED, which no screen shows or retries
 export const READ_DEADLINE_MS = 60_000
 export const TIMED_OUT = `no answer within ${READ_DEADLINE_MS / 1000} s`
 export const ABORTED = 'cancelled'
