@@ -180,7 +180,7 @@ kbd{font-family:var(--mono);background:var(--sunk);border:1px solid var(--rule-2
 /* ── new in v2 ───────────────────────────────────────────────────────────────────────────────────────────────── */
 /* the screen host: a screen fills it and scrolls (or splits) inside */
 #screen{flex:1;min-height:0;display:flex;}
-#screen > *{min-width:0;}
+#screen > *, #screen > .screenhost > *{min-width:0;}
 
 /* a screen's own banner: what is wrong (or worth knowing) about what it shows, with the reason — never a silent empty state */
 .banner{padding:6px 16px;font-size:var(--fs-cap);border-bottom:1px solid var(--rule);color:var(--ink);}
@@ -254,6 +254,8 @@ kbd{font-family:var(--mono);background:var(--sunk);border:1px solid var(--rule-2
 .disc-t b{color:var(--ink);font-weight:500;font-size:var(--fs-strong);}
 .disc-t .sum{font-size:var(--fs-body);}
 .disc-t .chev{width:12px;flex:none;}
+/* a closed panel takes no box: React Aria closes one with hidden="until-found" (content-visibility, not display:none) */
+.disc-b[hidden]{display:none;}
 .tech{font:var(--fs-cap)/20px var(--mono);color:var(--ink-2);background:var(--sunk);border-radius:var(--r-2);padding:8px 12px;display:grid;grid-template-columns:max-content minmax(0,1fr);column-gap:16px;margin:6px 0 4px;}
 .tech .k{color:var(--ink-3);}
 .tech .v{color:var(--ink);overflow-wrap:anywhere;}
@@ -1158,11 +1160,11 @@ a.ovtr:hover { background: var(--panel); }
 .hctl{display:inline-flex;flex-direction:column;align-items:flex-end;gap:3px;}
 .hswitch{position:relative;width:34px;height:20px;border-radius:var(--r-pill);border:1px solid var(--control-edge);background:var(--sunk);cursor:pointer;padding:0;flex:none;}
 .hswitch .knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--ink-3);transition:left var(--t-quick);}
-.hswitch[aria-checked="true"]{background:var(--action);border-color:var(--action);}
-.hswitch[aria-checked="true"] .knob{left:16px;background:var(--panel);}
+.hswitch[aria-checked="true"],.hswitch[data-selected]{background:var(--action);border-color:var(--action);}
+.hswitch[aria-checked="true"] .knob,.hswitch[data-selected] .knob{left:16px;background:var(--panel);}
 .hsetup{border:1px solid var(--control-edge);background:var(--panel);color:var(--ink);border-radius:var(--r-1);font-size:var(--fs-body);padding:2px 10px;cursor:pointer;}
-.hswitch[aria-busy="true"],.hsetup[aria-busy="true"]{cursor:progress;opacity:.6;}
-.hswitch:focus-visible,.hsetup:focus-visible{outline:2px solid var(--action);outline-offset:2px;}
+.hswitch[aria-busy="true"],.hsetup[aria-busy="true"],.hctl[aria-busy="true"] > .hswitch,.hctl[aria-busy="true"] > .hsetup{cursor:progress;opacity:.6;}
+.hswitch:focus-visible,.hswitch[data-focus-visible],.hsetup:focus-visible{outline:2px solid var(--action);outline-offset:2px;}
 .hrcpt{font-size:var(--fs-cap);line-height:16px;color:var(--ink-2);text-align:right;max-width:200px;white-space:normal;}
 .hrcpt.bad{color:var(--bad);}
 .capfoot{margin:10px 0 0;font-size:var(--fs-cap);color:var(--ink-3);}
@@ -1189,6 +1191,7 @@ a.ovtr:hover { background: var(--panel); }
 .lr .lgo{justify-self:end;border:0;background:none;color:var(--ink-3);font-size:var(--fs-body);cursor:pointer;padding:0 2px;border-radius:var(--r-1);}
 .lr .lgo:hover,.lr .lgo:focus-visible{color:var(--ink);}
 .lr .lx{grid-column:3 / 6;}
+.lr .lx[hidden]{display:none;}
 .lr .lx p{font-size:var(--fs-body);margin:0 0 3px;}
 .lr .lx .fine{color:var(--ink-2);font-size:var(--fs-cap);}
 .lr .lx .disc{margin-top:4px;}
