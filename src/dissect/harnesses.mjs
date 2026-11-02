@@ -6,7 +6,7 @@
 //     agent is unknown (id null). Only legacy records without proc use the UA, flagged inferred:true.
 //   • never splits or joins a session by pid or connection (3.4 关键区分): proc.pid / flow_id / dst unread.
 //   • proc.agent spellings: the 3.2 ids and Plan 3a's descriptor names are both accepted (gate G2).
-// Leaf module (0.1 §2): imports only the endpoint table.
+// Leaf module (0.1 §2): imports only the endpoint table and the stored-request-body parser.
 import { endpointOf } from './endpoints.mjs';
 import { storedRequestBody } from './request-body.mjs';
 

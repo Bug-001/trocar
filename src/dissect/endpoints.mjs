@@ -7,13 +7,14 @@
 // relay prefixes count too (RFC 4.6 §记录: `/anthropic/v1/messages` is still an inference request). Order matters: the first
 // matching row wins, so the token-count row comes first (`/v1/messages/count_tokens` is a ruler, not inference, 3.2).
 // `wire` is the wire format the path names on its own, or null when the path names none the board dissects (Gemini, D37 ⑥).
+// `unsupported` names an inference wire with no dissector in v1 (D37 ⑥), which the registry labels.
 export const ENDPOINTS = Object.freeze([
   { path: '.*count_tokens.*', class: 'token-count', wire: null },
   { path: '.*/v1/messages$', class: 'llm', wire: 'anthropic' },            // Anthropic Messages (incl. relay prefixes)
   { path: '.*/responses$', class: 'llm', wire: 'openai-responses' },       // OpenAI Responses (Codex)
   { path: '.*/chat/completions$', class: 'llm', wire: 'openai-chat' },     // OpenAI / DeepSeek Chat Completions
-  { path: '.*:streamGenerateContent.*', class: 'llm', wire: null },        // Gemini
-  { path: '.*:generateContent.*', class: 'llm', wire: null },
+  { path: '.*:streamGenerateContent.*', class: 'llm', wire: null, unsupported: 'gemini' }, // Gemini
+  { path: '.*:generateContent.*', class: 'llm', wire: null, unsupported: 'gemini' },
 ].map((r) => Object.freeze(r)))
 const MATCHERS = ENDPOINTS.map((r) => [new RegExp(`^(?:${r.path})`), r])
 

@@ -14,16 +14,15 @@ import { endpointOf, pathOf } from './endpoints.mjs';
 export { isWsHandshake };
 
 // D37 ⑥: no dissector in v1 — stored as captured, read as 「未识别」 and labelled. Vertex first: its
-// Gemini models also end in :generateContent.
+// Gemini models also end in :generateContent. Gemini itself is the endpoint table's `unsupported` row (./endpoints.mjs).
 const UNSUPPORTED = [
   ['vertex', /\/projects\/[^/]+\/locations\/[^/]+\/publishers\/[^/]+\/models\/[^/:]+:[A-Za-z]+$/],
   ['bedrock', /\/model\/[^/]+\/(invoke|invoke-with-response-stream|converse|converse-stream)$/],
-  ['gemini', /:(stream)?[gG]enerateContent$/],
 ];
 function unsupportedOf(rec) {
   const ep = pathOf(rec && rec.endpoint);
   for (const [name, re] of UNSUPPORTED) if (re.test(ep)) return name;
-  return null;
+  return endpointOf(ep)?.unsupported ?? null;
 }
 
 // → 'anthropic' | 'openai-responses' | 'openai-chat' | 'openai-responses-ws' | 'ws-handshake' | null.
