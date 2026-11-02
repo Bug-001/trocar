@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, stats, shoot, layoutFaults, timed } from './harness.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
-import { COMMANDS } from '../../../src/web/v2/labels/capture.mjs'
+import { COMMANDS } from '../../../web/legacy/labels/capture.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason

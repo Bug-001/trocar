@@ -7,8 +7,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, serveWorld, blockBytes } from './harness.mjs'
 import { world } from '../desk-world.mjs'
-import { packOrder } from '../../../src/web/v2/replay/follow.mjs'
-import { INTERVAL } from '../../../src/web/v2/core/poll.mjs'
+import { packOrder } from '../../../web/legacy/replay/follow.mjs'
+import { INTERVAL } from '../../../web/legacy/core/poll.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason

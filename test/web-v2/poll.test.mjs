@@ -2,7 +2,7 @@
 // fake clock, and startPoll's timer and visibility over node's mock timers for every period of 4.4's table.
 import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
-import { createPoller, startPoll, backoffMs, BACKOFF_MAX_MS, INTERVAL } from '../../src/web/v2/core/poll.mjs'
+import { createPoller, startPoll, backoffMs, BACKOFF_MAX_MS, INTERVAL } from '../../web/legacy/core/poll.mjs'
 
 // ── the poll loop (1.5 K-29): a fake clock and a fake reader ────────────────────────────────────────────────────────────
 function rig(answers) {

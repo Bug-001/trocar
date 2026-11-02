@@ -4,12 +4,12 @@
 // constructed calls.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { renderRawPanel, renderResourceView, wireRawPanel } from '../../src/web/v2/replay/rawpanel.mjs'
-import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
-import { stepOf } from '../../src/web/v2/replay/model.mjs'
+import { renderRawPanel, renderResourceView, wireRawPanel } from '../../web/legacy/replay/rawpanel.mjs'
+import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
+import { stepOf } from '../../web/legacy/replay/model.mjs'
 import { deskOf, deskFrom } from './desk-world.mjs'
-import * as W from '../../src/web/v2/labels/replay.mjs'
-import { esc, kf } from '../../src/web/v2/core/fmt.mjs'
+import * as W from '../../web/legacy/labels/replay.mjs'
+import { esc, kf } from '../../web/legacy/core/fmt.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
 const el = () => ({ _h: '', set innerHTML(v) { this._h = v }, get innerHTML() { return this._h }, querySelector: () => null })

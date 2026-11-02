@@ -5,14 +5,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import * as traffic from '../../src/web/v2/traffic/traffic.mjs'
-import * as hostPage from '../../src/web/v2/traffic/host.mjs'
-import { tableModel, tableHtml, rowHtml, recvParts, queryOf } from '../../src/web/v2/traffic/traffic.mjs'
-import { harnessKey, ALIASES } from '../../src/web/v2/core/chips.mjs'
-import { CLASS_IDS } from '../../src/web/v2/core/classes.mjs'
-import { parseHash } from '../../src/web/v2/core/router.mjs'
-import { bytes } from '../../src/web/v2/core/fmt.mjs'
-import * as W from '../../src/web/v2/labels/traffic.mjs'
+import * as traffic from '../../web/legacy/traffic/traffic.mjs'
+import * as hostPage from '../../web/legacy/traffic/host.mjs'
+import { tableModel, tableHtml, rowHtml, recvParts, queryOf } from '../../web/legacy/traffic/traffic.mjs'
+import { harnessKey, ALIASES } from '../../web/legacy/core/chips.mjs'
+import { CLASS_IDS } from '../../web/legacy/core/classes.mjs'
+import { parseHash } from '../../web/legacy/core/router.mjs'
+import { bytes } from '../../web/legacy/core/fmt.mjs'
+import * as W from '../../web/legacy/labels/traffic.mjs'
 import { trafficWorld } from './traffic-world.mjs'
 import { within } from '../helpers/bounded.mjs'
 
@@ -186,7 +186,7 @@ test('#9 a row opens its host page; agent and host round-trip through the route;
 
 test('#10 traffic sources carry no endpoint path literal', async () => {
   const { w, T } = await world
-  const dir = new URL('../../src/web/v2/', import.meta.url)
+  const dir = new URL('../../web/legacy/', import.meta.url)
   const files = ['traffic/traffic.mjs', 'traffic/host.mjs', 'traffic/request-view.mjs', 'labels/traffic.mjs']
   const src = files.map((f) => fs.readFileSync(fileURLToPath(new URL(f, dir)), 'utf8'))
   const endpoints = new Set()

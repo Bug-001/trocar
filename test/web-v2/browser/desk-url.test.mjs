@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, serveWorld } from './harness.mjs'
 import { world } from '../desk-world.mjs'
-import { WRITE_GAP_MS } from '../../../src/web/v2/core/router.mjs'
+import { WRITE_GAP_MS } from '../../../web/legacy/core/router.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason

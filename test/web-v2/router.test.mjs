@@ -2,8 +2,8 @@
 // unknown route landing on 总览 (carrying the flag main.mjs turns into a toast), document.title per route, and the history writer.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseHash, formatHash, documentTitle } from '../../src/web/v2/core/router.mjs'
-import { SCREEN_NAME } from '../../src/web/v2/labels/shell.mjs'
+import { parseHash, formatHash, documentTitle } from '../../web/legacy/core/router.mjs'
+import { SCREEN_NAME } from '../../web/legacy/labels/shell.mjs'
 
 const OVERVIEW = { area: 'overview', screen: 'overview', params: {} }
 
@@ -79,7 +79,7 @@ test('document.title is the screen\'s name and the product\'s — a host page al
 // Holding ← / → fires dozens of URL writes a second; WebKit throws after 100 history calls in 30 s. A write ≥ gap after the last one
 // lands in the same task (a reload right after a lone step change carries it); denser ones are ≥ gap apart; the last value always lands.
 import { mock } from 'node:test'
-import * as router from '../../src/web/v2/core/router.mjs'
+import * as router from '../../web/legacy/core/router.mjs'
 
 // a writer on an injected clock: `at(t)` runs every timer due by t, in order, then sets the clock to t
 function rig(gap) {
@@ -207,7 +207,7 @@ test('router: a replaceState / pushState that throws (a rate-limited Safari) nev
 // 4.4 §存下的答案: #/session/<id> finds the session's project in the list; a stored (older) list that lacks a newer session is not
 // "not listed": the list is read again until it is fresh
 test('#/session/<id> resolves a session newer than a stored list: no "not listed" from the stored answer', async () => {
-  const { mount } = await import('../../src/web/v2/replay/session-link.mjs')
+  const { mount } = await import('../../web/legacy/replay/session-link.mjs')
   const row = (id) => ({ session_id: id, project_slug: `p-${id}`, harness: 'codex', title: null, last_ts: '2026-10-18T10:00:00.000Z' })
   let reads = 0, went = null
   const api = { get: async () => ({ ok: true, status: 200, data: ++reads === 1

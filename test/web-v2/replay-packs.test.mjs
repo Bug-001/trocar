@@ -9,9 +9,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { createDesk, listOf, stepOf, indexOf, ridAt, laneEvents } from '../../src/web/v2/replay/model.mjs'
-import { parseLines, applyFile, applyHead } from '../../src/web/v2/replay/packs.mjs'
-import { behindOf } from '../../src/web/v2/replay/header.mjs'
+import { createDesk, listOf, stepOf, indexOf, ridAt, laneEvents } from '../../web/legacy/replay/model.mjs'
+import { parseLines, applyFile, applyHead } from '../../web/legacy/replay/packs.mjs'
+import { behindOf } from '../../web/legacy/replay/header.mjs'
 import { world } from './desk-world.mjs'
 
 const fx = JSON.parse(fs.readFileSync(new URL('../fixtures/session-read-contract.json', import.meta.url), 'utf8'))

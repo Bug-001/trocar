@@ -6,14 +6,14 @@
 // an open row whose bytes are on the way is the sized preview box; the read-state line is there exactly while `pending` is.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
-import { stepOf } from '../../src/web/v2/replay/model.mjs'
-import { ctxWindowUnits, ctxWindowHtml, renderContextWindow } from '../../src/web/v2/replay/ctxwin.mjs'
-import { stepBarHtml } from '../../src/web/v2/replay/stepbar.mjs'
-import { renderSessionHead } from '../../src/web/v2/replay/header.mjs'
-import { renderRawPanel } from '../../src/web/v2/replay/rawpanel.mjs'
-import { bodyCache } from '../../src/web/v2/replay/cell.mjs'
-import { frameFor } from '../../src/web/v2/replay/replay.mjs'
+import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
+import { stepOf } from '../../web/legacy/replay/model.mjs'
+import { ctxWindowUnits, ctxWindowHtml, renderContextWindow } from '../../web/legacy/replay/ctxwin.mjs'
+import { stepBarHtml } from '../../web/legacy/replay/stepbar.mjs'
+import { renderSessionHead } from '../../web/legacy/replay/header.mjs'
+import { renderRawPanel } from '../../web/legacy/replay/rawpanel.mjs'
+import { bodyCache } from '../../web/legacy/replay/cell.mjs'
+import { frameFor } from '../../web/legacy/replay/replay.mjs'
 import { world, deskFrom, readLane } from './desk-world.mjs'
 
 const SEEDS = [2, 5, 11, 23]

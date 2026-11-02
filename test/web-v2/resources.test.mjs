@@ -6,12 +6,12 @@
 // String level over desk-model states: the ledger is the anchor lane's `lane` answer as the desk holds it (desk-world.mjs).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { resourcesHtml, renderResources } from '../../src/web/v2/replay/resources.mjs'
-import * as W from '../../src/web/v2/labels/replay.mjs'
-import { relPath } from '../../src/web/v2/replay/analysis.mjs'
-import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
+import { resourcesHtml, renderResources } from '../../web/legacy/replay/resources.mjs'
+import * as W from '../../web/legacy/labels/replay.mjs'
+import { relPath } from '../../web/legacy/replay/analysis.mjs'
+import { buildLanes, anchorLane } from '../../web/legacy/replay/lanes.mjs'
 import { deskOf } from './desk-world.mjs'
-import { applyLane, applyLedger, seenFiles } from '../../src/web/v2/replay/model.mjs'
+import { applyLane, applyLedger, seenFiles } from '../../web/legacy/replay/model.mjs'
 
 // the main lane's six rows are R0-0 … R0-5 (deskOf); `ledger` is its lane answer's {resources, seen, events}
 const R = (i) => `R0-${i}`
@@ -106,7 +106,7 @@ test('#7 the compaction group still draws with an empty ledger', () => {
 // 2.4 element table: a long path is cut in the middle — the base name stays whole, the length fits unless the base
 // name alone is longer
 test('midClip keeps the base name whole and fits max unless the base name alone is longer', async () => {
-  const { midClip } = await import('../../src/web/v2/replay/analysis.mjs')
+  const { midClip } = await import('../../web/legacy/replay/analysis.mjs')
   let seed = 7
   const rnd = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n }
   for (let t = 0; t < 400; t++) {
