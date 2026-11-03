@@ -61,9 +61,10 @@ export const fit = (lines, { home = null } = {}) => lines.flatMap((l) => {
   return [own + first, ...more]
 })
 
-/** One harness's chain after `on` (§3.3): where a new connection goes, and the proxy setting it was drawn from (credentials masked). The chain starts
- *  with the harness's name, so the line does not say it again; column 0, so it never reads as an item of a path list above it (§1.1⑥). */
-const adoptedLine = (x) => `route: ${x.chain}${x.proxy ? ` (its proxy setting ${x.proxy}, read from ${(x.source || []).map((s) => (s.kind === 'file' ? `${s.where}${s.key ? ` ${s.key}` : ''}` : s.where)).join(', ') || 'its own settings'})` : ''}`
+/** One harness's chain after `on` (§3.3): where a new connection goes, and the proxy setting it was drawn from (credentials masked). A chain whose
+ *  first hop is the harness's name is not prefixed again; a proxy-mode chain starts with the running process (A.1, `node (pid N)`), so the line names
+ *  the harness (D38: for whom). Column 0, so it never reads as an item of a path list above it (§1.1⑥). */
+const adoptedLine = (h, x) => `${String(x.chain || '').startsWith(`${h} `) || x.chain === h ? 'route' : `route of ${h}`}: ${x.chain}${x.proxy ? ` (its proxy setting ${x.proxy}, read from ${(x.source || []).map((s) => (s.kind === 'file' ? `${s.where}${s.key ? ` ${s.key}` : ''}` : s.where)).join(', ') || 'its own settings'})` : ''}`
 
 /** D46: a chain that is the harness's own name and nothing else (the degenerate topology a machine whose facts cannot be read leaves) says nothing
  *  and is not printed. A chain with a hop (or a proxy setting named) is real. */
@@ -164,7 +165,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   }
   if (r.skipped.length) lines.push(`Skipped: ${r.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`)
   if (lingerText(r)) lines.push(lingerText(r))
-  for (const x of Object.values(r.adopted || {})) if (saysSomething(x)) lines.push(adoptedLine(x))
+  for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(adoptedLine(h, x))
   if (r.daemon && !daemonBit) lines.push('The collector is not running, so nothing is captured yet.', 'Start it: trocar daemon') // the command keeps its own line: folding must not cut it (§1.1③)
   if (r.restart.length) lines.push(`  ${c.yellow('!')} Restart to capture: ${r.restart.map((x) => `${x.harness} (pid ${x.pid} started before the certificate was there)`).join(', ')}. Until then they connect as they do now.`)
   const nothingNew = fresh && fresh.size === 0 && !(r.changed || []).length && !(r.created || []).length

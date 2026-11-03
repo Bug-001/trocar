@@ -84,6 +84,16 @@ test('a chain that is the harness itself is not printed as an adopted line — a
   assert.equal(receipt.match(/\bcodex\b/g).length, 1, `the route line names its harness once (1.6 §3.3 sample: route: codex -> ...)\n${receipt}`)
 })
 
+// §1.1⑥ · D38: a proxy-mode chain starts with the running process (A.1), not the harness; each route line still says whose route it is
+test('a route line whose chain does not start with its harness names the harness — two harnesses behind the same process name are told apart', () => {
+  const adopted = { 'claude-code': { chain: 'node (pid 7712) -> trocar :17992 -> api.anthropic.com:443 (direct)' }, opencode: { chain: 'node (pid 7790) -> trocar :17993 -> api.openai.com:443 (direct)' } }
+  const lines = formatOnReceipt({ changed: [], created: [], skipped: [], restart: [], notes: [], adopted }, { home: '/h' }).replace(/\n\s+/g, ' ').split('\n')
+  for (const [h, x] of Object.entries(adopted)) {
+    const pid = x.chain.match(/pid (\d+)/)[1]
+    assert.equal(lines.filter((l) => l.includes(pid) && new RegExp(`(^|\\W)${h}(\\W|$)`).test(l)).length, 1, `${h}'s route line names ${h}\n${lines.join('\n')}`)
+  }
+})
+
 // §1.1⑥: a label that lists several paths prints each on its own line, two deeper than the label — never two paths on one line
 test('a receipt label that lists several paths prints one path a line, two deeper than its label', () => {
   const long = (n) => `/h/.config/${n}/${'x'.repeat(48)}.json`
