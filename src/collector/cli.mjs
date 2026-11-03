@@ -18,7 +18,7 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
     const A = arch || (await (await loadDaemon()).loadArch())
     if (argv.includes('--remove')) {
       const r = A.install.uninstallHelper()
-      out(`Removed the kernel helper ${A.install.DEFAULTS.helperBin}.${r.warnings.length ? `\nWarning: ${r.warnings.join('; ')}` : ''}`)
+      out(`Removed the capability helper ${A.install.DEFAULTS.helperBin}.${r.warnings.length ? `\nWarning: ${r.warnings.join('; ')}` : ''}`)
       return 0
     }
     const i = argv.indexOf('--binary'), dir = path.join(packageRoot, 'src', 'collector', 'arch', 'linux')

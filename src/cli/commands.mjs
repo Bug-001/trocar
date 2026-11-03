@@ -108,7 +108,7 @@ export const COMMANDS = Object.freeze([
   { name: 'setup-helper',
     group: 'Maintenance', mutates: false, needsRoot: true, run: via('./setup-helper.mjs', 'run'),
     usage: 'sudo trocar setup-helper [--remove] [--binary <path>]',
-    summary: 'Installs the kernel helper trocar needs on Linux, once per machine. This is the only command that needs root, and it is not needed on macOS or Windows.',
+    summary: 'Installs the capability helper trocar needs on Linux, once per machine. This is the only command that needs root, and it is not needed on macOS or Windows.',
     options: [['--remove', 'remove the helper instead of installing it'], ['--binary <path>', 'install this helper binary, one you built yourself']],
     exits: [[0, 'the helper is in place, or gone'], [1, 'it could not be installed, and it says why'], [2, 'nothing ran: a usage error, not root, or not Linux']] },
   // not in help (§2): only the install scripts and `trocar update` run it

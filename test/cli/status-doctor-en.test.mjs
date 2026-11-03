@@ -145,7 +145,7 @@ test('§3.5 · §1.1⑥ `--failures`: a backquoted command in a reason prints wh
     const cmd = `sudo /h/${'x'.repeat(len - 40)}/node /h/trocar.mjs setup-helper` // a selfCommand shape, `len` columns
     assert.equal(cmd.length, len)
     for (const g of [{ where: 'helper', code: 'helper-down', harness: 'claude-code' }, { where: 'engine', code: 'no-word-for-this-code' }]) {
-      const reason = `redirector helper not found at /usr/local/libexec/trocar/redirector; install it once per machine with \`${cmd}\``
+      const reason = `capability helper not found at /usr/local/libexec/trocar/redirector; install it once per machine with \`${cmd}\``
       const lines = failuresBlock({ groups: [{ level: 'problem', count: 2, first_ts: '2026-10-18T12:00:00Z', last_ts: '2026-10-18T12:14:00Z', reason, ...g }] }, health, { now: NOW })
       clean(lines, `status --failures (${g.code}, ${len})`, [cmd])
       assert.equal(lines.filter((l) => l.trim() === cmd).length, 1, `${g.code} ${len}: the command whole, once, on its own line\n${lines.join('\n')}`)

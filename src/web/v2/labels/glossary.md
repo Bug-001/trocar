@@ -59,7 +59,7 @@
 | 合并的证书包 | merged certificate bundle | CA bundle |
 | 信任插件 | trust plugin | |
 | 启动入口 | launch shim | launcher |
-| 特权助手 | capability helper | privileged helper |
+| 特权助手 | capability helper | privileged helper, capture helper, kernel helper, redirector helper |
 | 开机自启的用户服务 | login item (CLI) | autostart, startup item |
 | 安装清单 | install manifest | |
 | 旧采集 | old capture (CLI) | legacy capture |

@@ -217,7 +217,7 @@ export function createRedirectorClient({
     })
     child.on('error', (err) => {
       if (err && err.code === 'ENOENT') {
-        fail(`redirector helper not found at ${resolvedBinary}; install it once per machine with \`${setupHelperCommand()}\``, {}, { code: 'ENOENT' })
+        fail(`capability helper not found at ${resolvedBinary}; install it once per machine with \`${setupHelperCommand()}\``, {}, { code: 'ENOENT' })
       } else {
         fail('spawn error: ' + (err && err.message ? err.message : String(err)))
       }

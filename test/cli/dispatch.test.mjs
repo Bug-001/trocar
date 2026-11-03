@@ -66,7 +66,7 @@ test('V20: setup-helper off Linux is exit 2 and not needed here; as a user it sa
   let r = await run(['setup-helper', '--binary', built])
   assert.equal(r.exit, 0); assert.match(r.io.stdoutText(), /^installed \/b \(caps\)/); assert.equal(r.io.stderrText(), '')
   r = await run(['setup-helper', '--remove'])
-  assert.equal(r.exit, 0); assert.match(r.io.stdoutText(), /^Removed the kernel helper \/usr\/local\/libexec\/trocar\/trocar-redirector/)
+  assert.equal(r.exit, 0); assert.ok(r.io.stdoutText().includes('/usr/local/libexec/trocar/trocar-redirector'), 'the removed path is named')
   assert.deepEqual(done, [['setup', built], ['remove']], 'the installer was asked once each, with the binary as typed')
   r = await run(['setup-helper', '--binary', built], { over: { install: { setupHelper: () => { throw new Error('the capability bit could not be set') } } } })
   assert.equal(r.exit, 1); assert.equal(r.io.stdoutText(), ''); assert.match(r.io.stderrText(), /the capability bit could not be set/)

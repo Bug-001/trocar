@@ -548,7 +548,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     async function ensureReady() {
       syncTracker() // which harnesses are on, and their policy, before the live processes are judged
       if (!caState.ok) throw new Error(`the collector CA is unusable (${caState.which}: ${caState.reason}); not attaching, agent connections go direct`)
-      if (helperDown && helperUp) throw new Error(`the redirector helper is down (${helperDown}); restart the collector`)
+      if (helperDown && helperUp) throw new Error(`the capability helper is down (${helperDown}); restart the collector`)
       if (helperDown) await startHelper() // never up in this run (not installed at start, 4.6 「助手还没装」): asked again now; still missing = its own helper-down says why
       if (v6Held) throw new Error(`${v6Held}; refusing to attach so no IPv6 connection is steered to it (M8)`)
       const { proto } = redirector.helperInfo()
@@ -605,7 +605,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       await redirector.configure(port)
       const was = helperDown
       helperDown = null; helperUp = true
-      if (was) { sw.clearDown(); if (lock) lock.name({ helper_pid: redirector.helperInfo().pid }); event({ event: 'helper-ok', reason: 'the capture helper is installed now and started; capture can be switched on' }) }
+      if (was) { sw.clearDown(); if (lock) lock.name({ helper_pid: redirector.helperInfo().pid }); event({ event: 'helper-ok', reason: 'the capability helper is installed now and started; capture can be switched on' }) }
     }
     try { await startHelper() } catch (e) { if (!e || e.code !== 'ENOENT') throw e }
     // the lock (4.6 §控制面, D-25): pid + start time + boot id, so a reused pid or a reboot is never "running"; its

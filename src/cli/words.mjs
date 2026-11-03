@@ -125,13 +125,13 @@ export const FAILURE_WORDS = Object.freeze({
   'classes-write-failed': 'the traffic class table could not be saved',
   'classes-log-failed': 'a change to the traffic class table was made but not logged',
   'classify-failed': 'a call could not be classified, so it is kept in full',
-  // the capture helper and the kernel
-  'helper-error': 'the capture helper failed',
+  // trocar's helpers (Linux: the capability helper; Windows: the PowerShell reader; helper-down and helper-start-failed come from either) and the kernel
+  'helper-error': 'the capability helper failed',
   'heartbeat-failed': "the helper's heartbeat failed",
   'heartbeat-gap': "the helper's heartbeat stopped",
   'loader-down': 'the helper loader is not listening',
   'loader-timeout': 'the helper loader did not answer in time',
-  'helper-start-failed': 'the capture helper would not start',
+  'helper-start-failed': "trocar's helper would not start",
   'socktable-unavailable': "the system's connection table could not be read",
   'kernel-drops': 'the kernel dropped packets',
   // on / off, install / uninstall
@@ -158,8 +158,8 @@ export const FAILURE_WORDS = Object.freeze({
   // failure events that carry no code of their own (the group's code is the event)
   failure: 'a problem was recorded',
   'agent-untrusted': "a running agent does not trust trocar's certificate yet",
-  'helper-down': 'the capture helper stopped',
-  'helper-version-mismatch': 'the capture helper is the wrong version',
+  'helper-down': "trocar's helper stopped",
+  'helper-version-mismatch': 'the capability helper is the wrong version',
   'attach-failed': 'capture could not be attached',
   'detach-failed': 'capture could not be detached',
 })
@@ -225,7 +225,7 @@ export function statusReason(code, { harness = '', pid = null, cause = null } = 
         : [`${hp} refused trocar's certificate for a host; its traffic is passed on unread until trocar tries again`, `to capture it now, restart ${h}`],
     'daemon-not-running': ['trocar is not running in the background'],
     'daemon-not-responding': ['trocar runs in the background but does not answer'],
-    'helper-missing': ["trocar's capture helper is missing or is the wrong version"],
+    'helper-missing': ["trocar's capability helper is missing or is the wrong version"],
     'link-missing': ['trocar is not attached'],
     'entry-missing': ['the setting that points at trocar is gone', null, `trocar on ${h}`],
     'entry-changed': ['the setting that points at trocar holds something else'],
