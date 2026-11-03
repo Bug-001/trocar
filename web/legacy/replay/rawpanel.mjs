@@ -123,7 +123,7 @@ function rawPanel(s) {
   const head = u('head', `<div class="rphd">${esc(W.RAW_HEAD(n))}${s.anchor.kind === 'main' ? '' : `<span class="rpsub"> · ${esc(W.callNo(W.laneWord(s.anchor.kind), n, ref ? ref.m : s.anchor.calls.length))}</span>`}</div>`)
   if (!call.rec) return { units: [...head, ...u('empty', `<div class="rpempty">${esc(W.NO_REQUEST)}</div>`)], parts: [] }
   const model = String((call.rec.request || {}).model || '')
-  const modelLine = u('model', model ? `<div class="rpk mono">${esc(model)}</div>` : '')
+  const modelLine = u('model', model ? `<div class="rpk">${esc(model)}</div>` : '')
   const st = s.desk ? stepOf(s.desk, call.rid) : null
   const d = (st && st.detail) || {}, w = { ...(call.wire || {}), ...(d.wire || {}) }
   if (!st || !st.held) return { units: [...head, ...modelLine, ...u('wire', wireHtml(w)), ...[0, 1, 2].map((i) => ({ key: 'busy' + i, html: BUSY_ROW }))], parts: [] }
@@ -167,7 +167,7 @@ export function renderResourceView(el, s) {
     const ff = tools.map(faithOf), proven = ff.every((f) => f === 'verbatim')
     const tier = proven ? W.CAP_VERBATIM : ff.every((f) => f === 'metadata') ? W.CAP_METADATA : W.CAP_MIXED
     body = `<div class="rpk"><b>${esc(pin.label || pin.resKey)}</b> · ${tools.length} tool definitions</div>` +
-      tools.map((t) => `<div class="rpk mono">${esc(W.capToolRow(t.name || '', kf(t.chars || 0)))}</div>`).join('') +
+      tools.map((t) => `<div class="rpk">${esc(W.capToolRow(t.name || '', kf(t.chars || 0)))}</div>`).join('') +
       `<div class="rpk ${proven ? 'rpok' : 'rpwarn'}">${esc(tier)}</div>`
   } else if (b) body = `<div class="pinbody" data-bi="${flat.indexOf(b)}"></div>`
   else body = `<div class="rpk">${esc(W.RES_NOT_FOUND)}</div>`
