@@ -732,7 +732,7 @@ function openDesk(ctx, route0) {
     const a = keyAction(e, { at, n: s.anchor.calls.length, problems: s.problems, chapters: ch.chs, step: s.anchor.no ? s.anchor.no(at) : at })
     if (!a) return
     e.preventDefault()
-    if (a.keys) openModal({ title: KEYS_TITLE, bodyHtml: `<dl class="keylist">${KEY_LIST.map(([k, w]) => `<dt><kbd>${esc(k)}</kbd></dt><dd>${esc(w)}</dd>`).join('')}</dl>` })
+    if (a.keys) openModal({ signal: s.ctx.signal, title: KEYS_TITLE, bodyHtml: `<dl class="keylist">${KEY_LIST.map(([k, w]) => `<dt><kbd>${esc(k)}</kbd></dt><dd>${esc(w)}</dd>`).join('')}</dl>` })
     else if (a.follow) { if (s.follow) followOff(); else followOn() }
     else if (s.playRid == null) return // a named step is still on its way to a desk that never drew
     else if (a.chapter != null) { keyTarget = null; s.chapterGo(a.chapter) }

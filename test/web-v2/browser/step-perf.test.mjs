@@ -86,6 +86,20 @@ test('1.2 §键盘: Tab reaches the step bar and the brush, and each shows an ou
   } finally { await b.stop() }
 })
 
+// 1.2 §键盘: `?` opens the desk's key list, a layer of the desk; Back to the library leaves the desk, and no dialog stays over the library
+test('1.2 §键盘: the ? key list closes when the desk is left for another screen', { skip }, async () => {
+  const b = await withBoard({ bytes: BYTES, chromium: gate.chromium })
+  try {
+    await openSession(b.page, null)
+    await b.page.keyboard.press('?')
+    await b.page.waitForSelector('[role=dialog][aria-modal=true]')
+    await b.page.goBack()
+    await b.page.waitForSelector('.lrow')
+    assert.equal(await b.page.locator('[role=dialog][aria-modal=true]').count(), 0)
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
 // D64④⑥: p50 and p95 next to the line, printed; this run is a baseline — acceptance numbers come from the test machines, not from it (PR 6)
 test.after(() => {
   for (const [k, v] of Object.entries(samples)) {

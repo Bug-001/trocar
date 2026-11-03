@@ -93,7 +93,8 @@ function wireKeys() {
   }, true)
 }
 
-export function openModal({ title = '', bodyHtml = '', actions, osStyle } = {}) {
+// `signal`: the dialog belongs to whoever opened it; when that one goes (the screen's signal aborts), the dialog closes with null.
+export function openModal({ title = '', bodyHtml = '', actions, osStyle, signal } = {}) {
   wireKeys()
   const acts = actions && actions.length ? actions : [{ label: 'Close', value: null }]
   const os = OS_GLYPH[osStyle] ? osStyle : null
@@ -122,6 +123,7 @@ export function openModal({ title = '', bodyHtml = '', actions, osStyle } = {}) 
       },
     }
     modalStack.push(entry)
+    if (signal) { if (signal.aborted) return entry.close(null); signal.addEventListener('abort', () => entry.close(null), { once: true }) }
     back.addEventListener('click', (e) => {
       if (e.target === back) return entry.close(null)
       const b = e.target.closest && e.target.closest('.mbtn')
