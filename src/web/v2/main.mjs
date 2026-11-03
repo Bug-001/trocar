@@ -7,7 +7,7 @@ import { configure, bootToken, onForbidden } from './core/http.mjs'
 import { store } from './core/store.mjs'
 import * as router from './core/router.mjs'
 import { initKeys, setScreenKeys } from './core/keys.mjs'
-import { installCopy, copyBtn, $ } from './core/dom.mjs'
+import { installCopy, copyBtn, $, setScreenSignal } from './core/dom.mjs'
 import { esc } from './core/fmt.mjs'
 import { watchHarnessIcons } from './core/chips.mjs'
 import { toast, installUi } from './core/ui.mjs'
@@ -68,8 +68,9 @@ let seq = 0 // a screen loads asynchronously; a newer route cancels an older loa
 function unmountCurrent() {
   if (!cur) return
   try { if (cur.inst) cur.inst.unmount() } catch (e) { console.error('unmount failed', e) }
-  cur.ac.abort() // after unmount(): the screen's pollers are stopped, so an aborted answer writes nothing
+  cur.ac.abort() // after unmount(): the screen's pollers are stopped, so an aborted answer writes nothing; its layers close (1.2 §键盘)
   cur = null
+  setScreenSignal(null)
   setScreenKeys(null)
   screenEl.replaceChildren()
 }
@@ -101,10 +102,11 @@ async function show(route) {
   // `cur` is set before mount() runs: a URL the screen writes while it mounts (the desk naming the step it shows) reaches update(), never a second mount
   const ac = new AbortController(), box = { screen: route.screen, inst: null, ac }
   cur = box
+  setScreenSignal(ac.signal) // every layer core opens from here on is this screen's (1.2 §键盘「层随屏走」)
   const inst = safeMount(mod, screenEl, { ...ctx, signal: ac.signal, api: scoped(api, ac.signal) }, { clearKeys: () => setScreenKeys(null) })
   if (cur !== box) { if (inst) { try { inst.unmount() } catch (e) { console.error('unmount failed', e) } } ac.abort() } // another screen took over while it mounted
   else if (inst) box.inst = inst
-  else { cur = null; ac.abort() }
+  else { cur = null; setScreenSignal(null); ac.abort() }
 }
 
 // the first route: write the canonical hash quietly (an empty hash becomes #/overview), then mount. An unknown route is handled by show().
