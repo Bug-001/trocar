@@ -150,3 +150,91 @@ function infoRows(s) {
   return rows
 }
 
+// ── the step head (2.2 §步头) ─────────────────────────────────────────────────────────────────────────────────────
+/**
+ * @typedef {{rough: true, n: number, m: number, label: string}} RoughStepHead
+ * @typedef {{rough: false, n: number|null, k: number|null, m: number, laneWord: string|null, label: string, model: string|null,
+ *   ts: string|null, time: string, half: {tip: string|null}|null, compare: {sel: number|null, cacheRefK: number|null, M: number}|null,
+ *   ctx: {word: string, value: number|null, comp: Array<[string, number]>|null}, cache: {word: string, label: string},
+ *   cost: {word: string, label: string}, cacheRows: () => object[], compRows: () => object[]|'busy', costRows: () => object[]}} StepHead
+ */
+/** @returns {StepHead|RoughStepHead|null} */
+export function stepHeadModel(s) {
+  const call = rowAt(s)
+  if (!call) {
+    const at = roughAt(s), h = s.desk && s.desk.head
+    return at != null && h.tier ? { rough: true, n: at + 1, m: h.steps, label: W.stepNo(at + 1, h.steps) } : null
+  }
+  const main = s.anchor.kind === 'main', r = stepRef(s.lanes, call.rid)
+  const no = r ? (r.step ? r.n : r.k) : s.playhead + 1, m = r ? r.m : s.anchor.calls.length
+  const ref = refRowOf(s.anchor, s.playhead), fid = callFacts(call), model = modelOf(call)
+  return {
+    rough: false, n: main ? no : null, k: main ? null : no, m, laneWord: main ? null : W.laneWord(s.anchor.kind),
+    label: main ? W.stepNo(no, m) : W.callNo(W.laneWord(s.anchor.kind), no, m),
+    model, ts: call.ts || null, time: fmtTime(call.ts) || '—',
+    half: fid.facts.length ? { tip: fid.tech.map((p) => p[1]).filter(Boolean).join('\n') || null } : null,
+    compare: main ? { sel: s.diffRef != null && s.anchor.calls[s.diffRef] ? localNo(s, s.anchor.calls[s.diffRef]) : null, cacheRefK: ref ? localNo(s, ref) : null, M: m } : null,
+    ctx: { word: W.CTX_BTN, value: call.unparsed || !call.rec ? null : (call.ctx ?? null), comp: compShares(call.comp) },
+    cache: { word: W.CACHE_TITLE, label: cacheLabel(call) },
+    cost: { word: W.COST_BTN, label: costLabel(call, s.pricing) },
+    cacheRows: () => cacheRows(s, call, ref, model),
+    compRows: () => compRows(s, call),
+    costRows: () => costRows(s, call, model),
+  }
+}
+
+// the 缓存 popover (2.2 §「缓存」按钮): the state sentence, then only the rows that apply
+function cacheRows(s, call, ref, model) {
+  const st = cacheState(call, ref), u = usageOf(call), b = call.cacheBreak || {}
+  const rows = [{ key: 'sentence', struct: W.isStructState(st), structTip: W.STRUCT_TIP, text: W.cacheSentence(st, {
+    laneW: W.laneWord(s.anchor.kind), causeW: W.causeWord(b.cause), attrW: W.ATTR_WORD[b.attribution], hitPct: st.hit != null ? Math.round(st.hit * 100) : null,
+    warm: st.warm, inferred: !!call.compactionInferred, errMsg: errMsgOf(call), zeroInput: st.zeroInput }) }]
+  if (u && st.state !== 'failed' && st.state !== 'no-usage') {
+    rows.push({ key: 'usage', unit: W.TOKENS_WORD, items: ['read', 'create', 'fresh', 'out'].map((k) => ({ key: k, word: W.USAGE_WORD[k], n: u[k] ?? null, text: u[k] == null ? '—' : kf(u[k]), tip: u[k] == null ? W.USAGE_NULL_TIP : null })) })
+  }
+  if (st.isBreak) {
+    const bc = breakCost(call, ref, s.pricing ? priceMatch(s.pricing, model) : null)
+    rows.push({ key: 'extra', approx: true, usd: bc.usd, text: bc.usd != null ? `${W.BREAK_COST_LINE} ${usd(bc.usd)}` : (W.BREAK_COST_WHY[bc.why] || W.BREAK_COST_WHY['no-ref']) })
+  }
+  if (hasChangeLine(call, flatOf(s, call))) rows.push({ key: 'jump', text: W.JUMP_TO_CHANGE })
+  if (call.wire && call.wire.cacheSemanticsKnown === false) rows.push({ key: 'unknown', text: W.CACHE_SEMANTICS_UNKNOWN })
+  return rows
+}
+
+// the 组成 popover (2.2 §「组成」按钮): 'busy' while this step's lane is not held (a sized empty row, no words, no control)
+function compRows(s, call) {
+  if (!call.rec) return [{ key: 'none', text: W.COMP_SELF.none }]
+  if (call.unparsed) return [{ key: 'unparsed', text: W.COMP_SELF.unparsed }]
+  const flat = flatOf(s, call)
+  if (!flat) return 'busy'
+  const tax = segTax(flat)
+  const rows = [{ key: 'size', bytes: tax.total, text: W.compSize(bytes(tax.total)) }, { key: 'calibre', text: W.COMP_CALIBRE },
+    { key: 'segs', items: TAX_ORDER.map((k) => ({ key: k, word: W.SEG_NAME[k], pct: tax.pct(k), text: `${W.SEG_NAME[k]} ${tax.pct(k)}%`, tip: `${bytes(tax.seg[k])} · ≈ ${kf(tax.est(k))} ${W.TOKENS_WORD}` })) },
+    { key: 'culprit', seg: tax.culprit, text: W.compCulprit(tax.culprit, tax.pct(tax.culprit)) }]
+  if (!tax.allVerbatim) rows.push({ key: 'tools-estimated', text: W.TOOLS_ESTIMATED })
+  // growth only against a real 内容对比步; a compaction step whose content ref IS the cache ref is a rewrite, not a Δ
+  if (call.cacheBreak && call.cacheBreak.cause === 'compaction' && s.diffRef == null) return [...rows, { key: 'compaction', text: W.COMPACTION_REWRITE }]
+  const cref = contentRefOf(s)
+  if (!cref) return rows
+  const refFlat = flatOf(s, cref)
+  if (!refFlat) return [...rows, { key: 'growth', busy: true }]
+  const prev = segTax(refFlat), d = tax.total - prev.total, refK = contentRefKOf(s)
+  const dom = TAX_ORDER.map((k) => ({ k, d: tax.seg[k] - prev.seg[k] })).reduce((a, x) => (Math.abs(x.d) > Math.abs(a.d) ? x : a), { k: 'tools', d: 0 })
+  const segW = dom.d ? W.SEG_NAME[dom.k] : '', less = d < 0
+  return [...rows, { key: 'growth', delta: d, seg: dom.d ? dom.k : null, refK, text: refK != null ? W.growthVs(refK, bytes(Math.abs(d)), segW, less) : W.growthLine(bytes(Math.abs(d)), segW, less) },
+    { key: 'diagnose', text: W.DIAGNOSE_ONLY }]
+}
+
+// the ≈ $ popover (2.2 §「≈ $」按钮): the calibre sentence always; one reason when the button says ≈ —
+function costRows(s, call, model) {
+  const u = usageOf(call), table = s.pricing, m = u && table ? priceMatch(table, model) : null
+  const rows = [{ key: 'calibre', text: W.COST_CALIBRE }]
+  if (m && m.exact === false) rows.push({ key: 'by-key', text: W.PRICE_BY_KEY(m.key) })
+  if (!m) {
+    const why = isFailed(call) ? W.COST_WHY.failed : !u ? W.COST_WHY['no-usage'] : !table ? (s.pricingErr ? priceStateNote(table, s.pricingErr) : W.PRICES_LOADING) : W.COST_WHY['no-price']
+    rows.push({ key: 'why', text: why })
+  }
+  rows.push({ key: 'prices', text: W.SEE_PRICES, href: '#/settings/prices' })
+  return rows
+}
+
