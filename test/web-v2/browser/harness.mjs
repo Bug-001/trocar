@@ -7,11 +7,21 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { boardHome, serveBoard } from '../real-face.mjs'
+import { tmpDir, removeTmp } from '../../helpers/tmp.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../../src/off/token-header.mjs'
 import { INTERVAL, TIMER_ROUND } from '../../../src/web/v2/core/poll.mjs'
 
 const SHOTS = fileURLToPath(new URL('./shots/', import.meta.url))
 const CHANNEL = { channel: 'chrome' }
+
+/** The system Chrome (`chromium` is playwright-core's), with a temp directory of its own as TMP / TEMP / TMPDIR: what it leaves there (on
+ *  Windows a chrome_url_fetcher_* folder) goes when the browser closes, never into the run's temp directory, which leak-guard checks. */
+export async function launchChrome(chromium) {
+  const tmp = tmpDir('trocar-chrome-')
+  const browser = await chromium.launch({ ...CHANNEL, env: { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } })
+  browser.once('disconnected', () => removeTmp(tmp))
+  return browser
+}
 
 /** { ok:true, chromium } when the browser suite may run here; { ok:false, reason } otherwise (the reason is printed). */
 export async function probe({ importer = () => import('playwright-core'), env = process.env } = {}) {
@@ -19,7 +29,7 @@ export async function probe({ importer = () => import('playwright-core'), env = 
   if (env.TROCAR_PLAYWRIGHT !== '1') return no('TROCAR_PLAYWRIGHT is not 1 (run it with `npm run test:browser`)')
   let chromium
   try { chromium = (await importer()).chromium } catch (e) { return no(`playwright-core is not installed: ${e?.message || e}`) }
-  try { await (await chromium.launch(CHANNEL)).close() } catch (e) { return no(`Google Chrome did not launch: ${String(e?.message || e).split('\n')[0]}`) }
+  try { await (await launchChrome(chromium)).close() } catch (e) { return no(`Google Chrome did not launch: ${String(e?.message || e).split('\n')[0]}`) }
   return { ok: true, chromium }
 }
 
@@ -79,7 +89,7 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
     }
   }
   try {
-    browser = await chromium.launch(CHANNEL)
+    browser = await launchChrome(chromium)
     context = await browser.newContext({ viewport: { width, height }, colorScheme: theme })
     page = await context.newPage()
     page.on('pageerror', (e) => errors.push(String(e)))

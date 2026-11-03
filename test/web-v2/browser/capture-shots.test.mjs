@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { probe, shoot, layoutFaults } from './harness.mjs'
+import { probe, shoot, layoutFaults, launchChrome } from './harness.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { modelWorld } from '../../helpers/model-world.mjs'
 import { liveUnit, withScratchCwd, boardPortOf, servableWorld } from '../../helpers/model-daemon.mjs'
@@ -35,7 +35,7 @@ async function withDaemonBoard(run) {
 }
 
 async function open(chromium, { base, token }, { width = 1280, theme = 'light' } = {}) {
-  const browser = await chromium.launch({ channel: 'chrome' })
+  const browser = await launchChrome(chromium)
   const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme })
   const page = await context.newPage()
   const posts = [], errors = []
