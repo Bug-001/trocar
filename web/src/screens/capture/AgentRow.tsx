@@ -76,7 +76,7 @@ export function AgentRow({ row, open, onOpen, onDone }: { row: AgentRowModel, op
         <dl className="exp">
           {row.why ? <>
             <dt>Why, and what to do</dt>
-            <dd>{row.why.lines.map((l, i) => <p key={i}>{l}</p>)}<p className="fine">{row.why.tail}</p></dd>
+            <dd className="why-do">{row.why.lines.map((l, i) => <p key={i}>{l}</p>)}<p className="fine">{row.why.tail}</p></dd>
           </> : null}
           {row.changes ? <>
             <dt>Changed for it by trocar</dt>
