@@ -72,7 +72,7 @@ export default function LibraryScreen({ route, router }: ScreenProps) {
   // eslint-disable-next-line react-hooks/incompatible-library -- VRows is not memoized: it reads the virtualizer on every render
   const v = useVirtualizer({
     count: entries.length, getScrollElement: () => listRef.current, overscan: 8, useFlushSync: false,
-    estimateSize: (i) => (entries[i]?.g ? 52 : 56), getItemKey: (i) => entries[i]?.key ?? i,
+    estimateSize: (i) => (entries[i]?.g ? 52 : 44), getItemKey: (i) => entries[i]?.key ?? i,
   })
 
   // scroll: follows the highlighted row's KEY. A new list (first answer, Back) lands on it, a filter change starts at the top, a key

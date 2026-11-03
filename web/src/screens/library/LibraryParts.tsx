@@ -66,7 +66,8 @@ export function VRows({ v, entries, sel, now, onOpen }:
         const e = entries[it.index]
         if (!e) return null
         return (
-          <div key={it.key as string} className="vrow" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: it.size, transform: `translateY(${it.start}px)` }}>
+          // a row is as tall as its content (one line or two); the virtualizer measures it
+          <div key={it.key as string} className="vrow" data-index={it.index} ref={v.measureElement} style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${it.start}px)` }}>
             {e.s ? <Row s={e.s} on={e.key === sel} now={now} onOpen={onOpen} /> : <DayHead g={e.g!} now={now} />}
           </div>
         )
