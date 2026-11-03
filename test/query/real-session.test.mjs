@@ -5,8 +5,9 @@
 // `TROCAR_REAL_HOME=<a trocar home> npm run test:real`. No timing is asserted: the numbers are measured and logged.
 //
 // The home is only read: the worker runs over a side home in a temp dir whose raw/ is a link to the real one and whose index/ is a
-// copy of its segment index without the context projections (index/ctx), so the session is extracted and folded from scratch and
-// whatever that writes lands in the temp dir. Without TROCAR_REAL_HOME it is skipped and says why.
+// copy of its segment index without the context projections (index/ctx), with every link followed (a home whose index/ is a link
+// would otherwise hand the worker the real index), so the session is extracted and folded from scratch and whatever that writes
+// lands in the temp dir. Without TROCAR_REAL_HOME it is skipped and says why.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
@@ -27,7 +28,13 @@ test('the largest real session, built from scratch by the real worker, answers i
   fs.mkdirSync(home, { recursive: true, mode: 0o700 })
   fs.symlinkSync(path.join(path.resolve(REAL), 'raw'), path.join(home, 'raw'))
   const index = path.join(REAL, 'index')
-  if (fs.existsSync(index)) fs.cpSync(index, path.join(home, 'index'), { recursive: true, filter: (p) => path.relative(index, p).split(path.sep)[0] !== 'ctx' })
+  if (fs.existsSync(index)) fs.cpSync(index, path.join(home, 'index'), { recursive: true, dereference: true, filter: (p) => path.relative(index, p).split(path.sep)[0] !== 'ctx' })
+  // A link left in the copy would let the worker write into the real home (a second writer beside the real one, 4.3 §4).
+  const links = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isSymbolicLink() ? [path.join(d, e.name)] : e.isDirectory() ? links(path.join(d, e.name)) : [])
+  if (fs.existsSync(path.join(home, 'index'))) {
+    assert.ok(!fs.lstatSync(path.join(home, 'index')).isSymbolicLink(), 'the side index is a copy, not a link to the real one')
+    assert.deepEqual(links(path.join(home, 'index')), [], 'the side index holds no link')
+  }
   const groups = sessionGroups(await indexRows({ home }))
   let id = null, most = -1
   for (const [k, rows] of groups) { const b = rows.reduce((n, r) => n + (r.stored_bytes || 0), 0); if (b > most) { most = b; id = k } }
