@@ -34,7 +34,6 @@ const P = {
   // collapse the sidebar to the rail / expand it again
   'rail-in': '<rect x="1.75" y="2.75" width="12.5" height="10.5" rx="3"/><path d="M6 2.75v10.5M11 6.25 9.25 8 11 9.75"/>',
   'rail-out': '<rect x="1.75" y="2.75" width="12.5" height="10.5" rx="3"/><path d="M6 2.75v10.5M9.25 6.25 11 8l-1.75 1.75"/>',
-  updown: '<path d="M5.25 6.25 8 3.5l2.75 2.75M5.25 9.75 8 12.5l2.75-2.75"/>',
   // half: the partial-capture mark (1.5 §标记), a ring with its left half filled
   half: '<circle cx="8" cy="8" r="5.75"/><path d="M8 2.25a5.75 5.75 0 0 0 0 11.5z" fill="currentColor" stroke="none"/>',
 }
