@@ -21,14 +21,15 @@ const val = (d) => d <= 0 ? pick([() => str(10), () => rnd() * 1e6 - 5e5, () => 
   : pick([() => Array.from({ length: Math.floor(rnd() * 6) }, () => val(d - 1)),
     () => Object.fromEntries(Array.from({ length: Math.floor(rnd() * 6) }, (_, i) => ['k' + i + str(3), val(d - 1)])), () => val(0)])()
 
-test('text and code: the kind class, and the drawn text is the source (code shows ESC as a visible mark)', () => {
+test('text and code: the kind class, and the drawn text is the source (code names the ESC byte as a dimmed ESC, 1.5 #5)', () => {
   for (let i = 0; i < 300; i++) {
     const s = str(200)
     for (const as of ['text', 'code']) {
       const out = renderKind({ as }, s, { budget: 1e9 })
       assert.ok(has(wrap(out), 'kd-' + as), as)
       assert.equal(out.more, null)
-      assert.equal(textOf(out.html), as === 'code' ? s.replaceAll('\u001b', '␛') : s, as)
+      assert.equal(textOf(out.html), as === 'code' ? s.replaceAll('\u001b', 'ESC') : s, as)
+      if (as === 'code') assert.equal(count(out.html, /<span class="kd-esc">ESC<\/span>/g), count(s, /\u001b/g), 'each ESC byte is one kd-esc mark')
     }
   }
 })
@@ -51,7 +52,7 @@ test('slicing: the more chain covers the whole string with no gap or overlap', (
         assert.ok(out.more === null || out.more > from, 'progress')
         from = out.more; n++
       } while (from !== null && n < 1e5)
-      assert.equal(got, as === 'code' ? s.replaceAll('\u001b', '␛') : s)
+      assert.equal(got, as === 'code' ? s.replaceAll('\u001b', 'ESC') : s)
     }
   }
 })
@@ -147,7 +148,7 @@ test('sections: each top-level tag pair gets a sec-tag label; text outside the t
     const out = renderKind({ as: 'sections', ...(rnd() < 0.5 && { kids: [{ as: 'code' }] }) }, s)
     assert.ok(has(wrap(out), 'kd-sec'))
     assert.equal(count(out.html, /class="sec-tag"/g), secs.length)
-    for (const [, b] of secs) assert.ok(textOf(out.html).includes(b.replaceAll('\u001b', '␛')))
+    for (const [, b] of secs) assert.ok(textOf(out.html).includes(b.replaceAll('\u001b', 'ESC')))
   }
 })
 

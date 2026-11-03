@@ -29,6 +29,7 @@ const get = (v, path) => {
   return v
 }
 const fail = () => { throw new Error('cannot draw') }
+const ESC = '<span class="kd-esc">ESC</span>' // an ANSI escape's ESC byte in code (2.3 §两种模式)
 const shown = (s) => esc(s).replace(/\r/g, '&#13;') // a raw CR would be read back as LF
 const asText = (v) => { if (typeof v === 'string') return v; try { return JSON.stringify(v, null, 2) ?? String(v) } catch { return String(v) } }
 
@@ -67,7 +68,7 @@ function code(r, b, v, o) {
   let html = o.from === 0 && r.title != null ? `<div class="kd-title">${esc(r.title)}</div>` : ''
   html += s.split('\n').map((line, i) => {
     const m = r.f?.gutter && (i > 0 || atStart) ? GUT.exec(line) : null
-    const rest = shown(m ? line.slice(m[0].length) : line).replace(/\u001b/g, '␛')
+    const rest = shown(m ? line.slice(m[0].length) : line).replace(/\u001b/g, ESC) // the ESC byte as a dimmed word: ␛ falls back to a third font (1.5 #5)
     return m ? `<span class="gut" aria-hidden="true">${esc(m[0])}</span>${rest}` : rest
   }).join('\n')
   return { html, more }
