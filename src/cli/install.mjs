@@ -281,7 +281,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   return board || problems.length ? EXIT.incomplete : EXIT.ok
 }
 
-/** 1.6 §3.2 / §1.1⑥: the undo that needs no source tree, as on prints it — the command on a line of its own, whole (standaloneCommand: `node "…"` on Windows). */
+/** 1.6 §3.2 / §1.1⑥: the undo that needs no source tree, as on prints it — the command on a line of its own, whole (standaloneCommand: the .cmd beside it on Windows). */
 const breakGlass = (home, platform) => ['If trocar itself breaks, run:', commandLine(standaloneCommand(standalonePath(home), platform))]
 
 // Set up (only): a row of the plan is one of that harness's forms whose own carrier install has not placed (setupOf's `missing`, the judgement

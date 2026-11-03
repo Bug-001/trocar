@@ -13,9 +13,9 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { buildStandalone, writeStandalone, checkStandalone, STANDALONE_ENTRY } from '../../src/off/standalone.mjs'
+import { buildStandalone, writeStandalone, checkStandalone, STANDALONE_ENTRY, STANDALONE_CMD } from '../../src/off/standalone.mjs'
 import { OFF_VERSION, MANIFEST_VERSION, readManifest, saveManifest, manifestPath, KNOWN_KINDS, FILE_ENTRY_KINDS } from '../../src/off/manifest.mjs'
-import { standalonePath } from '../../src/off/paths.mjs'
+import { standalonePath, standaloneFiles } from '../../src/off/paths.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
@@ -288,7 +288,7 @@ test('V35: a manifest newer than the copy knows is left alone — ok:false, exit
 
 test('the execute bit is only a POSIX fact: on win32 a copy without it is current, on linux it is not (Windows test machine run 2, 2026-10-18 Q4)', () => {
   const home = tmpDir('trocar-chk-win-')
-  writeStandalone({ home, version: OFF_VERSION })
+  writeStandalone({ home, version: OFF_VERSION, platform: 'win32' })
   fs.chmodSync(standalonePath(home), 0o600) // what Windows reports for a file install just wrote
   assert.equal(checkStandalone({ home, version: OFF_VERSION, platform: 'win32' }).ok, true, 'win32: nothing carries an execute bit, so it says nothing')
   const posix = checkStandalone({ home, version: OFF_VERSION, platform: 'linux' })
@@ -326,6 +326,29 @@ test('V35: the check reports a copy that is stale, missing or not what src/off g
   fs.rmSync(file); fs.mkdirSync(file)
   const dir = checkStandalone({ home })
   assert.deepEqual([dir.ok, dir.found], [false, null]); assert.match(dir.reason, /EISDIR|cannot be read/)
+})
+
+test('1.6 §3.2 step 1: on win32 trocar-off.cmd is written, checked and rewritten with trocar-off as one list; its bytes hold no Node path; elsewhere it is not written', () => {
+  const home = tmpDir('trocar-chk-cmd-')
+  const [file, cmd] = standaloneFiles(home, 'win32')
+  assert.deepEqual([cmd && path.dirname(cmd), standaloneFiles(home, 'linux'), standaloneFiles(home, 'darwin')], [path.dirname(file), [file], [file]])
+  assert.equal(writeStandalone({ home, version: OFF_VERSION, platform: 'win32' }).written, true)
+  const text = fs.readFileSync(cmd, 'utf8')
+  assert.equal(text, STANDALONE_CMD)
+  assert.ok([...text].every((c) => c.codePointAt(0) < 128) && !/[^\r]\n/.test(text), 'ASCII with CRLF: cmd reads it in every code page')
+  assert.ok(!/[A-Za-z]:\\/.test(text) && !text.includes(process.execPath), 'no absolute path in its bytes: switching Node never makes it stale')
+  assert.match(text, /trocar-off" %\*/, 'it runs the trocar-off beside it with every argument')
+  assert.deepEqual([checkStandalone({ home, version: OFF_VERSION, platform: 'win32' }).ok, writeStandalone({ home, version: OFF_VERSION, platform: 'win32' }).written], [true, false])
+  for (const spoil of [() => fs.rmSync(cmd), () => fs.writeFileSync(cmd, text.replace('node', 'nodes'))]) {
+    spoil()
+    const c = checkStandalone({ home, version: OFF_VERSION, platform: 'win32' })
+    assert.deepEqual([c.ok, c.path, c.found], [false, cmd, String(OFF_VERSION)], 'the finding names the .cmd')
+    assert.equal(writeStandalone({ home, version: OFF_VERSION, platform: 'win32' }).written, true)
+    assert.equal(fs.readFileSync(cmd, 'utf8'), STANDALONE_CMD, 'written again')
+  }
+  const posix = tmpDir('trocar-chk-nocmd-')
+  writeStandalone({ home: posix, version: OFF_VERSION, platform: 'linux' })
+  assert.deepEqual(fs.readdirSync(path.dirname(standalonePath(posix))), ['trocar-off'])
 })
 
 test('V35: `trocar doctor` says nothing of a copy that is current, and makes a finding that says what is wrong when it is not — and writes nothing', async () => {
@@ -405,7 +428,7 @@ test('a copy that cannot be written stops the install before one file of the age
 // legacyOffCli — it is the NEW off only, on every platform, and what the old capture left on a machine is cleaned by hand (README).
 // The copy's own behavior (the new off, no repository needed) is the cells above and below.
 
-test('D74: the copy runs with no node on PATH: sh starts the Node that ../app/current names', { skip: process.platform === 'win32' && 'the copy is run as "<node>" "<path>" on Windows' }, () => {
+test('D74: the copy runs with no node on PATH: sh starts the Node that ../app/current names', { skip: process.platform === 'win32' && 'on Windows trocar-off.cmd starts it (1.6 §3.2 step 1)' }, () => {
   const text = buildStandalone({ version: 'test' }).replace(STANDALONE_ENTRY, "(process.stdout.write('ran ' + process.argv.slice(2).join(' ')), 0)")
   const t = tmpDir('trocar-polyglot-'), file = path.join(t, 'bin', 'trocar-off'), node = path.join(t, 'app', 'node', 'n1', 'bin', 'node')
   fs.mkdirSync(path.dirname(file), { recursive: true }); fs.mkdirSync(path.dirname(node), { recursive: true })

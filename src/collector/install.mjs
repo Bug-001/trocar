@@ -506,7 +506,7 @@ export async function turnOn(opts = {}) {
     // the undo that needs no source tree is in place before the first thing it undoes (R3): written on every `on`, nothing when it already is what src/off generates. A copy that
     // cannot be written stops the run here, before one file of the agents' is touched — the way back first, like the backup of a file (R2) — and `recorded` writes the failure (R11)
     let standalone
-    try { standalone = writeStandalone({ home, version: OFF_VERSION, fs }) } catch (e) {
+    try { standalone = writeStandalone({ home, version: OFF_VERSION, platform: osName, fs }) } catch (e) {
       throw Object.assign(new Error(`${standalonePath(home)}, the undo that works without the source tree, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed — put that right, then run trocar on again`), { code: e && e.code })
     }
     const guard = () => {

@@ -71,7 +71,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   const said = (item, state, { harness = null, ...extra } = {}) => items.push({ item, state, ...extra, ...(harness ? { harness } : {}) })
   const save = () => saveManifest(dir, m, fs)
   if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); save() }
-  const stdl = writeStandalone({ home, version: OFF_VERSION, fs }) // the way back first (R3)
+  const stdl = writeStandalone({ home, version: OFF_VERSION, platform: os, fs }) // the way back first (R3)
   said('trocar-off', stdl.written ? 'written' : 'intact', { path: stdl.path })
   if (installHelper) { const h = installHelper(interactive); if (h && h.why && h.why !== 'same') problems.push(h.why) }
 
