@@ -21,7 +21,7 @@ export function reactView(s: DeskState, framed: (E: Els) => void, gone: () => vo
   root.className = 'desk next'
   const v = Object.fromEntries(AREAS.map((a) => [a, 0])) as Record<Area, number>
   const subs = new Set<() => void>()
-  let E: Els | null = null, K = Infinity, rough = { at: 0, K: Infinity }, emptyMsg = '', marked = false
+  let E: Els | null = null, K = Infinity, marked = false
   const reported = new Set<'step' | 'scope'>()
   const bump = (a: Area) => { v[a]++; for (const f of [...subs]) f() }
   return {
@@ -29,8 +29,6 @@ export function reactView(s: DeskState, framed: (E: Els) => void, gone: () => vo
     // the components' side
     subscribe(f: () => void) { subs.add(f); return () => { subs.delete(f) } },
     version: (a: Area) => v[a],
-    roughAt: () => rough,
-    emptyMsg: () => emptyMsg,
     framed(els: Els) { if (E) return; E = els; framed(els) },
     setCapacity(k: number) { if (k === K) return; K = k; s.refit?.() },
     roughDrawn(part: 'step' | 'scope') {
@@ -49,8 +47,8 @@ export function reactView(s: DeskState, framed: (E: Els) => void, gone: () => vo
     problems: () => bump('problems'),
     review: () => bump('review'),
     frame: () => bump('frame'),
-    rough(at: number, k: number) { rough = { at, K: k }; bump('rough') },
-    empty(msg: string) { emptyMsg = msg; bump('empty') },
+    rough: () => bump('rough'),
+    empty: () => bump('empty'),
     capacity: () => K,
     dispose: gone,
   }
