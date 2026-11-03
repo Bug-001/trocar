@@ -17,7 +17,6 @@ import type { ScreenProps } from '../../ScreenOutlet'
 import { queryOf, asOfText, routeHarness, windowLinks as windowLinksJs, failOf as failOfJs } from './model.mjs'
 import { ROW_H, DETAIL_BREAK, callsParams as callsParamsJs, mergePages as mergePagesJs, hostHref as hostHrefJs, crumbsOf as crumbsOfJs, hostRowView as hostRowViewJs, emptyText } from './host-model.mjs'
 import { detailModel as detailModelJs, requestView as requestViewJs } from './request-model.mjs'
-import { useBoardRouter } from './board-router'
 import { TrafficHead, type Crumb, type Scope } from './TrafficHead'
 import { ReadFail, type Fail } from './ReadFail'
 import { RequestView, type View } from './RequestView'
@@ -62,8 +61,7 @@ function ClassMenu({ items }: { items: Array<{ id: string, label: string, href: 
   )
 }
 
-export default function HostScreen({ route }: ScreenProps) {
-  const router = useBoardRouter()
+export default function HostScreen({ route, router }: ScreenProps) {
   const harness = routeHarness(route.harness) as string, host = String(route.host ?? '')
   const q = queryOf(route.params) as { window: string, cls: string | null }
   const ref: string | null = route.params.ref || null

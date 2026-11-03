@@ -13,7 +13,9 @@ import { parseHash } from '../../../legacy/core/router.mjs'
 import { initKeys } from '../../../legacy/core/keys.mjs'
 import { installUi } from '../../../legacy/core/ui.mjs'
 import { HARNESS_ORDER } from '../../../legacy/core/chips.mjs'
-import { BoardRouterContext, type BoardRouter } from './board-router'
+import type { ScreenProps } from '../../ScreenOutlet'
+
+type BoardRouter = ScreenProps['router']
 import HostScreen from './HostScreen'
 import TrafficScreen from './TrafficScreen'
 
@@ -84,7 +86,7 @@ function mount(hash: string) {
     }) as unknown as BoardRouter)
     router = r
     const Screen = route.screen === 'traffic-host' ? HostScreen : TrafficScreen
-    return <BoardRouterContext.Provider value={r}><Screen route={route} /></BoardRouterContext.Provider>
+    return <Screen route={route} router={r} />
   }
   const v = render(<QueryClientProvider client={new QueryClient()}><Wrapper /></QueryClientProvider>)
   const $ = <E extends Element = HTMLElement>(s: string) => v.container.querySelector<E>(s)

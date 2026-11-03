@@ -12,7 +12,7 @@ import { parseHash } from '../../../legacy/core/router.mjs'
 import { initKeys } from '../../../legacy/core/keys.mjs'
 import { HARNESS_ORDER } from '../../../legacy/core/chips.mjs'
 import * as W from '../../../legacy/labels/traffic.mjs'
-import { BoardRouterContext, type BoardRouter } from './board-router'
+import type { ScreenProps } from '../../ScreenOutlet'
 import TrafficScreen from './TrafficScreen'
 
 const [A, B, C] = HARNESS_ORDER as readonly string[] // A and B send traffic; C is only in `sessions`
@@ -62,9 +62,9 @@ const tick = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms))
 const settle = async () => { for (let i = 0; i < 3; i++) await tick(1) }
 
 async function mount(hash = '#/traffic') {
-  const router = { current: () => parseHash(hash), go: vi.fn(), setParams: vi.fn(), onRoute: () => () => {} } as unknown as BoardRouter
+  const router = { current: () => parseHash(hash), go: vi.fn(), setParams: vi.fn(), onRoute: () => () => {} } as unknown as ScreenProps['router']
   const client = new QueryClient()
-  const ui = (h: string) => <QueryClientProvider client={client}><BoardRouterContext.Provider value={router}><TrafficScreen route={parseHash(h)} /></BoardRouterContext.Provider></QueryClientProvider>
+  const ui = (h: string) => <QueryClientProvider client={client}><TrafficScreen route={parseHash(h)} router={router} /></QueryClientProvider>
   const r = render(ui(hash))
   await settle()
   const rows = () => [...r.container.querySelectorAll<HTMLElement>('.trow:not(.thead):not(.ttotal)')]

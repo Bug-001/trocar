@@ -16,9 +16,8 @@ import * as W from '../../../legacy/labels/traffic.mjs'
 import { HarnessIcon } from '../../ui/HarnessIcon'
 import type { ScreenProps } from '../../ScreenOutlet'
 import { queryOf, sinceOf, tableModel as tableModelJs, coverOf as coverOfJs, filterLinks as filterLinksJs, windowLinks as windowLinksJs, failOf as failOfJs } from './model.mjs'
-import { useBoardRouter } from './board-router'
 import { TrafficHead, type Scope } from './TrafficHead'
-import { InfoButton } from './InfoButton'
+import { InfoButton } from '../../ui/InfoButton'
 import { ReadFail, type Fail } from './ReadFail'
 
 type Cell = { main: string, note: string }
@@ -84,8 +83,7 @@ function TrafficRow({ row, hi, onOpen }: { row: Row, hi: boolean, onOpen: (e: Mo
     : <div className={`${cls} nolink`} data-h={row.hkey}>{inner}</div>
 }
 
-export default function TrafficScreen({ route }: ScreenProps) {
-  const router = useBoardRouter()
+export default function TrafficScreen({ route, router }: ScreenProps) {
   const q = queryOf(route.params) as Q
   const traffic = useQuery({
     queryKey: ['traffic', q.window],

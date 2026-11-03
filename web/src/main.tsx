@@ -1,7 +1,7 @@
 // web/src/main.tsx — boot (1.2 §路由, D75①②): the token leaves the address, the first hash becomes canonical, the page-wide handlers are
 // installed once, then React renders the shell: the sidebar and #screen, which holds one screen at a time: a legacy screen (LegacyScreen
 // mounts it into its host element) or a React screen (ScreenOutlet). Screens are loaded on demand. There is no site-wide banner: a screen says what is wrong with itself.
-import { useContext, useLayoutEffect, useRef, useState } from 'react'
+import { createContext, useContext, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -23,7 +23,6 @@ import { LegacyScreen, type Route } from './LegacyScreen'
 import { ScreenOutlet, lazyScreen, type LazyScreen } from './ScreenOutlet'
 import { Sidebar } from './shell/Sidebar'
 import { ConfirmProvider } from './ui/Confirm'
-import { BoardRouterContext } from './screens/traffic/board-router'
 
 // every screen of every route (core/router.mjs): the legacy ones here, the React ones in REACT_SCREENS
 const SCREENS = {
@@ -73,12 +72,14 @@ watchHarnessIcons(document.body) // every agent icon box any screen, menu or dra
   link.href = 'data:image/svg+xml,' + encodeURIComponent(new XMLSerializer().serializeToString(svg))
 })()
 
+type Facade = ReturnType<typeof createBoardRouter>['legacy']
+const FacadeContext = createContext<Facade | null>(null)
 const OVERVIEW = { area: 'overview', screen: 'overview', params: {} } as Route
 const sameRoute = (a: Route, b: Route) => !!a.unknown === !!b.unknown && formatHash(a) === formatHash(b)
 
 // the splat route's element: the route is the facade's current(), refreshed on every change it announces
 function Shell() {
-  const router = useContext(BoardRouterContext)!
+  const router = useContext(FacadeContext)!
   const [route, setRoute] = useState<Route>(router.current)
   const [ctx] = useState(() => ({ api, store, router, toast }))
   const screenEl = useRef<HTMLDivElement>(null)
@@ -120,7 +121,7 @@ const root = createRoot(document.getElementById('app')!)
 root.render(
   <QueryClientProvider client={new QueryClient()}>
     <ConfirmProvider>
-      <BoardRouterContext.Provider value={board.legacy}><RouterProvider router={board.router} /></BoardRouterContext.Provider>
+      <FacadeContext.Provider value={board.legacy}><RouterProvider router={board.router} /></FacadeContext.Provider>
     </ConfirmProvider>
   </QueryClientProvider>,
 )
