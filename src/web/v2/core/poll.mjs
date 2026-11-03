@@ -21,9 +21,9 @@ export const backoffMs = (n, base) => Math.min(base * 2 ** n, BACKOFF_MAX_MS)
 // {pending:…} when extraction has not caught up (4.4 live-poll, 3.5 §抽取前沿), anything else on success.
 //   · a timer tick (byReader false) does nothing while idle() holds (a hidden tab, a session that is not listed), nor before the
 //     next read is due; a reader's own action (byReader true) always reads
-//   · due (4.4 live-poll): after a failure, the back-off; after a success that answered `pending` or ended a back-off, at
-//     once (the timer's own interval is the gap); after any other success that took D ms, 3·D from its start when 3·D > base
-//     (a slow worker gets at most a third of the time from the timer), else at once
+//   · due (4.4 live-poll): after a failure, the back-off; after a success that answered `pending` or ended a back-off, the
+//     next timer tick (the timer's own interval is the gap); after any other success that took D ms, 3·D from its start when
+//     3·D > base (a slow worker gets at most a third of the time from the timer), else the next timer tick
 //   · a reader's call while a read is in flight asks for one more read after it; a timer tick then does nothing: queued behind the read,
 //     its round would start off the timer's beat, less than a period before the next tick's (4.4 每 1.5 s 一轮); a failure never re-reads
 //     by itself, so one failing read cannot loop

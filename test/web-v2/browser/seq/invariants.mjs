@@ -14,8 +14,8 @@ export const PENDING = new Map([
   ['I-memcap', 'the page heap stays under memCapBytes (80 MB)'],
 ])
 
-/** Invariants judged against a time line or a noisy measure (a task's length, the follow deadline, the heap's size), so a noisy box
- *  can meet one: a run that meets one is reproduced once and saved whole, never shrunk (runner findOne). I-mem (the element count)
+/** Invariants judged against a bound a loaded box can cross through noise alone (a task's 50 ms, the follow deadline, the heap's
+ *  growth ratio): a run that meets one is reproduced once and saved whole, never shrunk (runner findOne). I-mem (the element count)
  *  is exact and is shrunk. */
 export const TIMING = new Set(['I-longtask', 'I-follow', 'I-heap'])
 

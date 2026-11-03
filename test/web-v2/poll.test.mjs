@@ -32,7 +32,7 @@ test('poller: a reader\'s own action bypasses the back-off', async () => {
   await r.p.poll(); assert.equal(r.reads(), 2)
 })
 
-test('poller: one read in flight; a timer tick during it reads nothing after it, a reader\'s call during it reads once after a success', async () => {
+test('poller: one read in flight; a timer tick during it reads nothing after it, a reader\'s call during it reads once after it, a success or a failure', async () => {
   for (const [first, byReader, want] of [[{}, false, 1], [{ ok: false }, false, 1], [{}, true, 2], [{ ok: false }, true, 2]]) {
     let release, reads = 0
     const answers = [first, {}, {}]

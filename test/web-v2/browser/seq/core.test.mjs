@@ -61,7 +61,6 @@ test('a fixed regression whose replay meets its own key fails; open and flaky on
 
 test('findOne shrinks a reproduced I-url or I-mem (an element count) to its one cause but saves a reproduced timing one (I-longtask, I-follow, I-heap) whole, after one trial', async () => {
   const steps = ['a', 'b', 'x', 'c', 'd', 'e'].map((a) => ({ a, p: {} }))
-  for (const id of ['I-longtask', 'I-follow', 'I-heap']) assert.ok(TIMING.has(id), `${id} is judged against a time line`)
   for (const [id, want] of [['I-url', [steps[2]]], ['I-mem', [steps[2]]], ...[...TIMING].map((id) => [id, steps.slice(0, 5)])]) {
     const v = { id, sig: `${id}:replay`, fp: fingerprint('d'), step: 4, detail: 'd', screenshot: 'x.png' }
     // a trial fails with v's key exactly when its list still holds step 'x'
