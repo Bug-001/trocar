@@ -18,7 +18,7 @@ export const LIMITS = Object.freeze({
   // the desk's poll round (4.4 live-poll): the head and a Range read of each open tail, 1.5 s
   interval: Object.freeze({ status: 5000, sessions: 15000, session: 1500, 'd/head': 1500, 'd/open.main': 1500, 'd/open.rest': 1500 }), // spec/01-trocar-rfc/4.4-server.md:45-52
   intervalOther: 30000, // 4.4:52 「其余 … 每 30 s」
-  backoffCapMs: 30000, // 1.5 K-29 (spec/01-trocar-rfc/1.5-states-aesthetics.md:76): doubling, capped at 30 s
+  backoffCapMs: 30000, // 1.5 K-29 (spec/01-trocar-rfc/1.5-states-aesthetics.md:61): doubling, capped at 30 s
   sessionDurFactor: 3, // 4.4:51 the timer's next read waits ≥ 3 × the last read's duration
   rateSlack: 0.8, // timer jitter: a gap of 0.8 × the expected interval still passes (invariant I-rate)
   actionWindowMs: Object.freeze([-200, 500]), // a read within this of a reader action is the reader's read (4.4:51)
