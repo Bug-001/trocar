@@ -5,6 +5,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, shoot, layoutFaults } from './harness.mjs'
+import { typeFaults } from './type-inventory.mjs'
+import { CACHE_POPOVER_LABEL } from '../../../web/legacy/labels/replay.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -82,6 +84,19 @@ for (const width of [1280, 1024, 800]) {
           ...(L.rawGap == null || L.rawGap <= 8 ? [] : [`the raw panel stops ${L.rawGap}px above the right page's bottom`]),
         ]
         await shoot(b.page, 'replay-desk', { width, theme })
+        if (width === 1280 && theme === 'light') { // 1.5 #16 on the desk: a block row opened, then the cache popover, then the session info
+          const { page } = b
+          await page.locator('#ctxwin .cblk.collapsed[data-bi] > .cbh').first().click()
+          await page.waitForSelector('#ctxwin .cblk[data-bi]:not(.collapsed) > .cbc')
+          const type = []
+          for (const btn of [`#stepbar .popbtn[aria-label="${CACHE_POPOVER_LABEL}"]`, '#deskhead .sh-info .popbtn']) {
+            await page.click(btn)
+            await page.waitForSelector(`${btn}[aria-expanded="true"]`)
+            type.push(...(await typeFaults(page)).faults)
+          }
+          await page.keyboard.press('Escape')
+          assert.deepEqual(type, [], 'replay: type')
+        }
         if (width < 1200) { // the right page is the bottom row here: open it
           await b.page.click('#rpbar')
           await b.page.waitForSelector('#rightpage.open #rawpanel .rphd')
