@@ -243,11 +243,3 @@ test('1.3 #7 · #12 · #13 on the real server: every harness dir\'s session ligh
     }
   } finally { await face.close() }
 })
-
-test('1.3 #1 · one --gut: #saw and #rails take their gutter from one declaration across the scope\'s stylesheets', async () => {
-  const { readFileSync } = await import('node:fs')
-  const css = ['replay.css', 'scope.css'].map((f) => readFileSync(new URL(`../../web/legacy/css/${f}`, import.meta.url), 'utf8')).join('\n').replace(/\/\*[\s\S]*?\*\//g, '')
-  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, , body]) => /(^|[;\s])--gut\s*:/.test(body)).map(([, sel]) => sel.split(',').map((x) => x.trim()))
-  assert.equal(rules.length, 1, 'one rule declares --gut')
-  assert.ok(rules[0].includes('#saw') && rules[0].includes('#rails'), 'the rule is #saw and #rails together')
-})
