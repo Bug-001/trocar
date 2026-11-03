@@ -23,7 +23,7 @@ export const activeAgentChip = (name) => `agent: ${name}`
 export const activeProjectChip = (name) => `project: ${name}`
 
 // ── the caption row: only what changes how far the list can be trusted (D38); bookkeeping goes to 技术细节 ───────────
-export const capNotAllRead = (n) => `◐ ${n} capture ${n === 1 ? 'file was' : 'files were'} not read in full; the list may be incomplete`
+export const capNotAllRead = (n) => `${n} capture ${n === 1 ? 'file was' : 'files were'} not read in full; the list may be incomplete`
 export const CAP_NOT_ALL_TIP = 'See Storage for each file'
 export const SESSION_LIST = 'The session list' // what a failed read could not read (1.5 K-29: + the cause class, never the reason)
 export const RETRY = 'Retry'
@@ -32,13 +32,15 @@ export const capOldList = (t) => `Below is the list as read at ${t}`
 export const capStored = (ago) => `Updated ${ago} · refreshing`
 
 // ── the table header ─────────────────────────────────────────────────────────────────────────────────────────────────
+// the agent column's head: the menu's lowercase word (the invariant-3 gate holds the capitalised one as a tool name); CSS capitalises it
+export const COL_AGENT = AGENT_MENU
 export const COL_SESSION = 'Session'
 export const COL_SESSION_TIP = 'The title comes from the agent\'s own records or from the captured requests; hover a title to see which. Without one, the session is untitled'
 export const COL_CALLS = 'Model calls'
 export const COL_LAST = 'Last active'
 
-// ── group names (only in the 最近 order; local dates) ────────────────────────────────────────────────────────────────
-export const GROUPS = Object.freeze({ today: 'Today', yesterday: 'Yesterday', earlier: 'Earlier', none: 'No time' })
+// ── day heads (only in the 最近 order; local dates): the two named days and the no-time group; other days are dates ─────
+export const GROUPS = Object.freeze({ today: 'Today', yesterday: 'Yesterday', none: 'No time' })
 
 // ── the title rule's three steps and their hover words (the session id rides along) ─────────────────────────────────
 export { UNTITLED }

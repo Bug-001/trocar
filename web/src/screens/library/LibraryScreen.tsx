@@ -45,7 +45,7 @@ export default function LibraryScreen({ route, router }: ScreenProps) {
   const now = shown.at
   const all = useMemo(() => flattenSessions(shown.data) as Session[], [shown.data])
   const rows = useMemo(() => applyFilters(all, f, now) as Session[], [all, f, now])
-  const entries = useMemo(() => listEntries(rows, f.sort, now) as Entry[], [rows, f.sort, now])
+  const entries = useMemo(() => listEntries(rows, f.sort) as Entry[], [rows, f.sort])
   const sel = selectedKey(rows, f.sel) as string | null
 
   const open = useCallback((s: Session) => {
@@ -72,7 +72,7 @@ export default function LibraryScreen({ route, router }: ScreenProps) {
   // eslint-disable-next-line react-hooks/incompatible-library -- VRows is not memoized: it reads the virtualizer on every render
   const v = useVirtualizer({
     count: entries.length, getScrollElement: () => listRef.current, overscan: 8, useFlushSync: false,
-    estimateSize: (i) => (entries[i]?.g ? 28 : 50), getItemKey: (i) => entries[i]?.key ?? i,
+    estimateSize: (i) => (entries[i]?.g ? 52 : 56), getItemKey: (i) => entries[i]?.key ?? i,
   })
 
   // scroll: follows the highlighted row's KEY. A new list (first answer, Back) lands on it, a filter change starts at the top, a key
@@ -126,7 +126,7 @@ export default function LibraryScreen({ route, router }: ScreenProps) {
         <LibraryTools f={f} all={all} set={set} onClear={clear} inputRef={qRef} />
         <Caption data={q.data ?? null} err={err} listAt={q.dataUpdatedAt} now={q.dataUpdatedAt} onRetry={retry} />
         <div className="libhead">
-          <span className="lhs">{W.COL_SESSION}<TitleInfo /></span>
+          <span className="lha">{W.COL_AGENT}</span><span className="lhs">{W.COL_SESSION}<TitleInfo /></span>
           <span className="ln">{W.COL_CALLS}</span><span className="lw">{W.COL_LAST}</span>
         </div>
         <div className="liblist" id="liblist" aria-label="Sessions" ref={setList}>{body}</div>

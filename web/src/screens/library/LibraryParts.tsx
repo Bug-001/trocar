@@ -8,12 +8,14 @@ import { fmtStamp, fmtTime, relTime } from '../../../legacy/core/fmt.mjs'
 import { formatHash } from '../../../legacy/core/router.mjs'
 import { readFailure } from '../../../legacy/core/ui.mjs'
 import * as W from '../../../legacy/labels/library.mjs'
+import { HALF } from '../../../legacy/core/icons.mjs'
 import { HarnessIcon } from '../../ui/HarnessIcon'
+import { Svg } from '../../ui/Svg'
 import { TechDetails, type TechValue } from '../../ui/TechDetails'
-import { rowModel, captionFacts as captionFactsJs, emptyBoardState, filteredAgentLine } from './model.mjs'
+import { rowModel, dayHead, captionFacts as captionFactsJs, emptyBoardState, filteredAgentLine } from './model.mjs'
 import type { Failed, Session, SessionsData } from './useSessions'
 
-export type Entry = { key: string, g?: keyof typeof W.GROUPS, s?: Session }
+export type Entry = { key: string, g?: string, s?: Session }
 type Pairs = Array<[string, TechValue]>
 type Fact = { kind: 'not-all', n: number } | { kind: 'stored', at: string }
 const captionFacts = captionFactsJs as (errors: unknown, stored: string | null) => { facts: Fact[], tech: string[] }
@@ -35,21 +37,26 @@ export const Row = memo(function Row({ s, on, now, onOpen }: { s: Session, on: b
   return (
     <a className={`lrow${on ? ' sel' : ''}${m.dim ? ' dim' : ''}`} href={m.href} data-key={m.key} aria-current={on ? 'true' : undefined}
       onClick={(e) => { if (!plain(e)) return; e.preventDefault(); onOpen(s) }}>
+      <span className="lagent">
+        <HarnessIcon id={m.harnessId as string} />
+        <span className="lhn" title={m.harnessRaw ? `${m.harnessName} · ${m.harnessRaw}` : m.harnessName}>{m.harnessName}</span>
+      </span>
       <span className="lmain">
         <span className="lt" title={m.titleTip}>{m.titleText}</span>
-        <span className="lsub" title={m.subTip}>
-          <HarnessIcon id={m.harnessId as string} />
-          <span className="lhn" title={m.harnessRaw ? `${m.harnessName} · ${m.harnessRaw}` : m.harnessName}>{m.harnessName}</span>
-          {m.marks.length ? <span className="lmarks">{m.marks.map((k) => k.kind === 'inferred'
-            ? <span key={k.kind} className="lmark" data-mark={k.kind}><span className="mk mk-inf" title={k.tip}>{k.text}</span></span>
-            : <span key={k.kind} className="lmark" data-mark={k.kind} title={k.tip || undefined}>{k.text}</span>)}</span> : null}
-        </span>
+        <span className="lsub" title={m.subTip}>{m.marks.map((k) => k.kind === 'inferred'
+          ? <span key={k.kind} className="lmark" data-mark={k.kind}><span className="mk mk-inf" title={k.tip}>{k.text}</span></span>
+          : <span key={k.kind} className="lmark" data-mark={k.kind} title={k.tip || undefined}>{k.text}</span>)}</span>
       </span>
       <span className="ln" data-mark={m.dim ? 'probe-only' : undefined} title={m.dim ? W.PROBE_ONLY_TIP : W.COL_CALLS}>{m.dim ? W.PROBE_ONLY : m.calls}</span>
       <span className="lw" title={m.whenTip}>{m.when}</span>
     </a>
   )
 })
+
+const DayHead = ({ g, now }: { g: string, now: number }) => {
+  const h = dayHead(g, now)
+  return <div className="lgroup"><span className="lday">{h.word}</span>{h.date ? <span className="ldate">{h.date}</span> : null}</div>
+}
 
 export function VRows({ v, entries, sel, now, onOpen }:
   { v: Virtualizer<HTMLDivElement, Element>, entries: Entry[], sel: string | null, now: number, onOpen: (s: Session) => void }) {
@@ -60,7 +67,7 @@ export function VRows({ v, entries, sel, now, onOpen }:
         if (!e) return null
         return (
           <div key={it.key as string} className="vrow" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: it.size, transform: `translateY(${it.start}px)` }}>
-            {e.s ? <Row s={e.s} on={e.key === sel} now={now} onOpen={onOpen} /> : <div className="lgroup">{W.GROUPS[e.g!]}</div>}
+            {e.s ? <Row s={e.s} on={e.key === sel} now={now} onOpen={onOpen} /> : <DayHead g={e.g!} now={now} />}
           </div>
         )
       })}
@@ -76,7 +83,7 @@ export function Caption({ data, err, listAt, now, onRetry }:
   const cf = captionFacts(data?.errors, data?.stored ?? null)
   const parts: ReactNode[] = cf.facts.map((x) => x.kind === 'stored'
     ? <span key="stored" data-stored={x.at} title={fmtStamp(x.at)}>{W.capStored(relTime(x.at, now))}</span>
-    : <a key="not-all" href={STORAGE} title={W.CAP_NOT_ALL_TIP}>{`${W.capNotAllRead(x.n)} ›`}</a>)
+    : <a key="not-all" href={STORAGE} title={W.CAP_NOT_ALL_TIP}><Svg html={HALF} />{`${W.capNotAllRead(x.n)} ›`}</a>)
   if (err) parts.push(<span key="fail">{`${readFailure(W.SESSION_LIST, err).line} · `}
     <button type="button" className="linkbtn" onClick={onRetry}>{W.RETRY}</button>{` · ${W.capOldList(fmtTime(listAt))}`}</span>)
   const tech: Pairs = [...cf.tech.map((t, i) => [String(i + 1), { text: t }] as [string, TechValue]), ...(err ? failPairs(err) : [])]
