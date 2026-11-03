@@ -76,13 +76,14 @@ export default function LibraryScreen({ route, router }: ScreenProps) {
   })
 
   // scroll: follows the highlighted row's KEY. A new list (first answer, Back) lands on it, a filter change starts at the top, a key
-  // press brings the moved highlight into view (and focus with it, when focus was in the list); a poll leaves the scroll alone.
+  // press brings the moved highlight into view (and focus with it, when focus was in the list); a poll leaves the scroll alone. An
+  // empty list keeps the signature: only a mount or new data is a first paint, so the next match after it starts at the top.
   const prev = useRef<{ sig: string | null, sel: string | null }>({ sig: null, sel: null })
   const fsig = filterSignature(f)
   const hasRows = !!shown.data && rows.length > 0
   useLayoutEffect(() => {
     const el = listRef.current
-    if (!hasRows || !el) { prev.current = { sig: null, sel: null }; return }
+    if (!hasRows || !el) { prev.current = { ...prev.current, sel: null }; return }
     const selIndex = entries.findIndex((e) => e.s && e.key === sel)
     const d = scrollDecision({ prevSig: prev.current.sig, sig: fsig, selKey: sel, selIndex, prevSelKey: prev.current.sel })
     const moved = prev.current.sel !== sel

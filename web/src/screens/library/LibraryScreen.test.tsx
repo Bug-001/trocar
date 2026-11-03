@@ -36,8 +36,8 @@ beforeAll(() => {
   initKeys()
   installUi(document)
   globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
-  // the virtualizer sizes its window from the scroll element's client box, which jsdom leaves at 0
-  for (const [k, v] of [['clientHeight', 600], ['clientWidth', 1024]] as const) {
+  // the virtualizer sizes its window from the scroll element's client box and clamps a scroll to its scrollHeight, which jsdom leaves at 0
+  for (const [k, v] of [['clientHeight', 600], ['clientWidth', 1024], ['scrollHeight', 5000]] as const) {
     Object.defineProperty(HTMLElement.prototype, k, { configurable: true, get(this: HTMLElement) { return this.id === 'liblist' ? v : 0 } })
   }
   Element.prototype.scrollTo = function (this: Element, a?: ScrollToOptions | number, b?: number) {
@@ -281,4 +281,16 @@ test('V7: after an answer carrying `stored` the next read comes INTERVAL.session
   const d1 = at[1] - at[0], d2 = at[2] - at[1]
   expect(d1).toBeGreaterThanOrEqual(INTERVAL.session); expect(d1).toBeLessThan(INTERVAL.session + 10)
   expect(d2).toBeGreaterThanOrEqual(INTERVAL.sessions); expect(d2).toBeLessThan(INTERVAL.sessions + 10)
+})
+
+test('V9: a search that matches nothing, then one that matches, starts the new list at the top, not on the old highlight', async () => {
+  lists = [() => base.map((i) => sess(`s${i}`, 10 + i, 1 + i))]
+  const p = await mount(`#/sessions?sel=${encodeURIComponent(key(sess('s25', 0, 0)))}`)
+  expect(p.list.scrollTop, 'the first answer lands on the highlight').toBeGreaterThan(0)
+  const q = p.container.querySelector<HTMLInputElement>('#libq')!
+  q.focus(); fireEvent.change(q, { target: { value: 'no-such-session' } }); await settle()
+  expect(p.list.querySelectorAll('a.lrow').length).toBe(0)
+  fireEvent.change(q, { target: { value: 'title' } }); await settle()
+  expect(p.list.querySelectorAll('a.lrow').length).toBeGreaterThan(0)
+  expect(p.list.scrollTop).toBe(0)
 })
