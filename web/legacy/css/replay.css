@@ -524,3 +524,8 @@
 .v2-modal .keylist kbd{font-family:var(--mono);color:var(--ink);}
 /* a session the server does not know: only the window speaks (its link back to the list); no empty timeline around it */
 .desk.notlisted #saw,.desk.notlisted #rails,.desk.notlisted #stepbar{display:none;}
+
+/* ── the new desk (.desk.next, web/src/screens/replay): the session head's start time and entry word (1.2 §会话头) ─────────────── */
+/* the start time gives way first (1.2 让位次序: start → project → chip → title); the entry word is a short word, never cut */
+.desk.next .sh-start{flex:0 100000 auto;min-width:0;font-size:var(--fs-cap);color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.desk.next .sh-entry{flex:none;font-size:var(--fs-cap);color:var(--ink-3);white-space:nowrap;}

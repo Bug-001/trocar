@@ -806,7 +806,10 @@ function openDesk(ctx, route0, makeView = legacyView) {
     ctxwin.addEventListener('click', onRetry)
     offs.push(() => { rpbar.removeEventListener('click', onRp); rpbar.removeEventListener('keydown', onRpKey); ctxwin.removeEventListener('click', onRetry); rails.removeEventListener('mouseover', onRailHover) },
       wireTimeline(E.saw, s), wireRails(rails, s), wireCtxWin(ctxwin, s), wireOutline(E.ctxnav, s), wireResources(E.resexp, s),
-      wireRawPanel(E.rawpanel, s), wireSessionHead(E.deskhead, s), wireStepBar(E.stepbar, s), initLayout(root))
+      wireRawPanel(E.rawpanel, s), initLayout(root))
+    // a view that draws the session head and the step head itself (the React view) hands no #deskhead / #stepbar: it acts on them too
+    if (E.deskhead) offs.push(wireSessionHead(E.deskhead, s))
+    if (E.stepbar) offs.push(wireStepBar(E.stepbar, s))
   }
 
   // ── what lives outside the root (the page's keys and events, the shared drawer, timers, observers): only while attached ─────
