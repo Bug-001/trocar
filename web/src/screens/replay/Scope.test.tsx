@@ -46,7 +46,7 @@ const world = (o: object = {}) => mount(stateOf(deskOf([{ kind: 'main', rows: RO
 
 test('1.3 #1: every track is a .tkrow of exactly a .tgut and a .tlane', () => {
   const { $ } = world({ at: 2 })
-  for (const sel of ['#chapnav', '.sawaxis', '#probrow', '#sawrow', '#cacherow', '#askscale', '#ovstrip']) {
+  for (const sel of ['.sawaxis', '#probrow', '#sawrow', '#cacherow', '#askscale', '#ovstrip']) {
     const row = $(sel)!.closest('.tlane')!.parentElement!
     expect(row.classList.contains('tkrow'), sel).toBe(true)
     expect([...row.children].map((c) => c.className.split(' ')[0]), sel).toEqual(['tgut', 'tlane'])

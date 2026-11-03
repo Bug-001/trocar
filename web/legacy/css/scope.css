@@ -12,6 +12,7 @@
 .desk.next #saw .scur{position:absolute;top:0;bottom:0;width:1px;margin-left:-.5px;background:var(--cursor);opacity:.7;pointer-events:none;z-index:4;
   left:calc(var(--gut) + 8px + min(100% - var(--gut) - 8px, var(--nbars,100000) * var(--barcap)) * var(--f));}
 .desk.next #saw .tkrow-axis .sawaxis{position:relative;margin:0 0 2px;}
+.desk.next #saw .sawaxis [data-covered]{visibility:hidden;}
 .desk.next #saw .axtag{position:absolute;top:-1px;transform:translateX(-50%);padding:0 5px;border-radius:6px;background:var(--tag);color:var(--tag-ink);
   font-size:var(--fs-chart);line-height:1.4;white-space:nowrap;z-index:5;pointer-events:none;}
 /* the problem marks are buttons: no box of their own beyond replay.css's mark */
@@ -20,8 +21,8 @@
 .desk.next #probrow button:focus-visible{outline:1.5px solid var(--fg);}
 /* the main track is the scope's tallest row */
 .desk.next #saw .sawrow{height:82px;}
-.desk.next #saw #sawgut{white-space:normal;align-self:stretch;display:flex;flex-direction:column;align-items:flex-end;justify-content:flex-end;}
-.desk.next #saw .gshares{display:flex;flex-direction:column;align-items:flex-end;color:var(--dimmer);}
+.desk.next #saw #sawgut{white-space:normal;align-self:stretch;max-height:82px;display:flex;flex-direction:column;align-items:flex-end;justify-content:flex-end;}
+.desk.next #saw .gshares{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:0 6px;color:var(--dimmer);line-height:1.25;}
 .desk.next #saw .gshare{white-space:nowrap;}
 .desk.next #saw .gshare i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:3px;vertical-align:middle;}
 /* the cache trace: a line on three levels, dashed where there is no usage, its own style where the meaning is not certain, a gap where
