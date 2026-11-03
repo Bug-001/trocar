@@ -12,6 +12,7 @@ import { areaOf, railByDefault, sessionsTabTarget } from '../../legacy/shell/sid
 import { icon, BRAND } from '../../legacy/core/icons.mjs'
 import { BRAND as BRAND_TEXT, NAV, NAV_LABEL, RAIL_LABELS } from '../../legacy/labels/shell.mjs'
 import type { Route } from '../LegacyScreen'
+import { Svg } from '../ui/Svg'
 
 declare module '@react-types/shared' {
   interface RouterConfig { routerOptions: { sessions?: boolean } }
@@ -20,17 +21,6 @@ declare module '@react-types/shared' {
 type Facade = { current(): Route, go(r: Route, o?: { replace?: boolean }): void, parseHash(h: string): Route }
 type Store = { get(): { libraryHash: string } }
 type Item = { id: string, label: string, href: string, ic?: string, sub?: Item[] }
-
-// an svg string (core/icons.mjs) as an <svg> element of its own, so the markup has no wrapper around it
-function Svg({ html }: { html: string }) {
-  const { props, inner } = useMemo(() => {
-    const t = document.createElement('template'); t.innerHTML = html
-    const s = t.content.firstElementChild!
-    const camel = (n: string) => (n === 'class' ? 'className' : /^(aria|data)-/.test(n) ? n : n.replace(/-(\w)/g, (_, c: string) => c.toUpperCase()))
-    return { props: Object.fromEntries([...s.attributes].map((a) => [camel(a.name), a.value])), inner: s.innerHTML }
-  }, [html])
-  return <svg {...props} dangerouslySetInnerHTML={{ __html: inner }} />
-}
 
 // the per-viewer collapse choice: localStorage in try/catch, unreadable storage = no choice (the defaults apply)
 const SIDE_KEY = 'trocar.v2.sidebar'

@@ -12,6 +12,7 @@
 import { esc, bytes } from '../core/fmt.mjs'
 import { KIDS, serialize, patchInto } from '../core/units.mjs'
 import { techDetailsHtml } from '../core/ui.mjs'
+import { HALF } from '../core/icons.mjs'
 import * as W from '../labels/replay.mjs'
 import { messageTurns, keyDiff, refRowOf, hasChangeLine, callFacts } from './analysis.mjs'
 import { contentRefOf, contentRefKOf } from './stepbar.mjs'
@@ -27,14 +28,14 @@ export { blockBodyHtml } from './blocks.mjs'
 export function callFidelityHtml(call) {
   const { facts, tech } = callFacts(call)
   if (!facts.length) return ''
-  return `<div class="cwfline"><span class="cwhalf" aria-hidden="true">${W.HALF_MARK}</span> <span class="cwffacts">${facts.map((f) => esc(f)).join(' · ')}</span>${tech.length ? techDetailsHtml(tech, { id: 'cwf-tech' }) : ''}</div>`
+  return `<div class="cwfline"><span class="cwhalf" aria-hidden="true">${HALF}</span> <span class="cwffacts">${facts.map((f) => esc(f)).join(' · ')}</span>${tech.length ? techDetailsHtml(tech, { id: 'cwf-tech' }) : ''}</div>`
 }
 
 // ── ② the 窗口行: no block of this step can return to the raw bytes ──────────────────────────────────────────────────
 export function windowLineHtml(flat) {
   if (!flat || !flat.length || flat.some((b) => b.text_ref)) return ''
   const reasons = [...new Set(flat.map((b) => b.unaddressable).filter(Boolean))]
-  return `<div class="cwwin"><span class="cwhalf" aria-hidden="true">${W.HALF_MARK}</span> ${esc(W.WINDOW_LINE)}${reasons.length ? techDetailsHtml(reasons.map((r, i) => ['reason ' + (i + 1), r]), { id: 'cwwin-tech' }) : ''}</div>`
+  return `<div class="cwwin"><span class="cwhalf" aria-hidden="true">${HALF}</span> ${esc(W.WINDOW_LINE)}${reasons.length ? techDetailsHtml(reasons.map((r, i) => ['reason ' + (i + 1), r]), { id: 'cwwin-tech' }) : ''}</div>`
 }
 
 // ── ③ the section header: name · block count · size · 以下逐字 (or just ◐ when the window line is up) ────────────────
@@ -43,7 +44,7 @@ export function sectionHeaderHtml(sec, blocks, { windowLine = false } = {}) {
   const n = (blocks || []).length
   const size = (blocks || []).reduce((a, b) => a + (typeof b.bytes === 'number' ? b.bytes : 0), 0)
   const est = sec === 'tools' && (blocks || []).some((b) => faithOf(b) === 'metadata') // the size of a metadata-only definition is an estimate
-  const ff = windowLine ? `<span class="cwsecff" title="${esc(W.WINDOW_LINE)}">${W.HALF_MARK}</span>`
+  const ff = windowLine ? `<span class="cwsecff" title="${esc(W.WINDOW_LINE)}">${HALF}</span>`
     : (blocks || []).length && (blocks || []).every((b) => faithNow(b) === 'verbatim') ? `<span class="cwsecff v">${esc(W.SECTION_VERBATIM)}</span>` : ''
   return `<div class="cwsec" id="sec-${esc(sec)}"><b>${esc(name)}</b><span class="cwsecn">${esc(String(n))} blocks</span>` +
     `<span class="cwsecsz"${est ? ` title="${esc(W.SECTION_SIZE_EST_TIP)}"` : ` title="${esc(W.SECTION_SIZE_TIP)}"`}>${est ? W.SECTION_SIZE_EST : ''} ${esc(bytes(size))}</span>${ff}</div>`

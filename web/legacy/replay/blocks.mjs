@@ -9,6 +9,7 @@
 // `verbatim` faithfulness (`ff.faithfulness` on the wire, model.mjs boardDef), tools blocks too. Nothing is assumed verbatim without evidence.
 import { esc, kf } from '../core/fmt.mjs'
 import * as W from '../labels/replay.mjs'
+import { HALF } from '../core/icons.mjs'
 import { DISPLAY_CLIP, cellOf, cellBodyHtml, modeOf, bodyCache, hasInline, isAddressed, inlineText, loadBody, isRetryable } from './cell.mjs'
 export { DISPLAY_CLIP, preEsc, rawContentText, inlineText, hasInline, isAddressed, blockGot, loadBody, isRetryable, bodyCache } from './cell.mjs'
 
@@ -53,7 +54,7 @@ export const ffWord = (f) => W.FF_WORD[f] || W.FF_WORD.unknown
 // screen-reader word only (the section header says 以下逐字 once for a fully proven section).
 export function ffBadgeHtml(f, { tech = '' } = {}) {
   if (f == null || f === 'verbatim') return ''
-  return `<span class="ffbadge ff-${esc(f)}" data-ff="${esc(f)}" title="${esc(tech || ffWord(f))}">${esc(W.HALF_MARK + ' ' + ffWord(f))}</span>`
+  return `<span class="ffbadge ff-${esc(f)}" data-ff="${esc(f)}" title="${esc(tech || ffWord(f))}">${HALF + ' ' + esc(ffWord(f))}</span>`
 }
 // kept for the drawer's folded-row label (detail.mjs); the emoji forms are gone (2.3 砍掉的)
 export const FF = Object.freeze(Object.fromEntries(Object.entries(W.FF_WORD).map(([k, text]) => [k, { text }])))
@@ -69,14 +70,14 @@ export function blockBodyHtml(got, b) {
   if (got == null) {
     // a tools block always has its metadata row (name · params · descChars) to show, HEAVY-dropped or old-trace
     const inline = hasInline(b) || (b.sec === 'tools' && (b.name != null || b.descChars != null || (b.props && b.props.length)))
-    if (!inline) return `<div class="cbsrc warn">${esc(W.HALF_MARK + ' ' + W.NO_BODY)}</div>`
+    if (!inline) return `<div class="cbsrc warn">${HALF + ' ' + esc(W.NO_BODY)}</div>`
     const note = b.unaddressable ? `<div class="cbsrc warn" title="${esc(b.unaddressable)}">${esc(W.INLINE_NOTE)}</div>` : ''
     const cell = cellOf({ ...b, text_ref: undefined, inline: String(inlineText(b) ?? '') })
     return note + cellBodyHtml(cell, modeOf(cell.bid))
   }
   if (got.status !== 'ok') {
     const why = got.error || got.reason || 'the capture could not be read'
-    return `<div class="cbsrc warn" title="locator: ${esc(b.text_ref || '—')}">${esc(W.HALF_MARK + ' ' + ffWord('notfetched') + ' — ' + why)}</div>`
+    return `<div class="cbsrc warn" title="locator: ${esc(b.text_ref || '—')}">${HALF + ' ' + esc(ffWord('notfetched') + ' — ' + why)}</div>`
   }
   // the cached answer is read by ref (the cell LRU then holds refs, not bodies, and the blob of a media cell is keyed r:<ref>);
   // only an answer the cache does not hold rides inline
@@ -111,7 +112,7 @@ export function noteBodyFidelity(blk, got) {
   const sec = blk.dataset.sec
   if (root && sec) { // the section can no longer claim 以下逐字
     const hd = root.querySelector(`#sec-${sec.replace(/"/g, '\\"')} .cwsecff.v`)
-    if (hd) { hd.classList.remove('v'); hd.textContent = W.HALF_MARK; hd.title = W.WINDOW_LINE }
+    if (hd) { hd.classList.remove('v'); hd.innerHTML = HALF; hd.title = W.WINDOW_LINE }
   }
 }
 // paint `bc` with the body, and swap in the real bytes once they arrive. `bc.dataset.filled` says "this body needs no fetch on the next

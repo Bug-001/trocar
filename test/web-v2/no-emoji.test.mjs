@@ -1,6 +1,6 @@
 // test/web-v2/no-emoji.test.mjs — 1.5 验收 #8: no `\p{Extended_Pictographic}` character in any .mjs, .css or .html under
 // web/legacy (the UI's frame; verbatim content is runtime data and never sits in the sources). The allowed glyphs are
-// ‹ › ▸ ▾ ▴ · ≈ ◐ ⓘ — ? × and the drawn icons. The scanner is proven not vacuous on a planted emoji.
+// ‹ › ▸ ▾ ▴ · ≈ — ? × ⊖ … and the drawn icons (core/icons.mjs; ⓘ and ◐ are drawn there, not typed). The scanner is proven not vacuous on a planted emoji.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
