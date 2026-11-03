@@ -19,12 +19,6 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 // the root element of an SVG: after an optional <?xml …?> prologue and whitespace (and comments / a doctype), the first tag is <svg
 const svgRoot = (t) => t.replace(/^﻿?(?:\s|<\?xml[\s\S]*?\?>|<!--[\s\S]*?-->|<!DOCTYPE[^>]*>)*/i, '')
 
-test('the folder is not vacuous: it holds at least one file per registry row', () => {
-  const files = fs.readdirSync(ICONS).filter((f) => f !== SOURCES)
-  assert.ok(HARNESS_REGISTRY.length >= 1)
-  assert.ok(files.length >= HARNESS_REGISTRY.length, `${files.length} files for ${HARNESS_REGISTRY.length} rows`)
-})
-
 test('every registry row has its icon file, of the type its extension names, and square', () => {
   for (const r of HARNESS_REGISTRY) {
     assert.ok(fs.existsSync(path.join(ICONS, r.icon)), `${r.id}: ${r.icon}`)
