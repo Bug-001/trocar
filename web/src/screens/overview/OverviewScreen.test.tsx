@@ -206,6 +206,7 @@ test('O4: Enter and Space toggle technical details; the ⓘ opens a dialog on En
 
   const allowed = (b: Element, first: boolean) => (b.hasAttribute('aria-expanded') && b.hasAttribute('aria-controls')) || b.classList.contains('popbtn')
     || b.classList.contains('copybtn') || b.hasAttribute('data-g') || (first && b.hasAttribute('data-hctl'))
+    || (b.closest('.react-aria-Popover') != null && (b as HTMLElement).tabIndex < 0) // an open ⓘ layer (it sits by its button)'s screen-reader Dismiss
   const check = async (c: HTMLElement, first: boolean) => {
     for (const x of c.querySelectorAll('[aria-expanded="false"][aria-controls]')) fireEvent.click(x) // the open panels' buttons too
     await settle()
