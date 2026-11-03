@@ -53,6 +53,11 @@ test('(3) the host list follows `next` until null and collects exactly the ids o
   const all = await f.get('calls', { harness: h.harness, host: h.host, limit: 500 })
   assert.equal(all.doc.next, null)
   assert.deepEqual(list.rows.map((r) => r.id), all.doc.records.map((r) => r.id))
+  // #12 the caption's count and as-of are the last page's fields, not the rows drawn so far
+  assert.equal(typeof all.doc.total, 'number')
+  assert.equal(list.total, pages.at(-1).total)
+  assert.equal(list.total, all.doc.total)
+  assert.equal(list.asOf, pages.at(-1).as_of)
   // a page read twice (the first page re-read) draws its refs once
   assert.deepEqual(mergePages([...pages, pages[0]]).rows.map((r) => r.id), all.doc.records.map((r) => r.id))
 })

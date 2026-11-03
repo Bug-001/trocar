@@ -39,6 +39,7 @@ test('#1 table rows are the `traffic` hosts, grouped by agent, the agent only on
   assert.ok(m.total.sent.main.includes(bytes(T.totals.sent_bytes)))
   assert.ok(m.total.recv.main.includes(bytes(T.totals.received_bytes)))
   assert.equal(m.total.filtered, false)
+  assert.equal(m.asOf, T.as_of, '#7 the caption is as of the answer')
 })
 
 test('#2 收回: unrecorded is never 0; a partial sum is a floor with its count; all unrecorded is no value', async () => {
