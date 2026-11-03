@@ -112,9 +112,9 @@ a.rmark{color:var(--action);}
 /* the small screens: the class folds under the endpoint; 收回 moves into the detail only (1.10 §窄屏) */
 @media (max-width:899px){
   .thost{padding:12px 14px 0;}
-  /* three tracks that shrink with the screen: time · endpoint over class · marks; nothing sticks out of the row */
-  .hhead,.hrow{grid-template-columns:minmax(0,132px) minmax(0,1fr) auto;}
-  .hhead .cell.num,.hrow .cell.num,.hhead .cell.go{display:none;}
+  /* four tracks that shrink with the screen: time · endpoint over class · sent · marks; nothing sticks out of the row */
+  .hhead,.hrow{grid-template-columns:minmax(0,132px) minmax(0,1fr) auto auto;}
+  .hhead .cell.recv,.hrow .cell.recv,.hhead .cell.go{display:none;}
   .hhead .cell.class{grid-column:2;grid-row:2;}
   /* the two lines fill the row's fixed-height slot (1.10 行高固定; the slot is the list's .vrow) */
   .hrow{min-height:0;height:100%;padding:0;grid-template-rows:auto auto;align-content:center;line-height:18px;}
