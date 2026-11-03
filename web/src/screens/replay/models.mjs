@@ -61,7 +61,7 @@ export function sessionHeadModel(s, { libraryHash = '', now = Date.now() } = {})
     back: { href: libraryHash || '#/sessions', text: W.BACK },
     // the title never borrows the id or the start time (the start is its own part)
     title: { text: meta.title ?? null, fallback: meta.title == null ? W.UNTITLED : null, id: meta.session_id || '',
-      sourceTip: meta.title == null ? W.TITLE_UNTITLED_TIP : meta.title_source === 'wire' ? W.TITLE_FROM_WIRE : W.TITLE_FROM_META },
+      sourceTip: meta.title == null ? W.TITLE_UNTITLED_NEXT_TIP : meta.title_source === 'wire' ? W.TITLE_FROM_WIRE : W.TITLE_FROM_META },
     chip: { key: hk, name: harnessName(meta.harness), raw: harnessRaw(meta.harness), icon: harnessIconUrl(meta.harness),
       href: hk ? `#/capture?h=${encodeURIComponent(hk)}` : '#/capture', inferred: !!meta.harness_inferred, synthesized: !!meta.session_synthesized,
       multi: hs && hs.length > 1 ? { text: W.MULTIPLE_AGENTS, tip: W.MULTIPLE_AGENTS_TIP, inferred: hs.some((x) => x && (x.inferred || x.harness_inferred)) } : null },
