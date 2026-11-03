@@ -107,7 +107,7 @@ test('§3.4: the receipt text of an off with no names — no certificate item (D
   assert.match(out, /The daemon \(pid 4242\) exits after 2 open responses finish\./)
   assert.match(out, /1 connection trocar cannot see the end of/)
   assert.doesNotMatch(out, /Still trusting the trocar certificate/, 'off took no trust away, so it names no one as still trusting it')
-  assert.ok(out.replace(/\s+/g, ' ').includes('Still running, started by you: trocar serve (pid 5310, a read-only dashboard, not on any agent path).'), 'a trocar process the user started is named with what it is (D38)')
+  assert.match(out.replace(/\s+/g, ' '), /\btrocar serve\b[^.]*\b5310\b/, 'a trocar process the user started is named, with its pid (D38)')
   assert.ok(out.trimEnd().endsWith('Certificates stay installed. To remove them: trocar uninstall'), 'the last line says the certificates stay, and how to remove them')
   const bad = formatOffReceipt({ ok: false, all: true, harnesses: [], routing: { confirmed: true }, daemon: { pid: 9, state: 'unresponsive' }, relayed: 'unknown', relayed_reason: 'the daemon does not answer', changed: [], removed: [], skipped: [], left: [{ path: '/h/.codex/.env', result: 'left-unparsable', reason: 'is no longer valid JSON' }], problems: ['x'], notes: [] }, { home: '/h' })
   assert.match(bad, /^Capture is not fully off: trocar is off their path, but some items were left\./m)

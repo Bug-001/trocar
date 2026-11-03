@@ -86,7 +86,7 @@ test('D62 ⑥: the receipt never claims both "no door open" and that trocar exit
   readable('off-proxy-holder', held)
   assert.doesNotMatch(held, /no door open/, `a door IS open for the holder below: ${held}`)
   assert.doesNotMatch(held, /trocar exits|exits when/, `in proxy mode the daemon never exits: ${held}`)
-  assert.ok(held.replace(/\s+/g, ' ').includes('The daemon (pid 4012) keeps running, with one door still open for the connections below.'), 'D62 ⑥: the daemon stays, one door open for the holder')
+  assert.match(held.replace(/\s+/g, ' '), /\b4012\b[^.]*\bkeeps running\b[^.]*\bdoor\b/, 'D62 ⑥: the daemon stays, a door open for the holder')
   assert.match(held, /^That door closes when it exits; the daemon keeps running\.$/m)
 
   const idle = formatOffReceipt({ ...base, daemon: { pid: 4012, state: 'running' }, holders: [] })

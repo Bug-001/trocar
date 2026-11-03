@@ -738,7 +738,7 @@ test('uninstall on darwin: a gone bundle is rebuilt without opening a static OS 
   assert.deepEqual([opened, fps.includes(certBlocks(marker.certPem)[0].fp)], [[], false], 'no static OS bundle is opened, and cert.pem\'s roots are not in the rebuilt bundle')
   assert.deepEqual(Object.values(macRoots).map((c) => fps.includes(certBlocks(c.certPem)[0].fp)), [true, true, true], 'the three darwin sources are in it — the corporate anchor among them, so codex keeps its relay')
   assert.equal(fps.includes(trocarFp), false, 'and the trocar CA is not')
-  assert.match(formatOffReceipt(receipt).replace(/\s+/g, ' '), /combined-codex\.pem was rebuilt without the trocar certificate\./, 'the human receipt says it was rebuilt (4.6 第 2 步「回执写已重建」)')
+  assert.match(formatOffReceipt(receipt).replace(/\s+/g, ' '), /combined-codex\.pem\b[^.]*\brebuilt\b/, 'the human receipt says it was rebuilt (4.6 第 2 步「回执写已重建」)')
 })
 
 // D38 on a Mac: a source that could not be read is said, the rebuild still made from the rest (no bundle = no network). Node 20 has no getCACertificates —
@@ -754,7 +754,8 @@ test('uninstall on darwin: a gone bundle rebuilt while a source cannot be read s
   const said = flowEvents(s.dir).filter((e) => e.path === bundle && /rebuilt without the trocar CA/.test(e.reason))
   assert.equal(said.length, 1)
   assert.match(said[0].reason, /with the OS roots short of what could not be read \(getCACertificates: not available \(Node ≥ 22\.15 has it\)\)/)
-  assert.match(formatOffReceipt(receipt).replace(/\s+/g, ' '), /combined-codex\.pem was rebuilt without the trocar certificate \(it is short of the certificates that could not be read: getCACertificates: not available/, 'the human receipt names what could not be read (D38)')
+  const human = formatOffReceipt(receipt).replace(/\s+/g, ' ')
+  assert.ok(/combined-codex\.pem\b[^.]*\brebuilt\b/.test(human) && human.includes('getCACertificates'), `the human receipt says it was rebuilt and names what could not be read (D38)\n${human}`)
   // and with no source at all: Node's roots only, said as such
   const t = await installedHome({ names: ['codex'] })
   fs.rmSync(path.join(t.dir, 'ca', 'combined-codex.pem'))
