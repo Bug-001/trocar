@@ -149,6 +149,7 @@ test('§3.5 · §1.1⑥ `--failures`: a backquoted command in a reason prints wh
       const lines = failuresBlock({ groups: [{ level: 'problem', count: 2, first_ts: '2026-10-18T12:00:00Z', last_ts: '2026-10-18T12:14:00Z', reason, ...g }] }, health, { now: NOW })
       clean(lines, `status --failures (${g.code}, ${len})`, [cmd])
       assert.equal(lines.filter((l) => l.trim() === cmd).length, 1, `${g.code} ${len}: the command whole, once, on its own line\n${lines.join('\n')}`)
+      assert.ok(lines.filter((l) => l.trim() !== cmd).map((l) => l.trim()).join(' ').includes('the line below'), `${g.code} ${len}: the row points at its command (1.6 --failures)\n${lines.join('\n')}`)
     }
   }
 })

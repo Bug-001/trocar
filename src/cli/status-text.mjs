@@ -132,12 +132,18 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
 export const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:[^@/]*@)?(?:127\.0\.0\.1|\[?::1\]?|localhost):(\d+)/.exec(String(url || '')); return m ? `:${m[1]}` : String(url || unknown('no address recorded')) }
 
 // ── `--failures` (§3.5: one line per kind of problem, then Expected) ──────────────────────────────────────────────
-/** One group's line: its harness when the group names one (D38: for whom), the shared sentence, then (when the sentence stands for a known code) the record's own reason — the CLI has no technical details to fold it into. */
-/** §3.5 · §1.1⑥: a backquoted span of a reason is a command to copy (the helper's `sudo … setup-helper`, §3.2). The line briefs the prose — the span said as
- *  `the line below` — and each command follows whole on its own line; a reason with no span is as it was. */
+/** One group's line: its harness when the group names one (D38: for whom), the shared sentence, then (when the sentence stands for a known code) the
+ *  record's own reason — the CLI has no technical details to fold it into. §3.5 · §1.1⑥: a backquoted span of a reason is a command to copy (the
+ *  helper's `sudo … setup-helper`, §3.2): the line briefs the prose before it and ends with the pointer `the line below`, and each command follows whole on
+ *  its own line; a reason with no span is briefed as it is. */
 const COMMAND = /`([^`]+)`/g
+const POINTER = 'the line below'
 const commandsOf = (reason) => [...String(reason || '').matchAll(COMMAND)].map((m) => squashed(m[1]))
-const failureLine = (g0) => { const g = { ...g0, reason: String(g0.reason || '').replace(COMMAND, 'the line below') }; const r = failureWord(g.where, g.code, g.harness || '') && briefText(g.reason); const s = r ? `${failureBrief(g)}: ${r}` : failureBrief(g); return g.harness ? `${g.harness}: ${s}` : s } // no nested brackets (§1.1②): a reason has its own
+const reasonOf = (reason) => {
+  const s = String(reason || ''), at = s.search(COMMAND), whole = squashed(s.replace(COMMAND, POINTER))
+  return at < 0 || whole.length <= 100 ? whole : `${briefText(s.slice(0, at), 100 - POINTER.length - 1)} ${POINTER}`
+}
+const failureLine = (g0) => { const g = { ...g0, reason: reasonOf(g0.reason) }; const r = failureWord(g.where, g.code, g.harness || '') && briefText(g.reason); const s = r ? `${failureBrief(g)}: ${r}` : failureBrief(g); return g.harness ? `${g.harness}: ${s}` : s } // no nested brackets (§1.1②): a reason has its own
 
 /** The whole wall of the last 24 hours: one line per `level:'problem'` group of the document's `failures` (C.3, the board's capture log reads the same
  *  groups and words), then the `Expected` section (what is not a problem by design). */
