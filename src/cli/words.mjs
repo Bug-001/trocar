@@ -196,14 +196,14 @@ export const briefText = (s, max = 100) => {
 /** One failure group (C.3 `failures.groups[]`: { where, code, reason, harness? }) in one sentence, for `status --failures`, the board's capture log and
  *  the overview alike: the catalog's sentence when it knows the code — the code and the raw reason are then the technical details' (the CLI prints the
  *  reason after it) — else the raw errno / `where/code` with the squashed reason, so an unknown code is never hidden; the `×count` multiplier is the caller's. */
-export function failureBrief(g) {
+export function failureBrief(g, { max = 100 } = {}) { // `max`: the brief of the reason; a caller that briefed it already (status --failures, reasonOf) passes Infinity
   const from = g && typeof g.process === 'string' && g.process !== '' ? `, latest from ${g.process}${Number.isInteger(g.pid) ? ` pid ${g.pid}` : ''}` : '' // every failure that names its program, one way (1.6 §3.5)
-  return brief(g) + from
+  return brief(g, max) + from
 }
-function brief(g) {
+function brief(g, max) {
   const word = failureWord(g && g.where, g && g.code, (g && g.harness) || '')
   if (word) return word
-  const reason = briefText((g && g.reason) || '')
+  const reason = briefText((g && g.reason) || '', max)
   if (g && g.code && ERRNO.test(String(g.code))) return [g.code, reason].filter(Boolean).join(' ')
   return [[...new Set([g && g.where, g && g.code].filter(Boolean))].join('/') || 'a record', reason].filter(Boolean).join(' ') // an event with no code of its own is named once
 }

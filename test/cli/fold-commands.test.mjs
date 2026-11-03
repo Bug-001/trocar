@@ -49,3 +49,19 @@ for (const [name, render] of Object.entries(FORMATTERS)) {
     assert.equal(atCommandIndent(long), atCommandIndent(short), `a fold never sits at a command's indent ${[...commandIndents]}\n--- short\n${short}\n--- long\n${long}`)
   })
 }
+
+// 1.6 §3.5 / §1.1⑥: --failures never cuts a path out of a reason — the reason stays whole, every word in order, and a path too long for the row's
+// column is alone on its line (the helper-down row ended on "not found at..." with the path cut away)
+test('1.6 §3.5 --failures: a reason with a path keeps the path and every word; the command is still a line of its own', () => {
+  for (const depth of [2, 6]) {
+    const bin = `/usr/local/libexec/${'trocar-helper-dir/'.repeat(depth)}trocar-redirector`
+    const cmd = `sudo ${HOME}/.trocar/app/node/bin/node ${HOME}/.trocar/app/bin/trocar.mjs setup-helper`
+    const out = failuresBlock({ groups: [{ level: 'problem', count: 1, last_ts: new Date(NOW - 60e3).toISOString(), where: 'helper-down', code: 'helper-down', reason: `capability helper not found at ${bin}; install it once per machine with \`${cmd}\`` }] }, { collector: { expected: {} } }, { now: NOW })
+    const text = out.join(' ').split(/\s+/)
+    assert.ok(text.includes(bin) || text.includes(`${bin};`), `the path is whole\n${out.join('\n')}`)
+    assert.ok(!out.join('\n').includes('...'), `nothing was cut\n${out.join('\n')}`)
+    const said = ['found', 'at', 'install', 'it', 'once', 'per', 'machine', 'with', 'the', 'line', 'below'].map((w) => text.indexOf(w, text.indexOf('capability')))
+    assert.ok(said.every((x, i) => x > 0 && (!i || x > said[i - 1])), `every word of the reason, in order\n${out.join('\n')}`)
+    assert.ok(out.some((l) => l.trim() === cmd), `the command is whole on its own line\n${out.join('\n')}`)
+  }
+})

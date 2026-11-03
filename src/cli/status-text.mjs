@@ -139,9 +139,15 @@ export const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:[^@/]*@)?(?:127\.0\
  *  itself is cut, the pointer then put back at the end), and each command follows whole on its own line; a reason with no span is briefed as it is. */
 const COMMAND = /`([^`]+)`/g
 const commandsOf = (reason) => [...String(reason || '').matchAll(COMMAND)].map((m) => squashed(m[1]))
+// §3.5 / §1.1⑥: a brief never cuts a path (a word with `/` or `\\`) out of a reason: when the cut would drop one, the reason stays whole and the 80-column fold
+// gives the path a line of its own (R11: the reason is moved, never lost)
 const reasonOf = (reason, max = 100) => {
   const n = commandsOf(reason).length, pointer = n > 1 ? 'the lines below' : 'the line below'
-  const whole = squashed(String(reason || '').replace(COMMAND, pointer)), head = briefText(whole, max)
+  const whole = squashed(String(reason || '').replace(COMMAND, pointer)), cut = briefOf(whole, n, pointer, max), kept = new Set(cut.split(' '))
+  return whole.split(' ').some((w) => /[\\/]/.test(w) && !kept.has(w)) ? whole : cut
+}
+const briefOf = (whole, n, pointer, max) => {
+  const head = briefText(whole, max)
   if (!n || head === whole) return head
   // the clause that holds the last pointer says what the command is for: it stays whole, the words before it are cut (§3.5); a boundary whose
   // clause would be the pointer alone (`…, run: <pointer>`) is skipped, so the verb stays with it
@@ -151,7 +157,7 @@ const reasonOf = (reason, max = 100) => {
   if (start > 0 && room >= 3) return `${cut > 0 ? lead.slice(0, cut).replace(/[\s,;:]+$/, '') : ''}... ${clause}`
   return head.slice(0, -3).includes(pointer) ? head : `${briefText(whole, max - pointer.length - 1)} ${pointer}`
 }
-const failureLine = (g0) => { const g = { ...g0, reason: reasonOf(g0.reason) }; const r = failureWord(g.where, g.code, g.harness || '') && briefText(g.reason); const s = r ? `${failureBrief(g)}: ${r}` : failureBrief(g); return g.harness ? `${g.harness}: ${s}` : s } // no nested brackets (§1.1②): a reason has its own
+const failureLine = (g0) => { const g = { ...g0, reason: reasonOf(g0.reason) }; const r = failureWord(g.where, g.code, g.harness || '') && g.reason; const s = r ? `${failureBrief(g)}: ${r}` : failureBrief(g, { max: Infinity }); return g.harness ? `${g.harness}: ${s}` : s } // no nested brackets (§1.1②): a reason has its own
 
 /** The whole wall of the last 24 hours: one line per `level:'problem'` group of the document's `failures` (C.3, the board's capture log reads the same
  *  groups and words), then the `Expected` section (what is not a problem by design). */
