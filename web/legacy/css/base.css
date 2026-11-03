@@ -239,12 +239,17 @@ input::placeholder{color:var(--ink-3);}
 th,.colhead{font-size:var(--fs-cap);font-weight:var(--fw-strong);color:var(--ink-3);}
 /* an agent's icon and name as one unit, wherever it stands (a flex parent's gap or plain inline text) */
 .chip{display:inline-flex;align-items:center;gap:6px;}
+/* the state lamp (1.5 §前置定义 灯): one 8 px round dot everywhere, colour from the state tokens, centred on its line (in a flex
+   parent by the parent's centring, in text by vertical-align). Grey (.dim, or no state class) = a state that lights nothing. */
+.lamp{--c:var(--control-edge);display:inline-block;flex:none;width:8px;height:8px;border-radius:50%;background:var(--c);vertical-align:middle;align-self:center;}
+.lamp.ok{--c:var(--ok);} .lamp.warn{--c:var(--warn-lamp);} .lamp.bad{--c:var(--bad-lamp);} .lamp.note{--c:var(--note-lamp);}
 /* ── the popover kit (1.2 §弹出层) and the marks (1.5 §标记) ──────────────────────────────────────────────────── */
 .popbtn{border:0;background:none;color:var(--ink-3);cursor:pointer;font:inherit;padding:0 3px;border-radius:var(--r-1);white-space:nowrap;}
 .popbtn:hover{color:var(--ink);background:var(--hover);}
 .popbtn[aria-expanded="true"]{color:var(--ink);}
-/* an info glyph after a word: a gap before it, centred on the line, never taller than the line (the word keeps its baseline) */
-.popbtn:has(> svg:only-child){display:inline-flex;align-items:center;vertical-align:middle;height:var(--lh);margin-left:4px;padding:0 2px;}
+/* an info glyph after a word: a gap before it, exactly one line tall and top-aligned, so it neither grows nor shifts the line and
+   the word keeps the baseline of a head without a glyph (1.5 §审美维度 9) */
+.popbtn:has(> svg:only-child){display:inline-flex;align-items:center;vertical-align:top;height:1lh;margin-left:4px;padding:0 2px;}
 .pop{position:fixed;z-index:40;min-width:200px;max-width:380px;background:var(--raised);border:1px solid var(--rule);border-radius:var(--r-3);box-shadow:var(--shadow-float);padding:12px 14px;font-size:var(--fs-body);color:var(--ink);}
 /* a closed popover must really hide: the plain .pop[hidden] (0,2,0) loses the cascade to a variant rule like
    .pop.menu{display:flex} below (also 0,2,0, later) — a closed filter menu once rendered at the button's position and

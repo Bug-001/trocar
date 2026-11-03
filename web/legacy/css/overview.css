@@ -24,13 +24,8 @@
 /* a card before its first answer, or the stats of the last window while the new one is read (1.7 §读取与刷新): dimmed */
 .ovcard.reading .ovsay, .ovcard.reading .ovtbl, .ovcard.reading .ovtr, .ovempty.reading { color: var(--ink-2); }
 
-/* the state lamp (1.5 §采集状态: a shape, never colour alone — the sentence beside it says the state) */
-.lamp { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--control-edge); flex: none; }
-.ovh .lamp { margin-right: 8px; } /* the head has no gap of its own: an info glyph keeps the kit's 4 px after its word */
-.lamp.ok { background: var(--ok); }
-.lamp.warn { background: var(--warn-lamp); }
-.lamp.bad { background: var(--bad-lamp); }
-.lamp.dim { background: var(--control-edge); }
+/* the card head's lamp is the kit's .lamp (base.css); the head has no gap of its own: an info glyph keeps the kit's 4 px after its word */
+.ovh .lamp { margin-right: 8px; }
 
 /* the item / session rows: one <a> per row, the whole row is the link */
 .ovlist { display: flex; flex-direction: column; gap: 2px; }

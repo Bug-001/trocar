@@ -27,9 +27,9 @@ export type DoneFn = (out: unknown) => void
 export const Parts = ({ parts }: { parts: Part[] }) =>
   <>{parts.map((p, i) => <Fragment key={i}>{'mono' in p ? <span className="mono">{p.mono}</span> : p.text}</Fragment>)}</>
 
-// bad / warn lamps, the ok dot, or nothing (1.5: a normal state lights nothing, an unknown one neither)
+// the kit's lamp in the state's colour (bad / warn / ok), or nothing (1.5: a normal state lights nothing, an unknown one neither)
 export const Gut = ({ gut }: { gut: string | null }) => (
-  <span className="gut">{gut === 'ok' ? <span className="capdot" aria-hidden="true" /> : gut ? <span className={`lamp ${gut}`} aria-hidden="true" /> : null}</span>
+  <span className="gut">{gut ? <span className={`lamp ${gut}`} aria-hidden="true" /> : null}</span>
 )
 
 // the leading state word carries the severity colour (up to the first ':' or ' · '); the rest of the sentence stays ink
