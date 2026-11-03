@@ -10,7 +10,7 @@ import path from 'node:path'
 import { probe, shoot, layoutFaults } from './harness.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { modelWorld } from '../../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd, boardPortOf } from '../../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, boardPortOf, unservable } from '../../helpers/model-daemon.mjs'
 import { workerFork } from '../../helpers/worker-fork.mjs'
 import { depsFile } from '../../helpers/board-world.mjs'
 import { snapshot } from '../../query/raw-home.mjs'
@@ -18,7 +18,8 @@ import { renderWrapper } from '../../../src/collector/arch/darwin/wrapper.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
-const platform = 'darwin'
+// the first model platform this host can serve for real (unservable): control-harness.e2e proves both worlds, each on the hosts that can serve it
+const platform = (await Promise.all(['darwin', 'win32'].map(async (p) => [p, await unservable(p)]))).find(([, why]) => !why)[0]
 const HELPER = { close: async () => {}, call: async (verb) => { if (verb === 'ps') return { procs: [] }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } }
 
 async function withDaemonBoard(run) {
