@@ -119,16 +119,16 @@ export function setupHelper(opts = {}) {
     const m = capPart.match(/^([a-z0-9_,]+)=([a-z]+)$/)
     const gotCaps = m ? m[1].split(',').sort() : []
     const gotFlags = m ? m[2].split('').sort().join('') : ''
-    const wantCaps = ['cap_bpf', 'cap_net_admin', 'cap_perfmon'].sort()
-    if (JSON.stringify(gotCaps) !== JSON.stringify(wantCaps) || gotFlags !== 'ep') {
-      throw new Error(`unexpected caps ${JSON.stringify(capPart)} (want exactly cap_bpf,cap_net_admin,cap_perfmon=ep)`)
+    const [wantNames, wantFlags] = cfg.caps.split('+') // the one spelling of the set: what setcap was given is what getcap must read back
+    if (JSON.stringify(gotCaps) !== JSON.stringify(wantNames.split(',').sort()) || gotFlags !== wantFlags.split('').sort().join('')) {
+      throw new Error(`unexpected caps ${JSON.stringify(capPart)} (want exactly ${cfg.caps})`)
     }
     fs.renameSync(tmp, cfg.helperBin) // atomic swap over any running loader
   } catch (e) {
     try { fs.rmSync(tmp, { force: true }) } catch {}
     throw e
   }
-  return { ok: true, bin: cfg.helperBin, caps: 'cap_net_admin,cap_perfmon,cap_bpf=ep', swept }
+  return { ok: true, bin: cfg.helperBin, caps: cfg.caps, swept }
 }
 
 export function uninstallHelper(opts = {}) {
