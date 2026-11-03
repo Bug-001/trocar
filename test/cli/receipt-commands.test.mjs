@@ -68,3 +68,21 @@ test('§1.1⑥ a command to copy is deeper than every list item of the receipt',
   assert.ok(items.every((l) => depth(out[cmd]) > depth(l)), `the command is deeper than the items:\n${out.join('\n')}`)
 })
 
+// 附录 A.1 for on's route line (§1.1⑥, §3.3): it is one line from column 0 and never folds; a chain too long drops the [labels] first, and only
+// then is cut to `agent -> trocar -> <next hop> -> ...`; the proxy setting it was drawn from is still said
+test('A.1 on: a route line never folds; it drops the labels first, then keeps agent, trocar and the next hop', () => {
+  const home = '/home/alice'
+  const on = (chain) => lines(formatOnReceipt({ ...newReceipt('on'), ok: true, harnesses: ['codex'], changed: [], created: [], unchanged: [], skipped: [], restart: [], notes: [], daemon: { state: 'running', pid: 1 },
+    adopted: { codex: { chain, proxy: 'http://***@proxy.corp.example.com:8080', source: [{ kind: 'file', where: `${home}/.codex/.env`, key: 'HTTPS_PROXY' }] } } }, { home }))
+  const route = (out) => { const i = out.findIndex((l) => l.startsWith('route')); return { line: out[i], next: out[i + 1] } }
+  const hops = ['codex (pid 5530)', 'trocar :17992', 'proxy.corp.example:8080', 'internet']
+  const labelled = `${hops[0]} -> [.env HTTPS_PROXY, written by trocar] ${hops[1]} -> [system proxy] ${hops[2]} -> ${hops[3]}`
+  const a = route(on(labelled))
+  assert.ok(a.line.length <= 80 && !a.line.includes('['), a.line)
+  assert.ok(hops.every((h) => a.line.includes(h)), `dropping the labels was enough, so every hop stays: ${a.line}`)
+  assert.ok(!/^\s*(proxy|-> |internet)/.test(a.next), `nothing of the chain folds onto the next line: ${a.next}`)
+  const far = `${hops[0]} -> [ebpf] ${hops[1]} -> ${'hop.example.com:1 -> '.repeat(4)}${hops[2]} -> ${hops[3]}`
+  const b = route(on(far))
+  assert.equal(b.line, `route: ${hops[0]} -> ${hops[1]} -> hop.example.com:1 -> ...`)
+  assert.ok(on(far).join(' ').includes('http://***@proxy.corp.example.com:8080'), 'the proxy setting is still said')
+})

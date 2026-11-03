@@ -72,6 +72,16 @@ const distinct = (t) => t.branches.filter((b, i) => t.branches.findIndex((x) => 
 /** One line per way a harness's traffic goes: the path with trocar on it (HTTP and WebSocket that take the same path are one line). */
 export const renderCompact = (t) => distinct(t).map((b) => `${prefixOf(t, b)}${chain(t, b.path)}`)
 
+/** 附录 A.1 for a compact chain (renderCompact's lines joined by ` ; `) printed in `room` columns: whole when it fits; else every `[label]` dropped;
+ *  else each branch cut to `agent -> trocar -> <next hop> -> ...`. Never folded: a line still too long stays one line. */
+export function fitCompact(text, room) {
+  const branches = String(text).split(' ; ').map((b) => b.split(' -> '))
+  const bare = branches.map((hops) => hops.map((h, i) => (i ? h.replace(/^\[[^\]]*\] /, '') : h)))
+  const short = bare.map((hops) => { const at = hops.findIndex((h, i) => i && /^trocar\b/.test(h)), keep = at > 0 ? hops.slice(0, 1).concat(hops.slice(at, at + 2)) : hops.slice(0, 2); return keep.length < hops.length ? [...keep, '...'] : hops })
+  const tries = [text, ...[bare, short].map((x) => x.map((hops) => hops.join(' -> ')).join(' ; '))]
+  return tries.find((t) => t.length <= room) || tries[2]
+}
+
 /** What `status` says after a branch's chain: `on trocar's path: yes · captured: no (desired-off)`. */
 export const verdictText = (b) => `on trocar's path: ${tri(b.on_path)} · captured: ${tri(b.captured)}${b.reason ? ` (${b.reason})` : ''}`
 

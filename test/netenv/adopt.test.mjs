@@ -45,10 +45,11 @@ test('V46 (a) Linux: `on` writes no proxy key anywhere — the changed files and
   assert.equal(a.chain, 'claude-code -> [ebpf] trocar -> [CONNECT passed on as it is] proxy.corp:8080 -> internet')
   assert.equal(a.proxy, 'http://***@proxy.corp:8080')
   const text = (await (async () => { const t = sandbox(ENGINE); seedProxy(t); return (await t.run(['on', '--yes'], { deps: FACTS })).io.text() })())
-  const unwrap = (t) => t.replace(/\s+/g, ' ') // a long chain wraps (§1.1 width); the fact is the chain, not where it breaks
-  const chain = /claude-code -> \[ebpf\] trocar -> \[CONNECT passed on as it is\] proxy\.corp:8080 -> internet/g
-  assert.equal(unwrap(text).match(chain).length, 1, 'the chain is said once, by the receipt (§3.3; the plan names files and keys, §1.4): an `on --yes` prints both')
-  assert.match(unwrap(text), /internet \(its proxy setting http:\/\/\*\*\*@proxy\.corp:8080, read from /, 'the receipt names the setting it adopted, masked')
+  const unwrap = (t) => t.replace(/\s+/g, ' ') // a sentence wraps (§1.1 width); the fact is what it says, not where it breaks
+  // the hops in order; a chain too long for its line drops its [labels] first (附录 A.1), so a label is optional here
+  const chain = /claude-code -> (\[ebpf\] )?trocar -> (\[CONNECT passed on as it is\] )?proxy\.corp:8080 -> internet/g
+  assert.equal(text.match(chain).length, 1, 'the chain is said once, on one line, by the receipt (§3.3; the plan names files and keys, §1.4): an `on --yes` prints both')
+  assert.match(unwrap(text), /proxy setting http:\/\/\*\*\*@proxy\.corp:8080 was read from /, 'the receipt names the setting it adopted, masked')
   assert.ok(!/dave|hunter2/.test(text + JSON.stringify(doc)), 'no credential in the text or the JSON')
   const file = fs.readFileSync(netenvOf(s), 'utf8')
   assert.ok(!/dave|hunter2|proxy\.corp:8080"/.test(file.replace('http://***@proxy.corp:8080', '')), 'netenv.json: no original value')
