@@ -24,7 +24,8 @@ const FORM_WORDS = Object.freeze({
 })
 const CARRIER_WORDS = Object.freeze({
   root: 'reads your user trust store', 'config-key': "the certificate setting of its own configuration", 'pem-block': 'a block in your certificate file',
-  plugin: "trocar's plug-in", wrapper: "trocar's launch command", // no tense: the plan (before) and the receipt (after) say them alike 'switch-file': "trocar's switch file",
+  // no tense: the plan (before) and the receipt (after) say them alike
+  plugin: "trocar's plug-in", wrapper: "trocar's launch command", 'switch-file': "trocar's switch file",
   bundle: 'a certificate bundle trocar wrote', env: 'the certificate variable of its settings',
 })
 /** A form id (`codex.vscode`) as the form a user would name it by — the harness prefix goes. */
