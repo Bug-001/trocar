@@ -48,9 +48,9 @@ export function guard(req) {
   try { return LOOPBACK.has(new URL(o).hostname) ? null : 'forbidden: cross-origin request'; } catch { return 'forbidden: cross-origin request'; }
 }
 
-/** Every file of the static plane, read once: `/<path under src/web/board>`. A lookup in this map is
+/** Every file of the static plane, read once: `/<path under webDir>` (the committed src/web/board/ unless a test serves another build). A lookup in this map is
  *  the whole path-safety story: `..`, encoded or not, names nothing in it. */
-function loadStatic() {
+function loadStatic(webDir) {
   const files = new Map();
   const walk = (dir, url) => {
     for (const e of nodeFs.readdirSync(dir, { withFileTypes: true })) {
@@ -59,7 +59,7 @@ function loadStatic() {
       else if (e.isFile()) files.set(`${url}${e.name}`, nodeFs.readFileSync(abs));
     }
   };
-  walk(WEB_DIR, '/');
+  walk(webDir, '/');
   return files;
 }
 
@@ -103,8 +103,8 @@ export function tipTable() {
 
 let named = null; // the query core, imported on the first /api request (it is most of a cold start)
 
-export function createServer({ home, token, query, tips, uid = process.getuid?.(), platform = process.platform, fs, now, env } = {}) {
-  const files = loadStatic();
+export function createServer({ home, token, query, tips, uid = process.getuid?.(), platform = process.platform, fs, now, env, webDir = WEB_DIR } = {}) {
+  const files = loadStatic(webDir);
   const want = Buffer.from(String(token ?? ''));
   const tokenOk = (got) => {
     if (!want.length || typeof got !== 'string') return false; // no token configured → nothing passes
