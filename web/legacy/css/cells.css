@@ -29,7 +29,7 @@
 
 /* Readable: reading text in sans, machine bytes in mono */
 .cellread{min-width:0;color:var(--ink);overflow-wrap:anywhere;}
-.kd-text,.kd-md{font-family:var(--sans);font-size:var(--fs-strong);line-height:1.6;max-width:42em;}
+.kd-text,.kd-md{font-family:var(--sans);font-size:var(--fs-body);line-height:1.6;max-width:42em;}
 .kd-text{white-space:pre-wrap;overflow-wrap:anywhere;}
 .kd-code,.kd-shell,.kd-json,.kd-diff,.kd-kv dt,.kd-opaque,.sec-tag{font-family:var(--mono);font-size:var(--fs-body);line-height:1.6;}
 .kd-code,.kd-diff{white-space:pre;overflow-x:auto;max-width:100%;overflow-wrap:normal;padding:var(--s2);background:var(--sunk);border-radius:var(--r-1);}
@@ -41,7 +41,7 @@
 
 /* markdown */
 .md-h1,.md-h2,.md-h3,.md-h4,.md-h5,.md-h6{font-weight:600;margin:var(--s2) 0 var(--s1);line-height:1.35;}
-.md-h1{font-size:var(--fs-h1);} .md-h2{font-size:var(--fs-h2);} .md-h3,.md-h4,.md-h5,.md-h6{font-size:var(--fs-strong);}
+.md-h1{font-size:var(--fs-title);} .md-h2{font-size:var(--fs-head);} .md-h3,.md-h4,.md-h5,.md-h6{font-size:var(--fs-body);}
 .md-li{padding-left:1.2em;}
 .md-q{border-left:3px solid var(--rule-2);padding-left:var(--s3);color:var(--ink-2);}
 .md-em{font-style:italic;} .md-b{font-weight:600;}
