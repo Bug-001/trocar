@@ -87,7 +87,9 @@ curl.exe -fsSLo "%TEMP%\trocar-install.ps1" https://github.com/Bug-001/trocar/re
 ```
 
 `trocar install` adds `~/.trocar/bin` at the end of your PATH (one marked line in your shell's start file; on
-Windows one element of your user `Path`), so `trocar` works in a new terminal. Then:
+Windows one element of your user `Path`), so `trocar` works in a new terminal. A shell that is not interactive may not
+read that file (Ubuntu's `~/.bashrc` stops early for one, so `ssh host trocar` does not find it): use `~/.trocar/bin/trocar`
+there. Then:
 
 ```sh
 trocar on                       # start capture
@@ -114,9 +116,11 @@ make -C "$(npm root -g)/trocar-cli/src/collector/arch/linux"
 sudo "$(command -v node)" "$(command -v trocar)" setup-helper   # root's PATH may lack node or trocar (an nvm node), so both go by their paths
 ```
 
-Installed with the script, the code is under `~/.trocar/app/<version>` (the version is the first word of
-`~/.trocar/app/current`): build with `make -C ~/.trocar/app/<version>/src/collector/arch/linux`, then run the
-`sudo` line `trocar on` prints when the helper is missing; it names this copy's Node and code by their full paths.
+Installed with the script, the helper cannot come first: its source arrives with the script. `trocar install` finishes
+without it; the collector then runs and captures nothing, `trocar status` says the helper is missing, and the receipt's
+last line is the `sudo` line to run. The code is under `~/.trocar/app/<version>` (the version is the first word of
+`~/.trocar/app/current`): build with `make -C ~/.trocar/app/<version>/src/collector/arch/linux`, run that `sudo` line
+(it names this copy's Node and code by their full paths; `trocar on` prints it too), then `trocar on`.
 
 The same five commands on every OS, in this order: `trocar install` (once) → `trocar on` → `trocar off` →
 `trocar status` (any time) → `trocar uninstall`. `install` lists every file it will touch and writes them after you
@@ -181,15 +185,18 @@ a clone of this repo and `trocar install`. Nothing the old name left is read or 
 
 ```sh
 trocar off                     # first: uninstall refuses while capture is on
-trocar uninstall               # removes all of trocar's changes; keeps your records (~/.trocar/raw)
+trocar uninstall               # removes all of trocar's changes; keeps your records (~/.trocar/raw, ~/.trocar/collector/flows)
 trocar uninstall --purge-data  # also deletes the records and their index (asks first)
-sudo "$(command -v node)" "$(command -v trocar)" setup-helper --remove   # Linux, last: the machine's capability helper
 ```
+
+On Linux the machine's capability helper is one more step, with `sudo`. Installed from npm, run it after `uninstall`:
+`sudo "$(command -v node)" "$(command -v trocar)" setup-helper --remove`.
 
 Installed with the script, `uninstall` also removes trocar itself as its last step: `~/.trocar/app` (the code and its
 Node), the `trocar` launcher and the PATH item. On Windows the folder goes as soon as the command exits. On Linux,
-while the capability helper is installed, the code stays and `uninstall` prints the `sudo` line that removes the
-helper; run `trocar uninstall` again after it.
+removing the helper needs that code, so while the helper is installed the code stays, `uninstall` exits 1 and prints
+the `sudo ... setup-helper --remove` line with full paths. Run that line, then `trocar uninstall` once more: the second
+run removes the code, the launcher and the PATH item.
 
 `uninstall` always prints its plan and asks first; without a terminal and without `--yes` it changes
 nothing and exits 2. `uninstall` never does `off` for you. While a harness is on, or (macOS / Windows) a process started during `on` still
