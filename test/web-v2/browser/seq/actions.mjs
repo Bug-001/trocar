@@ -195,10 +195,12 @@ export const ACTIONS = [
     ctx.faults.arm({ kind: 'latency', name: 'd/head', n: 1, ms: p.ms })
     // B is opened once A's head is on its way, so the held head is A's (the switch happens with A's read in flight), not a race
     // between the two hash writes and A's screen load
-    const sent = ctx.page.waitForRequest((q) => /\/api\/d\/head\b/.test(q.url()) && new URL(q.url()).searchParams.get('id') === A.session_id, { timeout: 5000 }).catch(() => null)
+    const sent = ctx.page.waitForRequest((q) => /\/api\/d\/head\b/.test(q.url()) && new URL(q.url()).searchParams.get('id') === A.session_id, { timeout: 5000 }).then(() => true, () => false)
     await go(ctx.page, deskHash(A))
-    await sent
+    const left = await sent
     await go(ctx.page, deskHash(B))
+    // the step still ran, but as the race the wait is there to avoid: said in the run's notes, not passed off as the in-flight switch
+    if (!left) return { note: `switchInFlight: A's head (${A.session_id}) did not leave within 5 s; B was opened without A's read in flight` }
   }),
   world('grow', 8, (r) => ({ k: int(r, 1, 3) }), (ctx, p) => { ctx.lastGrow = ctx.world.grow(p.k); ctx.grownAt = Date.now() }),
   world('late', 4, (r) => ({ k: int(r, 1, 3) }), (ctx, p) => { ctx.lastGrow = ctx.world.late(p.k); ctx.grownAt = Date.now() }),
@@ -243,11 +245,11 @@ async function act(ctx, step) {
   return out
 }
 
-/** Run one step, let the page paint, and keep ctx.follow equal to the follow chip's aria-pressed (false off the desk). → {skipped?} */
+/** Run one step, let the page paint, and keep ctx.follow equal to the follow chip's aria-pressed (false off the desk). → {skipped?, note?} */
 export async function runStep(ctx, step) {
   const out = await act(ctx, step)
   await ctx.page.waitForTimeout(120)
   await ctx.page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok))))
   ctx.follow = await ctx.page.evaluate(() => document.querySelector('[data-follow]')?.getAttribute('aria-pressed') === 'true')
-  return out.skipped ? { skipped: true } : {}
+  return out.skipped ? { skipped: true } : out.note ? { note: out.note } : {}
 }

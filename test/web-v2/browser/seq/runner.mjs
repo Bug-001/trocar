@@ -81,7 +81,7 @@ const sessionOf = (hash) => { const m = /^#\/replay\/[^/]+\/([^/?]+)/.exec(hash)
 /**
  * runSequence({steps, seed, big, viewport, theme, chromium, real, base, known, shot}) →
  *   { violation?: {id, sig, detail, step, screenshot}, step, seen:[{id, sig, detail, step}], pending:{id: {n, max}}, ms, coverage:{a: {ran, skipped}}, maxLongTask,
- *     serverErrors:[text] (the server's truth read failed past a restart's grace) }
+ *     serverErrors:[text] (the server's truth read failed past a restart's grace), notes:[text] (a step that ran but not as it meant to) }
  * Stops at the first violation whose keyOf() is not in `known` (a Set of keys, or 'all' to run every step); a known one is recorded in
  * `seen`, its evidence logs are cleared and the run goes on. `shot` names the screenshot (default `<id>-<screen>-<seed>`).
  */
@@ -89,7 +89,7 @@ export async function runSequence({ steps, seed = 1, big = false, viewport = 128
   const t0 = Date.now()
   const world = base ? null : makeWorld({ seed, big })
   let faults
-  const out = { step: -1, seen: [], pending: {}, coverage: {}, maxLongTask: 0, serverErrors: [] }
+  const out = { step: -1, seen: [], pending: {}, coverage: {}, maxLongTask: 0, serverErrors: [], notes: [] }
   const b = await withBoard({ home: world, base, chromium, width: viewport, height: viewport < 768 ? 844 : 900, theme,
     setup: async (page) => { await page.addInitScript(recordInput); await installProbe(page); faults = await installFaults(page) } })
   const ctx = { b, page: b.page, world, faults, actions: [], hidden: [], follow: false, grownAt: null, lastGrow: null }
@@ -102,6 +102,7 @@ export async function runSequence({ steps, seed = 1, big = false, viewport = 128
       const t = Date.now()
       const r = await runStep(ctx, step).catch(() => ({ skipped: true })) // a navigation tore the page's context mid-step
       cov[r.skipped ? 'skipped' : 'ran']++
+      if (r.note) out.notes.push(`step ${i}: ${r.note}`)
       // a reload re-runs the probe, so the page is visible again: the reader's hidden window ends with that step
       const open = ctx.hidden.find((h) => h.to == null)
       if (open && !(await b.page.evaluate(() => document.hidden).catch(() => true))) open.to = t
