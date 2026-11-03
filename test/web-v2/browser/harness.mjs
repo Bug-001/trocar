@@ -14,12 +14,31 @@ import { INTERVAL, TIMER_ROUND } from '../../../src/web/v2/core/poll.mjs'
 const SHOTS = fileURLToPath(new URL('./shots/', import.meta.url))
 const CHANNEL = { channel: 'chrome' }
 
+/** Before `t.close()` runs, every route on what `routed()` lists is dropped with behavior 'ignoreErrors': a handler still awaiting
+ *  route.fetch when its page goes would otherwise reject with nobody to await it, an unhandled rejection that fails whichever case runs. */
+function closeQuietly(t, routed) {
+  const close = t.close.bind(t)
+  t.close = async (...a) => {
+    for (const x of routed()) { try { await x.unrouteAll({ behavior: 'ignoreErrors' }) } catch { /* already closed */ } }
+    return close(...a)
+  }
+}
+
 /** The system Chrome (`chromium` is playwright-core's), with a temp directory of its own as TMP / TEMP / TMPDIR: what it leaves there (on
- *  Windows a chrome_url_fetcher_* folder) goes when the browser closes, never into the run's temp directory, which leak-guard checks. */
+ *  Windows a chrome_url_fetcher_* folder) goes when the browser closes, never into the run's temp directory, which leak-guard checks.
+ *  Closing the browser, any context or any page of it first drops the routes on what closes (closeQuietly). */
 export async function launchChrome(chromium) {
   const tmp = tmpDir('trocar-chrome-')
   const browser = await chromium.launch({ ...CHANNEL, env: { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp } })
   browser.once('disconnected', () => removeTmp(tmp))
+  const newContext = browser.newContext.bind(browser)
+  browser.newContext = async (...a) => {
+    const c = await newContext(...a)
+    c.on('page', (p) => closeQuietly(p, () => [p]))
+    closeQuietly(c, () => [c, ...c.pages()])
+    return c
+  }
+  closeQuietly(browser, () => browser.contexts().flatMap((c) => [c, ...c.pages()]))
   return browser
 }
 
