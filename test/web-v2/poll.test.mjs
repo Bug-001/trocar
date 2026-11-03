@@ -7,7 +7,7 @@ import { createPoller, startPoll, backoffMs, BACKOFF_MAX_MS, INTERVAL } from '..
 // ── the poll loop (1.5 K-29): a fake clock and a fake reader ────────────────────────────────────────────────────────────
 function rig(answers) {
   let t = 0, reads = 0
-  const p = createPoller({ base: 1500, now: () => t, run: async () => { reads++; return answers.length ? answers.shift() : {} } })
+  const p = createPoller({ base: 1500, now: () => t, run: async () => { reads++; const a = answers.length ? answers.shift() : {}; if (a instanceof Error) throw a; return a } })
   return { p, at: (ms) => { t = ms }, reads: () => reads }
 }
 
@@ -24,6 +24,13 @@ test('poller: after a failure no read happens before the back-off is due; it dou
   r.at(t2); await r.p.poll(); assert.equal(r.reads(), 3, 'a success')
   r.at(t2 + 1499); await r.p.poll(); assert.equal(r.reads(), 3, 'the success that ends the back-off: no tick before one interval')
   r.at(t2 + 1500); await r.p.poll(); assert.equal(r.reads(), 4, 'one interval after it, the tick reads')
+})
+
+test('poller: a run that throws is a failure: the next timer read waits for the back-off', async () => {
+  const r = rig([new Error('worker gone'), {}])
+  await r.p.poll(); assert.equal(r.reads(), 1)
+  r.at(backoffMs(1, 1500) - 1); await r.p.poll(); assert.equal(r.reads(), 1, 'no read before the back-off is due')
+  r.at(backoffMs(1, 1500)); await r.p.poll(); assert.equal(r.reads(), 2)
 })
 
 test('poller: a reader\'s own action bypasses the back-off', async () => {

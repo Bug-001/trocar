@@ -11,7 +11,8 @@ export const BACKOFF_MAX_MS = 30000
 export const backoffMs = (n, base) => Math.min(base * 2 ** n, BACKOFF_MAX_MS)
 
 // createPoller({run, now, base, soon, alive, idle}) → {poll(byReader), start(), stop()}. `run()` reads once and resolves {ok:false} on a
-// failure, {pending:…} when extraction has not caught up (4.4 live-poll, 3.5 §抽取前沿), anything else on success.
+// failure (a run that throws is one too), {pending:…} when extraction has not caught up (4.4 live-poll, 3.5 §抽取前沿), anything else on
+// success.
 //   · one schedule: start() arms a timer for the next due round and every round re-arms it when it ends, so the gap between two timer
 //     rounds is the due time, whatever phase a reader's or a chained round started at; stop() disarms it
 //   · due (4.4 live-poll), from the start t0 of the last round that took D ms: after a failure, the back-off from its end; after a success
@@ -34,7 +35,7 @@ export function createPoller({ run, now = Date.now, base, soon = base, alive = (
       do {
         readerAgain = false
         const t0 = now()
-        const r = await run()
+        const r = await Promise.resolve().then(run).catch(() => ({ ok: false }))
         if (r && r.ok === false) { fails++; nextAt = now() + backoffMs(fails, base) }
         else {
           const wait = r && r.pending ? soon : fails ? base : Math.max(base, 3 * (now() - t0))
@@ -51,13 +52,12 @@ export function createPoller({ run, now = Date.now, base, soon = base, alive = (
 }
 
 // startPoll({run, base, soon, now, doc}) → {poll(byReader), stop()}: a started createPoller, idle while `doc` is hidden, one read at once
-// on start (when visible) and the moment `doc` is visible again. A read that throws counts as a failure. After stop() nothing reads and
+// on start (when visible) and the moment `doc` is visible again. After stop() nothing reads and
 // the listener is gone. With `soon`, a read that answered `pending` brings the next timer read `soon` ms after its start instead of
 // `base` (4.4 live-poll: a stored answer is followed by the fresh one).
 export function startPoll({ run, base, soon, now = () => Date.now(), doc = globalThis.document }) {
   let stopped = false
-  const safe = async () => { try { return await run() } catch { return { ok: false } } }
-  const p = createPoller({ run: safe, base, soon, now, alive: () => !stopped, idle: () => !!(doc && doc.hidden) })
+  const p = createPoller({ run, base, soon, now, alive: () => !stopped, idle: () => !!(doc && doc.hidden) })
   const onVis = () => { if (doc && !doc.hidden) p.poll(true) }
   if (doc && doc.addEventListener) doc.addEventListener('visibilitychange', onVis)
   p.start()
