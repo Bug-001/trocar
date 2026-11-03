@@ -46,7 +46,7 @@
   .pcell{flex:1 1 0;min-width:2px;}
   .pflag{flex:1 1 0;min-width:2px;align-self:flex-end;background:var(--pink);border-radius:2px 2px 0 0;opacity:.75;cursor:pointer;}
   .pflag:hover,.pflag:focus-visible{opacity:1;outline:1.5px solid var(--fg);}
-  .pxmark{flex:1 1 0;min-width:2px;text-align:center;color:var(--red);font-size:var(--fs-chart);line-height:1;align-self:flex-end;cursor:pointer;font-weight:600;}
+  .pxmark{flex:1 1 0;min-width:2px;text-align:center;color:var(--red);font-size:var(--fs-chart);line-height:1;align-self:flex-end;cursor:pointer;font-weight:var(--fw-strong);}
   .pxmark:hover,.pxmark:focus-visible{outline:1.5px solid var(--fg);border-radius:2px;}
   .pcompact{flex:1 1 0;min-width:2px;display:flex;justify-content:center;align-self:flex-end;cursor:pointer;}
   .pcompact::before{content:"";flex:none;width:6px;height:6px;margin-bottom:1px;box-sizing:border-box;border:1.5px solid var(--scope-ink-2);border-radius:50%;}
@@ -119,14 +119,14 @@
   .railname:hover{color:var(--fg);} .railname.col{opacity:.72;}
   .railname .tw{flex:none;width:9px;color:var(--dimmer);}
   .railname .tn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .railname.group .tn{color:var(--fg);font-weight:600;}
+  .railname.group .tn{color:var(--fg);font-weight:var(--fw-strong);}
   .railsonly{font-size:var(--fs-chart);color:var(--dimmer);padding:4px 0;}
   .tcsample{position:absolute;top:0;right:2px;font-size:var(--fs-chart);color:var(--dim);pointer-events:none;opacity:.9;}
 
   /* lane rails — every other lane of this session, time-aligned under the conversation */
   #rails{border-radius:0 0 16px 16px;margin-bottom:6px;padding:2px 12px 6px;user-select:none;min-height:0;overflow-y:auto;}
   .rail{border-top:1px solid var(--border);}
-  .subgrouphd b{color:var(--fg);font-weight:600;}
+  .subgrouphd b{color:var(--fg);font-weight:var(--fw-strong);}
   /* an opened sub-agent group holds at most ~40% of the viewport and scrolls inside itself (1.3 §叠加轨) */
   .subkids{max-height:40vh;overflow-y:auto;}
   .subgroup .subkids{margin-left:12px;border-left:2px solid color-mix(in srgb,var(--amber) 30%,var(--border));padding-left:4px;}
@@ -249,7 +249,7 @@
   .cblk:not(.collapsed) .cbh::before{content:"▾";}
   /* nothing in a head wraps: short of room the label and then the tag give it up (an ellipsis; the tag's title holds its word), the
      role, the marks and the size never do */
-  .cbrole{color:var(--fg);font-weight:600;flex:none;}
+  .cbrole{color:var(--fg);font-weight:var(--fw-strong);flex:none;}
   /* at 600 px and narrower a head is two lines (--cblk-ih): the role, the tag and the marks, then the label, a reply's stop reason
      and the size (::after breaks the line). The first line never wraps: the marks take their full width before the tag gets any, and only when even
      they do not fit do they shrink too (an ellipsis, the title holds the word) */
@@ -268,8 +268,8 @@
   .cwturnhd::before{content:"▾";color:var(--dimmer);font-size:var(--fs-cap);width:8px;}
   .cwturn.collapsed .cwturnhd::before{content:"▸";}
   .cwturnhd:hover{background:color-mix(in srgb,var(--fg) 4%,transparent);}
-  .cwturnq{color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;}
-  .cwturnq .qk{color:var(--dimmer);font-weight:400;font-family:var(--mono);font-size:var(--fs-cap);margin-left:6px;}
+  .cwturnq{color:var(--fg);font-weight:var(--fw-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;}
+  .cwturnq .qk{color:var(--dimmer);font-weight:var(--fw-regular);font-family:var(--mono);font-size:var(--fs-cap);margin-left:6px;}
   .cwturnn{color:var(--dimmer);font-size:var(--fs-cap);white-space:nowrap;border:1px solid var(--border);border-radius:10px;padding:0 6px;}
   .qlabel{font-size:var(--fs-cap);color:var(--dim);border:1px solid var(--border);border-radius:10px;padding:0 6px;margin-right:6px;white-space:nowrap;}
   .cwturnbody{padding:2px 8px 6px;} .cwturn.collapsed .cwturnbody{display:none;}
@@ -310,7 +310,7 @@
   .navrow .navct{font-size:var(--fs-cap);color:var(--dimmer);}
   /* a ledger count not known yet (2.4:67): a sized empty box where the digits go, no words */
   .navrow .navct[aria-busy="true"]{display:inline-block;width:2ch;height:10px;border-radius:2px;background:color-mix(in srgb,var(--fg) 6%,transparent);}
-  .navrow.head .navlbl{color:var(--fg);font-weight:600;}
+  .navrow.head .navlbl{color:var(--fg);font-weight:var(--fw-strong);}
   .navrow.head::before{content:"▸";color:var(--dimmer);font-size:var(--fs-cap);margin-right:-2px;}
   .navrow.head.open::before{content:"▾";}
   .navkids{margin:1px 0 4px 12px;border-left:1px solid var(--border);padding-left:4px;}
@@ -339,7 +339,7 @@
   /* markdown */
   .md code{font-family:var(--mono);font-size:inherit;background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:0 4px;}
   .md pre.mdc{margin:4px 0;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-family:var(--mono);font-size:var(--fs-cap);white-space:pre-wrap;word-break:break-word;overflow:auto;}
-  .md strong{color:var(--fg);font-weight:600;} .md em{font-style:italic;} .md a{color:var(--cyan);} .md .mdh{font-weight:600;color:var(--fg);}
+  .md strong{color:var(--fg);font-weight:var(--fw-strong);} .md em{font-style:normal;} .md a{color:var(--cyan);} .md .mdh{font-weight:var(--fw-strong);color:var(--fg);}
 
   /* ledger */
   .res{margin-bottom:11px;}
@@ -425,7 +425,7 @@
 .dblk>.dbh:hover{color:var(--fg);}
 .dblk>.dbh::before{content:"▸";color:var(--dimmer);font-size:var(--fs-cap);width:8px;}
 .dblk.open>.dbh::before{content:"▾";}
-.dblk .dbrole{color:var(--fg);font-weight:600;} .dblk .dblab{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;color:var(--cyan);}
+.dblk .dbrole{color:var(--fg);font-weight:var(--fw-strong);} .dblk .dblab{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;color:var(--cyan);}
 .dblk .dbn{margin-left:auto;color:var(--dimmer);font-size:var(--fs-cap);white-space:nowrap;}
 .dblk .dbbody{padding:0 9px 6px;} .dblk:not(.open) .dbbody{display:none;}
 .dblk .dbbody pre{max-height:300px;overflow:auto;}
@@ -461,7 +461,7 @@
 .fidline + .disc{margin:0;padding:0 16px 4px;background:var(--raised);font-size:var(--fs-cap);}
 /* the quiet 技术细节 disclosures under the fidelity row and in the raw panel: caption size, no 36 px row */
 .fidline + .disc .disc-t,#rawpanel .disc-t{min-height:0;font-size:var(--fs-cap);}
-.fidline + .disc .disc-t b,#rawpanel .disc-t b{font-size:var(--fs-cap);font-weight:400;color:var(--ink-3);}
+.fidline + .disc .disc-t b,#rawpanel .disc-t b{font-size:var(--fs-cap);font-weight:var(--fw-regular);color:var(--ink-3);}
 /* the session info popover's rows: numbers with their Chinese names and marks, links reachable by Tab */
 .pop .sipb{display:flex;flex-direction:column;gap:6px;min-width:240px;}
 .pop .sir{font-size:var(--fs-body);color:var(--ink);}

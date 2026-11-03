@@ -32,8 +32,8 @@ export const capOldList = (t) => `Below is the list as read at ${t}`
 export const capStored = (ago) => `Updated ${ago} · refreshing`
 
 // ── the table header ─────────────────────────────────────────────────────────────────────────────────────────────────
-// the agent column's head: the menu's lowercase word (the invariant-3 gate holds the capitalised one as a tool name); CSS capitalises it
-export const COL_AGENT = AGENT_MENU
+// the agent column's head: the menu's lowercase word (the invariant-3 gate holds the capitalised one as a tool name), capitalised here
+export const COL_AGENT = AGENT_MENU[0].toUpperCase() + AGENT_MENU.slice(1)
 export const COL_SESSION = 'Session'
 export const COL_SESSION_TIP = 'The title comes from the agent\'s own records or from the captured requests; hover a title to see which. Without one, the session is untitled'
 export const COL_CALLS = 'Model calls'

@@ -57,8 +57,6 @@
   --fs-head: 15px;    /* section and day headings */
   --fs-title: 20px;   /* screen titles, the step read-out, key figures */
   --fw-regular: 400;  --fw-strong: 600;
-  /* old size names some stylesheets still use: they go once no stylesheet uses them */
-  --fs-strong: var(--fs-body);  --fs-h2: var(--fs-head);  --fs-h1: var(--fs-title);
   /* space / shape / motion / widths */
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
   --r-1: 4px; --r-2: 8px; --r-3: 12px; --r-4: 16px; --r-pill: 999px;

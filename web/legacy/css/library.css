@@ -9,14 +9,14 @@
 .libtools input[type=search]:focus-visible,.libtools .popbtn:focus-visible,.fchip:focus-visible,.libtools button:focus-visible{outline:2px solid var(--action);outline-offset:1px;}
 .menuwrap{display:inline-flex;}
 .miname{margin-left:2px;}
-.miraw{margin-left:6px;color:var(--ink-3);font-family:var(--mono);font-size:10px;}
-.mchk{display:inline-block;width:14px;color:var(--action);font-weight:600;}
+.miraw{margin-left:6px;color:var(--ink-3);font-family:var(--mono);font-size:var(--fs-cap);}
+.mchk{display:inline-block;width:14px;color:var(--action);font-weight:var(--fw-strong);}
 .fchips{display:flex;flex-wrap:wrap;gap:5px;}
-.fchip{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;padding:2px 9px;border-radius:20px;white-space:nowrap;color:var(--action);border-color:var(--action);background:color-mix(in srgb,var(--action) 12%,transparent);}
+.fchip{display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-cap);padding:2px 9px;border-radius:20px;white-space:nowrap;color:var(--action);border-color:var(--action);background:color-mix(in srgb,var(--action) 12%,transparent);}
 .ghostbtn:disabled{opacity:.45;cursor:default;}
 
 /* the caption row: trust facts joined by ·, then 技术细节; empty when there is nothing to say */
-.libcap{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;padding:5px 16px;font-size:11px;color:var(--ink-2);background:var(--panel);border-bottom:1px solid var(--rule);}
+.libcap{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;padding:5px 16px;font-size:var(--fs-cap);color:var(--ink-2);background:var(--panel);border-bottom:1px solid var(--rule);}
 .libcap:empty{display:none;}
 .libcap a{color:var(--action);}
 .capsep{color:var(--ink-3);}
@@ -28,7 +28,6 @@
 /* one grid for the header and every row, so the columns line up: agent | 会话 | 模型调用 | 最后活动 */
 .libhead,.lrow{display:grid;grid-template-columns:176px minmax(0,1fr) 92px 110px;align-items:center;column-gap:12px;padding:0 16px;}
 .libhead{height:32px;font-size:var(--fs-cap);color:var(--ink-2);background:var(--paper);border-bottom:1px solid var(--rule);}
-.libhead .lha{text-transform:capitalize;}
 .libhead .ln,.lrow .ln,.libhead .lw,.lrow .lw{text-align:right;}
 .libhead .lhs .popbtn{padding:0 2px;font-size:var(--fs-cap);}
 .liblist{flex:1;min-height:0;overflow:auto;outline:none;}
