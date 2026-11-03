@@ -70,7 +70,7 @@ export default function LibraryScreen({ route, router }: ScreenProps) {
   const setList = useCallback((el: HTMLDivElement | null) => { listRef.current = el; holdRef(el) }, [holdRef])
   // eslint-disable-next-line react-hooks/incompatible-library -- VRows is not memoized: it reads the virtualizer on every render
   const v = useVirtualizer({
-    count: entries.length, getScrollElement: () => listRef.current, overscan: 8,
+    count: entries.length, getScrollElement: () => listRef.current, overscan: 8, useFlushSync: false,
     estimateSize: (i) => (entries[i]?.g ? 28 : 50), getItemKey: (i) => entries[i]?.key ?? i,
   })
 
