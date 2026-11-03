@@ -107,10 +107,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
     }
     const adoption = await prepareAdoption({ home, env, platform, deps, parts, now: deps.now ? () => deps.now().getTime() : Date.now }) // §9.5: the proxy each agent already uses, and the chain once trocar is on
     const routing = deps.routing || (parts.arch && typeof parts.arch.routing === 'function' ? parts.arch.routing({ harnesses: parts.harnesses, home, env, fs: deps.fs }) : null) // §9.5's proxy-mode routing: the platform supplies it beside prepare (win32); a platform without one (Linux's driver mode) adopts nothing extra and every existing on is its guard
-    const planText = (raw) => {
-      const adopted = adoption && !adoption.error ? Object.entries(adoption.chains(raw.targets)).filter(([h]) => raw.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })).filter((x) => /\s->\s/.test(x.chain) || false) : [] // D46: the degenerate one-hop chain says nothing and is not printed
-      return formatPlan({ ...raw, adopted }, { home, platform, colors: c })
-    }
+    const planText = (raw) => formatPlan(raw, { home, platform, colors: c }) // the route each harness takes is the receipt's line (§3.3), said once
     // The combined bundles' OS roots are the arch's (the flip checklist ②, 4.9 §4 末): the plan asks it through the one resolver (tls/roots.mjs bundleRoots), so the FIRST
     // install's bundles carry them — not only the daemon's next rebuild — and a read that fails stops the on before one file of the agents' is touched (D38); `deps.roots` overrides them.
     let { receipt, exit, plan } = await install.turnOn({

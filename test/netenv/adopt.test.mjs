@@ -47,7 +47,7 @@ test('V46 (a) Linux: `on` writes no proxy key anywhere — the changed files and
   const text = (await (async () => { const t = sandbox(ENGINE); seedProxy(t); return (await t.run(['on', '--yes'], { deps: FACTS })).io.text() })())
   const unwrap = (t) => t.replace(/\s+/g, ' ') // a long chain wraps (§1.1 width); the fact is the chain, not where it breaks
   const chain = /claude-code: route claude-code -> \[ebpf\] trocar -> \[CONNECT passed on as it is\] proxy\.corp:8080 -> internet/g
-  assert.equal(unwrap(text).match(chain).length, 2, 'the chain is printed once in the plan, once in the receipt')
+  assert.equal(unwrap(text).match(chain).length, 1, 'the chain is said once, by the receipt (§3.3; the plan names files and keys, §1.4): an `on --yes` prints both')
   assert.match(unwrap(text), /internet \(its proxy setting http:\/\/\*\*\*@proxy\.corp:8080, read from /, 'the receipt names the setting it adopted, masked')
   assert.ok(!/dave|hunter2/.test(text + JSON.stringify(doc)), 'no credential in the text or the JSON')
   const file = fs.readFileSync(netenvOf(s), 'utf8')

@@ -76,14 +76,9 @@ test('the plan autostart line is the platform own mechanism — a launchd plist 
 })
 
 // the degenerate adopted chain (the harness own name and nothing else) says nothing and is not printed
-test('a chain that is the harness itself is not printed as an adopted line — a chain with a hop (or a named proxy) is', () => {
+test('a chain that is the harness itself is not printed as an adopted line — a chain with a hop is', () => {
   const degenerate = { harness: 'claude-code', chain: 'claude-code' }
   const hopful = { harness: 'codex', chain: 'codex -> [ebpf] trocar -> api.openai.com:443 (direct)' }
-  const withProxy = { harness: 'z-code', chain: 'z-code', proxy: 'http://127.0.0.1:7897' }
-  const plan = formatPlan({ adopted: [degenerate, hopful, withProxy], entries: [], files: [], owned: [], watch: [] }, { home: '/h' }).replace(/\n\s+/g, ' ')
-  assert.doesNotMatch(plan, /claude-code: route claude-code/)
-  assert.match(plan, /codex: route codex -> /)
-  assert.match(plan, /z-code: route z-code \(its proxy setting http:\/\/127\.0\.0\.1:7897/, 'a degenerate chain with a real proxy setting still says something')
   const receipt = formatOnReceipt({ changed: [], created: [], skipped: [], restart: [], notes: [], adopted: { 'claude-code': degenerate, codex: hopful } }, { home: '/h' }).replace(/\n\s+/g, ' ')
   assert.ok(!receipt.includes('claude-code: route claude-code'))
   assert.match(receipt, /codex: route codex -> /)

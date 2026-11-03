@@ -234,7 +234,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const pathItem = await pathPlan({ root, home, env, platform, fs })
   const daemonItem = [...staleItem(stale, root), ...(pathItem ? [pathItem] : [])]
   const planned = [...planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), ...daemonItem]
-  say([formatPlan({ ...plan, adopted: [], standalone: stdNew ? stdPath : null }, { home, platform, command: 'install' }), ...pairs(daemonItem.map((p) => [p.what, p.detail])), ...wrap(COST), ...(stale ? wrap(CUT) : [])].join('\n'))
+  say([formatPlan({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform, command: 'install' }), ...pairs(daemonItem.map((p) => [p.what, p.detail])), ...wrap(COST), ...(stale ? wrap(CUT) : [])].join('\n'))
   if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, harnesses: plan.targets, changed: plan.changed, created: [...(stdNew ? [stdPath] : []), ...plan.created] }, null, 2)); return EXIT.ok }
   if ((plan.writing || stdNew || stale || pathItem) && !flags.has('--yes')) {
     if (json || !isInteractive(io)) return needsYes(io, json, planned)
