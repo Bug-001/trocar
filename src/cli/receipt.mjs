@@ -179,7 +179,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   lines.push(`Stop: trocar off`)
   // §1.1③⑥: a command a person copies gets its own line, so folding never cuts it in two
   if (r.standalone) lines.push('If trocar itself breaks, run:', commandLine(standaloneCommand(r.standalone, platform))) // a command to copy: whole
-  lines.push(c.dim('Status: trocar status   Remove trocar: trocar uninstall (your captured records stay)'))
+  lines.push(c.dim('Status: trocar status'), c.dim('Remove trocar: trocar uninstall (your captured records stay)')) // one next step a line: a fold never runs them together
   return fit(lines, { home }).join('\n')
 }
 
