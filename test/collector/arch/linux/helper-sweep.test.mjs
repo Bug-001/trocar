@@ -12,9 +12,9 @@ test('sweepStaged removes only staged helper copies, keeps the current one, and 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-hs-'))
   try {
     for (const n of ['.trocar-redirector.new.67915', '.trocar-redirector.new.12', 'trocar-redirector', '.trocar-redirector.new.x', 'notes']) fs.writeFileSync(path.join(dir, n), 'x')
-    assert.deepEqual(sweepStaged(dir, '.trocar-redirector.new.12').sort(), ['.trocar-redirector.new.67915'])
+    assert.deepEqual(sweepStaged(dir, '.trocar-redirector.new.12').sort(), [path.join(dir, '.trocar-redirector.new.67915')], 'what it removed, as the paths in the dir it swept (the report needs no rebuilding)')
     assert.deepEqual(fs.readdirSync(dir).sort(), ['.trocar-redirector.new.12', '.trocar-redirector.new.x', 'notes', 'trocar-redirector'], 'the helper itself and anything not ours stay')
-    assert.deepEqual(sweepStaged(dir), ['.trocar-redirector.new.12'])
+    assert.deepEqual(sweepStaged(dir), [path.join(dir, '.trocar-redirector.new.12')])
     assert.deepEqual(sweepStaged(path.join(dir, 'gone')), [], 'no helper dir: nothing to do')
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })

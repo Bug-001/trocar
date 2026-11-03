@@ -31,7 +31,7 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
     }
     const r = A.install.setupHelper({ binarySrc })
     const swept = r.swept && r.swept.length ? [`Also removed ${r.swept.length === 1 ? 'a staged copy' : `${r.swept.length} staged copies`} an interrupted setup-helper left:`] : []
-    out([...[`Installed the capability helper ${r.bin} with the capabilities ${r.caps}.`, ...swept].flatMap((l) => wrap(l)), ...(swept.length ? r.swept.map((n) => `  ${path.join(path.dirname(r.bin), n)}`) : [])].join('\n')) // 80 columns, a path never broken, a label's paths one a line two in (1.6 §1.1⑥)
+    out([...[`Installed the capability helper ${r.bin} with the capabilities ${r.caps}.`, ...swept].flatMap((l) => wrap(l)), ...(swept.length ? r.swept.map((p) => `  ${p}`) : [])].join('\n')) // 80 columns, a path never broken, a label's paths one a line two in (1.6 §1.1⑥)
     return 0
   } catch (e) { err(`trocar setup-helper: ${(e && e.message) || e}`); return 1 }
 }

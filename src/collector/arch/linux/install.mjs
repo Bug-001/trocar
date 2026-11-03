@@ -74,11 +74,12 @@ export function helperState({ cfg = DEFAULTS, run = null, fsys = fs } = {}) {
 // A setup-helper killed between its copy and its rename leaves the staged copy behind — possibly already capped.
 // Only setup-helper ever writes these names, so the next setup-helper and setup-helper --remove delete them and say so.
 const STAGED = /^\.trocar-redirector\.new\.\d+$/
+/** → the paths it removed (in `dir`), the ones every caller reports. */
 export function sweepStaged(dir, keep = null) {
   let names
   try { names = fs.readdirSync(dir) } catch (e) { if (e.code === 'ENOENT') return []; throw e }
-  const gone = names.filter((n) => STAGED.test(n) && n !== keep)
-  for (const n of gone) fs.rmSync(path.join(dir, n), { force: true })
+  const gone = names.filter((n) => STAGED.test(n) && n !== keep).map((n) => path.join(dir, n))
+  for (const p of gone) fs.rmSync(p, { force: true })
   return gone
 }
 export function setupHelper(opts = {}) {
