@@ -28,6 +28,8 @@ type List = { state: 'none' } | { state: 'table', rows: Rec[], total: number, as
 type RowView = { ref: string, href: string, when: { text: string, iso: string | null }, endpoint: string, cls: string, sent: string, recv: string,
   retention: { kind: 'log', label: string, href: string } | { kind: 'legacy-meta', label: string, tip: string } | null, failed: boolean }
 type Detail = { rec: unknown, error?: string | null }
+// a list page that is not a records page fails the read (1.5 K-29): the pages already drawn stay, and `next` is only ever read off a good page
+class ReadError extends Error { constructor(readonly answer: unknown) { super('read failed') } }
 type Where = { harness: string, host: string, window: string, cls: string | null }
 const callsParams = callsParamsJs as unknown as (o: Where & { after: string | null }) => Record<string, string>
 const hostHref = hostHrefJs as unknown as (o: Where) => string
@@ -69,13 +71,17 @@ export default function HostScreen({ route }: ScreenProps) {
 
   const list = useInfiniteQuery({
     queryKey: ['calls-host', harness, host, q.window, q.cls],
-    queryFn: ({ pageParam, signal }) => api.get('calls', callsParams({ harness, host, cls: q.cls, window: q.window, after: pageParam }), { signal }) as Promise<Answer>,
+    queryFn: async ({ pageParam, signal }) => {
+      const r = await api.get('calls', callsParams({ harness, host, cls: q.cls, window: q.window, after: pageParam }), { signal }) as Answer
+      if (!r.ok || !Array.isArray((r.data as { records?: unknown } | null | undefined)?.records)) throw new ReadError(r.ok ? { status: null, error: r.data?.error } : r)
+      return r
+    },
     initialPageParam: null as string | null,
-    getNextPageParam: (last: Answer) => (last.ok ? last.data?.next ?? undefined : undefined),
+    getNextPageParam: (last: Answer) => last.data?.next ?? undefined,
     ...ONCE,
   })
   const pages = list.data?.pages
-  const merged = useMemo(() => (pages ? mergePages(pages.map((p) => (p.ok ? p.data : null))) : null), [pages])
+  const merged = useMemo(() => (pages ? mergePages(pages.map((p) => p.data)) : null), [pages])
   const rows = useMemo(() => (merged && merged.state === 'table' ? merged.rows : []), [merged])
 
   // the list scrolls inside .tlist, under the caption and the column head: the virtual rows start at the list's own top
@@ -92,19 +98,22 @@ export default function HostScreen({ route }: ScreenProps) {
   }, [rows.length > 0]) // eslint-disable-line react-hooks/exhaustive-deps -- the list's top moves only when the table appears
   const items = virt.getVirtualItems()
   const lastIndex = items.length ? items[items.length - 1].index : -1
-  const { hasNextPage, isFetchingNextPage, fetchNextPage } = list
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = list
+  // a failed next page waits for its Retry: reading it again on every scroll would loop on a server that stays down
   useEffect(() => {
-    if (lastIndex >= 0 && lastIndex >= rows.length - 6 && hasNextPage && !isFetchingNextPage) void fetchNextPage()
-  }, [lastIndex, rows.length, hasNextPage, isFetchingNextPage, fetchNextPage])
+    if (lastIndex >= 0 && lastIndex >= rows.length - 6 && hasNextPage && !isFetchingNextPage && !isFetchNextPageError) void fetchNextPage()
+  }, [lastIndex, rows.length, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage])
 
   // the detail: the base read, and at most one revealed header for this ref
   const base = useQuery({ queryKey: ['calls-ref', ref], queryFn: ({ signal }) => api.get('calls', { ref }, { signal }) as Promise<Answer>, enabled: !!ref, ...ONCE })
+  // 「Show」 holds for the ref it was pressed on: any move of the selection masks it again, and nothing keeps the value once it is not shown
   const [revealed, setRevealed] = useState<{ ref: string, name: string } | null>(null)
+  if (revealed && revealed.ref !== ref) setRevealed(null)
   const name = revealed && revealed.ref === ref ? revealed.name : null
   const reveal = useQuery({
     queryKey: ['calls-ref', ref, 'show', name],
     queryFn: ({ signal }) => revealHeader(api, ref, name, { signal }) as Promise<Answer>,
-    enabled: !!ref && !!name, ...ONCE,
+    enabled: !!ref && !!name, ...ONCE, gcTime: 0,
   })
 
   useEffect(() => {
@@ -131,13 +140,13 @@ export default function HostScreen({ route }: ScreenProps) {
   const scope: Scope = { label: 'window', options: windowLinks(q.window, (w) => hostHref({ harness, host, window: w, cls: q.cls })) }
   const crumbs = crumbsOf({ harness, host, window: q.window, cls: q.cls })
     .map((c) => (c.harness ? { ...c, node: <><HarnessIcon id={c.harness} />{c.label}</> } : c))
-  const readAt = pages && pages[0].ok ? list.dataUpdatedAt : null
+  const readAt = pages ? list.dataUpdatedAt : null
 
   let body
-  if (!pages) body = <div className="tstate">{W.LOADING}</div>
-  else if (!merged || merged.state === 'none') {
-    const r = pages[0].ok ? { status: null, error: pages[0].data?.error } : pages[0]
-    body = <ReadFail fail={failOf(W.TRAFFIC, r)} onRetry={() => { void list.refetch() }} />
+  if (!merged || merged.state === 'none') {
+    body = list.error instanceof ReadError && !list.isFetching
+      ? <ReadFail fail={failOf(W.TRAFFIC, list.error.answer)} onRetry={() => { void list.refetch() }} />
+      : <div className="tstate">{W.LOADING}</div>
   } else if (!rows.length) body = <div className="tstate" data-empty="" data-class={q.cls ?? undefined}>{emptyText(q.cls)}</div>
   else {
     const asOf = asOfText(merged.asOf)
@@ -183,6 +192,9 @@ export default function HostScreen({ route }: ScreenProps) {
           )
         })}
       </div>
+      {isFetchNextPageError && list.error instanceof ReadError
+        ? <ReadFail fail={failOf(W.TRAFFIC, list.error.answer)} onRetry={() => { void fetchNextPage() }} />
+        : null}
     </>
   }
 

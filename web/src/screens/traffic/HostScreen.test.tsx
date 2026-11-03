@@ -118,6 +118,17 @@ test('d1 #21: Show reads that one header once, shows it alone, and keeps Technic
   expect(sel.isCollapsed).toBe(false)
   expect(sel.anchorNode!.isConnected).toBe(true)
 
+  // the shown value belongs to that one selection: moving away and back masks it again, with no read of its own
+  const shown = reads().filter((r) => r.reveal).length
+  fireEvent.click(p.link('r2')!)
+  await waitFor(() => expect(p.$('.rqd[data-ref="r2"]')).not.toBeNull())
+  fireEvent.click(p.link('r1')!)
+  await waitFor(() => expect(p.$('.rqd[data-ref="r1"]')).not.toBeNull())
+  await act(async () => {})
+  expect(p.container.textContent).not.toContain(SECRET.authorization)
+  expect(showButton(p.container, 'authorization')).not.toBeNull()
+  expect(reads().filter((r) => r.reveal).length).toBe(shown)
+
   // a failed reveal keeps that value masked
   answerOf = (q) => (q.reveal ? { ok: false, status: 500, data: null, error: 'boom' } : ok(refDoc(String(q.ref))))
   fireEvent.click(showButton(p.container, 'x-api-key')!)
@@ -150,6 +161,32 @@ test('d2 #12: the end of the list reads after=next; the focused and the selected
   await scrollTo(2 * PAGE * 34 - 340)
   await act(async () => {})
   expect(listReads().length).toBe(2)
+})
+
+test('d2b #12 / K-29 a next page that fails keeps the rows drawn and says so; scrolling does not re-read it, Retry reads after=next again', async () => {
+  for (const fail of [{ ok: false, status: 0, data: null, error: 'timeout' }, { ok: false, status: 503, data: null, error: 'down' }] as Answer[]) {
+    vi.mocked(api.get).mockClear()
+    let down = true
+    answerOf = (q) => (q.after ? (down ? fail : ok(page(q.after, 'telemetry'))) : ok(page(null, 'telemetry')))
+    const p = mount(hostHash('window=24h'))
+    await waitFor(() => expect(p.$('#hlist')).not.toBeNull())
+    const scroller = p.$('.tlist')!
+    let top = 0
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true, get: () => top, set: (v) => { top = v } })
+    const scrollTo = async (y: number) => { top = y; fireEvent.scroll(scroller); await act(async () => {}) }
+    await scrollTo(PAGE * 34 - 340)
+    const retry = await waitFor(() => p.getByRole('button', { name: /retry/i }))
+    expect(p.$<HTMLElement>('#hlist')!.style.height).toBe(`${PAGE * 34}px`)
+    await scrollTo(PAGE * 34 - 300)
+    await act(async () => {})
+    expect(listReads().map((r) => r.after ?? null)).toEqual([null, `c${PAGE}`])
+    down = false
+    fireEvent.click(retry)
+    await waitFor(() => expect(p.$<HTMLElement>('#hlist')!.style.height).toBe(`${2 * PAGE * 34}px`))
+    expect(listReads().map((r) => r.after ?? null)).toEqual([null, `c${PAGE}`, `c${PAGE}`])
+    expect(p.queryByRole('button', { name: /retry/i })).toBeNull()
+    p.unmount()
+  }
 })
 
 test('d3 #20 detail placement follows the media query: the drawer opens with ref; ↓ selects the next ref, Esc drops it; a drag-select over a row is not a click', async () => {
