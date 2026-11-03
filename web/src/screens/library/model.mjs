@@ -81,20 +81,33 @@ export function applyFilters(list, f, now) {
   return out.sort(f.sort === 'calls' ? (a, b) => (b.calls || 0) - (a.calls || 0) || byTimeDesc(a, b) : byTimeDesc)
 }
 
-// group names, only in the 最近 order: local dates; no-time rows sort last and land in their own group
-export function groupOf(s, now) {
+// groups, only in the 最近 order: one per local day of last_ts (YYYY-MM-DD from Date's local getters), no-time rows last in 'none'
+const pad = (n) => String(n).padStart(2, '0')
+export function groupOf(s) {
   const t = lastMs(s)
   if (t == null) return 'none'
-  const n = new Date(now)
-  const d0 = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime()
-  return t >= d0 ? 'today' : t >= d0 - 86400e3 ? 'yesterday' : 'earlier'
+  const d = new Date(t)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+// a day head: today · yesterday as words, a weekday within the last six days, else the date itself (the year only when it is not
+// this year); `date` rides beside the word unless the word already is the date. No counts (1.8 §表头与分组).
+const MD = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' })
+const YMD = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+const WEEKDAY = new Intl.DateTimeFormat('en-US', { weekday: 'long' })
+export function dayHead(key, now) {
+  if (key === 'none') return { word: W.GROUPS.none, date: null }
+  const [y, m, d] = key.split('-').map(Number), day = new Date(y, m - 1, d), n = new Date(now)
+  const back = Math.round((new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime() - day.getTime()) / 86400e3) // round: DST days
+  const date = (y === n.getFullYear() ? MD : YMD).format(day)
+  const word = back === 0 ? W.GROUPS.today : back === 1 ? W.GROUPS.yesterday : back > 1 && back < 7 ? WEEKDAY.format(day) : null
+  return word ? { word, date } : { word: date, date: null }
 }
 // the virtual list's entries, each with a stable key: rows, with a group entry before each new group only in the 最近 order
-export function listEntries(rows, sort, now) {
+export function listEntries(rows, sort) {
   const out = []
   let last = null
   for (const s of rows) {
-    if (sort === 'recent') { const g = groupOf(s, now); if (g !== last) { out.push({ key: 'g:' + g, g }); last = g } }
+    if (sort === 'recent') { const g = groupOf(s); if (g !== last) { out.push({ key: 'g:' + g, g }); last = g } }
     out.push({ key: sessionKey(s), s })
   }
   return out

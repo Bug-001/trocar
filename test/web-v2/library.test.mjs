@@ -2,7 +2,7 @@
 // shape. Marks are asserted by kind, never by their words.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseFilters, filtersToParams, applyFilters, listEntries, captionFacts, capShotMaker, emptyBoardState, filteredAgentLine, flattenSessions, rowModel, sessionKey, titleText, titleTipOf } from '../../web/src/screens/library/model.mjs'
+import { parseFilters, filtersToParams, applyFilters, listEntries, dayHead, captionFacts, capShotMaker, emptyBoardState, filteredAgentLine, flattenSessions, rowModel, sessionKey, titleText, titleTipOf } from '../../web/src/screens/library/model.mjs'
 import { loadSessions, freshSessions } from '../../web/legacy/library/logic.mjs'
 import { captureVerdict, capHealthPatch } from '../../web/legacy/core/capture-verdict.mjs'
 import * as W from '../../web/legacy/labels/library.mjs'
@@ -59,8 +59,7 @@ test('(6) filters: search, multi-select agents with aliases and h=-, inclusive w
   assert.deepEqual(ids({ window: '24h' }), ['A1', 'c3'], 'exactly 24 h old is inside; no time is outside')
   assert.ok(ids({ window: 'all' }).includes('d4')); assert.ok(!ids({ window: '7d' }).includes('d4'))
   assert.deepEqual(ids({ sort: 'calls' }), ['c3', 'A1', 'b2', 'd4'], 'a calls tie goes to the more recent')
-  const groups = (sort) => listEntries(applyFilters(list, parseFilters({ sort }), NOW), sort === 'calls' ? 'calls' : 'recent', NOW).filter((e) => 'g' in e).map((e) => e.g)
-  assert.deepEqual(groups(undefined), ['today', 'yesterday', 'earlier', 'none']); assert.deepEqual(groups('calls'), [])
+  assert.deepEqual(listEntries(applyFilters(list, parseFilters({ sort: 'calls' }), NOW), 'calls').filter((e) => 'g' in e), [], 'no group under the calls order')
   for (const sort of ['recent', 'calls']) {
     const es = listEntries(applyFilters(list, parseFilters({ sort }), NOW), sort, NOW)
     assert.equal(new Set(es.map((e) => e.key)).size, es.length, 'every entry key is unique')
@@ -70,6 +69,36 @@ test('(6) filters: search, multi-select agents with aliases and h=-, inclusive w
   assert.deepEqual(filtersToParams(parseFilters(p)), p)
   assert.deepEqual(filtersToParams(parseFilters({})), {})
   assert.deepEqual(filtersToParams(parseFilters({ window: '30d', sort: 'steps' })), {})
+})
+
+// local dates only (Date's local getters), never toISOString: the groups are the reader's days
+const pad = (n) => String(n).padStart(2, '0')
+const localKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` }
+test('(6) groups: one per local day of last_ts, newest first, no time last; today and yesterday are words; a head carries no counts', () => {
+  const nows = [new Date(2026, 9, 20, 12, 0, 0), new Date(2026, 9, 20, 0, 0, 10), new Date(2026, 9, 20, 23, 59, 50), new Date(2027, 0, 1, 0, 0, 5), new Date(2026, 2, 30, 1, 0, 0)].map((d) => d.getTime())
+  for (const now of nows) {
+    const n = new Date(now), at = (back, h, m = 0) => new Date(n.getFullYear(), n.getMonth(), n.getDate() - back, h, m, 0).getTime()
+    const times = [now, at(0, 0, 0), at(1, 23, 59), at(1, 0, 1), ...[2, 3, 4, 5, 6].map((b) => at(b, 13)), at(8, 9), new Date(n.getFullYear() - 1, 5, 15, 8).getTime()].filter((t) => t <= now)
+    const sessions = [...times.map((t, i) => S({ session_id: `s${i}`, last_ts: new Date(t).toISOString() })), S({ session_id: 'nt', last_ts: null })]
+    const es = listEntries(applyFilters(sessions, parseFilters({}), now), 'recent'), why = new Date(now).toString()
+    let g = null
+    const keys = []
+    for (const e of es) {
+      if ('g' in e) { g = e.g; keys.push(g); continue }
+      assert.equal(g, e.s.last_ts ? localKey(Date.parse(e.s.last_ts)) : 'none', `(i) ${e.s.session_id} ${why}`)
+    }
+    assert.equal(keys.at(-1), 'none', `(ii) no time is last ${why}`)
+    const dated = keys.slice(0, -1)
+    for (let i = 1; i < dated.length; i++) assert.ok(dated[i - 1] > dated[i], `(ii) ${dated} ${why}`)
+    assert.equal(dayHead(localKey(now), now).word, W.GROUPS.today, `(iii) ${why}`)
+    assert.equal(dayHead(localKey(at(1, 12)), now).word, W.GROUPS.yesterday, `(iii) ${why}`)
+    assert.equal(dayHead('none', now).word, W.GROUPS.none)
+    for (const k of dated) {
+      const [y, m, d] = k.split('-').map(Number), h = dayHead(k, now)
+      const digits = `${h.word} ${h.date ?? ''}`.match(/\d+/g) || []
+      for (const x of digits) assert.ok([String(y), String(m), String(d)].includes(x), `(iv) ${JSON.stringify(h)} for ${k}`)
+    }
+  }
 })
 
 test('(8) caption: n counts the non-note errors; tech lists every entry, notes too; a stored fact exactly when stored is given', () => {

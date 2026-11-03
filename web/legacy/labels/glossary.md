@@ -38,6 +38,8 @@
 | 资源 | resources | |
 | 读过的文件 | files read | |
 | 子 agent | sub-agent | child agent |
+| 最后活动 | last active | |
+| 组名:今天 / 昨天 / 没有时间 | today / yesterday / no time | |
 | 后台调用 | background calls | |
 | 主对话 | main thread | main conversation |
 | 缓存 | cache (CLI) | |
