@@ -148,63 +148,69 @@
 }
 
 *{box-sizing:border-box;}
-body{margin:0;background:var(--paper);color:var(--ink);font:400 var(--fs-body)/var(--lh) var(--sans);font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;height:100vh;overflow:hidden;}
+body{margin:0;background:var(--paper);color:var(--ink);font:var(--fw-regular) var(--fs-body)/var(--lh) var(--sans);font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;height:100vh;overflow:hidden;}
 a{color:var(--action);text-decoration:none;}
 a:hover{text-decoration:underline;text-underline-offset:3px;}
-:focus-visible{outline:2px solid var(--action);outline-offset:2px;border-radius:var(--r-1);}
+:focus-visible,[data-focus-visible]{outline:2px solid var(--action);outline-offset:2px;border-radius:var(--r-1);}
 button,select,input{font:inherit;color:inherit;}
 h1,h2,h3,p{margin:0;}
-.mono{font-family:var(--mono);font-size:var(--fs-cap);}
+b,strong,th,h1,h2,h3,h4{font-weight:var(--fw-strong);}
+.mono{font-family:var(--mono);font-size:var(--fs-cap);font-weight:var(--fw-regular);}
 .c2{color:var(--ink-2);} .c3{color:var(--ink-3);}
 .cap{font-size:var(--fs-cap);line-height:18px;}
 .num{text-align:right;white-space:nowrap;}
 .nw{white-space:nowrap;}
 .sr{position:absolute !important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
-.ico16{width:16px;height:16px;flex:none;} .ico14{width:14px;height:14px;flex:none;}
+.ico16{width:16px;height:16px;flex:none;} .ico14{width:14px;height:14px;flex:none;} .ico12{width:12px;height:12px;flex:none;}
 @media (prefers-reduced-motion: reduce){*,*::before,*::after{transition:none !important;animation:none !important;}}
 .spacer{flex:1;}
-select,button{font:inherit;background:var(--sunk);color:var(--ink);border:1px solid var(--rule-2);border-radius:var(--r-1);padding:3px 8px;max-width:340px;}
-button{cursor:pointer;} button:disabled{opacity:.4;cursor:default;}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--ink-3);}
-.sessmeta{font-size:10px;color:var(--ink-2);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-/* the desk head's identity: agent type · path · session name · fork/branch */
+.empty{color:var(--ink-3);padding:40px 12px;text-align:center;}
+kbd{font-family:var(--mono);font-size:var(--fs-cap);background:var(--sunk);border:1px solid var(--rule-2);border-radius:var(--r-1);padding:0 5px;}
 
-/* shared badges and fidelity marks (invariant 4: a dashed border means NOT verbatim / an estimate) */
-.estbadge{font-size:9px;color:var(--ink-2);border:1px dashed color-mix(in srgb,var(--ink-2) 45%,var(--rule));border-radius:10px;padding:0 5px;cursor:help;white-space:nowrap;margin-left:4px;}
-.metabadge{color:var(--ink-2);font-size:9px;white-space:nowrap;border:1px dashed var(--rule);border-radius:10px;padding:0 5px;cursor:help;}
-/* per-block faithfulness (1.4:52 / 不变式4): dashed = NOT byte-verbatim */
-.ffbadge{font-size:9px;white-space:nowrap;border:1px dashed color-mix(in srgb,var(--ink-2) 45%,var(--rule));border-radius:10px;padding:0 5px;cursor:help;color:var(--ink-2);}
-.ff-opaque{color:var(--ink-3);border-color:color-mix(in srgb,var(--ink-3) 45%,var(--rule));}
-.pill{font-size:8.5px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.4px;padding:1px 5px;border-radius:20px;border:1px solid var(--rule);}
-.pill.on{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,var(--rule));}
-.pill.off{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,var(--rule));}
-.pill.pend{color:var(--ink-3);}
-.empty{color:var(--ink-2);padding:40px 12px;text-align:center;}
-.pobadge{color:var(--ink-2);border:1px solid var(--ink-2);border-radius:3px;padding:0 4px;font-size:9px;}
-kbd{font-family:var(--mono);background:var(--sunk);border:1px solid var(--rule-2);border-radius:4px;padding:0 5px;font-size:10px;}
-.collapsible{position:relative;padding-left:12px;}
-.collapsible .edge{position:absolute;left:0;top:0;bottom:20px;width:9px;cursor:pointer;border-left:3px solid var(--rule);border-radius:3px;}
-.collapsible .edge:hover{border-left-color:var(--action);background:color-mix(in srgb,var(--action) 10%,transparent);}
-.collapsible .cwrap{max-height:150px;overflow:hidden;position:relative;}
-.collapsible.open .cwrap{max-height:none;}
-.collapsible:not(.open) .cwrap::after{content:"";position:absolute;left:0;right:0;bottom:0;height:40px;background:linear-gradient(transparent,var(--sunk));pointer-events:none;}
-.collapsible .more{cursor:pointer;color:var(--ink-2);font-family:var(--mono);font-size:10px;padding:3px 0 0;user-select:none;}
-.collapsible .more:hover{color:var(--action);}
+/* ── the shared kit (1.5 §组件): every screen draws its controls with these ─────────────────────────────────────── */
+/* buttons, select and search: 28px tall (20px line + padding + edge), the control edge, raised; hover and press sit
+   in :where() so any screen's own button class still wins */
+button,select{padding:3px 12px;max-width:340px;background:var(--raised);color:var(--ink);border:1px solid var(--control-edge);border-radius:var(--r-2);white-space:nowrap;}
+button{cursor:pointer;}
+:where(button:hover,button[data-hovered]){background:var(--panel);}
+:where(button:active,button[data-pressed]){background:var(--rule);}
+button:disabled,button[data-disabled]{opacity:.4;cursor:default;}
+select{padding:3px 8px 3px 11px;}
+input[type=search]{padding:3px 9px;background:var(--raised);color:var(--ink);border:1px solid var(--control-edge);border-radius:var(--r-2);min-width:0;}
+input::placeholder{color:var(--ink-3);}
+/* the segmented control (.on, or React Aria's [data-selected], = the current value) */
+.seg{display:inline-flex;flex:none;gap:2px;padding:2px;border:1px solid var(--control-edge);border-radius:var(--r-2);background:var(--panel);}
+.seg a,.seg button{height:24px;padding:0 11px;display:inline-flex;align-items:center;font-size:var(--fs-cap);color:var(--ink-2);text-decoration:none;border:0;background:none;border-radius:calc(var(--r-2) - 2px);cursor:pointer;white-space:nowrap;}
+.seg a:hover,.seg button:hover,.seg [data-hovered]{color:var(--ink);text-decoration:none;background:none;}
+.seg a.on,.seg button.on,.seg [data-selected]{background:var(--raised);color:var(--ink);box-shadow:var(--shadow-pill);}
+/* the switch: the element is the track, .knob rides on it */
+.hswitch{position:relative;width:36px;height:21px;padding:0;flex:none;border-radius:var(--r-pill);border:1px solid var(--control-edge);background:var(--switch-off);transition:background var(--t-quick);}
+.hswitch .knob{position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:var(--knob-off);transition:transform var(--t-quick) var(--ease),background var(--t-quick);}
+.hswitch[aria-checked="true"],.hswitch[data-selected]{background:var(--switch-on);border-color:var(--switch-on);}
+.hswitch[aria-checked="true"] .knob,.hswitch[data-selected] .knob{transform:translateX(15px);background:var(--knob-on);box-shadow:var(--shadow-knob);}
+/* the tooltip */
+.tip{background:var(--ink);color:var(--paper);font-size:var(--fs-cap);padding:4px 8px;border-radius:var(--r-1);max-width:280px;box-shadow:var(--shadow-float);}
+.copybtn{padding:0 8px;line-height:20px;font-size:var(--fs-cap);color:var(--ink-2);}
+.copybtn:hover{color:var(--ink);}
+
+/* fidelity badges (invariant 4: a dashed border means NOT verbatim / an estimate) */
+.metabadge,.ffbadge{font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;border:1px dashed var(--rule-2);border-radius:var(--r-pill);padding:0 6px;cursor:help;}
+.ff-opaque{color:var(--ink-3);}
 
 /* bottom drawer (screens fill #detail and toggle .open) */
 #detail{position:fixed;left:0;right:0;bottom:0;max-height:48vh;overflow:auto;background:var(--raised);border-top:2px solid var(--action);box-shadow:var(--shadow-float);padding:12px 20px 18px;transform:translateY(101%);visibility:hidden;transition:transform var(--t-panel) var(--ease),visibility 0s linear var(--t-panel);z-index:30;}
 /* closed = hidden once the slide ends: no shadow band at the bottom edge, out of the a11y tree */
 #detail.open{transform:none;visibility:visible;transition:transform var(--t-panel) var(--ease),visibility 0s;}
 #detail.k-monitor{border-top-color:var(--ct-thinking);} #detail.k-probe{border-top-color:var(--ct-tooluse);} #detail.k-aux{border-top-color:var(--ink-3);}
-#detail h3{margin:0 0 8px;font-size:var(--fs-body);font-family:var(--mono);}
-#detail .dclose{position:absolute;top:10px;right:16px;cursor:pointer;color:var(--ink-2);border:1px solid var(--rule);border-radius:var(--r-1);padding:2px 9px;font-size:11px;}
-#detail .din{font-size:11.5px;margin:5px 0;}
-#detail .persona{color:var(--ink-2);font-style:italic;}
-#detail pre{background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-1);padding:8px 11px;font-family:var(--mono);font-size:11px;white-space:pre-wrap;word-break:break-word;margin:4px 0;}
-#detail .callref{color:var(--action);cursor:pointer;text-decoration:underline;font-family:var(--mono);}
+#detail h3{margin:0 0 8px;font-size:var(--fs-head);}
+#detail .dclose{position:absolute;top:10px;right:16px;padding:1px 9px;font-size:var(--fs-cap);color:var(--ink-2);}
+#detail .din{font-size:var(--fs-cap);margin:5px 0;}
+#detail .persona{color:var(--ink-2);}
+#detail pre{background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-2);padding:8px 11px;font-family:var(--mono);font-size:var(--fs-cap);white-space:pre-wrap;word-break:break-word;margin:4px 0;}
+#detail .callref{color:var(--action);cursor:pointer;text-decoration:underline;font-family:var(--mono);font-size:var(--fs-cap);}
 #detail .callref:hover{color:var(--ink);}
 
-/* ── new in v2 ───────────────────────────────────────────────────────────────────────────────────────────────── */
 /* the screen host: a screen fills it and scrolls (or splits) inside */
 #screen{flex:1;min-height:0;display:flex;}
 #screen > *, #screen > .screenhost > *{min-width:0;}
@@ -214,81 +220,49 @@ kbd{font-family:var(--mono);background:var(--sunk);border:1px solid var(--rule-2
 .banner:empty{display:none;}
 .banner.warn{background:color-mix(in srgb,var(--warn) 14%,transparent);border-bottom-color:var(--warn);}
 .banner.bad{background:color-mix(in srgb,var(--bad) 14%,transparent);border-bottom-color:var(--bad);}
-.banner.info{background:color-mix(in srgb,var(--ct-tooluse) 14%,transparent);border-bottom-color:var(--ct-tooluse);}
+.banner.info{background:var(--action-wash);border-bottom-color:var(--action);}
 
-.copybtn{font-size:10px;padding:0 7px;line-height:1.7;color:var(--ink-2);cursor:pointer;}
-.copybtn:hover{color:var(--ink);border-color:var(--ink);}
-
-/* modal (core/dom.mjs openModal). .os = drawn like the operating system's own authorization prompt. */
+/* modal (core/dom.mjs openModal) */
 .v2-modal-back{position:fixed;inset:0;z-index:100;background:var(--scrim);display:flex;align-items:center;justify-content:center;padding:16px;}
-.v2-modal{background:var(--raised);color:var(--ink);border:1px solid var(--rule);border-radius:10px;min-width:min(340px,92vw);max-width:min(560px,92vw);max-height:90vh;overflow:auto;box-shadow:var(--shadow-float);}
-.v2-modal .mtitle{padding:12px 16px 4px;font-size:var(--fs-strong);font-weight:600;}
-.v2-modal .mbody{padding:4px 16px 12px;font-size:12.5px;line-height:1.65;color:var(--ink-2);}
+.v2-modal{background:var(--raised);color:var(--ink);border:1px solid var(--rule);border-radius:var(--r-3);min-width:min(340px,92vw);max-width:min(560px,92vw);max-height:90vh;overflow:auto;box-shadow:var(--shadow-float);}
+.v2-modal .mtitle{padding:16px 18px 4px;font-size:var(--fs-head);font-weight:var(--fw-strong);}
+.v2-modal .mbody{padding:4px 18px 12px;font-size:var(--fs-body);color:var(--ink-2);}
 .v2-modal .mbody b,.v2-modal .mbody strong{color:var(--ink);}
-.v2-modal .mbody code{font-family:var(--mono);font-size:.92em;background:var(--sunk);border-radius:4px;padding:0 4px;color:var(--ink);}
-.v2-modal .mactions{display:flex;justify-content:flex-end;gap:8px;padding:8px 16px 14px;}
-.v2-modal .mbtn{padding:4px 14px;}
-.v2-modal .mbtn.primary{background:var(--action);color:var(--action-ink);border-color:var(--action);font-weight:600;}
-.v2-modal .mbtn:focus-visible{outline:2px solid var(--action);outline-offset:2px;}
-
-.v2-modal.os{padding:0;}
-.v2-modal.os .mtitle{display:flex;align-items:center;gap:10px;}
-.v2-modal.os .mglyph{font-size:20px;line-height:1;}
-/* Windows (UAC): flat square dialog, solid accent title bar, shield, square buttons */
-.v2-modal.os-windows{font-family:"Segoe UI",system-ui,sans-serif;border-radius:0;border:1px solid var(--action);}
-.v2-modal.os-windows .mtitle{background:var(--action);color:var(--action-ink);padding:8px 14px;font-size:var(--fs-cap);font-weight:400;}
-.v2-modal.os-windows .mbody{padding:16px 16px 10px;color:var(--ink);}
-.v2-modal.os-windows .mactions{background:var(--sunk);border-top:1px solid var(--rule);padding:12px 16px;}
-.v2-modal.os-windows .mbtn{border-radius:0;min-width:84px;}
-/* macOS: rounded sheet, big lock centred above the title, pill buttons */
-.v2-modal.os-macos{font-family:-apple-system,"SF Pro Text",system-ui,sans-serif;border-radius:14px;text-align:center;}
-.v2-modal.os-macos .mtitle{flex-direction:column;gap:6px;padding:20px 20px 4px;font-size:13.5px;}
-.v2-modal.os-macos .mglyph{font-size:36px;}
-.v2-modal.os-macos .mbody{padding:4px 22px 12px;}
-.v2-modal.os-macos .mactions{justify-content:center;padding:6px 20px 18px;}
-.v2-modal.os-macos .mbtn{border-radius:20px;min-width:96px;}
-/* Linux (polkit): header bar with the title centred, rounded GTK-ish buttons */
-.v2-modal.os-linux{font-family:"Cantarell","Ubuntu","Noto Sans",system-ui,sans-serif;border-radius:8px;}
-.v2-modal.os-linux .mtitle{justify-content:center;background:var(--sunk);border-bottom:1px solid var(--rule);padding:9px 14px;font-size:var(--fs-body);}
-.v2-modal.os-linux .mbody{padding:14px 18px 10px;color:var(--ink);}
-.v2-modal.os-linux .mbtn{border-radius:var(--r-1);min-width:84px;}
-
+.v2-modal .mbody code{font-family:var(--mono);font-size:var(--fs-cap);background:var(--sunk);border-radius:var(--r-1);padding:0 4px;color:var(--ink);}
+.v2-modal .mactions{display:flex;justify-content:flex-end;gap:8px;padding:8px 18px 16px;}
+.v2-modal .mbtn.primary{background:var(--action);color:var(--action-ink);border-color:var(--action);font-weight:var(--fw-strong);}
 
 /* ── the popover kit (1.2 §弹出层) and the marks (1.5 §标记) ──────────────────────────────────────────────────── */
 .popbtn{border:0;background:none;color:var(--ink-3);cursor:pointer;font:inherit;padding:0 3px;border-radius:var(--r-1);white-space:nowrap;}
-.popbtn:hover{color:var(--ink);background:var(--panel);}
+.popbtn:hover{color:var(--ink);background:var(--hover);}
 .popbtn[aria-expanded="true"]{color:var(--ink);}
-.pop{position:fixed;z-index:40;min-width:200px;max-width:380px;background:var(--raised);border-radius:var(--r-2);box-shadow:var(--shadow-float);padding:12px 14px;font-size:var(--fs-body);color:var(--ink);}
+.pop{position:fixed;z-index:40;min-width:200px;max-width:380px;background:var(--raised);border:1px solid var(--rule);border-radius:var(--r-3);box-shadow:var(--shadow-float);padding:12px 14px;font-size:var(--fs-body);color:var(--ink);}
 /* a closed popover must really hide: the plain .pop[hidden] (0,2,0) loses the cascade to a variant rule like
-   .pop.menu{display:flex} below (also 0,2,0, later) — found in the wild when a closed filter menu rendered at the
-   button's position and ate its clicks (real-browser smoke, 2026-10-10); the variant selector (0,3,0) wins */
+   .pop.menu{display:flex} below (also 0,2,0, later) — a closed filter menu once rendered at the button's position and
+   ate its clicks; the variant selector (0,3,0) wins */
 .pop[hidden],.pop.menu[hidden]{display:none;}
-.pop .ph{font-size:var(--fs-strong);font-weight:600;margin-bottom:6px;}
+.pop .ph{font-size:var(--fs-body);font-weight:var(--fw-strong);margin-bottom:6px;}
 .pop .pb{min-width:0;}
 .pop .pb a{color:var(--action);}
-.pop.menu{display:flex;flex-direction:column;padding:6px 0;}
-.pop.menu a,.pop.menu button{display:block;padding:5px 14px;font-size:var(--fs-body);color:var(--ink);text-decoration:none;border:0;background:none;text-align:left;cursor:pointer;}
-.pop.menu a:hover,.pop.menu button:hover{background:var(--paper);text-decoration:none;}
-/* the segmented control (links; .on = the current value) */
-.seg{display:inline-flex;border:1px solid var(--rule-2);border-radius:var(--r-1);padding:1px;background:var(--paper);}
-.seg a,.seg button{padding:0 9px;font-size:var(--fs-cap);line-height:20px;color:var(--ink-2);text-decoration:none;border:0;background:none;border-radius:2px;cursor:pointer;white-space:nowrap;}
-.seg a:hover,.seg button:hover{color:var(--ink);text-decoration:none;}
-.seg a.on,.seg button.on{background:var(--raised);color:var(--action);font-weight:600;box-shadow:inset 0 0 0 1px var(--action);}
+.pop.menu{display:flex;flex-direction:column;padding:5px;min-width:210px;}
+.pop.menu a,.pop.menu button{display:flex;align-items:center;height:30px;padding:0 10px;font-size:var(--fs-body);color:var(--ink);text-decoration:none;border:0;background:none;border-radius:var(--r-2);text-align:left;cursor:pointer;}
+.pop.menu a:hover,.pop.menu button:hover{background:var(--hover);text-decoration:none;}
+.pop.menu a:focus-visible,.pop.menu button:focus-visible,.pop.menu [data-focused]{background:var(--action);color:var(--action-ink);outline:none;}
 /* a disclosure row and 技术细节 */
 .disc{border-bottom:1px solid var(--rule);}
-.disc-t{display:flex;align-items:baseline;gap:10px;min-height:36px;width:100%;border:0;background:none;color:var(--ink-2);font-size:var(--fs-body);cursor:pointer;text-align:left;padding:0;}
-.disc-t:hover{color:var(--ink);}
-.disc-t b{color:var(--ink);font-weight:500;font-size:var(--fs-strong);}
+.disc-t{display:flex;align-items:baseline;gap:10px;min-height:36px;width:100%;border:0;border-radius:0;background:none;color:var(--ink-2);font-size:var(--fs-body);cursor:pointer;text-align:left;padding:0;white-space:normal;}
+.disc-t:hover{color:var(--ink);background:none;}
+.disc-t b{color:var(--ink);font-weight:var(--fw-strong);font-size:var(--fs-body);}
 .disc-t .sum{font-size:var(--fs-body);}
-.disc-t .chev{width:12px;flex:none;}
+.disc-t .chev{width:12px;flex:none;transition:transform var(--t-quick) var(--ease);}
 /* a closed panel takes no box: React Aria closes one with hidden="until-found" (content-visibility, not display:none) */
 .disc-b[hidden]{display:none;}
-.tech{font:var(--fs-cap)/20px var(--mono);color:var(--ink-2);background:var(--sunk);border-radius:var(--r-2);padding:8px 12px;display:grid;grid-template-columns:max-content minmax(0,1fr);column-gap:16px;margin:6px 0 4px;}
+.tech{font-size:var(--fs-cap);line-height:20px;color:var(--ink-2);background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-3);padding:12px 14px;display:grid;grid-template-columns:max-content minmax(0,1fr);column-gap:16px;margin:6px 0 4px;}
 .tech .k{color:var(--ink-3);}
-.tech .v{color:var(--ink);overflow-wrap:anywhere;}
-/* the confirm dialog: the impact line carries the consequence, 取消 is the default focus */
+.tech .v{color:var(--ink);font-family:var(--mono);overflow-wrap:anywhere;}
+/* the confirm dialog: the impact line carries the consequence, Cancel is the default focus */
 .dialog{max-width:440px;}
-.dialog .impact{padding:8px 16px 0;font-size:var(--fs-strong);font-weight:600;line-height:22px;}
+.dialog .impact{padding:8px 18px 0;font-size:var(--fs-body);font-weight:var(--fw-strong);line-height:22px;}
 /* the fidelity marks: quiet, in place, never a status colour */
 .mk{font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;cursor:help;}
 .mk[data-ff="verbatim"]{cursor:default;}
