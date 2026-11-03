@@ -396,7 +396,7 @@ function openDesk(ctx, route0) {
     if (N) setPlayhead(N - 1, true, true); else { s.follow = true; s.followLanding = true; s.initialStep = null } // a named step still on its way no longer lands
     s.follow = true
     renderHeader()
-    poll(true)
+    poll()
   }
   s.followOn = followOn
   // the reader turns following off (f, the chip): the head and the URL (which now names the drawn step) follow at once
@@ -590,11 +590,12 @@ function openDesk(ctx, route0) {
     return createPoller({ base: POLL_MS, now: () => api.now(), alive: () => !s.dead && host != null && key === sessionKey(), idle,
       run: async () => { loadPricing().catch((e) => console.error(e)); try { return await pollOnce() } catch (e) { if (s.dead || key !== sessionKey() || (e && e.name === 'AbortError')) return; console.error(e); return { ok: false } } } }) }
   const poller = makePoller()
-  function poll(byReader = true) {
-    if (s.dead || (!byReader && idle())) return
-    return poller.poll(byReader)
+  // a reader's own read (the timer's are the poller's own, core/poll.mjs)
+  function poll() {
+    if (s.dead) return
+    return poller.poll(true)
   }
-  s.poll = () => poll(true)
+  s.poll = poll
   // a body read that failed is asked again on the poll's schedule (2.3 §读失败)
   const reask = () => { if (s.bodyFail.size && s.playRid != null) { targeted = s.playRid; steps.target(s.playRid) } }
 
@@ -715,7 +716,7 @@ function openDesk(ctx, route0) {
   const rpbar = $('#rpbar')
   const onRpKey = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRp() } }
   rpbar.addEventListener('click', onRp); rpbar.addEventListener('keydown', onRpKey)
-  const onRetry = (e) => { if (e.target.closest && e.target.closest('[data-retry]')) poll(true) } // the failure state's Retry
+  const onRetry = (e) => { if (e.target.closest && e.target.closest('[data-retry]')) poll() } // the failure state's Retry
   E.ctxwin.addEventListener('click', onRetry)
   const offs = [() => { rpbar.removeEventListener('click', onRp); rpbar.removeEventListener('keydown', onRpKey); E.ctxwin.removeEventListener('click', onRetry); E.rails.removeEventListener('mouseover', onRailHover) },
     wireTimeline(E.saw, s), wireRails(E.rails, s), wireCtxWin(E.ctxwin, s), wireOutline(E.ctxnav, s), wireResources(E.resexp, s),
@@ -740,7 +741,7 @@ function openDesk(ctx, route0) {
   }
   // popovers and menus close themselves first and stop the key (core/keys.mjs); here: the call drawer, then the bottom row
   const onEscape = () => { if (E.detail.classList.contains('open')) closeDetail(E.detail, s); else if (s.rpOpen) onRp() }
-  const onVis = () => { if (!document.hidden) poll(true) } // back in view: read now, not a tick later
+  const onVis = () => { if (!document.hidden) poll() } // back in view: read now, not a tick later
   // the lane's width changes with the window and with the right-page divider: watch both. Only a window that no longer fits is touched.
   const refit = () => { if (s.anchor && alive() && fitView()) { renderSaw(E.saw, s); renderRails(E.rails, s); watchRails(); renderOverview(E.saw, s) } }
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(refit) : null
@@ -767,7 +768,7 @@ function openDesk(ctx, route0) {
     // a step left mid-wait draws now; the URL names the drawn step at once (syncUrl). Answers applied while away were not drawn: all areas then
     if (s.anchor) { if (missed) { missed = false; renderAll() } else paintPlayhead() }
     chainLedger(); fill() // what a leave paused goes on (a desk that holds every pack reads nothing here)
-    poll(true) // the first open, or one round: the head If-None-Match, a Range on each tail
+    poll() // the first open, or one round: the head If-None-Match, a Range on each tail
   }
   // leave the page: the poll stops, every listener outside the root goes, the reads in flight finish into the desk's state (drawn on
   // return); no chain sends its next read while detached (1.2 §路由「离开再回来」)
