@@ -10,7 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { once } from 'node:events'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, withScratchCwd, boardPortOf } from '../helpers/model-daemon.mjs'
+import { liveUnit, withScratchCwd, boardPortOf, unservable } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
@@ -36,7 +36,7 @@ async function daemonOf(w, platform) {
 }
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform} · 4.4 #12: the daemon serves the board on the recorded port — static plane without the token, /api with the board.token, /status names it (never the token), GET /board gives it`, { timeout: 30_000 }, async () => {
+  test(`${platform} · 4.4 #12: the daemon serves the board on the recorded port — static plane without the token, /api with the board.token, /status names it (never the token), GET /board gives it`, { skip: await unservable(platform), timeout: 30_000 }, async () => {
     const { w, port } = await boardWorld(platform)
     await withScratchCwd(platform, async () => {
       const { box, ask } = await daemonOf(w, platform)
@@ -69,7 +69,7 @@ for (const platform of ['darwin', 'win32']) {
     })
   })
 
-  test(`${platform} · 4.4 #12 · D38: a board port another socket holds → board port-taken with a reason, one failure record {where:'daemon'}, and /query still answers`, { timeout: 30_000 }, async () => {
+  test(`${platform} · 4.4 #12 · D38: a board port another socket holds → board port-taken with a reason, one failure record {where:'daemon'}, and /query still answers`, { skip: await unservable(platform), timeout: 30_000 }, async () => {
     const { w, port } = await boardWorld(platform)
     const squat = net.createServer(); squat.listen(port, '127.0.0.1'); await once(squat, 'listening')
     await withScratchCwd(platform, async () => {

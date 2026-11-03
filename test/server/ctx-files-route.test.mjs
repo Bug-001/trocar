@@ -19,7 +19,7 @@ import { readHead } from '../../src/query/ctx-files.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { generate } from '../../scripts/gen-dataset.mjs'
 import { modelWorld } from '../helpers/model-world.mjs'
-import { liveUnit, boardPortOf } from '../helpers/model-daemon.mjs'
+import { liveUnit, boardPortOf, unservable } from '../helpers/model-daemon.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
 import { within, whileMoving, reporting } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -287,7 +287,7 @@ test('4.4 #17 tips: the keeper\'s new model calls of a keyed session ride on x-t
   } finally { await keeper.stop(); store.close(); w.server.close(); w.svc.stop() }
 })
 
-test('4.4 #17 tier-0 heads: a daemon started on a home without heads writes a tier-0 head for every session, with no query made', { timeout: 120_000 }, async () => {
+test('4.4 #17 tier-0 heads: a daemon started on a home without heads writes a tier-0 head for every session, with no query made', { skip: await unservable('darwin'), timeout: 120_000 }, async () => {
   const w = await modelWorld({ os: 'darwin' })
   const trocar = path.join(w.home, '.trocar')
   generate({ home: trocar, seed: 5, bytes: 1_500_000, segmentBytes: 1 << 20 })
@@ -306,7 +306,7 @@ test('4.4 #17 tier-0 heads: a daemon started on a home without heads writes a ti
   } finally { await box.stop() }
 })
 
-test('4.4 #17 tips · daemon: a keyed call captured through the real door → the daemon\'s board serves /api/d/head as the worker\'s head file, with x-trocar-tip naming that call', { timeout: 120_000 }, async () => {
+test('4.4 #17 tips · daemon: a keyed call captured through the real door → the daemon\'s board serves /api/d/head as the worker\'s head file, with x-trocar-tip naming that call', { skip: await unservable('darwin'), timeout: 120_000 }, async () => {
   const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
   await boardPortOf(w.dir)
   assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
