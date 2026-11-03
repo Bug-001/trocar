@@ -3,7 +3,7 @@
 // relaxed, D64⑥). Shots: every screen × 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, stats, shoot, layoutFaults, timed, timerRead } from './harness.mjs'
+import { probe, withBoard, stats, shoot, layoutFaults, timed, timerReads } from './harness.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 import { COMMANDS } from '../../../src/web/v2/labels/capture.mjs'
 
@@ -81,6 +81,7 @@ async function driveEveryScreen(b, { width, theme }) {
       samples[kind].push(await timed(page, 'step', prev, act))
     }
   }
+  const timerRead = await timerReads(b)
   const during = b.requests.filter((r) => r.start >= tStep && !timerRead(r)).map((r) => r.url) // a timer's read is not a step change (1.4 §D64)
   console.log(`# ${width} ${theme}: requests during 40 step changes: ${during.length}${during.length ? ' · ' + [...new Set(during)].join(' ') : ''}`)
   await shoot(page, 'replay-step', { width, theme })

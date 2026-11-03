@@ -8,6 +8,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { boardHome, serveBoard } from '../real-face.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../../src/off/token-header.mjs'
+import { INTERVAL, TIMER_ROUND } from '../../../src/web/v2/core/poll.mjs'
 
 const SHOTS = fileURLToPath(new URL('./shots/', import.meta.url))
 const CHANNEL = { channel: 'chrome' }
@@ -22,9 +23,31 @@ export async function probe({ importer = () => import('playwright-core'), env = 
   return { ok: true, chromium }
 }
 
-/** A logged request a timer sent by itself (4.4 §live-poll), not one a reader's action caused: the session list, status and price reads,
- *  and the open session's round (its head, and a Range read of each open tail). */
-export const timerRead = (r) => /^\/api\/(sessions|status|pricing)\b/.test(r.url) || r.url.startsWith('/api/d/head?') || (r.range != null && /^\/api\/d\/open\.\w+\?/.test(r.url))
+const isHead = (r) => r.url.startsWith('/api/d/head?')
+const tailPart = (r) => (/^\/api\/d\/open\.(\w+)\?/.exec(r.url) || [])[1]
+/** → a predicate of the logged requests a timer sent by itself (4.4 §live-poll), not one a reader's action caused: the session list,
+ *  status and price reads, and the open session's rounds, tied to the marks the poll engine sets as a timer round starts (core/poll.mjs
+ *  TIMER_ROUND): a round's head is the first head read within a third of the period after its mark, and its tails are the first Range
+ *  read of each open tail after that head and before the next mark (a read again after a 416, readTail's, too). Any other head or tail
+ *  read — one a step change sent, however long after the last round — is not the timer's. */
+export async function timerReads(b) {
+  const marks = (await b.page.evaluate(() => globalThis.__timerRounds || [])).filter((m) => m.base === INTERVAL.session).map((m) => m.at).sort((x, y) => x - y)
+  const byStart = (x, y) => x.start - y.start
+  const heads = b.requests.filter(isHead).sort(byStart), tails = b.requests.filter((r) => tailPart(r)).sort(byStart)
+  const timer = new Set()
+  marks.forEach((m, i) => {
+    const h = heads.find((r) => !timer.has(r) && r.start >= m - 50 && r.start <= m + INTERVAL.session / 3)
+    if (!h) return
+    timer.add(h)
+    const end = i + 1 < marks.length ? marks[i + 1] : Infinity, last = {}
+    for (const r of tails) {
+      if (r.start <= h.start || r.start >= end) continue
+      const part = tailPart(r), prev = last[part]
+      if (prev === undefined ? r.range != null : prev.status === 416) { timer.add(r); last[part] = r } else last[part] = { status: 0 }
+    }
+  })
+  return (r) => /^\/api\/(sessions|status|pricing)\b/.test(r.url) || timer.has(r)
+}
 
 /** The board on a fresh temp HOME in a fresh Chrome. `token`: true = the face's token, a string = that token, false = no fragment.
  *  `missing` lists every static file answered ≥ 400 (`<status> <path>`).
@@ -65,6 +88,11 @@ export async function withBoard({ bytes, home, base, idleMs, token = true, width
       if (!/^\/(api|control)\//.test(u.pathname) && r.status() >= 400) missing.push(`${r.status()} ${u.pathname}`) // a static file the page asked for and did not get (a /favicon.ico once)
       if (/^\/(api|control)\//.test(u.pathname)) requests.push({ url: u.pathname + u.search, method: r.request().method(), body: r.request().postData(), range: r.request().headers().range ?? null, status: r.status(), start: r.request().timing().startTime, t: Date.now() })
     })
+    // the poll engine's timer-round marks (timerReads), seen as they are set: the engine drops each from the timeline at once
+    await page.addInitScript((name) => {
+      globalThis.__timerRounds = []
+      new PerformanceObserver((l) => { for (const e of l.getEntries()) if (e.name === name) globalThis.__timerRounds.push({ at: performance.timeOrigin + e.startTime, base: e.detail && e.detail.base }) }).observe({ type: 'mark' })
+    }, TIMER_ROUND)
     await setup?.(page)
     const t = token === true ? face?.token : token
     await page.goto(face ? `${face.base}/${t ? `#t=${encodeURIComponent(t)}` : ''}` : base, { waitUntil: 'load' })

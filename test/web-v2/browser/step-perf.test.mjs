@@ -3,7 +3,7 @@
 // D64⑥: acceptance numbers come from the test machines, not this one). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, stats, timed, timerRead } from './harness.mjs'
+import { probe, withBoard, stats, timed, timerReads } from './harness.mjs'
 import { INTERVAL } from '../../../src/web/v2/core/poll.mjs'
 import { BOARD_LINES } from '../perf-lines.mjs'
 
@@ -56,7 +56,7 @@ test('D64②: 20 step changes by click and 20 by ←/→ send no request; a live
     for (const until = Date.now() + 20 * INTERVAL.session; !round() && Date.now() < until;) await stepOnce(b.page, 'key', bounce)
     for (let i = 0; i < 4; i++) await stepOnce(b.page, 'click', bounce)
     await b.page.waitForLoadState('networkidle')
-    const during = b.requests.filter((r) => r.start >= t0)
+    const during = b.requests.filter((r) => r.start >= t0), timerRead = await timerReads(b)
     console.log(`# requests while stepping: ${during.length}, of them the timers': ${during.filter(timerRead).length}`)
     assert.ok(samples.stepClick.length > 0 && samples.stepKey.length > 0, 'the session has more than one step')
     assert.ok(during.some(isHead), 'a live-poll round began among the step changes')
