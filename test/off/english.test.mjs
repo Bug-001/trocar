@@ -116,5 +116,7 @@ test('§1.1⑥ the marker-only listing: one item a file, its words with it, noth
     assert.ok(!out.some((l) => /^ {4}\S/.test(l)), `no line at the command column\n${out.join('\n')}`)
     assert.ok(out.every((l) => !l.includes(home)), out.join('\n'))
     for (const p of plan) assert.ok(out.some((l) => /^ {2}\S/.test(l) && l.includes(p.harness)), `${p.harness} is an item at column 2\n${out.join('\n')}`)
+    const starts = plan.map((p) => out.find((l) => l.startsWith(`  ${p.harness} `)).indexOf('~/'))
+    assert.equal(new Set(starts).size, 1, `§1.1②: every path starts in one value column\n${out.join('\n')}`)
   }
 })

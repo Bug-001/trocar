@@ -41,6 +41,20 @@ function fit(text) {
 // printed whole on its own line (§1.1⑥; `~` only for a POSIX HOME, where the shell expands it), every other line folded by fit
 const tildeWords = (s, home) => s.split(' ').map((w) => offTilde(w, home)).join(' ')
 export const textLines = (text, home) => String(text).split('\n').flatMap((l) => (isCommandLine(l) ? [home && home.startsWith('/') ? tildeWords(l, home) : l] : fit(tildeWords(l, home))))
+/** Rows of [label, value] as a labelled list (§1.1②, cli/text.mjs pairs' layout, written here for the same reason as fit): each label at column 2, padded so every
+ *  value starts in one column; a value folds at its own column (never COMMAND_INDENT: that column is at least 2 + 1 + 2), a word longer than the room keeps
+ *  its line whole; HOME as ~. */
+export const labelLines = (rows, home) => {
+  const label = Math.max(0, ...rows.map(([l]) => String(l).length)), col = 2 + label + 2
+  return rows.flatMap(([l, v]) => {
+    const out = []
+    let line = `  ${String(l).padEnd(label)}  `, empty = true
+    for (const word of tildeWords(String(v ?? ''), home).split(/\s+/).filter(Boolean)) {
+      if (!empty && line.length + 1 + word.length > WIDTH) { out.push(line); line = ' '.repeat(col) + word } else { line += (empty ? '' : ' ') + word; empty = false }
+    }
+    return [...out, line.trimEnd()]
+  })
+}
 
 // a key the user set to a value of their own while capture was on (D48②, removeTrocarText `prior_left`): their value wins, the old line trocar put out
 // of effect stays so — where it is, and how to have the old value back
