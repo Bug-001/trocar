@@ -24,7 +24,7 @@ export function DeskFrame({ desk }: { desk: DeskView }) {
   const n = useDeskModel(desk, 'saw', nbars)
   useLayoutEffect(() => {
     const $ = (sel: string) => desk.root.querySelector<HTMLElement>(sel)!
-    const ids = ['saw', 'rails', 'stepbar', 'ctxwin', 'ctxnav', 'resexp', 'rawpanel'] as const
+    const ids = ['saw', 'rails', 'ctxwin', 'ctxnav', 'resexp', 'rawpanel'] as const
     desk.framed({ ...Object.fromEntries(ids.map((id) => [id, $('#' + id)])), detail: document.getElementById('detail') } as Els)
   }, [desk])
   return <>

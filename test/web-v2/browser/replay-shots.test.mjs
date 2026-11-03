@@ -50,7 +50,7 @@ const editFiles = (b, edit) => b.page.route((u) => /^\/api\/d\/(p\d+|open)\./.te
 // every measured fact in one page pass
 const layout = (page) => page.evaluate(() => {
   const q = (s) => document.querySelector(s)
-  const kids = (sel) => [...document.querySelectorAll(`${sel} > *, ${sel} > * > *`)].filter((e) => e.getClientRects().length)
+  const kids = (sel) => [...document.querySelectorAll(`${sel} *`)].filter((e) => e.getClientRects().length && !e.closest('.pop'))
   // an ellipsis with its full text on hover is the designed give-way (1.2 §让位次序, 2.2 §步头放不下: the model name first), not a clip
   const clipped = [...kids('#deskhead'), ...kids('#stepbar')].filter((e) => e.scrollWidth > e.clientWidth + 0.5 && getComputedStyle(e).display !== 'inline' && !(getComputedStyle(e).textOverflow === 'ellipsis' && e.closest('[title]')))
     .map((e) => `${e.tagName}.${e.className} ${e.scrollWidth}>${e.clientWidth}`)
@@ -67,7 +67,7 @@ const layout = (page) => page.evaluate(() => {
   }
 })
 
-for (const width of [1280, 1024, 800]) {
+for (const width of [1440, 1280, 1024, 800]) {
   for (const theme of ['light', 'dark']) {
     test(`the replay desk fits at ${width} in ${theme}: nothing clipped, the window holds half the height, no side scroll`, { skip }, async () => {
       const b = await withBoard({ bytes: BYTES, width, theme, chromium: gate.chromium })
@@ -159,7 +159,7 @@ test('turning follow latest on from an earlier step lands the window on the newe
     await b.page.waitForFunction(() => !document.querySelector('#ctxwin .cwload') && !!document.querySelector('#ctxwin .cwreply'))
     await b.page.click('#ctxwin') // the keys go to the page, not to a control
     await b.page.keyboard.press('f')
-    await b.page.waitForFunction(() => /Step (\d+) \/ \1\b/.test(document.querySelector('#stepbar .sb-no').textContent))
+    await b.page.waitForFunction(() => /(\d+) \/ \1\b/.test(document.querySelector('#stepbar .sb-no').textContent))
     const at = await b.page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => {
       const w = document.querySelector('#ctxwin'), r = document.querySelector('#ctxwin .cwreply').getBoundingClientRect(), wr = w.getBoundingClientRect()
       const sb = document.querySelector('#stepbar'), top = wr.top + (sb && w.contains(sb) ? sb.getBoundingClientRect().height : 0)

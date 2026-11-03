@@ -46,7 +46,7 @@ export function InfoButton({ label, title, body, trigger, className }: { label: 
 
   return (
     <>
-      <Button ref={btn} className={className ? `popbtn ${className}` : 'popbtn'} aria-label={label} aria-expanded={how != null} aria-controls={`${id}-pop`}
+      <Button ref={btn} className={className ? `popbtn ${className}` : 'popbtn'} aria-label={label} aria-haspopup="dialog" aria-expanded={how != null} aria-controls={`${id}-pop`}
         onPress={() => show('pinned')}
         onFocus={() => { if (!backTo.current) show('focus') }}
         onMouseEnter={() => { clearTimeout(timer.current); timer.current = setTimeout(() => show('hover'), TIP_MS) }}
