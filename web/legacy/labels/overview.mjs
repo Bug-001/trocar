@@ -72,7 +72,7 @@ export const HIT_LABEL = 'main thread cache hit'
 export const HIT_UNKNOWN_TIP = "this provider's cache figures have an uncertain meaning"
 export const EST_TIP = 'local estimated cost (usage × unit price), not a bill'
 export const UNPRICED = (n) => `${n} model${n === 1 ? ' has' : 's have'} no unit price`
-export const EMPTY_WINDOW = 'no sessions in this window'
+export const EMPTY_WINDOW = 'No sessions in this window'
 export const PRICE_TABLE = 'the price table'
 export const NET_ONLY = 'no model calls · network only'
 export const TBL = Object.freeze({ agent: 'Agent', sessions: 'Sessions', calls: 'Model calls', cost: '≈ Cost', hit: 'Main thread cache hit', last: 'Last active' })
