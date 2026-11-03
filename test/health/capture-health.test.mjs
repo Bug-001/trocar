@@ -210,3 +210,18 @@ test('netenv: written → passed through; missing → present:false with the rea
     assert.match(b.health({ fs: { ...fs, readFileSync: (f, ...r) => { if (String(f).endsWith('netenv.json')) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return fs.readFileSync(f, ...r) } } }).netenv.error, /netenv\.json: EACCES/)
   } finally { b.done() }
 })
+
+test('C.3「已解决的组」: a failure whose condition a later ok event ended (helper-ok, ca-ok, agent-list-ok) no longer makes the health failing; the group stays; a new failure does again', () => {
+  for (const [fail, ok] of [[{ event: 'helper-down', where: 'helper' }, 'helper-ok'], [{ event: 'failure', where: 'ca', code: 'ca-invalid' }, 'ca-ok'], [{ event: 'failure', where: 'agents', code: 'agent-list-invalid' }, 'agent-list-ok']]) {
+    const b = home()
+    try {
+      installed(b); b.lock(); b.state('on', at(H))
+      b.flows([{ ts: at(H / 2), ...fail, reason: 'r' }, { ts: at(H / 3), event: ok }])
+      const r = b.health()
+      assert.equal(r.summary.state, 'ok', `${ok}: ${JSON.stringify(r.summary)}`)
+      assert.equal(r.collector.failures.length, 1, `${ok}: the group is still in the record`)
+      b.flows([{ ts: at(H / 4), ...fail, reason: 'r' }])
+      assert.equal(b.health().summary.state, 'failing', `${ok}: the failure is back`)
+    } finally { b.done() }
+  }
+})

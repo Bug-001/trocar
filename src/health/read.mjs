@@ -174,7 +174,7 @@ function collectorSummary(c) {
   return c.installed === null && RANK[s.state] < RANK.unknown ? { state: 'unknown', reason: c.manifest_error } : s
 }
 function judgedSummary(c) {
-  const d = c.daemon, n = c.conditions.length + c.failures.length
+  const d = c.daemon, n = c.conditions.length + c.failures.filter((g) => !g.resolved).length // a resolved group is a note (C.3), not a problem
   if (d.state === 'not-running') return { state: 'not-running', since: d.last_record_at, n, ...(d.unclean ? { reason: d.why } : d.last_stop ? { signal: d.last_stop.signal ?? null, reason: d.last_stop.reason ?? null } : {}) }
   if (d.state === 'not-responding') return { state: 'not-responding', since: d.lock_refreshed_at, n }
   if (n) return { state: 'failing', n }

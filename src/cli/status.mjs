@@ -415,7 +415,7 @@ function failuresOf(f) {
     const l = g.last || {}
     // a failure event's where / code; a connection row is `flow` with its not_captured; the raw journal's op / outcome; else the event
     const w = where || l.where || (l.event == null ? ROW : l.event)
-    return { level: 'problem', where: w, code: (l.code ?? l.not_captured ?? l.outcome ?? l.event ?? l.reason) || g.key, count: g.count || 1, first_ts: g.first_ts, last_ts: g.last_ts, agent: l.agent ?? l.harness, ...procOf(l), reason: reasonText(l.reason ?? (l.error && l.error.message)) }
+    return { level: g.resolved ? 'note' : 'problem', where: w, code: (l.code ?? l.not_captured ?? l.outcome ?? l.event ?? l.reason) || g.key, count: g.count || 1, first_ts: g.first_ts, last_ts: g.last_ts, agent: l.agent ?? l.harness, ...procOf(l), reason: reasonText(l.reason ?? (l.error && l.error.message)) }
   }
   const groups = [...(c.failures || []).map(problem(null)), ...((h.raw && h.raw.failures) || []).map(problem('raw'))]
   const expected = Object.values(c.expected || {}).reduce((n, x) => n + (Number(x) || 0), 0)
@@ -438,7 +438,7 @@ function failuresOf(f) {
     if (g.harness !== harness) g.harness = null // one group from more than one harness: the group names none
   }
   const all = [...by.values()].map(({ harness, ...g }) => (harness ? { ...g, harness } : g)).sort((a, b) => (String(a.last_ts) < String(b.last_ts) ? 1 : String(a.last_ts) > String(b.last_ts) ? -1 : 0))
-  return { problem: groups.reduce((n, g) => n + g.count, 0), expected, note: c.conditions ? c.conditions.length : 0, since: h.read && h.read.since ? h.read.since : null, latest,
+  return { problem: groups.filter((g) => g.level === 'problem').reduce((n, g) => n + g.count, 0), expected, note: (c.conditions ? c.conditions.length : 0) + groups.filter((g) => g.level === 'note').reduce((n, g) => n + g.count, 0), since: h.read && h.read.since ? h.read.since : null, latest,
     groups: all.slice(0, GROUPS_MAX), ...(all.length > GROUPS_MAX ? { groups_cut: all.length } : {}) }
 }
 

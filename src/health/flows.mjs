@@ -142,6 +142,9 @@ export function lastRun(notes) {
 // a folded line (events.mjs: written when the 10 s window closes) re-states the last suppressed record and stands for
 // exactly `suppressed` occurrences — the first one of the window was its own line already
 const PRELUDE_MS = 60_000 // a daemon's start-up lines are written within this before its daemon-start
+// 1.6 C.3「已解决的组」: the ok event that ends a failure's condition. A group whose newest record such an event follows is `resolved`: it stays
+// among the groups (D38: never lost) at level note, and no longer makes the health failing; a later failure of the group makes it a problem again.
+const ENDS = Object.freeze({ 'helper-ok': ['helper-down'], 'ca-ok': ['ca-invalid'], 'agent-list-ok': ['agent-list-invalid'] })
 const weight = (r) => (r.folded ? 0 : 1) + (typeof r.suppressed === 'number' ? r.suppressed : 0)
 
 /**
@@ -235,9 +238,11 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     if (isFailure(r)) {
       const key = groupKey(r)
       const g = groups.get(key) || { key, count: 0, first_ts: r.ts, last_ts: r.ts, last: null }
-      g.count += weight(r); g.last_ts = r.ts; g.last = pick(r)
+      g.count += weight(r); g.last_ts = r.ts; g.last = pick(r); delete g.resolved
       groups.delete(key); groups.set(key, g) // the Map's order is the order of each group's newest record
       if (agent) { const a = agentRow(agent); a.last_failure = r.ts; a.last_failure_key = key }
+    } else if (ENDS[r.event]) {
+      for (const g of groups.values()) if (ENDS[r.event].includes(g.last.event) || ENDS[r.event].includes(g.last.code)) g.resolved = true
     } else if (isRow(r)) {
       if (notCapturedClass(r.not_captured, r.reason) === 'expected') {
         const k = expectedKey(r) // a by-design reason counts under its own name ('not-an-agent'), not under 'untracked'
