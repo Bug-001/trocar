@@ -19,7 +19,7 @@ const apiOf = (face) => ({ get: async (name, params) => {
 // deskFrom's get over the real face: the answer document
 const getOf = (face) => async (name, params) => (await face.get(name, params)).doc
 
-test('(1)(2) the library reads every page of `sessions`; a row\'s title fields are title / title_source, null → untitled', async () => {
+test('(1)(2) the library reads every page of `sessions`; a row\'s title fields are title / title_source, null → untitled, pending → not known yet', async () => {
   const face = await serveBoard(boardHome({ bytes: 200000 }))
   try {
     const whole = (await face.get('sessions')).doc
@@ -30,10 +30,11 @@ test('(1)(2) the library reads every page of `sessions`; a row\'s title fields a
     assert.equal(r.data.sessions.length, whole.sessions.length)
     for (const s of whole.sessions) {
       const m = rowModel(s, Date.now())
-      assert.equal(m.title, s.title); assert.equal(m.titleSource, s.title_source); assert.equal(m.untitled, s.title == null)
-      for (const [title, title_source] of [['t', 'wire'], ['t', 'harness-local-store'], [null, null]]) {
+      assert.equal(m.title, s.title); assert.equal(m.titleSource, s.title_source); assert.equal(m.untitled, s.title == null && s.title_source !== 'pending')
+      for (const [title, title_source] of [['t', 'wire'], ['t', 'harness-local-store'], [null, null], [null, 'pending']]) {
         const v = rowModel({ ...s, title, title_source }, Date.now())
-        assert.equal(v.title, title); assert.equal(v.titleSource, title_source); assert.equal(v.untitled, title == null)
+        assert.equal(v.title, title); assert.equal(v.titleSource, title_source)
+        assert.equal(v.untitled, title == null && title_source !== 'pending'); assert.equal(v.titlePending, title_source === 'pending')
       }
     }
   } finally { await face.close() }

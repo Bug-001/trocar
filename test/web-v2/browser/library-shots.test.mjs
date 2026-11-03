@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, shoot } from './harness.mjs'
 import { INTERVAL } from '../../../src/web/v2/core/poll.mjs'
-import { UNTITLED } from '../../../src/web/v2/labels/common.mjs'
+import { UNTITLED, TITLE_PENDING } from '../../../src/web/v2/labels/common.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -20,34 +20,31 @@ const go = async (page, hash, sel) => {
 // a fresh mount of the library (via another screen), so a routed /api/sessions answer is what it starts from
 const remount = async (page, sel) => { await go(page, '#/settings/appearance', '[data-theme-choice]'); await go(page, '#/sessions', sel) }
 // a session's title comes from the usage sidecar, which the query worker fills after the first `sessions` answer (3.5 §谁执行它
-// `later`): the first answer of a fresh home has every title null and the library polls again only after INTERVAL.sessions. The rows
-// rows are checked and shot with the titles the face settles on: wait (≤ 10 s) until two face answers 500 ms apart carry the same titles, then remount.
+// `later`): the first answer of a fresh home has every title pending (title_source 'pending', 4.4 §人类标题的来源) and the library
+// polls again only after INTERVAL.sessions. The rows are checked and shot once the face has no pending title (≤ 10 s), then remounted.
 async function settledTitles(b) {
-  const titles = async () => JSON.stringify(((await b.get('sessions', {})).doc?.sessions || []).map((x) => x.title))
-  let prev = await titles()
-  for (const t0 = Date.now(); Date.now() - t0 < 10000;) {
-    await new Promise((r) => setTimeout(r, 500))
-    const now = await titles()
-    if (now === prev) break
-    prev = now
-  }
+  const pending = async () => ((await b.get('sessions', {})).doc?.sessions || []).some((x) => x.title_source === 'pending')
+  for (const t0 = Date.now(); (await pending()) && Date.now() - t0 < 10000;) await new Promise((r) => setTimeout(r, 250))
   await remount(b.page, '.lrow'); await b.page.waitForLoadState('networkidle')
 }
 
-// TODO (open product item): the first `sessions` answer of a fresh home carries title null for every session whose usage sidecar is
-// not filled yet (src/query/named/sessions.mjs titleOf only marks it to fill), and the board reads that null as "no title"
-// (library/logic.mjs titleText, overview/overview.mjs, replay/header.mjs): "not known yet" drawn as "none" (invariant 4). The fix
-// needs a spec decision (a pending title state, or titles computed before the answer); this case is red until then.
-test("1.8 §标题规则 the library's first answer draws no untitled row for a home whose sessions all have titles", { skip, todo: 'a title not known yet is drawn as no title' }, async () => {
+// 1.8 §标题规则 / acceptance 2: a title not known yet (the sidecar not filled) is said as pending and drawn as such, never as untitled
+test("1.8 §标题规则 the library's first answer draws its pending titles as not read yet, never untitled; the filled answer has every title", { skip }, async () => {
   const b = await withBoard({ bytes: BYTES, width: 1280, chromium: gate.chromium })
   try {
     const first = b.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/sessions', { timeout: 15000 })
     await go(b.page, '#/sessions', '.lrow')
-    const firstNull = ((await (await first).json()).sessions || []).filter((x) => x.title == null).length
-    const drawn = await b.page.$$eval('.lrow .lt', (els, u) => els.filter((e) => e.textContent === u).length, UNTITLED)
+    const firstRows = (await (await first).json()).sessions || []
+    const drawn = await b.page.$$eval('.lrow .lt', (els, [u, p]) => ({ untitled: els.filter((e) => e.textContent === u).length,
+      pending: els.filter((e) => e.textContent === p).length }), [UNTITLED, TITLE_PENDING])
+    const pend = firstRows.filter((x) => x.title_source === 'pending').length
+    assert.ok(pend > 0, 'a fresh home\'s first answer has titles not known yet')
+    assert.deepEqual(firstRows.filter((x) => x.title == null && x.title_source !== 'pending').map((x) => x.session_id), [], 'no first-answer row says "no title"')
+    assert.deepEqual(drawn, { untitled: 0, pending: pend }, 'rows drawn from the first answer: pending titles as not read yet, none untitled')
     await settledTitles(b)
     assert.deepEqual(((await b.get('sessions', {})).doc?.sessions || []).filter((x) => x.title == null), [], 'every session of this home has a title once the sidecar is filled')
-    assert.deepEqual([firstNull, drawn], [0, 0], 'null titles in the first answer, untitled rows drawn from it')
+    const filled = await b.page.$$eval('.lrow .lt', (els, [u, p]) => els.filter((e) => e.textContent === u || e.textContent === p).length, [UNTITLED, TITLE_PENDING])
+    assert.equal(filled, 0, 'rows drawn from the filled answer show their titles')
   } finally { await b.stop() }
 })
 

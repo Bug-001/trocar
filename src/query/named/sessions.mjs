@@ -38,17 +38,19 @@ export async function run({ home, fs, now, params: p, errors, later = null, prog
     }
     return notes.get(segment);
   };
+  // → {title, title_pending}: a call not yet covered by the sidecar up to the first main-lane call leaves the title not known yet
+  // (4.4 §人类标题的来源: title_source 'pending', never said as "no title", invariant 4)
   const titleOf = (id) => {
     const calls = rowsOf.get(id).filter(isModelCall).sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.lineNo - b.lineNo));
-    let title = null, found = false;
+    let title = null, found = false, pending = false;
     for (const r of calls) {
-      const n = note(r.segment), f = n && r.lineNo <= n.lines ? n.facts.get(r.lineNo) : null;
-      if (!n || r.lineNo > n.lines) toFill.add(r.segment);
-      if (!found && f && f.lane === 'main') { title = f.ask ?? null; found = true; }
+      const n = note(r.segment), covered = !!n && r.lineNo <= n.lines, f = covered ? n.facts.get(r.lineNo) : null;
+      if (!covered) { toFill.add(r.segment); if (!found) pending = true; }
+      if (!found && !pending && f && f.lane === 'main') { title = f.ask ?? null; found = true; }
     }
-    return title;
+    return { title, title_pending: pending };
   };
-  const sessions = items.map((f) => sessionMetaOfFacts({ ...f, title: titleOf(f.session_id) }));
+  const sessions = items.map((f) => sessionMetaOfFacts({ ...f, ...titleOf(f.session_id) }));
   // After the answer is written, and only where there is a next query (the worker's `later`): the one-shot CLI never writes one.
   if (later && toFill.size) later(() => fillUsage({ home, fs, segments: [...toFill] }));
   return { as_of: asOf(index), sessions, next, has_more };
