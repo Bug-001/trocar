@@ -11,16 +11,17 @@ const WIDTH = 80
 const offTilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
 const UNTIL_WORDS = { restart: 'until it restarts', 'next-connection': 'until its next new connection', 'next-handshake': 'until its next handshake', 'session-end': 'until its current session ends' }
 
-/** One line of at most 80 columns, or the line split at spaces with `indent` in front of every line after the first. A single word longer than the
- *  width (a path, a command) is never broken: it keeps its own line (§1.1 版式 6). White space the text starts with is kept as the first line's lead. */
-function fit(text, indent = '  ') {
+/** One line of at most 80 columns, or the line split at spaces, every line at the lead the text starts with (§1.1 版式 6: a folded line keeps its
+ *  first line's indent, so prose never folds to a command's deeper indent). A single word longer than the width (a path, a command) is never broken:
+ *  it keeps its own line. */
+function fit(text) {
   const s = String(text)
   const lead = s.slice(0, s.length - s.trimStart().length)
   const out = []
   let line = ''
   for (const word of s.trimStart().split(/\s+/).filter(Boolean)) {
-    const next = line ? `${line} ${word}` : `${out.length ? indent : lead}${word}`
-    if (line && next.length > WIDTH) { out.push(line); line = `${indent}${word}` } else line = next
+    const next = line ? `${line} ${word}` : `${lead}${word}`
+    if (line && next.length > WIDTH) { out.push(line); line = `${lead}${word}` } else line = next
   }
   if (line) out.push(line)
   return out
@@ -33,7 +34,7 @@ const textLines = (text, home) => String(text).split('\n').flatMap((l) => (/^ {2
 
 // a key the user set to a value of their own while capture was on (D48②, removeTrocarText `prior_left`): their value wins, the old line trocar put out
 // of effect stays so — where it is, and how to have the old value back
-const priorLeftLines = (c) => (c.prior_left || []).flatMap((p) => fit(`    ${p.key} now holds the value you set while capture was on; the old line (line ${p.line}) is still commented out: to put it back, delete the leading ${OFF_PREFIX} on it.`, '    '))
+const priorLeftLines = (c) => (c.prior_left || []).flatMap((p) => fit(`    ${p.key} now holds the value you set while capture was on; the old line (line ${p.line}) is still commented out: to put it back, delete the leading ${OFF_PREFIX} on it.`))
 
 // the status of one changed file
 function rowStatus(c, t) {
@@ -50,7 +51,7 @@ function rowLines(c, t, past, width) {
   const status = past ? rowStatus(c, t) : c.backup ? `will be undone. A copy of the file as it is: ${t(c.backup)}` : 'will be undone'
   const head = `  ${label}  ${where}`
   const one = `${head}${/ /.test(status) ? ': ' : ' '}${status}`
-  return [...(one.length <= WIDTH ? [one] : [head, ...fit(`    ${status}`, '    ')]), ...priorLeftLines(c)]
+  return [...(one.length <= WIDTH ? [one] : [head, ...fit(`    ${status}`)]), ...priorLeftLines(c)]
 }
 
 // a program still connected through trocar when the doors closed: the door it uses stays open, passing its traffic on and recording nothing (P12)
@@ -99,7 +100,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
       : `Capture is off for ${scope}. trocar is no longer on ${r.all || ids.length > 1 ? 'their' : 'its'} path.`)]
   if (r.nothing_installed) { // trocar is not on this machine: said first and alone, not "off" with a list of nothing (§1.1)
     const out = [header || 'Nothing to turn off. trocar is not installed on this machine.']
-    if ((r.skipped || []).length) for (const s of r.skipped) out.push(...fit(`  ${t(s.what)}: ${s.reason}`, '    '))
+    if ((r.skipped || []).length) for (const s of r.skipped) out.push(...fit(`  ${t(s.what)}: ${s.reason}`))
     if ((r.user_processes || []).length) for (const p of r.user_processes) out.push(...fit(`Still running, started by you: ${p.command} (pid ${p.pid}, ${p.note}).`))
     for (const n of r.notes || []) out.push(...fit(n))
     out.push(...extra, footer || 'Turn capture on: trocar install, then trocar on') // `on` refuses with no certificates installed (§3.3 前提), so the next step is install first
@@ -113,9 +114,9 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
     for (const row of new Set(changed.map((c) => rowLines(c, t, past, width).join('\n')))) lines.push(...row.split('\n'))
   } else lines.push(past ? 'No file of yours was changed.' : 'No file of yours would be changed.')
   // a file is said once: several entries of one file (json keys) are one removal
-  for (const p of [...new Set(removed.map((x) => t(typeof x === 'string' ? x : x.path)))]) lines.push(...fit(`  ${past ? 'Deleted' : 'Will delete'}, trocar created it: ${p}`, '    '))
+  for (const p of [...new Set(removed.map((x) => t(typeof x === 'string' ? x : x.path)))]) lines.push(...fit(`  ${past ? 'Deleted' : 'Will delete'}, trocar created it: ${p}`))
   const listed = new Set(changed.map((c) => c.path)) // a file is said once: what was undone is not also "already as it was"
-  for (const s of (r.skipped || []).filter((x) => !listed.has(x.what))) lines.push(...fit(`  ${t(s.what)}: ${s.reason}`, '    '))
+  for (const s of (r.skipped || []).filter((x) => !listed.has(x.what))) lines.push(...fit(`  ${t(s.what)}: ${s.reason}`))
   if (changed.length) lines.push('')
   if (past && r.routing && !r.routing.confirmed) lines.push(...fit(`trocar could not confirm it is off their path (${r.routing.state || 'reason unknown'}).`))
   lines.push(...daemonLines(r, past, cutNote))
@@ -130,11 +131,11 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   }
   if ((r.still_trusting || []).length) {
     const roots = r.still_trusting.filter((p) => p.what === 'root')
-    for (const p of roots) lines.push(...fit(`Your trust store still holds trocar's root certificate: ${p.reason}. Take it out by hand with this line:`, '  '), `  ${p.command}`) // a command keeps its own line, whole (1.6 §1.1⑥)
+    for (const p of roots) lines.push(...fit(`Your trust store still holds trocar's root certificate: ${p.reason}. Take it out by hand with this line:`), `  ${p.command}`) // a command keeps its own line, whole (1.6 §1.1⑥)
     const procs = r.still_trusting.filter((p) => p.what !== 'root')
     if (procs.length) {
       lines.push('Still trusting the trocar certificate, but not going through trocar:')
-      for (const p of procs) lines.push(...fit(`  ${p.harness} (pid ${p.pid}) ${UNTIL_WORDS[p.until] || UNTIL_WORDS.restart}`, '    '))
+      for (const p of procs) lines.push(...fit(`  ${p.harness} (pid ${p.pid}) ${UNTIL_WORDS[p.until] || UNTIL_WORDS.restart}`))
     }
   }
   for (const k of r.kept_bundles || []) {
@@ -153,7 +154,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   for (const p of r.user_processes || []) lines.push(...fit(`Still running, started by you: ${p.command} (pid ${p.pid}, ${p.note}).`))
   if ((r.pending || []).length) {
     lines.push(past ? 'Found by trocar\'s own marks and not undone yet:' : 'Will be undone by trocar\'s own marks:')
-    for (const p of r.pending) lines.push(...fit(`  ${p.harness ? `${p.harness}  ` : ''}${t(p.path)}`, '    '))
+    for (const p of r.pending) lines.push(...fit(`  ${p.harness ? `${p.harness}  ` : ''}${t(p.path)}`))
   }
   for (const l of r.left || []) lines.push(...fit(`Not undone: ${t(l.path)} (${l.reason || l.result})`))
   for (const n of r.problems || []) lines.push(...(n.includes('\n') ? textLines(n, home) : fit(n)))

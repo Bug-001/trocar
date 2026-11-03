@@ -10,6 +10,7 @@ import path from 'node:path'
 import { runCli } from '../../src/cli/main.mjs'
 import { EXIT } from '../../src/off/schema.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
+import { tilde } from '../../src/cli/receipt.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
@@ -74,6 +75,9 @@ test('V69 · 1.6 §1.1⑤⑥ the refusal as text: install, on, off and uninstall
     })
     assert.equal(exit, EXIT.incomplete, `${cmd}: exit 1 — ${io.text()}`)
     assertEnglish(io.text(), `trocar ${cmd} (older install)`)
-    assert.ok(io.text().split('\n').some((l) => l.trim() === '~/.trocar/bin/trocar-off'), `${cmd}: the standalone copy as a command of its own, under ~\n${io.text()}`)
+    const lines = io.text().split('\n').filter((l) => l.trim()), commands = ['trocar off', 'trocar uninstall', tilde(standalonePath(home), home)]
+    assert.ok(lines.some((l) => l.trim() === commands[2]), `${cmd}: the standalone copy as a command of its own, under ~\n${io.text()}`)
+    const indent = (l) => l.length - l.trimStart().length, isCommand = (l) => commands.includes(l.trim())
+    assert.ok(Math.min(...lines.filter(isCommand).map(indent)) > Math.max(...lines.filter((l) => !isCommand(l)).map(indent)), `${cmd}: every command sits deeper than the prose around it, a folded prose line never at a command's indent (§1.1⑥)\n${io.text()}`)
   }
 })
