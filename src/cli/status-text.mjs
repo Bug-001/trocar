@@ -143,8 +143,9 @@ const reasonOf = (reason, max = 100) => {
   const n = commandsOf(reason).length, pointer = n > 1 ? 'the lines below' : 'the line below'
   const whole = squashed(String(reason || '').replace(COMMAND, pointer)), head = briefText(whole, max)
   if (!n || head === whole) return head
-  // the clause that holds the last pointer says what the command is for: it stays whole, the words before it are cut (§3.5)
-  const at = whole.lastIndexOf(pointer), start = Math.max(0, ...[...whole.slice(0, at).matchAll(/[;:.]\s/g)].map((m) => m.index + m[0].length))
+  // the clause that holds the last pointer says what the command is for: it stays whole, the words before it are cut (§3.5); a boundary whose
+  // clause would be the pointer alone (`…, run: <pointer>`) is skipped, so the verb stays with it
+  const at = whole.lastIndexOf(pointer), start = Math.max(0, ...[...whole.slice(0, at).matchAll(/[;:.]\s/g)].map((m) => m.index + m[0].length).filter((b) => !whole.slice(b).trim().startsWith(pointer)))
   const clause = whole.slice(start), room = max - clause.length - 1
   const lead = whole.slice(0, start).trimEnd(), cut = lead.slice(0, room - 2).lastIndexOf(' ') // at a word boundary, or no word at all (§1.1⑦)
   if (start > 0 && room >= 3) return `${cut > 0 ? lead.slice(0, cut).replace(/[\s,;:]+$/, '') : ''}... ${clause}`
