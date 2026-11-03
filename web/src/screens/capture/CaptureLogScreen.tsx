@@ -53,13 +53,13 @@ function FilterMenu({ filter, agents }: { filter: string | null, agents: string[
 function LogRow({ row, open, onOpen }: { row: Row, open: boolean, onOpen: (open: boolean) => void }) {
   return (
     <Disclosure className="lr" data-key={row.key} data-unknown={row.unknown ? '1' : undefined} isExpanded={open} onExpandedChange={onOpen}>
+      <Button slot="trigger" className="lgo" data-lrow={`lx-${row.key}`} aria-label="Expand this row">
+        <Chev />
+      </Button>
       <span className="t">{row.time}</span>
       <span className="ag">{row.who ? <><HarnessIcon id={row.who.id} /><span className="chipname">{row.who.name}</span></> : <span className="c2">{row.whoText}</span>}</span>
       <span className="say">{row.text}</span>
       <span className="cnt">{`×${row.count}`}</span>
-      <Button slot="trigger" className="lgo" data-lrow={`lx-${row.key}`} aria-label="Expand this row">
-        <Chev />
-      </Button>
       <DisclosurePanel className="lx">
         <TechDetails pairs={techPairs(row.tech)} copy={pairsText(row.tech)} />
         <div className="capcopy"><CopyButton text={row.diag} label="Copy diagnostics" row /></div>
@@ -112,7 +112,7 @@ export default function CaptureLogScreen({ route }: ScreenProps) {
           </div> : null}
           <section className="crows" aria-label="Capture failures">
             {model.rows.length ? <>
-              <div className="lr h colhead"><span>Time</span><span>Agent</span><span className="say">What happened</span><span className="cnt">Count</span><span></span></div>
+              <div className="lr h colhead"><span></span><span>Time</span><span>Agent</span><span className="say">What happened</span><span className="cnt">Count</span></div>
               {model.rows.map((r) => <LogRow key={r.key} row={r} open={choice.get(r.key) === true} onOpen={(o) => setOpen(r.key, o)} />)}
             </> : <p className="caplog-none">{model.none}</p>}
           </section>

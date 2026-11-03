@@ -197,6 +197,7 @@ test('C5: every trigger on both pages (row name, log row chevron, changes block,
   const lgo = log.container.querySelector<HTMLElement>('.lr .lgo')!
   await keys(lgo, 'log row')
   const lr = lgo.closest('.lr')!
+  expect(lr.firstElementChild, '1.5 #5: an expandable row has its chevron before the words').toBe(lgo)
   const logTriggers = [lr.querySelector<HTMLElement>('.disc-t')!, ...log.container.querySelectorAll<HTMLElement>('#clogmain > .disc > .disc-t')]
   expect(logTriggers.length).toBe(2)
   for (const [i, x] of logTriggers.entries()) await keys(x, `log trigger ${i}`)

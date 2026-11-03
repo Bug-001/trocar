@@ -186,7 +186,7 @@
     #rightpage.open #rawpanel{max-height:none;grid-row:1 / span 2;grid-column:2;}
     #rpbar{display:flex;gap:8px;align-items:center;padding:5px 14px;font-size:var(--fs-cap);color:var(--ink-2);background:var(--raised);cursor:pointer;}
     #rpbar:hover{color:var(--ink);}
-    #rpbar::after{color:var(--ink-3);}
+    #rpbar::before{color:var(--ink-3);}
     #pages{padding-bottom:26px;}
   }
   /* < 900: the subagent / bg / 全程 rows fold into one closed row (1.2 §窄屏) — the fold row itself is rendered by rails.mjs */
@@ -521,5 +521,5 @@
 
 /* every disclosure triangle a ::before / ::after draws: the icons.mjs chevron as a mask over the text colour (--glyph-disc, set by
    core/ui.mjs installUi; 1.5 §审美 #5: no typed triangle), 12 px like DISC_CHEV; an open one turns a quarter */
-#rpbar::after,.cbh::before,.cwturnhd::before,.navrow.head::before,.res.file .res-hd .nm::before,.dblk>.dbh::before{content:"";display:inline-block;flex:none;width:12px;height:12px;vertical-align:-2px;background:currentColor;-webkit-mask:var(--glyph-disc) center/12px 12px no-repeat;mask:var(--glyph-disc) center/12px 12px no-repeat;transition:transform var(--t-quick) var(--ease);}
-#rightpage.open #rpbar::after,.cblk:not(.collapsed) .cbh::before,.cwturn:not(.collapsed) .cwturnhd::before,.navrow.head.open::before,.res.file.expanded .res-hd .nm::before,.dblk.open>.dbh::before{transform:rotate(90deg);}
+#rpbar::before,.cbh::before,.cwturnhd::before,.navrow.head::before,.res.file .res-hd .nm::before,.dblk>.dbh::before{content:"";display:inline-block;flex:none;width:12px;height:12px;vertical-align:-2px;background:currentColor;-webkit-mask:var(--glyph-disc) center/12px 12px no-repeat;mask:var(--glyph-disc) center/12px 12px no-repeat;transition:transform var(--t-quick) var(--ease);}
+#rightpage.open #rpbar::before,.cblk:not(.collapsed) .cbh::before,.cwturn:not(.collapsed) .cwturnhd::before,.navrow.head.open::before,.res.file.expanded .res-hd .nm::before,.dblk.open>.dbh::before{transform:rotate(90deg);}

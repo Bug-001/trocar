@@ -78,7 +78,7 @@
 /* the log (采集记录): the explanation line, a card of failure groups, the install notes, the page-bottom tech details */
 .caplog-bar{padding:0 0 10px;}
 .caplog-say{font-size:var(--fs-cap);color:var(--ink-2);margin:0;}
-.lr{display:grid;grid-template-columns:minmax(112px,150px) minmax(120px,150px) minmax(0,1fr) 56px 22px;column-gap:12px;align-items:baseline;padding:10px 16px;}
+.lr{display:grid;grid-template-columns:22px minmax(112px,150px) minmax(120px,150px) minmax(0,1fr) 56px;column-gap:12px;align-items:baseline;padding:10px 16px;}
 .lr + .lr{border-top:1px solid var(--rule);}
 .lr.h{padding:7px 16px;}
 .lr .t{font-size:var(--fs-cap);color:var(--ink-2);}
@@ -88,9 +88,9 @@
 /* a row's cells; the head row (.colhead) keeps the kit's table-head type */
 .lr:not(.colhead) .say{font-size:var(--fs-body);}
 .lr:not(.colhead) .cnt{font-size:var(--fs-cap);color:var(--ink-2);}
-.lr .lgo{display:inline-flex;align-items:center;justify-self:end;border:0;background:none;color:var(--ink-3);font-size:var(--fs-cap);cursor:pointer;padding:0 2px;border-radius:var(--r-1);}
+.lr .lgo{display:inline-flex;align-items:center;justify-self:start;border:0;background:none;color:var(--ink-3);font-size:var(--fs-cap);cursor:pointer;padding:0 2px;border-radius:var(--r-1);}
 .lr .lgo:hover,.lr .lgo:focus-visible{color:var(--ink);}
-.lr .lx{grid-column:3 / 6;}
+.lr .lx{grid-column:4 / 6;}
 .lr .lx[hidden]{display:none;}
 .lr .lx p{font-size:var(--fs-body);margin:0 0 3px;}
 .lr .lx .fine{color:var(--ink-2);font-size:var(--fs-cap);}
@@ -107,20 +107,21 @@
 
 /* narrow: a log row puts the agent over its sentence */
 @media (max-width: 1279px) {
-  .lr{grid-template-columns:minmax(96px,120px) minmax(0,1fr) 56px 22px;row-gap:2px;}
-  .lr.h span:nth-child(3){display:none;}
-  .lr .ag{grid-column:2;grid-row:1;}
-  .lr .say{grid-column:2;grid-row:2;}
-  .lr .cnt{grid-column:3;grid-row:1;}
-  .lr .lgo{grid-column:4;grid-row:1;}
-  .lr .lx{grid-column:2 / 5;}
+  .lr{grid-template-columns:22px minmax(96px,120px) minmax(0,1fr) 56px;row-gap:2px;}
+  .lr.h span:nth-child(4){display:none;}
+  .lr .lgo{grid-column:1;grid-row:1;}
+  .lr .t{grid-column:2;grid-row:1;}
+  .lr .ag{grid-column:3;grid-row:1;}
+  .lr .say{grid-column:3;grid-row:2;}
+  .lr .cnt{grid-column:4;grid-row:1;}
+  .lr .lx{grid-column:3 / 5;}
   .lr-note{grid-template-columns:minmax(96px,120px) minmax(0,1fr);}
   .lr-note .ag{grid-column:2;grid-row:1;}
   .lr-note .what{grid-column:2;}
 }
 /* phone: name and control share the first line, the sentence and the right column each take a full line under them;
-   the expand's labels, and every technical details grid's keys, sit above their values; a capture-log row puts time, count
-   and arrow on its first line, the agent and the sentence on a full line each */
+   the expand's labels, and every technical details grid's keys, sit above their values; a capture-log row puts chevron, time
+   and count on its first line, the agent and the sentence on a full line each */
 @media (max-width: 599px) {
   .crow{--ind:16px;}
   .crow-t{grid-template-rows:auto auto auto;}
@@ -133,14 +134,14 @@
   .exp dd{overflow-wrap:anywhere;}
   .crows .tech{grid-template-columns:minmax(0,1fr);}
   .crows .tech .v{margin-bottom:4px;}
-  .lr{grid-template-columns:minmax(0,1fr) auto 22px;}
-  .lr.h span:nth-child(2){display:none;}
-  .lr .t{grid-column:1;grid-row:1;}
-  .lr .cnt{grid-column:2;grid-row:1;}
-  .lr .lgo{grid-column:3;grid-row:1;}
-  .lr .ag{grid-column:1 / 4;grid-row:2;}
-  .lr .say{grid-column:1 / 4;grid-row:3;}
-  .lr .lx{grid-column:1 / 4;}
+  .lr{grid-template-columns:22px minmax(0,1fr) auto;}
+  .lr.h span:nth-child(3){display:none;}
+  .lr .lgo{grid-column:1;grid-row:1;}
+  .lr .t{grid-column:2;grid-row:1;}
+  .lr .cnt{grid-column:3;grid-row:1;}
+  .lr .ag{grid-column:2 / 4;grid-row:2;}
+  .lr .say{grid-column:2 / 4;grid-row:3;}
+  .lr .lx{grid-column:2 / 4;}
   .lr-note{grid-template-columns:minmax(0,1fr);}
   .lr-note .t,.lr-note .ag,.lr-note .what{grid-column:1;grid-row:auto;}
 }
