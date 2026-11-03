@@ -42,9 +42,9 @@ export function columns(rows, { gap = 2, width = Infinity } = {}) {
 /** `[[label, value], …]` → an indented two-column block; a value too long for `width` is folded under its own column, so the row still reads as one
  *  row (a Windows test machine 2026-10-18: it used to drop to a second line at indent 2, and `fit` then folded that to column 0). A word longer than the room
  *  left beside the label (a path, a command) keeps its own line unbroken, with the label alone above it (§1.1⑥). */
-export function pairs(rows, { indent = 2, gap = 2, width = WIDTH } = {}) {
+export function pairs(rows, { indent = 2, gap = 2, width = WIDTH, label: least = 0 } = {}) { // `label`: the least label width, so blocks printed apart line up
   const pad = ' '.repeat(indent)
-  const label = Math.max(0, ...rows.map(([l]) => String(l).length))
+  const label = Math.max(least, ...rows.map(([l]) => String(l).length))
   const col = indent + label + gap
   return rows.flatMap(([l, v]) => {
     const value = String(v ?? '')

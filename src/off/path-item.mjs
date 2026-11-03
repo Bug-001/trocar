@@ -14,7 +14,7 @@ import { undoEntry } from './journal.mjs'
 import { undoByHand } from './manifest.mjs'
 import { execTool } from './exec.mjs'
 
-const MARK = lineComment('puts trocar on your PATH')
+const MARK = lineComment('puts trocar on your PATH', 'trocar uninstall')
 const POSIX = `case ":$PATH:" in *":$HOME/.trocar/bin:"*) ;; *) export PATH="$PATH:$HOME/.trocar/bin" ;; esac ${MARK}`
 const FISH = `contains -- $HOME/.trocar/bin $PATH; or set -gx PATH $PATH $HOME/.trocar/bin ${MARK}`
 // first match wins; `os` absent = any system, `shell` absent = any shell

@@ -509,7 +509,7 @@ export function statusDocOf(f) {
   const health = healthDocOf(f)
   const doc = {
     ...newReceipt('status'), ok: statusExit(f) === EXIT.ok, ...(health ? { health } : {}), changed: changedOf(f),
-    daemon: { running: d.state === 'running' ? true : d.state === 'not-running' ? false : null, pid: d.state === 'running' ? d.pid : null, responding: d.state === 'running' ? true : d.state === 'not-responding' ? false : null, since: (d.reply && d.reply.since) || (d.lock && d.lock.started_at) || null, error: d.reason || null },
+    daemon: { running: d.state === 'running' ? true : d.state === 'not-running' ? false : null, pid: d.state === 'running' ? d.pid : null, responding: d.state === 'running' ? true : d.state === 'not-responding' ? false : null, since: (d.reply && d.reply.since) || (d.lock && d.lock.started_at) || null, code: (d.state === 'running' && d.reply && typeof d.reply.code === 'string' && d.reply.code) || null, error: d.reason || null }, // code: the daemon's own answer (C.3, D67⑤)
     harnesses: Object.fromEntries(f.harnesses.map((h) => [h.id, {
       desired: h.desired ?? null, captured: h.judged.captured, reason: reasonOf(h.judged), why: h.why,
       setup: setupDocOf(f, h.id), forms: forms[h.id] || [], processes: h.judged.rows.filter((r) => r.pid != null).map((r) => ({ pid: r.pid, name: r.name ?? null, captured: r.captured, reason: r.reason ?? null, ...(r.cause ? { cause: r.cause } : {}), ...(r.negatives ? { negatives: r.negatives } : {}) })),

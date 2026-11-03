@@ -13,12 +13,22 @@ import { pathItemTarget } from '../../src/off/path-item.mjs'
 import { appDir, launcherPath } from '../../src/off/paths.mjs'
 import { orphanBackups } from '../../src/off/backup.mjs'
 import { fakeIo, onCtx, seedClaude } from '../cli/fixtures/on-ctx.mjs'
+import { COMMANDS } from '../../src/cli/commands.mjs'
 
 test('V112: the start file is the one the (system, shell, ZDOTDIR) row names', () => {
   const h = '/h'
   const at = (platform, SHELL, extra = {}) => pathItemTarget({ platform, env: { SHELL, ...extra }, home: h }).file
   assert.deepEqual([at('darwin', '/bin/zsh'), at('linux', '/usr/bin/zsh', { ZDOTDIR: '/z' }), at('darwin', '/bin/bash'), at('linux', '/bin/bash'), at('linux', '/usr/bin/fish'), at('linux', '/bin/dash'), at('darwin', '')],
     ['/h/.zshrc', '/z/.zshrc', '/h/.bash_profile', '/h/.bashrc', '/h/.config/fish/conf.d/trocar.fish', '/h/.profile', '/h/.profile'])
+})
+
+// the line tells whoever reads the start file how it goes away: the command it names is one this trocar has, visible in help (commands.mjs)
+test('the PATH line names a command that exists to take it out', () => {
+  for (const shell of ['/bin/bash', '/usr/bin/fish']) {
+    const { line } = pathItemTarget({ platform: 'linux', env: { SHELL: shell }, home: '/h' })
+    const named = /`trocar ([^`]+)`/.exec(line)
+    assert.ok(named && COMMANDS.some((c) => c.name === named[1] && !c.hidden), line)
+  }
 })
 
 test('the line puts ~/.trocar/bin last on PATH once, however often the file is read', () => {

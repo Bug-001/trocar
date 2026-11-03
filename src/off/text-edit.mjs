@@ -12,7 +12,9 @@ export const BLOCK_BEGIN = `# >>> ${SENTINEL} >>> written by \`trocar collector 
 export const BLOCK_END = `# <<< ${SENTINEL} <<<`
 // A user's line of the same name family, put out of effect by trocar (4.6 §身份与信任「名字族」): uninstall strips exactly this prefix.
 export const OFF_PREFIX = `#${SENTINEL.replace(' ', '-')}-off# `
-export const lineComment = (what) => `# ${SENTINEL}: ${what} (\`trocar collector uninstall\` removes this line)`
+// `by`: the command that takes the line out. The PATH item names `trocar uninstall`; the agents' lines keep the words they were first written with, because
+// an install compares an entry's bytes and a new marker would rewrite every one of them (re-judging running agents as started before their certificate)
+export const lineComment = (what, by = 'trocar collector uninstall') => `# ${SENTINEL}: ${what} (\`${by}\` removes this line)`
 
 const SAFE_VALUE = /^[^\s"'`#$\\]+$/ // unquoted dotenv value: an absolute path without spaces, quotes, # or $
 // Inside double quotes a space, a single quote, brackets and # are plain characters; what dotenvy and python-dotenv read as an escape (\), a substitution ($, `) or the end of the line is
