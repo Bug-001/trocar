@@ -133,24 +133,32 @@ test('1.2 #23 a desk left while its packs load sends no pack read while away, an
   const L = 300, P = 8, long = world(5, { calls: 160, talk: { pre: 3, len: 60, every: 6, tail: 4 } }), packs = long.files(long.now, P).head.packs.length
   // every pack read's start and the leave, on the page's clock: the leave is stamped as the router hands the route over (its hashchange)
   const b = await withBoard({ bytes: 1e5, width: 1280, chromium: gate.chromium, setup: stampFetches })
+  let release, armed = false
+  const held = new Promise((r) => { release = r })
   try {
     const { page } = b
     const packReads = async () => (await page.evaluate(() => globalThis.__fetches)).filter((e) => /^\/api\/d\/p\d/.test(e.url))
     await serveWorld(page, long, { latency: L, pack: P })
+    // every pack main asked after the desk drew and before the leave is held until the page has left, so the leave lands while a main is in flight
+    await page.route(/\/api\/d\/p\d+\.main(\?|$)/, async (route) => { if (armed) await held; await route.fallback() })
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
     await until(page, () => !!document.querySelector('.desk #stepbar .sb-no'))
-    // leave, from inside the page, at the first frame a pack's main is in flight (every answer waits L)
+    armed = true
+    await page.evaluate(() => { globalThis.__armedAt = performance.timeOrigin + performance.now() })
+    // leave, from inside the page, at the first frame a held pack main is in flight
     const left = await page.evaluate(() => new Promise((resolve) => {
       const tick = () => {
-        if (!globalThis.__fetches.some((e) => /^\/api\/d\/p\d+\.main/.test(e.url) && e.t1 == null)) return requestAnimationFrame(tick)
+        if (!globalThis.__fetches.some((e) => /^\/api\/d\/p\d+\.main/.test(e.url) && e.t1 == null && e.t0 >= globalThis.__armedAt)) return requestAnimationFrame(tick)
         addEventListener('hashchange', () => resolve(performance.timeOrigin + performance.now()), { once: true })
         location.hash = '#/sessions'
       }
       tick()
     }))
     await until(page, () => !document.querySelector('.desk'))
+    release()
     await new Promise((r) => setTimeout(r, 4 * L))
     const away = await packReads()
+    assert.ok(away.some((e) => /\.main/.test(e.url) && e.t0 <= left && (e.t1 == null || e.t1 > left)), 'a pack main was in flight at the leave')
     assert.ok(away.some((e) => e.t0 <= left) && new Set(away.filter((e) => e.t1 != null).map((e) => e.url)).size < 2 * packs, 'the history was still loading when the reader left')
     assert.deepEqual(away.filter((e) => e.t0 > left).map((e) => `${e.url.split('?')[0]} +${Math.round(e.t0 - left)} ms`), [], 'pack reads started while away (ms after the leave)')
     await page.evaluate(() => history.back())
@@ -163,7 +171,7 @@ test('1.2 #23 a desk left while its packs load sends no pack read while away, an
     assert.deepEqual(all.filter((u, i) => all.indexOf(u) !== i), [], 'pack files read twice')
     assert.ok((await packReads()).some((e) => e.t0 > left), 'the loader went on after the return')
     assert.deepEqual(b.errors, [])
-  } finally { await b.stop() }
+  } finally { release(); await b.stop() }
 })
 
 test('1.2 #23 a desk left while its poll round\'s head is on its way reads no tail and no pack after it lands', { skip }, async () => {
