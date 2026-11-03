@@ -249,26 +249,28 @@ test('cli: install / on go to the one `trocar on` (src/cli/on.mjs) with the desc
 
 test('cli: setup-helper installs or removes through arch; a failure is exit 1', async () => {
   const done = []
-  const arch = { install: { DEFAULTS: { helperBin: '/usr/local/libexec/trocar/trocar-redirector' }, setupHelper: (o) => { done.push(o.binarySrc); return { bin: '/b', getcap: 'caps' } }, uninstallHelper: () => ({ warnings: [] }) } }
+  const arch = { install: { DEFAULTS: { helperBin: '/usr/local/libexec/trocar/trocar-redirector' }, setupHelper: (o) => { done.push(o.binarySrc); return { bin: '/b', caps: 'cap_bpf=ep' } }, uninstallHelper: () => ({ warnings: [] }) } }
   const root = tmpDir('trocar-cli-built-'), dir = path.join(root, 'src', 'collector', 'arch', 'linux'), built = path.join(dir, 'trocar-redirector')
   fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(built, '')
-  let t = io(); assert.equal(await runSetupHelper(['--binary', built], { arch: { install: { ...arch.install, setupHelper: (o) => { done.push(o.binarySrc); return { bin: '/b/trocar-redirector', getcap: '/b/trocar-redirector cap_net_admin,cap_perfmon,cap_bpf=ep' } } } }, ...t }), 0)
+  let t = io(); assert.equal(await runSetupHelper(['--binary', built], { arch: { install: { ...arch.install, setupHelper: (o) => { done.push(o.binarySrc); return { bin: '/b/trocar-redirector', caps: 'cap_net_admin,cap_perfmon,cap_bpf=ep' } } } }, ...t }), 0)
   assert.equal(t.o.join('\n').split('/b/trocar-redirector').length - 1, 1, `the helper's path is said once (D58)\n${t.o.join('\n')}`)
+  assert.ok(t.o.join(' ').includes('cap_net_admin,cap_perfmon,cap_bpf=ep'), `the capabilities the arch reports are said (D38)\n${t.o.join('\n')}`)
   t = io(); assert.equal(await runSetupHelper(['--remove'], { arch, ...t }), 0)
   assert.deepEqual(done, [built])
   t = io(); assert.equal(await runSetupHelper([], { arch: { install: { setupHelper: () => { throw new Error('must run as root') } } }, packageRoot: root, ...t }), 1)
   assert.deepEqual(t.e, ['trocar setup-helper: must run as root'], 'the failure is said once, named by the command')
   // a staged copy an interrupted setup-helper left is removed and said, by both directions (D38)
-  const swept = { install: { DEFAULTS: arch.install.DEFAULTS, setupHelper: () => ({ bin: '/b', getcap: 'caps', swept: ['.trocar-redirector.new.67915'] }), uninstallHelper: () => ({ warnings: ['removed 1 copy(ies) an interrupted setup-helper had staged: .trocar-redirector.new.67915'] }) } }
+  const swept = { install: { DEFAULTS: arch.install.DEFAULTS, setupHelper: () => ({ bin: '/b', caps: 'cap_bpf=ep', swept: ['.trocar-redirector.new.67915'] }), uninstallHelper: () => ({ warnings: ['removed a staged copy an interrupted setup-helper left: .trocar-redirector.new.67915'] }) } }
   t = io(); await runSetupHelper([], { arch: swept, packageRoot: root, ...t })
   assert.ok(t.o.join('\n').includes('.trocar-redirector.new.67915'), `the staged copy it removed is named (D38)\n${t.o.join('\n')}`)
+  assert.doesNotMatch(t.o.join('\n'), /\(ies\)|\(s\)/, 'plain English, no parenthesised plural (D58)')
   t = io(); await runSetupHelper(['--remove'], { arch: swept, ...t })
-  assert.match(t.o.join('\n'), /Warning: removed 1 copy\(ies\)/)
+  assert.match(t.o.join('\n'), /^Warning: .*\.trocar-redirector\.new\.67915/m)
 })
 
 test('cli: setup-helper on a checkout whose helper is not built says how to build it, once, and installs nothing (exit 1)', async () => {
   const called = []
-  const arch = { install: { DEFAULTS: { helperBin: '/usr/local/libexec/trocar/trocar-redirector' }, setupHelper: (o) => { called.push(o); return { bin: '/b', getcap: 'caps' } } } }
+  const arch = { install: { DEFAULTS: { helperBin: '/usr/local/libexec/trocar/trocar-redirector' }, setupHelper: (o) => { called.push(o); return { bin: '/b', caps: 'cap_bpf=ep' } } } }
   for (const root of [tmpDir('trocar-cli-unbuilt-'), path.join(tmpDir('trocar-cli-unbuilt-'), "ada's trocar")]) {
     const t = io()
     assert.equal(await runSetupHelper([], { arch, packageRoot: root, ...t }), 1)

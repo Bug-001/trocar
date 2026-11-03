@@ -128,7 +128,7 @@ export function setupHelper(opts = {}) {
     try { fs.rmSync(tmp, { force: true }) } catch {}
     throw e
   }
-  return { ok: true, bin: cfg.helperBin, caps: 'cap_net_admin,cap_perfmon,cap_bpf=ep', getcap: run('getcap', [cfg.helperBin]).out, swept }
+  return { ok: true, bin: cfg.helperBin, caps: 'cap_net_admin,cap_perfmon,cap_bpf=ep', swept }
 }
 
 export function uninstallHelper(opts = {}) {
@@ -141,7 +141,7 @@ export function uninstallHelper(opts = {}) {
   if (running.code === 0 && running.out) warnings.push('a capability helper is still running; it will keep working until it exits')
   fs.rmSync(cfg.helperBin, { force: true })
   const swept = sweepStaged(cfg.helperDir)
-  if (swept.length) warnings.push(`removed ${swept.length} copy(ies) an interrupted setup-helper had staged: ${swept.join(', ')}`)
+  if (swept.length) warnings.push(`removed ${swept.length === 1 ? 'a staged copy' : `${swept.length} staged copies`} an interrupted setup-helper left: ${swept.join(', ')}`)
   try { fs.rmdirSync(cfg.helperDir) } catch (e) { // gone already is fine; anything else is said, never swallowed
     if (e.code !== 'ENOENT') warnings.push(`${cfg.helperDir} was left in place (${e.code}): ${(() => { try { return fs.readdirSync(cfg.helperDir).join(', ') } catch { return '?' } })()}`)
   }
