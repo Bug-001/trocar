@@ -1,12 +1,19 @@
-// settings-model.test.mjs — 1.11 §验收 for the settings screens' pure models (storage-model.mjs, theme.mjs): the 磁盘 card and the
-// 保存什么 card as data, and the theme preference. Documents are constructed C.5 `classes` / `segments` shapes (the ones
-// src/query/named/{segments,classes}.mjs write); expected values come from the documents themselves and the shared catalogs.
+// settings-model.test.mjs — 1.11 §验收 for the settings screens' pure models (storage-model.mjs, theme.mjs, prices.mjs): the 磁盘
+// card and the 保存什么 card as data, the theme preference, the unpriced models and the paste template. Documents are constructed
+// C.5 `classes` / `segments` shapes (the ones src/query/named/{segments,classes}.mjs write); expected values come from the
+// documents themselves and the shared catalogs.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 import * as M from '../../web/src/screens/settings/storage-model.mjs'
 import { setTheme, themeChoice } from '../../web/src/screens/settings/theme.mjs'
 import { THEME_KEY } from '../../web/legacy/core/ui.mjs'
 import { CLASS_IDS, CLASS_DESC, FALLBACK_CLASS } from '../../web/legacy/core/classes.mjs'
+import { unpricedModels, templateText } from '../../web/legacy/settings/prices.mjs'
+import { priceMatch } from '../../web/legacy/core/metrics.mjs'
+import { loadPricing } from '../../src/view/pricing.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
 
 const SEG = '20260719T100000Z'
 const WINDOWS = ['24h', '7d', 'all']
@@ -157,3 +164,29 @@ test('#19 setTheme pins light / dark and stores the key, system removes both; a 
   doc.attrs.set('data-theme', 'sepia')
   assert.equal(themeChoice(doc), 'system')
 })
+
+test('#17 unpriced models: priceMatch null with usable calls; at least N = the max sessions over that model\'s rows', () => {
+  const table = { opus: [1, 2, 3, 4] }
+  const got = unpricedModels([
+    { model: 'glm-x', calls: 5, failed: 0, no_usage: 0, sessions: 2 },
+    { model: 'glm-x', calls: 3, failed: 0, no_usage: 0, sessions: 4 },
+    { model: 'zz-dead', calls: 2, failed: 1, no_usage: 1, sessions: 9 },
+    { model: 'claude-opus-4', calls: 9, failed: 0, no_usage: 0, sessions: 7 },
+  ], table)
+  assert.deepEqual(got, [{ model: 'glm-x', sessions: 4 }])
+})
+
+test('#18 the template: a member of the file when it exists, a whole file when not; pasted verbatim the model stays unpriced (no $0)', () => {
+  const model = 'glm-4.6'
+  const member = templateText(model, '/somewhere/pricing.json')
+  assert.ok(!/,\s*$/.test(member))
+  assert.deepEqual(JSON.parse(`{${member}}`), { [model]: [null, null, null, null] })
+  const whole = templateText(model, 'default')
+  assert.deepEqual(JSON.parse(whole), { [model]: [null, null, null, null] })
+  const f = path.join(tmpDir('trocar-price-'), 'pricing.json')
+  fs.writeFileSync(f, whole)
+  const t = loadPricing(f)
+  assert.equal(Object.prototype.hasOwnProperty.call(t, model), false)
+  assert.equal(priceMatch(t, model), null)
+})
+
