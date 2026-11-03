@@ -17,7 +17,9 @@ const out = deskNext ? fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-desk-next-'
 let status = 1
 try {
   if (out) {
-    const b = spawnSync('nice', ['-n', '15', 'npm', 'run', 'build:board', '--', '--mode', 'desk-next', '--outDir', out, '--emptyOutDir', '--logLevel', 'warn'], { stdio: 'inherit' })
+    // npm's own CLI under this node when npm started us (npm_execpath), else npm through the shell on win32 (npm.cmd); the caller sets the priority
+    const build = ['run', 'build:board', '--', '--mode', 'desk-next', '--outDir', out, '--emptyOutDir', '--logLevel', 'warn'], npm = process.env.npm_execpath
+    const b = npm ? spawnSync(process.execPath, [npm, ...build], { stdio: 'inherit' }) : spawnSync('npm', build, { stdio: 'inherit', shell: process.platform === 'win32' })
     if (b.status !== 0) throw new Error('the desk-next build failed')
     env.TROCAR_BOARD_DIR = out
   }
