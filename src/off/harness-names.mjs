@@ -1,13 +1,33 @@
-// harness-names.mjs (src/off) — the harness names the CLI takes and prints (RFC 1.6 §1.6): the CLI name is the code id (a descriptor's `name`
-// in src/collector/harness/), a few short aliases are accepted on input, and output (including `--json`) always has the code id. The one table:
-// src/off may import nothing outside itself (the standalone trocar-off is made of this directory alone), so it lives here and the CLI imports it
-// (0.1 §2). test/cli/harness-names.test.mjs holds it equal to the descriptors loadHarnesses() finds. Imports nothing.
+// harness-names.mjs (src/off) — the harness registry (D76): one row per harness, and the CLI names (RFC 1.6 §1.6), the read side's
+// proc.agent spellings (src/dissect/harnesses.mjs) and the board's names and icons all derive from it. Row fields:
+//   id: the code id — a descriptor's `name` in src/collector/harness/, what the CLI takes and prints (output, `--json` included, always has it);
+//   read: the read side's harness id when it differs from `id` (readIdOf); aliases: short names the CLI also accepts on input;
+//   name: the display name; icon: its file in ./harness-icons/ (provenance in ./harness-icons/SOURCES.md);
+//   legacy: a harness only old captures name (inferred from the UA), no descriptor, not a CLI name.
+// src/off may import nothing outside itself (the standalone trocar-off is made of this directory alone), so the registry lives here and the CLI
+// and src/dissect import it (0.1 §2). test/cli/harness-names.test.mjs holds it equal to the descriptors and the dissect table. Imports nothing.
 
-/** The code ids, in 1.6 §1.6's order (the order the commands list and resolve them). */
-export const HARNESS_IDS = Object.freeze(['claude-code', 'codex', 'opencode', 'kimi-code', 'deepseek-dsh', 'hermes', 'z-code', 'pi'])
+/** The rows, non-legacy ones in 1.6 §1.6's order (the order the commands list and resolve them). */
+export const HARNESS_REGISTRY = Object.freeze([
+  { id: 'claude-code', read: 'cc', aliases: ['claude'], name: 'Claude Code', icon: 'claude-code.svg' },
+  { id: 'codex', name: 'Codex', icon: 'codex.png' },
+  { id: 'opencode', name: 'OpenCode', icon: 'opencode.svg' },
+  { id: 'kimi-code', read: 'kimi', aliases: ['kimi'], name: 'Kimi Code', icon: 'kimi-code.png' },
+  { id: 'deepseek-dsh', read: 'dsh', aliases: ['dsh'], name: 'DeepSeek dsh', icon: 'deepseek-dsh.svg' },
+  { id: 'hermes', name: 'Hermes', icon: 'hermes.svg' },
+  { id: 'z-code', read: 'zcode', aliases: ['zcode'], name: 'Z-Code', icon: 'z-code.png' },
+  { id: 'pi', name: 'pi', icon: 'pi.svg' },
+  { id: 'deepseek-cli', legacy: true, name: 'DeepSeek CLI', icon: 'deepseek-cli.svg' },
+].map(Object.freeze))
 
-/** Short names accepted as input. */
-export const NAME_ALIASES = Object.freeze({ claude: 'claude-code', dsh: 'deepseek-dsh', kimi: 'kimi-code', zcode: 'z-code' })
+/** A row's read-side harness id. */
+export const readIdOf = (r) => r.read || r.id
+
+/** The code ids of the non-legacy rows, in registry order. */
+export const HARNESS_IDS = Object.freeze(HARNESS_REGISTRY.filter((r) => !r.legacy).map((r) => r.id))
+
+/** Short names accepted as input → code id. */
+export const NAME_ALIASES = Object.freeze(Object.fromEntries(HARNESS_REGISTRY.flatMap((r) => (r.aliases || []).map((a) => [a, r.id]))))
 
 /** `[harness…]` as typed → `{ ok: true, ids }` (`null` = none named = all; else code ids in `table` order, a repeat once), or
  *  `{ ok: false, unknown, known }` when any name is not a harness: `unknown` in the order typed, once each, `known` every name the

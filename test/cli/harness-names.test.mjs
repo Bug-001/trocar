@@ -3,8 +3,9 @@
 // touched — the exit is the dispatcher's, tested there). One table, src/off/harness-names.mjs, for the CLI and trocar-off alike.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { HARNESS_IDS, NAME_ALIASES, resolveHarnesses } from '../../src/off/harness-names.mjs'
+import { HARNESS_IDS, NAME_ALIASES, resolveHarnesses, HARNESS_REGISTRY, readIdOf } from '../../src/off/harness-names.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
+import { HARNESSES, LEGACY_HARNESS_IDS, harnessOf } from '../../src/dissect/harnesses.mjs'
 
 test('harness names: the ids are the descriptor names — a harness added as a descriptor alone fails here until the table names it (1.6 §1.6: CLI 名 = 代码 id)', async () => {
   const names = (await loadHarnesses()).map((d) => d.name).sort()
@@ -54,4 +55,31 @@ test('harness names: what is not a string is unknown, not a crash', () => {
   const r = resolveHarnesses([null, 7, 'codex'])
   assert.equal(r.ok, false)
   assert.deepEqual(r.unknown, ['null', '7'])
+})
+
+// The harness registry (D76): one row per harness; the CLI names, the read-side spellings and the board's names derive from it.
+const allUnique = (xs) => new Set(xs).size === xs.length
+
+test('harness registry: ids, read ids, aliases and names are each unique, and no alias is another row\'s id', () => {
+  const R = HARNESS_REGISTRY
+  for (const [what, xs] of [['id', R.map((r) => r.id)], ['read id', R.map(readIdOf)], ['alias', R.flatMap((r) => r.aliases || [])], ['name', R.map((r) => r.name)]]) {
+    assert.ok(allUnique(xs), `${what}s repeat: ${xs}`)
+  }
+  for (const r of R) for (const a of r.aliases || []) {
+    const owner = R.find((o) => o.id === a)
+    assert.ok(!owner || owner === r, `alias ${a} of ${r.id} is ${owner && owner.id}'s id`)
+  }
+})
+
+test('harness registry: the non-legacy read ids are the dissect table\'s ids, and the legacy ids are its legacy ids', () => {
+  assert.deepEqual(new Set(HARNESS_REGISTRY.filter((r) => !r.legacy).map(readIdOf)), new Set(HARNESSES.map((h) => h.id)))
+  assert.deepEqual(new Set(HARNESS_REGISTRY.filter((r) => r.legacy).map((r) => r.id)), new Set(LEGACY_HARNESS_IDS))
+})
+
+test('harness registry: a record whose proc.agent is a descriptor name is read as that row\'s read id', async () => {
+  for (const d of await loadHarnesses()) {
+    const row = HARNESS_REGISTRY.find((r) => r.id === d.name)
+    assert.ok(row, `${d.name} has a registry row`)
+    assert.equal(harnessOf({ proc: { pid: 1, exe: '/x/' + d.name, agent: d.name }, req_headers: {}, req_body: '{}' }).id, readIdOf(row), d.name)
+  }
 })
