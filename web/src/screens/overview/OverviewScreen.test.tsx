@@ -281,6 +281,16 @@ test('O7: while every read fails, each name\'s reads are at least the back-off a
   expect(calls.length).toBe(n)
 })
 
+test('O7b: opened in a hidden tab, the slow reads wait until the tab is visible, then each is asked', async () => {
+  setVisible(false)
+  mount(); await settle()
+  for (let t = 0; t < 20e3; t += 1000) await tick(1000)
+  for (const name of SLOW) expect(asked(name), name).toHaveLength(0)
+  setVisible(true); await settle()
+  for (let t = 0; t < 5e3; t += 500) await tick(500)
+  for (const name of SLOW) expect(asked(name).length, name).toBeGreaterThan(0)
+})
+
 test('O8: a sessions answer that carries `stored` is never shown; the fresh one after it is, on the same rows', async () => {
   answer.sessions = (n) => n === 0 ? ok({ sessions: [sess('a', 60)] })
     : n <= 5 ? ok({ sessions: [sess('s', 1)], stored: { at: T } }) : ok({ sessions: [sess('b', 1), sess('a', 60)] })
