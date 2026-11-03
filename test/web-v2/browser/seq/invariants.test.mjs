@@ -65,7 +65,7 @@ test('V0 a settled, followed desk that grows breaks no invariant', { skip }, asy
     await check(ctx()) // the first visit's baseline
     const grownAt = Date.now(); world.grow(2)
     await b.page.waitForTimeout(6000) // several timer reads at the desk's own cadence
-    const r = await check(ctx({ follow: true, grownAt }))
+    const r = await check(ctx({ follow: true, grownAt, stepAt: grownAt })) // the growth is the step (2.3 #27: the fresh page's first draw is not judged)
     assert.deepEqual(r.violations, [])
   } finally { await b.page.unroute('**/api/sessions**', slow) }
 })
@@ -225,9 +225,9 @@ test('V-loadstep a control inside an aria-busy frame of the desk', { skip }, asy
   assert.ok(ids(await check(ctx())).includes('I-loadstep'))
 })
 
-// the page's own timer runs the loop (code run through page.evaluate is no task of the page's)
+// the page's own timer runs the loop once the document's boot is over (code run through page.evaluate is no task of the page's)
 const planted = (loop) => `<!doctype html><meta charset="utf-8"><title>planted</title><p>planted</p><script>setTimeout(() => {
-  ${loop ? 'const t = performance.now(); while (performance.now() - t < 120);' : ''} window.__planted = true }, 50)</script>`
+  ${loop ? 'const t = performance.now(); while (performance.now() - t < 120);' : ''} window.__planted = true }, 300)</script>`
 
 test('a planted 120 ms busy loop is a long task ≥ 100 ms and an I-longtask violation; the page without it is neither', { skip }, async () => {
   for (const loop of [true, false]) {
@@ -244,6 +244,29 @@ test('a planted 120 ms busy loop is a long task ≥ 100 ms and an I-longtask vio
       assert.equal(ids(r).includes('I-longtask'), loop)
     } finally { await pg.close() }
   }
+})
+
+// 2.3 #27: I-longtask judges a task that starts after the step's input and after the document's boot. A 120 ms loop in a task of
+// the page's own 100 ms into the boot (an image held 500 ms delays `load`; a task in the first few ms can precede the observer) and one before the step's input are seen by the
+// probe and not judged; one after the step's input is.
+test('V-longtask: a long task in the boot or before the step\'s input is not judged; one after the step\'s input is', { skip }, async () => {
+  const pg = await b.page.context().newPage()
+  const busy = () => pg.evaluate(() => new Promise((ok) => setTimeout(() => { const t = performance.now(); while (performance.now() - t < 120); setTimeout(ok, 300) })))
+  try {
+    await installProbe(pg)
+    await pg.route('**/seq-boot.html', (r) => r.fulfill({ contentType: 'text/html; charset=utf-8',
+      body: '<!doctype html><meta charset="utf-8"><title>boot</title><p>boot</p><img src="seq-boot.gif"><script>setTimeout(() => { const t = performance.now(); while (performance.now() - t < 120); }, 100)</script>' }))
+    await pg.route('**/seq-boot.gif', (r) => setTimeout(() => r.fulfill({ contentType: 'image/gif', body: '' }).catch(() => {}), 500))
+    await pg.goto(`${b.url}/seq-boot.html`) // waits for `load`
+    await pg.waitForTimeout(300) // the boot ends a frame after `load`; the observer's entries are delivered after the task
+    assert.ok((await snap(pg)).longtaskMax >= 100, 'the boot\'s long task is seen')
+    assert.equal(ids(await check({ page: pg })).includes('I-longtask'), false, 'the boot is not judged')
+    await busy()
+    assert.equal(ids(await check({ page: pg, stepAt: Date.now() })).includes('I-longtask'), false, 'a task before the step\'s input is not judged')
+    const stepAt = Date.now()
+    await busy()
+    assert.ok(ids(await check({ page: pg, stepAt })).includes('I-longtask'), 'a task after the step\'s input is judged')
+  } finally { await pg.close() }
 })
 
 // a static page the harness serves at `hash` (not the board), its /api/* answered by `api(url)` → {body, ms}; resolves once

@@ -2,7 +2,8 @@
 // scripts run (page.addInitScript): live listeners on window / document / other targets (keyed by target, type, listener, capture),
 // live intervals, in-flight fetches and the log of every /api · /control fetch (start, end, status, failed / aborted / cut body, an
 // answer carrying `pending`, the route (hash before `?`) it was sent from, and for a head answer its sealed packs' tags {n: tag}),
-// AbortControllers created / aborted, long tasks, console.error calls, and a per-frame sampler of two reader-visible faults:
+// AbortControllers created / aborted, long tasks, the document's navigation boot (2.3 #27: from timeOrigin to one task after the first
+// frame after `load`, marked `seq-boot-done`), console.error calls, and a per-frame sampler of two reader-visible faults:
 //   blank — after #screen first held visible content, a frame where it has no element child or no visible text (1.5 K-29);
 //   keep  — a replay desk that was drawn (#ctxwin holds rows) for the route still in the hash, replaced by the never-drawn failure
 //           state (replay.mjs renderEmpty: `#ctxwin > .empty`, not the not-listed one) (1.5 K-29).
@@ -103,6 +104,11 @@ function pageProbe() {
   // ── long tasks, console.error ─────────────────────────────────────────────────────────────────────────────────────────────
   // a task of the page's own (a timer, an event, a parse) over 50 ms; code a test runs through page.evaluate is no task and is not seen
   try { new PerformanceObserver((l) => { for (const x of l.getEntries()) push(S.longtasks, { t: performance.timeOrigin + x.startTime, ms: x.duration }) }).observe({ type: 'longtask', buffered: true }) } catch { /* no long-task timing here */ }
+  // the navigation boot ends one task after the first frame after `load` (2.3 #27); a task that starts before then is the boot's
+  const boot = { origin: performance.timeOrigin, done: null }
+  const booted = () => setTimeout(() => { boot.done = performance.timeOrigin + performance.mark('seq-boot-done').startTime })
+  const onLoad = () => requestAnimationFrame(booted)
+  if (document.readyState === 'complete') onLoad(); else add.call(window, 'load', onLoad, { once: true })
   const ce = console.error
   console.error = function (...a) { push(S.consoleErrors, { t: now(), msg: a.map((x) => String(x && x.stack ? x.message : x)).join(' ').slice(0, 300) }); return ce.apply(this, a) }
 
@@ -145,7 +151,7 @@ function pageProbe() {
       intervals: S.intervals.size,
       inflight: S.inflight,
       ac: { ...S.ac },
-      longtasks: S.longtasks.slice(), longtaskMax: S.longtasks.reduce((m, x) => Math.max(m, x.ms), 0),
+      longtasks: S.longtasks.slice(), longtaskMax: S.longtasks.reduce((m, x) => Math.max(m, x.ms), 0), boot: { ...boot },
       consoleErrors: S.consoleErrors.slice(),
       blank: S.blank.slice(), keep: S.keep.slice(),
       fetchLog: S.fetchLog.map((x) => ({ ...x })),

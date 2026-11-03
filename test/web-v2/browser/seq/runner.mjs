@@ -1,6 +1,6 @@
 // test/web-v2/browser/seq/runner.mjs — one seeded sequence on a fresh board: generate(seed) draws the steps (pure); runSequence runs
 // them on a new world + board + Chrome, settles after each step and checks every invariant; findOne() turns a new violation into a
-// permanent regression (reproduce once, shrink with ddmin, save). Exports only; nothing runs at import.
+// permanent regression (reproduce once, shrink with ddmin unless it is a timing invariant, save). Exports only; nothing runs at import.
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,7 +10,7 @@ import { makeWorld, mainCount } from './world.mjs'
 import { installProbe, resetProbe } from './probe.mjs'
 import { installFaults } from './faults.mjs'
 import { genStep, runStep } from './actions.mjs'
-import { check } from './invariants.mjs'
+import { check, TIMING } from './invariants.mjs'
 import { ddmin } from './shrink.mjs'
 
 export const REGRESSIONS = fileURLToPath(new URL('./regressions/', import.meta.url))
@@ -113,7 +113,7 @@ export async function runSequence({ steps, seed = 1, big = false, viewport = 128
       const truth = id && !real ? () => retry(() => mainCount(b.get, id)).catch((e) => { noTruth = true; out.serverErrors.push(`step ${i}: ${e.message}`); return null }) : undefined
       // every input the page saw (a compound step clicks after its own waits) opens a reader window for I-rate
       for (const [at, e] of await b.page.evaluate(() => (window.__seqInput || []).splice(0)).catch(() => [])) ctx.actions.push({ t: at, a: e })
-      const c = { page: b.page, requests: b.requests, errors: b.errors, actions: ctx.actions, faults: faults.log, hidden: ctx.hidden, follow: ctx.follow,
+      const c = { stepAt: t, page: b.page, requests: b.requests, errors: b.errors, actions: ctx.actions, faults: faults.log, hidden: ctx.hidden, follow: ctx.follow,
         grownAt: ctx.grownAt, truth, real, prev, baseline, drag: ctx.lastDrag }
       const had = new Set(baseline.keys())
       const res = await check(c).catch(async () => { await b.page.waitForTimeout(500); return check(c) })
@@ -154,20 +154,22 @@ export function regressions() {
 /**
  * A violation `v` met at step v.step of `steps` (run `opts`): reproduce once on the list up to that step, shrink it with ddmin (each
  * trial a fresh board; it fails only when the same sig and fingerprint recur), save regressions/<id>-<screen>-<seed>.json as `new` (or `flaky` with
- * the full list when it does not reproduce). → the saved document plus {file, trials}.
+ * the full list when it does not reproduce). A timing invariant (invariants TIMING) is not shrunk: a noisy box makes ddmin's trials
+ * wander, so a reproduced one is saved whole as `timing`. → the saved document plus {file, trials}.
  */
-export async function findOne(v, steps, opts, { budgetMs = +(process.env.SEQ_SHRINK_MS || 600000), maxTrials = 40, log = () => {} } = {}) {
+export async function findOne(v, steps, opts, { budgetMs = +(process.env.SEQ_SHRINK_MS || 600000), maxTrials = 40, log = () => {}, run = runSequence, dir = REGRESSIONS } = {}) {
   const head = steps.slice(0, v.step + 1)
   let trials = 0
-  const fails = async (sub) => { trials++; const r = await runSequence({ ...opts, steps: sub, shot: 'trial' }); log(`trial ${trials}: ${sub.length} steps → ${r.violation?.sig || 'pass'}`); return !!r.violation && keyOf(r.violation) === keyOf(v) }
+  const fails = async (sub) => { trials++; const r = await run({ ...opts, steps: sub, shot: 'trial' }); log(`trial ${trials}: ${sub.length} steps → ${r.violation?.sig || 'pass'}`); return !!r.violation && keyOf(r.violation) === keyOf(v) }
   const again = await fails(head)
-  const min = again ? await ddmin(head, fails, { budgetMs, maxTrials: maxTrials - 1 }) : head
+  const timing = TIMING.has(v.id)
+  const min = again && !timing ? await ddmin(head, fails, { budgetMs, maxTrials: maxTrials - 1 }) : head
   const [id, screen] = v.sig.split(':')
   const name = `${id}-${screen}-${opts.seed}`
   const doc = { name, invariant: id, sig: v.sig, fp: v.fp, seed: opts.seed, big: !!opts.big, viewport: opts.viewport, theme: opts.theme, steps: min,
-    screenshot: path.relative(process.cwd(), v.screenshot), status: again ? 'new' : 'flaky', detail: v.detail }
-  fs.mkdirSync(REGRESSIONS, { recursive: true })
-  const file = path.join(REGRESSIONS, `${name}.json`)
+    screenshot: path.relative(process.cwd(), v.screenshot), status: !again ? 'flaky' : timing ? 'timing' : 'new', detail: v.detail }
+  fs.mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, `${name}.json`)
   // one step per line: a long minimal list stays a short, reviewable file
   const lines = `[\n${min.map((x) => `    ${JSON.stringify(x)}`).join(',\n')}\n  ]`
   fs.writeFileSync(file, JSON.stringify({ ...doc, steps: 0 }, null, 2).replace('"steps": 0', () => `"steps": ${lines}`) + '\n')
