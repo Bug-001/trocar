@@ -17,6 +17,7 @@
     {"a":"select","p":{"where":"body","f":0.364,"span":0.236}}
   ],
   "screenshot": "test/web-v2/browser/shots/seq/I-select-replay-6.png",
-  "status": "new",
-  "detail": "button.popbtn.sb-ro true,,false,false → false,,false,false"
+  "status": "fixed",
+  "detail": "button.popbtn.sb-ro true,,false,false → false,,false,false: the read-out was hover-opened (the 768 resize put it under the resting pointer) and closed when the pointer moved to the drag's start, as 1.2 §弹出层 says; selectDrag read the folds before that move, so the pointer's move counted as the drag. Fixed in the action: the folds are read with the pointer at the drag's start",
+  "owner": "seq"
 }
