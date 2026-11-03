@@ -11,8 +11,8 @@ export const AREAS = ['head', 'step', 'saw', 'overview', 'cur', 'problems', 'rev
 export type Area = typeof AREAS[number]
 // the controller's state (replay.mjs openDesk `s`): plain JS, read by the legacy renderers and the models
 export type DeskState = any
-// the containers the legacy areas draw and the controller wires; the session head is React's (no #deskhead)
-export type Els = Record<'saw' | 'rails' | 'stepbar' | 'ctxwin' | 'ctxnav' | 'resexp' | 'rawpanel', HTMLElement> & { detail: HTMLElement | null }
+// the containers the legacy areas draw and the controller wires; the session head and the step head are React's (no #deskhead, #stepbar)
+export type Els = Record<'saw' | 'rails' | 'ctxwin' | 'ctxnav' | 'resexp' | 'rawpanel', HTMLElement> & { detail: HTMLElement | null }
 export type DeskView = ReturnType<typeof reactView>
 
 // makeView's shape (replay.mjs deskRoutes): `framed` is the controller's; `gone` runs when the controller disposes the desk
