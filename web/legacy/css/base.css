@@ -1,123 +1,150 @@
-/* css/base.css — the token block (visual design §2, the one place colours live), base typography, and the shared
-   components the screens kept from the first board (badges, the detail drawer, the modal). Light is the default;
-   dark comes with the OS unless a manual [data-theme] says otherwise — both directions of the manual choice win.
-   Old token names the kept CSS still uses are aliased at the bottom of the token block (visual design §9.2); the
-   aliases go away as each screen moves to its own stylesheet. */
+/* css/base.css — the token block (1.5 §令牌, the one place colours live), base typography, and the shared kit every screen
+   uses (buttons, the segmented control, select and search, the switch, the tooltip, the popover, the disclosure row,
+   技术细节, the fidelity marks, the modal, the detail drawer). Light is the default; dark comes with the OS unless a manual
+   [data-theme] says otherwise — both directions of the manual choice win. A colour that differs between the themes is
+   set in all four blocks; one that does not, and every non-colour token, lives in :root only. */
 :root {
   color-scheme: light;
-  /* surfaces — enamel grey with a faint green, never cream, never pure grey */
-  --paper:   #EEF1F0;   /* 舱面: content background */
-  --panel:   #E2E8E6;   /* 面板: sidebar, hover, bottom bars */
-  --raised:  #FFFFFF;   /* 抬起: reading sheets — cards, detail panes, overlays */
-  --scope:   #E4EAE8;   /* 迹线屏: the inset instrument screen of the replay desk */
-  --cached:  #E6EDEE;   /* 水位: rows already sent last step */
-  --sunk:    #E8ECEB;   /* wells: raw JSON, paths, commands */
-  --rule:    #CDD6D3;   /* 1px hairlines */
-  --rule-2:  #AEBBB7;   /* stronger hairline, guide lines — decoration only, never the only edge of a control */
-  --control-edge: #74827E; /* the edge or state of a control: off toggle, input border, off lamp (≥ 3:1) */
-  --grat:    #D3DCD9;   /* graticule on the scope */
+  /* faces */
+  --paper: #F8F7FB;  --panel: #EFEDF5;  --raised: #FFFFFF;  --sunk: #F4F2F8;
+  --scope: #1B1830;  --scope-2: #241A37;  /* the replay desk's inset scope: dark glass in both themes */
+  --scope-bezel: #0F0D1C;  --scope-hi: rgb(255 255 255 / .14);  /* its edge: an outer bezel line and an inner top highlight */
+  /* lines */
+  --rule: #E4E1EC;  --rule-2: #CFCADC;  --control-edge: #848099;  --grat: rgb(255 255 255 / .07);
   /* ink */
-  --ink:   #132026;
-  --ink-2: #45555B;
-  --ink-3: #55656B;
-  /* action: ONLY things you can operate — links, primary button, toggle on, selection, focus, brush */
-  --action: #00657F;
-  --action-ink: #FFFFFF;
-  --action-wash: rgb(0 101 127 / .09);
-  /* status — text colour / lamp colour */
-  --bad: #AE2219;  --bad-lamp: #D0392D;
-  --warn: #874E00; --warn-lamp: #B06C00;
-  --ok: #24693B;
-  --note-lamp: #132026;
-  /* scope ink */
-  --trace: #45555B;     /* cache logic trace */
-  --cursor: #132026;    /* playhead, step tag */
-  --cursor-ink: #EEF1F0;
-  /* data (charts and legend swatches only) */
-  --ct-tools:     #5A6C88;
-  --ct-system:    #7F5DBE;
-  --ct-user:      #336CBA;
-  --ct-assistant: #23807A;
-  --ct-thinking:  #A84785;
-  --ct-tooluse:   #7E7520;
-  --ct-result:    #788389;
-  --ct-hatch:     #788389;   /* image / other / not loaded: texture, not a hue */
+  --ink: #1B1828;  --ink-2: #4D4960;  --ink-3: #605B72;
+  /* action: only what can be operated */
+  --action: #5B47E0;  --action-ink: #FFFFFF;  --action-wash: rgb(91 71 224 / .10);
+  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-on: #FFFFFF;  --knob-off: #7A7590;
+  /* state: amber and red are for problems only */
+  --bad: #B42318;  --bad-lamp: #E0443A;  --warn: #8A4B00;  --warn-lamp: #C2740E;  --ok: #217A45;  --note-lamp: #1B1828;
+  /* instrument: the trace on the glass, --trace-ink where the cache share sits on paper; the cursor is neutral */
+  --trace: #7FE8C8;  --trace-ink: #167A5F;  --cursor: #F4F2FF;  --cursor-ink: #17132B;
+  --scope-ink: #ECE9F7;  --scope-ink-2: #ABA5CA;  --scope-edge: #6E6890;  --scope-rule: rgb(255 255 255 / .12);
+  --scope-fill: rgb(255 255 255 / .06);  --scope-fill-2: rgb(255 255 255 / .16);  --scope-action: #B9AEFF;
+  --scope-glow: rgb(194 82 217 / .18);  --scope-col: rgb(255 255 255 / .09);
+  /* data: content types (charts and legend swatches only) */
+  --ct-tools: #6F7EA3;  --ct-system: #9479E8;  --ct-user: #3E8CF2;  --ct-assistant: #1E9E8F;
+  --ct-thinking: #D262B9;  --ct-tooluse: #A8841F;  --ct-result: #948A82;  --ct-hatch: #8C899C;
   /* block cells: diff and error tints under ink, diff hunk heads and JSON-tree text (RFC 2.3 §两种模式) */
-  --diff-add-bg: #DCEDE1; --diff-del-bg: #F5E1DE; --diff-hunk: #3D5A80; --err-bg: #FAE6E3;
-  --j-key: #5B4294; --j-str: #1F6845; --j-num: #8A4600; --j-lit: #8B3A6E;
-  /* type */
+  --diff-add-bg: #DCEDE1;  --diff-del-bg: #F5E1DE;  --diff-hunk: #3D5A80;  --err-bg: #FAE6E3;
+  --j-key: #5B3FB0;  --j-str: #1C6B47;  --j-num: #8A4600;  --j-lit: #9A2F72;
+  /* brand: the signature gradient; the tag runs its first two stops so its white ink holds 4.5:1 */
+  --brand-1: #6B5BFF;  --brand-2: #C252D9;  --brand-3: #FF8A5B;  --brand-ink: #FFFFFF;
+  --brand-line: linear-gradient(90deg, var(--brand-1), var(--brand-2) 55%, var(--brand-3));
+  --tag: linear-gradient(90deg, #5A46E6, #9C3BC0);  --tag-ink: #FFFFFF;
+  --brand-text: linear-gradient(100deg, #5A46E6 10%, #A43CC4 70%, #C2513F);
+  --wash: linear-gradient(172deg, #ECE9FC 0%, #F3EDF9 52%, #FBEEF0 100%);
+  --wash-soft: linear-gradient(120deg, rgb(107 91 255 / .07), rgb(194 82 217 / .06) 55%, rgb(255 138 91 / .07));
+  --hover: rgb(27 24 40 / .045);
+  /* depth */
+  --shadow-card: 0 1px 2px rgb(27 24 40 / .05), 0 4px 14px rgb(27 24 40 / .04);
+  --shadow-pill: 0 1px 2px rgb(27 24 40 / .10), 0 0 0 1px rgb(27 24 40 / .05);
+  --shadow-float: 0 12px 32px rgb(27 24 40 / .16), 0 1px 3px rgb(27 24 40 / .10);
+  --shadow-scope: inset 0 1px 0 var(--scope-hi), inset 0 0 0 1px var(--scope-rule), 0 0 0 1px var(--scope-bezel), 0 2px 6px rgb(0 0 0 / .12);
+  --shadow-knob: 0 1px 2px rgb(0 0 0 / .3);
+  --scrim: rgb(10 16 18 / .45);
+  /* type: two families, five sizes, two weights; nothing else sets type. --sans for everything read or operated; --mono
+     only for machine bytes and literal identifiers, always at --fs-cap. --wordmark is the logo, not UI text. Numbers are
+     tabular everywhere (set once on body); no letter-spacing, no all-caps, no italic. */
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", system-ui, sans-serif;
   --mono: "SF Mono", ui-monospace, Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", monospace;
+  --wordmark: "New York", "Iowan Old Style", "Charter", Georgia, serif;
   --lh: 20px;         /* the body's line */
-  --fs-chart: 11px;   /* inside charts only, digits / axis labels */
-  --fs-cap: 12px;     /* second lines, captions, marks */
-  --fs-body: 13px;    /* tables, body, mono verbatim */
-  --fs-strong: 14px;  /* row titles, status sentences, prose verbatim */
-  --fs-h2: 16px;      /* section heads, session verdict */
-  --fs-h1: 22px;      /* the page head's screen name */
-  --fs-kpi: 28px;     /* only the first-run 开始使用 page */
-  /* space / shape / depth / motion */
+  --fs-chart: 11px;   /* only numbers and labels drawn on the scope */
+  --fs-cap: 12px;     /* captions, meta, table heads, small controls, pills, all mono */
+  --fs-body: 13px;    /* body, rows, controls, row titles */
+  --fs-head: 15px;    /* section and day headings */
+  --fs-title: 20px;   /* screen titles, the step read-out, key figures */
+  --fw-regular: 400;  --fw-strong: 600;
+  /* old size names some stylesheets still use: they go once no stylesheet uses them */
+  --fs-strong: var(--fs-body);  --fs-h2: var(--fs-head);  --fs-h1: var(--fs-title);
+  /* space / shape / motion / widths */
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
-  --r-1: 3px; --r-2: 6px; --r-pill: 999px;
-  --shadow-float: 0 8px 24px rgb(19 32 38 / .16), 0 1px 2px rgb(19 32 38 / .08);
+  --r-1: 4px; --r-2: 8px; --r-3: 12px; --r-4: 16px; --r-pill: 999px;
   --t-tip: 300ms;
   --t-quick: 120ms; --t-panel: 180ms; --ease: cubic-bezier(.2, .7, .2, 1);
-  --scrim: rgb(10 16 18 / .45);
-  --side-w: 216px; --rail-w: 52px; --gutter: 16px;
-  /* old names the kept CSS (library / replay, the first board's components below) still uses — resolved through the
-     new tokens so both themes follow (visual design §9.2). --panel is NOT aliased: its old meaning is --raised. */
+  --side-w: 216px; --rail-w: 52px; --gutter: 16px; --outline-w: 236px; --rightpage-w: 320px;
+  /* old colour names the kept CSS (library / replay) still uses — resolved through the new tokens so both themes follow.
+     --panel is NOT aliased: its old meaning is --raised. */
   --bg: var(--paper); --fg: var(--ink); --dim: var(--ink-2); --dimmer: var(--ink-3);
   --border: var(--rule); --rail: var(--panel); --panel2: var(--sunk);
   --accent: var(--action); --green: var(--ok); --amber: var(--warn); --red: var(--bad); --pink: var(--bad);
   --cyan: var(--ct-tooluse); --purple: var(--ct-system);
-  --shadow: rgb(19 32 38 / .28); --shadow-lg: rgb(19 32 38 / .38); /* colours for the old box-shadow geometry */
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --paper: #161B1C; --panel: #1C2224; --raised: #21282A; --scope: #0F1415; --cached: #1A2326; --sunk: #1A2022;
-    --rule: #2D373A; --rule-2: #435156; --grat: #253033; --control-edge: #6A7A80;
-    --ink: #E0E7E7; --ink-2: #A3B0B3; --ink-3: #8D9A9E;
-    --action: #4FC3DF; --action-ink: #082028; --action-wash: rgb(79 195 223 / .12);
-    --bad: #FF8A7E; --bad-lamp: #FF5E50; --warn: #F0AE4C; --warn-lamp: #F2A53A; --ok: #63C98F; --note-lamp: #E0E7E7;
-    --trace: #A3B0B3; --cursor: #E0E7E7; --cursor-ink: #0F1415;
-    --ct-tools: #8F9BAA; --ct-system: #A88EE8; --ct-user: #6EA4EE; --ct-assistant: #4FBFB0;
-    --ct-thinking: #DD82BE; --ct-tooluse: #C9BF5C; --ct-result: #6E7A80; --ct-hatch: #6E7A80;
-    --diff-add-bg: #1E3328; --diff-del-bg: #3A2624; --diff-hunk: #93B4DC; --err-bg: #3B2321;
-    --j-key: #B9A2F0; --j-str: #7FCFA4; --j-num: #E8B36A; --j-lit: #E397C9;
-    --shadow-float: 0 10px 28px rgb(0 0 0 / .55), 0 0 0 1px rgb(255 255 255 / .04);
-    --shadow: rgb(0 0 0 / .5); --shadow-lg: rgb(0 0 0 / .6);
+    --paper: #121019;  --panel: #1A1724;  --raised: #1E1B29;  --sunk: #17141F;
+    --scope: #191430;  --scope-2: #22163A;  --scope-bezel: #4A416A;  --scope-hi: rgb(255 255 255 / .16);
+    --rule: #2A2636;  --rule-2: #3B3649;  --control-edge: #7A7491;  --grat: rgb(255 255 255 / .06);
+    --ink: #EDEBF5;  --ink-2: #ABA6BF;  --ink-3: #958FA9;
+    --action: #A497FF;  --action-ink: #160F33;  --action-wash: rgb(164 151 255 / .14);
+    --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;
+    --bad: #FF8F85;  --bad-lamp: #FF5D52;  --warn: #F2B35B;  --warn-lamp: #F2A13A;  --ok: #6AD49A;  --note-lamp: #EDEBF5;
+    --trace-ink: #5FD3AE;
+    --scope-ink-2: #A9A3C7;  --scope-edge: #6A6390;  --scope-rule: rgb(255 255 255 / .11);
+    --scope-fill: rgb(255 255 255 / .05);  --scope-fill-2: rgb(255 255 255 / .14);  --scope-glow: rgb(194 82 217 / .20);
+    --ct-tools: #7D8CB2;  --ct-system: #A68BF0;  --ct-user: #4F98F5;  --ct-assistant: #2DB09F;
+    --ct-thinking: #DA70C2;  --ct-tooluse: #C49E33;  --ct-result: #A0978F;  --ct-hatch: #8F8BA2;
+    --diff-add-bg: #1E3328;  --diff-del-bg: #3A2624;  --diff-hunk: #93B4DC;  --err-bg: #3B2321;
+    --j-key: #BBA6F5;  --j-str: #7FD1A6;  --j-num: #EBB46C;  --j-lit: #E79ACB;
+    --brand-text: linear-gradient(100deg, #9C8DFF 10%, #E07CF0 70%, #FFA27E);
+    --wash: linear-gradient(172deg, #1C1832 0%, #1D1528 55%, #241520 100%);
+    --wash-soft: linear-gradient(120deg, rgb(107 91 255 / .14), rgb(194 82 217 / .10) 55%, rgb(255 138 91 / .10));
+    --hover: rgb(255 255 255 / .05);
+    --shadow-card: 0 0 0 1px rgb(255 255 255 / .02), 0 4px 16px rgb(0 0 0 / .25);
+    --shadow-pill: 0 1px 2px rgb(0 0 0 / .4), 0 0 0 1px rgb(255 255 255 / .06);
+    --shadow-float: 0 14px 36px rgb(0 0 0 / .55), 0 0 0 1px rgb(255 255 255 / .06);
   }
 }
 :root[data-theme="light"] {
   color-scheme: light;
-  --paper: #EEF1F0; --panel: #E2E8E6; --raised: #FFFFFF; --scope: #E4EAE8; --cached: #E6EDEE; --sunk: #E8ECEB;
-  --rule: #CDD6D3; --rule-2: #AEBBB7; --grat: #D3DCD9; --control-edge: #74827E;
-  --ink: #132026; --ink-2: #45555B; --ink-3: #55656B;
-  --action: #00657F; --action-ink: #FFFFFF; --action-wash: rgb(0 101 127 / .09);
-  --bad: #AE2219; --bad-lamp: #D0392D; --warn: #874E00; --warn-lamp: #B06C00; --ok: #24693B; --note-lamp: #132026;
-  --trace: #45555B; --cursor: #132026; --cursor-ink: #EEF1F0;
-  --ct-tools: #5A6C88; --ct-system: #7F5DBE; --ct-user: #336CBA; --ct-assistant: #23807A;
-  --ct-thinking: #A84785; --ct-tooluse: #7E7520; --ct-result: #788389; --ct-hatch: #788389;
-  --diff-add-bg: #DCEDE1; --diff-del-bg: #F5E1DE; --diff-hunk: #3D5A80; --err-bg: #FAE6E3;
-  --j-key: #5B4294; --j-str: #1F6845; --j-num: #8A4600; --j-lit: #8B3A6E;
-  --shadow-float: 0 8px 24px rgb(19 32 38 / .16), 0 1px 2px rgb(19 32 38 / .08);
-  --shadow: rgb(19 32 38 / .28); --shadow-lg: rgb(19 32 38 / .38);
+  --paper: #F8F7FB;  --panel: #EFEDF5;  --raised: #FFFFFF;  --sunk: #F4F2F8;
+  --scope: #1B1830;  --scope-2: #241A37;  --scope-bezel: #0F0D1C;  --scope-hi: rgb(255 255 255 / .14);
+  --rule: #E4E1EC;  --rule-2: #CFCADC;  --control-edge: #848099;  --grat: rgb(255 255 255 / .07);
+  --ink: #1B1828;  --ink-2: #4D4960;  --ink-3: #605B72;
+  --action: #5B47E0;  --action-ink: #FFFFFF;  --action-wash: rgb(91 71 224 / .10);
+  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-off: #7A7590;
+  --bad: #B42318;  --bad-lamp: #E0443A;  --warn: #8A4B00;  --warn-lamp: #C2740E;  --ok: #217A45;  --note-lamp: #1B1828;
+  --trace-ink: #167A5F;
+  --scope-ink-2: #ABA5CA;  --scope-edge: #6E6890;  --scope-rule: rgb(255 255 255 / .12);
+  --scope-fill: rgb(255 255 255 / .06);  --scope-fill-2: rgb(255 255 255 / .16);  --scope-glow: rgb(194 82 217 / .18);
+  --ct-tools: #6F7EA3;  --ct-system: #9479E8;  --ct-user: #3E8CF2;  --ct-assistant: #1E9E8F;
+  --ct-thinking: #D262B9;  --ct-tooluse: #A8841F;  --ct-result: #948A82;  --ct-hatch: #8C899C;
+  --diff-add-bg: #DCEDE1;  --diff-del-bg: #F5E1DE;  --diff-hunk: #3D5A80;  --err-bg: #FAE6E3;
+  --j-key: #5B3FB0;  --j-str: #1C6B47;  --j-num: #8A4600;  --j-lit: #9A2F72;
+  --brand-text: linear-gradient(100deg, #5A46E6 10%, #A43CC4 70%, #C2513F);
+  --wash: linear-gradient(172deg, #ECE9FC 0%, #F3EDF9 52%, #FBEEF0 100%);
+  --wash-soft: linear-gradient(120deg, rgb(107 91 255 / .07), rgb(194 82 217 / .06) 55%, rgb(255 138 91 / .07));
+  --hover: rgb(27 24 40 / .045);
+  --shadow-card: 0 1px 2px rgb(27 24 40 / .05), 0 4px 14px rgb(27 24 40 / .04);
+  --shadow-pill: 0 1px 2px rgb(27 24 40 / .10), 0 0 0 1px rgb(27 24 40 / .05);
+  --shadow-float: 0 12px 32px rgb(27 24 40 / .16), 0 1px 3px rgb(27 24 40 / .10);
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --paper: #161B1C; --panel: #1C2224; --raised: #21282A; --scope: #0F1415; --cached: #1A2326; --sunk: #1A2022;
-  --rule: #2D373A; --rule-2: #435156; --grat: #253033; --control-edge: #6A7A80;
-  --ink: #E0E7E7; --ink-2: #A3B0B3; --ink-3: #8D9A9E;
-  --action: #4FC3DF; --action-ink: #082028; --action-wash: rgb(79 195 223 / .12);
-  --bad: #FF8A7E; --bad-lamp: #FF5E50; --warn: #F0AE4C; --warn-lamp: #F2A53A; --ok: #63C98F; --note-lamp: #E0E7E7;
-  --trace: #A3B0B3; --cursor: #E0E7E7; --cursor-ink: #0F1415;
-  --ct-tools: #8F9BAA; --ct-system: #A88EE8; --ct-user: #6EA4EE; --ct-assistant: #4FBFB0;
-  --ct-thinking: #DD82BE; --ct-tooluse: #C9BF5C; --ct-result: #6E7A80; --ct-hatch: #6E7A80;
-  --diff-add-bg: #1E3328; --diff-del-bg: #3A2624; --diff-hunk: #93B4DC; --err-bg: #3B2321;
-  --j-key: #B9A2F0; --j-str: #7FCFA4; --j-num: #E8B36A; --j-lit: #E397C9;
-  --shadow-float: 0 10px 28px rgb(0 0 0 / .55), 0 0 0 1px rgb(255 255 255 / .04);
-  --shadow: rgb(0 0 0 / .5); --shadow-lg: rgb(0 0 0 / .6);
+  --paper: #121019;  --panel: #1A1724;  --raised: #1E1B29;  --sunk: #17141F;
+  --scope: #191430;  --scope-2: #22163A;  --scope-bezel: #4A416A;  --scope-hi: rgb(255 255 255 / .16);
+  --rule: #2A2636;  --rule-2: #3B3649;  --control-edge: #7A7491;  --grat: rgb(255 255 255 / .06);
+  --ink: #EDEBF5;  --ink-2: #ABA6BF;  --ink-3: #958FA9;
+  --action: #A497FF;  --action-ink: #160F33;  --action-wash: rgb(164 151 255 / .14);
+  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;
+  --bad: #FF8F85;  --bad-lamp: #FF5D52;  --warn: #F2B35B;  --warn-lamp: #F2A13A;  --ok: #6AD49A;  --note-lamp: #EDEBF5;
+  --trace-ink: #5FD3AE;
+  --scope-ink-2: #A9A3C7;  --scope-edge: #6A6390;  --scope-rule: rgb(255 255 255 / .11);
+  --scope-fill: rgb(255 255 255 / .05);  --scope-fill-2: rgb(255 255 255 / .14);  --scope-glow: rgb(194 82 217 / .20);
+  --ct-tools: #7D8CB2;  --ct-system: #A68BF0;  --ct-user: #4F98F5;  --ct-assistant: #2DB09F;
+  --ct-thinking: #DA70C2;  --ct-tooluse: #C49E33;  --ct-result: #A0978F;  --ct-hatch: #8F8BA2;
+  --diff-add-bg: #1E3328;  --diff-del-bg: #3A2624;  --diff-hunk: #93B4DC;  --err-bg: #3B2321;
+  --j-key: #BBA6F5;  --j-str: #7FD1A6;  --j-num: #EBB46C;  --j-lit: #E79ACB;
+  --brand-text: linear-gradient(100deg, #9C8DFF 10%, #E07CF0 70%, #FFA27E);
+  --wash: linear-gradient(172deg, #1C1832 0%, #1D1528 55%, #241520 100%);
+  --wash-soft: linear-gradient(120deg, rgb(107 91 255 / .14), rgb(194 82 217 / .10) 55%, rgb(255 138 91 / .10));
+  --hover: rgb(255 255 255 / .05);
+  --shadow-card: 0 0 0 1px rgb(255 255 255 / .02), 0 4px 16px rgb(0 0 0 / .25);
+  --shadow-pill: 0 1px 2px rgb(0 0 0 / .4), 0 0 0 1px rgb(255 255 255 / .06);
+  --shadow-float: 0 14px 36px rgb(0 0 0 / .55), 0 0 0 1px rgb(255 255 255 / .06);
 }
 
 *{box-sizing:border-box;}
@@ -165,7 +192,7 @@ kbd{font-family:var(--mono);background:var(--sunk);border:1px solid var(--rule-2
 .collapsible .more:hover{color:var(--action);}
 
 /* bottom drawer (screens fill #detail and toggle .open) */
-#detail{position:fixed;left:0;right:0;bottom:0;max-height:48vh;overflow:auto;background:var(--raised);border-top:2px solid var(--action);box-shadow:0 -10px 30px var(--shadow);padding:12px 20px 18px;transform:translateY(101%);visibility:hidden;transition:transform var(--t-panel) var(--ease),visibility 0s linear var(--t-panel);z-index:30;}
+#detail{position:fixed;left:0;right:0;bottom:0;max-height:48vh;overflow:auto;background:var(--raised);border-top:2px solid var(--action);box-shadow:var(--shadow-float);padding:12px 20px 18px;transform:translateY(101%);visibility:hidden;transition:transform var(--t-panel) var(--ease),visibility 0s linear var(--t-panel);z-index:30;}
 /* closed = hidden once the slide ends: no shadow band at the bottom edge, out of the a11y tree */
 #detail.open{transform:none;visibility:visible;transition:transform var(--t-panel) var(--ease),visibility 0s;}
 #detail.k-monitor{border-top-color:var(--ct-thinking);} #detail.k-probe{border-top-color:var(--ct-tooluse);} #detail.k-aux{border-top-color:var(--ink-3);}
@@ -194,7 +221,7 @@ kbd{font-family:var(--mono);background:var(--sunk);border:1px solid var(--rule-2
 
 /* modal (core/dom.mjs openModal). .os = drawn like the operating system's own authorization prompt. */
 .v2-modal-back{position:fixed;inset:0;z-index:100;background:var(--scrim);display:flex;align-items:center;justify-content:center;padding:16px;}
-.v2-modal{background:var(--raised);color:var(--ink);border:1px solid var(--rule);border-radius:10px;min-width:min(340px,92vw);max-width:min(560px,92vw);max-height:90vh;overflow:auto;box-shadow:0 20px 60px var(--shadow-lg);}
+.v2-modal{background:var(--raised);color:var(--ink);border:1px solid var(--rule);border-radius:10px;min-width:min(340px,92vw);max-width:min(560px,92vw);max-height:90vh;overflow:auto;box-shadow:var(--shadow-float);}
 .v2-modal .mtitle{padding:12px 16px 4px;font-size:var(--fs-strong);font-weight:600;}
 .v2-modal .mbody{padding:4px 16px 12px;font-size:12.5px;line-height:1.65;color:var(--ink-2);}
 .v2-modal .mbody b,.v2-modal .mbody strong{color:var(--ink);}
