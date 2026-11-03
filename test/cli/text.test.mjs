@@ -132,3 +132,25 @@ test('wrap: a `trocar <command>` with its options, and a backquoted command, sta
     for (const c of cmds) assert.ok(lines.some((l) => l.includes(c)), `${width}: ${c} whole on one line:\n${lines.join('\n')}`)
   }
 })
+
+test('pairs: a first word too long for the value column takes the fold column like a later one, the label alone above it (§1.1⑥)', () => {
+  for (const len of [66, 72]) {
+    const word = `${'p'.repeat(len - 1)}:`
+    const out = pairs([['autostart', `${word} the link that enables it`], ['certificate', 'x']])
+    const col = out.at(-1).indexOf('x'), at = out.findIndex((l) => l.trim() === word)
+    assert.ok(at > 0 && out[at - 1].trim() === 'autostart', `the label is alone above the word\n${out.join('\n')}`)
+    assert.equal(out[at].indexOf(word), Math.min(col, 6), `word of ${len}: at the fold column (6)\n${out.join('\n')}`)
+    assert.ok(out.slice(at + 1, -1).every((l) => l.length - l.trimStart().length === col), `the words after it are in the value column\n${out.join('\n')}`)
+  }
+})
+
+test('pairs: widths are measured on the printed text, a HOME path as ~ (§1.1⑤⑥)', () => {
+  for (const home of ['/home/alice', '/Users/a-rather-long-account-name-on-this-mac']) {
+    const value = `one line added (- insert: [{ name: "${home}/.trocar/collector/plugins/dsh/index.js" }])`
+    const out = pairs([[`${home}/.dsh/cordis.patch.yml`, value]], { home })
+    const col = out[0].indexOf('one')
+    assert.ok(out.every((l) => !l.includes(home)), out.join('\n'))
+    assert.ok(out.slice(1).every((l) => l.length - l.trimStart().length === col), `every word fits the value column once shortened, so every line starts there\n${out.join('\n')}`)
+    assert.deepEqual(out.join(' ').split(/\s+/).filter(Boolean), ['~/.dsh/cordis.patch.yml', ...value.replaceAll(home, '~').split(' ')], 'every word, once, in order')
+  }
+})

@@ -86,3 +86,19 @@ test('A.1 on: a route line never folds; it drops the labels first, then keeps ag
   assert.equal(b.line, `route: ${hops[0]} -> ${hops[1]} -> hop.example.com:1 -> ...`)
   assert.ok(on(far).join(' ').includes('http://***@proxy.corp.example.com:8080'), 'the proxy setting is still said')
 })
+
+// §1.1⑤⑥: a receipt's rows are laid out at the width they print with — a HOME path inside a value is measured as ~/…, so a word that fits the value
+// column once shortened is never dropped to the fold column (a Linux install's Changed: row and its plan's SSL_CERT_FILE rows did)
+test('the rows of on / install measure a HOME path as it is printed (~), so every line of a value starts in its value column', async () => {
+  const { changeLines, formatPlan } = await import('../../src/cli/receipt.mjs')
+  const home = '/home/a-rather-long-account-name'
+  const valueCol = (out, first) => { const i = out.findIndex((l) => l.includes(first)); return { i, col: out[i].indexOf(first) } }
+  const changed = fit(changeLines({ changed: [{ path: `${home}/.dsh/cordis.patch.yml`, change: `one line added (- insert: [{ name: "${home}/.trocar/collector/plugins/dsh/index.js" }])`, backup: null }], created: [] }, { home }), { home })
+  const plan = lines(formatPlan({ entries: ['codex', 'hermes'].map((h) => ({ harness: h, path: `${home}/.${h}/.env`, keys: ['SSL_CERT_FILE'], what: `SSL_CERT_FILE=${home}/.trocar/collector/ca/combined-${h}.pem` })) }, { home }))
+  for (const [out, first] of [[changed, 'one line added'], [plan, '~/.codex/.env']]) {
+    const { i, col } = valueCol(out, first)
+    const rows = out.slice(i + 1).filter((l) => /^ {3,}/.test(l) && !l.trim().startsWith('~/.hermes') && !/^ {2}\S/.test(l))
+    assert.ok(rows.length && rows.every((l) => l.length - l.trimStart().length === col), `every folded line starts at column ${col}\n${out.join('\n')}`)
+    assert.ok(out.every((l) => l.length <= 80 && !l.includes(home)), out.join('\n'))
+  }
+})

@@ -6,7 +6,7 @@
 import path from 'node:path'
 import { standaloneCommand, appDir } from '../off/paths.mjs'
 import { COMMAND_INDENT, isCommandLine, foldHang } from '../off/receipt.mjs'
-import { noColor, WIDTH, wrap, pairs, size } from './text.mjs'
+import { noColor, WIDTH, wrap, pairs, size, tildeText, escRe } from './text.mjs'
 import { HARNESS_IDS } from '../off/harness-names.mjs'
 import { fitCompact } from '../netenv/topology-text.mjs'
 
@@ -38,10 +38,7 @@ const BARE = /\u001b\[\d+m/g
  *  would paste as `sudo` alone and then a Node with no script (§1.1⑥: a command keeps its own line unbroken). */
 export const commandLine = (command) => ({ command })
 
-const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-/** §1.1⑤: every path under HOME in a line of text as `~/…` — the one display rule for HOME paths of every receipt (fit applies it to each line). A path is
- *  HOME where it starts a word (after a blank, a quote, a bracket, `=` or `:`) and HOME ends at a separator or the word's end; `/home/al` is not in `/home/alice`. */
-export const tildeText = (s, home) => (home ? s.replace(new RegExp(`(^|[\\s"'(\\[=:])${escRe(home)}(?=[\\\\/]|$|[\\s"'),;\\]])`, 'g'), '$1~') : s)
+export { tildeText } from './text.mjs'
 
 /** §1.1⑤: a command to copy shows HOME as `~` where sh, zsh and bash expand it — an unquoted word that starts with a POSIX HOME, then `/` or the word's
  *  end. A path after a `sudo` word keeps the absolute form selfCommand writes (§3.2), and a Windows HOME is never a `~`. */
@@ -119,7 +116,7 @@ export function formatPlan(p, { home = null, platform = 'linux', command = 'on',
   const backups = t(p.backups || path.join(home || '~', '.trocar', 'backup'))
   return fit([
     c.bold(`trocar ${command} will write ${items.length} file${items.length === 1 ? '' : 's'}:`),
-    ...pairs(items.map((i) => [i.what, i.detail])),
+    ...pairs(items.map((i) => [i.what, i.detail]), { home }),
     `A copy of every file of yours it changes goes to ${backups}/ first.`,
     ...watchLines(p.watch, t).map((l) => `  ${l}`),
     ...(p.skipped && p.skipped.length ? [`Skipped: ${p.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`] : []),
@@ -145,7 +142,7 @@ export function changeLines(r, { past = true, home = null } = {}) {
   const lines = []
   if (r.changed.length) {
     lines.push(past ? 'Changed:' : 'Will change:')
-    lines.push(...pairs(r.changed.map((x) => [t(x.path), `${x.change}${x.backup ? ` (backup ${t(x.backup)})` : past ? ' (trocar made this file; there was nothing to back up)' : ' (a copy is kept first)'}`])))
+    lines.push(...pairs(r.changed.map((x) => [t(x.path), `${x.change}${x.backup ? ` (backup ${t(x.backup)})` : past ? ' (trocar made this file; there was nothing to back up)' : ' (a copy is kept first)'}`]), { home }))
   } else lines.push(past ? 'No file of yours was changed.' : 'No file of yours will be changed.')
   if (r.created.length) lines.push(...pathList(past ? "trocar's own files:" : 'trocar will make:', r.created, home))
   return lines

@@ -41,25 +41,31 @@ export function columns(rows, { gap = 2, width = Infinity } = {}) {
 }
 
 /** `[[label, value], …]` → an indented two-column block; a value too long for `width` is folded under its own column, so the row still reads as one
- *  row (a Windows test machine 2026-10-18: it used to drop to a second line at indent 2, and `fit` then folded that to column 0). A word longer than the room
- *  left beside the label (a path, a command) keeps its own line unbroken, with the label alone above it (§1.1⑥). */
-export function pairs(rows, { indent = 2, gap = 2, width = WIDTH, label: least = 0 } = {}) { // `label`: the least label width, so blocks printed apart line up
-  const pad = ' '.repeat(indent)
-  const label = Math.max(least, ...rows.map(([l]) => String(l).length))
-  const col = indent + label + gap
-  return rows.flatMap(([l, v]) => {
-    const value = String(v ?? '')
-    const head = `${pad}${String(l).padEnd(label)}${' '.repeat(gap)}`
+ *  row (a Windows test machine 2026-10-18: it used to drop to a second line at indent 2, and `fit` then folded that to column 0). A word too long for
+ *  the value column (a path, a command) — the first as much as a later one — is a line of its own at the fold column (foldHang), or at the indent when
+ *  even that is too narrow, never broken; when it is the first, the label is alone above it (§1.1⑥). `home`: HOME paths are shortened to `~/…`
+ *  (tildeText) BEFORE anything is measured, so a word is laid out at the width it is printed with (§1.1⑤⑥). */
+export function pairs(rows, { indent = 2, gap = 2, width = WIDTH, label: least = 0, home = null } = {}) { // `label`: the least label width, so blocks printed apart line up
+  const pad = ' '.repeat(indent), hang = foldHang(pad)
+  const shown = rows.map(([l, v]) => [tildeText(String(l), home), tildeText(String(v ?? ''), home)])
+  const label = Math.max(least, ...shown.map(([l]) => l.length))
+  const col = indent + label + gap, room = width - col
+  return shown.flatMap(([l, value]) => {
+    const head = `${pad}${l.padEnd(label)}${' '.repeat(gap)}`
     if (col + value.length <= width) return [`${head}${value}`.trimEnd()]
-    const first = value.split(/\s+/)[0]
-    // a word that does not even fit beside the label (a path, a command) keeps its own line unbroken, under the label (§1.1⑥)
-    if (col + first.length > width) return [`${pad}${l}`, ...wrap(value, width - indent).map((line) => pad + line)]
-    // every line of the value has the same room, `width - col`: wrap's hang would count against a line it is not in front of (the first). A later
-    // word longer than that room (a backup path) is a line of its own at the fold column (foldHang), or at the indent when even that is too narrow
-    const hang = foldHang(pad)
-    return wrap(value, width - col).map((line, i) => (!i ? head : line.length <= width - col ? ' '.repeat(col) : hang.length + line.length <= width ? hang : pad) + line)
+    // every line of the value has the same room: wrap's hang would count against a line it is not in front of (the first)
+    return wrap(value, room).flatMap((line, i) => {
+      const fits = line.length <= room, at = fits ? ' '.repeat(col) : hang.length + line.length <= width ? hang : pad
+      return !i ? (fits ? [head + line] : [`${pad}${l}`, at + line]) : [at + line]
+    })
   })
 }
+
+export const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/** §1.1⑤: every path under HOME in a line of text as `~/…` — the one display rule for HOME paths of every receipt (receipt.mjs fit applies it to each
+ *  line, pairs to each cell before it measures). A path is HOME where it starts a word (after a blank, a quote, a bracket, `=` or `:`) and HOME ends at a
+ *  separator or the word's end; `/home/al` is not in `/home/alice`. */
+export const tildeText = (s, home) => (home ? s.replace(new RegExp(`(^|[\\s"'(\\[=:])${escRe(home)}(?=[\\\\/]|$|[\\s"'),;\\]])`, 'g'), '$1~') : s)
 
 /** A path under the home directory printed with `~` (§1.1⑤); anything else, and anything that is not a path, as it is. */
 export function tilde(p, home) {

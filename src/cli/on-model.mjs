@@ -49,7 +49,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
       ...pairs([...new Map((receipt.routes || []).map((r) => {
         const where = r.at ? tilde(r.at, home) : r.route ? formWords(`.${r.route}`) : ''
         return [`${r.harness}|${where}|${r.ok}|${r.reason || ''}`, [r.harness, `${where ? `${where}: ` : ''}${r.ok ? 'the setting is in place' : `not written (${r.reason})`}`]]
-      })).values()]),
+      })).values()], { home }),
       ...receipt.notes.map(noteLine), ...receipt.problems.map((p) => `Problem: ${p}`)], { home }).join('\n'))
     return exit
   }
@@ -89,7 +89,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const seen = new Set(m.confirmed_paths || [])
   const fresh = [...new Set(plan.planned.flatMap((p) => p.paths))].filter((p) => !seen.has(p))
   say(fit([`trocar on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
-    ...pairs(plan.planned.map((p) => planLine(p, home))),
+    ...pairs(plan.planned.map((p) => planLine(p, home)), { home }),
     ...(fresh.length ? pathList('New since you last said yes:', fresh, home) : [])], { home }).join('\n'))
   const blockedSetup = setupBlocked(plan)
   if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned, ...(blockedSetup.length ? { blocked: blockedSetup } : {}) }), EXIT.ok)
