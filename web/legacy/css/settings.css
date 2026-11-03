@@ -4,24 +4,23 @@
    disk card, the price table, the paste-template row, the theme card. */
 
 /* the page body: cards down the page, readable width */
-#smain,#pmain{display:flex;flex-direction:column;gap:14px;max-width:1160px;}
+#smain,#pmain{display:flex;flex-direction:column;gap:var(--s4);max-width:1160px;}
 
-/* a card: the settings pages' one container shape */
-.scard{background:var(--raised);border:1px solid var(--border);border-radius:var(--r-2);padding:14px 18px 16px;min-width:0;}
-.scard h2{margin:0 0 8px;font-family:var(--sans);font-size:var(--fs-h2);font-weight:600;color:var(--ink);white-space:nowrap;}
+/* a card: the settings pages' one container shape — the prototype's card: raised, a hairline, the large radius, the card shadow */
+.scard{background:var(--raised);border:1px solid var(--rule);border-radius:var(--r-4);box-shadow:var(--shadow-card);padding:16px 18px;min-width:0;font-size:var(--fs-body);}
+.scard h2{margin:0 0 8px;font-family:var(--sans);font-size:var(--fs-head);font-weight:var(--fw-strong);color:var(--ink);white-space:nowrap;}
 .scard>.cap{margin:2px 0 8px;color:var(--ink-2);}
 .scard .err{margin:2px 0 6px;color:var(--bad);}
 
 /* tables sit in a frame that scrolls horizontally when narrow — the page itself never scrolls sideways (1.11 #25) */
-.hscroll{overflow-x:auto;border:1px solid var(--rule);border-radius:var(--r-1);background:var(--paper);}
-.hscroll table{border-collapse:collapse;width:100%;font-size:12px;}
+.scard .hscroll{overflow-x:auto;border:1px solid var(--rule);border-radius:var(--r-2);background:var(--raised);}
+.scard .hscroll table{border-collapse:collapse;width:100%;font-size:var(--fs-body);}
 
-.na{color:var(--dimmer);font-style:italic;}
-.v{font-family:var(--mono);font-size:11px;}
+.na{color:var(--ink-3);}
+.v{font-family:var(--mono);font-size:var(--fs-cap);}
 /* the 磁盘 card's lines */
-.dline{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;font-size:12.5px;margin:3px 0;}
-.dline b{font-weight:500;color:var(--ink-2);}
-.dline .num{font-family:var(--mono);}
+.dline{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;font-size:var(--fs-body);margin:3px 0;}
+.dline b{font-weight:var(--fw-strong);color:var(--ink-2);}
 .dline.bad a{color:var(--bad);}
 
 /* 保存什么:the level control, its receipt, the clipped rule list (title carries all of it) */
@@ -31,36 +30,32 @@
 .ctable .crcpt{margin-top:4px;font-size:var(--fs-cap);color:var(--ink-2);white-space:normal;max-width:320px;}
 .ctable .crcpt[data-receipt="not-changed"],.ctable .crcpt[data-receipt="offline"],.ctable .crcpt[data-receipt="read-only"]{color:var(--bad);}
 .ctable td.rules{max-width:0;width:40%;}
-.ctable .rclip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;}
-.ctable tr.hl td{background:color-mix(in srgb,var(--accent) 12%,transparent);}
-.ctable tr.hl td:first-child{box-shadow:inset 3px 0 0 var(--accent);}
-.ctable tfoot td{border-top:1px solid var(--rule);font-weight:600;}
-/* the class word is a word, not machine bytes (1.5); below 600 px the rules column is not drawn (1.11) */
-.ptable.ctable td.k{font-family:inherit;}
-/* phone: the Matches column folds away; a technical details grid puts each key above its value (a long key column left the values one letter wide) */
+.ctable .rclip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-cap);}
+.ctable tr.hl td{background:var(--action-wash);}
+.ctable tr.hl td:first-child{box-shadow:inset 3px 0 0 var(--action);}
+.ctable tfoot td{border-top:1px solid var(--rule);font-weight:var(--fw-strong);}
+/* below 600 px the rules column is not drawn (1.11); phone: the Matches column folds away; a technical details grid puts each key above its value (a long key column left the values one letter wide) */
 @media (max-width:599px){.ctable .rules{display:none;}.scard .tech{grid-template-columns:minmax(0,1fr);}.scard .tech .v{margin-bottom:4px;}}
 .linkbtn{border:0;background:none;padding:0;color:var(--action);cursor:pointer;font:inherit;}
 .scard .lastchg{margin-top:8px;}
 
 /* ── 价格 ─────────────────────────────────────────────────────────────────────────────────────────────────────── */
-.ptable th{font-size:10.5px;color:var(--dimmer);font-weight:500;text-align:left;padding:6px 10px;border-bottom:1px solid var(--rule);}
+/* table heads: caption size, the third ink, the strong weight; no caps */
+.ptable th{font-size:var(--fs-cap);color:var(--ink-3);font-weight:var(--fw-strong);text-align:left;padding:6px 10px;border-bottom:1px solid var(--rule);}
 .ptable th.n,.ptable td.n{text-align:right;}
-.ptable td{padding:4px 10px;border-bottom:1px solid color-mix(in srgb,var(--rule) 55%,transparent);}
+.ptable td{padding:5px 10px;border-bottom:1px solid var(--rule);}
 .ptable tr:last-child td{border-bottom:0;}
-.ptable td.n{font-family:var(--mono);font-size:11.5px;}
-.ptable td.k{font-family:var(--mono);font-weight:500;}
-.ptable .bad-shape{color:var(--bad);font-family:var(--mono);font-size:11px;}
-.cap.from{font-size:11px;color:var(--dimmer);}
+.cap.from{color:var(--ink-3);}
 /* 没有单价的模型: name · session count · the paste-ready row */
-.umodel{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;padding:7px 0;border-bottom:1px solid color-mix(in srgb,var(--rule) 45%,transparent);}
+.umodel{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;padding:7px 0;border-bottom:1px solid var(--rule);}
 .umodel:last-of-type{border-bottom:0;}
-.umodel .um{font-size:12px;}
-.cap.hint{margin-top:8px;color:var(--dimmer);}
+.umodel .um{font-size:var(--fs-body);}
+.cap.hint{margin-top:8px;color:var(--ink-3);}
 /* the template is one unbroken line in its own box (scrolls inside when narrow); the button sits after it, never on it */
 .tmpl{display:flex;align-items:center;gap:8px;flex:1 1 100%;min-width:0;}
-.well{display:block;min-width:0;max-width:100%;overflow-x:auto;white-space:pre;font-family:var(--mono);font-size:11px;background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-1);padding:2px 8px;}
+.well{display:block;min-width:0;max-width:100%;overflow-x:auto;white-space:pre;font-family:var(--mono);font-size:var(--fs-cap);background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-1);padding:2px 8px;}
 .tmpl .copybtn{flex:none;}
-.well:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+.well:focus-visible{outline:2px solid var(--action);outline-offset:1px;}
 
 /* ── 外观 ─────────────────────────────────────────────────────────────────────────────────────────────────────── */
 .theme-card .seg button{padding:0 14px;line-height:22px;font-size:var(--fs-body);}
