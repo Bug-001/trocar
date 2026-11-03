@@ -301,7 +301,10 @@ export function renderFindings(findings, { width = 80 } = {}) {
     f.commands.forEach((c, i) => {
       // a note is not a problem, so what it offers is not a `Fix` (a macOS test machine 2026-10-18: a Fix sat under the headline "no problems")
       const label = i === 0 ? `${pad}${f.class === 'note' ? 'Option' : 'Fix   '} ` : `${pad}       `
-      lines.push(label + c.run) // a command to copy is never folded (§1.1⑥): a paste of half of `sudo <node> <trocar.mjs> setup-helper` runs node alone
+      // a command to copy is never folded (§1.1⑥): a paste of half of `sudo <node> <trocar.mjs> setup-helper` runs node alone; a step in an
+      // application is prose, so it folds inside the width, two deeper than its first line (§1.1⑥, an indented line's fold)
+      if (c.shell !== 'gui') lines.push(label + c.run)
+      else lines.push(...wrap(c.run, width - label.length - 2).map((l, k) => (k ? ' '.repeat(label.length + 2) : label) + l))
     })
     if (f.verify) lines.push(`${pad}Check  ${f.verify}`)
   }

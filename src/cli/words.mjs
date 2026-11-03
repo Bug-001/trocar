@@ -174,6 +174,12 @@ export function failureWord(where, code, harness = '', cause = null) {
   return (s && s.text) || null
 }
 
+// the closed set of 附录 C `unknown.reason` (src/cli/schema.mjs UNKNOWN_REASONS), in words: what a hop that could not be read says (1.6 A.1, D58③)
+const UNKNOWN_WORDS = Object.freeze({ denied: 'not allowed to read', timeout: 'took too long to read', absent: 'not there', unparseable: 'could not be parsed', 'owner-unreadable': 'owner not known',
+  pac: 'a PAC script trocar does not run', 'kernel-filter-invisible': 'a kernel filter it cannot see', 'env-unreadable': 'environment not readable' })
+/** An `unknown.reason` code in words; a code outside the set is read out as its own words, never printed as a code. */
+export const unknownWords = (reason) => UNKNOWN_WORDS[reason] || String(reason ?? '').replace(/-/g, ' ')
+
 /** One line out of many: newlines and runs of whitespace become one space (a launchctl stderr with line breaks must not break the digest's alignment). */
 export const squashed = (s) => String(s ?? '').replace(/\s+/g, ' ').trim()
 

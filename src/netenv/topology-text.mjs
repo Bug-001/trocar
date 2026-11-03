@@ -3,6 +3,8 @@
 // English, ASCII only (D58): a chain is `agent (pid N) -> [where it came from] hop -> internet`.
 // What is never printed: a proxy URL's credentials (the facts never held them), a proxy product's name or node names (nothing here has them), and a hop's name when it could not be read — that
 // hop says `unknown (<reason>)` (D58③).
+import { unknownWords } from '../cli/words.mjs'
+
 export const ROUTING_TEXT = Object.freeze({ driver: 'driver mode', proxy: 'proxy mode', legacy: 'the old capture', none: 'no capture', unknown: 'routing unknown' })
 const BRANCH_TEXT = { http: 'HTTP', ws: 'WebSocket' }
 const tri = (v, yes = 'yes', no = 'no') => (v === true ? yes : v === false ? no : 'unknown')
@@ -11,10 +13,7 @@ const base = (p) => String(p).split(/[\\/]/).pop()
 const nodeOf = (t, id) => t.nodes.find((n) => n.id === id)
 const isTrocar = (n) => !!n && n.trocar === true
 const edgeOf = (t, from, to) => t.edges.find((e) => e.from === from && e.to === to) || null
-// the closed set of 附录 C `unknown.reason`, in words (D58③): a code is never printed
-const UNKNOWN_WORDS = { denied: 'not allowed to read', timeout: 'took too long to read', absent: 'not there', unparseable: 'could not be parsed', 'owner-unreadable': 'owner not known',
-  pac: 'a PAC script trocar does not run', 'kernel-filter-invisible': 'a kernel filter it cannot see', 'env-unreadable': 'environment not readable' }
-const unknownText = (n) => `unknown: ${UNKNOWN_WORDS[n.unknown.reason] || String(n.unknown.reason).replace(/-/g, ' ')}`
+const unknownText = (n) => `unknown: ${unknownWords(n.unknown.reason)}` // D58③: a code is never printed
 const passText = (n) => (n.passthrough ? `forwarded only for ${n.passthrough.hosts.join(', ')}` : null)
 const paren = (...parts) => { const p = parts.filter(Boolean); return p.length ? ` (${p.join('; ')})` : '' }
 
