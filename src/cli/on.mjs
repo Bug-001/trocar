@@ -11,7 +11,7 @@ import path from 'node:path'
 import { resolveHarnesses } from '../off/harness-names.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
-import { formatOnReceipt, formatPlan, planItems } from './receipt.mjs'
+import { fit, formatOnReceipt, formatPlan, planItems } from './receipt.mjs'
 import { colors, noColor } from './text.mjs'
 import { renderCompact } from '../netenv/topology-text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
@@ -54,7 +54,7 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
   const old = refuseOldManifest({ home, platform, fs: deps.fs || nodeFs })
   if (old) {
     const receipt = { ...newReceipt('on'), ok: false, error: { code: 'older-install', message: old.message }, harnesses: named.ids, notes: [old.message] }
-    if (json) io.out(JSON.stringify(receipt, null, 2)); else io.err(`trocar on: ${old.message}`)
+    if (json) io.out(JSON.stringify(receipt, null, 2)); else io.err(fit([`trocar on: ${old.message}`], { home }).join('\n'))
     return EXIT.incomplete
   }
   try {

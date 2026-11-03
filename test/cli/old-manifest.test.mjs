@@ -12,6 +12,7 @@ import { EXIT } from '../../src/off/schema.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
+import { assertEnglish } from '../helpers/english.mjs'
 
 const OLD_COPY = '#!/usr/bin/env node\n// the copy the trocar that wrote this manifest left\n'
 const noOs = () => { throw Object.assign(new Error('no OS tool may run on a refusal that happens before any write'), { code: 'ESANDBOX' }) }
@@ -62,3 +63,17 @@ for (const version of [1, 2]) {
     }
   })
 }
+
+test('V69 · 1.6 §1.1⑤⑥ the refusal as text: install, on and uninstall fit 80 columns, each command whole on its own line, HOME as ~', async () => {
+  for (const cmd of ['install', 'on', 'uninstall']) {
+    const home = oldHome(2)
+    const io = fakeIo()
+    const exit = await runCli(ARGV[cmd], {
+      io, home, platform: 'darwin', uid: 501, env: { HOME: home },
+      deps: { getuid: () => 501, exec: noOs, procs: async () => [], parts: null, request: noSock, socketPath: path.join(home, 'nope.sock') },
+    })
+    assert.equal(exit, EXIT.incomplete, `${cmd}: exit 1 — ${io.text()}`)
+    assertEnglish(io.text(), `trocar ${cmd} (older install)`)
+    assert.ok(io.text().split('\n').some((l) => l.trim() === '~/.trocar/bin/trocar-off'), `${cmd}: the standalone copy as a command of its own, under ~\n${io.text()}`)
+  }
+})

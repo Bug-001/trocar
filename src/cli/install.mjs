@@ -94,7 +94,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
   if ((deps.getuid || processUid)() === 0) { io.err('trocar install: run this as your own user, not as root.'); return EXIT.usage }
   const fs = deps.fs || nodeFs
   const old = refuseOldManifest({ home, platform, fs })
-  if (old) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, error: { code: 'older-install', message: old.message }, notes: [old.message] }, null, 2)); else io.err(`trocar install: ${old.message}`); return EXIT.incomplete }
+  if (old) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, error: { code: 'older-install', message: old.message }, notes: [old.message] }, null, 2)); else io.err(fit([`trocar install: ${old.message}`], { home }).join('\n')); return EXIT.incomplete }
   const { isModelOs } = await import('../collector/model-install.mjs')
   const model = isModelOs(platform)
   // R12: the writes run under op.lock, taken after the yes (a plan that is only printed takes nothing and writes nothing)
