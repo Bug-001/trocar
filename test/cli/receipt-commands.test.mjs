@@ -69,22 +69,35 @@ test('§1.1⑥ a command to copy is deeper than every list item of the receipt',
 })
 
 // 附录 A.1 for on's route line (§1.1⑥, §3.3): it is one line from column 0 and never folds; a chain too long drops the [labels] first, and only
-// then is cut to `agent -> trocar -> <next hop> -> ...`; the proxy setting it was drawn from is still said
-test('A.1 on: a route line never folds; it drops the labels first, then keeps agent, trocar and the next hop', () => {
+// then is cut to `agent -> trocar -> <next hop> -> ...` — each tier drawn from the topology itself, so a hop written in brackets (an IPv6 host) is
+// never mistaken for a label; the proxy setting it was drawn from is still said
+test('A.1 on: a route line never folds; it drops the labels first, then keeps agent, trocar and the next hop', async () => {
+  const { renderCompact, BRANCH_SEP } = await import('../../src/netenv/topology-text.mjs')
   const home = '/home/alice'
-  const on = (chain) => lines(formatOnReceipt({ ...newReceipt('on'), ok: true, harnesses: ['codex'], changed: [], created: [], unchanged: [], skipped: [], restart: [], notes: [], daemon: { state: 'running', pid: 1 },
-    adopted: { codex: { chain, proxy: 'http://***@proxy.corp.example.com:8080', source: [{ kind: 'file', where: `${home}/.codex/.env`, key: 'HTTPS_PROXY' }] } } }, { home }))
-  const route = (out) => { const i = out.findIndex((l) => l.startsWith('route')); return { line: out[i], next: out[i + 1] } }
-  const hops = ['codex (pid 5530)', 'trocar :17992', 'proxy.corp.example:8080', 'internet']
-  const labelled = `${hops[0]} -> [.env HTTPS_PROXY, written by trocar] ${hops[1]} -> [system proxy] ${hops[2]} -> ${hops[3]}`
-  const a = route(on(labelled))
-  assert.ok(a.line.length <= 80 && !a.line.includes('['), a.line)
-  assert.ok(hops.every((h) => a.line.includes(h)), `dropping the labels was enough, so every hop stays: ${a.line}`)
-  assert.ok(!/^\s*(proxy|-> |internet)/.test(a.next), `nothing of the chain folds onto the next line: ${a.next}`)
-  const far = `${hops[0]} -> [ebpf] ${hops[1]} -> ${'hop.example.com:1 -> '.repeat(4)}${hops[2]} -> ${hops[3]}`
-  const b = route(on(far))
-  assert.equal(b.line, `route: ${hops[0]} -> ${hops[1]} -> hop.example.com:1 -> ...`)
+  const topo = (hops) => {
+    const nodes = [{ id: 'a', kind: 'agent', name: 'codex', pid: 5530 }, { id: 't', kind: 'trocar-engine', name: 'trocar', port: 17992, trocar: true }, ...hops.map((h, i) => ({ id: `h${i}`, ...h }))]
+    const path = nodes.map((n) => n.id)
+    const edges = path.slice(1).map((to, i) => ({ from: path[i], to, via: i === 0 ? 'proxy-http' : (nodes[i + 1].via || 'system-proxy'), ...(i === 0 ? { entry: { where: `${home}/.codex/.env`, opt_in: false } } : {}) }))
+    return { harness: 'codex', nodes, edges, branches: [{ name: 'http', path, off_path: path.filter((id) => id !== 't') }] }
+  }
+  const on = (t) => lines(formatOnReceipt({ ...newReceipt('on'), ok: true, harnesses: ['codex'], changed: [], created: [], unchanged: [], skipped: [], restart: [], notes: [], daemon: { state: 'running', pid: 1 },
+    adopted: { codex: { chain: renderCompact(t).join(BRANCH_SEP), proxy: 'http://***@proxy.corp.example.com:8080', source: [{ kind: 'file', where: `${home}/.codex/.env`, key: 'HTTPS_PROXY' }] } } }, { home, topology: { codex: t } }))
+  const route = (out) => out.find((l) => l.startsWith('route'))
+  const near = topo([{ kind: 'proxy', name: 'proxy.corp.example:8080', port: 8080 }, { kind: 'egress', name: 'internet' }])
+  const a = route(on(near))
+  assert.ok(a.length <= 80 && !a.includes('['), a)
+  assert.ok(['codex (pid 5530)', 'trocar :17992', 'proxy.corp.example:8080', 'internet'].every((h) => a.includes(h)), `dropping the labels was enough, so every hop stays: ${a}`)
+  // an IPv6 hop is written in brackets: it is a host the line must print, not a label to drop
+  const v6 = topo([{ kind: 'upstream', name: '[::1]', via: 'direct' }])
+  const c = route(on(v6))
+  assert.ok(c.length <= 80 && c.endsWith('[::1] (direct)'), `the IPv6 host is kept: ${c}`)
+  const far = topo([...Array.from({ length: 4 }, (_, i) => ({ kind: 'proxy', name: `hop${i}.example.com:1`, port: 1 })), { kind: 'proxy', name: 'proxy.corp.example:8080', port: 8080 }, { kind: 'egress', name: 'internet' }])
+  assert.equal(route(on(far)), 'route: codex (pid 5530) -> trocar :17992 -> hop0.example.com:1 -> ...')
   assert.ok(on(far).join(' ').includes('http://***@proxy.corp.example.com:8080'), 'the proxy setting is still said')
+  assert.ok(on(far).every((l) => !/^\s*(-> |internet)/.test(l)), 'nothing of the chain folds onto the next line')
+  const huge = topo([{ kind: 'proxy', name: `${'very-long-proxy-name.'.repeat(4)}example:8080`, port: 8080 }, { kind: 'egress', name: 'internet' }])
+  const h = on(huge), at = h.findIndex((l) => l.startsWith('route'))
+  assert.ok(h[at].endsWith('-> ...') && !/^-> /.test(h[at + 1]), `a line still too long after the last tier stays one line, never folded\n${h.join('\n')}`)
 })
 
 // §1.1⑤⑥: a receipt's rows are laid out at the width they print with — a HOME path inside a value is measured as ~/…, so a word that fits the value

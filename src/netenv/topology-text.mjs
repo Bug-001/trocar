@@ -69,17 +69,26 @@ const prefixOf = (t, b, key = 'path') => [new Set(t.branches.map((x) => x.form).
 // the branches that go the same way (same form, same path) are one line
 const distinct = (t) => t.branches.filter((b, i) => t.branches.findIndex((x) => x.form === b.form && x.path.join() === b.path.join()) === i)
 
+/** Between the branches of one harness when they are said on one line (renderCompact's lines joined; `adopted.<h>.chain`, C.1). */
+export const BRANCH_SEP = ' ; '
 /** One line per way a harness's traffic goes: the path with trocar on it (HTTP and WebSocket that take the same path are one line). */
 export const renderCompact = (t) => distinct(t).map((b) => `${prefixOf(t, b)}${chain(t, b.path)}`)
 
-/** 附录 A.1 for a compact chain (renderCompact's lines joined by ` ; `) printed in `room` columns: whole when it fits; else every `[label]` dropped;
- *  else each branch cut to `agent -> trocar -> <next hop> -> ...`. Never folded: a line still too long stays one line. */
-export function fitCompact(text, room) {
-  const branches = String(text).split(' ; ').map((b) => b.split(' -> '))
-  const bare = branches.map((hops) => hops.map((h, i) => (i ? h.replace(/^\[[^\]]*\] /, '') : h)))
-  const short = bare.map((hops) => { const at = hops.findIndex((h, i) => i && /^trocar\b/.test(h)), keep = at > 0 ? hops.slice(0, 1).concat(hops.slice(at, at + 2)) : hops.slice(0, 2); return keep.length < hops.length ? [...keep, '...'] : hops })
-  const tries = [text, ...[bare, short].map((x) => x.map((hops) => hops.join(' -> ')).join(' ; '))]
-  return tries.find((t) => t.length <= room) || tries[2]
+// a branch cut to its agent, trocar and the hop after trocar (附录 A.1's last tier); a branch with no trocar on it keeps its first two hops
+function cutPath(t, path) {
+  const at = path.findIndex((id, i) => i && isTrocar(nodeOf(t, id)))
+  if (at < 0) return path.slice(0, 2)
+  const next = path.findIndex((id, i) => i > at && !isTrocar(nodeOf(t, id)))
+  return [path[0], ...path.slice(at, next < 0 ? undefined : next + 1)]
+}
+/** 附录 A.1 for a harness's compact chain printed in `room` columns: whole when it fits; else with every `[where it came from]` left out; else each
+ *  branch cut to `agent -> trocar -> <next hop> -> ...`. Each tier is drawn from the topology, never by re-reading text (a hop written in brackets, an IPv6
+ *  host, is a hop). Never folded: a line still too long stays one line. */
+export function fitCompact(t, room) {
+  const line = (draw) => distinct(t).map((b) => `${prefixOf(t, b)}${draw(b)}`).join(BRANCH_SEP)
+  const tiers = [line((b) => chain(t, b.path)), line((b) => chain(t, b.path, false, false)),
+    line((b) => { const ids = cutPath(t, b.path); return `${chain(t, ids, false, false)}${ids.length < b.path.length ? ' -> ...' : ''}` })]
+  return tiers.find((x) => x.length <= room) || tiers[2]
 }
 
 /** What `status` says after a branch's chain: `on trocar's path: yes · captured: no (desired-off)`. */

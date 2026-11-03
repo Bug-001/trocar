@@ -37,6 +37,8 @@ const BARE = /\u001b\[\d+m/g
 /** A command the reader is to copy, for `fit`: printed on a line of its own, indented, whole — a long `sudo <node> <trocar.mjs> …` folded on its spaces
  *  would paste as `sudo` alone and then a Node with no script (§1.1⑥: a command keeps its own line unbroken). */
 export const commandLine = (command) => ({ command })
+/** A line `fit` prints as it is, at column 0, never folded (HOME as `~` still): on's route line, which 附录 A.1 shortens instead of folding. */
+export const wholeLine = (whole) => ({ whole })
 
 export { tildeText } from './text.mjs'
 
@@ -51,6 +53,7 @@ export const tildeCommand = (s, home) => (home && home.startsWith('/')
  *  every text line's HOME paths as `~/…` (tildeText), a command to copy's where the shell expands them (tildeCommand). */
 export const fit = (lines, { home = null } = {}) => lines.flatMap((l) => {
   if (l && typeof l === 'object' && typeof l.command === 'string') return [`${COMMAND_INDENT}${tildeCommand(l.command, home)}`] // a command to copy (commandLine): one line, never folded, so a paste runs it whole
+  if (l && typeof l === 'object' && typeof l.whole === 'string') return [tildeText(l.whole, home)] // wholeLine
   // a text of several lines (a refusal with its commands, refuseOldManifest) keeps its lines, and a line of it at COMMAND_INDENT is a command to copy
   if (String(l).includes('\n')) return fit(String(l).split('\n').map((x) => (isCommandLine(x) ? commandLine(x.slice(COMMAND_INDENT.length)) : x)), { home })
   const s = tildeText(String(l), home)
@@ -63,10 +66,11 @@ export const fit = (lines, { home = null } = {}) => lines.flatMap((l) => {
 /** One harness's chain after `on` (§3.3): where a new connection goes, then the proxy setting it was drawn from (credentials masked). A chain whose
  *  first hop is the harness's name is not prefixed again; a proxy-mode chain starts with the running process (A.1, `node (pid N)`), so the line names
  *  the harness (D38: for whom). Column 0, so it never reads as an item of a path list above it, and never folded: a chain too long for the line
- *  degrades as 附录 A.1 says (fitCompact). The proxy setting is a sentence of its own below it (§1.1⑥). */
-const adoptedLines = (h, x) => {
+ *  degrades as 附录 A.1 says, drawn from the harness's topology `t` (fitCompact); with none, the recorded chain is printed whole. The proxy setting is
+ *  a sentence of its own below it (§1.1⑥). */
+const adoptedLines = (h, x, t) => {
   const head = `${String(x.chain || '').startsWith(`${h} `) || x.chain === h ? 'route' : `route of ${h}`}: `
-  return [`${head}${fitCompact(String(x.chain || ''), WIDTH - head.length)}`,
+  return [wholeLine(`${head}${t ? fitCompact(t, WIDTH - head.length) : String(x.chain || '')}`),
     ...(x.proxy ? [`${h}'s proxy setting ${x.proxy} was read from ${(x.source || []).map((s) => (s.kind === 'file' ? `${s.where}${s.key ? ` ${s.key}` : ''}` : s.where)).join(', ') || 'its own settings'}.`] : [])]
 }
 
@@ -150,7 +154,7 @@ export function changeLines(r, { past = true, home = null } = {}) {
 
 /** The receipt of `trocar on` as text (the verdict first, then every file it changed). `tense`: 'past' | 'future' (the dry run). `fresh` = the set of
  *  harnesses THIS run newly wired (their one-time notes print; the rest live in `doctor` and `--json`); null prints every note. */
-export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'linux', fresh = null, colors: c = noColor() } = {}) {
+export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'linux', fresh = null, topology = null, colors: c = noColor() } = {}) { // `topology`: { <h>: HarnessTopology }, what the route lines degrade from (A.1)
   const past = tense !== 'future'
   const t = (x) => tilde(x, home)
   // an on that wrote everything but has no collector running is done and exits 0, yet captures nothing yet: the header says so
@@ -169,7 +173,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   }
   if (r.skipped.length) lines.push(`Skipped: ${r.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`)
   if (lingerText(r)) lines.push(lingerText(r))
-  for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(...adoptedLines(h, x))
+  for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(...adoptedLines(h, x, topology && topology[h]))
   if (r.daemon && !daemonBit) lines.push('The collector is not running, so nothing is captured yet.', 'Start it: trocar daemon') // the command keeps its own line: folding must not cut it (§1.1③)
   if (r.restart.length) lines.push(`  ${c.yellow('!')} Restart to capture: ${r.restart.map((x) => `${x.harness} (pid ${x.pid} started before the certificate was there)`).join(', ')}. Until then they connect as they do now.`)
   const nothingNew = fresh && fresh.size === 0 && !(r.changed || []).length && !(r.created || []).length

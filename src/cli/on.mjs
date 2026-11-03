@@ -13,7 +13,7 @@ import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
 import { fit, formatOnReceipt, formatPlan, planItems } from './receipt.mjs'
 import { colors, noColor } from './text.mjs'
-import { renderCompact } from '../netenv/topology-text.mjs'
+import { renderCompact, BRANCH_SEP } from '../netenv/topology-text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { prepareAdoption, editedFields, recordAdoption } from './on-adopt.mjs'
@@ -24,7 +24,7 @@ import { runModelOn } from './on-model.mjs'
 
 const USAGE = usageLine(commandNamed('on'))
 const FLAGS = new Set(['--dry-run', '--yes', '--json'])
-const chainText = (t) => renderCompact(t).join(' ; ')
+const chainText = (t) => renderCompact(t).join(BRANCH_SEP)
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 
 /** → the exit code. `argv` is what follows `on`. `io` = { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo). */
@@ -131,7 +131,8 @@ export async function runOn({ io, env = process.env, home = os.homedir(), platfo
     else {
       // D46: the harnesses THIS run newly wired (their one-time 说明 notes print; a harness wired before keeps its notes in doctor and --json — the receipt object is untouched, R5/R11)
       const fresh = plan ? new Set((plan.targets || []).filter((id) => !(plan.installed || []).includes(id))) : null
-      io.out(formatOnReceipt(receipt, { tense: receipt.dry_run ? 'future' : 'past', home, platform, fresh, colors: c }))
+      const topology = adoption && !adoption.error && receipt.adopted ? adoption.chains(receipt.harnesses || []) : null // the route lines degrade from it (A.1)
+      io.out(formatOnReceipt(receipt, { tense: receipt.dry_run ? 'future' : 'past', home, platform, fresh, topology, colors: c }))
     }
     return exit
   } catch (e) {
