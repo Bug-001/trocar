@@ -69,6 +69,8 @@ a.trow.hi{background:var(--panel);}
 a.rmark{color:var(--action);}
 .rmark.fail{color:var(--bad);}
 .tcell{color:var(--ink-2);font-size:var(--fs-cap);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
+/* the selected row's 2px accent (inset shadow) stands in this start padding, off the time text; the head keeps the same start */
+.hhead,.hrow{padding-inline-start:var(--s2);}
 
 /* the detail: a column at the breakpoint, a bottom sheet under the list below it */
 .hdetail{min-width:0;overflow:auto;background:var(--raised);border-left:1px solid var(--rule);padding:0 0 32px;}
@@ -117,6 +119,6 @@ a.rmark{color:var(--action);}
   .hhead .cell.recv,.hrow .cell.recv{display:none;}
   .hhead .cell.class{grid-column:2;grid-row:2;}
   /* the two lines fill the row's fixed-height slot (1.10 行高固定; the slot is the list's .vrow) */
-  .hrow{min-height:0;height:100%;padding:0;grid-template-rows:auto auto;align-content:center;line-height:18px;}
+  .hrow{min-height:0;height:100%;grid-template-rows:auto auto;align-content:center;line-height:18px;}
   .hrow .cell.class{grid-column:2;grid-row:2;line-height:14px;}
 }
