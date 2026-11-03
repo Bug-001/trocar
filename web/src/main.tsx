@@ -29,7 +29,6 @@ import { BoardRouterContext } from './screens/traffic/board-router'
 const SCREENS = {
   replay: () => import('../legacy/replay/replay.mjs'),
   'session-link': () => import('../legacy/replay/session-link.mjs'),
-  traffic: () => import('../legacy/traffic/traffic.mjs'),
   'traffic-host': () => import('../legacy/traffic/host.mjs'),
 }
 const REACT_SCREENS: Record<string, LazyScreen> = {
@@ -40,6 +39,7 @@ const REACT_SCREENS: Record<string, LazyScreen> = {
   'settings-storage': lazyScreen(() => import('./screens/settings/StorageScreen')),
   'settings-prices': lazyScreen(() => import('./screens/settings/PricesScreen')),
   'settings-appearance': lazyScreen(() => import('./screens/settings/AppearanceScreen')),
+  traffic: lazyScreen(() => import('./screens/traffic/TrafficScreen')),
 }
 const PRELOADS = [...Object.values(SCREENS), ...Object.values(REACT_SCREENS).map((s) => s.load)] // the idle preload loads both kinds
 const isReact = (r: Route) => !r.unknown && Object.hasOwn(REACT_SCREENS, r.screen)
