@@ -15,6 +15,7 @@ import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, 
 import { codeId } from '../version.mjs'
 import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
 import { writeStandalone } from '../off/standalone.mjs'
+import { standaloneFiles } from '../off/paths.mjs'
 import { missingDirs } from '../off/fsutil.mjs'
 import { resolveLoc, readSrc, holds, isPresent } from './core/proxymode/sources.mjs'
 import { noProxyNames } from './core/proxymode/entries.mjs'
@@ -72,7 +73,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   const save = () => saveManifest(dir, m, fs)
   if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); save() }
   const stdl = writeStandalone({ home, version: OFF_VERSION, platform: os, fs }) // the way back first (R3)
-  said('trocar-off', stdl.written ? 'written' : 'intact', { path: stdl.path })
+  for (const file of standaloneFiles(home, os)) said('trocar-off', stdl.files.includes(file) ? 'written' : 'intact', { path: file }) // trocar-off.cmd too on Windows
   if (installHelper) { const h = installHelper(interactive); if (h && h.why && h.why !== 'same') problems.push(h.why) }
 
   // a · the root's key (P1): created only when the custody has none; the root it returns must have the ROOT profile (T12)

@@ -338,7 +338,10 @@ test('1.6 §3.2 step 1: on win32 trocar-off.cmd is written, checked and rewritte
   assert.ok([...text].every((c) => c.codePointAt(0) < 128) && !/[^\r]\n/.test(text), 'ASCII with CRLF: cmd reads it in every code page')
   assert.ok(!/[A-Za-z]:\\/.test(text) && !text.includes(process.execPath), 'no absolute path in its bytes: switching Node never makes it stale')
   assert.match(text, /trocar-off" %\*/, 'it runs the trocar-off beside it with every argument')
-  assert.deepEqual([checkStandalone({ home, version: OFF_VERSION, platform: 'win32' }).ok, writeStandalone({ home, version: OFF_VERSION, platform: 'win32' }).written], [true, false])
+  for (const f of [file, cmd]) fs.chmodSync(f, 0o600) // what Windows reports for every file: no execute bit (D54: a second install / on writes nothing)
+  assert.deepEqual([checkStandalone({ home, version: OFF_VERSION, platform: 'win32' }).ok, writeStandalone({ home, version: OFF_VERSION, platform: 'win32' })], [true, { path: file, written: false, files: [] }])
+  fs.rmSync(cmd)
+  assert.deepEqual([checkStandalone({ home, version: OFF_VERSION, platform: 'win32' }).missing, writeStandalone({ home, version: OFF_VERSION, platform: 'win32' }).files], [true, [cmd]], 'a missing .cmd is said as missing, and the write returns the one file it wrote')
   for (const spoil of [() => fs.rmSync(cmd), () => fs.writeFileSync(cmd, text.replace('node', 'nodes'))]) {
     spoil()
     const c = checkStandalone({ home, version: OFF_VERSION, platform: 'win32' })

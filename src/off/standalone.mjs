@@ -5,8 +5,8 @@
 //                     one load per built-in, and a call of runOffCli ends it. It refuses what would make a wrong file instead of writing it: two modules declaring one top-level
 //                     name, an import that is not `node:*` or a file of the directory, a cycle, an `export default` / `export { }` / `export *`, a renamed import of a module of the
 //                     directory (a bundle has one scope, so a name is the same name everywhere), a top-level destructuring.
-//   writeStandalone   atomic and durable, 0700; nothing is written when the file is already what buildStandalone says. On Windows the same for trocar-off.cmd (STANDALONE_CMD):
-//                     the files are paths.mjs standaloneFiles, the one list that is written, checked, listed and removed
+//   standaloneDue     the files a write would change (the plan names them); writeStandalone writes those, atomic and durable, 0700, and returns them. On Windows the same
+//                     for trocar-off.cmd (STANDALONE_CMD): the files are paths.mjs standaloneFiles, the one list that is written, checked, listed and removed
 //   checkStandalone   `ok` only when the file is what buildStandalone says right now (the version on its first lines, its bytes, executable) and, on Windows, the .cmd is
 //                     STANDALONE_CMD; `found` is the version it carries
 // The file has no ES module syntax: no `import`, no `export`, no top-level `await`. It has no extension, and which kind of module Node takes such a file for is up to the Node
@@ -232,32 +232,39 @@ export function buildStandalone({ srcDir = SOURCE_DIR, version, fs = nodeFs } = 
   ].join('\n')
 }
 
-/** Writes the files of standaloneFiles (0700; the directory 0700 when it is made) unless each already is what it should be → `{ path, written }`, `path` being
- *  trocar-off. Throws what the build or a write throws. */
-export function writeStandalone({ home = nodeOs.homedir(), version = OFF_VERSION, srcDir, platform = process.platform, fs = nodeFs } = {}) {
+/** The files of standaloneFiles that are not what they should be: missing, other bytes, or (POSIX only: Windows reports no execute bit, checkStandalone says why)
+ *  not executable. What writeStandalone writes and what a plan names (R3). Reads only. */
+export function standaloneDue({ home = nodeOs.homedir(), version = OFF_VERSION, srcDir, platform = process.platform, fs = nodeFs } = {}) {
   const texts = [buildStandalone({ srcDir, version, fs }), STANDALONE_CMD]
-  let written = false
-  standaloneFiles(home, platform).forEach((file, i) => {
+  return standaloneFiles(home, platform).map((file, i) => ({ file, text: texts[i] })).filter(({ file, text }) => {
     const have = readOrNull(fs, file)
     let mode = 0
     try { mode = fs.statSync(file).mode } catch { /* not there */ }
-    if (have && have.toString('utf8') === texts[i] && (mode & 0o100)) return
+    return !(have && have.toString('utf8') === text && (platform === 'win32' || (mode & 0o100)))
+  })
+}
+
+/** Writes the files of standaloneDue (0700; the directory 0700 when it is made) → `{ path, written, files }`: `path` is trocar-off, `files` the ones written (a receipt lists
+ *  those), `written` whether there was any. Throws what the build or a write throws. */
+export function writeStandalone({ home = nodeOs.homedir(), version = OFF_VERSION, srcDir, platform = process.platform, fs = nodeFs } = {}) {
+  const due = standaloneDue({ home, version, srcDir, platform, fs })
+  for (const { file, text } of due) {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
     sweepTemps(file, fs)
-    writeDurable(file, texts[i], 0o700, fs)
-    written = true
-  })
-  return { path: standalonePath(home), written }
+    writeDurable(file, text, 0o700, fs)
+  }
+  return { path: standalonePath(home), written: due.length > 0, files: due.map((d) => d.file) }
 }
 
 /** Is the copy on disk what `trocar on` would write now? → `{ ok, path, found, expected, reason? }`: `found` is the version on its first lines (null: none, or no file), `expected` the
- *  version asked for (default OFF_VERSION). Reads only. A version that differs, a text that differs under the same version, a file that is not executable, one that is not there or cannot be read: each is `ok: false` with `reason`. */
+ *  version asked for (default OFF_VERSION). Reads only. A version that differs, a text that differs under the same version, a file that is not executable, one that is not there or cannot be read: each is `ok: false` with `reason`
+ *  (and `missing: true` for one that is not there, `path` naming it). */
 export function checkStandalone({ home = nodeOs.homedir(), version = OFF_VERSION, srcDir, platform = process.platform, fs = nodeFs } = {}) {
   const file = standalonePath(home), expected = String(version)
   const no = (found, reason) => ({ ok: false, path: file, found, expected, reason })
   let text, mode
   try { text = fs.readFileSync(file, 'utf8'); mode = fs.statSync(file).mode } catch (e) {
-    return no(null, e && e.code === 'ENOENT' ? `${file} is not there: trocar on writes it` : `${file} cannot be read (${(e && e.code) || (e && e.message) || e}); trocar on writes it again`)
+    return e && e.code === 'ENOENT' ? { ...no(null, `${file} is not there: trocar on writes it`), missing: true } : no(null, `${file} cannot be read (${(e && e.code) || (e && e.message) || e}); trocar on writes it again`)
   }
   const m = VERSION_LINE.exec(text.split('\n', 3).join('\n'))
   const found = m ? m[1] : null
@@ -269,9 +276,9 @@ export function checkStandalone({ home = nodeOs.homedir(), version = OFF_VERSION
   // so checking it there called a good copy stale right after install (a Windows test machine 2026-10-18)
   if (platform !== 'win32' && !(mode & 0o100)) return no(found, `${file} is not executable; trocar on writes it again`)
   for (const cmd of standaloneFiles(home, platform).slice(1)) {
-    let have = null
-    try { have = fs.readFileSync(cmd, 'utf8') } catch { /* missing or unreadable: either way not the file */ }
-    if (have !== STANDALONE_CMD) return { ...no(found, have === null ? `${cmd} is not there or cannot be read: trocar on writes it` : `${cmd} is not what this trocar writes; trocar on writes it again`), path: cmd }
+    let have = null, gone = false
+    try { have = fs.readFileSync(cmd, 'utf8') } catch (e) { gone = !!e && e.code === 'ENOENT' }
+    if (have !== STANDALONE_CMD) return { ...no(found, gone ? `${cmd} is not there: trocar on writes it` : have === null ? `${cmd} cannot be read: trocar on writes it again` : `${cmd} is not what this trocar writes; trocar on writes it again`), path: cmd, ...(gone ? { missing: true } : {}) }
   }
   return { ok: true, path: file, found, expected }
 }
