@@ -14,6 +14,8 @@ import { appDir, launcherPath } from '../../src/off/paths.mjs'
 import { orphanBackups } from '../../src/off/backup.mjs'
 import { fakeIo, onCtx, seedClaude } from '../cli/fixtures/on-ctx.mjs'
 import { COMMANDS } from '../../src/cli/commands.mjs'
+import { DEFAULT_REDIRECTOR_BIN } from '../../src/collector/arch/linux/redirector-client.mjs'
+import { flowEvents } from '../off/fixtures/off-ctx.mjs'
 
 test('V112: the start file is the one the (system, shell, ZDOTDIR) row names', () => {
   const h = '/h'
@@ -65,4 +67,50 @@ test('V112 V113: a script-channel install adds the PATH item once; uninstall tak
   assert.equal(await runUninstallCli(['--yes', '--json'], ctx(un)), 0, un.text())
   assert.equal(fs.readFileSync(rc, 'utf8'), mine, 'the file is as it was')
   assert.deepEqual([fs.existsSync(appDir(home)), fs.existsSync(path.dirname(launcherPath(home, 'linux'))), fs.readFileSync(raw, 'utf8')], [false, false, '{"keep":1}\n'], 'app/, the launcher and the bin/ they leave empty are gone; the records stay')
+})
+
+// a script install on Linux with records on disk; `helper`: the capability helper is installed (its fixed path exists)
+function scriptLinux({ helper = false } = {}) {
+  const home = tmpDir('trocar-path-helper-')
+  seedClaude(home)
+  const root = path.join(appDir(home), '9.9.9')
+  fs.mkdirSync(path.join(root, 'bin'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'package.json'), '{"name":"trocar-cli","version":"9.9.9"}\n')
+  fs.writeFileSync(path.join(root, 'bin', 'trocar.mjs'), '')
+  fs.mkdirSync(path.dirname(launcherPath(home, 'linux')), { recursive: true }); fs.writeFileSync(launcherPath(home, 'linux'), '#!/bin/sh\n')
+  const rc = path.join(home, '.bashrc'); fs.writeFileSync(rc, 'alias ll="ls -l"\n')
+  const raw = path.join(home, '.trocar', 'raw', 'r.ndjson'); fs.mkdirSync(path.dirname(raw), { recursive: true }); fs.writeFileSync(raw, '{"keep":1}\n')
+  const withHelper = { ...fs, existsSync: (p) => p === DEFAULT_REDIRECTOR_BIN || fs.existsSync(p) }
+  const ctx = (io, h = helper) => { const c = onCtx(home, io); return { ...c, platform: 'linux', env: { ...c.env, SHELL: '/bin/bash' }, deps: { ...c.deps, root, ...(h ? { fs: withHelper } : {}) } } }
+  return { home, rc, raw, ctx }
+}
+
+test('1.6 §3.6: a helper still installed keeps the code, the PATH item and every record, even with --purge-data; it is a left row in flows/; once it is gone the next run removes the rest', async () => {
+  const s = scriptLinux({ helper: true })
+  assert.equal(await runInstallCli(['--yes'], s.ctx(fakeIo(), false)), 0)
+  const placed = fs.readFileSync(s.rc, 'utf8')
+  const io = fakeIo()
+  assert.equal(await runUninstallCli(['--purge-data', '--yes', '--json'], s.ctx(io)), 1, io.text())
+  const r = JSON.parse(io.text())
+  assert.equal(r.purge_data, false)
+  assert.ok(r.left.some((l) => l.path === DEFAULT_REDIRECTOR_BIN && typeof l.command === 'string'), 'the helper row, with its command')
+  assert.deepEqual([fs.readFileSync(s.raw, 'utf8'), fs.readFileSync(s.rc, 'utf8'), fs.existsSync(appDir(s.home)), fs.existsSync(launcherPath(s.home, 'linux'))], ['{"keep":1}\n', placed, true, true], 'records, PATH item, code and launcher all stay')
+  const ev = flowEvents(path.join(s.home, '.trocar', 'collector')).filter((e) => e.event === 'uninstall-note' || e.where === 'uninstall')
+  assert.ok(ev.some((e) => e.event === 'failure' && e.code === 'entry-not-undone' && e.path === DEFAULT_REDIRECTOR_BIN), 'D38: the left row is in flows/')
+  assert.equal(ev.filter((e) => e.kind === 'result').at(-1).outcome, 'left')
+
+  const again = fakeIo()
+  assert.equal(await runUninstallCli(['--yes', '--json'], s.ctx(again, false)), 0, again.text())
+  assert.deepEqual([fs.readFileSync(s.rc, 'utf8'), fs.existsSync(appDir(s.home)), fs.readFileSync(s.raw, 'utf8')], ['alias ll="ls -l"\n', false, '{"keep":1}\n'], 'the second run takes out the PATH item and the code')
+})
+
+test('D58: once a script uninstall removed trocar itself, its receipt names no trocar command; the kept records are named by path', async () => {
+  const s = scriptLinux()
+  assert.equal(await runInstallCli(['--yes'], s.ctx(fakeIo())), 0)
+  const io = fakeIo()
+  assert.equal(await runUninstallCli(['--yes'], s.ctx(io)), 0, io.text())
+  assert.equal(fs.existsSync(appDir(s.home)), false)
+  const named = COMMANDS.filter((c) => new RegExp(`\\btrocar ${c.name}\\b`).test(io.text())).map((c) => c.name)
+  assert.deepEqual(named, [], io.text())
+  assert.ok(io.text().includes('~/.trocar/raw'), io.text())
 })

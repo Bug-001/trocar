@@ -82,12 +82,14 @@ const errText = (e) => String((e && e.message) || e)
 /** What `uninstall --dry-run` would do (and what is printed when a yes is missing), read and written nowhere → the receipt fields. */
 function planUninstall(w, m, purgeData = false, root = packageRoot()) {
   const usable = m && !m.unsupported
+  const held = !!helperHoldsCode(w, root) // the code, the PATH item and the records stay (see below)
+  const script = !held && channelOf(root, { home: w.home, fs: w.fs }) === 'script'
   const entries = usable ? m.entries.filter((e) => e.kind === 'json-key' || e.kind === 'text') : []
   return {
     changed: [...entries.map((e) => ({ path: e.path, change: `${e.kind === 'text' ? "trocar's own lines" : (e.keys || []).join('.')} taken out`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
-      ...(usable && m.path_item ? [{ path: m.path_item.path, change: 'the PATH item taken out', backup: m.path_item.backup ?? null }] : [])],
-    removed: [...(usable ? m.files.map((f) => f.path) : []), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)).filter((p) => w.fs.existsSync(p)), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m ? [manifestPath(w.dir)] : []), ...(channelOf(root, { home: w.home, fs: w.fs }) === 'script' ? [launcherPath(w.home, w.platform), appDir(w.home)] : [])],
-    kept: purgeData ? [] : keptOf(w.home, w.fs),
+      ...(usable && m.path_item && !held ? [{ path: m.path_item.path, change: 'the PATH item taken out', backup: m.path_item.backup ?? null }] : [])],
+    removed: [...(usable ? m.files.map((f) => f.path) : []), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)).filter((p) => w.fs.existsSync(p)), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData && !held ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m && !held ? [manifestPath(w.dir)] : []), ...(script ? [launcherPath(w.home, w.platform), appDir(w.home)] : [])],
+    kept: purgeData && !held ? [] : keptOf(w.home, w.fs),
     notes: usable || !m ? [] : [`the install manifest is version ${JSON.stringify(m.version)}, which this build does not read: no entry would be touched`],
     autostart: { planned: true },
   }
@@ -224,10 +226,14 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     const unitFile = m && !m.unsupported ? m.files.find((f) => f.role === 'unit') : null
     let unitLeft = false
     const bare = !blocked && !m && u.mode === 'none' // no install record: said after the script copy's last step below, which may still remove trocar itself
+    // 1.6 §3.6: a Linux helper that keeps the script copy's code is known now, so it is a left row before the PATH item, the purge and the result line:
+    // the PATH item stays with the code (the next `trocar uninstall` is found by it; the manifest that names it is kept, as with every left row), no record is deleted
+    const helperRow = blocked ? null : helperHoldsCode(w, deps.root || packageRoot())
+    if (helperRow) { receipt.left.push(helperRow); failed.push({ code: 'entry-not-undone', path: helperRow.path, reason: `${helperRow.path}: ${helperRow.reason} ${helperRow.command}` }) }
     if (!blocked) {
       // D74⑤: the script channel's PATH item (install recorded it in `path_item`); one that cannot be taken out is left, with the manifest that names it
       // and the backup it names (before the sweep below: a taken-out item no longer names its backup, so the sweep drops it)
-      if (m && m.path_item) {
+      if (m && m.path_item && !helperRow) {
         const p = removePathItem(m.path_item, { env, fs, run: w.exec })
         if (p.ok) { receipt.changed.push({ path: p.path, change: 'the PATH item taken out' }); delete m.path_item }
         else { receipt.left.push({ path: p.path, result: p.result, reason: p.reason }); failed.push({ code: 'entry-not-undone', path: p.path, reason: p.reason }) }
@@ -327,8 +333,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     receipt.kept = keptOf(home, fs) // what is still there now this run is done: after a purge, nothing
     const was = receipt.removed.length
     if (!blocked && !left && !receipt.problems.length) scriptCopyLast(w, { home, env, receipt, root: deps.root || packageRoot() })
-    if (bare) receipt.notes.push(receipt.removed.length > was ? "there was no install record for this user: only trocar's own program was left, and it is removed" : 'nothing is installed for this user')
-    receipt.ok = receipt.problems.length === 0 && receipt.left.length === 0 // receipt.left: the helper row scriptCopyLast adds counts too
+    if (bare && !helperRow) receipt.notes.push(receipt.removed.length > was ? "there was no install record for this user: only trocar's own program was left, and it is removed" : 'nothing is installed for this user')
+    receipt.ok = receipt.problems.length === 0 && receipt.left.length === 0
     if (left && !receipt.problems.length) receipt.problems.push(`${left} item(s) could not be undone; the install manifest is kept. Fix them, then run trocar uninstall again`)
     return { receipt, exit: receipt.ok ? EXIT.ok : EXIT.incomplete }
   } catch (e) { // an error that is not a step's own: recorded where status finds it, then thrown (4.6: a failed run ends with outcome 'failed')
@@ -339,16 +345,11 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
 
 /** 1.6 §3.6 「脚本渠道的最后一步」 (D74⑧): a copy the install script placed goes last — the launcher and ~/.trocar/app (the code and its private Node), also
  *  with no manifest. Only after a clean run: one that left anything needs this code to run again. POSIX unlinks the running files; Windows cannot, so a
- *  detached hidden PowerShell waits for this process and deletes them then. Either way the directories left empty go with them. A Linux capability helper still
- *  installed needs this code to be removed, so the code stays and the command that removes the helper is printed. */
+ *  detached hidden PowerShell waits for this process and deletes them then. Either way the directories left empty go with them. (A Linux capability helper
+ *  still installed keeps the code: helperHoldsCode's left row, so this never runs then.) */
 function scriptCopyLast(w, { home, env, receipt, root }) {
   if (channelOf(root, { home, fs: w.fs }) !== 'script') return
   const app = appDir(home), launcher = launcherPath(home, w.platform)
-  if (w.platform === 'linux' && w.fs.existsSync(DEFAULT_REDIRECTOR_BIN)) {
-    // 1.6 §1.1⑥ / C.2 left[].command: the sudo line is the row's own command, printed whole on its own line (folded on its spaces, a paste ran `sudo` alone)
-    receipt.left.push({ what: 'the capability helper', path: DEFAULT_REDIRECTOR_BIN, reason: `still installed; removing it needs trocar's own code, so ${app} stays too. Remove the helper with this line, then run trocar uninstall again:`, command: `sudo ${selfCommand(['setup-helper', '--remove'], { root })}` })
-    return
-  }
   const dirs = [trocarHome(home), path.dirname(launcher), w.dir] // the run's own removeEmptyDirs came before the code went: these were not empty then
   if (w.platform !== 'win32') {
     for (const p of [launcher, app]) { try { if (w.fs.existsSync(p)) { w.fs.rmSync(p, { recursive: true, force: true }); receipt.removed.push(p) } } catch (e) { receipt.problems.push(`${p} could not be removed (${errText(e)}); remove it by hand`) } }
@@ -367,6 +368,13 @@ function scriptCopyLast(w, { home, env, receipt, root }) {
     receipt.removed.push(app, launcher)
     receipt.notes.push(`${app} and ${launcher} are removed as soon as this command exits`)
   } catch (e) { receipt.problems.push(`${app} could not be scheduled for removal (${errText(e)}); remove it and ${launcher} by hand once this command has exited`) }
+}
+
+/** 1.6 §3.6: on a script install, a Linux capability helper still installed needs this code to be removed → the left row that keeps the code (and the
+ *  PATH item and the records with it), else null. 1.6 §1.1⑥ / C.2 left[].command: the sudo line is the row's own command, printed whole on its own line. */
+function helperHoldsCode(w, root) {
+  if (w.platform !== 'linux' || !w.fs.existsSync(DEFAULT_REDIRECTOR_BIN) || channelOf(root, { home: w.home, fs: w.fs }) !== 'script') return null
+  return { what: 'the capability helper', path: DEFAULT_REDIRECTOR_BIN, reason: `still installed; removing it needs trocar's own code, so ${appDir(w.home)} stays too. Remove the helper with this line, then run trocar uninstall again:`, command: `sudo ${selfCommand(['setup-helper', '--remove'], { root })}` }
 }
 
 const USAGE = 'usage: trocar uninstall [--purge-data] [--dry-run] [--yes] [--json]'

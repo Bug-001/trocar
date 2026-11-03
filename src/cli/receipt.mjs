@@ -4,7 +4,7 @@
 // receipt, nothing written). Pure: no disk, no clock, no process. Paths under HOME are shown as `~/…` (the way the user knows them); `--json` keeps
 // the absolute path.
 import path from 'node:path'
-import { standaloneCommand } from '../off/paths.mjs'
+import { standaloneCommand, appDir } from '../off/paths.mjs'
 import { noColor, WIDTH, wrap, pairs, size } from './text.mjs'
 import { HARNESS_IDS } from '../off/harness-names.mjs'
 
@@ -220,9 +220,13 @@ export function formatUninstallReceipt(r, { home = null, platform = process.plat
   for (const n of r.notes || []) lines.push(`Note: ${n}`)
   // §3.6: the purge hint names what `kept` holds — what --purge-data deletes — and is not given when nothing is kept
   const keptWhat = (r.kept || []).map((k) => k.what)
+  const and = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}` : xs[0])
+  // the script copy's last step removed trocar itself (§3.6): no trocar command is left to name (D58), so the kept paths are said as what to delete by hand
+  const codeGone = home != null && (r.removed || []).includes(appDir(home))
   if (!past) lines.push('Nothing was changed. Run it with --yes to do it.')
   else if (r.ok === false) lines.push('Fix what is above, then run: trocar uninstall')
-  else if (!r.purge_data && keptWhat.length) lines.push(`To delete what was kept (${keptWhat.length > 1 ? `${keptWhat.slice(0, -1).join(', ')} and ${keptWhat.at(-1)}` : keptWhat[0]}), run:`, commandLine('trocar uninstall --purge-data'))
-  else lines.push('Install it again: trocar install')
+  else if (!r.purge_data && keptWhat.length && codeGone) lines.push(`trocar itself is removed. To delete what was kept (${and(keptWhat)}), delete ${and(r.kept.map((k) => `${t(k.path)}/`))} by hand.`)
+  else if (!r.purge_data && keptWhat.length) lines.push(`To delete what was kept (${and(keptWhat)}), run:`, commandLine('trocar uninstall --purge-data'))
+  else if (!codeGone) lines.push('Install it again: trocar install')
   return fit(lines, { home }).join('\n')
 }
