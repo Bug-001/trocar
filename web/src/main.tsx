@@ -31,7 +31,6 @@ const SCREENS = {
   library: () => import('../legacy/library/library.mjs'),
   replay: () => import('../legacy/replay/replay.mjs'),
   'session-link': () => import('../legacy/replay/session-link.mjs'),
-  traffic: () => import('../legacy/traffic/traffic.mjs'),
   'traffic-host': () => import('../legacy/traffic/host.mjs'),
   'settings-storage': () => import('../legacy/settings/storage.mjs'),
   'settings-prices': () => import('../legacy/settings/prices.mjs'),
@@ -40,6 +39,7 @@ const SCREENS = {
 const REACT_SCREENS: Record<string, LazyScreen> = {
   capture: lazyScreen(() => import('./screens/capture/CaptureScreen')),
   'capture-log': lazyScreen(() => import('./screens/capture/CaptureLogScreen')),
+  traffic: lazyScreen(() => import('./screens/traffic/TrafficScreen')),
 }
 const PRELOADS = [...Object.values(SCREENS), ...Object.values(REACT_SCREENS).map((s) => s.load)] // the idle preload loads both kinds
 const isReact = (r: Route) => !r.unknown && Object.hasOwn(REACT_SCREENS, r.screen)
