@@ -182,11 +182,14 @@ export function refuseOldManifest({ home = nodeOs.homedir(), platform = process.
   try { m = readManifest(collectorDir(home), fs) } catch { return null }
   if (!m || m.unsupported !== 'v2') return null
   const copy = standalonePath(home)
+  // 1.6 §1.1⑥ / §3.1: every command the reader runs is a line of its own, whole, whatever the wrapper does to the sentences around it
   const message = [
-    `the install manifest ${manifestPath(collectorDir(home))} is version ${m.version}, written by an trocar from before the collector model; this trocar does not read it and changed nothing. Undo it first with the trocar that wrote it:`,
-    '  1. the trocar from main before the collector model (PR-1): trocar off, then trocar uninstall',
-    `  2. without that build, the standalone copy it left: ${platform === 'win32' ? `node "${copy}"` : shellWord(copy)}`,
-    'then run trocar install.',
+    `the install manifest ${manifestPath(collectorDir(home))} is version ${m.version}, written by a trocar from before the collector model; this trocar does not read it and changed nothing. Undo it first with the trocar that wrote it, run:`,
+    '  trocar off',
+    '  trocar uninstall',
+    'Without that trocar, run the standalone copy it left:',
+    `  ${platform === 'win32' ? `node "${copy}"` : shellWord(copy)}`,
+    'Then run trocar install.',
   ].join('\n')
   return { version: m.version, message }
 }

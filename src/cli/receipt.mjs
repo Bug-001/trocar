@@ -46,6 +46,8 @@ export const tildeText = (s, home) => (home ? s.replace(new RegExp(`(^|[\\s"'(\\
  *  every text line's HOME paths as `~/…` (tildeText); a command to copy is printed as it is. */
 export const fit = (lines, { home = null } = {}) => lines.flatMap((l) => {
   if (l && typeof l === 'object' && typeof l.command === 'string') return [`  ${l.command}`] // a command to copy (commandLine): one line, never folded, so a paste runs it whole
+  // a text of several lines (a refusal with its commands, refuseOldManifest) keeps its lines, and a line of it indented two spaces is a command to copy
+  if (String(l).includes('\n')) return fit(String(l).split('\n').map((x) => (/^ {2}\S/.test(x) ? commandLine(x.slice(2)) : x)), { home })
   const s = tildeText(String(l), home)
   if (s.length <= WIDTH || BARE.test(s)) return [s]
   const own = ' '.repeat(s.length - s.trimStart().length)
@@ -223,7 +225,10 @@ export function formatUninstallReceipt(r, { home = null, platform = process.plat
   const and = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}` : xs[0])
   // the script copy's last step removed trocar itself (§3.6): no trocar command is left to name (D58), so the kept paths are said as what to delete by hand
   const codeGone = home != null && (r.removed || []).includes(appDir(home))
+  // §3.6 / §1.1③: a refusal (error) and a left row with its own command already say the next step — a second one would only repeat it
+  const ownStep = !!r.error || ((r.left || []).length > 0 && r.left.every((l) => l.command) && !(r.problems || []).length)
   if (!past) lines.push('Nothing was changed. Run it with --yes to do it.')
+  else if (r.ok === false && ownStep) { /* said above */ }
   else if (r.ok === false) lines.push('Fix what is above, then run: trocar uninstall')
   else if (!r.purge_data && keptWhat.length && codeGone) lines.push(`trocar itself is removed. To delete what was kept (${and(keptWhat)}), delete ${and(r.kept.map((k) => `${t(k.path)}/`))} by hand.`)
   else if (!r.purge_data && keptWhat.length) lines.push(`To delete what was kept (${and(keptWhat)}), run:`, commandLine('trocar uninstall --purge-data'))

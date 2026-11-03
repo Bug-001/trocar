@@ -16,7 +16,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { sandbox, installedViaCli, fakeIo, snapshot } from './fixtures/dispatch-ctx.mjs'
 
 const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
-import { codeId } from '../../src/version.mjs'
+import { codeId, selfCommand } from '../../src/version.mjs'
 
 const CODE = codeId() // D67⑥: the version with HEAD's first 7 in a git checkout
 /** The context of a run where every command is a spy that records `[name, ...argv]` and answers 0: what the dispatch did, not what the commands do. */
@@ -60,7 +60,7 @@ test('V20: setup-helper off Linux is exit 2 and not needed here; as a user it sa
     assert.equal(r.io.stderrText().trim(), 'trocar setup-helper: not needed on this platform.')
   }
   const user = await run(['setup-helper'], { uid: 1000 })
-  assert.equal(user.exit, 2); assert.match(user.io.stderrText(), /run it with sudo: sudo trocar setup-helper/)
+  assert.equal(user.exit, 2); assert.ok(user.io.stderrText().split('\n').some((l) => l.trim() === `sudo ${selfCommand(['setup-helper'])}`), 'the line to run, whole, by absolute paths (1.6 §3.2)')
   assert.deepEqual(done, [], 'refused before anything was installed')
   const built = path.join(tmpDir('trocar-dispatch-helper-'), 'trocar-redirector'); fs.writeFileSync(built, '')
   let r = await run(['setup-helper', '--binary', built])

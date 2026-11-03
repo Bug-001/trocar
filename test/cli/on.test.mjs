@@ -385,6 +385,10 @@ test('R6 / V7: `on --dry-run` with the helper missing still prints the plan and 
   assert.ok(dry.receipt.created.length > 0, 'and it is a real plan (the unit; every certificate item is install\'s)')
   assert.deepEqual(dry.receipt.blocked.map((b) => [b.what, b.command]), [['trocar on', `sudo ${selfCommand(['setup-helper'])}`]]) // 附录 C.1: blocked:[{what, reason, command?}]
   assert.deepEqual(validateReceipt(dry.receipt), [])
+  // C.2: every stop a real run would meet is its own blocked item — the login entry missing too, neither overwriting the other
+  const both = await s.run({ dryRun: true, helperState: () => ({ ok: false, reason: 'no helper' }), unit: { path: path.join(s.home, 'trocar.service'), registered: () => ({ state: 'absent' }) } })
+  assert.equal(both.receipt.blocked.length, 2, JSON.stringify(both.receipt.blocked))
+  assert.ok(both.receipt.blocked.some((b) => b.command === `sudo ${selfCommand(['setup-helper'])}`) && both.receipt.blocked.some((b) => !b.command), JSON.stringify(both.receipt.blocked))
   assert.deepEqual(snapshot(s.home), before, 'a dry run writes nothing')
   assert.equal((await s.run({ helperState: () => ({ ok: false, reason: 'no helper' }) })).exit, 1)
 })

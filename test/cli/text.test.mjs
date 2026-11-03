@@ -108,3 +108,14 @@ test('wrap: lines of at most 80 columns, broken on spaces; a word longer than th
   assert.deepEqual(wrap('', 80), [])
   for (const l of wrap('word '.repeat(60))) assert.ok(l.length <= WIDTH, l)
 })
+
+// §1.1⑥: a command named in a sentence never splits across lines — at every width, each command in the text is whole on one line
+test('wrap: a `trocar <command>` with its options, and a backquoted command, stay on one line at every width', () => {
+  const cmds = ['trocar uninstall', 'trocar install.', 'trocar uninstall --purge-data', '`sudo /opt/node/bin/node /opt/trocar/bin/trocar.mjs setup-helper`']
+  const text = `If you suspect misuse: ${cmds[0]}, then ${cmds[1]} To delete what was kept, run ${cmds[2]} or install the helper with ${cmds[3]}; then run trocar on.`
+  for (let width = 10; width <= 130; width++) {
+    const lines = wrap(text, width)
+    assert.equal(lines.join(' '), text.replace(/\s+/g, ' '), `${width}: no word lost`)
+    for (const c of cmds) assert.ok(lines.some((l) => l.includes(c)), `${width}: ${c} whole on one line:\n${lines.join('\n')}`)
+  }
+})

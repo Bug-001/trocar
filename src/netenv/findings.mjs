@@ -9,6 +9,7 @@ import { trustReasonText } from '../collector/core/codes.mjs'
 import { TRUST_REASONS, ROUTE_TRUST_REASONS, RESTART_REASONS } from '../health/codes.mjs'
 import { FINDINGS_WIN32 } from './findings-win32.mjs'
 import { ago } from '../cli/text.mjs'
+import { setupHelperCommand } from '../version.mjs'
 
 const BY_CLASS = { problem: 0, expected: 1, note: 2 }
 const nodeOf = (t, id) => t.nodes.find((n) => n.id === id)
@@ -129,7 +130,7 @@ export const FINDINGS = {
   'desired-off': { cls: 'expected', trocarFirst: true, what: (c) => `Capture is off for ${c.h}.`, why: () => 'trocar is not on its path: it connects directly, or through your own proxy.', commands: (c) => [trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
   'daemon-not-running': { cls: 'problem', trocarFirst: true, what: () => 'trocar is not running in the background, so nothing is captured.', why: () => 'Without it there is no engine, and new connections go straight out.', commands: (c) => [trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
   'daemon-not-responding': { cls: 'problem', trocarFirst: true, what: () => 'trocar runs in the background but does not answer, so nothing is captured.', why: () => 'Its heartbeat is stale, so new connections already go straight out.', commands: (c) => [trocar(c, 'trocar off'), trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
-  'helper-missing': { cls: 'problem', trocarFirst: false, what: () => 'trocar\'s capture helper is missing or is the wrong version.', why: () => 'Without it trocar cannot attach to the kernel, so nothing is captured.', commands: (c) => [{ run: 'sudo trocar setup-helper', shell: 'sh' }, trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
+  'helper-missing': { cls: 'problem', trocarFirst: false, what: () => 'trocar\'s capture helper is missing or is the wrong version.', why: () => 'Without it trocar cannot attach to the kernel, so nothing is captured.', commands: (c) => [{ run: setupHelperCommand(), shell: 'sh' }, trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
   'link-missing': { cls: 'problem', trocarFirst: true, what: () => 'Capture is on, but trocar is not attached, so nothing is captured.', why: () => 'New connections go straight out.', commands: (c) => [trocar(c, `trocar on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'trocar status' },
   'entry-missing': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s setting that points at trocar is gone.`, why: () => 'It was removed, or it was never written.', commands: (c) => installFix(c) || [trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
   'entry-changed': { cls: 'problem', trocarFirst: true, what: (c) => `${c.h}'s setting that points at trocar holds something else now.`, why: () => 'You, or another program, changed what trocar wrote.', commands: (c) => installFix(c) || [trocar(c, `trocar off ${c.h}`), trocar(c, `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
@@ -300,7 +301,7 @@ export function renderFindings(findings, { width = 80 } = {}) {
     f.commands.forEach((c, i) => {
       // a note is not a problem, so what it offers is not a `Fix` (a macOS test machine 2026-10-18: a Fix sat under the headline "no problems")
       const label = i === 0 ? `${pad}${f.class === 'note' ? 'Option' : 'Fix   '} ` : `${pad}       `
-      wrap(c.run, width - label.length).forEach((l, k) => lines.push((k ? `${pad}       ` : label) + l))
+      lines.push(label + c.run) // a command to copy is never folded (§1.1⑥): a paste of half of `sudo <node> <trocar.mjs> setup-helper` runs node alone
     })
     if (f.verify) lines.push(`${pad}Check  ${f.verify}`)
   }

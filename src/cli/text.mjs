@@ -91,10 +91,30 @@ export function ago(at, now = Date.now()) {
   return 'just now' // under a minute either way: a clock a little ahead is not a negative age
 }
 
-/** `text` broken into lines of at most `width` columns, on spaces (§1.1⑥); a word longer than the line keeps its own line, unbroken. */
+// §1.1⑥: a command named in a sentence is one word to the wrapper — a backquoted span, or `trocar <command>` with the options after it — so a
+// line never ends between `trocar` and `install.` (a 116-column macOS Terminal did). No list of command names: any lowercase word after `trocar`
+// glues, and gluing a word that is not a command only keeps two words together.
+const CLOSES = /`[.,;:)]*$/
+function words(text) {
+  const ws = String(text).split(/\s+/).filter(Boolean), out = []
+  for (let i = 0; i < ws.length; i++) {
+    let w = ws[i]
+    const end = w.startsWith('`') && !(w.length > 1 && CLOSES.test(w)) ? ws.findIndex((x, j) => j > i && CLOSES.test(x)) : -1
+    if (end > 0) { w = ws.slice(i, end + 1).join(' '); i = end } // an unclosed backquote glues nothing
+    else if (w === 'trocar' && /^[a-z][a-z-]*[.,;:)]?$/.test(ws[i + 1] || '')) {
+      w += ` ${ws[++i]}`
+      while (/[a-z-]$/.test(w) && /^--?[a-z]/.test(ws[i + 1] || '')) w += ` ${ws[++i]}`
+    }
+    out.push(w)
+  }
+  return out
+}
+
+/** `text` broken into lines of at most `width` columns, on spaces (§1.1⑥); a word longer than the line keeps its own line, unbroken; a command
+ *  named in the text (`words`) is one word. */
 export function wrap(text, width = WIDTH, hang = '') {
   const out = []
-  for (const word of String(text).split(/\s+/).filter(Boolean)) {
+  for (const word of words(text)) {
     if (out.length && out[out.length - 1].length + 1 + word.length <= width) out[out.length - 1] += ` ${word}`
     else out.push((out.length ? hang : '') + word)
   }

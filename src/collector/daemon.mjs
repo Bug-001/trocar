@@ -9,7 +9,7 @@ import tls from 'node:tls'
 import os from 'node:os'
 import path from 'node:path'
 import { trocarHome, collectorHome, rawHome } from '../paths.mjs'
-import { codeId } from '../version.mjs'
+import { codeId, setupHelperCommand } from '../version.mjs'
 import { startSealing } from './seal-queue.mjs'
 import { createIndexKeeper } from './index-keeper.mjs'
 import { loadArch } from './arch/index.mjs'
@@ -552,11 +552,11 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       if (helperDown) await startHelper() // never up in this run (not installed at start, 4.6 「助手还没装」): asked again now; still missing = its own helper-down says why
       if (v6Held) throw new Error(`${v6Held}; refusing to attach so no IPv6 connection is steered to it (M8)`)
       const { proto } = redirector.helperInfo()
-      if (proto !== redirector.expectedProto) throw new Error(`helper speaks protocol ${proto}, this daemon expects ${redirector.expectedProto}; run "sudo trocar setup-helper" (G2)`)
+      if (proto !== redirector.expectedProto) throw new Error(`helper speaks protocol ${proto}, this daemon expects ${redirector.expectedProto}; run \`${setupHelperCommand()}\` (G2)`)
       await tracker.rescan() // every `on` re-judges live processes (G18)
     }
     redirector.on('down', ({ reason, exit, stderr }) => { helperDown = reason; sw.markDown(reason); event({ event: 'helper-down', reason, ...(exit ? { exit } : {}), ...(stderr ? { stderr } : {}) }) }) // exit name + its last stderr lines (D-14)
-    redirector.on('version-mismatch', (m) => event({ event: 'helper-version-mismatch', ...m, reason: `the helper speaks protocol ${m.got}, this daemon expects ${m.expected}; run "sudo trocar setup-helper"` }))
+    redirector.on('version-mismatch', (m) => event({ event: 'helper-version-mismatch', ...m, reason: `the helper speaks protocol ${m.got}, this daemon expects ${m.expected}; run \`${setupHelperCommand()}\`` }))
     redirector.on('helper-error', ({ reason, code }) => failure('helper', coded(Object.assign(new Error(reason), { code }), 'helper-error')))
     redirector.on('heartbeat-error', ({ reason, code }) => failure('heartbeat', coded(Object.assign(new Error(`${reason}; once the last beat is 2 s old the kernel stops steering (connections go direct)`), { code }), 'heartbeat-failed')))
     redirector.on('flow-meta', ({ pid, dst }) => { // a watched but untrusted agent's connection went direct (D31: metadata only)

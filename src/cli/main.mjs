@@ -16,7 +16,7 @@ import { parseArgs } from './args.mjs'
 import { wrap, WIDTH } from './text.mjs'
 import { printJson, errorDoc } from './json.mjs'
 import { EXIT } from './schema.mjs'
-import { codeId } from '../version.mjs'
+import { codeId, selfCommand } from '../version.mjs'
 import { recordUserPath } from '../off/user-path.mjs'
 
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
@@ -38,7 +38,7 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   if (rest.includes('--help') || rest.includes('-h')) { io.out(helpText(cmd.name)); return EXIT.ok }
   // §1.5: the commands that change your own state refuse root, and the one that needs root refuses everyone else — before anything is read or written.
   if (cmd.needsRoot && platform !== 'linux') return refuse(cmd.name, 'usage', `trocar ${cmd.name}: not needed on this platform.`)
-  if (cmd.needsRoot && uid !== 0) return refuse(cmd.name, 'usage', `trocar ${cmd.name}: run it with sudo: sudo trocar ${cmd.name}`)
+  if (cmd.needsRoot && uid !== 0) return refuse(cmd.name, 'usage', `trocar ${cmd.name}: run it with sudo:\n  sudo ${selfCommand([cmd.name, ...rest])}`)
   // `mutates` may be a function of the parsed args: `classes set` and `raw seal` change state, `classes` shown and `raw cat` do not. Parsing reads and writes nothing, so it comes first.
   const args = parseArgs(cmd, rest)
   const mutates = typeof cmd.mutates === 'function' ? cmd.mutates(args) : cmd.mutates

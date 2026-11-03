@@ -9,7 +9,7 @@ import { runOnCli } from '../../src/cli/on.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
 import { runInstallCli } from '../../src/cli/install.mjs'
 import { runUninstallCli } from '../../src/cli/uninstall.mjs'
-import { standalonePath } from '../../src/off/paths.mjs'
+import { standalonePath, standaloneCommand } from '../../src/off/paths.mjs'
 import { formatOnReceipt, formatPlan } from '../../src/cli/receipt.mjs'
 import { validateReceipt, newReceipt } from '../../src/cli/schema.mjs'
 import { readStateFile } from '../../src/off/state.mjs'
@@ -81,7 +81,7 @@ test('V7: install in a terminal asks once, only the first time; "n" writes nothi
   assert.equal(yes.asked.length, 1)
   // §1.1③ gives one or two next steps, so the text names the next command and the undo; the four commands live in `--json`'s `commands` (appendix C install)
   assert.match(yes.stdoutText(), /Next: trocar on/, 'the receipt names the next step (R1, 1.6 §3.2)')
-  assert.match(yes.stdoutText(), /If trocar itself breaks: /, 'and the undo that works without this source tree')
+  assert.ok(yes.stdoutText().split('\n').some((l) => l.trim() === standaloneCommand(standalonePath(home), 'linux')), 'and the undo that works without this source tree, whole on its own line (1.6 §1.1⑥)')
   assertEnglish(yes.stdoutText(), 'the install receipt')
   const asJson = fakeIo({ tty: false })
   assert.equal(await runInstallCli(['--json'], onCtx(home, asJson)), 0)

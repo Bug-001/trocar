@@ -32,7 +32,7 @@ import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/
 import { newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { OFF_VERSION, installComplete } from '../off/manifest.mjs'
 import { writeStandalone, checkStandalone } from '../off/standalone.mjs'
-import { codeId, selfCommand } from '../version.mjs'
+import { codeId, setupHelperCommand } from '../version.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const listDir = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
@@ -441,7 +441,7 @@ export async function turnOn(opts = {}) {
     const h = await helperState()
     if (h && h.ok === false) {
       helperBlock = `the capability helper is missing or not the right version (${h.reason || 'not usable'})`
-      helperStop = { what: 'trocar on', reason: `${helperBlock}; nothing was changed. Install it with the line below, then run trocar on again`, command: `sudo ${selfCommand(['setup-helper'])}` }
+      helperStop = { what: 'trocar on', reason: `${helperBlock}; nothing was changed. Install it with the line below, then run trocar on again`, command: setupHelperCommand() }
     }
   }
   if (helperBlock && !dryRun) return { receipt: unwritten({ ...fresh(), ok: false, notes: [helperStop.reason], blocked: [helperStop] }), manifest: null, plan: null, exit: 1 }
@@ -480,7 +480,7 @@ export async function turnOn(opts = {}) {
     if (edited.length) r.notes.push(...edited.map((e) => `you changed the proxy setting of ${e.harness}: ${e.where || 'the proxy field'} is now ${e.now ?? 'empty'} (trocar left ${e.was ?? 'empty'} there); on takes that as the upstream and points the setting back at trocar`))
     if (dryRun) {
       const blk = autostartBlock({ unit, osName })
-      return { receipt: { ...r, dry_run: true, ok: !named, ...(blk ? { blocked: [{ what: 'trocar on', reason: blk }], notes: [...r.notes, `${blk} (a real trocar on stops there)`] } : {}), ...(helperBlock ? { blocked: [helperStop], notes: [...r.notes, `${helperBlock} (a real trocar on stops there). Install it with the line below, then run trocar on again`] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
+      return { receipt: { ...r, dry_run: true, ok: !named, ...(blk || helperBlock ? { blocked: [...(blk ? [{ what: 'trocar on', reason: blk }] : []), ...(helperBlock ? [helperStop] : [])], notes: [...r.notes, ...(blk ? [`${blk} (a real trocar on stops there)`] : []), ...(helperBlock ? [`${helperBlock} (a real trocar on stops there). Install it with the line below, then run trocar on again`] : [])] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
     }
     if (plan.writing || stateWrite || edited.length) onPlan({ ...plan, state: stateWrite ? stateF : null, edited })
     if (plan.first || plan.newPaths.length || edited.length) {
@@ -568,7 +568,7 @@ export async function turnOn(opts = {}) {
         reached = status.actual === 'on'
         if (!reached) {
           const why = status.degraded ? `the helper is down (${status.degraded.reason}); nothing is steered, agents connect directly` // first: a helper that is not up has no protocol to name
-            : status.helper && status.helper.ok === false ? `the capability helper speaks protocol ${status.helper.proto}, this daemon expects ${status.helper.expected_proto}; run: sudo trocar setup-helper`
+            : status.helper && status.helper.ok === false ? `the capability helper speaks protocol ${status.helper.proto}, this daemon expects ${status.helper.expected_proto}; run \`${setupHelperCommand()}\``
               : status.ca && status.ca.ok === false ? `the collector CA is unusable (${status.ca.which}: ${status.ca.reason}); nothing is steered` : `the daemon did not reach on (actual: ${status.actual}); nothing is steered, agents connect directly`
           problems.push(why); put({ event: EVENT.failure, where: 'switch', code: 'state-mismatch', reason: why })
         }

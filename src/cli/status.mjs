@@ -438,7 +438,8 @@ function failuresOf(f) {
     if (g.harness !== harness) g.harness = null // one group from more than one harness: the group names none
   }
   const all = [...by.values()].map(({ harness, ...g }) => (harness ? { ...g, harness } : g)).sort((a, b) => (String(a.last_ts) < String(b.last_ts) ? 1 : String(a.last_ts) > String(b.last_ts) ? -1 : 0))
-  return { problem: groups.filter((g) => g.level === 'problem').reduce((n, g) => n + g.count, 0), expected, note: (c.conditions ? c.conditions.length : 0) + groups.filter((g) => g.level === 'note').reduce((n, g) => n + g.count, 0), since: h.read && h.read.since ? h.read.since : null, latest,
+  // C.3: the three counts are one unit, records — a note is the sum of the note groups' counts (a standing condition is one record)
+  return { problem: groups.filter((g) => g.level === 'problem').reduce((n, g) => n + g.count, 0), expected, note: all.filter((g) => g.level === 'note').reduce((n, g) => n + g.count, 0), since: h.read && h.read.since ? h.read.since : null, latest,
     groups: all.slice(0, GROUPS_MAX), ...(all.length > GROUPS_MAX ? { groups_cut: all.length } : {}) }
 }
 

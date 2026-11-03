@@ -24,7 +24,7 @@ import { removeOwnedFile } from '../off/journal.mjs'
 import { removeEmptyDirs, sweepTemps, strictlyInside } from '../off/fsutil.mjs'
 import { execTool, spawnDetached } from '../off/exec.mjs'
 import { removePathItem } from '../off/path-item.mjs'
-import { channelOf, packageRoot, selfCommand } from '../version.mjs'
+import { channelOf, packageRoot, setupHelperCommand } from '../version.mjs'
 import { DEFAULT_REDIRECTOR_BIN } from '../collector/arch/linux/redirector-client.mjs'
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
@@ -82,7 +82,7 @@ const errText = (e) => String((e && e.message) || e)
 /** What `uninstall --dry-run` would do (and what is printed when a yes is missing), read and written nowhere → the receipt fields. */
 function planUninstall(w, m, purgeData = false, root = packageRoot()) {
   const usable = m && !m.unsupported
-  const held = !!helperHoldsCode(w, root) // the code, the PATH item and the records stay (see below)
+  const heldRow = helperHoldsCode(w, root), held = !!heldRow // the code, the PATH item and the records stay (see below); the plan says so, as the run will
   const script = !held && channelOf(root, { home: w.home, fs: w.fs }) === 'script'
   const entries = usable ? m.entries.filter((e) => e.kind === 'json-key' || e.kind === 'text') : []
   return {
@@ -92,6 +92,7 @@ function planUninstall(w, m, purgeData = false, root = packageRoot()) {
     kept: purgeData && !held ? [] : keptOf(w.home, w.fs),
     notes: usable || !m ? [] : [`the install manifest is version ${JSON.stringify(m.version)}, which this build does not read: no entry would be touched`],
     autostart: { planned: true },
+    ...(heldRow ? { left: [heldRow] } : {}),
   }
 }
 
@@ -335,7 +336,9 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     if (!blocked && !left && !receipt.problems.length) scriptCopyLast(w, { home, env, receipt, root: deps.root || packageRoot() })
     if (bare && !helperRow) receipt.notes.push(receipt.removed.length > was ? "there was no install record for this user: only trocar's own program was left, and it is removed" : 'nothing is installed for this user')
     receipt.ok = receipt.problems.length === 0 && receipt.left.length === 0
-    if (left && !receipt.problems.length) receipt.problems.push(`${left} item(s) could not be undone; the install manifest is kept. Fix them, then run trocar uninstall again`)
+    // §3.6: a left row with its own command (the helper's) is the next step itself; only the rows without one need this line
+    const bareLeft = receipt.left.filter((l) => !l.command).length
+    if (bareLeft && !receipt.problems.length) receipt.problems.push(`${bareLeft} item(s) could not be undone; the install manifest is kept. Fix them, then run trocar uninstall again`)
     return { receipt, exit: receipt.ok ? EXIT.ok : EXIT.incomplete }
   } catch (e) { // an error that is not a step's own: recorded where status finds it, then thrown (4.6: a failed run ends with outcome 'failed')
     try { if (fs.existsSync(w.dir)) { put({ event: 'failure', code: (e && e.code) || 'uninstall-error', reason: errText(e) }); put({ kind: 'result', outcome: 'failed', reason: `uninstall failed: ${errText(e)}` }) } } catch { /* the original error is the one that matters */ }
@@ -374,7 +377,7 @@ function scriptCopyLast(w, { home, env, receipt, root }) {
  *  PATH item and the records with it), else null. 1.6 §1.1⑥ / C.2 left[].command: the sudo line is the row's own command, printed whole on its own line. */
 function helperHoldsCode(w, root) {
   if (w.platform !== 'linux' || !w.fs.existsSync(DEFAULT_REDIRECTOR_BIN) || channelOf(root, { home: w.home, fs: w.fs }) !== 'script') return null
-  return { what: 'the capability helper', path: DEFAULT_REDIRECTOR_BIN, reason: `still installed; removing it needs trocar's own code, so ${appDir(w.home)} stays too. Remove the helper with this line, then run trocar uninstall again:`, command: `sudo ${selfCommand(['setup-helper', '--remove'], { root })}` }
+  return { what: 'the capability helper', path: DEFAULT_REDIRECTOR_BIN, reason: `still installed; removing it needs trocar's own code, so ${appDir(w.home)} stays too. Remove the helper with this line, then run trocar uninstall again:`, command: setupHelperCommand(['--remove'], { root }) }
 }
 
 const USAGE = 'usage: trocar uninstall [--purge-data] [--dry-run] [--yes] [--json]'

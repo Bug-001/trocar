@@ -40,6 +40,7 @@ import { spawn as defaultSpawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import readline from 'node:readline'
 import net from 'node:net'
+import { setupHelperCommand } from '../../../version.mjs'
 
 /** @typedef {{address:string,port:number,family:4|6}} Dst */
 /** @typedef {{dst:Dst,pid:number|null,agent:string|null,decrypt:boolean}} FlowMeta */
@@ -216,7 +217,7 @@ export function createRedirectorClient({
     })
     child.on('error', (err) => {
       if (err && err.code === 'ENOENT') {
-        fail(`redirector helper not found at ${resolvedBinary}; install it once per machine with "sudo trocar setup-helper"`, {}, { code: 'ENOENT' })
+        fail(`redirector helper not found at ${resolvedBinary}; install it once per machine with \`${setupHelperCommand()}\``, {}, { code: 'ENOENT' })
       } else {
         fail('spawn error: ' + (err && err.message ? err.message : String(err)))
       }

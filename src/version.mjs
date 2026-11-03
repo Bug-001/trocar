@@ -74,3 +74,5 @@ const shellWord = (s) => (/^[\w@%+=:,./-]+$/.test(String(s)) ? String(s) : `'${S
 /** The command line that runs THIS copy by absolute paths, `<node> <root>/bin/trocar.mjs <args…>`: what trocar prints for `sudo`, whose PATH has
  *  neither the user's node nor `trocar` (1.6 §3.2 「Linux 的能力助手命令」), the same on every channel. */
 export const selfCommand = (args, { root = packageRoot(), node = process.execPath } = {}) => [node, path.join(root, 'bin', 'trocar.mjs'), ...args].map(shellWord).join(' ')
+/** The one `sudo … setup-helper` line trocar prints (1.6 §3.2「Linux 的能力助手命令」): install, on, uninstall's --remove, the daemon's helper reasons, doctor. */
+export const setupHelperCommand = (args = [], opts = {}) => `sudo ${selfCommand(['setup-helper', ...args], opts)}`

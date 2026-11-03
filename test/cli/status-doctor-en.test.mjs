@@ -12,11 +12,11 @@ import { STATUS_REASONS } from '../../src/health/codes.mjs'
 const NOW = Date.parse('2026-10-18T12:24:00Z')
 const BAD = [[/[\u3000-\u9fff\uff00-\uffef]/, 'CJK'], [/\bundefined\b/, 'undefined'], [/\bnull\b/, 'null'], [/\bNaN\b/, 'NaN'], [/§/, 'a section sign'], [/\bD\d+\b/, 'a decision number'], [/<[a-z_]+>/, 'an unfilled placeholder'], [/[^\x20-\x7e]/, 'a non-ASCII character']]
 
-/** Every rule of D58 one output must keep. */
-function clean(lines, what) {
+/** Every rule of D58 one output must keep. `whole`: commands that print whole on their line, however long (§1.1⑥: a command is never folded). */
+function clean(lines, what, whole = []) {
   for (const l of lines) {
     for (const [re, name] of BAD) assert.doesNotMatch(l, re, `${what}: ${name} in ${JSON.stringify(l)}`)
-    assert.ok(l.length <= 80, `${what}: ${l.length} columns in ${JSON.stringify(l)}`)
+    assert.ok(l.length <= 80 || whole.some((c) => l.endsWith(` ${c}`)), `${what}: ${l.length} columns in ${JSON.stringify(l)}`)
   }
 }
 
@@ -59,7 +59,7 @@ test('§1.1 · §3.5 a long NOTE folds under its own column: every line of the s
     table.forEach((l, i) => {
       if (names.some((h) => l.startsWith(`  ${h} `))) return
       assert.equal(l.search(/\S/), note, `${code}: a folded line starts under NOTE: ${JSON.stringify(l)}`)
-      assert.ok(table[i - 1].length + 1 + l.trim().split(' ')[0].length > 80, `${code}: folded only where the next word does not fit: ${JSON.stringify(table[i - 1])}`)
+      assert.ok(table[i - 1].length + 1 + l.trim().match(/^(trocar [a-z][a-z-]*\S*|\S+)/)[0].length > 80, /* `trocar <command>` is one word to the wrapper (§1.1⑥) */ `${code}: folded only where the next word does not fit: ${JSON.stringify(table[i - 1])}`)
     })
   }
 })
@@ -160,7 +160,7 @@ test('附录 B · §3.7: every code in the catalogue renders as English sentence
     assert.ok(found.what && found.why, `${code}: what and why say something`)
     assert.ok(['problem', 'expected', 'note'].includes(found.class), `${code}: ${found.class} is a class of 附录 B`)
     if (found.class !== 'note') assert.ok(found.commands.length, `${code}: a problem or an expected finding says what to do`)
-    clean(renderFindings([found]), `doctor finding ${code}`)
+    clean(renderFindings([found]), `doctor finding ${code}`, found.commands.map((c) => c.run))
   }
 })
 

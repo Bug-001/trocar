@@ -9,13 +9,13 @@ import path from 'node:path'
 import { EXIT, newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { refuseOldManifest, readManifest, saveManifest } from '../off/manifest.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
-import { opLockFile, standalonePath, launcherPath } from '../off/paths.mjs'
+import { opLockFile, standalonePath, launcherPath, standaloneCommand } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
 import { fit, tilde, planItems, formWords, carrierWords, commandLine } from './receipt.mjs'
 import { pairs, wrap } from './text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT } from '../collector/core/codes.mjs'
-import { codeId, packageRoot, channelOf, selfCommand } from '../version.mjs'
+import { codeId, packageRoot, channelOf, setupHelperCommand } from '../version.mjs'
 import { CUT, daemonCode, replaceDaemon } from './replace-daemon.mjs'
 
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
@@ -203,7 +203,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       // receipt sample does not carry it); printing it again put the paragraph on the screen twice (a macOS test machine 2026-10-18).
       // `--json` keeps it as `residual_risk`, because a document has no plan above it.
       ...(r.problems.length ? [] : ['Next: trocar on']), // on refuses without the login entry (1.6 §3.3): it is no next step until install has finished
-      `If trocar itself breaks: ${tilde(standalonePath(home), home)}`], { home }).join('\n'))
+      ...breakGlass(home, platform)], { home }).join('\n'))
     return r.exit
   }
 }
@@ -262,10 +262,10 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   // the capability helper is an item of its own (D53, 1.6 §3.8): install never waits on it, the collector runs without it and captures nothing, and the receipt says the one sudo line
   const helperState = deps.helperState || (parts.arch && parts.arch.install && parts.arch.install.helperState ? () => parts.arch.install.helperState() : null)
   const h = helperState ? await helperState() : null
-  const sudoHelper = h && h.ok === false ? `sudo ${selfCommand(['setup-helper'], { root })}` : null
+  const sudoHelper = h && h.ok === false ? setupHelperCommand([], { root }) : null
   const helperNote = sudoHelper ? `the capability helper is not installed (${h.reason || 'not usable'}): the collector runs and captures nothing until it is.` : null
   const notes = [...(r.plan ? r.plan.notes : []), ...(rep ? rep.notes : [])]
-  const receipt = { ...newReceipt('install'), ok: !board && !problems.length, ...(problems.length ? { problems } : {}), ...(board ? { pending: [board] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses.filter((h) => args.harnesses.some((d) => d.name === h)) : [], /* ㉓: this copy's own */ changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...new Set([...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created), ...(written ? [ingressPath] : [])])], standalone: standalonePath(home), ...(done.path && done.path.rec ? { path_item: done.path.rec } : {}), planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes: [...notes, ...(helperNote ? [`${helperNote} Run: ${sudoHelper}`] : [])],
+  const receipt = { ...newReceipt('install'), ok: !board && !problems.length, ...(problems.length ? { problems } : {}), ...(board || sudoHelper ? { pending: [...(board ? [board] : []), ...(sudoHelper ? [{ what: 'the capability helper', reason: helperNote, command: sudoHelper }] : [])] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses.filter((h) => args.harnesses.some((d) => d.name === h)) : [], /* ㉓: this copy's own */ changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...new Set([...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created), ...(written ? [ingressPath] : [])])], standalone: standalonePath(home), ...(done.path && done.path.rec ? { path_item: done.path.rec } : {}), planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes, // the helper is a pending row with its command (C.2), not a sentence that carries one
     // `enabled` is the entry asked again after the run (1.6 §3.3: no claim without evidence), not "nothing failed": ensureDaemonUp asks it at the end of every
     // registering run and makes any answer but present its unitFailed, so a run that halted on a stuck daemon (and enabled nothing) says false here too
     ...(r.daemon ? { daemon: daemonRow(dmn, rep), autostart: { entry: args.unit.path, enabled: !dmn.unitFailed } } : {}) }
@@ -277,9 +277,12 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
     ...(board ? [`Not done yet: the board's port is pending (${board.reason}). Run again: trocar install`] : []),
     ...problems.map((p) => `Problem: ${p}`),
     ...(problems.length ? [] : sudoHelper ? ['Next: install the capability helper with this line, then run trocar on:', commandLine(sudoHelper)] : ['Next: trocar on']), // on refuses without the login entry (1.6 §3.3) or the helper (§3.8): neither is a next step until it is there
-    `If trocar itself breaks: ${tilde(standalonePath(home), home)}`], { home }).join('\n'))
+    ...breakGlass(home, platform)], { home }).join('\n'))
   return board || problems.length ? EXIT.incomplete : EXIT.ok
 }
+
+/** 1.6 §3.2 / §1.1⑥: the undo that needs no source tree, as on prints it — the command on a line of its own, whole (standaloneCommand: `node "…"` on Windows). */
+const breakGlass = (home, platform) => ['If trocar itself breaks, run:', commandLine(standaloneCommand(standalonePath(home), platform))]
 
 // Set up (only): a row of the plan is one of that harness's forms whose own carrier install has not placed (setupOf's `missing`, the judgement
 // status and on read, with the root read as on reads it: `root` when it is gone from the user's store, so install's run asks for it again); without

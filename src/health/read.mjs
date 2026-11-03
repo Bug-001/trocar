@@ -215,7 +215,7 @@ function netenvOf({ home, fs }) {
  * directory) cannot be read at all — never an empty answer.
  */
 export function captureHealth({ home = trocarHome(), harnesses, now = Date.now(), fs = nodeFs, alive = pidAlive, identity = procIdentity, maxBytes } = {}) {
-  const read = { files: [], errors: [], truncated: false, unparsable: 0, window_hours: WINDOW_MS / 3600e3 }
+  const read = { files: [], errors: [], truncated: false, unparsable: 0, window_hours: WINDOW_MS / 3600e3, since: new Date(now - WINDOW_MS).toISOString() } // since: the window's start (1.6 C.3 failures.since)
   const collector = collectorHealth({ dir: path.join(home, 'collector'), harnesses, now, fs, alive, identity, maxBytes, read })
   const raw = rawHealth({ home, now, fs, read })
   let summary = collector.summary
