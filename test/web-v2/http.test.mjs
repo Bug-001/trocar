@@ -271,12 +271,14 @@ test('K-30: after a 403 no request is sent, every read is {ok:false, status:403}
   assert.equal(fired, 1)
 })
 
-// the real face over a real worker whose HOME/PATH is the empty test machine (real-face.mjs)
-test('real face: status answers on the empty machine and sessions lists the demo session', async () => {
+// the real face over a real worker on the empty test machine of this host's own platform (real-face.mjs)
+test('real face: status and doctor answer on the empty machine, health not-installed, and sessions lists the demo session', async () => {
   const b = await serveBoard(boardHome())
   try {
     const st = await b.get('status')
     assert.equal(st.status, 200); assert.equal(st.doc.command, 'status')
+    assert.equal(st.doc.health && st.doc.health.state, 'not-installed', JSON.stringify(st.doc.health))
+    assert.equal((await b.get('doctor')).status, 200)
     const ss = await b.get('sessions')
     assert.equal(ss.status, 200); assert.ok(ss.doc.sessions.length >= 1)
   } finally { await b.close() }

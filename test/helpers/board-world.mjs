@@ -59,7 +59,7 @@ export function sharedTrust(state) {
   return { custody, rootStore, calls: () => { try { return fs.readFileSync(at('calls.log'), 'utf8').split('\n').filter(Boolean) } catch { return [] } }, setStore: (v) => write('store.json', v) }
 }
 
-/** → the deps of `on` / `off` / `status` / Set up for a world `{ platform, home, env, dirs, trust? }` (trust: sharedTrust's state directory). */
+/** → the deps of `on` / `off` / `status` / Set up for a world `{ platform, home, env, dirs, trust? }` (dirs: null = no model backends; trust: sharedTrust's state directory). */
 export async function boardDeps({ platform, home, env, dirs, trust = null }) {
   const harnesses = await loadHarnesses()
   const unit = standInUnit(home)
@@ -71,10 +71,11 @@ export async function boardDeps({ platform, home, env, dirs, trust = null }) {
   }
 }
 
-/** → the path of a deps module for the worker, for a modelWorld `w` on `platform` (`trust`: sharedTrust's state directory, for Set up). */
+/** → the path of a deps module for the worker, for a world `w` on `platform`: a modelWorld, or just `{ home, env }` for an empty machine with no
+ *  model backends (the board's face, test/web-v2/real-face.mjs). `trust`: sharedTrust's state directory, for Set up. */
 export function depsFile(w, platform, trust = null) {
   const file = path.join(tmpDir('trocar-board-deps-'), 'deps.mjs')
-  const world = { platform, home: w.home, env: w.env, dirs: w.ctx.dirs, trust }
+  const world = { platform, home: w.home, env: w.env, dirs: w.ctx ? w.ctx.dirs : null, trust }
   fs.writeFileSync(file, `import { boardDeps } from ${JSON.stringify(import.meta.url)}\nexport default await boardDeps(${JSON.stringify(world)})\n`)
   return file
 }
