@@ -24,12 +24,14 @@ export function createScreenHost(el: HTMLElement, ctx: object, screens: Screens,
   let shut = false
   let preloaded = false
 
+  // also with no screen mounted: a module still loading has its 「Reading…」 page (or its load error) in `el`
   function unmountCurrent() {
-    if (!cur) return
-    try { if (cur.inst) cur.inst.unmount() } catch (e) { console.error('unmount failed', e) }
-    cur.ac.abort() // after unmount(): the screen's pollers are stopped, so an aborted answer writes nothing (1.2 #22)
-    cur = null
-    setScreenKeys(null)
+    if (cur) {
+      try { if (cur.inst) cur.inst.unmount() } catch (e) { console.error('unmount failed', e) }
+      cur.ac.abort() // after unmount(): the screen's pollers are stopped, so an aborted answer writes nothing (1.2 #22)
+      cur = null
+      setScreenKeys(null)
+    }
     el.replaceChildren()
   }
   // after the first screen settles, load every other screen module once, so a later screen change does not wait on the network
