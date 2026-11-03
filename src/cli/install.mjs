@@ -125,7 +125,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     const carrierOf = (r) => (r.carrier === 'root'
       ? 'reads your user trust store'
       : r.paths && r.paths.length
-        ? `${r.paths.map((p) => tilde(p, home)).join(', ')}${r.keys ? `: ${r.keys.join('.')}` : ''}`
+        ? `${r.paths.map((p) => tilde(p, home)).join(', ')}: ${r.keys ? r.keys.join('.') : carrierWords(r.carrier)}` // 1.6 §3.2: what changes there, in the receipt's words when no key says it
         : `path not known yet: the place of its ${r.carrier} could not be resolved on this machine`)
     const planned = [
       ...(only && !need.root ? [] : [{ what: 'root', detail: "this machine's own root certificate, trusted for your user (the system asks you once; the key cannot be exported)" }]),

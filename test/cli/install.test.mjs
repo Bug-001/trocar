@@ -23,8 +23,9 @@ function fakeLaunchctl() {
   const calls = []
   return { calls, run: (file, args) => { calls.push([file, ...args].join(' ')); return { status: 0, stdout: '', stderr: '' } } }
 }
-async function cli(argv, { tty = false, over = {} } = {}) {
+async function cli(argv, { tty = false, over = {}, setup = null } = {}) {
   const w = await modelWorld({ commands: ['codex'] })
+  if (setup) setup(w)
   const io = fakeIo({ tty })
   const launchctl = fakeLaunchctl()
   // the control endpoint a daemon publishes (arch/darwin/control-path.mjs): without the file the CLI has no socket to ask, so the
@@ -219,3 +220,14 @@ for (const [why, status, asks] of [['refuses the drain', 409, ['install']], ['re
     assert.deepEqual(posted, asks, 'the exit requests the collector was sent')
   })
 }
+
+// 1.6 §3.2 计划: every row that names a place says what changes there — a carrier with no key (a launch command, a plug-in) in the receipt's words,
+// from the carrier kind (the macOS plan printed `kimi-code  ~/.kimi-code/bin` and nothing else)
+test('1.6 §3.2: every plan row that names a path says what changes there, a carrier with no key included', async () => {
+  const kimi = (w) => { const f = path.join(w.home, '.kimi-code', 'bin', 'kimi'); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 1, 2, 3, 4])) }
+  const { io, exit } = await cli(['--dry-run', '--json'], { setup: kimi })
+  assert.equal(exit, 0)
+  const plan = io.json().planned
+  assert.ok(plan.some((p) => p.what === 'kimi-code'), JSON.stringify(plan))
+  for (const p of plan.filter((x) => /^~[\\/]/.test(x.detail))) assert.match(p.detail, /^\S.*: \S/, `${p.what}: the path, then what changes there`)
+})
