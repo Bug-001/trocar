@@ -674,7 +674,7 @@ test('F5 WebSocket labels and capture health, by D38 class: a call cut at the ca
 //   F8: test/health/capture-health.test.mjs "a leftover old capture events file …" (not read; alone it is not installed).
 //   F9: test/health/capture-health.test.mjs and test/health/flows.test.mjs (an unreadable flows/ throws, installed:false,
 //       metadata only), test/cli/status-health.test.mjs (status: errors and exit 3), test/server/gate.test.mjs (Host /
-//       Origin), test/web-v2/caphealth-poll.test.mjs (stale after two missed periods).
+//       Origin), web/src/ui/poll.test.tsx and CaptureScreen.test.tsx C9 (stale after two missed periods).
 //   F3(c), F3(i): test/collector/arch/linux/redirector-client.unit.test.mjs (heartbeat gap, monotonic timing),
 //       test/collector/core/events.test.mjs (the day never goes back), test/health/capture-health.test.mjs (not
 //       responding by the lock's age, pid / boot_id mismatch → not running).

@@ -9,7 +9,7 @@ import { harnessKey, harnessName, HARNESS_ORDER } from './chips.mjs'
 import { RESTART_CODES, UNKNOWN_REASON } from '../labels/capture.mjs'
 import { HEALTH_WORDS, HEALTH_READ } from '../labels/common.mjs'
 import { failureBrief, failureWord, statusReason } from '../../../src/cli/words.mjs'
-import { startPoll, INTERVAL } from './poll.mjs'
+import { INTERVAL } from './poll.mjs'
 
 export const CAPH_MS = INTERVAL.status // the poll period of the pages that show this card while visible (4.4 §live-poll: `status` is the costliest read)
 
@@ -186,23 +186,3 @@ export function failureSentence(g) {
   return { text: UNKNOWN_REASON, code, cls: 'warn', unknown: true }
 }
 
-// ── the poll of `status` (1.5 §采集状态 轮询 — the one place, so the 总览 / 采集 / 采集记录 pages cannot disagree) ──
-// core/poll.mjs startPoll at CAPH_MS: while the page is visible one read per period, never two in flight, backing off after a
-// failure (K-29); hidden: no reads, and one read the moment the page is visible again. Every answer — including a failure — goes
-// through capHealthPatch into the store (a failure keeps the last good answer, so the page keeps showing it under its 截至 mark).
-// onAnswer(s) runs after each store write, on the caller's clock. → { stop(), refresh() } — refresh() reads at once (after a
-// write), still never two in flight: a refresh that lands while a read is out may be answered from before the write, so one more
-// read starts the moment that answer lands.
-export function pollCaptureHealth({ api, store, doc = typeof document === 'undefined' ? null : document, onAnswer = null }) {
-  let stopped = false
-  const run = async () => {
-    let r
-    try { r = await api.get('status') } catch (e) { r = { ok: false, error: String((e && e.message) || e) } }
-    if (stopped) return r
-    store.set(capHealthPatch(r, api.now()))
-    if (onAnswer) { try { onAnswer(store.get()) } catch { /* a listener that throws must not stop the poll */ } }
-    return { ok: !!(r && r.ok) }
-  }
-  const p = startPoll({ run, base: CAPH_MS, doc })
-  return { refresh() { if (!stopped) p.poll() }, stop() { stopped = true; p.stop() } }
-}
