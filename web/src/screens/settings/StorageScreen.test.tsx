@@ -136,6 +136,18 @@ test('V3: a class ⓘ opens on focus and is not modal: outside stays live and ta
   expect(document.activeElement, 'outside takes focus').toBe(t)
 })
 
+test('V3: with a class ⓘ open, the next tabbable after it is the layer\'s 「看这类流量 ›」 link (1.2 §弹出层)', async () => {
+  await mount()
+  const info = within(row('telemetry')).getByRole('button', { name: CLASS_NAME.telemetry })
+  act(() => info.focus())
+  await key(info, 'Enter')
+  const link = document.querySelector<HTMLElement>('[role="dialog"] a[href]')
+  expect(link?.getAttribute('href')).toBe('#/traffic?class=telemetry&window=24h')
+  const order = [...document.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex]')]
+    .filter((el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled && !el.closest('[hidden], [inert]'))
+  expect(order[order.indexOf(info) + 1]).toBe(link)
+})
+
 test('V4: a change plans then confirms, stays busy without disabling, ignores a second press, shows the server\'s level only after the re-read', async () => {
   await mount()
   let release!: (a: Answer) => void
