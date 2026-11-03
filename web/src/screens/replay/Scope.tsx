@@ -19,7 +19,10 @@ type Cell = { rid: string, col: number, state: string, tip: string }
 type Item = { rid: string, i: number, col: number, kind: 'flag' | 'x' | 'compact', h: number | null, tip: string, aria: string }
 type Mark = { x: number, v: number, failed: boolean }
 
-const BAR_PX = 80, FLAG_PX = 14 // the main track's tallest bar; the tallest flag (h ∝ √ ≈ extra cost)
+// the tallest bar is --barh (scope.css: the main track yields to #ctxwin on a short viewport, 1.3 §排布); BAR_PX is its full height,
+// used only to drop a segment too thin to draw. FLAG_PX: the tallest flag (h ∝ √ ≈ extra cost)
+const BAR_PX = 80, FLAG_PX = 14
+const barH = (f: number) => `calc(var(--barh) * ${f.toFixed(4)})`
 const READS: Area[] = ['saw', 'overview', 'cur', 'problems', 'review', 'rough', 'empty'] // the areas the scope draws
 const BACKDROP: Area[] = ['overview', 'rough', 'empty'] // the paints that rebuild the overview's backdrop (the brush moves on any)
 // the controller's state is plain JS the renderers share: a gesture writes its flags through here, not on a value React tracks
@@ -67,12 +70,12 @@ const sameBar = (p: { b: Bar, cost: boolean, rough: boolean }, n: { b: Bar, cost
   (['i', 'h', 'hatched', 'fail', 'compact', 'cur', 'reviewed', 'tip'] as const).every((k) => p.b[k] === n.b[k]) && sameSegs(p.b.segs, n.b.segs)
 
 const BarView = memo(function BarView({ b, cost, rough }: { b: Bar, cost: boolean, rough: boolean }) {
-  const H = b.h * BAR_PX // a hatched cost bar is 0 high: its stripe says the estimate cannot be made
+  // a hatched cost bar is 0 high: its stripe says the estimate cannot be made
   const cls = ['bar', cost && 'cost', b.fail && 'err', b.compact && 'compact', b.cur && 'cur', b.reviewed && 'reviewed'].filter(Boolean).join(' ')
   const at = rough ? { 'data-step': b.i } : { 'data-i': b.i }
-  return <div className={cls} {...at} style={{ height: `${H.toFixed(2)}px` }} title={b.tip}>
-    {b.fail ? null : b.hatched ? <span className="ct-unloaded" style={{ height: `${Math.max(6, H).toFixed(2)}px` }} />
-      : cost || !b.segs ? null : b.segs.map(([k, f]) => f * H < 0.4 ? null : <span key={k} className={`ct-${k}`} style={{ height: `${(f * H).toFixed(2)}px` }} />)}
+  return <div className={cls} {...at} style={{ height: barH(b.h) }} title={b.tip}>
+    {b.fail ? null : b.hatched ? <span className="ct-unloaded" style={{ height: `max(6px, ${barH(b.h)})` }} />
+      : cost || !b.segs ? null : b.segs.map(([k, f]) => f * b.h * BAR_PX < 0.4 ? null : <span key={k} className={`ct-${k}`} style={{ height: barH(f * b.h) }} />)}
   </div>
 }, sameBar)
 
