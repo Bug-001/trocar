@@ -1,94 +1,89 @@
-/* css/shell.css — the frame (visual design §3 / §4.1, cut to what 1.2 §侧栏 allows): the sidebar and its 52px rail on
-   the left, one screen on the right, the page head, the toast host. Tokens only (css/base.css). The sidebar is
-   navigation and nothing else — no status line, no lamp, no badge, no dot, no news, nothing at the bottom; the rail's
-   fly-out lists names and sub-page links only. */
+/* css/shell.css — the frame (1.2 §侧栏 / §页头, D77 look): the sidebar and its 52px rail on the left, one screen on the right,
+   the page head, the toast host. Tokens only (css/base.css). The sidebar is navigation and nothing else — no status line, no
+   lamp, no badge, no dot, no news, nothing at the bottom; the rail's fly-out lists names and sub-page links only. The current
+   item's raised pill, brand bar and --action glyph show position, never status. */
 #app{display:grid;grid-template-columns:var(--side-w) minmax(0,1fr);height:100vh;}
 #app.rail{grid-template-columns:var(--rail-w) minmax(0,1fr);}
 
-#sidebar{display:flex;flex-direction:column;min-width:0;padding:12px 0 10px;position:relative;z-index:5;background:var(--panel);}
-/* the sidebar's right edge is drawn per item, so the open item can break through it into the page */
-#sidebar::after{content:"";position:absolute;top:0;bottom:0;right:0;width:1px;background:var(--rule);z-index:0;}
-.brandrow{display:flex;align-items:center;gap:4px;padding:0 6px 0 12px;margin:0 0 14px 4px;}
-.brandrow .brand{display:inline-flex;align-items:center;gap:9px;height:28px;color:var(--ink);text-decoration:none;}
+#sidebar{display:flex;flex-direction:column;min-width:0;padding:10px 10px;position:relative;z-index:5;background:var(--wash);border-right:1px solid var(--rule);}
+.brandrow{display:flex;align-items:center;gap:4px;height:44px;padding:0 2px 0 6px;margin:0 0 18px;}
+.brandrow .brand{display:inline-flex;align-items:center;gap:9px;color:var(--ink);text-decoration:none;border-radius:var(--r-2);}
 .brandrow .brand:hover{text-decoration:none;}
-.brandrow .brand b{font-size:var(--fs-strong);font-weight:600;letter-spacing:.01em;}
 .brandrow .brand svg{flex:none;}
-.iconbtn{width:28px;height:28px;border:0;background:none;color:var(--ink-3);border-radius:var(--r-1);display:grid;place-items:center;cursor:pointer;flex:none;margin-left:auto;}
-.iconbtn:hover{background:var(--paper);color:var(--ink);}
+/* the one rule that sets the logo face (--wordmark) and the one place letter-spacing is allowed */
+.wordmark{font-family:var(--wordmark);font-size:var(--fs-title);font-weight:var(--fw-strong);letter-spacing:-.01em;}
+.iconbtn{width:28px;height:28px;border:0;background:none;color:var(--ink-2);border-radius:var(--r-2);display:grid;place-items:center;cursor:pointer;flex:none;margin-left:auto;}
+.iconbtn:hover{background:var(--hover);color:var(--ink);}
 
 #sidebar nav ul{list-style:none;margin:0;padding:0;}
-#sidebar nav > ul > li{position:relative;padding:3px 0;border-top:1px solid var(--rule);}
-#sidebar nav > ul > li:first-child{border-top:0;}
-#sidebar .hit{position:relative;z-index:1;display:grid;grid-template-columns:18px minmax(0,1fr);column-gap:10px;align-items:center;padding:8px 14px 8px 18px;color:var(--ink);text-decoration:none;}
-#sidebar .hit:hover{text-decoration:none;background:color-mix(in srgb,var(--paper) 55%,transparent);}
-#sidebar .hit .ico{color:var(--ink-2);display:grid;place-items:center;}
-#sidebar .hit .lbl{font-size:var(--fs-strong);font-weight:500;line-height:20px;}
-#sidebar a[aria-current="page"]{font-weight:600;}
-/* the open group opens into the page: the same paper as the content, through the sidebar's edge */
-#sidebar li.open{background:var(--paper);margin-right:-1px;z-index:1;}
-#sidebar li.open > .hit .ico{color:var(--ink);}
-#sidebar ul.sub{list-style:none;margin:-2px 0 6px 27px;padding:0;position:relative;}
-#sidebar ul.sub::before{content:"";position:absolute;left:0;top:4px;bottom:10px;width:1px;background:var(--rule-2);}
-#sidebar ul.sub a{position:relative;display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:4px 14px 4px 15px;font-size:var(--fs-body);color:var(--ink-2);text-decoration:none;}
-#sidebar ul.sub a:hover{color:var(--ink);text-decoration:none;}
-#sidebar ul.sub a[aria-current="page"]{color:var(--ink);}
-#sidebar ul.sub a[aria-current="page"]::before{content:"";position:absolute;left:-3px;top:11px;width:7px;height:7px;border-radius:50%;background:var(--ink);box-shadow:0 0 0 2px var(--paper);}
+#sidebar nav > ul > li{position:relative;margin:0 0 2px;}
+#sidebar .hit{position:relative;display:grid;grid-template-columns:18px minmax(0,1fr);column-gap:11px;align-items:center;height:34px;padding:0 10px;border-radius:var(--r-3);color:var(--ink-2);text-decoration:none;font-size:var(--fs-body);}
+#sidebar .hit:hover,#sidebar ul.sub a:hover,#sidebar .fly .fsub a:hover{background:var(--hover);color:var(--ink);text-decoration:none;}
+#sidebar .hit .ico{display:grid;place-items:center;}
+#sidebar li.open > .hit{color:var(--ink);}
+#sidebar li.open > .hit .ico{color:var(--action);}
+/* where the reader is: a raised pill with a 3px brand bar on its left edge */
+#sidebar .hit[aria-current="page"],#sidebar ul.sub a[aria-current="page"]{background:var(--raised);color:var(--ink);box-shadow:var(--shadow-pill);font-weight:var(--fw-strong);}
+#sidebar .hit[aria-current="page"]::before,#sidebar ul.sub a[aria-current="page"]::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:3px;border-radius:0 var(--r-1) var(--r-1) 0;background:var(--brand-line);}
+#sidebar ul.sub{list-style:none;margin:2px 0 8px;padding:0 0 0 28px;}
+#sidebar ul.sub a{position:relative;display:block;height:30px;line-height:30px;padding:0 10px;border-radius:var(--r-2);font-size:var(--fs-body);color:var(--ink-2);text-decoration:none;}
 #sidebar a:focus-visible{outline:2px solid var(--action);outline-offset:-2px;}
 
-/* the fly-out: names and sub-page links only; shown on hover / keyboard focus in the rail, never expanded */
-#sidebar .fly{position:absolute;left:calc(100% + 6px);top:0;min-width:180px;max-width:280px;z-index:6;background:var(--raised);border-radius:var(--r-2);box-shadow:var(--shadow-float);padding:8px 0 6px;}
-#sidebar .fly .fh{display:block;padding:0 14px;font-size:var(--fs-strong);font-weight:600;line-height:22px;color:var(--ink);}
-#sidebar .fly .fsub{display:block;margin:2px 0 0 14px;}
-#sidebar .fly .fsub a{display:block;padding:3px 14px 3px 0;font-size:var(--fs-body);color:var(--ink-2);text-decoration:none;}
-#sidebar .fly .fsub a:hover{color:var(--ink);}
+/* the fly-out: names and sub-page links only, in the rail only. It shows after --t-tip of hover and at once on keyboard focus,
+   and hides at once (the hidden state has no transition). visibility, not display, so the delay can run. */
+#sidebar .fly{display:flex;flex-direction:column;visibility:hidden;opacity:0;position:absolute;left:calc(100% - 2px);top:-6px;min-width:176px;max-width:280px;z-index:6;padding:6px;background:var(--raised);border:1px solid var(--rule);border-radius:var(--r-3);box-shadow:var(--shadow-float);}
+#sidebar li:hover > .fly{visibility:visible;opacity:1;transition:visibility 0s var(--t-tip),opacity 0s var(--t-tip);}
+#sidebar li:focus-within > .fly{visibility:visible;opacity:1;transition:none;}
+#sidebar .fly .fh{display:block;padding:6px 10px;font-size:var(--fs-body);font-weight:var(--fw-strong);color:var(--ink);}
+#sidebar .fly .fsub{display:flex;flex-direction:column;}
+#sidebar .fly .fsub a{display:block;padding:5px 10px;border-radius:var(--r-2);font-size:var(--fs-body);color:var(--ink-2);text-decoration:none;}
+#sidebar .fly .fsub a[aria-current="page"]{color:var(--ink);font-weight:var(--fw-strong);}
 #app:not(.rail) #sidebar .fly{display:none;}
 
-/* the rail: icons only; the open item keeps the paper and gains a 2px ink bar on its content-side edge */
-#app.rail #sidebar .brandrow{flex-direction:column;align-items:center;gap:8px;margin:0 0 10px;padding:0;}
-#app.rail #sidebar .brandrow .brand b{display:none;}
+/* the rail: 36px icon squares; the open area's item stays raised (its sub-pages are hidden) */
+#app.rail #sidebar{padding:10px 8px;}
+#app.rail #sidebar .brandrow{flex-direction:column;height:auto;gap:10px;padding:0;margin:0 0 14px;}
+#app.rail #sidebar .wordmark,#app.rail #sidebar .hit .lbl,#app.rail #sidebar ul.sub{display:none;}
 #app.rail #sidebar .iconbtn{margin:0;}
-#app.rail #sidebar .hit{grid-template-columns:1fr;justify-items:center;padding:11px 0;}
-#app.rail #sidebar .hit .lbl,#app.rail #sidebar ul.sub{display:none;}
-#app.rail #sidebar li.open::after{content:"";position:absolute;top:0;bottom:0;right:0;width:2px;background:var(--ink);z-index:2;}
-#app.rail #sidebar li:hover > .fly,#app.rail #sidebar li:focus-within > .fly{display:block;}
+#app.rail #sidebar .hit{grid-template-columns:1fr;justify-items:center;width:36px;height:36px;padding:0;margin:0 auto;}
+#app.rail #sidebar li.open > .hit{background:var(--raised);box-shadow:var(--shadow-pill);}
 /* below 1280 the rail is forced whatever the viewer stored; the content needs the width */
 @media (max-width:1279px){
   #app{grid-template-columns:var(--rail-w) minmax(0,1fr);}
-  #sidebar .brandrow{flex-direction:column;align-items:center;gap:8px;margin:0 0 10px;padding:0;}
-  #sidebar .brandrow .brand b{display:none;}
+  #sidebar{padding:10px 8px;}
+  #sidebar .brandrow{flex-direction:column;height:auto;gap:10px;padding:0;margin:0 0 14px;}
+  #sidebar .wordmark,#sidebar .hit .lbl,#sidebar ul.sub{display:none;}
   #sidebar .iconbtn{margin:0;}
-  #sidebar .hit{grid-template-columns:1fr;justify-items:center;padding:11px 0;}
-  #sidebar .hit .lbl,#sidebar ul.sub{display:none;}
-  #sidebar li.open::after{content:"";position:absolute;top:0;bottom:0;right:0;width:2px;background:var(--ink);z-index:2;}
-  #sidebar li:hover > .fly,#sidebar li:focus-within > .fly{display:block;}
-  /* the media query decided the rail, not #app.rail: outrank line 44's hide, but only on hover / keyboard focus — never all at once */
-  #app:not(.rail) #sidebar li:hover > .fly,#app:not(.rail) #sidebar li:focus-within > .fly{display:block;}
+  #sidebar .hit{grid-template-columns:1fr;justify-items:center;width:36px;height:36px;padding:0;margin:0 auto;}
+  #sidebar li.open > .hit{background:var(--raised);box-shadow:var(--shadow-pill);}
+  /* the media query decided the rail, not #app.rail: outrank the expanded sidebar's hide; hover / focus still decide visibility */
+  #app:not(.rail) #sidebar .fly{display:flex;}
 }
 
 #content{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--paper);position:relative;}
 /* a screen fills #screen and scrolls (or splits) inside; a plain page scrolls as a whole */
 .page{flex:1;min-width:0;overflow:auto;padding:14px 32px 56px;}
 .pagehead{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 14px;margin:0 0 12px;min-height:30px;}
-.pagehead h1.pagename{margin:0;font-family:var(--sans);font-size:var(--fs-h1);font-weight:500;letter-spacing:0;color:var(--ink-2);white-space:nowrap;}
-.pagehead .crumbs{display:flex;flex:1 1 auto;flex-wrap:wrap;min-width:0;overflow-wrap:anywhere;align-items:baseline;gap:8px;font-size:var(--fs-h1);font-weight:500;color:var(--ink-3);}
+.pagehead h1.pagename{margin:0;font-family:var(--sans);font-size:var(--fs-title);font-weight:var(--fw-strong);color:var(--ink);white-space:nowrap;}
+.pagehead .crumbs{display:flex;flex:1 1 auto;flex-wrap:wrap;min-width:0;overflow-wrap:anywhere;align-items:baseline;gap:8px;font-size:var(--fs-title);font-weight:var(--fw-strong);color:var(--ink);}
 .pagehead .crumbs a{color:var(--ink-2);text-decoration:none;}
 .pagehead .crumbs a:hover{color:var(--ink);text-decoration:underline;}
-.pagehead .crumbs .sep{color:var(--ink-3);font-weight:400;}
+.pagehead .crumbs .sep{color:var(--ink-3);font-weight:var(--fw-regular);}
 .pagehead .tools{margin-left:auto;display:flex;flex-wrap:wrap;min-width:0;align-items:baseline;gap:4px 12px;}
-.pagehead .readat{font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;}
+.pagehead .readat{font-size:var(--fs-cap);color:var(--ink-3);white-space:nowrap;}
 /* the segmented control of the head's scope (links, no script) */
-.pagehead .seg{display:inline-flex;border:1px solid var(--rule-2);border-radius:var(--r-1);padding:1px;background:var(--paper);}
-.pagehead .seg a{padding:0 9px;font-size:var(--fs-cap);line-height:20px;color:var(--ink-2);text-decoration:none;border-radius:2px;white-space:nowrap;}
-.pagehead .seg a:hover{color:var(--ink);text-decoration:none;}
-.pagehead .seg a.on{background:var(--raised);color:var(--action);font-weight:600;box-shadow:inset 0 0 0 1px var(--action);}
+.pagehead .seg{display:inline-flex;border:1px solid var(--rule-2);border-radius:var(--r-2);padding:1px;background:var(--paper);}
+.pagehead .seg a{padding:0 9px;font-size:var(--fs-cap);line-height:20px;color:var(--ink-2);text-decoration:none;border-radius:var(--r-1);white-space:nowrap;}
+.pagehead .seg a:hover{color:var(--ink);background:var(--hover);text-decoration:none;}
+.pagehead .seg a.on{background:var(--raised);color:var(--ink);font-weight:var(--fw-strong);box-shadow:var(--shadow-pill);}
 .screenwait{color:var(--ink-3);padding:24px 0;}
 .screenerr{margin:16px 20px;padding:10px 14px;border:1px solid var(--bad);border-radius:var(--r-2);background:color-mix(in srgb,var(--bad) 10%,transparent);color:var(--ink);}
 
 /* a toast is a short message that goes away by itself; it takes no focus */
 #toasts{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:60;display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none;}
-.toast{background:var(--ink);color:var(--paper);border-radius:var(--r-2);box-shadow:var(--shadow-float);padding:7px 14px;font-size:var(--fs-body);}
+.toast{background:var(--ink);color:var(--paper);border-radius:var(--r-3);box-shadow:var(--shadow-float);padding:7px 14px;font-size:var(--fs-body);}
 
 /* K-30 (1.5): the one-sentence page that replaces everything on a 403 — a card off the edges, centred */
-main.forbidden{box-sizing:border-box;width:min(640px,calc(100% - 2 * var(--s5)));margin:var(--s7) auto;padding:var(--s5) var(--s6);background:var(--raised);border:1px solid var(--rule);border-radius:var(--r-2);color:var(--fg);font-size:var(--fs-body);}
+main.forbidden{box-sizing:border-box;width:min(640px,calc(100% - 2 * var(--s5)));margin:var(--s7) auto;padding:var(--s5) var(--s6);background:var(--raised);border:1px solid var(--rule);border-radius:var(--r-3);box-shadow:var(--shadow-card);color:var(--fg);font-size:var(--fs-body);}
 main.forbidden p{margin:0 0 var(--s3);}
 main.forbidden p:last-child{margin:0;}

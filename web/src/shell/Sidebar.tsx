@@ -61,7 +61,7 @@ export function Sidebar({ route, router, store }: { route: Route, router: Facade
   return (
     <RouterProvider navigate={navigate} useHref={useHref}>
       <div className="brandrow">
-        <Link className="brand" href="/overview"><Svg html={BRAND} /><b>{BRAND_TEXT}</b></Link>
+        <Link className="brand" href="/overview"><Svg html={BRAND} /><span className="wordmark">{BRAND_TEXT}</span></Link>
         <Button className="iconbtn" data-rail="toggle" aria-label={rail ? RAIL_LABELS.out : RAIL_LABELS.in} aria-expanded={!rail}
           onPress={() => { const v = rail ? '0' : '1'; writePref(v); setPref(v) }}><Svg html={icon(rail ? 'rail-out' : 'rail-in')} /></Button>
       </div>
