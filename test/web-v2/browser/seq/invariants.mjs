@@ -7,7 +7,7 @@ import { snap as probeSnap } from './probe.mjs'
 import { WRITE_GAP_MS } from '../../../../web/legacy/core/router.mjs'
 
 export const IDS = Object.freeze(['I-pageerror', 'I-console', 'I-blank', 'I-keep', 'I-stack', 'I-hscroll', 'I-rate', 'I-write', 'I-leak',
-  'I-mem', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select'])
+  'I-mem', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select', 'I-review'])
 
 export const PENDING = new Map([
   ['I-memcap', 'the page heap stays under memCapBytes (80 MB)'],
@@ -89,6 +89,9 @@ const viewOf = (page) => page.evaluate((sel) => {
     chapter: ((l) => l && { s0: +l.dataset.s0, s1: +l.dataset.s1 })(document.querySelector('#chapnav .chaplabel')),
     at: ((e) => (e ? +e.dataset.n : null))(document.querySelector('#stepbar .sb-no[data-n], #stepbar .sb-at[data-n]')),
     win: ['#sawstart', '#sawend'].map((id) => +((/\d+/.exec(document.querySelector(id)?.textContent || '') || [])[0] ?? NaN)),
+    // the review range on the main track (2.1 #5): is the bracket drawn with a width, and which drawn bars are .reviewed
+    review: ((br) => ({ bracket: !!br && getComputedStyle(br).display !== 'none' && br.getBoundingClientRect().width > 0,
+      bars: [...document.querySelectorAll('#sawrow .bar')].map((b) => b.classList.contains('reviewed')) }))(document.querySelector('#reviewbracket')),
     sideways: document.documentElement.scrollWidth > innerWidth,
     dom: document.getElementsByTagName('*').length,
   }
@@ -288,6 +291,11 @@ export async function check(ctx) {
     for (const t0 = Date.now(); chapterOff(x) && Date.now() - t0 < LIMITS.chapterSettleMs;) { await page.waitForTimeout(100); x = await viewOf(page) }
     if (chapterOff(x)) bad('I-chapter', chapterOff(x))
   }
+  // I-review (2.1 #5 · 1.3 §跨轨联动): the bracket is drawn with a width iff some bar is .reviewed, and the .reviewed bars are a prefix
+  // of the drawn bars (the review range is [lo, k))
+  const rv = v.review, some = rv.bars.includes(true), prefix = rv.bars.indexOf(false) < 0 || !rv.bars.slice(rv.bars.indexOf(false)).includes(true)
+  if (rv.bracket !== some) bad('I-review', `the review bracket is ${rv.bracket ? '' : 'not '}drawn and ${some ? 'some' : 'no'} bar is reviewed`)
+  if (!prefix) bad('I-review', 'the reviewed bars are not a prefix of the drawn bars')
   const pk = packFaults(s.fetchLog)
   if (pk.length) bad('I-pack', pk.slice(0, 3).join(' | '))
 
