@@ -61,8 +61,9 @@ export const fit = (lines, { home = null } = {}) => lines.flatMap((l) => {
   return [own + first, ...more]
 })
 
-/** One harness's chain after `on` (§3.3): where a new connection goes, and the proxy setting it was drawn from (credentials masked). */
-const adoptedLine = (h, x) => `  ${h}: route ${x.chain}${x.proxy ? ` (its proxy setting ${x.proxy}, read from ${(x.source || []).map((s) => (s.kind === 'file' ? `${s.where}${s.key ? ` ${s.key}` : ''}` : s.where)).join(', ') || 'its own settings'})` : ''}`
+/** One harness's chain after `on` (§3.3): where a new connection goes, and the proxy setting it was drawn from (credentials masked). The chain starts
+ *  with the harness's name, so the line does not say it again; column 0, so it never reads as an item of a path list above it (§1.1⑥). */
+const adoptedLine = (x) => `route: ${x.chain}${x.proxy ? ` (its proxy setting ${x.proxy}, read from ${(x.source || []).map((s) => (s.kind === 'file' ? `${s.where}${s.key ? ` ${s.key}` : ''}` : s.where)).join(', ') || 'its own settings'})` : ''}`
 
 /** D46: a chain that is the harness's own name and nothing else (the degenerate topology a machine whose facts cannot be read leaves) says nothing
  *  and is not printed. A chain with a hop (or a proxy setting named) is real. */
@@ -125,7 +126,9 @@ const lingerText = ({ linger, linger_reason: why = null, user = null }) => (ling
   ? `Capture stops when you log out. To keep it on: loginctl enable-linger ${user || 'your-user-name'}`
   : linger === 'unknown' ? `Whether capture survives a logout is unknown (${why || 'the linger state could not be read'})` : null)
 
-const joinPaths = (list, home) => list.map((x) => tilde(typeof x === 'string' ? x : x.path, home)).join('  ')
+/** A label that lists paths (§1.1⑥): the label on its own line, each path on a line of its own two deeper — two paths on one line fold the second to
+ *  column 0. `more`: a last item after the paths (how many are not shown). */
+export const pathList = (label, list, home, more = null) => [label, ...list.map((x) => `  ${tilde(typeof x === 'string' ? x : x.path, home)}`), ...(more ? [`  ${more}`] : [])]
 
 /** The file lines of a receipt that writes (`on`, Linux `install`): each file changed — path, what, where its backup is — then what trocar made
  *  itself. `past`: false for a dry run (what it would do). */
@@ -136,7 +139,7 @@ export function changeLines(r, { past = true, home = null } = {}) {
     lines.push(past ? 'Changed:' : 'Will change:')
     lines.push(...pairs(r.changed.map((x) => [t(x.path), `${x.change}${x.backup ? ` (backup ${t(x.backup)})` : past ? ' (trocar made this file; there was nothing to back up)' : ' (a copy is kept first)'}`])))
   } else lines.push(past ? 'No file of yours was changed.' : 'No file of yours will be changed.')
-  if (r.created.length) lines.push(`${past ? "trocar's own files:" : "trocar will make:"} ${joinPaths(r.created, home)}`)
+  if (r.created.length) lines.push(...pathList(past ? "trocar's own files:" : 'trocar will make:', r.created, home))
   return lines
 }
 
@@ -157,12 +160,11 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   ]
   lines.push(...changeLines(r, { past, home }))
   if (r.unchanged && r.unchanged.length) { // the display caps at three names; the whole list is in --json, and none of them is rewritten by a second on
-    const shown = joinPaths(r.unchanged.slice(0, 3), home)
-    lines.push(`Already in place, not rewritten: ${shown}${r.unchanged.length > 3 ? `  and ${r.unchanged.length - 3} more (all of them: --json)` : ''}`)
+    lines.push(...pathList('Already in place, not rewritten:', r.unchanged.slice(0, 3), home, r.unchanged.length > 3 ? `and ${r.unchanged.length - 3} more (all of them: --json)` : null))
   }
   if (r.skipped.length) lines.push(`Skipped: ${r.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`)
   if (lingerText(r)) lines.push(lingerText(r))
-  for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(adoptedLine(h, x))
+  for (const x of Object.values(r.adopted || {})) if (saysSomething(x)) lines.push(adoptedLine(x))
   if (r.daemon && !daemonBit) lines.push('The collector is not running, so nothing is captured yet.', 'Start it: trocar daemon') // the command keeps its own line: folding must not cut it (§1.1③)
   if (r.restart.length) lines.push(`  ${c.yellow('!')} Restart to capture: ${r.restart.map((x) => `${x.harness} (pid ${x.pid} started before the certificate was there)`).join(', ')}. Until then they connect as they do now.`)
   const nothingNew = fresh && fresh.size === 0 && !(r.changed || []).length && !(r.created || []).length

@@ -80,8 +80,23 @@ test('a chain that is the harness itself is not printed as an adopted line — a
   const degenerate = { harness: 'claude-code', chain: 'claude-code' }
   const hopful = { harness: 'codex', chain: 'codex -> [ebpf] trocar -> api.openai.com:443 (direct)' }
   const receipt = formatOnReceipt({ changed: [], created: [], skipped: [], restart: [], notes: [], adopted: { 'claude-code': degenerate, codex: hopful } }, { home: '/h' }).replace(/\n\s+/g, ' ')
-  assert.ok(!receipt.includes('claude-code: route claude-code'))
-  assert.match(receipt, /codex: route codex -> /)
+  assert.ok(!receipt.includes('claude-code'), 'the degenerate chain is not printed')
+  assert.equal(receipt.match(/\bcodex\b/g).length, 1, `the route line names its harness once (1.6 §3.3 sample: route: codex -> ...)\n${receipt}`)
+})
+
+// §1.1⑥: a label that lists several paths prints each on its own line, two deeper than the label — never two paths on one line
+test('a receipt label that lists several paths prints one path a line, two deeper than its label', () => {
+  const long = (n) => `/h/.config/${n}/${'x'.repeat(48)}.json`
+  const paths = [long('a'), long('b'), long('c')], made = ['/h/.trocar/netenv.json', '/h/.trocar/collector/ingress.json']
+  const text = formatOnReceipt({ changed: [], created: made, unchanged: paths.map((p) => ({ path: p })), skipped: [], restart: [], notes: [] }, { home: '/h' })
+  const lines = text.split('\n')
+  for (const p of [...paths, ...made]) {
+    const shown = p.replace('/h/', '~/'), i = lines.findIndex((l) => l.trim() === shown)
+    assert.ok(i > 0, `${shown} is alone on its line\n${text}`)
+    let j = i - 1; while (j > 0 && lines[j].trim().startsWith('~/')) j--
+    const indent = (l) => l.length - l.trimStart().length
+    assert.equal(indent(lines[i]), indent(lines[j]) + 2, `${shown} sits two deeper than its label\n${text}`)
+  }
 })
 
 // the one-time harness notes: printed when THIS run wires the harness, relocated to doctor / --json afterwards (D46); the receipt object is untouched

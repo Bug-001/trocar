@@ -24,7 +24,7 @@ test('Linux install: CA + trust entries (phase install) + trocar-off, no unit, n
   // R1: the receipt says each user file it changed — path, what was changed, where the backup is — not only the plan before the yes
   const receipt = io.text().slice(io.text().indexOf("Installed. trocar's certificates are in place."))
   assert.match(receipt.replace(/\s+/g, ' '), /~\/\.claude\/settings\.json env\.NODE_EXTRA_CA_CERTS added \(backup/, receipt)
-  assert.match(receipt, /trocar's own files: .*trocar-off/, receipt)
+  assert.match(receipt.replace(/\s+/g, ' '), /trocar's own files: .*trocar-off/, receipt)
   const glass = receipt.split('\n'); assert.equal(glass[glass.indexOf('If trocar itself breaks, run:') + 1].trim(), '~/.trocar/bin/trocar-off', '§1.1⑤ · §3.2: the break-glass line shows HOME as ~')
   assertEnglish(io.text(), 'the Linux install plan and receipt')
   const dir = path.join(home, '.trocar', 'collector')
