@@ -43,7 +43,7 @@ export function replyMarkHtml(r) {
   const m = r && r.mark
   if (!m) return ''
   const w = m === 'partial' ? W.REPLY_PARTIAL : W.REPLY_PARSED
-  return `<span class="rpmark">${mark('part', w)} ${esc(m === 'partial' ? w.replace('◐ ', '') : w)}</span>`
+  return `<span class="rpmark">${mark('part', w)} ${esc(w)}</span>`
 }
 // a reply part's body: a cell like every other body (2.6 §A), slot-marked so the panel fills it once the bytes arrive
 const partBody = (d) => `<div class="rpbody" data-rpb="${esc(d.bid)}">${bodyFor({ ...d, text_ref: d.ref })}</div>`

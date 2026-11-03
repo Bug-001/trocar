@@ -5,6 +5,7 @@
 // exact-byte id); `bid` keys only view state. DOM-free above wireCells, so the strings can be tested in Node.
 import { esc, kf } from '../core/fmt.mjs'
 import * as W from '../labels/replay.mjs'
+import { HALF } from '../core/icons.mjs'
 import * as C from '../labels/cells.mjs'
 import { layout } from './jsonlay.mjs'
 import { renderKind, valueOf, jsonNodeHtml } from './kinds.mjs'
@@ -213,7 +214,7 @@ const lines = (chars) => Math.max(1, Math.min(20, Math.ceil((Number(chars) || 0)
 export function cellBodyHtml(cell, mode) {
   const got = gotOf(cell)
   if (!got) return `<pre class="cellpend" data-ref="${esc(cell.ref ?? '')}" style="--cl:${lines(cell.chars)}">${preEsc(String(cell.preview ?? ''))}</pre>`
-  if (got.status !== 'ok') return `<div class="cbsrc warn" title="locator: ${esc(cell.ref ?? '—')}">${esc(W.HALF_MARK + ' ' + W.FF_WORD.notfetched + ' — ' + (got.error || got.reason || 'the capture could not be read'))}</div>`
+  if (got.status !== 'ok') return `<div class="cbsrc warn" title="locator: ${esc(cell.ref ?? '—')}">${HALF + ' ' + esc(W.FF_WORD.notfetched + ' — ' + (got.error || got.reason || 'the capture could not be read'))}</div>`
   const m = mode === 'read' ? 'read' : 'raw', text = String(got.text ?? ''), k = cell.bid
   remember(k, cell)
   const e = entryOf(cell, m, text)

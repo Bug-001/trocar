@@ -3,6 +3,7 @@
 // installUi(doc) is the one wiring pass, installed once by web/src/main.tsx. Nothing touches `document` at import time.
 
 import { esc } from './fmt.mjs'
+import { icon, HALF } from './icons.mjs'
 import { MARK_TIP, READ_FAIL } from '../labels/common.mjs'
 
 // A short, polite message that goes away by itself — what the board says when it moved the reader somewhere (an unknown link). It is
@@ -40,11 +41,11 @@ export function applyThemePref(doc = typeof document === 'undefined' ? null : do
 // verbatim carries no text at all (the proof rule and the section head own the words); a number's estimate is the ≈
 // prefix the caller writes; — and ? are never a zero. `tip` overrides the default legend.
 export const MARK_KINDS = Object.freeze(['verbatim', 'est', 'inf', 'struct', 'part', 'null-provider', 'null-price', 'null-na', 'unknown'])
-const MARK_FORM = { verbatim: '', est: '≈', inf: 'inferred', struct: 'structural estimate', part: '◐', 'null-provider': '—', 'null-price': '—', 'null-na': '—', unknown: '?' }
+const MARK_FORM = { verbatim: '', est: '≈', inf: 'inferred', struct: 'structural estimate', part: HALF, 'null-provider': '—', 'null-price': '—', 'null-na': '—', unknown: '?' }
 export function mark(kind, tip) {
   if (kind === 'verbatim') return `<span class="mk" data-ff="verbatim" aria-label="verbatim"${tip ? ` title="${esc(tip)}"` : ''}></span>`
   const form = MARK_FORM[kind] != null ? MARK_FORM[kind] : String(kind)
-  return `<span class="mk mk-${esc(kind)}"${tip || MARK_TIP[kind] ? ` title="${esc(tip || MARK_TIP[kind])}"` : ''}>${esc(form)}</span>`
+  return `<span class="mk mk-${esc(kind)}"${tip || MARK_TIP[kind] ? ` title="${esc(tip || MARK_TIP[kind])}"` : ''}>${kind === 'part' ? form : esc(form)}</span>`
 }
 
 // ── popovers (1.2 §弹出层): one contract for the whole board ─────────────────────────────────────────────────────────
@@ -54,12 +55,12 @@ export function mark(kind, tip) {
 export const TIP_MS = 300 // the hover delay, = --t-tip
 
 let SEQ = 0
-export function popover({ label, title, body, glyph = 'ⓘ', cls = '' }) {
+export function popover({ label, title, body, glyph = icon('info'), cls = '' }) {
   const id = `po-${++SEQ}`
   return `<button type="button" class="popbtn ${cls}" data-pop="${id}" aria-label="${esc(label)}" aria-expanded="false" aria-controls="${id}">${glyph}</button>` +
     `<div class="pop" id="${id}" role="dialog" aria-labelledby="${id}-t" hidden><div class="ph" id="${id}-t">${esc(title)}</div><div class="pb">${body}</div></div>`
 }
-export const infoButton = (o) => popover({ glyph: 'ⓘ', ...o })
+export const infoButton = (o) => popover({ glyph: icon('info'), ...o })
 
 export function menuButton({ label, title, items }) {
   const id = `menu-${++SEQ}`

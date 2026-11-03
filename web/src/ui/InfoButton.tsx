@@ -8,6 +8,8 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Button, Popover } from 'react-aria-components'
 import { TIP_MS } from '../../legacy/core/ui.mjs'
+import { icon } from '../../legacy/core/icons.mjs'
+import { Svg } from './Svg'
 
 type How = 'hover' | 'focus' | 'pinned'
 let current: { close: () => void } | null = null // one popover at a time
@@ -47,7 +49,7 @@ export function InfoButton({ label, title, body }: { label: string, title: strin
         onPress={() => show('pinned')}
         onFocus={() => { if (!backTo.current) show('focus') }}
         onMouseEnter={() => { clearTimeout(timer.current); timer.current = setTimeout(() => show('hover'), TIP_MS) }}
-        onMouseLeave={left}>ⓘ</Button>
+        onMouseLeave={left}><Svg html={icon('info')} /></Button>
       <span ref={setHost} />
       <Popover triggerRef={btn} isOpen={how != null && host != null} onOpenChange={(o) => { if (!o) self.close() }} isNonModal
         placement="bottom start" containerPadding={8} UNSTABLE_portalContainer={host ?? undefined}>
