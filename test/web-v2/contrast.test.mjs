@@ -92,6 +92,9 @@ test('the segmented control: the selected label at 4.5:1 on its face, the others
 test('lamps and control edges reach 3:1 on the paper faces, in both themes', () => {
   at(3, cross(['--bad-lamp', '--warn-lamp', '--note-lamp', '--control-edge'], PAPER))
 })
+test('the agent icon tile is set apart from every paper face by its hairline, in both themes', () => {
+  at(1.25, cross(['--icon-tile-edge'], PAPER)) // 1.2 §画法, 1.5 第 7 条: the same line as the selected segment's face
+})
 test('the trace, cursor, scope action and edge, and the problem lamps reach 3:1 on the scope glass, in both themes', () => {
   at(3, cross(['--trace', '--cursor', '--scope-action', '--scope-edge', '--bad-lamp', '--warn-lamp'], SCOPE))
 })

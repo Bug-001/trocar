@@ -15,7 +15,7 @@
   --ink: #1B1828;  --ink-2: #4D4960;  --ink-3: #605B72;
   /* action: only what can be operated */
   --action: #5B47E0;  --action-ink: #FFFFFF;  --action-wash: rgb(91 71 224 / .10);
-  --seg-on: #FFFFFF;  --seg-track: #E6E3EE;  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-on: #FFFFFF;  --knob-off: #7A7590;  --icon-tile: transparent;
+  --seg-on: #FFFFFF;  --seg-track: #E6E3EE;  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-on: #FFFFFF;  --knob-off: #7A7590;  --icon-tile: #FFFFFF;  --icon-tile-edge: #CFCADC;
   /* state: amber and red are for problems only */
   --bad: #B42318;  --bad-lamp: #E0443A;  --warn: #8A4B00;  --warn-lamp: #C2740E;  --ok: #217A45;  --note-lamp: #1B1828;
   /* instrument: the trace on the glass, --trace-ink where the cache share sits on paper; the cursor is neutral */
@@ -79,7 +79,7 @@
     --rule: #2A2636;  --rule-2: #3B3649;  --control-edge: #7A7491;  --grat: rgb(255 255 255 / .06);
     --ink: #EDEBF5;  --ink-2: #ABA6BF;  --ink-3: #958FA9;
     --action: #A497FF;  --action-ink: #160F33;  --action-wash: rgb(164 151 255 / .14);
-    --seg-on: #3D3752;  --seg-track: #17141F;  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;  --icon-tile: #F4F3F8;
+    --seg-on: #3D3752;  --seg-track: #17141F;  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;  --icon-tile: #F4F3F8;  --icon-tile-edge: #F4F3F8;
     --bad: #FF8F85;  --bad-lamp: #FF5D52;  --warn: #F2B35B;  --warn-lamp: #F2A13A;  --ok: #6AD49A;  --note-lamp: #EDEBF5;
     --trace-ink: #5FD3AE;
     --scope-ink-2: #A9A3C7;  --scope-edge: #6A6390;  --scope-rule: rgb(255 255 255 / .11);
@@ -104,7 +104,7 @@
   --rule: #E4E1EC;  --rule-2: #CFCADC;  --control-edge: #848099;  --grat: rgb(255 255 255 / .07);
   --ink: #1B1828;  --ink-2: #4D4960;  --ink-3: #605B72;
   --action: #5B47E0;  --action-ink: #FFFFFF;  --action-wash: rgb(91 71 224 / .10);
-  --seg-on: #FFFFFF;  --seg-track: #E6E3EE;  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-off: #7A7590;  --icon-tile: transparent;
+  --seg-on: #FFFFFF;  --seg-track: #E6E3EE;  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-off: #7A7590;  --icon-tile: #FFFFFF;  --icon-tile-edge: #CFCADC;
   --bad: #B42318;  --bad-lamp: #E0443A;  --warn: #8A4B00;  --warn-lamp: #C2740E;  --ok: #217A45;  --note-lamp: #1B1828;
   --trace-ink: #167A5F;
   --scope-ink-2: #ABA5CA;  --scope-edge: #6E6890;  --scope-rule: rgb(255 255 255 / .12);
@@ -128,7 +128,7 @@
   --rule: #2A2636;  --rule-2: #3B3649;  --control-edge: #7A7491;  --grat: rgb(255 255 255 / .06);
   --ink: #EDEBF5;  --ink-2: #ABA6BF;  --ink-3: #958FA9;
   --action: #A497FF;  --action-ink: #160F33;  --action-wash: rgb(164 151 255 / .14);
-  --seg-on: #3D3752;  --seg-track: #17141F;  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;  --icon-tile: #F4F3F8;
+  --seg-on: #3D3752;  --seg-track: #17141F;  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;  --icon-tile: #F4F3F8;  --icon-tile-edge: #F4F3F8;
   --bad: #FF8F85;  --bad-lamp: #FF5D52;  --warn: #F2B35B;  --warn-lamp: #F2A13A;  --ok: #6AD49A;  --note-lamp: #EDEBF5;
   --trace-ink: #5FD3AE;
   --scope-ink-2: #A9A3C7;  --scope-edge: #6A6390;  --scope-rule: rgb(255 255 255 / .11);
@@ -291,8 +291,9 @@ th,.colhead{font-size:var(--fs-cap);font-weight:var(--fw-strong);color:var(--ink
 /* the agent chip (1.2 §agent chip): a 16px icon box + the name; same DOM for every harness, unknown included */
 .hicon{display:inline-grid;place-items:center;width:16px;height:16px;flex:none;vertical-align:-3px;}
 .hicon .hic-svg, .hicon img{width:16px;height:16px;display:block;}
-/* official icons come with a white tile, a black tile or none; in dark every known icon sits on the same light tile (--icon-tile,
-   transparent in light), spread 2px outside the box so the layout does not move (1.2 §画法); the artwork is unchanged */
-.hicon:not(.hicon-unknown){background:var(--icon-tile);border-radius:25%;box-shadow:0 0 0 2px var(--icon-tile);}
+/* official icons come with a white tile, a black tile or none, and their own padding; in both themes every known icon sits on the same
+   light tile (--icon-tile), spread 2px outside the box so the layout does not move, its outer 1px a hairline (--icon-tile-edge: set
+   apart from the paper in light, the tile's own colour in dark) (1.2 §画法); the artwork is unchanged */
+.hicon:not(.hicon-unknown){background:var(--icon-tile);border-radius:25%;box-shadow:0 0 0 1px var(--icon-tile),0 0 0 2px var(--icon-tile-edge);}
 .chipname{white-space:nowrap;}
 .chipep,.chipsyn{font-size:var(--fs-cap);color:var(--ink-2);margin-left:6px;white-space:nowrap;}
