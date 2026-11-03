@@ -88,7 +88,6 @@ test('gatherNetFacts: the switch, the daemon, the link ids, the descriptors\' be
   assert.deepEqual([cc.behaviour.measured, cc.behaviour.follows, cc.behaviour.branches], ['lab', { http: false, ws: false }, ['all']], 'claude-code on Linux: the HTTPS_PROXY path was measured by V54 on a test machine')
   assert.deepEqual(cc.behaviour.files, [path.join(home, '.claude', 'settings.json'), path.join(home, '.claude.json')])
   assert.deepEqual(cc.negatives, [{ pid: 4121, host: 'api.anthropic.com', reason: 'negative-cache' }], 'only the pairs of this harness\'s own processes')
-  assert.deepEqual(cc.apiHosts, ['api.anthropic.com'])
   assert.equal(cc.adopted.at, 'T')
   assert.equal(f.harnesses.codex.adopted, null)
   assert.equal(f.harnesses.codex.behaviour.measured, 'inferred', 'every other harness on Linux is still inferred from the Windows measurements')

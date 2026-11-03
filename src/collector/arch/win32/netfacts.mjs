@@ -102,7 +102,7 @@ export async function gatherWin32Facts(ctx, deps = {}) {
       return {
         pid: r.pid, name: processName(r), exe: r.exe ?? null, version: versionOf(r.exe), startedAt: iso(r.startedAt ?? null),
         watched: a ? (a.decrypt === true ? 'decrypt' : a.off === true ? 'absent' : 'no-decrypt') : 'unknown',
-        trusted: s ? s.trusted ?? null : null, reason: s ? s.reason ?? null : null, negative: !!(s && s.negative === true), start: s ? s.start : undefined,
+        trusted: s ? s.trusted ?? null : null, reason: s ? s.reason ?? null : null, negative: !!(s && s.negative === true), start: s ? s.start : undefined, forms: s ? s.forms : undefined, // the forms status found it can be on (one predicate, status.mjs formsOf)
         elevated, ...(elevated === true && inferred ? { elevatedInferred: true } : {}),
       }
     }

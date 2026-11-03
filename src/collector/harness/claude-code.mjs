@@ -171,7 +171,8 @@ const proxyMode = {
     // hosts stay forward-only until a logged-in cell passes (ruling ⑲): sign-in, the updater and the Code-tab engine download
     { id: 'claude-code.desktop', os: ['darwin', 'win32'], route: 'library', cert: 'root', trust: 'root',
       present: [perOs({ darwin: { base: 'abs', path: '/Applications/Claude.app' }, win32: { base: 'localAppData', path: 'AnthropicClaude' } }), perOs({ darwin: { base: 'home', path: 'Applications/Claude.app' }, win32: { base: 'localAppData', path: 'Packages', glob: 'Claude_*' } })],
-      verified: { darwin: true, win32: true }, forwardOnlyHosts: ['claude.ai', 'accounts.google.com', 'downloads.claude.ai'] },
+      verified: { darwin: true, win32: true }, forwardOnlyHosts: ['claude.ai', 'accounts.google.com', 'downloads.claude.ai'],
+      systemProxy: { http: true, ws: true } }, // the app (Electron) follows the OS proxy; the CLI forms do not (the harness's `proxy.systemProxy`)
   ],
   routes: {
     settings: { kind: 'json-key', file: SETTINGS, format: 'json', proxyKeys: [['env', 'HTTPS_PROXY'], ['env', 'https_proxy']], noProxyKeys: [['env', 'NO_PROXY'], ['env', 'no_proxy']], value: 'door-url', absent: 'create', takesEffect: 'takes effect the next time you start claude (it reads the proxy setting once, at start)' },
