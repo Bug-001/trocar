@@ -282,7 +282,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
 
   // ── empty and failed states: every widget that carries per-session data is neutralised, nothing of the last session stays ──
   // `msg` empty → ⑧, the empty frame (1.4: no text, no control); else the honest failure sentence, Retry, and the reason in details
-  let emptied = '' // the last empty state's sentence: a view whose frame comes later draws it then (catchUp)
+  let emptied = '' // the last empty state's sentence, null when the rough page was drawn after it: a view whose frame comes later draws that then (catchUp)
   function renderEmpty(msg) {
     emptied = msg
     s.brushDragging = false; s.anchor = null; s.lanes = []; s.curFlat = []; s.curRemoved = []; s.breaks = []; jumps.clear()
@@ -400,6 +400,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     const head = s.desk.head
     if (!host || !head || !head.steps) return
     const at = Math.max(0, Math.min(head.steps, s.initialStep ?? head.steps) - 1), K = sawCapacity()
+    emptied = null
     onEls(() => {
       renderRails(E.rails, s); watchRails()
       if (head.lanesMore) E.rails.insertAdjacentHTML('beforeend', `<div class="railsmore" data-more="${head.lanesMore}">${esc(moreLanes(head.lanesMore))}</div>`)
@@ -858,9 +859,9 @@ function openDesk(ctx, route0, makeView = legacyView) {
     watchRails()
   }
   // a step left mid-wait draws now; the URL names the drawn step at once (syncUrl). Answers applied while away were not drawn: all areas then
-  // A desk with no lane yet that painted before its frame was there draws its empty state now.
+  // A desk with no lane yet that painted before its frame was there draws now what it painted last: the rough page or its empty state.
   function catchUp() {
-    if (s.anchor) { if (missed) { missed = false; renderAll() } else paintPlayhead() } else if (missed) { missed = false; renderEmpty(emptied); if (s.notListed) paintNotListed() }
+    if (s.anchor) { if (missed) { missed = false; renderAll() } else paintPlayhead() } else if (missed) { missed = false; if (emptied == null) renderRough(); else { renderEmpty(emptied); if (s.notListed) paintNotListed() } }
   }
 
   // hang the desk in `el` as it was left; the URL decides the view only when it names a step (1.2 §路由「离开再回来」)
