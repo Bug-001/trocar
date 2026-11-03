@@ -194,9 +194,11 @@ On Linux the machine's capability helper is one more step, with `sudo`. Installe
 
 Installed with the script, `uninstall` also removes trocar itself as its last step: `~/.trocar/app` (the code and its
 Node), the `trocar` launcher and the PATH item. On Windows the folder goes as soon as the command exits. On Linux,
-removing the helper needs that code, so while the helper is installed the code stays, `uninstall` exits 1 and prints
-the `sudo ... setup-helper --remove` line with full paths. Run that line, then `trocar uninstall` once more: the second
-run removes the code, the launcher and the PATH item.
+removing the helper needs that code, so while the helper is installed the code, the launcher and the PATH item stay,
+no captured record is deleted (even with `--purge-data`), `uninstall` exits 1 and prints the
+`sudo ... setup-helper --remove` line with full paths. Run that line, then `trocar uninstall` once more: the second
+run removes the code, the launcher and the PATH item. Once trocar itself is gone, the receipt names the kept folders to
+delete by hand.
 
 `uninstall` always prints its plan and asks first; without a terminal and without `--yes` it changes
 nothing and exits 2. `uninstall` never does `off` for you. While a harness is on, or (macOS / Windows) a process started during `on` still
