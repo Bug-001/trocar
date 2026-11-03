@@ -36,8 +36,6 @@ export const EMPTY_HOST = 'No requests to this host in this window'
 export const EMPTY_HOST_CLASS = (word) => `No ${word} requests to this host in this window`
 export const PICK_ONE = 'Pick a request to see its request and response'
 export const CLOSE_DETAIL = 'Close request details'
-export const OPEN_IN_REPLAY = 'Open in replay ›'
-export const MODEL_CALL_LEAD = 'This is a model call; its content is in replay ›'
 export const RAW_REQUEST = 'Raw request'
 export const FAILED = 'failed'
 export const UNKNOWN_DAY = '—'
