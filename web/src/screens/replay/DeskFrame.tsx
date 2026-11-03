@@ -3,10 +3,10 @@
 // #ctxnav · the boundary #maindiv · the middle column, which holds only the step head and the context window (1.4 中栏); the right page
 // holds the resources and the raw panel. The containers the legacy areas draw (#ctxwin #ctxnav #resexp #rawpanel, and #rails inside the
 // scope) are rendered empty: React never renders children, classes or styles inside them. What this frame renders from the desk's state
-// (decision 12, one owner per element): #leftpage's `railopen` (rails open, s.railsFolded) and its --nbars (the bars the window
-// draws, which the detail lanes narrow to), the right page's `open`. The boundaries are wired by layout.mjs initLayout() (the
+// (decision 12, one owner per element): #leftpage's `railopen` (rails open, s.railsFolded) and the right page's `open`; the bars the
+// window draws (--nbars, which the detail lanes narrow to) are the scope's (Scope.tsx, from its model's window). The boundaries are wired by layout.mjs initLayout() (the
 // controller's wire()). Its first layout effect hands the controller the legacy containers (view.framed), once.
-import { useLayoutEffect, type CSSProperties } from 'react'
+import { useLayoutEffect } from 'react'
 import { MAINDIV_TIP, DIVIDER_TIP, RPBAR_TIP } from '../../../legacy/labels/replay.mjs'
 import { useDeskModel } from './useDesk'
 import { DeskHead } from './DeskHead'
@@ -16,12 +16,10 @@ import type { DeskState, DeskView, Els } from './view'
 
 const railsOpen = (s: DeskState) => !s.railsFolded
 const rightOpen = (s: DeskState) => !!s.rpOpen
-const nbars = (s: DeskState) => Math.max(1, s.view.hi - s.view.lo)
 
 export function DeskFrame({ desk }: { desk: DeskView }) {
   const rails = useDeskModel(desk, 'frame', railsOpen)
   const rp = useDeskModel(desk, 'frame', rightOpen)
-  const n = useDeskModel(desk, 'saw', nbars)
   useLayoutEffect(() => {
     const $ = (sel: string) => desk.root.querySelector<HTMLElement>(sel)!
     const ids = ['rails', 'ctxwin', 'ctxnav', 'resexp', 'rawpanel'] as const
@@ -31,7 +29,7 @@ export function DeskFrame({ desk }: { desk: DeskView }) {
   return <>
     <DeskHead desk={desk} />
     <div id="pages">
-      <div id="leftpage" className={rails ? 'railopen' : undefined} style={{ '--nbars': String(n) } as CSSProperties}>
+      <div id="leftpage" className={rails ? 'railopen' : undefined}>
         <Scope desk={desk} />
         <main>
           <div id="ctxnav" />

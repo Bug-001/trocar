@@ -7,7 +7,7 @@ import { reactView } from './view'
 import { scopeModel } from './models.mjs'
 import { deskOf as deskWorld } from '../../../../test/web-v2/desk-world.mjs'
 import { buildLanes, anchorLane } from '../../../legacy/replay/lanes.mjs'
-import { problemSteps } from '../../../legacy/replay/timeline.mjs'
+import { problemSteps, roughWindow } from '../../../legacy/replay/timeline.mjs'
 
 const deskOf = deskWorld as (lanes: object[], answer?: object) => any
 
@@ -140,5 +140,28 @@ test('2.1 #5 render: with a review range the bars below k are .reviewed and the 
     expect($$('#sawrow .bar').map((b) => b.classList.contains('reviewed'))).toEqual(m.bars.map((b: any) => b.i < k))
     expect(parseFloat($('#reviewbracket')!.style.width)).toBeCloseTo(m.review.width * 100, 2)
     expect($('#reviewbracket')!.style.display).toBe('block')
+  }
+})
+
+// 1.3 §窗内步少时收窄: the detail lanes narrow to the bars the window draws. On a held row that is the model's window; on the rough page
+// (2.3 §大致页面: the head alone, no row held, s.view still the fresh 0..0) it is the rough window, not one bar.
+test('1.3 narrowing: #saw carries --nbars = the model window\'s width, on a held row and on the rough page', () => {
+  const N = ROWS.length
+  for (const view of [{ lo: 0, hi: N }, { lo: 2, hi: 5 }, { lo: 3, hi: 4 }]) {
+    const { $, model } = world({ at: view.lo, view })
+    const v = model().view
+    expect($('#saw')!.style.getPropertyValue('--nbars'), JSON.stringify(view)).toBe(String(Math.max(1, v.hi - v.lo)))
+    cleanup(); document.body.replaceChildren()
+  }
+  for (const starts of [[0], [0, 3, 6]]) for (const initialStep of [undefined, 2, N]) {
+    const desk = deskOf([{ kind: 'main', rows: ROWS }], { events: EVENTS })
+    desk.head = { tier: 1, axis: 'R0-0', steps: N, peak: 1000, bucket: 1, chapters: starts.map((s0, k) => ({ k, s0, s1: starts[k + 1] ?? N, ts0: null, inferred: false })) }
+    const s = { ...stateOf(desk), anchor: null, playRid: null, playhead: 0, view: { lo: 0, hi: 0 }, initialStep }
+    const { $, desk: d, model } = mount(s)
+    expect(model().rough).toBe(true)
+    const w = roughWindow(desk.head, Math.max(0, Math.min(N, initialStep ?? N) - 1), d.capacity())
+    expect(w.hi - w.lo).toBeGreaterThan(1)
+    expect($('#saw')!.style.getPropertyValue('--nbars'), `${starts} @${initialStep}`).toBe(String(w.hi - w.lo))
+    cleanup(); document.body.replaceChildren()
   }
 })

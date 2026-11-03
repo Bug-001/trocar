@@ -109,7 +109,7 @@
   /* shared timeline grid: fixed left gutter (track titles) | aligned plotting lane (point 3) */
   #saw,#rails{--gut:140px;--barcap:25px;}
   /* 1.3 §窗内步少时收窄: every detail lane narrows to (bars in the brush window) × the bar cap, left-aligned, so the /N
-     columns stay one grid; --nbars is written on #leftpage by renderSaw. The whole-session strip keeps the full width. */
+     columns stay one grid; --nbars is written on #leftpage by renderSaw (the legacy desk) or on #saw by Scope.tsx. The whole-session strip keeps the full width. */
   #saw .tkrow:not(.tkrow-ovw):not(.tkrow-chap)>.tlane,#rails .tlane{max-width:calc(var(--nbars,100000) * var(--barcap));}
   .tkrow{display:grid;grid-template-columns:var(--gut) 1fr;align-items:center;column-gap:8px;}
   .tkrow-bars{align-items:end;}

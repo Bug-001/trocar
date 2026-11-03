@@ -175,7 +175,10 @@ export function Scope({ desk }: { desk: DeskView }) {
   const ticks = new Map<number, any>((m?.asks?.ticks || []).map((t: any) => [t.col, t]))
   const paths = tracePaths(m ? m.trace : [])
   const gutName = cost ? W.VIEW_COST : !m || rough || s.anchor?.kind === 'main' ? w.ctx : W.laneWord(s.anchor.kind)
-  return <div id="saw" ref={el}>
+  // the bars the window draws, which every detail lane (and #rails, inside #saw) narrows to: the model's window, so the rough page's
+  // chapter window too (1.3 §窗内步少时收窄)
+  const nb = m ? { '--nbars': String(Math.max(1, m.view.hi - m.view.lo)) } as CSSProperties : undefined
+  return <div id="saw" ref={el} style={nb}>
     <div className="sawlegend">
       <span id="viewswitch">{m && !rough ? (['ctx', 'cost'] as const).map((v) => <button key={v} type="button" className={`segbtn${(v === 'cost') === cost ? ' on' : ''}`} data-view={v} aria-pressed={(v === 'cost') === cost} onClick={() => setView(v)}>{v === 'cost' ? W.VIEW_COST : W.VIEW_CTX}</button>) : null}</span>
       <span id="complegend">{lg ? cost && !rough ? <span>{W.COST_LEGEND}</span> : <><span>{lg.estimate}</span><span className="barlegend">{(BAR_KEYS as Array<[string, string]>).map(([c, word]) => <span key={c}><i className={`ct-${c}`} />{word}</span>)}</span></> : null}</span>

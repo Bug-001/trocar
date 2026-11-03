@@ -134,8 +134,8 @@ test('at 1280 × 800 the step bar is one row, the window holds half the height, 
     assert.ok(L.ctxwin >= 0.5 * L.avail, `#ctxwin ${L.ctxwin}px < half of the available ${L.avail}px`)
     await openBusiest(b, true)
     const lanes = await b.page.evaluate(() => {
-      const page = document.querySelector('#leftpage'), cs = getComputedStyle(document.querySelector('#saw'))
-      const cap = parseFloat(cs.getPropertyValue('--barcap')), n = +getComputedStyle(page).getPropertyValue('--nbars')
+      const cs = getComputedStyle(document.querySelector('#saw'))
+      const cap = parseFloat(cs.getPropertyValue('--barcap')), n = +cs.getPropertyValue('--nbars')
       const w = (e) => e.getBoundingClientRect().width
       return { cap, n, detail: [...document.querySelectorAll('#saw .tkrow:not(.tkrow-ovw) > .tlane, #rails .tlane')].filter((e) => e.getClientRects().length).map(w),
         whole: w(document.querySelector('#saw .tkrow-ovw > .tlane')) }
