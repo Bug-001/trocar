@@ -31,7 +31,7 @@ test('(1)(2) the library reads every page of `sessions`; a row\'s title fields a
     for (const s of whole.sessions) {
       const m = rowModel(s, Date.now())
       assert.equal(m.title, s.title); assert.equal(m.titleSource, s.title_source); assert.equal(m.untitled, s.title == null && s.title_source !== 'pending')
-      for (const [title, title_source] of [['t', 'wire'], ['t', 'harness-local-store'], [null, null], [null, 'pending']]) {
+      for (const [title, title_source] of [['t', 'wire'], [null, null], [null, 'pending']]) {
         const v = rowModel({ ...s, title, title_source }, Date.now())
         assert.equal(v.title, title); assert.equal(v.titleSource, title_source)
         assert.equal(v.untitled, title == null && title_source !== 'pending'); assert.equal(v.titlePending, title_source === 'pending')

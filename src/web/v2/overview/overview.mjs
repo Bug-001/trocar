@@ -338,7 +338,6 @@ const agentTableHtml = (m, w, now, priceFail) => {
   return `<div class="hscroll"><div class="ovtbl" role="table">${head}${rows}</div></div>`
 }
 
-const TITLE_TIP = { 'harness-local-store': W.TITLE_FROM_AGENT, wire: TITLE_FROM_WIRE }
 export function recentCardHtml(s, now) {
   const P = s.sessions
   if (P == null || (P.ok == null && P.data == null)) return readingHtml('recent', W.CARD.recent)
@@ -347,7 +346,7 @@ export function recentCardHtml(s, now) {
   if (rows == null || !rows.length) return '' // no session at all is the first-use page (firstUse)
   const body = rows.map((r) => {
     const pend = r.title == null && r.titleSource === 'pending' // not known yet, not "untitled" (1.8 §标题规则)
-    const tip = [r.title != null ? TITLE_TIP[r.titleSource] : pend ? TITLE_PENDING_TIP : null, r.id].filter(Boolean).join(' · ')
+    const tip = [r.title != null ? TITLE_FROM_WIRE : pend ? TITLE_PENDING_TIP : null, r.id].filter(Boolean).join(' · ')
     const calls = r.calls === 0 && r.probes > 0 ? `<span title="${esc(W.PROBE_ONLY_TIP)}">${esc(W.PROBE_ONLY)}</span>` : esc(W.CALLS_N(r.calls))
     return `<a class="ovitem" href="${esc(r.href)}">` +
       `${harnessIcon(r.harness)}<span class="ovnm">${esc(harnessName(r.harness))}${r.inferred ? ` <span class="ovmark" title="agent inferred from the request headers">(inferred)</span>` : ''}</span>` +

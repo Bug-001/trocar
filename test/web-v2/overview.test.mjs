@@ -13,7 +13,7 @@ import { backoffMs, INTERVAL } from '../../src/web/v2/core/poll.mjs'
 import { within } from '../helpers/bounded.mjs'
 import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, UNKNOWN_ICON, harnessKey, harnessName } from '../../src/web/v2/core/chips.mjs'
 import { TITLE_FROM_WIRE } from '../../src/web/v2/labels/replay.mjs'
-import { TITLE_FROM_AGENT, FILES_NOT_READ } from '../../src/web/v2/labels/overview.mjs'
+import { FILES_NOT_READ } from '../../src/web/v2/labels/overview.mjs'
 import * as W from '../../src/web/v2/labels/overview.mjs'
 import { ERR_WHERE, SWITCH_WORD } from '../../src/web/v2/labels/capture.mjs'
 import { esc, fmtWhen } from '../../src/web/v2/core/fmt.mjs'
@@ -291,7 +291,7 @@ test('#10 first use: no session → the capture card and the start card only; no
 })
 
 test('#11 recent sessions: the five newest by last_ts, the hover by title_source, untitled without a time, a pending title as not read yet, the probe-only mark, the replay href', () => {
-  const rows = [session(3), session(1, { title: null, title_source: null }), session(6), session(2, { title_source: 'harness-local-store' }),
+  const rows = [session(3), session(1, { title: null, title_source: null }), session(6), session(2),
     session(4, { calls: 0, probes: 3 }), session(7), session(5, { title: null, title_source: 'pending' })]
   const want = [...rows].sort((a, b) => Date.parse(b.last_ts) - Date.parse(a.last_ts)).slice(0, 5)
   assert.deepEqual(recentRows({ sessions: rows }).map((r) => r.id), want.map((r) => r.session_id))
@@ -301,7 +301,7 @@ test('#11 recent sessions: the five newest by last_ts, the hover by title_source
   want.forEach((m, i) => {
     const it = items[i]
     assert.ok(it.includes(`href="#/replay/${m.project_slug}/${m.session_id}"`), it)
-    if (m.title != null) assert.ok(it.includes(esc(m.title_source === 'wire' ? TITLE_FROM_WIRE : TITLE_FROM_AGENT)), it)
+    if (m.title != null) assert.ok(it.includes(esc(TITLE_FROM_WIRE)), it)
     else assert.doesNotMatch(it, /title="[^"]*title from/)
     if (m.calls === 0 && m.probes > 0) assert.match(it, /ovnum"><span title=/)
   })

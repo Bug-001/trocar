@@ -32,7 +32,7 @@ test('(1) rows: agent name and icon are the chip lookup for harnessKey(harness);
 
 test('(2) title rules: the hover follows title_source, a pending title reads as not read yet; no title ever carries the inferred mark', () => {
   const tips = new Set()
-  for (const [title, title_source, tip] of [['Fix the queue', 'harness-local-store', W.titleFromAgent], ['Fix the queue', 'wire', W.titleFromWire], [null, null, W.titleNoKey], [null, 'pending', W.titlePending]]) {
+  for (const [title, title_source, tip] of [['Fix the queue', 'wire', W.titleFromWire], [null, null, W.titleNoKey], [null, 'pending', W.titlePending]]) {
     for (const harness_inferred of [false, true]) {
       const html = rowHtml(S({ title, title_source, harness_inferred }), '', NOW), [, attrs, text] = titleCell(html)
       assert.equal(/title="([^"]*)"/.exec(attrs)[1], esc(tip('sess-1')))
@@ -41,7 +41,7 @@ test('(2) title rules: the hover follows title_source, a pending title reads as 
       tips.add(tip('sess-1'))
     }
   }
-  assert.equal(tips.size, 4)
+  assert.equal(tips.size, 3)
 })
 
 test('(3)(4)(5) row marks follow their fields, table-driven; nothing marks a false or absent field', () => {
@@ -148,7 +148,7 @@ test('(12) the repaint signature moves with every displayed field and holds for 
   const base = S({ title: 't', title_source: 'wire', project_slug: 'p', project_path: '/w/p' })
   const sig = (o) => listSignature({ sessions: [{ ...base, ...o }], errors: [] }, null)
   assert.equal(sig({}), listSignature({ sessions: [{ ...base }], errors: [] }, null))
-  const changes = { title: 'u', title_source: 'harness-local-store', harnesses: ['codex', 'cc'], logged: 1, calls: 4, probes: 2, has_subagent: true, last_ts: new Date(NOW).toISOString(), entrypoint: 'cli', harness_inferred: true, session_synthesized: true, project_slug: 'q', project_path: '/w/q' }
+  const changes = { title: 'u', title_source: 'pending', harnesses: ['codex', 'cc'], logged: 1, calls: 4, probes: 2, has_subagent: true, last_ts: new Date(NOW).toISOString(), entrypoint: 'cli', harness_inferred: true, session_synthesized: true, project_slug: 'q', project_path: '/w/q' }
   for (const [k, v] of Object.entries(changes)) assert.notEqual(sig({ [k]: v }), sig({}), k)
 })
 

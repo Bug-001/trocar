@@ -43,7 +43,6 @@ export const GROUPS = Object.freeze({ today: 'Today', yesterday: 'Yesterday', ea
 // ── the title rule's three steps and their hover words (the session id rides along) ─────────────────────────────────
 export { UNTITLED, TITLE_PENDING }
 export const titlePending = (id) => `${TITLE_PENDING_TIP} · session ${id}`
-export const titleFromAgent = (id) => `The title comes from the agent\'s own records, not from captured content · session ${id}`
 export const titleFromWire = (id) => `The title is taken from the captured requests · session ${id}`
 export const titleNoKey = (id) => `The agent gave no title · session ${id}`
 

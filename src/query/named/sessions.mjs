@@ -7,8 +7,9 @@
 // Membership is one function for this query and for `session` (src/query/rows.mjs), and the document shape
 // is the board's own (src/view/board.mjs sessionMetaOfFacts), so the list and a replay cannot disagree.
 // The TITLE is the main lane's first prompt (4.4 §人类标题的来源), which lives in a request body the index does not parse (D20):
-// it comes from the usage sidecar (4.2 §用量旁注 `ask`) — the earliest main call of the session it covers — and is null until one
-// does. With `later` (the query worker), a page's segments without a sidecar are filled after the answer, as `overview` does.
+// it comes from the usage sidecar (4.2 §用量旁注 `ask`); while a call up to the first main call is not covered yet the title is
+// not known (title_source 'pending'). With `later` (the daemon's query worker), a page's segments without a sidecar are filled
+// after the answer, as `overview` does; the one-shot CLI with no daemon fills nothing, so its answer stays pending (C.5).
 // `stored`: the unwindowed list (only `limit` / `after`) is the answer the worker keeps on disk (3.5 §谁执行它「存下的答案」).
 import { sessionMetaOfFacts } from '../../view/board.mjs';
 import { readUsage, fillUsage } from '../usage.mjs';

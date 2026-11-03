@@ -92,7 +92,7 @@ export function titleTipOf(s) {
   const id = s.session_id
   if (pendingTitle(s)) return W.titlePending(id)
   if (s.title == null) return W.titleNoKey(id)
-  return s.title_source === 'wire' ? W.titleFromWire(id) : W.titleFromAgent(id)
+  return W.titleFromWire(id) // a title always comes from the wire (4.4 §人类标题的来源)
 }
 
 function matches(s, f, now, title) {
