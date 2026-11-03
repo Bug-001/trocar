@@ -13,13 +13,16 @@ const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 export { formatPlan } from '../cli/receipt.mjs'
 
 const loadDaemon = () => import('./daemon.mjs')
+/** The staged copies an interrupted setup-helper left and this run removed, either way: a label sentence in 80 columns, then each path alone on its line, two in
+ *  — a path never broken, never a second path on one line (1.6 §1.1⑥). */
+const sweptLines = (swept = []) => (swept.length ? [...wrap(`Also removed ${swept.length === 1 ? 'a staged copy' : `${swept.length} staged copies`} an interrupted setup-helper left:`), ...swept.map((p) => `  ${p}`)] : [])
 
 export async function runSetupHelper(argv, { arch = null, out = (s) => console.log(s), err = (s) => console.error(s), packageRoot = PACKAGE_ROOT } = {}) {
   try {
     const A = arch || (await (await loadDaemon()).loadArch())
     if (argv.includes('--remove')) {
       const r = A.install.uninstallHelper()
-      out(`Removed the capability helper ${A.install.DEFAULTS.helperBin}.${r.warnings.length ? `\nWarning: ${r.warnings.join('; ')}` : ''}`)
+      out([...wrap(`Removed the capability helper ${A.install.DEFAULTS.helperBin}.`), ...sweptLines(r.swept), ...(r.warnings || []).flatMap((w) => wrap(`Warning: ${w}`))].join('\n'))
       return 0
     }
     const i = argv.indexOf('--binary'), dir = path.join(packageRoot, 'src', 'collector', 'arch', 'linux')
@@ -30,8 +33,7 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
       return 1
     }
     const r = A.install.setupHelper({ binarySrc })
-    const swept = r.swept && r.swept.length ? [`Also removed ${r.swept.length === 1 ? 'a staged copy' : `${r.swept.length} staged copies`} an interrupted setup-helper left:`] : []
-    out([...[`Installed the capability helper ${r.bin} with the capabilities ${r.caps}.`, ...swept].flatMap((l) => wrap(l)), ...(swept.length ? r.swept.map((p) => `  ${p}`) : [])].join('\n')) // 80 columns, a path never broken, a label's paths one a line two in (1.6 §1.1⑥)
+    out([...wrap(`Installed the capability helper ${r.bin} with the capabilities ${r.caps}.`), ...sweptLines(r.swept)].join('\n'))
     return 0
   } catch (e) { err(`trocar setup-helper: ${(e && e.message) || e}`); return 1 }
 }

@@ -141,8 +141,7 @@ export function uninstallHelper(opts = {}) {
   const warnings = []
   if (running.code === 0 && running.out) warnings.push('a capability helper is still running; it will keep working until it exits')
   fs.rmSync(cfg.helperBin, { force: true })
-  const swept = sweepStaged(cfg.helperDir)
-  if (swept.length) warnings.push(`removed ${swept.length === 1 ? 'a staged copy' : `${swept.length} staged copies`} an interrupted setup-helper left: ${swept.join(', ')}`)
+  const swept = sweepStaged(cfg.helperDir) // returned apart from the warnings: the CLI lists each path on a line of its own (1.6 §1.1⑥)
   try { fs.rmdirSync(cfg.helperDir) } catch (e) { // gone already is fine; anything else is said, never swallowed
     if (e.code !== 'ENOENT') warnings.push(`${cfg.helperDir} was left in place (${e.code}): ${(() => { try { return fs.readdirSync(cfg.helperDir).join(', ') } catch { return '?' } })()}`)
   }

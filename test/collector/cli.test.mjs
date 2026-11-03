@@ -260,13 +260,16 @@ test('cli: setup-helper installs or removes through arch; a failure is exit 1', 
   t = io(); assert.equal(await runSetupHelper([], { arch: { install: { setupHelper: () => { throw new Error('must run as root') } } }, packageRoot: root, ...t }), 1)
   assert.deepEqual(t.e, ['trocar setup-helper: must run as root'], 'the failure is said once, named by the command')
   // a staged copy an interrupted setup-helper left is removed and said, by both directions (D38)
-  const swept = { install: { DEFAULTS: arch.install.DEFAULTS, setupHelper: () => ({ bin: '/b', caps: 'cap_bpf=ep', swept: ['/usr/local/libexec/trocar/.trocar-redirector.new.67915'] }), uninstallHelper: () => ({ warnings: ['removed a staged copy an interrupted setup-helper left: .trocar-redirector.new.67915'] }) } }
+  const swept = { install: { DEFAULTS: arch.install.DEFAULTS, setupHelper: () => ({ bin: '/b', caps: 'cap_bpf=ep', swept: ['/usr/local/libexec/trocar/.trocar-redirector.new.67915'] }), uninstallHelper: () => ({ warnings: ['a capability helper is still running; it will keep working until it exits'], swept: ['/usr/local/libexec/trocar/.trocar-redirector.new.67915'] }) } }
   t = io(); await runSetupHelper([], { arch: swept, packageRoot: root, ...t })
   assert.ok(t.o.join('\n').includes('.trocar-redirector.new.67915'), `the staged copy it removed is named (D38)\n${t.o.join('\n')}`)
   assert.doesNotMatch(t.o.join('\n'), /\(ies\)|\(s\)/, 'plain English, no parenthesised plural (D58)')
   assert.ok(t.o.join('\n').split('\n').some((l) => /^ {2}\S/.test(l) && l.trim().endsWith('.trocar-redirector.new.67915')), `a listed path is alone on its line, two in (1.6 §1.1⑥)\n${t.o.join('\n')}`)
   t = io(); await runSetupHelper(['--remove'], { arch: swept, ...t })
-  assert.match(t.o.join('\n'), /^Warning: .*\.trocar-redirector\.new\.67915/m)
+  const removed = t.o.join('\n').split('\n')
+  assert.ok(removed.some((l) => l === '  /usr/local/libexec/trocar/.trocar-redirector.new.67915'), `--remove lists the staged copy alone on its line, two in, like install (1.6 §1.1⑥)\n${removed.join('\n')}`)
+  assert.ok(removed.every((l) => l.length <= 80), `80 columns\n${removed.join('\n')}`)
+  assert.ok(removed.some((l) => /^Warning: .*still running/.test(l)), 'a warning is still said')
 })
 
 test('cli: setup-helper on a checkout whose helper is not built says how to build it, once, and installs nothing (exit 1)', async () => {
