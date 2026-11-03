@@ -8,7 +8,8 @@ import path from 'node:path'
 import { runUninstallCli } from '../../src/cli/uninstall.mjs'
 import { formatUninstallReceipt } from '../../src/cli/receipt.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
-import { standalonePath } from '../../src/off/paths.mjs'
+import { standalonePath, standaloneFiles } from '../../src/off/paths.mjs'
+import { writeStandalone } from '../../src/off/standalone.mjs'
 import { installedHome, writeDaemonLock, flowEvents, procTable, fakeClock, DAEMON_ROWS, hangsOnStatus, snapshot } from '../off/fixtures/off-ctx.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
@@ -70,6 +71,21 @@ test('uninstall --dry-run writes nothing and asks the daemon nothing: the same r
   const json = (await cli(s, ['--dry-run', '--json'])).io.json()
   assert.deepEqual([json.dry_run, json.ok, validateReceipt(json)], [true, true, []])
   assert.ok(json.removed.includes(standalonePath(s.home)) && json.removed.includes(path.join(s.dir, 'install-manifest.json')))
+})
+
+// win32's run is the model platform's, which refuses while capture is on (collectors-online); its plan reads the same list as the run (standaloneFiles)
+test('1.6 §3.2 step 1: uninstall lists every file of the standalone copy — trocar-off, and on win32 the trocar-off.cmd beside it — and removes them', async () => {
+  for (const platform of ['win32', 'linux']) {
+    const s = await installedHome({ names: ['claude-code'] })
+    writeStandalone({ home: s.home, platform })
+    const files = standaloneFiles(s.home, platform)
+    const plan = (await cli(s, ['--dry-run', '--json'], { platform, deps: { platform } })).io.json()
+    assert.deepEqual(files.filter((f) => !plan.removed.includes(f)), [], `${platform}: the plan names each file`)
+    if (platform !== 'linux') continue
+    const r = await cli(s, ['--yes', '--json'], { platform, deps: { platform } })
+    assert.equal(r.exit, 0, r.io.text())
+    assert.deepEqual([files.filter((f) => fs.existsSync(f)), files.filter((f) => !r.io.json().removed.includes(f))], [[], []], 'each is gone, and the receipt says so')
+  }
 })
 
 test('R6: --purge-data takes the collector machine with the data — kernel/, kernel-archive/, forwarder/ and control.json / ingress.json (the pinned kernel copy and cache, the kernel config with its secret, the daemon control endpoint) — while a plain uninstall leaves them for the next on, except ingress.json (uninstall deletes it, so the next install chooses its ports again)', async () => {

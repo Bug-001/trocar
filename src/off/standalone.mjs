@@ -5,8 +5,10 @@
 //                     one load per built-in, and a call of runOffCli ends it. It refuses what would make a wrong file instead of writing it: two modules declaring one top-level
 //                     name, an import that is not `node:*` or a file of the directory, a cycle, an `export default` / `export { }` / `export *`, a renamed import of a module of the
 //                     directory (a bundle has one scope, so a name is the same name everywhere), a top-level destructuring.
-//   writeStandalone   atomic and durable, 0700; nothing is written when the file is already what buildStandalone says
-//   checkStandalone   `ok` only when the file is what buildStandalone says right now (the version on its first lines, its bytes, executable); `found` is the version it carries
+//   writeStandalone   atomic and durable, 0700; nothing is written when the file is already what buildStandalone says. On Windows the same for trocar-off.cmd (STANDALONE_CMD):
+//                     the files are paths.mjs standaloneFiles, the one list that is written, checked, listed and removed
+//   checkStandalone   `ok` only when the file is what buildStandalone says right now (the version on its first lines, its bytes, executable) and, on Windows, the .cmd is
+//                     STANDALONE_CMD; `found` is the version it carries
 // The file has no ES module syntax: no `import`, no `export`, no top-level `await`. It has no extension, and which kind of module Node takes such a file for is up to the Node
 // (22.7 and 20.19 look at the syntax, older ones say commonjs) and to any package.json above it — so it is written to run as either: built-ins come in through one loader that is
 // `require` where there is one and `process.getBuiltinModule` where there is not. A file that said `import` would not start on a Node that does not look at the syntax, and the
@@ -19,8 +21,17 @@ import nodeOs from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readOrNull, writeDurable, sweepTemps } from './fsutil.mjs'
-import { standalonePath } from './paths.mjs'
+import { standalonePath, standaloneFiles } from './paths.mjs'
 import { OFF_VERSION } from './manifest.mjs'
+
+/** trocar-off.cmd, the Windows half of standaloneFiles: runs trocar-off beside it with the Node the launcher trocar.cmd finds — the node.exe `..\app\current`
+ *  names (the script channel, D74: maybe no node on PATH), else `node` on PATH — so, like trocar-off, its bytes hold no Node path (1.6 §3.2 step 1). ASCII, CRLF.
+ *  It ends on the node line with nothing after it: cmd returns node's exit code however it was started (a trailing `& exit /b` returned 0 under `cmd /c` and
+ *  under PowerShell, Windows test machine 2026-11-04). */
+export const STANDALONE_CMD = ['@echo off', 'setlocal', 'set "D=%~dp0..\\app"', 'set "N="',
+  'if exist "%D%\\current" for /f "usebackq tokens=2" %%a in ("%D%\\current") do set "N=%%a"',
+  'set "E=node"', 'if defined N if exist "%D%\\node\\%N%\\node.exe" set "E=%D%\\node\\%N%\\node.exe"',
+  '"%E%" "%~dp0trocar-off" %*', ''].join('\r\n')
 
 /** The call that ends the file. The tests that need a Linux answer on any machine replace exactly this text (and say so); a copy that runs on a person's machine runs it as it is. */
 export const STANDALONE_ENTRY = 'runOffCli(process.argv.slice(2), { standalone: true })'
@@ -221,18 +232,22 @@ export function buildStandalone({ srcDir = SOURCE_DIR, version, fs = nodeFs } = 
   ].join('\n')
 }
 
-/** Writes ~/.trocar/bin/trocar-off (0700; the directory 0700 when it is made) unless it already is what buildStandalone says → `{ path, written }`. Throws what the build or the write throws. */
-export function writeStandalone({ home = nodeOs.homedir(), version = OFF_VERSION, srcDir, fs = nodeFs } = {}) {
-  const file = standalonePath(home)
-  const text = buildStandalone({ srcDir, version, fs })
-  const have = readOrNull(fs, file)
-  let mode = 0
-  try { mode = fs.statSync(file).mode } catch { /* not there */ }
-  if (have && have.toString('utf8') === text && (mode & 0o100)) return { path: file, written: false }
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  sweepTemps(file, fs)
-  writeDurable(file, text, 0o700, fs)
-  return { path: file, written: true }
+/** Writes the files of standaloneFiles (0700; the directory 0700 when it is made) unless each already is what it should be → `{ path, written }`, `path` being
+ *  trocar-off. Throws what the build or a write throws. */
+export function writeStandalone({ home = nodeOs.homedir(), version = OFF_VERSION, srcDir, platform = process.platform, fs = nodeFs } = {}) {
+  const texts = [buildStandalone({ srcDir, version, fs }), STANDALONE_CMD]
+  let written = false
+  standaloneFiles(home, platform).forEach((file, i) => {
+    const have = readOrNull(fs, file)
+    let mode = 0
+    try { mode = fs.statSync(file).mode } catch { /* not there */ }
+    if (have && have.toString('utf8') === texts[i] && (mode & 0o100)) return
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+    sweepTemps(file, fs)
+    writeDurable(file, texts[i], 0o700, fs)
+    written = true
+  })
+  return { path: standalonePath(home), written }
 }
 
 /** Is the copy on disk what `trocar on` would write now? → `{ ok, path, found, expected, reason? }`: `found` is the version on its first lines (null: none, or no file), `expected` the
@@ -253,5 +268,10 @@ export function checkStandalone({ home = nodeOs.homedir(), version = OFF_VERSION
   // the execute bit is a POSIX fact: on Windows nothing carries one (the file is run as `node "<path>"`, which is what the undo line says),
   // so checking it there called a good copy stale right after install (a Windows test machine 2026-10-18)
   if (platform !== 'win32' && !(mode & 0o100)) return no(found, `${file} is not executable; trocar on writes it again`)
+  for (const cmd of standaloneFiles(home, platform).slice(1)) {
+    let have = null
+    try { have = fs.readFileSync(cmd, 'utf8') } catch { /* missing or unreadable: either way not the file */ }
+    if (have !== STANDALONE_CMD) return { ...no(found, have === null ? `${cmd} is not there or cannot be read: trocar on writes it` : `${cmd} is not what this trocar writes; trocar on writes it again`), path: cmd }
+  }
   return { ok: true, path: file, found, expected }
 }

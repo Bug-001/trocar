@@ -16,7 +16,7 @@ import { readManifest, saveManifest, manifestPath, refuseOldManifest } from '../
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
-import { standalonePath, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES } from '../off/paths.mjs'
+import { standaloneFiles, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES } from '../off/paths.mjs'
 import { rawHome, indexHome, classesLog, collectorHome } from '../paths.mjs' // D60: the records are segments under ~/.trocar/raw, the index trocar builds from them under ~/.trocar/index
 import { netenvFile } from '../netenv/index.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
@@ -88,7 +88,7 @@ function planUninstall(w, m, purgeData = false, root = packageRoot()) {
   return {
     changed: [...entries.map((e) => ({ path: e.path, change: `${e.kind === 'text' ? "trocar's own lines" : (e.keys || []).join('.')} taken out`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
       ...(usable && m.path_item && !held ? [{ path: m.path_item.path, change: 'the PATH item taken out', backup: m.path_item.backup ?? null }] : [])],
-    removed: [...(usable ? m.files.map((f) => f.path) : []), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)).filter((p) => w.fs.existsSync(p)), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData && !held ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m && !held ? [manifestPath(w.dir)] : []), ...(script ? [launcherPath(w.home, w.platform), appDir(w.home)] : [])],
+    removed: [...(usable ? m.files.map((f) => f.path) : []), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)).filter((p) => w.fs.existsSync(p)), ...(w.fs.existsSync(path.join(w.dir, 'ingress.json')) ? [path.join(w.dir, 'ingress.json')] : []), backupDir(w.home), ...standaloneFiles(w.home, w.platform), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData && !held ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m && !held ? [manifestPath(w.dir)] : []), ...(script ? [launcherPath(w.home, w.platform), appDir(w.home)] : [])],
     kept: purgeData && !held ? [] : keptOf(w.home, w.fs),
     notes: usable || !m ? [] : [`the install manifest is version ${JSON.stringify(m.version)}, which this build does not read: no entry would be touched`],
     autostart: { planned: true },
@@ -282,8 +282,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       rm(daemonLogPaths(home).dir)
       // the darwin key custody's signing helper (install put it there, 4.11 P1): it goes once no root key is left for it to remove — after undoRootKeys, which needs it
       const helper = w.platform === 'darwin' && !(m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key')) ? signHelperPath(home, NATIVE.signHelper) : null
-      for (const p of [path.join(w.dir, 'run'), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)), w.lockFile, runtime, standalonePath(home), netenvFile(home), helper]) if (p) rm(p) // update.json: an update that never finished is trocar's own note, and goes with the rest of its state (§5.5); door-seen.json: the holder check above has read it
-      removeEmptyDirs([path.dirname(standalonePath(home))], fs)
+      for (const p of [path.join(w.dir, 'run'), ...COLLECTOR_STATE_FILES.map((n) => path.join(w.dir, n)), w.lockFile, runtime, ...standaloneFiles(home, w.platform), netenvFile(home), helper]) if (p) rm(p) // update.json: an update that never finished is trocar's own note, and goes with the rest of its state (§5.5); door-seen.json: the holder check above has read it
+      removeEmptyDirs([path.dirname(standaloneFiles(home)[0])], fs)
       // the door ports and their tokens (decision #16): the next install and on choose them again
       const ing = removeIngressConfig({ dir: w.dir, fs })
       if (!ing.removed) noted.push({ kind: 'residue-not-removed', code: 'residue-not-removed', path: path.join(w.dir, 'ingress.json'), reason: `${path.join(w.dir, 'ingress.json')} could not be removed (${ing.reason}); remove it by hand` })

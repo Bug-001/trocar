@@ -1,7 +1,7 @@
 // paths.mjs (src/off) — where trocar keeps what `off` has to find, for one HOME. src/off may import nothing outside itself (0.1 §2: the
 // standalone `~/.trocar/bin/trocar-off` is made of this directory alone), so these few paths are written here instead of imported from
 // src/paths.mjs; test/paths.test.mjs makes the two one fact (and oldCaDir the same answer as caDir() in every shape, D27).
-// Every function takes the user's HOME (default: the process's) so a test points it at a sandbox; none touches the disk but oldCaDir and standaloneCommand.
+// Every function takes the user's HOME (default: the process's) so a test points it at a sandbox; none touches the disk but oldCaDir.
 import nodeFs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -23,15 +23,15 @@ export const standalonePath = (home = os.homedir()) => path.join(trocarHome(home
 export const appDir = (home = os.homedir()) => path.join(trocarHome(home), 'app')
 /** ~/.trocar/bin/trocar (Windows trocar.cmd): the launcher that reads `app/current` and runs the version it names. */
 export const launcherPath = (home = os.homedir(), platform = process.platform) => path.join(trocarHome(home), 'bin', platform === 'win32' ? 'trocar.cmd' : 'trocar')
-/** The command that runs that copy, the one place it is worded: elsewhere the path runs itself (its sh prologue finds a Node); Windows ignores the
- *  shebang, so there it is `<node> "<path>"` — the script channel's own node.exe that `app\\current` beside the copy's bin\\ names (that machine may have
- *  no node on PATH, D74), else `node`. Reads that one pointer, nothing else. */
-export function standaloneCommand(p, platform = process.platform, fs = nodeFs) {
-  if (platform !== 'win32') return p
-  const app = path.win32.join(path.win32.dirname(path.win32.dirname(p)), 'app')
-  let exe = null
-  try { const id = fs.readFileSync(path.win32.join(app, 'current'), 'utf8').split(/\r?\n/)[0].split(' ')[1]; if (id) exe = path.win32.join(app, 'node', id, 'node.exe') } catch { /* not the script channel */ }
-  return `${exe && fs.existsSync(exe) ? `"${exe}"` : 'node'} "${p}"`
+const cmdBeside = (p) => `${p}.cmd`
+/** The files of that copy, one list that is written, checked, listed and removed as one (1.6 §3.2 step 1): trocar-off, and on Windows, which ignores the
+ *  shebang, trocar-off.cmd beside it, which starts it with the Node the launcher would (`..\app\current`'s node.exe, else `node`). */
+export const standaloneFiles = (home = os.homedir(), platform = process.platform) => [standalonePath(home), ...(platform === 'win32' ? [cmdBeside(standalonePath(home))] : [])]
+/** The command that runs that copy, the one place it is worded: elsewhere the path runs itself (its sh prologue finds a Node); on Windows the .cmd of
+ *  standaloneFiles, as `cmd --% /c @"<path>.cmd"` — one line that PowerShell and cmd both run unchanged (1.6 §1.1⑤): PowerShell hands everything after
+ *  `--%` to cmd as it is, cmd skips that word, and the `@` keeps `/c` from stripping the quotes, so spaces, `&`, `(`, `^` in the path stay. */
+export function standaloneCommand(p, platform = process.platform) {
+  return platform === 'win32' ? `cmd --% /c @"${cmdBeside(p)}"` : p
 }
 /** ~/.trocar/legacy-manifest.json: the ledger of what `on` changed through the old capture. */
 export const legacyManifestPath = (home = os.homedir()) => path.join(trocarHome(home), 'legacy-manifest.json')

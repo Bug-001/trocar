@@ -396,15 +396,21 @@ test('on prints no network-environment line and its --json receipt has no netenv
   assert.ok(!/本机网络环境/.test(dry.stdoutText())); assert.deepEqual(changedFiles(before, snapshot(home4)), [], '--dry-run writes nothing')
 })
 
-// Windows ignores the shebang, so the bare path of trocar-off runs nothing there; every place that prints it as a command says `node "<path>"` on win32.
-test('the standalone trocar-off is printed as a runnable command: node "<path>" on win32, the path elsewhere', async () => {
-  const { standaloneCommand } = await import('../../src/off/paths.mjs')
-  const win = 'C:\\Users\\a\\.trocar\\bin\\trocar-off', posix = '/home/a/.trocar/bin/trocar-off'
-  assert.equal(standaloneCommand(win, 'win32'), `node "${win}"`)
-  const scriptFs = { readFileSync: () => '9.9.9 n1\r\n', existsSync: () => true } // D74: a script-channel machine may have no node on PATH
-  assert.equal(standaloneCommand(win, 'win32', scriptFs), `"C:\\Users\\a\\.trocar\\app\\node\\n1\\node.exe" "${win}"`)
+// Windows ignores the shebang, so the bare path of trocar-off runs nothing there: the line runs the .cmd standaloneFiles puts beside it, and it never starts
+// with a quoted string — PowerShell, where the script channel installs (D74), reads `"<a>" "<b>"` as an expression and refuses it (1.6 §1.1⑤ · §3.2 step 1).
+test('the standalone trocar-off is printed as a runnable command: on win32 the .cmd beside it, whole in quotes and not first on the line; the path elsewhere', async () => {
+  const { standaloneCommand, standaloneFiles, standalonePath } = await import('../../src/off/paths.mjs')
+  for (const home of ['C:\\Users\\a', 'C:\\Users\\a b&(c)^d']) {
+    const win = path.win32.join(home, '.trocar', 'bin', 'trocar-off'), cmd = `${win}.cmd`
+    const line = standaloneCommand(win, 'win32')
+    assert.ok(line.includes(`"${cmd}"`), `the .cmd path, quoted whole: ${line}`)
+    assert.notEqual(line[0], '"', 'PowerShell refuses a line that starts with a quoted string and goes on')
+    assert.ok(!line.includes('node'), 'no Node path in the line: the .cmd finds it, so switching Node never makes the line wrong')
+    const r = { ...newReceipt('on'), ok: true, standalone: win }
+    assert.ok(formatOnReceipt(r, { platform: 'win32' }).split('\n').some((l) => l.trim() === line), 'the receipt prints that line whole, on its own')
+  }
+  const home = '/home/a', posix = standalonePath(home)
+  assert.deepEqual([standaloneFiles(home, 'win32').map((f) => path.basename(f)), standaloneFiles(home, 'linux'), standaloneFiles(home, 'darwin')], [['trocar-off', 'trocar-off.cmd'], [posix], [posix]])
   for (const p of ['darwin', 'linux']) assert.equal(standaloneCommand(posix, p), posix)
-  const r = { ...newReceipt('on'), ok: true, standalone: win }
-  assert.ok(formatOnReceipt(r, { platform: 'win32' }).includes(`node "${win}"`), 'the receipt line runs on Windows')
-  assert.ok(!formatOnReceipt({ ...r, standalone: posix }, { platform: 'darwin' }).includes('node "'))
+  assert.ok(!formatOnReceipt({ ...newReceipt('on'), ok: true, standalone: posix }, { platform: 'darwin' }).includes('.cmd'))
 })

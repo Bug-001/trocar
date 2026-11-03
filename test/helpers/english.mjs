@@ -27,7 +27,7 @@ export function assertEnglish(text, where = 'the output', { placeholders = false
   if (!width) return
   for (const line of bare.split('\n')) {
     if (!line.trim().includes(' ')) continue // §1.1⑥: one long value (a path, a command) keeps its own line unbroken, however long it is
-    if (line.startsWith(COMMAND_INDENT) && /^(?:sudo |node |"|\/|[A-Za-z]:\\)/.test(line.slice(COMMAND_INDENT.length))) continue // §1.1⑥: a command to copy, printed whole on its own line (receipt.mjs commandLine)
+    if (line.startsWith(COMMAND_INDENT) && line[COMMAND_INDENT.length] !== ' ') continue // §1.1⑥: a line that starts at the command column is a command to copy, printed whole (receipt.mjs commandLine)
     assert.ok(line.length <= WIDTH, `${where} has a line of ${line.length} columns (max ${WIDTH}):\n${line}`)
   }
 }

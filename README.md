@@ -377,11 +377,12 @@ website you visit cannot reach it.
 
 Certificates belong to `install` / `uninstall`, routing belongs to `on` / `off` (D55): `on` and `off` never write a
 certificate byte. `off` works when trocar itself is broken — no daemon, no source tree, no `node_modules`:
-`~/.trocar/bin/trocar-off` is one file that needs only `node`, and `install` writes it. Every command that changes
-something lists what it changed (each file, its backup, how to undo it) and takes `--json`; before it changes a file of
-yours it keeps a copy in `~/.trocar/backup/`. `on` never restarts an agent or a capture that is running: the processes
-that need a restart are listed. Name an agent (`trocar off claude-code`) to switch only that one; `on; on` and
-`off; off` write nothing the second time (D54).
+`~/.trocar/bin/trocar-off` is one file that needs only `node`, and `install` writes it (on Windows with a
+`trocar-off.cmd` beside it, run as `cmd --% /c @"<path>\trocar-off.cmd"`, a line PowerShell and cmd both run as
+printed). Every command that changes something lists what it changed (each file, its backup, how to undo it) and takes
+`--json`; before it changes a file of yours it keeps a copy in `~/.trocar/backup/`. `on` never restarts an agent or a
+capture that is running: the processes that need a restart are listed. Name an agent (`trocar off claude-code`) to
+switch only that one; `on; on` and `off; off` write nothing the second time (D54).
 
 `trocar status` and `trocar doctor` show, per agent, whether it is captured and why not, and where trocar forwards its
 connections — agent → door → upstream, and where the upstream comes from: the agent's own proxy, the system proxy, or a
