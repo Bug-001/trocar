@@ -26,8 +26,9 @@ export async function unservable(platform, host = process.platform) {
 
 /** The platforms a model world is built for (modelWorld's `os`) whose daemon serves a control endpoint, in the order a test takes them. */
 const WORLDS = ['darwin', 'win32']
-/** → the first of WORLDS this host can serve for real (unservable), with its own arch's parts: { platform, renderWrapper } — a win32 world's
- *  wrapper is win32's, never darwin's. */
+/** → { platform, renderWrapper }: the first of WORLDS this host can serve for real (unservable), and that platform's own renderWrapper (a
+ *  win32 world's is win32's, never darwin's). renderWrapper only renders a wrapper's source: placing a win32 wrapper also takes a compile
+ *  step (model-backends' wrapperKit), which this does not give, so it serves worlds whose harnesses place no wrapper. */
 export async function servableWorld(host = process.platform) {
   for (const platform of WORLDS) {
     if (await unservable(platform, host)) continue

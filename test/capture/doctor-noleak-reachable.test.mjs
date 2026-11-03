@@ -39,7 +39,7 @@ import { cliOnEmptyMachine } from '../helpers/board-world.mjs';
 //     of silently reading zero records.
 // The red line's new home (file permissions) is pinned in test/capture/verbatim-headers.test.mjs.
 
-// `doctor` runs as the bin runs it, on an empty machine (board-world.mjs): its status block asks no OS tool on any host (0.1 §3)
+// `doctor` runs through runCli, as the bin calls it, in a child node on an empty machine (board-world.mjs): its status block asks no OS tool on any host (0.1 §3)
 const doctorOn = (home) => { const c = cliOnEmptyMachine(home, ['doctor'], { TROCAR_SOURCE: '' }); return [c.args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: c.env }] };
 
 // A capture holding a real un-redacted credential. If doctor reads ANY records at all, it must find it.
@@ -101,7 +101,7 @@ test('runSelfTest does not certify when nothing was examined: 无法判定 (exit
   assert.equal(res.hardFail, false);
 });
 
-test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s new home)', () => {
+test('runCli in a child node: doctor hard-fails on a world-readable capture (the red line\'s new home)', () => {
   // Replaces two tests that asserted "finds an un-redacted credential and exits non-zero". Those
   // would now pass for the WRONG REASON — their fixtures were 0644, so ④b would trip regardless of
   // any credential — which is exactly the kind of accidentally-green assertion this suite keeps
@@ -114,7 +114,7 @@ test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s
     fs.chmodSync(path.join(home, 'capture.ndjson'), 0o644);
     let status = 0, out = '';
     try {
-      // the default source of this sandbox HOME (D27), the way a user runs it: no option of its own
+      // the default source of this sandbox HOME (D27): no option of its own, runCli in a child node on stand-in deps
       out = execFileSync(process.execPath, ...doctorOn(dir));
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
     assert.notEqual(status, 0,
@@ -128,7 +128,7 @@ test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('END TO END: a bare doctor on a CLEAN multi-root capture examines records and passes', () => {
+test('runCli in a child node: a bare doctor on a CLEAN multi-root capture examines records and passes', () => {
   // This is the assertion that isolates the source-resolution fix, and it took a failed mutation to
   // find. Reverting the array handling does NOT make the leak tests green-to-red, because the
   // vacuous-scan guard added above turns *any* read failure into a loud hard-fail — good
@@ -168,7 +168,7 @@ test('END TO END: a bare doctor on a CLEAN multi-root capture examines records a
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
-test('END TO END: a BARE `trocar doctor` reads the D27 multi-root default', () => {
+test('runCli in a child node: a BARE `trocar doctor` reads the D27 multi-root default', () => {
   // THE ACTUAL REGRESSION, exercised the way it actually happened: no --source at all, so the source
   // is whatever serveSource() returns — an ARRAY of the home and the collector directory. That array went
   // straight into fs.statSync(), which throws ERR_INVALID_ARG_TYPE on a non-path, and the catch

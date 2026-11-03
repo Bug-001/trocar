@@ -1,4 +1,5 @@
-// test/collector/cli.test.mjs — the capture commands over injected daemon / install modules (through the one dispatch, src/cli/main.mjs), and the real bin.
+// test/collector/cli.test.mjs — the capture commands over injected daemon / install modules (through the one dispatch, src/cli/main.mjs), and runCli in a
+// child node on an empty machine's stand-in deps (cliOnEmptyMachine).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -291,7 +292,7 @@ test('cli: the Linux installer\'s own refusals leave the command name to the com
   assert.doesNotMatch(message, /^trocar setup-helper:/)
 })
 
-test('cli: the CLI runs `status` without a runtime dir on a HOME with nothing installed (→ 0: nothing is wrong, and nothing was written)', () => {
+test('cli: runCli in a child node runs `status` without a runtime dir on a HOME with nothing installed (→ 0: nothing is wrong, and nothing was written)', () => {
   const home = tmpDir('trocar-cli-bin-')
   const c = cliOnEmptyMachine(home, ['status'], { XDG_RUNTIME_DIR: undefined }) // status reads the disk: never the operator's own
   const r = spawnSync(process.execPath, c.args, { env: c.env, encoding: 'utf8' })
