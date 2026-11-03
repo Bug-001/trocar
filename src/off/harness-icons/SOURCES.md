@@ -5,8 +5,9 @@ The registry that names each file is `src/off/harness-names.mjs`. The board buil
 this folder (without this file) into the board at `assets/harness/`.
 
 The terms column says what allows redistribution, or that no stated terms were found and where we looked.
-A code license (MIT, Apache-2.0) covers the file's copyright; it grants no trademark rights. A mark whose
-terms do not allow redistribution is replaced by a trocar drawing (spec 1.2 §agent chip).
+A code license (MIT, Apache-2.0) covers the file's copyright; it grants no trademark rights. A mark with
+no stated terms is used as published, only to identify its agent (spec D76 ②). A mark whose terms forbid
+redistribution, or whose owner asks for it to be removed, is replaced by a trocar drawing (spec 1.2 §agent chip).
 
 | file | harness | source | retrieved | trademark owner | transformation | terms |
 |---|---|---|---|---|---|---|
