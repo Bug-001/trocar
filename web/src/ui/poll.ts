@@ -10,11 +10,25 @@ import { capHealthPatch } from '../../legacy/core/capture-verdict.mjs'
 
 export type PollName = keyof typeof INTERVAL
 
+// the failures since the last success. TanStack Query resets fetchFailureCount at every fetch, so it never passes 1 without its own
+// retry; the run is counted instead as errorUpdateCount less its value at the last success, held per query (lastOk).
+type PollState = { dataUpdatedAt: number, errorUpdatedAt: number, errorUpdateCount: number, fetchFailureCount: number }
+const lastOk = new WeakMap<object, { at: number, errs: number }>()
+const failuresSinceOk = (q: { state: PollState }) => {
+  const s = q.state
+  let m = lastOk.get(q)
+  if (!m || m.at !== s.dataUpdatedAt) {
+    m = { at: s.dataUpdatedAt, errs: s.errorUpdatedAt > s.dataUpdatedAt ? s.errorUpdateCount - s.fetchFailureCount : s.errorUpdateCount }
+    lastOk.set(q, m)
+  }
+  return s.errorUpdatedAt > s.dataUpdatedAt ? s.errorUpdateCount - m.errs : 0
+}
+
 export function pollOptions(name: PollName) {
   const base = INTERVAL[name]
   return {
-    refetchInterval: (q: { state: { fetchFailureCount: number } }) => {
-      const failures = q.state.fetchFailureCount
+    refetchInterval: (q: { state: PollState }) => {
+      const failures = failuresSinceOk(q)
       return failures ? backoffMs(failures, base) : base
     },
     refetchIntervalInBackground: false,
