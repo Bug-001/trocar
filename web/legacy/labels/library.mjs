@@ -9,18 +9,16 @@ export const WINDOWS = WINDOW_LABEL
 
 // ── the tool row ─────────────────────────────────────────────────────────────────────────────────────────────────────
 export const SEARCH_PLAIN = 'Search titles, projects or session ids'
-// the tool row's menu key is lowercase like every other UI copy word (unknown agent, several agents); the RFC sketch spells
-// it with a capital first letter, but the invariant-3 gate holds that capitalised word as a quoted tool-name literal —
-// lowercase here, flagged in review as an open question
-export const AGENT_MENU = 'agent'
-export const PROJECT_MENU = 'project'
+// the tool row's menus, in sentence case like every head and menu on the board (1.5 §审美维度 9)
+export const AGENT_MENU = 'Agent'
+export const PROJECT_MENU = 'Project'
 export const ALL_PROJECTS = 'All projects'
 export const noSuchProject = (slug) => `${slug} (no such project)`
-export const SORT_MENU = 'sort'
+export const SORT_MENU = 'Sort'
 export const SORTS = Object.freeze({ recent: 'Recent', calls: 'Model calls' })
 export const CLEAR_FILTERS = 'Clear filters'
-export const activeAgentChip = (name) => `agent: ${name}`
-export const activeProjectChip = (name) => `project: ${name}`
+export const activeAgentChip = (name) => `${AGENT_MENU}: ${name}`
+export const activeProjectChip = (name) => `${PROJECT_MENU}: ${name}`
 
 // ── the caption row: only what changes how far the list can be trusted (D38); bookkeeping goes to 技术细节 ───────────
 export const capNotAllRead = (n) => `${n} capture ${n === 1 ? 'file was' : 'files were'} not read in full; the list may be incomplete`
@@ -32,8 +30,7 @@ export const capOldList = (t) => `Below is the list as read at ${t}`
 export const capStored = (ago) => `Updated ${ago} · refreshing`
 
 // ── the table header ─────────────────────────────────────────────────────────────────────────────────────────────────
-// the agent column's head: the menu's lowercase word (the invariant-3 gate holds the capitalised one as a tool name), capitalised here
-export const COL_AGENT = AGENT_MENU[0].toUpperCase() + AGENT_MENU.slice(1)
+export const COL_AGENT = AGENT_MENU
 export const COL_SESSION = 'Session'
 export const COL_SESSION_TIP = 'The title comes from the agent\'s own records or from the captured requests; hover a title to see which. Without one, the session is untitled'
 export const COL_CALLS = 'Model calls'

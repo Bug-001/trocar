@@ -75,7 +75,7 @@ export const UNPRICED = (n) => `${n} model${n === 1 ? ' has' : 's have'} no unit
 export const EMPTY_WINDOW = 'no sessions in this window'
 export const PRICE_TABLE = 'the price table'
 export const NET_ONLY = 'no model calls · network only'
-export const TBL = Object.freeze({ agent: 'agent', sessions: 'sessions', calls: 'model calls', cost: '≈ cost', hit: 'main thread cache hit', last: 'last active' })
+export const TBL = Object.freeze({ agent: 'Agent', sessions: 'Sessions', calls: 'Model calls', cost: '≈ Cost', hit: 'Main thread cache hit', last: 'Last active' })
 
 // ── 最近的会话 · 盘上占用 · 开始使用 ───────────────────────────────────────────────────────────────────────────────────
 export const ALL_SESSIONS = 'All sessions ›'

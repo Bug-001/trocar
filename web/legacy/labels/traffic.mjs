@@ -4,14 +4,15 @@
 import { CLASS_NAME } from '../core/classes.mjs'
 
 // ── the traffic table ───────────────────────────────────────────────────────────────────────────────────────────────────
-export const WINDOW_LABEL = Object.freeze([{ value: '1h', label: '1 hour' }, { value: '24h', label: '24 hours' }, { value: '7d', label: '7 days' }, { value: 'all', label: 'all' }])
+export const WINDOW_LABEL = Object.freeze([{ value: '1h', label: '1 hour' }, { value: '24h', label: '24 hours' }, { value: '7d', label: '7 days' }, { value: 'all', label: 'All' }])
 export const DEFAULT_WINDOW = '24h'
 export const AS_OF = 'as of'
 export const COVERS_PREFIX = 'Only agents already counted in the stats: ' // followed by each agent's name
 export const AGENT_SOURCE_NOTE = 'Agents are identified by process. Old-capture records carry no process, so their agent is inferred from the request headers; this table cannot tell which rows those are.'
 export const AGENT_AGENT_TIP = 'Old-capture records carry no process; the agent is inferred from the request headers.'
-export const FILTER_AGENT = 'agent'
-export const FILTER_CLASS = 'class'
+export const FILTER_AGENT = 'Agent'
+export const FILTER_CLASS = 'Class'
+export const filterChip = (menu, word) => `${menu}: ${word}`
 export const CLASS_FILTER_NOTE = (word) => `Only hosts with ${word} requests are listed; the numbers are each host's total across all classes`
 export const WHAT_IS_KEPT = 'What this class keeps ›'
 export const COL = Object.freeze({ agent: 'Agent', host: 'Host', first: 'First seen', requests: 'Requests', sent: 'Sent', recv: 'Received', classes: 'Main classes', total: 'Total' })

@@ -95,7 +95,7 @@ function serviceOf(h, v) {
   tech.push(...commandPairs(commandsFor(h, { service: true })))
   return {
     id: '*service', gut: gutOf(v.cls, v.state === 'ok'),
-    lead: { text: cap1(v.text), cls: v.cls, toLog: v.state === 'failing' && logged },
+    lead: { text: v.text, cls: v.cls, toLog: v.state === 'failing' && logged },
     conds, failing, logLink: logged && v.state !== 'failing',
     lingerStop: h && h.linger === false ? 'Capture stops at logout' : null,
     tech, copy: copyOf(tech), diag: diagOf({ health: h && h.health, daemon: d, critical: h && h.critical, errors: h && h.errors }),

@@ -158,7 +158,7 @@ export default function HostScreen({ route, router }: ScreenProps) {
         <div className="tfilters">
           <ClassMenu items={CLASS_IDS.map((id: string) => ({ id, label: W.classWord(id), href: kept(id) }))} />
           {q.cls ? <>
-            <a className="fchip" href={kept(null)} title="Remove this filter">{`${W.FILTER_CLASS}:${W.classWord(q.cls)}`} <span className="x" aria-hidden="true">×</span></a>
+            <a className="fchip" href={kept(null)} title="Remove this filter">{W.filterChip(W.FILTER_CLASS, W.classWord(q.cls))} <span className="x" aria-hidden="true">×</span></a>
             <span className="cap-item cap-note">{W.CLASS_FILTER_NOTE(W.classWord(q.cls))}</span>
           </> : null}
         </div>

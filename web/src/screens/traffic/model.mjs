@@ -142,8 +142,8 @@ export function filterLinks({ window, h = [], cls = null, agents = [] }) {
     classes: CLASS_IDS.map((id) => ({ id, label: W.classWord(id), href: hrefOf({ class: id }) })),
     kept: cls ? formatHash({ screen: 'settings-storage', params: h.length ? { h: h.join(','), class: cls } : { class: cls } }) : null,
     chips: [
-      ...h.map((id) => ({ label: `${W.FILTER_AGENT}:${harnessName(id)}`, href: hrefOf({ h: null }) })),
-      ...(cls ? [{ label: `${W.FILTER_CLASS}:${W.classWord(cls)}`, href: hrefOf({ class: null }) }] : []),
+      ...h.map((id) => ({ label: W.filterChip(W.FILTER_AGENT, harnessName(id)), href: hrefOf({ h: null }) })),
+      ...(cls ? [{ label: W.filterChip(W.FILTER_CLASS, W.classWord(cls)), href: hrefOf({ class: null }) }] : []),
     ],
     note: cls ? W.CLASS_FILTER_NOTE(W.classWord(cls)) : null,
   }
