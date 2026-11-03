@@ -163,7 +163,7 @@ serves it from `install` on (D66); `trocar board` prints its address with your k
 the board opens again from history or a bookmark. It is the HTTP shell of `trocar query`
 over `GET /api/<name>` (D59), and `trocar status` shows its address (never the key) on its `Board` line. It
 reads `~/.trocar/raw/`, so **the sessions of every captured harness appear side by side on one
-board** (the collector's `flows/`, `audit/` and `replays/` are not envelopes and are not shown). Each agent appears by its official icon beside its name.
+board** (the collector's `flows/`, `audit/` and `replays/` are not envelopes and are not shown). Each agent appears by its official icon beside its name. Times read the same on every screen: a day as "Oct 18" (or "Today" / "Yesterday"), a clock time as "08:00:52", both together as "Oct 18, 08:00:52".
 Product names and logos are trademarks of their owners and identify the agents only.
 
 There is one board, at `/`. Besides reading, it writes three things, each through the plan-then-confirm protocol of `/control/*` (it shows the
