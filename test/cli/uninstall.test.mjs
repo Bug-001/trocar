@@ -497,6 +497,22 @@ test('D60: a plain uninstall keeps every byte under raw/ and names it with its s
   assert.deepEqual(p.io.json().kept, [], 'and the receipt claims nothing is kept')
 })
 
+// 1.6 §3.6: every place a plain uninstall keeps — raw/ (index/ with it), collector/flows/, audit/, replays/, the class-change log — is a `kept` row that is on disk;
+// --purge-data keeps none of them (a macOS test machine 2026-11-03: flows/ stayed with no Kept row, under "Delete the captured records")
+test('§3.6: a plain uninstall lists every place it keeps — flows/, audit/, replays/ — each still on disk; --purge-data lists and leaves none', async () => {
+  const seedPlaces = (s) => { for (const d of ['audit', 'replays']) { fs.mkdirSync(path.join(s.dir, d), { recursive: true }); fs.writeFileSync(path.join(s.dir, d, 'x.ndjson'), '{}\n') } }
+  const plain = await installedHome({ names: ['claude-code'] }); seedPlaces(plain)
+  const r = await cli(plain, ['--json'])
+  assert.equal(r.exit, 0, r.io.text())
+  const kept = r.io.json().kept.map((k) => k.path)
+  for (const d of ['flows', 'audit', 'replays']) assert.ok(kept.includes(path.join(plain.dir, d)), `${d}/ is a kept row: ${JSON.stringify(kept)}`)
+  assert.ok(kept.every((p) => fs.existsSync(p)), 'every kept row is on disk')
+  const purged = await installedHome({ names: ['claude-code'] }); seedPlaces(purged)
+  const p = await cli(purged, ['--purge-data', '--json'])
+  assert.equal(p.exit, 0, p.io.text())
+  assert.deepEqual([p.io.json().kept, ['flows', 'audit', 'replays'].filter((d) => fs.existsSync(path.join(purged.dir, d)))], [[], []])
+})
+
 test('the text receipt says a file once: two entries of one file with the same change, or a file named twice as removed, are one row', () => {
   const file = path.join('/h', 'Library', 'Application Support', 'Code', 'User', 'settings.json') // one file, two json entries (a proxy key and an array item)
   const rows = (r) => formatUninstallReceipt({ command: 'uninstall', ok: true, removed: [], ...r }, { home: '/h' }).split('\n').filter((l) => l.includes('settings.json')).length

@@ -17,7 +17,7 @@ import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autosta
 import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
 import { findingFor } from '../netenv/findings.mjs'
 import { standalonePath, backupDir, opLockFile, trocarHome, appDir, launcherPath, COLLECTOR_STATE_FILES } from '../off/paths.mjs'
-import { rawHome, indexHome, classesLog } from '../paths.mjs' // D60: the records are segments under ~/.trocar/raw, the index trocar builds from them under ~/.trocar/index
+import { rawHome, indexHome, classesLog, collectorHome } from '../paths.mjs' // D60: the records are segments under ~/.trocar/raw, the index trocar builds from them under ~/.trocar/index
 import { netenvFile } from '../netenv/index.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
 import { removeOwnedFile } from '../off/journal.mjs'
@@ -64,9 +64,10 @@ async function captureOnline(w, m, notes = []) {
   return on.length || unknown || (holders && holders.length) ? { on, holders: holders || [], unknown } : null
 }
 
-// What a plain uninstall keeps, and `--purge-data` deletes: the records themselves and the index built from them (D60). `flows/`, where trocar
-// says what it did and what failed (D38), stays either way: this very run writes its own last line there. The class-change log is data too (1.6 §3.6).
-const KEEPS = [[rawHome, 'your captured records'], [indexHome, 'the index trocar built from them'], [classesLog, 'the log of your traffic class changes']]
+// What a plain uninstall keeps, and `--purge-data` deletes — the one list of 1.6 §3.6: the records themselves and the index built from them (D60), `flows/`
+// where trocar says what it did and what failed (D38; a plain run writes its own last line there), the intervention audit and replays, the class-change log.
+const KEEPS = [[rawHome, 'your captured records'], [indexHome, 'the index trocar built from them'], [(t) => path.join(collectorHome(t), 'flows'), "trocar's record of what it did and what failed"],
+  [(t) => path.join(collectorHome(t), 'audit'), 'the record of what was intercepted or changed'], [(t) => path.join(collectorHome(t), 'replays'), 'the requests sent again'], [classesLog, 'the log of your traffic class changes']]
 const bytesUnder = (p, fs) => { // the size of a directory (or of a file), for the receipt; what cannot be read counts 0 rather than failing an uninstall
   let n = 0
   const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const q = path.join(d, e.name); if (e.isDirectory()) walk(q); else try { n += fs.lstatSync(q).size } catch { /* gone while we looked */ } } } // lstat: a link counts as the link, never as what it points at outside ~/.trocar
@@ -119,7 +120,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   // §3.6: uninstall always prints its plan and asks — it takes certificates out of your trust settings and removes files of yours. Not a terminal
   // and no --yes: the plan only, nothing changed, exit 2 (§1.4).
   if (!yes) {
-    if (say) say(formatUninstallReceipt({ ...receipt, ...planUninstall(w, m, purgeData, deps.root), notes: [] }, { home, tense: 'future' }))
+    if (say) say(formatUninstallReceipt({ ...receipt, ...planUninstall(w, m, purgeData, deps.root), notes: [] }, { home, platform: w.platform, tense: 'future' }))
     const ok = interactive && io ? await confirm(io, purgeData ? 'This also deletes every captured record, for good. Proceed?' : 'Proceed?') : null
     if (ok !== true) {
       plan()
@@ -222,8 +223,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // 6 · trocar's own files — only when nothing above is still open
     const unitFile = m && !m.unsupported ? m.files.find((f) => f.role === 'unit') : null
     let unitLeft = false
+    const bare = !blocked && !m && u.mode === 'none' // no install record: said after the script copy's last step below, which may still remove trocar itself
     if (!blocked) {
-      if (!m && u.mode === 'none') receipt.notes.push('nothing is installed for this user')
       // D74⑤: the script channel's PATH item (install recorded it in `path_item`); one that cannot be taken out is left, with the manifest that names it
       // and the backup it names (before the sweep below: a taken-out item no longer names its backup, so the sweep drops it)
       if (m && m.path_item) {
@@ -291,7 +292,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     if (purgeHeld) { receipt.purge_data = false; receipt.notes.push('This run did not finish, so not one captured record was deleted (--purge-data deletes them only when every other step succeeded). Fix what is above, then run: trocar uninstall --purge-data') }
     if (purgeData && !purgeHeld) {
       for (const n of (() => { try { return fs.readdirSync(w.dir) } catch { return [] } })()) if (/^capture-.*\.ndjson$/.test(n)) rm(path.join(w.dir, n))
-      for (const sub of ['flows', 'audit', 'replays', 'kernel', 'kernel-archive', 'forwarder']) rm(path.join(w.dir, sub))
+      for (const sub of ['kernel', 'kernel-archive', 'forwarder']) rm(path.join(w.dir, sub))
       for (const k of keptOf(home, fs)) rm(k.path) // the records themselves and the index built from them (D60): a purge that left them would leave every record on disk
     }
     // after the purge, so --purge-data never deletes what this run could not undo; a line that cannot be written is said in the output, never dropped, and never stops the uninstall
@@ -324,7 +325,9 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     try { list = await w.procs() } catch (e) { receipt.notes.push(`the process table could not be read (${errText(e)}), so the trocar processes you started yourself are not listed`) }
     receipt.user_processes = userProcessesOf(list)
     receipt.kept = keptOf(home, fs) // what is still there now this run is done: after a purge, nothing
+    const was = receipt.removed.length
     if (!blocked && !left && !receipt.problems.length) scriptCopyLast(w, { home, env, receipt, root: deps.root || packageRoot() })
+    if (bare) receipt.notes.push(receipt.removed.length > was ? "there was no install record for this user: only trocar's own program was left, and it is removed" : 'nothing is installed for this user')
     receipt.ok = receipt.problems.length === 0 && left === 0
     if (!receipt.ok && !receipt.problems.length) receipt.problems.push(`${left} item(s) could not be undone; the install manifest is kept. Fix them, then run trocar uninstall again`)
     return { receipt, exit: receipt.ok ? EXIT.ok : EXIT.incomplete }
@@ -385,7 +388,7 @@ export async function runUninstallCli(argv, { io, env = process.env, home = node
     const { receipt, exit } = await runUninstall({ home, env, purgeData: flags.has('--purge-data'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: !json && isInteractive(io), io: { ...io, prompt: io.stdout }, say: json ? null : io.out, deps: { platform, ...deps } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins) — the same seam `off` has
     if (json) io.out(JSON.stringify(receipt, null, 2))
     else if (receipt.needs_yes || receipt.declined) { for (const n of receipt.notes) io.err(n) } // the plan went out before the question was asked; what is left to say is why nothing was done (R6)
-    else io.out(formatUninstallReceipt(receipt, { home }))
+    else io.out(formatUninstallReceipt(receipt, { home, platform: deps.platform || platform }))
     return exit
   } catch (e) {
     const message = errText(e)

@@ -166,12 +166,24 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
 
 /** The receipt of `trocar uninstall` as text (§3.6): the verdict, what was removed, what was kept, and the one next step. `tense`: 'past' |
  *  'future' (`--dry-run`, or the plan printed when a yes is missing). */
-export function formatUninstallReceipt(r, { home = null, tense = r.dry_run ? 'future' : 'past', dataNote = null } = {}) {
+/** 1.6 §3.6: the uninstall receipt's first line, true on each platform — the root is in the user's trust store on macOS and Windows only; on Linux it
+ *  reached the agents through the certificate settings install gave them (4.6), so that is what is said gone. The one place this line is decided. */
+export function uninstallHeadline({ platform = process.platform, past = true } = {}) {
+  const linux = platform === 'linux'
+  if (!past) return `trocar uninstall will take out everything install put on this machine, ${linux ? 'the certificate settings it gave your agents included' : 'and remove the root certificate from your trust settings'}.`
+  return `Uninstalled. trocar is no longer on your agents' path, and ${linux ? 'the certificate settings it gave them are gone' : 'its root certificate is gone from your trust settings'}.`
+}
+// a root key is named by its custody, `<kind>:<id>` (src/off/undo.mjs keyWhere): said as where it was, never the id (D58)
+const KEY_WHERE = { keychain: "trocar's root key, from your login keychain", cng: "trocar's root key, from Windows' key storage" }
+const removedWords = (p, t) => { const k = /^([a-z]{2,}):/.exec(p); return k ? KEY_WHERE[k[1]] || "trocar's root key" : t(p) }
+
+export function formatUninstallReceipt(r, { home = null, platform = process.platform, tense = r.dry_run ? 'future' : 'past', dataNote = null } = {}) {
   const past = tense !== 'future'
   const t = (x) => tilde(x, home)
   const removed = [], kept = []
   for (const c of r.changed || []) removed.push(`${t(c.path)}: ${c.change}`)
-  for (const p of r.removed || []) removed.push(t(p))
+  const said = new Set((r.changed || []).map((c) => c.path)) // a file both changed and removed (the root certificate: out of the trust store, then deleted) is one row
+  for (const p of r.removed || []) if (!said.has(p)) removed.push(removedWords(p, t))
   if ((r.dropped_backups || []).length) removed.push(`${r.dropped_backups.length} backup${r.dropped_backups.length === 1 ? '' : 's'} in ${t(path.dirname(r.dropped_backups[0]))}/`)
   if (dataNote) kept.push(dataNote)
   else if (r.purge_data) removed.push('your captured records (--purge-data)')
@@ -180,10 +192,7 @@ export function formatUninstallReceipt(r, { home = null, tense = r.dry_run ? 'fu
   if (typeof r.class_table === 'string') kept.push(`your traffic classes, ${t(r.class_table)}`)
   // §3.6 / 4.6: a bundle a live process may still have open is kept with trocar's CA taken out — the receipt says which, and who may hold it
   for (const b of r.kept_bundles || []) kept.push(`${t(b.path)} (trocar's certificate taken out)${(b.pids || []).length ? `: ${(b.pids || []).map((p) => `pid ${p}`).join(', ')} may have loaded it` : ''}`)
-  const lines = [!past
-    ? 'trocar uninstall will take out everything install put on this machine, and remove the root certificate from your trust settings.'
-    : r.ok === false ? 'trocar uninstall did not finish. What is left is below.'
-      : "Uninstalled. trocar is no longer on your agents' path, and its root certificate is gone from your trust settings."]
+  const lines = [past && r.ok === false ? 'trocar uninstall did not finish. What is left is below.' : uninstallHeadline({ platform, past })]
   if (r.nothing_installed) lines.push('Nothing of trocar is installed for your user, so there was nothing to take out.')
   // a file is said once, as `off` says it: several entries of one file (json keys) with the same change are one row
   if (removed.length) lines.push(past ? 'Removed' : 'Will remove', ...[...new Set(removed)].map((x) => `  ${x}`))
