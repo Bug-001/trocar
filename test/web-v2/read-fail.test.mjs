@@ -7,15 +7,11 @@ import { statsCard, recentCard, capCard } from '../../web/src/screens/overview/m
 import { capHealthPatch } from '../../web/legacy/core/capture-verdict.mjs'
 import * as trafficPage from '../../web/legacy/traffic/traffic.mjs'
 import * as hostPage from '../../web/legacy/traffic/host.mjs'
-import { readFailHtml, captionHtml, emptyBoardHtml } from '../../web/legacy/library/library.mjs'
-import { capShotMaker } from '../../web/legacy/library/logic.mjs'
 import { logModel } from '../../web/src/screens/capture/log-model.mjs'
 import { HEALTH_READ } from '../../web/legacy/labels/common.mjs'
 import { captureVerdict } from '../../web/legacy/core/capture-verdict.mjs'
 import { screenErrorHtml } from '../../web/legacy/shell/safemount.mjs'
-import { hidesReason, reasonsWith, visibleOf, outsideCollapsed } from './visible.mjs'
-import { esc } from '../../web/legacy/core/fmt.mjs'
-import * as LW from '../../web/legacy/labels/library.mjs'
+import { hidesReason, reasonsWith, visibleOf } from './visible.mjs'
 import { trafficWorld } from './traffic-world.mjs'
 import { boardHome } from './real-face.mjs'
 
@@ -116,36 +112,17 @@ test('a failed read on traffic or a host page (list and request detail) shows th
   }
 })
 
-test('library, capture log and the shell keep a failed read\'s reason out of the visible text', async () => {
+test('capture log and the shell keep a failed read\'s reason out of the visible text', () => {
   const NOW = Date.parse('2026-10-20T12:00:00Z')
-  for (const status of [0, 500, 503]) {
-    for (const make of [0, 1, 2, 3]) {
-      const t = tok(), reason = reasonsWith(t)[make], given = reason !== ''
-      const r = { ok: false, status, error: reason }
-      const where = (site) => `${site} · ${status} · ${make}`
-      const lf = readFailHtml(r)
-      hidesReason(lf, t, given, where('library read failure'))
-      assert.ok(lf.includes('data-act="retry"'), where('library read failure'))
-      const cap = captionHtml([], r, NOW - 5000)
-      hidesReason(cap, t, given, where('stale caption'))
-      assert.ok(cap.includes('data-act="retry"'), where('stale caption'))
-      // the empty board's capture-health line, from the one-shot read: answered, thrown, or a 503 verdict
-      for (const [how, fetch] of [['answer', async () => r], ['throw', async () => { throw new Error(reason) }]]) {
-        const shot = capShotMaker(fetch, () => NOW)
-        await shot.read()
-        const eb = emptyBoardHtml(shot.settled)
-        hidesReason(eb, t, given, where(`empty board ${how}`))
-        // a failed answer keeps its cause class on the line: the same line any board read failure with that status says
-        const st = how === 'throw' ? 0 : status
-        if (!(st === 503 && given)) assert.ok(outsideCollapsed(eb).includes(esc(readFailure(LW.CAPTURE_HEALTH, { status: st }).line)), where(`empty board ${how} cause`))
-      }
-      if (!given) continue // the rest take a bare reason; an empty one is no failure there
-      const log = logModel({ unreadable: reason }) // the visible words are the board's; the reason only in the technical pairs
-      assert.ok(log.say.includes(HEALTH_READ.unreadable), where('capture log'))
-      assert.ok(!JSON.stringify([log.say, log.none, log.rows, log.manifest]).includes(t), where('capture log'))
-      assert.ok(log.foot.errors.some((p) => p.v.text.includes(t)), where('capture log details'))
-      assert.ok(!visibleOf(captureVerdict({ unreadable: reason }, { okAt: NOW, now: NOW }).text).includes(t), where('verdict'))
-      hidesReason(screenErrorHtml(reason), t, true, where('screen error'))
-    }
+  for (const make of [0, 1, 2, 3]) {
+    const t = tok(), reason = reasonsWith(t)[make]
+    if (reason === '') continue // these take a bare reason; an empty one is no failure there
+    const where = (site) => `${site} · ${make}`
+    const log = logModel({ unreadable: reason }) // the visible words are the board's; the reason only in the technical pairs
+    assert.ok(log.say.includes(HEALTH_READ.unreadable), where('capture log'))
+    assert.ok(!JSON.stringify([log.say, log.none, log.rows, log.manifest]).includes(t), where('capture log'))
+    assert.ok(log.foot.errors.some((p) => p.v.text.includes(t)), where('capture log details'))
+    assert.ok(!visibleOf(captureVerdict({ unreadable: reason }, { okAt: NOW, now: NOW }).text).includes(t), where('verdict'))
+    hidesReason(screenErrorHtml(reason), t, true, where('screen error'))
   }
 })

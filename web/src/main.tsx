@@ -26,7 +26,6 @@ import { ConfirmProvider } from './ui/Confirm'
 
 // every screen of every route (core/router.mjs): the legacy ones here, the React ones in REACT_SCREENS
 const SCREENS = {
-  library: () => import('../legacy/library/library.mjs'),
   replay: () => import('../legacy/replay/replay.mjs'),
   'session-link': () => import('../legacy/replay/session-link.mjs'),
   traffic: () => import('../legacy/traffic/traffic.mjs'),
@@ -35,6 +34,7 @@ const SCREENS = {
 const REACT_SCREENS: Record<string, LazyScreen> = {
   overview: lazyScreen(() => import('./screens/overview/OverviewScreen')),
   capture: lazyScreen(() => import('./screens/capture/CaptureScreen')),
+  library: lazyScreen(() => import('./screens/library/LibraryScreen')),
   'capture-log': lazyScreen(() => import('./screens/capture/CaptureLogScreen')),
   'settings-storage': lazyScreen(() => import('./screens/settings/StorageScreen')),
   'settings-prices': lazyScreen(() => import('./screens/settings/PricesScreen')),
