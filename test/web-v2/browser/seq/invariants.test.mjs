@@ -27,6 +27,16 @@ async function fresh() {
   actions = []; baseline = new Map(); b.errors.length = 0; b.requests.length = 0
   act('reload'); await b.page.reload({ waitUntil: 'load' }); await drawn(b.page); await quiet()
 }
+// the desk is done reading: its step bar counts the server's m steps, no read is in flight and the last one ended ≥ 500 ms ago (its
+// answer applied and drawn). A URL planted before that is rewritten by the desk's next draw (syncUrl names the shown step), so a slow
+// page — a 2-vCPU box, a 6x CPU throttle — still drawing the reload's reads erased V-url's plant before check could see it.
+async function settledDesk() {
+  const m = await mainCount(b.get, id)
+  await b.page.waitForFunction((k) => {
+    const x = /(\d+)\s*\/\s*(\d+)/.exec(document.querySelector('#stepbar .sb-no')?.textContent || ''), s = window.__seq.snap()
+    return !!x && +x[2] === k && s.inflight === 0 && Date.now() - Math.max(0, ...s.fetchLog.map((e) => e.end ?? Infinity)) >= 500
+  }, m, { timeout: 20000, polling: 100 })
+}
 // the desk follows the newest step of the settled session: its step bar shows m / m (m = the server's main-lane count) with
 // 跟随最新 on, and the URL names no step (1.2 §路由: a following desk's URL names neither step nor call, so a reload follows
 // too). Both are waited for, never assumed: the first answer can be a pending fold's part (13 of 27 steps).
@@ -189,7 +199,7 @@ test('V-hold not following, growth and an unrecorded step key', { skip }, async 
 })
 
 test('V-url the hash names another step than the one shown', { skip }, async () => {
-  await fresh()
+  await fresh(); await settledDesk()
   await b.page.evaluate(() => {
     const n = +/(\d+)\s*\//.exec(document.querySelector('#stepbar .sb-no').textContent)[1]
     const [route, q] = location.hash.split('?'), p = new URLSearchParams(q || '')
@@ -204,6 +214,7 @@ test('V-url-follow the hash names no step while the desk does not follow', { ski
   await following()
   act('f'); await b.page.keyboard.press('f') // 跟随最新 off: the desk writes the shown step
   await b.page.waitForFunction(() => document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'false' && /[?&]step=/.test(location.hash))
+  await settledDesk()
   await b.page.evaluate(() => {
     const [route, q] = location.hash.split('?'), p = new URLSearchParams(q || '')
     p.delete('step'); history.replaceState(null, '', p.size ? `${route}?${p}` : route)
