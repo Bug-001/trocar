@@ -1,6 +1,7 @@
 // web/src/main.tsx — boot (1.2 §路由, D75①②): the token leaves the address, the first hash becomes canonical, the page-wide handlers are
 // installed once, then React renders the shell: the sidebar and #screen, which holds one screen at a time: a legacy screen (LegacyScreen
-// mounts it into its host element) or a React screen (ScreenOutlet). Screens are loaded on demand. There is no site-wide banner: a screen says what is wrong with itself.
+// mounts it into its host element) or a React screen (ScreenOutlet); in the desk-next build (`vite build --mode desk-next`, D75③) the
+// replay desk is a third owner, DeskHost, with its own host element (it keeps the desks a reader left). Screens are loaded on demand. There is no site-wide banner: a screen says what is wrong with itself.
 import { createContext, useContext, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
@@ -19,13 +20,16 @@ import { UNKNOWN_ROUTE, FORBIDDEN } from '../legacy/labels/shell.mjs'
 import { COMMANDS } from '../legacy/labels/capture.mjs'
 import { createBoardRouter } from './router'
 import { LegacyScreen, type Route } from './LegacyScreen'
-import { ScreenOutlet, lazyScreen, type LazyScreen } from './ScreenOutlet'
+import { ScreenOutlet, ScreenBoundary, lazyScreen, type LazyScreen } from './ScreenOutlet'
+import type { DeskProps } from './screens/replay/DeskHost'
 import { Sidebar } from './shell/Sidebar'
 import { ConfirmProvider } from './ui/Confirm'
 
-// every screen of every route (core/router.mjs): the legacy ones here, the React ones in REACT_SCREENS
-const SCREENS = {
-  replay: () => import('../legacy/replay/replay.mjs'),
+// the new replay desk (web/src/screens/replay/) is in the desk-next build only; the default build folds this to false and has none of it
+const DESK_NEXT = import.meta.env.MODE === 'desk-next'
+// every screen of every route (core/router.mjs): the legacy ones here, the React ones in REACT_SCREENS, the new desk in DESK
+const SCREENS: Record<string, () => Promise<unknown>> = {
+  ...(DESK_NEXT ? {} : { replay: () => import('../legacy/replay/replay.mjs') }),
   'session-link': () => import('../legacy/replay/session-link.mjs'),
 }
 const REACT_SCREENS: Record<string, LazyScreen> = {
@@ -39,8 +43,11 @@ const REACT_SCREENS: Record<string, LazyScreen> = {
   traffic: lazyScreen(() => import('./screens/traffic/TrafficScreen')),
   'traffic-host': lazyScreen(() => import('./screens/traffic/HostScreen')),
 }
-const PRELOADS = [...Object.values(SCREENS), ...Object.values(REACT_SCREENS).map((s) => s.load)] // the idle preload loads both kinds
+const DESK = DESK_NEXT ? lazyScreen<DeskProps>(() => import('./screens/replay/DeskHost')) : null
+const PRELOADS = [...Object.values(SCREENS), ...Object.values(REACT_SCREENS).map((s) => s.load), ...(DESK ? [DESK.load] : [])] // the idle preload loads every kind
 const isReact = (r: Route) => !r.unknown && Object.hasOwn(REACT_SCREENS, r.screen)
+const isDesk = (r: Route) => DESK_NEXT && !r.unknown && r.screen === 'replay'
+const ownerOf = (r: Route) => (isDesk(r) ? 'desk' : isReact(r) ? 'react' : 'legacy')
 
 // the token leaves the address (#t=…) before the router reads the hash (4.4 §每用户口令)
 configure({ token: bootToken() })
@@ -49,6 +56,8 @@ const first = parseHash(location.hash)
 if (!first.unknown) {
   try { history.replaceState(null, '', formatHash(first)) } catch (e) { console.warn('could not write the canonical hash', e) } // a blocked history API leaves the URL as typed; the board still mounts
 }
+
+if (DESK && isDesk(first)) DESK.load().catch(() => {}) // a cold replay open loads the desk with the shell; a failure is said where the desk would be
 
 initKeys()
 installUi(document) // the popover / disclosure contract, once for the whole board
@@ -79,8 +88,10 @@ const sameRoute = (a: Route, b: Route) => !!a.unknown === !!b.unknown && formatH
 function Shell() {
   const router = useContext(FacadeContext)!
   const [route, setRoute] = useState<Route>(router.current)
+  const [deskOn, setDeskOn] = useState(() => isDesk(router.current())) // the desk's host mounts on the first replay route and stays
   const [ctx] = useState(() => ({ api, store, router, toast }))
   const screenEl = useRef<HTMLDivElement>(null)
+  const deskEl = useRef<HTMLDivElement>(null)
   const shown = useRef(route)
   useLayoutEffect(() => {
     let live = false // false while the effect itself runs: flushSync is never called inside a lifecycle
@@ -91,11 +102,11 @@ function Shell() {
       // the library's hash is kept current on EVERY library route (typing a filter included), so the 会话 item from another screen
       // restores exactly what was on screen; set() is silent when nothing changed
       if (r.screen === 'library') store.set({ libraryHash: formatHash(r) })
-      // between a legacy and a React screen, the legacy host has just been cleared (or filled) inside this same announcement: the React
-      // side paints now too, so no frame shows #screen empty
-      const crossing = live && isReact(r) !== isReact(shown.current)
+      // between two owners (legacy, React, the desk), the host that drew the last route has just been cleared (or filled) inside this same
+      // announcement: the React side paints now too, so no frame shows #screen empty
+      const crossing = live && ownerOf(r) !== ownerOf(shown.current)
       shown.current = r
-      const apply = () => setRoute((prev: Route) => (sameRoute(prev, r) ? prev : r))
+      const apply = () => { if (isDesk(r)) setDeskOn(true); setRoute((prev: Route) => (sameRoute(prev, r) ? prev : r)) }
       if (crossing) flushSync(apply); else apply()
     }
     const off = router.onRoute(on)
@@ -108,6 +119,10 @@ function Shell() {
     <div id="content"><div id="screen">
       <div className="screenhost" ref={screenEl} style={{ display: 'contents' }} />
       {isReact(route) ? <ScreenOutlet screen={REACT_SCREENS[route.screen]} name={route.screen} route={route} router={router} /> : null}
+      {DESK ? <div className="deskhost" ref={deskEl} style={{ display: 'contents' }} /> : null}
+      {DESK && deskOn ? <div style={{ display: isDesk(route) ? 'contents' : 'none' }}>
+        <ScreenBoundary><DESK.Screen router={router} ctx={ctx} host={deskEl} isDesk={isDesk} /></ScreenBoundary>
+      </div> : null}
     </div></div>
     <LegacyScreen el={screenEl} router={router} ctx={ctx} screens={SCREENS} preloads={PRELOADS} />
   </>
