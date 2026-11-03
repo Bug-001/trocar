@@ -8,6 +8,8 @@ import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { api } from '../../../legacy/core/api.mjs'
 import { INTERVAL, backoffMs } from '../../../legacy/core/poll.mjs'
+import { TIP_MS } from '../../../legacy/core/ui.mjs'
+import { HEALTH_READ } from '../../../legacy/labels/common.mjs'
 import { parseHash } from '../../../legacy/core/router.mjs'
 import { store } from '../../../legacy/core/store.mjs'
 import { ALIASES, HARNESS_ORDER, harnessKey } from '../../../legacy/core/chips.mjs'
@@ -184,6 +186,23 @@ test('O4: Enter and Space toggle technical details; the ⓘ opens a dialog on En
   expect(dialog).not.toBeNull()
   fireEvent.keyDown(document.activeElement ?? dialog, { key: 'Escape' }); fireEvent.keyUp(document.activeElement ?? dialog, { key: 'Escape' }); await settle()
   expect(document.querySelector('[role="dialog"]')).toBeNull()
+  expect(document.activeElement).toBe(info) // Esc gives the focus back, and that focus is not an open
+  // 1.2 §弹出层: focus opens at once, hover after TIP_MS, a click outside closes; the layer is not modal: nothing outside is inert or
+  // hidden, and the focus moves out freely
+  act(() => t.focus()); act(() => info.focus()); await settle()
+  expect(document.querySelector('[role="dialog"]'), 'focus').not.toBeNull()
+  const free = (el: Element | null): boolean => !el || (!el.hasAttribute('inert') && el.getAttribute('aria-hidden') !== 'true' && free(el.parentElement))
+  expect(free(t), 'outside stays live').toBe(true)
+  act(() => t.focus())
+  expect(document.activeElement, 'outside takes focus').toBe(t)
+  fireEvent.click(document.body); await settle()
+  expect(document.querySelector('[role="dialog"]'), 'click outside').toBeNull()
+  fireEvent.mouseEnter(info); await tick(TIP_MS - 50)
+  expect(document.querySelector('[role="dialog"]'), 'hover, early').toBeNull()
+  await tick(50); await settle()
+  expect(document.querySelector('[role="dialog"]'), 'hover').not.toBeNull()
+  fireEvent.mouseLeave(info, { relatedTarget: document.body }); await settle()
+  expect(document.querySelector('[role="dialog"]'), 'pointer left').toBeNull()
 
   const allowed = (b: Element, first: boolean) => (b.hasAttribute('aria-expanded') && b.hasAttribute('aria-controls')) || b.classList.contains('popbtn')
     || b.classList.contains('copybtn') || b.hasAttribute('data-g') || (first && b.hasAttribute('data-hctl'))
@@ -305,4 +324,27 @@ test('O8: a sessions answer that carries `stored` is never shown; the fresh one 
   expect(seen).toBe(false)
   expect(p.link(replay('b'))).not.toBeNull()
   expect(p.link(replay('a'))).toBe(a)
+})
+
+test('O8: status failing with one unchanging reason, the other reads standing still: the capture card says 「? not refreshed」 once two polls are missed, not before', async () => {
+  const still = () => new Promise<Ans>(() => {}) // no other answer moves the bundle, so only the repeated failure can
+  for (const n of ['sessions', ...SLOW]) answer[n] = still
+  let failFrom = Infinity
+  answer.status = (n) => (n >= failFrom ? { ok: false, status: 500, data: null, error: 'boom' } : ok(statusDoc(0)))
+  const STALE = HEALTH_READ.stale('').toLowerCase() // the label up to its time (the page capitalises a sentence's first letter)
+  const p = mount(); await settle()
+  const said = () => (p.region(W.CARD.capture)?.textContent ?? '').toLowerCase()
+  expect(said()).not.toBe('')
+  expect(said().includes(STALE)).toBe(false)
+  failFrom = asked('status').length
+  const okAt = Date.now()
+  await poll('status')
+  expect(asked('status').length).toBe(failFrom + 1) // one failed read, inside two periods: still the last answer, no stale mark
+  expect(said().includes(STALE)).toBe(false)
+  while (Date.now() - okAt <= 2 * INTERVAL.status) await tick(INTERVAL.status / 5)
+  const out = asked('status').length
+  for (let i = 0; i < 20 && asked('status').length === out; i++) await tick(INTERVAL.status / 5) // the next failed read, same reason, after the cut
+  await settle()
+  expect(asked('status').length).toBeGreaterThan(out)
+  expect(said().includes(STALE)).toBe(true)
 })
