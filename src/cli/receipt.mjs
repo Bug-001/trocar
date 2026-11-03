@@ -32,9 +32,14 @@ export const carrierWords = (kind) => CARRIER_WORDS[kind] || String(kind ?? '').
 
 const BARE = /\u001b\[\d+m/g
 
+/** A command the reader is to copy, for `fit`: printed on a line of its own, indented, whole — a long `sudo <node> <trocar.mjs> …` folded on its spaces
+ *  would paste as `sudo` alone and then a Node with no script (§1.1⑥: a command keeps its own line unbroken). */
+export const commandLine = (command) => ({ command })
+
 /** §1.1⑥: every line fits 80 columns — one that does not is folded on spaces, indented to its own indent, and a word that is longer than the line
  *  (a path, a command) keeps its own line unbroken. A coloured line is left alone: its escape bytes are not columns and must not be cut. */
 export const fit = (lines) => lines.flatMap((l) => {
+  if (l && typeof l === 'object' && typeof l.command === 'string') return [`  ${l.command}`] // a command to copy (commandLine): one line, never folded, so a paste runs it whole
   const s = String(l)
   if (s.length <= WIDTH || BARE.test(s)) return [s]
   const own = ' '.repeat(s.length - s.trimStart().length)
