@@ -1,12 +1,15 @@
 // test/web-v2/browser/overview-shots.test.mjs — the overview in real Chrome on the real face (1.7): the recent-sessions rows fit
 // their card at 1280 (titles whole, the date inside the card), the first-use page, and the K-30 page off the viewport's corner.
-// the first-use page with its agent rows (1.7 §首次使用: one control per row, only GETs until a click).
+// the first-use page with its agent rows (1.7 §首次使用: one control per row, only GETs until a click), and an O1 item landing on its
+// 采集 row opened (1.7 #16, ?h=). Elements are found by role and accessible name; the class names stay only for the fit checks.
 // Shots: overview, overview-first-use, overview-first-use-agents and forbidden at 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { probe, withBoard, shoot } from './harness.mjs'
-import { ALIASES } from '../../../web/legacy/core/chips.mjs'
+import { ALIASES, HARNESS_ORDER, harnessKey } from '../../../web/legacy/core/chips.mjs'
+import { CARD } from '../../../web/legacy/labels/overview.mjs'
+import { CTL } from '../../../web/legacy/labels/capture.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -21,10 +24,16 @@ const twoAgents = () => {
   return { ...structuredClone(SAMPLE), health: { state: 'ok', since: new Date().toISOString() }, harnesses: Object.fromEntries(TWO.map((id, i) => [id, row(i)])), install: { state: 'complete', harnesses: TWO, pending: [] }, changed: [], holders: [], topology: {} }
 }
 
-const go = async (page, hash, sel) => {
+// go to a hash and wait for the first element `at(page)` finds there
+const go = async (page, hash, at) => {
   await page.evaluate((h) => { location.hash = h }, hash)
-  await page.waitForSelector(sel, { timeout: 15000 })
+  await at(page).first().waitFor({ timeout: 15000 })
 }
+const card = (page, name) => page.getByRole('region', { name, exact: true })
+const recentLinks = (page) => card(page, CARD.recent).getByRole('link')
+// the agents card's controls: each switch (react-aria puts role=switch on its input) and each Set up button; data-hctl names the kind
+const controls = (page) => { const a = card(page, CARD.agents); return a.getByRole('switch').or(a.getByRole('button', { name: CTL.setup, exact: true })) }
+const themePage = (page) => page.locator('[data-theme-choice]')
 // how the recent rows sit in their card: a cut title, or a date past the card's edge
 const recentFit = (page) => page.evaluate(() => {
   const card = document.querySelector('.ovcard.recent').getBoundingClientRect()
@@ -40,21 +49,21 @@ for (const width of [1280, 1024]) {
     test(`the overview and its first-use page at ${width} in ${theme}`, { skip }, async () => {
       const b = await withBoard({ bytes: 2e6, width, theme, chromium: gate.chromium })
       try {
-        await go(b.page, '#/overview', '.ovcard.recent .ovitem'); await b.page.waitForLoadState('networkidle')
+        await go(b.page, '#/overview', recentLinks); await b.page.waitForLoadState('networkidle')
         if (width === 1280) assert.deepEqual(await recentFit(b.page), [])
         assert.equal(await hscroll(b.page), false)
         await shoot(b.page, 'overview', { width, theme })
         await b.page.route('**/api/sessions?**', (r) => r.fulfill({ json: EMPTY }))
-        await go(b.page, '#/settings/appearance', '[data-theme-choice]'); await go(b.page, '#/overview', '.ovcard.start')
+        await go(b.page, '#/settings/appearance', themePage); await go(b.page, '#/overview', (p) => card(p, CARD.start))
         await b.page.waitForLoadState('networkidle')
-        assert.equal(await b.page.locator('.ovcard.items, .ovcard.stats, .ovcard.recent').count(), 0)
+        for (const name of [CARD.items, CARD.stats, CARD.recent]) assert.equal(await card(b.page, name).count(), 0, name)
         assert.equal(await hscroll(b.page), false)
         await shoot(b.page, 'overview-first-use', { width, theme })
         await b.page.route('**/api/status*', (r) => r.fulfill({ json: twoAgents() }))
         await b.page.route('**/control/status*', (r) => r.fulfill({ json: { control: true } }))
-        await go(b.page, '#/settings/appearance', '[data-theme-choice]'); await go(b.page, '#/overview', '#ovagents [data-hctl]')
+        await go(b.page, '#/settings/appearance', themePage); await go(b.page, '#/overview', controls)
         await b.page.waitForLoadState('networkidle')
-        assert.deepEqual((await b.page.locator('#ovagents [data-hctl]').evaluateAll((xs) => xs.map((x) => x.dataset.hctl))).sort(), ['setup', 'switch'])
+        assert.deepEqual((await controls(b.page).evaluateAll((xs) => xs.map((x) => x.closest('[data-hctl]').dataset.hctl))).sort(), ['setup', 'switch'])
         assert.equal(await hscroll(b.page), false)
         await shoot(b.page, 'overview-first-use-agents', { width, theme })
         assert.deepEqual(b.requests.filter((r) => r.method !== 'GET'), [])
@@ -73,3 +82,32 @@ for (const width of [1280, 1024]) {
     })
   }
 }
+
+// 1.7 #16 · L3: an O1 item opens the 采集 page on its row, expanded and in view. The C.3 sample's harness is on and not captured
+// (config-after-start); five agents in that state fill Needs a look with ?h= links, and the last one's row sits below the fold
+// until the landing scrolls it in (a problem row is open by default, so the scroll is what only ?h= gives).
+test('an O1 item lands on its 采集 row, opened and in view (?h=)', { skip }, async () => {
+  const b = await withBoard({ bytes: 2e6, chromium: gate.chromium })
+  try {
+    const [h0] = Object.values(SAMPLE.harnesses)
+    assert.deepEqual([h0.desired, h0.captured, h0.reason], ['on', false, 'config-after-start'])
+    const ids = HARNESS_ORDER.slice(0, 5)
+    const doc = { ...structuredClone(SAMPLE), health: { state: 'ok', since: new Date().toISOString() }, critical: [], failures: { ...SAMPLE.failures, groups: [] },
+      harnesses: Object.fromEntries(ids.map((id) => [id, structuredClone(h0)])), install: { state: 'complete', harnesses: ids, pending: [] } }
+    await b.page.route('**/api/status*', (r) => r.fulfill({ json: doc }))
+    const items = (p) => card(p, CARD.items).locator('a[href^="#/capture?h="]')
+    await go(b.page, '#/overview', items)
+    const link = items(b.page).last()
+    const id = harnessKey(decodeURIComponent(new URL((await link.getAttribute('href')).slice(1), 'http://x').searchParams.get('h')))
+    assert.ok(ids.map(harnessKey).includes(id), id)
+    await link.click()
+    const sel = `[data-caprow="cap-${id}"]`
+    await b.page.waitForFunction((s) => document.querySelector(s)?.getAttribute('aria-expanded') === 'true', sel, { timeout: 15000 })
+    const panel = await b.page.locator(sel).getAttribute('aria-controls')
+    assert.ok(panel, 'the trigger names its panel')
+    assert.equal(await b.page.locator(`[id="${panel}"]`).isVisible(), true)
+    await b.page.waitForFunction((s) => { const r = document.querySelector(s).getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight }, sel, { timeout: 5000 })
+    assert.deepEqual(b.requests.filter((r) => r.method !== 'GET'), [])
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
