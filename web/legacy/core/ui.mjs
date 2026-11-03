@@ -141,7 +141,7 @@ export function confirmDialog(opts, doc = typeof document === 'undefined' ? null
 // room, clamped 8px inside the viewport. A menu ([data-menu]) never opens on hover.
 export function installUi(doc = typeof document === 'undefined' ? null : document) {
   if (!doc) return null
-  // the disclosure triangle a ::before / ::after draws (replay.css): the icons.mjs chevron as a mask, never a typed ▸
+  // the disclosure triangle a ::before / ::after draws (replay.css): the icons.mjs chevron as a mask
   // the HTML parser puts the <svg> in the SVG namespace and the serializer writes it out, so no namespace URL is typed here
   const tpl = doc.createElement('template')
   tpl.innerHTML = icon('chevron-right')

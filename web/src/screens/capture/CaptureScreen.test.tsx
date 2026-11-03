@@ -169,7 +169,7 @@ const LOGGED = (d: Record<string, unknown>) => {
     { level: 'expected', where: 'engine', code: 'y', count: 1, first_ts: T, last_ts: T }] }
 }
 
-test('C5: every trigger on both pages (row name, log row ▸, changes block, technical details) toggles on Enter and Space; clicks elsewhere on a head line or inside the panel do not', async () => {
+test('C5: every trigger on both pages (row name, log row chevron, changes block, technical details) toggles on Enter and Space; clicks elsewhere on a head line or inside the panel do not', async () => {
   answers = [{ opencode: FINE }]
   patch = LOGGED
   const cap = await mount()

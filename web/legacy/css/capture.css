@@ -8,7 +8,7 @@
 .crows{background:var(--raised);border:1px solid var(--rule);border-radius:var(--r-4);box-shadow:var(--shadow-card);}
 .crow + .crow{border-top:1px solid var(--rule);}
 
-/* a row: lamp slot · ▸ · icon · name over the status sentence · last captured / failure · the desired word or the one control.
+/* a row: lamp slot · disclosure chevron · icon · name over the status sentence · last captured / failure · the desired word or the one control.
    The name button spans the two lines (subgrid), so the icon centres on both while the sentence below the name stays outside it. */
 .crow{--ind:86px;}
 .crow-t{display:grid;grid-template-columns:16px 12px 28px minmax(0,1fr) fit-content(240px) auto;grid-template-rows:auto auto;column-gap:10px;align-items:center;min-height:58px;padding:9px 16px 9px 0;}
