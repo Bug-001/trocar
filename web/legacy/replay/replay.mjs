@@ -44,7 +44,7 @@ import { renderSessionHead, wireSessionHead, captureGap, behindOf } from './head
 import { stepBarHtml, roughStepHtml, wireStepBar } from './stepbar.mjs'
 import { loadBodies, bodyCache, clearOverrides, overrideScope, isRetryable } from './cell.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
-import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION, REVIEW_TIP, moreLanes } from '../labels/replay.mjs'
+import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION, REVIEW_TIP, MAINDIV_TIP, DIVIDER_TIP, RPBAR_TIP, moreLanes } from '../labels/replay.mjs'
 import { readFailure } from '../core/ui.mjs'
 
 const POLL_MS = INTERVAL.session
@@ -76,12 +76,12 @@ export const SKELETON = `<div id="pages">
 <div id="rails"></div>
 <main>
   <div id="ctxnav"></div>
-  <div id="maindiv" title="Drag to resize the outline · double-click to reset"></div>
+  <div id="maindiv" title="${esc(MAINDIV_TIP)}"></div>
   <div id="midcol"><div id="stepbar"></div><div id="ctxwin">${emptyFrameHtml()}</div></div>
 </main>
 </div>
-<div id="divider" title="Drag to resize the right page · double-click to reset"></div>
-<div id="rightpage"><div id="rpbar" role="button" tabindex="0" aria-expanded="false" title="Expand the right page"></div><div id="rpbody"><div id="resexp"></div><div id="rawpanel"></div></div></div>
+<div id="divider" title="${esc(DIVIDER_TIP)}"></div>
+<div id="rightpage"><div id="rpbar" role="button" tabindex="0" aria-expanded="false" title="${esc(RPBAR_TIP)}"></div><div id="rpbody"><div id="resexp"></div><div id="rawpanel"></div></div></div>
 </div>`
 
 // what the playhead's panels (window, outline, resources, raw panel) draw from: equal → not repainted (spec 1.4 D64). The anchor
@@ -122,7 +122,48 @@ const yieldNow = () => (globalThis.scheduler && typeof globalThis.scheduler.yiel
 const frame = (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16))
 
 const SCROLLED = ['#ctxwin', '#ctxnav', '#resexp', '#rawpanel', '#rails'] // scroll positions a detached node loses
-const keyOf = (route) => route.project + '::' + route.id
+export const keyOf = (route) => route.project + '::' + route.id // a session's desk in the session cache (a route, or a desk's state)
+
+// The R1 areas' paints on their own element that are not one render call: the legacy view's, and the new desk's thin wrappers' until
+// they are ported (web/src/screens/replay/). Each writes only inside the element it is handed.
+// s.reviewRange on the bars (bars carry a GLOBAL data-i) and the bracket over the window's part of it; null clears both
+export function paintReview(saw, s) {
+  const r = s.reviewRange, br = saw.querySelector('#reviewbracket')
+  if (!r) {
+    for (const b of saw.querySelectorAll('#sawrow .bar.reviewed')) b.classList.remove('reviewed')
+    if (br) br.style.display = 'none'
+    return
+  }
+  for (const b of saw.querySelectorAll('#sawrow .bar')) b.classList.toggle('reviewed', +b.dataset.i < r.k)
+  if (br) {
+    br.style.display = 'block'
+    br.style.width = (Math.max(0, Math.min(1, (r.k - s.view.lo) / Math.max(1, s.view.hi - s.view.lo))) * 100).toFixed(2) + '%'
+    br.title = REVIEW_TIP(r.k)
+  }
+}
+export function emptyScope(saw) {
+  const $ = (sel) => saw.querySelector(sel)
+  $('#sawrow').innerHTML = '<div id="reviewbracket"><span class="rbend" aria-hidden="true">inferred</span></div>'; $('#cacherow').innerHTML = ''; $('#ovstrip').innerHTML = ''
+  $('#probrow').innerHTML = ''; $('#chapnav').innerHTML = ''; $('#askscale').innerHTML = ''; $('#askrow').style.display = 'none'
+  for (const id of ['#sawstart', '#sawend', '#viewrange']) $(id).textContent = ''
+  $('#sawgut').textContent = 'Context'; $('#viewswitch').innerHTML = ''; $('#complegend').innerHTML = ''; $('#nomain').style.display = 'none'
+}
+// how many bars #sawrow can draw (timeline.mjs barsThatFit). A lane that has no width yet (not laid out, or not in the document) cannot
+// judge: no limit. Measured on the bars row's grid column, not on #sawrow: the detail lanes narrow to the window's bar count (1.3)
+export function laneCapacity(saw) {
+  const row = saw.querySelector('#sawrow'), tk = row && row.closest('.tkrow')
+  if (!tk) return Infinity
+  const cols = typeof getComputedStyle === 'function' ? getComputedStyle(tk).gridTemplateColumns.split(' ') : []
+  const w = parseFloat(cols[cols.length - 1]) || row.clientWidth
+  return w > 0 ? barsThatFit(w) : Infinity
+}
+// the rough page's step label for step `at` (0-based); a desk that drew a step keeps its step head (a named step on its way). → drawn
+export function roughStepHead(stepbar, s, at) {
+  if (s.playRid != null && s.anchor && s.anchor.calls.length) return false
+  const head = s.desk.head
+  stepbar.innerHTML = head.tier ? roughStepHtml(at + 1, head.steps) : ''
+  return true
+}
 
 // The legacy view: today's DOM (DESKHEAD + SKELETON) in the desk's own root, its frame there at once. A view draws the R1 areas from
 // the state `s` and hands the controller its element map through `framed(E)` when its frame is there:
@@ -144,49 +185,21 @@ function legacyView(s, framed) {
     overview: () => renderOverview(E.saw, s),
     cur: () => { markCurrent(E.saw, s); repositionBrush(E.saw, s) },
     problems: () => renderProblemNav(E.saw, s),
-    // s.reviewRange on the bars (bars carry a GLOBAL data-i) and the bracket over the window's part of it; null clears both
-    review() {
-      const r = s.reviewRange
-      if (!r) {
-        for (const b of root.querySelectorAll('#sawrow .bar.reviewed')) b.classList.remove('reviewed')
-        const br = $('#reviewbracket'); if (br) br.style.display = 'none'
-        return
-      }
-      for (const b of root.querySelectorAll('#sawrow .bar')) b.classList.toggle('reviewed', +b.dataset.i < r.k)
-      const br = $('#reviewbracket')
-      if (br) {
-        br.style.display = 'block'
-        br.style.width = (Math.max(0, Math.min(1, (r.k - s.view.lo) / Math.max(1, s.view.hi - s.view.lo))) * 100).toFixed(2) + '%'
-        br.title = REVIEW_TIP(r.k)
-      }
+    review: () => paintReview(E.saw, s),
+    // s.railsFolded and s.rpOpen on the page: the rows the narrow screen folds show with the rails open; the right page's bottom row
+    frame() {
+      $('#leftpage').classList.toggle('railopen', !s.railsFolded)
+      $('#rightpage').classList.toggle('open', s.rpOpen); $('#rpbar').setAttribute('aria-expanded', String(s.rpOpen))
     },
-    // s.railsFolded on the page: the rows the narrow screen folds show with the rails open
-    frame() { const lp = $('#leftpage'); if (lp) lp.classList.toggle('railopen', !s.railsFolded) },
     // the head's rows for step `at` (K bars at most): on a desk that drew a step only its bars (a named step on its way, the rest as it
     // was); else the rough page's step label too, the first such paint marked 'desk-rough'
     rough(at, K) {
-      const head = s.desk.head
       roughRows(E.saw, s, at, K)
-      if (s.playRid != null && s.anchor && s.anchor.calls.length) return
-      E.stepbar.innerHTML = head.tier ? roughStepHtml(at + 1, head.steps) : ''
+      if (!roughStepHead(E.stepbar, s, at)) return
       if (!roughMarked && typeof performance !== 'undefined') { roughMarked = true; performance.mark('desk-rough') }
     },
-    empty() {
-      E.stepbar.innerHTML = ''
-      $('#sawrow').innerHTML = '<div id="reviewbracket"><span class="rbend" aria-hidden="true">inferred</span></div>'; $('#cacherow').innerHTML = ''; $('#ovstrip').innerHTML = ''
-      $('#probrow').innerHTML = ''; $('#chapnav').innerHTML = ''; $('#askscale').innerHTML = ''; $('#askrow').style.display = 'none'
-      for (const id of ['#sawstart', '#sawend', '#viewrange']) $(id).textContent = ''
-      $('#sawgut').textContent = 'Context'; $('#viewswitch').innerHTML = ''; $('#complegend').innerHTML = ''; $('#nomain').style.display = 'none'
-    },
-    // how many bars #sawrow can draw (timeline.mjs barsThatFit). A lane that has no width yet (not laid out, or not in the document) cannot
-    // judge: no limit. Measured on the bars row's grid column, not on #sawrow: the detail lanes narrow to the window's bar count (1.3)
-    capacity() {
-      const saw = $('#sawrow'), row = saw && saw.closest('.tkrow')
-      if (!row) return Infinity
-      const cols = typeof getComputedStyle === 'function' ? getComputedStyle(row).gridTemplateColumns.split(' ') : []
-      const w = parseFloat(cols[cols.length - 1]) || saw.clientWidth
-      return w > 0 ? barsThatFit(w) : Infinity
-    },
+    empty() { E.stepbar.innerHTML = ''; emptyScope(E.saw) },
+    capacity: () => laneCapacity(E.saw),
     dispose() {},
   }
   framed(E)
@@ -262,12 +275,16 @@ function openDesk(ctx, route0, makeView = legacyView) {
   s.renderStep = () => view.step()
   s.paintReview = () => view.review() // rails.mjs : highlightRange / clearRange set s.reviewRange
   s.paintFrame = () => view.frame() // the rails' fold row sets s.railsFolded
+  s.refit = () => refit() // a view whose lane capacity changed (view.capacity())
 
+  function paintNotListed() { onEls(() => { E.ctxwin.innerHTML = notListedHtml(); E.ctxwin.__units = null }) }
   function renderHeader() { s.headFollow = s.follow; view.head(); syncUrl() }
 
   // ── empty and failed states: every widget that carries per-session data is neutralised, nothing of the last session stays ──
   // `msg` empty → ⑧, the empty frame (1.4: no text, no control); else the honest failure sentence, Retry, and the reason in details
+  let emptied = '' // the last empty state's sentence: a view whose frame comes later draws it then (catchUp)
   function renderEmpty(msg) {
+    emptied = msg
     s.brushDragging = false; s.anchor = null; s.lanes = []; s.curFlat = []; s.curRemoved = []; s.breaks = []; jumps.clear()
     s.landedFor = null; s.turnLanded.clear(); s.lastPhSig = null
     view.empty(msg)
@@ -705,7 +722,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     const moved = behind()
     // the server knows no such session (meta null, nothing captured): said HERE, with a way back; the timer stops reading it
     if (head.meta == null && !head.steps) {
-      s.goodKey = null; s.notListed = true; renderEmpty(''); onEls(() => { E.ctxwin.innerHTML = notListedHtml(); E.ctxwin.__units = null }); root.classList.add('notlisted'); renderHeader(); return { ok: true }
+      s.goodKey = null; s.notListed = true; renderEmpty(''); paintNotListed(); root.classList.add('notlisted'); renderHeader(); return { ok: true }
     }
     if (s.notListed) { s.notListed = false; root.classList.remove('notlisted') }
     // left while the head was on its way: the head is the round's last read (a detached desk sends no next read); attach's round reads the tails
@@ -778,7 +795,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
   api.get('status').then((r) => { if (!s.dead && r.ok) { s.health = r.data; judgeGap(); if (s.anchor) renderHeader() } }).catch((e) => console.error(e))
 
   // ── the desk's own listeners (inside its root): wired once its frame is there, kept while it is detached, dropped by dispose() ──
-  const onRp = () => { s.rpOpen = !s.rpOpen; const rp = $('#rightpage'); if (rp) { rp.classList.toggle('open', s.rpOpen); const b = $('#rpbar'); if (b) b.setAttribute('aria-expanded', String(s.rpOpen)) } }
+  const onRp = () => { s.rpOpen = !s.rpOpen; view.frame() }
   const onRpKey = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRp() } }
   const onRetry = (e) => { if (e.target.closest && e.target.closest('[data-retry]')) poll() } // the failure state's Retry
   const offs = []
@@ -837,7 +854,10 @@ function openDesk(ctx, route0, makeView = legacyView) {
     watchRails()
   }
   // a step left mid-wait draws now; the URL names the drawn step at once (syncUrl). Answers applied while away were not drawn: all areas then
-  function catchUp() { if (s.anchor) { if (missed) { missed = false; renderAll() } else paintPlayhead() } }
+  // A desk with no lane yet that painted before its frame was there draws its empty state now.
+  function catchUp() {
+    if (s.anchor) { if (missed) { missed = false; renderAll() } else paintPlayhead() } else if (missed) { missed = false; renderEmpty(emptied); if (s.notListed) paintNotListed() }
+  }
 
   // hang the desk in `el` as it was left; the URL decides the view only when it names a step (1.2 §路由「离开再回来」)
   function attach(el, ctx, route) {
