@@ -61,6 +61,19 @@ test('pairs: every folded line fills up to the width, the lines under a label as
   }
 })
 
+test('pairs: a later word too long for the value column takes its own line at the fold column, never past the width (§1.1⑥)', () => {
+  for (const len of [30, 60, 70]) {
+    const word = 'p'.repeat(len)
+    const value = `key -> trocar (backup ${word}) tail`
+    const out = pairs([['~/.claude/settings.json', value]])
+    for (const line of out) assert.ok(line.length <= WIDTH, `word of ${len}: ${JSON.stringify(line)} is past the width`)
+    assert.deepEqual(out.join(' ').split(/\s+/).filter(Boolean), ['~/.claude/settings.json', ...value.split(' ')], 'every word, once, in order')
+  }
+  const huge = 'q'.repeat(WIDTH)
+  const out = pairs([['label', `a ${huge} b`]])
+  assert.ok(out.some((l) => l.trim() === huge), 'a word longer than any column is whole, alone on its line')
+})
+
 test('tilde: the home directory becomes ~, and only at the start of a path', () => {
   assert.equal(tilde('/home/u/.trocar/raw', '/home/u'), '~/.trocar/raw')
   assert.equal(tilde('/home/u', '/home/u'), '~')

@@ -7,6 +7,7 @@
 //   tilde / size / ago / unknown   the conventions of §1.1⑤: `~` for the home directory, 1000-based KB/MB/GB, relative time, and the one wording
 //                    for a value that could not be read.
 import { styleText } from 'node:util'
+import { foldHang } from '../off/receipt.mjs'
 
 /** The column count the manual's samples are laid out for (§1.1⑥). */
 export const WIDTH = 80
@@ -53,8 +54,10 @@ export function pairs(rows, { indent = 2, gap = 2, width = WIDTH, label: least =
     const first = value.split(/\s+/)[0]
     // a word that does not even fit beside the label (a path, a command) keeps its own line unbroken, under the label (§1.1⑥)
     if (col + first.length > width) return [`${pad}${l}`, ...wrap(value, width - indent).map((line) => pad + line)]
-    // every line of the value has the same room, `width - col`: wrap's hang would count against a line it is not in front of (the first)
-    return wrap(value, width - col).map((line, i) => (i ? ' '.repeat(col) : head) + line)
+    // every line of the value has the same room, `width - col`: wrap's hang would count against a line it is not in front of (the first). A later
+    // word longer than that room (a backup path) is a line of its own at the fold column (foldHang), or at the indent when even that is too narrow
+    const hang = foldHang(pad)
+    return wrap(value, width - col).map((line, i) => (!i ? head : line.length <= width - col ? ' '.repeat(col) : hang.length + line.length <= width ? hang : pad) + line)
   })
 }
 
