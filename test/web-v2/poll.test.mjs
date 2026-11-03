@@ -32,16 +32,16 @@ test('poller: a reader\'s own action bypasses the back-off', async () => {
   await r.p.poll(); assert.equal(r.reads(), 2)
 })
 
-test('poller: one read in flight; a tick during it re-reads after a success, never after a failure', async () => {
-  for (const [first, want] of [[{}, 2], [{ ok: false }, 1]]) {
+test('poller: one read in flight; a timer tick during it reads nothing after it, a reader\'s call during it reads once after a success', async () => {
+  for (const [first, byReader, want] of [[{}, false, 1], [{ ok: false }, false, 1], [{}, true, 2], [{ ok: false }, true, 2]]) {
     let release, reads = 0
     const answers = [first, {}, {}]
     const p = createPoller({ base: 1500, now: () => 0, run: () => { reads++; const a = answers.shift(); return reads === 1 ? new Promise((res) => { release = () => res(a) }) : Promise.resolve(a) } })
     const done = p.poll()
-    await p.poll(); await p.poll() // ticks while the first read is in flight: no second concurrent read
+    await p.poll(byReader); await p.poll(byReader) // calls while the first read is in flight: no second concurrent read
     assert.equal(reads, 1)
     release(); await done
-    assert.equal(reads, want, JSON.stringify(first))
+    assert.equal(reads, want, JSON.stringify({ first, byReader }))
   }
 })
 
@@ -113,6 +113,32 @@ test('4.4 live-poll: after a slow success without pending no timer read comes be
     r.at(3 * D); await r.p.poll(); assert.equal(r.reads(), 2)
   }
 })
+
+// 4.4 live-poll 「每 1.5 s 一轮」: a round the timer began starts at least one period after the round before it, however long a reader's
+// read took and whatever it answered; both timers the board drives the engine with: a fixed interval (the replay desk) and startPoll
+for (const drive of ['interval', 'startPoll']) {
+  test(`poller (${drive}): no timer round comes less than one period after the round before it`, async (t) => {
+    mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] }); t.after(() => mock.timers.reset())
+    const base = INTERVAL.session
+    for (const took of [base / 3 + 1, base - 1, base + 341, 2.5 * base])
+      for (const answer of [{}, { pending: { done: 1, total: 9 } }]) {
+        const reads = []
+        const run = () => new Promise((res) => { reads.push(Date.now()); setTimeout(() => res(answer), reads.length === 1 ? took : 5) })
+        const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)) }
+        let stop
+        if (drive === 'interval') {
+          const p = createPoller({ base, run }), id = setInterval(() => p.poll(false), base)
+          p.poll(true); stop = () => clearInterval(id)
+        } else stop = startPoll({ run, base, doc: { hidden: false, addEventListener() {}, removeEventListener() {} } }).stop
+        const t0 = Date.now()
+        while (Date.now() - t0 < 3 * took + 3 * base) { mock.timers.tick(50); await settle() }
+        stop()
+        const label = `took ${took}, ${JSON.stringify(answer)}`
+        assert.ok(reads.length >= 3, `${label}: ${reads.length} reads`)
+        for (let i = 1; i < reads.length; i++) assert.ok(reads[i] - reads[i - 1] >= base, `${label}: read ${i + 1} came ${reads[i] - reads[i - 1]} ms after the one before`)
+      }
+  })
+}
 
 // ── startPoll over every period of 4.4's table (mock timers; a fake document and reader) ─────────────────────────────────
 import fs from 'node:fs'
