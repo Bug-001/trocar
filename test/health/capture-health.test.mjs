@@ -225,3 +225,18 @@ test('C.3「已解决的组」: a failure whose condition a later ok event ended
     } finally { b.done() }
   }
 })
+
+test('C.3「已解决的组」: such a failure from before a daemon restart that the new run did not write again is resolved; written again in the new run, it fails', () => {
+  for (const fail of [{ event: 'helper-down', where: 'helper' }, { event: 'failure', where: 'ca', code: 'ca-invalid' }, { event: 'failure', where: 'agents', code: 'agent-list-invalid' }]) {
+    const b = home()
+    try {
+      installed(b); b.lock(); b.state('on', at(H))
+      b.flows([{ ts: at(H / 2), event: 'daemon-start', pid: 1 }, { ts: at(H / 2 - 1000), ...fail, reason: 'r' }, { ts: at(H / 3), event: 'daemon-stop' }, { ts: at(H / 4), event: 'daemon-start', pid: 2 }])
+      const r = b.health()
+      assert.equal(r.summary.state, 'ok', `${fail.event}/${fail.code}: ${JSON.stringify(r.summary)}`)
+      assert.equal(r.collector.failures.length, 1, 'the group is still in the record')
+      b.flows([{ ts: at(H / 5), ...fail, reason: 'r' }])
+      assert.equal(b.health().summary.state, 'failing', 'written again in this run')
+    } finally { b.done() }
+  }
+})

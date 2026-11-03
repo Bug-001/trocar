@@ -144,7 +144,10 @@ export function lastRun(notes) {
 const PRELUDE_MS = 60_000 // a daemon's start-up lines are written within this before its daemon-start
 // 1.6 C.3「已解决的组」: the ok event that ends a failure's condition. A group whose newest record such an event follows is `resolved`: it stays
 // among the groups (D38: never lost) at level note, and no longer makes the health failing; a later failure of the group makes it a problem again.
+// The ok events are written on a transition within one daemon run; every start judges these conditions again, so a group of them whose newest record
+// precedes the newest run (its prelude included) and that the run did not write again is resolved too — a restart ended it.
 const ENDS = Object.freeze({ 'helper-ok': ['helper-down'], 'ca-ok': ['ca-invalid'], 'agent-list-ok': ['agent-list-invalid'] })
+const ENDED = new Set(Object.values(ENDS).flat())
 const weight = (r) => (r.folded ? 0 : 1) + (typeof r.suppressed === 'number' ? r.suppressed : 0)
 
 /**
@@ -229,7 +232,9 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
   const cutoff = now - windowMs
   const groups = new Map(), agents = new Map()
   const agentRow = (a) => { if (!agents.has(a)) agents.set(a, { agent: a, last_captured: null, last_failure: null, last_failure_key: null }); return agents.get(a) }
-  for (const r of records) {
+  for (let i = 0; i < records.length; i++) {
+    const r = records[i]
+    if (i === from && startIdx >= 0) for (const g of groups.values()) if (ENDED.has(g.last.event) || ENDED.has(g.last.code)) g.resolved = true
     if (typeof r.ts === 'string') out.last_ts = r.ts
     if (r.event === 'install-note' || r.event === 'uninstall-note') out.install[r.event === 'install-note' ? 'install' : 'uninstall'].push(pick(r))
     const t = Date.parse(r.ts)
