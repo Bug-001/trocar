@@ -1375,7 +1375,8 @@ a.trow.hi{background:var(--panel);}
 .thost.drawer .tbody{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;}
 .tlist{min-width:0;overflow:auto;padding-bottom:40px;}
 /* the endpoint takes the width the fixed columns leave: no empty lined track at the end of a wide row */
-.hhead,.hrow{display:grid;grid-template-columns:140px minmax(200px,1fr) 84px 76px 76px minmax(96px,130px);column-gap:10px;align-items:center;}
+/* the start padding holds the selected row's 2px accent (inset shadow) off the time text; the head keeps the same start */
+.hhead,.hrow{display:grid;grid-template-columns:140px minmax(200px,1fr) 84px 76px 76px minmax(96px,130px);column-gap:10px;align-items:center;padding-inline-start:var(--s2);}
 .hhead{min-height:28px;font-size:var(--fs-cap);color:var(--ink-3);border-bottom:1px solid var(--rule);}
 .hrow{min-height:34px;font-size:var(--fs-body);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--rule);}
 /* the row is a div: its main link spans the five cells (display:contents keeps them grid items), the marks are siblings */
@@ -1389,8 +1390,6 @@ a.trow.hi{background:var(--panel);}
 a.rmark{color:var(--action);}
 .rmark.fail{color:var(--bad);}
 .tcell{color:var(--ink-2);font-size:var(--fs-cap);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
-/* the selected row's 2px accent (inset shadow) stands in this start padding, off the time text; the head keeps the same start */
-.hhead,.hrow{padding-inline-start:var(--s2);}
 
 /* the detail: a column at the breakpoint, a bottom sheet under the list below it */
 .hdetail{min-width:0;overflow:auto;background:var(--raised);border-left:1px solid var(--rule);padding:0 0 32px;}
