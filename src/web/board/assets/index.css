@@ -15,7 +15,7 @@
   --ink: #1B1828;  --ink-2: #4D4960;  --ink-3: #605B72;
   /* action: only what can be operated */
   --action: #5B47E0;  --action-ink: #FFFFFF;  --action-wash: rgb(91 71 224 / .10);
-  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-on: #FFFFFF;  --knob-off: #7A7590;
+  --seg-on: #FFFFFF;  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-on: #FFFFFF;  --knob-off: #7A7590;
   /* state: amber and red are for problems only */
   --bad: #B42318;  --bad-lamp: #E0443A;  --warn: #8A4B00;  --warn-lamp: #C2740E;  --ok: #217A45;  --note-lamp: #1B1828;
   /* instrument: the trace on the glass, --trace-ink where the cache share sits on paper; the cursor is neutral */
@@ -78,7 +78,7 @@
     --rule: #2A2636;  --rule-2: #3B3649;  --control-edge: #7A7491;  --grat: rgb(255 255 255 / .06);
     --ink: #EDEBF5;  --ink-2: #ABA6BF;  --ink-3: #958FA9;
     --action: #A497FF;  --action-ink: #160F33;  --action-wash: rgb(164 151 255 / .14);
-    --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;
+    --seg-on: #3D3752;  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;
     --bad: #FF8F85;  --bad-lamp: #FF5D52;  --warn: #F2B35B;  --warn-lamp: #F2A13A;  --ok: #6AD49A;  --note-lamp: #EDEBF5;
     --trace-ink: #5FD3AE;
     --scope-ink-2: #A9A3C7;  --scope-edge: #6A6390;  --scope-rule: rgb(255 255 255 / .11);
@@ -103,7 +103,7 @@
   --rule: #E4E1EC;  --rule-2: #CFCADC;  --control-edge: #848099;  --grat: rgb(255 255 255 / .07);
   --ink: #1B1828;  --ink-2: #4D4960;  --ink-3: #605B72;
   --action: #5B47E0;  --action-ink: #FFFFFF;  --action-wash: rgb(91 71 224 / .10);
-  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-off: #7A7590;
+  --seg-on: #FFFFFF;  --switch-on: #5B47E0;  --switch-off: #E6E3EE;  --knob-off: #7A7590;
   --bad: #B42318;  --bad-lamp: #E0443A;  --warn: #8A4B00;  --warn-lamp: #C2740E;  --ok: #217A45;  --note-lamp: #1B1828;
   --trace-ink: #167A5F;
   --scope-ink-2: #ABA5CA;  --scope-edge: #6E6890;  --scope-rule: rgb(255 255 255 / .12);
@@ -127,7 +127,7 @@
   --rule: #2A2636;  --rule-2: #3B3649;  --control-edge: #7A7491;  --grat: rgb(255 255 255 / .06);
   --ink: #EDEBF5;  --ink-2: #ABA6BF;  --ink-3: #958FA9;
   --action: #A497FF;  --action-ink: #160F33;  --action-wash: rgb(164 151 255 / .14);
-  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;
+  --seg-on: #3D3752;  --switch-on: #6F5CF2;  --switch-off: #2C2839;  --knob-off: #8A84A0;
   --bad: #FF8F85;  --bad-lamp: #FF5D52;  --warn: #F2B35B;  --warn-lamp: #F2A13A;  --ok: #6AD49A;  --note-lamp: #EDEBF5;
   --trace-ink: #5FD3AE;
   --scope-ink-2: #A9A3C7;  --scope-edge: #6A6390;  --scope-rule: rgb(255 255 255 / .11);
@@ -181,7 +181,8 @@ input::placeholder{color:var(--ink-3);}
 .seg{display:inline-flex;flex:none;gap:2px;padding:2px;border:1px solid var(--control-edge);border-radius:var(--r-2);background:var(--panel);}
 .seg a,.seg button{height:24px;padding:0 11px;display:inline-flex;align-items:center;font-size:var(--fs-cap);color:var(--ink-2);text-decoration:none;border:0;background:none;border-radius:calc(var(--r-2) - 2px);cursor:pointer;white-space:nowrap;}
 .seg a:hover,.seg button:hover,.seg [data-hovered]{color:var(--ink);text-decoration:none;background:none;}
-.seg a.on,.seg button.on,.seg [data-selected]{background:var(--raised);color:var(--ink);box-shadow:var(--shadow-pill);}
+/* --seg-on: the selected segment's own face, set apart from the track in both themes (--raised is the track's near twin in dark) */
+.seg a.on,.seg button.on,.seg [data-selected]{background:var(--seg-on);color:var(--ink);box-shadow:var(--shadow-pill);}
 /* the switch: the element is the track, .knob rides on it */
 .hswitch{position:relative;width:36px;height:21px;padding:0;flex:none;border-radius:var(--r-pill);border:1px solid var(--control-edge);background:var(--switch-off);transition:background var(--t-quick);}
 .hswitch .knob{position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:var(--knob-off);transition:transform var(--t-quick) var(--ease),background var(--t-quick);}
@@ -234,6 +235,8 @@ input::placeholder{color:var(--ink-3);}
 .popbtn{border:0;background:none;color:var(--ink-3);cursor:pointer;font:inherit;padding:0 3px;border-radius:var(--r-1);white-space:nowrap;}
 .popbtn:hover{color:var(--ink);background:var(--hover);}
 .popbtn[aria-expanded="true"]{color:var(--ink);}
+/* an info glyph after a word: a gap before it, centred on the line, never taller than the line (the word keeps its baseline) */
+.popbtn:has(> svg:only-child){display:inline-flex;align-items:center;vertical-align:middle;height:var(--lh);margin-left:4px;padding:0 2px;}
 .pop{position:fixed;z-index:40;min-width:200px;max-width:380px;background:var(--raised);border:1px solid var(--rule);border-radius:var(--r-3);box-shadow:var(--shadow-float);padding:12px 14px;font-size:var(--fs-body);color:var(--ink);}
 /* a closed popover must really hide: the plain .pop[hidden] (0,2,0) loses the cascade to a variant rule like
    .pop.menu{display:flex} below (also 0,2,0, later) — a closed filter menu once rendered at the button's position and
@@ -248,11 +251,14 @@ input::placeholder{color:var(--ink-3);}
 .pop.menu a:focus-visible,.pop.menu button:focus-visible,.pop.menu [data-focused]{background:var(--action);color:var(--action-ink);outline:none;}
 /* a disclosure row and 技术细节 */
 .disc{border-bottom:1px solid var(--rule);}
-.disc-t{display:flex;align-items:baseline;gap:10px;min-height:36px;width:100%;border:0;border-radius:0;background:none;color:var(--ink-2);font-size:var(--fs-body);cursor:pointer;text-align:left;padding:0;white-space:normal;}
+.disc:last-child{border-bottom:0;} /* a rule closes a disclosure only when something follows it */
+.disc-t{display:flex;align-items:center;gap:8px;min-height:36px;width:100%;border:0;border-radius:0;background:none;color:var(--ink-2);font-size:var(--fs-body);cursor:pointer;text-align:left;padding:0;white-space:normal;}
 .disc-t:hover{color:var(--ink);background:none;}
 .disc-t b{color:var(--ink);font-weight:var(--fw-strong);font-size:var(--fs-body);}
 .disc-t .sum{font-size:var(--fs-body);}
-.disc-t .chev{width:12px;flex:none;transition:transform var(--t-quick) var(--ease);}
+/* the drawn triangle (icons.mjs DISC_CHEV) of every disclosure: it turns a quarter when its trigger is open */
+.chev{flex:none;transition:transform var(--t-quick) var(--ease);}
+[aria-expanded="true"] > svg.chev{transform:rotate(90deg);}
 /* a closed panel takes no box: React Aria closes one with hidden="until-found" (content-visibility, not display:none) */
 .disc-b[hidden]{display:none;}
 .tech{font-size:var(--fs-cap);line-height:20px;color:var(--ink-2);background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-3);padding:12px 14px;display:grid;grid-template-columns:max-content minmax(0,1fr);column-gap:16px;margin:6px 0 4px;}
@@ -349,7 +355,7 @@ input::placeholder{color:var(--ink-3);}
 .pagehead .seg{display:inline-flex;border:1px solid var(--rule-2);border-radius:var(--r-2);padding:1px;background:var(--paper);}
 .pagehead .seg a{padding:0 9px;font-size:var(--fs-cap);line-height:20px;color:var(--ink-2);text-decoration:none;border-radius:var(--r-1);white-space:nowrap;}
 .pagehead .seg a:hover{color:var(--ink);background:var(--hover);text-decoration:none;}
-.pagehead .seg a.on{background:var(--raised);color:var(--ink);font-weight:var(--fw-strong);box-shadow:var(--shadow-pill);}
+.pagehead .seg a.on{background:var(--seg-on);color:var(--ink);font-weight:var(--fw-strong);box-shadow:var(--shadow-pill);}
 .screenwait{color:var(--ink-3);padding:24px 0;}
 .screenerr{margin:16px 20px;padding:10px 14px;border:1px solid var(--bad);border-radius:var(--r-2);background:color-mix(in srgb,var(--bad) 10%,transparent);color:var(--ink);}
 
@@ -396,12 +402,12 @@ main.forbidden p:last-child{margin:0;}
 .liblist{flex:1;min-height:0;overflow:auto;outline:none;}
 
 /* a day head (only in the 最近 order): the day's word, then its date when the word is not already the date; no counts */
-.lgroup{height:100%;box-sizing:border-box;display:flex;align-items:flex-end;gap:10px;padding:0 16px 8px;background:var(--paper);border-bottom:1px solid var(--rule);}
+.lgroup{height:52px;box-sizing:border-box;display:flex;align-items:flex-end;gap:10px;padding:0 16px 8px;background:var(--paper);border-bottom:1px solid var(--rule);}
 .lday{font-size:var(--fs-head);font-weight:var(--fw-strong);color:var(--ink);}
 .ldate{font-size:var(--fs-cap);color:var(--ink-3);}
 
 /* a session row: the agent, then two lines — the title, then entry · project · marks */
-.lrow{height:100%;cursor:pointer;color:inherit;text-decoration:none;border-bottom:1px solid var(--rule);}
+.lrow{min-height:40px;box-sizing:border-box;padding-top:7px;padding-bottom:7px;cursor:pointer;color:inherit;text-decoration:none;border-bottom:1px solid var(--rule);}
 .lrow:hover{background:var(--hover);}
 .lrow:focus-visible{outline:2px solid var(--action);outline-offset:-2px;}
 .lrow.sel{background:var(--action-wash);box-shadow:inset 3px 0 0 var(--action);}
@@ -410,7 +416,7 @@ main.forbidden p:last-child{margin:0;}
 .lhn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lmain{min-width:0;display:flex;flex-direction:column;gap:2px;}
 .lt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:var(--fs-body);font-weight:var(--fw-strong);}
-/* the marks never wrap (the row has a fixed height): they end in … and the line's title holds the full text */
+/* the marks never wrap (a row has one line or two): they end in … and the line's title holds the full text */
 .lsub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-3);font-size:var(--fs-cap);}
 .lsub:empty{display:none;}
 .lmark+.lmark::before{content:'·';margin:0 6px;}
@@ -427,7 +433,7 @@ main.forbidden p:last-child{margin:0;}
 
 /* narrow screens: the agent column narrows, its name always stays (ending in … at worst), the marks still end in … (1.8 §窄屏) */
 @media(max-width:820px){
-  .libhead,.lrow{grid-template-columns:128px minmax(0,1fr) 64px 84px;column-gap:10px;padding:0 12px;}
+  .libhead,.lrow{grid-template-columns:128px minmax(0,1fr) 64px 84px;column-gap:10px;padding-inline:12px;}
   .libtools,.libcap{padding:8px 12px;}
 }
 /* phone widths: no room for an agent column, so the title runs across the first line up to the last-active time, and the
@@ -529,7 +535,9 @@ a.ovtr:hover { background: var(--hover); }
     background:radial-gradient(700px 180px at 88% -30%,var(--scope-glow),transparent 70%),linear-gradient(165deg,var(--scope),var(--scope-2));}
   #saw{border-radius:16px 16px 0 0;margin-top:6px;padding:8px 12px 4px;user-select:none;overflow-x:clip;}
   #saw:has(+ #rails:empty){border-radius:16px;}
-  #saw::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;background:var(--brand-line);border-radius:16px 16px 0 0;pointer-events:none;}
+  /* the brand hairline is the panel's own top border: it follows the rounded corners and tapers into the sides */
+  #saw::before{content:"";position:absolute;inset:0;border-radius:inherit;border-top:2px solid transparent;background:var(--brand-line) border-box;
+    mask:linear-gradient(#000 0 0) padding-box exclude,linear-gradient(#000 0 0) border-box;pointer-events:none;}
   .sawrow{display:flex;align-items:flex-end;gap:1px;height:74px;cursor:pointer;position:relative;}
   .bar{flex:1 1 0;min-width:2px;position:relative;opacity:.62;border-radius:2px 2px 0 0;transition:opacity .1s;display:flex;flex-direction:column-reverse;overflow:hidden;}
   .bar>span{display:block;width:100%;}
@@ -545,9 +553,9 @@ a.ovtr:hover { background: var(--hover); }
   .ct-other{background:repeating-linear-gradient(45deg,var(--dimmer) 0 2px,transparent 2px 4px);}
   /* a call whose body was not shipped on this page (paged_out): composition UNKNOWN, not empty */
   .ct-unloaded{background:repeating-linear-gradient(45deg,var(--dim) 0 3px,transparent 3px 6px);opacity:.55;}
-  .barlegend{display:block;font-size:var(--fs-chart);color:var(--dim);white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis;} /* one row: the keys that do not fit end in an ellipsis, all of them in the title */
-  .barlegend i{width:8px;height:8px;border-radius:2px;display:inline-block;margin:0 2px 0 6px;vertical-align:middle;}
-  .barlegend i:first-child{margin-left:0;}
+  .barlegend{display:flex;flex-wrap:wrap;gap:2px 8px;font-size:var(--fs-chart);color:var(--dim);min-width:0;}
+  .barlegend>span{white-space:nowrap;}
+  .barlegend i{width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:3px;vertical-align:middle;}
   .bar.cost{background:var(--dim);}
   .bar.cost>span{display:none;}
   /* the cost view keeps a failed step's bar red (1.3 §视图切换: 失败步照主轨画矮柱 + ×) — .bar.cost must not paint over it */
@@ -616,12 +624,11 @@ a.ovtr:hover { background: var(--hover); }
   .ovbrush .ovh{position:absolute;top:-1px;bottom:-1px;width:7px;cursor:col-resize;background:var(--accent);opacity:.55;}
   .ovh-l{left:-1px;border-radius:2px 0 0 2px;} .ovh-r{right:-1px;border-radius:0 2px 2px 0;}
   .ovbrush .ovh:hover{opacity:.9;}
-  /* one line at any width: a part that does not fit is cut with an ellipsis and keeps its words in its title */
-  .sawlegend{display:flex;gap:12px;font-size:var(--fs-chart);color:var(--dim);margin-top:3px;flex-wrap:nowrap;white-space:nowrap;align-items:center;min-width:0;}
-  .sawlegend>span{min-width:0;overflow:hidden;text-overflow:ellipsis;}
-  .sawlegend>#viewswitch,.sawlegend>#viewrange{flex:none;}
-  #complegend{display:flex;gap:6px;align-items:center;}
-  #complegend>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;}
+  /* never cut: a part that does not fit the line wraps; a swatch never parts from its name */
+  .sawlegend{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:var(--fs-chart);color:var(--dim);margin-top:3px;align-items:center;min-width:0;}
+  .sawlegend>span{min-width:0;}
+  .sawlegend>#viewswitch,.sawlegend>#viewrange{flex:none;white-space:nowrap;}
+  #complegend{display:flex;flex-wrap:wrap;gap:2px 6px;align-items:center;}
   /* shared timeline grid: fixed left gutter (track titles) | aligned plotting lane (point 3) */
   #saw,#rails{--gut:140px;--barcap:25px;}
   /* 1.3 §窗内步少时收窄: every detail lane narrows to (bars in the brush window) × the bar cap, left-aligned, so the /N
@@ -678,15 +685,18 @@ a.ovtr:hover { background: var(--hover); }
   #resexp{flex:1 1 0;min-height:0;overflow-y:auto;padding:9px 10px 30px;}
   /* the right page splits in halves (1.2 §回放台 B 布局): the raw panel reaches the page's bottom, never stops a third of the way down */
   #rawpanel{flex:1 1 0;min-height:0;overflow-y:auto;border-top:1px solid var(--border);background:var(--rail);padding:8px 10px;}
-  .rphd{font-family:var(--mono);font-size:var(--fs-cap);color:var(--fg);margin-bottom:4px;}
-  .rpk{font-size:var(--fs-cap);color:var(--dim);margin:2px 0;} .rpk b{color:var(--fg);font-family:var(--mono);}
+  /* the panel's head and row labels are words (sans, the strong weight); only keys, values and paths are mono (D77②) */
+  .rphd{font-size:var(--fs-cap);font-weight:var(--fw-strong);color:var(--fg);margin-bottom:4px;}
+  .rpk{font-size:var(--fs-cap);color:var(--dim);margin:2px 0;} .rpk b{color:var(--fg);}
+  .rpkv{display:inline-block;max-width:100%;} /* a key and its value wrap as one */
+  .rpk code{font-family:var(--mono);font-size:var(--fs-cap);}
   .rpcost b{color:var(--amber);}
   /* D14 花费保真标:虚线徽章 = 非线上事实,本地估价(可编辑单价) */
   .rpempty{font-size:var(--fs-cap);color:var(--dimmer);}
   .viewname{cursor:pointer;} .viewname:hover{text-decoration:underline;color:var(--fg);}
   .viewbtn{cursor:pointer;opacity:.45;font-size:var(--fs-cap);margin-left:4px;} .viewbtn:hover{opacity:1;}
   .rawpre{font-family:var(--mono);font-size:var(--fs-cap);line-height:1.45;white-space:pre-wrap;word-break:break-word;color:var(--dim);margin:5px 0 0;}
-  .rpx{float:right;cursor:pointer;color:var(--dimmer);font-size:var(--fs-cap);border:1px solid var(--border);border-radius:5px;padding:0 5px;} .rpx:hover{color:var(--fg);}
+  .rpx{float:right;cursor:pointer;font-weight:var(--fw-regular);color:var(--dimmer);font-size:var(--fs-cap);border:1px solid var(--border);border-radius:5px;padding:0 5px;} .rpx:hover{color:var(--fg);}
   .resz{font-size:var(--fs-cap);color:var(--dimmer);margin:0 0 5px;}
   /* < 1200: the right page folds to one bottom line 「读过的文件 N · 原始数据 ▸」(1.2 §窄屏); opened it rises from the
      bottom at half height with 资源 and 原始数据 side by side. ≥ 1200 the bar is not drawn at all. */
@@ -1146,7 +1156,9 @@ a.ovtr:hover { background: var(--hover); }
 .crow-t{display:grid;grid-template-columns:16px 12px 28px minmax(0,1fr) fit-content(240px) auto;grid-template-rows:auto auto;column-gap:10px;align-items:center;min-height:58px;padding:9px 16px 9px 0;}
 .crow .gut{grid-column:1;grid-row:1 / 3;display:flex;justify-content:center;}
 .crow .nm{grid-column:2 / 5;grid-row:1 / 3;align-self:stretch;display:grid;grid-template-columns:subgrid;grid-template-rows:subgrid;align-items:center;border:0;background:none;color:var(--ink);font-size:var(--fs-body);font-weight:var(--fw-strong);text-align:left;cursor:pointer;padding:0;border-radius:var(--r-1);min-width:0;}
-.crow .nm .chev{grid-column:1;grid-row:1 / 3;color:var(--ink-3);font-size:var(--fs-cap);text-align:center;}
+.crow .nm .chev{grid-column:1;grid-row:1 / 3;justify-self:center;color:var(--ink-3);}
+/* a row with no icon (the service row): the triangle moves to the icon's place, next to its name */
+.crow .nm:not(:has(.hicon)) .chev{grid-column:2;justify-self:end;}
 .crow .nm .hicon{grid-column:2;grid-row:1 / 3;}
 .crow .nm .hicon,.crow .nm .hicon img,.crow .nm .hicon .hic-svg{width:28px;height:28px;}
 .crow .nm > :last-child{grid-column:3;grid-row:1;align-self:end;min-width:0;overflow-wrap:anywhere;}
@@ -1192,7 +1204,9 @@ a.ovtr:hover { background: var(--hover); }
 .hrcpt{font-size:var(--fs-cap);line-height:16px;color:var(--ink-2);text-align:right;max-width:200px;white-space:normal;}
 .hrcpt.bad{color:var(--bad);}
 .capfoot{margin:10px 4px 0;font-size:var(--fs-cap);color:var(--ink-3);}
-.capcopy{padding:2px 0 4px;}
+.capcopy{padding:8px 0 4px;}
+/* Copy diagnostics is an action of the row, so it is the kit's button, not the small copy inside 技术细节 */
+.capcopy .copybtn{padding:3px 12px;line-height:var(--lh);font-size:var(--fs-body);color:var(--ink);}
 
 /* the blocks under the table (本机网络环境 / 改动): a group starts with a hairline */
 .cblock{border-top:1px solid var(--rule);margin-top:24px;padding:12px 0 6px;}
@@ -1212,7 +1226,7 @@ a.ovtr:hover { background: var(--hover); }
 .lr .say{font-size:var(--fs-body);line-height:20px;min-width:0;text-wrap:pretty;}
 .lr.h .say,.lr.h .cnt{font-size:var(--fs-cap);color:var(--ink-3);}
 .lr .cnt{text-align:right;font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;}
-.lr .lgo{justify-self:end;border:0;background:none;color:var(--ink-3);font-size:var(--fs-cap);cursor:pointer;padding:0 2px;border-radius:var(--r-1);}
+.lr .lgo{display:inline-flex;align-items:center;justify-self:end;border:0;background:none;color:var(--ink-3);font-size:var(--fs-cap);cursor:pointer;padding:0 2px;border-radius:var(--r-1);}
 .lr .lgo:hover,.lr .lgo:focus-visible{color:var(--ink);}
 .lr .lx{grid-column:3 / 6;}
 .lr .lx[hidden]{display:none;}
@@ -1294,7 +1308,7 @@ a.ovtr:hover { background: var(--hover); }
 .dline.bad a{color:var(--bad);}
 
 /* 保存什么:the level control, its receipt, the clipped rule list (title carries all of it) */
-.ctable td{vertical-align:top;}
+.ctable td{vertical-align:middle;} /* the name, the counts, the glyph and the switch share one centre line */
 .ctable td.lv{white-space:nowrap;}
 .ctable .busy{margin-left:8px;}
 .ctable .crcpt{margin-top:4px;font-size:var(--fs-cap);color:var(--ink-2);white-space:normal;max-width:320px;}
@@ -1336,7 +1350,6 @@ a.ovtr:hover { background: var(--hover); }
    media query via host.mjs; 1.10 §一件事只说一处). */
 
 /* ── the traffic table (also the host page's caption / states) ─────────────────────────────────────────────────── */
-.page.traf{padding:14px 28px 56px;}
 .tcap{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 18px;padding:2px 0 8px;font-size:var(--fs-cap);color:var(--ink-2);}
 .cap-item{white-space:nowrap;}
 .tcap [data-note]{white-space:normal;flex:1 1 320px;min-width:0;}
@@ -1358,6 +1371,8 @@ a.trow.hi{background:var(--hover);}
 .trow.thead{min-height:28px;font-size:var(--fs-cap);font-weight:var(--fw-strong);color:var(--ink-3);border-top:0;border-bottom:1px solid var(--rule);}
 .trow.ttotal{font-weight:var(--fw-strong);border-top:1px solid var(--rule-2);}
 .trow .gut{width:0;}
+/* .cell here is a table cell, not a block cell (cells.css gives .cell an uneven margin that lifts it off the row's line) */
+.trow .cell,.hhead .cell,.hrow .cell{margin:0;}
 .trow .nm{display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;white-space:nowrap;}
 .trow .nmname{overflow:hidden;text-overflow:ellipsis;}
 .trow .cell-host{min-width:0;}
@@ -1382,7 +1397,7 @@ a.trow.hi{background:var(--hover);}
 }
 
 /* ── the host page ────────────────────────────────────────────────────────────────────────────────────────────────── */
-.thost{display:flex;flex-direction:column;height:100%;min-height:0;padding:14px 28px 0;}
+.thost{display:flex;flex-direction:column;height:100%;min-height:0;padding:14px 32px 0;}
 .thost .pagehead{margin-bottom:0;}
 .tbody{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 440px;column-gap:0;}
 .thost.drawer .tbody{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;}
