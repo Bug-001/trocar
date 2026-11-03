@@ -4,6 +4,7 @@
 // deps (src/query/worker.mjs argv[3]); depsFile writes that module for one world. Exports only.
 import fs from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { tmpDir } from './tmp.mjs'
 import crypto from 'node:crypto'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
@@ -78,4 +79,18 @@ export function depsFile(w, platform, trust = null) {
   const world = { platform, home: w.home, env: w.env, dirs: w.ctx ? w.ctx.dirs : null, trust }
   fs.writeFileSync(file, `import { boardDeps } from ${JSON.stringify(import.meta.url)}\nexport default await boardDeps(${JSON.stringify(world)})\n`)
   return file
+}
+
+const CLI_MAIN = new URL('../../src/cli/main.mjs', import.meta.url).href
+/** `trocar <args>` run as bin/trocar.mjs runs it (runCli, its exit code), on the empty machine of depsFile for a temp `home` on this host's own
+ *  platform, as the board's face reads it: `status` / `doctor` ask no OS tool on any host (0.1 §3). → { args, env }: node's arguments, and an
+ *  environment whose HOME / USERPROFILE are `home` and that sets no proxy (none of this process's `*_proxy` variables), `env` laid over it
+ *  (an undefined value leaves that variable out). */
+export function cliOnEmptyMachine(home, args, env = {}) {
+  const deps = pathToFileURL(depsFile({ home, env: { HOME: home, USERPROFILE: home } }, process.platform)).href
+  const own = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/_proxy$/i.test(k)))
+  return {
+    args: ['--input-type=module', '-e', `import { runCli } from ${JSON.stringify(CLI_MAIN)}\nconst { default: deps } = await import(${JSON.stringify(deps)})\nprocess.exitCode = await runCli(process.argv.slice(1), { deps })`, ...args],
+    env: { ...own, HOME: home, USERPROFILE: home, ...env },
+  }
 }

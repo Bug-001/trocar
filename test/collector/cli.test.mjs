@@ -8,16 +8,14 @@ import { appendEvent } from '../../src/collector/core/events.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { newManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
-import { fileURLToPath } from 'node:url'
 import { runSetupHelper } from '../../src/collector/cli.mjs'
 import { formatStatus } from '../../src/cli/status-text.mjs'
 import { runCli as runOne } from '../../src/cli/main.mjs'
 import { runDaemonCli } from '../../src/cli/daemon.mjs'
 import { DAEMON_ALREADY_UP, DAEMON_ENDPOINT_BUSY } from '../../src/collector/core/control.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { osStubs } from '../helpers/os-stubs.mjs' // on a Mac the real bin's status asks launchd and the keychain (read-only): stubs answer, 0.1 §3
+import { cliOnEmptyMachine } from '../helpers/board-world.mjs' // the CLI as the bin runs it, on an empty machine: status asks no OS tool on any host, 0.1 §3
 
-const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
 const NO_EXEC = () => ({ status: 0, stdout: '', stderr: '' }) // and `ss` / `ip`, which it reads for the topology, find nothing (0.1 §3)
 // `trocar daemon` refuses before install and writes nothing (1.6 §5.2), so a test that drives the daemon records an install
 // the daemon may start on first (manifest.mjs daemonMayStart: an install record and a root in custody).
@@ -293,10 +291,10 @@ test('cli: the Linux installer\'s own refusals leave the command name to the com
   assert.doesNotMatch(message, /^trocar setup-helper:/)
 })
 
-test('cli: the real bin runs `status` without a runtime dir on a HOME with nothing installed (→ 0: nothing is wrong, and nothing was written)', () => {
+test('cli: the CLI runs `status` without a runtime dir on a HOME with nothing installed (→ 0: nothing is wrong, and nothing was written)', () => {
   const home = tmpDir('trocar-cli-bin-')
-  const env = { ...process.env, HOME: home, ...osStubs().env }; delete env.XDG_RUNTIME_DIR // status reads the disk: never the operator's own
-  const r = spawnSync(process.execPath, [BIN, 'status'], { env, encoding: 'utf8' })
+  const c = cliOnEmptyMachine(home, ['status'], { XDG_RUNTIME_DIR: undefined }) // status reads the disk: never the operator's own
+  const r = spawnSync(process.execPath, c.args, { env: c.env, encoding: 'utf8' })
   assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /^No harness is set up for capture yet\./); assert.equal(r.stderr, '')
   assert.deepEqual(fs.readdirSync(home), [], 'read-only')
   assert.ok(formatStatus({ ...STATUS, agents: [] }).includes('agents: none running'))
@@ -304,7 +302,6 @@ test('cli: the real bin runs `status` without a runtime dir on a HOME with nothi
     { key: 'engine/lookup-miss', count: 4, last_ts: 'T2', last: { ts: 'T2', event: 'failure', where: 'engine', code: 'lookup-miss', reason: 'no original destination', suppressed: 3 } }]
   const health = { generated_at: 'T3', summary: { state: 'failing', n: 3 }, collector: { installed: true, daemon: { state: 'running' }, conditions: [{ kind: 'untrusted', pid: 11, agent: 'claude-code', since: 'T1', reason: 'config-after-start' }], failures: groups, expected: {} }, raw: { problems: [] }, read: { errors: [], truncated: false } }
   assert.match(formatStatus({ ...STATUS, health }), /capture health: 3 problem\(s\)[^\n]*\nconditions now:\n  now: untrusted pid 11 claude-code since T1: config-after-start\nproblems in the last 24 hours \(2 kind\(s\)\):\n  T1 agent-untrusted pid 11 claude-code: restart it\n  T2 problem \(engine\/lookup-miss\): no original destination \(x4 in 24 h\)$/, 'status prints the durable failure records by kind (D38)')
-  assert.ok(path.isAbsolute(BIN))
   fs.rmSync(home, { recursive: true, force: true })
 })
 
