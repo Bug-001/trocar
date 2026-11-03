@@ -20,7 +20,6 @@ export const NO_HOST = 'host not recorded'
 export const NEW = 'new'
 export const NEW_TIP = 'This agent never connected to this host before these 24 hours (inferred from the records counted in the stats)'
 export const FIRST_SEEN_TIP = 'From the records counted in the stats'
-export const UNCLASSIFIED_TIP = 'This agent\'s traffic cannot be split further yet'
 export const UNRECORDED = 'not recorded'
 export const UNRECORDED_N = (n) => `${n} not recorded`
 export const ONLY_THESE = 'these rows only'
