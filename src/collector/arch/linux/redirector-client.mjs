@@ -153,13 +153,14 @@ export function createRedirectorClient({
     }
   }
 
-  function fail(reason, extra = {}, { quiet = false } = {}) {
+  // `code`: what start() rejects with — ENOENT when there is no helper at its path (the daemon then runs without one, 4.6 「助手还没装」)
+  function fail(reason, extra = {}, { quiet = false, code = 'loader-down' } = {}) {
     if (down) return
     down = true
     stopHeartbeat()
     for (const { reject } of pending.values()) reject(Object.assign(new Error('redirector loader down: ' + reason), { code: 'loader-down' }))
     pending.clear()
-    if (readyReject) { readyReject(new Error('redirector loader down: ' + reason)); readyResolve = readyReject = null }
+    if (readyReject) { readyReject(Object.assign(new Error('redirector loader down: ' + reason), { code })); readyResolve = readyReject = null }
     if (quiet) return // an orderly close: no `down`, so no helper-down failure (the daemon's own daemon-stop records the stop)
     emitter.emit('down', { reason, ...extra, ...(stderrTail.length ? { stderr: [...stderrTail] } : {}) })
   }
@@ -215,7 +216,7 @@ export function createRedirectorClient({
     })
     child.on('error', (err) => {
       if (err && err.code === 'ENOENT') {
-        fail(`redirector helper not found at ${resolvedBinary}; install it once per machine with "sudo trocar setup-helper"`)
+        fail(`redirector helper not found at ${resolvedBinary}; install it once per machine with "sudo trocar setup-helper"`, {}, { code: 'ENOENT' })
       } else {
         fail('spawn error: ' + (err && err.message ? err.message : String(err)))
       }

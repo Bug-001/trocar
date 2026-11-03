@@ -244,6 +244,7 @@ export function lockKeeper({ file, fields, segmentOf = () => null }) {
       segment = seg; written = true // only now: a failed write must be retried, not remembered as done
     },
     release() { released = true; fs.rmSync(file, { force: true }) },
+    name(extra) { Object.assign(fields, extra); written = false; this.refresh() }, // a field that changed (the helper started later): the next write carries it
   }
 }
 
@@ -497,6 +498,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       onUnmatched: (a) => failure('tracker', coded(new Error(`pid ${a.pid} (${a.exe}) matches ${a.candidates.join(' and ')}: claimed by two harness descriptors, so it is judged as neither and never watched; its connections go direct`), 'ambiguous'), { pid: a.pid, candidates: a.candidates }),
       onError: (e, at) => failure('tracker', Object.assign(new Error(`pid ${at.pid} (${at.phase}): ${errText(e)}${at.phase === 'judge' ? '; it is not watched, its connections go direct' : ''}`), { code: (e && e.code) || (at.phase === 'judge' ? 'judge-error' : 'unwatch-error') }), at) })
     let helperDown = null
+    let helperUp = false // the helper came up in this run: one that dies after that is never started again (4.6 §事件)
+    let lock = null
     let sw = null
 
     engine = createEngine({
@@ -545,7 +548,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     async function ensureReady() {
       syncTracker() // which harnesses are on, and their policy, before the live processes are judged
       if (!caState.ok) throw new Error(`the collector CA is unusable (${caState.which}: ${caState.reason}); not attaching, agent connections go direct`)
-      if (helperDown) throw new Error(`the redirector helper is down (${helperDown}); restart the collector`)
+      if (helperDown && helperUp) throw new Error(`the redirector helper is down (${helperDown}); restart the collector`)
+      if (helperDown) await startHelper() // never up in this run (not installed at start, 4.6 「助手还没装」): asked again now; still missing = its own helper-down says why
       if (v6Held) throw new Error(`${v6Held}; refusing to attach so no IPv6 connection is steered to it (M8)`)
       const { proto } = redirector.helperInfo()
       if (proto !== redirector.expectedProto) throw new Error(`helper speaks protocol ${proto}, this daemon expects ${redirector.expectedProto}; run "sudo trocar setup-helper" (G2)`)
@@ -593,12 +597,21 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // unwatch is unanswered (no beat: the steering lapses and agents go direct, fail open). A loop that was stalled past the kernel's window therefore
     // resumes only after what the operator turned off in the meantime is off. A reload that just took something away has run the reconcile itself.
     redirector.setBeatGate(async () => { const r = await reload(); const clean = r.turnedOff.length ? tracker.stuckPids().length === 0 : await settle(); return clean && sw.anyOn() })
-    await redirector.start()
-    await redirector.configure(port)
+    // the helper up and pointed at the engine. Not installed (no file at its path: a script install's first `install`, 4.6 「助手还没装」) is no
+    // reason to exit: helper-down is on disk with the reason, nothing is attached (agents go direct), and the next `on` asks again (ensureReady).
+    // A helper that is there and fails to start is still a start failure.
+    async function startHelper() {
+      await redirector.start()
+      await redirector.configure(port)
+      const was = helperDown
+      helperDown = null; helperUp = true
+      if (was) { sw.clearDown(); if (lock) lock.name({ helper_pid: redirector.helperInfo().pid }); event({ event: 'helper-ok', reason: 'the capture helper is installed now and started; capture can be switched on' }) }
+    }
+    try { await startHelper() } catch (e) { if (!e || e.code !== 'ENOENT') throw e }
     // the lock (4.6 §控制面, D-25): pid + start time + boot id, so a reused pid or a reboot is never "running"; its
     // mtime is refreshed every second, so a stuck daemon shows as unresponsive within 5 s — read from disk alone
     const me = identity(process.pid)
-    const lock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, helper_pid: redirector.helperInfo().pid, engine_port: port, socket: sock }, segmentOf: () => store.currentSegment })
+    lock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, helper_pid: redirector.helperInfo().pid, engine_port: port, socket: sock }, segmentOf: () => store.currentSegment })
     const refreshLock = lock.refresh
     refreshLock()
     // the lock must name the live segment before that segment's first byte (D60, invariant 2): the store calls this

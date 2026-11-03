@@ -191,6 +191,7 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     else if (r.event === 'agent-exit') { untrusted.delete(r.pid); clearNeg(String(r.pid)) }
     else if (r.event === 'negative-cache-cleared') clearNeg(String(r.neg_key ?? r.pid))
     else if (r.event === 'helper-down') degraded = { kind: 'degraded', ...pick(r), since: r.ts }
+    else if (r.event === 'helper-ok') degraded = null // a helper not installed at start came up later (4.6 「助手还没装」)
     else if (r.event === 'helper-version-mismatch') version = { kind: 'helper-version', ...pick(r), since: r.ts }
     else if (r.event === 'switch') mismatch = r.actual && r.actual !== 'unknown' && r.desired !== r.actual ? { kind: 'state-mismatch', ...pick(r), since: r.ts } : null
     else if (r.event === 'failure' && r.code === 'state-mismatch') mismatch = { kind: 'state-mismatch', ...pick(r), since: r.ts }
