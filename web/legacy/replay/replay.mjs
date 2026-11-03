@@ -799,13 +799,14 @@ function openDesk(ctx, route0, makeView = legacyView) {
   const onRpKey = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRp() } }
   const onRetry = (e) => { if (e.target.closest && e.target.closest('[data-retry]')) poll() } // the failure state's Retry
   const offs = []
+  // a view whose scope is its own (the new desk's Scope.tsx) frames with no `saw`: its rows are not wired here
   function wire() {
     const rpbar = $('#rpbar'), { ctxwin, rails } = E
     rails.addEventListener('mouseover', onRailHover)
     rpbar.addEventListener('click', onRp); rpbar.addEventListener('keydown', onRpKey)
     ctxwin.addEventListener('click', onRetry)
     offs.push(() => { rpbar.removeEventListener('click', onRp); rpbar.removeEventListener('keydown', onRpKey); ctxwin.removeEventListener('click', onRetry); rails.removeEventListener('mouseover', onRailHover) },
-      wireTimeline(E.saw, s), wireRails(rails, s), wireCtxWin(ctxwin, s), wireOutline(E.ctxnav, s), wireResources(E.resexp, s),
+      E.saw ? wireTimeline(E.saw, s) : () => {}, wireRails(rails, s), wireCtxWin(ctxwin, s), wireOutline(E.ctxnav, s), wireResources(E.resexp, s),
       wireRawPanel(E.rawpanel, s), wireSessionHead(E.deskhead, s), wireStepBar(E.stepbar, s), initLayout(root))
   }
 
