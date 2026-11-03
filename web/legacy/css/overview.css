@@ -39,7 +39,7 @@
 .ovitem.more { color: var(--dim); font-size: var(--fs-cap); }
 .ovsubj { font-size: var(--fs-strong); color: var(--dim); flex: none; }
 .hicon { display: inline-flex; width: 16px; height: 16px; flex: none; }
-.hicon svg { width: 16px; height: 16px; }
+.hicon svg, .hicon img { width: 16px; height: 16px; }
 
 /* the per-agent table: a grid of link rows (the whole row is one <a>, 1.7 §统计); agent column holds the chip */
 .hscroll { overflow-x: auto; margin-top: 8px; }

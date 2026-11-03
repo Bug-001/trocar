@@ -13,7 +13,6 @@ import { formatHash, parseHash, documentTitle } from '../legacy/core/router.mjs'
 import { initKeys } from '../legacy/core/keys.mjs'
 import { installCopy, copyBtn } from '../legacy/core/dom.mjs'
 import { esc } from '../legacy/core/fmt.mjs'
-import { watchHarnessIcons } from '../legacy/core/chips.mjs'
 import { toast, installUi } from '../legacy/core/ui.mjs'
 import { BRAND } from '../legacy/core/icons.mjs'
 import { UNKNOWN_ROUTE, FORBIDDEN } from '../legacy/labels/shell.mjs'
@@ -56,7 +55,6 @@ installUi(document) // the popover / disclosure contract, once for the whole boa
 installCopy(document.body)
 // Esc closes the bottom drawer (the screens fill #detail and toggle .open)
 document.addEventListener('v2:escape', () => { document.getElementById('detail')?.classList.remove('open') })
-watchHarnessIcons(document.body) // every agent icon box any screen, menu or drawer draws is filled here, once it is in the page
 
 // the tab icon: the brand mark (core/icons.mjs BRAND) in the theme's own colours — an icon file cannot read CSS variables, so the
 // tokens are resolved here and the mark is serialized into the <link rel="icon"> index.html holds (no icon file, no colour literal)

@@ -179,7 +179,7 @@ export async function shoot(page, name, { width, theme }) {
  *    both ways (a disclosure title under a copy button, a cell note running into the next column, a date over a switch);
  *  - `cut`: text cut off by a box that clips it with no ellipsis (a hidden-overflow ancestor that is not a scroll container, horizontally);
  *  - `untitled`: text truncated with an ellipsis whose full text is nowhere on hover (no `title` on it or above it);
- *  - `emptyIcons`: an agent icon box of a known agent that is still empty. Overlays (dialogs, popovers, toasts) float by design and are left out. */
+ *  - `emptyIcons`: an agent icon box of a known agent with no <img>, or whose image failed to decode. Overlays (dialogs, popovers, toasts) float by design and are left out. */
 export const layoutFaults = (page, root = '#content') => page.evaluate((root) => {
   const R = document.querySelector(root)
   const out = { overlap: [], cut: [], untitled: [], emptyIcons: [] }
@@ -236,7 +236,12 @@ export const layoutFaults = (page, root = '#content') => page.evaluate((root) =>
       break
     }
   }
-  for (const el of R.querySelectorAll('[data-hicon]')) if (el.getAttribute('data-hicon') !== '?' && shown(el) && !el.querySelector('svg')) out.emptyIcons.push(el.getAttribute('data-hicon'))
+  // a known agent's box holds its <img>, and the image decoded (K-11: a file that fails to load leaves an empty box, so it is counted here)
+  for (const el of R.querySelectorAll('[data-hicon]')) {
+    if (el.getAttribute('data-hicon') === '?' || !shown(el)) continue
+    const img = el.querySelector('img')
+    if (!img || (img.complete && img.naturalWidth === 0)) out.emptyIcons.push(el.getAttribute('data-hicon'))
+  }
   for (const k of Object.keys(out)) out[k] = [...new Set(out[k])]
   return out
 }, root)

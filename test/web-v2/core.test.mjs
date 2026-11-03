@@ -1,7 +1,8 @@
 // The small pure modules other screens import by name: chips, labels, classes, store.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { CHIP, HARNESS_ORDER, harnessKey, harnessName, harnessIcon, harnessRaw, chipFor, UNIDENTIFIED, UNKNOWN_ICON, sanitizeHarnessSvg } from '../../web/legacy/core/chips.mjs'
+import { harnessName, harnessIcon, harnessIconUrl, harnessRaw, chipFor, UNIDENTIFIED, UNKNOWN_ICON } from '../../web/legacy/core/chips.mjs'
+import { HARNESS_REGISTRY, readIdOf } from '../../src/off/harness-names.mjs'
 import { L } from '../../web/legacy/core/labels.mjs'
 import * as labelsAgg from '../../web/legacy/core/labels.mjs'
 import * as labelsCommon from '../../web/legacy/labels/common.mjs'
@@ -11,44 +12,35 @@ import { parseHash, formatHash } from '../../web/legacy/core/router.mjs'
 import * as domMod from '../../web/legacy/core/dom.mjs'
 import * as safeMountMod from '../../web/legacy/shell/safemount.mjs'
 
-test('chips: each read-side id (test/web-v2/harness-seam.test.mjs holds them to the server table) has its icon file, aliases folded onto them', () => {
-  for (const id of HARNESS_ORDER) { assert.ok(CHIP[id], `CHIP.${id}`); assert.match(CHIP[id].icon, /^[\w-]+\.svg$/) }
-  assert.deepEqual(['claude-code', 'deepseek-dsh', 'kimi-code', 'z-code', 'codex', 'mystery'].map(harnessKey), ['cc', 'dsh', 'kimi', 'zcode', 'codex', 'mystery'])
-  assert.equal(harnessName('deepseek-dsh'), harnessName('dsh')); assert.equal(harnessIcon('z-code'), harnessIcon('zcode'))
-})
-test('chips: an unknown or missing harness never borrows another one\'s name or icon', () => {
-  assert.equal(harnessName(null), UNIDENTIFIED); assert.equal(harnessName('mystery'), UNIDENTIFIED)
-  assert.equal(harnessName('constructor'), UNIDENTIFIED) // not an inherited property
-  assert.equal(harnessRaw('mystery'), 'mystery'); assert.equal(harnessRaw(null), null); assert.equal(harnessRaw('cc'), null)
-  for (const id of [null, '', 'mystery']) assert.match(harnessIcon(id), /hicon-unknown/, 'the reserved dashed glyph')
-  assert.match(harnessIcon('mystery'), /stroke-dasharray/, 'dashed, like no harness\' mark')
-  assert.equal(harnessIcon('mystery'), harnessIcon(null), 'one unknown glyph, not one per stranger')
-  assert.match(chipFor({ harness: 'mystery' }), /data-hicon="\?"/); assert.ok(chipFor(null).includes(UNIDENTIFIED))
-})
-test('chips: a known harness icon is an empty 16px box until the loader fills it — never the unknown glyph', () => {
-  assert.equal(harnessIcon('cc'), '<span class="hicon" data-hicon="cc" aria-hidden="true"></span>')
-  assert.ok(!harnessIcon('cc').includes('dasharray'))
-})
-test('chips: the chip is the same DOM for every harness — icon + name; entry point and inference are quiet marks', () => {
-  const s = chipFor({ harness: 'codex', entrypoint: 'cli', harness_inferred: true, session_synthesized: true })
-  assert.ok(s.startsWith(harnessIcon('codex'))); assert.ok(s.includes('<span class="chipname">Codex</span>'))
-  for (const id of HARNESS_ORDER) { // same structure: icon span + one name span, only their content differs
-    const c = chipFor({ harness: id })
-    assert.match(c, /^<span class="hicon"/); assert.equal((c.match(/<span class="chipname">/g) || []).length, 1, id)
+// generated over the registry (D76): both spellings of a row resolve to its name and its file; an unknown id never borrows either
+const imgSrc = (html) => (html.match(/<img\b[^>]*\ssrc="([^"]*)"/) || [])[1]
+test('chips: every registry row, by its code id and its read id, shows its name and its own icon file as an <img>', () => {
+  for (const r of HARNESS_REGISTRY) for (const x of [r.id, readIdOf(r)]) {
+    assert.equal(harnessName(x), r.name, x)
+    assert.ok(harnessIconUrl(x) && harnessIconUrl(x).endsWith('/' + r.icon), x)
+    assert.equal(imgSrc(harnessIcon(x)), harnessIconUrl(x), x)
+    assert.ok(!harnessIcon(x).includes('dasharray'), `${x}: the dashed square is the unknown agent's alone`)
   }
 })
-test('chips: the icon whitelist keeps scripts, handlers, urls and foreign content out, and lets the drawn files through', () => {
-  assert.equal(sanitizeHarnessSvg('<svg viewBox="0 0 16 16"><path d="M1 1"/></svg>'), '<path d="M1 1"/>')
-  for (const bad of [
-    '<svg onload="x()"><path/></svg>',
-    '<svg><script>alert(1)</script></svg>',
-    '<svg><foreignObject><body/></foreignObject></svg>',
-    '<svg><a href="http://x">y</a></svg>',
-    '<svg><path style="fill:url(#x)"/></svg>',
-    '<svg><image href="x.png"/></svg>',
-    '<svg><text>hi</text></svg>',
-    'not svg at all',
-  ]) assert.equal(sanitizeHarnessSvg(bad), null, bad)
+test('chips: an unknown or missing harness never borrows another one\'s name or icon', () => {
+  for (const id of [null, '', 'mystery', 'constructor']) {
+    assert.equal(harnessName(id), UNIDENTIFIED, String(id))
+    assert.match(harnessIcon(id), /hicon-unknown/, String(id))
+    assert.ok(harnessIcon(id).includes(UNKNOWN_ICON), String(id))
+    assert.ok(!harnessIcon(id).includes('<img'), String(id))
+    assert.equal(harnessIconUrl(id), null, String(id))
+    assert.equal(harnessRaw(id), id == null || id === '' ? null : id, String(id))
+  }
+  assert.match(chipFor({ harness: 'mystery' }), /data-hicon="\?"/); assert.ok(chipFor(null).includes(UNIDENTIFIED))
+})
+test('chips: the chip is the same DOM for every harness — icon + name; entry point and inference are quiet marks', () => {
+  const shape = (s) => s.replace(/<img[^>]*>/g, '<img>').replace(/(data-hicon=")[^"]*"/g, '$1"').replace(/>[^<]*</g, '><')
+  const shapes = new Set(HARNESS_REGISTRY.map((r) => shape(chipFor({ harness: readIdOf(r), entrypoint: 'cli', harness_inferred: true, session_synthesized: true }))))
+  assert.equal(shapes.size, 1, [...shapes].join('\n'))
+  for (const r of HARNESS_REGISTRY) {
+    const c = chipFor({ harness: r.id })
+    assert.ok(c.startsWith(harnessIcon(r.id))); assert.ok(c.includes(`<span class="chipname">${r.name}</span>`), r.id)
+  }
 })
 test('labels and classes keep their contract', () => {
   assert.equal('PROPOSED_ENDPOINT' in L, false, 'the mock-era proposed-endpoint label is gone')

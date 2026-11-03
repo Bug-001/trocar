@@ -1,6 +1,7 @@
 // web/vite.config.mjs — builds the board (web/) into the committed src/web/board/, which the daemon serves (4.4 §静态面, D75).
 // Fixed names, no hashes: the build is committed and a rebuild of unchanged sources is byte-identical. CSS is not minified, so the
 // cascade the hand-written sheets define is the one the page gets.
+import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 
@@ -36,11 +37,22 @@ const noticesNoEmail = {
   },
 }
 
+// The harness icons (D76) live beside the registry in src/off/harness-icons/; every file there but its SOURCES.md ships at
+// assets/harness/<file>, byte for byte, which is where core/chips.mjs harnessIconUrl() points.
+const ICONS = new URL('../src/off/harness-icons/', import.meta.url)
+const harnessIcons = {
+  name: 'trocar-harness-icons',
+  generateBundle() {
+    for (const f of fs.readdirSync(ICONS).filter((f) => f !== 'SOURCES.md').sort())
+      this.emitFile({ type: 'asset', fileName: 'assets/harness/' + f, source: fs.readFileSync(new URL(f, ICONS)) })
+  },
+}
+
 export default {
   root: fileURLToPath(new URL('.', import.meta.url)),
   base: './',
   publicDir: 'public',
-  plugins: [react(), firstAhead, noticesNoEmail],
+  plugins: [react(), firstAhead, noticesNoEmail, harnessIcons],
   build: {
     outDir: fileURLToPath(new URL('../src/web/board/', import.meta.url)),
     emptyOutDir: true,

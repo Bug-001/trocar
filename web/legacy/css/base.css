@@ -270,6 +270,6 @@ kbd{font-family:var(--mono);background:var(--sunk);border:1px solid var(--rule-2
 
 /* the agent chip (1.2 §agent chip): a 16px icon box + the name; same DOM for every harness, unknown included */
 .hicon{display:inline-grid;place-items:center;width:16px;height:16px;flex:none;vertical-align:-3px;}
-.hicon .hic-svg{width:16px;height:16px;display:block;}
+.hicon .hic-svg, .hicon img{width:16px;height:16px;display:block;}
 .chipname{white-space:nowrap;}
 .chipep,.chipsyn{font-size:var(--fs-cap);color:var(--ink-2);margin-left:6px;white-space:nowrap;}
