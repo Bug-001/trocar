@@ -1,4 +1,4 @@
-// screens/library/model.mjs — the session library as data (1.8): filters ↔ hash params, the filtered and sorted list, the
+// screens/library/model.mjs — the session library as data (1.8): filters to and from hash params, the filtered and sorted list, the
 // virtual list's keyed entries, the row view model with its marks, the menus, the caption facts and the stand-in states.
 // Framework-free (D75②): no DOM, no timers, no HTML; LibraryScreen.tsx only renders what this returns. Agent names come from
 // core/chips.mjs only (invariant 3); a field the server does not carry is detected by key presence and its element stays out —
