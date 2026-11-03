@@ -12,7 +12,9 @@
     background:radial-gradient(700px 180px at 88% -30%,var(--scope-glow),transparent 70%),linear-gradient(165deg,var(--scope),var(--scope-2));}
   #saw{border-radius:16px 16px 0 0;margin-top:6px;padding:8px 12px 4px;user-select:none;overflow-x:clip;}
   #saw:has(+ #rails:empty){border-radius:16px;}
-  #saw::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;background:var(--brand-line);border-radius:16px 16px 0 0;pointer-events:none;}
+  /* the brand hairline is the panel's own top border: it follows the rounded corners and tapers into the sides */
+  #saw::before{content:"";position:absolute;inset:0;border-radius:inherit;border-top:2px solid transparent;background:var(--brand-line) border-box;
+    mask:linear-gradient(#000 0 0) padding-box exclude,linear-gradient(#000 0 0) border-box;pointer-events:none;}
   .sawrow{display:flex;align-items:flex-end;gap:1px;height:74px;cursor:pointer;position:relative;}
   .bar{flex:1 1 0;min-width:2px;position:relative;opacity:.62;border-radius:2px 2px 0 0;transition:opacity .1s;display:flex;flex-direction:column-reverse;overflow:hidden;}
   .bar>span{display:block;width:100%;}
@@ -28,9 +30,9 @@
   .ct-other{background:repeating-linear-gradient(45deg,var(--dimmer) 0 2px,transparent 2px 4px);}
   /* a call whose body was not shipped on this page (paged_out): composition UNKNOWN, not empty */
   .ct-unloaded{background:repeating-linear-gradient(45deg,var(--dim) 0 3px,transparent 3px 6px);opacity:.55;}
-  .barlegend{display:block;font-size:var(--fs-chart);color:var(--dim);white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis;} /* one row: the keys that do not fit end in an ellipsis, all of them in the title */
-  .barlegend i{width:8px;height:8px;border-radius:2px;display:inline-block;margin:0 2px 0 6px;vertical-align:middle;}
-  .barlegend i:first-child{margin-left:0;}
+  .barlegend{display:flex;flex-wrap:wrap;gap:2px 8px;font-size:var(--fs-chart);color:var(--dim);min-width:0;}
+  .barlegend>span{white-space:nowrap;}
+  .barlegend i{width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:3px;vertical-align:middle;}
   .bar.cost{background:var(--dim);}
   .bar.cost>span{display:none;}
   /* the cost view keeps a failed step's bar red (1.3 §视图切换: 失败步照主轨画矮柱 + ×) — .bar.cost must not paint over it */
@@ -99,12 +101,11 @@
   .ovbrush .ovh{position:absolute;top:-1px;bottom:-1px;width:7px;cursor:col-resize;background:var(--accent);opacity:.55;}
   .ovh-l{left:-1px;border-radius:2px 0 0 2px;} .ovh-r{right:-1px;border-radius:0 2px 2px 0;}
   .ovbrush .ovh:hover{opacity:.9;}
-  /* one line at any width: a part that does not fit is cut with an ellipsis and keeps its words in its title */
-  .sawlegend{display:flex;gap:12px;font-size:var(--fs-chart);color:var(--dim);margin-top:3px;flex-wrap:nowrap;white-space:nowrap;align-items:center;min-width:0;}
-  .sawlegend>span{min-width:0;overflow:hidden;text-overflow:ellipsis;}
-  .sawlegend>#viewswitch,.sawlegend>#viewrange{flex:none;}
-  #complegend{display:flex;gap:6px;align-items:center;}
-  #complegend>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;}
+  /* never cut: a part that does not fit the line wraps; a swatch never parts from its name */
+  .sawlegend{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:var(--fs-chart);color:var(--dim);margin-top:3px;align-items:center;min-width:0;}
+  .sawlegend>span{min-width:0;}
+  .sawlegend>#viewswitch,.sawlegend>#viewrange{flex:none;white-space:nowrap;}
+  #complegend{display:flex;flex-wrap:wrap;gap:2px 6px;align-items:center;}
   /* shared timeline grid: fixed left gutter (track titles) | aligned plotting lane (point 3) */
   #saw,#rails{--gut:140px;--barcap:25px;}
   /* 1.3 §窗内步少时收窄: every detail lane narrows to (bars in the brush window) × the bar cap, left-aligned, so the /N
@@ -161,15 +162,18 @@
   #resexp{flex:1 1 0;min-height:0;overflow-y:auto;padding:9px 10px 30px;}
   /* the right page splits in halves (1.2 §回放台 B 布局): the raw panel reaches the page's bottom, never stops a third of the way down */
   #rawpanel{flex:1 1 0;min-height:0;overflow-y:auto;border-top:1px solid var(--border);background:var(--rail);padding:8px 10px;}
-  .rphd{font-family:var(--mono);font-size:var(--fs-cap);color:var(--fg);margin-bottom:4px;}
-  .rpk{font-size:var(--fs-cap);color:var(--dim);margin:2px 0;} .rpk b{color:var(--fg);font-family:var(--mono);}
+  /* the panel's head and row labels are words (sans, the strong weight); only keys, values and paths are mono (D77②) */
+  .rphd{font-size:var(--fs-cap);font-weight:var(--fw-strong);color:var(--fg);margin-bottom:4px;}
+  .rpk{font-size:var(--fs-cap);color:var(--dim);margin:2px 0;} .rpk b{color:var(--fg);}
+  .rpkv{display:inline-block;max-width:100%;} /* a key and its value wrap as one */
+  .rpk code{font-family:var(--mono);font-size:var(--fs-cap);}
   .rpcost b{color:var(--amber);}
   /* D14 花费保真标:虚线徽章 = 非线上事实,本地估价(可编辑单价) */
   .rpempty{font-size:var(--fs-cap);color:var(--dimmer);}
   .viewname{cursor:pointer;} .viewname:hover{text-decoration:underline;color:var(--fg);}
   .viewbtn{cursor:pointer;opacity:.45;font-size:var(--fs-cap);margin-left:4px;} .viewbtn:hover{opacity:1;}
   .rawpre{font-family:var(--mono);font-size:var(--fs-cap);line-height:1.45;white-space:pre-wrap;word-break:break-word;color:var(--dim);margin:5px 0 0;}
-  .rpx{float:right;cursor:pointer;color:var(--dimmer);font-size:var(--fs-cap);border:1px solid var(--border);border-radius:5px;padding:0 5px;} .rpx:hover{color:var(--fg);}
+  .rpx{float:right;cursor:pointer;font-weight:var(--fw-regular);color:var(--dimmer);font-size:var(--fs-cap);border:1px solid var(--border);border-radius:5px;padding:0 5px;} .rpx:hover{color:var(--fg);}
   .resz{font-size:var(--fs-cap);color:var(--dimmer);margin:0 0 5px;}
   /* < 1200: the right page folds to one bottom line 「读过的文件 N · 原始数据 ▸」(1.2 §窄屏); opened it rises from the
      bottom at half height with 资源 and 原始数据 side by side. ≥ 1200 the bar is not drawn at all. */

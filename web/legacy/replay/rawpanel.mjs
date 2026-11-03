@@ -64,14 +64,18 @@ function keysOf(ks) {
   if (Array.isArray(ks)) return ks
   return Object.entries(ks || {}).map(([key, v]) => (v && typeof v === 'object' ? { key, ...v } : { key, ref: v }))
 }
-const refRow = (x, label) => x.ref
-  ? `<code class="nbk" data-nbk="${esc(x.ref)}" style="cursor:pointer">${esc(label)}</code>${x.chars != null ? ' ' + kf(x.chars) + ' characters' : ''}`
-  : `<code>${esc(label)}</code> <span class="metabadge" title="${esc(x.why || '')}">${esc(x.why ? 'no bytes to read back' : W.NO_RAW_REPLY)}</span>`
+// one row item, kept whole on a line (a key never parts from its value); `word` = the label is our words (sans), not a literal key
+const refRow = (x, label, { word = false, value = '' } = {}) => {
+  const tag = word ? 'span' : 'code'
+  return `<span class="rpkv">${x.ref
+    ? `<${tag} class="nbk" data-nbk="${esc(x.ref)}" style="cursor:pointer">${esc(label)}</${tag}>${x.chars != null ? ' ' + kf(x.chars) + ' characters' : ''}`
+    : `<${tag}>${esc(label)}</${tag}> <span class="metabadge" title="${esc(x.why || '')}">${esc(x.why ? 'no bytes to read back' : W.NO_RAW_REPLY)}</span>`}${value}</span>`
+}
 function rawReplyHtml(d, w) {
   const rs = refsOf(d.respRefs)
   if (!rs.length) return ''
   const ws = w.transport === 'ws'
-  return `<div class="rpk" title="The captured reply bytes — each piece can be read back from the raw record"><b>${esc(W.RAW_REPLY)}</b> · ${rs.map((x, j) => (ws ? refRow(x, W.rawReplyNth(j + 1)) : refRow({ ...x, chars: null }, x.chars != null ? `${kf(x.chars)} characters` : '—'))).join(' · ')}<div class="nbkbody"></div></div>`
+  return `<div class="rpk" title="The captured reply bytes — each piece can be read back from the raw record"><b>${esc(W.RAW_REPLY)}</b> · ${rs.map((x, j) => (ws ? refRow(x, W.rawReplyNth(j + 1), { word: true }) : refRow({ ...x, chars: null }, x.chars != null ? `${kf(x.chars)} characters` : '—', { word: true }))).join(' · ')}<div class="nbkbody"></div></div>`
 }
 // the server ships `value` only for a short scalar (2.6 §A: the threshold lives in nonBlockKeysOf); the panel never judges length
 const scalarShown = (v) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
@@ -81,7 +85,7 @@ function paramsHtml(c, d) {
   if (!ks.length) return `<div class="rpk"><b>${esc(W.REQ_PARAMS)}</b> · ${esc(W.NO_PARAMS)}</div>`
   // a value the server shipped is shown as is (mono); a key without one keeps its length — the bytes open as a cell
   const row = (k) => (scalarShown(k.value)
-    ? `${refRow({ ref: k.ref, chars: null, why: k.note }, k.key)} <span class="mono">${esc(String(k.value))}</span>`
+    ? refRow({ ref: k.ref, chars: null, why: k.note }, k.key, { value: ` <span class="mono">${esc(String(k.value))}</span>` })
     : refRow({ ref: k.ref, chars: k.chars, why: k.note }, k.key))
   return `<div class="rpk" title="Request keys that are not context blocks — kept verbatim in the raw record"><b>${esc(W.REQ_PARAMS)}</b> · ${ks.map(row).join(' · ')}<div class="nbkbody"></div></div>`
 }
@@ -171,7 +175,7 @@ export function renderResourceView(el, s) {
       `<div class="rpk ${proven ? 'rpok' : 'rpwarn'}">${esc(tier)}</div>`
   } else if (b) body = `<div class="pinbody" data-bi="${flat.indexOf(b)}"></div>`
   else body = `<div class="rpk">${esc(W.RES_NOT_FOUND)}</div>`
-  el.innerHTML = `<div class="rphd">${esc(path)} <span class="rpx" id="rpx" role="button" tabindex="0">${esc(W.BACK_TO_RAW)}</span></div>${body}`
+  el.innerHTML = `<div class="rphd"><span class="mono">${esc(path)}</span> <span class="rpx" id="rpx" role="button" tabindex="0">${esc(W.BACK_TO_RAW)}</span></div>${body}`
   const pb = el.querySelector('.pinbody')
   if (pb && b) fillBody(s.ctx.api, pb, b)
 }
@@ -181,7 +185,7 @@ export function wireRawPanel(el, s) {
     if (e.target.closest('#rpx')) { s.viewPin = null; renderRawPanel(el, s); return }
     const t = e.target.closest('[data-nbk]')
     if (!t || !t.dataset.nbk) return
-    const bc = t.parentElement.querySelector('.nbkbody')
+    const bc = t.closest('.rpk')?.querySelector('.nbkbody')
     if (bc) fillBody(s.ctx.api, bc, { text_ref: t.dataset.nbk })
   }
   el.addEventListener('click', onClick)
