@@ -5,9 +5,11 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { Scope } from './Scope'
 import { reactView } from './view'
 import { scopeModel } from './models.mjs'
-import { deskOf } from '../../../../test/web-v2/desk-world.mjs'
+import { deskOf as deskWorld } from '../../../../test/web-v2/desk-world.mjs'
 import { buildLanes, anchorLane } from '../../../legacy/replay/lanes.mjs'
 import { problemSteps } from '../../../legacy/replay/timeline.mjs'
+
+const deskOf = deskWorld as (lanes: object[], answer?: object) => any
 
 afterEach(() => { cleanup(); document.body.replaceChildren() })
 
