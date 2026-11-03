@@ -135,14 +135,20 @@ export const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:[^@/]*@)?(?:127\.0\
 /** One group's line: its harness when the group names one (D38: for whom), the shared sentence, then (when the sentence stands for a known code) the
  *  record's own reason — the CLI has no technical details to fold it into. §3.5 · §1.1⑥: a backquoted span of a reason is a command to copy (the
  *  helper's `sudo … setup-helper`, §3.2): the line briefs the whole reason with each span said as the pointer (`the line below`, `the lines below`
- *  for two or more), the pointer put back at the end when the cut took it, and each command follows whole on its own line; a reason with no span is
- *  briefed as it is. */
+ *  for two or more); when it does not fit, the clause holding the last pointer stays whole and the words before it are cut (only a clause too long by
+ *  itself is cut, the pointer then put back at the end), and each command follows whole on its own line; a reason with no span is briefed as it is. */
 const COMMAND = /`([^`]+)`/g
 const commandsOf = (reason) => [...String(reason || '').matchAll(COMMAND)].map((m) => squashed(m[1]))
-const reasonOf = (reason) => {
+const reasonOf = (reason, max = 100) => {
   const n = commandsOf(reason).length, pointer = n > 1 ? 'the lines below' : 'the line below'
-  const whole = squashed(String(reason || '').replace(COMMAND, pointer)), head = briefText(whole)
-  return !n || head.slice(0, -3).includes(pointer) || head === whole ? head : `${briefText(whole, 100 - pointer.length - 1)} ${pointer}`
+  const whole = squashed(String(reason || '').replace(COMMAND, pointer)), head = briefText(whole, max)
+  if (!n || head === whole) return head
+  // the clause that holds the last pointer says what the command is for: it stays whole, the words before it are cut (§3.5)
+  const at = whole.lastIndexOf(pointer), start = Math.max(0, ...[...whole.slice(0, at).matchAll(/[;:.]\s/g)].map((m) => m.index + m[0].length))
+  const clause = whole.slice(start), room = max - clause.length - 1
+  const lead = whole.slice(0, start).trimEnd(), cut = lead.slice(0, room - 2).lastIndexOf(' ') // at a word boundary, or no word at all (§1.1⑦)
+  if (start > 0 && room >= 3) return `${cut > 0 ? lead.slice(0, cut).replace(/[\s,;:]+$/, '') : ''}... ${clause}`
+  return head.slice(0, -3).includes(pointer) ? head : `${briefText(whole, max - pointer.length - 1)} ${pointer}`
 }
 const failureLine = (g0) => { const g = { ...g0, reason: reasonOf(g0.reason) }; const r = failureWord(g.where, g.code, g.harness || '') && briefText(g.reason); const s = r ? `${failureBrief(g)}: ${r}` : failureBrief(g); return g.harness ? `${g.harness}: ${s}` : s } // no nested brackets (§1.1②): a reason has its own
 

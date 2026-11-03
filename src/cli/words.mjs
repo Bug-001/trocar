@@ -158,7 +158,7 @@ export const FAILURE_WORDS = Object.freeze({
   // failure events that carry no code of their own (the group's code is the event)
   failure: 'a problem was recorded',
   'agent-untrusted': "a running agent does not trust trocar's certificate yet",
-  'helper-down': "trocar's helper stopped",
+  'helper-down': "trocar's helper is not running",
   'helper-version-mismatch': 'the capability helper is the wrong version',
   'attach-failed': 'capture could not be attached',
   'detach-failed': 'capture could not be detached',
