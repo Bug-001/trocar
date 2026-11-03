@@ -49,6 +49,7 @@ test('real kernel: a client that spawns children while its connections are answe
   let child = null
   const server = net.createServer((s) => {
     const peer = { address: s.remoteAddress, port: s.remotePort }
+    s.on('error', () => {}) // the client destroys each socket on its answer and is killed at the end: a reset here is expected, not a failure
     s.once('data', async () => { answers.push(await ownerOfSocket({ exec, peer, socktablePath: helper })); s.end('x') })
   })
   server.listen(0, '127.0.0.1')
