@@ -18,6 +18,20 @@ const go = async (page, hash, sel) => {
 }
 // a fresh mount of the library (via another screen), so a routed /api/sessions answer is what it starts from
 const remount = async (page, sel) => { await go(page, '#/settings/appearance', '[data-theme-choice]'); await go(page, '#/sessions', sel) }
+// a session's title comes from the usage sidecar, which the query worker fills after the first `sessions` answer (3.5 §谁执行它
+// `later`): the first answer of a fresh home has every title null and the library polls again only after INTERVAL.sessions. The rows
+// rows are checked and shot with the titles the face settles on: wait (≤ 10 s) until two face answers 500 ms apart carry the same titles, then remount.
+async function settledTitles(b) {
+  const titles = async () => JSON.stringify(((await b.get('sessions', {})).doc?.sessions || []).map((x) => x.title))
+  let prev = await titles()
+  for (const t0 = Date.now(); Date.now() - t0 < 10000;) {
+    await new Promise((r) => setTimeout(r, 500))
+    const now = await titles()
+    if (now === prev) break
+    prev = now
+  }
+  await remount(b.page, '.lrow'); await b.page.waitForLoadState('networkidle')
+}
 
 const layout = (page) => page.evaluate(() => {
   const txt = (e) => (e ? e.textContent : '')
@@ -40,7 +54,7 @@ for (const width of [1280, 1024]) {
     test(`(7)(14) the library and its empty state at ${width} in ${theme}: one window control, no head numbers, titled truncation`, { skip }, async () => {
       const b = await withBoard({ bytes: BYTES, width, theme, chromium: gate.chromium })
       try {
-        await go(b.page, '#/sessions', '.lrow'); await b.page.waitForLoadState('networkidle')
+        await go(b.page, '#/sessions', '.lrow'); await settledTitles(b)
         const l = await layout(b.page)
         assert.equal(l.hscroll, false); assert.deepEqual(l.untitled, [])
         assert.equal(l.segs, 1); assert.equal(l.segInHead, 1)
