@@ -22,7 +22,8 @@ test('poller: after a failure no read happens before the back-off is due; it dou
   const t2 = backoffMs(1, 1500) + backoffMs(2, 1500)
   r.at(t2 - 1); await r.p.poll(); assert.equal(r.reads(), 2, 'the second wait is longer')
   r.at(t2); await r.p.poll(); assert.equal(r.reads(), 3, 'a success')
-  await r.p.poll(); assert.equal(r.reads(), 4, 'after a success the next tick reads at once')
+  r.at(t2 + 1499); await r.p.poll(); assert.equal(r.reads(), 3, 'the success that ends the back-off: no tick before one interval')
+  r.at(t2 + 1500); await r.p.poll(); assert.equal(r.reads(), 4, 'one interval after it, the tick reads')
 })
 
 test('poller: a reader\'s own action bypasses the back-off', async () => {
@@ -32,16 +33,16 @@ test('poller: a reader\'s own action bypasses the back-off', async () => {
   await r.p.poll(); assert.equal(r.reads(), 2)
 })
 
-test('poller: one read in flight; a tick during it re-reads after a success, never after a failure', async () => {
-  for (const [first, want] of [[{}, 2], [{ ok: false }, 1]]) {
+test('poller: one read in flight; a tick during it is dropped, a reader\'s call during it reads once more after it', async () => {
+  for (const [first, reader, want] of [[{}, false, 1], [{ ok: false }, false, 1], [{}, true, 2], [{ ok: false }, true, 2]]) {
     let release, reads = 0
     const answers = [first, {}, {}]
     const p = createPoller({ base: 1500, now: () => 0, run: () => { reads++; const a = answers.shift(); return reads === 1 ? new Promise((res) => { release = () => res(a) }) : Promise.resolve(a) } })
     const done = p.poll()
-    await p.poll(); await p.poll() // ticks while the first read is in flight: no second concurrent read
+    await p.poll(reader); await p.poll(reader) // calls while the first read is in flight: no second concurrent read
     assert.equal(reads, 1)
     release(); await done
-    assert.equal(reads, want, JSON.stringify(first))
+    assert.equal(reads, want, `${JSON.stringify(first)} reader ${reader}`)
   }
 })
 
@@ -50,7 +51,7 @@ test('poller: while idle() holds (hidden tab, a session not listed) a timer tick
   const p = createPoller({ base: 1500, now: () => 0, idle: () => idle, run: async () => { reads++; return {} } })
   await p.poll(); await p.poll(); assert.equal(reads, 0, 'idle: the timer reads nothing')
   await p.poll(true); assert.equal(reads, 1, 'a reader poll reads')
-  idle = false; await p.poll(); assert.equal(reads, 2, 'no longer idle: the next tick reads')
+  idle = false; await p.poll(); assert.equal(reads, 1, 'no longer idle: not before one interval after the last read')
 })
 
 test('poller: after a slow success a timer tick waits 3x that read; a quick read keeps the plain interval', async () => {
@@ -66,7 +67,8 @@ test('poller: after a slow success a timer tick waits 3x that read; a quick read
   let t = 0, reads = 0
   const D = Math.floor(base / 3) - 1
   const p = createPoller({ base, now: () => t, run: async () => { reads++; t += D; return {} } })
-  await p.poll(); await p.poll(); assert.equal(reads, 2, 'a quick read: the next timer tick (one interval later) reads')
+  await p.poll(); t = base - 1; await p.poll(); assert.equal(reads, 1, 'a quick read: no tick before one interval')
+  t = base; await p.poll(); assert.equal(reads, 2, 'a quick read: the tick one interval after its start reads')
 })
 
 test('poller: a tick during a slow read does not chain a read before the 3x gap', async () => {
@@ -111,6 +113,26 @@ test('4.4 live-poll: after a slow success without pending no timer read comes be
     for (let t = D; t < 3 * D; t += base / 2) { r.at(t); await r.p.poll() }
     assert.equal(r.reads(), 1, `D=${D}`)
     r.at(3 * D); await r.p.poll(); assert.equal(r.reads(), 2)
+  }
+})
+
+// 4.4 live-poll 「每 1.5 s 一轮 … head 带 pending 时下一轮仍在 1.5 s 后」: the started poller's one schedule. The first round is the
+// reader's (the desk's attach) and answers `pending` after a long wait, whatever phase it ends at; no two rounds that were not a reader's
+// start less than `base` apart, and none waits more than `base` past its due time.
+test('poller start(): after a long pending round no two timer rounds come less than base apart', async (t) => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'] }); t.after(() => mock.timers.reset())
+  const base = INTERVAL.session
+  for (const took of [7188, 7500, base - 1, 3 * base + 24]) {
+    const starts = []
+    const p = createPoller({ base, run: () => { starts.push(Date.now()); return new Promise((res) => setTimeout(() => res(starts.length === 1 ? { pending: { done: 1, total: 9 } } : {}), starts.length === 1 ? took : 25)) } })
+    p.start(); p.poll(true)
+    for (let ms = 0; ms < took + 6 * base; ms += 5) { mock.timers.tick(5); await new Promise((r) => setImmediate(r)) }
+    p.stop()
+    assert.ok(starts.length >= 6, `took ${took}: ${starts.length} rounds`)
+    for (let i = 1; i < starts.length; i++) {
+      const gap = starts[i] - starts[i - 1], due = i === 1 ? base : Math.max(base, 75)
+      assert.ok(gap >= due && gap <= Math.max(due, i === 1 ? took : 0) + 10, `took ${took}: round ${i + 1} ${gap} ms after round ${i}`)
+    }
   }
 })
 

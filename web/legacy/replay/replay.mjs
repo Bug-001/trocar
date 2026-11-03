@@ -588,11 +588,10 @@ function openDesk(ctx, route0) {
   const idle = () => (typeof document !== 'undefined' && document.hidden) || s.notListed
   const makePoller = () => { const key = sessionKey()
     return createPoller({ base: POLL_MS, now: () => api.now(), alive: () => !s.dead && host != null && key === sessionKey(), idle,
-      run: async () => { try { return await pollOnce() } catch (e) { if (s.dead || key !== sessionKey() || (e && e.name === 'AbortError')) return; console.error(e); return { ok: false } } } }) }
+      run: async () => { loadPricing().catch((e) => console.error(e)); try { return await pollOnce() } catch (e) { if (s.dead || key !== sessionKey() || (e && e.name === 'AbortError')) return; console.error(e); return { ok: false } } } }) }
   const poller = makePoller()
   function poll(byReader = true) {
     if (s.dead || (!byReader && idle())) return
-    loadPricing().catch((e) => console.error(e))
     return poller.poll(byReader)
   }
   s.poll = () => poll(true)
@@ -745,7 +744,7 @@ function openDesk(ctx, route0) {
   // the lane's width changes with the window and with the right-page divider: watch both. Only a window that no longer fits is touched.
   const refit = () => { if (s.anchor && alive() && fitView()) { renderSaw(E.saw, s); renderRails(E.rails, s); watchRails(); renderOverview(E.saw, s) } }
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(refit) : null
-  let timer = null, unwireDetail = null, scrolls = []
+  let unwireDetail = null, scrolls = []
 
   renderEmpty('')
 
@@ -763,7 +762,7 @@ function openDesk(ctx, route0) {
     window.addEventListener('resize', refit)
     if (ro) ro.observe($('#sawrow').closest('.tkrow'))
     watchRails()
-    timer = setInterval(() => poll(false), POLL_MS) // the desk keeps reading; 「跟随最新」 only decides whether the playhead follows growth
+    poller.start() // the desk keeps reading on the poller's one schedule; 「跟随最新」 only decides whether the playhead follows growth
     if (hasStep(route)) update(route)
     // a step left mid-wait draws now; the URL names the drawn step at once (syncUrl). Answers applied while away were not drawn: all areas then
     if (s.anchor) { if (missed) { missed = false; renderAll() } else paintPlayhead() }
@@ -775,7 +774,7 @@ function openDesk(ctx, route0) {
   function detach() {
     if (!host) return
     scrolls = SCROLLED.map((sel) => [sel, $(sel) ? $(sel).scrollTop : 0])
-    clearInterval(timer); timer = null
+    poller.stop()
     if (busyTimer != null) { clearTimeout(busyTimer); busyTimer = null }
     jumps.clear()
     setScreenKeys(null)
