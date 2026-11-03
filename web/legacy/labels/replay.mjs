@@ -439,3 +439,7 @@ export const CALL_FAILED_WORD = 'call failed'
 export const COMP_NOT_COMPUTED = 'The breakdown has not been computed yet'
 export const PEAK_CTX_TIP = 'The largest real input total of a main thread step (input + cache read + cache write)'
 export const SAMPLED_TIP = 'Sampled: one point per bucket, not one per step (the strip is a map, not verbatim data)'
+// the desk's boundaries (1.2 §回放台 B 布局)
+export const MAINDIV_TIP = 'Drag to resize the outline · double-click to reset'
+export const DIVIDER_TIP = 'Drag to resize the right page · double-click to reset'
+export const RPBAR_TIP = 'Expand the right page'
