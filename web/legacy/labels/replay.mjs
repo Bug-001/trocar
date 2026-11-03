@@ -127,7 +127,7 @@ export const SESSION_INFO_LABEL = 'About this session'
 export const MULTIPLE_AGENTS = 'several agents'
 export const TITLE_FROM_META = 'The title comes from the agent\'s own records, not from captured content'
 export const TITLE_FROM_WIRE = 'The title is taken from the captured requests'
-export const TITLE_UNTITLED_TIP = 'No usable title; the start time comes from the record of the first step'
+export const TITLE_UNTITLED_TIP = 'No usable title was recorded for this session'
 export const MULTIPLE_AGENTS_TIP = 'Records of several agents share this session id'
 export const PROJECT = 'project'
 export const GUESS = 'inferred'
@@ -415,3 +415,27 @@ export const KEY_LIST = Object.freeze([
   ['Esc', 'Close the topmost layer'],
   ['?', 'This list'],
 ])
+
+// ── the new desk's models (web/src/screens/replay/models.mjs): the words its session head, step head and scope read ──
+// 1.2 §会话头 开始时间: the word is START_LINE; the tip gives the full moment
+export const startTip = (stamp) => `First step at ${stamp}`
+// 1.3 §提问刻度: the prompts row's name — K and P known · only P · only K · neither
+export const askRowName = (k, p) => (k != null && p != null ? `Prompt ${k} / ${p}` : p != null ? count(p, 'prompt') : k != null ? `Prompt ${k}` : 'Prompts')
+// 2.2 §步头: the upper word of the three read-out buttons (the cache one is CACHE_TITLE)
+export const CTX_BTN = 'Context'
+export const COST_BTN = 'Estimate'
+// 1.3 §排布: a content type's share of the playhead step in the main track's name cell (an estimate)
+export const approxShare = (pct) => `≈ ${pct}%`
+export const approxUsd = (v) => `≈ ${v}`
+export const COST_NONE = '≈ —'
+export const PRICES_LOADING = 'The price table is loading'
+// 2.2 §「缓存」按钮: the four usage numbers' names, the closed set a popover may show
+export const USAGE_WORD = Object.freeze({ read: 'cache read', create: 'cache write', fresh: 'uncached', out: 'output' })
+export const TOKENS_WORD = 'tokens'
+// 1.3 §主轨: a bar's hover, the axis captions, the peak's hover
+export const barTip = (main, n, what) => `${main ? 'Step' : 'Call'} ${n}${what ? ` · ${what}` : ''}`
+export const axisNo = (main, n) => `${main ? 'Step' : 'Call'} ${n}`
+export const CALL_FAILED_WORD = 'call failed'
+export const COMP_NOT_COMPUTED = 'The breakdown has not been computed yet'
+export const PEAK_CTX_TIP = 'The largest real input total of a main thread step (input + cache read + cache write)'
+export const SAMPLED_TIP = 'Sampled: one point per bucket, not one per step (the strip is a map, not verbatim data)'
