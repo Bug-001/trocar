@@ -23,7 +23,7 @@ import { isInteractive, confirm } from '../off/io.mjs'
 import { commandNamed, usageLine } from './commands.mjs'
 import { pairs as pairsAt, wrap } from './text.mjs'
 // every block of label-value rows an update prints (the plan, the result — maybe from another process) shares one value column
-const ROW = Object.freeze({ code: 'Code', collector: 'Collector', offOn: 'Off and on again', again: 'Capturing again', switchedOn: 'Switched on again' })
+const ROW = Object.freeze({ version: 'Code', collector: 'Collector', offOn: 'Off and on again', again: 'Capturing again', switchedOn: 'Switched on again' })
 const pairs = (rows) => pairsAt(rows, { label: Math.max(...Object.values(ROW).map((l) => l.length)) })
 import { runOffCli } from '../off/main.mjs'
 import { runOnCli } from './on.mjs'
@@ -100,7 +100,7 @@ async function update({ io, env, home, platform, deps, flags }) {
   /** The code is the newest and the daemon runs another one (or says none): only the one step that replaces it (§5.5). */
   const daemonOnly = async (running) => {
     const runs = running || 'code it does not name'
-    const g = await gate([[ROW.code, `${r.from} (already the newest)`], [ROW.collector, `runs ${runs}, so it is replaced by ${r.from}`]],
+    const g = await gate([[ROW.version, `${r.from} (already the newest)`], [ROW.collector, `runs ${runs}, so it is replaced by ${r.from}`]],
       [{ what: 'daemon', detail: `the collector runs ${runs}, so it is stopped and started again on ${r.from}` }], CUT)
     if (g !== null) return g
     return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from: r.from, on: [] }, only: 'daemon' })
@@ -113,7 +113,7 @@ async function update({ io, env, home, platform, deps, flags }) {
     const to = codeId(root)
     r.from = waiting.from || r.from; r.to = to; r.harnesses = waiting.on // C.2: the receipt of the plan says what the finish does, --dry-run and a refused question included
     const replaced = (await daemonCode({ platform, dir, env, fs, deps })) !== to // as replaceDaemon judges it: a collector on this code is left running
-    const g = await gate([[ROW.code, `${r.from} -> ${to}`], [ROW.switchedOn, waiting.on.join(', ') || 'nothing was being captured']],
+    const g = await gate([[ROW.version, `${r.from} -> ${to}`], [ROW.switchedOn, waiting.on.join(', ') || 'nothing was being captured']],
       [{ what: 'finish', detail: `an update to ${to} is waiting to be finished: ${replaced ? 'the collector is replaced, ' : ''}install runs again${waiting.on.length ? `, and capture is switched on again for ${waiting.on.join(', ')}` : ''}`, harnesses: waiting.on }], replaced ? CUT : null, yes && env[HANDED_OVER] === '1')
     if (g !== null) return g
     return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting })
@@ -138,7 +138,7 @@ async function update({ io, env, home, platform, deps, flags }) {
     const on = harnessesOn({ home, fs })
     if (on.error) return no('state-unreadable', on.error)
     r.harnesses = on.ids
-    const g = await gate([[ROW.code, `${r.from} -> ${v} (installed with the install script)`], [ROW.offOn, on.ids.join(', ') || 'nothing is being captured']],
+    const g = await gate([[ROW.version, `${r.from} -> ${v} (installed with the install script)`], [ROW.offOn, on.ids.join(', ') || 'nothing is being captured']],
       [{ what: 'code', detail: `the code of this machine's trocar goes from ${r.from} to ${v}` },
         { what: 'harnesses', detail: on.ids.length ? `${on.ids.join(', ')}: switched off before the code changes and on again after it` : 'no agent is being captured, so none is switched off', harness: null, harnesses: on.ids }], COST)
     if (g !== null) return g
@@ -192,7 +192,7 @@ async function update({ io, env, home, platform, deps, flags }) {
     const on = harnessesOn({ home, fs })
     if (on.error) return no('state-unreadable', on.error)
     r.from = from || r.from; r.harnesses = on.ids // C.2: the receipt of the plan says what the finish does, --dry-run and a refused question included
-    const g = await gate([[ROW.code, `${from || 'code it does not name'} -> ${to} (installed with ${channel === 'npm' ? 'npm' : 'the install script'})`], [ROW.switchedOn, on.ids.join(', ') || 'nothing is being captured']],
+    const g = await gate([[ROW.version, `${from || 'code it does not name'} -> ${to} (installed with ${channel === 'npm' ? 'npm' : 'the install script'})`], [ROW.switchedOn, on.ids.join(', ') || 'nothing is being captured']],
       [{ what: 'finish', detail: `${why}${on.ids.length ? `, and capture is switched on again for ${on.ids.join(', ')}` : ''}`, harnesses: on.ids }], running !== to ? CUT : null) // replaceDaemon leaves a collector on this code running
     if (g !== null) return g
     try { writeHandover(handover, { from, on: on.ids }, fs) } catch (e) { return no('handover-unwritable', `this update could not be written down (${(e && e.message) || e}), so nothing was changed`) }
@@ -237,7 +237,7 @@ async function update({ io, env, home, platform, deps, flags }) {
     { what: 'code', detail: `the code of this machine's trocar goes from ${r.from} to ${r.to}` },
     { what: 'harnesses', detail: on.ids.length ? `${on.ids.join(', ')}: switched off before the code changes and on again after it` : 'no agent is being captured, so none is switched off', harness: null, harnesses: on.ids },
   ]
-  const g = await gate([[ROW.code, `${r.from} -> ${r.to}`], [ROW.offOn, on.ids.join(', ') || 'nothing is being captured']], planned, COST)
+  const g = await gate([[ROW.version, `${r.from} -> ${r.to}`], [ROW.offOn, on.ids.join(', ') || 'nothing is being captured']], planned, COST)
   if (g !== null) return g
 
   // 1 · (old code) off, and the names into the handover file — the new code switches on what this file names, nothing else (D67①)
