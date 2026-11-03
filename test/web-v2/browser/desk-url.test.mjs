@@ -50,12 +50,14 @@ test('1.2 #13 a following desk reloaded on a grown session lands on the newest s
     assert.equal(growth.left(), 0)
     const v = await view(page)
     assert.deepEqual(v, { n: m1, m: m1, follow: 'true', step: null })
-    // the chip turns following off: the drawn step is in the URL in the same task (1.2 §路由: a lone change), on the chip's path too
-    const off = await page.evaluate(() => {
+    // the chip turns following off: the drawn step is in the URL in the same task (1.2 §路由: a lone change), on the chip's path too;
+    // the chip itself is drawn by the next frame (the React desk paints on its commit)
+    const step = await page.evaluate(() => {
       document.querySelector('.sh-follow').click()
-      return { follow: document.querySelector('.sh-follow').getAttribute('aria-pressed'), step: new URLSearchParams(location.hash.split('?')[1] || '').get('step') }
+      return new URLSearchParams(location.hash.split('?')[1] || '').get('step')
     })
-    assert.deepEqual(off, { follow: 'false', step: String(m1) })
+    assert.equal(step, String(m1))
+    await until(page, () => document.querySelector('.sh-follow')?.getAttribute('aria-pressed') === 'false')
   } finally { await b.stop() }
 })
 
