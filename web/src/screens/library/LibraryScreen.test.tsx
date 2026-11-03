@@ -120,6 +120,7 @@ test('V1: across polls that add sessions above and change counts, a session keep
     expect(node.getAttribute('aria-current'), `poll ${i}`).toBe('true')
     expect(p.list.scrollTop, `poll ${i}`).toBe(40)
     expect(p.row(key(sess(`new${i - 1}`, 0, 0))), `poll ${i}`).not.toBeNull()
+    expect(node.querySelector('.ln')!.textContent, `poll ${i}: the changed count is drawn`).toBe(String(10 + 3 + i))
   }
 })
 
@@ -146,6 +147,40 @@ test('V3: a drag-select inside a row opens nothing, and the selection outlives a
   await poll()
   expect(document.getSelection()!.isCollapsed).toBe(false)
   expect(p.gos).toEqual([])
+})
+
+test('V3b: while a selection holds the rows, the head\'s read-at time stays with them; once it is gone, the next poll moves it', async () => {
+  lists = [(n) => [sess('a', 5 + n, 1)]]
+  const p = await mount()
+  const head = () => p.container.querySelector('#libhead .readat')!.textContent
+  const first = head()
+  expect(first).toBeTruthy()
+  const title = p.row(key(sess('a', 0, 0)))!.querySelector('.lt')!.firstChild!
+  const r = document.createRange(); r.setStart(title, 0); r.setEnd(title, 4)
+  document.getSelection()!.addRange(r)
+  document.dispatchEvent(new Event('selectionchange'))
+  await poll()
+  expect(served).toBe(2)
+  expect(head(), 'held with the rows').toBe(first)
+  expect(p.row(key(sess('a', 0, 0)))!.querySelector('.ln')!.textContent, 'the rows are held too').toBe('5')
+  document.getSelection()!.removeAllRanges()
+  document.dispatchEvent(new Event('selectionchange'))
+  await poll()
+  expect(head(), 'moves once nothing is held').not.toBe(first)
+})
+
+test('V8: each row is one link with no focusable inside, and its href reads back as the replay route of that session (id escaped)', async () => {
+  const ids = ['a"<b>', 'x y/z?#&', 'plain']
+  lists = [() => ids.map((id, i) => sess(id, 3, i + 1, { project_slug: `p${i}` }))]
+  const p = await mount()
+  const rows = [...p.list.querySelectorAll<HTMLAnchorElement>('.lrow')]
+  expect(rows.map((a) => a.tagName)).toEqual(ids.map(() => 'A'))
+  for (const [i, id] of ids.entries()) {
+    const a = rows.find((x) => x.dataset.key === `p${i}::${id}`)!
+    expect(a, id).toBeTruthy()
+    expect(a.querySelectorAll('a, button, input, select, textarea, [tabindex], [contenteditable]').length, id).toBe(0)
+    expect(parseHash(a.getAttribute('href')!), id).toMatchObject({ area: 'replay', screen: 'replay', project: `p${i}`, id })
+  }
 })
 
 test('V4: ↓ ↑ End write sel, Enter opens, / focuses the search, keys typed there do nothing; the agent menu is a menu of checkboxes', async () => {

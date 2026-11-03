@@ -38,7 +38,8 @@ export default function LibraryScreen({ route, router }: ScreenProps) {
   const [readAt, setReadAt] = useState<number | null>(null)
   if (q.data && !q.data.stored && q.dataUpdatedAt !== readAt) setReadAt(q.dataUpdatedAt)
   const err = q.error?.answer ?? null
-  const latest = useMemo(() => ({ data: stamp.data ?? null, err, at: stamp.at }), [stamp, err])
+  // the head's time is held with the rows it dates: a held answer keeps the time it was read at (1.2 §点击与选中文字 ③)
+  const latest = useMemo(() => ({ data: stamp.data ?? null, err, at: stamp.at, readAt }), [stamp, err, readAt])
   const { shown, ref: holdRef } = useSelectionHold(latest)
 
   const now = shown.at
@@ -119,7 +120,7 @@ export default function LibraryScreen({ route, router }: ScreenProps) {
 
   return (
     <div className="page">
-      <div id="libhead"><PageHead name={SCREEN_NAME.library} readAt={readAt} tools={<WindowSeg value={f.window} set={set} />} /></div>
+      <div id="libhead"><PageHead name={SCREEN_NAME.library} readAt={shown.readAt} tools={<WindowSeg value={f.window} set={set} />} /></div>
       <div className="lib">
         <LibraryTools f={f} all={all} set={set} onClear={clear} inputRef={qRef} />
         <Caption data={q.data ?? null} err={err} listAt={q.dataUpdatedAt} now={q.dataUpdatedAt} onRetry={retry} />

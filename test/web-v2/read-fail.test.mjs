@@ -10,6 +10,7 @@ import * as hostPage from '../../web/legacy/traffic/host.mjs'
 import { logModel } from '../../web/src/screens/capture/log-model.mjs'
 import { HEALTH_READ } from '../../web/legacy/labels/common.mjs'
 import { captureVerdict } from '../../web/legacy/core/capture-verdict.mjs'
+import { capShotMaker, emptyBoardState } from '../../web/src/screens/library/model.mjs'
 import { screenErrorHtml } from '../../web/legacy/shell/safemount.mjs'
 import { hidesReason, reasonsWith, visibleOf } from './visible.mjs'
 import { trafficWorld } from './traffic-world.mjs'
@@ -124,5 +125,21 @@ test('capture log and the shell keep a failed read\'s reason out of the visible 
     assert.ok(log.foot.errors.some((p) => p.v.text.includes(t)), where('capture log details'))
     assert.ok(!visibleOf(captureVerdict({ unreadable: reason }, { okAt: NOW, now: NOW }).text).includes(t), where('verdict'))
     hidesReason(screenErrorHtml(reason), t, true, where('screen error'))
+  }
+})
+
+test('the library\'s empty board keeps a failed capture-health read\'s reason out of its line, in the technical pairs only', async () => {
+  const NOW = Date.parse('2026-10-20T12:00:00Z')
+  for (const status of [0, 500, 503]) {
+    for (const make of [0, 1, 2, 3]) {
+      const t = tok(), reason = reasonsWith(t)[make], given = reason !== ''
+      for (const [how, fetch] of [['answer', async () => ({ ok: false, status, error: reason })], ['throw', async () => { throw new Error(reason) }]]) {
+        const shot = capShotMaker(fetch, () => NOW)
+        await shot.read()
+        const { line, tech } = emptyBoardState(shot.settled), where = `${how} · ${status} · ${make}`
+        assert.ok(line && !line.includes(t), where)
+        if (given) assert.ok(tech.some(([, v]) => v.includes(t)), where)
+      }
+    }
   }
 })
