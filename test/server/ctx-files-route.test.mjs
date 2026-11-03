@@ -155,6 +155,29 @@ test('4.4 #16: a head read that finds no file carries the tag of the head file t
   assert.equal(again.status, 304)
 })
 
+// 4.4 §答案文件「文件不在」: a relayed answer file carries no ETag (the worker's version tag is not the file's tag); a head the worker
+// answers without writing a head file (no such session) is that read's answer, from one worker read
+test('4.4 #16: a relayed answer file is untagged; a head of no session is answered from one relay', async () => {
+  const w = await folded()
+  const plain = await w.d('head') // takes no gzip: the stored gzip file is not sent, the named query is
+  assert.equal(plain.status, 200)
+  assert.equal(plain.headers.etag, undefined, 'a relayed head carries no tag')
+  const relays = []
+  const counted = { ...w.svc, relay: (a) => (relays.push(a.name), w.svc.relay(a)) }
+  const { server } = createServer({ home: w.home, token: TOKEN, query: counted, tips: w.tips.of })
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  try {
+    const nobody = 'no-such-session-' + process.pid
+    const r = await get(server.address().port, `/api/d/head?id=${nobody}`, withToken(gz))
+    const named = await w.api(`/api/session?id=${nobody}&head=`)
+    assert.equal(r.status, named.status, 'the answer is the named query\'s')
+    const doc = JSON.parse(r.headers['content-encoding'] === 'gzip' ? unzip(r.body) : r.body.toString('utf8'))
+    assert.ok(doc.errors.some((e) => e.code === 'session-unknown'), 'it says there is no such session')
+    assert.equal(r.headers.etag, undefined)
+    assert.deepEqual(relays, ['session'], 'one worker read, not a second relay')
+  } finally { server.close() }
+})
+
 // 3.5 §谁执行它「答案文件」: a session never folded has only its tier-0 head, which is still folding; the board opening it (a poll of
 // d/head with the tag it holds, as replay.mjs reads it) makes the worker follow it, with no named query and no new record
 test('4.4 #16 folding head: polling a never-folded session\'s head, and nothing else, folds it to a settled head, also from the old name', async (t) => {
