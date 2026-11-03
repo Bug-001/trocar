@@ -1,6 +1,6 @@
 // test/web-v2/no-emoji.test.mjs — 1.5 验收 #8: no `\p{Extended_Pictographic}` character in any .mjs, .css or .html under
 // web/legacy (the UI's frame; verbatim content is runtime data and never sits in the sources). The allowed glyphs are
-// ‹ › ▸ ▾ ▴ · ≈ — ? × ⊖ … and the drawn icons (core/icons.mjs; ⓘ and ◐ are drawn there, not typed). The scanner is proven not vacuous on a planted emoji.
+// ‹ › · ≈ — ? × … and the drawn icons (core/icons.mjs; ⓘ, ◐ and the triangles are drawn there, not typed). The scanner is proven not vacuous on a planted emoji.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -21,8 +21,8 @@ function emojiViolations(rel, text) {
 test('the scanner is not vacuous: it catches a planted emoji, in a string and in a comment, and spares the allowed glyphs', () => {
   assert.deepEqual(emojiViolations('x.mjs', 'const a = "🟠"'), ['x.mjs: 🟠 U+1f7e0'])
   assert.notDeepEqual(emojiViolations('x.mjs', '// ⚠ a lamp in a comment'), [])
-  assert.deepEqual(emojiViolations('x.mjs', '‹ › ▸ ▾ ▴ · ≈ ◐ ⓘ — ? ×'), [])
-  assert.deepEqual(emojiViolations('x.css', '.a::after{content:"▾"}'), [])
+  assert.deepEqual(emojiViolations('x.mjs', '‹ › · ≈ ◐ ⓘ — ? × …'), [])
+  assert.deepEqual(emojiViolations('x.css', '.a::after{content:"…"}'), [])
 })
 
 test('no .mjs / .css / .html under web/legacy carries an emoji character', () => {

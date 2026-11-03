@@ -13,6 +13,7 @@ import { setScreenKeys } from '../../../legacy/core/keys.mjs'
 import { revealHeader } from '../../../legacy/core/sensitive.mjs'
 import * as W from '../../../legacy/labels/traffic.mjs'
 import { HarnessIcon } from '../../ui/HarnessIcon'
+import { MenuChev } from '../../ui/Chev'
 import type { ScreenProps } from '../../ScreenOutlet'
 import { queryOf, asOfText, routeHarness, windowLinks as windowLinksJs, failOf as failOfJs } from './model.mjs'
 import { ROW_H, DETAIL_BREAK, callsParams as callsParamsJs, mergePages as mergePagesJs, hostHref as hostHrefJs, crumbsOf as crumbsOfJs, hostRowView as hostRowViewJs, emptyText } from './host-model.mjs'
@@ -53,7 +54,7 @@ const modeNow = () => (mql()?.matches === false ? 'drawer' : 'column')
 function ClassMenu({ items }: { items: Array<{ id: string, label: string, href: string }> }) {
   return (
     <MenuTrigger>
-      <Button className="popbtn" aria-label={W.FILTER_CLASS}>{W.FILTER_CLASS} <span className="chev" aria-hidden="true">▾</span></Button>
+      <Button className="popbtn" aria-label={W.FILTER_CLASS}>{W.FILTER_CLASS} <MenuChev /></Button>
       <Popover className="pop menu" placement="bottom end">
         <Menu aria-label={W.FILTER_CLASS} items={items}>{(i) => <MenuItem id={i.id} href={i.href} textValue={i.label}>{i.label}</MenuItem>}</Menu>
       </Popover>

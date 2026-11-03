@@ -272,6 +272,8 @@ th,.colhead{font-size:var(--fs-cap);font-weight:var(--fw-strong);color:var(--ink
 /* the drawn triangle (icons.mjs DISC_CHEV) of every disclosure: it turns a quarter when its trigger is open */
 .chev{flex:none;transition:transform var(--t-quick) var(--ease);}
 [aria-expanded="true"] > svg.chev{transform:rotate(90deg);}
+/* a menu trigger's mark (icons.mjs MENU_CHEV) and a link's go mark sit on the text's line */
+.chev > svg, svg.go{vertical-align:-1px;}
 /* a closed panel takes no box: React Aria closes one with hidden="until-found" (content-visibility, not display:none) */
 .disc-b[hidden]{display:none;}
 .tech{font-size:var(--fs-cap);line-height:20px;color:var(--ink-2);background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-3);padding:12px 14px;display:grid;grid-template-columns:max-content minmax(0,1fr);column-gap:16px;margin:6px 0 4px;}

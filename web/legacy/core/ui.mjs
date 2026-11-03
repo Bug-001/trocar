@@ -3,7 +3,7 @@
 // installUi(doc) is the one wiring pass, installed once by web/src/main.tsx. Nothing touches `document` at import time.
 
 import { esc } from './fmt.mjs'
-import { icon, HALF, DISC_CHEV } from './icons.mjs'
+import { icon, HALF, DISC_CHEV, MENU_CHEV, glyphCss } from './icons.mjs'
 import { MARK_TIP, READ_FAIL } from '../labels/common.mjs'
 
 // A short, polite message that goes away by itself — what the board says when it moved the reader somewhere (an unknown link). It is
@@ -64,7 +64,7 @@ export const infoButton = (o) => popover({ glyph: icon('info'), ...o })
 
 export function menuButton({ label, title, items }) {
   const id = `menu-${++SEQ}`
-  return `<button type="button" class="popbtn" data-menu="${id}" aria-label="${esc(label)}" aria-haspopup="menu" aria-expanded="false" aria-controls="${id}">${esc(title)} <span class="chev" aria-hidden="true">▾</span></button>` +
+  return `<button type="button" class="popbtn" data-menu="${id}" aria-label="${esc(label)}" aria-haspopup="menu" aria-expanded="false" aria-controls="${id}">${esc(title)} <span class="chev" aria-hidden="true">${MENU_CHEV}</span></button>` +
     `<div class="pop menu" id="${id}" role="menu" aria-labelledby="${id}-b" hidden>` +
     items.map((i) => i.href ? `<a role="menuitem" href="${esc(i.href)}">${esc(i.label)}</a>` : `<button type="button" role="menuitem" data-menu-act="${esc(i.act || '')}">${esc(i.label)}</button>`).join('') + `</div>`
 }
@@ -76,7 +76,7 @@ export function segmentedHtml({ label, options = [], value }) {
     `<a href="${esc(o.href || '#')}"${o.value === value ? ' class="on" aria-current="true"' : ''}>${esc(o.label)}</a>`).join('')}</nav>`
 }
 
-// a disclosure row: ▸ title summary; the body is in the DOM, hidden until opened
+// a disclosure row: triangle, title, summary; the body is in the DOM, hidden until opened
 export function disclosureHtml({ id, title, summary = '', body = '', open = false }) {
   const bid = `${id}-b`
   return `<div class="disc" id="${esc(id)}"><button type="button" class="disc-t" data-disc="${esc(bid)}" aria-expanded="${open}" aria-controls="${esc(bid)}">` +
@@ -141,6 +141,8 @@ export function confirmDialog(opts, doc = typeof document === 'undefined' ? null
 // room, clamped 8px inside the viewport. A menu ([data-menu]) never opens on hover.
 export function installUi(doc = typeof document === 'undefined' ? null : document) {
   if (!doc) return null
+  // the disclosure triangle a ::before / ::after draws (replay.css): the icons.mjs chevron as a mask, never a typed ▸
+  doc.documentElement.style.setProperty('--glyph-disc', glyphCss('chevron-right'))
   // 1.2 §点击与选中文字 ①: a press that made or changed a selection is not a click. Every toggle on the board listens in the bubble
   // phase, so this one capture-phase listener keeps the click that ends a drag-select (or a double / triple / Shift click) from all of
   // them, and from <summary> / links. A selection already there at pointerdown does not count (a button keeps it in Chrome); a
@@ -218,7 +220,7 @@ export function installUi(doc = typeof document === 'undefined' ? null : documen
     if (btn && btn.dataset.menu && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openLayer(btn, { pinned: true }) }
     if (open && e.key === 'Escape') close(true)
   })
-  // disclosures: ▸ / ▾ anywhere on the board
+  // disclosures anywhere on the board
   doc.addEventListener('click', (e) => {
     const t = e.target && e.target.closest ? e.target.closest('[data-disc]') : null
     if (!t) return
