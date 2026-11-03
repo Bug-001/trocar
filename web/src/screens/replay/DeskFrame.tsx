@@ -24,8 +24,9 @@ export function DeskFrame({ desk }: { desk: DeskView }) {
   const n = useDeskModel(desk, 'saw', nbars)
   useLayoutEffect(() => {
     const $ = (sel: string) => desk.root.querySelector<HTMLElement>(sel)!
-    const ids = ['saw', 'rails', 'ctxwin', 'ctxnav', 'resexp', 'rawpanel'] as const
-    desk.framed({ ...Object.fromEntries(ids.map((id) => [id, $('#' + id)])), detail: document.getElementById('detail') } as Els)
+    const ids = ['rails', 'ctxwin', 'ctxnav', 'resexp', 'rawpanel'] as const
+    // no `saw`: the scope is React's (Scope.tsx draws and wires it), so the controller's wire() leaves it alone
+    desk.framed({ ...Object.fromEntries(ids.map((id) => [id, $('#' + id)])), saw: null, detail: document.getElementById('detail') } as Els)
   }, [desk])
   return <>
     <DeskHead desk={desk} />

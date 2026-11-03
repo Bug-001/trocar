@@ -89,7 +89,7 @@ test('decision 2: els() is null until the frame is there; the first commit hands
   expect(a.elsAtAttach).toBeNull()
   expect(a.framed).toBe(1)
   const E = a.view.els()!
-  for (const k of ['saw', 'rails', 'ctxwin', 'ctxnav', 'resexp', 'rawpanel'] as const) expect(E[k] && a.view.root.contains(E[k]), k).toBe(true)
+  for (const k of ['rails', 'ctxwin', 'ctxnav', 'resexp', 'rawpanel'] as const) expect(E[k] && a.view.root.contains(E[k]), k).toBe(true)
   act(() => { router.go(deskAt('b')) })
   act(() => { router.go(deskAt('a')) })
   expect(a.framed).toBe(1)

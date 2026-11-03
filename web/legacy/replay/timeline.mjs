@@ -21,7 +21,7 @@ import { laneWord } from '../labels/replay.mjs'
 import * as W from '../labels/replay.mjs'
 import { FLAG, cellsOf } from '../../../src/view/head-cols.mjs'
 // the composition colours' keys, in the bars' stacking order: [class suffix, word]
-const BAR_KEYS = [['tools', 'tools'], ['system', 'system'], ['user', 'messages'], ['assistant', 'reply'], ['thinking', 'thinking'], ['tool_use', 'tool call'], ['tool_result', 'tool result']]
+export const BAR_KEYS = [['tools', 'tools'], ['system', 'system'], ['user', 'messages'], ['assistant', 'reply'], ['thinking', 'thinking'], ['tool_use', 'tool call'], ['tool_result', 'tool result']]
 
 export const OVW_BARCAP = 60
 const q = (el, sel) => el.querySelector(sel)
