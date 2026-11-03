@@ -20,7 +20,7 @@ import { failOf as failJs, flatText, receiptOf as receiptJs, storageModel as mod
 import { DiskCard, techOf, type DiskModel, type Pairs } from './DiskCard'
 import { ClassesCard, type CardModel, type Receipt } from './ClassesCard'
 
-type Answer = { ok?: boolean, status?: number, data?: unknown, error?: unknown } | null | undefined
+type Answer = { ok?: boolean, status?: number, data?: unknown, error?: unknown, at?: number } | null | undefined
 type Out = { outcome: string, status: number, error?: unknown }
 const storageModel = modelJs as (docs: { classes: unknown, segments: unknown, segmentsFail: unknown }, window: string,
   o: { control: unknown, hl: string | null, now: number }) => { disk: DiskModel, card: CardModel }
@@ -36,7 +36,8 @@ export default function StorageScreen({ route }: ScreenProps) {
   const params = route.params as { window?: string, class?: string }
   const win = winOf(params), hl = params.class || null
   const ask = useConfirm()
-  const cq = useQuery({ queryKey: ['classes'], queryFn: ({ signal }) => api.get('classes', null, { signal }) as Promise<Answer>, ...once })
+  // the read time is stamped when the answer arrives, so a cached answer drawn on a later entry keeps its own time
+  const cq = useQuery({ queryKey: ['classes'], queryFn: async ({ signal }): Promise<Answer> => ({ ...(await api.get('classes', null, { signal }) as object), at: api.now() }), ...once })
   const sq = useQuery({ queryKey: ['segments'], queryFn: ({ signal }) => api.get('segments', null, { signal }) as Promise<Answer>, ...once })
   const control = useQuery({ queryKey: ['control-status'], queryFn: ({ signal }) => api.controlStatus({ signal }) as Promise<Answer>, staleTime: Infinity, retry: false })
   const ctl = control.data ?? (control.error ? failed(control.error) : null)
@@ -48,7 +49,7 @@ export default function StorageScreen({ route }: ScreenProps) {
   const [seen, setSeen] = useState({ stamp: 0, answers: 0, good: null as { doc: unknown, at: number } | null, fail: null as Answer })
   if (stamp && stamp !== seen.stamp) {
     const a = cq.data && cq.errorUpdatedAt <= cq.dataUpdatedAt ? cq.data : failed(cq.error)
-    setSeen({ stamp, answers: seen.answers + 1, good: a && a.ok ? { doc: a.data, at: api.now() } : seen.good, fail: a && a.ok ? null : a })
+    setSeen({ stamp, answers: seen.answers + 1, good: a && a.ok ? { doc: a.data, at: a.at! } : seen.good, fail: a && a.ok ? null : a })
   }
   const answersRef = useRef(0)
   useEffect(() => { answersRef.current = seen.answers }, [seen.answers])

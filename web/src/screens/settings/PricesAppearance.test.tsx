@@ -12,6 +12,7 @@ import { parseHash } from '../../../legacy/core/router.mjs'
 import { THEME_KEY } from '../../../legacy/core/ui.mjs'
 import * as W from '../../../legacy/labels/settings.mjs'
 import { templateText } from '../../../legacy/settings/prices.mjs'
+import { fmtTime } from '../../../legacy/core/fmt.mjs'
 import PricesScreen from './PricesScreen'
 import AppearanceScreen from './AppearanceScreen'
 
@@ -87,6 +88,10 @@ test('P2: no unpriced card while overview is not there; each unpriced model copi
     writeText.mockClear()
     page = wrap(<PricesScreen route={parseHash('#/settings/prices')} />)
     await page.findByRole('heading', { name: W.CARD_UNPRICED })
+    // the source line shows the file the table came from; the defaults say so instead of a path (§价格, 验收 16)
+    const from = page.container.querySelector('.from')!
+    if (src === 'default') expect(from.textContent).toBe(W.PRICE_DEFAULT)
+    else expect(from.textContent).toContain(src)
     for (const model of UNPRICED) {
       const um = [...page.container.querySelectorAll('.umodel')].find((u) => u.querySelector('.um')?.textContent === model) as HTMLElement
       expect(um).toBeTruthy()
@@ -96,6 +101,24 @@ test('P2: no unpriced card while overview is not there; each unpriced model copi
     }
     cleanup()
   }
+})
+
+test('P3: every entry reads the price table again; a failed re-read keeps the last good answer\'s read time (1.11 §数据与刷新)', async () => {
+  const T1 = Date.UTC(2026, 9, 20, 9, 0, 0), T2 = T1 + 3 * 3600e3 + 7e3
+  let now = T1, answer: Answer = ok({ source: 'default', models: [{ model: 'claude', input: 3, output: 15, cache_write: 3.75, cache_read: 0.3 }] })
+  vi.spyOn(api, 'now').mockImplementation(() => now)
+  vi.spyOn(api, 'get').mockImplementation(async (name: string) => (name === 'pricing' ? answer : NOT_FOUND))
+  const client = new QueryClient() // one client for the board, as in main.tsx
+  const tree = () => <QueryClientProvider client={client}><PricesScreen route={parseHash('#/settings/prices')} /></QueryClientProvider>
+  let r = render(tree())
+  await waitFor(() => expect(r.container.querySelector('.readat')?.textContent).toContain(fmtTime(T1)))
+  r.unmount()
+  now = T2; answer = { ok: false, status: 0, data: null, error: 'fetch failed' }
+  r = render(tree())
+  await r.findByRole('button', { name: W.RETRY })
+  expect(pricingCalls()).toBe(2)
+  expect(r.container.querySelector('.readat')!.textContent).toContain(fmtTime(T1))
+  expect(r.container.textContent).not.toContain(fmtTime(T2))
 })
 
 test('A1: the theme choice starts from <html data-theme>, Space switches the attribute and the key, a throwing storage still switches and says so, no server read', async () => {

@@ -10,6 +10,7 @@ import { api } from '../../../legacy/core/api.mjs'
 import { parseHash } from '../../../legacy/core/router.mjs'
 import { CLASS_NAME } from '../../../legacy/core/classes.mjs'
 import * as W from '../../../legacy/labels/settings.mjs'
+import { fmtTime } from '../../../legacy/core/fmt.mjs'
 import { ConfirmProvider } from '../../ui/Confirm'
 import StorageScreen from './StorageScreen'
 
@@ -232,4 +233,23 @@ test('V8: a failed classes read offers Retry with the reason hidden; a failed se
   expect(disk.querySelector('.jumpfiles')).toBeNull()
   expect(within(disk.querySelector<HTMLElement>('.dline.bad')!).getByRole('button', { name: W.RETRY })).toBeTruthy()
   expect(visible()).not.toContain(TOKEN)
+})
+
+test('V9: every entry reads classes again; a cached document drawn on entry keeps its own read time when the re-read fails (1.11 §数据与刷新, invariant 4)', async () => {
+  const T1 = Date.UTC(2026, 9, 20, 9, 0, 0), T2 = T1 + 3 * 3600e3 + 7e3
+  let now = T1
+  vi.spyOn(api, 'now').mockImplementation(() => now)
+  const client = new QueryClient() // one client for the board, as in main.tsx
+  const tree = () => <QueryClientProvider client={client}><ConfirmProvider><StorageScreen route={parseHash('#/settings/storage')} /></ConfirmProvider></QueryClientProvider>
+  let r = render(tree())
+  await settle()
+  expect(document.querySelector('.readat')!.textContent).toContain(fmtTime(T1))
+  r.unmount()
+  now = T2; classesFail = { ok: false, status: 0, data: null, error: 'no route' }
+  r = render(tree())
+  await settle()
+  expect(vi.mocked(api.get).mock.calls.filter((c) => c[0] === 'classes').length).toBe(2)
+  expect(within(document.querySelector<HTMLElement>('#smain .err')!).getByRole('button', { name: W.RETRY })).toBeTruthy()
+  expect(document.querySelector('.readat')!.textContent).toContain(fmtTime(T1))
+  expect(document.body.textContent).not.toContain(fmtTime(T2))
 })

@@ -25,7 +25,8 @@ const failOf = failOfJs as (what: string, r: unknown) => { line: string, pairs: 
 
 const TECH: Array<[string, string]> = [[W.COL_KEY, W.TECH_MATCH], [W.COL_WRITE, W.TECH_WRITE_ONE], ['price table', W.TECH_PRICING_PATH]]
 const techOf = (pairs: Array<[string, string]>) => pairs.map(([k, v]): [string, TechValue] => [k, { text: v }])
-const once = { staleTime: Infinity, refetchOnWindowFocus: false, refetchOnReconnect: false, retry: false } as const
+// read on every entry (a cached answer is drawn first, then re-read), never on focus or reconnect, never retried by itself
+const once = { refetchOnWindowFocus: false, refetchOnReconnect: false, retry: false } as const
 
 // one read: a throw is a failed answer like any other (K-29)
 async function read(name: string, signal: AbortSignal): Promise<Answer> {
