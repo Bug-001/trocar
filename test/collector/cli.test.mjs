@@ -264,6 +264,7 @@ test('cli: setup-helper installs or removes through arch; a failure is exit 1', 
   t = io(); await runSetupHelper([], { arch: swept, packageRoot: root, ...t })
   assert.ok(t.o.join('\n').includes('.trocar-redirector.new.67915'), `the staged copy it removed is named (D38)\n${t.o.join('\n')}`)
   assert.doesNotMatch(t.o.join('\n'), /\(ies\)|\(s\)/, 'plain English, no parenthesised plural (D58)')
+  assert.ok(t.o.join('\n').split('\n').some((l) => /^ {2}\S/.test(l) && l.trim().endsWith('.trocar-redirector.new.67915')), `a listed path is alone on its line, two in (1.6 §1.1⑥)\n${t.o.join('\n')}`)
   t = io(); await runSetupHelper(['--remove'], { arch: swept, ...t })
   assert.match(t.o.join('\n'), /^Warning: .*\.trocar-redirector\.new\.67915/m)
 })
