@@ -38,9 +38,10 @@ export function launcherText(app, platform = process.platform) {
   if (platform === 'win32') {
     return ['@echo off', 'setlocal', 'set "D=%~dp0..\\app"', 'set "V=" & set "N="',
       'for /f "usebackq tokens=1,2" %%a in ("%D%\\current") do set "V=%%a" & set "N=%%b"',
-      'if not defined N (echo trocar: %D%\\current names no version. Run the install command again. 1>&2 & exit /b 1)',
-      // one line, parsed before node runs: cmd never reads the file again, so uninstall may delete it while this runs (`exit /b` keeps node's code)
-      '"%D%\\node\\%N%\\node.exe" "%D%\\%V%\\bin\\trocar.mjs" %* & exit /b', ''].join('\r\n')
+      'if not defined N (echo trocar: "%D%\\current" names no version. Run the install command again. 1>&2 & exit /b 1)', // quoted: a ) or & in the home ends no block
+      // one line, parsed before node runs: cmd never reads the file again, so uninstall may delete it while this runs. node's code goes back as a literal
+      // number (call set keeps it, for /f makes it a word): a bare `exit /b` reads as 0 to PowerShell and cmd /c, `call exit /b N` as 0 at the cmd prompt (4.5 §A)
+      '"%D%\\node\\%N%\\node.exe" "%D%\\%V%\\bin\\trocar.mjs" %* & call set "C=%%errorlevel%%" & for /f %%c in (\'echo %%C%%\') do exit /b %%c', ''].join('\r\n')
   }
   const q = `'${app.replace(/'/g, `'\\''`)}'`
   return ['#!/bin/sh', `d=${q}`, 'read -r v n <"$d/current" && [ -n "$n" ] || { echo "trocar: $d/current names no version. Run the install command again." >&2; exit 1; }',
