@@ -49,9 +49,10 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   if (args.error) return refuse(cmd.name, args.error.code, args.error.message, { usage: args.error.usage })
   const run = (deps.commands && deps.commands[cmd.name]) || cmd.run
   // 4.11 `present`: a command typed in a terminal records the user's PATH while trocar is installed (before the run, for what it reads; after it, for
-  // what `install` just installed), so every asker resolves a form's command alike. `daemon` is the login service's start: its PATH is not the user's.
-  // A command `deps.commands` replaces does nothing of its own, so it records nothing either. A failure to record never changes the answer.
-  const remember = () => { if (mutates && cmd.name !== 'daemon' && run === cmd.run) try { recordUserPath({ home, env, ...(deps.fs ? { fs: deps.fs } : {}) }) } catch { /* the next command records it */ } }
+  // what `install` just installed), so every asker resolves a form's command alike — but not one whose table row says `recordsPath: false` (`daemon`:
+  // the login service's PATH is not the user's; `uninstall`: it deletes that file). A command `deps.commands` replaces does nothing of its own, so it
+  // records nothing either. A failure to record never changes the answer.
+  const remember = () => { if (mutates && cmd.recordsPath !== false && run === cmd.run) try { recordUserPath({ home, env, ...(deps.fs ? { fs: deps.fs } : {}) }) } catch { /* the next command records it */ } }
   remember()
   try {
     return await run(rest, { io: cio, env, home, platform, uid, json, args, deps: { getuid: () => uid, ...deps } })

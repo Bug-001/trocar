@@ -192,3 +192,16 @@ test('the real bin: --version, help, help off, an unknown command and `daemon --
   const d = run('daemon', '--bogus'); assert.deepEqual([d.status, d.stdout], [2, '']); assert.match(d.stderr, /trocar daemon: unknown option '--bogus'/)
   assert.deepEqual(fs.readdirSync(home), [], 'nothing was written')
 })
+
+// 4.11 present / 1.6 V7: uninstall records no PATH — it deletes that file, so recording it first made a second uninstall report removing what it
+// had just written — and its --dry-run writes nothing at all
+test('4.11 present: uninstall records no PATH of the user; its --dry-run leaves HOME byte for byte as it was', async () => {
+  const s = sandbox()
+  assert.equal((await s.run(['install', '--yes'])).exit, 0)
+  const recorded = path.join(s.dir, 'user-path.json')
+  assert.ok(fs.existsSync(recorded), 'install, a command typed in a terminal, recorded the PATH')
+  fs.rmSync(recorded)
+  const before = snapshot(s.home)
+  await s.run(['uninstall', '--dry-run'], { env: { ...s.ctx().env, PATH: '/a/path/this/run/has' } })
+  assert.deepEqual(snapshot(s.home), before, 'the dry run wrote nothing, user-path.json included')
+})

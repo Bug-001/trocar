@@ -56,7 +56,7 @@ export const COMMANDS = Object.freeze([
     options: [['--failures', 'list every failure of the last day, not just the newest'], JSON_OPT],
     exits: [[0, 'every agent is being captured'], [1, 'some are not'], [2, 'a usage error, or an unknown agent'], [3, 'it could not be read; the reason is in the output']] },
   { name: 'uninstall',
-    group: 'Capture', mutates: true, run: via('./uninstall.mjs', 'runUninstallCli'),
+    group: 'Capture', mutates: true, recordsPath: false, run: via('./uninstall.mjs', 'runUninstallCli'), // 4.11 present: it deletes the recorded PATH
     usage: 'trocar uninstall [--purge-data] [--yes] [--dry-run] [--json]',
     summary: 'Removes what install put on this machine: the root, the certificates the agents read, and the records of both. Capture must be off first. Your captured data stays unless you ask for it to go.',
     options: [['--purge-data', 'also delete the captured records'], YES, DRY, JSON_OPT],
@@ -100,7 +100,7 @@ export const COMMANDS = Object.freeze([
     options: [],
     exits: [[0, 'the records are on stdout'], [1, 'the segment or a record number does not exist, or could not be read'], [2, 'a usage error']] },
   { name: 'daemon',
-    group: 'Maintenance', mutates: true, run: via('./daemon.mjs', 'runDaemonCli'),
+    group: 'Maintenance', mutates: true, recordsPath: false, run: via('./daemon.mjs', 'runDaemonCli'), // 4.11 present: the login service's PATH is not the user's
     usage: 'trocar daemon [--supervise]',
     summary: 'Runs the collector in the foreground. This is what starts at login, so you do not normally type it. It drains what is in flight before it stops.',
     options: [['--supervise', 'on Windows: the parent the scheduled task starts, which keeps the collector running']],
