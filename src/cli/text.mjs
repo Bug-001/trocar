@@ -104,6 +104,9 @@ export function ago(at, now = Date.now()) {
 // line never ends between `trocar` and `install.` (a 116-column macOS Terminal did). No list of command names: any lowercase word after `trocar`
 // glues, and gluing a word that is not a command only keeps two words together.
 const CLOSES = /`[.,;:)]*$/
+// §1.1⑤⑥: a size (`size()`: a number, then B / KB / MB / GB) is one word, and a bracketed size goes with the word before it — the thing it is the size
+// of (`~/.trocar/raw/ (1.3 GB)`), so a fold never leaves `(3.2 KB)` alone on a line, nor `3.2` at the end of one and `KB` at the start of the next
+const NUMBER = /^\(?\d[\d.,]*$/, UNIT = /^[KMG]?B\)?[.,;:]?$/
 function words(text) {
   const ws = String(text).split(/\s+/).filter(Boolean), out = []
   for (let i = 0; i < ws.length; i++) {
@@ -113,6 +116,10 @@ function words(text) {
     else if (w === 'trocar' && /^[a-z][a-z-]*[.,;:)]?$/.test(ws[i + 1] || '')) {
       w += ` ${ws[++i]}`
       while (/[a-z-]$/.test(w) && /^--?[a-z]/.test(ws[i + 1] || '')) w += ` ${ws[++i]}`
+    }
+    else if (NUMBER.test(w) && UNIT.test(ws[i + 1] || '')) {
+      w += ` ${ws[++i]}`
+      if (w.startsWith('(') && out.length) { out[out.length - 1] += ` ${w}`; continue }
     }
     out.push(w)
   }

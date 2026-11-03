@@ -154,3 +154,13 @@ test('pairs: widths are measured on the printed text, a HOME path as ~ (§1.1⑤
     assert.deepEqual(out.join(' ').split(/\s+/).filter(Boolean), ['~/.dsh/cordis.patch.yml', ...value.replaceAll(home, '~').split(' ')], 'every word, once, in order')
   }
 })
+
+test('wrap: a size stays with its number and unit, and a bracketed size with the word it is the size of (§1.1⑤⑥)', () => {
+  for (let n = 0; n < 40; n++) {
+    const path = '~/.trocar/collector/flows/', text = `w${'w'.repeat(n)} trocar's record of what it did and what failed, in ${path} (3.2 KB) and 12.5 MB more`
+    const out = wrap(text, WIDTH)
+    assert.ok(out.some((l) => l.includes(`${path} (3.2 KB)`)), `the size is on its path's line\n${out.join('\n')}`)
+    assert.ok(out.some((l) => l.includes('12.5 MB')), `a number and its unit are never split\n${out.join('\n')}`)
+    assert.deepEqual(out.join(' ').split(' '), text.split(' '), 'every word, once, in order')
+  }
+})
