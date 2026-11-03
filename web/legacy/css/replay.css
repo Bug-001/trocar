@@ -478,19 +478,18 @@
 .pop .sijump{font:inherit;font-size:var(--fs-body);color:var(--action);background:none;border:0;padding:0;cursor:pointer;text-decoration:none;}
 .pop .sijump:hover{text-decoration:underline;}
 /* the step bar: the middle column's first row, sticky, only 2.2's table in it */
-/* too narrow (2.2 §步头放不下): the model name is cut first, then the prompt number and the time; only when those are at their
-   least does the line wrap. Every part that gives way has a flex basis of 0, so it never forces the wrap itself; ‹ step ›, Compare
-   and the three buttons are never cut */
+/* too narrow (2.2 §步头放不下): only the model name is cut, down to eight characters (flex basis 0, so it never forces the wrap
+   itself); then the line wraps. ‹ step ›, the prompt number, the time, Compare and the three buttons are never cut: a short word
+   cut to one letter says nothing */
 #stepbar{flex:none;position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;padding:4px 14px;background:var(--raised);border-bottom:1px solid var(--rule);font-size:var(--fs-cap);color:var(--ink-2);}
 #stepbar .sb-nav{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}
 #stepbar .sbbtn{font:inherit;font-size:var(--fs-body);line-height:1;padding:2px 7px;background:transparent;border:1px solid var(--rule);border-radius:var(--r-1);color:var(--ink-2);cursor:pointer;}
 #stepbar .sbbtn:hover{color:var(--ink);border-color:var(--ink-2);}
 #stepbar .sb-no{font-size:var(--fs-body);color:var(--ink);white-space:nowrap;}
-/* the free space goes to the prompt number and the time first (grow 1000), the model name gets what is left: it gives way first */
-#stepbar .sb-ask,#stepbar .sb-time{white-space:nowrap;min-width:0;max-width:max-content;overflow:hidden;text-overflow:ellipsis;flex:1000 1 0;}
-#stepbar .sb-nav,#stepbar .sb-cmp,#stepbar>.popbtn{flex:none;}
+#stepbar .sb-ask,#stepbar .sb-time{white-space:nowrap;}
+#stepbar .sb-nav,#stepbar .sb-ask,#stepbar .sb-time,#stepbar .sb-cmp,#stepbar>.popbtn{flex:none;}
 /* the model name: ellipsis, full name in its title */
-#stepbar .sb-model{font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1 1 0;min-width:4ch;max-width:max-content;}
+#stepbar .sb-model{font-size:var(--fs-cap);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1 1 0;min-width:8ch;max-width:max-content;}
 #stepbar .spacer{flex:none;margin-left:auto;} /* takes only what the parts above leave over */
 #stepbar .sb-cmp .cmpx{margin-left:4px;color:var(--ink-3);cursor:pointer;border:1px solid var(--rule);border-radius:var(--r-1);padding:0 3px;line-height:1.2;}
 #stepbar .sb-cmp .cmpx:hover{color:var(--bad);border-color:var(--bad);}
