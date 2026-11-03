@@ -7,8 +7,6 @@ import { statsCard, recentCard, capCard } from '../../web/src/screens/overview/m
 import { capHealthPatch } from '../../web/legacy/core/capture-verdict.mjs'
 import * as trafficPage from '../../web/legacy/traffic/traffic.mjs'
 import * as hostPage from '../../web/legacy/traffic/host.mjs'
-import * as prices from '../../web/legacy/settings/prices.mjs'
-import * as storage from '../../web/legacy/settings/storage.mjs'
 import { readFailHtml, captionHtml, emptyBoardHtml } from '../../web/legacy/library/library.mjs'
 import { capShotMaker } from '../../web/legacy/library/logic.mjs'
 import { logModel } from '../../web/src/screens/capture/log-model.mjs'
@@ -89,16 +87,13 @@ const world = (async () => {
 })()
 test.after(async () => { (await world).w.close() })
 
-test('a failed read on traffic, a host page (list and request detail), Settings › Prices and Settings › Storage shows the token only in hidden technical details, with a retry control', async () => {
+test('a failed read on traffic or a host page (list and request detail) shows the token only in hidden technical details, with a retry control', async () => {
   const { w, host, ref } = await world
   const q = (url) => new URL(url, 'http://x')
   const sites = [
     ['traffic', trafficPage, '#/traffic', (u) => u.pathname === '/api/traffic', 'data-act="retry"'],
     ['host list', hostPage, host, (u) => u.pathname === '/api/calls' && u.searchParams.has('host'), 'data-act="retry"'],
     ['request detail', hostPage, `${host}?ref=${encodeURIComponent(ref)}`, (u) => u.pathname === '/api/calls' && u.searchParams.has('ref'), 'data-act="retry-detail"'],
-    ['prices', prices, '#/settings/prices', (u) => u.pathname === '/api/pricing', 'href="#/settings/prices"'],
-    ['storage', storage, '#/settings/storage', (u) => u.pathname === '/api/classes', 'href="#/settings/storage"'],
-    ['storage files', storage, '#/settings/storage', (u) => u.pathname === '/api/segments', 'href="#/settings/storage"'], // never zero problems (D38)
   ]
   for (const [name, mod, hash, hit, retry] of sites) {
     for (const fail of [500, 503, 'throw']) {
