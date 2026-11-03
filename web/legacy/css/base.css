@@ -45,15 +45,15 @@
   --shadow-knob: 0 1px 2px rgb(0 0 0 / .3);
   --scrim: rgb(10 16 18 / .45);
   /* type: two families, five sizes, two weights; nothing else sets type. --sans for everything read or operated; --mono
-     only for machine bytes and literal identifiers, always at --fs-cap. --wordmark is the logo, not UI text. Numbers are
+     only for machine bytes and literal identifiers, at --fs-cap except the verbatim bytes of Raw and Readable cells (--fs-body, the size of the reading text beside them). --wordmark is the logo, not UI text. Numbers are
      tabular everywhere (set once on body); no letter-spacing, no all-caps, no italic. */
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", system-ui, sans-serif;
   --mono: "SF Mono", ui-monospace, Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", monospace;
   --wordmark: "New York", "Iowan Old Style", "Charter", Georgia, serif;
   --lh: 20px;         /* the body's line */
   --fs-chart: 11px;   /* only numbers and labels drawn on the scope */
-  --fs-cap: 12px;     /* captions, meta, table heads, small controls, pills, all mono */
-  --fs-body: 13px;    /* body, rows, controls, row titles */
+  --fs-cap: 12px;     /* captions, meta, table heads, small controls, pills, mono outside the cells */
+  --fs-body: 13px;    /* body, rows, controls, row titles, the bytes in Raw and Readable cells */
   --fs-head: 15px;    /* section and day headings */
   --fs-title: 20px;   /* screen titles, the step read-out, key figures */
   --fw-regular: 400;  --fw-strong: 600;
