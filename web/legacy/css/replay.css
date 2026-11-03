@@ -441,7 +441,8 @@
 .sh-back,.sh-follow,.sh-info{flex:none;}
 .sh-back{font-size:var(--fs-cap);color:var(--action);text-decoration:none;white-space:nowrap;border:1px solid var(--rule);border-radius:var(--r-pill);padding:2px 10px;}
 .sh-back:hover{color:var(--ink);border-color:var(--ink-2);}
-.sh-name{flex:0 1 auto;min-width:2em;font-size:var(--fs-title);font-weight:var(--fw-strong);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:44vw;}
+/* the title ellipsizes, so it clips: its line box holds the whole glyph box (Segoe UI at 20 px needs about 27 px; 1.2 §让位次序) */
+.sh-name{flex:0 1 auto;min-width:2em;font-size:var(--fs-title);line-height:1.4;font-weight:var(--fw-strong);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:44vw;}
 .sh-chip{flex:0 100 auto;min-width:0;overflow:hidden;display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-cap);color:var(--ink-2);text-decoration:none;background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-pill);padding:2px 9px;white-space:nowrap;}
 .sh-chip:hover{border-color:var(--ink-2);color:var(--ink);}
 .sh-chip .chipname{color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;}
