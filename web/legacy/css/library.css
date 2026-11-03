@@ -67,3 +67,16 @@
   .libhead,.lrow{grid-template-columns:128px minmax(0,1fr) 64px 84px;column-gap:10px;padding:0 12px;}
   .libtools,.libcap{padding:8px 12px;}
 }
+/* phone widths: no room for an agent column, so the title runs across the first line up to the last-active time, and the
+   agent's name opens the second, before the marks and the call count; the header drops its agent cell (1.8 §窄屏) */
+@media(max-width:640px){
+  .libhead{grid-template-columns:minmax(0,1fr) 44px 64px;column-gap:8px;}
+  .libhead .lha{display:none;}
+  .lrow{grid-template-columns:fit-content(45%) minmax(0,1fr) 44px 64px;column-gap:8px;grid-template-areas:"t t t w" "a s n w";align-content:center;row-gap:2px;}
+  .lrow .lmain{display:contents;}
+  .lrow .lt{grid-area:t;}
+  .lrow .lsub{grid-area:s;}
+  .lrow .lagent{grid-area:a;gap:6px;font-size:var(--fs-cap);color:var(--ink-2);}
+  .lrow .ln{grid-area:n;}
+  .lrow .lw{grid-area:w;}
+}
