@@ -32,9 +32,11 @@ for (const home of HOMES) {
   test(`§1.1⑤ a command to copy (${home}): HOME as ~ only where sh expands it; a sudo line, a quoted path and a Windows line stay absolute`, () => {
     const s = sep(home), posix = s === '/'
     const off = `${home}${s}.trocar${s}bin${s}trocar-off`
-    const [bare, sudo, quoted, sibling] = fit([{ command: off }, { command: longCommand(home) }, { command: `node "${off}"` }, { command: `${home}x${s}bin${s}tool` }], { home }).map((l) => l.trim())
+    const [bare, sudo, quoted, sibling, cd, later] = fit([{ command: off }, { command: longCommand(home) }, { command: `node "${off}"` }, { command: `${home}x${s}bin${s}tool` }, { command: `cd ${home}` }, { command: `env A=1 sudo ${off}` }], { home }).map((l) => l.trim())
     assert.equal(bare, posix ? `~${s}.trocar${s}bin${s}trocar-off` : off)
-    assert.equal(sudo, longCommand(home), 'sudo: root\'s ~ is not yours (§3.2)')
+    assert.equal(sudo, longCommand(home), 'a sudo line keeps the absolute paths selfCommand writes (§3.2)')
+    assert.equal(cd, posix ? 'cd ~' : `cd ${home}`, 'HOME as a whole word: ~ only where sh expands it')
+    assert.equal(later, `env A=1 sudo ${off}`, 'sudo anywhere before the path keeps it absolute (§3.2)')
     assert.equal(quoted, `node "${off}"`, 'a quoted ~ is not expanded')
     assert.equal(sibling, `${home}x${s}bin${s}tool`)
   })

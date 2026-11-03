@@ -41,9 +41,11 @@ const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
  *  HOME where it starts a word (after a blank, a quote, a bracket, `=` or `:`) and HOME ends at a separator or the word's end; `/home/al` is not in `/home/alice`. */
 export const tildeText = (s, home) => (home ? s.replace(new RegExp(`(^|[\\s"'(\\[=:])${escRe(home)}(?=[\\\\/]|$|[\\s"'),;\\]])`, 'g'), '$1~') : s)
 
-/** §1.1⑤: a command to copy shows HOME as `~` where sh, zsh and bash expand it — an unquoted word that starts with HOME, then `/` or the word's end. A
- *  `sudo` line stays absolute (§3.2), and a Windows line keeps its quoted `\` paths: neither matches, so no platform is named here. */
-export const tildeCommand = (s, home) => (home && !/^sudo\s/.test(s) ? s.replace(new RegExp(`(^|\\s)${escRe(home)}(?=/|\\s|$)`, 'g'), '$1~') : s)
+/** §1.1⑤: a command to copy shows HOME as `~` where sh, zsh and bash expand it — an unquoted word that starts with a POSIX HOME, then `/` or the word's
+ *  end. A path after a `sudo` word keeps the absolute form selfCommand writes (§3.2), and a Windows HOME is never a `~`. */
+export const tildeCommand = (s, home) => (home && home.startsWith('/')
+  ? s.replace(new RegExp(`(^|\\s)${escRe(home)}(?=/|\\s|$)`, 'g'), (m, pre, at) => (/(^|\s)sudo\s/.test(s.slice(0, at + pre.length)) ? m : `${pre}~`))
+  : s)
 
 /** §1.1⑥: every line fits 80 columns — one that does not is folded on spaces, indented to its own indent, and a word that is longer than the line
  *  (a path, a command) keeps its own line unbroken. A coloured line is left alone: its escape bytes are not columns and must not be cut. `home`: §1.1⑤,
