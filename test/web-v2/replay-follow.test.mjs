@@ -104,6 +104,36 @@ test('2.3 #25: scrubbing keeps ≤ 1 lane and ≤ 1 block read in flight, asks o
   for (const [k, v] of Object.entries(seen)) assert.ok(v > 0, `the scrubs include ${k} reads`)
 })
 
+// 1.2 §路由「离开再回来」: a left desk sends no new read. Pause at every point of a step's reads (resting, its lane read out, its block read
+// out); while paused nothing starts, the reads out finish; resumed, the step rests 100 ms again and then gets what it lacks.
+test('1.2 #23: a paused step sends no read until resumed, wherever the pause lands, and then rests 100 ms before it asks', async () => {
+  for (const pauseAt of [0, 50, 120, 170, 260, 400]) {
+    const clk = clock(), starts = []
+    let paused = false, laneHeld = false, bodies = 0
+    const get = (name, p, { signal }) => {
+      assert.ok(!paused, `pause at ${pauseAt}: a ${name} read started at ${clk.now()} while paused`)
+      starts.push([name, clk.now()])
+      return new Promise((res) => {
+        const id = clk.setTimer(() => res(name === 'lane' ? { ok: true, data: {} } : { ok: true, data: { blocks: p.ref.map((ref) => ({ ref, bytes: 'b', encoding: 'utf8' })), errors: [] } }), 100)
+        signal.addEventListener('abort', () => { clk.clearTimer(id); res({ ok: false, status: 0, error: 'cancelled' }) }, { once: true })
+      })
+    }
+    // the step lacks its lane first, then its bodies (the lane's rows name their refs)
+    const need = () => (laneHeld ? { lane: null, refs: bodies ? [] : ['r1'] } : { lane: { lane: 'L' }, refs: [] })
+    const sr = createStepReads({ get, setTimer: clk.setTimer, clearTimer: clk.clearTimer, need,
+      onLane: (rid, a) => { if (a.ok) laneHeld = true }, onBodies: () => { bodies++ } })
+    sr.target('s1')
+    await clk.advance(pauseAt)
+    paused = true; sr.pause()
+    await clk.advance(1000)
+    const back = clk.now()
+    paused = false; sr.resume()
+    await clk.advance(1000)
+    assert.ok(laneHeld && bodies === 1, `pause at ${pauseAt}: once resumed the step got its lane and its bodies`)
+    for (const [name, t] of starts.filter(([, t]) => t >= back)) assert.ok(t - back >= 100, `pause at ${pauseAt}: the ${name} read came ${t - back} ms after resume`)
+  }
+})
+
 test('loadBodies (3.5 block): one read for the refs not held; each item fills by its ref; bytes:null takes its errors entry', async () => {
   bodyCache.clear()
   const [okItem, nullItem] = fx.block_multi.blocks

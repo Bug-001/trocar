@@ -509,12 +509,16 @@ function openDesk(ctx, route0) {
         let parsed = null
         try { parsed = r.ok && r.status === 200 ? parseLines(r.text) : null } catch { /* not the file's lines: a failure like any other */ }
         if (!parsed) { packFailed = true; if (s.playRid == null && s.initialStep != null) readFailed(r.ok ? { status: r.status, error: 'not the file\'s lines' } : r); break }
+        // held once the desk holds it: a part whose apply threw, or never ran, is read again
         applies.push(serial(() => { if (gone()) return; keep(`p${p.n}.${part}`, r.text.length); const ch = applyParsed({ kind: 'pack', n: p.n, part }, parsed); got.push(part); return redraw(ch) }))
       }
     } catch (e) { err = e }
-    const applied = Promise.all(applies).finally(() => {
+    // every apply settles before the pack's record is written, so a part still applying is neither held nor read twice
+    const applied = Promise.allSettled(applies).then((rs) => {
       if (got.length) packHeld.set(p.n, { tag, parts: new Set([...had, ...got]) })
       packing.delete(p.n)
+      const bad = rs.find((x) => x.status === 'rejected')
+      if (bad) throw bad.reason
     })
     if (err) { applied.catch(() => {}); throw err }
     return { applied }
@@ -773,7 +777,7 @@ function openDesk(ctx, route0) {
     if (hasStep(route)) update(route)
     // a step left mid-wait draws now; the URL names the drawn step at once (syncUrl). Answers applied while away were not drawn: all areas then
     if (s.anchor) { if (missed) { missed = false; renderAll() } else paintPlayhead() }
-    chainLedger(); fill() // what a leave paused goes on (a desk that holds every pack reads nothing here)
+    steps.resume(); chainLedger(); fill() // what a leave paused goes on (a desk that holds every pack reads nothing here)
     poll(true) // the first open, or one round: the head If-None-Match, a Range on each tail
   }
   // leave the page: the poll stops, every listener outside the root goes, the reads in flight finish into the desk's state (drawn on
@@ -782,6 +786,7 @@ function openDesk(ctx, route0) {
     if (!host) return
     scrolls = SCROLLED.map((sel) => [sel, $(sel) ? $(sel).scrollTop : 0])
     clearInterval(timer); timer = null
+    steps.pause() // the step's rest timer and its asks after an answer: resume() on attach
     if (busyTimer != null) { clearTimeout(busyTimer); busyTimer = null }
     jumps.clear()
     setScreenKeys(null)

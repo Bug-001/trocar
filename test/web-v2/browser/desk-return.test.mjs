@@ -174,6 +174,43 @@ test('1.2 #23 a desk left while its packs load sends no pack read while away, an
   } finally { release(); await b.stop() }
 })
 
+test('1.2 #23 a desk left while its step rests sends no block read while away, and once back its step reads after resting', { skip }, async () => {
+  const b = await withBoard({ bytes: 1e5, width: 1280, chromium: gate.chromium, setup: stampFetches })
+  try {
+    const { page } = b
+    await serveWorld(page, w)
+    await page.evaluate(() => { location.hash = '#/replay/p/S' })
+    await drawn(page)
+    await settle(b)
+    const blocks = async () => (await page.evaluate(() => globalThis.__fetches)).filter((e) => e.url.startsWith('/api/block?'))
+    // Home moves the playhead to step 1, far from the followed newest step, so its bodies are not cached; leave at the first frame that
+    // shows it, inside the step's 100 ms rest (2.3 §快速拖动), and stamp the leave on the page's clock
+    const was = await page.evaluate(() => document.querySelector('#stepbar .sb-no').dataset.n)
+    const left = await page.evaluate(() => new Promise((resolve) => {
+      const t0 = performance.now(), tick = () => {
+        const n = document.querySelector('#stepbar .sb-no')?.dataset.n, at = performance.timeOrigin + performance.now()
+        if (n !== '1') return performance.now() - t0 < 5000 ? requestAnimationFrame(tick) : resolve({ ms: Infinity, at, n })
+        if (performance.now() - t0 < 100) location.hash = '#/sessions'
+        resolve({ ms: performance.now() - t0, at, n })
+      }
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+      tick()
+    }))
+    assert.ok(was !== '1' && left.ms < 100, `step 1 was drawn within its 100 ms rest (from step ${was}: ${JSON.stringify(left)})`)
+    await until(page, () => !document.querySelector('.desk'))
+    await new Promise((r) => setTimeout(r, 1000))
+    assert.deepEqual((await blocks()).filter((e) => e.t0 > left.at).map((e) => `+${Math.round(e.t0 - left.at)} ms`), [], 'block reads started while away (ms after the leave)')
+    await page.evaluate(() => history.back())
+    await until(page, () => document.querySelector('.desk #stepbar .sb-no')?.dataset.n === '1')
+    const back = await page.evaluate(() => performance.timeOrigin + performance.now())
+    const t0 = Date.now()
+    while (!(await blocks()).some((e) => e.t0 > left.at) && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 50))
+    const after = (await blocks()).filter((e) => e.t0 > left.at)
+    assert.ok(after.length && after.every((e) => e.t0 >= back), 'back on the desk, step 1 reads its bodies')
+    assert.deepEqual(b.errors, [])
+  } finally { await b.stop() }
+})
+
 test('1.2 #23 a desk left while its poll round\'s head is on its way reads no tail and no pack after it lands', { skip }, async () => {
   const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
   try {
