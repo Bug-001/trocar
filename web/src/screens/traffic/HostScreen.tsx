@@ -137,7 +137,7 @@ export default function HostScreen({ route, router }: ScreenProps) {
 
   const scope: Scope = { label: 'window', options: windowLinks(q.window, (w) => hostHref({ harness, host, window: w, cls: q.cls })) }
   const crumbs = crumbsOf({ harness, host, window: q.window, cls: q.cls })
-    .map((c) => (c.harness ? { ...c, node: <><HarnessIcon id={c.harness} />{c.label}</> } : c))
+    .map((c) => (c.harness ? { ...c, node: <span className="chip"><HarnessIcon id={c.harness} />{c.label}</span> } : c))
   const readAt = pages ? list.dataUpdatedAt : null
 
   let body
