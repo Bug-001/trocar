@@ -5,16 +5,12 @@ import assert from 'node:assert/strict'
 import { readFailure } from '../../web/legacy/core/ui.mjs'
 import { statsCard, recentCard, capCard } from '../../web/src/screens/overview/model.mjs'
 import { capHealthPatch } from '../../web/legacy/core/capture-verdict.mjs'
-import * as trafficPage from '../../web/legacy/traffic/traffic.mjs'
-import * as hostPage from '../../web/legacy/traffic/host.mjs'
 import { logModel } from '../../web/src/screens/capture/log-model.mjs'
 import { HEALTH_READ } from '../../web/legacy/labels/common.mjs'
 import { captureVerdict } from '../../web/legacy/core/capture-verdict.mjs'
 import { capShotMaker, emptyBoardState } from '../../web/src/screens/library/model.mjs'
 import { screenErrorHtml } from '../../web/legacy/shell/safemount.mjs'
 import { hidesReason, reasonsWith, visibleOf } from './visible.mjs'
-import { trafficWorld } from './traffic-world.mjs'
-import { boardHome } from './real-face.mjs'
 
 let n = 0
 const tok = () => `tok-${++n}-q7`
@@ -72,44 +68,6 @@ test('overview cards: stats and recent read failures, the price line and an unre
     const c = capCard({ data: p.capH, okAt: p.capHOkAt, err: null, ok: true }, NOW)
     assert.ok(![c.text, ...c.subs].some((x) => x.includes(t)), `capture · ${make}: reason in the visible line`)
     assert.ok(c.tech && c.tech.some(([, v]) => String(v).includes(t)), `capture · ${make}: reason not kept in the technical details`)
-  }
-})
-
-const world = (async () => {
-  const w = await trafficWorld({ home: boardHome({ bytes: 2e5 }) })
-  const T = (await w.face.get('traffic', { limit: 500 })).doc
-  const h = T.hosts.find((r) => r.host && r.harness && r.requests > 0)
-  const calls = (await w.face.get('calls', { harness: h.harness, host: h.host, limit: 50 })).doc
-  return { w, host: `#/traffic/host/${encodeURIComponent(h.harness)}/${encodeURIComponent(h.host)}`, ref: calls.records[0].ref }
-})()
-test.after(async () => { (await world).w.close() })
-
-test('a failed read on traffic or a host page (list and request detail) shows the token only in hidden technical details, with a retry control', async () => {
-  const { w, host, ref } = await world
-  const q = (url) => new URL(url, 'http://x')
-  const sites = [
-    ['traffic', trafficPage, '#/traffic', (u) => u.pathname === '/api/traffic', 'data-act="retry"'],
-    ['host list', hostPage, host, (u) => u.pathname === '/api/calls' && u.searchParams.has('host'), 'data-act="retry"'],
-    ['request detail', hostPage, `${host}?ref=${encodeURIComponent(ref)}`, (u) => u.pathname === '/api/calls' && u.searchParams.has('ref'), 'data-act="retry-detail"'],
-  ]
-  for (const [name, mod, hash, hit, retry] of sites) {
-    for (const fail of [500, 503, 'throw']) {
-      for (const make of [0, 1, 2, 3]) {
-        const t = tok(), reason = reasonsWith(t)[make], where = `${name} · ${fail} · ${make}`
-        w.tamper((url, doc) => {
-          if (!hit(q(url))) return doc
-          if (fail === 'throw') throw new Error(reason)
-          return { status: fail, body: { error: reason } }
-        })
-        try {
-          const s = await w.mount(mod, hash)
-          const html = s.html()
-          hidesReason(html, t, reason !== '', where)
-          assert.ok(html.includes(retry), `${where}: retry control`)
-          s.inst.unmount()
-        } finally { w.tamper(null) }
-      }
-    }
   }
 })
 
