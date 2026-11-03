@@ -53,3 +53,18 @@ test('§3.6 the purge command is given exactly when something is kept, and the h
     for (const k of kept) assert.ok(hint.includes(k.what), `the hint names ${k.what}:\n${text}`)
   }
 })
+
+// §1.1⑥ columns: a label's items hang two deeper than the label; a command to copy sits deeper than any item, so the same path as an item
+// (`trocar's own files:`) and as a command (`If trocar itself breaks, run:`) never look alike. Read off the rendered receipt, not a fixed indent.
+test('§1.1⑥ a command to copy is deeper than every list item of the receipt', () => {
+  const home = '/home/alice', off = `${home}/.trocar/bin/trocar-off`
+  const r = { ...newReceipt('on'), ok: true, harnesses: ['codex'], changed: [], created: [off, `${home}/.trocar/collector/state.json`], unchanged: [], skipped: [], restart: [], notes: [], daemon: { state: 'running', pid: 1 }, standalone: off }
+  const out = lines(formatOnReceipt(r, { home, platform: 'linux' }))
+  const depth = (l) => l.length - l.trimStart().length
+  const label = out.indexOf("trocar's own files:"), cmd = out.indexOf('If trocar itself breaks, run:') + 1
+  const items = out.slice(label + 1).filter((l, i, a) => i < a.findIndex((x) => depth(x) === 0))
+  assert.ok(items.length === 2 && items.every((l) => depth(l) > 0), out.join('\n'))
+  assert.equal(out[cmd].trim(), '~/.trocar/bin/trocar-off')
+  assert.ok(items.every((l) => depth(out[cmd]) > depth(l)), `the command is deeper than the items:\n${out.join('\n')}`)
+})
+

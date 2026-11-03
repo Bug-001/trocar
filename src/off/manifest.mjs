@@ -20,6 +20,7 @@ import path from 'node:path'
 import { collectorDir, standalonePath } from './paths.mjs'
 import { readOrNull, writeDurable } from './fsutil.mjs'
 import { SENTINEL, OFF_PREFIX, BLOCK_OPEN, BLOCK_END } from './text-edit.mjs'
+import { COMMAND_INDENT } from './receipt.mjs'
 import { TASK_NAME, RUN_KEY } from './win32.mjs' // the undo-by-hand sentences name the same task and Run value the undo touches (the equality is test/off/win32.test.mjs's)
 
 export const MANIFEST = 'install-manifest.json'
@@ -185,10 +186,10 @@ export function refuseOldManifest({ home = nodeOs.homedir(), platform = process.
   // 1.6 §1.1⑥ / §3.1: every command the reader runs is a line of its own, whole, whatever the wrapper does to the sentences around it
   const message = [
     `the install manifest ${manifestPath(collectorDir(home))} is version ${m.version}, written by a trocar from before the collector model; this trocar does not read it and changed nothing. Undo it first with the trocar that wrote it, run:`,
-    '  trocar off',
-    '  trocar uninstall',
+    `${COMMAND_INDENT}trocar off`,
+    `${COMMAND_INDENT}trocar uninstall`,
     'Without that trocar, run the standalone copy it left:',
-    `  ${platform === 'win32' ? `node "${copy}"` : shellWord(copy)}`,
+    `${COMMAND_INDENT}${platform === 'win32' ? `node "${copy}"` : shellWord(copy)}`,
     'Then run trocar install.',
   ].join('\n')
   return { version: m.version, message }

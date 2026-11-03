@@ -7,16 +7,26 @@
 import path from 'node:path'
 import { OFF_PREFIX } from './text-edit.mjs'
 
+/** 1.6 §1.1⑥: the column of a command to copy — deeper than a sentence (column 0) and a label's item (column 2), so a path printed as an item and
+ *  the same path printed as a command never look alike. Every receipt and refusal prints its commands here, and a line of a several-line text
+ *  (a refusal) that starts here is that text's command. */
+export const COMMAND_INDENT = '    '
+/** Where the folded lines of an indented line (an item) start: two deeper than the line and than COMMAND_INDENT, so no fold is ever at a command's
+ *  column (§1.1⑥). A column-0 line folds at column 0. */
+export const foldHang = (lead) => (lead ? ' '.repeat(Math.max(lead.length, COMMAND_INDENT.length) + 2) : '')
+/** Is this line of a several-line text a command to copy (it starts at COMMAND_INDENT)? */
+export const isCommandLine = (l) => String(l).startsWith(COMMAND_INDENT) && /\S/.test(String(l).charAt(COMMAND_INDENT.length))
+
 const WIDTH = 80
 const offTilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
 const UNTIL_WORDS = { restart: 'until it restarts', 'next-connection': 'until its next new connection', 'next-handshake': 'until its next handshake', 'session-end': 'until its current session ends' }
 
-/** One line of at most 80 columns, or the line split at spaces (§1.1 版式 6): a text at column 0 folds at column 0, an indented one hangs two deeper
- *  than its lead, so a fold never lands on a command's two-space indent. A single word longer than the width (a path, a command) is never broken:
+/** One line of at most 80 columns, or the line split at spaces (§1.1 版式 6): a text at column 0 folds at column 0, an indented one hangs at
+ *  foldHang. A single word longer than the width (a path, a command) is never broken:
  *  it keeps its own line. */
 function fit(text) {
   const s = String(text)
-  const lead = s.slice(0, s.length - s.trimStart().length), hang = lead && `${lead}  `
+  const lead = s.slice(0, s.length - s.trimStart().length), hang = foldHang(lead)
   const out = []
   let line = ''
   for (const word of s.trimStart().split(/\s+/).filter(Boolean)) {
@@ -27,10 +37,10 @@ function fit(text) {
   return out
 }
 
-// a text of several lines (refuseOldManifest's refusal) keeps its lines, with HOME as `~` (§1.1⑤): a line indented two spaces is a command to copy,
+// a text of several lines (refuseOldManifest's refusal) keeps its lines, with HOME as `~` (§1.1⑤): a line at COMMAND_INDENT is a command to copy,
 // printed whole on its own line (§1.1⑥; `~` only for a POSIX HOME, where the shell expands it), every other line folded by fit
 const tildeWords = (s, home) => s.split(' ').map((w) => offTilde(w, home)).join(' ')
-const textLines = (text, home) => String(text).split('\n').flatMap((l) => (/^ {2}\S/.test(l) ? [home && home.startsWith('/') ? tildeWords(l, home) : l] : fit(tildeWords(l, home))))
+const textLines = (text, home) => String(text).split('\n').flatMap((l) => (isCommandLine(l) ? [home && home.startsWith('/') ? tildeWords(l, home) : l] : fit(tildeWords(l, home))))
 
 // a key the user set to a value of their own while capture was on (D48②, removeTrocarText `prior_left`): their value wins, the old line trocar put out
 // of effect stays so — where it is, and how to have the old value back
@@ -131,7 +141,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   }
   if ((r.still_trusting || []).length) {
     const roots = r.still_trusting.filter((p) => p.what === 'root')
-    for (const p of roots) lines.push(...fit(`Your trust store still holds trocar's root certificate: ${p.reason}. Take it out by hand with this line:`), `  ${p.command}`) // a command keeps its own line, whole (1.6 §1.1⑥)
+    for (const p of roots) lines.push(...fit(`Your trust store still holds trocar's root certificate: ${p.reason}. Take it out by hand with this line:`), `${COMMAND_INDENT}${p.command}`) // a command keeps its own line, whole (1.6 §1.1⑥)
     const procs = r.still_trusting.filter((p) => p.what !== 'root')
     if (procs.length) {
       lines.push('Still trusting the trocar certificate, but not going through trocar:')

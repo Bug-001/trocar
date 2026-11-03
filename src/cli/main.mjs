@@ -18,6 +18,7 @@ import { printJson, errorDoc } from './json.mjs'
 import { EXIT } from './schema.mjs'
 import { codeId, selfCommand } from '../version.mjs'
 import { recordUserPath } from '../off/user-path.mjs'
+import { COMMAND_INDENT } from '../off/receipt.mjs'
 
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const REPORT = 'Please report it with what you ran: https://github.com/Bug-001/trocar/issues'
@@ -38,7 +39,7 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   if (rest.includes('--help') || rest.includes('-h')) { io.out(helpText(cmd.name)); return EXIT.ok }
   // §1.5: the commands that change your own state refuse root, and the one that needs root refuses everyone else — before anything is read or written.
   if (cmd.needsRoot && platform !== 'linux') return refuse(cmd.name, 'usage', `trocar ${cmd.name}: not needed on this platform.`)
-  if (cmd.needsRoot && uid !== 0) return refuse(cmd.name, 'usage', `trocar ${cmd.name}: run it with sudo:\n  sudo ${selfCommand([cmd.name, ...rest])}`)
+  if (cmd.needsRoot && uid !== 0) return refuse(cmd.name, 'usage', `trocar ${cmd.name}: run it with sudo:\n${COMMAND_INDENT}sudo ${selfCommand([cmd.name, ...rest])}`)
   // `mutates` may be a function of the parsed args: `classes set` and `raw seal` change state, `classes` shown and `raw cat` do not. Parsing reads and writes nothing, so it comes first.
   const args = parseArgs(cmd, rest)
   const mutates = typeof cmd.mutates === 'function' ? cmd.mutates(args) : cmd.mutates

@@ -5,6 +5,7 @@
 // the absolute path.
 import path from 'node:path'
 import { standaloneCommand, appDir } from '../off/paths.mjs'
+import { COMMAND_INDENT, isCommandLine, foldHang } from '../off/receipt.mjs'
 import { noColor, WIDTH, wrap, pairs, size } from './text.mjs'
 import { HARNESS_IDS } from '../off/harness-names.mjs'
 
@@ -47,17 +48,17 @@ export const tildeCommand = (s, home) => (home && home.startsWith('/')
   ? s.replace(new RegExp(`(^|\\s)${escRe(home)}(?=/|\\s|$)`, 'g'), (m, pre, at) => (/(^|\s)sudo\s/.test(s.slice(0, at + pre.length)) ? m : `${pre}~`))
   : s)
 
-/** §1.1⑥: every line fits 80 columns — one that does not is folded on spaces: a column-0 line folds at column 0, an indented line (an item) hangs two
- *  deeper than its first line, so a fold never lands on a command's two-space indent; a word that is longer than the line (a path, a command) keeps its own line unbroken. A coloured line is left alone: its escape bytes are not columns and must not be cut. `home`: §1.1⑤,
+/** §1.1⑥: every line fits 80 columns — one that does not is folded on spaces: a column-0 line folds at column 0, an indented line (an item) hangs at
+ *  foldHang, past the command column; a command to copy sits at COMMAND_INDENT, right under the column-0 line that says what it is for; a word that is longer than the line (a path, a command) keeps its own line unbroken. A coloured line is left alone: its escape bytes are not columns and must not be cut. `home`: §1.1⑤,
  *  every text line's HOME paths as `~/…` (tildeText), a command to copy's where the shell expands them (tildeCommand). */
 export const fit = (lines, { home = null } = {}) => lines.flatMap((l) => {
-  if (l && typeof l === 'object' && typeof l.command === 'string') return [`  ${tildeCommand(l.command, home)}`] // a command to copy (commandLine): one line, never folded, so a paste runs it whole
-  // a text of several lines (a refusal with its commands, refuseOldManifest) keeps its lines, and a line of it indented two spaces is a command to copy
-  if (String(l).includes('\n')) return fit(String(l).split('\n').map((x) => (/^ {2}\S/.test(x) ? commandLine(x.slice(2)) : x)), { home })
+  if (l && typeof l === 'object' && typeof l.command === 'string') return [`${COMMAND_INDENT}${tildeCommand(l.command, home)}`] // a command to copy (commandLine): one line, never folded, so a paste runs it whole
+  // a text of several lines (a refusal with its commands, refuseOldManifest) keeps its lines, and a line of it at COMMAND_INDENT is a command to copy
+  if (String(l).includes('\n')) return fit(String(l).split('\n').map((x) => (isCommandLine(x) ? commandLine(x.slice(COMMAND_INDENT.length)) : x)), { home })
   const s = tildeText(String(l), home)
   if (s.length <= WIDTH || BARE.test(s)) return [s]
   const own = ' '.repeat(s.length - s.trimStart().length)
-  const [first, ...more] = wrap(s.trimStart(), WIDTH - own.length, own && `${own}  `)
+  const [first, ...more] = wrap(s.trimStart(), WIDTH - own.length, foldHang(own))
   return [own + first, ...more]
 })
 
