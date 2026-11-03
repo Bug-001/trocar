@@ -15,14 +15,15 @@ const skip = gate.ok ? false : gate.reason
 const P = 8 // members a pack: the long session is 20 sealed packs
 const longSession = () => world(5, { calls: 160, page: 16, talk: { pre: 3, len: 60, every: 6, tail: 4 } })
 
-// the step numbers #stepbar .sb-no shows, sampled every frame from now on: window.__steps = [{n, t (ms epoch)}] on each change
+// the step numbers #stepbar .sb-no shows, sampled every frame from now on: window.__steps = [{n, t}] on each change, t on stampFetches'
+// clock (performance.timeOrigin + performance.now(), ms epoch), so it and the fetch stamps subtract cleanly
 const sampleSteps = (page) => page.evaluate(() => {
   window.__steps = []
   let last = null
   const tick = () => {
     const x = /(\d+)\s*\/\s*\d+/.exec(document.querySelector('#stepbar .sb-no')?.textContent || '')
     const n = x ? +x[1] : null
-    if (n !== last) { last = n; if (n != null) window.__steps.push({ n, t: Date.now() }) }
+    if (n !== last) { last = n; if (n != null) window.__steps.push({ n, t: performance.timeOrigin + performance.now() }) }
     requestAnimationFrame(tick)
   }
   tick()
@@ -90,7 +91,7 @@ test('2.3 #30: a step named in another pack is that pack\'s first read and lands
       page.on('request', (r) => { const u = new URL(r.url()); if (/^\/api\/d\/p\d/.test(u.pathname)) pr.push(u.pathname) })
       await serveWorld(page, w, { latency: 40, pack: P })
       await sampleSteps(page)
-      const t0 = await page.evaluate((k) => { location.hash = `#/replay/p/S?step=${k}`; return Date.now() }, k)
+      const t0 = await page.evaluate((k) => { location.hash = `#/replay/p/S?step=${k}`; return performance.timeOrigin + performance.now() }, k)
       assert.ok(await until(page, async () => (await steps(page)).length > 0), `step ${k} was drawn`)
       await page.waitForTimeout(300)
       const seen = await steps(page)
