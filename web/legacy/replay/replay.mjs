@@ -44,7 +44,7 @@ import { renderSessionHead, wireSessionHead, captureGap, behindOf } from './head
 import { stepBarHtml, roughStepHtml, wireStepBar } from './stepbar.mjs'
 import { loadBodies, bodyCache, clearOverrides, overrideScope, isRetryable } from './cell.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
-import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION, moreLanes } from '../labels/replay.mjs'
+import { CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST, RETRY, THIS_SESSION, REVIEW_TIP, moreLanes } from '../labels/replay.mjs'
 import { readFailure } from '../core/ui.mjs'
 
 const POLL_MS = INTERVAL.session
@@ -126,7 +126,8 @@ const keyOf = (route) => route.project + '::' + route.id
 
 // The legacy view: today's DOM (DESKHEAD + SKELETON) in the desk's own root, its frame there at once. A view draws the R1 areas from
 // the state `s` and hands the controller its element map through `framed(E)` when its frame is there:
-//   { root, els() → E | null, head(), step(), saw(), overview(), cur(), problems(), rough(at, K), empty(msg), capacity() → K, dispose() }
+//   { root, els() → E | null, head(), step(), saw(), overview(), cur(), problems(), review(), frame(), rough(at, K), empty(msg),
+//     capacity() → K, dispose() }
 function legacyView(s, framed) {
   const root = document.createElement('div')
   root.className = 'desk'
@@ -143,6 +144,24 @@ function legacyView(s, framed) {
     overview: () => renderOverview(E.saw, s),
     cur: () => { markCurrent(E.saw, s); repositionBrush(E.saw, s) },
     problems: () => renderProblemNav(E.saw, s),
+    // s.reviewRange on the bars (bars carry a GLOBAL data-i) and the bracket over the window's part of it; null clears both
+    review() {
+      const r = s.reviewRange
+      if (!r) {
+        for (const b of root.querySelectorAll('#sawrow .bar.reviewed')) b.classList.remove('reviewed')
+        const br = $('#reviewbracket'); if (br) br.style.display = 'none'
+        return
+      }
+      for (const b of root.querySelectorAll('#sawrow .bar')) b.classList.toggle('reviewed', +b.dataset.i < r.k)
+      const br = $('#reviewbracket')
+      if (br) {
+        br.style.display = 'block'
+        br.style.width = (Math.max(0, Math.min(1, (r.k - s.view.lo) / Math.max(1, s.view.hi - s.view.lo))) * 100).toFixed(2) + '%'
+        br.title = REVIEW_TIP(r.k)
+      }
+    },
+    // s.railsFolded on the page: the rows the narrow screen folds show with the rails open
+    frame() { const lp = $('#leftpage'); if (lp) lp.classList.toggle('railopen', !s.railsFolded) },
     // the head's rows for step `at` (K bars at most): on a desk that drew a step only its bars (a named step on its way, the rest as it
     // was); else the rough page's step label too, the first such paint marked 'desk-rough'
     rough(at, K) {
@@ -198,7 +217,7 @@ function openDesk(ctx, route0, makeView = legacyView) {
     followLanding: false, // the playhead was last moved by 跟随最新, not by the reader: the window lands on the reply (1.4 §打开一步时落在哪)
     landedFor: null, replyFor: null, // the window's landing ran for that rid; the reply rows' open state belongs to that rid
     navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
-    railsFolded: typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches, rpOpen: false,
+    railsFolded: typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches, rpOpen: false, reviewRange: null,
     gap: null, totals: null, errNote: null, lastPhSig: null, unheld: null, notListed: false, goodKey: null, goodAt: null, staleErr: null,
     bodyFail: new Map(), // a body read that failed: ref → its failed body (2.3 §读失败)
   })
@@ -241,6 +260,8 @@ function openDesk(ctx, route0, makeView = legacyView) {
   // the 内容对比步 (2.3): the compare menu's choice survives scrubbing, clears on a session switch
   s.setDiff = (idx) => { s.diffRef = idx; drawPlayhead() }
   s.renderStep = () => view.step()
+  s.paintReview = () => view.review() // rails.mjs : highlightRange / clearRange set s.reviewRange
+  s.paintFrame = () => view.frame() // the rails' fold row sets s.railsFolded
 
   function renderHeader() { s.headFollow = s.follow; view.head(); syncUrl() }
 
