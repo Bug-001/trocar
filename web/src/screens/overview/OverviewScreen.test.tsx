@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { api } from '../../../legacy/core/api.mjs'
-import { INTERVAL } from '../../../legacy/core/poll.mjs'
+import { INTERVAL, backoffMs } from '../../../legacy/core/poll.mjs'
 import { parseHash } from '../../../legacy/core/router.mjs'
 import { store } from '../../../legacy/core/store.mjs'
 import { ALIASES, HARNESS_ORDER, harnessKey } from '../../../legacy/core/chips.mjs'
@@ -87,6 +87,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   document.getSelection()?.removeAllRanges()
   document.body.replaceChildren()
+  Reflect.deleteProperty(document, 'visibilityState')
 })
 
 const tick = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms))
@@ -106,6 +107,10 @@ function mount(hash = '#/overview') {
   const link = (href: string) => c.querySelector<HTMLAnchorElement>(`a[href="${href}"]`)
   const readAt = () => c.querySelector('.readat')?.textContent ?? null
   return { c, region, open, shut, link, readAt, go: (h: string) => r.rerender(ui(h)) }
+}
+const setVisible = (visible: boolean) => {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (visible ? 'visible' : 'hidden') })
+  document.dispatchEvent(new Event('visibilitychange', { bubbles: true }))
 }
 
 test('O1: the stats card\'s price-table details the reader opened stay open across polls; the failed session list\'s details stay closed', async () => {
@@ -258,6 +263,22 @@ test('O6: with no session the page is capture + one control per agent + start, w
   for (const name of [W.CARD.items, W.CARD.stats, W.CARD.recent]) expect(p.region(name), name).not.toBeNull()
   expect(p.c.querySelector('#ovgrid')).toBe(grid)
   expect(vi.mocked(api.control)).not.toHaveBeenCalled()
+})
+
+test('O7: while every read fails, each name\'s reads are at least the back-off apart; a hidden tab reads nothing', async () => {
+  for (const name of Object.keys(BASE)) answer[name] = (n) => fail(n)
+  const base: Record<string, number> = { status: INTERVAL.status, sessions: INTERVAL.sessions, ...Object.fromEntries(SLOW.map((n) => [n, INTERVAL.other])) }
+  mount(); await settle()
+  for (let t = 0; t < 120e3; t += 1000) await tick(1000)
+  for (const [name, b] of Object.entries(base)) {
+    const at = asked(name).map((c) => c.at)
+    expect(at.length, name).toBeGreaterThan(2)
+    for (let k = 1; k < at.length; k++) expect(at[k] - at[k - 1], `${name} read ${k}`).toBeGreaterThanOrEqual(backoffMs(k, b))
+  }
+  setVisible(false)
+  const n = calls.length
+  for (let t = 0; t < 60e3; t += 1000) await tick(1000)
+  expect(calls.length).toBe(n)
 })
 
 test('O8: a sessions answer that carries `stored` is never shown; the fresh one after it is, on the same rows', async () => {
