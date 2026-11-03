@@ -1,6 +1,6 @@
 // test/web-v2/no-provider-branches.test.mjs — invariant 3 / AC-3 for the v2 board: the front end carries no provider
-// wire vocabulary, no harness tool names and no harness ids except in core/chips.mjs (whose icon files live under
-// assets/harness/ and are .svg, below this scanner's horizon).
+// wire vocabulary, no model or vendor word, no harness tool names and no harness ids, in any file: the board reads the
+// harness names and icons from the registry (src/off/harness-names.mjs, D76), so no file under web/ is exempt.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -8,6 +8,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { HARNESSES, LEGACY_HARNESS_IDS } from '../../src/dissect/harnesses.mjs'
+import { HARNESS_REGISTRY, readIdOf } from '../../src/off/harness-names.mjs'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'legacy')
 // every .mjs / .html / .css under `dir`, except assets/ (the harness icons and their SOURCES.md are data rows of the
@@ -22,16 +23,15 @@ const WIRE = ['x-claude-code', 'x-codex-', 'x-opencode-', 'x-deepseek-harness-',
   'completion_tokens', 'prompt_cache_hit_tokens', 'previous_response_id', 'response.completed', 'function_call_output',
   'tool_calls', 'raw_sse', 'dsh_session_log', 'reasoning_content', 'prompt_cache_key', 'cch=', 'anthropic', 'openai',
   'claude-', 'gpt-']
-// model families and vendors, as whole words in any case: "opus", "Sonnet", "moonshot" … The harness names that are also vendor names
-// (kimi, deepseek) are the chip table's to spell (core/chips.mjs); nothing else may say them.
+// model families and vendors, as whole words in any case: "opus", "Sonnet", "moonshot" … (a harness's display name that holds one of
+// them comes from the registry at run time, never from front-end text)
 const FAMILY = ['opus', 'sonnet', 'haiku', 'glm', 'deepseek', 'moonshot', 'openrouter', 'kimi', 'qwen', 'gemini', 'claude']
 const FAMILY_RE = new RegExp(`(?<![a-z0-9_])(?:${FAMILY.join('|')})(?![a-z0-9_])`, 'gi')
-const CHIPS_MAY_SAY = new Set(['kimi', 'deepseek', 'claude']) // a harness's display name (Kimi Code, DeepSeek dsh, Claude Code)
 // tool names as string literals (a capitalised "Read" at the start of an English comment is not a branch)
 const TOOLS = [/['"`](Read|Write|Edit|Bash|Grep|Glob|Skill|Task|TodoWrite|WebFetch|WebSearch|NotebookEdit|MultiEdit|Agent|apply_patch|shell)['"`]/, /mcp__/, /\bfile_path\b/]
-// harness ids, read from the server's table: each row's id and proc.agent spellings, and the legacy row (a descriptor's name is among the
-// spellings, test/web-v2/harness-seam.test.mjs (e)) — so a new harness is scanned for once it has its row. WORD_IDS: the ones that can be a key
-const ALL_IDS = [...new Set([...HARNESSES.flatMap((h) => [h.id, ...h.agents]), ...LEGACY_HARNESS_IDS])]
+// harness ids, read from the registry (code ids, read ids, aliases) and the read side's table (each row's id and proc.agent spellings, and
+// the legacy row) — so a new harness is scanned for once it has its row. WORD_IDS: the ones that can be a key
+const ALL_IDS = [...new Set([...HARNESS_REGISTRY.flatMap((r) => [r.id, readIdOf(r), ...(r.aliases || [])]), ...HARNESSES.flatMap((h) => [h.id, ...h.agents]), ...LEGACY_HARNESS_IDS])]
 const WORD_IDS = ALL_IDS.filter((id) => /^[A-Za-z_$][\w$]*$/.test(id))
 const alt = (ids) => ids.map((id) => id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
 // as a string in any quote style ('cc', "cc", `cc`), or as an unquoted object key ({ cc: … }, , codex: …)
@@ -74,15 +74,12 @@ const HOSTS = /\b[a-z0-9-]+\.(?:com|net|io|cn|ai|dev|org)\b(?:\.(?:mjs|css|html)
 export function violations(name, text) {
   const out = []
   const lower = text.toLowerCase()
-  const isChips = name.endsWith(path.join('core', 'chips.mjs'))
-  for (const w of WIRE) if (lower.includes(w) && !(isChips && w === 'claude-')) out.push(`${name}: wire word "${w}"`)
-  for (const m of new Set([...text.matchAll(FAMILY_RE)].map((x) => x[0].toLowerCase()))) if (!(isChips && CHIPS_MAY_SAY.has(m))) out.push(`${name}: model / vendor word "${m}"`)
+  for (const w of WIRE) if (lower.includes(w)) out.push(`${name}: wire word "${w}"`)
+  for (const m of new Set([...text.matchAll(FAMILY_RE)].map((x) => x[0].toLowerCase()))) out.push(`${name}: model / vendor word "${m}"`)
   for (const re of TOOLS) if (re.test(text)) out.push(`${name}: tool name ${re}`)
-  if (!isChips) {
-    for (const re of IDS) if (re.test(text)) out.push(`${name}: harness id ${re}`)
-    for (const lit of embeddedIdLiterals(text)) out.push(`${name}: harness id inside the string ${lit}`)
-    for (const body of regexIds(text)) out.push(`${name}: harness id inside the regex /${body}/`)
-  }
+  for (const re of IDS) if (re.test(text)) out.push(`${name}: harness id ${re}`)
+  for (const lit of embeddedIdLiterals(text)) out.push(`${name}: harness id inside the string ${lit}`)
+  for (const body of regexIds(text)) out.push(`${name}: harness id inside the regex /${body}/`)
   for (const m of text.matchAll(HOSTS)) if (!/\.(?:mjs|css|html)$/i.test(m[0])) out.push(`${name}: host literal "${m[0]}"`)
   return out
 }
@@ -102,14 +99,11 @@ test('harness ids are caught in any quote style, and as unquoted object keys', (
     assert.deepEqual(violations('x.mjs', src), [], src)
 })
 // A-M8: the guard must bite on the obvious regressions — a model family, a vendor, a tool the first list lacked, an id in a regex or a template
-test('model families and vendors are caught, in any case, as words; harness display names are the chip table\'s alone', () => {
+test('model families and vendors are caught, in any case, as words', () => {
   for (const w of ['opus', 'Sonnet', 'HAIKU', 'glm', 'DeepSeek', 'moonshot', 'OpenRouter', 'kimi', 'Qwen', 'gemini', 'gpt-4o'])
     assert.ok(violations('x.mjs', `const m = '${w}'`).length >= 1, w)
   assert.ok(violations('x.mjs', '// the opus tier costs more').length >= 1, 'a comment too: the words are not wanted in front-end text at all')
   for (const ok of ['const sonnetry = 1', 'const glmx = 2', 'const topus = 3', 'const geminis = 4']) assert.deepEqual(violations('x.mjs', ok), [], ok)
-  const chips = path.join('web', 'legacy', 'core', 'chips.mjs')
-  assert.deepEqual(violations(chips, "const n = 'DeepSeek dsh', k = 'Kimi Code'"), [])
-  assert.equal(violations(chips, "const m = 'opus'").length, 1); assert.equal(violations(chips, "const m = 'moonshot'").length, 1)
 })
 test('the tools the first list lacked are caught as string literals; the same word in prose is not', () => {
   for (const t of ['WebFetch', 'WebSearch', 'NotebookEdit', 'MultiEdit', 'Agent', 'TodoWrite', 'Task']) {
@@ -123,16 +117,6 @@ test('a harness id is caught inside a regex literal and inside a longer string o
   for (const ok of ['const a = b / cc / d', 'const t = x.cc / 2', 'a = b.cc // codex in a comment', '/* /hermes/ in a block comment */ x = 1', 'const s = "accord"', 'const re = /acct|xcc/', "const u = 'a.cc'", 'const q = `${cc}`'])
     assert.deepEqual(violations('x.mjs', ok), [], ok)
   assert.deepEqual(regexLiterals('a = /x\\/y/g; b = c / d / e; // /no/\nf = /[/]z/'), ['x\\/y', '[/]z'])
-  const chips = path.join('web', 'legacy', 'core', 'chips.mjs')
-  assert.deepEqual(violations(chips, "const re = /^(cc|codex)$/, k = 'x:kimi:y'"), []) // the chip table is the one place that names them
-  assert.equal(violations(path.join('other', 'chips.mjs'), "const re = /codex/").length, 1)
-})
-test('core/chips.mjs is exempt from harness ids and from "claude-", nothing else', () => {
-  const chips = path.join('web', 'legacy', 'core', 'chips.mjs')
-  assert.deepEqual(violations(chips, "const t = { cc: 1, 'claude-code': 2, codex: 3, \"kimi\": 4, `zcode`: 5 }"), [])
-  assert.equal(violations(chips, "x = 'prompt_tokens'").length, 1) // wire vocabulary still counts there
-  assert.equal(violations(chips, "x = 'Bash'").length, 1)
-  assert.equal(violations(path.join('other', 'chips.mjs'), "const h = 'codex'").length, 1) // only core/chips.mjs is exempt
 })
 test('wire words: cached_tokens and the billing "cch=" marker are caught', () => {
   assert.equal(violations('x.mjs', 'u.cached_tokens').length, 1)
