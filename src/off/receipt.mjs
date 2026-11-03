@@ -40,7 +40,7 @@ function fit(text) {
 // a text of several lines (refuseOldManifest's refusal) keeps its lines, with HOME as `~` (§1.1⑤): a line at COMMAND_INDENT is a command to copy,
 // printed whole on its own line (§1.1⑥; `~` only for a POSIX HOME, where the shell expands it), every other line folded by fit
 const tildeWords = (s, home) => s.split(' ').map((w) => offTilde(w, home)).join(' ')
-const textLines = (text, home) => String(text).split('\n').flatMap((l) => (isCommandLine(l) ? [home && home.startsWith('/') ? tildeWords(l, home) : l] : fit(tildeWords(l, home))))
+export const textLines = (text, home) => String(text).split('\n').flatMap((l) => (isCommandLine(l) ? [home && home.startsWith('/') ? tildeWords(l, home) : l] : fit(tildeWords(l, home))))
 
 // a key the user set to a value of their own while capture was on (D48②, removeTrocarText `prior_left`): their value wins, the old line trocar put out
 // of effect stays so — where it is, and how to have the old value back
