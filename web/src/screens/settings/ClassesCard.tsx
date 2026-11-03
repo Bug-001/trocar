@@ -26,7 +26,8 @@ const keepName = (k: string) => (W.KEEP_NAME as Record<string, string>)[k] ?? k
 
 function Level({ r, busy, onChange }: { r: Row & { id: string }, busy: boolean, onChange: Change }) {
   return (
-    <ToggleButtonGroup className="seg live lvl" data-lvl={r.id} aria-label={W.LEVEL_OF(r.name)} aria-busy={busy || undefined}
+    <ToggleButtonGroup className="seg live lvl" data-lvl={r.id} aria-label={W.LEVEL_OF(r.name)}
+      render={(props) => <div {...props} aria-busy={busy || undefined} />}
       selectionMode="single" disallowEmptySelection selectedKeys={[r.keep]}
       onSelectionChange={(keys: Set<Key>) => { const k = [...keys][0]; if (k != null && k !== r.keep) onChange(r.id, String(k)) }}>
       {KEEPS.map((k) => (
