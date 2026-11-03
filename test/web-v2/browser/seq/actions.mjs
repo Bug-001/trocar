@@ -193,7 +193,11 @@ export const ACTIONS = [
     if (rows.length < 2) return SKIP
     const A = rowAt(rows, p.a), B = rows[(rows.indexOf(A) + 1 + Math.floor(p.b * (rows.length - 1))) % rows.length]
     ctx.faults.arm({ kind: 'latency', name: 'd/head', n: 1, ms: p.ms })
+    // B is opened once A's head is on its way, so the held head is A's (the switch happens with A's read in flight), not a race
+    // between the two hash writes and A's screen load
+    const sent = ctx.page.waitForRequest((q) => /\/api\/d\/head\b/.test(q.url()) && new URL(q.url()).searchParams.get('id') === A.session_id, { timeout: 5000 }).catch(() => null)
     await go(ctx.page, deskHash(A))
+    await sent
     await go(ctx.page, deskHash(B))
   }),
   world('grow', 8, (r) => ({ k: int(r, 1, 3) }), (ctx, p) => { ctx.lastGrow = ctx.world.grow(p.k); ctx.grownAt = Date.now() }),

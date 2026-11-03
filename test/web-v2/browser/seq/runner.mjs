@@ -63,8 +63,10 @@ async function shoot(page, name) {
   return file
 }
 
-// installed before the probe (so its listeners are not the board's): the time and kind of every reader input the page receives
+// installed before the probe (so its listeners are not the board's): the time and kind of every reader input the page receives, the
+// page's own load first (a goto or a reload opens the screen the URL names, as a hashchange does; main.tsx's canonical hash fires no event)
 function recordInput() {
+  ;(window.__seqInput ||= []).push([Date.now(), 'load'])
   for (const e of ['keydown', 'pointerdown', 'hashchange', 'popstate']) addEventListener(e, () => (window.__seqInput ||= []).push([Date.now(), e]), true)
 }
 

@@ -116,11 +116,12 @@ function rateFaults(log, { actions = [], hidden = [] } = {}) {
   const byReader = (t) => actions.some((a) => t >= a.t + lo && t <= a.t + hi)
   const hiddenAt = (t) => hidden.some((h) => t > h.from && (h.to == null || t < h.to))
   const sorted = [...log].filter((x) => x.method === 'GET').sort((a, b) => a.start - b.start)
-  // the first read of each key in a window is the screen's own: on becoming visible again (4.4:49-51) and on opening (4.4 「打开时」)
+  // the first read of each key in a window is the screen's own: on becoming visible again (4.4:49-51) and on opening (4.4 「打开时」: a load,
+  // a hashchange, a popstate)
   const exempt = new Set()
   const firstIn = (from, to) => { const seen = new Set(); for (const e of sorted) if (e.start >= from && e.start <= to && !seen.has(rateKey(e.url))) { seen.add(rateKey(e.url)); exempt.add(e) } }
   for (const h of hidden) if (h.to != null) firstIn(h.to, h.to + LIMITS.returnReadMs)
-  for (const a of actions) if (a.a === 'hashchange' || a.a === 'popstate') firstIn(a.t + lo, a.t + LIMITS.openReadMs)
+  for (const a of actions) if (a.a === 'load' || a.a === 'hashchange' || a.a === 'popstate') firstIn(a.t + lo, a.t + LIMITS.openReadMs)
   const last = new Map() // key → {start, dur, fails, pending, recovered}
   let sessionAt = -Infinity // the start of the latest poll round (its head read, or a `session` read), whatever caused it
   for (const e of sorted) {
