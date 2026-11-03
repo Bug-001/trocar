@@ -8,7 +8,7 @@ import { unitText, unitPath, wantsLink, removeWantsLinks, systemctl, userUnit, U
 import { commandNamed } from '../../../../src/cli/commands.mjs'
 
 test('unit: absolute quoted ExecStart, restart on failure, no capability-stripping directives', () => {
-  const t = unitText({ node: '/usr/bin/node', script: '/opt/my "trocar"/bin/trocar.mjs' })
+  const t = unitText({ program: ['/usr/bin/node', '/opt/my "trocar"/bin/trocar.mjs'] })
   assert.match(t, /^ExecStart="\/usr\/bin\/node" "\/opt\/my \\"trocar\\"\/bin\/trocar\.mjs" daemon$/m)
   assert.match(t, /^Restart=on-failure$/m)
   assert.match(t, /^KillMode=mixed$/m, 'a stop signals the daemon alone; it closes its helper itself (4.6 F3(h))')
@@ -19,13 +19,13 @@ test('unit: absolute quoted ExecStart, restart on failure, no capability-strippi
 
 test('unit: ExecStart runs a command of the table that refuses root (trocar daemon, 1.6 §2)', () => {
   const words = (text) => (/^ExecStart=(.*)$/m.exec(text)[1].match(/"(?:[^"\\]|\\.)*"|\S+/g) || []).map((w) => w.replace(/^"|"$/g, ''))
-  const [, , ...argv] = words(unitText({ node: '/usr/bin/node', script: '/opt/trocar/bin/trocar.mjs' }))
+  const [, , ...argv] = words(unitText({ program: ['/usr/bin/node', '/opt/trocar/bin/trocar.mjs'] }))
   assert.deepEqual(argv, ['daemon'])
   assert.ok(commandNamed(argv[0]) && commandNamed(argv[0]).mutates, 'the unit runs a command that is in the table, and it is one the daemon user runs, not root')
 })
 
 test('unit: the daemon\'s own environment as quoted Environment= lines; % and $ cannot expand into something else (review 3 #1)', () => {
-  const t = unitText({ node: '/opt/n$v/node', script: '/s/trocar.mjs', env: { NODE_EXTRA_CA_CERTS: '/corp/"ca" 100%.pem' } })
+  const t = unitText({ program: ['/opt/n$v/node', '/s/trocar.mjs'], env: { NODE_EXTRA_CA_CERTS: '/corp/"ca" 100%.pem' } })
   assert.match(t, /^\[Service\]\nType=simple\nEnvironment="NODE_EXTRA_CA_CERTS=\/corp\/\\"ca\\" 100%%\.pem"\nExecStart=/m, 'in [Service], before ExecStart')
   assert.match(t, /^ExecStart="\/opt\/n\$\$v\/node" "\/s\/trocar\.mjs" daemon$/m)
   assert.equal(wantsLink('/h'), '/h/.config/systemd/user/default.target.wants/trocar-collector.service')
