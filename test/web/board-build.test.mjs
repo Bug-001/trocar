@@ -32,3 +32,9 @@ test('a rebuild of web/ equals the committed src/web/board/, file by file and by
   for (const f of files) assert.equal(fs.readFileSync(path.join(out, f)).includes(here), false, `${f} names the checkout's path`)
   assert.deepEqual(tree(web), sources, 'the build leaves nothing beside its config')
 })
+
+// 1.2 §涉及源文件 · D75③: the new desk is in the desk-next build only (`vite build --mode desk-next`); the committed build mounts the
+// legacy desk and carries none of the new one's modules
+test('the committed build has no chunk of the new desk (web/src/screens/replay/DeskHost.tsx)', () => {
+  assert.deepEqual(tree(path.join(BUILT, 'assets')).filter((f) => /^DeskHost\b/.test(f)), [])
+})

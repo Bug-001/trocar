@@ -35,7 +35,7 @@ export async function serveBoard({ userHome, home, idleMs }) {
   const kids = []
   const svc = createQueryService({ home, idleMs, fork: (h, ...argv) => { const c = fork(WORKER, [h, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: ['--require', NO_REAL_OS], env }); kids.push(c); return c } })
   const alive = () => kids.filter((c) => c.exitCode === null && c.signalCode === null)
-  const { server } = createServer({ home, token: TOKEN, query: svc })
+  const { server } = createServer({ home, token: TOKEN, query: svc, webDir: process.env.TROCAR_BOARD_DIR }) // --desk-next: the desk-next build (scripts/test-browser.mjs)
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
   const port = server.address().port
   const get = async (name, params = {}) => {
