@@ -10,7 +10,7 @@ import * as W from '../../../legacy/labels/overview.mjs'
 import { TechDetails, type TechValue } from '../../ui/TechDetails'
 import { HarnessIcon } from '../../ui/HarnessIcon'
 import { HarnessSwitch, type ControlModel } from '../../ui/HarnessSwitch'
-import { InfoButton } from './InfoButton'
+import { InfoButton } from '../../ui/InfoButton'
 import type { capCard, itemsCard, startCard } from './model.mjs'
 
 type Link = { text: string, href: string }
