@@ -172,7 +172,7 @@ test('#3 no false 「nothing to handle」: a failed source draws the partial not
 
 // a mounted overview on a fake element and a fake api that logs every call
 // hold(name, params, opts) → a promise to wait on before answering (the test decides when a read answers), or null to answer at once
-function fakeMount({ status = quiet(), sessions = { sessions: [session(1)], errors: [], next: null }, window = '24h', control = {}, answer = { ok: true }, hold = null } = {}) {
+function fakeMount({ status = quiet(), sessions = { sessions: [session(1)], errors: [], next: null }, window = '24h', control = {}, answer = { ok: true }, hold = null, doc = null } = {}) {
   const log = [], on = {}
   const docs = { status, sessions, classes: { disk: { trocar_bytes: 1 } }, pricing: { models: [] }, traffic: { hosts: [], harness_since: {} }, segments: { segments: [] } }
   const api = {
@@ -191,7 +191,7 @@ function fakeMount({ status = quiet(), sessions = { sessions: [session(1)], erro
   const el = {
     set innerHTML(v) { for (const id of v.match(/id="([^"]+)"/g).map((x) => x.slice(4, -1))) zones[id] = { innerHTML: '', classList: { toggle() {} } } },
     querySelector: (sel) => zones[sel.slice(1)],
-    addEventListener(type, fn) { on[type] = fn }, removeEventListener() {}, replaceChildren() {},
+    addEventListener(type, fn) { on[type] = fn }, removeEventListener() {}, replaceChildren() {}, ownerDocument: doc,
   }
   const router = { current: () => ({ params: { window } }) }
   const inst = mount(el, { api, router, store: {}, toast: () => {} })
@@ -212,6 +212,22 @@ test('a stored sessions answer is not shown: the overview reads the list again a
     await within((async () => { while (!html().includes('fresh-title')) await new Promise((d) => setTimeout(d, 50)) })(), 10_000, 'the fresh list')
     assert.ok(!html().includes('stored-title'))
     assert.ok(reads >= 2, `read again (${reads})`)
+  } finally { inst.unmount() }
+})
+
+// 1.7 §读取与刷新: the slow reads share two sockets, and 「页面不可见时全部停」 — a read still queued when the page is hidden is not sent
+test('a slow read whose socket comes free while the page is hidden is not sent', async () => {
+  const doc = { hidden: false }, held = []
+  const { inst, log } = fakeMount({ doc, hold: (name) => (name === 'classes' || name === 'pricing' ? new Promise((res) => held.push(() => res({ ok: true, status: 200, data: name === 'classes' ? { disk: { trocar_bytes: 1 } } : { models: [] } }))) : null) })
+  const slow = () => log.filter((x) => ['overview', 'segments', 'traffic'].includes(x.name)).length
+  try {
+    await settle()
+    assert.equal(held.length, 2, 'classes and pricing hold both sockets')
+    assert.equal(slow(), 0, 'the other slow reads wait for a socket')
+    doc.hidden = true
+    for (const f of held) f()
+    await settle()
+    assert.equal(slow(), 0, JSON.stringify(log.map((x) => x.name)))
   } finally { inst.unmount() }
 })
 

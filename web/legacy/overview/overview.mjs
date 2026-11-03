@@ -425,6 +425,8 @@ export const SKELETON =
   `<div id="ovcap"></div><div id="ovitems"></div><div id="ovagents"></div><div id="ovstats" class="span"></div><div id="ovrecent" class="span"></div>` +
   `</div></div>`
 
+const HELD = Object.freeze({ held: true }) // a slow read not sent because the page was hidden when its socket came free
+
 export function mount(el, ctx) {
   const { api, router } = ctx
   let dead = false
@@ -438,6 +440,7 @@ export function mount(el, ctx) {
 
   // fold one read into its slot: a failure keeps the last good data and marks the source failed this round. → {ok} for the poller
   const fold = (slot, r) => {
+    if (r === HELD) return {}
     if (r && r.ok) { s[slot] = { data: r.data, ok: true, err: null }; s.readAt = Date.now() }
     else s[slot] = { data: s[slot].data, ok: false, err: r || NO_ANSWER }
     return { ok: !!(r && r.ok) }
@@ -467,11 +470,15 @@ export function mount(el, ctx) {
   const readControl = () => api.controlStatus().then((r) => { s.control = r }, (e) => { s.control = { ok: false, error: String(e) } }).finally(render)
   const readSessions = async () => fold('sessions', await freshSessions(api, { alive: () => !dead })) // a stored answer is not shown (4.4 §存下的答案)
   // the five slow reads share two sockets (1.7 §读取与刷新: the browser's six per origin keep room for status and sessions), the
-  // window's own stats read included; an aborted read gives its socket back at once, as the browser does
+  // window's own stats read included; an aborted read gives its socket back at once, as the browser does. A read whose turn comes
+  // while the page is hidden is not sent (1.7: 「页面不可见时全部停」): it answers HELD, the slot keeps what it has, and the poller's
+  // visible-again read asks it then
   let free = 2
   const queue = []
+  const hidden = () => !!(el.ownerDocument && el.ownerDocument.hidden)
   const slowGet = (name, params, opts = {}) => new Promise((resolve, reject) => {
     const go = () => {
+      if (hidden()) { resolve(HELD); const next = queue.shift(); if (next) next(); else free++; return }
       let held = true
       const give = () => { if (!held) return; held = false; const next = queue.shift(); if (next) next(); else free++ }
       if (opts.signal) opts.signal.addEventListener('abort', give, { once: true })
@@ -487,7 +494,7 @@ export function mount(el, ctx) {
     if (statsCtl) statsCtl.abort()
     const ctl = statsCtl = new AbortController(), asked = statsW = s.w
     const p = statsP = slowGet('overview', { since: asked === 'all' ? null : asked }, { signal: ctl.signal }).then((r) => {
-      if (ctl.signal.aborted || asked !== s.w) return
+      if (ctl.signal.aborted || asked !== s.w || r === HELD) return
       const kept = s.stats.w === asked ? s.stats.data : null
       s.stats = r && r.ok ? { data: r.data, ok: true, err: null, w: asked } : { data: kept, ok: false, err: r || NO_ANSWER, w: kept ? asked : null }
       if (r && r.ok) s.readAt = Date.now()
