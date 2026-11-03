@@ -246,27 +246,55 @@ test('a planted 120 ms busy loop is a long task ≥ 100 ms and an I-longtask vio
   }
 })
 
-// 2.3 #27: I-longtask judges a task that starts after the step's input and after the document's boot. A 120 ms loop in a task of
-// the page's own 100 ms into the boot (an image held 500 ms delays `load`; a task in the first few ms can precede the observer) and one before the step's input are seen by the
-// probe and not judged; one after the step's input is.
-test('V-longtask: a long task in the boot or before the step\'s input is not judged; one after the step\'s input is', { skip }, async () => {
+// 2.3 #27: I-longtask judges a task that starts after the step starts, unless that step made the document (the whole step is its
+// boot). A 120 ms loop in a task of the page's own 100 ms into a document the step opened, and one before the step starts, are seen
+// by the probe and not judged; one after the step starts is.
+test('V-longtask: a long task of the step that made the document or before the step starts is not judged; one after the step starts is', { skip }, async () => {
   const pg = await b.page.context().newPage()
+  const at = () => pg.evaluate(() => performance.timeOrigin + performance.now())
   const busy = () => pg.evaluate(() => new Promise((ok) => setTimeout(() => { const t = performance.now(); while (performance.now() - t < 120); setTimeout(ok, 300) })))
   try {
     await installProbe(pg)
     await pg.route('**/seq-boot.html', (r) => r.fulfill({ contentType: 'text/html; charset=utf-8',
-      body: '<!doctype html><meta charset="utf-8"><title>boot</title><p>boot</p><img src="seq-boot.gif"><script>setTimeout(() => { const t = performance.now(); while (performance.now() - t < 120); }, 100)</script>' }))
-    await pg.route('**/seq-boot.gif', (r) => setTimeout(() => r.fulfill({ contentType: 'image/gif', body: '' }).catch(() => {}), 500))
-    await pg.goto(`${b.url}/seq-boot.html`) // waits for `load`
-    await pg.waitForTimeout(300) // the boot ends a frame after `load`; the observer's entries are delivered after the task
+      body: '<!doctype html><meta charset="utf-8"><title>boot</title><p>boot</p><script>setTimeout(() => { const t = performance.now(); while (performance.now() - t < 120); }, 100)</script>' }))
+    await pg.goto('about:blank')
+    const openAt = await at()
+    await pg.goto(`${b.url}/seq-boot.html`)
+    await pg.waitForTimeout(500) // past the 100 ms timer; the observer's entries are delivered after the task
     assert.ok((await snap(pg)).longtaskMax >= 100, 'the boot\'s long task is seen')
-    assert.equal(ids(await check({ page: pg })).includes('I-longtask'), false, 'the boot is not judged')
+    assert.equal(ids(await check({ page: pg, stepAt: openAt })).includes('I-longtask'), false, 'the step that made the document is not judged')
     await busy()
-    assert.equal(ids(await check({ page: pg, stepAt: Date.now() })).includes('I-longtask'), false, 'a task before the step\'s input is not judged')
-    const stepAt = Date.now()
+    assert.equal(ids(await check({ page: pg, stepAt: await at() })).includes('I-longtask'), false, 'a task before the step starts is not judged')
+    const stepAt = await at()
     await busy()
-    assert.ok(ids(await check({ page: pg, stepAt })).includes('I-longtask'), 'a task after the step\'s input is judged')
+    assert.ok(ids(await check({ page: pg, stepAt })).includes('I-longtask'), 'a task after the step starts is judged')
   } finally { await pg.close() }
+})
+
+// the same on the real board: under a 6x CPU throttle a reload step's cold open (the rough page, then the rows and the packs the loader
+// reads behind them, D71①) runs long tasks that I-longtask does not judge; a long task that the next step's key starts is judged
+test('V-longtask board: a throttled reload step is not judged; a long task after the next step\'s key is', { skip }, async () => {
+  const cdp = await b.page.context().newCDPSession(b.page)
+  const at = () => b.page.evaluate(() => performance.timeOrigin + performance.now())
+  try {
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 })
+    const reloadAt = await at()
+    await b.page.reload({ waitUntil: 'load' }); await drawn(b.page)
+    await b.page.waitForTimeout(1500) // the loader's packs behind the rows
+    assert.ok((await snap(b.page)).longtaskMax > 50, 'the throttled cold open runs long tasks')
+    assert.equal(ids(await check({ page: b.page, stepAt: reloadAt })).includes('I-longtask'), false, 'the reload step is not judged')
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 })
+    await quiet()
+    // the key's own task runs a 120 ms loop of the page's
+    await b.page.evaluate(() => document.addEventListener('keydown', () => { const t = performance.now(); while (performance.now() - t < 120); }, { once: true }))
+    const keyAt = await at()
+    await b.page.keyboard.press('ArrowLeft')
+    await b.page.waitForTimeout(500)
+    assert.ok(ids(await check({ page: b.page, stepAt: keyAt })).includes('I-longtask'), 'a long task after the key is judged')
+  } finally {
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 }).catch(() => {}); await cdp.detach().catch(() => {})
+    await b.page.evaluate((h) => { location.hash = h }, hash) // the key named a step: the next case's reload follows again
+  }
 })
 
 // a static page the harness serves at `hash` (not the board), its /api/* answered by `api(url)` → {body, ms}; resolves once

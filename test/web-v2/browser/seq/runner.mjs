@@ -98,6 +98,8 @@ export async function runSequence({ steps, seed = 1, big = false, viewport = 128
       out.step = i
       const step = steps[i], cov = out.coverage[step.a] ||= { ran: 0, skipped: 0 }
       const t = Date.now()
+      // the step's start on the page's own clock, the one its long tasks are timed on (I-longtask, 2.3 #27)
+      const stepAt = await b.page.evaluate(() => performance.timeOrigin + performance.now()).catch(() => t)
       const r = await runStep(ctx, step).catch(() => ({ skipped: true })) // a navigation tore the page's context mid-step
       cov[r.skipped ? 'skipped' : 'ran']++
       // a reload re-runs the probe, so the page is visible again: the reader's hidden window ends with that step
@@ -113,7 +115,7 @@ export async function runSequence({ steps, seed = 1, big = false, viewport = 128
       const truth = id && !real ? () => retry(() => mainCount(b.get, id)).catch((e) => { noTruth = true; out.serverErrors.push(`step ${i}: ${e.message}`); return null }) : undefined
       // every input the page saw (a compound step clicks after its own waits) opens a reader window for I-rate
       for (const [at, e] of await b.page.evaluate(() => (window.__seqInput || []).splice(0)).catch(() => [])) ctx.actions.push({ t: at, a: e })
-      const c = { stepAt: t, page: b.page, requests: b.requests, errors: b.errors, actions: ctx.actions, faults: faults.log, hidden: ctx.hidden, follow: ctx.follow,
+      const c = { stepAt, page: b.page, requests: b.requests, errors: b.errors, actions: ctx.actions, faults: faults.log, hidden: ctx.hidden, follow: ctx.follow,
         grownAt: ctx.grownAt, truth, real, prev, baseline, drag: ctx.lastDrag }
       const had = new Set(baseline.keys())
       const res = await check(c).catch(async () => { await b.page.waitForTimeout(500); return check(c) })

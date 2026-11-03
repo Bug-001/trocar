@@ -32,7 +32,7 @@ export const LIMITS = Object.freeze({
   memRatio: 1.5, memSlackBytes: 10 * 2 ** 20, // invariant I-mem
   memCapBytes: 80 * 2 ** 20, // pending: no spec line sets this cap yet
   followMs: 15000, // spec/01-trocar-rfc/1.4-central-board.md:71-73 · 4.4:51
-  longtaskMs: 50, // D64 ②: no task of the page's own over 50 ms after a step's input, outside the document's boot (2.3 #27)
+  longtaskMs: 50, // D64 ②: no task of the page's own over 50 ms after a step starts, unless that step made the document (2.3 #27)
   loaderMax: 3, // spec/01-trocar-rfc/2.3-context-window.md:186 加载器: at most 3 of the desk's loader reads on their way at once
   chapterSettleMs: 1000, // the chapter row and the step bar are drawn by one paint; a check that lands between two frames looks again
 })
@@ -184,8 +184,8 @@ function packFaults(log) {
  * check(ctx) → { violations:[{id, sig, fp, detail}], pending:[{id, value, pointer}], view }.
  * ctx: { page, requests, errors, actions:[{t,a}], faults:[{name, kind, from, to}], hidden:[{from,to}], follow, grownAt (ms of the last
  * growth, or null), truth() → the main-lane count, real, prev (the `view` of the previous check), baseline (Map, optional: per-route
- * first-visit counts; default one per page), drag ({made, changed} of a select step just run, else null), stepAt (ms of the step's
- * input; default: judge every long task after the boot) }. Call it when the page has settled.
+ * first-visit counts; default one per page), drag ({made, changed} of a select step just run, else null), stepAt (the step's start on
+ * the page's clock, performance.timeOrigin + now(); default: judge every long task) }. Call it when the page has settled.
  */
 export async function check(ctx) {
   const { page, requests = [], errors = [], actions = [], faults = [], hidden = [], follow = false, grownAt = null, truth, real = false, prev = null, drag = null } = ctx
@@ -287,8 +287,8 @@ export async function check(ctx) {
   const pk = packFaults(s.fetchLog)
   if (pk.length) bad('I-pack', pk.slice(0, 3).join(' | '))
 
-  // I-longtask (2.3 #27): a task that starts after the step's input and after the document's boot (null: not done, all of it is boot)
-  const from = Math.max(ctx.stepAt ?? -Infinity, s.boot?.done ?? Infinity)
+  // I-longtask (2.3 #27): a task that starts after the step starts; a step that made this document is its boot, none of it judged
+  const from = ctx.stepAt == null ? -Infinity : s.origin >= ctx.stepAt ? Infinity : ctx.stepAt
   const long = s.longtasks.filter((x) => x.t >= from).reduce((m, x) => Math.max(m, x.ms), 0)
   if (long > LIMITS.longtaskMs) bad('I-longtask', `a long task of ${Math.round(long)} ms`)
   if (v.loadStep) bad('I-loadstep', `a load control: ${v.loadStep}`)
