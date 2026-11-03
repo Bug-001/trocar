@@ -6,6 +6,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { probe, withBoard, shoot, layoutFaults } from './harness.mjs'
+import { FILTER_CLASS } from '../../../web/legacy/labels/traffic.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
@@ -47,10 +48,10 @@ test('M7 · I21 · R18 / R20: the detail never covers the list\'s five columns; 
       const host = await openPages(b)
       assert.deepEqual(await textBetween(b.page, '.tcap'), [], 'traffic: head → table')
       // I21: the class menu's first item → ?class=
-      await b.page.getByRole('button', { name: 'class', exact: true }).click()
+      await b.page.getByRole('button', { name: FILTER_CLASS, exact: true }).click() // the menu's word from its label, not a copy of it
       await b.page.getByRole('menuitem').first().click()
       await b.page.waitForFunction(() => /[?&]class=/.test(location.hash))
-      await b.page.getByRole('link', { name: /^class:/ }).waitFor({ timeout: 10000 })
+      await b.page.getByRole('link', { name: new RegExp(`^${FILTER_CLASS}:`) }).waitFor({ timeout: 10000 })
 
       await go(b.page, host)
       await requests(b.page).getByRole('link').first().waitFor({ timeout: 30000 })
