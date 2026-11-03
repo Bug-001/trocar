@@ -7,15 +7,16 @@ import { snap as probeSnap } from './probe.mjs'
 import { WRITE_GAP_MS } from '../../../../src/web/v2/core/router.mjs'
 
 export const IDS = Object.freeze(['I-pageerror', 'I-console', 'I-blank', 'I-keep', 'I-stack', 'I-hscroll', 'I-rate', 'I-write', 'I-leak',
-  'I-mem', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select'])
+  'I-mem', 'I-heap', 'I-follow', 'I-hold', 'I-url', 'I-cjk', 'I-longtask', 'I-loadstep', 'I-chapter', 'I-pack', 'I-memcap', 'I-select'])
 
 export const PENDING = new Map([
   ['I-memcap', 'the page heap stays under memCapBytes (80 MB)'],
 ])
 
-/** Invariants judged against a time line (a task's length, the follow deadline, the heap's size), so a noisy box can meet one: a run
- *  that meets one is reproduced once and saved whole, never shrunk (runner findOne). */
-export const TIMING = new Set(['I-longtask', 'I-follow', 'I-mem'])
+/** Invariants judged against a time line or a noisy measure (a task's length, the follow deadline, the heap's size), so a noisy box
+ *  can meet one: a run that meets one is reproduced once and saved whole, never shrunk (runner findOne). I-mem (the element count)
+ *  is exact and is shrunk. */
+export const TIMING = new Set(['I-longtask', 'I-follow', 'I-heap'])
 
 export const LIMITS = Object.freeze({
   consoleGraceMs: 2000, // an armed fault window's console.error tail (invariant I-console)
@@ -30,7 +31,7 @@ export const LIMITS = Object.freeze({
   openReadMs: 10000, // a screen's opening reads after a route change, chained behind its first answers (4.4 「打开时」)
   leakSlack: 2, // a one-time lazy global wiring (core/dom.mjs wireKeys on the first dialog) is no leak; a per-visit one passes it by the 4th visit
   settleMs: 3000, // how long check waits for in-flight fetches to settle before I-leak counts them
-  memRatio: 1.5, memSlackBytes: 10 * 2 ** 20, // invariant I-mem
+  memRatio: 1.5, memSlackBytes: 10 * 2 ** 20, // invariants I-mem (elements) and I-heap
   memCapBytes: 80 * 2 ** 20, // pending: no spec line sets this cap yet
   followMs: 15000, // spec/01-trocar-rfc/1.4-central-board.md:71-73 · 4.4:51
   longtaskMs: 50, // D64 ②: no task of the page's own over 50 ms after a step starts, unless that step made the document (2.3 #27)
@@ -213,7 +214,7 @@ export async function check(ctx) {
   const writes = [...requests, ...s.fetchLog].filter((r) => r.method && r.method !== 'GET')
   if (writes.length) bad('I-write', writes.slice(0, 3).map((r) => `${r.method} ${r.url}`).join(' | '))
 
-  // I-leak / I-mem: the route's first visit is its baseline; a later visit may not hold more
+  // I-leak / I-mem / I-heap: the route's first visit is its baseline; a later visit may not hold more
   const deadline = Date.now() + LIMITS.settleMs
   let first = base.get(route)
   // the world grew since the baseline: what the route draws grew with the data, so the baseline is taken again (not a leak)
@@ -233,12 +234,10 @@ export async function check(ctx) {
   else if (!prev || routeOf(prev.hash) !== route) { // a revisit (the route was just entered again); within one visit an open overlay may hold more
     const more = ['window', 'document', 'intervals', 'inflight'].filter((k) => now[k] > first[k] + LIMITS.leakSlack)
     if (more.length) bad('I-leak', more.map((k) => `${k} ${first[k]} → ${now[k]}`).join(', '))
-    const grew = []
-    if (now.dom > LIMITS.memRatio * first.dom) grew.push(`elements ${first.dom} → ${now.dom}`)
+    if (now.dom > LIMITS.memRatio * first.dom) bad('I-mem', `elements ${first.dom} → ${now.dom}`)
     // a first visit's heap is a cold page's (no store, no caches yet): the heap's baseline is the route's first revisit
     if (first.warm == null) first.warm = now.heap
-    else if (now.heap > LIMITS.memRatio * first.warm + LIMITS.memSlackBytes) grew.push(`heap ${first.warm} → ${now.heap}`)
-    if (grew.length) bad('I-mem', grew.join(', '))
+    else if (now.heap > LIMITS.memRatio * first.warm + LIMITS.memSlackBytes) bad('I-heap', `heap ${first.warm} → ${now.heap}`)
   }
   if (now.heap > LIMITS.memCapBytes) pending.push({ id: 'I-memcap', value: now.heap, pointer: PENDING.get('I-memcap') })
 

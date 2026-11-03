@@ -17,7 +17,7 @@ export const REGRESSIONS = fileURLToPath(new URL('./regressions/', import.meta.u
 const SHOTS = fileURLToPath(new URL('../shots/seq/', import.meta.url))
 const QUIET_MS = 300, SETTLE_CAP_MS = 5000, SETTLE_LATENCY_MS = 25000
 // checks that only mean something once the page has settled (a step that cannot settle skips these and keeps the rest)
-const SETTLED_ONLY = new Set(['I-url', 'I-leak', 'I-mem', 'I-follow', 'I-hold'])
+const SETTLED_ONLY = new Set(['I-url', 'I-leak', 'I-mem', 'I-heap', 'I-follow', 'I-hold'])
 
 /** A violation's (or a regression's) identity: its `<id>:<screen>` sig and its fingerprint (invariants.mjs). */
 export const keyOf = (v) => `${v.sig} ${v.fp}`
@@ -120,7 +120,7 @@ export async function runSequence({ steps, seed = 1, big = false, viewport = 128
       const had = new Set(baseline.keys())
       const res = await check(c).catch(async () => { await b.page.waitForTimeout(500); return check(c) })
       ctx.lastDrag = null
-      // a first visit drawn under a fault (a failed read draws a short error) is no baseline for I-leak / I-mem: the next visit is
+      // a first visit drawn under a fault (a failed read draws a short error) is no baseline for I-leak / I-mem / I-heap: the next visit is
       if (faults.log.some((f) => f.to == null || f.to >= t - 2000)) for (const k of baseline.keys()) if (!had.has(k)) baseline.delete(k)
       prev = res.view
       for (const p of res.pending) { const e = out.pending[p.id] ||= { n: 0, max: 0 }; e.n++; if (typeof p.value === 'number') e.max = Math.max(e.max, p.value) }
