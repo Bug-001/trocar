@@ -132,12 +132,13 @@ export function setupHelper(opts = {}) {
   return { ok: true, bin: cfg.helperBin, caps: cfg.caps, swept }
 }
 
-export function uninstallHelper(opts = {}) {
-  requireRoot()
+// `root` / `exec`: the root check and the tool runner, for a test that runs the real function over a temp dir (0.1 §6 #13: its return is what the CLI reads)
+export function uninstallHelper({ root = requireRoot, exec = run, ...opts } = {}) {
+  root()
   const cfg = { ...DEFAULTS, ...opts }
   // Warn (do not fail) if any loader is still running: it keeps working until it exits; later
   // starts fail open and `doctor` reports the missing helper.
-  const running = run('pgrep', ['-f', cfg.helperBin])
+  const running = exec('pgrep', ['-f', cfg.helperBin])
   const warnings = []
   if (running.code === 0 && running.out) warnings.push('a capability helper is still running; it will keep working until it exits')
   fs.rmSync(cfg.helperBin, { force: true })

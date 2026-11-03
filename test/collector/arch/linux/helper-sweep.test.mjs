@@ -6,7 +6,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { sweepStaged } from '../../../../src/collector/arch/linux/install.mjs'
+import { sweepStaged, uninstallHelper } from '../../../../src/collector/arch/linux/install.mjs'
+import { tmpDir } from '../../../helpers/tmp.mjs'
 
 test('sweepStaged removes only staged helper copies, keeps the current one, and reports what it removed', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-hs-'))
@@ -17,4 +18,12 @@ test('sweepStaged removes only staged helper copies, keeps the current one, and 
     assert.deepEqual(sweepStaged(dir), [path.join(dir, '.trocar-redirector.new.12')])
     assert.deepEqual(sweepStaged(path.join(dir, 'gone')), [], 'no helper dir: nothing to do')
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('uninstallHelper (the real one, root check and runner stubbed) removes the helper and returns the staged copies it swept in `swept`, which --remove lists (D38)', () => {
+  const dir = tmpDir('trocar-hs-rm-')
+  const bin = path.join(dir, 'trocar-redirector'), staged = path.join(dir, '.trocar-redirector.new.67915')
+  for (const f of [bin, staged]) fs.writeFileSync(f, 'x')
+  const r = uninstallHelper({ helperDir: dir, helperBin: bin, root: () => {}, exec: () => ({ code: 1, out: '', err: '' }) })
+  assert.deepEqual([r.swept, r.warnings, fs.existsSync(dir)], [[staged], [], false])
 })
