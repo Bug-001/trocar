@@ -5,7 +5,7 @@
 // pack is that pack's first read and lands directly, no step in between ever drawn (#30). Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { probe, withBoard, serveWorld, blockBytes } from './harness.mjs'
+import { probe, withBoard, serveWorld, blockBytes, stampFetches } from './harness.mjs'
 import { world } from '../desk-world.mjs'
 import { packOrder } from '../../../src/web/v2/replay/follow.mjs'
 import { INTERVAL } from '../../../src/web/v2/core/poll.mjs'
@@ -36,15 +36,12 @@ async function until(page, what, ms = 15000) {
 
 test('2.3 #29: the loader keeps ≤ 3 reads out, reads the packs back to back in its order, has them all within their back-to-back time, reads none again', { skip }, async (t) => {
   const L = 150, w = longSession(), head = w.files(w.now, P).head
-  const b = await withBoard({ bytes: 1e5, chromium: gate.chromium })
+  const b = await withBoard({ bytes: 1e5, chromium: gate.chromium, setup: stampFetches })
   try {
     const { page } = b
-    // every loader read (a pack file, lane, block) with when it started and ended (ms epoch)
-    const log = []
-    const kind = (u) => (/^\/api\/d\/p\d/.test(u.pathname) ? 'pack' : u.pathname === '/api/lane' || u.pathname === '/api/block' ? u.pathname.slice(5) : null)
-    page.on('request', (r) => { const u = new URL(r.url()), k = kind(u); if (k) log.push({ r, k, path: u.pathname, start: Date.now(), end: null }) })
-    page.on('requestfinished', (r) => { const x = log.find((e) => e.r === r); if (x) x.end = Date.now() })
-    page.on('requestfailed', (r) => { const x = log.find((e) => e.r === r); if (x) x.end = Date.now() })
+    // every loader read (a pack file, lane, block) with when the page started it and when its body was in (ms epoch, the page's clock)
+    const kind = (u) => (/^\/api\/d\/p\d/.test(u) ? 'pack' : /^\/api\/(lane|block)\?/.test(u) ? 'loader' : null)
+    const loaderReads = async () => (await page.evaluate(() => globalThis.__fetches)).map((e) => ({ ...e, k: kind(e.url), path: e.url.split('?')[0] })).filter((e) => e.k).sort((x, y) => x.t0 - y.t0)
     await serveWorld(page, w, { latency: L, pack: P })
     await sampleSteps(page)
     await page.evaluate(() => { location.hash = '#/replay/p/S' })
@@ -53,21 +50,22 @@ test('2.3 #29: the loader keeps ≤ 3 reads out, reads the packs back to back in
     // the reader opens rows while the packs come: their bodies' reads go through the same loader (≤ 3 out still holds)
     const opened = await page.evaluate(() => { const hs = [...document.querySelectorAll('#ctxwin .cblk.collapsed:not(.removed):not([data-rp]) > .cbh')].slice(0, 4); for (const h of hs) h.click(); return hs.length })
     assert.ok(opened > 1, `the drawn step has rows to open (${opened})`)
-    const files = 2 * head.packs.length, packs = () => log.filter((e) => e.k === 'pack')
+    const files = 2 * head.packs.length, packs = async () => (await loaderReads()).filter((e) => e.k === 'pack')
     assert.ok(head.packs.length >= 6, `the session is long: ${head.packs.length} sealed packs`)
-    assert.ok(await until(page, async () => new Set(packs().filter((e) => e.end).map((e) => e.path)).size === files, 20000), `every pack file came (${packs().length} of ${files})`)
-    const done = Math.max(...packs().map((e) => e.end))
+    assert.ok(await until(page, async () => new Set((await packs()).filter((e) => e.t1 != null).map((e) => e.path)).size === files, 20000), `every pack file came (${(await packs()).length} of ${files})`)
+    const done = Math.max(...(await packs()).map((e) => e.t1))
     // (5) a poll round later no held pack is read again
     await page.waitForTimeout(2 * INTERVAL.session + 300)
-    assert.equal(packs().length, files, 'no pack read twice')
+    const log = await loaderReads(), P_ = log.filter((e) => e.k === 'pack')
+    assert.equal(P_.length, files, 'no pack read twice')
     // (1) at no moment more than 3 loader reads out
-    const edges = log.flatMap((e) => [[e.start, 1], [e.end ?? Infinity, -1]]).sort((x, y) => x[0] - y[0] || x[1] - y[1])
+    const edges = log.flatMap((e) => [[e.t0, 1], [e.t1 ?? Infinity, -1]]).sort((x, y) => x[0] - y[0] || x[1] - y[1])
     let out = 0, most = 0
     for (const [, d] of edges) { out += d; most = Math.max(most, out) }
     assert.ok(most <= 3, `${most} loader reads were out at once`)
-    // (2) each pack read but the first three goes out ≤ 50 ms after another loader read ended, or waits only while the loader is full: no poll beat
-    const P_ = packs(), outAt = (x) => log.filter((e) => e.start <= x && (e.end ?? Infinity) > x).length
-    const late = P_.slice(3).filter((e) => !log.some((o) => o.end != null && o.end <= e.start && e.start - o.end <= 50) && outAt(e.start - 51) < 3)
+    // (2) each pack read but the first three goes out ≤ 50 ms after another loader read's body was in, or waits only while the loader is full: no poll beat
+    const outAt = (x) => log.filter((e) => e.t0 <= x && (e.t1 ?? Infinity) > x).length
+    const late = P_.slice(3).filter((e) => !log.some((o) => o.t1 != null && o.t1 <= e.t0 && e.t0 - o.t1 <= 50) && outAt(e.t0 - 51) < 3)
     assert.deepEqual(late.map((e) => e.path), [], 'pack reads that waited with the loader not full')
     // (3) the packs in 2.3 加载器's order for a desk that follows (main before rest of each)
     const firsts = [...new Set(P_.map((e) => +/p(\d+)/.exec(e.path)[1]))]
