@@ -11,17 +11,17 @@ const WIDTH = 80
 const offTilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
 const UNTIL_WORDS = { restart: 'until it restarts', 'next-connection': 'until its next new connection', 'next-handshake': 'until its next handshake', 'session-end': 'until its current session ends' }
 
-/** One line of at most 80 columns, or the line split at spaces, every line at the lead the text starts with (§1.1 版式 6: a folded line keeps its
- *  first line's indent, so prose never folds to a command's deeper indent). A single word longer than the width (a path, a command) is never broken:
+/** One line of at most 80 columns, or the line split at spaces (§1.1 版式 6): a text at column 0 folds at column 0, an indented one hangs two deeper
+ *  than its lead, so a fold never lands on a command's two-space indent. A single word longer than the width (a path, a command) is never broken:
  *  it keeps its own line. */
 function fit(text) {
   const s = String(text)
-  const lead = s.slice(0, s.length - s.trimStart().length)
+  const lead = s.slice(0, s.length - s.trimStart().length), hang = lead && `${lead}  `
   const out = []
   let line = ''
   for (const word of s.trimStart().split(/\s+/).filter(Boolean)) {
     const next = line ? `${line} ${word}` : `${lead}${word}`
-    if (line && next.length > WIDTH) { out.push(line); line = `${lead}${word}` } else line = next
+    if (line && next.length > WIDTH) { out.push(line); line = `${hang}${word}` } else line = next
   }
   if (line) out.push(line)
   return out

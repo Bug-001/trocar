@@ -47,8 +47,8 @@ export const tildeCommand = (s, home) => (home && home.startsWith('/')
   ? s.replace(new RegExp(`(^|\\s)${escRe(home)}(?=/|\\s|$)`, 'g'), (m, pre, at) => (/(^|\s)sudo\s/.test(s.slice(0, at + pre.length)) ? m : `${pre}~`))
   : s)
 
-/** §1.1⑥: every line fits 80 columns — one that does not is folded on spaces, every folded line at the first line's own indent (so prose never
- *  folds to a command's two-space indent), and a word that is longer than the line (a path, a command) keeps its own line unbroken. A coloured line is left alone: its escape bytes are not columns and must not be cut. `home`: §1.1⑤,
+/** §1.1⑥: every line fits 80 columns — one that does not is folded on spaces: a column-0 line folds at column 0, an indented line (an item) hangs two
+ *  deeper than its first line, so a fold never lands on a command's two-space indent; a word that is longer than the line (a path, a command) keeps its own line unbroken. A coloured line is left alone: its escape bytes are not columns and must not be cut. `home`: §1.1⑤,
  *  every text line's HOME paths as `~/…` (tildeText), a command to copy's where the shell expands them (tildeCommand). */
 export const fit = (lines, { home = null } = {}) => lines.flatMap((l) => {
   if (l && typeof l === 'object' && typeof l.command === 'string') return [`  ${tildeCommand(l.command, home)}`] // a command to copy (commandLine): one line, never folded, so a paste runs it whole
@@ -57,7 +57,7 @@ export const fit = (lines, { home = null } = {}) => lines.flatMap((l) => {
   const s = tildeText(String(l), home)
   if (s.length <= WIDTH || BARE.test(s)) return [s]
   const own = ' '.repeat(s.length - s.trimStart().length)
-  const [first, ...more] = wrap(s.trimStart(), WIDTH - own.length, own)
+  const [first, ...more] = wrap(s.trimStart(), WIDTH - own.length, own && `${own}  `)
   return [own + first, ...more]
 })
 

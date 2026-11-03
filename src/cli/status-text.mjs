@@ -154,7 +154,7 @@ export function failuresBlock(failures, health, { now = Date.now() } = {}) {
   const lines = [groups.length ? `Problems in the last 24 hours: ${groups.reduce((n, g) => n + g.count, 0)} in ${groups.length} kind${groups.length === 1 ? '' : 's'}` : 'No problems in the last 24 hours.']
   if (groups.length) { // §1.1⑥: each row folds inside 80 columns, under its own text
     const heads = columns(groups.map((g) => [ago(g.last_ts, now), `x${g.count}`, ''])).map((h) => `  ${h}  `), col = Math.max(...heads.map((h) => h.length))
-    groups.forEach((g, i) => lines.push(...wrap(failureLine(g), WIDTH - col).map((t, j) => (j ? ' '.repeat(col) : heads[i].padEnd(col)) + t), ...commandsOf(g.reason).map((x) => ' '.repeat(col) + x)))
+    groups.forEach((g, i) => lines.push(...wrap(failureLine(g), WIDTH - col).map((t, j) => (j ? ' '.repeat(col) : heads[i].padEnd(col)) + t), ...commandsOf(g.reason).map((x) => ' '.repeat(col + 2) + x))) // a command sits two deeper than the reason's folds (§3.5, §1.1⑥)
   }
   const exp = Object.entries((health.collector && health.collector.expected) || {})
   lines.push('', 'Expected')
